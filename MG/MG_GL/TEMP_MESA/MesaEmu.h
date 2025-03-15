@@ -7,8 +7,6 @@
 
 #include "../../Includes.h"
 
-#endif //MOBILEGL_MESAEMU_H
-
 /*
  * Mesa 3-D graphics library
  * 
@@ -341,3 +339,22 @@ OSMesaPostprocess(OSMesaContext osmesa, const char *filter,
 
 
 #endif
+
+struct OSMesaContextData {
+    VkInstance instance = VK_NULL_HANDLE;
+    VkPhysicalDevice physicalDevice = VK_NULL_HANDLE;
+    VkDevice device = VK_NULL_HANDLE;
+    VkQueue graphicsQueue = VK_NULL_HANDLE;
+    VkImage targetImage = VK_NULL_HANDLE;
+    VkImageView imageView = VK_NULL_HANDLE;
+    VkCommandPool commandPool = VK_NULL_HANDLE;
+    GLsizei currentWidth = 0;
+    GLsizei currentHeight = 0;
+    GLint packAlignment = 4;
+    GLubyte* frontBuffer = nullptr;
+    uint32_t queueFamilyIndex = 0;
+};
+
+static std::map<OSMesaContext, OSMesaContextData> ctxMap;
+
+#endif //MOBILEGL_MESAEMU_H

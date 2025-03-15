@@ -6,7 +6,12 @@
 
 namespace MG_GL::GL {
     static std::string rendererString;
+    static bool loggedMGInfo;
     const GLubyte* GetString(GLenum name) {
+        if (!loggedMGInfo) {
+            loggedMGInfo = true;
+            MG_GL::Getter::LogMGInfo();
+        }
         MG_Util::Debug::LogD("glGetString, name: %s", MG_Util::Debug::GLEnumToString(name));
         switch (name) {
             case GL_VENDOR: 
@@ -17,8 +22,8 @@ namespace MG_GL::GL {
                     versionStr == std::to_string(MG_Global::GL::GLVersionMajor) + "."
                                     +  std::to_string(MG_Global::GL::GLVersionMinor) + "."
                                     +  std::to_string(MG_Global::GL::GLVersionRevision) 
-                                    + " MobileGL (" + MG_GL::Getter::GetBackendName() + ") ";
-
+                                    + " "+ MG_GL::Getter::GetMGName()+
+                                    ", MobileGL (" + MG_GL::Getter::GetBackendName() + ") ";
                     versionStr += std::to_string(MG_Global::MG::VersionMajor) + "."
                                     +  std::to_string(MG_Global::MG::VersionMinor) + "."
                                     +  std::to_string(MG_Global::MG::VersionRevision);

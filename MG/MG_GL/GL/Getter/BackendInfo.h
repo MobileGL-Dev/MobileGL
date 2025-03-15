@@ -9,6 +9,8 @@
 
 namespace MG_GL::Getter {
     const std::string GetBackendName();
+    const std::string GetMGName();
+    void LogMGInfo();
 }
 
 #endif //MOBILEGL_BACKENDINFO_H

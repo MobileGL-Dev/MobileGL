@@ -5,6 +5,6 @@
 #include "Includes.h"
 
 __attribute__((constructor)) void MG_Initialize() {
-    MG_Util::Debug::LogI("MobileGL Initializing...");
     MG_Util::Debug::LogInit();
+    MG_Util::Debug::LogI("MobileGL Initializing...");
 }

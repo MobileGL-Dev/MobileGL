@@ -21,6 +21,9 @@
 #ifndef MOBILEGL_DEBUG_H
 #include "MG_UTIL/Debug/Debug.h"
 #endif
+#ifndef MOBILEGL_MESAEMU_H
+#include "MG_GL/TEMP_MESA/MesaEmu.h"
+#endif
 
 #include <cstring>
 #include <iostream>
@@ -31,6 +34,10 @@
 #include <chrono>
 #include <thread>
 #include <string>
+#include <map>
+#include <vector>
+#include <stdexcept>
+#include <vulkan/vulkan.h>
 
 #ifdef __ANDROID__
 #include <android/log.h>

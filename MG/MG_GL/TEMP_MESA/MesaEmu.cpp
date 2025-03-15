@@ -6,26 +6,6 @@
 
 // Code From DeepSeek
 
-#include <vulkan/vulkan.h>
-#include <cstring>
-#include <map>
-#include <vector>
-#include <stdexcept>
-struct OSMesaContextData {
-    VkInstance instance = VK_NULL_HANDLE;
-    VkPhysicalDevice physicalDevice = VK_NULL_HANDLE;
-    VkDevice device = VK_NULL_HANDLE;
-    VkQueue graphicsQueue = VK_NULL_HANDLE;
-    VkImage targetImage = VK_NULL_HANDLE;
-    VkImageView imageView = VK_NULL_HANDLE;
-    VkCommandPool commandPool = VK_NULL_HANDLE;
-    GLsizei currentWidth = 0;
-    GLsizei currentHeight = 0;
-    GLint packAlignment = 4;
-    GLubyte* frontBuffer = nullptr;
-    uint32_t queueFamilyIndex = 0;
-};
-static std::map<OSMesaContext, OSMesaContextData> ctxMap;
 static thread_local OSMesaContext currentContext = nullptr;
 static uint32_t findGraphicsQueueFamily(VkPhysicalDevice physicalDevice) {
     uint32_t queueFamilyCount = 0;
