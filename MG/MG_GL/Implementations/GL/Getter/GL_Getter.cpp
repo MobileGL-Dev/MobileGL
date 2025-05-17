@@ -120,6 +120,32 @@ namespace MG_GL::GL {
         }
 
         switch (pname) {
+            // General
+            case GL_CONTEXT_PROFILE_MASK:
+                params[0] = GL_CONTEXT_CORE_PROFILE_BIT;
+                break;
+            case GL_NUM_EXTENSIONS:
+                static GLint num_extensions = -1;
+                if (num_extensions == -1) {
+                    const GLubyte* ext_str = MG_GL::GL::GetString(GL_EXTENSIONS);
+                    char *copy = strdup((const char *) ext_str);
+                    char *token = strtok(copy, " ");
+                    num_extensions = 0;
+                    while (token) {
+                        num_extensions++;
+                        token = strtok(nullptr, " ");
+                    }
+                    free(copy);
+                }
+                params[0] = num_extensions;
+                break;
+            case GL_MAJOR_VERSION:
+                params[0] = MG_Global::GL::GLVersionMajor;
+                break;
+            case GL_MINOR_VERSION:
+                params[0] = MG_Global::GL::GLVersionMinor;
+                break;
+            
             // Viewport and scissor
             case GL_VIEWPORT:
                 memcpy(params, MG_State_T::commonState->viewport, 4 * sizeof(GLint));
