@@ -196,7 +196,15 @@ GLenum BufferState::CopyBufferRange(GLenum readTarget, GLenum writeTarget, GLint
 }
 
 GLenum BufferState::AcquireBufferMemory(GLenum target, GLenum access, void** mappedPointer) {
-    return AcquireBufferMemoryRange(target, 0, buffers_[currentBindings_[target]].data.size(), access, mappedPointer);
+    GLbitfield flags = 0;
+    switch (access) {
+        case GL_READ_ONLY:  flags = GL_MAP_READ_BIT; break;
+        case GL_WRITE_ONLY: flags = GL_MAP_WRITE_BIT; break;
+        case GL_READ_WRITE: flags = GL_MAP_READ_BIT | GL_MAP_WRITE_BIT; break;
+        default:
+            flags = access;
+    }
+    return AcquireBufferMemoryRange(target, 0, buffers_[currentBindings_[target]].data.size(), flags, mappedPointer);
 }
 
 GLenum BufferState::ReleaseBufferMemory(GLenum target) {
