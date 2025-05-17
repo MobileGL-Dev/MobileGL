@@ -24,7 +24,7 @@ struct VertexArrayObject {
     bool attribDirty = false;
     bool eboDirty = false;
     GLuint elementBuffer = 0;
-    std::unordered_map<GLuint, VertexAttribState> attribs;
+    ankerl::unordered_map<GLuint, VertexAttribState> attribs;
 };
 
 class VertexArrayState {
@@ -50,7 +50,7 @@ public:
     bool ValidateAllocatedHandle(GLuint array);
 
     GLuint currentVao_ = 0;
-    std::unordered_map<GLuint, VertexArrayObject> vaos_;
+    ankerl::unordered_map<GLuint, VertexArrayObject> vaos_;
 private:
     std::set<GLuint> freeIds_;
     GLuint lastId_ = 0;

@@ -84,8 +84,6 @@
 #include <cstring>
 #include <iostream>
 #include <cstdio>
-#include <dlfcn.h>
-#include <unistd.h>
 #include <ctime>
 #include <chrono>
 #include <thread>
@@ -103,7 +101,6 @@
 #include <unordered_map>
 #include <queue>
 #include <format>
-#include <vulkan/vulkan.h>
 #include <glslang/Public/ShaderLang.h>
 #include <glslang/Include/Types.h>
 #include <glslang/Public/ShaderLang.h>
@@ -112,9 +109,15 @@
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/glm.hpp>
 #include <ankerl/unordered_dense.h>
-#include "GLES/gl32.h"
+#include <GLES3/gl32.h>
 
 #include "MG_Include/UncertainBool.hpp"
+
+#ifndef _WIN32
+#include <dlfcn.h>
+#include <unistd.h>
+#include <vulkan/vulkan.h>
+#endif
 
 #ifdef __ANDROID__
 #include <android/log.h>

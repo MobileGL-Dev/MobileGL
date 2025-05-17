@@ -108,7 +108,7 @@ namespace MG_Util::Program {
             return;
         }
 
-        std::unordered_set<GLint> used_locations;
+        ankerl::unordered_set<GLint> used_locations;
         GLint auto_location = 0;
         for (auto spirv: allSpirv) {
             spvc_parsed_ir ir = nullptr;

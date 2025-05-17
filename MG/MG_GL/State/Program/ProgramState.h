@@ -41,17 +41,17 @@ struct ProgramObject {
     bool dirty;
     GLint linkStatus;
     std::string infoLog;
-    std::unordered_map<std::string, GLint> attribBindings;
-    std::unordered_map<std::string, GLint> attribLocations;
-    std::unordered_map<std::string, GLint> uniformLocations;
-    std::unordered_map<std::string, UniformValue> uniformValues;
+    ankerl::unordered_map<std::string, GLint> attribBindings;
+    ankerl::unordered_map<std::string, GLint> attribLocations;
+    ankerl::unordered_map<std::string, GLint> uniformLocations;
+    ankerl::unordered_map<std::string, UniformValue> uniformValues;
     bool markedForDeletion;
 };
 
 class ProgramState {
 public:
-    std::unordered_map<GLuint, ShaderObject> shaders_;
-    std::unordered_map<GLuint, ProgramObject> programs_;
+    ankerl::unordered_map<GLuint, ShaderObject> shaders_;
+    ankerl::unordered_map<GLuint, ProgramObject> programs_;
     std::set<GLuint> freeShaderIds_;
     std::set<GLuint> freeProgramIds_;
     GLuint lastShaderId_ = 0;

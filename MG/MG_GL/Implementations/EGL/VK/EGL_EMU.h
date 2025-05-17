@@ -69,9 +69,9 @@ extern std::atomic<uintptr_t> g_nextSurfaceId;
 extern EGLenum g_currentAPI;
 
 extern std::mutex g_globalMutex;
-extern std::unordered_map<EGLDisplay, VulkanDisplay> g_displays;
-extern std::unordered_map<EGLSurface, VulkanSurface> g_surfaces;
-extern std::unordered_map<EGLContext, VulkanContext> g_contexts;
+extern ankerl::unordered_map<EGLDisplay, VulkanDisplay> g_displays;
+extern ankerl::unordered_map<EGLSurface, VulkanSurface> g_surfaces;
+extern ankerl::unordered_map<EGLContext, VulkanContext> g_contexts;
 extern EGLint g_lastError;
 
 extern thread_local EGLContext tls_currentContext;

@@ -5,14 +5,29 @@
 #ifndef MOBILEGL_CONSTANTS_H
 #define MOBILEGL_CONSTANTS_H
 
+#include <array>
+#include <unordered_map>
+#include <unordered_set>
+#include <GL/gl.h>
+#include <ankerl/unordered_dense.h>
+
 #ifdef __ANDROID__
 #define __ANDROID_API__ 26
 #endif
-#define MG_EXPORT extern "C" __attribute__((visibility("default")))
 
-#include <array>
-#include <unordered_set>
-#include <GL/gl.h>
+#ifdef _WIN32
+#define MG_EXPORT extern "C" __declspec(dllexport)
+#else
+#define MG_EXPORT extern "C" __attribute__((visibility("default")))
+#endif
+
+namespace ankerl {
+    template <typename K, typename V>
+    using unordered_map = ankerl::unordered_dense::map<K, V>;
+    
+    template <typename T>
+    using unordered_set = ankerl::unordered_dense::set<T>;
+}
 
 namespace MG_Constants {
     namespace Common {
@@ -24,7 +39,7 @@ namespace MG_Constants {
     }
     
     namespace Blend {
-        static const std::unordered_set<GLenum> VALID_FACTORS = {
+        static const ankerl::unordered_set<GLenum> VALID_FACTORS = {
                 GL_ZERO, GL_ONE, GL_SRC_COLOR, GL_ONE_MINUS_SRC_COLOR,
                 GL_DST_COLOR, GL_ONE_MINUS_DST_COLOR, GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA,
                 GL_DST_ALPHA, GL_ONE_MINUS_DST_ALPHA, GL_CONSTANT_COLOR, GL_ONE_MINUS_CONSTANT_COLOR,
@@ -33,51 +48,51 @@ namespace MG_Constants {
     }
     
     namespace Depth {
-        static const std::unordered_set<GLenum> VALID_FUNCS = {
+        static const ankerl::unordered_set<GLenum> VALID_FUNCS = {
                 GL_NEVER, GL_LESS, GL_EQUAL, GL_LEQUAL, GL_GREATER, GL_NOTEQUAL, GL_GEQUAL, GL_ALWAYS
         }; // OpenGL 3
     }
     
     namespace CommonState {
-        static const std::unordered_set<GLenum> VALID_CAPS = {
+        static const ankerl::unordered_set<GLenum> VALID_CAPS = {
                 GL_BLEND, GL_DEPTH_TEST, GL_STENCIL_TEST, GL_SCISSOR_TEST, GL_CULL_FACE,
                 GL_POLYGON_OFFSET_FILL, GL_SAMPLE_ALPHA_TO_COVERAGE, GL_SAMPLE_COVERAGE
         }; // OpenGL 3
     }
     
     namespace Framebuffer {
-        static const std::unordered_set<GLenum> VALID_ATTACHMENTS = {
+        static const ankerl::unordered_set<GLenum> VALID_ATTACHMENTS = {
                 GL_COLOR_ATTACHMENT0, GL_DEPTH_ATTACHMENT,
                 GL_STENCIL_ATTACHMENT, GL_DEPTH_STENCIL_ATTACHMENT
         }; // OpenGL 3
         
-        static const std::unordered_set<GLenum> VALID_TARGETS = {
+        static const ankerl::unordered_set<GLenum> VALID_TARGETS = {
                 GL_FRAMEBUFFER, GL_DRAW_FRAMEBUFFER, GL_READ_FRAMEBUFFER
         }; // OpenGL 3
         
-        static const std::unordered_set<GLenum> VALID_ACCESS = {
+        static const ankerl::unordered_set<GLenum> VALID_ACCESS = {
                 GL_READ_ONLY, GL_WRITE_ONLY, GL_READ_WRITE
         }; // OpenGL 3
     }
     
     namespace Buffer {
-        static const std::unordered_set<GLenum> VALID_PARAM_NAMES = {
+        static const ankerl::unordered_set<GLenum> VALID_PARAM_NAMES = {
                 GL_BUFFER_ACCESS, GL_BUFFER_MAPPED, GL_BUFFER_SIZE, GL_BUFFER_USAGE
         }; // OpenGL 3
         
-        static const std::unordered_set<GLenum> VALID_TARGETS = { 
+        static const ankerl::unordered_set<GLenum> VALID_TARGETS = { 
                 GL_ARRAY_BUFFER, GL_COPY_READ_BUFFER, GL_COPY_WRITE_BUFFER, GL_ELEMENT_ARRAY_BUFFER,
                 GL_PIXEL_PACK_BUFFER, GL_PIXEL_UNPACK_BUFFER, GL_TEXTURE_BUFFER,
                 GL_TRANSFORM_FEEDBACK_BUFFER,  GL_UNIFORM_BUFFER
         }; // OpenGL 3
         
-        static const std::unordered_set<GLenum> VALID_ACCESS = {
+        static const ankerl::unordered_set<GLenum> VALID_ACCESS = {
                 GL_READ_ONLY, GL_WRITE_ONLY, GL_READ_WRITE
         }; // OpenGL 3
     }
 
     namespace PixelStore {
-        static const std::unordered_map<GLenum, GLint> DEFAULT_VALUES_MAP = {
+        static const ankerl::unordered_map<GLenum, GLint> DEFAULT_VALUES_MAP = {
                 {GL_PACK_SWAP_BYTES,   GL_FALSE},
                 {GL_PACK_LSB_FIRST,    GL_FALSE},
                 {GL_PACK_ROW_LENGTH,   0},
@@ -96,7 +111,7 @@ namespace MG_Constants {
                 {GL_UNPACK_ALIGNMENT,  4}
         }; // OpenGL 3
         
-        static const std::unordered_set<GLenum> VALID_PARAM_NAMES = {
+        static const ankerl::unordered_set<GLenum> VALID_PARAM_NAMES = {
                 GL_PACK_SWAP_BYTES, GL_PACK_LSB_FIRST, GL_PACK_ROW_LENGTH, GL_PACK_IMAGE_HEIGHT,
                 GL_PACK_SKIP_ROWS, GL_PACK_SKIP_PIXELS, GL_PACK_SKIP_IMAGES, GL_PACK_ALIGNMENT,
                 GL_UNPACK_SWAP_BYTES, GL_UNPACK_LSB_FIRST, GL_UNPACK_ROW_LENGTH,
@@ -110,18 +125,18 @@ namespace MG_Constants {
         inline const GLuint MAX_TEXTURE_UNITS = 80;
         const GLsizei MAX_TEXTURE_SIZE = 32768;
         const GLsizei MAX_ARRAY_LAYERS = 256;
-        inline const std::unordered_set<GLenum> VALID_TARGETS = {
+        inline const ankerl::unordered_set<GLenum> VALID_TARGETS = {
                 GL_TEXTURE_2D, GL_PROXY_TEXTURE_2D, GL_TEXTURE_1D_ARRAY, GL_PROXY_TEXTURE_1D_ARRAY,
                 GL_TEXTURE_RECTANGLE, GL_PROXY_TEXTURE_RECTANGLE, GL_TEXTURE_CUBE_MAP_POSITIVE_X,
                 GL_TEXTURE_CUBE_MAP_NEGATIVE_X, GL_TEXTURE_CUBE_MAP_POSITIVE_Y, GL_TEXTURE_CUBE_MAP_NEGATIVE_Y, 
                 GL_TEXTURE_CUBE_MAP_POSITIVE_Z, GL_TEXTURE_CUBE_MAP_NEGATIVE_Z, GL_PROXY_TEXTURE_CUBE_MAP
         }; // OpenGL 3
 
-        inline const std::unordered_set<GLenum> VALID_FORMATS = {
+        inline const ankerl::unordered_set<GLenum> VALID_FORMATS = {
                 GL_RED, GL_RG, GL_RGB, GL_BGR, GL_RGBA, GL_BGRA, GL_DEPTH_COMPONENT, GL_DEPTH_STENCIL
         }; // OpenGL 3
 
-        inline const std::unordered_set<GLenum> VALID_INTERNAL_FORMATS = {
+        inline const ankerl::unordered_set<GLenum> VALID_INTERNAL_FORMATS = {
                 GL_RED, GL_RG, GL_RGB, GL_BGR, GL_RGBA, GL_BGRA, GL_DEPTH_COMPONENT, GL_DEPTH_STENCIL,
                 GL_RGBA32F, GL_RGBA32I, GL_RGBA32UI, GL_RGBA16, GL_RGBA16F, GL_RGBA16I, 
                 GL_RGBA16UI, GL_RGBA8, GL_RGBA8UI, GL_SRGB8_ALPHA8, GL_RGB10_A2, GL_RGB10_A2UI, 
@@ -136,7 +151,7 @@ namespace MG_Constants {
                 GL_DEPTH32F_STENCIL8, GL_DEPTH24_STENCIL8
         }; // OpenGL 3
 
-        inline const std::unordered_set<GLenum> VALID_TYPES = {
+        inline const ankerl::unordered_set<GLenum> VALID_TYPES = {
                 GL_UNSIGNED_BYTE, GL_BYTE, GL_UNSIGNED_SHORT, GL_SHORT, GL_UNSIGNED_INT, GL_INT, 
                 GL_FLOAT, GL_UNSIGNED_BYTE_3_3_2, GL_UNSIGNED_BYTE_2_3_3_REV, GL_UNSIGNED_SHORT_5_6_5, 
                 GL_UNSIGNED_SHORT_5_6_5_REV, GL_UNSIGNED_SHORT_4_4_4_4, GL_UNSIGNED_SHORT_4_4_4_4_REV,
@@ -144,14 +159,14 @@ namespace MG_Constants {
                 GL_UNSIGNED_INT_8_8_8_8_REV, GL_UNSIGNED_INT_10_10_10_2, GL_UNSIGNED_INT_2_10_10_10_REV
         }; // OpenGL 3
 
-        inline const std::unordered_set<GLenum> VALID_TEXTURE_PARAM_NAMES = {
+        inline const ankerl::unordered_set<GLenum> VALID_TEXTURE_PARAM_NAMES = {
                 GL_TEXTURE_BASE_LEVEL, GL_TEXTURE_COMPARE_FUNC, GL_TEXTURE_COMPARE_MODE, GL_TEXTURE_MIN_FILTER, 
                 GL_TEXTURE_MAG_FILTER, GL_TEXTURE_MAX_LEVEL, GL_TEXTURE_SWIZZLE_R, GL_TEXTURE_SWIZZLE_G,
                 GL_TEXTURE_SWIZZLE_B, GL_TEXTURE_SWIZZLE_A, GL_TEXTURE_SWIZZLE_RGBA, GL_TEXTURE_WRAP_S,
                 GL_TEXTURE_WRAP_T, GL_TEXTURE_WRAP_R, GL_TEXTURE_LOD_BIAS, GL_TEXTURE_MIN_LOD, GL_TEXTURE_MAX_LOD, GL_TEXTURE_BORDER_COLOR
         }; // OpenGL 3
         
-        inline const std::unordered_set<GLenum> VALID_QUERY_LEVEL_PROPERTY_PARAM_NAMES = {
+        inline const ankerl::unordered_set<GLenum> VALID_QUERY_LEVEL_PROPERTY_PARAM_NAMES = {
                 GL_TEXTURE_WIDTH, GL_TEXTURE_HEIGHT, GL_TEXTURE_DEPTH, GL_TEXTURE_INTERNAL_FORMAT,
                 GL_TEXTURE_RED_SIZE, GL_TEXTURE_GREEN_SIZE, GL_TEXTURE_BLUE_SIZE, GL_TEXTURE_ALPHA_SIZE,
                 GL_TEXTURE_DEPTH_SIZE, GL_TEXTURE_COMPRESSED, GL_TEXTURE_COMPRESSED_IMAGE_SIZE
