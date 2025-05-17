@@ -13,7 +13,7 @@ namespace MG_Global {
         inline const int VersionMinor = 0;
         inline const int VersionRevision = 0;
         inline const int VersionPatch = 0;
-        inline const std::string VersionSuffix = "-Dev";
+        inline const std::string VersionSuffix = "-ShittilyDraw";
     }
     
     namespace Backend {
@@ -22,7 +22,7 @@ namespace MG_Global {
     
     namespace GL {
         inline const int GLVersionMajor = 3;
-        inline const int GLVersionMinor = 0;
+        inline const int GLVersionMinor = 2;
         inline const int GLVersionRevision = 0;
     }
     
