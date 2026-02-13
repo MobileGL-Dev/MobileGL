@@ -213,10 +213,10 @@ jobs:
     env:
       BUILD_ROOT: ${{ github.workspace }}
     steps:
-      - name: 设置交换空间
+      - name: 设置交换空间（128GB）
         uses: pierotofy/set-swap-space@master
         with:
-          swap-size-gb: 32
+          swap-size-gb: 128
       - name: 检出仓库
         uses: actions/checkout@v4
         with:
@@ -240,7 +240,9 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y binutils-arm-linux-gnueabihf g++-arm-linux-gnueabihf libc6-dev-armhf-cross
-      - name: 配置 CMake（交叉编译，强制禁用 LTO）
+      - name: 设置 Ninja 并行上限
+        run: echo "CMAKE_BUILD_PARALLEL_LEVEL=2" >> $GITHUB_ENV
+      - name: 配置 CMake（交叉编译，强制禁用 LTO，使用 lld）
         working-directory: ${{ env.BUILD_ROOT }}
         run: |
           rm -rf build
@@ -251,9 +253,9 @@ jobs:
             -DCMAKE_CXX_COMPILER=clang++-20 \
             -DCMAKE_C_FLAGS="--target=arm-linux-gnueabihf -fno-lto" \
             -DCMAKE_CXX_FLAGS="--target=arm-linux-gnueabihf -fno-lto" \
-            -DCMAKE_EXE_LINKER_FLAGS="--target=arm-linux-gnueabihf -fno-lto" \
-            -DCMAKE_SHARED_LINKER_FLAGS="--target=arm-linux-gnueabihf -fno-lto" \
-            -DCMAKE_MODULE_LINKER_FLAGS="--target=arm-linux-gnueabihf -fno-lto" \
+            -DCMAKE_EXE_LINKER_FLAGS="--target=arm-linux-gnueabihf -fno-lto -fuse-ld=lld" \
+            -DCMAKE_SHARED_LINKER_FLAGS="--target=arm-linux-gnueabihf -fno-lto -fuse-ld=lld" \
+            -DCMAKE_MODULE_LINKER_FLAGS="--target=arm-linux-gnueabihf -fno-lto -fuse-ld=lld" \
             -DCMAKE_C_FLAGS_RELEASE="-O2 -DNDEBUG -fno-lto" \
             -DCMAKE_CXX_FLAGS_RELEASE="-O2 -DNDEBUG -fno-lto" \
             -DCMAKE_INTERPROCEDURAL_OPTIMIZATION=OFF \
@@ -261,11 +263,20 @@ jobs:
             -DBUILD_SHARED_LIBS=ON \
             -DMOBILEGL_BUILD_TEST=OFF \
             -DMOBILEGL_BUILD_BENCHMARK=OFF
-      - name: 编译（8 线程并行）
+      - name: 编译（并行 2 线程 + 详细输出）
         working-directory: ${{ env.BUILD_ROOT }}/build
         run: |
-          set -x
-          cmake --build . --parallel 8
+          set -euxo pipefail
+          cmake --build . --parallel 2 --verbose
+      - name: 打印系统资源状态（排查 OOM）
+        if: always()
+        run: |
+          echo "== free -h =="
+          free -h || true
+          echo "== df -h =="
+          df -h || true
+          echo "== dmesg (OOM?) =="
+          sudo dmesg -T | tail -n 200 || true
       - name: 收集构建产物
         run: |
           mkdir -p ${{ env.BUILD_ROOT }}/artifacts
