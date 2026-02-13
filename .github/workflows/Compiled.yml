@@ -314,7 +314,32 @@ jobs:
           path: ${{ github.workspace }}/downloaded
           merge-multiple: true
 
+      - name: 列出下载内容
+        run: |
+          echo "下载目录内容:"
+          ls -la ${{ github.workspace }}/downloaded
+          echo "工作空间根目录内容:"
+          ls -la ${{ github.workspace }}
+
+      - name: 检查是否存在已合并的压缩包
+        id: check
+        run: |
+          set -euxo pipefail
+          FOUND_FILE=$(find ${{ github.workspace }}/downloaded -name "MobileGL-linux-all.zip" -type f | head -n1)
+          if [ -n "$FOUND_FILE" ]; then
+            echo "找到已存在的压缩包: $FOUND_FILE"
+            cp "$FOUND_FILE" ${{ github.workspace }}/MobileGL-linux-all.zip
+            echo "已复制到工作空间根目录"
+            echo "found=true" >> $GITHUB_OUTPUT
+          else
+            echo "未找到已存在的压缩包"
+            echo "found=false" >> $GITHUB_OUTPUT
+          fi
+          echo "当前工作空间根目录内容:"
+          ls -la ${{ github.workspace }}
+
       - name: 归一化目录并打包为 ZIP
+        if: steps.check.outputs.found != 'true'
         run: |
           set -euxo pipefail
           STAGE="${{ github.workspace }}/stage"
@@ -330,18 +355,22 @@ jobs:
           cd "$STAGE"
           zip -r "${{ github.workspace }}/MobileGL-linux-all.zip" lib
 
-      - name: 上传合并后的压缩包
-        id: upload
+      - name: 列出生成的文件
+        if: steps.check.outputs.found != 'true'
+        run: ls -la ${{ github.workspace }}
+
+      - name: 上传新生成的压缩包
+        if: steps.check.outputs.found != 'true'
         uses: actions/upload-artifact@v4
         with:
           name: MobileGL-linux-all
           path: ${{ github.workspace }}/MobileGL-linux-all.zip
           if-no-files-found: error
 
-      - name: 输出代理下载链接
-        run: |
-          echo "原始下载链接:"
-          echo "https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}/artifacts/${{ steps.upload.outputs.artifact-id }}"
-          echo ""
-          echo "代理下载链接:"
-          echo "https://htttp-proxy.262832.xyz/https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}/artifacts/${{ steps.upload.outputs.artifact-id }}"
+      - name: 上传已存在的压缩包
+        if: steps.check.outputs.found == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: MobileGL-linux-all
+          path: ${{ github.workspace }}/MobileGL-linux-all.zip
+          if-no-files-found: error
