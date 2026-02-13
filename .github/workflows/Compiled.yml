@@ -1,4 +1,4 @@
-name: 构建 Android 全架构
+name: 构建MobileGL_Android全架构
 
 on:
   push:
@@ -25,7 +25,7 @@ jobs:
       - name: 设置交换空间
         uses: pierotofy/set-swap-space@master
         with:
-          swap-size-gb: 32
+          swap-size-gb: 24
 
       - name: 检出仓库
         uses: actions/checkout@v4
@@ -57,7 +57,7 @@ jobs:
         working-directory: ${{ github.workspace }}/3rdparty/glslang
         run: python3 update_glslang_sources.py
 
-      - name: 配置 CMake（Android / ${{ matrix.abi }}）
+      - name: 配置 CMake
         run: |
           cmake -S . -B build-${{ matrix.abi }} \
             -G Ninja \
@@ -77,28 +77,28 @@ jobs:
             -DMOBILEGL_BUILD_TEST=OFF \
             -DMOBILEGL_BUILD_BENCHMARK=OFF
 
-      - name: 编译（${{ matrix.abi }}）
+      - name: 编译
         run: cmake --build build-${{ matrix.abi }} --parallel $(nproc)
 
-      - name: 收集产物（${{ matrix.abi }}）
+      - name: 收集产物
         run: |
           set -euxo pipefail
-          OUT="artifacts/lib/${{ matrix.abi }}"
-          mkdir -p "$OUT"
+          OUT_DIR="artifacts/lib/${{ matrix.abi }}"
+          mkdir -p "$OUT_DIR"
           SO_FILE=$(find "build-${{ matrix.abi }}" -name "libMobileGL.so" -type f | head -n1 || true)
           if [ -z "$SO_FILE" ]; then
             echo "::error::未找到 libMobileGL.so"
             exit 1
           fi
-          cp "$SO_FILE" "$OUT/libMobileGL.so"
+          cp "$SO_FILE" "$OUT_DIR/libMobileGL.so"
 
-      - name: 验证依赖（readelf NEEDED）
+      - name: 验证依赖
         run: |
           set -euxo pipefail
           SO="artifacts/lib/${{ matrix.abi }}/libMobileGL.so"
           "${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf" -d "$SO" | grep NEEDED || true
 
-      - name: 上传产物（${{ matrix.abi }}）
+      - name: 上传产物
         uses: actions/upload-artifact@v4
         with:
           name: MobileGL-android-${{ matrix.abi }}
@@ -106,7 +106,7 @@ jobs:
           if-no-files-found: error
 
   merge:
-    name: 合并打包（ZIP）
+    name: 合并所有架构库
     needs: [ build-android ]
     runs-on: ubuntu-latest
     steps:
