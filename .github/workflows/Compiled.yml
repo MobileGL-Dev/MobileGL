@@ -1,4 +1,4 @@
-name: 构建 MobileGL
+name: 构建 MobileGL（Linux 四架构）
 
 on:
   push:
@@ -213,10 +213,10 @@ jobs:
     env:
       BUILD_ROOT: ${{ github.workspace }}
     steps:
-      - name: 设置交换空间（128GB）
+      - name: 设置交换空间
         uses: pierotofy/set-swap-space@master
         with:
-          swap-size-gb: 128
+          swap-size-gb: 30
       - name: 检出仓库
         uses: actions/checkout@v4
         with:
