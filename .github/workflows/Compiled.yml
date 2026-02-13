@@ -1,4 +1,4 @@
-name: 构建 MobileGL（Linux 四架构）
+name: 构建 MobileGL
 
 on:
   push:
@@ -18,11 +18,12 @@ jobs:
     runs-on: ubuntu-latest
     env:
       BUILD_ROOT: ${{ github.workspace }}
+      ARCH: x86_64
     steps:
       - name: 设置交换空间
         uses: pierotofy/set-swap-space@master
         with:
-          swap-size-gb: 16
+          swap-size-gb: 30
       - name: 检出仓库
         uses: actions/checkout@v4
         with:
@@ -58,14 +59,13 @@ jobs:
         run: cmake --build . --parallel $(nproc)
       - name: 收集构建产物
         run: |
-          mkdir -p ${{ env.BUILD_ROOT }}/artifacts
           SO_FILE=$(find ${{ env.BUILD_ROOT }}/build -name "libMobileGL.so" -type f | head -n1)
           if [ -z "$SO_FILE" ]; then
             SO_FILE=$(find ${{ env.BUILD_ROOT }}/build -name "libMobileGL.so.*" -type f | head -n1)
           fi
           if [ -n "$SO_FILE" ]; then
-            cp "$SO_FILE" "${{ env.BUILD_ROOT }}/artifacts/libMobileGL-x86_64.so"
-            echo "已生成共享库: libMobileGL-x86_64.so"
+            mkdir -p ${{ env.BUILD_ROOT }}/artifacts/lib/${{ env.ARCH }}
+            cp "$SO_FILE" "${{ env.BUILD_ROOT }}/artifacts/lib/${{ env.ARCH }}/libMobileGL.so"
           else
             echo "::error::未找到 libMobileGL.so"
             exit 1
@@ -73,8 +73,8 @@ jobs:
       - name: 上传构建产物
         uses: actions/upload-artifact@v4
         with:
-          name: MobileGL-linux-x86_64
-          path: ${{ env.BUILD_ROOT }}/artifacts/libMobileGL-x86_64.so
+          name: MobileGL-linux-${{ env.ARCH }}
+          path: ${{ env.BUILD_ROOT }}/artifacts
           if-no-files-found: error
 
   build-arm64-v8a:
@@ -82,7 +82,12 @@ jobs:
     runs-on: ubuntu-24.04-arm
     env:
       BUILD_ROOT: ${{ github.workspace }}
+      ARCH: arm64-v8a
     steps:
+      - name: 设置交换空间
+        uses: pierotofy/set-swap-space@master
+        with:
+          swap-size-gb: 30
       - name: 检出仓库
         uses: actions/checkout@v4
         with:
@@ -118,14 +123,13 @@ jobs:
         run: cmake --build . --parallel $(nproc)
       - name: 收集构建产物
         run: |
-          mkdir -p ${{ env.BUILD_ROOT }}/artifacts
           SO_FILE=$(find ${{ env.BUILD_ROOT }}/build -name "libMobileGL.so" -type f | head -n1)
           if [ -z "$SO_FILE" ]; then
             SO_FILE=$(find ${{ env.BUILD_ROOT }}/build -name "libMobileGL.so.*" -type f | head -n1)
           fi
           if [ -n "$SO_FILE" ]; then
-            cp "$SO_FILE" "${{ env.BUILD_ROOT }}/artifacts/libMobileGL-arm64-v8a.so"
-            echo "已生成共享库: libMobileGL-arm64-v8a.so"
+            mkdir -p ${{ env.BUILD_ROOT }}/artifacts/lib/${{ env.ARCH }}
+            cp "$SO_FILE" "${{ env.BUILD_ROOT }}/artifacts/lib/${{ env.ARCH }}/libMobileGL.so"
           else
             echo "::error::未找到 libMobileGL.so"
             exit 1
@@ -133,8 +137,8 @@ jobs:
       - name: 上传构建产物
         uses: actions/upload-artifact@v4
         with:
-          name: MobileGL-linux-arm64-v8a
-          path: ${{ env.BUILD_ROOT }}/artifacts/libMobileGL-arm64-v8a.so
+          name: MobileGL-linux-${{ env.ARCH }}
+          path: ${{ env.BUILD_ROOT }}/artifacts
           if-no-files-found: error
 
   build-x86:
@@ -142,11 +146,12 @@ jobs:
     runs-on: ubuntu-latest
     env:
       BUILD_ROOT: ${{ github.workspace }}
+      ARCH: x86
     steps:
       - name: 设置交换空间
         uses: pierotofy/set-swap-space@master
         with:
-          swap-size-gb: 16
+          swap-size-gb: 30
       - name: 检出仓库
         uses: actions/checkout@v4
         with:
@@ -188,14 +193,13 @@ jobs:
         run: cmake --build . --parallel $(nproc)
       - name: 收集构建产物
         run: |
-          mkdir -p ${{ env.BUILD_ROOT }}/artifacts
           SO_FILE=$(find ${{ env.BUILD_ROOT }}/build -name "libMobileGL.so" -type f | head -n1)
           if [ -z "$SO_FILE" ]; then
             SO_FILE=$(find ${{ env.BUILD_ROOT }}/build -name "libMobileGL.so.*" -type f | head -n1)
           fi
           if [ -n "$SO_FILE" ]; then
-            cp "$SO_FILE" "${{ env.BUILD_ROOT }}/artifacts/libMobileGL-x86.so"
-            echo "已生成共享库: libMobileGL-x86.so"
+            mkdir -p ${{ env.BUILD_ROOT }}/artifacts/lib/${{ env.ARCH }}
+            cp "$SO_FILE" "${{ env.BUILD_ROOT }}/artifacts/lib/${{ env.ARCH }}/libMobileGL.so"
           else
             echo "::error::未找到 libMobileGL.so"
             exit 1
@@ -203,8 +207,8 @@ jobs:
       - name: 上传构建产物
         uses: actions/upload-artifact@v4
         with:
-          name: MobileGL-linux-x86
-          path: ${{ env.BUILD_ROOT }}/artifacts/libMobileGL-x86.so
+          name: MobileGL-linux-${{ env.ARCH }}
+          path: ${{ env.BUILD_ROOT }}/artifacts
           if-no-files-found: error
 
   build-armeabi-v7a:
@@ -212,6 +216,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       BUILD_ROOT: ${{ github.workspace }}
+      ARCH: armeabi-v7a
     steps:
       - name: 设置交换空间
         uses: pierotofy/set-swap-space@master
@@ -242,7 +247,7 @@ jobs:
           sudo apt-get install -y binutils-arm-linux-gnueabihf g++-arm-linux-gnueabihf libc6-dev-armhf-cross
       - name: 设置 Ninja 并行上限
         run: echo "CMAKE_BUILD_PARALLEL_LEVEL=2" >> $GITHUB_ENV
-      - name: 配置 CMake（交叉编译，强制禁用 LTO，使用 lld）
+      - name: 配置 CMake
         working-directory: ${{ env.BUILD_ROOT }}
         run: |
           rm -rf build
@@ -263,12 +268,12 @@ jobs:
             -DBUILD_SHARED_LIBS=ON \
             -DMOBILEGL_BUILD_TEST=OFF \
             -DMOBILEGL_BUILD_BENCHMARK=OFF
-      - name: 编译（并行 2 线程 + 详细输出）
+      - name: 编译
         working-directory: ${{ env.BUILD_ROOT }}/build
         run: |
           set -euxo pipefail
           cmake --build . --parallel 2 --verbose
-      - name: 打印系统资源状态（排查 OOM）
+      - name: 打印系统资源状态
         if: always()
         run: |
           echo "== free -h =="
@@ -279,14 +284,13 @@ jobs:
           sudo dmesg -T | tail -n 200 || true
       - name: 收集构建产物
         run: |
-          mkdir -p ${{ env.BUILD_ROOT }}/artifacts
           SO_FILE=$(find ${{ env.BUILD_ROOT }}/build -name "libMobileGL.so" -type f | head -n1)
           if [ -z "$SO_FILE" ]; then
             SO_FILE=$(find ${{ env.BUILD_ROOT }}/build -name "libMobileGL.so.*" -type f | head -n1)
           fi
           if [ -n "$SO_FILE" ]; then
-            cp "$SO_FILE" "${{ env.BUILD_ROOT }}/artifacts/libMobileGL-armeabi-v7a.so"
-            echo "已生成共享库: libMobileGL-armeabi-v7a.so"
+            mkdir -p ${{ env.BUILD_ROOT }}/artifacts/lib/${{ env.ARCH }}
+            cp "$SO_FILE" "${{ env.BUILD_ROOT }}/artifacts/lib/${{ env.ARCH }}/libMobileGL.so"
           else
             echo "::error::未找到 libMobileGL.so"
             exit 1
@@ -294,6 +298,28 @@ jobs:
       - name: 上传构建产物
         uses: actions/upload-artifact@v4
         with:
-          name: MobileGL-linux-armeabi-v7a
-          path: ${{ env.BUILD_ROOT }}/artifacts/libMobileGL-armeabi-v7a.so
+          name: MobileGL-linux-${{ env.ARCH }}
+          path: ${{ env.BUILD_ROOT }}/artifacts
+          if-no-files-found: error
+
+  merge-artifacts:
+    name: 合并所有架构库
+    needs: [build-x86_64, build-arm64-v8a, build-x86, build-armeabi-v7a]
+    runs-on: ubuntu-latest
+    steps:
+      - name: 下载所有构建产物
+        uses: actions/download-artifact@v4
+        with:
+          pattern: MobileGL-linux-*
+          path: ${{ github.workspace }}/downloaded
+          merge-multiple: true
+      - name: 整理目录结构并打包为 ZIP
+        run: |
+          cd ${{ github.workspace }}/downloaded
+          zip -r ${{ github.workspace }}/MobileGL-linux-all.zip lib/
+      - name: 上传合并后的压缩包
+        uses: actions/upload-artifact@v4
+        with:
+          name: MobileGL-linux-all
+          path: ${{ github.workspace }}/MobileGL-linux-all.zip
           if-no-files-found: error
