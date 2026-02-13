@@ -210,71 +210,66 @@ jobs:
     env:
       BUILD_ROOT: ${{ github.workspace }}
     steps:
-      - name: 设置 QEMU
-        uses: docker/setup-qemu-action@v3
+      - name: 设置交换空间
+        uses: pierotofy/set-swap-space@master
         with:
-          platforms: linux/arm/v7
+          swap-size-gb: 64
       - name: 检出仓库
         uses: actions/checkout@v4
         with:
           submodules: true
-      - name: 在 ARMv7 容器内构建
+      - name: 获取 CMake
+        uses: lukka/get-cmake@latest
+      - name: 更新 glslang 外部源码
+        working-directory: ${{ env.BUILD_ROOT }}/3rdparty/glslang
+        run: python3 update_glslang_sources.py
+      - name: 安装基础工具
         run: |
-          # 创建产物目录
+          sudo apt-get update
+          sudo apt-get install -y ninja-build python3
+      - name: 安装 Clang 20
+        run: |
+          wget -O - https://apt.llvm.org/llvm-snapshot.gpg.key | sudo apt-key add -
+          sudo add-apt-repository "deb http://apt.llvm.org/$(lsb_release -cs)/ llvm-toolchain-$(lsb_release -cs)-20 main"
+          sudo apt-get update
+          sudo apt-get install -y clang-20 clang++-20 lld-20 libc++-20-dev libc++abi-20-dev
+      - name: 安装 ARM 交叉编译依赖
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y binutils-arm-linux-gnueabihf g++-arm-linux-gnueabihf libc6-dev-armhf-cross
+      - name: 配置 CMake（交叉编译，禁用 LTO）
+        working-directory: ${{ env.BUILD_ROOT }}
+        run: |
+          cmake -S . -B build \
+            -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_COMPILER=clang-20 \
+            -DCMAKE_CXX_COMPILER=clang++-20 \
+            -DCMAKE_C_FLAGS="--target=arm-linux-gnueabihf" \
+            -DCMAKE_CXX_FLAGS="--target=arm-linux-gnueabihf" \
+            -DCMAKE_EXE_LINKER_FLAGS="--target=arm-linux-gnueabihf" \
+            -DCMAKE_SHARED_LINKER_FLAGS="--target=arm-linux-gnueabihf" \
+            -DCMAKE_INTERPROCEDURAL_OPTIMIZATION=OFF \
+            -DGLSLANG_LTO=OFF \
+            -DBUILD_SHARED_LIBS=ON \
+            -DMOBILEGL_BUILD_TEST=OFF \
+            -DMOBILEGL_BUILD_BENCHMARK=OFF
+      - name: 编译
+        working-directory: ${{ env.BUILD_ROOT }}/build
+        run: cmake --build . --parallel $(nproc)
+      - name: 收集构建产物
+        run: |
           mkdir -p ${{ env.BUILD_ROOT }}/artifacts
-
-          # 运行容器，挂载工作目录，执行构建
-          docker run --rm \
-            --platform linux/arm/v7 \
-            -v ${{ env.BUILD_ROOT }}:${{ env.BUILD_ROOT }} \
-            -w ${{ env.BUILD_ROOT }} \
-            arm32v7/ubuntu:22.04 \
-            bash -c "
-              set -e
-              # 安装基础工具
-              apt-get update
-              apt-get install -y wget gnupg lsb-release software-properties-common cmake ninja-build python3 git
-
-              # 更新 glslang 外部源码
-              cd ${{ env.BUILD_ROOT }}/3rdparty/glslang
-              python3 update_glslang_sources.py
-
-              # 安装 Clang 20
-              wget -O - https://apt.llvm.org/llvm-snapshot.gpg.key | apt-key add -
-              add-apt-repository 'deb http://apt.llvm.org/$(lsb_release -cs)/ llvm-toolchain-$(lsb_release -cs)-20 main'
-              apt-get update
-              apt-get install -y clang-20 clang++-20 lld-20 libc++-20-dev libc++abi-20-dev
-
-              # 显示工具链信息
-              clang-20 --version
-              uname -m
-
-              # 配置 CMake
-              cd ${{ env.BUILD_ROOT }}
-              cmake -S . -B build \
-                -G Ninja \
-                -DCMAKE_BUILD_TYPE=Release \
-                -DCMAKE_C_COMPILER=clang-20 \
-                -DCMAKE_CXX_COMPILER=clang++-20 \
-                -DBUILD_SHARED_LIBS=ON \
-                -DMOBILEGL_BUILD_TEST=OFF \
-                -DMOBILEGL_BUILD_BENCHMARK=OFF
-
-              # 编译
-              cmake --build build --parallel $(nproc)
-
-              # 复制产物到宿主机可访问位置
-              SO_FILE=\$(find build -name 'libMobileGL.so' -type f | head -n1)
-              if [ -z \"\$SO_FILE\" ]; then
-                SO_FILE=\$(find build -name 'libMobileGL.so.*' -type f | head -n1)
-              fi
-              if [ -n \"\$SO_FILE\" ]; then
-                cp \"\$SO_FILE\" ${{ env.BUILD_ROOT }}/artifacts/libMobileGL-armeabi-v7a.so
-              else
-                echo '未找到 libMobileGL.so'
-                exit 1
-              fi
-            "
+          SO_FILE=$(find ${{ env.BUILD_ROOT }}/build -name "libMobileGL.so" -type f | head -n1)
+          if [ -z "$SO_FILE" ]; then
+            SO_FILE=$(find ${{ env.BUILD_ROOT }}/build -name "libMobileGL.so.*" -type f | head -n1)
+          fi
+          if [ -n "$SO_FILE" ]; then
+            cp "$SO_FILE" "${{ env.BUILD_ROOT }}/artifacts/libMobileGL-armeabi-v7a.so"
+          else
+            echo "::error::未找到 libMobileGL.so"
+            exit 1
+          fi
       - name: 上传构建产物
         uses: actions/upload-artifact@v4
         with:
