@@ -23,31 +23,25 @@ jobs:
         uses: pierotofy/set-swap-space@master
         with:
           swap-size-gb: 16
-
       - name: 检出仓库
         uses: actions/checkout@v4
         with:
           submodules: true
-
       - name: 获取 CMake
         uses: lukka/get-cmake@latest
-
       - name: 更新 glslang 外部源码
         working-directory: ${{ env.BUILD_ROOT }}/3rdparty/glslang
         run: python3 update_glslang_sources.py
-
       - name: 安装基础工具
         run: |
           sudo apt-get update
           sudo apt-get install -y ninja-build python3
-
       - name: 安装 Clang 20
         run: |
           wget -O - https://apt.llvm.org/llvm-snapshot.gpg.key | sudo apt-key add -
           sudo add-apt-repository "deb http://apt.llvm.org/$(lsb_release -cs)/ llvm-toolchain-$(lsb_release -cs)-20 main"
           sudo apt-get update
           sudo apt-get install -y clang-20 clang++-20 lld-20 libc++-20-dev libc++abi-20-dev
-
       - name: 配置 CMake
         working-directory: ${{ env.BUILD_ROOT }}
         run: |
@@ -59,11 +53,9 @@ jobs:
             -DBUILD_SHARED_LIBS=ON \
             -DMOBILEGL_BUILD_TEST=OFF \
             -DMOBILEGL_BUILD_BENCHMARK=OFF
-
       - name: 编译
         working-directory: ${{ env.BUILD_ROOT }}/build
         run: cmake --build . --parallel $(nproc)
-
       - name: 收集构建产物
         run: |
           mkdir -p ${{ env.BUILD_ROOT }}/artifacts
@@ -78,7 +70,6 @@ jobs:
             echo "::error::未找到 libMobileGL.so"
             exit 1
           fi
-
       - name: 上传构建产物
         uses: actions/upload-artifact@v4
         with:
@@ -96,26 +87,21 @@ jobs:
         uses: actions/checkout@v4
         with:
           submodules: true
-
       - name: 获取 CMake
         uses: lukka/get-cmake@latest
-
       - name: 更新 glslang 外部源码
         working-directory: ${{ env.BUILD_ROOT }}/3rdparty/glslang
         run: python3 update_glslang_sources.py
-
       - name: 安装基础工具
         run: |
           sudo apt-get update
           sudo apt-get install -y ninja-build python3
-
       - name: 安装 Clang 20
         run: |
           wget -O - https://apt.llvm.org/llvm-snapshot.gpg.key | sudo apt-key add -
           sudo add-apt-repository "deb http://apt.llvm.org/$(lsb_release -cs)/ llvm-toolchain-$(lsb_release -cs)-20 main"
           sudo apt-get update
           sudo apt-get install -y clang-20 clang++-20 lld-20 libc++-20-dev libc++abi-20-dev
-
       - name: 配置 CMake
         working-directory: ${{ env.BUILD_ROOT }}
         run: |
@@ -127,11 +113,9 @@ jobs:
             -DBUILD_SHARED_LIBS=ON \
             -DMOBILEGL_BUILD_TEST=OFF \
             -DMOBILEGL_BUILD_BENCHMARK=OFF
-
       - name: 编译
         working-directory: ${{ env.BUILD_ROOT }}/build
         run: cmake --build . --parallel $(nproc)
-
       - name: 收集构建产物
         run: |
           mkdir -p ${{ env.BUILD_ROOT }}/artifacts
@@ -146,7 +130,6 @@ jobs:
             echo "::error::未找到 libMobileGL.so"
             exit 1
           fi
-
       - name: 上传构建产物
         uses: actions/upload-artifact@v4
         with:
@@ -164,36 +147,29 @@ jobs:
         uses: pierotofy/set-swap-space@master
         with:
           swap-size-gb: 16
-
       - name: 检出仓库
         uses: actions/checkout@v4
         with:
           submodules: true
-
       - name: 获取 CMake
         uses: lukka/get-cmake@latest
-
       - name: 更新 glslang 外部源码
         working-directory: ${{ env.BUILD_ROOT }}/3rdparty/glslang
         run: python3 update_glslang_sources.py
-
       - name: 安装基础工具
         run: |
           sudo apt-get update
           sudo apt-get install -y ninja-build python3
-
       - name: 安装 Clang 20
         run: |
           wget -O - https://apt.llvm.org/llvm-snapshot.gpg.key | sudo apt-key add -
           sudo add-apt-repository "deb http://apt.llvm.org/$(lsb_release -cs)/ llvm-toolchain-$(lsb_release -cs)-20 main"
           sudo apt-get update
           sudo apt-get install -y clang-20 clang++-20 lld-20 libc++-20-dev libc++abi-20-dev
-
       - name: 安装 32 位依赖
         run: |
           sudo apt-get update
           sudo apt-get install -y gcc-multilib g++-multilib libc6-dev-i386
-
       - name: 配置 CMake
         working-directory: ${{ env.BUILD_ROOT }}
         run: |
@@ -207,11 +183,9 @@ jobs:
             -DBUILD_SHARED_LIBS=ON \
             -DMOBILEGL_BUILD_TEST=OFF \
             -DMOBILEGL_BUILD_BENCHMARK=OFF
-
       - name: 编译
         working-directory: ${{ env.BUILD_ROOT }}/build
         run: cmake --build . --parallel $(nproc)
-
       - name: 收集构建产物
         run: |
           mkdir -p ${{ env.BUILD_ROOT }}/artifacts
@@ -226,7 +200,6 @@ jobs:
             echo "::error::未找到 libMobileGL.so"
             exit 1
           fi
-
       - name: 上传构建产物
         uses: actions/upload-artifact@v4
         with:
@@ -243,63 +216,56 @@ jobs:
       - name: 设置交换空间
         uses: pierotofy/set-swap-space@master
         with:
-          swap-size-gb: 32  # 加大交换空间防止链接 OOM
-
+          swap-size-gb: 32
       - name: 检出仓库
         uses: actions/checkout@v4
         with:
           submodules: true
-
       - name: 获取 CMake
         uses: lukka/get-cmake@latest
-
       - name: 更新 glslang 外部源码
         working-directory: ${{ env.BUILD_ROOT }}/3rdparty/glslang
         run: python3 update_glslang_sources.py
-
       - name: 安装基础工具
         run: |
           sudo apt-get update
           sudo apt-get install -y ninja-build python3
-
       - name: 安装 Clang 20
         run: |
           wget -O - https://apt.llvm.org/llvm-snapshot.gpg.key | sudo apt-key add -
           sudo add-apt-repository "deb http://apt.llvm.org/$(lsb_release -cs)/ llvm-toolchain-$(lsb_release -cs)-20 main"
           sudo apt-get update
           sudo apt-get install -y clang-20 clang++-20 lld-20 libc++-20-dev libc++abi-20-dev
-
       - name: 安装 ARM 交叉编译依赖
         run: |
           sudo apt-get update
           sudo apt-get install -y binutils-arm-linux-gnueabihf g++-arm-linux-gnueabihf libc6-dev-armhf-cross
-
-      - name: 配置 CMake（交叉编译，禁用 LTO）
+      - name: 配置 CMake（交叉编译，强制禁用 LTO）
         working-directory: ${{ env.BUILD_ROOT }}
         run: |
-          # 强制清理旧缓存
           rm -rf build
           cmake -S . -B build --fresh \
             -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_C_COMPILER=clang-20 \
             -DCMAKE_CXX_COMPILER=clang++-20 \
-            -DCMAKE_C_FLAGS="--target=arm-linux-gnueabihf" \
-            -DCMAKE_CXX_FLAGS="--target=arm-linux-gnueabihf" \
-            -DCMAKE_EXE_LINKER_FLAGS="--target=arm-linux-gnueabihf" \
-            -DCMAKE_SHARED_LINKER_FLAGS="--target=arm-linux-gnueabihf" \
+            -DCMAKE_C_FLAGS="--target=arm-linux-gnueabihf -fno-lto" \
+            -DCMAKE_CXX_FLAGS="--target=arm-linux-gnueabihf -fno-lto" \
+            -DCMAKE_EXE_LINKER_FLAGS="--target=arm-linux-gnueabihf -fno-lto" \
+            -DCMAKE_SHARED_LINKER_FLAGS="--target=arm-linux-gnueabihf -fno-lto" \
+            -DCMAKE_MODULE_LINKER_FLAGS="--target=arm-linux-gnueabihf -fno-lto" \
+            -DCMAKE_C_FLAGS_RELEASE="-O2 -DNDEBUG -fno-lto" \
+            -DCMAKE_CXX_FLAGS_RELEASE="-O2 -DNDEBUG -fno-lto" \
             -DCMAKE_INTERPROCEDURAL_OPTIMIZATION=OFF \
             -DGLSLANG_LTO=OFF \
             -DBUILD_SHARED_LIBS=ON \
             -DMOBILEGL_BUILD_TEST=OFF \
             -DMOBILEGL_BUILD_BENCHMARK=OFF
-
-      - name: 编译（单线程模式避免内存溢出）
+      - name: 编译（8 线程并行）
         working-directory: ${{ env.BUILD_ROOT }}/build
         run: |
           set -x
-          cmake --build . --parallel 1
-
+          cmake --build . --parallel 8
       - name: 收集构建产物
         run: |
           mkdir -p ${{ env.BUILD_ROOT }}/artifacts
@@ -314,7 +280,6 @@ jobs:
             echo "::error::未找到 libMobileGL.so"
             exit 1
           fi
-
       - name: 上传构建产物
         uses: actions/upload-artifact@v4
         with:
