@@ -338,39 +338,18 @@ jobs:
           echo "当前工作空间根目录内容:"
           ls -la ${{ github.workspace }}
 
-      - name: 归一化目录并打包为 ZIP
-        if: steps.check.outputs.found != 'true'
-        run: |
-          set -euxo pipefail
-          STAGE="${{ github.workspace }}/stage"
-          rm -rf "$STAGE"
-          mkdir -p "$STAGE/lib"
-          if [ -d "${{ github.workspace }}/downloaded/lib" ]; then
-            cp -a "${{ github.workspace }}/downloaded/lib/." "$STAGE/lib/"
-          fi
-          if [ -d "${{ github.workspace }}/downloaded/artifacts/lib" ]; then
-            cp -a "${{ github.workspace }}/downloaded/artifacts/lib/." "$STAGE/lib/"
-          fi
-          find "$STAGE" -name "*.zip" -type f -delete || true
-          cd "$STAGE"
-          zip -r "${{ github.workspace }}/MobileGL-linux-all.zip" lib
-
-      - name: 列出生成的文件
-        if: steps.check.outputs.found != 'true'
-        run: ls -la ${{ github.workspace }}
-
-      - name: 上传新生成的压缩包
-        if: steps.check.outputs.found != 'true'
-        uses: actions/upload-artifact@v4
-        with:
-          name: MobileGL-linux-all
-          path: ${{ github.workspace }}/MobileGL-linux-all.zip
-          if-no-files-found: error
-
       - name: 上传已存在的压缩包
         if: steps.check.outputs.found == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: MobileGL-linux-all
           path: ${{ github.workspace }}/MobileGL-linux-all.zip
+          if-no-files-found: error
+
+      - name: 直接上传合并后的 lib 目录
+        if: steps.check.outputs.found != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: MobileGL-linux-all
+          path: ${{ github.workspace }}/downloaded/lib
           if-no-files-found: error
