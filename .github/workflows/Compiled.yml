@@ -20,7 +20,7 @@ jobs:
       BUILD_ROOT: ${{ github.workspace }}
       ARCH: x86_64
       ANDROID_ABI: x86_64
-      ANDROID_API: 21
+      ANDROID_API: 26
     steps:
       - name: 设置交换空间
         uses: pierotofy/set-swap-space@master
@@ -53,6 +53,8 @@ jobs:
             -DCMAKE_TOOLCHAIN_FILE=${{ env.ANDROID_NDK }}/build/cmake/android.toolchain.cmake \
             -DANDROID_ABI=${{ env.ANDROID_ABI }} \
             -DANDROID_PLATFORM=android-${{ env.ANDROID_API }} \
+            -DCMAKE_CXX_STANDARD=20 \
+            -DCMAKE_CXX_STANDARD_REQUIRED=ON \
             -DBUILD_SHARED_LIBS=ON \
             -DMOBILEGL_BUILD_TEST=OFF \
             -DMOBILEGL_BUILD_BENCHMARK=OFF
@@ -90,7 +92,7 @@ jobs:
       BUILD_ROOT: ${{ github.workspace }}
       ARCH: arm64-v8a
       ANDROID_ABI: arm64-v8a
-      ANDROID_API: 21
+      ANDROID_API: 26
     steps:
       - name: 设置交换空间
         uses: pierotofy/set-swap-space@master
@@ -123,6 +125,8 @@ jobs:
             -DCMAKE_TOOLCHAIN_FILE=${{ env.ANDROID_NDK }}/build/cmake/android.toolchain.cmake \
             -DANDROID_ABI=${{ env.ANDROID_ABI }} \
             -DANDROID_PLATFORM=android-${{ env.ANDROID_API }} \
+            -DCMAKE_CXX_STANDARD=20 \
+            -DCMAKE_CXX_STANDARD_REQUIRED=ON \
             -DBUILD_SHARED_LIBS=ON \
             -DMOBILEGL_BUILD_TEST=OFF \
             -DMOBILEGL_BUILD_BENCHMARK=OFF
@@ -160,7 +164,7 @@ jobs:
       BUILD_ROOT: ${{ github.workspace }}
       ARCH: x86
       ANDROID_ABI: x86
-      ANDROID_API: 21
+      ANDROID_API: 26
     steps:
       - name: 设置交换空间
         uses: pierotofy/set-swap-space@master
@@ -193,6 +197,8 @@ jobs:
             -DCMAKE_TOOLCHAIN_FILE=${{ env.ANDROID_NDK }}/build/cmake/android.toolchain.cmake \
             -DANDROID_ABI=${{ env.ANDROID_ABI }} \
             -DANDROID_PLATFORM=android-${{ env.ANDROID_API }} \
+            -DCMAKE_CXX_STANDARD=20 \
+            -DCMAKE_CXX_STANDARD_REQUIRED=ON \
             -DBUILD_SHARED_LIBS=ON \
             -DMOBILEGL_BUILD_TEST=OFF \
             -DMOBILEGL_BUILD_BENCHMARK=OFF
@@ -230,7 +236,7 @@ jobs:
       BUILD_ROOT: ${{ github.workspace }}
       ARCH: armeabi-v7a
       ANDROID_ABI: armeabi-v7a
-      ANDROID_API: 16
+      ANDROID_API: 26
     steps:
       - name: 设置交换空间
         uses: pierotofy/set-swap-space@master
@@ -263,6 +269,8 @@ jobs:
             -DCMAKE_TOOLCHAIN_FILE=${{ env.ANDROID_NDK }}/build/cmake/android.toolchain.cmake \
             -DANDROID_ABI=${{ env.ANDROID_ABI }} \
             -DANDROID_PLATFORM=android-${{ env.ANDROID_API }} \
+            -DCMAKE_CXX_STANDARD=20 \
+            -DCMAKE_CXX_STANDARD_REQUIRED=ON \
             -DBUILD_SHARED_LIBS=ON \
             -DMOBILEGL_BUILD_TEST=OFF \
             -DMOBILEGL_BUILD_BENCHMARK=OFF
