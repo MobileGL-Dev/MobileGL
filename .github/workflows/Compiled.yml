@@ -59,15 +59,25 @@ jobs:
         run: cmake --build . --parallel $(nproc)
       - name: 收集构建产物
         run: |
+          mkdir -p ${{ env.BUILD_ROOT }}/artifacts/lib/${{ env.ARCH }}
           SO_FILE=$(find ${{ env.BUILD_ROOT }}/build -name "libMobileGL.so" -type f | head -n1)
           if [ -z "$SO_FILE" ]; then
             SO_FILE=$(find ${{ env.BUILD_ROOT }}/build -name "libMobileGL.so.*" -type f | head -n1)
           fi
           if [ -n "$SO_FILE" ]; then
-            mkdir -p ${{ env.BUILD_ROOT }}/artifacts/lib/${{ env.ARCH }}
             cp "$SO_FILE" "${{ env.BUILD_ROOT }}/artifacts/lib/${{ env.ARCH }}/libMobileGL.so"
           else
             echo "::error::未找到 libMobileGL.so"
+            exit 1
+          fi
+          GLSLANG_FILE=$(find ${{ env.BUILD_ROOT }}/build -name "libglslang.so" -type f | head -n1)
+          if [ -z "$GLSLANG_FILE" ]; then
+            GLSLANG_FILE=$(find ${{ env.BUILD_ROOT }}/build -name "libglslang.so.*" -type f | head -n1)
+          fi
+          if [ -n "$GLSLANG_FILE" ]; then
+            cp "$GLSLANG_FILE" "${{ env.BUILD_ROOT }}/artifacts/lib/${{ env.ARCH }}/libglslang.so"
+          else
+            echo "::error::未找到 libglslang.so"
             exit 1
           fi
       - name: 上传构建产物
@@ -123,15 +133,25 @@ jobs:
         run: cmake --build . --parallel $(nproc)
       - name: 收集构建产物
         run: |
+          mkdir -p ${{ env.BUILD_ROOT }}/artifacts/lib/${{ env.ARCH }}
           SO_FILE=$(find ${{ env.BUILD_ROOT }}/build -name "libMobileGL.so" -type f | head -n1)
           if [ -z "$SO_FILE" ]; then
             SO_FILE=$(find ${{ env.BUILD_ROOT }}/build -name "libMobileGL.so.*" -type f | head -n1)
           fi
           if [ -n "$SO_FILE" ]; then
-            mkdir -p ${{ env.BUILD_ROOT }}/artifacts/lib/${{ env.ARCH }}
             cp "$SO_FILE" "${{ env.BUILD_ROOT }}/artifacts/lib/${{ env.ARCH }}/libMobileGL.so"
           else
             echo "::error::未找到 libMobileGL.so"
+            exit 1
+          fi
+          GLSLANG_FILE=$(find ${{ env.BUILD_ROOT }}/build -name "libglslang.so" -type f | head -n1)
+          if [ -z "$GLSLANG_FILE" ]; then
+            GLSLANG_FILE=$(find ${{ env.BUILD_ROOT }}/build -name "libglslang.so.*" -type f | head -n1)
+          fi
+          if [ -n "$GLSLANG_FILE" ]; then
+            cp "$GLSLANG_FILE" "${{ env.BUILD_ROOT }}/artifacts/lib/${{ env.ARCH }}/libglslang.so"
+          else
+            echo "::error::未找到 libglslang.so"
             exit 1
           fi
       - name: 上传构建产物
@@ -193,15 +213,25 @@ jobs:
         run: cmake --build . --parallel $(nproc)
       - name: 收集构建产物
         run: |
+          mkdir -p ${{ env.BUILD_ROOT }}/artifacts/lib/${{ env.ARCH }}
           SO_FILE=$(find ${{ env.BUILD_ROOT }}/build -name "libMobileGL.so" -type f | head -n1)
           if [ -z "$SO_FILE" ]; then
             SO_FILE=$(find ${{ env.BUILD_ROOT }}/build -name "libMobileGL.so.*" -type f | head -n1)
           fi
           if [ -n "$SO_FILE" ]; then
-            mkdir -p ${{ env.BUILD_ROOT }}/artifacts/lib/${{ env.ARCH }}
             cp "$SO_FILE" "${{ env.BUILD_ROOT }}/artifacts/lib/${{ env.ARCH }}/libMobileGL.so"
           else
             echo "::error::未找到 libMobileGL.so"
+            exit 1
+          fi
+          GLSLANG_FILE=$(find ${{ env.BUILD_ROOT }}/build -name "libglslang.so" -type f | head -n1)
+          if [ -z "$GLSLANG_FILE" ]; then
+            GLSLANG_FILE=$(find ${{ env.BUILD_ROOT }}/build -name "libglslang.so.*" -type f | head -n1)
+          fi
+          if [ -n "$GLSLANG_FILE" ]; then
+            cp "$GLSLANG_FILE" "${{ env.BUILD_ROOT }}/artifacts/lib/${{ env.ARCH }}/libglslang.so"
+          else
+            echo "::error::未找到 libglslang.so"
             exit 1
           fi
       - name: 上传构建产物
@@ -284,15 +314,25 @@ jobs:
           sudo dmesg -T | tail -n 200 || true
       - name: 收集构建产物
         run: |
+          mkdir -p ${{ env.BUILD_ROOT }}/artifacts/lib/${{ env.ARCH }}
           SO_FILE=$(find ${{ env.BUILD_ROOT }}/build -name "libMobileGL.so" -type f | head -n1)
           if [ -z "$SO_FILE" ]; then
             SO_FILE=$(find ${{ env.BUILD_ROOT }}/build -name "libMobileGL.so.*" -type f | head -n1)
           fi
           if [ -n "$SO_FILE" ]; then
-            mkdir -p ${{ env.BUILD_ROOT }}/artifacts/lib/${{ env.ARCH }}
             cp "$SO_FILE" "${{ env.BUILD_ROOT }}/artifacts/lib/${{ env.ARCH }}/libMobileGL.so"
           else
             echo "::error::未找到 libMobileGL.so"
+            exit 1
+          fi
+          GLSLANG_FILE=$(find ${{ env.BUILD_ROOT }}/build -name "libglslang.so" -type f | head -n1)
+          if [ -z "$GLSLANG_FILE" ]; then
+            GLSLANG_FILE=$(find ${{ env.BUILD_ROOT }}/build -name "libglslang.so.*" -type f | head -n1)
+          fi
+          if [ -n "$GLSLANG_FILE" ]; then
+            cp "$GLSLANG_FILE" "${{ env.BUILD_ROOT }}/artifacts/lib/${{ env.ARCH }}/libglslang.so"
+          else
+            echo "::error::未找到 libglslang.so"
             exit 1
           fi
       - name: 上传构建产物
