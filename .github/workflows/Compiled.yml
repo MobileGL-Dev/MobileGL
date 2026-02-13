@@ -313,6 +313,7 @@ jobs:
           pattern: MobileGL-linux-*
           path: ${{ github.workspace }}/downloaded
           merge-multiple: true
+
       - name: 归一化目录并打包为 ZIP
         run: |
           set -euxo pipefail
@@ -328,9 +329,19 @@ jobs:
           find "$STAGE" -name "*.zip" -type f -delete || true
           cd "$STAGE"
           zip -r "${{ github.workspace }}/MobileGL-linux-all.zip" lib
+
       - name: 上传合并后的压缩包
+        id: upload
         uses: actions/upload-artifact@v4
         with:
           name: MobileGL-linux-all
           path: ${{ github.workspace }}/MobileGL-linux-all.zip
           if-no-files-found: error
+
+      - name: 输出代理下载链接
+        run: |
+          echo "原始下载链接:"
+          echo "https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}/artifacts/${{ steps.upload.outputs.artifact-id }}"
+          echo ""
+          echo "代理下载链接:"
+          echo "https://htttp-proxy.262832.xyz/https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}/artifacts/${{ steps.upload.outputs.artifact-id }}"
