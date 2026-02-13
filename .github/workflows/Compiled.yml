@@ -313,10 +313,21 @@ jobs:
           pattern: MobileGL-linux-*
           path: ${{ github.workspace }}/downloaded
           merge-multiple: true
-      - name: 整理目录结构并打包为 ZIP
+      - name: 归一化目录并打包为 ZIP
         run: |
-          cd ${{ github.workspace }}/downloaded
-          zip -r ${{ github.workspace }}/MobileGL-linux-all.zip lib/
+          set -euxo pipefail
+          STAGE="${{ github.workspace }}/stage"
+          rm -rf "$STAGE"
+          mkdir -p "$STAGE/lib"
+          if [ -d "${{ github.workspace }}/downloaded/lib" ]; then
+            cp -a "${{ github.workspace }}/downloaded/lib/." "$STAGE/lib/"
+          fi
+          if [ -d "${{ github.workspace }}/downloaded/artifacts/lib" ]; then
+            cp -a "${{ github.workspace }}/downloaded/artifacts/lib/." "$STAGE/lib/"
+          fi
+          find "$STAGE" -name "*.zip" -type f -delete || true
+          cd "$STAGE"
+          zip -r "${{ github.workspace }}/MobileGL-linux-all.zip" lib
       - name: 上传合并后的压缩包
         uses: actions/upload-artifact@v4
         with:
