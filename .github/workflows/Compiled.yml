@@ -12,6 +12,9 @@ on:
       - dev
   workflow_dispatch:
 
+env:
+  NDK_VER: r29
+
 jobs:
   build-android-x86_64:
     name: android-x86_64
@@ -20,7 +23,7 @@ jobs:
       BUILD_ROOT: ${{ github.workspace }}
       ARCH: x86_64
       ANDROID_ABI: x86_64
-      ANDROID_API: 26
+      ANDROID_API: 29
     steps:
       - name: 设置交换空间
         uses: pierotofy/set-swap-space@master
@@ -38,9 +41,9 @@ jobs:
           sudo apt-get install -y ninja-build python3
       - name: 下载 Android NDK
         run: |
-          wget -q https://dl.google.com/android/repository/android-ndk-r26d-linux.zip
-          unzip -q android-ndk-r26d-linux.zip
-          echo "ANDROID_NDK=${{ github.workspace }}/android-ndk-r26d" >> $GITHUB_ENV
+          wget -q https://dl.google.com/android/repository/android-ndk-${NDK_VER}-linux.zip
+          unzip -q android-ndk-${NDK_VER}-linux.zip
+          echo "ANDROID_NDK=${{ github.workspace }}/android-ndk-${NDK_VER}" >> $GITHUB_ENV
       - name: 更新 glslang 外部源码
         working-directory: ${{ env.BUILD_ROOT }}/3rdparty/glslang
         run: python3 update_glslang_sources.py
@@ -55,6 +58,12 @@ jobs:
             -DANDROID_PLATFORM=android-${{ env.ANDROID_API }} \
             -DCMAKE_CXX_STANDARD=20 \
             -DCMAKE_CXX_STANDARD_REQUIRED=ON \
+            -DMOBILEGL_ANDROID_NO_STD_FORMAT=ON \
+            -DCMAKE_C_FLAGS="-fno-lto" \
+            -DCMAKE_CXX_FLAGS="-fno-lto" \
+            -DCMAKE_SHARED_LINKER_FLAGS="-fno-lto" \
+            -DCMAKE_EXE_LINKER_FLAGS="-fno-lto" \
+            -DCMAKE_INTERPROCEDURAL_OPTIMIZATION=OFF \
             -DBUILD_SHARED_LIBS=ON \
             -DMOBILEGL_BUILD_TEST=OFF \
             -DMOBILEGL_BUILD_BENCHMARK=OFF
@@ -92,7 +101,7 @@ jobs:
       BUILD_ROOT: ${{ github.workspace }}
       ARCH: arm64-v8a
       ANDROID_ABI: arm64-v8a
-      ANDROID_API: 26
+      ANDROID_API: 29
     steps:
       - name: 设置交换空间
         uses: pierotofy/set-swap-space@master
@@ -110,9 +119,9 @@ jobs:
           sudo apt-get install -y ninja-build python3
       - name: 下载 Android NDK
         run: |
-          wget -q https://dl.google.com/android/repository/android-ndk-r26d-linux.zip
-          unzip -q android-ndk-r26d-linux.zip
-          echo "ANDROID_NDK=${{ github.workspace }}/android-ndk-r26d" >> $GITHUB_ENV
+          wget -q https://dl.google.com/android/repository/android-ndk-${NDK_VER}-linux.zip
+          unzip -q android-ndk-${NDK_VER}-linux.zip
+          echo "ANDROID_NDK=${{ github.workspace }}/android-ndk-${NDK_VER}" >> $GITHUB_ENV
       - name: 更新 glslang 外部源码
         working-directory: ${{ env.BUILD_ROOT }}/3rdparty/glslang
         run: python3 update_glslang_sources.py
@@ -127,6 +136,12 @@ jobs:
             -DANDROID_PLATFORM=android-${{ env.ANDROID_API }} \
             -DCMAKE_CXX_STANDARD=20 \
             -DCMAKE_CXX_STANDARD_REQUIRED=ON \
+            -DMOBILEGL_ANDROID_NO_STD_FORMAT=ON \
+            -DCMAKE_C_FLAGS="-fno-lto" \
+            -DCMAKE_CXX_FLAGS="-fno-lto" \
+            -DCMAKE_SHARED_LINKER_FLAGS="-fno-lto" \
+            -DCMAKE_EXE_LINKER_FLAGS="-fno-lto" \
+            -DCMAKE_INTERPROCEDURAL_OPTIMIZATION=OFF \
             -DBUILD_SHARED_LIBS=ON \
             -DMOBILEGL_BUILD_TEST=OFF \
             -DMOBILEGL_BUILD_BENCHMARK=OFF
@@ -164,7 +179,7 @@ jobs:
       BUILD_ROOT: ${{ github.workspace }}
       ARCH: x86
       ANDROID_ABI: x86
-      ANDROID_API: 26
+      ANDROID_API: 29
     steps:
       - name: 设置交换空间
         uses: pierotofy/set-swap-space@master
@@ -182,9 +197,9 @@ jobs:
           sudo apt-get install -y ninja-build python3
       - name: 下载 Android NDK
         run: |
-          wget -q https://dl.google.com/android/repository/android-ndk-r26d-linux.zip
-          unzip -q android-ndk-r26d-linux.zip
-          echo "ANDROID_NDK=${{ github.workspace }}/android-ndk-r26d" >> $GITHUB_ENV
+          wget -q https://dl.google.com/android/repository/android-ndk-${NDK_VER}-linux.zip
+          unzip -q android-ndk-${NDK_VER}-linux.zip
+          echo "ANDROID_NDK=${{ github.workspace }}/android-ndk-${NDK_VER}" >> $GITHUB_ENV
       - name: 更新 glslang 外部源码
         working-directory: ${{ env.BUILD_ROOT }}/3rdparty/glslang
         run: python3 update_glslang_sources.py
@@ -199,6 +214,12 @@ jobs:
             -DANDROID_PLATFORM=android-${{ env.ANDROID_API }} \
             -DCMAKE_CXX_STANDARD=20 \
             -DCMAKE_CXX_STANDARD_REQUIRED=ON \
+            -DMOBILEGL_ANDROID_NO_STD_FORMAT=ON \
+            -DCMAKE_C_FLAGS="-fno-lto" \
+            -DCMAKE_CXX_FLAGS="-fno-lto" \
+            -DCMAKE_SHARED_LINKER_FLAGS="-fno-lto" \
+            -DCMAKE_EXE_LINKER_FLAGS="-fno-lto" \
+            -DCMAKE_INTERPROCEDURAL_OPTIMIZATION=OFF \
             -DBUILD_SHARED_LIBS=ON \
             -DMOBILEGL_BUILD_TEST=OFF \
             -DMOBILEGL_BUILD_BENCHMARK=OFF
@@ -236,7 +257,7 @@ jobs:
       BUILD_ROOT: ${{ github.workspace }}
       ARCH: armeabi-v7a
       ANDROID_ABI: armeabi-v7a
-      ANDROID_API: 26
+      ANDROID_API: 29
     steps:
       - name: 设置交换空间
         uses: pierotofy/set-swap-space@master
@@ -254,9 +275,9 @@ jobs:
           sudo apt-get install -y ninja-build python3
       - name: 下载 Android NDK
         run: |
-          wget -q https://dl.google.com/android/repository/android-ndk-r26d-linux.zip
-          unzip -q android-ndk-r26d-linux.zip
-          echo "ANDROID_NDK=${{ github.workspace }}/android-ndk-r26d" >> $GITHUB_ENV
+          wget -q https://dl.google.com/android/repository/android-ndk-${NDK_VER}-linux.zip
+          unzip -q android-ndk-${NDK_VER}-linux.zip
+          echo "ANDROID_NDK=${{ github.workspace }}/android-ndk-${NDK_VER}" >> $GITHUB_ENV
       - name: 更新 glslang 外部源码
         working-directory: ${{ env.BUILD_ROOT }}/3rdparty/glslang
         run: python3 update_glslang_sources.py
@@ -271,6 +292,12 @@ jobs:
             -DANDROID_PLATFORM=android-${{ env.ANDROID_API }} \
             -DCMAKE_CXX_STANDARD=20 \
             -DCMAKE_CXX_STANDARD_REQUIRED=ON \
+            -DMOBILEGL_ANDROID_NO_STD_FORMAT=ON \
+            -DCMAKE_C_FLAGS="-fno-lto" \
+            -DCMAKE_CXX_FLAGS="-fno-lto" \
+            -DCMAKE_SHARED_LINKER_FLAGS="-fno-lto" \
+            -DCMAKE_EXE_LINKER_FLAGS="-fno-lto" \
+            -DCMAKE_INTERPROCEDURAL_OPTIMIZATION=OFF \
             -DBUILD_SHARED_LIBS=ON \
             -DMOBILEGL_BUILD_TEST=OFF \
             -DMOBILEGL_BUILD_BENCHMARK=OFF
@@ -324,35 +351,24 @@ jobs:
           echo "工作空间根目录内容:"
           ls -la ${{ github.workspace }}
 
-      - name: 检查是否存在已合并的压缩包
-        id: check
+      - name: 归一化目录并打包为 ZIP
         run: |
           set -euxo pipefail
-          FOUND_FILE=$(find ${{ github.workspace }}/downloaded -name "MobileGL-android-all.zip" -type f | head -n1)
-          if [ -n "$FOUND_FILE" ]; then
-            echo "找到已存在的压缩包: $FOUND_FILE"
-            cp "$FOUND_FILE" ${{ github.workspace }}/MobileGL-android-all.zip
-            echo "已复制到工作空间根目录"
-            echo "found=true" >> $GITHUB_OUTPUT
-          else
-            echo "未找到已存在的压缩包"
-            echo "found=false" >> $GITHUB_OUTPUT
+          STAGE="${{ github.workspace }}/stage"
+          rm -rf "$STAGE"
+          mkdir -p "$STAGE/lib"
+          if [ -d "${{ github.workspace }}/downloaded/lib" ]; then
+            cp -a "${{ github.workspace }}/downloaded/lib/." "$STAGE/lib/"
           fi
-          echo "当前工作空间根目录内容:"
-          ls -la ${{ github.workspace }}
+          if [ -d "${{ github.workspace }}/downloaded/artifacts/lib" ]; then
+            cp -a "${{ github.workspace }}/downloaded/artifacts/lib/." "$STAGE/lib/"
+          fi
+          cd "$STAGE"
+          zip -r "${{ github.workspace }}/MobileGL-android-all.zip" lib
 
-      - name: 上传已存在的压缩包
-        if: steps.check.outputs.found == 'true'
+      - name: 上传合并后的压缩包
         uses: actions/upload-artifact@v4
         with:
           name: MobileGL-android-all
           path: ${{ github.workspace }}/MobileGL-android-all.zip
-          if-no-files-found: error
-
-      - name: 直接上传合并后的 lib 目录
-        if: steps.check.outputs.found != 'true'
-        uses: actions/upload-artifact@v4
-        with:
-          name: MobileGL-android-all
-          path: ${{ github.workspace }}/downloaded/lib
           if-no-files-found: error
