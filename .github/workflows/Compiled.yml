@@ -120,7 +120,7 @@ jobs:
       - name: 列出下载内容
         run: ls -R downloaded
 
-      - name: 归一化目录并打包 ZIP
+      - name: 归一化目录并准备上传
         run: |
           set -euxo pipefail
           STAGE="${{ github.workspace }}/stage"
@@ -137,12 +137,10 @@ jobs:
               echo "警告: $artifact_dir 中没有 libMobileGL.so"
             fi
           done
-          cd "$STAGE"
-          zip -r "${{ github.workspace }}/MobileGL-android-all.zip" lib
 
-      - name: 上传合并后的压缩包
+      - name: 上传合并后的目录
         uses: actions/upload-artifact@v4
         with:
           name: MobileGL-android-all
-          path: MobileGL-android-all.zip
+          path: ${{ github.workspace }}/stage
           if-no-files-found: error
