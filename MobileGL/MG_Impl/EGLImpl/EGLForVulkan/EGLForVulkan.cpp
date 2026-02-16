@@ -94,7 +94,7 @@ namespace MobileGL {
             MG_Backend::DirectVulkan::pVulkanRenderer = MakeUnique<MG_Backend::DirectVulkan::VulkanRenderer>(window);
             MG_Backend::DirectVulkan::pVulkanRenderer->Initialize();
 
-            PrepareDemoRes(); // for demo use
+            // PrepareDemoRes(); // for demo use
         }
 
         EGLSurface CreateWindowSurface(EGLDisplay dpy, EGLConfig config, NativeWindowType window,

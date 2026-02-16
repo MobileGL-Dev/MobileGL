@@ -126,6 +126,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         m_swapchain->SetFramebuffers(Move(fbs));
     }
 
+    void VulkanRenderer::SetSwapchainViewportSize(const UintVec2& size) {
+        if (m_swapchain) m_swapchain->SetViewportSize(size);
+    }
+
     void VulkanRenderer::CreateFrameResources() {
         DestroyFrameResources();
         Uint32 imageCount = static_cast<Uint32>(m_swapchain->GetImageViews().size());
@@ -242,8 +246,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
     void VulkanRenderer::RecordAndSubmit(Uint32 imageIndex) {
         auto& frame = *m_frames[m_currentFrame];
-        VK_VERIFY(vkWaitForFences(m_ctx.GetDevice(), 1, &frame.InFlightFence, VK_TRUE, UINT64_MAX),
-                  "vkWaitForFences");
+        VK_VERIFY(vkWaitForFences(m_ctx.GetDevice(), 1, &frame.InFlightFence, VK_TRUE, UINT64_MAX), "vkWaitForFences");
         VK_VERIFY(vkResetFences(m_ctx.GetDevice(), 1, &frame.InFlightFence), "vkResetFences");
         VK_VERIFY(vkResetCommandBuffer(frame.CommandBuffer, 0), "vkResetCommandBuffer");
 
@@ -351,7 +354,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         DestroyPipelines();
     }
 
-    void VulkanRenderer::RenderFrame() { DrawAndPresent(); }
+    void VulkanRenderer::RenderFrame() {
+        DrawAndPresent();
+    }
 
-    void VulkanRenderer::Present() { DrawAndPresent(); }
+    void VulkanRenderer::Present() {
+        DrawAndPresent();
+    }
 } // namespace MobileGL::MG_Backend::DirectVulkan

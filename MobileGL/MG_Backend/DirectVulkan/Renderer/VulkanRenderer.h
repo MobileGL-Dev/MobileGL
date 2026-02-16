@@ -27,6 +27,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         void Initialize();
         void RenderFrame();
         void Present();
+        void SetSwapchainViewportSize(const UintVec2& size);
 
         VkPipeline CreateGraphicsPipelineFromSpv(const String& name, const Vector<Uint>& vertexSpv,
                                                  const Vector<Uint>& fragmentSpv);

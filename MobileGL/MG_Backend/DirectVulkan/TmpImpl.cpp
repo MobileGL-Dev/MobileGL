@@ -8,6 +8,7 @@
 
 #include "TmpImpl.h"
 #include "MG_Backend/DirectVulkan/DirectVulkan.h"
+#include "MG_Util/Types.h"
 #include "Renderer/VkCommon.h"
 #include "Renderer/VulkanContext.h"
 #include "Renderer/SwapchainManager.h"
@@ -190,6 +191,7 @@ namespace MobileGL::MG_Backend::DirectVulkan::TmpImpl {
             Uint32 currentFrame = 0;
             Uint32 maxFramesInFlight = 2;
             Bool initialized = false;
+            UintVec2 viewportSize{0, 0};
 
             VkImage depthImage = VK_NULL_HANDLE;
             VkDeviceMemory depthMemory = VK_NULL_HANDLE;
@@ -2983,6 +2985,7 @@ namespace MobileGL::MG_Backend::DirectVulkan::TmpImpl {
             DestroyRenderPass();
             DestroyDepthResources();
 
+            g.swapchain->SetViewportSize(g.viewportSize);
             g.swapchain->Recreate();
             CreateDepthResources();
             CreateRenderPass();
@@ -3152,20 +3155,14 @@ namespace MobileGL::MG_Backend::DirectVulkan::TmpImpl {
         }
 
         VkViewport vp{};
-        if (rs->Viewport.z() > 0 && rs->Viewport.w() > 0) {
-            vp.x = static_cast<Float>(rs->Viewport.x());
-            vp.y = static_cast<Float>(rs->Viewport.y());
-            vp.width = static_cast<Float>(rs->Viewport.z());
-            vp.height = static_cast<Float>(rs->Viewport.w());
-        } else {
-            vp.x = 0.0f;
-            vp.y = 0.0f;
-            vp.width = static_cast<Float>(g.activeExtent.width);
-            vp.height = static_cast<Float>(g.activeExtent.height);
-        }
+        vp.x = 0.0f;
+        vp.y = 0.0f;
+        vp.width = static_cast<Float>(g.activeExtent.width);
+        vp.height = static_cast<Float>(g.activeExtent.height);
         vp.minDepth = 0.0f;
         vp.maxDepth = 1.0f;
         vkCmdSetViewport(frame->CommandBuffer, 0, 1, &vp);
+        g.viewportSize = {(Uint)rs->Viewport.z(), (Uint)rs->Viewport.w()};
 
         VkRect2D scissor{};
         if (rs->ScissorTestEnabled) {

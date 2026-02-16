@@ -8,6 +8,7 @@
 
 #pragma once
 #include <Includes.h>
+#include "MG_Util/Math/VectorTypes.h"
 #include "VulkanContext.h"
 #include "VkCommon.h"
 
@@ -22,6 +23,7 @@ namespace MobileGL::MG_Backend::DirectVulkan::VkManager {
 
         void Initialize();
         void Recreate();
+        void SetViewportSize(const UintVec2& size) { m_viewportSize = size; }
 
         VkSwapchainKHR GetSwapchain() const { return m_swapchain; }
         VkFormat GetFormat() const { return m_format; }
@@ -31,6 +33,7 @@ namespace MobileGL::MG_Backend::DirectVulkan::VkManager {
         const Vector<VkFramebuffer>& GetFramebuffers() const { return m_framebuffers; }
         void SetFramebuffers(Vector<VkFramebuffer>&& framebuffers);
         Vector<VkFence>& GetImagesInFlight() { return m_imagesInFlight; }
+        const UintVec2& GetViewportSize() const { return m_viewportSize; }
 
     private:
         void CreateSwapchain(VkSwapchainKHR oldSwapchain);
@@ -44,5 +47,6 @@ namespace MobileGL::MG_Backend::DirectVulkan::VkManager {
         Vector<VkImageView> m_imageViews;
         Vector<VkFramebuffer> m_framebuffers;
         Vector<VkFence> m_imagesInFlight;
+        UintVec2 m_viewportSize{0, 0};
     };
 } // namespace MobileGL::MG_Backend::DirectVulkan::VkManager

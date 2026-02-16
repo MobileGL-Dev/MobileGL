@@ -30,6 +30,7 @@ namespace MobileGL::MG_Backend::DirectVulkan::VkManager {
 
         VkExtent2D ChooseExtent(const VkSurfaceCapabilitiesKHR& caps, ANativeWindow* window) {
             if (caps.currentExtent.width != UINT32_MAX) return caps.currentExtent;
+            // try to get frontend viewport size
             VkExtent2D extent{640, 480};
 #ifdef VK_USE_PLATFORM_ANDROID_KHR
             if (window) {
@@ -45,16 +46,22 @@ namespace MobileGL::MG_Backend::DirectVulkan::VkManager {
         }
     } // namespace
 
-    SwapchainManager::~SwapchainManager() { DestroySwapchain(); }
+    SwapchainManager::~SwapchainManager() {
+        DestroySwapchain();
+    }
 
-    void SwapchainManager::Initialize() { CreateSwapchain(VK_NULL_HANDLE); }
+    void SwapchainManager::Initialize() {
+        CreateSwapchain(VK_NULL_HANDLE);
+    }
 
     void SwapchainManager::Recreate() {
         DestroySwapchain();
         CreateSwapchain(VK_NULL_HANDLE);
     }
 
-    void SwapchainManager::SetFramebuffers(Vector<VkFramebuffer>&& framebuffers) { m_framebuffers = Move(framebuffers); }
+    void SwapchainManager::SetFramebuffers(Vector<VkFramebuffer>&& framebuffers) {
+        m_framebuffers = Move(framebuffers);
+    }
 
     void SwapchainManager::DestroySwapchain() {
         auto device = m_ctx.GetDevice();
@@ -102,7 +109,12 @@ namespace MobileGL::MG_Backend::DirectVulkan::VkManager {
 
         VkSurfaceFormatKHR surfaceFormat = ChooseSurfaceFormat(formats);
         VkPresentModeKHR presentMode = ChoosePresentMode(modes);
-        VkExtent2D extent = ChooseExtent(caps, m_ctx.GetWindow());
+        VkExtent2D extent;
+        if (m_viewportSize.x() == 0 || m_viewportSize.y() == 0) {
+            extent = ChooseExtent(caps, m_ctx.GetWindow());
+        } else {
+            extent = {m_viewportSize.x(), m_viewportSize.y()};
+        }
 
         Uint32 imageCount = caps.minImageCount + 1;
         if (caps.maxImageCount > 0 && imageCount > caps.maxImageCount) imageCount = caps.maxImageCount;
