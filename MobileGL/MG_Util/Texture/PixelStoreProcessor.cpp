@@ -72,7 +72,7 @@ namespace MobileGL::MG_Util::PixelStoreProcessor {
 
     // assume 8 bit per channel
     // swizzle.size() == channel count
-    static void ProcessColorSwizzle(void* data, SizeT pixelCount, const Vector<TextureSwizzleParam>& swizzle) {
+    void ProcessColorSwizzle(void* data, SizeT pixelCount, const Vector<TextureSwizzleParam>& swizzle) {
         const auto bpp = swizzle.size();
         Uint8* bytes = static_cast<Uint8*>(data);
         Uint8 pixelScratch[4];
@@ -172,22 +172,25 @@ namespace MobileGL::MG_Util::PixelStoreProcessor {
         return outputPixels;
     }
 
-    void* ProcessTexturePixelsDataPack(const void* inputPixels, const PixelStoreParameters& params, SizeT pixelSize,
+    void* ProcessTexturePixelsDataPack(const void* inputPixels, const PixelStoreParameters& params,
+                                       TextureInternalFormat srcInternalFormat, TexturePixelDataType srcDataType,
+                                       TextureInputFormat dstInputFormat, TexturePixelDataType dstDataType,
                                        IntVec3 dimension, Bool isBitmap, SizeT& outSize) {
-        if (pixelSize == 0) {
-            outSize = 0;
-            return nullptr;
-        }
+        const SizeT pixelSize = MG_Util::GetInternalBytesPerPixel(srcInternalFormat, srcDataType);
 
         Int width = dimension.x();
         Int height = dimension.y();
         Int depth = dimension.z();
 
-        const Int outputWidth = (params.RowLength > 0) ? params.RowLength : width;
-        const SizeT outputRowStride = CalculateRowStride(outputWidth, pixelSize, params.Alignment);
-        const SizeT inputRowStride = static_cast<SizeT>(width) * pixelSize;
+        if (pixelSize == 0) {
+            outSize = 0;
+            return nullptr;
+        }
 
-        const Int effectiveHeight = (params.ImageHeight > 0) ? params.ImageHeight : height;
+        // TODO: take care of PixelStoreParameters
+        const SizeT outputRowStride = width * pixelSize;
+        const Int effectiveHeight = height;
+        const SizeT inputRowStride = outputRowStride;
 
         outSize = static_cast<SizeT>(outputRowStride) * static_cast<SizeT>(effectiveHeight) * static_cast<SizeT>(depth);
         void* outputPixels = malloc(outSize);
@@ -201,11 +204,21 @@ namespace MobileGL::MG_Util::PixelStoreProcessor {
         const Uint8* src = static_cast<const Uint8*>(inputPixels);
         Uint8* dst = static_cast<Uint8*>(outputPixels);
 
-        dst += static_cast<SizeT>(params.SkipImages) * static_cast<SizeT>(effectiveHeight) * outputRowStride;
-        dst += static_cast<SizeT>(params.SkipRows) * outputRowStride;
-        dst += static_cast<SizeT>(params.SkipPixels) * pixelSize;
-
         Vector<Uint8> tempRow(static_cast<SizeT>(width) * pixelSize);
+
+        bool needSwizzle = false;
+        static Vector<TextureSwizzleParam> swizzle;
+        swizzle = {TextureSwizzleParam::Red, TextureSwizzleParam::Green, TextureSwizzleParam::Blue,
+                   TextureSwizzleParam::Alpha};
+        if (srcInternalFormat == TextureInternalFormat::RGBA && dstInputFormat == TextureInputFormat::BGRA) {
+            swizzle = {TextureSwizzleParam::Blue, TextureSwizzleParam::Green, TextureSwizzleParam::Red,
+                       TextureSwizzleParam::Alpha};
+            needSwizzle = true;
+        }
+        if (dstDataType == TexturePixelDataType::UnsignedInt8888) {
+            std::reverse(swizzle.begin(), swizzle.end());
+            needSwizzle = true;
+        }
 
         for (Int z = 0; z < depth; ++z) {
             Uint8* layerDst = dst;
@@ -220,6 +233,10 @@ namespace MobileGL::MG_Util::PixelStoreProcessor {
 
                 if (params.LSBFirst && isBitmap) {
                     ProcessLSBFirst(tempRow.data(), static_cast<SizeT>(width), 1);
+                }
+
+                if (needSwizzle) {
+                    ProcessColorSwizzle(tempRow.data(), static_cast<SizeT>(width), swizzle);
                 }
 
                 Memcpy(layerDst, tempRow.data(), static_cast<SizeT>(width) * pixelSize);

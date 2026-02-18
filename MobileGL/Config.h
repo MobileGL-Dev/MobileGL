@@ -8,24 +8,14 @@
 
 #pragma once
 #include <Includes.h>
-#include <MG_Backend/Backends.h>
+#include <MG_Backend/BackendObjects.h>
 
-namespace MobileGL {
-    namespace MG_Config {
-        inline const String ProjectName = "MobileGL";
-        inline const String CoreName = "MobileGL Core";
-        inline const String CoreVendor = "MobileGL-Dev (BZLZHH, Swung0x48, Tungsten)";
-        inline const Version CoreVersion = {26, 2, 0, "-dev", VersionType::Development};
-        inline const VersionStringFormatAttrib DefaultVersionStringFormatAttrib = {2, 2, 0, true, true};
-        extern UniquePtr<RendererInfo> RendererInfoPtr;
+namespace MobileGL::MG_Config {
+    inline const String ProjectName = "MobileGL";
+    inline const String CoreName = "MobileGL Core";
+    inline const String CoreVendor = "MobileGL-Dev (BZLZHH, Swung0x48, Tungsten)";
+    inline const Version CoreVersion = {26, 2, 0, "-dev", VersionType::Development};
+    inline const VersionStringFormatAttrib DefaultVersionStringFormatAttrib = {2, 2, 0, true, true};
 
-        namespace Backend {
-#define MOBILEGL_BACKEND MOBILEGL_BACKEND_TYPE_DIRECT_GLES
-
-            namespace Diligent {
-                inline const MG_Backend::Diligent::SpecificBackendType SpecificBackend =
-                    MG_Backend::Diligent::SpecificBackendType::Vulkan;
-            }
-        } // namespace Backend
-    } // namespace MG_Config
-} // namespace MobileGL
+    extern BackendType ActiveBackendType;
+} // namespace MobileGL::MG_Config

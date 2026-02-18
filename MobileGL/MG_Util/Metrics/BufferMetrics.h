@@ -12,5 +12,5 @@
 namespace MobileGL {
     namespace MG_Util {
         SizeT GetGLTypeSize(GLenum type);
-    }
+    } // namespace MG_Util
 } // namespace MobileGL

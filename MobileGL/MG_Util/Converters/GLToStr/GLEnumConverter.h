@@ -12,5 +12,5 @@
 namespace MobileGL {
     namespace MG_Util {
         String ConvertGLEnumToString(GLenum value);
-    }
+    } // namespace MG_Util
 } // namespace MobileGL

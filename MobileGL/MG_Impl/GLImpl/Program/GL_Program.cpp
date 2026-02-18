@@ -477,7 +477,19 @@ namespace MobileGL {
             auto programObject = TryToGetProgramObject(program);
             if (!programObject) return;
             MGLOG_D("%s: linking program %d", __func__, program);
-            programObject->Link(!MG_Config::RendererInfoPtr->BackendCapability.AllowVSOnlyPrograms);
+
+            static Bool allowVSOnlyPrograms;
+            static Bool initialized = false;
+            if (!initialized) {
+                const auto& activeBackendObject = MG_Backend::pActiveBackendObject;
+                if (!activeBackendObject) {
+                    MGLOG_E("activeBackendObject is not initialized!");
+                    return;
+                }
+                const auto& rendererInfo = activeBackendObject->GetRendererInfo();
+                allowVSOnlyPrograms = (Int)rendererInfo.StaticBackendCapability.AllowVSOnlyPrograms;
+            }
+            programObject->Link(!allowVSOnlyPrograms);
         }
 
         void ShaderSource_State(GLuint shader, GLsizei count, const GLchar* const* string, const GLint* length) {

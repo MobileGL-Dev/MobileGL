@@ -13,12 +13,13 @@ namespace MobileGL {
     namespace MG_State {
         namespace GLState {
             // FramebufferAttachmentObject
-            FramebufferAttachmentObject::FramebufferAttachmentObject(SharedPtr<MG_State::GLState::ITextureObject> texture,
-                                                                     Int level)
+            FramebufferAttachmentObject::FramebufferAttachmentObject(
+                SharedPtr<MG_State::GLState::ITextureObject> texture, Int level)
                 : m_texture(texture), m_textureLevel(level) {}
             FramebufferAttachmentObject::FramebufferAttachmentObject(SharedPtr<RenderbufferObject> renderbuffer)
                 : m_renderbuffer(renderbuffer) {}
-            FramebufferAttachmentObject::FramebufferAttachmentObject(Bool IsValid) : m_texture(nullptr), m_renderbuffer(nullptr) {
+            FramebufferAttachmentObject::FramebufferAttachmentObject(Bool IsValid)
+                : m_texture(nullptr), m_renderbuffer(nullptr) {
                 m_isValid = IsValid;
             }
 
@@ -104,7 +105,8 @@ namespace MobileGL {
                 return m_attachmentObjects[static_cast<SizeT>(type)];
             }
 
-            const FramebufferObject::FramebufferAttachmentObjectArray& FramebufferObject::GetAllAttachmentObjects() const {
+            const FramebufferObject::FramebufferAttachmentObjectArray& FramebufferObject::GetAllAttachmentObjects()
+                const {
                 return m_attachmentObjects;
             }
 

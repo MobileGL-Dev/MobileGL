@@ -9,272 +9,231 @@
 #include "GL_Drawing.h"
 #include <Config.h>
 #include <MG_State/GLState/Core.h>
-#if MOBILEGL_BACKEND == MOBILEGL_BACKEND_TYPE_DIRECT_GLES
-#include <MG_Backend/DirectGLES/DirectGLES.h>
-#endif
-#include <MG_Util/BackendLoaders/OpenGL/Loader.h>
+#include <MG_Backend/BackendObjects.h>
 
-namespace MobileGL {
-    namespace MG_Impl::GLImpl {
-        void Clear_Backend(GLbitfield mask) {
+namespace MobileGL::MG_Impl::GLImpl {
+    void Clear_Backend(GLbitfield mask) {
 #ifdef TRACY_ENABLE
-            ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
+        ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
-#if MOBILEGL_BACKEND == MOBILEGL_BACKEND_TYPE_DIRECT_GLES
-            MG_Backend::DirectGLES::Clear(mask);
-#endif
-        }
+        MG_Backend::gBackendFunctionsTable.GL.Clear(mask);
+    }
 
-        void DrawElements_Backend(GLenum mode, GLsizei count, GLenum type, const void* indices) {
+    void DrawElements_Backend(GLenum mode, GLsizei count, GLenum type, const void* indices) {
 #ifdef TRACY_ENABLE
-            ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
+        ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
-#if MOBILEGL_BACKEND == MOBILEGL_BACKEND_TYPE_DIRECT_GLES
-            MG_Backend::DirectGLES::DrawElements(mode, count, type, indices);
-#endif
-        }
+        MG_Backend::gBackendFunctionsTable.GL.DrawElements(mode, count, type, indices);
+    }
 
-        void MultiDrawElements_Backend(GLenum mode, const GLsizei* count, GLenum type, const void* const* indices,
-                                       GLsizei drawcount) {
+    void MultiDrawElements_Backend(GLenum mode, const GLsizei* count, GLenum type, const void* const* indices,
+                                   GLsizei drawcount) {
 #ifdef TRACY_ENABLE
-            ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
+        ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
-#if MOBILEGL_BACKEND == MOBILEGL_BACKEND_TYPE_DIRECT_GLES
-            MG_Backend::DirectGLES::MultiDrawElements(mode, count, type, indices, drawcount);
-#endif
-        }
+        MG_Backend::gBackendFunctionsTable.GL.MultiDrawElements(mode, count, type, indices, drawcount);
+    }
 
-        void MultiDrawElementsBaseVertex_Backend(GLenum mode, const GLsizei* count, GLenum type,
-                                                 const void* const* indices, GLsizei drawcount,
-                                                 const GLint* basevertex) {
+    void MultiDrawElementsBaseVertex_Backend(GLenum mode, const GLsizei* count, GLenum type, const void* const* indices,
+                                             GLsizei drawcount, const GLint* basevertex) {
 #ifdef TRACY_ENABLE
-            ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
+        ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
-#if MOBILEGL_BACKEND == MOBILEGL_BACKEND_TYPE_DIRECT_GLES
-            MG_Backend::DirectGLES::MultiDrawElementsBaseVertex(mode, count, type, indices, drawcount, basevertex);
-#endif
-        }
+        MG_Backend::gBackendFunctionsTable.GL.MultiDrawElementsBaseVertex(mode, count, type, indices, drawcount,
+                                                                          basevertex);
+    }
 
-        void DrawArrays_Backend(GLenum mode, GLint first, GLsizei count) {
+    void DrawArrays_Backend(GLenum mode, GLint first, GLsizei count) {
 #ifdef TRACY_ENABLE
-            ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
+        ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
-#if MOBILEGL_BACKEND == MOBILEGL_BACKEND_TYPE_DIRECT_GLES
-            MG_Backend::DirectGLES::DrawArrays(mode, first, count);
-#endif
-        }
+        MG_Backend::gBackendFunctionsTable.GL.DrawArrays(mode, first, count);
+    }
 
-        void DrawElementsBaseVertex_Backend(GLenum mode, GLsizei count, GLenum type, const void* indices,
-                                            GLint basevertex) {
+    void DrawElementsBaseVertex_Backend(GLenum mode, GLsizei count, GLenum type, const void* indices,
+                                        GLint basevertex) {
 #ifdef TRACY_ENABLE
-            ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
+        ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
-#if MOBILEGL_BACKEND == MOBILEGL_BACKEND_TYPE_DIRECT_GLES
-            MG_Backend::DirectGLES::DrawElementsBaseVertex(mode, count, type, indices, basevertex);
-#endif
-        }
+        MG_Backend::gBackendFunctionsTable.GL.DrawElementsBaseVertex(mode, count, type, indices, basevertex);
+    }
 
-        void MultiDrawElementsIndirect_Backend(GLenum mode, GLenum type, const void* indirect, GLsizei drawcount,
-                                               GLsizei stride) {
+    void MultiDrawElementsIndirect_Backend(GLenum mode, GLenum type, const void* indirect, GLsizei drawcount,
+                                           GLsizei stride) {
 #ifdef TRACY_ENABLE
-            ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
+        ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
-#if MOBILEGL_BACKEND == MOBILEGL_BACKEND_TYPE_DIRECT_GLES
-            MG_Backend::DirectGLES::MultiDrawElementsIndirect(mode, type, indirect, drawcount, stride);
-#endif
-        }
+        MG_Backend::gBackendFunctionsTable.GL.MultiDrawElementsIndirect(mode, type, indirect, drawcount, stride);
+    }
 
-        void MultiDrawArraysIndirect_Backend(GLenum mode, const void* indirect, GLsizei drawcount, GLsizei stride) {
+    void MultiDrawArraysIndirect_Backend(GLenum mode, const void* indirect, GLsizei drawcount, GLsizei stride) {
 #ifdef TRACY_ENABLE
-            ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
+        ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
-#if MOBILEGL_BACKEND == MOBILEGL_BACKEND_TYPE_DIRECT_GLES
-            MG_Backend::DirectGLES::MultiDrawArraysIndirect(mode, indirect, drawcount, stride);
-#endif
-        }
+        MG_Backend::gBackendFunctionsTable.GL.MultiDrawArraysIndirect(mode, indirect, drawcount, stride);
+    }
 
-        void DrawRangeElementsBaseVertex_Backend(GLenum mode, GLuint start, GLuint end, GLsizei count, GLenum type,
-                                                 const void* indices, GLint basevertex) {
+    void DrawRangeElementsBaseVertex_Backend(GLenum mode, GLuint start, GLuint end, GLsizei count, GLenum type,
+                                             const void* indices, GLint basevertex) {
 #ifdef TRACY_ENABLE
-            ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
+        ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
-#if MOBILEGL_BACKEND == MOBILEGL_BACKEND_TYPE_DIRECT_GLES
-            MG_Backend::DirectGLES::DrawRangeElementsBaseVertex(mode, start, end, count, type, indices, basevertex);
-#endif
-        }
+        MG_Backend::gBackendFunctionsTable.GL.DrawRangeElementsBaseVertex(mode, start, end, count, type, indices,
+                                                                          basevertex);
+    }
 
-        void DrawRangeElements_Backend(GLenum mode, GLuint start, GLuint end, GLsizei count, GLenum type,
-                                       const void* indices) {
+    void DrawRangeElements_Backend(GLenum mode, GLuint start, GLuint end, GLsizei count, GLenum type,
+                                   const void* indices) {
 #ifdef TRACY_ENABLE
-            ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
+        ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
-#if MOBILEGL_BACKEND == MOBILEGL_BACKEND_TYPE_DIRECT_GLES
-            MG_Backend::DirectGLES::DrawRangeElements(mode, start, end, count, type, indices);
-#endif
-        }
+        MG_Backend::gBackendFunctionsTable.GL.DrawRangeElements(mode, start, end, count, type, indices);
+    }
 
-        void DrawElementsInstancedBaseVertexBaseInstance_Backend(GLenum mode, GLsizei count, GLenum type,
-                                                                 const void* indices, GLsizei instancecount,
-                                                                 GLint basevertex, GLuint baseinstance) {
+    void DrawElementsInstancedBaseVertexBaseInstance_Backend(GLenum mode, GLsizei count, GLenum type,
+                                                             const void* indices, GLsizei instancecount,
+                                                             GLint basevertex, GLuint baseinstance) {
 #ifdef TRACY_ENABLE
-            ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
+        ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
-#if MOBILEGL_BACKEND == MOBILEGL_BACKEND_TYPE_DIRECT_GLES
-            MG_Backend::DirectGLES::DrawElementsInstancedBaseVertexBaseInstance(
-                mode, count, type, indices, instancecount, basevertex, baseinstance);
-#endif
-        }
+        MG_Backend::gBackendFunctionsTable.GL.DrawElementsInstancedBaseVertexBaseInstance(
+            mode, count, type, indices, instancecount, basevertex, baseinstance);
+    }
 
-        void DrawElementsInstancedBaseVertex_Backend(GLenum mode, GLsizei count, GLenum type, const void* indices,
-                                                     GLsizei instancecount, GLint basevertex) {
+    void DrawElementsInstancedBaseVertex_Backend(GLenum mode, GLsizei count, GLenum type, const void* indices,
+                                                 GLsizei instancecount, GLint basevertex) {
 #ifdef TRACY_ENABLE
-            ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
+        ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
-#if MOBILEGL_BACKEND == MOBILEGL_BACKEND_TYPE_DIRECT_GLES
-            MG_Backend::DirectGLES::DrawElementsInstancedBaseVertex(mode, count, type, indices, instancecount,
-                                                                    basevertex);
-#endif
-        }
+        MG_Backend::gBackendFunctionsTable.GL.DrawElementsInstancedBaseVertex(mode, count, type, indices, instancecount,
+                                                                              basevertex);
+    }
 
-        void DrawElementsInstancedBaseInstance_Backend(GLenum mode, GLsizei count, GLenum type, const void* indices,
-                                                       GLsizei instancecount, GLuint baseinstance) {
+    void DrawElementsInstancedBaseInstance_Backend(GLenum mode, GLsizei count, GLenum type, const void* indices,
+                                                   GLsizei instancecount, GLuint baseinstance) {
 #ifdef TRACY_ENABLE
-            ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
+        ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
-#if MOBILEGL_BACKEND == MOBILEGL_BACKEND_TYPE_DIRECT_GLES
-            MG_Backend::DirectGLES::DrawElementsInstancedBaseInstance(mode, count, type, indices, instancecount,
-                                                                      baseinstance);
-#endif
-        }
+        MG_Backend::gBackendFunctionsTable.GL.DrawElementsInstancedBaseInstance(mode, count, type, indices,
+                                                                                instancecount, baseinstance);
+    }
 
-        void DrawElementsInstanced_Backend(GLenum mode, GLsizei count, GLenum type, const void* indices,
-                                           GLsizei instancecount) {
+    void DrawElementsInstanced_Backend(GLenum mode, GLsizei count, GLenum type, const void* indices,
+                                       GLsizei instancecount) {
 #ifdef TRACY_ENABLE
-            ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
+        ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
-#if MOBILEGL_BACKEND == MOBILEGL_BACKEND_TYPE_DIRECT_GLES
-            MG_Backend::DirectGLES::DrawElementsInstanced(mode, count, type, indices, instancecount);
-#endif
-        }
+        MG_Backend::gBackendFunctionsTable.GL.DrawElementsInstanced(mode, count, type, indices, instancecount);
+    }
 
-        void DrawElementsIndirect_Backend(GLenum mode, GLenum type, const void* indirect) {
+    void DrawElementsIndirect_Backend(GLenum mode, GLenum type, const void* indirect) {
 #ifdef TRACY_ENABLE
-            ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
+        ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
-#if MOBILEGL_BACKEND == MOBILEGL_BACKEND_TYPE_DIRECT_GLES
-            MG_Backend::DirectGLES::DrawElementsIndirect(mode, type, indirect);
-#endif
-        }
-        void DrawArraysInstancedBaseInstance_Backend(GLenum mode, GLint first, GLsizei count, GLsizei instancecount,
-                                                     GLuint baseinstance) {
+        MG_Backend::gBackendFunctionsTable.GL.DrawElementsIndirect(mode, type, indirect);
+    }
+    void DrawArraysInstancedBaseInstance_Backend(GLenum mode, GLint first, GLsizei count, GLsizei instancecount,
+                                                 GLuint baseinstance) {
 #ifdef TRACY_ENABLE
-            ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
+        ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
-#if MOBILEGL_BACKEND == MOBILEGL_BACKEND_TYPE_DIRECT_GLES
-            MG_Backend::DirectGLES::DrawArraysInstancedBaseInstance(mode, first, count, instancecount, baseinstance);
-#endif
-        }
+        MG_Backend::gBackendFunctionsTable.GL.DrawArraysInstancedBaseInstance(mode, first, count, instancecount,
+                                                                              baseinstance);
+    }
 
-        void DrawArraysInstanced_Backend(GLenum mode, GLint first, GLsizei count, GLsizei instancecount) {
+    void DrawArraysInstanced_Backend(GLenum mode, GLint first, GLsizei count, GLsizei instancecount) {
 #ifdef TRACY_ENABLE
-            ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
+        ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
-#if MOBILEGL_BACKEND == MOBILEGL_BACKEND_TYPE_DIRECT_GLES
-            MG_Backend::DirectGLES::DrawArraysInstanced(mode, first, count, instancecount);
-#endif
-        }
+        MG_Backend::gBackendFunctionsTable.GL.DrawArraysInstanced(mode, first, count, instancecount);
+    }
 
-        void DrawArraysIndirect_Backend(GLenum mode, const void* indirect) {
+    void DrawArraysIndirect_Backend(GLenum mode, const void* indirect) {
 #ifdef TRACY_ENABLE
-            ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
+        ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
-#if MOBILEGL_BACKEND == MOBILEGL_BACKEND_TYPE_DIRECT_GLES
-            MG_Backend::DirectGLES::DrawArraysIndirect(mode, indirect);
-#endif
-        }
+        MG_Backend::gBackendFunctionsTable.GL.DrawArraysIndirect(mode, indirect);
+    }
 
-        /* @INSERTION_POINT:FUNCTION_IMPLEMENTATION@ */
-        void MultiDrawElementsIndirect(GLenum mode, GLenum type, const void* indirect, GLsizei drawcount,
-                                       GLsizei stride) {
-            MultiDrawElementsIndirect_Backend(mode, type, indirect, drawcount, stride);
-        }
+    /* @INSERTION_POINT:FUNCTION_IMPLEMENTATION@ */
+    void MultiDrawElementsIndirect(GLenum mode, GLenum type, const void* indirect, GLsizei drawcount, GLsizei stride) {
+        MultiDrawElementsIndirect_Backend(mode, type, indirect, drawcount, stride);
+    }
 
-        void MultiDrawArraysIndirect(GLenum mode, const void* indirect, GLsizei drawcount, GLsizei stride) {
-            MultiDrawArraysIndirect_Backend(mode, indirect, drawcount, stride);
-        }
+    void MultiDrawArraysIndirect(GLenum mode, const void* indirect, GLsizei drawcount, GLsizei stride) {
+        MultiDrawArraysIndirect_Backend(mode, indirect, drawcount, stride);
+    }
 
-        void DrawRangeElementsBaseVertex(GLenum mode, GLuint start, GLuint end, GLsizei count, GLenum type,
-                                         const void* indices, GLint basevertex) {
-            DrawRangeElementsBaseVertex_Backend(mode, start, end, count, type, indices, basevertex);
-        }
+    void DrawRangeElementsBaseVertex(GLenum mode, GLuint start, GLuint end, GLsizei count, GLenum type,
+                                     const void* indices, GLint basevertex) {
+        DrawRangeElementsBaseVertex_Backend(mode, start, end, count, type, indices, basevertex);
+    }
 
-        void DrawRangeElements(GLenum mode, GLuint start, GLuint end, GLsizei count, GLenum type, const void* indices) {
-            DrawRangeElements_Backend(mode, start, end, count, type, indices);
-        }
+    void DrawRangeElements(GLenum mode, GLuint start, GLuint end, GLsizei count, GLenum type, const void* indices) {
+        DrawRangeElements_Backend(mode, start, end, count, type, indices);
+    }
 
-        void DrawElementsInstancedBaseVertexBaseInstance(GLenum mode, GLsizei count, GLenum type, const void* indices,
-                                                         GLsizei instancecount, GLint basevertex, GLuint baseinstance) {
-            DrawElementsInstancedBaseVertexBaseInstance_Backend(mode, count, type, indices, instancecount, basevertex,
-                                                                baseinstance);
-        }
+    void DrawElementsInstancedBaseVertexBaseInstance(GLenum mode, GLsizei count, GLenum type, const void* indices,
+                                                     GLsizei instancecount, GLint basevertex, GLuint baseinstance) {
+        DrawElementsInstancedBaseVertexBaseInstance_Backend(mode, count, type, indices, instancecount, basevertex,
+                                                            baseinstance);
+    }
 
-        void DrawElementsInstancedBaseVertex(GLenum mode, GLsizei count, GLenum type, const void* indices,
-                                             GLsizei instancecount, GLint basevertex) {
-            DrawElementsInstancedBaseVertex_Backend(mode, count, type, indices, instancecount, basevertex);
-        }
+    void DrawElementsInstancedBaseVertex(GLenum mode, GLsizei count, GLenum type, const void* indices,
+                                         GLsizei instancecount, GLint basevertex) {
+        DrawElementsInstancedBaseVertex_Backend(mode, count, type, indices, instancecount, basevertex);
+    }
 
-        void DrawElementsInstancedBaseInstance(GLenum mode, GLsizei count, GLenum type, const void* indices,
-                                               GLsizei instancecount, GLuint baseinstance) {
-            DrawElementsInstancedBaseInstance_Backend(mode, count, type, indices, instancecount, baseinstance);
-        }
+    void DrawElementsInstancedBaseInstance(GLenum mode, GLsizei count, GLenum type, const void* indices,
+                                           GLsizei instancecount, GLuint baseinstance) {
+        DrawElementsInstancedBaseInstance_Backend(mode, count, type, indices, instancecount, baseinstance);
+    }
 
-        void DrawElementsInstanced(GLenum mode, GLsizei count, GLenum type, const void* indices,
-                                   GLsizei instancecount) {
-            DrawElementsInstanced_Backend(mode, count, type, indices, instancecount);
-        }
+    void DrawElementsInstanced(GLenum mode, GLsizei count, GLenum type, const void* indices, GLsizei instancecount) {
+        DrawElementsInstanced_Backend(mode, count, type, indices, instancecount);
+    }
 
-        void DrawElementsIndirect(GLenum mode, GLenum type, const void* indirect) {
-            DrawElementsIndirect_Backend(mode, type, indirect);
-        }
+    void DrawElementsIndirect(GLenum mode, GLenum type, const void* indirect) {
+        DrawElementsIndirect_Backend(mode, type, indirect);
+    }
 
-        void DrawArraysInstancedBaseInstance(GLenum mode, GLint first, GLsizei count, GLsizei instancecount,
-                                             GLuint baseinstance) {
-            DrawArraysInstancedBaseInstance_Backend(mode, first, count, instancecount, baseinstance);
-        }
+    void DrawArraysInstancedBaseInstance(GLenum mode, GLint first, GLsizei count, GLsizei instancecount,
+                                         GLuint baseinstance) {
+        DrawArraysInstancedBaseInstance_Backend(mode, first, count, instancecount, baseinstance);
+    }
 
-        void DrawArraysInstanced(GLenum mode, GLint first, GLsizei count, GLsizei instancecount) {
-            DrawArraysInstanced_Backend(mode, first, count, instancecount);
-        }
+    void DrawArraysInstanced(GLenum mode, GLint first, GLsizei count, GLsizei instancecount) {
+        DrawArraysInstanced_Backend(mode, first, count, instancecount);
+    }
 
-        void DrawArraysIndirect(GLenum mode, const void* indirect) {
-            DrawArraysIndirect_Backend(mode, indirect);
-        }
+    void DrawArraysIndirect(GLenum mode, const void* indirect) {
+        DrawArraysIndirect_Backend(mode, indirect);
+    }
 
-        void DrawElementsBaseVertex(GLenum mode, GLsizei count, GLenum type, const void* indices, GLint basevertex) {
-            DrawElementsBaseVertex_Backend(mode, count, type, indices, basevertex);
-        }
+    void DrawElementsBaseVertex(GLenum mode, GLsizei count, GLenum type, const void* indices, GLint basevertex) {
+        DrawElementsBaseVertex_Backend(mode, count, type, indices, basevertex);
+    }
 
-        void DrawArrays(GLenum mode, GLint first, GLsizei count) {
-            DrawArrays_Backend(mode, first, count);
-        }
+    void DrawArrays(GLenum mode, GLint first, GLsizei count) {
+        DrawArrays_Backend(mode, first, count);
+    }
 
-        void MultiDrawElements(GLenum mode, const GLsizei* count, GLenum type, const void* const* indices,
-                               GLsizei drawcount) {
-            MultiDrawElements_Backend(mode, count, type, indices, drawcount);
-        }
+    void MultiDrawElements(GLenum mode, const GLsizei* count, GLenum type, const void* const* indices,
+                           GLsizei drawcount) {
+        MultiDrawElements_Backend(mode, count, type, indices, drawcount);
+    }
 
-        void MultiDrawElementsBaseVertex(GLenum mode, const GLsizei* count, GLenum type, const void* const* indices,
-                                         GLsizei drawcount, const GLint* basevertex) {
-            MultiDrawElementsBaseVertex_Backend(mode, count, type, indices, drawcount, basevertex);
-        }
+    void MultiDrawElementsBaseVertex(GLenum mode, const GLsizei* count, GLenum type, const void* const* indices,
+                                     GLsizei drawcount, const GLint* basevertex) {
+        MultiDrawElementsBaseVertex_Backend(mode, count, type, indices, drawcount, basevertex);
+    }
 
-        void Clear(GLbitfield mask) {
-            Clear_Backend(mask);
-        }
+    void Clear(GLbitfield mask) {
+        Clear_Backend(mask);
+    }
 
-        void DrawElements(GLenum mode, GLsizei count, GLenum type, const void* indices) {
-            DrawElements_Backend(mode, count, type, indices);
-        }
+    void DrawElements(GLenum mode, GLsizei count, GLenum type, const void* indices) {
+        DrawElements_Backend(mode, count, type, indices);
+    }
 
-    } // namespace MG_Impl::GLImpl
-} // namespace MobileGL
+} // namespace MobileGL::MG_Impl::GLImpl

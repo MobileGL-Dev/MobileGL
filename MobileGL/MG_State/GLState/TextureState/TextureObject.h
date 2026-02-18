@@ -69,6 +69,7 @@ namespace MobileGL {
                 void SetBaseLevel(Uint baseLevel) override;
                 void SetMaxLevel(Uint maxLevel) override;
                 Uint16 GetTextureParamsVersion() const override;
+
             protected:
                 const Uint m_externalIndex;
                 const TextureTarget m_target = TextureTarget::Unknown;

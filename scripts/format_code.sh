@@ -18,7 +18,7 @@ cd "$(dirname "$0")" || { printf "%s\n" "Cannot cd to script dir"; exit 1; }
 DIR="../MobileGL"
 CLANG_FORMAT_CONFIG="../.clang-format"
 
-CLANG_FORMAT_PATH="$(command -v clang-format-21 2>/dev/null || true)"
+CLANG_FORMAT_PATH="$(command -v clang-format-23 2>/dev/null || true)"
 if [ -z "$CLANG_FORMAT_PATH" ]; then
     CLANG_FORMAT_PATH="$(command -v clang-format 2>/dev/null || true)"
 fi

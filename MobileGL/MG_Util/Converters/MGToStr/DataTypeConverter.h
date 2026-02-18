@@ -12,5 +12,5 @@
 namespace MobileGL {
     namespace MG_Util {
         String ConvertDataTypeToString(DataType type);
-    }
+    } // namespace MG_Util
 } // namespace MobileGL

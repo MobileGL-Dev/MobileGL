@@ -9,16 +9,19 @@ BraceWrapping:
   AfterClass: false
   AfterControlStatement: Never
   AfterEnum: false
-  AfterNamespace: false 
-  AfterStruct: false    
-  AfterUnion: false     
-  BeforeElse: false     
+  AfterNamespace: false
+  AfterStruct: false
+  AfterUnion: false
+  BeforeElse: false
   SplitEmptyFunction: false
   SplitEmptyRecord: false
 
-AllowShortBlocksOnASingleLine: Empty 
+AllowShortBlocksOnASingleLine: Empty
 AllowShortIfStatementsOnASingleLine: WithoutElse
 AlwaysBreakTemplateDeclarations: Yes
 NamespaceIndentation: All
 AllowShortFunctionsOnASingleLine: Inline
 SortIncludes: false
+FixNamespaceComments: true
+ShortNamespaceLines: 0
+CompactNamespaces: false

@@ -13,5 +13,5 @@
 namespace MobileGL {
     namespace MG_Util {
         ShaderStage ConvertGLEnumToShaderStage(GLenum type);
-    }
+    } // namespace MG_Util
 } // namespace MobileGL
