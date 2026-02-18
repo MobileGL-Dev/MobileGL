@@ -72,6 +72,21 @@ jobs:
           set -euxo pipefail
           python3 update_glslang_sources.py
 
+      - name: 临时修补 Loader.cpp 的 nullptrptr 拼写
+        run: |
+          set -euxo pipefail
+          FILE="MobileGL/MG_Util/BackendLoaders/OpenGL/Loader.cpp"
+          if [ -f "$FILE" ]; then
+            if grep -q "nullptrptr" "$FILE"; then
+              perl -pi -e 's/\bnullptrptr\b/nullptr/g' "$FILE"
+              echo "patched: $FILE (nullptrptr -> nullptr)"
+            else
+              echo "no patch needed: $FILE"
+            fi
+          else
+            echo "::warning::file not found: $FILE"
+          fi
+
       - name: 缓存构建目录
         uses: actions/cache@v4
         with:
@@ -105,18 +120,21 @@ jobs:
             -DMOBILEGL_ANDROID_NO_STD_FORMAT=ON \
             -DMOBILEGL_NO_STD_FORMAT=ON
 
-      - name: 诊断：确认实际 iOS 最低部署版本参数
+      - name: 诊断部署版本
         run: |
           set -euxo pipefail
           if [ -f "build-${{ matrix.platform }}/build.ninja" ]; then
-            echo "=== grep version-min in build.ninja ==="
-            grep -Eo -- '-m(iphoneos|ios-simulator)-version-min=[0-9.]+|-mios-version-min=[0-9.]+' build-${{ matrix.platform }}/build.ninja || true
+            echo "=== version-min flags ==="
+            grep -Eo -- '-m(iphoneos|ios-simulator)-version-min=[0-9.]+' build-${{ matrix.platform }}/build.ninja || true
           fi
 
       - name: 编译
         run: |
           set -euxo pipefail
-          cmake --build build-${{ matrix.platform }} --config ${{ env.BUILD_TYPE }} --target ${{ env.TARGET_NAME }} --parallel $(sysctl -n hw.logicalcpu)
+          cmake --build build-${{ matrix.platform }} \
+            --config ${{ env.BUILD_TYPE }} \
+            --target ${{ env.TARGET_NAME }} \
+            --parallel $(sysctl -n hw.logicalcpu)
 
       - name: 签名动态库
         run: |
@@ -161,17 +179,13 @@ jobs:
           path: downloaded
           merge-multiple: false
 
-      - name: 列出下载内容
-        run: |
-          set -euxo pipefail
-          ls -R downloaded
-
-      - name: 整理产物目录
+      - name: 整理产物
         run: |
           set -euxo pipefail
           STAGE="${{ github.workspace }}/stage"
           rm -rf "$STAGE"
           mkdir -p "$STAGE/lib"
+
           for artifact_dir in downloaded/*; do
             [ -d "$artifact_dir" ] || continue
             platform="${artifact_dir#downloaded/MobileGL-ios-}"
@@ -179,12 +193,10 @@ jobs:
             if [ -f "$lib_file" ]; then
               mkdir -p "$STAGE/lib/$platform"
               cp "$lib_file" "$STAGE/lib/$platform/${{ env.LIB_NAME }}"
-            else
-              echo "警告: $artifact_dir 中没有 ${{ env.LIB_NAME }}"
             fi
           done
 
-      - name: 上传合并后的完整产物
+      - name: 上传合并产物
         uses: actions/upload-artifact@v4
         with:
           name: MobileGL-ios-all
