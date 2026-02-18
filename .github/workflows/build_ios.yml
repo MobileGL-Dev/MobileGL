@@ -14,7 +14,7 @@ concurrency:
 
 env:
   BUILD_TYPE: "RelWithDebInfo"
-  TARGET_NAME: "MobileGL"           # 修正为目标名称：MobileGL（首字母大写）
+  TARGET_NAME: "MobileGL"
   LIB_NAME: "libMobileGL.dylib"
 
 jobs:
@@ -75,7 +75,7 @@ jobs:
           restore-keys: |
             cmake-build-ios-${{ runner.os }}-${{ matrix.platform }}-
 
-      - name: 配置 CMake（启用 ccache）
+      - name: 配置 CMake（启用 ccache，禁用 std::format）
         run: |
           export CCACHE_DIR=~/.ccache
           cmake -B build-${{ matrix.platform }} \
@@ -91,7 +91,9 @@ jobs:
             -DMOBILEGL_BUILD_TEST=OFF \
             -DMOBILEGL_BUILD_BENCHMARK=OFF \
             -DBENCHMARK_ENABLE_TESTING=OFF \
-            -DBENCHMARK_ENABLE_GTEST_TESTS=OFF
+            -DBENCHMARK_ENABLE_GTEST_TESTS=OFF \
+            -DMOBILEGL_ANDROID_NO_STD_FORMAT=ON \
+            -DMOBILEGL_NO_STD_FORMAT=ON
 
       - name: 编译
         run: cmake --build build-${{ matrix.platform }} --config ${{ env.BUILD_TYPE }} --target ${{ env.TARGET_NAME }} --parallel $(sysctl -n hw.logicalcpu)
