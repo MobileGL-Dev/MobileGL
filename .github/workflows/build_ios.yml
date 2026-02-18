@@ -24,7 +24,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        platform: [ OS64, SIMULATOR64 ]   # 可添加更多平台
+        platform: [ OS64, SIMULATOR64 ]
 
     steps:
       - name: 检出仓库
@@ -53,11 +53,14 @@ jobs:
           curl -L -o ios.toolchain.cmake \
             https://github.com/leetal/ios-cmake/raw/master/ios.toolchain.cmake
 
+      - name: 更新 glslang 外部源码
+        run: python3 3rdparty/glslang/update_glslang_sources.py
+
       - name: 缓存构建目录
         uses: actions/cache@v4
         with:
           path: build-${{ matrix.platform }}
-          key: cmake-build-ios-${{ runner.os }}-${{ matrix.platform }}-${{ hashFiles('CMakeLists.txt', '**/CMakeLists.txt', '**/*.cmake') }}
+          key: cmake-build-ios-${{ runner.os }}-${{ matrix.platform }}-${{ hashFiles('CMakeLists.txt', '**/CMakeLists.txt', '**/*.cmake', '3rdparty/glslang/update_glslang_sources.py') }}
           restore-keys: |
             cmake-build-ios-${{ runner.os }}-${{ matrix.platform }}-
 
