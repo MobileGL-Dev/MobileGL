@@ -1,0 +1,151 @@
+name: 构建MobileGL_iOS全平台
+
+on:
+  push:
+    branches: [ dev, "release/*" ]
+    tags: [ "v*" ]
+  pull_request:
+    branches: [ dev ]
+  workflow_dispatch:
+
+concurrency:
+  group: mobilegl-ios-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  BUILD_TYPE: "RelWithDebInfo"
+  TARGET_NAME: "mobileg"
+  LIB_NAME: "libMobileGL.dylib"
+
+jobs:
+  build-ios:
+    name: 构建 ${{ matrix.platform }}
+    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [ OS64, SIMULATOR64 ]
+
+    steps:
+      - name: 检出仓库
+        uses: actions/checkout@v4
+        with:
+          submodules: true
+          fetch-depth: 0
+
+      - name: 安装基础工具
+        run: |
+          brew install ninja
+
+      - name: 获取 CMake
+        uses: lukka/get-cmake@latest
+
+      # 缓存 ios-cmake 工具链文件（避免重复下载）
+      - name: 缓存 ios-cmake 工具链
+        uses: actions/cache@v4
+        id: cache-toolchain
+        with:
+          path: ios.toolchain.cmake
+          key: ios-toolchain-${{ hashFiles('ios.toolchain.cmake') }}
+          restore-keys: |
+            ios-toolchain-
+
+      - name: 下载 ios-cmake 工具链（如未缓存）
+        if: steps.cache-toolchain.outputs.cache-hit != 'true'
+        run: |
+          curl -L -o ios.toolchain.cmake \
+            https://github.com/leetal/ios-cmake/raw/master/ios.toolchain.cmake
+
+      # 缓存 CMake 构建目录（按平台区分）
+      - name: 缓存构建目录
+        uses: actions/cache@v4
+        with:
+          path: build-${{ matrix.platform }}
+          key: cmake-build-ios-${{ runner.os }}-${{ matrix.platform }}-${{ hashFiles('CMakeLists.txt', '**/CMakeLists.txt', '**/*.cmake') }}
+          restore-keys: |
+            cmake-build-ios-${{ runner.os }}-${{ matrix.platform }}-
+
+      - name: 配置 CMake
+        run: |
+          cmake -B build-${{ matrix.platform }} \
+            -G Ninja \
+            -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} \
+            -DCMAKE_TOOLCHAIN_FILE=ios.toolchain.cmake \
+            -DSTATICLIB=OFF \
+            -DMACOS=ON \
+            -DPLATFORM=${{ matrix.platform }} \
+            -DCMAKE_C_FLAGS="-Wno-error=implicit-function-declaration"
+
+      - name: 编译
+        run: cmake --build build-${{ matrix.platform }} --config ${{ env.BUILD_TYPE }} --target ${{ env.TARGET_NAME }} --parallel $(sysctl -n hw.logicalcpu)
+
+      - name: 签名动态库
+        run: |
+          DYLIB_PATH=$(find build-${{ matrix.platform }} -name "*.dylib" -type f | head -n1)
+          if [ -z "$DYLIB_PATH" ]; then
+            echo "::error::未找到动态库文件"
+            exit 1
+          fi
+          codesign -s - "$DYLIB_PATH"
+          echo "DYLIB_PATH=$DYLIB_PATH" >> $GITHUB_ENV
+
+      - name: 收集产物
+        run: |
+          set -euxo pipefail
+          OUT_DIR="artifacts/lib/${{ matrix.platform }}"
+          mkdir -p "$OUT_DIR"
+          cp "${{ env.DYLIB_PATH }}" "$OUT_DIR/${{ env.LIB_NAME }}"
+
+      - name: 验证架构
+        run: |
+          set -euxo pipefail
+          lipo -info "artifacts/lib/${{ matrix.platform }}/${{ env.LIB_NAME }}"
+
+      - name: 上传单个平台产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: MobileGL-ios-${{ matrix.platform }}
+          path: artifacts/lib/${{ matrix.platform }}/${{ env.LIB_NAME }}
+          if-no-files-found: error
+          retention-days: 7
+
+  merge:
+    name: 合并所有平台
+    needs: [ build-ios ]
+    runs-on: macos-latest
+    steps:
+      - name: 下载所有平台产物
+        uses: actions/download-artifact@v4
+        with:
+          pattern: MobileGL-ios-*
+          path: downloaded
+          merge-multiple: false
+
+      - name: 列出下载内容
+        run: ls -R downloaded
+
+      - name: 整理产物目录
+        run: |
+          set -euxo pipefail
+          STAGE="${{ github.workspace }}/stage"
+          rm -rf "$STAGE"
+          mkdir -p "$STAGE/lib"
+          for artifact_dir in downloaded/*; do
+            [ -d "$artifact_dir" ] || continue
+            platform="${artifact_dir#downloaded/MobileGL-ios-}"
+            lib_file="$artifact_dir/${{ env.LIB_NAME }}"
+            if [ -f "$lib_file" ]; then
+              mkdir -p "$STAGE/lib/$platform"
+              cp "$lib_file" "$STAGE/lib/$platform/${{ env.LIB_NAME }}"
+            else
+              echo "警告: $artifact_dir 中没有 ${{ env.LIB_NAME }}"
+            fi
+          done
+
+      - name: 上传合并后的完整产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: MobileGL-ios-all
+          path: ${{ github.workspace }}/stage
+          if-no-files-found: error
+          retention-days: 14
