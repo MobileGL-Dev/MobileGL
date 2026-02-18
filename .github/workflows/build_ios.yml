@@ -16,6 +16,7 @@ env:
   BUILD_TYPE: "RelWithDebInfo"
   TARGET_NAME: "MobileGL"
   LIB_NAME: "libMobileGL.dylib"
+  IOS_DEPLOYMENT_TARGET: "16.3"
 
 jobs:
   build-ios:
@@ -57,7 +58,7 @@ jobs:
           key: ios-toolchain-${{ hashFiles('ios.toolchain.cmake') }}
           restore-keys: ios-toolchain-
 
-      - name: 下载 ios-cmake 工具链（如未缓存）
+      - name: 下载 ios-cmake 工具链
         if: steps.cache-toolchain.outputs.cache-hit != 'true'
         run: |
           curl -L -o ios.toolchain.cmake \
@@ -75,9 +76,12 @@ jobs:
           restore-keys: |
             cmake-build-ios-${{ runner.os }}-${{ matrix.platform }}-
 
-      - name: 配置 CMake（启用 ccache，禁用 std::format）
+      - name: 配置 CMake
         run: |
+          set -euxo pipefail
           export CCACHE_DIR=~/.ccache
+          export IPHONEOS_DEPLOYMENT_TARGET=${{ env.IOS_DEPLOYMENT_TARGET }}
+
           cmake -B build-${{ matrix.platform }} \
             -G Ninja \
             -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} \
@@ -85,6 +89,7 @@ jobs:
             -DSTATICLIB=OFF \
             -DMACOS=ON \
             -DPLATFORM=${{ matrix.platform }} \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=${{ env.IOS_DEPLOYMENT_TARGET }} \
             -DCMAKE_C_FLAGS="-Wno-error=implicit-function-declaration" \
             -DCMAKE_C_COMPILER_LAUNCHER=ccache \
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
@@ -96,10 +101,13 @@ jobs:
             -DMOBILEGL_NO_STD_FORMAT=ON
 
       - name: 编译
-        run: cmake --build build-${{ matrix.platform }} --config ${{ env.BUILD_TYPE }} --target ${{ env.TARGET_NAME }} --parallel $(sysctl -n hw.logicalcpu)
+        run: |
+          set -euxo pipefail
+          cmake --build build-${{ matrix.platform }} --config ${{ env.BUILD_TYPE }} --target ${{ env.TARGET_NAME }} --parallel $(sysctl -n hw.logicalcpu)
 
       - name: 签名动态库
         run: |
+          set -euxo pipefail
           DYLIB_PATH=$(find build-${{ matrix.platform }} -name "*.dylib" -type f | head -n1)
           if [ -z "$DYLIB_PATH" ]; then
             echo "::error::未找到动态库文件"
@@ -116,7 +124,9 @@ jobs:
           cp "${{ env.DYLIB_PATH }}" "$OUT_DIR/${{ env.LIB_NAME }}"
 
       - name: 验证架构
-        run: lipo -info "artifacts/lib/${{ matrix.platform }}/${{ env.LIB_NAME }}"
+        run: |
+          set -euxo pipefail
+          lipo -info "artifacts/lib/${{ matrix.platform }}/${{ env.LIB_NAME }}"
 
       - name: 上传单个平台产物
         uses: actions/upload-artifact@v4
