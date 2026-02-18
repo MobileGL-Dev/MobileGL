@@ -1823,7 +1823,7 @@ namespace MobileGL {
                 CASE(GL_FOG_SPECULAR_TEXTURE_WIN)
 
             default:
-                return std::format("0x%x", value);
+                return std::format("0x{:x}", value);
             }
 #undef CASE
         }

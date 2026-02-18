@@ -30,22 +30,22 @@ namespace MobileGL {
             }
 
             switch (attachment) {
-                case GL_NONE:
-                    return FramebufferAttachmentType::None;
-                case GL_DEPTH_ATTACHMENT:
-                    return FramebufferAttachmentType::Depth;
-                case GL_STENCIL_ATTACHMENT:
-                    return FramebufferAttachmentType::Stencil;
-                case GL_FRONT_LEFT:
-                    return FramebufferAttachmentType::FrontLeft;
-                case GL_FRONT_RIGHT:
-                    return FramebufferAttachmentType::FrontRight;
-                case GL_BACK_LEFT:
-                    return FramebufferAttachmentType::BackLeft;
-                case GL_BACK_RIGHT:
-                    return FramebufferAttachmentType::BackRight;
-                default:
-                    return FramebufferAttachmentType::Unknown;
+            case GL_NONE:
+                return FramebufferAttachmentType::None;
+            case GL_DEPTH_ATTACHMENT:
+                return FramebufferAttachmentType::Depth;
+            case GL_STENCIL_ATTACHMENT:
+                return FramebufferAttachmentType::Stencil;
+            case GL_FRONT_LEFT:
+                return FramebufferAttachmentType::FrontLeft;
+            case GL_FRONT_RIGHT:
+                return FramebufferAttachmentType::FrontRight;
+            case GL_BACK_LEFT:
+                return FramebufferAttachmentType::BackLeft;
+            case GL_BACK_RIGHT:
+                return FramebufferAttachmentType::BackRight;
+            default:
+                return FramebufferAttachmentType::Unknown;
             }
         }
 

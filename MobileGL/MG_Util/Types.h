@@ -75,6 +75,10 @@ namespace MobileGL {
         using E = std::common_type_t<Ts...>;
         return std::array<E, sizeof...(Ts)>{{std::forward<Ts>(elems)...}};
     }
+    template <typename T>
+    inline String ToString(const T& value) {
+        return std::to_string(value);
+    }
     class RuntimeError : public std::runtime_error {
     public:
         using std::runtime_error::runtime_error;
@@ -252,7 +256,7 @@ namespace MobileGL {
         }
     };
 
-    struct BackendCap {
+    struct StaticBackendCapabilityT {
         Bool AllowVSOnlyPrograms = false;
     };
 
@@ -268,7 +272,7 @@ namespace MobileGL {
         String BackendName;
         Optional<String> ExtraVendor;
         GLInfo RendererGLInfo;
-        BackendCap BackendCapability;
+        StaticBackendCapabilityT StaticBackendCapability;
     };
 
     template <typename Bit,

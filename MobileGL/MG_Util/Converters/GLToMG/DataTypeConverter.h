@@ -12,5 +12,5 @@
 namespace MobileGL {
     namespace MG_Util {
         DataType ConvertGLEnumToDataType(GLenum type);
-    }
+    } // namespace MG_Util
 } // namespace MobileGL

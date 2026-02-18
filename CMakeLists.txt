@@ -126,6 +126,7 @@ endif ()
 
 set(SOURCE_FILES
     MobileGL/Init.cpp
+    MobileGL/GlobalObjects.cpp
 
     MobileGL/MG_Util/Debug/Log.cpp
 
@@ -175,9 +176,7 @@ set(SOURCE_FILES
     MobileGL/MG_Impl/GLXImpl/LookUp/LookUp.cpp
 
     MobileGL/MG_Impl/EGLImpl/Exporting/Definitions.cpp
-    MobileGL/MG_Impl/EGLImpl/Temporary/TemporaryEGLImpl.cpp
-    MobileGL/MG_Impl/EGLImpl/EGLWrapper/EGLWrapper.cpp
-    MobileGL/MG_Impl/EGLImpl/EGLForVulkan/EGLForVulkan.cpp
+    MobileGL/MG_Impl/EGLImpl/EGLImpl.cpp
     
     # @INSERTION_POINT:SOURCE_FILE_GLIMPL@ #
     MobileGL/MG_Impl/GLImpl/Sampler/Validators.cpp
@@ -202,13 +201,16 @@ set(SOURCE_FILES
     MobileGL/MG_Impl/GetProcAddress.cpp
 
     MobileGL/MG_Backend/Init.cpp
+    MobileGL/MG_Backend/BackendObject.cpp
 
     MobileGL/MG_Backend/DirectGLES/DirectGLES.cpp
+    MobileGL/MG_Backend/DirectGLES/BackendObject_DirectGLES.cpp
     MobileGL/MG_Backend/DirectGLES/Utils.cpp
     MobileGL/MG_Backend/DirectGLES/Managers.cpp
 
     MobileGL/MG_Backend/DirectVulkan/DirectVulkan.cpp
     MobileGL/MG_Backend/DirectVulkan/TmpImpl.cpp
+    MobileGL/MG_Backend/DirectVulkan/BackendObject_DirectVulkan.cpp
     MobileGL/MG_Backend/DirectVulkan/Renderer/VulkanContext.cpp
     MobileGL/MG_Backend/DirectVulkan/Renderer/SwapchainManager.cpp
     MobileGL/MG_Backend/DirectVulkan/Renderer/PipelineManager.cpp

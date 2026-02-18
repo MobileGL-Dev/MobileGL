@@ -11,8 +11,6 @@
 #include "Renderer/VulkanRenderer.h"
 
 namespace MobileGL::MG_Backend::DirectVulkan {
-    extern UniquePtr<VulkanRenderer> pVulkanRenderer;
-
     void ClearBufferfi(GLenum buffer, GLint drawbuffer, GLfloat depth, GLint stencil);
     void ClearBufferfv(GLenum buffer, GLint drawbuffer, const GLfloat* value);
     void ClearBufferuiv(GLenum buffer, GLint drawbuffer, const GLuint* value);
@@ -49,5 +47,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     void CopyTexSubImage2D(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLint x, GLint y, GLsizei width,
                            GLsizei height);
     void GenerateMipmap(GLenum target);
-    const GLubyte* GetString(GLenum name);
+    void ReadPixels(GLint x, GLint y, GLsizei width, GLsizei height, GLenum format, GLenum type, void* pixels);
+    void GetTexImage(GLenum target, GLint level, GLenum format, GLenum type, GLvoid* pixels);
+    Bool InitWindowSurface(NativeWindowType window);
+    void Present();
 } // namespace MobileGL::MG_Backend::DirectVulkan

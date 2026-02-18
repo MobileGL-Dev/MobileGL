@@ -10,6 +10,7 @@
 #include <Includes.h>
 #include <MG_State/GLState/TextureState/TextureState.h>
 #include <MG_State/GLState/SamplerState/SamplerObject.h>
+#include <MG_Util/BackendLoaders/OpenGL/Loader.h>
 
 #define CallAndCheck(operation)                                                                                        \
     MGLOG_D("Call GLES func: %s", #operation);                                                                         \
@@ -55,5 +56,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
     const GLubyte* GetString(GLenum name);
     void ReadPixels(GLint x, GLint y, GLsizei width, GLsizei height, GLenum format, GLenum type, void* pixels);
     void GetTexImage(GLenum target, GLint level, GLenum format, GLenum type, GLvoid* pixels);
+    Bool InitWindowSurface(NativeWindowType window);
+    void Present();
+    void SetEGLFuncsTable(const MG_External::EGLFunctionsTable& eglFuncs);
+    void SetGLESFuncsTable(const MG_External::GLESFunctionsTable& glesFuncs);
+    void SetGLESCapabilities(const MG_External::GLESCapabilities& capabilities);
+    void DestroyEGLContext();
 
+    extern MG_External::EGLFunctionsTable g_EGLFuncs;
+    extern MG_External::GLESFunctionsTable g_GLESFuncs;
+    extern MG_External::GLESCapabilities g_GLESCapabilities;
 } // namespace MobileGL::MG_Backend::DirectGLES

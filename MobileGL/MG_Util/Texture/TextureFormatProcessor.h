@@ -17,5 +17,5 @@ namespace MobileGL {
     namespace MG_Util::TextureFormatProcessor {
         void NormalizePixelFormat(GLenum internalFormat, Flags<PixelFormatNormalizeOptionBit> options,
                                   GLenum* outInternalFormat, GLenum* outFormat, GLenum* outType);
-    }
+    } // namespace MG_Util::TextureFormatProcessor
 } // namespace MobileGL

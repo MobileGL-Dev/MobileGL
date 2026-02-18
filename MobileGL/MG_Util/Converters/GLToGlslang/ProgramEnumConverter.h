@@ -12,5 +12,5 @@
 namespace MobileGL {
     namespace MG_Util {
         EShLanguage ConvertGLEnumToEShLanguage(GLenum shaderType);
-    }
+    } // namespace MG_Util
 } // namespace MobileGL

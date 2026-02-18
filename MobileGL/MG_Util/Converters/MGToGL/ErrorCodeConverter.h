@@ -13,5 +13,5 @@
 namespace MobileGL {
     namespace MG_Util {
         GLenum ConvertErrorCodeToGLEnum(ErrorCode code);
-    }
+    } // namespace MG_Util
 } // namespace MobileGL

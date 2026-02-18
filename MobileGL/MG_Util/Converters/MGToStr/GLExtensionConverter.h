@@ -12,5 +12,5 @@
 namespace MobileGL {
     namespace MG_Util {
         String ConvertGLExtToString(GLExtension extension);
-    }
+    } // namespace MG_Util
 } // namespace MobileGL
