@@ -53,8 +53,10 @@ jobs:
           curl -L -o ios.toolchain.cmake \
             https://github.com/leetal/ios-cmake/raw/master/ios.toolchain.cmake
 
+      # 修正：切换到 glslang 目录再执行更新脚本
       - name: 更新 glslang 外部源码
-        run: python3 3rdparty/glslang/update_glslang_sources.py
+        working-directory: ${{ github.workspace }}/3rdparty/glslang
+        run: python3 update_glslang_sources.py
 
       - name: 缓存构建目录
         uses: actions/cache@v4
