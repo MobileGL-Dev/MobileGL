@@ -7,107 +7,144 @@
 </p>
 
 <p align="center"><em>
-A desktop OpenGL implementation
+一个桌面 OpenGL 实现
 </em></p>
 
-MobileGL is a *free* and *open-source* project that implements a desktop **OpenGL** API. The goal is to provide a complete desktop OpenGL implementation with a state management layer and multi-backend support.
+MobileGL 是一个 *free* 且 *open-source* 的项目，实现了桌面 **OpenGL** API。目标是提供一个完整的桌面 OpenGL 实现，包括状态管理层和多后端支持。
 
 > [!NOTE]
 >
-> **Status:** In development. Parts of the codebase are incomplete. Current short-term target: **OpenGL 3.3 (Core Profile)**.
+> **Status:** 开发中。部分代码仍未完成。当前短期目标: **OpenGL 3.3 (Core Profile)**。
 
-## Project positioning
+---
 
-MobileGL is an implementation of a desktop OpenGL library. It aims to provide:
+## 项目定位
 
-* Full OpenGL state management.
-* A front-end that exposes OpenGL functions.
-* Multiple independent backend implementations, where each backend targets a specific graphics API and remains fully isolated from others.
+MobileGL 是一个桌面 OpenGL 库的实现。它旨在提供:
 
-This project is intended as an implementation/translation layer.
+- 完整的 OpenGL 状态管理。
+- 一个暴露 OpenGL 函数的前端。
+- 多个相互独立的后端实现，每个后端针对特定图形 API，并且彼此完全隔离。
 
-## Key components
+本项目定位为一个实现/翻译层。
 
-The repository is organized into following top-level modules:
+---
 
-1. **MG_State** — state tracking and management logic for Graphics APIs.
-2. **MG_Impl** — front-end implementations of Graphics APIs that interact with `MG_State` and `MG_Backend`.
-3. **MG_Backend** — per-backend translation layer that maps front-end Graphics APIs' semantics and state into concrete backend API calls (e.g. OpenGL ES, Vulkan).
-4. **MG_Util** and other utility modules.
+## 核心组件
 
-## Third-party components
+仓库按如下顶层模块组织:
 
-MobileGL reuses several open-source projects:
+1. **MG_State** — 图形 API 的状态跟踪与管理逻辑。
+2. **MG_Impl** — 图形 API 的前端实现，与 `MG_State` 和 `MG_Backend` 交互。
+3. **MG_Backend** — 各后端的转换层，将前端图形 API 的语义和状态映射为具体后端 API 调用 (例如 OpenGL ES, Vulkan)。
+4. **MG_Util** 及其他工具模块。
 
-* **SPIRV-Cross** by **KhronosGroup** - [Apache License 2.0](https://github.com/KhronosGroup/SPIRV-Cross/blob/master/LICENSE): [github](https://github.com/KhronosGroup/SPIRV-Cross)
-* **glslang** by **KhronosGroup** - [Various Licenses](https://github.com/KhronosGroup/glslang/blob/main/LICENSE.txt): [github](https://github.com/KhronosGroup/glslang)
-* **DiligentCore** by **Diligent Graphics** - [Apache License 2.0](https://github.com/DiligentGraphics/DiligentCore/blob/master/License.txt): [github](https://github.com/DiligentGraphics/DiligentCore)
+---
 
-Refer to each component's repository for exact license texts. Any bundled third-party code in this repository is included under the upstream project's license.
+## 第三方组件
 
-## Compatibility & target
+MobileGL 复用了多个开源项目:
 
-* **Short-term target:** `OpenGL 3.3 (Core Profile)`.
-* **Current development focus:**
-  * `MG_State` and `MG_Impl` for `OpenGL 3.3 (Core Profile)`
-  * `Direct (Vulkan)` backend
-  * `Direct (OpenGL ES)` backend
+- **SPIRV-Cross** by **KhronosGroup**  
+  - License: [Apache License 2.0](https://github.com/KhronosGroup/SPIRV-Cross/blob/master/LICENSE)  
+  - Repository: https://github.com/KhronosGroup/SPIRV-Cross
 
-## Build Instructions
+- **glslang** by **KhronosGroup**  
+  - License: [Various Licenses](https://github.com/KhronosGroup/glslang/blob/main/LICENSE.txt)  
+  - Repository: https://github.com/KhronosGroup/glslang
 
-We currently provide **no releases** and **no precompiled binaries**.  
-If you want to try the project right now, you’ll need to build it yourself:
+- **DiligentCore** by **Diligent Graphics**  
+  - License: [Apache License 2.0](https://github.com/DiligentGraphics/DiligentCore/blob/master/License.txt)  
+  - Repository: https://github.com/DiligentGraphics/DiligentCore
 
-1. Clone the repository:
+请参阅各组件仓库以获取准确的许可证文本。本仓库中包含的任何第三方代码均遵循其上游项目的许可证。
 
-   ```sh
-   git clone https://github.com/MobileGL-Dev/MobileGL.git
-   ```
+---
 
-2. Initialize and update all submodules recursively:
+## 兼容性与目标
 
-   ```sh
-   git submodule update --init --recursive
-   ```
+- **Short-term target:** `OpenGL 3.3 (Core Profile)`
+- **Current development focus:**
+  - 面向 `OpenGL 3.3 (Core Profile)` 的 `MG_State` 和 `MG_Impl`
+  - `Direct (Vulkan)` backend
+  - `Direct (OpenGL ES)` backend
 
-3. Follow glslang’s own documentation for its required initiation.
+---
 
-4. Configure and build the project with CMake:
+## 构建说明
 
-   ```sh
-   cmake -B build
-   cmake --build build
-   ```
-   
-   or do it in a modern way:
-   
-   ```sh
-   cmake -S . -B build -G Ninja -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++
-   cmake --build build
-   ```
-   
-   Alternatively, you can use platform-specific build commands as needed.
+目前我们 **没有发布版本**，也 **没有预编译二进制文件**。  
+如果你现在想尝试该项目，需要自行构建:
 
-## Build Options
+### 1. 克隆仓库
 
-| Option                       | Description                                           | Default |
-|------------------------------| ----------------------------------------------------- | ------- |
-| `MOBILEGL_BUILD_TEST`        | Build MobileGL tests (requires Clang)                 | ON      |
-| `MOBILEGL_BUILD_BENCHMARK`   | Build MobileGL benchmarks (requires Clang)            | ON      |
-| `MOBILEGL_FORCE_RELEASE_OPT` | Enable O3 and LTO in Debug build                      | ON      |
-| `MOBILEGL_ENABLE_TRACY`      | Enable Tracy profiler for performance analysis        | OFF     |
+```sh
+git clone https://github.com/MobileGL-Dev/MobileGL.git
+cd MobileGL
+```
 
-   **Notes:**
+### 2. 初始化并更新子模块
 
-* The project requires C++23.
-* `MG_Test` and `MG_Benchmark` can only be built with Clang, not GCC. To enforce Clang, add `-DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++` to your command.
-* On Android, tests and benchmarks are always disabled.
+```sh
+git submodule update --init --recursive
+```
 
-## Notice
+### 3. 按照 glslang 官方文档完成其初始化步骤
 
-* MobileGL is **not** production-ready currently.
-* Some `OpenGL 3.3 (Core Profile)` features are still missing or under development.
+请参考:  
+https://github.com/KhronosGroup/glslang
+
+### 4. 使用 CMake 构建项目
+
+基础构建:
+
+```sh
+cmake -B build
+cmake --build build
+```
+
+现代方式 (推荐):
+
+```sh
+cmake -S . -B build -G Ninja -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++
+cmake --build build
+```
+
+你也可以根据需要使用平台特定的构建命令。
+
+---
+
+## 构建选项
+
+| Option                       | Description                                    | Default |
+|------------------------------|-----------------------------------------------|---------|
+| `MOBILEGL_BUILD_TEST`        | 构建 MobileGL 测试 (需要 Clang)               | ON      |
+| `MOBILEGL_BUILD_BENCHMARK`   | 构建 MobileGL 基准测试 (需要 Clang)           | ON      |
+| `MOBILEGL_FORCE_RELEASE_OPT` | 在 Debug 构建中启用 O3 和 LTO                 | ON      |
+| `MOBILEGL_ENABLE_TRACY`      | 启用 Tracy 性能分析器                          | OFF     |
+
+### Notes
+
+- 项目需要 C++23。
+- `MG_Test` 和 `MG_Benchmark` 只能使用 Clang 构建，不能使用 GCC。  
+  如需强制使用 Clang，请添加:
+
+```sh
+-DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++
+```
+
+- 在 Android 平台上，测试和基准测试始终被禁用。
+
+---
+
+## 注意
+
+- MobileGL 当前 **尚未达到生产可用状态**。
+- 部分 `OpenGL 3.3 (Core Profile)` 功能仍缺失或正在开发中。
+
+---
 
 ## License
 
-This project is distributed under **GNU LGPL v3.0**. See the `LICENSE` file in the repository for detailed information.
+本项目基于 **GNU LGPL v3.0** 发布。  
+详细信息请参阅仓库中的 `LICENSE` 文件。
