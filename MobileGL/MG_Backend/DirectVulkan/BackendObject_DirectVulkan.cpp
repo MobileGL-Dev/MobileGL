@@ -8,8 +8,8 @@
 
 #include "BackendObject_DirectVulkan.h"
 #include "MG_Backend/BackendObject.h"
-#include <MG_Backend/DirectVulkan/DirectVulkan.h>
-#include <MG_Backend/DirectVulkan/TmpImpl.h>
+#include "DirectVulkan.h"
+#include "TmpImpl.h"
 #include <MG_Util/BackendLoaders/OpenGL/Loader.h>
 
 namespace MobileGL::MG_Backend::DirectVulkan {

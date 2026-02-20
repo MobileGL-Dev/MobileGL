@@ -7,7 +7,7 @@
 // End of Source File Header
 
 #include "TmpImpl.h"
-#include "MG_Backend/DirectVulkan/DirectVulkan.h"
+
 #include <MG_Impl/GLImpl/Framebuffer/GL_Framebuffer.h>
 #include <MG_Util/ShaderTranspiler/Types.h>
 #include "MG_Util/Debug/Log.h"

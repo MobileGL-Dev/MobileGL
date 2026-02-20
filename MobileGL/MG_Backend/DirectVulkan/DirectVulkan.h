@@ -8,7 +8,6 @@
 
 #pragma once
 #include <Includes.h>
-#include "Renderer/VulkanRenderer.h"
 
 namespace MobileGL::MG_Backend::DirectVulkan {
     namespace TmpImpl {
