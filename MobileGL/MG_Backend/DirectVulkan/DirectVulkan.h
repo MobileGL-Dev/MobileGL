@@ -11,6 +11,10 @@
 #include "Renderer/VulkanRenderer.h"
 
 namespace MobileGL::MG_Backend::DirectVulkan {
+    namespace TmpImpl {
+        class VulkanState;
+    } // namespace TmpImpl
+
     void ClearBufferfi(GLenum buffer, GLint drawbuffer, GLfloat depth, GLint stencil);
     void ClearBufferfv(GLenum buffer, GLint drawbuffer, const GLfloat* value);
     void ClearBufferuiv(GLenum buffer, GLint drawbuffer, const GLuint* value);
@@ -51,4 +55,5 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     void GetTexImage(GLenum target, GLint level, GLenum format, GLenum type, GLvoid* pixels);
     Bool InitWindowSurface(NativeWindowType window);
     void Present();
+    const TmpImpl::VulkanState& GetVulkanState();
 } // namespace MobileGL::MG_Backend::DirectVulkan

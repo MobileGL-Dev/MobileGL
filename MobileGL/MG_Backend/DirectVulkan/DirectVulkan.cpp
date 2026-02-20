@@ -67,4 +67,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     void Present() {
         TmpImpl::Present();
     }
+
+    const TmpImpl::VulkanState& GetVulkanState() {
+        return TmpImpl::GetVulkanState();
+    }
 } // namespace MobileGL::MG_Backend::DirectVulkan

@@ -7,8 +7,6 @@
 // End of Source File Header
 
 #include "GL_Getter.h"
-#include "GL/gl.h"
-#include "MG_Util/Debug/Log.h"
 #include <Config.h>
 #include <MGGitHash.h>
 #include <MG_State/GLState/Core.h>

@@ -8,11 +8,229 @@
 
 #pragma once
 #include <Includes.h>
+#include "Renderer/VkCommon.h"
+#include "Renderer/VulkanContext.h"
+#include "Renderer/SwapchainManager.h"
+#include "Renderer/FrameContext.h"
+#include "Managers/ProgramManager.h"
+#include <MG_State/GLState/Core.h>
 
 namespace MobileGL::MG_Backend::DirectVulkan::TmpImpl {
+    namespace DV = MobileGL::MG_Backend::DirectVulkan::VkManager;
+    using BufferObject = MobileGL::MG_State::GLState::BufferObject;
+    using ProgramObject = MobileGL::MG_State::GLState::ProgramObject;
+    using VertexArrayObject = MobileGL::MG_State::GLState::VertexArrayObject;
+    using FramebufferObject = MobileGL::MG_State::GLState::FramebufferObject;
+    using FramebufferAttachmentObject = MobileGL::MG_State::GLState::FramebufferAttachmentObject;
+    using ITextureObject = MobileGL::MG_State::GLState::ITextureObject;
+    using RenderbufferObject = MobileGL::MG_State::GLState::RenderbufferObject;
+    using SamplerObject = MobileGL::MG_State::GLState::SamplerObject;
+    using TextureObjectMipmap = MobileGL::MG_State::GLState::TextureObjectMipmap;
+    using TrashImage = MobileGL::MG_Backend::DirectVulkan::TrashImage;
+
+    struct BufferResource {
+        VkBuffer buffer = VK_NULL_HANDLE;
+        VkDeviceMemory memory = VK_NULL_HANDLE;
+        VkDeviceSize size = 0;
+        VkBufferUsageFlags usage = 0;
+        VkMemoryPropertyFlags props = 0;
+        void* mapped = nullptr;
+        Uint32 lastUsedFrame = ~0u;
+    };
+
+    struct TextureResource {
+        VkImage image = VK_NULL_HANDLE;
+        VkDeviceMemory memory = VK_NULL_HANDLE;
+        VkImageView view = VK_NULL_HANDLE;
+        UnorderedMap<Uint32, VkImageView> mipViews;
+        VkFormat format = VK_FORMAT_UNDEFINED;
+        VkExtent3D extent{0, 0, 1};
+        VkImageLayout layout = VK_IMAGE_LAYOUT_UNDEFINED;
+        Uint32 mipLevels = 1;
+        Uint16 paramsVersion = 0;
+        bool valid = false;
+    };
+
+    struct RenderbufferResource {
+        VkImage image = VK_NULL_HANDLE;
+        VkDeviceMemory memory = VK_NULL_HANDLE;
+        VkImageView view = VK_NULL_HANDLE;
+        VkFormat format = VK_FORMAT_UNDEFINED;
+        VkExtent2D extent{0, 0};
+        VkImageLayout layout = VK_IMAGE_LAYOUT_UNDEFINED;
+        bool valid = false;
+    };
+
+    struct SamplerResource {
+        VkSampler sampler = VK_NULL_HANDLE;
+        Uint16 version = 0;
+        SamplerParameters params{};
+    };
+
+    struct PendingClearInfo {
+        GLbitfield mask = 0;
+        FloatVec4 clearColor = {0.0f, 0.0f, 0.0f, 1.0f};
+        Float clearDepth = 1.0f;
+    };
+
+    struct UniformBindingInfo {
+        String name;
+        Uint32 binding = 0;
+        Uint32 set = 0;
+        Uint32 blockIndex = 0xFFFFFFFFu;
+        VkShaderStageFlags stages = 0;
+    };
+
+    struct SamplerBindingInfo {
+        String name;
+        Uint32 binding = 0;
+        Uint32 set = 0;
+        VkShaderStageFlags stages = 0;
+    };
+
+    struct ProgramResource {
+        ProgramObject* program = nullptr;
+        Uint64 spvHash = 0;
+        DV::ProgramManager::HashType programHash = 0;
+        Vector<VkPipelineShaderStageCreateInfo>* shaderStages = nullptr;
+
+        VkDescriptorSetLayout setLayout = VK_NULL_HANDLE;
+        VkPipelineLayout pipelineLayout = VK_NULL_HANDLE;
+
+        struct UboPool {
+            Vector<BufferResource> buffers;
+            Uint32 cursor = 0;
+        };
+        Vector<UboPool> uboPools;
+        SizeT uboSize = 0;
+        Int32 uboBinding = -1;
+        Uint32 uniformDescriptorCount = 0;
+        Uint32 samplerDescriptorCount = 0;
+
+        Vector<UniformBindingInfo> uniformBindings;
+        Vector<SamplerBindingInfo> samplerBindings;
+        UnorderedMap<String, Uint32> samplerBindingByName;
+
+        UnorderedMap<Uint64, VkPipeline> pipelines;
+    };
+
+    struct DescriptorPoolConfig {
+        Uint32 maxSets = 0;
+        Uint32 uniformCount = 0;
+        Uint32 samplerCount = 0;
+    };
+
+    struct FrameDescriptorPools {
+        Vector<VkDescriptorPool> pools;
+        DescriptorPoolConfig config;
+        Uint32 activePool = 0;
+    };
+
+    struct VertexAttribKey {
+        Uint8 enabled = 0;
+        Uint8 size = 0;
+        Uint8 type = 0;
+        Uint8 normalized = 0;
+        Uint8 isInteger = 0;
+        Uint8 divisor = 0;
+        Uint16 pad = 0;
+        Uint32 stride = 0;
+        Uint64 offset = 0;
+    };
+
+    struct AttachmentInfo {
+        FramebufferAttachmentType type = FramebufferAttachmentType::None;
+        VkImageView view = VK_NULL_HANDLE;
+        VkFormat format = VK_FORMAT_UNDEFINED;
+        VkImageAspectFlags aspect = 0;
+        VkImageLayout finalLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        ITextureObject* texture = nullptr;
+        RenderbufferObject* renderbuffer = nullptr;
+    };
+
+    struct BackendFramebufferObject {
+        Array<VkRenderPass, 8> renderPasses = {};
+        VkFramebuffer framebuffer = VK_NULL_HANDLE;
+        VkExtent2D extent{0, 0};
+        Uint32 colorAttachmentCount = 0;
+        Bool hasDepth = false;
+        VkFormat depthFormat = VK_FORMAT_UNDEFINED;
+        Uint64 renderPassCompatHash = 0;
+
+        Vector<AttachmentInfo> attachments;
+        Array<Int32, static_cast<SizeT>(FramebufferAttachmentType::FramebufferAttachmentTypeCount)> attachmentIndex =
+            {};
+
+        FramebufferObject::FramebufferAttachmentVersionArray syncedAttachmentVersions = {0};
+        FramebufferObject::FramebufferAttachmentArray frontendDrawBuffers = {FramebufferAttachmentType::None};
+        Array<Int32, FramebufferObject::MAX_DRAW_BUFFERS> drawBufferAttachmentIndices = {};
+        FramebufferAttachmentType frontendReadBuffer = FramebufferAttachmentType::Color0;
+        Uint64 configHash = 0;
+        Uint16 objectVersion = 0;
+
+        Bool IsValid() const { return renderPasses[0] != VK_NULL_HANDLE && framebuffer != VK_NULL_HANDLE; }
+    };
+
+    struct VulkanState {
+        UniquePtr<DV::VulkanContext> ctx;
+        UniquePtr<DV::SwapchainManager> swapchain;
+        UniquePtr<DV::ProgramManager> programMgr;
+        Array<VkRenderPass, 8> renderPasses = {};
+        VkCommandPool commandPool = VK_NULL_HANDLE;
+        Vector<UniquePtr<DV::FrameContext>> frames;
+        Vector<FrameDescriptorPools> frameDescriptorPools;
+        Uint32 currentFrame = 0;
+        Uint32 maxFramesInFlight = 2;
+        Bool initialized = false;
+        UintVec2 viewportSize{0, 0};
+
+        VkImage depthImage = VK_NULL_HANDLE;
+        VkDeviceMemory depthMemory = VK_NULL_HANDLE;
+        VkImageView depthView = VK_NULL_HANDLE;
+        VkFormat depthFormat = VK_FORMAT_UNDEFINED;
+        Uint64 defaultRenderPassCompatHash = 0;
+
+        BufferResource nullUbo;
+
+        TextureResource defaultTexture;
+        SamplerResource defaultSampler;
+
+        UnorderedMap<const BufferObject*, BufferResource> buffers;
+        UnorderedMap<const ITextureObject*, TextureResource> textures;
+        UnorderedMap<const RenderbufferObject*, RenderbufferResource> renderbuffers;
+        UnorderedMap<const SamplerObject*, SamplerResource> samplers;
+        UnorderedMap<const ProgramObject*, ProgramResource> programs;
+        UnorderedMap<SharedPtr<MG_State::GLState::FramebufferObject>, SharedPtr<BackendFramebufferObject>> framebuffers;
+
+        VkRenderPass activeRenderPass = VK_NULL_HANDLE;
+        VkFramebuffer activeFramebuffer = VK_NULL_HANDLE;
+        VkExtent2D activeExtent{0, 0};
+        Uint32 activeColorAttachmentCount = 1;
+        Bool activeHasDepth = false;
+        VkFormat activeDepthFormat = VK_FORMAT_UNDEFINED;
+        SharedPtr<MG_State::GLState::FramebufferObject> activeStateFBO = nullptr;
+        SharedPtr<BackendFramebufferObject> activeBackendFBO = nullptr;
+        Bool activeIsDefault = true;
+        Bool activeDefaultColorWrites = true;
+
+        VkRenderPass recordingRenderPass = VK_NULL_HANDLE;
+        VkFramebuffer recordingFramebuffer = VK_NULL_HANDLE;
+        Bool cmdBufferBegun = false;
+
+        Bool recording = false;
+        Bool frameSubmitted = false;
+        FloatVec4 clearColor = {0.0f, 0.0f, 0.0f, 1.0f};
+        Float clearDepth = 1.0f;
+
+        UnorderedMap<SharedPtr<FramebufferObject>, PendingClearInfo> pendingClears;
+
+        Vector<VkImageLayout> swapchainImageLayouts;
+    };
+
     void Present();
     void FrameBegin();
     void InitVulkan(ANativeWindow* window);
+    const VulkanState& GetVulkanState();
     void ClearBufferfi(GLenum buffer, GLint drawbuffer, GLfloat depth, GLint stencil);
     void ClearBufferfv(GLenum buffer, GLint drawbuffer, const GLfloat* value);
     void ClearBufferuiv(GLenum buffer, GLint drawbuffer, const GLuint* value);
@@ -49,5 +267,4 @@ namespace MobileGL::MG_Backend::DirectVulkan::TmpImpl {
     void CopyTexSubImage2D(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLint x, GLint y, GLsizei width,
                            GLsizei height);
     void GenerateMipmap(GLenum target);
-    void Present();
 } // namespace MobileGL::MG_Backend::DirectVulkan::TmpImpl

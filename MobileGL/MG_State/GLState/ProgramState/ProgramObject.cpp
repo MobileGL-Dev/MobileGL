@@ -111,9 +111,9 @@ namespace MobileGL {
                 }
 
                 std::sort(m_shaders.begin(), m_shaders.end(),
-                    [](SharedPtr<ShaderObject>& a, SharedPtr<ShaderObject>& b) {
-                            return a->GetShaderStage() < b->GetShaderStage();
-                });
+                          [](SharedPtr<ShaderObject>& a, SharedPtr<ShaderObject>& b) {
+                              return a->GetShaderStage() < b->GetShaderStage();
+                          });
 
                 for (SizeT i = 0; i < m_shaders.size(); i++) {
                     shaderTypes[i] = MG_Util::ConvertShaderStageToGLEnum(m_shaders[i]->GetShaderStage());

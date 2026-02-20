@@ -31,8 +31,9 @@ namespace MobileGL {
                 // Compile for OpenGL here, so that we can do validation and link
                 // like a real OpenGL driver at linking stage
                 // Will compile for other backends later.
-                ShaderAttrib attrib{
-                    .shaderType = MG_Util::ConvertShaderStageToGLEnum(m_stage), .sourceStr = m_source, .flags = ShaderCompileBits::CompileForOpenGL};
+                ShaderAttrib attrib{.shaderType = MG_Util::ConvertShaderStageToGLEnum(m_stage),
+                                    .sourceStr = m_source,
+                                    .flags = ShaderCompileBits::CompileForOpenGL};
 
                 auto result = ShaderCompiler::CompileShader(attrib);
                 if (result) {

@@ -168,6 +168,7 @@ set(SOURCE_FILES
     MobileGL/MG_Util/ShaderTranspiler/SpirvPasses/EliminateFloatEqualsZeroPass.cpp
 
     MobileGL/MG_Util/BackendLoaders/OpenGL/Loader.cpp
+    MobileGL/MG_Util/BackendLoaders/Vulkan/Loader.cpp
 
     MobileGL/MG_Util/Texture/PixelStoreProcessor.cpp
     MobileGL/MG_Util/Texture/TextureFormatProcessor.cpp

@@ -9,8 +9,8 @@
 #include "BackendObject_DirectVulkan.h"
 #include "MG_Backend/BackendObject.h"
 #include <MG_Backend/DirectVulkan/DirectVulkan.h>
+#include <MG_Backend/DirectVulkan/TmpImpl.h>
 #include <MG_Util/BackendLoaders/OpenGL/Loader.h>
-#include <format>
 
 namespace MobileGL::MG_Backend::DirectVulkan {
     BackendObject_DirectVulkan::~BackendObject_DirectVulkan() = default;
@@ -24,7 +24,16 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
     void BackendObject_DirectVulkan::Initialize() {
         m_initialized = true;
-        // TODO
+    }
+
+    void BackendObject_DirectVulkan::InitCapabilities() {
+        if (!m_initialized) {
+            MGLOG_E("Cannot initialize capabilities before backend is initialized");
+            return;
+        }
+
+        MG_Util::BackendLoader::QueryVulkanCapabilities(m_vulkanCaps,
+                                                        DirectVulkan::GetVulkanState().ctx->GetPhysicalDevice());
         UpdateDynamicBackendParameters();
     }
 
@@ -53,7 +62,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // Format:
         // <GPU Name>, Vulkan <Vulkan Version>, Driver <Driver Version>
         // TODO
-        return "Vulkan";
+        String str = m_vulkanCaps.DeviceName + ", Vulkan " + m_vulkanCaps.VulkanAPIVersion.toString() + ", Driver " +
+                     m_vulkanCaps.DriverVersionString;
+        return str;
     }
 
     BackendType BackendObject_DirectVulkan::GetBackendType() const {
@@ -103,6 +114,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     }
 
     void BackendObject_DirectVulkan::UpdateDynamicBackendParameters() {
-        m_dynamicParameters.UniformBufferOffsetAlignment = 256; // TODO
+        m_dynamicParameters.UniformBufferOffsetAlignment = m_vulkanCaps.UniformBufferOffsetAlignment;
     }
 } // namespace MobileGL::MG_Backend::DirectVulkan

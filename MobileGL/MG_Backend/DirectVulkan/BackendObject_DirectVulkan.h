@@ -9,13 +9,16 @@
 #pragma once
 #include <Includes.h>
 #include "../BackendObject.h"
+#include <MG_Util/BackendLoaders/Vulkan/Loader.h>
 
 namespace MobileGL::MG_Backend::DirectVulkan {
     class BackendObject_DirectVulkan : public BackendObject {
     public:
         ~BackendObject_DirectVulkan() override;
+
         void Initialize() override;
         void InitWindowSurface() override;
+        void InitCapabilities() override;
 
         const RendererInfo& GetRendererInfo() const override;
         String GetBackendAPIVersionString() const override;
@@ -28,5 +31,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
         Bool m_initialized = false;
         DynamicBackendParameters m_dynamicParameters;
+        MG_External::VulkanCapabilities m_vulkanCaps;
     };
 } // namespace MobileGL::MG_Backend::DirectVulkan
