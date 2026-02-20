@@ -15,7 +15,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
     class BackendObject_DirectGLES : public BackendObject {
     public:
         ~BackendObject_DirectGLES() override;
+
         void Initialize() override;
+        void InitCapabilities() override;
         void InitWindowSurface() override;
 
         const RendererInfo& GetRendererInfo() const override;

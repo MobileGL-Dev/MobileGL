@@ -38,8 +38,15 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
         DirectGLES::SetEGLFuncsTable(m_EGLFunctions);
         DirectGLES::SetGLESFuncsTable(m_GLESFunctions);
+    }
 
-        if (!MG_Util::BackendLoader::FillInGLESCapabilities(m_GLESCapabilities, m_GLESFunctions, m_EGLFunctions)) {
+    void BackendObject_DirectGLES::InitCapabilities() {
+        if (!m_initialized) {
+            MGLOG_E("DirectGLES backend not initialized");
+            return;
+        }
+
+        if (!MG_Util::BackendLoader::FillInGLESCapabilities(m_GLESCapabilities, m_GLESFunctions)) {
             MGLOG_E("Failed to fill in GLES capabilities for DirectGLES backend");
             return;
         }

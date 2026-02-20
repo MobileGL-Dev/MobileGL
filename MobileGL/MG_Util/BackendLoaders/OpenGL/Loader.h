@@ -1020,8 +1020,7 @@ namespace MobileGL {
                                   MG_External::EGL::eglGetProcAddress_PTR procAddress);
         Bool AcquireEGLFunctions(MG_External::EGLFunctionsTable& funcs);
         Bool FillInGLESCapabilities(MG_External::GLESCapabilities& caps,
-                                    const MG_External::GLESFunctionsTable& glesFuncs,
-                                    const MG_External::EGLFunctionsTable& eglFuncs);
+                                    const MG_External::GLESFunctionsTable& glesFuncs);
     } // namespace MG_Util::BackendLoader
 } // namespace MobileGL
 #undef MOBILEGL_EXTERNAL_GLES

@@ -496,112 +496,9 @@ namespace MobileGL::MG_Util::BackendLoader {
         return true;
     }
 
-    static EGLDisplay eglDisplay = EGL_NO_DISPLAY;
-    static EGLSurface eglSurface = EGL_NO_SURFACE;
-    static EGLContext eglContext = EGL_NO_CONTEXT;
-    inline void DestroyTempEGLCtx(const MG_External::EGLFunctionsTable& eglFuncs) {
-        if (eglSurface != EGL_NO_SURFACE) {
-            eglFuncs.eglDestroySurface(eglDisplay, eglSurface);
-            eglSurface = EGL_NO_SURFACE;
-        }
-        if (eglContext != EGL_NO_CONTEXT) {
-            eglFuncs.eglDestroyContext(eglDisplay, eglContext);
-            eglContext = EGL_NO_CONTEXT;
-        }
-        if (eglDisplay != EGL_NO_DISPLAY) {
-            eglFuncs.eglTerminate(eglDisplay);
-            eglDisplay = EGL_NO_DISPLAY;
-        }
-    }
-    inline Bool InitTmpEGLContext(const MG_External::EGLFunctionsTable& eglFuncs) {
-        EGLint configAttribs[] = {EGL_RED_SIZE,
-                                  8,
-                                  EGL_GREEN_SIZE,
-                                  8,
-                                  EGL_BLUE_SIZE,
-                                  8,
-                                  EGL_ALPHA_SIZE,
-                                  8,
-                                  EGL_SURFACE_TYPE,
-                                  EGL_PBUFFER_BIT,
-                                  EGL_RENDERABLE_TYPE,
-                                  EGL_OPENGL_ES2_BIT,
-                                  EGL_NONE};
-
-        EGLint ctxAttribs[] = {EGL_CONTEXT_CLIENT_VERSION, 2, EGL_NONE};
-
-        EGLint pbAttribs[] = {EGL_WIDTH, 32, EGL_HEIGHT, 32, EGL_NONE};
-
-        EGLConfig pbufConfig;
-        EGLint configsFound = 0;
-
-        eglDisplay = eglFuncs.eglGetDisplay(EGL_DEFAULT_DISPLAY);
-        if (eglDisplay == EGL_NO_DISPLAY) {
-            DestroyTempEGLCtx(eglFuncs);
-            return false;
-        }
-
-        if (eglFuncs.eglInitialize(eglDisplay, nullptr, nullptr) != EGL_TRUE) {
-            DestroyTempEGLCtx(eglFuncs);
-            return false;
-        }
-
-        if (eglFuncs.eglBindAPI(EGL_OPENGL_ES_API) != EGL_TRUE) {
-            DestroyTempEGLCtx(eglFuncs);
-            return false;
-        }
-
-        if (eglFuncs.eglChooseConfig(eglDisplay, configAttribs, &pbufConfig, 1, &configsFound) != EGL_TRUE) {
-            DestroyTempEGLCtx(eglFuncs);
-            return false;
-        }
-
-        if (configsFound == 0) {
-            configAttribs[6] = 0;
-            if (eglFuncs.eglChooseConfig(eglDisplay, configAttribs, &pbufConfig, 1, &configsFound) != EGL_TRUE) {
-                DestroyTempEGLCtx(eglFuncs);
-                return false;
-            }
-            if (!configsFound) {
-                DestroyTempEGLCtx(eglFuncs);
-                return false;
-            }
-        }
-
-        eglContext = eglFuncs.eglCreateContext(eglDisplay, pbufConfig, EGL_NO_CONTEXT, ctxAttribs);
-        if (eglContext == EGL_NO_CONTEXT) {
-            DestroyTempEGLCtx(eglFuncs);
-            return false;
-        }
-
-        eglSurface = eglFuncs.eglCreatePbufferSurface(eglDisplay, pbufConfig, pbAttribs);
-        if (eglSurface == EGL_NO_SURFACE) {
-            DestroyTempEGLCtx(eglFuncs);
-            return false;
-        }
-
-        if (eglFuncs.eglMakeCurrent(eglDisplay, eglSurface, eglSurface, eglContext) != EGL_TRUE) {
-            DestroyTempEGLCtx(eglFuncs);
-            return false;
-        }
-        return true;
-    }
-
-    Bool FillInGLESCapabilities(MG_External::GLESCapabilities& caps, const MG_External::GLESFunctionsTable& glesFuncs,
-                                const MG_External::EGLFunctionsTable& eglFuncs) {
+    Bool FillInGLESCapabilities(MG_External::GLESCapabilities& caps, const MG_External::GLESFunctionsTable& glesFuncs) {
         if (!glesFuncs.glGetString || !glesFuncs.glGetIntegerv) {
             MGLOG_E("Required GLES functions are not loaded, cannot query capabilities");
-            return false;
-        }
-        if (!eglFuncs.eglGetDisplay || !eglFuncs.eglInitialize || !eglFuncs.eglChooseConfig ||
-            !eglFuncs.eglCreateContext || !eglFuncs.eglCreatePbufferSurface || !eglFuncs.eglMakeCurrent) {
-            MGLOG_E("Required EGL functions are not loaded, cannot create temporary EGL context");
-            return false;
-        }
-
-        Bool eglCtxCreated = InitTmpEGLContext(eglFuncs);
-        if (!eglCtxCreated) {
-            MGLOG_E("Failed to create temporary EGL context, cannot query GLES capabilities");
             return false;
         }
 
@@ -637,7 +534,6 @@ namespace MobileGL::MG_Util::BackendLoader {
         glesFuncs.glGetIntegerv(GL_UNIFORM_BUFFER_OFFSET_ALIGNMENT, &caps.UniformBufferOffsetAlignment);
         MGLOG_I("    GL_UNIFORM_BUFFER_OFFSET_ALIGNMENT: %d", caps.UniformBufferOffsetAlignment);
 
-        DestroyTempEGLCtx(eglFuncs);
         return true;
     }
 } // namespace MobileGL::MG_Util::BackendLoader
