@@ -1,4 +1,4 @@
-// MobileGL - MobileGL/MG_Backend/DirectVulkan/Managers/ProgramManager.cpp
+// MobileGL - MobileGL/MG_Backend/DirectVulkanTMP/Managers/ProgramManager.cpp
 // Copyright (c) 2025-2026 MobileGL-Dev
 // Licensed under the GNU Lesser General Public License v3.0:
 //   https://www.gnu.org/licenses/gpl-3.0.txt
@@ -21,7 +21,7 @@
 
 #include <bit>
 
-namespace MobileGL::MG_Backend::DirectVulkan::VkManager {
+namespace MobileGL::MG_Backend::DirectVulkanTMP::VkManager {
     namespace {
         using ProgramObject = MG_State::GLState::ProgramObject;
         using ShaderObject = MG_State::GLState::ShaderObject;
@@ -444,4 +444,4 @@ namespace MobileGL::MG_Backend::DirectVulkan::VkManager {
 
         return entry.stages;
     }
-} // namespace MobileGL::MG_Backend::DirectVulkan::VkManager
+} // namespace MobileGL::MG_Backend::DirectVulkanTMP::VkManager

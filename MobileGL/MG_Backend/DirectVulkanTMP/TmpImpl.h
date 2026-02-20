@@ -1,4 +1,4 @@
-// MobileGL - MobileGL/MG_Backend/DirectVulkan/TmpImpl.h
+// MobileGL - MobileGL/MG_Backend/DirectVulkanTMP/TmpImpl.h
 // Copyright (c) 2025-2026 MobileGL-Dev
 // Licensed under the GNU Lesser General Public License v3.0:
 //   https://www.gnu.org/licenses/gpl-3.0.txt
@@ -15,8 +15,8 @@
 #include "Managers/ProgramManager.h"
 #include <MG_State/GLState/Core.h>
 
-namespace MobileGL::MG_Backend::DirectVulkan::TmpImpl {
-    namespace DV = MobileGL::MG_Backend::DirectVulkan::VkManager;
+namespace MobileGL::MG_Backend::DirectVulkanTMP::TmpImpl {
+    namespace DV = MobileGL::MG_Backend::DirectVulkanTMP::VkManager;
     using BufferObject = MobileGL::MG_State::GLState::BufferObject;
     using ProgramObject = MobileGL::MG_State::GLState::ProgramObject;
     using VertexArrayObject = MobileGL::MG_State::GLState::VertexArrayObject;
@@ -26,7 +26,7 @@ namespace MobileGL::MG_Backend::DirectVulkan::TmpImpl {
     using RenderbufferObject = MobileGL::MG_State::GLState::RenderbufferObject;
     using SamplerObject = MobileGL::MG_State::GLState::SamplerObject;
     using TextureObjectMipmap = MobileGL::MG_State::GLState::TextureObjectMipmap;
-    using TrashImage = MobileGL::MG_Backend::DirectVulkan::TrashImage;
+    using TrashImage = MobileGL::MG_Backend::DirectVulkanTMP::TrashImage;
 
     struct BufferResource {
         VkBuffer buffer = VK_NULL_HANDLE;
@@ -267,4 +267,4 @@ namespace MobileGL::MG_Backend::DirectVulkan::TmpImpl {
     void CopyTexSubImage2D(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLint x, GLint y, GLsizei width,
                            GLsizei height);
     void GenerateMipmap(GLenum target);
-} // namespace MobileGL::MG_Backend::DirectVulkan::TmpImpl
+} // namespace MobileGL::MG_Backend::DirectVulkanTMP::TmpImpl

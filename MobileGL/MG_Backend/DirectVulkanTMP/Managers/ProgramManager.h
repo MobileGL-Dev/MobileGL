@@ -1,4 +1,4 @@
-// MobileGL - MobileGL/MG_Backend/DirectVulkan/Managers/ProgramManager.h
+// MobileGL - MobileGL/MG_Backend/DirectVulkanTMP/Managers/ProgramManager.h
 // Copyright (c) 2025-2026 MobileGL-Dev
 // Licensed under the GNU Lesser General Public License v3.0:
 //   https://www.gnu.org/licenses/gpl-3.0.txt
@@ -12,7 +12,7 @@
 #include "../Renderer/VkCommon.h"
 #include "MG_State/GLState/ProgramState/ProgramObject.h"
 
-namespace MobileGL::MG_Backend::DirectVulkan::VkManager {
+namespace MobileGL::MG_Backend::DirectVulkanTMP::VkManager {
     enum class ShaderTransformBit : Uint {
         None = 0,
         PositionYFlip = 1 << 0,
@@ -55,4 +55,4 @@ namespace MobileGL::MG_Backend::DirectVulkan::VkManager {
         VulkanContext& m_ctx;
         UnorderedMap<const MG_State::GLState::ProgramObject*, ProgramStages> m_cache;
     };
-} // namespace MobileGL::MG_Backend::DirectVulkan::VkManager
+} // namespace MobileGL::MG_Backend::DirectVulkanTMP::VkManager

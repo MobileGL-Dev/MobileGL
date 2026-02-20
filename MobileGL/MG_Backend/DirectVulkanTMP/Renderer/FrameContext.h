@@ -1,4 +1,4 @@
-// MobileGL - MobileGL/MG_Backend/DirectVulkan/Renderer/FrameContext.h
+// MobileGL - MobileGL/MG_Backend/DirectVulkanTMP/Renderer/FrameContext.h
 // Copyright (c) 2025-2026 MobileGL-Dev
 // Licensed under the GNU Lesser General Public License v3.0:
 //   https://www.gnu.org/licenses/gpl-3.0.txt
@@ -11,7 +11,7 @@
 #include "VulkanContext.h"
 #include "VkCommon.h"
 
-namespace MobileGL::MG_Backend::DirectVulkan {
+namespace MobileGL::MG_Backend::DirectVulkanTMP {
     struct TrashBuffer {
         VkBuffer buffer = VK_NULL_HANDLE;
         VkDeviceMemory memory = VK_NULL_HANDLE;
@@ -39,4 +39,4 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             void Cleanup(VulkanContext& ctx);
         };
     } // namespace VkManager
-} // namespace MobileGL::MG_Backend::DirectVulkan
+} // namespace MobileGL::MG_Backend::DirectVulkanTMP

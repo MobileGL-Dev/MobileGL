@@ -52,8 +52,8 @@ namespace MobileGL::MG_Backend {
         case BackendType::DirectGLES:
             pActiveBackendObject = MakeUnique<DirectGLES::BackendObject_DirectGLES>();
             break;
-        case BackendType::DirectVulkan:
-            pActiveBackendObject = MakeUnique<DirectVulkan::BackendObject_DirectVulkan>();
+        case BackendType::DirectVulkanTMP:
+            pActiveBackendObject = MakeUnique<DirectVulkanTMP::BackendObject_DirectVulkanTMP>();
             break;
         case BackendType::Unknown:
         default:

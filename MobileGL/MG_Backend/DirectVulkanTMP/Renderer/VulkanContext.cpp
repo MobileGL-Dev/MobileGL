@@ -1,4 +1,4 @@
-// MobileGL - MobileGL/MG_Backend/DirectVulkan/Renderer/VulkanContext.cpp
+// MobileGL - MobileGL/MG_Backend/DirectVulkanTMP/Renderer/VulkanContext.cpp
 // Copyright (c) 2025-2026 MobileGL-Dev
 // Licensed under the GNU Lesser General Public License v3.0:
 //   https://www.gnu.org/licenses/gpl-3.0.txt
@@ -8,7 +8,7 @@
 
 #include "VulkanContext.h"
 
-namespace MobileGL::MG_Backend::DirectVulkan::VkManager {
+namespace MobileGL::MG_Backend::DirectVulkanTMP::VkManager {
     namespace {
         Bool CheckDeviceExtensionSupport(VkPhysicalDevice device, const Vector<const char*>& required) {
             Uint32 count = 0;
@@ -162,4 +162,4 @@ namespace MobileGL::MG_Backend::DirectVulkan::VkManager {
         VK_VERIFY(vkCreateDevice(m_physicalDevice, &dci, nullptr, &m_device), "vkCreateDevice");
         vkGetDeviceQueue(m_device, m_graphicsQueueFamily, 0, &m_graphicsQueue);
     }
-} // namespace MobileGL::MG_Backend::DirectVulkan::VkManager
+} // namespace MobileGL::MG_Backend::DirectVulkanTMP::VkManager

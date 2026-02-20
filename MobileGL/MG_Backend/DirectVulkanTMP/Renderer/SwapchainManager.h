@@ -1,4 +1,4 @@
-// MobileGL - MobileGL/MG_Backend/DirectVulkan/Renderer/SwapchainManager.h
+// MobileGL - MobileGL/MG_Backend/DirectVulkanTMP/Renderer/SwapchainManager.h
 // Copyright (c) 2025-2026 MobileGL-Dev
 // Licensed under the GNU Lesser General Public License v3.0:
 //   https://www.gnu.org/licenses/gpl-3.0.txt
@@ -12,7 +12,7 @@
 #include "VulkanContext.h"
 #include "VkCommon.h"
 
-namespace MobileGL::MG_Backend::DirectVulkan::VkManager {
+namespace MobileGL::MG_Backend::DirectVulkanTMP::VkManager {
     class SwapchainManager {
     public:
         explicit SwapchainManager(VulkanContext& ctx) : m_ctx(ctx) {}
@@ -49,4 +49,4 @@ namespace MobileGL::MG_Backend::DirectVulkan::VkManager {
         Vector<VkFence> m_imagesInFlight;
         UintVec2 m_viewportSize{0, 0};
     };
-} // namespace MobileGL::MG_Backend::DirectVulkan::VkManager
+} // namespace MobileGL::MG_Backend::DirectVulkanTMP::VkManager

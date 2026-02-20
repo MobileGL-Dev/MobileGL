@@ -209,14 +209,14 @@ set(SOURCE_FILES
     MobileGL/MG_Backend/DirectGLES/Utils.cpp
     MobileGL/MG_Backend/DirectGLES/Managers.cpp
 
-    MobileGL/MG_Backend/DirectVulkan/DirectVulkan.cpp
-    MobileGL/MG_Backend/DirectVulkan/TmpImpl.cpp
-    MobileGL/MG_Backend/DirectVulkan/BackendObject_DirectVulkan.cpp
-    MobileGL/MG_Backend/DirectVulkan/Renderer/VulkanContext.cpp
-    MobileGL/MG_Backend/DirectVulkan/Renderer/SwapchainManager.cpp
-    MobileGL/MG_Backend/DirectVulkan/Renderer/PipelineManager.cpp
-    MobileGL/MG_Backend/DirectVulkan/Renderer/FrameContext.cpp
-    MobileGL/MG_Backend/DirectVulkan/Managers/ProgramManager.cpp
+    MobileGL/MG_Backend/DirectVulkanTMP/DirectVulkanTMP.cpp
+    MobileGL/MG_Backend/DirectVulkanTMP/TmpImpl.cpp
+    MobileGL/MG_Backend/DirectVulkanTMP/BackendObject_DirectVulkanTMP.cpp
+    MobileGL/MG_Backend/DirectVulkanTMP/Renderer/VulkanContext.cpp
+    MobileGL/MG_Backend/DirectVulkanTMP/Renderer/SwapchainManager.cpp
+    MobileGL/MG_Backend/DirectVulkanTMP/Renderer/PipelineManager.cpp
+    MobileGL/MG_Backend/DirectVulkanTMP/Renderer/FrameContext.cpp
+    MobileGL/MG_Backend/DirectVulkanTMP/Managers/ProgramManager.cpp
 
     MobileGL/MG_State/GLState/Core.cpp
     MobileGL/MG_State/GLState/ErrorState/Error.cpp

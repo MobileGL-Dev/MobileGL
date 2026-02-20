@@ -1,4 +1,4 @@
-// MobileGL - MobileGL/MG_Backend/DirectVulkan/Renderer/FrameContext.cpp
+// MobileGL - MobileGL/MG_Backend/DirectVulkanTMP/Renderer/FrameContext.cpp
 // Copyright (c) 2025-2026 MobileGL-Dev
 // Licensed under the GNU Lesser General Public License v3.0:
 //   https://www.gnu.org/licenses/gpl-3.0.txt
@@ -8,7 +8,7 @@
 
 #include "FrameContext.h"
 
-namespace MobileGL::MG_Backend::DirectVulkan::VkManager {
+namespace MobileGL::MG_Backend::DirectVulkanTMP::VkManager {
     void FrameContext::Initialize(VulkanContext& ctx, VkCommandPool pool) {
         CommandPool = pool;
         VkCommandBufferAllocateInfo abci{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
@@ -46,4 +46,4 @@ namespace MobileGL::MG_Backend::DirectVulkan::VkManager {
         }
         CommandPool = VK_NULL_HANDLE;
     }
-} // namespace MobileGL::MG_Backend::DirectVulkan::VkManager
+} // namespace MobileGL::MG_Backend::DirectVulkanTMP::VkManager

@@ -1,4 +1,4 @@
-// MobileGL - MobileGL/MG_Backend/DirectVulkan/Renderer/VulkanContext.h
+// MobileGL - MobileGL/MG_Backend/DirectVulkanTMP/Renderer/VulkanContext.h
 // Copyright (c) 2025-2026 MobileGL-Dev
 // Licensed under the GNU Lesser General Public License v3.0:
 //   https://www.gnu.org/licenses/gpl-3.0.txt
@@ -10,7 +10,7 @@
 #include <Includes.h>
 #include "VkCommon.h"
 
-namespace MobileGL::MG_Backend::DirectVulkan::VkManager {
+namespace MobileGL::MG_Backend::DirectVulkanTMP::VkManager {
     class VulkanContext {
     public:
         VulkanContext() = default;
@@ -44,4 +44,4 @@ namespace MobileGL::MG_Backend::DirectVulkan::VkManager {
         Uint32 m_graphicsQueueFamily = ~0u;
         ANativeWindow* m_window = nullptr;
     };
-} // namespace MobileGL::MG_Backend::DirectVulkan::VkManager
+} // namespace MobileGL::MG_Backend::DirectVulkanTMP::VkManager

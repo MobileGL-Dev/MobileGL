@@ -1,4 +1,4 @@
-// MobileGL - MobileGL/MG_Backend/DirectVulkan/DirectVulkan.cpp
+// MobileGL - MobileGL/MG_Backend/DirectVulkanTMP/DirectVulkanTMP.cpp
 // Copyright (c) 2025-2026 MobileGL-Dev
 // Licensed under the GNU Lesser General Public License v3.0:
 //   https://www.gnu.org/licenses/gpl-3.0.txt
@@ -6,16 +6,16 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 // End of Source File Header
 
-#include "DirectVulkan.h"
+#include "DirectVulkanTMP.h"
 #include "TmpImpl.h"
 
-namespace MobileGL::MG_Backend::DirectVulkan {
+namespace MobileGL::MG_Backend::DirectVulkanTMP {
     void Clear(GLbitfield mask) {
-        MobileGL::MG_Backend::DirectVulkan::TmpImpl::Clear(mask);
+        MobileGL::MG_Backend::DirectVulkanTMP::TmpImpl::Clear(mask);
     }
 
     void DrawElements(GLenum mode, GLsizei count, GLenum type, const void* indices) {
-        MobileGL::MG_Backend::DirectVulkan::TmpImpl::DrawElements(mode, count, type, indices);
+        MobileGL::MG_Backend::DirectVulkanTMP::TmpImpl::DrawElements(mode, count, type, indices);
     }
 
     void ClearBufferfi(GLenum buffer, GLint drawbuffer, GLfloat depth, GLint stencil) {}
@@ -71,4 +71,4 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     const TmpImpl::VulkanState& GetVulkanState() {
         return TmpImpl::GetVulkanState();
     }
-} // namespace MobileGL::MG_Backend::DirectVulkan
+} // namespace MobileGL::MG_Backend::DirectVulkanTMP

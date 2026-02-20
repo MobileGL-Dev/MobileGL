@@ -1,4 +1,4 @@
-// MobileGL - MobileGL/MG_Backend/DirectVulkan/TmpImpl.cpp
+// MobileGL - MobileGL/MG_Backend/DirectVulkanTMP/TmpImpl.cpp
 // Copyright (c) 2025-2026 MobileGL-Dev
 // Licensed under the GNU Lesser General Public License v3.0:
 //   https://www.gnu.org/licenses/gpl-3.0.txt
@@ -14,7 +14,7 @@
 #include <xxhash.h>
 
 #define DEBUG_TRACE_POINT() MGLOG_D("DV TmpImpl Trace: %s:%d", __func__, __LINE__)
-namespace MobileGL::MG_Backend::DirectVulkan::TmpImpl {
+namespace MobileGL::MG_Backend::DirectVulkanTMP::TmpImpl {
     class PendingClearInfo;
     void BeginRenderPass(GLbitfield clearMask, const PendingClearInfo* clearInfo);
 
@@ -2861,7 +2861,7 @@ namespace MobileGL::MG_Backend::DirectVulkan::TmpImpl {
         if (g.initialized) return;
 
         g.ctx = MakeUnique<DV::VulkanContext>();
-        g.ctx->Initialize(window, "MobileGL-DirectVulkan-Tmp");
+        g.ctx->Initialize(window, "MobileGL-DirectVulkanTMP-Tmp");
 
         g.swapchain = MakeUnique<DV::SwapchainManager>(*g.ctx);
         g.swapchain->Initialize();
@@ -3544,4 +3544,4 @@ namespace MobileGL::MG_Backend::DirectVulkan::TmpImpl {
         }
         clearInfo.mask |= validMask;
     }
-} // namespace MobileGL::MG_Backend::DirectVulkan::TmpImpl
+} // namespace MobileGL::MG_Backend::DirectVulkanTMP::TmpImpl

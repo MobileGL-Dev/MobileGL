@@ -1,4 +1,4 @@
-// MobileGL - MobileGL/MG_Backend/DirectVulkan/BackendObject_DirectVulkan.h
+// MobileGL - MobileGL/MG_Backend/DirectVulkanTMP/BackendObject_DirectVulkanTMP.h
 // Copyright (c) 2025-2026 MobileGL-Dev
 // Licensed under the GNU Lesser General Public License v3.0:
 //   https://www.gnu.org/licenses/gpl-3.0.txt
@@ -11,10 +11,10 @@
 #include "../BackendObject.h"
 #include <MG_Util/BackendLoaders/Vulkan/Loader.h>
 
-namespace MobileGL::MG_Backend::DirectVulkan {
-    class BackendObject_DirectVulkan : public BackendObject {
+namespace MobileGL::MG_Backend::DirectVulkanTMP {
+    class BackendObject_DirectVulkanTMP : public BackendObject {
     public:
-        ~BackendObject_DirectVulkan() override;
+        ~BackendObject_DirectVulkanTMP() override;
 
         void Initialize() override;
         void InitWindowSurface() override;
@@ -33,4 +33,4 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         DynamicBackendParameters m_dynamicParameters;
         MG_External::VulkanCapabilities m_vulkanCaps;
     };
-} // namespace MobileGL::MG_Backend::DirectVulkan
+} // namespace MobileGL::MG_Backend::DirectVulkanTMP

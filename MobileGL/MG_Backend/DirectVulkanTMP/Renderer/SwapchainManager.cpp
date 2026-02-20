@@ -1,4 +1,4 @@
-// MobileGL - MobileGL/MG_Backend/DirectVulkan/Renderer/SwapchainManager.cpp
+// MobileGL - MobileGL/MG_Backend/DirectVulkanTMP/Renderer/SwapchainManager.cpp
 // Copyright (c) 2025-2026 MobileGL-Dev
 // Licensed under the GNU Lesser General Public License v3.0:
 //   https://www.gnu.org/licenses/gpl-3.0.txt
@@ -8,7 +8,7 @@
 
 #include "SwapchainManager.h"
 
-namespace MobileGL::MG_Backend::DirectVulkan::VkManager {
+namespace MobileGL::MG_Backend::DirectVulkanTMP::VkManager {
     namespace {
         VkSurfaceFormatKHR ChooseSurfaceFormat(const Vector<VkSurfaceFormatKHR>& formats) {
             for (const auto& f : formats) {
@@ -163,4 +163,4 @@ namespace MobileGL::MG_Backend::DirectVulkan::VkManager {
         m_format = surfaceFormat.format;
         m_extent = extent;
     }
-} // namespace MobileGL::MG_Backend::DirectVulkan::VkManager
+} // namespace MobileGL::MG_Backend::DirectVulkanTMP::VkManager

@@ -1,4 +1,4 @@
-// MobileGL - MobileGL/MG_Backend/DirectVulkan/BackendObject_DirectVulkan.cpp
+// MobileGL - MobileGL/MG_Backend/DirectVulkanTMP/BackendObject_DirectVulkanTMP.cpp
 // Copyright (c) 2025-2026 MobileGL-Dev
 // Licensed under the GNU Lesser General Public License v3.0:
 //   https://www.gnu.org/licenses/gpl-3.0.txt
@@ -6,42 +6,42 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 // End of Source File Header
 
-#include "BackendObject_DirectVulkan.h"
+#include "BackendObject_DirectVulkanTMP.h"
 #include "MG_Backend/BackendObject.h"
-#include "DirectVulkan.h"
+#include "DirectVulkanTMP.h"
 #include "TmpImpl.h"
 #include <MG_Util/BackendLoaders/OpenGL/Loader.h>
 
-namespace MobileGL::MG_Backend::DirectVulkan {
-    BackendObject_DirectVulkan::~BackendObject_DirectVulkan() = default;
+namespace MobileGL::MG_Backend::DirectVulkanTMP {
+    BackendObject_DirectVulkanTMP::~BackendObject_DirectVulkanTMP() = default;
 
-    void BackendObject_DirectVulkan::InitWindowSurface() {
+    void BackendObject_DirectVulkanTMP::InitWindowSurface() {
         auto nativeWindow = reinterpret_cast<NativeWindowType>(m_windowHandle.Handle);
-        if (!DirectVulkan::InitWindowSurface(nativeWindow)) {
-            MGLOG_E("Failed to initialize window surface for DirectVulkan backend");
+        if (!DirectVulkanTMP::InitWindowSurface(nativeWindow)) {
+            MGLOG_E("Failed to initialize window surface for DirectVulkanTMP backend");
         }
     }
 
-    void BackendObject_DirectVulkan::Initialize() {
+    void BackendObject_DirectVulkanTMP::Initialize() {
         m_initialized = true;
     }
 
-    void BackendObject_DirectVulkan::InitCapabilities() {
+    void BackendObject_DirectVulkanTMP::InitCapabilities() {
         if (!m_initialized) {
             MGLOG_E("Cannot initialize capabilities before backend is initialized");
             return;
         }
 
         MG_Util::BackendLoader::QueryVulkanCapabilities(m_vulkanCaps,
-                                                        DirectVulkan::GetVulkanState().ctx->GetPhysicalDevice());
+                                                        DirectVulkanTMP::GetVulkanState().ctx->GetPhysicalDevice());
         UpdateDynamicBackendParameters();
     }
 
-    const RendererInfo& BackendObject_DirectVulkan::GetRendererInfo() const {
+    const RendererInfo& BackendObject_DirectVulkanTMP::GetRendererInfo() const {
         static RendererInfo RendererInfo = {
-            .RendererName = "Magma",          // Renderer Name
-            .BackendName = "Direct (Vulkan)", // Backend Name
-            .ExtraVendor = Nullopt,           // Extra vendor
+            .RendererName = "Magma-TMP",          // Renderer Name
+            .BackendName = "Direct (Vulkan) TMP", // Backend Name
+            .ExtraVendor = Nullopt,               // Extra vendor
             .RendererGLInfo =
                 {
                     .TargetGLVersion = {3, 3, 0},                      // Target OpenGL Version
@@ -55,9 +55,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         return RendererInfo;
     }
 
-    String BackendObject_DirectVulkan::GetBackendAPIVersionString() const {
+    String BackendObject_DirectVulkanTMP::GetBackendAPIVersionString() const {
         if (!m_initialized) {
-            return "<uninitialized DirectVulkan backend>";
+            return "<uninitialized DirectVulkanTMP backend>";
         }
         // Format:
         // <GPU Name>, Vulkan <Vulkan Version>, Driver <Driver Version>
@@ -67,15 +67,15 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         return str;
     }
 
-    BackendType BackendObject_DirectVulkan::GetBackendType() const {
-        return BackendType::DirectVulkan;
+    BackendType BackendObject_DirectVulkanTMP::GetBackendType() const {
+        return BackendType::DirectVulkanTMP;
     }
 
-    const GlobalBackendFunctionsTable& BackendObject_DirectVulkan::GetBackendFunctions() const {
+    const GlobalBackendFunctionsTable& BackendObject_DirectVulkanTMP::GetBackendFunctions() const {
         static GlobalBackendFunctionsTable funcsTable;
         static Bool funcsTableInitialized = false;
         if (!funcsTableInitialized) {
-            funcsTable.Present = DirectVulkan::Present;
+            funcsTable.Present = DirectVulkanTMP::Present;
             funcsTable.GL.DrawArrays = DrawArrays;
             funcsTable.GL.DrawElements = DrawElements;
             funcsTable.GL.DrawElementsBaseVertex = DrawElementsBaseVertex;
@@ -109,11 +109,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         return funcsTable;
     }
 
-    const DynamicBackendParameters& BackendObject_DirectVulkan::GetDynamicParameters() const {
+    const DynamicBackendParameters& BackendObject_DirectVulkanTMP::GetDynamicParameters() const {
         return m_dynamicParameters;
     }
 
-    void BackendObject_DirectVulkan::UpdateDynamicBackendParameters() {
+    void BackendObject_DirectVulkanTMP::UpdateDynamicBackendParameters() {
         m_dynamicParameters.UniformBufferOffsetAlignment = m_vulkanCaps.UniformBufferOffsetAlignment;
     }
-} // namespace MobileGL::MG_Backend::DirectVulkan
+} // namespace MobileGL::MG_Backend::DirectVulkanTMP

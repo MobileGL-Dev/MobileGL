@@ -1,4 +1,4 @@
-// MobileGL - MobileGL/MG_Backend/DirectVulkan/DirectVulkan.h
+// MobileGL - MobileGL/MG_Backend/DirectVulkanTMP/DirectVulkanTMP.h
 // Copyright (c) 2025-2026 MobileGL-Dev
 // Licensed under the GNU Lesser General Public License v3.0:
 //   https://www.gnu.org/licenses/gpl-3.0.txt
@@ -9,7 +9,7 @@
 #pragma once
 #include <Includes.h>
 
-namespace MobileGL::MG_Backend::DirectVulkan {
+namespace MobileGL::MG_Backend::DirectVulkanTMP {
     namespace TmpImpl {
         class VulkanState;
     } // namespace TmpImpl
@@ -55,4 +55,4 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     Bool InitWindowSurface(NativeWindowType window);
     void Present();
     const TmpImpl::VulkanState& GetVulkanState();
-} // namespace MobileGL::MG_Backend::DirectVulkan
+} // namespace MobileGL::MG_Backend::DirectVulkanTMP
