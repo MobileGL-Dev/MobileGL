@@ -179,6 +179,8 @@ namespace MobileGL::MG_Backend::DirectVulkanTMP::TmpImpl {
         VkCommandPool commandPool = VK_NULL_HANDLE;
         Vector<UniquePtr<DV::FrameContext>> frames;
         Vector<FrameDescriptorPools> frameDescriptorPools;
+        Vector<BufferResource> stagingPool;
+        Vector<Vector<BufferResource>> stagingPending;
         Uint32 currentFrame = 0;
         Uint32 maxFramesInFlight = 2;
         Bool initialized = false;

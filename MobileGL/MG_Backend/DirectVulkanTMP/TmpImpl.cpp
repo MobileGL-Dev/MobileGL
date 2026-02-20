@@ -17,6 +17,7 @@
 namespace MobileGL::MG_Backend::DirectVulkanTMP::TmpImpl {
     class PendingClearInfo;
     void BeginRenderPass(GLbitfield clearMask, const PendingClearInfo* clearInfo);
+    void BeginCommandBuffer();
 
     VulkanState g;
 
@@ -75,6 +76,33 @@ namespace MobileGL::MG_Backend::DirectVulkanTMP::TmpImpl {
 
         MOBILEGL_ASSERT(out.buffer != VK_NULL_HANDLE || out.memory != VK_NULL_HANDLE,
                         "CreateBuffer: buffer or memory is null");
+    }
+
+    BufferResource AcquireStagingBuffer(VkDeviceSize size) {
+        for (auto it = g.stagingPool.begin(); it != g.stagingPool.end(); ++it) {
+            if (it->size >= size) {
+                BufferResource res = *it;
+                g.stagingPool.erase(it);
+                return res;
+            }
+        }
+        BufferResource res{};
+        CreateBuffer(size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                     VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, res);
+        return res;
+    }
+
+    void ReleaseStagingBuffer(BufferResource& res) {
+        if (res.buffer == VK_NULL_HANDLE && res.memory == VK_NULL_HANDLE) return;
+        if (g.frames.empty()) {
+            DestroyBuffer(res);
+            return;
+        }
+        if (g.stagingPending.empty()) {
+            g.stagingPending.resize(g.frames.size());
+        }
+        g.stagingPending[g.currentFrame].push_back(res);
+        res = BufferResource{};
     }
 
     void UpdateBufferFromObject(BufferResource& res, BufferObject* obj) {
@@ -792,11 +820,42 @@ namespace MobileGL::MG_Backend::DirectVulkanTMP::TmpImpl {
         vkFreeCommandBuffers(g.ctx->GetDevice(), g.commandPool, 1, &cmd);
     }
 
+    bool RecordTransferCommands(const std::function<void(VkCommandBuffer)>& record, bool restartIfRecording) {
+        if (g.frames.empty()) {
+            SubmitImmediate(record);
+            return false;
+        }
+        BeginCommandBuffer();
+        auto& frame = *g.frames[g.currentFrame];
+        Bool wasRecording = g.recording;
+        if (g.recording) {
+            vkCmdEndRenderPass(frame.CommandBuffer);
+            g.recording = false;
+            g.recordingRenderPass = VK_NULL_HANDLE;
+            g.recordingFramebuffer = VK_NULL_HANDLE;
+        }
+
+        record(frame.CommandBuffer);
+
+        if (wasRecording && restartIfRecording) {
+            if (g.activeIsDefault) {
+                g.activeRenderPass = GetOrCreateDefaultRenderPass(0);
+            } else if (g.activeBackendFBO) {
+                g.activeRenderPass = GetOrCreateBackendRenderPass(*g.activeBackendFBO, 0);
+            }
+            if (g.activeRenderPass != VK_NULL_HANDLE && g.activeFramebuffer != VK_NULL_HANDLE) {
+                BeginRenderPass(0, nullptr);
+            }
+        }
+        return true;
+    }
+
     void EnsureImageLayout(VkImage image, VkImageLayout& currentLayout, VkImageLayout desiredLayout,
                            VkImageAspectFlags aspect) {
         if (currentLayout == desiredLayout) return;
-        SubmitImmediate(
-            [&](VkCommandBuffer cmd) { CmdTransitionImageLayout(cmd, image, currentLayout, desiredLayout, aspect); });
+        RecordTransferCommands(
+            [&](VkCommandBuffer cmd) { CmdTransitionImageLayout(cmd, image, currentLayout, desiredLayout, aspect); },
+            false);
         currentLayout = desiredLayout;
     }
 
@@ -850,33 +909,34 @@ namespace MobileGL::MG_Backend::DirectVulkanTMP::TmpImpl {
         void* data = mip->MapMipmapData(target, 0);
         if (!data) return;
 
-        BufferResource staging{};
-        CreateBuffer(size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-                     VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, staging);
+        BufferResource staging = AcquireStagingBuffer(size);
         Memcpy(staging.mapped, data, size);
 
         VkExtent3D extent = res.extent;
         VkImageAspectFlags aspect = AspectForFormat(res.format);
         VkImageLayout sampledLayout = SampledLayoutForFormat(res.format);
 
-        SubmitImmediate([&](VkCommandBuffer cmd) {
-            CmdTransitionImageLayout(cmd, res.image, res.layout, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, aspect);
+        RecordTransferCommands(
+            [&](VkCommandBuffer cmd) {
+                CmdTransitionImageLayout(cmd, res.image, res.layout, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, aspect);
 
-            VkBufferImageCopy region{};
-            region.imageSubresource.aspectMask = aspect;
-            region.imageSubresource.mipLevel = 0;
-            region.imageSubresource.baseArrayLayer = 0;
-            region.imageSubresource.layerCount = 1;
-            region.imageExtent = extent;
-            vkCmdCopyBufferToImage(cmd, staging.buffer, res.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+                VkBufferImageCopy region{};
+                region.imageSubresource.aspectMask = aspect;
+                region.imageSubresource.mipLevel = 0;
+                region.imageSubresource.baseArrayLayer = 0;
+                region.imageSubresource.layerCount = 1;
+                region.imageExtent = extent;
+                vkCmdCopyBufferToImage(cmd, staging.buffer, res.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1,
+                                       &region);
 
-            CmdTransitionImageLayout(cmd, res.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, sampledLayout, aspect);
-        });
+                CmdTransitionImageLayout(cmd, res.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, sampledLayout, aspect);
+            },
+            true);
 
         res.layout = sampledLayout;
         mip->MarkStorageDirty(target, 0, false);
 
-        DestroyBuffer(staging);
+        ReleaseStagingBuffer(staging);
     }
 
     void CopyImageMipLevels(const TextureResource& src, TextureResource& dst) {
@@ -884,25 +944,28 @@ namespace MobileGL::MG_Backend::DirectVulkanTMP::TmpImpl {
         VkImageLayout finalLayout =
             (src.layout != VK_IMAGE_LAYOUT_UNDEFINED) ? src.layout : SampledLayoutForFormat(src.format);
 
-        SubmitImmediate([&](VkCommandBuffer cmd) {
-            CmdTransitionImageLayout(cmd, src.image, src.layout, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, aspect);
-            CmdTransitionImageLayout(cmd, dst.image, dst.layout, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, aspect);
+        RecordTransferCommands(
+            [&](VkCommandBuffer cmd) {
+                CmdTransitionImageLayout(cmd, src.image, src.layout, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, aspect);
+                CmdTransitionImageLayout(cmd, dst.image, dst.layout, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, aspect);
 
-            Uint32 copyLevels = std::min(src.mipLevels, dst.mipLevels);
-            for (Uint32 level = 0; level < copyLevels; ++level) {
-                VkImageCopy region{};
-                region.srcSubresource.aspectMask = aspect;
-                region.srcSubresource.mipLevel = level;
-                region.srcSubresource.baseArrayLayer = 0;
-                region.srcSubresource.layerCount = 1;
-                region.dstSubresource = region.srcSubresource;
-                region.extent = {std::max(1u, dst.extent.width >> level), std::max(1u, dst.extent.height >> level), 1};
-                vkCmdCopyImage(cmd, src.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, dst.image,
-                               VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
-            }
+                Uint32 copyLevels = std::min(src.mipLevels, dst.mipLevels);
+                for (Uint32 level = 0; level < copyLevels; ++level) {
+                    VkImageCopy region{};
+                    region.srcSubresource.aspectMask = aspect;
+                    region.srcSubresource.mipLevel = level;
+                    region.srcSubresource.baseArrayLayer = 0;
+                    region.srcSubresource.layerCount = 1;
+                    region.dstSubresource = region.srcSubresource;
+                    region.extent = {std::max(1u, dst.extent.width >> level), std::max(1u, dst.extent.height >> level),
+                                     1};
+                    vkCmdCopyImage(cmd, src.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, dst.image,
+                                   VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+                }
 
-            CmdTransitionImageLayout(cmd, dst.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, finalLayout, aspect);
-        });
+                CmdTransitionImageLayout(cmd, dst.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, finalLayout, aspect);
+            },
+            true);
 
         dst.layout = finalLayout;
     }
@@ -2365,30 +2428,30 @@ namespace MobileGL::MG_Backend::DirectVulkanTMP::TmpImpl {
             g.defaultTexture.valid = true;
 
             Uint32 pixel = 0xFFFFFFFFu;
-            BufferResource staging{};
-            CreateBuffer(sizeof(pixel), VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-                         VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, staging);
+            BufferResource staging = AcquireStagingBuffer(sizeof(pixel));
             Memcpy(staging.mapped, &pixel, sizeof(pixel));
 
-            SubmitImmediate([&](VkCommandBuffer cmd) {
-                CmdTransitionImageLayout(cmd, g.defaultTexture.image, g.defaultTexture.layout,
-                                         VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_ASPECT_COLOR_BIT);
+            RecordTransferCommands(
+                [&](VkCommandBuffer cmd) {
+                    CmdTransitionImageLayout(cmd, g.defaultTexture.image, g.defaultTexture.layout,
+                                             VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_ASPECT_COLOR_BIT);
 
-                VkBufferImageCopy region{};
-                region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-                region.imageSubresource.mipLevel = 0;
-                region.imageSubresource.baseArrayLayer = 0;
-                region.imageSubresource.layerCount = 1;
-                region.imageExtent = {1, 1, 1};
-                vkCmdCopyBufferToImage(cmd, staging.buffer, g.defaultTexture.image,
-                                       VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+                    VkBufferImageCopy region{};
+                    region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+                    region.imageSubresource.mipLevel = 0;
+                    region.imageSubresource.baseArrayLayer = 0;
+                    region.imageSubresource.layerCount = 1;
+                    region.imageExtent = {1, 1, 1};
+                    vkCmdCopyBufferToImage(cmd, staging.buffer, g.defaultTexture.image,
+                                           VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
 
-                CmdTransitionImageLayout(cmd, g.defaultTexture.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                                         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_ASPECT_COLOR_BIT);
-            });
+                    CmdTransitionImageLayout(cmd, g.defaultTexture.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                                             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_ASPECT_COLOR_BIT);
+                },
+                false);
 
             g.defaultTexture.layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-            DestroyBuffer(staging);
+            ReleaseStagingBuffer(staging);
         }
     }
 
@@ -2431,10 +2494,13 @@ namespace MobileGL::MG_Backend::DirectVulkanTMP::TmpImpl {
                     g.depthMemory);
         g.depthView = CreateImageView(g.depthImage, g.depthFormat, AspectForFormat(g.depthFormat));
 
-        SubmitImmediate([&](VkCommandBuffer cmd) {
-            CmdTransitionImageLayout(cmd, g.depthImage, VK_IMAGE_LAYOUT_UNDEFINED,
-                                     VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL, AspectForFormat(g.depthFormat));
-        });
+        RecordTransferCommands(
+            [&](VkCommandBuffer cmd) {
+                CmdTransitionImageLayout(cmd, g.depthImage, VK_IMAGE_LAYOUT_UNDEFINED,
+                                         VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+                                         AspectForFormat(g.depthFormat));
+            },
+            false);
     }
 
     void DestroyRenderPass() {
@@ -2480,6 +2546,12 @@ namespace MobileGL::MG_Backend::DirectVulkanTMP::TmpImpl {
 
     void DestroyFrameResources() {
         DestroyDescriptorPools();
+        for (auto& pending : g.stagingPending) {
+            for (auto& buf : pending) {
+                g.stagingPool.push_back(buf);
+            }
+        }
+        g.stagingPending.clear();
         for (auto& f : g.frames) {
             if (f) f->Cleanup(*g.ctx);
         }
@@ -2498,6 +2570,8 @@ namespace MobileGL::MG_Backend::DirectVulkanTMP::TmpImpl {
         }
         g.frameDescriptorPools.clear();
         g.frameDescriptorPools.resize(frames);
+        g.stagingPending.clear();
+        g.stagingPending.resize(frames);
         g.currentFrame = 0;
     }
 
@@ -2514,6 +2588,13 @@ namespace MobileGL::MG_Backend::DirectVulkanTMP::TmpImpl {
         auto& frame = *g.frames[g.currentFrame];
         VK_VERIFY(vkWaitForFences(g.ctx->GetDevice(), 1, &frame.InFlightFence, VK_TRUE, UINT64_MAX), "vkWaitForFences");
         VK_VERIFY(vkResetFences(g.ctx->GetDevice(), 1, &frame.InFlightFence), "vkResetFences");
+        if (!g.stagingPending.empty()) {
+            auto& pending = g.stagingPending[g.currentFrame];
+            for (auto& buf : pending) {
+                g.stagingPool.push_back(buf);
+            }
+            pending.clear();
+        }
         ClearFrameTrashBuffers();
         ClearFrameTrashImages();
         VK_VERIFY(vkResetCommandBuffer(frame.CommandBuffer, 0), "vkResetCommandBuffer");
