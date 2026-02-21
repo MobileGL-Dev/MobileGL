@@ -149,15 +149,16 @@ namespace MobileGL::MG_Backend::DirectVulkanTMP::TmpImpl {
     };
 
     struct BackendFramebufferObject {
-        Array<VkRenderPass, 8> renderPasses = {};
-        VkFramebuffer framebuffer = VK_NULL_HANDLE;
         VkExtent2D extent{0, 0};
         Uint32 colorAttachmentCount = 0;
         Bool hasDepth = false;
         VkFormat depthFormat = VK_FORMAT_UNDEFINED;
-        Uint64 renderPassCompatHash = 0;
+        VkFormat depthAttachmentFormat = VK_FORMAT_UNDEFINED;
+        VkFormat stencilAttachmentFormat = VK_FORMAT_UNDEFINED;
+        Uint64 renderingCompatHash = 0;
 
         Vector<AttachmentInfo> attachments;
+        Vector<VkFormat> colorAttachmentFormats;
         Array<Int32, static_cast<SizeT>(FramebufferAttachmentType::FramebufferAttachmentTypeCount)> attachmentIndex =
             {};
 
@@ -168,14 +169,13 @@ namespace MobileGL::MG_Backend::DirectVulkanTMP::TmpImpl {
         Uint64 configHash = 0;
         Uint16 objectVersion = 0;
 
-        Bool IsValid() const { return renderPasses[0] != VK_NULL_HANDLE && framebuffer != VK_NULL_HANDLE; }
+        Bool IsValid() const { return !attachments.empty() && extent.width > 0 && extent.height > 0; }
     };
 
     struct VulkanState {
         UniquePtr<DV::VulkanContext> ctx;
         UniquePtr<DV::SwapchainManager> swapchain;
         UniquePtr<DV::ProgramManager> programMgr;
-        Array<VkRenderPass, 8> renderPasses = {};
         VkCommandPool commandPool = VK_NULL_HANDLE;
         Vector<UniquePtr<DV::FrameContext>> frames;
         Vector<FrameDescriptorPools> frameDescriptorPools;
@@ -190,7 +190,7 @@ namespace MobileGL::MG_Backend::DirectVulkanTMP::TmpImpl {
         VkDeviceMemory depthMemory = VK_NULL_HANDLE;
         VkImageView depthView = VK_NULL_HANDLE;
         VkFormat depthFormat = VK_FORMAT_UNDEFINED;
-        Uint64 defaultRenderPassCompatHash = 0;
+        Uint64 defaultRenderingCompatHash = 0;
 
         BufferResource nullUbo;
 
@@ -204,19 +204,29 @@ namespace MobileGL::MG_Backend::DirectVulkanTMP::TmpImpl {
         UnorderedMap<const ProgramObject*, ProgramResource> programs;
         UnorderedMap<SharedPtr<MG_State::GLState::FramebufferObject>, SharedPtr<BackendFramebufferObject>> framebuffers;
 
-        VkRenderPass activeRenderPass = VK_NULL_HANDLE;
-        VkFramebuffer activeFramebuffer = VK_NULL_HANDLE;
         VkExtent2D activeExtent{0, 0};
+        Vector<VkImageView> activeColorViews;
+        Vector<VkImageLayout> activeColorLayouts;
+        Vector<VkFormat> activeColorFormats;
+        Vector<Int32> activeColorAttachmentIndices;
+        VkImageView activeDepthView = VK_NULL_HANDLE;
+        VkImageLayout activeDepthLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        VkImageView activeStencilView = VK_NULL_HANDLE;
+        VkImageLayout activeStencilLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        Uint32 activeSwapchainImageIndex = ~0u;
         Uint32 activeColorAttachmentCount = 1;
         Bool activeHasDepth = false;
         VkFormat activeDepthFormat = VK_FORMAT_UNDEFINED;
+        VkFormat activeDepthAttachmentFormat = VK_FORMAT_UNDEFINED;
+        VkFormat activeStencilAttachmentFormat = VK_FORMAT_UNDEFINED;
+        Uint64 activeRenderingCompatHash = 0;
+        Uint64 activeRenderingConfigHash = 0;
         SharedPtr<MG_State::GLState::FramebufferObject> activeStateFBO = nullptr;
         SharedPtr<BackendFramebufferObject> activeBackendFBO = nullptr;
         Bool activeIsDefault = true;
         Bool activeDefaultColorWrites = true;
 
-        VkRenderPass recordingRenderPass = VK_NULL_HANDLE;
-        VkFramebuffer recordingFramebuffer = VK_NULL_HANDLE;
+        Uint64 recordingRenderingConfigHash = 0;
         Bool cmdBufferBegun = false;
 
         Bool recording = false;
@@ -227,6 +237,9 @@ namespace MobileGL::MG_Backend::DirectVulkanTMP::TmpImpl {
         UnorderedMap<SharedPtr<FramebufferObject>, PendingClearInfo> pendingClears;
 
         Vector<VkImageLayout> swapchainImageLayouts;
+
+        PFN_vkCmdBeginRendering pfnCmdBeginRendering = nullptr;
+        PFN_vkCmdEndRendering pfnCmdEndRendering = nullptr;
     };
 
     void Present();

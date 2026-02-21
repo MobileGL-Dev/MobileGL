@@ -16,7 +16,7 @@
 #define DEBUG_TRACE_POINT() MGLOG_D("DV TmpImpl Trace: %s:%d", __func__, __LINE__)
 namespace MobileGL::MG_Backend::DirectVulkanTMP::TmpImpl {
     class PendingClearInfo;
-    void BeginRenderPass(GLbitfield clearMask, const PendingClearInfo* clearInfo);
+    void BeginRendering(GLbitfield clearMask, const PendingClearInfo* clearInfo);
     void BeginCommandBuffer();
 
     VulkanState g;
@@ -367,206 +367,53 @@ namespace MobileGL::MG_Backend::DirectVulkanTMP::TmpImpl {
         return VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
     }
 
-    Uint8 ClearMaskKey(GLbitfield mask) {
-        Uint8 key = 0;
-        if (mask & GL_COLOR_BUFFER_BIT) key |= 0x1;
-        if (mask & GL_DEPTH_BUFFER_BIT) key |= 0x2;
-        if (mask & GL_STENCIL_BUFFER_BIT) key |= 0x4;
-        return key;
-    }
-
-    void FillSubpassDependency(VkSubpassDependency& dep, Bool hasColor, Bool hasDepthStencil) {
-        dep = {};
-        dep.srcSubpass = VK_SUBPASS_EXTERNAL;
-        dep.dstSubpass = 0;
-        if (hasColor) {
-            dep.srcStageMask |= VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-            dep.dstStageMask |= VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-            dep.dstAccessMask |= VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-        }
-        if (hasDepthStencil) {
-            dep.srcStageMask |= VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
-            dep.dstStageMask |= VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
-            dep.dstAccessMask |= VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-        }
-        if (dep.srcStageMask == 0) {
-            dep.srcStageMask = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
-            dep.dstStageMask = VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT;
-        }
-    }
-
-    VkRenderPass CreateBackendRenderPass(const BackendFramebufferObject& backend, GLbitfield clearMask) {
-        Vector<VkAttachmentDescription> descs;
-        descs.reserve(backend.attachments.size());
-
-        Vector<Bool> colorClearable;
-        colorClearable.resize(backend.attachments.size(), false);
-        if (clearMask & GL_COLOR_BUFFER_BIT) {
-            for (Uint32 i = 0; i < backend.colorAttachmentCount; ++i) {
-                Int32 idx = backend.drawBufferAttachmentIndices[i];
-                if (idx >= 0 && static_cast<SizeT>(idx) < backend.attachments.size()) {
-                    colorClearable[static_cast<SizeT>(idx)] = true;
-                }
-            }
-        }
-
-        for (SizeT i = 0; i < backend.attachments.size(); ++i) {
-            const auto& info = backend.attachments[i];
-            VkAttachmentDescription desc{};
-            desc.format = info.format;
-            desc.samples = VK_SAMPLE_COUNT_1_BIT;
-            Bool isDepth = (info.aspect & VK_IMAGE_ASPECT_DEPTH_BIT) != 0;
-            Bool isStencil = (info.aspect & VK_IMAGE_ASPECT_STENCIL_BIT) != 0;
-            if (isDepth) {
-                desc.loadOp =
-                    (clearMask & GL_DEPTH_BUFFER_BIT) ? VK_ATTACHMENT_LOAD_OP_CLEAR : VK_ATTACHMENT_LOAD_OP_LOAD;
-                desc.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-            } else {
-                desc.loadOp = colorClearable[i] ? VK_ATTACHMENT_LOAD_OP_CLEAR : VK_ATTACHMENT_LOAD_OP_LOAD;
-                desc.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-            }
-            if (isStencil) {
-                desc.stencilLoadOp =
-                    (clearMask & GL_STENCIL_BUFFER_BIT) ? VK_ATTACHMENT_LOAD_OP_CLEAR : VK_ATTACHMENT_LOAD_OP_LOAD;
-                desc.stencilStoreOp = VK_ATTACHMENT_STORE_OP_STORE;
-            } else {
-                desc.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-                desc.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-            }
-            desc.initialLayout = info.finalLayout;
-            desc.finalLayout = info.finalLayout;
-            descs.push_back(desc);
-        }
-
-        Vector<VkAttachmentReference> colorRefs;
-        colorRefs.resize(backend.colorAttachmentCount);
-        for (Uint32 i = 0; i < backend.colorAttachmentCount; ++i) {
-            Int32 idx = backend.drawBufferAttachmentIndices[i];
-            if (idx < 0 || static_cast<SizeT>(idx) >= backend.attachments.size()) {
-                colorRefs[i] = {VK_ATTACHMENT_UNUSED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
-            } else {
-                colorRefs[i] = {static_cast<Uint32>(idx), VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
-            }
-        }
-
-        Int32 depthIdx = backend.attachmentIndex[static_cast<SizeT>(FramebufferAttachmentType::Depth)];
-        if (depthIdx < 0) {
-            depthIdx = backend.attachmentIndex[static_cast<SizeT>(FramebufferAttachmentType::Stencil)];
-        }
-        Bool useDepth = depthIdx >= 0;
-        VkAttachmentReference depthRef{};
-        if (useDepth) {
-            depthRef.attachment = static_cast<Uint32>(depthIdx);
-            depthRef.layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
-        }
-
-        VkSubpassDescription sub{};
-        sub.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
-        sub.colorAttachmentCount = backend.colorAttachmentCount;
-        sub.pColorAttachments = backend.colorAttachmentCount > 0 ? colorRefs.data() : nullptr;
-        if (useDepth) sub.pDepthStencilAttachment = &depthRef;
-
-        VkSubpassDependency dep{};
-        FillSubpassDependency(dep, backend.colorAttachmentCount > 0, useDepth);
-
-        VkRenderPassCreateInfo rpci{VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO};
-        rpci.attachmentCount = descs.size();
-        rpci.pAttachments = descs.data();
-        rpci.subpassCount = 1;
-        rpci.pSubpasses = &sub;
-        rpci.dependencyCount = 1;
-        rpci.pDependencies = &dep;
-
-        VkRenderPass rp = VK_NULL_HANDLE;
-        VK_VERIFY(vkCreateRenderPass(g.ctx->GetDevice(), &rpci, nullptr, &rp), "vkCreateRenderPass");
-        return rp;
-    }
-
-    VkRenderPass GetOrCreateBackendRenderPass(BackendFramebufferObject& backend, GLbitfield clearMask) {
-        Uint8 key = ClearMaskKey(clearMask);
-        if (key == 0) return backend.renderPasses[0];
-        VkRenderPass& rp = backend.renderPasses[key];
-        if (rp != VK_NULL_HANDLE) return rp;
-        rp = CreateBackendRenderPass(backend, clearMask);
-        return rp;
-    }
-
-    VkRenderPass CreateDefaultRenderPass(GLbitfield clearMask) {
-        VkAttachmentDescription color{};
-        color.format = g.swapchain->GetFormat();
-        color.samples = VK_SAMPLE_COUNT_1_BIT;
-        color.loadOp = (clearMask & GL_COLOR_BUFFER_BIT) ? VK_ATTACHMENT_LOAD_OP_CLEAR : VK_ATTACHMENT_LOAD_OP_LOAD;
-        color.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-        color.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-        color.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-        color.initialLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
-        color.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
-
-        Vector<VkAttachmentDescription> attachments;
-        attachments.push_back(color);
-
-        VkAttachmentReference colorRef{0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
-        VkAttachmentReference depthRef{};
-        Bool hasDepth = g.depthFormat != VK_FORMAT_UNDEFINED;
-        if (hasDepth) {
-            VkAttachmentDescription depth{};
-            depth.format = g.depthFormat;
-            depth.samples = VK_SAMPLE_COUNT_1_BIT;
-            depth.loadOp = (clearMask & GL_DEPTH_BUFFER_BIT) ? VK_ATTACHMENT_LOAD_OP_CLEAR : VK_ATTACHMENT_LOAD_OP_LOAD;
-            depth.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-            if (AspectForFormat(g.depthFormat) & VK_IMAGE_ASPECT_STENCIL_BIT) {
-                depth.stencilLoadOp =
-                    (clearMask & GL_STENCIL_BUFFER_BIT) ? VK_ATTACHMENT_LOAD_OP_CLEAR : VK_ATTACHMENT_LOAD_OP_LOAD;
-                depth.stencilStoreOp = VK_ATTACHMENT_STORE_OP_STORE;
-            } else {
-                depth.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-                depth.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-            }
-            depth.initialLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
-            depth.finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
-            attachments.push_back(depth);
-
-            depthRef = {1, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL};
-        }
-
-        VkSubpassDescription sub{};
-        sub.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
-        sub.colorAttachmentCount = 1;
-        sub.pColorAttachments = &colorRef;
-        if (hasDepth) sub.pDepthStencilAttachment = &depthRef;
-
-        VkSubpassDependency dep{};
-        FillSubpassDependency(dep, true, hasDepth);
-
-        VkRenderPassCreateInfo rpci{VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO};
-        rpci.attachmentCount = attachments.size();
-        rpci.pAttachments = attachments.data();
-        rpci.subpassCount = 1;
-        rpci.pSubpasses = &sub;
-        rpci.dependencyCount = 1;
-        rpci.pDependencies = &dep;
-
-        VkRenderPass rp = VK_NULL_HANDLE;
-        VK_VERIFY(vkCreateRenderPass(g.ctx->GetDevice(), &rpci, nullptr, &rp), "vkCreateRenderPass");
-        return rp;
-    }
-
-    Uint64 ComputeDefaultRenderPassCompatHash() {
+    Uint64 ComputeRenderingCompatHash(const Vector<VkFormat>& colorFormats, VkFormat depthFormat,
+                                      VkFormat stencilFormat) {
         Vector<Uint64> compatData;
-        Bool hasDepth = g.depthFormat != VK_FORMAT_UNDEFINED;
-        compatData.reserve(6);
-        compatData.push_back(static_cast<Uint64>(hasDepth ? 2 : 1));
-        compatData.push_back(static_cast<Uint64>(g.swapchain->GetFormat()));
-        if (hasDepth) compatData.push_back(static_cast<Uint64>(g.depthFormat));
-        compatData.push_back(1); // color attachment count
-        compatData.push_back(0); // color attachment index
-        compatData.push_back(static_cast<Uint64>(hasDepth ? 1 : -1));
+        compatData.reserve(3 + colorFormats.size());
+        compatData.push_back(static_cast<Uint64>(colorFormats.size()));
+        for (auto fmt : colorFormats) {
+            compatData.push_back(static_cast<Uint64>(fmt));
+        }
+        compatData.push_back(static_cast<Uint64>(depthFormat));
+        compatData.push_back(static_cast<Uint64>(stencilFormat));
         return XXH64(compatData.data(), compatData.size() * sizeof(Uint64), 0xA11CE5EDu);
     }
 
-    Uint64 GetActiveRenderPassCompatHash() {
-        if (g.activeIsDefault) return g.defaultRenderPassCompatHash;
-        if (g.activeBackendFBO) return g.activeBackendFBO->renderPassCompatHash;
+    Uint64 ComputeRenderingConfigHash(const VkExtent2D& extent, const Vector<VkImageView>& colorViews,
+                                      const Vector<VkImageLayout>& colorLayouts, VkImageView depthView,
+                                      VkImageLayout depthLayout, VkImageView stencilView, VkImageLayout stencilLayout) {
+        Vector<Uint64> hashData;
+        hashData.reserve(8 + colorViews.size() * 2);
+        hashData.push_back((static_cast<Uint64>(extent.width) << 32) | static_cast<Uint64>(extent.height));
+        hashData.push_back(static_cast<Uint64>(colorViews.size()));
+        for (SizeT i = 0; i < colorViews.size(); ++i) {
+            VkImageLayout layout = (i < colorLayouts.size()) ? colorLayouts[i] : VK_IMAGE_LAYOUT_UNDEFINED;
+            hashData.push_back(static_cast<Uint64>(reinterpret_cast<uintptr_t>(colorViews[i])));
+            hashData.push_back(static_cast<Uint64>(layout));
+        }
+        hashData.push_back(static_cast<Uint64>(reinterpret_cast<uintptr_t>(depthView)));
+        hashData.push_back(static_cast<Uint64>(depthLayout));
+        hashData.push_back(static_cast<Uint64>(reinterpret_cast<uintptr_t>(stencilView)));
+        hashData.push_back(static_cast<Uint64>(stencilLayout));
+        return XXH64(hashData.data(), hashData.size() * sizeof(Uint64), 0x9A37B15Eu);
+    }
+
+    Uint64 ComputeDefaultRenderingCompatHash() {
+        Vector<VkFormat> colorFormats = {g.swapchain->GetFormat()};
+        VkFormat depthFormat = VK_FORMAT_UNDEFINED;
+        VkFormat stencilFormat = VK_FORMAT_UNDEFINED;
+        if (g.depthFormat != VK_FORMAT_UNDEFINED) {
+            VkImageAspectFlags aspect = AspectForFormat(g.depthFormat);
+            if (aspect & VK_IMAGE_ASPECT_DEPTH_BIT) depthFormat = g.depthFormat;
+            if (aspect & VK_IMAGE_ASPECT_STENCIL_BIT) stencilFormat = g.depthFormat;
+        }
+        return ComputeRenderingCompatHash(colorFormats, depthFormat, stencilFormat);
+    }
+
+    Uint64 GetActiveRenderingCompatHash() {
+        if (g.activeIsDefault) return g.defaultRenderingCompatHash;
+        if (g.activeBackendFBO) return g.activeBackendFBO->renderingCompatHash;
         return 0;
     }
 
@@ -577,15 +424,6 @@ namespace MobileGL::MG_Backend::DirectVulkanTMP::TmpImpl {
             if (drawBuffers[i] != FramebufferAttachmentType::None) return true;
         }
         return false;
-    }
-
-    VkRenderPass GetOrCreateDefaultRenderPass(GLbitfield clearMask) {
-        Uint8 key = ClearMaskKey(clearMask);
-        if (key == 0) return g.renderPasses[0];
-        VkRenderPass& rp = g.renderPasses[key];
-        if (rp != VK_NULL_HANDLE) return rp;
-        rp = CreateDefaultRenderPass(clearMask);
-        return rp;
     }
 
     void CreateImage(VkExtent3D extent, VkFormat format, VkImageUsageFlags usage, VkImage& image,
@@ -820,6 +658,55 @@ namespace MobileGL::MG_Backend::DirectVulkanTMP::TmpImpl {
         vkFreeCommandBuffers(g.ctx->GetDevice(), g.commandPool, 1, &cmd);
     }
 
+    Bool HasActiveRenderingAttachments() {
+        if (g.activeExtent.width == 0 || g.activeExtent.height == 0) return false;
+        for (auto view : g.activeColorViews) {
+            if (view != VK_NULL_HANDLE) return true;
+        }
+        return g.activeDepthView != VK_NULL_HANDLE || g.activeStencilView != VK_NULL_HANDLE;
+    }
+
+    void EnsureActiveColorLayoutsForRendering(VkCommandBuffer cmd) {
+        if (!g.activeIsDefault || g.activeSwapchainImageIndex == ~0u) return;
+        if (g.activeSwapchainImageIndex >= g.swapchainImageLayouts.size()) return;
+        const auto& images = g.swapchain->GetImages();
+        if (g.activeSwapchainImageIndex >= images.size()) return;
+
+        auto& currentLayout = g.swapchainImageLayouts[g.activeSwapchainImageIndex];
+        if (currentLayout == VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL) return;
+        CmdTransitionImageLayout(cmd, images[g.activeSwapchainImageIndex], currentLayout,
+                                 VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_ASPECT_COLOR_BIT);
+        currentLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    }
+
+    void LoadDynamicRenderingCommands() {
+        auto device = g.ctx ? g.ctx->GetDevice() : VK_NULL_HANDLE;
+        if (device == VK_NULL_HANDLE) return;
+
+        g.pfnCmdBeginRendering =
+            reinterpret_cast<PFN_vkCmdBeginRendering>(vkGetDeviceProcAddr(device, "vkCmdBeginRendering"));
+        g.pfnCmdEndRendering =
+            reinterpret_cast<PFN_vkCmdEndRendering>(vkGetDeviceProcAddr(device, "vkCmdEndRendering"));
+
+        if (!g.pfnCmdBeginRendering) {
+            g.pfnCmdBeginRendering =
+                reinterpret_cast<PFN_vkCmdBeginRendering>(vkGetDeviceProcAddr(device, "vkCmdBeginRenderingKHR"));
+        }
+        if (!g.pfnCmdEndRendering) {
+            g.pfnCmdEndRendering =
+                reinterpret_cast<PFN_vkCmdEndRendering>(vkGetDeviceProcAddr(device, "vkCmdEndRenderingKHR"));
+        }
+    }
+
+    void EndActiveRendering() {
+        if (!g.recording) return;
+        auto& frame = *g.frames[g.currentFrame];
+        MOBILEGL_ASSERT(g.pfnCmdEndRendering != nullptr, "vkCmdEndRendering function pointer is null");
+        g.pfnCmdEndRendering(frame.CommandBuffer);
+        g.recording = false;
+        g.recordingRenderingConfigHash = 0;
+    }
+
     bool RecordTransferCommands(const std::function<void(VkCommandBuffer)>& record, bool restartIfRecording) {
         if (g.frames.empty()) {
             SubmitImmediate(record);
@@ -828,24 +715,13 @@ namespace MobileGL::MG_Backend::DirectVulkanTMP::TmpImpl {
         BeginCommandBuffer();
         auto& frame = *g.frames[g.currentFrame];
         Bool wasRecording = g.recording;
-        if (g.recording) {
-            vkCmdEndRenderPass(frame.CommandBuffer);
-            g.recording = false;
-            g.recordingRenderPass = VK_NULL_HANDLE;
-            g.recordingFramebuffer = VK_NULL_HANDLE;
-        }
+        EndActiveRendering();
 
         record(frame.CommandBuffer);
 
-        if (wasRecording && restartIfRecording) {
-            if (g.activeIsDefault) {
-                g.activeRenderPass = GetOrCreateDefaultRenderPass(0);
-            } else if (g.activeBackendFBO) {
-                g.activeRenderPass = GetOrCreateBackendRenderPass(*g.activeBackendFBO, 0);
-            }
-            if (g.activeRenderPass != VK_NULL_HANDLE && g.activeFramebuffer != VK_NULL_HANDLE) {
-                BeginRenderPass(0, nullptr);
-            }
+        if (wasRecording && restartIfRecording && HasActiveRenderingAttachments()) {
+            EnsureActiveColorLayoutsForRendering(frame.CommandBuffer);
+            BeginRendering(0, nullptr);
         }
         return true;
     }
@@ -869,25 +745,14 @@ namespace MobileGL::MG_Backend::DirectVulkanTMP::TmpImpl {
 
         auto& frame = *g.frames[g.currentFrame];
         Bool wasRecording = g.recording;
-        if (g.recording) {
-            vkCmdEndRenderPass(frame.CommandBuffer);
-            g.recording = false;
-            g.recordingRenderPass = VK_NULL_HANDLE;
-            g.recordingFramebuffer = VK_NULL_HANDLE;
-        }
+        EndActiveRendering();
 
         CmdTransitionImageLayout(frame.CommandBuffer, res.image, res.layout, desiredLayout, aspect);
         res.layout = desiredLayout;
 
-        if (wasRecording) {
-            if (g.activeIsDefault) {
-                g.activeRenderPass = GetOrCreateDefaultRenderPass(0);
-            } else if (g.activeBackendFBO) {
-                g.activeRenderPass = GetOrCreateBackendRenderPass(*g.activeBackendFBO, 0);
-            }
-            if (g.activeRenderPass != VK_NULL_HANDLE) {
-                BeginRenderPass(0, nullptr);
-            }
+        if (wasRecording && HasActiveRenderingAttachments()) {
+            EnsureActiveColorLayoutsForRendering(frame.CommandBuffer);
+            BeginRendering(0, nullptr);
         }
     }
 
@@ -1050,23 +915,16 @@ namespace MobileGL::MG_Backend::DirectVulkanTMP::TmpImpl {
     }
 
     void DestroyBackendFramebuffer(BackendFramebufferObject& backend) {
-        if (backend.framebuffer != VK_NULL_HANDLE) {
-            vkDestroyFramebuffer(g.ctx->GetDevice(), backend.framebuffer, nullptr);
-            backend.framebuffer = VK_NULL_HANDLE;
-        }
-        for (auto& rp : backend.renderPasses) {
-            if (rp != VK_NULL_HANDLE) {
-                vkDestroyRenderPass(g.ctx->GetDevice(), rp, nullptr);
-                rp = VK_NULL_HANDLE;
-            }
-        }
         backend.attachments.clear();
+        backend.colorAttachmentFormats.clear();
         backend.attachmentIndex.fill(-1);
         backend.extent = {0, 0};
         backend.colorAttachmentCount = 0;
         backend.hasDepth = false;
         backend.depthFormat = VK_FORMAT_UNDEFINED;
-        backend.renderPassCompatHash = 0;
+        backend.depthAttachmentFormat = VK_FORMAT_UNDEFINED;
+        backend.stencilAttachmentFormat = VK_FORMAT_UNDEFINED;
+        backend.renderingCompatHash = 0;
         backend.configHash = 0;
         backend.drawBufferAttachmentIndices.fill(-1);
     }
@@ -1218,29 +1076,35 @@ namespace MobileGL::MG_Backend::DirectVulkanTMP::TmpImpl {
             }
         }
 
-        Vector<Uint64> compatData;
-        compatData.reserve(4 + newAttachments.size() * 2 + nEffectiveBuffers);
-        compatData.push_back(static_cast<Uint64>(newAttachments.size()));
-        for (const auto& info : newAttachments) {
-            compatData.push_back(static_cast<Uint64>(info.format));
-            compatData.push_back(static_cast<Uint64>(info.aspect));
-        }
-        compatData.push_back(static_cast<Uint64>(nEffectiveBuffers));
+        Vector<VkFormat> colorAttachmentFormats;
+        colorAttachmentFormats.resize(nEffectiveBuffers, VK_FORMAT_UNDEFINED);
         for (Uint32 i = 0; i < nEffectiveBuffers; ++i) {
-            compatData.push_back(static_cast<Uint64>(drawAttachmentIndices[i]));
+            Int32 idx = drawAttachmentIndices[i];
+            if (idx < 0 || static_cast<SizeT>(idx) >= newAttachments.size()) continue;
+            colorAttachmentFormats[i] = newAttachments[static_cast<SizeT>(idx)].format;
         }
-        Int32 depthIdx = -1;
+
+        VkFormat depthFormat = VK_FORMAT_UNDEFINED;
+        VkFormat depthAttachmentFormat = VK_FORMAT_UNDEFINED;
+        VkFormat stencilAttachmentFormat = VK_FORMAT_UNDEFINED;
         if (useDepthAttachment) {
             FramebufferAttachmentType depthType =
                 hasDepth ? FramebufferAttachmentType::Depth : FramebufferAttachmentType::Stencil;
-            depthIdx = newIndex[static_cast<SizeT>(depthType)];
+            Int32 idx = newIndex[static_cast<SizeT>(depthType)];
+            if (idx >= 0 && static_cast<SizeT>(idx) < newAttachments.size()) {
+                const auto& info = newAttachments[static_cast<SizeT>(idx)];
+                depthFormat = info.format;
+                if (info.aspect & VK_IMAGE_ASPECT_DEPTH_BIT) depthAttachmentFormat = info.format;
+                if (info.aspect & VK_IMAGE_ASPECT_STENCIL_BIT) stencilAttachmentFormat = info.format;
+            }
         }
-        compatData.push_back(static_cast<Uint64>(depthIdx));
-        Uint64 compatHash = XXH64(compatData.data(), compatData.size() * sizeof(Uint64), 0xA11CE5EDu);
+
+        Uint64 compatHash =
+            ComputeRenderingCompatHash(colorAttachmentFormats, depthAttachmentFormat, stencilAttachmentFormat);
 
         Vector<Uint64> hashData;
         hashData.reserve(8 + newAttachments.size() * 3 + FramebufferObject::MAX_DRAW_BUFFERS);
-        hashData.push_back(static_cast<Uint64>(extent.width) << 32 | extent.height);
+        hashData.push_back((static_cast<Uint64>(extent.width) << 32) | static_cast<Uint64>(extent.height));
         hashData.push_back(static_cast<Uint64>(nEffectiveBuffers));
         hashData.push_back(static_cast<Uint64>(useDepthAttachment));
         for (Uint32 i = 0; i < FramebufferObject::MAX_DRAW_BUFFERS; ++i) {
@@ -1249,12 +1113,17 @@ namespace MobileGL::MG_Backend::DirectVulkanTMP::TmpImpl {
         for (const auto& info : newAttachments) {
             hashData.push_back(static_cast<Uint64>(info.type));
             hashData.push_back(static_cast<Uint64>(info.format));
-            hashData.push_back(reinterpret_cast<Uint64>(info.view));
+            hashData.push_back(static_cast<Uint64>(reinterpret_cast<uintptr_t>(info.view)));
         }
         Uint64 newHash = XXH64(hashData.data(), hashData.size() * sizeof(Uint64), 0xF00DF00Du);
 
         if (backend.configHash == newHash && backend.IsValid()) {
             backend.objectVersion = stateFBO->GetObjectVersion();
+            backend.colorAttachmentFormats = colorAttachmentFormats;
+            backend.depthFormat = depthFormat;
+            backend.depthAttachmentFormat = depthAttachmentFormat;
+            backend.stencilAttachmentFormat = stencilAttachmentFormat;
+            backend.renderingCompatHash = compatHash;
             backend.frontendDrawBuffers = drawBuffers;
             backend.drawBufferAttachmentIndices = drawAttachmentIndices;
             backend.frontendReadBuffer = stateFBO->GetReadBuffer();
@@ -1268,39 +1137,18 @@ namespace MobileGL::MG_Backend::DirectVulkanTMP::TmpImpl {
         backend.attachmentIndex = Move(newIndex);
         backend.extent = extent;
         backend.colorAttachmentCount = nEffectiveBuffers;
+        backend.colorAttachmentFormats = Move(colorAttachmentFormats);
         backend.hasDepth = useDepthAttachment;
-        backend.depthFormat = VK_FORMAT_UNDEFINED;
-        if (useDepthAttachment) {
-            FramebufferAttachmentType depthType =
-                hasDepth ? FramebufferAttachmentType::Depth : FramebufferAttachmentType::Stencil;
-            Int32 idx = backend.attachmentIndex[static_cast<SizeT>(depthType)];
-            if (idx >= 0) {
-                backend.depthFormat = backend.attachments[static_cast<SizeT>(idx)].format;
-            }
-        }
+        backend.depthFormat = depthFormat;
+        backend.depthAttachmentFormat = depthAttachmentFormat;
+        backend.stencilAttachmentFormat = stencilAttachmentFormat;
         backend.configHash = newHash;
-        backend.renderPassCompatHash = compatHash;
+        backend.renderingCompatHash = compatHash;
         backend.frontendDrawBuffers = drawBuffers;
         backend.drawBufferAttachmentIndices = drawAttachmentIndices;
         backend.frontendReadBuffer = stateFBO->GetReadBuffer();
         backend.syncedAttachmentVersions = stateFBO->GetAllFramebufferAttachmentVersions();
         backend.objectVersion = stateFBO->GetObjectVersion();
-
-        backend.renderPasses[0] = CreateBackendRenderPass(backend, 0);
-
-        Vector<VkImageView> views;
-        views.reserve(backend.attachments.size());
-        for (const auto& info : backend.attachments) {
-            views.push_back(info.view);
-        }
-        VkFramebufferCreateInfo fbci{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
-        fbci.renderPass = backend.renderPasses[0];
-        fbci.attachmentCount = views.size();
-        fbci.pAttachments = views.data();
-        fbci.width = extent.width;
-        fbci.height = extent.height;
-        fbci.layers = 1;
-        VK_VERIFY(vkCreateFramebuffer(g.ctx->GetDevice(), &fbci, nullptr, &backend.framebuffer), "vkCreateFramebuffer");
 
         return true;
     }
@@ -1318,18 +1166,48 @@ namespace MobileGL::MG_Backend::DirectVulkanTMP::TmpImpl {
             g.activeStateFBO = currentFBO;
             g.activeBackendFBO = nullptr;
             g.activeDefaultColorWrites = DefaultFboColorWritesEnabled(currentFBO);
-            g.activeRenderPass = g.renderPasses[0];
+            g.activeExtent = g.swapchain->GetExtent();
+            g.activeSwapchainImageIndex = ~0u;
+            g.activeColorAttachmentCount = 1;
+            g.activeColorViews.assign(1, VK_NULL_HANDLE);
+            g.activeColorLayouts.assign(1, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+            g.activeColorFormats.assign(1, g.swapchain->GetFormat());
+            g.activeColorAttachmentIndices.assign(1, 0);
+
             if (!g.frames.empty()) {
                 auto& frame = *g.frames[g.currentFrame];
-                g.activeFramebuffer = g.swapchain->GetFramebuffers()[frame.CurrentImageIndex];
-            } else {
-                g.activeFramebuffer = VK_NULL_HANDLE;
+                const auto& imageViews = g.swapchain->GetImageViews();
+                if (frame.CurrentImageIndex < imageViews.size()) {
+                    g.activeColorViews[0] = imageViews[frame.CurrentImageIndex];
+                    g.activeSwapchainImageIndex = frame.CurrentImageIndex;
+                }
             }
-            g.activeExtent = g.swapchain->GetExtent();
-            g.activeColorAttachmentCount = 1;
+
             g.activeHasDepth = g.depthView != VK_NULL_HANDLE;
             g.activeDepthFormat = g.depthFormat;
-            return g.activeFramebuffer != VK_NULL_HANDLE;
+            g.activeDepthView = g.depthView;
+            g.activeDepthLayout = g.depthView != VK_NULL_HANDLE ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL
+                                                                : VK_IMAGE_LAYOUT_UNDEFINED;
+
+            VkImageAspectFlags depthAspect =
+                (g.depthFormat != VK_FORMAT_UNDEFINED) ? AspectForFormat(g.depthFormat) : 0;
+            g.activeDepthAttachmentFormat = ((depthAspect & VK_IMAGE_ASPECT_DEPTH_BIT) && g.depthView != VK_NULL_HANDLE)
+                                                ? g.depthFormat
+                                                : VK_FORMAT_UNDEFINED;
+            g.activeStencilView = ((depthAspect & VK_IMAGE_ASPECT_STENCIL_BIT) && g.depthView != VK_NULL_HANDLE)
+                                      ? g.depthView
+                                      : VK_NULL_HANDLE;
+            g.activeStencilLayout = g.activeStencilView != VK_NULL_HANDLE
+                                        ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL
+                                        : VK_IMAGE_LAYOUT_UNDEFINED;
+            g.activeStencilAttachmentFormat =
+                (g.activeStencilView != VK_NULL_HANDLE) ? g.depthFormat : VK_FORMAT_UNDEFINED;
+
+            g.activeRenderingCompatHash = g.defaultRenderingCompatHash;
+            g.activeRenderingConfigHash =
+                ComputeRenderingConfigHash(g.activeExtent, g.activeColorViews, g.activeColorLayouts, g.activeDepthView,
+                                           g.activeDepthLayout, g.activeStencilView, g.activeStencilLayout);
+            return g.activeColorViews[0] != VK_NULL_HANDLE;
         }
 
         auto it = g.framebuffers.find(currentFBO);
@@ -1347,12 +1225,51 @@ namespace MobileGL::MG_Backend::DirectVulkanTMP::TmpImpl {
         g.activeStateFBO = currentFBO;
         g.activeBackendFBO = backend;
         g.activeDefaultColorWrites = true;
-        g.activeRenderPass = backend->renderPasses[0];
-        g.activeFramebuffer = backend->framebuffer;
+        g.activeSwapchainImageIndex = ~0u;
         g.activeExtent = backend->extent;
         g.activeColorAttachmentCount = backend->colorAttachmentCount;
+        g.activeColorViews.assign(g.activeColorAttachmentCount, VK_NULL_HANDLE);
+        g.activeColorLayouts.assign(g.activeColorAttachmentCount, VK_IMAGE_LAYOUT_UNDEFINED);
+        g.activeColorFormats = backend->colorAttachmentFormats;
+        g.activeColorAttachmentIndices.assign(g.activeColorAttachmentCount, -1);
+        for (Uint32 i = 0; i < g.activeColorAttachmentCount; ++i) {
+            Int32 idx = backend->drawBufferAttachmentIndices[i];
+            g.activeColorAttachmentIndices[i] = idx;
+            if (idx < 0 || static_cast<SizeT>(idx) >= backend->attachments.size()) continue;
+            const auto& att = backend->attachments[static_cast<SizeT>(idx)];
+            g.activeColorViews[i] = att.view;
+            g.activeColorLayouts[i] = att.finalLayout;
+        }
+
         g.activeHasDepth = backend->hasDepth;
         g.activeDepthFormat = backend->depthFormat;
+        g.activeDepthAttachmentFormat = backend->depthAttachmentFormat;
+        g.activeStencilAttachmentFormat = backend->stencilAttachmentFormat;
+        g.activeDepthView = VK_NULL_HANDLE;
+        g.activeDepthLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        g.activeStencilView = VK_NULL_HANDLE;
+        g.activeStencilLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        if (backend->hasDepth) {
+            Int32 depthIdx = backend->attachmentIndex[static_cast<SizeT>(FramebufferAttachmentType::Depth)];
+            if (depthIdx < 0) {
+                depthIdx = backend->attachmentIndex[static_cast<SizeT>(FramebufferAttachmentType::Stencil)];
+            }
+            if (depthIdx >= 0 && static_cast<SizeT>(depthIdx) < backend->attachments.size()) {
+                const auto& depthAtt = backend->attachments[static_cast<SizeT>(depthIdx)];
+                if (depthAtt.aspect & VK_IMAGE_ASPECT_DEPTH_BIT) {
+                    g.activeDepthView = depthAtt.view;
+                    g.activeDepthLayout = depthAtt.finalLayout;
+                }
+                if (depthAtt.aspect & VK_IMAGE_ASPECT_STENCIL_BIT) {
+                    g.activeStencilView = depthAtt.view;
+                    g.activeStencilLayout = depthAtt.finalLayout;
+                }
+            }
+        }
+        g.activeRenderingCompatHash = backend->renderingCompatHash;
+        g.activeRenderingConfigHash =
+            ComputeRenderingConfigHash(g.activeExtent, g.activeColorViews, g.activeColorLayouts, g.activeDepthView,
+                                       g.activeDepthLayout, g.activeStencilView, g.activeStencilLayout);
         return backend->IsValid();
     }
 
@@ -2072,8 +1989,9 @@ namespace MobileGL::MG_Backend::DirectVulkanTMP::TmpImpl {
     }
 
     VkPipeline GetOrCreatePipeline(ProgramResource& prog, const VertexArrayObject* vao, const RenderStateParameters& rs,
-                                   VkPrimitiveTopology topology, VkRenderPass renderPass, Uint32 colorAttachmentCount,
-                                   Bool hasDepth, Uint64 renderPassKey) {
+                                   VkPrimitiveTopology topology, const Vector<VkFormat>& colorAttachmentFormats,
+                                   VkFormat depthAttachmentFormat, VkFormat stencilAttachmentFormat,
+                                   Uint64 renderingKey) {
         if (!g.programMgr) g.programMgr = MakeUnique<DV::ProgramManager>(*g.ctx);
         prog.shaderStages = &g.programMgr->CreatePipelineShaderStages(prog.program, GetShaderTransformFlags());
         if (!prog.shaderStages || prog.shaderStages->empty()) {
@@ -2097,9 +2015,10 @@ namespace MobileGL::MG_Backend::DirectVulkanTMP::TmpImpl {
             Uint32 srcA = 0;
             Uint32 dstA = 0;
             Uint64 blendHash = 0;
-            Uint64 renderPass = 0;
+            Uint64 renderingKey = 0;
             Uint32 colorAttachments = 0;
-            Uint32 hasDepth = 0;
+            Uint32 depthFormat = 0;
+            Uint32 stencilFormat = 0;
         } key{};
 
         DEBUG_TRACE_POINT();
@@ -2119,9 +2038,10 @@ namespace MobileGL::MG_Backend::DirectVulkanTMP::TmpImpl {
         key.srcA = static_cast<Uint32>(rs.BlendStates[0].SrcFactorAlpha);
         key.dstA = static_cast<Uint32>(rs.BlendStates[0].DstFactorAlpha);
         key.blendHash = XXH64(rs.BlendStates.data(), sizeof(rs.BlendStates), 0xBEEFCAFEu);
-        key.renderPass = renderPassKey;
-        key.colorAttachments = colorAttachmentCount;
-        key.hasDepth = hasDepth ? 1u : 0u;
+        key.renderingKey = renderingKey;
+        key.colorAttachments = static_cast<Uint32>(colorAttachmentFormats.size());
+        key.depthFormat = static_cast<Uint32>(depthAttachmentFormat);
+        key.stencilFormat = static_cast<Uint32>(stencilAttachmentFormat);
 
         DEBUG_TRACE_POINT();
         Uint64 hash = XXH64(&key, sizeof(key), 0x12345678u);
@@ -2183,13 +2103,17 @@ namespace MobileGL::MG_Backend::DirectVulkanTMP::TmpImpl {
 
         DEBUG_TRACE_POINT();
         VkPipelineDepthStencilStateCreateInfo depth{VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
-        depth.depthTestEnable = rs.DepthTestEnabled ? VK_TRUE : VK_FALSE;
-        depth.depthWriteEnable = rs.DepthMask ? VK_TRUE : VK_FALSE;
+        Bool hasDepthAttachment = depthAttachmentFormat != VK_FORMAT_UNDEFINED;
+        Bool hasStencilAttachment = stencilAttachmentFormat != VK_FORMAT_UNDEFINED;
+        Bool hasDepthStencilAttachment = hasDepthAttachment || hasStencilAttachment;
+        depth.depthTestEnable = (hasDepthAttachment && rs.DepthTestEnabled) ? VK_TRUE : VK_FALSE;
+        depth.depthWriteEnable = (hasDepthAttachment && rs.DepthMask) ? VK_TRUE : VK_FALSE;
         depth.depthCompareOp = ToVkCompareOp(rs.DepthFunc);
         depth.stencilTestEnable = VK_FALSE;
 
         DEBUG_TRACE_POINT();
         Vector<VkPipelineColorBlendAttachmentState> colorAtts;
+        Uint32 colorAttachmentCount = static_cast<Uint32>(colorAttachmentFormats.size());
         if (colorAttachmentCount > 0) {
             colorAtts.resize(colorAttachmentCount);
             for (Uint32 i = 0; i < colorAttachmentCount; ++i) {
@@ -2221,8 +2145,15 @@ namespace MobileGL::MG_Backend::DirectVulkanTMP::TmpImpl {
         dyn.dynamicStateCount = 2;
         dyn.pDynamicStates = dynamics;
 
+        VkPipelineRenderingCreateInfo rendering{VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO};
+        rendering.colorAttachmentCount = colorAttachmentCount;
+        rendering.pColorAttachmentFormats = colorAttachmentFormats.empty() ? nullptr : colorAttachmentFormats.data();
+        rendering.depthAttachmentFormat = depthAttachmentFormat;
+        rendering.stencilAttachmentFormat = stencilAttachmentFormat;
+
         DEBUG_TRACE_POINT();
         VkGraphicsPipelineCreateInfo gpi{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
+        gpi.pNext = &rendering;
         gpi.stageCount = prog.shaderStages ? prog.shaderStages->size() : 0;
         gpi.pStages = prog.shaderStages ? prog.shaderStages->data() : nullptr;
         gpi.pVertexInputState = &vertexInput;
@@ -2230,11 +2161,11 @@ namespace MobileGL::MG_Backend::DirectVulkanTMP::TmpImpl {
         gpi.pViewportState = &vpci;
         gpi.pRasterizationState = &raster;
         gpi.pMultisampleState = &ms;
-        gpi.pDepthStencilState = hasDepth ? &depth : nullptr;
+        gpi.pDepthStencilState = hasDepthStencilAttachment ? &depth : nullptr;
         gpi.pColorBlendState = &blend;
         gpi.pDynamicState = &dyn;
         gpi.layout = prog.pipelineLayout;
-        gpi.renderPass = renderPass;
+        gpi.renderPass = VK_NULL_HANDLE;
         gpi.subpass = 0;
 
         DEBUG_TRACE_POINT();
@@ -2503,45 +2434,11 @@ namespace MobileGL::MG_Backend::DirectVulkanTMP::TmpImpl {
             false);
     }
 
-    void DestroyRenderPass() {
-        for (auto& rp : g.renderPasses) {
-            if (rp != VK_NULL_HANDLE) {
-                vkDestroyRenderPass(g.ctx->GetDevice(), rp, nullptr);
-                rp = VK_NULL_HANDLE;
-            }
-        }
-        g.defaultRenderPassCompatHash = 0;
-    }
-
-    void CreateRenderPass() {
-        DestroyRenderPass();
-        g.renderPasses[0] = CreateDefaultRenderPass(0);
-        g.defaultRenderPassCompatHash = ComputeDefaultRenderPassCompatHash();
-    }
-
-    void CreateFramebuffers() {
+    void RefreshSwapchainStateForRendering() {
         const auto& imageViews = g.swapchain->GetImageViews();
         g.swapchainImageLayouts.clear();
         g.swapchainImageLayouts.resize(imageViews.size(), VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
-        Vector<VkFramebuffer> fbs;
-        fbs.reserve(imageViews.size());
-        for (auto iv : imageViews) {
-            Vector<VkImageView> attachments;
-            attachments.push_back(iv);
-            if (g.depthView != VK_NULL_HANDLE) attachments.push_back(g.depthView);
-
-            VkFramebufferCreateInfo fbci{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
-            fbci.renderPass = g.renderPasses[0];
-            fbci.attachmentCount = attachments.size();
-            fbci.pAttachments = attachments.data();
-            fbci.width = g.swapchain->GetExtent().width;
-            fbci.height = g.swapchain->GetExtent().height;
-            fbci.layers = 1;
-            VkFramebuffer fb = VK_NULL_HANDLE;
-            VK_VERIFY(vkCreateFramebuffer(g.ctx->GetDevice(), &fbci, nullptr, &fb), "vkCreateFramebuffer");
-            fbs.push_back(fb);
-        }
-        g.swapchain->SetFramebuffers(Move(fbs));
+        g.defaultRenderingCompatHash = ComputeDefaultRenderingCompatHash();
     }
 
     void DestroyFrameResources() {
@@ -2606,60 +2503,80 @@ namespace MobileGL::MG_Backend::DirectVulkanTMP::TmpImpl {
         g.cmdBufferBegun = true;
     }
 
-    void BeginRenderPass(GLbitfield clearMask, const PendingClearInfo* clearInfo) {
+    void BeginRendering(GLbitfield clearMask, const PendingClearInfo* clearInfo) {
         if (g.recording) return;
         auto& frame = *g.frames[g.currentFrame];
-        VkRenderPassBeginInfo rpbi{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
-        rpbi.renderPass = g.activeRenderPass;
-        rpbi.framebuffer = g.activeFramebuffer;
-        rpbi.renderArea.offset = {0, 0};
-        rpbi.renderArea.extent = g.activeExtent;
-
-        Vector<VkClearValue> clearValues;
-        if (clearMask && clearInfo) {
-            SizeT attachmentCount = 0;
-            if (g.activeIsDefault) {
-                attachmentCount = (g.depthFormat != VK_FORMAT_UNDEFINED) ? 2 : 1;
-            } else if (g.activeBackendFBO) {
-                attachmentCount = g.activeBackendFBO->attachments.size();
+        Vector<VkRenderingAttachmentInfo> colorAttachments;
+        colorAttachments.resize(g.activeColorAttachmentCount);
+        for (Uint32 i = 0; i < g.activeColorAttachmentCount; ++i) {
+            auto& color = colorAttachments[i];
+            color = {VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
+            color.imageView = g.activeColorViews[i];
+            if (color.imageView == VK_NULL_HANDLE) {
+                color.imageLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+                color.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+                color.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+                continue;
             }
-            if (attachmentCount > 0) {
-                clearValues.resize(attachmentCount);
+
+            color.imageLayout = g.activeColorLayouts[i];
+            Bool canClearColor = false;
+            if ((clearMask & GL_COLOR_BUFFER_BIT) && clearInfo) {
                 if (g.activeIsDefault) {
-                    if (clearMask & GL_COLOR_BUFFER_BIT) {
-                        clearValues[0].color = {clearInfo->clearColor.x(), clearInfo->clearColor.y(),
-                                                clearInfo->clearColor.z(), clearInfo->clearColor.w()};
-                    }
-                    if (attachmentCount > 1 && (clearMask & (GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT))) {
-                        clearValues[1].depthStencil = {clearInfo->clearDepth, 0};
-                    }
-                } else if (g.activeBackendFBO) {
-                    for (SizeT i = 0; i < attachmentCount; ++i) {
-                        const auto& att = g.activeBackendFBO->attachments[i];
-                        if ((att.aspect & VK_IMAGE_ASPECT_COLOR_BIT) && (clearMask & GL_COLOR_BUFFER_BIT)) {
-                            clearValues[i].color = {clearInfo->clearColor.x(), clearInfo->clearColor.y(),
-                                                    clearInfo->clearColor.z(), clearInfo->clearColor.w()};
-                        }
-                        if ((att.aspect & (VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT)) &&
-                            (clearMask & (GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT))) {
-                            clearValues[i].depthStencil = {clearInfo->clearDepth, 0};
-                        }
-                    }
+                    canClearColor = g.activeDefaultColorWrites;
+                } else if (i < g.activeColorAttachmentIndices.size()) {
+                    canClearColor = g.activeColorAttachmentIndices[i] >= 0;
                 }
-                rpbi.clearValueCount = static_cast<Uint32>(clearValues.size());
-                rpbi.pClearValues = clearValues.data();
+            }
+            color.loadOp = canClearColor ? VK_ATTACHMENT_LOAD_OP_CLEAR : VK_ATTACHMENT_LOAD_OP_LOAD;
+            color.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+            if (canClearColor) {
+                color.clearValue.color = {clearInfo->clearColor.x(), clearInfo->clearColor.y(),
+                                          clearInfo->clearColor.z(), clearInfo->clearColor.w()};
             }
         }
 
-        vkCmdBeginRenderPass(frame.CommandBuffer, &rpbi, VK_SUBPASS_CONTENTS_INLINE);
+        VkRenderingAttachmentInfo depthAttachment{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
+        VkRenderingAttachmentInfo stencilAttachment{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
+        Bool hasDepthAttachment =
+            g.activeDepthView != VK_NULL_HANDLE && g.activeDepthAttachmentFormat != VK_FORMAT_UNDEFINED;
+        Bool hasStencilAttachment =
+            g.activeStencilView != VK_NULL_HANDLE && g.activeStencilAttachmentFormat != VK_FORMAT_UNDEFINED;
+        if (hasDepthAttachment) {
+            Bool clearDepth = (clearMask & GL_DEPTH_BUFFER_BIT) && clearInfo;
+            depthAttachment.imageView = g.activeDepthView;
+            depthAttachment.imageLayout = g.activeDepthLayout;
+            depthAttachment.loadOp = clearDepth ? VK_ATTACHMENT_LOAD_OP_CLEAR : VK_ATTACHMENT_LOAD_OP_LOAD;
+            depthAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+            depthAttachment.clearValue.depthStencil = {clearInfo ? clearInfo->clearDepth : 1.0f, 0};
+        }
+        if (hasStencilAttachment) {
+            Bool clearStencil = (clearMask & GL_STENCIL_BUFFER_BIT) && clearInfo;
+            stencilAttachment.imageView = g.activeStencilView;
+            stencilAttachment.imageLayout = g.activeStencilLayout;
+            stencilAttachment.loadOp = clearStencil ? VK_ATTACHMENT_LOAD_OP_CLEAR : VK_ATTACHMENT_LOAD_OP_LOAD;
+            stencilAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+            stencilAttachment.clearValue.depthStencil = {clearInfo ? clearInfo->clearDepth : 1.0f, 0};
+        }
+
+        VkRenderingInfo rendering{VK_STRUCTURE_TYPE_RENDERING_INFO};
+        rendering.renderArea.offset = {0, 0};
+        rendering.renderArea.extent = g.activeExtent;
+        rendering.layerCount = 1;
+        rendering.colorAttachmentCount = static_cast<Uint32>(colorAttachments.size());
+        rendering.pColorAttachments = colorAttachments.empty() ? nullptr : colorAttachments.data();
+        rendering.pDepthAttachment = hasDepthAttachment ? &depthAttachment : nullptr;
+        rendering.pStencilAttachment = hasStencilAttachment ? &stencilAttachment : nullptr;
+
+        MOBILEGL_ASSERT(g.pfnCmdBeginRendering != nullptr, "vkCmdBeginRendering function pointer is null");
+        g.pfnCmdBeginRendering(frame.CommandBuffer, &rendering);
         g.recording = true;
-        g.recordingRenderPass = g.activeRenderPass;
-        g.recordingFramebuffer = g.activeFramebuffer;
+        g.recordingRenderingConfigHash = g.activeRenderingConfigHash;
     }
 
-    Bool EnsureRenderPassBound() {
+    Bool EnsureRenderingBound() {
         if (!SyncDrawFramebuffer()) return false;
-        if (g.activeFramebuffer == VK_NULL_HANDLE) return false;
+        if (!HasActiveRenderingAttachments()) return false;
 
         GLbitfield pendingMask = 0;
         PendingClearInfo pendingInfo{};
@@ -2676,10 +2593,12 @@ namespace MobileGL::MG_Backend::DirectVulkanTMP::TmpImpl {
         if (pendingMask & GL_COLOR_BUFFER_BIT) {
             Bool hasColor = false;
             if (g.activeIsDefault) {
-                hasColor = g.activeDefaultColorWrites && g.activeColorAttachmentCount > 0;
-            } else if (g.activeBackendFBO) {
-                for (Uint32 i = 0; i < g.activeBackendFBO->colorAttachmentCount; ++i) {
-                    if (g.activeBackendFBO->drawBufferAttachmentIndices[i] >= 0) {
+                hasColor = g.activeDefaultColorWrites && !g.activeColorViews.empty() &&
+                           g.activeColorViews[0] != VK_NULL_HANDLE;
+            } else {
+                for (Uint32 i = 0; i < g.activeColorAttachmentCount; ++i) {
+                    if (g.activeColorViews[i] != VK_NULL_HANDLE && i < g.activeColorAttachmentIndices.size() &&
+                        g.activeColorAttachmentIndices[i] >= 0) {
                         hasColor = true;
                         break;
                     }
@@ -2689,10 +2608,12 @@ namespace MobileGL::MG_Backend::DirectVulkanTMP::TmpImpl {
         }
         VkImageAspectFlags depthAspect =
             g.activeDepthFormat != VK_FORMAT_UNDEFINED ? AspectForFormat(g.activeDepthFormat) : 0;
-        if ((pendingMask & GL_DEPTH_BUFFER_BIT) && g.activeHasDepth && (depthAspect & VK_IMAGE_ASPECT_DEPTH_BIT)) {
+        if ((pendingMask & GL_DEPTH_BUFFER_BIT) && (depthAspect & VK_IMAGE_ASPECT_DEPTH_BIT) &&
+            g.activeDepthView != VK_NULL_HANDLE) {
             effectiveMask |= GL_DEPTH_BUFFER_BIT;
         }
-        if ((pendingMask & GL_STENCIL_BUFFER_BIT) && g.activeHasDepth && (depthAspect & VK_IMAGE_ASPECT_STENCIL_BIT)) {
+        if ((pendingMask & GL_STENCIL_BUFFER_BIT) && (depthAspect & VK_IMAGE_ASPECT_STENCIL_BIT) &&
+            g.activeStencilView != VK_NULL_HANDLE) {
             effectiveMask |= GL_STENCIL_BUFFER_BIT;
         }
 
@@ -2702,31 +2623,23 @@ namespace MobileGL::MG_Backend::DirectVulkanTMP::TmpImpl {
             pendingMask = 0;
         }
 
-        if (g.recording && g.recordingFramebuffer == g.activeFramebuffer && pendingMask == 0) {
-            g.activeRenderPass = g.recordingRenderPass;
+        BeginCommandBuffer();
+        auto& frame = *g.frames[g.currentFrame];
+        EnsureActiveColorLayoutsForRendering(frame.CommandBuffer);
+
+        if (g.recording && g.recordingRenderingConfigHash == g.activeRenderingConfigHash && pendingMask == 0) {
             return true;
         }
 
-        if (g.activeIsDefault) {
-            g.activeRenderPass = GetOrCreateDefaultRenderPass(effectiveMask);
-        } else if (g.activeBackendFBO) {
-            g.activeRenderPass = GetOrCreateBackendRenderPass(*g.activeBackendFBO, effectiveMask);
-        }
-
-        if (g.activeRenderPass == VK_NULL_HANDLE) return false;
-        BeginCommandBuffer();
         bool forceRestart = pendingMask && effectiveMask != 0;
         if (!g.recording) {
-            BeginRenderPass(effectiveMask, effectiveMask ? &pendingInfo : nullptr);
+            BeginRendering(effectiveMask, effectiveMask ? &pendingInfo : nullptr);
             if (pendingIt != g.pendingClears.end()) g.pendingClears.erase(pendingIt);
             return true;
         }
-        if (forceRestart || g.recordingRenderPass != g.activeRenderPass ||
-            g.recordingFramebuffer != g.activeFramebuffer) {
-            auto& frame = *g.frames[g.currentFrame];
-            vkCmdEndRenderPass(frame.CommandBuffer);
-            g.recording = false;
-            BeginRenderPass(effectiveMask, effectiveMask ? &pendingInfo : nullptr);
+        if (forceRestart || g.recordingRenderingConfigHash != g.activeRenderingConfigHash) {
+            EndActiveRendering();
+            BeginRendering(effectiveMask, effectiveMask ? &pendingInfo : nullptr);
             if (pendingIt != g.pendingClears.end()) g.pendingClears.erase(pendingIt);
         }
         return true;
@@ -2785,10 +2698,20 @@ namespace MobileGL::MG_Backend::DirectVulkanTMP::TmpImpl {
 
     void EndRecordingAndSubmit() {
         auto& frame = *g.frames[g.currentFrame];
-        if (g.recording) {
-            vkCmdEndRenderPass(frame.CommandBuffer);
-            g.recording = false;
+        EndActiveRendering();
+
+        if (frame.CurrentImageIndex < g.swapchainImageLayouts.size()) {
+            const auto& images = g.swapchain->GetImages();
+            if (frame.CurrentImageIndex < images.size()) {
+                auto& currentLayout = g.swapchainImageLayouts[frame.CurrentImageIndex];
+                if (currentLayout != VK_IMAGE_LAYOUT_PRESENT_SRC_KHR) {
+                    CmdTransitionImageLayout(frame.CommandBuffer, images[frame.CurrentImageIndex], currentLayout,
+                                             VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, VK_IMAGE_ASPECT_COLOR_BIT);
+                    currentLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+                }
+            }
         }
+
         VK_VERIFY(vkEndCommandBuffer(frame.CommandBuffer), "vkEndCommandBuffer");
 
         VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO};
@@ -2806,8 +2729,7 @@ namespace MobileGL::MG_Backend::DirectVulkanTMP::TmpImpl {
         VK_VERIFY(vkQueueSubmit(g.ctx->GetGraphicsQueue(), 1, &si, frame.InFlightFence), "vkQueueSubmit");
         g.frameSubmitted = true;
         g.cmdBufferBegun = false;
-        g.recordingRenderPass = VK_NULL_HANDLE;
-        g.recordingFramebuffer = VK_NULL_HANDLE;
+        g.recordingRenderingConfigHash = 0;
     }
 
     void RecreateSwapchain() {
@@ -2815,18 +2737,15 @@ namespace MobileGL::MG_Backend::DirectVulkanTMP::TmpImpl {
         g.recording = false;
         g.cmdBufferBegun = false;
         g.frameSubmitted = false;
-        g.recordingRenderPass = VK_NULL_HANDLE;
-        g.recordingFramebuffer = VK_NULL_HANDLE;
+        g.recordingRenderingConfigHash = 0;
 
         DestroyFrameResources();
-        DestroyRenderPass();
         DestroyDepthResources();
 
         g.swapchain->SetViewportSize(g.viewportSize);
         g.swapchain->Recreate();
         CreateDepthResources();
-        CreateRenderPass();
-        CreateFramebuffers();
+        RefreshSwapchainStateForRendering();
         CreateFrameResources();
 
         for (auto& [_, prog] : g.programs) {
@@ -2904,7 +2823,7 @@ namespace MobileGL::MG_Backend::DirectVulkanTMP::TmpImpl {
             if (currentFBO) {
                 auto it = g.pendingClears.find(currentFBO);
                 if (it != g.pendingClears.end() && it->second.mask) {
-                    EnsureRenderPassBound();
+                    EnsureRenderingBound();
                 }
             }
         }
@@ -2946,11 +2865,14 @@ namespace MobileGL::MG_Backend::DirectVulkanTMP::TmpImpl {
 
         g.swapchain = MakeUnique<DV::SwapchainManager>(*g.ctx);
         g.swapchain->Initialize();
+        LoadDynamicRenderingCommands();
+        if (!g.pfnCmdBeginRendering || !g.pfnCmdEndRendering) {
+            throw RuntimeError("Dynamic Rendering commands are not available on this Vulkan loader/device");
+        }
 
         CreateCommandPool();
         CreateDepthResources();
-        CreateRenderPass();
-        CreateFramebuffers();
+        RefreshSwapchainStateForRendering();
         CreateFrameResources();
 
         CreateNullUbo();
@@ -2973,14 +2895,15 @@ namespace MobileGL::MG_Backend::DirectVulkanTMP::TmpImpl {
         vao = MG_State::pGLContext->GetBoundVertexArray().get();
         rs = &MG_State::pGLContext->GetRenderStateParameters();
 
-        if (!EnsureRenderPassBound()) return false;
+        if (!EnsureRenderingBound()) return false;
         progRes = &GetProgramResource(program.get());
         RenderStateParameters rsForPipeline = *rs;
         if (g.activeIsDefault && !g.activeDefaultColorWrites) {
             rsForPipeline.ColorMask = {false, false, false, false};
         }
-        pipeline = GetOrCreatePipeline(*progRes, vao, rsForPipeline, ToVkTopology(mode), g.activeRenderPass,
-                                       g.activeColorAttachmentCount, g.activeHasDepth, GetActiveRenderPassCompatHash());
+        pipeline = GetOrCreatePipeline(*progRes, vao, rsForPipeline, ToVkTopology(mode), g.activeColorFormats,
+                                       g.activeDepthAttachmentFormat, g.activeStencilAttachmentFormat,
+                                       GetActiveRenderingCompatHash());
         if (pipeline == VK_NULL_HANDLE) {
             MGLOG_E("Vulkan: failed to create pipeline (no shader stages)");
             return false;
@@ -3099,7 +3022,7 @@ namespace MobileGL::MG_Backend::DirectVulkanTMP::TmpImpl {
         auto& pending = g.pendingClears;
         auto pendingDrawIt = pending.find(drawFBO);
         if (pendingDrawIt != pending.end() && pendingDrawIt->second.mask) {
-            if (!EnsureRenderPassBound()) return;
+            if (!EnsureRenderingBound()) return;
         }
 
         auto ensureBackendFbo = [&](const SharedPtr<FramebufferObject>& fbo, SharedPtr<BackendFramebufferObject>& out,
@@ -3132,12 +3055,7 @@ namespace MobileGL::MG_Backend::DirectVulkanTMP::TmpImpl {
 
         BeginCommandBuffer();
         auto& frame = *g.frames[g.currentFrame];
-        if (g.recording) {
-            vkCmdEndRenderPass(frame.CommandBuffer);
-            g.recording = false;
-            g.recordingRenderPass = VK_NULL_HANDLE;
-            g.recordingFramebuffer = VK_NULL_HANDLE;
-        }
+        EndActiveRendering();
 
         struct BlitImageRef {
             VkImage image = VK_NULL_HANDLE;
@@ -3215,14 +3133,15 @@ namespace MobileGL::MG_Backend::DirectVulkanTMP::TmpImpl {
         auto resolveDefaultColor = [&](BlitImageRef& out) -> Bool {
             if (g.frames.empty()) return false;
             const auto& images = g.swapchain->GetImages();
+            if (g.swapchainImageLayouts.size() != images.size()) return false;
             Uint32 imageIndex = frame.CurrentImageIndex;
             if (imageIndex >= images.size()) return false;
             out.image = images[imageIndex];
             out.format = g.swapchain->GetFormat();
             out.aspect = VK_IMAGE_ASPECT_COLOR_BIT;
-            out.layout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
-            out.restoreLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
-            out.trackedLayout = nullptr;
+            out.layout = g.swapchainImageLayouts[imageIndex];
+            out.restoreLayout = out.layout;
+            out.trackedLayout = &g.swapchainImageLayouts[imageIndex];
             out.extent = g.swapchain->GetExtent();
             return out.image != VK_NULL_HANDLE;
         };
@@ -3609,11 +3528,7 @@ namespace MobileGL::MG_Backend::DirectVulkanTMP::TmpImpl {
         }
 
         if (currentFBO == g.activeStateFBO && g.recording) {
-            auto& frame = *g.frames[g.currentFrame];
-            vkCmdEndRenderPass(frame.CommandBuffer);
-            g.recording = false;
-            g.recordingRenderPass = VK_NULL_HANDLE;
-            g.recordingFramebuffer = VK_NULL_HANDLE;
+            EndActiveRendering();
         }
 
         auto& clearInfo = g.pendingClears[currentFBO];

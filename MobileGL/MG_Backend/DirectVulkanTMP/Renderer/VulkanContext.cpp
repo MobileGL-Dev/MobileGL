@@ -48,6 +48,14 @@ namespace MobileGL::MG_Backend::DirectVulkanTMP::VkManager {
             }
             return false;
         }
+
+        Bool SupportsDynamicRendering(VkPhysicalDevice device) {
+            VkPhysicalDeviceVulkan13Features vk13{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES};
+            VkPhysicalDeviceFeatures2 features2{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};
+            features2.pNext = &vk13;
+            vkGetPhysicalDeviceFeatures2(device, &features2);
+            return vk13.dynamicRendering == VK_TRUE;
+        }
     } // namespace
 
     VulkanContext::~VulkanContext() {
@@ -86,10 +94,10 @@ namespace MobileGL::MG_Backend::DirectVulkanTMP::VkManager {
     void VulkanContext::CreateInstance(const char* appName) {
         VkApplicationInfo app{VK_STRUCTURE_TYPE_APPLICATION_INFO};
         app.pApplicationName = appName;
-        app.applicationVersion = VK_MAKE_VERSION(1, 1, 0);
+        app.applicationVersion = VK_MAKE_VERSION(1, 3, 0);
         app.pEngineName = "MobileGL";
-        app.engineVersion = VK_MAKE_VERSION(1, 1, 0);
-        app.apiVersion = VK_API_VERSION_1_1;
+        app.engineVersion = VK_MAKE_VERSION(1, 3, 0);
+        app.apiVersion = VK_API_VERSION_1_3;
 
         Vector<const char*> extensions;
         extensions.push_back(VK_KHR_SURFACE_EXTENSION_NAME);
@@ -130,6 +138,7 @@ namespace MobileGL::MG_Backend::DirectVulkanTMP::VkManager {
             Uint32 family = ~0u;
             if (!FindGraphicsQueueFamily(device, m_surface, family)) continue;
             if (!CheckDeviceExtensionSupport(device, requiredExts)) continue;
+            if (!SupportsDynamicRendering(device)) continue;
 
             m_physicalDevice = device;
             m_graphicsQueueFamily = family;
@@ -151,13 +160,19 @@ namespace MobileGL::MG_Backend::DirectVulkanTMP::VkManager {
         Vector<const char*> deviceExtensions = {VK_KHR_SWAPCHAIN_EXTENSION_NAME};
 
         VkPhysicalDeviceFeatures features{};
+        VkPhysicalDeviceVulkan13Features vk13{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES};
+        vk13.dynamicRendering = VK_TRUE;
+        VkPhysicalDeviceFeatures2 features2{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};
+        features2.features = features;
+        features2.pNext = &vk13;
 
         VkDeviceCreateInfo dci{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};
+        dci.pNext = &features2;
         dci.queueCreateInfoCount = 1;
         dci.pQueueCreateInfos = &qci;
         dci.enabledExtensionCount = static_cast<Uint32>(deviceExtensions.size());
         dci.ppEnabledExtensionNames = deviceExtensions.data();
-        dci.pEnabledFeatures = &features;
+        dci.pEnabledFeatures = nullptr;
 
         VK_VERIFY(vkCreateDevice(m_physicalDevice, &dci, nullptr, &m_device), "vkCreateDevice");
         vkGetDeviceQueue(m_device, m_graphicsQueueFamily, 0, &m_graphicsQueue);
