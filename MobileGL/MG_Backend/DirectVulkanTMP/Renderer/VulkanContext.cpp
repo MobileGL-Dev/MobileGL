@@ -56,6 +56,14 @@ namespace MobileGL::MG_Backend::DirectVulkanTMP::VkManager {
             vkGetPhysicalDeviceFeatures2(device, &features2);
             return vk13.dynamicRendering == VK_TRUE;
         }
+
+        Bool SupportsTimelineSemaphore(VkPhysicalDevice device) {
+            VkPhysicalDeviceVulkan12Features vk12{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES};
+            VkPhysicalDeviceFeatures2 features2{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};
+            features2.pNext = &vk12;
+            vkGetPhysicalDeviceFeatures2(device, &features2);
+            return vk12.timelineSemaphore == VK_TRUE;
+        }
     } // namespace
 
     VulkanContext::~VulkanContext() {
@@ -162,8 +170,11 @@ namespace MobileGL::MG_Backend::DirectVulkanTMP::VkManager {
         VkPhysicalDeviceFeatures features{};
         VkPhysicalDeviceVulkan13Features vk13{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES};
         vk13.dynamicRendering = VK_TRUE;
+        VkPhysicalDeviceVulkan12Features vk12{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES};
+        vk12.timelineSemaphore = SupportsTimelineSemaphore(m_physicalDevice) ? VK_TRUE : VK_FALSE;
         VkPhysicalDeviceFeatures2 features2{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};
         features2.features = features;
+        vk13.pNext = &vk12;
         features2.pNext = &vk13;
 
         VkDeviceCreateInfo dci{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};

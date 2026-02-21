@@ -18,6 +18,7 @@ namespace MobileGL::MG_Backend::DirectVulkanTMP::TmpImpl {
     class PendingClearInfo;
     void BeginRendering(GLbitfield clearMask, const PendingClearInfo* clearInfo);
     void BeginCommandBuffer();
+    void SubmitImmediate(const std::function<void(VkCommandBuffer)>& record);
 
     VulkanState g;
 
@@ -49,6 +50,8 @@ namespace MobileGL::MG_Backend::DirectVulkanTMP::TmpImpl {
             res.memory = VK_NULL_HANDLE;
         }
         res.size = 0;
+        res.offset = 0;
+        res.fromRing = false;
     }
 
     void CreateBuffer(VkDeviceSize size, VkBufferUsageFlags usage, VkMemoryPropertyFlags props, BufferResource& out) {
@@ -79,20 +82,56 @@ namespace MobileGL::MG_Backend::DirectVulkanTMP::TmpImpl {
     }
 
     BufferResource AcquireStagingBuffer(VkDeviceSize size) {
+        constexpr VkDeviceSize kStagingRingDefaultSize = 8ull * 1024ull * 1024ull;
+        constexpr VkDeviceSize kStagingRingAlignment = 16ull;
+        if (!g.frames.empty() && g.currentFrame < g.stagingRings.size()) {
+            auto& ring = g.stagingRings[g.currentFrame];
+            if (ring.buffer.buffer == VK_NULL_HANDLE) {
+                VkDeviceSize cap = std::max(kStagingRingDefaultSize, size);
+                CreateBuffer(cap, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                             VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, ring.buffer);
+                ring.capacity = cap;
+                ring.head = 0;
+            }
+
+            VkDeviceSize alignedHead = (ring.head + (kStagingRingAlignment - 1)) & ~(kStagingRingAlignment - 1);
+            if (alignedHead + size <= ring.capacity) {
+                BufferResource res{};
+                res.buffer = ring.buffer.buffer;
+                res.memory = ring.buffer.memory;
+                res.size = size;
+                res.offset = alignedHead;
+                res.usage = ring.buffer.usage;
+                res.props = ring.buffer.props;
+                res.mapped = static_cast<void*>(reinterpret_cast<Uint8*>(ring.buffer.mapped) + alignedHead);
+                res.fromRing = true;
+                ring.head = alignedHead + size;
+                return res;
+            }
+        }
+
         for (auto it = g.stagingPool.begin(); it != g.stagingPool.end(); ++it) {
             if (it->size >= size) {
                 BufferResource res = *it;
                 g.stagingPool.erase(it);
+                res.offset = 0;
+                res.fromRing = false;
                 return res;
             }
         }
         BufferResource res{};
         CreateBuffer(size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
                      VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, res);
+        res.offset = 0;
+        res.fromRing = false;
         return res;
     }
 
     void ReleaseStagingBuffer(BufferResource& res) {
+        if (res.fromRing) {
+            res = BufferResource{};
+            return;
+        }
         if (res.buffer == VK_NULL_HANDLE && res.memory == VK_NULL_HANDLE) return;
         if (g.frames.empty()) {
             DestroyBuffer(res);
@@ -103,6 +142,53 @@ namespace MobileGL::MG_Backend::DirectVulkanTMP::TmpImpl {
         }
         g.stagingPending[g.currentFrame].push_back(res);
         res = BufferResource{};
+    }
+
+    void QueueBufferCopy(VkBuffer src, VkBuffer dst, const VkBufferCopy& region) {
+        if (src == VK_NULL_HANDLE || dst == VK_NULL_HANDLE || region.size == 0) return;
+        for (auto& batch : g.pendingBufferCopies) {
+            if (batch.src == src && batch.dst == dst) {
+                batch.regions.push_back(region);
+                return;
+            }
+        }
+        PendingBufferCopyBatch batch{};
+        batch.src = src;
+        batch.dst = dst;
+        batch.regions.push_back(region);
+        g.pendingBufferCopies.push_back(Move(batch));
+    }
+
+    void FlushPendingBufferCopies(VkCommandBuffer cmd) {
+        if (g.pendingBufferCopies.empty()) return;
+
+        Vector<VkBufferMemoryBarrier> barriers;
+        barriers.reserve(g.pendingBufferCopies.size());
+
+        for (auto& batch : g.pendingBufferCopies) {
+            if (batch.regions.empty()) continue;
+            vkCmdCopyBuffer(cmd, batch.src, batch.dst, static_cast<Uint32>(batch.regions.size()), batch.regions.data());
+
+            VkBufferMemoryBarrier barrier{VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER};
+            barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+            barrier.dstAccessMask =
+                VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT | VK_ACCESS_INDEX_READ_BIT | VK_ACCESS_UNIFORM_READ_BIT;
+            barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            barrier.buffer = batch.dst;
+            barrier.offset = 0;
+            barrier.size = VK_WHOLE_SIZE;
+            barriers.push_back(barrier);
+        }
+
+        if (!barriers.empty()) {
+            vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                 VK_PIPELINE_STAGE_VERTEX_INPUT_BIT | VK_PIPELINE_STAGE_VERTEX_SHADER_BIT |
+                                     VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                                 0, 0, nullptr, static_cast<Uint32>(barriers.size()), barriers.data(), 0, nullptr);
+        }
+
+        g.pendingBufferCopies.clear();
     }
 
     void UpdateBufferFromObject(BufferResource& res, BufferObject* obj) {
@@ -134,7 +220,12 @@ namespace MobileGL::MG_Backend::DirectVulkanTMP::TmpImpl {
     }
 
     BufferResource& SyncBuffer(BufferObject* obj) {
-        auto& res = g.buffers[obj];
+        auto& set = g.buffers[obj];
+        if (set.perFrame.empty()) {
+            set.perFrame.resize(1);
+        }
+        auto& res = set.perFrame[0];
+
         VkDeviceSize size = obj->GetSize();
         if (size == 0) {
             auto dataPtr = obj->GetDataReadOnly();
@@ -148,33 +239,82 @@ namespace MobileGL::MG_Backend::DirectVulkanTMP::TmpImpl {
         Bool preferRealloc = changeBits & BufferChangeBits::PreferReallocationBit;
         Bool needCreate = res.buffer == VK_NULL_HANDLE || res.size < size || preferRealloc;
         if (needCreate) {
-            auto& frame = *g.frames[g.currentFrame];
-            frame.TrashBuffers.push_back({res.buffer, res.memory, res.mapped != nullptr});
+            if (!g.frames.empty() && (res.buffer != VK_NULL_HANDLE || res.memory != VK_NULL_HANDLE)) {
+                auto& frame = *g.frames[g.currentFrame];
+                frame.TrashBuffers.push_back({res.buffer, res.memory, res.mapped != nullptr});
+            } else {
+                DestroyBuffer(res);
+            }
             res = BufferResource{};
             VkBufferUsageFlags usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT |
                                        VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
                                        VK_BUFFER_USAGE_TRANSFER_DST_BIT;
-            VkMemoryPropertyFlags props = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+            VkMemoryPropertyFlags props = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
             CreateBuffer(size, usage, props, res);
-            res.lastUsedFrame = ~0u;
+        }
+
+        if (!(changeBits & BufferChangeBits::DirtyBit)) return res;
+
+        auto dataPtr = obj->GetDataReadOnly();
+        if (!dataPtr || dataPtr->empty()) {
+            obj->ClearDirty();
+            return res;
         }
 
         if (res.mapped) {
-            if ((changeBits & BufferChangeBits::DirtyBit) && res.lastUsedFrame != ~0u &&
-                res.lastUsedFrame != g.currentFrame && res.lastUsedFrame < g.frames.size()) {
-                auto& prior = *g.frames[res.lastUsedFrame];
-                VK_VERIFY(vkWaitForFences(g.ctx->GetDevice(), 1, &prior.InFlightFence, VK_TRUE, UINT64_MAX),
-                          "vkWaitForFences");
-            }
-            auto dataPtr = obj->GetDataReadOnly();
             if (needCreate && dataPtr && !dataPtr->empty()) {
                 Memcpy(res.mapped, dataPtr->data(), static_cast<SizeT>(size));
                 obj->ClearDirty();
             } else {
                 UpdateBufferFromObject(res, obj);
             }
+            return res;
         }
-        if (g.cmdBufferBegun) res.lastUsedFrame = g.currentFrame;
+
+        Vector<Range1D> ranges = obj->GetDirtyRanges();
+        if (ranges.empty()) {
+            ranges.push_back({0, static_cast<SizeT>(size)});
+        }
+
+        VkDeviceSize totalSize = 0;
+        for (const auto& r : ranges) {
+            if (r.end <= r.start) continue;
+            totalSize += static_cast<VkDeviceSize>(r.end - r.start);
+        }
+        if (totalSize == 0) {
+            obj->ClearDirty();
+            return res;
+        }
+
+        BufferResource staging = AcquireStagingBuffer(totalSize);
+        auto* dst = reinterpret_cast<Uint8*>(staging.mapped);
+        VkDeviceSize cursor = 0;
+        Vector<VkBufferCopy> regions;
+        regions.reserve(ranges.size());
+        for (const auto& r : ranges) {
+            if (r.end <= r.start) continue;
+            VkDeviceSize len = static_cast<VkDeviceSize>(r.end - r.start);
+            Memcpy(dst + cursor, dataPtr->data() + r.start, static_cast<SizeT>(len));
+            VkBufferCopy region{};
+            region.srcOffset = staging.offset + cursor;
+            region.dstOffset = r.start;
+            region.size = len;
+            regions.push_back(region);
+            cursor += len;
+        }
+
+        if (g.frames.empty()) {
+            SubmitImmediate([&](VkCommandBuffer cmd) {
+                vkCmdCopyBuffer(cmd, staging.buffer, res.buffer, static_cast<Uint32>(regions.size()), regions.data());
+            });
+        } else {
+            for (const auto& region : regions) {
+                QueueBufferCopy(staging.buffer, res.buffer, region);
+            }
+        }
+
+        obj->ClearDirty();
+        ReleaseStagingBuffer(staging);
         return res;
     }
 
@@ -613,6 +753,18 @@ namespace MobileGL::MG_Backend::DirectVulkanTMP::TmpImpl {
             barrier.dstAccessMask = 0;
             srcStage = VK_PIPELINE_STAGE_TRANSFER_BIT;
             dstStage = VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT;
+        } else if (oldLayout == VK_IMAGE_LAYOUT_PRESENT_SRC_KHR &&
+                   newLayout == VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL) {
+            barrier.srcAccessMask = 0;
+            barrier.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+            srcStage = VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT;
+            dstStage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+        } else if (oldLayout == VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL &&
+                   newLayout == VK_IMAGE_LAYOUT_PRESENT_SRC_KHR) {
+            barrier.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+            barrier.dstAccessMask = 0;
+            srcStage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+            dstStage = VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT;
         } else if (oldLayout == VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL &&
                    newLayout == VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL) {
             barrier.srcAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
@@ -652,8 +804,34 @@ namespace MobileGL::MG_Backend::DirectVulkanTMP::TmpImpl {
         VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO};
         si.commandBufferCount = 1;
         si.pCommandBuffers = &cmd;
-        VK_VERIFY(vkQueueSubmit(g.ctx->GetGraphicsQueue(), 1, &si, VK_NULL_HANDLE), "vkQueueSubmit");
-        vkQueueWaitIdle(g.ctx->GetGraphicsQueue());
+
+        if (g.timelineSemaphore != VK_NULL_HANDLE) {
+            Uint64 signalValue = ++g.timelineValue;
+            VkTimelineSemaphoreSubmitInfo tsi{VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO};
+            tsi.signalSemaphoreValueCount = 1;
+            tsi.pSignalSemaphoreValues = &signalValue;
+            si.pNext = &tsi;
+            VkSemaphore signalSem = g.timelineSemaphore;
+            si.signalSemaphoreCount = 1;
+            si.pSignalSemaphores = &signalSem;
+
+            VK_VERIFY(vkQueueSubmit(g.ctx->GetGraphicsQueue(), 1, &si, VK_NULL_HANDLE), "vkQueueSubmit");
+
+            VkSemaphoreWaitInfo wi{VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO};
+            wi.semaphoreCount = 1;
+            wi.pSemaphores = &g.timelineSemaphore;
+            wi.pValues = &signalValue;
+            MOBILEGL_ASSERT(g.pfnWaitSemaphores != nullptr, "vkWaitSemaphores function pointer is null");
+            VK_VERIFY(g.pfnWaitSemaphores(g.ctx->GetDevice(), &wi, UINT64_MAX), "vkWaitSemaphores immediate");
+        } else {
+            VkFenceCreateInfo fci{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
+            VkFence submitFence = VK_NULL_HANDLE;
+            VK_VERIFY(vkCreateFence(g.ctx->GetDevice(), &fci, nullptr, &submitFence), "vkCreateFence immediate");
+            VK_VERIFY(vkQueueSubmit(g.ctx->GetGraphicsQueue(), 1, &si, submitFence), "vkQueueSubmit");
+            VK_VERIFY(vkWaitForFences(g.ctx->GetDevice(), 1, &submitFence, VK_TRUE, UINT64_MAX),
+                      "vkWaitForFences immediate");
+            vkDestroyFence(g.ctx->GetDevice(), submitFence, nullptr);
+        }
 
         vkFreeCommandBuffers(g.ctx->GetDevice(), g.commandPool, 1, &cmd);
     }
@@ -696,6 +874,12 @@ namespace MobileGL::MG_Backend::DirectVulkanTMP::TmpImpl {
             g.pfnCmdEndRendering =
                 reinterpret_cast<PFN_vkCmdEndRendering>(vkGetDeviceProcAddr(device, "vkCmdEndRenderingKHR"));
         }
+
+        g.pfnWaitSemaphores = reinterpret_cast<PFN_vkWaitSemaphores>(vkGetDeviceProcAddr(device, "vkWaitSemaphores"));
+        if (!g.pfnWaitSemaphores) {
+            g.pfnWaitSemaphores =
+                reinterpret_cast<PFN_vkWaitSemaphores>(vkGetDeviceProcAddr(device, "vkWaitSemaphoresKHR"));
+        }
     }
 
     void EndActiveRendering() {
@@ -716,6 +900,7 @@ namespace MobileGL::MG_Backend::DirectVulkanTMP::TmpImpl {
         auto& frame = *g.frames[g.currentFrame];
         Bool wasRecording = g.recording;
         EndActiveRendering();
+        FlushPendingBufferCopies(frame.CommandBuffer);
 
         record(frame.CommandBuffer);
 
@@ -786,6 +971,7 @@ namespace MobileGL::MG_Backend::DirectVulkanTMP::TmpImpl {
                 CmdTransitionImageLayout(cmd, res.image, res.layout, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, aspect);
 
                 VkBufferImageCopy region{};
+                region.bufferOffset = staging.offset;
                 region.imageSubresource.aspectMask = aspect;
                 region.imageSubresource.mipLevel = 0;
                 region.imageSubresource.baseArrayLayer = 0;
@@ -2368,6 +2554,7 @@ namespace MobileGL::MG_Backend::DirectVulkanTMP::TmpImpl {
                                              VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_ASPECT_COLOR_BIT);
 
                     VkBufferImageCopy region{};
+                    region.bufferOffset = staging.offset;
                     region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
                     region.imageSubresource.mipLevel = 0;
                     region.imageSubresource.baseArrayLayer = 0;
@@ -2443,6 +2630,7 @@ namespace MobileGL::MG_Backend::DirectVulkanTMP::TmpImpl {
 
     void DestroyFrameResources() {
         DestroyDescriptorPools();
+        g.pendingBufferCopies.clear();
         for (auto& pending : g.stagingPending) {
             for (auto& buf : pending) {
                 g.stagingPool.push_back(buf);
@@ -2453,6 +2641,13 @@ namespace MobileGL::MG_Backend::DirectVulkanTMP::TmpImpl {
             if (f) f->Cleanup(*g.ctx);
         }
         g.frames.clear();
+
+        for (auto& ring : g.stagingRings) {
+            DestroyBuffer(ring.buffer);
+            ring.capacity = 0;
+            ring.head = 0;
+        }
+        g.stagingRings.clear();
     }
 
     void CreateFrameResources() {
@@ -2469,6 +2664,8 @@ namespace MobileGL::MG_Backend::DirectVulkanTMP::TmpImpl {
         g.frameDescriptorPools.resize(frames);
         g.stagingPending.clear();
         g.stagingPending.resize(frames);
+        g.stagingRings.clear();
+        g.stagingRings.resize(frames);
         g.currentFrame = 0;
     }
 
@@ -2485,6 +2682,9 @@ namespace MobileGL::MG_Backend::DirectVulkanTMP::TmpImpl {
         auto& frame = *g.frames[g.currentFrame];
         VK_VERIFY(vkWaitForFences(g.ctx->GetDevice(), 1, &frame.InFlightFence, VK_TRUE, UINT64_MAX), "vkWaitForFences");
         VK_VERIFY(vkResetFences(g.ctx->GetDevice(), 1, &frame.InFlightFence), "vkResetFences");
+        if (g.currentFrame < g.stagingRings.size()) {
+            g.stagingRings[g.currentFrame].head = 0;
+        }
         if (!g.stagingPending.empty()) {
             auto& pending = g.stagingPending[g.currentFrame];
             for (auto& buf : pending) {
@@ -2626,6 +2826,12 @@ namespace MobileGL::MG_Backend::DirectVulkanTMP::TmpImpl {
         BeginCommandBuffer();
         auto& frame = *g.frames[g.currentFrame];
         EnsureActiveColorLayoutsForRendering(frame.CommandBuffer);
+        if (!g.pendingBufferCopies.empty()) {
+            if (g.recording) {
+                EndActiveRendering();
+            }
+            FlushPendingBufferCopies(frame.CommandBuffer);
+        }
 
         if (g.recording && g.recordingRenderingConfigHash == g.activeRenderingConfigHash && pendingMask == 0) {
             return true;
@@ -2699,6 +2905,7 @@ namespace MobileGL::MG_Backend::DirectVulkanTMP::TmpImpl {
     void EndRecordingAndSubmit() {
         auto& frame = *g.frames[g.currentFrame];
         EndActiveRendering();
+        FlushPendingBufferCopies(frame.CommandBuffer);
 
         if (frame.CurrentImageIndex < g.swapchainImageLayouts.size()) {
             const auto& images = g.swapchain->GetImages();
@@ -2722,8 +2929,25 @@ namespace MobileGL::MG_Backend::DirectVulkanTMP::TmpImpl {
         si.pWaitDstStageMask = waitStages;
         si.commandBufferCount = 1;
         si.pCommandBuffers = &frame.CommandBuffer;
-        VkSemaphore signalSemaphores[] = {frame.RenderFinished};
-        si.signalSemaphoreCount = 1;
+
+        VkSemaphore signalSemaphores[2] = {frame.RenderFinished, VK_NULL_HANDLE};
+        Uint32 signalCount = 1;
+
+        Uint64 waitValues[1] = {0};
+        Uint64 signalValues[2] = {0, 0};
+        VkTimelineSemaphoreSubmitInfo tsi{VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO};
+        if (g.timelineSemaphore != VK_NULL_HANDLE) {
+            signalSemaphores[signalCount] = g.timelineSemaphore;
+            signalValues[signalCount] = ++g.timelineValue;
+            signalCount++;
+            tsi.waitSemaphoreValueCount = si.waitSemaphoreCount;
+            tsi.pWaitSemaphoreValues = waitValues;
+            tsi.signalSemaphoreValueCount = signalCount;
+            tsi.pSignalSemaphoreValues = signalValues;
+            si.pNext = &tsi;
+        }
+
+        si.signalSemaphoreCount = signalCount;
         si.pSignalSemaphores = signalSemaphores;
 
         VK_VERIFY(vkQueueSubmit(g.ctx->GetGraphicsQueue(), 1, &si, frame.InFlightFence), "vkQueueSubmit");
@@ -2780,7 +3004,7 @@ namespace MobileGL::MG_Backend::DirectVulkanTMP::TmpImpl {
     void ClearFrameTrashBuffers() {
         auto& frame = *g.frames[g.currentFrame];
         for (auto& buf : frame.TrashBuffers) {
-            if (!buf.mapped) {
+            if (buf.mapped) {
                 vkUnmapMemory(g.ctx->GetDevice(), buf.memory);
             }
             vkDestroyBuffer(g.ctx->GetDevice(), buf.buffer, nullptr);
@@ -2869,6 +3093,19 @@ namespace MobileGL::MG_Backend::DirectVulkanTMP::TmpImpl {
         if (!g.pfnCmdBeginRendering || !g.pfnCmdEndRendering) {
             throw RuntimeError("Dynamic Rendering commands are not available on this Vulkan loader/device");
         }
+        if (g.timelineSemaphore == VK_NULL_HANDLE) {
+            VkSemaphoreTypeCreateInfo stci{VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO};
+            stci.semaphoreType = VK_SEMAPHORE_TYPE_TIMELINE;
+            stci.initialValue = 0;
+            VkSemaphoreCreateInfo sci{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
+            sci.pNext = &stci;
+            VkResult semRes = vkCreateSemaphore(g.ctx->GetDevice(), &sci, nullptr, &g.timelineSemaphore);
+            if (semRes != VK_SUCCESS) {
+                g.timelineSemaphore = VK_NULL_HANDLE;
+            } else {
+                g.timelineValue = 0;
+            }
+        }
 
         CreateCommandPool();
         CreateDepthResources();
@@ -2880,6 +3117,36 @@ namespace MobileGL::MG_Backend::DirectVulkanTMP::TmpImpl {
 
         g.initialized = true;
         FrameBeginInternal();
+    }
+
+    void ApplyDrawState(DV::FrameContext* frame, const RenderStateParameters* rs, VkPipeline pipeline,
+                        VkDescriptorSet drawSet, ProgramResource* progRes) {
+        if (!frame || !rs || pipeline == VK_NULL_HANDLE) return;
+
+        VkViewport vp{};
+        vp.x = 0.0f;
+        vp.y = 0.0f;
+        vp.width = static_cast<Float>(g.activeExtent.width);
+        vp.height = static_cast<Float>(g.activeExtent.height);
+        vp.minDepth = 0.0f;
+        vp.maxDepth = 1.0f;
+        vkCmdSetViewport(frame->CommandBuffer, 0, 1, &vp);
+
+        VkRect2D scissor{};
+        if (rs->ScissorTestEnabled) {
+            scissor.offset = {rs->ScissorBox.x(), rs->ScissorBox.y()};
+            scissor.extent = {static_cast<Uint32>(rs->ScissorBox.z()), static_cast<Uint32>(rs->ScissorBox.w())};
+        } else {
+            scissor.offset = {0, 0};
+            scissor.extent = g.activeExtent;
+        }
+        vkCmdSetScissor(frame->CommandBuffer, 0, 1, &scissor);
+
+        vkCmdBindPipeline(frame->CommandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+        if (drawSet != VK_NULL_HANDLE && progRes && progRes->pipelineLayout != VK_NULL_HANDLE) {
+            vkCmdBindDescriptorSets(frame->CommandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, progRes->pipelineLayout, 0,
+                                    1, &drawSet, 0, nullptr);
+        }
     }
 
     Bool PrepareForDraw(GLenum mode, VkPipeline& pipeline, VkDescriptorSet& drawSet, VertexArrayObject*& vao,
@@ -2895,7 +3162,8 @@ namespace MobileGL::MG_Backend::DirectVulkanTMP::TmpImpl {
         vao = MG_State::pGLContext->GetBoundVertexArray().get();
         rs = &MG_State::pGLContext->GetRenderStateParameters();
 
-        if (!EnsureRenderingBound()) return false;
+        if (!SyncDrawFramebuffer()) return false;
+        BeginCommandBuffer();
         progRes = &GetProgramResource(program.get());
         RenderStateParameters rsForPipeline = *rs;
         if (g.activeIsDefault && !g.activeDefaultColorWrites) {
@@ -2917,33 +3185,7 @@ namespace MobileGL::MG_Backend::DirectVulkanTMP::TmpImpl {
             MGLOG_E("Vulkan: failed to allocate descriptor set for draw");
             return false;
         }
-
-        VkViewport vp{};
-        vp.x = 0.0f;
-        vp.y = 0.0f;
-        vp.width = static_cast<Float>(g.activeExtent.width);
-        vp.height = static_cast<Float>(g.activeExtent.height);
-        vp.minDepth = 0.0f;
-        vp.maxDepth = 1.0f;
-        vkCmdSetViewport(frame->CommandBuffer, 0, 1, &vp);
         g.viewportSize = {(Uint)rs->Viewport.z(), (Uint)rs->Viewport.w()};
-
-        VkRect2D scissor{};
-        if (rs->ScissorTestEnabled) {
-            scissor.offset = {rs->ScissorBox.x(), rs->ScissorBox.y()};
-            scissor.extent = {static_cast<Uint32>(rs->ScissorBox.z()), static_cast<Uint32>(rs->ScissorBox.w())};
-        } else {
-            scissor.offset = {0, 0};
-            scissor.extent = g.activeExtent;
-        }
-        vkCmdSetScissor(frame->CommandBuffer, 0, 1, &scissor);
-
-        vkCmdBindPipeline(frame->CommandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
-
-        if (drawSet != VK_NULL_HANDLE) {
-            vkCmdBindDescriptorSets(frame->CommandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, progRes->pipelineLayout, 0,
-                                    1, &drawSet, 0, nullptr);
-        }
 
         return true;
     }
@@ -2961,10 +3203,7 @@ namespace MobileGL::MG_Backend::DirectVulkanTMP::TmpImpl {
             for (Uint32 i = 0; i < VertexArrayObject::MAX_VERTEX_ATTRIBS; ++i) {
                 const auto& attr = vao->GetAttribute(i);
                 if (!attr.Enabled || !attr.Buffer) continue;
-                auto& vbo = SyncBuffer(attr.Buffer.get());
-                VkDeviceSize offset = 0;
-                VkBuffer buf = vbo.buffer;
-                vkCmdBindVertexBuffers(frame->CommandBuffer, i, 1, &buf, &offset);
+                SyncBuffer(attr.Buffer.get());
             }
         }
 
@@ -2992,6 +3231,20 @@ namespace MobileGL::MG_Backend::DirectVulkanTMP::TmpImpl {
         }
 
         if (iboRes && iboRes->buffer != VK_NULL_HANDLE) {
+            if (!EnsureRenderingBound()) return;
+            ApplyDrawState(frame, rs, pipeline, drawSet, prog);
+
+            if (vao) {
+                for (Uint32 i = 0; i < VertexArrayObject::MAX_VERTEX_ATTRIBS; ++i) {
+                    const auto& attr = vao->GetAttribute(i);
+                    if (!attr.Enabled || !attr.Buffer) continue;
+                    auto& vbo = SyncBuffer(attr.Buffer.get());
+                    VkDeviceSize offset = 0;
+                    VkBuffer buf = vbo.buffer;
+                    vkCmdBindVertexBuffers(frame->CommandBuffer, i, 1, &buf, &offset);
+                }
+            }
+
             vkCmdBindIndexBuffer(frame->CommandBuffer, iboRes->buffer, 0, indexType);
             Uint32 firstIndex = indexSize ? static_cast<Uint32>(indexOffset / indexSize) : 0;
             vkCmdDrawIndexed(frame->CommandBuffer, count, 1, firstIndex, 0, 0);
@@ -3451,10 +3704,7 @@ namespace MobileGL::MG_Backend::DirectVulkanTMP::TmpImpl {
             for (Uint32 i = 0; i < VertexArrayObject::MAX_VERTEX_ATTRIBS; ++i) {
                 const auto& attr = vao->GetAttribute(i);
                 if (!attr.Enabled || !attr.Buffer) continue;
-                auto& vbo = SyncBuffer(attr.Buffer.get());
-                VkDeviceSize offset = 0;
-                VkBuffer buf = vbo.buffer;
-                vkCmdBindVertexBuffers(frame->CommandBuffer, i, 1, &buf, &offset);
+                SyncBuffer(attr.Buffer.get());
             }
         }
 
@@ -3482,6 +3732,20 @@ namespace MobileGL::MG_Backend::DirectVulkanTMP::TmpImpl {
         }
 
         if (iboRes && iboRes->buffer != VK_NULL_HANDLE) {
+            if (!EnsureRenderingBound()) return;
+            ApplyDrawState(frame, rs, pipeline, drawSet, prog);
+
+            if (vao) {
+                for (Uint32 i = 0; i < VertexArrayObject::MAX_VERTEX_ATTRIBS; ++i) {
+                    const auto& attr = vao->GetAttribute(i);
+                    if (!attr.Enabled || !attr.Buffer) continue;
+                    auto& vbo = SyncBuffer(attr.Buffer.get());
+                    VkDeviceSize offset = 0;
+                    VkBuffer buf = vbo.buffer;
+                    vkCmdBindVertexBuffers(frame->CommandBuffer, i, 1, &buf, &offset);
+                }
+            }
+
             vkCmdBindIndexBuffer(frame->CommandBuffer, iboRes->buffer, 0, indexType);
             Uint32 firstIndex = indexSize ? static_cast<Uint32>(indexOffset / indexSize) : 0;
             vkCmdDrawIndexed(frame->CommandBuffer, count, 1, firstIndex, basevertex, 0);
@@ -3505,13 +3769,22 @@ namespace MobileGL::MG_Backend::DirectVulkanTMP::TmpImpl {
             for (Uint32 i = 0; i < VertexArrayObject::MAX_VERTEX_ATTRIBS; ++i) {
                 const auto& attr = vao->GetAttribute(i);
                 if (!attr.Enabled || !attr.Buffer) continue;
+                SyncBuffer(attr.Buffer.get());
+            }
+        }
+
+        if (!EnsureRenderingBound()) return;
+        ApplyDrawState(frame, rs, pipeline, drawSet, prog);
+        if (vao) {
+            for (Uint32 i = 0; i < VertexArrayObject::MAX_VERTEX_ATTRIBS; ++i) {
+                const auto& attr = vao->GetAttribute(i);
+                if (!attr.Enabled || !attr.Buffer) continue;
                 auto& vbo = SyncBuffer(attr.Buffer.get());
                 VkDeviceSize offset = 0;
                 VkBuffer buf = vbo.buffer;
                 vkCmdBindVertexBuffers(frame->CommandBuffer, i, 1, &buf, &offset);
             }
         }
-
         vkCmdDraw(frame->CommandBuffer, count, 1, first, 0);
     }
 

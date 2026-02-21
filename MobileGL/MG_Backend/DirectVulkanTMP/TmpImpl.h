@@ -32,10 +32,28 @@ namespace MobileGL::MG_Backend::DirectVulkanTMP::TmpImpl {
         VkBuffer buffer = VK_NULL_HANDLE;
         VkDeviceMemory memory = VK_NULL_HANDLE;
         VkDeviceSize size = 0;
+        VkDeviceSize offset = 0;
         VkBufferUsageFlags usage = 0;
         VkMemoryPropertyFlags props = 0;
         void* mapped = nullptr;
+        Bool fromRing = false;
         Uint32 lastUsedFrame = ~0u;
+    };
+
+    struct BufferResourceSet {
+        Vector<BufferResource> perFrame;
+    };
+
+    struct PendingBufferCopyBatch {
+        VkBuffer src = VK_NULL_HANDLE;
+        VkBuffer dst = VK_NULL_HANDLE;
+        Vector<VkBufferCopy> regions;
+    };
+
+    struct StagingRing {
+        BufferResource buffer;
+        VkDeviceSize capacity = 0;
+        VkDeviceSize head = 0;
     };
 
     struct TextureResource {
@@ -197,12 +215,14 @@ namespace MobileGL::MG_Backend::DirectVulkanTMP::TmpImpl {
         TextureResource defaultTexture;
         SamplerResource defaultSampler;
 
-        UnorderedMap<const BufferObject*, BufferResource> buffers;
+        UnorderedMap<const BufferObject*, BufferResourceSet> buffers;
         UnorderedMap<const ITextureObject*, TextureResource> textures;
         UnorderedMap<const RenderbufferObject*, RenderbufferResource> renderbuffers;
         UnorderedMap<const SamplerObject*, SamplerResource> samplers;
         UnorderedMap<const ProgramObject*, ProgramResource> programs;
         UnorderedMap<SharedPtr<MG_State::GLState::FramebufferObject>, SharedPtr<BackendFramebufferObject>> framebuffers;
+        Vector<PendingBufferCopyBatch> pendingBufferCopies;
+        Vector<StagingRing> stagingRings;
 
         VkExtent2D activeExtent{0, 0};
         Vector<VkImageView> activeColorViews;
@@ -240,6 +260,9 @@ namespace MobileGL::MG_Backend::DirectVulkanTMP::TmpImpl {
 
         PFN_vkCmdBeginRendering pfnCmdBeginRendering = nullptr;
         PFN_vkCmdEndRendering pfnCmdEndRendering = nullptr;
+        PFN_vkWaitSemaphores pfnWaitSemaphores = nullptr;
+        VkSemaphore timelineSemaphore = VK_NULL_HANDLE;
+        Uint64 timelineValue = 0;
     };
 
     void Present();
