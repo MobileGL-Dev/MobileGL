@@ -16,7 +16,7 @@ cmake --build build-test
 Run the OpenRA fixture test:
 
 ```sh
-ctest --test-dir build-test -V -R MobileGLTraceReplay.OpenRA.DirectGLES
+ctest --test-dir build-test -V -R MobileGLTraceReplay.OpenRA
 ```
 
 Run the CLI directly:
@@ -39,6 +39,5 @@ build-test/tools/trace_replay/mobilegl_trace_replay \
   --fuzz-percent 20
 ```
 
-The Linux runner uses an EGL pbuffer shim and loads MobileGL by path with `dlopen`. The current CI test covers the
-OpenRA core-profile trace through the `DirectGLES` backend. `DirectVulkan` is still available as a CLI argument, but it
-requires a native window/swapchain path and is not part of the headless CI test yet.
+The Linux runner loads MobileGL by path with `dlopen`. It uses an EGL pbuffer for `DirectGLES` and an X11 window
+surface for `DirectVulkan` so Magma can create a Vulkan swapchain under `xvfb-run` in CI.

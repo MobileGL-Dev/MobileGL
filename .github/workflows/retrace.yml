@@ -42,7 +42,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y clang-20 clang++-20 lld-20 libc++-20-dev libc++abi-20-dev libvulkan-dev libegl1-mesa-dev libgles2-mesa-dev libgl1-mesa-dri mesa-vulkan-drivers
+          sudo apt-get install -y clang-20 clang++-20 lld-20 libc++-20-dev libc++abi-20-dev libvulkan-dev libegl1-mesa-dev libgles2-mesa-dev libgl1-mesa-dri mesa-vulkan-drivers xvfb
 
       - name: Show installed toolchain
         run: |
@@ -64,17 +64,22 @@ jobs:
         working-directory: ${{env.TEST_ROOT}}/build-retrace
         run: cmake --build . --target mobilegl_trace_replay
 
-      - name: OpenRA retrace
+      - name: Retrace and validate Espryt (DirectGLES)
         working-directory: ${{env.TEST_ROOT}}/build-retrace
         run: ctest -V -R MobileGLTraceReplay.OpenRA.DirectGLES
 
-      - name: Upload OpenRA actual
+      - name: Retrace and validate Magma (DirectVulkan)
+        working-directory: ${{env.TEST_ROOT}}/build-retrace
+        run: xvfb-run -a ctest -V -R MobileGLTraceReplay.OpenRA.DirectVulkan
+
+      - name: Upload actual image
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: OpenRA-retrace-actual
           path: |
-            build-retrace/tools/trace_replay/openra/output/actual.png
-            build-retrace/tools/trace_replay/openra/output/result.json
-            build-retrace/tools/trace_replay/openra/output/retrace.log
+            build-retrace/tools/trace_replay/openra/actual-images/openra-DirectGLES-actual.png
+            build-retrace/tools/trace_replay/openra/actual-images/openra-DirectVulkan-actual.png
+            build-retrace/tools/trace_replay/openra/actual-images/*.json
+            build-retrace/tools/trace_replay/openra/actual-images/*.log
           if-no-files-found: warn

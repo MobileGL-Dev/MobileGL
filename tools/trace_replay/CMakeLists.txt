@@ -257,14 +257,21 @@ target_link_libraries(mobilegl_trace_replay PRIVATE
 add_dependencies(mobilegl_trace_replay MobileGL)
 
 enable_testing()
-add_test(
-        NAME MobileGLTraceReplay.OpenRA.DirectGLES
-        COMMAND "${CMAKE_COMMAND}"
-        -DTRACE_REPLAY_EXE=$<TARGET_FILE:mobilegl_trace_replay>
-        -DMOBILEGL_LIBRARY=$<TARGET_FILE:MobileGL>
-        -DOPENRA_TRACE_ARCHIVE=${MOBILEGL_TRACE_ROOT}/fixtures/openra.tgz
-        -DOPENRA_GOLDEN=${MOBILEGL_TRACE_ROOT}/fixtures/openra.0000031249.png
-        -DOPENRA_OUTPUT_DIR=${CMAKE_CURRENT_BINARY_DIR}/openra
-        -P ${MOBILEGL_TRACE_ROOT}/run_openra_replay.cmake)
-set_tests_properties(MobileGLTraceReplay.OpenRA.DirectGLES PROPERTIES
-        ENVIRONMENT "EGL_PLATFORM=surfaceless;LIBGL_ALWAYS_SOFTWARE=1;MESA_GL_VERSION_OVERRIDE=3.3;MESA_GLSL_VERSION_OVERRIDE=330")
+function(add_openra_trace_replay_test BACKEND)
+    add_test(
+            NAME MobileGLTraceReplay.OpenRA.${BACKEND}
+            COMMAND "${CMAKE_COMMAND}"
+            -DTRACE_REPLAY_EXE=$<TARGET_FILE:mobilegl_trace_replay>
+            -DMOBILEGL_LIBRARY=$<TARGET_FILE:MobileGL>
+            -DOPENRA_TRACE_ARCHIVE=${MOBILEGL_TRACE_ROOT}/fixtures/openra.tgz
+            -DOPENRA_GOLDEN=${MOBILEGL_TRACE_ROOT}/fixtures/openra.0000031249.png
+            -DOPENRA_BACKEND=${BACKEND}
+            -DOPENRA_OUTPUT_DIR=${CMAKE_CURRENT_BINARY_DIR}/openra/${BACKEND}
+            -DOPENRA_ARTIFACT_DIR=${CMAKE_CURRENT_BINARY_DIR}/openra/actual-images
+            -P ${MOBILEGL_TRACE_ROOT}/run_openra_replay.cmake)
+    set_tests_properties(MobileGLTraceReplay.OpenRA.${BACKEND} PROPERTIES
+            ENVIRONMENT "EGL_PLATFORM=surfaceless;LIBGL_ALWAYS_SOFTWARE=1;MESA_GL_VERSION_OVERRIDE=3.3;MESA_GLSL_VERSION_OVERRIDE=330")
+endfunction()
+
+add_openra_trace_replay_test(DirectGLES)
+add_openra_trace_replay_test(DirectVulkan)
