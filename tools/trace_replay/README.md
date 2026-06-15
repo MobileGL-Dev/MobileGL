@@ -3,6 +3,10 @@
 This directory builds a Linux command line replay runner for apitrace files. It is meant for CI coverage of MobileGL
 without Android, APK packaging, FCL, or plugin runtime dependencies.
 
+The bundled `openra` fixture comes from GL4ES' apitrace corpus. See
+[GL4ES_TRACES.md](GL4ES_TRACES.md) for the current inventory and the traces that
+were rejected because they rely on compatibility/fixed-function OpenGL.
+
 Build from the MobileGL repository root:
 
 ```sh
@@ -39,5 +43,5 @@ build-test/tools/trace_replay/mobilegl_trace_replay \
   --fuzz-percent 20
 ```
 
-The Linux runner loads MobileGL by path with `dlopen`. It uses an EGL pbuffer for `DirectGLES` and an X11 window
-surface for `DirectVulkan` so Magma can create a Vulkan swapchain under `xvfb-run` in CI.
+The Linux runner loads MobileGL by path with `dlopen`. It uses an EGL pbuffer for `DirectGLES` and maps the pbuffer
+path to `VK_EXT_headless_surface` for `DirectVulkan`, so CI does not need an X11 or Wayland window.

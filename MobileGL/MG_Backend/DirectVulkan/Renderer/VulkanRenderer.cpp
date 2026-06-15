@@ -1665,8 +1665,15 @@ void main() {
         MOBILEGL_ASSERT(m_vertexInputStateFactory != nullptr, "VertexInputStateFactory creation failed.");
 
         // Prime the first frame so Render() always targets an acquired swapchain image.
-        VK_VERIFY(m_frameContext.WaitAndAcquireNextImage(m_device, m_swapchainObject.GetHandle(), m_imageIndexAcquired),
-                  "Initialize, WaitAndAcquireNextImage");
+        VkResult acquireResult =
+            m_frameContext.WaitAndAcquireNextImage(m_device, m_swapchainObject.GetHandle(), m_imageIndexAcquired);
+        if (acquireResult == VK_ERROR_OUT_OF_DATE_KHR || acquireResult == VK_SUBOPTIMAL_KHR) {
+            MGLOG_D("Initialize, vkAcquireNextImageKHR got %d, recreating swapchain", acquireResult);
+            RecreateSwapchain();
+            acquireResult =
+                m_frameContext.WaitAndAcquireNextImage(m_device, m_swapchainObject.GetHandle(), m_imageIndexAcquired);
+        }
+        VK_VERIFY(acquireResult, "Initialize, WaitAndAcquireNextImage");
         m_textureManager->BeginFrame(m_frameContext.GetCurrentFrameIndex());
         m_bufferManager.BeginFrame(m_frameContext.GetCurrentFrameIndex());
         m_transientVertexIndexBufferSlicesThisFrame.clear();

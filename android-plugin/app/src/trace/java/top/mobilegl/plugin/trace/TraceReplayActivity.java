@@ -3,6 +3,8 @@ package top.mobilegl.plugin.trace;
 import android.app.Activity;
 import android.content.Intent;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.util.Log;
 import android.view.Surface;
 import android.view.SurfaceHolder;
@@ -24,6 +26,7 @@ public final class TraceReplayActivity extends Activity {
     private TextView statusView;
     private TraceReplayRequest request;
     private boolean started;
+    private final Handler mainHandler = new Handler(Looper.getMainLooper());
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -58,11 +61,12 @@ public final class TraceReplayActivity extends Activity {
         holder.addCallback(new SurfaceHolder.Callback() {
             @Override
             public void surfaceCreated(SurfaceHolder holder) {
+                scheduleReplay(holder);
             }
 
             @Override
             public void surfaceChanged(SurfaceHolder holder, int format, int width, int height) {
-                startReplay(holder);
+                scheduleReplay(holder);
             }
 
             @Override
@@ -71,13 +75,21 @@ public final class TraceReplayActivity extends Activity {
         });
     }
 
+    private void scheduleReplay(SurfaceHolder holder) {
+        mainHandler.postDelayed(() -> startReplay(holder), 250);
+    }
+
     private void startReplay(SurfaceHolder holder) {
         if (started) {
             return;
         }
+        Surface surface = holder.getSurface();
+        if (surface == null || !surface.isValid()) {
+            return;
+        }
         started = true;
         statusView.setText("Running trace replay\n" + request.outputDir);
-        new Thread(() -> runRequest(request, holder.getSurface()), "MobileGLTraceReplay").start();
+        new Thread(() -> runRequest(request, surface), "MobileGLTraceReplay").start();
     }
 
     private void runRequest(TraceReplayRequest request, Surface surface) {
