@@ -148,6 +148,21 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         vkCmdSetLineWidth(commandBuffer, lineWidth);
     }
 
+    static VkRect2D MakeClampedScissorRect(const IntVec4& scissorBox, const IntVec2& framebufferExtent) {
+        const Int x0 = std::max<Int>(0, scissorBox.x());
+        const Int y0 = std::max<Int>(0, scissorBox.y());
+        const Int x1 = std::min<Int>(framebufferExtent.x(), scissorBox.x() + std::max<Int>(0, scissorBox.z()));
+        const Int y1 = std::min<Int>(framebufferExtent.y(), scissorBox.y() + std::max<Int>(0, scissorBox.w()));
+
+        VkRect2D scissor{};
+        scissor.offset = {x0, y0};
+        scissor.extent = {
+            static_cast<Uint32>(std::max<Int>(0, x1 - x0)),
+            static_cast<Uint32>(std::max<Int>(0, y1 - y0)),
+        };
+        return scissor;
+    }
+
     static void ApplyStencilState(VkCommandBuffer commandBuffer) {
         const StencilFaceState& frontStencil = MG_State::pGLContext->GetStencilState(StencilFace::Front);
         const StencilFaceState& backStencil = MG_State::pGLContext->GetStencilState(StencilFace::Back);
@@ -462,6 +477,15 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     static const char* PresentDumpPath() {
         const char* value = std::getenv("MOBILEGL_PRESENT_DUMP_PATH");
         return value != nullptr && value[0] != '\0' ? value : nullptr;
+    }
+
+    static Bool PresentDumpMatchesTargetCall() {
+        const char* target = std::getenv("MOBILEGL_PRESENT_DUMP_CALL");
+        if (target == nullptr || target[0] == '\0') {
+            return true;
+        }
+        const char* current = std::getenv("MOBILEGL_PRESENT_CURRENT_CALL");
+        return current != nullptr && std::strcmp(target, current) == 0;
     }
 
     static void DumpVertexInputStats(Uint32 location, const MG_State::GLState::VertexAttribute& attr,
@@ -3018,8 +3042,7 @@ void main() {
         VkRect2D scissor{};
         if (scissorEnabled) {
             const auto& scissorBox = MG_State::pGLContext->GetScissorBox();
-            scissor.offset = { scissorBox[0], scissorBox[1] };
-            scissor.extent = { (Uint)scissorBox[2], (Uint)scissorBox[3] };
+            scissor = MakeClampedScissorRect(scissorBox, renderPassEntry->extent);
         } else {
             scissor.offset = {0, 0};
             scissor.extent = { (Uint)renderPassEntry->extent.x(), (Uint)renderPassEntry->extent.y() };
@@ -4105,6 +4128,7 @@ void main() {
     Bool VulkanRenderer::SubmitReadbackCommandsAndWait(FrameContext::FrameData& frame) {
         if (frame.isCommandRecording) {
             m_frameContext.EndCommandRecording();
+            frame.hasCommandBufferRecorded = true;
         }
         if (!frame.hasCommandBufferRecorded) {
             return true;
@@ -4185,6 +4209,16 @@ void main() {
         const VkImageLayout srcOriginalLayout = readIsDefaultFbo
             ? m_swapchainObject.GetImageLayout(m_imageIndexAcquired)
             : *srcBinding.trackedLayout;
+        if (PresentStatsEnabled()) {
+            std::fprintf(stderr,
+                         "MOBILEGL_READPIXELS_BEGIN defaultFbo=%s x=%d y=%d width=%d height=%d srcLayout=%d recording=%s recorded=%s imageIndex=%u\n",
+                         readIsDefaultFbo ? "true" : "false",
+                         x, y, width, height,
+                         static_cast<Int>(srcOriginalLayout),
+                         frame.isCommandRecording ? "true" : "false",
+                         frame.hasCommandBufferRecorded ? "true" : "false",
+                         m_imageIndexAcquired);
+        }
         if (srcOriginalLayout == VK_IMAGE_LAYOUT_UNDEFINED) {
             MGLOG_E("DirectVulkan::ReadPixels skipped: source image layout is undefined");
             return;
@@ -4260,6 +4294,23 @@ void main() {
         if (mapped == nullptr) {
             MGLOG_E("DirectVulkan::ReadPixels skipped: failed to map readback buffer");
             return;
+        }
+        if (PresentStatsEnabled()) {
+            const SizeT pixelCount = static_cast<SizeT>(width) * static_cast<SizeT>(height);
+            SizeT nonBlack = 0;
+            SizeT nonTransparent = 0;
+            for (SizeT i = 0; i < pixelCount; ++i) {
+                const Uint8* p = mapped + i * 4;
+                if (p[0] != 0 || p[1] != 0 || p[2] != 0) {
+                    ++nonBlack;
+                }
+                if (p[3] != 0) {
+                    ++nonTransparent;
+                }
+            }
+            std::fprintf(stderr,
+                         "MOBILEGL_READPIXELS_STATS nonBlack=%zu/%zu alpha=%zu/%zu\n",
+                         nonBlack, pixelCount, nonTransparent, pixelCount);
         }
         const VkFormat srcFormat = readIsDefaultFbo ? m_swapchainObject.GetSurfaceFormat().format : VK_FORMAT_R8G8B8A8_UNORM;
         PackReadbackToClientOrPbo(mapped, srcFormat, width, height, format, type, pixels);
@@ -4768,8 +4819,21 @@ void main() {
         VkDeviceSize presentStatsReadbackSize = 0;
         const VkExtent2D presentStatsExtent = m_swapchainObject.GetExtent();
         const char* presentDumpPath = PresentDumpPath();
-        const Bool collectPresentStats = (PresentStatsEnabled() || presentDumpPath != nullptr) && frame.isCommandRecording &&
+        const Bool shouldDumpPresent = presentDumpPath != nullptr && PresentDumpMatchesTargetCall();
+        const Bool collectPresentStats = (PresentStatsEnabled() || shouldDumpPresent) && frame.isCommandRecording &&
                                          presentStatsExtent.width > 0 && presentStatsExtent.height > 0;
+        if (PresentStatsEnabled() && presentDumpPath != nullptr) {
+            const char* targetCall = std::getenv("MOBILEGL_PRESENT_DUMP_CALL");
+            const char* currentCall = std::getenv("MOBILEGL_PRESENT_CURRENT_CALL");
+            std::fprintf(stderr,
+                         "MOBILEGL_PRESENT_DUMP_GATE target=%s current=%s shouldDump=%s recording=%s size=%ux%u path=%s\n",
+                         targetCall != nullptr ? targetCall : "",
+                         currentCall != nullptr ? currentCall : "",
+                         shouldDumpPresent ? "true" : "false",
+                         frame.isCommandRecording ? "true" : "false",
+                         presentStatsExtent.width, presentStatsExtent.height,
+                         presentDumpPath);
+        }
         if (collectPresentStats) {
             presentStatsReadbackSize = static_cast<VkDeviceSize>(presentStatsExtent.width) *
                                        static_cast<VkDeviceSize>(presentStatsExtent.height) * 4;
@@ -4860,7 +4924,7 @@ void main() {
                              nonBlack, pixelCount, colored, pixelCount, nonTransparent, pixelCount,
                              presentStatsExtent.width, presentStatsExtent.height);
             }
-            if (presentDumpPath != nullptr) {
+            if (shouldDumpPresent) {
                 FILE* dump = std::fopen(presentDumpPath, "wb");
                 if (dump != nullptr) {
                     std::fprintf(dump, "P6\n%u %u\n255\n", presentStatsExtent.width, presentStatsExtent.height);
@@ -4870,6 +4934,12 @@ void main() {
                         std::fwrite(rgb, 1, sizeof(rgb), dump);
                     }
                     std::fclose(dump);
+                    if (PresentStatsEnabled()) {
+                        std::fprintf(stderr, "MOBILEGL_PRESENT_DUMP_WRITTEN path=%s bytes=%zu\n",
+                                     presentDumpPath, static_cast<SizeT>(pixelCount * 3));
+                    }
+                } else if (PresentStatsEnabled()) {
+                    std::fprintf(stderr, "MOBILEGL_PRESENT_DUMP_FAILED path=%s\n", presentDumpPath);
                 }
             }
         }

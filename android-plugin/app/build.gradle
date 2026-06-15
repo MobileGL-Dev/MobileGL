@@ -34,13 +34,14 @@ android {
         }
     }
 
-    flavorDimensions 'backend'
+    flavorDimensions 'backend', 'profile'
 
     productFlavors {
         espryt {
             dimension 'backend'
             applicationId 'top.mobilegl.plugin.espryt'
             def env = mobileGlEnvString('DirectGLES')
+            resValue 'string', 'mobilegl_default_backend', 'DirectGLES'
             manifestPlaceholders = [
                     appLabel: 'MobileGL Espryt',
                     des     : 'MobileGL Espryt',
@@ -53,6 +54,7 @@ android {
             dimension 'backend'
             applicationId 'top.mobilegl.plugin.magma'
             def env = mobileGlEnvString('DirectVulkan')
+            resValue 'string', 'mobilegl_default_backend', 'DirectVulkan'
             manifestPlaceholders = [
                     appLabel: 'MobileGL Magma',
                     des     : 'MobileGL Magma',
@@ -60,6 +62,14 @@ android {
                     boatEnv : env,
                     pojavEnv: env,
             ]
+        }
+        plugin {
+            dimension 'profile'
+        }
+        trace {
+            dimension 'profile'
+            applicationIdSuffix '.trace'
+            versionNameSuffix '-trace'
         }
     }
 
@@ -83,6 +93,13 @@ android {
         }
     }
 
+    externalNativeBuild {
+        cmake {
+            path file('src/trace/cpp/CMakeLists.txt')
+            version '3.22.1'
+        }
+    }
+
     packaging {
         jniLibs {
             useLegacyPackaging true
@@ -94,6 +111,12 @@ android {
 android.applicationVariants.configureEach { variant ->
     variant.outputs.configureEach {
         outputFileName = "MobileGL-${variant.flavorName.capitalize()}-${variant.buildType.name}.apk"
+    }
+}
+
+androidComponents {
+    onVariants(selector().withFlavor('profile', 'plugin')) { variant ->
+        variant.packaging.jniLibs.excludes.add('**/libtrace_replay_runner.so')
     }
 }
 

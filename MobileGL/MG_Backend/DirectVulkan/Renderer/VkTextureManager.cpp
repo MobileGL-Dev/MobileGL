@@ -399,6 +399,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
     static void DumpTextureUploadStats(Int textureId, TextureUploadTarget target, Uint32 level,
                                        const IntVec3& texelSize, const void* data, SizeT byteSize, Uint32 channels) {
+        if (channels == 0 && texelSize.x() > 0 && texelSize.y() > 0) {
+            const SizeT depth = static_cast<SizeT>(std::max(texelSize.z(), 1));
+            const SizeT pixelCount = static_cast<SizeT>(texelSize.x()) * static_cast<SizeT>(texelSize.y()) * depth;
+            if (pixelCount > 0 && byteSize % pixelCount == 0) {
+                channels = static_cast<Uint32>(std::min<SizeT>(byteSize / pixelCount, 4));
+            }
+        }
         if (!ShouldDumpTextureUploadStats() || data == nullptr || byteSize == 0 || channels == 0) {
             return;
         }
