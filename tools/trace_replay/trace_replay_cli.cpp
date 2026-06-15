@@ -1,0 +1,136 @@
+#include "trace_replay_core.hpp"
+
+#include <cstdlib>
+#include <iostream>
+#include <string>
+
+extern "C" void mobilegl_trace_set_requested_size(int width, int height);
+
+namespace {
+
+void PrintUsage(const char *argv0) {
+    std::cerr
+            << "Usage: " << argv0 << " --trace PATH --target-call N --output DIR [options]\n"
+            << "\n"
+            << "Options:\n"
+            << "  --golden PATH             Golden PNG to compare against\n"
+            << "  --backend NAME            DirectGLES or DirectVulkan (default: DirectGLES)\n"
+            << "  --mobilegl-library PATH   libMobileGL.so path (default: libMobileGL.so)\n"
+            << "  --width N                 Replay surface width override\n"
+            << "  --height N                Replay surface height override\n"
+            << "  --tolerance N             Allowed mismatch pixels\n"
+            << "  --fuzz-percent N          Per-channel fuzz threshold, 0-100 (default: 20)\n"
+            << "  --crop-x N                Compare crop x\n"
+            << "  --crop-y N                Compare crop y\n"
+            << "  --crop-width N            Compare crop width\n"
+            << "  --crop-height N           Compare crop height\n";
+}
+
+bool ReadValue(int argc, char **argv, int &index, std::string &out) {
+    if (index + 1 >= argc) {
+        std::cerr << "Missing value for " << argv[index] << "\n";
+        return false;
+    }
+    out = argv[++index];
+    return true;
+}
+
+bool ReadInt(int argc, char **argv, int &index, int &out) {
+    std::string value;
+    if (!ReadValue(argc, argv, index, value)) {
+        return false;
+    }
+    out = std::atoi(value.c_str());
+    return true;
+}
+
+bool ReadLongLong(int argc, char **argv, int &index, long long &out) {
+    std::string value;
+    if (!ReadValue(argc, argv, index, value)) {
+        return false;
+    }
+    out = std::strtoll(value.c_str(), nullptr, 10);
+    return true;
+}
+
+bool ParseArgs(int argc, char **argv, mobilegl_trace::Request &request) {
+    request.backend = "DirectGLES";
+    request.fuzzPercent = 20;
+
+    for (int i = 1; i < argc; ++i) {
+        const std::string arg = argv[i];
+        if (arg == "--trace") {
+            if (!ReadValue(argc, argv, i, request.tracePath)) return false;
+        } else if (arg == "--golden") {
+            if (!ReadValue(argc, argv, i, request.goldenPath)) return false;
+        } else if (arg == "--output") {
+            if (!ReadValue(argc, argv, i, request.outputDir)) return false;
+        } else if (arg == "--backend") {
+            if (!ReadValue(argc, argv, i, request.backend)) return false;
+        } else if (arg == "--mobilegl-library") {
+            if (!ReadValue(argc, argv, i, request.mobileGlLibrary)) return false;
+        } else if (arg == "--target-frame") {
+            if (!ReadInt(argc, argv, i, request.targetFrame)) return false;
+        } else if (arg == "--target-call") {
+            if (!ReadLongLong(argc, argv, i, request.targetCall)) return false;
+        } else if (arg == "--width") {
+            if (!ReadInt(argc, argv, i, request.width)) return false;
+        } else if (arg == "--height") {
+            if (!ReadInt(argc, argv, i, request.height)) return false;
+        } else if (arg == "--tolerance") {
+            if (!ReadInt(argc, argv, i, request.tolerance)) return false;
+        } else if (arg == "--crop-x") {
+            if (!ReadInt(argc, argv, i, request.cropX)) return false;
+        } else if (arg == "--crop-y") {
+            if (!ReadInt(argc, argv, i, request.cropY)) return false;
+        } else if (arg == "--crop-width") {
+            if (!ReadInt(argc, argv, i, request.cropWidth)) return false;
+        } else if (arg == "--crop-height") {
+            if (!ReadInt(argc, argv, i, request.cropHeight)) return false;
+        } else if (arg == "--fuzz-percent") {
+            if (!ReadInt(argc, argv, i, request.fuzzPercent)) return false;
+        } else if (arg == "--help" || arg == "-h") {
+            return false;
+        } else {
+            std::cerr << "Unknown argument: " << arg << "\n";
+            return false;
+        }
+    }
+
+    if (request.tracePath.empty()) {
+        std::cerr << "--trace is required\n";
+        return false;
+    }
+    if (request.outputDir.empty()) {
+        std::cerr << "--output is required\n";
+        return false;
+    }
+    if (request.targetCall < 0) {
+        std::cerr << "--target-call is required\n";
+        return false;
+    }
+    return true;
+}
+
+} // namespace
+
+int main(int argc, char **argv) {
+    mobilegl_trace::Request request;
+    if (!ParseArgs(argc, argv, request)) {
+        PrintUsage(argv[0]);
+        return 2;
+    }
+
+    mobilegl_trace_set_requested_size(request.width, request.height);
+    mobilegl_trace::Result result = mobilegl_trace::RunTraceReplay(request);
+    mobilegl_trace_set_requested_size(0, 0);
+
+    if (!result.resultPath.empty()) {
+        mobilegl_trace::WriteResultJson(request, result);
+    }
+
+    std::cout << result.message << "\n"
+              << "result: " << result.resultPath << "\n"
+              << "actual: " << result.actualPath << "\n";
+    return result.passed ? 0 : result.statusCode;
+}

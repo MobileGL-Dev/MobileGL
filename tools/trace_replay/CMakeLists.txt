@@ -1,13 +1,21 @@
 cmake_minimum_required(VERSION 3.22.1)
 
-project(trace_replay_runner)
+if(NOT UNIX OR APPLE OR ANDROID)
+    message(STATUS "MobileGL trace replay runner is only enabled on Linux")
+    return()
+endif()
 
-set(APITRACE_ROOT "${CMAKE_CURRENT_LIST_DIR}/../../../../third_party/apitrace")
+set(MOBILEGL_TRACE_ROOT "${CMAKE_CURRENT_LIST_DIR}")
+set(MOBILEGL_TRACE_SHARED_CPP_DIR "${CMAKE_SOURCE_DIR}/android-plugin/app/src/trace/cpp")
+set(APITRACE_ROOT "${CMAKE_SOURCE_DIR}/android-plugin/third_party/apitrace")
 set(APITRACE_BINARY_DIR "${CMAKE_CURRENT_BINARY_DIR}/apitrace")
 set(APITRACE_VERSION "mobilegl-trace")
 
 find_package(Python3 REQUIRED)
 find_package(Threads REQUIRED)
+
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 include("${APITRACE_ROOT}/cmake/ConvenienceLibrary.cmake")
 
@@ -30,9 +38,10 @@ set(Snappy_FOUND OFF CACHE BOOL "" FORCE)
 set(BROTLIDEC_FOUND OFF CACHE BOOL "" FORCE)
 set(BROTLIENC_FOUND OFF CACHE BOOL "" FORCE)
 set(ZSTD_FOUND OFF CACHE BOOL "" FORCE)
-set(CMAKE_EXECUTABLE_FORMAT "MobileGLAndroid" CACHE INTERNAL "" FORCE)
 
-add_custom_target(check)
+if(NOT TARGET check)
+    add_custom_target(check)
+endif()
 add_subdirectory("${APITRACE_ROOT}/thirdparty" "${APITRACE_BINARY_DIR}/thirdparty")
 
 set(APITRACE_GENERATED_DIR "${APITRACE_BINARY_DIR}/generated")
@@ -58,55 +67,35 @@ add_custom_command(
         "${APITRACE_ROOT}/specs/gltypes.py"
         "${APITRACE_ROOT}/specs/stdapi.py")
 
-add_library(glproc STATIC
-        "${APITRACE_GENERATED_DIR}/glproc.cpp"
-        apitrace_glproc_android.cpp)
-target_include_directories(glproc PUBLIC
-        "${APITRACE_GENERATED_DIR}"
-        "${APITRACE_ROOT}/dispatch"
-        "${APITRACE_ROOT}/lib/os"
-        "${APITRACE_ROOT}/thirdparty/khronos")
-target_link_libraries(glproc PUBLIC apitrace_os dl)
-
-execute_process(
-        COMMAND ${Python3_EXECUTABLE} "${APITRACE_ROOT}/retrace/glretrace.py"
-        OUTPUT_FILE "${APITRACE_GENERATED_DIR}/glretrace_gl.cpp"
-        COMMAND_ERROR_IS_FATAL ANY)
-
-execute_process(
-        COMMAND ${Python3_EXECUTABLE} "${APITRACE_ROOT}/retrace/glstate_params.py"
-        OUTPUT_FILE "${APITRACE_GENERATED_DIR}/glstate_params.cpp"
-        COMMAND_ERROR_IS_FATAL ANY)
-
-add_library(apitrace_os STATIC
+add_library(mobilegl_trace_apitrace_os STATIC
         "${APITRACE_ROOT}/lib/os/os_backtrace.cpp"
         "${APITRACE_ROOT}/lib/os/os_crtdbg.cpp"
         "${APITRACE_ROOT}/lib/os/os_posix.cpp")
-target_include_directories(apitrace_os PUBLIC
+target_include_directories(mobilegl_trace_apitrace_os PUBLIC
         "${APITRACE_ROOT}/compat"
         "${APITRACE_ROOT}/thirdparty"
         "${APITRACE_ROOT}/lib/os"
         "${APITRACE_ROOT}/lib/trace")
-target_link_libraries(apitrace_os PUBLIC Threads::Threads)
+target_link_libraries(mobilegl_trace_apitrace_os PUBLIC Threads::Threads)
 
-add_library(highlight STATIC "${APITRACE_ROOT}/lib/highlight/highlight.cpp")
-target_include_directories(highlight PUBLIC "${APITRACE_ROOT}/lib/highlight")
+add_library(mobilegl_trace_highlight STATIC "${APITRACE_ROOT}/lib/highlight/highlight.cpp")
+target_include_directories(mobilegl_trace_highlight PUBLIC "${APITRACE_ROOT}/lib/highlight")
 
-add_library(guids STATIC "${APITRACE_ROOT}/lib/guids/guids.cpp")
-target_include_directories(guids PUBLIC
+add_library(mobilegl_trace_guids STATIC "${APITRACE_ROOT}/lib/guids/guids.cpp")
+target_include_directories(mobilegl_trace_guids PUBLIC
         "${APITRACE_ROOT}/lib/guids"
         "${APITRACE_ROOT}/lib/os")
 
-add_library(image STATIC
+add_library(mobilegl_trace_image STATIC
         "${APITRACE_ROOT}/lib/image/image_bmp.cpp"
         "${APITRACE_ROOT}/lib/image/image_png.cpp"
         "${APITRACE_ROOT}/lib/image/image_pnm.cpp"
         "${APITRACE_ROOT}/lib/image/image_raw.cpp"
         "${APITRACE_ROOT}/lib/image/image_md5.cpp")
-target_include_directories(image PUBLIC "${APITRACE_ROOT}/lib/image")
-target_link_libraries(image PUBLIC md5 PNG::PNG)
+target_include_directories(mobilegl_trace_image PUBLIC "${APITRACE_ROOT}/lib/image")
+target_link_libraries(mobilegl_trace_image PUBLIC md5 PNG::PNG)
 
-add_library(common STATIC
+add_library(mobilegl_trace_common STATIC
         "${APITRACE_ROOT}/lib/trace/trace_callset.cpp"
         "${APITRACE_ROOT}/lib/trace/trace_dump.cpp"
         "${APITRACE_ROOT}/lib/trace/trace_fast_callset.cpp"
@@ -129,7 +118,7 @@ add_library(common STATIC
         "${APITRACE_ROOT}/lib/trace/trace_writer.cpp"
         "${APITRACE_ROOT}/lib/trace/trace_writer_local.cpp"
         "${APITRACE_ROOT}/lib/trace/trace_writer_model.cpp")
-target_include_directories(common PUBLIC
+target_include_directories(mobilegl_trace_common PUBLIC
         "${APITRACE_ROOT}/compat"
         "${APITRACE_ROOT}/thirdparty"
         "${APITRACE_ROOT}/lib/guids"
@@ -137,28 +126,48 @@ target_include_directories(common PUBLIC
         "${APITRACE_ROOT}/lib/os"
         "${APITRACE_ROOT}/lib/trace"
         "${APITRACE_ROOT}/lib/ubjson")
-target_link_libraries(common PUBLIC
-        guids
-        highlight
-        apitrace_os
+target_link_libraries(mobilegl_trace_common PUBLIC
+        mobilegl_trace_guids
+        mobilegl_trace_highlight
+        mobilegl_trace_apitrace_os
         Snappy::snappy
         ZLIB::ZLIB
         PkgConfig::BROTLIDEC
         PkgConfig::ZSTD
         zstd_seekable)
 
-add_library(glhelpers STATIC
+add_library(mobilegl_trace_glproc STATIC
+        "${APITRACE_GENERATED_DIR}/glproc.cpp"
+        "${MOBILEGL_TRACE_ROOT}/apitrace_glproc_mobilegl.cpp")
+target_include_directories(mobilegl_trace_glproc PUBLIC
+        "${APITRACE_GENERATED_DIR}"
+        "${APITRACE_ROOT}/dispatch"
+        "${APITRACE_ROOT}/lib/os"
+        "${APITRACE_ROOT}/thirdparty/khronos")
+target_link_libraries(mobilegl_trace_glproc PUBLIC mobilegl_trace_apitrace_os dl)
+
+execute_process(
+        COMMAND ${Python3_EXECUTABLE} "${APITRACE_ROOT}/retrace/glretrace.py"
+        OUTPUT_FILE "${APITRACE_GENERATED_DIR}/glretrace_gl.cpp"
+        COMMAND_ERROR_IS_FATAL ANY)
+
+execute_process(
+        COMMAND ${Python3_EXECUTABLE} "${APITRACE_ROOT}/retrace/glstate_params.py"
+        OUTPUT_FILE "${APITRACE_GENERATED_DIR}/glstate_params.cpp"
+        COMMAND_ERROR_IS_FATAL ANY)
+
+add_library(mobilegl_trace_glhelpers STATIC
         "${APITRACE_ROOT}/helpers/glfeatures.cpp"
         "${APITRACE_ROOT}/helpers/eglsize.cpp")
-target_include_directories(glhelpers PUBLIC
+target_include_directories(mobilegl_trace_glhelpers PUBLIC
         "${APITRACE_GENERATED_DIR}"
         "${APITRACE_ROOT}/dispatch"
         "${APITRACE_ROOT}/helpers"
         "${APITRACE_ROOT}/lib/os"
         "${APITRACE_ROOT}/thirdparty/khronos")
-target_link_libraries(glhelpers PUBLIC glproc apitrace_os)
+target_link_libraries(mobilegl_trace_glhelpers PUBLIC mobilegl_trace_glproc mobilegl_trace_apitrace_os)
 
-add_library(retrace_common STATIC
+add_library(mobilegl_trace_retrace_common STATIC
         "${APITRACE_ROOT}/retrace/json.cpp"
         "${APITRACE_ROOT}/retrace/process_name.cpp"
         "${APITRACE_ROOT}/retrace/retrace.cpp"
@@ -169,12 +178,12 @@ add_library(retrace_common STATIC
         "${APITRACE_ROOT}/retrace/state_writer_json.cpp"
         "${APITRACE_ROOT}/retrace/state_writer_ubjson.cpp"
         "${APITRACE_ROOT}/retrace/ws.cpp")
-target_compile_definitions(retrace_common PUBLIC RETRACE)
-target_compile_definitions(retrace_common PRIVATE
+target_compile_definitions(mobilegl_trace_retrace_common PUBLIC RETRACE)
+target_compile_definitions(mobilegl_trace_retrace_common PRIVATE
         exit=mobilegl_apitrace_exit
         main=mobilegl_apitrace_main)
-target_compile_options(retrace_common PRIVATE "-include${CMAKE_CURRENT_LIST_DIR}/apitrace_exit.hpp")
-target_include_directories(retrace_common PUBLIC
+target_compile_options(mobilegl_trace_retrace_common PRIVATE "-include${MOBILEGL_TRACE_SHARED_CPP_DIR}/apitrace_exit.hpp")
+target_include_directories(mobilegl_trace_retrace_common PUBLIC
         "${APITRACE_GENERATED_DIR}"
         "${APITRACE_ROOT}/compat"
         "${APITRACE_ROOT}/dispatch"
@@ -187,15 +196,13 @@ target_include_directories(retrace_common PUBLIC
         "${APITRACE_ROOT}/retrace"
         "${APITRACE_ROOT}/thirdparty"
         "${APITRACE_ROOT}/thirdparty/khronos")
-target_link_libraries(retrace_common PUBLIC image common)
+target_link_libraries(mobilegl_trace_retrace_common PUBLIC mobilegl_trace_image mobilegl_trace_common)
 
-add_library(glretrace_common STATIC
+add_library(mobilegl_trace_glretrace_common STATIC
         "${APITRACE_GENERATED_DIR}/glretrace_gl.cpp"
         "${APITRACE_GENERATED_DIR}/glstate_params.cpp"
         "${APITRACE_ROOT}/retrace/glretrace_cgl.cpp"
         "${APITRACE_ROOT}/retrace/glretrace_egl.cpp"
-        # GLX here is only the apitrace trace-call frontend. Android execution
-        # still goes through apitrace_glws_android.cpp and MobileGL's EGL entrypoints.
         "${APITRACE_ROOT}/retrace/glretrace_glx.cpp"
         "${APITRACE_ROOT}/retrace/glretrace_main.cpp"
         "${APITRACE_ROOT}/retrace/glretrace_wgl.cpp"
@@ -212,32 +219,52 @@ add_library(glretrace_common STATIC
         "${APITRACE_ROOT}/retrace/metric_backend_opengl.cpp"
         "${APITRACE_ROOT}/retrace/metric_helper.cpp"
         "${APITRACE_ROOT}/retrace/metric_writer.cpp"
-        apitrace_glws_android.cpp)
-target_include_directories(glretrace_common PUBLIC
+        "${MOBILEGL_TRACE_ROOT}/apitrace_glws_egl.cpp")
+target_include_directories(mobilegl_trace_glretrace_common PUBLIC
         "${APITRACE_GENERATED_DIR}"
         "${APITRACE_ROOT}/dispatch"
         "${APITRACE_ROOT}/helpers"
         "${APITRACE_ROOT}/retrace")
-target_compile_definitions(glretrace_common PRIVATE
+target_compile_definitions(mobilegl_trace_glretrace_common PRIVATE
         exit=mobilegl_apitrace_exit
         main=mobilegl_apitrace_main)
-target_compile_options(glretrace_common PRIVATE "-include${CMAKE_CURRENT_LIST_DIR}/apitrace_exit.hpp")
-target_link_libraries(glretrace_common PUBLIC retrace_common glhelpers glproc)
+target_compile_options(mobilegl_trace_glretrace_common PRIVATE "-include${MOBILEGL_TRACE_SHARED_CPP_DIR}/apitrace_exit.hpp")
+target_link_libraries(mobilegl_trace_glretrace_common PUBLIC
+        mobilegl_trace_retrace_common
+        mobilegl_trace_glhelpers
+        mobilegl_trace_glproc)
 
-add_library(trace_replay_runner SHARED
-        trace_replay_core.cpp
-        trace_replay_jni.cpp)
-
-target_compile_features(trace_replay_runner PRIVATE cxx_std_17)
-target_compile_definitions(trace_replay_runner PRIVATE
+add_executable(mobilegl_trace_replay
+        "${MOBILEGL_TRACE_SHARED_CPP_DIR}/trace_replay_core.cpp"
+        "${MOBILEGL_TRACE_ROOT}/trace_replay_cli.cpp")
+target_compile_features(mobilegl_trace_replay PRIVATE cxx_std_17)
+target_compile_definitions(mobilegl_trace_replay PRIVATE
         MOBILEGL_APITRACE_RETRACE_MAIN=mobilegl_apitrace_main)
-
-target_include_directories(trace_replay_runner PRIVATE
+target_include_directories(mobilegl_trace_replay PRIVATE
+        "${MOBILEGL_TRACE_SHARED_CPP_DIR}"
         "${APITRACE_ROOT}/lib/image")
-
-target_link_libraries(trace_replay_runner
-        glretrace_common
-        retrace_common
-        image
-        android
+target_link_libraries(mobilegl_trace_replay PRIVATE
+        "-Wl,--start-group"
+        mobilegl_trace_glretrace_common
+        mobilegl_trace_retrace_common
+        mobilegl_trace_image
+        mobilegl_trace_common
+        mobilegl_trace_glhelpers
+        mobilegl_trace_glproc
+        mobilegl_trace_apitrace_os
+        "-Wl,--end-group"
         dl)
+add_dependencies(mobilegl_trace_replay MobileGL)
+
+enable_testing()
+add_test(
+        NAME MobileGLTraceReplay.OpenRA.DirectGLES
+        COMMAND "${CMAKE_COMMAND}"
+        -DTRACE_REPLAY_EXE=$<TARGET_FILE:mobilegl_trace_replay>
+        -DMOBILEGL_LIBRARY=$<TARGET_FILE:MobileGL>
+        -DOPENRA_TRACE_ARCHIVE=${MOBILEGL_TRACE_ROOT}/fixtures/openra.tgz
+        -DOPENRA_GOLDEN=${MOBILEGL_TRACE_ROOT}/fixtures/openra.0000031249.png
+        -DOPENRA_OUTPUT_DIR=${CMAKE_CURRENT_BINARY_DIR}/openra
+        -P ${MOBILEGL_TRACE_ROOT}/run_openra_replay.cmake)
+set_tests_properties(MobileGLTraceReplay.OpenRA.DirectGLES PROPERTIES
+        ENVIRONMENT "EGL_PLATFORM=surfaceless;LIBGL_ALWAYS_SOFTWARE=1;MESA_GL_VERSION_OVERRIDE=3.3;MESA_GLSL_VERSION_OVERRIDE=330")

@@ -22,7 +22,11 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-extern "C" int main(int argc, char** argv);
+#ifndef MOBILEGL_APITRACE_RETRACE_MAIN
+#define MOBILEGL_APITRACE_RETRACE_MAIN main
+#endif
+
+extern "C" int MOBILEGL_APITRACE_RETRACE_MAIN(int argc, char** argv);
 
 namespace mobilegl_trace {
 namespace {
@@ -108,6 +112,7 @@ std::string JsonEscape(const std::string& value) {
 
 bool LoadMobileGL(const Request& request, std::string& error) {
     setenv("MOBILEGL_BACKEND_TYPE", request.backend.c_str(), 1);
+    setenv("MOBILEGL_TRACE_LIBRARY", request.mobileGlLibrary.c_str(), 1);
 
     void* handle = dlopen(request.mobileGlLibrary.c_str(), RTLD_NOW | RTLD_GLOBAL);
     if (handle == nullptr) {
@@ -366,7 +371,7 @@ int RunRetraceMain(const Request& request) {
             tracePath.data(),
             nullptr,
     };
-    return main(10, argv);
+    return MOBILEGL_APITRACE_RETRACE_MAIN(10, argv);
 }
 
 bool RunRetrace(const Request& request, Result& result) {

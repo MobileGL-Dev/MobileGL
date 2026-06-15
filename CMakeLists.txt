@@ -6,6 +6,7 @@ option(MOBILEGL_BUILD_TEST        "Build MobileGL tests"                        
 option(MOBILEGL_BUILD_BENCHMARK   "Build MobileGL benchmarks"                        ON )
 option(MOBILEGL_FORCE_RELEASE_OPT "Enable Release optimization flags in Debug build" ON )
 option(MOBILEGL_ENABLE_TRACY      "Enable tracy for profiling"                       OFF)
+option(MOBILEGL_BUILD_TRACE_REPLAY "Build Linux apitrace replay runner"              OFF)
 
 if (ANDROID)
     set(MOBILEGL_BUILD_TEST       OFF CACHE BOOL "Build MobileGL tests"      FORCE)
@@ -395,5 +396,10 @@ if (NOT ANDROID)
 
     if (MOBILEGL_BUILD_BENCHMARK)
         add_subdirectory(MobileGL/MG_Benchmark)
+    endif()
+
+    if (MOBILEGL_BUILD_TRACE_REPLAY)
+        enable_testing()
+        add_subdirectory(tools/trace_replay)
     endif()
 endif()
