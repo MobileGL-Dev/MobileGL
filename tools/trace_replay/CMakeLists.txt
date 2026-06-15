@@ -269,8 +269,13 @@ function(add_openra_trace_replay_test BACKEND)
             -DOPENRA_OUTPUT_DIR=${CMAKE_CURRENT_BINARY_DIR}/openra/${BACKEND}
             -DOPENRA_ARTIFACT_DIR=${CMAKE_CURRENT_BINARY_DIR}/openra/actual-images
             -P ${MOBILEGL_TRACE_ROOT}/run_openra_replay.cmake)
-    set_tests_properties(MobileGLTraceReplay.OpenRA.${BACKEND} PROPERTIES
-            ENVIRONMENT "EGL_PLATFORM=surfaceless;LIBGL_ALWAYS_SOFTWARE=1;MESA_GL_VERSION_OVERRIDE=3.3;MESA_GLSL_VERSION_OVERRIDE=330")
+    if(BACKEND STREQUAL "DirectGLES")
+        set_tests_properties(MobileGLTraceReplay.OpenRA.${BACKEND} PROPERTIES
+                ENVIRONMENT "EGL_PLATFORM=surfaceless;LIBGL_ALWAYS_SOFTWARE=1;MESA_GL_VERSION_OVERRIDE=3.3;MESA_GLSL_VERSION_OVERRIDE=330")
+    else()
+        set_tests_properties(MobileGLTraceReplay.OpenRA.${BACKEND} PROPERTIES
+                ENVIRONMENT "LIBGL_ALWAYS_SOFTWARE=1;MESA_GL_VERSION_OVERRIDE=3.3;MESA_GLSL_VERSION_OVERRIDE=330")
+    endif()
 endfunction()
 
 add_openra_trace_replay_test(DirectGLES)

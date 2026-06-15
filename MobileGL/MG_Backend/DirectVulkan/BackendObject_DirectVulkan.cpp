@@ -54,6 +54,16 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         return true;
     }
 
+    Bool BackendObject_DirectVulkan::InitPbufferSurface(EGLint width, EGLint height) {
+        VulkanRendererConfig config;
+        config.SurfaceWidth = static_cast<Uint32>(std::max<EGLint>(width, 1));
+        config.SurfaceHeight = static_cast<Uint32>(std::max<EGLint>(height, 1));
+        pVulkanRenderer = MakeUnique<MG_Backend::DirectVulkan::VulkanRenderer>(0, config);
+        MOBILEGL_ASSERT(pVulkanRenderer != nullptr, "InitPbufferSurface: VulkanRenderer creation failed");
+        pVulkanRenderer->Initialize();
+        return true;
+    }
+
     void BackendObject_DirectVulkan::Initialize() {
         m_initialized = true;
     }
@@ -110,6 +120,22 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
 
         return BackendObject::CreateEGLWindowSurface(handle);
+    }
+
+    Bool BackendObject_DirectVulkan::CreateEGLPbufferSurface(EGLint width, EGLint height) {
+        const std::lock_guard<std::recursive_mutex> lock(m_eglStateMutex);
+        if (!m_initialized) {
+            MGLOG_E("DirectVulkan backend not initialized");
+            return false;
+        }
+        if (m_eglSurfaceInitialized && m_eglSurfaceKind == SurfaceKind::Pbuffer) {
+            return true;
+        }
+        if (m_eglSurfaceInitialized || pVulkanRenderer) {
+            pVulkanRenderer.reset();
+            ResetEGLRuntimeState();
+        }
+        return BackendObject::CreateEGLPbufferSurface(width, height);
     }
 
     Bool BackendObject_DirectVulkan::MakeEGLCurrent(EGLDisplay dpy, EGLSurface draw, EGLSurface read, EGLContext ctx) {

@@ -4927,10 +4927,20 @@ void main() {
             if (shouldDumpPresent) {
                 FILE* dump = std::fopen(presentDumpPath, "wb");
                 if (dump != nullptr) {
+                    const VkFormat presentFormat = m_swapchainObject.GetSurfaceFormat().format;
+                    const Bool presentIsBgra = presentFormat == VK_FORMAT_B8G8R8A8_UNORM ||
+                                               presentFormat == VK_FORMAT_B8G8R8A8_SRGB ||
+                                               presentFormat == VK_FORMAT_B8G8R8A8_SNORM ||
+                                               presentFormat == VK_FORMAT_B8G8R8A8_USCALED ||
+                                               presentFormat == VK_FORMAT_B8G8R8A8_SSCALED;
                     std::fprintf(dump, "P6\n%u %u\n255\n", presentStatsExtent.width, presentStatsExtent.height);
                     for (SizeT i = 0; i < pixelCount; ++i) {
                         const Uint8* p = pixels + i * 4;
-                        const Uint8 rgb[3] = {p[0], p[1], p[2]};
+                        const Uint8 rgb[3] = {
+                            presentIsBgra ? p[2] : p[0],
+                            p[1],
+                            presentIsBgra ? p[0] : p[2],
+                        };
                         std::fwrite(rgb, 1, sizeof(rgb), dump);
                     }
                     std::fclose(dump);
@@ -5011,19 +5021,22 @@ void main() {
         instanceInfo.pApplicationInfo = &appInfo;
 
         // Extensions
-        Vector<const char*> exts = {VK_KHR_SURFACE_EXTENSION_NAME,
+        Vector<const char*> exts = {VK_KHR_SURFACE_EXTENSION_NAME};
+        if (!m_window) {
+            exts.push_back(VK_EXT_HEADLESS_SURFACE_EXTENSION_NAME);
+        } else {
 #ifdef VK_USE_PLATFORM_ANDROID_KHR
-                                    VK_KHR_ANDROID_SURFACE_EXTENSION_NAME
+            exts.push_back(VK_KHR_ANDROID_SURFACE_EXTENSION_NAME);
 #elif defined VK_USE_PLATFORM_WIN32_KHR
-                                    VK_KHR_WIN32_SURFACE_EXTENSION_NAME
+            exts.push_back(VK_KHR_WIN32_SURFACE_EXTENSION_NAME);
 #elif defined VK_USE_PLATFORM_METAL_EXT
-                                    VK_EXT_METAL_SURFACE_EXTENSION_NAME
+            exts.push_back(VK_EXT_METAL_SURFACE_EXTENSION_NAME);
 #elif defined VK_USE_PLATFORM_XLIB_KHR
-                                    VK_KHR_XLIB_SURFACE_EXTENSION_NAME
+            exts.push_back(VK_KHR_XLIB_SURFACE_EXTENSION_NAME);
 #else
 #warning "VulkanContext::CreateInstance: VK_KHR_*_surface extension not defined on this platform"
 #endif
-        }; // TODO: support more platforms
+        } // TODO: support more platforms
 
 #if defined(VK_USE_PLATFORM_METAL_EXT)
         exts.push_back(VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME);
@@ -5032,6 +5045,11 @@ void main() {
 
         if (m_validationLayersEnabled) {
             exts.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
+        }
+
+        for (const char* ext : exts) {
+            MOBILEGL_ASSERT(IsExtensionSupported(m_extensions, ext), "Required Vulkan instance extension not found: %s",
+                            ext);
         }
 
         instanceInfo.enabledExtensionCount = exts.size();
@@ -5180,6 +5198,14 @@ void main() {
             return false;
         }
 
+        // Accept software/virtual/other devices when no discrete or integrated GPU
+        // has been selected yet. This is important for Linux headless CI using lavapipe.
+        if (!otherDevice.IsComplete()) {
+            outBetterDevice = newDevice;
+            MGLOG_I("    Picked physical device. (Reason: First suitable device)");
+            return true;
+        }
+
         // Pick discrete GPU
         if (newDevice.properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU &&
             otherDevice.properties.deviceType != VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU) {
@@ -5199,7 +5225,7 @@ void main() {
         // Ignore other GPU when discrete GPU found
         if (newDevice.properties.deviceType != VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU &&
             otherDevice.properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU) {
-            outBetterDevice = newDevice;
+            outBetterDevice = otherDevice;
             MGLOG_I("    Ignored physical device. (Reason: Already picked discrete GPU)");
             return false;
         }
@@ -5395,10 +5421,14 @@ void main() {
     }
 
     void VulkanRenderer::CreateSwapchain() {
+        const VkExtent2D desiredExtent = {
+            std::max<Uint32>(m_config.SurfaceWidth, 1),
+            std::max<Uint32>(m_config.SurfaceHeight, 1),
+        };
         m_swapchainObject.Create(m_device, m_physicalDevice.handle, m_surface,
                                  static_cast<Uint32>(m_physicalDevice.queueFamilies.graphicsFamily),
                                  static_cast<Uint32>(m_physicalDevice.queueFamilies.presentFamily),
-                                 m_config.MaxFramesInFlight);
+                                 m_config.MaxFramesInFlight, desiredExtent);
     }
 
     void VulkanRenderer::CreateCommandPool() {
@@ -5410,6 +5440,17 @@ void main() {
     }
 
     void VulkanRenderer::CreateSurface() {
+        if (!m_window) {
+            auto* createHeadlessSurface =
+                reinterpret_cast<PFN_vkCreateHeadlessSurfaceEXT>(
+                    vkGetInstanceProcAddr(m_instance, "vkCreateHeadlessSurfaceEXT"));
+            MOBILEGL_ASSERT(createHeadlessSurface != nullptr,
+                            "VK_EXT_headless_surface is not available for DirectVulkan pbuffer surface");
+            VkHeadlessSurfaceCreateInfoEXT sci{VK_STRUCTURE_TYPE_HEADLESS_SURFACE_CREATE_INFO_EXT};
+            VK_VERIFY(createHeadlessSurface(m_instance, &sci, nullptr, &m_surface),
+                      "vkCreateHeadlessSurfaceEXT failed");
+            return;
+        }
 #if defined VK_USE_PLATFORM_ANDROID_KHR
         auto* nativeWindow = static_cast<ANativeWindow*>(m_window);
         if (!nativeWindow) throw RuntimeError("ANativeWindowType is null");

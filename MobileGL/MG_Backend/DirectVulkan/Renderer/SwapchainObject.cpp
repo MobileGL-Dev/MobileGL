@@ -105,7 +105,15 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     VkSurfaceFormatKHR SwapchainObject::ChooseSwapchainSurfaceFormat(
         const Vector<VkSurfaceFormatKHR>& availableFormats) {
         for (const auto& availableFormat : availableFormats) {
-            if (availableFormat.format == VK_FORMAT_B8G8R8A8_SRGB &&
+            if ((availableFormat.format == VK_FORMAT_B8G8R8A8_UNORM ||
+                 availableFormat.format == VK_FORMAT_R8G8B8A8_UNORM) &&
+                availableFormat.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) {
+                return availableFormat;
+            }
+        }
+        for (const auto& availableFormat : availableFormats) {
+            if ((availableFormat.format == VK_FORMAT_B8G8R8A8_SRGB ||
+                 availableFormat.format == VK_FORMAT_R8G8B8A8_SRGB) &&
                 availableFormat.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) {
                 return availableFormat;
             }
@@ -130,7 +138,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     }
 
     void SwapchainObject::Create(VkDevice device, VkPhysicalDevice physicalDevice, VkSurfaceKHR surface,
-                                 Uint32 graphicsQueueFamily, Uint32 presentQueueFamily, Uint32 minImageCountHint) {
+                                 Uint32 graphicsQueueFamily, Uint32 presentQueueFamily, Uint32 minImageCountHint,
+                                 VkExtent2D desiredExtent) {
         const auto swapchainCapabilities = GetSwapchainCapabilities(physicalDevice, surface);
         MOBILEGL_ASSERT(swapchainCapabilities.IsComplete(),
                         "SwapchainObject::Create failed: incomplete swapchain capabilities");
@@ -167,6 +176,14 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         createInfo.imageFormat = pickedSurfaceFormat.format;
         createInfo.imageColorSpace = pickedSurfaceFormat.colorSpace;
         createInfo.imageExtent = swapchainCaps.currentExtent;
+        if (createInfo.imageExtent.width == UINT32_MAX || createInfo.imageExtent.height == UINT32_MAX) {
+            createInfo.imageExtent.width = std::clamp(desiredExtent.width,
+                                                      swapchainCaps.minImageExtent.width,
+                                                      swapchainCaps.maxImageExtent.width);
+            createInfo.imageExtent.height = std::clamp(desiredExtent.height,
+                                                       swapchainCaps.minImageExtent.height,
+                                                       swapchainCaps.maxImageExtent.height);
+        }
         if (swapchainCaps.currentTransform == VK_SURFACE_TRANSFORM_ROTATE_90_BIT_KHR ||
             swapchainCaps.currentTransform == VK_SURFACE_TRANSFORM_ROTATE_270_BIT_KHR) {
             std::swap(createInfo.imageExtent.width, createInfo.imageExtent.height);

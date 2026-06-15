@@ -560,6 +560,7 @@ Result RunTraceReplay(const Request& request) {
     Result result;
     result.resultPath = request.outputDir + "/result.json";
     result.actualPath = request.outputDir + "/actual.png";
+    const std::string mobileGlLogPath = request.outputDir + "/mobilegl.log";
 
     if (!EnsureDirectory(request.outputDir)) {
         result.statusCode = STATUS_IO_ERROR;
@@ -597,6 +598,8 @@ Result RunTraceReplay(const Request& request) {
         unsetenv("MOBILEGL_TEXTURE_UPLOAD_STATS");
         unsetenv("MOBILEGL_DESCRIPTOR_STATS");
     }
+
+    setenv("MOBILEGL_LOG_FILE_PATH", mobileGlLogPath.c_str(), 1);
 
     std::string mobileGlError;
     if (!LoadMobileGL(request, mobileGlError)) {

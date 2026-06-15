@@ -16,7 +16,6 @@ using PfnEglBindApi = EGLBoolean (*)(EGLenum);
 using PfnEglChooseConfig = EGLBoolean (*)(EGLDisplay, const EGLint *, EGLConfig *, EGLint, EGLint *);
 using PfnEglCreateContext = EGLContext (*)(EGLDisplay, EGLConfig, EGLContext, const EGLint *);
 using PfnEglCreatePbufferSurface = EGLSurface (*)(EGLDisplay, EGLConfig, const EGLint *);
-using PfnEglCreateWindowSurface = EGLSurface (*)(EGLDisplay, EGLConfig, EGLNativeWindowType, const EGLint *);
 using PfnEglDestroyContext = EGLBoolean (*)(EGLDisplay, EGLContext);
 using PfnEglDestroySurface = EGLBoolean (*)(EGLDisplay, EGLSurface);
 using PfnEglGetConfigAttrib = EGLBoolean (*)(EGLDisplay, EGLConfig, EGLint, EGLint *);
@@ -34,7 +33,6 @@ struct EglFns {
     PfnEglChooseConfig chooseConfig = nullptr;
     PfnEglCreateContext createContext = nullptr;
     PfnEglCreatePbufferSurface createPbufferSurface = nullptr;
-    PfnEglCreateWindowSurface createWindowSurface = nullptr;
     PfnEglDestroyContext destroyContext = nullptr;
     PfnEglDestroySurface destroySurface = nullptr;
     PfnEglGetConfigAttrib getConfigAttrib = nullptr;
@@ -47,32 +45,7 @@ struct EglFns {
     PfnEglTerminate terminate = nullptr;
 };
 
-struct X11Fns {
-    void *lib = nullptr;
-    void *display = nullptr;
-    using XOpenDisplay = void *(*)(const char *);
-    using XCloseDisplay = int (*)(void *);
-    using XDefaultScreen = int (*)(void *);
-    using XDefaultRootWindow = unsigned long (*)(void *);
-    using XBlackPixel = unsigned long (*)(void *, int);
-    using XCreateSimpleWindow = unsigned long (*)(void *, unsigned long, int, int, unsigned int, unsigned int,
-                                                  unsigned int, unsigned long, unsigned long);
-    using XDestroyWindow = int (*)(void *, unsigned long);
-    using XMapWindow = int (*)(void *, unsigned long);
-    using XFlush = int (*)(void *);
-    XOpenDisplay openDisplay = nullptr;
-    XCloseDisplay closeDisplay = nullptr;
-    XDefaultScreen defaultScreen = nullptr;
-    XDefaultRootWindow defaultRootWindow = nullptr;
-    XBlackPixel blackPixel = nullptr;
-    XCreateSimpleWindow createSimpleWindow = nullptr;
-    XDestroyWindow destroyWindow = nullptr;
-    XMapWindow mapWindow = nullptr;
-    XFlush flush = nullptr;
-};
-
 EglFns gEgl;
-X11Fns gX11;
 EGLDisplay gDisplay = EGL_NO_DISPLAY;
 void *gMobileGl = nullptr;
 const glws::Drawable *gCurrentDrawable = nullptr;
@@ -135,7 +108,6 @@ bool LoadEgl() {
            Load(gEgl.chooseConfig, "eglChooseConfig") &&
            Load(gEgl.createContext, "eglCreateContext") &&
            Load(gEgl.createPbufferSurface, "eglCreatePbufferSurface") &&
-           Load(gEgl.createWindowSurface, "eglCreateWindowSurface") &&
            Load(gEgl.destroyContext, "eglDestroyContext") &&
            Load(gEgl.destroySurface, "eglDestroySurface") &&
            Load(gEgl.getConfigAttrib, "eglGetConfigAttrib") &&
@@ -146,79 +118,6 @@ bool LoadEgl() {
            Load(gEgl.queryString, "eglQueryString") &&
            Load(gEgl.swapBuffers, "eglSwapBuffers") &&
            Load(gEgl.terminate, "eglTerminate");
-}
-
-bool IsDirectVulkanBackend() {
-    const char *backend = std::getenv("MOBILEGL_BACKEND_TYPE");
-    return backend != nullptr && std::strcmp(backend, "DirectVulkan") == 0;
-}
-
-template <typename T>
-bool LoadX11(T &slot, const char *name) {
-    slot = reinterpret_cast<T>(dlsym(gX11.lib, name));
-    if (slot == nullptr) {
-        std::cerr << "error: failed to resolve " << name << " from X11\n";
-        return false;
-    }
-    return true;
-}
-
-bool EnsureX11() {
-    if (gX11.display != nullptr) {
-        return true;
-    }
-    if (gX11.lib == nullptr) {
-        gX11.lib = dlopen("libX11.so.6", RTLD_LOCAL | RTLD_NOW);
-        if (gX11.lib == nullptr) {
-            gX11.lib = dlopen("libX11.so", RTLD_LOCAL | RTLD_NOW);
-        }
-        if (gX11.lib == nullptr) {
-            std::cerr << "error: failed to open libX11 for DirectVulkan trace replay\n";
-            return false;
-        }
-        if (!LoadX11(gX11.openDisplay, "XOpenDisplay") ||
-            !LoadX11(gX11.closeDisplay, "XCloseDisplay") ||
-            !LoadX11(gX11.defaultScreen, "XDefaultScreen") ||
-            !LoadX11(gX11.defaultRootWindow, "XDefaultRootWindow") ||
-            !LoadX11(gX11.blackPixel, "XBlackPixel") ||
-            !LoadX11(gX11.createSimpleWindow, "XCreateSimpleWindow") ||
-            !LoadX11(gX11.destroyWindow, "XDestroyWindow") ||
-            !LoadX11(gX11.mapWindow, "XMapWindow") ||
-            !LoadX11(gX11.flush, "XFlush")) {
-            return false;
-        }
-    }
-    gX11.display = gX11.openDisplay(std::getenv("DISPLAY"));
-    if (gX11.display == nullptr) {
-        std::cerr << "error: XOpenDisplay failed for DirectVulkan trace replay\n";
-        return false;
-    }
-    return true;
-}
-
-unsigned long CreateX11Window(int width, int height) {
-    if (!EnsureX11()) {
-        return 0;
-    }
-    const int screen = gX11.defaultScreen(gX11.display);
-    const unsigned long root = gX11.defaultRootWindow(gX11.display);
-    const unsigned long black = gX11.blackPixel(gX11.display, screen);
-    const unsigned long window = gX11.createSimpleWindow(gX11.display, root, 0, 0,
-                                                         static_cast<unsigned int>(std::max(width, 1)),
-                                                         static_cast<unsigned int>(std::max(height, 1)),
-                                                         0, black, black);
-    if (window != 0) {
-        gX11.mapWindow(gX11.display, window);
-        gX11.flush(gX11.display);
-    }
-    return window;
-}
-
-void DestroyX11Window(unsigned long window) {
-    if (window != 0 && gX11.display != nullptr && gX11.destroyWindow != nullptr) {
-        gX11.destroyWindow(gX11.display, window);
-        gX11.flush(gX11.display);
-    }
 }
 
 void PrintGlIdentityOnce() {
@@ -261,7 +160,6 @@ public:
 class EglDrawable final : public glws::Drawable {
 public:
     EGLSurface surface = EGL_NO_SURFACE;
-    unsigned long x11Window = 0;
 
     EglDrawable(const EglVisual *visual, int width, int height, bool pbuffer)
         : Drawable(visual, width, height, pbuffer) {
@@ -309,26 +207,14 @@ public:
 
 private:
     void createSurface() {
-        const int resolvedWidth = ResolveWidth(width);
-        const int resolvedHeight = ResolveHeight(height);
-        if (IsDirectVulkanBackend()) {
-            x11Window = CreateX11Window(resolvedWidth, resolvedHeight);
-            if (x11Window == 0) {
-                surface = EGL_NO_SURFACE;
-                return;
-            }
-            surface = gEgl.createWindowSurface(gDisplay, static_cast<const EglVisual *>(visual)->config,
-                                               reinterpret_cast<EGLNativeWindowType>(x11Window), nullptr);
-        } else {
-            const EGLint attribs[] = {
-                    EGL_WIDTH, resolvedWidth,
-                    EGL_HEIGHT, resolvedHeight,
-                    EGL_NONE,
-            };
-            surface = gEgl.createPbufferSurface(gDisplay, static_cast<const EglVisual *>(visual)->config, attribs);
-        }
+        const EGLint attribs[] = {
+                EGL_WIDTH, ResolveWidth(width),
+                EGL_HEIGHT, ResolveHeight(height),
+                EGL_NONE,
+        };
+        surface = gEgl.createPbufferSurface(gDisplay, static_cast<const EglVisual *>(visual)->config, attribs);
         if (surface == EGL_NO_SURFACE) {
-            std::cerr << "error: EGL surface creation failed: 0x" << std::hex
+            std::cerr << "error: EGL pbuffer creation failed: 0x" << std::hex
                       << gEgl.getError() << std::dec << "\n";
         }
     }
@@ -338,8 +224,6 @@ private:
             gEgl.destroySurface(gDisplay, surface);
             surface = EGL_NO_SURFACE;
         }
-        DestroyX11Window(x11Window);
-        x11Window = 0;
     }
 };
 

@@ -42,7 +42,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y clang-20 clang++-20 lld-20 libc++-20-dev libc++abi-20-dev libvulkan-dev libegl1-mesa-dev libgles2-mesa-dev libgl1-mesa-dri mesa-vulkan-drivers xvfb
+          sudo apt-get install -y clang-20 clang++-20 lld-20 libc++-20-dev libc++abi-20-dev libvulkan-dev libegl1-mesa-dev libgles2-mesa-dev libgl1-mesa-dri mesa-vulkan-drivers
 
       - name: Show installed toolchain
         run: |
@@ -70,7 +70,7 @@ jobs:
 
       - name: Retrace and validate Magma (DirectVulkan)
         working-directory: ${{env.TEST_ROOT}}/build-retrace
-        run: xvfb-run -a ctest -V -R MobileGLTraceReplay.OpenRA.DirectVulkan
+        run: ctest -V -R MobileGLTraceReplay.OpenRA.DirectVulkan
 
       - name: Upload actual image
         if: always()
