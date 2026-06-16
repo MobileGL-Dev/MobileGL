@@ -131,7 +131,7 @@ jobs:
           arch: x86_64
           profile: pixel_6
           disable-animations: true
-          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -camera-back none -camera-front none
+          emulator-options: -no-window -gpu swiftshader -no-snapshot -noaudio -no-boot-anim -camera-back none -camera-front none
           script: >-
             set +e;
             status=0;
@@ -233,7 +233,7 @@ jobs:
           arch: x86_64
           profile: pixel_6
           disable-animations: true
-          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -camera-back none -camera-front none
+          emulator-options: -no-window -gpu swiftshader -no-snapshot -noaudio -no-boot-anim -camera-back none -camera-front none
           script: >-
             set +e;
             status=0;
@@ -314,7 +314,7 @@ jobs:
             --target-call 4000686
             --width 854
             --height 480
-            --tolerance 20000
+            --tolerance 500
             --crop-x 0
             --crop-y 0
             --crop-width 0
