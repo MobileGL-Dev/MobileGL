@@ -279,6 +279,12 @@ bool WritePngRgba(const std::string& path, const RgbaImage& image, std::string& 
     return true;
 }
 
+void ForceOpaqueAlpha(RgbaImage& image) {
+    for (std::size_t i = 3; i < image.pixels.size(); i += 4) {
+        image.pixels[i] = 0xff;
+    }
+}
+
 bool ReadPpmRgbAsRgba(const std::string& path, RgbaImage& image, std::string& error) {
     std::ifstream file(path, std::ios::binary);
     if (!file) {
@@ -440,9 +446,21 @@ bool RunRetrace(const Request& request, bool usePresentDump, Result& result) {
         return false;
     }
     if (hasSnapshot && !hasPresentDump) {
-        if (!CopyFile(snapshotPath, result.actualPath)) {
+        RgbaImage snapshot;
+        std::string imageError;
+        if (!ReadPngRgba(snapshotPath, snapshot, imageError)) {
             result.statusCode = STATUS_IO_ERROR;
-            result.message = "failed to copy snapshot to " + result.actualPath;
+            result.message = imageError.empty()
+                                     ? "failed to decode snapshot PNG: " + snapshotPath
+                                     : imageError;
+            return false;
+        }
+        ForceOpaqueAlpha(snapshot);
+        if (!WritePngRgba(result.actualPath, snapshot, imageError)) {
+            result.statusCode = STATUS_IO_ERROR;
+            result.message = imageError.empty()
+                                     ? "failed to write snapshot to actual PNG"
+                                     : imageError;
             return false;
         }
     }
