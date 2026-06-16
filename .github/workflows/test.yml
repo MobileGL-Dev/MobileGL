@@ -1,4 +1,4 @@
-name: CI
+name: Test
 
 on:
   push:
@@ -305,3 +305,4 @@ jobs:
           if [ "${direct_gles_status}" -ne 0 ] || [ "${direct_vulkan_status}" -ne 0 ]; then
             exit 1
           fi
+
