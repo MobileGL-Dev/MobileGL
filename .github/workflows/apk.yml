@@ -134,8 +134,31 @@ jobs:
           emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -camera-back none -camera-front none
           script: >-
             set +e;
+            status=0;
+            apk_file="$(find android-retrace-apks -name 'MobileGL-EsprytTrace-release.apk' -print -quit)";
             sh android-plugin/trace-replay-ci.sh
-            --apk-file "$(find android-retrace-apks -name 'MobileGL-EsprytTrace-release.apk' -print -quit)"
+            --apk-file "${apk_file}"
+            --package top.mobilegl.plugin.espryt.trace
+            --backend DirectGLES
+            --result-root android-retrace-result
+            --fixture-root android-retrace-fixture
+            --case OpenRA
+            --trace-archive tools/trace_replay/fixtures/openra.tgz
+            --trace-file openra.trace
+            --golden tools/trace_replay/fixtures/openra.0000031249.png
+            --target-call 31249
+            --width 640
+            --height 480
+            --tolerance 20
+            --crop-x 1
+            --crop-y 1
+            --crop-width 638
+            --crop-height 478
+            --fuzz-percent 20
+            --timeout-seconds 180
+            || status=1;
+            sh android-plugin/trace-replay-ci.sh
+            --apk-file "${apk_file}"
             --package top.mobilegl.plugin.espryt.trace
             --backend DirectGLES
             --result-root android-retrace-result
@@ -153,8 +176,29 @@ jobs:
             --crop-width 0
             --crop-height 0
             --fuzz-percent 20
-            --timeout-seconds 180;
-            status=$?;
+            --timeout-seconds 180
+            || status=1;
+            sh android-plugin/trace-replay-ci.sh
+            --apk-file "${apk_file}"
+            --package top.mobilegl.plugin.espryt.trace
+            --backend DirectGLES
+            --result-root android-retrace-result
+            --fixture-root android-retrace-fixture
+            --case minecraft-1.21.4-main-menu
+            --trace-archive tools/trace_replay/fixtures/minecraft-1.21.4-main-menu.tgz
+            --trace-file trace.trace
+            --golden tools/trace_replay/fixtures/minecraft-1.21.4-main-menu.0000481787.png
+            --target-call 481787
+            --width 854
+            --height 480
+            --tolerance 500
+            --crop-x 0
+            --crop-y 0
+            --crop-width 0
+            --crop-height 0
+            --fuzz-percent 20
+            --timeout-seconds 180
+            || status=1;
             mkdir -p android-retrace-result/status;
             echo "${status}" > android-retrace-result/status/DirectGLES.status;
             exit 0
@@ -171,8 +215,31 @@ jobs:
           emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -camera-back none -camera-front none
           script: >-
             set +e;
+            status=0;
+            apk_file="$(find android-retrace-apks -name 'MobileGL-MagmaTrace-release.apk' -print -quit)";
             sh android-plugin/trace-replay-ci.sh
-            --apk-file "$(find android-retrace-apks -name 'MobileGL-MagmaTrace-release.apk' -print -quit)"
+            --apk-file "${apk_file}"
+            --package top.mobilegl.plugin.magma.trace
+            --backend DirectVulkan
+            --result-root android-retrace-result
+            --fixture-root android-retrace-fixture
+            --case OpenRA
+            --trace-archive tools/trace_replay/fixtures/openra.tgz
+            --trace-file openra.trace
+            --golden tools/trace_replay/fixtures/openra.0000031249.png
+            --target-call 31249
+            --width 640
+            --height 480
+            --tolerance 20
+            --crop-x 1
+            --crop-y 1
+            --crop-width 638
+            --crop-height 478
+            --fuzz-percent 20
+            --timeout-seconds 180
+            || status=1;
+            sh android-plugin/trace-replay-ci.sh
+            --apk-file "${apk_file}"
             --package top.mobilegl.plugin.magma.trace
             --backend DirectVulkan
             --result-root android-retrace-result
@@ -190,8 +257,29 @@ jobs:
             --crop-width 0
             --crop-height 0
             --fuzz-percent 20
-            --timeout-seconds 180;
-            status=$?;
+            --timeout-seconds 180
+            || status=1;
+            sh android-plugin/trace-replay-ci.sh
+            --apk-file "${apk_file}"
+            --package top.mobilegl.plugin.magma.trace
+            --backend DirectVulkan
+            --result-root android-retrace-result
+            --fixture-root android-retrace-fixture
+            --case minecraft-1.21.4-main-menu
+            --trace-archive tools/trace_replay/fixtures/minecraft-1.21.4-main-menu.tgz
+            --trace-file trace.trace
+            --golden tools/trace_replay/fixtures/minecraft-1.21.4-main-menu.0000481787.png
+            --target-call 481787
+            --width 854
+            --height 480
+            --tolerance 500
+            --crop-x 0
+            --crop-y 0
+            --crop-width 0
+            --crop-height 0
+            --fuzz-percent 20
+            --timeout-seconds 180
+            || status=1;
             mkdir -p android-retrace-result/status;
             echo "${status}" > android-retrace-result/status/DirectVulkan.status;
             exit 0
