@@ -267,20 +267,20 @@ jobs:
         working-directory: build-retrace
         run: |
           set +e
-          ctest -V -R MobileGLTraceReplay.OpenRA.DirectGLES
+          ctest -V -R 'MobileGLTraceReplay\..*\.DirectGLES'
           status=$?
-          mkdir -p tools/trace_replay/openra
-          echo "${status}" > tools/trace_replay/openra/DirectGLES.status
+          mkdir -p tools/trace_replay/status
+          echo "${status}" > tools/trace_replay/status/DirectGLES.status
           exit 0
 
       - name: Retrace and validate Magma (DirectVulkan)
         working-directory: build-retrace
         run: |
           set +e
-          ctest -V -R MobileGLTraceReplay.OpenRA.DirectVulkan
+          ctest -V -R 'MobileGLTraceReplay\..*\.DirectVulkan'
           status=$?
-          mkdir -p tools/trace_replay/openra
-          echo "${status}" > tools/trace_replay/openra/DirectVulkan.status
+          mkdir -p tools/trace_replay/status
+          echo "${status}" > tools/trace_replay/status/DirectVulkan.status
           exit 0
 
       - name: Upload actual image
@@ -289,20 +289,17 @@ jobs:
         with:
           name: retrace-result
           path: |
-            build-retrace/tools/trace_replay/openra/actual-images/openra-DirectGLES-actual.png
-            build-retrace/tools/trace_replay/openra/actual-images/openra-DirectVulkan-actual.png
-            build-retrace/tools/trace_replay/openra/actual-images/*.json
-            build-retrace/tools/trace_replay/openra/actual-images/*.log
-            build-retrace/tools/trace_replay/openra/*.status
-            build-retrace/tools/trace_replay/openra/*/output/**
+            build-retrace/tools/trace_replay/*/actual-images/**
+            build-retrace/tools/trace_replay/*/*/output/**
+            build-retrace/tools/trace_replay/status/*.status
           if-no-files-found: warn
 
       - name: Check retrace results
         if: always()
         working-directory: build-retrace
         run: |
-          direct_gles_status="$(cat tools/trace_replay/openra/DirectGLES.status 2>/dev/null || echo 1)"
-          direct_vulkan_status="$(cat tools/trace_replay/openra/DirectVulkan.status 2>/dev/null || echo 1)"
+          direct_gles_status="$(cat tools/trace_replay/status/DirectGLES.status 2>/dev/null || echo 1)"
+          direct_vulkan_status="$(cat tools/trace_replay/status/DirectVulkan.status 2>/dev/null || echo 1)"
           echo "DirectGLES status: ${direct_gles_status}"
           echo "DirectVulkan status: ${direct_vulkan_status}"
           if [ "${direct_gles_status}" -ne 0 ] || [ "${direct_vulkan_status}" -ne 0 ]; then

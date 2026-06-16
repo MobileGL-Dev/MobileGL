@@ -22,3 +22,4 @@ MobileGL/MG*/cmake-build*
 /android-plugin/.gradle
 /android-plugin/build
 /android-plugin/app/build
+tools/trace_replay/work/

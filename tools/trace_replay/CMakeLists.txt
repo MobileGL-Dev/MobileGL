@@ -264,26 +264,104 @@ else()
 endif()
 
 enable_testing()
-function(add_openra_trace_replay_test BACKEND)
+function(add_trace_replay_test CASE_NAME BACKEND)
+    set(oneValueArgs
+            TRACE_ARCHIVE
+            TRACE_FILE
+            GOLDEN
+            TARGET_CALL
+            WIDTH
+            HEIGHT
+            TOLERANCE
+            CROP_X
+            CROP_Y
+            CROP_WIDTH
+            CROP_HEIGHT
+            FUZZ_PERCENT)
+    cmake_parse_arguments(TRACE_CASE "" "${oneValueArgs}" "" ${ARGN})
+    foreach(required TRACE_ARCHIVE GOLDEN TARGET_CALL WIDTH HEIGHT)
+        if(NOT TRACE_CASE_${required})
+            message(FATAL_ERROR "${required} is required for ${CASE_NAME}")
+        endif()
+    endforeach()
+    if(NOT TRACE_CASE_TRACE_FILE)
+        set(TRACE_CASE_TRACE_FILE trace.trace)
+    endif()
+    if(NOT TRACE_CASE_TOLERANCE)
+        set(TRACE_CASE_TOLERANCE 0)
+    endif()
+    if(NOT TRACE_CASE_CROP_X)
+        set(TRACE_CASE_CROP_X 0)
+    endif()
+    if(NOT TRACE_CASE_CROP_Y)
+        set(TRACE_CASE_CROP_Y 0)
+    endif()
+    if(NOT TRACE_CASE_CROP_WIDTH)
+        set(TRACE_CASE_CROP_WIDTH 0)
+    endif()
+    if(NOT TRACE_CASE_CROP_HEIGHT)
+        set(TRACE_CASE_CROP_HEIGHT 0)
+    endif()
+    if(NOT TRACE_CASE_FUZZ_PERCENT)
+        set(TRACE_CASE_FUZZ_PERCENT 20)
+    endif()
+
     add_test(
-            NAME MobileGLTraceReplay.OpenRA.${BACKEND}
+            NAME MobileGLTraceReplay.${CASE_NAME}.${BACKEND}
             COMMAND "${CMAKE_COMMAND}"
             -DTRACE_REPLAY_EXE=$<TARGET_FILE:mobilegl_trace_replay>
             -DMOBILEGL_LIBRARY=${mobilegl_trace_replay_mobilegl_library}
-            -DOPENRA_TRACE_ARCHIVE=${MOBILEGL_TRACE_ROOT}/fixtures/openra.tgz
-            -DOPENRA_GOLDEN=${MOBILEGL_TRACE_ROOT}/fixtures/openra.0000031249.png
-            -DOPENRA_BACKEND=${BACKEND}
-            -DOPENRA_OUTPUT_DIR=${CMAKE_CURRENT_BINARY_DIR}/openra/${BACKEND}
-            -DOPENRA_ARTIFACT_DIR=${CMAKE_CURRENT_BINARY_DIR}/openra/actual-images
-            -P ${MOBILEGL_TRACE_ROOT}/run_openra_replay.cmake)
+            -DTRACE_CASE_NAME=${CASE_NAME}
+            -DTRACE_ARCHIVE=${TRACE_CASE_TRACE_ARCHIVE}
+            -DTRACE_FILE=${TRACE_CASE_TRACE_FILE}
+            -DTRACE_GOLDEN=${TRACE_CASE_GOLDEN}
+            -DTRACE_BACKEND=${BACKEND}
+            -DTRACE_TARGET_CALL=${TRACE_CASE_TARGET_CALL}
+            -DTRACE_WIDTH=${TRACE_CASE_WIDTH}
+            -DTRACE_HEIGHT=${TRACE_CASE_HEIGHT}
+            -DTRACE_TOLERANCE=${TRACE_CASE_TOLERANCE}
+            -DTRACE_CROP_X=${TRACE_CASE_CROP_X}
+            -DTRACE_CROP_Y=${TRACE_CASE_CROP_Y}
+            -DTRACE_CROP_WIDTH=${TRACE_CASE_CROP_WIDTH}
+            -DTRACE_CROP_HEIGHT=${TRACE_CASE_CROP_HEIGHT}
+            -DTRACE_FUZZ_PERCENT=${TRACE_CASE_FUZZ_PERCENT}
+            -DTRACE_OUTPUT_DIR=${CMAKE_CURRENT_BINARY_DIR}/${CASE_NAME}/${BACKEND}
+            -DTRACE_ARTIFACT_DIR=${CMAKE_CURRENT_BINARY_DIR}/${CASE_NAME}/actual-images
+            -P ${MOBILEGL_TRACE_ROOT}/run_trace_case.cmake)
     if(BACKEND STREQUAL "DirectGLES")
-        set_tests_properties(MobileGLTraceReplay.OpenRA.${BACKEND} PROPERTIES
+        set_tests_properties(MobileGLTraceReplay.${CASE_NAME}.${BACKEND} PROPERTIES
                 ENVIRONMENT "EGL_PLATFORM=surfaceless;LIBGL_ALWAYS_SOFTWARE=1;MESA_GL_VERSION_OVERRIDE=3.3;MESA_GLSL_VERSION_OVERRIDE=330")
     else()
-        set_tests_properties(MobileGLTraceReplay.OpenRA.${BACKEND} PROPERTIES
+        set_tests_properties(MobileGLTraceReplay.${CASE_NAME}.${BACKEND} PROPERTIES
                 ENVIRONMENT "LIBGL_ALWAYS_SOFTWARE=1;MESA_GL_VERSION_OVERRIDE=3.3;MESA_GLSL_VERSION_OVERRIDE=330")
     endif()
 endfunction()
 
-add_openra_trace_replay_test(DirectGLES)
-add_openra_trace_replay_test(DirectVulkan)
+function(add_trace_replay_test_for_backends CASE_NAME)
+    add_trace_replay_test(${CASE_NAME} DirectGLES ${ARGN})
+    add_trace_replay_test(${CASE_NAME} DirectVulkan ${ARGN})
+endfunction()
+
+add_trace_replay_test_for_backends(OpenRA
+        TRACE_ARCHIVE ${MOBILEGL_TRACE_ROOT}/fixtures/openra.tgz
+        TRACE_FILE openra.trace
+        GOLDEN ${MOBILEGL_TRACE_ROOT}/fixtures/openra.0000031249.png
+        TARGET_CALL 31249
+        WIDTH 640
+        HEIGHT 480
+        TOLERANCE 20
+        CROP_X 1
+        CROP_Y 1
+        CROP_WIDTH 638
+        CROP_HEIGHT 478
+        FUZZ_PERCENT 20)
+
+add_trace_replay_test_for_backends(minecraft-1.21.4-startup
+        TRACE_ARCHIVE ${MOBILEGL_TRACE_ROOT}/fixtures/minecraft-1.21.4-startup.tgz
+        TRACE_FILE trace.trace
+        GOLDEN ${MOBILEGL_TRACE_ROOT}/fixtures/minecraft-1.21.4-startup.0000092195.png
+        TARGET_CALL 92195
+        WIDTH 854
+        HEIGHT 480
+        TOLERANCE 20
+        FUZZ_PERCENT 20)
