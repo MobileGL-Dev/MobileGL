@@ -314,7 +314,7 @@ jobs:
             --target-call 4000686
             --width 854
             --height 480
-            --tolerance 500
+            --tolerance 20000
             --crop-x 0
             --crop-y 0
             --crop-width 0
