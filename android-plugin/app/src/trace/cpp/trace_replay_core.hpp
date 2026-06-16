@@ -18,6 +18,7 @@ struct Request {
     std::string tracePath;
     std::string goldenPath;
     std::string outputDir;
+    std::string diffPath;
     std::string backend;
     std::string mobileGlLibrary = "libMobileGL.so";
     int targetFrame = -1;
@@ -38,6 +39,7 @@ struct Result {
     std::string message;
     std::string resultPath;
     std::string actualPath;
+    std::string diffPath;
     long long mismatchPixels = -1;
 };
 

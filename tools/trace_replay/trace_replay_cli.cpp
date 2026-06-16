@@ -14,6 +14,7 @@ void PrintUsage(const char *argv0) {
             << "\n"
             << "Options:\n"
             << "  --golden PATH             Golden PNG to compare against\n"
+            << "  --diff PATH               Difference PNG output path\n"
             << "  --backend NAME            DirectGLES or DirectVulkan (default: DirectGLES)\n"
             << "  --mobilegl-library PATH   libMobileGL.so path (default: libMobileGL.so)\n"
             << "  --width N                 Replay surface width override\n"
@@ -63,6 +64,8 @@ bool ParseArgs(int argc, char **argv, mobilegl_trace::Request &request) {
             if (!ReadValue(argc, argv, i, request.tracePath)) return false;
         } else if (arg == "--golden") {
             if (!ReadValue(argc, argv, i, request.goldenPath)) return false;
+        } else if (arg == "--diff") {
+            if (!ReadValue(argc, argv, i, request.diffPath)) return false;
         } else if (arg == "--output") {
             if (!ReadValue(argc, argv, i, request.outputDir)) return false;
         } else if (arg == "--backend") {
@@ -131,6 +134,7 @@ int main(int argc, char **argv) {
 
     std::cout << result.message << "\n"
               << "result: " << result.resultPath << "\n"
-              << "actual: " << result.actualPath << "\n";
+              << "actual: " << result.actualPath << "\n"
+              << "diff: " << result.diffPath << "\n";
     return result.passed ? 0 : result.statusCode;
 }

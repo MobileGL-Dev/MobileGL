@@ -443,6 +443,59 @@ int ChannelValue(const RgbaImage& image, int x, int y, int channel) {
     return image.pixels[(static_cast<std::size_t>(y) * image.width + x) * 4 + channel];
 }
 
+bool WriteDifferenceImage(const Result& result,
+                          const RgbaImage& actual,
+                          const RgbaImage& golden,
+                          int x0,
+                          int y0,
+                          int compareWidth,
+                          int compareHeight,
+                          int fuzz,
+                          std::string& error) {
+    if (result.diffPath.empty()) {
+        return true;
+    }
+
+    constexpr int kDiffScale = 8;
+    RgbaImage diff;
+    diff.width = actual.width;
+    diff.height = actual.height;
+    diff.pixels.assign(static_cast<std::size_t>(diff.width) * diff.height * 4, 0);
+    for (int y = 0; y < diff.height; ++y) {
+        for (int x = 0; x < diff.width; ++x) {
+            std::uint8_t* dst = diff.pixels.data() + (static_cast<std::size_t>(y) * diff.width + x) * 4;
+            dst[3] = 0xff;
+        }
+    }
+
+    for (int y = 0; y < compareHeight; ++y) {
+        for (int x = 0; x < compareWidth; ++x) {
+            int imageX = x0 + x;
+            int imageY = y0 + y;
+            int dr = std::abs(ChannelValue(actual, imageX, imageY, 0) -
+                              ChannelValue(golden, imageX, imageY, 0));
+            int dg = std::abs(ChannelValue(actual, imageX, imageY, 1) -
+                              ChannelValue(golden, imageX, imageY, 1));
+            int db = std::abs(ChannelValue(actual, imageX, imageY, 2) -
+                              ChannelValue(golden, imageX, imageY, 2));
+            bool different = dr > fuzz || dg > fuzz || db > fuzz;
+            std::uint8_t* dst = diff.pixels.data() +
+                                (static_cast<std::size_t>(imageY) * diff.width + imageX) * 4;
+            if (different) {
+                dst[0] = 0xff;
+                dst[1] = static_cast<std::uint8_t>(std::min(255, dg * kDiffScale));
+                dst[2] = static_cast<std::uint8_t>(std::min(255, db * kDiffScale));
+            } else {
+                dst[0] = static_cast<std::uint8_t>(std::min(255, dr * kDiffScale));
+                dst[1] = static_cast<std::uint8_t>(std::min(255, dg * kDiffScale));
+                dst[2] = static_cast<std::uint8_t>(std::min(255, db * kDiffScale));
+            }
+        }
+    }
+
+    return WritePngRgba(result.diffPath, diff, error);
+}
+
 bool CompareWithGolden(const Request& request, Result& result) {
     if (request.goldenPath.empty()) {
         result.passed = true;
@@ -511,6 +564,13 @@ bool CompareWithGolden(const Request& request, Result& result) {
         }
     }
 
+    std::string diffError;
+    if (!WriteDifferenceImage(result, actual, golden, x0, y0, compareWidth, compareHeight, fuzz, diffError)) {
+        result.statusCode = STATUS_IO_ERROR;
+        result.message = diffError.empty() ? "failed to write diff PNG" : diffError;
+        return false;
+    }
+
     result.mismatchPixels = mismatch;
     result.passed = mismatch <= request.tolerance;
     result.statusCode = result.passed ? STATUS_OK : STATUS_COMPARE_FAILED;
@@ -540,6 +600,7 @@ bool WriteResultJson(const Request& request, const Result& result) {
     file << "  \"tracePath\": \"" << JsonEscape(request.tracePath) << "\",\n";
     file << "  \"goldenPath\": \"" << JsonEscape(request.goldenPath) << "\",\n";
     file << "  \"actualPath\": \"" << JsonEscape(result.actualPath) << "\",\n";
+    file << "  \"diffPath\": \"" << JsonEscape(result.diffPath) << "\",\n";
     file << "  \"backend\": \"" << JsonEscape(request.backend) << "\",\n";
     file << "  \"targetFrame\": " << request.targetFrame << ",\n";
     file << "  \"targetCall\": " << request.targetCall << ",\n";
@@ -560,6 +621,7 @@ Result RunTraceReplay(const Request& request) {
     Result result;
     result.resultPath = request.outputDir + "/result.json";
     result.actualPath = request.outputDir + "/actual.png";
+    result.diffPath = request.diffPath;
     const std::string mobileGlLogPath = request.outputDir + "/mobilegl.log";
 
     if (!EnsureDirectory(request.outputDir)) {

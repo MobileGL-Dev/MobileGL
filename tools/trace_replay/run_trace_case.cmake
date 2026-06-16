@@ -50,6 +50,7 @@ execute_process(
         COMMAND "${TRACE_REPLAY_EXE}"
         --trace "${trace_path}"
         --golden "${TRACE_GOLDEN}"
+        --diff "${TRACE_OUTPUT_DIR}/output/${TRACE_CASE_NAME}-diff.png"
         --output "${TRACE_OUTPUT_DIR}/output"
         --backend "${TRACE_BACKEND}"
         --mobilegl-library "${MOBILEGL_LIBRARY}"
