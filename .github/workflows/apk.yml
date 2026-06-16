@@ -233,7 +233,7 @@ jobs:
           arch: x86_64
           profile: pixel_6
           disable-animations: true
-          emulator-options: -no-window -gpu host -no-snapshot -noaudio -no-boot-anim -camera-back none -camera-front none
+          emulator-options: -no-window -gpu angle -no-snapshot -noaudio -no-boot-anim -camera-back none -camera-front none
           script: >-
             set +e;
             status=0;
