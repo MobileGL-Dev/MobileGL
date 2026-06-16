@@ -46,8 +46,15 @@ jobs:
         working-directory: 3rdparty/glslang
         run: python update_glslang_sources.py
 
-      - name: Build APKs
-        run: gradle --no-daemon -p android-plugin :app:assembleRelease :app:assembleEsprytTraceRelease :app:assembleMagmaTraceRelease --parallel --max-workers "$(nproc)"
+      - name: Build plugin APKs
+        run: gradle --no-daemon -p android-plugin :app:assembleEsprytPluginRelease :app:assembleMagmaPluginRelease --parallel --max-workers "$(nproc)"
+        env:
+          SIGNING_STORE_PASSWORD: ${{ secrets.SIGNING_STORE_PASSWORD }}
+          SIGNING_KEY_ALIAS: ${{ secrets.SIGNING_KEY_ALIAS }}
+          SIGNING_KEY_PASSWORD: ${{ secrets.SIGNING_KEY_PASSWORD }}
+
+      - name: Build retrace APKs
+        run: gradle --no-daemon -p android-plugin :app:assembleEsprytTraceRelease :app:assembleMagmaTraceRelease -Pmobilegl.abis=all --parallel --max-workers "$(nproc)"
         env:
           SIGNING_STORE_PASSWORD: ${{ secrets.SIGNING_STORE_PASSWORD }}
           SIGNING_KEY_ALIAS: ${{ secrets.SIGNING_KEY_ALIAS }}
@@ -85,16 +92,6 @@ jobs:
           path: android-plugin/app/build/outputs/apk/*Trace/release/*.apk
           if-no-files-found: error
 
-      - name: Build emulator retrace APKs
-        run: gradle --no-daemon -p android-plugin :app:assembleEsprytTraceDebug :app:assembleMagmaTraceDebug -Pmobilegl.abis=x86_64 --parallel --max-workers "$(nproc)"
-
-      - name: Upload emulator retrace APKs
-        uses: actions/upload-artifact@v4
-        with:
-          name: mobilegl-android-retrace-apk-x86_64
-          path: android-plugin/app/build/outputs/apk/*Trace/debug/*.apk
-          if-no-files-found: error
-
   retrace:
     runs-on: ubuntu-latest
     needs: build
@@ -113,11 +110,12 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Download emulator retrace APKs
+      - name: Download retrace APKs
         uses: actions/download-artifact@v4
         with:
-          name: mobilegl-android-retrace-apk-x86_64
+          pattern: MobileGL-retrace-apk-*
           path: android-retrace-apks
+          merge-multiple: true
 
       - name: Enable KVM
         run: |
@@ -142,8 +140,8 @@ jobs:
             cp tools/trace_replay/fixtures/minecraft-1.21.4-startup.0000092195.png android-retrace-fixture/golden.png
             adb push android-retrace-fixture/trace.trace /data/local/tmp/mobilegl-trace.trace
             adb push android-retrace-fixture/golden.png /data/local/tmp/mobilegl-golden.png
-            ESPRYT_APK="$(find android-retrace-apks -name 'MobileGL-EsprytTrace-debug.apk' -print -quit)"
-            MAGMA_APK="$(find android-retrace-apks -name 'MobileGL-MagmaTrace-debug.apk' -print -quit)"
+            ESPRYT_APK="$(find android-retrace-apks -name 'MobileGL-EsprytTrace-release.apk' -print -quit)"
+            MAGMA_APK="$(find android-retrace-apks -name 'MobileGL-MagmaTrace-release.apk' -print -quit)"
             test -n "${ESPRYT_APK}"
             test -n "${MAGMA_APK}"
 

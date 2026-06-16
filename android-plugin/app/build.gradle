@@ -18,7 +18,11 @@ def releaseSigningReady = signingStoreFile.exists()
         && signingKeyAlias
         && signingKeyPassword
 def mobileGlAbiFilters = {
-    ((findProperty('mobilegl.abis') ?: System.getenv('MOBILEGL_ABIS') ?: 'arm64-v8a') as String)
+    def abiList = (findProperty('mobilegl.abis') ?: System.getenv('MOBILEGL_ABIS') ?: 'arm64-v8a') as String
+    if (abiList.equalsIgnoreCase('all')) {
+        return ['arm64-v8a', 'x86_64']
+    }
+    abiList
             .split(',')
             .collect { it.trim() }
             .findAll { !it.isEmpty() }
@@ -36,7 +40,10 @@ android {
         versionName 'dev'
 
         ndk {
-            abiFilters(*mobileGlAbiFilters())
+            def abiFiltersOverride = mobileGlAbiFilters()
+            if (!abiFiltersOverride.isEmpty()) {
+                abiFilters(*abiFiltersOverride)
+            }
         }
     }
 

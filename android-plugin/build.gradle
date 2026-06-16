@@ -4,7 +4,11 @@ plugins {
 }
 
 def mobileGlAbiFilters = {
-    ((rootProject.findProperty('mobilegl.abis') ?: System.getenv('MOBILEGL_ABIS') ?: 'arm64-v8a') as String)
+    def abiList = (rootProject.findProperty('mobilegl.abis') ?: System.getenv('MOBILEGL_ABIS') ?: 'arm64-v8a') as String
+    if (abiList.equalsIgnoreCase('all')) {
+        return ['arm64-v8a', 'x86_64']
+    }
+    abiList
             .split(',')
             .collect { it.trim() }
             .findAll { !it.isEmpty() }
@@ -15,7 +19,10 @@ subprojects { subproject ->
         subproject.android {
             defaultConfig {
                 ndk {
-                    abiFilters(*mobileGlAbiFilters())
+                    def abiFiltersOverride = mobileGlAbiFilters()
+                    if (!abiFiltersOverride.isEmpty()) {
+                        abiFilters(*abiFiltersOverride)
+                    }
                 }
                 externalNativeBuild {
                     cmake {
