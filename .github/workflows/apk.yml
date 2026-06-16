@@ -133,6 +133,7 @@ jobs:
           disable-animations: true
           emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -camera-back none -camera-front none
           script: |
+            bash <<'BASH'
             set -euo pipefail
 
             mkdir -p android-retrace-fixture android-retrace-result
@@ -203,6 +204,7 @@ jobs:
               top.mobilegl.plugin.magma.trace \
               "${MAGMA_APK}" \
               DirectVulkan
+            BASH
 
       - name: Upload Android retrace result
         if: always()
