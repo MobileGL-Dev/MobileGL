@@ -3,6 +3,7 @@
 #include <dlfcn.h>
 #include "apitrace_exit.hpp"
 #include "png.h"
+#include "trace_parser.hpp"
 
 #include <algorithm>
 #include <cerrno>
@@ -113,6 +114,7 @@ std::string JsonEscape(const std::string& value) {
 bool LoadMobileGL(const Request& request, std::string& error) {
     setenv("MOBILEGL_BACKEND_TYPE", request.backend.c_str(), 1);
     setenv("MOBILEGL_TRACE_LIBRARY", request.mobileGlLibrary.c_str(), 1);
+    setenv("MOBILEGL_TRACE_SKIP_AUTODESTROY", "1", 1);
 
     void* handle = dlopen(request.mobileGlLibrary.c_str(), RTLD_NOW | RTLD_GLOBAL);
     if (handle == nullptr) {
@@ -345,9 +347,38 @@ std::string SnapshotPathForCall(const Request& request) {
     return request.outputDir + "/actual." + call + ".png";
 }
 
-int RunRetraceMain(const Request& request) {
+bool TargetCallSwapsRenderTarget(const Request& request, bool& swapsRenderTarget, std::string& error) {
+    trace::Parser parser;
+    if (!parser.open(request.tracePath.c_str())) {
+        error = "failed to open trace for target call inspection";
+        return false;
+    }
+
+    trace::Call* call = nullptr;
+    while ((call = parser.parse_call()) != nullptr) {
+        const long long callNo = static_cast<long long>(call->no);
+        if (callNo == request.targetCall) {
+            swapsRenderTarget = (call->flags & trace::CALL_FLAG_SWAP_RENDERTARGET) != 0;
+            delete call;
+            return true;
+        }
+        if (callNo > request.targetCall) {
+            delete call;
+            break;
+        }
+        delete call;
+    }
+
+    std::ostringstream message;
+    message << "target_call " << request.targetCall << " was not found in trace";
+    error = message.str();
+    return false;
+}
+
+int RunRetraceMain(const Request& request, bool usePresentDump) {
     std::string prefix = request.outputDir + "/actual.";
-    std::string callSet = std::to_string(request.targetCall);
+    const long long snapshotCall = usePresentDump ? request.targetCall + 1 : request.targetCall;
+    std::string callSet = std::to_string(snapshotCall);
 
     std::string arg0 = "mobilegl-glretrace";
     std::string argBenchmark = "-b";
@@ -374,11 +405,11 @@ int RunRetraceMain(const Request& request) {
     return MOBILEGL_APITRACE_RETRACE_MAIN(10, argv);
 }
 
-bool RunRetrace(const Request& request, Result& result) {
+bool RunRetrace(const Request& request, bool usePresentDump, Result& result) {
     int status = 0;
     try {
         ScopedFdRedirect redirect(request.outputDir + "/retrace.log");
-        status = RunRetraceMain(request);
+        status = RunRetraceMain(request, usePresentDump);
     } catch (const MobileGLRetraceExit& retraceExit) {
         status = retraceExit.status;
     } catch (const std::exception& exception) {
@@ -402,7 +433,7 @@ bool RunRetrace(const Request& request, Result& result) {
     std::string snapshotPath = SnapshotPathForCall(request);
     const std::string presentPath = request.outputDir + "/present.ppm";
     const bool hasSnapshot = Exists(snapshotPath);
-    const bool hasPresentDump = request.backend == "DirectVulkan" && Exists(presentPath);
+    const bool hasPresentDump = usePresentDump && Exists(presentPath);
     if (!hasSnapshot && !hasPresentDump) {
         result.statusCode = STATUS_RETRACE_FAILED;
         result.message = "retrace completed but did not create expected snapshot: " + snapshotPath;
@@ -415,7 +446,7 @@ bool RunRetrace(const Request& request, Result& result) {
             return false;
         }
     }
-    if (request.backend == "DirectVulkan") {
+    if (usePresentDump) {
         if (hasPresentDump) {
             RgbaImage present;
             std::string imageError;
@@ -648,7 +679,17 @@ Result RunTraceReplay(const Request& request) {
         return result;
     }
 
+    bool usePresentDump = false;
     if (request.backend == "DirectVulkan") {
+        std::string inspectError;
+        if (!TargetCallSwapsRenderTarget(request, usePresentDump, inspectError)) {
+            result.statusCode = STATUS_INVALID_ARGUMENT;
+            result.message = inspectError;
+            return result;
+        }
+    }
+
+    if (usePresentDump) {
         std::string presentDumpPath = request.outputDir + "/present.ppm";
         std::string presentDumpCall = std::to_string(request.targetCall);
         setenv("MOBILEGL_PRESENT_DUMP_PATH", presentDumpPath.c_str(), 1);
@@ -670,7 +711,7 @@ Result RunTraceReplay(const Request& request) {
         return result;
     }
 
-    if (!RunRetrace(request, result)) {
+    if (!RunRetrace(request, usePresentDump, result)) {
         return result;
     }
 

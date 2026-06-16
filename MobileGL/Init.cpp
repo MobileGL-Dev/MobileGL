@@ -13,6 +13,7 @@
 #include <MG_State/EGLState/Core.h>
 #include <MG_Impl/GLImpl/Texture/ProxyTexture.h>
 #include <MG_Impl/GLImpl/Framebuffer/GL_Framebuffer.h>
+#include <cstdlib>
 
 namespace MobileGL {
     namespace {
@@ -66,6 +67,9 @@ namespace MobileGL {
     }
 
     __attribute__((destructor)) static void AutoDestroy() {
+        if (std::getenv("MOBILEGL_TRACE_SKIP_AUTODESTROY") != nullptr) {
+            return;
+        }
         Destroy();
     }
 #endif

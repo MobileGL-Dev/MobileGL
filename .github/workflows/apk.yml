@@ -199,6 +199,27 @@ jobs:
             --fuzz-percent 20
             --timeout-seconds 180
             || status=1;
+            sh android-plugin/trace-replay-ci.sh
+            --apk-file "${apk_file}"
+            --package top.mobilegl.plugin.espryt.trace
+            --backend DirectGLES
+            --result-root android-retrace-result
+            --fixture-root android-retrace-fixture
+            --case minecraft-1.21.4-in-world
+            --trace-archive tools/trace_replay/fixtures/minecraft-1.21.4-in-world.tgz
+            --trace-file trace.trace
+            --golden tools/trace_replay/fixtures/minecraft-1.21.4-in-world.0004000686.png
+            --target-call 4000686
+            --width 854
+            --height 480
+            --tolerance 500
+            --crop-x 0
+            --crop-y 0
+            --crop-width 0
+            --crop-height 0
+            --fuzz-percent 20
+            --timeout-seconds 900
+            || status=1;
             mkdir -p android-retrace-result/status;
             echo "${status}" > android-retrace-result/status/DirectGLES.status;
             exit 0
@@ -279,6 +300,27 @@ jobs:
             --crop-height 0
             --fuzz-percent 20
             --timeout-seconds 180
+            || status=1;
+            sh android-plugin/trace-replay-ci.sh
+            --apk-file "${apk_file}"
+            --package top.mobilegl.plugin.magma.trace
+            --backend DirectVulkan
+            --result-root android-retrace-result
+            --fixture-root android-retrace-fixture
+            --case minecraft-1.21.4-in-world
+            --trace-archive tools/trace_replay/fixtures/minecraft-1.21.4-in-world.tgz
+            --trace-file trace.trace
+            --golden tools/trace_replay/fixtures/minecraft-1.21.4-in-world.0004000686.png
+            --target-call 4000686
+            --width 854
+            --height 480
+            --tolerance 500
+            --crop-x 0
+            --crop-y 0
+            --crop-width 0
+            --crop-height 0
+            --fuzz-percent 20
+            --timeout-seconds 900
             || status=1;
             mkdir -p android-retrace-result/status;
             echo "${status}" > android-retrace-result/status/DirectVulkan.status;
