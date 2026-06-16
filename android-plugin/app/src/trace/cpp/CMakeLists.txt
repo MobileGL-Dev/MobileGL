@@ -20,6 +20,11 @@ function(include_with_scope)
     include(${ARGV})
 endfunction()
 
+function(target_redirect_exit TARGET)
+    target_compile_definitions(${TARGET} PRIVATE exit=mobilegl_apitrace_exit)
+    target_compile_options(${TARGET} PRIVATE "-include${CMAKE_CURRENT_LIST_DIR}/apitrace_exit.hpp")
+endfunction()
+
 set(BUILD_TESTING OFF CACHE BOOL "" FORCE)
 set(ENABLE_STATIC_SNAPPY ON CACHE BOOL "" FORCE)
 set(DOC_INSTALL_DIR "doc" CACHE PATH "" FORCE)
@@ -88,6 +93,7 @@ target_include_directories(apitrace_os PUBLIC
         "${APITRACE_ROOT}/lib/os"
         "${APITRACE_ROOT}/lib/trace")
 target_link_libraries(apitrace_os PUBLIC Threads::Threads)
+target_redirect_exit(apitrace_os)
 
 add_library(highlight STATIC "${APITRACE_ROOT}/lib/highlight/highlight.cpp")
 target_include_directories(highlight PUBLIC "${APITRACE_ROOT}/lib/highlight")
@@ -146,6 +152,7 @@ target_link_libraries(common PUBLIC
         PkgConfig::BROTLIDEC
         PkgConfig::ZSTD
         zstd_seekable)
+target_redirect_exit(common)
 
 add_library(glhelpers STATIC
         "${APITRACE_ROOT}/helpers/glfeatures.cpp"
@@ -171,9 +178,8 @@ add_library(retrace_common STATIC
         "${APITRACE_ROOT}/retrace/ws.cpp")
 target_compile_definitions(retrace_common PUBLIC RETRACE)
 target_compile_definitions(retrace_common PRIVATE
-        exit=mobilegl_apitrace_exit
         main=mobilegl_apitrace_main)
-target_compile_options(retrace_common PRIVATE "-include${CMAKE_CURRENT_LIST_DIR}/apitrace_exit.hpp")
+target_redirect_exit(retrace_common)
 target_include_directories(retrace_common PUBLIC
         "${APITRACE_GENERATED_DIR}"
         "${APITRACE_ROOT}/compat"
@@ -219,9 +225,8 @@ target_include_directories(glretrace_common PUBLIC
         "${APITRACE_ROOT}/helpers"
         "${APITRACE_ROOT}/retrace")
 target_compile_definitions(glretrace_common PRIVATE
-        exit=mobilegl_apitrace_exit
         main=mobilegl_apitrace_main)
-target_compile_options(glretrace_common PRIVATE "-include${CMAKE_CURRENT_LIST_DIR}/apitrace_exit.hpp")
+target_redirect_exit(glretrace_common)
 target_link_libraries(glretrace_common PUBLIC retrace_common glhelpers glproc)
 
 add_library(trace_replay_runner SHARED

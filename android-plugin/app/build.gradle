@@ -17,6 +17,7 @@ def releaseSigningReady = signingStoreFile.exists()
         && signingStorePassword
         && signingKeyAlias
         && signingKeyPassword
+def debuggableRelease = (findProperty('mobilegl.debuggableRelease') ?: 'false').toString().toBoolean()
 def mobileGlAbiFilters = {
     def abiList = (findProperty('mobilegl.abis') ?: System.getenv('MOBILEGL_ABIS') ?: 'arm64-v8a') as String
     if (abiList.equalsIgnoreCase('all')) {
@@ -99,6 +100,7 @@ android {
 
     buildTypes {
         release {
+            debuggable debuggableRelease
             minifyEnabled false
             if (releaseSigningReady) {
                 signingConfig signingConfigs.release

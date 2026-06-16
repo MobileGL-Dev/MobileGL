@@ -1,6 +1,9 @@
 #!/bin/sh
 set -eu
 
+ADB="${ADB:-adb}"
+PYTHON="${PYTHON:-python3}"
+
 usage() {
   cat <<'EOF'
 Usage:
@@ -120,10 +123,6 @@ test -f "${golden_path}" || die "golden image does not exist: ${golden_path}"
 
 safe_case="$(printf '%s' "${case_name}" | sed 's/[^A-Za-z0-9._-]/_/g')"
 
-quote_android_path() {
-  printf '%s' "$1" | sed "s/'/'\\\\''/g"
-}
-
 prepare_fixture() {
   fixture_dir="${fixture_root}/${safe_case}"
   rm -rf "${fixture_dir}"
@@ -133,22 +132,19 @@ prepare_fixture() {
   extracted_trace="${fixture_dir}/${trace_file}"
   test -f "${extracted_trace}" || die "trace file not found in archive: ${trace_file}"
 
-  adb push "${extracted_trace}" "/data/local/tmp/mobilegl-${safe_case}.trace"
-  adb push "${golden_path}" "/data/local/tmp/mobilegl-${safe_case}.golden.png"
-  adb shell chmod 0644 "/data/local/tmp/mobilegl-${safe_case}.trace" "/data/local/tmp/mobilegl-${safe_case}.golden.png"
+  "${ADB}" push "${extracted_trace}" "/data/local/tmp/mobilegl-${safe_case}.trace"
+  "${ADB}" push "${golden_path}" "/data/local/tmp/mobilegl-${safe_case}.golden.png"
+  "${ADB}" shell chmod 0644 "/data/local/tmp/mobilegl-${safe_case}.trace" "/data/local/tmp/mobilegl-${safe_case}.golden.png"
 }
 
 copy_fixture_to_app() {
-  package_name="$1"
   trace_tmp="/data/local/tmp/mobilegl-${safe_case}.trace"
   golden_tmp="/data/local/tmp/mobilegl-${safe_case}.golden.png"
-  escaped_trace_tmp="$(quote_android_path "${trace_tmp}")"
-  escaped_golden_tmp="$(quote_android_path "${golden_tmp}")"
 
-  adb shell run-as "${package_name}" rm -rf files/trace-replay
-  adb shell run-as "${package_name}" mkdir -p files/trace-replay/input files/trace-replay/output
-  adb shell run-as "${package_name}" sh -c "cat '${escaped_trace_tmp}' > files/trace-replay/input/trace.trace"
-  adb shell run-as "${package_name}" sh -c "cat '${escaped_golden_tmp}' > files/trace-replay/input/golden.png"
+  "${ADB}" shell run-as "${package_name}" rm -rf files/trace-replay
+  "${ADB}" shell run-as "${package_name}" mkdir -p files/trace-replay/input files/trace-replay/output
+  "${ADB}" shell run-as "${package_name}" cp "${trace_tmp}" files/trace-replay/input/trace.trace
+  "${ADB}" shell run-as "${package_name}" cp "${golden_tmp}" files/trace-replay/input/golden.png
 }
 
 run_retrace() {
@@ -156,11 +152,11 @@ run_retrace() {
   result_dir="${result_root}/${safe_case}-${backend}"
 
   mkdir -p "${result_dir}"
-  adb install -r "${apk_file}"
-  copy_fixture_to_app "${package_name}"
-  adb shell am force-stop "${package_name}"
-  adb logcat -c
-  adb shell am start -W -a top.mobilegl.plugin.TRACE_REPLAY \
+  "${ADB}" install -r "${apk_file}"
+  copy_fixture_to_app
+  "${ADB}" shell am force-stop "${package_name}"
+  "${ADB}" logcat -c
+  "${ADB}" shell am start -W -a top.mobilegl.plugin.TRACE_REPLAY \
     -n "${package_name}/top.mobilegl.plugin.trace.TraceReplayActivity" \
     --es trace_path "${app_dir}/input/trace.trace" \
     --es golden_path "${app_dir}/input/golden.png" \
@@ -178,21 +174,21 @@ run_retrace() {
     --ei fuzz_percent "${fuzz_percent}"
 
   for _ in $(seq 1 "${timeout_seconds}"); do
-    if adb shell run-as "${package_name}" ls files/trace-replay/output/result.json >/dev/null 2>&1; then
+    if "${ADB}" shell run-as "${package_name}" ls files/trace-replay/output/result.json >/dev/null 2>&1; then
       break
     fi
     sleep 1
   done
 
-  adb logcat -d -t 1000 > "${result_dir}/logcat.txt" || true
-  adb shell run-as "${package_name}" ls files/trace-replay/output/result.json
-  adb exec-out run-as "${package_name}" cat files/trace-replay/output/result.json > "${result_dir}/result.json"
+  "${ADB}" logcat -d -t 1000 > "${result_dir}/logcat.txt" || true
+  "${ADB}" shell run-as "${package_name}" ls files/trace-replay/output/result.json
+  "${ADB}" exec-out run-as "${package_name}" cat files/trace-replay/output/result.json > "${result_dir}/result.json"
   cat "${result_dir}/result.json"
-  adb exec-out run-as "${package_name}" cat files/trace-replay/output/actual.png > "${result_dir}/${safe_case}-${backend}-actual.png"
-  adb exec-out run-as "${package_name}" cat "files/trace-replay/output/${safe_case}-diff.png" > "${result_dir}/${safe_case}-${backend}-diff.png"
-  adb exec-out run-as "${package_name}" cat files/trace-replay/output/retrace.log > "${result_dir}/retrace.log" || true
+  "${ADB}" exec-out run-as "${package_name}" cat files/trace-replay/output/actual.png > "${result_dir}/${safe_case}-${backend}-actual.png"
+  "${ADB}" exec-out run-as "${package_name}" cat "files/trace-replay/output/${safe_case}-diff.png" > "${result_dir}/${safe_case}-${backend}-diff.png"
+  "${ADB}" exec-out run-as "${package_name}" cat files/trace-replay/output/retrace.log > "${result_dir}/retrace.log" || true
 
-  python3 -c 'import json, sys; result = json.load(open(sys.argv[1], encoding="utf-8")); sys.exit(0 if result.get("passed") else f"trace replay failed: {result}")' "${result_dir}/result.json"
+  "${PYTHON}" -c 'import json, sys; result = json.load(open(sys.argv[1], encoding="utf-8")); sys.exit(0 if result.get("passed") else f"trace replay failed: {result}")' "${result_dir}/result.json"
 }
 
 mkdir -p "${fixture_root}" "${result_root}"
