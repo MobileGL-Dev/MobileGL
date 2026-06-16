@@ -47,3 +47,60 @@ build-test/tools/trace_replay/mobilegl_trace_replay \
   --tolerance 20 \
   --fuzz-percent 20
 ```
+
+## Android device replay
+
+Build and install a trace APK from the repository root:
+
+```sh
+gradle --no-daemon -p android-plugin :app:assembleEsprytTraceDebug
+adb install -r android-plugin/app/build/outputs/apk/esprytTrace/debug/MobileGL-EsprytTrace-debug.apk
+```
+
+Prepare a fixture and copy it into the app-private directory:
+
+```sh
+mkdir -p /tmp/mobilegl-openra
+tar -xzf tools/trace_replay/fixtures/openra.tgz -C /tmp/mobilegl-openra
+adb push /tmp/mobilegl-openra/openra.trace /data/local/tmp/mobilegl-openra.trace
+adb push tools/trace_replay/fixtures/openra.0000031249.png /data/local/tmp/mobilegl-openra.golden.png
+
+PKG=top.mobilegl.plugin.espryt.trace
+APP_DIR=/data/user/0/$PKG/files/trace-replay
+adb shell run-as $PKG rm -rf files/trace-replay
+adb shell run-as $PKG mkdir -p files/trace-replay/input files/trace-replay/output
+adb shell run-as $PKG cp /data/local/tmp/mobilegl-openra.trace files/trace-replay/input/openra.trace
+adb shell run-as $PKG cp /data/local/tmp/mobilegl-openra.golden.png files/trace-replay/input/openra.golden.png
+```
+
+Launch the standalone trace runner Activity:
+
+```sh
+adb shell am start -W -a top.mobilegl.plugin.TRACE_REPLAY \
+  -n $PKG/top.mobilegl.plugin.trace.TraceReplayActivity \
+  --es trace_path $APP_DIR/input/openra.trace \
+  --es golden_path $APP_DIR/input/openra.golden.png \
+  --es output_dir $APP_DIR/output \
+  --es diff_path $APP_DIR/output/openra-diff.png \
+  --es backend DirectGLES \
+  --el target_call 31249 \
+  --ei width 640 \
+  --ei height 480 \
+  --ei crop_x 1 \
+  --ei crop_y 1 \
+  --ei crop_width 638 \
+  --ei crop_height 478 \
+  --ei tolerance 20 \
+  --ei fuzz_percent 20
+```
+
+Read back the result and images:
+
+```sh
+adb shell run-as $PKG cat files/trace-replay/output/result.json
+adb exec-out run-as $PKG cat files/trace-replay/output/actual.png > openra-actual.png
+adb exec-out run-as $PKG cat files/trace-replay/output/openra-diff.png > openra-diff.png
+```
+
+For the Vulkan backend, build and install `:app:assembleMagmaTraceDebug`, set
+`PKG=top.mobilegl.plugin.magma.trace`, and pass `--es backend DirectVulkan`.

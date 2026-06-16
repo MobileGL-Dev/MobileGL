@@ -26,6 +26,7 @@ Intent extras:
 trace_path    absolute path to the apitrace file
 golden_path   optional absolute path to a golden PNG
 output_dir    directory for result.json and actual.png
+diff_path     optional absolute path for a golden-difference PNG
 backend       DirectGLES or DirectVulkan; defaults to the backend flavor
 target_frame  target frame index, or -1
 target_call   target call number, or -1
@@ -61,6 +62,7 @@ adb shell am start -a top.mobilegl.plugin.TRACE_REPLAY \
   --es trace_path /data/user/0/top.mobilegl.plugin.espryt.trace/files/trace-replay/input/app.trace \
   --es golden_path /data/user/0/top.mobilegl.plugin.espryt.trace/files/trace-replay/input/app.golden.png \
   --es output_dir /data/user/0/top.mobilegl.plugin.espryt.trace/files/trace-replay/output \
+  --es diff_path /data/user/0/top.mobilegl.plugin.espryt.trace/files/trace-replay/output/app-diff.png \
   --es backend DirectGLES \
   --el target_call 31249 \
   --ei tolerance 0 \

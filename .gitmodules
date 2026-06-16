@@ -28,6 +28,6 @@
 [submodule "3rdparty/SPIRV-Reflect"]
 	path = 3rdparty/SPIRV-Reflect
 	url = https://github.com/KhronosGroup/SPIRV-Reflect.git
-[submodule "android-plugin/third_party/apitrace"]
-	path = android-plugin/third_party/apitrace
+[submodule "3rdparty/apitrace"]
+	path = 3rdparty/apitrace
 	url = https://github.com/MobileGL-Dev/apitrace.git

@@ -17,6 +17,12 @@ def releaseSigningReady = signingStoreFile.exists()
         && signingStorePassword
         && signingKeyAlias
         && signingKeyPassword
+def mobileGlAbiFilters = {
+    ((findProperty('mobilegl.abis') ?: System.getenv('MOBILEGL_ABIS') ?: 'arm64-v8a') as String)
+            .split(',')
+            .collect { it.trim() }
+            .findAll { !it.isEmpty() }
+}
 
 android {
     namespace 'top.mobilegl.plugin'
@@ -30,7 +36,7 @@ android {
         versionName 'dev'
 
         ndk {
-            abiFilters 'arm64-v8a'
+            abiFilters(*mobileGlAbiFilters())
         }
     }
 

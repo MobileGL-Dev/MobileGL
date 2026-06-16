@@ -98,6 +98,7 @@ public final class TraceReplayActivity extends Activity {
                 request.tracePath,
                 request.goldenPath,
                 request.outputDir,
+                request.diffPath,
                 request.backend,
                 request.targetFrame,
                 request.targetCall,
@@ -123,6 +124,7 @@ public final class TraceReplayActivity extends Activity {
             String tracePath,
             String goldenPath,
             String outputDir,
+            String diffPath,
             String backend,
             int targetFrame,
             long targetCall,
@@ -140,6 +142,7 @@ public final class TraceReplayActivity extends Activity {
         final String tracePath;
         final String goldenPath;
         final String outputDir;
+        final String diffPath;
         final String backend;
         final int targetFrame;
         final long targetCall;
@@ -156,6 +159,7 @@ public final class TraceReplayActivity extends Activity {
                 String tracePath,
                 String goldenPath,
                 String outputDir,
+                String diffPath,
                 String backend,
                 int targetFrame,
                 long targetCall,
@@ -171,6 +175,7 @@ public final class TraceReplayActivity extends Activity {
             this.tracePath = tracePath;
             this.goldenPath = goldenPath;
             this.outputDir = outputDir;
+            this.diffPath = diffPath;
             this.backend = backend;
             this.targetFrame = targetFrame;
             this.targetCall = targetCall;
@@ -186,10 +191,12 @@ public final class TraceReplayActivity extends Activity {
 
         static TraceReplayRequest from(Intent intent, File filesDir, String defaultBackend) {
             String outputDir = readString(intent, "output_dir", new File(filesDir, "trace-replay").getAbsolutePath());
+            String diffPath = readString(intent, "diff_path", "");
             return new TraceReplayRequest(
                     readString(intent, "trace_path", ""),
                     readString(intent, "golden_path", ""),
                     outputDir,
+                    diffPath,
                     readString(intent, "backend", defaultBackend),
                     intent.getIntExtra("target_frame", -1),
                     intent.getLongExtra("target_call", -1L),
@@ -216,19 +223,22 @@ public final class TraceReplayActivity extends Activity {
         public final String message;
         public final String resultPath;
         public final String actualPath;
+        public final String diffPath;
 
         public TraceReplayResult(
                 boolean passed,
                 int statusCode,
                 String message,
                 String resultPath,
-                String actualPath
+                String actualPath,
+                String diffPath
         ) {
             this.passed = passed;
             this.statusCode = statusCode;
             this.message = message;
             this.resultPath = resultPath;
             this.actualPath = actualPath;
+            this.diffPath = diffPath;
         }
 
         @Override
@@ -239,6 +249,7 @@ public final class TraceReplayActivity extends Activity {
                     ", message='" + message + '\'' +
                     ", resultPath='" + resultPath + '\'' +
                     ", actualPath='" + actualPath + '\'' +
+                    ", diffPath='" + diffPath + '\'' +
                     '}';
         }
     }

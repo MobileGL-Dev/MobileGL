@@ -84,3 +84,97 @@ jobs:
           name: MobileGL-retrace-apk-${{ env.date_today }}-${{ env.short_sha }}
           path: android-plugin/app/build/outputs/apk/*Trace/release/*.apk
           if-no-files-found: error
+
+      - name: Build emulator retrace APKs
+        run: gradle --no-daemon -p android-plugin :app:assembleEsprytTraceDebug :app:assembleMagmaTraceDebug -Pmobilegl.abis=x86_64 --parallel --max-workers "$(nproc)"
+
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Test retrace APK on Android AVD
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          target: google_apis
+          arch: x86_64
+          profile: pixel_6
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -camera-back none -camera-front none
+          script: |
+            set -euo pipefail
+
+            mkdir -p android-retrace-fixture android-retrace-result
+            tar -xzf tools/trace_replay/fixtures/minecraft-1.21.4-startup.tgz -C android-retrace-fixture
+            cp tools/trace_replay/fixtures/minecraft-1.21.4-startup.0000092195.png android-retrace-fixture/golden.png
+            adb push android-retrace-fixture/trace.trace /data/local/tmp/mobilegl-trace.trace
+            adb push android-retrace-fixture/golden.png /data/local/tmp/mobilegl-golden.png
+
+            run_retrace() {
+              local case_name="$1"
+              local package_name="$2"
+              local apk_path="$3"
+              local backend="$4"
+              local app_dir="/data/user/0/${package_name}/files/trace-replay"
+              local result_dir="android-retrace-result/${case_name}"
+
+              mkdir -p "${result_dir}"
+              adb install -r "${apk_path}"
+              adb shell run-as "${package_name}" rm -rf files/trace-replay
+              adb shell run-as "${package_name}" mkdir -p files/trace-replay/input files/trace-replay/output
+              adb shell run-as "${package_name}" cp /data/local/tmp/mobilegl-trace.trace files/trace-replay/input/trace.trace
+              adb shell run-as "${package_name}" cp /data/local/tmp/mobilegl-golden.png files/trace-replay/input/golden.png
+              adb shell am force-stop "${package_name}"
+              adb logcat -c
+              adb shell am start -W -a top.mobilegl.plugin.TRACE_REPLAY \
+                -n "${package_name}/top.mobilegl.plugin.trace.TraceReplayActivity" \
+                --es trace_path "${app_dir}/input/trace.trace" \
+                --es golden_path "${app_dir}/input/golden.png" \
+                --es output_dir "${app_dir}/output" \
+                --es diff_path "${app_dir}/output/${case_name}-diff.png" \
+                --es backend "${backend}" \
+                --el target_call 92195 \
+                --ei width 854 \
+                --ei height 480 \
+                --ei tolerance 20 \
+                --ei fuzz_percent 20
+
+              for _ in $(seq 1 180); do
+                if adb shell run-as "${package_name}" ls files/trace-replay/output/result.json >/dev/null 2>&1; then
+                  break
+                fi
+                sleep 1
+              done
+
+              adb logcat -d -t 1000 > "${result_dir}/logcat.txt" || true
+              adb shell run-as "${package_name}" ls files/trace-replay/output/result.json
+              adb exec-out run-as "${package_name}" cat files/trace-replay/output/result.json > "${result_dir}/result.json"
+              cat "${result_dir}/result.json"
+              adb exec-out run-as "${package_name}" cat files/trace-replay/output/actual.png > "${result_dir}/${case_name}-actual.png"
+              adb exec-out run-as "${package_name}" cat files/trace-replay/output/${case_name}-diff.png > "${result_dir}/${case_name}-diff.png"
+              adb exec-out run-as "${package_name}" cat files/trace-replay/output/retrace.log > "${result_dir}/retrace.log" || true
+
+              python3 -c 'import json, sys; result = json.load(open(sys.argv[1], encoding="utf-8")); sys.exit(0 if result.get("passed") else f"trace replay failed: {result}")' "${result_dir}/result.json"
+            }
+
+            run_retrace \
+              minecraft-1.21.4-startup-DirectGLES \
+              top.mobilegl.plugin.espryt.trace \
+              android-plugin/app/build/outputs/apk/esprytTrace/debug/MobileGL-EsprytTrace-debug.apk \
+              DirectGLES
+
+            run_retrace \
+              minecraft-1.21.4-startup-DirectVulkan \
+              top.mobilegl.plugin.magma.trace \
+              android-plugin/app/build/outputs/apk/magmaTrace/debug/MobileGL-MagmaTrace-debug.apk \
+              DirectVulkan
+
+      - name: Upload Android retrace result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: MobileGL-android-retrace-result-${{ env.date_today }}-${{ env.short_sha }}
+          path: android-retrace-result/**
+          if-no-files-found: warn

@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.22.1)
 
 project(trace_replay_runner)
 
-set(APITRACE_ROOT "${CMAKE_CURRENT_LIST_DIR}/../../../../third_party/apitrace")
+set(APITRACE_ROOT "${CMAKE_CURRENT_LIST_DIR}/../../../../../3rdparty/apitrace")
 set(APITRACE_BINARY_DIR "${CMAKE_CURRENT_BINARY_DIR}/apitrace")
 set(APITRACE_VERSION "mobilegl-trace")
 

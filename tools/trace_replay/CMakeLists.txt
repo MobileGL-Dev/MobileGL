@@ -7,7 +7,7 @@ endif()
 
 set(MOBILEGL_TRACE_ROOT "${CMAKE_CURRENT_LIST_DIR}")
 set(MOBILEGL_TRACE_SHARED_CPP_DIR "${CMAKE_SOURCE_DIR}/android-plugin/app/src/trace/cpp")
-set(APITRACE_ROOT "${CMAKE_SOURCE_DIR}/android-plugin/third_party/apitrace")
+set(APITRACE_ROOT "${CMAKE_SOURCE_DIR}/3rdparty/apitrace")
 set(APITRACE_BINARY_DIR "${CMAKE_CURRENT_BINARY_DIR}/apitrace")
 set(APITRACE_VERSION "mobilegl-trace")
 set(MOBILEGL_TRACE_REPLAY_MOBILEGL_LIBRARY "" CACHE FILEPATH "Existing libMobileGL.so to use for trace replay tests")

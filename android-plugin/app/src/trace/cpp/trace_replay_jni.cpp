@@ -28,18 +28,21 @@ jobject MakeResult(JNIEnv* env, const mobilegl_trace::Result& result) {
     if (clazz == nullptr) {
         return nullptr;
     }
-    jmethodID ctor = env->GetMethodID(clazz, "<init>", "(ZILjava/lang/String;Ljava/lang/String;Ljava/lang/String;)V");
+    jmethodID ctor = env->GetMethodID(clazz, "<init>",
+                                      "(ZILjava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V");
     if (ctor == nullptr) {
         return nullptr;
     }
     jstring message = env->NewStringUTF(result.message.c_str());
     jstring resultPath = env->NewStringUTF(result.resultPath.c_str());
     jstring actualPath = env->NewStringUTF(result.actualPath.c_str());
+    jstring diffPath = env->NewStringUTF(result.diffPath.c_str());
     jobject object = env->NewObject(clazz, ctor, result.passed ? JNI_TRUE : JNI_FALSE, result.statusCode, message,
-                                    resultPath, actualPath);
+                                    resultPath, actualPath, diffPath);
     env->DeleteLocalRef(message);
     env->DeleteLocalRef(resultPath);
     env->DeleteLocalRef(actualPath);
+    env->DeleteLocalRef(diffPath);
     return object;
 }
 
@@ -52,6 +55,7 @@ Java_top_mobilegl_plugin_trace_TraceReplayActivity_nativeRunTraceReplay(JNIEnv* 
                                                                         jstring tracePath,
                                                                         jstring goldenPath,
                                                                         jstring outputDir,
+                                                                        jstring diffPath,
                                                                         jstring backend,
                                                                         jint targetFrame,
                                                                         jlong targetCall,
@@ -67,6 +71,7 @@ Java_top_mobilegl_plugin_trace_TraceReplayActivity_nativeRunTraceReplay(JNIEnv* 
     request.tracePath = ToString(env, tracePath);
     request.goldenPath = ToString(env, goldenPath);
     request.outputDir = ToString(env, outputDir);
+    request.diffPath = ToString(env, diffPath);
     request.backend = ToString(env, backend);
     request.targetFrame = targetFrame;
     request.targetCall = targetCall;
