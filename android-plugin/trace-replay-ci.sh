@@ -5,7 +5,9 @@ usage() {
   cat <<'EOF'
 Usage:
   sh android-plugin/trace-replay-ci.sh \
-    --apk-dir DIR \
+    --apk-file FILE \
+    --package PACKAGE \
+    --backend BACKEND \
     --result-root DIR \
     --fixture-root DIR \
     --case NAME \
@@ -21,13 +23,7 @@ Usage:
     --crop-width N \
     --crop-height N \
     --fuzz-percent N \
-    --timeout-seconds N \
-    --espryt-package PACKAGE \
-    --espryt-apk-name APK_NAME \
-    --espryt-backend BACKEND \
-    --magma-package PACKAGE \
-    --magma-apk-name APK_NAME \
-    --magma-backend BACKEND
+    --timeout-seconds N
 EOF
 }
 
@@ -52,7 +48,9 @@ require_value() {
   fi
 }
 
-apk_dir=""
+apk_file=""
+package_name=""
+backend=""
 result_root=""
 fixture_root=""
 case_name=""
@@ -69,16 +67,12 @@ crop_width=""
 crop_height=""
 fuzz_percent=""
 timeout_seconds=""
-espryt_package=""
-espryt_apk_name=""
-espryt_backend=""
-magma_package=""
-magma_apk_name=""
-magma_backend=""
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
-    --apk-dir) apk_dir="$(next_arg "$@")"; shift 2 ;;
+    --apk-file) apk_file="$(next_arg "$@")"; shift 2 ;;
+    --package) package_name="$(next_arg "$@")"; shift 2 ;;
+    --backend) backend="$(next_arg "$@")"; shift 2 ;;
     --result-root) result_root="$(next_arg "$@")"; shift 2 ;;
     --fixture-root) fixture_root="$(next_arg "$@")"; shift 2 ;;
     --case) case_name="$(next_arg "$@")"; shift 2 ;;
@@ -95,18 +89,14 @@ while [ "$#" -gt 0 ]; do
     --crop-height) crop_height="$(next_arg "$@")"; shift 2 ;;
     --fuzz-percent) fuzz_percent="$(next_arg "$@")"; shift 2 ;;
     --timeout-seconds) timeout_seconds="$(next_arg "$@")"; shift 2 ;;
-    --espryt-package) espryt_package="$(next_arg "$@")"; shift 2 ;;
-    --espryt-apk-name) espryt_apk_name="$(next_arg "$@")"; shift 2 ;;
-    --espryt-backend) espryt_backend="$(next_arg "$@")"; shift 2 ;;
-    --magma-package) magma_package="$(next_arg "$@")"; shift 2 ;;
-    --magma-apk-name) magma_apk_name="$(next_arg "$@")"; shift 2 ;;
-    --magma-backend) magma_backend="$(next_arg "$@")"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) die "unknown argument: $1" ;;
   esac
 done
 
-require_value "${apk_dir}" "--apk-dir"
+require_value "${apk_file}" "--apk-file"
+require_value "${package_name}" "--package"
+require_value "${backend}" "--backend"
 require_value "${result_root}" "--result-root"
 require_value "${fixture_root}" "--fixture-root"
 require_value "${case_name}" "--case"
@@ -123,13 +113,8 @@ require_value "${crop_width}" "--crop-width"
 require_value "${crop_height}" "--crop-height"
 require_value "${fuzz_percent}" "--fuzz-percent"
 require_value "${timeout_seconds}" "--timeout-seconds"
-require_value "${espryt_package}" "--espryt-package"
-require_value "${espryt_apk_name}" "--espryt-apk-name"
-require_value "${espryt_backend}" "--espryt-backend"
-require_value "${magma_package}" "--magma-package"
-require_value "${magma_apk_name}" "--magma-apk-name"
-require_value "${magma_backend}" "--magma-backend"
 
+test -f "${apk_file}" || die "APK does not exist: ${apk_file}"
 test -f "${trace_archive}" || die "trace archive does not exist: ${trace_archive}"
 test -f "${golden_path}" || die "golden image does not exist: ${golden_path}"
 
@@ -137,13 +122,6 @@ safe_case="$(printf '%s' "${case_name}" | sed 's/[^A-Za-z0-9._-]/_/g')"
 
 quote_android_path() {
   printf '%s' "$1" | sed "s/'/'\\\\''/g"
-}
-
-find_apk() {
-  apk_name="$1"
-  apk_path="$(find "${apk_dir}" -name "${apk_name}" -print -quit)"
-  test -n "${apk_path}" || die "APK not found under ${apk_dir}: ${apk_name}"
-  printf '%s' "${apk_path}"
 }
 
 prepare_fixture() {
@@ -174,14 +152,11 @@ copy_fixture_to_app() {
 }
 
 run_retrace() {
-  package_name="$1"
-  apk_path="$2"
-  backend="$3"
   app_dir="/data/user/0/${package_name}/files/trace-replay"
   result_dir="${result_root}/${safe_case}-${backend}"
 
   mkdir -p "${result_dir}"
-  adb install -r "${apk_path}"
+  adb install -r "${apk_file}"
   copy_fixture_to_app "${package_name}"
   adb shell am force-stop "${package_name}"
   adb logcat -c
@@ -223,5 +198,4 @@ run_retrace() {
 mkdir -p "${fixture_root}" "${result_root}"
 prepare_fixture
 
-run_retrace "${espryt_package}" "$(find_apk "${espryt_apk_name}")" "${espryt_backend}"
-run_retrace "${magma_package}" "$(find_apk "${magma_apk_name}")" "${magma_backend}"
+run_retrace
