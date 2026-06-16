@@ -10,6 +10,7 @@ set(MOBILEGL_TRACE_SHARED_CPP_DIR "${CMAKE_SOURCE_DIR}/android-plugin/app/src/tr
 set(APITRACE_ROOT "${CMAKE_SOURCE_DIR}/android-plugin/third_party/apitrace")
 set(APITRACE_BINARY_DIR "${CMAKE_CURRENT_BINARY_DIR}/apitrace")
 set(APITRACE_VERSION "mobilegl-trace")
+set(MOBILEGL_TRACE_REPLAY_MOBILEGL_LIBRARY "" CACHE FILEPATH "Existing libMobileGL.so to use for trace replay tests")
 
 find_package(Python3 REQUIRED)
 find_package(Threads REQUIRED)
@@ -254,7 +255,13 @@ target_link_libraries(mobilegl_trace_replay PRIVATE
         mobilegl_trace_apitrace_os
         "-Wl,--end-group"
         dl)
-add_dependencies(mobilegl_trace_replay MobileGL)
+
+if(MOBILEGL_TRACE_REPLAY_MOBILEGL_LIBRARY)
+    set(mobilegl_trace_replay_mobilegl_library "${MOBILEGL_TRACE_REPLAY_MOBILEGL_LIBRARY}")
+else()
+    set(mobilegl_trace_replay_mobilegl_library "$<TARGET_FILE:MobileGL>")
+    add_dependencies(mobilegl_trace_replay MobileGL)
+endif()
 
 enable_testing()
 function(add_openra_trace_replay_test BACKEND)
@@ -262,7 +269,7 @@ function(add_openra_trace_replay_test BACKEND)
             NAME MobileGLTraceReplay.OpenRA.${BACKEND}
             COMMAND "${CMAKE_COMMAND}"
             -DTRACE_REPLAY_EXE=$<TARGET_FILE:mobilegl_trace_replay>
-            -DMOBILEGL_LIBRARY=$<TARGET_FILE:MobileGL>
+            -DMOBILEGL_LIBRARY=${mobilegl_trace_replay_mobilegl_library}
             -DOPENRA_TRACE_ARCHIVE=${MOBILEGL_TRACE_ROOT}/fixtures/openra.tgz
             -DOPENRA_GOLDEN=${MOBILEGL_TRACE_ROOT}/fixtures/openra.0000031249.png
             -DOPENRA_BACKEND=${BACKEND}

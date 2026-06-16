@@ -190,8 +190,10 @@ jobs:
 
   retrace:
     runs-on: ubuntu-latest
+    needs: build-linux
     env:
       BUILD_DIR: build-retrace
+      MOBILEGL_LIBRARY: ${{ github.workspace }}/build-linux/libMobileGL.so
 
     steps:
       - name: Set Swap Space
@@ -230,6 +232,17 @@ jobs:
           ld.lld-20 --version || ld.lld --version || true
           dpkg -l 'libc++*' 'libegl*' 'libgles*' 'mesa*' 'vulkan*' || true
 
+      - name: Download Linux runtime
+        uses: actions/download-artifact@v4
+        with:
+          name: mobilegl-linux-runtime
+          path: .
+
+      - name: Unpack Linux runtime
+        run: |
+          tar -xzf mobilegl-linux-runtime.tgz
+          test -f "${MOBILEGL_LIBRARY}"
+
       - name: Configure CMake
         run: |
           if [ "${{ secrets.ACTIONS_STEP_DEBUG }}" = "true" ]; then
@@ -245,6 +258,7 @@ jobs:
             -DMOBILEGL_BUILD_TEST=OFF \
             -DMOBILEGL_BUILD_BENCHMARK=OFF \
             -DMOBILEGL_BUILD_TRACE_REPLAY=ON \
+            -DMOBILEGL_TRACE_REPLAY_MOBILEGL_LIBRARY="${MOBILEGL_LIBRARY}" \
             -DCMAKE_POLICY_VERSION_MINIMUM=3.5
 
       - name: Build trace replay
