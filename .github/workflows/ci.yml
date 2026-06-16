@@ -85,7 +85,6 @@ jobs:
             --exclude='build.ninja' \
             --exclude='cmake_install.cmake' \
             -czf ci-artifacts/mobilegl-linux-runtime.tgz \
-            "${BUILD_DIR}/CTestTestfile.cmake" \
             "${BUILD_DIR}/MobileGL/MG_Test" \
             "${BUILD_DIR}/MobileGL/MG_Benchmark" \
             "${SHARED_LIBS[@]}"
