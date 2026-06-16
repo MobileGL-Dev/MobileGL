@@ -1,0 +1,250 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - dev
+      - Feat/Backend-Direct-GLES
+      - Feat/Backend-Direct-Vulkan
+  workflow_dispatch:
+
+jobs:
+  build-linux:
+    runs-on: ubuntu-latest
+    env:
+      BUILD_DIR: build-linux
+
+    steps:
+      - name: Set Swap Space
+        uses: pierotofy/set-swap-space@master
+        with:
+          swap-size-gb: 32
+
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Get CMake
+        uses: lukka/get-cmake@latest
+
+      - name: Prepare Vulkan SDK
+        uses: humbletim/setup-vulkan-sdk@v1.2.1
+        with:
+          vulkan-query-version: 1.4.304.1
+          vulkan-components: Vulkan-Headers, Vulkan-Loader
+          vulkan-use-cache: true
+
+      - name: Update glslang external sources
+        working-directory: 3rdparty/glslang
+        run: python update_glslang_sources.py
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang-20 clang++-20 lld-20 libc++-20-dev libc++abi-20-dev libvulkan-dev libegl1-mesa-dev libgles2-mesa-dev libgl1-mesa-dri mesa-vulkan-drivers ninja-build
+
+      - name: Show installed toolchain
+        run: |
+          clang-20 --version
+          clang++-20 --version
+          ld.lld-20 --version || ld.lld --version || true
+          dpkg -l 'libc++*' 'libegl*' 'libgles*' 'mesa*' 'vulkan*' || true
+
+      - name: Configure CMake
+        run: |
+          if [ "${{ secrets.ACTIONS_STEP_DEBUG }}" = "true" ]; then
+            BUILD_TYPE=Debug
+          else
+            BUILD_TYPE=Release
+          fi
+
+          cmake -S . -B "${BUILD_DIR}" -G Ninja \
+            -DCMAKE_C_COMPILER=clang-20 \
+            -DCMAKE_CXX_COMPILER=clang++-20 \
+            -DCMAKE_BUILD_TYPE="${BUILD_TYPE}" \
+            -DMOBILEGL_BUILD_TEST=ON \
+            -DMOBILEGL_BUILD_BENCHMARK=ON \
+            -DMOBILEGL_BUILD_TRACE_REPLAY=ON \
+            -DBENCHMARK_DOWNLOAD_DEPENDENCIES=ON \
+            -DBENCHMARK_ENABLE_TESTING=OFF \
+            -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+
+      - name: Build
+        run: cmake --build "${BUILD_DIR}" --parallel "$(nproc)"
+
+      - name: Package Linux runtime
+        run: |
+          mkdir -p ci-artifacts
+          mapfile -t SHARED_LIBS < <(find "${BUILD_DIR}" -type f \( -name '*.so' -o -name '*.so.*' \) -print | sort)
+          tar \
+            --exclude='*/CMakeFiles' \
+            --exclude='*.o' \
+            --exclude='*.a' \
+            --exclude='*.ninja*' \
+            --exclude='build.ninja' \
+            --exclude='cmake_install.cmake' \
+            -czf ci-artifacts/mobilegl-linux-runtime.tgz \
+            "${BUILD_DIR}/CTestTestfile.cmake" \
+            "${BUILD_DIR}/MobileGL/MG_Test" \
+            "${BUILD_DIR}/MobileGL/MG_Benchmark" \
+            "${BUILD_DIR}/tools/trace_replay" \
+            "${SHARED_LIBS[@]}" \
+            tools/trace_replay/fixtures
+
+      - name: Upload Linux runtime
+        uses: actions/upload-artifact@v4
+        with:
+          name: mobilegl-linux-runtime
+          path: ci-artifacts/mobilegl-linux-runtime.tgz
+          if-no-files-found: error
+
+  test:
+    runs-on: ubuntu-latest
+    needs: build-linux
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Get CMake
+        uses: lukka/get-cmake@latest
+
+      - name: Install runtime dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libvulkan1 libegl1 libgles2 libgl1-mesa-dri mesa-vulkan-drivers
+
+      - name: Download Linux runtime
+        uses: actions/download-artifact@v4
+        with:
+          name: mobilegl-linux-runtime
+          path: .
+
+      - name: Unpack Linux runtime
+        run: tar -xzf mobilegl-linux-runtime.tgz
+
+      - name: Normalize CTest command paths
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+
+          for path in Path('build-linux').rglob('CTestTestfile.cmake'):
+              text = path.read_text()
+              text = re.sub(r'"[^"]*/cmake-[^"]*/bin/cmake"', '"cmake"', text)
+              path.write_text(text)
+          PY
+
+      - name: Test
+        working-directory: build-linux/MobileGL/MG_Test
+        run: |
+          if [ "${{ secrets.ACTIONS_STEP_DEBUG }}" = "true" ]; then
+            ctest -V
+          else
+            ctest --output-on-failure
+          fi
+
+  benchmark:
+    runs-on: ubuntu-latest
+    needs: build-linux
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Get CMake
+        uses: lukka/get-cmake@latest
+
+      - name: Install runtime dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libvulkan1 libegl1 libgles2 libgl1-mesa-dri mesa-vulkan-drivers
+
+      - name: Download Linux runtime
+        uses: actions/download-artifact@v4
+        with:
+          name: mobilegl-linux-runtime
+          path: .
+
+      - name: Unpack Linux runtime
+        run: tar -xzf mobilegl-linux-runtime.tgz
+
+      - name: Normalize CTest command paths
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+
+          for path in Path('build-linux').rglob('CTestTestfile.cmake'):
+              text = path.read_text()
+              text = re.sub(r'"[^"]*/cmake-[^"]*/bin/cmake"', '"cmake"', text)
+              path.write_text(text)
+          PY
+
+      - name: Benchmark
+        working-directory: build-linux/MobileGL/MG_Benchmark
+        run: ctest -V -C Release
+
+  retrace:
+    runs-on: ubuntu-latest
+    needs: build-linux
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Get CMake
+        uses: lukka/get-cmake@latest
+
+      - name: Install runtime dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libvulkan1 libegl1 libgles2 libgl1-mesa-dri mesa-vulkan-drivers
+
+      - name: Download Linux runtime
+        uses: actions/download-artifact@v4
+        with:
+          name: mobilegl-linux-runtime
+          path: .
+
+      - name: Unpack Linux runtime
+        run: tar -xzf mobilegl-linux-runtime.tgz
+
+      - name: Normalize CTest command paths
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+
+          for path in Path('build-linux').rglob('CTestTestfile.cmake'):
+              text = path.read_text()
+              text = re.sub(r'"[^"]*/cmake-[^"]*/bin/cmake"', '"cmake"', text)
+              path.write_text(text)
+          PY
+
+      - name: Retrace and validate Espryt (DirectGLES)
+        working-directory: build-linux/tools/trace_replay
+        run: ctest -V -R MobileGLTraceReplay.OpenRA.DirectGLES
+
+      - name: Retrace and validate Magma (DirectVulkan)
+        working-directory: build-linux/tools/trace_replay
+        run: ctest -V -R MobileGLTraceReplay.OpenRA.DirectVulkan
+
+      - name: Upload actual image
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: OpenRA-retrace-actual
+          path: |
+            build-linux/tools/trace_replay/openra/actual-images/openra-DirectGLES-actual.png
+            build-linux/tools/trace_replay/openra/actual-images/openra-DirectVulkan-actual.png
+            build-linux/tools/trace_replay/openra/actual-images/*.json
+            build-linux/tools/trace_replay/openra/actual-images/*.log
+          if-no-files-found: warn

@@ -1,4 +1,4 @@
-name: MobileGL Plugin APK
+name: MobileGL APK
 
 on:
   push:
@@ -46,14 +46,14 @@ jobs:
         working-directory: 3rdparty/glslang
         run: python update_glslang_sources.py
 
-      - name: Build plugin APK
-        run: gradle --no-daemon -p android-plugin :app:assembleRelease
+      - name: Build APKs
+        run: gradle --no-daemon -p android-plugin :app:assembleRelease :app:assembleEsprytTraceRelease :app:assembleMagmaTraceRelease --parallel --max-workers "$(nproc)"
         env:
           SIGNING_STORE_PASSWORD: ${{ secrets.SIGNING_STORE_PASSWORD }}
           SIGNING_KEY_ALIAS: ${{ secrets.SIGNING_KEY_ALIAS }}
           SIGNING_KEY_PASSWORD: ${{ secrets.SIGNING_KEY_PASSWORD }}
 
-      - name: Verify signed APK
+      - name: Verify signed APKs
         run: |
           APKSIGNER="$(find "$ANDROID_HOME/build-tools" -name apksigner -type f | sort -V | tail -n 1)"
           mapfile -t APKS < <(find android-plugin/app/build/outputs/apk -type f -path '*/release/*.apk' | sort)
@@ -75,6 +75,12 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: MobileGL-plugin-${{ env.date_today }}-${{ env.short_sha }}
-          path: |
-            android-plugin/app/build/outputs/apk/release/*.apk
-            android-plugin/app/build/outputs/apk/**/release/*.apk
+          path: android-plugin/app/build/outputs/apk/*Plugin/release/*.apk
+          if-no-files-found: error
+
+      - name: Upload retrace APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: MobileGL-retrace-apk-${{ env.date_today }}-${{ env.short_sha }}
+          path: android-plugin/app/build/outputs/apk/*Trace/release/*.apk
+          if-no-files-found: error
