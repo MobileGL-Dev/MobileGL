@@ -25,6 +25,9 @@ The bundled fixtures cover:
 - minecraft-1.21.4-fabric-iris-mellow-in-world: captured from Minecraft 1.21.4 Fabric with Sodium, Iris, and Mellow
   after entering a singleplayer world.
   ![Minecraft 1.21.4 Fabric Iris Mellow in-world golden](fixtures/minecraft-1.21.4-fabric-iris-mellow-in-world.0000096143.png)
+- minecraft-1.21.4-fabric-iris-bliss-in-world: captured from Minecraft 1.21.4 Fabric with Sodium, Iris, and Bliss
+  after entering a singleplayer world.
+  ![Minecraft 1.21.4 Fabric Iris Bliss in-world golden](fixtures/minecraft-1.21.4-fabric-iris-bliss-in-world.0000113511.png)
 - minecraft-1.21.4-fabric-iris-iterationt-in-world: captured from Minecraft 1.21.4 Fabric with Sodium, Iris, and
   iterationT after entering a singleplayer world.
   ![Minecraft 1.21.4 Fabric Iris iterationT in-world golden](fixtures/minecraft-1.21.4-fabric-iris-iterationt-in-world.0001173280.png)
