@@ -20,6 +20,8 @@
 #include <MG_Impl/GLImpl/Getter/GL_Getter.h>
 #include <MG_Impl/GLImpl/RenderState/GL_RenderState.h>
 #include <MG_State/GLState/Core.h>
+#include <MG_State/GLState/FramebufferState/FramebufferObject.h>
+#include <MG_State/GLState/TextureState/TextureState.h>
 #include <MG_Backend/DirectVulkan/Renderer/VkRenderPassManager.h>
 #include <MG_Backend/DirectVulkan/Renderer/VkTextureManager.h>
 #include <MG_Backend/DirectVulkan/Renderer/VulkanRenderer.h>
@@ -198,6 +200,46 @@ TEST(DirectVulkanSanity, AdvertisesVoxyRequiredRenderingExtensionsWithoutRaising
               extensions.end());
     EXPECT_NE(std::find(extensions.begin(), extensions.end(), MobileGL::E_GL_ARB_gpu_shader_int64),
               extensions.end());
+}
+
+TEST(DirectVulkanSanity, ClampsAdvertisedTextureAndDrawBufferLimitsToFrontendState) {
+    using namespace MobileGL;
+
+    MG_Backend::DirectVulkan::BackendObject_DirectVulkan backend;
+
+    MG_External::VulkanCapabilities highCaps;
+    highCaps.MaxTextureImageUnits = 256;
+    highCaps.MaxVertexTextureImageUnits = 256;
+    highCaps.MaxComputeTextureImageUnits = 256;
+    highCaps.MaxCombinedTextureImageUnits = 256;
+    highCaps.MaxDrawBuffers = 128;
+    highCaps.MaxColorAttachments = 128;
+    backend.ApplyVulkanCapabilitiesForTesting(highCaps);
+
+    const auto& highParams = backend.GetDynamicParameters();
+    EXPECT_EQ(highParams.MaxTextureImageUnits, MG_State::GLState::TextureState::MAX_TEXTURE_IMAGE_UNITS);
+    EXPECT_EQ(highParams.MaxVertexTextureImageUnits, MG_State::GLState::TextureState::MAX_TEXTURE_IMAGE_UNITS);
+    EXPECT_EQ(highParams.MaxComputeTextureImageUnits, MG_State::GLState::TextureState::MAX_TEXTURE_IMAGE_UNITS);
+    EXPECT_EQ(highParams.MaxCombinedTextureImageUnits, MG_State::GLState::TextureState::MAX_TEXTURE_IMAGE_UNITS);
+    EXPECT_EQ(highParams.MaxDrawBuffers, MG_State::GLState::FramebufferObject::MAX_DRAW_BUFFERS);
+    EXPECT_EQ(highParams.MaxColorAttachments, MG_State::GLState::FramebufferObject::MAX_DRAW_BUFFERS);
+
+    MG_External::VulkanCapabilities lowCaps;
+    lowCaps.MaxTextureImageUnits = 16;
+    lowCaps.MaxVertexTextureImageUnits = 12;
+    lowCaps.MaxComputeTextureImageUnits = 10;
+    lowCaps.MaxCombinedTextureImageUnits = 20;
+    lowCaps.MaxDrawBuffers = 4;
+    lowCaps.MaxColorAttachments = 6;
+    backend.ApplyVulkanCapabilitiesForTesting(lowCaps);
+
+    const auto& lowParams = backend.GetDynamicParameters();
+    EXPECT_EQ(lowParams.MaxTextureImageUnits, 16);
+    EXPECT_EQ(lowParams.MaxVertexTextureImageUnits, 12);
+    EXPECT_EQ(lowParams.MaxComputeTextureImageUnits, 10);
+    EXPECT_EQ(lowParams.MaxCombinedTextureImageUnits, 20);
+    EXPECT_EQ(lowParams.MaxDrawBuffers, 4);
+    EXPECT_EQ(lowParams.MaxColorAttachments, 6);
 }
 
 TEST(DirectVulkanSanity, AdvertisesSubgroupOnlyWhenVulkanReportsUsableSupport) {

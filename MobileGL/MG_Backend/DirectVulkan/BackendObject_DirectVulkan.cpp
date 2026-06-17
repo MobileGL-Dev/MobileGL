@@ -9,6 +9,8 @@
 #include "BackendObject_DirectVulkan.h"
 #include "MG_Backend/BackendObject.h"
 #include "DirectVulkan.h"
+#include "MG_State/GLState/FramebufferState/FramebufferObject.h"
+#include "MG_State/GLState/TextureState/TextureState.h"
 
 namespace MobileGL::MG_Backend::DirectVulkan {
     namespace {
@@ -331,10 +333,15 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         m_dynamicParameters.MaxIntegerSamples = m_vulkanCaps.MaxIntegerSamples;
         m_dynamicParameters.MaxSamples = m_vulkanCaps.MaxSamples;
         m_dynamicParameters.MaxSampleMaskWords = m_vulkanCaps.MaxSampleMaskWords;
-        m_dynamicParameters.MaxTextureImageUnits = m_vulkanCaps.MaxTextureImageUnits;
-        m_dynamicParameters.MaxVertexTextureImageUnits = m_vulkanCaps.MaxVertexTextureImageUnits;
-        m_dynamicParameters.MaxComputeTextureImageUnits = m_vulkanCaps.MaxComputeTextureImageUnits;
-        m_dynamicParameters.MaxCombinedTextureImageUnits = m_vulkanCaps.MaxCombinedTextureImageUnits;
+        const Int maxSupportedTextureUnits =
+            static_cast<Int>(MG_State::GLState::TextureState::MAX_TEXTURE_IMAGE_UNITS);
+        m_dynamicParameters.MaxTextureImageUnits = std::min(m_vulkanCaps.MaxTextureImageUnits, maxSupportedTextureUnits);
+        m_dynamicParameters.MaxVertexTextureImageUnits =
+            std::min(m_vulkanCaps.MaxVertexTextureImageUnits, maxSupportedTextureUnits);
+        m_dynamicParameters.MaxComputeTextureImageUnits =
+            std::min(m_vulkanCaps.MaxComputeTextureImageUnits, maxSupportedTextureUnits);
+        m_dynamicParameters.MaxCombinedTextureImageUnits =
+            std::min(m_vulkanCaps.MaxCombinedTextureImageUnits, maxSupportedTextureUnits);
         m_dynamicParameters.MaxVertexAttribs = m_vulkanCaps.MaxVertexAttribs;
         m_dynamicParameters.MaxComputeShaderStorageBlocks = m_vulkanCaps.MaxComputeShaderStorageBlocks;
         m_dynamicParameters.MaxCombinedShaderStorageBlocks = m_vulkanCaps.MaxCombinedShaderStorageBlocks;
@@ -347,8 +354,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         m_dynamicParameters.MaxImageUnits = m_vulkanCaps.MaxImageUnits;
         m_dynamicParameters.MaxCombinedImageUniforms = m_vulkanCaps.MaxCombinedImageUniforms;
         m_dynamicParameters.MaxComputeImageUniforms = m_vulkanCaps.MaxComputeImageUniforms;
-        m_dynamicParameters.MaxDrawBuffers = m_vulkanCaps.MaxDrawBuffers;
-        m_dynamicParameters.MaxColorAttachments = m_vulkanCaps.MaxColorAttachments;
+        const Int maxSupportedDrawBuffers =
+            static_cast<Int>(MG_State::GLState::FramebufferObject::MAX_DRAW_BUFFERS);
+        m_dynamicParameters.MaxDrawBuffers = std::min(m_vulkanCaps.MaxDrawBuffers, maxSupportedDrawBuffers);
+        m_dynamicParameters.MaxColorAttachments = std::min(m_vulkanCaps.MaxColorAttachments, maxSupportedDrawBuffers);
         m_dynamicParameters.MaxClipDistances = m_vulkanCaps.MaxClipDistances;
         m_dynamicParameters.MaxViewports = m_vulkanCaps.MaxViewports;
         m_dynamicParameters.MaxViewportWidth = m_vulkanCaps.MaxViewportWidth;
