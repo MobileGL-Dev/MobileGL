@@ -46,6 +46,11 @@ namespace MobileGL::MG_Impl::GLImpl {
     void FramebufferTexture1D(GLenum target, GLenum attachment, GLenum textarget, GLuint texture, GLint level);
     void FramebufferTexture(GLenum target, GLenum attachment, GLuint texture, GLint level);
     void NamedFramebufferTexture(GLuint framebuffer, GLenum attachment, GLuint texture, GLint level);
+    void NamedFramebufferTexture1D(GLuint framebuffer, GLenum attachment, GLenum textarget, GLuint texture, GLint level);
+    void NamedFramebufferTexture2D(GLuint framebuffer, GLenum attachment, GLenum textarget, GLuint texture, GLint level);
+    void NamedFramebufferTexture3D(GLuint framebuffer, GLenum attachment, GLenum textarget, GLuint texture, GLint level,
+                                   GLint zoffset);
+    void NamedFramebufferTextureLayer(GLuint framebuffer, GLenum attachment, GLuint texture, GLint level, GLint layer);
     void NamedFramebufferDrawBuffer(GLuint framebuffer, GLenum buf);
     void NamedFramebufferDrawBuffers(GLuint framebuffer, GLsizei n, const GLenum* bufs);
     void NamedFramebufferReadBuffer(GLuint framebuffer, GLenum src);

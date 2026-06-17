@@ -391,6 +391,8 @@ namespace MobileGL {
                 RenameBuiltinShadowingFunction(source, "round", "mg_round");
                 RenameBuiltinShadowingFunction(source, "tanh", "mg_tanh");
                 RenameBuiltinShadowingFunction(source, "fma", "mg_fma");
+                RenameBuiltinShadowingFunction(source, "min3", "mg_min3");
+                RenameBuiltinShadowingFunction(source, "max3", "mg_max3");
                 ModernizeLegacyGLSL(stage, source);
                 InjectDepthRangeBuiltinShim(stage, source);
             }

@@ -128,6 +128,8 @@ namespace MobileGL {
                 return VK_FORMAT_A2R10G10B10_UINT_PACK32;
             case TextureInternalFormat::RGBA16:
                 return VK_FORMAT_R16G16B16A16_UNORM;
+            case TextureInternalFormat::RGBA16Snorm:
+                return VK_FORMAT_R16G16B16A16_SNORM;
             case TextureInternalFormat::SRGB8:
                 return VK_FORMAT_R8G8B8_SRGB;
             case TextureInternalFormat::SRGB8Alpha8:

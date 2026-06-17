@@ -132,6 +132,8 @@ namespace MobileGL {
                 return GL_RGBA12;
             case TextureInternalFormat::RGBA16:
                 return GL_RGBA16;
+            case TextureInternalFormat::RGBA16Snorm:
+                return GL_RGBA16_SNORM;
             case TextureInternalFormat::SRGB8:
                 return GL_SRGB8;
             case TextureInternalFormat::SRGB8Alpha8:

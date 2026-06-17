@@ -685,6 +685,102 @@ namespace MobileGL::MG_Impl::GLImpl {
         framebufferObject->AttachTexture(attachmentType, textureObject, textureUploadTarget, level);
     }
 
+    void NamedFramebufferTextureWithUploadTarget_State(const char* functionName, GLuint framebuffer, GLenum attachment,
+                                                       GLuint texture, GLint level,
+                                                       TextureUploadTarget textureUploadTarget) {
+        if (attachment == GL_DEPTH_STENCIL_ATTACHMENT) {
+            NamedFramebufferTextureWithUploadTarget_State(functionName, framebuffer, GL_DEPTH_ATTACHMENT, texture,
+                                                         level, textureUploadTarget);
+            NamedFramebufferTextureWithUploadTarget_State(functionName, framebuffer, GL_STENCIL_ATTACHMENT, texture,
+                                                         level, textureUploadTarget);
+            return;
+        }
+
+        auto framebufferObject = GetNamedFramebufferObject_State(framebuffer, functionName);
+        if (!framebufferObject) return;
+
+        const FramebufferAttachmentType attachmentType = MG_Util::ConvertGLEnumToFramebufferAttachmentType(attachment);
+        if (!FramebufferImpl::ValidateFramebufferAttachmentType(attachmentType)) return;
+        if (!TextureImpl::ValidateTextureName(texture, true)) return;
+
+        if (texture == 0) {
+            framebufferObject->Detach(attachmentType);
+            return;
+        }
+
+        auto& textureObject = MG_State::pGLContext->GetTextureObject(texture);
+        if (!textureObject) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidOperation,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", functionName,
+                                             std::format("Texture object {} is not valid.", texture)));
+            return;
+        }
+
+        const auto expectedTextureTarget = MG_Util::ConvertTextureUploadTargetToTextureTarget(textureUploadTarget);
+        if (expectedTextureTarget == TextureTarget::Unknown ||
+            textureObject->GetTarget() != expectedTextureTarget) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidOperation,
+                MakeUnique<GenericErrorInfo>(
+                    "MG_Impl/GLImpl", functionName,
+                    std::format("Attachment target {} does not match texture {} target {}.",
+                                MG_Util::ConvertTextureUploadTargetToString(textureUploadTarget),
+                                texture,
+                                MG_Util::ConvertTextureTargetToString(textureObject->GetTarget()))));
+            return;
+        }
+
+        framebufferObject->AttachTexture(attachmentType, textureObject, textureUploadTarget, level);
+    }
+
+    void NamedFramebufferTexture1D_State(GLuint framebuffer, GLenum attachment, GLenum textarget, GLuint texture,
+                                         GLint level) {
+        TextureUploadTarget textureUploadTarget = TextureUploadTarget::Texture1D;
+        if (texture != 0) {
+            textureUploadTarget = MG_Util::ConvertGLEnumToTextureUploadTarget(textarget);
+            if (!TextureImpl::ValidateTextureUploadTarget(textureUploadTarget)) return;
+        }
+        NamedFramebufferTextureWithUploadTarget_State(__func__, framebuffer, attachment, texture, level,
+                                                      textureUploadTarget);
+    }
+
+    void NamedFramebufferTexture2D_State(GLuint framebuffer, GLenum attachment, GLenum textarget, GLuint texture,
+                                         GLint level) {
+        TextureUploadTarget textureUploadTarget = TextureUploadTarget::Texture2D;
+        if (texture != 0) {
+            textureUploadTarget = MG_Util::ConvertGLEnumToTextureUploadTarget(textarget);
+            if (!TextureImpl::ValidateTextureUploadTarget(textureUploadTarget)) return;
+        }
+        NamedFramebufferTextureWithUploadTarget_State(__func__, framebuffer, attachment, texture, level,
+                                                      textureUploadTarget);
+    }
+
+    void NamedFramebufferTexture3D_State(GLuint framebuffer, GLenum attachment, GLenum textarget, GLuint texture,
+                                         GLint level, GLint zoffset) {
+        static_cast<void>(framebuffer);
+        static_cast<void>(attachment);
+        static_cast<void>(textarget);
+        static_cast<void>(texture);
+        static_cast<void>(level);
+        static_cast<void>(zoffset);
+        RecordUnsupportedFramebufferTextureAttachmentError(
+            __func__,
+            "3D framebuffer texture slice attachments are not represented by the current framebuffer attachment model.");
+    }
+
+    void NamedFramebufferTextureLayer_State(GLuint framebuffer, GLenum attachment, GLuint texture, GLint level,
+                                            GLint layer) {
+        static_cast<void>(framebuffer);
+        static_cast<void>(attachment);
+        static_cast<void>(texture);
+        static_cast<void>(level);
+        static_cast<void>(layer);
+        RecordUnsupportedFramebufferTextureAttachmentError(
+            __func__,
+            "Layered framebuffer texture attachments are not represented by the current framebuffer attachment model.");
+    }
+
     void FramebufferRenderbuffer_State(GLenum target, GLenum attachment, GLenum renderbuffertarget,
                                        GLuint renderbuffer) {
         if (target == GL_FRAMEBUFFER) {
@@ -1567,6 +1663,26 @@ namespace MobileGL::MG_Impl::GLImpl {
 
     void NamedFramebufferTexture(GLuint framebuffer, GLenum attachment, GLuint texture, GLint level) {
         NamedFramebufferTexture_State(framebuffer, attachment, texture, level);
+    }
+
+    void NamedFramebufferTexture1D(GLuint framebuffer, GLenum attachment, GLenum textarget, GLuint texture,
+                                   GLint level) {
+        NamedFramebufferTexture1D_State(framebuffer, attachment, textarget, texture, level);
+    }
+
+    void NamedFramebufferTexture2D(GLuint framebuffer, GLenum attachment, GLenum textarget, GLuint texture,
+                                   GLint level) {
+        NamedFramebufferTexture2D_State(framebuffer, attachment, textarget, texture, level);
+    }
+
+    void NamedFramebufferTexture3D(GLuint framebuffer, GLenum attachment, GLenum textarget, GLuint texture,
+                                   GLint level, GLint zoffset) {
+        NamedFramebufferTexture3D_State(framebuffer, attachment, textarget, texture, level, zoffset);
+    }
+
+    void NamedFramebufferTextureLayer(GLuint framebuffer, GLenum attachment, GLuint texture, GLint level,
+                                      GLint layer) {
+        NamedFramebufferTextureLayer_State(framebuffer, attachment, texture, level, layer);
     }
 
     void NamedFramebufferDrawBuffer(GLuint framebuffer, GLenum buf) {

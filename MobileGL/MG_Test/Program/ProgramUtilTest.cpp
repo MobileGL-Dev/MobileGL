@@ -103,6 +103,37 @@ void main() {
     }
 }
 
+TEST_F(ProgramUtilTest, PreprocessFragmentShaderRenamesMin3Max3Helpers) {
+    using namespace MG_Util::ShaderTranspiler;
+
+    String source = R"(#version 460 core
+out vec4 fragColor;
+
+float min3(float a, float b, float c) { return min(min(a, b), c); }
+float max3(float a, float b, float c) { return max(max(a, b), c); }
+
+void main() {
+    float dark = min3(0.1, 0.2, 0.3);
+    float bright = max3(max3(0.1, 0.2, 0.3), 0.4, 0.5);
+    fragColor = vec4(dark, bright, 0.0, 1.0);
+})";
+
+    PreprocessShaderSource(ShaderStage::Fragment, source);
+
+    EXPECT_NE(source.find("float mg_min3("), String::npos);
+    EXPECT_NE(source.find("float mg_max3("), String::npos);
+    EXPECT_NE(source.find("mg_min3(0.1, 0.2, 0.3)"), String::npos);
+    EXPECT_NE(source.find("mg_max3(mg_max3(0.1, 0.2, 0.3), 0.4, 0.5)"), String::npos);
+    EXPECT_EQ(source.find("float min3("), String::npos);
+    EXPECT_EQ(source.find("float max3("), String::npos);
+
+    ShaderAttrib attrib{.shaderType = GL_FRAGMENT_SHADER, .sourceStr = source};
+    auto res = ShaderCompiler::CompileShader(attrib);
+    if (!res) {
+        FAIL() << "errc: " << res.error().errc << "\nlog: " << res.error().log << "\nsource:\n" << source;
+    }
+}
+
 const char* vs = R"(#version 150
 
 in vec4 Position;
