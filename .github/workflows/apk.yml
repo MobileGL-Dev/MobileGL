@@ -47,14 +47,14 @@ jobs:
         run: python update_glslang_sources.py
 
       - name: Build plugin APKs
-        run: gradle --no-daemon -p android-plugin :app:assembleEsprytPluginRelease :app:assembleMagmaPluginRelease --parallel --max-workers "$(nproc)"
+        run: gradle --no-daemon -p android-plugin :app:assembleEsprytPluginRelease :app:assembleMagmaPluginRelease -Pmobilegl.logLevel=MOBILEGL_LOG_LEVEL_INFO --parallel --max-workers "$(nproc)"
         env:
           SIGNING_STORE_PASSWORD: ${{ secrets.SIGNING_STORE_PASSWORD }}
           SIGNING_KEY_ALIAS: ${{ secrets.SIGNING_KEY_ALIAS }}
           SIGNING_KEY_PASSWORD: ${{ secrets.SIGNING_KEY_PASSWORD }}
 
       - name: Build retrace APKs
-        run: gradle --no-daemon -p android-plugin :app:assembleEsprytTraceRelease :app:assembleMagmaTraceRelease -Pmobilegl.abis=all -Pmobilegl.debuggableRelease=true --parallel --max-workers "$(nproc)"
+        run: gradle --no-daemon -p android-plugin :app:assembleEsprytTraceRelease :app:assembleMagmaTraceRelease -Pmobilegl.abis=all -Pmobilegl.debuggableRelease=true -Pmobilegl.logLevel=MOBILEGL_LOG_LEVEL_INFO --parallel --max-workers "$(nproc)"
         env:
           SIGNING_STORE_PASSWORD: ${{ secrets.SIGNING_STORE_PASSWORD }}
           SIGNING_KEY_ALIAS: ${{ secrets.SIGNING_KEY_ALIAS }}

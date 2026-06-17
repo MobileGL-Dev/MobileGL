@@ -14,6 +14,10 @@ def mobileGlAbiFilters = {
             .findAll { !it.isEmpty() }
 }
 
+def mobileGlLogActiveLevel = {
+    (rootProject.findProperty('mobilegl.logLevel') ?: System.getenv('MOBILEGL_LOG_ACTIVE_LEVEL') ?: 'MOBILEGL_LOG_LEVEL_INFO') as String
+}
+
 subprojects { subproject ->
     subproject.plugins.withId('com.android.library') {
         subproject.android {
@@ -26,7 +30,7 @@ subprojects { subproject ->
                 }
                 externalNativeBuild {
                     cmake {
-                        cppFlags '-DMOBILEGL_LOG_ACTIVE_LEVEL=MOBILEGL_LOG_LEVEL_INFO'
+                        cppFlags "-DMOBILEGL_LOG_ACTIVE_LEVEL=${mobileGlLogActiveLevel()}"
                     }
                 }
             }
