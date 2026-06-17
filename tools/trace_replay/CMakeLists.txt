@@ -414,3 +414,13 @@ add_trace_replay_test_for_backends(minecraft-1.21.4-fabric-iris-makeup-ultrafast
         HEIGHT 480
         TOLERANCE 20
         FUZZ_PERCENT 20)
+
+add_trace_replay_test_for_backends(minecraft-1.21.4-fabric-iris-mellow-in-world
+        TRACE_ARCHIVE ${MOBILEGL_TRACE_ROOT}/fixtures/minecraft-1.21.4-fabric-iris-mellow-in-world.tgz
+        TRACE_FILE trace.trace
+        GOLDEN ${MOBILEGL_TRACE_ROOT}/fixtures/minecraft-1.21.4-fabric-iris-mellow-in-world.0000096143.png
+        TARGET_CALL 96143
+        WIDTH 854
+        HEIGHT 480
+        TOLERANCE 20
+        FUZZ_PERCENT 20)
