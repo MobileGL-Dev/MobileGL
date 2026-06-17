@@ -12,7 +12,7 @@ The bundled fixtures cover:
 - minecraft-1.21.4-main-menu: captured from Minecraft 1.21.4's main menu.
   ![Minecraft 1.21.4 main menu golden](fixtures/minecraft-1.21.4-main-menu.0000481787.png)
 - minecraft-1.21.4-in-world: captured from Minecraft 1.21.4 after entering a singleplayer world.
-  ![Minecraft 1.21.4 in-world golden](fixtures/minecraft-1.21.4-in-world.0004000686.png)
+  ![Minecraft 1.21.4 in-world golden](fixtures/minecraft-1.21.4-in-world.0000280000.png)
 
 Build from the MobileGL repository root:
 

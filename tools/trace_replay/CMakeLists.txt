@@ -379,8 +379,8 @@ add_trace_replay_test_for_backends(minecraft-1.21.4-main-menu
 add_trace_replay_test_for_backends(minecraft-1.21.4-in-world
         TRACE_ARCHIVE ${MOBILEGL_TRACE_ROOT}/fixtures/minecraft-1.21.4-in-world.tgz
         TRACE_FILE trace.trace
-        GOLDEN ${MOBILEGL_TRACE_ROOT}/fixtures/minecraft-1.21.4-in-world.0004000686.png
-        TARGET_CALL 4000686
+        GOLDEN ${MOBILEGL_TRACE_ROOT}/fixtures/minecraft-1.21.4-in-world.0000280000.png
+        TARGET_CALL 280000
         WIDTH 854
         HEIGHT 480
         TOLERANCE 500

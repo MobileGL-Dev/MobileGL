@@ -208,8 +208,8 @@ jobs:
             --case minecraft-1.21.4-in-world
             --trace-archive tools/trace_replay/fixtures/minecraft-1.21.4-in-world.tgz
             --trace-file trace.trace
-            --golden tools/trace_replay/fixtures/minecraft-1.21.4-in-world.0004000686.png
-            --target-call 4000686
+            --golden tools/trace_replay/fixtures/minecraft-1.21.4-in-world.0000280000.png
+            --target-call 280000
             --width 854
             --height 480
             --tolerance 500
@@ -310,8 +310,8 @@ jobs:
             --case minecraft-1.21.4-in-world
             --trace-archive tools/trace_replay/fixtures/minecraft-1.21.4-in-world.tgz
             --trace-file trace.trace
-            --golden tools/trace_replay/fixtures/minecraft-1.21.4-in-world.0004000686.png
-            --target-call 4000686
+            --golden tools/trace_replay/fixtures/minecraft-1.21.4-in-world.0000280000.png
+            --target-call 280000
             --width 854
             --height 480
             --tolerance 500
