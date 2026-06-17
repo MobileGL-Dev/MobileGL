@@ -19,6 +19,9 @@ The bundled fixtures cover:
 - minecraft-1.21.4-fabric-iris-bsl-in-world: captured from Minecraft 1.21.4 Fabric with Sodium, Iris, and BSL
   Shaders after entering a singleplayer world.
   ![Minecraft 1.21.4 Fabric Iris BSL in-world golden](fixtures/minecraft-1.21.4-fabric-iris-bsl-in-world.0000110725.png)
+- minecraft-1.21.4-fabric-iris-makeup-ultrafast-in-world: captured from Minecraft 1.21.4 Fabric with Sodium, Iris, and
+  MakeUP UltraFast after entering a singleplayer world.
+  ![Minecraft 1.21.4 Fabric Iris MakeUP UltraFast in-world golden](fixtures/minecraft-1.21.4-fabric-iris-makeup-ultrafast-in-world.0000095322.png)
 
 Build from the MobileGL repository root:
 
