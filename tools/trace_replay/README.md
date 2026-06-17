@@ -22,6 +22,9 @@ The bundled fixtures cover:
 - minecraft-1.21.4-fabric-iris-makeup-ultrafast-in-world: captured from Minecraft 1.21.4 Fabric with Sodium, Iris, and
   MakeUP UltraFast after entering a singleplayer world.
   ![Minecraft 1.21.4 Fabric Iris MakeUP UltraFast in-world golden](fixtures/minecraft-1.21.4-fabric-iris-makeup-ultrafast-in-world.0000095322.png)
+- minecraft-1.21.4-fabric-iris-complementary-reimagined-in-world: captured from Minecraft 1.21.4 Fabric with Sodium,
+  Iris, and Complementary Reimagined after entering a singleplayer world.
+  ![Minecraft 1.21.4 Fabric Iris Complementary Reimagined in-world golden](fixtures/minecraft-1.21.4-fabric-iris-complementary-reimagined-in-world.0000151297.png)
 - minecraft-1.21.4-fabric-iris-mellow-in-world: captured from Minecraft 1.21.4 Fabric with Sodium, Iris, and Mellow
   after entering a singleplayer world.
   ![Minecraft 1.21.4 Fabric Iris Mellow in-world golden](fixtures/minecraft-1.21.4-fabric-iris-mellow-in-world.0000096143.png)
