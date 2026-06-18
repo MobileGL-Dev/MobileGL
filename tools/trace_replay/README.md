@@ -43,6 +43,9 @@ The bundled fixtures cover:
 - minecraft-1.21.4-fabric-iris-iterationt-in-world: captured from Minecraft 1.21.4 Fabric with Sodium, Iris, and
   iterationT after entering a singleplayer world.
   ![Minecraft 1.21.4 Fabric Iris iterationT in-world golden](fixtures/minecraft-1.21.4-fabric-iris-iterationt-in-world.0001173280.png)
+- minecraft-1.21.4-fabric-iris-iterationt-nodsa-in-world: captured from Minecraft 1.21.4 Fabric with Sodium, Iris, and
+  iterationT after entering a singleplayer world, with Iris' DSA path disabled.
+  ![Minecraft 1.21.4 Fabric Iris iterationT no-DSA in-world golden](fixtures/minecraft-1.21.4-fabric-iris-iterationt-nodsa-in-world.0001606997.png)
 - minecraft-1.21.4-fabric-iris-photon-v1.1-in-world: captured from Minecraft 1.21.4 Fabric with Sodium, Iris, and
   Photon v1.1 after entering a singleplayer world.
   ![Minecraft 1.21.4 Fabric Iris Photon v1.1 in-world golden](fixtures/minecraft-1.21.4-fabric-iris-photon-v1.1-in-world.0000159866.png)
