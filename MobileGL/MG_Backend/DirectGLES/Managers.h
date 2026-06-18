@@ -223,6 +223,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
         void UnbindTexture(Uint unit, GLenum target);
         extern StateBackendObjectRegistry<MG_State::GLState::ITextureObject, BackendTextureObject>
             g_backendTextureObjects;
+        SharedPtr<BackendTextureObject>& SyncTextureObjectToBackend(
+            const SharedPtr<MG_State::GLState::ITextureObject>& textureObject);
         extern Array<Array<BackendTextureObject*, (SizeT)TextureTarget::TextureTargetCount>,
                      MG_State::GLState::TextureState::MAX_TEXTURE_IMAGE_UNITS>
             g_boundTexturesCache;

@@ -86,6 +86,57 @@ namespace MobileGL::MG_Impl::GLImpl {
                                                      MG_Util::ConvertGLEnumToTexturePixelDataType(realType));
         }
 
+        Uint ComputeFullMipmapLevelCount(const IntVec3& baseTexelSize) {
+            Int maxDimension = std::max<Int>(
+                baseTexelSize.x(),
+                std::max<Int>(baseTexelSize.y(), std::max<Int>(baseTexelSize.z(), 1)));
+            Uint mipLevelCount = 1;
+            while (maxDimension > 1) {
+                maxDimension = std::max<Int>(maxDimension / 2, 1);
+                ++mipLevelCount;
+            }
+            return mipLevelCount;
+        }
+
+        IntVec3 ComputeMipmapTexelSize(const IntVec3& baseTexelSize, Uint relativeLevel) {
+            return {
+                std::max<Int>(baseTexelSize.x() >> static_cast<Int>(relativeLevel), 1),
+                std::max<Int>(baseTexelSize.y() >> static_cast<Int>(relativeLevel), 1),
+                std::max<Int>(baseTexelSize.z() >> static_cast<Int>(relativeLevel), 1),
+            };
+        }
+
+        Bool EnsureGeneratedMipmapStorageAllocated(
+            MG_State::GLState::TextureObjectMipmap& texture,
+            TextureUploadTarget uploadTarget) {
+            const Uint existingLevelCount = texture.GetMipmapLevelCount();
+            if (existingLevelCount == 0) {
+                return false;
+            }
+
+            const IntVec3 baseTexelSize = texture.GetMipmapTexelSize(uploadTarget, 0);
+            const SizeT baseByteSize = texture.GetMipmapByteSize(uploadTarget, 0);
+            const SizeT baseTexelCount = static_cast<SizeT>(baseTexelSize.x()) *
+                                         static_cast<SizeT>(baseTexelSize.y()) *
+                                         static_cast<SizeT>(baseTexelSize.z());
+            if (baseTexelSize.x() <= 0 || baseTexelSize.y() <= 0 || baseTexelSize.z() <= 0 ||
+                baseByteSize == 0 || baseTexelCount == 0 || (baseByteSize % baseTexelCount) != 0) {
+                return false;
+            }
+
+            const SizeT bytesPerTexel = baseByteSize / baseTexelCount;
+            const Uint requiredLevelCount = ComputeFullMipmapLevelCount(baseTexelSize);
+            for (Uint level = existingLevelCount; level < requiredLevelCount; ++level) {
+                const IntVec3 levelTexelSize = ComputeMipmapTexelSize(baseTexelSize, level);
+                const SizeT levelByteSize = bytesPerTexel * static_cast<SizeT>(levelTexelSize.x()) *
+                                            static_cast<SizeT>(levelTexelSize.y()) *
+                                            static_cast<SizeT>(levelTexelSize.z());
+                texture.AllocateStorage(uploadTarget, level, {levelTexelSize, levelByteSize});
+                texture.MarkStorageDirty(uploadTarget, level, false);
+            }
+            return true;
+        }
+
         Bool IsMultisampleTextureTarget(TextureTarget target) {
             return target == TextureTarget::Texture2DMultisample ||
                    target == TextureTarget::Texture2DMultisampleArray;
@@ -1875,6 +1926,61 @@ namespace MobileGL::MG_Impl::GLImpl {
         MG_Backend::gBackendFunctionsTable.GL.CopyTexSubImage2D(target, level, xoffset, yoffset, x, y, width, height);
     }
 
+    void CopyImageSubData_Backend(const SharedPtr<MG_State::GLState::ITextureObject>& srcTexture,
+                                  GLenum srcTarget, GLint srcLevel, GLint srcX, GLint srcY, GLint srcZ,
+                                  const SharedPtr<MG_State::GLState::ITextureObject>& dstTexture,
+                                  GLenum dstTarget, GLint dstLevel, GLint dstX, GLint dstY, GLint dstZ,
+                                  GLsizei srcWidth, GLsizei srcHeight, GLsizei srcDepth) {
+        auto copyImageSubData = MG_Backend::gBackendFunctionsTable.GL.CopyImageSubData;
+        if (!copyImageSubData) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidOperation,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
+                                             "Backend does not support image-to-image copies."));
+            return;
+        }
+        copyImageSubData(srcTexture, srcTarget, srcLevel, srcX, srcY, srcZ, dstTexture, dstTarget, dstLevel, dstX,
+                         dstY, dstZ, srcWidth, srcHeight, srcDepth);
+    }
+
+    Bool ValidateCopyImageSubData_State(const SharedPtr<MG_State::GLState::ITextureObject>& srcTexture,
+                                        GLenum srcTarget, GLint srcLevel,
+                                        const SharedPtr<MG_State::GLState::ITextureObject>& dstTexture,
+                                        GLenum dstTarget, GLint dstLevel,
+                                        GLsizei srcWidth, GLsizei srcHeight, GLsizei srcDepth) {
+        if (!TextureImpl::ValidateTextureObject(srcTexture) || !TextureImpl::ValidateTextureObject(dstTexture)) {
+            return false;
+        }
+        const auto srcTextureTarget = MG_Util::ConvertGLEnumToTextureTarget(srcTarget);
+        const auto dstTextureTarget = MG_Util::ConvertGLEnumToTextureTarget(dstTarget);
+        if (!TextureImpl::ValidateTextureTarget(srcTextureTarget) ||
+            !TextureImpl::ValidateTextureTarget(dstTextureTarget)) {
+            return false;
+        }
+        if (!TextureImpl::ValidateTextureTargetUniformity(srcTexture, srcTextureTarget) ||
+            !TextureImpl::ValidateTextureTargetUniformity(dstTexture, dstTextureTarget)) {
+            return false;
+        }
+        if (!TextureImpl::ValidateTextureLevelNumber(srcLevel) ||
+            !TextureImpl::ValidateTextureLevelNumber(dstLevel)) {
+            return false;
+        }
+        if (srcWidth < 0 || srcHeight < 0 || srcDepth < 0) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidValue,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
+                                             "Copy dimensions must be non-negative."));
+            return false;
+        }
+        if (srcWidth == 0 || srcHeight == 0 || srcDepth == 0) {
+            return false;
+        }
+        if (!TextureImpl::ValidateBaseInternalFormatMatch(srcTexture->GetFormat(), dstTexture->GetFormat())) {
+            return false;
+        }
+        return true;
+    }
+
     void CopyTexSubImage1D_State(GLenum target, GLint level, GLint xoffset, GLint x, GLint y, GLsizei width) {
         // TODO: implement
     }
@@ -2725,6 +2831,17 @@ namespace MobileGL::MG_Impl::GLImpl {
     }
 
     void GenerateMipmap(GLenum target) {
+        const auto textureTarget = MG_Util::ConvertGLEnumToTextureTarget(target);
+        auto& activeUnit = MG_State::pGLContext->GetTextureUnitObject(MG_State::pGLContext->GetActiveTextureUnit());
+        auto& textureObject = activeUnit.GetBindingSlot(textureTarget).GetBoundObject();
+        if (textureObject) {
+            auto* mipmapTexture = dynamic_cast<MG_State::GLState::TextureObjectMipmap*>(textureObject.get());
+            MOBILEGL_ASSERT(mipmapTexture != nullptr, "GenerateMipmap requires mipmap texture storage.");
+            for (const TextureUploadTarget uploadTarget : textureObject->GetUploadTargets()) {
+                MOBILEGL_ASSERT(EnsureGeneratedMipmapStorageAllocated(*mipmapTexture, uploadTarget),
+                                "GenerateMipmap could not allocate generated mipmap state.");
+            }
+        }
         GenerateMipmap_Backend(target);
     }
 
@@ -2999,6 +3116,19 @@ namespace MobileGL::MG_Impl::GLImpl {
     void CopyTexImage1D(GLenum target, GLint level, GLenum internalformat, GLint x, GLint y, GLsizei width,
                         GLint border) {
         CopyTexImage1D_State(target, level, internalformat, x, y, width, border);
+    }
+
+    void CopyImageSubData(GLuint srcName, GLenum srcTarget, GLint srcLevel, GLint srcX, GLint srcY, GLint srcZ,
+                          GLuint dstName, GLenum dstTarget, GLint dstLevel, GLint dstX, GLint dstY, GLint dstZ,
+                          GLsizei srcWidth, GLsizei srcHeight, GLsizei srcDepth) {
+        auto srcTexture = GetTextureObjectByName(srcName, __func__);
+        auto dstTexture = GetTextureObjectByName(dstName, __func__);
+        if (!ValidateCopyImageSubData_State(srcTexture, srcTarget, srcLevel, dstTexture, dstTarget, dstLevel,
+                                            srcWidth, srcHeight, srcDepth)) {
+            return;
+        }
+        CopyImageSubData_Backend(srcTexture, srcTarget, srcLevel, srcX, srcY, srcZ, dstTexture, dstTarget, dstLevel,
+                                 dstX, dstY, dstZ, srcWidth, srcHeight, srcDepth);
     }
 
     void CompressedTexSubImage3D(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLint zoffset, GLsizei width,

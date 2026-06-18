@@ -1490,6 +1490,358 @@ namespace MobileGL::MG_Backend::DirectGLES {
         const Bool m_isRead = false;
     };
 
+    static Bool IsDepthOnlyFormat(TextureInternalFormat format) {
+        return MG_Util::IsDepthFormatInternalFormat(format) && !MG_Util::IsStencilFormatInternalFormat(format);
+    }
+
+    static Bool IsColorOnlyFormat(TextureInternalFormat format) {
+        return !MG_Util::IsDepthFormatInternalFormat(format) && !MG_Util::IsStencilFormatInternalFormat(format);
+    }
+
+    static Bool IsIntegerColorFormat(TextureInternalFormat format) {
+        switch (format) {
+        case TextureInternalFormat::RGB10A2UI:
+        case TextureInternalFormat::R8I:
+        case TextureInternalFormat::R8UI:
+        case TextureInternalFormat::R16I:
+        case TextureInternalFormat::R16UI:
+        case TextureInternalFormat::R32I:
+        case TextureInternalFormat::R32UI:
+        case TextureInternalFormat::RG8I:
+        case TextureInternalFormat::RG8UI:
+        case TextureInternalFormat::RG16I:
+        case TextureInternalFormat::RG16UI:
+        case TextureInternalFormat::RG32I:
+        case TextureInternalFormat::RG32UI:
+        case TextureInternalFormat::RGB8I:
+        case TextureInternalFormat::RGB8UI:
+        case TextureInternalFormat::RGB16I:
+        case TextureInternalFormat::RGB16UI:
+        case TextureInternalFormat::RGB32I:
+        case TextureInternalFormat::RGB32UI:
+        case TextureInternalFormat::RGBA8I:
+        case TextureInternalFormat::RGBA8UI:
+        case TextureInternalFormat::RGBA16I:
+        case TextureInternalFormat::RGBA16UI:
+        case TextureInternalFormat::RGBA32I:
+        case TextureInternalFormat::RGBA32UI:
+            return true;
+        default:
+            return false;
+        }
+    }
+
+    static Uint ComputeFullMipmapLevelCount(const IntVec3& baseTexelSize) {
+        Int maxDimension = std::max<Int>(
+            baseTexelSize.x(),
+            std::max<Int>(baseTexelSize.y(), std::max<Int>(baseTexelSize.z(), 1)));
+        Uint mipLevelCount = 1;
+        while (maxDimension > 1) {
+            maxDimension = std::max<Int>(maxDimension / 2, 1);
+            ++mipLevelCount;
+        }
+        return mipLevelCount;
+    }
+
+    static IntVec3 ComputeMipmapTexelSize(const IntVec3& baseTexelSize, Uint relativeLevel) {
+        return {
+            std::max<Int>(baseTexelSize.x() >> static_cast<Int>(relativeLevel), 1),
+            std::max<Int>(baseTexelSize.y() >> static_cast<Int>(relativeLevel), 1),
+            std::max<Int>(baseTexelSize.z() >> static_cast<Int>(relativeLevel), 1),
+        };
+    }
+
+    static Bool EnsureGenerateMipmapStorageAllocated(MG_State::GLState::TextureObjectMipmap& texture,
+                                                    TextureUploadTarget uploadTarget, Bool& allocatedStorage) {
+        const Uint existingLevelCount = texture.GetMipmapLevelCount();
+        if (existingLevelCount == 0) {
+            return false;
+        }
+
+        const IntVec3 baseTexelSize = texture.GetMipmapTexelSize(uploadTarget, 0);
+        const SizeT baseByteSize = texture.GetMipmapByteSize(uploadTarget, 0);
+        const SizeT baseTexelCount = static_cast<SizeT>(baseTexelSize.x()) *
+                                     static_cast<SizeT>(baseTexelSize.y()) *
+                                     static_cast<SizeT>(baseTexelSize.z());
+        if (baseTexelSize.x() <= 0 || baseTexelSize.y() <= 0 || baseTexelSize.z() <= 0 ||
+            baseByteSize == 0 || baseTexelCount == 0 || (baseByteSize % baseTexelCount) != 0) {
+            return false;
+        }
+
+        const SizeT bytesPerTexel = baseByteSize / baseTexelCount;
+        const Uint requiredLevelCount = ComputeFullMipmapLevelCount(baseTexelSize);
+        if (existingLevelCount < requiredLevelCount) {
+            allocatedStorage = true;
+        }
+        for (Uint level = existingLevelCount; level < requiredLevelCount; ++level) {
+            const IntVec3 levelTexelSize = ComputeMipmapTexelSize(baseTexelSize, level);
+            const SizeT levelByteSize = bytesPerTexel * static_cast<SizeT>(levelTexelSize.x()) *
+                                        static_cast<SizeT>(levelTexelSize.y()) *
+                                        static_cast<SizeT>(levelTexelSize.z());
+            texture.AllocateStorage(uploadTarget, level, {levelTexelSize, levelByteSize});
+            texture.MarkStorageDirty(uploadTarget, level, false);
+        }
+        return true;
+    }
+
+    static Bool EnsureGenerateMipmapStorageAllocated(const SharedPtr<MG_State::GLState::ITextureObject>& texture) {
+        auto* mipmapTexture = dynamic_cast<MG_State::GLState::TextureObjectMipmap*>(texture.get());
+        MOBILEGL_ASSERT(mipmapTexture != nullptr, "GenerateMipmap requires mipmap texture storage.");
+        Bool allocatedStorage = false;
+        for (const TextureUploadTarget uploadTarget : texture->GetUploadTargets()) {
+            MOBILEGL_ASSERT(EnsureGenerateMipmapStorageAllocated(*mipmapTexture, uploadTarget, allocatedStorage),
+                            "GenerateMipmap could not allocate generated mipmap storage.");
+        }
+        return allocatedStorage;
+    }
+
+    static void AssertNoGLError(const char* operation) {
+        const GLenum err = g_GLESFuncs.glGetError();
+        MOBILEGL_ASSERT(err == GL_NO_ERROR, "%s failed: %s", operation,
+                        MG_Util::ConvertGLEnumToString(err).c_str());
+    }
+
+    static void ClearGLErrors() {
+        while (g_GLESFuncs.glGetError() != GL_NO_ERROR) {}
+    }
+
+    class ScopedDepthBlitState {
+    public:
+        ScopedDepthBlitState() {
+            g_GLESFuncs.glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, reinterpret_cast<GLint*>(&m_prevReadFBO));
+            g_GLESFuncs.glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, reinterpret_cast<GLint*>(&m_prevDrawFBO));
+            g_GLESFuncs.glGetBooleanv(GL_SCISSOR_TEST, &m_prevScissorEnabled);
+            g_GLESFuncs.glDisable(GL_SCISSOR_TEST);
+
+            if (s_readFBO == 0) {
+                g_GLESFuncs.glGenFramebuffers(1, &s_readFBO);
+            }
+            if (s_drawFBO == 0) {
+                g_GLESFuncs.glGenFramebuffers(1, &s_drawFBO);
+            }
+            g_GLESFuncs.glBindFramebuffer(GL_READ_FRAMEBUFFER, s_readFBO);
+            AssertNoGLError("bind depth blit read framebuffer");
+            g_GLESFuncs.glBindFramebuffer(GL_DRAW_FRAMEBUFFER, s_drawFBO);
+            AssertNoGLError("bind depth blit draw framebuffer");
+        }
+
+        ~ScopedDepthBlitState() {
+            g_GLESFuncs.glBindFramebuffer(GL_READ_FRAMEBUFFER, m_prevReadFBO);
+            g_GLESFuncs.glBindFramebuffer(GL_DRAW_FRAMEBUFFER, m_prevDrawFBO);
+            if (m_prevScissorEnabled == GL_TRUE) {
+                g_GLESFuncs.glEnable(GL_SCISSOR_TEST);
+            } else {
+                g_GLESFuncs.glDisable(GL_SCISSOR_TEST);
+            }
+        }
+
+    private:
+        GLuint m_prevReadFBO = 0;
+        GLuint m_prevDrawFBO = 0;
+        GLboolean m_prevScissorEnabled = GL_FALSE;
+        static GLuint s_readFBO;
+        static GLuint s_drawFBO;
+    };
+
+    GLuint ScopedDepthBlitState::s_readFBO = 0;
+    GLuint ScopedDepthBlitState::s_drawFBO = 0;
+
+    static void BlitDepthTexture2D(GLuint srcTexture, GLint srcLevel, GLint srcX, GLint srcY, GLsizei srcWidth,
+                                   GLsizei srcHeight, GLuint dstTexture, GLint dstLevel, GLint dstX, GLint dstY,
+                                   GLsizei dstWidth, GLsizei dstHeight) {
+        MOBILEGL_ASSERT(srcTexture != 0 && dstTexture != 0, "Depth blit requires valid backend textures.");
+        MOBILEGL_ASSERT(srcLevel >= 0 && dstLevel >= 0, "Depth blit mip levels must be non-negative.");
+        MOBILEGL_ASSERT(srcWidth > 0 && srcHeight > 0 && dstWidth > 0 && dstHeight > 0,
+                        "Depth blit dimensions must be positive.");
+
+        ClearGLErrors();
+        ScopedDepthBlitState state;
+        g_GLESFuncs.glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, srcTexture,
+                                           srcLevel);
+        AssertNoGLError("attach depth blit source texture");
+        g_GLESFuncs.glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, dstTexture,
+                                           dstLevel);
+        AssertNoGLError("attach depth blit destination texture");
+        MOBILEGL_ASSERT(g_GLESFuncs.glCheckFramebufferStatus(GL_READ_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE,
+                        "Depth blit read framebuffer is incomplete.");
+        AssertNoGLError("check depth blit read framebuffer");
+        MOBILEGL_ASSERT(g_GLESFuncs.glCheckFramebufferStatus(GL_DRAW_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE,
+                        "Depth blit draw framebuffer is incomplete.");
+        AssertNoGLError("check depth blit draw framebuffer");
+
+        g_GLESFuncs.glBlitFramebuffer(srcX, srcY, srcX + srcWidth, srcY + srcHeight,
+                                      dstX, dstY, dstX + dstWidth, dstY + dstHeight,
+                                      GL_DEPTH_BUFFER_BIT, GL_NEAREST);
+        AssertNoGLError("depth texture blit");
+    }
+
+    static void BlitColorTexture2D(GLuint srcTexture, GLint srcLevel, GLint srcX, GLint srcY, GLsizei srcWidth,
+                                   GLsizei srcHeight, GLuint dstTexture, GLint dstLevel, GLint dstX, GLint dstY,
+                                   GLsizei dstWidth, GLsizei dstHeight, GLenum filter) {
+        MOBILEGL_ASSERT(srcTexture != 0 && dstTexture != 0, "Color blit requires valid backend textures.");
+        MOBILEGL_ASSERT(srcLevel >= 0 && dstLevel >= 0, "Color blit mip levels must be non-negative.");
+        MOBILEGL_ASSERT(srcWidth > 0 && srcHeight > 0 && dstWidth > 0 && dstHeight > 0,
+                        "Color blit dimensions must be positive.");
+        MOBILEGL_ASSERT(filter == GL_NEAREST || filter == GL_LINEAR, "Color blit filter must be nearest or linear.");
+
+        ClearGLErrors();
+        ScopedDepthBlitState state;
+        g_GLESFuncs.glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, srcTexture,
+                                           srcLevel);
+        AssertNoGLError("attach color blit source texture");
+        g_GLESFuncs.glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, dstTexture,
+                                           dstLevel);
+        AssertNoGLError("attach color blit destination texture");
+        g_GLESFuncs.glReadBuffer(GL_COLOR_ATTACHMENT0);
+        AssertNoGLError("set color blit read buffer");
+        const GLenum drawBuffer = GL_COLOR_ATTACHMENT0;
+        g_GLESFuncs.glDrawBuffers(1, &drawBuffer);
+        AssertNoGLError("set color blit draw buffer");
+        MOBILEGL_ASSERT(g_GLESFuncs.glCheckFramebufferStatus(GL_READ_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE,
+                        "Color blit read framebuffer is incomplete.");
+        AssertNoGLError("check color blit read framebuffer");
+        MOBILEGL_ASSERT(g_GLESFuncs.glCheckFramebufferStatus(GL_DRAW_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE,
+                        "Color blit draw framebuffer is incomplete.");
+        AssertNoGLError("check color blit draw framebuffer");
+
+        g_GLESFuncs.glBlitFramebuffer(srcX, srcY, srcX + srcWidth, srcY + srcHeight,
+                                      dstX, dstY, dstX + dstWidth, dstY + dstHeight,
+                                      GL_COLOR_BUFFER_BIT, filter);
+        AssertNoGLError("color texture blit");
+    }
+
+    static void CopyR32FTexture2D(GLuint srcTexture, GLint srcLevel, GLint srcX, GLint srcY, GLsizei width,
+                                  GLsizei height, GLuint dstTexture, GLenum dstTarget, GLint dstLevel, GLint dstX,
+                                  GLint dstY) {
+        MOBILEGL_ASSERT(srcTexture != 0 && dstTexture != 0, "R32F copy requires valid backend textures.");
+        MOBILEGL_ASSERT(dstTarget == GL_TEXTURE_2D, "R32F copy only supports GL_TEXTURE_2D destinations.");
+        MOBILEGL_ASSERT(srcLevel >= 0 && dstLevel >= 0, "R32F copy mip levels must be non-negative.");
+        MOBILEGL_ASSERT(width > 0 && height > 0, "R32F copy dimensions must be positive.");
+
+        ClearGLErrors();
+        ScopedDepthBlitState state;
+        g_GLESFuncs.glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, srcTexture,
+                                           srcLevel);
+        AssertNoGLError("attach R32F copy source texture");
+        g_GLESFuncs.glReadBuffer(GL_COLOR_ATTACHMENT0);
+        AssertNoGLError("set R32F copy read buffer");
+        MOBILEGL_ASSERT(g_GLESFuncs.glCheckFramebufferStatus(GL_READ_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE,
+                        "R32F copy read framebuffer is incomplete.");
+        AssertNoGLError("check R32F copy read framebuffer");
+
+        GLint prevPackBuffer = 0;
+        GLint prevUnpackBuffer = 0;
+        GLint prevPackAlignment = 4;
+        GLint prevUnpackAlignment = 4;
+        GLint prevPackRowLength = 0;
+        GLint prevUnpackRowLength = 0;
+        GLint prevPackSkipRows = 0;
+        GLint prevUnpackSkipRows = 0;
+        GLint prevPackSkipPixels = 0;
+        GLint prevUnpackSkipPixels = 0;
+        GLint prevActiveTexture = GL_TEXTURE0;
+        GLint prevBoundTexture = 0;
+
+        g_GLESFuncs.glGetIntegerv(GL_PIXEL_PACK_BUFFER_BINDING, &prevPackBuffer);
+        g_GLESFuncs.glGetIntegerv(GL_PIXEL_UNPACK_BUFFER_BINDING, &prevUnpackBuffer);
+        g_GLESFuncs.glGetIntegerv(GL_PACK_ALIGNMENT, &prevPackAlignment);
+        g_GLESFuncs.glGetIntegerv(GL_UNPACK_ALIGNMENT, &prevUnpackAlignment);
+        g_GLESFuncs.glGetIntegerv(GL_PACK_ROW_LENGTH, &prevPackRowLength);
+        g_GLESFuncs.glGetIntegerv(GL_UNPACK_ROW_LENGTH, &prevUnpackRowLength);
+        g_GLESFuncs.glGetIntegerv(GL_PACK_SKIP_ROWS, &prevPackSkipRows);
+        g_GLESFuncs.glGetIntegerv(GL_UNPACK_SKIP_ROWS, &prevUnpackSkipRows);
+        g_GLESFuncs.glGetIntegerv(GL_PACK_SKIP_PIXELS, &prevPackSkipPixels);
+        g_GLESFuncs.glGetIntegerv(GL_UNPACK_SKIP_PIXELS, &prevUnpackSkipPixels);
+        g_GLESFuncs.glGetIntegerv(GL_ACTIVE_TEXTURE, &prevActiveTexture);
+
+        g_GLESFuncs.glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+        g_GLESFuncs.glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
+        g_GLESFuncs.glPixelStorei(GL_PACK_ALIGNMENT, 4);
+        g_GLESFuncs.glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+        g_GLESFuncs.glPixelStorei(GL_PACK_ROW_LENGTH, 0);
+        g_GLESFuncs.glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+        g_GLESFuncs.glPixelStorei(GL_PACK_SKIP_ROWS, 0);
+        g_GLESFuncs.glPixelStorei(GL_UNPACK_SKIP_ROWS, 0);
+        g_GLESFuncs.glPixelStorei(GL_PACK_SKIP_PIXELS, 0);
+        g_GLESFuncs.glPixelStorei(GL_UNPACK_SKIP_PIXELS, 0);
+
+        Vector<Float> pixels(static_cast<SizeT>(width) * static_cast<SizeT>(height));
+        g_GLESFuncs.glReadPixels(srcX, srcY, width, height, GL_RED, GL_FLOAT, pixels.data());
+        AssertNoGLError("read R32F copy pixels");
+
+        g_GLESFuncs.glActiveTexture(GL_TEXTURE0 + TextureImpl::TempTextureUnit);
+        g_GLESFuncs.glGetIntegerv(GL_TEXTURE_BINDING_2D, &prevBoundTexture);
+        g_GLESFuncs.glBindTexture(dstTarget, dstTexture);
+        g_GLESFuncs.glTexSubImage2D(dstTarget, dstLevel, dstX, dstY, width, height, GL_RED, GL_FLOAT, pixels.data());
+        AssertNoGLError("upload R32F copy pixels");
+
+        g_GLESFuncs.glBindTexture(dstTarget, static_cast<GLuint>(prevBoundTexture));
+        g_GLESFuncs.glActiveTexture(static_cast<GLenum>(prevActiveTexture));
+        TextureImpl::g_activeTextureUnit =
+            static_cast<Uint>(static_cast<GLenum>(prevActiveTexture) - GL_TEXTURE0);
+        g_GLESFuncs.glBindBuffer(GL_PIXEL_PACK_BUFFER, static_cast<GLuint>(prevPackBuffer));
+        g_GLESFuncs.glBindBuffer(GL_PIXEL_UNPACK_BUFFER, static_cast<GLuint>(prevUnpackBuffer));
+        g_GLESFuncs.glPixelStorei(GL_PACK_ALIGNMENT, prevPackAlignment);
+        g_GLESFuncs.glPixelStorei(GL_UNPACK_ALIGNMENT, prevUnpackAlignment);
+        g_GLESFuncs.glPixelStorei(GL_PACK_ROW_LENGTH, prevPackRowLength);
+        g_GLESFuncs.glPixelStorei(GL_UNPACK_ROW_LENGTH, prevUnpackRowLength);
+        g_GLESFuncs.glPixelStorei(GL_PACK_SKIP_ROWS, prevPackSkipRows);
+        g_GLESFuncs.glPixelStorei(GL_UNPACK_SKIP_ROWS, prevUnpackSkipRows);
+        g_GLESFuncs.glPixelStorei(GL_PACK_SKIP_PIXELS, prevPackSkipPixels);
+        g_GLESFuncs.glPixelStorei(GL_UNPACK_SKIP_PIXELS, prevUnpackSkipPixels);
+    }
+
+    static void GenerateDepthTexture2DMipmap(
+        const SharedPtr<MG_State::GLState::ITextureObject>& texture,
+        const SharedPtr<TextureImpl::BackendTextureObject>& backendTexture) {
+        MOBILEGL_ASSERT(texture != nullptr && backendTexture != nullptr, "GenerateDepthTexture2DMipmap needs texture.");
+        MOBILEGL_ASSERT(texture->GetTarget() == TextureTarget::Texture2D,
+                        "DirectGLES depth mipmap generation only supports GL_TEXTURE_2D.");
+        MOBILEGL_ASSERT(IsDepthOnlyFormat(texture->GetFormat()),
+                        "DirectGLES depth mipmap generation requires a depth-only texture.");
+
+        auto* mipmapTexture = dynamic_cast<MG_State::GLState::TextureObjectMipmap*>(texture.get());
+        MOBILEGL_ASSERT(mipmapTexture != nullptr, "Depth mipmap generation requires mipmap storage.");
+        const Uint mipLevelCount = mipmapTexture->GetMipmapLevelCount();
+        MOBILEGL_ASSERT(mipLevelCount > 0, "Depth mipmap generation requires allocated storage.");
+
+        const GLuint textureId = backendTexture->GetBackendTextureId();
+        for (Uint level = 1; level < mipLevelCount; ++level) {
+            const IntVec3 srcSize = mipmapTexture->GetMipmapTexelSize(TextureUploadTarget::Texture2D, level - 1);
+            const IntVec3 dstSize = mipmapTexture->GetMipmapTexelSize(TextureUploadTarget::Texture2D, level);
+            BlitDepthTexture2D(textureId, static_cast<GLint>(level - 1), 0, 0,
+                               static_cast<GLsizei>(srcSize.x()), static_cast<GLsizei>(srcSize.y()),
+                               textureId, static_cast<GLint>(level), 0, 0,
+                               static_cast<GLsizei>(dstSize.x()), static_cast<GLsizei>(dstSize.y()));
+        }
+    }
+
+    static void GenerateColorTexture2DMipmap(
+        const SharedPtr<MG_State::GLState::ITextureObject>& texture,
+        const SharedPtr<TextureImpl::BackendTextureObject>& backendTexture) {
+        MOBILEGL_ASSERT(texture != nullptr && backendTexture != nullptr, "GenerateColorTexture2DMipmap needs texture.");
+        MOBILEGL_ASSERT(texture->GetTarget() == TextureTarget::Texture2D,
+                        "DirectGLES color mipmap generation only supports GL_TEXTURE_2D.");
+        MOBILEGL_ASSERT(IsColorOnlyFormat(texture->GetFormat()),
+                        "DirectGLES color mipmap generation requires a color-only texture.");
+
+        auto* mipmapTexture = dynamic_cast<MG_State::GLState::TextureObjectMipmap*>(texture.get());
+        MOBILEGL_ASSERT(mipmapTexture != nullptr, "Color mipmap generation requires mipmap storage.");
+        const Uint mipLevelCount = mipmapTexture->GetMipmapLevelCount();
+        MOBILEGL_ASSERT(mipLevelCount > 0, "Color mipmap generation requires allocated storage.");
+
+        const GLenum filter = IsIntegerColorFormat(texture->GetFormat()) ? GL_NEAREST : GL_LINEAR;
+        const GLuint textureId = backendTexture->GetBackendTextureId();
+        for (Uint level = 1; level < mipLevelCount; ++level) {
+            const IntVec3 srcSize = mipmapTexture->GetMipmapTexelSize(TextureUploadTarget::Texture2D, level - 1);
+            const IntVec3 dstSize = mipmapTexture->GetMipmapTexelSize(TextureUploadTarget::Texture2D, level);
+            BlitColorTexture2D(textureId, static_cast<GLint>(level - 1), 0, 0,
+                               static_cast<GLsizei>(srcSize.x()), static_cast<GLsizei>(srcSize.y()),
+                               textureId, static_cast<GLint>(level), 0, 0,
+                               static_cast<GLsizei>(dstSize.x()), static_cast<GLsizei>(dstSize.y()), filter);
+        }
+    }
+
     void CopyTexImage2D(GLenum target, GLint level, GLenum internalformat, GLint x, GLint y, GLsizei width,
                         GLsizei height, GLint border) {
 #if MOBILEGL_LOG_ACTIVE_LEVEL <= MOBILEGL_LOG_LEVEL_DEBUG
@@ -1666,10 +2018,26 @@ namespace MobileGL::MG_Backend::DirectGLES {
         auto& unit = MG_State::pGLContext->GetTextureUnitObject(unitIndex);
         auto& slot = unit.GetBindingSlot(MG_Util::ConvertGLEnumToTextureTarget(target));
         auto& texture = slot.GetBoundObject();
+        MOBILEGL_ASSERT(texture != nullptr, "GenerateMipmap requires a bound texture.");
+        if (texture->GetFormat() == TextureInternalFormat::R11FG11FB10F || IsDepthOnlyFormat(texture->GetFormat())) {
+            EnsureGenerateMipmapStorageAllocated(texture);
+        }
         auto& backendTexture = TextureImpl::SyncTextureObjectToBackend(texture);
 
+        if (IsDepthOnlyFormat(texture->GetFormat())) {
+            GenerateDepthTexture2DMipmap(texture, backendTexture);
+            return;
+        }
+        if (texture->GetFormat() == TextureInternalFormat::R11FG11FB10F &&
+            texture->GetTarget() == TextureTarget::Texture2D) {
+            GenerateColorTexture2DMipmap(texture, backendTexture);
+            return;
+        }
+
         backendTexture->Bind(target, unitIndex);
+        DebugImpl::ErrorLopper::Clear();
         g_GLESFuncs.glGenerateMipmap(target);
+        AssertNoGLError("glGenerateMipmap");
     }
 
     const GLubyte* GetString(GLenum name) {
@@ -1698,6 +2066,61 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
     void MemoryBarrierByRegion(GLbitfield barriers) {
         g_GLESFuncs.glMemoryBarrierByRegion(barriers);
+    }
+
+    void CopyImageSubData(const SharedPtr<MG_State::GLState::ITextureObject>& srcTexture,
+                          GLenum srcTarget, GLint srcLevel, GLint srcX, GLint srcY, GLint srcZ,
+                          const SharedPtr<MG_State::GLState::ITextureObject>& dstTexture,
+                          GLenum dstTarget, GLint dstLevel, GLint dstX, GLint dstY, GLint dstZ,
+                          GLsizei srcWidth, GLsizei srcHeight, GLsizei srcDepth) {
+        auto& srcBackendTexture = TextureImpl::SyncTextureObjectToBackend(srcTexture);
+        auto& dstBackendTexture = TextureImpl::SyncTextureObjectToBackend(dstTexture);
+
+        const Bool srcIsDepth = MG_Util::IsDepthFormatInternalFormat(srcTexture->GetFormat());
+        const Bool dstIsDepth = MG_Util::IsDepthFormatInternalFormat(dstTexture->GetFormat());
+        const Bool srcStencil = MG_Util::IsStencilFormatInternalFormat(srcTexture->GetFormat());
+        const Bool dstStencil = MG_Util::IsStencilFormatInternalFormat(dstTexture->GetFormat());
+        if (srcIsDepth || dstIsDepth || srcStencil || dstStencil) {
+            MOBILEGL_ASSERT(srcIsDepth && dstIsDepth && !srcStencil && !dstStencil,
+                            "DirectGLES CopyImageSubData only supports depth-only image copies.");
+            MOBILEGL_ASSERT(srcTarget == GL_TEXTURE_2D && dstTarget == GL_TEXTURE_2D,
+                            "DirectGLES depth CopyImageSubData only supports GL_TEXTURE_2D.");
+            MOBILEGL_ASSERT(srcZ == 0 && dstZ == 0 && srcDepth == 1,
+                            "DirectGLES depth CopyImageSubData only supports single-layer copies.");
+            BlitDepthTexture2D(srcBackendTexture->GetBackendTextureId(), srcLevel, srcX, srcY, srcWidth, srcHeight,
+                               dstBackendTexture->GetBackendTextureId(), dstLevel, dstX, dstY, srcWidth, srcHeight);
+            return;
+        }
+
+        if (srcTexture->GetFormat() == TextureInternalFormat::R32F ||
+            dstTexture->GetFormat() == TextureInternalFormat::R32F) {
+            DebugImpl::ErrorLopper::Clear();
+            g_GLESFuncs.glCopyImageSubData(srcBackendTexture->GetBackendTextureId(), srcTarget, srcLevel, srcX, srcY, srcZ,
+                                           dstBackendTexture->GetBackendTextureId(), dstTarget, dstLevel, dstX, dstY, dstZ,
+                                           srcWidth, srcHeight, srcDepth);
+            const GLenum copyImageError = g_GLESFuncs.glGetError();
+            if (copyImageError == GL_NO_ERROR) {
+                return;
+            }
+            MOBILEGL_ASSERT(copyImageError == GL_INVALID_ENUM,
+                            "glCopyImageSubData failed: %s",
+                            MG_Util::ConvertGLEnumToString(copyImageError).c_str());
+            MOBILEGL_ASSERT(IsColorOnlyFormat(srcTexture->GetFormat()) && IsColorOnlyFormat(dstTexture->GetFormat()),
+                            "DirectGLES CopyImageSubData only supports color-only or depth-only copies.");
+            MOBILEGL_ASSERT(srcTarget == GL_TEXTURE_2D && dstTarget == GL_TEXTURE_2D,
+                            "DirectGLES color CopyImageSubData only supports GL_TEXTURE_2D.");
+            MOBILEGL_ASSERT(srcZ == 0 && dstZ == 0 && srcDepth == 1,
+                            "DirectGLES color CopyImageSubData only supports single-layer copies.");
+            CopyR32FTexture2D(srcBackendTexture->GetBackendTextureId(), srcLevel, srcX, srcY, srcWidth, srcHeight,
+                              dstBackendTexture->GetBackendTextureId(), dstTarget, dstLevel, dstX, dstY);
+            return;
+        }
+
+        DebugImpl::ErrorLopper::Clear();
+        g_GLESFuncs.glCopyImageSubData(srcBackendTexture->GetBackendTextureId(), srcTarget, srcLevel, srcX, srcY, srcZ,
+                                       dstBackendTexture->GetBackendTextureId(), dstTarget, dstLevel, dstX, dstY, dstZ,
+                                       srcWidth, srcHeight, srcDepth);
+        AssertNoGLError("glCopyImageSubData");
     }
 
     void BindImageTexture(GLuint unit, GLuint texture, GLint level, GLboolean layered, GLint layer, GLenum access,

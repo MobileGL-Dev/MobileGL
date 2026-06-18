@@ -592,6 +592,17 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         MOBILEGL_ASSERT(MG_State::pGLContext, "DirectVulkan::CopyTexSubImage2D called with null GL context");
         pVulkanRenderer->CopyTexSubImage2D(target, level, xoffset, yoffset, x, y, width, height);
     }
+    void CopyImageSubData(const SharedPtr<MG_State::GLState::ITextureObject>& srcTexture,
+                          GLenum srcTarget, GLint srcLevel, GLint srcX, GLint srcY, GLint srcZ,
+                          const SharedPtr<MG_State::GLState::ITextureObject>& dstTexture,
+                          GLenum dstTarget, GLint dstLevel, GLint dstX, GLint dstY, GLint dstZ,
+                          GLsizei srcWidth, GLsizei srcHeight, GLsizei srcDepth) {
+        MOBILEGL_ASSERT(pVulkanRenderer, "DirectVulkan::CopyImageSubData called with null VulkanRenderer");
+        MOBILEGL_ASSERT(MG_State::pGLContext, "DirectVulkan::CopyImageSubData called with null GL context");
+        pVulkanRenderer->CopyImageSubData(srcTexture, srcTarget, srcLevel, srcX, srcY, srcZ,
+                                          dstTexture, dstTarget, dstLevel, dstX, dstY, dstZ,
+                                          srcWidth, srcHeight, srcDepth);
+    }
     void GenerateMipmap(GLenum target) {
         MOBILEGL_ASSERT(pVulkanRenderer, "DirectVulkan::GenerateMipmap called with null VulkanRenderer");
         MOBILEGL_ASSERT(MG_State::pGLContext, "DirectVulkan::GenerateMipmap called with null GL context");

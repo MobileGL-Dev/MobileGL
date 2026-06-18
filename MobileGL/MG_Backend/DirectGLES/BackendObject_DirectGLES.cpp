@@ -215,6 +215,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             funcsTable.GL.BlitNamedFramebuffer = BlitNamedFramebuffer;
             funcsTable.GL.CopyTexImage2D = CopyTexImage2D;
             funcsTable.GL.CopyTexSubImage2D = CopyTexSubImage2D;
+            funcsTable.GL.CopyImageSubData = CopyImageSubData;
             funcsTable.GL.GenerateMipmap = GenerateMipmap;
             funcsTable.GL.ReadPixels = ReadPixels;
             funcsTable.GL.GetTexImage = GetTexImage;
