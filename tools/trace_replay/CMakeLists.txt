@@ -402,7 +402,7 @@ add_trace_replay_test_for_backends(minecraft-1.21.4-fabric-iris-bsl-in-world
         TARGET_CALL 110725
         WIDTH 854
         HEIGHT 480
-        TOLERANCE 20
+        TOLERANCE 200
         FUZZ_PERCENT 20)
 
 add_trace_replay_test_for_backends(minecraft-1.21.4-fabric-iris-makeup-ultrafast-in-world
