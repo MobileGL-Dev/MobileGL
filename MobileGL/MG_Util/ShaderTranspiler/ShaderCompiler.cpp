@@ -144,6 +144,7 @@ namespace MobileGL {
                 tshader = MakeShared<glslang::TShader>(lang);
                 const char* src[] = {sourceStr.data()};
                 tshader->setStrings(src, 1);
+                tshader->setNanMinMaxClamp(true);
                 tshader->setInvertY(true);
                 if (attrib.flags & ShaderCompileBits::CompileForOpenGL) {
                     tshader->setEnvInput(glslang::EShSourceGlsl, lang, glslang::EShClientVulkan, 450);
