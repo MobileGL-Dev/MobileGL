@@ -434,3 +434,13 @@ add_trace_replay_test_for_backends(minecraft-1.21.4-fabric-iris-iterationt-in-wo
         HEIGHT 480
         TOLERANCE 150
         FUZZ_PERCENT 20)
+
+add_trace_replay_test_for_backends(minecraft-1.21.4-fabric-iris-iterationt-nodsa-in-world
+        TRACE_ARCHIVE ${MOBILEGL_TRACE_ROOT}/fixtures/minecraft-1.21.4-fabric-iris-iterationt-nodsa-in-world.tgz
+        TRACE_FILE trace.trace
+        GOLDEN ${MOBILEGL_TRACE_ROOT}/fixtures/minecraft-1.21.4-fabric-iris-iterationt-nodsa-in-world.0001606997.png
+        TARGET_CALL 1606997
+        WIDTH 854
+        HEIGHT 480
+        TOLERANCE 150
+        FUZZ_PERCENT 20)
