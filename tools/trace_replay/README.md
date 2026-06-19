@@ -52,6 +52,9 @@ The bundled fixtures cover:
 - minecraft-1.21.4-fabric-iris-photon-v1.1-in-world: captured from Minecraft 1.21.4 Fabric with Sodium, Iris, and
   Photon v1.1 after entering a singleplayer world.
   ![Minecraft 1.21.4 Fabric Iris Photon v1.1 in-world golden](fixtures/minecraft-1.21.4-fabric-iris-photon-v1.1-in-world.0000159866.png)
+- minecraft-1.21.4-fabric-iris-photon-v1.3b-in-world: captured from Minecraft 1.21.4 Fabric with Sodium, Iris, and
+  Photon v1.3b after entering a singleplayer world.
+  ![Minecraft 1.21.4 Fabric Iris Photon v1.3b in-world golden](fixtures/minecraft-1.21.4-fabric-iris-photon-v1.3b-in-world.0000172128.png)
 
 Build from the MobileGL repository root:
 
