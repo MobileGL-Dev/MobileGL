@@ -1656,12 +1656,21 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
         ClearGLErrors();
         ScopedDepthBlitState state;
+        g_GLESFuncs.glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, 0, 0);
+        AssertNoGLError("detach depth blit read color texture");
+        g_GLESFuncs.glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, 0, 0);
+        AssertNoGLError("detach depth blit draw color texture");
         g_GLESFuncs.glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, srcTexture,
                                            srcLevel);
         AssertNoGLError("attach depth blit source texture");
         g_GLESFuncs.glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, dstTexture,
                                            dstLevel);
         AssertNoGLError("attach depth blit destination texture");
+        g_GLESFuncs.glReadBuffer(GL_NONE);
+        AssertNoGLError("set depth blit read buffer");
+        const GLenum drawBuffer = GL_NONE;
+        g_GLESFuncs.glDrawBuffers(1, &drawBuffer);
+        AssertNoGLError("set depth blit draw buffer");
         MOBILEGL_ASSERT(g_GLESFuncs.glCheckFramebufferStatus(GL_READ_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE,
                         "Depth blit read framebuffer is incomplete.");
         AssertNoGLError("check depth blit read framebuffer");
@@ -1686,6 +1695,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
         ClearGLErrors();
         ScopedDepthBlitState state;
+        g_GLESFuncs.glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, 0, 0);
+        AssertNoGLError("detach color blit read depth texture");
+        g_GLESFuncs.glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, 0, 0);
+        AssertNoGLError("detach color blit draw depth texture");
+        g_GLESFuncs.glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_STENCIL_ATTACHMENT, GL_TEXTURE_2D, 0, 0);
+        AssertNoGLError("detach color blit read stencil texture");
+        g_GLESFuncs.glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_STENCIL_ATTACHMENT, GL_TEXTURE_2D, 0, 0);
+        AssertNoGLError("detach color blit draw stencil texture");
         g_GLESFuncs.glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, srcTexture,
                                            srcLevel);
         AssertNoGLError("attach color blit source texture");
