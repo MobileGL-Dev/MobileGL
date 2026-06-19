@@ -425,6 +425,16 @@ add_trace_replay_test_for_backends(minecraft-1.21.4-fabric-iris-super-duper-vani
         TOLERANCE 20
         FUZZ_PERCENT 20)
 
+add_trace_replay_test_for_backends(minecraft-1.21.4-fabric-iris-sundial-lite-in-world
+        TRACE_ARCHIVE ${MOBILEGL_TRACE_ROOT}/fixtures/minecraft-1.21.4-fabric-iris-sundial-lite-in-world.tgz
+        TRACE_FILE trace.trace
+        GOLDEN ${MOBILEGL_TRACE_ROOT}/fixtures/minecraft-1.21.4-fabric-iris-sundial-lite-in-world.0000150023.png
+        TARGET_CALL 150023
+        WIDTH 854
+        HEIGHT 480
+        TOLERANCE 20
+        FUZZ_PERCENT 20)
+
 add_trace_replay_test_for_backends(minecraft-1.21.4-fabric-iris-complementary-reimagined-in-world
         TRACE_ARCHIVE ${MOBILEGL_TRACE_ROOT}/fixtures/minecraft-1.21.4-fabric-iris-complementary-reimagined-in-world.tgz
         TRACE_FILE trace.trace
