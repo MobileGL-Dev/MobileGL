@@ -425,6 +425,16 @@ add_trace_replay_test_for_backends(minecraft-1.21.4-fabric-iris-complementary-re
         TOLERANCE 20
         FUZZ_PERCENT 20)
 
+add_trace_replay_test_for_backends(minecraft-1.21.4-fabric-iris-complementary-unbound-in-world
+        TRACE_ARCHIVE ${MOBILEGL_TRACE_ROOT}/fixtures/minecraft-1.21.4-fabric-iris-complementary-unbound-in-world.tgz
+        TRACE_FILE trace.trace
+        GOLDEN ${MOBILEGL_TRACE_ROOT}/fixtures/minecraft-1.21.4-fabric-iris-complementary-unbound-in-world.0000146559.png
+        TARGET_CALL 146559
+        WIDTH 854
+        HEIGHT 480
+        TOLERANCE 150
+        FUZZ_PERCENT 20)
+
 add_trace_replay_test_for_backends(minecraft-1.21.4-fabric-iris-mellow-in-world
         TRACE_ARCHIVE ${MOBILEGL_TRACE_ROOT}/fixtures/minecraft-1.21.4-fabric-iris-mellow-in-world.tgz
         TRACE_FILE trace.trace
