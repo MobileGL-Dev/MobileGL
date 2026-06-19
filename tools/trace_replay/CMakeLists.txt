@@ -445,6 +445,16 @@ add_trace_replay_test_for_backends(minecraft-1.21.4-fabric-iris-mellow-in-world
         TOLERANCE 20
         FUZZ_PERCENT 20)
 
+add_trace_replay_test_for_backends(minecraft-1.21.4-fabric-iris-nostalgia-in-world
+        TRACE_ARCHIVE ${MOBILEGL_TRACE_ROOT}/fixtures/minecraft-1.21.4-fabric-iris-nostalgia-in-world.tgz
+        TRACE_FILE trace.trace
+        GOLDEN ${MOBILEGL_TRACE_ROOT}/fixtures/minecraft-1.21.4-fabric-iris-nostalgia-in-world.0000153808-linux-mesa.png
+        TARGET_CALL 153808
+        WIDTH 854
+        HEIGHT 480
+        TOLERANCE 60
+        FUZZ_PERCENT 20)
+
 add_trace_replay_test_for_backends(minecraft-1.21.4-fabric-iris-bliss-in-world
         TRACE_ARCHIVE ${MOBILEGL_TRACE_ROOT}/fixtures/minecraft-1.21.4-fabric-iris-bliss-in-world.tgz
         TRACE_FILE trace.trace
@@ -458,11 +468,11 @@ add_trace_replay_test_for_backends(minecraft-1.21.4-fabric-iris-bliss-in-world
 add_trace_replay_test_for_backends(minecraft-1.21.4-fabric-iris-chocapic-v6-lite-in-world
         TRACE_ARCHIVE ${MOBILEGL_TRACE_ROOT}/fixtures/minecraft-1.21.4-fabric-iris-chocapic-v6-lite-in-world.tgz
         TRACE_FILE trace.trace
-        GOLDEN ${MOBILEGL_TRACE_ROOT}/fixtures/minecraft-1.21.4-fabric-iris-chocapic-v6-lite-in-world.0000125124.png
+        GOLDEN ${MOBILEGL_TRACE_ROOT}/fixtures/minecraft-1.21.4-fabric-iris-chocapic-v6-lite-in-world.0000125124-linux-mesa.png
         TARGET_CALL 125124
         WIDTH 854
         HEIGHT 480
-        TOLERANCE 700
+        TOLERANCE 200
         FUZZ_PERCENT 20)
 
 add_trace_replay_test_for_backends(minecraft-1.21.4-fabric-iris-iterationt-in-world
@@ -483,4 +493,14 @@ add_trace_replay_test_for_backends(minecraft-1.21.4-fabric-iris-iterationt-nodsa
         WIDTH 854
         HEIGHT 480
         TOLERANCE 150
+        FUZZ_PERCENT 20)
+
+add_trace_replay_test_for_backends(minecraft-1.21.4-fabric-iris-photon-v1.1-in-world
+        TRACE_ARCHIVE ${MOBILEGL_TRACE_ROOT}/fixtures/minecraft-1.21.4-fabric-iris-photon-v1.1-in-world.tgz
+        TRACE_FILE trace.trace
+        GOLDEN ${MOBILEGL_TRACE_ROOT}/fixtures/minecraft-1.21.4-fabric-iris-photon-v1.1-in-world.0000159866.png
+        TARGET_CALL 159866
+        WIDTH 854
+        HEIGHT 480
+        TOLERANCE 20
         FUZZ_PERCENT 20)
