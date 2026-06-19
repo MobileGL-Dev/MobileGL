@@ -66,6 +66,7 @@ namespace MobileGL::MG_State::GLState {
         m_uniformLocations.clear();
         m_uniformIndexInTProgram.clear();
         m_uniformSamplerOrImageUnitIndex.clear();
+        m_explicitOpaqueUniformBindings.clear();
         m_uniformBlockIndexByName.clear();
         m_uniformBlockBinding.clear();
         m_uniformOffsets.clear();
@@ -199,7 +200,9 @@ namespace MobileGL::MG_State::GLState {
 
         MG_Util::ShaderTranspiler::ProgramAttrib attrib{.shaders = Move(shaders),
                                                         .explicitVertexInLocations = m_explicitAttribLocations,
-                                                        .explicitFragmentOutLocations = m_explicitFragDataLocation};
+                                                        .explicitFragmentOutLocations = m_explicitFragDataLocation,
+                                                        .explicitOpaqueUniformBindings =
+                                                            &m_explicitOpaqueUniformBindings};
 
         MGLOG_D("ProgramObject %u: Calling ShaderCompiler::LinkProgram", m_externalIndex);
         auto result = MG_Util::ShaderTranspiler::ShaderCompiler::LinkProgram(attrib);
@@ -306,6 +309,11 @@ namespace MobileGL::MG_State::GLState {
         }
 
         SizeT locNeedle = 0;
+        std::sort(unallocatedUniformIndex.begin(), unallocatedUniformIndex.end(), [this](Int lhs, Int rhs) {
+            const auto& lhsUniform = m_program->getUniform(lhs);
+            const auto& rhsUniform = m_program->getUniform(rhs);
+            return lhsUniform.name < rhsUniform.name;
+        });
         for (auto index : unallocatedUniformIndex) {
             auto& uniform = m_program->getUniform(index);
             for (; locNeedle <= m_maxUniformLocation; locNeedle++) {
@@ -334,12 +342,12 @@ namespace MobileGL::MG_State::GLState {
                 continue;
             }
 
-            const int binding = uniform.getBinding();
-            if (binding >= 0 && binding != static_cast<int>(glslang::TQualifier::layoutBindingEnd)) {
-                m_uniformSamplerOrImageUnitIndex[location] = binding;
-                MGLOG_D("ProgramObject %u: Reflection - opaque uniform '%s' location=%u initialUnit=%d",
-                        m_externalIndex, uniform.name.c_str(), location, binding);
-            }
+            const auto explicitBinding = m_explicitOpaqueUniformBindings.find(uniform.name);
+            const int initialUnit =
+                explicitBinding != m_explicitOpaqueUniformBindings.end() ? static_cast<int>(explicitBinding->second) : 0;
+            m_uniformSamplerOrImageUnitIndex[location] = initialUnit;
+            MGLOG_D("ProgramObject %u: Reflection - opaque uniform '%s' location=%u initialUnit=%d",
+                    m_externalIndex, uniform.name.c_str(), location, initialUnit);
         }
 
         // ------------ attributes (vertex in) ---------------
@@ -461,7 +469,8 @@ namespace MobileGL::MG_State::GLState {
         // 2. Do actual linking
         ProgramAttrib attrib{.shaders = Move(shaders),
                              .explicitVertexInLocations = m_explicitAttribLocations,
-                             .explicitFragmentOutLocations = m_explicitFragDataLocation};
+                             .explicitFragmentOutLocations = m_explicitFragDataLocation,
+                             .explicitOpaqueUniformBindings = &m_explicitOpaqueUniformBindings};
         MGLOG_D("ProgramObject %u: GenerateBinary - linking program for binary", m_externalIndex);
         auto programResult = ShaderCompiler::LinkProgram(attrib);
         if (!programResult) {
@@ -495,6 +504,8 @@ namespace MobileGL::MG_State::GLState {
         m_uniformSizesInBytes.clear();
         m_uniformOffsets.clear();
         m_globalUboScratch.clear();
+        m_uniformOffsets.resize(m_maxUniformLocation + 1);
+        m_uniformSizesInBytes.resize(m_maxUniformLocation + 1);
         for (SizeT i = 0; i < m_generatedSpirv.size(); i++) {
             auto& spv = m_generatedSpirv[i];
 
@@ -520,37 +531,34 @@ namespace MobileGL::MG_State::GLState {
                 if (size == 0) {
                     continue;
                 }
-                m_globalUboScratch.resize(size);
-                m_uniformOffsets.resize(m_maxUniformLocation + 1);
+                if (m_globalUboScratch.size() < size) {
+                    m_globalUboScratch.resize(size);
+                }
                 for (const auto& [name, offset] : meta.plainUniformOffsetsInUBO) {
                     if (m_uniformLocations.find(name) != m_uniformLocations.end()) {
                         m_uniformOffsets[m_uniformLocations[name]] = offset;
                         MGLOG_D("ProgramObject %u: GenerateBinary - uniform '%s' offset=%u assigned to location %u",
                                 m_externalIndex, name.c_str(), offset, m_uniformLocations[name]);
-                    } else {
-                        MGLOG_D("ProgramObject %u: GenerateBinary - uniform '%s' offset=%u but not found in "
-                                "m_uniformLocations",
-                                m_externalIndex, name.c_str(), offset);
-                    }
+            } else {
+                MGLOG_D("ProgramObject %u: GenerateBinary - uniform '%s' offset=%u but not found in "
+                        "m_uniformLocations",
+                        m_externalIndex, name.c_str(), offset);
+            }
                 }
-                m_uniformSizesInBytes.resize(m_maxUniformLocation + 1);
                 for (const auto& [name, size] : meta.plainUniformMemberSizesInBytes) {
                     if (m_uniformLocations.find(name) != m_uniformLocations.end()) {
                         m_uniformSizesInBytes[m_uniformLocations[name]] = size;
                         MGLOG_D("ProgramObject %u: GenerateBinary - uniform '%s' size=%u assigned to location %u",
                                 m_externalIndex, name.c_str(), size, m_uniformLocations[name]);
-                    } else {
-                        MGLOG_D("ProgramObject %u: GenerateBinary - uniform '%s' size=%u but not found in "
-                                "m_uniformLocations",
-                                m_externalIndex, name.c_str(), size);
-                    }
+            } else {
+                MGLOG_D("ProgramObject %u: GenerateBinary - uniform '%s' size=%u but not found in "
+                        "m_uniformLocations",
+                        m_externalIndex, name.c_str(), size);
+            }
                 }
-                // Only parse first module that contains uniform metadata
-                MGLOG_D("ProgramObject %u: GenerateBinary - finished parsing module %zu; breaking after first "
-                        "valid metadata",
+                MGLOG_D("ProgramObject %u: GenerateBinary - finished parsing module %zu metadata",
                         m_externalIndex, i);
             }
-            break;
         }
     }
 

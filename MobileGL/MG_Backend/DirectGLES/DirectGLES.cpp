@@ -1589,8 +1589,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
         MOBILEGL_ASSERT(mipmapTexture != nullptr, "GenerateMipmap requires mipmap texture storage.");
         Bool allocatedStorage = false;
         for (const TextureUploadTarget uploadTarget : texture->GetUploadTargets()) {
-            MOBILEGL_ASSERT(EnsureGenerateMipmapStorageAllocated(*mipmapTexture, uploadTarget, allocatedStorage),
-                            "GenerateMipmap could not allocate generated mipmap storage.");
+            const Bool allocated = EnsureGenerateMipmapStorageAllocated(*mipmapTexture, uploadTarget, allocatedStorage);
+            MOBILEGL_ASSERT(allocated, "GenerateMipmap could not allocate generated mipmap storage.");
         }
         return allocatedStorage;
     }

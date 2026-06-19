@@ -4212,8 +4212,9 @@ void main() {
                             static_cast<Int>(resource->format));
         }
 
-        MOBILEGL_ASSERT(EnsureGenerateMipmapStorageAllocated(*mipmapTexture, uploadTarget, baseMipLevel),
-                "GenerateMipmap could not allocate a full mip chain for this texture.");
+        const Bool allocatedMipmapStorage =
+            EnsureGenerateMipmapStorageAllocated(*mipmapTexture, uploadTarget, baseMipLevel);
+        MOBILEGL_ASSERT(allocatedMipmapStorage, "GenerateMipmap could not allocate a full mip chain for this texture.");
 
         resource = m_textureManager->SyncTextureAndGetDescriptor(*texture);
         MOBILEGL_ASSERT(resource != nullptr && resource->image != VK_NULL_HANDLE,

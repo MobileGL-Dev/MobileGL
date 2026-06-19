@@ -162,7 +162,12 @@ namespace MobileGL::MG_State::GLState {
         Uint32 GetBackendStateVersion() const { return m_backendStateVersion; }
 
         void SetUniformSamplerOrImageUnitIndex(Uint location, Int unit) {
+            if (location >= m_uniformSamplerOrImageUnitIndex.size() ||
+                m_uniformSamplerOrImageUnitIndex[location] == unit) {
+                return;
+            }
             m_uniformSamplerOrImageUnitIndex[location] = unit;
+            ++m_backendStateVersion;
         }
 
         Int GetUniformSamplerOrImageUnitIndex(Uint location) const {
@@ -260,6 +265,7 @@ namespace MobileGL::MG_State::GLState {
         Vector<Int> m_uniformIndexInTProgram;
         // ditto. Will be set at glUniform1i
         Vector<Int> m_uniformSamplerOrImageUnitIndex;
+        UnorderedMap<String, Uint> m_explicitOpaqueUniformBindings;
 
         // Ordered by uniform block index
         // index is DIFFERENT from binding!!!

@@ -197,7 +197,8 @@ namespace MobileGL {
                     if (program->getIntermediate((EShLanguage)stage) == nullptr) continue;
                     resolver =
                         MakeUnique<TMglGlslIoResolver>(*program, (EShLanguage)stage, attrib.explicitVertexInLocations,
-                                                       attrib.explicitFragmentOutLocations);
+                                                       attrib.explicitFragmentOutLocations,
+                                                       attrib.explicitOpaqueUniformBindings);
                     break;
                 }
                 auto ioMapper = UniquePtr<glslang::TIoMapper>(glslang::GetGlslIoMapper());
@@ -235,6 +236,8 @@ namespace MobileGL {
 
                 Optimizer optimizer(SPV_ENV_VULKAN_1_1);
 
+                optimizer.RegisterPass(CreateAggressiveDCEPass(false));
+                optimizer.RegisterPass(CreateRemoveUnusedInterfaceVariablesPass());
                 optimizer.RegisterPass(FlattenInterfaceStructPass::CreateFlattenInterfaceStructPass());
                 optimizer.RegisterPass(EliminateFloatEqualsZeroPass::CreateEliminateFloatEqualsZeroPass());
 

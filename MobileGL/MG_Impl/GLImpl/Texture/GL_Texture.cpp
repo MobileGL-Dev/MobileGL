@@ -2837,16 +2837,16 @@ namespace MobileGL::MG_Impl::GLImpl {
         if (textureObject) {
             auto* mipmapTexture = dynamic_cast<MG_State::GLState::TextureObjectMipmap*>(textureObject.get());
             MOBILEGL_ASSERT(mipmapTexture != nullptr, "GenerateMipmap requires mipmap texture storage.");
-            for (const TextureUploadTarget uploadTarget : textureObject->GetUploadTargets()) {
-                MOBILEGL_ASSERT(EnsureGeneratedMipmapStorageAllocated(*mipmapTexture, uploadTarget),
-                                "GenerateMipmap could not allocate generated mipmap state.");
-            }
         }
         GenerateMipmap_Backend(target);
     }
 
     void GenerateTextureMipmap(GLuint texture) {
         auto textureObject = GetTextureObjectByName(texture, __func__);
+        if (textureObject) {
+            auto* mipmapTexture = dynamic_cast<MG_State::GLState::TextureObjectMipmap*>(textureObject.get());
+            MOBILEGL_ASSERT(mipmapTexture != nullptr, "GenerateTextureMipmap requires mipmap texture storage.");
+        }
         WithTemporarilyBoundNamedTexture(textureObject, [&](GLenum target) { GenerateMipmap_Backend(target); });
     }
 

@@ -26,15 +26,26 @@ namespace MobileGL {
     public:
         using ExplicitVarSlotMap = UnorderedMap<String, Uint>;
         TMglGlslIoResolver(const glslang::TIntermediate& intermediate, const ExplicitVarSlotMap& vertexIns,
-                           const ExplicitVarSlotMap& fragOuts)
-            : TDefaultGlslIoResolver(intermediate), m_explicitVertexIns(vertexIns), m_explicitFragOuts(fragOuts) {}
+                           const ExplicitVarSlotMap& fragOuts, ExplicitVarSlotMap* opaqueUniformBindings)
+            : TDefaultGlslIoResolver(intermediate), m_explicitVertexIns(vertexIns), m_explicitFragOuts(fragOuts),
+              m_explicitOpaqueUniformBindings(opaqueUniformBindings) {}
         TMglGlslIoResolver(const glslang::TProgram& program, const EShLanguage stage,
-                           const ExplicitVarSlotMap& vertexIns, const ExplicitVarSlotMap& fragOuts)
-            : TMglGlslIoResolver(*program.getIntermediate(stage), vertexIns, fragOuts) {}
+                           const ExplicitVarSlotMap& vertexIns, const ExplicitVarSlotMap& fragOuts,
+                           ExplicitVarSlotMap* opaqueUniformBindings)
+            : TMglGlslIoResolver(*program.getIntermediate(stage), vertexIns, fragOuts, opaqueUniformBindings) {}
         void reserverStorageSlot(glslang::TVarEntryInfo& ent, TInfoSink& infoSink) override;
+        void reserverResourceSlot(glslang::TVarEntryInfo& ent, TInfoSink& infoSink) override;
+        int resolveUniformLocation(EShLanguage stage, glslang::TVarEntryInfo& ent) override;
 
     protected:
+        bool ShouldAssignPlainUniformLocation(const glslang::TType& type) const;
+        void EnsurePlainUniformLocationsAssigned();
+
         const ExplicitVarSlotMap& m_explicitVertexIns;
         const ExplicitVarSlotMap& m_explicitFragOuts;
+        ExplicitVarSlotMap* m_explicitOpaqueUniformBindings = nullptr;
+        std::map<glslang::TString, int> m_plainUniformLocationSizeByName;
+        std::map<glslang::TString, int> m_plainUniformLocationByName;
+        bool m_plainUniformLocationsAssigned = false;
     };
 } // namespace MobileGL

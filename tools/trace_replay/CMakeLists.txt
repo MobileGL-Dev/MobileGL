@@ -445,6 +445,16 @@ add_trace_replay_test_for_backends(minecraft-1.21.4-fabric-iris-mellow-in-world
         TOLERANCE 20
         FUZZ_PERCENT 20)
 
+add_trace_replay_test_for_backends(minecraft-1.21.4-fabric-iris-chocapic-v6-lite-in-world
+        TRACE_ARCHIVE ${MOBILEGL_TRACE_ROOT}/fixtures/minecraft-1.21.4-fabric-iris-chocapic-v6-lite-in-world.tgz
+        TRACE_FILE trace.trace
+        GOLDEN ${MOBILEGL_TRACE_ROOT}/fixtures/minecraft-1.21.4-fabric-iris-chocapic-v6-lite-in-world.0000125124.png
+        TARGET_CALL 125124
+        WIDTH 854
+        HEIGHT 480
+        TOLERANCE 700
+        FUZZ_PERCENT 20)
+
 add_trace_replay_test_for_backends(minecraft-1.21.4-fabric-iris-iterationt-in-world
         TRACE_ARCHIVE ${MOBILEGL_TRACE_ROOT}/fixtures/minecraft-1.21.4-fabric-iris-iterationt-in-world.tgz
         TRACE_FILE trace.trace
