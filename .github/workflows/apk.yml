@@ -96,6 +96,9 @@ jobs:
     name: retrace (${{ matrix.backend.name }}, ${{ matrix.case.name }})
     runs-on: ubuntu-latest
     needs: build
+    timeout-minutes: 75
+    env:
+      AVD_NAME: mobilegl-${{ matrix.backend.id }}
     strategy:
       fail-fast: false
       max-parallel: 4
@@ -376,6 +379,8 @@ jobs:
         run: |
           echo "date_today=$(date +'%Y-%m-%d')" >> "$GITHUB_ENV"
           echo "short_sha=${GITHUB_SHA::7}" >> "$GITHUB_ENV"
+          echo "EMULATOR_LOG=${RUNNER_TEMP}/mobilegl-emulator.log" >> "$GITHUB_ENV"
+          echo "EMULATOR_PID_FILE=${RUNNER_TEMP}/mobilegl-emulator.pid" >> "$GITHUB_ENV"
 
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
@@ -393,36 +398,65 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
 
-      - name: Retrace and validate
+      - name: Create AVD
         run: |
-          apk_file="$(find android-retrace-apks -name '${{ matrix.backend.apk }}' -print -quit)"
-          sh android-plugin/run-avd-ci.sh \
+          sh android-plugin/run-avd-ci.sh create \
             --api-level 35 \
             --target google_apis \
             --arch x86_64 \
             --profile pixel_6 \
+            --avd-name "${AVD_NAME}"
+
+      - name: Launch Emulator
+        run: |
+          sh android-plugin/run-avd-ci.sh start \
+            --avd-name "${AVD_NAME}" \
             --gpu "${{ matrix.backend.gpu }}" \
-            --avd-name "mobilegl-${{ matrix.backend.id }}" \
-            -- sh android-plugin/trace-replay-ci.sh \
-              --apk-file "${apk_file}" \
-              --package "${{ matrix.backend.package }}" \
-              --backend "${{ matrix.backend.name }}" \
-              --result-root android-retrace-result \
-              --fixture-root android-retrace-fixture \
-              --case "${{ matrix.case.name }}" \
-              --trace-archive "${{ matrix.case.trace_archive }}" \
-              --trace-file "${{ matrix.case.trace_file }}" \
-              --golden "${{ matrix.case.golden }}" \
-              --target-call "${{ matrix.case.target_call }}" \
-              --width "${{ matrix.case.width }}" \
-              --height "${{ matrix.case.height }}" \
-              --tolerance "${{ matrix.case.tolerance }}" \
-              --crop-x "${{ matrix.case.crop_x }}" \
-              --crop-y "${{ matrix.case.crop_y }}" \
-              --crop-width "${{ matrix.case.crop_width }}" \
-              --crop-height "${{ matrix.case.crop_height }}" \
-              --fuzz-percent "${{ matrix.case.fuzz_percent }}" \
-              --timeout-seconds "${{ matrix.case.timeout_seconds }}"
+            --emulator-log "${EMULATOR_LOG}" \
+            --pid-file "${EMULATOR_PID_FILE}" \
+            --boot-timeout 300
+
+      - name: Retrace and validate
+        run: |
+          apk_file="$(find android-retrace-apks -name '${{ matrix.backend.apk }}' -print -quit)"
+          timeout "$(( ${{ matrix.case.timeout_seconds }} + 300 ))" sh android-plugin/trace-replay-ci.sh \
+            --apk-file "${apk_file}" \
+            --package "${{ matrix.backend.package }}" \
+            --backend "${{ matrix.backend.name }}" \
+            --result-root android-retrace-result \
+            --fixture-root android-retrace-fixture \
+            --case "${{ matrix.case.name }}" \
+            --trace-archive "${{ matrix.case.trace_archive }}" \
+            --trace-file "${{ matrix.case.trace_file }}" \
+            --golden "${{ matrix.case.golden }}" \
+            --target-call "${{ matrix.case.target_call }}" \
+            --width "${{ matrix.case.width }}" \
+            --height "${{ matrix.case.height }}" \
+            --tolerance "${{ matrix.case.tolerance }}" \
+            --crop-x "${{ matrix.case.crop_x }}" \
+            --crop-y "${{ matrix.case.crop_y }}" \
+            --crop-width "${{ matrix.case.crop_width }}" \
+            --crop-height "${{ matrix.case.crop_height }}" \
+            --fuzz-percent "${{ matrix.case.fuzz_percent }}" \
+            --timeout-seconds "${{ matrix.case.timeout_seconds }}"
+
+      - name: Collect emulator diagnostics
+        if: always()
+        run: |
+          mkdir -p android-retrace-result/diagnostics
+          adb devices -l > android-retrace-result/diagnostics/adb-devices.txt || true
+          timeout 30 adb logcat -d -t 1000 > android-retrace-result/diagnostics/logcat.txt || true
+          if [ -f "${EMULATOR_LOG}" ]; then
+            cp "${EMULATOR_LOG}" android-retrace-result/diagnostics/emulator.log
+          fi
+
+      - name: Stop Emulator
+        if: always()
+        run: |
+          sh android-plugin/run-avd-ci.sh stop \
+            --avd-name "${AVD_NAME}" \
+            --emulator-log "${EMULATOR_LOG}" \
+            --pid-file "${EMULATOR_PID_FILE}"
 
       - name: Upload Android retrace result
         if: always()
