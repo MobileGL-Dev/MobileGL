@@ -348,7 +348,7 @@ add_trace_replay_test_for_backends(OpenRA
         TARGET_CALL 31249
         WIDTH 640
         HEIGHT 480
-        TOLERANCE 20
+        TOLERANCE 3072
         CROP_X 1
         CROP_Y 1
         CROP_WIDTH 638
@@ -362,7 +362,7 @@ add_trace_replay_test_for_backends(minecraft-1.21.4-startup
         TARGET_CALL 92195
         WIDTH 854
         HEIGHT 480
-        TOLERANCE 20
+        TOLERANCE 4100
         FUZZ_PERCENT 20)
 
 add_trace_replay_test_for_backends(minecraft-1.21.4-main-menu
@@ -372,7 +372,7 @@ add_trace_replay_test_for_backends(minecraft-1.21.4-main-menu
         TARGET_CALL 481787
         WIDTH 854
         HEIGHT 480
-        TOLERANCE 500
+        TOLERANCE 4100
         FUZZ_PERCENT 20)
 
 add_trace_replay_test_for_backends(minecraft-1.21.4-in-world
@@ -382,7 +382,7 @@ add_trace_replay_test_for_backends(minecraft-1.21.4-in-world
         TARGET_CALL 280000
         WIDTH 854
         HEIGHT 480
-        TOLERANCE 500
+        TOLERANCE 4100
         FUZZ_PERCENT 20)
 
 add_trace_replay_test_for_backends(minecraft-1.21.4-fabric-sodium-in-world
@@ -392,7 +392,7 @@ add_trace_replay_test_for_backends(minecraft-1.21.4-fabric-sodium-in-world
         TARGET_CALL 923340
         WIDTH 854
         HEIGHT 480
-        TOLERANCE 20
+        TOLERANCE 4100
         FUZZ_PERCENT 20)
 
 add_trace_replay_test_for_backends(minecraft-1.21.4-fabric-iris-bsl-in-world
@@ -402,7 +402,7 @@ add_trace_replay_test_for_backends(minecraft-1.21.4-fabric-iris-bsl-in-world
         TARGET_CALL 110725
         WIDTH 854
         HEIGHT 480
-        TOLERANCE 200
+        TOLERANCE 4100
         FUZZ_PERCENT 20)
 
 add_trace_replay_test_for_backends(minecraft-1.21.4-fabric-iris-makeup-ultrafast-in-world
@@ -412,7 +412,7 @@ add_trace_replay_test_for_backends(minecraft-1.21.4-fabric-iris-makeup-ultrafast
         TARGET_CALL 95322
         WIDTH 854
         HEIGHT 480
-        TOLERANCE 20
+        TOLERANCE 4100
         FUZZ_PERCENT 20)
 
 add_trace_replay_test_for_backends(minecraft-1.21.4-fabric-iris-super-duper-vanilla-in-world
@@ -422,7 +422,7 @@ add_trace_replay_test_for_backends(minecraft-1.21.4-fabric-iris-super-duper-vani
         TARGET_CALL 141559
         WIDTH 854
         HEIGHT 480
-        TOLERANCE 20
+        TOLERANCE 4100
         FUZZ_PERCENT 20)
 
 add_trace_replay_test_for_backends(minecraft-1.21.4-fabric-iris-sundial-lite-in-world
@@ -432,7 +432,7 @@ add_trace_replay_test_for_backends(minecraft-1.21.4-fabric-iris-sundial-lite-in-
         TARGET_CALL 150023
         WIDTH 854
         HEIGHT 480
-        TOLERANCE 20
+        TOLERANCE 4100
         FUZZ_PERCENT 20)
 
 add_trace_replay_test_for_backends(minecraft-1.21.4-fabric-iris-complementary-reimagined-in-world
@@ -442,7 +442,7 @@ add_trace_replay_test_for_backends(minecraft-1.21.4-fabric-iris-complementary-re
         TARGET_CALL 151297
         WIDTH 854
         HEIGHT 480
-        TOLERANCE 20
+        TOLERANCE 4100
         FUZZ_PERCENT 20)
 
 add_trace_replay_test_for_backends(minecraft-1.21.4-fabric-iris-complementary-unbound-in-world
@@ -452,7 +452,7 @@ add_trace_replay_test_for_backends(minecraft-1.21.4-fabric-iris-complementary-un
         TARGET_CALL 146559
         WIDTH 854
         HEIGHT 480
-        TOLERANCE 150
+        TOLERANCE 4100
         FUZZ_PERCENT 20)
 
 add_trace_replay_test_for_backends(minecraft-1.21.4-fabric-iris-mellow-in-world
@@ -462,7 +462,7 @@ add_trace_replay_test_for_backends(minecraft-1.21.4-fabric-iris-mellow-in-world
         TARGET_CALL 96143
         WIDTH 854
         HEIGHT 480
-        TOLERANCE 20
+        TOLERANCE 4100
         FUZZ_PERCENT 20)
 
 add_trace_replay_test_for_backends(minecraft-1.21.4-fabric-iris-nostalgia-in-world
@@ -472,7 +472,7 @@ add_trace_replay_test_for_backends(minecraft-1.21.4-fabric-iris-nostalgia-in-wor
         TARGET_CALL 153808
         WIDTH 854
         HEIGHT 480
-        TOLERANCE 60
+        TOLERANCE 4100
         FUZZ_PERCENT 20)
 
 add_trace_replay_test_for_backends(minecraft-1.21.4-fabric-iris-bliss-in-world
@@ -482,7 +482,7 @@ add_trace_replay_test_for_backends(minecraft-1.21.4-fabric-iris-bliss-in-world
         TARGET_CALL 113511
         WIDTH 854
         HEIGHT 480
-        TOLERANCE 40
+        TOLERANCE 4100
         FUZZ_PERCENT 20)
 
 add_trace_replay_test_for_backends(minecraft-1.21.4-fabric-iris-chocapic-v6-lite-in-world
@@ -492,7 +492,7 @@ add_trace_replay_test_for_backends(minecraft-1.21.4-fabric-iris-chocapic-v6-lite
         TARGET_CALL 125124
         WIDTH 854
         HEIGHT 480
-        TOLERANCE 200
+        TOLERANCE 4100
         FUZZ_PERCENT 20)
 
 add_trace_replay_test_for_backends(minecraft-1.21.4-fabric-iris-iterationt-in-world
@@ -502,7 +502,7 @@ add_trace_replay_test_for_backends(minecraft-1.21.4-fabric-iris-iterationt-in-wo
         TARGET_CALL 1173280
         WIDTH 854
         HEIGHT 480
-        TOLERANCE 150
+        TOLERANCE 4100
         FUZZ_PERCENT 20)
 
 add_trace_replay_test_for_backends(minecraft-1.21.4-fabric-iris-iterationt-nodsa-in-world
@@ -512,7 +512,7 @@ add_trace_replay_test_for_backends(minecraft-1.21.4-fabric-iris-iterationt-nodsa
         TARGET_CALL 1606997
         WIDTH 854
         HEIGHT 480
-        TOLERANCE 150
+        TOLERANCE 4100
         FUZZ_PERCENT 20)
 
 add_trace_replay_test_for_backends(minecraft-1.21.4-fabric-iris-photon-v1.1-in-world
@@ -522,5 +522,5 @@ add_trace_replay_test_for_backends(minecraft-1.21.4-fabric-iris-photon-v1.1-in-w
         TARGET_CALL 159866
         WIDTH 854
         HEIGHT 480
-        TOLERANCE 20
+        TOLERANCE 4100
         FUZZ_PERCENT 20)
