@@ -14,6 +14,7 @@ void PrintUsage(const char *argv0) {
             << "\n"
             << "Options:\n"
             << "  --golden PATH             Golden PNG to compare against\n"
+            << "  --alternate-golden PATH   Additional acceptable golden PNG\n"
             << "  --diff PATH               Difference PNG output path\n"
             << "  --backend NAME            DirectGLES or DirectVulkan (default: DirectGLES)\n"
             << "  --mobilegl-library PATH   libMobileGL.so path (default: libMobileGL.so)\n"
@@ -64,6 +65,12 @@ bool ParseArgs(int argc, char **argv, mobilegl_trace::Request &request) {
             if (!ReadValue(argc, argv, i, request.tracePath)) return false;
         } else if (arg == "--golden") {
             if (!ReadValue(argc, argv, i, request.goldenPath)) return false;
+        } else if (arg == "--alternate-golden") {
+            std::string alternateGolden;
+            if (!ReadValue(argc, argv, i, alternateGolden)) return false;
+            if (!alternateGolden.empty()) {
+                request.alternateGoldenPaths.push_back(alternateGolden);
+            }
         } else if (arg == "--diff") {
             if (!ReadValue(argc, argv, i, request.diffPath)) return false;
         } else if (arg == "--output") {

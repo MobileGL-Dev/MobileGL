@@ -1,6 +1,7 @@
 #pragma once
 
 #include <string>
+#include <vector>
 
 namespace mobilegl_trace {
 
@@ -17,6 +18,7 @@ enum StatusCode {
 struct Request {
     std::string tracePath;
     std::string goldenPath;
+    std::vector<std::string> alternateGoldenPaths;
     std::string outputDir;
     std::string diffPath;
     std::string backend;
@@ -40,6 +42,7 @@ struct Result {
     std::string resultPath;
     std::string actualPath;
     std::string diffPath;
+    std::string matchedGoldenPath;
     long long mismatchPixels = -1;
 };
 

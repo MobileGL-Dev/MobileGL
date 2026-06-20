@@ -18,6 +18,7 @@
 #include <memory>
 #include <sstream>
 #include <string>
+#include <utility>
 #include <vector>
 #include <fcntl.h>
 #include <sys/stat.h>
@@ -545,27 +546,29 @@ bool WriteDifferenceImage(const Result& result,
     return WritePngRgba(result.diffPath, diff, error);
 }
 
-bool CompareWithGolden(const Request& request, Result& result) {
-    if (request.goldenPath.empty()) {
-        result.passed = true;
-        result.statusCode = STATUS_OK;
-        result.message = "retrace completed; golden_path was not provided";
-        result.mismatchPixels = 0;
-        return true;
-    }
-    if (!Exists(request.goldenPath)) {
-        result.statusCode = STATUS_INVALID_ARGUMENT;
-        result.message = "golden_path does not exist or is not a regular file";
+struct GoldenComparison {
+    std::string path;
+    RgbaImage image;
+    long long mismatchPixels = std::numeric_limits<long long>::max();
+    int x0 = 0;
+    int y0 = 0;
+    int compareWidth = 0;
+    int compareHeight = 0;
+};
+
+bool CompareAgainstOneGolden(const Request& request,
+                             const RgbaImage& actual,
+                             const std::string& goldenPath,
+                             int fuzz,
+                             GoldenComparison& comparison,
+                             std::string& error) {
+    if (!Exists(goldenPath)) {
+        error = "golden_path does not exist or is not a regular file: " + goldenPath;
         return false;
     }
 
-    RgbaImage actual;
     RgbaImage golden;
-    std::string pngError;
-    if (!ReadPngRgba(result.actualPath, actual, pngError) ||
-        !ReadPngRgba(request.goldenPath, golden, pngError)) {
-        result.statusCode = STATUS_COMPARE_FAILED;
-        result.message = pngError.empty() ? "failed to decode actual or golden PNG" : pngError;
+    if (!ReadPngRgba(goldenPath, golden, error)) {
         return false;
     }
 
@@ -573,11 +576,11 @@ bool CompareWithGolden(const Request& request, Result& result) {
     int y0 = request.cropY;
     if (request.cropWidth <= 0 && request.cropHeight <= 0 &&
         (actual.width != golden.width || actual.height != golden.height)) {
-        result.statusCode = STATUS_COMPARE_FAILED;
         std::ostringstream message;
         message << "actual image size " << actual.width << "x" << actual.height
-                << " does not match golden image size " << golden.width << "x" << golden.height;
-        result.message = message.str();
+                << " does not match golden image size " << golden.width << "x" << golden.height
+                << ": " << goldenPath;
+        error = message.str();
         return false;
     }
 
@@ -589,12 +592,10 @@ bool CompareWithGolden(const Request& request, Result& result) {
         y0 + compareHeight > actual.height ||
         x0 + compareWidth > golden.width ||
         y0 + compareHeight > golden.height) {
-        result.statusCode = STATUS_INVALID_ARGUMENT;
-        result.message = "compare crop is outside actual or golden image bounds";
+        error = "compare crop is outside actual or golden image bounds: " + goldenPath;
         return false;
     }
 
-    const int fuzz = std::max(0, std::min(100, request.fuzzPercent)) * 255 / 100;
     long long mismatch = 0;
     for (int y = 0; y < compareHeight; ++y) {
         for (int x = 0; x < compareWidth; ++x) {
@@ -613,20 +614,83 @@ bool CompareWithGolden(const Request& request, Result& result) {
         }
     }
 
+    comparison.path = goldenPath;
+    comparison.image = std::move(golden);
+    comparison.mismatchPixels = mismatch;
+    comparison.x0 = x0;
+    comparison.y0 = y0;
+    comparison.compareWidth = compareWidth;
+    comparison.compareHeight = compareHeight;
+    return true;
+}
+
+bool CompareWithGolden(const Request& request, Result& result) {
+    std::vector<std::string> goldenPaths;
+    if (!request.goldenPath.empty()) {
+        goldenPaths.push_back(request.goldenPath);
+    }
+    for (const auto& alternateGoldenPath : request.alternateGoldenPaths) {
+        if (!alternateGoldenPath.empty()) {
+            goldenPaths.push_back(alternateGoldenPath);
+        }
+    }
+
+    if (goldenPaths.empty()) {
+        result.passed = true;
+        result.statusCode = STATUS_OK;
+        result.message = "retrace completed; golden_path was not provided";
+        result.mismatchPixels = 0;
+        return true;
+    }
+
+    RgbaImage actual;
+    std::string pngError;
+    if (!ReadPngRgba(result.actualPath, actual, pngError)) {
+        result.statusCode = STATUS_COMPARE_FAILED;
+        result.message = pngError.empty() ? "failed to decode actual PNG" : pngError;
+        return false;
+    }
+
+    const int fuzz = std::max(0, std::min(100, request.fuzzPercent)) * 255 / 100;
+    GoldenComparison bestComparison;
+    std::string comparisonError;
+    bool hasComparison = false;
+    for (const auto& goldenPath : goldenPaths) {
+        GoldenComparison comparison;
+        std::string error;
+        if (!CompareAgainstOneGolden(request, actual, goldenPath, fuzz, comparison, error)) {
+            comparisonError = error;
+            continue;
+        }
+        if (!hasComparison || comparison.mismatchPixels < bestComparison.mismatchPixels) {
+            bestComparison = std::move(comparison);
+            hasComparison = true;
+        }
+    }
+
+    if (!hasComparison) {
+        result.statusCode = STATUS_COMPARE_FAILED;
+        result.message = comparisonError.empty() ? "failed to compare against any golden PNG" : comparisonError;
+        return false;
+    }
+
     std::string diffError;
-    if (!WriteDifferenceImage(result, actual, golden, x0, y0, compareWidth, compareHeight, fuzz, diffError)) {
+    if (!WriteDifferenceImage(result, actual, bestComparison.image, bestComparison.x0, bestComparison.y0,
+                              bestComparison.compareWidth, bestComparison.compareHeight, fuzz, diffError)) {
         result.statusCode = STATUS_IO_ERROR;
         result.message = diffError.empty() ? "failed to write diff PNG" : diffError;
         return false;
     }
 
-    result.mismatchPixels = mismatch;
-    result.passed = mismatch <= request.tolerance;
+    result.mismatchPixels = bestComparison.mismatchPixels;
+    result.matchedGoldenPath = bestComparison.path;
+    result.passed = bestComparison.mismatchPixels <= request.tolerance;
     result.statusCode = result.passed ? STATUS_OK : STATUS_COMPARE_FAILED;
     std::ostringstream message;
-    message << "retrace completed; mismatchPixels=" << mismatch
+    message << "retrace completed; mismatchPixels=" << bestComparison.mismatchPixels
             << ", tolerance=" << request.tolerance
-            << ", fuzzPercent=" << request.fuzzPercent;
+            << ", fuzzPercent=" << request.fuzzPercent
+            << ", matchedGoldenPath=" << bestComparison.path;
     result.message = message.str();
     return result.passed;
 }
@@ -648,6 +712,15 @@ bool WriteResultJson(const Request& request, const Result& result) {
     file << "  \"message\": \"" << JsonEscape(result.message) << "\",\n";
     file << "  \"tracePath\": \"" << JsonEscape(request.tracePath) << "\",\n";
     file << "  \"goldenPath\": \"" << JsonEscape(request.goldenPath) << "\",\n";
+    file << "  \"alternateGoldenPaths\": [";
+    for (std::size_t i = 0; i < request.alternateGoldenPaths.size(); ++i) {
+        if (i > 0) {
+            file << ", ";
+        }
+        file << "\"" << JsonEscape(request.alternateGoldenPaths[i]) << "\"";
+    }
+    file << "],\n";
+    file << "  \"matchedGoldenPath\": \"" << JsonEscape(result.matchedGoldenPath) << "\",\n";
     file << "  \"actualPath\": \"" << JsonEscape(result.actualPath) << "\",\n";
     file << "  \"diffPath\": \"" << JsonEscape(result.diffPath) << "\",\n";
     file << "  \"backend\": \"" << JsonEscape(request.backend) << "\",\n";

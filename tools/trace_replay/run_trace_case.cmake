@@ -22,6 +22,10 @@ endif()
 if(NOT DEFINED TRACE_FUZZ_PERCENT OR "${TRACE_FUZZ_PERCENT}" STREQUAL "")
     set(TRACE_FUZZ_PERCENT 20)
 endif()
+set(alternate_golden_args)
+if(DEFINED TRACE_ALTERNATE_GOLDEN AND NOT "${TRACE_ALTERNATE_GOLDEN}" STREQUAL "")
+    list(APPEND alternate_golden_args --alternate-golden "${TRACE_ALTERNATE_GOLDEN}")
+endif()
 
 if(EXISTS "${TRACE_OUTPUT_DIR}")
     file(REMOVE_RECURSE "${TRACE_OUTPUT_DIR}")
@@ -50,6 +54,7 @@ execute_process(
         COMMAND "${TRACE_REPLAY_EXE}"
         --trace "${trace_path}"
         --golden "${TRACE_GOLDEN}"
+        ${alternate_golden_args}
         --diff "${TRACE_OUTPUT_DIR}/output/${TRACE_CASE_NAME}-diff.png"
         --output "${TRACE_OUTPUT_DIR}/output"
         --backend "${TRACE_BACKEND}"

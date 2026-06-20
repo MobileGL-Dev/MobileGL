@@ -54,6 +54,7 @@ Java_top_mobilegl_plugin_trace_TraceReplayActivity_nativeRunTraceReplay(JNIEnv* 
                                                                         jobject surface,
                                                                         jstring tracePath,
                                                                         jstring goldenPath,
+                                                                        jstring alternateGoldenPath,
                                                                         jstring outputDir,
                                                                         jstring diffPath,
                                                                         jstring backend,
@@ -70,6 +71,10 @@ Java_top_mobilegl_plugin_trace_TraceReplayActivity_nativeRunTraceReplay(JNIEnv* 
     mobilegl_trace::Request request;
     request.tracePath = ToString(env, tracePath);
     request.goldenPath = ToString(env, goldenPath);
+    std::string alternateGolden = ToString(env, alternateGoldenPath);
+    if (!alternateGolden.empty()) {
+        request.alternateGoldenPaths.push_back(alternateGolden);
+    }
     request.outputDir = ToString(env, outputDir);
     request.diffPath = ToString(env, diffPath);
     request.backend = ToString(env, backend);

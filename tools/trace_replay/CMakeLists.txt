@@ -269,6 +269,7 @@ function(add_trace_replay_test CASE_NAME BACKEND)
             TRACE_ARCHIVE
             TRACE_FILE
             GOLDEN
+            ALTERNATE_GOLDEN
             TARGET_CALL
             WIDTH
             HEIGHT
@@ -314,6 +315,7 @@ function(add_trace_replay_test CASE_NAME BACKEND)
             -DTRACE_ARCHIVE=${TRACE_CASE_TRACE_ARCHIVE}
             -DTRACE_FILE=${TRACE_CASE_TRACE_FILE}
             -DTRACE_GOLDEN=${TRACE_CASE_GOLDEN}
+            -DTRACE_ALTERNATE_GOLDEN=${TRACE_CASE_ALTERNATE_GOLDEN}
             -DTRACE_BACKEND=${BACKEND}
             -DTRACE_TARGET_CALL=${TRACE_CASE_TARGET_CALL}
             -DTRACE_WIDTH=${TRACE_CASE_WIDTH}
@@ -469,6 +471,7 @@ add_trace_replay_test_for_backends(minecraft-1.21.4-fabric-iris-nostalgia-in-wor
         TRACE_ARCHIVE ${MOBILEGL_TRACE_ROOT}/fixtures/minecraft-1.21.4-fabric-iris-nostalgia-in-world.tgz
         TRACE_FILE trace.trace
         GOLDEN ${MOBILEGL_TRACE_ROOT}/fixtures/minecraft-1.21.4-fabric-iris-nostalgia-in-world.0000153808-linux-mesa.png
+        ALTERNATE_GOLDEN ${MOBILEGL_TRACE_ROOT}/fixtures/minecraft-1.21.4-fabric-iris-nostalgia-in-world.0000153808.png
         TARGET_CALL 153808
         WIDTH 854
         HEIGHT 480

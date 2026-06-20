@@ -287,6 +287,7 @@ jobs:
             trace_archive: tools/trace_replay/fixtures/minecraft-1.21.4-fabric-iris-nostalgia-in-world.tgz
             trace_file: trace.trace
             golden: tools/trace_replay/fixtures/minecraft-1.21.4-fabric-iris-nostalgia-in-world.0000153808-linux-mesa.png
+            alternate_golden: tools/trace_replay/fixtures/minecraft-1.21.4-fabric-iris-nostalgia-in-world.0000153808.png
             target_call: 153808
             width: 854
             height: 480
@@ -429,6 +430,7 @@ jobs:
             --trace-archive "${{ matrix.case.trace_archive }}" \
             --trace-file "${{ matrix.case.trace_file }}" \
             --golden "${{ matrix.case.golden }}" \
+            --alternate-golden "${{ matrix.case.alternate_golden || '' }}" \
             --target-call "${{ matrix.case.target_call }}" \
             --width "${{ matrix.case.width }}" \
             --height "${{ matrix.case.height }}" \

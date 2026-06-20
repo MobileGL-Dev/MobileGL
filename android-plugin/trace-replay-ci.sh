@@ -17,6 +17,7 @@ Usage:
     --trace-archive FILE \
     --trace-file FILE_IN_ARCHIVE \
     --golden FILE \
+    [--alternate-golden FILE] \
     --target-call N \
     --width N \
     --height N \
@@ -60,6 +61,7 @@ case_name=""
 trace_archive=""
 trace_file=""
 golden_path=""
+alternate_golden_path=""
 target_call=""
 width=""
 height=""
@@ -82,6 +84,15 @@ while [ "$#" -gt 0 ]; do
     --trace-archive) trace_archive="$(next_arg "$@")"; shift 2 ;;
     --trace-file) trace_file="$(next_arg "$@")"; shift 2 ;;
     --golden) golden_path="$(next_arg "$@")"; shift 2 ;;
+    --alternate-golden)
+      if [ "$#" -lt 2 ] || [ "${2#--}" != "$2" ]; then
+        alternate_golden_path=""
+        shift 1
+      else
+        alternate_golden_path="$2"
+        shift 2
+      fi
+      ;;
     --target-call) target_call="$(next_arg "$@")"; shift 2 ;;
     --width) width="$(next_arg "$@")"; shift 2 ;;
     --height) height="$(next_arg "$@")"; shift 2 ;;
@@ -120,6 +131,9 @@ require_value "${timeout_seconds}" "--timeout-seconds"
 test -f "${apk_file}" || die "APK does not exist: ${apk_file}"
 test -f "${trace_archive}" || die "trace archive does not exist: ${trace_archive}"
 test -f "${golden_path}" || die "golden image does not exist: ${golden_path}"
+if [ -n "${alternate_golden_path}" ]; then
+  test -f "${alternate_golden_path}" || die "alternate golden image does not exist: ${alternate_golden_path}"
+fi
 
 safe_case="$(printf '%s' "${case_name}" | sed 's/[^A-Za-z0-9._-]/_/g')"
 
@@ -134,32 +148,50 @@ prepare_fixture() {
 
   "${ADB}" push "${extracted_trace}" "/data/local/tmp/mobilegl-${safe_case}.trace"
   "${ADB}" push "${golden_path}" "/data/local/tmp/mobilegl-${safe_case}.golden.png"
+  if [ -n "${alternate_golden_path}" ]; then
+    "${ADB}" push "${alternate_golden_path}" "/data/local/tmp/mobilegl-${safe_case}.alternate-golden.png"
+  fi
   "${ADB}" shell chmod 0644 "/data/local/tmp/mobilegl-${safe_case}.trace" "/data/local/tmp/mobilegl-${safe_case}.golden.png"
+  if [ -n "${alternate_golden_path}" ]; then
+    "${ADB}" shell chmod 0644 "/data/local/tmp/mobilegl-${safe_case}.alternate-golden.png"
+  fi
 }
 
 copy_fixture_to_app() {
   trace_tmp="/data/local/tmp/mobilegl-${safe_case}.trace"
   golden_tmp="/data/local/tmp/mobilegl-${safe_case}.golden.png"
+  alternate_golden_tmp="/data/local/tmp/mobilegl-${safe_case}.alternate-golden.png"
 
   "${ADB}" shell run-as "${package_name}" rm -rf files/trace-replay
   "${ADB}" shell run-as "${package_name}" mkdir -p files/trace-replay/input files/trace-replay/output
   "${ADB}" shell run-as "${package_name}" cp "${trace_tmp}" files/trace-replay/input/trace.trace
   "${ADB}" shell run-as "${package_name}" cp "${golden_tmp}" files/trace-replay/input/golden.png
+  if [ -n "${alternate_golden_path}" ]; then
+    "${ADB}" shell run-as "${package_name}" cp "${alternate_golden_tmp}" files/trace-replay/input/alternate-golden.png
+  fi
 }
 
 run_retrace() {
   app_dir="/data/user/0/${package_name}/files/trace-replay"
   result_dir="${result_root}/${safe_case}-${backend}"
+  alternate_golden_app_path=""
+  if [ -n "${alternate_golden_path}" ]; then
+    alternate_golden_app_path="${app_dir}/input/alternate-golden.png"
+  fi
 
   mkdir -p "${result_dir}"
   "${ADB}" install -r "${apk_file}"
   copy_fixture_to_app
   "${ADB}" shell am force-stop "${package_name}"
   "${ADB}" logcat -c
-  "${ADB}" shell am start -W -a top.mobilegl.plugin.TRACE_REPLAY \
+  set -- am start -W -a top.mobilegl.plugin.TRACE_REPLAY \
     -n "${package_name}/top.mobilegl.plugin.trace.TraceReplayActivity" \
     --es trace_path "${app_dir}/input/trace.trace" \
-    --es golden_path "${app_dir}/input/golden.png" \
+    --es golden_path "${app_dir}/input/golden.png"
+  if [ -n "${alternate_golden_app_path}" ]; then
+    set -- "$@" --es alternate_golden_path "${alternate_golden_app_path}"
+  fi
+  set -- "$@" \
     --es output_dir "${app_dir}/output" \
     --es diff_path "${app_dir}/output/${safe_case}-diff.png" \
     --es backend "${backend}" \
@@ -172,6 +204,7 @@ run_retrace() {
     --ei crop_width "${crop_width}" \
     --ei crop_height "${crop_height}" \
     --ei fuzz_percent "${fuzz_percent}"
+  "${ADB}" shell "$@"
 
   for _ in $(seq 1 "${timeout_seconds}"); do
     if "${ADB}" shell run-as "${package_name}" ls files/trace-replay/output/result.json >/dev/null 2>&1; then

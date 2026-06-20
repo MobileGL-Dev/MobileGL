@@ -97,6 +97,7 @@ public final class TraceReplayActivity extends Activity {
                 surface,
                 request.tracePath,
                 request.goldenPath,
+                request.alternateGoldenPath,
                 request.outputDir,
                 request.diffPath,
                 request.backend,
@@ -123,6 +124,7 @@ public final class TraceReplayActivity extends Activity {
             Surface surface,
             String tracePath,
             String goldenPath,
+            String alternateGoldenPath,
             String outputDir,
             String diffPath,
             String backend,
@@ -141,6 +143,7 @@ public final class TraceReplayActivity extends Activity {
     private static final class TraceReplayRequest {
         final String tracePath;
         final String goldenPath;
+        final String alternateGoldenPath;
         final String outputDir;
         final String diffPath;
         final String backend;
@@ -158,6 +161,7 @@ public final class TraceReplayActivity extends Activity {
         private TraceReplayRequest(
                 String tracePath,
                 String goldenPath,
+                String alternateGoldenPath,
                 String outputDir,
                 String diffPath,
                 String backend,
@@ -174,6 +178,7 @@ public final class TraceReplayActivity extends Activity {
         ) {
             this.tracePath = tracePath;
             this.goldenPath = goldenPath;
+            this.alternateGoldenPath = alternateGoldenPath;
             this.outputDir = outputDir;
             this.diffPath = diffPath;
             this.backend = backend;
@@ -195,6 +200,7 @@ public final class TraceReplayActivity extends Activity {
             return new TraceReplayRequest(
                     readString(intent, "trace_path", ""),
                     readString(intent, "golden_path", ""),
+                    readString(intent, "alternate_golden_path", ""),
                     outputDir,
                     diffPath,
                     readString(intent, "backend", defaultBackend),
