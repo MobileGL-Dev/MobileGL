@@ -17,6 +17,9 @@ def mobileGlAbiFilters = {
 def mobileGlLogActiveLevel = {
     (rootProject.findProperty('mobilegl.logLevel') ?: System.getenv('MOBILEGL_LOG_ACTIVE_LEVEL') ?: 'MOBILEGL_LOG_LEVEL_INFO') as String
 }
+def mobileGlCmakeCompilerLauncher = {
+    (rootProject.findProperty('mobilegl.cmakeCompilerLauncher') ?: System.getenv('MOBILEGL_CMAKE_COMPILER_LAUNCHER') ?: '') as String
+}
 
 subprojects { subproject ->
     subproject.plugins.withId('com.android.library') {
@@ -30,6 +33,11 @@ subprojects { subproject ->
                 }
                 externalNativeBuild {
                     cmake {
+                        def compilerLauncher = mobileGlCmakeCompilerLauncher()
+                        if (!compilerLauncher.isEmpty()) {
+                            arguments "-DCMAKE_C_COMPILER_LAUNCHER=${compilerLauncher}",
+                                    "-DCMAKE_CXX_COMPILER_LAUNCHER=${compilerLauncher}"
+                        }
                         cppFlags "-DMOBILEGL_LOG_ACTIVE_LEVEL=${mobileGlLogActiveLevel()}"
                     }
                 }

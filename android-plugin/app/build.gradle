@@ -28,6 +28,9 @@ def mobileGlAbiFilters = {
             .collect { it.trim() }
             .findAll { !it.isEmpty() }
 }
+def mobileGlCmakeCompilerLauncher = {
+    (findProperty('mobilegl.cmakeCompilerLauncher') ?: System.getenv('MOBILEGL_CMAKE_COMPILER_LAUNCHER') ?: '') as String
+}
 
 android {
     namespace 'top.mobilegl.plugin'
@@ -112,6 +115,11 @@ android {
         cmake {
             path file('src/trace/cpp/CMakeLists.txt')
             version '3.22.1'
+            def compilerLauncher = mobileGlCmakeCompilerLauncher()
+            if (!compilerLauncher.isEmpty()) {
+                arguments "-DCMAKE_C_COMPILER_LAUNCHER=${compilerLauncher}",
+                        "-DCMAKE_CXX_COMPILER_LAUNCHER=${compilerLauncher}"
+            }
         }
     }
 
