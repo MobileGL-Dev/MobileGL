@@ -13,11 +13,6 @@ jobs:
     runs-on: ubuntu-latest
     env:
       BUILD_DIR: build-linux
-      CCACHE_BASEDIR: ${{ github.workspace }}
-      CCACHE_COMPILERCHECK: content
-      CCACHE_DIR: ${{ github.workspace }}/.ccache/build-linux
-      CCACHE_MAXSIZE: 2G
-      CCACHE_NOHASHDIR: true
 
     steps:
       - name: Set Swap Space
@@ -47,15 +42,7 @@ jobs:
       - name: Install build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y clang-20 clang++-20 lld-20 libc++-20-dev libc++abi-20-dev libvulkan-dev libegl1-mesa-dev libgles2-mesa-dev libgl1-mesa-dri mesa-vulkan-drivers ninja-build ccache
-
-      - name: Restore ccache
-        uses: actions/cache@v4
-        with:
-          path: .ccache/build-linux
-          key: ${{ runner.os }}-test-build-linux-ccache-${{ github.sha }}
-          restore-keys: |
-            ${{ runner.os }}-test-build-linux-ccache-
+          sudo apt-get install -y clang-20 clang++-20 lld-20 libc++-20-dev libc++abi-20-dev libvulkan-dev libegl1-mesa-dev libgles2-mesa-dev libgl1-mesa-dri mesa-vulkan-drivers ninja-build
 
       - name: Show installed toolchain
         run: |
@@ -75,8 +62,6 @@ jobs:
           cmake -S . -B "${BUILD_DIR}" -G Ninja \
             -DCMAKE_C_COMPILER=clang-20 \
             -DCMAKE_CXX_COMPILER=clang++-20 \
-            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
-            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
             -DCMAKE_BUILD_TYPE="${BUILD_TYPE}" \
             -DMOBILEGL_LOG_ACTIVE_LEVEL=MOBILEGL_LOG_LEVEL_INFO \
             -DMOBILEGL_BUILD_TEST=ON \
@@ -87,10 +72,7 @@ jobs:
             -DCMAKE_POLICY_VERSION_MINIMUM=3.5
 
       - name: Build
-        run: |
-          ccache --zero-stats
-          cmake --build "${BUILD_DIR}" --parallel "$(nproc)"
-          ccache --show-stats
+        run: cmake --build "${BUILD_DIR}" --parallel "$(nproc)"
 
       - name: Package Linux runtime
         run: |
@@ -212,11 +194,6 @@ jobs:
     env:
       BUILD_DIR: build-retrace
       MOBILEGL_LIBRARY: ${{ github.workspace }}/build-linux/libMobileGL.so
-      CCACHE_BASEDIR: ${{ github.workspace }}
-      CCACHE_COMPILERCHECK: content
-      CCACHE_DIR: ${{ github.workspace }}/.ccache/build-retrace
-      CCACHE_MAXSIZE: 2G
-      CCACHE_NOHASHDIR: true
 
     steps:
       - name: Set Swap Space
@@ -247,15 +224,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y clang-20 clang++-20 lld-20 libc++-20-dev libc++abi-20-dev libvulkan-dev libegl1-mesa-dev libgles2-mesa-dev libgl1-mesa-dri mesa-vulkan-drivers ninja-build ccache
-
-      - name: Restore ccache
-        uses: actions/cache@v4
-        with:
-          path: .ccache/build-retrace
-          key: ${{ runner.os }}-test-build-retrace-ccache-${{ github.sha }}
-          restore-keys: |
-            ${{ runner.os }}-test-build-retrace-ccache-
+          sudo apt-get install -y clang-20 clang++-20 lld-20 libc++-20-dev libc++abi-20-dev libvulkan-dev libegl1-mesa-dev libgles2-mesa-dev libgl1-mesa-dri mesa-vulkan-drivers ninja-build
 
       - name: Show installed toolchain
         run: |
@@ -286,8 +255,6 @@ jobs:
           cmake -S . -B "${BUILD_DIR}" -G Ninja \
             -DCMAKE_C_COMPILER=clang-20 \
             -DCMAKE_CXX_COMPILER=clang++-20 \
-            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
-            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
             -DCMAKE_BUILD_TYPE="${BUILD_TYPE}" \
             -DMOBILEGL_LOG_ACTIVE_LEVEL=MOBILEGL_LOG_LEVEL_INFO \
             -DMOBILEGL_BUILD_TEST=OFF \
@@ -297,10 +264,7 @@ jobs:
             -DCMAKE_POLICY_VERSION_MINIMUM=3.5
 
       - name: Build trace replay
-        run: |
-          ccache --zero-stats
-          cmake --build "${BUILD_DIR}" --target mobilegl_trace_replay --parallel "$(nproc)"
-          ccache --show-stats
+        run: cmake --build "${BUILD_DIR}" --target mobilegl_trace_replay --parallel "$(nproc)"
 
       - name: Normalize CTest command paths
         run: |
@@ -374,7 +338,9 @@ jobs:
       - name: Install runtime dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libvulkan1 libegl1 libgles2 libgl1-mesa-dri mesa-vulkan-drivers
+          sudo apt-get install -y libvulkan1 libegl1-mesa-dev libgles2-mesa-dev libgl1-mesa-dri mesa-vulkan-drivers
+          test -e /usr/lib/x86_64-linux-gnu/libEGL.so
+          test -e /usr/lib/x86_64-linux-gnu/libGLESv2.so
 
       - name: Download Linux runtime
         uses: actions/download-artifact@v4

@@ -11,12 +11,6 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-    env:
-      CCACHE_BASEDIR: ${{ github.workspace }}
-      CCACHE_COMPILERCHECK: content
-      CCACHE_DIR: ${{ github.workspace }}/.ccache/android
-      CCACHE_MAXSIZE: 4G
-      CCACHE_NOHASHDIR: true
 
     steps:
       - name: Checkout repo
@@ -43,27 +37,6 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Restore Android native SDK packages
-        uses: actions/cache@v4
-        with:
-          path: |
-            /usr/local/lib/android/sdk/ndk/27.3.13750724
-            /usr/local/lib/android/sdk/cmake/3.22.1
-          key: ${{ runner.os }}-android-native-sdk-ndk-27.3.13750724-cmake-3.22.1
-
-      - name: Install ccache
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y ccache
-
-      - name: Restore ccache
-        uses: actions/cache@v4
-        with:
-          path: .ccache/android
-          key: ${{ runner.os }}-apk-ccache-${{ github.sha }}
-          restore-keys: |
-            ${{ runner.os }}-apk-ccache-
-
       - name: Install Android NDK
         run: |
           sdkmanager "ndk;27.3.13750724"
@@ -74,20 +47,14 @@ jobs:
         run: python update_glslang_sources.py
 
       - name: Build plugin APKs
-        run: |
-          ccache --zero-stats
-          gradle --no-daemon -p android-plugin :app:assembleEsprytPluginRelease :app:assembleMagmaPluginRelease -Pmobilegl.cmakeCompilerLauncher=ccache -Pmobilegl.logLevel=MOBILEGL_LOG_LEVEL_INFO --parallel --max-workers "$(nproc)"
-          ccache --show-stats
+        run: gradle --no-daemon -p android-plugin :app:assembleEsprytPluginRelease :app:assembleMagmaPluginRelease -Pmobilegl.logLevel=MOBILEGL_LOG_LEVEL_INFO --parallel --max-workers "$(nproc)"
         env:
           SIGNING_STORE_PASSWORD: ${{ secrets.SIGNING_STORE_PASSWORD }}
           SIGNING_KEY_ALIAS: ${{ secrets.SIGNING_KEY_ALIAS }}
           SIGNING_KEY_PASSWORD: ${{ secrets.SIGNING_KEY_PASSWORD }}
 
       - name: Build retrace APKs
-        run: |
-          ccache --zero-stats
-          gradle --no-daemon -p android-plugin :app:assembleEsprytTraceRelease :app:assembleMagmaTraceRelease -Pmobilegl.cmakeCompilerLauncher=ccache -Pmobilegl.abis=all -Pmobilegl.debuggableRelease=true -Pmobilegl.logLevel=MOBILEGL_LOG_LEVEL_INFO --parallel --max-workers "$(nproc)"
-          ccache --show-stats
+        run: gradle --no-daemon -p android-plugin :app:assembleEsprytTraceRelease :app:assembleMagmaTraceRelease -Pmobilegl.abis=all -Pmobilegl.debuggableRelease=true -Pmobilegl.logLevel=MOBILEGL_LOG_LEVEL_INFO --parallel --max-workers "$(nproc)"
         env:
           SIGNING_STORE_PASSWORD: ${{ secrets.SIGNING_STORE_PASSWORD }}
           SIGNING_KEY_ALIAS: ${{ secrets.SIGNING_KEY_ALIAS }}
@@ -412,14 +379,6 @@ jobs:
 
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
-
-      - name: Restore Android emulator SDK packages
-        uses: actions/cache@v4
-        with:
-          path: |
-            /usr/local/lib/android/sdk/platforms/android-35
-            /usr/local/lib/android/sdk/system-images/android-35/google_apis/x86_64
-          key: ${{ runner.os }}-android-emulator-sdk-api35-google-apis-x86-64
 
       - name: Download retrace APKs
         uses: actions/download-artifact@v4
