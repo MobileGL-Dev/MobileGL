@@ -188,7 +188,7 @@ jobs:
         working-directory: build-linux/MobileGL/MG_Benchmark
         run: ctest -V -C Release
 
-  retrace:
+  build-retrace:
     runs-on: ubuntu-latest
     needs: build-linux
     env:
@@ -266,46 +266,110 @@ jobs:
       - name: Build trace replay
         run: cmake --build "${BUILD_DIR}" --target mobilegl_trace_replay --parallel "$(nproc)"
 
-      - name: Retrace and validate Espryt (DirectGLES)
-        working-directory: build-retrace
+      - name: Normalize CTest command paths
         run: |
-          set +e
-          ctest -V -R 'MobileGLTraceReplay\..*\.DirectGLES'
-          status=$?
-          mkdir -p tools/trace_replay/status
-          echo "${status}" > tools/trace_replay/status/DirectGLES.status
-          exit 0
+          python - <<'PY'
+          from pathlib import Path
+          import re
 
-      - name: Retrace and validate Magma (DirectVulkan)
-        working-directory: build-retrace
+          for path in Path('build-retrace').rglob('CTestTestfile.cmake'):
+              text = path.read_text()
+              text = re.sub(r'"[^"]*/cmake-[^"]*/bin/cmake"', '"cmake"', text)
+              path.write_text(text)
+          PY
+
+      - name: Package trace replay
         run: |
-          set +e
-          ctest -V -R 'MobileGLTraceReplay\..*\.DirectVulkan'
-          status=$?
-          mkdir -p tools/trace_replay/status
-          echo "${status}" > tools/trace_replay/status/DirectVulkan.status
-          exit 0
+          mkdir -p ci-artifacts
+          tar -czf ci-artifacts/mobilegl-trace-replay.tgz \
+            build-retrace/tools/trace_replay/mobilegl_trace_replay \
+            build-retrace/tools/trace_replay/CTestTestfile.cmake
+
+      - name: Upload trace replay
+        uses: actions/upload-artifact@v4
+        with:
+          name: mobilegl-trace-replay
+          path: ci-artifacts/mobilegl-trace-replay.tgz
+          if-no-files-found: error
+
+  retrace:
+    name: retrace (${{ matrix.backend }}, ${{ matrix.case }})
+    runs-on: ubuntu-latest
+    needs:
+      - build-linux
+      - build-retrace
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        backend:
+          - DirectGLES
+          - DirectVulkan
+        case:
+          - OpenRA
+          - minecraft-1.21.4-startup
+          - minecraft-1.21.4-main-menu
+          - minecraft-1.21.4-in-world
+          - minecraft-1.21.4-fabric-sodium-in-world
+          - minecraft-1.21.4-fabric-iris-bsl-in-world
+          - minecraft-1.21.4-fabric-iris-makeup-ultrafast-in-world
+          - minecraft-1.21.4-fabric-iris-super-duper-vanilla-in-world
+          - minecraft-1.21.4-fabric-iris-sundial-lite-in-world
+          - minecraft-1.21.4-fabric-iris-complementary-reimagined-in-world
+          - minecraft-1.21.4-fabric-iris-complementary-unbound-in-world
+          - minecraft-1.21.4-fabric-iris-mellow-in-world
+          - minecraft-1.21.4-fabric-iris-nostalgia-in-world
+          - minecraft-1.21.4-fabric-iris-bliss-in-world
+          - minecraft-1.21.4-fabric-iris-chocapic-v6-lite-in-world
+          - minecraft-1.21.4-fabric-iris-iterationt-in-world
+          - minecraft-1.21.4-fabric-iris-iterationt-nodsa-in-world
+          - minecraft-1.21.4-fabric-iris-photon-v1.1-in-world
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          lfs: true
+          submodules: recursive
+
+      - name: Get CMake
+        uses: lukka/get-cmake@latest
+
+      - name: Install runtime dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libvulkan1 libegl1 libgles2 libgl1-mesa-dri mesa-vulkan-drivers
+
+      - name: Download Linux runtime
+        uses: actions/download-artifact@v4
+        with:
+          name: mobilegl-linux-runtime
+          path: .
+
+      - name: Download trace replay
+        uses: actions/download-artifact@v4
+        with:
+          name: mobilegl-trace-replay
+          path: .
+
+      - name: Unpack retrace runtime
+        run: |
+          tar -xzf mobilegl-linux-runtime.tgz
+          tar -xzf mobilegl-trace-replay.tgz
+          test -f build-linux/libMobileGL.so
+          test -f build-retrace/tools/trace_replay/mobilegl_trace_replay
+
+      - name: Retrace and validate
+        working-directory: build-retrace/tools/trace_replay
+        run: ctest -V --no-tests=error -R '^MobileGLTraceReplay\.${{ matrix.case }}\.${{ matrix.backend }}$'
 
       - name: Upload actual image
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: retrace-result
+          name: retrace-result-${{ matrix.backend }}-${{ matrix.case }}
           path: |
-            build-retrace/tools/trace_replay/*/actual-images/**
-            build-retrace/tools/trace_replay/*/*/output/**
-            build-retrace/tools/trace_replay/status/*.status
+            build-retrace/tools/trace_replay/${{ matrix.case }}/actual-images/**
+            build-retrace/tools/trace_replay/${{ matrix.case }}/${{ matrix.backend }}/output/**
           if-no-files-found: warn
-
-      - name: Check retrace results
-        if: always()
-        working-directory: build-retrace
-        run: |
-          direct_gles_status="$(cat tools/trace_replay/status/DirectGLES.status 2>/dev/null || echo 1)"
-          direct_vulkan_status="$(cat tools/trace_replay/status/DirectVulkan.status 2>/dev/null || echo 1)"
-          echo "DirectGLES status: ${direct_gles_status}"
-          echo "DirectVulkan status: ${direct_vulkan_status}"
-          if [ "${direct_gles_status}" -ne 0 ] || [ "${direct_vulkan_status}" -ne 0 ]; then
-            exit 1
-          fi
 
