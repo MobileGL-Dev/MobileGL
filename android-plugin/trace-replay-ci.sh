@@ -136,6 +136,17 @@ if [ -n "${alternate_golden_path}" ]; then
 fi
 
 safe_case="$(printf '%s' "${case_name}" | sed 's/[^A-Za-z0-9._-]/_/g')"
+app_dir="/data/user/0/${package_name}/files/trace-replay"
+
+collect_run_diagnostics() {
+  diagnostics_dir="$1"
+  mkdir -p "${diagnostics_dir}"
+  "${ADB}" logcat -d -t 2000 > "${diagnostics_dir}/logcat.txt" || true
+  "${ADB}" shell pidof "${package_name}" > "${diagnostics_dir}/pidof.txt" 2>&1 || true
+  "${ADB}" shell dumpsys activity activities > "${diagnostics_dir}/activity.txt" 2>&1 || true
+  "${ADB}" shell run-as "${package_name}" ls -laR "${app_dir}" > "${diagnostics_dir}/app-files.txt" 2>&1 || true
+  "${ADB}" exec-out run-as "${package_name}" cat "${app_dir}/output/retrace.log" > "${diagnostics_dir}/retrace.log" || true
+}
 
 prepare_fixture() {
   fixture_dir="${fixture_root}/${safe_case}"
@@ -162,17 +173,16 @@ copy_fixture_to_app() {
   golden_tmp="/data/local/tmp/mobilegl-${safe_case}.golden.png"
   alternate_golden_tmp="/data/local/tmp/mobilegl-${safe_case}.alternate-golden.png"
 
-  "${ADB}" shell run-as "${package_name}" rm -rf files/trace-replay
-  "${ADB}" shell run-as "${package_name}" mkdir -p files/trace-replay/input files/trace-replay/output
-  "${ADB}" shell run-as "${package_name}" cp "${trace_tmp}" files/trace-replay/input/trace.trace
-  "${ADB}" shell run-as "${package_name}" cp "${golden_tmp}" files/trace-replay/input/golden.png
+  "${ADB}" shell run-as "${package_name}" rm -rf "${app_dir}"
+  "${ADB}" shell run-as "${package_name}" mkdir -p "${app_dir}/input" "${app_dir}/output"
+  "${ADB}" shell run-as "${package_name}" cp "${trace_tmp}" "${app_dir}/input/trace.trace"
+  "${ADB}" shell run-as "${package_name}" cp "${golden_tmp}" "${app_dir}/input/golden.png"
   if [ -n "${alternate_golden_path}" ]; then
-    "${ADB}" shell run-as "${package_name}" cp "${alternate_golden_tmp}" files/trace-replay/input/alternate-golden.png
+    "${ADB}" shell run-as "${package_name}" cp "${alternate_golden_tmp}" "${app_dir}/input/alternate-golden.png"
   fi
 }
 
 run_retrace() {
-  app_dir="/data/user/0/${package_name}/files/trace-replay"
   result_dir="${result_root}/${safe_case}-${backend}"
   alternate_golden_app_path=""
   if [ -n "${alternate_golden_path}" ]; then
@@ -207,19 +217,26 @@ run_retrace() {
   "${ADB}" shell "$@"
 
   for _ in $(seq 1 "${timeout_seconds}"); do
-    if "${ADB}" shell run-as "${package_name}" ls files/trace-replay/output/result.json >/dev/null 2>&1; then
+    if "${ADB}" shell run-as "${package_name}" ls "${app_dir}/output/result.json" >/dev/null 2>&1; then
       break
     fi
     sleep 1
   done
 
-  "${ADB}" logcat -d -t 1000 > "${result_dir}/logcat.txt" || true
-  "${ADB}" shell run-as "${package_name}" ls files/trace-replay/output/result.json
-  "${ADB}" exec-out run-as "${package_name}" cat files/trace-replay/output/result.json > "${result_dir}/result.json"
+  collect_run_diagnostics "${result_dir}"
+  if ! "${ADB}" shell run-as "${package_name}" ls "${app_dir}/output/result.json" >/dev/null 2>&1; then
+    echo "trace-replay-ci.sh: result.json was not created after ${timeout_seconds}s" >&2
+    echo "trace-replay-ci.sh: recent relevant logcat lines:" >&2
+    grep -E 'MobileGLTraceRunner|AndroidRuntime|FATAL EXCEPTION|trace_replay|MobileGL|libc' "${result_dir}/logcat.txt" | tail -200 >&2 || true
+    echo "trace-replay-ci.sh: app trace-replay files:" >&2
+    cat "${result_dir}/app-files.txt" >&2 || true
+    exit 1
+  fi
+  "${ADB}" exec-out run-as "${package_name}" cat "${app_dir}/output/result.json" > "${result_dir}/result.json"
   cat "${result_dir}/result.json"
-  "${ADB}" exec-out run-as "${package_name}" cat files/trace-replay/output/actual.png > "${result_dir}/${safe_case}-${backend}-actual.png"
-  "${ADB}" exec-out run-as "${package_name}" cat "files/trace-replay/output/${safe_case}-diff.png" > "${result_dir}/${safe_case}-${backend}-diff.png"
-  "${ADB}" exec-out run-as "${package_name}" cat files/trace-replay/output/retrace.log > "${result_dir}/retrace.log" || true
+  "${ADB}" exec-out run-as "${package_name}" cat "${app_dir}/output/actual.png" > "${result_dir}/${safe_case}-${backend}-actual.png"
+  "${ADB}" exec-out run-as "${package_name}" cat "${app_dir}/output/${safe_case}-diff.png" > "${result_dir}/${safe_case}-${backend}-diff.png"
+  "${ADB}" exec-out run-as "${package_name}" cat "${app_dir}/output/retrace.log" > "${result_dir}/retrace.log" || true
 
   "${PYTHON}" -c 'import json, sys; result = json.load(open(sys.argv[1], encoding="utf-8")); sys.exit(0 if result.get("passed") else f"trace replay failed: {result}")' "${result_dir}/result.json"
 }
