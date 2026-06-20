@@ -146,6 +146,7 @@ collect_run_diagnostics() {
   "${ADB}" shell dumpsys activity activities > "${diagnostics_dir}/activity.txt" 2>&1 || true
   "${ADB}" shell run-as "${package_name}" ls -laR "${app_dir}" > "${diagnostics_dir}/app-files.txt" 2>&1 || true
   "${ADB}" exec-out run-as "${package_name}" cat "${app_dir}/output/retrace.log" > "${diagnostics_dir}/retrace.log" || true
+  "${ADB}" exec-out run-as "${package_name}" cat "${app_dir}/output/mobilegl.log" > "${diagnostics_dir}/mobilegl.log" || true
 }
 
 prepare_fixture() {
@@ -216,8 +217,13 @@ run_retrace() {
     --ei fuzz_percent "${fuzz_percent}"
   "${ADB}" shell "$@"
 
+  app_exited=0
   for _ in $(seq 1 "${timeout_seconds}"); do
     if "${ADB}" shell run-as "${package_name}" ls "${app_dir}/output/result.json" >/dev/null 2>&1; then
+      break
+    fi
+    if ! "${ADB}" shell pidof "${package_name}" >/dev/null 2>&1; then
+      app_exited=1
       break
     fi
     sleep 1
@@ -225,7 +231,19 @@ run_retrace() {
 
   collect_run_diagnostics "${result_dir}"
   if ! "${ADB}" shell run-as "${package_name}" ls "${app_dir}/output/result.json" >/dev/null 2>&1; then
-    echo "trace-replay-ci.sh: result.json was not created after ${timeout_seconds}s" >&2
+    if [ "${app_exited}" -eq 1 ]; then
+      echo "trace-replay-ci.sh: app process exited before result.json was created" >&2
+    else
+      echo "trace-replay-ci.sh: result.json was not created after ${timeout_seconds}s" >&2
+    fi
+    if [ -s "${result_dir}/retrace.log" ]; then
+      echo "trace-replay-ci.sh: retrace.log:" >&2
+      cat "${result_dir}/retrace.log" >&2
+    fi
+    if [ -s "${result_dir}/mobilegl.log" ]; then
+      echo "trace-replay-ci.sh: tail of mobilegl.log:" >&2
+      tail -200 "${result_dir}/mobilegl.log" >&2
+    fi
     echo "trace-replay-ci.sh: recent relevant logcat lines:" >&2
     grep -E 'MobileGLTraceRunner|AndroidRuntime|FATAL EXCEPTION|trace_replay|MobileGL|libc' "${result_dir}/logcat.txt" | tail -200 >&2 || true
     echo "trace-replay-ci.sh: app trace-replay files:" >&2
