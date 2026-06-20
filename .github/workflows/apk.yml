@@ -95,6 +95,26 @@ jobs:
   retrace:
     runs-on: ubuntu-latest
     needs: build
+    env:
+      TRACE_REPLAY_CASES: |
+        OpenRA|tools/trace_replay/fixtures/openra.tgz|openra.trace|tools/trace_replay/fixtures/openra.0000031249.png|31249|640|480|20|1|1|638|478|20|180
+        minecraft-1.21.4-startup|tools/trace_replay/fixtures/minecraft-1.21.4-startup.tgz|trace.trace|tools/trace_replay/fixtures/minecraft-1.21.4-startup.0000092195.png|92195|854|480|20|0|0|0|0|20|180
+        minecraft-1.21.4-main-menu|tools/trace_replay/fixtures/minecraft-1.21.4-main-menu.tgz|trace.trace|tools/trace_replay/fixtures/minecraft-1.21.4-main-menu.0000481787.png|481787|854|480|500|0|0|0|0|20|180
+        minecraft-1.21.4-in-world|tools/trace_replay/fixtures/minecraft-1.21.4-in-world.tgz|trace.trace|tools/trace_replay/fixtures/minecraft-1.21.4-in-world.0000280000.png|280000|854|480|500|0|0|0|0|20|900
+        minecraft-1.21.4-fabric-sodium-in-world|tools/trace_replay/fixtures/minecraft-1.21.4-fabric-sodium-in-world.tgz|trace.trace|tools/trace_replay/fixtures/minecraft-1.21.4-fabric-sodium-in-world.0000923340.png|923340|854|480|20|0|0|0|0|20|1800
+        minecraft-1.21.4-fabric-iris-bsl-in-world|tools/trace_replay/fixtures/minecraft-1.21.4-fabric-iris-bsl-in-world.tgz|trace.trace|tools/trace_replay/fixtures/minecraft-1.21.4-fabric-iris-bsl-in-world.0000110725.png|110725|854|480|200|0|0|0|0|20|900
+        minecraft-1.21.4-fabric-iris-makeup-ultrafast-in-world|tools/trace_replay/fixtures/minecraft-1.21.4-fabric-iris-makeup-ultrafast-in-world.tgz|trace.trace|tools/trace_replay/fixtures/minecraft-1.21.4-fabric-iris-makeup-ultrafast-in-world.0000095322.png|95322|854|480|20|0|0|0|0|20|900
+        minecraft-1.21.4-fabric-iris-super-duper-vanilla-in-world|tools/trace_replay/fixtures/minecraft-1.21.4-fabric-iris-super-duper-vanilla-in-world.tgz|trace.trace|tools/trace_replay/fixtures/minecraft-1.21.4-fabric-iris-super-duper-vanilla-in-world.0000141559.png|141559|854|480|20|0|0|0|0|20|900
+        minecraft-1.21.4-fabric-iris-sundial-lite-in-world|tools/trace_replay/fixtures/minecraft-1.21.4-fabric-iris-sundial-lite-in-world.tgz|trace.trace|tools/trace_replay/fixtures/minecraft-1.21.4-fabric-iris-sundial-lite-in-world.0000150023.png|150023|854|480|20|0|0|0|0|20|900
+        minecraft-1.21.4-fabric-iris-complementary-reimagined-in-world|tools/trace_replay/fixtures/minecraft-1.21.4-fabric-iris-complementary-reimagined-in-world.tgz|trace.trace|tools/trace_replay/fixtures/minecraft-1.21.4-fabric-iris-complementary-reimagined-in-world.0000151297.png|151297|854|480|20|0|0|0|0|20|900
+        minecraft-1.21.4-fabric-iris-complementary-unbound-in-world|tools/trace_replay/fixtures/minecraft-1.21.4-fabric-iris-complementary-unbound-in-world.tgz|trace.trace|tools/trace_replay/fixtures/minecraft-1.21.4-fabric-iris-complementary-unbound-in-world.0000146559.png|146559|854|480|150|0|0|0|0|20|900
+        minecraft-1.21.4-fabric-iris-mellow-in-world|tools/trace_replay/fixtures/minecraft-1.21.4-fabric-iris-mellow-in-world.tgz|trace.trace|tools/trace_replay/fixtures/minecraft-1.21.4-fabric-iris-mellow-in-world.0000096143.png|96143|854|480|20|0|0|0|0|20|900
+        minecraft-1.21.4-fabric-iris-nostalgia-in-world|tools/trace_replay/fixtures/minecraft-1.21.4-fabric-iris-nostalgia-in-world.tgz|trace.trace|tools/trace_replay/fixtures/minecraft-1.21.4-fabric-iris-nostalgia-in-world.0000153808-linux-mesa.png|153808|854|480|60|0|0|0|0|20|900
+        minecraft-1.21.4-fabric-iris-bliss-in-world|tools/trace_replay/fixtures/minecraft-1.21.4-fabric-iris-bliss-in-world.tgz|trace.trace|tools/trace_replay/fixtures/minecraft-1.21.4-fabric-iris-bliss-in-world.0000113511.png|113511|854|480|40|0|0|0|0|20|900
+        minecraft-1.21.4-fabric-iris-chocapic-v6-lite-in-world|tools/trace_replay/fixtures/minecraft-1.21.4-fabric-iris-chocapic-v6-lite-in-world.tgz|trace.trace|tools/trace_replay/fixtures/minecraft-1.21.4-fabric-iris-chocapic-v6-lite-in-world.0000125124-linux-mesa.png|125124|854|480|200|0|0|0|0|20|900
+        minecraft-1.21.4-fabric-iris-iterationt-in-world|tools/trace_replay/fixtures/minecraft-1.21.4-fabric-iris-iterationt-in-world.tgz|trace.trace|tools/trace_replay/fixtures/minecraft-1.21.4-fabric-iris-iterationt-in-world.0001173280.png|1173280|854|480|150|0|0|0|0|20|2400
+        minecraft-1.21.4-fabric-iris-iterationt-nodsa-in-world|tools/trace_replay/fixtures/minecraft-1.21.4-fabric-iris-iterationt-nodsa-in-world.tgz|trace.trace|tools/trace_replay/fixtures/minecraft-1.21.4-fabric-iris-iterationt-nodsa-in-world.0001606997.png|1606997|854|480|150|0|0|0|0|20|2400
+        minecraft-1.21.4-fabric-iris-photon-v1.1-in-world|tools/trace_replay/fixtures/minecraft-1.21.4-fabric-iris-photon-v1.1-in-world.tgz|trace.trace|tools/trace_replay/fixtures/minecraft-1.21.4-fabric-iris-photon-v1.1-in-world.0000159866.png|159866|854|480|20|0|0|0|0|20|900
 
     steps:
       - name: Checkout repo
@@ -133,96 +153,37 @@ jobs:
           profile: pixel_6
           disable-animations: true
           emulator-options: -no-window -gpu swiftshader -no-snapshot -noaudio -no-boot-anim -camera-back none -camera-front none
-          script: >-
-            set +e;
-            status=0;
-            apk_file="$(find android-retrace-apks -name 'MobileGL-EsprytTrace-release.apk' -print -quit)";
-            sh android-plugin/trace-replay-ci.sh
-            --apk-file "${apk_file}"
-            --package top.mobilegl.plugin.espryt.trace
-            --backend DirectGLES
-            --result-root android-retrace-result
-            --fixture-root android-retrace-fixture
-            --case OpenRA
-            --trace-archive tools/trace_replay/fixtures/openra.tgz
-            --trace-file openra.trace
-            --golden tools/trace_replay/fixtures/openra.0000031249.png
-            --target-call 31249
-            --width 640
-            --height 480
-            --tolerance 20
-            --crop-x 1
-            --crop-y 1
-            --crop-width 638
-            --crop-height 478
-            --fuzz-percent 20
-            --timeout-seconds 180
-            || status=1;
-            sh android-plugin/trace-replay-ci.sh
-            --apk-file "${apk_file}"
-            --package top.mobilegl.plugin.espryt.trace
-            --backend DirectGLES
-            --result-root android-retrace-result
-            --fixture-root android-retrace-fixture
-            --case minecraft-1.21.4-startup
-            --trace-archive tools/trace_replay/fixtures/minecraft-1.21.4-startup.tgz
-            --trace-file trace.trace
-            --golden tools/trace_replay/fixtures/minecraft-1.21.4-startup.0000092195.png
-            --target-call 92195
-            --width 854
-            --height 480
-            --tolerance 20
-            --crop-x 0
-            --crop-y 0
-            --crop-width 0
-            --crop-height 0
-            --fuzz-percent 20
-            --timeout-seconds 180
-            || status=1;
-            sh android-plugin/trace-replay-ci.sh
-            --apk-file "${apk_file}"
-            --package top.mobilegl.plugin.espryt.trace
-            --backend DirectGLES
-            --result-root android-retrace-result
-            --fixture-root android-retrace-fixture
-            --case minecraft-1.21.4-main-menu
-            --trace-archive tools/trace_replay/fixtures/minecraft-1.21.4-main-menu.tgz
-            --trace-file trace.trace
-            --golden tools/trace_replay/fixtures/minecraft-1.21.4-main-menu.0000481787.png
-            --target-call 481787
-            --width 854
-            --height 480
-            --tolerance 500
-            --crop-x 0
-            --crop-y 0
-            --crop-width 0
-            --crop-height 0
-            --fuzz-percent 20
-            --timeout-seconds 180
-            || status=1;
-            sh android-plugin/trace-replay-ci.sh
-            --apk-file "${apk_file}"
-            --package top.mobilegl.plugin.espryt.trace
-            --backend DirectGLES
-            --result-root android-retrace-result
-            --fixture-root android-retrace-fixture
-            --case minecraft-1.21.4-in-world
-            --trace-archive tools/trace_replay/fixtures/minecraft-1.21.4-in-world.tgz
-            --trace-file trace.trace
-            --golden tools/trace_replay/fixtures/minecraft-1.21.4-in-world.0000280000.png
-            --target-call 280000
-            --width 854
-            --height 480
-            --tolerance 500
-            --crop-x 0
-            --crop-y 0
-            --crop-width 0
-            --crop-height 0
-            --fuzz-percent 20
-            --timeout-seconds 900
-            || status=1;
-            mkdir -p android-retrace-result/status;
-            echo "${status}" > android-retrace-result/status/DirectGLES.status;
+          script: |
+            set +e
+            status=0
+            apk_file="$(find android-retrace-apks -name 'MobileGL-EsprytTrace-release.apk' -print -quit)"
+            printf '%s\n' "${TRACE_REPLAY_CASES}" > android-retrace-cases.txt
+            while IFS='|' read -r case_name trace_archive trace_file golden target_call width height tolerance crop_x crop_y crop_width crop_height fuzz_percent timeout_seconds; do
+              [ -n "${case_name}" ] || continue
+              sh android-plugin/trace-replay-ci.sh \
+                --apk-file "${apk_file}" \
+                --package top.mobilegl.plugin.espryt.trace \
+                --backend DirectGLES \
+                --result-root android-retrace-result \
+                --fixture-root android-retrace-fixture \
+                --case "${case_name}" \
+                --trace-archive "${trace_archive}" \
+                --trace-file "${trace_file}" \
+                --golden "${golden}" \
+                --target-call "${target_call}" \
+                --width "${width}" \
+                --height "${height}" \
+                --tolerance "${tolerance}" \
+                --crop-x "${crop_x}" \
+                --crop-y "${crop_y}" \
+                --crop-width "${crop_width}" \
+                --crop-height "${crop_height}" \
+                --fuzz-percent "${fuzz_percent}" \
+                --timeout-seconds "${timeout_seconds}" \
+                || status=1
+            done < android-retrace-cases.txt
+            mkdir -p android-retrace-result/status
+            echo "${status}" > android-retrace-result/status/DirectGLES.status
             exit 0
 
       - name: Retrace and validate Magma (DirectVulkan)
@@ -235,96 +196,37 @@ jobs:
           profile: pixel_6
           disable-animations: true
           emulator-options: -no-window -gpu angle -no-snapshot -noaudio -no-boot-anim -camera-back none -camera-front none
-          script: >-
-            set +e;
-            status=0;
-            apk_file="$(find android-retrace-apks -name 'MobileGL-MagmaTrace-release.apk' -print -quit)";
-            sh android-plugin/trace-replay-ci.sh
-            --apk-file "${apk_file}"
-            --package top.mobilegl.plugin.magma.trace
-            --backend DirectVulkan
-            --result-root android-retrace-result
-            --fixture-root android-retrace-fixture
-            --case OpenRA
-            --trace-archive tools/trace_replay/fixtures/openra.tgz
-            --trace-file openra.trace
-            --golden tools/trace_replay/fixtures/openra.0000031249.png
-            --target-call 31249
-            --width 640
-            --height 480
-            --tolerance 20
-            --crop-x 1
-            --crop-y 1
-            --crop-width 638
-            --crop-height 478
-            --fuzz-percent 20
-            --timeout-seconds 180
-            || status=1;
-            sh android-plugin/trace-replay-ci.sh
-            --apk-file "${apk_file}"
-            --package top.mobilegl.plugin.magma.trace
-            --backend DirectVulkan
-            --result-root android-retrace-result
-            --fixture-root android-retrace-fixture
-            --case minecraft-1.21.4-startup
-            --trace-archive tools/trace_replay/fixtures/minecraft-1.21.4-startup.tgz
-            --trace-file trace.trace
-            --golden tools/trace_replay/fixtures/minecraft-1.21.4-startup.0000092195.png
-            --target-call 92195
-            --width 854
-            --height 480
-            --tolerance 20
-            --crop-x 0
-            --crop-y 0
-            --crop-width 0
-            --crop-height 0
-            --fuzz-percent 20
-            --timeout-seconds 180
-            || status=1;
-            sh android-plugin/trace-replay-ci.sh
-            --apk-file "${apk_file}"
-            --package top.mobilegl.plugin.magma.trace
-            --backend DirectVulkan
-            --result-root android-retrace-result
-            --fixture-root android-retrace-fixture
-            --case minecraft-1.21.4-main-menu
-            --trace-archive tools/trace_replay/fixtures/minecraft-1.21.4-main-menu.tgz
-            --trace-file trace.trace
-            --golden tools/trace_replay/fixtures/minecraft-1.21.4-main-menu.0000481787.png
-            --target-call 481787
-            --width 854
-            --height 480
-            --tolerance 500
-            --crop-x 0
-            --crop-y 0
-            --crop-width 0
-            --crop-height 0
-            --fuzz-percent 20
-            --timeout-seconds 180
-            || status=1;
-            sh android-plugin/trace-replay-ci.sh
-            --apk-file "${apk_file}"
-            --package top.mobilegl.plugin.magma.trace
-            --backend DirectVulkan
-            --result-root android-retrace-result
-            --fixture-root android-retrace-fixture
-            --case minecraft-1.21.4-in-world
-            --trace-archive tools/trace_replay/fixtures/minecraft-1.21.4-in-world.tgz
-            --trace-file trace.trace
-            --golden tools/trace_replay/fixtures/minecraft-1.21.4-in-world.0000280000.png
-            --target-call 280000
-            --width 854
-            --height 480
-            --tolerance 500
-            --crop-x 0
-            --crop-y 0
-            --crop-width 0
-            --crop-height 0
-            --fuzz-percent 20
-            --timeout-seconds 900
-            || status=1;
-            mkdir -p android-retrace-result/status;
-            echo "${status}" > android-retrace-result/status/DirectVulkan.status;
+          script: |
+            set +e
+            status=0
+            apk_file="$(find android-retrace-apks -name 'MobileGL-MagmaTrace-release.apk' -print -quit)"
+            printf '%s\n' "${TRACE_REPLAY_CASES}" > android-retrace-cases.txt
+            while IFS='|' read -r case_name trace_archive trace_file golden target_call width height tolerance crop_x crop_y crop_width crop_height fuzz_percent timeout_seconds; do
+              [ -n "${case_name}" ] || continue
+              sh android-plugin/trace-replay-ci.sh \
+                --apk-file "${apk_file}" \
+                --package top.mobilegl.plugin.magma.trace \
+                --backend DirectVulkan \
+                --result-root android-retrace-result \
+                --fixture-root android-retrace-fixture \
+                --case "${case_name}" \
+                --trace-archive "${trace_archive}" \
+                --trace-file "${trace_file}" \
+                --golden "${golden}" \
+                --target-call "${target_call}" \
+                --width "${width}" \
+                --height "${height}" \
+                --tolerance "${tolerance}" \
+                --crop-x "${crop_x}" \
+                --crop-y "${crop_y}" \
+                --crop-width "${crop_width}" \
+                --crop-height "${crop_height}" \
+                --fuzz-percent "${fuzz_percent}" \
+                --timeout-seconds "${timeout_seconds}" \
+                || status=1
+            done < android-retrace-cases.txt
+            mkdir -p android-retrace-result/status
+            echo "${status}" > android-retrace-result/status/DirectVulkan.status
             exit 0
 
       - name: Upload Android retrace result
