@@ -149,6 +149,15 @@ collect_run_diagnostics() {
   "${ADB}" exec-out run-as "${package_name}" cat "${app_dir}/output/mobilegl.log" > "${diagnostics_dir}/mobilegl.log" || true
 }
 
+copy_app_artifact() {
+  source_path="$1"
+  destination_path="$2"
+  if ! "${ADB}" exec-out run-as "${package_name}" cat "${source_path}" > "${destination_path}"; then
+    echo "trace-replay-ci.sh: warning: failed to copy ${source_path}" >&2
+    rm -f "${destination_path}"
+  fi
+}
+
 prepare_fixture() {
   fixture_dir="${fixture_root}/${safe_case}"
   rm -rf "${fixture_dir}"
@@ -252,9 +261,10 @@ run_retrace() {
   fi
   "${ADB}" exec-out run-as "${package_name}" cat "${app_dir}/output/result.json" > "${result_dir}/result.json"
   cat "${result_dir}/result.json"
-  "${ADB}" exec-out run-as "${package_name}" cat "${app_dir}/output/actual.png" > "${result_dir}/${safe_case}-${backend}-actual.png"
-  "${ADB}" exec-out run-as "${package_name}" cat "${app_dir}/output/${safe_case}-diff.png" > "${result_dir}/${safe_case}-${backend}-diff.png"
-  "${ADB}" exec-out run-as "${package_name}" cat "${app_dir}/output/retrace.log" > "${result_dir}/retrace.log" || true
+  copy_app_artifact "${app_dir}/output/actual.png" "${result_dir}/${safe_case}-${backend}-actual.png"
+  copy_app_artifact "${app_dir}/output/${safe_case}-diff.png" "${result_dir}/${safe_case}-${backend}-diff.png"
+  copy_app_artifact "${app_dir}/output/retrace.log" "${result_dir}/retrace.log"
+  copy_app_artifact "${app_dir}/output/mobilegl.log" "${result_dir}/mobilegl.log"
 
   "${PYTHON}" -c 'import json, sys; result = json.load(open(sys.argv[1], encoding="utf-8")); sys.exit(0 if result.get("passed") else f"trace replay failed: {result}")' "${result_dir}/result.json"
 }
