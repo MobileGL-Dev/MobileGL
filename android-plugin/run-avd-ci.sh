@@ -46,9 +46,28 @@ require_value() {
   fi
 }
 
+find_android_tool() {
+  tool="$1"
+  fallback="$2"
+
+  if command -v "${tool}" >/dev/null 2>&1; then
+    command -v "${tool}"
+    return 0
+  fi
+
+  sdk_root="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
+  if [ -n "${sdk_root}" ] && [ -x "${sdk_root}/${fallback}" ]; then
+    printf '%s\n' "${sdk_root}/${fallback}"
+    return 0
+  fi
+
+  die "unable to find Android SDK tool: ${tool}"
+}
+
 print_diagnostics() {
   emulator_log="$1"
-  adb devices -l >&2 || true
+  adb_bin="$(find_android_tool adb platform-tools/adb)"
+  "${adb_bin}" devices -l >&2 || true
   if [ -f "${emulator_log}" ]; then
     echo "----- emulator log -----" >&2
     cat "${emulator_log}" >&2 || true
@@ -81,9 +100,12 @@ create_avd() {
   require_value "${profile}" "--profile"
   require_value "${avd_name}" "--avd-name"
 
+  sdkmanager_bin="$(find_android_tool sdkmanager cmdline-tools/latest/bin/sdkmanager)"
+  avdmanager_bin="$(find_android_tool avdmanager cmdline-tools/latest/bin/avdmanager)"
+
   system_image="system-images;android-${api_level};${target};${arch}"
-  sdkmanager "platform-tools" "emulator" "platforms;android-${api_level}" "${system_image}"
-  echo no | avdmanager create avd --force --name "${avd_name}" --package "${system_image}" --device "${profile}"
+  "${sdkmanager_bin}" "platform-tools" "emulator" "platforms;android-${api_level}" "${system_image}"
+  echo no | "${avdmanager_bin}" create avd --force --name "${avd_name}" --package "${system_image}" --device "${profile}"
 }
 
 start_avd() {
@@ -111,8 +133,11 @@ start_avd() {
   require_value "${pid_file}" "--pid-file"
   require_value "${boot_timeout}" "--boot-timeout"
 
+  adb_bin="$(find_android_tool adb platform-tools/adb)"
+  emulator_bin="$(find_android_tool emulator emulator/emulator)"
+
   mkdir -p "$(dirname "${emulator_log}")" "$(dirname "${pid_file}")"
-  emulator -avd "${avd_name}" \
+  "${emulator_bin}" -avd "${avd_name}" \
     -no-window \
     -gpu "${gpu}" \
     -no-snapshot \
@@ -124,14 +149,14 @@ start_avd() {
   emulator_pid="$!"
   echo "${emulator_pid}" > "${pid_file}"
 
-  if ! timeout "${boot_timeout}" adb wait-for-device; then
+  if ! timeout "${boot_timeout}" "${adb_bin}" wait-for-device; then
     print_diagnostics "${emulator_log}"
     die "emulator did not connect to adb within ${boot_timeout}s"
   fi
 
   booted=""
   for _ in $(seq 1 "${boot_timeout}"); do
-    booted="$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r' || true)"
+    booted="$("${adb_bin}" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r' || true)"
     if [ "${booted}" = "1" ]; then
       break
     fi
@@ -143,10 +168,10 @@ start_avd() {
     die "emulator did not boot within ${boot_timeout}s"
   fi
 
-  adb shell settings put global window_animation_scale 0
-  adb shell settings put global transition_animation_scale 0
-  adb shell settings put global animator_duration_scale 0
-  adb shell input keyevent 82 || true
+  "${adb_bin}" shell settings put global window_animation_scale 0
+  "${adb_bin}" shell settings put global transition_animation_scale 0
+  "${adb_bin}" shell settings put global animator_duration_scale 0
+  "${adb_bin}" shell input keyevent 82 || true
 }
 
 stop_avd() {
@@ -168,7 +193,9 @@ stop_avd() {
   require_value "${emulator_log}" "--emulator-log"
   require_value "${pid_file}" "--pid-file"
 
-  adb emu kill >/dev/null 2>&1 || true
+  adb_bin="$(find_android_tool adb platform-tools/adb)"
+
+  "${adb_bin}" emu kill >/dev/null 2>&1 || true
   if [ -f "${pid_file}" ]; then
     emulator_pid="$(cat "${pid_file}")"
     if [ -n "${emulator_pid}" ] && kill -0 "${emulator_pid}" 2>/dev/null; then
