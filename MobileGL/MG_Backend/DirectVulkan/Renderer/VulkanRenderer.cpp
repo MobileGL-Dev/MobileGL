@@ -794,6 +794,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         static constexpr Uint kHiddenBlitFragmentShaderId = 0xFFFFFFF2u;
         static constexpr Uint kHiddenBlitNearestSamplerId = 0xFFFFFFF3u;
         static constexpr Uint kHiddenBlitLinearSamplerId = 0xFFFFFFF4u;
+        static constexpr Uint kHiddenDepthMipmapProgramId = 0xFFFFFFF5u;
+        static constexpr Uint kHiddenDepthMipmapVertexShaderId = 0xFFFFFFF6u;
+        static constexpr Uint kHiddenDepthMipmapFragmentShaderId = 0xFFFFFFF7u;
         static constexpr const char* kFullscreenTriangleVertexShaderSource = R"(#version 460 core
 uniform vec4 uSrcRect;
 uniform vec4 uDstRect;
@@ -835,6 +838,22 @@ layout(location = 0) out vec4 outColor;
 
 void main() {
     outColor = texture(uSource, vTexCoord);
+}
+)";
+
+        static constexpr const char* kDepthMipmapFragmentShaderSource = R"(#version 460 core
+layout(binding = 0) uniform sampler2D uSource;
+layout(location = 0) in vec2 vTexCoord;
+uniform ivec2 uSrcTexelSize;
+
+void main() {
+    ivec2 srcBase = ivec2(vTexCoord * vec2(uSrcTexelSize));
+    ivec2 srcMax = uSrcTexelSize - ivec2(1);
+    float depth0 = texelFetch(uSource, clamp(srcBase, ivec2(0), srcMax), 0).r;
+    float depth1 = texelFetch(uSource, clamp(srcBase + ivec2(1, 0), ivec2(0), srcMax), 0).r;
+    float depth2 = texelFetch(uSource, clamp(srcBase + ivec2(0, 1), ivec2(0), srcMax), 0).r;
+    float depth3 = texelFetch(uSource, clamp(srcBase + ivec2(1, 1), ivec2(0), srcMax), 0).r;
+    gl_FragDepth = 0.25 * (depth0 + depth1 + depth2 + depth3);
 }
 )";
 
@@ -1630,6 +1649,8 @@ void main() {
         MOBILEGL_ASSERT(succeeded, "VkSamplerManager initialization failed.");
         succeeded = InitializeBlitResources();
         MOBILEGL_ASSERT(succeeded, "Blit pipeline resource initialization failed.");
+        succeeded = InitializeDepthMipmapResources();
+        MOBILEGL_ASSERT(succeeded, "Depth mipmap pipeline resource initialization failed.");
 
         m_uniformManager = MakeUnique<UniformManager>();
         MOBILEGL_ASSERT(m_uniformManager != nullptr, "UniformDescriptorBinder creation failed.");
@@ -1661,10 +1682,12 @@ void main() {
     void VulkanRenderer::Shutdown() {
         VK_VERIFY(vkDeviceWaitIdle(m_device));
 
+        DestroyDeferredDepthMipmapCleanup();
         DestroyComputePipelines();
 
         m_pipelineFactory.reset();
         ShutdownBlitResources();
+        ShutdownDepthMipmapResources();
         if (m_samplerManager) {
             m_samplerManager->Shutdown();
             m_samplerManager.reset();
@@ -2049,6 +2072,123 @@ void main() {
         m_blitResources = {};
     }
 
+    Bool VulkanRenderer::InitializeDepthMipmapResources() {
+        ShutdownDepthMipmapResources();
+
+        auto vertexShader = MakeShared<MG_State::GLState::ShaderObject>(ShaderStage::Vertex,
+                                                                         kHiddenDepthMipmapVertexShaderId);
+        vertexShader->SetShaderSource(kFullscreenTriangleVertexShaderSource);
+        vertexShader->Compile();
+        if (!vertexShader->GetCompileStatus()) {
+            MGLOG_E("InitializeDepthMipmapResources failed: vertex shader compile error: %s",
+                    vertexShader->GetInfoLog().c_str());
+            return false;
+        }
+
+        auto fragmentShader = MakeShared<MG_State::GLState::ShaderObject>(ShaderStage::Fragment,
+                                                                           kHiddenDepthMipmapFragmentShaderId);
+        fragmentShader->SetShaderSource(kDepthMipmapFragmentShaderSource);
+        fragmentShader->Compile();
+        if (!fragmentShader->GetCompileStatus()) {
+            MGLOG_E("InitializeDepthMipmapResources failed: fragment shader compile error: %s",
+                    fragmentShader->GetInfoLog().c_str());
+            return false;
+        }
+
+        m_depthMipmapResources.program = MakeShared<MG_State::GLState::ProgramObject>(kHiddenDepthMipmapProgramId);
+        m_depthMipmapResources.program->AttachShader(vertexShader);
+        m_depthMipmapResources.program->AttachShader(fragmentShader);
+        m_depthMipmapResources.program->Link(false);
+        if (!m_depthMipmapResources.program->GetLinkStatus()) {
+            MGLOG_E("InitializeDepthMipmapResources failed: program link error: %s",
+                    m_depthMipmapResources.program->GetInfoLog().c_str());
+            return false;
+        }
+
+        m_depthMipmapResources.srcRectLocation = m_depthMipmapResources.program->GetUniformLocation("uSrcRect");
+        m_depthMipmapResources.dstRectLocation = m_depthMipmapResources.program->GetUniformLocation("uDstRect");
+        m_depthMipmapResources.surfaceTransformLocation =
+            m_depthMipmapResources.program->GetUniformLocation("uSurfaceTransform");
+        m_depthMipmapResources.srcTexelSizeLocation =
+            m_depthMipmapResources.program->GetUniformLocation("uSrcTexelSize");
+        MOBILEGL_ASSERT(m_depthMipmapResources.srcRectLocation >= 0,
+                        "InitializeDepthMipmapResources: missing uSrcRect");
+        MOBILEGL_ASSERT(m_depthMipmapResources.dstRectLocation >= 0,
+                        "InitializeDepthMipmapResources: missing uDstRect");
+        MOBILEGL_ASSERT(m_depthMipmapResources.surfaceTransformLocation >= 0,
+                        "InitializeDepthMipmapResources: missing uSurfaceTransform");
+        MOBILEGL_ASSERT(m_depthMipmapResources.srcTexelSizeLocation >= 0,
+                        "InitializeDepthMipmapResources: missing uSrcTexelSize");
+        MOBILEGL_ASSERT(m_depthMipmapResources.program->GetUBOSize() > 0,
+                        "InitializeDepthMipmapResources: depth mipmap program global UBO is empty");
+        MOBILEGL_ASSERT(m_programFactory != nullptr, "InitializeDepthMipmapResources: program factory is null");
+
+        ProgramFactory::CompileOptionFlags transformFlags = 0;
+        const auto& programObj =
+            m_programFactory->GetOrCreateProgram(*m_depthMipmapResources.program, transformFlags);
+        Bool foundSamplerBinding = false;
+        for (Uint32 binding = 0; binding < programObj.samplerNameByBinding.size(); ++binding) {
+            if (programObj.bindingKinds[binding] != ProgramFactory::DescriptorBindingKind::CombinedImageSampler) {
+                continue;
+            }
+            if (programObj.samplerNameByBinding[binding] == "uSource") {
+                m_depthMipmapResources.samplerBinding = binding;
+                foundSamplerBinding = true;
+                break;
+            }
+        }
+        MOBILEGL_ASSERT(foundSamplerBinding,
+                        "InitializeDepthMipmapResources: failed to resolve reflected binding for uSource");
+        return true;
+    }
+
+    void VulkanRenderer::ShutdownDepthMipmapResources() {
+        m_depthMipmapResources = {};
+    }
+
+    void VulkanRenderer::CollectDeferredDepthMipmapCleanup(Uint32 frameIndex) {
+        MOBILEGL_ASSERT(frameIndex < m_deferredDepthMipmapCleanup.size(),
+                        "CollectDeferredDepthMipmapCleanup: frame index %u out of range (size=%zu)",
+                        frameIndex, m_deferredDepthMipmapCleanup.size());
+        if (m_device == VK_NULL_HANDLE) {
+            return;
+        }
+
+        auto& cleanup = m_deferredDepthMipmapCleanup[frameIndex];
+        for (auto framebuffer : cleanup.framebuffers) {
+            if (framebuffer != VK_NULL_HANDLE) {
+                vkDestroyFramebuffer(m_device, framebuffer, nullptr);
+            }
+        }
+        for (auto pipeline : cleanup.pipelines) {
+            if (pipeline != VK_NULL_HANDLE) {
+                vkDestroyPipeline(m_device, pipeline, nullptr);
+            }
+        }
+        for (auto renderPass : cleanup.renderPasses) {
+            if (renderPass != VK_NULL_HANDLE) {
+                vkDestroyRenderPass(m_device, renderPass, nullptr);
+            }
+        }
+        for (auto imageView : cleanup.imageViews) {
+            if (imageView != VK_NULL_HANDLE) {
+                vkDestroyImageView(m_device, imageView, nullptr);
+            }
+        }
+
+        cleanup.framebuffers.clear();
+        cleanup.pipelines.clear();
+        cleanup.renderPasses.clear();
+        cleanup.imageViews.clear();
+    }
+
+    void VulkanRenderer::DestroyDeferredDepthMipmapCleanup() {
+        for (Uint32 frameIndex = 0; frameIndex < m_deferredDepthMipmapCleanup.size(); ++frameIndex) {
+            CollectDeferredDepthMipmapCleanup(frameIndex);
+        }
+        m_deferredDepthMipmapCleanup.clear();
+    }
+
     VkPipeline VulkanRenderer::GetOrCreateBlitPipeline(const RenderPassEntry& renderPassEntry) {
         MOBILEGL_ASSERT(m_blitResources.program != nullptr, "GetOrCreateBlitPipeline: blit program is null");
         MOBILEGL_ASSERT(m_programFactory != nullptr, "GetOrCreateBlitPipeline: program factory is null");
@@ -2094,6 +2234,305 @@ void main() {
                 kColorWriteMask);
         }
         return m_pipelineFactory->GetOrCreatePipeline(payload);
+    }
+
+    Bool VulkanRenderer::GenerateDepthMipmapWithShader(FrameContext::FrameData& frame,
+                                                       MG_State::GLState::ITextureObject& texture,
+                                                       VkTextureManager::TextureResource& resource,
+                                                       Uint32 baseMipLevel,
+                                                       Uint32 generateMipLevelCount,
+                                                       const IntVec3& storageBaseTexelSize,
+                                                       VkImageLayout originalLayout,
+                                                       VkImageLayout finalLayout) {
+        MOBILEGL_ASSERT(m_depthMipmapResources.program != nullptr,
+                        "GenerateDepthMipmapWithShader: depth mipmap program is null");
+        MOBILEGL_ASSERT(m_blitResources.nearestSampler != nullptr,
+                        "GenerateDepthMipmapWithShader: helper sampler is null");
+        MOBILEGL_ASSERT(m_programFactory != nullptr, "GenerateDepthMipmapWithShader: program factory is null");
+        MOBILEGL_ASSERT(m_uniformManager != nullptr, "GenerateDepthMipmapWithShader: uniform manager is null");
+        MOBILEGL_ASSERT(texture.GetTarget() == TextureTarget::Texture2D,
+                        "GenerateDepthMipmapWithShader only supports GL_TEXTURE_2D depth textures");
+        MOBILEGL_ASSERT(resource.aspect == VK_IMAGE_ASPECT_DEPTH_BIT,
+                        "GenerateDepthMipmapWithShader requires a depth-only aspect");
+        MOBILEGL_ASSERT(resource.depth == 1 && resource.arrayLayers == 1,
+                        "GenerateDepthMipmapWithShader only supports single-layer depth textures");
+        MOBILEGL_ASSERT(m_frameContext.GetCurrentFrameIndex() < m_deferredDepthMipmapCleanup.size(),
+                        "GenerateDepthMipmapWithShader: frame index %u out of range (cleanup slots=%zu)",
+                        m_frameContext.GetCurrentFrameIndex(), m_deferredDepthMipmapCleanup.size());
+
+        auto& deferredCleanup = m_deferredDepthMipmapCleanup[m_frameContext.GetCurrentFrameIndex()];
+
+        ProgramFactory::CompileOptionFlags transformFlags = 0;
+        const auto& programObj =
+            m_programFactory->GetOrCreateProgram(*m_depthMipmapResources.program, transformFlags);
+
+        VkAttachmentDescription depthAttachment{};
+        depthAttachment.format = resource.format;
+        depthAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
+        depthAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        depthAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        depthAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        depthAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        depthAttachment.initialLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+        depthAttachment.finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+
+        VkAttachmentReference depthAttachmentRef{};
+        depthAttachmentRef.attachment = 0;
+        depthAttachmentRef.layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+
+        VkSubpassDescription subpassDesc{};
+        subpassDesc.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+        subpassDesc.pDepthStencilAttachment = &depthAttachmentRef;
+
+        VkRenderPassCreateInfo renderPassCreateInfo{};
+        renderPassCreateInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+        renderPassCreateInfo.attachmentCount = 1;
+        renderPassCreateInfo.pAttachments = &depthAttachment;
+        renderPassCreateInfo.subpassCount = 1;
+        renderPassCreateInfo.pSubpasses = &subpassDesc;
+
+        VkRenderPass renderPass = VK_NULL_HANDLE;
+        VK_VERIFY(vkCreateRenderPass(m_device, &renderPassCreateInfo, nullptr, &renderPass),
+                  "GenerateDepthMipmapWithShader: vkCreateRenderPass");
+
+        static const VkPipelineVertexInputStateCreateInfo kEmptyVertexInputState {
+            VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO
+        };
+
+        VkPipelineInputAssemblyStateCreateInfo inputAssembly{};
+        inputAssembly.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+        inputAssembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+
+        VkPipelineViewportStateCreateInfo viewportState{};
+        viewportState.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+        viewportState.viewportCount = 1;
+        viewportState.scissorCount = 1;
+
+        VkPipelineRasterizationStateCreateInfo rasterizationState{};
+        rasterizationState.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+        rasterizationState.polygonMode = VK_POLYGON_MODE_FILL;
+        rasterizationState.cullMode = VK_CULL_MODE_NONE;
+        rasterizationState.frontFace = VK_FRONT_FACE_CLOCKWISE;
+        rasterizationState.lineWidth = 1.0f;
+
+        VkPipelineMultisampleStateCreateInfo multisampleState{};
+        multisampleState.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+        multisampleState.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+
+        VkPipelineDepthStencilStateCreateInfo depthStencilState{};
+        depthStencilState.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+        depthStencilState.depthTestEnable = VK_TRUE;
+        depthStencilState.depthWriteEnable = VK_TRUE;
+        depthStencilState.depthCompareOp = VK_COMPARE_OP_ALWAYS;
+        depthStencilState.minDepthBounds = 0.0f;
+        depthStencilState.maxDepthBounds = 1.0f;
+
+        VkPipelineColorBlendStateCreateInfo colorBlendState{};
+        colorBlendState.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+
+        const VkDynamicState dynamicStates[] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+        VkPipelineDynamicStateCreateInfo dynamicState{};
+        dynamicState.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+        dynamicState.dynamicStateCount = static_cast<Uint32>(sizeof(dynamicStates) / sizeof(dynamicStates[0]));
+        dynamicState.pDynamicStates = dynamicStates;
+
+        VkGraphicsPipelineCreateInfo pipelineCreateInfo{};
+        pipelineCreateInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+        pipelineCreateInfo.stageCount = static_cast<Uint32>(programObj.stages.size());
+        pipelineCreateInfo.pStages = programObj.stages.data();
+        pipelineCreateInfo.pVertexInputState = &kEmptyVertexInputState;
+        pipelineCreateInfo.pInputAssemblyState = &inputAssembly;
+        pipelineCreateInfo.pViewportState = &viewportState;
+        pipelineCreateInfo.pRasterizationState = &rasterizationState;
+        pipelineCreateInfo.pMultisampleState = &multisampleState;
+        pipelineCreateInfo.pDepthStencilState = &depthStencilState;
+        pipelineCreateInfo.pColorBlendState = &colorBlendState;
+        pipelineCreateInfo.pDynamicState = &dynamicState;
+        pipelineCreateInfo.layout = programObj.pipelineLayout;
+        pipelineCreateInfo.renderPass = renderPass;
+        pipelineCreateInfo.subpass = 0;
+
+        VkPipeline pipeline = VK_NULL_HANDLE;
+        VK_VERIFY(vkCreateGraphicsPipelines(m_device, VK_NULL_HANDLE, 1, &pipelineCreateInfo, nullptr, &pipeline),
+                  "GenerateDepthMipmapWithShader: vkCreateGraphicsPipelines");
+        deferredCleanup.renderPasses.push_back(renderPass);
+        deferredCleanup.pipelines.push_back(pipeline);
+
+        auto createMipView = [&](Uint32 mipLevel, VkImageAspectFlags aspectMask) {
+            VkImageViewCreateInfo viewCreateInfo{};
+            viewCreateInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+            viewCreateInfo.image = resource.image;
+            viewCreateInfo.viewType = resource.viewType;
+            viewCreateInfo.format = resource.format;
+            viewCreateInfo.components.r = VK_COMPONENT_SWIZZLE_IDENTITY;
+            viewCreateInfo.components.g = VK_COMPONENT_SWIZZLE_IDENTITY;
+            viewCreateInfo.components.b = VK_COMPONENT_SWIZZLE_IDENTITY;
+            viewCreateInfo.components.a = VK_COMPONENT_SWIZZLE_IDENTITY;
+            viewCreateInfo.subresourceRange.aspectMask = aspectMask;
+            viewCreateInfo.subresourceRange.baseMipLevel = mipLevel;
+            viewCreateInfo.subresourceRange.levelCount = 1;
+            viewCreateInfo.subresourceRange.baseArrayLayer = 0;
+            viewCreateInfo.subresourceRange.layerCount = 1;
+
+            VkImageView view = VK_NULL_HANDLE;
+            VK_VERIFY(vkCreateImageView(m_device, &viewCreateInfo, nullptr, &view),
+                      "GenerateDepthMipmapWithShader: vkCreateImageView");
+            return view;
+        };
+
+        VkPipelineStageFlags originalSrcStageMask = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+        VkAccessFlags originalSrcAccessMask = 0;
+        GetImageTransitionSourceState(originalLayout, originalSrcStageMask, originalSrcAccessMask);
+
+        VkPipelineStageFlags finalDstStageMask = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+        VkAccessFlags finalDstAccessMask = 0;
+        GetImageTransitionDestinationState(finalLayout, finalDstStageMask, finalDstAccessMask);
+
+        VkPipelineStageFlags attachmentStageMask = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+        VkAccessFlags attachmentAccessMask = 0;
+        GetImageTransitionDestinationState(VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+                                           attachmentStageMask, attachmentAccessMask);
+
+        if (originalLayout != finalLayout) {
+            if (baseMipLevel > 0) {
+                VkImageLayout lowerMipLayout = originalLayout;
+                const Bool lowerReady = VkTextureManager::TransitionImageLayout(
+                    frame.commandBuffer, resource.image, lowerMipLayout, finalLayout,
+                    originalSrcStageMask, finalDstStageMask,
+                    originalSrcAccessMask, finalDstAccessMask,
+                    resource.aspect, 0, baseMipLevel);
+                MOBILEGL_ASSERT(lowerReady, "%s: failed to transition lower untouched mip levels", __func__);
+            }
+
+            if (generateMipLevelCount < resource.mipLevels) {
+                VkImageLayout upperMipLayout = originalLayout;
+                const Bool upperReady = VkTextureManager::TransitionImageLayout(
+                    frame.commandBuffer, resource.image, upperMipLayout, finalLayout,
+                    originalSrcStageMask, finalDstStageMask,
+                    originalSrcAccessMask, finalDstAccessMask,
+                    resource.aspect, generateMipLevelCount, resource.mipLevels - generateMipLevelCount);
+                MOBILEGL_ASSERT(upperReady, "%s: failed to transition upper untouched mip levels", __func__);
+            }
+
+            VkImageLayout baseMipLayout = originalLayout;
+            const Bool baseReady = VkTextureManager::TransitionImageLayout(
+                frame.commandBuffer, resource.image, baseMipLayout, finalLayout,
+                originalSrcStageMask, finalDstStageMask,
+                originalSrcAccessMask, finalDstAccessMask,
+                resource.aspect, baseMipLevel, 1);
+            MOBILEGL_ASSERT(baseReady, "%s: failed to transition base mip level to sampled layout", __func__);
+        }
+
+        resource.layout = finalLayout;
+
+        auto* depthProgramData = static_cast<Uint8*>(m_depthMipmapResources.program->MapUBO());
+        MOBILEGL_ASSERT(depthProgramData != nullptr, "GenerateDepthMipmapWithShader: depth mipmap UBO is null");
+        auto writeUniform = [&](Int location, const void* data, SizeT size) {
+            MOBILEGL_ASSERT(location >= 0, "GenerateDepthMipmapWithShader: invalid uniform location");
+            const Uint offset = m_depthMipmapResources.program->GetUniformOffset(static_cast<Uint>(location));
+            MOBILEGL_ASSERT(offset + size <= m_depthMipmapResources.program->GetUBOSize(),
+                            "GenerateDepthMipmapWithShader: uniform write out of bounds");
+            memcpy(depthProgramData + offset, data, size);
+        };
+
+        for (Uint32 level = baseMipLevel + 1; level < generateMipLevelCount; ++level) {
+            VkImageLayout dstMipLayout = originalLayout;
+            const Bool dstReady = VkTextureManager::TransitionImageLayout(
+                frame.commandBuffer, resource.image, dstMipLayout, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+                originalSrcStageMask, attachmentStageMask,
+                originalSrcAccessMask, attachmentAccessMask,
+                resource.aspect, level, 1);
+            MOBILEGL_ASSERT(dstReady, "%s: failed to transition mip level %u to depth attachment layout", __func__, level);
+
+            const IntVec3 srcTexelSize = ComputeMipTexelSize(storageBaseTexelSize, level - 1);
+            const IntVec3 dstTexelSize = ComputeMipTexelSize(storageBaseTexelSize, level);
+            const Int srcTexelSizeUniform[2] = {srcTexelSize.x(), srcTexelSize.y()};
+
+            const VkImageView sourceImageView = createMipView(level - 1, VK_IMAGE_ASPECT_DEPTH_BIT);
+            const VkImageView depthAttachmentView = createMipView(level, resource.aspect);
+            deferredCleanup.imageViews.push_back(sourceImageView);
+            deferredCleanup.imageViews.push_back(depthAttachmentView);
+
+            VkFramebufferCreateInfo framebufferCreateInfo{};
+            framebufferCreateInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+            framebufferCreateInfo.renderPass = renderPass;
+            framebufferCreateInfo.attachmentCount = 1;
+            framebufferCreateInfo.pAttachments = &depthAttachmentView;
+            framebufferCreateInfo.width = static_cast<Uint32>(dstTexelSize.x());
+            framebufferCreateInfo.height = static_cast<Uint32>(dstTexelSize.y());
+            framebufferCreateInfo.layers = 1;
+
+            VkFramebuffer framebuffer = VK_NULL_HANDLE;
+            VK_VERIFY(vkCreateFramebuffer(m_device, &framebufferCreateInfo, nullptr, &framebuffer),
+                      "GenerateDepthMipmapWithShader: vkCreateFramebuffer");
+            deferredCleanup.framebuffers.push_back(framebuffer);
+
+            VkRenderPassBeginInfo renderPassBeginInfo{};
+            renderPassBeginInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+            renderPassBeginInfo.renderPass = renderPass;
+            renderPassBeginInfo.framebuffer = framebuffer;
+            renderPassBeginInfo.renderArea.offset = {0, 0};
+            renderPassBeginInfo.renderArea.extent = {
+                static_cast<Uint32>(dstTexelSize.x()), static_cast<Uint32>(dstTexelSize.y())
+            };
+
+            vkCmdBeginRenderPass(frame.commandBuffer, &renderPassBeginInfo, VK_SUBPASS_CONTENTS_INLINE);
+
+            VkViewport viewport{};
+            viewport.x = 0.0f;
+            viewport.y = 0.0f;
+            viewport.width = static_cast<float>(dstTexelSize.x());
+            viewport.height = static_cast<float>(dstTexelSize.y());
+            viewport.minDepth = 0.0f;
+            viewport.maxDepth = 1.0f;
+            vkCmdSetViewport(frame.commandBuffer, 0, 1, &viewport);
+
+            VkRect2D scissor{};
+            scissor.offset = {0, 0};
+            scissor.extent = {static_cast<Uint32>(dstTexelSize.x()), static_cast<Uint32>(dstTexelSize.y())};
+            vkCmdSetScissor(frame.commandBuffer, 0, 1, &scissor);
+
+            vkCmdBindPipeline(frame.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+
+            std::fill(depthProgramData,
+                      depthProgramData + m_depthMipmapResources.program->GetUBOSize(),
+                      Uint8{0});
+            BlitUniformData blitUniformData{};
+            writeUniform(m_depthMipmapResources.srcRectLocation,
+                         blitUniformData.srcRect,
+                         sizeof(blitUniformData.srcRect));
+            writeUniform(m_depthMipmapResources.dstRectLocation,
+                         blitUniformData.dstRect,
+                         sizeof(blitUniformData.dstRect));
+            writeUniform(m_depthMipmapResources.surfaceTransformLocation,
+                         &blitUniformData.surfaceTransform,
+                         sizeof(blitUniformData.surfaceTransform));
+            writeUniform(m_depthMipmapResources.srcTexelSizeLocation,
+                         srcTexelSizeUniform,
+                         sizeof(srcTexelSizeUniform));
+
+            const auto samplerBindingOverride = UniformManager::SamplerBindingOverride{
+                .binding = m_depthMipmapResources.samplerBinding,
+                .texture = &texture,
+                .sampler = m_blitResources.nearestSampler.get(),
+                .imageView = sourceImageView,
+            };
+            const Bool bound = m_uniformManager->BindProgramUniformBuffers(
+                frame.commandBuffer, *m_depthMipmapResources.program, programObj,
+                m_frameContext.GetCurrentFrameIndex(), VK_PIPELINE_BIND_POINT_GRAPHICS, &samplerBindingOverride);
+            MOBILEGL_ASSERT(bound, "GenerateDepthMipmapWithShader: BindProgramUniformBuffers failed");
+            vkCmdDraw(frame.commandBuffer, 3, 1, 0, 0);
+            vkCmdEndRenderPass(frame.commandBuffer);
+
+            VkImageLayout finishedMipLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+            const Bool finishedReady = VkTextureManager::TransitionImageLayout(
+                frame.commandBuffer, resource.image, finishedMipLayout, finalLayout,
+                attachmentStageMask, finalDstStageMask,
+                attachmentAccessMask, finalDstAccessMask,
+                resource.aspect, level, 1);
+            MOBILEGL_ASSERT(finishedReady, "%s: failed to transition mip level %u to sampled layout", __func__, level);
+        }
+        return true;
     }
 
     VkPipeline VulkanRenderer::GetOrCreatePipeline(
@@ -4207,9 +4646,6 @@ void main() {
         if (isDepthOrStencilTexture) {
             MOBILEGL_ASSERT((resource->aspect & VK_IMAGE_ASPECT_STENCIL_BIT) == 0,
                             "GenerateMipmap: depth-stencil mipmap generation is not supported yet.");
-            MOBILEGL_ASSERT(supportsNativeBlit,
-                            "GenerateMipmap: depth texture format %d does not support native Vulkan blit.",
-                            static_cast<Int>(resource->format));
         }
 
         const Bool allocatedMipmapStorage =
@@ -4244,6 +4680,27 @@ void main() {
 
         const VkImageLayout originalLayout = resource->layout;
         const VkImageLayout finalLayout = ResolveGenerateMipmapFinalLayout(resource->aspect);
+        if (isDepthOrStencilTexture && !supportsNativeBlit) {
+            const Bool supportsShaderDepthMipmap =
+                (optimalTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT) != 0 &&
+                (optimalTilingFeatures & VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT) != 0;
+            MOBILEGL_ASSERT(resource->aspect == VK_IMAGE_ASPECT_DEPTH_BIT,
+                            "GenerateMipmap: shader fallback only supports depth-only textures.");
+            MOBILEGL_ASSERT(textureTarget == TextureTarget::Texture2D && resource->depth == 1 && resource->arrayLayers == 1,
+                            "GenerateMipmap: shader fallback only supports single-layer GL_TEXTURE_2D depth textures.");
+            MOBILEGL_ASSERT(supportsShaderDepthMipmap,
+                            "GenerateMipmap: depth texture format %d lacks sampled/depth-attachment support for shader fallback.",
+                            static_cast<Int>(resource->format));
+            const Bool depthReady = GenerateDepthMipmapWithShader(frame, *texture, *resource,
+                                                                  baseMipLevel, generateMipLevelCount,
+                                                                  storageBaseTexelSize, originalLayout, finalLayout);
+            MOBILEGL_ASSERT(depthReady,
+                            "GenerateMipmap: depth fallback failed for textureId=%d target=%d internalFormat=%d vkFormat=%d",
+                            texture->GetExternalIndex(), static_cast<Int>(texture->GetTarget()),
+                            static_cast<Int>(texture->GetFormat()), static_cast<Int>(resource->format));
+            return;
+        }
+
         const VkFilter blitFilter = isDepthOrStencilTexture
             ? VK_FILTER_NEAREST
             : ((optimalTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT) != 0
@@ -4699,6 +5156,7 @@ void main() {
                 m_frameContext.WaitAndAcquireNextImage(m_device, m_swapchainObject.GetHandle(), m_imageIndexAcquired);
         }
         VK_VERIFY(result, "Present, vkAcquireNextImageKHR");
+        CollectDeferredDepthMipmapCleanup(m_frameContext.GetCurrentFrameIndex());
         m_textureManager->BeginFrame(m_frameContext.GetCurrentFrameIndex());
         m_bufferManager.BeginFrame(m_frameContext.GetCurrentFrameIndex());
         m_transientVertexIndexBufferSlicesThisFrame.clear();
@@ -5352,6 +5810,9 @@ void main() {
         }
 
         vkDeviceWaitIdle(m_device);
+
+        DestroyDeferredDepthMipmapCleanup();
+        m_deferredDepthMipmapCleanup.assign(m_frameContext.GetFrameCount(), {});
 
         ShutdownSwapchain();
 

@@ -180,6 +180,22 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             Uint32 samplerBinding = 0;
         };
 
+        struct DepthMipmapResources {
+            SharedPtr<MG_State::GLState::ProgramObject> program;
+            Int srcRectLocation = -1;
+            Int dstRectLocation = -1;
+            Int surfaceTransformLocation = -1;
+            Int srcTexelSizeLocation = -1;
+            Uint32 samplerBinding = 0;
+        };
+
+        struct DeferredDepthMipmapCleanup {
+            Vector<VkImageView> imageViews;
+            Vector<VkFramebuffer> framebuffers;
+            Vector<VkRenderPass> renderPasses;
+            Vector<VkPipeline> pipelines;
+        };
+
         void QueueClearBufferPayload(GLenum buffer, GLint drawbuffer, const ClearAttachmentPayload& clearPayload);
         void QueueClearBufferPayloadForFramebuffer(const MG_State::GLState::FramebufferObject& framebuffer,
                                                   GLenum buffer, GLint drawbuffer,
@@ -238,6 +254,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         UniquePtr<VkTextureManager> m_textureManager;
         UniquePtr<VkSamplerManager> m_samplerManager;
         BlitResources m_blitResources;
+        DepthMipmapResources m_depthMipmapResources;
+        Vector<DeferredDepthMipmapCleanup> m_deferredDepthMipmapCleanup;
 
         void CreateInstance();
         VkResult SetupDebugMessenger();
@@ -267,7 +285,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                      const MG_State::GLState::VertexArrayObject& vao,
                                       const IndexBufferView* pIndexBufferView = nullptr);
         Bool InitializeBlitResources();
+        Bool InitializeDepthMipmapResources();
         void ShutdownBlitResources();
+        void ShutdownDepthMipmapResources();
+        void CollectDeferredDepthMipmapCleanup(Uint32 frameIndex);
+        void DestroyDeferredDepthMipmapCleanup();
         Bool TryBlitToDefaultFramebufferWithShader(FrameContext::FrameData& frame,
                                                    MG_State::GLState::FramebufferObject& readFbo,
                                                    MG_State::GLState::FramebufferObject& drawFbo,
@@ -277,6 +299,14 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         Bool MaterializePendingClearForTexture(VkCommandBuffer commandBuffer,
                                                MG_State::GLState::ITextureObject& texture);
         VkPipeline GetOrCreateBlitPipeline(const RenderPassEntry& renderPassEntry);
+        Bool GenerateDepthMipmapWithShader(FrameContext::FrameData& frame,
+                                           MG_State::GLState::ITextureObject& texture,
+                                           VkTextureManager::TextureResource& resource,
+                                           Uint32 baseMipLevel,
+                                           Uint32 generateMipLevelCount,
+                                           const IntVec3& storageBaseTexelSize,
+                                           VkImageLayout originalLayout,
+                                           VkImageLayout finalLayout);
         Bool SubmitReadbackCommandsAndWait(FrameContext::FrameData& frame);
 
         void ShutdownSwapchain();
