@@ -64,6 +64,14 @@ find_android_tool() {
   die "unable to find Android SDK tool: ${tool}"
 }
 
+ensure_android_avd_home() {
+  if [ -z "${ANDROID_AVD_HOME:-}" ]; then
+    export ANDROID_AVD_HOME="${RUNNER_TEMP:-${PWD}}/mobilegl-avd"
+  fi
+
+  mkdir -p "${ANDROID_AVD_HOME}"
+}
+
 print_diagnostics() {
   emulator_log="$1"
   adb_bin="$(find_android_tool adb platform-tools/adb)"
@@ -102,6 +110,7 @@ create_avd() {
 
   sdkmanager_bin="$(find_android_tool sdkmanager cmdline-tools/latest/bin/sdkmanager)"
   avdmanager_bin="$(find_android_tool avdmanager cmdline-tools/latest/bin/avdmanager)"
+  ensure_android_avd_home
 
   system_image="system-images;android-${api_level};${target};${arch}"
   "${sdkmanager_bin}" "platform-tools" "emulator" "platforms;android-${api_level}" "${system_image}"
@@ -135,6 +144,7 @@ start_avd() {
 
   adb_bin="$(find_android_tool adb platform-tools/adb)"
   emulator_bin="$(find_android_tool emulator emulator/emulator)"
+  ensure_android_avd_home
 
   mkdir -p "$(dirname "${emulator_log}")" "$(dirname "${pid_file}")"
   "${emulator_bin}" -avd "${avd_name}" \
@@ -194,6 +204,7 @@ stop_avd() {
   require_value "${pid_file}" "--pid-file"
 
   adb_bin="$(find_android_tool adb platform-tools/adb)"
+  ensure_android_avd_home
 
   "${adb_bin}" emu kill >/dev/null 2>&1 || true
   if [ -f "${pid_file}" ]; then
