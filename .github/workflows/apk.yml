@@ -108,12 +108,12 @@ jobs:
             id: espryt
             apk: MobileGL-EsprytTrace-release.apk
             package: top.mobilegl.plugin.espryt.trace
-            gpu: angle
+            gpu: swangle
           - name: DirectVulkan
             id: magma
             apk: MobileGL-MagmaTrace-release.apk
             package: top.mobilegl.plugin.magma.trace
-            gpu: angle
+            gpu: lavapipe
         case:
           - name: OpenRA
             trace_archive: tools/trace_replay/fixtures/openra.tgz
