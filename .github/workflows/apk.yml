@@ -134,7 +134,7 @@ jobs:
             id: espryt
             apk: MobileGL-EsprytTrace-release.apk
             package: top.mobilegl.plugin.espryt.trace
-            gpu: swangle
+            gpu: software
           - name: DirectVulkan
             id: magma
             apk: MobileGL-MagmaTrace-release.apk
