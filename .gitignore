@@ -22,4 +22,5 @@ MobileGL/MG*/cmake-build*
 /android-plugin/.gradle
 /android-plugin/build
 /android-plugin/app/build
+/android-plugin/app/src/trace/jniLibs
 tools/trace_replay/work/

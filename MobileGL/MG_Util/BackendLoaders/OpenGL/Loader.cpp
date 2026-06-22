@@ -10,6 +10,11 @@
 #include "MG_Util/Types.h"
 
 namespace MobileGL::MG_Util::BackendLoader {
+    static Bool UseRetraceAngle() {
+        const char* value = std::getenv("MOBILEGL_RETRACE_USE_ANGLE");
+        return value != nullptr && std::strcmp(value, "1") == 0;
+    }
+
     static void* OpenLib(const Vector<String>& names) {
 #if !defined(__WIN32) && !defined(_WIN32) && !defined(__APPLE__)
         static const String LibPathPrefixes[] = {
@@ -433,10 +438,15 @@ namespace MobileGL::MG_Util::BackendLoader {
     }
 
     void AcquireEGLFunctions(MG_External::EGLFunctionsTable& funcs) {
-        static const Vector<String> EGLLibNames = {"libEGL.so"};
-        void* eglLib = OpenLib(EGLLibNames);
+        Vector<String> eglLibNames = {"libEGL.so"};
+        if (UseRetraceAngle()) {
+            OpenLib({"libGLESv2_angle.so"});
+            eglLibNames = {"libEGL_angle.so", "libEGL.so"};
+        }
+
+        void* eglLib = OpenLib(eglLibNames);
         if (!eglLib) {
-            MGLOG_E("Failed to open libEGL.so");
+            MGLOG_E("Failed to open EGL library");
             return;
         }
 

@@ -74,6 +74,17 @@ bool Exists(const std::string& path) {
     return !path.empty() && stat(path.c_str(), &st) == 0 && S_ISREG(st.st_mode);
 }
 
+bool UseAngleForRequest(const Request& request) {
+    if (request.backend != "DirectGLES") {
+        return false;
+    }
+    if (request.useAngle) {
+        return true;
+    }
+    const char* value = getenv("MOBILEGL_RETRACE_USE_ANGLE");
+    return value != nullptr && strcmp(value, "1") == 0;
+}
+
 bool EnsureDirectory(const std::string& path) {
     if (path.empty()) {
         return false;
@@ -116,6 +127,9 @@ bool LoadMobileGL(const Request& request, std::string& error) {
     setenv("MOBILEGL_BACKEND_TYPE", request.backend.c_str(), 1);
     setenv("MOBILEGL_TRACE_LIBRARY", request.mobileGlLibrary.c_str(), 1);
     setenv("MOBILEGL_TRACE_SKIP_AUTODESTROY", "1", 1);
+    if (UseAngleForRequest(request)) {
+        setenv("MOBILEGL_RETRACE_USE_ANGLE", "1", 1);
+    }
 
     void* handle = dlopen(request.mobileGlLibrary.c_str(), RTLD_NOW | RTLD_GLOBAL);
     if (handle == nullptr) {
@@ -734,6 +748,7 @@ bool WriteResultJson(const Request& request, const Result& result) {
     file << "  \"cropHeight\": " << request.cropHeight << ",\n";
     file << "  \"tolerance\": " << request.tolerance << ",\n";
     file << "  \"fuzzPercent\": " << request.fuzzPercent << ",\n";
+    file << "  \"useAngle\": " << (UseAngleForRequest(request) ? "true" : "false") << ",\n";
     file << "  \"mismatchPixels\": " << result.mismatchPixels << "\n";
     file << "}\n";
     return true;

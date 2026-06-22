@@ -98,7 +98,8 @@ Java_top_mobilegl_plugin_trace_TraceReplayActivity_nativeRunTraceReplay(JNIEnv* 
                                                                         jint cropY,
                                                                         jint cropWidth,
                                                                         jint cropHeight,
-                                                                        jint fuzzPercent) {
+                                                                        jint fuzzPercent,
+                                                                        jboolean useAngle) {
     mobilegl_trace::Request request;
     request.tracePath = ToString(env, tracePath);
     request.goldenPath = ToString(env, goldenPath);
@@ -119,6 +120,7 @@ Java_top_mobilegl_plugin_trace_TraceReplayActivity_nativeRunTraceReplay(JNIEnv* 
     request.cropWidth = cropWidth;
     request.cropHeight = cropHeight;
     request.fuzzPercent = fuzzPercent;
+    request.useAngle = useAngle == JNI_TRUE;
 
     ScopedTraceReplayState replayState;
     mobilegl_trace_set_requested_size(request.width, request.height);

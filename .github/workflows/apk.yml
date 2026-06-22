@@ -75,6 +75,16 @@ jobs:
           SIGNING_KEY_ALIAS: ${{ secrets.SIGNING_KEY_ALIAS }}
           SIGNING_KEY_PASSWORD: ${{ secrets.SIGNING_KEY_PASSWORD }}
 
+      - name: Download ANGLE x86_64 libraries
+        run: |
+          angle_dir="android-plugin/app/src/trace/jniLibs/x86_64"
+          angle_base="https://raw.githubusercontent.com/FCL-Team/FoldCraftLauncher/main/FCLauncher/src/main/jniLibs/x86_64"
+          mkdir -p "${angle_dir}"
+          curl -L --fail --retry 3 -o "${angle_dir}/libEGL_angle.so" "${angle_base}/libEGL_angle.so"
+          curl -L --fail --retry 3 -o "${angle_dir}/libGLESv2_angle.so" "${angle_base}/libGLESv2_angle.so"
+          test -s "${angle_dir}/libEGL_angle.so"
+          test -s "${angle_dir}/libGLESv2_angle.so"
+
       - name: Build retrace APKs
         run: gradle --no-daemon -p android-plugin :app:assembleEsprytTraceRelease :app:assembleMagmaTraceRelease -Pmobilegl.abis=all -Pmobilegl.debuggableRelease=true -Pmobilegl.logLevel=MOBILEGL_LOG_LEVEL_INFO --parallel --max-workers "$(nproc)"
         env:
@@ -444,6 +454,8 @@ jobs:
             --boot-timeout 300
 
       - name: Retrace and validate
+        env:
+          MOBILEGL_RETRACE_USE_ANGLE: ${{ matrix.backend.name == 'DirectGLES' && '1' || '0' }}
         run: |
           apk_file="$(find android-retrace-apks -name '${{ matrix.backend.apk }}' -print -quit)"
           timeout "$(( ${{ matrix.case.timeout_seconds }} + 300 ))" sh android-plugin/trace-replay-ci.sh \

@@ -110,7 +110,8 @@ public final class TraceReplayActivity extends Activity {
                 request.cropY,
                 request.cropWidth,
                 request.cropHeight,
-                request.fuzzPercent
+                request.fuzzPercent,
+                request.useAngle
         );
         Log.i(TAG, result.toString());
         TraceReplayResult finalResult = result;
@@ -137,7 +138,8 @@ public final class TraceReplayActivity extends Activity {
             int cropY,
             int cropWidth,
             int cropHeight,
-            int fuzzPercent
+            int fuzzPercent,
+            boolean useAngle
     );
 
     private static final class TraceReplayRequest {
@@ -157,6 +159,7 @@ public final class TraceReplayActivity extends Activity {
         final int cropWidth;
         final int cropHeight;
         final int fuzzPercent;
+        final boolean useAngle;
 
         private TraceReplayRequest(
                 String tracePath,
@@ -174,7 +177,8 @@ public final class TraceReplayActivity extends Activity {
                 int cropY,
                 int cropWidth,
                 int cropHeight,
-                int fuzzPercent
+                int fuzzPercent,
+                boolean useAngle
         ) {
             this.tracePath = tracePath;
             this.goldenPath = goldenPath;
@@ -192,6 +196,7 @@ public final class TraceReplayActivity extends Activity {
             this.cropWidth = cropWidth;
             this.cropHeight = cropHeight;
             this.fuzzPercent = fuzzPercent;
+            this.useAngle = useAngle;
         }
 
         static TraceReplayRequest from(Intent intent, File filesDir, String defaultBackend) {
@@ -213,7 +218,8 @@ public final class TraceReplayActivity extends Activity {
                     intent.getIntExtra("crop_y", 0),
                     intent.getIntExtra("crop_width", 0),
                     intent.getIntExtra("crop_height", 0),
-                    intent.getIntExtra("fuzz_percent", 20)
+                    intent.getIntExtra("fuzz_percent", 20),
+                    intent.getBooleanExtra("use_angle", false)
             );
         }
 

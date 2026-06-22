@@ -33,6 +33,7 @@ struct Request {
     int cropHeight = 0;
     int tolerance = 0;
     int fuzzPercent = 20;
+    bool useAngle = false;
 };
 
 struct Result {

@@ -28,6 +28,9 @@ Usage:
     --crop-height N \
     --fuzz-percent N \
     --timeout-seconds N
+
+Set MOBILEGL_RETRACE_USE_ANGLE=1 to run DirectGLES replay with packaged ANGLE
+instead of the device system GLES driver.
 EOF
 }
 
@@ -195,8 +198,12 @@ copy_fixture_to_app() {
 run_retrace() {
   result_dir="${result_root}/${safe_case}-${backend}"
   alternate_golden_app_path=""
+  use_angle=0
   if [ -n "${alternate_golden_path}" ]; then
     alternate_golden_app_path="${app_dir}/input/alternate-golden.png"
+  fi
+  if [ "${MOBILEGL_RETRACE_USE_ANGLE:-}" = "1" ] && [ "${backend}" = "DirectGLES" ]; then
+    use_angle=1
   fi
 
   mkdir -p "${result_dir}"
@@ -210,6 +217,9 @@ run_retrace() {
     --es golden_path "${app_dir}/input/golden.png"
   if [ -n "${alternate_golden_app_path}" ]; then
     set -- "$@" --es alternate_golden_path "${alternate_golden_app_path}"
+  fi
+  if [ "${use_angle}" -eq 1 ]; then
+    set -- "$@" --ez use_angle true
   fi
   set -- "$@" \
     --es output_dir "${app_dir}/output" \
