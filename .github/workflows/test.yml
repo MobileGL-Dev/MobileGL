@@ -13,6 +13,11 @@ jobs:
     runs-on: ubuntu-latest
     env:
       BUILD_DIR: build-linux
+      CCACHE_BASEDIR: ${{ github.workspace }}
+      CCACHE_COMPRESS: "true"
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_MAXSIZE: 4G
+      CCACHE_NOHASHDIR: "true"
 
     steps:
       - name: Set Swap Space
@@ -28,6 +33,15 @@ jobs:
       - name: Get CMake
         uses: lukka/get-cmake@latest
 
+      - name: Restore ccache
+        uses: actions/cache@v4
+        with:
+          path: .ccache
+          key: ${{ runner.os }}-test-${{ github.job }}-ccache-${{ github.ref_name }}-${{ github.run_id }}
+          restore-keys: |
+            ${{ runner.os }}-test-${{ github.job }}-ccache-${{ github.ref_name }}-
+            ${{ runner.os }}-test-${{ github.job }}-ccache-
+
       - name: Prepare Vulkan SDK
         uses: humbletim/setup-vulkan-sdk@v1.2.1
         with:
@@ -42,10 +56,11 @@ jobs:
       - name: Install build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y clang-20 clang++-20 lld-20 libc++-20-dev libc++abi-20-dev libvulkan-dev libegl1-mesa-dev libgles2-mesa-dev libgl1-mesa-dri mesa-vulkan-drivers ninja-build
+          sudo apt-get install -y ccache clang-20 clang++-20 lld-20 libc++-20-dev libc++abi-20-dev libvulkan-dev libegl1-mesa-dev libgles2-mesa-dev libgl1-mesa-dri mesa-vulkan-drivers ninja-build
 
       - name: Show installed toolchain
         run: |
+          ccache --version
           clang-20 --version
           clang++-20 --version
           ld.lld-20 --version || ld.lld --version || true
@@ -62,6 +77,8 @@ jobs:
           cmake -S . -B "${BUILD_DIR}" -G Ninja \
             -DCMAKE_C_COMPILER=clang-20 \
             -DCMAKE_CXX_COMPILER=clang++-20 \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
             -DCMAKE_BUILD_TYPE="${BUILD_TYPE}" \
             -DMOBILEGL_LOG_ACTIVE_LEVEL=MOBILEGL_LOG_LEVEL_INFO \
             -DMOBILEGL_BUILD_TEST=ON \
@@ -73,6 +90,10 @@ jobs:
 
       - name: Build
         run: cmake --build "${BUILD_DIR}" --parallel "$(nproc)"
+
+      - name: Show ccache stats
+        if: always()
+        run: ccache --show-stats
 
       - name: Package Linux runtime
         run: |
@@ -193,6 +214,11 @@ jobs:
     needs: build-linux
     env:
       BUILD_DIR: build-retrace
+      CCACHE_BASEDIR: ${{ github.workspace }}
+      CCACHE_COMPRESS: "true"
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_MAXSIZE: 4G
+      CCACHE_NOHASHDIR: "true"
       MOBILEGL_LIBRARY: ${{ github.workspace }}/build-linux/libMobileGL.so
 
     steps:
@@ -210,6 +236,15 @@ jobs:
       - name: Get CMake
         uses: lukka/get-cmake@latest
 
+      - name: Restore ccache
+        uses: actions/cache@v4
+        with:
+          path: .ccache
+          key: ${{ runner.os }}-test-${{ github.job }}-ccache-${{ github.ref_name }}-${{ github.run_id }}
+          restore-keys: |
+            ${{ runner.os }}-test-${{ github.job }}-ccache-${{ github.ref_name }}-
+            ${{ runner.os }}-test-${{ github.job }}-ccache-
+
       - name: Prepare Vulkan SDK
         uses: humbletim/setup-vulkan-sdk@v1.2.1
         with:
@@ -224,10 +259,11 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y clang-20 clang++-20 lld-20 libc++-20-dev libc++abi-20-dev libvulkan-dev libegl1-mesa-dev libgles2-mesa-dev libgl1-mesa-dri mesa-vulkan-drivers ninja-build
+          sudo apt-get install -y ccache clang-20 clang++-20 lld-20 libc++-20-dev libc++abi-20-dev libvulkan-dev libegl1-mesa-dev libgles2-mesa-dev libgl1-mesa-dri mesa-vulkan-drivers ninja-build
 
       - name: Show installed toolchain
         run: |
+          ccache --version
           clang-20 --version
           clang++-20 --version
           ld.lld-20 --version || ld.lld --version || true
@@ -255,6 +291,8 @@ jobs:
           cmake -S . -B "${BUILD_DIR}" -G Ninja \
             -DCMAKE_C_COMPILER=clang-20 \
             -DCMAKE_CXX_COMPILER=clang++-20 \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
             -DCMAKE_BUILD_TYPE="${BUILD_TYPE}" \
             -DMOBILEGL_LOG_ACTIVE_LEVEL=MOBILEGL_LOG_LEVEL_INFO \
             -DMOBILEGL_BUILD_TEST=OFF \
@@ -265,6 +303,10 @@ jobs:
 
       - name: Build trace replay
         run: cmake --build "${BUILD_DIR}" --target mobilegl_trace_replay --parallel "$(nproc)"
+
+      - name: Show ccache stats
+        if: always()
+        run: ccache --show-stats
 
       - name: Normalize CTest command paths
         run: |

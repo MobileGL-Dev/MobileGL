@@ -18,6 +18,9 @@ def releaseSigningReady = signingStoreFile.exists()
         && signingKeyAlias
         && signingKeyPassword
 def debuggableRelease = (findProperty('mobilegl.debuggableRelease') ?: 'false').toString().toBoolean()
+def mobileGlCmakeCompilerLauncher = {
+    (findProperty('mobilegl.cmakeCompilerLauncher') ?: System.getenv('MOBILEGL_CMAKE_COMPILER_LAUNCHER') ?: '').toString().trim()
+}
 def mobileGlAbiFilters = {
     def abiList = (findProperty('mobilegl.abis') ?: System.getenv('MOBILEGL_ABIS') ?: 'arm64-v8a') as String
     if (abiList.equalsIgnoreCase('all')) {
@@ -44,6 +47,15 @@ android {
             def abiFiltersOverride = mobileGlAbiFilters()
             if (!abiFiltersOverride.isEmpty()) {
                 abiFilters(*abiFiltersOverride)
+            }
+        }
+        externalNativeBuild {
+            cmake {
+                def compilerLauncher = mobileGlCmakeCompilerLauncher()
+                if (!compilerLauncher.isEmpty()) {
+                    arguments "-DCMAKE_C_COMPILER_LAUNCHER=${compilerLauncher}",
+                            "-DCMAKE_CXX_COMPILER_LAUNCHER=${compilerLauncher}"
+                }
             }
         }
     }
