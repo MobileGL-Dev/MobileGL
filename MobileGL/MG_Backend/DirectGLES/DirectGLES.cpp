@@ -1605,6 +1605,29 @@ namespace MobileGL::MG_Backend::DirectGLES {
         while (g_GLESFuncs.glGetError() != GL_NO_ERROR) {}
     }
 
+    class ScopedDefaultFramebufferBinding {
+    public:
+        ScopedDefaultFramebufferBinding() {
+            GLint prevReadFBO = 0;
+            GLint prevDrawFBO = 0;
+            g_GLESFuncs.glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &prevReadFBO);
+            g_GLESFuncs.glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &prevDrawFBO);
+            m_prevReadFBO = static_cast<GLuint>(prevReadFBO);
+            m_prevDrawFBO = static_cast<GLuint>(prevDrawFBO);
+            g_GLESFuncs.glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
+            g_GLESFuncs.glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+        }
+
+        ~ScopedDefaultFramebufferBinding() {
+            g_GLESFuncs.glBindFramebuffer(GL_READ_FRAMEBUFFER, m_prevReadFBO);
+            g_GLESFuncs.glBindFramebuffer(GL_DRAW_FRAMEBUFFER, m_prevDrawFBO);
+        }
+
+    private:
+        GLuint m_prevReadFBO = 0;
+        GLuint m_prevDrawFBO = 0;
+    };
+
     class ScopedDepthBlitState {
     public:
         ScopedDepthBlitState() {
@@ -2053,6 +2076,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
         backendTexture->Bind(target, unitIndex);
         DebugImpl::ErrorLopper::Clear();
+        // ANGLE/Mesa may validate the currently bound FBO while generating mipmaps.
+        // Avoid a feedback-loop style failure when the source texture is attached there.
+        ScopedDefaultFramebufferBinding defaultFramebuffer;
         g_GLESFuncs.glGenerateMipmap(target);
         AssertNoGLError("glGenerateMipmap");
     }
