@@ -52,6 +52,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return const_cast<StateBackendObjectRegistry*>(this)->find(stateObj);
         }
 
+        iterator begin() { return m_backendObjects.begin(); }
+        const_iterator begin() const { return m_backendObjects.begin(); }
         iterator end() { return m_backendObjects.end(); }
         const_iterator end() const { return m_backendObjects.end(); }
 

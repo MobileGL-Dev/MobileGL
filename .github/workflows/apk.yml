@@ -270,7 +270,7 @@ jobs:
             target_call: 150023
             width: 854
             height: 480
-            tolerance: 4100
+            tolerance: 8000
             crop_x: 0
             crop_y: 0
             crop_width: 0

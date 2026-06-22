@@ -19,6 +19,7 @@
 #include <MG_Util/BackendLoaders/OpenGL/Loader.h>
 #include <MG_Util/Converters/GLToStr/GLEnumConverter.h>
 #include <MG_Util/Converters/MGToGL/TextureEnumConverter.h>
+#include <MG_Util/Converters/MGToGL/FramebufferEnumConverter.h>
 #include <MG_Util/Converters/MGToStr/TextureEnumConverter.h>
 #include <MG_Util/Converters/MGToGL/RenderStateEnumConverter.h>
 #include <MG_Util/Metrics/BufferMetrics.h>
@@ -1605,27 +1606,147 @@ namespace MobileGL::MG_Backend::DirectGLES {
         while (g_GLESFuncs.glGetError() != GL_NO_ERROR) {}
     }
 
-    class ScopedDefaultFramebufferBinding {
+    class ScopedCompleteFramebufferBinding {
     public:
-        ScopedDefaultFramebufferBinding() {
+        ScopedCompleteFramebufferBinding() {
+            GLint prevReadFBO = 0;
+            GLint prevDrawFBO = 0;
+            g_GLESFuncs.glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &prevReadFBO);
+            g_GLESFuncs.glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &prevDrawFBO);
+            g_GLESFuncs.glGetIntegerv(GL_RENDERBUFFER_BINDING, &m_prevRenderbuffer);
+            m_prevReadFBO = static_cast<GLuint>(prevReadFBO);
+            m_prevDrawFBO = static_cast<GLuint>(prevDrawFBO);
+
+            EnsureScratchFBO();
+            g_GLESFuncs.glBindFramebuffer(GL_READ_FRAMEBUFFER, s_scratchFBO);
+            g_GLESFuncs.glBindFramebuffer(GL_DRAW_FRAMEBUFFER, s_scratchFBO);
+        }
+
+        ~ScopedCompleteFramebufferBinding() {
+            g_GLESFuncs.glBindFramebuffer(GL_READ_FRAMEBUFFER, m_prevReadFBO);
+            g_GLESFuncs.glBindFramebuffer(GL_DRAW_FRAMEBUFFER, m_prevDrawFBO);
+            g_GLESFuncs.glBindRenderbuffer(GL_RENDERBUFFER, static_cast<GLuint>(m_prevRenderbuffer));
+        }
+
+    private:
+        static void EnsureScratchFBO() {
+            if (s_scratchFBO != 0) {
+                return;
+            }
+
+            g_GLESFuncs.glGenFramebuffers(1, &s_scratchFBO);
+            g_GLESFuncs.glGenRenderbuffers(1, &s_scratchRBO);
+            g_GLESFuncs.glBindFramebuffer(GL_FRAMEBUFFER, s_scratchFBO);
+            g_GLESFuncs.glBindRenderbuffer(GL_RENDERBUFFER, s_scratchRBO);
+            g_GLESFuncs.glRenderbufferStorage(GL_RENDERBUFFER, GL_RGBA8, 1, 1);
+            g_GLESFuncs.glFramebufferRenderbuffer(
+                GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, s_scratchRBO);
+            const GLenum drawBuffer = GL_COLOR_ATTACHMENT0;
+            g_GLESFuncs.glDrawBuffers(1, &drawBuffer);
+            g_GLESFuncs.glReadBuffer(GL_COLOR_ATTACHMENT0);
+            MOBILEGL_ASSERT(g_GLESFuncs.glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE,
+                            "GenerateMipmap scratch framebuffer is incomplete.");
+        }
+
+        GLuint m_prevReadFBO = 0;
+        GLuint m_prevDrawFBO = 0;
+        GLint m_prevRenderbuffer = 0;
+        static GLuint s_scratchFBO;
+        static GLuint s_scratchRBO;
+    };
+
+    GLuint ScopedCompleteFramebufferBinding::s_scratchFBO = 0;
+    GLuint ScopedCompleteFramebufferBinding::s_scratchRBO = 0;
+
+    class ScopedDetachedTextureFramebufferAttachments {
+    public:
+        explicit ScopedDetachedTextureFramebufferAttachments(
+            const SharedPtr<MG_State::GLState::ITextureObject>& texture) {
+            if (texture == nullptr) {
+                return;
+            }
+
             GLint prevReadFBO = 0;
             GLint prevDrawFBO = 0;
             g_GLESFuncs.glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &prevReadFBO);
             g_GLESFuncs.glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &prevDrawFBO);
             m_prevReadFBO = static_cast<GLuint>(prevReadFBO);
             m_prevDrawFBO = static_cast<GLuint>(prevDrawFBO);
-            g_GLESFuncs.glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
-            g_GLESFuncs.glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+
+            const auto backendTextureIt = TextureImpl::g_backendTextureObjects.find(texture.get());
+            if (backendTextureIt == TextureImpl::g_backendTextureObjects.end() || !backendTextureIt->second) {
+                return;
+            }
+            const GLuint backendTextureId = backendTextureIt->second->GetBackendTextureId();
+
+            for (auto it = FramebufferImpl::g_backendFramebufferObjects.begin();
+                 it != FramebufferImpl::g_backendFramebufferObjects.end(); ++it) {
+                auto* stateFBO = it->first;
+                const auto& backendFBO = it->second;
+                if (stateFBO == nullptr || !backendFBO || stateFBO->IsDefaultFramebuffer()) {
+                    continue;
+                }
+
+                const auto& attachments = stateFBO->GetAllAttachmentObjects();
+                for (SizeT i = 0; i < attachments.size(); ++i) {
+                    const auto& attachmentObject = attachments[i];
+                    if (!attachmentObject.IsTexture() || attachmentObject.GetTexture().get() != texture.get()) {
+                        continue;
+                    }
+
+                    const auto frontendType = static_cast<FramebufferAttachmentType>(i);
+                    GLenum backendAttachment = GL_NONE;
+                    if (frontendType >= FramebufferAttachmentType::Color0 &&
+                        frontendType <= FramebufferAttachmentType::Color31) {
+                        backendAttachment = backendFBO->GetBackendAttachmentType(frontendType);
+                    } else {
+                        backendAttachment = MG_Util::ConvertFramebufferAttachmentTypeToGLEnum(frontendType);
+                    }
+                    if (backendAttachment == GL_NONE || backendAttachment == GL_UNKNOWN_MGL) {
+                        continue;
+                    }
+
+                    GLenum textureTarget =
+                        MG_Util::ConvertTextureUploadTargetToGLEnum(attachmentObject.GetTextureUploadTarget());
+                    if (textureTarget == GL_UNKNOWN_MGL) {
+                        textureTarget = MG_Util::ConvertTextureTargetToGLEnum(texture->GetTarget());
+                    }
+
+                    const GLuint backendFBOId = backendFBO->GetBackendFramebufferId();
+                    g_GLESFuncs.glBindFramebuffer(GL_DRAW_FRAMEBUFFER, backendFBOId);
+                    g_GLESFuncs.glFramebufferTexture2D(
+                        GL_DRAW_FRAMEBUFFER, backendAttachment, textureTarget, 0, 0);
+                    ClearGLErrors();
+                    m_detachedAttachments.push_back(
+                        {backendFBOId, backendAttachment, textureTarget, backendTextureId,
+                         static_cast<GLint>(attachmentObject.GetTextureLevel())});
+                }
+            }
         }
 
-        ~ScopedDefaultFramebufferBinding() {
+        ~ScopedDetachedTextureFramebufferAttachments() {
+            for (const auto& attachment : m_detachedAttachments) {
+                g_GLESFuncs.glBindFramebuffer(GL_DRAW_FRAMEBUFFER, attachment.framebuffer);
+                g_GLESFuncs.glFramebufferTexture2D(
+                    GL_DRAW_FRAMEBUFFER, attachment.attachment, attachment.textureTarget,
+                    attachment.texture, attachment.level);
+            }
             g_GLESFuncs.glBindFramebuffer(GL_READ_FRAMEBUFFER, m_prevReadFBO);
             g_GLESFuncs.glBindFramebuffer(GL_DRAW_FRAMEBUFFER, m_prevDrawFBO);
         }
 
     private:
+        struct DetachedAttachment {
+            GLuint framebuffer = 0;
+            GLenum attachment = GL_NONE;
+            GLenum textureTarget = GL_TEXTURE_2D;
+            GLuint texture = 0;
+            GLint level = 0;
+        };
+
         GLuint m_prevReadFBO = 0;
         GLuint m_prevDrawFBO = 0;
+        Vector<DetachedAttachment> m_detachedAttachments;
     };
 
     class ScopedDepthBlitState {
@@ -2077,8 +2198,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
         backendTexture->Bind(target, unitIndex);
         DebugImpl::ErrorLopper::Clear();
         // ANGLE/Mesa may validate the currently bound FBO while generating mipmaps.
-        // Avoid a feedback-loop style failure when the source texture is attached there.
-        ScopedDefaultFramebufferBinding defaultFramebuffer;
+        // Also detach the source texture from synced FBO objects for ANGLE's validation.
+        ScopedDetachedTextureFramebufferAttachments detachedAttachments(texture);
+        DebugImpl::ErrorLopper::Clear();
+        // Bind a complete internal FBO that does not reference the source texture.
+        ScopedCompleteFramebufferBinding completeFramebuffer;
         g_GLESFuncs.glGenerateMipmap(target);
         AssertNoGLError("glGenerateMipmap");
     }
