@@ -533,17 +533,21 @@ namespace MobileGL::MG_Backend::DirectGLES {
             GLint m_prevSkipImages = 0;
         };
 
-        static Uint GetNorm16ComponentCount(TextureInternalFormat format) {
+        static Uint GetNormFallbackComponentCount(TextureInternalFormat format) {
             switch (format) {
+            case TextureInternalFormat::R8Snorm:
             case TextureInternalFormat::R16:
             case TextureInternalFormat::R16Snorm:
                 return 1;
+            case TextureInternalFormat::RG8Snorm:
             case TextureInternalFormat::RG16:
             case TextureInternalFormat::RG16Snorm:
                 return 2;
+            case TextureInternalFormat::RGB8Snorm:
             case TextureInternalFormat::RGB16:
             case TextureInternalFormat::RGB16Snorm:
                 return 3;
+            case TextureInternalFormat::RGBA8Snorm:
             case TextureInternalFormat::RGBA16:
             case TextureInternalFormat::RGBA16Snorm:
                 return 4;
@@ -552,8 +556,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
         }
 
-        static Bool IsSnorm16Format(TextureInternalFormat format) {
+        static Bool IsSnormFallbackFormat(TextureInternalFormat format) {
             switch (format) {
+            case TextureInternalFormat::R8Snorm:
+            case TextureInternalFormat::RG8Snorm:
+            case TextureInternalFormat::RGB8Snorm:
+            case TextureInternalFormat::RGBA8Snorm:
             case TextureInternalFormat::R16Snorm:
             case TextureInternalFormat::RG16Snorm:
             case TextureInternalFormat::RGB16Snorm:
@@ -564,13 +572,25 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
         }
 
-        static const void* PrepareNorm16FloatFallbackUpload(TextureInternalFormat format,
-                                                            const IntVec3& texelSize,
-                                                            const void* data,
-                                                            SizeT byteSize,
-                                                            GLenum uploadType,
-                                                            Vector<Float>& convertedData) {
-            const Uint componentCount = GetNorm16ComponentCount(format);
+        static Bool IsNorm8FallbackFormat(TextureInternalFormat format) {
+            switch (format) {
+            case TextureInternalFormat::R8Snorm:
+            case TextureInternalFormat::RG8Snorm:
+            case TextureInternalFormat::RGB8Snorm:
+            case TextureInternalFormat::RGBA8Snorm:
+                return true;
+            default:
+                return false;
+            }
+        }
+
+        static const void* PrepareNormFloatFallbackUpload(TextureInternalFormat format,
+                                                          const IntVec3& texelSize,
+                                                          const void* data,
+                                                          SizeT byteSize,
+                                                          GLenum uploadType,
+                                                          Vector<Float>& convertedData) {
+            const Uint componentCount = GetNormFallbackComponentCount(format);
             if (componentCount == 0 || uploadType != GL_FLOAT || data == nullptr || byteSize == 0) {
                 return data;
             }
@@ -579,14 +599,21 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                      static_cast<SizeT>(std::max(texelSize.y(), 0)) *
                                      static_cast<SizeT>(std::max(texelSize.z(), 0));
             const SizeT componentTotal = texelCount * static_cast<SizeT>(componentCount);
-            const SizeT sourceComponentTotal = byteSize / sizeof(Uint16);
+            const SizeT sourceComponentSize = IsNorm8FallbackFormat(format) ? sizeof(Int8) : sizeof(Uint16);
+            const SizeT sourceComponentTotal = byteSize / sourceComponentSize;
             if (componentTotal == 0 || sourceComponentTotal == 0) {
                 return nullptr;
             }
 
             convertedData.assign(componentTotal, 0.0f);
             const SizeT copyComponentTotal = std::min(componentTotal, sourceComponentTotal);
-            if (IsSnorm16Format(format)) {
+            if (IsNorm8FallbackFormat(format)) {
+                const Int8* src = static_cast<const Int8*>(data);
+                constexpr Float invMaxSnorm8 = 1.0f / 127.0f;
+                for (SizeT i = 0; i < copyComponentTotal; ++i) {
+                    convertedData[i] = std::max(static_cast<Float>(src[i]) * invMaxSnorm8, -1.0f);
+                }
+            } else if (IsSnormFallbackFormat(format)) {
                 const Int16* src = static_cast<const Int16*>(data);
                 constexpr Float invMaxSnorm16 = 1.0f / 32767.0f;
                 for (SizeT i = 0; i < copyComponentTotal; ++i) {
@@ -695,7 +722,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                               ? textureMipmapObject->MapMipmapData(uploadTarget, level)
                                               : nullptr;
                             Vector<Float> convertedUploadData;
-                            const void* uploadData = PrepareNorm16FloatFallbackUpload(
+                            const void* uploadData = PrepareNormFloatFallbackUpload(
                                 textureMipmapObject->GetFormat(), levelTexelSize, pData, levelByteSize, glType,
                                 convertedUploadData);
 
@@ -785,7 +812,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                                   ? textureMipmapObject->MapMipmapData(uploadTarget, level)
                                                   : nullptr;
                                 Vector<Float> convertedUploadData;
-                                const void* uploadData = PrepareNorm16FloatFallbackUpload(
+                                const void* uploadData = PrepareNormFloatFallbackUpload(
                                     textureMipmapObject->GetFormat(), levelTexelSize, pData, levelByteSize, glType,
                                     convertedUploadData);
                                 MGLOG_D("%s: target: %s: syncing mip %d: %dx%dx%d, byteSize = %d, pData = %p, "
@@ -889,7 +916,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                             auto texelSize = textureMipmapObject->GetMipmapTexelSize(uploadTarget, level);
                             const void* mipData = textureMipmapObject->MapMipmapData(uploadTarget, level);
                             Vector<Float> convertedUploadData;
-                            const void* uploadData = PrepareNorm16FloatFallbackUpload(
+                            const void* uploadData = PrepareNormFloatFallbackUpload(
                                 textureMipmapObject->GetFormat(), texelSize, mipData, byteSize, glType,
                                 convertedUploadData);
                             switch (stateTextureObject->GetTarget()) {

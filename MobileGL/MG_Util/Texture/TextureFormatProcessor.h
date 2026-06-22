@@ -14,6 +14,7 @@ namespace MobileGL {
         NoNorm16 = 1 << 0,
         NoSnorm16 = 1 << 1,
         NoRgb16 = 1 << 2,
+        NoSnorm8 = 1 << 3,
         None = 0,
     };
     namespace MG_Util::TextureFormatProcessor {

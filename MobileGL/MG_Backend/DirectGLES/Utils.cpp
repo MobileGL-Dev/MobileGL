@@ -32,6 +32,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             if (g_GLESCapabilities.GLESRendererString.find("ANGLE") != String::npos) {
                 options |= PixelFormatNormalizeOptionBit::NoRgb16;
                 options |= PixelFormatNormalizeOptionBit::NoSnorm16;
+                options |= PixelFormatNormalizeOptionBit::NoSnorm8;
             }
             NormalizePixelFormat(MG_Util::ConvertTextureInternalFormatToGLEnum(internalFormat), options,
                                  outInternalFormat, outFormat, outType);
