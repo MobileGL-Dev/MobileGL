@@ -26,10 +26,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
             ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
             using namespace MobileGL::MG_Util::TextureFormatProcessor;
-            const Bool useNorm16Texture = g_GLESCapabilities.SupportsNorm16Texture &&
-                                          g_GLESCapabilities.GLESRendererString.find("ANGLE") == String::npos;
-            auto options =
-                useNorm16Texture ? PixelFormatNormalizeOptionBit::None : PixelFormatNormalizeOptionBit::NoNorm16;
+            Flags<PixelFormatNormalizeOptionBit> options =
+                (g_GLESCapabilities.SupportsNorm16Texture) ? PixelFormatNormalizeOptionBit::None
+                                                           : PixelFormatNormalizeOptionBit::NoNorm16;
+            if (g_GLESCapabilities.GLESRendererString.find("ANGLE") != String::npos) {
+                options |= PixelFormatNormalizeOptionBit::NoRgb16;
+                options |= PixelFormatNormalizeOptionBit::NoSnorm16;
+            }
             NormalizePixelFormat(MG_Util::ConvertTextureInternalFormatToGLEnum(internalFormat), options,
                                  outInternalFormat, outFormat, outType);
         }

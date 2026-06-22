@@ -12,6 +12,8 @@
 namespace MobileGL {
     enum class PixelFormatNormalizeOptionBit : Uint {
         NoNorm16 = 1 << 0,
+        NoSnorm16 = 1 << 1,
+        NoRgb16 = 1 << 2,
         None = 0,
     };
     namespace MG_Util::TextureFormatProcessor {
