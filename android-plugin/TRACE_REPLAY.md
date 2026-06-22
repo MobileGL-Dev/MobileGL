@@ -39,6 +39,7 @@ crop_y        optional compare crop y
 crop_width    optional compare crop width
 crop_height   optional compare crop height
 use_angle     optional boolean; DirectGLES uses packaged ANGLE when true
+angle_library_dir optional directory containing libEGL_angle.so and libGLESv2_angle.so; defaults to the APK native library directory
 ```
 
 Implementation notes:
@@ -49,7 +50,7 @@ Implementation notes:
 - `DirectGLES` replays on an EGL pbuffer by default, avoiding Android `SurfaceView` lifetime coupling. `DirectVulkan` still uses the Activity surface because it needs a native window-backed Vulkan swapchain.
 - Golden comparison is implemented in native C++ with libpng RGBA decode. The Java Activity only passes arguments and displays the native result, so the replay/compare core is not tied to Android UI or Bitmap APIs and can be ported to Linux.
 - The plugin profile still excludes `libtrace_replay_runner.so`; normal plugin APK behavior is preserved.
-- Set `MOBILEGL_RETRACE_USE_ANGLE=1` when running `trace-replay-ci.sh` to pass `use_angle=true` for DirectGLES. The APK must include `libEGL_angle.so` and `libGLESv2_angle.so` under its x86_64 native libraries.
+- Set `MOBILEGL_RETRACE_USE_ANGLE=1` when running `trace-replay-ci.sh` to pass `use_angle=true` for DirectGLES. The APK must include `libEGL_angle.so` and `libGLESv2_angle.so` under its x86_64 native libraries. The Activity passes Android's `nativeLibraryDir` to native code as `MOBILEGL_RETRACE_ANGLE_DIR`.
 
 Example core-profile trace smoke command for a debug trace APK:
 

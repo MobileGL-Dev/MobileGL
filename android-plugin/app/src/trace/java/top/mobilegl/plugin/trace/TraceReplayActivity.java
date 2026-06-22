@@ -44,6 +44,7 @@ public final class TraceReplayActivity extends Activity {
         request = TraceReplayRequest.from(
                 intent,
                 getFilesDir(),
+                getApplicationInfo().nativeLibraryDir,
                 getString(top.mobilegl.plugin.R.string.mobilegl_default_backend)
         );
         statusView = new TextView(this);
@@ -111,6 +112,7 @@ public final class TraceReplayActivity extends Activity {
                 request.cropWidth,
                 request.cropHeight,
                 request.fuzzPercent,
+                request.angleLibraryDir,
                 request.useAngle
         );
         Log.i(TAG, result.toString());
@@ -139,6 +141,7 @@ public final class TraceReplayActivity extends Activity {
             int cropWidth,
             int cropHeight,
             int fuzzPercent,
+            String angleLibraryDir,
             boolean useAngle
     );
 
@@ -159,6 +162,7 @@ public final class TraceReplayActivity extends Activity {
         final int cropWidth;
         final int cropHeight;
         final int fuzzPercent;
+        final String angleLibraryDir;
         final boolean useAngle;
 
         private TraceReplayRequest(
@@ -178,6 +182,7 @@ public final class TraceReplayActivity extends Activity {
                 int cropWidth,
                 int cropHeight,
                 int fuzzPercent,
+                String angleLibraryDir,
                 boolean useAngle
         ) {
             this.tracePath = tracePath;
@@ -196,10 +201,11 @@ public final class TraceReplayActivity extends Activity {
             this.cropWidth = cropWidth;
             this.cropHeight = cropHeight;
             this.fuzzPercent = fuzzPercent;
+            this.angleLibraryDir = angleLibraryDir;
             this.useAngle = useAngle;
         }
 
-        static TraceReplayRequest from(Intent intent, File filesDir, String defaultBackend) {
+        static TraceReplayRequest from(Intent intent, File filesDir, String nativeLibraryDir, String defaultBackend) {
             String outputDir = readString(intent, "output_dir", new File(filesDir, "trace-replay").getAbsolutePath());
             String diffPath = readString(intent, "diff_path", "");
             return new TraceReplayRequest(
@@ -219,6 +225,7 @@ public final class TraceReplayActivity extends Activity {
                     intent.getIntExtra("crop_width", 0),
                     intent.getIntExtra("crop_height", 0),
                     intent.getIntExtra("fuzz_percent", 20),
+                    readString(intent, "angle_library_dir", nativeLibraryDir),
                     intent.getBooleanExtra("use_angle", false)
             );
         }

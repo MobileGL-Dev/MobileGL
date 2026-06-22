@@ -129,6 +129,12 @@ bool LoadMobileGL(const Request& request, std::string& error) {
     setenv("MOBILEGL_TRACE_SKIP_AUTODESTROY", "1", 1);
     if (UseAngleForRequest(request)) {
         setenv("MOBILEGL_RETRACE_USE_ANGLE", "1", 1);
+        if (!request.angleLibraryDir.empty()) {
+            setenv("MOBILEGL_RETRACE_ANGLE_DIR", request.angleLibraryDir.c_str(), 1);
+        }
+    } else {
+        unsetenv("MOBILEGL_RETRACE_USE_ANGLE");
+        unsetenv("MOBILEGL_RETRACE_ANGLE_DIR");
     }
 
     void* handle = dlopen(request.mobileGlLibrary.c_str(), RTLD_NOW | RTLD_GLOBAL);
@@ -738,6 +744,7 @@ bool WriteResultJson(const Request& request, const Result& result) {
     file << "  \"actualPath\": \"" << JsonEscape(result.actualPath) << "\",\n";
     file << "  \"diffPath\": \"" << JsonEscape(result.diffPath) << "\",\n";
     file << "  \"backend\": \"" << JsonEscape(request.backend) << "\",\n";
+    file << "  \"angleLibraryDir\": \"" << JsonEscape(request.angleLibraryDir) << "\",\n";
     file << "  \"targetFrame\": " << request.targetFrame << ",\n";
     file << "  \"targetCall\": " << request.targetCall << ",\n";
     file << "  \"width\": " << request.width << ",\n";

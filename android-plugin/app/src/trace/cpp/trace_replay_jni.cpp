@@ -99,6 +99,7 @@ Java_top_mobilegl_plugin_trace_TraceReplayActivity_nativeRunTraceReplay(JNIEnv* 
                                                                         jint cropWidth,
                                                                         jint cropHeight,
                                                                         jint fuzzPercent,
+                                                                        jstring angleLibraryDir,
                                                                         jboolean useAngle) {
     mobilegl_trace::Request request;
     request.tracePath = ToString(env, tracePath);
@@ -110,6 +111,7 @@ Java_top_mobilegl_plugin_trace_TraceReplayActivity_nativeRunTraceReplay(JNIEnv* 
     request.outputDir = ToString(env, outputDir);
     request.diffPath = ToString(env, diffPath);
     request.backend = ToString(env, backend);
+    request.angleLibraryDir = ToString(env, angleLibraryDir);
     request.targetFrame = targetFrame;
     request.targetCall = targetCall;
     request.width = width;

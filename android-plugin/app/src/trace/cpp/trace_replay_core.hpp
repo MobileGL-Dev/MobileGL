@@ -23,6 +23,7 @@ struct Request {
     std::string diffPath;
     std::string backend;
     std::string mobileGlLibrary = "libMobileGL.so";
+    std::string angleLibraryDir;
     int targetFrame = -1;
     long long targetCall = -1;
     int width = 0;

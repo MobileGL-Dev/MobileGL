@@ -15,6 +15,19 @@ namespace MobileGL::MG_Util::BackendLoader {
         return value != nullptr && std::strcmp(value, "1") == 0;
     }
 
+    static Vector<String> AngleLibNames(const char* name) {
+        const char* angleDir = std::getenv("MOBILEGL_RETRACE_ANGLE_DIR");
+        if (angleDir != nullptr && angleDir[0] != '\0') {
+            String path = angleDir;
+            if (!path.empty() && path.back() != '/') {
+                path += "/";
+            }
+            path += name;
+            return {path, name};
+        }
+        return {name};
+    }
+
     static void* OpenLib(const Vector<String>& names) {
 #if !defined(__WIN32) && !defined(_WIN32) && !defined(__APPLE__)
         static const String LibPathPrefixes[] = {
@@ -30,6 +43,7 @@ namespace MobileGL::MG_Util::BackendLoader {
             for (const auto& name : names) {
                 String path_name = prefix + name;
                 if ((lib = dlopen(path_name.c_str(), flags))) {
+                    MGLOG_I("Loaded GL backend library: %s", path_name.c_str());
                     return lib;
                 }
             }
@@ -438,13 +452,22 @@ namespace MobileGL::MG_Util::BackendLoader {
     }
 
     void AcquireEGLFunctions(MG_External::EGLFunctionsTable& funcs) {
-        Vector<String> eglLibNames = {"libEGL.so"};
+        void* eglLib = nullptr;
         if (UseRetraceAngle()) {
-            OpenLib({"libGLESv2_angle.so"});
-            eglLibNames = {"libEGL_angle.so", "libEGL.so"};
+            void* glesLib = OpenLib(AngleLibNames("libGLESv2_angle.so"));
+            if (!glesLib) {
+                MGLOG_E("Failed to open ANGLE libGLESv2_angle.so");
+                return;
+            }
+            eglLib = OpenLib(AngleLibNames("libEGL_angle.so"));
+            if (!eglLib) {
+                MGLOG_E("Failed to open ANGLE libEGL_angle.so");
+                return;
+            }
+        } else {
+            eglLib = OpenLib({"libEGL.so"});
         }
 
-        void* eglLib = OpenLib(eglLibNames);
         if (!eglLib) {
             MGLOG_E("Failed to open EGL library");
             return;
