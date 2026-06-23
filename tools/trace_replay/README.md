@@ -152,3 +152,5 @@ adb exec-out run-as $PKG cat files/trace-replay/output/openra-diff.png > openra-
 
 For the Vulkan backend, build and install `:app:assembleMagmaTraceDebug`, set
 `PKG=top.mobilegl.plugin.magma.trace`, and pass `--es backend DirectVulkan`.
+DirectGLES also renders to the Activity surface by default; pass
+`--ez use_pbuffer true` to use the offscreen pbuffer path.

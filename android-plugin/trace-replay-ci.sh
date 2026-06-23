@@ -26,10 +26,13 @@ Usage:
     --crop-y N \
     --crop-width N \
     --crop-height N \
+    [--use-pbuffer] \
     --timeout-seconds N
 
 Set MOBILEGL_RETRACE_USE_ANGLE=1 to run DirectGLES replay with packaged ANGLE
 instead of the device system GLES driver.
+Set MOBILEGL_RETRACE_USE_PBUFFER=1 or pass --use-pbuffer to run DirectGLES
+against an offscreen EGL pbuffer instead of the Activity surface.
 EOF
 }
 
@@ -72,6 +75,7 @@ crop_x=""
 crop_y=""
 crop_width=""
 crop_height=""
+use_pbuffer=0
 timeout_seconds=""
 
 while [ "$#" -gt 0 ]; do
@@ -102,6 +106,7 @@ while [ "$#" -gt 0 ]; do
     --crop-y) crop_y="$(next_arg "$@")"; shift 2 ;;
     --crop-width) crop_width="$(next_arg "$@")"; shift 2 ;;
     --crop-height) crop_height="$(next_arg "$@")"; shift 2 ;;
+    --use-pbuffer) use_pbuffer=1; shift 1 ;;
     --timeout-seconds) timeout_seconds="$(next_arg "$@")"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) die "unknown argument: $1" ;;
@@ -201,6 +206,9 @@ run_retrace() {
   if [ "${MOBILEGL_RETRACE_USE_ANGLE:-}" = "1" ] && [ "${backend}" = "DirectGLES" ]; then
     use_angle=1
   fi
+  if [ "${MOBILEGL_RETRACE_USE_PBUFFER:-}" = "1" ] && [ "${backend}" = "DirectGLES" ]; then
+    use_pbuffer=1
+  fi
 
   mkdir -p "${result_dir}"
   "${ADB}" install -r "${apk_file}"
@@ -216,6 +224,9 @@ run_retrace() {
   fi
   if [ "${use_angle}" -eq 1 ]; then
     set -- "$@" --ez use_angle true
+  fi
+  if [ "${use_pbuffer}" -eq 1 ] && [ "${backend}" = "DirectGLES" ]; then
+    set -- "$@" --ez use_pbuffer true
   fi
   set -- "$@" \
     --es output_dir "${app_dir}/output" \

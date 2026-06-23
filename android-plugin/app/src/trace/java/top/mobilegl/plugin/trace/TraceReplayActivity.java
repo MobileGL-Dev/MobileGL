@@ -112,7 +112,8 @@ public final class TraceReplayActivity extends Activity {
                 request.cropWidth,
                 request.cropHeight,
                 request.angleLibraryDir,
-                request.useAngle
+                request.useAngle,
+                request.usePbuffer
         );
         Log.i(TAG, result.toString());
         TraceReplayResult finalResult = result;
@@ -140,7 +141,8 @@ public final class TraceReplayActivity extends Activity {
             int cropWidth,
             int cropHeight,
             String angleLibraryDir,
-            boolean useAngle
+            boolean useAngle,
+            boolean usePbuffer
     );
 
     private static final class TraceReplayRequest {
@@ -161,6 +163,7 @@ public final class TraceReplayActivity extends Activity {
         final int cropHeight;
         final String angleLibraryDir;
         final boolean useAngle;
+        final boolean usePbuffer;
 
         private TraceReplayRequest(
                 String tracePath,
@@ -179,7 +182,8 @@ public final class TraceReplayActivity extends Activity {
                 int cropWidth,
                 int cropHeight,
                 String angleLibraryDir,
-                boolean useAngle
+                boolean useAngle,
+                boolean usePbuffer
         ) {
             this.tracePath = tracePath;
             this.goldenPath = goldenPath;
@@ -198,6 +202,7 @@ public final class TraceReplayActivity extends Activity {
             this.cropHeight = cropHeight;
             this.angleLibraryDir = angleLibraryDir;
             this.useAngle = useAngle;
+            this.usePbuffer = usePbuffer;
         }
 
         static TraceReplayRequest from(Intent intent, File filesDir, String nativeLibraryDir, String defaultBackend) {
@@ -220,7 +225,8 @@ public final class TraceReplayActivity extends Activity {
                     intent.getIntExtra("crop_width", 0),
                     intent.getIntExtra("crop_height", 0),
                     readString(intent, "angle_library_dir", nativeLibraryDir),
-                    intent.getBooleanExtra("use_angle", false)
+                    intent.getBooleanExtra("use_angle", false),
+                    intent.getBooleanExtra("use_pbuffer", false)
             );
         }
 

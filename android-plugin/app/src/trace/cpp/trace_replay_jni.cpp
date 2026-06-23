@@ -99,7 +99,8 @@ Java_top_mobilegl_plugin_trace_TraceReplayActivity_nativeRunTraceReplay(JNIEnv* 
                                                                         jint cropWidth,
                                                                         jint cropHeight,
                                                                         jstring angleLibraryDir,
-                                                                        jboolean useAngle) {
+                                                                        jboolean useAngle,
+                                                                        jboolean usePbuffer) {
     mobilegl_trace::Request request;
     request.tracePath = ToString(env, tracePath);
     request.goldenPath = ToString(env, goldenPath);
@@ -121,10 +122,13 @@ Java_top_mobilegl_plugin_trace_TraceReplayActivity_nativeRunTraceReplay(JNIEnv* 
     request.cropWidth = cropWidth;
     request.cropHeight = cropHeight;
     request.useAngle = useAngle == JNI_TRUE;
+    request.usePbuffer = usePbuffer == JNI_TRUE;
 
     ScopedTraceReplayState replayState;
     mobilegl_trace_set_requested_size(request.width, request.height);
-    const bool needsNativeWindow = request.backend == "DirectVulkan";
+    const bool needsNativeWindow =
+        request.backend == "DirectVulkan" ||
+        (request.backend == "DirectGLES" && !request.usePbuffer);
     ANativeWindow *window = needsNativeWindow && surface != nullptr ? ANativeWindow_fromSurface(env, surface) : nullptr;
     mobilegl_trace_set_native_window(window);
     if (window != nullptr) {

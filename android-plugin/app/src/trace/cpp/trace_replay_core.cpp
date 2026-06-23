@@ -814,6 +814,7 @@ bool WriteResultJson(const Request& request, const Result& result) {
     file << "  \"ssim\": " << result.ssim << ",\n";
     file << "  \"ssimThreshold\": " << request.ssimThreshold << ",\n";
     file << "  \"useAngle\": " << (UseAngleForRequest(request) ? "true" : "false") << ",\n";
+    file << "  \"usePbuffer\": " << (request.usePbuffer ? "true" : "false") << ",\n";
     file << "  \"mismatchPixels\": " << result.mismatchPixels << "\n";
     file << "}\n";
     return true;

@@ -34,6 +34,7 @@ struct Request {
     int cropHeight = 0;
     double ssimThreshold = 0.99;
     bool useAngle = false;
+    bool usePbuffer = false;
 };
 
 struct Result {

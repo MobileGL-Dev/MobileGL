@@ -38,6 +38,7 @@ crop_y        optional compare crop y
 crop_width    optional compare crop width
 crop_height   optional compare crop height
 use_angle     optional boolean; DirectGLES uses packaged ANGLE when true
+use_pbuffer   optional boolean; DirectGLES uses an offscreen EGL pbuffer when true
 angle_library_dir optional directory containing libEGL_angle.so and libGLESv2_angle.so; defaults to the APK native library directory
 ```
 
@@ -46,10 +47,10 @@ Implementation notes:
 - The trace APK builds independently from FCL and can be launched with `adb shell am start`.
 - The native runner validates inputs, sets `MOBILEGL_BACKEND_TYPE`, loads `libMobileGL.so`, runs apitrace GL retrace, writes `actual.png`, and writes `result.json`.
 - The runner uses a MobileGL-backed EGL window-system shim. GLX calls in PC traces are consumed by apitrace's GLX retrace frontend and mapped onto this EGL shim; the Android runner does not require or call a MobileGL GLX implementation.
-- `DirectGLES` replays on an EGL pbuffer by default, avoiding Android `SurfaceView` lifetime coupling. `DirectVulkan` still uses the Activity surface because it needs a native window-backed Vulkan swapchain.
+- `DirectGLES` and `DirectVulkan` replay on the Activity `SurfaceView` by default. DirectGLES can still use the old offscreen EGL pbuffer path by passing `use_pbuffer=true`.
 - Golden comparison is implemented in native C++ with libpng RGBA decode and SSIM validation. The Java Activity only passes arguments and displays the native result, so the replay/compare core is not tied to Android UI or Bitmap APIs and can be ported to Linux.
 - The plugin profile still excludes `libtrace_replay_runner.so`; normal plugin APK behavior is preserved.
-- Set `MOBILEGL_RETRACE_USE_ANGLE=1` when running `trace-replay-ci.sh` to pass `use_angle=true` for DirectGLES. The APK must include `libEGL_angle.so` and `libGLESv2_angle.so` under its x86_64 native libraries. The Activity passes Android's `nativeLibraryDir` to native code as `MOBILEGL_RETRACE_ANGLE_DIR`.
+- Set `MOBILEGL_RETRACE_USE_ANGLE=1` when running `trace-replay-ci.sh` to pass `use_angle=true` for DirectGLES. Set `MOBILEGL_RETRACE_USE_PBUFFER=1` or pass `--use-pbuffer` to keep DirectGLES offscreen. The APK must include `libEGL_angle.so` and `libGLESv2_angle.so` under its x86_64 native libraries. The Activity passes Android's `nativeLibraryDir` to native code as `MOBILEGL_RETRACE_ANGLE_DIR`.
 
 Example core-profile trace smoke command for a debug trace APK:
 
