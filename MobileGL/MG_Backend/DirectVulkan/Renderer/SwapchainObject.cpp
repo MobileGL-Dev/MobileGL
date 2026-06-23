@@ -184,6 +184,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                                        swapchainCaps.minImageExtent.height,
                                                        swapchainCaps.maxImageExtent.height);
         }
+        const VkExtent2D defaultFramebufferExtent = createInfo.imageExtent;
         if (swapchainCaps.currentTransform == VK_SURFACE_TRANSFORM_ROTATE_90_BIT_KHR ||
             swapchainCaps.currentTransform == VK_SURFACE_TRANSFORM_ROTATE_270_BIT_KHR) {
             std::swap(createInfo.imageExtent.width, createInfo.imageExtent.height);
@@ -254,10 +255,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
         // Properly initialize Default FBO here
         auto& defaultFBOInfo = MG_Impl::GLImpl::FramebufferImpl::pDefaultFramebufferInfo;
-        const Int extentWidth = static_cast<Int>(createInfo.imageExtent.width);
-        const Int extentHeight = static_cast<Int>(createInfo.imageExtent.height);
+        const Int extentWidth = static_cast<Int>(defaultFramebufferExtent.width);
+        const Int extentHeight = static_cast<Int>(defaultFramebufferExtent.height);
         const SizeT defaultAttachmentByteSize =
-            static_cast<SizeT>(createInfo.imageExtent.width) * static_cast<SizeT>(createInfo.imageExtent.height) * 4;
+            static_cast<SizeT>(defaultFramebufferExtent.width) *
+            static_cast<SizeT>(defaultFramebufferExtent.height) * 4;
 
         auto* colorTex = static_cast<MG_State::GLState::TextureObject2D*>(defaultFBOInfo->colorAttachment.get());
         colorTex->AllocateStorage(

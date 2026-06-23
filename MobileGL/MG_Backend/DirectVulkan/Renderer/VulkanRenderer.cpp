@@ -90,17 +90,53 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         return requestedAlpha;
     }
 
-    static void ApplyGLViewportState(VkCommandBuffer commandBuffer, const IntVec2& fallbackExtent) {
+    static Bool IsQuarterTurnPreTransform(VkSurfaceTransformFlagBitsKHR preTransform) {
+        return preTransform == VK_SURFACE_TRANSFORM_ROTATE_90_BIT_KHR ||
+               preTransform == VK_SURFACE_TRANSFORM_ROTATE_270_BIT_KHR;
+    }
+
+    static IntVec2 ResolveDefaultFramebufferLogicalExtent(VkSurfaceTransformFlagBitsKHR preTransform,
+                                                          const IntVec2& rawExtent) {
+        if (IsQuarterTurnPreTransform(preTransform)) {
+            return {rawExtent.y(), rawExtent.x()};
+        }
+        return rawExtent;
+    }
+
+    static Int ScaleFramebufferCoordinate(Int value, Int fromExtent, Int toExtent) {
+        if (fromExtent <= 0 || toExtent <= 0) {
+            return value;
+        }
+        return static_cast<Int>((static_cast<Int64>(value) * toExtent + fromExtent / 2) / fromExtent);
+    }
+
+    static void ApplyGLViewportState(VkCommandBuffer commandBuffer,
+                                     const IntVec2& framebufferExtent,
+                                     VkSurfaceTransformFlagBitsKHR preTransform,
+                                     Bool isDefaultFramebuffer) {
         const IntVec4& viewportState = MG_State::pGLContext->GetViewport();
         const FloatVec2& depthRange = MG_State::pGLContext->GetDepthRange();
+        const IntVec2 logicalExtent = isDefaultFramebuffer
+            ? ResolveDefaultFramebufferLogicalExtent(preTransform, framebufferExtent)
+            : framebufferExtent;
+
+        Int viewportX = viewportState.x();
+        Int viewportY = viewportState.y();
+        Int viewportWidth = viewportState.z() > 0 ? viewportState.z() : logicalExtent.x();
+        Int viewportHeight = viewportState.w() > 0 ? viewportState.w() : logicalExtent.y();
+
+        if (isDefaultFramebuffer && IsQuarterTurnPreTransform(preTransform)) {
+            viewportX = ScaleFramebufferCoordinate(viewportX, logicalExtent.x(), framebufferExtent.x());
+            viewportY = ScaleFramebufferCoordinate(viewportY, logicalExtent.y(), framebufferExtent.y());
+            viewportWidth = ScaleFramebufferCoordinate(viewportWidth, logicalExtent.x(), framebufferExtent.x());
+            viewportHeight = ScaleFramebufferCoordinate(viewportHeight, logicalExtent.y(), framebufferExtent.y());
+        }
 
         VkViewport viewport{};
-        viewport.x = static_cast<float>(viewportState.x());
-        viewport.y = static_cast<float>(viewportState.y());
-        viewport.width =
-            static_cast<float>(viewportState.z() > 0 ? viewportState.z() : fallbackExtent.x());
-        viewport.height =
-            static_cast<float>(viewportState.w() > 0 ? viewportState.w() : fallbackExtent.y());
+        viewport.x = static_cast<float>(viewportX);
+        viewport.y = static_cast<float>(viewportY);
+        viewport.width = static_cast<float>(viewportWidth);
+        viewport.height = static_cast<float>(viewportHeight);
         viewport.minDepth = depthRange.x();
         viewport.maxDepth = depthRange.y();
         vkCmdSetViewport(commandBuffer, 0, 1, &viewport);
@@ -159,6 +195,33 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         scissor.extent = {
             static_cast<Uint32>(std::max<Int>(0, x1 - x0)),
             static_cast<Uint32>(std::max<Int>(0, y1 - y0)),
+        };
+        return scissor;
+    }
+
+    static VkRect2D MakeDefaultFramebufferScissorRect(const IntVec4& scissorBox,
+                                                      const IntVec2& framebufferExtent,
+                                                      VkSurfaceTransformFlagBitsKHR preTransform) {
+        if (!IsQuarterTurnPreTransform(preTransform)) {
+            return MakeClampedScissorRect(scissorBox, framebufferExtent);
+        }
+
+        const IntVec2 logicalExtent = ResolveDefaultFramebufferLogicalExtent(preTransform, framebufferExtent);
+        const Int logicalX0 = std::max<Int>(0, scissorBox.x());
+        const Int logicalY0 = std::max<Int>(0, scissorBox.y());
+        const Int logicalX1 = std::min<Int>(logicalExtent.x(), scissorBox.x() + std::max<Int>(0, scissorBox.z()));
+        const Int logicalY1 = std::min<Int>(logicalExtent.y(), scissorBox.y() + std::max<Int>(0, scissorBox.w()));
+
+        const Int rawX0 = ScaleFramebufferCoordinate(logicalX0, logicalExtent.x(), framebufferExtent.x());
+        const Int rawY0 = ScaleFramebufferCoordinate(logicalY0, logicalExtent.y(), framebufferExtent.y());
+        const Int rawX1 = ScaleFramebufferCoordinate(logicalX1, logicalExtent.x(), framebufferExtent.x());
+        const Int rawY1 = ScaleFramebufferCoordinate(logicalY1, logicalExtent.y(), framebufferExtent.y());
+
+        VkRect2D scissor{};
+        scissor.offset = {std::max<Int>(0, rawX0), std::max<Int>(0, rawY0)};
+        scissor.extent = {
+            static_cast<Uint32>(std::max<Int>(0, rawX1 - rawX0)),
+            static_cast<Uint32>(std::max<Int>(0, rawY1 - rawY0)),
         };
         return scissor;
     }
@@ -1410,10 +1473,74 @@ void main() {
                 case VK_FORMAT_B8G8R8A8_UNORM:
                 case VK_FORMAT_B8G8R8A8_SNORM:
                 case VK_FORMAT_B8G8R8A8_SRGB:
+                case VK_FORMAT_B8G8R8A8_USCALED:
+                case VK_FORMAT_B8G8R8A8_SSCALED:
                     return true;
                 default:
                     return false;
             }
+        }
+
+        static VkExtent2D GetPresentedDumpExtent(VkExtent2D rawExtent,
+                                                 VkSurfaceTransformFlagBitsKHR preTransform) {
+            if (IsQuarterTurnPreTransform(preTransform)) {
+                return {rawExtent.height, rawExtent.width};
+            }
+            return rawExtent;
+        }
+
+        static const Uint8* GetPresentedDumpPixel(const Uint8* rawPixels,
+                                                  VkExtent2D rawExtent,
+                                                  VkSurfaceTransformFlagBitsKHR preTransform,
+                                                  Uint32 presentedX,
+                                                  Uint32 presentedY) {
+            Uint32 rawX = presentedX;
+            Uint32 rawY = presentedY;
+            switch (preTransform) {
+                case VK_SURFACE_TRANSFORM_ROTATE_90_BIT_KHR:
+                    rawX = rawExtent.width - 1 - presentedY;
+                    rawY = presentedX;
+                    break;
+                case VK_SURFACE_TRANSFORM_ROTATE_180_BIT_KHR:
+                    rawX = rawExtent.width - 1 - presentedX;
+                    rawY = rawExtent.height - 1 - presentedY;
+                    break;
+                case VK_SURFACE_TRANSFORM_ROTATE_270_BIT_KHR:
+                    rawX = presentedY;
+                    rawY = rawExtent.height - 1 - presentedX;
+                    break;
+                default:
+                    break;
+            }
+            return rawPixels + (static_cast<SizeT>(rawY) * rawExtent.width + rawX) * 4;
+        }
+
+        static Bool WritePresentedDumpPpm(const char* path,
+                                          const Uint8* rawPixels,
+                                          VkExtent2D rawExtent,
+                                          VkFormat rawFormat,
+                                          VkSurfaceTransformFlagBitsKHR preTransform) {
+            FILE* dump = std::fopen(path, "wb");
+            if (dump == nullptr) {
+                return false;
+            }
+
+            const VkExtent2D presentedExtent = GetPresentedDumpExtent(rawExtent, preTransform);
+            const Bool presentIsBgra = IsBgraVkFormat(rawFormat);
+            std::fprintf(dump, "P6\n%u %u\n255\n", presentedExtent.width, presentedExtent.height);
+            for (Uint32 y = 0; y < presentedExtent.height; ++y) {
+                for (Uint32 x = 0; x < presentedExtent.width; ++x) {
+                    const Uint8* p = GetPresentedDumpPixel(rawPixels, rawExtent, preTransform, x, y);
+                    const Uint8 rgb[3] = {
+                        presentIsBgra ? p[2] : p[0],
+                        p[1],
+                        presentIsBgra ? p[0] : p[2],
+                    };
+                    std::fwrite(rgb, 1, sizeof(rgb), dump);
+                }
+            }
+            std::fclose(dump);
+            return true;
         }
 
         static SizeT AlignPixelRow(SizeT rowBytes, Int alignment) {
@@ -3045,7 +3172,8 @@ void main() {
             MOBILEGL_ASSERT(idxUploadOk, "SetupDraw skipped: failed to upload index buffer");
         }
 
-        ApplyGLViewportState(frame.commandBuffer, renderPassEntry->extent);
+        ApplyGLViewportState(frame.commandBuffer, renderPassEntry->extent,
+                             m_swapchainObject.GetPreTransform(), drawFbo->IsDefaultFramebuffer());
         ApplyBlendConstants(frame.commandBuffer);
         ApplyPolygonOffsetState(frame.commandBuffer);
         ApplyLineWidthState(frame.commandBuffer);
@@ -3055,7 +3183,10 @@ void main() {
         VkRect2D scissor{};
         if (scissorEnabled) {
             const auto& scissorBox = MG_State::pGLContext->GetScissorBox();
-            scissor = MakeClampedScissorRect(scissorBox, renderPassEntry->extent);
+            scissor = drawFbo->IsDefaultFramebuffer()
+                ? MakeDefaultFramebufferScissorRect(scissorBox, renderPassEntry->extent,
+                                                    m_swapchainObject.GetPreTransform())
+                : MakeClampedScissorRect(scissorBox, renderPassEntry->extent);
         } else {
             scissor.offset = {0, 0};
             scissor.extent = { (Uint)renderPassEntry->extent.x(), (Uint)renderPassEntry->extent.y() };
@@ -3523,7 +3654,8 @@ void main() {
         const Bool ok = VkRenderPassManager::BeginRenderPass(frame.commandBuffer, renderPassEntry);
         MOBILEGL_ASSERT(ok, "%s: BeginRenderPass failed", __func__);
 
-        ApplyGLViewportState(frame.commandBuffer, renderPassEntry.extent);
+        ApplyGLViewportState(frame.commandBuffer, renderPassEntry.extent,
+                             m_swapchainObject.GetPreTransform(), drawIsDefaultFbo);
 
         VkRect2D scissor{};
         scissor.offset = {0, 0};
@@ -5102,25 +5234,9 @@ void main() {
                              presentStatsExtent.width, presentStatsExtent.height);
             }
             if (shouldDumpPresent) {
-                FILE* dump = std::fopen(presentDumpPath, "wb");
-                if (dump != nullptr) {
-                    const VkFormat presentFormat = m_swapchainObject.GetSurfaceFormat().format;
-                    const Bool presentIsBgra = presentFormat == VK_FORMAT_B8G8R8A8_UNORM ||
-                                               presentFormat == VK_FORMAT_B8G8R8A8_SRGB ||
-                                               presentFormat == VK_FORMAT_B8G8R8A8_SNORM ||
-                                               presentFormat == VK_FORMAT_B8G8R8A8_USCALED ||
-                                               presentFormat == VK_FORMAT_B8G8R8A8_SSCALED;
-                    std::fprintf(dump, "P6\n%u %u\n255\n", presentStatsExtent.width, presentStatsExtent.height);
-                    for (SizeT i = 0; i < pixelCount; ++i) {
-                        const Uint8* p = pixels + i * 4;
-                        const Uint8 rgb[3] = {
-                            presentIsBgra ? p[2] : p[0],
-                            p[1],
-                            presentIsBgra ? p[0] : p[2],
-                        };
-                        std::fwrite(rgb, 1, sizeof(rgb), dump);
-                    }
-                    std::fclose(dump);
+                const VkFormat presentFormat = m_swapchainObject.GetSurfaceFormat().format;
+                if (WritePresentedDumpPpm(presentDumpPath, pixels, presentStatsExtent, presentFormat,
+                                          m_swapchainObject.GetPreTransform())) {
                     if (PresentStatsEnabled()) {
                         std::fprintf(stderr, "MOBILEGL_PRESENT_DUMP_WRITTEN path=%s bytes=%zu\n",
                                      presentDumpPath, static_cast<SizeT>(pixelCount * 3));
