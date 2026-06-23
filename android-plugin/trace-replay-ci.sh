@@ -21,12 +21,11 @@ Usage:
     --target-call N \
     --width N \
     --height N \
-    --tolerance N \
+    --ssim-threshold N \
     --crop-x N \
     --crop-y N \
     --crop-width N \
     --crop-height N \
-    --fuzz-percent N \
     --timeout-seconds N
 
 Set MOBILEGL_RETRACE_USE_ANGLE=1 to run DirectGLES replay with packaged ANGLE
@@ -68,12 +67,11 @@ alternate_golden_path=""
 target_call=""
 width=""
 height=""
-tolerance=""
+ssim_threshold=""
 crop_x=""
 crop_y=""
 crop_width=""
 crop_height=""
-fuzz_percent=""
 timeout_seconds=""
 
 while [ "$#" -gt 0 ]; do
@@ -99,12 +97,11 @@ while [ "$#" -gt 0 ]; do
     --target-call) target_call="$(next_arg "$@")"; shift 2 ;;
     --width) width="$(next_arg "$@")"; shift 2 ;;
     --height) height="$(next_arg "$@")"; shift 2 ;;
-    --tolerance) tolerance="$(next_arg "$@")"; shift 2 ;;
+    --ssim-threshold) ssim_threshold="$(next_arg "$@")"; shift 2 ;;
     --crop-x) crop_x="$(next_arg "$@")"; shift 2 ;;
     --crop-y) crop_y="$(next_arg "$@")"; shift 2 ;;
     --crop-width) crop_width="$(next_arg "$@")"; shift 2 ;;
     --crop-height) crop_height="$(next_arg "$@")"; shift 2 ;;
-    --fuzz-percent) fuzz_percent="$(next_arg "$@")"; shift 2 ;;
     --timeout-seconds) timeout_seconds="$(next_arg "$@")"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) die "unknown argument: $1" ;;
@@ -123,12 +120,11 @@ require_value "${golden_path}" "--golden"
 require_value "${target_call}" "--target-call"
 require_value "${width}" "--width"
 require_value "${height}" "--height"
-require_value "${tolerance}" "--tolerance"
+require_value "${ssim_threshold}" "--ssim-threshold"
 require_value "${crop_x}" "--crop-x"
 require_value "${crop_y}" "--crop-y"
 require_value "${crop_width}" "--crop-width"
 require_value "${crop_height}" "--crop-height"
-require_value "${fuzz_percent}" "--fuzz-percent"
 require_value "${timeout_seconds}" "--timeout-seconds"
 
 test -f "${apk_file}" || die "APK does not exist: ${apk_file}"
@@ -228,12 +224,11 @@ run_retrace() {
     --el target_call "${target_call}" \
     --ei width "${width}" \
     --ei height "${height}" \
-    --ei tolerance "${tolerance}" \
+    --es ssim_threshold "${ssim_threshold}" \
     --ei crop_x "${crop_x}" \
     --ei crop_y "${crop_y}" \
     --ei crop_width "${crop_width}" \
-    --ei crop_height "${crop_height}" \
-    --ei fuzz_percent "${fuzz_percent}"
+    --ei crop_height "${crop_height}"
   "${ADB}" shell "$@"
 
   app_exited=0

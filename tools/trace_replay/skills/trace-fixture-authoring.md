@@ -173,8 +173,7 @@ add_trace_replay_test_for_backends(case-name
         TARGET_CALL 0
         WIDTH 854
         HEIGHT 480
-        TOLERANCE 20
-        FUZZ_PERCENT 20)
+        SSIM_THRESHOLD 0.99)
 ```
 
 Optional crop:
@@ -191,13 +190,13 @@ Optional crop:
 Edit `.github/workflows/apk.yml` `TRACE_REPLAY_CASES`:
 
 ```text
-case-name|tools/trace_replay/fixtures/case-name.tgz|trace.trace|tools/trace_replay/fixtures/case-name.0000000000.png|0|854|480|20|0|0|0|0|20|900
+case-name|tools/trace_replay/fixtures/case-name.tgz|trace.trace|tools/trace_replay/fixtures/case-name.0000000000.png|0|854|480|0.99|0|0|0|0|900
 ```
 
 Field order:
 
 ```text
-case|trace archive|trace file|golden|target call|width|height|tolerance|crop x|crop y|crop width|crop height|fuzz percent|timeout seconds
+case|trace archive|trace file|golden|target call|width|height|ssim threshold|crop x|crop y|crop width|crop height|timeout seconds
 ```
 
 Update `tools/trace_replay/README.md` with one fixture sentence and one golden
@@ -236,12 +235,11 @@ cmake \
   -DTRACE_TARGET_CALL="$TARGET_CALL" \
   -DTRACE_WIDTH="$WIDTH" \
   -DTRACE_HEIGHT="$HEIGHT" \
-  -DTRACE_TOLERANCE=20 \
+  -DTRACE_SSIM_THRESHOLD=0.99 \
   -DTRACE_CROP_X=0 \
   -DTRACE_CROP_Y=0 \
   -DTRACE_CROP_WIDTH=0 \
   -DTRACE_CROP_HEIGHT=0 \
-  -DTRACE_FUZZ_PERCENT=20 \
   -DTRACE_OUTPUT_DIR="$WORK/$CASE/linux-DirectGLES" \
   -DTRACE_ARTIFACT_DIR="$WORK/$CASE/linux-artifacts" \
   -P "$REPO/tools/trace_replay/run_trace_case.cmake"
@@ -292,12 +290,11 @@ sh "$REPO/android-plugin/trace-replay-ci.sh" \
   --target-call "$TARGET_CALL" \
   --width "$WIDTH" \
   --height "$HEIGHT" \
-  --tolerance 20 \
+  --ssim-threshold 0.99 \
   --crop-x 0 \
   --crop-y 0 \
   --crop-width 0 \
   --crop-height 0 \
-  --fuzz-percent 20 \
   --timeout-seconds 900
 ```
 

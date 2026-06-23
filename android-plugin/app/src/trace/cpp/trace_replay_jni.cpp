@@ -93,12 +93,11 @@ Java_top_mobilegl_plugin_trace_TraceReplayActivity_nativeRunTraceReplay(JNIEnv* 
                                                                         jlong targetCall,
                                                                         jint width,
                                                                         jint height,
-                                                                        jint tolerance,
+                                                                        jdouble ssimThreshold,
                                                                         jint cropX,
                                                                         jint cropY,
                                                                         jint cropWidth,
                                                                         jint cropHeight,
-                                                                        jint fuzzPercent,
                                                                         jstring angleLibraryDir,
                                                                         jboolean useAngle) {
     mobilegl_trace::Request request;
@@ -116,12 +115,11 @@ Java_top_mobilegl_plugin_trace_TraceReplayActivity_nativeRunTraceReplay(JNIEnv* 
     request.targetCall = targetCall;
     request.width = width;
     request.height = height;
-    request.tolerance = tolerance;
+    request.ssimThreshold = ssimThreshold;
     request.cropX = cropX;
     request.cropY = cropY;
     request.cropWidth = cropWidth;
     request.cropHeight = cropHeight;
-    request.fuzzPercent = fuzzPercent;
     request.useAngle = useAngle == JNI_TRUE;
 
     ScopedTraceReplayState replayState;

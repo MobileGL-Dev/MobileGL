@@ -273,12 +273,11 @@ function(add_trace_replay_test CASE_NAME BACKEND)
             TARGET_CALL
             WIDTH
             HEIGHT
-            TOLERANCE
+            SSIM_THRESHOLD
             CROP_X
             CROP_Y
             CROP_WIDTH
-            CROP_HEIGHT
-            FUZZ_PERCENT)
+            CROP_HEIGHT)
     cmake_parse_arguments(TRACE_CASE "" "${oneValueArgs}" "" ${ARGN})
     foreach(required TRACE_ARCHIVE GOLDEN TARGET_CALL WIDTH HEIGHT)
         if(NOT TRACE_CASE_${required})
@@ -288,8 +287,8 @@ function(add_trace_replay_test CASE_NAME BACKEND)
     if(NOT TRACE_CASE_TRACE_FILE)
         set(TRACE_CASE_TRACE_FILE trace.trace)
     endif()
-    if(NOT TRACE_CASE_TOLERANCE)
-        set(TRACE_CASE_TOLERANCE 0)
+    if(NOT TRACE_CASE_SSIM_THRESHOLD)
+        set(TRACE_CASE_SSIM_THRESHOLD 0.99)
     endif()
     if(NOT TRACE_CASE_CROP_X)
         set(TRACE_CASE_CROP_X 0)
@@ -302,9 +301,6 @@ function(add_trace_replay_test CASE_NAME BACKEND)
     endif()
     if(NOT TRACE_CASE_CROP_HEIGHT)
         set(TRACE_CASE_CROP_HEIGHT 0)
-    endif()
-    if(NOT TRACE_CASE_FUZZ_PERCENT)
-        set(TRACE_CASE_FUZZ_PERCENT 20)
     endif()
     add_test(
             NAME MobileGLTraceReplay.${CASE_NAME}.${BACKEND}
@@ -320,12 +316,11 @@ function(add_trace_replay_test CASE_NAME BACKEND)
             -DTRACE_TARGET_CALL=${TRACE_CASE_TARGET_CALL}
             -DTRACE_WIDTH=${TRACE_CASE_WIDTH}
             -DTRACE_HEIGHT=${TRACE_CASE_HEIGHT}
-            -DTRACE_TOLERANCE=${TRACE_CASE_TOLERANCE}
+            -DTRACE_SSIM_THRESHOLD=${TRACE_CASE_SSIM_THRESHOLD}
             -DTRACE_CROP_X=${TRACE_CASE_CROP_X}
             -DTRACE_CROP_Y=${TRACE_CASE_CROP_Y}
             -DTRACE_CROP_WIDTH=${TRACE_CASE_CROP_WIDTH}
             -DTRACE_CROP_HEIGHT=${TRACE_CASE_CROP_HEIGHT}
-            -DTRACE_FUZZ_PERCENT=${TRACE_CASE_FUZZ_PERCENT}
             -DTRACE_OUTPUT_DIR=${CMAKE_CURRENT_BINARY_DIR}/${CASE_NAME}/${BACKEND}
             -DTRACE_ARTIFACT_DIR=${CMAKE_CURRENT_BINARY_DIR}/${CASE_NAME}/actual-images
             -P ${MOBILEGL_TRACE_ROOT}/run_trace_case.cmake)
@@ -350,12 +345,11 @@ add_trace_replay_test_for_backends(OpenRA
         TARGET_CALL 31249
         WIDTH 640
         HEIGHT 480
-        TOLERANCE 3072
         CROP_X 1
         CROP_Y 1
         CROP_WIDTH 638
         CROP_HEIGHT 478
-        FUZZ_PERCENT 20)
+)
 
 add_trace_replay_test_for_backends(minecraft-1.21.4-startup
         TRACE_ARCHIVE ${MOBILEGL_TRACE_ROOT}/fixtures/minecraft-1.21.4-startup.tgz
@@ -364,8 +358,7 @@ add_trace_replay_test_for_backends(minecraft-1.21.4-startup
         TARGET_CALL 92195
         WIDTH 854
         HEIGHT 480
-        TOLERANCE 4100
-        FUZZ_PERCENT 20)
+)
 
 add_trace_replay_test_for_backends(minecraft-1.21.4-main-menu
         TRACE_ARCHIVE ${MOBILEGL_TRACE_ROOT}/fixtures/minecraft-1.21.4-main-menu.tgz
@@ -374,8 +367,7 @@ add_trace_replay_test_for_backends(minecraft-1.21.4-main-menu
         TARGET_CALL 481787
         WIDTH 854
         HEIGHT 480
-        TOLERANCE 4100
-        FUZZ_PERCENT 20)
+)
 
 add_trace_replay_test_for_backends(minecraft-1.21.4-in-world
         TRACE_ARCHIVE ${MOBILEGL_TRACE_ROOT}/fixtures/minecraft-1.21.4-in-world.tgz
@@ -384,8 +376,7 @@ add_trace_replay_test_for_backends(minecraft-1.21.4-in-world
         TARGET_CALL 280000
         WIDTH 854
         HEIGHT 480
-        TOLERANCE 4100
-        FUZZ_PERCENT 20)
+)
 
 add_trace_replay_test_for_backends(minecraft-1.21.4-fabric-sodium-in-world
         TRACE_ARCHIVE ${MOBILEGL_TRACE_ROOT}/fixtures/minecraft-1.21.4-fabric-sodium-in-world.tgz
@@ -394,8 +385,7 @@ add_trace_replay_test_for_backends(minecraft-1.21.4-fabric-sodium-in-world
         TARGET_CALL 923340
         WIDTH 854
         HEIGHT 480
-        TOLERANCE 4100
-        FUZZ_PERCENT 20)
+)
 
 add_trace_replay_test_for_backends(minecraft-1.21.4-fabric-iris-bsl-in-world
         TRACE_ARCHIVE ${MOBILEGL_TRACE_ROOT}/fixtures/minecraft-1.21.4-fabric-iris-bsl-in-world.tgz
@@ -404,8 +394,7 @@ add_trace_replay_test_for_backends(minecraft-1.21.4-fabric-iris-bsl-in-world
         TARGET_CALL 110725
         WIDTH 854
         HEIGHT 480
-        TOLERANCE 4100
-        FUZZ_PERCENT 20)
+)
 
 add_trace_replay_test_for_backends(minecraft-1.21.4-fabric-iris-makeup-ultrafast-in-world
         TRACE_ARCHIVE ${MOBILEGL_TRACE_ROOT}/fixtures/minecraft-1.21.4-fabric-iris-makeup-ultrafast-in-world.tgz
@@ -414,8 +403,7 @@ add_trace_replay_test_for_backends(minecraft-1.21.4-fabric-iris-makeup-ultrafast
         TARGET_CALL 95322
         WIDTH 854
         HEIGHT 480
-        TOLERANCE 4100
-        FUZZ_PERCENT 20)
+)
 
 add_trace_replay_test_for_backends(minecraft-1.21.4-fabric-iris-super-duper-vanilla-in-world
         TRACE_ARCHIVE ${MOBILEGL_TRACE_ROOT}/fixtures/minecraft-1.21.4-fabric-iris-super-duper-vanilla-in-world.tgz
@@ -424,8 +412,7 @@ add_trace_replay_test_for_backends(minecraft-1.21.4-fabric-iris-super-duper-vani
         TARGET_CALL 141559
         WIDTH 854
         HEIGHT 480
-        TOLERANCE 4100
-        FUZZ_PERCENT 20)
+)
 
 add_trace_replay_test_for_backends(minecraft-1.21.4-fabric-iris-sundial-lite-in-world
         TRACE_ARCHIVE ${MOBILEGL_TRACE_ROOT}/fixtures/minecraft-1.21.4-fabric-iris-sundial-lite-in-world.tgz
@@ -434,8 +421,7 @@ add_trace_replay_test_for_backends(minecraft-1.21.4-fabric-iris-sundial-lite-in-
         TARGET_CALL 150023
         WIDTH 854
         HEIGHT 480
-        TOLERANCE 4100
-        FUZZ_PERCENT 20)
+)
 
 add_trace_replay_test_for_backends(minecraft-1.21.4-fabric-iris-complementary-reimagined-in-world
         TRACE_ARCHIVE ${MOBILEGL_TRACE_ROOT}/fixtures/minecraft-1.21.4-fabric-iris-complementary-reimagined-in-world.tgz
@@ -444,8 +430,7 @@ add_trace_replay_test_for_backends(minecraft-1.21.4-fabric-iris-complementary-re
         TARGET_CALL 151297
         WIDTH 854
         HEIGHT 480
-        TOLERANCE 4100
-        FUZZ_PERCENT 20)
+)
 
 add_trace_replay_test_for_backends(minecraft-1.21.4-fabric-iris-complementary-unbound-in-world
         TRACE_ARCHIVE ${MOBILEGL_TRACE_ROOT}/fixtures/minecraft-1.21.4-fabric-iris-complementary-unbound-in-world.tgz
@@ -454,8 +439,7 @@ add_trace_replay_test_for_backends(minecraft-1.21.4-fabric-iris-complementary-un
         TARGET_CALL 146559
         WIDTH 854
         HEIGHT 480
-        TOLERANCE 4100
-        FUZZ_PERCENT 20)
+)
 
 add_trace_replay_test_for_backends(minecraft-1.21.4-fabric-iris-mellow-in-world
         TRACE_ARCHIVE ${MOBILEGL_TRACE_ROOT}/fixtures/minecraft-1.21.4-fabric-iris-mellow-in-world.tgz
@@ -464,8 +448,7 @@ add_trace_replay_test_for_backends(minecraft-1.21.4-fabric-iris-mellow-in-world
         TARGET_CALL 96143
         WIDTH 854
         HEIGHT 480
-        TOLERANCE 4100
-        FUZZ_PERCENT 20)
+)
 
 add_trace_replay_test_for_backends(minecraft-1.21.4-fabric-iris-nostalgia-in-world
         TRACE_ARCHIVE ${MOBILEGL_TRACE_ROOT}/fixtures/minecraft-1.21.4-fabric-iris-nostalgia-in-world.tgz
@@ -475,8 +458,7 @@ add_trace_replay_test_for_backends(minecraft-1.21.4-fabric-iris-nostalgia-in-wor
         TARGET_CALL 153808
         WIDTH 854
         HEIGHT 480
-        TOLERANCE 4100
-        FUZZ_PERCENT 20)
+)
 
 add_trace_replay_test_for_backends(minecraft-1.21.4-fabric-iris-bliss-in-world
         TRACE_ARCHIVE ${MOBILEGL_TRACE_ROOT}/fixtures/minecraft-1.21.4-fabric-iris-bliss-in-world.tgz
@@ -485,8 +467,7 @@ add_trace_replay_test_for_backends(minecraft-1.21.4-fabric-iris-bliss-in-world
         TARGET_CALL 113511
         WIDTH 854
         HEIGHT 480
-        TOLERANCE 4100
-        FUZZ_PERCENT 20)
+)
 
 add_trace_replay_test_for_backends(minecraft-1.21.4-fabric-iris-chocapic-v6-lite-in-world
         TRACE_ARCHIVE ${MOBILEGL_TRACE_ROOT}/fixtures/minecraft-1.21.4-fabric-iris-chocapic-v6-lite-in-world.tgz
@@ -495,8 +476,7 @@ add_trace_replay_test_for_backends(minecraft-1.21.4-fabric-iris-chocapic-v6-lite
         TARGET_CALL 125124
         WIDTH 854
         HEIGHT 480
-        TOLERANCE 4100
-        FUZZ_PERCENT 20)
+)
 
 add_trace_replay_test_for_backends(minecraft-1.21.4-fabric-iris-iterationt-in-world
         TRACE_ARCHIVE ${MOBILEGL_TRACE_ROOT}/fixtures/minecraft-1.21.4-fabric-iris-iterationt-in-world.tgz
@@ -505,8 +485,7 @@ add_trace_replay_test_for_backends(minecraft-1.21.4-fabric-iris-iterationt-in-wo
         TARGET_CALL 1173280
         WIDTH 854
         HEIGHT 480
-        TOLERANCE 4100
-        FUZZ_PERCENT 20)
+)
 
 add_trace_replay_test_for_backends(minecraft-1.21.4-fabric-iris-iterationt-nodsa-in-world
         TRACE_ARCHIVE ${MOBILEGL_TRACE_ROOT}/fixtures/minecraft-1.21.4-fabric-iris-iterationt-nodsa-in-world.tgz
@@ -515,8 +494,7 @@ add_trace_replay_test_for_backends(minecraft-1.21.4-fabric-iris-iterationt-nodsa
         TARGET_CALL 1606997
         WIDTH 854
         HEIGHT 480
-        TOLERANCE 4100
-        FUZZ_PERCENT 20)
+)
 
 add_trace_replay_test_for_backends(minecraft-1.21.4-fabric-iris-photon-v1.1-in-world
         TRACE_ARCHIVE ${MOBILEGL_TRACE_ROOT}/fixtures/minecraft-1.21.4-fabric-iris-photon-v1.1-in-world.tgz
@@ -525,5 +503,4 @@ add_trace_replay_test_for_backends(minecraft-1.21.4-fabric-iris-photon-v1.1-in-w
         TARGET_CALL 159866
         WIDTH 854
         HEIGHT 480
-        TOLERANCE 4100
-        FUZZ_PERCENT 20)
+)

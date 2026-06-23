@@ -32,8 +32,7 @@ struct Request {
     int cropY = 0;
     int cropWidth = 0;
     int cropHeight = 0;
-    int tolerance = 0;
-    int fuzzPercent = 20;
+    double ssimThreshold = 0.99;
     bool useAngle = false;
 };
 
@@ -45,6 +44,7 @@ struct Result {
     std::string actualPath;
     std::string diffPath;
     std::string matchedGoldenPath;
+    double ssim = -1.0;
     long long mismatchPixels = -1;
 };
 

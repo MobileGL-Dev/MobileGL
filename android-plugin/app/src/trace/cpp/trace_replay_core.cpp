@@ -14,6 +14,7 @@
 #include <cstring>
 #include <exception>
 #include <fstream>
+#include <iomanip>
 #include <limits>
 #include <memory>
 #include <sstream>
@@ -520,7 +521,6 @@ bool WriteDifferenceImage(const Result& result,
                           int y0,
                           int compareWidth,
                           int compareHeight,
-                          int fuzz,
                           std::string& error) {
     if (result.diffPath.empty()) {
         return true;
@@ -548,7 +548,7 @@ bool WriteDifferenceImage(const Result& result,
                               ChannelValue(golden, imageX, imageY, 1));
             int db = std::abs(ChannelValue(actual, imageX, imageY, 2) -
                               ChannelValue(golden, imageX, imageY, 2));
-            bool different = dr > fuzz || dg > fuzz || db > fuzz;
+            bool different = dr != 0 || dg != 0 || db != 0;
             std::uint8_t* dst = diff.pixels.data() +
                                 (static_cast<std::size_t>(imageY) * diff.width + imageX) * 4;
             if (different) {
@@ -569,17 +569,71 @@ bool WriteDifferenceImage(const Result& result,
 struct GoldenComparison {
     std::string path;
     RgbaImage image;
-    long long mismatchPixels = std::numeric_limits<long long>::max();
+    double ssim = -1.0;
+    long long mismatchPixels = 0;
     int x0 = 0;
     int y0 = 0;
     int compareWidth = 0;
     int compareHeight = 0;
 };
 
+double ComputeChannelSsim(const RgbaImage& actual,
+                          const RgbaImage& golden,
+                          int x0,
+                          int y0,
+                          int compareWidth,
+                          int compareHeight,
+                          unsigned channel) {
+    const double count = static_cast<double>(compareWidth) * static_cast<double>(compareHeight);
+    double sumA = 0.0;
+    double sumG = 0.0;
+    double sumAA = 0.0;
+    double sumGG = 0.0;
+    double sumAG = 0.0;
+
+    for (int y = 0; y < compareHeight; ++y) {
+        for (int x = 0; x < compareWidth; ++x) {
+            const double a = ChannelValue(actual, x0 + x, y0 + y, channel);
+            const double g = ChannelValue(golden, x0 + x, y0 + y, channel);
+            sumA += a;
+            sumG += g;
+            sumAA += a * a;
+            sumGG += g * g;
+            sumAG += a * g;
+        }
+    }
+
+    const double meanA = sumA / count;
+    const double meanG = sumG / count;
+    const double varianceA = std::max(0.0, sumAA / count - meanA * meanA);
+    const double varianceG = std::max(0.0, sumGG / count - meanG * meanG);
+    const double covariance = sumAG / count - meanA * meanG;
+
+    constexpr double kC1 = 6.5025;  // (0.01 * 255)^2
+    constexpr double kC2 = 58.5225; // (0.03 * 255)^2
+    const double luminance = (2.0 * meanA * meanG + kC1) /
+                             (meanA * meanA + meanG * meanG + kC1);
+    const double contrastStructure = (2.0 * covariance + kC2) /
+                                     (varianceA + varianceG + kC2);
+    return luminance * contrastStructure;
+}
+
+double ComputeRgbSsim(const RgbaImage& actual,
+                      const RgbaImage& golden,
+                      int x0,
+                      int y0,
+                      int compareWidth,
+                      int compareHeight) {
+    double sum = 0.0;
+    for (unsigned channel = 0; channel < 3; ++channel) {
+        sum += ComputeChannelSsim(actual, golden, x0, y0, compareWidth, compareHeight, channel);
+    }
+    return sum / 3.0;
+}
+
 bool CompareAgainstOneGolden(const Request& request,
                              const RgbaImage& actual,
                              const std::string& goldenPath,
-                             int fuzz,
                              GoldenComparison& comparison,
                              std::string& error) {
     if (!Exists(goldenPath)) {
@@ -616,27 +670,28 @@ bool CompareAgainstOneGolden(const Request& request,
         return false;
     }
 
-    long long mismatch = 0;
+    long long exactMismatch = 0;
     for (int y = 0; y < compareHeight; ++y) {
         for (int x = 0; x < compareWidth; ++x) {
             bool different = false;
             for (unsigned c = 0; c < 3; ++c) {
                 int a = ChannelValue(actual, x0 + x, y0 + y, c);
                 int g = ChannelValue(golden, x0 + x, y0 + y, c);
-                if (std::abs(a - g) > fuzz) {
+                if (a != g) {
                     different = true;
                     break;
                 }
             }
             if (different) {
-                ++mismatch;
+                ++exactMismatch;
             }
         }
     }
 
     comparison.path = goldenPath;
     comparison.image = std::move(golden);
-    comparison.mismatchPixels = mismatch;
+    comparison.ssim = ComputeRgbSsim(actual, comparison.image, x0, y0, compareWidth, compareHeight);
+    comparison.mismatchPixels = exactMismatch;
     comparison.x0 = x0;
     comparison.y0 = y0;
     comparison.compareWidth = compareWidth;
@@ -659,6 +714,7 @@ bool CompareWithGolden(const Request& request, Result& result) {
         result.passed = true;
         result.statusCode = STATUS_OK;
         result.message = "retrace completed; golden_path was not provided";
+        result.ssim = 1.0;
         result.mismatchPixels = 0;
         return true;
     }
@@ -671,18 +727,17 @@ bool CompareWithGolden(const Request& request, Result& result) {
         return false;
     }
 
-    const int fuzz = std::max(0, std::min(100, request.fuzzPercent)) * 255 / 100;
     GoldenComparison bestComparison;
     std::string comparisonError;
     bool hasComparison = false;
     for (const auto& goldenPath : goldenPaths) {
         GoldenComparison comparison;
         std::string error;
-        if (!CompareAgainstOneGolden(request, actual, goldenPath, fuzz, comparison, error)) {
+        if (!CompareAgainstOneGolden(request, actual, goldenPath, comparison, error)) {
             comparisonError = error;
             continue;
         }
-        if (!hasComparison || comparison.mismatchPixels < bestComparison.mismatchPixels) {
+        if (!hasComparison || comparison.ssim > bestComparison.ssim) {
             bestComparison = std::move(comparison);
             hasComparison = true;
         }
@@ -696,20 +751,22 @@ bool CompareWithGolden(const Request& request, Result& result) {
 
     std::string diffError;
     if (!WriteDifferenceImage(result, actual, bestComparison.image, bestComparison.x0, bestComparison.y0,
-                              bestComparison.compareWidth, bestComparison.compareHeight, fuzz, diffError)) {
+                              bestComparison.compareWidth, bestComparison.compareHeight, diffError)) {
         result.statusCode = STATUS_IO_ERROR;
         result.message = diffError.empty() ? "failed to write diff PNG" : diffError;
         return false;
     }
 
+    result.ssim = bestComparison.ssim;
     result.mismatchPixels = bestComparison.mismatchPixels;
     result.matchedGoldenPath = bestComparison.path;
-    result.passed = bestComparison.mismatchPixels <= request.tolerance;
+    result.passed = bestComparison.ssim >= request.ssimThreshold;
     result.statusCode = result.passed ? STATUS_OK : STATUS_COMPARE_FAILED;
     std::ostringstream message;
-    message << "retrace completed; mismatchPixels=" << bestComparison.mismatchPixels
-            << ", tolerance=" << request.tolerance
-            << ", fuzzPercent=" << request.fuzzPercent
+    message << std::fixed << std::setprecision(6)
+            << "retrace completed; ssim=" << bestComparison.ssim
+            << ", ssimThreshold=" << request.ssimThreshold
+            << ", mismatchPixels=" << bestComparison.mismatchPixels
             << ", matchedGoldenPath=" << bestComparison.path;
     result.message = message.str();
     return result.passed;
@@ -753,8 +810,9 @@ bool WriteResultJson(const Request& request, const Result& result) {
     file << "  \"cropY\": " << request.cropY << ",\n";
     file << "  \"cropWidth\": " << request.cropWidth << ",\n";
     file << "  \"cropHeight\": " << request.cropHeight << ",\n";
-    file << "  \"tolerance\": " << request.tolerance << ",\n";
-    file << "  \"fuzzPercent\": " << request.fuzzPercent << ",\n";
+    file << std::fixed << std::setprecision(9);
+    file << "  \"ssim\": " << result.ssim << ",\n";
+    file << "  \"ssimThreshold\": " << request.ssimThreshold << ",\n";
     file << "  \"useAngle\": " << (UseAngleForRequest(request) ? "true" : "false") << ",\n";
     file << "  \"mismatchPixels\": " << result.mismatchPixels << "\n";
     file << "}\n";

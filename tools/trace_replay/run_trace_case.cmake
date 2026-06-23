@@ -4,8 +4,8 @@ foreach(required TRACE_REPLAY_EXE MOBILEGL_LIBRARY TRACE_ARCHIVE TRACE_FILE TRAC
     endif()
 endforeach()
 
-if(NOT DEFINED TRACE_TOLERANCE OR "${TRACE_TOLERANCE}" STREQUAL "")
-    set(TRACE_TOLERANCE 0)
+if(NOT DEFINED TRACE_SSIM_THRESHOLD OR "${TRACE_SSIM_THRESHOLD}" STREQUAL "")
+    set(TRACE_SSIM_THRESHOLD 0.99)
 endif()
 if(NOT DEFINED TRACE_CROP_X OR "${TRACE_CROP_X}" STREQUAL "")
     set(TRACE_CROP_X 0)
@@ -18,9 +18,6 @@ if(NOT DEFINED TRACE_CROP_WIDTH OR "${TRACE_CROP_WIDTH}" STREQUAL "")
 endif()
 if(NOT DEFINED TRACE_CROP_HEIGHT OR "${TRACE_CROP_HEIGHT}" STREQUAL "")
     set(TRACE_CROP_HEIGHT 0)
-endif()
-if(NOT DEFINED TRACE_FUZZ_PERCENT OR "${TRACE_FUZZ_PERCENT}" STREQUAL "")
-    set(TRACE_FUZZ_PERCENT 20)
 endif()
 set(alternate_golden_args)
 if(DEFINED TRACE_ALTERNATE_GOLDEN AND NOT "${TRACE_ALTERNATE_GOLDEN}" STREQUAL "")
@@ -62,12 +59,11 @@ execute_process(
         --target-call "${TRACE_TARGET_CALL}"
         --width "${TRACE_WIDTH}"
         --height "${TRACE_HEIGHT}"
-        --tolerance "${TRACE_TOLERANCE}"
+        --ssim-threshold "${TRACE_SSIM_THRESHOLD}"
         --crop-x "${TRACE_CROP_X}"
         --crop-y "${TRACE_CROP_Y}"
         --crop-width "${TRACE_CROP_WIDTH}"
         --crop-height "${TRACE_CROP_HEIGHT}"
-        --fuzz-percent "${TRACE_FUZZ_PERCENT}"
         RESULT_VARIABLE replay_result
         OUTPUT_VARIABLE replay_stdout
         ERROR_VARIABLE replay_stderr)

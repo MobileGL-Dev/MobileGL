@@ -94,8 +94,7 @@ build-test/tools/trace_replay/mobilegl_trace_replay \
   --crop-y 1 \
   --crop-width 638 \
   --crop-height 478 \
-  --tolerance 20 \
-  --fuzz-percent 20
+  --ssim-threshold 0.99
 ```
 
 ## Android device replay
@@ -140,8 +139,7 @@ adb shell am start -W -a top.mobilegl.plugin.TRACE_REPLAY \
   --ei crop_y 1 \
   --ei crop_width 638 \
   --ei crop_height 478 \
-  --ei tolerance 20 \
-  --ei fuzz_percent 20
+  --es ssim_threshold 0.99
 ```
 
 Read back the result and images:

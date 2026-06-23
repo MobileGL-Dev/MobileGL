@@ -106,12 +106,11 @@ public final class TraceReplayActivity extends Activity {
                 request.targetCall,
                 request.width,
                 request.height,
-                request.tolerance,
+                request.ssimThreshold,
                 request.cropX,
                 request.cropY,
                 request.cropWidth,
                 request.cropHeight,
-                request.fuzzPercent,
                 request.angleLibraryDir,
                 request.useAngle
         );
@@ -135,12 +134,11 @@ public final class TraceReplayActivity extends Activity {
             long targetCall,
             int width,
             int height,
-            int tolerance,
+            double ssimThreshold,
             int cropX,
             int cropY,
             int cropWidth,
             int cropHeight,
-            int fuzzPercent,
             String angleLibraryDir,
             boolean useAngle
     );
@@ -156,12 +154,11 @@ public final class TraceReplayActivity extends Activity {
         final long targetCall;
         final int width;
         final int height;
-        final int tolerance;
+        final double ssimThreshold;
         final int cropX;
         final int cropY;
         final int cropWidth;
         final int cropHeight;
-        final int fuzzPercent;
         final String angleLibraryDir;
         final boolean useAngle;
 
@@ -176,12 +173,11 @@ public final class TraceReplayActivity extends Activity {
                 long targetCall,
                 int width,
                 int height,
-                int tolerance,
+                double ssimThreshold,
                 int cropX,
                 int cropY,
                 int cropWidth,
                 int cropHeight,
-                int fuzzPercent,
                 String angleLibraryDir,
                 boolean useAngle
         ) {
@@ -195,12 +191,11 @@ public final class TraceReplayActivity extends Activity {
             this.targetCall = targetCall;
             this.width = width;
             this.height = height;
-            this.tolerance = tolerance;
+            this.ssimThreshold = ssimThreshold;
             this.cropX = cropX;
             this.cropY = cropY;
             this.cropWidth = cropWidth;
             this.cropHeight = cropHeight;
-            this.fuzzPercent = fuzzPercent;
             this.angleLibraryDir = angleLibraryDir;
             this.useAngle = useAngle;
         }
@@ -219,12 +214,11 @@ public final class TraceReplayActivity extends Activity {
                     intent.getLongExtra("target_call", -1L),
                     intent.getIntExtra("width", 0),
                     intent.getIntExtra("height", 0),
-                    intent.getIntExtra("tolerance", 0),
+                    readDouble(intent, "ssim_threshold", 0.99),
                     intent.getIntExtra("crop_x", 0),
                     intent.getIntExtra("crop_y", 0),
                     intent.getIntExtra("crop_width", 0),
                     intent.getIntExtra("crop_height", 0),
-                    intent.getIntExtra("fuzz_percent", 20),
                     readString(intent, "angle_library_dir", nativeLibraryDir),
                     intent.getBooleanExtra("use_angle", false)
             );
@@ -233,6 +227,18 @@ public final class TraceReplayActivity extends Activity {
         private static String readString(Intent intent, String key, String fallback) {
             String value = intent.getStringExtra(key);
             return value == null ? fallback : value;
+        }
+
+        private static double readDouble(Intent intent, String key, double fallback) {
+            String stringValue = intent.getStringExtra(key);
+            if (stringValue != null && !stringValue.isEmpty()) {
+                try {
+                    return Double.parseDouble(stringValue);
+                } catch (NumberFormatException ignored) {
+                    return fallback;
+                }
+            }
+            return intent.getDoubleExtra(key, fallback);
         }
     }
 

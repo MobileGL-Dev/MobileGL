@@ -40,8 +40,9 @@ The golden and target environments must use the same trace, surface size, target
 call numbers, and comparison crop. They do not need to report the same GL vendor,
 renderer, version, or extension set. The only requirement for the golden
 environment is that it can replay the case and pass the fixture's golden image
-test. Disable overlays and avoid tolerance/fuzz while localizing the first
-divergent call unless the known golden already has small nondeterministic noise.
+test. Disable overlays and use a strict SSIM threshold while localizing the
+first divergent call unless the known golden already has small nondeterministic
+noise.
 
 ## Prepare two replay environments
 
@@ -80,8 +81,7 @@ mkdir -p "$WORK/$CASE"
   --target-call "$TARGET_CALL" \
   --width "$WIDTH" \
   --height "$HEIGHT" \
-  --tolerance 0 \
-  --fuzz-percent 0 > "$WORK/$CASE/target-retrace.log" 2>&1 || true
+  --ssim-threshold 1.0 > "$WORK/$CASE/target-retrace.log" 2>&1 || true
 ```
 
 Keep target GL identity lines such as `MOBILEGL_TRACE_GL_VENDOR`,
@@ -90,7 +90,7 @@ Keep target GL identity lines such as `MOBILEGL_TRACE_GL_VENDOR`,
 reject a golden environment because its GL strings differ from the target.
 
 For Android, use `android-plugin/trace-replay-ci.sh` with the same trace,
-golden, target call, width, height, crop, tolerance, and fuzz values. Pull
+golden, target call, width, height, crop, and SSIM threshold values. Pull
 `result.json`, `actual.png`, `diff.png`, `retrace.log`, and `logcat.txt` before
 continuing.
 
@@ -151,8 +151,7 @@ for call in 1000 1250 1430 1700; do
     --target-call "$call" \
     --width "$WIDTH" \
     --height "$HEIGHT" \
-    --tolerance 0 \
-    --fuzz-percent 0 || true
+    --ssim-threshold 1.0 || true
 done
 ```
 

@@ -158,12 +158,10 @@ jobs:
             target_call: 31249
             width: 640
             height: 480
-            tolerance: 3072
             crop_x: 1
             crop_y: 1
             crop_width: 638
             crop_height: 478
-            fuzz_percent: 20
             timeout_seconds: 180
           - name: minecraft-1.21.4-startup
             trace_archive: tools/trace_replay/fixtures/minecraft-1.21.4-startup.tgz
@@ -172,12 +170,10 @@ jobs:
             target_call: 92195
             width: 854
             height: 480
-            tolerance: 4100
             crop_x: 0
             crop_y: 0
             crop_width: 0
             crop_height: 0
-            fuzz_percent: 20
             timeout_seconds: 180
           - name: minecraft-1.21.4-main-menu
             trace_archive: tools/trace_replay/fixtures/minecraft-1.21.4-main-menu.tgz
@@ -186,12 +182,10 @@ jobs:
             target_call: 481787
             width: 854
             height: 480
-            tolerance: 4100
             crop_x: 0
             crop_y: 0
             crop_width: 0
             crop_height: 0
-            fuzz_percent: 20
             timeout_seconds: 180
           - name: minecraft-1.21.4-in-world
             trace_archive: tools/trace_replay/fixtures/minecraft-1.21.4-in-world.tgz
@@ -200,12 +194,10 @@ jobs:
             target_call: 280000
             width: 854
             height: 480
-            tolerance: 4100
             crop_x: 0
             crop_y: 0
             crop_width: 0
             crop_height: 0
-            fuzz_percent: 20
             timeout_seconds: 900
           - name: minecraft-1.21.4-fabric-sodium-in-world
             trace_archive: tools/trace_replay/fixtures/minecraft-1.21.4-fabric-sodium-in-world.tgz
@@ -214,12 +206,10 @@ jobs:
             target_call: 923340
             width: 854
             height: 480
-            tolerance: 4100
             crop_x: 0
             crop_y: 0
             crop_width: 0
             crop_height: 0
-            fuzz_percent: 20
             timeout_seconds: 1800
           - name: minecraft-1.21.4-fabric-iris-bsl-in-world
             trace_archive: tools/trace_replay/fixtures/minecraft-1.21.4-fabric-iris-bsl-in-world.tgz
@@ -228,12 +218,10 @@ jobs:
             target_call: 110725
             width: 854
             height: 480
-            tolerance: 4100
             crop_x: 0
             crop_y: 0
             crop_width: 0
             crop_height: 0
-            fuzz_percent: 20
             timeout_seconds: 900
           - name: minecraft-1.21.4-fabric-iris-makeup-ultrafast-in-world
             trace_archive: tools/trace_replay/fixtures/minecraft-1.21.4-fabric-iris-makeup-ultrafast-in-world.tgz
@@ -242,12 +230,10 @@ jobs:
             target_call: 95322
             width: 854
             height: 480
-            tolerance: 4100
             crop_x: 0
             crop_y: 0
             crop_width: 0
             crop_height: 0
-            fuzz_percent: 20
             timeout_seconds: 900
           - name: minecraft-1.21.4-fabric-iris-super-duper-vanilla-in-world
             trace_archive: tools/trace_replay/fixtures/minecraft-1.21.4-fabric-iris-super-duper-vanilla-in-world.tgz
@@ -256,12 +242,10 @@ jobs:
             target_call: 141559
             width: 854
             height: 480
-            tolerance: 4100
             crop_x: 0
             crop_y: 0
             crop_width: 0
             crop_height: 0
-            fuzz_percent: 20
             timeout_seconds: 900
           - name: minecraft-1.21.4-fabric-iris-sundial-lite-in-world
             trace_archive: tools/trace_replay/fixtures/minecraft-1.21.4-fabric-iris-sundial-lite-in-world.tgz
@@ -270,12 +254,10 @@ jobs:
             target_call: 150023
             width: 854
             height: 480
-            tolerance: 8000
             crop_x: 0
             crop_y: 0
             crop_width: 0
             crop_height: 0
-            fuzz_percent: 20
             timeout_seconds: 900
           - name: minecraft-1.21.4-fabric-iris-complementary-reimagined-in-world
             trace_archive: tools/trace_replay/fixtures/minecraft-1.21.4-fabric-iris-complementary-reimagined-in-world.tgz
@@ -284,12 +266,10 @@ jobs:
             target_call: 151297
             width: 854
             height: 480
-            tolerance: 4100
             crop_x: 0
             crop_y: 0
             crop_width: 0
             crop_height: 0
-            fuzz_percent: 20
             timeout_seconds: 900
           - name: minecraft-1.21.4-fabric-iris-complementary-unbound-in-world
             trace_archive: tools/trace_replay/fixtures/minecraft-1.21.4-fabric-iris-complementary-unbound-in-world.tgz
@@ -298,12 +278,10 @@ jobs:
             target_call: 146559
             width: 854
             height: 480
-            tolerance: 4100
             crop_x: 0
             crop_y: 0
             crop_width: 0
             crop_height: 0
-            fuzz_percent: 20
             timeout_seconds: 900
           - name: minecraft-1.21.4-fabric-iris-mellow-in-world
             trace_archive: tools/trace_replay/fixtures/minecraft-1.21.4-fabric-iris-mellow-in-world.tgz
@@ -312,12 +290,10 @@ jobs:
             target_call: 96143
             width: 854
             height: 480
-            tolerance: 4100
             crop_x: 0
             crop_y: 0
             crop_width: 0
             crop_height: 0
-            fuzz_percent: 20
             timeout_seconds: 900
           - name: minecraft-1.21.4-fabric-iris-nostalgia-in-world
             trace_archive: tools/trace_replay/fixtures/minecraft-1.21.4-fabric-iris-nostalgia-in-world.tgz
@@ -327,12 +303,10 @@ jobs:
             target_call: 153808
             width: 854
             height: 480
-            tolerance: 4100
             crop_x: 0
             crop_y: 0
             crop_width: 0
             crop_height: 0
-            fuzz_percent: 20
             timeout_seconds: 900
           - name: minecraft-1.21.4-fabric-iris-bliss-in-world
             trace_archive: tools/trace_replay/fixtures/minecraft-1.21.4-fabric-iris-bliss-in-world.tgz
@@ -341,12 +315,10 @@ jobs:
             target_call: 113511
             width: 854
             height: 480
-            tolerance: 4100
             crop_x: 0
             crop_y: 0
             crop_width: 0
             crop_height: 0
-            fuzz_percent: 20
             timeout_seconds: 900
           - name: minecraft-1.21.4-fabric-iris-chocapic-v6-lite-in-world
             trace_archive: tools/trace_replay/fixtures/minecraft-1.21.4-fabric-iris-chocapic-v6-lite-in-world.tgz
@@ -355,12 +327,10 @@ jobs:
             target_call: 125124
             width: 854
             height: 480
-            tolerance: 4100
             crop_x: 0
             crop_y: 0
             crop_width: 0
             crop_height: 0
-            fuzz_percent: 20
             timeout_seconds: 900
           - name: minecraft-1.21.4-fabric-iris-iterationt-in-world
             trace_archive: tools/trace_replay/fixtures/minecraft-1.21.4-fabric-iris-iterationt-in-world.tgz
@@ -369,12 +339,10 @@ jobs:
             target_call: 1173280
             width: 854
             height: 480
-            tolerance: 4100
             crop_x: 0
             crop_y: 0
             crop_width: 0
             crop_height: 0
-            fuzz_percent: 20
             timeout_seconds: 2400
           - name: minecraft-1.21.4-fabric-iris-iterationt-nodsa-in-world
             trace_archive: tools/trace_replay/fixtures/minecraft-1.21.4-fabric-iris-iterationt-nodsa-in-world.tgz
@@ -383,12 +351,10 @@ jobs:
             target_call: 1606997
             width: 854
             height: 480
-            tolerance: 4100
             crop_x: 0
             crop_y: 0
             crop_width: 0
             crop_height: 0
-            fuzz_percent: 20
             timeout_seconds: 2400
           - name: minecraft-1.21.4-fabric-iris-photon-v1.1-in-world
             trace_archive: tools/trace_replay/fixtures/minecraft-1.21.4-fabric-iris-photon-v1.1-in-world.tgz
@@ -397,12 +363,10 @@ jobs:
             target_call: 159866
             width: 854
             height: 480
-            tolerance: 4100
             crop_x: 0
             crop_y: 0
             crop_width: 0
             crop_height: 0
-            fuzz_percent: 20
             timeout_seconds: 900
 
     steps:
@@ -472,12 +436,11 @@ jobs:
             --target-call "${{ matrix.case.target_call }}" \
             --width "${{ matrix.case.width }}" \
             --height "${{ matrix.case.height }}" \
-            --tolerance "${{ matrix.case.tolerance }}" \
+            --ssim-threshold "${{ matrix.case.ssim_threshold || '0.99' }}" \
             --crop-x "${{ matrix.case.crop_x }}" \
             --crop-y "${{ matrix.case.crop_y }}" \
             --crop-width "${{ matrix.case.crop_width }}" \
             --crop-height "${{ matrix.case.crop_height }}" \
-            --fuzz-percent "${{ matrix.case.fuzz_percent }}" \
             --timeout-seconds "${{ matrix.case.timeout_seconds }}"
 
       - name: Collect emulator diagnostics

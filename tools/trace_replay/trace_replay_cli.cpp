@@ -20,8 +20,7 @@ void PrintUsage(const char *argv0) {
             << "  --mobilegl-library PATH   libMobileGL.so path (default: libMobileGL.so)\n"
             << "  --width N                 Replay surface width override\n"
             << "  --height N                Replay surface height override\n"
-            << "  --tolerance N             Allowed mismatch pixels\n"
-            << "  --fuzz-percent N          Per-channel fuzz threshold, 0-100 (default: 20)\n"
+            << "  --ssim-threshold N        Minimum SSIM required to pass (default: 0.99)\n"
             << "  --crop-x N                Compare crop x\n"
             << "  --crop-y N                Compare crop y\n"
             << "  --crop-width N            Compare crop width\n"
@@ -55,9 +54,17 @@ bool ReadLongLong(int argc, char **argv, int &index, long long &out) {
     return true;
 }
 
+bool ReadDouble(int argc, char **argv, int &index, double &out) {
+    std::string value;
+    if (!ReadValue(argc, argv, index, value)) {
+        return false;
+    }
+    out = std::strtod(value.c_str(), nullptr);
+    return true;
+}
+
 bool ParseArgs(int argc, char **argv, mobilegl_trace::Request &request) {
     request.backend = "DirectGLES";
-    request.fuzzPercent = 20;
 
     for (int i = 1; i < argc; ++i) {
         const std::string arg = argv[i];
@@ -87,8 +94,8 @@ bool ParseArgs(int argc, char **argv, mobilegl_trace::Request &request) {
             if (!ReadInt(argc, argv, i, request.width)) return false;
         } else if (arg == "--height") {
             if (!ReadInt(argc, argv, i, request.height)) return false;
-        } else if (arg == "--tolerance") {
-            if (!ReadInt(argc, argv, i, request.tolerance)) return false;
+        } else if (arg == "--ssim-threshold") {
+            if (!ReadDouble(argc, argv, i, request.ssimThreshold)) return false;
         } else if (arg == "--crop-x") {
             if (!ReadInt(argc, argv, i, request.cropX)) return false;
         } else if (arg == "--crop-y") {
@@ -97,8 +104,6 @@ bool ParseArgs(int argc, char **argv, mobilegl_trace::Request &request) {
             if (!ReadInt(argc, argv, i, request.cropWidth)) return false;
         } else if (arg == "--crop-height") {
             if (!ReadInt(argc, argv, i, request.cropHeight)) return false;
-        } else if (arg == "--fuzz-percent") {
-            if (!ReadInt(argc, argv, i, request.fuzzPercent)) return false;
         } else if (arg == "--help" || arg == "-h") {
             return false;
         } else {
