@@ -2895,37 +2895,164 @@ namespace MobileGL::MG_Impl::GLImpl {
 
         const Bool isDepthFormat = MG_Util::IsDepthFormatInternalFormat(textureInternalFormat);
         const Bool isStencilFormat = MG_Util::IsStencilFormatInternalFormat(textureInternalFormat);
+        const ComponentSizes componentSizes = MG_Util::GetComponentSizesForInternalFormat(textureInternalFormat);
         const Bool isIntegerFormat = imageFormat == GL_RED_INTEGER || imageFormat == GL_RG_INTEGER ||
                                      imageFormat == GL_RGB_INTEGER || imageFormat == GL_RGBA_INTEGER;
-        const Bool isLayeredTarget = target == GL_TEXTURE_3D || target == GL_TEXTURE_1D_ARRAY ||
-                                     target == GL_TEXTURE_2D_ARRAY || target == GL_TEXTURE_CUBE_MAP ||
-                                     target == GL_TEXTURE_CUBE_MAP_ARRAY || target == GL_TEXTURE_2D_MULTISAMPLE_ARRAY;
 
-        GLint maxSamples = 1;
+        SizeT targetIndex = isRenderbufferTarget ? MG_Backend::GetRenderbufferFormatCapabilityTargetIndex()
+                                                 : MG_Backend::GetFormatCapabilityTargetIndex(textureTarget);
+        if (targetIndex >= MG_Backend::kFormatCapabilityTargetCount) return;
+        const SizeT formatIndex = static_cast<SizeT>(textureInternalFormat);
+
+        MG_Backend::FormatCapabilityFlags fullCaps;
+        MG_Backend::FormatCapabilityFlags caveatCaps;
+        const Vector<Int>* sampleCounts = nullptr;
         if (MG_Backend::pActiveBackendObject) {
-            const auto& dynamicParameters = MG_Backend::pActiveBackendObject->GetDynamicParameters();
-            if (isDepthFormat || isStencilFormat) {
-                maxSamples = dynamicParameters.MaxDepthTextureSamples;
-            } else if (isIntegerFormat) {
-                maxSamples = dynamicParameters.MaxIntegerSamples;
-            } else {
-                maxSamples = dynamicParameters.MaxColorTextureSamples;
-            }
-            maxSamples = std::max(maxSamples, 1);
+            const auto& cache = MG_Backend::pActiveBackendObject->GetFormatCapabilities();
+            fullCaps = cache.FullCaps[targetIndex][formatIndex];
+            caveatCaps = cache.CaveatCaps[targetIndex][formatIndex];
+            sampleCounts = &cache.SampleCounts[targetIndex][formatIndex];
         }
+
+        auto hasFull = [&](MG_Backend::FormatCapability capability) {
+            return MG_Backend::HasFormatCapability(fullCaps, capability);
+        };
+        auto hasCaveat = [&](MG_Backend::FormatCapability capability) {
+            return MG_Backend::HasFormatCapability(caveatCaps, capability);
+        };
+        auto supportFor = [&](MG_Backend::FormatCapability capability) -> GLint {
+            if (hasFull(capability)) return GL_FULL_SUPPORT;
+            if (hasCaveat(capability)) return GL_CAVEAT_SUPPORT;
+            return GL_NONE;
+        };
+        auto supportForWithFallback = [&](MG_Backend::FormatCapability primary,
+                                          MG_Backend::FormatCapability fallback) -> GLint {
+            if (hasFull(primary)) return GL_FULL_SUPPORT;
+            if (hasCaveat(primary) || hasFull(fallback) || hasCaveat(fallback)) return GL_CAVEAT_SUPPORT;
+            return GL_NONE;
+        };
+        auto componentType = [&](GLint size, Bool depthComponent, Bool stencilComponent) -> GLint {
+            if (size <= 0) return GL_NONE;
+            if (stencilComponent) return GL_UNSIGNED_INT;
+            if (depthComponent) {
+                return (textureInternalFormat == TextureInternalFormat::DepthComponent32F ||
+                        textureInternalFormat == TextureInternalFormat::Depth32FStencil8)
+                           ? GL_FLOAT
+                           : GL_UNSIGNED_NORMALIZED;
+            }
+            switch (textureInternalFormat) {
+            case TextureInternalFormat::R8I:
+            case TextureInternalFormat::R16I:
+            case TextureInternalFormat::R32I:
+            case TextureInternalFormat::RG8I:
+            case TextureInternalFormat::RG16I:
+            case TextureInternalFormat::RG32I:
+            case TextureInternalFormat::RGB8I:
+            case TextureInternalFormat::RGB16I:
+            case TextureInternalFormat::RGB32I:
+            case TextureInternalFormat::RGBA8I:
+            case TextureInternalFormat::RGBA16I:
+            case TextureInternalFormat::RGBA32I:
+                return GL_INT;
+            case TextureInternalFormat::R8UI:
+            case TextureInternalFormat::R16UI:
+            case TextureInternalFormat::R32UI:
+            case TextureInternalFormat::RG8UI:
+            case TextureInternalFormat::RG16UI:
+            case TextureInternalFormat::RG32UI:
+            case TextureInternalFormat::RGB8UI:
+            case TextureInternalFormat::RGB16UI:
+            case TextureInternalFormat::RGB32UI:
+            case TextureInternalFormat::RGBA8UI:
+            case TextureInternalFormat::RGBA16UI:
+            case TextureInternalFormat::RGBA32UI:
+            case TextureInternalFormat::RGB10A2UI:
+                return GL_UNSIGNED_INT;
+            case TextureInternalFormat::R16F:
+            case TextureInternalFormat::RG16F:
+            case TextureInternalFormat::RGB16F:
+            case TextureInternalFormat::RGBA16F:
+            case TextureInternalFormat::R32F:
+            case TextureInternalFormat::RG32F:
+            case TextureInternalFormat::RGB32F:
+            case TextureInternalFormat::RGBA32F:
+            case TextureInternalFormat::R11FG11FB10F:
+            case TextureInternalFormat::RGB9E5:
+                return GL_FLOAT;
+            case TextureInternalFormat::R8Snorm:
+            case TextureInternalFormat::R16Snorm:
+            case TextureInternalFormat::RG8Snorm:
+            case TextureInternalFormat::RG16Snorm:
+            case TextureInternalFormat::RGB8Snorm:
+            case TextureInternalFormat::RGB16Snorm:
+            case TextureInternalFormat::RGBA8Snorm:
+            case TextureInternalFormat::RGBA16Snorm:
+                return GL_SIGNED_NORMALIZED;
+            default:
+                return GL_UNSIGNED_NORMALIZED;
+            }
+        };
 
         switch (pname) {
         case GL_INTERNALFORMAT_SUPPORTED:
-            writeValues({GL_TRUE});
+            writeValues({(hasFull(MG_Backend::FormatCapability::Creatable) ||
+                          hasCaveat(MG_Backend::FormatCapability::Creatable))
+                             ? GL_TRUE
+                             : GL_FALSE});
             return;
         case GL_INTERNALFORMAT_PREFERRED:
             writeValues({static_cast<GLint>(preferredInternalFormat)});
+            return;
+        case GL_INTERNALFORMAT_RED_SIZE:
+            writeValues({componentSizes.Red});
+            return;
+        case GL_INTERNALFORMAT_GREEN_SIZE:
+            writeValues({componentSizes.Green});
+            return;
+        case GL_INTERNALFORMAT_BLUE_SIZE:
+            writeValues({componentSizes.Blue});
+            return;
+        case GL_INTERNALFORMAT_ALPHA_SIZE:
+            writeValues({componentSizes.Alpha});
+            return;
+        case GL_INTERNALFORMAT_DEPTH_SIZE:
+            writeValues({componentSizes.Depth});
+            return;
+        case GL_INTERNALFORMAT_STENCIL_SIZE:
+            writeValues({componentSizes.Stencil});
+            return;
+        case GL_INTERNALFORMAT_SHARED_SIZE:
+            writeValues({textureInternalFormat == TextureInternalFormat::RGB9E5 ? 5 : 0});
+            return;
+        case GL_INTERNALFORMAT_RED_TYPE:
+            writeValues({componentType(componentSizes.Red, false, false)});
+            return;
+        case GL_INTERNALFORMAT_GREEN_TYPE:
+            writeValues({componentType(componentSizes.Green, false, false)});
+            return;
+        case GL_INTERNALFORMAT_BLUE_TYPE:
+            writeValues({componentType(componentSizes.Blue, false, false)});
+            return;
+        case GL_INTERNALFORMAT_ALPHA_TYPE:
+            writeValues({componentType(componentSizes.Alpha, false, false)});
+            return;
+        case GL_INTERNALFORMAT_DEPTH_TYPE:
+            writeValues({componentType(componentSizes.Depth, true, false)});
+            return;
+        case GL_INTERNALFORMAT_STENCIL_TYPE:
+            writeValues({componentType(componentSizes.Stencil, false, true)});
             return;
         case GL_TEXTURE_IMAGE_FORMAT:
             writeValues({static_cast<GLint>(imageFormat)});
             return;
         case GL_TEXTURE_IMAGE_TYPE:
             writeValues({static_cast<GLint>(imageType)});
+            return;
+        case GL_TEXTURE_COMPRESSED:
+        case GL_TEXTURE_COMPRESSED_BLOCK_WIDTH:
+        case GL_TEXTURE_COMPRESSED_BLOCK_HEIGHT:
+        case GL_TEXTURE_COMPRESSED_BLOCK_SIZE:
+            writeValues({0});
             return;
         case GL_COLOR_COMPONENTS:
             writeValues({(!isDepthFormat && !isStencilFormat) ? GL_TRUE : GL_FALSE});
@@ -2937,20 +3064,42 @@ namespace MobileGL::MG_Impl::GLImpl {
             writeValues({isStencilFormat ? GL_TRUE : GL_FALSE});
             return;
         case GL_FRAMEBUFFER_RENDERABLE:
-            writeValues({GL_FULL_SUPPORT});
+            writeValues({supportFor(MG_Backend::FormatCapability::FramebufferRenderable)});
             return;
         case GL_FRAMEBUFFER_RENDERABLE_LAYERED:
-            writeValues({isLayeredTarget ? GL_FULL_SUPPORT : GL_NONE});
+            writeValues({supportFor(MG_Backend::FormatCapability::FramebufferLayered)});
+            return;
+        case GL_FILTER:
+            writeValues({supportForWithFallback(MG_Backend::FormatCapability::LinearFilter,
+                                                MG_Backend::FormatCapability::Sampled)});
+            return;
+        case GL_MIPMAP:
+            writeValues({supportForWithFallback(MG_Backend::FormatCapability::GenerateMipmap,
+                                                MG_Backend::FormatCapability::Sampled)});
+            return;
+        case GL_TEXTURE_GATHER:
+        case GL_TEXTURE_GATHER_SHADOW:
+            writeValues({supportFor(MG_Backend::FormatCapability::TextureGather)});
+            return;
+        case GL_TEXTURE_SHADOW:
+            writeValues({supportFor(MG_Backend::FormatCapability::TextureShadow)});
             return;
         case GL_NUM_SAMPLE_COUNTS:
-            writeValues({maxSamples > 1 ? 2 : 1});
+            writeValues({sampleCounts != nullptr ? static_cast<GLint>(sampleCounts->size()) : 0});
             return;
         case GL_SAMPLES:
-            if (maxSamples > 1) {
-                writeValues({maxSamples, 1});
-            } else {
-                writeValues({1});
+            if (sampleCounts != nullptr) {
+                GLsizei index = 0;
+                for (Int sampleCount : *sampleCounts) {
+                    if (index >= bufSize) break;
+                    params[index++] = sampleCount;
+                }
+                while (index < bufSize) {
+                    params[index++] = 0;
+                }
+                return;
             }
+            writeValues({});
             return;
         default:
             MG_State::pGLContext->RecordError(

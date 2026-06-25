@@ -10,6 +10,7 @@
 
 #include "Includes.h"
 #include "Init.h"
+#include <MG_Backend/BackendObjects.h>
 #include <MG_Impl/GLImpl/Getter/GL_Getter.h>
 #include <MG_Impl/GLImpl/RenderState/GL_RenderState.h>
 #include <MG_Impl/GLImpl/Texture/GL_Texture.h>
@@ -23,6 +24,93 @@ class TextureTest : public ::testing::Test {
 protected:
     void SetUp() override { MobileGL::Initialize(); }
 };
+
+namespace {
+    class FormatCapabilityBackend final : public MobileGL::MG_Backend::BackendObject {
+    public:
+        FormatCapabilityBackend() {
+            auto& cache = MutableFormatCapabilities();
+            const auto texture2DIndex =
+                MobileGL::MG_Backend::GetFormatCapabilityTargetIndex(TextureTarget::Texture2D);
+            const auto texture3DIndex =
+                MobileGL::MG_Backend::GetFormatCapabilityTargetIndex(TextureTarget::Texture3D);
+            const auto renderbufferIndex =
+                MobileGL::MG_Backend::GetRenderbufferFormatCapabilityTargetIndex();
+            const auto rgba8Index = static_cast<SizeT>(TextureInternalFormat::RGBA8);
+            const auto rg8Index = static_cast<SizeT>(TextureInternalFormat::RG8);
+            const auto depthStencilIndex = static_cast<SizeT>(TextureInternalFormat::Depth24Stencil8);
+
+            cache.FullCaps[texture2DIndex][rgba8Index] |= MobileGL::MG_Backend::FormatCapability::Creatable;
+            cache.FullCaps[texture2DIndex][rgba8Index] |= MobileGL::MG_Backend::FormatCapability::Sampled;
+            cache.FullCaps[texture2DIndex][rgba8Index] |= MobileGL::MG_Backend::FormatCapability::LinearFilter;
+            cache.FullCaps[texture2DIndex][rgba8Index] |= MobileGL::MG_Backend::FormatCapability::GenerateMipmap;
+            cache.FullCaps[texture2DIndex][rgba8Index] |=
+                MobileGL::MG_Backend::FormatCapability::FramebufferRenderable;
+            cache.FullCaps[texture2DIndex][rgba8Index] |= MobileGL::MG_Backend::FormatCapability::ColorAttachment;
+            cache.SampleCounts[texture2DIndex][rgba8Index] = {1};
+
+            cache.CaveatCaps[texture2DIndex][rg8Index] |= MobileGL::MG_Backend::FormatCapability::Creatable;
+            cache.CaveatCaps[texture2DIndex][rg8Index] |= MobileGL::MG_Backend::FormatCapability::Sampled;
+            cache.CaveatCaps[texture2DIndex][rg8Index] |= MobileGL::MG_Backend::FormatCapability::LinearFilter;
+
+            cache.FullCaps[texture3DIndex][depthStencilIndex] |=
+                MobileGL::MG_Backend::FormatCapability::Creatable;
+            cache.FullCaps[texture3DIndex][depthStencilIndex] |=
+                MobileGL::MG_Backend::FormatCapability::FramebufferRenderable;
+            cache.FullCaps[texture3DIndex][depthStencilIndex] |=
+                MobileGL::MG_Backend::FormatCapability::FramebufferLayered;
+            cache.FullCaps[texture3DIndex][depthStencilIndex] |=
+                MobileGL::MG_Backend::FormatCapability::DepthAttachment;
+            cache.FullCaps[texture3DIndex][depthStencilIndex] |=
+                MobileGL::MG_Backend::FormatCapability::StencilAttachment;
+
+            cache.FullCaps[renderbufferIndex][depthStencilIndex] |=
+                MobileGL::MG_Backend::FormatCapability::Creatable;
+            cache.FullCaps[renderbufferIndex][depthStencilIndex] |=
+                MobileGL::MG_Backend::FormatCapability::FramebufferRenderable;
+            cache.FullCaps[renderbufferIndex][depthStencilIndex] |=
+                MobileGL::MG_Backend::FormatCapability::DepthAttachment;
+            cache.FullCaps[renderbufferIndex][depthStencilIndex] |=
+                MobileGL::MG_Backend::FormatCapability::StencilAttachment;
+            cache.FullCaps[renderbufferIndex][depthStencilIndex] |=
+                MobileGL::MG_Backend::FormatCapability::MultisampleRenderbuffer;
+            cache.SampleCounts[renderbufferIndex][depthStencilIndex] = {4, 2, 1};
+        }
+
+        void Initialize() override {}
+        Bool InitCapabilities() override { return true; }
+        Bool InitWindowSurface() override { return true; }
+        const RendererInfo& GetRendererInfo() const override {
+            static RendererInfo info = {};
+            return info;
+        }
+        String GetBackendAPIVersionString() const override { return {}; }
+        const MobileGL::MG_Backend::GlobalBackendFunctionsTable& GetBackendFunctions() const override {
+            static MobileGL::MG_Backend::GlobalBackendFunctionsTable table = {};
+            return table;
+        }
+        const MobileGL::MG_Backend::DynamicBackendParameters& GetDynamicParameters() const override {
+            static MobileGL::MG_Backend::DynamicBackendParameters params = {};
+            return params;
+        }
+        BackendType GetBackendType() const override { return BackendType::Unknown; }
+    };
+
+    class ScopedBackendOverride {
+    public:
+        explicit ScopedBackendOverride(UniquePtr<MobileGL::MG_Backend::BackendObject> backend):
+            m_previous(Move(MobileGL::MG_Backend::pActiveBackendObject)) {
+            MobileGL::MG_Backend::pActiveBackendObject = Move(backend);
+        }
+
+        ~ScopedBackendOverride() {
+            MobileGL::MG_Backend::pActiveBackendObject = Move(m_previous);
+        }
+
+    private:
+        UniquePtr<MobileGL::MG_Backend::BackendObject> m_previous;
+    };
+} // namespace
 
 TEST_F(TextureTest, CreateTexturesCreatesObjectsWithoutBinding) {
     GLuint texture = 0;
@@ -346,10 +434,23 @@ TEST_F(TextureTest, NamedTextureVectorParametersAndGettersWorkWithoutBinding) {
 }
 
 TEST_F(TextureTest, GetInternalformativReportsBasicTextureMetadata) {
+    ScopedBackendOverride backend(MakeUnique<FormatCapabilityBackend>());
     GLint params[4] = {};
 
     MG_Impl::GLImpl::GetInternalformativ(GL_TEXTURE_2D, GL_RGBA8, GL_INTERNALFORMAT_SUPPORTED, 1, params);
     EXPECT_EQ(params[0], GL_TRUE);
+
+    MG_Impl::GLImpl::GetInternalformativ(GL_TEXTURE_2D, GL_RGBA8, GL_FRAMEBUFFER_RENDERABLE, 1, params);
+    EXPECT_EQ(params[0], GL_FULL_SUPPORT);
+
+    MG_Impl::GLImpl::GetInternalformativ(GL_TEXTURE_2D, GL_RGBA8, GL_FILTER, 1, params);
+    EXPECT_EQ(params[0], GL_FULL_SUPPORT);
+
+    MG_Impl::GLImpl::GetInternalformativ(GL_TEXTURE_2D, GL_RGBA8, GL_INTERNALFORMAT_RED_SIZE, 1, params);
+    EXPECT_EQ(params[0], 8);
+
+    MG_Impl::GLImpl::GetInternalformativ(GL_TEXTURE_2D, GL_RGBA8, GL_INTERNALFORMAT_RED_TYPE, 1, params);
+    EXPECT_EQ(params[0], GL_UNSIGNED_NORMALIZED);
 
     MG_Impl::GLImpl::GetInternalformativ(GL_TEXTURE_2D, GL_RGBA8, GL_TEXTURE_IMAGE_FORMAT, 1, params);
     EXPECT_EQ(params[0], GL_RGBA);
@@ -357,9 +458,23 @@ TEST_F(TextureTest, GetInternalformativReportsBasicTextureMetadata) {
     MG_Impl::GLImpl::GetInternalformativ(GL_TEXTURE_2D, GL_RGBA8, GL_TEXTURE_IMAGE_TYPE, 1, params);
     EXPECT_EQ(params[0], GL_UNSIGNED_BYTE);
 
+    MG_Impl::GLImpl::GetInternalformativ(GL_TEXTURE_2D, GL_RG8, GL_INTERNALFORMAT_SUPPORTED, 1, params);
+    EXPECT_EQ(params[0], GL_TRUE);
+
+    MG_Impl::GLImpl::GetInternalformativ(GL_TEXTURE_2D, GL_RG8, GL_FILTER, 1, params);
+    EXPECT_EQ(params[0], GL_CAVEAT_SUPPORT);
+
     MG_Impl::GLImpl::GetInternalformativ(GL_TEXTURE_3D, GL_DEPTH24_STENCIL8, GL_FRAMEBUFFER_RENDERABLE_LAYERED, 1,
                                          params);
     EXPECT_EQ(params[0], GL_FULL_SUPPORT);
+
+    MG_Impl::GLImpl::GetInternalformativ(GL_RENDERBUFFER, GL_DEPTH24_STENCIL8, GL_NUM_SAMPLE_COUNTS, 1, params);
+    EXPECT_EQ(params[0], 3);
+
+    MG_Impl::GLImpl::GetInternalformativ(GL_RENDERBUFFER, GL_DEPTH24_STENCIL8, GL_SAMPLES, 4, params);
+    EXPECT_EQ(params[0], 4);
+    EXPECT_EQ(params[1], 2);
+    EXPECT_EQ(params[2], 1);
     EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
 }
 

@@ -24,6 +24,53 @@ namespace MobileGL {
     };
 
     namespace MG_Backend {
+        enum class FormatCapability : Uint64 {
+            Creatable = 1ull << 0,
+
+            Sampled = 1ull << 1,
+            LinearFilter = 1ull << 2,
+            GenerateMipmap = 1ull << 3,
+            TextureGather = 1ull << 4,
+            TextureShadow = 1ull << 5,
+
+            FramebufferRenderable = 1ull << 6,
+            FramebufferLayered = 1ull << 7,
+            MultisampleTexture = 1ull << 8,
+            MultisampleRenderbuffer = 1ull << 9,
+
+            ColorAttachment = 1ull << 10,
+            DepthAttachment = 1ull << 11,
+            StencilAttachment = 1ull << 12,
+
+            TextureBuffer = 1ull << 13
+        };
+
+        using FormatCapabilityFlags = Flags<FormatCapability>;
+
+        inline constexpr SizeT kFormatCapabilityTextureTargetCount =
+            static_cast<SizeT>(TextureTarget::TextureTargetCount);
+        inline constexpr SizeT kFormatCapabilityRenderbufferTargetIndex = kFormatCapabilityTextureTargetCount;
+        inline constexpr SizeT kFormatCapabilityTargetCount = kFormatCapabilityTextureTargetCount + 1;
+        inline constexpr SizeT kFormatCapabilityFormatCount =
+            static_cast<SizeT>(TextureInternalFormat::TextureInternalFormatCount);
+
+        using FormatCapabilityTable =
+            Array<Array<FormatCapabilityFlags, kFormatCapabilityFormatCount>, kFormatCapabilityTargetCount>;
+        using FormatSampleCountTable =
+            Array<Array<Vector<Int>, kFormatCapabilityFormatCount>, kFormatCapabilityTargetCount>;
+
+        struct FormatCapabilityCache {
+            FormatCapabilityTable FullCaps{};
+            FormatCapabilityTable CaveatCaps{};
+            FormatSampleCountTable SampleCounts{};
+
+            void Clear();
+        };
+
+        Bool HasFormatCapability(FormatCapabilityFlags caps, FormatCapability capability);
+        SizeT GetFormatCapabilityTargetIndex(TextureTarget target);
+        SizeT GetRenderbufferFormatCapabilityTargetIndex();
+
         struct GLFunctionsTable {
             void (*DrawArrays)(GLenum mode, GLint first, GLsizei count);
             void (*DrawElements)(GLenum mode, GLsizei count, GLenum type, const void* indices);
@@ -206,6 +253,7 @@ namespace MobileGL {
             virtual String GetBackendAPIVersionString() const = 0;
             virtual const GlobalBackendFunctionsTable& GetBackendFunctions() const = 0;
             virtual const DynamicBackendParameters& GetDynamicParameters() const = 0;
+            const FormatCapabilityCache& GetFormatCapabilities() const;
             virtual BackendType GetBackendType() const = 0;
 
         protected:
@@ -217,8 +265,10 @@ namespace MobileGL {
 
             void ResetEGLRuntimeState();
             virtual Bool InitPbufferSurface(EGLint width, EGLint height);
+            FormatCapabilityCache& MutableFormatCapabilities();
 
             mutable std::recursive_mutex m_eglStateMutex;
+            FormatCapabilityCache m_formatCapabilities;
             WindowHandle m_windowHandle;
             EGLDisplay m_eglDisplay = EGL_NO_DISPLAY;
             Bool m_eglDisplayInitialized = false;

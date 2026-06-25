@@ -19,6 +19,36 @@ namespace MobileGL::MG_Backend {
         }
     } // namespace
 
+    void FormatCapabilityCache::Clear() {
+        for (auto& row : FullCaps) {
+            row.fill(FormatCapabilityFlags{});
+        }
+        for (auto& row : CaveatCaps) {
+            row.fill(FormatCapabilityFlags{});
+        }
+        for (auto& row : SampleCounts) {
+            for (auto& counts : row) {
+                counts.clear();
+            }
+        }
+    }
+
+    Bool HasFormatCapability(FormatCapabilityFlags caps, FormatCapability capability) {
+        return static_cast<Bool>(caps & capability);
+    }
+
+    SizeT GetFormatCapabilityTargetIndex(TextureTarget target) {
+        if (target == TextureTarget::Unknown || static_cast<Int>(target) < 0 ||
+            static_cast<SizeT>(target) >= kFormatCapabilityTextureTargetCount) {
+            return kFormatCapabilityTargetCount;
+        }
+        return static_cast<SizeT>(target);
+    }
+
+    SizeT GetRenderbufferFormatCapabilityTargetIndex() {
+        return kFormatCapabilityRenderbufferTargetIndex;
+    }
+
     Bool BackendObject::InitializeEGLDisplay(EGLDisplay dpy, EGLint* major, EGLint* minor) {
         const std::lock_guard<std::recursive_mutex> lock(m_eglStateMutex);
         if (dpy == EGL_NO_DISPLAY) {
@@ -175,6 +205,14 @@ namespace MobileGL::MG_Backend {
     void BackendObject::SetWindowHandle(const WindowHandle& handle) {
         const std::lock_guard<std::recursive_mutex> lock(m_eglStateMutex);
         m_windowHandle = handle;
+    }
+
+    const FormatCapabilityCache& BackendObject::GetFormatCapabilities() const {
+        return m_formatCapabilities;
+    }
+
+    FormatCapabilityCache& BackendObject::MutableFormatCapabilities() {
+        return m_formatCapabilities;
     }
 
     Bool BackendObject::InitPbufferSurface(EGLint width, EGLint height) {

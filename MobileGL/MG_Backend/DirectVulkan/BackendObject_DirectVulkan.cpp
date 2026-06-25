@@ -11,11 +11,252 @@
 #include "DirectVulkan.h"
 #include "MG_State/GLState/FramebufferState/FramebufferObject.h"
 #include "MG_State/GLState/TextureState/TextureState.h"
+#include "MG_Util/Classifiers/TextureEnumClassifier.h"
+#include "MG_Util/Converters/MGToGL/TextureEnumConverter.h"
+#include "MG_Util/Converters/MGToVk/TextureEnumConverter.h"
+#include "MG_Util/Texture/TextureFormatProcessor.h"
 
 namespace MobileGL::MG_Backend::DirectVulkan {
     namespace {
         Bool IsReleaseCurrentRequest(EGLDisplay dpy, EGLSurface draw, EGLSurface read, EGLContext ctx) {
             return dpy == EGL_NO_DISPLAY && draw == EGL_NO_SURFACE && read == EGL_NO_SURFACE && ctx == EGL_NO_CONTEXT;
+        }
+
+        Bool IsFormatIndexValid(TextureInternalFormat format) {
+            return format != TextureInternalFormat::Unknown && static_cast<Int>(format) >= 0 &&
+                   static_cast<SizeT>(format) < kFormatCapabilityFormatCount;
+        }
+
+        Bool IsLayeredTarget(TextureTarget target) {
+            return target == TextureTarget::Texture3D || target == TextureTarget::Texture1DArray ||
+                   target == TextureTarget::Texture2DArray || target == TextureTarget::TextureCubeMap ||
+                   target == TextureTarget::TextureCubeMapArray ||
+                   target == TextureTarget::Texture2DMultisampleArray;
+        }
+
+        Bool IsMultisampleTarget(TextureTarget target) {
+            return target == TextureTarget::Texture2DMultisample ||
+                   target == TextureTarget::Texture2DMultisampleArray;
+        }
+
+        Bool IsTextureBufferTarget(TextureTarget target) {
+            return target == TextureTarget::TextureBuffer;
+        }
+
+        Bool IsIntegerInternalFormat(TextureInternalFormat format) {
+            const GLenum glFormat = MG_Util::ConvertTextureInternalFormatToGLEnum(format);
+            GLenum normalizedInternalFormat = glFormat;
+            GLenum imageFormat = GL_RGBA;
+            GLenum imageType = GL_UNSIGNED_BYTE;
+            MG_Util::TextureFormatProcessor::NormalizePixelFormat(
+                glFormat, PixelFormatNormalizeOptionBit::None, &normalizedInternalFormat, &imageFormat, &imageType);
+            return imageFormat == GL_RED_INTEGER || imageFormat == GL_RG_INTEGER || imageFormat == GL_RGB_INTEGER ||
+                   imageFormat == GL_RGBA_INTEGER;
+        }
+
+        FormatCapabilityFlags GetAttachmentCaps(TextureInternalFormat format) {
+            FormatCapabilityFlags caps = FormatCapability::FramebufferRenderable;
+            const Bool isDepth = MG_Util::IsDepthFormatInternalFormat(format);
+            const Bool isStencil = MG_Util::IsStencilFormatInternalFormat(format);
+            if (!isDepth && !isStencil) {
+                caps |= FormatCapability::ColorAttachment;
+            }
+            if (isDepth) {
+                caps |= FormatCapability::DepthAttachment;
+            }
+            if (isStencil) {
+                caps |= FormatCapability::StencilAttachment;
+            }
+            return caps;
+        }
+
+        FormatCapabilityFlags BuildVulkanCaps(TextureInternalFormat logicalFormat,
+                                              TextureTarget target,
+                                              VkFormatFeatureFlags features) {
+            FormatCapabilityFlags caps;
+            const Bool isDepth = MG_Util::IsDepthFormatInternalFormat(logicalFormat);
+            const Bool isStencil = MG_Util::IsStencilFormatInternalFormat(logicalFormat);
+            const Bool isInteger = IsIntegerInternalFormat(logicalFormat);
+
+            if (IsTextureBufferTarget(target)) {
+                if ((features & VK_FORMAT_FEATURE_UNIFORM_TEXEL_BUFFER_BIT) != 0) {
+                    caps |= FormatCapability::Creatable;
+                    caps |= FormatCapability::Sampled;
+                    caps |= FormatCapability::TextureBuffer;
+                }
+                return caps;
+            }
+
+            const Bool sampled = (features & VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT) != 0;
+            const Bool linearFilter = (features & VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT) != 0;
+            const Bool colorRenderable = (features & VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT) != 0;
+            const Bool depthStencilRenderable =
+                (features & VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT) != 0;
+            const Bool renderable = (isDepth || isStencil) ? depthStencilRenderable : colorRenderable;
+
+            if (sampled || renderable) {
+                caps |= FormatCapability::Creatable;
+            }
+            if (sampled) {
+                caps |= FormatCapability::Sampled;
+                if (linearFilter && !isInteger && !isStencil) {
+                    caps |= FormatCapability::LinearFilter;
+                }
+                if (!isStencil && (features & VK_FORMAT_FEATURE_BLIT_SRC_BIT) != 0 &&
+                    (features & VK_FORMAT_FEATURE_BLIT_DST_BIT) != 0) {
+                    caps |= FormatCapability::GenerateMipmap;
+                }
+                if (!isInteger && !isDepth && !isStencil) {
+                    caps |= FormatCapability::TextureGather;
+                }
+                if (isDepth && !isStencil) {
+                    caps |= FormatCapability::TextureShadow;
+                }
+            }
+            if (renderable) {
+                caps |= GetAttachmentCaps(logicalFormat);
+                if (IsLayeredTarget(target)) {
+                    caps |= FormatCapability::FramebufferLayered;
+                }
+            }
+            if (IsMultisampleTarget(target)) {
+                caps |= FormatCapability::MultisampleTexture;
+            }
+            return caps;
+        }
+
+        Optional<VkFormat> ResolveVulkanFallbackFormat(TextureInternalFormat format) {
+            switch (format) {
+            case TextureInternalFormat::RGB:
+            case TextureInternalFormat::RGB8:
+                return VK_FORMAT_R8G8B8A8_UNORM;
+            case TextureInternalFormat::SRGB8:
+                return VK_FORMAT_R8G8B8A8_SRGB;
+            case TextureInternalFormat::RGB8Snorm:
+                return VK_FORMAT_R8G8B8A8_SNORM;
+            case TextureInternalFormat::RGB16:
+                return VK_FORMAT_R16G16B16A16_UNORM;
+            case TextureInternalFormat::RGB16Snorm:
+                return VK_FORMAT_R16G16B16A16_SNORM;
+            case TextureInternalFormat::RGB16F:
+                return VK_FORMAT_R16G16B16A16_SFLOAT;
+            case TextureInternalFormat::RGB32F:
+                return VK_FORMAT_R32G32B32A32_SFLOAT;
+            case TextureInternalFormat::RGB8I:
+                return VK_FORMAT_R8G8B8A8_SINT;
+            case TextureInternalFormat::RGB8UI:
+                return VK_FORMAT_R8G8B8A8_UINT;
+            case TextureInternalFormat::RGB16I:
+                return VK_FORMAT_R16G16B16A16_SINT;
+            case TextureInternalFormat::RGB16UI:
+                return VK_FORMAT_R16G16B16A16_UINT;
+            case TextureInternalFormat::RGB32I:
+                return VK_FORMAT_R32G32B32A32_SINT;
+            case TextureInternalFormat::RGB32UI:
+                return VK_FORMAT_R32G32B32A32_UINT;
+            default:
+                return Nullopt;
+            }
+        }
+
+        Vector<Int> BuildSampleCounts(Int maxSamples) {
+            Vector<Int> counts;
+            for (Int samples = std::max(maxSamples, 1); samples > 1; samples >>= 1) {
+                counts.push_back(samples);
+            }
+            counts.push_back(1);
+            return counts;
+        }
+
+        void FillVulkanFormatCapabilities(VkPhysicalDevice physicalDevice,
+                                          const DynamicBackendParameters& dynamicParameters,
+                                          FormatCapabilityCache& cache) {
+            cache.Clear();
+            if (physicalDevice == VK_NULL_HANDLE) {
+                return;
+            }
+
+            for (SizeT formatIndex = 0; formatIndex < kFormatCapabilityFormatCount; ++formatIndex) {
+                const auto logicalFormat = static_cast<TextureInternalFormat>(formatIndex);
+                if (!IsFormatIndexValid(logicalFormat)) {
+                    continue;
+                }
+
+                VkFormat nativeFormat = MG_Util::ConvertTextureInternalFormatToVkEnum(logicalFormat);
+                VkFormat fallbackFormat = ResolveVulkanFallbackFormat(logicalFormat).value_or(VK_FORMAT_UNDEFINED);
+
+                VkFormatProperties nativeProperties{};
+                if (nativeFormat != VK_FORMAT_UNDEFINED) {
+                    vkGetPhysicalDeviceFormatProperties(physicalDevice, nativeFormat, &nativeProperties);
+                }
+
+                VkFormatProperties fallbackProperties{};
+                if (fallbackFormat != VK_FORMAT_UNDEFINED && fallbackFormat != nativeFormat) {
+                    vkGetPhysicalDeviceFormatProperties(physicalDevice, fallbackFormat, &fallbackProperties);
+                }
+
+                for (SizeT targetIndex = 0; targetIndex < kFormatCapabilityTextureTargetCount; ++targetIndex) {
+                    const auto target = static_cast<TextureTarget>(targetIndex);
+                    const VkFormatFeatureFlags nativeFeatures =
+                        IsTextureBufferTarget(target) ? nativeProperties.bufferFeatures
+                                                      : nativeProperties.optimalTilingFeatures;
+                    FormatCapabilityFlags nativeCaps = BuildVulkanCaps(logicalFormat, target, nativeFeatures);
+                    cache.FullCaps[targetIndex][formatIndex] |= nativeCaps;
+
+                    const VkFormatFeatureFlags fallbackFeatures =
+                        IsTextureBufferTarget(target) ? fallbackProperties.bufferFeatures
+                                                      : fallbackProperties.optimalTilingFeatures;
+                    FormatCapabilityFlags fallbackCaps = BuildVulkanCaps(logicalFormat, target, fallbackFeatures);
+                    if (fallbackFormat != VK_FORMAT_UNDEFINED && fallbackFormat != nativeFormat) {
+                        cache.CaveatCaps[targetIndex][formatIndex] |= fallbackCaps;
+                    }
+
+                    if (HasFormatCapability(nativeCaps | fallbackCaps, FormatCapability::MultisampleTexture)) {
+                        const Bool isDepth = MG_Util::IsDepthFormatInternalFormat(logicalFormat);
+                        const Bool isStencil = MG_Util::IsStencilFormatInternalFormat(logicalFormat);
+                        const Bool isInteger = IsIntegerInternalFormat(logicalFormat);
+                        Int maxSamples = dynamicParameters.MaxColorTextureSamples;
+                        if (isDepth || isStencil) {
+                            maxSamples = dynamicParameters.MaxDepthTextureSamples;
+                        } else if (isInteger) {
+                            maxSamples = dynamicParameters.MaxIntegerSamples;
+                        }
+                        cache.SampleCounts[targetIndex][formatIndex] = BuildSampleCounts(maxSamples);
+                    }
+                }
+
+                const SizeT renderbufferTargetIndex = GetRenderbufferFormatCapabilityTargetIndex();
+                FormatCapabilityFlags renderbufferCaps =
+                    BuildVulkanCaps(logicalFormat, TextureTarget::Texture2D, nativeProperties.optimalTilingFeatures);
+                renderbufferCaps &= FormatCapability::Creatable;
+                if ((nativeProperties.optimalTilingFeatures &
+                     (VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT | VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT)) != 0) {
+                    renderbufferCaps |= GetAttachmentCaps(logicalFormat);
+                    renderbufferCaps |= FormatCapability::MultisampleRenderbuffer;
+                }
+                cache.FullCaps[renderbufferTargetIndex][formatIndex] |= renderbufferCaps;
+
+                if (fallbackFormat != VK_FORMAT_UNDEFINED && fallbackFormat != nativeFormat) {
+                    FormatCapabilityFlags fallbackRenderbufferCaps =
+                        BuildVulkanCaps(logicalFormat, TextureTarget::Texture2D,
+                                        fallbackProperties.optimalTilingFeatures);
+                    fallbackRenderbufferCaps &= FormatCapability::Creatable;
+                    if ((fallbackProperties.optimalTilingFeatures &
+                         (VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT | VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT)) !=
+                        0) {
+                        fallbackRenderbufferCaps |= GetAttachmentCaps(logicalFormat);
+                        fallbackRenderbufferCaps |= FormatCapability::MultisampleRenderbuffer;
+                    }
+                    cache.CaveatCaps[renderbufferTargetIndex][formatIndex] |= fallbackRenderbufferCaps;
+                }
+
+                const FormatCapabilityFlags rbCaps = cache.FullCaps[renderbufferTargetIndex][formatIndex] |
+                                                     cache.CaveatCaps[renderbufferTargetIndex][formatIndex];
+                if (HasFormatCapability(rbCaps, FormatCapability::MultisampleRenderbuffer)) {
+                    cache.SampleCounts[renderbufferTargetIndex][formatIndex] =
+                        BuildSampleCounts(dynamicParameters.MaxFramebufferSamples);
+                }
+            }
         }
     } // namespace
 
@@ -88,6 +329,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
         UpdateDynamicBackendParameters();
         UpdateAdvertisedExtensions();
+        FillVulkanFormatCapabilities(physicalDevice.handle, m_dynamicParameters, MutableFormatCapabilities());
         return true;
     }
 
@@ -255,6 +497,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         m_vulkanCaps = capabilities;
         UpdateDynamicBackendParameters();
         UpdateAdvertisedExtensions();
+        MutableFormatCapabilities().Clear();
     }
 
     void BackendObject_DirectVulkan::UpdateAdvertisedExtensions() {

@@ -9,13 +9,390 @@
 #include "BackendObject_DirectGLES.h"
 #include "MG_Backend/BackendObject.h"
 #include <MG_Backend/DirectGLES/DirectGLES.h>
+#include <MG_Backend/DirectGLES/Utils.h>
 #include <MG_Util/BackendLoaders/OpenGL/Loader.h>
+#include <MG_Util/Classifiers/TextureEnumClassifier.h>
+#include <MG_Util/Converters/MGToGL/TextureEnumConverter.h>
+#include <MG_Util/Texture/TextureFormatProcessor.h>
 #include <format>
 
 namespace MobileGL::MG_Backend::DirectGLES {
     namespace {
         Bool IsReleaseCurrentRequest(EGLDisplay dpy, EGLSurface draw, EGLSurface read, EGLContext ctx) {
             return dpy == EGL_NO_DISPLAY && draw == EGL_NO_SURFACE && read == EGL_NO_SURFACE && ctx == EGL_NO_CONTEXT;
+        }
+
+        void ClearGLErrors(const MG_External::GLESFunctionsTable& gl) {
+            if (!gl.glGetError) return;
+            while (gl.glGetError() != GL_NO_ERROR) {
+            }
+        }
+
+        Bool CheckNoGLError(const MG_External::GLESFunctionsTable& gl) {
+            return !gl.glGetError || gl.glGetError() == GL_NO_ERROR;
+        }
+
+        GLenum GetTextureBindingQuery(TextureTarget target) {
+            switch (target) {
+            case TextureTarget::Texture2D:
+                return GL_TEXTURE_BINDING_2D;
+            case TextureTarget::Texture3D:
+                return GL_TEXTURE_BINDING_3D;
+            case TextureTarget::TextureCubeMap:
+                return GL_TEXTURE_BINDING_CUBE_MAP;
+            case TextureTarget::Texture2DArray:
+                return GL_TEXTURE_BINDING_2D_ARRAY;
+            case TextureTarget::TextureCubeMapArray:
+                return GL_TEXTURE_BINDING_CUBE_MAP_ARRAY;
+            case TextureTarget::Texture2DMultisample:
+                return GL_TEXTURE_BINDING_2D_MULTISAMPLE;
+            case TextureTarget::Texture2DMultisampleArray:
+                return GL_TEXTURE_BINDING_2D_MULTISAMPLE_ARRAY;
+            default:
+                return GL_UNKNOWN_MGL;
+            }
+        }
+
+        Bool IsGLESProbeTextureTarget(TextureTarget target) {
+            switch (target) {
+            case TextureTarget::Texture2D:
+            case TextureTarget::Texture3D:
+            case TextureTarget::TextureCubeMap:
+            case TextureTarget::Texture2DArray:
+            case TextureTarget::TextureCubeMapArray:
+            case TextureTarget::Texture2DMultisample:
+            case TextureTarget::Texture2DMultisampleArray:
+                return true;
+            default:
+                return false;
+            }
+        }
+
+        Bool IsGLESProbeMultisampleTarget(TextureTarget target) {
+            return target == TextureTarget::Texture2DMultisample ||
+                   target == TextureTarget::Texture2DMultisampleArray;
+        }
+
+        GLenum GetFramebufferAttachment(TextureInternalFormat format) {
+            const Bool isDepth = MG_Util::IsDepthFormatInternalFormat(format);
+            const Bool isStencil = MG_Util::IsStencilFormatInternalFormat(format);
+            if (isDepth && isStencil) return GL_DEPTH_STENCIL_ATTACHMENT;
+            if (isDepth) return GL_DEPTH_ATTACHMENT;
+            if (isStencil) return GL_STENCIL_ATTACHMENT;
+            return GL_COLOR_ATTACHMENT0;
+        }
+
+        FormatCapabilityFlags GetAttachmentCaps(TextureInternalFormat format) {
+            FormatCapabilityFlags caps = FormatCapability::FramebufferRenderable;
+            const Bool isDepth = MG_Util::IsDepthFormatInternalFormat(format);
+            const Bool isStencil = MG_Util::IsStencilFormatInternalFormat(format);
+            if (!isDepth && !isStencil) {
+                caps |= FormatCapability::ColorAttachment;
+            }
+            if (isDepth) {
+                caps |= FormatCapability::DepthAttachment;
+            }
+            if (isStencil) {
+                caps |= FormatCapability::StencilAttachment;
+            }
+            return caps;
+        }
+
+        Bool IsDepthOnlyFormat(TextureInternalFormat format) {
+            return MG_Util::IsDepthFormatInternalFormat(format) && !MG_Util::IsStencilFormatInternalFormat(format);
+        }
+
+        Bool IsFilterableFormat(TextureInternalFormat format) {
+            const GLenum glFormat = MG_Util::ConvertTextureInternalFormatToGLEnum(format);
+            GLenum normalizedInternalFormat = glFormat;
+            GLenum imageFormat = GL_RGBA;
+            GLenum imageType = GL_UNSIGNED_BYTE;
+            MG_Util::TextureFormatProcessor::NormalizePixelFormat(
+                glFormat, PixelFormatNormalizeOptionBit::None, &normalizedInternalFormat, &imageFormat, &imageType);
+            return imageFormat != GL_RED_INTEGER && imageFormat != GL_RG_INTEGER && imageFormat != GL_RGB_INTEGER &&
+                   imageFormat != GL_RGBA_INTEGER && !MG_Util::IsDepthFormatInternalFormat(format) &&
+                   !MG_Util::IsStencilFormatInternalFormat(format);
+        }
+
+        FormatCapabilityFlags GetTextureFeatureCaps(TextureInternalFormat format, TextureTarget target) {
+            FormatCapabilityFlags caps = FormatCapability::Creatable | FormatCapability::Sampled;
+            if (IsFilterableFormat(format)) {
+                caps |= FormatCapability::LinearFilter;
+            }
+            if (!IsGLESProbeMultisampleTarget(target) && !MG_Util::IsStencilFormatInternalFormat(format)) {
+                caps |= FormatCapability::GenerateMipmap;
+            }
+            if (IsDepthOnlyFormat(format)) {
+                caps |= FormatCapability::TextureShadow;
+            }
+            if (IsGLESProbeMultisampleTarget(target)) {
+                caps |= FormatCapability::MultisampleTexture;
+            }
+            return caps;
+        }
+
+        FormatCapabilityFlags GetRenderbufferFeatureCaps(TextureInternalFormat format) {
+            return FormatCapabilityFlags(FormatCapability::Creatable) | GetAttachmentCaps(format) |
+                   FormatCapability::MultisampleRenderbuffer;
+        }
+
+        Bool ProbeFramebufferCompletenessForTexture(const MG_External::GLESFunctionsTable& gl,
+                                                   TextureTarget target,
+                                                   GLuint texture,
+                                                   TextureInternalFormat format) {
+            GLuint framebuffer = 0;
+            GLint prevFramebuffer = 0;
+            if (!gl.glGenFramebuffers || !gl.glBindFramebuffer || !gl.glCheckFramebufferStatus ||
+                !gl.glDeleteFramebuffers) {
+                return false;
+            }
+
+            gl.glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prevFramebuffer);
+            gl.glGenFramebuffers(1, &framebuffer);
+            gl.glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
+
+            const GLenum attachment = GetFramebufferAttachment(format);
+            switch (target) {
+            case TextureTarget::Texture2D:
+                gl.glFramebufferTexture2D(GL_FRAMEBUFFER, attachment, GL_TEXTURE_2D, texture, 0);
+                break;
+            case TextureTarget::TextureCubeMap:
+                gl.glFramebufferTexture2D(GL_FRAMEBUFFER, attachment, GL_TEXTURE_CUBE_MAP_POSITIVE_X, texture, 0);
+                break;
+            case TextureTarget::Texture3D:
+            case TextureTarget::Texture2DArray:
+            case TextureTarget::TextureCubeMapArray:
+            case TextureTarget::Texture2DMultisampleArray:
+                if (!gl.glFramebufferTextureLayer) {
+                    gl.glBindFramebuffer(GL_FRAMEBUFFER, static_cast<GLuint>(prevFramebuffer));
+                    gl.glDeleteFramebuffers(1, &framebuffer);
+                    return false;
+                }
+                gl.glFramebufferTextureLayer(GL_FRAMEBUFFER, attachment, texture, 0, 0);
+                break;
+            case TextureTarget::Texture2DMultisample:
+                gl.glFramebufferTexture2D(GL_FRAMEBUFFER, attachment, GL_TEXTURE_2D_MULTISAMPLE, texture, 0);
+                break;
+            default:
+                gl.glBindFramebuffer(GL_FRAMEBUFFER, static_cast<GLuint>(prevFramebuffer));
+                gl.glDeleteFramebuffers(1, &framebuffer);
+                return false;
+            }
+
+            const Bool complete = gl.glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
+            gl.glBindFramebuffer(GL_FRAMEBUFFER, static_cast<GLuint>(prevFramebuffer));
+            gl.glDeleteFramebuffers(1, &framebuffer);
+            return complete;
+        }
+
+        Bool ProbeFramebufferCompletenessForRenderbuffer(const MG_External::GLESFunctionsTable& gl,
+                                                        GLuint renderbuffer,
+                                                        TextureInternalFormat format) {
+            GLuint framebuffer = 0;
+            GLint prevFramebuffer = 0;
+            if (!gl.glGenFramebuffers || !gl.glBindFramebuffer || !gl.glFramebufferRenderbuffer ||
+                !gl.glCheckFramebufferStatus || !gl.glDeleteFramebuffers) {
+                return false;
+            }
+
+            gl.glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prevFramebuffer);
+            gl.glGenFramebuffers(1, &framebuffer);
+            gl.glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
+            gl.glFramebufferRenderbuffer(GL_FRAMEBUFFER, GetFramebufferAttachment(format), GL_RENDERBUFFER,
+                                         renderbuffer);
+            const Bool complete = gl.glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
+            gl.glBindFramebuffer(GL_FRAMEBUFFER, static_cast<GLuint>(prevFramebuffer));
+            gl.glDeleteFramebuffers(1, &framebuffer);
+            return complete;
+        }
+
+        Bool ProbeTexture(const MG_External::GLESFunctionsTable& gl, TextureTarget target, GLenum internalFormat,
+                          GLenum imageFormat, GLenum imageType, TextureInternalFormat logicalFormat,
+                          Bool* outRenderable) {
+            if (!IsGLESProbeTextureTarget(target) || !gl.glGenTextures || !gl.glBindTexture || !gl.glDeleteTextures) {
+                return false;
+            }
+
+            const GLenum glTarget = MG_Util::ConvertTextureTargetToGLEnum(target);
+            const GLenum bindingQuery = GetTextureBindingQuery(target);
+            if (glTarget == GL_UNKNOWN_MGL || bindingQuery == GL_UNKNOWN_MGL) {
+                return false;
+            }
+
+            GLint previousBinding = 0;
+            gl.glGetIntegerv(bindingQuery, &previousBinding);
+            GLuint texture = 0;
+            gl.glGenTextures(1, &texture);
+            gl.glBindTexture(glTarget, texture);
+            ClearGLErrors(gl);
+
+            const Bool isMultisample = IsGLESProbeMultisampleTarget(target);
+            if (isMultisample) {
+                if (target == TextureTarget::Texture2DMultisample && gl.glTexStorage2DMultisample) {
+                    gl.glTexStorage2DMultisample(glTarget, 1, internalFormat, 1, 1, GL_TRUE);
+                } else if (target == TextureTarget::Texture2DMultisampleArray && gl.glTexStorage3DMultisample) {
+                    gl.glTexStorage3DMultisample(glTarget, 1, internalFormat, 1, 1, 1, GL_TRUE);
+                } else {
+                    gl.glBindTexture(glTarget, static_cast<GLuint>(previousBinding));
+                    gl.glDeleteTextures(1, &texture);
+                    return false;
+                }
+            } else {
+                if (gl.glTexParameteri) {
+                    gl.glTexParameteri(glTarget, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+                    gl.glTexParameteri(glTarget, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+                }
+                switch (target) {
+                case TextureTarget::Texture2D:
+                    gl.glTexImage2D(glTarget, 0, static_cast<GLint>(internalFormat), 2, 2, 0, imageFormat, imageType,
+                                    nullptr);
+                    break;
+                case TextureTarget::TextureCubeMap:
+                    for (GLenum face = GL_TEXTURE_CUBE_MAP_POSITIVE_X; face <= GL_TEXTURE_CUBE_MAP_NEGATIVE_Z; ++face) {
+                        gl.glTexImage2D(face, 0, static_cast<GLint>(internalFormat), 2, 2, 0, imageFormat, imageType,
+                                        nullptr);
+                    }
+                    break;
+                case TextureTarget::Texture3D:
+                    gl.glTexImage3D(glTarget, 0, static_cast<GLint>(internalFormat), 2, 2, 2, 0, imageFormat,
+                                    imageType, nullptr);
+                    break;
+                case TextureTarget::Texture2DArray:
+                    gl.glTexImage3D(glTarget, 0, static_cast<GLint>(internalFormat), 2, 2, 1, 0, imageFormat,
+                                    imageType, nullptr);
+                    break;
+                case TextureTarget::TextureCubeMapArray:
+                    gl.glTexImage3D(glTarget, 0, static_cast<GLint>(internalFormat), 2, 2, 6, 0, imageFormat,
+                                    imageType, nullptr);
+                    break;
+                default:
+                    break;
+                }
+            }
+
+            const Bool created = CheckNoGLError(gl);
+            Bool renderable = false;
+            if (created) {
+                renderable = ProbeFramebufferCompletenessForTexture(gl, target, texture, logicalFormat);
+            }
+            if (outRenderable) {
+                *outRenderable = renderable;
+            }
+            gl.glBindTexture(glTarget, static_cast<GLuint>(previousBinding));
+            gl.glDeleteTextures(1, &texture);
+            ClearGLErrors(gl);
+            return created;
+        }
+
+        Bool ProbeRenderbuffer(const MG_External::GLESFunctionsTable& gl,
+                               GLenum internalFormat,
+                               TextureInternalFormat logicalFormat,
+                               Bool multisample,
+                               Int samples) {
+            if (!gl.glGenRenderbuffers || !gl.glBindRenderbuffer || !gl.glDeleteRenderbuffers) {
+                return false;
+            }
+
+            GLint prevRenderbuffer = 0;
+            gl.glGetIntegerv(GL_RENDERBUFFER_BINDING, &prevRenderbuffer);
+            GLuint renderbuffer = 0;
+            gl.glGenRenderbuffers(1, &renderbuffer);
+            gl.glBindRenderbuffer(GL_RENDERBUFFER, renderbuffer);
+            ClearGLErrors(gl);
+            if (multisample) {
+                if (!gl.glRenderbufferStorageMultisample) {
+                    gl.glBindRenderbuffer(GL_RENDERBUFFER, static_cast<GLuint>(prevRenderbuffer));
+                    gl.glDeleteRenderbuffers(1, &renderbuffer);
+                    return false;
+                }
+                gl.glRenderbufferStorageMultisample(GL_RENDERBUFFER, samples, internalFormat, 1, 1);
+            } else {
+                gl.glRenderbufferStorage(GL_RENDERBUFFER, internalFormat, 1, 1);
+            }
+            const Bool created = CheckNoGLError(gl);
+            const Bool complete = created && ProbeFramebufferCompletenessForRenderbuffer(gl, renderbuffer, logicalFormat);
+            gl.glBindRenderbuffer(GL_RENDERBUFFER, static_cast<GLuint>(prevRenderbuffer));
+            gl.glDeleteRenderbuffers(1, &renderbuffer);
+            ClearGLErrors(gl);
+            return complete;
+        }
+
+        Vector<Int> ProbeRenderbufferSampleCounts(const MG_External::GLESFunctionsTable& gl,
+                                                  GLenum internalFormat,
+                                                  TextureInternalFormat logicalFormat,
+                                                  Int maxSamples) {
+            Vector<Int> sampleCounts;
+            for (Int samples = std::max(maxSamples, 1); samples > 1; samples >>= 1) {
+                if (ProbeRenderbuffer(gl, internalFormat, logicalFormat, true, samples)) {
+                    sampleCounts.push_back(samples);
+                }
+            }
+            sampleCounts.push_back(1);
+            return sampleCounts;
+        }
+
+        void ProbeGLESFormatCapabilities(const MG_External::GLESFunctionsTable& gl,
+                                         FormatCapabilityCache& cache,
+                                         const DynamicBackendParameters& dynamicParameters) {
+            cache.Clear();
+            for (SizeT formatIndex = 0; formatIndex < kFormatCapabilityFormatCount; ++formatIndex) {
+                const auto logicalFormat = static_cast<TextureInternalFormat>(formatIndex);
+                GLenum requestedInternalFormat = MG_Util::ConvertTextureInternalFormatToGLEnum(logicalFormat);
+                if (requestedInternalFormat == GL_UNKNOWN_MGL) {
+                    continue;
+                }
+
+                GLenum backendInternalFormat = requestedInternalFormat;
+                GLenum imageFormat = GL_RGBA;
+                GLenum imageType = GL_UNSIGNED_BYTE;
+                TextureImpl::GenerateTextureFormatInfo(logicalFormat, &backendInternalFormat, &imageFormat,
+                                                       &imageType);
+                const Bool isCaveat = backendInternalFormat != requestedInternalFormat;
+
+                for (SizeT targetIndex = 0; targetIndex < kFormatCapabilityTextureTargetCount; ++targetIndex) {
+                    const auto target = static_cast<TextureTarget>(targetIndex);
+                    Bool renderable = false;
+                    if (!ProbeTexture(gl, target, backendInternalFormat, imageFormat, imageType, logicalFormat,
+                                      &renderable)) {
+                        continue;
+                    }
+
+                    FormatCapabilityFlags caps = GetTextureFeatureCaps(logicalFormat, target);
+                    if (renderable) {
+                        caps |= GetAttachmentCaps(logicalFormat);
+                        if (target == TextureTarget::Texture3D || target == TextureTarget::Texture2DArray ||
+                            target == TextureTarget::TextureCubeMapArray ||
+                            target == TextureTarget::Texture2DMultisampleArray) {
+                            caps |= FormatCapability::FramebufferLayered;
+                        }
+                    }
+                    auto& table = isCaveat ? cache.CaveatCaps : cache.FullCaps;
+                    table[targetIndex][formatIndex] |= caps;
+
+                    if (IsGLESProbeMultisampleTarget(target)) {
+                        cache.SampleCounts[targetIndex][formatIndex] = {1};
+                    }
+                }
+
+                const SizeT renderbufferTargetIndex = GetRenderbufferFormatCapabilityTargetIndex();
+                if (ProbeRenderbuffer(gl, backendInternalFormat, logicalFormat, false, 1)) {
+                    auto& table = isCaveat ? cache.CaveatCaps : cache.FullCaps;
+                    table[renderbufferTargetIndex][formatIndex] |= GetRenderbufferFeatureCaps(logicalFormat);
+
+                    const Bool isDepth = MG_Util::IsDepthFormatInternalFormat(logicalFormat);
+                    const Bool isStencil = MG_Util::IsStencilFormatInternalFormat(logicalFormat);
+                    const Bool isInteger = imageFormat == GL_RED_INTEGER || imageFormat == GL_RG_INTEGER ||
+                                           imageFormat == GL_RGB_INTEGER || imageFormat == GL_RGBA_INTEGER;
+                    Int maxSamples = dynamicParameters.MaxColorTextureSamples;
+                    if (isDepth || isStencil) {
+                        maxSamples = dynamicParameters.MaxDepthTextureSamples;
+                    } else if (isInteger) {
+                        maxSamples = dynamicParameters.MaxIntegerSamples;
+                    }
+                    cache.SampleCounts[renderbufferTargetIndex][formatIndex] =
+                        ProbeRenderbufferSampleCounts(gl, backendInternalFormat, logicalFormat, maxSamples);
+                }
+            }
         }
     } // namespace
 
@@ -53,6 +430,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         }
         DirectGLES::SetGLESCapabilities(m_GLESCapabilities);
         UpdateDynamicBackendParameters();
+        ProbeGLESFormatCapabilities(m_GLESFunctions, MutableFormatCapabilities(), m_dynamicParameters);
         return true;
     }
 
