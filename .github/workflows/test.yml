@@ -230,7 +230,6 @@ jobs:
       - name: Checkout repo
         uses: actions/checkout@v4
         with:
-          lfs: true
           submodules: recursive
 
       - name: Get CMake
@@ -371,8 +370,10 @@ jobs:
       - name: Checkout repo
         uses: actions/checkout@v4
         with:
-          lfs: true
           submodules: recursive
+
+      - name: Fetch trace fixture
+        run: bash .github/scripts/fetch-trace-fixture-lfs.sh '${{ matrix.case }}'
 
       - name: Get CMake
         uses: lukka/get-cmake@latest

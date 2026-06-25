@@ -373,8 +373,10 @@ jobs:
       - name: Checkout repo
         uses: actions/checkout@v4
         with:
-          lfs: true
           submodules: recursive
+
+      - name: Fetch trace fixture
+        run: bash .github/scripts/fetch-trace-fixture-lfs.sh '${{ matrix.case.name }}'
 
       - name: Set artifact metadata
         run: |
