@@ -34,6 +34,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         Flags<PixelFormatNormalizeOptionBit> GetDriverPixelFormatNormalizeOptions() {
             Flags<PixelFormatNormalizeOptionBit> options = PixelFormatNormalizeOptionBit::NoDepthComponent32;
             options |= PixelFormatNormalizeOptionBit::NoRGBA8Snorm;
+            options |= PixelFormatNormalizeOptionBit::NoRGB16Snorm;
             if (!g_GLESCapabilities.SupportsNorm16Texture) {
                 options |= PixelFormatNormalizeOptionBit::NoNorm16;
             }
@@ -213,7 +214,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return result;
         }
 
-        String ClampRGBA8SnormFallbackOutputs(String glslCode, GLenum shaderType, Uint32 outputMask) {
+        String ClampSnormFallbackOutputs(String glslCode, GLenum shaderType, Uint32 outputMask) {
 #ifdef TRACY_ENABLE
             ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif

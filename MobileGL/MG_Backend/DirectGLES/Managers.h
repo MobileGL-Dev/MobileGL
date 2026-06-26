@@ -284,17 +284,17 @@ namespace MobileGL::MG_Backend::DirectGLES {
             void SetBaseInstance(Uint32 baseInstance) const;
             Uint GetBackendProgramId() const { return m_backendProgramId; }
             Uint GetBackendGlobalUBOId() const { return m_backendGlobalUBOId; }
-            Uint32 GetRGBA8SnormClampOutputMask() const { return m_rgba8SnormClampOutputMask; }
+            Uint32 GetSnormFallbackClampOutputMask() const { return m_snormFallbackClampOutputMask; }
 
         private:
             Uint m_backendProgramId = 0;
             Uint m_backendGlobalUBOId = 0;
             Int m_baseInstanceUniformLocation = -1;
-            Uint32 m_rgba8SnormClampOutputMask = 0;
+            Uint32 m_snormFallbackClampOutputMask = 0;
             Bool m_isInitialized = false;
         };
 
-        extern Uint32 g_rgba8SnormClampOutputMask;
+        extern Uint32 g_snormFallbackClampOutputMask;
         extern StateBackendObjectRegistry<MG_State::GLState::ProgramObject, BackendProgramObjectImpl>
             g_backendProgramObjects;
     } // namespace PrgramImpl

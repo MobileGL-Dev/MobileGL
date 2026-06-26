@@ -185,6 +185,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         Flags<PixelFormatNormalizeOptionBit> GetDriverPixelFormatNormalizeOptions() {
             Flags<PixelFormatNormalizeOptionBit> options = PixelFormatNormalizeOptionBit::NoDepthComponent32;
             options |= PixelFormatNormalizeOptionBit::NoRGBA8Snorm;
+            options |= PixelFormatNormalizeOptionBit::NoRGB16Snorm;
             if (!g_GLESCapabilities.SupportsNorm16Texture) {
                 options |= PixelFormatNormalizeOptionBit::NoNorm16;
             }
@@ -211,6 +212,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
             if (options & PixelFormatNormalizeOptionBit::NoRGBA8Snorm) {
                 reasons.push_back(forced ? "RGBA8_SNORM fallback forced by backend policy"
                                          : "RGBA8_SNORM render target path is not supported");
+            }
+            if (options & PixelFormatNormalizeOptionBit::NoRGB16Snorm) {
+                reasons.push_back(forced ? "RGB16_SNORM fallback forced by backend policy"
+                                         : "RGB16_SNORM render target path is not supported");
             }
             if (options & PixelFormatNormalizeOptionBit::NoDepthComponent32) {
                 reasons.push_back("GL_DEPTH_COMPONENT32 native probe failed on OpenGL ES");

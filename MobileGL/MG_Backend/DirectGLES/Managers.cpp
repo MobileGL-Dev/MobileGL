@@ -1316,17 +1316,33 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return true;
         }
 
-        static Bool IsRGBA8SnormFallbackAttachment(
+        static Bool IsSnormFormat(TextureInternalFormat format) {
+            switch (format) {
+            case TextureInternalFormat::R8Snorm:
+            case TextureInternalFormat::RG8Snorm:
+            case TextureInternalFormat::RGB8Snorm:
+            case TextureInternalFormat::RGBA8Snorm:
+            case TextureInternalFormat::R16Snorm:
+            case TextureInternalFormat::RG16Snorm:
+            case TextureInternalFormat::RGB16Snorm:
+            case TextureInternalFormat::RGBA16Snorm:
+                return true;
+            default:
+                return false;
+            }
+        }
+
+        static Bool IsSnormFallbackAttachment(
             const MG_State::GLState::FramebufferAttachmentObject& attachmentObject) {
             if (attachmentObject.IsTexture()) {
                 const auto& textureObject = attachmentObject.GetTexture();
-                return textureObject && textureObject->GetFormat() == TextureInternalFormat::RGBA8Snorm &&
+                return textureObject && IsSnormFormat(textureObject->GetFormat()) &&
                        TextureImpl::ShouldUseCaveatTextureFormat(textureObject->GetFormat(), textureObject->GetTarget());
             }
             if (attachmentObject.IsRenderbuffer()) {
                 const auto& renderbufferObject = attachmentObject.GetRenderbuffer();
                 return renderbufferObject &&
-                       renderbufferObject->GetInternalFormat() == TextureInternalFormat::RGBA8Snorm &&
+                       IsSnormFormat(renderbufferObject->GetInternalFormat()) &&
                        TextureImpl::ShouldUseCaveatRenderbufferFormat(renderbufferObject->GetInternalFormat());
             }
             return false;
@@ -1391,11 +1407,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
                         continue;
                     }
                     const auto& attachmentObject = stateFBOObject->GetAttachment(frontendBuf);
-                    if (IsRGBA8SnormFallbackAttachment(attachmentObject)) {
+                    if (IsSnormFallbackAttachment(attachmentObject)) {
                         clampOutputMask |= (1u << i);
                     }
                 }
-                PrgramImpl::g_rgba8SnormClampOutputMask = clampOutputMask;
+                PrgramImpl::g_snormFallbackClampOutputMask = clampOutputMask;
             }
 
             // 2. Remap read buffer
@@ -1510,7 +1526,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
     } // namespace FramebufferImpl
 
     namespace PrgramImpl {
-        Uint32 g_rgba8SnormClampOutputMask = 0;
+        Uint32 g_snormFallbackClampOutputMask = 0;
         StateBackendObjectRegistry<MG_State::GLState::ProgramObject, BackendProgramObjectImpl> g_backendProgramObjects;
 
         BackendProgramObjectImpl::BackendProgramObjectImpl() {
@@ -1555,7 +1571,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
             MGLOG_D("Syncing program to backend. State program ID: %u, Backend ID: %u",
                     stateProgramObject->GetExternalIndex(), m_backendProgramId);
-            m_rgba8SnormClampOutputMask = g_rgba8SnormClampOutputMask;
+            m_snormFallbackClampOutputMask = g_snormFallbackClampOutputMask;
 
             // Detach all existing shaders
             GLint attachedCount = 0;
@@ -1631,8 +1647,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 source = ForceFlatIntegerVaryings(source, glShaderType);
                 source = EmulateBaseInstanceInVertexShader(std::move(source), glShaderType);
                 source = ForceSupporterOutput(source);
-                source = ClampRGBA8SnormFallbackOutputs(std::move(source), glShaderType,
-                                                        m_rgba8SnormClampOutputMask);
+                source = ClampSnormFallbackOutputs(std::move(source), glShaderType,
+                                                   m_snormFallbackClampOutputMask);
 
                 // Patch for Photon compiler precision issue
                 String findStr = "1000000.0";

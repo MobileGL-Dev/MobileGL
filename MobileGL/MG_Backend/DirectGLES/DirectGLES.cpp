@@ -712,7 +712,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 backendObj->SyncToBackend(currentProgram);
             } else {
                 if (!backendObj->GetBackendProgramId() ||
-                    backendObj->GetRGBA8SnormClampOutputMask() != g_rgba8SnormClampOutputMask) {
+                    backendObj->GetSnormFallbackClampOutputMask() != g_snormFallbackClampOutputMask) {
                     backendObj->SyncToBackend(currentProgram);
                 }
             }
