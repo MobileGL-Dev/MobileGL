@@ -136,6 +136,122 @@ namespace MobileGL::MG_Backend::DirectGLES {
                    FormatCapability::MultisampleRenderbuffer;
         }
 
+        struct GLESProbeFormatInfo {
+            GLenum InternalFormat = GL_UNKNOWN_MGL;
+            GLenum ImageFormat = GL_RGBA;
+            GLenum ImageType = GL_UNSIGNED_BYTE;
+        };
+
+        constexpr FormatCapability kGLESProbeCapabilities[] = {
+            FormatCapability::Creatable,
+            FormatCapability::Sampled,
+            FormatCapability::LinearFilter,
+            FormatCapability::GenerateMipmap,
+            FormatCapability::TextureGather,
+            FormatCapability::TextureShadow,
+            FormatCapability::FramebufferRenderable,
+            FormatCapability::FramebufferLayered,
+            FormatCapability::MultisampleTexture,
+            FormatCapability::MultisampleRenderbuffer,
+            FormatCapability::ColorAttachment,
+            FormatCapability::DepthAttachment,
+            FormatCapability::StencilAttachment,
+            FormatCapability::TextureBuffer,
+        };
+
+        GLESProbeFormatInfo BuildNativeProbeFormatInfo(GLenum requestedInternalFormat) {
+            GLESProbeFormatInfo info;
+            info.InternalFormat = requestedInternalFormat;
+            MG_Util::TextureFormatProcessor::NormalizePixelFormat(
+                requestedInternalFormat, PixelFormatNormalizeOptionBit::None, nullptr, &info.ImageFormat,
+                &info.ImageType);
+            return info;
+        }
+
+        Flags<PixelFormatNormalizeOptionBit> GetForcedPixelFormatNormalizeOptions() {
+            Flags<PixelFormatNormalizeOptionBit> options;
+            if (g_GLESCapabilities.GLESRendererString.find("ANGLE") != String::npos) {
+                options |= PixelFormatNormalizeOptionBit::NoRgb16;
+                options |= PixelFormatNormalizeOptionBit::NoSnorm16;
+                options |= PixelFormatNormalizeOptionBit::NoSnorm8;
+            }
+            return options;
+        }
+
+        Flags<PixelFormatNormalizeOptionBit> GetDriverPixelFormatNormalizeOptions() {
+            Flags<PixelFormatNormalizeOptionBit> options = PixelFormatNormalizeOptionBit::NoDepthComponent32;
+            if (!g_GLESCapabilities.SupportsNorm16Texture) {
+                options |= PixelFormatNormalizeOptionBit::NoNorm16;
+            }
+            return options;
+        }
+
+        Bool BuildFallbackProbeFormatInfo(GLenum requestedInternalFormat,
+                                          Flags<PixelFormatNormalizeOptionBit> options,
+                                          GLESProbeFormatInfo& outInfo) {
+            const Flags<PixelFormatNormalizeOptionBit> applicableOptions =
+                MG_Util::TextureFormatProcessor::GetApplicablePixelFormatNormalizeOptions(requestedInternalFormat,
+                                                                                          options);
+            if (!applicableOptions) {
+                return false;
+            }
+
+            MG_Util::TextureFormatProcessor::NormalizePixelFormat(requestedInternalFormat, applicableOptions,
+                                                                  &outInfo.InternalFormat, &outInfo.ImageFormat,
+                                                                  &outInfo.ImageType);
+            return outInfo.InternalFormat != GL_UNKNOWN_MGL;
+        }
+
+        FormatCapabilityFlags BuildTextureCapsFromProbe(TextureInternalFormat logicalFormat,
+                                                        TextureTarget target,
+                                                        Bool renderable) {
+            FormatCapabilityFlags caps = GetTextureFeatureCaps(logicalFormat, target);
+            if (renderable) {
+                caps |= GetAttachmentCaps(logicalFormat);
+                if (target == TextureTarget::Texture3D || target == TextureTarget::Texture2DArray ||
+                    target == TextureTarget::TextureCubeMapArray ||
+                    target == TextureTarget::Texture2DMultisampleArray) {
+                    caps |= FormatCapability::FramebufferLayered;
+                }
+            }
+            return caps;
+        }
+
+        void AddFullFormatCaps(FormatCapabilityCache& cache,
+                               SizeT targetIndex,
+                               SizeT formatIndex,
+                               FormatCapabilityFlags caps) {
+            cache.FullCaps[targetIndex][formatIndex] |= caps;
+        }
+
+        void AddCaveatFormatCaps(FormatCapabilityCache& cache,
+                                 SizeT targetIndex,
+                                 SizeT formatIndex,
+                                 FormatCapabilityFlags caps) {
+            for (FormatCapability capability : kGLESProbeCapabilities) {
+                if (HasFormatCapability(caps, capability) &&
+                    !HasFormatCapability(cache.FullCaps[targetIndex][formatIndex], capability)) {
+                    cache.CaveatCaps[targetIndex][formatIndex] |= capability;
+                }
+            }
+        }
+
+        Int GetGLESFormatMaxSamples(const DynamicBackendParameters& dynamicParameters,
+                                    TextureInternalFormat logicalFormat,
+                                    GLenum imageFormat) {
+            const Bool isDepth = MG_Util::IsDepthFormatInternalFormat(logicalFormat);
+            const Bool isStencil = MG_Util::IsStencilFormatInternalFormat(logicalFormat);
+            const Bool isInteger = imageFormat == GL_RED_INTEGER || imageFormat == GL_RG_INTEGER ||
+                                   imageFormat == GL_RGB_INTEGER || imageFormat == GL_RGBA_INTEGER;
+            if (isDepth || isStencil) {
+                return dynamicParameters.MaxDepthTextureSamples;
+            }
+            if (isInteger) {
+                return dynamicParameters.MaxIntegerSamples;
+            }
+            return dynamicParameters.MaxColorTextureSamples;
+        }
+
         Bool ProbeFramebufferCompletenessForTexture(const MG_External::GLESFunctionsTable& gl,
                                                    TextureTarget target,
                                                    GLuint texture,
@@ -335,6 +451,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                          FormatCapabilityCache& cache,
                                          const DynamicBackendParameters& dynamicParameters) {
             cache.Clear();
+            const Flags<PixelFormatNormalizeOptionBit> forcedOptions = GetForcedPixelFormatNormalizeOptions();
+            const Flags<PixelFormatNormalizeOptionBit> driverOptions = GetDriverPixelFormatNormalizeOptions();
+
             for (SizeT formatIndex = 0; formatIndex < kFormatCapabilityFormatCount; ++formatIndex) {
                 const auto logicalFormat = static_cast<TextureInternalFormat>(formatIndex);
                 GLenum requestedInternalFormat = MG_Util::ConvertTextureInternalFormatToGLEnum(logicalFormat);
@@ -342,55 +461,71 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     continue;
                 }
 
-                GLenum backendInternalFormat = requestedInternalFormat;
-                GLenum imageFormat = GL_RGBA;
-                GLenum imageType = GL_UNSIGNED_BYTE;
-                TextureImpl::GenerateTextureFormatInfo(logicalFormat, &backendInternalFormat, &imageFormat,
-                                                       &imageType);
-                const Bool isCaveat = backendInternalFormat != requestedInternalFormat;
+                const GLESProbeFormatInfo nativeInfo = BuildNativeProbeFormatInfo(requestedInternalFormat);
+                GLESProbeFormatInfo fallbackInfo;
+                const Bool hasForcedFallback =
+                    BuildFallbackProbeFormatInfo(requestedInternalFormat, forcedOptions, fallbackInfo);
+                if (!hasForcedFallback) {
+                    BuildFallbackProbeFormatInfo(requestedInternalFormat, driverOptions, fallbackInfo);
+                }
 
                 for (SizeT targetIndex = 0; targetIndex < kFormatCapabilityTextureTargetCount; ++targetIndex) {
                     const auto target = static_cast<TextureTarget>(targetIndex);
-                    Bool renderable = false;
-                    if (!ProbeTexture(gl, target, backendInternalFormat, imageFormat, imageType, logicalFormat,
-                                      &renderable)) {
-                        continue;
-                    }
-
-                    FormatCapabilityFlags caps = GetTextureFeatureCaps(logicalFormat, target);
-                    if (renderable) {
-                        caps |= GetAttachmentCaps(logicalFormat);
-                        if (target == TextureTarget::Texture3D || target == TextureTarget::Texture2DArray ||
-                            target == TextureTarget::TextureCubeMapArray ||
-                            target == TextureTarget::Texture2DMultisampleArray) {
-                            caps |= FormatCapability::FramebufferLayered;
+                    Bool shouldProbeFallback = hasForcedFallback;
+                    if (!hasForcedFallback) {
+                        Bool nativeRenderable = false;
+                        const Bool nativeCreated =
+                            ProbeTexture(gl, target, nativeInfo.InternalFormat, nativeInfo.ImageFormat,
+                                         nativeInfo.ImageType, logicalFormat, &nativeRenderable);
+                        if (nativeCreated) {
+                            AddFullFormatCaps(cache, targetIndex, formatIndex,
+                                              BuildTextureCapsFromProbe(logicalFormat, target, nativeRenderable));
+                            if (IsGLESProbeMultisampleTarget(target)) {
+                                cache.SampleCounts[targetIndex][formatIndex] = {1};
+                            }
                         }
+                        shouldProbeFallback = !nativeCreated || !nativeRenderable;
                     }
-                    auto& table = isCaveat ? cache.CaveatCaps : cache.FullCaps;
-                    table[targetIndex][formatIndex] |= caps;
 
-                    if (IsGLESProbeMultisampleTarget(target)) {
-                        cache.SampleCounts[targetIndex][formatIndex] = {1};
+                    if (shouldProbeFallback && fallbackInfo.InternalFormat != GL_UNKNOWN_MGL) {
+                        Bool fallbackRenderable = false;
+                        const Bool fallbackCreated =
+                            ProbeTexture(gl, target, fallbackInfo.InternalFormat, fallbackInfo.ImageFormat,
+                                         fallbackInfo.ImageType, logicalFormat, &fallbackRenderable);
+                        if (fallbackCreated) {
+                            AddCaveatFormatCaps(cache, targetIndex, formatIndex,
+                                                BuildTextureCapsFromProbe(logicalFormat, target, fallbackRenderable));
+                            if (IsGLESProbeMultisampleTarget(target)) {
+                                cache.SampleCounts[targetIndex][formatIndex] = {1};
+                            }
+                        }
                     }
                 }
 
                 const SizeT renderbufferTargetIndex = GetRenderbufferFormatCapabilityTargetIndex();
-                if (ProbeRenderbuffer(gl, backendInternalFormat, logicalFormat, false, 1)) {
-                    auto& table = isCaveat ? cache.CaveatCaps : cache.FullCaps;
-                    table[renderbufferTargetIndex][formatIndex] |= GetRenderbufferFeatureCaps(logicalFormat);
-
-                    const Bool isDepth = MG_Util::IsDepthFormatInternalFormat(logicalFormat);
-                    const Bool isStencil = MG_Util::IsStencilFormatInternalFormat(logicalFormat);
-                    const Bool isInteger = imageFormat == GL_RED_INTEGER || imageFormat == GL_RG_INTEGER ||
-                                           imageFormat == GL_RGB_INTEGER || imageFormat == GL_RGBA_INTEGER;
-                    Int maxSamples = dynamicParameters.MaxColorTextureSamples;
-                    if (isDepth || isStencil) {
-                        maxSamples = dynamicParameters.MaxDepthTextureSamples;
-                    } else if (isInteger) {
-                        maxSamples = dynamicParameters.MaxIntegerSamples;
+                Bool shouldProbeFallbackRenderbuffer = hasForcedFallback;
+                if (!hasForcedFallback) {
+                    const Bool nativeRenderbufferComplete =
+                        ProbeRenderbuffer(gl, nativeInfo.InternalFormat, logicalFormat, false, 1);
+                    if (nativeRenderbufferComplete) {
+                        AddFullFormatCaps(cache, renderbufferTargetIndex, formatIndex,
+                                          GetRenderbufferFeatureCaps(logicalFormat));
+                        const Int maxSamples =
+                            GetGLESFormatMaxSamples(dynamicParameters, logicalFormat, nativeInfo.ImageFormat);
+                        cache.SampleCounts[renderbufferTargetIndex][formatIndex] =
+                            ProbeRenderbufferSampleCounts(gl, nativeInfo.InternalFormat, logicalFormat, maxSamples);
+                    } else {
+                        shouldProbeFallbackRenderbuffer = true;
                     }
+                }
+                if (shouldProbeFallbackRenderbuffer && fallbackInfo.InternalFormat != GL_UNKNOWN_MGL &&
+                    ProbeRenderbuffer(gl, fallbackInfo.InternalFormat, logicalFormat, false, 1)) {
+                    AddCaveatFormatCaps(cache, renderbufferTargetIndex, formatIndex,
+                                        GetRenderbufferFeatureCaps(logicalFormat));
+                    const Int maxSamples =
+                        GetGLESFormatMaxSamples(dynamicParameters, logicalFormat, fallbackInfo.ImageFormat);
                     cache.SampleCounts[renderbufferTargetIndex][formatIndex] =
-                        ProbeRenderbufferSampleCounts(gl, backendInternalFormat, logicalFormat, maxSamples);
+                        ProbeRenderbufferSampleCounts(gl, fallbackInfo.InternalFormat, logicalFormat, maxSamples);
                 }
             }
         }

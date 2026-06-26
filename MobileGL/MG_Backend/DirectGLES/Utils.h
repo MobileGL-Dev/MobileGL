@@ -35,7 +35,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
     namespace TextureImpl {
         void GenerateTextureFormatInfo(TextureInternalFormat internalFormat, GLenum* outInternalFormat,
-                                       GLenum* outFormat, GLenum* outType);
+                                       GLenum* outFormat, GLenum* outType,
+                                       TextureTarget target = TextureTarget::Unknown);
+        void GenerateRenderbufferFormatInfo(TextureInternalFormat internalFormat, GLenum* outInternalFormat,
+                                            GLenum* outFormat, GLenum* outType);
     } // namespace TextureImpl
 
     namespace FramebufferImpl {} // namespace FramebufferImpl

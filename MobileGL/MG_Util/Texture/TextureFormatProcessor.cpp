@@ -10,6 +10,42 @@
 #include "MG_Util/Converters/GLToStr/GLEnumConverter.h"
 
 namespace MobileGL::MG_Util::TextureFormatProcessor {
+    Flags<PixelFormatNormalizeOptionBit>
+    GetApplicablePixelFormatNormalizeOptions(GLenum internalFormat,
+                                             Flags<PixelFormatNormalizeOptionBit> options) {
+        Flags<PixelFormatNormalizeOptionBit> applicableOptions;
+        switch (internalFormat) {
+        case GL_DEPTH_COMPONENT32:
+            applicableOptions |= options & PixelFormatNormalizeOptionBit::NoDepthComponent32;
+            break;
+        case GL_RGBA16:
+        case GL_RG16:
+        case GL_R16:
+            applicableOptions |= options & PixelFormatNormalizeOptionBit::NoNorm16;
+            break;
+        case GL_RGB16:
+            applicableOptions |= options & PixelFormatNormalizeOptionBit::NoNorm16;
+            applicableOptions |= options & PixelFormatNormalizeOptionBit::NoRgb16;
+            break;
+        case GL_RGBA16_SNORM:
+        case GL_RGB16_SNORM:
+        case GL_RG16_SNORM:
+        case GL_R16_SNORM:
+            applicableOptions |= options & PixelFormatNormalizeOptionBit::NoNorm16;
+            applicableOptions |= options & PixelFormatNormalizeOptionBit::NoSnorm16;
+            break;
+        case GL_RGBA8_SNORM:
+        case GL_RGB8_SNORM:
+        case GL_RG8_SNORM:
+        case GL_R8_SNORM:
+            applicableOptions |= options & PixelFormatNormalizeOptionBit::NoSnorm8;
+            break;
+        default:
+            break;
+        }
+        return applicableOptions;
+    }
+
     void NormalizePixelFormat(GLenum internalFormat, Flags<PixelFormatNormalizeOptionBit> options,
                               GLenum* outInternalFormat, GLenum* outFormat, GLenum* outType) {
 #ifdef TRACY_ENABLE
@@ -19,7 +55,11 @@ namespace MobileGL::MG_Util::TextureFormatProcessor {
         if (outInternalFormat) {
             switch (internalFormat) {
             case GL_DEPTH_COMPONENT32:
-                *outInternalFormat = GL_DEPTH_COMPONENT;
+                if (options & PixelFormatNormalizeOptionBit::NoDepthComponent32) {
+                    *outInternalFormat = GL_DEPTH_COMPONENT;
+                    break;
+                }
+                *outInternalFormat = internalFormat;
                 break;
             case GL_RGBA16:
                 if (options & PixelFormatNormalizeOptionBit::NoNorm16) {

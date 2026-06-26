@@ -2041,7 +2041,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
         auto mgInternalFormat = textureObject->GetFormat();
         GLenum format = GL_DEPTH_COMPONENT;
         GLenum type = GL_UNSIGNED_INT;
-        TextureImpl::GenerateTextureFormatInfo(mgInternalFormat, &internalformat, &format, &type);
+        TextureImpl::GenerateTextureFormatInfo(mgInternalFormat, &internalformat, &format, &type,
+                                               MG_Util::ConvertGLEnumToTextureTarget(target));
         MOBILEGL_ASSERT(format != GL_NONE && type != GL_NONE,
                         "%s: cannot GenerateTextureFormatInfo(%s): out internalformat=%s, format=%s, type=%s",
                         MG_Util::ConvertTextureInternalFormatToString(mgInternalFormat).c_str(),
@@ -2269,9 +2270,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
             if (copyImageError == GL_NO_ERROR) {
                 return;
             }
-            MOBILEGL_ASSERT(copyImageError == GL_INVALID_ENUM,
-                            "glCopyImageSubData failed: %s",
-                            MG_Util::ConvertGLEnumToString(copyImageError).c_str());
             MOBILEGL_ASSERT(IsColorOnlyFormat(srcTexture->GetFormat()) && IsColorOnlyFormat(dstTexture->GetFormat()),
                             "DirectGLES CopyImageSubData only supports color-only or depth-only copies.");
             MOBILEGL_ASSERT(srcTarget == GL_TEXTURE_2D && dstTarget == GL_TEXTURE_2D,

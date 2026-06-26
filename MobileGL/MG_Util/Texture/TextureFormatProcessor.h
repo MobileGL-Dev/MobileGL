@@ -15,9 +15,13 @@ namespace MobileGL {
         NoSnorm16 = 1 << 1,
         NoRgb16 = 1 << 2,
         NoSnorm8 = 1 << 3,
+        NoDepthComponent32 = 1 << 4,
         None = 0,
     };
     namespace MG_Util::TextureFormatProcessor {
+        Flags<PixelFormatNormalizeOptionBit>
+        GetApplicablePixelFormatNormalizeOptions(GLenum internalFormat,
+                                                 Flags<PixelFormatNormalizeOptionBit> options);
         void NormalizePixelFormat(GLenum internalFormat, Flags<PixelFormatNormalizeOptionBit> options,
                                   GLenum* outInternalFormat, GLenum* outFormat, GLenum* outType);
     } // namespace MG_Util::TextureFormatProcessor

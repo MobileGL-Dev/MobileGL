@@ -9,6 +9,7 @@
 #include "DirectGLES.h"
 #include "Utils.h"
 #include "Managers.h"
+#include "MG_Backend/BackendObjects.h"
 #include "MG_Util/Converters/GLToMG/FramebufferEnumConverter.h"
 #include "MG_Util/Texture/TextureFormatProcessor.h"
 
@@ -19,23 +20,112 @@
 #include <MG_Util/Converters/MGToGL/FramebufferEnumConverter.h>
 
 namespace MobileGL::MG_Backend::DirectGLES {
-    namespace TextureImpl {
-        void GenerateTextureFormatInfo(TextureInternalFormat internalFormat, GLenum* outInternalFormat,
-                                       GLenum* outFormat, GLenum* outType) {
-#ifdef TRACY_ENABLE
-            ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
-#endif
-            using namespace MobileGL::MG_Util::TextureFormatProcessor;
-            Flags<PixelFormatNormalizeOptionBit> options =
-                (g_GLESCapabilities.SupportsNorm16Texture) ? PixelFormatNormalizeOptionBit::None
-                                                           : PixelFormatNormalizeOptionBit::NoNorm16;
+    namespace {
+        Flags<PixelFormatNormalizeOptionBit> GetForcedPixelFormatNormalizeOptions() {
+            Flags<PixelFormatNormalizeOptionBit> options;
             if (g_GLESCapabilities.GLESRendererString.find("ANGLE") != String::npos) {
                 options |= PixelFormatNormalizeOptionBit::NoRgb16;
                 options |= PixelFormatNormalizeOptionBit::NoSnorm16;
                 options |= PixelFormatNormalizeOptionBit::NoSnorm8;
             }
-            NormalizePixelFormat(MG_Util::ConvertTextureInternalFormatToGLEnum(internalFormat), options,
-                                 outInternalFormat, outFormat, outType);
+            return options;
+        }
+
+        Flags<PixelFormatNormalizeOptionBit> GetDriverPixelFormatNormalizeOptions() {
+            Flags<PixelFormatNormalizeOptionBit> options = PixelFormatNormalizeOptionBit::NoDepthComponent32;
+            if (!g_GLESCapabilities.SupportsNorm16Texture) {
+                options |= PixelFormatNormalizeOptionBit::NoNorm16;
+            }
+            return options;
+        }
+
+        Flags<PixelFormatNormalizeOptionBit> GetRuntimeFallbackNormalizeOptions(GLenum requestedInternalFormat) {
+            using namespace MG_Util::TextureFormatProcessor;
+            const Flags<PixelFormatNormalizeOptionBit> forcedOptions =
+                GetApplicablePixelFormatNormalizeOptions(requestedInternalFormat, GetForcedPixelFormatNormalizeOptions());
+            if (forcedOptions) {
+                return forcedOptions;
+            }
+            return GetApplicablePixelFormatNormalizeOptions(requestedInternalFormat,
+                                                            GetDriverPixelFormatNormalizeOptions());
+        }
+
+        Bool HasCachedFormatCapability(TextureInternalFormat internalFormat,
+                                       SizeT targetIndex,
+                                       Bool caveat,
+                                       FormatCapability capability) {
+            if (!pActiveBackendObject || targetIndex >= kFormatCapabilityTargetCount) {
+                return false;
+            }
+            const SizeT formatIndex = static_cast<SizeT>(internalFormat);
+            if (formatIndex >= kFormatCapabilityFormatCount) {
+                return false;
+            }
+
+            const FormatCapabilityCache& cache = pActiveBackendObject->GetFormatCapabilities();
+            const FormatCapabilityFlags caps =
+                caveat ? cache.CaveatCaps[targetIndex][formatIndex] : cache.FullCaps[targetIndex][formatIndex];
+            return HasFormatCapability(caps, capability);
+        }
+
+        Bool HasAnyCachedFormatCapability(TextureInternalFormat internalFormat,
+                                          Bool caveat,
+                                          FormatCapability capability) {
+            for (SizeT targetIndex = 0; targetIndex < kFormatCapabilityTargetCount; ++targetIndex) {
+                if (HasCachedFormatCapability(internalFormat, targetIndex, caveat, capability)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        Bool ShouldUseCaveatFormat(TextureInternalFormat internalFormat, SizeT targetIndex) {
+            if (targetIndex < kFormatCapabilityTargetCount) {
+                if (HasCachedFormatCapability(internalFormat, targetIndex, false, FormatCapability::Creatable)) {
+                    return false;
+                }
+                return HasCachedFormatCapability(internalFormat, targetIndex, true, FormatCapability::Creatable);
+            }
+
+            if (HasAnyCachedFormatCapability(internalFormat, false, FormatCapability::Creatable)) {
+                return false;
+            }
+            return HasAnyCachedFormatCapability(internalFormat, true, FormatCapability::Creatable);
+        }
+
+        void GenerateFormatInfo(TextureInternalFormat internalFormat,
+                                SizeT targetIndex,
+                                GLenum* outInternalFormat,
+                                GLenum* outFormat,
+                                GLenum* outType) {
+            using namespace MobileGL::MG_Util::TextureFormatProcessor;
+            const GLenum requestedInternalFormat = MG_Util::ConvertTextureInternalFormatToGLEnum(internalFormat);
+            Flags<PixelFormatNormalizeOptionBit> options;
+            if (!pActiveBackendObject || ShouldUseCaveatFormat(internalFormat, targetIndex)) {
+                options = GetRuntimeFallbackNormalizeOptions(requestedInternalFormat);
+            }
+            NormalizePixelFormat(requestedInternalFormat, options, outInternalFormat, outFormat, outType);
+        }
+    } // namespace
+
+    namespace TextureImpl {
+        void GenerateTextureFormatInfo(TextureInternalFormat internalFormat, GLenum* outInternalFormat,
+                                       GLenum* outFormat, GLenum* outType, TextureTarget target) {
+#ifdef TRACY_ENABLE
+            ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
+#endif
+            const SizeT targetIndex =
+                target == TextureTarget::Unknown ? kFormatCapabilityTargetCount : GetFormatCapabilityTargetIndex(target);
+            GenerateFormatInfo(internalFormat, targetIndex, outInternalFormat, outFormat, outType);
+        }
+
+        void GenerateRenderbufferFormatInfo(TextureInternalFormat internalFormat, GLenum* outInternalFormat,
+                                            GLenum* outFormat, GLenum* outType) {
+#ifdef TRACY_ENABLE
+            ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
+#endif
+            GenerateFormatInfo(internalFormat, GetRenderbufferFormatCapabilityTargetIndex(), outInternalFormat,
+                               outFormat, outType);
         }
     } // namespace TextureImpl
     namespace PrgramImpl {

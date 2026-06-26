@@ -708,7 +708,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
                     GLenum glInternalFormat, glType, glFormat;
                     TextureImpl::GenerateTextureFormatInfo(textureMipmapObject->GetFormat(), &glInternalFormat,
-                                                           &glFormat, &glType);
+                                                           &glFormat, &glType, targetInternal);
 
                     const auto& uploadTargets = textureMipmapObject->GetUploadTargets();
                     ScopedDefaultUnpackState unpackState;
@@ -771,7 +771,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     // Regenerate all mipmap levels
                     GLenum glInternalFormat, glType, glFormat;
                     TextureImpl::GenerateTextureFormatInfo(textureMipmapObject->GetFormat(), &glInternalFormat,
-                                                           &glFormat, &glType);
+                                                           &glFormat, &glType, targetInternal);
 
                     const auto& uploadTargets = textureMipmapObject->GetUploadTargets();
                     if (TextureImpl::IsMultisampleTextureTarget(targetInternal)) {
@@ -884,7 +884,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     const auto mipmapCount = textureMipmapObject->GetMipmapLevelCount();
                     GLenum glInternalFormat, glType, glFormat;
                     TextureImpl::GenerateTextureFormatInfo(textureMipmapObject->GetFormat(), &glInternalFormat,
-                                                           &glFormat, &glType);
+                                                           &glFormat, &glType, targetInternal);
                     const auto& uploadTargets = textureMipmapObject->GetUploadTargets();
                     ScopedDefaultUnpackState unpackState;
                     for (auto& uploadTarget : uploadTargets) {
@@ -980,7 +980,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
                 GLenum glInternalFormat, glType, glFormat;
                 TextureImpl::GenerateTextureFormatInfo(textureBufferObject->GetFormat(), &glInternalFormat, &glFormat,
-                                                       &glType);
+                                                       &glType, TextureTarget::TextureBuffer);
 
                 if (needsRegeneration) {
                     MGLOG_D("Texture state changed significantly or not initialized, regenerating texture buffer with "
@@ -1832,7 +1832,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             Int height = static_cast<Int>(stateRBOObject->GetHeight());
             Int samples = static_cast<Int>(stateRBOObject->GetSamples());
             GLenum glInternalFormat, glType, glFormat;
-            TextureImpl::GenerateTextureFormatInfo(internalFormat, &glInternalFormat, &glFormat, &glType);
+            TextureImpl::GenerateRenderbufferFormatInfo(internalFormat, &glInternalFormat, &glFormat, &glType);
 
             if (samples > 0) {
                 g_GLESFuncs.glRenderbufferStorageMultisample(
