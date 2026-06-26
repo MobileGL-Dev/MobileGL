@@ -335,27 +335,27 @@ jobs:
           - name: minecraft-1.21.4-fabric-iris-iterationt-in-world
             trace_archive: tools/trace_replay/fixtures/minecraft-1.21.4-fabric-iris-iterationt-in-world.tgz
             trace_file: trace.trace
-            golden: tools/trace_replay/fixtures/minecraft-1.21.4-fabric-iris-iterationt-in-world.0001173280.png
-            target_call: 1173280
+            golden: tools/trace_replay/fixtures/minecraft-1.21.4-fabric-iris-iterationt-in-world.0000110538.png
+            target_call: 110538
             width: 854
             height: 480
             crop_x: 0
             crop_y: 0
             crop_width: 0
             crop_height: 0
-            timeout_seconds: 2400
+            timeout_seconds: 900
           - name: minecraft-1.21.4-fabric-iris-iterationt-nodsa-in-world
             trace_archive: tools/trace_replay/fixtures/minecraft-1.21.4-fabric-iris-iterationt-nodsa-in-world.tgz
             trace_file: trace.trace
-            golden: tools/trace_replay/fixtures/minecraft-1.21.4-fabric-iris-iterationt-nodsa-in-world.0001606997.png
-            target_call: 1606997
+            golden: tools/trace_replay/fixtures/minecraft-1.21.4-fabric-iris-iterationt-nodsa-in-world.0000115019.png
+            target_call: 115019
             width: 854
             height: 480
             crop_x: 0
             crop_y: 0
             crop_width: 0
             crop_height: 0
-            timeout_seconds: 2400
+            timeout_seconds: 900
           - name: minecraft-1.21.4-fabric-iris-photon-v1.1-in-world
             trace_archive: tools/trace_replay/fixtures/minecraft-1.21.4-fabric-iris-photon-v1.1-in-world.tgz
             trace_file: trace.trace

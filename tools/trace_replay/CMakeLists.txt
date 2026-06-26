@@ -481,8 +481,8 @@ add_trace_replay_test_for_backends(minecraft-1.21.4-fabric-iris-chocapic-v6-lite
 add_trace_replay_test_for_backends(minecraft-1.21.4-fabric-iris-iterationt-in-world
         TRACE_ARCHIVE ${MOBILEGL_TRACE_ROOT}/fixtures/minecraft-1.21.4-fabric-iris-iterationt-in-world.tgz
         TRACE_FILE trace.trace
-        GOLDEN ${MOBILEGL_TRACE_ROOT}/fixtures/minecraft-1.21.4-fabric-iris-iterationt-in-world.0001173280.png
-        TARGET_CALL 1173280
+        GOLDEN ${MOBILEGL_TRACE_ROOT}/fixtures/minecraft-1.21.4-fabric-iris-iterationt-in-world.0000110538.png
+        TARGET_CALL 110538
         WIDTH 854
         HEIGHT 480
 )
@@ -490,8 +490,8 @@ add_trace_replay_test_for_backends(minecraft-1.21.4-fabric-iris-iterationt-in-wo
 add_trace_replay_test_for_backends(minecraft-1.21.4-fabric-iris-iterationt-nodsa-in-world
         TRACE_ARCHIVE ${MOBILEGL_TRACE_ROOT}/fixtures/minecraft-1.21.4-fabric-iris-iterationt-nodsa-in-world.tgz
         TRACE_FILE trace.trace
-        GOLDEN ${MOBILEGL_TRACE_ROOT}/fixtures/minecraft-1.21.4-fabric-iris-iterationt-nodsa-in-world.0001606997.png
-        TARGET_CALL 1606997
+        GOLDEN ${MOBILEGL_TRACE_ROOT}/fixtures/minecraft-1.21.4-fabric-iris-iterationt-nodsa-in-world.0000115019.png
+        TARGET_CALL 115019
         WIDTH 854
         HEIGHT 480
 )

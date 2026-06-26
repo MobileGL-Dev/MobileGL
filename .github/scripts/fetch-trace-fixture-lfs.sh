@@ -73,10 +73,10 @@ case "${case_name}" in
     add_standard_case "0000125124-linux-mesa"
     ;;
   minecraft-1.21.4-fabric-iris-iterationt-in-world)
-    add_standard_case "0001173280"
+    add_standard_case "0000110538"
     ;;
   minecraft-1.21.4-fabric-iris-iterationt-nodsa-in-world)
-    add_standard_case "0001606997"
+    add_standard_case "0000115019"
     ;;
   minecraft-1.21.4-fabric-iris-photon-v1.1-in-world)
     add_standard_case "0000159866"
