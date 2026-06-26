@@ -35,6 +35,9 @@ namespace MobileGL::MG_Util::TextureFormatProcessor {
             applicableOptions |= options & PixelFormatNormalizeOptionBit::NoSnorm16;
             break;
         case GL_RGBA8_SNORM:
+            applicableOptions |= options & PixelFormatNormalizeOptionBit::NoSnorm8;
+            applicableOptions |= options & PixelFormatNormalizeOptionBit::NoRGBA8Snorm;
+            break;
         case GL_RGB8_SNORM:
         case GL_RG8_SNORM:
         case GL_R8_SNORM:
@@ -123,7 +126,8 @@ namespace MobileGL::MG_Util::TextureFormatProcessor {
                 *outInternalFormat = internalFormat;
                 break;
             case GL_RGBA8_SNORM:
-                if (options & PixelFormatNormalizeOptionBit::NoSnorm8) {
+                if ((options & PixelFormatNormalizeOptionBit::NoSnorm8) ||
+                    (options & PixelFormatNormalizeOptionBit::NoRGBA8Snorm)) {
                     *outInternalFormat = GL_RGBA16F;
                     break;
                 }
@@ -360,11 +364,18 @@ namespace MobileGL::MG_Util::TextureFormatProcessor {
                     *outType = GL_SHORT;
                     break;
                 }
-            case GL_RGBA8_SNORM:
             case GL_RGB8_SNORM:
             case GL_RG8_SNORM:
             case GL_R8_SNORM:
                 if (options & PixelFormatNormalizeOptionBit::NoSnorm8) {
+                    *outType = GL_FLOAT;
+                    break;
+                }
+                *outType = GL_BYTE;
+                break;
+            case GL_RGBA8_SNORM:
+                if ((options & PixelFormatNormalizeOptionBit::NoSnorm8) ||
+                    (options & PixelFormatNormalizeOptionBit::NoRGBA8Snorm)) {
                     *outType = GL_FLOAT;
                     break;
                 }

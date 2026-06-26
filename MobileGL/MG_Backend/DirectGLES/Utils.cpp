@@ -33,6 +33,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
         Flags<PixelFormatNormalizeOptionBit> GetDriverPixelFormatNormalizeOptions() {
             Flags<PixelFormatNormalizeOptionBit> options = PixelFormatNormalizeOptionBit::NoDepthComponent32;
+            options |= PixelFormatNormalizeOptionBit::NoRGBA8Snorm;
             if (!g_GLESCapabilities.SupportsNorm16Texture) {
                 options |= PixelFormatNormalizeOptionBit::NoNorm16;
             }
@@ -81,10 +82,15 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
         Bool ShouldUseCaveatFormat(TextureInternalFormat internalFormat, SizeT targetIndex) {
             if (targetIndex < kFormatCapabilityTargetCount) {
-                if (HasCachedFormatCapability(internalFormat, targetIndex, false, FormatCapability::Creatable)) {
-                    return false;
-                }
-                return HasCachedFormatCapability(internalFormat, targetIndex, true, FormatCapability::Creatable);
+                const Bool fullCreatable =
+                    HasCachedFormatCapability(internalFormat, targetIndex, false, FormatCapability::Creatable);
+                const Bool caveatCreatable =
+                    HasCachedFormatCapability(internalFormat, targetIndex, true, FormatCapability::Creatable);
+                const Bool fullRenderable =
+                    HasCachedFormatCapability(internalFormat, targetIndex, false, FormatCapability::FramebufferRenderable);
+                const Bool caveatRenderable =
+                    HasCachedFormatCapability(internalFormat, targetIndex, true, FormatCapability::FramebufferRenderable);
+                return (!fullCreatable && caveatCreatable) || (!fullRenderable && caveatRenderable);
             }
 
             if (HasAnyCachedFormatCapability(internalFormat, false, FormatCapability::Creatable)) {
@@ -126,6 +132,16 @@ namespace MobileGL::MG_Backend::DirectGLES {
 #endif
             GenerateFormatInfo(internalFormat, GetRenderbufferFormatCapabilityTargetIndex(), outInternalFormat,
                                outFormat, outType);
+        }
+
+        Bool ShouldUseCaveatTextureFormat(TextureInternalFormat internalFormat, TextureTarget target) {
+            const SizeT targetIndex =
+                target == TextureTarget::Unknown ? kFormatCapabilityTargetCount : GetFormatCapabilityTargetIndex(target);
+            return ShouldUseCaveatFormat(internalFormat, targetIndex);
+        }
+
+        Bool ShouldUseCaveatRenderbufferFormat(TextureInternalFormat internalFormat) {
+            return ShouldUseCaveatFormat(internalFormat, GetRenderbufferFormatCapabilityTargetIndex());
         }
     } // namespace TextureImpl
     namespace PrgramImpl {
@@ -195,6 +211,57 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
             result.insert(insertionPos, precisionFloat + precisionInt);
             return result;
+        }
+
+        String ClampRGBA8SnormFallbackOutputs(String glslCode, GLenum shaderType, Uint32 outputMask) {
+#ifdef TRACY_ENABLE
+            ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
+#endif
+            if (shaderType != GL_FRAGMENT_SHADER || outputMask == 0) {
+                return glslCode;
+            }
+
+            const std::regex outputPattern(
+                R"(layout\s*\(\s*location\s*=\s*([0-9]+)\s*\)\s*out\s+(?:(?:lowp|mediump|highp)\s+)?vec4\s+([A-Za-z_][A-Za-z0-9_]*)\s*;)");
+            std::sregex_iterator outputIt(glslCode.begin(), glslCode.end(), outputPattern);
+            std::sregex_iterator outputEnd;
+            Vector<String> outputNames;
+            for (; outputIt != outputEnd; ++outputIt) {
+                const Uint location = static_cast<Uint>(std::stoul((*outputIt)[1].str()));
+                if (location < 32 && (outputMask & (1u << location))) {
+                    outputNames.push_back((*outputIt)[2].str());
+                }
+            }
+            if (outputNames.empty()) {
+                return glslCode;
+            }
+
+            const std::regex mainPattern(R"(void\s+main\s*\([^)]*\)\s*\{)");
+            std::smatch mainMatch;
+            if (!std::regex_search(glslCode, mainMatch, mainPattern)) {
+                return glslCode;
+            }
+
+            SizeT bracePos = static_cast<SizeT>(mainMatch.position(0) + mainMatch.length(0) - 1);
+            Int depth = 0;
+            for (SizeT pos = bracePos; pos < glslCode.size(); ++pos) {
+                if (glslCode[pos] == '{') {
+                    ++depth;
+                } else if (glslCode[pos] == '}') {
+                    --depth;
+                    if (depth == 0) {
+                        String clampLine;
+                        for (const String& outputName : outputNames) {
+                            clampLine += "\n    " + outputName + " = clamp(" + outputName +
+                                         ", vec4(-1.0), vec4(1.0));";
+                        }
+                        clampLine += "\n";
+                        glslCode.insert(pos, clampLine);
+                        return glslCode;
+                    }
+                }
+            }
+            return glslCode;
         }
 
         String ForceFlatIntegerVaryings(const String& glslCode, GLenum shaderType) {

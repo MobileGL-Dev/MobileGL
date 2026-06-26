@@ -39,6 +39,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                        TextureTarget target = TextureTarget::Unknown);
         void GenerateRenderbufferFormatInfo(TextureInternalFormat internalFormat, GLenum* outInternalFormat,
                                             GLenum* outFormat, GLenum* outType);
+        Bool ShouldUseCaveatTextureFormat(TextureInternalFormat internalFormat, TextureTarget target);
+        Bool ShouldUseCaveatRenderbufferFormat(TextureInternalFormat internalFormat);
     } // namespace TextureImpl
 
     namespace FramebufferImpl {} // namespace FramebufferImpl
@@ -46,6 +48,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
     namespace PrgramImpl {
         String ProcessOutColorLocations(const String& glslCode);
         String ForceSupporterOutput(const String& glslCode);
+        String ClampRGBA8SnormFallbackOutputs(String glslCode, GLenum shaderType, Uint32 outputMask);
         String ForceFlatIntegerVaryings(const String& glslCode, GLenum shaderType);
         String RemoveLayoutBinding(const String& glslCode);
     } // namespace PrgramImpl

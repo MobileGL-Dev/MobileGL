@@ -711,7 +711,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 backendObj = MakeShared<BackendProgramObjectImpl>();
                 backendObj->SyncToBackend(currentProgram);
             } else {
-                if (!backendObj->GetBackendProgramId()) {
+                if (!backendObj->GetBackendProgramId() ||
+                    backendObj->GetRGBA8SnormClampOutputMask() != g_rgba8SnormClampOutputMask) {
                     backendObj->SyncToBackend(currentProgram);
                 }
             }
