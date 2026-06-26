@@ -13,6 +13,7 @@
 #include "MG_State/GLState/TextureState/TextureState.h"
 #include "MG_Util/Classifiers/TextureEnumClassifier.h"
 #include "MG_Util/Converters/MGToGL/TextureEnumConverter.h"
+#include "MG_Util/Converters/MGToStr/TextureEnumConverter.h"
 #include "MG_Util/Converters/MGToVk/TextureEnumConverter.h"
 #include "MG_Util/Texture/TextureFormatProcessor.h"
 
@@ -125,38 +126,92 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             return caps;
         }
 
-        Optional<VkFormat> ResolveVulkanFallbackFormat(TextureInternalFormat format) {
+        Optional<TextureInternalFormat> ResolveVulkanFallbackLogicalFormat(TextureInternalFormat format) {
             switch (format) {
             case TextureInternalFormat::RGB:
             case TextureInternalFormat::RGB8:
-                return VK_FORMAT_R8G8B8A8_UNORM;
+                return TextureInternalFormat::RGBA8;
             case TextureInternalFormat::SRGB8:
-                return VK_FORMAT_R8G8B8A8_SRGB;
+                return TextureInternalFormat::SRGB8Alpha8;
             case TextureInternalFormat::RGB8Snorm:
-                return VK_FORMAT_R8G8B8A8_SNORM;
+                return TextureInternalFormat::RGBA8Snorm;
             case TextureInternalFormat::RGB16:
-                return VK_FORMAT_R16G16B16A16_UNORM;
+                return TextureInternalFormat::RGBA16;
             case TextureInternalFormat::RGB16Snorm:
-                return VK_FORMAT_R16G16B16A16_SNORM;
+                return TextureInternalFormat::RGBA16Snorm;
             case TextureInternalFormat::RGB16F:
-                return VK_FORMAT_R16G16B16A16_SFLOAT;
+                return TextureInternalFormat::RGBA16F;
             case TextureInternalFormat::RGB32F:
-                return VK_FORMAT_R32G32B32A32_SFLOAT;
+                return TextureInternalFormat::RGBA32F;
             case TextureInternalFormat::RGB8I:
-                return VK_FORMAT_R8G8B8A8_SINT;
+                return TextureInternalFormat::RGBA8I;
             case TextureInternalFormat::RGB8UI:
-                return VK_FORMAT_R8G8B8A8_UINT;
+                return TextureInternalFormat::RGBA8UI;
             case TextureInternalFormat::RGB16I:
-                return VK_FORMAT_R16G16B16A16_SINT;
+                return TextureInternalFormat::RGBA16I;
             case TextureInternalFormat::RGB16UI:
-                return VK_FORMAT_R16G16B16A16_UINT;
+                return TextureInternalFormat::RGBA16UI;
             case TextureInternalFormat::RGB32I:
-                return VK_FORMAT_R32G32B32A32_SINT;
+                return TextureInternalFormat::RGBA32I;
             case TextureInternalFormat::RGB32UI:
-                return VK_FORMAT_R32G32B32A32_UINT;
+                return TextureInternalFormat::RGBA32UI;
             default:
                 return Nullopt;
             }
+        }
+
+        Optional<VkFormat> ResolveVulkanFallbackFormat(TextureInternalFormat format) {
+            const Optional<TextureInternalFormat> fallbackLogicalFormat = ResolveVulkanFallbackLogicalFormat(format);
+            if (!fallbackLogicalFormat) {
+                return Nullopt;
+            }
+            return MG_Util::ConvertTextureInternalFormatToVkEnum(*fallbackLogicalFormat);
+        }
+
+        constexpr FormatCapability kVulkanProbeCapabilities[] = {
+            FormatCapability::Creatable,
+            FormatCapability::Sampled,
+            FormatCapability::LinearFilter,
+            FormatCapability::GenerateMipmap,
+            FormatCapability::TextureGather,
+            FormatCapability::TextureShadow,
+            FormatCapability::FramebufferRenderable,
+            FormatCapability::FramebufferLayered,
+            FormatCapability::MultisampleTexture,
+            FormatCapability::MultisampleRenderbuffer,
+            FormatCapability::ColorAttachment,
+            FormatCapability::DepthAttachment,
+            FormatCapability::StencilAttachment,
+            FormatCapability::TextureBuffer,
+        };
+
+        Bool HasNewCaveatFormatCaps(FormatCapabilityFlags nativeCaps, FormatCapabilityFlags fallbackCaps) {
+            for (FormatCapability capability : kVulkanProbeCapabilities) {
+                if (HasFormatCapability(fallbackCaps, capability) &&
+                    !HasFormatCapability(nativeCaps, capability)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        String GetFormatCapabilityTargetNameForLog(SizeT targetIndex) {
+            if (targetIndex == GetRenderbufferFormatCapabilityTargetIndex()) {
+                return "Renderbuffer";
+            }
+            if (targetIndex < kFormatCapabilityTextureTargetCount) {
+                return MG_Util::ConvertTextureTargetToString(static_cast<TextureTarget>(targetIndex));
+            }
+            return "Unknown";
+        }
+
+        void LogVulkanFormatCaveat(TextureInternalFormat logicalFormat,
+                                   SizeT targetIndex,
+                                   TextureInternalFormat fallbackFormat) {
+            MGLOG_I("Caveat: %s %s not fully supported. Reason: native Vulkan format is not fully supported. Fallback: %s",
+                    GetFormatCapabilityTargetNameForLog(targetIndex).c_str(),
+                    MG_Util::ConvertTextureInternalFormatToString(logicalFormat).c_str(),
+                    MG_Util::ConvertTextureInternalFormatToString(fallbackFormat).c_str());
         }
 
         Vector<Int> BuildSampleCounts(Int maxSamples) {
@@ -183,6 +238,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 }
 
                 VkFormat nativeFormat = MG_Util::ConvertTextureInternalFormatToVkEnum(logicalFormat);
+                const Optional<TextureInternalFormat> fallbackLogicalFormat =
+                    ResolveVulkanFallbackLogicalFormat(logicalFormat);
                 VkFormat fallbackFormat = ResolveVulkanFallbackFormat(logicalFormat).value_or(VK_FORMAT_UNDEFINED);
 
                 VkFormatProperties nativeProperties{};
@@ -209,6 +266,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                     FormatCapabilityFlags fallbackCaps = BuildVulkanCaps(logicalFormat, target, fallbackFeatures);
                     if (fallbackFormat != VK_FORMAT_UNDEFINED && fallbackFormat != nativeFormat) {
                         cache.CaveatCaps[targetIndex][formatIndex] |= fallbackCaps;
+                        if (fallbackLogicalFormat && HasNewCaveatFormatCaps(nativeCaps, fallbackCaps)) {
+                            LogVulkanFormatCaveat(logicalFormat, targetIndex, *fallbackLogicalFormat);
+                        }
                     }
 
                     if (HasFormatCapability(nativeCaps | fallbackCaps, FormatCapability::MultisampleTexture)) {
@@ -248,6 +308,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                         fallbackRenderbufferCaps |= FormatCapability::MultisampleRenderbuffer;
                     }
                     cache.CaveatCaps[renderbufferTargetIndex][formatIndex] |= fallbackRenderbufferCaps;
+                    if (fallbackLogicalFormat &&
+                        HasNewCaveatFormatCaps(renderbufferCaps, fallbackRenderbufferCaps)) {
+                        LogVulkanFormatCaveat(logicalFormat, renderbufferTargetIndex, *fallbackLogicalFormat);
+                    }
                 }
 
                 const FormatCapabilityFlags rbCaps = cache.FullCaps[renderbufferTargetIndex][formatIndex] |
