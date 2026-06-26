@@ -70,6 +70,7 @@ namespace MobileGL {
         Bool HasFormatCapability(FormatCapabilityFlags caps, FormatCapability capability);
         SizeT GetFormatCapabilityTargetIndex(TextureTarget target);
         SizeT GetRenderbufferFormatCapabilityTargetIndex();
+        void PrintFormatCapabilities(const FormatCapabilityCache& cache);
 
         struct GLFunctionsTable {
             void (*DrawArrays)(GLenum mode, GLint first, GLsizei count);

@@ -330,6 +330,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         UpdateDynamicBackendParameters();
         UpdateAdvertisedExtensions();
         FillVulkanFormatCapabilities(physicalDevice.handle, m_dynamicParameters, MutableFormatCapabilities());
+        PrintFormatCapabilities(GetFormatCapabilities());
         return true;
     }
 

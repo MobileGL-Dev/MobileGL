@@ -431,6 +431,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         DirectGLES::SetGLESCapabilities(m_GLESCapabilities);
         UpdateDynamicBackendParameters();
         ProbeGLESFormatCapabilities(m_GLESFunctions, MutableFormatCapabilities(), m_dynamicParameters);
+        PrintFormatCapabilities(GetFormatCapabilities());
         return true;
     }
 
