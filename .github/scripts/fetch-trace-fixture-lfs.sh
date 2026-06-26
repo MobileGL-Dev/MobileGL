@@ -88,6 +88,18 @@ case "${case_name}" in
 esac
 
 include="$(IFS=,; echo "${files[*]}")"
+if [ "${case_name}" = "OpenRA" ]; then
+  echo "Fixture files for ${case_name} are stored in Git: ${include}"
+  for file in "${files[@]}"; do
+    test -s "${file}"
+    if head -n 1 "${file}" | grep -q "version https://git-lfs.github.com/spec/v1"; then
+      echo "fixture should not be stored as an LFS pointer: ${file}" >&2
+      exit 1
+    fi
+  done
+  exit 0
+fi
+
 echo "Fetching LFS fixture files for ${case_name}: ${include}"
 
 git lfs install --local
