@@ -537,9 +537,8 @@ jobs:
           if-no-files-found: error
 
       - name: Upload Android retrace summary PDF
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
-          name: MobileGL-android-retrace-summary-pdf-${{ env.date_today }}-${{ env.short_sha }}
           path: android-retrace-summary/mobilegl-android-retrace-overview.pdf
-          compression-level: 0
+          archive: false
           if-no-files-found: error
