@@ -252,7 +252,7 @@ async function collectRows(inputs, defaultGroup) {
       group,
       backend,
       caseName,
-      status: "FAIL",
+      status: "NO_RESULT",
       ssim: "",
       message: "result.json was not found",
       actual: await findImage(pngs, caseName, backend, "actual", directory),
@@ -284,6 +284,7 @@ async function copyAsset(source, outputDir, assetName) {
 
 function statusText(row) {
   if (!row) return "NO RESULT";
+  if (row.status === "NO_RESULT") return "NO RESULT";
   if (row.status === "FIXTURE_MISSING") return "MISSING FIXTURE";
   if (row.ssim) {
     const value = Number(row.ssim);
@@ -316,16 +317,20 @@ async function renderHtml(rows, outputDir, title, groupLabel, htmlName) {
       ${src ? `<img src="${htmlEscape(src)}" alt="${label}">` : `<div class="no-image">NO IMAGE</div>`}
     </figure>`;
 
+  const missingImages = (row) => !row.actualRel || !row.goldenRel || !row.diffRel;
+  const cellFor = (group, backend, caseName) => cells.get(`${group}\0${backend}\0${caseName}`) ?? {
+    status: "NO_RESULT",
+    actualRel: "",
+    goldenRel: "",
+    diffRel: "",
+  };
+
   const backendCell = (group, backend, caseName) => {
-    const row = cells.get(`${group}\0${backend}\0${caseName}`) ?? {
-      status: "NO_RESULT",
-      actualRel: "",
-      goldenRel: "",
-      diffRel: "",
-    };
+    const row = cellFor(group, backend, caseName);
     const statusClass = row.status === "PASS" ? "pass" : row.status === "NO_RESULT" || row.status === "FIXTURE_MISSING" ? "missing" : "fail";
+    const imageClass = missingImages(row) ? "image-missing" : "";
     return `
-      <section class="backend-cell ${statusClass}">
+      <section class="backend-cell ${statusClass} ${imageClass}">
         <header>${backend} <strong>${statusText(row)}</strong></header>
         <div class="thumbs">
           ${thumb(row.actualRel, "actual")}
@@ -336,14 +341,15 @@ async function renderHtml(rows, outputDir, title, groupLabel, htmlName) {
   };
 
   const groupSections = groups.map((group) => {
-    const groupRows = rows.filter((row) => row.group === group);
-    const passed = groupRows.filter((row) => row.status === "PASS").length;
-    const failed = groupRows.filter((row) => row.status === "FAIL").length;
-    const missing = groupRows.filter((row) => row.status !== "PASS" && row.status !== "FAIL").length;
+    const groupCells = CASES.flatMap((caseName) => BACKENDS.map((backend) => cellFor(group, backend, caseName)));
+    const passed = groupCells.filter((row) => row.status === "PASS").length;
+    const failed = groupCells.filter((row) => row.status === "FAIL").length;
+    const noResult = groupCells.filter((row) => row.status !== "PASS" && row.status !== "FAIL").length;
+    const incompleteImages = groupCells.filter((row) => row.status !== "NO_RESULT" && missingImages(row)).length;
     return `
       <section class="group">
         <h1>${htmlEscape(title)} - ${htmlEscape(group)}</h1>
-        <p>Each backend cell shows actual / golden / diff. Failed cases are red; missing or absent results are orange. PASS ${passed}, FAIL ${failed}, MISSING ${missing}.</p>
+        <p>Each backend cell shows actual / golden / diff. Failed cases are red; absent results are orange; incomplete image sets get an orange notch. PASS ${passed}, FAIL ${failed}, NO RESULT ${noResult}, MISSING IMAGES ${incompleteImages}.</p>
         <div class="grid header-row">
           <div>case</div>
           <div>DirectGLES</div>
@@ -426,9 +432,20 @@ async function renderHtml(rows, outputDir, title, groupLabel, htmlName) {
     border: 1px solid var(--line);
     background: var(--panel);
     min-height: 102px;
+    position: relative;
   }
   .backend-cell.fail { border: 3px solid var(--red); }
   .backend-cell.missing { border: 2px solid var(--orange); }
+  .backend-cell.image-missing::after {
+    content: "";
+    position: absolute;
+    right: 0;
+    top: 0;
+    width: 0;
+    height: 0;
+    border-top: 16px solid var(--orange);
+    border-left: 16px solid transparent;
+  }
   .backend-cell > header {
     height: 22px;
     padding: 4px 7px;
