@@ -345,11 +345,10 @@ async function renderHtml(rows, outputDir, title, groupLabel, htmlName) {
     const passed = groupCells.filter((row) => row.status === "PASS").length;
     const failed = groupCells.filter((row) => row.status === "FAIL").length;
     const noResult = groupCells.filter((row) => row.status !== "PASS" && row.status !== "FAIL").length;
-    const incompleteImages = groupCells.filter((row) => row.status !== "NO_RESULT" && missingImages(row)).length;
     return `
       <section class="group">
         <h1>${htmlEscape(title)} - ${htmlEscape(group)}</h1>
-        <p>Each backend cell shows actual / golden / diff. Failed cases are red; absent results are orange; incomplete image sets get an orange notch. PASS ${passed}, FAIL ${failed}, NO RESULT ${noResult}, MISSING IMAGES ${incompleteImages}.</p>
+        <p>Each backend cell shows actual / golden / diff. Failed cases are red; absent results are orange; incomplete image sets get an orange notch. PASS ${passed}, FAIL ${failed}, NO RESULT ${noResult}.</p>
         <div class="grid header-row">
           <div>case</div>
           <div>DirectGLES</div>
