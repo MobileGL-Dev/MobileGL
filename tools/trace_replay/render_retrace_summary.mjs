@@ -138,8 +138,12 @@ function inferCaseBackend(filePath) {
 
 function inferGroup(filePath, defaultGroup) {
   const text = normalizeSlashes(filePath);
-  for (const token of ["HA27Q3LQ", "JNHUVK4XL7ZLWK7L"]) {
-    if (text.includes(token)) return token;
+  for (const segment of text.split("/")) {
+    const match = segment.match(/^android-retrace-(?:result|fixture|work)-(.+)$/);
+    if (!match) continue;
+    const parts = match[1].split("-");
+    const serial = parts[parts.length - 1];
+    if (serial) return serial;
   }
   return defaultGroup;
 }
@@ -229,7 +233,12 @@ async function findImage(pngs, caseName, backend, kind, nearFile) {
   }
 
   const scored = [];
+  const nearGroup = nearFile ? inferGroup(nearFile, "") : "";
   for (const png of pngs) {
+    const text = normalizeSlashes(png);
+    if ((kind === "actual" || kind === "diff") && backend && !text.includes(backend)) continue;
+    const pngGroup = inferGroup(png, "");
+    if (nearGroup && pngGroup && pngGroup !== nearGroup) continue;
     const score = scoreImage(png, caseName, backend, kind);
     if (score >= 7) scored.push({ score, png });
   }
