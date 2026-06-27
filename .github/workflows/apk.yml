@@ -179,6 +179,7 @@ jobs:
             trace_archive: tools/trace_replay/fixtures/minecraft-1.21.4-main-menu.tgz
             trace_file: trace.trace
             golden: tools/trace_replay/fixtures/minecraft-1.21.4-main-menu.0000481787.png
+            alternate_golden: tools/trace_replay/fixtures/minecraft-1.21.4-main-menu.0000481787-mali.png
             target_call: 481787
             width: 854
             height: 480
