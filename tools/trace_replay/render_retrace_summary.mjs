@@ -142,6 +142,37 @@ function inferGroup(filePath, defaultGroup) {
   return defaultGroup;
 }
 
+function parseGpuLabel(logText) {
+  const renderer = logText.match(/^\[[^\n]*\]\s*\[[^\n]*\]:\s*GL_RENDERER:\s*(.+?)\s*$/m)
+    ?? logText.match(/^GL_RENDERER:\s*(.+?)\s*$/m);
+  if (renderer?.[1]) return renderer[1].trim();
+
+  const vulkanDevice = logText.match(/^\[[^\n]*\]\s*\[[^\n]*\]:\s+(.+?)\s+\(Vulkan\s+[^,\n]+,\s*[^)\n]*GPU\)\s*$/m)
+    ?? logText.match(/^\s+(.+?)\s+\(Vulkan\s+[^,\n]+,\s*[^)\n]*GPU\)\s*$/m);
+  if (vulkanDevice?.[1]) return vulkanDevice[1].trim();
+
+  return "";
+}
+
+async function collectGroupLabels(files, defaultGroup) {
+  const labels = new Map();
+  const logFiles = files.filter((file) => {
+    const name = path.basename(file).toLowerCase();
+    return name === "mobilegl.log" || name === "logcat.txt";
+  });
+  for (const logFile of logFiles) {
+    const group = inferGroup(logFile, defaultGroup);
+    try {
+      const gpuLabel = parseGpuLabel(await readFile(logFile, "utf8"));
+      if (gpuLabel) labels.set(group, gpuLabel);
+    } catch {
+      // Diagnostics should not make summary rendering fail.
+    }
+  }
+
+  return labels;
+}
+
 function scoreImage(filePath, caseName, backend, kind) {
   const text = normalizeSlashes(filePath);
   const name = path.basename(filePath).toLowerCase();
@@ -197,6 +228,7 @@ async function findImage(pngs, caseName, backend, kind, nearFile) {
 async function collectRows(inputs, defaultGroup) {
   const files = [];
   for (const input of inputs) files.push(...await walk(input));
+  const groupLabels = await collectGroupLabels(files, defaultGroup);
   const pngs = [];
   for (const file of files) {
     if (await isUsablePng(file)) pngs.push(file);
@@ -255,7 +287,7 @@ async function collectRows(inputs, defaultGroup) {
     });
   }
 
-  return [...rows.values()];
+  return { rows: [...rows.values()], groupLabels };
 }
 
 function htmlEscape(value) {
@@ -285,7 +317,7 @@ function statusText(row) {
   return row.status;
 }
 
-async function renderHtml(rows, outputDir, title, groupLabel, htmlName) {
+async function renderHtml(rows, groupLabels, outputDir, title, groupLabel, htmlName) {
   await mkdir(outputDir, { recursive: true });
   const groups = [...new Set(rows.map((row) => row.group))].sort();
   if (groups.length === 0) groups.push(groupLabel);
@@ -331,6 +363,7 @@ async function renderHtml(rows, outputDir, title, groupLabel, htmlName) {
   };
 
   const groupSections = groups.map((group) => {
+    const displayGroup = groupLabels.get(group) ?? group;
     const groupCells = CASES.flatMap((caseName) => BACKENDS.map((backend) => cellFor(group, backend, caseName)));
     const passed = groupCells.filter((row) => row.status === "PASS").length;
     const failed = groupCells.filter((row) => row.status === "FAIL").length;
@@ -339,7 +372,7 @@ async function renderHtml(rows, outputDir, title, groupLabel, htmlName) {
     const passRate = passRateDenominator === 0 ? "0.0%" : `${(passed * 100 / passRateDenominator).toFixed(1)}%`;
     return `
       <section class="group">
-        <h1>${htmlEscape(title)} - ${htmlEscape(group)}</h1>
+        <h1>${htmlEscape(title)} - ${htmlEscape(displayGroup)}</h1>
         <p>Each backend cell shows actual / golden / diff. Failed cases are red; absent results are orange; incomplete image sets get an orange notch.<br>PASS ${passed}, FAIL ${failed}, NO RESULT ${noResult}, PASS RATE ${passRate}.</p>
         <div class="grid header-row">
           <div>case</div>
@@ -564,8 +597,8 @@ ${groupSections}
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   await mkdir(args.outputDir, { recursive: true });
-  const rows = await collectRows(args.inputs, args.groupLabel);
-  const htmlPath = await renderHtml(rows, args.outputDir, args.title, args.groupLabel, args.htmlName);
+  const { rows, groupLabels } = await collectRows(args.inputs, args.groupLabel);
+  const htmlPath = await renderHtml(rows, groupLabels, args.outputDir, args.title, args.groupLabel, args.htmlName);
   console.log(htmlPath);
 }
 
