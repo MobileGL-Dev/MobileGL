@@ -465,6 +465,16 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: retrace-summary-${{ env.date_today }}-${{ env.short_sha }}
-          path: retrace-summary/**
+          path: |
+            retrace-summary/**
+            !retrace-summary/mobilegl-linux-retrace-overview.pdf
+          if-no-files-found: error
+
+      - name: Upload retrace summary PDF
+        uses: actions/upload-artifact@v4
+        with:
+          name: retrace-summary-pdf-${{ env.date_today }}-${{ env.short_sha }}
+          path: retrace-summary/mobilegl-linux-retrace-overview.pdf
+          compression-level: 0
           if-no-files-found: error
 

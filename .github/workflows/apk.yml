@@ -531,5 +531,15 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: MobileGL-android-retrace-summary-${{ env.date_today }}-${{ env.short_sha }}
-          path: android-retrace-summary/**
+          path: |
+            android-retrace-summary/**
+            !android-retrace-summary/mobilegl-android-retrace-overview.pdf
+          if-no-files-found: error
+
+      - name: Upload Android retrace summary PDF
+        uses: actions/upload-artifact@v4
+        with:
+          name: MobileGL-android-retrace-summary-pdf-${{ env.date_today }}-${{ env.short_sha }}
+          path: android-retrace-summary/mobilegl-android-retrace-overview.pdf
+          compression-level: 0
           if-no-files-found: error
