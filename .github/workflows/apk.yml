@@ -537,11 +537,6 @@ jobs:
           pattern: MobileGL-android-retrace-result-*
           path: retrace-artifacts
 
-      - name: Install PDF renderer
-        run: |
-          npm install --no-save --no-package-lock playwright
-          npx playwright install --with-deps chromium
-
       - name: Render retrace summary
         run: |
           node tools/trace_replay/render_retrace_summary.mjs \
@@ -549,21 +544,11 @@ jobs:
             --output-dir android-retrace-summary \
             --title "MobileGL Android retrace overview" \
             --group-label "Android Emulator" \
-            --html mobilegl-android-retrace-overview.html \
-            --pdf mobilegl-android-retrace-overview.pdf
+            --html mobilegl-android-retrace-overview.html
 
       - name: Upload Android retrace summary
-        uses: actions/upload-artifact@v4
-        with:
-          name: MobileGL-android-retrace-summary-${{ env.date_today }}-${{ env.short_sha }}
-          path: |
-            android-retrace-summary/**
-            !android-retrace-summary/mobilegl-android-retrace-overview.pdf
-          if-no-files-found: error
-
-      - name: Upload Android retrace summary PDF
         uses: actions/upload-artifact@v7
         with:
-          path: android-retrace-summary/mobilegl-android-retrace-overview.pdf
+          path: android-retrace-summary/mobilegl-android-retrace-overview.html
           archive: false
           if-no-files-found: error

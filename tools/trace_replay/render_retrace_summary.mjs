@@ -1,8 +1,7 @@
 #!/usr/bin/env node
 
-import { copyFile, mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
 
 const BACKENDS = ["DirectGLES", "DirectVulkan"];
 const CASES = [
@@ -33,10 +32,7 @@ function usage() {
   node tools/trace_replay/render_retrace_summary.mjs \\
     --input DIR [--input DIR ...] \\
     --output-dir DIR \\
-    [--title TITLE] [--group-label LABEL] [--html NAME] [--pdf NAME]
-
-When --pdf is provided, the script requires Playwright to be installed in the
-current Node environment.`);
+    [--title TITLE] [--group-label LABEL] [--html NAME]`);
 }
 
 function parseArgs(argv) {
@@ -46,7 +42,6 @@ function parseArgs(argv) {
     title: "MobileGL retrace overview",
     groupLabel: "retrace",
     htmlName: "mobilegl-retrace-overview.html",
-    pdfName: "",
   };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
@@ -65,9 +60,6 @@ function parseArgs(argv) {
       i += 1;
     } else if (arg === "--html" && value) {
       args.htmlName = value;
-      i += 1;
-    } else if (arg === "--pdf" && value) {
-      args.pdfName = value;
       i += 1;
     } else if (arg === "--help" || arg === "-h") {
       usage();
@@ -274,14 +266,11 @@ function htmlEscape(value) {
     .replaceAll('"', "&quot;");
 }
 
-async function copyAsset(source, outputDir, assetName) {
+async function embedPng(source) {
   if (!source) return "";
   if (!(await isUsablePng(source))) return "";
-  const assetsDir = path.join(outputDir, "assets");
-  await mkdir(assetsDir, { recursive: true });
-  const destination = path.join(assetsDir, assetName);
-  await copyFile(source, destination);
-  return normalizeSlashes(path.relative(outputDir, destination));
+  const data = await readFile(source);
+  return `data:image/png;base64,${data.toString("base64")}`;
 }
 
 function statusText(row) {
@@ -304,27 +293,26 @@ async function renderHtml(rows, outputDir, title, groupLabel, htmlName) {
 
   const cells = new Map();
   for (const row of rows) {
-    const base = `${safeCase(row.group)}-${row.backend}-${safeCase(row.caseName)}`;
     cells.set(`${row.group}\0${row.backend}\0${row.caseName}`, {
       ...row,
-      actualRel: await copyAsset(row.actual, outputDir, `${base}-actual.png`),
-      goldenRel: await copyAsset(row.golden, outputDir, `${base}-golden.png`),
-      diffRel: await copyAsset(row.diff, outputDir, `${base}-diff.png`),
+      actualSrc: await embedPng(row.actual),
+      goldenSrc: await embedPng(row.golden),
+      diffSrc: await embedPng(row.diff),
     });
   }
 
   const thumb = (src, label) => `
     <figure class="thumb">
-      <figcaption>${label}</figcaption>
-      ${src ? `<img src="${htmlEscape(src)}" alt="${label}">` : `<div class="no-image">NO IMAGE</div>`}
+      <figcaption>${htmlEscape(label)}</figcaption>
+      ${src ? `<button class="image-button" type="button" aria-label="Open ${htmlEscape(label)} image"><img src="${htmlEscape(src)}" alt="${htmlEscape(label)}"></button>` : `<div class="no-image">NO IMAGE</div>`}
     </figure>`;
 
-  const missingImages = (row) => !row.actualRel || !row.goldenRel || !row.diffRel;
+  const missingImages = (row) => !row.actualSrc || !row.goldenSrc || !row.diffSrc;
   const cellFor = (group, backend, caseName) => cells.get(`${group}\0${backend}\0${caseName}`) ?? {
     status: "NO_RESULT",
-    actualRel: "",
-    goldenRel: "",
-    diffRel: "",
+    actualSrc: "",
+    goldenSrc: "",
+    diffSrc: "",
   };
 
   const backendCell = (group, backend, caseName) => {
@@ -335,9 +323,9 @@ async function renderHtml(rows, outputDir, title, groupLabel, htmlName) {
       <section class="backend-cell ${statusClass} ${imageClass}">
         <header>${backend} <strong>${statusText(row)}</strong></header>
         <div class="thumbs">
-          ${thumb(row.actualRel, "actual")}
-          ${thumb(row.goldenRel, "golden")}
-          ${thumb(row.diffRel, "diff")}
+          ${thumb(row.actualSrc, "actual")}
+          ${thumb(row.goldenSrc, "golden")}
+          ${thumb(row.diffSrc, "diff")}
         </div>
       </section>`;
   };
@@ -347,10 +335,12 @@ async function renderHtml(rows, outputDir, title, groupLabel, htmlName) {
     const passed = groupCells.filter((row) => row.status === "PASS").length;
     const failed = groupCells.filter((row) => row.status === "FAIL").length;
     const noResult = groupCells.filter((row) => row.status !== "PASS" && row.status !== "FAIL").length;
+    const passRateDenominator = passed + failed;
+    const passRate = passRateDenominator === 0 ? "0.0%" : `${(passed * 100 / passRateDenominator).toFixed(1)}%`;
     return `
       <section class="group">
         <h1>${htmlEscape(title)} - ${htmlEscape(group)}</h1>
-        <p>Each backend cell shows actual / golden / diff. Failed cases are red; absent results are orange; incomplete image sets get an orange notch.<br>PASS ${passed}, FAIL ${failed}, NO RESULT ${noResult}.</p>
+        <p>Each backend cell shows actual / golden / diff. Failed cases are red; absent results are orange; incomplete image sets get an orange notch.<br>PASS ${passed}, FAIL ${failed}, NO RESULT ${noResult}, PASS RATE ${passRate}.</p>
         <div class="grid header-row">
           <div>case</div>
           <div>DirectGLES</div>
@@ -478,6 +468,16 @@ async function renderHtml(rows, outputDir, title, groupLabel, htmlName) {
     font-size: 9px;
     font-weight: 700;
   }
+  .image-button {
+    width: 100%;
+    height: 100%;
+    display: block;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    cursor: zoom-in;
+  }
   .thumb img {
     width: 100%;
     height: 100%;
@@ -493,10 +493,30 @@ async function renderHtml(rows, outputDir, title, groupLabel, htmlName) {
     font-weight: 700;
     color: var(--text);
   }
+  .lightbox {
+    position: fixed;
+    inset: 0;
+    z-index: 20;
+    display: grid;
+    place-items: center;
+    padding: 28px;
+    background: rgb(0 0 0 / 86%);
+    cursor: zoom-out;
+  }
+  .lightbox[hidden] {
+    display: none;
+  }
+  .lightbox img {
+    max-width: min(96vw, 1600px);
+    max-height: 94vh;
+    object-fit: contain;
+    box-shadow: 0 18px 70px rgb(0 0 0 / 70%);
+  }
   @page { size: 1170px 2380px; margin: 0; }
   @media print {
     main { padding: 10px; }
     .group { margin-bottom: 0; }
+    .lightbox { display: none; }
   }
 </style>
 </head>
@@ -504,6 +524,35 @@ async function renderHtml(rows, outputDir, title, groupLabel, htmlName) {
 <main>
 ${groupSections}
 </main>
+<div class="lightbox" id="lightbox" hidden>
+  <img id="lightbox-image" alt="">
+</div>
+<script>
+(() => {
+  const lightbox = document.getElementById("lightbox");
+  const lightboxImage = document.getElementById("lightbox-image");
+  const closeLightbox = () => {
+    lightbox.hidden = true;
+    lightboxImage.removeAttribute("src");
+    lightboxImage.alt = "";
+  };
+
+  document.querySelectorAll(".image-button").forEach((button) => {
+    button.addEventListener("click", () => {
+      const image = button.querySelector("img");
+      if (!image) return;
+      lightboxImage.src = image.src;
+      lightboxImage.alt = image.alt;
+      lightbox.hidden = false;
+    });
+  });
+
+  lightbox.addEventListener("click", closeLightbox);
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && !lightbox.hidden) closeLightbox();
+  });
+})();
+</script>
 </body>
 </html>
 `;
@@ -512,66 +561,12 @@ ${groupSections}
   return output;
 }
 
-function csvEscape(value) {
-  const text = String(value ?? "");
-  return /[",\n]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
-}
-
-async function writeCsv(rows, outputDir) {
-  const header = ["Group", "Backend", "Case", "Status", "SSIM", "Message", "Actual", "Golden", "Diff"];
-  const sorted = [...rows].sort((a, b) =>
-    a.group.localeCompare(b.group) ||
-    BACKENDS.indexOf(a.backend) - BACKENDS.indexOf(b.backend) ||
-    CASES.indexOf(a.caseName) - CASES.indexOf(b.caseName)
-  );
-  const serialize = (row) => [
-    row.group,
-    row.backend,
-    row.caseName,
-    row.status,
-    row.ssim,
-    row.message,
-    row.actual,
-    row.golden,
-    row.diff,
-  ].map(csvEscape).join(",");
-  await writeFile(path.join(outputDir, "summary.csv"), [header.join(","), ...sorted.map(serialize)].join("\n"), "utf8");
-  await writeFile(path.join(outputDir, "failures.csv"), [header.join(","), ...sorted.filter((row) => row.status !== "PASS").map(serialize)].join("\n"), "utf8");
-}
-
-async function renderPdf(htmlPath, pdfPath) {
-  let chromium;
-  try {
-    ({ chromium } = await import("playwright"));
-  } catch (error) {
-    throw new Error("Playwright is required for --pdf. Install it with: npm install playwright && npx playwright install chromium");
-  }
-  const browser = await chromium.launch();
-  try {
-    const page = await browser.newPage({ viewport: { width: 1170, height: 2380 }, deviceScaleFactor: 1 });
-    await page.goto(pathToFileURL(htmlPath).href, { waitUntil: "networkidle" });
-    await page.pdf({
-      path: pdfPath,
-      printBackground: true,
-      preferCSSPageSize: true,
-    });
-  } finally {
-    await browser.close();
-  }
-}
-
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   await mkdir(args.outputDir, { recursive: true });
   const rows = await collectRows(args.inputs, args.groupLabel);
   const htmlPath = await renderHtml(rows, args.outputDir, args.title, args.groupLabel, args.htmlName);
-  await writeCsv(rows, args.outputDir);
   console.log(htmlPath);
-  if (args.pdfName) {
-    const pdfPath = path.join(args.outputDir, args.pdfName);
-    await renderPdf(htmlPath, pdfPath);
-    console.log(pdfPath);
-  }
 }
 
 main().catch((error) => {
