@@ -1332,6 +1332,18 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
         }
 
+        static Bool IsUnormFormat(TextureInternalFormat format) {
+            switch (format) {
+            case TextureInternalFormat::R16:
+            case TextureInternalFormat::RG16:
+            case TextureInternalFormat::RGB16:
+            case TextureInternalFormat::RGBA16:
+                return true;
+            default:
+                return false;
+            }
+        }
+
         static Bool IsSnormFallbackAttachment(
             const MG_State::GLState::FramebufferAttachmentObject& attachmentObject) {
             if (attachmentObject.IsTexture()) {
@@ -1343,6 +1355,22 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 const auto& renderbufferObject = attachmentObject.GetRenderbuffer();
                 return renderbufferObject &&
                        IsSnormFormat(renderbufferObject->GetInternalFormat()) &&
+                       TextureImpl::ShouldUseCaveatRenderbufferFormat(renderbufferObject->GetInternalFormat());
+            }
+            return false;
+        }
+
+        static Bool IsUnormFallbackAttachment(
+            const MG_State::GLState::FramebufferAttachmentObject& attachmentObject) {
+            if (attachmentObject.IsTexture()) {
+                const auto& textureObject = attachmentObject.GetTexture();
+                return textureObject && IsUnormFormat(textureObject->GetFormat()) &&
+                       TextureImpl::ShouldUseCaveatTextureFormat(textureObject->GetFormat(), textureObject->GetTarget());
+            }
+            if (attachmentObject.IsRenderbuffer()) {
+                const auto& renderbufferObject = attachmentObject.GetRenderbuffer();
+                return renderbufferObject &&
+                       IsUnormFormat(renderbufferObject->GetInternalFormat()) &&
                        TextureImpl::ShouldUseCaveatRenderbufferFormat(renderbufferObject->GetInternalFormat());
             }
             return false;
@@ -1399,7 +1427,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
 
             if (asTarget == FramebufferTarget::Draw) {
-                Uint32 clampOutputMask = 0;
+                Uint32 snormClampOutputMask = 0;
+                Uint32 unormClampOutputMask = 0;
                 for (Uint i = 0; i < FramebufferObject::MAX_DRAW_BUFFERS && i < 32; ++i) {
                     const auto frontendBuf = stateDrawBuffers[i];
                     if (frontendBuf < FramebufferAttachmentType::Color0 ||
@@ -1408,10 +1437,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     }
                     const auto& attachmentObject = stateFBOObject->GetAttachment(frontendBuf);
                     if (IsSnormFallbackAttachment(attachmentObject)) {
-                        clampOutputMask |= (1u << i);
+                        snormClampOutputMask |= (1u << i);
+                    } else if (IsUnormFallbackAttachment(attachmentObject)) {
+                        unormClampOutputMask |= (1u << i);
                     }
                 }
-                PrgramImpl::g_snormFallbackClampOutputMask = clampOutputMask;
+                PrgramImpl::g_snormFallbackClampOutputMask = snormClampOutputMask;
+                PrgramImpl::g_unormFallbackClampOutputMask = unormClampOutputMask;
             }
 
             // 2. Remap read buffer
@@ -1527,6 +1559,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
     namespace PrgramImpl {
         Uint32 g_snormFallbackClampOutputMask = 0;
+        Uint32 g_unormFallbackClampOutputMask = 0;
         StateBackendObjectRegistry<MG_State::GLState::ProgramObject, BackendProgramObjectImpl> g_backendProgramObjects;
 
         BackendProgramObjectImpl::BackendProgramObjectImpl() {
@@ -1572,6 +1605,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             MGLOG_D("Syncing program to backend. State program ID: %u, Backend ID: %u",
                     stateProgramObject->GetExternalIndex(), m_backendProgramId);
             m_snormFallbackClampOutputMask = g_snormFallbackClampOutputMask;
+            m_unormFallbackClampOutputMask = g_unormFallbackClampOutputMask;
 
             // Detach all existing shaders
             GLint attachedCount = 0;
@@ -1647,8 +1681,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 source = ForceFlatIntegerVaryings(source, glShaderType);
                 source = EmulateBaseInstanceInVertexShader(std::move(source), glShaderType);
                 source = ForceSupporterOutput(source);
-                source = ClampSnormFallbackOutputs(std::move(source), glShaderType,
-                                                   m_snormFallbackClampOutputMask);
+                source = ClampNormFallbackOutputs(std::move(source), glShaderType,
+                                                  m_snormFallbackClampOutputMask,
+                                                  m_unormFallbackClampOutputMask);
 
                 // Patch for Photon compiler precision issue
                 String findStr = "1000000.0";

@@ -214,10 +214,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return result;
         }
 
-        String ClampSnormFallbackOutputs(String glslCode, GLenum shaderType, Uint32 outputMask) {
+        String ClampNormFallbackOutputs(String glslCode, GLenum shaderType, Uint32 snormOutputMask,
+                                        Uint32 unormOutputMask) {
 #ifdef TRACY_ENABLE
             ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
+            const Uint32 outputMask = snormOutputMask | unormOutputMask;
             if (shaderType != GL_FRAGMENT_SHADER || outputMask == 0) {
                 return glslCode;
             }
@@ -226,14 +228,18 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 R"(layout\s*\(\s*location\s*=\s*([0-9]+)\s*\)\s*out\s+(?:(?:lowp|mediump|highp)\s+)?vec4\s+([A-Za-z_][A-Za-z0-9_]*)\s*;)");
             std::sregex_iterator outputIt(glslCode.begin(), glslCode.end(), outputPattern);
             std::sregex_iterator outputEnd;
-            Vector<String> outputNames;
+            struct OutputClamp {
+                String Name;
+                Bool Signed;
+            };
+            Vector<OutputClamp> outputClamps;
             for (; outputIt != outputEnd; ++outputIt) {
                 const Uint location = static_cast<Uint>(std::stoul((*outputIt)[1].str()));
                 if (location < 32 && (outputMask & (1u << location))) {
-                    outputNames.push_back((*outputIt)[2].str());
+                    outputClamps.push_back({(*outputIt)[2].str(), static_cast<Bool>(snormOutputMask & (1u << location))});
                 }
             }
-            if (outputNames.empty()) {
+            if (outputClamps.empty()) {
                 return glslCode;
             }
 
@@ -252,9 +258,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     --depth;
                     if (depth == 0) {
                         String clampLine;
-                        for (const String& outputName : outputNames) {
-                            clampLine += "\n    " + outputName + " = clamp(" + outputName +
-                                         ", vec4(-1.0), vec4(1.0));";
+                        for (const OutputClamp& outputClamp : outputClamps) {
+                            const String minValue = outputClamp.Signed ? "-1.0" : "0.0";
+                            clampLine += "\n    " + outputClamp.Name + " = clamp(" + outputClamp.Name +
+                                         ", vec4(" + minValue + "), vec4(1.0));";
                         }
                         clampLine += "\n";
                         glslCode.insert(pos, clampLine);

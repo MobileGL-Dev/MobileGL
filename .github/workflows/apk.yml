@@ -216,6 +216,7 @@ jobs:
             trace_archive: tools/trace_replay/fixtures/minecraft-1.21.4-fabric-iris-bsl-in-world.tgz
             trace_file: trace.trace
             golden: tools/trace_replay/fixtures/minecraft-1.21.4-fabric-iris-bsl-in-world.0000110725.png
+            alternate_golden: tools/trace_replay/fixtures/minecraft-1.21.4-fabric-iris-bsl-in-world.0000110725-mali.png
             target_call: 110725
             width: 854
             height: 480
