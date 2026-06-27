@@ -17,6 +17,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         Uint64 CacheVersion = MG_Config::CacheVersion;
         Uint32 SurfaceWidth = 1;
         Uint32 SurfaceHeight = 1;
+        Bool DisablePipelineCache = false;
 #if MOBILEGL_LOG_ACTIVE_LEVEL <= MOBILEGL_LOG_LEVEL_DEBUG
         Bool EnableValidationLayers = true;
 #else

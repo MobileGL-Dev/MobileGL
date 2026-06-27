@@ -26,6 +26,10 @@
 #include <vulkan/vulkan_core.h>
 
 namespace MobileGL::MG_Backend::DirectVulkan {
+    static Bool IsPowerVRDevice(const VkPhysicalDeviceProperties& properties) {
+        return std::strstr(properties.deviceName, "PowerVR") != nullptr;
+    }
+
     static VkPipelineColorBlendAttachmentState MakeColorBlendAttachmentState(
         Bool blendEnable,
         VkBlendFactor srcColorBlendFactor,
@@ -1762,6 +1766,11 @@ void main() {
 
         const Uint32 maxProgramBindings = ComputeMaxProgramBindings(m_physicalDevice.properties);
         MGLOG_I("DirectVulkan: using %u program descriptor bindings", maxProgramBindings);
+        if (IsPowerVRDevice(m_physicalDevice.properties)) {
+            m_config.DisablePipelineCache = true;
+            MGLOG_W("DirectVulkan: disabling pipeline cache on PowerVR device %s",
+                    m_physicalDevice.properties.deviceName);
+        }
 
         RecreateSwapchain();
 

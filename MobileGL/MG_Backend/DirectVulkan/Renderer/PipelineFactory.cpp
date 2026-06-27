@@ -13,6 +13,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         m_device(device), m_config(config) {
         MOBILEGL_ASSERT(m_device != VK_NULL_HANDLE, "PipelineFactory: device is null");
 
+        if (m_config.DisablePipelineCache) {
+            MGLOG_I("DirectVulkan: pipeline cache disabled");
+            return;
+        }
+
         VkPipelineCacheCreateInfo pipelineCacheInfo{VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO};
         VK_VERIFY(vkCreatePipelineCache(m_device, &pipelineCacheInfo, nullptr, &m_pipelineCache),
                   "vkCreatePipelineCache");
