@@ -348,7 +348,7 @@ async function renderHtml(rows, outputDir, title, groupLabel, htmlName) {
     return `
       <section class="group">
         <h1>${htmlEscape(title)} - ${htmlEscape(group)}</h1>
-        <p>Each backend cell shows actual / golden / diff. Failed cases are red; absent results are orange; incomplete image sets get an orange notch. PASS ${passed}, FAIL ${failed}, NO RESULT ${noResult}.</p>
+        <p>Each backend cell shows actual / golden / diff. Failed cases are red; absent results are orange; incomplete image sets get an orange notch.<br>PASS ${passed}, FAIL ${failed}, NO RESULT ${noResult}.</p>
         <div class="grid header-row">
           <div>case</div>
           <div>DirectGLES</div>
