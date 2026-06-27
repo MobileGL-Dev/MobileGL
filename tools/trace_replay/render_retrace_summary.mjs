@@ -2,8 +2,10 @@
 
 import { mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 const BACKENDS = ["DirectGLES", "DirectVulkan"];
+const DEFAULT_FIXTURE_ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "fixtures");
 const CASES = [
   "OpenRA",
   "minecraft-1.21.4-startup",
@@ -176,18 +178,28 @@ async function collectGroupLabels(files, defaultGroup) {
 function scoreImage(filePath, caseName, backend, kind) {
   const text = normalizeSlashes(filePath);
   const name = path.basename(filePath).toLowerCase();
+  const fixtureGoldenPrefix = `${caseName}.`.toLowerCase();
   const lowerKind = kind.toLowerCase();
   if (lowerKind === "golden" && name.includes("alternate-golden")) return 0;
   const matchesKind =
     name === `${lowerKind}.png` ||
     name.endsWith(`-${lowerKind}.png`) ||
     name.endsWith(`_${lowerKind}.png`);
-  if (!matchesKind) return 0;
+  const matchesFixtureGolden =
+    (lowerKind === "golden" || lowerKind === "alternate-golden") &&
+    name.startsWith(fixtureGoldenPrefix) &&
+    name.endsWith(".png");
+  if (!matchesKind && !matchesFixtureGolden) return 0;
 
   let score = 0;
   if (text.includes(caseName) || text.includes(safeCase(caseName))) score += 4;
   if (text.includes(backend)) score += 3;
   score += 3;
+  if (matchesFixtureGolden) {
+    score += 4;
+    if (lowerKind === "alternate-golden" && name.includes("-mali.")) score += 3;
+    if (lowerKind === "golden" && !name.includes("-mali.")) score += 2;
+  }
   if (name === `${caseName}-${backend}-${kind}.png`.toLowerCase()) score += 4;
   if (name === `${safeCase(caseName)}-${backend}-${kind}.png`.toLowerCase()) score += 4;
   if (name === `${kind}.png`) score += 4;
@@ -229,8 +241,9 @@ async function collectRows(inputs, defaultGroup) {
   const files = [];
   for (const input of inputs) files.push(...await walk(input));
   const groupLabels = await collectGroupLabels(files, defaultGroup);
+  const fixtureFiles = await walk(DEFAULT_FIXTURE_ROOT);
   const pngs = [];
-  for (const file of files) {
+  for (const file of [...files, ...fixtureFiles]) {
     if (await isUsablePng(file)) pngs.push(file);
   }
 
