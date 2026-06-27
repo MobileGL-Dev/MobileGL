@@ -41,6 +41,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
     MG_External::GLESCapabilities g_GLESCapabilities;
 
     static Bool QueryCurrentSurfaceSize(Int& outWidth, Int& outHeight);
+    static SharedPtr<MG_State::GLState::SamplerObject> g_rawDepthFetchSamplerState;
+    static SharedPtr<SamplerImpl::BackendSamplerObject> g_rawDepthFetchSamplerBackend;
 
     enum class DrawSyncBit : Uint32 {
         None = 0,
@@ -72,6 +74,36 @@ namespace MobileGL::MG_Backend::DirectGLES {
         Uint32 first = 0;
         Uint32 baseInstance = 0;
     };
+
+    SamplerImpl::BackendSamplerObject* GetRawDepthFetchSampler() {
+        if (!g_rawDepthFetchSamplerState) {
+            g_rawDepthFetchSamplerState = MakeShared<MG_State::GLState::SamplerObject>(0);
+            g_rawDepthFetchSamplerState->SetMinFilter(SamplerFilterMode::Nearest);
+            g_rawDepthFetchSamplerState->SetMagFilter(SamplerFilterMode::Nearest);
+            g_rawDepthFetchSamplerState->SetMipmapMode(SamplerMipmapMode::None);
+            g_rawDepthFetchSamplerState->SetCompareMode(SamplerCompareMode::None);
+            g_rawDepthFetchSamplerState->SetSamplerCompareFunc(SamplerCompareFunc::Always);
+            g_rawDepthFetchSamplerBackend = MakeShared<SamplerImpl::BackendSamplerObject>();
+        }
+        g_rawDepthFetchSamplerBackend->SyncToBackend(g_rawDepthFetchSamplerState);
+        return g_rawDepthFetchSamplerBackend.get();
+    }
+
+    Bool NeedsRawDepthFetchSampler(const SharedPtr<MG_State::GLState::SamplerObject>& samplerObject,
+                                   TextureInternalFormat textureFormat) {
+        if (!MG_Util::IsDepthFormatInternalFormat(textureFormat) || !samplerObject) {
+            return false;
+        }
+
+        const auto& samplerParams = samplerObject->GetAllSamplerParameters();
+        if (samplerParams.compareMode != SamplerCompareMode::None) {
+            return false;
+        }
+
+        return samplerParams.minFilter != SamplerFilterMode::Nearest ||
+               samplerParams.mipmapMode != SamplerMipmapMode::None ||
+               samplerParams.magFilter != SamplerFilterMode::Nearest;
+    }
 
     const Uint8* ResolveIndirectCommandBytes(const void* indirect, SizeT requiredBytes, const char* label) {
         auto drawBuffer = MG_State::pGLContext->GetBufferBindingSlot(BufferTarget::DrawIndirect).GetBoundObject();
@@ -934,9 +966,20 @@ namespace MobileGL::MG_Backend::DirectGLES {
                             backendProgramIt->second->GetBackendProgramId(), name.c_str());
                         g_GLESFuncs.glUniform1i(locAtBackend, unit);
 
-                        auto& samplerObject = MG_State::pGLContext->GetTextureUnitObject(unit).GetSamplerObject();
+                        auto& textureUnit = MG_State::pGLContext->GetTextureUnitObject(unit);
+                        auto& samplerObject = textureUnit.GetSamplerObject();
+                        const auto uniformType = currentProgram->GetUniformType(loc);
+                        const auto& texture2D = textureUnit.GetBindingSlot(TextureTarget::Texture2D).GetBoundObject();
+                        const SharedPtr<MG_State::GLState::SamplerObject>* rawDepthSamplerObject = &samplerObject;
+                        if (!*rawDepthSamplerObject && texture2D) {
+                            rawDepthSamplerObject = &texture2D->GetSamplerObject();
+                        }
 
-                        if (samplerObject) {
+                        if (uniformType == GL_SAMPLER_2D && texture2D &&
+                            NeedsRawDepthFetchSampler(*rawDepthSamplerObject, texture2D->GetFormat())) {
+                            GetRawDepthFetchSampler()->Bind(unit);
+                            MGLOG_D("Using raw depth fetch sampler for uniform %s on unit %d.", name.c_str(), unit);
+                        } else if (samplerObject) {
                             const auto& backendSamplerIt =
                                 SamplerImpl::g_backendSamplerObjects.find(samplerObject.get());
                             Bool exist = (backendSamplerIt != SamplerImpl::g_backendSamplerObjects.end());
