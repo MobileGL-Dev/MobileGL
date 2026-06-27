@@ -445,6 +445,19 @@ jobs:
             --crop-height "${{ matrix.case.crop_height }}" \
             --timeout-seconds "${{ matrix.case.timeout_seconds }}"
 
+      - name: Collect retrace summary inputs
+        if: always()
+        run: |
+          safe_case="$(printf '%s' '${{ matrix.case.name }}' | sed 's/[^A-Za-z0-9._-]/_/g')"
+          result_dir="android-retrace-result/${safe_case}-${{ matrix.backend.name }}"
+          mkdir -p "${result_dir}"
+          if [ -s "${{ matrix.case.golden }}" ]; then
+            cp "${{ matrix.case.golden }}" "${result_dir}/${safe_case}-${{ matrix.backend.name }}-golden.png"
+          fi
+          if [ -n "${{ matrix.case.alternate_golden || '' }}" ] && [ -s "${{ matrix.case.alternate_golden || '' }}" ]; then
+            cp "${{ matrix.case.alternate_golden || '' }}" "${result_dir}/${safe_case}-${{ matrix.backend.name }}-alternate-golden.png"
+          fi
+
       - name: Collect emulator diagnostics
         if: always()
         run: |
@@ -470,3 +483,53 @@ jobs:
           name: MobileGL-android-retrace-result-${{ env.date_today }}-${{ env.short_sha }}-${{ matrix.backend.name }}-${{ matrix.case.name }}
           path: android-retrace-result/**
           if-no-files-found: warn
+
+  retrace-summary:
+    name: retrace summary
+    runs-on: ubuntu-latest
+    needs: retrace
+    if: always()
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set artifact metadata
+        run: |
+          echo "date_today=$(date +'%Y-%m-%d')" >> "$GITHUB_ENV"
+          echo "short_sha=${GITHUB_SHA::7}" >> "$GITHUB_ENV"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Download Android retrace results
+        uses: actions/download-artifact@v4
+        with:
+          pattern: MobileGL-android-retrace-result-*
+          path: retrace-artifacts
+
+      - name: Install PDF renderer
+        run: |
+          npm install --no-save --no-package-lock playwright
+          npx playwright install --with-deps chromium
+
+      - name: Render retrace summary
+        run: |
+          node tools/trace_replay/render_retrace_summary.mjs \
+            --input retrace-artifacts \
+            --output-dir android-retrace-summary \
+            --title "MobileGL Android retrace overview" \
+            --group-label "Android Emulator" \
+            --html mobilegl-android-retrace-overview.html \
+            --pdf mobilegl-android-retrace-overview.pdf
+
+      - name: Upload Android retrace summary
+        uses: actions/upload-artifact@v4
+        with:
+          name: MobileGL-android-retrace-summary-${{ env.date_today }}-${{ env.short_sha }}
+          path: android-retrace-summary/**
+          if-no-files-found: error

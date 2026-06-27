@@ -418,3 +418,53 @@ jobs:
             build-retrace/tools/trace_replay/${{ matrix.case }}/${{ matrix.backend }}/output/**
           if-no-files-found: warn
 
+  retrace-summary:
+    name: retrace summary
+    runs-on: ubuntu-latest
+    needs: retrace
+    if: always()
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set artifact metadata
+        run: |
+          echo "date_today=$(date +'%Y-%m-%d')" >> "$GITHUB_ENV"
+          echo "short_sha=${GITHUB_SHA::7}" >> "$GITHUB_ENV"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Download retrace results
+        uses: actions/download-artifact@v4
+        with:
+          pattern: retrace-result-*
+          path: retrace-artifacts
+
+      - name: Install PDF renderer
+        run: |
+          npm install --no-save --no-package-lock playwright
+          npx playwright install --with-deps chromium
+
+      - name: Render retrace summary
+        run: |
+          node tools/trace_replay/render_retrace_summary.mjs \
+            --input retrace-artifacts \
+            --output-dir retrace-summary \
+            --title "MobileGL Linux retrace overview" \
+            --group-label "Linux" \
+            --html mobilegl-linux-retrace-overview.html \
+            --pdf mobilegl-linux-retrace-overview.pdf
+
+      - name: Upload retrace summary
+        uses: actions/upload-artifact@v4
+        with:
+          name: retrace-summary-${{ env.date_today }}-${{ env.short_sha }}
+          path: retrace-summary/**
+          if-no-files-found: error
+
