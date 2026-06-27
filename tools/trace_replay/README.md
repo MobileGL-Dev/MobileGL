@@ -16,6 +16,12 @@ The bundled fixtures cover:
 - minecraft-1.21.4-fabric-sodium-in-world: captured from Minecraft 1.21.4 Fabric with Sodium after entering a
   singleplayer world with Fancy graphics.
   ![Minecraft 1.21.4 Fabric Sodium in-world golden](fixtures/minecraft-1.21.4-fabric-sodium-in-world.0000923340.png)
+- minecraft-1.21.4-fabric-common-mods-in-world: captured from Minecraft 1.21.4 Fabric with Sodium, Iris, REI,
+  Xaero's Minimap, Xaero's World Map, JourneyMap, and Modern UI, with shader packs disabled.
+  ![Minecraft 1.21.4 Fabric common mods in-world golden](fixtures/minecraft-1.21.4-fabric-common-mods-in-world.0000522084.png)
+- minecraft-1.21.4-fabric-common-mods-inventory: captured from Minecraft 1.21.4 Fabric with Sodium, Iris, REI,
+  Xaero's Minimap, Xaero's World Map, JourneyMap, and Modern UI with the creative inventory and REI item list open.
+  ![Minecraft 1.21.4 Fabric common mods inventory golden](fixtures/minecraft-1.21.4-fabric-common-mods-inventory.0000728558.png)
 - minecraft-1.21.4-fabric-iris-bsl-in-world: captured from Minecraft 1.21.4 Fabric with Sodium, Iris, and BSL
   Shaders after entering a singleplayer world.
   ![Minecraft 1.21.4 Fabric Iris BSL in-world golden](fixtures/minecraft-1.21.4-fabric-iris-bsl-in-world.0000110725.png)

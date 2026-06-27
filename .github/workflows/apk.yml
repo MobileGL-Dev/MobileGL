@@ -212,6 +212,32 @@ jobs:
             crop_width: 0
             crop_height: 0
             timeout_seconds: 1800
+          - name: minecraft-1.21.4-fabric-common-mods-in-world
+            trace_archive: tools/trace_replay/fixtures/minecraft-1.21.4-fabric-common-mods-in-world.tgz
+            trace_file: trace.trace
+            golden: tools/trace_replay/fixtures/minecraft-1.21.4-fabric-common-mods-in-world.0000522084.png
+            vulkan_only: true
+            target_call: 522084
+            width: 854
+            height: 480
+            crop_x: 0
+            crop_y: 0
+            crop_width: 0
+            crop_height: 0
+            timeout_seconds: 1800
+          - name: minecraft-1.21.4-fabric-common-mods-inventory
+            trace_archive: tools/trace_replay/fixtures/minecraft-1.21.4-fabric-common-mods-inventory.tgz
+            trace_file: trace.trace
+            golden: tools/trace_replay/fixtures/minecraft-1.21.4-fabric-common-mods-inventory.0000728558.png
+            vulkan_only: true
+            target_call: 728558
+            width: 854
+            height: 480
+            crop_x: 0
+            crop_y: 0
+            crop_width: 0
+            crop_height: 0
+            timeout_seconds: 1800
           - name: minecraft-1.21.4-fabric-iris-bsl-in-world
             trace_archive: tools/trace_replay/fixtures/minecraft-1.21.4-fabric-iris-bsl-in-world.tgz
             trace_file: trace.trace
@@ -394,6 +420,47 @@ jobs:
             crop_width: 0
             crop_height: 0
             timeout_seconds: 900
+        exclude:
+          - backend:
+              name: DirectGLES
+              id: espryt
+              apk: MobileGL-EsprytTrace-release.apk
+              package: top.mobilegl.plugin.espryt.trace
+              gpu: software
+            case:
+              name: minecraft-1.21.4-fabric-common-mods-in-world
+              trace_archive: tools/trace_replay/fixtures/minecraft-1.21.4-fabric-common-mods-in-world.tgz
+              trace_file: trace.trace
+              golden: tools/trace_replay/fixtures/minecraft-1.21.4-fabric-common-mods-in-world.0000522084.png
+              vulkan_only: true
+              target_call: 522084
+              width: 854
+              height: 480
+              crop_x: 0
+              crop_y: 0
+              crop_width: 0
+              crop_height: 0
+              timeout_seconds: 1800
+          - backend:
+              name: DirectGLES
+              id: espryt
+              apk: MobileGL-EsprytTrace-release.apk
+              package: top.mobilegl.plugin.espryt.trace
+              gpu: software
+            case:
+              name: minecraft-1.21.4-fabric-common-mods-inventory
+              trace_archive: tools/trace_replay/fixtures/minecraft-1.21.4-fabric-common-mods-inventory.tgz
+              trace_file: trace.trace
+              golden: tools/trace_replay/fixtures/minecraft-1.21.4-fabric-common-mods-inventory.0000728558.png
+              vulkan_only: true
+              target_call: 728558
+              width: 854
+              height: 480
+              crop_x: 0
+              crop_y: 0
+              crop_width: 0
+              crop_height: 0
+              timeout_seconds: 1800
 
     steps:
       - name: Checkout repo

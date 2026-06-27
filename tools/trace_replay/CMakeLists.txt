@@ -388,6 +388,24 @@ add_trace_replay_test_for_backends(minecraft-1.21.4-fabric-sodium-in-world
         HEIGHT 480
 )
 
+add_trace_replay_test(minecraft-1.21.4-fabric-common-mods-in-world DirectVulkan
+        TRACE_ARCHIVE ${MOBILEGL_TRACE_ROOT}/fixtures/minecraft-1.21.4-fabric-common-mods-in-world.tgz
+        TRACE_FILE trace.trace
+        GOLDEN ${MOBILEGL_TRACE_ROOT}/fixtures/minecraft-1.21.4-fabric-common-mods-in-world.0000522084.png
+        TARGET_CALL 522084
+        WIDTH 854
+        HEIGHT 480
+)
+
+add_trace_replay_test(minecraft-1.21.4-fabric-common-mods-inventory DirectVulkan
+        TRACE_ARCHIVE ${MOBILEGL_TRACE_ROOT}/fixtures/minecraft-1.21.4-fabric-common-mods-inventory.tgz
+        TRACE_FILE trace.trace
+        GOLDEN ${MOBILEGL_TRACE_ROOT}/fixtures/minecraft-1.21.4-fabric-common-mods-inventory.0000728558.png
+        TARGET_CALL 728558
+        WIDTH 854
+        HEIGHT 480
+)
+
 add_trace_replay_test_for_backends(minecraft-1.21.4-fabric-iris-bsl-in-world
         TRACE_ARCHIVE ${MOBILEGL_TRACE_ROOT}/fixtures/minecraft-1.21.4-fabric-iris-bsl-in-world.tgz
         TRACE_FILE trace.trace
