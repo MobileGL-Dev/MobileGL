@@ -504,3 +504,21 @@ add_trace_replay_test_for_backends(minecraft-1.21.4-fabric-iris-photon-v1.1-in-w
         WIDTH 854
         HEIGHT 480
 )
+
+add_trace_replay_test_for_backends(minecraft-1.21.4-fabric-iris-photon-v1.3b-in-world
+        TRACE_ARCHIVE ${MOBILEGL_TRACE_ROOT}/fixtures/minecraft-1.21.4-fabric-iris-photon-v1.3b-in-world.tgz
+        TRACE_FILE trace.trace
+        GOLDEN ${MOBILEGL_TRACE_ROOT}/fixtures/minecraft-1.21.4-fabric-iris-photon-v1.3b-in-world.0000172128.png
+        TARGET_CALL 172128
+        WIDTH 854
+        HEIGHT 480
+)
+
+add_trace_replay_test_for_backends(minecraft-1.21.4-fabric-iris-derivative-main-d24.4.14-in-world
+        TRACE_ARCHIVE ${MOBILEGL_TRACE_ROOT}/fixtures/minecraft-1.21.4-fabric-iris-derivative-main-d24.4.14-in-world.tgz
+        TRACE_FILE trace.trace
+        GOLDEN ${MOBILEGL_TRACE_ROOT}/fixtures/minecraft-1.21.4-fabric-iris-derivative-main-d24.4.14-in-world.0000145353.png
+        TARGET_CALL 145353
+        WIDTH 854
+        HEIGHT 480
+)

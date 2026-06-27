@@ -368,6 +368,30 @@ jobs:
             crop_width: 0
             crop_height: 0
             timeout_seconds: 900
+          - name: minecraft-1.21.4-fabric-iris-photon-v1.3b-in-world
+            trace_archive: tools/trace_replay/fixtures/minecraft-1.21.4-fabric-iris-photon-v1.3b-in-world.tgz
+            trace_file: trace.trace
+            golden: tools/trace_replay/fixtures/minecraft-1.21.4-fabric-iris-photon-v1.3b-in-world.0000172128.png
+            target_call: 172128
+            width: 854
+            height: 480
+            crop_x: 0
+            crop_y: 0
+            crop_width: 0
+            crop_height: 0
+            timeout_seconds: 900
+          - name: minecraft-1.21.4-fabric-iris-derivative-main-d24.4.14-in-world
+            trace_archive: tools/trace_replay/fixtures/minecraft-1.21.4-fabric-iris-derivative-main-d24.4.14-in-world.tgz
+            trace_file: trace.trace
+            golden: tools/trace_replay/fixtures/minecraft-1.21.4-fabric-iris-derivative-main-d24.4.14-in-world.0000145353.png
+            target_call: 145353
+            width: 854
+            height: 480
+            crop_x: 0
+            crop_y: 0
+            crop_width: 0
+            crop_height: 0
+            timeout_seconds: 900
 
     steps:
       - name: Checkout repo

@@ -24,6 +24,8 @@ const CASES = [
   "minecraft-1.21.4-fabric-iris-iterationt-in-world",
   "minecraft-1.21.4-fabric-iris-iterationt-nodsa-in-world",
   "minecraft-1.21.4-fabric-iris-photon-v1.1-in-world",
+  "minecraft-1.21.4-fabric-iris-photon-v1.3b-in-world",
+  "minecraft-1.21.4-fabric-iris-derivative-main-d24.4.14-in-world",
 ];
 
 function usage() {
