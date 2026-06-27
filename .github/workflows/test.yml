@@ -125,8 +125,6 @@ jobs:
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
-        with:
-          submodules: recursive
 
       - name: Get CMake
         uses: lukka/get-cmake@latest
@@ -173,8 +171,6 @@ jobs:
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
-        with:
-          submodules: recursive
 
       - name: Get CMake
         uses: lukka/get-cmake@latest
@@ -371,8 +367,6 @@ jobs:
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
-        with:
-          submodules: recursive
 
       - name: Fetch trace fixture
         run: bash .github/scripts/fetch-trace-fixture-lfs.sh '${{ matrix.case }}'
@@ -429,8 +423,6 @@ jobs:
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
-        with:
-          submodules: recursive
 
       - name: Set artifact metadata
         run: |
