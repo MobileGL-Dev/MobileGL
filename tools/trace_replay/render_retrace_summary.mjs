@@ -329,6 +329,8 @@ async function embedPng(source) {
 
 function statusText(row) {
   if (!row) return "NO RESULT";
+  const effective = effectiveStatus(row);
+  if (effective === "FAIL" && row.status === "NO_RESULT") return `FAIL <span>NO RESULT</span>`;
   if (row.status === "NO_RESULT") return "NO RESULT";
   if (row.status === "FIXTURE_MISSING") return "MISSING FIXTURE";
   if (row.ssim) {
@@ -337,6 +339,12 @@ function statusText(row) {
     return `${row.status} <span>SSIM ${htmlEscape(text)}</span>`;
   }
   return row.status;
+}
+
+function effectiveStatus(row) {
+  if (!row) return "NO_RESULT";
+  if (row.status === "PASS" || row.status === "FAIL") return row.status;
+  return !row.actualSrc && !row.goldenSrc ? "NO_RESULT" : "FAIL";
 }
 
 async function renderHtml(rows, groupLabels, outputDir, title, groupLabel, htmlName) {
@@ -371,7 +379,8 @@ async function renderHtml(rows, groupLabels, outputDir, title, groupLabel, htmlN
 
   const backendCell = (group, backend, caseName) => {
     const row = cellFor(group, backend, caseName);
-    const statusClass = row.status === "PASS" ? "pass" : row.status === "NO_RESULT" || row.status === "FIXTURE_MISSING" ? "missing" : "fail";
+    const effective = effectiveStatus(row);
+    const statusClass = effective === "PASS" ? "pass" : effective === "NO_RESULT" ? "missing" : "fail";
     const imageClass = missingImages(row) ? "image-missing" : "";
     return `
       <section class="backend-cell ${statusClass} ${imageClass}">
@@ -387,9 +396,9 @@ async function renderHtml(rows, groupLabels, outputDir, title, groupLabel, htmlN
   const groupSections = groups.map((group) => {
     const displayGroup = groupLabels.get(group) ?? group;
     const groupCells = CASES.flatMap((caseName) => BACKENDS.map((backend) => cellFor(group, backend, caseName)));
-    const passed = groupCells.filter((row) => row.status === "PASS").length;
-    const failed = groupCells.filter((row) => row.status === "FAIL").length;
-    const noResult = groupCells.filter((row) => row.status !== "PASS" && row.status !== "FAIL").length;
+    const passed = groupCells.filter((row) => effectiveStatus(row) === "PASS").length;
+    const failed = groupCells.filter((row) => effectiveStatus(row) === "FAIL").length;
+    const noResult = groupCells.filter((row) => effectiveStatus(row) === "NO_RESULT").length;
     const passRateDenominator = passed + failed;
     const passRate = passRateDenominator === 0 ? "0.0%" : `${(passed * 100 / passRateDenominator).toFixed(1)}%`;
     return `
