@@ -273,6 +273,15 @@ set(SOURCE_FILES
     MobileGL/MG_State/GLState/RenderbufferState/RenderbufferState.cpp
 )
 
+if (APPLE)
+    list(APPEND SOURCE_FILES
+        MobileGL/MG_Impl/CGLImpl/CGLImpl.cpp
+        MobileGL/MG_Impl/CGLImpl/Exporting/Definitions.cpp
+        MobileGL/MG_Impl/DyldInterpose/DyldInterpose.cpp
+        MobileGL/MG_Impl/NSOpenGLImpl/NSOpenGLImpl.cpp
+    )
+endif()
+
 set(MOBILEGL_LINK_LIBRARIES
         glslang::glslang
         spirv-cross-c
@@ -388,12 +397,16 @@ if (APPLE)
     target_link_libraries(${CMAKE_PROJECT_NAME} PUBLIC
         "-framework Cocoa"
         "-framework QuartzCore"
-        "-framework Foundation")
+        "-framework Foundation"
+        "-framework OpenGL"
+        objc)
     if(TARGET ${CMAKE_PROJECT_NAME}_s)
         target_link_libraries(${CMAKE_PROJECT_NAME}_s PUBLIC
             "-framework Cocoa"
             "-framework QuartzCore"
-            "-framework Foundation")
+            "-framework Foundation"
+            "-framework OpenGL"
+            objc)
     endif()
 endif()
 

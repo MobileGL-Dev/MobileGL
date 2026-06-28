@@ -10,6 +10,9 @@
 
 #include "GLImpl/Texture/ProxyTexture.h"
 #include "GLImpl/Framebuffer/GL_Framebuffer.h"
+#if defined(__APPLE__)
+#include "NSOpenGLImpl/NSOpenGLImpl.h"
+#endif
 
 #include <MG_State/GLState/TextureState/TextureObject1D.h>
 #include <MG_State/GLState/TextureState/TextureObject2D.h>
@@ -45,5 +48,8 @@ namespace MobileGL::MG_Impl {
             MakeUnique<GLImpl::FramebufferImpl::DefaultFramebufferInfo>(fbo0, colorTex, depthTex, stencilTex);
         MG_State::pGLContext->GetFramebufferBindingSlot(FramebufferTarget::Draw).Bind(fbo0);
         MG_State::pGLContext->GetFramebufferBindingSlot(FramebufferTarget::Read).Bind(fbo0);
+#if defined(__APPLE__)
+        NSOpenGLImpl::InstallHooks();
+#endif
     }
 } // namespace MobileGL::MG_Impl

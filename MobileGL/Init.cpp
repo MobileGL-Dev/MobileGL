@@ -18,6 +18,29 @@
 namespace MobileGL {
     namespace {
         Bool g_isInitialized = false;
+
+        void DestroyImpl(Bool logLifecycle) {
+            if (!g_isInitialized) {
+                return;
+            }
+
+            if (logLifecycle) {
+                MGLOG_I("MobileGL closing...");
+            }
+            glslang::FinalizeProcess();
+            MG_Backend::pActiveBackendObject.reset();
+            MG_State::pGLContext.reset();
+            MG_State::pEGLContext.reset();
+            MG_Impl::GLImpl::TextureImpl::pProxyTextureManager.reset();
+            MG_Impl::GLImpl::FramebufferImpl::pDefaultFramebufferInfo.reset();
+            MG_Backend::gBackendFunctionsTable = {};
+            g_isInitialized = false;
+            if (logLifecycle) {
+                MG_Util::Debug::Close();
+            }
+
+            // TODO: add and use Destroy functions for other subsystems
+        }
     }
 
     void Initialize() {
@@ -43,22 +66,7 @@ namespace MobileGL {
     }
 
     void Destroy() {
-        if (!g_isInitialized) {
-            return;
-        }
-
-        MGLOG_I("MobileGL closing...");
-        glslang::FinalizeProcess();
-        MG_Backend::pActiveBackendObject.reset();
-        MG_State::pGLContext.reset();
-        MG_State::pEGLContext.reset();
-        MG_Impl::GLImpl::TextureImpl::pProxyTextureManager.reset();
-        MG_Impl::GLImpl::FramebufferImpl::pDefaultFramebufferInfo.reset();
-        MG_Backend::gBackendFunctionsTable = {};
-        g_isInitialized = false;
-        MG_Util::Debug::Close();
-
-        // TODO: add and use Destroy functions for other subsystems
+        DestroyImpl(true);
     }
 
 #if defined(__linux__) || defined(__APPLE__)
@@ -70,7 +78,12 @@ namespace MobileGL {
         if (std::getenv("MOBILEGL_TRACE_SKIP_AUTODESTROY") != nullptr) {
             return;
         }
-        Destroy();
+#if defined(__APPLE__)
+        // macOS injected dylibs can run destructors after logging/backend static state is already torn down.
+        return;
+#else
+        DestroyImpl(false);
+#endif
     }
 #endif
 

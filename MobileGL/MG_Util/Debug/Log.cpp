@@ -11,7 +11,11 @@
 namespace MobileGL {
     namespace MG_Util::Debug {
         static FILE* s_logFile = nullptr;
-        static std::mutex s_mutex;
+
+        std::mutex& LogMutex() {
+            static auto* mutex = new std::mutex();
+            return *mutex;
+        }
 
         constexpr char* GetOSName() {
 #if defined(_WIN32)
@@ -81,7 +85,7 @@ namespace MobileGL {
         }
 
         void Log(const char* levelTag, android_LogPriority androidLogLevel, const char* fmt, ...) {
-            std::lock_guard<std::mutex> lock(s_mutex);
+            std::lock_guard<std::mutex> lock(LogMutex());
 
 #if MOBILEGL_LOG_ENABLE_STACKTRACE
             auto trace = std::stacktrace::current();
