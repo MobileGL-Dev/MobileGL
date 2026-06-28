@@ -321,6 +321,10 @@ function htmlEscape(value) {
     .replaceAll('"', "&quot;");
 }
 
+function jsonScriptText(value) {
+  return JSON.stringify(value).replaceAll("<", "\\u003c");
+}
+
 async function embedPng(source) {
   if (!source) return "";
   if (!(await isUsablePng(source))) return "";
@@ -364,11 +368,34 @@ async function renderHtml(rows, groupLabels, outputDir, title, groupLabel, htmlN
     });
   }
 
-  const thumb = (src, label) => `
+  const imageTemplates = [];
+  const imageTemplatesByGroup = new Map();
+  const imageTemplateForGroup = (group) => {
+    let template = imageTemplatesByGroup.get(group);
+    if (!template) {
+      template = { id: `image-data-${imageTemplates.length}`, images: {}, nextImage: 0 };
+      imageTemplatesByGroup.set(group, template);
+      imageTemplates.push(template);
+    }
+    return template;
+  };
+  const registerImage = (group, src) => {
+    if (!src) return "";
+    const template = imageTemplateForGroup(group);
+    const id = `image-${template.nextImage}`;
+    template.nextImage += 1;
+    template.images[id] = src;
+    return id;
+  };
+
+  const thumb = (group, src, label) => {
+    const imageId = registerImage(group, src);
+    return `
     <figure class="thumb">
       <figcaption>${htmlEscape(label)}</figcaption>
-      ${src ? `<button class="image-button" type="button" aria-label="Open ${htmlEscape(label)} image"><img src="${htmlEscape(src)}" alt="${htmlEscape(label)}"></button>` : `<div class="no-image">NO IMAGE</div>`}
+      ${imageId ? `<button class="image-button" type="button" aria-label="Open ${htmlEscape(label)} image"><img class="lazy-image" data-image-id="${imageId}" alt="${htmlEscape(label)}" loading="lazy" decoding="async"></button>` : `<div class="no-image">NO IMAGE</div>`}
     </figure>`;
+  };
 
   const missingImages = (row) => !row.actualSrc || !row.goldenSrc || !row.diffSrc;
   const cellFor = (group, backend, caseName) => cells.get(`${group}\0${backend}\0${caseName}`) ?? {
@@ -387,9 +414,9 @@ async function renderHtml(rows, groupLabels, outputDir, title, groupLabel, htmlN
       <section class="backend-cell ${statusClass} ${imageClass}">
         <header>${backend} <strong>${statusText(row)}</strong></header>
         <div class="thumbs">
-          ${thumb(row.actualSrc, "actual")}
-          ${thumb(row.goldenSrc, "golden")}
-          ${thumb(row.diffSrc, "diff")}
+          ${thumb(group, row.actualSrc, "actual")}
+          ${thumb(group, row.goldenSrc, "golden")}
+          ${thumb(group, row.diffSrc, "diff")}
         </div>
       </section>`;
   };
@@ -432,7 +459,7 @@ async function renderHtml(rows, groupLabels, outputDir, title, groupLabel, htmlN
     font-family: Arial, Helvetica, sans-serif;
     font-size: 12px;
   }
-  main { width: 1170px; margin: 0 auto; padding: 14px 10px 96px; }
+  main { width: min(1170px, 100%); margin: 0 auto; padding: 14px 10px 96px; }
   .document-title {
     margin: 0 0 6px;
     font-size: 28px;
@@ -448,6 +475,28 @@ async function renderHtml(rows, groupLabels, outputDir, title, groupLabel, htmlN
     align-items: start;
     justify-content: space-between;
     gap: 16px;
+    margin-bottom: 10px;
+    padding: 12px 14px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: #2f2f2f;
+    cursor: pointer;
+    user-select: none;
+  }
+  .group-title:hover { border-color: #5a6473; }
+  .group-title:focus-visible {
+    outline: 2px solid #6f87ff;
+    outline-offset: 2px;
+  }
+  .group-title::after {
+    content: "+ Expand";
+    flex: 0 0 auto;
+    align-self: center;
+    color: var(--muted);
+    font-weight: 700;
+  }
+  .group:not(.collapsed) .group-title::after {
+    content: "- Collapse";
   }
   h1 { margin: 0; font-size: 24px; line-height: 1.2; }
   p { margin: 4px 0 12px; color: var(--muted); }
@@ -506,23 +555,13 @@ async function renderHtml(rows, groupLabels, outputDir, title, groupLabel, htmlN
     width: 100%;
     background: #252b38;
   }
-  .toggle-cases {
-    flex: 0 0 auto;
-    margin-top: 2px;
-    border: 1px solid var(--line);
-    border-radius: 6px;
-    padding: 6px 10px;
-    color: var(--text);
-    background: #151922;
-    font: inherit;
-    cursor: pointer;
-  }
-  .toggle-cases:hover { background: #1b2130; }
   .group.collapsed .case-list { display: none; }
+  .case-list { overflow-x: auto; }
   .grid {
     display: grid;
     grid-template-columns: 280px 430px 430px;
     column-gap: 10px;
+    min-width: 1150px;
   }
   .header-row {
     color: var(--muted);
@@ -623,20 +662,54 @@ async function renderHtml(rows, groupLabels, outputDir, title, groupLabel, htmlN
     position: fixed;
     inset: 0;
     z-index: 20;
-    display: grid;
-    place-items: center;
-    padding: 28px;
+    display: flex;
+    flex-direction: column;
+    padding: max(12px, env(safe-area-inset-top)) max(10px, env(safe-area-inset-right)) max(12px, env(safe-area-inset-bottom)) max(10px, env(safe-area-inset-left));
     background: rgb(0 0 0 / 86%);
     cursor: zoom-out;
   }
   .lightbox[hidden] {
     display: none;
   }
+  .lightbox-close {
+    position: fixed;
+    right: max(10px, env(safe-area-inset-right));
+    top: max(10px, env(safe-area-inset-top));
+    z-index: 21;
+    width: 38px;
+    height: 38px;
+    border: 1px solid rgb(255 255 255 / 24%);
+    border-radius: 999px;
+    color: var(--text);
+    background: rgb(18 18 18 / 92%);
+    font-size: 24px;
+    line-height: 34px;
+    cursor: pointer;
+  }
+  .lightbox-stage {
+    width: 100%;
+    height: 100%;
+    display: grid;
+    place-items: center;
+    overflow: auto;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+    padding: 44px 0 16px;
+  }
   .lightbox img {
     max-width: min(96vw, 1600px);
-    max-height: 94vh;
+    max-height: calc(100dvh - 72px);
     object-fit: contain;
     box-shadow: 0 18px 70px rgb(0 0 0 / 70%);
+    cursor: zoom-in;
+  }
+  .lightbox.zoomed .lightbox-stage {
+    place-items: start center;
+  }
+  .lightbox.zoomed img {
+    max-width: none;
+    max-height: none;
+    cursor: zoom-out;
   }
   .summary-footer {
     margin-top: 24px;
@@ -652,6 +725,34 @@ async function renderHtml(rows, groupLabels, outputDir, title, groupLabel, htmlN
     .summary-footer { display: none; }
     .lightbox { display: none; }
   }
+  @media (max-width: 700px) {
+    body { font-size: 11px; }
+    main { padding: 10px 6px 72px; }
+    .document-title { font-size: 22px; }
+    .group-title {
+      display: block;
+      padding: 10px 10px 12px;
+    }
+    .group-title::after {
+      display: block;
+      margin-top: 8px;
+    }
+    h1 { font-size: 18px; }
+    .stats { gap: 6px; }
+    .stat { padding: 4px 6px; }
+    .status-bar { margin-bottom: 0; }
+    .lightbox {
+      background: rgb(0 0 0 / 92%);
+    }
+    .lightbox-stage {
+      padding-top: 52px;
+      align-items: start;
+    }
+    .lightbox img {
+      max-width: calc(100vw - 20px);
+      max-height: calc(100dvh - 84px);
+    }
+  }
 </style>
 </head>
 <body>
@@ -660,8 +761,10 @@ async function renderHtml(rows, groupLabels, outputDir, title, groupLabel, htmlN
 <p class="overview-note">Each backend cell shows actual / golden / diff. Failed cases are red; absent results are orange; incomplete image sets get an orange notch.</p>
 `);
 
+  const caseTemplates = [];
   for (const group of groups) {
     const displayGroup = groupLabels.get(group) ?? group;
+    const templateId = `case-template-${caseTemplates.length}`;
     const groupCells = CASES.flatMap((caseName) => BACKENDS.map((backend) => cellFor(group, backend, caseName)));
     const passed = groupCells.filter((row) => effectiveStatus(row) === "PASS").length;
     const failed = groupCells.filter((row) => effectiveStatus(row) === "FAIL").length;
@@ -672,9 +775,30 @@ async function renderHtml(rows, groupLabels, outputDir, title, groupLabel, htmlN
     const passPercent = statusTotal === 0 ? "0" : (passed * 100 / statusTotal).toFixed(3);
     const noResultPercent = statusTotal === 0 ? "0" : (noResult * 100 / statusTotal).toFixed(3);
     const failPercent = statusTotal === 0 ? "0" : (failed * 100 / statusTotal).toFixed(3);
+    let caseHtml = `
+          <div class="grid header-row">
+            <div>case</div>
+            <div>DirectGLES</div>
+            <div>DirectVulkan</div>
+          </div>
+`;
+    for (const [index, caseName] of CASES.entries()) {
+      caseHtml += `
+          <div class="grid case-row ${index % 2 === 0 ? "even" : "odd"}">
+            <aside>
+              <strong>${htmlEscape(shortCase(caseName))}</strong>
+              ${caseName.includes("iterationt") && !rowMap.has(`${group}\0DirectGLES\0${caseName}`) && !rowMap.has(`${group}\0DirectVulkan\0${caseName}`)
+                ? `<small>LFS fixture may be unavailable</small>` : ""}
+            </aside>
+            ${backendCell(group, "DirectGLES", caseName)}
+            ${backendCell(group, "DirectVulkan", caseName)}
+          </div>`;
+    }
+    caseTemplates.push({ id: templateId, html: caseHtml });
+    const imageTemplate = imageTemplatesByGroup.get(group);
     await write(`
-      <section class="group collapsed">
-        <div class="group-title">
+      <section class="group collapsed" data-template-id="${templateId}" data-image-template-id="${imageTemplate ? imageTemplate.id : ""}">
+        <div class="group-title" role="button" tabindex="0" aria-expanded="false">
           <div>
             <h1>${htmlEscape(displayGroup)}</h1>
             <div class="stats" aria-label="summary stats">
@@ -689,73 +813,117 @@ async function renderHtml(rows, groupLabels, outputDir, title, groupLabel, htmlN
                 : `<span class="segment pass" style="width: ${passPercent}%;" title="PASS ${passed}"></span><span class="segment no-result" style="width: ${noResultPercent}%;" title="NO RESULT ${noResult}"></span><span class="segment fail" style="width: ${failPercent}%;" title="FAIL ${failed}"></span>`}
             </div>
           </div>
-          <button class="toggle-cases" type="button" aria-expanded="false">Expand cases</button>
         </div>
-        <div class="case-list">
-          <div class="grid header-row">
-            <div>case</div>
-            <div>DirectGLES</div>
-            <div>DirectVulkan</div>
-          </div>
-`);
-    for (const [index, caseName] of CASES.entries()) {
-      await write(`
-          <div class="grid case-row ${index % 2 === 0 ? "even" : "odd"}">
-            <aside>
-              <strong>${htmlEscape(shortCase(caseName))}</strong>
-              ${caseName.includes("iterationt") && !rowMap.has(`${group}\0DirectGLES\0${caseName}`) && !rowMap.has(`${group}\0DirectVulkan\0${caseName}`)
-                ? `<small>LFS fixture may be unavailable</small>` : ""}
-            </aside>
-            ${backendCell(group, "DirectGLES", caseName)}
-            ${backendCell(group, "DirectVulkan", caseName)}
-          </div>`);
-    }
-    await write(`
-        </div>
+        <div class="case-list" data-loaded="false"></div>
       </section>`);
+  }
+
+  for (const template of caseTemplates) {
+    await write(`
+<script type="application/json" id="${template.id}">${jsonScriptText(template.html)}</script>`);
   }
 
   await write(`
 <footer class="summary-footer">End of retrace summary. ${groups.length} ${htmlEscape(groupLabel)} groups rendered.</footer>
 </main>
 <div class="lightbox" id="lightbox" hidden>
-  <img id="lightbox-image" alt="">
+  <button class="lightbox-close" type="button" aria-label="Close image">&times;</button>
+  <div class="lightbox-stage">
+    <img id="lightbox-image" alt="">
+  </div>
 </div>
 <script>
 (() => {
   const lightbox = document.getElementById("lightbox");
   const lightboxImage = document.getElementById("lightbox-image");
+  const lightboxClose = document.querySelector(".lightbox-close");
+  const imageDataCache = new Map();
+  const hydrateGroup = (group) => {
+    const list = group.querySelector(".case-list");
+    if (!list || list.dataset.loaded === "true") return;
+    const template = document.getElementById(group.dataset.templateId);
+    if (!template) return;
+    list.innerHTML = JSON.parse(template.textContent);
+    list.dataset.loaded = "true";
+    template.remove();
+  };
+  const imageDataForGroup = (group) => {
+    const templateId = group?.dataset.imageTemplateId;
+    if (!templateId) return {};
+    if (imageDataCache.has(templateId)) return imageDataCache.get(templateId);
+    const template = document.getElementById(templateId);
+    if (!template) return {};
+    const images = JSON.parse(template.textContent);
+    imageDataCache.set(templateId, images);
+    template.remove();
+    return images;
+  };
+  const loadImage = (image) => {
+    if (!image || image.src || !image.dataset.imageId) return;
+    const group = image.closest(".group");
+    const src = imageDataForGroup(group)[image.dataset.imageId];
+    if (src) image.src = src;
+  };
+  const loadImagesInGroup = (group) => {
+    hydrateGroup(group);
+    group.querySelectorAll("img[data-image-id]").forEach(loadImage);
+  };
   const closeLightbox = () => {
     lightbox.hidden = true;
+    lightbox.classList.remove("zoomed");
     lightboxImage.removeAttribute("src");
     lightboxImage.alt = "";
   };
 
-  document.querySelectorAll(".image-button").forEach((button) => {
-    button.addEventListener("click", () => {
-      const image = button.querySelector("img");
-      if (!image) return;
-      lightboxImage.src = image.src;
-      lightboxImage.alt = image.alt;
-      lightbox.hidden = false;
-    });
+  document.addEventListener("click", (event) => {
+    const button = event.target.closest(".image-button");
+    if (!button) return;
+    const image = button.querySelector("img");
+    if (!image) return;
+    loadImage(image);
+    lightboxImage.src = image.src;
+    lightboxImage.alt = image.alt;
+    lightbox.hidden = false;
+    lightbox.classList.remove("zoomed");
   });
 
-  document.querySelectorAll(".toggle-cases").forEach((button) => {
-    button.addEventListener("click", () => {
-      const group = button.closest(".group");
+  document.querySelectorAll(".group-title").forEach((title) => {
+    const toggleGroup = () => {
+      const group = title.closest(".group");
       const expanded = group.classList.toggle("collapsed") === false;
-      button.setAttribute("aria-expanded", String(expanded));
-      button.textContent = expanded ? "Collapse cases" : "Expand cases";
+      title.setAttribute("aria-expanded", String(expanded));
+      if (expanded) loadImagesInGroup(group);
+    };
+    title.addEventListener("click", toggleGroup);
+    title.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter" && event.key !== " ") return;
+      event.preventDefault();
+      toggleGroup();
     });
   });
 
   lightbox.addEventListener("click", closeLightbox);
+  lightboxClose.addEventListener("click", closeLightbox);
+  lightboxImage.addEventListener("click", (event) => {
+    event.stopPropagation();
+    lightbox.classList.toggle("zoomed");
+  });
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape" && !lightbox.hidden) closeLightbox();
   });
+  window.addEventListener("load", () => {
+    document.querySelectorAll(".group:not(.collapsed)").forEach(loadImagesInGroup);
+  }, { once: true });
 })();
 </script>
+`);
+
+  for (const template of imageTemplates) {
+    await write(`
+<script type="application/json" id="${template.id}" data-image-data="true">${jsonScriptText(template.images)}</script>`);
+  }
+
+  await write(`
 </body>
 </html>
 `);
