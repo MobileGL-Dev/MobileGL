@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <cerrno>
+#include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -19,6 +20,7 @@
 #include <memory>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 #include <fcntl.h>
@@ -30,6 +32,10 @@
 #endif
 
 extern "C" int MOBILEGL_APITRACE_RETRACE_MAIN(int argc, char** argv);
+
+#if defined(__GNUC__) || defined(__clang__)
+extern "C" void mobilegl_trace_pump_events() __attribute__((weak));
+#endif
 
 namespace mobilegl_trace {
 namespace {
@@ -146,6 +152,26 @@ bool LoadMobileGL(const Request& request, std::string& error) {
         return false;
     }
     return true;
+}
+
+void ConfigureHoldEnv(const Request& request) {
+    if (request.holdMs <= 0) {
+        unsetenv("MOBILEGL_TRACE_HOLD_MS");
+        unsetenv("MOBILEGL_TRACE_HOLD_CALL");
+        unsetenv("MOBILEGL_TRACE_HOLD_DONE");
+        return;
+    }
+
+    const std::string holdMs = std::to_string(request.holdMs);
+    const std::string holdCall = std::to_string(request.targetCall);
+    setenv("MOBILEGL_TRACE_HOLD_MS", holdMs.c_str(), 1);
+    setenv("MOBILEGL_TRACE_HOLD_CALL", holdCall.c_str(), 1);
+    unsetenv("MOBILEGL_TRACE_HOLD_DONE");
+}
+
+bool TraceHoldAlreadyRan() {
+    const char* holdDone = getenv("MOBILEGL_TRACE_HOLD_DONE");
+    return holdDone != nullptr && std::strcmp(holdDone, "1") == 0;
 }
 
 bool CopyFile(const std::string& from, const std::string& to) {
@@ -436,6 +462,7 @@ int RunRetraceMain(const Request& request, bool usePresentDump) {
 
 bool RunRetrace(const Request& request, bool usePresentDump, Result& result) {
     int status = 0;
+    ConfigureHoldEnv(request);
     try {
         ScopedFdRedirect redirect(request.outputDir + "/retrace.log");
         status = RunRetraceMain(request, usePresentDump);
@@ -565,6 +592,28 @@ bool WriteDifferenceImage(const Result& result,
     }
 
     return WritePngRgba(result.diffPath, diff, error);
+}
+
+void PumpTraceEvents() {
+#if defined(__GNUC__) || defined(__clang__)
+    if (mobilegl_trace_pump_events != nullptr) {
+        mobilegl_trace_pump_events();
+    }
+#endif
+}
+
+void HoldAfterRetrace(const Request& request) {
+    if (request.holdMs <= 0 || TraceHoldAlreadyRan()) {
+        return;
+    }
+
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(request.holdMs);
+    while (std::chrono::steady_clock::now() < deadline) {
+        PumpTraceEvents();
+        std::this_thread::sleep_for(std::chrono::milliseconds(16));
+    }
+    PumpTraceEvents();
+    setenv("MOBILEGL_TRACE_HOLD_DONE", "1", 1);
 }
 
 struct GoldenComparison {
@@ -816,6 +865,7 @@ bool WriteResultJson(const Request& request, const Result& result) {
     file << "  \"ssimThreshold\": " << request.ssimThreshold << ",\n";
     file << "  \"useAngle\": " << (UseAngleForRequest(request) ? "true" : "false") << ",\n";
     file << "  \"usePbuffer\": " << (request.usePbuffer ? "true" : "false") << ",\n";
+    file << "  \"holdMs\": " << request.holdMs << ",\n";
     file << "  \"mismatchPixels\": " << result.mismatchPixels << "\n";
     file << "}\n";
     return true;
@@ -885,9 +935,11 @@ Result RunTraceReplay(const Request& request) {
     }
 
     if (!RunRetrace(request, usePresentDump, result)) {
+        HoldAfterRetrace(request);
         return result;
     }
 
+    HoldAfterRetrace(request);
     CompareWithGolden(request, result);
     return result;
 }

@@ -4,11 +4,13 @@
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
 #include <algorithm>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <dlfcn.h>
 #include <iostream>
+#include <thread>
 
 #if defined(__APPLE__)
 #include <CoreGraphics/CoreGraphics.h>
@@ -81,6 +83,12 @@ id SendId(id receiver, const char *selector) {
     return ObjcMsgSend<id (*)(id, SEL)>()(receiver, sel_registerName(selector));
 }
 
+id NSStringFromUtf8(const char *value) {
+    id stringClass = reinterpret_cast<id>(objc_getClass("NSString"));
+    return ObjcMsgSend<id (*)(id, SEL, const char *)>()(
+        stringClass, sel_registerName("stringWithUTF8String:"), value);
+}
+
 void SendVoid(id receiver, const char *selector) {
     ObjcMsgSend<void (*)(id, SEL)>()(receiver, sel_registerName(selector));
 }
@@ -141,12 +149,18 @@ void PumpMacOSEvents() {
     SendVoid(app, "updateWindows");
 }
 
+extern "C" void mobilegl_trace_pump_events() {
+    PumpMacOSEvents();
+}
+
 void EnsureApplicationActive() {
     id app = SharedApplication();
     if (!app) {
         return;
     }
+    SendVoid(app, "finishLaunching");
     SendVoidLong(app, "setActivationPolicy:", kNSApplicationActivationPolicyRegular);
+    SendVoidId(app, "unhide:", nil);
     SendVoidBool(app, "activateIgnoringOtherApps:", true);
 }
 
@@ -172,6 +186,8 @@ id CreateMetalWindow(int width, int height, id *outLayer) {
         std::cerr << "error: failed to create NSWindow\n";
         return nil;
     }
+    SendVoidId(window, "setTitle:", NSStringFromUtf8("MobileGL Trace Replay"));
+    SendVoidBool(window, "setReleasedWhenClosed:", false);
 
     id contentView = SendId(window, "contentView");
     id layer = SendId(metalLayerClass, "layer");
@@ -185,13 +201,52 @@ id CreateMetalWindow(int width, int height, id *outLayer) {
     SendVoidCGRect(layer, "setFrame:", {{0.0, 0.0}, {surfaceWidth, surfaceHeight}});
     SendVoidCGSize(layer, "setDrawableSize:", {surfaceWidth, surfaceHeight});
     SendVoidId(contentView, "setLayer:", layer);
-    ObjcMsgSend<void (*)(id, SEL, id)>()(window, sel_registerName("makeKeyAndOrderFront:"), nil);
-    PumpMacOSEvents();
 
     *outLayer = layer;
     return window;
 }
+
+void ShowMetalWindow(id window) {
+    if (!window) {
+        return;
+    }
+    EnsureApplicationActive();
+    ObjcMsgSend<void (*)(id, SEL, id)>()(window, sel_registerName("makeKeyAndOrderFront:"), nil);
+    SendVoid(window, "orderFrontRegardless");
+    PumpMacOSEvents();
+}
 #endif
+
+void HoldAfterTargetPresent(const char *callNo) {
+    const char *holdMsText = std::getenv("MOBILEGL_TRACE_HOLD_MS");
+    if (holdMsText == nullptr || holdMsText[0] == '\0') {
+        return;
+    }
+    const int holdMs = std::atoi(holdMsText);
+    if (holdMs <= 0) {
+        return;
+    }
+    const char *holdDone = std::getenv("MOBILEGL_TRACE_HOLD_DONE");
+    if (holdDone != nullptr && std::strcmp(holdDone, "1") == 0) {
+        return;
+    }
+    const char *holdCall = std::getenv("MOBILEGL_TRACE_HOLD_CALL");
+    if (holdCall != nullptr && holdCall[0] != '\0' && std::strcmp(holdCall, callNo) != 0) {
+        return;
+    }
+
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(holdMs);
+    while (std::chrono::steady_clock::now() < deadline) {
+#if defined(__APPLE__)
+        PumpMacOSEvents();
+#endif
+        std::this_thread::sleep_for(std::chrono::milliseconds(16));
+    }
+#if defined(__APPLE__)
+    PumpMacOSEvents();
+#endif
+    setenv("MOBILEGL_TRACE_HOLD_DONE", "1", 1);
+}
 
 int ResolveWidth(int width) {
     if (gRequestedWidth > 0) {
@@ -308,6 +363,7 @@ public:
 #if defined(__APPLE__)
     id window = nil;
     id metalLayer = nil;
+    bool windowShown = false;
 #endif
 
     EglDrawable(const EglVisual *visual, int width, int height, bool pbuffer)
@@ -343,9 +399,8 @@ public:
     void show() override {
         visible = true;
 #if defined(__APPLE__)
-        if (window) {
-            ObjcMsgSend<void (*)(id, SEL, id)>()(window, sel_registerName("makeKeyAndOrderFront:"), nil);
-            PumpMacOSEvents();
+        if (windowShown) {
+            ShowMetalWindow(window);
         }
 #endif
     }
@@ -366,7 +421,12 @@ public:
         unsetenv("MOBILEGL_PRESENT_CURRENT_CALL");
 #if defined(__APPLE__)
         PumpMacOSEvents();
+        if (window && !windowShown) {
+            ShowMetalWindow(window);
+            windowShown = true;
+        }
 #endif
+        HoldAfterTargetPresent(callNo);
     }
 
 private:
@@ -552,8 +612,10 @@ Visual *createVisual(bool doubleBuffer, unsigned samples, Profile profile) {
 }
 
 Drawable *createDrawable(const Visual *visual, int width, int height, const pbuffer_info *pbInfo) {
+    (void)pbInfo;
+    const bool usePbuffer = !TraceReplayWantsWindowSurface();
     return new EglDrawable(static_cast<const EglVisual *>(visual), ResolveWidth(width),
-                           ResolveHeight(height), true);
+                           ResolveHeight(height), usePbuffer);
 }
 
 Context *createContext(const Visual *visual, Context *shareContext, bool) {

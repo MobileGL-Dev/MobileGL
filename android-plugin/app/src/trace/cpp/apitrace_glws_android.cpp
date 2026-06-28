@@ -7,10 +7,12 @@
 #include <dlfcn.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
+#include <thread>
 
 namespace {
 
@@ -85,6 +87,28 @@ void *Lookup(const char *name) {
         }
     }
     return dlsym(RTLD_DEFAULT, name);
+}
+
+void HoldAfterTargetPresent(const char *callNo) {
+    const char *holdMsText = std::getenv("MOBILEGL_TRACE_HOLD_MS");
+    if (holdMsText == nullptr || holdMsText[0] == '\0') {
+        return;
+    }
+    const int holdMs = std::atoi(holdMsText);
+    if (holdMs <= 0) {
+        return;
+    }
+    const char *holdDone = std::getenv("MOBILEGL_TRACE_HOLD_DONE");
+    if (holdDone != nullptr && std::strcmp(holdDone, "1") == 0) {
+        return;
+    }
+    const char *holdCall = std::getenv("MOBILEGL_TRACE_HOLD_CALL");
+    if (holdCall != nullptr && holdCall[0] != '\0' && std::strcmp(holdCall, callNo) != 0) {
+        return;
+    }
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(holdMs));
+    setenv("MOBILEGL_TRACE_HOLD_DONE", "1", 1);
 }
 
 template <typename T>
@@ -175,6 +199,7 @@ public:
             setenv("MOBILEGL_PRESENT_CURRENT_CALL", callNo, 1);
             gEgl.swapBuffers(gDisplay, surface);
             unsetenv("MOBILEGL_PRESENT_CURRENT_CALL");
+            HoldAfterTargetPresent(callNo);
         }
     }
 

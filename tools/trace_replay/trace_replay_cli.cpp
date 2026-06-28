@@ -22,6 +22,7 @@ void PrintUsage(const char *argv0) {
             << "  --height N                Replay surface height override\n"
             << "  --window-surface          Replay to a native window surface\n"
             << "  --pbuffer-surface         Replay to an EGL pbuffer surface (default)\n"
+            << "  --hold-ms N               Keep the replay process alive after retrace (default: 0)\n"
             << "  --ssim-threshold N        Minimum SSIM required to pass (default: 0.99)\n"
             << "  --crop-x N                Compare crop x\n"
             << "  --crop-y N                Compare crop y\n"
@@ -100,6 +101,8 @@ bool ParseArgs(int argc, char **argv, mobilegl_trace::Request &request) {
             request.usePbuffer = false;
         } else if (arg == "--pbuffer-surface") {
             request.usePbuffer = true;
+        } else if (arg == "--hold-ms") {
+            if (!ReadInt(argc, argv, i, request.holdMs)) return false;
         } else if (arg == "--ssim-threshold") {
             if (!ReadDouble(argc, argv, i, request.ssimThreshold)) return false;
         } else if (arg == "--crop-x") {
@@ -128,6 +131,10 @@ bool ParseArgs(int argc, char **argv, mobilegl_trace::Request &request) {
     }
     if (request.targetCall < 0) {
         std::cerr << "--target-call is required\n";
+        return false;
+    }
+    if (request.holdMs < 0) {
+        std::cerr << "--hold-ms must be non-negative\n";
         return false;
     }
     return true;
