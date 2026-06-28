@@ -25,7 +25,90 @@
 #include <cstring>
 #include <vulkan/vulkan_core.h>
 
+#if defined(__APPLE__)
+#include <CoreGraphics/CoreGraphics.h>
+#include <objc/message.h>
+#include <objc/objc.h>
+#include <objc/runtime.h>
+#endif
+
 namespace MobileGL::MG_Backend::DirectVulkan {
+#if defined(__APPLE__)
+    namespace {
+        constexpr unsigned long kNSWindowStyleMaskBorderless = 0;
+        constexpr unsigned long kNSBackingStoreBuffered = 2;
+
+        template <typename Fn>
+        Fn ObjcMsgSend() {
+            return reinterpret_cast<Fn>(objc_msgSend);
+        }
+
+        id SendId(id receiver, const char* selector) {
+            return ObjcMsgSend<id (*)(id, SEL)>()(receiver, sel_registerName(selector));
+        }
+
+        void SendVoid(id receiver, const char* selector) {
+            ObjcMsgSend<void (*)(id, SEL)>()(receiver, sel_registerName(selector));
+        }
+
+        void SendVoidBool(id receiver, const char* selector, bool value) {
+            ObjcMsgSend<void (*)(id, SEL, bool)>()(receiver, sel_registerName(selector), value);
+        }
+
+        void SendVoidId(id receiver, const char* selector, id value) {
+            ObjcMsgSend<void (*)(id, SEL, id)>()(receiver, sel_registerName(selector), value);
+        }
+
+        void SendVoidCGRect(id receiver, const char* selector, CGRect value) {
+            ObjcMsgSend<void (*)(id, SEL, CGRect)>()(receiver, sel_registerName(selector), value);
+        }
+
+        void SendVoidCGSize(id receiver, const char* selector, CGSize value) {
+            ObjcMsgSend<void (*)(id, SEL, CGSize)>()(receiver, sel_registerName(selector), value);
+        }
+
+        id Retain(id object) {
+            return object ? SendId(object, "retain") : nil;
+        }
+
+        void Release(id object) {
+            if (object) {
+                SendVoid(object, "release");
+            }
+        }
+
+        void* CreateInternalMetalLayer(Uint32 width, Uint32 height, void** outWindow) {
+            const auto surfaceWidth = static_cast<CGFloat>(std::max<Uint32>(width, 1));
+            const auto surfaceHeight = static_cast<CGFloat>(std::max<Uint32>(height, 1));
+            id windowClass = reinterpret_cast<id>(objc_getClass("NSWindow"));
+            id metalLayerClass = reinterpret_cast<id>(objc_getClass("CAMetalLayer"));
+            MOBILEGL_ASSERT(windowClass && metalLayerClass,
+                            "Failed to resolve NSWindow/CAMetalLayer for DirectVulkan pbuffer");
+
+            CGRect frame = {{0.0, 0.0}, {surfaceWidth, surfaceHeight}};
+            id window = SendId(windowClass, "alloc");
+            window = ObjcMsgSend<id (*)(id, SEL, CGRect, unsigned long, unsigned long, bool)>()(
+                window, sel_registerName("initWithContentRect:styleMask:backing:defer:"),
+                frame, kNSWindowStyleMaskBorderless, kNSBackingStoreBuffered, true);
+            MOBILEGL_ASSERT(window, "Failed to create hidden NSWindow for DirectVulkan pbuffer");
+
+            id contentView = SendId(window, "contentView");
+            MOBILEGL_ASSERT(contentView, "Failed to query hidden NSWindow contentView");
+            SendVoidBool(contentView, "setWantsLayer:", true);
+
+            id metalLayer = SendId(metalLayerClass, "layer");
+            MOBILEGL_ASSERT(metalLayer, "Failed to create hidden CAMetalLayer for DirectVulkan pbuffer");
+            Retain(metalLayer);
+            SendVoidCGRect(metalLayer, "setFrame:", frame);
+            SendVoidCGSize(metalLayer, "setDrawableSize:", frame.size);
+            SendVoidId(contentView, "setLayer:", metalLayer);
+
+            *outWindow = window;
+            return metalLayer;
+        }
+    } // namespace
+#endif
+
     static Bool IsPowerVRDevice(const VkPhysicalDeviceProperties& properties) {
         return std::strstr(properties.deviceName, "PowerVR") != nullptr;
     }
@@ -1867,6 +1950,17 @@ void main() {
             vkDestroySurfaceKHR(m_instance, m_surface, nullptr);
             m_surface = VK_NULL_HANDLE;
         }
+
+#if defined(VK_USE_PLATFORM_METAL_EXT)
+        if (m_platformLibrary != nullptr) {
+            Release(reinterpret_cast<id>(m_platformLibrary));
+            m_platformLibrary = nullptr;
+        }
+        if (m_platformDisplay != nullptr) {
+            Release(reinterpret_cast<id>(m_platformDisplay));
+            m_platformDisplay = nullptr;
+        }
+#endif
 
 #if defined(VK_USE_PLATFORM_XLIB_KHR)
         if (m_platformDisplay != nullptr) {
@@ -5325,7 +5419,11 @@ void main() {
         // Extensions
         Vector<const char*> exts = {VK_KHR_SURFACE_EXTENSION_NAME};
         if (!m_window) {
+#ifdef VK_USE_PLATFORM_METAL_EXT
+            exts.push_back(VK_EXT_METAL_SURFACE_EXTENSION_NAME);
+#else
             exts.push_back(VK_EXT_HEADLESS_SURFACE_EXTENSION_NAME);
+#endif
         } else {
 #ifdef VK_USE_PLATFORM_ANDROID_KHR
             exts.push_back(VK_KHR_ANDROID_SURFACE_EXTENSION_NAME);
@@ -5743,6 +5841,11 @@ void main() {
 
     void VulkanRenderer::CreateSurface() {
         if (!m_window) {
+#if defined VK_USE_PLATFORM_METAL_EXT
+            m_window = reinterpret_cast<NativeWindowType>(
+                CreateInternalMetalLayer(m_config.SurfaceWidth, m_config.SurfaceHeight, &m_platformDisplay));
+            m_platformLibrary = reinterpret_cast<void*>(m_window);
+#else
             auto* createHeadlessSurface =
                 reinterpret_cast<PFN_vkCreateHeadlessSurfaceEXT>(
                     vkGetInstanceProcAddr(m_instance, "vkCreateHeadlessSurfaceEXT"));
@@ -5752,6 +5855,7 @@ void main() {
             VK_VERIFY(createHeadlessSurface(m_instance, &sci, nullptr, &m_surface),
                       "vkCreateHeadlessSurfaceEXT failed");
             return;
+#endif
         }
 #if defined VK_USE_PLATFORM_ANDROID_KHR
         auto* nativeWindow = static_cast<ANativeWindow*>(m_window);

@@ -128,6 +128,7 @@ bool LoadMobileGL(const Request& request, std::string& error) {
     setenv("MOBILEGL_BACKEND_TYPE", request.backend.c_str(), 1);
     setenv("MOBILEGL_TRACE_LIBRARY", request.mobileGlLibrary.c_str(), 1);
     setenv("MOBILEGL_TRACE_SKIP_AUTODESTROY", "1", 1);
+    setenv("MOBILEGL_TRACE_SURFACE", request.usePbuffer ? "pbuffer" : "window", 1);
     if (UseAngleForRequest(request)) {
         setenv("MOBILEGL_RETRACE_USE_ANGLE", "1", 1);
         if (!request.angleLibraryDir.empty()) {

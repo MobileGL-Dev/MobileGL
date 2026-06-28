@@ -223,7 +223,8 @@ namespace MobileGL {
         enum class WindowBackend {
             Android,
             X11,
-            // TODO: X11, Wayland, Windows, macOS, etc.
+            MetalLayer,
+            // TODO: Wayland, Windows, etc.
             WindowBackendCount,
             Unknown = -1
         };

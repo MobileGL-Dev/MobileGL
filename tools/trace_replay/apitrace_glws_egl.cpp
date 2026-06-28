@@ -10,12 +10,20 @@
 #include <dlfcn.h>
 #include <iostream>
 
+#if defined(__APPLE__)
+#include <CoreGraphics/CoreGraphics.h>
+#include <objc/message.h>
+#include <objc/objc.h>
+#include <objc/runtime.h>
+#endif
+
 namespace {
 
 using PfnEglBindApi = EGLBoolean (*)(EGLenum);
 using PfnEglChooseConfig = EGLBoolean (*)(EGLDisplay, const EGLint *, EGLConfig *, EGLint, EGLint *);
 using PfnEglCreateContext = EGLContext (*)(EGLDisplay, EGLConfig, EGLContext, const EGLint *);
 using PfnEglCreatePbufferSurface = EGLSurface (*)(EGLDisplay, EGLConfig, const EGLint *);
+using PfnEglCreateWindowSurface = EGLSurface (*)(EGLDisplay, EGLConfig, EGLNativeWindowType, const EGLint *);
 using PfnEglDestroyContext = EGLBoolean (*)(EGLDisplay, EGLContext);
 using PfnEglDestroySurface = EGLBoolean (*)(EGLDisplay, EGLSurface);
 using PfnEglGetConfigAttrib = EGLBoolean (*)(EGLDisplay, EGLConfig, EGLint, EGLint *);
@@ -33,6 +41,7 @@ struct EglFns {
     PfnEglChooseConfig chooseConfig = nullptr;
     PfnEglCreateContext createContext = nullptr;
     PfnEglCreatePbufferSurface createPbufferSurface = nullptr;
+    PfnEglCreateWindowSurface createWindowSurface = nullptr;
     PfnEglDestroyContext destroyContext = nullptr;
     PfnEglDestroySurface destroySurface = nullptr;
     PfnEglGetConfigAttrib getConfigAttrib = nullptr;
@@ -53,6 +62,136 @@ EGLContext gCurrentContext = EGL_NO_CONTEXT;
 int gRequestedWidth = 0;
 int gRequestedHeight = 0;
 bool gPrintedGlIdentity = false;
+
+#if defined(__APPLE__)
+constexpr unsigned long kNSWindowStyleMaskTitled = 1ul << 0;
+constexpr unsigned long kNSWindowStyleMaskClosable = 1ul << 1;
+constexpr unsigned long kNSWindowStyleMaskMiniaturizable = 1ul << 2;
+constexpr unsigned long kNSWindowStyleMaskResizable = 1ul << 3;
+constexpr unsigned long kNSBackingStoreBuffered = 2;
+constexpr long kNSApplicationActivationPolicyRegular = 0;
+constexpr unsigned long long kNSEventMaskAny = ~0ull;
+
+template <typename Fn>
+Fn ObjcMsgSend() {
+    return reinterpret_cast<Fn>(objc_msgSend);
+}
+
+id SendId(id receiver, const char *selector) {
+    return ObjcMsgSend<id (*)(id, SEL)>()(receiver, sel_registerName(selector));
+}
+
+void SendVoid(id receiver, const char *selector) {
+    ObjcMsgSend<void (*)(id, SEL)>()(receiver, sel_registerName(selector));
+}
+
+void SendVoidId(id receiver, const char *selector, id value) {
+    ObjcMsgSend<void (*)(id, SEL, id)>()(receiver, sel_registerName(selector), value);
+}
+
+void SendVoidBool(id receiver, const char *selector, bool value) {
+    ObjcMsgSend<void (*)(id, SEL, bool)>()(receiver, sel_registerName(selector), value);
+}
+
+void SendVoidLong(id receiver, const char *selector, long value) {
+    ObjcMsgSend<void (*)(id, SEL, long)>()(receiver, sel_registerName(selector), value);
+}
+
+void SendVoidCGRect(id receiver, const char *selector, CGRect value) {
+    ObjcMsgSend<void (*)(id, SEL, CGRect)>()(receiver, sel_registerName(selector), value);
+}
+
+void SendVoidCGSize(id receiver, const char *selector, CGSize value) {
+    ObjcMsgSend<void (*)(id, SEL, CGSize)>()(receiver, sel_registerName(selector), value);
+}
+
+id Retain(id object) {
+    return object ? SendId(object, "retain") : nil;
+}
+
+void Release(id object) {
+    if (object) {
+        SendVoid(object, "release");
+    }
+}
+
+id SharedApplication() {
+    id appClass = reinterpret_cast<id>(objc_getClass("NSApplication"));
+    return appClass ? SendId(appClass, "sharedApplication") : nil;
+}
+
+void PumpMacOSEvents() {
+    id app = SharedApplication();
+    if (!app) {
+        return;
+    }
+    id distantPast = SendId(reinterpret_cast<id>(objc_getClass("NSDate")), "distantPast");
+    id stringClass = reinterpret_cast<id>(objc_getClass("NSString"));
+    id defaultRunLoopMode = ObjcMsgSend<id (*)(id, SEL, const char *)>()(
+        stringClass, sel_registerName("stringWithUTF8String:"), "kCFRunLoopDefaultMode");
+    while (true) {
+        id event = ObjcMsgSend<id (*)(id, SEL, unsigned long long, id, id, bool)>()(
+            app, sel_registerName("nextEventMatchingMask:untilDate:inMode:dequeue:"),
+            kNSEventMaskAny, distantPast, defaultRunLoopMode, true);
+        if (!event) {
+            break;
+        }
+        SendVoidId(app, "sendEvent:", event);
+    }
+    SendVoid(app, "updateWindows");
+}
+
+void EnsureApplicationActive() {
+    id app = SharedApplication();
+    if (!app) {
+        return;
+    }
+    SendVoidLong(app, "setActivationPolicy:", kNSApplicationActivationPolicyRegular);
+    SendVoidBool(app, "activateIgnoringOtherApps:", true);
+}
+
+id CreateMetalWindow(int width, int height, id *outLayer) {
+    EnsureApplicationActive();
+    id windowClass = reinterpret_cast<id>(objc_getClass("NSWindow"));
+    id metalLayerClass = reinterpret_cast<id>(objc_getClass("CAMetalLayer"));
+    if (!windowClass || !metalLayerClass) {
+        std::cerr << "error: failed to resolve NSWindow/CAMetalLayer\n";
+        return nil;
+    }
+
+    const auto surfaceWidth = static_cast<CGFloat>(std::max(width, 1));
+    const auto surfaceHeight = static_cast<CGFloat>(std::max(height, 1));
+    const CGRect frame = {{80.0, 80.0}, {surfaceWidth, surfaceHeight}};
+    constexpr unsigned long style = kNSWindowStyleMaskTitled | kNSWindowStyleMaskClosable |
+                                    kNSWindowStyleMaskMiniaturizable | kNSWindowStyleMaskResizable;
+    id window = SendId(windowClass, "alloc");
+    window = ObjcMsgSend<id (*)(id, SEL, CGRect, unsigned long, unsigned long, bool)>()(
+        window, sel_registerName("initWithContentRect:styleMask:backing:defer:"),
+        frame, style, kNSBackingStoreBuffered, false);
+    if (!window) {
+        std::cerr << "error: failed to create NSWindow\n";
+        return nil;
+    }
+
+    id contentView = SendId(window, "contentView");
+    id layer = SendId(metalLayerClass, "layer");
+    if (!contentView || !layer) {
+        Release(window);
+        std::cerr << "error: failed to create CAMetalLayer\n";
+        return nil;
+    }
+    Retain(layer);
+    SendVoidBool(contentView, "setWantsLayer:", true);
+    SendVoidCGRect(layer, "setFrame:", {{0.0, 0.0}, {surfaceWidth, surfaceHeight}});
+    SendVoidCGSize(layer, "setDrawableSize:", {surfaceWidth, surfaceHeight});
+    SendVoidId(contentView, "setLayer:", layer);
+    ObjcMsgSend<void (*)(id, SEL, id)>()(window, sel_registerName("makeKeyAndOrderFront:"), nil);
+    PumpMacOSEvents();
+
+    *outLayer = layer;
+    return window;
+}
+#endif
 
 int ResolveWidth(int width) {
     if (gRequestedWidth > 0) {
@@ -108,6 +247,7 @@ bool LoadEgl() {
            Load(gEgl.chooseConfig, "eglChooseConfig") &&
            Load(gEgl.createContext, "eglCreateContext") &&
            Load(gEgl.createPbufferSurface, "eglCreatePbufferSurface") &&
+           Load(gEgl.createWindowSurface, "eglCreateWindowSurface") &&
            Load(gEgl.destroyContext, "eglDestroyContext") &&
            Load(gEgl.destroySurface, "eglDestroySurface") &&
            Load(gEgl.getConfigAttrib, "eglGetConfigAttrib") &&
@@ -118,6 +258,11 @@ bool LoadEgl() {
            Load(gEgl.queryString, "eglQueryString") &&
            Load(gEgl.swapBuffers, "eglSwapBuffers") &&
            Load(gEgl.terminate, "eglTerminate");
+}
+
+bool TraceReplayWantsWindowSurface() {
+    const char *mode = std::getenv("MOBILEGL_TRACE_SURFACE");
+    return mode != nullptr && std::strcmp(mode, "window") == 0;
 }
 
 void PrintGlIdentityOnce() {
@@ -160,6 +305,10 @@ public:
 class EglDrawable final : public glws::Drawable {
 public:
     EGLSurface surface = EGL_NO_SURFACE;
+#if defined(__APPLE__)
+    id window = nil;
+    id metalLayer = nil;
+#endif
 
     EglDrawable(const EglVisual *visual, int width, int height, bool pbuffer)
         : Drawable(visual, width, height, pbuffer) {
@@ -168,6 +317,12 @@ public:
 
     ~EglDrawable() override {
         destroySurface();
+#if defined(__APPLE__)
+        Release(metalLayer);
+        metalLayer = nil;
+        Release(window);
+        window = nil;
+#endif
     }
 
     void resize(int w, int h) override {
@@ -187,6 +342,12 @@ public:
 
     void show() override {
         visible = true;
+#if defined(__APPLE__)
+        if (window) {
+            ObjcMsgSend<void (*)(id, SEL, id)>()(window, sel_registerName("makeKeyAndOrderFront:"), nil);
+            PumpMacOSEvents();
+        }
+#endif
     }
 
     void swapBuffers() override {
@@ -203,13 +364,50 @@ public:
         setenv("MOBILEGL_PRESENT_CURRENT_CALL", callNo, 1);
         gEgl.swapBuffers(gDisplay, surface);
         unsetenv("MOBILEGL_PRESENT_CURRENT_CALL");
+#if defined(__APPLE__)
+        PumpMacOSEvents();
+#endif
     }
 
 private:
+    bool shouldCreateWindowSurface() const {
+        if (pbuffer) {
+            return false;
+        }
+        const char *mode = std::getenv("MOBILEGL_TRACE_SURFACE");
+        return mode != nullptr && std::strcmp(mode, "window") == 0;
+    }
+
     void createSurface() {
+        const int surfaceWidth = ResolveWidth(width);
+        const int surfaceHeight = ResolveHeight(height);
+#if defined(__APPLE__)
+        if (shouldCreateWindowSurface()) {
+            if (!window) {
+                window = CreateMetalWindow(surfaceWidth, surfaceHeight, &metalLayer);
+            } else if (metalLayer) {
+                const auto w = static_cast<CGFloat>(std::max(surfaceWidth, 1));
+                const auto h = static_cast<CGFloat>(std::max(surfaceHeight, 1));
+                SendVoidCGSize(metalLayer, "setDrawableSize:", {w, h});
+                SendVoidCGRect(metalLayer, "setFrame:", {{0.0, 0.0}, {w, h}});
+            }
+            if (metalLayer) {
+                surface = gEgl.createWindowSurface(
+                        gDisplay,
+                        static_cast<const EglVisual *>(visual)->config,
+                        reinterpret_cast<EGLNativeWindowType>(metalLayer),
+                        nullptr);
+            }
+            if (surface == EGL_NO_SURFACE) {
+                std::cerr << "error: EGL window surface creation failed: 0x" << std::hex
+                          << gEgl.getError() << std::dec << "\n";
+            }
+            return;
+        }
+#endif
         const EGLint attribs[] = {
-                EGL_WIDTH, ResolveWidth(width),
-                EGL_HEIGHT, ResolveHeight(height),
+                EGL_WIDTH, surfaceWidth,
+                EGL_HEIGHT, surfaceHeight,
                 EGL_NONE,
         };
         surface = gEgl.createPbufferSurface(gDisplay, static_cast<const EglVisual *>(visual)->config, attribs);
@@ -224,6 +422,14 @@ private:
             gEgl.destroySurface(gDisplay, surface);
             surface = EGL_NO_SURFACE;
         }
+#if defined(__APPLE__)
+        if (!shouldCreateWindowSurface()) {
+            Release(metalLayer);
+            metalLayer = nil;
+            Release(window);
+            window = nil;
+        }
+#endif
     }
 };
 
@@ -323,8 +529,9 @@ Visual *createVisual(bool doubleBuffer, unsigned samples, Profile profile) {
         return nullptr;
     }
 
+    const EGLint surfaceType = TraceReplayWantsWindowSurface() ? EGL_WINDOW_BIT : EGL_PBUFFER_BIT;
     const EGLint attribs[] = {
-            EGL_SURFACE_TYPE, EGL_PBUFFER_BIT,
+            EGL_SURFACE_TYPE, surfaceType,
             EGL_RENDERABLE_TYPE, visual->api == EGL_OPENGL_ES_API ? EGL_OPENGL_ES3_BIT : EGL_OPENGL_BIT,
             EGL_RED_SIZE, 8,
             EGL_GREEN_SIZE, 8,
@@ -373,6 +580,9 @@ bool makeCurrentInternal(Drawable *drawable, Drawable *readable, Context *contex
 }
 
 bool processEvents() {
+#if defined(__APPLE__)
+    PumpMacOSEvents();
+#endif
     return false;
 }
 

@@ -6,7 +6,7 @@ option(MOBILEGL_BUILD_TEST        "Build MobileGL tests"                        
 option(MOBILEGL_BUILD_BENCHMARK   "Build MobileGL benchmarks"                        ON )
 option(MOBILEGL_FORCE_RELEASE_OPT "Enable Release optimization flags in Debug build" ON )
 option(MOBILEGL_ENABLE_TRACY      "Enable tracy for profiling"                       OFF)
-option(MOBILEGL_BUILD_TRACE_REPLAY "Build Linux apitrace replay runner"              OFF)
+option(MOBILEGL_BUILD_TRACE_REPLAY "Build desktop apitrace replay runner"            OFF)
 set(MOBILEGL_LOG_ACTIVE_LEVEL "MOBILEGL_LOG_LEVEL_INFO" CACHE STRING "MobileGL active log level macro")
 
 if (ANDROID)
@@ -382,6 +382,19 @@ if (ANDROID)
         log
         vulkan
     )
+endif()
+
+if (APPLE)
+    target_link_libraries(${CMAKE_PROJECT_NAME} PUBLIC
+        "-framework Cocoa"
+        "-framework QuartzCore"
+        "-framework Foundation")
+    if(TARGET ${CMAKE_PROJECT_NAME}_s)
+        target_link_libraries(${CMAKE_PROJECT_NAME}_s PUBLIC
+            "-framework Cocoa"
+            "-framework QuartzCore"
+            "-framework Foundation")
+    endif()
 endif()
 
 if (NOT ANDROID)

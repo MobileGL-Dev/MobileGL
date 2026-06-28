@@ -412,8 +412,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             MGLOG_E("DirectVulkan backend not initialized");
             return false;
         }
-        if (!handle.Handle || (handle.Backend != WindowBackend::Android && handle.Backend != WindowBackend::X11)) {
-            MGLOG_E("DirectVulkan backend only supports Android and X11 native windows");
+        if (!handle.Handle || (handle.Backend != WindowBackend::Android &&
+                               handle.Backend != WindowBackend::X11 &&
+                               handle.Backend != WindowBackend::MetalLayer)) {
+            MGLOG_E("DirectVulkan backend only supports Android, X11, and CAMetalLayer native windows");
             return false;
         }
 

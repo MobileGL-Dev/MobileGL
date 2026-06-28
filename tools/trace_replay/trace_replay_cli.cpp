@@ -20,6 +20,8 @@ void PrintUsage(const char *argv0) {
             << "  --mobilegl-library PATH   libMobileGL.so path (default: libMobileGL.so)\n"
             << "  --width N                 Replay surface width override\n"
             << "  --height N                Replay surface height override\n"
+            << "  --window-surface          Replay to a native window surface\n"
+            << "  --pbuffer-surface         Replay to an EGL pbuffer surface (default)\n"
             << "  --ssim-threshold N        Minimum SSIM required to pass (default: 0.99)\n"
             << "  --crop-x N                Compare crop x\n"
             << "  --crop-y N                Compare crop y\n"
@@ -94,6 +96,10 @@ bool ParseArgs(int argc, char **argv, mobilegl_trace::Request &request) {
             if (!ReadInt(argc, argv, i, request.width)) return false;
         } else if (arg == "--height") {
             if (!ReadInt(argc, argv, i, request.height)) return false;
+        } else if (arg == "--window-surface") {
+            request.usePbuffer = false;
+        } else if (arg == "--pbuffer-surface") {
+            request.usePbuffer = true;
         } else if (arg == "--ssim-threshold") {
             if (!ReadDouble(argc, argv, i, request.ssimThreshold)) return false;
         } else if (arg == "--crop-x") {

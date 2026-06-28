@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.22.1)
 
-if(NOT UNIX OR APPLE OR ANDROID)
-    message(STATUS "MobileGL trace replay runner is only enabled on Linux")
+if(NOT UNIX OR ANDROID)
+    message(STATUS "MobileGL trace replay runner is only enabled on desktop Unix")
     return()
 endif()
 
@@ -140,12 +140,16 @@ target_link_libraries(mobilegl_trace_common PUBLIC
 add_library(mobilegl_trace_glproc STATIC
         "${APITRACE_GENERATED_DIR}/glproc.cpp"
         "${MOBILEGL_TRACE_ROOT}/apitrace_glproc_mobilegl.cpp")
+if(APPLE)
+    target_compile_definitions(mobilegl_trace_glproc PRIVATE GL_SILENCE_DEPRECATION)
+endif()
 target_include_directories(mobilegl_trace_glproc PUBLIC
+        "${CMAKE_SOURCE_DIR}/include"
         "${APITRACE_GENERATED_DIR}"
         "${APITRACE_ROOT}/dispatch"
         "${APITRACE_ROOT}/lib/os"
         "${APITRACE_ROOT}/thirdparty/khronos")
-target_link_libraries(mobilegl_trace_glproc PUBLIC mobilegl_trace_apitrace_os dl)
+target_link_libraries(mobilegl_trace_glproc PUBLIC mobilegl_trace_apitrace_os ${CMAKE_DL_LIBS})
 
 execute_process(
         COMMAND ${Python3_EXECUTABLE} "${APITRACE_ROOT}/retrace/glretrace.py"
@@ -221,6 +225,15 @@ add_library(mobilegl_trace_glretrace_common STATIC
         "${APITRACE_ROOT}/retrace/metric_helper.cpp"
         "${APITRACE_ROOT}/retrace/metric_writer.cpp"
         "${MOBILEGL_TRACE_ROOT}/apitrace_glws_egl.cpp")
+if(APPLE)
+    set(MOBILEGL_TRACE_APPLE_FRAMEWORKS
+            "-framework Cocoa"
+            "-framework QuartzCore"
+            "-framework Foundation")
+    target_sources(mobilegl_trace_glretrace_common PRIVATE
+            "${MOBILEGL_TRACE_ROOT}/macos_cgs_surface_bounds.cpp")
+    target_compile_definitions(mobilegl_trace_glretrace_common PRIVATE GL_SILENCE_DEPRECATION)
+endif()
 target_include_directories(mobilegl_trace_glretrace_common PUBLIC
         "${APITRACE_GENERATED_DIR}"
         "${APITRACE_ROOT}/dispatch"
@@ -244,8 +257,7 @@ target_compile_definitions(mobilegl_trace_replay PRIVATE
 target_include_directories(mobilegl_trace_replay PRIVATE
         "${MOBILEGL_TRACE_SHARED_CPP_DIR}"
         "${APITRACE_ROOT}/lib/image")
-target_link_libraries(mobilegl_trace_replay PRIVATE
-        "-Wl,--start-group"
+set(MOBILEGL_TRACE_REPLAY_LINK_LIBRARIES
         mobilegl_trace_glretrace_common
         mobilegl_trace_retrace_common
         mobilegl_trace_image
@@ -253,8 +265,18 @@ target_link_libraries(mobilegl_trace_replay PRIVATE
         mobilegl_trace_glhelpers
         mobilegl_trace_glproc
         mobilegl_trace_apitrace_os
-        "-Wl,--end-group"
-        dl)
+        ${CMAKE_DL_LIBS})
+
+if(APPLE)
+    target_link_libraries(mobilegl_trace_replay PRIVATE
+            ${MOBILEGL_TRACE_REPLAY_LINK_LIBRARIES}
+            ${MOBILEGL_TRACE_APPLE_FRAMEWORKS})
+else()
+    target_link_libraries(mobilegl_trace_replay PRIVATE
+            "-Wl,--start-group"
+            ${MOBILEGL_TRACE_REPLAY_LINK_LIBRARIES}
+            "-Wl,--end-group")
+endif()
 
 if(MOBILEGL_TRACE_REPLAY_MOBILEGL_LIBRARY)
     set(mobilegl_trace_replay_mobilegl_library "${MOBILEGL_TRACE_REPLAY_MOBILEGL_LIBRARY}")

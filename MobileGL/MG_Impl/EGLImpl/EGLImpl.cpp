@@ -34,6 +34,8 @@ namespace MobileGL::MG_Impl::EGLImpl {
         MG_Backend::WindowBackend DetectWindowBackend() {
 #if defined(ANDROID) || defined(__ANDROID__)
             return MG_Backend::WindowBackend::Android;
+#elif defined(__APPLE__)
+            return MG_Backend::WindowBackend::MetalLayer;
 #elif defined(__linux__)
             return MG_Backend::WindowBackend::X11;
 #else

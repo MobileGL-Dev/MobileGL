@@ -1,6 +1,16 @@
 #include "glproc.hpp"
 
+#if defined(__has_include)
+#if __has_include(<GLES3/gl3.h>)
 #include <GLES3/gl3.h>
+#elif __has_include(<GLES3/gl32.h>)
+#include <GLES3/gl32.h>
+#else
+#error "OpenGL ES 3 headers are required"
+#endif
+#else
+#include <GLES3/gl3.h>
+#endif
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
