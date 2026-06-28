@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
-import { mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises";
+import { createWriteStream } from "node:fs";
+import { mkdir, readdir, readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -393,37 +394,16 @@ async function renderHtml(rows, groupLabels, outputDir, title, groupLabel, htmlN
       </section>`;
   };
 
-  const groupSections = groups.map((group) => {
-    const displayGroup = groupLabels.get(group) ?? group;
-    const groupCells = CASES.flatMap((caseName) => BACKENDS.map((backend) => cellFor(group, backend, caseName)));
-    const passed = groupCells.filter((row) => effectiveStatus(row) === "PASS").length;
-    const failed = groupCells.filter((row) => effectiveStatus(row) === "FAIL").length;
-    const noResult = groupCells.filter((row) => effectiveStatus(row) === "NO_RESULT").length;
-    const passRateDenominator = passed + failed;
-    const passRate = passRateDenominator === 0 ? "0.0%" : `${(passed * 100 / passRateDenominator).toFixed(1)}%`;
-    return `
-      <section class="group">
-        <h1>${htmlEscape(title)} - ${htmlEscape(displayGroup)}</h1>
-        <p>Each backend cell shows actual / golden / diff. Failed cases are red; absent results are orange; incomplete image sets get an orange notch.<br>PASS ${passed}, FAIL ${failed}, NO RESULT ${noResult}, PASS RATE ${passRate}.</p>
-        <div class="grid header-row">
-          <div>case</div>
-          <div>DirectGLES</div>
-          <div>DirectVulkan</div>
-        </div>
-        ${CASES.map((caseName, index) => `
-          <div class="grid case-row ${index % 2 === 0 ? "even" : "odd"}">
-            <aside>
-              <strong>${htmlEscape(shortCase(caseName))}</strong>
-              ${caseName.includes("iterationt") && !rowMap.has(`${group}\0DirectGLES\0${caseName}`) && !rowMap.has(`${group}\0DirectVulkan\0${caseName}`)
-                ? `<small>LFS fixture may be unavailable</small>` : ""}
-            </aside>
-            ${backendCell(group, "DirectGLES", caseName)}
-            ${backendCell(group, "DirectVulkan", caseName)}
-          </div>`).join("")}
-      </section>`;
-  }).join("");
+  const output = path.join(outputDir, htmlName);
+  const stream = createWriteStream(output, { encoding: "utf8" });
+  const write = (chunk) => new Promise((resolve, reject) => {
+    stream.write(chunk, (error) => error ? reject(error) : resolve());
+  });
+  const finish = () => new Promise((resolve, reject) => {
+    stream.end((error) => error ? reject(error) : resolve());
+  });
 
-  const html = `<!doctype html>
+  await write(`<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -452,9 +432,8 @@ async function renderHtml(rows, groupLabels, outputDir, title, groupLabel, htmlN
     font-family: Arial, Helvetica, sans-serif;
     font-size: 12px;
   }
-  main { width: 1170px; margin: 0 auto; padding: 14px 10px 24px; }
-  .group { break-after: page; margin-bottom: 28px; }
-  .group:last-child { break-after: auto; }
+  main { width: 1170px; margin: 0 auto; padding: 14px 10px 96px; }
+  .group { margin-bottom: 28px; }
   h1 { margin: 0; font-size: 24px; line-height: 1.2; }
   p { margin: 4px 0 12px; color: var(--muted); }
   .grid {
@@ -576,17 +555,62 @@ async function renderHtml(rows, groupLabels, outputDir, title, groupLabel, htmlN
     object-fit: contain;
     box-shadow: 0 18px 70px rgb(0 0 0 / 70%);
   }
+  .summary-footer {
+    margin-top: 24px;
+    padding: 18px 0 8px;
+    color: var(--muted);
+    border-top: 1px solid var(--line);
+  }
   @page { size: 1170px 2380px; margin: 0; }
   @media print {
     main { padding: 10px; }
-    .group { margin-bottom: 0; }
+    .group { break-after: page; margin-bottom: 0; }
+    .group:last-child { break-after: auto; }
+    .summary-footer { display: none; }
     .lightbox { display: none; }
   }
 </style>
 </head>
 <body>
 <main>
-${groupSections}
+`);
+
+  for (const group of groups) {
+    const displayGroup = groupLabels.get(group) ?? group;
+    const groupCells = CASES.flatMap((caseName) => BACKENDS.map((backend) => cellFor(group, backend, caseName)));
+    const passed = groupCells.filter((row) => effectiveStatus(row) === "PASS").length;
+    const failed = groupCells.filter((row) => effectiveStatus(row) === "FAIL").length;
+    const noResult = groupCells.filter((row) => effectiveStatus(row) === "NO_RESULT").length;
+    const passRateDenominator = passed + failed;
+    const passRate = passRateDenominator === 0 ? "0.0%" : `${(passed * 100 / passRateDenominator).toFixed(1)}%`;
+    await write(`
+      <section class="group">
+        <h1>${htmlEscape(title)} - ${htmlEscape(displayGroup)}</h1>
+        <p>Each backend cell shows actual / golden / diff. Failed cases are red; absent results are orange; incomplete image sets get an orange notch.<br>PASS ${passed}, FAIL ${failed}, NO RESULT ${noResult}, PASS RATE ${passRate}.</p>
+        <div class="grid header-row">
+          <div>case</div>
+          <div>DirectGLES</div>
+          <div>DirectVulkan</div>
+        </div>
+`);
+    for (const [index, caseName] of CASES.entries()) {
+      await write(`
+          <div class="grid case-row ${index % 2 === 0 ? "even" : "odd"}">
+            <aside>
+              <strong>${htmlEscape(shortCase(caseName))}</strong>
+              ${caseName.includes("iterationt") && !rowMap.has(`${group}\0DirectGLES\0${caseName}`) && !rowMap.has(`${group}\0DirectVulkan\0${caseName}`)
+                ? `<small>LFS fixture may be unavailable</small>` : ""}
+            </aside>
+            ${backendCell(group, "DirectGLES", caseName)}
+            ${backendCell(group, "DirectVulkan", caseName)}
+          </div>`);
+    }
+    await write(`
+      </section>`);
+  }
+
+  await write(`
+<footer class="summary-footer">End of retrace summary. ${groups.length} ${htmlEscape(groupLabel)} groups rendered.</footer>
 </main>
 <div class="lightbox" id="lightbox" hidden>
   <img id="lightbox-image" alt="">
@@ -619,9 +643,8 @@ ${groupSections}
 </script>
 </body>
 </html>
-`;
-  const output = path.join(outputDir, htmlName);
-  await writeFile(output, html, "utf8");
+`);
+  await finish();
   return output;
 }
 
