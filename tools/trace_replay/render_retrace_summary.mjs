@@ -433,9 +433,92 @@ async function renderHtml(rows, groupLabels, outputDir, title, groupLabel, htmlN
     font-size: 12px;
   }
   main { width: 1170px; margin: 0 auto; padding: 14px 10px 96px; }
+  .document-title {
+    margin: 0 0 6px;
+    font-size: 28px;
+    line-height: 1.2;
+  }
+  .overview-note {
+    margin: 0 0 16px;
+    color: var(--muted);
+  }
   .group { margin-bottom: 28px; }
+  .group-title {
+    display: flex;
+    align-items: start;
+    justify-content: space-between;
+    gap: 16px;
+  }
   h1 { margin: 0; font-size: 24px; line-height: 1.2; }
   p { margin: 4px 0 12px; color: var(--muted); }
+  .stats {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin: 8px 0 12px;
+  }
+  .stat {
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 5px 8px;
+    color: var(--text);
+    background: #151922;
+    font-weight: 700;
+  }
+  .stat strong {
+    margin-left: 5px;
+    font-size: 14px;
+  }
+  .stat.rate {
+    border-color: #6f87ff;
+    background: #1d2544;
+  }
+  .stat.pass {
+    border-color: var(--green);
+    background: #15341e;
+  }
+  .stat.fail {
+    border-color: var(--red);
+    background: #3a171a;
+  }
+  .stat.no-result {
+    border-color: var(--orange);
+    background: #3b2a10;
+  }
+  .status-bar {
+    display: flex;
+    width: min(560px, 100%);
+    height: 14px;
+    margin: -4px 0 12px;
+    overflow: hidden;
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    background: #151922;
+  }
+  .status-bar .segment {
+    min-width: 0;
+    height: 100%;
+  }
+  .status-bar .pass { background: var(--green); }
+  .status-bar .no-result { background: var(--orange); }
+  .status-bar .fail { background: var(--red); }
+  .status-bar .empty {
+    width: 100%;
+    background: #252b38;
+  }
+  .toggle-cases {
+    flex: 0 0 auto;
+    margin-top: 2px;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 6px 10px;
+    color: var(--text);
+    background: #151922;
+    font: inherit;
+    cursor: pointer;
+  }
+  .toggle-cases:hover { background: #1b2130; }
+  .group.collapsed .case-list { display: none; }
   .grid {
     display: grid;
     grid-template-columns: 280px 430px 430px;
@@ -573,6 +656,8 @@ async function renderHtml(rows, groupLabels, outputDir, title, groupLabel, htmlN
 </head>
 <body>
 <main>
+<h1 class="document-title">${htmlEscape(title)}</h1>
+<p class="overview-note">Each backend cell shows actual / golden / diff. Failed cases are red; absent results are orange; incomplete image sets get an orange notch.</p>
 `);
 
   for (const group of groups) {
@@ -583,15 +668,35 @@ async function renderHtml(rows, groupLabels, outputDir, title, groupLabel, htmlN
     const noResult = groupCells.filter((row) => effectiveStatus(row) === "NO_RESULT").length;
     const passRateDenominator = passed + failed;
     const passRate = passRateDenominator === 0 ? "0.0%" : `${(passed * 100 / passRateDenominator).toFixed(1)}%`;
+    const statusTotal = passed + noResult + failed;
+    const passPercent = statusTotal === 0 ? "0" : (passed * 100 / statusTotal).toFixed(3);
+    const noResultPercent = statusTotal === 0 ? "0" : (noResult * 100 / statusTotal).toFixed(3);
+    const failPercent = statusTotal === 0 ? "0" : (failed * 100 / statusTotal).toFixed(3);
     await write(`
-      <section class="group">
-        <h1>${htmlEscape(title)} - ${htmlEscape(displayGroup)}</h1>
-        <p>Each backend cell shows actual / golden / diff. Failed cases are red; absent results are orange; incomplete image sets get an orange notch.<br>PASS ${passed}, FAIL ${failed}, NO RESULT ${noResult}, PASS RATE ${passRate}.</p>
-        <div class="grid header-row">
-          <div>case</div>
-          <div>DirectGLES</div>
-          <div>DirectVulkan</div>
+      <section class="group collapsed">
+        <div class="group-title">
+          <div>
+            <h1>${htmlEscape(displayGroup)}</h1>
+            <div class="stats" aria-label="summary stats">
+              <span class="stat rate">PASS RATE <strong>${passRate}</strong></span>
+              <span class="stat pass">PASS <strong>${passed}</strong></span>
+              <span class="stat no-result">NO RESULT <strong>${noResult}</strong></span>
+              <span class="stat fail">FAIL <strong>${failed}</strong></span>
+            </div>
+            <div class="status-bar" aria-label="PASS ${passed}, NO RESULT ${noResult}, FAIL ${failed}">
+              ${statusTotal === 0
+                ? `<span class="empty" title="NO RESULT 0"></span>`
+                : `<span class="segment pass" style="width: ${passPercent}%;" title="PASS ${passed}"></span><span class="segment no-result" style="width: ${noResultPercent}%;" title="NO RESULT ${noResult}"></span><span class="segment fail" style="width: ${failPercent}%;" title="FAIL ${failed}"></span>`}
+            </div>
+          </div>
+          <button class="toggle-cases" type="button" aria-expanded="false">Expand cases</button>
         </div>
+        <div class="case-list">
+          <div class="grid header-row">
+            <div>case</div>
+            <div>DirectGLES</div>
+            <div>DirectVulkan</div>
+          </div>
 `);
     for (const [index, caseName] of CASES.entries()) {
       await write(`
@@ -606,6 +711,7 @@ async function renderHtml(rows, groupLabels, outputDir, title, groupLabel, htmlN
           </div>`);
     }
     await write(`
+        </div>
       </section>`);
   }
 
@@ -632,6 +738,15 @@ async function renderHtml(rows, groupLabels, outputDir, title, groupLabel, htmlN
       lightboxImage.src = image.src;
       lightboxImage.alt = image.alt;
       lightbox.hidden = false;
+    });
+  });
+
+  document.querySelectorAll(".toggle-cases").forEach((button) => {
+    button.addEventListener("click", () => {
+      const group = button.closest(".group");
+      const expanded = group.classList.toggle("collapsed") === false;
+      button.setAttribute("aria-expanded", String(expanded));
+      button.textContent = expanded ? "Collapse cases" : "Expand cases";
     });
   });
 
