@@ -406,6 +406,51 @@ add_trace_replay_test(minecraft-1.21.4-fabric-common-mods-inventory DirectVulkan
         HEIGHT 480
 )
 
+add_trace_replay_test(minecraft-1.21.4-fabric-rei-inventory DirectVulkan
+        TRACE_ARCHIVE ${MOBILEGL_TRACE_ROOT}/fixtures/minecraft-1.21.4-fabric-rei-inventory.tgz
+        TRACE_FILE trace.trace
+        GOLDEN ${MOBILEGL_TRACE_ROOT}/fixtures/minecraft-1.21.4-fabric-rei-inventory.0005431826.png
+        TARGET_CALL 5431826
+        WIDTH 854
+        HEIGHT 480
+)
+
+add_trace_replay_test(minecraft-1.21.4-fabric-xaero-minimap-in-world DirectVulkan
+        TRACE_ARCHIVE ${MOBILEGL_TRACE_ROOT}/fixtures/minecraft-1.21.4-fabric-xaero-minimap-in-world.tgz
+        TRACE_FILE trace.trace
+        GOLDEN ${MOBILEGL_TRACE_ROOT}/fixtures/minecraft-1.21.4-fabric-xaero-minimap-in-world.0002553500.png
+        TARGET_CALL 2553500
+        WIDTH 854
+        HEIGHT 480
+)
+
+add_trace_replay_test(minecraft-1.21.4-fabric-xaero-world-map-in-world DirectVulkan
+        TRACE_ARCHIVE ${MOBILEGL_TRACE_ROOT}/fixtures/minecraft-1.21.4-fabric-xaero-world-map-in-world.tgz
+        TRACE_FILE trace.trace
+        GOLDEN ${MOBILEGL_TRACE_ROOT}/fixtures/minecraft-1.21.4-fabric-xaero-world-map-in-world.0001598209.png
+        TARGET_CALL 1598209
+        WIDTH 854
+        HEIGHT 480
+)
+
+add_trace_replay_test(minecraft-1.21.4-fabric-journeymap-in-world DirectVulkan
+        TRACE_ARCHIVE ${MOBILEGL_TRACE_ROOT}/fixtures/minecraft-1.21.4-fabric-journeymap-in-world.tgz
+        TRACE_FILE trace.trace
+        GOLDEN ${MOBILEGL_TRACE_ROOT}/fixtures/minecraft-1.21.4-fabric-journeymap-in-world.0002632392.png
+        TARGET_CALL 2632392
+        WIDTH 854
+        HEIGHT 480
+)
+
+add_trace_replay_test(minecraft-1.21.4-fabric-modernui-inventory DirectVulkan
+        TRACE_ARCHIVE ${MOBILEGL_TRACE_ROOT}/fixtures/minecraft-1.21.4-fabric-modernui-inventory.tgz
+        TRACE_FILE trace.trace
+        GOLDEN ${MOBILEGL_TRACE_ROOT}/fixtures/minecraft-1.21.4-fabric-modernui-inventory.0004907381.png
+        TARGET_CALL 4907381
+        WIDTH 854
+        HEIGHT 480
+)
+
 add_trace_replay_test_for_backends(minecraft-1.21.4-fabric-iris-bsl-in-world
         TRACE_ARCHIVE ${MOBILEGL_TRACE_ROOT}/fixtures/minecraft-1.21.4-fabric-iris-bsl-in-world.tgz
         TRACE_FILE trace.trace
