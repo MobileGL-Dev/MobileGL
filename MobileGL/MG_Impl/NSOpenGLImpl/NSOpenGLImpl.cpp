@@ -77,6 +77,12 @@ namespace MobileGL::MG_Impl::NSOpenGLImpl {
             }
         }
 
+        void SendVoidCGFloat(id receiver, const char* selector, CGFloat value) {
+            if (receiver) {
+                ObjcMsgSend<void (*)(id, SEL, CGFloat)>()(receiver, sel_registerName(selector), value);
+            }
+        }
+
         bool SendBool(id receiver, const char* selector) {
             return receiver ? ObjcMsgSend<bool (*)(id, SEL)>()(receiver, sel_registerName(selector)) : false;
         }
@@ -86,6 +92,13 @@ namespace MobileGL::MG_Impl::NSOpenGLImpl {
                 return {};
             }
             return ObjcMsgSend<CGRect (*)(id, SEL)>()(receiver, sel_registerName(selector));
+        }
+
+        CGRect SendCGRectCGRect(id receiver, const char* selector, CGRect value) {
+            if (!receiver) {
+                return {};
+            }
+            return ObjcMsgSend<CGRect (*)(id, SEL, CGRect)>()(receiver, sel_registerName(selector), value);
         }
 
         CGFloat SendCGFloat(id receiver, const char* selector) {
@@ -200,7 +213,48 @@ namespace MobileGL::MG_Impl::NSOpenGLImpl {
             return self;
         }
 
-        id CreateMetalLayerForView(id view) {
+        struct DrawableGeometry {
+            CGRect Bounds = {};
+            CGSize DrawableSize = {1.0, 1.0};
+            CGFloat Scale = 1.0;
+        };
+
+        DrawableGeometry GetDrawableGeometry(id view) {
+            DrawableGeometry geometry;
+            geometry.Bounds = SendCGRect(view, "bounds");
+            if (geometry.Bounds.size.width <= 0.0 || geometry.Bounds.size.height <= 0.0) {
+                geometry.Bounds.size.width = 1.0;
+                geometry.Bounds.size.height = 1.0;
+            }
+
+            id window = SendId(view, "window");
+            if (window) {
+                geometry.Scale = SendCGFloat(window, "backingScaleFactor");
+            }
+            if (geometry.Scale <= 0.0) {
+                geometry.Scale = 1.0;
+            }
+
+            CGRect backingBounds = SendCGRectCGRect(view, "convertRectToBacking:", geometry.Bounds);
+            if (backingBounds.size.width > 0.0 && backingBounds.size.height > 0.0) {
+                geometry.DrawableSize = backingBounds.size;
+            } else {
+                geometry.DrawableSize = {geometry.Bounds.size.width * geometry.Scale,
+                                         geometry.Bounds.size.height * geometry.Scale};
+            }
+            geometry.DrawableSize.width = std::max<CGFloat>(std::round(geometry.DrawableSize.width), 1.0);
+            geometry.DrawableSize.height = std::max<CGFloat>(std::round(geometry.DrawableSize.height), 1.0);
+            return geometry;
+        }
+
+        void ConfigureMetalLayerForView(id layer, id view, const DrawableGeometry& geometry) {
+            SendVoidCGRect(layer, "setFrame:", geometry.Bounds);
+            SendVoidCGFloat(layer, "setContentsScale:", geometry.Scale);
+            SendVoidCGSize(layer, "setDrawableSize:", geometry.DrawableSize);
+            SendVoidBool(layer, "setNeedsDisplayOnBoundsChange:", true);
+        }
+
+        id CreateMetalLayerForView(id view, DrawableGeometry* outGeometry) {
             if (!view) {
                 return nil;
             }
@@ -216,23 +270,12 @@ namespace MobileGL::MG_Impl::NSOpenGLImpl {
                 return nil;
             }
 
-            CGRect bounds = SendCGRect(view, "bounds");
-            if (bounds.size.width <= 0.0 || bounds.size.height <= 0.0) {
-                bounds.size.width = 1.0;
-                bounds.size.height = 1.0;
-            }
-            CGFloat scale = 1.0;
-            id window = SendId(view, "window");
-            if (window) {
-                scale = SendCGFloat(window, "backingScaleFactor");
-            }
-            if (scale <= 0.0) {
-                scale = 1.0;
-            }
-            CGSize drawableSize = {bounds.size.width * scale, bounds.size.height * scale};
-            SendVoidCGRect(layer, "setFrame:", bounds);
-            SendVoidCGSize(layer, "setDrawableSize:", drawableSize);
+            const auto geometry = GetDrawableGeometry(view);
+            ConfigureMetalLayerForView(layer, view, geometry);
             SendVoidId(view, "setLayer:", layer);
+            if (outGeometry) {
+                *outGeometry = geometry;
+            }
             return layer;
         }
 
@@ -247,13 +290,16 @@ namespace MobileGL::MG_Impl::NSOpenGLImpl {
                 SetAssoc(self, &kContextLayerKey, nil, kAssociationRetain);
                 return;
             }
-            id layer = CreateMetalLayerForView(view);
+            DrawableGeometry geometry;
+            id layer = CreateMetalLayerForView(view, &geometry);
             if (!layer) {
                 return;
             }
             SetAssoc(self, &kContextViewKey, view, kAssociationAssign);
             SetAssoc(self, &kContextLayerKey, layer, kAssociationRetain);
-            const auto error = CGLImpl::AttachDrawable(context, view, layer);
+            const auto error = CGLImpl::AttachDrawable(context, view, layer,
+                                                       static_cast<GLint>(geometry.DrawableSize.width),
+                                                       static_cast<GLint>(geometry.DrawableSize.height));
             if (error != kCGLNoError) {
                 MGLOG_E("NSOpenGLImpl: failed to attach drawable: %s", CGLImpl::ErrorString(error));
             }
@@ -316,16 +362,15 @@ namespace MobileGL::MG_Impl::NSOpenGLImpl {
                 ContextSetView(self, nullptr, view);
                 return;
             }
-            CGRect bounds = SendCGRect(view, "bounds");
-            CGFloat scale = 1.0;
-            if (id window = SendId(view, "window")) {
-                scale = SendCGFloat(window, "backingScaleFactor");
+            const auto geometry = GetDrawableGeometry(view);
+            ConfigureMetalLayerForView(layer, view, geometry);
+            const auto error = CGLImpl::AttachDrawable(context, view, layer,
+                                                       static_cast<GLint>(geometry.DrawableSize.width),
+                                                       static_cast<GLint>(geometry.DrawableSize.height));
+            if (error != kCGLNoError) {
+                MGLOG_E("NSOpenGLImpl: update failed to attach drawable: %s", CGLImpl::ErrorString(error));
+                return;
             }
-            if (scale <= 0.0) {
-                scale = 1.0;
-            }
-            SendVoidCGRect(layer, "setFrame:", bounds);
-            SendVoidCGSize(layer, "setDrawableSize:", {bounds.size.width * scale, bounds.size.height * scale});
             CGLImpl::UpdateContext(context);
         }
 

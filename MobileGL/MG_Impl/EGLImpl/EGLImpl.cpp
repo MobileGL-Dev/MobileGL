@@ -55,6 +55,18 @@ namespace MobileGL::MG_Impl::EGLImpl {
             return defaultValue;
         }
 
+        EGLint GetAttribValue(const EGLAttrib* attribList, EGLint attrib, EGLint defaultValue) {
+            if (!attribList) {
+                return defaultValue;
+            }
+            for (SizeT i = 0; attribList[i] != EGL_NONE; i += 2) {
+                if (attribList[i] == attrib) {
+                    return static_cast<EGLint>(attribList[i + 1]);
+                }
+            }
+            return defaultValue;
+        }
+
         template <typename NativeType>
         Bool IsNullNativeHandle(NativeType nativeHandle) {
             if constexpr (std::is_pointer_v<NativeType>) {
@@ -102,6 +114,8 @@ namespace MobileGL::MG_Impl::EGLImpl {
         const MG_Backend::WindowHandle windowHandle = {
             .Backend = DetectWindowBackend(),
             .Handle = ToVoidHandle(window),
+            .Width = static_cast<Uint32>(std::max<EGLint>(GetAttribValue(attrib_list, EGL_WIDTH, 0), 0)),
+            .Height = static_cast<Uint32>(std::max<EGLint>(GetAttribValue(attrib_list, EGL_HEIGHT, 0), 0)),
         };
         if (!backendObject->CreateEGLWindowSurface(windowHandle)) {
             state->SetError(EGL_BAD_NATIVE_WINDOW);
@@ -598,6 +612,8 @@ namespace MobileGL::MG_Impl::EGLImpl {
         const MG_Backend::WindowHandle windowHandle = {
             .Backend = DetectWindowBackend(),
             .Handle = native_window,
+            .Width = static_cast<Uint32>(std::max<EGLint>(GetAttribValue(attrib_list, EGL_WIDTH, 0), 0)),
+            .Height = static_cast<Uint32>(std::max<EGLint>(GetAttribValue(attrib_list, EGL_HEIGHT, 0), 0)),
         };
         if (!backendObject->CreateEGLWindowSurface(windowHandle)) {
             state->SetError(EGL_BAD_NATIVE_WINDOW);

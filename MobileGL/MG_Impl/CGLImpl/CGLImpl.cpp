@@ -232,6 +232,30 @@ namespace MobileGL::MG_Impl::CGLImpl {
             }
             return kCGLNoError;
         }
+
+        CGLError RecreateSurfaceLocked(CGLContextObj ctx, ContextObject& object) {
+            if (!object.MetalLayer) {
+                return kCGLBadDrawable;
+            }
+            if (object.Surface != EGL_NO_SURFACE) {
+                EGLImpl::DestroySurface(object.Display, object.Surface);
+                object.Surface = EGL_NO_SURFACE;
+            }
+            const EGLAttrib attribs[] = {
+                EGL_WIDTH, std::max<GLint>(object.SurfaceBackingSize[0], 1),
+                EGL_HEIGHT, std::max<GLint>(object.SurfaceBackingSize[1], 1),
+                EGL_NONE,
+            };
+            EGLSurface surface = EGLImpl::CreatePlatformWindowSurface(object.Display, object.Config,
+                                                                      object.MetalLayer, attribs);
+            if (surface == EGL_NO_SURFACE) {
+                object.HasDrawable = false;
+                return kCGLBadDrawable;
+            }
+            object.Surface = surface;
+            object.HasDrawable = true;
+            return GetCurrentContext() == ctx ? MakeCurrentLocked(ctx, object) : kCGLNoError;
+        }
     } // namespace
 
     CGLError ChoosePixelFormat(const CGLPixelFormatAttribute* attribs, CGLPixelFormatObj* pix, GLint* npix) {
@@ -460,9 +484,19 @@ namespace MobileGL::MG_Impl::CGLImpl {
             EGLImpl::SwapInterval(object->Display, object->SwapInterval);
             return kCGLNoError;
         case kCGLCPSurfaceBackingSize:
-            object->SurfaceBackingSize[0] = params[0];
-            object->SurfaceBackingSize[1] = params[1];
+        {
+            const GLint width = std::max<GLint>(params[0], 1);
+            const GLint height = std::max<GLint>(params[1], 1);
+            if (object->SurfaceBackingSize[0] == width && object->SurfaceBackingSize[1] == height) {
+                return kCGLNoError;
+            }
+            object->SurfaceBackingSize[0] = width;
+            object->SurfaceBackingSize[1] = height;
+            if (object->MetalLayer) {
+                return RecreateSurfaceLocked(ctx, *object);
+            }
             return kCGLNoError;
+        }
         case kCGLCPSurfaceOpacity:
         case kCGLCPSurfaceOrder:
         case kCGLCPMPSwapsInFlight:
@@ -600,7 +634,7 @@ namespace MobileGL::MG_Impl::CGLImpl {
         }
     }
 
-    CGLError AttachDrawable(CGLContextObj ctx, void* nsView, void* metalLayer) {
+    CGLError AttachDrawable(CGLContextObj ctx, void* nsView, void* metalLayer, GLint width, GLint height) {
         const std::lock_guard<std::recursive_mutex> lock(RegistryMutex());
         auto* object = TryGetContext(ctx);
         if (!object) {
@@ -609,7 +643,12 @@ namespace MobileGL::MG_Impl::CGLImpl {
         if (!metalLayer) {
             return kCGLBadDrawable;
         }
-        if (object->Surface != EGL_NO_SURFACE && object->MetalLayer == metalLayer) {
+        width = std::max<GLint>(width, 1);
+        height = std::max<GLint>(height, 1);
+        const Bool sameSize = object->SurfaceBackingSize[0] == width && object->SurfaceBackingSize[1] == height;
+        object->SurfaceBackingSize[0] = width;
+        object->SurfaceBackingSize[1] = height;
+        if (object->Surface != EGL_NO_SURFACE && object->MetalLayer == metalLayer && sameSize) {
             object->View = nsView;
             object->HasDrawable = true;
             return kCGLNoError;
@@ -618,16 +657,11 @@ namespace MobileGL::MG_Impl::CGLImpl {
             EGLImpl::DestroySurface(object->Display, object->Surface);
             object->Surface = EGL_NO_SURFACE;
         }
-        EGLSurface surface = EGLImpl::CreatePlatformWindowSurface(object->Display, object->Config, metalLayer, nullptr);
-        if (surface == EGL_NO_SURFACE) {
-            return kCGLBadDrawable;
-        }
-        object->Surface = surface;
         object->View = nsView;
         object->MetalLayer = metalLayer;
-        object->HasDrawable = true;
-        if (GetCurrentContext() == ctx) {
-            return MakeCurrentLocked(ctx, *object);
+        const auto recreateError = RecreateSurfaceLocked(ctx, *object);
+        if (recreateError != kCGLNoError) {
+            return recreateError;
         }
         return kCGLNoError;
     }

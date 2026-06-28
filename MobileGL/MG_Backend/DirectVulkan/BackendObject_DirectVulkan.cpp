@@ -420,7 +420,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
 
         const Bool sameHandle = m_eglSurfaceInitialized && m_eglSurfaceKind == SurfaceKind::Window &&
-                                m_windowHandle.Backend == handle.Backend && m_windowHandle.Handle == handle.Handle;
+                                m_windowHandle.Backend == handle.Backend && m_windowHandle.Handle == handle.Handle &&
+                                m_windowHandle.Width == handle.Width && m_windowHandle.Height == handle.Height;
         if (sameHandle) {
             return true;
         }
