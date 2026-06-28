@@ -522,6 +522,10 @@ async function renderHtml(rows, groupLabels, outputDir, title, groupLabel, htmlN
     border-color: #6f87ff;
     background: #1d2544;
   }
+  .stat-break {
+    flex-basis: 100%;
+    height: 0;
+  }
   .stat.pass {
     border-color: var(--green);
     background: #15341e;
@@ -803,6 +807,7 @@ async function renderHtml(rows, groupLabels, outputDir, title, groupLabel, htmlN
             <h1>${htmlEscape(displayGroup)}</h1>
             <div class="stats" aria-label="summary stats">
               <span class="stat rate">PASS RATE <strong>${passRate}</strong></span>
+              <span class="stat-break" aria-hidden="true"></span>
               <span class="stat pass">PASS <strong>${passed}</strong></span>
               <span class="stat no-result">NO RESULT <strong>${noResult}</strong></span>
               <span class="stat fail">FAIL <strong>${failed}</strong></span>
