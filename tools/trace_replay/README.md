@@ -37,6 +37,21 @@ The bundled fixtures cover:
 - minecraft-1.21.4-fabric-modernui-inventory: captured from Minecraft 1.21.4 Fabric with Sodium, Iris, and Modern UI,
   with shader packs disabled and the creative inventory open.
   ![Minecraft 1.21.4 Fabric Modern UI inventory golden](fixtures/minecraft-1.21.4-fabric-modernui-inventory.0004907381.png)
+- minecraft-1.21.4-fabric-rei-inventory-normal-world: captured from Minecraft 1.21.4 Fabric with Sodium, Iris, and
+  REI in a normal singleplayer world, with shader packs disabled and the creative inventory and REI item list open.
+  ![Minecraft 1.21.4 Fabric REI inventory normal-world golden](fixtures/minecraft-1.21.4-fabric-rei-inventory-normal-world.0006599207.png)
+- minecraft-1.21.4-fabric-xaero-minimap-in-world-normal-world: captured from Minecraft 1.21.4 Fabric with Sodium,
+  Iris, and Xaero's Minimap after entering a normal singleplayer world with shader packs disabled.
+  ![Minecraft 1.21.4 Fabric Xaero's Minimap normal-world golden](fixtures/minecraft-1.21.4-fabric-xaero-minimap-in-world-normal-world.0003893975.png)
+- minecraft-1.21.4-fabric-xaero-world-map-in-world-normal-world: captured from Minecraft 1.21.4 Fabric with Sodium,
+  Iris, and Xaero's World Map in a normal singleplayer world, with shader packs disabled and the world map screen open.
+  ![Minecraft 1.21.4 Fabric Xaero's World Map normal-world golden](fixtures/minecraft-1.21.4-fabric-xaero-world-map-in-world-normal-world.0002099794.png)
+- minecraft-1.21.4-fabric-journeymap-in-world-normal-world: captured from Minecraft 1.21.4 Fabric with Sodium, Iris,
+  and JourneyMap after entering a normal singleplayer world with shader packs disabled.
+  ![Minecraft 1.21.4 Fabric JourneyMap normal-world golden](fixtures/minecraft-1.21.4-fabric-journeymap-in-world-normal-world.0005099482.png)
+- minecraft-1.21.4-fabric-modernui-inventory-normal-world: captured from Minecraft 1.21.4 Fabric with Sodium, Iris,
+  and Modern UI in a normal singleplayer world, with shader packs disabled and the creative inventory open.
+  ![Minecraft 1.21.4 Fabric Modern UI inventory normal-world golden](fixtures/minecraft-1.21.4-fabric-modernui-inventory-normal-world.0008585354.png)
 - minecraft-1.21.4-fabric-iris-bsl-in-world: captured from Minecraft 1.21.4 Fabric with Sodium, Iris, and BSL
   Shaders after entering a singleplayer world.
   ![Minecraft 1.21.4 Fabric Iris BSL in-world golden](fixtures/minecraft-1.21.4-fabric-iris-bsl-in-world.0000110725.png)
