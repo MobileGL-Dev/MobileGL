@@ -88,6 +88,48 @@ If you want to try the project right now, you’ll need to build it yourself:
    
    Alternatively, you can use platform-specific build commands as needed.
 
+### Build For macOS
+
+On macOS, MobileGL can be built as a dylib that exposes the normal OpenGL/CGL/NSOpenGL entry points and routes them to the `DirectVulkan` backend. This is useful for running applications such as Minecraft through their stock GLFW/LWJGL OpenGL path while MobileGL is injected before context creation.
+
+Prerequisites:
+
+* macOS with Clang and Ninja.
+* Vulkan loader and MoltenVK installed. With Homebrew, the MoltenVK ICD is commonly located at `/opt/homebrew/etc/vulkan/icd.d/MoltenVK_icd.json`.
+
+Configure and build:
+
+```sh
+cmake -S . -B build-macos-magma \
+  -G Ninja \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DMOBILEGL_BACKEND_TYPE=DirectVulkan \
+  -DMOBILEGL_BUILD_TEST=OFF \
+  -DMOBILEGL_BUILD_BENCHMARK=OFF
+
+cmake --build build-macos-magma --target MobileGL -j8
+```
+
+The dylib will be generated at:
+
+```sh
+build-macos-magma/libMobileGL.dylib
+```
+
+To run Minecraft by MobileGL from a launcher like PrismLauncher, keep the stock LWJGL/GLFW natives and add a wrapper command to the instance settings:
+
+```sh
+env DYLD_INSERT_LIBRARIES=/absolute/path/to/MobileGL/build-macos-magma/libMobileGL.dylib MOBILEGL_BACKEND_TYPE=DirectVulkan VK_ICD_FILENAMES=/opt/homebrew/etc/vulkan/icd.d/MoltenVK_icd.json
+```
+
+Also make sure the JVM arguments include:
+
+```sh
+-XstartOnFirstThread
+```
+
+`DYLD_INSERT_LIBRARIES` must be active before GLFW creates its OpenGL context. After startup, the Minecraft F3 screen should report MobileGL and the `Direct (Vulkan)` backend if the injection worked.
+
 ## Build Options
 
 | Option                       | Description                                           | Default |
@@ -112,6 +154,7 @@ MobileGL supports runtime configuration via environment variables.
 | Variable                | Description                                      | Allowed Values                       | Default        |
 |-------------------------|--------------------------------------------------|--------------------------------------|----------------|
 | `MOBILEGL_BACKEND_TYPE` | Select active backend implementation at startup. | `DirectGLES`, `DirectVulkan`         | `DirectGLES`   |
+| `VK_ICD_FILENAMES`      | Select the Vulkan ICD used by the Vulkan loader. | Path to an ICD JSON file             | Loader default |
 
 ## Notice
 
