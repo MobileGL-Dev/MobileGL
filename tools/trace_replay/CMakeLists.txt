@@ -410,7 +410,7 @@ add_trace_replay_test_for_backends(minecraft-1.21.4-fabric-sodium-in-world
         HEIGHT 480
 )
 
-add_trace_replay_test(minecraft-1.21.4-fabric-common-mods-in-world DirectVulkan
+add_trace_replay_test_for_backends(minecraft-1.21.4-fabric-common-mods-in-world
         TRACE_ARCHIVE ${MOBILEGL_TRACE_ROOT}/fixtures/minecraft-1.21.4-fabric-common-mods-in-world.tgz
         TRACE_FILE trace.trace
         GOLDEN ${MOBILEGL_TRACE_ROOT}/fixtures/minecraft-1.21.4-fabric-common-mods-in-world.0000522084.png
@@ -419,7 +419,7 @@ add_trace_replay_test(minecraft-1.21.4-fabric-common-mods-in-world DirectVulkan
         HEIGHT 480
 )
 
-add_trace_replay_test(minecraft-1.21.4-fabric-common-mods-inventory DirectVulkan
+add_trace_replay_test_for_backends(minecraft-1.21.4-fabric-common-mods-inventory
         TRACE_ARCHIVE ${MOBILEGL_TRACE_ROOT}/fixtures/minecraft-1.21.4-fabric-common-mods-inventory.tgz
         TRACE_FILE trace.trace
         GOLDEN ${MOBILEGL_TRACE_ROOT}/fixtures/minecraft-1.21.4-fabric-common-mods-inventory.0000728558.png
@@ -428,7 +428,7 @@ add_trace_replay_test(minecraft-1.21.4-fabric-common-mods-inventory DirectVulkan
         HEIGHT 480
 )
 
-add_trace_replay_test(minecraft-1.21.4-fabric-rei-inventory DirectVulkan
+add_trace_replay_test_for_backends(minecraft-1.21.4-fabric-rei-inventory
         TRACE_ARCHIVE ${MOBILEGL_TRACE_ROOT}/fixtures/minecraft-1.21.4-fabric-rei-inventory.tgz
         TRACE_FILE trace.trace
         GOLDEN ${MOBILEGL_TRACE_ROOT}/fixtures/minecraft-1.21.4-fabric-rei-inventory.0005431826.png
@@ -437,7 +437,7 @@ add_trace_replay_test(minecraft-1.21.4-fabric-rei-inventory DirectVulkan
         HEIGHT 480
 )
 
-add_trace_replay_test(minecraft-1.21.4-fabric-xaero-minimap-in-world DirectVulkan
+add_trace_replay_test_for_backends(minecraft-1.21.4-fabric-xaero-minimap-in-world
         TRACE_ARCHIVE ${MOBILEGL_TRACE_ROOT}/fixtures/minecraft-1.21.4-fabric-xaero-minimap-in-world.tgz
         TRACE_FILE trace.trace
         GOLDEN ${MOBILEGL_TRACE_ROOT}/fixtures/minecraft-1.21.4-fabric-xaero-minimap-in-world.0002553500.png
@@ -446,7 +446,7 @@ add_trace_replay_test(minecraft-1.21.4-fabric-xaero-minimap-in-world DirectVulka
         HEIGHT 480
 )
 
-add_trace_replay_test(minecraft-1.21.4-fabric-xaero-world-map-in-world DirectVulkan
+add_trace_replay_test_for_backends(minecraft-1.21.4-fabric-xaero-world-map-in-world
         TRACE_ARCHIVE ${MOBILEGL_TRACE_ROOT}/fixtures/minecraft-1.21.4-fabric-xaero-world-map-in-world.tgz
         TRACE_FILE trace.trace
         GOLDEN ${MOBILEGL_TRACE_ROOT}/fixtures/minecraft-1.21.4-fabric-xaero-world-map-in-world.0001598209.png
@@ -455,7 +455,7 @@ add_trace_replay_test(minecraft-1.21.4-fabric-xaero-world-map-in-world DirectVul
         HEIGHT 480
 )
 
-add_trace_replay_test(minecraft-1.21.4-fabric-journeymap-in-world DirectVulkan
+add_trace_replay_test_for_backends(minecraft-1.21.4-fabric-journeymap-in-world
         TRACE_ARCHIVE ${MOBILEGL_TRACE_ROOT}/fixtures/minecraft-1.21.4-fabric-journeymap-in-world.tgz
         TRACE_FILE trace.trace
         GOLDEN ${MOBILEGL_TRACE_ROOT}/fixtures/minecraft-1.21.4-fabric-journeymap-in-world.0002632392.png
@@ -464,7 +464,7 @@ add_trace_replay_test(minecraft-1.21.4-fabric-journeymap-in-world DirectVulkan
         HEIGHT 480
 )
 
-add_trace_replay_test(minecraft-1.21.4-fabric-modernui-inventory DirectVulkan
+add_trace_replay_test_for_backends(minecraft-1.21.4-fabric-modernui-inventory
         TRACE_ARCHIVE ${MOBILEGL_TRACE_ROOT}/fixtures/minecraft-1.21.4-fabric-modernui-inventory.tgz
         TRACE_FILE trace.trace
         GOLDEN ${MOBILEGL_TRACE_ROOT}/fixtures/minecraft-1.21.4-fabric-modernui-inventory.0004907381.png
@@ -473,7 +473,7 @@ add_trace_replay_test(minecraft-1.21.4-fabric-modernui-inventory DirectVulkan
         HEIGHT 480
 )
 
-add_trace_replay_test(minecraft-1.21.4-fabric-rei-inventory-normal-world DirectVulkan
+add_trace_replay_test_for_backends(minecraft-1.21.4-fabric-rei-inventory-normal-world
         TRACE_ARCHIVE ${MOBILEGL_TRACE_ROOT}/fixtures/minecraft-1.21.4-fabric-rei-inventory-normal-world.tgz
         TRACE_FILE trace.trace
         GOLDEN ${MOBILEGL_TRACE_ROOT}/fixtures/minecraft-1.21.4-fabric-rei-inventory-normal-world.0006599207.png
@@ -482,16 +482,20 @@ add_trace_replay_test(minecraft-1.21.4-fabric-rei-inventory-normal-world DirectV
         HEIGHT 480
 )
 
-add_trace_replay_test(minecraft-1.21.4-fabric-xaero-minimap-in-world-normal-world DirectVulkan
+add_trace_replay_test_for_backends(minecraft-1.21.4-fabric-xaero-minimap-in-world-normal-world
         TRACE_ARCHIVE ${MOBILEGL_TRACE_ROOT}/fixtures/minecraft-1.21.4-fabric-xaero-minimap-in-world-normal-world.tgz
         TRACE_FILE trace.trace
         GOLDEN ${MOBILEGL_TRACE_ROOT}/fixtures/minecraft-1.21.4-fabric-xaero-minimap-in-world-normal-world.0003893975.png
         TARGET_CALL 3893975
         WIDTH 854
         HEIGHT 480
+        CROP_X 0
+        CROP_Y 10
+        CROP_WIDTH 140
+        CROP_HEIGHT 158
 )
 
-add_trace_replay_test(minecraft-1.21.4-fabric-xaero-world-map-in-world-normal-world DirectVulkan
+add_trace_replay_test_for_backends(minecraft-1.21.4-fabric-xaero-world-map-in-world-normal-world
         TRACE_ARCHIVE ${MOBILEGL_TRACE_ROOT}/fixtures/minecraft-1.21.4-fabric-xaero-world-map-in-world-normal-world.tgz
         TRACE_FILE trace.trace
         GOLDEN ${MOBILEGL_TRACE_ROOT}/fixtures/minecraft-1.21.4-fabric-xaero-world-map-in-world-normal-world.0002099794.png
@@ -500,7 +504,7 @@ add_trace_replay_test(minecraft-1.21.4-fabric-xaero-world-map-in-world-normal-wo
         HEIGHT 480
 )
 
-add_trace_replay_test(minecraft-1.21.4-fabric-journeymap-in-world-normal-world DirectVulkan
+add_trace_replay_test_for_backends(minecraft-1.21.4-fabric-journeymap-in-world-normal-world
         TRACE_ARCHIVE ${MOBILEGL_TRACE_ROOT}/fixtures/minecraft-1.21.4-fabric-journeymap-in-world-normal-world.tgz
         TRACE_FILE trace.trace
         GOLDEN ${MOBILEGL_TRACE_ROOT}/fixtures/minecraft-1.21.4-fabric-journeymap-in-world-normal-world.0005099482.png
@@ -509,7 +513,7 @@ add_trace_replay_test(minecraft-1.21.4-fabric-journeymap-in-world-normal-world D
         HEIGHT 480
 )
 
-add_trace_replay_test(minecraft-1.21.4-fabric-modernui-inventory-normal-world DirectVulkan
+add_trace_replay_test_for_backends(minecraft-1.21.4-fabric-modernui-inventory-normal-world
         TRACE_ARCHIVE ${MOBILEGL_TRACE_ROOT}/fixtures/minecraft-1.21.4-fabric-modernui-inventory-normal-world.tgz
         TRACE_FILE trace.trace
         GOLDEN ${MOBILEGL_TRACE_ROOT}/fixtures/minecraft-1.21.4-fabric-modernui-inventory-normal-world.0008585354.png

@@ -216,7 +216,6 @@ jobs:
             trace_archive: tools/trace_replay/fixtures/minecraft-1.21.4-fabric-common-mods-in-world.tgz
             trace_file: trace.trace
             golden: tools/trace_replay/fixtures/minecraft-1.21.4-fabric-common-mods-in-world.0000522084.png
-            vulkan_only: true
             target_call: 522084
             width: 854
             height: 480
@@ -229,7 +228,6 @@ jobs:
             trace_archive: tools/trace_replay/fixtures/minecraft-1.21.4-fabric-common-mods-inventory.tgz
             trace_file: trace.trace
             golden: tools/trace_replay/fixtures/minecraft-1.21.4-fabric-common-mods-inventory.0000728558.png
-            vulkan_only: true
             target_call: 728558
             width: 854
             height: 480
@@ -242,7 +240,6 @@ jobs:
             trace_archive: tools/trace_replay/fixtures/minecraft-1.21.4-fabric-rei-inventory.tgz
             trace_file: trace.trace
             golden: tools/trace_replay/fixtures/minecraft-1.21.4-fabric-rei-inventory.0005431826.png
-            vulkan_only: true
             target_call: 5431826
             width: 854
             height: 480
@@ -255,7 +252,6 @@ jobs:
             trace_archive: tools/trace_replay/fixtures/minecraft-1.21.4-fabric-xaero-minimap-in-world.tgz
             trace_file: trace.trace
             golden: tools/trace_replay/fixtures/minecraft-1.21.4-fabric-xaero-minimap-in-world.0002553500.png
-            vulkan_only: true
             target_call: 2553500
             width: 854
             height: 480
@@ -268,7 +264,6 @@ jobs:
             trace_archive: tools/trace_replay/fixtures/minecraft-1.21.4-fabric-xaero-world-map-in-world.tgz
             trace_file: trace.trace
             golden: tools/trace_replay/fixtures/minecraft-1.21.4-fabric-xaero-world-map-in-world.0001598209.png
-            vulkan_only: true
             target_call: 1598209
             width: 854
             height: 480
@@ -281,7 +276,6 @@ jobs:
             trace_archive: tools/trace_replay/fixtures/minecraft-1.21.4-fabric-journeymap-in-world.tgz
             trace_file: trace.trace
             golden: tools/trace_replay/fixtures/minecraft-1.21.4-fabric-journeymap-in-world.0002632392.png
-            vulkan_only: true
             target_call: 2632392
             width: 854
             height: 480
@@ -294,7 +288,6 @@ jobs:
             trace_archive: tools/trace_replay/fixtures/minecraft-1.21.4-fabric-modernui-inventory.tgz
             trace_file: trace.trace
             golden: tools/trace_replay/fixtures/minecraft-1.21.4-fabric-modernui-inventory.0004907381.png
-            vulkan_only: true
             target_call: 4907381
             width: 854
             height: 480
@@ -307,7 +300,6 @@ jobs:
             trace_archive: tools/trace_replay/fixtures/minecraft-1.21.4-fabric-rei-inventory-normal-world.tgz
             trace_file: trace.trace
             golden: tools/trace_replay/fixtures/minecraft-1.21.4-fabric-rei-inventory-normal-world.0006599207.png
-            vulkan_only: true
             target_call: 6599207
             width: 854
             height: 480
@@ -320,20 +312,18 @@ jobs:
             trace_archive: tools/trace_replay/fixtures/minecraft-1.21.4-fabric-xaero-minimap-in-world-normal-world.tgz
             trace_file: trace.trace
             golden: tools/trace_replay/fixtures/minecraft-1.21.4-fabric-xaero-minimap-in-world-normal-world.0003893975.png
-            vulkan_only: true
             target_call: 3893975
             width: 854
             height: 480
             crop_x: 0
-            crop_y: 0
-            crop_width: 0
-            crop_height: 0
+            crop_y: 10
+            crop_width: 140
+            crop_height: 158
             timeout_seconds: 1800
           - name: minecraft-1.21.4-fabric-xaero-world-map-in-world-normal-world
             trace_archive: tools/trace_replay/fixtures/minecraft-1.21.4-fabric-xaero-world-map-in-world-normal-world.tgz
             trace_file: trace.trace
             golden: tools/trace_replay/fixtures/minecraft-1.21.4-fabric-xaero-world-map-in-world-normal-world.0002099794.png
-            vulkan_only: true
             target_call: 2099794
             width: 854
             height: 480
@@ -346,7 +336,6 @@ jobs:
             trace_archive: tools/trace_replay/fixtures/minecraft-1.21.4-fabric-journeymap-in-world-normal-world.tgz
             trace_file: trace.trace
             golden: tools/trace_replay/fixtures/minecraft-1.21.4-fabric-journeymap-in-world-normal-world.0005099482.png
-            vulkan_only: true
             target_call: 5099482
             width: 854
             height: 480
@@ -359,7 +348,6 @@ jobs:
             trace_archive: tools/trace_replay/fixtures/minecraft-1.21.4-fabric-modernui-inventory-normal-world.tgz
             trace_file: trace.trace
             golden: tools/trace_replay/fixtures/minecraft-1.21.4-fabric-modernui-inventory-normal-world.0008585354.png
-            vulkan_only: true
             target_call: 8585354
             width: 854
             height: 480
@@ -550,248 +538,6 @@ jobs:
             crop_width: 0
             crop_height: 0
             timeout_seconds: 900
-        exclude:
-          - backend:
-              name: DirectGLES
-              id: espryt
-              apk: MobileGL-EsprytTrace-release.apk
-              package: top.mobilegl.plugin.espryt.trace
-              gpu: software
-            case:
-              name: minecraft-1.21.4-fabric-common-mods-in-world
-              trace_archive: tools/trace_replay/fixtures/minecraft-1.21.4-fabric-common-mods-in-world.tgz
-              trace_file: trace.trace
-              golden: tools/trace_replay/fixtures/minecraft-1.21.4-fabric-common-mods-in-world.0000522084.png
-              vulkan_only: true
-              target_call: 522084
-              width: 854
-              height: 480
-              crop_x: 0
-              crop_y: 0
-              crop_width: 0
-              crop_height: 0
-              timeout_seconds: 1800
-          - backend:
-              name: DirectGLES
-              id: espryt
-              apk: MobileGL-EsprytTrace-release.apk
-              package: top.mobilegl.plugin.espryt.trace
-              gpu: software
-            case:
-              name: minecraft-1.21.4-fabric-common-mods-inventory
-              trace_archive: tools/trace_replay/fixtures/minecraft-1.21.4-fabric-common-mods-inventory.tgz
-              trace_file: trace.trace
-              golden: tools/trace_replay/fixtures/minecraft-1.21.4-fabric-common-mods-inventory.0000728558.png
-              vulkan_only: true
-              target_call: 728558
-              width: 854
-              height: 480
-              crop_x: 0
-              crop_y: 0
-              crop_width: 0
-              crop_height: 0
-              timeout_seconds: 1800
-          - backend:
-              name: DirectGLES
-              id: espryt
-              apk: MobileGL-EsprytTrace-release.apk
-              package: top.mobilegl.plugin.espryt.trace
-              gpu: software
-            case:
-              name: minecraft-1.21.4-fabric-rei-inventory
-              trace_archive: tools/trace_replay/fixtures/minecraft-1.21.4-fabric-rei-inventory.tgz
-              trace_file: trace.trace
-              golden: tools/trace_replay/fixtures/minecraft-1.21.4-fabric-rei-inventory.0005431826.png
-              vulkan_only: true
-              target_call: 5431826
-              width: 854
-              height: 480
-              crop_x: 0
-              crop_y: 0
-              crop_width: 0
-              crop_height: 0
-              timeout_seconds: 1800
-          - backend:
-              name: DirectGLES
-              id: espryt
-              apk: MobileGL-EsprytTrace-release.apk
-              package: top.mobilegl.plugin.espryt.trace
-              gpu: software
-            case:
-              name: minecraft-1.21.4-fabric-xaero-minimap-in-world
-              trace_archive: tools/trace_replay/fixtures/minecraft-1.21.4-fabric-xaero-minimap-in-world.tgz
-              trace_file: trace.trace
-              golden: tools/trace_replay/fixtures/minecraft-1.21.4-fabric-xaero-minimap-in-world.0002553500.png
-              vulkan_only: true
-              target_call: 2553500
-              width: 854
-              height: 480
-              crop_x: 0
-              crop_y: 0
-              crop_width: 0
-              crop_height: 0
-              timeout_seconds: 1800
-          - backend:
-              name: DirectGLES
-              id: espryt
-              apk: MobileGL-EsprytTrace-release.apk
-              package: top.mobilegl.plugin.espryt.trace
-              gpu: software
-            case:
-              name: minecraft-1.21.4-fabric-xaero-world-map-in-world
-              trace_archive: tools/trace_replay/fixtures/minecraft-1.21.4-fabric-xaero-world-map-in-world.tgz
-              trace_file: trace.trace
-              golden: tools/trace_replay/fixtures/minecraft-1.21.4-fabric-xaero-world-map-in-world.0001598209.png
-              vulkan_only: true
-              target_call: 1598209
-              width: 854
-              height: 480
-              crop_x: 0
-              crop_y: 0
-              crop_width: 0
-              crop_height: 0
-              timeout_seconds: 1800
-          - backend:
-              name: DirectGLES
-              id: espryt
-              apk: MobileGL-EsprytTrace-release.apk
-              package: top.mobilegl.plugin.espryt.trace
-              gpu: software
-            case:
-              name: minecraft-1.21.4-fabric-journeymap-in-world
-              trace_archive: tools/trace_replay/fixtures/minecraft-1.21.4-fabric-journeymap-in-world.tgz
-              trace_file: trace.trace
-              golden: tools/trace_replay/fixtures/minecraft-1.21.4-fabric-journeymap-in-world.0002632392.png
-              vulkan_only: true
-              target_call: 2632392
-              width: 854
-              height: 480
-              crop_x: 0
-              crop_y: 0
-              crop_width: 0
-              crop_height: 0
-              timeout_seconds: 1800
-          - backend:
-              name: DirectGLES
-              id: espryt
-              apk: MobileGL-EsprytTrace-release.apk
-              package: top.mobilegl.plugin.espryt.trace
-              gpu: software
-            case:
-              name: minecraft-1.21.4-fabric-modernui-inventory
-              trace_archive: tools/trace_replay/fixtures/minecraft-1.21.4-fabric-modernui-inventory.tgz
-              trace_file: trace.trace
-              golden: tools/trace_replay/fixtures/minecraft-1.21.4-fabric-modernui-inventory.0004907381.png
-              vulkan_only: true
-              target_call: 4907381
-              width: 854
-              height: 480
-              crop_x: 0
-              crop_y: 0
-              crop_width: 0
-              crop_height: 0
-              timeout_seconds: 1800
-          - backend:
-              name: DirectGLES
-              id: espryt
-              apk: MobileGL-EsprytTrace-release.apk
-              package: top.mobilegl.plugin.espryt.trace
-              gpu: software
-            case:
-              name: minecraft-1.21.4-fabric-rei-inventory-normal-world
-              trace_archive: tools/trace_replay/fixtures/minecraft-1.21.4-fabric-rei-inventory-normal-world.tgz
-              trace_file: trace.trace
-              golden: tools/trace_replay/fixtures/minecraft-1.21.4-fabric-rei-inventory-normal-world.0006599207.png
-              vulkan_only: true
-              target_call: 6599207
-              width: 854
-              height: 480
-              crop_x: 0
-              crop_y: 0
-              crop_width: 0
-              crop_height: 0
-              timeout_seconds: 1800
-          - backend:
-              name: DirectGLES
-              id: espryt
-              apk: MobileGL-EsprytTrace-release.apk
-              package: top.mobilegl.plugin.espryt.trace
-              gpu: software
-            case:
-              name: minecraft-1.21.4-fabric-xaero-minimap-in-world-normal-world
-              trace_archive: tools/trace_replay/fixtures/minecraft-1.21.4-fabric-xaero-minimap-in-world-normal-world.tgz
-              trace_file: trace.trace
-              golden: tools/trace_replay/fixtures/minecraft-1.21.4-fabric-xaero-minimap-in-world-normal-world.0003893975.png
-              vulkan_only: true
-              target_call: 3893975
-              width: 854
-              height: 480
-              crop_x: 0
-              crop_y: 0
-              crop_width: 0
-              crop_height: 0
-              timeout_seconds: 1800
-          - backend:
-              name: DirectGLES
-              id: espryt
-              apk: MobileGL-EsprytTrace-release.apk
-              package: top.mobilegl.plugin.espryt.trace
-              gpu: software
-            case:
-              name: minecraft-1.21.4-fabric-xaero-world-map-in-world-normal-world
-              trace_archive: tools/trace_replay/fixtures/minecraft-1.21.4-fabric-xaero-world-map-in-world-normal-world.tgz
-              trace_file: trace.trace
-              golden: tools/trace_replay/fixtures/minecraft-1.21.4-fabric-xaero-world-map-in-world-normal-world.0002099794.png
-              vulkan_only: true
-              target_call: 2099794
-              width: 854
-              height: 480
-              crop_x: 0
-              crop_y: 0
-              crop_width: 0
-              crop_height: 0
-              timeout_seconds: 1800
-          - backend:
-              name: DirectGLES
-              id: espryt
-              apk: MobileGL-EsprytTrace-release.apk
-              package: top.mobilegl.plugin.espryt.trace
-              gpu: software
-            case:
-              name: minecraft-1.21.4-fabric-journeymap-in-world-normal-world
-              trace_archive: tools/trace_replay/fixtures/minecraft-1.21.4-fabric-journeymap-in-world-normal-world.tgz
-              trace_file: trace.trace
-              golden: tools/trace_replay/fixtures/minecraft-1.21.4-fabric-journeymap-in-world-normal-world.0005099482.png
-              vulkan_only: true
-              target_call: 5099482
-              width: 854
-              height: 480
-              crop_x: 0
-              crop_y: 0
-              crop_width: 0
-              crop_height: 0
-              timeout_seconds: 1800
-          - backend:
-              name: DirectGLES
-              id: espryt
-              apk: MobileGL-EsprytTrace-release.apk
-              package: top.mobilegl.plugin.espryt.trace
-              gpu: software
-            case:
-              name: minecraft-1.21.4-fabric-modernui-inventory-normal-world
-              trace_archive: tools/trace_replay/fixtures/minecraft-1.21.4-fabric-modernui-inventory-normal-world.tgz
-              trace_file: trace.trace
-              golden: tools/trace_replay/fixtures/minecraft-1.21.4-fabric-modernui-inventory-normal-world.0008585354.png
-              vulkan_only: true
-              target_call: 8585354
-              width: 854
-              height: 480
-              crop_x: 0
-              crop_y: 0
-              crop_width: 0
-              crop_height: 0
-              timeout_seconds: 1800
-
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
