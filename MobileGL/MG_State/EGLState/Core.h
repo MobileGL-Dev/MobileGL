@@ -74,6 +74,7 @@ namespace MobileGL {
                 EGLSurfaceHandle CreatePlatformPixmapSurface(EGLDisplayHandle display, EGLConfigHandle config,
                                                              void* nativePixmap, const EGLAttrib* attribList);
                 Bool DestroySurface(EGLDisplayHandle display, EGLSurfaceHandle surface);
+                Bool ResizeSurface(EGLDisplayHandle display, EGLSurfaceHandle surface, EGLint width, EGLint height);
                 Bool QuerySurface(EGLDisplayHandle display, EGLSurfaceHandle surface, EGLint attribute,
                                   EGLint* value) const;
                 Bool ValidateSurface(EGLSurfaceHandle surface) const;

@@ -246,6 +246,7 @@ namespace MobileGL {
 
             virtual Bool InitializeEGLDisplay(EGLDisplay dpy, EGLint* major, EGLint* minor);
             virtual Bool CreateEGLWindowSurface(const WindowHandle& handle);
+            virtual Bool ResizeEGLWindowSurface(Uint32 width, Uint32 height);
             virtual Bool CreateEGLPbufferSurface(EGLint width, EGLint height);
             virtual Bool MakeEGLCurrent(EGLDisplay dpy, EGLSurface draw, EGLSurface read, EGLContext ctx);
             virtual Bool SwapEGLBuffers(EGLDisplay dpy, EGLSurface draw);

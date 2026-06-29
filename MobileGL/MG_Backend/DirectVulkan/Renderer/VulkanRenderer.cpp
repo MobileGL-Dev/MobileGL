@@ -5389,9 +5389,15 @@ void main() {
         if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR) {
             MGLOG_D("Present, vkQueuePresentKHR got %d, recreating swapchain", result);
             RecreateSwapchain();
+            m_swapchainResizeRequested = false;
             result = VK_SUCCESS;
         }
         VK_VERIFY(result, "Present, vkQueuePresentKHR");
+        if (m_swapchainResizeRequested) {
+            MGLOG_D("Present, processing requested swapchain resize");
+            RecreateSwapchain();
+            m_swapchainResizeRequested = false;
+        }
 
         // 3) Advance frame slot.
         m_frameContext.AdvanceToNext();
@@ -5401,6 +5407,7 @@ void main() {
         if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR) {
             MGLOG_D("Present, vkAcquireNextImageKHR got %d, recreating swapchain", result);
             RecreateSwapchain();
+            m_swapchainResizeRequested = false;
             result =
                 m_frameContext.WaitAndAcquireNextImage(m_device, m_swapchainObject.GetHandle(), m_imageIndexAcquired);
         }
@@ -6103,6 +6110,17 @@ void main() {
 
     const PhysicalDevice& VulkanRenderer::GetPhysicalDevice() const {
         return m_physicalDevice;
+    }
+
+    void VulkanRenderer::RequestSwapchainResize(Uint32 width, Uint32 height) {
+        width = std::max<Uint32>(width, 1);
+        height = std::max<Uint32>(height, 1);
+        if (m_config.SurfaceWidth == width && m_config.SurfaceHeight == height) {
+            return;
+        }
+        m_config.SurfaceWidth = width;
+        m_config.SurfaceHeight = height;
+        m_swapchainResizeRequested = true;
     }
 
     VkInstance VulkanRenderer::GetInstance() const {

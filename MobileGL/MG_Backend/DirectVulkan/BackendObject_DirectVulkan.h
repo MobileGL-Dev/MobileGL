@@ -22,6 +22,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         Bool InitCapabilities() override;
         Bool InitializeEGLDisplay(EGLDisplay dpy, EGLint* major, EGLint* minor) override;
         Bool CreateEGLWindowSurface(const WindowHandle& handle) override;
+        Bool ResizeEGLWindowSurface(Uint32 width, Uint32 height) override;
         Bool CreateEGLPbufferSurface(EGLint width, EGLint height) override;
         Bool MakeEGLCurrent(EGLDisplay dpy, EGLSurface draw, EGLSurface read, EGLContext ctx) override;
         Bool SwapEGLBuffers(EGLDisplay dpy, EGLSurface draw) override;

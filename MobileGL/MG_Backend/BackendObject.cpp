@@ -229,6 +229,17 @@ namespace MobileGL::MG_Backend {
         return true;
     }
 
+    Bool BackendObject::ResizeEGLWindowSurface(Uint32 width, Uint32 height) {
+        const std::lock_guard<std::recursive_mutex> lock(m_eglStateMutex);
+        if (!m_eglSurfaceInitialized || m_eglSurfaceKind != SurfaceKind::Window) {
+            MGLOG_E("ResizeEGLWindowSurface failed: no window surface is initialized");
+            return false;
+        }
+        m_windowHandle.Width = width;
+        m_windowHandle.Height = height;
+        return true;
+    }
+
     Bool BackendObject::CreateEGLPbufferSurface(EGLint width, EGLint height) {
         const std::lock_guard<std::recursive_mutex> lock(m_eglStateMutex);
         if (!m_eglDisplayInitialized) {

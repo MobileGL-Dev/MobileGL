@@ -935,6 +935,23 @@ namespace MobileGL {
                 return true;
             }
 
+            Bool EGLContext::ResizeSurface(EGLDisplayHandle display, EGLSurfaceHandle surface,
+                                           EGLint width, EGLint height) {
+                const std::lock_guard<std::recursive_mutex> lock(m_mutex);
+                auto surfaceIt = m_surfaces.find(surface);
+                if (surfaceIt == m_surfaces.end()) {
+                    SetError(EGL_BAD_SURFACE);
+                    return false;
+                }
+                if (surfaceIt->second.Display != display) {
+                    SetError(EGL_BAD_MATCH);
+                    return false;
+                }
+                surfaceIt->second.Width = std::max<EGLint>(width, 1);
+                surfaceIt->second.Height = std::max<EGLint>(height, 1);
+                return true;
+            }
+
             Bool EGLContext::QuerySurface(EGLDisplayHandle display, EGLSurfaceHandle surface, EGLint attribute,
                                           EGLint* value) const {
                 const std::lock_guard<std::recursive_mutex> lock(m_mutex);

@@ -256,6 +256,18 @@ namespace MobileGL::MG_Impl::CGLImpl {
             object.HasDrawable = true;
             return GetCurrentContext() == ctx ? MakeCurrentLocked(ctx, object) : kCGLNoError;
         }
+
+        CGLError ResizeSurfaceLocked(ContextObject& object) {
+            if (object.Surface == EGL_NO_SURFACE) {
+                return kCGLBadDrawable;
+            }
+            return EGLImpl::ResizePlatformWindowSurface(
+                       object.Display, object.Surface,
+                       std::max<GLint>(object.SurfaceBackingSize[0], 1),
+                       std::max<GLint>(object.SurfaceBackingSize[1], 1))
+                       ? kCGLNoError
+                       : kCGLBadDrawable;
+        }
     } // namespace
 
     CGLError ChoosePixelFormat(const CGLPixelFormatAttribute* attribs, CGLPixelFormatObj* pix, GLint* npix) {
@@ -492,8 +504,8 @@ namespace MobileGL::MG_Impl::CGLImpl {
             }
             object->SurfaceBackingSize[0] = width;
             object->SurfaceBackingSize[1] = height;
-            if (object->MetalLayer) {
-                return RecreateSurfaceLocked(ctx, *object);
+            if (object->MetalLayer && object->Surface != EGL_NO_SURFACE) {
+                return ResizeSurfaceLocked(*object);
             }
             return kCGLNoError;
         }
@@ -652,6 +664,11 @@ namespace MobileGL::MG_Impl::CGLImpl {
             object->View = nsView;
             object->HasDrawable = true;
             return kCGLNoError;
+        }
+        if (object->Surface != EGL_NO_SURFACE && object->MetalLayer == metalLayer) {
+            object->View = nsView;
+            object->HasDrawable = true;
+            return ResizeSurfaceLocked(*object);
         }
         if (object->Surface != EGL_NO_SURFACE) {
             EGLImpl::DestroySurface(object->Display, object->Surface);

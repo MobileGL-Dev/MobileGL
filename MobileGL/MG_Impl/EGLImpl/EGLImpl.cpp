@@ -623,6 +623,28 @@ namespace MobileGL::MG_Impl::EGLImpl {
         return state->CreatePlatformWindowSurface(dpy, config, native_window, attrib_list);
     }
 
+    EGLBoolean ResizePlatformWindowSurface(EGLDisplay dpy, EGLSurface surface, EGLint width, EGLint height) {
+        auto* state = GetState();
+        if (!state) {
+            return EGL_FALSE;
+        }
+        if (!state->ResizeSurface(dpy, surface, width, height)) {
+            return EGL_FALSE;
+        }
+        auto* backendObject = GetBackendObject(state);
+        if (!backendObject) {
+            MGLOG_E("activeBackendObject not initialized!");
+            return EGL_FALSE;
+        }
+        width = std::max<EGLint>(width, 1);
+        height = std::max<EGLint>(height, 1);
+        if (!backendObject->ResizeEGLWindowSurface(static_cast<Uint32>(width), static_cast<Uint32>(height))) {
+            state->SetError(EGL_BAD_NATIVE_WINDOW);
+            return EGL_FALSE;
+        }
+        return EGL_TRUE;
+    }
+
     EGLSurface CreatePlatformPixmapSurface(EGLDisplay dpy, EGLConfig config, void* native_pixmap,
                                            const EGLAttrib* attrib_list) {
         auto* state = GetState();

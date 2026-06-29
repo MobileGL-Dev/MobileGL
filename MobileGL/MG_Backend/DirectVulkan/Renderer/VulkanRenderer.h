@@ -160,6 +160,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         VkInstance GetInstance() const;
         Bool IsDrawIndirectCountExtensionEnabled() const;
 
+        void RequestSwapchainResize(Uint32 width, Uint32 height);
         void RecreateSwapchain();
 
     private:
@@ -206,6 +207,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         void* m_platformLibrary = nullptr;
         void* m_platformCloseDisplay = nullptr;
         VulkanRendererConfig m_config;
+        Bool m_swapchainResizeRequested = false;
 
         // Vulkan objects
         Bool m_validationLayersEnabled = false;

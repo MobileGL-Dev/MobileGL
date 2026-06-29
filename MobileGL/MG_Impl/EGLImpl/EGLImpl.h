@@ -57,6 +57,7 @@ namespace MobileGL::MG_Impl::EGLImpl {
     EGLDisplay GetPlatformDisplay(EGLenum platform, void* native_display, const EGLAttrib* attrib_list);
     EGLSurface CreatePlatformWindowSurface(EGLDisplay dpy, EGLConfig config, void* native_window,
                                            const EGLAttrib* attrib_list);
+    EGLBoolean ResizePlatformWindowSurface(EGLDisplay dpy, EGLSurface surface, EGLint width, EGLint height);
     EGLSurface CreatePlatformPixmapSurface(EGLDisplay dpy, EGLConfig config, void* native_pixmap,
                                            const EGLAttrib* attrib_list);
     EGLBoolean WaitSync(EGLDisplay dpy, EGLSync sync, EGLint flags);

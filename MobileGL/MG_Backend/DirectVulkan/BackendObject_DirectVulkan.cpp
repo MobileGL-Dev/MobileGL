@@ -434,6 +434,23 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         return BackendObject::CreateEGLWindowSurface(handle);
     }
 
+    Bool BackendObject_DirectVulkan::ResizeEGLWindowSurface(Uint32 width, Uint32 height) {
+        const std::lock_guard<std::recursive_mutex> lock(m_eglStateMutex);
+        if (!m_initialized) {
+            MGLOG_E("DirectVulkan backend not initialized");
+            return false;
+        }
+        if (!pVulkanRenderer) {
+            MGLOG_E("DirectVulkan renderer is not initialized");
+            return false;
+        }
+        if (!BackendObject::ResizeEGLWindowSurface(width, height)) {
+            return false;
+        }
+        pVulkanRenderer->RequestSwapchainResize(width, height);
+        return true;
+    }
+
     Bool BackendObject_DirectVulkan::CreateEGLPbufferSurface(EGLint width, EGLint height) {
         const std::lock_guard<std::recursive_mutex> lock(m_eglStateMutex);
         if (!m_initialized) {
