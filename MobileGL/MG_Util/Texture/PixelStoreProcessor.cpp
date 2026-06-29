@@ -70,6 +70,31 @@ namespace MobileGL::MG_Util::PixelStoreProcessor {
         }
     }
 
+    static Bool GetRgba8ByteSwizzleForUnpack(TextureInputFormat inputFormat, TexturePixelDataType inputDataType,
+                                             Vector<TextureSwizzleParam>& swizzle) {
+        if (inputFormat == TextureInputFormat::RGBA) {
+            if (inputDataType == TexturePixelDataType::UnsignedInt8888) {
+                swizzle = {TextureSwizzleParam::Alpha, TextureSwizzleParam::Blue, TextureSwizzleParam::Green,
+                           TextureSwizzleParam::Red};
+                return true;
+            }
+            return false;
+        }
+
+        if (inputFormat == TextureInputFormat::BGRA) {
+            if (inputDataType == TexturePixelDataType::UnsignedInt8888) {
+                swizzle = {TextureSwizzleParam::Green, TextureSwizzleParam::Blue, TextureSwizzleParam::Alpha,
+                           TextureSwizzleParam::Red};
+            } else {
+                swizzle = {TextureSwizzleParam::Blue, TextureSwizzleParam::Green, TextureSwizzleParam::Red,
+                           TextureSwizzleParam::Alpha};
+            }
+            return true;
+        }
+
+        return false;
+    }
+
     // assume 8 bit per channel
     // swizzle.size() == channel count
     void ProcessColorSwizzle(void* data, SizeT pixelCount, const Vector<TextureSwizzleParam>& swizzle) {
@@ -132,6 +157,10 @@ namespace MobileGL::MG_Util::PixelStoreProcessor {
 
         Bool isByteType =
             (inputDataType == TexturePixelDataType::UnsignedByte || inputDataType == TexturePixelDataType::Byte);
+        Vector<TextureSwizzleParam> colorSwizzle;
+        const Bool needColorSwizzle =
+            targetInternalFormat == TextureInternalFormat::RGBA8 &&
+            GetRgba8ByteSwizzleForUnpack(textureInputFormat, inputDataType, colorSwizzle);
         for (Int z = 0; z < copyDepth; ++z) {
             const Uint8* layerSrc = src;
             Uint8* layerDst = dst;
@@ -149,13 +178,10 @@ namespace MobileGL::MG_Util::PixelStoreProcessor {
                     ProcessLSBFirst(layerDst, static_cast<SizeT>(copyWidth), 1);
                 }
 
-                if (textureInputFormat == TextureInputFormat::BGRA &&
-                    targetInternalFormat == TextureInternalFormat::RGBA8) {
-                    MGLOG_D("%s: Swizzle (BGRA)", __func__);
+                if (needColorSwizzle) {
+                    MGLOG_D("%s: Swizzle RGBA8 unpack", __func__);
                     //                    MGLOG_D("%s: pixel0 before = %x", __func__, *((Uint32*)layerDst));
-                    ProcessColorSwizzle(layerDst, static_cast<SizeT>(copyWidth),
-                                        {TextureSwizzleParam::Blue, TextureSwizzleParam::Green,
-                                         TextureSwizzleParam::Red, TextureSwizzleParam::Alpha});
+                    ProcessColorSwizzle(layerDst, static_cast<SizeT>(copyWidth), colorSwizzle);
                     //                    MGLOG_D("%s: pixel0 after  = %x", __func__, *((Uint32*)layerDst));
                 }
                 //                else

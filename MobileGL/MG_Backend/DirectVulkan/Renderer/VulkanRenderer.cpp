@@ -897,15 +897,39 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                depthAttachment.GetTextureLevel() != stencilAttachment.GetTextureLevel();
     }
 
-    static Bool HasCompleteRenderbufferAttachment(const MG_State::GLState::FramebufferObject& framebufferObject) {
+    static Bool IsColorAttachment(FramebufferAttachmentType attachmentType) {
+        return attachmentType >= FramebufferAttachmentType::Color0 &&
+               attachmentType <= FramebufferAttachmentType::Color31;
+    }
+
+    static Bool HasUnsupportedCompleteRenderbufferAttachment(
+        const MG_State::GLState::FramebufferObject& framebufferObject) {
         if (framebufferObject.GetExternalIndex() == 0) {
             return false;
         }
 
-        for (const auto& attachment : framebufferObject.GetAllAttachmentObjects()) {
+        const auto& attachments = framebufferObject.GetAllAttachmentObjects();
+        for (SizeT i = 0; i < attachments.size(); ++i) {
+            const auto attachmentType = static_cast<FramebufferAttachmentType>(i);
+            const auto& attachment = attachments[i];
             if (attachment.IsRenderbuffer() && attachment.IsComplete()) {
-                return true;
+                if (IsColorAttachment(attachmentType)) {
+                    return true;
+                }
             }
+        }
+
+        const auto& depthAttachment = framebufferObject.GetAttachment(FramebufferAttachmentType::Depth);
+        const auto& stencilAttachment = framebufferObject.GetAttachment(FramebufferAttachmentType::Stencil);
+        if (!depthAttachment.IsComplete() || !stencilAttachment.IsComplete()) {
+            return false;
+        }
+        if (depthAttachment.IsRenderbuffer() && stencilAttachment.IsRenderbuffer()) {
+            return depthAttachment.GetRenderbuffer().get() != stencilAttachment.GetRenderbuffer().get();
+        }
+        if ((depthAttachment.IsRenderbuffer() || stencilAttachment.IsRenderbuffer()) &&
+            (depthAttachment.IsTexture() || stencilAttachment.IsTexture())) {
+            return true;
         }
         return false;
     }
@@ -913,7 +937,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     static Bool IsUnsupportedFramebufferForDirectVulkan(
         const MG_State::GLState::FramebufferObject& framebufferObject) {
         return HasDistinctCompleteDepthStencilTextureAttachments(framebufferObject) ||
-               HasCompleteRenderbufferAttachment(framebufferObject);
+               HasUnsupportedCompleteRenderbufferAttachment(framebufferObject);
     }
 
     static void RecordUnsupportedFramebufferError(const char* func) {
@@ -1842,7 +1866,8 @@ void main() {
         succeeded = m_clearManager->Initialize();
         MOBILEGL_ASSERT(succeeded, "VkClearManager initialization failed.");
         m_renderPassManager =
-            MakeUnique<VkRenderPassManager>(m_device, m_config, *m_clearManager, *m_textureManager, m_swapchainObject);
+            MakeUnique<VkRenderPassManager>(m_device, m_physicalDevice.handle, m_allocator, m_config, *m_clearManager,
+                                            *m_textureManager, m_swapchainObject);
         MOBILEGL_ASSERT(m_renderPassManager != nullptr, "VkRenderPassManager creation failed.");
         succeeded = m_renderPassManager->Initialize();
         MOBILEGL_ASSERT(succeeded, "VkRenderPassManager initialization failed.");
@@ -3438,6 +3463,7 @@ void main() {
             .stencil = MG_State::pGLContext->GetClearStencil()
         };
         m_clearManager->QueueClear(mask, payload, *fbo);
+        m_renderPassManager->QueueRenderbufferClear(mask, payload, *fbo);
     }
 
     void VulkanRenderer::QueueClearBufferPayloadForFramebuffer(
@@ -3454,7 +3480,11 @@ void main() {
                 return;
             }
             const auto& attachment = framebuffer.GetAttachment(attachmentType);
-            if (!attachment.IsTexture() || attachment.IsRenderbuffer()) {
+            if (attachment.IsRenderbuffer()) {
+                m_renderPassManager->QueueRenderbufferClear(clearPayload, attachment);
+                return;
+            }
+            if (!attachment.IsTexture()) {
                 return;
             }
             m_clearManager->QueueClear(clearPayload, attachment);
@@ -6097,14 +6127,18 @@ void main() {
         clearRect.layerCount = 1;
 
         for (const auto& pending : compatibleRenderPassEntry.pendingClearAttachments) {
-            if (pending.key.texture == nullptr) {
+            if (!pending.hasInlinePayload && pending.key.texture == nullptr) {
                 continue;
             }
 
             ClearAttachmentPayload clearPayload{};
             SharedPtr<MG_State::GLState::ITextureObject> liveTexture;
-            if (!m_clearManager->GetPendingClear(pending.key, clearPayload, liveTexture)) {
-                continue;
+            if (pending.hasInlinePayload) {
+                clearPayload = pending.inlinePayload;
+            } else {
+                if (!m_clearManager->GetPendingClear(pending.key, clearPayload, liveTexture)) {
+                    continue;
+                }
             }
 
             VkClearAttachment clearAttachment{};
@@ -6133,7 +6167,11 @@ void main() {
             }
 
             vkCmdClearAttachments(commandBuffer, 1, &clearAttachment, 1, &clearRect);
-            m_clearManager->PopPendingClear(pending.key);
+            if (pending.hasInlinePayload) {
+                m_renderPassManager->PopPendingRenderbufferClear(pending.renderbuffer);
+            } else {
+                m_clearManager->PopPendingClear(pending.key);
+            }
         }
     }
 

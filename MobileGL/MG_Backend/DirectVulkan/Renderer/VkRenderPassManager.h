@@ -16,10 +16,12 @@
 #include "MG_State/GLState/FramebufferState/FramebufferObject.h"
 
 #include <Includes.h>
+#include <vk_mem_alloc.h>
 
 namespace MobileGL::MG_Backend::DirectVulkan {
     enum class TrackedAttachmentTarget : Uint8 {
         Texture,
+        Renderbuffer,
         SwapchainColor,
         SwapchainDepthStencil
     };
@@ -27,11 +29,15 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     struct PendingClearAttachmentInfo {
         Uint32 attachmentIndex = 0;
         PendingClearKey key{};
+        MG_State::GLState::RenderbufferObject* renderbuffer = nullptr;
+        Bool hasInlinePayload = false;
+        ClearAttachmentPayload inlinePayload{};
     };
 
     struct TrackedAttachmentLayoutInfo {
         TrackedAttachmentTarget target = TrackedAttachmentTarget::Texture;
         WeakPtr<MG_State::GLState::ITextureObject> texture;
+        WeakPtr<MG_State::GLState::RenderbufferObject> renderbuffer;
         Uint32 textureMipLevel = 0;
         Uint32 swapchainImageIndex = 0;
         VkImageLayout finalLayout = VK_IMAGE_LAYOUT_UNDEFINED;
@@ -143,8 +149,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     public:
         using HashType = Uint64;
         VkRenderPassManager(VkDevice device,
-            const VulkanRendererConfig& config, VkClearManager& clearManager, VkTextureManager& textureManager,
-            SwapchainObject& swapchainObject);
+            VkPhysicalDevice physicalDevice, VmaAllocator allocator, const VulkanRendererConfig& config,
+            VkClearManager& clearManager, VkTextureManager& textureManager, SwapchainObject& swapchainObject);
         ~VkRenderPassManager();
 
         Bool Initialize();
@@ -153,23 +159,64 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         HashType ComputeHash(
             const MG_State::GLState::FramebufferObject& fbo,
             Uint32 swapchainImageIndex,
-            Bool includePendingClear = true) const;
+            Bool includePendingClear = true);
         RenderPassEntry& GetOrCreateRenderPass(const MG_State::GLState::FramebufferObject& fbo, Uint32 swapchainImageIndex);
+        void QueueRenderbufferClear(GLbitfield mask, const ClearFramebufferPayload& clearPayload,
+                                    const MG_State::GLState::FramebufferObject& drawFbo);
+        void QueueRenderbufferClear(const ClearAttachmentPayload& clearPayload,
+                                    const MG_State::GLState::FramebufferAttachmentObject& attachment);
+        void PopPendingRenderbufferClear(MG_State::GLState::RenderbufferObject* renderbuffer);
         static Bool BeginRenderPass(VkCommandBuffer commandBuffer, RenderPassEntry& renderPassEntry);
         static Bool EndRenderPass(VkCommandBuffer commandBuffer);
         static ActiveRenderPassInfo* GetActiveRenderPass();
     private:
         VkDevice m_device = VK_NULL_HANDLE;
+        VkPhysicalDevice m_physicalDevice = VK_NULL_HANDLE;
+        VmaAllocator m_allocator = nullptr;
         const VulkanRendererConfig& m_config;
         VkClearManager& m_clearManager;
         VkTextureManager& m_textureManager;
         SwapchainObject& m_swapchainObject;
         UnorderedMap<Uint64, RenderPassEntry> m_renderPasses;
+
+        struct RenderbufferResource {
+            WeakPtr<MG_State::GLState::RenderbufferObject> renderbuffer;
+            VkImage image = VK_NULL_HANDLE;
+            VmaAllocation allocation = nullptr;
+            VkImageView view = VK_NULL_HANDLE;
+            VkImageLayout layout = VK_IMAGE_LAYOUT_UNDEFINED;
+            VkFormat format = VK_FORMAT_UNDEFINED;
+            VkImageAspectFlags aspect = VK_IMAGE_ASPECT_NONE;
+            VkExtent2D extent = {0, 0};
+            VkSampleCountFlagBits sampleCount = VK_SAMPLE_COUNT_1_BIT;
+            TextureInternalFormat internalFormat = TextureInternalFormat::Unknown;
+            Int samples = 0;
+
+            void Destroy(VkDevice device, VmaAllocator allocator);
+        };
+
+        struct PendingRenderbufferClear {
+            WeakPtr<MG_State::GLState::RenderbufferObject> renderbuffer;
+            ClearAttachmentPayload payload{};
+        };
+
+        UnorderedMap<MG_State::GLState::RenderbufferObject*, RenderbufferResource> m_renderbufferResources;
+        UnorderedMap<MG_State::GLState::RenderbufferObject*, PendingRenderbufferClear> m_pendingRenderbufferClears;
+
+        RenderbufferResource* GetOrCreateRenderbufferResource(
+            const SharedPtr<MG_State::GLState::RenderbufferObject>& renderbuffer);
+        Bool GetPendingRenderbufferClear(MG_State::GLState::RenderbufferObject* renderbuffer,
+                                         ClearAttachmentPayload& outPayload) const;
+        Bool HasPendingRenderbufferClear(
+            const MG_State::GLState::FramebufferAttachmentObject& attachment) const;
+        void CollectRenderbufferGarbage();
+
         static inline XXH64_state_t* m_hashState = XXH64_createState();
         static inline ActiveRenderPassInfo s_activeRenderPass{};
         static inline Bool s_hasActiveRenderPass = false;
         static inline VkClearManager* s_clearManager = nullptr;
         static inline VkTextureManager* s_textureManager = nullptr;
         static inline SwapchainObject* s_swapchainObject = nullptr;
+        static inline VkRenderPassManager* s_renderPassManager = nullptr;
     };
 } // namespace MobileGL::MG_Backend::DirectVulkan
