@@ -15,6 +15,7 @@
 #include <MG_Util/Classifiers/TextureEnumClassifier.h>
 #include <MG_Util/Metrics/TextureMetrics.h>
 #include <MG_State/GLState/Core.h>
+#include <MG_State/GLState/ErrorState/Error.h>
 #include <MG_Impl/GLImpl/Framebuffer/GL_Framebuffer.h>
 #include <MG_Util/BackendLoaders/OpenGL/Loader.h>
 #include <MG_Util/Converters/GLToStr/GLEnumConverter.h>
@@ -1647,6 +1648,39 @@ namespace MobileGL::MG_Backend::DirectGLES {
                         MG_Util::ConvertGLEnumToString(err).c_str());
     }
 
+    static ErrorCode ConvertGLESErrorToErrorCode(GLenum err) {
+        switch (err) {
+        case GL_INVALID_ENUM:
+            return ErrorCode::InvalidEnum;
+        case GL_INVALID_VALUE:
+            return ErrorCode::InvalidValue;
+        case GL_INVALID_FRAMEBUFFER_OPERATION:
+            return ErrorCode::InvalidFramebufferOperation;
+        case GL_OUT_OF_MEMORY:
+            return ErrorCode::OutOfMemory;
+        case GL_INVALID_OPERATION:
+        default:
+            return ErrorCode::InvalidOperation;
+        }
+    }
+
+    static Bool RecordGLError(const char* operation, GLenum target, TextureInternalFormat format) {
+        const GLenum err = g_GLESFuncs.glGetError();
+        if (err == GL_NO_ERROR) {
+            return true;
+        }
+
+        MGLOG_E("%s failed: %s. target=%s, format=%s", operation,
+                MG_Util::ConvertGLEnumToString(err).c_str(),
+                MG_Util::ConvertGLEnumToString(target).c_str(),
+                MG_Util::ConvertTextureInternalFormatToString(format).c_str());
+        MG_State::pGLContext->RecordError(
+            ConvertGLESErrorToErrorCode(err),
+            MakeUnique<GenericErrorInfo>("DirectGLES", operation,
+                                         MG_Util::ConvertGLEnumToString(err)));
+        return false;
+    }
+
     static void ClearGLErrors() {
         while (g_GLESFuncs.glGetError() != GL_NO_ERROR) {}
     }
@@ -2250,7 +2284,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // Bind a complete internal FBO that does not reference the source texture.
         ScopedCompleteFramebufferBinding completeFramebuffer;
         g_GLESFuncs.glGenerateMipmap(target);
-        AssertNoGLError("glGenerateMipmap");
+        RecordGLError("glGenerateMipmap", target, texture->GetFormat());
     }
 
     const GLubyte* GetString(GLenum name) {
