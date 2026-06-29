@@ -10,7 +10,7 @@
 
 #include "GLImpl/Texture/ProxyTexture.h"
 #include "GLImpl/Framebuffer/GL_Framebuffer.h"
-#if defined(__APPLE__)
+#if defined(__APPLE__) && !defined(MOBILEGL_IOS)
 #include "NSOpenGLImpl/NSOpenGLImpl.h"
 #endif
 
@@ -48,7 +48,7 @@ namespace MobileGL::MG_Impl {
             MakeUnique<GLImpl::FramebufferImpl::DefaultFramebufferInfo>(fbo0, colorTex, depthTex, stencilTex);
         MG_State::pGLContext->GetFramebufferBindingSlot(FramebufferTarget::Draw).Bind(fbo0);
         MG_State::pGLContext->GetFramebufferBindingSlot(FramebufferTarget::Read).Bind(fbo0);
-#if defined(__APPLE__)
+#if defined(__APPLE__) && !defined(MOBILEGL_IOS)
         NSOpenGLImpl::InstallHooks();
 #endif
     }

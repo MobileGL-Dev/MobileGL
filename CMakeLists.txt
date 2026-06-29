@@ -7,7 +7,9 @@ option(MOBILEGL_BUILD_BENCHMARK   "Build MobileGL benchmarks"                   
 option(MOBILEGL_FORCE_RELEASE_OPT "Enable Release optimization flags in Debug build" ON )
 option(MOBILEGL_ENABLE_TRACY      "Enable tracy for profiling"                       OFF)
 option(MOBILEGL_BUILD_TRACE_REPLAY "Build desktop apitrace replay runner"            OFF)
+option(MOBILEGL_IOS               "Build MobileGL for iOS instead of macOS when APPLE is set" OFF)
 set(MOBILEGL_LOG_ACTIVE_LEVEL "MOBILEGL_LOG_LEVEL_INFO" CACHE STRING "MobileGL active log level macro")
+set(MOBILEGL_VULKAN_LIBRARY "" CACHE FILEPATH "Vulkan loader/MoltenVK library to link for iOS builds")
 
 if (ANDROID)
     set(MOBILEGL_BUILD_TEST       OFF CACHE BOOL "Build MobileGL tests"      FORCE)
@@ -273,7 +275,7 @@ set(SOURCE_FILES
     MobileGL/MG_State/GLState/RenderbufferState/RenderbufferState.cpp
 )
 
-if (APPLE)
+if (APPLE AND NOT MOBILEGL_IOS)
     list(APPEND SOURCE_FILES
         MobileGL/MG_Impl/CGLImpl/CGLImpl.cpp
         MobileGL/MG_Impl/CGLImpl/Exporting/Definitions.cpp
@@ -393,7 +395,7 @@ if (ANDROID)
     )
 endif()
 
-if (APPLE)
+if (APPLE AND NOT MOBILEGL_IOS)
     target_link_libraries(${CMAKE_PROJECT_NAME} PUBLIC
         "-framework Cocoa"
         "-framework QuartzCore"
@@ -410,7 +412,31 @@ if (APPLE)
     endif()
 endif()
 
-if (NOT ANDROID)
+if (APPLE AND MOBILEGL_IOS)
+    target_compile_definitions(${CMAKE_PROJECT_NAME} PUBLIC MOBILEGL_IOS=1 _LIBCPP_DISABLE_AVAILABILITY)
+    target_link_libraries(${CMAKE_PROJECT_NAME} PUBLIC
+        "-framework CoreGraphics"
+        "-framework Foundation"
+        "-framework QuartzCore"
+        objc)
+    if (MOBILEGL_VULKAN_LIBRARY)
+        target_link_libraries(${CMAKE_PROJECT_NAME} PUBLIC "${MOBILEGL_VULKAN_LIBRARY}")
+    endif()
+
+    if(TARGET ${CMAKE_PROJECT_NAME}_s)
+        target_compile_definitions(${CMAKE_PROJECT_NAME}_s PUBLIC MOBILEGL_IOS=1 _LIBCPP_DISABLE_AVAILABILITY)
+        target_link_libraries(${CMAKE_PROJECT_NAME}_s PUBLIC
+            "-framework CoreGraphics"
+            "-framework Foundation"
+            "-framework QuartzCore"
+            objc)
+        if (MOBILEGL_VULKAN_LIBRARY)
+            target_link_libraries(${CMAKE_PROJECT_NAME}_s PUBLIC "${MOBILEGL_VULKAN_LIBRARY}")
+        endif()
+    endif()
+endif()
+
+if (NOT ANDROID AND NOT MOBILEGL_IOS)
     find_package(Vulkan)
     if (Vulkan_FOUND)
         target_link_libraries(${CMAKE_PROJECT_NAME} PUBLIC Vulkan::Vulkan Vulkan::Headers)
@@ -418,7 +444,9 @@ if (NOT ANDROID)
         target_include_directories(${CMAKE_PROJECT_NAME} PUBLIC ${Vulkan_INCLUDE_DIR})
         target_include_directories(${CMAKE_PROJECT_NAME}_s PUBLIC ${Vulkan_INCLUDE_DIR})
     endif ()
+endif ()
 
+if (NOT ANDROID)
     if (MOBILEGL_BUILD_TEST)
         add_subdirectory(MobileGL/MG_Test)
     endif()

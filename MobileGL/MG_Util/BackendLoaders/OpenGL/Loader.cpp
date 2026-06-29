@@ -8,6 +8,9 @@
 
 #include "Loader.h"
 #include "MG_Util/Types.h"
+#if defined(MOBILEGL_IOS)
+#include <dlfcn.h>
+#endif
 
 namespace MobileGL::MG_Util::BackendLoader {
     static Bool UseRetraceAngle() {
@@ -29,10 +32,14 @@ namespace MobileGL::MG_Util::BackendLoader {
     }
 
     static void* OpenLib(const Vector<String>& names) {
-#if !defined(__WIN32) && !defined(_WIN32) && !defined(__APPLE__)
+#if !defined(__WIN32) && !defined(_WIN32) && (!defined(__APPLE__) || defined(MOBILEGL_IOS))
         static const String LibPathPrefixes[] = {
+#if defined(MOBILEGL_IOS)
+            "@rpath/", "@executable_path/Frameworks/", "@loader_path/Frameworks/",
+#else
             "/opt/vc/lib/", "/usr/local/lib/", "/usr/lib/", "/usr/lib/x86_64-linux-gnu/",
             "/usr/lib64/", "/lib64/",
+#endif
             "" // We should put this to the end of the list to avoid breaking `LD_LIBRARY_PATH` usage
         };
 
@@ -53,7 +60,7 @@ namespace MobileGL::MG_Util::BackendLoader {
     }
 
     inline void* ProcAddress(void* lib, const char* name) {
-#if !defined(__WIN32) && !defined(_WIN32) && !defined(__APPLE__)
+#if !defined(__WIN32) && !defined(_WIN32) && (!defined(__APPLE__) || defined(MOBILEGL_IOS))
         return dlsym(lib, name);
 #else
         return nullptr;
@@ -465,7 +472,11 @@ namespace MobileGL::MG_Util::BackendLoader {
                 return;
             }
         } else {
+#if defined(MOBILEGL_IOS)
+            eglLib = OpenLib({"libtinygl4angle.dylib"});
+#else
             eglLib = OpenLib({"libEGL.so"});
+#endif
         }
 
         if (!eglLib) {

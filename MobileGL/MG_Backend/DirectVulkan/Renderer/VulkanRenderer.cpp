@@ -5476,15 +5476,28 @@ void main() {
         } // TODO: support more platforms
 
 #if defined(VK_USE_PLATFORM_METAL_EXT)
-        exts.push_back(VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME);
-        instanceInfo.flags |= VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR;
+        if (IsExtensionSupported(m_extensions, VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME)) {
+            exts.push_back(VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME);
+            instanceInfo.flags |= VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR;
+        } else {
+            MGLOG_I("Optional Vulkan instance extension not supported: %s",
+                    VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME);
+        }
 #endif
 
         if (m_validationLayersEnabled) {
             exts.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
         }
 
+        MGLOG_I("Enabling %d Vulkan instance extensions:", exts.size());
         for (const char* ext : exts) {
+            MGLOG_I("    %s", ext);
+        }
+
+        for (const char* ext : exts) {
+            if (!IsExtensionSupported(m_extensions, ext)) {
+                MGLOG_E("Required Vulkan instance extension not found: %s", ext);
+            }
             MOBILEGL_ASSERT(IsExtensionSupported(m_extensions, ext), "Required Vulkan instance extension not found: %s",
                             ext);
         }

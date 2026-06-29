@@ -7,7 +7,7 @@
 // End of Source File Header
 
 #include "GetProcAddress.h"
-#if defined(__APPLE__)
+#if defined(__APPLE__) && !defined(MOBILEGL_IOS)
 #ifndef GL_SILENCE_DEPRECATION
 #define GL_SILENCE_DEPRECATION
 #endif
@@ -67,7 +67,7 @@ namespace MobileGL::MG_Impl {
         GETPROC(eglCreatePlatformPixmapSurface, name);
         GETPROC(eglWaitSync, name);
 
-#if defined(__APPLE__)
+#if defined(__APPLE__) && !defined(MOBILEGL_IOS)
         GETPROC(CGLChoosePixelFormat, name);
         GETPROC(CGLDestroyPixelFormat, name);
         GETPROC(CGLDescribePixelFormat, name);
