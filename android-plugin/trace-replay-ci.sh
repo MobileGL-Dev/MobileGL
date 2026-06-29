@@ -42,6 +42,18 @@ die() {
   exit 2
 }
 
+host_path_for_adb() {
+  if command -v cygpath >/dev/null 2>&1; then
+    cygpath -w "$1"
+  else
+    printf '%s' "$1"
+  fi
+}
+
+adb_device_path() {
+  MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*' "${ADB}" "$@"
+}
+
 next_arg() {
   if [ "$#" -lt 2 ]; then
     die "$1 requires a value"
@@ -146,17 +158,17 @@ collect_run_diagnostics() {
   diagnostics_dir="$1"
   mkdir -p "${diagnostics_dir}"
   "${ADB}" logcat -d -t 2000 > "${diagnostics_dir}/logcat.txt" || true
-  "${ADB}" shell pidof "${package_name}" > "${diagnostics_dir}/pidof.txt" 2>&1 || true
-  "${ADB}" shell dumpsys activity activities > "${diagnostics_dir}/activity.txt" 2>&1 || true
-  "${ADB}" shell run-as "${package_name}" ls -laR "${app_dir}" > "${diagnostics_dir}/app-files.txt" 2>&1 || true
-  "${ADB}" exec-out run-as "${package_name}" cat "${app_dir}/output/retrace.log" > "${diagnostics_dir}/retrace.log" || true
-  "${ADB}" exec-out run-as "${package_name}" cat "${app_dir}/output/mobilegl.log" > "${diagnostics_dir}/mobilegl.log" || true
+  adb_device_path shell pidof "${package_name}" > "${diagnostics_dir}/pidof.txt" 2>&1 || true
+  adb_device_path shell dumpsys activity activities > "${diagnostics_dir}/activity.txt" 2>&1 || true
+  adb_device_path shell run-as "${package_name}" ls -laR "${app_dir}" > "${diagnostics_dir}/app-files.txt" 2>&1 || true
+  adb_device_path exec-out run-as "${package_name}" cat "${app_dir}/output/retrace.log" > "${diagnostics_dir}/retrace.log" || true
+  adb_device_path exec-out run-as "${package_name}" cat "${app_dir}/output/mobilegl.log" > "${diagnostics_dir}/mobilegl.log" || true
 }
 
 copy_app_artifact() {
   source_path="$1"
   destination_path="$2"
-  if ! "${ADB}" exec-out run-as "${package_name}" cat "${source_path}" > "${destination_path}"; then
+  if ! adb_device_path exec-out run-as "${package_name}" cat "${source_path}" > "${destination_path}"; then
     echo "trace-replay-ci.sh: warning: failed to copy ${source_path}" >&2
     rm -f "${destination_path}"
   fi
@@ -171,14 +183,14 @@ prepare_fixture() {
   extracted_trace="${fixture_dir}/${trace_file}"
   test -f "${extracted_trace}" || die "trace file not found in archive: ${trace_file}"
 
-  "${ADB}" push "${extracted_trace}" "/data/local/tmp/mobilegl-${safe_case}.trace"
-  "${ADB}" push "${golden_path}" "/data/local/tmp/mobilegl-${safe_case}.golden.png"
+  adb_device_path push "$(host_path_for_adb "${extracted_trace}")" "/data/local/tmp/mobilegl-${safe_case}.trace"
+  adb_device_path push "$(host_path_for_adb "${golden_path}")" "/data/local/tmp/mobilegl-${safe_case}.golden.png"
   if [ -n "${alternate_golden_path}" ]; then
-    "${ADB}" push "${alternate_golden_path}" "/data/local/tmp/mobilegl-${safe_case}.alternate-golden.png"
+    adb_device_path push "$(host_path_for_adb "${alternate_golden_path}")" "/data/local/tmp/mobilegl-${safe_case}.alternate-golden.png"
   fi
-  "${ADB}" shell chmod 0644 "/data/local/tmp/mobilegl-${safe_case}.trace" "/data/local/tmp/mobilegl-${safe_case}.golden.png"
+  adb_device_path shell chmod 0644 "/data/local/tmp/mobilegl-${safe_case}.trace" "/data/local/tmp/mobilegl-${safe_case}.golden.png"
   if [ -n "${alternate_golden_path}" ]; then
-    "${ADB}" shell chmod 0644 "/data/local/tmp/mobilegl-${safe_case}.alternate-golden.png"
+    adb_device_path shell chmod 0644 "/data/local/tmp/mobilegl-${safe_case}.alternate-golden.png"
   fi
 }
 
@@ -187,12 +199,12 @@ copy_fixture_to_app() {
   golden_tmp="/data/local/tmp/mobilegl-${safe_case}.golden.png"
   alternate_golden_tmp="/data/local/tmp/mobilegl-${safe_case}.alternate-golden.png"
 
-  "${ADB}" shell run-as "${package_name}" rm -rf "${app_dir}"
-  "${ADB}" shell run-as "${package_name}" mkdir -p "${app_dir}/input" "${app_dir}/output"
-  "${ADB}" shell run-as "${package_name}" cp "${trace_tmp}" "${app_dir}/input/trace.trace"
-  "${ADB}" shell run-as "${package_name}" cp "${golden_tmp}" "${app_dir}/input/golden.png"
+  adb_device_path shell run-as "${package_name}" rm -rf "${app_dir}"
+  adb_device_path shell run-as "${package_name}" mkdir -p "${app_dir}/input" "${app_dir}/output"
+  adb_device_path shell run-as "${package_name}" cp "${trace_tmp}" "${app_dir}/input/trace.trace"
+  adb_device_path shell run-as "${package_name}" cp "${golden_tmp}" "${app_dir}/input/golden.png"
   if [ -n "${alternate_golden_path}" ]; then
-    "${ADB}" shell run-as "${package_name}" cp "${alternate_golden_tmp}" "${app_dir}/input/alternate-golden.png"
+    adb_device_path shell run-as "${package_name}" cp "${alternate_golden_tmp}" "${app_dir}/input/alternate-golden.png"
   fi
 }
 
@@ -211,9 +223,9 @@ run_retrace() {
   fi
 
   mkdir -p "${result_dir}"
-  "${ADB}" install -r "${apk_file}"
+  "${ADB}" install -r "$(host_path_for_adb "${apk_file}")"
   copy_fixture_to_app
-  "${ADB}" shell am force-stop "${package_name}"
+  adb_device_path shell am force-stop "${package_name}"
   "${ADB}" logcat -c
   set -- am start -W -a top.mobilegl.plugin.TRACE_REPLAY \
     -n "${package_name}/top.mobilegl.plugin.trace.TraceReplayActivity" \
@@ -240,14 +252,14 @@ run_retrace() {
     --ei crop_y "${crop_y}" \
     --ei crop_width "${crop_width}" \
     --ei crop_height "${crop_height}"
-  "${ADB}" shell "$@"
+  adb_device_path shell "$@"
 
   app_exited=0
   for _ in $(seq 1 "${timeout_seconds}"); do
-    if "${ADB}" shell run-as "${package_name}" ls "${app_dir}/output/result.json" >/dev/null 2>&1; then
+    if adb_device_path shell run-as "${package_name}" ls "${app_dir}/output/result.json" >/dev/null 2>&1; then
       break
     fi
-    if ! "${ADB}" shell pidof "${package_name}" >/dev/null 2>&1; then
+    if ! adb_device_path shell pidof "${package_name}" >/dev/null 2>&1; then
       app_exited=1
       break
     fi
@@ -255,7 +267,7 @@ run_retrace() {
   done
 
   collect_run_diagnostics "${result_dir}"
-  if ! "${ADB}" shell run-as "${package_name}" ls "${app_dir}/output/result.json" >/dev/null 2>&1; then
+  if ! adb_device_path shell run-as "${package_name}" ls "${app_dir}/output/result.json" >/dev/null 2>&1; then
     if [ "${app_exited}" -eq 1 ]; then
       echo "trace-replay-ci.sh: app process exited before result.json was created" >&2
     else
@@ -275,7 +287,7 @@ run_retrace() {
     cat "${result_dir}/app-files.txt" >&2 || true
     exit 1
   fi
-  "${ADB}" exec-out run-as "${package_name}" cat "${app_dir}/output/result.json" > "${result_dir}/result.json"
+  adb_device_path exec-out run-as "${package_name}" cat "${app_dir}/output/result.json" > "${result_dir}/result.json"
   cat "${result_dir}/result.json"
   copy_app_artifact "${app_dir}/output/actual.png" "${result_dir}/${safe_case}-${backend}-actual.png"
   copy_app_artifact "${app_dir}/output/${safe_case}-diff.png" "${result_dir}/${safe_case}-${backend}-diff.png"

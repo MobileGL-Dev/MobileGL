@@ -444,6 +444,10 @@ add_trace_replay_test_for_backends(minecraft-1.21.4-fabric-xaero-minimap-in-worl
         TARGET_CALL 2553500
         WIDTH 854
         HEIGHT 480
+        CROP_X 0
+        CROP_Y 10
+        CROP_WIDTH 140
+        CROP_HEIGHT 158
 )
 
 add_trace_replay_test_for_backends(minecraft-1.21.4-fabric-xaero-world-map-in-world
