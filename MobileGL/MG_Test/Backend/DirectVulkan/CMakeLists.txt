@@ -43,7 +43,7 @@ endif()
 target_compile_definitions(DirectVulkanSanityTest PRIVATE -DNOMINMAX)
 
 include(GoogleTest)
-gtest_discover_tests(DirectVulkanSanityTest)
+gtest_discover_tests(DirectVulkanSanityTest DISCOVERY_TIMEOUT 30)
 
 add_executable(
         DirectVulkanTestExec

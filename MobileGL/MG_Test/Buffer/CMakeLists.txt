@@ -24,4 +24,4 @@ if (MSVC)
 endif()
 
 include(GoogleTest)
-gtest_discover_tests(BufferTest)
+gtest_discover_tests(BufferTest DISCOVERY_TIMEOUT 30)

@@ -17,4 +17,4 @@ target_link_libraries(
 )
 
 include(GoogleTest)
-gtest_discover_tests(FramebufferTest)
+gtest_discover_tests(FramebufferTest DISCOVERY_TIMEOUT 30)

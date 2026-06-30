@@ -62,7 +62,7 @@ set(LINK_LIBRARIES
 )
 
 include(GoogleTest)
-gtest_discover_tests(SanityTest)
+gtest_discover_tests(SanityTest DISCOVERY_TIMEOUT 30)
 
 add_subdirectory(Buffer)
 add_subdirectory(EGLState)

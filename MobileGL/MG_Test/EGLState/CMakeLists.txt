@@ -17,4 +17,4 @@ target_link_libraries(
 )
 
 include(GoogleTest)
-gtest_discover_tests(EGLStateTest)
+gtest_discover_tests(EGLStateTest DISCOVERY_TIMEOUT 30)

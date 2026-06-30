@@ -17,7 +17,7 @@ target_link_libraries(
 )
 
 include(GoogleTest)
-gtest_discover_tests(TextureTest)
+gtest_discover_tests(TextureTest DISCOVERY_TIMEOUT 30)
 
 add_executable(
         VkClearManagerTest
@@ -35,4 +35,4 @@ target_link_libraries(
         ${LINK_LIBRARIES}
 )
 
-gtest_discover_tests(VkClearManagerTest)
+gtest_discover_tests(VkClearManagerTest DISCOVERY_TIMEOUT 30)

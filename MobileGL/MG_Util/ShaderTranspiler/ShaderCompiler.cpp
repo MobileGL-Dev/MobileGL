@@ -10,6 +10,7 @@
 
 #include "SpirvPasses/EliminateFloatEqualsZeroPass.h"
 #include "SpirvPasses/FlattenInterfaceStructPass.h"
+#include "SpirvPasses/RenameSamplerFunctionParameterPass.h"
 #include "spirv-tools/libspirv.h"
 #include "spirv-tools/optimizer.hpp"
 
@@ -240,6 +241,7 @@ namespace MobileGL {
                 optimizer.RegisterPass(CreateAggressiveDCEPass(false));
                 optimizer.RegisterPass(CreateRemoveUnusedInterfaceVariablesPass());
                 optimizer.RegisterPass(FlattenInterfaceStructPass::CreateFlattenInterfaceStructPass());
+                optimizer.RegisterPass(RenameSamplerFunctionParameterPass::CreateRenameSamplerFunctionParameterPass());
                 optimizer.RegisterPass(EliminateFloatEqualsZeroPass::CreateEliminateFloatEqualsZeroPass());
 
                 return optimizer.Run(inputBinary.data(), inputBinary.size(), &outputBinary, options);

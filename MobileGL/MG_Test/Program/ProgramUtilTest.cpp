@@ -15,8 +15,11 @@
 #include <MG_Util/Converters/GLToStr/GLEnumConverter.h>
 #include <MG_Util/ShaderTranspiler/ShaderCompiler.h>
 #include <MG_Util/ShaderTranspiler/ShaderSourceProcessor.h>
+#include <MG_Util/ShaderTranspiler/SpirvPasses/RenameSamplerFunctionParameterPass.h>
 #include <MG_Util/ShaderTranspiler/Types.h>
 #include <MG_Util/ShaderTranspiler/glslang/UniformTraverser.h>
+#include <spirv-tools/libspirv.hpp>
+#include <spirv-tools/optimizer.hpp>
 
 using namespace MobileGL;
 
@@ -29,6 +32,64 @@ protected:
 
 TEST_F(ProgramUtilTest, Sanity) {
     ASSERT_TRUE(true);
+}
+
+TEST_F(ProgramUtilTest, RenameSamplerFunctionParameterInSpirvPass) {
+    using namespace MG_Util::ShaderTranspiler;
+
+    const String spirvText = R"(
+               OpCapability Shader
+               OpMemoryModel Logical GLSL450
+               OpEntryPoint Fragment %main "main" %outColor
+               OpExecutionMode %main OriginUpperLeft
+               OpName %globalSampler "sampler"
+               OpName %paramSampler "sampler"
+               OpName %main "main"
+               OpDecorate %outColor Location 0
+       %void = OpTypeVoid
+      %float = OpTypeFloat 32
+    %v4float = OpTypeVector %float 4
+     %mainFn = OpTypeFunction %void
+    %paramFn = OpTypeFunction %void %float
+  %outV4Ptr = OpTypePointer Output %v4float
+ %privatePtr = OpTypePointer Private %float
+   %outColor = OpVariable %outV4Ptr Output
+%globalSampler = OpVariable %privatePtr Private
+     %helper = OpFunction %void None %paramFn
+%paramSampler = OpFunctionParameter %float
+ %helperBody = OpLabel
+               OpReturn
+               OpFunctionEnd
+       %main = OpFunction %void None %mainFn
+   %mainBody = OpLabel
+               OpReturn
+               OpFunctionEnd
+)";
+
+    spvtools::SpirvTools tools(SPV_ENV_VULKAN_1_1);
+    Vector<uint32_t> inputBinary;
+    ASSERT_TRUE(tools.Assemble(spirvText, &inputBinary));
+
+    spvtools::Optimizer optimizer(SPV_ENV_VULKAN_1_1);
+    spvtools::OptimizerOptions options;
+    options.set_run_validator(false);
+    optimizer.RegisterPass(RenameSamplerFunctionParameterPass::CreateRenameSamplerFunctionParameterPass());
+
+    Vector<uint32_t> outputBinary;
+    ASSERT_TRUE(optimizer.Run(inputBinary.data(), inputBinary.size(), &outputBinary, options));
+
+    String outputText;
+    ASSERT_TRUE(tools.Disassemble(outputBinary, &outputText));
+
+    EXPECT_NE(outputText.find("\"MGL_COMPAT_sampler\""), String::npos);
+
+    SizeT exactSamplerNameCount = 0;
+    SizeT searchOffset = 0;
+    while ((searchOffset = outputText.find("\"sampler\"", searchOffset)) != String::npos) {
+        ++exactSamplerNameCount;
+        searchOffset += std::strlen("\"sampler\"");
+    }
+    EXPECT_EQ(exactSamplerNameCount, 1u);
 }
 
 TEST_F(ProgramUtilTest, PreprocessLegacyVertexShaderModernizesGlmarkStyleSource) {
