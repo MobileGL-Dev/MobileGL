@@ -22,7 +22,8 @@
 namespace MobileGL::MG_Backend::DirectGLES {
     namespace {
         Bool IsReleaseCurrentRequest(EGLDisplay dpy, EGLSurface draw, EGLSurface read, EGLContext ctx) {
-            return dpy == EGL_NO_DISPLAY && draw == EGL_NO_SURFACE && read == EGL_NO_SURFACE && ctx == EGL_NO_CONTEXT;
+            (void)dpy;
+            return draw == EGL_NO_SURFACE && read == EGL_NO_SURFACE && ctx == EGL_NO_CONTEXT;
         }
 
         void ClearGLErrors(const MG_External::GLESFunctionsTable& gl) {
@@ -708,11 +709,40 @@ namespace MobileGL::MG_Backend::DirectGLES {
     }
 
     Bool BackendObject_DirectGLES::MakeEGLCurrent(EGLDisplay dpy, EGLSurface draw, EGLSurface read, EGLContext ctx) {
+        const std::lock_guard<std::recursive_mutex> lock(m_eglStateMutex);
         if (IsReleaseCurrentRequest(dpy, draw, read, ctx)) {
+            if (!DirectGLES::ReleaseCurrent()) {
+                return false;
+            }
             return BackendObject::MakeEGLCurrent(dpy, draw, read, ctx);
         }
 
-        return BackendObject::MakeEGLCurrent(dpy, draw, read, ctx);
+        if (!m_initialized) {
+            MGLOG_E("DirectGLES backend not initialized");
+            return false;
+        }
+        if (!m_eglDisplayInitialized || m_eglDisplay != dpy) {
+            MGLOG_E("MakeEGLCurrent failed: EGL display mismatch or not initialized");
+            return false;
+        }
+        if (!m_eglSurfaceInitialized) {
+            MGLOG_E("MakeEGLCurrent failed: EGL surface is not initialized");
+            return false;
+        }
+        if (draw == EGL_NO_SURFACE || read == EGL_NO_SURFACE || ctx == EGL_NO_CONTEXT) {
+            MGLOG_E("MakeEGLCurrent failed: draw/read/context is invalid");
+            return false;
+        }
+
+        if (!DirectGLES::MakeCurrent()) {
+            return false;
+        }
+
+        if (!BackendObject::MakeEGLCurrent(dpy, draw, read, ctx)) {
+            (void)DirectGLES::ReleaseCurrent();
+            return false;
+        }
+        return true;
     }
 
     Bool BackendObject_DirectGLES::SwapEGLBuffers(EGLDisplay dpy, EGLSurface draw) {

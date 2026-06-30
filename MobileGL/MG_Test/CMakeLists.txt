@@ -65,6 +65,7 @@ include(GoogleTest)
 gtest_discover_tests(SanityTest)
 
 add_subdirectory(Buffer)
+add_subdirectory(EGLState)
 add_subdirectory(Framebuffer)
 add_subdirectory(Texture)
 add_subdirectory(VertexArray)

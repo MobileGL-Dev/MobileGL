@@ -20,7 +20,8 @@
 namespace MobileGL::MG_Backend::DirectVulkan {
     namespace {
         Bool IsReleaseCurrentRequest(EGLDisplay dpy, EGLSurface draw, EGLSurface read, EGLContext ctx) {
-            return dpy == EGL_NO_DISPLAY && draw == EGL_NO_SURFACE && read == EGL_NO_SURFACE && ctx == EGL_NO_CONTEXT;
+            (void)dpy;
+            return draw == EGL_NO_SURFACE && read == EGL_NO_SURFACE && ctx == EGL_NO_CONTEXT;
         }
 
         Bool IsFormatIndexValid(TextureInternalFormat format) {

@@ -1054,9 +1054,20 @@ namespace MobileGL {
                                          EGLContextHandle context) {
                 const std::lock_guard<std::recursive_mutex> lock(m_mutex);
                 const Bool releaseCurrentRequest =
-                    display == EGL_NO_DISPLAY && draw == EGL_NO_SURFACE && read == EGL_NO_SURFACE && context == nullptr;
+                    draw == EGL_NO_SURFACE && read == EGL_NO_SURFACE && context == nullptr;
                 const auto threadKey = CurrentThreadKey();
                 if (releaseCurrentRequest) {
+                    if (display != EGL_NO_DISPLAY) {
+                        auto* displayObject = TryGetDisplay(display);
+                        if (!displayObject) {
+                            SetError(EGL_BAD_DISPLAY);
+                            return false;
+                        }
+                        if (!displayObject->Initialized) {
+                            SetError(EGL_NOT_INITIALIZED);
+                            return false;
+                        }
+                    }
                     ReleaseThreadUnlocked(threadKey);
                     return true;
                 }

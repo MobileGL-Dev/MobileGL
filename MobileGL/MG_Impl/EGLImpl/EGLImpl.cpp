@@ -10,6 +10,8 @@
 #include "../GetProcAddress.h"
 #include <MG_Backend/BackendObjects.h>
 #include <MG_State/EGLState/Core.h>
+#include <mutex>
+#include <sstream>
 #include <type_traits>
 
 namespace MobileGL::MG_Impl::EGLImpl {
@@ -29,6 +31,17 @@ namespace MobileGL::MG_Impl::EGLImpl {
                 state->SetError(EGL_NOT_INITIALIZED);
             }
             return backendObject;
+        }
+
+        std::recursive_mutex& EGLOperationMutex() {
+            static std::recursive_mutex mutex;
+            return mutex;
+        }
+
+        String CurrentThreadIdString() {
+            std::ostringstream stream;
+            stream << std::this_thread::get_id();
+            return stream.str();
         }
 
         MG_Backend::WindowBackend DetectWindowBackend() {
@@ -55,7 +68,7 @@ namespace MobileGL::MG_Impl::EGLImpl {
             return defaultValue;
         }
 
-        EGLint GetAttribValue(const EGLAttrib* attribList, EGLint attrib, EGLint defaultValue) {
+        EGLint GetAttribValueAttrib(const EGLAttrib* attribList, EGLint attrib, EGLint defaultValue) {
             if (!attribList) {
                 return defaultValue;
             }
@@ -126,6 +139,7 @@ namespace MobileGL::MG_Impl::EGLImpl {
     }
 
     EGLBoolean SwapBuffers(EGLDisplay dpy, EGLSurface draw) {
+        const std::lock_guard<std::recursive_mutex> operationLock(EGLOperationMutex());
         auto* state = GetState();
         if (!state) {
             return EGL_FALSE;
@@ -141,6 +155,7 @@ namespace MobileGL::MG_Impl::EGLImpl {
             return EGL_FALSE;
         }
         if (!backendObject->SwapEGLBuffers(dpy, draw)) {
+            MGLOG_E("eglSwapBuffers failed on thread=%s dpy=%p draw=%p", CurrentThreadIdString().c_str(), dpy, draw);
             state->SetError(EGL_BAD_SURFACE);
             return EGL_FALSE;
         }
@@ -202,6 +217,7 @@ namespace MobileGL::MG_Impl::EGLImpl {
     }
 
     EGLBoolean MakeCurrent(EGLDisplay dpy, EGLSurface draw, EGLSurface read, EGLContext ctx) {
+        const std::lock_guard<std::recursive_mutex> operationLock(EGLOperationMutex());
         auto* state = GetState();
         if (!state) {
             return EGL_FALSE;
@@ -211,17 +227,30 @@ namespace MobileGL::MG_Impl::EGLImpl {
         const auto oldDraw = state->GetCurrentSurface(EGL_DRAW);
         const auto oldRead = state->GetCurrentSurface(EGL_READ);
         const auto oldContext = state->GetCurrentContext();
+        const String threadId = CurrentThreadIdString();
+
+        MGLOG_D("eglMakeCurrent begin thread=%s dpy=%p draw=%p read=%p ctx=%p oldDpy=%p oldDraw=%p oldRead=%p oldCtx=%p",
+                threadId.c_str(), dpy, draw, read, ctx, oldDisplay, oldDraw, oldRead, oldContext);
 
         if (!state->MakeCurrent(dpy, draw, read, ctx)) {
+            const EGLint error = state->ConsumeError();
+            MGLOG_D("eglMakeCurrent rejected by EGLState thread=%s error=0x%04x", threadId.c_str(), error);
+            state->SetError(error);
             return EGL_FALSE;
         }
 
         const Bool releaseCurrentRequest =
-            dpy == EGL_NO_DISPLAY && draw == EGL_NO_SURFACE && read == EGL_NO_SURFACE && ctx == EGL_NO_CONTEXT;
+            draw == EGL_NO_SURFACE && read == EGL_NO_SURFACE && ctx == EGL_NO_CONTEXT;
         if (releaseCurrentRequest) {
             if (auto* backendObject = MG_Backend::pActiveBackendObject.get()) {
-                (void)backendObject->MakeEGLCurrent(dpy, draw, read, ctx);
+                if (!backendObject->MakeEGLCurrent(dpy, draw, read, ctx)) {
+                    MGLOG_E("eglMakeCurrent release failed in backend thread=%s", threadId.c_str());
+                    state->MakeCurrent(oldDisplay, oldDraw, oldRead, oldContext);
+                    state->SetError(EGL_BAD_ACCESS);
+                    return EGL_FALSE;
+                }
             }
+            MGLOG_D("eglMakeCurrent release succeeded thread=%s", threadId.c_str());
             return EGL_TRUE;
         }
 
@@ -232,10 +261,14 @@ namespace MobileGL::MG_Impl::EGLImpl {
             return EGL_FALSE;
         }
         if (!backendObject->MakeEGLCurrent(dpy, draw, read, ctx)) {
+            MGLOG_E("eglMakeCurrent backend attach failed thread=%s dpy=%p draw=%p read=%p ctx=%p", threadId.c_str(),
+                    dpy, draw, read, ctx);
             state->SetError(EGL_BAD_ACCESS);
             state->MakeCurrent(oldDisplay, oldDraw, oldRead, oldContext);
             return EGL_FALSE;
         }
+        MGLOG_D("eglMakeCurrent attach succeeded thread=%s dpy=%p draw=%p read=%p ctx=%p", threadId.c_str(), dpy, draw,
+                read, ctx);
         return EGL_TRUE;
     }
 
@@ -612,8 +645,8 @@ namespace MobileGL::MG_Impl::EGLImpl {
         const MG_Backend::WindowHandle windowHandle = {
             .Backend = DetectWindowBackend(),
             .Handle = native_window,
-            .Width = static_cast<Uint32>(std::max<EGLint>(GetAttribValue(attrib_list, EGL_WIDTH, 0), 0)),
-            .Height = static_cast<Uint32>(std::max<EGLint>(GetAttribValue(attrib_list, EGL_HEIGHT, 0), 0)),
+            .Width = static_cast<Uint32>(std::max<EGLint>(GetAttribValueAttrib(attrib_list, EGL_WIDTH, 0), 0)),
+            .Height = static_cast<Uint32>(std::max<EGLint>(GetAttribValueAttrib(attrib_list, EGL_HEIGHT, 0), 0)),
         };
         if (!backendObject->CreateEGLWindowSurface(windowHandle)) {
             state->SetError(EGL_BAD_NATIVE_WINDOW);

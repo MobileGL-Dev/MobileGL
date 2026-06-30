@@ -268,6 +268,13 @@ namespace MobileGL {
                 Pbuffer
             };
 
+            struct EGLCurrentState {
+                EGLDisplay Display = EGL_NO_DISPLAY;
+                EGLSurface DrawSurface = EGL_NO_SURFACE;
+                EGLSurface ReadSurface = EGL_NO_SURFACE;
+                EGLContext Context = EGL_NO_CONTEXT;
+            };
+
             void ResetEGLRuntimeState();
             virtual Bool InitPbufferSurface(EGLint width, EGLint height);
             FormatCapabilityCache& MutableFormatCapabilities();
@@ -280,7 +287,7 @@ namespace MobileGL {
             Bool m_eglSurfaceInitialized = false;
             Bool m_backendCapabilitiesInitialized = false;
             SurfaceKind m_eglSurfaceKind = SurfaceKind::None;
-            UnorderedMap<std::thread::id, Bool> m_eglCurrentThreads;
+            UnorderedMap<std::thread::id, EGLCurrentState> m_eglCurrentThreads;
         };
     } // namespace MG_Backend
 } // namespace MobileGL

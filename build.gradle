@@ -1,5 +1,9 @@
 apply plugin: 'com.android.library'
 
+def mobileGlLogActiveLevel = {
+    (rootProject.findProperty('mobilegl.logLevel') ?: System.getenv('MOBILEGL_LOG_ACTIVE_LEVEL') ?: 'MOBILEGL_LOG_LEVEL_INFO') as String
+}
+
 android {
     namespace 'top.mobilegl.mobilegl'
     compileSdk 34
@@ -9,11 +13,11 @@ android {
 
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
 
-//         externalNativeBuild {
-//             cmake {
-//                 arguments "-DMOBILEGL_ENABLE_TRACY=ON"
-//             }
-//         }
+        externalNativeBuild {
+            cmake {
+                arguments "-DMOBILEGL_LOG_ACTIVE_LEVEL=${mobileGlLogActiveLevel()}"
+            }
+        }
     }
 
     buildTypes {

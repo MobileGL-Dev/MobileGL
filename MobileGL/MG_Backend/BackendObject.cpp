@@ -33,7 +33,8 @@ namespace MobileGL::MG_Backend {
         };
 
         Bool IsReleaseCurrentRequest(EGLDisplay dpy, EGLSurface draw, EGLSurface read, EGLContext ctx) {
-            return dpy == EGL_NO_DISPLAY && draw == EGL_NO_SURFACE && read == EGL_NO_SURFACE && ctx == EGL_NO_CONTEXT;
+            (void)dpy;
+            return draw == EGL_NO_SURFACE && read == EGL_NO_SURFACE && ctx == EGL_NO_CONTEXT;
         }
 
         std::thread::id CurrentThreadKey() {
@@ -296,7 +297,12 @@ namespace MobileGL::MG_Backend {
             m_backendCapabilitiesInitialized = true;
         }
 
-        m_eglCurrentThreads[threadKey] = true;
+        m_eglCurrentThreads[threadKey] = EGLCurrentState{
+            .Display = dpy,
+            .DrawSurface = draw,
+            .ReadSurface = read,
+            .Context = ctx,
+        };
         return true;
     }
 
@@ -314,8 +320,14 @@ namespace MobileGL::MG_Backend {
             MGLOG_E("SwapEGLBuffers failed: EGL display mismatch or not initialized");
             return false;
         }
-        if (m_eglCurrentThreads.find(CurrentThreadKey()) == m_eglCurrentThreads.end()) {
+        const auto currentIt = m_eglCurrentThreads.find(CurrentThreadKey());
+        if (currentIt == m_eglCurrentThreads.end()) {
             MGLOG_E("SwapEGLBuffers failed: no current context attached");
+            return false;
+        }
+        if (currentIt->second.Display != dpy || currentIt->second.DrawSurface != draw ||
+            currentIt->second.Context == EGL_NO_CONTEXT) {
+            MGLOG_E("SwapEGLBuffers failed: draw surface is not current on this thread");
             return false;
         }
         if (!m_eglSurfaceInitialized || draw == EGL_NO_SURFACE) {

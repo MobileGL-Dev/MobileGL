@@ -3222,7 +3222,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         g_Surface = g_EGLFuncs.eglCreateWindowSurface(g_Display, g_Config, window, nullptr);
         if (g_Surface == EGL_NO_SURFACE) return false;
 
-        if (!g_EGLFuncs.eglMakeCurrent(g_Display, g_Surface, g_Surface, g_Context)) return false;
+        if (!MakeCurrent()) return false;
 
         MGLOG_D("EGL context created successfully: display=%p, surface=%p, context=%p. window=%p", g_Display, g_Surface,
                 g_Context, window);
@@ -3237,10 +3237,36 @@ namespace MobileGL::MG_Backend::DirectGLES {
         g_Surface = g_EGLFuncs.eglCreatePbufferSurface(g_Display, g_Config, surfaceAttribs);
         if (g_Surface == EGL_NO_SURFACE) return false;
 
-        if (!g_EGLFuncs.eglMakeCurrent(g_Display, g_Surface, g_Surface, g_Context)) return false;
+        if (!MakeCurrent()) return false;
 
         MGLOG_D("EGL pbuffer context created successfully: display=%p, surface=%p, context=%p. size=%dx%d", g_Display,
                 g_Surface, g_Context, width, height);
+        return true;
+    }
+
+    Bool MakeCurrent() {
+        if (!g_EGLFuncs.eglMakeCurrent || g_Display == EGL_NO_DISPLAY || g_Surface == EGL_NO_SURFACE ||
+            g_Context == EGL_NO_CONTEXT) {
+            MGLOG_E("DirectGLES::MakeCurrent failed: EGL display/surface/context is not initialized");
+            return false;
+        }
+        if (!g_EGLFuncs.eglMakeCurrent(g_Display, g_Surface, g_Surface, g_Context)) {
+            const EGLint error = g_EGLFuncs.eglGetError ? g_EGLFuncs.eglGetError() : EGL_SUCCESS;
+            MGLOG_E("DirectGLES::MakeCurrent failed: native eglMakeCurrent returned error 0x%04x", error);
+            return false;
+        }
+        return true;
+    }
+
+    Bool ReleaseCurrent() {
+        if (!g_EGLFuncs.eglMakeCurrent || g_Display == EGL_NO_DISPLAY) {
+            return true;
+        }
+        if (!g_EGLFuncs.eglMakeCurrent(g_Display, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT)) {
+            const EGLint error = g_EGLFuncs.eglGetError ? g_EGLFuncs.eglGetError() : EGL_SUCCESS;
+            MGLOG_E("DirectGLES::ReleaseCurrent failed: native eglMakeCurrent returned error 0x%04x", error);
+            return false;
+        }
         return true;
     }
 

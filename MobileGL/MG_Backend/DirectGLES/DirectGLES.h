@@ -93,6 +93,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
     void ShaderStorageBlockBinding(GLuint program, GLuint storageBlockIndex, GLuint storageBlockBinding);
     Bool InitWindowSurface(NativeWindowType window);
     Bool InitPbufferSurface(EGLint width, EGLint height);
+    Bool MakeCurrent();
+    Bool ReleaseCurrent();
     void Present();
     void SetEGLFuncsTable(const MG_External::EGLFunctionsTable& eglFuncs);
     void SetGLESFuncsTable(const MG_External::GLESFunctionsTable& glesFuncs);
