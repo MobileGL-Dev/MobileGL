@@ -38,6 +38,21 @@ case "${case_name}" in
   minecraft-1.21.4-fabric-sodium-in-world)
     add_standard_case "0000923340"
     ;;
+  minecraft-1.21.4-fabric-rei-inventory-normal-world)
+    add_standard_case "0000734465"
+    ;;
+  minecraft-1.21.4-fabric-xaero-minimap-in-world-normal-world)
+    add_standard_case "0000457190"
+    ;;
+  minecraft-1.21.4-fabric-xaero-world-map-in-world-normal-world)
+    add_standard_case "0000573061"
+    ;;
+  minecraft-1.21.4-fabric-journeymap-in-world-normal-world)
+    add_standard_case "0000641975"
+    ;;
+  minecraft-1.21.4-fabric-modernui-inventory-normal-world)
+    add_standard_case "0000727926"
+    ;;
   minecraft-1.21.4-fabric-iris-bsl-in-world)
     add_standard_case "0000110725"
     ;;
@@ -80,6 +95,12 @@ case "${case_name}" in
     ;;
   minecraft-1.21.4-fabric-iris-photon-v1.1-in-world)
     add_standard_case "0000159866"
+    ;;
+  minecraft-1.21.4-fabric-iris-photon-v1.3b-in-world)
+    add_standard_case "0000172128"
+    ;;
+  minecraft-1.21.4-fabric-iris-derivative-main-d24.4.14-in-world)
+    add_standard_case "0000145353"
     ;;
   *)
     echo "unknown trace case: ${case_name}" >&2
