@@ -480,8 +480,8 @@ add_trace_replay_test_for_backends(minecraft-1.21.4-fabric-modernui-inventory
 add_trace_replay_test_for_backends(minecraft-1.21.4-fabric-rei-inventory-normal-world
         TRACE_ARCHIVE ${MOBILEGL_TRACE_ROOT}/fixtures/minecraft-1.21.4-fabric-rei-inventory-normal-world.tgz
         TRACE_FILE trace.trace
-        GOLDEN ${MOBILEGL_TRACE_ROOT}/fixtures/minecraft-1.21.4-fabric-rei-inventory-normal-world.0006599207.png
-        TARGET_CALL 6599207
+        GOLDEN ${MOBILEGL_TRACE_ROOT}/fixtures/minecraft-1.21.4-fabric-rei-inventory-normal-world.0000734465.png
+        TARGET_CALL 734465
         WIDTH 854
         HEIGHT 480
 )
@@ -489,8 +489,8 @@ add_trace_replay_test_for_backends(minecraft-1.21.4-fabric-rei-inventory-normal-
 add_trace_replay_test_for_backends(minecraft-1.21.4-fabric-xaero-minimap-in-world-normal-world
         TRACE_ARCHIVE ${MOBILEGL_TRACE_ROOT}/fixtures/minecraft-1.21.4-fabric-xaero-minimap-in-world-normal-world.tgz
         TRACE_FILE trace.trace
-        GOLDEN ${MOBILEGL_TRACE_ROOT}/fixtures/minecraft-1.21.4-fabric-xaero-minimap-in-world-normal-world.0003893975.png
-        TARGET_CALL 3893975
+        GOLDEN ${MOBILEGL_TRACE_ROOT}/fixtures/minecraft-1.21.4-fabric-xaero-minimap-in-world-normal-world.0000457190.png
+        TARGET_CALL 457190
         WIDTH 854
         HEIGHT 480
         CROP_X 0
@@ -502,8 +502,8 @@ add_trace_replay_test_for_backends(minecraft-1.21.4-fabric-xaero-minimap-in-worl
 add_trace_replay_test_for_backends(minecraft-1.21.4-fabric-xaero-world-map-in-world-normal-world
         TRACE_ARCHIVE ${MOBILEGL_TRACE_ROOT}/fixtures/minecraft-1.21.4-fabric-xaero-world-map-in-world-normal-world.tgz
         TRACE_FILE trace.trace
-        GOLDEN ${MOBILEGL_TRACE_ROOT}/fixtures/minecraft-1.21.4-fabric-xaero-world-map-in-world-normal-world.0002099794.png
-        TARGET_CALL 2099794
+        GOLDEN ${MOBILEGL_TRACE_ROOT}/fixtures/minecraft-1.21.4-fabric-xaero-world-map-in-world-normal-world.0000573061.png
+        TARGET_CALL 573061
         WIDTH 854
         HEIGHT 480
 )
@@ -511,8 +511,8 @@ add_trace_replay_test_for_backends(minecraft-1.21.4-fabric-xaero-world-map-in-wo
 add_trace_replay_test_for_backends(minecraft-1.21.4-fabric-journeymap-in-world-normal-world
         TRACE_ARCHIVE ${MOBILEGL_TRACE_ROOT}/fixtures/minecraft-1.21.4-fabric-journeymap-in-world-normal-world.tgz
         TRACE_FILE trace.trace
-        GOLDEN ${MOBILEGL_TRACE_ROOT}/fixtures/minecraft-1.21.4-fabric-journeymap-in-world-normal-world.0005099482.png
-        TARGET_CALL 5099482
+        GOLDEN ${MOBILEGL_TRACE_ROOT}/fixtures/minecraft-1.21.4-fabric-journeymap-in-world-normal-world.0000641975.png
+        TARGET_CALL 641975
         WIDTH 854
         HEIGHT 480
 )
@@ -520,8 +520,8 @@ add_trace_replay_test_for_backends(minecraft-1.21.4-fabric-journeymap-in-world-n
 add_trace_replay_test_for_backends(minecraft-1.21.4-fabric-modernui-inventory-normal-world
         TRACE_ARCHIVE ${MOBILEGL_TRACE_ROOT}/fixtures/minecraft-1.21.4-fabric-modernui-inventory-normal-world.tgz
         TRACE_FILE trace.trace
-        GOLDEN ${MOBILEGL_TRACE_ROOT}/fixtures/minecraft-1.21.4-fabric-modernui-inventory-normal-world.0008585354.png
-        TARGET_CALL 8585354
+        GOLDEN ${MOBILEGL_TRACE_ROOT}/fixtures/minecraft-1.21.4-fabric-modernui-inventory-normal-world.0000727926.png
+        TARGET_CALL 727926
         WIDTH 854
         HEIGHT 480
 )

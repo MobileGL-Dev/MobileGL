@@ -299,8 +299,8 @@ jobs:
           - name: minecraft-1.21.4-fabric-rei-inventory-normal-world
             trace_archive: tools/trace_replay/fixtures/minecraft-1.21.4-fabric-rei-inventory-normal-world.tgz
             trace_file: trace.trace
-            golden: tools/trace_replay/fixtures/minecraft-1.21.4-fabric-rei-inventory-normal-world.0006599207.png
-            target_call: 6599207
+            golden: tools/trace_replay/fixtures/minecraft-1.21.4-fabric-rei-inventory-normal-world.0000734465.png
+            target_call: 734465
             width: 854
             height: 480
             crop_x: 0
@@ -311,8 +311,8 @@ jobs:
           - name: minecraft-1.21.4-fabric-xaero-minimap-in-world-normal-world
             trace_archive: tools/trace_replay/fixtures/minecraft-1.21.4-fabric-xaero-minimap-in-world-normal-world.tgz
             trace_file: trace.trace
-            golden: tools/trace_replay/fixtures/minecraft-1.21.4-fabric-xaero-minimap-in-world-normal-world.0003893975.png
-            target_call: 3893975
+            golden: tools/trace_replay/fixtures/minecraft-1.21.4-fabric-xaero-minimap-in-world-normal-world.0000457190.png
+            target_call: 457190
             width: 854
             height: 480
             crop_x: 0
@@ -323,8 +323,8 @@ jobs:
           - name: minecraft-1.21.4-fabric-xaero-world-map-in-world-normal-world
             trace_archive: tools/trace_replay/fixtures/minecraft-1.21.4-fabric-xaero-world-map-in-world-normal-world.tgz
             trace_file: trace.trace
-            golden: tools/trace_replay/fixtures/minecraft-1.21.4-fabric-xaero-world-map-in-world-normal-world.0002099794.png
-            target_call: 2099794
+            golden: tools/trace_replay/fixtures/minecraft-1.21.4-fabric-xaero-world-map-in-world-normal-world.0000573061.png
+            target_call: 573061
             width: 854
             height: 480
             crop_x: 0
@@ -335,8 +335,8 @@ jobs:
           - name: minecraft-1.21.4-fabric-journeymap-in-world-normal-world
             trace_archive: tools/trace_replay/fixtures/minecraft-1.21.4-fabric-journeymap-in-world-normal-world.tgz
             trace_file: trace.trace
-            golden: tools/trace_replay/fixtures/minecraft-1.21.4-fabric-journeymap-in-world-normal-world.0005099482.png
-            target_call: 5099482
+            golden: tools/trace_replay/fixtures/minecraft-1.21.4-fabric-journeymap-in-world-normal-world.0000641975.png
+            target_call: 641975
             width: 854
             height: 480
             crop_x: 0
@@ -347,8 +347,8 @@ jobs:
           - name: minecraft-1.21.4-fabric-modernui-inventory-normal-world
             trace_archive: tools/trace_replay/fixtures/minecraft-1.21.4-fabric-modernui-inventory-normal-world.tgz
             trace_file: trace.trace
-            golden: tools/trace_replay/fixtures/minecraft-1.21.4-fabric-modernui-inventory-normal-world.0008585354.png
-            target_call: 8585354
+            golden: tools/trace_replay/fixtures/minecraft-1.21.4-fabric-modernui-inventory-normal-world.0000727926.png
+            target_call: 727926
             width: 854
             height: 480
             crop_x: 0
