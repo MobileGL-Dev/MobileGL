@@ -68,6 +68,40 @@ namespace MobileGL {
                 if (color == m_borderColor) return;
 
                 m_borderColor = color;
+                m_borderColorI = IntVec4(static_cast<Int32>(color.x()), static_cast<Int32>(color.y()),
+                                         static_cast<Int32>(color.z()), static_cast<Int32>(color.w()));
+                m_borderColorUI = UintVec4(static_cast<Uint32>(color.x()), static_cast<Uint32>(color.y()),
+                                           static_cast<Uint32>(color.z()), static_cast<Uint32>(color.w()));
+                ++m_textureParamsVersion;
+            }
+
+            const IntVec4& TextureObjectBase::GetBorderColorI() const {
+                return m_borderColorI;
+            }
+
+            void TextureObjectBase::SetBorderColorI(const IntVec4& color) {
+                if (color == m_borderColorI) return;
+
+                m_borderColorI = color;
+                m_borderColorUI = UintVec4(static_cast<Uint32>(color.x()), static_cast<Uint32>(color.y()),
+                                           static_cast<Uint32>(color.z()), static_cast<Uint32>(color.w()));
+                m_borderColor = FloatVec4(static_cast<Float>(color.x()), static_cast<Float>(color.y()),
+                                          static_cast<Float>(color.z()), static_cast<Float>(color.w()));
+                ++m_textureParamsVersion;
+            }
+
+            const UintVec4& TextureObjectBase::GetBorderColorUI() const {
+                return m_borderColorUI;
+            }
+
+            void TextureObjectBase::SetBorderColorUI(const UintVec4& color) {
+                if (color == m_borderColorUI) return;
+
+                m_borderColorUI = color;
+                m_borderColorI = IntVec4(static_cast<Int32>(color.x()), static_cast<Int32>(color.y()),
+                                         static_cast<Int32>(color.z()), static_cast<Int32>(color.w()));
+                m_borderColor = FloatVec4(static_cast<Float>(color.x()), static_cast<Float>(color.y()),
+                                          static_cast<Float>(color.z()), static_cast<Float>(color.w()));
                 ++m_textureParamsVersion;
             }
 

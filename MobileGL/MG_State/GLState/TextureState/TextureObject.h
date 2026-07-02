@@ -32,6 +32,10 @@ namespace MobileGL::MG_State::GLState {
         virtual Uint GetExternalIndex() const = 0;
         virtual const FloatVec4& GetBorderColor() const = 0;
         virtual void SetBorderColor(const FloatVec4& color) = 0;
+        virtual const IntVec4& GetBorderColorI() const = 0;
+        virtual void SetBorderColorI(const IntVec4& color) = 0;
+        virtual const UintVec4& GetBorderColorUI() const = 0;
+        virtual void SetBorderColorUI(const UintVec4& color) = 0;
         virtual TextureSwizzleParam GetSwizzleParam(TextureSwizzleParam param) const = 0;
         virtual void SetSwizzleParam(TextureSwizzleParam param, TextureSwizzleParam value) = 0;
         virtual void SetSwizzleParamRGBA(const Vec4<TextureSwizzleParam>& values) = 0;
@@ -64,6 +68,10 @@ namespace MobileGL::MG_State::GLState {
         Uint GetExternalIndex() const override;
         const FloatVec4& GetBorderColor() const override;
         void SetBorderColor(const FloatVec4& color) override;
+        const IntVec4& GetBorderColorI() const override;
+        void SetBorderColorI(const IntVec4& color) override;
+        const UintVec4& GetBorderColorUI() const override;
+        void SetBorderColorUI(const UintVec4& color) override;
         TextureSwizzleParam GetSwizzleParam(TextureSwizzleParam param) const override;
         const Vec4<TextureSwizzleParam>& GetAllSwizzleParams() const override;
         void SetSwizzleParam(TextureSwizzleParam param, TextureSwizzleParam value) override;
@@ -87,6 +95,8 @@ namespace MobileGL::MG_State::GLState {
         TextureInternalFormat m_internalFormat = TextureInternalFormat::Unknown;
         SharedPtr<SamplerObject> m_sampler = nullptr;
         FloatVec4 m_borderColor = {0.0f, 0.0f, 0.0f, 0.0f};
+        IntVec4 m_borderColorI = {0, 0, 0, 0};
+        UintVec4 m_borderColorUI = {0, 0, 0, 0};
         Vec4<TextureSwizzleParam> m_swizzleParams = {TextureSwizzleParam::Red, TextureSwizzleParam::Green,
                                                      TextureSwizzleParam::Blue, TextureSwizzleParam::Alpha};
         UintVec2 m_levelRange = {0, 1000};

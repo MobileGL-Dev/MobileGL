@@ -31,7 +31,7 @@ namespace MobileGL::MG_Impl::GLImpl {
     static SharedPtr<MG_State::GLState::ITextureObject> nullTextureObject;
     static UnorderedMap<Uint, Bool> g_autoGenerateMipmapByTextureId;
 
-    void GetTexParameteriv_State(GLenum target, GLenum pname, GLint* params);
+    Bool GetTexParameteriv_State(GLenum target, GLenum pname, GLint* params);
 
     namespace {
         void SetTextureBorderColorFromFloats(const SharedPtr<MG_State::GLState::ITextureObject>& textureObject,
@@ -43,6 +43,16 @@ namespace MobileGL::MG_Impl::GLImpl {
                                            const GLint* params) {
             textureObject->SetBorderColor(FloatVec4(static_cast<Float>(params[0]), static_cast<Float>(params[1]),
                                                     static_cast<Float>(params[2]), static_cast<Float>(params[3])));
+        }
+
+        void SetTextureBorderColorFromIntegerInts(const SharedPtr<MG_State::GLState::ITextureObject>& textureObject,
+                                                  const GLint* params) {
+            textureObject->SetBorderColorI(IntVec4(params[0], params[1], params[2], params[3]));
+        }
+
+        void SetTextureBorderColorFromUnsignedInts(const SharedPtr<MG_State::GLState::ITextureObject>& textureObject,
+                                                   const GLuint* params) {
+            textureObject->SetBorderColorUI(UintVec4(params[0], params[1], params[2], params[3]));
         }
 
         Bool SetTextureSwizzleParamsFromInts(const SharedPtr<MG_State::GLState::ITextureObject>& textureObject,
@@ -993,7 +1003,7 @@ namespace MobileGL::MG_Impl::GLImpl {
             TextureTarget textureTarget = MG_Util::ConvertGLEnumToTextureTarget(target);
             auto& textureObject = GetTextureObjectByTarget(textureUploadTarget, textureTarget);
             if (!textureObject) return;
-            SetTextureBorderColorFromInts(textureObject, params);
+            SetTextureBorderColorFromIntegerInts(textureObject, params);
             break;
         }
         case GL_TEXTURE_SWIZZLE_RGBA: {
@@ -1021,8 +1031,7 @@ namespace MobileGL::MG_Impl::GLImpl {
             TextureTarget textureTarget = MG_Util::ConvertGLEnumToTextureTarget(target);
             auto& textureObject = GetTextureObjectByTarget(textureUploadTarget, textureTarget);
             if (!textureObject) return;
-            textureObject->SetBorderColor(FloatVec4(static_cast<Float>(params[0]), static_cast<Float>(params[1]),
-                                                    static_cast<Float>(params[2]), static_cast<Float>(params[3])));
+            SetTextureBorderColorFromUnsignedInts(textureObject, params);
             break;
         }
         case GL_TEXTURE_SWIZZLE_RGBA: {
@@ -1499,8 +1508,28 @@ namespace MobileGL::MG_Impl::GLImpl {
     void GetTexParameterIuiv_State(GLenum target, GLenum pname, GLuint* params) {
         if (params == nullptr) return;
 
+        if (pname == GL_TEXTURE_BORDER_COLOR) {
+            TextureUploadTarget textureUploadTarget = MG_Util::ConvertGLEnumToTextureUploadTarget(target);
+            TextureTarget textureTarget = MG_Util::ConvertGLEnumToTextureTarget(target);
+            auto& activeUnit = MG_State::pGLContext->GetTextureUnitObject(MG_State::pGLContext->GetActiveTextureUnit());
+            auto& bindingSlot = activeUnit.GetBindingSlot(textureTarget);
+            Bool isProxy = TextureImpl::IsProxyTextureTarget(textureUploadTarget);
+            auto& textureObject =
+                isProxy ? TextureImpl::pProxyTextureManager->GetProxyTextureObject(textureUploadTarget)
+                        : bindingSlot.GetBoundObject();
+
+            if (!TextureImpl::ValidateTextureObject(textureObject)) return;
+
+            const auto& borderColor = textureObject->GetBorderColorUI();
+            params[0] = borderColor.x();
+            params[1] = borderColor.y();
+            params[2] = borderColor.z();
+            params[3] = borderColor.w();
+            return;
+        }
+
         GLint signedParams[4] = {0, 0, 0, 0};
-        GetTexParameteriv_State(target, pname, signedParams);
+        if (!GetTexParameteriv_State(target, pname, signedParams)) return;
         const int componentCount = pname == GL_TEXTURE_BORDER_COLOR || pname == GL_TEXTURE_SWIZZLE_RGBA ? 4 : 1;
         for (int i = 0; i < componentCount; ++i) {
             params[i] = static_cast<GLuint>(signedParams[i]);
@@ -1508,10 +1537,32 @@ namespace MobileGL::MG_Impl::GLImpl {
     }
 
     void GetTexParameterIiv_State(GLenum target, GLenum pname, GLint* params) {
+        if (params == nullptr) return;
+
+        if (pname == GL_TEXTURE_BORDER_COLOR) {
+            TextureUploadTarget textureUploadTarget = MG_Util::ConvertGLEnumToTextureUploadTarget(target);
+            TextureTarget textureTarget = MG_Util::ConvertGLEnumToTextureTarget(target);
+            auto& activeUnit = MG_State::pGLContext->GetTextureUnitObject(MG_State::pGLContext->GetActiveTextureUnit());
+            auto& bindingSlot = activeUnit.GetBindingSlot(textureTarget);
+            Bool isProxy = TextureImpl::IsProxyTextureTarget(textureUploadTarget);
+            auto& textureObject =
+                isProxy ? TextureImpl::pProxyTextureManager->GetProxyTextureObject(textureUploadTarget)
+                        : bindingSlot.GetBoundObject();
+
+            if (!TextureImpl::ValidateTextureObject(textureObject)) return;
+
+            const auto& borderColor = textureObject->GetBorderColorI();
+            params[0] = borderColor.x();
+            params[1] = borderColor.y();
+            params[2] = borderColor.z();
+            params[3] = borderColor.w();
+            return;
+        }
+
         GetTexParameteriv_State(target, pname, params);
     }
 
-    void GetTexParameteriv_State(GLenum target, GLenum pname, GLint* params) {
+    Bool GetTexParameteriv_State(GLenum target, GLenum pname, GLint* params) {
         // ======================= Converting ================================
         TextureUploadTarget textureUploadTarget = MG_Util::ConvertGLEnumToTextureUploadTarget(target);
         TextureTarget textureTarget = MG_Util::ConvertGLEnumToTextureTarget(target);
@@ -1524,7 +1575,7 @@ namespace MobileGL::MG_Impl::GLImpl {
             isProxy ? TextureImpl::pProxyTextureManager->GetProxyTextureObject(textureUploadTarget)
                     : bindingSlot.GetBoundObject();
 
-        if (!TextureImpl::ValidateTextureObject(textureObject)) return;
+        if (!TextureImpl::ValidateTextureObject(textureObject)) return false;
 
         switch (pname) {
         case GL_TEXTURE_MAG_FILTER:
@@ -1633,8 +1684,10 @@ namespace MobileGL::MG_Impl::GLImpl {
             MG_State::pGLContext->RecordError(ErrorCode::InvalidEnum,
                                               MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", "GetTexParameteriv_State",
                                                                            "pname is not a valid texture parameter."));
-            return;
+            return false;
         }
+
+        return true;
     }
 
     void GetTexParameterfv_State(GLenum target, GLenum pname, GLfloat* params) {
