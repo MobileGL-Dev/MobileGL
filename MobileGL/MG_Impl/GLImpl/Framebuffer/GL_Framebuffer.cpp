@@ -64,6 +64,15 @@ namespace MobileGL::MG_Impl::GLImpl {
                    HasCompleteRenderbufferAttachment(framebufferObject);
         }
 
+        Bool HasDefinedAttachment(const MG_State::GLState::FramebufferObject& framebufferObject) {
+            for (const auto& attachment : framebufferObject.GetAllAttachmentObjects()) {
+                if (attachment.IsValid() && !attachment.IsEmpty()) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
         void RecordUnsupportedFramebufferTextureAttachmentError(const char* functionName, const char* detail) {
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidOperation,
@@ -1199,7 +1208,9 @@ namespace MobileGL::MG_Impl::GLImpl {
         //       additional GL_FRAMEBUFFER_UNSUPPORTED cases, GL_FRAMEBUFFER_INCOMPLETE_MULTISAMPLE,
         //       GL_FRAMEBUFFER_INCOMPLETE_LAYER_TARGETS
         if (!framebufferObject->CheckCompleteness()) {
-            return GL_FRAMEBUFFER_INCOMPLETE_MISSING_ATTACHMENT;
+            return HasDefinedAttachment(*framebufferObject) ?
+                GL_FRAMEBUFFER_INCOMPLETE_ATTACHMENT :
+                GL_FRAMEBUFFER_INCOMPLETE_MISSING_ATTACHMENT;
         }
         if (IsActiveBackendDirectVulkan() &&
             IsUnsupportedFramebufferForDirectVulkan(*framebufferObject)) {
@@ -1222,7 +1233,9 @@ namespace MobileGL::MG_Impl::GLImpl {
         if (!framebufferObject) return GL_FRAMEBUFFER_UNDEFINED;
 
         if (!framebufferObject->CheckCompleteness()) {
-            return GL_FRAMEBUFFER_INCOMPLETE_MISSING_ATTACHMENT;
+            return HasDefinedAttachment(*framebufferObject) ?
+                GL_FRAMEBUFFER_INCOMPLETE_ATTACHMENT :
+                GL_FRAMEBUFFER_INCOMPLETE_MISSING_ATTACHMENT;
         }
         if (IsActiveBackendDirectVulkan() &&
             IsUnsupportedFramebufferForDirectVulkan(*framebufferObject)) {
