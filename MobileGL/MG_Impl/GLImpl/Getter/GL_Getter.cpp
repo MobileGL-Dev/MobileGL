@@ -39,7 +39,9 @@ namespace MobileGL::MG_Impl::GLImpl {
 
         constexpr GLint kFrontendMaxComputeUniformComponents = 1024;
         constexpr GLint kFrontendMaxComputeAtomicCounters = 8;
-        constexpr GLint kFrontendMaxComputeAtomicCounterBuffers = 1;
+        constexpr GLint kFrontendMaxComputeAtomicCounterBuffers = 8;
+        constexpr GLint kFrontendMaxComputeSharedMemorySize = 32768;
+        constexpr GLint kFrontendMaxComputeWorkGroupInvocations = 1024;
         constexpr GLint kFrontendMaxCombinedAtomicCounters = 8;
         constexpr GLint kFrontendMaxFragmentAtomicCounters = 8;
         constexpr GLint kFrontendMaxGeometryAtomicCounters = 0;
@@ -74,6 +76,14 @@ namespace MobileGL::MG_Impl::GLImpl {
         constexpr GLint kFrontendMinUniformBufferBindings = 36;
         constexpr GLint kFrontendSubpixelBits = 4;
         constexpr GLint kFrontendMaxSamples = 4;
+
+        constexpr GLint GetMinComputeWorkGroupCount(GLuint index) {
+            return index < 3 ? 65535 : 0;
+        }
+
+        constexpr GLint GetMinComputeWorkGroupSize(GLuint index) {
+            return index < 2 ? 1024 : (index == 2 ? 64 : 0);
+        }
 
         GLint GetMaxCombinedUniformComponents(GLint maxDefaultUniformComponents, GLint maxUniformBlocks,
                                               GLint maxUniformBlockSizeBytes) {
@@ -622,6 +632,27 @@ namespace MobileGL::MG_Impl::GLImpl {
         }
 
         auto getIntegeri = MG_Backend::gBackendFunctionsTable.GL.GetIntegeri_v;
+        if (target == GL_MAX_COMPUTE_WORK_GROUP_COUNT || target == GL_MAX_COMPUTE_WORK_GROUP_SIZE) {
+            if (index >= 3) {
+                *data = 0;
+                MG_State::pGLContext->RecordError(
+                    ErrorCode::InvalidValue,
+                    MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
+                                                 "Compute work group index is out of range."));
+                return;
+            }
+
+            const GLint minimum = target == GL_MAX_COMPUTE_WORK_GROUP_COUNT
+                ? GetMinComputeWorkGroupCount(index)
+                : GetMinComputeWorkGroupSize(index);
+            GLint backendValue = 0;
+            if (getIntegeri) {
+                getIntegeri(target, index, &backendValue);
+            }
+            *data = std::max(backendValue, minimum);
+            return;
+        }
+
         if (!getIntegeri) {
             *data = 0;
             MG_State::pGLContext->RecordError(
@@ -847,6 +878,9 @@ namespace MobileGL::MG_Impl::GLImpl {
             return;
         case GL_MAX_COMPUTE_ATOMIC_COUNTER_BUFFERS:
             *params = kFrontendMaxComputeAtomicCounterBuffers;
+            return;
+        case GL_MAX_COMPUTE_SHARED_MEMORY_SIZE:
+            *params = kFrontendMaxComputeSharedMemorySize;
             return;
         case GL_DISPATCH_INDIRECT_BUFFER_BINDING: {
             auto& obj = MG_State::pGLContext->GetBufferBindingSlot(BufferTarget::DispatchIndirect).GetBoundObject();
@@ -1604,7 +1638,8 @@ namespace MobileGL::MG_Impl::GLImpl {
                                                       dynamicParameters.MaxUniformBlockSize);
             break;
         case GL_MAX_COMPUTE_WORK_GROUP_INVOCATIONS:
-            *params = dynamicParameters.MaxComputeWorkGroupInvocations;
+            *params = std::max(dynamicParameters.MaxComputeWorkGroupInvocations,
+                               kFrontendMaxComputeWorkGroupInvocations);
             break;
         case GL_MAX_COMPUTE_WORK_GROUP_COUNT:
             GetIntegeri_v(GL_MAX_COMPUTE_WORK_GROUP_COUNT, 0, &params[0]);
