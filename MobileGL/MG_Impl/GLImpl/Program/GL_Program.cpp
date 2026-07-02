@@ -624,6 +624,13 @@ namespace MobileGL::MG_Impl::GLImpl {
 
         auto& programObject = TryToGetProgramObject(program);
         if (!programObject) return;
+        if (!programObject->GetLinkStatus()) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidOperation,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
+                                             "program " + std::to_string(program) + " is not linked."));
+            return;
+        }
         MG_State::pGLContext->UseProgram(program);
     }
 

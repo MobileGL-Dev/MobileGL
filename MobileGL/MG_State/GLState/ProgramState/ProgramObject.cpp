@@ -171,6 +171,11 @@ namespace MobileGL::MG_State::GLState {
         if (addDefaultFSIfMissingForRenderingPipelineProgram) {
             AddDefaultFragmentShaderIfMissing();
         }
+        if (m_shaders.empty()) {
+            m_infoLog = "No shader objects are attached to program.";
+            MGLOG_E("ProgramObject %u: Link failed - no shader objects attached.", m_externalIndex);
+            return;
+        }
 
         std::sort(m_shaders.begin(), m_shaders.end(),
                   [](const SharedPtr<ShaderObject>& a, const SharedPtr<ShaderObject>& b) {
