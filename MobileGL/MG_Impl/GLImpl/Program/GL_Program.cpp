@@ -72,6 +72,112 @@ namespace MobileGL::MG_Impl::GLImpl {
         return programObject;
     }
 
+    static const SharedPtr<MG_State::GLState::ProgramObject>& TryToGetLinkedProgramForInterfaceQuery(GLuint program,
+                                                                                                     const char* caller) {
+        static const SharedPtr<MG_State::GLState::ProgramObject> nullProgramObject = nullptr;
+        if (!MG_State::pGLContext->ValidateProgramName(program)) {
+            const ErrorCode error = MG_State::pGLContext->ValidateShaderName(program)
+                ? ErrorCode::InvalidOperation
+                : ErrorCode::InvalidValue;
+            MG_State::pGLContext->RecordError(
+                error,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller,
+                                             std::to_string(program) + " is not a linked program object."));
+            return nullProgramObject;
+        }
+
+        auto& programObject = MG_State::pGLContext->GetProgramObject(program);
+        if (!programObject || !programObject->GetLinkStatus()) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidOperation,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller,
+                                             std::to_string(program) + " is not a linked program object."));
+            return nullProgramObject;
+        }
+        return programObject;
+    }
+
+    static bool IsProgramInterfaceEnum(GLenum programInterface) {
+        switch (programInterface) {
+        case GL_UNIFORM:
+        case GL_UNIFORM_BLOCK:
+        case GL_PROGRAM_INPUT:
+        case GL_PROGRAM_OUTPUT:
+        case GL_BUFFER_VARIABLE:
+        case GL_SHADER_STORAGE_BLOCK:
+        case GL_ATOMIC_COUNTER_BUFFER:
+        case GL_TRANSFORM_FEEDBACK_VARYING:
+        case GL_VERTEX_SUBROUTINE:
+        case GL_TESS_CONTROL_SUBROUTINE:
+        case GL_TESS_EVALUATION_SUBROUTINE:
+        case GL_GEOMETRY_SUBROUTINE:
+        case GL_FRAGMENT_SUBROUTINE:
+        case GL_COMPUTE_SUBROUTINE:
+        case GL_VERTEX_SUBROUTINE_UNIFORM:
+        case GL_TESS_CONTROL_SUBROUTINE_UNIFORM:
+        case GL_TESS_EVALUATION_SUBROUTINE_UNIFORM:
+        case GL_GEOMETRY_SUBROUTINE_UNIFORM:
+        case GL_FRAGMENT_SUBROUTINE_UNIFORM:
+        case GL_COMPUTE_SUBROUTINE_UNIFORM:
+            return true;
+        default:
+            return false;
+        }
+    }
+
+    static bool IsSubroutineUniformInterface(GLenum programInterface) {
+        switch (programInterface) {
+        case GL_VERTEX_SUBROUTINE_UNIFORM:
+        case GL_TESS_CONTROL_SUBROUTINE_UNIFORM:
+        case GL_TESS_EVALUATION_SUBROUTINE_UNIFORM:
+        case GL_GEOMETRY_SUBROUTINE_UNIFORM:
+        case GL_FRAGMENT_SUBROUTINE_UNIFORM:
+        case GL_COMPUTE_SUBROUTINE_UNIFORM:
+            return true;
+        default:
+            return false;
+        }
+    }
+
+    static bool ValidateProgramInterfaceivQuery(GLenum programInterface, GLenum pname) {
+        bool valid = IsProgramInterfaceEnum(programInterface);
+        switch (pname) {
+        case GL_ACTIVE_RESOURCES:
+            break;
+        case GL_MAX_NAME_LENGTH:
+            valid = valid && programInterface != GL_ATOMIC_COUNTER_BUFFER;
+            break;
+        case GL_MAX_NUM_ACTIVE_VARIABLES:
+            valid = programInterface == GL_UNIFORM_BLOCK || programInterface == GL_ATOMIC_COUNTER_BUFFER ||
+                    programInterface == GL_SHADER_STORAGE_BLOCK;
+            break;
+        case GL_MAX_NUM_COMPATIBLE_SUBROUTINES:
+            valid = IsSubroutineUniformInterface(programInterface);
+            break;
+        default:
+            valid = false;
+            break;
+        }
+        if (!valid) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidOperation,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
+                                             "Unsupported program interface query."));
+        }
+        return valid;
+    }
+
+    static bool ValidateNamedProgramResourceInterface(GLenum programInterface, const char* caller) {
+        if (!IsProgramInterfaceEnum(programInterface) || programInterface == GL_ATOMIC_COUNTER_BUFFER) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidEnum,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller,
+                                             "Unsupported named program resource interface."));
+            return false;
+        }
+        return true;
+    }
+
     void CopyStr(GLsizei bufSize, GLsizei* length, GLchar* dst, const char* src, GLsizei srcLength) {
         if (bufSize <= 0) {
             if (length) *length = 0;
@@ -1600,8 +1706,9 @@ namespace MobileGL::MG_Impl::GLImpl {
     }
 
     void GetProgramInterfaceiv(GLuint program, GLenum programInterface, GLenum pname, GLint* params) {
-        auto& programObject = TryToGetProgramObject(program);
-        if (!programObject || !programObject->GetLinkStatus()) return;
+        auto& programObject = TryToGetLinkedProgramForInterfaceQuery(program, __func__);
+        if (!programObject) return;
+        if (!ValidateProgramInterfaceivQuery(programInterface, pname)) return;
         auto getProgramInterfaceiv = MG_Backend::gBackendFunctionsTable.GL.GetProgramInterfaceiv;
         if (!getProgramInterfaceiv) {
             MG_State::pGLContext->RecordError(
@@ -1614,8 +1721,10 @@ namespace MobileGL::MG_Impl::GLImpl {
     }
 
     GLuint GetProgramResourceIndex(GLuint program, GLenum programInterface, const GLchar* name) {
-        auto& programObject = TryToGetProgramObject(program);
-        if (!programObject || !programObject->GetLinkStatus()) return GL_INVALID_INDEX;
+        auto& programObject = TryToGetLinkedProgramForInterfaceQuery(program, __func__);
+        if (!programObject) return GL_INVALID_INDEX;
+        if (!ValidateNamedProgramResourceInterface(programInterface, __func__)) return GL_INVALID_INDEX;
+        if (!name) return GL_INVALID_INDEX;
         auto getProgramResourceIndex = MG_Backend::gBackendFunctionsTable.GL.GetProgramResourceIndex;
         if (!getProgramResourceIndex) {
             MG_State::pGLContext->RecordError(
@@ -1629,8 +1738,9 @@ namespace MobileGL::MG_Impl::GLImpl {
 
     void GetProgramResourceName(GLuint program, GLenum programInterface, GLuint index, GLsizei bufSize, GLsizei* length,
                                 GLchar* name) {
-        auto& programObject = TryToGetProgramObject(program);
-        if (!programObject || !programObject->GetLinkStatus()) return;
+        auto& programObject = TryToGetLinkedProgramForInterfaceQuery(program, __func__);
+        if (!programObject) return;
+        if (!ValidateNamedProgramResourceInterface(programInterface, __func__)) return;
         if (bufSize < 0) {
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidValue,
@@ -1650,8 +1760,8 @@ namespace MobileGL::MG_Impl::GLImpl {
 
     void GetProgramResourceiv(GLuint program, GLenum programInterface, GLuint index, GLsizei propCount,
                               const GLenum* props, GLsizei bufSize, GLsizei* length, GLint* params) {
-        auto& programObject = TryToGetProgramObject(program);
-        if (!programObject || !programObject->GetLinkStatus()) return;
+        auto& programObject = TryToGetLinkedProgramForInterfaceQuery(program, __func__);
+        if (!programObject) return;
         if (propCount < 0 || bufSize < 0) {
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidValue, MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
@@ -1670,8 +1780,8 @@ namespace MobileGL::MG_Impl::GLImpl {
     }
 
     GLint GetProgramResourceLocation(GLuint program, GLenum programInterface, const GLchar* name) {
-        auto& programObject = TryToGetProgramObject(program);
-        if (!programObject || !programObject->GetLinkStatus()) return -1;
+        auto& programObject = TryToGetLinkedProgramForInterfaceQuery(program, __func__);
+        if (!programObject) return -1;
         auto getProgramResourceLocation = MG_Backend::gBackendFunctionsTable.GL.GetProgramResourceLocation;
         if (!getProgramResourceLocation) {
             MG_State::pGLContext->RecordError(
@@ -1684,8 +1794,8 @@ namespace MobileGL::MG_Impl::GLImpl {
     }
 
     GLint GetProgramResourceLocationIndex(GLuint program, GLenum programInterface, const GLchar* name) {
-        auto& programObject = TryToGetProgramObject(program);
-        if (!programObject || !programObject->GetLinkStatus()) return -1;
+        auto& programObject = TryToGetLinkedProgramForInterfaceQuery(program, __func__);
+        if (!programObject) return -1;
         auto getProgramResourceLocationIndex = MG_Backend::gBackendFunctionsTable.GL.GetProgramResourceLocationIndex;
         if (!getProgramResourceLocationIndex) return -1;
         return getProgramResourceLocationIndex(program, programInterface, name);
