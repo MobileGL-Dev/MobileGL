@@ -396,9 +396,9 @@ bool ReadPpmRgbAsRgba(const std::string& path, RgbaImage& image, std::string& er
     return true;
 }
 
-std::string SnapshotPathForCall(const Request& request) {
+std::string SnapshotPathForCall(const Request& request, bool usePresentDump) {
     char call[16];
-    snprintf(call, sizeof(call), "%010lld", request.targetCall);
+    snprintf(call, sizeof(call), "%010lld", usePresentDump ? request.targetCall + 1 : request.targetCall);
     return request.outputDir + "/actual." + call + ".png";
 }
 
@@ -486,7 +486,7 @@ bool RunRetrace(const Request& request, bool usePresentDump, Result& result) {
         return false;
     }
 
-    std::string snapshotPath = SnapshotPathForCall(request);
+    std::string snapshotPath = SnapshotPathForCall(request, usePresentDump);
     const std::string presentPath = request.outputDir + "/present.ppm";
     const bool hasSnapshot = Exists(snapshotPath);
     const bool hasPresentDump = usePresentDump && Exists(presentPath);

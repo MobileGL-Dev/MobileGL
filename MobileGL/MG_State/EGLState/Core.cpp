@@ -701,9 +701,12 @@ namespace MobileGL {
                     return false;
                 }
                 const auto* ctx = TryGetContext(currentIt->second.Context);
-                return ctx && ctx->ClientAPI == EGL_OPENGL_API &&
-                       ((ctx->OpenGLProfileMask & EGL_CONTEXT_OPENGL_CORE_PROFILE_BIT) ||
-                        ctx->MajorVersion > 3 || (ctx->MajorVersion == 3 && ctx->MinorVersion >= 1));
+                if (!ctx || ctx->ClientAPI != EGL_OPENGL_API ||
+                    (ctx->OpenGLProfileMask & EGL_CONTEXT_OPENGL_COMPATIBILITY_PROFILE_BIT)) {
+                    return false;
+                }
+                return (ctx->OpenGLProfileMask & EGL_CONTEXT_OPENGL_CORE_PROFILE_BIT) ||
+                       ctx->MajorVersion > 3 || (ctx->MajorVersion == 3 && ctx->MinorVersion >= 1);
             }
 
             EGLContext::EGLSurfaceHandle EGLContext::CreateWindowSurface(EGLDisplayHandle display,
