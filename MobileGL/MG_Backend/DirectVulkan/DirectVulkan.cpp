@@ -8,7 +8,9 @@
 
 #include "DirectVulkan.h"
 #include "DirectVulkanResourceState.h"
+#include "MG_Backend/BackendObjects.h"
 #include "MG_State/GLState/Core.h"
+#include "MG_State/GLState/ErrorState/ErrorInfo.h"
 #include "MG_Impl/GLImpl/Framebuffer/GL_Framebuffer.h"
 #include "MG_Util/Miscellany/IndexGenerator.h"
 #include <cstring>
@@ -1115,7 +1117,19 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         auto* programObject = TryGetDirectVulkanProgram(program);
         if (!programObject) return;
         auto& cache = GetProgramResourceCache(*programObject);
+        const Int maxBindings = pActiveBackendObject
+            ? pActiveBackendObject->GetDynamicParameters().MaxShaderStorageBufferBindings
+            : 0;
+        if (storageBlockBinding >= static_cast<GLuint>(maxBindings)) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidValue,
+                MakeUnique<GenericErrorInfo>("DirectVulkan", __func__, "Shader storage binding is out of range."));
+            return;
+        }
         if (storageBlockIndex >= cache.storageBlocks.size()) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidValue,
+                MakeUnique<GenericErrorInfo>("DirectVulkan", __func__, "Shader storage block index is not active."));
             return;
         }
         cache.storageBlocks[storageBlockIndex].binding = storageBlockBinding;
