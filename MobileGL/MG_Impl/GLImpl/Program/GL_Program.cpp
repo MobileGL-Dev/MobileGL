@@ -453,12 +453,12 @@ namespace MobileGL::MG_Impl::GLImpl {
             MGLOG_D("%s: %s = %d", __func__, MG_Util::ConvertGLEnumToString(pname).c_str(), *params);
             break;
         case GL_COMPUTE_WORK_GROUP_SIZE: { // GL >= 4.3
-            if (!programObject->GetLinkStatus()) {
+            if (!programObject->GetLinkStatus() || programObject->GetShaderIndexByStage(ShaderStage::Compute) < 0) {
                 MG_State::pGLContext->RecordError(
                     ErrorCode::InvalidOperation,
                     MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
                                                  std::to_string(program) +
-                                                     " is not a program object that has been linked."));
+                                                     " is not a linked program object with a compute shader."));
                 return;
             }
             params[0] = static_cast<GLint>(programObject->GetComputeLocalSize(0));

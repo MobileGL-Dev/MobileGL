@@ -62,6 +62,40 @@ namespace {
             return glType;
         }
     }
+
+    static bool ComputeShaderDeclaresLocalSize(const MobileGL::String& source) {
+        bool inLineComment = false;
+        bool inBlockComment = false;
+        for (MobileGL::SizeT i = 0; i < source.length(); ++i) {
+            if (inLineComment) {
+                inLineComment = source[i] != '\n';
+                continue;
+            }
+            if (inBlockComment) {
+                if (source[i] == '*' && i + 1 < source.length() && source[i + 1] == '/') {
+                    inBlockComment = false;
+                    ++i;
+                }
+                continue;
+            }
+            if (source[i] == '/' && i + 1 < source.length()) {
+                if (source[i + 1] == '/') {
+                    inLineComment = true;
+                    ++i;
+                    continue;
+                }
+                if (source[i + 1] == '*') {
+                    inBlockComment = true;
+                    ++i;
+                    continue;
+                }
+            }
+            if (source.compare(i, 11, "local_size_") == 0) {
+                return true;
+            }
+        }
+        return false;
+    }
 }
 
 namespace MobileGL::MG_State::GLState {
@@ -170,9 +204,6 @@ namespace MobileGL::MG_State::GLState {
         }
         m_detachedShaders.clear();
 
-        Vector<GLenum> shaderTypes(m_shaders.size());
-        Vector<SharedPtr<glslang::TShader>> shaders(m_shaders.size());
-
         if (addDefaultFSIfMissingForRenderingPipelineProgram) {
             AddDefaultFragmentShaderIfMissing();
         }
@@ -187,6 +218,9 @@ namespace MobileGL::MG_State::GLState {
                       return a->GetShaderStage() < b->GetShaderStage();
                   });
 
+        Vector<GLenum> shaderTypes(m_shaders.size());
+        Vector<SharedPtr<glslang::TShader>> shaders(m_shaders.size());
+
         for (SizeT i = 0; i < m_shaders.size(); i++) {
             shaderTypes[i] = MG_Util::ConvertShaderStageToGLEnum(m_shaders[i]->GetShaderStage());
             MGLOG_D("ProgramObject %u: Preparing shader[%zu] stage %s at %p", m_externalIndex, i,
@@ -199,6 +233,12 @@ namespace MobileGL::MG_State::GLState {
                                         m_shaders[i]->GetShaderSource());
                 MGLOG_E("ProgramObject %u: Link failed - shader[%zu] compile status false. InfoLog:\n%s",
                         m_externalIndex, i, m_infoLog.c_str());
+                return;
+            }
+            if (m_shaders[i]->GetShaderStage() == ShaderStage::Compute &&
+                !ComputeShaderDeclaresLocalSize(m_shaders[i]->GetShaderSource())) {
+                m_infoLog = "Compute shader is missing a local_size layout declaration.";
+                MGLOG_E("ProgramObject %u: Link failed - %s", m_externalIndex, m_infoLog.c_str());
                 return;
             }
             shaders[i] = m_shaders[i]->GetCompiledShader();
