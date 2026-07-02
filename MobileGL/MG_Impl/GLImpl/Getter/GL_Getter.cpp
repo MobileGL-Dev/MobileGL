@@ -1076,16 +1076,10 @@ namespace MobileGL::MG_Impl::GLImpl {
             *params = kFrontendMaxFragmentInputComponents;
             return;
         case GL_MAX_FRAGMENT_IMAGE_UNIFORMS:
-            if (MG_Backend::pActiveBackendObject &&
-                MG_Backend::pActiveBackendObject->GetBackendType() == BackendType::DirectVulkan) {
-                // TODO: Advertise fragment image uniforms on DirectVulkan once image-load-store draw paths do not trap.
-                *params = 0;
-            } else {
-                // TODO: Track per-stage image uniform limits separately instead of reusing the compute/backend stage cap.
-                *params = MG_Backend::pActiveBackendObject
-                              ? MG_Backend::pActiveBackendObject->GetDynamicParameters().MaxComputeImageUniforms
-                              : MG_Backend::DynamicBackendParameters{}.MaxComputeImageUniforms;
-            }
+            // TODO: Track per-stage image uniform limits separately instead of reusing the compute/backend stage cap.
+            *params = MG_Backend::pActiveBackendObject
+                          ? MG_Backend::pActiveBackendObject->GetDynamicParameters().MaxComputeImageUniforms
+                          : MG_Backend::DynamicBackendParameters{}.MaxComputeImageUniforms;
             return;
         case GL_MAX_FRAGMENT_UNIFORM_COMPONENTS:
             *params = kFrontendMaxFragmentUniformComponents;
