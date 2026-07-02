@@ -25,6 +25,11 @@ namespace {
         return bracket == MobileGL::String::npos ? name : name.substr(0, bracket);
     }
 
+    static bool IsBuiltInPipelineOutput(const glslang::TObjectReflection& output) {
+        const auto* type = output.getType();
+        return type && type->getQualifier().builtIn != glslang::EbvNone;
+    }
+
     static int GetVertexInputLocationSpan(GLenum glType) {
         switch (glType) {
         case GL_FLOAT_MAT2:
@@ -645,6 +650,10 @@ namespace MobileGL::MG_State::GLState {
         const Int outputCount = m_program->getNumPipeOutputs();
         for (Int index = 0; index < outputCount; ++index) {
             const auto& output = m_program->getPipeOutput(index);
+            if (IsBuiltInPipelineOutput(output)) {
+                continue;
+            }
+
             const String outputName = StripArrayElementSuffix(output.name);
             const auto explicitLocation = m_explicitFragDataLocation.find(outputName);
             const Int location = explicitLocation != m_explicitFragDataLocation.end()

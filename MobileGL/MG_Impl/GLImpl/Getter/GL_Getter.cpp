@@ -890,6 +890,9 @@ namespace MobileGL::MG_Impl::GLImpl {
         case GL_MAX_DEBUG_GROUP_STACK_DEPTH:
             *params = 0; // debug-group entrypoints are stubbed
             return;
+        case GL_MAX_DEBUG_MESSAGE_LENGTH:
+            *params = 1024; // debug-message entrypoints are stubbed, but KHR_debug requires a valid limit
+            return;
         case GL_DEBUG_GROUP_STACK_DEPTH:
             *params = 0; // debug-group entrypoints are stubbed
             return;
