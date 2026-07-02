@@ -131,6 +131,7 @@ jobs:
   trace-cases:
     name: trace case matrix
     runs-on: ubuntu-latest
+    needs: build
     outputs:
       android: ${{ steps.trace-cases.outputs.android }}
       names: ${{ steps.trace-cases.outputs.names }}

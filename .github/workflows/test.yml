@@ -207,7 +207,10 @@ jobs:
 
   build-retrace:
     runs-on: ubuntu-latest
-    needs: build-linux
+    needs:
+      - build-linux
+      - test
+      - benchmark
     env:
       BUILD_DIR: build-retrace
       CCACHE_BASEDIR: ${{ github.workspace }}
@@ -332,6 +335,9 @@ jobs:
   trace-cases:
     name: trace case matrix
     runs-on: ubuntu-latest
+    needs:
+      - test
+      - benchmark
     outputs:
       names: ${{ steps.trace-cases.outputs.names }}
     steps:
@@ -455,7 +461,7 @@ jobs:
     name: retrace summary
     runs-on: ubuntu-latest
     needs: retrace
-    if: always()
+    if: ${{ always() && needs.retrace.result != 'skipped' }}
 
     steps:
       - name: Checkout repo
