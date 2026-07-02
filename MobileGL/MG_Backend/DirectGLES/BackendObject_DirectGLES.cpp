@@ -660,7 +660,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         return BackendObject::InitializeEGLDisplay(dpy, major, minor);
     }
 
-    Bool BackendObject_DirectGLES::CreateEGLWindowSurface(const WindowHandle& handle) {
+    Bool BackendObject_DirectGLES::CreateEGLWindowSurface(EGLSurface surface, const WindowHandle& handle) {
         const std::lock_guard<std::recursive_mutex> lock(m_eglStateMutex);
         if (!m_initialized) {
             MGLOG_E("DirectGLES backend not initialized");
@@ -675,8 +675,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return false;
         }
 
-        const Bool sameHandle = m_eglSurfaceInitialized && m_eglSurfaceKind == SurfaceKind::Window &&
-                                m_windowHandle.Backend == handle.Backend && m_windowHandle.Handle == handle.Handle;
+        const Bool sameHandle = m_eglSurfaceInitialized && m_eglSurface == surface &&
+                                m_eglSurfaceKind == SurfaceKind::Window && m_windowHandle.Backend == handle.Backend &&
+                                m_windowHandle.Handle == handle.Handle;
         if (sameHandle) {
             return true;
         }
@@ -686,14 +687,18 @@ namespace MobileGL::MG_Backend::DirectGLES {
             ResetEGLRuntimeState();
         }
 
-        return BackendObject::CreateEGLWindowSurface(handle);
+        return BackendObject::CreateEGLWindowSurface(surface, handle);
     }
 
-    Bool BackendObject_DirectGLES::CreateEGLPbufferSurface(EGLint width, EGLint height) {
+    Bool BackendObject_DirectGLES::CreateEGLPbufferSurface(EGLSurface surface, EGLint width, EGLint height) {
         const std::lock_guard<std::recursive_mutex> lock(m_eglStateMutex);
         if (!m_initialized) {
             MGLOG_E("DirectGLES backend not initialized");
             return false;
+        }
+
+        if (m_eglSurfaceInitialized && m_eglSurface == surface && m_eglSurfaceKind == SurfaceKind::Pbuffer) {
+            return true;
         }
 
         if (m_eglSurfaceInitialized) {
@@ -701,7 +706,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             ResetEGLRuntimeState();
         }
 
-        return BackendObject::CreateEGLPbufferSurface(width, height);
+        return BackendObject::CreateEGLPbufferSurface(surface, width, height);
     }
 
     Bool BackendObject_DirectGLES::InitPbufferSurface(EGLint width, EGLint height) {
@@ -747,6 +752,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
     Bool BackendObject_DirectGLES::SwapEGLBuffers(EGLDisplay dpy, EGLSurface draw) {
         return BackendObject::SwapEGLBuffers(dpy, draw);
+    }
+
+    void BackendObject_DirectGLES::ReleaseEGLSurface(EGLSurface surface) {
+        const std::lock_guard<std::recursive_mutex> lock(m_eglStateMutex);
+        if (m_eglSurface == surface) {
+            DestroyEGLContext();
+        }
+        BackendObject::ReleaseEGLSurface(surface);
     }
 
     void BackendObject_DirectGLES::ReleaseEGLResources() {

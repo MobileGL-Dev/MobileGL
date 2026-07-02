@@ -118,24 +118,31 @@ namespace MobileGL::MG_Impl::EGLImpl {
             return EGL_NO_SURFACE;
         }
 
-        auto* backendObject = GetBackendObject(state);
-        if (!backendObject) {
-            MGLOG_E("activeBackendObject not initialized!");
-            return EGL_NO_SURFACE;
-        }
-
         const MG_Backend::WindowHandle windowHandle = {
             .Backend = DetectWindowBackend(),
             .Handle = ToVoidHandle(window),
             .Width = static_cast<Uint32>(std::max<EGLint>(GetAttribValue(attrib_list, EGL_WIDTH, 0), 0)),
             .Height = static_cast<Uint32>(std::max<EGLint>(GetAttribValue(attrib_list, EGL_HEIGHT, 0), 0)),
         };
-        if (!backendObject->CreateEGLWindowSurface(windowHandle)) {
+
+        EGLSurface surface = state->CreateWindowSurface(dpy, config, window, attrib_list);
+        if (surface == EGL_NO_SURFACE) {
+            return EGL_NO_SURFACE;
+        }
+
+        auto* backendObject = GetBackendObject(state);
+        if (!backendObject) {
+            MGLOG_E("activeBackendObject not initialized!");
+            state->DestroySurface(dpy, surface);
+            return EGL_NO_SURFACE;
+        }
+        if (!backendObject->CreateEGLWindowSurface(surface, windowHandle)) {
+            state->DestroySurface(dpy, surface);
             state->SetError(EGL_BAD_NATIVE_WINDOW);
             return EGL_NO_SURFACE;
         }
 
-        return state->CreateWindowSurface(dpy, config, window, attrib_list);
+        return surface;
     }
 
     EGLBoolean SwapBuffers(EGLDisplay dpy, EGLSurface draw) {
@@ -281,11 +288,18 @@ namespace MobileGL::MG_Impl::EGLImpl {
     }
 
     EGLBoolean DestroySurface(EGLDisplay dpy, EGLSurface surface) {
+        const std::lock_guard<std::recursive_mutex> operationLock(EGLOperationMutex());
         auto* state = GetState();
         if (!state) {
             return EGL_FALSE;
         }
-        return state->DestroySurface(dpy, surface) ? EGL_TRUE : EGL_FALSE;
+        if (!state->DestroySurface(dpy, surface)) {
+            return EGL_FALSE;
+        }
+        if (auto* backendObject = MG_Backend::pActiveBackendObject.get()) {
+            backendObject->ReleaseEGLSurface(surface);
+        }
+        return EGL_TRUE;
     }
 
     EGLBoolean Terminate(EGLDisplay dpy) {
@@ -420,7 +434,7 @@ namespace MobileGL::MG_Impl::EGLImpl {
         if (!backendObject) {
             return EGL_NO_SURFACE;
         }
-        if (!backendObject->CreateEGLPbufferSurface(width, height)) {
+        if (!backendObject->CreateEGLPbufferSurface(surface, width, height)) {
             state->DestroySurface(dpy, surface);
             state->SetError(EGL_BAD_ALLOC);
             return EGL_NO_SURFACE;
@@ -643,24 +657,31 @@ namespace MobileGL::MG_Impl::EGLImpl {
             return EGL_NO_SURFACE;
         }
 
-        auto* backendObject = GetBackendObject(state);
-        if (!backendObject) {
-            MGLOG_E("activeBackendObject not initialized!");
-            return EGL_NO_SURFACE;
-        }
-
         const MG_Backend::WindowHandle windowHandle = {
             .Backend = DetectWindowBackend(),
             .Handle = native_window,
             .Width = static_cast<Uint32>(std::max<EGLint>(GetAttribValueAttrib(attrib_list, EGL_WIDTH, 0), 0)),
             .Height = static_cast<Uint32>(std::max<EGLint>(GetAttribValueAttrib(attrib_list, EGL_HEIGHT, 0), 0)),
         };
-        if (!backendObject->CreateEGLWindowSurface(windowHandle)) {
+
+        EGLSurface surface = state->CreatePlatformWindowSurface(dpy, config, native_window, attrib_list);
+        if (surface == EGL_NO_SURFACE) {
+            return EGL_NO_SURFACE;
+        }
+
+        auto* backendObject = GetBackendObject(state);
+        if (!backendObject) {
+            MGLOG_E("activeBackendObject not initialized!");
+            state->DestroySurface(dpy, surface);
+            return EGL_NO_SURFACE;
+        }
+        if (!backendObject->CreateEGLWindowSurface(surface, windowHandle)) {
+            state->DestroySurface(dpy, surface);
             state->SetError(EGL_BAD_NATIVE_WINDOW);
             return EGL_NO_SURFACE;
         }
 
-        return state->CreatePlatformWindowSurface(dpy, config, native_window, attrib_list);
+        return surface;
     }
 
     EGLBoolean ResizePlatformWindowSurface(EGLDisplay dpy, EGLSurface surface, EGLint width, EGLint height) {
@@ -678,7 +699,7 @@ namespace MobileGL::MG_Impl::EGLImpl {
         }
         width = std::max<EGLint>(width, 1);
         height = std::max<EGLint>(height, 1);
-        if (!backendObject->ResizeEGLWindowSurface(static_cast<Uint32>(width), static_cast<Uint32>(height))) {
+        if (!backendObject->ResizeEGLWindowSurface(surface, static_cast<Uint32>(width), static_cast<Uint32>(height))) {
             state->SetError(EGL_BAD_NATIVE_WINDOW);
             return EGL_FALSE;
         }

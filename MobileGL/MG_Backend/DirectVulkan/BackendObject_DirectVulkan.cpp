@@ -407,7 +407,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         return BackendObject::InitializeEGLDisplay(dpy, major, minor);
     }
 
-    Bool BackendObject_DirectVulkan::CreateEGLWindowSurface(const WindowHandle& handle) {
+    Bool BackendObject_DirectVulkan::CreateEGLWindowSurface(EGLSurface surface, const WindowHandle& handle) {
         const std::lock_guard<std::recursive_mutex> lock(m_eglStateMutex);
         if (!m_initialized) {
             MGLOG_E("DirectVulkan backend not initialized");
@@ -420,9 +420,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             return false;
         }
 
-        const Bool sameHandle = m_eglSurfaceInitialized && m_eglSurfaceKind == SurfaceKind::Window &&
-                                m_windowHandle.Backend == handle.Backend && m_windowHandle.Handle == handle.Handle &&
-                                m_windowHandle.Width == handle.Width && m_windowHandle.Height == handle.Height;
+        const Bool sameHandle = m_eglSurfaceInitialized && m_eglSurface == surface &&
+                                m_eglSurfaceKind == SurfaceKind::Window && m_windowHandle.Backend == handle.Backend &&
+                                m_windowHandle.Handle == handle.Handle && m_windowHandle.Width == handle.Width &&
+                                m_windowHandle.Height == handle.Height;
         if (sameHandle) {
             return true;
         }
@@ -432,10 +433,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             ResetEGLRuntimeState();
         }
 
-        return BackendObject::CreateEGLWindowSurface(handle);
+        return BackendObject::CreateEGLWindowSurface(surface, handle);
     }
 
-    Bool BackendObject_DirectVulkan::ResizeEGLWindowSurface(Uint32 width, Uint32 height) {
+    Bool BackendObject_DirectVulkan::ResizeEGLWindowSurface(EGLSurface surface, Uint32 width, Uint32 height) {
         const std::lock_guard<std::recursive_mutex> lock(m_eglStateMutex);
         if (!m_initialized) {
             MGLOG_E("DirectVulkan backend not initialized");
@@ -445,27 +446,27 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             MGLOG_E("DirectVulkan renderer is not initialized");
             return false;
         }
-        if (!BackendObject::ResizeEGLWindowSurface(width, height)) {
+        if (!BackendObject::ResizeEGLWindowSurface(surface, width, height)) {
             return false;
         }
         pVulkanRenderer->RequestSwapchainResize(width, height);
         return true;
     }
 
-    Bool BackendObject_DirectVulkan::CreateEGLPbufferSurface(EGLint width, EGLint height) {
+    Bool BackendObject_DirectVulkan::CreateEGLPbufferSurface(EGLSurface surface, EGLint width, EGLint height) {
         const std::lock_guard<std::recursive_mutex> lock(m_eglStateMutex);
         if (!m_initialized) {
             MGLOG_E("DirectVulkan backend not initialized");
             return false;
         }
-        if (m_eglSurfaceInitialized && m_eglSurfaceKind == SurfaceKind::Pbuffer) {
+        if (m_eglSurfaceInitialized && m_eglSurface == surface && m_eglSurfaceKind == SurfaceKind::Pbuffer) {
             return true;
         }
         if (m_eglSurfaceInitialized || pVulkanRenderer) {
             pVulkanRenderer.reset();
             ResetEGLRuntimeState();
         }
-        return BackendObject::CreateEGLPbufferSurface(width, height);
+        return BackendObject::CreateEGLPbufferSurface(surface, width, height);
     }
 
     Bool BackendObject_DirectVulkan::MakeEGLCurrent(EGLDisplay dpy, EGLSurface draw, EGLSurface read, EGLContext ctx) {
@@ -487,6 +488,14 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             return false;
         }
         return BackendObject::SwapEGLBuffers(dpy, draw);
+    }
+
+    void BackendObject_DirectVulkan::ReleaseEGLSurface(EGLSurface surface) {
+        const std::lock_guard<std::recursive_mutex> lock(m_eglStateMutex);
+        if (m_eglSurface == surface) {
+            pVulkanRenderer.reset();
+        }
+        BackendObject::ReleaseEGLSurface(surface);
     }
 
     void BackendObject_DirectVulkan::ReleaseEGLResources() {

@@ -245,11 +245,12 @@ namespace MobileGL {
             virtual Bool InitWindowSurface() = 0;
 
             virtual Bool InitializeEGLDisplay(EGLDisplay dpy, EGLint* major, EGLint* minor);
-            virtual Bool CreateEGLWindowSurface(const WindowHandle& handle);
-            virtual Bool ResizeEGLWindowSurface(Uint32 width, Uint32 height);
-            virtual Bool CreateEGLPbufferSurface(EGLint width, EGLint height);
+            virtual Bool CreateEGLWindowSurface(EGLSurface surface, const WindowHandle& handle);
+            virtual Bool ResizeEGLWindowSurface(EGLSurface surface, Uint32 width, Uint32 height);
+            virtual Bool CreateEGLPbufferSurface(EGLSurface surface, EGLint width, EGLint height);
             virtual Bool MakeEGLCurrent(EGLDisplay dpy, EGLSurface draw, EGLSurface read, EGLContext ctx);
             virtual Bool SwapEGLBuffers(EGLDisplay dpy, EGLSurface draw);
+            virtual void ReleaseEGLSurface(EGLSurface surface);
             virtual void ReleaseEGLResources();
 
             void SetWindowHandle(const WindowHandle& handle);
@@ -283,6 +284,7 @@ namespace MobileGL {
             FormatCapabilityCache m_formatCapabilities;
             WindowHandle m_windowHandle;
             EGLDisplay m_eglDisplay = EGL_NO_DISPLAY;
+            EGLSurface m_eglSurface = EGL_NO_SURFACE;
             Bool m_eglDisplayInitialized = false;
             Bool m_eglSurfaceInitialized = false;
             Bool m_backendCapabilitiesInitialized = false;
