@@ -1056,6 +1056,18 @@ namespace MobileGL::MG_Impl::GLImpl {
         case GL_MAX_FRAGMENT_INPUT_COMPONENTS:
             *params = kFrontendMaxFragmentInputComponents;
             return;
+        case GL_MAX_FRAGMENT_IMAGE_UNIFORMS:
+            if (MG_Backend::pActiveBackendObject &&
+                MG_Backend::pActiveBackendObject->GetBackendType() == BackendType::DirectVulkan) {
+                // TODO: Advertise fragment image uniforms on DirectVulkan once image-load-store draw paths do not trap.
+                *params = 0;
+            } else {
+                // TODO: Track per-stage image uniform limits separately instead of reusing the compute/backend stage cap.
+                *params = MG_Backend::pActiveBackendObject
+                              ? MG_Backend::pActiveBackendObject->GetDynamicParameters().MaxComputeImageUniforms
+                              : MG_Backend::DynamicBackendParameters{}.MaxComputeImageUniforms;
+            }
+            return;
         case GL_MAX_FRAGMENT_UNIFORM_COMPONENTS:
             *params = kFrontendMaxFragmentUniformComponents;
             return;
@@ -1082,6 +1094,9 @@ namespace MobileGL::MG_Impl::GLImpl {
             return;
         case GL_MAX_GEOMETRY_TEXTURE_IMAGE_UNITS:
             *params = kFrontendMaxGeometryTextureImageUnits;
+            return;
+        case GL_MAX_GEOMETRY_IMAGE_UNIFORMS:
+            *params = 0;
             return;
         case GL_MAX_GEOMETRY_TOTAL_OUTPUT_COMPONENTS:
             *params = kFrontendMaxGeometryTotalOutputComponents;
@@ -1122,6 +1137,12 @@ namespace MobileGL::MG_Impl::GLImpl {
         case GL_MAX_TESS_EVALUATION_ATOMIC_COUNTERS:
             *params = kFrontendMaxTessEvaluationAtomicCounters;
             return;
+        case GL_MAX_TESS_CONTROL_IMAGE_UNIFORMS:
+            *params = 0;
+            return;
+        case GL_MAX_TESS_EVALUATION_IMAGE_UNIFORMS:
+            *params = 0;
+            return;
         case GL_MAX_TESS_CONTROL_SHADER_STORAGE_BLOCKS:
             *params = 16; // TODO
             return;
@@ -1142,6 +1163,9 @@ namespace MobileGL::MG_Impl::GLImpl {
             return;
         case GL_MAX_VERTEX_ATOMIC_COUNTERS:
             *params = kFrontendMaxVertexAtomicCounters;
+            return;
+        case GL_MAX_VERTEX_IMAGE_UNIFORMS:
+            *params = 0;
             return;
         case GL_MAX_VERTEX_SHADER_STORAGE_BLOCKS:
             *params = 16; // TODO

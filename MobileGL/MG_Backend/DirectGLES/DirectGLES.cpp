@@ -2702,8 +2702,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
         MGLOG_D("ReadPixels: x=%d y=%d w=%d h=%d format=%s type=%s pixels=%p", x, y, width, height,
                 MG_Util::ConvertGLEnumToString(format).c_str(), MG_Util::ConvertGLEnumToString(type).c_str(), pixels);
 
-        MOBILEGL_ASSERT(format == GL_RGBA || format == GL_RGBA_INTEGER,
-                        "Only GL_RGBA and GL_RGBA_INTEGER are supported currently, while requested %s.",
+        MOBILEGL_ASSERT(format == GL_RGBA || format == GL_RGBA_INTEGER || format == GL_RED ||
+                            format == GL_RED_INTEGER,
+                        "Only GL_RGBA, GL_RGBA_INTEGER, GL_RED and GL_RED_INTEGER are supported currently, "
+                        "while requested %s.",
                         MG_Util::ConvertGLEnumToString(format).c_str());
         MOBILEGL_ASSERT(type == GL_UNSIGNED_BYTE || type == GL_UNSIGNED_INT || type == GL_UNSIGNED_INT_2_10_10_10_REV ||
                             type == GL_INT || type == GL_FLOAT,
