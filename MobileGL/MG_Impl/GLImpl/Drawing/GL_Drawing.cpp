@@ -67,11 +67,11 @@ namespace MobileGL::MG_Impl::GLImpl {
         }
 
         const auto& vao = MG_State::pGLContext->GetBoundVertexArray();
-        if (vao && vao->GetExternalIndex() == 0) {
+        if (MG_State::pEGLContext->IsCurrentContextOpenGLCoreProfile() && vao && vao->GetExternalIndex() == 0) {
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidOperation,
                 MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", functionName,
-                                             "Default vertex array object cannot be used for drawing."));
+                                             "Default vertex array object cannot be used for drawing in core profile."));
             return false;
         }
 
