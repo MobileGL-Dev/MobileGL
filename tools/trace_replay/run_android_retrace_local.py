@@ -6,6 +6,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from trace_cases import case_with_defaults, load_trace_cases
+
 
 ROOT = Path(__file__).resolve().parents[2]
 FIXTURES = ROOT / "tools" / "trace_replay" / "fixtures"
@@ -29,55 +31,7 @@ BACKENDS = {
     },
 }
 
-CASES = [
-    {
-        "name": "OpenRA",
-        "trace_archive": "openra.tgz",
-        "trace_file": "openra.trace",
-        "golden": "openra.0000031249.png",
-        "target_call": 31249,
-        "width": 640,
-        "height": 480,
-        "crop_x": 1,
-        "crop_y": 1,
-        "crop_width": 638,
-        "crop_height": 478,
-        "timeout_seconds": 180,
-    },
-    {"name": "minecraft-1.21.4-startup", "golden": "minecraft-1.21.4-startup.0000092195.png", "target_call": 92195, "timeout_seconds": 180},
-    {"name": "minecraft-1.21.4-main-menu", "golden": "minecraft-1.21.4-main-menu.0000481787.png", "alternate_golden": "minecraft-1.21.4-main-menu.0000481787-mali.png", "target_call": 481787, "timeout_seconds": 180},
-    {"name": "minecraft-1.21.4-in-world", "golden": "minecraft-1.21.4-in-world.0000280000.png", "target_call": 280000, "timeout_seconds": 900},
-    {"name": "minecraft-1.21.4-fabric-sodium-in-world", "golden": "minecraft-1.21.4-fabric-sodium-in-world.0000923340.png", "target_call": 923340, "timeout_seconds": 1800},
-    {"name": "minecraft-26.2-main-menu", "golden": "minecraft-26.2-main-menu.0000101926.png", "target_call": 101926, "timeout_seconds": 180},
-    {"name": "minecraft-26.2-in-world", "golden": "minecraft-26.2-in-world.0000519370.png", "target_call": 519370, "timeout_seconds": 900},
-    {"name": "minecraft-1.21.4-fabric-common-mods-in-world", "golden": "minecraft-1.21.4-fabric-common-mods-in-world.0000522084.png", "target_call": 522084, "timeout_seconds": 1800},
-    {"name": "minecraft-1.21.4-fabric-common-mods-inventory", "golden": "minecraft-1.21.4-fabric-common-mods-inventory.0000728558.png", "target_call": 728558, "timeout_seconds": 1800},
-    {"name": "minecraft-1.21.4-fabric-rei-inventory", "golden": "minecraft-1.21.4-fabric-rei-inventory.0005431826.png", "target_call": 5431826, "timeout_seconds": 1800},
-    {"name": "minecraft-1.21.4-fabric-xaero-minimap-in-world", "golden": "minecraft-1.21.4-fabric-xaero-minimap-in-world.0002553500.png", "target_call": 2553500, "crop_y": 10, "crop_width": 140, "crop_height": 158, "timeout_seconds": 1800},
-    {"name": "minecraft-1.21.4-fabric-xaero-world-map-in-world", "golden": "minecraft-1.21.4-fabric-xaero-world-map-in-world.0001598209.png", "target_call": 1598209, "timeout_seconds": 1800},
-    {"name": "minecraft-1.21.4-fabric-journeymap-in-world", "golden": "minecraft-1.21.4-fabric-journeymap-in-world.0002632392.png", "target_call": 2632392, "timeout_seconds": 1800},
-    {"name": "minecraft-1.21.4-fabric-modernui-inventory", "golden": "minecraft-1.21.4-fabric-modernui-inventory.0004907381.png", "target_call": 4907381, "timeout_seconds": 1800},
-    {"name": "minecraft-1.21.4-fabric-rei-inventory-normal-world", "golden": "minecraft-1.21.4-fabric-rei-inventory-normal-world.0000734465.png", "target_call": 734465, "timeout_seconds": 1800},
-    {"name": "minecraft-1.21.4-fabric-xaero-minimap-in-world-normal-world", "golden": "minecraft-1.21.4-fabric-xaero-minimap-in-world-normal-world.0000457190.png", "target_call": 457190, "crop_y": 10, "crop_width": 140, "crop_height": 158, "timeout_seconds": 1800},
-    {"name": "minecraft-1.21.4-fabric-xaero-world-map-in-world-normal-world", "golden": "minecraft-1.21.4-fabric-xaero-world-map-in-world-normal-world.0000573061.png", "target_call": 573061, "timeout_seconds": 1800},
-    {"name": "minecraft-1.21.4-fabric-journeymap-in-world-normal-world", "golden": "minecraft-1.21.4-fabric-journeymap-in-world-normal-world.0000641975.png", "target_call": 641975, "timeout_seconds": 1800},
-    {"name": "minecraft-1.21.4-fabric-modernui-inventory-normal-world", "golden": "minecraft-1.21.4-fabric-modernui-inventory-normal-world.0000727926.png", "target_call": 727926, "timeout_seconds": 1800},
-    {"name": "minecraft-1.21.4-fabric-iris-bsl-in-world", "golden": "minecraft-1.21.4-fabric-iris-bsl-in-world.0000110725.png", "alternate_golden": "minecraft-1.21.4-fabric-iris-bsl-in-world.0000110725-mali.png", "target_call": 110725, "timeout_seconds": 900},
-    {"name": "minecraft-1.21.4-fabric-iris-makeup-ultrafast-in-world", "golden": "minecraft-1.21.4-fabric-iris-makeup-ultrafast-in-world.0000095322.png", "target_call": 95322, "timeout_seconds": 900},
-    {"name": "minecraft-1.21.4-fabric-iris-super-duper-vanilla-in-world", "golden": "minecraft-1.21.4-fabric-iris-super-duper-vanilla-in-world.0000141559.png", "target_call": 141559, "timeout_seconds": 900},
-    {"name": "minecraft-1.21.4-fabric-iris-sundial-lite-in-world", "golden": "minecraft-1.21.4-fabric-iris-sundial-lite-in-world.0000150023.png", "target_call": 150023, "timeout_seconds": 900},
-    {"name": "minecraft-1.21.4-fabric-iris-complementary-reimagined-in-world", "golden": "minecraft-1.21.4-fabric-iris-complementary-reimagined-in-world.0000151297.png", "target_call": 151297, "timeout_seconds": 900},
-    {"name": "minecraft-1.21.4-fabric-iris-complementary-unbound-in-world", "golden": "minecraft-1.21.4-fabric-iris-complementary-unbound-in-world.0000146559.png", "target_call": 146559, "timeout_seconds": 900},
-    {"name": "minecraft-1.21.4-fabric-iris-mellow-in-world", "golden": "minecraft-1.21.4-fabric-iris-mellow-in-world.0000096143.png", "target_call": 96143, "timeout_seconds": 900},
-    {"name": "minecraft-1.21.4-fabric-iris-nostalgia-in-world", "golden": "minecraft-1.21.4-fabric-iris-nostalgia-in-world.0000153808-linux-mesa.png", "alternate_golden": "minecraft-1.21.4-fabric-iris-nostalgia-in-world.0000153808.png", "target_call": 153808, "timeout_seconds": 900},
-    {"name": "minecraft-1.21.4-fabric-iris-bliss-in-world", "golden": "minecraft-1.21.4-fabric-iris-bliss-in-world.0000113511.png", "target_call": 113511, "timeout_seconds": 900},
-    {"name": "minecraft-1.21.4-fabric-iris-chocapic-v6-lite-in-world", "golden": "minecraft-1.21.4-fabric-iris-chocapic-v6-lite-in-world.0000125124-linux-mesa.png", "target_call": 125124, "timeout_seconds": 900},
-    {"name": "minecraft-1.21.4-fabric-iris-iterationt-in-world", "golden": "minecraft-1.21.4-fabric-iris-iterationt-in-world.0000110538.png", "target_call": 110538, "timeout_seconds": 900},
-    {"name": "minecraft-1.21.4-fabric-iris-iterationt-nodsa-in-world", "golden": "minecraft-1.21.4-fabric-iris-iterationt-nodsa-in-world.0000115019.png", "target_call": 115019, "timeout_seconds": 900},
-    {"name": "minecraft-1.21.4-fabric-iris-photon-v1.1-in-world", "golden": "minecraft-1.21.4-fabric-iris-photon-v1.1-in-world.0000159866.png", "target_call": 159866, "timeout_seconds": 900},
-    {"name": "minecraft-1.21.4-fabric-iris-photon-v1.3b-in-world", "golden": "minecraft-1.21.4-fabric-iris-photon-v1.3b-in-world.0000172128.png", "target_call": 172128, "timeout_seconds": 900},
-    {"name": "minecraft-1.21.4-fabric-iris-derivative-main-d24.4.14-in-world", "golden": "minecraft-1.21.4-fabric-iris-derivative-main-d24.4.14-in-world.0000145353.png", "target_call": 145353, "timeout_seconds": 900},
-]
+CASES = load_trace_cases()
 
 
 def safe_case(name):
@@ -93,23 +47,6 @@ def bash_path(path):
     drive = path.drive.rstrip(":").lower()
     parts = path.parts[1:]
     return "/" + drive + "/" + "/".join(parts)
-
-
-def case_with_defaults(case):
-    merged = {
-        "trace_archive": f"{case['name']}.tgz",
-        "trace_file": "trace.trace",
-        "width": 854,
-        "height": 480,
-        "ssim_threshold": "0.99",
-        "crop_x": 0,
-        "crop_y": 0,
-        "crop_width": 0,
-        "crop_height": 0,
-        "timeout_seconds": 900,
-    }
-    merged.update(case)
-    return merged
 
 
 def mark_skipped(case, backend, reason):

@@ -1,41 +1,15 @@
 #!/usr/bin/env node
 
-import { createWriteStream } from "node:fs";
+import { createWriteStream, readFileSync } from "node:fs";
 import { mkdir, readdir, readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const BACKENDS = ["DirectGLES", "DirectVulkan"];
-const DEFAULT_FIXTURE_ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "fixtures");
-const CASES = [
-  "OpenRA",
-  "minecraft-1.21.4-startup",
-  "minecraft-1.21.4-main-menu",
-  "minecraft-1.21.4-in-world",
-  "minecraft-1.21.4-fabric-sodium-in-world",
-  "minecraft-26.2-main-menu",
-  "minecraft-26.2-in-world",
-  "minecraft-1.21.4-fabric-rei-inventory-normal-world",
-  "minecraft-1.21.4-fabric-xaero-minimap-in-world-normal-world",
-  "minecraft-1.21.4-fabric-xaero-world-map-in-world-normal-world",
-  "minecraft-1.21.4-fabric-journeymap-in-world-normal-world",
-  "minecraft-1.21.4-fabric-modernui-inventory-normal-world",
-  "minecraft-1.21.4-fabric-iris-bsl-in-world",
-  "minecraft-1.21.4-fabric-iris-makeup-ultrafast-in-world",
-  "minecraft-1.21.4-fabric-iris-super-duper-vanilla-in-world",
-  "minecraft-1.21.4-fabric-iris-sundial-lite-in-world",
-  "minecraft-1.21.4-fabric-iris-complementary-reimagined-in-world",
-  "minecraft-1.21.4-fabric-iris-complementary-unbound-in-world",
-  "minecraft-1.21.4-fabric-iris-mellow-in-world",
-  "minecraft-1.21.4-fabric-iris-nostalgia-in-world",
-  "minecraft-1.21.4-fabric-iris-bliss-in-world",
-  "minecraft-1.21.4-fabric-iris-chocapic-v6-lite-in-world",
-  "minecraft-1.21.4-fabric-iris-iterationt-in-world",
-  "minecraft-1.21.4-fabric-iris-iterationt-nodsa-in-world",
-  "minecraft-1.21.4-fabric-iris-photon-v1.1-in-world",
-  "minecraft-1.21.4-fabric-iris-photon-v1.3b-in-world",
-  "minecraft-1.21.4-fabric-iris-derivative-main-d24.4.14-in-world",
-];
+const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
+const DEFAULT_FIXTURE_ROOT = path.join(SCRIPT_DIR, "fixtures");
+const TRACE_CASES = JSON.parse(readFileSync(path.join(SCRIPT_DIR, "trace_cases.json"), "utf8"));
+const CASES = TRACE_CASES.cases.map((traceCase) => traceCase.name);
 
 function usage() {
   console.error(`Usage:

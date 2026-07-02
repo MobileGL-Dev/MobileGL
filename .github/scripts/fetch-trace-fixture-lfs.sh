@@ -8,111 +8,17 @@ fi
 
 case_name="$1"
 fixture_dir="${2:-tools/trace_replay/fixtures}"
+python_bin="${PYTHON:-python3}"
 
-files=()
+if ! command -v "${python_bin}" >/dev/null 2>&1 && command -v python >/dev/null 2>&1; then
+  python_bin=python
+fi
 
-add_standard_case() {
-  local golden_suffix="$1"
-  files+=(
-    "${fixture_dir}/${case_name}.tgz"
-    "${fixture_dir}/${case_name}.${golden_suffix}.png"
-  )
-}
-
-case "${case_name}" in
-  OpenRA)
-    files+=(
-      "${fixture_dir}/openra.tgz"
-      "${fixture_dir}/openra.0000031249.png"
-    )
-    ;;
-  minecraft-1.21.4-startup)
-    add_standard_case "0000092195"
-    ;;
-  minecraft-1.21.4-main-menu)
-    add_standard_case "0000481787"
-    ;;
-  minecraft-1.21.4-in-world)
-    add_standard_case "0000280000"
-    ;;
-  minecraft-1.21.4-fabric-sodium-in-world)
-    add_standard_case "0000923340"
-    ;;
-  minecraft-26.2-main-menu)
-    add_standard_case "0000101926"
-    ;;
-  minecraft-26.2-in-world)
-    add_standard_case "0000519370"
-    ;;
-  minecraft-1.21.4-fabric-rei-inventory-normal-world)
-    add_standard_case "0000734465"
-    ;;
-  minecraft-1.21.4-fabric-xaero-minimap-in-world-normal-world)
-    add_standard_case "0000457190"
-    ;;
-  minecraft-1.21.4-fabric-xaero-world-map-in-world-normal-world)
-    add_standard_case "0000573061"
-    ;;
-  minecraft-1.21.4-fabric-journeymap-in-world-normal-world)
-    add_standard_case "0000641975"
-    ;;
-  minecraft-1.21.4-fabric-modernui-inventory-normal-world)
-    add_standard_case "0000727926"
-    ;;
-  minecraft-1.21.4-fabric-iris-bsl-in-world)
-    add_standard_case "0000110725"
-    ;;
-  minecraft-1.21.4-fabric-iris-makeup-ultrafast-in-world)
-    add_standard_case "0000095322"
-    ;;
-  minecraft-1.21.4-fabric-iris-super-duper-vanilla-in-world)
-    add_standard_case "0000141559"
-    ;;
-  minecraft-1.21.4-fabric-iris-sundial-lite-in-world)
-    add_standard_case "0000150023"
-    ;;
-  minecraft-1.21.4-fabric-iris-complementary-reimagined-in-world)
-    add_standard_case "0000151297"
-    ;;
-  minecraft-1.21.4-fabric-iris-complementary-unbound-in-world)
-    add_standard_case "0000146559"
-    ;;
-  minecraft-1.21.4-fabric-iris-mellow-in-world)
-    add_standard_case "0000096143"
-    ;;
-  minecraft-1.21.4-fabric-iris-nostalgia-in-world)
-    files+=(
-      "${fixture_dir}/${case_name}.tgz"
-      "${fixture_dir}/${case_name}.0000153808-linux-mesa.png"
-      "${fixture_dir}/${case_name}.0000153808.png"
-    )
-    ;;
-  minecraft-1.21.4-fabric-iris-bliss-in-world)
-    add_standard_case "0000113511"
-    ;;
-  minecraft-1.21.4-fabric-iris-chocapic-v6-lite-in-world)
-    add_standard_case "0000125124-linux-mesa"
-    ;;
-  minecraft-1.21.4-fabric-iris-iterationt-in-world)
-    add_standard_case "0000110538"
-    ;;
-  minecraft-1.21.4-fabric-iris-iterationt-nodsa-in-world)
-    add_standard_case "0000115019"
-    ;;
-  minecraft-1.21.4-fabric-iris-photon-v1.1-in-world)
-    add_standard_case "0000159866"
-    ;;
-  minecraft-1.21.4-fabric-iris-photon-v1.3b-in-world)
-    add_standard_case "0000172128"
-    ;;
-  minecraft-1.21.4-fabric-iris-derivative-main-d24.4.14-in-world)
-    add_standard_case "0000145353"
-    ;;
-  *)
-    echo "unknown trace case: ${case_name}" >&2
-    exit 2
-    ;;
-esac
+fixture_list="$("${python_bin}" tools/trace_replay/trace_cases.py \
+  --format fixture-files \
+  --case "${case_name}" \
+  --fixture-root "${fixture_dir}")"
+mapfile -t files <<< "${fixture_list}"
 
 include="$(IFS=,; echo "${files[*]}")"
 if [ "${case_name}" = "OpenRA" ]; then

@@ -329,12 +329,26 @@ jobs:
           path: ci-artifacts/mobilegl-trace-replay.tgz
           if-no-files-found: error
 
+  trace-cases:
+    name: trace case matrix
+    runs-on: ubuntu-latest
+    outputs:
+      names: ${{ steps.trace-cases.outputs.names }}
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Load trace cases
+        id: trace-cases
+        run: echo "names=$(python3 tools/trace_replay/trace_cases.py --format names)" >> "$GITHUB_OUTPUT"
+
   retrace:
     name: retrace (${{ matrix.backend }}, ${{ matrix.case }})
     runs-on: ubuntu-latest
     needs:
       - build-linux
       - build-retrace
+      - trace-cases
     strategy:
       fail-fast: false
       max-parallel: 4
@@ -342,34 +356,7 @@ jobs:
         backend:
           - DirectGLES
           - DirectVulkan
-        case:
-          - OpenRA
-          - minecraft-1.21.4-startup
-          - minecraft-1.21.4-main-menu
-          - minecraft-1.21.4-in-world
-          - minecraft-1.21.4-fabric-sodium-in-world
-          - minecraft-26.2-main-menu
-          - minecraft-26.2-in-world
-          - minecraft-1.21.4-fabric-rei-inventory-normal-world
-          - minecraft-1.21.4-fabric-xaero-minimap-in-world-normal-world
-          - minecraft-1.21.4-fabric-xaero-world-map-in-world-normal-world
-          - minecraft-1.21.4-fabric-journeymap-in-world-normal-world
-          - minecraft-1.21.4-fabric-modernui-inventory-normal-world
-          - minecraft-1.21.4-fabric-iris-bsl-in-world
-          - minecraft-1.21.4-fabric-iris-makeup-ultrafast-in-world
-          - minecraft-1.21.4-fabric-iris-super-duper-vanilla-in-world
-          - minecraft-1.21.4-fabric-iris-sundial-lite-in-world
-          - minecraft-1.21.4-fabric-iris-complementary-reimagined-in-world
-          - minecraft-1.21.4-fabric-iris-complementary-unbound-in-world
-          - minecraft-1.21.4-fabric-iris-mellow-in-world
-          - minecraft-1.21.4-fabric-iris-nostalgia-in-world
-          - minecraft-1.21.4-fabric-iris-bliss-in-world
-          - minecraft-1.21.4-fabric-iris-chocapic-v6-lite-in-world
-          - minecraft-1.21.4-fabric-iris-iterationt-in-world
-          - minecraft-1.21.4-fabric-iris-iterationt-nodsa-in-world
-          - minecraft-1.21.4-fabric-iris-photon-v1.1-in-world
-          - minecraft-1.21.4-fabric-iris-photon-v1.3b-in-world
-          - minecraft-1.21.4-fabric-iris-derivative-main-d24.4.14-in-world
+        case: ${{ fromJSON(needs.trace-cases.outputs.names) }}
 
     steps:
       - name: Checkout repo
