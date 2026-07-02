@@ -2112,6 +2112,13 @@ namespace MobileGL::MG_Impl::GLImpl {
             return;
         }
 
+        if (!MG_State::pGLContext->ValidateTextureName(texture)) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidOperation,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", "BindTexture_State", "Invalid texture name"));
+            return;
+        }
+
         if (!TextureImpl::ValidateTextureName(texture, true)) return;
 
         // ======================= Processing ================================

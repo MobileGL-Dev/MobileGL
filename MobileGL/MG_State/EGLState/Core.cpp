@@ -608,6 +608,9 @@ namespace MobileGL {
                 if (auto value = ParseAttribValue(attribList, EGL_CONTEXT_MINOR_VERSION); value) {
                     contextObject.MinorVersion = *value;
                 }
+                if (auto value = ParseAttribValue(attribList, EGL_CONTEXT_OPENGL_PROFILE_MASK); value) {
+                    contextObject.OpenGLProfileMask = *value;
+                }
 
                 const auto context = EncodeHandle<EGLContextHandle>(m_nextContextHandle++);
                 m_contexts[context] = contextObject;
@@ -689,6 +692,18 @@ namespace MobileGL {
                 const std::lock_guard<std::recursive_mutex> lock(m_mutex);
                 const auto* ctx = TryGetContext(context);
                 return ctx && ctx->Display == display;
+            }
+
+            Bool EGLContext::IsCurrentContextOpenGLCoreProfile() const {
+                const std::lock_guard<std::recursive_mutex> lock(m_mutex);
+                auto currentIt = m_threadCurrents.find(CurrentThreadKey());
+                if (currentIt == m_threadCurrents.end()) {
+                    return false;
+                }
+                const auto* ctx = TryGetContext(currentIt->second.Context);
+                return ctx && ctx->ClientAPI == EGL_OPENGL_API &&
+                       ((ctx->OpenGLProfileMask & EGL_CONTEXT_OPENGL_CORE_PROFILE_BIT) ||
+                        ctx->MajorVersion > 3 || (ctx->MajorVersion == 3 && ctx->MinorVersion >= 1));
             }
 
             EGLContext::EGLSurfaceHandle EGLContext::CreateWindowSurface(EGLDisplayHandle display,

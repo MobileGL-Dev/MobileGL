@@ -3293,7 +3293,10 @@ void main() {
         }
 
         auto vtxUploadOk = UploadAndBindVertexBuffers(frame.commandBuffer, vao, drawParams);
-        MOBILEGL_ASSERT(vtxUploadOk, "SetupDraw skipped: failed to upload vertex buffers");
+        if (!vtxUploadOk) {
+            MGLOG_E("SetupDraw skipped: failed to upload vertex buffers");
+            return false;
+        }
 
         if (aspects & DrawSetupAspect::IndexBuffer) {
             auto idxUploadOk = UploadAndBindIndexBuffer(frame, vao, pIndexBufferView);

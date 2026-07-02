@@ -9,6 +9,7 @@
 #include "GL_Drawing.h"
 #include <Config.h>
 #include <MG_State/GLState/Core.h>
+#include <MG_State/EGLState/Core.h>
 #include <MG_Backend/BackendObjects.h>
 
 namespace MobileGL::MG_Impl::GLImpl {
@@ -62,6 +63,15 @@ namespace MobileGL::MG_Impl::GLImpl {
                 MakeUnique<GenericErrorInfo>(
                     "MG_Impl/GLImpl", functionName,
                     "Primitive mode GL_LINE_LOOP is not supported by the DirectVulkan backend."));
+            return false;
+        }
+
+        const auto& vao = MG_State::pGLContext->GetBoundVertexArray();
+        if (MG_State::pEGLContext->IsCurrentContextOpenGLCoreProfile() && vao && vao->GetExternalIndex() == 0) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidOperation,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", functionName,
+                                             "Default vertex array object cannot be used for drawing in core profile."));
             return false;
         }
 

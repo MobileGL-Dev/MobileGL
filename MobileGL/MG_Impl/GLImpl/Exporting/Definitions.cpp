@@ -18,6 +18,7 @@
 #include "../Framebuffer/GL_Framebuffer.h"
 #include "../VertexArray/GL_VertexArray.h"
 #include "../Sync/GL_Sync.h"
+#include <MG_State/GLState/Core.h>
 
 #define DECLARE_GL_FUNCTION_STUB_HEAD(type, name, ...) MOBILEGL_GL_API type gl##name(__VA_ARGS__) {
 
@@ -211,7 +212,15 @@ DECLARE_GL_FUNCTION_HEAD(void, CompressedTexSubImage3D, GLenum target, GLint lev
 DECLARE_GL_FUNCTION_STUB_HEAD(void, GenQueries, GLsizei n, GLuint* ids) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, GenQueries, n, ids)
 DECLARE_GL_FUNCTION_STUB_HEAD(void, DeleteQueries, GLsizei n, const GLuint* ids) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, DeleteQueries, n, ids)
 DECLARE_GL_FUNCTION_STUB_HEAD(GLboolean, IsQuery, GLuint id) DECLARE_GL_FUNCTION_STUB_END(GLboolean, IsQuery, id)
-DECLARE_GL_FUNCTION_STUB_HEAD(void, BeginQuery, GLenum target, GLuint id) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, BeginQuery, target, id)
+MOBILEGL_GL_API void glBeginQuery(GLenum target, GLuint id) {
+    MGLOG_W("Stub function: %s(...)", __FUNCTION__);
+    if (id != 0) {
+        MobileGL::MG_State::pGLContext->RecordError(
+            MobileGL::ErrorCode::InvalidOperation,
+            MobileGL::MakeUnique<MobileGL::GenericErrorInfo>("MG_Impl/GLImpl", __FUNCTION__,
+                                                             "Query object does not exist."));
+    }
+}
 DECLARE_GL_FUNCTION_STUB_HEAD(void, EndQuery, GLenum target) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, EndQuery, target)
 DECLARE_GL_FUNCTION_STUB_HEAD(void, GetQueryiv, GLenum target, GLenum pname, GLint* params) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, GetQueryiv, target, pname, params)
 DECLARE_GL_FUNCTION_STUB_HEAD(void, GetQueryObjectuiv, GLuint id, GLenum pname, GLuint* params) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, GetQueryObjectuiv, id, pname, params)

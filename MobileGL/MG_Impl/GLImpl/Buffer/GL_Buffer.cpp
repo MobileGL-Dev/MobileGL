@@ -1275,6 +1275,8 @@ namespace MobileGL::MG_Impl::GLImpl {
             return;
         }
 
+        if (!BufferImpl::ValidateBufferName(buffer, true)) return;
+
         Bool doesBufferObjectCreated = MG_State::pGLContext->ValidateBufferObject(buffer);
         if (!doesBufferObjectCreated) {
             MG_State::pGLContext->CreateBufferObject(buffer);
@@ -1303,6 +1305,8 @@ namespace MobileGL::MG_Impl::GLImpl {
             point.SetRange(Range1D(0, 0));
             return;
         }
+
+        if (!BufferImpl::ValidateBufferName(buffer, true)) return;
 
         Bool doesBufferObjectCreated = MG_State::pGLContext->ValidateBufferObject(buffer);
         if (!doesBufferObjectCreated) {
