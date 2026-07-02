@@ -7,6 +7,7 @@
 // End of Source File Header
 
 #include "Core.h"
+#include <EGL/eglext.h>
 
 namespace MobileGL {
     namespace MG_State {
@@ -611,6 +612,32 @@ namespace MobileGL {
                 if (auto value = ParseAttribValue(attribList, EGL_CONTEXT_OPENGL_PROFILE_MASK); value) {
                     contextObject.OpenGLProfileMask = *value;
                 }
+                if (auto value = ParseAttribValue(attribList, EGL_CONTEXT_FLAGS_KHR); value) {
+                    contextObject.EGLContextFlags = *value;
+                    if (*value & EGL_CONTEXT_OPENGL_FORWARD_COMPATIBLE_BIT_KHR) {
+                        contextObject.OpenGLContextFlags |= GL_CONTEXT_FLAG_FORWARD_COMPATIBLE_BIT;
+                    }
+                    if (*value & EGL_CONTEXT_OPENGL_DEBUG_BIT_KHR) {
+                        contextObject.OpenGLContextFlags |= GL_CONTEXT_FLAG_DEBUG_BIT;
+                    }
+                    if (*value & EGL_CONTEXT_OPENGL_ROBUST_ACCESS_BIT_KHR) {
+                        contextObject.OpenGLContextFlags |= GL_CONTEXT_FLAG_ROBUST_ACCESS_BIT;
+                    }
+                }
+                if (auto value = ParseAttribValue(attribList, EGL_CONTEXT_OPENGL_FORWARD_COMPATIBLE);
+                    value && *value == EGL_TRUE) {
+                    contextObject.EGLContextFlags |= EGL_CONTEXT_OPENGL_FORWARD_COMPATIBLE_BIT_KHR;
+                    contextObject.OpenGLContextFlags |= GL_CONTEXT_FLAG_FORWARD_COMPATIBLE_BIT;
+                }
+                if (auto value = ParseAttribValue(attribList, EGL_CONTEXT_OPENGL_DEBUG); value && *value == EGL_TRUE) {
+                    contextObject.EGLContextFlags |= EGL_CONTEXT_OPENGL_DEBUG_BIT_KHR;
+                    contextObject.OpenGLContextFlags |= GL_CONTEXT_FLAG_DEBUG_BIT;
+                }
+                if (auto value = ParseAttribValue(attribList, EGL_CONTEXT_OPENGL_ROBUST_ACCESS);
+                    value && *value == EGL_TRUE) {
+                    contextObject.EGLContextFlags |= EGL_CONTEXT_OPENGL_ROBUST_ACCESS_BIT_KHR;
+                    contextObject.OpenGLContextFlags |= GL_CONTEXT_FLAG_ROBUST_ACCESS_BIT;
+                }
 
                 const auto context = EncodeHandle<EGLContextHandle>(m_nextContextHandle++);
                 m_contexts[context] = contextObject;
@@ -668,6 +695,9 @@ namespace MobileGL {
                 case EGL_CONTEXT_MINOR_VERSION:
                     *value = contextObject->MinorVersion;
                     return true;
+                case EGL_CONTEXT_FLAGS_KHR:
+                    *value = contextObject->EGLContextFlags;
+                    return true;
                 case EGL_CONFIG_ID: {
                     const auto* cfg = TryGetConfig(contextObject->Config);
                     if (!cfg) {
@@ -707,6 +737,16 @@ namespace MobileGL {
                 }
                 return (ctx->OpenGLProfileMask & EGL_CONTEXT_OPENGL_CORE_PROFILE_BIT) ||
                        ctx->MajorVersion > 3 || (ctx->MajorVersion == 3 && ctx->MinorVersion >= 1);
+            }
+
+            EGLint EGLContext::GetCurrentContextFlags() const {
+                const std::lock_guard<std::recursive_mutex> lock(m_mutex);
+                auto currentIt = m_threadCurrents.find(CurrentThreadKey());
+                if (currentIt == m_threadCurrents.end()) {
+                    return 0;
+                }
+                const auto* ctx = TryGetContext(currentIt->second.Context);
+                return ctx ? ctx->OpenGLContextFlags : 0;
             }
 
             EGLContext::EGLSurfaceHandle EGLContext::CreateWindowSurface(EGLDisplayHandle display,

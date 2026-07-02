@@ -59,6 +59,7 @@ namespace MobileGL {
                 Bool ValidateContext(EGLContextHandle context) const;
                 Bool ValidateContextOnDisplay(EGLDisplayHandle display, EGLContextHandle context) const;
                 Bool IsCurrentContextOpenGLCoreProfile() const;
+                EGLint GetCurrentContextFlags() const;
 
                 // Surface
                 EGLSurfaceHandle CreateWindowSurface(EGLDisplayHandle display, EGLConfigHandle config,
@@ -160,6 +161,8 @@ namespace MobileGL {
                     EGLint MajorVersion = 1;
                     EGLint MinorVersion = 0;
                     EGLint OpenGLProfileMask = 0;
+                    EGLint EGLContextFlags = 0;
+                    EGLint OpenGLContextFlags = 0;
                 };
 
                 struct SurfaceObject {

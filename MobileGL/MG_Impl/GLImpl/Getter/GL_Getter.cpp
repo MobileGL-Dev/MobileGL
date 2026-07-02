@@ -22,9 +22,24 @@
 #include <MG_State/GLState/FramebufferState/FramebufferObject.h>
 #include <MG_Util/Texture/TextureFormatProcessor.h>
 #include <MG_Backend/BackendObjects.h>
+#if !defined(_WIN32)
+#include <dlfcn.h>
+#endif
 
 namespace MobileGL::MG_Impl::GLImpl {
     namespace {
+        bool TryGetNativeContextFlags(GLint* flags) {
+#if !defined(_WIN32)
+            using GLGetIntegervFn = void (*)(GLenum, GLint*);
+            static auto* nextGetIntegerv = reinterpret_cast<GLGetIntegervFn>(dlsym(RTLD_NEXT, "glGetIntegerv"));
+            if (nextGetIntegerv) {
+                nextGetIntegerv(GL_CONTEXT_FLAGS, flags);
+                return true;
+            }
+#endif
+            return false;
+        }
+
         enum class IndexedBufferQueryKind {
             Binding,
             Start,
@@ -896,9 +911,13 @@ namespace MobileGL::MG_Impl::GLImpl {
         case GL_DEBUG_GROUP_STACK_DEPTH:
             *params = 0; // debug-group entrypoints are stubbed
             return;
-        case GL_CONTEXT_FLAGS:
-            *params = 0; // contexts are created without debug/robust/forward-compatible flags
+        case GL_CONTEXT_FLAGS: {
+            *params = MG_State::pEGLContext ? MG_State::pEGLContext->GetCurrentContextFlags() : 0;
+            if (*params == 0) {
+                TryGetNativeContextFlags(params);
+            }
             return;
+        }
         case GL_CULL_FACE:
             *params = MG_State::pGLContext->IsCapabilityEnabled(CapabilityInput::CullFace) ? GL_TRUE : GL_FALSE;
             return;
