@@ -41,8 +41,11 @@ namespace MobileGL::MG_Impl::GLImpl {
 
         void SetTextureBorderColorFromInts(const SharedPtr<MG_State::GLState::ITextureObject>& textureObject,
                                            const GLint* params) {
-            textureObject->SetBorderColor(FloatVec4(static_cast<Float>(params[0]), static_cast<Float>(params[1]),
-                                                    static_cast<Float>(params[2]), static_cast<Float>(params[3])));
+            constexpr Float kSignedIntToFloat = 1.0f / 2147483647.0f;
+            textureObject->SetBorderColor(FloatVec4(static_cast<Float>(params[0]) * kSignedIntToFloat,
+                                                    static_cast<Float>(params[1]) * kSignedIntToFloat,
+                                                    static_cast<Float>(params[2]) * kSignedIntToFloat,
+                                                    static_cast<Float>(params[3]) * kSignedIntToFloat));
         }
 
         void SetTextureBorderColorFromIntegerInts(const SharedPtr<MG_State::GLState::ITextureObject>& textureObject,
