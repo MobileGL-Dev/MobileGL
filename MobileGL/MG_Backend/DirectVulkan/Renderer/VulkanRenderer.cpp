@@ -908,17 +908,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             return false;
         }
 
-        const auto& attachments = framebufferObject.GetAllAttachmentObjects();
-        for (SizeT i = 0; i < attachments.size(); ++i) {
-            const auto attachmentType = static_cast<FramebufferAttachmentType>(i);
-            const auto& attachment = attachments[i];
-            if (attachment.IsRenderbuffer() && attachment.IsComplete()) {
-                if (IsColorAttachment(attachmentType)) {
-                    return true;
-                }
-            }
-        }
-
         const auto& depthAttachment = framebufferObject.GetAttachment(FramebufferAttachmentType::Depth);
         const auto& stencilAttachment = framebufferObject.GetAttachment(FramebufferAttachmentType::Stencil);
         if (!depthAttachment.IsComplete() || !stencilAttachment.IsComplete()) {
@@ -936,6 +925,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
     static Bool IsUnsupportedFramebufferForDirectVulkan(
         const MG_State::GLState::FramebufferObject& framebufferObject) {
+        // TODO: Revisit this gate when DirectVulkan has full color renderbuffer render/blit/readback support.
         return HasDistinctCompleteDepthStencilTextureAttachments(framebufferObject) ||
                HasUnsupportedCompleteRenderbufferAttachment(framebufferObject);
     }

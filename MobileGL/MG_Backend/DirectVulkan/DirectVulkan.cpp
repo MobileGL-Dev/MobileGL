@@ -12,6 +12,8 @@
 #include "MG_State/GLState/Core.h"
 #include "MG_State/GLState/ErrorState/ErrorInfo.h"
 #include "MG_Impl/GLImpl/Framebuffer/GL_Framebuffer.h"
+#include "MG_Util/Converters/GLToMG/TextureEnumConverter.h"
+#include "MG_Util/Metrics/TextureMetrics.h"
 #include "MG_Util/Miscellany/IndexGenerator.h"
 #include <cstring>
 #include <spirv_reflect.h>
@@ -57,6 +59,19 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         };
 
         UnorderedMap<GLuint, ProgramResourceCache> g_programResourceCaches;
+
+        void ClearReadPixelsOutput(GLsizei width, GLsizei height, GLenum format, GLenum type, void* pixels) {
+            if (!pixels || width <= 0 || height <= 0) {
+                return;
+            }
+            const auto inputFormat = MG_Util::ConvertGLEnumToTextureInputFormat(format);
+            const auto inputType = MG_Util::ConvertGLEnumToTexturePixelDataType(type);
+            const SizeT size = MG_Util::CalculateInputTextureImageSize(inputFormat, inputType,
+                                                                       IntVec3(width, height, 1));
+            if (size > 0) {
+                std::memset(pixels, 0, size);
+            }
+        }
 
         String NormalizeDescriptorName(const SpvReflectDescriptorBinding& binding) {
             const char* rawName = binding.name;
@@ -1145,8 +1160,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         cache.storageBlocks[storageBlockIndex].binding = storageBlockBinding;
     }
     void ReadPixels(GLint x, GLint y, GLsizei width, GLsizei height, GLenum format, GLenum type, void* pixels) {
-        MOBILEGL_ASSERT(pVulkanRenderer, "DirectVulkan::ReadPixels called with null VulkanRenderer");
-        MOBILEGL_ASSERT(MG_State::pGLContext, "DirectVulkan::ReadPixels called with null GL context");
+        if (!pVulkanRenderer || !MG_State::pGLContext) {
+            // TODO: Route early/default-FBO readbacks through a real DirectVulkan read path instead of returning zeros.
+            ClearReadPixelsOutput(width, height, format, type, pixels);
+            return;
+        }
         pVulkanRenderer->ReadPixels(x, y, width, height, format, type, pixels);
     }
     void GetTexImage(GLenum target, GLint level, GLenum format, GLenum type, GLvoid* pixels) {
@@ -1162,8 +1180,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     }
 
     void Clear(GLbitfield mask) {
-        MOBILEGL_ASSERT(pVulkanRenderer, "DirectVulkan::Clear called with null VulkanRenderer");
-        MOBILEGL_ASSERT(MG_State::pGLContext, "DirectVulkan::Clear called with null GL context");
+        if (!pVulkanRenderer || !MG_State::pGLContext) {
+            // TODO: Preserve pending clears issued before the Vulkan renderer/context is fully attached.
+            return;
+        }
         pVulkanRenderer->Clear(mask);
     }
 
@@ -1277,8 +1297,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
     void BlitFramebuffer(GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1, GLint dstX0, GLint dstY0, GLint dstX1,
                          GLint dstY1, GLbitfield mask, GLenum filter) {
-        MOBILEGL_ASSERT(pVulkanRenderer, "DirectVulkan::BlitFramebuffer called with null VulkanRenderer");
-        MOBILEGL_ASSERT(MG_State::pGLContext, "DirectVulkan::BlitFramebuffer called with null GL context");
+        if (!pVulkanRenderer || !MG_State::pGLContext) {
+            // TODO: Support pre-renderer/default-FBO blits instead of dropping them at the DirectVulkan boundary.
+            return;
+        }
         pVulkanRenderer->BlitFramebuffer(srcX0, srcY0, srcX1, srcY1, dstX0, dstY0, dstX1, dstY1, mask, filter);
     }
 

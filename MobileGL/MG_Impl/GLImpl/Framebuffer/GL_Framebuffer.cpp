@@ -45,23 +45,10 @@ namespace MobileGL::MG_Impl::GLImpl {
                    depthAttachment.GetTextureLevel() != stencilAttachment.GetTextureLevel();
         }
 
-        Bool HasCompleteRenderbufferAttachment(const MG_State::GLState::FramebufferObject& framebufferObject) {
-            if (framebufferObject.GetExternalIndex() == 0) {
-                return false;
-            }
-
-            for (const auto& attachment : framebufferObject.GetAllAttachmentObjects()) {
-                if (attachment.IsRenderbuffer() && attachment.IsComplete()) {
-                    return true;
-                }
-            }
-            return false;
-        }
-
         Bool IsUnsupportedFramebufferForDirectVulkan(
             const MG_State::GLState::FramebufferObject& framebufferObject) {
-            return HasDistinctCompleteDepthStencilTextureAttachments(framebufferObject) ||
-                   HasCompleteRenderbufferAttachment(framebufferObject);
+            // TODO: Keep this in sync with DirectVulkan renderbuffer support as color renderbuffer rendering lands.
+            return HasDistinctCompleteDepthStencilTextureAttachments(framebufferObject);
         }
 
         Bool HasDefinedAttachment(const MG_State::GLState::FramebufferObject& framebufferObject) {
