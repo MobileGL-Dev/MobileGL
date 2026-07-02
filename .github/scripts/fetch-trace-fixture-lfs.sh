@@ -39,7 +39,7 @@ case "${case_name}" in
     add_standard_case "0000923340"
     ;;
   minecraft-26.2-main-menu)
-    add_standard_case "0000259766"
+    add_standard_case "0000101926"
     ;;
   minecraft-26.2-in-world)
     add_standard_case "0000519370"

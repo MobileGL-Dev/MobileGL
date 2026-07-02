@@ -17,7 +17,7 @@ The bundled fixtures cover:
   singleplayer world with Fancy graphics.
   ![Minecraft 1.21.4 Fabric Sodium in-world golden](fixtures/minecraft-1.21.4-fabric-sodium-in-world.0000923340.png)
 - minecraft-26.2-main-menu: captured from Minecraft 26.2's main menu.
-  ![Minecraft 26.2 main menu golden](fixtures/minecraft-26.2-main-menu.0000259766.png)
+  ![Minecraft 26.2 main menu golden](fixtures/minecraft-26.2-main-menu.0000101926.png)
 - minecraft-26.2-in-world: captured from Minecraft 26.2 after entering a normal singleplayer world.
   ![Minecraft 26.2 in-world golden](fixtures/minecraft-26.2-in-world.0000519370.png)
 - minecraft-1.21.4-fabric-common-mods-in-world: captured from Minecraft 1.21.4 Fabric with Sodium, Iris, REI,

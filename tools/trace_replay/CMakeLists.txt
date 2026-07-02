@@ -413,8 +413,8 @@ add_trace_replay_test_for_backends(minecraft-1.21.4-fabric-sodium-in-world
 add_trace_replay_test_for_backends(minecraft-26.2-main-menu
         TRACE_ARCHIVE ${MOBILEGL_TRACE_ROOT}/fixtures/minecraft-26.2-main-menu.tgz
         TRACE_FILE trace.trace
-        GOLDEN ${MOBILEGL_TRACE_ROOT}/fixtures/minecraft-26.2-main-menu.0000259766.png
-        TARGET_CALL 259766
+        GOLDEN ${MOBILEGL_TRACE_ROOT}/fixtures/minecraft-26.2-main-menu.0000101926.png
+        TARGET_CALL 101926
         WIDTH 854
         HEIGHT 480
 )

@@ -48,7 +48,7 @@ CASES = [
     {"name": "minecraft-1.21.4-main-menu", "golden": "minecraft-1.21.4-main-menu.0000481787.png", "alternate_golden": "minecraft-1.21.4-main-menu.0000481787-mali.png", "target_call": 481787, "timeout_seconds": 180},
     {"name": "minecraft-1.21.4-in-world", "golden": "minecraft-1.21.4-in-world.0000280000.png", "target_call": 280000, "timeout_seconds": 900},
     {"name": "minecraft-1.21.4-fabric-sodium-in-world", "golden": "minecraft-1.21.4-fabric-sodium-in-world.0000923340.png", "target_call": 923340, "timeout_seconds": 1800},
-    {"name": "minecraft-26.2-main-menu", "golden": "minecraft-26.2-main-menu.0000259766.png", "target_call": 259766, "timeout_seconds": 180},
+    {"name": "minecraft-26.2-main-menu", "golden": "minecraft-26.2-main-menu.0000101926.png", "target_call": 101926, "timeout_seconds": 180},
     {"name": "minecraft-26.2-in-world", "golden": "minecraft-26.2-in-world.0000519370.png", "target_call": 519370, "timeout_seconds": 900},
     {"name": "minecraft-1.21.4-fabric-common-mods-in-world", "golden": "minecraft-1.21.4-fabric-common-mods-in-world.0000522084.png", "target_call": 522084, "timeout_seconds": 1800},
     {"name": "minecraft-1.21.4-fabric-common-mods-inventory", "golden": "minecraft-1.21.4-fabric-common-mods-inventory.0000728558.png", "target_call": 728558, "timeout_seconds": 1800},

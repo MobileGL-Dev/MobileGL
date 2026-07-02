@@ -215,8 +215,8 @@ jobs:
           - name: minecraft-26.2-main-menu
             trace_archive: tools/trace_replay/fixtures/minecraft-26.2-main-menu.tgz
             trace_file: trace.trace
-            golden: tools/trace_replay/fixtures/minecraft-26.2-main-menu.0000259766.png
-            target_call: 259766
+            golden: tools/trace_replay/fixtures/minecraft-26.2-main-menu.0000101926.png
+            target_call: 101926
             width: 854
             height: 480
             crop_x: 0
