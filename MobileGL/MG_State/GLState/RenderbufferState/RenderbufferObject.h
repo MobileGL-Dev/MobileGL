@@ -45,7 +45,7 @@ namespace MobileGL {
 
             private:
                 Uint m_externalIndex = 0;
-                TextureInternalFormat m_internalFormat;
+                TextureInternalFormat m_internalFormat = TextureInternalFormat::RGBA;
                 Int m_width = 0;
                 Int m_height = 0;
                 Int m_samples = 0;
