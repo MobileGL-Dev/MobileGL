@@ -200,8 +200,65 @@ namespace MobileGL::MG_Impl::GLImpl {
         MG_State::pGLContext->SetSampleMaskValue(static_cast<Uint32>(mask));
     }
 
+    Int GetMaxRenderbufferSize_State() {
+        if (MG_Backend::pActiveBackendObject == nullptr) {
+            return std::numeric_limits<Int>::max();
+        }
+        return MG_Backend::pActiveBackendObject->GetDynamicParameters().MaxRenderbufferSize;
+    }
+
+    Int GetMaxRenderbufferSamples_State() {
+        if (MG_Backend::pActiveBackendObject == nullptr) {
+            return std::numeric_limits<Int>::max();
+        }
+        return std::max(MG_Backend::pActiveBackendObject->GetDynamicParameters().MaxSamples, 1);
+    }
+
+    Bool ValidateRenderbufferStorageSize_State(GLsizei width, GLsizei height, const char* caller) {
+        if (width < 0 || height < 0) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidValue,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller, "Width and height must be non-negative."));
+            return false;
+        }
+
+        const Int maxRenderbufferSize = GetMaxRenderbufferSize_State();
+        if (width > maxRenderbufferSize || height > maxRenderbufferSize) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidValue,
+                MakeUnique<GenericErrorInfo>(
+                    "MG_Impl/GLImpl", caller,
+                    std::format("Width and height must not exceed GL_MAX_RENDERBUFFER_SIZE ({}).",
+                                maxRenderbufferSize)));
+            return false;
+        }
+        return true;
+    }
+
+    Bool ValidateRenderbufferStorageSamples_State(GLsizei samples, const char* caller) {
+        if (samples < 0) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidValue,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller, "Sample count must be non-negative."));
+            return false;
+        }
+
+        const Int maxSamples = GetMaxRenderbufferSamples_State();
+        if (samples > maxSamples) {
+            // TODO: Use per-internalformat renderbuffer sample limits once glGetInternalformativ is backed.
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidValue,
+                MakeUnique<GenericErrorInfo>(
+                    "MG_Impl/GLImpl", caller,
+                    std::format("Sample count {} exceeds GL_MAX_SAMPLES ({}).", samples, maxSamples)));
+            return false;
+        }
+        return true;
+    }
+
     void RenderbufferStorageMultisample_State(GLenum target, GLsizei samples, GLenum internalformat, GLsizei width,
                                               GLsizei height) {
+        constexpr const char* kCaller = "RenderbufferStorageMultisample_State";
         RenderbufferTarget rbTarget = MG_Util::ConvertGLEnumToRenderbufferTarget(target);
         if (!FramebufferImpl::ValidateRenderbufferTarget(rbTarget)) return;
 
@@ -210,7 +267,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         if (!renderbufferObject) {
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidOperation,
-                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", "RenderbufferStorageMultisample_State",
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", kCaller,
                                              "Renderbuffer target is bound to no renderbuffer object."));
             return;
         }
@@ -218,20 +275,8 @@ namespace MobileGL::MG_Impl::GLImpl {
         TextureInternalFormat format = MG_Util::ConvertGLEnumToTextureInternalFormat(internalformat);
         if (!TextureImpl::ValidateTextureInternalFormat(format)) return;
 
-        if (samples < 0) {
-            MG_State::pGLContext->RecordError(
-                ErrorCode::InvalidValue,
-                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", "RenderbufferStorageMultisample_State",
-                                             "Sample count must be non-negative."));
-            return;
-        }
-        if (width < 0 || height < 0) {
-            MG_State::pGLContext->RecordError(
-                ErrorCode::InvalidValue,
-                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", "RenderbufferStorageMultisample_State",
-                                             "Width and height must be non-negative."));
-            return;
-        }
+        if (!ValidateRenderbufferStorageSamples_State(samples, kCaller)) return;
+        if (!ValidateRenderbufferStorageSize_State(width, height, kCaller)) return;
 
         renderbufferObject->AllocateStorage({width, height});
         renderbufferObject->SetInternalFormat(format);
@@ -248,12 +293,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         }
         TextureInternalFormat format = MG_Util::ConvertGLEnumToTextureInternalFormat(internalformat);
         if (!TextureImpl::ValidateTextureInternalFormat(format)) return;
-        if (width < 0 || height < 0) {
-            MG_State::pGLContext->RecordError(
-                ErrorCode::InvalidValue, MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller,
-                                                                      "Width and height must be non-negative."));
-            return;
-        }
+        if (!ValidateRenderbufferStorageSize_State(width, height, caller)) return;
         renderbufferObject->AllocateStorage({width, height});
         renderbufferObject->SetInternalFormat(format);
         renderbufferObject->SetSamples(0);
@@ -430,6 +470,7 @@ namespace MobileGL::MG_Impl::GLImpl {
 
     void NamedRenderbufferStorage_State(GLuint renderbuffer, GLenum internalformat, GLsizei width, GLsizei height) {
         auto renderbufferObject = GetNamedRenderbufferObject_State(renderbuffer, "NamedRenderbufferStorage_State");
+        if (!renderbufferObject) return;
         AllocateRenderbufferStorage_State(renderbufferObject, internalformat, width, height,
                                           "NamedRenderbufferStorage_State");
     }
@@ -442,20 +483,8 @@ namespace MobileGL::MG_Impl::GLImpl {
 
         TextureInternalFormat format = MG_Util::ConvertGLEnumToTextureInternalFormat(internalformat);
         if (!TextureImpl::ValidateTextureInternalFormat(format)) return;
-        if (samples < 0) {
-            MG_State::pGLContext->RecordError(
-                ErrorCode::InvalidValue,
-                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", "NamedRenderbufferStorageMultisample_State",
-                                             "Sample count must be non-negative."));
-            return;
-        }
-        if (width < 0 || height < 0) {
-            MG_State::pGLContext->RecordError(
-                ErrorCode::InvalidValue,
-                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", "NamedRenderbufferStorageMultisample_State",
-                                             "Width and height must be non-negative."));
-            return;
-        }
+        if (!ValidateRenderbufferStorageSamples_State(samples, "NamedRenderbufferStorageMultisample_State")) return;
+        if (!ValidateRenderbufferStorageSize_State(width, height, "NamedRenderbufferStorageMultisample_State")) return;
 
         renderbufferObject->AllocateStorage({width, height});
         renderbufferObject->SetInternalFormat(format);
@@ -1435,6 +1464,7 @@ namespace MobileGL::MG_Impl::GLImpl {
     void GetNamedRenderbufferParameteriv_State(GLuint renderbuffer, GLenum pname, GLint* params) {
         auto renderbufferObject =
             GetNamedRenderbufferObject_State(renderbuffer, "GetNamedRenderbufferParameteriv_State");
+        if (!renderbufferObject) return;
         GetRenderbufferParameterivForObject_State(renderbufferObject, pname, params,
                                                  "GetNamedRenderbufferParameteriv_State");
     }
