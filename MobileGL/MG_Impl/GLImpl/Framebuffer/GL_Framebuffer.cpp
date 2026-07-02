@@ -792,6 +792,12 @@ namespace MobileGL::MG_Impl::GLImpl {
 
     void FramebufferRenderbuffer_State(GLenum target, GLenum attachment, GLenum renderbuffertarget,
                                        GLuint renderbuffer) {
+        if (attachment == GL_DEPTH_STENCIL_ATTACHMENT) {
+            FramebufferRenderbuffer_State(target, GL_DEPTH_ATTACHMENT, renderbuffertarget, renderbuffer);
+            FramebufferRenderbuffer_State(target, GL_STENCIL_ATTACHMENT, renderbuffertarget, renderbuffer);
+            return;
+        }
+
         if (target == GL_FRAMEBUFFER) {
             target = GL_DRAW_FRAMEBUFFER;
         }
