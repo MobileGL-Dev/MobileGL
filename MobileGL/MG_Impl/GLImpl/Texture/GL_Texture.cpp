@@ -231,6 +231,59 @@ namespace MobileGL::MG_Impl::GLImpl {
             }
         }
 
+        Bool IsValidImageTextureFormat(GLenum format) {
+            switch (format) {
+            case GL_RGBA32F:
+            case GL_RGBA16F:
+            case GL_RG32F:
+            case GL_RG16F:
+            case GL_R11F_G11F_B10F:
+            case GL_R32F:
+            case GL_R16F:
+            case GL_RGBA32UI:
+            case GL_RGBA16UI:
+            case GL_RGB10_A2UI:
+            case GL_RGBA8UI:
+            case GL_RG32UI:
+            case GL_RG16UI:
+            case GL_RG8UI:
+            case GL_R32UI:
+            case GL_R16UI:
+            case GL_R8UI:
+            case GL_RGBA32I:
+            case GL_RGBA16I:
+            case GL_RGBA8I:
+            case GL_RG32I:
+            case GL_RG16I:
+            case GL_RG8I:
+            case GL_R32I:
+            case GL_R16I:
+            case GL_R8I:
+            case GL_RGBA16:
+            case GL_RGB10_A2:
+            case GL_RGBA8:
+            case GL_RG16:
+            case GL_RG8:
+            case GL_R16:
+            case GL_R8:
+            case GL_RGBA16_SNORM:
+            case GL_RGBA8_SNORM:
+            case GL_RG16_SNORM:
+            case GL_RG8_SNORM:
+            case GL_R16_SNORM:
+            case GL_R8_SNORM:
+                return true;
+            default:
+                return false;
+            }
+        }
+
+        GLuint GetAdvertisedImageUnitCount() {
+            return static_cast<GLuint>(std::min<GLint>(
+                MG_Backend::pActiveBackendObject->GetDynamicParameters().MaxImageUnits,
+                MG_State::GLState::TextureState::MAX_TEXTURE_IMAGE_UNITS));
+        }
+
         Uint ComputeFullMipmapLevelCount(const IntVec3& baseTexelSize) {
             Int maxDimension = std::max<Int>(
                 baseTexelSize.x(),
@@ -1752,6 +1805,11 @@ namespace MobileGL::MG_Impl::GLImpl {
                     textureObject->GetSamplerObject()->GetSamplerCompareFunc());
             }
             break;
+        case GL_IMAGE_FORMAT_COMPATIBILITY_TYPE:
+            if (params) {
+                *params = GL_IMAGE_FORMAT_COMPATIBILITY_BY_SIZE;
+            }
+            break;
         default:
             MG_State::pGLContext->RecordError(ErrorCode::InvalidEnum,
                                               MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", "GetTexParameteriv_State",
@@ -3102,7 +3160,7 @@ namespace MobileGL::MG_Impl::GLImpl {
 
     void BindImageTexture(GLuint unit, GLuint texture, GLint level, GLboolean layered, GLint layer, GLenum access,
                           GLenum format) {
-        if (unit >= MG_State::GLState::TextureState::MAX_TEXTURE_IMAGE_UNITS) {
+        if (unit >= GetAdvertisedImageUnitCount()) {
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidValue,
                 MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__, "Image texture unit is out of range."));
@@ -3124,6 +3182,12 @@ namespace MobileGL::MG_Impl::GLImpl {
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidEnum,
                 MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__, "Invalid image texture access."));
+            return;
+        }
+        if (!IsValidImageTextureFormat(format)) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidValue,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__, "Invalid image texture format."));
             return;
         }
 

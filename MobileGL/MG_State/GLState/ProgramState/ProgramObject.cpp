@@ -321,12 +321,16 @@ namespace MobileGL::MG_State::GLState {
         // ------------ Uniforms (GL Plain) ----------------
         // Allocate uniform locations
         m_activeUniformCount = m_program->getNumUniformVariables();
+        Int requiredUniformLocations = 0;
         MGLOG_D("ProgramObject %u: Reflection - active uniform count = %d", m_externalIndex, m_activeUniformCount);
         for (int i = 0; i < m_activeUniformCount; i++) {
             auto& uniform = m_program->getUniform(i);
             auto location = uniform.layoutLocation();
+            const Int locationSpan =
+                (uniform.getType() && uniform.getType()->isOpaque()) ? std::max(1, uniform.size) : 1;
+            requiredUniformLocations += locationSpan;
             if (location != glslang::TQualifier::layoutLocationEnd) {
-                m_maxUniformLocation = std::max(m_maxUniformLocation, location);
+                m_maxUniformLocation = std::max(m_maxUniformLocation, location + locationSpan - 1);
             }
             m_uniformNameMaxLength = std::max(m_uniformNameMaxLength, (Int)uniform.name.length());
             m_uniformLocations[uniform.name] = location;
@@ -337,13 +341,13 @@ namespace MobileGL::MG_State::GLState {
         MGLOG_D("ProgramObject %u: Reflection - computed m_maxUniformLocation=%u m_uniformNameMaxLength=%d",
                 m_externalIndex, m_maxUniformLocation, m_uniformNameMaxLength);
 
-        if (m_maxUniformLocation + 1 < m_activeUniformCount) {
-            MGLOG_D("ProgramObject %u: Reflection - maxUniformLocation+1 (%u) < activeUniformCount (%d), "
+        if (m_maxUniformLocation + 1 < requiredUniformLocations) {
+            MGLOG_D("ProgramObject %u: Reflection - maxUniformLocation+1 (%u) < requiredUniformLocations (%d), "
                     "adjusting",
-                    m_externalIndex, m_maxUniformLocation + 1, m_activeUniformCount);
+                    m_externalIndex, m_maxUniformLocation + 1, requiredUniformLocations);
             // This means we have fewer than enough gaps to fit
             // unallocated uniforms
-            m_maxUniformLocation = m_activeUniformCount;
+            m_maxUniformLocation = requiredUniformLocations - 1;
         }
 
         // i-th elements refers to uniform at layout(location = i, ...)
@@ -362,9 +366,14 @@ namespace MobileGL::MG_State::GLState {
                         m_externalIndex, uniform.name.c_str());
                 continue; // will allocate unallocated uniforms later
             }
-            m_uniformIndexInTProgram[location] = i;
-            MGLOG_D("ProgramObject %u: Reflection - assigned uniform '%s' to location %d (indexInTProgram=%d)",
-                    m_externalIndex, uniform.name.c_str(), location, i);
+            const Int locationSpan =
+                (uniform.getType() && uniform.getType()->isOpaque()) ? std::max(1, uniform.size) : 1;
+            for (Int element = 0; element < locationSpan; ++element) {
+                m_uniformIndexInTProgram[location + element] = i;
+            }
+            MGLOG_D("ProgramObject %u: Reflection - assigned uniform '%s' to locations %d..%d "
+                    "(indexInTProgram=%d)",
+                    m_externalIndex, uniform.name.c_str(), location, location + locationSpan - 1, i);
         }
 
         SizeT locNeedle = 0;
@@ -375,15 +384,24 @@ namespace MobileGL::MG_State::GLState {
         });
         for (auto index : unallocatedUniformIndex) {
             auto& uniform = m_program->getUniform(index);
+            const Int locationSpan =
+                (uniform.getType() && uniform.getType()->isOpaque()) ? std::max(1, uniform.size) : 1;
             for (; locNeedle <= m_maxUniformLocation; locNeedle++) {
-                if (m_uniformIndexInTProgram[locNeedle] != glslang::TQualifier::layoutLocationEnd) continue;
+                bool hasRoom = locNeedle + locationSpan - 1 <= m_maxUniformLocation;
+                for (Int element = 0; hasRoom && element < locationSpan; ++element) {
+                    hasRoom = m_uniformIndexInTProgram[locNeedle + element] ==
+                              glslang::TQualifier::layoutLocationEnd;
+                }
+                if (!hasRoom) continue;
                 // Found a vacant location at locNeedle
-                m_uniformIndexInTProgram[locNeedle] = index;
+                for (Int element = 0; element < locationSpan; ++element) {
+                    m_uniformIndexInTProgram[locNeedle + element] = index;
+                }
                 m_uniformLocations[uniform.name] = locNeedle;
-                MGLOG_D("ProgramObject %u: Reflection - assigned unallocated uniform '%s' to location %zu "
+                MGLOG_D("ProgramObject %u: Reflection - assigned unallocated uniform '%s' to locations %zu..%zu "
                         "(index %d)",
-                        m_externalIndex, uniform.name.c_str(), locNeedle, index);
-                locNeedle++;
+                        m_externalIndex, uniform.name.c_str(), locNeedle, locNeedle + locationSpan - 1, index);
+                locNeedle += locationSpan;
                 break;
             }
         }
@@ -404,9 +422,14 @@ namespace MobileGL::MG_State::GLState {
             const auto explicitBinding = m_explicitOpaqueUniformBindings.find(uniform.name);
             const int initialUnit =
                 explicitBinding != m_explicitOpaqueUniformBindings.end() ? static_cast<int>(explicitBinding->second) : 0;
-            m_uniformSamplerOrImageUnitIndex[location] = initialUnit;
-            MGLOG_D("ProgramObject %u: Reflection - opaque uniform '%s' location=%u initialUnit=%d",
-                    m_externalIndex, uniform.name.c_str(), location, initialUnit);
+            const Int locationSpan = std::max(1, uniform.size);
+            for (Int element = 0; element < locationSpan &&
+                                  location + element < m_uniformSamplerOrImageUnitIndex.size(); ++element) {
+                m_uniformSamplerOrImageUnitIndex[location + element] =
+                    initialUnit + (explicitBinding != m_explicitOpaqueUniformBindings.end() ? element : 0);
+            }
+            MGLOG_D("ProgramObject %u: Reflection - opaque uniform '%s' locations=%u..%u initialUnit=%d",
+                    m_externalIndex, uniform.name.c_str(), location, location + locationSpan - 1, initialUnit);
         }
 
         // ------------ attributes (vertex in) ---------------

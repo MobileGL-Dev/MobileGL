@@ -646,6 +646,52 @@ namespace MobileGL::MG_Impl::GLImpl {
             }
         }
 
+        switch (target) {
+        case GL_IMAGE_BINDING_NAME:
+        case GL_IMAGE_BINDING_LEVEL:
+        case GL_IMAGE_BINDING_LAYERED:
+        case GL_IMAGE_BINDING_LAYER:
+        case GL_IMAGE_BINDING_ACCESS:
+        case GL_IMAGE_BINDING_FORMAT: {
+            const auto maxImageUnits = static_cast<GLuint>(std::min<GLint>(
+                MG_Backend::pActiveBackendObject->GetDynamicParameters().MaxImageUnits,
+                MG_State::GLState::TextureState::MAX_TEXTURE_IMAGE_UNITS));
+            if (index >= maxImageUnits) {
+                *data = 0;
+                MG_State::pGLContext->RecordError(
+                    ErrorCode::InvalidValue,
+                    MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__, "Image unit index is out of range."));
+                return;
+            }
+
+            const auto& binding = MG_State::pGLContext->GetImageTextureBinding(static_cast<Int>(index));
+            switch (target) {
+            case GL_IMAGE_BINDING_NAME:
+                *data = binding.Texture ? static_cast<GLint>(binding.Texture->GetExternalIndex()) : 0;
+                return;
+            case GL_IMAGE_BINDING_LEVEL:
+                *data = binding.Level;
+                return;
+            case GL_IMAGE_BINDING_LAYERED:
+                *data = binding.Layered;
+                return;
+            case GL_IMAGE_BINDING_LAYER:
+                *data = binding.Layer;
+                return;
+            case GL_IMAGE_BINDING_ACCESS:
+                *data = static_cast<GLint>(binding.Access);
+                return;
+            case GL_IMAGE_BINDING_FORMAT:
+                *data = static_cast<GLint>(binding.Format);
+                return;
+            default:
+                break;
+            }
+        }
+        default:
+            break;
+        }
+
         auto getIntegeri = MG_Backend::gBackendFunctionsTable.GL.GetIntegeri_v;
         if (target == GL_MAX_COMPUTE_WORK_GROUP_COUNT || target == GL_MAX_COMPUTE_WORK_GROUP_SIZE) {
             if (index >= 3) {

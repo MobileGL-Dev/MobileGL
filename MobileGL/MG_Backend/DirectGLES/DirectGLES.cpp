@@ -2792,9 +2792,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
                         MG_Util::ConvertGLEnumToString(format).c_str());
         MOBILEGL_ASSERT(type == GL_UNSIGNED_BYTE || type == GL_UNSIGNED_INT || type == GL_UNSIGNED_INT_2_10_10_10_REV ||
                             type == GL_INT || type == GL_FLOAT || type == GL_UNSIGNED_INT_8_8_8_8 ||
-                            type == GL_UNSIGNED_INT_8_8_8_8_REV,
+                            type == GL_UNSIGNED_INT_8_8_8_8_REV || type == GL_HALF_FLOAT,
                         "Only GL_UNSIGNED_BYTE, GL_UNSIGNED_INT, GL_UNSIGNED_INT_2_10_10_10_REV, "
-                        "GL_INT, GL_FLOAT, GL_UNSIGNED_INT_8_8_8_8 and GL_UNSIGNED_INT_8_8_8_8_REV "
+                        "GL_INT, GL_FLOAT, GL_HALF_FLOAT, GL_UNSIGNED_INT_8_8_8_8 and GL_UNSIGNED_INT_8_8_8_8_REV "
                         "are supported currently, while requested %s.",
                         MG_Util::ConvertGLEnumToString(type).c_str());
 

@@ -216,6 +216,25 @@ namespace MobileGL::MG_Impl::GLImpl {
         return false;
     }
 
+    GLint GetOpaqueUniformUnitLimit(const glslang::TType* type) {
+        const auto& dynamicParameters = MG_Backend::pActiveBackendObject->GetDynamicParameters();
+        if (type && type->isImage()) return dynamicParameters.MaxImageUnits;
+        if (type && type->isTexture()) return dynamicParameters.MaxCombinedTextureImageUnits;
+        return 0;
+    }
+
+    bool ValidateOpaqueUniformUnit(const char* functionName, const glslang::TType* type, GLint unit) {
+        const GLint limit = GetOpaqueUniformUnitLimit(type);
+        if (unit < 0 || unit >= limit) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidValue,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", functionName,
+                                             "Opaque uniform unit is out of range."));
+            return false;
+        }
+        return true;
+    }
+
     void AttachShader_State(GLuint program, GLuint shader) {
         auto& programObject = TryToGetProgramObject(program);
         if (!programObject) return;
@@ -776,12 +795,19 @@ namespace MobileGL::MG_Impl::GLImpl {
             Memcpy((char*)programObject.MapUBO() + offset + byteOffsetInsideUniform, value, ItemCount * sizeof(T));
         } else {
             auto* ttype = programObject.GetUniformTType(location);
-            if (ttype->isTexture() || ttype->isImage()) {
-                MGLOG_D("%s: program = %d, opaque uniform location = %d, name = '%s', unit = %d", __func__,
-                        programObject.GetExternalIndex(), location, programObject.GetUniformName(location).c_str(),
-                        static_cast<Int>(*value));
-                programObject.SetUniformSamplerOrImageUnitIndex(location, *value);
+            if (!ttype->isTexture() && !ttype->isImage()) return;
+            if constexpr (!std::is_same_v<std::remove_cv_t<T>, GLint> || ItemCount != 1) {
+                MG_State::pGLContext->RecordError(
+                    ErrorCode::InvalidOperation,
+                    MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
+                                                 "Opaque uniforms can only be set with Uniform1i/Uniform1iv."));
+                return;
             }
+            if (!ValidateOpaqueUniformUnit(__func__, ttype, *value)) return;
+            MGLOG_D("%s: program = %d, opaque uniform location = %d, name = '%s', unit = %d", __func__,
+                    programObject.GetExternalIndex(), location, programObject.GetUniformName(location).c_str(),
+                    static_cast<Int>(*value));
+            programObject.SetUniformSamplerOrImageUnitIndex(location, *value);
         }
     }
 
@@ -1033,6 +1059,34 @@ namespace MobileGL::MG_Impl::GLImpl {
         }
     }
 
+    void UniformMatrixNonSquarefv_State(const char* caller, GLint location, GLsizei count) {
+        if (location == -1) return;
+
+        auto& programObject = MG_State::pGLContext->GetCurrentProgram();
+        if (programObject == nullptr) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidOperation,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller, "There is no current program object."));
+            return;
+        }
+
+        for (GLint i = 0; i < count; i++) {
+            if (!programObject->IsValidUniformLocation(location + i)) {
+                RecordInvalidUniformLocationError(caller, location + i, "the current program object");
+                return;
+            }
+            if (programObject->IsUniformOpaqueAtLocation(location + i)) {
+                MG_State::pGLContext->RecordError(
+                    ErrorCode::InvalidOperation,
+                    MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller,
+                                                 "Opaque uniforms cannot be set with matrix Uniform calls."));
+                return;
+            }
+        }
+
+        // TODO: Implement non-square matrix uniform uploads for non-opaque uniforms.
+    }
+
     void ProgramUniformMatrix2fv_State(GLuint program, GLint location, GLsizei count, GLboolean transpose,
                                        const GLfloat* value) {
         if (location == -1) return;
@@ -1125,6 +1179,37 @@ namespace MobileGL::MG_Impl::GLImpl {
                 Uniform_State<16>(*programObject, location + i, value + i * 16);
             }
         }
+    }
+
+    void ProgramUniformMatrixNonSquarefv_State(const char* caller, GLuint program, GLint location, GLsizei count) {
+        if (location == -1) return;
+
+        auto& programObject = TryToGetProgramObject(program);
+        if (!programObject) return;
+
+        if (!programObject->GetLinkStatus()) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidOperation,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller,
+                                             "program " + std::to_string(program) + " is not linked."));
+            return;
+        }
+
+        for (GLint i = 0; i < count; i++) {
+            if (!programObject->IsValidUniformLocation(location + i)) {
+                RecordInvalidUniformLocationError(caller, location + i, "program " + std::to_string(program));
+                return;
+            }
+            if (programObject->IsUniformOpaqueAtLocation(location + i)) {
+                MG_State::pGLContext->RecordError(
+                    ErrorCode::InvalidOperation,
+                    MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller,
+                                                 "Opaque uniforms cannot be set with matrix Uniform calls."));
+                return;
+            }
+        }
+
+        // TODO: Implement non-square matrix uniform uploads for non-opaque uniforms.
     }
 
     GLuint GetUniformBlockIndex_State(GLuint program, const GLchar* uniformBlockName) {
@@ -1576,6 +1661,30 @@ namespace MobileGL::MG_Impl::GLImpl {
         UniformMatrix4fv_State(location, count, transpose, value);
     }
 
+    void UniformMatrix2x3fv(GLint location, GLsizei count, GLboolean transpose, const GLfloat* value) {
+        UniformMatrixNonSquarefv_State(__func__, location, count);
+    }
+
+    void UniformMatrix3x2fv(GLint location, GLsizei count, GLboolean transpose, const GLfloat* value) {
+        UniformMatrixNonSquarefv_State(__func__, location, count);
+    }
+
+    void UniformMatrix2x4fv(GLint location, GLsizei count, GLboolean transpose, const GLfloat* value) {
+        UniformMatrixNonSquarefv_State(__func__, location, count);
+    }
+
+    void UniformMatrix4x2fv(GLint location, GLsizei count, GLboolean transpose, const GLfloat* value) {
+        UniformMatrixNonSquarefv_State(__func__, location, count);
+    }
+
+    void UniformMatrix3x4fv(GLint location, GLsizei count, GLboolean transpose, const GLfloat* value) {
+        UniformMatrixNonSquarefv_State(__func__, location, count);
+    }
+
+    void UniformMatrix4x3fv(GLint location, GLsizei count, GLboolean transpose, const GLfloat* value) {
+        UniformMatrixNonSquarefv_State(__func__, location, count);
+    }
+
     void ProgramUniform1f(GLuint program, GLint location, GLfloat v0) {
         ProgramUniform1fv(program, location, 1, &v0);
     }
@@ -1694,6 +1803,36 @@ namespace MobileGL::MG_Impl::GLImpl {
     void ProgramUniformMatrix4fv(GLuint program, GLint location, GLsizei count, GLboolean transpose,
                                  const GLfloat* value) {
         ProgramUniformMatrix4fv_State(program, location, count, transpose, value);
+    }
+
+    void ProgramUniformMatrix2x3fv(GLuint program, GLint location, GLsizei count, GLboolean transpose,
+                                   const GLfloat* value) {
+        ProgramUniformMatrixNonSquarefv_State(__func__, program, location, count);
+    }
+
+    void ProgramUniformMatrix3x2fv(GLuint program, GLint location, GLsizei count, GLboolean transpose,
+                                   const GLfloat* value) {
+        ProgramUniformMatrixNonSquarefv_State(__func__, program, location, count);
+    }
+
+    void ProgramUniformMatrix2x4fv(GLuint program, GLint location, GLsizei count, GLboolean transpose,
+                                   const GLfloat* value) {
+        ProgramUniformMatrixNonSquarefv_State(__func__, program, location, count);
+    }
+
+    void ProgramUniformMatrix4x2fv(GLuint program, GLint location, GLsizei count, GLboolean transpose,
+                                   const GLfloat* value) {
+        ProgramUniformMatrixNonSquarefv_State(__func__, program, location, count);
+    }
+
+    void ProgramUniformMatrix3x4fv(GLuint program, GLint location, GLsizei count, GLboolean transpose,
+                                   const GLfloat* value) {
+        ProgramUniformMatrixNonSquarefv_State(__func__, program, location, count);
+    }
+
+    void ProgramUniformMatrix4x3fv(GLuint program, GLint location, GLsizei count, GLboolean transpose,
+                                   const GLfloat* value) {
+        ProgramUniformMatrixNonSquarefv_State(__func__, program, location, count);
     }
 
     GLuint GetUniformBlockIndex(GLuint program, const GLchar* uniformBlockName) {
