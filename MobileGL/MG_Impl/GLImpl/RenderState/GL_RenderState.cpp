@@ -336,6 +336,16 @@ namespace MobileGL::MG_Impl::GLImpl {
     }
 
     void Enable_State(GLenum cap) {
+        switch (cap) {
+        case GL_TEXTURE_1D:
+        case GL_TEXTURE_2D:
+        case GL_TEXTURE_3D:
+        case GL_TEXTURE_CUBE_MAP:
+            return;
+        default:
+            break;
+        }
+
         CapabilityInput capInput = MG_Util::ConvertGLEnumToCapabilityInput(cap);
         if (capInput == CapabilityInput::Unknown) {
             MG_State::pGLContext->RecordError(
@@ -350,6 +360,16 @@ namespace MobileGL::MG_Impl::GLImpl {
     }
 
     void Disable_State(GLenum cap) {
+        switch (cap) {
+        case GL_TEXTURE_1D:
+        case GL_TEXTURE_2D:
+        case GL_TEXTURE_3D:
+        case GL_TEXTURE_CUBE_MAP:
+            return;
+        default:
+            break;
+        }
+
         CapabilityInput capInput = MG_Util::ConvertGLEnumToCapabilityInput(cap);
         if (capInput == CapabilityInput::Unknown) {
             MG_State::pGLContext->RecordError(
