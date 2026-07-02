@@ -3534,7 +3534,9 @@ void main() {
     void VulkanRenderer::QueueClearBufferPayload(GLenum buffer, GLint drawbuffer,
                                                  const ClearAttachmentPayload& clearPayload) {
         auto* fbo = MG_State::pGLContext->GetFramebufferBindingSlot(FramebufferTarget::Draw).GetBoundObject().get();
-        MOBILEGL_ASSERT(fbo, "VulkanRenderer::QueueClearBufferPayload: draw framebuffer not found");
+        if (!fbo) {
+            return;
+        }
         QueueClearBufferPayloadForFramebuffer(*fbo, buffer, drawbuffer, clearPayload);
     }
 

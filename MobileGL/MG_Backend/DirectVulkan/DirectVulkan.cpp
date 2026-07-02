@@ -346,25 +346,33 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     }
 
     void ClearBufferfi(GLenum buffer, GLint drawbuffer, GLfloat depth, GLint stencil) {
-        MOBILEGL_ASSERT(pVulkanRenderer, "DirectVulkan::ClearBufferfi called with null VulkanRenderer");
+        if (!pVulkanRenderer) {
+            return;
+        }
         MOBILEGL_ASSERT(MG_State::pGLContext, "DirectVulkan::ClearBufferfi called with null GL context");
         pVulkanRenderer->ClearBufferfi(buffer, drawbuffer, depth, stencil);
     }
 
     void ClearBufferfv(GLenum buffer, GLint drawbuffer, const GLfloat* value) {
-        MOBILEGL_ASSERT(pVulkanRenderer, "DirectVulkan::ClearBufferfv called with null VulkanRenderer");
+        if (!pVulkanRenderer) {
+            return;
+        }
         MOBILEGL_ASSERT(MG_State::pGLContext, "DirectVulkan::ClearBufferfv called with null GL context");
         pVulkanRenderer->ClearBufferfv(buffer, drawbuffer, value);
     }
 
     void ClearBufferuiv(GLenum buffer, GLint drawbuffer, const GLuint* value) {
-        MOBILEGL_ASSERT(pVulkanRenderer, "DirectVulkan::ClearBufferuiv called with null VulkanRenderer");
+        if (!pVulkanRenderer) {
+            return;
+        }
         MOBILEGL_ASSERT(MG_State::pGLContext, "DirectVulkan::ClearBufferuiv called with null GL context");
         pVulkanRenderer->ClearBufferuiv(buffer, drawbuffer, value);
     }
 
     void ClearBufferiv(GLenum buffer, GLint drawbuffer, const GLint* value) {
-        MOBILEGL_ASSERT(pVulkanRenderer, "DirectVulkan::ClearBufferiv called with null VulkanRenderer");
+        if (!pVulkanRenderer) {
+            return;
+        }
         MOBILEGL_ASSERT(MG_State::pGLContext, "DirectVulkan::ClearBufferiv called with null GL context");
         pVulkanRenderer->ClearBufferiv(buffer, drawbuffer, value);
     }
