@@ -1285,7 +1285,7 @@ namespace MobileGL::MG_Impl::GLImpl {
 
         point.Bind(bufferObject);
         if (bufferObject) {
-            point.SetRange(Range1D(0, bufferObject->GetSize()));
+            point.SetRange(Range1D(0, bufferObject->GetSize()), false);
             MGLOG_D("%s: set range (0, %d)", __func__, bufferObject->GetSize());
         } else {
             point.ClearRange();

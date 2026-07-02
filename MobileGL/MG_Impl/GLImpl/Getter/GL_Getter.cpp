@@ -143,6 +143,16 @@ namespace MobileGL::MG_Impl::GLImpl {
             return queryKind == IndexedBufferQueryKind::Start || queryKind == IndexedBufferQueryKind::Size;
         }
 
+        SizeT GetIndexedBufferQueryPointCount(BufferTarget bufferTarget) {
+            const SizeT frontendCount = MG_State::pGLContext->GetBufferBindingPointCount(bufferTarget);
+            if (bufferTarget == BufferTarget::ShaderStorage && MG_Backend::pActiveBackendObject) {
+                const Int backendCount =
+                    MG_Backend::pActiveBackendObject->GetDynamicParameters().MaxShaderStorageBufferBindings;
+                return std::min(frontendCount, static_cast<SizeT>(std::max(backendCount, 0)));
+            }
+            return frontendCount;
+        }
+
         bool TryDecodeDrawBufferQuery(GLenum pname, SizeT& drawBufferIndex) {
             if (pname == GL_DRAW_BUFFER) {
                 drawBufferIndex = 0;
@@ -223,7 +233,7 @@ namespace MobileGL::MG_Impl::GLImpl {
                 return false;
             }
 
-            if (index >= MG_State::pGLContext->GetBufferBindingPointCount(bufferTarget)) {
+            if (index >= GetIndexedBufferQueryPointCount(bufferTarget)) {
                 MG_State::pGLContext->RecordError(
                     ErrorCode::InvalidValue,
                     MakeUnique<GenericErrorInfo>(
@@ -589,9 +599,17 @@ namespace MobileGL::MG_Impl::GLImpl {
                 *data = static_cast<GLint>(bufferObject->GetExternalIndex());
                 return;
             case IndexedBufferQueryKind::Start:
+                if (!bindingPoint.HasExplicitRange()) {
+                    *data = 0;
+                    return;
+                }
                 *data = static_cast<GLint>(bindingPoint.GetRange().start);
                 return;
             case IndexedBufferQueryKind::Size: {
+                if (!bindingPoint.HasExplicitRange()) {
+                    *data = 0;
+                    return;
+                }
                 const Range1D range = bindingPoint.GetRange();
                 const auto start = std::min(range.start, bufferObject->GetSize());
                 const auto end = std::min(range.end, bufferObject->GetSize());
@@ -639,9 +657,17 @@ namespace MobileGL::MG_Impl::GLImpl {
                 *data = static_cast<GLint64>(bufferObject->GetExternalIndex());
                 return;
             case IndexedBufferQueryKind::Start:
+                if (!bindingPoint.HasExplicitRange()) {
+                    *data = 0;
+                    return;
+                }
                 *data = static_cast<GLint64>(range.start);
                 return;
             case IndexedBufferQueryKind::Size: {
+                if (!bindingPoint.HasExplicitRange()) {
+                    *data = 0;
+                    return;
+                }
                 const auto start = std::min(range.start, bufferObject->GetSize());
                 const auto end = std::min(range.end, bufferObject->GetSize());
                 *data = static_cast<GLint64>(end - start);
@@ -1669,7 +1695,7 @@ namespace MobileGL::MG_Impl::GLImpl {
             *params = dynamicParameters.MaxSampleMaskWords;
             break;
         case GL_MAX_SHADER_STORAGE_BUFFER_BINDINGS:
-            *params = dynamicParameters.MaxShaderStorageBufferBindings;
+            *params = static_cast<GLint>(GetIndexedBufferQueryPointCount(BufferTarget::ShaderStorage));
             break;
         case GL_MAX_TEXTURE_BUFFER_SIZE:
             *params = dynamicParameters.MaxTextureBufferSize;

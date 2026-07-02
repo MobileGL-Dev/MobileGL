@@ -179,12 +179,21 @@ namespace MobileGL {
 
         Range1D GetRange() const { return m_range; }
 
-        void SetRange(const Range1D& range) { m_range = range; }
+        Bool HasExplicitRange() const { return m_hasExplicitRange; }
 
-        void ClearRange() { m_range = Range1D(); }
+        void SetRange(const Range1D& range, Bool hasExplicitRange = true) {
+            m_range = range;
+            m_hasExplicitRange = hasExplicitRange;
+        }
+
+        void ClearRange() {
+            m_range = Range1D();
+            m_hasExplicitRange = false;
+        }
 
     private:
         Range1D m_range;
+        Bool m_hasExplicitRange = false;
     };
 
     struct ComponentSizes {
