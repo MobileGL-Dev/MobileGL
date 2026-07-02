@@ -20,6 +20,11 @@ void main() {}
 )";
 
 namespace {
+    static MobileGL::String StripArrayElementSuffix(const MobileGL::String& name) {
+        const MobileGL::SizeT bracket = name.find('[');
+        return bracket == MobileGL::String::npos ? name : name.substr(0, bracket);
+    }
+
     static int GetVertexInputLocationSpan(GLenum glType) {
         switch (glType) {
         case GL_FLOAT_MAT2:
@@ -225,6 +230,9 @@ namespace MobileGL::MG_State::GLState {
         MGLOG_D("ProgramObject %u: Starting reflection", m_externalIndex);
         DoReflection();
         MGLOG_D("ProgramObject %u: Reflection done (linkStatus=%d)", m_externalIndex, (int)m_linkStatus);
+        if (!ValidateFragmentOutputLocations()) {
+            return;
+        }
 
         MGLOG_D("ProgramObject %u: Starting binary generation", m_externalIndex);
         GenerateBinary();
@@ -588,6 +596,43 @@ namespace MobileGL::MG_State::GLState {
         m_explicitFragDataLocation[name] = index;
         MGLOG_D("ProgramObject %u: SetExplicitFragmentOutLocation - stored explicit location for '%s' -> %u",
                 m_externalIndex, name, index);
+    }
+
+    Bool ProgramObject::ValidateFragmentOutputLocations() {
+        if (!m_program) return false;
+
+        UnorderedMap<Int, String> colorNumberOwners;
+        const Int outputCount = m_program->getNumPipeOutputs();
+        for (Int index = 0; index < outputCount; ++index) {
+            const auto& output = m_program->getPipeOutput(index);
+            const String outputName = StripArrayElementSuffix(output.name);
+            const auto explicitLocation = m_explicitFragDataLocation.find(outputName);
+            const Int location = explicitLocation != m_explicitFragDataLocation.end()
+                                     ? static_cast<Int>(explicitLocation->second)
+                                     : static_cast<Int>(output.layoutLocation());
+            const Int span = std::max<Int>(output.size, 1);
+
+            if (location < 0 || location + span > m_maxFragmentOutputColorNumber) {
+                m_infoLog = std::format("Fragment output '{}' location range [{}, {}) exceeds GL_MAX_DRAW_BUFFERS {}.",
+                                        outputName, location, location + span, m_maxFragmentOutputColorNumber);
+                MGLOG_E("ProgramObject %u: Link failed - %s", m_externalIndex, m_infoLog.c_str());
+                ResetLinkArtifacts();
+                return false;
+            }
+
+            for (Int colorNumber = location; colorNumber < location + span; ++colorNumber) {
+                auto [owner, inserted] = colorNumberOwners.emplace(colorNumber, outputName);
+                if (!inserted) {
+                    m_infoLog = std::format("Fragment outputs '{}' and '{}' alias color number {}.",
+                                            owner->second, outputName, colorNumber);
+                    MGLOG_E("ProgramObject %u: Link failed - %s", m_externalIndex, m_infoLog.c_str());
+                    ResetLinkArtifacts();
+                    return false;
+                }
+            }
+        }
+
+        return true;
     }
 
     Int ProgramObject::GetFragmentDataLocation(const char* name) {

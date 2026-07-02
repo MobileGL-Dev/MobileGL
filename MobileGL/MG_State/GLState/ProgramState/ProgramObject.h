@@ -26,6 +26,9 @@ namespace MobileGL::MG_State::GLState {
 
         void SetExplicitVertexInLocation(Uint index, const char* name);
         void SetExplicitFragmentOutLocation(Uint index, const char* name);
+        void SetMaxFragmentOutputColorNumber(Int maxDrawBuffers) {
+            m_maxFragmentOutputColorNumber = maxDrawBuffers;
+        }
         Int GetFragmentDataLocation(const char* name);
 
         Vector<SharedPtr<ShaderObject>>& GetAttachedShaders();
@@ -241,6 +244,7 @@ namespace MobileGL::MG_State::GLState {
         void GenerateBinary();
         void WaitUntilGenerationCompleted() const;
         void AddDefaultFragmentShaderIfMissing();
+        Bool ValidateFragmentOutputLocations();
 
         const Uint m_externalIndex = 0;
         Vector<SharedPtr<ShaderObject>> m_shaders;
@@ -258,6 +262,7 @@ namespace MobileGL::MG_State::GLState {
         // FragData (Frag out)
         UnorderedMap<String, Uint> m_explicitFragDataLocation;
         UnorderedMap<String, Uint> m_linkedFragDataLocation;
+        Int m_maxFragmentOutputColorNumber = 8;
 
         // Uniforms
         UnorderedMap<String, Uint> m_uniformLocations;

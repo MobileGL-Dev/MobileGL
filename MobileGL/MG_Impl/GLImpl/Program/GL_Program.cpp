@@ -589,6 +589,10 @@ namespace MobileGL::MG_Impl::GLImpl {
             const auto& rendererInfo = activeBackendObject->GetRendererInfo();
             allowVSOnlyPrograms = (Int)rendererInfo.StaticBackendCapability.AllowVSOnlyPrograms;
         }
+        const auto& activeBackendObject = MG_Backend::pActiveBackendObject;
+        if (activeBackendObject) {
+            programObject->SetMaxFragmentOutputColorNumber(activeBackendObject->GetDynamicParameters().MaxDrawBuffers);
+        }
         programObject->Link(!allowVSOnlyPrograms);
     }
 
