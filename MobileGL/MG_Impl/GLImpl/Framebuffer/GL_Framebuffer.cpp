@@ -808,7 +808,6 @@ namespace MobileGL::MG_Impl::GLImpl {
         if (!FramebufferImpl::ValidateFramebufferAttachmentType(attachmentType)) return;
         if (!FramebufferImpl::ValidateFramebufferTarget(framebufferTarget)) return;
         if (!FramebufferImpl::ValidateRenderbufferTarget(rbTarget)) return;
-        if (!FramebufferImpl::ValidateRenderbufferName(renderbuffer, true)) return;
         auto& bindingSlot = MG_State::pGLContext->GetFramebufferBindingSlot(framebufferTarget);
         auto& framebufferObject = bindingSlot.GetBoundObject();
         if (!framebufferObject) {
@@ -824,6 +823,7 @@ namespace MobileGL::MG_Impl::GLImpl {
             return;
         }
 
+        if (!FramebufferImpl::ValidateRenderbufferName(renderbuffer, false)) return;
         auto& renderbufferObject = MG_State::pGLContext->GetRenderbufferObject(renderbuffer);
         if (!renderbufferObject) {
             MG_State::pGLContext->RecordError(
@@ -851,13 +851,13 @@ namespace MobileGL::MG_Impl::GLImpl {
         RenderbufferTarget rbTarget = MG_Util::ConvertGLEnumToRenderbufferTarget(renderbuffertarget);
         if (!FramebufferImpl::ValidateFramebufferAttachmentType(attachmentType)) return;
         if (!FramebufferImpl::ValidateRenderbufferTarget(rbTarget)) return;
-        if (!FramebufferImpl::ValidateRenderbufferName(renderbuffer)) return;
 
         if (renderbuffer == 0) {
             framebufferObject->Detach(attachmentType);
             return;
         }
 
+        if (!FramebufferImpl::ValidateRenderbufferName(renderbuffer, false)) return;
         auto renderbufferObject =
             GetNamedRenderbufferObject_State(renderbuffer, "NamedFramebufferRenderbuffer_State");
         if (!renderbufferObject) return;
@@ -1624,6 +1624,16 @@ namespace MobileGL::MG_Impl::GLImpl {
                                                                          "Invalid type for depth-stencil format"));
                 return false;
             }
+        } else {
+            const FramebufferAttachmentType readBuffer = framebufferObject->GetReadBuffer();
+            if (readBuffer == FramebufferAttachmentType::None ||
+                !framebufferObject->GetAttachment(readBuffer).IsValid()) {
+                MG_State::pGLContext->RecordError(
+                    ErrorCode::InvalidOperation,
+                    MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", "ReadPixels_State",
+                                                 "No color buffer for color format"));
+                return false;
+            }
         }
 
         // Check PBO state
@@ -1652,8 +1662,9 @@ namespace MobileGL::MG_Impl::GLImpl {
         }
 
         // Check multisampling
-        if (framebufferObject->GetAttachment(FramebufferAttachmentType::Color0).IsRenderbuffer()) {
-            auto& rbo = framebufferObject->GetAttachment(FramebufferAttachmentType::Color0).GetRenderbuffer();
+        const FramebufferAttachmentType readBuffer = framebufferObject->GetReadBuffer();
+        if (readBuffer != FramebufferAttachmentType::None && framebufferObject->GetAttachment(readBuffer).IsRenderbuffer()) {
+            auto& rbo = framebufferObject->GetAttachment(readBuffer).GetRenderbuffer();
             if (rbo && rbo->GetSamples() > 1) {
                 MG_State::pGLContext->RecordError(
                     ErrorCode::InvalidOperation,
