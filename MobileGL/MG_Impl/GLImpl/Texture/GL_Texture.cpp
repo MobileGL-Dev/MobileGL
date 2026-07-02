@@ -86,6 +86,100 @@ namespace MobileGL::MG_Impl::GLImpl {
                                                      MG_Util::ConvertGLEnumToTexturePixelDataType(realType));
         }
 
+        GLint GetTextureComponentType(TextureInternalFormat textureInternalFormat, GLint size, Bool depthComponent,
+                                      Bool stencilComponent) {
+            if (size <= 0) return GL_NONE;
+            if (stencilComponent) return GL_UNSIGNED_INT;
+            if (depthComponent) {
+                return (textureInternalFormat == TextureInternalFormat::DepthComponent32F ||
+                        textureInternalFormat == TextureInternalFormat::Depth32FStencil8)
+                           ? GL_FLOAT
+                           : GL_UNSIGNED_NORMALIZED;
+            }
+            switch (textureInternalFormat) {
+            case TextureInternalFormat::R8I:
+            case TextureInternalFormat::R16I:
+            case TextureInternalFormat::R32I:
+            case TextureInternalFormat::RG8I:
+            case TextureInternalFormat::RG16I:
+            case TextureInternalFormat::RG32I:
+            case TextureInternalFormat::RGB8I:
+            case TextureInternalFormat::RGB16I:
+            case TextureInternalFormat::RGB32I:
+            case TextureInternalFormat::RGBA8I:
+            case TextureInternalFormat::RGBA16I:
+            case TextureInternalFormat::RGBA32I:
+                return GL_INT;
+            case TextureInternalFormat::R8UI:
+            case TextureInternalFormat::R16UI:
+            case TextureInternalFormat::R32UI:
+            case TextureInternalFormat::RG8UI:
+            case TextureInternalFormat::RG16UI:
+            case TextureInternalFormat::RG32UI:
+            case TextureInternalFormat::RGB8UI:
+            case TextureInternalFormat::RGB16UI:
+            case TextureInternalFormat::RGB32UI:
+            case TextureInternalFormat::RGBA8UI:
+            case TextureInternalFormat::RGBA16UI:
+            case TextureInternalFormat::RGBA32UI:
+            case TextureInternalFormat::RGB10A2UI:
+                return GL_UNSIGNED_INT;
+            case TextureInternalFormat::R16F:
+            case TextureInternalFormat::RG16F:
+            case TextureInternalFormat::RGB16F:
+            case TextureInternalFormat::RGBA16F:
+            case TextureInternalFormat::R32F:
+            case TextureInternalFormat::RG32F:
+            case TextureInternalFormat::RGB32F:
+            case TextureInternalFormat::RGBA32F:
+            case TextureInternalFormat::R11FG11FB10F:
+            case TextureInternalFormat::RGB9E5:
+                return GL_FLOAT;
+            case TextureInternalFormat::R8Snorm:
+            case TextureInternalFormat::R16Snorm:
+            case TextureInternalFormat::RG8Snorm:
+            case TextureInternalFormat::RG16Snorm:
+            case TextureInternalFormat::RGB8Snorm:
+            case TextureInternalFormat::RGB16Snorm:
+            case TextureInternalFormat::RGBA8Snorm:
+            case TextureInternalFormat::RGBA16Snorm:
+                return GL_SIGNED_NORMALIZED;
+            default:
+                return GL_UNSIGNED_NORMALIZED;
+            }
+        }
+
+        GLint GetTextureLevelComponentParameter(TextureInternalFormat textureInternalFormat, GLenum pname) {
+            const ComponentSizes componentSizes = MG_Util::GetComponentSizesForInternalFormat(textureInternalFormat);
+            switch (pname) {
+            case GL_TEXTURE_RED_SIZE:
+                return componentSizes.Red;
+            case GL_TEXTURE_GREEN_SIZE:
+                return componentSizes.Green;
+            case GL_TEXTURE_BLUE_SIZE:
+                return componentSizes.Blue;
+            case GL_TEXTURE_ALPHA_SIZE:
+                return componentSizes.Alpha;
+            case GL_TEXTURE_DEPTH_SIZE:
+                return componentSizes.Depth;
+            case GL_TEXTURE_STENCIL_SIZE:
+                return componentSizes.Stencil;
+            case GL_TEXTURE_RED_TYPE:
+                return GetTextureComponentType(textureInternalFormat, componentSizes.Red, false, false);
+            case GL_TEXTURE_GREEN_TYPE:
+                return GetTextureComponentType(textureInternalFormat, componentSizes.Green, false, false);
+            case GL_TEXTURE_BLUE_TYPE:
+                return GetTextureComponentType(textureInternalFormat, componentSizes.Blue, false, false);
+            case GL_TEXTURE_ALPHA_TYPE:
+                return GetTextureComponentType(textureInternalFormat, componentSizes.Alpha, false, false);
+            case GL_TEXTURE_DEPTH_TYPE:
+                return GetTextureComponentType(textureInternalFormat, componentSizes.Depth, true, false);
+            default:
+                MOBILEGL_ASSERT(false, "Invalid texture level component pname: %d", pname);
+                return 0;
+            }
+        }
+
         Uint ComputeFullMipmapLevelCount(const IntVec3& baseTexelSize) {
             Int maxDimension = std::max<Int>(
                 baseTexelSize.x(),
@@ -1761,16 +1855,28 @@ namespace MobileGL::MG_Impl::GLImpl {
         case GL_TEXTURE_BLUE_SIZE:
         case GL_TEXTURE_ALPHA_SIZE:
         case GL_TEXTURE_DEPTH_SIZE:
+        case GL_TEXTURE_STENCIL_SIZE:
+            if (params) {
+                *params = GetTextureLevelComponentParameter(textureObject->GetFormat(), pname);
+            }
+            break;
         case GL_TEXTURE_COMPRESSED:
+            if (params) {
+                *params = GL_FALSE;
+            }
+            break;
         case GL_TEXTURE_COMPRESSED_IMAGE_SIZE:
-            break; // TODO
+            if (params) {
+                *params = 0;
+            }
+            break;
         default:
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidEnum, MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", "GetTexLevelParameteriv_State",
                                                                      "pname is not a valid texture level parameter."));
             return;
         }
-        MGLOG_D("returned %u",*params);
+        if (params) MGLOG_D("returned %u", *params);
     }
 
     void GetTexLevelParameterfv_State(GLenum target, GLint level, GLenum pname, GLfloat* params) {
@@ -1861,9 +1967,21 @@ namespace MobileGL::MG_Impl::GLImpl {
         case GL_TEXTURE_BLUE_SIZE:
         case GL_TEXTURE_ALPHA_SIZE:
         case GL_TEXTURE_DEPTH_SIZE:
+        case GL_TEXTURE_STENCIL_SIZE:
+            if (params) {
+                *params = static_cast<GLfloat>(GetTextureLevelComponentParameter(textureObject->GetFormat(), pname));
+            }
+            break;
         case GL_TEXTURE_COMPRESSED:
+            if (params) {
+                *params = 0.0f;
+            }
+            break;
         case GL_TEXTURE_COMPRESSED_IMAGE_SIZE:
-            break; // TODO
+            if (params) {
+                *params = 0.0f;
+            }
+            break;
         default:
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidEnum, MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", "GetTexLevelParameterfv_State",
@@ -2911,8 +3029,8 @@ namespace MobileGL::MG_Impl::GLImpl {
         if (targetIndex >= MG_Backend::kFormatCapabilityTargetCount) return;
         const SizeT formatIndex = static_cast<SizeT>(textureInternalFormat);
 
-        MG_Backend::FormatCapabilityFlags fullCaps;
-        MG_Backend::FormatCapabilityFlags caveatCaps;
+        MG_Backend::FormatCapabilityFlags fullCaps{};
+        MG_Backend::FormatCapabilityFlags caveatCaps{};
         const Vector<Int>* sampleCounts = nullptr;
         if (MG_Backend::pActiveBackendObject) {
             const auto& cache = MG_Backend::pActiveBackendObject->GetFormatCapabilities();
@@ -2938,68 +3056,6 @@ namespace MobileGL::MG_Impl::GLImpl {
             if (hasCaveat(primary) || hasFull(fallback) || hasCaveat(fallback)) return GL_CAVEAT_SUPPORT;
             return GL_NONE;
         };
-        auto componentType = [&](GLint size, Bool depthComponent, Bool stencilComponent) -> GLint {
-            if (size <= 0) return GL_NONE;
-            if (stencilComponent) return GL_UNSIGNED_INT;
-            if (depthComponent) {
-                return (textureInternalFormat == TextureInternalFormat::DepthComponent32F ||
-                        textureInternalFormat == TextureInternalFormat::Depth32FStencil8)
-                           ? GL_FLOAT
-                           : GL_UNSIGNED_NORMALIZED;
-            }
-            switch (textureInternalFormat) {
-            case TextureInternalFormat::R8I:
-            case TextureInternalFormat::R16I:
-            case TextureInternalFormat::R32I:
-            case TextureInternalFormat::RG8I:
-            case TextureInternalFormat::RG16I:
-            case TextureInternalFormat::RG32I:
-            case TextureInternalFormat::RGB8I:
-            case TextureInternalFormat::RGB16I:
-            case TextureInternalFormat::RGB32I:
-            case TextureInternalFormat::RGBA8I:
-            case TextureInternalFormat::RGBA16I:
-            case TextureInternalFormat::RGBA32I:
-                return GL_INT;
-            case TextureInternalFormat::R8UI:
-            case TextureInternalFormat::R16UI:
-            case TextureInternalFormat::R32UI:
-            case TextureInternalFormat::RG8UI:
-            case TextureInternalFormat::RG16UI:
-            case TextureInternalFormat::RG32UI:
-            case TextureInternalFormat::RGB8UI:
-            case TextureInternalFormat::RGB16UI:
-            case TextureInternalFormat::RGB32UI:
-            case TextureInternalFormat::RGBA8UI:
-            case TextureInternalFormat::RGBA16UI:
-            case TextureInternalFormat::RGBA32UI:
-            case TextureInternalFormat::RGB10A2UI:
-                return GL_UNSIGNED_INT;
-            case TextureInternalFormat::R16F:
-            case TextureInternalFormat::RG16F:
-            case TextureInternalFormat::RGB16F:
-            case TextureInternalFormat::RGBA16F:
-            case TextureInternalFormat::R32F:
-            case TextureInternalFormat::RG32F:
-            case TextureInternalFormat::RGB32F:
-            case TextureInternalFormat::RGBA32F:
-            case TextureInternalFormat::R11FG11FB10F:
-            case TextureInternalFormat::RGB9E5:
-                return GL_FLOAT;
-            case TextureInternalFormat::R8Snorm:
-            case TextureInternalFormat::R16Snorm:
-            case TextureInternalFormat::RG8Snorm:
-            case TextureInternalFormat::RG16Snorm:
-            case TextureInternalFormat::RGB8Snorm:
-            case TextureInternalFormat::RGB16Snorm:
-            case TextureInternalFormat::RGBA8Snorm:
-            case TextureInternalFormat::RGBA16Snorm:
-                return GL_SIGNED_NORMALIZED;
-            default:
-                return GL_UNSIGNED_NORMALIZED;
-            }
-        };
-
         switch (pname) {
         case GL_INTERNALFORMAT_SUPPORTED:
             writeValues({(hasFull(MG_Backend::FormatCapability::Creatable) ||
@@ -3032,22 +3088,22 @@ namespace MobileGL::MG_Impl::GLImpl {
             writeValues({textureInternalFormat == TextureInternalFormat::RGB9E5 ? 5 : 0});
             return;
         case GL_INTERNALFORMAT_RED_TYPE:
-            writeValues({componentType(componentSizes.Red, false, false)});
+            writeValues({GetTextureComponentType(textureInternalFormat, componentSizes.Red, false, false)});
             return;
         case GL_INTERNALFORMAT_GREEN_TYPE:
-            writeValues({componentType(componentSizes.Green, false, false)});
+            writeValues({GetTextureComponentType(textureInternalFormat, componentSizes.Green, false, false)});
             return;
         case GL_INTERNALFORMAT_BLUE_TYPE:
-            writeValues({componentType(componentSizes.Blue, false, false)});
+            writeValues({GetTextureComponentType(textureInternalFormat, componentSizes.Blue, false, false)});
             return;
         case GL_INTERNALFORMAT_ALPHA_TYPE:
-            writeValues({componentType(componentSizes.Alpha, false, false)});
+            writeValues({GetTextureComponentType(textureInternalFormat, componentSizes.Alpha, false, false)});
             return;
         case GL_INTERNALFORMAT_DEPTH_TYPE:
-            writeValues({componentType(componentSizes.Depth, true, false)});
+            writeValues({GetTextureComponentType(textureInternalFormat, componentSizes.Depth, true, false)});
             return;
         case GL_INTERNALFORMAT_STENCIL_TYPE:
-            writeValues({componentType(componentSizes.Stencil, false, true)});
+            writeValues({GetTextureComponentType(textureInternalFormat, componentSizes.Stencil, false, true)});
             return;
         case GL_TEXTURE_IMAGE_FORMAT:
             writeValues({static_cast<GLint>(imageFormat)});

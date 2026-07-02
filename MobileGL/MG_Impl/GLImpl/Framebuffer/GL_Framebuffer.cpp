@@ -851,7 +851,7 @@ namespace MobileGL::MG_Impl::GLImpl {
     }
 
     void DrawBuffersForFramebuffer_State(const SharedPtr<MG_State::GLState::FramebufferObject>& fbo, Bool isDefaultFBO,
-                                         GLsizei n, const GLenum* bufs) {
+                                         GLsizei n, const GLenum* bufs, Bool allowDefaultFBOAliases) {
         if (n < 0) {
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidValue,
@@ -874,6 +874,16 @@ namespace MobileGL::MG_Impl::GLImpl {
         std::fill(existenceMap, existenceMap + (SizeT)FramebufferAttachmentType::FramebufferAttachmentTypeCount, -1);
 
         for (GLsizei i = 0; i < n; ++i) {
+            if (isDefaultFBO && !allowDefaultFBOAliases && (bufs[i] == GL_FRONT || bufs[i] == GL_BACK)) {
+                MG_State::pGLContext->RecordError(
+                    ErrorCode::InvalidEnum,
+                    MakeUnique<GenericErrorInfo>(
+                        "MG_Impl/GLImpl", __func__,
+                        std::format("glDrawBuffers cannot use default framebuffer alias {}.",
+                                    MG_Util::ConvertGLEnumToString(bufs[i]))));
+                return;
+            }
+
             auto attType = MG_Util::ConvertGLEnumToFramebufferAttachmentType(bufs[i]);
 
             // ------------------- Check validity begin ------------------------
@@ -945,15 +955,18 @@ namespace MobileGL::MG_Impl::GLImpl {
         auto& bindingSlot = MG_State::pGLContext->GetFramebufferBindingSlot(FramebufferTarget::Draw);
         auto& fbo = bindingSlot.GetBoundObject();
         const bool isDefaultFBO = (fbo == FramebufferImpl::pDefaultFramebufferInfo->defaultFBO);
-        DrawBuffersForFramebuffer_State(fbo, isDefaultFBO, n, bufs);
+        DrawBuffersForFramebuffer_State(fbo, isDefaultFBO, n, bufs, false);
     }
 
     void DrawBuffer_State(GLenum buf) {
         if (buf == GL_NONE) {
             DrawBuffers_State(0, nullptr);
         } else {
+            auto& bindingSlot = MG_State::pGLContext->GetFramebufferBindingSlot(FramebufferTarget::Draw);
+            auto& fbo = bindingSlot.GetBoundObject();
+            const bool isDefaultFBO = (fbo == FramebufferImpl::pDefaultFramebufferInfo->defaultFBO);
             static GLenum bufs[] = {buf};
-            DrawBuffers_State(1, bufs);
+            DrawBuffersForFramebuffer_State(fbo, isDefaultFBO, 1, bufs, true);
         }
     }
 
@@ -1016,7 +1029,7 @@ namespace MobileGL::MG_Impl::GLImpl {
     void NamedFramebufferDrawBuffers_State(GLuint framebuffer, GLsizei n, const GLenum* bufs) {
         auto framebufferObject = GetNamedFramebufferObject_State(framebuffer, "NamedFramebufferDrawBuffers_State");
         if (!framebufferObject) return;
-        DrawBuffersForFramebuffer_State(framebufferObject, false, n, bufs);
+        DrawBuffersForFramebuffer_State(framebufferObject, false, n, bufs, false);
     }
 
     void NamedFramebufferDrawBuffer_State(GLuint framebuffer, GLenum buf) {
@@ -1436,6 +1449,80 @@ namespace MobileGL::MG_Impl::GLImpl {
         MG_Backend::gBackendFunctionsTable.GL.ClearBufferiv(buffer, drawbuffer, value);
     }
 
+    Bool ValidateClearBufferDrawbuffer_State(GLenum buffer, GLint drawbuffer, const char* caller) {
+        if (buffer == GL_COLOR) {
+            if (drawbuffer < 0 ||
+                drawbuffer >= static_cast<GLint>(MG_State::GLState::FramebufferObject::MAX_DRAW_BUFFERS)) {
+                MG_State::pGLContext->RecordError(
+                    ErrorCode::InvalidValue,
+                    MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller, "color drawbuffer index is out of range."));
+                return false;
+            }
+            return true;
+        }
+
+        if (drawbuffer != 0) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidValue,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller,
+                                             "depth, stencil, and depth/stencil clears require drawbuffer 0."));
+            return false;
+        }
+        return true;
+    }
+
+    Bool ValidateClearBufferfv_State(GLenum buffer, GLint drawbuffer) {
+        if (buffer != GL_COLOR && buffer != GL_DEPTH) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidEnum,
+                MakeUnique<GenericErrorInfo>(
+                    "MG_Impl/GLImpl", "ValidateClearBufferfv_State",
+                    std::format("buffer {} is not accepted for glClearBufferfv.",
+                                MG_Util::ConvertGLEnumToString(buffer))));
+            return false;
+        }
+        return ValidateClearBufferDrawbuffer_State(buffer, drawbuffer, "ValidateClearBufferfv_State");
+    }
+
+    Bool ValidateClearBufferiv_State(GLenum buffer, GLint drawbuffer) {
+        if (buffer != GL_COLOR && buffer != GL_STENCIL) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidEnum,
+                MakeUnique<GenericErrorInfo>(
+                    "MG_Impl/GLImpl", "ValidateClearBufferiv_State",
+                    std::format("buffer {} is not accepted for glClearBufferiv.",
+                                MG_Util::ConvertGLEnumToString(buffer))));
+            return false;
+        }
+        return ValidateClearBufferDrawbuffer_State(buffer, drawbuffer, "ValidateClearBufferiv_State");
+    }
+
+    Bool ValidateClearBufferuiv_State(GLenum buffer, GLint drawbuffer) {
+        if (buffer != GL_COLOR && buffer != GL_STENCIL) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidEnum,
+                MakeUnique<GenericErrorInfo>(
+                    "MG_Impl/GLImpl", "ValidateClearBufferuiv_State",
+                    std::format("buffer {} is not accepted for glClearBufferuiv.",
+                                MG_Util::ConvertGLEnumToString(buffer))));
+            return false;
+        }
+        return ValidateClearBufferDrawbuffer_State(buffer, drawbuffer, "ValidateClearBufferuiv_State");
+    }
+
+    Bool ValidateClearBufferfi_State(GLenum buffer, GLint drawbuffer) {
+        if (buffer != GL_DEPTH_STENCIL) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidEnum,
+                MakeUnique<GenericErrorInfo>(
+                    "MG_Impl/GLImpl", "ValidateClearBufferfi_State",
+                    std::format("buffer {} is not accepted for glClearBufferfi.",
+                                MG_Util::ConvertGLEnumToString(buffer))));
+            return false;
+        }
+        return ValidateClearBufferDrawbuffer_State(buffer, drawbuffer, "ValidateClearBufferfi_State");
+    }
+
     Bool ReadPixels_State(GLint x, GLint y, GLsizei width, GLsizei height, GLenum format, GLenum type, void* pixels) {
         TextureInputFormat textureInputFormat = MG_Util::ConvertGLEnumToTextureInputFormat(format);
         TexturePixelDataType texturePixelDataType = MG_Util::ConvertGLEnumToTexturePixelDataType(type);
@@ -1571,18 +1658,22 @@ namespace MobileGL::MG_Impl::GLImpl {
     }
 
     void ClearBufferfi(GLenum buffer, GLint drawbuffer, GLfloat depth, GLint stencil) {
+        if (!ValidateClearBufferfi_State(buffer, drawbuffer)) return;
         ClearBufferfi_Backend(buffer, drawbuffer, depth, stencil);
     }
 
     void ClearBufferfv(GLenum buffer, GLint drawbuffer, const GLfloat* value) {
+        if (!ValidateClearBufferfv_State(buffer, drawbuffer)) return;
         ClearBufferfv_Backend(buffer, drawbuffer, value);
     }
 
     void ClearBufferuiv(GLenum buffer, GLint drawbuffer, const GLuint* value) {
+        if (!ValidateClearBufferuiv_State(buffer, drawbuffer)) return;
         ClearBufferuiv_Backend(buffer, drawbuffer, value);
     }
 
     void ClearBufferiv(GLenum buffer, GLint drawbuffer, const GLint* value) {
+        if (!ValidateClearBufferiv_State(buffer, drawbuffer)) return;
         ClearBufferiv_Backend(buffer, drawbuffer, value);
     }
 

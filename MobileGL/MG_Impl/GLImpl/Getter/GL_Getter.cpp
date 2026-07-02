@@ -62,10 +62,18 @@ namespace MobileGL::MG_Impl::GLImpl {
         constexpr GLint kFrontendMaxCombinedUniformBlocks = kFrontendMaxVertexUniformBlocks +
                                                             kFrontendMaxGeometryUniformBlocks +
                                                             kFrontendMaxFragmentUniformBlocks;
-        constexpr GLint kFrontendMaxVaryingComponents = 60;
+        constexpr GLint kFrontendMaxVaryingComponents = 64;
         constexpr GLint kFrontendMaxVaryingVectors = 8;
         constexpr GLint kFrontendMaxProgramTexelOffset = 7;
         constexpr GLint kFrontendMinProgramTexelOffset = -8;
+        constexpr GLint kFrontendMaxTransformFeedbackInterleavedComponents = 64;
+        constexpr GLint kFrontendMaxTransformFeedbackSeparateAttribs = 4;
+        constexpr GLint kFrontendMaxTransformFeedbackSeparateComponents = 4;
+        constexpr GLint kFrontendMaxGeometryOutputVertices = 256;
+        constexpr GLint kFrontendMaxGeometryTotalOutputComponents = 1024;
+        constexpr GLint kFrontendMinUniformBufferBindings = 36;
+        constexpr GLint kFrontendSubpixelBits = 4;
+        constexpr GLint kFrontendMaxSamples = 4;
 
         GLint GetMaxCombinedUniformComponents(GLint maxDefaultUniformComponents, GLint maxUniformBlocks,
                                               GLint maxUniformBlockSizeBytes) {
@@ -1006,8 +1014,14 @@ namespace MobileGL::MG_Impl::GLImpl {
         case GL_MAX_GEOMETRY_OUTPUT_COMPONENTS:
             *params = kFrontendMaxGeometryOutputComponents;
             return;
+        case GL_MAX_GEOMETRY_OUTPUT_VERTICES:
+            *params = kFrontendMaxGeometryOutputVertices;
+            return;
         case GL_MAX_GEOMETRY_TEXTURE_IMAGE_UNITS:
             *params = kFrontendMaxGeometryTextureImageUnits;
+            return;
+        case GL_MAX_GEOMETRY_TOTAL_OUTPUT_COMPONENTS:
+            *params = kFrontendMaxGeometryTotalOutputComponents;
             return;
         case GL_MAX_GEOMETRY_UNIFORM_BLOCKS:
             *params = kFrontendMaxGeometryUniformBlocks;
@@ -1601,6 +1615,12 @@ namespace MobileGL::MG_Impl::GLImpl {
                                                       kFrontendMaxGeometryUniformBlocks,
                                                       dynamicParameters.MaxUniformBlockSize);
             break;
+        case GL_MAX_GEOMETRY_OUTPUT_VERTICES:
+            *params = kFrontendMaxGeometryOutputVertices;
+            break;
+        case GL_MAX_GEOMETRY_TOTAL_OUTPUT_COMPONENTS:
+            *params = kFrontendMaxGeometryTotalOutputComponents;
+            break;
         case GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS:
             *params = dynamicParameters.MaxCombinedTextureImageUnits;
             break;
@@ -1654,6 +1674,15 @@ namespace MobileGL::MG_Impl::GLImpl {
         case GL_MAX_TEXTURE_BUFFER_SIZE:
             *params = dynamicParameters.MaxTextureBufferSize;
             break;
+        case GL_MAX_TRANSFORM_FEEDBACK_INTERLEAVED_COMPONENTS:
+            *params = kFrontendMaxTransformFeedbackInterleavedComponents;
+            break;
+        case GL_MAX_TRANSFORM_FEEDBACK_SEPARATE_ATTRIBS:
+            *params = kFrontendMaxTransformFeedbackSeparateAttribs;
+            break;
+        case GL_MAX_TRANSFORM_FEEDBACK_SEPARATE_COMPONENTS:
+            *params = kFrontendMaxTransformFeedbackSeparateComponents;
+            break;
         case GL_MAX_TEXTURE_IMAGE_UNITS:
             *params = dynamicParameters.MaxTextureImageUnits;
             break;
@@ -1661,7 +1690,7 @@ namespace MobileGL::MG_Impl::GLImpl {
             *params = dynamicParameters.MaxTextureSize;
             break;
         case GL_MAX_UNIFORM_BUFFER_BINDINGS:
-            *params = dynamicParameters.MaxUniformBufferBindings;
+            *params = std::max(dynamicParameters.MaxUniformBufferBindings, kFrontendMinUniformBufferBindings);
             break;
         case GL_MAX_UNIFORM_BLOCK_SIZE:
             *params = dynamicParameters.MaxUniformBlockSize;
@@ -1699,7 +1728,7 @@ namespace MobileGL::MG_Impl::GLImpl {
             *params = static_cast<GLint>(dynamicParameters.SmoothLineWidthGranularity);
             break;
         case GL_SUBPIXEL_BITS:
-            *params = dynamicParameters.ViewportSubpixelBits;
+            *params = std::max(dynamicParameters.ViewportSubpixelBits, kFrontendSubpixelBits);
             break;
         case GL_UNIFORM_BUFFER_OFFSET_ALIGNMENT:
             *params = static_cast<Int>(dynamicParameters.UniformBufferOffsetAlignment);
@@ -1709,7 +1738,7 @@ namespace MobileGL::MG_Impl::GLImpl {
             params[1] = static_cast<GLint>(dynamicParameters.ViewportBoundsRangeMax);
             break;
         case GL_VIEWPORT_SUBPIXEL_BITS:
-            *params = dynamicParameters.ViewportSubpixelBits;
+            *params = std::max(dynamicParameters.ViewportSubpixelBits, kFrontendSubpixelBits);
             break;
         case GL_MAX_COLOR_ATTACHMENTS:
         case GL_MAX_DRAW_BUFFERS:
@@ -1717,7 +1746,7 @@ namespace MobileGL::MG_Impl::GLImpl {
                                                         : dynamicParameters.MaxDrawBuffers;
             break;
         case GL_MAX_SAMPLES:
-            *params = dynamicParameters.MaxSamples;
+            *params = std::max(dynamicParameters.MaxSamples, kFrontendMaxSamples);
             break;
         default:
             MGLOG_E("glGetIntegerv: Invalid enum %s (0x%X)", MG_Util::ConvertGLEnumToString(pname).c_str(), pname);

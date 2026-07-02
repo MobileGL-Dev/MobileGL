@@ -1158,6 +1158,20 @@ namespace MobileGL::MG_Impl::GLImpl {
                                              std::to_string(program) + " is not the name of a program object."));
             return;
         }
+        if (name == nullptr) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidValue,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__, "name cannot be null."));
+            return;
+        }
+        const auto& dynamicParameters = MG_Backend::pActiveBackendObject->GetDynamicParameters();
+        if (colorNumber >= static_cast<GLuint>(dynamicParameters.MaxDrawBuffers)) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidValue,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
+                                             "colorNumber is greater than or equal to GL_MAX_DRAW_BUFFERS."));
+            return;
+        }
         if (strncmp(name, "gl_", 3) == 0) {
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidOperation,
@@ -1165,7 +1179,6 @@ namespace MobileGL::MG_Impl::GLImpl {
                                              "name " + std::string(name) + " starts with the reserved prefix `gl_`."));
             return;
         }
-        // TODO: Emit error "if `colorNumber` is greater than or equal to `GL_MAX_DRAW_BUFFERS`"
 
         MGLOG_D("%s: loc %02d = \"%s\"", __func__, colorNumber, name);
         programObject->SetExplicitFragmentOutLocation(colorNumber, name);
