@@ -142,6 +142,30 @@ void main() {
     EXPECT_EQ(source.find("#define"), String::npos);
 }
 
+TEST_F(ProgramUtilTest, PreprocessLegacyFragmentShaderModernizesFragData) {
+    using namespace MG_Util::ShaderTranspiler;
+
+    String source = R"(#version 130
+void main() {
+    gl_FragData[0] = vec4(1.0);
+    gl_FragData[1].a = 0.5;
+})";
+
+    PreprocessShaderSource(ShaderStage::Fragment, source);
+
+    EXPECT_EQ(source.find("#version 460 core\n"), 0);
+    EXPECT_NE(source.find("layout(location = 0) out vec4 mg_FragData[8];\n"), String::npos);
+    EXPECT_NE(source.find("mg_FragData[0] = vec4(1.0);"), String::npos);
+    EXPECT_NE(source.find("mg_FragData[1].a = 0.5;"), String::npos);
+    EXPECT_EQ(source.find("gl_FragData"), String::npos);
+
+    ShaderAttrib attrib{.shaderType = GL_FRAGMENT_SHADER, .sourceStr = source};
+    auto res = ShaderCompiler::CompileShader(attrib);
+    if (!res) {
+        FAIL() << "errc: " << res.error().errc << "\nlog: " << res.error().log << "\nsource:\n" << source;
+    }
+}
+
 TEST_F(ProgramUtilTest, PreprocessFragmentShaderInjectsDepthRangeShim) {
     using namespace MG_Util::ShaderTranspiler;
 

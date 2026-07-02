@@ -257,6 +257,7 @@ namespace MobileGL::MG_State::GLState {
 
         // FragData (Frag out)
         UnorderedMap<String, Uint> m_explicitFragDataLocation;
+        UnorderedMap<String, Uint> m_linkedFragDataLocation;
 
         // Uniforms
         UnorderedMap<String, Uint> m_uniformLocations;

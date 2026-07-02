@@ -286,9 +286,14 @@ namespace {
         if (stage == MobileGL::ShaderStage::Fragment) {
             ReplaceIdentifier(source, "varying", "in");
             const bool usesFragColor = source.find("gl_FragColor") != MobileGL::String::npos;
+            const bool usesFragData = source.find("gl_FragData") != MobileGL::String::npos;
             if (usesFragColor) {
                 ReplaceIdentifier(source, "gl_FragColor", "mg_FragColor");
                 source.insert(FindAfterVersionDirective(source), "out vec4 mg_FragColor;\n");
+            }
+            if (usesFragData) {
+                ReplaceIdentifier(source, "gl_FragData", "mg_FragData");
+                source.insert(FindAfterVersionDirective(source), "layout(location = 0) out vec4 mg_FragData[8];\n");
             }
         }
     }

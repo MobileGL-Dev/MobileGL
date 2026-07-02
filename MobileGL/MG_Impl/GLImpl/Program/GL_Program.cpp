@@ -1200,6 +1200,19 @@ namespace MobileGL::MG_Impl::GLImpl {
                                              std::to_string(program) + " is not the name of a program object."));
             return -1;
         }
+        if (name == nullptr) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidValue,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__, "name cannot be null."));
+            return -1;
+        }
+        if (!programObject->GetLinkStatus()) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidOperation,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
+                                             std::to_string(program) + " has not been linked successfully."));
+            return -1;
+        }
         return programObject->GetFragmentDataLocation(name);
     }
 

@@ -214,6 +214,7 @@ namespace MobileGL::MG_State::GLState {
         if (result) {
             m_linkStatus = true;
             m_program = result.value();
+            m_linkedFragDataLocation = m_explicitFragDataLocation;
             MGLOG_D("ProgramObject %u: LinkProgram succeeded, TProgram ptr %p", m_externalIndex, m_program.get());
         } else {
             m_infoLog = result.error().log;
@@ -592,12 +593,12 @@ namespace MobileGL::MG_State::GLState {
     Int ProgramObject::GetFragmentDataLocation(const char* name) {
         if (!m_program || !name) return -1;
 
-        const auto explicitLocation = m_explicitFragDataLocation.find(name);
+        const auto explicitLocation = m_linkedFragDataLocation.find(name);
         const Int outputCount = m_program->getNumPipeOutputs();
         for (Int index = 0; index < outputCount; ++index) {
             const auto& output = m_program->getPipeOutput(index);
             if (output.name != name) continue;
-            if (explicitLocation != m_explicitFragDataLocation.end()) return static_cast<Int>(explicitLocation->second);
+            if (explicitLocation != m_linkedFragDataLocation.end()) return static_cast<Int>(explicitLocation->second);
             return static_cast<Int>(output.layoutLocation());
         }
         return -1;
