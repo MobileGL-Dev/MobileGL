@@ -2884,8 +2884,13 @@ namespace MobileGL::MG_Impl::GLImpl {
             return;
         }
 
-        auto textureObject = GetTextureObjectByName(texture, __func__);
-        if (!textureObject) return;
+        auto& textureObject = MG_State::pGLContext->GetTextureObject(texture);
+        if (!textureObject) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidOperation,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__, "Texture object does not exist."));
+            return;
+        }
         textureUnit.GetBindingSlot(textureObject->GetTarget()).Bind(textureObject);
     }
 
