@@ -162,16 +162,44 @@ namespace MobileGL {
             }
 
             void TextureObjectBase::SetBaseLevel(Uint baseLevel) {
+                if (IsImmutable() && m_immutableLevels > 0) {
+                    baseLevel = std::min(baseLevel, m_immutableLevels - 1);
+                }
                 if (baseLevel == m_levelRange.x()) return;
 
                 m_levelRange.x() = baseLevel;
+                if (IsImmutable() && m_levelRange.y() < m_levelRange.x()) {
+                    m_levelRange.y() = m_levelRange.x();
+                }
                 ++m_textureParamsVersion;
             }
 
             void TextureObjectBase::SetMaxLevel(Uint maxLevel) {
+                if (IsImmutable() && m_immutableLevels > 0) {
+                    maxLevel = std::min(std::max(maxLevel, m_levelRange.x()), m_immutableLevels - 1);
+                }
                 if (maxLevel == m_levelRange.y()) return;
 
                 m_levelRange.y() = maxLevel;
+                ++m_textureParamsVersion;
+            }
+
+            Bool TextureObjectBase::IsImmutable() const {
+                return m_immutableLevels > 0;
+            }
+
+            Uint TextureObjectBase::GetImmutableLevels() const {
+                return m_immutableLevels;
+            }
+
+            void TextureObjectBase::SetImmutableLevels(Uint levels) {
+                if (m_immutableLevels == levels) return;
+
+                m_immutableLevels = levels;
+                if (m_immutableLevels > 0) {
+                    m_levelRange.x() = std::min(m_levelRange.x(), m_immutableLevels - 1);
+                    m_levelRange.y() = std::min(std::max(m_levelRange.y(), m_levelRange.x()), m_immutableLevels - 1);
+                }
                 ++m_textureParamsVersion;
             }
 

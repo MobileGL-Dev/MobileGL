@@ -43,6 +43,9 @@ namespace MobileGL::MG_State::GLState {
         virtual const UintVec2& GetLevelRange() const = 0;
         virtual void SetBaseLevel(Uint baseLevel) = 0;
         virtual void SetMaxLevel(Uint maxLevel) = 0;
+        virtual Bool IsImmutable() const = 0;
+        virtual Uint GetImmutableLevels() const = 0;
+        virtual void SetImmutableLevels(Uint levels) = 0;
         virtual Uint16 GetTextureParamsVersion() const = 0;
         virtual Int GetSamples() const = 0;
         virtual void SetSamples(Int samples) = 0;
@@ -79,6 +82,9 @@ namespace MobileGL::MG_State::GLState {
         const UintVec2& GetLevelRange() const override;
         void SetBaseLevel(Uint baseLevel) override;
         void SetMaxLevel(Uint maxLevel) override;
+        Bool IsImmutable() const override;
+        Uint GetImmutableLevels() const override;
+        void SetImmutableLevels(Uint levels) override;
         Uint16 GetTextureParamsVersion() const override;
         Int GetSamples() const override;
         void SetSamples(Int samples) override;
@@ -100,6 +106,7 @@ namespace MobileGL::MG_State::GLState {
         Vec4<TextureSwizzleParam> m_swizzleParams = {TextureSwizzleParam::Red, TextureSwizzleParam::Green,
                                                      TextureSwizzleParam::Blue, TextureSwizzleParam::Alpha};
         UintVec2 m_levelRange = {0, 1000};
+        Uint m_immutableLevels = 0;
         Uint16 m_textureParamsVersion = 0;
         Int m_samples = 0;
         Bool m_fixedSampleLocations = true;
