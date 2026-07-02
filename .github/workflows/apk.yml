@@ -212,6 +212,30 @@ jobs:
             crop_width: 0
             crop_height: 0
             timeout_seconds: 1800
+          - name: minecraft-26.2-main-menu
+            trace_archive: tools/trace_replay/fixtures/minecraft-26.2-main-menu.tgz
+            trace_file: trace.trace
+            golden: tools/trace_replay/fixtures/minecraft-26.2-main-menu.0000259766.png
+            target_call: 259766
+            width: 854
+            height: 480
+            crop_x: 0
+            crop_y: 0
+            crop_width: 0
+            crop_height: 0
+            timeout_seconds: 180
+          - name: minecraft-26.2-in-world
+            trace_archive: tools/trace_replay/fixtures/minecraft-26.2-in-world.tgz
+            trace_file: trace.trace
+            golden: tools/trace_replay/fixtures/minecraft-26.2-in-world.0000519370.png
+            target_call: 519370
+            width: 854
+            height: 480
+            crop_x: 0
+            crop_y: 0
+            crop_width: 0
+            crop_height: 0
+            timeout_seconds: 900
           - name: minecraft-1.21.4-fabric-rei-inventory-normal-world
             trace_archive: tools/trace_replay/fixtures/minecraft-1.21.4-fabric-rei-inventory-normal-world.tgz
             trace_file: trace.trace

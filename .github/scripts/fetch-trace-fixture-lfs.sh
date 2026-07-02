@@ -38,6 +38,12 @@ case "${case_name}" in
   minecraft-1.21.4-fabric-sodium-in-world)
     add_standard_case "0000923340"
     ;;
+  minecraft-26.2-main-menu)
+    add_standard_case "0000259766"
+    ;;
+  minecraft-26.2-in-world)
+    add_standard_case "0000519370"
+    ;;
   minecraft-1.21.4-fabric-rei-inventory-normal-world)
     add_standard_case "0000734465"
     ;;

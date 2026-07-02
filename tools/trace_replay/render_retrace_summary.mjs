@@ -13,6 +13,8 @@ const CASES = [
   "minecraft-1.21.4-main-menu",
   "minecraft-1.21.4-in-world",
   "minecraft-1.21.4-fabric-sodium-in-world",
+  "minecraft-26.2-main-menu",
+  "minecraft-26.2-in-world",
   "minecraft-1.21.4-fabric-rei-inventory-normal-world",
   "minecraft-1.21.4-fabric-xaero-minimap-in-world-normal-world",
   "minecraft-1.21.4-fabric-xaero-world-map-in-world-normal-world",
