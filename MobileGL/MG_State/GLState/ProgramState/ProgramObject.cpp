@@ -585,9 +585,16 @@ namespace MobileGL::MG_State::GLState {
     }
 
     Int ProgramObject::GetFragmentDataLocation(const char* name) {
-        // TODO: should retrieve "post-mortem" location from glslang instead
-        auto it = m_explicitFragDataLocation.find(name);
-        if (it == m_explicitFragDataLocation.end()) return -1;
-        return (Int)it->second;
+        if (!m_program || !name) return -1;
+
+        const auto explicitLocation = m_explicitFragDataLocation.find(name);
+        const Int outputCount = m_program->getNumPipeOutputs();
+        for (Int index = 0; index < outputCount; ++index) {
+            const auto& output = m_program->getPipeOutput(index);
+            if (output.name != name) continue;
+            if (explicitLocation != m_explicitFragDataLocation.end()) return static_cast<Int>(explicitLocation->second);
+            return static_cast<Int>(output.layoutLocation());
+        }
+        return -1;
     }
 } // namespace MobileGL::MG_State::GLState
