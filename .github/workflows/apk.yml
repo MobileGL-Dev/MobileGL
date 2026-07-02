@@ -133,13 +133,49 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       android: ${{ steps.trace-cases.outputs.android }}
+      names: ${{ steps.trace-cases.outputs.names }}
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
 
       - name: Load trace cases
         id: trace-cases
-        run: echo "android=$(python3 tools/trace_replay/trace_cases.py --format github-apk)" >> "$GITHUB_OUTPUT"
+        run: |
+          echo "android=$(python3 tools/trace_replay/trace_cases.py --format github-apk)" >> "$GITHUB_OUTPUT"
+          echo "names=$(python3 tools/trace_replay/trace_cases.py --format names)" >> "$GITHUB_OUTPUT"
+
+  trace-fixtures:
+    name: trace fixture (${{ matrix.case }})
+    runs-on: ubuntu-latest
+    needs: trace-cases
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        case: ${{ fromJSON(needs.trace-cases.outputs.names) }}
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Fetch trace fixture
+        run: bash .github/scripts/fetch-trace-fixture-lfs.sh '${{ matrix.case }}'
+
+      - name: Stage trace fixture
+        run: |
+          safe_case="$(printf '%s' '${{ matrix.case }}' | sed 's/[^A-Za-z0-9._-]/_/g')"
+          stage_dir="trace-fixtures/${safe_case}"
+          mkdir -p "${stage_dir}"
+          python3 tools/trace_replay/trace_cases.py --format fixture-files --case '${{ matrix.case }}' |
+            while IFS= read -r file; do
+              cp "${file}" "${stage_dir}/"
+            done
+
+      - name: Upload trace fixture
+        uses: actions/upload-artifact@v4
+        with:
+          name: MobileGL-trace-fixture-${{ matrix.case }}
+          path: trace-fixtures/**
+          if-no-files-found: error
 
   retrace:
     name: retrace (${{ matrix.backend.name }}, ${{ matrix.case.name }})
@@ -147,6 +183,8 @@ jobs:
     needs:
       - build
       - trace-cases
+      - trace-fixtures
+    if: ${{ always() && needs.build.result == 'success' && needs.trace-cases.result == 'success' }}
     timeout-minutes: 75
     env:
       AVD_NAME: mobilegl-${{ matrix.backend.id }}
@@ -170,8 +208,16 @@ jobs:
       - name: Checkout repo
         uses: actions/checkout@v4
 
-      - name: Fetch trace fixture
-        run: bash .github/scripts/fetch-trace-fixture-lfs.sh '${{ matrix.case.name }}'
+      - name: Download trace fixture
+        uses: actions/download-artifact@v4
+        with:
+          name: MobileGL-trace-fixture-${{ matrix.case.name }}
+          path: trace-fixture-download
+
+      - name: Install trace fixture
+        run: |
+          mkdir -p tools/trace_replay/fixtures
+          find trace-fixture-download -type f -exec cp {} tools/trace_replay/fixtures/ \;
 
       - name: Set artifact metadata
         run: |

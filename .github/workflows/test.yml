@@ -342,6 +342,39 @@ jobs:
         id: trace-cases
         run: echo "names=$(python3 tools/trace_replay/trace_cases.py --format names)" >> "$GITHUB_OUTPUT"
 
+  trace-fixtures:
+    name: trace fixture (${{ matrix.case }})
+    runs-on: ubuntu-latest
+    needs: trace-cases
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        case: ${{ fromJSON(needs.trace-cases.outputs.names) }}
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Fetch trace fixture
+        run: bash .github/scripts/fetch-trace-fixture-lfs.sh '${{ matrix.case }}'
+
+      - name: Stage trace fixture
+        run: |
+          safe_case="$(printf '%s' '${{ matrix.case }}' | sed 's/[^A-Za-z0-9._-]/_/g')"
+          stage_dir="trace-fixtures/${safe_case}"
+          mkdir -p "${stage_dir}"
+          python3 tools/trace_replay/trace_cases.py --format fixture-files --case '${{ matrix.case }}' |
+            while IFS= read -r file; do
+              cp "${file}" "${stage_dir}/"
+            done
+
+      - name: Upload trace fixture
+        uses: actions/upload-artifact@v4
+        with:
+          name: trace-fixture-${{ matrix.case }}
+          path: trace-fixtures/**
+          if-no-files-found: error
+
   retrace:
     name: retrace (${{ matrix.backend }}, ${{ matrix.case }})
     runs-on: ubuntu-latest
@@ -349,6 +382,8 @@ jobs:
       - build-linux
       - build-retrace
       - trace-cases
+      - trace-fixtures
+    if: ${{ always() && needs.build-linux.result == 'success' && needs.build-retrace.result == 'success' && needs.trace-cases.result == 'success' }}
     strategy:
       fail-fast: false
       max-parallel: 4
@@ -362,8 +397,16 @@ jobs:
       - name: Checkout repo
         uses: actions/checkout@v4
 
-      - name: Fetch trace fixture
-        run: bash .github/scripts/fetch-trace-fixture-lfs.sh '${{ matrix.case }}'
+      - name: Download trace fixture
+        uses: actions/download-artifact@v4
+        with:
+          name: trace-fixture-${{ matrix.case }}
+          path: trace-fixture-download
+
+      - name: Install trace fixture
+        run: |
+          mkdir -p tools/trace_replay/fixtures
+          find trace-fixture-download -type f -exec cp {} tools/trace_replay/fixtures/ \;
 
       - name: Get CMake
         uses: lukka/get-cmake@latest
@@ -449,4 +492,3 @@ jobs:
           path: retrace-summary/mobilegl-linux-retrace-overview.html
           archive: false
           if-no-files-found: error
-

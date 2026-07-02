@@ -9,6 +9,7 @@ fi
 case_name="$1"
 fixture_dir="${2:-tools/trace_replay/fixtures}"
 python_bin="${PYTHON:-python3}"
+mirror_base="${MOBILEGL_TRACE_FIXTURE_MIRROR_BASE:-https://repo.miawa.cn/mgl/tools/trace_replay/fixtures}"
 
 if ! command -v "${python_bin}" >/dev/null 2>&1 && command -v python >/dev/null 2>&1; then
   python_bin=python
@@ -33,10 +34,29 @@ if [ "${case_name}" = "OpenRA" ]; then
   exit 0
 fi
 
-echo "Fetching LFS fixture files for ${case_name}: ${include}"
+fetch_from_mirror() {
+  mkdir -p "${fixture_dir}"
+  for file in "${files[@]}"; do
+    local name
+    local url
+    name="$(basename "${file}")"
+    url="${mirror_base%/}/${name}"
+    echo "Fetching trace fixture from mirror: ${url}"
+    if ! curl -L --fail --retry 3 --retry-delay 2 -o "${file}.tmp" "${url}"; then
+      rm -f "${file}.tmp"
+      return 1
+    fi
+    mv "${file}.tmp" "${file}"
+  done
+}
 
-git lfs install --local
-git lfs pull --include="${include}" --exclude=""
+if fetch_from_mirror; then
+  echo "Fetched trace fixture files for ${case_name} from mirror: ${include}"
+else
+  echo "Mirror fetch failed for ${case_name}; falling back to Git LFS: ${include}"
+  git lfs install --local
+  git lfs pull --include="${include}" --exclude=""
+fi
 
 for file in "${files[@]}"; do
   test -s "${file}"
