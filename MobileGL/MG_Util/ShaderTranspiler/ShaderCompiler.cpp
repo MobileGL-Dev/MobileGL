@@ -47,7 +47,8 @@ namespace MobileGL {
                 Resources.maxComputeWorkGroupCountZ = 65535;
                 Resources.maxComputeWorkGroupSizeX = 1024;
                 Resources.maxComputeWorkGroupSizeY = 1024;
-                Resources.maxComputeWorkGroupSizeZ = 64;
+                // TODO: Drive glslang compute resource limits from the active backend instead of this permissive cap.
+                Resources.maxComputeWorkGroupSizeZ = 1024;
                 Resources.maxComputeUniformComponents = 1024;
                 Resources.maxComputeTextureImageUnits = 16;
                 Resources.maxComputeImageUniforms = 8;
