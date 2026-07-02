@@ -382,7 +382,14 @@ namespace MobileGL::MG_Impl::EGLImpl {
         case EGL_CLIENT_APIS:
             return "OpenGL OpenGL_ES";
         case EGL_EXTENSIONS:
-            return "";
+            if (display == EGL_NO_DISPLAY) {
+                return "EGL_EXT_client_extensions "
+                       "EGL_EXT_platform_base "
+                       "EGL_KHR_platform_base "
+                       "EGL_MESA_platform_surfaceless";
+            }
+            return "EGL_KHR_create_context "
+                   "EGL_MESA_platform_surfaceless";
         default:
             state->SetError(EGL_BAD_PARAMETER);
             return nullptr;

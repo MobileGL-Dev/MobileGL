@@ -14,6 +14,8 @@
 #include <OpenGL/OpenGL.h>
 #endif
 
+extern "C" EGLDisplay eglGetPlatformDisplayEXT(EGLenum platform, void* native_display, const EGLint* attrib_list);
+
 #define GETPROC(name, var)                                                                                             \
     if (strcmp(#name, var) == 0) {                                                                                     \
         return (void*)name;                                                                                            \
@@ -63,6 +65,7 @@ namespace MobileGL::MG_Impl {
         GETPROC(eglCreateImage, name);
         GETPROC(eglDestroyImage, name);
         GETPROC(eglGetPlatformDisplay, name);
+        GETPROC(eglGetPlatformDisplayEXT, name);
         GETPROC(eglCreatePlatformWindowSurface, name);
         GETPROC(eglCreatePlatformPixmapSurface, name);
         GETPROC(eglWaitSync, name);

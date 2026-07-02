@@ -235,6 +235,14 @@ MOBILEGL_EGL_API EGLDisplay eglGetPlatformDisplay(EGLenum platform, void* native
     return MobileGL::MG_Impl::EGLImpl::GetPlatformDisplay(platform, native_display, attrib_list);
 }
 
+MOBILEGL_EGL_API EGLDisplay eglGetPlatformDisplayEXT(EGLenum platform, void* native_display,
+                                                     const EGLint* attrib_list) {
+    MGLOG_D("eglGetPlatformDisplayEXT(platform=%u, native_display=%p, attrib_list=%p)", platform, native_display,
+            attrib_list);
+    return MobileGL::MG_Impl::EGLImpl::GetPlatformDisplay(
+        platform, native_display, reinterpret_cast<const EGLAttrib*>(attrib_list));
+}
+
 MOBILEGL_EGL_API EGLSurface eglCreatePlatformWindowSurface(EGLDisplay dpy, EGLConfig config, void* native_window,
                                                            const EGLAttrib* attrib_list) {
     MGLOG_D("eglCreatePlatformWindowSurface(dpy=%p, config=%p, native_window=%p, attrib_list=%p)", dpy, config,
