@@ -8,6 +8,7 @@ export WORK="$PWD/.trace-work"
 export CASE="case-name"
 export WIDTH=854
 export HEIGHT=480
+export TARGET_FRAME=0
 export TARGET_CALL=0
 ```
 
@@ -76,46 +77,52 @@ For Java:
 
 Keep `full.trace` until both backends are validated.
 
-## Select target call
+## Select target frame
+
+Fixture selection must be frame-based. Do not trim the fixture from a full trace
+by filtering arbitrary call ranges or single full-trace calls. Pick a rendered
+frame, then trim with `gltrim -f`.
 
 ```sh
-mkdir -p "$WORK/$CASE/probe"
-for call in $(seq "$START_CALL" "$STEP_CALL" "$END_CALL"); do
-  "$APITRACE" replay --headless \
-    --snapshot-prefix "$WORK/$CASE/probe/$CASE." \
-    --snapshot="$call" \
-    --call-nos \
-    "$WORK/$CASE/full.trace" || true
-done
+"$APITRACE" dump --calls=frame "$WORK/$CASE/full.trace" \
+  > "$WORK/$CASE/frames.txt"
 ```
 
-Inspect the PNGs and set:
+Inspect `frames.txt`, identify the frame that contains the intended visual
+state, and set:
 
 ```sh
-export TARGET_CALL=<chosen-call-number>
+export TARGET_FRAME=<chosen-frame-number>
 ```
 
 ## Trim and package
 
 ```sh
-"$APITRACE" trim \
-  --calls="$TARGET_CALL" \
+"$APITRACE" gltrim \
+  -f "$TARGET_FRAME" \
   --output "$WORK/$CASE/trace.trace" \
   "$WORK/$CASE/full.trace"
 ```
 
 ## Generate golden
 
-Generate the golden from the trimmed trace:
+Generate frame snapshots from the trimmed trace, then choose the snapshot that
+matches the selected frame. The target call used by replay registration must
+come from the trimmed trace, not from a call-filtered full-trace selection.
 
 ```sh
 mkdir -p "$WORK/$CASE/golden"
 "$APITRACE" replay --headless \
   --snapshot-prefix "$WORK/$CASE/golden/$CASE." \
-  --snapshot="$TARGET_CALL" \
   --call-nos \
   "$WORK/$CASE/trace.trace"
+```
 
+Set `TARGET_CALL` to the call number in the chosen trimmed-trace snapshot
+filename:
+
+```sh
+export TARGET_CALL=<chosen-trimmed-trace-snapshot-call>
 GOLDEN_SRC="$WORK/$CASE/golden/$CASE.$(printf '%010d' "$TARGET_CALL").png"
 ```
 
@@ -149,6 +156,16 @@ tar -czf "$REPO/tools/trace_replay/fixtures/$CASE.tgz" \
   -C "$WORK/$CASE/archive" trace.trace
 cp "$WORK/$CASE/$CASE.$(printf '%010d' "$TARGET_CALL").png" \
   "$REPO/tools/trace_replay/fixtures/"
+```
+
+Check the final archive size. The committed fixture archive should be less than
+20 MiB, and should preferably be less than 10 MiB. If it is larger, recapture
+with a shorter run or trim a smaller frame-only fixture instead of adding
+call-based filtering.
+
+```sh
+du -h "$REPO/tools/trace_replay/fixtures/$CASE.tgz"
+tar -tzf "$REPO/tools/trace_replay/fixtures/$CASE.tgz"
 ```
 
 Track with Git LFS:
