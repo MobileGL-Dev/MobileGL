@@ -233,7 +233,7 @@ namespace MobileGL::MG_Impl::GLImpl {
 
             const SizeT bytesPerTexel = baseByteSize / baseTexelCount;
             const Uint requiredLevelCount = ComputeFullMipmapLevelCount(baseTexelSize);
-            for (Uint level = existingLevelCount; level < requiredLevelCount; ++level) {
+            for (Uint level = 1; level < requiredLevelCount; ++level) {
                 const IntVec3 levelTexelSize = ComputeMipmapTexelSize(baseTexelSize, level);
                 const SizeT levelByteSize = bytesPerTexel * static_cast<SizeT>(levelTexelSize.x()) *
                                             static_cast<SizeT>(levelTexelSize.y()) *
@@ -242,6 +242,12 @@ namespace MobileGL::MG_Impl::GLImpl {
                 texture.MarkStorageDirty(uploadTarget, level, false);
             }
             return true;
+        }
+
+        void EnsureGeneratedMipmapStorageAllocated(MG_State::GLState::TextureObjectMipmap& texture) {
+            for (const TextureUploadTarget uploadTarget : texture.GetUploadTargets()) {
+                EnsureGeneratedMipmapStorageAllocated(texture, uploadTarget);
+            }
         }
 
         Bool IsMultisampleTextureTarget(TextureTarget target) {
@@ -3043,6 +3049,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         if (textureObject) {
             auto* mipmapTexture = dynamic_cast<MG_State::GLState::TextureObjectMipmap*>(textureObject.get());
             MOBILEGL_ASSERT(mipmapTexture != nullptr, "GenerateMipmap requires mipmap texture storage.");
+            EnsureGeneratedMipmapStorageAllocated(*mipmapTexture);
         }
         GenerateMipmap_Backend(target);
     }
@@ -3053,7 +3060,13 @@ namespace MobileGL::MG_Impl::GLImpl {
             auto* mipmapTexture = dynamic_cast<MG_State::GLState::TextureObjectMipmap*>(textureObject.get());
             MOBILEGL_ASSERT(mipmapTexture != nullptr, "GenerateTextureMipmap requires mipmap texture storage.");
         }
-        WithTemporarilyBoundNamedTexture(textureObject, [&](GLenum target) { GenerateMipmap_Backend(target); });
+        WithTemporarilyBoundNamedTexture(textureObject, [&](GLenum target) {
+            if (textureObject) {
+                auto* mipmapTexture = dynamic_cast<MG_State::GLState::TextureObjectMipmap*>(textureObject.get());
+                EnsureGeneratedMipmapStorageAllocated(*mipmapTexture);
+            }
+            GenerateMipmap_Backend(target);
+        });
     }
 
     void GetTexImage(GLenum target, GLint level, GLenum format, GLenum type, GLvoid* pixels) {

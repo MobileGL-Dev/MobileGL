@@ -614,7 +614,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                           srcWidth, srcHeight, srcDepth);
     }
     void GenerateMipmap(GLenum target) {
-        MOBILEGL_ASSERT(pVulkanRenderer, "DirectVulkan::GenerateMipmap called with null VulkanRenderer");
+        if (!pVulkanRenderer) {
+            return;
+        }
         MOBILEGL_ASSERT(MG_State::pGLContext, "DirectVulkan::GenerateMipmap called with null GL context");
         pVulkanRenderer->GenerateMipmap(target);
     }
