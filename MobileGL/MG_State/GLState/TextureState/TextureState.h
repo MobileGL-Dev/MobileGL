@@ -37,7 +37,7 @@ namespace MobileGL::MG_State::GLState {
 
     class TextureState {
     public:
-        static constexpr int MAX_TEXTURE_IMAGE_UNITS = 32;
+        static constexpr int MAX_TEXTURE_IMAGE_UNITS = 192;
 
         TextureState();
         void GenerateNames(Uint number, Vector<Uint>& textures);
