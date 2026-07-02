@@ -178,6 +178,22 @@ namespace MobileGL::MG_Impl::GLImpl {
         return true;
     }
 
+    static Int GetKnownProgramResourceCount(const SharedPtr<MG_State::GLState::ProgramObject>& programObject,
+                                            GLenum programInterface) {
+        switch (programInterface) {
+        case GL_UNIFORM:
+            return programObject->GetUniformCount();
+        case GL_UNIFORM_BLOCK:
+            return programObject->GetActiveUniformBlocksCount();
+        case GL_PROGRAM_INPUT:
+            return programObject->GetActiveAttributesCount();
+        case GL_PROGRAM_OUTPUT:
+            return programObject->GetActiveFragmentOutputCount();
+        default:
+            return -1;
+        }
+    }
+
     void CopyStr(GLsizei bufSize, GLsizei* length, GLchar* dst, const char* src, GLsizei srcLength) {
         if (bufSize <= 0) {
             if (length) *length = 0;
@@ -1733,7 +1749,14 @@ namespace MobileGL::MG_Impl::GLImpl {
                                              "Backend does not support program interface queries."));
             return GL_INVALID_INDEX;
         }
-        return getProgramResourceIndex(program, programInterface, name);
+        GLuint index = getProgramResourceIndex(program, programInterface, name);
+        const String resourceName = name;
+        if (index == GL_INVALID_INDEX && resourceName.length() > 3 &&
+            resourceName.compare(resourceName.length() - 3, 3, "[0]") == 0) {
+            index = getProgramResourceIndex(program, programInterface,
+                                            resourceName.substr(0, resourceName.length() - 3).c_str());
+        }
+        return index;
     }
 
     void GetProgramResourceName(GLuint program, GLenum programInterface, GLuint index, GLsizei bufSize, GLsizei* length,
@@ -1741,6 +1764,13 @@ namespace MobileGL::MG_Impl::GLImpl {
         auto& programObject = TryToGetLinkedProgramForInterfaceQuery(program, __func__);
         if (!programObject) return;
         if (!ValidateNamedProgramResourceInterface(programInterface, __func__)) return;
+        const Int resourceCount = GetKnownProgramResourceCount(programObject, programInterface);
+        if (resourceCount >= 0 && index >= static_cast<GLuint>(resourceCount)) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidValue,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__, "index is out of range."));
+            return;
+        }
         if (bufSize < 0) {
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidValue,

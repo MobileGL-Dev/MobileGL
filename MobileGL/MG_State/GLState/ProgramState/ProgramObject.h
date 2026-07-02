@@ -45,8 +45,16 @@ namespace MobileGL::MG_State::GLState {
 
         Int GetActiveUniformIndex(const String& name) const {
             const Int uniformIndex = m_program->getUniformIndex(name.c_str());
-            if (uniformIndex < 0 || uniformIndex >= m_activeUniformCount) return -1;
-            return m_program->getUniform(uniformIndex).name == name ? uniformIndex : -1;
+            if (uniformIndex >= 0 && uniformIndex < m_activeUniformCount &&
+                m_program->getUniform(uniformIndex).name == name) {
+                return uniformIndex;
+            }
+
+            if (name.length() <= 3 || name.compare(name.length() - 3, 3, "[0]") != 0) return -1;
+            const String baseName = name.substr(0, name.length() - 3);
+            const Int baseIndex = m_program->getUniformIndex(baseName.c_str());
+            if (baseIndex < 0 || baseIndex >= m_activeUniformCount) return -1;
+            return m_program->getUniform(baseIndex).name == baseName ? baseIndex : -1;
         }
 
         Bool IsValidUniformLocation(Int location) const {
