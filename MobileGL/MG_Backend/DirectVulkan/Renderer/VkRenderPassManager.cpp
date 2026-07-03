@@ -73,22 +73,27 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     }
 
     static Uint32 ResolveAttachmentBaseArrayLayer(const MG_State::GLState::FramebufferAttachmentObject& attachment) {
+        if (attachment.IsLayered()) {
+            return 0;
+        }
         const TextureUploadTarget uploadTarget = attachment.GetTextureUploadTarget();
         if (!IsCubeMapFaceUploadTarget(uploadTarget)) {
-            return 0;
+            return static_cast<Uint32>(std::max(attachment.GetTextureLayer(), 0));
         }
         return static_cast<Uint32>(uploadTarget) - static_cast<Uint32>(TextureUploadTarget::CubeMapPositiveX);
     }
 
     static Uint32 ResolveAttachmentLayerCount(const MG_State::GLState::FramebufferAttachmentObject& attachment) {
-        static_cast<void>(attachment);
+        if (attachment.IsLayered()) {
+            return static_cast<Uint32>(std::max(attachment.GetSize().z(), 1));
+        }
         return 1u;
     }
 
     static VkImageViewType ResolveAttachmentViewType(
         const MG_State::GLState::FramebufferAttachmentObject& attachment,
         const VkTextureManager::TextureResource& resource) {
-        return IsCubeMapFaceUploadTarget(attachment.GetTextureUploadTarget()) ?
+        return !attachment.IsLayered() && IsCubeMapFaceUploadTarget(attachment.GetTextureUploadTarget()) ?
             VK_IMAGE_VIEW_TYPE_2D :
             resource.viewType;
     }
@@ -438,6 +443,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 XXHASH_VERIFY(XXH64_update(m_hashState, &textureLevel, sizeof(textureLevel)));
                 const TextureUploadTarget textureUploadTarget = att.GetTextureUploadTarget();
                 XXHASH_VERIFY(XXH64_update(m_hashState, &textureUploadTarget, sizeof(textureUploadTarget)));
+                const Int textureLayer = att.GetTextureLayer();
+                XXHASH_VERIFY(XXH64_update(m_hashState, &textureLayer, sizeof(textureLayer)));
+                const Bool textureLayered = att.IsLayered();
+                XXHASH_VERIFY(XXH64_update(m_hashState, &textureLayered, sizeof(textureLayered)));
 
                 Uint64 imageIdentity = 0;
                 auto* texture = att.GetTexture().get();
@@ -621,6 +630,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         attachmentViews.reserve(colorAttachmentSlotCount + 1);
         VkSampleCountFlagBits renderPassSampleCount = VK_SAMPLE_COUNT_1_BIT;
         Bool hasRenderPassSampleCount = false;
+        Uint32 framebufferLayers = 1;
         const auto adoptRenderPassSampleCount = [&](VkSampleCountFlagBits sampleCount,
                                                     const char* attachmentKind,
                                                     Int attachmentId) {
@@ -713,6 +723,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                         });
                         const Uint32 baseArrayLayer = ResolveAttachmentBaseArrayLayer(att);
                         const Uint32 layerCount = ResolveAttachmentLayerCount(att);
+                        framebufferLayers = std::max(framebufferLayers, layerCount);
                         const VkImageViewType attachmentViewType = ResolveAttachmentViewType(att, *textureResource);
                         attachmentViews.emplace_back(
                             m_textureManager.GetOrCreateAttachmentViewAtMipLevel(
@@ -877,6 +888,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 textureResources.emplace_back(depthTextureResource);
                 const Uint32 baseArrayLayer = ResolveAttachmentBaseArrayLayer(*selectedDepthStencilAttachment);
                 const Uint32 layerCount = ResolveAttachmentLayerCount(*selectedDepthStencilAttachment);
+                framebufferLayers = std::max(framebufferLayers, layerCount);
                 const VkImageViewType attachmentViewType =
                     ResolveAttachmentViewType(*selectedDepthStencilAttachment, *depthTextureResource);
                 attachmentViews.emplace_back(
@@ -953,7 +965,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         framebufferCreateInfo.pAttachments = attachmentViews.data();
         framebufferCreateInfo.width = width;
         framebufferCreateInfo.height = height;
-        framebufferCreateInfo.layers = 1;
+        framebufferCreateInfo.layers = framebufferLayers;
         VkFramebuffer framebuffer = VK_NULL_HANDLE;
         VK_VERIFY(vkCreateFramebuffer(m_device, &framebufferCreateInfo, nullptr, &framebuffer));
         IntVec2 extent = {width, height};
@@ -969,7 +981,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             hasDepthStencilAttachment,
             renderPassSampleCount,
             extent,
-            1 };
+            static_cast<Int>(framebufferLayers) };
         MGLOG_D("VkRenderPassManager::GetOrCreateRenderPass: hash=0x%llx compatibilityHash=0x%llx attachmentCount=%u colorAttachmentCount=%u samples=%d extent=%dx%d",
                 static_cast<unsigned long long>(hash),
                 static_cast<unsigned long long>(compatibilityHash),

@@ -67,7 +67,9 @@ namespace MobileGL::MG_Impl::GLImpl {
         }
 
         Bool ResolveRepresentableFramebufferTextureUploadTarget(const MG_State::GLState::ITextureObject& textureObject,
-                                                                TextureUploadTarget& outUploadTarget) {
+                                                                TextureUploadTarget& outUploadTarget,
+                                                                Bool& outLayered) {
+            outLayered = false;
             switch (textureObject.GetTarget()) {
             case TextureTarget::Texture1D:
                 outUploadTarget = TextureUploadTarget::Texture1D;
@@ -81,7 +83,12 @@ namespace MobileGL::MG_Impl::GLImpl {
             case TextureTarget::Texture2DMultisample:
                 outUploadTarget = TextureUploadTarget::Texture2DMultisample;
                 return true;
+            case TextureTarget::Texture2DArray:
+                outUploadTarget = TextureUploadTarget::Texture2DArray;
+                outLayered = true;
+                return true;
             default:
+                // TODO: Extend layered framebuffer attachment support to 3D, cube, 1D array, and multisample array textures.
                 outUploadTarget = TextureUploadTarget::Unknown;
                 return false;
             }
@@ -89,7 +96,7 @@ namespace MobileGL::MG_Impl::GLImpl {
 
         void AttachFramebufferTextureWithUploadTarget(const char* functionName, GLenum target, GLenum attachment,
                                                       GLuint texture, GLint level,
-                                                      TextureUploadTarget textureUploadTarget) {
+                                                      TextureUploadTarget textureUploadTarget, Bool layered = false) {
             if (target == GL_FRAMEBUFFER) {
                 target = GL_DRAW_FRAMEBUFFER;
             }
@@ -145,7 +152,7 @@ namespace MobileGL::MG_Impl::GLImpl {
                 return;
             }
 
-            framebufferObject->AttachTexture(attachmentType, textureObject, textureUploadTarget, level);
+            framebufferObject->AttachTexture(attachmentType, textureObject, textureUploadTarget, level, 0, layered);
         }
     } // namespace
 
@@ -406,7 +413,15 @@ namespace MobileGL::MG_Impl::GLImpl {
             }
             break;
         case GL_FRAMEBUFFER_ATTACHMENT_TEXTURE_LAYER:
-            *params = 0;
+            *params = (attachmentObject != nullptr && attachmentObject->IsTexture() && attachmentObject->IsValid())
+                ? static_cast<GLint>(attachmentObject->GetTextureLayer())
+                : 0;
+            break;
+        case GL_FRAMEBUFFER_ATTACHMENT_LAYERED:
+            *params = (attachmentObject != nullptr && attachmentObject->IsTexture() && attachmentObject->IsValid() &&
+                       attachmentObject->IsLayered())
+                ? GL_TRUE
+                : GL_FALSE;
             break;
         default:
             MG_State::pGLContext->RecordError(
@@ -661,14 +676,16 @@ namespace MobileGL::MG_Impl::GLImpl {
         }
 
         TextureUploadTarget textureUploadTarget = TextureUploadTarget::Unknown;
-        if (!ResolveRepresentableFramebufferTextureUploadTarget(*textureObject, textureUploadTarget)) {
+        Bool layered = false;
+        if (!ResolveRepresentableFramebufferTextureUploadTarget(*textureObject, textureUploadTarget, layered)) {
             RecordUnsupportedFramebufferTextureAttachmentError(
                 __func__,
                 "Layered or multi-image framebuffer texture targets are not fully represented by the current framebuffer attachment model.");
             return;
         }
 
-        AttachFramebufferTextureWithUploadTarget(__func__, target, attachment, texture, level, textureUploadTarget);
+        AttachFramebufferTextureWithUploadTarget(__func__, target, attachment, texture, level, textureUploadTarget,
+                                                 layered);
     }
 
     void NamedFramebufferTexture_State(GLuint framebuffer, GLenum attachment, GLuint texture, GLint level) {
@@ -700,14 +717,15 @@ namespace MobileGL::MG_Impl::GLImpl {
         }
 
         TextureUploadTarget textureUploadTarget = TextureUploadTarget::Unknown;
-        if (!ResolveRepresentableFramebufferTextureUploadTarget(*textureObject, textureUploadTarget)) {
+        Bool layered = false;
+        if (!ResolveRepresentableFramebufferTextureUploadTarget(*textureObject, textureUploadTarget, layered)) {
             RecordUnsupportedFramebufferTextureAttachmentError(
                 "NamedFramebufferTexture_State",
                 "Layered or multi-image framebuffer texture targets are not fully represented by the current framebuffer attachment model.");
             return;
         }
 
-        framebufferObject->AttachTexture(attachmentType, textureObject, textureUploadTarget, level);
+        framebufferObject->AttachTexture(attachmentType, textureObject, textureUploadTarget, level, 0, layered);
     }
 
     void NamedFramebufferTextureWithUploadTarget_State(const char* functionName, GLuint framebuffer, GLenum attachment,
@@ -1322,8 +1340,18 @@ namespace MobileGL::MG_Impl::GLImpl {
                 : 0;
             break;
         case GL_FRAMEBUFFER_ATTACHMENT_TEXTURE_CUBE_MAP_FACE:
-        case GL_FRAMEBUFFER_ATTACHMENT_TEXTURE_LAYER:
             *params = 0;
+            break;
+        case GL_FRAMEBUFFER_ATTACHMENT_TEXTURE_LAYER:
+            *params = (attachmentObject != nullptr && attachmentObject->IsTexture() && attachmentObject->IsValid())
+                ? static_cast<GLint>(attachmentObject->GetTextureLayer())
+                : 0;
+            break;
+        case GL_FRAMEBUFFER_ATTACHMENT_LAYERED:
+            *params = (attachmentObject != nullptr && attachmentObject->IsTexture() && attachmentObject->IsValid() &&
+                       attachmentObject->IsLayered())
+                ? GL_TRUE
+                : GL_FALSE;
             break;
         default:
             MG_State::pGLContext->RecordError(

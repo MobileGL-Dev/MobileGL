@@ -1283,15 +1283,21 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     return false;
                 }
                 backendTextureObject->SyncMipmapsToBackend(textureObject);
-                auto glTextureTarget =
-                    MG_Util::ConvertTextureUploadTargetToGLEnum(attachmentObject.GetTextureUploadTarget());
-                if (glTextureTarget == GL_UNKNOWN_MGL) {
-                    glTextureTarget = MG_Util::ConvertTextureTargetToGLEnum(textureObject->GetTarget());
+                if (attachmentObject.IsLayered()) {
+                    g_GLESFuncs.glFramebufferTexture(glFBOTarget, glBackendAttachment,
+                                                     backendTextureObject->GetBackendTextureId(),
+                                                     static_cast<GLint>(attachmentObject.GetTextureLevel()));
+                } else {
+                    auto glTextureTarget =
+                        MG_Util::ConvertTextureUploadTargetToGLEnum(attachmentObject.GetTextureUploadTarget());
+                    if (glTextureTarget == GL_UNKNOWN_MGL) {
+                        glTextureTarget = MG_Util::ConvertTextureTargetToGLEnum(textureObject->GetTarget());
+                    }
+                    backendTextureObject->Bind(glTextureTarget);
+                    g_GLESFuncs.glFramebufferTexture2D(glFBOTarget, glBackendAttachment, glTextureTarget,
+                                                       backendTextureObject->GetBackendTextureId(),
+                                                       static_cast<GLint>(attachmentObject.GetTextureLevel()));
                 }
-                backendTextureObject->Bind(glTextureTarget);
-                g_GLESFuncs.glFramebufferTexture2D(glFBOTarget, glBackendAttachment, glTextureTarget,
-                                                   backendTextureObject->GetBackendTextureId(),
-                                                   static_cast<GLint>(attachmentObject.GetTextureLevel()));
             } else if (attachmentObject.IsRenderbuffer()) {
                 const auto& renderbufferObject = attachmentObject.GetRenderbuffer();
                 const auto& backendRenderbufferIt =

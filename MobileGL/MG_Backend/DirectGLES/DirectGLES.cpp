@@ -1793,12 +1793,16 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
                     const GLuint backendFBOId = backendFBO->GetBackendFramebufferId();
                     g_GLESFuncs.glBindFramebuffer(GL_DRAW_FRAMEBUFFER, backendFBOId);
-                    g_GLESFuncs.glFramebufferTexture2D(
-                        GL_DRAW_FRAMEBUFFER, backendAttachment, textureTarget, 0, 0);
+                    if (attachmentObject.IsLayered()) {
+                        g_GLESFuncs.glFramebufferTexture(GL_DRAW_FRAMEBUFFER, backendAttachment, 0, 0);
+                    } else {
+                        g_GLESFuncs.glFramebufferTexture2D(
+                            GL_DRAW_FRAMEBUFFER, backendAttachment, textureTarget, 0, 0);
+                    }
                     ClearGLErrors();
                     m_detachedAttachments.push_back(
                         {backendFBOId, backendAttachment, textureTarget, backendTextureId,
-                         static_cast<GLint>(attachmentObject.GetTextureLevel())});
+                         static_cast<GLint>(attachmentObject.GetTextureLevel()), attachmentObject.IsLayered()});
                 }
             }
         }
@@ -1806,9 +1810,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
         ~ScopedDetachedTextureFramebufferAttachments() {
             for (const auto& attachment : m_detachedAttachments) {
                 g_GLESFuncs.glBindFramebuffer(GL_DRAW_FRAMEBUFFER, attachment.framebuffer);
-                g_GLESFuncs.glFramebufferTexture2D(
-                    GL_DRAW_FRAMEBUFFER, attachment.attachment, attachment.textureTarget,
-                    attachment.texture, attachment.level);
+                if (attachment.layered) {
+                    g_GLESFuncs.glFramebufferTexture(
+                        GL_DRAW_FRAMEBUFFER, attachment.attachment, attachment.texture, attachment.level);
+                } else {
+                    g_GLESFuncs.glFramebufferTexture2D(
+                        GL_DRAW_FRAMEBUFFER, attachment.attachment, attachment.textureTarget,
+                        attachment.texture, attachment.level);
+                }
             }
             g_GLESFuncs.glBindFramebuffer(GL_READ_FRAMEBUFFER, m_prevReadFBO);
             g_GLESFuncs.glBindFramebuffer(GL_DRAW_FRAMEBUFFER, m_prevDrawFBO);
@@ -1821,6 +1830,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             GLenum textureTarget = GL_TEXTURE_2D;
             GLuint texture = 0;
             GLint level = 0;
+            Bool layered = false;
         };
 
         GLuint m_prevReadFBO = 0;

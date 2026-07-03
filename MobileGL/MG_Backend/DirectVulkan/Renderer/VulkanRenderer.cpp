@@ -923,11 +923,26 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         return false;
     }
 
+    static Bool HasLayeredTextureAttachment(const MG_State::GLState::FramebufferObject& framebufferObject) {
+        if (framebufferObject.GetExternalIndex() == 0) {
+            return false;
+        }
+
+        for (const auto& attachment : framebufferObject.GetAllAttachmentObjects()) {
+            if (attachment.IsTexture() && attachment.IsLayered()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     static Bool IsUnsupportedFramebufferForDirectVulkan(
         const MG_State::GLState::FramebufferObject& framebufferObject) {
         // TODO: Revisit this gate when DirectVulkan has full color renderbuffer render/blit/readback support.
+        // TODO: Implement DirectVulkan layered framebuffer rendering instead of rejecting layered draw targets.
         return HasDistinctCompleteDepthStencilTextureAttachments(framebufferObject) ||
-               HasUnsupportedCompleteRenderbufferAttachment(framebufferObject);
+               HasUnsupportedCompleteRenderbufferAttachment(framebufferObject) ||
+               HasLayeredTextureAttachment(framebufferObject);
     }
 
     static void RecordUnsupportedFramebufferError(const char* func) {

@@ -74,7 +74,7 @@ namespace MobileGL {
         public:
             explicit FramebufferAttachmentObject(const SharedPtr<MG_State::GLState::ITextureObject>& texture,
                                                  TextureUploadTarget textureUploadTarget,
-                                                 Int level = 0);
+                                                 Int level = 0, Int layer = 0, Bool layered = false);
             explicit FramebufferAttachmentObject(const SharedPtr<RenderbufferObject>& renderbuffer);
             explicit FramebufferAttachmentObject(Bool IsValid = true);
 
@@ -84,6 +84,8 @@ namespace MobileGL {
             const SharedPtr<MG_State::GLState::ITextureObject>& GetTexture() const;
             const SharedPtr<RenderbufferObject>& GetRenderbuffer() const;
             Int GetTextureLevel() const;
+            Int GetTextureLayer() const;
+            Bool IsLayered() const;
             TextureUploadTarget GetTextureUploadTarget() const;
             Bool IsComplete() const;
             IntVec3 GetSize() const;
@@ -94,6 +96,8 @@ namespace MobileGL {
             SharedPtr<RenderbufferObject> m_renderbuffer = nullptr;
             TextureUploadTarget m_textureUploadTarget = TextureUploadTarget::Unknown;
             Int m_textureLevel = 0;
+            Int m_textureLayer = 0;
+            Bool m_layered = false;
             Bool m_isValid = true;
         };
 
@@ -112,7 +116,8 @@ namespace MobileGL {
             FramebufferObject(Uint externalIndex);
 
             void AttachTexture(FramebufferAttachmentType type, const SharedPtr<ITextureObject>& texture,
-                               TextureUploadTarget textureUploadTarget = TextureUploadTarget::Unknown, int level = 0);
+                               TextureUploadTarget textureUploadTarget = TextureUploadTarget::Unknown, int level = 0,
+                               int layer = 0, Bool layered = false);
             void AttachRenderbuffer(FramebufferAttachmentType type, const SharedPtr<RenderbufferObject>& renderbuffer);
             void Detach(FramebufferAttachmentType type);
             const FramebufferAttachmentObject& GetAttachment(FramebufferAttachmentType type) const;

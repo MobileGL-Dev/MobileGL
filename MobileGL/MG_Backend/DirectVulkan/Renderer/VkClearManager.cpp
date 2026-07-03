@@ -28,6 +28,26 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         return static_cast<Uint32>(target) - static_cast<Uint32>(TextureUploadTarget::CubeMapPositiveX);
     }
 
+    static Uint32 ResolveAttachmentBaseArrayLayer(
+        const MG_State::GLState::FramebufferAttachmentObject& attachment) {
+        if (attachment.IsLayered()) {
+            return 0;
+        }
+        const TextureUploadTarget uploadTarget = attachment.GetTextureUploadTarget();
+        if (!IsCubeMapFaceUploadTarget(uploadTarget)) {
+            return static_cast<Uint32>(std::max(attachment.GetTextureLayer(), 0));
+        }
+        return ResolveAttachmentBaseArrayLayer(uploadTarget);
+    }
+
+    static Uint32 ResolveAttachmentLayerCount(
+        const MG_State::GLState::FramebufferAttachmentObject& attachment) {
+        if (attachment.IsLayered()) {
+            return static_cast<Uint32>(std::max(attachment.GetSize().z(), 1));
+        }
+        return 1u;
+    }
+
     static const MG_State::GLState::FramebufferAttachmentObject* GetClearableAttachment(
         const MG_State::GLState::FramebufferObject& drawFbo, FramebufferAttachmentType attachmentType) {
         if (attachmentType == FramebufferAttachmentType::None) {
@@ -60,9 +80,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         auto* texture = attachment.GetTexture().get();
         MOBILEGL_ASSERT(texture != nullptr, "MakePendingClearKey: texture attachment resolved to null");
         const Uint32 mipLevel = static_cast<Uint32>(std::max(attachment.GetTextureLevel(), 0));
-        const TextureUploadTarget uploadTarget = attachment.GetTextureUploadTarget();
-        const Uint32 baseArrayLayer = ResolveAttachmentBaseArrayLayer(uploadTarget);
-        const Uint32 layerCount = IsCubeMapFaceUploadTarget(uploadTarget) ? 1u : 1u;
+        const Uint32 baseArrayLayer = ResolveAttachmentBaseArrayLayer(attachment);
+        const Uint32 layerCount = ResolveAttachmentLayerCount(attachment);
         return MakePendingClearKey(texture, mipLevel, baseArrayLayer, layerCount);
     }
 

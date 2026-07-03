@@ -45,7 +45,7 @@ namespace MobileGL {
                                                  {TextureUploadTarget::Texture1DArray});
 
             STUB_TEXTURE_OBJECT_CLASS_DEFINITION(TextureObject2DArray, TextureTarget::Texture2DArray,
-                                                 {TextureUploadTarget::Texture2D});
+                                                 {TextureUploadTarget::Texture2DArray});
 
             STUB_TEXTURE_OBJECT_CLASS_DEFINITION(TextureObjectCubeMapArray, TextureTarget::TextureCubeMapArray,
                                                  {TextureUploadTarget::CubeMapArray});

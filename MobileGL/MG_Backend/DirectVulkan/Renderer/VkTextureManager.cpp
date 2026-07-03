@@ -522,6 +522,16 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         case TextureUploadTarget::ProxyTexture2DMultisample:
             outShape = {};
             return true;
+        case TextureUploadTarget::Texture2DArray:
+        case TextureUploadTarget::ProxyTexture2DArray:
+            MOBILEGL_ASSERT(texelSize.z() > 0,
+                            "TryResolveTextureShapeInfo: invalid 2D array depth=%d for textureId=%d",
+                            texelSize.z(), texture.GetExternalIndex());
+            outShape.imageType = VK_IMAGE_TYPE_2D;
+            outShape.viewType = VK_IMAGE_VIEW_TYPE_2D_ARRAY;
+            outShape.depth = 1;
+            outShape.arrayLayers = static_cast<Uint32>(texelSize.z());
+            return true;
         case TextureUploadTarget::Texture2DMultisampleArray:
         case TextureUploadTarget::ProxyTexture2DMultisampleArray:
             MOBILEGL_ASSERT(texelSize.z() > 0,

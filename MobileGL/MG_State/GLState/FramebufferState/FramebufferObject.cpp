@@ -12,8 +12,10 @@
 namespace MobileGL::MG_State::GLState {
     // FramebufferAttachmentObject
     FramebufferAttachmentObject::FramebufferAttachmentObject(
-        const SharedPtr<MG_State::GLState::ITextureObject>& texture, TextureUploadTarget textureUploadTarget, Int level)
-        : m_texture(texture), m_textureUploadTarget(textureUploadTarget), m_textureLevel(level) {}
+        const SharedPtr<MG_State::GLState::ITextureObject>& texture, TextureUploadTarget textureUploadTarget, Int level,
+        Int layer, Bool layered)
+        : m_texture(texture), m_textureUploadTarget(textureUploadTarget), m_textureLevel(level),
+          m_textureLayer(layer), m_layered(layered) {}
     FramebufferAttachmentObject::FramebufferAttachmentObject(const SharedPtr<RenderbufferObject>& renderbuffer)
         : m_renderbuffer(renderbuffer) {}
     FramebufferAttachmentObject::FramebufferAttachmentObject(Bool IsValid)
@@ -43,6 +45,14 @@ namespace MobileGL::MG_State::GLState {
 
     Int FramebufferAttachmentObject::GetTextureLevel() const {
         return m_textureLevel;
+    }
+
+    Int FramebufferAttachmentObject::GetTextureLayer() const {
+        return m_textureLayer;
+    }
+
+    Bool FramebufferAttachmentObject::IsLayered() const {
+        return m_layered;
     }
 
     TextureUploadTarget FramebufferAttachmentObject::GetTextureUploadTarget() const {
@@ -98,8 +108,9 @@ namespace MobileGL::MG_State::GLState {
     }
 
     void FramebufferObject::AttachTexture(FramebufferAttachmentType type, const SharedPtr<ITextureObject>& texture,
-                                          TextureUploadTarget textureUploadTarget, int level) {
-        m_attachmentObjects[static_cast<SizeT>(type)] = FramebufferAttachmentObject(texture, textureUploadTarget, level);
+                                          TextureUploadTarget textureUploadTarget, int level, int layer, Bool layered) {
+        m_attachmentObjects[static_cast<SizeT>(type)] =
+            FramebufferAttachmentObject(texture, textureUploadTarget, level, layer, layered);
         BumpAttachmentVersion(type);
     }
 
