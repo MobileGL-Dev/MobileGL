@@ -224,6 +224,8 @@ namespace MobileGL {
                     return;
                 }
 
+                const EGLSurfaceHandle drawSurface = currentIt->second.DrawSurface;
+                const EGLSurfaceHandle readSurface = currentIt->second.ReadSurface;
                 const EGLContextHandle context = currentIt->second.Context;
                 if (context != nullptr) {
                     auto ownerIt = m_contextOwners.find(context);
@@ -232,6 +234,29 @@ namespace MobileGL {
                     }
                 }
                 m_threadCurrents.erase(currentIt);
+                DestroyPendingSurfaceIfUnused(drawSurface);
+                DestroyPendingSurfaceIfUnused(readSurface);
+            }
+
+            Bool EGLContext::IsSurfaceCurrentUnlocked(EGLSurfaceHandle surface) const {
+                if (surface == EGL_NO_SURFACE) {
+                    return false;
+                }
+                for (const auto& current : m_threadCurrents) {
+                    if (current.second.DrawSurface == surface || current.second.ReadSurface == surface) {
+                        return true;
+                    }
+                }
+                return false;
+            }
+
+            void EGLContext::DestroyPendingSurfaceIfUnused(EGLSurfaceHandle surface) {
+                auto surfaceIt = m_surfaces.find(surface);
+                if (surfaceIt == m_surfaces.end() || !surfaceIt->second.DestroyPending ||
+                    IsSurfaceCurrentUnlocked(surface)) {
+                    return;
+                }
+                m_surfaces.erase(surfaceIt);
             }
 
             void EGLContext::ReleaseDisplayObjects(EGLDisplayHandle display) {
@@ -972,22 +997,9 @@ namespace MobileGL {
                     return false;
                 }
 
-                for (auto currentIt = m_threadCurrents.begin(); currentIt != m_threadCurrents.end();) {
-                    if (currentIt->second.DrawSurface == surface) {
-                        currentIt->second.DrawSurface = EGL_NO_SURFACE;
-                    }
-                    if (currentIt->second.ReadSurface == surface) {
-                        currentIt->second.ReadSurface = EGL_NO_SURFACE;
-                    }
-
-                    const Bool emptyCurrent = currentIt->second.Context == nullptr &&
-                                              currentIt->second.DrawSurface == EGL_NO_SURFACE &&
-                                              currentIt->second.ReadSurface == EGL_NO_SURFACE;
-                    if (emptyCurrent) {
-                        currentIt = m_threadCurrents.erase(currentIt);
-                        continue;
-                    }
-                    ++currentIt;
+                if (IsSurfaceCurrentUnlocked(surface)) {
+                    surfaceIt->second.DestroyPending = true;
+                    return true;
                 }
                 m_surfaces.erase(surfaceIt);
                 return true;

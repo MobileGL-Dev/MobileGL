@@ -319,7 +319,7 @@ namespace MobileGL::MG_Backend {
         const std::lock_guard<std::recursive_mutex> lock(m_eglStateMutex);
         const auto threadKey = CurrentThreadKey();
         if (IsReleaseCurrentRequest(dpy, draw, read, ctx)) {
-            m_eglCurrentThreads.erase(threadKey);
+            ReleaseEGLCurrentThread(threadKey);
             return true;
         }
 
@@ -358,6 +358,7 @@ namespace MobileGL::MG_Backend {
             m_backendCapabilitiesInitialized = true;
         }
 
+        ReleaseEGLCurrentThread(threadKey);
         m_eglCurrentThreads[threadKey] = EGLCurrentState{
             .Display = dpy,
             .DrawSurface = draw,
@@ -408,18 +409,60 @@ namespace MobileGL::MG_Backend {
         return true;
     }
 
-    void BackendObject::ReleaseEGLSurface(EGLSurface surface) {
-        const std::lock_guard<std::recursive_mutex> lock(m_eglStateMutex);
-        for (auto currentIt = m_eglCurrentThreads.begin(); currentIt != m_eglCurrentThreads.end();) {
-            if (currentIt->second.DrawSurface == surface || currentIt->second.ReadSurface == surface) {
-                currentIt = m_eglCurrentThreads.erase(currentIt);
-                continue;
+    Bool BackendObject::IsEGLSurfaceCurrent(EGLSurface surface) const {
+        if (surface == EGL_NO_SURFACE) {
+            return false;
+        }
+        for (const auto& current : m_eglCurrentThreads) {
+            if (current.second.DrawSurface == surface || current.second.ReadSurface == surface) {
+                return true;
             }
-            ++currentIt;
+        }
+        return false;
+    }
+
+    void BackendObject::DestroyPendingEGLSurfaceIfUnused(EGLSurface surface) {
+        auto surfaceIt = m_eglSurfaces.find(surface);
+        if (surfaceIt == m_eglSurfaces.end() || !surfaceIt->second.DestroyPending ||
+            IsEGLSurfaceCurrent(surface)) {
+            return;
         }
 
-        m_eglSurfaces.erase(surface);
+        m_eglSurfaces.erase(surfaceIt);
         if (m_eglSurface == surface) {
+            OnEGLSurfaceReleased(surface);
+            ResetEGLRuntimeState();
+        }
+    }
+
+    void BackendObject::ReleaseEGLCurrentThread(const std::thread::id& threadKey) {
+        auto currentIt = m_eglCurrentThreads.find(threadKey);
+        if (currentIt == m_eglCurrentThreads.end()) {
+            return;
+        }
+
+        const EGLSurface drawSurface = currentIt->second.DrawSurface;
+        const EGLSurface readSurface = currentIt->second.ReadSurface;
+        m_eglCurrentThreads.erase(currentIt);
+        DestroyPendingEGLSurfaceIfUnused(drawSurface);
+        DestroyPendingEGLSurfaceIfUnused(readSurface);
+    }
+
+    void BackendObject::ReleaseEGLSurface(EGLSurface surface) {
+        const std::lock_guard<std::recursive_mutex> lock(m_eglStateMutex);
+        auto surfaceIt = m_eglSurfaces.find(surface);
+        if (surfaceIt == m_eglSurfaces.end()) {
+            return;
+        }
+
+        if (IsEGLSurfaceCurrent(surface)) {
+            surfaceIt->second.DestroyPending = true;
+            return;
+        }
+
+        m_eglSurfaces.erase(surfaceIt);
+        if (m_eglSurface == surface) {
+            OnEGLSurfaceReleased(surface);
             ResetEGLRuntimeState();
         }
     }
@@ -449,5 +492,9 @@ namespace MobileGL::MG_Backend {
         (void)width;
         (void)height;
         return false;
+    }
+
+    void BackendObject::OnEGLSurfaceReleased(EGLSurface surface) {
+        (void)surface;
     }
 } // namespace MobileGL::MG_Backend

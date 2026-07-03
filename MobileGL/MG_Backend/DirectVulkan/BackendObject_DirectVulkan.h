@@ -38,6 +38,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
     private:
         Bool InitPbufferSurface(EGLint width, EGLint height) override;
+        void OnEGLSurfaceReleased(EGLSurface surface) override;
         void UpdateAdvertisedExtensions();
         void UpdateDynamicBackendParameters();
 

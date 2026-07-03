@@ -463,9 +463,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
     void BackendObject_DirectVulkan::ReleaseEGLSurface(EGLSurface surface) {
         const std::lock_guard<std::recursive_mutex> lock(m_eglStateMutex);
-        if (m_eglSurface == surface) {
-            pVulkanRenderer.reset();
-        }
         BackendObject::ReleaseEGLSurface(surface);
     }
 
@@ -473,6 +470,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         const std::lock_guard<std::recursive_mutex> lock(m_eglStateMutex);
         pVulkanRenderer.reset();
         BackendObject::ReleaseEGLResources();
+    }
+
+    void BackendObject_DirectVulkan::OnEGLSurfaceReleased(EGLSurface surface) {
+        (void)surface;
+        pVulkanRenderer.reset();
     }
 
     const RendererInfo& BackendObject_DirectVulkan::GetRendererInfo() const {

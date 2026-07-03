@@ -278,6 +278,7 @@ namespace MobileGL {
 
             struct EGLSurfaceState {
                 SurfaceKind Kind = SurfaceKind::None;
+                Bool DestroyPending = false;
                 WindowHandle Window;
                 EGLint Width = 1;
                 EGLint Height = 1;
@@ -289,6 +290,7 @@ namespace MobileGL {
             const EGLSurfaceState* GetRegisteredEGLSurface(EGLSurface surface) const;
             Bool ActivateEGLSurface(EGLSurface surface);
             virtual Bool InitPbufferSurface(EGLint width, EGLint height);
+            virtual void OnEGLSurfaceReleased(EGLSurface surface);
             FormatCapabilityCache& MutableFormatCapabilities();
 
             mutable std::recursive_mutex m_eglStateMutex;
@@ -302,6 +304,11 @@ namespace MobileGL {
             SurfaceKind m_eglSurfaceKind = SurfaceKind::None;
             UnorderedMap<std::thread::id, EGLCurrentState> m_eglCurrentThreads;
             UnorderedMap<EGLSurface, EGLSurfaceState> m_eglSurfaces;
+
+        private:
+            Bool IsEGLSurfaceCurrent(EGLSurface surface) const;
+            void DestroyPendingEGLSurfaceIfUnused(EGLSurface surface);
+            void ReleaseEGLCurrentThread(const std::thread::id& threadKey);
         };
     } // namespace MG_Backend
 } // namespace MobileGL

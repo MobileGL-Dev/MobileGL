@@ -637,11 +637,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     }
 
     void DispatchCompute(GLuint numGroupsX, GLuint numGroupsY, GLuint numGroupsZ) {
-        if (!pVulkanRenderer || !MG_State::pGLContext) {
-            // TODO: Keep DirectVulkan renderer/context lifetime valid across failed compute image-load-store programs.
-            MGLOG_E("DirectVulkan::DispatchCompute skipped: renderer or GL context is null");
-            return;
-        }
+        MOBILEGL_ASSERT(pVulkanRenderer, "DirectVulkan::DispatchCompute called with null VulkanRenderer");
+        MOBILEGL_ASSERT(MG_State::pGLContext, "DirectVulkan::DispatchCompute called with null GL context");
         pVulkanRenderer->DispatchCompute(numGroupsX, numGroupsY, numGroupsZ);
     }
 
@@ -652,11 +649,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     }
 
     void MemoryBarrier(GLbitfield barriers) {
-        if (!pVulkanRenderer || !MG_State::pGLContext) {
-            // TODO: Preserve or replay memory barriers when DirectVulkan renderer/context recovery is implemented.
-            MGLOG_E("DirectVulkan::MemoryBarrier skipped: renderer or GL context is null");
-            return;
-        }
+        MOBILEGL_ASSERT(pVulkanRenderer, "DirectVulkan::MemoryBarrier called with null VulkanRenderer");
+        MOBILEGL_ASSERT(MG_State::pGLContext, "DirectVulkan::MemoryBarrier called with null GL context");
         pVulkanRenderer->MemoryBarrier(barriers);
     }
 
@@ -1175,12 +1169,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         pVulkanRenderer->ReadPixels(x, y, width, height, format, type, pixels);
     }
     void GetTexImage(GLenum target, GLint level, GLenum format, GLenum type, GLvoid* pixels) {
-        if (!pVulkanRenderer || !MG_State::pGLContext) {
-            // TODO: Keep DirectVulkan renderer/context lifetime valid across failed image-load-store readbacks.
-            ClearReadPixelsOutput(1, 1, format, type, pixels);
-            MGLOG_E("DirectVulkan::GetTexImage skipped: renderer or GL context is null");
-            return;
-        }
+        MOBILEGL_ASSERT(pVulkanRenderer, "DirectVulkan::GetTexImage called with null VulkanRenderer");
+        MOBILEGL_ASSERT(MG_State::pGLContext, "DirectVulkan::GetTexImage called with null GL context");
         pVulkanRenderer->GetTexImage(target, level, format, type, pixels);
     }
     void GetTextureImage(const SharedPtr<MG_State::GLState::ITextureObject>& texture, TextureUploadTarget uploadTarget,
@@ -1199,11 +1189,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     }
 
     void DrawArrays(GLenum mode, GLint first, GLsizei count) {
-        if (!pVulkanRenderer || !MG_State::pGLContext) {
-            // TODO: Keep DirectVulkan renderer/context lifetime valid across failed image-load-store programs.
-            MGLOG_E("DirectVulkan::DrawArrays skipped: renderer or GL context is null");
-            return;
-        }
+        MOBILEGL_ASSERT(pVulkanRenderer, "DirectVulkan::DrawArrays called with null VulkanRenderer");
+        MOBILEGL_ASSERT(MG_State::pGLContext, "DirectVulkan::DrawArrays called with null GL context");
 
         DrawCmd payload{};
         payload.mode = mode;

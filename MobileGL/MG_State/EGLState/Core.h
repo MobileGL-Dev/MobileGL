@@ -169,6 +169,7 @@ namespace MobileGL {
                     EGLDisplayHandle Display = EGL_NO_DISPLAY;
                     EGLConfigHandle Config = nullptr;
                     SurfaceType Type = SurfaceType::Window;
+                    Bool DestroyPending = false;
                     Uint64 NativeHandleKey = 0;
                     EGLClientBuffer ClientBuffer = nullptr;
                     EGLenum BufferType = EGL_NONE;
@@ -232,6 +233,8 @@ namespace MobileGL {
 
                 void ReleaseDisplayObjects(EGLDisplayHandle display);
                 void ReleaseThreadUnlocked(const std::thread::id& threadKey);
+                Bool IsSurfaceCurrentUnlocked(EGLSurfaceHandle surface) const;
+                void DestroyPendingSurfaceIfUnused(EGLSurfaceHandle surface);
 
             private:
                 mutable std::recursive_mutex m_mutex;

@@ -39,6 +39,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
     private:
         void UpdateDynamicBackendParameters();
         Bool InitPbufferSurface(EGLint width, EGLint height) override;
+        void OnEGLSurfaceReleased(EGLSurface surface) override;
 
         Bool m_initialized = false;
         MG_External::EGLFunctionsTable m_EGLFunctions;

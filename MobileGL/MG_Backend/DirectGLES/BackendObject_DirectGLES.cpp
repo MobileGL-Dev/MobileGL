@@ -756,9 +756,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
     void BackendObject_DirectGLES::ReleaseEGLSurface(EGLSurface surface) {
         const std::lock_guard<std::recursive_mutex> lock(m_eglStateMutex);
-        if (m_eglSurface == surface) {
-            DestroyEGLContext();
-        }
         BackendObject::ReleaseEGLSurface(surface);
     }
 
@@ -766,6 +763,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
         const std::lock_guard<std::recursive_mutex> lock(m_eglStateMutex);
         DestroyEGLContext();
         BackendObject::ReleaseEGLResources();
+    }
+
+    void BackendObject_DirectGLES::OnEGLSurfaceReleased(EGLSurface surface) {
+        (void)surface;
+        DestroyEGLContext();
     }
 
     const RendererInfo& BackendObject_DirectGLES::GetRendererInfo() const {
