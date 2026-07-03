@@ -2021,7 +2021,37 @@ void main() {
         }
         s_vkCmdDrawIndexedIndirectCount = nullptr;
 
-        DestroySurface();
+        if (m_instance != VK_NULL_HANDLE && m_surface != VK_NULL_HANDLE) {
+            vkDestroySurfaceKHR(m_instance, m_surface, nullptr);
+            m_surface = VK_NULL_HANDLE;
+        }
+
+#if defined(VK_USE_PLATFORM_METAL_EXT)
+        if (m_platformLibrary != nullptr) {
+            Release(reinterpret_cast<id>(m_platformLibrary));
+            m_platformLibrary = nullptr;
+        }
+        if (m_platformDisplay != nullptr) {
+            Release(reinterpret_cast<id>(m_platformDisplay));
+            m_platformDisplay = nullptr;
+        }
+#endif
+
+#if defined(VK_USE_PLATFORM_XLIB_KHR)
+        if (m_platformDisplay != nullptr) {
+            using XCloseDisplayFn = int (*)(Display*);
+            auto* closeDisplay = reinterpret_cast<XCloseDisplayFn>(m_platformCloseDisplay);
+            if (closeDisplay) {
+                closeDisplay(static_cast<Display*>(m_platformDisplay));
+            }
+            m_platformDisplay = nullptr;
+        }
+        m_platformCloseDisplay = nullptr;
+        if (m_platformLibrary != nullptr) {
+            dlclose(m_platformLibrary);
+            m_platformLibrary = nullptr;
+        }
+#endif
 
         if (m_debugMessenger != VK_NULL_HANDLE) {
             DestroyDebugMessenger();
@@ -2033,67 +2063,6 @@ void main() {
             m_instance = VK_NULL_HANDLE;
         }
         MGLOG_I("VulkanRenderer shut down completed");
-    }
-
-    void VulkanRenderer::BindSurface(NativeWindowType window, const VulkanRendererConfig& cfg) {
-        if (m_instance == VK_NULL_HANDLE) {
-            m_window = window;
-            m_config = cfg;
-            Initialize();
-            return;
-        }
-
-        if (m_device != VK_NULL_HANDLE) {
-            VK_VERIFY(vkDeviceWaitIdle(m_device));
-        }
-
-        ReleaseSurface();
-        m_window = window;
-        m_config.SurfaceWidth = std::max<Uint32>(cfg.SurfaceWidth, 1);
-        m_config.SurfaceHeight = std::max<Uint32>(cfg.SurfaceHeight, 1);
-        CreateSurface();
-
-        const auto queueFamilies = GetQueueFamilyFromPhysicalDevice(m_physicalDevice.handle);
-        const Int presentFamily =
-            GetPresentQueueFamilyIndex(m_physicalDevice, m_surface, queueFamilies,
-                                       m_physicalDevice.queueFamilies.presentFamily);
-        MOBILEGL_ASSERT(presentFamily == m_physicalDevice.queueFamilies.presentFamily,
-                        "BindSurface: new EGL surface requires a different Vulkan present queue family");
-
-        RecreateSwapchain();
-        VkResult acquireResult =
-            m_frameContext.WaitAndAcquireNextImage(m_device, m_swapchainObject.GetHandle(), m_imageIndexAcquired);
-        if (acquireResult == VK_ERROR_OUT_OF_DATE_KHR || acquireResult == VK_SUBOPTIMAL_KHR) {
-            RecreateSwapchain();
-            acquireResult =
-                m_frameContext.WaitAndAcquireNextImage(m_device, m_swapchainObject.GetHandle(), m_imageIndexAcquired);
-        }
-        VK_VERIFY(acquireResult, "BindSurface, WaitAndAcquireNextImage");
-        if (m_textureManager) {
-            m_textureManager->BeginFrame(m_frameContext.GetCurrentFrameIndex());
-        }
-        m_bufferManager.BeginFrame(m_frameContext.GetCurrentFrameIndex());
-        m_transientVertexIndexBufferSlicesThisFrame.clear();
-        m_swapchainResizeRequested = false;
-    }
-
-    void VulkanRenderer::ReleaseSurface() {
-        if (m_surface == VK_NULL_HANDLE && m_swapchainObject.GetHandle() == VK_NULL_HANDLE) {
-            return;
-        }
-
-        if (m_device != VK_NULL_HANDLE) {
-            VK_VERIFY(vkDeviceWaitIdle(m_device));
-            DestroyDeferredDepthMipmapCleanup();
-            if (m_renderPassManager) {
-                ShutdownSwapchain();
-            } else {
-                m_swapchainObject.Shutdown(m_device);
-            }
-        }
-        DestroySurface();
-        m_swapchainResizeRequested = false;
-        m_imageIndexAcquired = 0;
     }
 
     Bool VulkanRenderer::UploadAndBindVertexBuffers(
@@ -6042,42 +6011,6 @@ void main() {
         MGLOG_W("VulkanRenderer::Initialize called on a platform which is not supported yet"); // TODO: support more
                                                                                                // platforms
 #endif
-    }
-
-    void VulkanRenderer::DestroySurface() {
-        if (m_instance != VK_NULL_HANDLE && m_surface != VK_NULL_HANDLE) {
-            vkDestroySurfaceKHR(m_instance, m_surface, nullptr);
-            m_surface = VK_NULL_HANDLE;
-        }
-
-#if defined(VK_USE_PLATFORM_METAL_EXT)
-        if (m_platformLibrary != nullptr) {
-            Release(reinterpret_cast<id>(m_platformLibrary));
-            m_platformLibrary = nullptr;
-        }
-        if (m_platformDisplay != nullptr) {
-            Release(reinterpret_cast<id>(m_platformDisplay));
-            m_platformDisplay = nullptr;
-        }
-#endif
-
-#if defined(VK_USE_PLATFORM_XLIB_KHR)
-        if (m_platformDisplay != nullptr) {
-            using XCloseDisplayFn = int (*)(Display*);
-            auto* closeDisplay = reinterpret_cast<XCloseDisplayFn>(m_platformCloseDisplay);
-            if (closeDisplay) {
-                closeDisplay(static_cast<Display*>(m_platformDisplay));
-            }
-            m_platformDisplay = nullptr;
-        }
-        m_platformCloseDisplay = nullptr;
-        if (m_platformLibrary != nullptr) {
-            dlclose(m_platformLibrary);
-            m_platformLibrary = nullptr;
-        }
-#endif
-
-        m_window = 0;
     }
 
     Vector<VkQueueFamilyProperties> VulkanRenderer::GetQueueFamilyFromPhysicalDevice(VkPhysicalDevice device) {

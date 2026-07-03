@@ -372,16 +372,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
         auto nativeWindow = reinterpret_cast<NativeWindowType>(m_windowHandle.Handle);
 
-        VulkanRendererConfig config;
-        config.SurfaceWidth = std::max<Uint32>(m_windowHandle.Width, 1);
-        config.SurfaceHeight = std::max<Uint32>(m_windowHandle.Height, 1);
-        if (pVulkanRenderer) {
-            pVulkanRenderer->BindSurface(nativeWindow, config);
-        } else {
-            pVulkanRenderer = MakeUnique<MG_Backend::DirectVulkan::VulkanRenderer>(nativeWindow, config);
-            MOBILEGL_ASSERT(pVulkanRenderer != nullptr, "InitWindowSurface: VulkanRenderer creation failed");
-            pVulkanRenderer->Initialize();
-        }
+        pVulkanRenderer = MakeUnique<MG_Backend::DirectVulkan::VulkanRenderer>(nativeWindow);
+        MOBILEGL_ASSERT(pVulkanRenderer != nullptr, "InitWindowSurface: VulkanRenderer creation failed");
+        pVulkanRenderer->Initialize();
         return true;
     }
 
@@ -389,13 +382,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         VulkanRendererConfig config;
         config.SurfaceWidth = static_cast<Uint32>(std::max<EGLint>(width, 1));
         config.SurfaceHeight = static_cast<Uint32>(std::max<EGLint>(height, 1));
-        if (pVulkanRenderer) {
-            pVulkanRenderer->BindSurface(NativeWindowType{}, config);
-        } else {
-            pVulkanRenderer = MakeUnique<MG_Backend::DirectVulkan::VulkanRenderer>(NativeWindowType{}, config);
-            MOBILEGL_ASSERT(pVulkanRenderer != nullptr, "InitPbufferSurface: VulkanRenderer creation failed");
-            pVulkanRenderer->Initialize();
-        }
+        pVulkanRenderer = MakeUnique<MG_Backend::DirectVulkan::VulkanRenderer>(NativeWindowType{}, config);
+        MOBILEGL_ASSERT(pVulkanRenderer != nullptr, "InitPbufferSurface: VulkanRenderer creation failed");
+        pVulkanRenderer->Initialize();
         return true;
     }
 
@@ -501,9 +490,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
     void BackendObject_DirectVulkan::OnEGLSurfaceReleased(EGLSurface surface) {
         (void)surface;
-        if (pVulkanRenderer) {
-            pVulkanRenderer->ReleaseSurface();
-        }
+        pVulkanRenderer.reset();
     }
 
     const RendererInfo& BackendObject_DirectVulkan::GetRendererInfo() const {

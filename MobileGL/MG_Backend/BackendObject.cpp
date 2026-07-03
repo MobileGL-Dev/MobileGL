@@ -291,19 +291,6 @@ namespace MobileGL::MG_Backend {
             return true;
         }
 
-        if (m_eglSurfaceInitialized) {
-            if (IsEGLSurfaceCurrent(m_eglSurface)) {
-                MGLOG_E("ActivateEGLSurface failed: current EGL surface is still in use");
-                return false;
-            }
-            OnEGLSurfaceReleased(m_eglSurface);
-            m_eglSurfaceInitialized = false;
-            m_backendCapabilitiesInitialized = false;
-            m_eglSurfaceKind = SurfaceKind::None;
-            m_eglSurface = EGL_NO_SURFACE;
-            m_windowHandle = {};
-        }
-
         if (surfaceState->Kind == SurfaceKind::Window) {
             SetWindowHandle(surfaceState->Window);
             if (!InitWindowSurface()) {
@@ -323,6 +310,7 @@ namespace MobileGL::MG_Backend {
         m_eglSurface = surface;
         m_eglSurfaceInitialized = true;
         m_eglSurfaceKind = surfaceState->Kind;
+        m_eglCurrentThreads.clear();
         m_backendCapabilitiesInitialized = false;
         return true;
     }
@@ -339,6 +327,12 @@ namespace MobileGL::MG_Backend {
             MGLOG_E("MakeEGLCurrent failed: EGL display mismatch or not initialized");
             return false;
         }
+        if (!m_eglSurfaceInitialized) {
+            if (draw != read || !ActivateEGLSurface(draw)) {
+                MGLOG_E("MakeEGLCurrent failed: EGL surface is not initialized");
+                return false;
+            }
+        }
         if (!GetRegisteredEGLSurface(draw) || !GetRegisteredEGLSurface(read)) {
             MGLOG_E("MakeEGLCurrent failed: EGL surface is not registered");
             return false;
@@ -347,24 +341,15 @@ namespace MobileGL::MG_Backend {
             MGLOG_E("MakeEGLCurrent failed: separate draw/read surfaces are not supported");
             return false;
         }
+        if (draw != m_eglSurface && !ActivateEGLSurface(draw)) {
+            MGLOG_E("MakeEGLCurrent failed: EGL surface is not backed by this backend");
+            return false;
+        }
         if (draw == EGL_NO_SURFACE || read == EGL_NO_SURFACE || ctx == EGL_NO_CONTEXT) {
             MGLOG_E("MakeEGLCurrent failed: draw/read/context is invalid");
             return false;
         }
 
-        if (m_eglSurfaceInitialized && draw != m_eglSurface) {
-            ReleaseEGLCurrentThread(threadKey);
-        }
-        if (!m_eglSurfaceInitialized) {
-            if (!ActivateEGLSurface(draw)) {
-                MGLOG_E("MakeEGLCurrent failed: EGL surface is not initialized");
-                return false;
-            }
-        }
-        if (draw != m_eglSurface && !ActivateEGLSurface(draw)) {
-            MGLOG_E("MakeEGLCurrent failed: EGL surface is not backed by this backend");
-            return false;
-        }
         if (!m_backendCapabilitiesInitialized) {
             if (!InitCapabilities()) {
                 MGLOG_E("MakeEGLCurrent failed: InitCapabilities failed");
