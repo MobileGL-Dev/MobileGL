@@ -346,7 +346,7 @@ jobs:
 
       - name: Load trace cases
         id: trace-cases
-        run: echo "names=$(python3 tools/trace_replay/trace_cases.py --format names)" >> "$GITHUB_OUTPUT"
+        run: echo "names=$(python3 tools/trace_replay/trace_cases.py --ci --format names)" >> "$GITHUB_OUTPUT"
 
   trace-fixtures:
     name: trace fixture (${{ matrix.case }})

@@ -142,8 +142,8 @@ jobs:
       - name: Load trace cases
         id: trace-cases
         run: |
-          echo "android=$(python3 tools/trace_replay/trace_cases.py --format github-apk)" >> "$GITHUB_OUTPUT"
-          echo "names=$(python3 tools/trace_replay/trace_cases.py --format names)" >> "$GITHUB_OUTPUT"
+          echo "android=$(python3 tools/trace_replay/trace_cases.py --ci --format github-apk)" >> "$GITHUB_OUTPUT"
+          echo "names=$(python3 tools/trace_replay/trace_cases.py --ci --format names)" >> "$GITHUB_OUTPUT"
 
   trace-fixtures:
     name: trace fixture (${{ matrix.case }})

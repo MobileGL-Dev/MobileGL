@@ -67,6 +67,10 @@ def github_apk_case(case):
     return result
 
 
+def ci_trace_cases(cases):
+    return [case for case in cases if case.get("ci", True)]
+
+
 def cmake_quote(value):
     return '"' + str(value).replace("\\", "/").replace('"', '\\"') + '"'
 
@@ -105,6 +109,7 @@ def emit_cmake(cases, fixture_root):
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--case", dest="case_name", help="Trace case name.")
+    parser.add_argument("--ci", action="store_true", help="Only include cases enabled for CI.")
     parser.add_argument("--fixture-root", default="tools/trace_replay/fixtures")
     parser.add_argument(
         "--format",
@@ -117,6 +122,8 @@ def parse_args():
 def main():
     args = parse_args()
     cases = load_trace_cases()
+    if args.ci:
+        cases = ci_trace_cases(cases)
     if args.format == "names":
         print(json.dumps([case["name"] for case in cases], separators=(",", ":")))
     elif args.format == "github-apk":

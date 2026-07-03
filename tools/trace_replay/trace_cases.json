@@ -55,6 +55,7 @@
     },
     {
       "name": "minecraft-26.2-main-menu",
+      "ci": false,
       "trace_archive": "minecraft-26.2-main-menu.tgz",
       "golden": "minecraft-26.2-main-menu.0000101926.png",
       "target_call": 101926,
@@ -62,6 +63,7 @@
     },
     {
       "name": "minecraft-26.2-in-world",
+      "ci": false,
       "trace_archive": "minecraft-26.2-in-world.tgz",
       "golden": "minecraft-26.2-in-world.0000519370.png",
       "target_call": 519370
