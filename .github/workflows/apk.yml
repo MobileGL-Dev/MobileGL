@@ -264,6 +264,7 @@ jobs:
       - name: Retrace and validate
         env:
           MOBILEGL_RETRACE_USE_ANGLE: ${{ matrix.backend.name == 'DirectGLES' && '1' || '0' }}
+          MOBILEGL_VULKAN_R11G11B10F_FALLBACK: ${{ matrix.backend.name == 'DirectVulkan' && '1' || '0' }}
         run: |
           apk_file="$(find android-retrace-apks -name '${{ matrix.backend.apk }}' -print -quit)"
           timeout "$(( ${{ matrix.case.timeout_seconds }} + 300 ))" sh android-plugin/trace-replay-ci.sh \
