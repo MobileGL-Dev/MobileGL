@@ -1266,6 +1266,7 @@ namespace MobileGL::MG_Impl::GLImpl {
                 MG_Util::ConvertGLEnumToString(target).c_str(), pointIndex, buffer);
         BufferTarget bufferTarget = MG_Util::ConvertGLEnumToBufferTarget(target);
         if (!BufferImpl::ValidateBufferBindingPointTarget(bufferTarget)) return;
+        if (!BufferImpl::ValidateBufferBindingPointIndex(bufferTarget, pointIndex)) return;
 
         auto& point = MG_State::pGLContext->GetBufferBindingPoint(bufferTarget, pointIndex);
         SharedPtr<MG_State::GLState::BufferObject> bufferObject;
@@ -1297,6 +1298,7 @@ namespace MobileGL::MG_Impl::GLImpl {
                 MG_Util::ConvertGLEnumToString(target).c_str(), index, buffer, offset, size);
         BufferTarget bufferTarget = MG_Util::ConvertGLEnumToBufferTarget(target);
         if (!BufferImpl::ValidateBufferBindingPointTarget(bufferTarget)) return;
+        if (!BufferImpl::ValidateBufferBindingPointIndex(bufferTarget, index)) return;
 
         auto& point = MG_State::pGLContext->GetBufferBindingPoint(bufferTarget, index);
         SharedPtr<MG_State::GLState::BufferObject> bufferObject;

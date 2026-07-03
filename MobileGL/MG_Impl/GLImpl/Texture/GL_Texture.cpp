@@ -3218,13 +3218,21 @@ namespace MobileGL::MG_Impl::GLImpl {
 
     void GenerateMipmap(GLenum target) {
         const auto textureTarget = MG_Util::ConvertGLEnumToTextureTarget(target);
+        if (!TextureImpl::ValidateTextureTarget(textureTarget)) {
+            return;
+        }
         auto& activeUnit = MG_State::pGLContext->GetTextureUnitObject(MG_State::pGLContext->GetActiveTextureUnit());
         auto& textureObject = activeUnit.GetBindingSlot(textureTarget).GetBoundObject();
-        if (textureObject) {
-            auto* mipmapTexture = dynamic_cast<MG_State::GLState::TextureObjectMipmap*>(textureObject.get());
-            MOBILEGL_ASSERT(mipmapTexture != nullptr, "GenerateMipmap requires mipmap texture storage.");
-            EnsureGeneratedMipmapStorageAllocated(*mipmapTexture);
+        if (!textureObject) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidOperation,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__, "GenerateMipmap requires a bound texture."));
+            return;
         }
+
+        auto* mipmapTexture = dynamic_cast<MG_State::GLState::TextureObjectMipmap*>(textureObject.get());
+        MOBILEGL_ASSERT(mipmapTexture != nullptr, "GenerateMipmap requires mipmap texture storage.");
+        EnsureGeneratedMipmapStorageAllocated(*mipmapTexture);
         GenerateMipmap_Backend(target);
     }
 

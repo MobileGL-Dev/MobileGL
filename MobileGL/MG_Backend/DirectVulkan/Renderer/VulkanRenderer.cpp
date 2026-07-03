@@ -1041,38 +1041,46 @@ void main() {
         }
 
         static Bool EnsureGenerateMipmapStorageAllocated(::MobileGL::MG_State::GLState::TextureObjectMipmap& texture,
-                                                         ::MobileGL::TextureUploadTarget uploadTarget,
                                                          Uint32 baseMipLevel) {
             const Uint32 existingMipLevelCount = static_cast<Uint32>(texture.GetMipmapLevelCount());
             if (existingMipLevelCount <= baseMipLevel) {
                 return false;
             }
 
-            const IntVec3 baseTexelSize = texture.GetMipmapTexelSize(uploadTarget, baseMipLevel);
-            const SizeT baseByteSize = texture.GetMipmapByteSize(uploadTarget, baseMipLevel);
-            if (baseTexelSize.x() <= 0 || baseTexelSize.y() <= 0 || baseTexelSize.z() <= 0 || baseByteSize == 0) {
+            const auto& uploadTargets = texture.GetUploadTargets();
+            if (uploadTargets.empty()) {
                 return false;
             }
 
-            const SizeT baseTexelCount = static_cast<SizeT>(baseTexelSize.x()) * static_cast<SizeT>(baseTexelSize.y()) *
-                                         static_cast<SizeT>(baseTexelSize.z());
-            if (baseTexelCount == 0 || (baseByteSize % baseTexelCount) != 0) {
-                return false;
-            }
+            for (const auto uploadTarget : uploadTargets) {
+                const IntVec3 baseTexelSize = texture.GetMipmapTexelSize(uploadTarget, baseMipLevel);
+                const SizeT baseByteSize = texture.GetMipmapByteSize(uploadTarget, baseMipLevel);
+                if (baseTexelSize.x() <= 0 || baseTexelSize.y() <= 0 || baseTexelSize.z() <= 0 ||
+                    baseByteSize == 0) {
+                    return false;
+                }
 
-            const SizeT bytesPerTexel = baseByteSize / baseTexelCount;
-            const Uint32 requiredMipLevelCount = baseMipLevel + ComputeFullMipLevelCount(baseTexelSize);
-            if (existingMipLevelCount >= requiredMipLevelCount) {
-                return true;
-            }
+                const SizeT baseTexelCount = static_cast<SizeT>(baseTexelSize.x()) *
+                                             static_cast<SizeT>(baseTexelSize.y()) *
+                                             static_cast<SizeT>(baseTexelSize.z());
+                if (baseTexelCount == 0 || (baseByteSize % baseTexelCount) != 0) {
+                    return false;
+                }
 
-            for (Uint32 level = existingMipLevelCount; level < requiredMipLevelCount; ++level) {
-                const IntVec3 levelTexelSize = ComputeMipTexelSize(baseTexelSize, level - baseMipLevel);
-                const SizeT levelByteSize = bytesPerTexel * static_cast<SizeT>(levelTexelSize.x()) *
-                                            static_cast<SizeT>(levelTexelSize.y()) *
-                                            static_cast<SizeT>(levelTexelSize.z());
-                texture.AllocateStorage(uploadTarget, level, {levelTexelSize, levelByteSize});
-                texture.MarkStorageDirty(uploadTarget, level, false);
+                const SizeT bytesPerTexel = baseByteSize / baseTexelCount;
+                const Uint32 requiredMipLevelCount = baseMipLevel + ComputeFullMipLevelCount(baseTexelSize);
+                if (existingMipLevelCount >= requiredMipLevelCount) {
+                    continue;
+                }
+
+                for (Uint32 level = existingMipLevelCount; level < requiredMipLevelCount; ++level) {
+                    const IntVec3 levelTexelSize = ComputeMipTexelSize(baseTexelSize, level - baseMipLevel);
+                    const SizeT levelByteSize = bytesPerTexel * static_cast<SizeT>(levelTexelSize.x()) *
+                                                static_cast<SizeT>(levelTexelSize.y()) *
+                                                static_cast<SizeT>(levelTexelSize.z());
+                    texture.AllocateStorage(uploadTarget, level, {levelTexelSize, levelByteSize});
+                    texture.MarkStorageDirty(uploadTarget, level, false);
+                }
             }
             return true;
         }
@@ -1696,12 +1704,47 @@ void main() {
             }
         }
 
+        static void StoreReadbackPixelFloat(const Uint8* src, Bool srcIsBgra, GLenum dstFormat, Float* dst) {
+            const Float r = static_cast<Float>(srcIsBgra ? src[2] : src[0]) / 255.0f;
+            const Float g = static_cast<Float>(src[1]) / 255.0f;
+            const Float b = static_cast<Float>(srcIsBgra ? src[0] : src[2]) / 255.0f;
+            const Float a = static_cast<Float>(src[3]) / 255.0f;
+
+            // TODO: extend readback packing to integer/depth formats instead of only normalized color formats.
+            switch (dstFormat) {
+                case GL_RGB:
+                    dst[0] = r;
+                    dst[1] = g;
+                    dst[2] = b;
+                    break;
+                case GL_BGR:
+                    dst[0] = b;
+                    dst[1] = g;
+                    dst[2] = r;
+                    break;
+                case GL_RGBA:
+                    dst[0] = r;
+                    dst[1] = g;
+                    dst[2] = b;
+                    dst[3] = a;
+                    break;
+                case GL_BGRA:
+                    dst[0] = b;
+                    dst[1] = g;
+                    dst[2] = r;
+                    dst[3] = a;
+                    break;
+                default:
+                    break;
+            }
+        }
+
         static Bool PackReadbackToClientOrPbo(const Uint8* srcPixels, VkFormat srcFormat, GLsizei width,
                                               GLsizei height, GLenum format, GLenum type, void* pixels) {
             if (width <= 0 || height <= 0) {
                 return true;
             }
-            if (type != GL_UNSIGNED_BYTE) {
+            if (type != GL_UNSIGNED_BYTE && type != GL_FLOAT) {
                 MGLOG_E("DirectVulkan readback skipped: unsupported type=0x%x", type);
                 return false;
             }
@@ -1713,15 +1756,16 @@ void main() {
             }
 
             const auto packParams = MG_State::pGLContext->GetPixelStoreParameters(false);
+            const SizeT dstComponentBytes = type == GL_FLOAT ? sizeof(Float) : sizeof(Uint8);
             const SizeT rowPixels = static_cast<SizeT>(packParams.RowLength > 0 ? packParams.RowLength : width);
-            const SizeT dstRowStride = AlignPixelRow(rowPixels * static_cast<SizeT>(dstChannels),
+            const SizeT dstRowStride = AlignPixelRow(rowPixels * static_cast<SizeT>(dstChannels) * dstComponentBytes,
                                                      packParams.Alignment);
             const SizeT dstOffset = static_cast<SizeT>(std::max(packParams.SkipRows, 0)) * dstRowStride +
                                     static_cast<SizeT>(std::max(packParams.SkipPixels, 0)) *
-                                        static_cast<SizeT>(dstChannels);
+                                        static_cast<SizeT>(dstChannels) * dstComponentBytes;
             const SizeT packedSize = dstOffset +
                                      (static_cast<SizeT>(height - 1) * dstRowStride) +
-                                     (static_cast<SizeT>(width) * static_cast<SizeT>(dstChannels));
+                                     (static_cast<SizeT>(width) * static_cast<SizeT>(dstChannels) * dstComponentBytes);
             Vector<Uint8> packed(packedSize, 0);
 
             const Bool srcIsBgra = IsBgraVkFormat(srcFormat);
@@ -1729,10 +1773,14 @@ void main() {
                 const Uint8* srcRow = srcPixels + static_cast<SizeT>(row) * static_cast<SizeT>(width) * 4;
                 Uint8* dstRow = packed.data() + dstOffset + static_cast<SizeT>(row) * dstRowStride;
                 for (GLsizei col = 0; col < width; ++col) {
-                    StoreReadbackPixel(srcRow + static_cast<SizeT>(col) * 4,
-                                       srcIsBgra,
-                                       format,
-                                       dstRow + static_cast<SizeT>(col) * static_cast<SizeT>(dstChannels));
+                    const auto* src = srcRow + static_cast<SizeT>(col) * 4;
+                    auto* dst = dstRow + static_cast<SizeT>(col) * static_cast<SizeT>(dstChannels) *
+                                             dstComponentBytes;
+                    if (type == GL_FLOAT) {
+                        StoreReadbackPixelFloat(src, srcIsBgra, format, reinterpret_cast<Float*>(dst));
+                    } else {
+                        StoreReadbackPixel(src, srcIsBgra, format, dst);
+                    }
                 }
             }
 
@@ -4854,9 +4902,9 @@ void main() {
 
     void VulkanRenderer::GenerateMipmap(GLenum target) {
         const auto textureTarget = MG_Util::ConvertGLEnumToTextureTarget(target);
-        const auto uploadTarget = MG_Util::ConvertGLEnumToTextureUploadTarget(target);
-        MOBILEGL_ASSERT(textureTarget == TextureTarget::Texture2D || textureTarget == TextureTarget::Texture3D,
-                        "GenerateMipmap currently only supports GL_TEXTURE_2D and GL_TEXTURE_3D.");
+        MOBILEGL_ASSERT(textureTarget == TextureTarget::Texture2D || textureTarget == TextureTarget::Texture3D ||
+                            textureTarget == TextureTarget::TextureCubeMap,
+                        "GenerateMipmap currently only supports GL_TEXTURE_2D, GL_TEXTURE_3D, and GL_TEXTURE_CUBE_MAP.");
 
         auto& textureUnit = MG_State::pGLContext->GetTextureUnitObject(MG_State::pGLContext->GetActiveTextureUnit());
         auto texture = textureUnit.GetBindingSlot(textureTarget).GetBoundObject();
@@ -4908,8 +4956,7 @@ void main() {
                             "GenerateMipmap: depth-stencil mipmap generation is not supported yet.");
         }
 
-        const Bool allocatedMipmapStorage =
-            EnsureGenerateMipmapStorageAllocated(*mipmapTexture, uploadTarget, baseMipLevel);
+        const Bool allocatedMipmapStorage = EnsureGenerateMipmapStorageAllocated(*mipmapTexture, baseMipLevel);
         MOBILEGL_ASSERT(allocatedMipmapStorage, "GenerateMipmap could not allocate a full mip chain for this texture.");
 
         resource = m_textureManager->SyncTextureAndGetDescriptor(*texture);
@@ -5021,13 +5068,13 @@ void main() {
             blitRegion.srcSubresource.aspectMask = resource->aspect;
             blitRegion.srcSubresource.mipLevel = level - 1;
             blitRegion.srcSubresource.baseArrayLayer = 0;
-            blitRegion.srcSubresource.layerCount = 1;
+            blitRegion.srcSubresource.layerCount = resource->arrayLayers;
             blitRegion.srcOffsets[0] = {0, 0, 0};
             blitRegion.srcOffsets[1] = {srcTexelSize.x(), srcTexelSize.y(), srcTexelSize.z()};
             blitRegion.dstSubresource.aspectMask = resource->aspect;
             blitRegion.dstSubresource.mipLevel = level;
             blitRegion.dstSubresource.baseArrayLayer = 0;
-            blitRegion.dstSubresource.layerCount = 1;
+            blitRegion.dstSubresource.layerCount = resource->arrayLayers;
             blitRegion.dstOffsets[0] = {0, 0, 0};
             blitRegion.dstOffsets[1] = {dstTexelSize.x(), dstTexelSize.y(), dstTexelSize.z()};
 

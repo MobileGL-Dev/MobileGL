@@ -690,7 +690,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         m_dynamicParameters.MaxTextureBufferSize = m_vulkanCaps.MaxTextureBufferSize;
         m_dynamicParameters.MaxUniformBufferBindings = m_vulkanCaps.MaxUniformBufferBindings;
         m_dynamicParameters.MaxUniformBlockSize = m_vulkanCaps.MaxUniformBlockSize;
-        m_dynamicParameters.MaxImageUnits = m_vulkanCaps.MaxImageUnits;
+        m_dynamicParameters.MaxImageUnits = std::min(m_vulkanCaps.MaxImageUnits, maxSupportedTextureUnits);
         m_dynamicParameters.MaxCombinedImageUniforms = m_vulkanCaps.MaxCombinedImageUniforms;
         m_dynamicParameters.MaxComputeImageUniforms = m_vulkanCaps.MaxComputeImageUniforms;
         const Int maxSupportedDrawBuffers =

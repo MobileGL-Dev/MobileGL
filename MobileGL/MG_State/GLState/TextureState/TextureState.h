@@ -20,7 +20,7 @@ namespace MobileGL::MG_State::GLState {
         GLboolean Layered = GL_FALSE;
         GLint Layer = 0;
         GLenum Access = GL_READ_ONLY;
-        GLenum Format = GL_RGBA8;
+        GLenum Format = GL_R8;
         Uint16 Version = 0;
 
         void Bind(SharedPtr<ITextureObject> texture, GLint level, GLboolean layered, GLint layer, GLenum access,

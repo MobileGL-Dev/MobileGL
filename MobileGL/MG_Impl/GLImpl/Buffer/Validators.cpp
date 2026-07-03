@@ -7,6 +7,7 @@
 // End of Source File Header
 
 #include "Validators.h"
+#include <MG_Backend/BackendObjects.h>
 #include <MG_State/GLState/Core.h>
 #include <MG_State/GLState/ErrorState/Error.h>
 #include <MG_Util/Converters/GLToStr/GLEnumConverter.h>
@@ -50,6 +51,26 @@ namespace MobileGL::MG_Impl::GLImpl::BufferImpl {
             return false;
         }
         return true;
+    }
+
+    Bool ValidateBufferBindingPointIndex(BufferTarget target, Uint index) {
+        SizeT pointCount = MG_State::pGLContext->GetBufferBindingPointCount(target);
+        if (target == BufferTarget::ShaderStorage && MG_Backend::pActiveBackendObject) {
+            const Int backendCount =
+                MG_Backend::pActiveBackendObject->GetDynamicParameters().MaxShaderStorageBufferBindings;
+            pointCount = std::min(pointCount, static_cast<SizeT>(std::max(backendCount, 0)));
+        }
+
+        if (index < pointCount) {
+            return true;
+        }
+
+        MG_State::pGLContext->RecordError(
+            ErrorCode::InvalidValue,
+            MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl/BufferImpl", "ValidateBufferBindingPointIndex",
+                                         std::format("Binding point index {} is out of range for target {}.", index,
+                                                     MG_Util::ConvertBufferTargetToString(target))));
+        return false;
     }
 
     Bool ValidateBufferName(Uint index, Bool allowZero) {

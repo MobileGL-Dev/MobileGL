@@ -346,6 +346,18 @@ target_compile_definitions(${CMAKE_PROJECT_NAME}
         MOBILEGL_LOG_ACTIVE_LEVEL=${MOBILEGL_LOG_ACTIVE_LEVEL}
 )
 
+if(UNIX AND NOT APPLE AND NOT ANDROID)
+    foreach(MOBILEGL_LOADER_ALIAS
+            libEGL.so libEGL.so.1)
+        add_custom_command(TARGET ${CMAKE_PROJECT_NAME} POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E create_symlink
+                    "$<TARGET_FILE_NAME:${CMAKE_PROJECT_NAME}>"
+                    "$<TARGET_FILE_DIR:${CMAKE_PROJECT_NAME}>/${MOBILEGL_LOADER_ALIAS}"
+            COMMENT "Creating ${MOBILEGL_LOADER_ALIAS} alias for Linux GL/EGL loaders"
+        )
+    endforeach()
+endif()
+
 if(NOT ANDROID)
     add_library(${CMAKE_PROJECT_NAME}_s STATIC 
         ${SOURCE_FILES}

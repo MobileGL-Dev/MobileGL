@@ -99,7 +99,7 @@ namespace MobileGL::MG_State::GLState {
                 }
                 for (auto& imageBinding : m_imageTextureBindings) {
                     if (imageBinding.Texture == it->second) {
-                        imageBinding.Bind(nullptr, 0, GL_FALSE, 0, GL_READ_ONLY, GL_RGBA8);
+                        imageBinding.Bind(nullptr, 0, GL_FALSE, 0, GL_READ_ONLY, GL_R8);
                     }
                 }
                 m_textureObjects.erase(it);

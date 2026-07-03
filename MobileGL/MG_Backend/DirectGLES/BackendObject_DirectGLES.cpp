@@ -906,7 +906,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
         m_dynamicParameters.MaxTextureBufferSize = m_GLESCapabilities.MaxTextureBufferSize;
         m_dynamicParameters.MaxUniformBufferBindings = m_GLESCapabilities.MaxUniformBufferBindings;
         m_dynamicParameters.MaxUniformBlockSize = m_GLESCapabilities.MaxUniformBlockSize;
-        m_dynamicParameters.MaxImageUnits = m_GLESCapabilities.MaxImageUnits;
+        const Int maxSupportedTextureUnits =
+            static_cast<Int>(MG_State::GLState::TextureState::MAX_TEXTURE_IMAGE_UNITS);
+        m_dynamicParameters.MaxImageUnits = std::min(m_GLESCapabilities.MaxImageUnits, maxSupportedTextureUnits);
         m_dynamicParameters.MaxCombinedImageUniforms = m_GLESCapabilities.MaxCombinedImageUniforms;
         m_dynamicParameters.MaxComputeImageUniforms = m_GLESCapabilities.MaxComputeImageUniforms;
         m_dynamicParameters.MaxDrawBuffers = m_GLESCapabilities.MaxDrawBuffers;

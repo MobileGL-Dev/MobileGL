@@ -2698,6 +2698,94 @@ namespace MobileGL::MG_Backend::DirectGLES {
         }
     };
 
+    static SizeT AlignPixelRow(SizeT rowBytes, Int alignment) {
+        const SizeT resolvedAlignment = static_cast<SizeT>(std::max(alignment, 1));
+        return (rowBytes + resolvedAlignment - 1) & ~(resolvedAlignment - 1);
+    }
+
+    static Int GetFloatReadbackChannelCount(GLenum format) {
+        switch (format) {
+            case GL_RED:
+                return 1;
+            case GL_RGBA:
+                return 4;
+            default:
+                return 0;
+        }
+    }
+
+    static Bool ReadPixelsFloatViaUnsignedByte(GLint x, GLint y, GLsizei width, GLsizei height, GLenum format,
+                                               void* pixels) {
+        if (width <= 0 || height <= 0) {
+            return true;
+        }
+        const Int dstChannels = GetFloatReadbackChannelCount(format);
+        if (dstChannels == 0) {
+            return false;
+        }
+
+        const GLenum readFormat = format == GL_RED ? GL_RED : GL_RGBA;
+        const Int readChannels = format == GL_RED ? 1 : 4;
+        Vector<Uint8> raw(static_cast<SizeT>(width) * static_cast<SizeT>(height) *
+                          static_cast<SizeT>(readChannels));
+
+        GLint prevPixelPackBuffer = 0;
+        g_GLESFuncs.glGetIntegerv(GL_PIXEL_PACK_BUFFER_BINDING, &prevPixelPackBuffer);
+        g_GLESFuncs.glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+        g_GLESFuncs.glPixelStorei(GL_PACK_ALIGNMENT, 1);
+        g_GLESFuncs.glPixelStorei(GL_PACK_ROW_LENGTH, 0);
+        g_GLESFuncs.glPixelStorei(GL_PACK_SKIP_ROWS, 0);
+        g_GLESFuncs.glPixelStorei(GL_PACK_SKIP_PIXELS, 0);
+        g_GLESFuncs.glReadPixels(x, y, width, height, readFormat, GL_UNSIGNED_BYTE, raw.data());
+        const GLenum readError = g_GLESFuncs.glGetError();
+        g_GLESFuncs.glBindBuffer(GL_PIXEL_PACK_BUFFER, static_cast<GLuint>(prevPixelPackBuffer));
+        if (readError != GL_NO_ERROR) {
+            MGLOG_E("ReadPixels: GL_FLOAT fallback read failed: %s",
+                    MG_Util::ConvertGLEnumToString(readError).c_str());
+            return true;
+        }
+
+        const auto packParams = MG_State::pGLContext->GetPixelStoreParameters(false);
+        const SizeT rowPixels = static_cast<SizeT>(packParams.RowLength > 0 ? packParams.RowLength : width);
+        const SizeT dstPixelBytes = static_cast<SizeT>(dstChannels) * sizeof(Float);
+        const SizeT dstRowStride = AlignPixelRow(rowPixels * dstPixelBytes, packParams.Alignment);
+        const SizeT dstOffset = static_cast<SizeT>(std::max(packParams.SkipRows, 0)) * dstRowStride +
+                                static_cast<SizeT>(std::max(packParams.SkipPixels, 0)) * dstPixelBytes;
+        const SizeT packedSize = dstOffset + static_cast<SizeT>(height - 1) * dstRowStride +
+                                 static_cast<SizeT>(width) * dstPixelBytes;
+        Vector<Uint8> packed(packedSize, 0);
+
+        for (GLsizei row = 0; row < height; ++row) {
+            const Uint8* srcRow = raw.data() + static_cast<SizeT>(row) * static_cast<SizeT>(width) *
+                                                   static_cast<SizeT>(readChannels);
+            auto* dstRow = reinterpret_cast<Float*>(packed.data() + dstOffset +
+                                                     static_cast<SizeT>(row) * dstRowStride);
+            for (GLsizei col = 0; col < width; ++col) {
+                const Uint8* src = srcRow + static_cast<SizeT>(col) * static_cast<SizeT>(readChannels);
+                Float* dst = dstRow + static_cast<SizeT>(col) * static_cast<SizeT>(dstChannels);
+                // TODO: extend readback packing to all desktop GL read formats instead of only normalized RED/RGBA.
+                for (Int component = 0; component < dstChannels; ++component) {
+                    dst[component] = static_cast<Float>(src[component]) / 255.0f;
+                }
+            }
+        }
+
+        const auto& pixelPackBufferObject =
+            MG_State::pGLContext->GetBufferBindingSlot(BufferTarget::PixelPack).GetBoundObject();
+        if (pixelPackBufferObject) {
+            const SizeT pboOffset = reinterpret_cast<SizeT>(pixels);
+            if (pboOffset + packed.size() > pixelPackBufferObject->GetSize()) {
+                MGLOG_E("ReadPixels: GL_FLOAT fallback PBO is too small");
+                return true;
+            }
+            pixelPackBufferObject->UploadSubData({packed.data(), packed.size()}, pboOffset);
+            pixelPackBufferObject->ClearDirty();
+        } else if (pixels != nullptr && !packed.empty()) {
+            Memcpy(pixels, packed.data(), packed.size());
+        }
+        return true;
+    }
+
     void ReadPixels(GLint x, GLint y, GLsizei width, GLsizei height, GLenum format, GLenum type, void* pixels) {
         MGLOG_D("ReadPixels: x=%d y=%d w=%d h=%d format=%s type=%s pixels=%p", x, y, width, height,
                 MG_Util::ConvertGLEnumToString(format).c_str(), MG_Util::ConvertGLEnumToString(type).c_str(), pixels);
@@ -2730,6 +2818,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
         if (fbStatus != GL_FRAMEBUFFER_COMPLETE) {
             MGLOG_E("ReadPixels: bound READ FBO is not complete");
+            return;
+        }
+        if (type == GL_FLOAT && ReadPixelsFloatViaUnsignedByte(x, y, width, height, format, pixels)) {
+            MGLOG_D("ReadPixels: finished via GL_FLOAT fallback");
             return;
         }
 

@@ -235,6 +235,25 @@ namespace MobileGL::MG_Impl::GLImpl {
         return true;
     }
 
+    bool ValidateShaderStorageBlockBinding(GLuint binding) {
+        SizeT maxBindingCount = MG_State::pGLContext->GetBufferBindingPointCount(BufferTarget::ShaderStorage);
+        if (MG_Backend::pActiveBackendObject) {
+            const Int backendCount =
+                MG_Backend::pActiveBackendObject->GetDynamicParameters().MaxShaderStorageBufferBindings;
+            maxBindingCount = std::min(maxBindingCount, static_cast<SizeT>(std::max(backendCount, 0)));
+        }
+
+        if (binding < maxBindingCount) {
+            return true;
+        }
+
+        MG_State::pGLContext->RecordError(
+            ErrorCode::InvalidValue,
+            MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
+                                         "Shader storage block binding is out of range."));
+        return false;
+    }
+
     void AttachShader_State(GLuint program, GLuint shader) {
         auto& programObject = TryToGetProgramObject(program);
         if (!programObject) return;
@@ -1973,6 +1992,7 @@ namespace MobileGL::MG_Impl::GLImpl {
     void ShaderStorageBlockBinding(GLuint program, GLuint storageBlockIndex, GLuint storageBlockBinding) {
         auto& programObject = TryToGetProgramObject(program);
         if (!programObject || !programObject->GetLinkStatus()) return;
+        if (!ValidateShaderStorageBlockBinding(storageBlockBinding)) return;
         auto shaderStorageBlockBinding = MG_Backend::gBackendFunctionsTable.GL.ShaderStorageBlockBinding;
         if (!shaderStorageBlockBinding) {
             MG_State::pGLContext->RecordError(
