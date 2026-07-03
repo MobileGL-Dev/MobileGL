@@ -108,6 +108,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
         void Initialize();
         void Shutdown();
+        void BindSurface(NativeWindowType window, const VulkanRendererConfig& cfg);
+        void ReleaseSurface();
 
         Bool SetupDraw(FrameContext::FrameData& frame, GLenum mode, Flags<DrawSetupAspect> aspects,
                        const DrawCmdParam& drawParams,
@@ -264,6 +266,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         VkResult DestroyDebugMessenger();
         VkDebugUtilsMessengerCreateInfoEXT PopulateDebugMessengerCreateInfo();
         void CreateSurface();
+        void DestroySurface();
         void PickPhysicalDevice();
         void CreateLogicalDeviceAndQueues();
         void CreateAllocator();
