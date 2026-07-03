@@ -1962,7 +1962,13 @@ void main() {
     }
 
     void VulkanRenderer::Shutdown() {
-        VK_VERIFY(vkDeviceWaitIdle(m_device));
+        if (m_instance == VK_NULL_HANDLE && m_device == VK_NULL_HANDLE && m_surface == VK_NULL_HANDLE) {
+            return;
+        }
+
+        if (m_device != VK_NULL_HANDLE) {
+            VK_VERIFY(vkDeviceWaitIdle(m_device));
+        }
 
         DestroyDeferredDepthMipmapCleanup();
         DestroyComputePipelines();
@@ -1982,7 +1988,9 @@ void main() {
         m_bufferManager.Shutdown();
         m_transientVertexIndexBufferSlicesThisFrame.clear();
 
-        m_frameContext.Destroy(m_device, m_commandPool);
+        if (m_device != VK_NULL_HANDLE) {
+            m_frameContext.Destroy(m_device, m_commandPool);
+        }
 
         if (m_uniformManager) {
             m_uniformManager->Shutdown();
@@ -1990,7 +1998,11 @@ void main() {
         }
         m_programFactory.reset();
 
-        ShutdownSwapchain();
+        if (m_renderPassManager) {
+            ShutdownSwapchain();
+        } else if (m_device != VK_NULL_HANDLE) {
+            m_swapchainObject.Shutdown(m_device);
+        }
         m_renderPassManager.reset();
         if (m_clearManager) {
             m_clearManager->Shutdown();
@@ -2009,7 +2021,7 @@ void main() {
         }
         s_vkCmdDrawIndexedIndirectCount = nullptr;
 
-        if (m_surface != VK_NULL_HANDLE) {
+        if (m_instance != VK_NULL_HANDLE && m_surface != VK_NULL_HANDLE) {
             vkDestroySurfaceKHR(m_instance, m_surface, nullptr);
             m_surface = VK_NULL_HANDLE;
         }

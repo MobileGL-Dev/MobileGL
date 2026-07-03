@@ -276,7 +276,18 @@ namespace MobileGL {
                 EGLContext Context = EGL_NO_CONTEXT;
             };
 
+            struct EGLSurfaceState {
+                SurfaceKind Kind = SurfaceKind::None;
+                WindowHandle Window;
+                EGLint Width = 1;
+                EGLint Height = 1;
+            };
+
             void ResetEGLRuntimeState();
+            Bool RegisterEGLWindowSurface(EGLSurface surface, const WindowHandle& handle);
+            Bool RegisterEGLPbufferSurface(EGLSurface surface, EGLint width, EGLint height);
+            const EGLSurfaceState* GetRegisteredEGLSurface(EGLSurface surface) const;
+            Bool ActivateEGLSurface(EGLSurface surface);
             virtual Bool InitPbufferSurface(EGLint width, EGLint height);
             FormatCapabilityCache& MutableFormatCapabilities();
 
@@ -290,6 +301,7 @@ namespace MobileGL {
             Bool m_backendCapabilitiesInitialized = false;
             SurfaceKind m_eglSurfaceKind = SurfaceKind::None;
             UnorderedMap<std::thread::id, EGLCurrentState> m_eglCurrentThreads;
+            UnorderedMap<EGLSurface, EGLSurfaceState> m_eglSurfaces;
         };
     } // namespace MG_Backend
 } // namespace MobileGL

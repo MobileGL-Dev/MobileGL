@@ -420,20 +420,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             return false;
         }
 
-        const Bool sameHandle = m_eglSurfaceInitialized && m_eglSurface == surface &&
-                                m_eglSurfaceKind == SurfaceKind::Window && m_windowHandle.Backend == handle.Backend &&
-                                m_windowHandle.Handle == handle.Handle && m_windowHandle.Width == handle.Width &&
-                                m_windowHandle.Height == handle.Height;
-        if (sameHandle) {
-            return true;
-        }
-
-        if (m_eglSurfaceInitialized || pVulkanRenderer) {
-            pVulkanRenderer.reset();
-            ResetEGLRuntimeState();
-        }
-
-        return BackendObject::CreateEGLWindowSurface(surface, handle);
+        return RegisterEGLWindowSurface(surface, handle);
     }
 
     Bool BackendObject_DirectVulkan::ResizeEGLWindowSurface(EGLSurface surface, Uint32 width, Uint32 height) {
@@ -442,14 +429,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             MGLOG_E("DirectVulkan backend not initialized");
             return false;
         }
-        if (!pVulkanRenderer) {
-            MGLOG_E("DirectVulkan renderer is not initialized");
-            return false;
-        }
         if (!BackendObject::ResizeEGLWindowSurface(surface, width, height)) {
             return false;
         }
-        pVulkanRenderer->RequestSwapchainResize(width, height);
+        if (pVulkanRenderer && m_eglSurface == surface) {
+            pVulkanRenderer->RequestSwapchainResize(width, height);
+        }
         return true;
     }
 
@@ -459,25 +444,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             MGLOG_E("DirectVulkan backend not initialized");
             return false;
         }
-        if (m_eglSurfaceInitialized && m_eglSurface == surface && m_eglSurfaceKind == SurfaceKind::Pbuffer) {
-            return true;
-        }
-        if (m_eglSurfaceInitialized || pVulkanRenderer) {
-            pVulkanRenderer.reset();
-            ResetEGLRuntimeState();
-        }
-        return BackendObject::CreateEGLPbufferSurface(surface, width, height);
+        return RegisterEGLPbufferSurface(surface, width, height);
     }
 
     Bool BackendObject_DirectVulkan::MakeEGLCurrent(EGLDisplay dpy, EGLSurface draw, EGLSurface read, EGLContext ctx) {
         const std::lock_guard<std::recursive_mutex> lock(m_eglStateMutex);
-        if (IsReleaseCurrentRequest(dpy, draw, read, ctx)) {
-            return BackendObject::MakeEGLCurrent(dpy, draw, read, ctx);
-        }
-        if (!pVulkanRenderer) {
-            MGLOG_E("DirectVulkan renderer is not initialized");
-            return false;
-        }
         return BackendObject::MakeEGLCurrent(dpy, draw, read, ctx);
     }
 

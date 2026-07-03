@@ -202,77 +202,114 @@ namespace MobileGL::MG_Backend {
 
     Bool BackendObject::CreateEGLWindowSurface(EGLSurface surface, const WindowHandle& handle) {
         const std::lock_guard<std::recursive_mutex> lock(m_eglStateMutex);
-        if (!m_eglDisplayInitialized) {
-            MGLOG_E("CreateEGLWindowSurface failed: EGL display is not initialized");
-            return false;
-        }
-        if (surface == EGL_NO_SURFACE) {
-            MGLOG_E("CreateEGLWindowSurface failed: invalid EGLSurface");
-            return false;
-        }
-        if (handle.Backend == WindowBackend::Unknown || !handle.Handle) {
-            MGLOG_E("CreateEGLWindowSurface failed: invalid native window handle");
-            return false;
-        }
-
-        if (m_eglSurfaceInitialized && m_eglSurface == surface && m_eglSurfaceKind == SurfaceKind::Window &&
-            m_windowHandle.Backend == handle.Backend && m_windowHandle.Handle == handle.Handle &&
-            m_windowHandle.Width == handle.Width && m_windowHandle.Height == handle.Height) {
-            return true;
-        }
-
-        SetWindowHandle(handle);
-        if (!InitWindowSurface()) {
-            MGLOG_E("CreateEGLWindowSurface failed: backend InitWindowSurface failed");
-            return false;
-        }
-
-        m_eglSurface = surface;
-        m_eglSurfaceInitialized = true;
-        m_eglSurfaceKind = SurfaceKind::Window;
-        m_eglCurrentThreads.clear();
-        m_backendCapabilitiesInitialized = false;
-        return true;
+        return RegisterEGLWindowSurface(surface, handle) && ActivateEGLSurface(surface);
     }
 
     Bool BackendObject::ResizeEGLWindowSurface(EGLSurface surface, Uint32 width, Uint32 height) {
         const std::lock_guard<std::recursive_mutex> lock(m_eglStateMutex);
-        if (!m_eglSurfaceInitialized || m_eglSurface != surface || m_eglSurfaceKind != SurfaceKind::Window) {
+        auto surfaceIt = m_eglSurfaces.find(surface);
+        if (surfaceIt == m_eglSurfaces.end() || surfaceIt->second.Kind != SurfaceKind::Window) {
             MGLOG_E("ResizeEGLWindowSurface failed: no window surface is initialized");
             return false;
         }
-        m_windowHandle.Width = width;
-        m_windowHandle.Height = height;
+        surfaceIt->second.Window.Width = width;
+        surfaceIt->second.Window.Height = height;
+        if (m_eglSurface == surface) {
+            m_windowHandle.Width = width;
+            m_windowHandle.Height = height;
+        }
         return true;
     }
 
     Bool BackendObject::CreateEGLPbufferSurface(EGLSurface surface, EGLint width, EGLint height) {
         const std::lock_guard<std::recursive_mutex> lock(m_eglStateMutex);
+        return RegisterEGLPbufferSurface(surface, width, height) && ActivateEGLSurface(surface);
+    }
+
+    Bool BackendObject::RegisterEGLWindowSurface(EGLSurface surface, const WindowHandle& handle) {
+        const std::lock_guard<std::recursive_mutex> lock(m_eglStateMutex);
         if (!m_eglDisplayInitialized) {
-            MGLOG_E("CreateEGLPbufferSurface failed: EGL display is not initialized");
+            MGLOG_E("RegisterEGLWindowSurface failed: EGL display is not initialized");
             return false;
         }
         if (surface == EGL_NO_SURFACE) {
-            MGLOG_E("CreateEGLPbufferSurface failed: invalid EGLSurface");
+            MGLOG_E("RegisterEGLWindowSurface failed: invalid EGLSurface");
+            return false;
+        }
+        if (handle.Backend == WindowBackend::Unknown || !handle.Handle) {
+            MGLOG_E("RegisterEGLWindowSurface failed: invalid native window handle");
+            return false;
+        }
+
+        auto& state = m_eglSurfaces[surface];
+        state = EGLSurfaceState{
+            .Kind = SurfaceKind::Window,
+            .Window = handle,
+            .Width = static_cast<EGLint>(std::max<Uint32>(handle.Width, 1)),
+            .Height = static_cast<EGLint>(std::max<Uint32>(handle.Height, 1)),
+        };
+        return true;
+    }
+
+    Bool BackendObject::RegisterEGLPbufferSurface(EGLSurface surface, EGLint width, EGLint height) {
+        const std::lock_guard<std::recursive_mutex> lock(m_eglStateMutex);
+        if (!m_eglDisplayInitialized) {
+            MGLOG_E("RegisterEGLPbufferSurface failed: EGL display is not initialized");
+            return false;
+        }
+        if (surface == EGL_NO_SURFACE) {
+            MGLOG_E("RegisterEGLPbufferSurface failed: invalid EGLSurface");
             return false;
         }
         if (width <= 0 || height <= 0) {
-            MGLOG_E("CreateEGLPbufferSurface failed: invalid size %dx%d", width, height);
+            MGLOG_E("RegisterEGLPbufferSurface failed: invalid size %dx%d", width, height);
             return false;
         }
 
-        if (m_eglSurfaceInitialized && m_eglSurface == surface && m_eglSurfaceKind == SurfaceKind::Pbuffer) {
+        m_eglSurfaces[surface] = EGLSurfaceState{
+            .Kind = SurfaceKind::Pbuffer,
+            .Width = width,
+            .Height = height,
+        };
+        return true;
+    }
+
+    const BackendObject::EGLSurfaceState* BackendObject::GetRegisteredEGLSurface(EGLSurface surface) const {
+        const std::lock_guard<std::recursive_mutex> lock(m_eglStateMutex);
+        auto surfaceIt = m_eglSurfaces.find(surface);
+        return surfaceIt == m_eglSurfaces.end() ? nullptr : &surfaceIt->second;
+    }
+
+    Bool BackendObject::ActivateEGLSurface(EGLSurface surface) {
+        const std::lock_guard<std::recursive_mutex> lock(m_eglStateMutex);
+        const auto* surfaceState = GetRegisteredEGLSurface(surface);
+        if (!surfaceState) {
+            MGLOG_E("ActivateEGLSurface failed: EGL surface is not registered");
+            return false;
+        }
+        if (m_eglSurfaceInitialized && m_eglSurface == surface) {
             return true;
         }
 
-        if (!InitPbufferSurface(width, height)) {
-            MGLOG_E("CreateEGLPbufferSurface failed: backend InitPbufferSurface failed");
+        if (surfaceState->Kind == SurfaceKind::Window) {
+            SetWindowHandle(surfaceState->Window);
+            if (!InitWindowSurface()) {
+                MGLOG_E("ActivateEGLSurface failed: backend InitWindowSurface failed");
+                return false;
+            }
+        } else if (surfaceState->Kind == SurfaceKind::Pbuffer) {
+            if (!InitPbufferSurface(surfaceState->Width, surfaceState->Height)) {
+                MGLOG_E("ActivateEGLSurface failed: backend InitPbufferSurface failed");
+                return false;
+            }
+        } else {
+            MGLOG_E("ActivateEGLSurface failed: unsupported surface kind");
             return false;
         }
 
         m_eglSurface = surface;
         m_eglSurfaceInitialized = true;
-        m_eglSurfaceKind = SurfaceKind::Pbuffer;
+        m_eglSurfaceKind = surfaceState->Kind;
         m_eglCurrentThreads.clear();
         m_backendCapabilitiesInitialized = false;
         return true;
@@ -291,10 +328,20 @@ namespace MobileGL::MG_Backend {
             return false;
         }
         if (!m_eglSurfaceInitialized) {
-            MGLOG_E("MakeEGLCurrent failed: EGL surface is not initialized");
+            if (draw != read || !ActivateEGLSurface(draw)) {
+                MGLOG_E("MakeEGLCurrent failed: EGL surface is not initialized");
+                return false;
+            }
+        }
+        if (!GetRegisteredEGLSurface(draw) || !GetRegisteredEGLSurface(read)) {
+            MGLOG_E("MakeEGLCurrent failed: EGL surface is not registered");
             return false;
         }
-        if (draw != m_eglSurface || read != m_eglSurface) {
+        if (draw != read) {
+            MGLOG_E("MakeEGLCurrent failed: separate draw/read surfaces are not supported");
+            return false;
+        }
+        if (draw != m_eglSurface && !ActivateEGLSurface(draw)) {
             MGLOG_E("MakeEGLCurrent failed: EGL surface is not backed by this backend");
             return false;
         }
@@ -326,6 +373,7 @@ namespace MobileGL::MG_Backend {
         m_backendCapabilitiesInitialized = false;
         m_eglSurfaceKind = SurfaceKind::None;
         m_eglSurface = EGL_NO_SURFACE;
+        m_windowHandle = {};
         m_eglCurrentThreads.clear();
     }
 
@@ -370,18 +418,18 @@ namespace MobileGL::MG_Backend {
             ++currentIt;
         }
 
+        m_eglSurfaces.erase(surface);
         if (m_eglSurface == surface) {
             ResetEGLRuntimeState();
-            m_windowHandle = {};
         }
     }
 
     void BackendObject::ReleaseEGLResources() {
         const std::lock_guard<std::recursive_mutex> lock(m_eglStateMutex);
         ResetEGLRuntimeState();
+        m_eglSurfaces.clear();
         m_eglDisplay = EGL_NO_DISPLAY;
         m_eglDisplayInitialized = false;
-        m_windowHandle = {};
     }
 
     void BackendObject::SetWindowHandle(const WindowHandle& handle) {
