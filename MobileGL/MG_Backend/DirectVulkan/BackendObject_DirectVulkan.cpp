@@ -17,8 +17,19 @@
 #include "MG_Util/Converters/MGToVk/TextureEnumConverter.h"
 #include "MG_Util/Texture/TextureFormatProcessor.h"
 
+#include <cstdlib>
+#include <cstring>
+
 namespace MobileGL::MG_Backend::DirectVulkan {
     namespace {
+        Bool IsR11G11B10FFallbackEnabled() {
+            static const Bool enabled = [] {
+                const char* value = std::getenv("MOBILEGL_VULKAN_R11G11B10F_FALLBACK");
+                return value != nullptr && value[0] != '\0' && std::strcmp(value, "0") != 0;
+            }();
+            return enabled;
+        }
+
         Bool IsReleaseCurrentRequest(EGLDisplay dpy, EGLSurface draw, EGLSurface read, EGLContext ctx) {
             (void)dpy;
             return draw == EGL_NO_SURFACE && read == EGL_NO_SURFACE && ctx == EGL_NO_CONTEXT;
@@ -142,6 +153,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 return TextureInternalFormat::RGBA16Snorm;
             case TextureInternalFormat::RGB16F:
                 return TextureInternalFormat::RGBA16F;
+            case TextureInternalFormat::R11FG11FB10F:
+                if (IsR11G11B10FFallbackEnabled()) {
+                    return TextureInternalFormat::RGBA16F;
+                }
+                return Nullopt;
             case TextureInternalFormat::RGB32F:
                 return TextureInternalFormat::RGBA32F;
             case TextureInternalFormat::RGB8I:

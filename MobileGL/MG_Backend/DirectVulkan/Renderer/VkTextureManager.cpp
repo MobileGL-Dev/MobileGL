@@ -46,6 +46,14 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         Uint32 arrayLayers = 1;
     };
 
+    static Bool IsR11G11B10FFallbackEnabled() {
+        static const Bool enabled = [] {
+            const char* value = std::getenv("MOBILEGL_VULKAN_R11G11B10F_FALLBACK");
+            return value != nullptr && value[0] != '\0' && std::strcmp(value, "0") != 0;
+        }();
+        return enabled;
+    }
+
     static Bool IsMultisampleTextureUploadTarget(TextureUploadTarget target) {
         return target == TextureUploadTarget::Texture2DMultisample ||
                target == TextureUploadTarget::ProxyTexture2DMultisample ||
@@ -320,6 +328,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             return {VK_FORMAT_R16G16B16A16_SNORM, true, 2, {0xFF, 0x7F, 0x00, 0x00}};
         case TextureInternalFormat::RGB16F:
             return {VK_FORMAT_R16G16B16A16_SFLOAT, true, 2, {0x00, 0x3C, 0x00, 0x00}};
+        case TextureInternalFormat::R11FG11FB10F:
+            if (IsR11G11B10FFallbackEnabled()) {
+                return {VK_FORMAT_R16G16B16A16_SFLOAT, true, 2, {0x00, 0x3C, 0x00, 0x00}};
+            }
+            return {MG_Util::ConvertTextureInternalFormatToVkEnum(format), false, 0, {0, 0, 0, 0}};
         case TextureInternalFormat::RGB32F:
             return {VK_FORMAT_R32G32B32A32_SFLOAT, true, 4, {0x00, 0x00, 0x80, 0x3F}};
         case TextureInternalFormat::RGB8I:

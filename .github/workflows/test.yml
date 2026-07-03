@@ -445,7 +445,11 @@ jobs:
 
       - name: Retrace and validate
         working-directory: build-retrace/tools/trace_replay
-        run: ctest -V --no-tests=error -R '^MobileGLTraceReplay\.${{ matrix.case }}\.${{ matrix.backend }}$'
+        run: |
+          if [ '${{ matrix.backend }}' = 'DirectVulkan' ]; then
+            export MOBILEGL_VULKAN_R11G11B10F_FALLBACK=1
+          fi
+          ctest -V --no-tests=error -R '^MobileGLTraceReplay\.${{ matrix.case }}\.${{ matrix.backend }}$'
 
       - name: Upload actual image
         if: always()
