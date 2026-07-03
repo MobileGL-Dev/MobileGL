@@ -512,6 +512,22 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                            TextureUploadTarget uploadTarget, const IntVec3& texelSize,
                                            TextureShapeInfo& outShape) {
         switch (uploadTarget) {
+        case TextureUploadTarget::Texture1D:
+        case TextureUploadTarget::ProxyTexture1D:
+            outShape = {};
+            outShape.imageType = VK_IMAGE_TYPE_1D;
+            outShape.viewType = VK_IMAGE_VIEW_TYPE_1D;
+            return true;
+        case TextureUploadTarget::Texture1DArray:
+        case TextureUploadTarget::ProxyTexture1DArray:
+            MOBILEGL_ASSERT(texelSize.z() > 0,
+                            "TryResolveTextureShapeInfo: invalid 1D array depth=%d for textureId=%d",
+                            texelSize.z(), texture.GetExternalIndex());
+            outShape.imageType = VK_IMAGE_TYPE_1D;
+            outShape.viewType = VK_IMAGE_VIEW_TYPE_1D_ARRAY;
+            outShape.depth = 1;
+            outShape.arrayLayers = static_cast<Uint32>(texelSize.z());
+            return true;
         case TextureUploadTarget::Texture2D:
         case TextureUploadTarget::ProxyTexture2D:
         case TextureUploadTarget::TextureRectangle:

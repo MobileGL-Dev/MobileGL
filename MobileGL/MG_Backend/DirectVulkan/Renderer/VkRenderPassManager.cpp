@@ -661,8 +661,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             // Color attachment description
             VkAttachmentDescription& desc = attachmentDescriptions.back();
             switch (textureTarget) {
+                case TextureTarget::Texture1D:
+                case TextureTarget::Texture1DArray:
                 case TextureTarget::Texture2D:
-                case TextureTarget::Texture2DMultisample: {
+                case TextureTarget::Texture2DArray:
+                case TextureTarget::Texture2DMultisample:
+                case TextureTarget::TextureRectangle: {
                     desc.flags = 0;
                     desc.format = isDefaultFbo ?
                         m_swapchainObject.GetSurfaceFormat().format :

@@ -923,26 +923,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         return false;
     }
 
-    static Bool HasLayeredTextureAttachment(const MG_State::GLState::FramebufferObject& framebufferObject) {
-        if (framebufferObject.GetExternalIndex() == 0) {
-            return false;
-        }
-
-        for (const auto& attachment : framebufferObject.GetAllAttachmentObjects()) {
-            if (attachment.IsTexture() && attachment.IsLayered()) {
-                return true;
-            }
-        }
-        return false;
-    }
-
     static Bool IsUnsupportedFramebufferForDirectVulkan(
         const MG_State::GLState::FramebufferObject& framebufferObject) {
         // TODO: Revisit this gate when DirectVulkan has full color renderbuffer render/blit/readback support.
-        // TODO: Implement DirectVulkan layered framebuffer rendering instead of rejecting layered draw targets.
         return HasDistinctCompleteDepthStencilTextureAttachments(framebufferObject) ||
-               HasUnsupportedCompleteRenderbufferAttachment(framebufferObject) ||
-               HasLayeredTextureAttachment(framebufferObject);
+               HasUnsupportedCompleteRenderbufferAttachment(framebufferObject);
     }
 
     static void RecordUnsupportedFramebufferError(const char* func) {
@@ -4929,9 +4914,9 @@ void main() {
 
     void VulkanRenderer::GenerateMipmap(GLenum target) {
         const auto textureTarget = MG_Util::ConvertGLEnumToTextureTarget(target);
-        MOBILEGL_ASSERT(textureTarget == TextureTarget::Texture2D || textureTarget == TextureTarget::Texture3D ||
-                            textureTarget == TextureTarget::TextureCubeMap,
-                        "GenerateMipmap currently only supports GL_TEXTURE_2D, GL_TEXTURE_3D, and GL_TEXTURE_CUBE_MAP.");
+        MOBILEGL_ASSERT(textureTarget == TextureTarget::Texture2D || textureTarget == TextureTarget::Texture2DArray ||
+                            textureTarget == TextureTarget::Texture3D || textureTarget == TextureTarget::TextureCubeMap,
+                        "GenerateMipmap currently only supports GL_TEXTURE_2D, GL_TEXTURE_2D_ARRAY, GL_TEXTURE_3D, and GL_TEXTURE_CUBE_MAP.");
 
         auto& textureUnit = MG_State::pGLContext->GetTextureUnitObject(MG_State::pGLContext->GetActiveTextureUnit());
         auto texture = textureUnit.GetBindingSlot(textureTarget).GetBoundObject();
