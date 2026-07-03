@@ -439,10 +439,8 @@ namespace MobileGL::MG_Impl::GLImpl {
     } // namespace
 
     const SharedPtr<MG_State::GLState::ITextureObject>& GetTextureObjectByName(GLuint texture, const char* caller) {
-        if (texture == 0 || !TextureImpl::ValidateTextureName(texture, true)) return nullTextureObject;
-
         auto& textureObject = MG_State::pGLContext->GetTextureObject(texture);
-        if (!TextureImpl::ValidateTextureObject(textureObject)) {
+        if (!textureObject) {
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidOperation,
                 MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller,
@@ -450,6 +448,67 @@ namespace MobileGL::MG_Impl::GLImpl {
             return nullTextureObject;
         }
         return textureObject;
+    }
+
+    Bool ValidateTextureParameterForTarget(const SharedPtr<MG_State::GLState::ITextureObject>& textureObject,
+                                           GLenum pname, GLint param, const char* caller) {
+        const auto target = textureObject->GetTarget();
+        if ((pname == GL_TEXTURE_BASE_LEVEL || pname == GL_TEXTURE_MAX_LEVEL) && param < 0) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidValue,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller, "Texture level parameter must be non-negative."));
+            return false;
+        }
+
+        if ((target == TextureTarget::Texture2DMultisample ||
+             target == TextureTarget::Texture2DMultisampleArray) &&
+            pname == GL_TEXTURE_BASE_LEVEL && param != 0) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidOperation,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller,
+                                             "Multisample texture base level must be zero."));
+            return false;
+        }
+
+        if (target == TextureTarget::TextureRectangle && pname == GL_TEXTURE_BASE_LEVEL && param != 0) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidOperation,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller, "Rectangle texture base level must be zero."));
+            return false;
+        }
+
+        if ((target == TextureTarget::Texture2DMultisample ||
+             target == TextureTarget::Texture2DMultisampleArray) &&
+            (pname == GL_TEXTURE_WRAP_S || pname == GL_TEXTURE_WRAP_T || pname == GL_TEXTURE_WRAP_R ||
+             pname == GL_TEXTURE_MIN_FILTER || pname == GL_TEXTURE_MAG_FILTER || pname == GL_TEXTURE_MIN_LOD ||
+             pname == GL_TEXTURE_MAX_LOD || pname == GL_TEXTURE_LOD_BIAS || pname == GL_TEXTURE_COMPARE_MODE ||
+             pname == GL_TEXTURE_COMPARE_FUNC || pname == GL_TEXTURE_BORDER_COLOR)) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidOperation,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller,
+                                             "Sampler state is invalid for multisample textures."));
+            return false;
+        }
+
+        if (target == TextureTarget::TextureRectangle) {
+            if ((pname == GL_TEXTURE_WRAP_S || pname == GL_TEXTURE_WRAP_T) &&
+                (param == GL_MIRROR_CLAMP_TO_EDGE || param == GL_MIRRORED_REPEAT || param == GL_REPEAT)) {
+                MG_State::pGLContext->RecordError(
+                    ErrorCode::InvalidEnum,
+                    MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller,
+                                                 "Invalid wrap mode for rectangle texture."));
+                return false;
+            }
+            if (pname == GL_TEXTURE_MIN_FILTER && param != GL_NEAREST && param != GL_LINEAR) {
+                MG_State::pGLContext->RecordError(
+                    ErrorCode::InvalidEnum,
+                    MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller,
+                                                 "Invalid min filter for rectangle texture."));
+                return false;
+            }
+        }
+
+        return true;
     }
 
     TextureUploadTarget GetPrimaryUploadTarget(const SharedPtr<MG_State::GLState::ITextureObject>& textureObject) {
@@ -461,6 +520,7 @@ namespace MobileGL::MG_Impl::GLImpl {
     void TextureParameterObject_State(const SharedPtr<MG_State::GLState::ITextureObject>& textureObject, GLenum pname,
                                       GLint param, const char* caller) {
         if (!textureObject) return;
+        if (!ValidateTextureParameterForTarget(textureObject, pname, param, caller)) return;
 
         switch (pname) {
         case GL_TEXTURE_MAG_FILTER:
@@ -529,6 +589,7 @@ namespace MobileGL::MG_Impl::GLImpl {
     void TextureParameterObjectf_State(const SharedPtr<MG_State::GLState::ITextureObject>& textureObject, GLenum pname,
                                        GLfloat param, const char* caller) {
         if (!textureObject) return;
+        if (!ValidateTextureParameterForTarget(textureObject, pname, static_cast<GLint>(param), caller)) return;
 
         switch (pname) {
         case GL_TEXTURE_MAG_FILTER:

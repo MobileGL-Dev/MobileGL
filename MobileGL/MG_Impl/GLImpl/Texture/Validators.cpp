@@ -7,6 +7,7 @@
 // End of Source File Header
 
 #include "Validators.h"
+#include <MG_Backend/BackendObjects.h>
 #include <MG_State/GLState/Core.h>
 #include <MG_State/GLState/ErrorState/Error.h>
 #include <MG_Util/Converters/GLToStr/GLEnumConverter.h>
@@ -83,8 +84,20 @@ namespace MobileGL::MG_Impl::GLImpl::TextureImpl {
             return false;
         }
 
-        // TODO: GL_INVALID_VALUE may be generated if level is greater than log2(max), where max is the returned
-        // value of GL_MAX_TEXTURE_SIZE.
+        Int maxTextureSize = MG_Backend::DynamicBackendParameters{}.MaxTextureSize;
+        if (MG_Backend::pActiveBackendObject) {
+            maxTextureSize = MG_Backend::pActiveBackendObject->GetDynamicParameters().MaxTextureSize;
+        }
+        Int maxLevel = 0;
+        for (Int size = std::max(maxTextureSize, 1); size > 1; size >>= 1) {
+            ++maxLevel;
+        }
+        if (level > maxLevel) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidValue, MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", "ValidateTextureLevelNumber",
+                                                                      "Texture level exceeds GL_MAX_TEXTURE_SIZE"));
+            return false;
+        }
 
         return true;
     }
@@ -129,7 +142,7 @@ namespace MobileGL::MG_Impl::GLImpl::TextureImpl {
         return true;
     }
 
-    Bool ValidateTextureSizeRange(SizeT width, SizeT height, SizeT depth) {
+    Bool ValidateTextureSizeRange(Int width, Int height, Int depth) {
         if (width < 0 || height < 0 || depth < 0) {
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidValue, MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", "ValidateTextureSizeRange",
