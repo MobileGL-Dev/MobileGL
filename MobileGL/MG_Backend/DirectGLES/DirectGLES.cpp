@@ -2786,13 +2786,130 @@ namespace MobileGL::MG_Backend::DirectGLES {
         return true;
     }
 
+    static Bool ReadPixelsDepthFloatViaUnsignedInt(GLint x, GLint y, GLsizei width, GLsizei height, void* pixels) {
+        if (width <= 0 || height <= 0) {
+            return true;
+        }
+
+        Vector<Uint32> raw(static_cast<SizeT>(width) * static_cast<SizeT>(height));
+        GLint prevPixelPackBuffer = 0;
+        g_GLESFuncs.glGetIntegerv(GL_PIXEL_PACK_BUFFER_BINDING, &prevPixelPackBuffer);
+        g_GLESFuncs.glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+        g_GLESFuncs.glPixelStorei(GL_PACK_ALIGNMENT, 1);
+        g_GLESFuncs.glPixelStorei(GL_PACK_ROW_LENGTH, 0);
+        g_GLESFuncs.glPixelStorei(GL_PACK_SKIP_ROWS, 0);
+        g_GLESFuncs.glPixelStorei(GL_PACK_SKIP_PIXELS, 0);
+        g_GLESFuncs.glReadPixels(x, y, width, height, GL_DEPTH_COMPONENT, GL_UNSIGNED_INT, raw.data());
+        const GLenum readError = g_GLESFuncs.glGetError();
+        g_GLESFuncs.glBindBuffer(GL_PIXEL_PACK_BUFFER, static_cast<GLuint>(prevPixelPackBuffer));
+        if (readError != GL_NO_ERROR) {
+            MGLOG_E("ReadPixels: depth GL_FLOAT fallback read failed: %s",
+                    MG_Util::ConvertGLEnumToString(readError).c_str());
+            return true;
+        }
+
+        const auto packParams = MG_State::pGLContext->GetPixelStoreParameters(false);
+        const SizeT rowPixels = static_cast<SizeT>(packParams.RowLength > 0 ? packParams.RowLength : width);
+        const SizeT dstPixelBytes = sizeof(Float);
+        const SizeT dstRowStride = AlignPixelRow(rowPixels * dstPixelBytes, packParams.Alignment);
+        const SizeT dstOffset = static_cast<SizeT>(std::max(packParams.SkipRows, 0)) * dstRowStride +
+                                static_cast<SizeT>(std::max(packParams.SkipPixels, 0)) * dstPixelBytes;
+        const SizeT packedSize = dstOffset + static_cast<SizeT>(height - 1) * dstRowStride +
+                                 static_cast<SizeT>(width) * dstPixelBytes;
+        Vector<Uint8> packed(packedSize, 0);
+
+        for (GLsizei row = 0; row < height; ++row) {
+            const Uint32* srcRow = raw.data() + static_cast<SizeT>(row) * static_cast<SizeT>(width);
+            auto* dstRow = reinterpret_cast<Float*>(packed.data() + dstOffset +
+                                                     static_cast<SizeT>(row) * dstRowStride);
+            for (GLsizei col = 0; col < width; ++col) {
+                // TODO: preserve native depth precision when GLES exposes float depth readback directly.
+                dstRow[col] = static_cast<Float>(static_cast<Double>(srcRow[col]) / 4294967295.0);
+            }
+        }
+
+        const auto& pixelPackBufferObject =
+            MG_State::pGLContext->GetBufferBindingSlot(BufferTarget::PixelPack).GetBoundObject();
+        if (pixelPackBufferObject) {
+            const SizeT pboOffset = reinterpret_cast<SizeT>(pixels);
+            if (pboOffset + packed.size() > pixelPackBufferObject->GetSize()) {
+                MGLOG_E("ReadPixels: depth GL_FLOAT fallback PBO is too small");
+                return true;
+            }
+            pixelPackBufferObject->UploadSubData({packed.data(), packed.size()}, pboOffset);
+            pixelPackBufferObject->ClearDirty();
+        } else if (pixels != nullptr && !packed.empty()) {
+            Memcpy(pixels, packed.data(), packed.size());
+        }
+        return true;
+    }
+
+    static Bool ReadPixelsStencilUintViaUnsignedByte(GLint x, GLint y, GLsizei width, GLsizei height, void* pixels) {
+        if (width <= 0 || height <= 0) {
+            return true;
+        }
+
+        Vector<Uint8> raw(static_cast<SizeT>(width) * static_cast<SizeT>(height));
+        GLint prevPixelPackBuffer = 0;
+        g_GLESFuncs.glGetIntegerv(GL_PIXEL_PACK_BUFFER_BINDING, &prevPixelPackBuffer);
+        g_GLESFuncs.glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+        g_GLESFuncs.glPixelStorei(GL_PACK_ALIGNMENT, 1);
+        g_GLESFuncs.glPixelStorei(GL_PACK_ROW_LENGTH, 0);
+        g_GLESFuncs.glPixelStorei(GL_PACK_SKIP_ROWS, 0);
+        g_GLESFuncs.glPixelStorei(GL_PACK_SKIP_PIXELS, 0);
+        g_GLESFuncs.glReadPixels(x, y, width, height, GL_STENCIL_INDEX, GL_UNSIGNED_BYTE, raw.data());
+        const GLenum readError = g_GLESFuncs.glGetError();
+        g_GLESFuncs.glBindBuffer(GL_PIXEL_PACK_BUFFER, static_cast<GLuint>(prevPixelPackBuffer));
+        if (readError != GL_NO_ERROR) {
+            MGLOG_E("ReadPixels: stencil GL_UNSIGNED_INT fallback read failed: %s",
+                    MG_Util::ConvertGLEnumToString(readError).c_str());
+            return true;
+        }
+
+        const auto packParams = MG_State::pGLContext->GetPixelStoreParameters(false);
+        const SizeT rowPixels = static_cast<SizeT>(packParams.RowLength > 0 ? packParams.RowLength : width);
+        const SizeT dstPixelBytes = sizeof(Uint32);
+        const SizeT dstRowStride = AlignPixelRow(rowPixels * dstPixelBytes, packParams.Alignment);
+        const SizeT dstOffset = static_cast<SizeT>(std::max(packParams.SkipRows, 0)) * dstRowStride +
+                                static_cast<SizeT>(std::max(packParams.SkipPixels, 0)) * dstPixelBytes;
+        const SizeT packedSize = dstOffset + static_cast<SizeT>(height - 1) * dstRowStride +
+                                 static_cast<SizeT>(width) * dstPixelBytes;
+        Vector<Uint8> packed(packedSize, 0);
+
+        for (GLsizei row = 0; row < height; ++row) {
+            const Uint8* srcRow = raw.data() + static_cast<SizeT>(row) * static_cast<SizeT>(width);
+            auto* dstRow = reinterpret_cast<Uint32*>(packed.data() + dstOffset +
+                                                      static_cast<SizeT>(row) * dstRowStride);
+            for (GLsizei col = 0; col < width; ++col) {
+                // TODO: switch to native uint stencil readback if the GLES backend exposes it.
+                dstRow[col] = srcRow[col];
+            }
+        }
+
+        const auto& pixelPackBufferObject =
+            MG_State::pGLContext->GetBufferBindingSlot(BufferTarget::PixelPack).GetBoundObject();
+        if (pixelPackBufferObject) {
+            const SizeT pboOffset = reinterpret_cast<SizeT>(pixels);
+            if (pboOffset + packed.size() > pixelPackBufferObject->GetSize()) {
+                MGLOG_E("ReadPixels: stencil GL_UNSIGNED_INT fallback PBO is too small");
+                return true;
+            }
+            pixelPackBufferObject->UploadSubData({packed.data(), packed.size()}, pboOffset);
+            pixelPackBufferObject->ClearDirty();
+        } else if (pixels != nullptr && !packed.empty()) {
+            Memcpy(pixels, packed.data(), packed.size());
+        }
+        return true;
+    }
+
     void ReadPixels(GLint x, GLint y, GLsizei width, GLsizei height, GLenum format, GLenum type, void* pixels) {
         MGLOG_D("ReadPixels: x=%d y=%d w=%d h=%d format=%s type=%s pixels=%p", x, y, width, height,
                 MG_Util::ConvertGLEnumToString(format).c_str(), MG_Util::ConvertGLEnumToString(type).c_str(), pixels);
 
         MOBILEGL_ASSERT(format == GL_RGBA || format == GL_RGBA_INTEGER || format == GL_RED ||
-                            format == GL_RED_INTEGER,
-                        "Only GL_RGBA, GL_RGBA_INTEGER, GL_RED and GL_RED_INTEGER are supported currently, "
+                            format == GL_RED_INTEGER || format == GL_DEPTH_COMPONENT || format == GL_STENCIL_INDEX,
+                        "Only GL_RGBA, GL_RGBA_INTEGER, GL_RED, GL_RED_INTEGER, GL_DEPTH_COMPONENT and "
+                        "GL_STENCIL_INDEX are supported currently, "
                         "while requested %s.",
                         MG_Util::ConvertGLEnumToString(format).c_str());
         MOBILEGL_ASSERT(type == GL_UNSIGNED_BYTE || type == GL_UNSIGNED_INT || type == GL_UNSIGNED_INT_2_10_10_10_REV ||
@@ -2818,6 +2935,16 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
         if (fbStatus != GL_FRAMEBUFFER_COMPLETE) {
             MGLOG_E("ReadPixels: bound READ FBO is not complete");
+            return;
+        }
+        if (format == GL_DEPTH_COMPONENT && type == GL_FLOAT &&
+            ReadPixelsDepthFloatViaUnsignedInt(x, y, width, height, pixels)) {
+            MGLOG_D("ReadPixels: finished via depth GL_FLOAT fallback");
+            return;
+        }
+        if (format == GL_STENCIL_INDEX && type == GL_UNSIGNED_INT &&
+            ReadPixelsStencilUintViaUnsignedByte(x, y, width, height, pixels)) {
+            MGLOG_D("ReadPixels: finished via stencil GL_UNSIGNED_INT fallback");
             return;
         }
         if (type == GL_FLOAT && ReadPixelsFloatViaUnsignedByte(x, y, width, height, format, pixels)) {
