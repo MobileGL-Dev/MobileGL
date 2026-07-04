@@ -516,7 +516,8 @@ public:
             attribs[index++] = EGL_CONTEXT_MINOR_VERSION_KHR;
             attribs[index++] = profile.major >= 3 ? profile.minor : 3;
             attribs[index++] = EGL_CONTEXT_OPENGL_PROFILE_MASK_KHR;
-            attribs[index++] = EGL_CONTEXT_OPENGL_CORE_PROFILE_BIT_KHR;
+            attribs[index++] = profile.core ? EGL_CONTEXT_OPENGL_CORE_PROFILE_BIT_KHR
+                                            : EGL_CONTEXT_OPENGL_COMPATIBILITY_PROFILE_BIT_KHR;
         }
         attribs[index++] = EGL_NONE;
 
