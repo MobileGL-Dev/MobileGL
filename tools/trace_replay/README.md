@@ -137,6 +137,29 @@ build-test/tools/trace_replay/mobilegl_trace_replay \
   --ssim-threshold 0.99
 ```
 
+Run the macOS native-window DirectVulkan retrace matrix and render the same
+HTML overview shape as CI:
+
+```sh
+cmake -S . -B cmake-build-macos-trace-arm64 -G Ninja \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_OSX_ARCHITECTURES=arm64 \
+  -DMOBILEGL_BUILD_TEST=OFF \
+  -DMOBILEGL_BUILD_BENCHMARK=OFF \
+  -DMOBILEGL_BUILD_TRACE_REPLAY=ON
+cmake --build cmake-build-macos-trace-arm64 --target MobileGL mobilegl_trace_replay
+python3 tools/trace_replay/run_macos_window_retrace_local.py --ci --all
+open .trace-work/macos-window-retrace-summary/mobilegl-macos-window-vulkan-retrace-overview.html
+```
+
+The macOS runner hydrates missing fixtures from the trace fixture mirror with
+parallel downloads before falling back to Git LFS. It reuses the
+`cmake-build-macos-trace-arm64` harness by default on Apple Silicon, passes
+`--window-surface`, and defaults to DirectVulkan only. If a native-window replay
+hits a fatal assertion, the runner writes a failure result and stops before
+launching later cases; use `--continue-after-fatal` to collect the full matrix,
+or `--skip-case NAME` for known fatal cases.
+
 ## Android device replay
 
 Build and install a trace APK from the repository root:
