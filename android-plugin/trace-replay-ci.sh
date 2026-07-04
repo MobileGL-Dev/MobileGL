@@ -227,7 +227,7 @@ run_retrace() {
   copy_fixture_to_app
   adb_device_path shell am force-stop "${package_name}"
   "${ADB}" logcat -c
-  set -- am start -W -a top.mobilegl.plugin.TRACE_REPLAY \
+  set -- am start -a top.mobilegl.plugin.TRACE_REPLAY \
     -n "${package_name}/top.mobilegl.plugin.trace.TraceReplayActivity" \
     --es trace_path "${app_dir}/input/trace.trace" \
     --es golden_path "${app_dir}/input/golden.png"

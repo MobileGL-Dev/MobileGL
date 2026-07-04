@@ -20,7 +20,7 @@ BACKENDS = {
     "DirectGLES": {
         "apk": ROOT / "android-plugin" / "app" / "build" / "outputs" / "apk" / "esprytTrace" / "debug" / "MobileGL-EsprytTrace-debug.apk",
         "package": "top.mobilegl.plugin.espryt.trace",
-        "use_angle": False,
+        "use_angle": True,
         "use_pbuffer": False,
     },
     "DirectVulkan": {
