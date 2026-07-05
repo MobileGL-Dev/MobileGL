@@ -25,7 +25,6 @@
 #include <MG_State/GLState/FramebufferState/FramebufferObject.h>
 #include <algorithm>
 #include <cctype>
-#include <regex>
 
 namespace MobileGL::MG_Backend::DirectGLES {
     constexpr Bool PREFER_MAP_BUFFER_RANGE_FOR_BUFFER_SYNC = false;
@@ -57,46 +56,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 pos = end;
             }
         }
-        return source;
-    }
-
-    static String PackPhotonSharedVec3Memory(String source) {
-        constexpr const char* declaration = "shared vec3 shared_memory[256][9];";
-        const SizeT declarationPos = source.find(declaration);
-        if (declarationPos == String::npos) {
-            return source;
-        }
-
-        source.replace(declarationPos, String(declaration).size(),
-                       "shared float shared_memory[256][9][3];\n"
-                       "void StorePhotonSharedMemory(uint row, uint column, vec3 value)\n"
-                       "{\n"
-                       "    shared_memory[row][column][0] = value.x;\n"
-                       "    shared_memory[row][column][1] = value.y;\n"
-                       "    shared_memory[row][column][2] = value.z;\n"
-                       "}\n"
-                       "vec3 LoadPhotonSharedMemory(uint row, uint column)\n"
-                       "{\n"
-                       "    return vec3(shared_memory[row][column][0], shared_memory[row][column][1], "
-                       "shared_memory[row][column][2]);\n"
-                       "}\n");
-
-        source = std::regex_replace(
-            source, std::regex(R"(shared_memory\[([^\]]+)\]\[([^\]]+)\] \+= ([^;]+);)"),
-            "StorePhotonSharedMemory($1, $2, LoadPhotonSharedMemory($1, $2) + ($3));");
-        source = std::regex_replace(
-            source, std::regex(R"(shared_memory\[([^\]]+)\]\[([^\]]+)\] = ([^;]+);)"),
-            "StorePhotonSharedMemory($1, $2, $3);");
-        source = std::regex_replace(source, std::regex(R"(shared_memory\[([^\]]+)\]\[([^\]]+)\](?!\[))"),
-                                    "LoadPhotonSharedMemory($1, $2)");
-        source = std::regex_replace(source, std::regex(R"(LoadPhotonSharedMemory\(0,)"),
-                                    "LoadPhotonSharedMemory(0u,");
-        source = std::regex_replace(source, std::regex(R"(vec3 ([A-Za-z_][A-Za-z0-9_]*)\[9\] = shared_memory\[0\];)"),
-                                    "vec3 $1[9];\n"
-                                    "        for (uint photon_band = 0u; photon_band < 9u; ++photon_band)\n"
-                                    "        {\n"
-                                    "            $1[photon_band] = LoadPhotonSharedMemory(0u, photon_band);\n"
-                                    "        }");
         return source;
     }
 
@@ -1851,7 +1810,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 source = ClampNormFallbackOutputs(std::move(source), glShaderType,
                                                   m_snormFallbackClampOutputMask,
                                                   m_unormFallbackClampOutputMask);
-                source = PackPhotonSharedVec3Memory(std::move(source));
 
                 // Patch for Photon compiler precision issue
                 String findStr = "1000000.0";

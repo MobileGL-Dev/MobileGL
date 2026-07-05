@@ -808,3 +808,90 @@ TEST_F(ProgramUtilTest, CompileAndLinkBlitProgram) {
         }
     }
 }
+
+const char* photon_shared_vec3_cs = R"(#version 460 core
+layout(local_size_x = 16, local_size_y = 16) in;
+
+shared vec3 shared_memory[256][9];
+
+layout(location = 0) uniform int u_row;
+layout(location = 1) uniform int u_col;
+layout(location = 2) uniform vec3 u_value;
+
+layout(std430, binding = 0) writeonly buffer OutputBuffer {
+    vec4 out_data[];
+};
+
+void main() {
+    uint row = gl_LocalInvocationIndex;
+    uint col = u_col;
+
+    shared_memory[row][col] = u_value;
+    shared_memory[row][col] += vec3(1.0);
+
+    vec3 loaded = shared_memory[row][col];
+    float x = shared_memory[row][col].x;
+
+    vec3 rowCopy[9];
+    for (uint i = 0u; i < 9u; ++i) {
+        rowCopy[i] = shared_memory[row][i];
+    }
+
+    memoryBarrierShared();
+    barrier();
+
+    out_data[gl_GlobalInvocationID.x] = vec4(loaded + rowCopy[col] + vec3(x), 1.0);
+}
+)";
+
+TEST_F(ProgramUtilTest, DecomposeWorkgroupVec3InSpirvPass) {
+    using namespace MG_Util::ShaderTranspiler;
+
+    String csSource = photon_shared_vec3_cs;
+    PreprocessShaderSource(ShaderStage::Compute, csSource);
+
+    ShaderAttrib csAttrib{.shaderType = GL_COMPUTE_SHADER, .sourceStr = csSource};
+    auto csRes = ShaderCompiler::CompileShader(csAttrib);
+    if (!csRes) {
+        ASSERT_NE(csRes.error().errc, 0);
+        FAIL() << "errc: " << csRes.error().errc << "\nlog: " << csRes.error().log;
+    }
+
+    ProgramAttrib programAttrib{.shaders = {csRes.value()}};
+    auto programRes = ShaderCompiler::LinkProgram(programAttrib);
+    if (!programRes) {
+        ASSERT_NE(programRes.error().errc, 0);
+        FAIL() << "errc: " << programRes.error().errc << "\nlog: " << programRes.error().log;
+    }
+
+    ProgramBinaryAttrib binaryAttrib{
+        .shaderTypes = {GL_COMPUTE_SHADER},
+        .program = *programRes.value(),
+    };
+    auto binRes = ShaderCompiler::GetSpirvBinaryFromProgram(binaryAttrib);
+    ASSERT_TRUE(binRes.has_value());
+    ASSERT_FALSE(binRes->empty());
+
+    Vector<uint32_t> optimized;
+    ASSERT_TRUE(ShaderCompiler::SanitizeAndOptimizeBinary(binRes->at(0), optimized))
+        << "SanitizeAndOptimizeBinary failed - the DecomposeWorkgroupVec3Pass may have "
+           "encountered an unsupported pattern";
+
+    SpvcSession session(optimized, SessionUsageBit::Transpile);
+    auto sourceRes = ShaderCompiler::DecompileShader(session);
+    ASSERT_TRUE(sourceRes.has_value()) << "errc: " << sourceRes.error().errc
+                                       << "\nlog: " << sourceRes.error().log;
+
+    const String& source = sourceRes.value();
+
+    // The decomposed output must not contain a `shared vec3` declaration.
+    EXPECT_EQ(source.find("shared vec3"), std::string::npos)
+        << "DecomposeWorkgroupVec3Pass did not eliminate `shared vec3`:\n"
+        << source;
+
+    // It should now use a scalar array form (shared float ...).
+    EXPECT_NE(source.find("shared float"), std::string::npos)
+        << "Expected `shared float` in decomposed output:\n"
+        << source;
+}
+
