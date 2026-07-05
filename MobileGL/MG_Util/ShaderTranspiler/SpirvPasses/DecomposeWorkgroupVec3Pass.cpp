@@ -13,6 +13,7 @@
 #include "source/opt/instruction.h"
 #include "source/opt/ir_context.h"
 #include "source/opt/module.h"
+#include "source/opt/reflect.h"
 #include "source/opt/type_manager.h"
 #include "spirv.hpp"
 
@@ -307,6 +308,39 @@ namespace MobileGL {
                     }
 
                     assert(false && "DecomposeWorkgroupVec3Pass: unsupported composite store type");
+                }
+
+                void MoveLateTypesConstantsBeforeGlobalVariables(IRContext* context) {
+                    Instruction* firstVariable = nullptr;
+                    for (Instruction& inst : context->module()->types_values()) {
+                        if (inst.opcode() == spv::Op::OpVariable) {
+                            firstVariable = &inst;
+                            break;
+                        }
+                    }
+
+                    if (firstVariable == nullptr) {
+                        return;
+                    }
+
+                    bool sawFirstVariable = false;
+                    for (auto it = context->module()->types_values_begin();
+                         it != context->module()->types_values_end();) {
+                        Instruction* inst = &*it;
+                        ++it;
+
+                        if (inst == firstVariable) {
+                            sawFirstVariable = true;
+                            continue;
+                        }
+
+                        if (sawFirstVariable &&
+                            (spvtools::opt::IsTypeInst(inst->opcode()) ||
+                             spvtools::opt::IsConstantInst(inst->opcode()) ||
+                             inst->opcode() == spv::Op::OpUndef)) {
+                            inst->InsertBefore(firstVariable);
+                        }
+                    }
                 }
             } // namespace
 
@@ -604,6 +638,8 @@ namespace MobileGL {
                         }
                     }
                 }
+
+                MoveLateTypesConstantsBeforeGlobalVariables(ctx);
 
                 return Status::SuccessWithChange;
             }

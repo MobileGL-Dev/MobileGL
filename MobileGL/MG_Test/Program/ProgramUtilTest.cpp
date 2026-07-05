@@ -822,6 +822,10 @@ layout(std430, binding = 0) writeonly buffer OutputBuffer {
     vec4 out_data[];
 };
 
+vec3 evaluate_row(vec3 row_values[9], uint col) {
+    return row_values[col] + row_values[0];
+}
+
 void main() {
     uint row = gl_LocalInvocationIndex;
     uint col = u_col;
@@ -837,7 +841,7 @@ void main() {
     memoryBarrierShared();
     barrier();
 
-    out_data[gl_GlobalInvocationID.x] = vec4(loaded + rowCopy[col] + vec3(x), 1.0);
+    out_data[gl_GlobalInvocationID.x] = vec4(loaded + rowCopy[col] + evaluate_row(shared_memory[0], col) + vec3(x), 1.0);
 }
 )";
 
@@ -874,13 +878,17 @@ TEST_F(ProgramUtilTest, DecomposeWorkgroupVec3InSpirvPass) {
         << "SanitizeAndOptimizeBinary failed - the DecomposeWorkgroupVec3Pass may have "
            "encountered an unsupported pattern";
 
+    spvtools::Optimizer parseOnlyOptimizer(SPV_ENV_VULKAN_1_1);
+    Vector<uint32_t> parsedBinary;
+    ASSERT_TRUE(parseOnlyOptimizer.Run(optimized.data(), optimized.size(), &parsedBinary))
+        << "DecomposeWorkgroupVec3Pass emitted SPIR-V with invalid physical layout";
+
     SpvcSession session(optimized, SessionUsageBit::Transpile);
     auto sourceRes = ShaderCompiler::DecompileShader(session);
     ASSERT_TRUE(sourceRes.has_value()) << "errc: " << sourceRes.error().errc
                                        << "\nlog: " << sourceRes.error().log;
 
     const String& source = sourceRes.value();
-
     // The decomposed output must not contain a `shared vec3` declaration.
     EXPECT_EQ(source.find("shared vec3"), std::string::npos)
         << "DecomposeWorkgroupVec3Pass did not eliminate `shared vec3`:\n"
