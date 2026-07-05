@@ -41,6 +41,13 @@
       "timeout_seconds": 180
     },
     {
+      "name": "minecraft-1.17-main-menu-854",
+      "trace_archive": "minecraft-1.17-main-menu-854.tgz",
+      "golden": "minecraft-1.17-main-menu-854.0000117757.png",
+      "target_call": 117757,
+      "timeout_seconds": 180
+    },
+    {
       "name": "minecraft-1.21.4-in-world",
       "trace_archive": "minecraft-1.21.4-in-world.tgz",
       "golden": "minecraft-1.21.4-in-world.0000280000.png",
