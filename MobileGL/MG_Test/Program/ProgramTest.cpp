@@ -108,6 +108,35 @@ void main() {
     fragColor = vec4(OutColor, float(intVal));
 })";
 
+const char* sodiumStylePushConstantVs = R"(#version 460 core
+
+layout(location = 0) in vec3 Position;
+
+#ifdef VULKAN
+layout(push_constant) uniform PC {
+    vec3 u_RegionOffset;
+    int u_CurrentTime;
+    uint u_RegionID;
+};
+#else
+uniform vec3 u_RegionOffset;
+uniform int u_CurrentTime;
+uniform uint u_RegionID;
+#endif
+
+void main() {
+    vec3 offset = u_RegionOffset + vec3(float(u_CurrentTime) * 0.0 + float(u_RegionID) * 0.0);
+    gl_Position = vec4(Position + offset, 1.0);
+})";
+
+const char* sodiumStylePushConstantFs = R"(#version 460 core
+
+out vec4 fragColor;
+
+void main() {
+    fragColor = vec4(1.0);
+})";
+
 TEST_F(ProgramTest, CompileVertex) {
     GLuint vs = CreateShader(GL_VERTEX_SHADER);
     ShaderSource(vs, 1, &vsSrc, NULL);
@@ -455,6 +484,58 @@ TEST_F(ProgramTest, CompileAndLink) {
         }
         printf("shader dump: \n%s\n", result);
     }
+}
+
+TEST_F(ProgramTest, SodiumStyleVulkanMacroShaderUsesPlainUniforms) {
+    char infoLog[1024] = "";
+
+    GLuint vs = CreateShader(GL_VERTEX_SHADER);
+    ShaderSource(vs, 1, &sodiumStylePushConstantVs, NULL);
+    CompileShader(vs);
+    GLint vsStatus = GL_FALSE;
+    GetShaderiv(vs, GL_COMPILE_STATUS, &vsStatus);
+    GetShaderInfoLog(vs, sizeof(infoLog), nullptr, infoLog);
+    ASSERT_EQ(vsStatus, GL_TRUE) << infoLog;
+
+    GLuint fs = CreateShader(GL_FRAGMENT_SHADER);
+    ShaderSource(fs, 1, &sodiumStylePushConstantFs, NULL);
+    CompileShader(fs);
+    GLint fsStatus = GL_FALSE;
+    GetShaderiv(fs, GL_COMPILE_STATUS, &fsStatus);
+    GetShaderInfoLog(fs, sizeof(infoLog), nullptr, infoLog);
+    ASSERT_EQ(fsStatus, GL_TRUE) << infoLog;
+
+    GLuint program = CreateProgram();
+    AttachShader(program, vs);
+    AttachShader(program, fs);
+    LinkProgram(program);
+    GLint linkStatus = GL_FALSE;
+    GetProgramiv(program, GL_LINK_STATUS, &linkStatus);
+    GetProgramInfoLog(program, sizeof(infoLog), nullptr, infoLog);
+    ASSERT_EQ(linkStatus, GL_TRUE) << infoLog;
+
+    const GLint regionOffsetLoc = GetUniformLocation(program, "u_RegionOffset");
+    const GLint currentTimeLoc = GetUniformLocation(program, "u_CurrentTime");
+    const GLint regionIdLoc = GetUniformLocation(program, "u_RegionID");
+    ASSERT_GE(regionOffsetLoc, 0);
+    ASSERT_GE(currentTimeLoc, 0);
+    ASSERT_GE(regionIdLoc, 0);
+
+    auto programObject = MG_State::pGLContext->GetProgramObject(program);
+    ASSERT_NE(programObject, nullptr);
+    ASSERT_GT(programObject->GetUBOSize(), 0u);
+
+    UseProgram(program);
+    Uniform3f(regionOffsetLoc, 1.0f, 2.0f, 3.0f);
+    Uniform1i(currentTimeLoc, 4);
+    Uniform1ui(regionIdLoc, 5u);
+    EXPECT_EQ(GetError(), GL_NO_ERROR);
+
+    GLfloat regionOffset[3] = {};
+    GetUniformfv(program, regionOffsetLoc, regionOffset);
+    EXPECT_EQ(regionOffset[0], 1.0f);
+    EXPECT_EQ(regionOffset[1], 2.0f);
+    EXPECT_EQ(regionOffset[2], 3.0f);
 }
 
 TEST_F(ProgramTest, Uniform1uiStoresUnsignedValue) {

@@ -148,6 +148,7 @@ namespace MobileGL {
                 tshader->setStrings(src, 1);
                 tshader->setNanMinMaxClamp(true);
                 tshader->setInvertY(true);
+                tshader->setPreamble("#undef VULKAN\n");
                 if (attrib.flags & ShaderCompileBits::CompileForOpenGL) {
                     tshader->setEnvInput(glslang::EShSourceGlsl, lang, glslang::EShClientVulkan, 450);
                     tshader->setEnvClient(glslang::EShClientOpenGL, glslang::EShTargetOpenGL_450);
