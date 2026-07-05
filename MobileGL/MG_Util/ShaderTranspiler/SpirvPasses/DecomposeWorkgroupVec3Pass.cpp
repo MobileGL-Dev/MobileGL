@@ -125,49 +125,52 @@ namespace MobileGL {
 
                 // =====================================================================
                 // Phase 1: Build type mappings.
-                //   vec3TypeId  -> scalarArr3TypeId  (OpTypeVector -> OpTypeArray [3])
-                //   ptrWGVec3Id -> ptrWGArr3Id       (OpTypePointer Workgroup vec3 -> ...arr3)
+                //   vec3TypeIds: candidate OpTypeVector ids.
+                //
+                // Do not register replacement types until Phase 2 proves a Workgroup
+                // variable really needs rewriting. SPIRV-Tools verifies that a pass
+                // returning SuccessWithoutChange leaves the binary unchanged.
                 // =====================================================================
+                std::unordered_set<uint32_t> vec3TypeIds;
                 std::unordered_map<uint32_t, uint32_t> vec3ToArr3;
                 std::unordered_map<uint32_t, uint32_t> ptrVec3ToPtrArr3;
 
                 for (Instruction& typeInst : ctx->types_values()) {
                     if (typeInst.opcode() == spv::Op::OpTypeVector &&
                         IsVec3Type(&typeInst) != 0) {
-                        const uint32_t scalarTypeId = typeInst.GetSingleWordInOperand(0);
-                        analysis::Type* scalarType = typeMgr->GetType(scalarTypeId);
-                        if (scalarType == nullptr) {
-                            continue;
-                        }
-                        // Create or retrieve a scalar array [3] type.
-                        const uint32_t const3Id = constMgr->GetUIntConstId(3);
-                        analysis::Array::LengthInfo lengthInfo =
-                            analysis::Array(scalarType, analysis::Array::LengthInfo{})
-                                .GetConstantLengthInfo(const3Id, 3);
-                        analysis::Array arrType(scalarType, lengthInfo);
-                        analysis::Type* regArrType = typeMgr->GetRegisteredType(&arrType);
-                        const uint32_t arrTypeId = typeMgr->GetTypeInstruction(regArrType);
-                        vec3ToArr3[typeInst.result_id()] = arrTypeId;
-                    }
-                    if (typeInst.opcode() == spv::Op::OpTypePointer) {
-                        const auto sc = static_cast<spv::StorageClass>(
-                            typeInst.GetSingleWordInOperand(0));
-                        if (sc == spv::StorageClass::Workgroup) {
-                            const uint32_t pointeeId = typeInst.GetSingleWordInOperand(1);
-                            auto it = vec3ToArr3.find(pointeeId);
-                            if (it != vec3ToArr3.end()) {
-                                const uint32_t ptrArrId =
-                                    typeMgr->FindPointerToType(it->second,
-                                                               spv::StorageClass::Workgroup);
-                                ptrVec3ToPtrArr3[typeInst.result_id()] = ptrArrId;
-                            }
-                        }
+                        vec3TypeIds.insert(typeInst.result_id());
                     }
                 }
 
-                if (vec3ToArr3.empty()) {
+                if (vec3TypeIds.empty()) {
                     return Status::SuccessWithoutChange;
                 }
+
+                auto getOrCreateArr3ForVec3 = [&](uint32_t vec3TypeId) -> uint32_t {
+                    auto existing = vec3ToArr3.find(vec3TypeId);
+                    if (existing != vec3ToArr3.end()) {
+                        return existing->second;
+                    }
+
+                    Instruction* vec3TypeInst = defUseMgr->GetDef(vec3TypeId);
+                    assert(vec3TypeInst != nullptr);
+                    const uint32_t scalarTypeId = vec3TypeInst->GetSingleWordInOperand(0);
+                    analysis::Type* scalarType = typeMgr->GetType(scalarTypeId);
+                    if (scalarType == nullptr) {
+                        return 0;
+                    }
+
+                    const uint32_t const3Id = constMgr->GetUIntConstId(3);
+                    analysis::Array::LengthInfo lengthInfo{
+                        const3Id,
+                        {analysis::Array::LengthInfo::kConstant, 3},
+                    };
+                    analysis::Array arrType(scalarType, lengthInfo);
+                    analysis::Type* regArrType = typeMgr->GetRegisteredType(&arrType);
+                    const uint32_t arrTypeId = typeMgr->GetTypeInstruction(regArrType);
+                    vec3ToArr3[vec3TypeId] = arrTypeId;
+                    return arrTypeId;
+                };
 
                 bool modified = false;
 
@@ -193,14 +196,18 @@ namespace MobileGL {
                     if (vec3LeafId == 0) {
                         continue;
                     }
+                    const uint32_t arr3LeafId = getOrCreateArr3ForVec3(vec3LeafId);
+                    if (arr3LeafId == 0) {
+                        continue;
+                    }
                     // If the pointee is itself a direct vec3 (no array wrapping), handle it
                     // via the vec3ToArr3 map directly.
                     uint32_t newPointeeId;
                     if (pointeeId == vec3LeafId) {
-                        newPointeeId = vec3ToArr3[vec3LeafId];
+                        newPointeeId = arr3LeafId;
                     } else {
                         newPointeeId = RebuildPointeeType(ctx, pointeeId,
-                                                          vec3ToArr3[vec3LeafId], vec3ToArr3);
+                                                          arr3LeafId, vec3ToArr3);
                     }
                     const uint32_t newPtrId = typeMgr->FindPointerToType(
                         newPointeeId, spv::StorageClass::Workgroup);
@@ -211,6 +218,25 @@ namespace MobileGL {
 
                 if (!modified) {
                     return Status::SuccessWithoutChange;
+                }
+
+                for (Instruction& typeInst : ctx->types_values()) {
+                    if (typeInst.opcode() != spv::Op::OpTypePointer) {
+                        continue;
+                    }
+                    const auto sc = static_cast<spv::StorageClass>(
+                        typeInst.GetSingleWordInOperand(0));
+                    if (sc != spv::StorageClass::Workgroup) {
+                        continue;
+                    }
+                    const uint32_t pointeeId = typeInst.GetSingleWordInOperand(1);
+                    auto it = vec3ToArr3.find(pointeeId);
+                    if (it == vec3ToArr3.end()) {
+                        continue;
+                    }
+                    const uint32_t ptrArrId =
+                        typeMgr->FindPointerToType(it->second, spv::StorageClass::Workgroup);
+                    ptrVec3ToPtrArr3[typeInst.result_id()] = ptrArrId;
                 }
 
                 // =====================================================================

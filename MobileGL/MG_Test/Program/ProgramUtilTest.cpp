@@ -895,3 +895,46 @@ TEST_F(ProgramUtilTest, DecomposeWorkgroupVec3InSpirvPass) {
         << source;
 }
 
+TEST_F(ProgramUtilTest, DecomposeWorkgroupVec3IgnoresNonWorkgroupVec3) {
+    using namespace MG_Util::ShaderTranspiler;
+
+    String csSource = R"(#version 460 core
+layout(local_size_x = 1) in;
+
+layout(std430, binding = 0) writeonly buffer OutputBuffer {
+    vec4 out_data[];
+};
+
+void main() {
+    vec3 local = vec3(1.0, 2.0, 3.0);
+    out_data[gl_GlobalInvocationID.x] = vec4(local, 1.0);
+}
+)";
+    PreprocessShaderSource(ShaderStage::Compute, csSource);
+
+    ShaderAttrib csAttrib{.shaderType = GL_COMPUTE_SHADER, .sourceStr = csSource};
+    auto csRes = ShaderCompiler::CompileShader(csAttrib);
+    if (!csRes) {
+        ASSERT_NE(csRes.error().errc, 0);
+        FAIL() << "errc: " << csRes.error().errc << "\nlog: " << csRes.error().log;
+    }
+
+    ProgramAttrib programAttrib{.shaders = {csRes.value()}};
+    auto programRes = ShaderCompiler::LinkProgram(programAttrib);
+    if (!programRes) {
+        ASSERT_NE(programRes.error().errc, 0);
+        FAIL() << "errc: " << programRes.error().errc << "\nlog: " << programRes.error().log;
+    }
+
+    ProgramBinaryAttrib binaryAttrib{
+        .shaderTypes = {GL_COMPUTE_SHADER},
+        .program = *programRes.value(),
+    };
+    auto binRes = ShaderCompiler::GetSpirvBinaryFromProgram(binaryAttrib);
+    ASSERT_TRUE(binRes.has_value());
+    ASSERT_FALSE(binRes->empty());
+
+    Vector<uint32_t> optimized;
+    ASSERT_TRUE(ShaderCompiler::SanitizeAndOptimizeBinary(binRes->at(0), optimized));
+}
+
