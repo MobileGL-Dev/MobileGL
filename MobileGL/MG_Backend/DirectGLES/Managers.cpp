@@ -25,6 +25,7 @@
 #include <MG_State/GLState/FramebufferState/FramebufferObject.h>
 #include <algorithm>
 #include <cctype>
+#include <regex>
 
 namespace MobileGL::MG_Backend::DirectGLES {
     constexpr Bool PREFER_MAP_BUFFER_RANGE_FOR_BUFFER_SYNC = false;
@@ -56,6 +57,46 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 pos = end;
             }
         }
+        return source;
+    }
+
+    static String PackPhotonSharedVec3Memory(String source) {
+        constexpr const char* declaration = "shared vec3 shared_memory[256][9];";
+        const SizeT declarationPos = source.find(declaration);
+        if (declarationPos == String::npos) {
+            return source;
+        }
+
+        source.replace(declarationPos, String(declaration).size(),
+                       "shared float shared_memory[256][9][3];\n"
+                       "void StorePhotonSharedMemory(uint row, uint column, vec3 value)\n"
+                       "{\n"
+                       "    shared_memory[row][column][0] = value.x;\n"
+                       "    shared_memory[row][column][1] = value.y;\n"
+                       "    shared_memory[row][column][2] = value.z;\n"
+                       "}\n"
+                       "vec3 LoadPhotonSharedMemory(uint row, uint column)\n"
+                       "{\n"
+                       "    return vec3(shared_memory[row][column][0], shared_memory[row][column][1], "
+                       "shared_memory[row][column][2]);\n"
+                       "}\n");
+
+        source = std::regex_replace(
+            source, std::regex(R"(shared_memory\[([^\]]+)\]\[([^\]]+)\] \+= ([^;]+);)"),
+            "StorePhotonSharedMemory($1, $2, LoadPhotonSharedMemory($1, $2) + ($3));");
+        source = std::regex_replace(
+            source, std::regex(R"(shared_memory\[([^\]]+)\]\[([^\]]+)\] = ([^;]+);)"),
+            "StorePhotonSharedMemory($1, $2, $3);");
+        source = std::regex_replace(source, std::regex(R"(shared_memory\[([^\]]+)\]\[([^\]]+)\](?!\[))"),
+                                    "LoadPhotonSharedMemory($1, $2)");
+        source = std::regex_replace(source, std::regex(R"(LoadPhotonSharedMemory\(0,)"),
+                                    "LoadPhotonSharedMemory(0u,");
+        source = std::regex_replace(source, std::regex(R"(vec3 ([A-Za-z_][A-Za-z0-9_]*)\[9\] = shared_memory\[0\];)"),
+                                    "vec3 $1[9];\n"
+                                    "        for (uint photon_band = 0u; photon_band < 9u; ++photon_band)\n"
+                                    "        {\n"
+                                    "            $1[photon_band] = LoadPhotonSharedMemory(0u, photon_band);\n"
+                                    "        }");
         return source;
     }
 
@@ -498,6 +539,38 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return m_backendTextureId;
         }
 
+        void BackendTextureObject::RequireImageBindableStorage() {
+            if (m_imageBindableStorageRequired) {
+                return;
+            }
+            m_imageBindableStorageRequired = true;
+            m_isInitialized = false;
+        }
+
+        void BackendTextureObject::RecreateBackendTexture() {
+            if (m_backendTextureId != 0) {
+                g_GLESFuncs.glDeleteTextures(1, &m_backendTextureId);
+                for (auto& unitCache : g_boundTexturesCache) {
+                    for (auto& boundTexture : unitCache) {
+                        if (boundTexture == this) {
+                            boundTexture = nullptr;
+                        }
+                    }
+                }
+            }
+
+            g_GLESFuncs.glGenTextures(1, &m_backendTextureId);
+            if (m_backendTextureId == 0) {
+                MGLOG_E("Failed to regenerate texture object.");
+                MGLOG_E("ES glGetError(): %s", MG_Util::ConvertGLEnumToString(g_GLESFuncs.glGetError()).c_str());
+            } else {
+                MGLOG_D("Regenerated texture object with ID: %u.", m_backendTextureId);
+            }
+            m_isInitialized = false;
+            m_backendStorageImmutable = false;
+            m_prevTextureInfo = {};
+        }
+
         class ScopedDefaultUnpackState {
         public:
             ScopedDefaultUnpackState() {
@@ -686,8 +759,15 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 currentTextureInfo.mipmapLevels = mipmapCount;
 
                 Bool needsRegeneration = !m_isInitialized || (currentTextureInfo != m_prevTextureInfo);
+                if (needsRegeneration && m_backendStorageImmutable) {
+                    RecreateBackendTexture();
+                    Bind(target);
+                }
+
                 const Bool canAppendMipmaps =
                     m_isInitialized &&
+                    !m_imageBindableStorageRequired &&
+                    !stateTextureObject->IsImmutable() &&
                     currentTextureInfo.internalFormat == m_prevTextureInfo.internalFormat &&
                     currentTextureInfo.width == m_prevTextureInfo.width &&
                     currentTextureInfo.height == m_prevTextureInfo.height &&
@@ -795,12 +875,93 @@ namespace MobileGL::MG_Backend::DirectGLES {
                             MOBILEGL_ASSERT(false, "Unexpected multisample target: %d", static_cast<Int>(targetInternal));
                             break;
                         }
+                        m_backendStorageImmutable = true;
                         for (const auto& uploadTarget : uploadTargets) {
                             for (SizeT level = 0; level < mipmapCount; ++level) {
                                 textureMipmapObject->MarkStorageDirty(uploadTarget, level, false);
                             }
                         }
+                    } else if (stateTextureObject->IsImmutable() || m_imageBindableStorageRequired) {
+                        DebugImpl::ErrorLopper::Clear();
+                        g_GLESFuncs.glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
+                        switch (targetInternal) {
+                        case TextureTarget::Texture2D:
+                        case TextureTarget::TextureCubeMap:
+                            g_GLESFuncs.glTexStorage2D(target, static_cast<GLsizei>(mipmapCount), glInternalFormat,
+                                                       static_cast<GLsizei>(baseSize.x()),
+                                                       static_cast<GLsizei>(baseSize.y()));
+                            break;
+                        case TextureTarget::Texture3D:
+                            g_GLESFuncs.glTexStorage3D(target, static_cast<GLsizei>(mipmapCount), glInternalFormat,
+                                                       static_cast<GLsizei>(baseSize.x()),
+                                                       static_cast<GLsizei>(baseSize.y()),
+                                                       static_cast<GLsizei>(baseSize.z()));
+                            break;
+                        default:
+                            MGLOG_E("Unhandled immutable texture target %s",
+                                    MG_Util::ConvertTextureTargetToString(targetInternal).c_str());
+                            break;
+                        }
+                        DebugImpl::ErrorLopper::Loop([file = __FILE__, line = __LINE__, func = __func__, target,
+                                                      glInternalFormat](GLenum err) {
+                            MGLOG_D("%s(%s:%d) ES error: %s. glTexStorage*: target=%s, internalformat=%s", func,
+                                    file, line, MG_Util::ConvertGLEnumToString(err).c_str(),
+                                    MG_Util::ConvertGLEnumToString(target).c_str(),
+                                    MG_Util::ConvertGLEnumToString(glInternalFormat).c_str());
+                        });
+                        m_backendStorageImmutable = true;
+
+                        ScopedDefaultUnpackState unpackState;
+                        for (auto& uploadTarget : uploadTargets) {
+                            for (SizeT level = 0; level < mipmapCount; ++level) {
+                                auto levelByteSize = textureMipmapObject->GetMipmapByteSize(uploadTarget, level);
+                                const bool levelDirty = textureMipmapObject->IsStorageDirty(uploadTarget, level);
+                                if (levelDirty && levelByteSize != 0) {
+                                    auto levelTexelSize =
+                                        textureMipmapObject->GetMipmapTexelSize(uploadTarget, level);
+                                    auto glUploadTarget = MG_Util::ConvertTextureUploadTargetToGLEnum(uploadTarget);
+                                    auto* pData = textureMipmapObject->MapMipmapData(uploadTarget, level);
+                                    Vector<Float> convertedUploadData;
+                                    const void* uploadData = PrepareNormFloatFallbackUpload(
+                                        textureMipmapObject->GetFormat(), levelTexelSize, pData, levelByteSize, glType,
+                                        convertedUploadData);
+
+                                    DebugImpl::ErrorLopper::Clear();
+                                    g_GLESFuncs.glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
+                                    switch (targetInternal) {
+                                    case TextureTarget::Texture2D:
+                                    case TextureTarget::TextureCubeMap:
+                                        g_GLESFuncs.glTexSubImage2D(
+                                            glUploadTarget, static_cast<GLint>(level), 0, 0,
+                                            static_cast<GLsizei>(levelTexelSize.x()),
+                                            static_cast<GLsizei>(levelTexelSize.y()), glFormat, glType, uploadData);
+                                        break;
+                                    case TextureTarget::Texture3D:
+                                        g_GLESFuncs.glTexSubImage3D(
+                                            glUploadTarget, static_cast<GLint>(level), 0, 0, 0,
+                                            static_cast<GLsizei>(levelTexelSize.x()),
+                                            static_cast<GLsizei>(levelTexelSize.y()),
+                                            static_cast<GLsizei>(levelTexelSize.z()), glFormat, glType, uploadData);
+                                        break;
+                                    default:
+                                        break;
+                                    }
+                                    DebugImpl::ErrorLopper::Loop(
+                                        [file = __FILE__, line = __LINE__, func = __func__, glUploadTarget,
+                                         glFormat, glType, pData](GLenum err) {
+                                            MGLOG_D("%s(%s:%d) ES error: %s. glTexSubImage*: target=%s, format=%s, "
+                                                    "type=%s, pixels=%p",
+                                                    func, file, line, MG_Util::ConvertGLEnumToString(err).c_str(),
+                                                    MG_Util::ConvertGLEnumToString(glUploadTarget).c_str(),
+                                                    MG_Util::ConvertGLEnumToString(glFormat).c_str(),
+                                                    MG_Util::ConvertGLEnumToString(glType).c_str(), pData);
+                                        });
+                                }
+                                textureMipmapObject->MarkStorageDirty(uploadTarget, level, false);
+                            }
+                        }
                     } else {
+                        m_backendStorageImmutable = false;
                         ScopedDefaultUnpackState unpackState;
                         for (auto& uploadTarget : uploadTargets) {
                             for (SizeT level = 0; level < mipmapCount; ++level) {
@@ -1690,6 +1851,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 source = ClampNormFallbackOutputs(std::move(source), glShaderType,
                                                   m_snormFallbackClampOutputMask,
                                                   m_unormFallbackClampOutputMask);
+                source = PackPhotonSharedVec3Memory(std::move(source));
 
                 // Patch for Photon compiler precision issue
                 String findStr = "1000000.0";

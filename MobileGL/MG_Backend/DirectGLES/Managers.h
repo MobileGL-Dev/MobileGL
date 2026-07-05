@@ -205,12 +205,17 @@ namespace MobileGL::MG_Backend::DirectGLES {
             void SyncMipmapsToBackend(const SharedPtr<MG_State::GLState::ITextureObject>& stateTextureObject);
             void SyncBuiltinSamplerToBackend(const SharedPtr<MG_State::GLState::ITextureObject>& stateTextureObject);
             void SyncTextureParamsToBackend(const SharedPtr<MG_State::GLState::ITextureObject>& stateTextureObject);
+            void RequireImageBindableStorage();
             void Bind(GLenum target, Uint unit = TempTextureUnit);
             Uint GetBackendTextureId() const;
 
         private:
+            void RecreateBackendTexture();
+
             Uint m_backendTextureId = 0;
             Bool m_isInitialized = false;
+            Bool m_imageBindableStorageRequired = false;
+            Bool m_backendStorageImmutable = false;
             StateTextureBasicInfo m_prevTextureInfo;
             SamplerParameters m_cacheSamplerParameters;
             UintVec2 m_cacheLodRange = {0, 1000};
@@ -226,7 +231,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
         extern StateBackendObjectRegistry<MG_State::GLState::ITextureObject, BackendTextureObject>
             g_backendTextureObjects;
         SharedPtr<BackendTextureObject>& SyncTextureObjectToBackend(
-            const SharedPtr<MG_State::GLState::ITextureObject>& textureObject);
+            const SharedPtr<MG_State::GLState::ITextureObject>& textureObject,
+            Bool imageBindableStorageRequired = false);
         extern Array<Array<BackendTextureObject*, (SizeT)TextureTarget::TextureTargetCount>,
                      MG_State::GLState::TextureState::MAX_TEXTURE_IMAGE_UNITS>
             g_boundTexturesCache;
