@@ -832,10 +832,7 @@ void main() {
     vec3 loaded = shared_memory[row][col];
     float x = shared_memory[row][col].x;
 
-    vec3 rowCopy[9];
-    for (uint i = 0u; i < 9u; ++i) {
-        rowCopy[i] = shared_memory[row][i];
-    }
+    vec3 rowCopy[9] = shared_memory[0];
 
     memoryBarrierShared();
     barrier();
@@ -892,6 +889,10 @@ TEST_F(ProgramUtilTest, DecomposeWorkgroupVec3InSpirvPass) {
     // It should now use a scalar array form (shared float ...).
     EXPECT_NE(source.find("shared float"), std::string::npos)
         << "Expected `shared float` in decomposed output:\n"
+        << source;
+
+    EXPECT_EQ(source.find("= shared_memory[0]"), std::string::npos)
+        << "Decomposed output kept an invalid whole-row shared-memory load:\n"
         << source;
 }
 

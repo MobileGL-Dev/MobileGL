@@ -100,6 +100,17 @@ namespace MobileGL {
                     return typeId;
                 }
 
+                uint32_t GetArrayLength(IRContext* context, const Instruction* arrayTypeInst) {
+                    assert(arrayTypeInst != nullptr && arrayTypeInst->opcode() == spv::Op::OpTypeArray);
+                    const uint32_t lengthId = arrayTypeInst->GetSingleWordInOperand(1);
+                    const Instruction* lengthInst = context->get_def_use_mgr()->GetDef(lengthId);
+                    if (lengthInst == nullptr || lengthInst->opcode() != spv::Op::OpConstant ||
+                        lengthInst->NumInOperands() == 0) {
+                        return 0;
+                    }
+                    return lengthInst->GetSingleWordInOperand(0);
+                }
+
                 // Inserts an instruction before |where|, sets its debug info, and updates
                 // def-use and block mapping. Returns a pointer to the inserted instruction.
                 Instruction* InsertBefore(BasicBlock* block, Instruction* where,
@@ -111,6 +122,191 @@ namespace MobileGL {
                     context->AnalyzeDefUse(&*iter);
                     context->set_instr_block(&*iter, block);
                     return &*iter;
+                }
+
+                uint32_t BuildCompositeLoad(IRContext* context, BasicBlock* block, Instruction* where,
+                                            uint32_t originalTypeId, uint32_t decomposedPtrId,
+                                            const std::unordered_map<uint32_t, uint32_t>& vec3ToArr3,
+                                            const Instruction* sourceLoad) {
+                    auto* defUseMgr = context->get_def_use_mgr();
+                    auto* typeMgr = context->get_type_mgr();
+                    auto* constMgr = context->get_constant_mgr();
+                    Instruction* originalTypeInst = defUseMgr->GetDef(originalTypeId);
+                    assert(originalTypeInst != nullptr);
+
+                    if (originalTypeInst->opcode() == spv::Op::OpTypeVector) {
+                        const auto vecIt = vec3ToArr3.find(originalTypeId);
+                        assert(vecIt != vec3ToArr3.end());
+                        const uint32_t scalarTypeId = originalTypeInst->GetSingleWordInOperand(0);
+                        const uint32_t ptrScalarTypeId =
+                            typeMgr->FindPointerToType(scalarTypeId, spv::StorageClass::Workgroup);
+                        std::vector<uint32_t> componentIds;
+                        componentIds.reserve(3);
+                        for (uint32_t c = 0; c < 3; ++c) {
+                            const uint32_t constCId = constMgr->GetUIntConstId(c);
+                            const uint32_t acId = context->TakeNextId();
+                            auto acInst = MakeUnique<Instruction>(
+                                context, spv::Op::OpAccessChain, ptrScalarTypeId, acId,
+                                std::initializer_list<Operand>{
+                                    {SPV_OPERAND_TYPE_ID, {decomposedPtrId}},
+                                    {SPV_OPERAND_TYPE_ID, {constCId}}});
+                            InsertBefore(block, where, std::move(acInst), context);
+
+                            const uint32_t loadId = context->TakeNextId();
+                            auto loadInst = MakeUnique<Instruction>(
+                                context, spv::Op::OpLoad, scalarTypeId, loadId,
+                                std::initializer_list<Operand>{
+                                    {SPV_OPERAND_TYPE_ID, {acId}}});
+                            for (uint32_t opIdx = 1; opIdx < sourceLoad->NumInOperands(); ++opIdx) {
+                                loadInst->AddOperand(Operand(sourceLoad->GetInOperand(opIdx)));
+                            }
+                            Instruction* loadPtr = InsertBefore(block, where, std::move(loadInst), context);
+                            componentIds.push_back(loadPtr->result_id());
+                        }
+
+                        const uint32_t compositeId = context->TakeNextId();
+                        auto composite = MakeUnique<Instruction>(
+                            context, spv::Op::OpCompositeConstruct, originalTypeId, compositeId,
+                            std::initializer_list<Operand>{});
+                        for (uint32_t componentId : componentIds) {
+                            composite->AddOperand({SPV_OPERAND_TYPE_ID, {componentId}});
+                        }
+                        InsertBefore(block, where, std::move(composite), context);
+                        return compositeId;
+                    }
+
+                    if (originalTypeInst->opcode() == spv::Op::OpTypeArray) {
+                        const uint32_t originalElemTypeId = originalTypeInst->GetSingleWordInOperand(0);
+                        const uint32_t vec3LeafId = FindVec3LeafTypeId(context, originalElemTypeId);
+                        assert(vec3LeafId != 0);
+                        const auto arr3It = vec3ToArr3.find(vec3LeafId);
+                        assert(arr3It != vec3ToArr3.end());
+                        const uint32_t decomposedElemTypeId =
+                            originalElemTypeId == vec3LeafId
+                                ? arr3It->second
+                                : RebuildPointeeType(context, originalElemTypeId, arr3It->second, vec3ToArr3);
+                        const uint32_t ptrDecomposedElemTypeId =
+                            typeMgr->FindPointerToType(decomposedElemTypeId, spv::StorageClass::Workgroup);
+                        const uint32_t length = GetArrayLength(context, originalTypeInst);
+                        assert(length != 0);
+
+                        std::vector<uint32_t> elementIds;
+                        elementIds.reserve(length);
+                        for (uint32_t i = 0; i < length; ++i) {
+                            const uint32_t constIId = constMgr->GetUIntConstId(i);
+                            const uint32_t elemPtrId = context->TakeNextId();
+                            auto elemAc = MakeUnique<Instruction>(
+                                context, spv::Op::OpAccessChain, ptrDecomposedElemTypeId, elemPtrId,
+                                std::initializer_list<Operand>{
+                                    {SPV_OPERAND_TYPE_ID, {decomposedPtrId}},
+                                    {SPV_OPERAND_TYPE_ID, {constIId}}});
+                            InsertBefore(block, where, std::move(elemAc), context);
+                            elementIds.push_back(BuildCompositeLoad(context, block, where, originalElemTypeId,
+                                                                    elemPtrId, vec3ToArr3, sourceLoad));
+                        }
+
+                        const uint32_t compositeId = context->TakeNextId();
+                        auto composite = MakeUnique<Instruction>(
+                            context, spv::Op::OpCompositeConstruct, originalTypeId, compositeId,
+                            std::initializer_list<Operand>{});
+                        for (uint32_t elementId : elementIds) {
+                            composite->AddOperand({SPV_OPERAND_TYPE_ID, {elementId}});
+                        }
+                        InsertBefore(block, where, std::move(composite), context);
+                        return compositeId;
+                    }
+
+                    assert(false && "DecomposeWorkgroupVec3Pass: unsupported composite load type");
+                    return 0;
+                }
+
+                void BuildCompositeStore(IRContext* context, BasicBlock* block, Instruction* where,
+                                         uint32_t originalTypeId, uint32_t decomposedPtrId, uint32_t valueId,
+                                         const std::unordered_map<uint32_t, uint32_t>& vec3ToArr3,
+                                         const Instruction* sourceStore) {
+                    auto* defUseMgr = context->get_def_use_mgr();
+                    auto* typeMgr = context->get_type_mgr();
+                    auto* constMgr = context->get_constant_mgr();
+                    Instruction* originalTypeInst = defUseMgr->GetDef(originalTypeId);
+                    assert(originalTypeInst != nullptr);
+
+                    if (originalTypeInst->opcode() == spv::Op::OpTypeVector) {
+                        const auto vecIt = vec3ToArr3.find(originalTypeId);
+                        assert(vecIt != vec3ToArr3.end());
+                        const uint32_t scalarTypeId = originalTypeInst->GetSingleWordInOperand(0);
+                        const uint32_t ptrScalarTypeId =
+                            typeMgr->FindPointerToType(scalarTypeId, spv::StorageClass::Workgroup);
+                        for (uint32_t c = 0; c < 3; ++c) {
+                            const uint32_t extractId = context->TakeNextId();
+                            auto extract = MakeUnique<Instruction>(
+                                context, spv::Op::OpCompositeExtract, scalarTypeId, extractId,
+                                std::initializer_list<Operand>{
+                                    {SPV_OPERAND_TYPE_ID, {valueId}},
+                                    {SPV_OPERAND_TYPE_LITERAL_INTEGER, {c}}});
+                            InsertBefore(block, where, std::move(extract), context);
+
+                            const uint32_t constCId = constMgr->GetUIntConstId(c);
+                            const uint32_t acId = context->TakeNextId();
+                            auto acInst = MakeUnique<Instruction>(
+                                context, spv::Op::OpAccessChain, ptrScalarTypeId, acId,
+                                std::initializer_list<Operand>{
+                                    {SPV_OPERAND_TYPE_ID, {decomposedPtrId}},
+                                    {SPV_OPERAND_TYPE_ID, {constCId}}});
+                            InsertBefore(block, where, std::move(acInst), context);
+
+                            auto compStore = MakeUnique<Instruction>(
+                                context, spv::Op::OpStore, 0, 0,
+                                std::initializer_list<Operand>{
+                                    {SPV_OPERAND_TYPE_ID, {acId}},
+                                    {SPV_OPERAND_TYPE_ID, {extractId}}});
+                            for (uint32_t opIdx = 2; opIdx < sourceStore->NumInOperands(); ++opIdx) {
+                                compStore->AddOperand(Operand(sourceStore->GetInOperand(opIdx)));
+                            }
+                            InsertBefore(block, where, std::move(compStore), context);
+                        }
+                        return;
+                    }
+
+                    if (originalTypeInst->opcode() == spv::Op::OpTypeArray) {
+                        const uint32_t originalElemTypeId = originalTypeInst->GetSingleWordInOperand(0);
+                        const uint32_t vec3LeafId = FindVec3LeafTypeId(context, originalElemTypeId);
+                        assert(vec3LeafId != 0);
+                        const auto arr3It = vec3ToArr3.find(vec3LeafId);
+                        assert(arr3It != vec3ToArr3.end());
+                        const uint32_t decomposedElemTypeId =
+                            originalElemTypeId == vec3LeafId
+                                ? arr3It->second
+                                : RebuildPointeeType(context, originalElemTypeId, arr3It->second, vec3ToArr3);
+                        const uint32_t ptrDecomposedElemTypeId =
+                            typeMgr->FindPointerToType(decomposedElemTypeId, spv::StorageClass::Workgroup);
+                        const uint32_t length = GetArrayLength(context, originalTypeInst);
+                        assert(length != 0);
+
+                        for (uint32_t i = 0; i < length; ++i) {
+                            const uint32_t extractId = context->TakeNextId();
+                            auto extract = MakeUnique<Instruction>(
+                                context, spv::Op::OpCompositeExtract, originalElemTypeId, extractId,
+                                std::initializer_list<Operand>{
+                                    {SPV_OPERAND_TYPE_ID, {valueId}},
+                                    {SPV_OPERAND_TYPE_LITERAL_INTEGER, {i}}});
+                            InsertBefore(block, where, std::move(extract), context);
+
+                            const uint32_t constIId = constMgr->GetUIntConstId(i);
+                            const uint32_t elemPtrId = context->TakeNextId();
+                            auto elemAc = MakeUnique<Instruction>(
+                                context, spv::Op::OpAccessChain, ptrDecomposedElemTypeId, elemPtrId,
+                                std::initializer_list<Operand>{
+                                    {SPV_OPERAND_TYPE_ID, {decomposedPtrId}},
+                                    {SPV_OPERAND_TYPE_ID, {constIId}}});
+                            InsertBefore(block, where, std::move(elemAc), context);
+
+                            BuildCompositeStore(context, block, where, originalElemTypeId, elemPtrId,
+                                                extractId, vec3ToArr3, sourceStore);
+                        }
+                        return;
+                    }
+
+                    assert(false && "DecomposeWorkgroupVec3Pass: unsupported composite store type");
                 }
             } // namespace
 
@@ -133,7 +329,7 @@ namespace MobileGL {
                 // =====================================================================
                 std::unordered_set<uint32_t> vec3TypeIds;
                 std::unordered_map<uint32_t, uint32_t> vec3ToArr3;
-                std::unordered_map<uint32_t, uint32_t> ptrVec3ToPtrArr3;
+                std::unordered_map<uint32_t, uint32_t> ptrCompositeToDecomposed;
 
                 for (Instruction& typeInst : ctx->types_values()) {
                     if (typeInst.opcode() == spv::Op::OpTypeVector &&
@@ -230,21 +426,29 @@ namespace MobileGL {
                         continue;
                     }
                     const uint32_t pointeeId = typeInst.GetSingleWordInOperand(1);
-                    auto it = vec3ToArr3.find(pointeeId);
+                    const uint32_t vec3LeafId = FindVec3LeafTypeId(ctx, pointeeId);
+                    if (vec3LeafId == 0) {
+                        continue;
+                    }
+                    auto it = vec3ToArr3.find(vec3LeafId);
                     if (it == vec3ToArr3.end()) {
                         continue;
                     }
-                    const uint32_t ptrArrId =
-                        typeMgr->FindPointerToType(it->second, spv::StorageClass::Workgroup);
-                    ptrVec3ToPtrArr3[typeInst.result_id()] = ptrArrId;
+                    const uint32_t newPointeeId =
+                        pointeeId == vec3LeafId
+                            ? it->second
+                            : RebuildPointeeType(ctx, pointeeId, it->second, vec3ToArr3);
+                    const uint32_t newPtrId =
+                        typeMgr->FindPointerToType(newPointeeId, spv::StorageClass::Workgroup);
+                    ptrCompositeToDecomposed[typeInst.result_id()] = newPtrId;
                 }
 
                 // =====================================================================
                 // Phase 3: Rewrite access chain result types.
                 //   Any OpAccessChain/OpInBoundsAccessChain whose result type is a
-                //   ptr_Workgroup_vec3 must now produce ptr_Workgroup_arr3.
-                //   (Access chains that go one level deeper to a component already have
-                //    result type ptr_scalar, which is unaffected.)
+                //   Workgroup pointer whose pointee contains vec3 must now produce the
+                //   decomposed pointer type. Access chains that go one level deeper to a
+                //   scalar component already have result type ptr_scalar and are unaffected.
                 // =====================================================================
                 // We also need to handle chained access chains: an access chain whose
                 // base is itself an access chain that was rewritten. Since the result
@@ -258,31 +462,30 @@ namespace MobileGL {
                                 inst.opcode() != spv::Op::OpInBoundsAccessChain) {
                                 continue;
                             }
-                            auto it = ptrVec3ToPtrArr3.find(inst.type_id());
-                            if (it != ptrVec3ToPtrArr3.end()) {
+                            auto it = ptrCompositeToDecomposed.find(inst.type_id());
+                            if (it != ptrCompositeToDecomposed.end()) {
                                 accessChainsToFix.push_back(&inst);
                             }
                         }
                     }
                 }
                 for (Instruction* ac : accessChainsToFix) {
-                    const uint32_t newTypeId = ptrVec3ToPtrArr3[ac->type_id()];
+                    const uint32_t newTypeId = ptrCompositeToDecomposed[ac->type_id()];
                     ac->SetResultType(newTypeId);
                     defUseMgr->AnalyzeInstUse(ac);
                 }
 
-                // Build the set of decomposed pointer type ids (ptr_Workgroup_arr3) for
-                // fast lookup when matching loads/stores.
-                std::unordered_set<uint32_t> ptrArr3TypeIds;
-                for (const auto& [oldPtr, newPtr] : ptrVec3ToPtrArr3) {
-                    ptrArr3TypeIds.insert(newPtr);
+                // Build the set of decomposed pointer type ids for fast lookup when matching
+                // loads/stores.
+                std::unordered_set<uint32_t> decomposedPtrTypeIds;
+                for (const auto& [oldPtr, newPtr] : ptrCompositeToDecomposed) {
+                    decomposedPtrTypeIds.insert(newPtr);
                 }
 
                 // =====================================================================
-                // Phase 4: Rewrite whole-vec3 OpLoad.
-                //   OpLoad %v3float %ptr  (ptr is now ptr_Workgroup_arr3)
-                //   -> 3x OpAccessChain %ptr_float %ptr %c + OpLoad %float
-                //   -> OpCompositeConstruct %v3float %f0 %f1 %f2
+                // Phase 4: Rewrite whole-composite OpLoad.
+                //   OpLoad %v3float %ptr             -> vec3 component loads
+                //   OpLoad %arr_v3float %ptr_to_row  -> per-element vec3 loads + array construct
                 // =====================================================================
                 std::vector<Instruction*> loadsToRewrite;
                 for (auto& func : *ctx->module()) {
@@ -291,7 +494,7 @@ namespace MobileGL {
                             if (inst.opcode() != spv::Op::OpLoad) {
                                 continue;
                             }
-                            if (vec3ToArr3.find(inst.type_id()) == vec3ToArr3.end()) {
+                            if (FindVec3LeafTypeId(ctx, inst.type_id()) == 0) {
                                 continue;
                             }
                             // Check the pointer operand's type.
@@ -300,7 +503,7 @@ namespace MobileGL {
                             if (ptrDef == nullptr) {
                                 continue;
                             }
-                            if (ptrArr3TypeIds.find(ptrDef->type_id()) == ptrArr3TypeIds.end()) {
+                            if (decomposedPtrTypeIds.find(ptrDef->type_id()) == decomposedPtrTypeIds.end()) {
                                 continue;
                             }
                             loadsToRewrite.push_back(&inst);
@@ -310,47 +513,9 @@ namespace MobileGL {
 
                 for (Instruction* load : loadsToRewrite) {
                     BasicBlock* block = ctx->get_instr_block(load);
-                    const uint32_t vec3TypeId = load->type_id();
-                    const uint32_t floatTypeId =
-                        defUseMgr->GetDef(vec3TypeId)->GetSingleWordInOperand(0);
-                    const uint32_t ptrFloatTypeId = typeMgr->FindPointerToType(
-                        floatTypeId, spv::StorageClass::Workgroup);
                     const uint32_t ptrId = load->GetSingleWordInOperand(0);
-
-                    std::vector<uint32_t> compLoadIds;
-                    compLoadIds.reserve(3);
-                    for (uint32_t c = 0; c < 3; ++c) {
-                        const uint32_t constCId = constMgr->GetUIntConstId(c);
-                        const uint32_t acId = ctx->TakeNextId();
-                        auto acInst = MakeUnique<Instruction>(
-                            ctx, spv::Op::OpAccessChain, ptrFloatTypeId, acId,
-                            std::initializer_list<Operand>{
-                                {SPV_OPERAND_TYPE_ID, {ptrId}},
-                                {SPV_OPERAND_TYPE_ID, {constCId}}});
-                        Instruction* acPtr = InsertBefore(block, load, std::move(acInst), ctx);
-
-                        const uint32_t loadId = ctx->TakeNextId();
-                        auto loadInst = MakeUnique<Instruction>(
-                            ctx, spv::Op::OpLoad, floatTypeId, loadId,
-                            std::initializer_list<Operand>{
-                                {SPV_OPERAND_TYPE_ID, {acId}}});
-                        // Copy memory operands (alignment etc.) from original load.
-                        for (uint32_t opIdx = 1; opIdx < load->NumInOperands(); ++opIdx) {
-                            loadInst->AddOperand(Operand(load->GetInOperand(opIdx)));
-                        }
-                        Instruction* loadPtr =
-                            InsertBefore(block, load, std::move(loadInst), ctx);
-                        compLoadIds.push_back(loadPtr->result_id());
-                    }
-
-                    const uint32_t compositeId = ctx->TakeNextId();
-                    auto composite = MakeUnique<Instruction>(
-                        ctx, spv::Op::OpCompositeConstruct, vec3TypeId, compositeId,
-                        std::initializer_list<Operand>{});
-                    for (uint32_t cId : compLoadIds) {
-                        composite->AddOperand({SPV_OPERAND_TYPE_ID, {cId}});
-                    }
-                    InsertBefore(block, load, std::move(composite), ctx);
+                    const uint32_t compositeId =
+                        BuildCompositeLoad(ctx, block, load, load->type_id(), ptrId, vec3ToArr3, load);
 
                     ctx->ReplaceAllUsesWith(load->result_id(), compositeId);
                     ctx->KillNamesAndDecorates(load->result_id());
@@ -358,10 +523,9 @@ namespace MobileGL {
                 }
 
                 // =====================================================================
-                // Phase 5: Rewrite whole-vec3 OpStore.
-                //   OpStore %ptr %vec3val  (ptr is now ptr_Workgroup_arr3)
-                //   -> 3x OpCompositeExtract %float %val %c
-                //   -> 3x OpAccessChain %ptr_float %ptr %c + OpStore %ptr_c %comp_c
+                // Phase 5: Rewrite whole-composite OpStore.
+                //   OpStore %ptr %vec3val      -> per-component scalar stores
+                //   OpStore %ptr %arr_v3float  -> per-element vec3 stores
                 // =====================================================================
                 std::vector<Instruction*> storesToRewrite;
                 for (auto& func : *ctx->module()) {
@@ -375,7 +539,12 @@ namespace MobileGL {
                             if (ptrDef == nullptr) {
                                 continue;
                             }
-                            if (ptrArr3TypeIds.find(ptrDef->type_id()) == ptrArr3TypeIds.end()) {
+                            if (decomposedPtrTypeIds.find(ptrDef->type_id()) == decomposedPtrTypeIds.end()) {
+                                continue;
+                            }
+                            const uint32_t valId = inst.GetSingleWordInOperand(1);
+                            Instruction* valDef = defUseMgr->GetDef(valId);
+                            if (valDef == nullptr || FindVec3LeafTypeId(ctx, valDef->type_id()) == 0) {
                                 continue;
                             }
                             storesToRewrite.push_back(&inst);
@@ -387,56 +556,15 @@ namespace MobileGL {
                     BasicBlock* block = ctx->get_instr_block(store);
                     const uint32_t ptrId = store->GetSingleWordInOperand(0);
                     const uint32_t valId = store->GetSingleWordInOperand(1);
-                    Instruction* ptrDef = defUseMgr->GetDef(ptrId);
-                    const uint32_t arr3TypeId = ptrDef->type_id() == 0
-                        ? 0
-                        : defUseMgr->GetDef(ptrDef->type_id())->GetSingleWordInOperand(1);
-                    // The pointee is the scalar array [3]; element type is the scalar.
-                    Instruction* arr3TypeInst = defUseMgr->GetDef(arr3TypeId);
-                    const uint32_t scalarTypeId = arr3TypeInst->GetSingleWordInOperand(0);
-                    const uint32_t ptrScalarTypeId = typeMgr->FindPointerToType(
-                        scalarTypeId, spv::StorageClass::Workgroup);
-
-                    for (uint32_t c = 0; c < 3; ++c) {
-                        const uint32_t constCId = constMgr->GetUIntConstId(c);
-                        // Extract component c from the stored value.
-                        const uint32_t extractId = ctx->TakeNextId();
-                        auto extract = MakeUnique<Instruction>(
-                            ctx, spv::Op::OpCompositeExtract, scalarTypeId, extractId,
-                            std::initializer_list<Operand>{
-                                {SPV_OPERAND_TYPE_ID, {valId}},
-                                {SPV_OPERAND_TYPE_LITERAL_INTEGER, {c}}});
-                        InsertBefore(block, store, std::move(extract), ctx);
-
-                        // Access chain into the array at index c.
-                        const uint32_t acId = ctx->TakeNextId();
-                        auto acInst = MakeUnique<Instruction>(
-                            ctx, spv::Op::OpAccessChain, ptrScalarTypeId, acId,
-                            std::initializer_list<Operand>{
-                                {SPV_OPERAND_TYPE_ID, {ptrId}},
-                                {SPV_OPERAND_TYPE_ID, {constCId}}});
-                        InsertBefore(block, store, std::move(acInst), ctx);
-
-                        // Store the component.
-                        auto compStore = MakeUnique<Instruction>(
-                            ctx, spv::Op::OpStore, 0, 0,
-                            std::initializer_list<Operand>{
-                                {SPV_OPERAND_TYPE_ID, {acId}},
-                                {SPV_OPERAND_TYPE_ID, {extractId}}});
-                        // Copy memory operands (alignment etc.) from original store.
-                        for (uint32_t opIdx = 2; opIdx < store->NumInOperands(); ++opIdx) {
-                            compStore->AddOperand(Operand(store->GetInOperand(opIdx)));
-                        }
-                        InsertBefore(block, store, std::move(compStore), ctx);
-                    }
-
+                    Instruction* valDef = defUseMgr->GetDef(valId);
+                    BuildCompositeStore(ctx, block, store, valDef->type_id(), ptrId, valId, vec3ToArr3, store);
                     ctx->KillInst(store);
                 }
 
                 // =====================================================================
                 // Phase 6: Assert on unsupported atomic/CopyMemory on vec3 pointers.
                 //   After phases 3-5, any remaining instruction whose pointer operand's
-                //   type is ptr_Workgroup_vec3 indicates an unsupported pattern.
+                //   type is a decomposed Workgroup pointer indicates an unsupported pattern.
                 // =====================================================================
                 for (auto& func : *ctx->module()) {
                     for (auto& bb : func) {
@@ -466,8 +594,8 @@ namespace MobileGL {
                             if (ptrDef == nullptr) {
                                 continue;
                             }
-                            if (ptrVec3ToPtrArr3.find(ptrDef->type_id()) !=
-                                ptrVec3ToPtrArr3.end()) {
+                            if (decomposedPtrTypeIds.find(ptrDef->type_id()) !=
+                                decomposedPtrTypeIds.end()) {
                                 MOBILEGL_ASSERT(false,
                                     "DecomposeWorkgroupVec3Pass: unsupported atomic/CopyMemory "
                                     "on workgroup vec3 pointer");
