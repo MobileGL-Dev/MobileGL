@@ -178,17 +178,54 @@ jobs:
           path: trace-fixtures/**
           if-no-files-found: error
 
+  android-avd:
+    name: android avd image
+    runs-on: ubuntu-latest
+    env:
+      AVD_NAME: mobilegl-ci
+      ANDROID_AVD_HOME: ${{ github.workspace }}/.android/avd
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Restore Android AVD cache
+        id: android-avd-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ env.ANDROID_AVD_HOME }}
+            /usr/local/lib/android/sdk/emulator
+            /usr/local/lib/android/sdk/platform-tools
+            /usr/local/lib/android/sdk/platforms/android-35
+            /usr/local/lib/android/sdk/system-images/android-35/google_apis/x86_64
+          key: ${{ runner.os }}-mobilegl-avd-api35-google_apis-x86_64-pixel_6-v1-${{ hashFiles('android-plugin/run-avd-ci.sh') }}
+
+      - name: Create AVD
+        if: steps.android-avd-cache.outputs.cache-hit != 'true'
+        run: |
+          sh android-plugin/run-avd-ci.sh create \
+            --api-level 35 \
+            --target google_apis \
+            --arch x86_64 \
+            --profile pixel_6 \
+            --avd-name "${AVD_NAME}"
+
   retrace:
     name: retrace (${{ matrix.backend.name }}, ${{ matrix.case.name }})
     runs-on: ubuntu-latest
     needs:
       - build
+      - android-avd
       - trace-cases
       - trace-fixtures
-    if: ${{ always() && needs.build.result == 'success' && needs.trace-cases.result == 'success' }}
+    if: ${{ always() && needs.build.result == 'success' && needs.android-avd.result == 'success' && needs.trace-cases.result == 'success' }}
     timeout-minutes: 75
     env:
-      AVD_NAME: mobilegl-${{ matrix.backend.id }}
+      AVD_NAME: mobilegl-ci
+      ANDROID_AVD_HOME: ${{ github.workspace }}/.android/avd
     strategy:
       fail-fast: false
       max-parallel: 4
@@ -235,6 +272,18 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
+      - name: Restore Android AVD cache
+        id: android-avd-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ${{ env.ANDROID_AVD_HOME }}
+            /usr/local/lib/android/sdk/emulator
+            /usr/local/lib/android/sdk/platform-tools
+            /usr/local/lib/android/sdk/platforms/android-35
+            /usr/local/lib/android/sdk/system-images/android-35/google_apis/x86_64
+          key: ${{ runner.os }}-mobilegl-avd-api35-google_apis-x86_64-pixel_6-v1-${{ hashFiles('android-plugin/run-avd-ci.sh') }}
+
       - name: Download retrace APKs
         uses: actions/download-artifact@v4
         with:
@@ -249,6 +298,7 @@ jobs:
           sudo udevadm trigger --name-match=kvm
 
       - name: Create AVD
+        if: steps.android-avd-cache.outputs.cache-hit != 'true'
         run: |
           sh android-plugin/run-avd-ci.sh create \
             --api-level 35 \
