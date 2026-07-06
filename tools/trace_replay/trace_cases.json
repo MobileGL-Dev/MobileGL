@@ -255,6 +255,7 @@
       "name": "minecraft-1.21.4-fabric-iris-derivative-main-d24.4.14-in-world",
       "trace_archive": "minecraft-1.21.4-fabric-iris-derivative-main-d24.4.14-in-world.tgz",
       "golden": "minecraft-1.21.4-fabric-iris-derivative-main-d24.4.14-in-world.0000145353.png",
+      "alternate_golden": "minecraft-1.21.4-fabric-iris-derivative-main-d24.4.14-in-world.0000145353-android-angle.png",
       "target_call": 145353
     }
   ]
