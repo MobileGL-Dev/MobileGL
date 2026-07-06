@@ -2330,6 +2330,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
     void MemoryBarrier(GLbitfield barriers) {
         g_GLESFuncs.glMemoryBarrier(barriers);
+        if (g_GLESCapabilities.GLESRendererString.find("ANGLE") != String::npos) {
+            g_GLESFuncs.glFlush();
+        }
     }
 
     void MemoryBarrierByRegion(GLbitfield barriers) {
