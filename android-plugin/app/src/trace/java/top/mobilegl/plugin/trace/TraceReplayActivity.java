@@ -113,7 +113,8 @@ public final class TraceReplayActivity extends Activity {
                 request.cropHeight,
                 request.angleLibraryDir,
                 request.useAngle,
-                request.usePbuffer
+                request.usePbuffer,
+                request.avoidAngleLlvmpipeSamplerMipmapMinFilter
         );
         Log.i(TAG, result.toString());
         TraceReplayResult finalResult = result;
@@ -142,7 +143,8 @@ public final class TraceReplayActivity extends Activity {
             int cropHeight,
             String angleLibraryDir,
             boolean useAngle,
-            boolean usePbuffer
+            boolean usePbuffer,
+            boolean avoidAngleLlvmpipeSamplerMipmapMinFilter
     );
 
     private static final class TraceReplayRequest {
@@ -164,6 +166,7 @@ public final class TraceReplayActivity extends Activity {
         final String angleLibraryDir;
         final boolean useAngle;
         final boolean usePbuffer;
+        final boolean avoidAngleLlvmpipeSamplerMipmapMinFilter;
 
         private TraceReplayRequest(
                 String tracePath,
@@ -183,7 +186,8 @@ public final class TraceReplayActivity extends Activity {
                 int cropHeight,
                 String angleLibraryDir,
                 boolean useAngle,
-                boolean usePbuffer
+                boolean usePbuffer,
+                boolean avoidAngleLlvmpipeSamplerMipmapMinFilter
         ) {
             this.tracePath = tracePath;
             this.goldenPath = goldenPath;
@@ -203,6 +207,7 @@ public final class TraceReplayActivity extends Activity {
             this.angleLibraryDir = angleLibraryDir;
             this.useAngle = useAngle;
             this.usePbuffer = usePbuffer;
+            this.avoidAngleLlvmpipeSamplerMipmapMinFilter = avoidAngleLlvmpipeSamplerMipmapMinFilter;
         }
 
         static TraceReplayRequest from(Intent intent, File filesDir, String nativeLibraryDir, String defaultBackend) {
@@ -226,7 +231,8 @@ public final class TraceReplayActivity extends Activity {
                     intent.getIntExtra("crop_height", 0),
                     readString(intent, "angle_library_dir", nativeLibraryDir),
                     intent.getBooleanExtra("use_angle", false),
-                    intent.getBooleanExtra("use_pbuffer", false)
+                    intent.getBooleanExtra("use_pbuffer", false),
+                    intent.getBooleanExtra("avoid_angle_llvmpipe_sampler_mipmap_min_filter", false)
             );
         }
 

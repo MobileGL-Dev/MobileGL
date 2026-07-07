@@ -149,6 +149,11 @@ bool LoadMobileGL(const Request& request, std::string& error) {
         unsetenv("MOBILEGL_RETRACE_USE_ANGLE");
         unsetenv("MOBILEGL_RETRACE_ANGLE_DIR");
     }
+    if (request.avoidAngleLlvmpipeSamplerMipmapMinFilter) {
+        setenv("MOBILEGL_ANGLE_LLVMPIPE_AVOID_SAMPLER_MIPMAP_MIN_FILTER", "1", 1);
+    } else {
+        unsetenv("MOBILEGL_ANGLE_LLVMPIPE_AVOID_SAMPLER_MIPMAP_MIN_FILTER");
+    }
 
     void* handle = dlopen(request.mobileGlLibrary.c_str(), RTLD_NOW | RTLD_GLOBAL);
     if (handle == nullptr) {
@@ -870,6 +875,8 @@ bool WriteResultJson(const Request& request, const Result& result) {
     file << "  \"ssimThreshold\": " << request.ssimThreshold << ",\n";
     file << "  \"useAngle\": " << (UseAngleForRequest(request) ? "true" : "false") << ",\n";
     file << "  \"usePbuffer\": " << (request.usePbuffer ? "true" : "false") << ",\n";
+    file << "  \"avoidAngleLlvmpipeSamplerMipmapMinFilter\": "
+         << (request.avoidAngleLlvmpipeSamplerMipmapMinFilter ? "true" : "false") << ",\n";
     file << "  \"holdMs\": " << request.holdMs << ",\n";
     file << "  \"mismatchPixels\": " << result.mismatchPixels << "\n";
     file << "}\n";

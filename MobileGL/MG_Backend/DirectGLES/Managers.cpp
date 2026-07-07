@@ -25,20 +25,28 @@
 #include <MG_State/GLState/FramebufferState/FramebufferObject.h>
 #include <algorithm>
 #include <cctype>
+#include <cstdlib>
+#include <cstring>
 
 namespace MobileGL::MG_Backend::DirectGLES {
     constexpr Bool PREFER_MAP_BUFFER_RANGE_FOR_BUFFER_SYNC = false;
     constexpr const char* BASE_INSTANCE_UNIFORM_NAME = "mg_BaseInstance";
 
-    static Bool ShouldAvoidMipmapMinFilterOnAngleLlvmpipe() {
+    static Bool IsAngleLlvmpipeRenderer() {
         return g_GLESCapabilities.GLESRendererString.find("ANGLE") != String::npos &&
                g_GLESCapabilities.GLESRendererString.find("llvmpipe") != String::npos;
     }
 
-    static GLenum ResolveBackendMinFilter(const SamplerParameters& samplerParams) {
+    static Bool ShouldAvoidSamplerMipmapMinFilterOnAngleLlvmpipe() {
+        const char* value = std::getenv("MOBILEGL_ANGLE_LLVMPIPE_AVOID_SAMPLER_MIPMAP_MIN_FILTER");
+        return value != nullptr && std::strcmp(value, "1") == 0 && IsAngleLlvmpipeRenderer();
+    }
+
+    static GLenum ResolveBackendMinFilter(const SamplerParameters& samplerParams,
+                                          Bool avoidMipmapMinFilter) {
         GLenum filter = MG_Util::ConvertSamplerFilterModeToGLEnum(samplerParams.minFilter,
                                                                   samplerParams.mipmapMode);
-        if (!ShouldAvoidMipmapMinFilterOnAngleLlvmpipe()) {
+        if (!avoidMipmapMinFilter) {
             return filter;
         }
         switch (filter) {
@@ -1214,7 +1222,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             if (m_cacheSamplerParameters.minFilter != samplerParams.minFilter ||
                 m_cacheSamplerParameters.mipmapMode != samplerParams.mipmapMode) {
                 g_GLESFuncs.glTexParameteri(target, GL_TEXTURE_MIN_FILTER,
-                                            (GLint)ResolveBackendMinFilter(samplerParams));
+                                            (GLint)ResolveBackendMinFilter(samplerParams, IsAngleLlvmpipeRenderer()));
                 m_cacheSamplerParameters.minFilter = samplerParams.minFilter;
                 m_cacheSamplerParameters.mipmapMode = samplerParams.mipmapMode;
             }
@@ -1962,7 +1970,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
             if (m_cacheSamplerParameters.minFilter != samplerParams.minFilter ||
                 m_cacheSamplerParameters.mipmapMode != samplerParams.mipmapMode) {
                 g_GLESFuncs.glSamplerParameteri(m_backendSamplerId, GL_TEXTURE_MIN_FILTER,
-                                                (GLint)ResolveBackendMinFilter(samplerParams));
+                                                (GLint)ResolveBackendMinFilter(
+                                                    samplerParams,
+                                                    ShouldAvoidSamplerMipmapMinFilterOnAngleLlvmpipe()));
                 m_cacheSamplerParameters.minFilter = samplerParams.minFilter;
                 m_cacheSamplerParameters.mipmapMode = samplerParams.mipmapMode;
             }

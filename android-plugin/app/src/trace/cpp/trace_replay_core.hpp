@@ -35,6 +35,7 @@ struct Request {
     double ssimThreshold = 0.99;
     bool useAngle = false;
     bool usePbuffer = true;
+    bool avoidAngleLlvmpipeSamplerMipmapMinFilter = false;
     int holdMs = 0;
 };
 

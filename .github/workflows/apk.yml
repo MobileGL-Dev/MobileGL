@@ -78,12 +78,15 @@ jobs:
       - name: Download ANGLE x86_64 libraries
         run: |
           angle_dir="android-plugin/app/src/trace/jniLibs/x86_64"
-          angle_base="https://raw.githubusercontent.com/FCL-Team/FoldCraftLauncher/main/FCLauncher/src/main/jniLibs/x86_64"
+          angle_commit="f2a3d510dffd8f6540a52e1a7d0c5787d151075b"
+          angle_base="https://raw.githubusercontent.com/FCL-Team/FoldCraftLauncher/${angle_commit}/FCLauncher/src/main/jniLibs/x86_64"
           mkdir -p "${angle_dir}"
           curl -L --fail --retry 3 -o "${angle_dir}/libEGL_angle.so" "${angle_base}/libEGL_angle.so"
           curl -L --fail --retry 3 -o "${angle_dir}/libGLESv2_angle.so" "${angle_base}/libGLESv2_angle.so"
           test -s "${angle_dir}/libEGL_angle.so"
           test -s "${angle_dir}/libGLESv2_angle.so"
+          echo "c41828768d089899fa058ec0bee711a91be88347f29bdb935223da6be1149c40  ${angle_dir}/libEGL_angle.so" | sha256sum -c -
+          echo "e4f820d99f94365c66df868c7740fef142fe5c0cd7c941790a9e30638857ca4d  ${angle_dir}/libGLESv2_angle.so" | sha256sum -c -
 
       - name: Build retrace APKs
         run: gradle --no-daemon -p android-plugin :app:assembleEsprytTraceRelease :app:assembleMagmaTraceRelease -Pmobilegl.abis=all -Pmobilegl.debuggableRelease=true -Pmobilegl.logLevel=MOBILEGL_LOG_LEVEL_INFO --parallel --max-workers "$(nproc)"
@@ -322,6 +325,19 @@ jobs:
           MOBILEGL_VULKAN_R11G11B10F_FALLBACK: ${{ matrix.backend.name == 'DirectVulkan' && '1' || '0' }}
         run: |
           apk_file="$(find android-retrace-apks -name '${{ matrix.backend.apk }}' -print -quit)"
+          extra_retrace_args=()
+          if [ "${{ matrix.backend.name }}" = "DirectGLES" ] && [ "${{ matrix.case.name }}" = "minecraft-1.21.4-fabric-iris-bliss-in-world" ]; then
+            angle_override_dir="${RUNNER_TEMP}/mobilegl-angle-bliss-x86_64"
+            angle_override_commit="bdcc96ac11c79001018ae4375eb73cb54a9f682f"
+            angle_override_base="https://raw.githubusercontent.com/FCL-Team/FoldCraftLauncher/${angle_override_commit}/FCLauncher/src/main/jniLibs/x86_64"
+            mkdir -p "${angle_override_dir}"
+            curl -L --fail --retry 3 -o "${angle_override_dir}/libEGL_angle.so" "${angle_override_base}/libEGL_angle.so"
+            curl -L --fail --retry 3 -o "${angle_override_dir}/libGLESv2_angle.so" "${angle_override_base}/libGLESv2_angle.so"
+            echo "d0f4298ccc770cc801fc52e21733521646161e8a4adb3bd0052d9a1b57ee0ca8  ${angle_override_dir}/libEGL_angle.so" | sha256sum -c -
+            echo "66fdc867e552192d553d59095ea2e3cef4829de65c356f1fd826027b1905972e  ${angle_override_dir}/libGLESv2_angle.so" | sha256sum -c -
+            extra_retrace_args+=(--angle-library-dir "${angle_override_dir}")
+            extra_retrace_args+=(--avoid-angle-llvmpipe-sampler-mipmap-min-filter)
+          fi
           timeout "$(( ${{ matrix.case.timeout_seconds }} + 300 ))" sh android-plugin/trace-replay-ci.sh \
             --apk-file "${apk_file}" \
             --package "${{ matrix.backend.package }}" \
@@ -341,7 +357,8 @@ jobs:
             --crop-y "${{ matrix.case.crop_y }}" \
             --crop-width "${{ matrix.case.crop_width }}" \
             --crop-height "${{ matrix.case.crop_height }}" \
-            --timeout-seconds "${{ matrix.case.timeout_seconds }}"
+            --timeout-seconds "${{ matrix.case.timeout_seconds }}" \
+            "${extra_retrace_args[@]}"
 
       - name: Collect retrace summary inputs
         if: always()
