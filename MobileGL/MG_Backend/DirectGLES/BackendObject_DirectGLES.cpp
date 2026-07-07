@@ -251,7 +251,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         void LogGLESFormatCaveat(TextureInternalFormat logicalFormat,
                                  SizeT targetIndex,
                                  const GLESProbeFormatInfo& fallbackInfo) {
-            MGLOG_I("Caveat: %s %s not fully supported. Reason: %s. Fallback: %s",
+            MGLOG_D("Caveat: %s %s not fully supported. Reason: %s. Fallback: %s",
                     GetFormatCapabilityTargetNameForLog(targetIndex).c_str(),
                     MG_Util::ConvertTextureInternalFormatToString(logicalFormat).c_str(),
                     fallbackInfo.Reason.c_str(),

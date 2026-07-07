@@ -225,7 +225,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         void LogVulkanFormatCaveat(TextureInternalFormat logicalFormat,
                                    SizeT targetIndex,
                                    TextureInternalFormat fallbackFormat) {
-            MGLOG_I("Caveat: %s %s not fully supported. Reason: native Vulkan format is not fully supported. Fallback: %s",
+            MGLOG_D("Caveat: %s %s not fully supported. Reason: native Vulkan format is not fully supported. Fallback: %s",
                     GetFormatCapabilityTargetNameForLog(targetIndex).c_str(),
                     MG_Util::ConvertTextureInternalFormatToString(logicalFormat).c_str(),
                     MG_Util::ConvertTextureInternalFormatToString(fallbackFormat).c_str());

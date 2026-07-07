@@ -163,16 +163,16 @@ namespace MobileGL::MG_Backend {
     void PrintFormatCapabilities(const FormatCapabilityCache& cache) {
         const SizeT formatNameWidth = GetPrintedFormatNameWidth();
 
-        MGLOG_I("Backend format capabilities:");
+        MGLOG_D("Backend format capabilities:");
         for (SizeT targetIndex = 0; targetIndex < kFormatCapabilityTargetCount; ++targetIndex) {
-            MGLOG_I("");
+            MGLOG_D("");
             const String targetName = GetFormatCapabilityTargetName(targetIndex);
-            MGLOG_I("- %s", targetName.c_str());
+            MGLOG_D("- %s", targetName.c_str());
             const String header = BuildFormatCapabilityHeader(formatNameWidth);
-            MGLOG_I("%s", header.c_str());
+            MGLOG_D("%s", header.c_str());
             for (SizeT formatIndex = 0; formatIndex < kFormatCapabilityFormatCount; ++formatIndex) {
                 const String row = BuildFormatCapabilityRow(cache, targetIndex, formatIndex, formatNameWidth);
-                MGLOG_I("%s", row.c_str());
+                MGLOG_D("%s", row.c_str());
             }
         }
     }
