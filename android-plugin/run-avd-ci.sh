@@ -113,7 +113,8 @@ create_avd() {
   ensure_android_avd_home
 
   system_image="system-images;android-${api_level};${target};${arch}"
-  "${sdkmanager_bin}" "platform-tools" "emulator" "platforms;android-${api_level}" "${system_image}"
+  yes | "${sdkmanager_bin}" --licenses >/dev/null
+  yes | "${sdkmanager_bin}" "platform-tools" "emulator" "platforms;android-${api_level}" "${system_image}"
   echo no | "${avdmanager_bin}" create avd --force --name "${avd_name}" --package "${system_image}" --device "${profile}"
 }
 
