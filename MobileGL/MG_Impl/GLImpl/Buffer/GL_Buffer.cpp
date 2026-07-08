@@ -1444,4 +1444,23 @@ namespace MobileGL::MG_Impl::GLImpl {
     void BindBufferRange(GLenum target, GLuint index, GLuint buffer, GLintptr offset, GLsizeiptr size) {
         BindBufferRange_State(target, index, buffer, offset, size);
     }
+
+    // ARB_multi_bind: defined by the spec as equivalent to a loop over the single-bind entry
+    // points (with buffer 0 resetting the binding point).
+    void BindBuffersBase(GLenum target, GLuint first, GLsizei count, const GLuint* buffers) {
+        for (GLsizei i = 0; i < count; ++i) {
+            BindBufferBase_State(target, first + i, buffers ? buffers[i] : 0);
+        }
+    }
+
+    void BindBuffersRange(GLenum target, GLuint first, GLsizei count, const GLuint* buffers, const GLintptr* offsets,
+                          const GLsizeiptr* sizes) {
+        for (GLsizei i = 0; i < count; ++i) {
+            if (!buffers || buffers[i] == 0) {
+                BindBufferBase_State(target, first + i, 0);
+            } else {
+                BindBufferRange_State(target, first + i, buffers[i], offsets ? offsets[i] : 0, sizes ? sizes[i] : 0);
+            }
+        }
+    }
 } // namespace MobileGL::MG_Impl::GLImpl

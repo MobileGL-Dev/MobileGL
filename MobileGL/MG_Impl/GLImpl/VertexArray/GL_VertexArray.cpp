@@ -47,6 +47,27 @@ namespace MobileGL::MG_Impl::GLImpl {
             return pname == GL_CURRENT_VERTEX_ATTRIB;
         }
 
+        static bool ValidateVertexBindingIndex(GLuint bindingindex, const char* funcName) {
+            if (bindingindex >= MG_State::GLState::VertexArrayObject::MAX_VERTEX_ATTRIB_BINDINGS) {
+                MG_State::pGLContext->RecordError(
+                    ErrorCode::InvalidValue,
+                    MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", funcName,
+                                                 "bindingindex exceeds GL_MAX_VERTEX_ATTRIB_BINDINGS."));
+                return false;
+            }
+            return true;
+        }
+
+        static SharedPtr<MG_State::GLState::VertexArrayObject> GetBoundVertexArrayOrError(const char* funcName) {
+            auto& vao = MG_State::pGLContext->GetBoundVertexArray();
+            if (!vao) {
+                MG_State::pGLContext->RecordError(
+                    ErrorCode::InvalidOperation,
+                    MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", funcName, "No vertex array object is bound."));
+            }
+            return vao;
+        }
+
         static bool ValidateVertexAttribPname(GLenum pname) {
             switch (pname) {
             case GL_VERTEX_ATTRIB_ARRAY_ENABLED:
@@ -260,51 +281,83 @@ namespace MobileGL::MG_Impl::GLImpl {
         vao->GetIndexBufferBindingSlot().Bind(bufferObject);
     }
 
+    static void VertexBufferBinding_State(const SharedPtr<MG_State::GLState::VertexArrayObject>& vao,
+                                          GLuint bindingindex, GLuint buffer, GLintptr offset, GLsizei stride,
+                                          const char* caller) {
+        if (!ValidateVertexBindingIndex(bindingindex, caller)) return;
+        if (offset < 0 || stride < 0) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidValue,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller, "offset and stride must be non-negative."));
+            return;
+        }
+        auto bufferObject = GetVertexArrayBufferObject_State(buffer, caller);
+        if (buffer != 0 && !bufferObject) return;
+
+        vao->SetBindingBuffer(bindingindex, bufferObject, static_cast<SizeT>(offset), stride);
+    }
+
     void VertexArrayVertexBuffer_State(GLuint vaobj, GLuint bindingindex, GLuint buffer, GLintptr offset,
                                        GLsizei stride) {
         auto vao = GetNamedVertexArrayObject_State(vaobj, "VertexArrayVertexBuffer_State");
         if (!vao) return;
-        if (!VertexArrayImpl::ValidateVertexAttributeIndex(bindingindex)) return;
-        if (offset < 0 || stride < 0) {
-            MG_State::pGLContext->RecordError(
-                ErrorCode::InvalidValue,
-                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", "VertexArrayVertexBuffer_State",
-                                             "offset and stride must be non-negative."));
-            return;
-        }
-        auto bufferObject = GetVertexArrayBufferObject_State(buffer, "VertexArrayVertexBuffer_State");
-        if (buffer != 0 && !bufferObject) return;
+        VertexBufferBinding_State(vao, bindingindex, buffer, offset, stride, "VertexArrayVertexBuffer_State");
+    }
 
-        const auto& attr = vao->GetAttribute(bindingindex);
-        vao->SetAttributeFormat(bindingindex, attr.Size, attr.Type, attr.Normalized, stride, static_cast<SizeT>(offset),
-                                attr.IsInteger);
-        vao->BindAttributeBuffer(bindingindex, bufferObject);
+    void VertexArrayVertexBuffers_State(GLuint vaobj, GLuint first, GLsizei count, const GLuint* buffers,
+                                        const GLintptr* offsets, const GLsizei* strides) {
+        auto vao = GetNamedVertexArrayObject_State(vaobj, "VertexArrayVertexBuffers_State");
+        if (!vao) return;
+        for (GLsizei i = 0; i < count; ++i) {
+            if (!buffers) {
+                VertexBufferBinding_State(vao, first + i, 0, 0, 16, "VertexArrayVertexBuffers_State");
+            } else {
+                VertexBufferBinding_State(vao, first + i, buffers[i], offsets ? offsets[i] : 0,
+                                          strides ? strides[i] : 16, "VertexArrayVertexBuffers_State");
+            }
+        }
+    }
+
+    static void VertexAttribFormatSeparate_State(const SharedPtr<MG_State::GLState::VertexArrayObject>& vao,
+                                                 GLuint attribindex, GLint size, GLenum type, GLboolean normalized,
+                                                 GLuint relativeoffset, Bool isInteger, const char* caller) {
+        if (!VertexArrayImpl::ValidateVertexAttributeIndex(attribindex)) return;
+
+        DataType dataType = MG_Util::ConvertGLEnumToDataType(type);
+        if (!VertexArrayImpl::ValidateVertexAttribPointerParams(attribindex, size, dataType, 0)) return;
+
+        vao->SetAttributeFormatSeparate(attribindex, size, dataType, normalized, isInteger, relativeoffset);
     }
 
     void VertexArrayAttribFormat_State(GLuint vaobj, GLuint attribindex, GLint size, GLenum type,
                                        GLboolean normalized, GLuint relativeoffset) {
         auto vao = GetNamedVertexArrayObject_State(vaobj, "VertexArrayAttribFormat_State");
         if (!vao) return;
-        if (!VertexArrayImpl::ValidateVertexAttributeIndex(attribindex)) return;
-
-        DataType dataType = MG_Util::ConvertGLEnumToDataType(type);
-        const auto& attr = vao->GetAttribute(attribindex);
-        if (!VertexArrayImpl::ValidateVertexAttribPointerParams(attribindex, size, dataType, attr.Stride)) return;
-
-        vao->SetAttributeFormat(attribindex, size, dataType, normalized, attr.Stride, relativeoffset, false);
+        VertexAttribFormatSeparate_State(vao, attribindex, size, type, normalized, relativeoffset, false,
+                                         "VertexArrayAttribFormat_State");
     }
 
     void VertexArrayAttribIFormat_State(GLuint vaobj, GLuint attribindex, GLint size, GLenum type,
                                         GLuint relativeoffset) {
         auto vao = GetNamedVertexArrayObject_State(vaobj, "VertexArrayAttribIFormat_State");
         if (!vao) return;
+        VertexAttribFormatSeparate_State(vao, attribindex, size, type, GL_FALSE, relativeoffset, true,
+                                         "VertexArrayAttribIFormat_State");
+    }
+
+    void VertexArrayAttribBinding_State(GLuint vaobj, GLuint attribindex, GLuint bindingindex) {
+        auto vao = GetNamedVertexArrayObject_State(vaobj, "VertexArrayAttribBinding_State");
+        if (!vao) return;
         if (!VertexArrayImpl::ValidateVertexAttributeIndex(attribindex)) return;
+        if (!ValidateVertexBindingIndex(bindingindex, "VertexArrayAttribBinding_State")) return;
+        vao->SetAttributeBinding(attribindex, bindingindex);
+    }
 
-        DataType dataType = MG_Util::ConvertGLEnumToDataType(type);
-        const auto& attr = vao->GetAttribute(attribindex);
-        if (!VertexArrayImpl::ValidateVertexAttribPointerParams(attribindex, size, dataType, attr.Stride)) return;
-
-        vao->SetAttributeFormat(attribindex, size, dataType, false, attr.Stride, relativeoffset, true);
+    void VertexArrayBindingDivisor_State(GLuint vaobj, GLuint bindingindex, GLuint divisor) {
+        auto vao = GetNamedVertexArrayObject_State(vaobj, "VertexArrayBindingDivisor_State");
+        if (!vao) return;
+        if (!ValidateVertexBindingIndex(bindingindex, "VertexArrayBindingDivisor_State")) return;
+        vao->SetBindingDivisor(bindingindex, divisor);
     }
 
     GLboolean IsVertexArray_State(GLuint array) {
@@ -638,6 +691,68 @@ namespace MobileGL::MG_Impl::GLImpl {
 
     void VertexArrayAttribIFormat(GLuint vaobj, GLuint attribindex, GLint size, GLenum type, GLuint relativeoffset) {
         VertexArrayAttribIFormat_State(vaobj, attribindex, size, type, relativeoffset);
+    }
+
+    void VertexArrayAttribBinding(GLuint vaobj, GLuint attribindex, GLuint bindingindex) {
+        VertexArrayAttribBinding_State(vaobj, attribindex, bindingindex);
+    }
+
+    void VertexArrayBindingDivisor(GLuint vaobj, GLuint bindingindex, GLuint divisor) {
+        VertexArrayBindingDivisor_State(vaobj, bindingindex, divisor);
+    }
+
+    void VertexArrayVertexBuffers(GLuint vaobj, GLuint first, GLsizei count, const GLuint* buffers,
+                                  const GLintptr* offsets, const GLsizei* strides) {
+        VertexArrayVertexBuffers_State(vaobj, first, count, buffers, offsets, strides);
+    }
+
+    void BindVertexBuffer(GLuint bindingindex, GLuint buffer, GLintptr offset, GLsizei stride) {
+        auto vao = GetBoundVertexArrayOrError("BindVertexBuffer");
+        if (!vao) return;
+        VertexBufferBinding_State(vao, bindingindex, buffer, offset, stride, "BindVertexBuffer");
+    }
+
+    void BindVertexBuffers(GLuint first, GLsizei count, const GLuint* buffers, const GLintptr* offsets,
+                           const GLsizei* strides) {
+        auto vao = GetBoundVertexArrayOrError("BindVertexBuffers");
+        if (!vao) return;
+        for (GLsizei i = 0; i < count; ++i) {
+            if (!buffers) {
+                VertexBufferBinding_State(vao, first + i, 0, 0, 16, "BindVertexBuffers");
+            } else {
+                VertexBufferBinding_State(vao, first + i, buffers[i], offsets ? offsets[i] : 0,
+                                          strides ? strides[i] : 16, "BindVertexBuffers");
+            }
+        }
+    }
+
+    void VertexAttribFormat(GLuint attribindex, GLint size, GLenum type, GLboolean normalized, GLuint relativeoffset) {
+        auto vao = GetBoundVertexArrayOrError("VertexAttribFormat");
+        if (!vao) return;
+        VertexAttribFormatSeparate_State(vao, attribindex, size, type, normalized, relativeoffset, false,
+                                         "VertexAttribFormat");
+    }
+
+    void VertexAttribIFormat(GLuint attribindex, GLint size, GLenum type, GLuint relativeoffset) {
+        auto vao = GetBoundVertexArrayOrError("VertexAttribIFormat");
+        if (!vao) return;
+        VertexAttribFormatSeparate_State(vao, attribindex, size, type, GL_FALSE, relativeoffset, true,
+                                         "VertexAttribIFormat");
+    }
+
+    void VertexAttribBinding(GLuint attribindex, GLuint bindingindex) {
+        auto vao = GetBoundVertexArrayOrError("VertexAttribBinding");
+        if (!vao) return;
+        if (!VertexArrayImpl::ValidateVertexAttributeIndex(attribindex)) return;
+        if (!ValidateVertexBindingIndex(bindingindex, "VertexAttribBinding")) return;
+        vao->SetAttributeBinding(attribindex, bindingindex);
+    }
+
+    void VertexBindingDivisor(GLuint bindingindex, GLuint divisor) {
+        auto vao = GetBoundVertexArrayOrError("VertexBindingDivisor");
+        if (!vao) return;
+        if (!ValidateVertexBindingIndex(bindingindex, "VertexBindingDivisor")) return;
+        vao->SetBindingDivisor(bindingindex, divisor);
     }
 
     void VertexAttribDivisor(GLuint index, GLuint divisor) {

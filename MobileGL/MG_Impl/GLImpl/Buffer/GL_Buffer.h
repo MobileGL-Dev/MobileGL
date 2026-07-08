@@ -45,5 +45,8 @@ namespace MobileGL::MG_Impl::GLImpl {
     void GenBuffers(GLsizei n, GLuint* buffers);
     void BindBufferBase(GLenum target, GLuint index, GLuint buffer);
     void BindBufferRange(GLenum target, GLuint index, GLuint buffer, GLintptr offset, GLsizeiptr size);
+    void BindBuffersBase(GLenum target, GLuint first, GLsizei count, const GLuint* buffers);
+    void BindBuffersRange(GLenum target, GLuint first, GLsizei count, const GLuint* buffers, const GLintptr* offsets,
+                          const GLsizeiptr* sizes);
 
 } // namespace MobileGL::MG_Impl::GLImpl

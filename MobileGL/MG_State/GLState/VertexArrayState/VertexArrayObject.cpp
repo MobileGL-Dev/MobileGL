@@ -51,6 +51,9 @@ namespace MobileGL::MG_State::GLState {
                                                SizeT offset, Bool isInteger) {
         if (index >= MAX_VERTEX_ATTRIBS) return;
 
+        // The classic pointer-style API takes back full ownership of the resolved fields.
+        m_attributeUsesBindingModel[index] = false;
+
         if (m_attributes[index].Size == size && m_attributes[index].Type == type &&
             m_attributes[index].Normalized == normalized && m_attributes[index].Stride == stride &&
             m_attributes[index].Offset == offset && m_attributes[index].IsInteger == isInteger) {
@@ -114,6 +117,91 @@ namespace MobileGL::MG_State::GLState {
     Uint VertexArrayObject::GetAttributeDivisor(Uint index) const {
         if (index >= MAX_VERTEX_ATTRIBS) return 0;
         return m_attributes[index].Divisor;
+    }
+
+    void VertexArrayObject::ResolveAttributeFromBinding(Uint attribIndex) {
+        if (attribIndex >= MAX_VERTEX_ATTRIBS) return;
+        if (!m_attributeUsesBindingModel[attribIndex]) return;
+
+        const Uint bindingIndex = m_attributeBindingIndex[attribIndex];
+        if (bindingIndex >= MAX_VERTEX_ATTRIB_BINDINGS) return;
+        const auto& binding = m_bindingPoints[bindingIndex];
+
+        auto& attr = m_attributes[attribIndex];
+
+        const SizeT resolvedOffset = binding.Offset + m_attributeRelativeOffset[attribIndex];
+        if (attr.Stride != binding.Stride || attr.Offset != resolvedOffset || attr.Divisor != binding.Divisor) {
+            attr.Stride = binding.Stride;
+            attr.Offset = resolvedOffset;
+            attr.Divisor = binding.Divisor;
+            BumpAttributeFormatVersion(attribIndex);
+        }
+
+        if (attr.Buffer != binding.Buffer) {
+            attr.Buffer = binding.Buffer;
+            BumpAttributeBufferVersion(attribIndex);
+        }
+    }
+
+    void VertexArrayObject::SetBindingBuffer(Uint bindingIndex, const SharedPtr<BufferObject>& buffer, SizeT offset,
+                                             int stride) {
+        if (bindingIndex >= MAX_VERTEX_ATTRIB_BINDINGS) return;
+
+        auto& binding = m_bindingPoints[bindingIndex];
+        binding.Buffer = buffer;
+        binding.Offset = offset;
+        binding.Stride = stride;
+
+        for (Uint attribIndex = 0; attribIndex < MAX_VERTEX_ATTRIBS; ++attribIndex) {
+            if (m_attributeBindingIndex[attribIndex] == bindingIndex) {
+                // Binding a vertex buffer to a binding point adopts every attribute currently
+                // mapped to that binding point into the binding model (the default mapping is
+                // attribute i -> binding i, which matches the GL 4.3 rules for state mixing).
+                m_attributeUsesBindingModel[attribIndex] = true;
+                ResolveAttributeFromBinding(attribIndex);
+            }
+        }
+    }
+
+    void VertexArrayObject::SetBindingDivisor(Uint bindingIndex, Uint divisor) {
+        if (bindingIndex >= MAX_VERTEX_ATTRIB_BINDINGS) return;
+
+        m_bindingPoints[bindingIndex].Divisor = divisor;
+
+        for (Uint attribIndex = 0; attribIndex < MAX_VERTEX_ATTRIBS; ++attribIndex) {
+            if (m_attributeBindingIndex[attribIndex] == bindingIndex && m_attributeUsesBindingModel[attribIndex]) {
+                ResolveAttributeFromBinding(attribIndex);
+            }
+        }
+    }
+
+    void VertexArrayObject::SetAttributeBinding(Uint attribIndex, Uint bindingIndex) {
+        if (attribIndex >= MAX_VERTEX_ATTRIBS) return;
+        if (bindingIndex >= MAX_VERTEX_ATTRIB_BINDINGS) return;
+
+        m_attributeBindingIndex[attribIndex] = bindingIndex;
+        m_attributeUsesBindingModel[attribIndex] = true;
+        ResolveAttributeFromBinding(attribIndex);
+    }
+
+    void VertexArrayObject::SetAttributeFormatSeparate(Uint attribIndex, int size, DataType type, Bool normalized,
+                                                       Bool isInteger, Uint relativeOffset) {
+        if (attribIndex >= MAX_VERTEX_ATTRIBS) return;
+        if (size < 1 || size > 4) return;
+
+        auto& attr = m_attributes[attribIndex];
+        if (attr.Size != size || attr.Type != type || attr.Normalized != normalized || attr.IsInteger != isInteger ||
+            m_attributeRelativeOffset[attribIndex] != relativeOffset) {
+            attr.Size = size;
+            attr.Type = type;
+            attr.Normalized = normalized;
+            attr.IsInteger = isInteger;
+            m_attributeRelativeOffset[attribIndex] = relativeOffset;
+            BumpAttributeFormatVersion(attribIndex);
+        }
+
+        m_attributeUsesBindingModel[attribIndex] = true;
+        ResolveAttributeFromBinding(attribIndex);
     }
 
     void VertexArrayObject::BumpAttributeFormatVersion(Uint index) {

@@ -39,6 +39,17 @@ namespace MobileGL::MG_Impl::GLImpl {
     void VertexArrayAttribFormat(GLuint vaobj, GLuint attribindex, GLint size, GLenum type, GLboolean normalized,
                                  GLuint relativeoffset);
     void VertexArrayAttribIFormat(GLuint vaobj, GLuint attribindex, GLint size, GLenum type, GLuint relativeoffset);
+    void VertexArrayAttribBinding(GLuint vaobj, GLuint attribindex, GLuint bindingindex);
+    void VertexArrayBindingDivisor(GLuint vaobj, GLuint bindingindex, GLuint divisor);
+    void VertexArrayVertexBuffers(GLuint vaobj, GLuint first, GLsizei count, const GLuint* buffers,
+                                  const GLintptr* offsets, const GLsizei* strides);
+    void BindVertexBuffer(GLuint bindingindex, GLuint buffer, GLintptr offset, GLsizei stride);
+    void BindVertexBuffers(GLuint first, GLsizei count, const GLuint* buffers, const GLintptr* offsets,
+                           const GLsizei* strides);
+    void VertexAttribFormat(GLuint attribindex, GLint size, GLenum type, GLboolean normalized, GLuint relativeoffset);
+    void VertexAttribIFormat(GLuint attribindex, GLint size, GLenum type, GLuint relativeoffset);
+    void VertexAttribBinding(GLuint attribindex, GLuint bindingindex);
+    void VertexBindingDivisor(GLuint bindingindex, GLuint divisor);
     void VertexAttribDivisor(GLuint index, GLuint divisor);
     GLboolean IsVertexArray(GLuint array);
     void DisableVertexAttribArray(GLuint index);
