@@ -266,12 +266,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 }
             }
 
-            // Indirect Buffer Object
+            // Indirect Buffer Object - must also be bound to GL_DRAW_INDIRECT_BUFFER on the ES
+            // context since indirect draws now execute natively on the GPU.
             if (includeIndirectBuffer) {
                 auto& possibleIndirectBuffer =
                     MG_State::pGLContext->GetBufferBindingSlot(BufferTarget::DrawIndirect).GetBoundObject();
                 if (possibleIndirectBuffer) {
-                    CreateAndSyncBufferObject(possibleIndirectBuffer);
+                    SyncBoundBuffer(BufferTarget::DrawIndirect, GL_DRAW_INDIRECT_BUFFER);
                 }
             }
 
