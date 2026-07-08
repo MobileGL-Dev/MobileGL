@@ -126,15 +126,27 @@ namespace MobileGL::MG_Backend::DirectGLES {
             Uint id = 0;
             SizeT storageSize = 0;
             Bool storageInitialized = false;
+            // ES context generation this resource's id belongs to; ids from a
+            // destroyed context are invalid and must not be deleted or reused.
+            Uint contextGeneration = 0;
+            // Frontend change serial the backend storage reflects. When immediate
+            // ops cannot run (ops unregistered, no current context), this lags and
+            // EnsureBufferResource falls back to a full re-upload.
+            Uint64 syncedChangeSerial = 0;
             // Ops that arrived while no ES context was current on the calling thread
             // (or before storage existed); replayed by EnsureBufferResource.
             Bool pendingRespecify = false;
             VecRange1D pendingRanges;
         };
 
-        // Registered as the frontend's BufferBackendOps at backend init.
+        // Registered as the frontend's BufferBackendOps at backend init and on
+        // every MakeCurrent (the ES context can be destroyed and recreated, e.g.
+        // by the trace replayer's probe context).
         void RegisterBufferBackendOps();
         void UnregisterBufferBackendOps();
+        // The ES context died: unregister ops, invalidate all outstanding GL ids
+        // (they belonged to the dead context) and drop deferred deletes.
+        void OnBackendContextDestroyed();
 
         // Get-or-create the backend resource and bring its storage up to date
         // (creates the GL buffer, replays pending ops, pushes persistent-mapped

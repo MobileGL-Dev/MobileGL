@@ -123,6 +123,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
             Uint g_boundArrayBufferId = 0;
             Bool g_boundArrayBufferKnown = false;
 
+            // Bumped whenever the backend ES context is destroyed; resources with
+            // an older generation hold ids from a dead context.
+            Uint g_bufferContextGeneration = 1;
+
             // Resources whose owning BufferObject died; ids deleted at the next
             // sync point with a current ES context.
             Vector<SharedPtr<BackendBufferResource>> g_deferredBufferReleases;
@@ -133,7 +137,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
 
             Bool CanTouchGLNow() {
-                return false && DirectGLES::IsBackendContextCurrentOnThisThread(); // BISECT-EXPERIMENT
+                return DirectGLES::IsBackendContextCurrentOnThisThread();
             }
 
             // (Re)specify backend storage from the shadow copy: glBufferData.
@@ -151,6 +155,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 resource.storageInitialized = true;
                 resource.pendingRespecify = false;
                 resource.pendingRanges.clear();
+                resource.syncedChangeSerial = bufferObject.GetChangeSerial();
             }
 
             Bool StorageMatches(const GLESBufferResource& resource, const BufferObject& bufferObject) {
@@ -171,7 +176,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
             void Ops_Respecify(BufferObject& bufferObject) {
                 auto* resource = ResourceOf(bufferObject);
                 if (!resource) return; // lazy: EnsureBufferResource full-uploads on creation
-                if (!CanTouchGLNow() || resource->id == 0) {
+                if (!CanTouchGLNow() || resource->id == 0 ||
+                    resource->contextGeneration != g_bufferContextGeneration) {
                     resource->pendingRespecify = true;
                     resource->pendingRanges.clear();
                     return;
@@ -190,11 +196,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 auto* resource = ResourceOf(bufferObject);
                 if (!resource) return;
                 if (resource->pendingRespecify) return; // full re-upload pending anyway
-                if (!CanTouchGLNow() || resource->id == 0 || !StorageMatches(*resource, bufferObject)) {
+                if (!CanTouchGLNow() || resource->id == 0 ||
+                    resource->contextGeneration != g_bufferContextGeneration ||
+                    !StorageMatches(*resource, bufferObject)) {
                     resource->pendingRanges.Add({offset, offset + size});
                     return;
                 }
                 UploadRangeNow(*resource, bufferObject, offset, offset + size);
+                resource->syncedChangeSerial = bufferObject.GetChangeSerial();
             }
 
             void Ops_FlushMappedRange(BufferObject& bufferObject, Range1D range,
@@ -202,7 +211,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 auto* resource = ResourceOf(bufferObject);
                 if (!resource) return;
                 if (resource->pendingRespecify) return;
-                if (!CanTouchGLNow() || resource->id == 0 || !StorageMatches(*resource, bufferObject)) {
+                if (!CanTouchGLNow() || resource->id == 0 ||
+                    resource->contextGeneration != g_bufferContextGeneration ||
+                    !StorageMatches(*resource, bufferObject)) {
                     resource->pendingRanges.Add(range);
                     return;
                 }
@@ -227,17 +238,23 @@ namespace MobileGL::MG_Backend::DirectGLES {
                         Memcpy(mappedData, bufferObject.GetDataReadOnly()->data() + range.start,
                                range.end - range.start);
                         g_GLESFuncs.glUnmapBuffer(TempBufferTarget);
+                        resource->syncedChangeSerial = bufferObject.GetChangeSerial();
                         return;
                     }
                     MGLOG_E("Failed to map buffer with ID: %u for flush, falling back to glBufferSubData",
                             resource->id);
                 }
                 UploadRangeNow(*resource, bufferObject, range.start, range.end);
+                resource->syncedChangeSerial = bufferObject.GetChangeSerial();
             }
 
             void Ops_OnDestroy(SharedPtr<BackendBufferResource>&& resource) {
                 if (!resource) return;
                 auto* glesResource = static_cast<GLESBufferResource*>(resource.get());
+                if (glesResource->contextGeneration != g_bufferContextGeneration) {
+                    glesResource->id = 0; // id belonged to a destroyed context
+                    return;
+                }
                 if (CanTouchGLNow()) {
                     if (glesResource->id != 0) {
                         if (g_boundArrayBufferKnown && g_boundArrayBufferId == glesResource->id) {
@@ -274,6 +291,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
             g_deferredBufferReleases.clear();
         }
 
+        void OnBackendContextDestroyed() {
+            UnregisterBufferBackendOps();
+            ++g_bufferContextGeneration;
+        }
+
         void ProcessDeferredBufferReleases() {
             if (!CanTouchGLNow()) return;
             Vector<SharedPtr<BackendBufferResource>> releases;
@@ -283,6 +305,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
             for (auto& resource : releases) {
                 auto* glesResource = static_cast<GLESBufferResource*>(resource.get());
+                if (glesResource->contextGeneration != g_bufferContextGeneration) {
+                    glesResource->id = 0;
+                    continue;
+                }
                 if (glesResource->id != 0) {
                     if (g_boundArrayBufferKnown && g_boundArrayBufferId == glesResource->id) {
                         InvalidateArrayBufferBindingCache();
@@ -310,6 +336,16 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 newResource->pendingRespecify = true;
                 resource = newResource.get();
                 bufferObject->SetBackendResource(std::move(newResource));
+            }
+
+            if (resource->contextGeneration != g_bufferContextGeneration) {
+                // The id (if any) belonged to a destroyed ES context.
+                resource->id = 0;
+                resource->storageInitialized = false;
+                resource->storageSize = 0;
+                resource->pendingRespecify = true;
+                resource->pendingRanges.clear();
+                resource->contextGeneration = g_bufferContextGeneration;
             }
 
             if (resource->id == 0) {
@@ -340,6 +376,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     UploadRangeNow(*resource, *bufferObject, std::min(range.start, end), end);
                 }
                 resource->pendingRanges.clear();
+                resource->syncedChangeSerial = bufferObject->GetChangeSerial();
+            } else if (resource->syncedChangeSerial != bufferObject->GetChangeSerial()) {
+                // Ops could not track some writes (e.g. the ops table was
+                // unregistered between contexts); re-upload everything.
+                RespecifyStorageNow(*resource, *bufferObject);
             }
             return resource;
         }
@@ -348,7 +389,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 #ifdef TRACY_ENABLE
             ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
-            if (false && target == GL_ARRAY_BUFFER) { // BISECT2: cache disabled
+            if (target == GL_ARRAY_BUFFER) {
                 if (g_boundArrayBufferKnown && g_boundArrayBufferId == id) {
                     return;
                 }

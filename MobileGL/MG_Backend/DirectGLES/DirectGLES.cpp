@@ -3485,6 +3485,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return false;
         }
         t_backendContextCurrent = true;
+        // The ops table may have been unregistered when a previous ES context was
+        // destroyed (e.g. a probe context); re-register now that GL is usable.
+        BufferImpl::RegisterBufferBackendOps();
         return true;
     }
 
@@ -3511,7 +3514,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
     }
 
     void DestroyEGLContext() {
-        BufferImpl::UnregisterBufferBackendOps();
+        BufferImpl::OnBackendContextDestroyed();
         t_backendContextCurrent = false;
         if (g_Display != EGL_NO_DISPLAY) {
             g_EGLFuncs.eglMakeCurrent(g_Display, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
