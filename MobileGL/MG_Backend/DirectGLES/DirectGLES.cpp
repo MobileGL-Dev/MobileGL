@@ -276,6 +276,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
 
             SyncBufferBindingPoints(BufferTarget::Uniform, GL_UNIFORM_BUFFER);
+            // Graphics shaders may also read SSBOs (e.g. Flywheel's indirect vertex shaders pull
+            // instance data from storage buffers), so keep those binding points in sync for draws
+            // and not just for compute dispatches.
+            SyncBufferBindingPoints(BufferTarget::ShaderStorage, GL_SHADER_STORAGE_BUFFER);
         }
 
         void SyncComputeBuffers(Bool includeDispatchIndirectBuffer) {
@@ -1015,6 +1019,121 @@ namespace MobileGL::MG_Backend::DirectGLES {
         }
     }
 
+    void SetCurrentDrawID(Uint32 drawId) {
+        const auto& currentProgram = MG_State::pGLContext->GetCurrentProgram();
+        if (!currentProgram || !currentProgram->GetLinkStatus()) {
+            return;
+        }
+        const auto& backendProgramIt = PrgramImpl::g_backendProgramObjects.find(currentProgram.get());
+        if (backendProgramIt != PrgramImpl::g_backendProgramObjects.end()) {
+            backendProgramIt->second->SetDrawID(drawId);
+        }
+    }
+
+    static Bool SupportsNativeIndirectDraws() {
+        const auto& version = g_GLESCapabilities.GLESVersion;
+        const Bool esVersionOk = version.Major > 3 || (version.Major == 3 && version.Minor >= 1);
+        return esVersionOk && g_GLESFuncs.glDrawElementsIndirect != nullptr &&
+               g_GLESFuncs.glDrawArraysIndirect != nullptr;
+    }
+
+    // Runs an (indexed) indirect multi-draw. When a GL_DRAW_INDIRECT_BUFFER is bound the draws
+    // execute natively on the GPU so commands written by compute shaders (e.g. Flywheel's
+    // culling pipeline updating instanceCount) are honored; the CPU shadow is still consulted
+    // for the per-command baseInstance, which is CPU-authored, to feed the mg_BaseInstance
+    // shader emulation. Falls back to the CPU per-command loop for client-memory commands or
+    // when the driver cannot consume the command's baseInstance field (no GL_EXT_base_instance).
+    static void ExecuteIndexedIndirectCommands(GLenum mode, GLenum type, SizeT indexSize, const Uint8* commandBytes,
+                                               SizeT commandOffset, Bool hasIndirectBuffer, GLsizei drawcount,
+                                               GLsizei stride, const char* label) {
+        Bool useNative = hasIndirectBuffer && SupportsNativeIndirectDraws();
+        if (useNative && !g_GLESCapabilities.SupportsBaseInstance) {
+            for (GLsizei i = 0; i < drawcount; ++i) {
+                DrawElementsIndirectCommand cmd{};
+                std::memcpy(&cmd, commandBytes + static_cast<SizeT>(i) * stride, sizeof(cmd));
+                if (cmd.baseInstance != 0) {
+                    useNative = false;
+                    MGLOG_W("%s: non-zero baseInstance without GL_EXT_base_instance, falling back to CPU "
+                            "emulation (GPU-written command fields will not be honored)",
+                            label);
+                    break;
+                }
+            }
+        }
+
+        if (useNative) {
+            for (GLsizei i = 0; i < drawcount; ++i) {
+                DrawElementsIndirectCommand cmd{};
+                std::memcpy(&cmd, commandBytes + static_cast<SizeT>(i) * stride, sizeof(cmd));
+                SetCurrentDrawID(static_cast<Uint32>(i));
+                SetCurrentBaseInstance(cmd.baseInstance);
+                g_GLESFuncs.glDrawElementsIndirect(
+                    mode, type, reinterpret_cast<const void*>(commandOffset + static_cast<SizeT>(i) * stride));
+            }
+        } else {
+            for (GLsizei i = 0; i < drawcount; ++i) {
+                DrawElementsIndirectCommand cmd{};
+                std::memcpy(&cmd, commandBytes + static_cast<SizeT>(i) * stride, sizeof(cmd));
+                if (cmd.count == 0 || cmd.instanceCount == 0) {
+                    continue;
+                }
+                SetCurrentDrawID(static_cast<Uint32>(i));
+                SetCurrentBaseInstance(cmd.baseInstance);
+                const auto indexByteOffset = static_cast<SizeT>(cmd.firstIndex) * indexSize;
+                g_GLESFuncs.glDrawElementsInstancedBaseVertex(
+                    mode, static_cast<GLsizei>(cmd.count), type, reinterpret_cast<const GLvoid*>(indexByteOffset),
+                    static_cast<GLsizei>(cmd.instanceCount), cmd.baseVertex);
+            }
+        }
+        SetCurrentDrawID(0);
+        SetCurrentBaseInstance(0);
+    }
+
+    static void ExecuteArraysIndirectCommands(GLenum mode, const Uint8* commandBytes, SizeT commandOffset,
+                                              Bool hasIndirectBuffer, GLsizei drawcount, GLsizei stride,
+                                              const char* label) {
+        Bool useNative = hasIndirectBuffer && SupportsNativeIndirectDraws();
+        if (useNative && !g_GLESCapabilities.SupportsBaseInstance) {
+            for (GLsizei i = 0; i < drawcount; ++i) {
+                DrawArraysIndirectCommand cmd{};
+                std::memcpy(&cmd, commandBytes + static_cast<SizeT>(i) * stride, sizeof(cmd));
+                if (cmd.baseInstance != 0) {
+                    useNative = false;
+                    MGLOG_W("%s: non-zero baseInstance without GL_EXT_base_instance, falling back to CPU "
+                            "emulation (GPU-written command fields will not be honored)",
+                            label);
+                    break;
+                }
+            }
+        }
+
+        if (useNative) {
+            for (GLsizei i = 0; i < drawcount; ++i) {
+                DrawArraysIndirectCommand cmd{};
+                std::memcpy(&cmd, commandBytes + static_cast<SizeT>(i) * stride, sizeof(cmd));
+                SetCurrentDrawID(static_cast<Uint32>(i));
+                SetCurrentBaseInstance(cmd.baseInstance);
+                g_GLESFuncs.glDrawArraysIndirect(
+                    mode, reinterpret_cast<const void*>(commandOffset + static_cast<SizeT>(i) * stride));
+            }
+        } else {
+            for (GLsizei i = 0; i < drawcount; ++i) {
+                DrawArraysIndirectCommand cmd{};
+                std::memcpy(&cmd, commandBytes + static_cast<SizeT>(i) * stride, sizeof(cmd));
+                if (cmd.count == 0 || cmd.instanceCount == 0) {
+                    continue;
+                }
+                SetCurrentDrawID(static_cast<Uint32>(i));
+                SetCurrentBaseInstance(cmd.baseInstance);
+                g_GLESFuncs.glDrawArraysInstanced(mode, static_cast<GLint>(cmd.first),
+                                                  static_cast<GLsizei>(cmd.count),
+                                                  static_cast<GLsizei>(cmd.instanceCount));
+            }
+        }
+        SetCurrentDrawID(0);
+        SetCurrentBaseInstance(0);
+    }
+
     void PrepareForCompute(Bool includeDispatchIndirectBuffer) {
 #ifdef TRACY_ENABLE
         ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
@@ -1170,19 +1289,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return;
         }
 
-        for (GLsizei i = 0; i < drawcount; ++i) {
-            DrawElementsIndirectCommand cmd{};
-            std::memcpy(&cmd, commandBytes + static_cast<SizeT>(i) * stride, sizeof(cmd));
-            if (cmd.count == 0 || cmd.instanceCount == 0) {
-                continue;
-            }
-            SetCurrentBaseInstance(cmd.baseInstance);
-            const auto indexByteOffset = static_cast<SizeT>(cmd.firstIndex) * indexSize;
-            g_GLESFuncs.glDrawElementsInstancedBaseVertex(
-                mode, static_cast<GLsizei>(cmd.count), type, reinterpret_cast<const GLvoid*>(indexByteOffset),
-                static_cast<GLsizei>(cmd.instanceCount), cmd.baseVertex);
-        }
-        SetCurrentBaseInstance(0);
+        const Bool hasIndirectBuffer =
+            MG_State::pGLContext->GetBufferBindingSlot(BufferTarget::DrawIndirect).GetBoundObject() != nullptr;
+        ExecuteIndexedIndirectCommands(mode, type, indexSize, commandBytes, reinterpret_cast<SizeT>(indirect),
+                                       hasIndirectBuffer, drawcount, stride, "MultiDrawElementsIndirect");
     }
 
     void MultiDrawElementsIndirectCount(GLenum mode, GLenum type, const void* indirect, GLintptr drawcount,
@@ -1242,19 +1352,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
         Uint32 actualDrawCount = 0;
         std::memcpy(&actualDrawCount, parameterData->data() + drawcount, sizeof(actualDrawCount));
         actualDrawCount = std::min<Uint32>(actualDrawCount, static_cast<Uint32>(maxdrawcount));
-        for (Uint32 i = 0; i < actualDrawCount; ++i) {
-            DrawElementsIndirectCommand cmd{};
-            std::memcpy(&cmd, drawData->data() + commandOffset + static_cast<SizeT>(i) * stride, sizeof(cmd));
-            if (cmd.count == 0 || cmd.instanceCount == 0) {
-                continue;
-            }
-            SetCurrentBaseInstance(cmd.baseInstance);
-            const auto indexByteOffset = static_cast<SizeT>(cmd.firstIndex) * indexSize;
-            g_GLESFuncs.glDrawElementsInstancedBaseVertex(
-                mode, static_cast<GLsizei>(cmd.count), type, reinterpret_cast<const GLvoid*>(indexByteOffset),
-                static_cast<GLsizei>(cmd.instanceCount), cmd.baseVertex);
-        }
-        SetCurrentBaseInstance(0);
+        ExecuteIndexedIndirectCommands(mode, type, indexSize, drawData->data() + commandOffset, commandOffset,
+                                       /*hasIndirectBuffer=*/true, static_cast<GLsizei>(actualDrawCount), stride,
+                                       "MultiDrawElementsIndirectCount");
     }
 
     void MultiDrawArraysIndirect(GLenum mode, const void* indirect, GLsizei drawcount, GLsizei stride) {
@@ -1284,18 +1384,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return;
         }
 
-        for (GLsizei i = 0; i < drawcount; ++i) {
-            DrawArraysIndirectCommand cmd{};
-            std::memcpy(&cmd, commandBytes + static_cast<SizeT>(i) * stride, sizeof(cmd));
-            if (cmd.count == 0 || cmd.instanceCount == 0) {
-                continue;
-            }
-            SetCurrentBaseInstance(cmd.baseInstance);
-            g_GLESFuncs.glDrawArraysInstanced(
-                mode, static_cast<GLint>(cmd.first), static_cast<GLsizei>(cmd.count),
-                static_cast<GLsizei>(cmd.instanceCount));
-        }
-        SetCurrentBaseInstance(0);
+        const Bool hasIndirectBuffer =
+            MG_State::pGLContext->GetBufferBindingSlot(BufferTarget::DrawIndirect).GetBoundObject() != nullptr;
+        ExecuteArraysIndirectCommands(mode, commandBytes, reinterpret_cast<SizeT>(indirect), hasIndirectBuffer,
+                                      drawcount, stride, "MultiDrawArraysIndirect");
     }
 
     void DrawRangeElementsBaseVertex(GLenum mode, GLuint start, GLuint end, GLsizei count, GLenum type,
@@ -1358,18 +1450,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return;
         }
 
-        DrawElementsIndirectCommand cmd{};
-        std::memcpy(&cmd, commandBytes, sizeof(cmd));
-        if (cmd.count == 0 || cmd.instanceCount == 0) {
-            return;
-        }
-
-        SetCurrentBaseInstance(cmd.baseInstance);
-        const auto indexByteOffset = static_cast<SizeT>(cmd.firstIndex) * indexSize;
-        g_GLESFuncs.glDrawElementsInstancedBaseVertex(
-            mode, static_cast<GLsizei>(cmd.count), type, reinterpret_cast<const GLvoid*>(indexByteOffset),
-            static_cast<GLsizei>(cmd.instanceCount), cmd.baseVertex);
-        SetCurrentBaseInstance(0);
+        const Bool hasIndirectBuffer =
+            MG_State::pGLContext->GetBufferBindingSlot(BufferTarget::DrawIndirect).GetBoundObject() != nullptr;
+        ExecuteIndexedIndirectCommands(mode, type, indexSize, commandBytes, reinterpret_cast<SizeT>(indirect),
+                                       hasIndirectBuffer, 1, sizeof(DrawElementsIndirectCommand),
+                                       "DrawElementsIndirect");
     }
 
     void DrawArraysInstancedBaseInstance(GLenum mode, GLint first, GLsizei count, GLsizei instancecount,
@@ -1397,17 +1482,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return;
         }
 
-        DrawArraysIndirectCommand cmd{};
-        std::memcpy(&cmd, commandBytes, sizeof(cmd));
-        if (cmd.count == 0 || cmd.instanceCount == 0) {
-            return;
-        }
-
-        SetCurrentBaseInstance(cmd.baseInstance);
-        g_GLESFuncs.glDrawArraysInstanced(
-            mode, static_cast<GLint>(cmd.first), static_cast<GLsizei>(cmd.count),
-            static_cast<GLsizei>(cmd.instanceCount));
-        SetCurrentBaseInstance(0);
+        const Bool hasIndirectBuffer =
+            MG_State::pGLContext->GetBufferBindingSlot(BufferTarget::DrawIndirect).GetBoundObject() != nullptr;
+        ExecuteArraysIndirectCommands(mode, commandBytes, reinterpret_cast<SizeT>(indirect), hasIndirectBuffer, 1,
+                                      sizeof(DrawArraysIndirectCommand), "DrawArraysIndirect");
     }
 
     void BlitFramebuffer(GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1, GLint dstX0, GLint dstY0, GLint dstX1,

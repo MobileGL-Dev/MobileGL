@@ -788,7 +788,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                    E_GL_EXT_framebuffer_object, E_GL_ARB_depth_texture, E_GL_ARB_buffer_storage,
                                    E_GL_ARB_texture_storage, E_GL_ARB_direct_state_access,
                                    E_GL_ARB_multi_draw_indirect, E_GL_ARB_indirect_parameters,
-                                   E_GL_ARB_shader_draw_parameters},
+                                   E_GL_ARB_shader_draw_parameters, E_GL_ARB_gpu_shader5, E_GL_ARB_multi_bind,
+                                   E_GL_ARB_shading_language_420pack, E_GL_ARB_vertex_attrib_binding,
+                                   E_GL_ARB_shader_image_size},
                     .IsCompatibilityProfile = false // Is Compatibility Profile
                 },
             .StaticBackendCapability = {.AllowVSOnlyPrograms = false} // Backend Capability

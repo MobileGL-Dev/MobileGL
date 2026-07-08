@@ -1018,6 +1018,7 @@ namespace MobileGL {
             String GLESShadingLanguageVersionString;
             Bool SupportsPersistentMapping = false;
             Bool SupportsNorm16Texture = false;
+            Bool SupportsBaseInstance = false;
             Int UniformBufferOffsetAlignment = 256;
             Float AliasedLineWidthRangeMin = 1.0f;
             Float AliasedLineWidthRangeMax = 1.0f;

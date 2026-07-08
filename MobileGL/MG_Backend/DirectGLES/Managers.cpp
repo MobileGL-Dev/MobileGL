@@ -9,6 +9,7 @@
 #include "Managers.h"
 #include "Utils.h"
 #include "DirectGLES.h"
+#include <MG_Util/ShaderTranspiler/ShaderCompiler.h>
 
 #include <MG_Util/BackendLoaders/OpenGL/Loader.h>
 #include <MG_Util/Converters/GLToStr/GLEnumConverter.h>
@@ -31,6 +32,8 @@
 namespace MobileGL::MG_Backend::DirectGLES {
     constexpr Bool PREFER_MAP_BUFFER_RANGE_FOR_BUFFER_SYNC = false;
     constexpr const char* BASE_INSTANCE_UNIFORM_NAME = "mg_BaseInstance";
+    constexpr const char* DRAW_ID_UNIFORM_NAME = "mg_DrawID";
+    constexpr const char* BASE_VERTEX_UNIFORM_NAME = "mg_BaseVertex";
 
     static Bool IsAngleLlvmpipeRenderer() {
         return g_GLESCapabilities.GLESRendererString.find("ANGLE") != String::npos &&
@@ -111,6 +114,36 @@ namespace MobileGL::MG_Backend::DirectGLES {
         source = ReplaceIdentifier(std::move(source), "gl_BaseInstance", BASE_INSTANCE_UNIFORM_NAME);
         return InjectUniformAfterVersion(std::move(source),
                                          String("uniform highp int ") + BASE_INSTANCE_UNIFORM_NAME + ";");
+    }
+
+    // The LowerDrawParametersPass demotes gl_DrawID / gl_BaseInstance / gl_BaseVertex to plain
+    // Private globals named mg_DrawID / mg_BaseInstance / mg_BaseVertex; SPIRV-Cross then emits
+    // them as ordinary global declarations. Turn those declarations into uniforms so the draw
+    // paths can feed real values per (sub-)draw.
+    String PromoteDrawParameterGlobalsToUniforms(String source, GLenum shaderType) {
+        if (shaderType != GL_VERTEX_SHADER) {
+            return source;
+        }
+        for (const char* name : {DRAW_ID_UNIFORM_NAME, BASE_INSTANCE_UNIFORM_NAME, BASE_VERTEX_UNIFORM_NAME}) {
+            for (const char* declPrefix : {"highp int ", "mediump int ", "lowp int ", "int ", "highp uint ",
+                                           "mediump uint ", "uint "}) {
+                const String declaration = String(declPrefix) + name + ";";
+                const SizeT pos = source.find(declaration);
+                if (pos == String::npos) {
+                    continue;
+                }
+                // Only promote a standalone global declaration, not a uniform we already emitted.
+                const Bool alreadyUniform = pos >= 8 && source.compare(pos - 8, 8, "uniform ") == 0;
+                if (!alreadyUniform) {
+                    const Bool hasPrecision = std::strncmp(declPrefix, "int ", 4) != 0 &&
+                                              std::strncmp(declPrefix, "uint ", 5) != 0;
+                    const String qualifier = hasPrecision ? "uniform " : "uniform highp ";
+                    source.replace(pos, declaration.size(), qualifier + declaration);
+                }
+                break;
+            }
+        }
+        return source;
     }
 
     namespace BufferImpl {
@@ -1919,7 +1952,17 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 String source;
                 auto& spirvCode = shaderSpirvs[index];
 
-                MG_Util::ShaderTranspiler::SpvcSession spvcSession(spirvCode,
+                // ESSL cannot express gl_DrawID/gl_BaseInstance/gl_BaseVertex; demote them to
+                // plain globals (mg_*) before handing the module to SPIRV-Cross.
+                Vector<unsigned int> loweredSpirv;
+                const Vector<unsigned int>* effectiveSpirv = &spirvCode;
+                if (glShaderType == GL_VERTEX_SHADER &&
+                    MG_Util::ShaderTranspiler::ShaderCompiler::LowerDrawParametersForEssl(spirvCode, loweredSpirv) &&
+                    !loweredSpirv.empty()) {
+                    effectiveSpirv = &loweredSpirv;
+                }
+
+                MG_Util::ShaderTranspiler::SpvcSession spvcSession(*effectiveSpirv,
                     MG_Util::ShaderTranspiler::SessionUsageBit::Transpile);
 
                 spvc_compiler_options options;
@@ -1950,6 +1993,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 source = ProcessOutColorLocations(source);
                 source = ForceFlatIntegerVaryings(source, glShaderType);
                 source = EmulateBaseInstanceInVertexShader(std::move(source), glShaderType);
+                source = PromoteDrawParameterGlobalsToUniforms(std::move(source), glShaderType);
                 source = ForceSupporterOutput(source);
                 source = ClampNormFallbackOutputs(std::move(source), glShaderType,
                                                   m_snormFallbackClampOutputMask,
@@ -2005,6 +2049,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
             m_baseInstanceUniformLocation = g_GLESFuncs.glGetUniformLocation(m_backendProgramId,
                                                                              BASE_INSTANCE_UNIFORM_NAME);
+            m_drawIdUniformLocation = g_GLESFuncs.glGetUniformLocation(m_backendProgramId, DRAW_ID_UNIFORM_NAME);
 
             // Create global UBO
             if (stateProgramObject->GetUBOSize() > 0) {
@@ -2033,6 +2078,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 return;
             }
             g_GLESFuncs.glUniform1i(m_baseInstanceUniformLocation, static_cast<GLint>(baseInstance));
+        }
+
+        void BackendProgramObjectImpl::SetDrawID(Uint32 drawId) const {
+            if (m_drawIdUniformLocation < 0) {
+                return;
+            }
+            g_GLESFuncs.glUniform1i(m_drawIdUniformLocation, static_cast<GLint>(drawId));
         }
     } // namespace PrgramImpl
 

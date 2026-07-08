@@ -12,6 +12,7 @@
 #include "SpirvPasses/FlattenInterfaceStructPass.h"
 #include "SpirvPasses/RenameSamplerFunctionParameterPass.h"
 #include "SpirvPasses/DecomposeWorkgroupVec3Pass.h"
+#include "SpirvPasses/LowerDrawParametersPass.h"
 #include "spirv-tools/libspirv.h"
 #include "spirv-tools/optimizer.hpp"
 
@@ -247,6 +248,18 @@ namespace MobileGL {
                 optimizer.RegisterPass(RenameSamplerFunctionParameterPass::CreateRenameSamplerFunctionParameterPass());
                 optimizer.RegisterPass(EliminateFloatEqualsZeroPass::CreateEliminateFloatEqualsZeroPass());
                 optimizer.RegisterPass(DecomposeWorkgroupVec3Pass::CreateDecomposeWorkgroupVec3Pass());
+
+                return optimizer.Run(inputBinary.data(), inputBinary.size(), &outputBinary, options);
+            }
+
+            bool ShaderCompiler::LowerDrawParametersForEssl(const Vector<Uint32>& inputBinary,
+                                                            Vector<uint32_t>& outputBinary) {
+                using namespace spvtools;
+                OptimizerOptions options;
+                options.set_run_validator(false);
+
+                Optimizer optimizer(SPV_ENV_VULKAN_1_1);
+                optimizer.RegisterPass(LowerDrawParametersPass::CreateLowerDrawParametersPass());
 
                 return optimizer.Run(inputBinary.data(), inputBinary.size(), &outputBinary, options);
             }

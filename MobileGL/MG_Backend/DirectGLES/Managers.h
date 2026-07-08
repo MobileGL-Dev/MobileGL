@@ -16,6 +16,7 @@
 
 namespace MobileGL::MG_Backend::DirectGLES {
     String EmulateBaseInstanceInVertexShader(String source, GLenum shaderType);
+    String PromoteDrawParameterGlobalsToUniforms(String source, GLenum shaderType);
 
     template <typename StateObject, typename BackendObject>
     class StateBackendObjectRegistry {
@@ -316,6 +317,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             void SyncToBackend(const SharedPtr<MG_State::GLState::ProgramObject>& stateProgramObject);
             void Use() const;
             void SetBaseInstance(Uint32 baseInstance) const;
+            void SetDrawID(Uint32 drawId) const;
             Uint GetBackendProgramId() const { return m_backendProgramId; }
             Uint GetBackendGlobalUBOId() const { return m_backendGlobalUBOId; }
             Uint32 GetSnormFallbackClampOutputMask() const { return m_snormFallbackClampOutputMask; }
@@ -325,6 +327,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             Uint m_backendProgramId = 0;
             Uint m_backendGlobalUBOId = 0;
             Int m_baseInstanceUniformLocation = -1;
+            Int m_drawIdUniformLocation = -1;
             Uint32 m_snormFallbackClampOutputMask = 0;
             Uint32 m_unormFallbackClampOutputMask = 0;
             Bool m_isInitialized = false;
