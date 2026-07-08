@@ -5225,7 +5225,10 @@ void main() {
         }
 
         MOBILEGL_ASSERT(frame.isCommandRecording, "%s: frame recording was not started", __func__);
-        if (m_drawIndirectCountExtensionEnabled && s_vkCmdDrawIndexedIndirectCount) {
+        // vkCmdDrawIndexedIndirectCount with maxDrawCount > 1 additionally requires the
+        // multiDrawIndirect device feature; fall back to the CPU readback loop otherwise.
+        if (m_drawIndirectCountExtensionEnabled && s_vkCmdDrawIndexedIndirectCount &&
+            (m_multiDrawIndirectFeatureEnabled || maxdrawcount == 1)) {
             MGLOG_D("DirectVulkan: glMultiDrawElementsIndirectCountARB(max=%d stride=%d)", maxdrawcount, stride);
             s_vkCmdDrawIndexedIndirectCount(frame.commandBuffer,
                                             drawSlice.buffer,
@@ -5251,6 +5254,149 @@ void main() {
             std::memcpy(&cmd, drawData->data() + commandOffset + static_cast<SizeT>(idraw) * stride, sizeof(cmd));
             vkCmdDrawIndexed(frame.commandBuffer, cmd.indexCount, cmd.instanceCount, cmd.firstIndex,
                              cmd.vertexOffset, cmd.firstInstance);
+        }
+    }
+
+    void VulkanRenderer::MultiDrawElementsIndirect(GLenum mode, GLenum type, const void* indirect,
+                                                   GLsizei drawcount, GLsizei stride) {
+        auto& frame = m_frameContext.GetCurrent();
+
+        if (drawcount <= 0) {
+            return;
+        }
+        if (stride == 0) {
+            stride = sizeof(DrawIndexedCmdParam);
+        }
+        if (stride < static_cast<GLsizei>(sizeof(DrawIndexedCmdParam))) {
+            MGLOG_E("MultiDrawElementsIndirect skipped: stride %d is smaller than command size %zu",
+                    stride, sizeof(DrawIndexedCmdParam));
+            return;
+        }
+
+        const SizeT indexSize = MG_Util::GetGLTypeSize(type);
+        if (indexSize == 0) {
+            MGLOG_E("MultiDrawElementsIndirect skipped: unsupported index type 0x%x", type);
+            return;
+        }
+
+        const auto& vao = *MG_State::pGLContext->GetBoundVertexArray();
+        const auto* indexBuffer = vao.GetIndexBufferBindingSlot().GetBoundObject().get();
+        if (!indexBuffer) {
+            MGLOG_E("MultiDrawElementsIndirect skipped: no element array buffer is bound");
+            return;
+        }
+
+        const SizeT commandOffset = reinterpret_cast<SizeT>(indirect);
+        const SizeT commandBytes = commandOffset +
+            static_cast<SizeT>(stride) * static_cast<SizeT>(drawcount - 1) + sizeof(DrawIndexedCmdParam);
+        auto drawBuffer = MG_State::pGLContext->GetBufferBindingSlot(BufferTarget::DrawIndirect).GetBoundObject();
+        if (!drawBuffer || commandBytes > drawBuffer->GetSize()) {
+            MGLOG_E("MultiDrawElementsIndirect skipped: invalid GL_DRAW_INDIRECT_BUFFER binding or range");
+            return;
+        }
+
+        // The command parameters live on the GPU; the CPU-visible range that any single
+        // command may address is the whole element array buffer.
+        DrawCmdParam vertexRange{};
+        vertexRange.vertexCount = static_cast<Uint32>(indexBuffer->GetSize() / indexSize);
+        vertexRange.instanceCount = 1;
+
+        IndexBufferView indexBufferView{};
+        indexBufferView.indexType = type;
+        indexBufferView.indexByteOffset = 0;
+        indexBufferView.indexByteSize = indexBuffer->GetSize();
+
+        if (!SetupDraw(frame, mode, DrawSetupAspect::IndexBuffer | DrawSetupAspect::IndirectDrawBuffer,
+                       vertexRange, &indexBufferView)) {
+            return;
+        }
+
+        BufferSlice drawSlice{};
+        if (!m_bufferManager.AcquireResidentSlice(BufferKind::Indirect, drawBuffer, drawSlice)) {
+            MGLOG_E("MultiDrawElementsIndirect skipped: failed to sync draw indirect buffer");
+            return;
+        }
+
+        MOBILEGL_ASSERT(frame.isCommandRecording, "%s: frame recording was not started", __func__);
+        MGLOG_D("DirectVulkan: glMultiDrawElementsIndirect(drawcount=%d stride=%d)", drawcount, stride);
+        if (drawcount == 1 || (m_multiDrawIndirectFeatureEnabled && stride % 4 == 0)) {
+            vkCmdDrawIndexedIndirect(frame.commandBuffer,
+                                     drawSlice.buffer,
+                                     drawSlice.offset + static_cast<VkDeviceSize>(commandOffset),
+                                     static_cast<Uint32>(drawcount),
+                                     static_cast<Uint32>(stride));
+            return;
+        }
+
+        // multiDrawIndirect device feature unavailable: one indirect draw per command is
+        // valid without it and still consumes the GPU-written parameters.
+        for (GLsizei idraw = 0; idraw < drawcount; ++idraw) {
+            vkCmdDrawIndexedIndirect(frame.commandBuffer,
+                                     drawSlice.buffer,
+                                     drawSlice.offset + static_cast<VkDeviceSize>(commandOffset) +
+                                         static_cast<VkDeviceSize>(idraw) * static_cast<VkDeviceSize>(stride),
+                                     1, 0);
+        }
+    }
+
+    void VulkanRenderer::MultiDrawArraysIndirect(GLenum mode, const void* indirect, GLsizei drawcount,
+                                                 GLsizei stride) {
+        auto& frame = m_frameContext.GetCurrent();
+
+        if (drawcount <= 0) {
+            return;
+        }
+        if (stride == 0) {
+            stride = sizeof(DrawCmdParam);
+        }
+        if (stride < static_cast<GLsizei>(sizeof(DrawCmdParam))) {
+            MGLOG_E("MultiDrawArraysIndirect skipped: stride %d is smaller than command size %zu",
+                    stride, sizeof(DrawCmdParam));
+            return;
+        }
+
+        const SizeT commandOffset = reinterpret_cast<SizeT>(indirect);
+        const SizeT commandBytes = commandOffset +
+            static_cast<SizeT>(stride) * static_cast<SizeT>(drawcount - 1) + sizeof(DrawCmdParam);
+        auto drawBuffer = MG_State::pGLContext->GetBufferBindingSlot(BufferTarget::DrawIndirect).GetBoundObject();
+        if (!drawBuffer || commandBytes > drawBuffer->GetSize()) {
+            MGLOG_E("MultiDrawArraysIndirect skipped: invalid GL_DRAW_INDIRECT_BUFFER binding or range");
+            return;
+        }
+
+        // The command parameters live on the GPU, so the vertex range is unknown here;
+        // resident vertex buffers are uploaded in full regardless.
+        DrawCmdParam vertexRange{};
+        vertexRange.vertexCount = 0;
+        vertexRange.instanceCount = 1;
+
+        if (!SetupDraw(frame, mode, DrawSetupAspect::IndirectDrawBuffer, vertexRange)) {
+            return;
+        }
+
+        BufferSlice drawSlice{};
+        if (!m_bufferManager.AcquireResidentSlice(BufferKind::Indirect, drawBuffer, drawSlice)) {
+            MGLOG_E("MultiDrawArraysIndirect skipped: failed to sync draw indirect buffer");
+            return;
+        }
+
+        MOBILEGL_ASSERT(frame.isCommandRecording, "%s: frame recording was not started", __func__);
+        MGLOG_D("DirectVulkan: glMultiDrawArraysIndirect(drawcount=%d stride=%d)", drawcount, stride);
+        if (drawcount == 1 || (m_multiDrawIndirectFeatureEnabled && stride % 4 == 0)) {
+            vkCmdDrawIndirect(frame.commandBuffer,
+                              drawSlice.buffer,
+                              drawSlice.offset + static_cast<VkDeviceSize>(commandOffset),
+                              static_cast<Uint32>(drawcount),
+                              static_cast<Uint32>(stride));
+            return;
+        }
+
+        for (GLsizei idraw = 0; idraw < drawcount; ++idraw) {
+            vkCmdDrawIndirect(frame.commandBuffer,
+                              drawSlice.buffer,
+                              drawSlice.offset + static_cast<VkDeviceSize>(commandOffset) +
+                                  static_cast<VkDeviceSize>(idraw) * static_cast<VkDeviceSize>(stride),
+                              1, 0);
         }
     }
 
@@ -5755,6 +5901,8 @@ void main() {
         m_logicOpFeatureEnabled = deviceFeatures.logicOp == VK_TRUE;
         deviceFeatures.shaderInt64 = supportedDeviceFeatures.shaderInt64;
         deviceFeatures.drawIndirectFirstInstance = supportedDeviceFeatures.drawIndirectFirstInstance;
+        deviceFeatures.multiDrawIndirect = supportedDeviceFeatures.multiDrawIndirect;
+        m_multiDrawIndirectFeatureEnabled = deviceFeatures.multiDrawIndirect == VK_TRUE;
         m_logicOpFeatureEnabled = deviceFeatures.logicOp == VK_TRUE;
 
         VkDeviceCreateInfo deviceCreateInfo{};
@@ -5787,18 +5935,19 @@ void main() {
             indexTypeUint8ExtensionName = VK_EXT_INDEX_TYPE_UINT8_EXTENSION_NAME;
         }
 
+        auto getPhysicalDeviceFeatures2 = reinterpret_cast<PFN_vkGetPhysicalDeviceFeatures2>(
+            vkGetInstanceProcAddr(m_instance, "vkGetPhysicalDeviceFeatures2"));
+        if (getPhysicalDeviceFeatures2 == nullptr) {
+            getPhysicalDeviceFeatures2 = reinterpret_cast<PFN_vkGetPhysicalDeviceFeatures2>(
+                vkGetInstanceProcAddr(m_instance, "vkGetPhysicalDeviceFeatures2KHR"));
+        }
+
         VkPhysicalDeviceIndexTypeUint8Features indexTypeUint8Features{};
         indexTypeUint8Features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_INDEX_TYPE_UINT8_FEATURES;
         if (indexTypeUint8ExtensionName != nullptr) {
             VkPhysicalDeviceFeatures2 featureQuery{};
             featureQuery.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
             featureQuery.pNext = &indexTypeUint8Features;
-            auto getPhysicalDeviceFeatures2 = reinterpret_cast<PFN_vkGetPhysicalDeviceFeatures2>(
-                vkGetInstanceProcAddr(m_instance, "vkGetPhysicalDeviceFeatures2"));
-            if (getPhysicalDeviceFeatures2 == nullptr) {
-                getPhysicalDeviceFeatures2 = reinterpret_cast<PFN_vkGetPhysicalDeviceFeatures2>(
-                    vkGetInstanceProcAddr(m_instance, "vkGetPhysicalDeviceFeatures2KHR"));
-            }
             MOBILEGL_ASSERT(getPhysicalDeviceFeatures2 != nullptr,
                             "CreateLogicalDeviceAndQueues: vkGetPhysicalDeviceFeatures2 is unavailable");
             getPhysicalDeviceFeatures2(m_physicalDevice.handle, &featureQuery);
@@ -5818,10 +5967,32 @@ void main() {
             MGLOG_W("VK_KHR_index_type_uint8 / VK_EXT_index_type_uint8 not supported; uint8 index buffers will stay disabled");
         }
 
+        m_shaderDrawParametersFeatureEnabled = false;
+        VkPhysicalDeviceShaderDrawParametersFeatures shaderDrawParametersFeatures{};
+        shaderDrawParametersFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_DRAW_PARAMETERS_FEATURES;
+        if (m_physicalDevice.properties.apiVersion >= VK_API_VERSION_1_1 && getPhysicalDeviceFeatures2 != nullptr) {
+            VkPhysicalDeviceFeatures2 featureQuery{};
+            featureQuery.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+            featureQuery.pNext = &shaderDrawParametersFeatures;
+            getPhysicalDeviceFeatures2(m_physicalDevice.handle, &featureQuery);
+            if (shaderDrawParametersFeatures.shaderDrawParameters == VK_TRUE) {
+                shaderDrawParametersFeatures.pNext = const_cast<void*>(deviceCreateInfo.pNext);
+                deviceCreateInfo.pNext = &shaderDrawParametersFeatures;
+                m_shaderDrawParametersFeatureEnabled = true;
+            }
+        } else if (m_shaderDrawParametersExtensionEnabled) {
+            // Vulkan 1.0 device: enabling VK_KHR_shader_draw_parameters alone exposes the SPIR-V
+            // DrawParameters capability; the shaderDrawParameters feature struct only exists from 1.1.
+            m_shaderDrawParametersFeatureEnabled = true;
+        }
+        if (!m_shaderDrawParametersFeatureEnabled) {
+            MGLOG_W("shaderDrawParameters is unavailable; shaders using gl_DrawID/gl_BaseInstance will not work");
+        }
+
         deviceCreateInfo.enabledExtensionCount = static_cast<Uint32>(enabledDeviceExtensions.size());
         deviceCreateInfo.ppEnabledExtensionNames = enabledDeviceExtensions.data();
         MGLOG_I("Device feature support: geometryShader=%s independentBlend=%s logicOp=%s shaderClipDistance=%s "
-                "shaderCullDistance=%s wideLines=%s shaderInt64=%s drawIndirectFirstInstance=%s",
+                "shaderCullDistance=%s wideLines=%s shaderInt64=%s drawIndirectFirstInstance=%s multiDrawIndirect=%s",
             supportedDeviceFeatures.geometryShader ? "true" : "false",
             supportedDeviceFeatures.independentBlend ? "true" : "false",
             supportedDeviceFeatures.logicOp ? "true" : "false",
@@ -5829,9 +6000,11 @@ void main() {
             supportedDeviceFeatures.shaderCullDistance ? "true" : "false",
             supportedDeviceFeatures.wideLines ? "true" : "false",
             supportedDeviceFeatures.shaderInt64 ? "true" : "false",
-            supportedDeviceFeatures.drawIndirectFirstInstance ? "true" : "false");
+            supportedDeviceFeatures.drawIndirectFirstInstance ? "true" : "false",
+            supportedDeviceFeatures.multiDrawIndirect ? "true" : "false");
         MGLOG_I("Device feature enabled: geometryShader=%s independentBlend=%s logicOp=%s shaderClipDistance=%s "
-                "shaderCullDistance=%s wideLines=%s shaderInt64=%s drawIndirectFirstInstance=%s",
+                "shaderCullDistance=%s wideLines=%s shaderInt64=%s drawIndirectFirstInstance=%s multiDrawIndirect=%s "
+                "shaderDrawParameters=%s",
             deviceFeatures.geometryShader ? "true" : "false",
             deviceFeatures.independentBlend ? "true" : "false",
             deviceFeatures.logicOp ? "true" : "false",
@@ -5839,7 +6012,9 @@ void main() {
             deviceFeatures.shaderCullDistance ? "true" : "false",
             deviceFeatures.wideLines ? "true" : "false",
             deviceFeatures.shaderInt64 ? "true" : "false",
-            deviceFeatures.drawIndirectFirstInstance ? "true" : "false");
+            deviceFeatures.drawIndirectFirstInstance ? "true" : "false",
+            deviceFeatures.multiDrawIndirect ? "true" : "false",
+            m_shaderDrawParametersFeatureEnabled ? "true" : "false");
         VK_VERIFY(vkCreateDevice(m_physicalDevice.handle, &deviceCreateInfo, nullptr, &m_device), "vkCreateDevice");
 
         s_vkCmdDrawIndexedIndirectCount = reinterpret_cast<PFNDrawIndexedIndirectCountFunc>(
@@ -6067,8 +6242,9 @@ void main() {
                                                          Vector<const char*>& inOutEnabledExtensions) {
         m_drawIndirectCountExtensionEnabled = EnableOptionalDeviceExtension(availableExtensions, inOutEnabledExtensions,
                                                                             VK_KHR_DRAW_INDIRECT_COUNT_EXTENSION_NAME);
-        EnableOptionalDeviceExtension(availableExtensions, inOutEnabledExtensions,
-                                      VK_KHR_SHADER_DRAW_PARAMETERS_EXTENSION_NAME);
+        m_shaderDrawParametersExtensionEnabled =
+            EnableOptionalDeviceExtension(availableExtensions, inOutEnabledExtensions,
+                                          VK_KHR_SHADER_DRAW_PARAMETERS_EXTENSION_NAME);
 #ifdef VK_KHR_PORTABILITY_SUBSET_EXTENSION_NAME
         EnableOptionalDeviceExtension(availableExtensions, inOutEnabledExtensions,
                                       VK_KHR_PORTABILITY_SUBSET_EXTENSION_NAME);

@@ -409,7 +409,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     void MultiDrawElementsIndirect(GLenum mode, GLenum type, const void* indirect, GLsizei drawcount, GLsizei stride) {
         MOBILEGL_ASSERT(pVulkanRenderer, "DirectVulkan::MultiDrawElementsIndirect called with null VulkanRenderer");
         MOBILEGL_ASSERT(MG_State::pGLContext, "DirectVulkan::MultiDrawElementsIndirect called with null GL context");
-        pVulkanRenderer->MultiDrawElementsIndirectCount(mode, type, indirect, 0, drawcount, stride);
+        pVulkanRenderer->MultiDrawElementsIndirect(mode, type, indirect, drawcount, stride);
     }
     void MultiDrawArraysIndirect(GLenum mode, const void* indirect, GLsizei drawcount, GLsizei stride) {
         MOBILEGL_ASSERT(pVulkanRenderer, "DirectVulkan::MultiDrawArraysIndirect called with null VulkanRenderer");
@@ -418,6 +418,15 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         if (drawcount <= 0) {
             return;
         }
+
+        // With a bound GL_DRAW_INDIRECT_BUFFER the command parameters may be GPU-written
+        // (e.g. by a compute shader), so consume them natively on the GPU.
+        auto drawBuffer = MG_State::pGLContext->GetBufferBindingSlot(BufferTarget::DrawIndirect).GetBoundObject();
+        if (drawBuffer) {
+            pVulkanRenderer->MultiDrawArraysIndirect(mode, indirect, drawcount, stride);
+            return;
+        }
+
         if (stride == 0) {
             stride = sizeof(DrawArraysIndirectCommand);
         }
@@ -427,6 +436,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             return;
         }
 
+        // No indirect buffer bound: the pointer refers to client memory.
         const auto* commandBytes = ResolveIndirectCommandBytes(
             indirect,
             static_cast<SizeT>(stride) * static_cast<SizeT>(drawcount - 1) + sizeof(DrawArraysIndirectCommand),
@@ -541,6 +551,15 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             return;
         }
 
+        // With a bound GL_DRAW_INDIRECT_BUFFER the command parameters may be GPU-written
+        // (e.g. by a compute shader), so consume them natively on the GPU.
+        auto drawBuffer = MG_State::pGLContext->GetBufferBindingSlot(BufferTarget::DrawIndirect).GetBoundObject();
+        if (drawBuffer) {
+            pVulkanRenderer->MultiDrawElementsIndirect(mode, type, indirect, 1, 0);
+            return;
+        }
+
+        // No indirect buffer bound: the pointer refers to client memory.
         const auto* commandBytes =
             ResolveIndirectCommandBytes(indirect, sizeof(DrawElementsIndirectCommand), "DrawElementsIndirect");
         if (!commandBytes) {
@@ -585,6 +604,15 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         MOBILEGL_ASSERT(pVulkanRenderer, "DirectVulkan::DrawArraysIndirect called with null VulkanRenderer");
         MOBILEGL_ASSERT(MG_State::pGLContext, "DirectVulkan::DrawArraysIndirect called with null GL context");
 
+        // With a bound GL_DRAW_INDIRECT_BUFFER the command parameters may be GPU-written
+        // (e.g. by a compute shader), so consume them natively on the GPU.
+        auto drawBuffer = MG_State::pGLContext->GetBufferBindingSlot(BufferTarget::DrawIndirect).GetBoundObject();
+        if (drawBuffer) {
+            pVulkanRenderer->MultiDrawArraysIndirect(mode, indirect, 1, 0);
+            return;
+        }
+
+        // No indirect buffer bound: the pointer refers to client memory.
         const auto* commandBytes =
             ResolveIndirectCommandBytes(indirect, sizeof(DrawArraysIndirectCommand), "DrawArraysIndirect");
         if (!commandBytes) {

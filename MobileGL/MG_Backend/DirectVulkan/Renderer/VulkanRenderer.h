@@ -156,6 +156,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         void DrawArrays(const DrawCmd& payload);
         void DrawElements(const DrawIndexedCmd& payload);
         void MultiDrawElements(const MultiDrawIndexedCmd& payloads);
+        void MultiDrawElementsIndirect(GLenum mode, GLenum type, const void* indirect, GLsizei drawcount,
+                                       GLsizei stride);
+        void MultiDrawArraysIndirect(GLenum mode, const void* indirect, GLsizei drawcount, GLsizei stride);
         void MultiDrawElementsIndirectCount(GLenum mode, GLenum type, const void* indirect, GLintptr drawcount,
                                             GLsizei maxdrawcount, GLsizei stride);
         void Present();
@@ -229,6 +232,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         Bool m_drawIndirectCountExtensionEnabled = false;
         Bool m_indexTypeUint8ExtensionEnabled = false;
         Bool m_logicOpFeatureEnabled = false;
+        Bool m_multiDrawIndirectFeatureEnabled = false;
+        Bool m_shaderDrawParametersExtensionEnabled = false;
+        Bool m_shaderDrawParametersFeatureEnabled = false;
         using PFNDrawIndexedIndirectCountFunc = void(VKAPI_PTR*)(VkCommandBuffer commandBuffer, VkBuffer buffer,
                                                                  VkDeviceSize offset, VkBuffer countBuffer,
                                                                  VkDeviceSize countBufferOffset, Uint32 maxDrawCount,
