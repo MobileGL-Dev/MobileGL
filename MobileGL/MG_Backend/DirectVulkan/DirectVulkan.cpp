@@ -229,7 +229,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         const Uint8* ResolveIndirectCommandBytes(const void* indirect, SizeT requiredBytes, const char* label) {
             auto drawBuffer = MG_State::pGLContext->GetBufferBindingSlot(BufferTarget::DrawIndirect).GetBoundObject();
             if (drawBuffer) {
-                drawBuffer->MarkPersistentMappedRangeDirty();
+                drawBuffer->SyncPersistentMappedRange();
                 const auto drawData = drawBuffer->GetDataReadOnly();
                 const SizeT commandOffset = reinterpret_cast<SizeT>(indirect);
                 if (!drawData || commandOffset + requiredBytes > drawData->size()) {
@@ -480,7 +480,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             return;
         }
 
-        parameterBuffer->MarkPersistentMappedRangeDirty();
+        parameterBuffer->SyncPersistentMappedRange();
         const auto parameterData = parameterBuffer->GetDataReadOnly();
         if (!parameterData) {
             MGLOG_E("MultiDrawArraysIndirectCount skipped: CPU fallback cannot read parameter buffer");

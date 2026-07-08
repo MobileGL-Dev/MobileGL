@@ -109,7 +109,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
     const Uint8* ResolveIndirectCommandBytes(const void* indirect, SizeT requiredBytes, const char* label) {
         auto drawBuffer = MG_State::pGLContext->GetBufferBindingSlot(BufferTarget::DrawIndirect).GetBoundObject();
         if (drawBuffer) {
-            drawBuffer->MarkPersistentMappedRangeDirty();
+            drawBuffer->SyncPersistentMappedRange();
             const auto drawData = drawBuffer->GetDataReadOnly();
             const SizeT commandOffset = reinterpret_cast<SizeT>(indirect);
             if (!drawData || commandOffset + requiredBytes > drawData->size()) {
@@ -177,16 +177,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
     namespace BufferImpl {
         void CreateAndSyncBufferObject(const SharedPtr<MG_State::GLState::BufferObject>& bufferObject) {
-            bufferObject->MarkPersistentMappedRangeDirty();
-            if (!(bufferObject->GetChangeBits() & BufferChangeBits::DirtyBit)) return;
-
-            const auto& backendBufferIt = g_backendBufferObjects.find(bufferObject.get());
-            Bool exist = (backendBufferIt != g_backendBufferObjects.end());
-            auto& backendObj = exist ? backendBufferIt->second : g_backendBufferObjects.GetOrCreate(bufferObject);
-            if (!exist) {
-                backendObj = MakeShared<BackendBufferObject>();
-            }
-            backendObj->SyncToBackend(bufferObject);
+            // Immediate BufferBackendOps keep existing storage current; this only
+            // needs to materialize the resource (and replay pending ops).
+            EnsureBufferResource(bufferObject);
         }
 
         void SyncBufferBindingPoints(BufferTarget target, GLenum glTarget) {
@@ -202,16 +195,15 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     continue;
                 }
 
-                CreateAndSyncBufferObject(obj);
-                const auto& backendBufferIt = g_backendBufferObjects.find(obj.get());
-                if (backendBufferIt == g_backendBufferObjects.end()) {
+                auto* backendResource = EnsureBufferResource(obj);
+                if (!backendResource || backendResource->id == 0) {
                     MGLOG_E("No backend buffer found for %s binding point %zu.",
                             MG_Util::ConvertGLEnumToString(glTarget).c_str(), i);
                     continue;
                 }
 
                 const auto& range = point.GetRange();
-                auto backendBufferId = backendBufferIt->second->GetBackendBufferId();
+                auto backendBufferId = backendResource->id;
                 if (range.start == 0 && range.end >= obj->GetSize()) {
                     g_GLESFuncs.glBindBufferBase(glTarget, static_cast<GLuint>(i), backendBufferId);
                 } else {
@@ -233,20 +225,19 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 return;
             }
 
-            CreateAndSyncBufferObject(bufferObject);
-            const auto& backendBufferIt = g_backendBufferObjects.find(bufferObject.get());
-            if (backendBufferIt == g_backendBufferObjects.end()) {
+            auto* backendResource = EnsureBufferResource(bufferObject);
+            if (!backendResource || backendResource->id == 0) {
                 MGLOG_E("No backend buffer found for %s.", MG_Util::ConvertGLEnumToString(glTarget).c_str());
                 return;
             }
-            backendBufferIt->second->Bind(glTarget);
+            BindBufferId(glTarget, backendResource->id);
         }
 
         void SyncNeccessaryBuffers(Bool includeIBO = false, Bool includeIndirectBuffer = false) {
 #ifdef TRACY_ENABLE
             ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
-            g_backendBufferObjects.CollectGarbageIfNeeded();
+            ProcessDeferredBufferReleases();
 
             // All buffers we need are:
             //   1.VBO 2.IBO (if needed) 3.UBO 4.IndirectBuffer (if needed)
@@ -291,7 +282,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 #ifdef TRACY_ENABLE
             ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
-            g_backendBufferObjects.CollectGarbageIfNeeded();
+            ProcessDeferredBufferReleases();
             SyncBufferBindingPoints(BufferTarget::Uniform, GL_UNIFORM_BUFFER);
             SyncBufferBindingPoints(BufferTarget::ShaderStorage, GL_SHADER_STORAGE_BUFFER);
             if (includeDispatchIndirectBuffer) {
@@ -945,16 +936,15 @@ namespace MobileGL::MG_Backend::DirectGLES {
                         auto range = point.GetRange();
 
                         if (bufferObj) {
-                            const auto& backendBufferIt = BufferImpl::g_backendBufferObjects.find(bufferObj.get());
-                            if (backendBufferIt != BufferImpl::g_backendBufferObjects.end()) {
-                                const auto& backendBufferObject = backendBufferIt->second;
-                                backendBufferObject->Bind(GL_UNIFORM_BUFFER);
+                            auto* backendResource = BufferImpl::EnsureBufferResource(bufferObj);
+                            if (backendResource && backendResource->id != 0) {
+                                BufferImpl::BindBufferId(GL_UNIFORM_BUFFER, backendResource->id);
                                 if (range.end == 0) {
                                     g_GLESFuncs.glBindBufferBase(GL_UNIFORM_BUFFER, lastUBOBinding,
-                                                                 backendBufferObject->GetBackendBufferId());
+                                                                 backendResource->id);
                                 } else {
                                     g_GLESFuncs.glBindBufferRange(
-                                        GL_UNIFORM_BUFFER, lastUBOBinding, backendBufferObject->GetBackendBufferId(),
+                                        GL_UNIFORM_BUFFER, lastUBOBinding, backendResource->id,
                                         (GLintptr)range.start, (GLintptr)(range.end - range.start));
                                 }
                             } else {
@@ -1232,8 +1222,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return;
         }
 
-        drawBuffer->MarkPersistentMappedRangeDirty();
-        parameterBuffer->MarkPersistentMappedRangeDirty();
+        drawBuffer->SyncPersistentMappedRange();
+        parameterBuffer->SyncPersistentMappedRange();
         const auto drawData = drawBuffer->GetDataReadOnly();
         const auto parameterData = parameterBuffer->GetDataReadOnly();
 
@@ -2802,8 +2792,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 MGLOG_E("ReadPixels: GL_FLOAT fallback PBO is too small");
                 return true;
             }
-            pixelPackBufferObject->UploadSubData({packed.data(), packed.size()}, pboOffset);
-            pixelPackBufferObject->ClearDirty();
+            pixelPackBufferObject->WritebackFromBackend({packed.data(), packed.size()}, pboOffset);
         } else if (pixels != nullptr && !packed.empty()) {
             Memcpy(pixels, packed.data(), packed.size());
         }
@@ -2860,8 +2849,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 MGLOG_E("ReadPixels: depth GL_FLOAT fallback PBO is too small");
                 return true;
             }
-            pixelPackBufferObject->UploadSubData({packed.data(), packed.size()}, pboOffset);
-            pixelPackBufferObject->ClearDirty();
+            pixelPackBufferObject->WritebackFromBackend({packed.data(), packed.size()}, pboOffset);
         } else if (pixels != nullptr && !packed.empty()) {
             Memcpy(pixels, packed.data(), packed.size());
         }
@@ -2918,8 +2906,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 MGLOG_E("ReadPixels: stencil GL_UNSIGNED_INT fallback PBO is too small");
                 return true;
             }
-            pixelPackBufferObject->UploadSubData({packed.data(), packed.size()}, pboOffset);
-            pixelPackBufferObject->ClearDirty();
+            pixelPackBufferObject->WritebackFromBackend({packed.data(), packed.size()}, pboOffset);
         } else if (pixels != nullptr && !packed.empty()) {
             Memcpy(pixels, packed.data(), packed.size());
         }
@@ -2982,18 +2969,16 @@ namespace MobileGL::MG_Backend::DirectGLES {
         Bool usePBO;
         GLuint prevPixelPackBuffer = 0;
         if (pixelPackBufferObject) {
-            BufferImpl::CreateAndSyncBufferObject(pixelPackBufferObject);
+            auto* backendResource = BufferImpl::EnsureBufferResource(pixelPackBufferObject);
             MGLOG_D("ReadPixels: Using PBO %u", pixelPackBufferObject->GetExternalIndex());
             usePBO = true;
-            const auto& backendBufferIt = BufferImpl::g_backendBufferObjects.find(pixelPackBufferObject.get());
 
-            if (backendBufferIt == BufferImpl::g_backendBufferObjects.end()) {
+            if (!backendResource || backendResource->id == 0) {
                 MGLOG_E("ReadPixels: No backend buffer found for PBO %u.",
                         pixelPackBufferObject ? pixelPackBufferObject->GetExternalIndex() : 0);
                 return;
             }
-            const auto& backendBufferObject = backendBufferIt->second;
-            backendBufferObject->Bind(GL_PIXEL_PACK_BUFFER);
+            BufferImpl::BindBufferId(GL_PIXEL_PACK_BUFFER, backendResource->id);
             g_GLESFuncs.glGetIntegerv(GL_PIXEL_PACK_BUFFER_BINDING, (GLint*)&prevPixelPackBuffer);
         } else {
             usePBO = false;
@@ -3010,12 +2995,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
             if (pboMappedPtr) {
                 MGLOG_D("ReadPixels: Copying data from PBO to client memory");
                 SizeT size = pixelPackBufferObject->GetSize();
-                pixelPackBufferObject->UploadSubData({pboMappedPtr, size}, 0);
-                pixelPackBufferObject->ClearDirty();
+                pixelPackBufferObject->WritebackFromBackend({pboMappedPtr, size}, 0);
                 MGLOG_D("ReadPixels: Unmapping PBO");
                 g_GLESFuncs.glUnmapBuffer(GL_PIXEL_PACK_BUFFER);
             } else {
-                MGLOG_E("ReadPixels: glMapBufferRange returned nullptr");
                 MGLOG_E("ReadPixels: glMapBufferRange returned nullptr");
             }
             MGLOG_D("ReadPixels: Restoring previous pixel pack buffer binding %u", prevPixelPackBuffer);
@@ -3132,17 +3115,15 @@ namespace MobileGL::MG_Backend::DirectGLES {
         Bool usePBO;
         GLuint prevPixelPackBuffer = 0;
         if (pixelPackBufferObject) {
-            BufferImpl::CreateAndSyncBufferObject(pixelPackBufferObject);
+            auto* backendResource = BufferImpl::EnsureBufferResource(pixelPackBufferObject);
             MGLOG_D("GetTexImage: Using PBO %u", pixelPackBufferObject->GetExternalIndex());
             usePBO = true;
-            const auto& backendBufferIt = BufferImpl::g_backendBufferObjects.find(pixelPackBufferObject.get());
-            if (backendBufferIt == BufferImpl::g_backendBufferObjects.end()) {
+            if (!backendResource || backendResource->id == 0) {
                 MGLOG_E("GetTexImage: No backend buffer found for PBO %u.",
                         pixelPackBufferObject ? pixelPackBufferObject->GetExternalIndex() : 0);
                 return;
             }
-            const auto& backendBufferObject = backendBufferIt->second;
-            backendBufferObject->Bind(GL_PIXEL_PACK_BUFFER);
+            BufferImpl::BindBufferId(GL_PIXEL_PACK_BUFFER, backendResource->id);
             g_GLESFuncs.glGetIntegerv(GL_PIXEL_PACK_BUFFER_BINDING, (GLint*)&prevPixelPackBuffer);
         } else {
             usePBO = false;
@@ -3168,8 +3149,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             if (pboMappedPtr) {
                 MGLOG_D("ReadPixels: Copying data from PBO to client memory");
                 SizeT size = pixelPackBufferObject->GetSize();
-                pixelPackBufferObject->UploadSubData({pboMappedPtr, size}, 0);
-                pixelPackBufferObject->ClearDirty();
+                pixelPackBufferObject->WritebackFromBackend({pboMappedPtr, size}, 0);
                 MGLOG_D("ReadPixels: Unmapping PBO");
                 g_GLESFuncs.glUnmapBuffer(GL_PIXEL_PACK_BUFFER);
             } else {
@@ -3489,6 +3469,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
         return true;
     }
 
+    namespace {
+        thread_local Bool t_backendContextCurrent = false;
+    }
+
     Bool MakeCurrent() {
         if (!g_EGLFuncs.eglMakeCurrent || g_Display == EGL_NO_DISPLAY || g_Surface == EGL_NO_SURFACE ||
             g_Context == EGL_NO_CONTEXT) {
@@ -3500,11 +3484,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
             MGLOG_E("DirectGLES::MakeCurrent failed: native eglMakeCurrent returned error 0x%04x", error);
             return false;
         }
+        t_backendContextCurrent = true;
         return true;
     }
 
     Bool ReleaseCurrent() {
         if (!g_EGLFuncs.eglMakeCurrent || g_Display == EGL_NO_DISPLAY) {
+            t_backendContextCurrent = false;
             return true;
         }
         if (!g_EGLFuncs.eglMakeCurrent(g_Display, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT)) {
@@ -3512,7 +3498,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
             MGLOG_E("DirectGLES::ReleaseCurrent failed: native eglMakeCurrent returned error 0x%04x", error);
             return false;
         }
+        t_backendContextCurrent = false;
         return true;
+    }
+
+    Bool IsBackendContextCurrentOnThisThread() {
+        return t_backendContextCurrent && g_Context != EGL_NO_CONTEXT;
     }
 
     void Present() {
@@ -3520,6 +3511,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
     }
 
     void DestroyEGLContext() {
+        BufferImpl::UnregisterBufferBackendOps();
+        t_backendContextCurrent = false;
         if (g_Display != EGL_NO_DISPLAY) {
             g_EGLFuncs.eglMakeCurrent(g_Display, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
             if (g_Context != EGL_NO_CONTEXT) {

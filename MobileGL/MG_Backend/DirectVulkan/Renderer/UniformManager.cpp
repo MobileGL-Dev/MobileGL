@@ -382,7 +382,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
 
         BufferSlice slice{};
-        if (!m_bufferManager->SyncResidentBuffer(BufferKind::TextureBuffer, bufferObject, slice) || !slice.IsValid()) {
+        if (!m_bufferManager->AcquireResidentSlice(BufferKind::TextureBuffer, bufferObject, slice) || !slice.IsValid()) {
             MGLOG_E("ResolveTexelBufferDescriptor: failed to sync GL buffer %u for texture buffer %u",
                     bufferObject->GetExternalIndex(), texture->GetExternalIndex());
             return false;
@@ -457,7 +457,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
 
         BufferSlice slice{};
-        if (!m_bufferManager->SyncResidentBuffer(BufferKind::ShaderStorage, bufferObject, slice) || !slice.IsValid()) {
+        if (!m_bufferManager->AcquireResidentSlice(BufferKind::ShaderStorage, bufferObject, slice) || !slice.IsValid()) {
             MGLOG_E("ResolveStorageBufferDescriptor: failed to sync GL buffer %u for block '%s'",
                     bufferObject->GetExternalIndex(), programObj.storageBlockNameByBinding[binding].c_str());
             return false;
@@ -622,7 +622,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         MOBILEGL_ASSERT(bufferObject != nullptr,
                         "ResolveUniformBufferPayload: no UBO bound at frontend binding %u for block '%s'",
                         frontendBinding, program.GetUniformBlockName(static_cast<Uint32>(blockIndex)).c_str());
-        bufferObject->MarkPersistentMappedRangeDirty();
+        bufferObject->SyncPersistentMappedRange();
 
         const auto bufferData = bufferObject->GetDataReadOnly();
         MOBILEGL_ASSERT(bufferData != nullptr && !bufferData->empty(),

@@ -10,9 +10,52 @@
 
 namespace MobileGL::MG_Backend::DirectVulkan {
     namespace {
-        constexpr Uint32 kResidentBufferGCInterval = 60;
         constexpr VmaAllocationCreateFlags kResidentBufferAllocationFlags =
             VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT;
+        constexpr SizeT kLiveResourcePruneThreshold = 256;
+
+        using MG_State::GLState::BackendBufferResource;
+        using MG_State::GLState::BufferBackendOps;
+        using MG_State::GLState::BufferObject;
+
+        // The manager owned by the active VulkanRenderer; immediate ops route here.
+        VkBufferManager* g_activeBufferManager = nullptr;
+
+        void Ops_Respecify(BufferObject& bufferObject) {
+            if (g_activeBufferManager) {
+                g_activeBufferManager->OnRespecify(bufferObject);
+            }
+        }
+
+        void Ops_SubData(BufferObject& bufferObject, SizeT offset, SizeT size) {
+            if (g_activeBufferManager) {
+                g_activeBufferManager->OnSubData(bufferObject, offset, size);
+            }
+        }
+
+        void Ops_FlushMappedRange(BufferObject& bufferObject, Range1D range,
+                                  Flags<BufferMappingAccessBit> appAccess) {
+            if (g_activeBufferManager) {
+                g_activeBufferManager->OnFlushMappedRange(bufferObject, range, appAccess);
+            }
+        }
+
+        void Ops_OnDestroy(SharedPtr<BackendBufferResource>&& resource) {
+            if (g_activeBufferManager) {
+                g_activeBufferManager->OnResourceDestroyed(std::move(resource));
+            }
+            // No active manager: the device/allocator is gone or going away and
+            // Shutdown() already destroyed the storage; dropping the handle here
+            // must not touch Vulkan. VkBufferResource's dtor destroys via VMA only
+            // when the allocation is still valid, which Shutdown() cleared.
+        }
+
+        const BufferBackendOps g_vulkanBufferBackendOps = {
+            .Respecify = Ops_Respecify,
+            .SubData = Ops_SubData,
+            .FlushMappedRange = Ops_FlushMappedRange,
+            .OnDestroy = Ops_OnDestroy,
+        };
     } // namespace
 
     Bool VkBufferManager::Initialize(const VkBufferManagerInitInfo& initInfo) {
@@ -22,38 +65,79 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         MOBILEGL_ASSERT(initInfo.frameCount > 0, "VkBufferManager::Initialize requires non-zero frame count");
 
         m_initInfo = initInfo;
-        m_deferredResidentReleases.resize(initInfo.frameCount);
+        m_deferredBufferReleases.resize(initInfo.frameCount);
+        m_deferredResourceReleases.resize(initInfo.frameCount);
         m_currentFrameIndex = 0;
-        return InitializeTransientArenas();
+        m_frameSerial = 1;
+        m_completedSerialFloor = 0;
+        if (!InitializeTransientArenas()) {
+            return false;
+        }
+        g_activeBufferManager = this;
+        MG_State::GLState::SetBufferBackendOps(&g_vulkanBufferBackendOps);
+        return true;
     }
 
     void VkBufferManager::Shutdown() {
+        if (g_activeBufferManager == this) {
+            g_activeBufferManager = nullptr;
+            if (MG_State::GLState::GetBufferBackendOps() == &g_vulkanBufferBackendOps) {
+                MG_State::GLState::SetBufferBackendOps(nullptr);
+            }
+        }
         m_transientUploadArena.Shutdown();
-        DestroyResidentBuffers();
-        DestroyDeferredResidentReleases();
+        DestroyAllDeferredReleases();
+        ReleaseAllLiveResources();
+        m_copyProvider = nullptr;
         m_initInfo = {};
         m_currentFrameIndex = 0;
-        m_residentGcTick = 0;
+        m_frameSerial = 1;
+        m_completedSerialFloor = 0;
     }
 
     Bool VkBufferManager::RecreateTransientArenas(Uint32 frameCount) {
-        MOBILEGL_ASSERT(m_initInfo.allocator != nullptr, "VkBufferManager::RecreateTransientArenas requires initialized manager");
+        MOBILEGL_ASSERT(m_initInfo.allocator != nullptr,
+                        "VkBufferManager::RecreateTransientArenas requires initialized manager");
         MOBILEGL_ASSERT(frameCount > 0, "VkBufferManager::RecreateTransientArenas requires non-zero frame count");
 
+        // Callers guarantee the device is idle around arena recreation.
+        NotifyDeviceIdle();
         m_transientUploadArena.Shutdown();
         m_initInfo.frameCount = frameCount;
-        DestroyDeferredResidentReleases();
-        m_deferredResidentReleases.resize(frameCount);
+        DestroyAllDeferredReleases();
+        m_deferredBufferReleases.resize(frameCount);
+        m_deferredResourceReleases.resize(frameCount);
         m_currentFrameIndex = 0;
         return InitializeTransientArenas();
     }
 
     void VkBufferManager::BeginFrame(Uint32 frameIndex) {
-        MOBILEGL_ASSERT(frameIndex < m_deferredResidentReleases.size(),
+        MOBILEGL_ASSERT(frameIndex < m_deferredBufferReleases.size(),
                         "VkBufferManager::BeginFrame frame index out of range");
         m_currentFrameIndex = frameIndex;
-        CollectDeferredResidentReleases(frameIndex);
+        ++m_frameSerial;
+        CollectDeferredReleases(frameIndex);
         m_transientUploadArena.BeginFrame(frameIndex);
+    }
+
+    void VkBufferManager::NotifyDeviceIdle() {
+        // Everything submitted so far has completed. Work recorded for the
+        // current frame has not been submitted yet, so the current serial
+        // remains busy.
+        if (m_frameSerial > 0) {
+            m_completedSerialFloor = m_frameSerial - 1;
+        }
+    }
+
+    void VkBufferManager::SetCopyCommandProvider(IBufferCopyCommandProvider* provider) {
+        m_copyProvider = provider;
+    }
+
+    Bool VkBufferManager::IsResourceBusy(const VkBufferResource& resource) const {
+        const Uint64 frameCount = m_initInfo.frameCount > 0 ? m_initInfo.frameCount : 1;
+        Uint64 completed = m_frameSerial > frameCount ? m_frameSerial - frameCount : 0;
+        completed = std::max(completed, m_completedSerialFloor);
+        return resource.lastUseSerial > completed;
     }
 
     Bool VkBufferManager::UploadTransient(BufferKind kind, Uint32 frameIndex, const void* data,
@@ -67,7 +151,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             .allocator = m_initInfo.allocator,
             .frameCount = m_initInfo.frameCount,
             .usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT |
-                     VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT,
+                     VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT |
+                     VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
             .memoryUsage = m_initInfo.transientMemoryUsage,
             .allocationFlags = m_initInfo.transientAllocationFlags,
             .minBufferSize = m_initInfo.minUploadBytes,
@@ -75,116 +160,341 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         });
     }
 
-    Bool VkBufferManager::SyncResidentBuffer(BufferKind kind,
-                                             const SharedPtr<MG_State::GLState::BufferObject>& bufferObject,
-                                             BufferSlice& outSlice) {
-        const VkBufferUsageFlags requiredUsage = GetVkBufferUsage(kind);
-        MOBILEGL_ASSERT(requiredUsage != 0,
-                        "VkBufferManager::SyncResidentBuffer unsupported resident buffer kind");
-        MOBILEGL_ASSERT(bufferObject != nullptr, "VkBufferManager::SyncResidentBuffer requires valid buffer object");
-        CollectResidentGarbageIfNeeded();
+    VkBufferResource* VkBufferManager::ResourceOf(MG_State::GLState::BufferObject& bufferObject) {
+        return static_cast<VkBufferResource*>(bufferObject.GetBackendResource().get());
+    }
 
-        const auto* bufferData = bufferObject->GetDataReadOnly().get();
-        MOBILEGL_ASSERT(bufferData != nullptr, "VkBufferManager::SyncResidentBuffer requires frontend buffer data");
-        bufferObject->MarkPersistentMappedRangeDirty();
+    SharedPtr<VkBufferResource> VkBufferManager::GetOrCreateResource(
+        const SharedPtr<MG_State::GLState::BufferObject>& bufferObject) {
+        auto existing = std::static_pointer_cast<VkBufferResource>(bufferObject->GetBackendResource());
+        if (existing) {
+            return existing;
+        }
+        auto resource = MakeShared<VkBufferResource>();
+        bufferObject->SetBackendResource(resource);
+        TrackLiveResource(resource);
+        return resource;
+    }
 
-        const VkDeviceSize bufferSize = static_cast<VkDeviceSize>(bufferObject->GetSize());
-        if (bufferSize == 0) {
-            MGLOG_E("VkBufferManager::SyncResidentBuffer failed: buffer size is zero");
+    void VkBufferManager::TrackLiveResource(const SharedPtr<VkBufferResource>& resource) {
+        if (m_liveResources.size() >= kLiveResourcePruneThreshold) {
+            std::erase_if(m_liveResources, [](const WeakPtr<VkBufferResource>& weak) { return weak.expired(); });
+        }
+        m_liveResources.push_back(resource);
+    }
+
+    void VkBufferManager::ReleaseAllLiveResources() {
+        for (auto& weak : m_liveResources) {
+            if (auto resource = weak.lock()) {
+                resource->buffer.Destroy();
+                resource->storageSize = 0;
+                resource->usageFlags = 0;
+                resource->lastUseSerial = 0;
+                resource->pendingFullUpload = true;
+                resource->transientSlice = {};
+                resource->transientFrameSerial = 0;
+            }
+        }
+        m_liveResources.clear();
+    }
+
+    Bool VkBufferManager::CreateResidentStorage(VkBufferResource& resource, VkDeviceSize size,
+                                                VkBufferUsageFlags usage) {
+        // Staged range copies write resident storage with vkCmdCopyBuffer.
+        usage |= VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+        const Bool created = resource.buffer.Create({
+            .allocator = m_initInfo.allocator,
+            .size = size,
+            .usage = usage,
+            .memoryUsage = VMA_MEMORY_USAGE_AUTO,
+            .allocationFlags = kResidentBufferAllocationFlags,
+        });
+        if (!created || resource.buffer.Map() == nullptr) {
+            MGLOG_E("VkBufferManager::CreateResidentStorage failed (size=%llu)",
+                    static_cast<unsigned long long>(size));
+            resource.buffer.Destroy();
+            resource.storageSize = 0;
+            resource.usageFlags = 0;
             return false;
         }
-
-        auto& entry = m_residentBuffers[bufferObject.get()];
-        entry.aliveRef = bufferObject;
-
-        const auto changeBits = bufferObject->GetChangeBits();
-        const Bool needsRecreate = !entry.buffer.IsValid() || entry.size != bufferSize ||
-                                   ((entry.usage & requiredUsage) != requiredUsage) ||
-                                   (changeBits & BufferChangeBits::PreferReallocationBit);
-        if (needsRecreate) {
-            const VkBufferUsageFlags recreatedUsage = entry.usage | requiredUsage;
-            DeferResidentRelease(std::move(entry.buffer));
-            const Bool created = entry.buffer.Create({
-                .allocator = m_initInfo.allocator,
-                .size = bufferSize,
-                .usage = recreatedUsage,
-                .memoryUsage = VMA_MEMORY_USAGE_AUTO,
-                .allocationFlags = kResidentBufferAllocationFlags,
-            });
-            if (!created || entry.buffer.Map() == nullptr) {
-                MGLOG_E("VkBufferManager::SyncResidentBuffer failed: unable to create resident buffer");
-                entry.buffer.Destroy();
-                entry.size = 0;
-                entry.usage = 0;
-                return false;
-            }
-            if (!entry.buffer.Upload(bufferData->data(), bufferSize, 0)) {
-                MGLOG_E("VkBufferManager::SyncResidentBuffer failed: initial upload failed");
-                entry.buffer.Destroy();
-                entry.size = 0;
-                entry.usage = 0;
-                return false;
-            }
-            entry.size = bufferSize;
-            entry.usage = recreatedUsage;
-            bufferObject->ClearDirty();
-            outSlice = entry.buffer.GetSlice(0, bufferSize);
-            return true;
-        }
-
-        if (changeBits & BufferChangeBits::DirtyBit) {
-            const auto& dirtyRanges = bufferObject->GetDirtyRanges();
-            for (const auto& range : dirtyRanges) {
-                const VkDeviceSize rangeOffset = static_cast<VkDeviceSize>(range.start);
-                const VkDeviceSize rangeSize = static_cast<VkDeviceSize>(range.end - range.start);
-                if (rangeSize == 0) {
-                    continue;
-                }
-                if (!entry.buffer.Upload(bufferData->data() + range.start, rangeSize, rangeOffset)) {
-                    MGLOG_E("VkBufferManager::SyncResidentBuffer failed: dirty range upload failed");
-                    return false;
-                }
-            }
-            bufferObject->ClearDirty();
-        }
-
-        outSlice = entry.buffer.GetSlice(0, bufferSize);
+        resource.storageSize = size;
+        resource.usageFlags = usage;
         return true;
     }
 
-    void VkBufferManager::DowngradeResidentBufferToTransient(const SharedPtr<MG_State::GLState::BufferObject>& bufferObject) {
-        if (bufferObject == nullptr) {
-            return;
+    Bool VkBufferManager::SwapStorageAndUploadAll(VkBufferResource& resource,
+                                                  MG_State::GLState::BufferObject& bufferObject) {
+        const VkDeviceSize size = static_cast<VkDeviceSize>(bufferObject.GetSize());
+        const VkBufferUsageFlags usage = resource.usageFlags;
+        DeferRelease(std::move(resource.buffer));
+        if (!CreateResidentStorage(resource, size, usage)) {
+            resource.pendingFullUpload = true;
+            return false;
         }
-
-        auto it = m_residentBuffers.find(bufferObject.get());
-        if (it == m_residentBuffers.end()) {
-            return;
+        if (!resource.buffer.Upload(bufferObject.GetDataReadOnly()->data(), size, 0)) {
+            MGLOG_E("VkBufferManager::SwapStorageAndUploadAll: upload failed");
+            resource.pendingFullUpload = true;
+            return false;
         }
-
-        DeferResidentRelease(std::move(it->second.buffer));
-        m_residentBuffers.erase(it);
+        resource.pendingFullUpload = false;
+        return true;
     }
 
-    void VkBufferManager::DeferResidentRelease(VkBufferObject&& buffer) {
+    Bool VkBufferManager::StagedRangeCopy(VkBufferResource& resource, MG_State::GLState::BufferObject& bufferObject,
+                                          SizeT offset, SizeT size) {
+        if (!m_copyProvider) {
+            return false;
+        }
+        BufferSlice staging{};
+        if (!m_transientUploadArena.Upload(m_currentFrameIndex, bufferObject.GetDataReadOnly()->data() + offset,
+                                           static_cast<VkDeviceSize>(size), 16, staging)) {
+            return false;
+        }
+        VkCommandBuffer commandBuffer = m_copyProvider->AcquireBufferCopyCommandBuffer();
+        if (commandBuffer == VK_NULL_HANDLE) {
+            return false;
+        }
+
+        // Order the copy after every prior read/write of this buffer, both from
+        // in-flight frames (submission order) and from commands already recorded
+        // in this frame's command buffer.
+        VkMemoryBarrier beforeBarrier{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+        beforeBarrier.srcAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
+        beforeBarrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1,
+                             &beforeBarrier, 0, nullptr, 0, nullptr);
+
+        VkBufferCopy region{};
+        region.srcOffset = staging.offset;
+        region.dstOffset = static_cast<VkDeviceSize>(offset);
+        region.size = static_cast<VkDeviceSize>(size);
+        vkCmdCopyBuffer(commandBuffer, staging.buffer, resource.buffer.GetHandle(), 1, &region);
+
+        VkMemoryBarrier afterBarrier{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+        afterBarrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        afterBarrier.dstAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
+        vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 1,
+                             &afterBarrier, 0, nullptr, 0, nullptr);
+
+        resource.lastUseSerial = m_frameSerial;
+        return true;
+    }
+
+    void VkBufferManager::OnRespecify(MG_State::GLState::BufferObject& bufferObject) {
+        auto* resource = ResourceOf(bufferObject);
+        if (!resource) {
+            return; // lazy: AcquireResidentSlice performs a full upload on creation
+        }
+        // Any cached streaming slice refers to the previous contents.
+        resource->transientFrameSerial = 0;
+        if (!resource->buffer.IsValid()) {
+            return; // streaming-only resource: shadow + serial are enough
+        }
+
+        const VkDeviceSize size = static_cast<VkDeviceSize>(bufferObject.GetSize());
+        if (size == 0) {
+            DeferRelease(std::move(resource->buffer));
+            resource->storageSize = 0;
+            resource->pendingFullUpload = false;
+            return;
+        }
+
+        if (size != resource->storageSize || IsResourceBusy(*resource)) {
+            // Conditional orphan: only swap the storage when the old one is
+            // still referenced by the GPU (or no longer fits).
+            SwapStorageAndUploadAll(*resource, bufferObject);
+            return;
+        }
+
+        if (!resource->buffer.Upload(bufferObject.GetDataReadOnly()->data(), size, 0)) {
+            MGLOG_E("VkBufferManager::OnRespecify: in-place upload failed");
+            resource->pendingFullUpload = true;
+        }
+    }
+
+    void VkBufferManager::OnSubData(MG_State::GLState::BufferObject& bufferObject, SizeT offset, SizeT size) {
+        auto* resource = ResourceOf(bufferObject);
+        if (!resource) {
+            return;
+        }
+        resource->transientFrameSerial = 0;
+        if (!resource->buffer.IsValid() || resource->pendingFullUpload) {
+            return;
+        }
+        if (static_cast<VkDeviceSize>(bufferObject.GetSize()) != resource->storageSize) {
+            resource->pendingFullUpload = true;
+            return;
+        }
+
+        if (!IsResourceBusy(*resource)) {
+            if (!resource->buffer.Upload(bufferObject.GetDataReadOnly()->data() + offset,
+                                         static_cast<VkDeviceSize>(size), static_cast<VkDeviceSize>(offset))) {
+                MGLOG_E("VkBufferManager::OnSubData: host upload failed");
+                resource->pendingFullUpload = true;
+            }
+            return;
+        }
+
+        // Busy partial write: stage + GPU copy preserves GL ordering within the
+        // frame and leaves bytes outside the range (possibly GPU-written, e.g.
+        // SSBO) intact. Fall back to a storage swap if staging is unavailable.
+        if (!StagedRangeCopy(*resource, bufferObject, offset, size)) {
+            SwapStorageAndUploadAll(*resource, bufferObject);
+        }
+    }
+
+    void VkBufferManager::OnFlushMappedRange(MG_State::GLState::BufferObject& bufferObject, Range1D range,
+                                             Flags<BufferMappingAccessBit> appAccess) {
+        auto* resource = ResourceOf(bufferObject);
+        if (!resource) {
+            return;
+        }
+        resource->transientFrameSerial = 0;
+        if (!resource->buffer.IsValid() || resource->pendingFullUpload) {
+            return;
+        }
+        if (static_cast<VkDeviceSize>(bufferObject.GetSize()) != resource->storageSize) {
+            resource->pendingFullUpload = true;
+            return;
+        }
+
+        const SizeT offset = range.start;
+        const SizeT size = range.end - range.start;
+        // GL_MAP_UNSYNCHRONIZED_BIT: the app guarantees it does not overwrite
+        // data the GPU is still reading; honour it with a direct host write.
+        if ((appAccess & BufferMappingAccessBit::Unsynchronized) || !IsResourceBusy(*resource)) {
+            if (!resource->buffer.Upload(bufferObject.GetDataReadOnly()->data() + offset,
+                                         static_cast<VkDeviceSize>(size), static_cast<VkDeviceSize>(offset))) {
+                MGLOG_E("VkBufferManager::OnFlushMappedRange: host upload failed");
+                resource->pendingFullUpload = true;
+            }
+            return;
+        }
+
+        if (!StagedRangeCopy(*resource, bufferObject, offset, size)) {
+            SwapStorageAndUploadAll(*resource, bufferObject);
+        }
+    }
+
+    void VkBufferManager::OnResourceDestroyed(SharedPtr<MG_State::GLState::BackendBufferResource>&& resource) {
+        if (!resource) {
+            return;
+        }
+        auto vkResource = std::static_pointer_cast<VkBufferResource>(std::move(resource));
+        if (!vkResource->buffer.IsValid()) {
+            return;
+        }
+        if (m_deferredResourceReleases.empty()) {
+            vkResource->buffer.Destroy();
+            return;
+        }
+        MOBILEGL_ASSERT(m_currentFrameIndex < m_deferredResourceReleases.size(),
+                        "VkBufferManager::OnResourceDestroyed current frame index out of range");
+        // Keep the whole resource alive until this frame slot's fence has been
+        // waited, then the storage is destroyed with it.
+        m_deferredResourceReleases[m_currentFrameIndex].push_back(std::move(vkResource));
+    }
+
+    Bool VkBufferManager::AcquireResidentSlice(BufferKind kind,
+                                               const SharedPtr<MG_State::GLState::BufferObject>& bufferObject,
+                                               BufferSlice& outSlice) {
+        const VkBufferUsageFlags requiredUsage = GetVkBufferUsage(kind);
+        MOBILEGL_ASSERT(requiredUsage != 0, "VkBufferManager::AcquireResidentSlice unsupported buffer kind");
+        MOBILEGL_ASSERT(bufferObject != nullptr, "VkBufferManager::AcquireResidentSlice requires valid buffer object");
+
+        auto resource = GetOrCreateResource(bufferObject);
+        bufferObject->SyncPersistentMappedRange();
+
+        const VkDeviceSize size = static_cast<VkDeviceSize>(bufferObject->GetSize());
+        if (size == 0) {
+            MGLOG_E("VkBufferManager::AcquireResidentSlice failed: buffer size is zero");
+            return false;
+        }
+
+        const Bool needsRecreate = !resource->buffer.IsValid() || resource->storageSize != size ||
+                                   ((resource->usageFlags & requiredUsage) != requiredUsage) ||
+                                   resource->pendingFullUpload;
+        if (needsRecreate) {
+            const VkBufferUsageFlags usage = resource->usageFlags | requiredUsage;
+            DeferRelease(std::move(resource->buffer));
+            if (!CreateResidentStorage(*resource, size, usage)) {
+                return false;
+            }
+            if (!resource->buffer.Upload(bufferObject->GetDataReadOnly()->data(), size, 0)) {
+                MGLOG_E("VkBufferManager::AcquireResidentSlice failed: initial upload failed");
+                resource->buffer.Destroy();
+                resource->storageSize = 0;
+                resource->usageFlags = 0;
+                return false;
+            }
+            resource->pendingFullUpload = false;
+        }
+
+        resource->lastUseSerial = m_frameSerial;
+        outSlice = resource->buffer.GetSlice(0, size);
+        return true;
+    }
+
+    Bool VkBufferManager::AcquireStreamedSlice(BufferKind kind,
+                                               const SharedPtr<MG_State::GLState::BufferObject>& bufferObject,
+                                               BufferSlice& outSlice) {
+        (void)kind;
+        MOBILEGL_ASSERT(bufferObject != nullptr, "VkBufferManager::AcquireStreamedSlice requires valid buffer object");
+
+        auto resource = GetOrCreateResource(bufferObject);
+        bufferObject->SyncPersistentMappedRange();
+
+        const VkDeviceSize size = static_cast<VkDeviceSize>(bufferObject->GetSize());
+        if (size == 0) {
+            MGLOG_E("VkBufferManager::AcquireStreamedSlice failed: buffer size is zero");
+            return false;
+        }
+
+        const Uint64 changeSerial = bufferObject->GetChangeSerial();
+        if (resource->transientFrameSerial == m_frameSerial && resource->transientChangeSerial == changeSerial &&
+            resource->transientSize == size && resource->transientSlice.IsValid()) {
+            outSlice = resource->transientSlice;
+            return true;
+        }
+
+        if (!m_transientUploadArena.Upload(m_currentFrameIndex, bufferObject->GetDataReadOnly()->data(), size, 16,
+                                           outSlice)) {
+            return false;
+        }
+        resource->transientSlice = outSlice;
+        resource->transientFrameSerial = m_frameSerial;
+        resource->transientChangeSerial = changeSerial;
+        resource->transientSize = size;
+
+        // Streaming path is authoritative now; release resident storage so we do
+        // not keep a second, stale copy alive (downgrade).
+        if (resource->buffer.IsValid()) {
+            DeferRelease(std::move(resource->buffer));
+            resource->storageSize = 0;
+        }
+        return true;
+    }
+
+    void VkBufferManager::DeferRelease(VkBufferObject&& buffer) {
         if (!buffer.IsValid()) {
             return;
         }
 
-        if (m_deferredResidentReleases.empty()) {
+        if (m_deferredBufferReleases.empty()) {
             buffer.Destroy();
             return;
         }
 
-        MOBILEGL_ASSERT(m_currentFrameIndex < m_deferredResidentReleases.size(),
-                        "VkBufferManager::DeferResidentRelease current frame index out of range");
-        m_deferredResidentReleases[m_currentFrameIndex].push_back(std::move(buffer));
+        MOBILEGL_ASSERT(m_currentFrameIndex < m_deferredBufferReleases.size(),
+                        "VkBufferManager::DeferRelease current frame index out of range");
+        m_deferredBufferReleases[m_currentFrameIndex].push_back(std::move(buffer));
     }
 
-    void VkBufferManager::CollectDeferredResidentReleases(Uint32 frameIndex) {
-        MOBILEGL_ASSERT(frameIndex < m_deferredResidentReleases.size(),
-                        "VkBufferManager::CollectDeferredResidentReleases frame index out of range");
-        m_deferredResidentReleases[frameIndex].clear();
+    void VkBufferManager::CollectDeferredReleases(Uint32 frameIndex) {
+        MOBILEGL_ASSERT(frameIndex < m_deferredBufferReleases.size(),
+                        "VkBufferManager::CollectDeferredReleases frame index out of range");
+        m_deferredBufferReleases[frameIndex].clear();
+        m_deferredResourceReleases[frameIndex].clear();
     }
 
     VkBufferUsageFlags VkBufferManager::GetVkBufferUsage(BufferKind kind) {
@@ -209,46 +519,20 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
     }
 
-    void VkBufferManager::CollectResidentGarbageIfNeeded() {
-        ++m_residentGcTick;
-        if (m_residentGcTick < kResidentBufferGCInterval) {
-            return;
-        }
-        CollectResidentGarbageNow();
-        m_residentGcTick = 0;
-    }
-
-    void VkBufferManager::CollectResidentGarbageNow() {
-        Vector<MG_State::GLState::BufferObject*> staleBuffers;
-        staleBuffers.reserve(m_residentBuffers.size());
-
-        for (const auto& [rawBuffer, entry] : m_residentBuffers) {
-            if (entry.aliveRef.expired()) {
-                staleBuffers.push_back(rawBuffer);
+    void VkBufferManager::DestroyAllDeferredReleases() {
+        for (auto& releases : m_deferredBufferReleases) {
+            for (auto& buffer : releases) {
+                buffer.Destroy();
             }
+            releases.clear();
         }
-
-        for (const auto* rawBuffer : staleBuffers) {
-            auto it = m_residentBuffers.find(const_cast<MG_State::GLState::BufferObject*>(rawBuffer));
-            if (it == m_residentBuffers.end()) {
-                continue;
+        m_deferredBufferReleases.clear();
+        for (auto& releases : m_deferredResourceReleases) {
+            for (auto& resource : releases) {
+                resource->buffer.Destroy();
             }
-            DeferResidentRelease(std::move(it->second.buffer));
-            m_residentBuffers.erase(it);
+            releases.clear();
         }
-    }
-
-    void VkBufferManager::DestroyDeferredResidentReleases() {
-        for (auto& deferredReleases : m_deferredResidentReleases) {
-            deferredReleases.clear();
-        }
-        m_deferredResidentReleases.clear();
-    }
-
-    void VkBufferManager::DestroyResidentBuffers() {
-        for (auto& [_, entry] : m_residentBuffers) {
-            entry.buffer.Destroy();
-        }
-        m_residentBuffers.clear();
+        m_deferredResourceReleases.clear();
     }
 } // namespace MobileGL::MG_Backend::DirectVulkan

@@ -115,26 +115,42 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
     namespace BufferImpl {
         const GLenum TempBufferTarget = GL_ARRAY_BUFFER;
-        class BackendBufferObject {
+
+        // The DirectGLES storage behind one frontend buffer. Owned (refcounted) by
+        // the frontend BufferObject; immediate BufferBackendOps keep it current, so
+        // draw-time "sync" reduces to ensuring the storage exists.
+        class GLESBufferResource : public MG_State::GLState::BackendBufferResource {
         public:
-            BackendBufferObject();
-            void SyncToBackend(const SharedPtr<MG_State::GLState::BufferObject>& stateBufferObject);
-            Uint GetBackendBufferId() const { return m_backendBufferId; }
-            void Bind(GLenum target = TempBufferTarget);
+            ~GLESBufferResource() override = default;
 
-        private:
-            void SyncToBackend_glBufferData(const SharedPtr<MG_State::GLState::BufferObject>& stateBufferObject);
-            void SyncToBackend_glBufferSubData(const SharedPtr<MG_State::GLState::BufferObject>& stateBufferObject);
-            void SyncToBackend_glMapBufferRange(const SharedPtr<MG_State::GLState::BufferObject>& stateBufferObject,
-                                                Bool invalidate = true, Bool unsynchronized = true);
-
-            Uint m_backendBufferId = 0;
-            SizeT m_prevBufferSize = 0;
-            Bool m_isInitialized = false;
+            Uint id = 0;
+            SizeT storageSize = 0;
+            Bool storageInitialized = false;
+            // Ops that arrived while no ES context was current on the calling thread
+            // (or before storage existed); replayed by EnsureBufferResource.
+            Bool pendingRespecify = false;
+            VecRange1D pendingRanges;
         };
 
-        extern BackendBufferObject* g_boundVertexBufferObject;
-        extern StateBackendObjectRegistry<MG_State::GLState::BufferObject, BackendBufferObject> g_backendBufferObjects;
+        // Registered as the frontend's BufferBackendOps at backend init.
+        void RegisterBufferBackendOps();
+        void UnregisterBufferBackendOps();
+
+        // Get-or-create the backend resource and bring its storage up to date
+        // (creates the GL buffer, replays pending ops, pushes persistent-mapped
+        // ranges). Requires the ES context to be current. Returns nullptr only
+        // for null input.
+        GLESBufferResource* EnsureBufferResource(const SharedPtr<MG_State::GLState::BufferObject>& bufferObject);
+        // Existing resource or nullptr; performs no GL calls.
+        GLESBufferResource* GetBufferResource(MG_State::GLState::BufferObject* bufferObject);
+
+        // Deletes GL buffers whose owning frontend objects died (possibly on a
+        // thread without a current ES context). Called from draw-time sync.
+        void ProcessDeferredBufferReleases();
+
+        // glBindBuffer with a redundant-bind cache for GL_ARRAY_BUFFER.
+        void BindBufferId(GLenum target, Uint id);
+        void InvalidateArrayBufferBindingCache();
     } // namespace BufferImpl
 
     namespace VertexArrayImpl {

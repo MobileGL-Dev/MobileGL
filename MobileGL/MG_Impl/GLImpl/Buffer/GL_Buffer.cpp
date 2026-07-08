@@ -834,10 +834,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         }
 
         bufferObject->SetUsage(bufferUsage);
-        bufferObject->Resize(size);
-        if (data) {
-            bufferObject->UploadData({(void*)data, (SizeT)size}, 0);
-        }
+        bufferObject->Respecify(size, data);
     }
 
     void BufferStorage_State(GLenum target, GLsizeiptr size, const void* data, GLbitfield flags) {
@@ -928,10 +925,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         }
 
         bufferObject->SetUsage(bufferUsage);
-        bufferObject->Resize(size);
-        if (data) {
-            bufferObject->UploadData({(void*)data, (SizeT)size}, 0);
-        }
+        bufferObject->Respecify(size, data);
     }
 
     void NamedBufferSubData_State(GLuint buffer, GLintptr offset, GLsizeiptr size, const void* data) {

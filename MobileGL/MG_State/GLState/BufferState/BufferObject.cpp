@@ -9,24 +9,67 @@
 #include "BufferObject.h"
 
 namespace MobileGL::MG_State::GLState {
-    BufferObject::BufferObject(Uint externalIndex)
-        : m_externalIndex(externalIndex), m_size(0), m_usage(BufferUsage::StaticDraw), m_isMapped(false),
-          m_mappingAccess(BufferMappingAccessBit::Null),
-          m_change(BufferChangeBits::DirtyBit | BufferChangeBits::PreferReallocationBit), m_mappedRange({0, 0}),
-          m_dataPtr(MakeShared<Data>()), m_ownsStagingData{} {
-        m_change.DirtyRanges.reserve(BufferChange::DEFAULT_RESERVED_DIRTY_RANGES_COUNT);
+    namespace {
+        const BufferBackendOps* g_bufferBackendOps = nullptr;
     }
 
-    void BufferObject::Resize(SizeT size) {
+    void SetBufferBackendOps(const BufferBackendOps* ops) {
+        g_bufferBackendOps = ops;
+    }
+
+    const BufferBackendOps* GetBufferBackendOps() {
+        return g_bufferBackendOps;
+    }
+
+    BufferObject::BufferObject(Uint externalIndex)
+        : m_externalIndex(externalIndex), m_size(0), m_usage(BufferUsage::StaticDraw), m_isMapped(false),
+          m_mappingAccess(BufferMappingAccessBit::Null), m_mappedRange({0, 0}), m_dataPtr(MakeShared<Data>()),
+          m_ownsStagingData{} {}
+
+    BufferObject::~BufferObject() {
+        if (m_backendResource && g_bufferBackendOps && g_bufferBackendOps->OnDestroy) {
+            g_bufferBackendOps->OnDestroy(std::move(m_backendResource));
+        }
+    }
+
+    void BufferObject::NotifyRespecify() {
+        ++m_changeSerial;
+        if (g_bufferBackendOps && g_bufferBackendOps->Respecify) {
+            g_bufferBackendOps->Respecify(*this);
+        }
+    }
+
+    void BufferObject::NotifySubData(SizeT offset, SizeT size) {
+        ++m_changeSerial;
+        if (size == 0) return;
+        if (g_bufferBackendOps && g_bufferBackendOps->SubData) {
+            g_bufferBackendOps->SubData(*this, offset, size);
+        }
+    }
+
+    void BufferObject::NotifyFlushMappedRange(Range1D range, Flags<BufferMappingAccessBit> appAccess) {
+        ++m_changeSerial;
+        if (range.start >= range.end) return;
+        if (g_bufferBackendOps && g_bufferBackendOps->FlushMappedRange) {
+            g_bufferBackendOps->FlushMappedRange(*this, range, appAccess);
+        }
+    }
+
+    void BufferObject::Respecify(SizeT size, const void* data) {
         ReleaseMemory();
         m_size = size;
         m_dataPtr->reserve(std::bit_ceil(size)); // power-of-2 reserve
         m_dataPtr->resize(size);
+        if (data && size > 0) {
+            Memcpy(m_dataPtr->data(), data, size);
+        }
         m_isImmutableStorage = false;
         m_storageFlags = 0;
-        m_change.Bits |= BufferChangeBits::DirtyBit;
-        m_change.Bits |= BufferChangeBits::PreferReallocationBit;
-        ++m_changeSerial;
+        NotifyRespecify();
+    }
+
+    void BufferObject::Resize(SizeT size) {
+        Respecify(size, nullptr);
     }
 
     void BufferObject::AllocateImmutableStorage(SizeT size, const void* data, GLbitfield storageFlags) {
@@ -41,10 +84,7 @@ namespace MobileGL::MG_State::GLState {
         }
         m_isImmutableStorage = true;
         m_storageFlags = storageFlags;
-        m_change.DirtyRanges.clear();
-        m_change.DirtyRanges.Add({0, size});
-        m_change.Bits = BufferChangeBits::DirtyBit | BufferChangeBits::PreferReallocationBit;
-        ++m_changeSerial;
+        NotifyRespecify();
     }
 
     void BufferObject::UploadData(DataPtr data, SizeT atOffset) {
@@ -54,15 +94,7 @@ namespace MobileGL::MG_State::GLState {
         MOBILEGL_ASSERT(!m_isMapped || (m_mappingAccess & BufferMappingAccessBit::Persistent),
                         "Cannot upload data while buffer is non-persistently mapped.");
         Memcpy(m_dataPtr->data() + atOffset, data.data, data.size);
-        m_change.DirtyRanges.Add({atOffset, atOffset + data.size});
-        m_change.Bits |= BufferChangeBits::DirtyBit;
-        m_change.Bits |= BufferChangeBits::ForbidInvalidationBit;
-        m_change.Bits |= BufferChangeBits::ForbidUnsynchronizationBit;
-        ++m_changeSerial;
-        // This function may be called by `glBufferData`, but we still set the forbid bits above,
-        // because when `PreferReallocationBit` is set, those bits are ignored anyway.
-        // The bits can fit the `glBufferSubData` semantics
-        // (though `glBufferSubData` calls `UploadSubData` instead).
+        NotifySubData(atOffset, data.size);
     }
 
     void BufferObject::SetUsage(BufferUsage usage) {
@@ -78,9 +110,7 @@ namespace MobileGL::MG_State::GLState {
                     Memcpy(m_dataPtr->data() + m_mappedRange.start, m_stagingData.data(),
                            m_mappedRange.end - m_mappedRange.start);
                 }
-                m_change.DirtyRanges.Add({m_mappedRange.start, m_mappedRange.end});
-                m_change.Bits |= BufferChangeBits::DirtyBit;
-                ++m_changeSerial;
+                NotifyFlushMappedRange(m_mappedRange, m_mappingAccess);
             }
 
             m_stagingData.clear();
@@ -107,20 +137,24 @@ namespace MobileGL::MG_State::GLState {
         if (!(m_mappingAccess & BufferMappingAccessBit::Persistent)) {
             Memcpy(m_dataPtr->data() + start, m_stagingData.data() + offset, length);
         }
-        m_change.DirtyRanges.Add({start, end});
-        m_change.Bits |= BufferChangeBits::DirtyBit;
-        ++m_changeSerial;
+        NotifyFlushMappedRange({start, end}, m_mappingAccess);
     }
 
-    void BufferObject::MarkPersistentMappedRangeDirty() {
+    void BufferObject::SyncPersistentMappedRange() {
         if (!m_isMapped) return;
         if (!(m_mappingAccess & BufferMappingAccessBit::Persistent)) return;
         if (!(m_mappingAccess & BufferMappingAccessBit::Write)) return;
         if (m_mappingAccess & BufferMappingAccessBit::FlushExplicit) return;
         if (m_mappedRange.start >= m_mappedRange.end) return;
 
-        m_change.DirtyRanges.Add(m_mappedRange);
-        m_change.Bits |= BufferChangeBits::DirtyBit;
+        NotifySubData(m_mappedRange.start, m_mappedRange.end - m_mappedRange.start);
+    }
+
+    void BufferObject::WritebackFromBackend(DataPtr data, SizeT atOffset) {
+        MOBILEGL_ASSERT(atOffset + data.size <= m_size,
+                        "WritebackFromBackend out of bounds: atOffset (%zu) + data.size (%zu) > m_size (%zu)", atOffset,
+                        data.size, m_size);
+        Memcpy(m_dataPtr->data() + atOffset, data.data, data.size);
         ++m_changeSerial;
     }
 
@@ -132,11 +166,7 @@ namespace MobileGL::MG_State::GLState {
                         data.size, m_size);
 
         Memcpy(m_dataPtr->data() + atOffset, data.data, data.size);
-        m_change.DirtyRanges.Add({atOffset, atOffset + data.size});
-        m_change.Bits |= BufferChangeBits::DirtyBit;
-        m_change.Bits |= BufferChangeBits::ForbidInvalidationBit;
-        m_change.Bits |= BufferChangeBits::ForbidUnsynchronizationBit;
-        ++m_changeSerial;
+        NotifySubData(atOffset, data.size);
     }
 
     void BufferObject::CopyDataFrom(const SharedPtr<BufferObject>& src, SizeT srcOffset, SizeT dstOffset, SizeT size) {
@@ -153,9 +183,7 @@ namespace MobileGL::MG_State::GLState {
 
         const Uint8* srcData = src->m_dataPtr->data() + srcOffset;
         Memcpy(m_dataPtr->data() + dstOffset, srcData, size);
-        m_change.DirtyRanges.Add({dstOffset, dstOffset + size});
-        m_change.Bits |= BufferChangeBits::DirtyBit;
-        ++m_changeSerial;
+        NotifySubData(dstOffset, size);
     }
 
     void* BufferObject::AcquireMemory(Bool markMapped, Bool read, Bool write) {
@@ -164,10 +192,6 @@ namespace MobileGL::MG_State::GLState {
             m_mappingAccess = (read ? BufferMappingAccessBit::Read : BufferMappingAccessBit::Null) |
                               (write ? BufferMappingAccessBit::Write : BufferMappingAccessBit::Null);
             m_mappedRange = {0, m_size};
-            if (write) {
-                m_change.Bits |= BufferChangeBits::ForbidInvalidationBit;
-                m_change.Bits |= BufferChangeBits::ForbidUnsynchronizationBit;
-            }
 
             if (m_mappingAccess & BufferMappingAccessBit::Write) {
                 m_stagingData.resize(m_size);
@@ -192,21 +216,6 @@ namespace MobileGL::MG_State::GLState {
         m_isMapped = true;
         m_mappingAccess = access;
         m_mappedRange = range;
-        m_change.Bits |=
-            !(access & BufferMappingAccessBit::InvalidateBuffer || access & BufferMappingAccessBit::InvalidateRange)
-                ? BufferChangeBits::ForbidInvalidationBit
-                : BufferChangeBits::None;
-        m_change.Bits |= !(access & BufferMappingAccessBit::Unsynchronized)
-                             ? BufferChangeBits::ForbidUnsynchronizationBit
-                             : BufferChangeBits::None;
-
-        m_change.Bits |=
-            !(access & BufferMappingAccessBit::InvalidateBuffer || access & BufferMappingAccessBit::InvalidateRange)
-                ? BufferChangeBits::ForbidInvalidationBit
-                : BufferChangeBits::None;
-        m_change.Bits |= !(access & BufferMappingAccessBit::Unsynchronized)
-                             ? BufferChangeBits::ForbidUnsynchronizationBit
-                             : BufferChangeBits::None;
 
         if (access & BufferMappingAccessBit::Persistent) {
             m_ownsStagingData = false;
@@ -232,11 +241,6 @@ namespace MobileGL::MG_State::GLState {
         return m_dataPtr;
     }
 
-    void BufferObject::ClearDirty() {
-        m_change.DirtyRanges.clear();
-        m_change.Bits = BufferChangeBits::None;
-    }
-
     SizeT BufferObject::GetSize() const {
         return m_size;
     }
@@ -249,16 +253,16 @@ namespace MobileGL::MG_State::GLState {
         return m_usage;
     }
 
-    const VecRange1D& BufferObject::GetDirtyRanges() const {
-        return m_change.DirtyRanges;
-    }
-
-    Flags<BufferChangeBits> BufferObject::GetChangeBits() const {
-        return m_change.Bits;
-    }
-
     Uint64 BufferObject::GetChangeSerial() const {
         return m_changeSerial;
+    }
+
+    const SharedPtr<BackendBufferResource>& BufferObject::GetBackendResource() const {
+        return m_backendResource;
+    }
+
+    void BufferObject::SetBackendResource(SharedPtr<BackendBufferResource> resource) {
+        m_backendResource = std::move(resource);
     }
 
     Bool BufferObject::IsMapped() const {

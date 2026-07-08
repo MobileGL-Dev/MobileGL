@@ -74,10 +74,8 @@ TEST_F(BufferTest, PingPong) {
     Vector<Int> bufdata(data.size());
     memcpy(bufdata.data(), p, byteSize);
     ASSERT_EQ(data, bufdata);
-    ASSERT_EQ(bufRead->GetDirtyRanges().size() >= 1, true);
-    auto range = bufRead->GetDirtyRanges()[0];
-    ASSERT_EQ(range.start, 0);
-    ASSERT_EQ(range.end, byteSize);
+    // Writes bump the change serial so backends can invalidate cached slices.
+    ASSERT_GT(bufRead->GetChangeSerial(), 0u);
 }
 
 TEST_F(BufferTest, GenerateManyNames_NoPrematureCreation) {
@@ -117,7 +115,7 @@ TEST_F(BufferTest, AcquireMemory) {
     bufObj->Resize(byteSize);
     DataPtr ptr{.data = initData.data(), .size = byteSize};
     bufObj->UploadData(ptr, 0);
-    bufObj->ClearDirty();
+    const Uint64 baseSerial = bufObj->GetChangeSerial();
     Int* mappedPtr = static_cast<Int*>(bufObj->AcquireMemory(true, true, true));
     mappedPtr[0] = 100;
     mappedPtr[1] = 200;
@@ -128,11 +126,8 @@ TEST_F(BufferTest, AcquireMemory) {
     void* p = bufObj->AcquireMemory(false, true, false);
     memcpy(actual.data(), p, byteSize);
     ASSERT_EQ(actual, expected);
-    ASSERT_EQ(bufObj->GetDirtyRanges().size() >= 1, true);
-    auto dirty = bufObj->GetDirtyRanges()[0];
-
-    ASSERT_EQ(dirty.start, 0);
-    ASSERT_EQ(dirty.end, sizeof(Int) * 5);
+    // Unmapping a write map flushes the mapped range and bumps the serial.
+    ASSERT_GT(bufObj->GetChangeSerial(), baseSerial);
 }
 
 TEST_F(BufferTest, AcquireMemoryRangeWithoutExplicit) {
@@ -146,7 +141,7 @@ TEST_F(BufferTest, AcquireMemoryRangeWithoutExplicit) {
     bufObj->Resize(byteSize);
     DataPtr ptr{.data = initData.data(), .size = byteSize};
     bufObj->UploadData(ptr, 0);
-    bufObj->ClearDirty();
+    const Uint64 baseSerial = bufObj->GetChangeSerial();
 
     Range1D mapRange{.start = sizeof(Int), .end = sizeof(Int) * 4};
     Int* mappedPtr = static_cast<Int*>(bufObj->AcquireMemoryRange(mapRange, BufferMappingAccessBit::Write));
@@ -158,10 +153,7 @@ TEST_F(BufferTest, AcquireMemoryRangeWithoutExplicit) {
     void* p = bufObj->AcquireMemory(false, true, false);
     memcpy(actual.data(), p, byteSize);
     ASSERT_EQ(actual, expected);
-    ASSERT_EQ(bufObj->GetDirtyRanges().size() >= 1, true);
-    auto dirty = bufObj->GetDirtyRanges()[0];
-    ASSERT_EQ(dirty.start, sizeof(Int));
-    ASSERT_EQ(dirty.end, sizeof(Int) * 4);
+    ASSERT_GT(bufObj->GetChangeSerial(), baseSerial);
 }
 
 TEST_F(BufferTest, AcquireMemoryRangeWithExplicit) {
@@ -177,7 +169,7 @@ TEST_F(BufferTest, AcquireMemoryRangeWithExplicit) {
     DataPtr ptr{.data = initData.data(), .size = byteSize};
     bufObj->UploadData(ptr, 0);
 
-    bufObj->ClearDirty();
+    const Uint64 baseSerial = bufObj->GetChangeSerial();
 
     Range1D mapRange{.start = sizeof(Int), .end = sizeof(Int) * 4};
     Int* mappedPtr = static_cast<Int*>(
@@ -186,29 +178,20 @@ TEST_F(BufferTest, AcquireMemoryRangeWithExplicit) {
     mappedPtr[0] = 200;
     mappedPtr[1] = 300;
 
+    // Only the explicitly flushed range reaches the shadow (and the backend).
     bufObj->FlushMemoryRange(0, sizeof(Int));
-    ASSERT_EQ(bufObj->GetDirtyRanges().size() >= 1, true);
-    auto dirty = bufObj->GetDirtyRanges()[0];
-    ASSERT_EQ(dirty.start, sizeof(Int));
-    ASSERT_EQ(dirty.end, sizeof(Int) * 2);
+    const Uint64 flushedSerial = bufObj->GetChangeSerial();
+    ASSERT_GT(flushedSerial, baseSerial);
 
+    // FlushExplicit unmap must not flush the rest of the mapped range.
     bufObj->ReleaseMemory();
-
-    ASSERT_EQ(bufObj->GetDirtyRanges().size() >= 1, true);
-    dirty = bufObj->GetDirtyRanges()[0];
-    ASSERT_EQ(dirty.start, sizeof(Int));
-    ASSERT_EQ(dirty.end, sizeof(Int) * 2);
+    ASSERT_EQ(bufObj->GetChangeSerial(), flushedSerial);
 
     Vector<Int> expected{10, 200, 30, 40, 50};
     Vector<Int> actual(5);
     void* p = bufObj->AcquireMemory(false, true, false);
     memcpy(actual.data(), p, byteSize);
     ASSERT_EQ(actual, expected);
-
-    ASSERT_EQ(bufObj->GetDirtyRanges().size() >= 1, true);
-    dirty = bufObj->GetDirtyRanges()[0];
-    ASSERT_EQ(dirty.start, sizeof(Int));
-    ASSERT_EQ(dirty.end, sizeof(Int) * 2);
 }
 
 TEST_F(BufferTest, CopyBufferSubData) {
@@ -237,8 +220,8 @@ TEST_F(BufferTest, CopyBufferSubData) {
     DataPtr dstPtr{.data = dstData.data(), .size = dstSize};
     dstObj->UploadData(dstPtr, 0);
 
-    srcObj->ClearDirty();
-    dstObj->ClearDirty();
+    const Uint64 srcSerial = srcObj->GetChangeSerial();
+    const Uint64 dstSerial = dstObj->GetChangeSerial();
 
     dstObj->CopyDataFrom(srcObj, 2 * sizeof(Int), 5 * sizeof(Int), 4 * sizeof(Int));
 
@@ -250,10 +233,9 @@ TEST_F(BufferTest, CopyBufferSubData) {
 
     ASSERT_EQ(actual, expected);
 
-    ASSERT_EQ(dstObj->GetDirtyRanges().size() >= 1, true);
-    auto dirty = dstObj->GetDirtyRanges()[0];
-    ASSERT_EQ(dirty.start, 5 * sizeof(Int));
-    ASSERT_EQ(dirty.end, 9 * sizeof(Int));
+    // The copy mutates only the destination.
+    ASSERT_GT(dstObj->GetChangeSerial(), dstSerial);
+    ASSERT_EQ(srcObj->GetChangeSerial(), srcSerial);
 }
 
 TEST_F(BufferTest, WriteWhileMapped) {
@@ -282,10 +264,7 @@ TEST_F(BufferTest, WriteWhileMapped) {
 
     ASSERT_EQ(actual, expected);
 
-    ASSERT_EQ(bufObj->GetDirtyRanges().size() >= 1, true);
-    auto dirty = bufObj->GetDirtyRanges()[0];
-    ASSERT_EQ(dirty.start, 0);
-    ASSERT_EQ(dirty.end, byteSize);
+    ASSERT_GT(bufObj->GetChangeSerial(), 0u);
 }
 
 TEST_F(BufferTest, PartialUpdate) {
@@ -300,7 +279,7 @@ TEST_F(BufferTest, PartialUpdate) {
     bufObj->Resize(byteSize);
     DataPtr ptr{.data = initData.data(), .size = byteSize};
     bufObj->UploadData(ptr, 0);
-    bufObj->ClearDirty();
+    const Uint64 baseSerial = bufObj->GetChangeSerial();
 
     Vector<Int> update{999, 888};
     bufObj->UploadSubData({(void*)(update.data()), (SizeT)(update.size() * sizeof(Int))}, sizeof(Int));
@@ -312,10 +291,7 @@ TEST_F(BufferTest, PartialUpdate) {
 
     ASSERT_EQ(actual, expected);
 
-    ASSERT_EQ(bufObj->GetDirtyRanges().size() >= 1, true);
-    auto dirty = bufObj->GetDirtyRanges()[0];
-    ASSERT_EQ(dirty.start, sizeof(Int));
-    ASSERT_EQ(dirty.end, 3 * sizeof(Int));
+    ASSERT_GT(bufObj->GetChangeSerial(), baseSerial);
 }
 
 TEST_F(BufferTest, DeleteBufferObject) {
@@ -662,7 +638,7 @@ TEST_F(GeneralBufferTest, General_PersistentCoherentWriteDirtyWithoutUnmap) {
 
     auto bufferObject = MG_State::pGLContext->GetBufferObject(buffer);
     ASSERT_NE(bufferObject, nullptr);
-    bufferObject->ClearDirty();
+    const Uint64 baseSerial = bufferObject->GetChangeSerial();
 
     auto* mapped = static_cast<GLint*>(
         MapBufferRange(GL_ARRAY_BUFFER, 0, sizeof(initial),
@@ -670,10 +646,9 @@ TEST_F(GeneralBufferTest, General_PersistentCoherentWriteDirtyWithoutUnmap) {
     ASSERT_NE(mapped, nullptr);
     mapped[2] = 1234;
 
-    bufferObject->MarkPersistentMappedRangeDirty();
-    ASSERT_FALSE(bufferObject->GetDirtyRanges().empty());
-    EXPECT_EQ(bufferObject->GetDirtyRanges()[0].start, 0);
-    EXPECT_EQ(bufferObject->GetDirtyRanges()[0].end, sizeof(initial));
+    // Draw-time hook: pushes the persistently mapped write range to the backend.
+    bufferObject->SyncPersistentMappedRange();
+    EXPECT_GT(bufferObject->GetChangeSerial(), baseSerial);
 
     const auto data = bufferObject->GetDataReadOnly();
     EXPECT_EQ(reinterpret_cast<const GLint*>(data->data())[2], 1234);
@@ -692,7 +667,7 @@ TEST_F(GeneralBufferTest, General_PersistentExplicitFlushOnlyDirtiesFlushedRange
 
     auto bufferObject = MG_State::pGLContext->GetBufferObject(buffer);
     ASSERT_NE(bufferObject, nullptr);
-    bufferObject->ClearDirty();
+    const Uint64 baseSerial = bufferObject->GetChangeSerial();
 
     auto* mapped = static_cast<GLint*>(
         MapBufferRange(GL_ARRAY_BUFFER, 0, sizeof(initial),
@@ -701,13 +676,12 @@ TEST_F(GeneralBufferTest, General_PersistentExplicitFlushOnlyDirtiesFlushedRange
     mapped[1] = 200;
     mapped[3] = 400;
 
-    bufferObject->MarkPersistentMappedRangeDirty();
-    EXPECT_TRUE(bufferObject->GetDirtyRanges().empty());
+    // FlushExplicit persistent maps only reach the backend via explicit flushes.
+    bufferObject->SyncPersistentMappedRange();
+    EXPECT_EQ(bufferObject->GetChangeSerial(), baseSerial);
 
     FlushMappedBufferRange(GL_ARRAY_BUFFER, sizeof(GLint), sizeof(GLint));
-    ASSERT_FALSE(bufferObject->GetDirtyRanges().empty());
-    EXPECT_EQ(bufferObject->GetDirtyRanges()[0].start, sizeof(GLint));
-    EXPECT_EQ(bufferObject->GetDirtyRanges()[0].end, sizeof(GLint) * 2);
+    EXPECT_GT(bufferObject->GetChangeSerial(), baseSerial);
 
     EXPECT_TRUE(UnmapBuffer(GL_ARRAY_BUFFER));
     EXPECT_EQ(GetError(), GL_NO_ERROR);
@@ -728,7 +702,7 @@ TEST_F(GeneralBufferTest, General_NamedBufferStorageMappingWrappers) {
 
     auto bufferObject = MG_State::pGLContext->GetBufferObject(buffer);
     ASSERT_NE(bufferObject, nullptr);
-    bufferObject->ClearDirty();
+    const Uint64 baseSerial = bufferObject->GetChangeSerial();
 
     auto* mapped = static_cast<GLint*>(
         MapNamedBufferRange(buffer, 0, sizeof(initial),
@@ -741,9 +715,7 @@ TEST_F(GeneralBufferTest, General_NamedBufferStorageMappingWrappers) {
     EXPECT_EQ(mapPointer, mapped);
 
     FlushMappedNamedBufferRange(buffer, 0, sizeof(GLint));
-    ASSERT_FALSE(bufferObject->GetDirtyRanges().empty());
-    EXPECT_EQ(bufferObject->GetDirtyRanges()[0].start, 0);
-    EXPECT_EQ(bufferObject->GetDirtyRanges()[0].end, sizeof(GLint));
+    EXPECT_GT(bufferObject->GetChangeSerial(), baseSerial);
 
     EXPECT_TRUE(UnmapNamedBuffer(buffer));
     EXPECT_EQ(GetError(), GL_NO_ERROR);

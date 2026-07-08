@@ -101,13 +101,17 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
     };
 
-    class VulkanRenderer {
+    class VulkanRenderer : public IBufferCopyCommandProvider {
     public:
         VulkanRenderer(NativeWindowType window, const VulkanRendererConfig& cfg = {});
         ~VulkanRenderer();
 
         void Initialize();
         void Shutdown();
+
+        // IBufferCopyCommandProvider: recording command buffer, outside any
+        // render pass, for immediate staged buffer copies.
+        VkCommandBuffer AcquireBufferCopyCommandBuffer() override;
 
         Bool SetupDraw(FrameContext::FrameData& frame, GLenum mode, Flags<DrawSetupAspect> aspects,
                        const DrawCmdParam& drawParams,
@@ -233,15 +237,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
         VkCommandPool m_commandPool = VK_NULL_HANDLE;
 
-        struct TransientBufferSliceCacheEntry {
-            BufferSlice slice;
-            Uint64 changeSerial = 0;
-            SizeT size = 0;
-        };
-
         VkBufferManager m_bufferManager;
-        UnorderedMap<const MG_State::GLState::BufferObject*, TransientBufferSliceCacheEntry>
-            m_transientVertexIndexBufferSlicesThisFrame;
 
         Uint m_imageIndexAcquired = 0;
         FrameContext m_frameContext;

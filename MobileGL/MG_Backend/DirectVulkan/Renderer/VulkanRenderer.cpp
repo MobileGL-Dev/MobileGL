@@ -1792,7 +1792,7 @@ void main() {
                     MGLOG_E("DirectVulkan readback skipped: pixel pack buffer is too small");
                     return false;
                 }
-                pixelPackBufferObject->UploadSubData({packed.data(), packed.size()}, pboOffset);
+                pixelPackBufferObject->WritebackFromBackend({packed.data(), packed.size()}, pboOffset);
                 return true;
             }
 
@@ -1893,6 +1893,7 @@ void main() {
             .transientPersistentMapping = true,
         });
         MOBILEGL_ASSERT(succeeded, "VkBufferManager initialization failed.");
+        m_bufferManager.SetCopyCommandProvider(this);
         m_textureManager = MakeUnique<VkTextureManager>();
         MOBILEGL_ASSERT(m_textureManager != nullptr, "VkTextureManager creation failed.");
         succeeded = m_textureManager->Initialize(
@@ -1956,7 +1957,6 @@ void main() {
         VK_VERIFY(acquireResult, "Initialize, WaitAndAcquireNextImage");
         m_textureManager->BeginFrame(m_frameContext.GetCurrentFrameIndex());
         m_bufferManager.BeginFrame(m_frameContext.GetCurrentFrameIndex());
-        m_transientVertexIndexBufferSlicesThisFrame.clear();
 
         MGLOG_D("VulkanRenderer initialized");
     }
@@ -1986,7 +1986,6 @@ void main() {
         }
         m_vertexInputStateFactory.reset();
         m_bufferManager.Shutdown();
-        m_transientVertexIndexBufferSlicesThisFrame.clear();
 
         if (m_device != VK_NULL_HANDLE) {
             m_frameContext.Destroy(m_device, m_commandPool);
@@ -2147,32 +2146,15 @@ void main() {
             auto sourceBufferShared = MG_State::pGLContext->GetBufferObject(sourceBuffer->GetExternalIndex());
             MOBILEGL_ASSERT(sourceBufferShared != nullptr,
                             "UploadAndBindVertexStreams failed to resolve shared source buffer");
-            sourceBufferShared->MarkPersistentMappedRangeDirty();
             BufferSlice slice{};
-            const Bool isDirty = (sourceBufferShared->GetChangeBits() & BufferChangeBits::DirtyBit);
-            const Uint64 changeSerial = sourceBufferShared->GetChangeSerial();
             const SizeT sourceSize = sourceBufferShared->GetSize();
-            auto cachedTransient = m_transientVertexIndexBufferSlicesThisFrame.find(sourceBufferShared.get());
-            if (cachedTransient != m_transientVertexIndexBufferSlicesThisFrame.end() && !isDirty &&
-                cachedTransient->second.changeSerial == changeSerial && cachedTransient->second.size == sourceSize) {
-                slice = cachedTransient->second.slice;
-            } else if (ShouldUseTransientVertexIndexBuffer(*sourceBufferShared) || isDirty) {
-                const auto sourceData = sourceBufferShared->GetDataReadOnly();
-                if (!m_bufferManager.UploadTransient(BufferKind::Vertex, m_frameContext.GetCurrentFrameIndex(),
-                                                     sourceData->data(), static_cast<VkDeviceSize>(sourceSize), 16,
-                                                     slice)) {
+            if (ShouldUseTransientVertexIndexBuffer(*sourceBufferShared)) {
+                if (!m_bufferManager.AcquireStreamedSlice(BufferKind::Vertex, sourceBufferShared, slice)) {
                     MOBILEGL_ASSERT(false, "UploadAndBindVertexStreams skipped: failed to upload transient binding %zu", binding);
                     return false;
                 }
-                m_transientVertexIndexBufferSlicesThisFrame[sourceBufferShared.get()] = {
-                    .slice = slice,
-                    .changeSerial = changeSerial,
-                    .size = sourceSize,
-                };
-                m_bufferManager.DowngradeResidentBufferToTransient(sourceBufferShared);
-                sourceBufferShared->ClearDirty();
             } else {
-                if (!m_bufferManager.SyncResidentBuffer(BufferKind::Vertex, sourceBufferShared, slice)) {
+                if (!m_bufferManager.AcquireResidentSlice(BufferKind::Vertex, sourceBufferShared, slice)) {
                     MGLOG_E("UploadAndBindVertexStreams skipped: failed to sync resident binding %zu", binding);
                     return false;
                 }
@@ -2247,7 +2229,6 @@ void main() {
 
         const auto* indexBuffer = vao.GetIndexBufferBindingSlot().GetBoundObject().get();
         MOBILEGL_ASSERT(indexBuffer != nullptr, "UploadAndBindIndexBuffer requires bound EBO");
-        const SizeT indexSize = MG_Util::GetGLTypeSize(pIndexBufferView->indexType);
         const SizeT indexDataSizeBytes = pIndexBufferView->indexByteSize;
         MOBILEGL_ASSERT(pIndexBufferView->indexByteOffset + indexDataSizeBytes <= indexBuffer->GetSize(),
                         "DrawElements index range out of bounds");
@@ -2255,44 +2236,14 @@ void main() {
         BufferSlice slice{};
         auto indexBufferShared = MG_State::pGLContext->GetBufferObject(indexBuffer->GetExternalIndex());
         MOBILEGL_ASSERT(indexBufferShared != nullptr, "UploadAndBindIndexBuffer failed to resolve shared EBO");
-        indexBufferShared->MarkPersistentMappedRangeDirty();
-        const Bool isDirty = (indexBufferShared->GetChangeBits() & BufferChangeBits::DirtyBit);
-        const Uint64 changeSerial = indexBufferShared->GetChangeSerial();
-        const SizeT indexBufferSize = indexBufferShared->GetSize();
-        auto cachedTransient = m_transientVertexIndexBufferSlicesThisFrame.find(indexBufferShared.get());
-        if (cachedTransient != m_transientVertexIndexBufferSlicesThisFrame.end() && !isDirty &&
-            cachedTransient->second.changeSerial == changeSerial && cachedTransient->second.size == indexBufferSize) {
-            slice = cachedTransient->second.slice;
-            vkCmdBindIndexBuffer(frame.commandBuffer,
-                                 slice.buffer,
-                                 slice.offset + static_cast<VkDeviceSize>(pIndexBufferView->indexByteOffset),
-                                 vkIndexType);
-            return true;
-        }
-        if (ShouldUseTransientVertexIndexBuffer(*indexBufferShared) || isDirty) {
+        if (ShouldUseTransientVertexIndexBuffer(*indexBufferShared)) {
             const auto indexData = indexBufferShared->GetDataReadOnly();
             MOBILEGL_ASSERT(indexData != nullptr && !indexData->empty(), "DrawElements requires non-empty EBO data");
-            if (!m_bufferManager.UploadTransient(BufferKind::Index, m_frameContext.GetCurrentFrameIndex(),
-                                                 indexData->data(),
-                                                 static_cast<VkDeviceSize>(indexBufferSize), indexSize,
-                                                 slice)) {
+            if (!m_bufferManager.AcquireStreamedSlice(BufferKind::Index, indexBufferShared, slice)) {
                 MOBILEGL_ASSERT(false, "DrawElements skipped: failed to prepare transient index buffer");
                 return false;
             }
-            m_transientVertexIndexBufferSlicesThisFrame[indexBufferShared.get()] = {
-                .slice = slice,
-                .changeSerial = changeSerial,
-                .size = indexBufferSize,
-            };
-            m_bufferManager.DowngradeResidentBufferToTransient(indexBufferShared);
-            indexBufferShared->ClearDirty();
-            vkCmdBindIndexBuffer(frame.commandBuffer,
-                                 slice.buffer,
-                                 slice.offset + static_cast<VkDeviceSize>(pIndexBufferView->indexByteOffset),
-                                 vkIndexType);
-            return true;
-        }
-        if (!m_bufferManager.SyncResidentBuffer(BufferKind::Index, indexBufferShared, slice)) {
+        } else if (!m_bufferManager.AcquireResidentSlice(BufferKind::Index, indexBufferShared, slice)) {
             MGLOG_E("DrawElements skipped: failed to sync resident index buffer");
             return false;
         }
@@ -3449,10 +3400,10 @@ void main() {
             MGLOG_E("DispatchComputeIndirect skipped: GL_DISPATCH_INDIRECT_BUFFER is not bound");
             return;
         }
-        indirectBuffer->MarkPersistentMappedRangeDirty();
+        indirectBuffer->SyncPersistentMappedRange();
 
         BufferSlice slice{};
-        if (!m_bufferManager.SyncResidentBuffer(BufferKind::Indirect, indirectBuffer, slice)) {
+        if (!m_bufferManager.AcquireResidentSlice(BufferKind::Indirect, indirectBuffer, slice)) {
             MGLOG_E("DispatchComputeIndirect skipped: failed to sync indirect dispatch buffer");
             return;
         }
@@ -5259,16 +5210,16 @@ void main() {
             return;
         }
 
-        drawBuffer->MarkPersistentMappedRangeDirty();
-        parameterBuffer->MarkPersistentMappedRangeDirty();
+        drawBuffer->SyncPersistentMappedRange();
+        parameterBuffer->SyncPersistentMappedRange();
 
         BufferSlice drawSlice{};
-        if (!m_bufferManager.SyncResidentBuffer(BufferKind::Indirect, drawBuffer, drawSlice)) {
+        if (!m_bufferManager.AcquireResidentSlice(BufferKind::Indirect, drawBuffer, drawSlice)) {
             MGLOG_E("MultiDrawElementsIndirectCount skipped: failed to sync draw indirect buffer");
             return;
         }
         BufferSlice parameterSlice{};
-        if (!m_bufferManager.SyncResidentBuffer(BufferKind::Indirect, parameterBuffer, parameterSlice)) {
+        if (!m_bufferManager.AcquireResidentSlice(BufferKind::Indirect, parameterBuffer, parameterSlice)) {
             MGLOG_E("MultiDrawElementsIndirectCount skipped: failed to sync parameter buffer");
             return;
         }
@@ -5301,6 +5252,22 @@ void main() {
             vkCmdDrawIndexed(frame.commandBuffer, cmd.indexCount, cmd.instanceCount, cmd.firstIndex,
                              cmd.vertexOffset, cmd.firstInstance);
         }
+    }
+
+    VkCommandBuffer VulkanRenderer::AcquireBufferCopyCommandBuffer() {
+        if (m_device == VK_NULL_HANDLE || m_frameContext.GetFrameCount() == 0) {
+            return VK_NULL_HANDLE;
+        }
+        auto& frame = m_frameContext.GetCurrent();
+        if (!frame.isCommandRecording) {
+            m_frameContext.BeginCommandRecording();
+        }
+        // vkCmdCopyBuffer must be recorded outside a render pass; draws re-begin
+        // their render pass lazily, matching the existing blit/clear pattern.
+        if (VkRenderPassManager::GetActiveRenderPass() != nullptr) {
+            VkRenderPassManager::EndRenderPass(frame.commandBuffer);
+        }
+        return frame.commandBuffer;
     }
 
     void VulkanRenderer::Present() {
@@ -5469,7 +5436,6 @@ void main() {
         CollectDeferredDepthMipmapCleanup(m_frameContext.GetCurrentFrameIndex());
         m_textureManager->BeginFrame(m_frameContext.GetCurrentFrameIndex());
         m_bufferManager.BeginFrame(m_frameContext.GetCurrentFrameIndex());
-        m_transientVertexIndexBufferSlicesThisFrame.clear();
     }
 
     void VulkanRenderer::CreateInstance() {
@@ -6171,7 +6137,6 @@ void main() {
                 m_textureManager->BeginFrame(m_frameContext.GetCurrentFrameIndex());
             }
             m_bufferManager.BeginFrame(m_frameContext.GetCurrentFrameIndex());
-            m_transientVertexIndexBufferSlicesThisFrame.clear();
         }
     }
 

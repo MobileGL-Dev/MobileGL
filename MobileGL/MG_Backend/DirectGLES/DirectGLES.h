@@ -95,6 +95,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
     Bool InitPbufferSurface(EGLint width, EGLint height);
     Bool MakeCurrent();
     Bool ReleaseCurrent();
+    // True when the backend ES context is current on the calling thread, i.e.
+    // immediate buffer ops may issue GL calls right now.
+    Bool IsBackendContextCurrentOnThisThread();
     void Present();
     void SetEGLFuncsTable(const MG_External::EGLFunctionsTable& eglFuncs);
     void SetGLESFuncsTable(const MG_External::GLESFunctionsTable& glesFuncs);

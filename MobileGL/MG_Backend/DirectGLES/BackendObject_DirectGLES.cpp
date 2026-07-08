@@ -9,6 +9,7 @@
 #include "BackendObject_DirectGLES.h"
 #include "MG_Backend/BackendObject.h"
 #include <MG_Backend/DirectGLES/DirectGLES.h>
+#include <MG_Backend/DirectGLES/Managers.h>
 #include <MG_Backend/DirectGLES/Utils.h>
 #include <MG_Util/BackendLoaders/OpenGL/Loader.h>
 #include <MG_Util/Classifiers/TextureEnumClassifier.h>
@@ -632,6 +633,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         MG_Util::BackendLoader::AcquireGLESFunctions(m_GLESFunctions, m_EGLFunctions.eglGetProcAddress);
         DirectGLES::SetEGLFuncsTable(m_EGLFunctions);
         DirectGLES::SetGLESFuncsTable(m_GLESFunctions);
+        BufferImpl::RegisterBufferBackendOps();
         m_initialized = true;
     }
 

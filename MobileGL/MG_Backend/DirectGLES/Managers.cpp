@@ -114,171 +114,254 @@ namespace MobileGL::MG_Backend::DirectGLES {
     }
 
     namespace BufferImpl {
-        BackendBufferObject::BackendBufferObject() {
+        namespace {
+            using MG_State::GLState::BackendBufferResource;
+            using MG_State::GLState::BufferBackendOps;
+            using MG_State::GLState::BufferObject;
+
+            // GL_ARRAY_BUFFER redundant-bind cache (id 0 = unknown/none).
+            Uint g_boundArrayBufferId = 0;
+            Bool g_boundArrayBufferKnown = false;
+
+            // Resources whose owning BufferObject died; ids deleted at the next
+            // sync point with a current ES context.
+            Vector<SharedPtr<BackendBufferResource>> g_deferredBufferReleases;
+            std::mutex g_deferredBufferReleasesMutex;
+
+            GLESBufferResource* ResourceOf(BufferObject& bufferObject) {
+                return static_cast<GLESBufferResource*>(bufferObject.GetBackendResource().get());
+            }
+
+            Bool CanTouchGLNow() {
+                return false && DirectGLES::IsBackendContextCurrentOnThisThread(); // BISECT-EXPERIMENT
+            }
+
+            // (Re)specify backend storage from the shadow copy: glBufferData.
+            // The orphaning point - the ES driver performs the actual rename.
+            void RespecifyStorageNow(GLESBufferResource& resource, BufferObject& bufferObject) {
 #ifdef TRACY_ENABLE
-            ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
+                ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
-            g_GLESFuncs.glGenBuffers(1, &m_backendBufferId);
-            if (m_backendBufferId == 0) {
-                MGLOG_E("Failed to generate buffer object.");
-                MGLOG_E("ES glGetError(): %s", MG_Util::ConvertGLEnumToString(g_GLESFuncs.glGetError()).c_str());
-            } else {
-                MGLOG_D("Generated buffer object with ID: %u.", m_backendBufferId);
+                const SizeT size = bufferObject.GetSize();
+                const GLenum usage = MG_Util::ConvertBufferUsageToGLEnum(bufferObject.GetUsage());
+                BindBufferId(TempBufferTarget, resource.id);
+                g_GLESFuncs.glBufferData(TempBufferTarget, (GLsizeiptr)size,
+                                         size > 0 ? bufferObject.GetDataReadOnly()->data() : nullptr, usage);
+                resource.storageSize = size;
+                resource.storageInitialized = true;
+                resource.pendingRespecify = false;
+                resource.pendingRanges.clear();
             }
-        }
 
-        void BackendBufferObject::SyncToBackend(const SharedPtr<MG_State::GLState::BufferObject>& stateBufferObject) {
+            Bool StorageMatches(const GLESBufferResource& resource, const BufferObject& bufferObject) {
+                return resource.storageInitialized && !resource.pendingRespecify &&
+                       resource.storageSize == bufferObject.GetSize();
+            }
+
+            void UploadRangeNow(GLESBufferResource& resource, BufferObject& bufferObject, SizeT start, SizeT end) {
 #ifdef TRACY_ENABLE
-            ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
+                ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
-            if (!stateBufferObject) {
-                MGLOG_E("State buffer object is null, cannot sync to backend.");
-                return;
+                if (start >= end) return;
+                BindBufferId(TempBufferTarget, resource.id);
+                g_GLESFuncs.glBufferSubData(TempBufferTarget, (GLintptr)start, (GLsizeiptr)(end - start),
+                                            bufferObject.GetDataReadOnly()->data() + start);
             }
 
-            SizeT bufferSize = stateBufferObject->GetSize();
-            if (bufferSize == 0) {
-                MGLOG_W("Buffer size is zero, skipping sync for object with ID: %u", m_backendBufferId);
-                return;
-            }
-
-            MGLOG_D("Syncing buffer object with backend ID %u to backend for state ID %u", m_backendBufferId,
-                    stateBufferObject->GetExternalIndex());
-
-            // Decide sync method
-            // glBufferData
-            Bool needsRegeneration =
-                !m_isInitialized || (stateBufferObject->GetChangeBits() & BufferChangeBits::PreferReallocationBit);
-
-            if (needsRegeneration) {
-                MGLOG_D("Buffer size changed significantly or not initialized, regenerating buffer with ID: %u",
-                        m_backendBufferId);
-                SyncToBackend_glBufferData(stateBufferObject);
-                m_isInitialized = true;
-                m_prevBufferSize = bufferSize;
-                stateBufferObject->ClearDirty();
-                return;
-            }
-
-            // glMapBufferRange or glBufferSubData
-            Bool useInvalidationMap = !(stateBufferObject->GetChangeBits() & BufferChangeBits::ForbidInvalidationBit);
-            // TODO: MAY AFFECT PERFORMANCE
-            Bool useUnsynchronizedMap =
-                !(stateBufferObject->GetChangeBits() & BufferChangeBits::ForbidUnsynchronizationBit);
-            Bool useMapBufferRange = PREFER_MAP_BUFFER_RANGE_FOR_BUFFER_SYNC &&
-                                     (useInvalidationMap || useUnsynchronizedMap);
-
-            if (!useMapBufferRange && PREFER_MAP_BUFFER_RANGE_FOR_BUFFER_SYNC) {
-                auto usage = stateBufferObject->GetUsage();
-                if (usage == BufferUsage::DynamicDraw || usage == BufferUsage::StreamDraw ||
-                    usage == BufferUsage::StreamCopy || usage == BufferUsage::DynamicCopy) {
-                    useMapBufferRange = true;
-                }
-            }
-
-            if (useMapBufferRange) {
-                MGLOG_D("Using glMapBufferRange to sync buffer with ID: %u", m_backendBufferId);
-                SyncToBackend_glMapBufferRange(stateBufferObject, useInvalidationMap, useUnsynchronizedMap);
-            } else {
-                MGLOG_D("Using glBufferSubData to sync buffer with ID: %u", m_backendBufferId);
-                SyncToBackend_glBufferSubData(stateBufferObject);
-            }
-
-            // Clear dirty state
-            stateBufferObject->ClearDirty();
-            m_prevBufferSize = bufferSize;
-        }
-
-        void BackendBufferObject::SyncToBackend_glBufferData(
-            const SharedPtr<MG_State::GLState::BufferObject>& stateBufferObject) {
-#ifdef TRACY_ENABLE
-            ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
-#endif
-
-            MGLOG_D("Syncing buffer data (glBufferData) for object with ID : %u", m_backendBufferId);
-
-            const void* data = stateBufferObject->GetDataReadOnly()->data();
-            SizeT size = stateBufferObject->GetSize();
-            GLenum usage = MG_Util::ConvertBufferUsageToGLEnum(stateBufferObject->GetUsage());
-
-            Bind();
-            g_GLESFuncs.glBufferData(TempBufferTarget, (GLsizeiptr)size, data, usage);
-        }
-
-        void BackendBufferObject::SyncToBackend_glBufferSubData(
-            const SharedPtr<MG_State::GLState::BufferObject>& stateBufferObject) {
-#ifdef TRACY_ENABLE
-            ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
-#endif
-
-            MGLOG_D("Syncing buffer sub-data (glBufferSubData) for object with ID : %u", m_backendBufferId);
-
-            const void* data = stateBufferObject->GetDataReadOnly()->data();
-            // dirty range: [range.start, range.end)
-            auto& ranges = stateBufferObject->GetDirtyRanges();
-            if (ranges.empty()) {
-                MGLOG_D("No dirty range to sync for buffer with ID: %u", m_backendBufferId);
-                return;
-            }
-
-            for (const auto& range : ranges) {
-                Bind();
-                g_GLESFuncs.glBufferSubData(TempBufferTarget, (GLintptr)range.start,
-                                            (GLintptr)(range.end - range.start),
-                                            reinterpret_cast<const char*>(data) + range.start);
-            }
-        }
-
-        void BackendBufferObject::SyncToBackend_glMapBufferRange(
-            const SharedPtr<MG_State::GLState::BufferObject>& stateBufferObject, Bool invalidate, Bool unsynchronized) {
-#ifdef TRACY_ENABLE
-            ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
-#endif
-
-            MGLOG_D("Syncing buffer map (glMapBuffer) for object with ID : %u", m_backendBufferId);
-            MGLOG_D("Mapping buffer with ID: %u", m_backendBufferId);
-            auto& ranges = stateBufferObject->GetDirtyRanges();
-            if (ranges.empty()) {
-                MGLOG_D("No dirty range to sync for buffer with ID: %u", m_backendBufferId);
-                return;
-            }
-            SizeT minStart = ranges.GetOverallMinStart();
-            SizeT maxEnd = ranges.GetOverallMaxEnd();
-            Bind();
-            void* mappedData = g_GLESFuncs.glMapBufferRange(
-                TempBufferTarget, (GLintptr)minStart, (GLintptr)(maxEnd - minStart),
-                (invalidate ? GL_MAP_INVALIDATE_RANGE_BIT : 0) | (unsynchronized ? GL_MAP_UNSYNCHRONIZED_BIT : 0) |
-                    GL_MAP_WRITE_BIT | GL_MAP_FLUSH_EXPLICIT_BIT);
-            const void* data = stateBufferObject->GetDataReadOnly()->data();
-            if (mappedData) {
-                MGLOG_D("Mapped buffer data successfully for object with ID: %u", m_backendBufferId);
-                Memcpy(mappedData, reinterpret_cast<const char*>(data) + minStart, maxEnd - minStart);
-                // Explicitly flush the dirty ranges
-                for (const auto& range : ranges) {
-                    g_GLESFuncs.glFlushMappedBufferRange(TempBufferTarget, (GLintptr)(range.start - minStart),
-                                                         (GLintptr)(range.end - range.start));
-                }
-                g_GLESFuncs.glUnmapBuffer(TempBufferTarget);
-            } else {
-                MGLOG_E("Failed to map buffer with ID: %u", m_backendBufferId);
-            }
-        }
-
-        void BackendBufferObject::Bind(GLenum target) {
-#ifdef TRACY_ENABLE
-            ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
-#endif
-            if (target == GL_ARRAY_BUFFER) {
-                if (g_boundVertexBufferObject == this) {
+            void Ops_Respecify(BufferObject& bufferObject) {
+                auto* resource = ResourceOf(bufferObject);
+                if (!resource) return; // lazy: EnsureBufferResource full-uploads on creation
+                if (!CanTouchGLNow() || resource->id == 0) {
+                    resource->pendingRespecify = true;
+                    resource->pendingRanges.clear();
                     return;
                 }
-                g_boundVertexBufferObject = this;
+                if (bufferObject.GetSize() == 0) {
+                    resource->storageInitialized = false;
+                    resource->storageSize = 0;
+                    resource->pendingRespecify = false;
+                    resource->pendingRanges.clear();
+                    return;
+                }
+                RespecifyStorageNow(*resource, bufferObject);
             }
-            g_GLESFuncs.glBindBuffer(target, m_backendBufferId);
+
+            void Ops_SubData(BufferObject& bufferObject, SizeT offset, SizeT size) {
+                auto* resource = ResourceOf(bufferObject);
+                if (!resource) return;
+                if (resource->pendingRespecify) return; // full re-upload pending anyway
+                if (!CanTouchGLNow() || resource->id == 0 || !StorageMatches(*resource, bufferObject)) {
+                    resource->pendingRanges.Add({offset, offset + size});
+                    return;
+                }
+                UploadRangeNow(*resource, bufferObject, offset, offset + size);
+            }
+
+            void Ops_FlushMappedRange(BufferObject& bufferObject, Range1D range,
+                                      Flags<BufferMappingAccessBit> appAccess) {
+                auto* resource = ResourceOf(bufferObject);
+                if (!resource) return;
+                if (resource->pendingRespecify) return;
+                if (!CanTouchGLNow() || resource->id == 0 || !StorageMatches(*resource, bufferObject)) {
+                    resource->pendingRanges.Add(range);
+                    return;
+                }
+
+                // Honour the app's real mapping flags per call: only reach for a
+                // mapped upload when the app allowed invalidation/unsynchronized
+                // access, otherwise a plain glBufferSubData carries the exact
+                // synchronization semantics.
+                const Bool invalidate = (appAccess & BufferMappingAccessBit::InvalidateRange) ||
+                                        (appAccess & BufferMappingAccessBit::InvalidateBuffer);
+                const Bool unsynchronized = static_cast<Bool>(appAccess & BufferMappingAccessBit::Unsynchronized);
+                if (PREFER_MAP_BUFFER_RANGE_FOR_BUFFER_SYNC && (invalidate || unsynchronized)) {
+#ifdef TRACY_ENABLE
+                    ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
+#endif
+                    BindBufferId(TempBufferTarget, resource->id);
+                    void* mappedData = g_GLESFuncs.glMapBufferRange(
+                        TempBufferTarget, (GLintptr)range.start, (GLsizeiptr)(range.end - range.start),
+                        GL_MAP_WRITE_BIT | (invalidate ? GL_MAP_INVALIDATE_RANGE_BIT : 0) |
+                            (unsynchronized ? GL_MAP_UNSYNCHRONIZED_BIT : 0));
+                    if (mappedData) {
+                        Memcpy(mappedData, bufferObject.GetDataReadOnly()->data() + range.start,
+                               range.end - range.start);
+                        g_GLESFuncs.glUnmapBuffer(TempBufferTarget);
+                        return;
+                    }
+                    MGLOG_E("Failed to map buffer with ID: %u for flush, falling back to glBufferSubData",
+                            resource->id);
+                }
+                UploadRangeNow(*resource, bufferObject, range.start, range.end);
+            }
+
+            void Ops_OnDestroy(SharedPtr<BackendBufferResource>&& resource) {
+                if (!resource) return;
+                auto* glesResource = static_cast<GLESBufferResource*>(resource.get());
+                if (CanTouchGLNow()) {
+                    if (glesResource->id != 0) {
+                        if (g_boundArrayBufferKnown && g_boundArrayBufferId == glesResource->id) {
+                            InvalidateArrayBufferBindingCache();
+                        }
+                        g_GLESFuncs.glDeleteBuffers(1, &glesResource->id);
+                        glesResource->id = 0;
+                    }
+                    return;
+                }
+                const std::lock_guard<std::mutex> lock(g_deferredBufferReleasesMutex);
+                g_deferredBufferReleases.push_back(std::move(resource));
+            }
+
+            const BufferBackendOps g_glesBufferBackendOps = {
+                .Respecify = Ops_Respecify,
+                .SubData = Ops_SubData,
+                .FlushMappedRange = Ops_FlushMappedRange,
+                .OnDestroy = Ops_OnDestroy,
+            };
+        } // namespace
+
+        void RegisterBufferBackendOps() {
+            MG_State::GLState::SetBufferBackendOps(&g_glesBufferBackendOps);
         }
 
-        StateBackendObjectRegistry<MG_State::GLState::BufferObject, BackendBufferObject> g_backendBufferObjects;
-        BackendBufferObject* g_boundVertexBufferObject = nullptr;
+        void UnregisterBufferBackendOps() {
+            if (MG_State::GLState::GetBufferBackendOps() == &g_glesBufferBackendOps) {
+                MG_State::GLState::SetBufferBackendOps(nullptr);
+            }
+            InvalidateArrayBufferBindingCache();
+            const std::lock_guard<std::mutex> lock(g_deferredBufferReleasesMutex);
+            // The ES context owning these ids is going away; just drop the handles.
+            g_deferredBufferReleases.clear();
+        }
+
+        void ProcessDeferredBufferReleases() {
+            if (!CanTouchGLNow()) return;
+            Vector<SharedPtr<BackendBufferResource>> releases;
+            {
+                const std::lock_guard<std::mutex> lock(g_deferredBufferReleasesMutex);
+                releases.swap(g_deferredBufferReleases);
+            }
+            for (auto& resource : releases) {
+                auto* glesResource = static_cast<GLESBufferResource*>(resource.get());
+                if (glesResource->id != 0) {
+                    if (g_boundArrayBufferKnown && g_boundArrayBufferId == glesResource->id) {
+                        InvalidateArrayBufferBindingCache();
+                    }
+                    g_GLESFuncs.glDeleteBuffers(1, &glesResource->id);
+                    glesResource->id = 0;
+                }
+            }
+        }
+
+        GLESBufferResource* GetBufferResource(MG_State::GLState::BufferObject* bufferObject) {
+            if (!bufferObject) return nullptr;
+            return static_cast<GLESBufferResource*>(bufferObject->GetBackendResource().get());
+        }
+
+        GLESBufferResource* EnsureBufferResource(const SharedPtr<MG_State::GLState::BufferObject>& bufferObject) {
+#ifdef TRACY_ENABLE
+            ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
+#endif
+            if (!bufferObject) return nullptr;
+
+            auto* resource = static_cast<GLESBufferResource*>(bufferObject->GetBackendResource().get());
+            if (!resource) {
+                auto newResource = MakeShared<GLESBufferResource>();
+                newResource->pendingRespecify = true;
+                resource = newResource.get();
+                bufferObject->SetBackendResource(std::move(newResource));
+            }
+
+            if (resource->id == 0) {
+                g_GLESFuncs.glGenBuffers(1, &resource->id);
+                if (resource->id == 0) {
+                    MGLOG_E("Failed to generate buffer object.");
+                    MGLOG_E("ES glGetError(): %s", MG_Util::ConvertGLEnumToString(g_GLESFuncs.glGetError()).c_str());
+                    return resource;
+                }
+                resource->storageInitialized = false;
+                resource->pendingRespecify = true;
+            }
+
+            // Push persistently-mapped writes first; lands either as an immediate
+            // SubData (fresh storage) or as part of the full re-upload below.
+            bufferObject->SyncPersistentMappedRange();
+
+            if (bufferObject->GetSize() == 0) {
+                return resource;
+            }
+
+            if (resource->pendingRespecify || !resource->storageInitialized ||
+                resource->storageSize != bufferObject->GetSize()) {
+                RespecifyStorageNow(*resource, *bufferObject);
+            } else if (!resource->pendingRanges.empty()) {
+                for (const auto& range : resource->pendingRanges) {
+                    const SizeT end = std::min(range.end, bufferObject->GetSize());
+                    UploadRangeNow(*resource, *bufferObject, std::min(range.start, end), end);
+                }
+                resource->pendingRanges.clear();
+            }
+            return resource;
+        }
+
+        void BindBufferId(GLenum target, Uint id) {
+#ifdef TRACY_ENABLE
+            ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
+#endif
+            if (false && target == GL_ARRAY_BUFFER) { // BISECT2: cache disabled
+                if (g_boundArrayBufferKnown && g_boundArrayBufferId == id) {
+                    return;
+                }
+                g_boundArrayBufferId = id;
+                g_boundArrayBufferKnown = true;
+            }
+            g_GLESFuncs.glBindBuffer(target, id);
+        }
+
+        void InvalidateArrayBufferBindingCache() {
+            g_boundArrayBufferId = 0;
+            g_boundArrayBufferKnown = false;
+        }
     } // namespace BufferImpl
 
     namespace VertexArrayImpl {
@@ -346,14 +429,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 return false;
             }
 
-            const auto& backendBufferIt = BufferImpl::g_backendBufferObjects.find(bufferObject.get());
-            if (backendBufferIt == BufferImpl::g_backendBufferObjects.end()) {
+            auto* backendResource = BufferImpl::EnsureBufferResource(bufferObject);
+            if (!backendResource || backendResource->id == 0) {
                 MGLOG_E("No backend buffer found for attribute's buffer, cannot bind attribute.");
                 return false;
             }
-            const auto& backendBufferObject = backendBufferIt->second;
 
-            backendBufferObject->Bind(GL_ARRAY_BUFFER);
+            BufferImpl::BindBufferId(GL_ARRAY_BUFFER, backendResource->id);
             return true;
         }
 
@@ -416,10 +498,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 const auto& indexBufferBinding = stateVAOObject->GetIndexBufferBindingSlot().GetBoundObject();
                 Bool indexBufferSynced = false;
                 if (indexBufferBinding) {
-                    const auto& backendBufferIt = BufferImpl::g_backendBufferObjects.find(indexBufferBinding.get());
-                    if (backendBufferIt != BufferImpl::g_backendBufferObjects.end()) {
-                        const auto& backendBufferObject = backendBufferIt->second;
-                        backendBufferObject->Bind(GL_ELEMENT_ARRAY_BUFFER);
+                    auto* backendResource = BufferImpl::EnsureBufferResource(indexBufferBinding);
+                    if (backendResource && backendResource->id != 0) {
+                        BufferImpl::BindBufferId(GL_ELEMENT_ARRAY_BUFFER, backendResource->id);
                         indexBufferSynced = true;
                     } else {
                         MGLOG_W("No backend buffer found for index buffer binding, cannot bind index buffer.");
@@ -471,7 +552,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     }
                 }
 
-                g_GLESFuncs.glBindBuffer(GL_ARRAY_BUFFER, bufferId);
+                BufferImpl::BindBufferId(GL_ARRAY_BUFFER, bufferId);
                 g_GLESFuncs.glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(uploadSize), clientData,
                                          GL_STREAM_DRAW);
 
@@ -486,7 +567,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 }
             }
 
-            BufferImpl::g_boundVertexBufferObject = nullptr;
         }
 
         StateBackendObjectRegistry<MG_State::GLState::VertexArrayObject, BackendVertexArrayObject>
@@ -1112,22 +1192,15 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 Bool needsRegeneration = !m_isInitialized || (currentTextureInfo != m_prevTextureInfo);
 
                 // Need to sync texture buffer if not synced yet
-                auto& backendBuffers = BufferImpl::g_backendBufferObjects;
-                SharedPtr<BufferImpl::BackendBufferObject> backendBufferObject;
-                const auto& backendBufferIt = backendBuffers.find(buffer.get());
-                if (backendBufferIt == backendBuffers.end()) {
-                    auto& backendBufferSlot = backendBuffers.GetOrCreate(buffer);
-                    if (!backendBufferSlot) {
-                        backendBufferSlot = MakeShared<BufferImpl::BackendBufferObject>();
-                    }
-                    backendBufferObject = backendBufferSlot;
-                } else {
-                    backendBufferObject = backendBufferIt->second;
+                auto* backendBufferResource = BufferImpl::EnsureBufferResource(buffer);
+                if (!backendBufferResource || backendBufferResource->id == 0) {
+                    MGLOG_E("Failed to sync backing buffer for texture buffer with ID: %u",
+                            stateTextureObject->GetExternalIndex());
+                    return;
                 }
-                backendBufferObject->SyncToBackend(buffer);
 
                 // Bind buffer to texture
-                auto backendId = backendBufferObject->GetBackendBufferId();
+                auto backendId = backendBufferResource->id;
 
                 GLenum glInternalFormat, glType, glFormat;
                 TextureImpl::GenerateTextureFormatInfo(textureBufferObject->GetFormat(), &glInternalFormat, &glFormat,
