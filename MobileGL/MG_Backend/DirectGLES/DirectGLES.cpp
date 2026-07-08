@@ -1042,26 +1042,16 @@ namespace MobileGL::MG_Backend::DirectGLES {
     // execute natively on the GPU so commands written by compute shaders (e.g. Flywheel's
     // culling pipeline updating instanceCount) are honored; the CPU shadow is still consulted
     // for the per-command baseInstance, which is CPU-authored, to feed the mg_BaseInstance
-    // shader emulation. Falls back to the CPU per-command loop for client-memory commands or
-    // when the driver cannot consume the command's baseInstance field (no GL_EXT_base_instance).
+    // shader emulation. Without GL_EXT_base_instance a non-zero baseInstance in the command is
+    // technically undefined in ES; mobile drivers ignore the reserved word, instanced-array
+    // fetches were never baseInstance-offset here anyway, and the CPU fallback cannot see
+    // GPU-written command fields at all - so native is never worse. Only client-memory
+    // commands take the CPU per-command loop.
     static void ExecuteIndexedIndirectCommands(GLenum mode, GLenum type, SizeT indexSize, const Uint8* commandBytes,
                                                SizeT commandOffset, Bool hasIndirectBuffer, GLsizei drawcount,
                                                GLsizei stride, const char* label) {
-        Bool useNative = hasIndirectBuffer && SupportsNativeIndirectDraws();
-        if (useNative && !g_GLESCapabilities.SupportsBaseInstance) {
-            for (GLsizei i = 0; i < drawcount; ++i) {
-                DrawElementsIndirectCommand cmd{};
-                std::memcpy(&cmd, commandBytes + static_cast<SizeT>(i) * stride, sizeof(cmd));
-                if (cmd.baseInstance != 0) {
-                    useNative = false;
-                    MGLOG_W("%s: non-zero baseInstance without GL_EXT_base_instance, falling back to CPU "
-                            "emulation (GPU-written command fields will not be honored)",
-                            label);
-                    break;
-                }
-            }
-        }
-
+        (void)label;
+        const Bool useNative = hasIndirectBuffer && SupportsNativeIndirectDraws();
         if (useNative) {
             for (GLsizei i = 0; i < drawcount; ++i) {
                 DrawElementsIndirectCommand cmd{};
@@ -1093,21 +1083,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
     static void ExecuteArraysIndirectCommands(GLenum mode, const Uint8* commandBytes, SizeT commandOffset,
                                               Bool hasIndirectBuffer, GLsizei drawcount, GLsizei stride,
                                               const char* label) {
-        Bool useNative = hasIndirectBuffer && SupportsNativeIndirectDraws();
-        if (useNative && !g_GLESCapabilities.SupportsBaseInstance) {
-            for (GLsizei i = 0; i < drawcount; ++i) {
-                DrawArraysIndirectCommand cmd{};
-                std::memcpy(&cmd, commandBytes + static_cast<SizeT>(i) * stride, sizeof(cmd));
-                if (cmd.baseInstance != 0) {
-                    useNative = false;
-                    MGLOG_W("%s: non-zero baseInstance without GL_EXT_base_instance, falling back to CPU "
-                            "emulation (GPU-written command fields will not be honored)",
-                            label);
-                    break;
-                }
-            }
-        }
-
+        (void)label;
+        const Bool useNative = hasIndirectBuffer && SupportsNativeIndirectDraws();
         if (useNative) {
             for (GLsizei i = 0; i < drawcount; ++i) {
                 DrawArraysIndirectCommand cmd{};
