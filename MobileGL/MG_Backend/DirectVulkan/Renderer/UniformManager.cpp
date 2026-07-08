@@ -652,13 +652,14 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                         program.GetUniformBlockName(static_cast<Uint32>(blockIndex)).c_str());
 
         const VkDeviceSize available = rangeEnd - rangeStart;
-        MOBILEGL_ASSERT(available >= blockSize,
-                        "ResolveUniformBufferPayload: bound range %zu is smaller than UBO size %zu for block '%s'",
-                        static_cast<SizeT>(available), static_cast<SizeT>(blockSize),
-                        program.GetUniformBlockName(static_cast<Uint32>(blockIndex)).c_str());
-
-        outData = bufferData->data() + static_cast<SizeT>(rangeStart);
         outSize = blockSize;
+        outData = bufferData->data() + static_cast<SizeT>(rangeStart);
+        if (available < blockSize) {
+            static thread_local Vector<Uint8> paddedUbo;
+            paddedUbo.assign(static_cast<SizeT>(blockSize), 0);
+            Memcpy(paddedUbo.data(), outData, static_cast<SizeT>(available));
+            outData = paddedUbo.data();
+        }
         return true;
     }
 
