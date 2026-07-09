@@ -113,6 +113,14 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         VkTextureManager* m_textureManager = nullptr;
         VkSamplerManager* m_samplerManager = nullptr;
         mutable SharedPtr<MG_State::GLState::ITextureObject> m_fallbackTexture2D;
+
+        // Per-draw scratch buffers for BindProgramUniformBuffers: reused (clear keeps
+        // capacity) so the descriptor-write path stops allocating on every draw.
+        Vector<VkWriteDescriptorSet> m_writesScratch;
+        Vector<VkDescriptorBufferInfo> m_bufferInfosScratch;
+        Vector<VkDescriptorImageInfo> m_imageInfosScratch;
+        Vector<VkBufferView> m_texelBufferViewsScratch;
+        Vector<Uint32> m_dynamicOffsetsScratch;
     };
 } // namespace MobileGL::MG_Backend::DirectVulkan
 

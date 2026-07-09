@@ -2077,8 +2077,10 @@ void main() {
 
         const auto bindingCount = vertexInputState.bindings.size() + static_cast<SizeT>(std::popcount(missingAttribMask));
 
-        Vector<VkBuffer> vkBuffers(bindingCount, VK_NULL_HANDLE);
-        Vector<VkDeviceSize> vkOffsets(bindingCount, 0);
+        auto& vkBuffers = m_vertexBuffersScratch;
+        auto& vkOffsets = m_vertexOffsetsScratch;
+        vkBuffers.assign(bindingCount, VK_NULL_HANDLE);
+        vkOffsets.assign(bindingCount, 0);
 
         auto findBufferByKey = [&](SizeT bufferKey) -> const MG_State::GLState::BufferObject* {
             const auto& attrs = vao.GetAllAttributes();
@@ -2690,6 +2692,7 @@ void main() {
             MOBILEGL_ASSERT(offset + size <= m_depthMipmapResources.program->GetUBOSize(),
                             "GenerateDepthMipmapWithShader: uniform write out of bounds");
             memcpy(depthProgramData + offset, data, size);
+            m_depthMipmapResources.program->MarkUBOContentDirty();
         };
 
         for (Uint32 level = baseMipLevel + 1; level < generateMipLevelCount; ++level) {
@@ -2843,12 +2846,13 @@ void main() {
         }
 #endif
 
-        auto vertexInputHash = m_vertexInputStateFactory->ComputeHash(vao);
+        auto vertexInputHash = m_vertexInputStateFactory->GetOrComputeHash(vao);
         auto& vis = m_vertexInputStateFactory->GetOrCreateVertexInputState(vao, vertexInputHash);
         const Uint32 vertexInputAttribMask = BuildVertexInputAttributeMask(vis.attributes);
         const Uint32 activeAttribMask = programObj.activeVertexInputLocationMask;
         const Uint32 missingAttribMask = activeAttribMask & ~vertexInputAttribMask;
-        Vector<VkVertexInputAttributeDescription> patchedAttributes = vis.attributes;
+        auto& patchedAttributes = m_patchedAttributesScratch;
+        patchedAttributes.assign(vis.attributes.begin(), vis.attributes.end());
         Bool hasPatchedVertexAttributes = false;
         for (auto& attribute : patchedAttributes) {
             if (attribute.location >= 32 || (activeAttribMask & (1u << attribute.location)) == 0) {
@@ -3188,7 +3192,7 @@ void main() {
         // which probably indicates it's been gone through codepath like `fbo attach` -> `clear` -> `fbo detach`, and
         // without draws in between to give it a chance to materialize such clear.
         // Deal with this situation here.
-        Vector<MG_State::GLState::ITextureObject*> sampledTextures;
+        auto& sampledTextures = m_sampledTexturesScratch; // cleared by CollectSampledTextures
         Bool hasSampledTextures = m_uniformManager->CollectSampledTextures(program, programObj, sampledTextures);
         MOBILEGL_ASSERT(hasSampledTextures, "%s: CollectSampledTextures failed", __func__);
         MGLOG_D("SetupDraw: program=%u drawFbo=%u sampledTextureCount=%zu activeRenderPass=%s",
@@ -3848,6 +3852,7 @@ void main() {
         writeUniform(m_blitResources.dstRectLocation, blitUniformData.dstRect, sizeof(blitUniformData.dstRect));
         writeUniform(m_blitResources.surfaceTransformLocation, &blitUniformData.surfaceTransform,
                      sizeof(blitUniformData.surfaceTransform));
+        m_blitResources.program->MarkUBOContentDirty();
 
         const auto samplerBindingOverride = UniformManager::SamplerBindingOverride{
             .binding = m_blitResources.samplerBinding,
@@ -4875,7 +4880,7 @@ void main() {
         MOBILEGL_ASSERT(texture != nullptr, "GenerateMipmap requires a bound texture.");
         MOBILEGL_ASSERT(texture->IsComplete(), "GenerateMipmap requires a complete texture.");
 
-        auto* mipmapTexture = dynamic_cast<MG_State::GLState::TextureObjectMipmap*>(texture.get());
+        auto* mipmapTexture = MG_State::GLState::AsMipmapTexture(texture.get());
         MOBILEGL_ASSERT(mipmapTexture != nullptr, "GenerateMipmap requires a mipmapped texture object.");
 
         const Uint32 currentMipLevelCount = static_cast<Uint32>(mipmapTexture->GetMipmapLevelCount());

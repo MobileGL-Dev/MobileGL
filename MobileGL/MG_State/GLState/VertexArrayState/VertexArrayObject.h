@@ -81,6 +81,23 @@ namespace MobileGL {
                 const VertexAttributeVersion& GetAttributeVersion(Uint index) const;
                 const Array<VertexAttributeVersion, MAX_VERTEX_ATTRIBS>& GetAllAttributeVersions() const;
 
+                // Aggregate of every per-attribute version bump; lets backends detect
+                // "any vertex-input state changed" with one compare.
+                Uint32 GetConfigVersion() const { return m_configVersion; }
+
+                // Backend-owned content-hash memo, valid while the config version matches
+                // (same idea as ProgramObject's hash memo — avoids re-hashing all
+                // attributes on every draw).
+                Bool GetBackendHashMemo(Uint64& outHash) const {
+                    if (m_backendHashMemoVersion != m_configVersion) return false;
+                    outHash = m_backendHashMemo;
+                    return true;
+                }
+                void SetBackendHashMemo(Uint64 hash) const {
+                    m_backendHashMemo = hash;
+                    m_backendHashMemoVersion = m_configVersion;
+                }
+
             private:
                 void BumpAttributeFormatVersion(Uint index);
                 void BumpAttributeBufferVersion(Uint index);
@@ -100,6 +117,10 @@ namespace MobileGL {
                 // ARB_vertex_attrib_binding API; only such attributes are re-resolved, so the
                 // classic glVertexAttribPointer path keeps its exact historical behavior.
                 Array<Bool, MAX_VERTEX_ATTRIBS> m_attributeUsesBindingModel = {};
+
+                Uint32 m_configVersion = 0;
+                mutable Uint64 m_backendHashMemo = 0;
+                mutable Uint32 m_backendHashMemoVersion = ~0u;
             };
         } // namespace GLState
     } // namespace MG_State

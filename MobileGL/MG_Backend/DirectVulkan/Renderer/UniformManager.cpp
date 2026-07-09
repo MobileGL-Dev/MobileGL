@@ -822,12 +822,17 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         MOBILEGL_ASSERT(m_samplerManager != nullptr, "BindProgramUniformBuffers: sampler manager is null");
         MOBILEGL_ASSERT(m_bufferManager != nullptr, "BindProgramUniformBuffers: buffer manager is null");
 
-        Vector<VkWriteDescriptorSet> writes;
+        auto& writes = m_writesScratch;
+        auto& bufferInfos = m_bufferInfosScratch;
+        auto& imageInfos = m_imageInfosScratch;
+        auto& texelBufferViews = m_texelBufferViewsScratch;
+        auto& dynamicOffsets = m_dynamicOffsetsScratch;
+        writes.clear();
+        bufferInfos.clear();
+        imageInfos.clear();
+        texelBufferViews.clear();
+        dynamicOffsets.clear();
         writes.reserve(m_maxBindings);
-        Vector<VkDescriptorBufferInfo> bufferInfos;
-        Vector<VkDescriptorImageInfo> imageInfos;
-        Vector<VkBufferView> texelBufferViews;
-        Vector<Uint32> dynamicOffsets;
         bufferInfos.reserve(m_maxBindings);
         imageInfos.reserve(m_maxBindings);
         texelBufferViews.reserve(m_maxBindings);

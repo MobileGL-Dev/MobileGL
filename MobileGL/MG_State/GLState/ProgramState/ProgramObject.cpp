@@ -105,6 +105,14 @@ namespace {
 
 namespace MobileGL::MG_State::GLState {
     void ProgramObject::ResetLinkArtifacts() {
+        // Relinking regenerates the SPIR-V, so any backend-cached state keyed on
+        // m_backendStateVersion (e.g. the content-hash memo) must be invalidated,
+        // along with every link-derived backend cache (m_linkVersion) and the
+        // last-uploaded-UBO gate (a relink resets uniforms to their initial values,
+        // and that reset must reach the GPU).
+        ++m_backendStateVersion;
+        ++m_linkVersion;
+        MarkUBOContentDirty();
         m_program.reset();
         m_generatedSpirv.clear();
         m_uniformLocations.clear();

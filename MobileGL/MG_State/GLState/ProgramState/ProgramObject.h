@@ -170,7 +170,33 @@ namespace MobileGL::MG_State::GLState {
         void* MapUBO() { return m_globalUboScratch.data(); }
         const void* GetUBOData() const { return m_globalUboScratch.data(); }
         Uint GetUBOSize() const { return static_cast<Uint>(m_globalUboScratch.size()); }
+        // Content version of the CPU-side global-UBO shadow: writers bump it so backends
+        // can skip re-uploading an unchanged UBO on every draw. ~0u is reserved as the
+        // backends' "never uploaded" sentinel, so skip over it on wrap.
+        Uint32 GetUBOContentVersion() const { return m_uboContentVersion; }
+        void MarkUBOContentDirty() {
+            if (++m_uboContentVersion == ~0u) m_uboContentVersion = 0;
+        }
         Uint32 GetBackendStateVersion() const { return m_backendStateVersion; }
+        // Bumped only by (re)linking — lets backends detect that every piece of
+        // link-derived reflection (locations, block order, UBO layout) is stale.
+        Uint32 GetLinkVersion() const { return m_linkVersion; }
+
+        // Content-hash memo for backends: avoids re-hashing the generated SPIR-V on every
+        // draw. The memo is keyed by (backendStateVersion, flags); ResetLinkArtifacts and
+        // the binding setters below invalidate it by bumping m_backendStateVersion.
+        Bool GetBackendHashMemo(Uint flags, Uint64& outHash) const {
+            if (m_backendHashMemoVersion != m_backendStateVersion || m_backendHashMemoFlags != flags) {
+                return false;
+            }
+            outHash = m_backendHashMemo;
+            return true;
+        }
+        void SetBackendHashMemo(Uint flags, Uint64 hash) const {
+            m_backendHashMemo = hash;
+            m_backendHashMemoVersion = m_backendStateVersion;
+            m_backendHashMemoFlags = flags;
+        }
 
         void SetUniformSamplerOrImageUnitIndex(Uint location, Int unit) {
             if (location >= m_uniformSamplerOrImageUnitIndex.size() ||
@@ -308,5 +334,13 @@ namespace MobileGL::MG_State::GLState {
         Bool m_linkStatus = false;
         Bool m_validateStatus = true;
         Uint32 m_backendStateVersion = 0;
+
+        // Backend-owned content-hash memo (see GetBackendHashMemo): valid only while
+        // m_backendStateVersion and the compile flags match the recorded values.
+        mutable Uint64 m_backendHashMemo = 0;
+        mutable Uint32 m_backendHashMemoVersion = ~0u;
+        mutable Uint m_backendHashMemoFlags = 0;
+        Uint32 m_uboContentVersion = 0;
+        Uint32 m_linkVersion = 0;
     };
 } // namespace MobileGL::MG_State::GLState

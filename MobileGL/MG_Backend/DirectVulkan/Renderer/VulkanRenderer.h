@@ -272,6 +272,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         DepthMipmapResources m_depthMipmapResources;
         Vector<DeferredDepthMipmapCleanup> m_deferredDepthMipmapCleanup;
 
+        // Per-draw scratch buffers (clear keeps capacity) — these paths run for every
+        // draw call and must not allocate.
+        Vector<MG_State::GLState::ITextureObject*> m_sampledTexturesScratch;
+        Vector<VkBuffer> m_vertexBuffersScratch;
+        Vector<VkDeviceSize> m_vertexOffsetsScratch;
+        Vector<VkVertexInputAttributeDescription> m_patchedAttributesScratch;
+
         void CreateInstance();
         VkResult SetupDebugMessenger();
         VkResult DestroyDebugMessenger();

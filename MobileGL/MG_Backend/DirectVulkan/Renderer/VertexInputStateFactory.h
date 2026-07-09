@@ -38,6 +38,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         VertexInputStateFactory(const VertexInputStateFactory&) = delete;
 
         HashType ComputeHash(const MG_State::GLState::VertexArrayObject& vao) const;
+        // Memoized ComputeHash: reuses the VAO's cached hash while its config version
+        // is unchanged. Use this on per-draw paths.
+        HashType GetOrComputeHash(const MG_State::GLState::VertexArrayObject& vao) const;
         const BackendVertexInputState& GetOrCreateVertexInputState(
             const MG_State::GLState::VertexArrayObject& vao, HashType hash);
         const BackendVertexInputState& GetOrCreateVertexInputState(const MG_State::GLState::VertexArrayObject& vao);

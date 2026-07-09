@@ -31,8 +31,19 @@ static const char* string_VkColorSpaceKHR(VkColorSpaceKHR) {
     return "VkColorSpaceKHR(unknown)";
 }
 
-static const char* string_VkPresentModeKHR(VkPresentModeKHR) {
-    return "VkPresentModeKHR(unknown)";
+static const char* string_VkPresentModeKHR(VkPresentModeKHR presentMode) {
+    switch (presentMode) {
+    case VK_PRESENT_MODE_IMMEDIATE_KHR:
+        return "VK_PRESENT_MODE_IMMEDIATE_KHR";
+    case VK_PRESENT_MODE_MAILBOX_KHR:
+        return "VK_PRESENT_MODE_MAILBOX_KHR";
+    case VK_PRESENT_MODE_FIFO_KHR:
+        return "VK_PRESENT_MODE_FIFO_KHR";
+    case VK_PRESENT_MODE_FIFO_RELAXED_KHR:
+        return "VK_PRESENT_MODE_FIFO_RELAXED_KHR";
+    default:
+        return "VkPresentModeKHR(unknown)";
+    }
 }
 
 static const char* string_VkSurfaceTransformFlagBitsKHR(VkSurfaceTransformFlagBitsKHR) {

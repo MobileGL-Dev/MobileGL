@@ -1666,7 +1666,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
     const ProgramFactory::VkProgramObject& ProgramFactory::GetOrCreateProgram(
         const MG_State::GLState::ProgramObject& program, CompileOptionFlags flags) {
-        const HashType hash = ComputeHash(program, flags);
+        // Hashing the full SPIR-V of every stage is far too expensive to repeat per draw;
+        // reuse the program's memoized hash while its backend state version is unchanged.
+        HashType hash = 0;
+        if (!program.GetBackendHashMemo(flags.GetRaw(), hash)) {
+            hash = ComputeHash(program, flags);
+            program.SetBackendHashMemo(flags.GetRaw(), hash);
+        }
         auto it = m_cache.find(hash);
         if (it != m_cache.end()) {
             return it->second;

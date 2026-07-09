@@ -336,6 +336,8 @@ namespace MobileGL {
 
         operator Bool() const { return Any(); }
 
+        typename Underlying::type GetRaw() const { return flags; }
+
     private:
         Bool Any() const { return static_cast<typename Underlying::type>(flags) != 0; }
 

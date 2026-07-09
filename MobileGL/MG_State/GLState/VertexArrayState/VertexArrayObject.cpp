@@ -207,16 +207,19 @@ namespace MobileGL::MG_State::GLState {
     void VertexArrayObject::BumpAttributeFormatVersion(Uint index) {
         if (index >= MAX_VERTEX_ATTRIBS) return;
         ++m_attributeVersions[index].FormatVersion;
+        ++m_configVersion;
     }
 
     void VertexArrayObject::BumpAttributeBufferVersion(Uint index) {
         if (index >= MAX_VERTEX_ATTRIBS) return;
         ++m_attributeVersions[index].BufferVersion;
+        ++m_configVersion;
     }
 
     void VertexArrayObject::BumpAttributeSwitchVersion(Uint index) {
         if (index >= MAX_VERTEX_ATTRIBS) return;
         ++m_attributeVersions[index].SwitchVersion;
+        ++m_configVersion;
     }
 
     const VertexAttributeVersion& VertexArrayObject::GetAttributeVersion(Uint index) const {

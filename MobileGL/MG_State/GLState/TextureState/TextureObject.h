@@ -128,6 +128,20 @@ namespace MobileGL::MG_State::GLState {
         virtual Bool IsStorageDirty(TextureUploadTarget uploadTarget, Uint mipmapLevel) const = 0;
     };
 
+    // Cheap replacement for dynamic_cast on the hot path: TextureObjectMipmap is the
+    // only hierarchy branch whose storage type reports Mipmap, so the tag check makes
+    // the static_cast safe.
+    inline TextureObjectMipmap* AsMipmapTexture(ITextureObject* texture) {
+        return (texture && texture->GetStorageType() == TextureStorageType::Mipmap)
+                   ? static_cast<TextureObjectMipmap*>(texture)
+                   : nullptr;
+    }
+    inline const TextureObjectMipmap* AsMipmapTexture(const ITextureObject* texture) {
+        return (texture && texture->GetStorageType() == TextureStorageType::Mipmap)
+                   ? static_cast<const TextureObjectMipmap*>(texture)
+                   : nullptr;
+    }
+
     class TextureObjectWithOneMipmap : public TextureObjectMipmap {
     public:
         TextureObjectWithOneMipmap(TextureTarget target, Uint externalIndex)

@@ -675,7 +675,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
 
         Vector<TextureIdentity> staleAliases;
-        staleAliases.reserve(m_aliveObjects.size());
         for (auto it = m_aliveObjects.begin(); it != m_aliveObjects.end(); ++it) {
             if (it->first.texture != texture) {
                 continue;
@@ -698,12 +697,19 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         auto aliveIt = m_aliveObjects.find(identity);
         if (aliveIt != m_aliveObjects.end() && aliveIt->second.expired()) {
             EraseTrackedTexture(aliveIt->first);
+            aliveIt = m_aliveObjects.end();
         }
 
-        const auto& liveTexture = MG_State::pGLContext->GetTextureObject(texture.GetExternalIndex());
-        if (liveTexture && liveTexture.get() == &texture) {
-            m_aliveObjects[identity] = WeakPtr<MG_State::GLState::ITextureObject>(liveTexture);
-            PruneStaleTextureAliases(&texture);
+        // Only (re)register and prune when this (texture, lifetime) pair is new: stale
+        // aliases can only come into existence through an address reuse, which by
+        // construction introduces a new identity. Doing this unconditionally made every
+        // sampled-texture sync scan the entire alive-texture map per draw.
+        if (aliveIt == m_aliveObjects.end()) {
+            const auto& liveTexture = MG_State::pGLContext->GetTextureObject(texture.GetExternalIndex());
+            if (liveTexture && liveTexture.get() == &texture) {
+                m_aliveObjects[identity] = WeakPtr<MG_State::GLState::ITextureObject>(liveTexture);
+                PruneStaleTextureAliases(&texture);
+            }
         }
 
         auto it = m_textureResources.find(identity);
@@ -1033,7 +1039,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             return false;
         }
 
-        auto* mipTexture = dynamic_cast<MG_State::GLState::TextureObjectMipmap*>(&texture);
+        auto* mipTexture = MG_State::GLState::AsMipmapTexture(&texture);
         if (!mipTexture) {
             MGLOG_D("%s: not TextureObjectMipmap", __func__);
             return false;
@@ -1579,7 +1585,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                                    IntVec3& outTexelSize,
                                                    SizeT& outByteSize,
                                                    Uint32& outMipLevelCount) {
-        const auto* mipTexture = dynamic_cast<const MG_State::GLState::TextureObjectMipmap*>(&texture);
+        const auto* mipTexture = MG_State::GLState::AsMipmapTexture(&texture);
         if (!mipTexture) {
             MGLOG_D("%s: not TextureObjectMipmap", __func__);
             return false;
@@ -1639,7 +1645,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         MOBILEGL_ASSERT(mipLevels > 0, "ResolveViewMipRange: mipLevels must be > 0");
 
         Uint32 definedMipLevels = mipLevels;
-        if (const auto* mipTexture = dynamic_cast<const MG_State::GLState::TextureObjectMipmap*>(&texture)) {
+        if (const auto* mipTexture = MG_State::GLState::AsMipmapTexture(&texture)) {
             const auto& targets = texture.GetUploadTargets();
             for (const auto target : targets) {
                 const Uint32 uploadMipLevels = GetUploadMipLevelCount(*mipTexture, target);
