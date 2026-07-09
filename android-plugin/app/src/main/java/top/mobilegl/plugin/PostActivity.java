@@ -5,6 +5,8 @@ import android.graphics.Typeface;
 import android.os.Bundle;
 import android.util.Log;
 import android.util.TypedValue;
+import android.view.Gravity;
+import android.view.View;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
@@ -25,6 +27,12 @@ public final class PostActivity extends Activity {
     private static final int COLOR_WARN = 0xFFFF9800;
     private static final int COLOR_FAIL = 0xFFF44336;
     private static final int COLOR_INFO = 0xFF9E9E9E;
+    private static final int COLOR_DETAIL = 0xFFBBBBBB;
+    private static final int COLOR_ROW_EVEN = 0xFF1A1A1A;
+    private static final int COLOR_ROW_ODD = 0xFF121212;
+
+    private static final String INDICATOR_COLLAPSED = "▸";
+    private static final String INDICATOR_EXPANDED = "▾";
 
     /**
      * Single-flight state: the driver POST runs at most once per process.
@@ -177,7 +185,7 @@ public final class PostActivity extends Activity {
         String nativeError = root.optString("error", "");
         if (!nativeError.isEmpty()) {
             showError(nativeError);
-            addText(json, 10, COLOR_INFO, false, dp(8));
+            addRawJsonSection(json);
             return;
         }
         JSONArray backends = extractBackends(root);
@@ -192,6 +200,7 @@ public final class PostActivity extends Activity {
                 renderBackendSection(backend);
             }
         }
+        addRawJsonSection(json);
     }
 
     private static JSONArray extractBackends(JSONObject root) {
@@ -238,17 +247,111 @@ public final class PostActivity extends Activity {
         if (checks == null) {
             return;
         }
+        LinearLayout table = new LinearLayout(this);
+        table.setOrientation(LinearLayout.VERTICAL);
+        LinearLayout.LayoutParams tableParams = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+        );
+        tableParams.topMargin = dp(6);
+        contentLayout.addView(table, tableParams);
+        int rowIndex = 0;
         for (int i = 0; i < checks.length(); ++i) {
             JSONObject check = checks.optJSONObject(i);
             if (check == null) {
                 continue;
             }
-            String status = check.optString("status", "INFO");
-            String checkName = check.optString("name", "unnamed check");
-            String detail = check.optString("detail", check.optString("message", ""));
-            String row = "[" + status + "] " + checkName + (detail.isEmpty() ? "" : " - " + detail);
-            addText(row, 12, statusColor(status), false, dp(4));
+            addCheckRow(table, check, rowIndex++);
         }
+    }
+
+    /**
+     * Adds one two-column check row (name | status chip) to the table. Rows with
+     * a non-empty detail get a collapse indicator and toggle the detail text on tap;
+     * rows without detail show no indicator and are not tappable.
+     */
+    private void addCheckRow(LinearLayout table, JSONObject check, int rowIndex) {
+        String status = check.optString("status", "INFO");
+        String checkName = check.optString("name", "unnamed check");
+        String detail = check.optString("detail", check.optString("message", ""));
+        boolean hasDetail = !detail.isEmpty();
+
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.VERTICAL);
+        row.setBackgroundColor(rowIndex % 2 == 0 ? COLOR_ROW_EVEN : COLOR_ROW_ODD);
+        table.addView(row, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+        ));
+
+        LinearLayout line = new LinearLayout(this);
+        line.setOrientation(LinearLayout.HORIZONTAL);
+        line.setGravity(Gravity.CENTER_VERTICAL);
+        line.setMinimumHeight(dp(44));
+        line.setPadding(dp(8), dp(6), dp(8), dp(6));
+        row.addView(line, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+        ));
+
+        TextView indicatorView = makeText(hasDetail ? INDICATOR_COLLAPSED : "", 12, COLOR_INFO, false);
+        line.addView(indicatorView, new LinearLayout.LayoutParams(
+                dp(16),
+                LinearLayout.LayoutParams.WRAP_CONTENT
+        ));
+
+        TextView nameView = makeText(checkName, 12, COLOR_TEXT, false);
+        line.addView(nameView, new LinearLayout.LayoutParams(
+                0,
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                1f
+        ));
+
+        TextView statusChip = makeText(status, 12, statusColor(status), true);
+        statusChip.setGravity(Gravity.END);
+        statusChip.setMinWidth(dp(56));
+        LinearLayout.LayoutParams chipParams = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+        );
+        chipParams.leftMargin = dp(8);
+        line.addView(statusChip, chipParams);
+
+        if (!hasDetail) {
+            return;
+        }
+
+        TextView detailView = makeText(detail, 11, COLOR_DETAIL, false);
+        detailView.setPadding(dp(24), 0, dp(8), dp(8));
+        detailView.setVisibility(View.GONE);
+        row.addView(detailView, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+        ));
+
+        row.setOnClickListener(view -> {
+            boolean expanded = detailView.getVisibility() == View.VISIBLE;
+            detailView.setVisibility(expanded ? View.GONE : View.VISIBLE);
+            indicatorView.setText(expanded ? INDICATOR_COLLAPSED : INDICATOR_EXPANDED);
+        });
+    }
+
+    /** Adds the collapsed "Raw report" toggle plus the (initially hidden) raw JSON dump. */
+    private void addRawJsonSection(String json) {
+        TextView toggleView = addText(INDICATOR_COLLAPSED + " Raw report (tap to expand)", 12, COLOR_INFO, true, dp(24));
+        toggleView.setMinimumHeight(dp(44));
+        toggleView.setGravity(Gravity.CENTER_VERTICAL);
+
+        TextView rawView = addText(json, 10, COLOR_INFO, false, dp(4));
+        rawView.setVisibility(View.GONE);
+
+        toggleView.setOnClickListener(view -> {
+            boolean expanded = rawView.getVisibility() == View.VISIBLE;
+            rawView.setVisibility(expanded ? View.GONE : View.VISIBLE);
+            toggleView.setText(expanded
+                    ? INDICATOR_COLLAPSED + " Raw report (tap to expand)"
+                    : INDICATOR_EXPANDED + " Raw report (tap to collapse)");
+        });
     }
 
     private static String sectionTitle(String backendName) {
@@ -298,17 +401,23 @@ public final class PostActivity extends Activity {
     }
 
     private TextView addText(String text, int sizeSp, int color, boolean bold, int topMarginPx) {
-        TextView view = new TextView(this);
-        view.setText(text);
-        view.setTextColor(color);
-        view.setTextSize(TypedValue.COMPLEX_UNIT_SP, sizeSp);
-        view.setTypeface(Typeface.MONOSPACE, bold ? Typeface.BOLD : Typeface.NORMAL);
+        TextView view = makeText(text, sizeSp, color, bold);
         LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
         );
         params.topMargin = topMarginPx;
         contentLayout.addView(view, params);
+        return view;
+    }
+
+    /** Builds a styled TextView without attaching it to any parent. */
+    private TextView makeText(String text, int sizeSp, int color, boolean bold) {
+        TextView view = new TextView(this);
+        view.setText(text);
+        view.setTextColor(color);
+        view.setTextSize(TypedValue.COMPLEX_UNIT_SP, sizeSp);
+        view.setTypeface(Typeface.MONOSPACE, bold ? Typeface.BOLD : Typeface.NORMAL);
         return view;
     }
 
