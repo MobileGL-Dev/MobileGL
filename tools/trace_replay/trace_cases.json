@@ -257,6 +257,20 @@
       "golden": "minecraft-1.21.4-fabric-iris-derivative-main-d24.4.14-in-world.0000145353.png",
       "alternate_golden": "minecraft-1.21.4-fabric-iris-derivative-main-d24.4.14-in-world.0000145353-android-angle.png",
       "target_call": 145353
+    },
+    {
+      "name": "minecraft-1.21.1-neoforge-create-indirect-in-world",
+      "trace_archive": "minecraft-1.21.1-neoforge-create-indirect-in-world.tgz",
+      "golden": "minecraft-1.21.1-neoforge-create-indirect-in-world.0000504631.png",
+      "target_call": 504631,
+      "timeout_seconds": 1800
+    },
+    {
+      "name": "minecraft-1.21.1-neoforge-create-instancing-in-world",
+      "trace_archive": "minecraft-1.21.1-neoforge-create-instancing-in-world.tgz",
+      "golden": "minecraft-1.21.1-neoforge-create-instancing-in-world.0000530333.png",
+      "target_call": 530333,
+      "timeout_seconds": 1800
     }
   ]
 }

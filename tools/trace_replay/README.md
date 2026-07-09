@@ -103,6 +103,13 @@ The bundled fixtures cover:
 - minecraft-1.21.4-fabric-iris-sundial-lite-in-world: captured from Minecraft 1.21.4 Fabric with Sodium, Iris, and
   Sundial Lite after entering a singleplayer world.
   ![Minecraft 1.21.4 Fabric Iris Sundial Lite in-world golden](fixtures/minecraft-1.21.4-fabric-iris-sundial-lite-in-world.0000150023.png)
+- minecraft-1.21.1-neoforge-create-indirect-in-world: captured from Minecraft 1.21.1 NeoForge with Create, Sodium,
+  and Iris (no shader pack) in a world facing Create water wheels and a large cogwheel, with Flywheel's
+  `flywheel:indirect` backend (compute-shader culling, glMultiDrawElementsIndirect, persistent-mapped staging).
+  ![Minecraft 1.21.1 NeoForge Create indirect in-world golden](fixtures/minecraft-1.21.1-neoforge-create-indirect-in-world.0000504631.png)
+- minecraft-1.21.1-neoforge-create-instancing-in-world: same world and camera as the indirect case, with Flywheel's
+  `flywheel:instancing` backend (texture-buffer instance data, glDrawElementsInstancedBaseVertex).
+  ![Minecraft 1.21.1 NeoForge Create instancing in-world golden](fixtures/minecraft-1.21.1-neoforge-create-instancing-in-world.0000530333.png)
 
 Build from the MobileGL repository root:
 
