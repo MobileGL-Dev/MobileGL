@@ -330,7 +330,9 @@ TEST_F(GeneralVertexArrayTest, General_DirectStateAccessConfiguresNamedVAOWithou
     EXPECT_TRUE(attr.Normalized);
     EXPECT_FALSE(attr.IsInteger);
     EXPECT_EQ(attr.Stride, 24);
-    EXPECT_EQ(attr.Offset, 12);
+    // The flat attribute view holds the resolved effective offset:
+    // binding offset (16) + attribute relative offset (12).
+    EXPECT_EQ(attr.Offset, 28);
     EXPECT_EQ(attr.Buffer, MG_State::pGLContext->GetBufferObject(vertexBuffer));
     EXPECT_EQ(vaoObj->GetIndexBufferBindingSlot().GetBoundObject(), MG_State::pGLContext->GetBufferObject(indexBuffer));
     EXPECT_EQ(MG_State::pGLContext->GetBoundVertexArray(), boundObj);
