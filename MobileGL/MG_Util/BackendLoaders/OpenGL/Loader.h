@@ -1019,6 +1019,12 @@ namespace MobileGL {
             Bool SupportsPersistentMapping = false;
             Bool SupportsNorm16Texture = false;
             Bool SupportsBaseInstance = false;
+            // True when indirect draws leak the command's baseInstance word ("reserved,
+            // must be zero" in unextended ES) into gl_InstanceID. Conforming ES drivers
+            // keep gl_InstanceID zero-based; ANGLE's Vulkan backend hands the command
+            // straight to vkCmdDraw*Indirect and compiles gl_InstanceID to SPIR-V
+            // InstanceIndex, which includes firstInstance.
+            Bool IndirectDrawInstanceIdIncludesBaseInstance = false;
             Int UniformBufferOffsetAlignment = 256;
             Float AliasedLineWidthRangeMin = 1.0f;
             Float AliasedLineWidthRangeMax = 1.0f;

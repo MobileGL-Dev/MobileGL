@@ -543,6 +543,155 @@ namespace MobileGL::MG_Util::BackendLoader {
         }
     }
 
+    // Detects whether indirect draws leak the command's baseInstance word ("reserved, must
+    // be zero" in unextended ES) into gl_InstanceID. Conforming ES drivers keep
+    // gl_InstanceID zero-based, but ANGLE's Vulkan backend forwards the command verbatim to
+    // vkCmdDraw*Indirect and compiles gl_InstanceID to SPIR-V InstanceIndex, which includes
+    // firstInstance. The DirectGLES native indirect-draw path uses this answer to keep
+    // gl_InstanceID zero-based in rewritten shaders (PromoteDrawParameterGlobalsToUniforms).
+    static Bool ProbeIndirectInstanceIdIncludesBaseInstance(const MG_External::GLESCapabilities& caps,
+                                                            const MG_External::GLESFunctionsTable& f) {
+        const Bool esVersionOk =
+            caps.GLESVersion.Major > 3 || (caps.GLESVersion.Major == 3 && caps.GLESVersion.Minor >= 1);
+        if (!esVersionOk || !f.glDrawArraysIndirect || !f.glBindBufferBase || !f.glMapBufferRange ||
+            !f.glUnmapBuffer || !f.glMemoryBarrier || !f.glCreateShader || !f.glCreateProgram) {
+            return false;
+        }
+        GLint maxVertexSsboBlocks = 0;
+        f.glGetIntegerv(GL_MAX_VERTEX_SHADER_STORAGE_BLOCKS, &maxVertexSsboBlocks);
+        if (maxVertexSsboBlocks < 1) {
+            // The native indirect machinery cannot read the command buffer from the vertex
+            // stage on this driver anyway; assume conforming zero-based gl_InstanceID.
+            MGLOG_I("baseInstance probe skipped: GL_MAX_VERTEX_SHADER_STORAGE_BLOCKS = %d", maxVertexSsboBlocks);
+            return false;
+        }
+        while (f.glGetError() != GL_NO_ERROR) {
+        }
+
+        const char* vsSource = "#version 310 es\n"
+                               "layout(std430, binding = 0) buffer MgProbeResult { highp int mg_probeValue; };\n"
+                               "void main() {\n"
+                               "    mg_probeValue = gl_InstanceID;\n"
+                               "    gl_Position = vec4(0.0, 0.0, 0.0, 1.0);\n"
+                               "    gl_PointSize = 1.0;\n"
+                               "}\n";
+        const char* fsSource = "#version 310 es\n"
+                               "void main() {}\n";
+        const auto compileShader = [&f](GLenum type, const char* src) -> GLuint {
+            const GLuint shader = f.glCreateShader(type);
+            if (shader == 0) {
+                return 0;
+            }
+            f.glShaderSource(shader, 1, &src, nullptr);
+            f.glCompileShader(shader);
+            GLint status = GL_FALSE;
+            f.glGetShaderiv(shader, GL_COMPILE_STATUS, &status);
+            if (status != GL_TRUE) {
+                f.glDeleteShader(shader);
+                return 0;
+            }
+            return shader;
+        };
+        const GLuint vs = compileShader(GL_VERTEX_SHADER, vsSource);
+        const GLuint fs = compileShader(GL_FRAGMENT_SHADER, fsSource);
+        GLuint program = 0;
+        if (vs != 0 && fs != 0) {
+            program = f.glCreateProgram();
+            if (program != 0) {
+                f.glAttachShader(program, vs);
+                f.glAttachShader(program, fs);
+                f.glLinkProgram(program);
+                GLint status = GL_FALSE;
+                f.glGetProgramiv(program, GL_LINK_STATUS, &status);
+                if (status != GL_TRUE) {
+                    f.glDeleteProgram(program);
+                    program = 0;
+                }
+            }
+        }
+        if (vs != 0) f.glDeleteShader(vs);
+        if (fs != 0) f.glDeleteShader(fs);
+        if (program == 0) {
+            MGLOG_I("baseInstance probe skipped: probe program failed to build (vs=%u fs=%u)", vs, fs);
+            while (f.glGetError() != GL_NO_ERROR) {
+            }
+            return false;
+        }
+
+        constexpr GLuint kProbeBaseInstance = 7;
+        struct {
+            GLuint count;
+            GLuint instanceCount;
+            GLuint first;
+            GLuint baseInstance;
+        } command = {1, 1, 0, kProbeBaseInstance};
+        const GLint sentinel = -1;
+        // ES makes indirect draws INVALID_OPERATION on the default vertex array object.
+        GLuint vao = 0;
+        f.glGenVertexArrays(1, &vao);
+        f.glBindVertexArray(vao);
+        GLuint buffers[2] = {0, 0}; // [0] = result SSBO, [1] = indirect command buffer
+        f.glGenBuffers(2, buffers);
+        f.glBindBuffer(GL_SHADER_STORAGE_BUFFER, buffers[0]);
+        f.glBufferData(GL_SHADER_STORAGE_BUFFER, sizeof(sentinel), &sentinel, GL_STATIC_DRAW);
+        f.glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, buffers[0]);
+        f.glBindBuffer(GL_DRAW_INDIRECT_BUFFER, buffers[1]);
+        f.glBufferData(GL_DRAW_INDIRECT_BUFFER, sizeof(command), &command, GL_STATIC_DRAW);
+
+        // The default framebuffer may be incomplete (e.g. surfaceless contexts) and draws
+        // are validated against completeness even under GL_RASTERIZER_DISCARD, so give the
+        // probe its own 1x1 target.
+        GLuint framebuffer = 0;
+        GLuint renderbuffer = 0;
+        f.glGenFramebuffers(1, &framebuffer);
+        f.glGenRenderbuffers(1, &renderbuffer);
+        f.glBindRenderbuffer(GL_RENDERBUFFER, renderbuffer);
+        f.glRenderbufferStorage(GL_RENDERBUFFER, GL_RGBA8, 1, 1);
+        f.glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
+        f.glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, renderbuffer);
+
+        f.glUseProgram(program);
+        f.glEnable(GL_RASTERIZER_DISCARD);
+        f.glDrawArraysIndirect(GL_POINTS, nullptr);
+        f.glDisable(GL_RASTERIZER_DISCARD);
+        f.glMemoryBarrier(GL_BUFFER_UPDATE_BARRIER_BIT);
+
+        Bool includesBase = false;
+        const GLenum drawError = f.glGetError();
+        if (drawError == GL_NO_ERROR) {
+            f.glBindBuffer(GL_SHADER_STORAGE_BUFFER, buffers[0]);
+            const void* mapped = f.glMapBufferRange(GL_SHADER_STORAGE_BUFFER, 0, sizeof(GLint), GL_MAP_READ_BIT);
+            if (mapped != nullptr) {
+                GLint written = -1;
+                std::memcpy(&written, mapped, sizeof(written));
+                f.glUnmapBuffer(GL_SHADER_STORAGE_BUFFER);
+                includesBase = written == static_cast<GLint>(kProbeBaseInstance);
+                MGLOG_I("baseInstance probe: shader observed gl_InstanceID = %d (baseInstance was %u)", written,
+                        kProbeBaseInstance);
+            } else {
+                MGLOG_I("baseInstance probe inconclusive: result map failed");
+            }
+        } else {
+            MGLOG_I("baseInstance probe inconclusive: draw raised GL error 0x%x", drawError);
+        }
+
+        f.glUseProgram(0);
+        f.glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        f.glBindRenderbuffer(GL_RENDERBUFFER, 0);
+        f.glDeleteFramebuffers(1, &framebuffer);
+        f.glDeleteRenderbuffers(1, &renderbuffer);
+        f.glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, 0);
+        f.glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
+        f.glBindBuffer(GL_DRAW_INDIRECT_BUFFER, 0);
+        f.glBindVertexArray(0);
+        f.glDeleteVertexArrays(1, &vao);
+        f.glDeleteBuffers(2, buffers);
+        f.glDeleteProgram(program);
+        while (f.glGetError() != GL_NO_ERROR) {
+        }
+        return includesBase;
+    }
+
     Bool FillInGLESCapabilities(MG_External::GLESCapabilities& caps, const MG_External::GLESFunctionsTable& glesFuncs) {
         if (!glesFuncs.glGetString || !glesFuncs.glGetIntegerv) {
             MGLOG_E("Required GLES functions are not loaded, cannot query capabilities");
@@ -756,6 +905,11 @@ namespace MobileGL::MG_Util::BackendLoader {
         MGLOG_I("    GL_VIEWPORT_BOUNDS_RANGE: [%.3f, %.3f]", caps.ViewportBoundsRangeMin,
                 caps.ViewportBoundsRangeMax);
         MGLOG_I("    GL_VIEWPORT_SUBPIXEL_BITS: %d", caps.ViewportSubpixelBits);
+
+        caps.IndirectDrawInstanceIdIncludesBaseInstance =
+            ProbeIndirectInstanceIdIncludesBaseInstance(caps, glesFuncs);
+        MGLOG_I("    Indirect draw gl_InstanceID includes baseInstance: %s",
+                caps.IndirectDrawInstanceIdIncludesBaseInstance ? "true" : "false");
 
         return true;
     }

@@ -38,6 +38,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
     constexpr const char* BASE_INSTANCE_LOWERED_NAME = "mg_BaseInstanceLowered";
     constexpr const char* BASE_INSTANCE_WORD_INDEX_UNIFORM_NAME = "mg_BaseInstanceWordIndex";
     constexpr const char* INDIRECT_PARAMS_BLOCK_NAME = "mg_IndirectParams";
+    constexpr const char* ZERO_BASED_INSTANCE_ID_NAME = "mg_ZeroBasedInstanceID";
 
     static Bool IsAngleLlvmpipeRenderer() {
         return g_GLESCapabilities.GLESRendererString.find("ANGLE") != String::npos &&
@@ -157,9 +158,20 @@ namespace MobileGL::MG_Backend::DirectGLES {
         }
         for (const char* declPrefix : {"highp int ", "mediump int ", "lowp int ", "int "}) {
             const String declaration = String(declPrefix) + BASE_INSTANCE_LOWERED_NAME + ";";
-            const SizeT pos = source.find(declaration);
+            SizeT pos = source.find(declaration);
             if (pos == String::npos) {
                 continue;
+            }
+            // On drivers where native indirect draws leak the command's baseInstance into
+            // gl_InstanceID (ANGLE-on-Vulkan; IndirectDrawInstanceIdIncludesBaseInstance),
+            // rebase gl_InstanceID back to zero during those draws so shaders computing
+            // gl_BaseInstance + gl_InstanceID don't add the base twice. Scoped to shaders
+            // using gl_BaseInstance: only they take the native indirect SSBO machinery.
+            const Bool rebaseInstanceId = g_GLESCapabilities.IndirectDrawInstanceIdIncludesBaseInstance &&
+                                          source.find("gl_InstanceID") != String::npos;
+            if (rebaseInstanceId) {
+                source = ReplaceIdentifier(source, "gl_InstanceID", ZERO_BASED_INSTANCE_ID_NAME);
+                pos = source.find(declaration); // the declaration contains no gl_InstanceID
             }
             const Int paramsBinding = g_GLESCapabilities.MaxShaderStorageBufferBindings > 0
                                           ? g_GLESCapabilities.MaxShaderStorageBufferBindings - 1
@@ -172,6 +184,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
             machinery += String("layout(std430, binding = ") + std::to_string(paramsBinding) +
                          ") readonly buffer " + INDIRECT_PARAMS_BLOCK_NAME +
                          " { highp uint mg_indirectWords[]; };\n";
+            if (rebaseInstanceId) {
+                machinery += String("#define ") + ZERO_BASED_INSTANCE_ID_NAME + " (gl_InstanceID - ((" +
+                             BASE_INSTANCE_WORD_INDEX_UNIFORM_NAME + " >= 0) ? int(mg_indirectWords[uint(" +
+                             BASE_INSTANCE_WORD_INDEX_UNIFORM_NAME + ")]) : 0))\n";
+            }
             machinery += String("#define ") + BASE_INSTANCE_LOWERED_NAME + " ((" +
                          BASE_INSTANCE_WORD_INDEX_UNIFORM_NAME + " >= 0) ? int(mg_indirectWords[uint(" +
                          BASE_INSTANCE_WORD_INDEX_UNIFORM_NAME + ")]) : " + BASE_INSTANCE_UNIFORM_NAME + ")";

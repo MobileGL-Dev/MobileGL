@@ -1078,8 +1078,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
     // shader emulation. Without GL_EXT_base_instance a non-zero baseInstance in the command is
     // technically undefined in ES; mobile drivers ignore the reserved word, instanced-array
     // fetches were never baseInstance-offset here anyway, and the CPU fallback cannot see
-    // GPU-written command fields at all - so native is never worse. Only client-memory
-    // commands take the CPU per-command loop.
+    // GPU-written command fields at all - so native is never worse. ANGLE-on-Vulkan instead
+    // leaks the word into gl_InstanceID (it becomes vkCmdDrawIndexedIndirect's firstInstance);
+    // the shader rewrite compensates by rebasing gl_InstanceID during these draws when
+    // IndirectDrawInstanceIdIncludesBaseInstance is set (PromoteDrawParameterGlobalsToUniforms).
+    // Only client-memory commands take the CPU per-command loop.
     static void ExecuteIndexedIndirectCommands(GLenum mode, GLenum type, SizeT indexSize, const Uint8* commandBytes,
                                                SizeT commandOffset,
                                                const SharedPtr<MG_State::GLState::BufferObject>& drawIndirectBuffer,
