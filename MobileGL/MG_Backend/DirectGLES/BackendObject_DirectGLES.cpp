@@ -818,6 +818,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         static Bool funcsTableInitialized = false;
         if (!funcsTableInitialized) {
             funcsTable.Present = DirectGLES::Present;
+            funcsTable.SetSwapInterval = DirectGLES::SetSwapInterval;
             funcsTable.GL.DrawArrays = DrawArrays;
             funcsTable.GL.DrawElements = DrawElements;
             funcsTable.GL.DrawElementsBaseVertex = DrawElementsBaseVertex;

@@ -409,6 +409,13 @@ namespace MobileGL::MG_Backend {
         return true;
     }
 
+    void BackendObject::SetEGLSwapInterval(Int interval) {
+        const auto& backendFunctions = GetBackendFunctions();
+        if (backendFunctions.SetSwapInterval) {
+            backendFunctions.SetSwapInterval(interval);
+        }
+    }
+
     Bool BackendObject::IsEGLSurfaceCurrent(EGLSurface surface) const {
         if (surface == EGL_NO_SURFACE) {
             return false;

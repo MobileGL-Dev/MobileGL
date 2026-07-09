@@ -812,6 +812,7 @@ namespace MobileGL::MG_Impl::GLImpl {
             MGLOG_D("%s: program = %d, location = %d, byteOffset = %d", __func__, programObject.GetExternalIndex(),
                     location, offset + byteOffsetInsideUniform);
             Memcpy((char*)programObject.MapUBO() + offset + byteOffsetInsideUniform, value, ItemCount * sizeof(T));
+            programObject.MarkUBOContentDirty();
         } else {
             auto* ttype = programObject.GetUniformTType(location);
             if (!ttype->isTexture() && !ttype->isImage()) return;

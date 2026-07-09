@@ -202,6 +202,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         }
 
         auto& textureUnit = MG_State::pGLContext->GetTextureUnitObject((Int)unit);
+        MG_State::pGLContext->NoteTextureUnitTouched((Int)unit);
         if (sampler == 0) {
             textureUnit.SetSamplerObject(nullptr);
         } else {

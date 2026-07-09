@@ -415,7 +415,17 @@ namespace MobileGL::MG_Impl::EGLImpl {
         if (!state) {
             return EGL_FALSE;
         }
-        return state->SwapInterval(dpy, interval) ? EGL_TRUE : EGL_FALSE;
+        if (!state->SwapInterval(dpy, interval)) {
+            return EGL_FALSE;
+        }
+        // Forward the request to the backend's native presentation path; without this
+        // the app's vsync setting only ever reaches MobileGL's shadow state and the
+        // native surface stays at the driver default (interval 1 = always vsynced).
+        auto* backendObject = GetBackendObject(state);
+        if (backendObject) {
+            backendObject->SetEGLSwapInterval(static_cast<Int>(interval));
+        }
+        return EGL_TRUE;
     }
 
     EGLSurface CreatePbufferSurface(EGLDisplay dpy, EGLConfig config, const EGLint* attrib_list) {

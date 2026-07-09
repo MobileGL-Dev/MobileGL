@@ -52,7 +52,16 @@ namespace MobileGL::MG_State::GLState {
         Bool ValidateName(Uint index) const;
         Bool ValidateTextureObject(Uint index) const;
 
+        // High-water mark of texture units ever touched by a texture or sampler bind.
+        // Units above it have provably-empty binding slots, so per-draw backend scans
+        // can stop there instead of walking all MAX_TEXTURE_IMAGE_UNITS units.
+        void NoteUnitTouched(Int unit) {
+            if (unit > m_maxTouchedUnit && unit < MAX_TEXTURE_IMAGE_UNITS) m_maxTouchedUnit = unit;
+        }
+        Int GetMaxTouchedUnit() const { return m_maxTouchedUnit; }
+
     private:
+        Int m_maxTouchedUnit = -1;
         Int m_activeTextureUnit = 0;
         Array<TextureUnit, MAX_TEXTURE_IMAGE_UNITS> m_textureUnits;
         Array<ImageTextureBinding, MAX_TEXTURE_IMAGE_UNITS> m_imageTextureBindings;

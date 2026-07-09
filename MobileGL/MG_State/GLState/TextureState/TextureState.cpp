@@ -89,20 +89,22 @@ namespace MobileGL::MG_State::GLState {
         if (m_indexGenerator.IsValid(index)) {
             auto it = m_textureObjects.find(index);
             if (it != m_textureObjects.end()) {
-                for (auto& unit : m_textureUnits) {
-                    auto& bindingSlots = unit.GetAllBindingSlots();
+                // Units past the touched high-water mark can never reference a texture.
+                for (Int unit = 0; unit <= m_maxTouchedUnit; ++unit) {
+                    auto& bindingSlots = m_textureUnits[unit].GetAllBindingSlots();
                     for (auto& bindingSlot : bindingSlots) {
                         if (bindingSlot.GetBoundObject() == it->second) {
                             bindingSlot.Bind(nullptr);
                         }
                     }
                 }
-                for (auto& imageBinding : m_imageTextureBindings) {
+                for (Int unit = 0; unit <= m_maxTouchedUnit; ++unit) {
+                    auto& imageBinding = m_imageTextureBindings[unit];
                     if (imageBinding.Texture == it->second) {
                         imageBinding.Bind(nullptr, 0, GL_FALSE, 0, GL_READ_ONLY, GL_R8);
                     }
                 }
-                m_textureObjects.erase(it);
+                m_textureObjects.erase(index);
             }
             m_indexGenerator.Delete(index);
         }

@@ -175,6 +175,9 @@ namespace MobileGL {
         struct GlobalBackendFunctionsTable {
             GLFunctionsTable GL;
             void (*Present)();
+            // Optional: applies the app-requested eglSwapInterval to the native
+            // presentation path (null = backend keeps its own pacing policy).
+            void (*SetSwapInterval)(Int interval);
         };
 
         struct DynamicBackendParameters {
@@ -264,6 +267,9 @@ namespace MobileGL {
             virtual Bool CreateEGLPbufferSurface(EGLSurface surface, EGLint width, EGLint height);
             virtual Bool MakeEGLCurrent(EGLDisplay dpy, EGLSurface draw, EGLSurface read, EGLContext ctx);
             virtual Bool SwapEGLBuffers(EGLDisplay dpy, EGLSurface draw);
+            // Forwards the app-requested eglSwapInterval to the backend's native
+            // presentation path (no-op for backends without a SetSwapInterval hook).
+            virtual void SetEGLSwapInterval(Int interval);
             virtual void ReleaseEGLSurface(EGLSurface surface);
             virtual void ReleaseEGLResources();
 

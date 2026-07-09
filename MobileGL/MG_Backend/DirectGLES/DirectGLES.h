@@ -110,6 +110,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
     void DeleteSync(BackendSyncHandle sync);
     Bool GetSyncStatus(BackendSyncHandle sync);
     void Present();
+    // Applies (or defers until the window surface exists) the app-requested
+    // eglSwapInterval on the native EGL surface.
+    void SetSwapInterval(Int interval);
     void SetEGLFuncsTable(const MG_External::EGLFunctionsTable& eglFuncs);
     void SetGLESFuncsTable(const MG_External::GLESFunctionsTable& glesFuncs);
     void SetGLESCapabilities(const MG_External::GLESCapabilities& capabilities);

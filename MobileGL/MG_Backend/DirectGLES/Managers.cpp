@@ -1957,6 +1957,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
     namespace PrgramImpl {
         Uint32 g_snormFallbackClampOutputMask = 0;
         Uint32 g_unormFallbackClampOutputMask = 0;
+        Uint g_lastUsedBackendProgramId = 0;
         StateBackendObjectRegistry<MG_State::GLState::ProgramObject, BackendProgramObjectImpl> g_backendProgramObjects;
 
         BackendProgramObjectImpl::BackendProgramObjectImpl() {
@@ -1980,6 +1981,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
             if (m_backendProgramId != 0) {
                 MGLOG_D("Deleting backend program object with ID: %u", m_backendProgramId);
                 g_GLESFuncs.glDeleteProgram(m_backendProgramId);
+                // The driver may recycle this GL name for a future program; a stale
+                // guard entry would then wrongly skip the glUseProgram for it.
+                if (g_lastUsedBackendProgramId == m_backendProgramId) {
+                    g_lastUsedBackendProgramId = 0;
+                }
             }
         }
 
@@ -2168,16 +2174,82 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 m_backendGlobalUBOId = 0;
             }
 
+            CacheResourceLocations(stateProgramObject);
+            m_syncedLinkVersion = stateProgramObject->GetLinkVersion();
+
             m_isInitialized = true;
             MGLOG_D("Program sync completed. backend ID %u", m_backendProgramId);
+        }
+
+        // Resolves every name-based resource lookup once per link so the per-draw path
+        // (BindCurrentProgramWithResources) never issues glGetUniformBlockIndex /
+        // glGetUniformLocation string queries; block-to-binding-point assignments are
+        // program state and only need to be established here.
+        void BackendProgramObjectImpl::CacheResourceLocations(
+            const SharedPtr<MG_State::GLState::ProgramObject>& stateProgramObject) {
+            m_globalUboBackendBlockIndex = -1;
+            m_lastUploadedGlobalUboVersion = ~0u;
+            if (stateProgramObject->GetUBOSize() > 0) {
+                const Uint blockIndex =
+                    g_GLESFuncs.glGetUniformBlockIndex(m_backendProgramId, MG_Util::ShaderTranspiler::GLOBAL_UBO_NAME);
+                if (blockIndex != GL_INVALID_INDEX) {
+                    m_globalUboBackendBlockIndex = static_cast<Int>(blockIndex);
+                    g_GLESFuncs.glUniformBlockBinding(m_backendProgramId, blockIndex, 0);
+                } else {
+                    MGLOG_W("Program %u has frontend global UBO storage, but backend has no %s block.",
+                            stateProgramObject->GetExternalIndex(), MG_Util::ShaderTranspiler::GLOBAL_UBO_NAME);
+                }
+            }
+
+            const Int uboCount = stateProgramObject->GetActiveUniformBlocksCount();
+            m_uniformBlockBackendIndices.assign(static_cast<SizeT>(std::max(uboCount, 0)), -1);
+            Uint lastUBOBinding = 0; // binding 0 is reserved for the global UBO
+            for (Int i = 0; i < uboCount; ++i) {
+                ++lastUBOBinding;
+                const auto& name = stateProgramObject->GetUniformBlockName(static_cast<Uint>(i));
+                const GLuint backendBlkIdx = g_GLESFuncs.glGetUniformBlockIndex(m_backendProgramId, name.c_str());
+                if (backendBlkIdx == GL_INVALID_INDEX) {
+                    // Either eliminated as unused, or an SSBO block (frontend reflection
+                    // lists those among uniform blocks); SSBO bindings are baked into the ESSL.
+                    continue;
+                }
+                m_uniformBlockBackendIndices[static_cast<SizeT>(i)] = static_cast<Int>(backendBlkIdx);
+                g_GLESFuncs.glUniformBlockBinding(m_backendProgramId, backendBlkIdx, lastUBOBinding);
+            }
+
+            m_samplerUniformBindings.clear();
+            const Uint maxUniformLoc = stateProgramObject->GetMaxUniformLocation();
+            for (Uint loc = 0; loc <= maxUniformLoc; ++loc) {
+                const auto& name = stateProgramObject->GetUniformName(loc);
+                if (name.empty()) continue;
+                const GLenum uniformType = stateProgramObject->GetUniformType(loc);
+                if (IsImageUniformType(uniformType)) {
+                    // ES image units come exclusively from the layout(binding=N) qualifier
+                    // (preserved in the transpiled ESSL); glUniform1i on an image uniform
+                    // is an INVALID_OPERATION.
+                    continue;
+                }
+                const Int backendLoc = g_GLESFuncs.glGetUniformLocation(m_backendProgramId, name.c_str());
+                if (backendLoc < 0) continue;
+                SamplerUniformBinding binding;
+                binding.frontendLocation = loc;
+                binding.backendLocation = backendLoc;
+                binding.uniformType = uniformType;
+                binding.lastAssignedUnit = -1;
+                m_samplerUniformBindings.push_back(binding);
+            }
         }
 
         void BackendProgramObjectImpl::Use() const {
 #ifdef TRACY_ENABLE
             ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
+            if (g_lastUsedBackendProgramId == m_backendProgramId) {
+                return;
+            }
             MGLOG_D("Using program %u", m_backendProgramId);
             g_GLESFuncs.glUseProgram(m_backendProgramId);
+            g_lastUsedBackendProgramId = m_backendProgramId;
         }
 
         void BackendProgramObjectImpl::SetBaseInstance(Uint32 baseInstance) const {

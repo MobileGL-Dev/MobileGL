@@ -355,7 +355,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
             //   2. textures used in current FBO
             //   3. textures bound to image units (TODO)
 
-            for (int index = 0; index < MG_State::GLState::TextureState::MAX_TEXTURE_IMAGE_UNITS; ++index) {
+            // Units past the frontend's high-water mark have provably-empty slots.
+            const Int maxTouchedUnit = MG_State::pGLContext->GetMaxTouchedTextureUnit();
+            for (Int index = 0; index <= maxTouchedUnit; ++index) {
                 auto& unit = MG_State::pGLContext->GetTextureUnitObject(index);
                 for (const auto& bindingSlot : unit.GetAllBindingSlots()) {
                     auto& textureObject = bindingSlot.GetBoundObject();
@@ -748,6 +750,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             auto& currentProgram = MG_State::pGLContext->GetCurrentProgram();
             if (!currentProgram || !currentProgram->GetLinkStatus()) {
                 g_GLESFuncs.glUseProgram(0);
+                g_lastUsedBackendProgramId = 0;
                 return;
             }
             const auto& backendProgramIt = g_backendProgramObjects.find(currentProgram.get());
@@ -757,7 +760,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 backendObj = MakeShared<BackendProgramObjectImpl>();
                 backendObj->SyncToBackend(currentProgram);
             } else {
+                // A link-version mismatch means the program was relinked: the backend
+                // shaders and every cache built by CacheResourceLocations (block
+                // indices, sampler locations, UBO upload gate) are stale.
                 if (!backendObj->GetBackendProgramId() ||
+                    backendObj->GetSyncedLinkVersion() != currentProgram->GetLinkVersion() ||
                     backendObj->GetSnormFallbackClampOutputMask() != g_snormFallbackClampOutputMask ||
                     backendObj->GetUnormFallbackClampOutputMask() != g_unormFallbackClampOutputMask) {
                     backendObj->SyncToBackend(currentProgram);
@@ -827,32 +834,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
     static void BindCurrentProgramWithResources();
     static void BindCurrentTextures();
 
-    // Image uniforms take their unit from the layout(binding=N) qualifier baked into
-    // the transpiled ESSL; unlike samplers they must not (and in ES cannot) be
-    // assigned through glUniform1i.
-    static Bool IsImageUniformType(GLenum type) {
-        switch (type) {
-        case 0x904D: /*GL_IMAGE_2D*/
-        case 0x904E: /*GL_IMAGE_3D*/
-        case 0x9050: /*GL_IMAGE_CUBE*/
-        case 0x9051: /*GL_IMAGE_BUFFER*/
-        case 0x9053: /*GL_IMAGE_2D_ARRAY*/
-        case 0x9058: /*GL_INT_IMAGE_2D*/
-        case 0x9059: /*GL_INT_IMAGE_3D*/
-        case 0x905B: /*GL_INT_IMAGE_CUBE*/
-        case 0x905C: /*GL_INT_IMAGE_BUFFER*/
-        case 0x905E: /*GL_INT_IMAGE_2D_ARRAY*/
-        case 0x9063: /*GL_UNSIGNED_INT_IMAGE_2D*/
-        case 0x9064: /*GL_UNSIGNED_INT_IMAGE_3D*/
-        case 0x9066: /*GL_UNSIGNED_INT_IMAGE_CUBE*/
-        case 0x9067: /*GL_UNSIGNED_INT_IMAGE_BUFFER*/
-        case 0x9069: /*GL_UNSIGNED_INT_IMAGE_2D_ARRAY*/
-            return true;
-        default:
-            return false;
-        }
-    }
-
     void PrepareForDraw(DrawSyncBit syncBit) {
 #ifdef TRACY_ENABLE
         ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
@@ -896,8 +877,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
 #ifdef TRACY_ENABLE
         ZoneScopedNC("BindCurrentTextures", TRACY_ZONECOLOR_BACKEND);
 #endif
-        Int maxTextureUnits = MG_State::GLState::TextureState::MAX_TEXTURE_IMAGE_UNITS;
-        for (Int unit = 0; unit < maxTextureUnits; ++unit) {
+        // Units past the frontend's high-water mark have provably-empty slots.
+        const Int maxTouchedUnit = MG_State::pGLContext->GetMaxTouchedTextureUnit();
+        for (Int unit = 0; unit <= maxTouchedUnit; ++unit) {
             auto& textureUnit = MG_State::pGLContext->GetTextureUnitObject(unit);
 
             for (const auto& bindingSlot : textureUnit.GetAllBindingSlots()) {
@@ -945,56 +927,45 @@ namespace MobileGL::MG_Backend::DirectGLES {
 #endif
             const auto& backendProgramIt = PrgramImpl::g_backendProgramObjects.find(currentProgram.get());
             if (backendProgramIt != PrgramImpl::g_backendProgramObjects.end()) {
-                backendProgramIt->second->Use();
-                auto backendProgramId = backendProgramIt->second->GetBackendProgramId();
+                auto& backendProgram = *backendProgramIt->second;
+                backendProgram.Use();
 
-                // Global UBO
-                if (currentProgram->GetUBOSize() > 0) {
+                // Global UBO: block index and binding-point assignment are cached at
+                // link time (CacheResourceLocations); re-upload only when the CPU shadow
+                // actually changed since the last upload for this program.
+                if (currentProgram->GetUBOSize() > 0 && backendProgram.HasGlobalUboBlock()) {
 #ifdef TRACY_ENABLE
                     ZoneScopedNC("UpdateGlobalUBO", TRACY_ZONECOLOR_BACKEND);
 #endif
-                    g_GLESFuncs.glBindBuffer(GL_UNIFORM_BUFFER, backendProgramIt->second->GetBackendGlobalUBOId());
-                    g_GLESFuncs.glBufferSubData(GL_UNIFORM_BUFFER, 0, currentProgram->GetUBOSize(),
-                                                currentProgram->MapUBO());
-                    g_GLESFuncs.glBindBuffer(GL_UNIFORM_BUFFER, 0);
-
-                    Uint blockIndex = g_GLESFuncs.glGetUniformBlockIndex(backendProgramId,
-                                                                         MG_Util::ShaderTranspiler::GLOBAL_UBO_NAME);
-                    if (blockIndex == GL_INVALID_INDEX) {
-                        MGLOG_W("Program %u has frontend global UBO storage, but backend has no %s block.",
-                                currentProgram->GetExternalIndex(), MG_Util::ShaderTranspiler::GLOBAL_UBO_NAME);
-                    } else {
-                        g_GLESFuncs.glUniformBlockBinding(backendProgramId, blockIndex, 0);
-
-                        g_GLESFuncs.glBindBufferBase(GL_UNIFORM_BUFFER, 0,
-                                                     backendProgramIt->second->GetBackendGlobalUBOId());
+                    const Uint32 uboContentVersion = currentProgram->GetUBOContentVersion();
+                    if (backendProgram.GetLastUploadedGlobalUboVersion() != uboContentVersion) {
+                        g_GLESFuncs.glBindBuffer(GL_UNIFORM_BUFFER, backendProgram.GetBackendGlobalUBOId());
+                        g_GLESFuncs.glBufferSubData(GL_UNIFORM_BUFFER, 0, currentProgram->GetUBOSize(),
+                                                    currentProgram->MapUBO());
+                        g_GLESFuncs.glBindBuffer(GL_UNIFORM_BUFFER, 0);
+                        backendProgram.SetLastUploadedGlobalUboVersion(uboContentVersion);
                     }
+                    g_GLESFuncs.glBindBufferBase(GL_UNIFORM_BUFFER, 0, backendProgram.GetBackendGlobalUBOId());
                 }
 
                 {
 #ifdef TRACY_ENABLE
                     ZoneScopedNC("UpdateUBO", TRACY_ZONECOLOR_BACKEND);
 #endif
-                    // Normal UBO
-                    auto uboCount = currentProgram->GetActiveUniformBlocksCount();
-                    Uint lastUBOBinding = 0; // to prevent overlapping bindings between global UBO and normal UBOs
+                    // Normal UBOs: backend block indices and glUniformBlockBinding
+                    // assignments are cached at link time; per draw only the buffer
+                    // bindings are re-established (they follow frontend binding points).
+                    const auto& blockBackendIndices = backendProgram.GetUniformBlockBackendIndices();
+                    const auto uboCount = static_cast<Int>(blockBackendIndices.size());
+                    Uint lastUBOBinding = 0; // binding 0 is reserved for the global UBO
                     for (Int i = 0; i < uboCount; ++i) {
                         ++lastUBOBinding;
-                        // program state binding index == backend binding index
-
-                        // Connect program ubo index to backend binding point
-                        auto binding = currentProgram->GetUniformBlockBinding(i);
-                        auto& name = currentProgram->GetUniformBlockName(i);
-                        GLuint backendBlkIdx = g_GLESFuncs.glGetUniformBlockIndex(backendProgramId, name.c_str());
-                        if (backendBlkIdx == GL_INVALID_INDEX) {
-                            // Not a uniform block in the backend program: either eliminated as
-                            // unused, or an SSBO block (the frontend's reflection lists those
-                            // among uniform blocks); SSBO bindings are baked into the ESSL.
+                        if (blockBackendIndices[i] < 0) {
                             continue;
                         }
-                        g_GLESFuncs.glUniformBlockBinding(backendProgramId, backendBlkIdx, lastUBOBinding);
 
                         // Connect buffer to backend binding point
+                        auto binding = currentProgram->GetUniformBlockBinding(i);
                         auto& point = MG_State::pGLContext->GetBufferBindingPoint(BufferTarget::Uniform, binding);
                         auto& bufferObj = point.GetBoundObject();
                         auto range = point.GetRange();
@@ -1022,23 +993,17 @@ namespace MobileGL::MG_Backend::DirectGLES {
 #ifdef TRACY_ENABLE
                     ZoneScopedNC("BindSamplerUnit", TRACY_ZONECOLOR_BACKEND);
 #endif
-                    // Sampler unit binding
-                    auto maxUniformLoc = currentProgram->GetMaxUniformLocation();
-                    for (Uint loc = 0; loc <= maxUniformLoc; ++loc) {
-                        auto& name = currentProgram->GetUniformName(loc);
-                        if (name.empty()) continue;
-                        auto unit = currentProgram->GetUniformSamplerOrImageUnitIndex(loc);
+                    // Sampler unit binding: backend locations are cached at link time;
+                    // glUniform1i is program state, so it is only re-issued when the
+                    // frontend-assigned unit differs from what this program last saw.
+                    for (auto& samplerBinding : backendProgram.GetSamplerUniformBindings()) {
+                        const auto unit =
+                            currentProgram->GetUniformSamplerOrImageUnitIndex(samplerBinding.frontendLocation);
                         if (unit == -1) continue;
-                        const auto uniformType = currentProgram->GetUniformType(loc);
-                        if (IsImageUniformType(uniformType)) {
-                            // ES image units come exclusively from the layout(binding=N)
-                            // qualifier (preserved in the transpiled ESSL); glUniform1i on an
-                            // image uniform is an INVALID_OPERATION.
-                            continue;
+                        if (samplerBinding.lastAssignedUnit != unit) {
+                            g_GLESFuncs.glUniform1i(samplerBinding.backendLocation, unit);
+                            samplerBinding.lastAssignedUnit = unit;
                         }
-                        auto locAtBackend = g_GLESFuncs.glGetUniformLocation(
-                            backendProgramIt->second->GetBackendProgramId(), name.c_str());
-                        g_GLESFuncs.glUniform1i(locAtBackend, unit);
 
                         auto& textureUnit = MG_State::pGLContext->GetTextureUnitObject(unit);
                         auto& samplerObject = textureUnit.GetSamplerObject();
@@ -1048,10 +1013,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
                             rawDepthSamplerObject = &texture2D->GetSamplerObject();
                         }
 
-                        if (uniformType == GL_SAMPLER_2D && texture2D &&
+                        if (samplerBinding.uniformType == GL_SAMPLER_2D && texture2D &&
                             NeedsRawDepthFetchSampler(*rawDepthSamplerObject, texture2D->GetFormat())) {
                             GetRawDepthFetchSampler()->Bind(unit);
-                            MGLOG_D("Using raw depth fetch sampler for uniform %s on unit %d.", name.c_str(), unit);
+                            MGLOG_D("Using raw depth fetch sampler on unit %d.", unit);
                         } else if (samplerObject) {
                             const auto& backendSamplerIt =
                                 SamplerImpl::g_backendSamplerObjects.find(samplerObject.get());
@@ -1069,6 +1034,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 }
             } else {
                 g_GLESFuncs.glUseProgram(0);
+                PrgramImpl::g_lastUsedBackendProgramId = 0;
                 MGLOG_E("No backend program found (maybe not synced) for current program, cannot use program.");
             }
         }
@@ -1222,6 +1188,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         const auto& currentProgram = MG_State::pGLContext->GetCurrentProgram();
         if (!currentProgram || !currentProgram->GetLinkStatus()) {
             g_GLESFuncs.glUseProgram(0);
+            PrgramImpl::g_lastUsedBackendProgramId = 0;
             return;
         }
 
@@ -3594,6 +3561,26 @@ namespace MobileGL::MG_Backend::DirectGLES {
         return g_Context != EGL_NO_CONTEXT;
     }
 
+    namespace {
+        // Last swap interval the app requested through eglSwapInterval; -1 = never
+        // requested (keep the EGL default of 1). Re-applied when the window surface
+        // is (re)created since interval is per-surface state.
+        Int g_requestedSwapInterval = -1;
+
+        void ApplyRequestedSwapInterval() {
+            if (g_requestedSwapInterval < 0) return;
+            if (!g_EGLFuncs.eglSwapInterval || g_Display == EGL_NO_DISPLAY || g_Surface == EGL_NO_SURFACE) return;
+            const EGLBoolean ok = g_EGLFuncs.eglSwapInterval(g_Display, g_requestedSwapInterval);
+            MGLOG_I("DirectGLES: applied native swap interval %d (%s)", g_requestedSwapInterval,
+                    ok ? "ok" : "failed");
+        }
+    } // namespace
+
+    void SetSwapInterval(Int interval) {
+        g_requestedSwapInterval = interval;
+        ApplyRequestedSwapInterval();
+    }
+
     Bool InitWindowSurface(NativeWindowType window) {
         if (!window) return false;
 
@@ -3603,6 +3590,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
         if (g_Surface == EGL_NO_SURFACE) return false;
 
         if (!MakeCurrent()) return false;
+
+        ApplyRequestedSwapInterval();
 
         MGLOG_D("EGL context created successfully: display=%p, surface=%p, context=%p. window=%p", g_Display, g_Surface,
                 g_Context, window);
@@ -3663,6 +3652,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // The ops table may have been unregistered when a previous ES context was
         // destroyed (e.g. a probe context); re-register now that GL is usable.
         BufferImpl::RegisterBufferBackendOps();
+        // Conservatively drop the redundant-glUseProgram guard: re-issuing one bind
+        // after a MakeCurrent is cheaper than trusting a possibly-reset context.
+        PrgramImpl::g_lastUsedBackendProgramId = 0;
+        // eglSwapInterval requires a current context; a request made while none was
+        // current (and dropped by the driver) is retried here.
+        ApplyRequestedSwapInterval();
         return true;
     }
 

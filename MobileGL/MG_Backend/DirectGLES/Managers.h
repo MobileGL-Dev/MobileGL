@@ -315,9 +315,46 @@ namespace MobileGL::MG_Backend::DirectGLES {
         extern Array<Uint16, SizeT(FramebufferTarget::FramebufferTargetCount)> g_fboBindVersions;
     } // namespace FramebufferImpl
 
+    // Image uniforms take their unit from the layout(binding=N) qualifier baked into
+    // the transpiled ESSL; unlike samplers they must not (and in ES cannot) be
+    // assigned through glUniform1i.
+    inline Bool IsImageUniformType(GLenum type) {
+        switch (type) {
+        case 0x904D: /*GL_IMAGE_2D*/
+        case 0x904E: /*GL_IMAGE_3D*/
+        case 0x9050: /*GL_IMAGE_CUBE*/
+        case 0x9051: /*GL_IMAGE_BUFFER*/
+        case 0x9053: /*GL_IMAGE_2D_ARRAY*/
+        case 0x9058: /*GL_INT_IMAGE_2D*/
+        case 0x9059: /*GL_INT_IMAGE_3D*/
+        case 0x905B: /*GL_INT_IMAGE_CUBE*/
+        case 0x905C: /*GL_INT_IMAGE_BUFFER*/
+        case 0x905E: /*GL_INT_IMAGE_2D_ARRAY*/
+        case 0x9063: /*GL_UNSIGNED_INT_IMAGE_2D*/
+        case 0x9064: /*GL_UNSIGNED_INT_IMAGE_3D*/
+        case 0x9066: /*GL_UNSIGNED_INT_IMAGE_CUBE*/
+        case 0x9067: /*GL_UNSIGNED_INT_IMAGE_BUFFER*/
+        case 0x9069: /*GL_UNSIGNED_INT_IMAGE_2D_ARRAY*/
+            return true;
+        default:
+            return false;
+        }
+    }
+
     namespace PrgramImpl {
         class BackendProgramObjectImpl {
         public:
+            // Per-link cache of a sampler-style uniform's backend location: built once in
+            // SyncToBackend so draws stop issuing glGetUniformLocation string queries.
+            // lastAssignedUnit mirrors the program-state value set through glUniform1i
+            // (program state persists across binds, so caching per program is exact).
+            struct SamplerUniformBinding {
+                Uint frontendLocation = 0;
+                Int backendLocation = -1;
+                GLenum uniformType = 0;
+                Int lastAssignedUnit = -1;
+            };
+
             BackendProgramObjectImpl();
             ~BackendProgramObjectImpl();
             void SyncToBackend(const SharedPtr<MG_State::GLState::ProgramObject>& stateProgramObject);
@@ -331,7 +368,18 @@ namespace MobileGL::MG_Backend::DirectGLES {
             Uint32 GetSnormFallbackClampOutputMask() const { return m_snormFallbackClampOutputMask; }
             Uint32 GetUnormFallbackClampOutputMask() const { return m_unormFallbackClampOutputMask; }
 
+            Bool HasGlobalUboBlock() const { return m_globalUboBackendBlockIndex >= 0; }
+            const Vector<Int>& GetUniformBlockBackendIndices() const { return m_uniformBlockBackendIndices; }
+            Vector<SamplerUniformBinding>& GetSamplerUniformBindings() { return m_samplerUniformBindings; }
+            Uint32 GetLastUploadedGlobalUboVersion() const { return m_lastUploadedGlobalUboVersion; }
+            void SetLastUploadedGlobalUboVersion(Uint32 version) { m_lastUploadedGlobalUboVersion = version; }
+            // Frontend link version this backend program (and its resource caches) was
+            // built from; a mismatch means every link-derived cache here is stale.
+            Uint32 GetSyncedLinkVersion() const { return m_syncedLinkVersion; }
+
         private:
+            void CacheResourceLocations(const SharedPtr<MG_State::GLState::ProgramObject>& stateProgramObject);
+
             Uint m_backendProgramId = 0;
             Uint m_backendGlobalUBOId = 0;
             Int m_baseInstanceUniformLocation = -1;
@@ -341,10 +389,20 @@ namespace MobileGL::MG_Backend::DirectGLES {
             Uint32 m_snormFallbackClampOutputMask = 0;
             Uint32 m_unormFallbackClampOutputMask = 0;
             Bool m_isInitialized = false;
+
+            Int m_globalUboBackendBlockIndex = -1;
+            Vector<Int> m_uniformBlockBackendIndices; // frontend block index -> backend index (-1 = absent)
+            Vector<SamplerUniformBinding> m_samplerUniformBindings;
+            Uint32 m_lastUploadedGlobalUboVersion = ~0u;
+            Uint32 m_syncedLinkVersion = ~0u;
         };
 
         extern Uint32 g_snormFallbackClampOutputMask;
         extern Uint32 g_unormFallbackClampOutputMask;
+        // Backend id of the last glUseProgram issued through this backend; lets Use()
+        // skip redundant rebinds. Reset to 0 wherever glUseProgram(0) is issued or the
+        // ES context is recreated.
+        extern Uint g_lastUsedBackendProgramId;
         extern StateBackendObjectRegistry<MG_State::GLState::ProgramObject, BackendProgramObjectImpl>
             g_backendProgramObjects;
     } // namespace PrgramImpl

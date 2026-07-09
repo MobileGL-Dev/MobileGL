@@ -80,6 +80,8 @@ namespace MobileGL {
                 TextureUnit& GetTextureUnitObject(Int unit);
                 ImageTextureBinding& GetImageTextureBinding(Int unit);
                 const ImageTextureBinding& GetImageTextureBinding(Int unit) const;
+                void NoteTextureUnitTouched(Int unit) { m_textureState.NoteUnitTouched(unit); }
+                Int GetMaxTouchedTextureUnit() const { return m_textureState.GetMaxTouchedUnit(); }
                 Bool ValidateTextureName(Uint index) const;
                 Bool ValidateTextureObject(Uint index) const;
                 Int GetActiveTextureUnit() const;
