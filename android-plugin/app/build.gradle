@@ -46,6 +46,21 @@ def mobileGlGitShortHash = {
         'nogit'
     }
 }()
+// Monthly revision: commits reachable from HEAD since the start of the
+// version's month. Multiple releases in one month (calendar versioning ships
+// several per month) each get a strictly larger versionCode; a new month
+// bumps the minor and dwarfs any reset via the *10000 weight.
+def mobileGlMonthlyRevision = {
+    try {
+        def since = String.format('%d-%02d-01T00:00:00', 2000 + mobileGlVersionMajor, mobileGlVersionMinor)
+        def proc = ['git', 'rev-list', '--count', "--since=${since}", 'HEAD'].execute(null, rootDir)
+        proc.waitFor()
+        def n = proc.in.text.trim()
+        (proc.exitValue() == 0 && n) ? n.toInteger() : 0
+    } catch (Exception ignored) {
+        0
+    }
+}()
 
 android {
     namespace 'top.mobilegl.plugin'
@@ -55,7 +70,11 @@ android {
     defaultConfig {
         minSdk 26
         targetSdk 34
-        versionCode mobileGlVersionMajor * 100 + mobileGlVersionMinor
+        // year*1_000_000 + month*10_000 + monthly revision keeps versionCode
+        // strictly increasing across releases (monotonic within a month and
+        // across month/year rollovers), so every build is an installable
+        // upgrade. Max ~99_129999, well under Android's 2_100_000_000 ceiling.
+        versionCode mobileGlVersionMajor * 1000000 + mobileGlVersionMinor * 10000 + mobileGlMonthlyRevision
         versionName String.format('%d.%02d.%s', mobileGlVersionMajor, mobileGlVersionMinor, mobileGlGitShortHash)
 
         ndk {
