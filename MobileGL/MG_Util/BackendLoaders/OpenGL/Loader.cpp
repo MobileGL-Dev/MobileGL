@@ -549,8 +549,8 @@ namespace MobileGL::MG_Util::BackendLoader {
     // vkCmdDraw*Indirect and compiles gl_InstanceID to SPIR-V InstanceIndex, which includes
     // firstInstance. The DirectGLES native indirect-draw path uses this answer to keep
     // gl_InstanceID zero-based in rewritten shaders (PromoteDrawParameterGlobalsToUniforms).
-    static Bool ProbeIndirectInstanceIdIncludesBaseInstance(const MG_External::GLESCapabilities& caps,
-                                                            const MG_External::GLESFunctionsTable& f) {
+    Bool ProbeIndirectInstanceIdIncludesBaseInstance(const MG_External::GLESCapabilities& caps,
+                                                     const MG_External::GLESFunctionsTable& f) {
         const Bool esVersionOk =
             caps.GLESVersion.Major > 3 || (caps.GLESVersion.Major == 3 && caps.GLESVersion.Minor >= 1);
         if (!esVersionOk || !f.glDrawArraysIndirect || !f.glBindBufferBase || !f.glMapBufferRange ||

@@ -1082,6 +1082,11 @@ namespace MobileGL {
         void AcquireEGLFunctions(MG_External::EGLFunctionsTable& funcs);
         Bool FillInGLESCapabilities(MG_External::GLESCapabilities& caps,
                                     const MG_External::GLESFunctionsTable& glesFuncs);
+        // Detects whether indirect draws leak the command's baseInstance word into
+        // gl_InstanceID (see Loader.cpp). Called by FillInGLESCapabilities; exposed
+        // so MG_Test can drive it against a fake GLES functions table.
+        Bool ProbeIndirectInstanceIdIncludesBaseInstance(const MG_External::GLESCapabilities& caps,
+                                                         const MG_External::GLESFunctionsTable& glesFuncs);
     } // namespace MG_Util::BackendLoader
 } // namespace MobileGL
 #undef MOBILEGL_EXTERNAL_GLES

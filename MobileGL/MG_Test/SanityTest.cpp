@@ -77,6 +77,31 @@ namespace {
         unsetenv(name);
 #endif
     }
+
+    MobileGL::SizeT CountOccurrences(const MobileGL::String& haystack, const MobileGL::String& needle) {
+        MobileGL::SizeT count = 0;
+        for (MobileGL::SizeT pos = haystack.find(needle); pos != MobileGL::String::npos;
+             pos = haystack.find(needle, pos + needle.size())) {
+            ++count;
+        }
+        return count;
+    }
+
+    // Snapshots the DirectGLES capability globals on construction and restores them on
+    // destruction, so tests that mutate g_GLESCapabilities cannot leak state into later
+    // tests even if an assertion or exception unwinds the test body early.
+    struct ScopedGLESCapabilitiesOverride {
+        ScopedGLESCapabilitiesOverride():
+            m_snapshot(MobileGL::MG_Backend::DirectGLES::g_GLESCapabilities) {}
+        ~ScopedGLESCapabilitiesOverride() {
+            MobileGL::MG_Backend::DirectGLES::g_GLESCapabilities = m_snapshot;
+        }
+        ScopedGLESCapabilitiesOverride(const ScopedGLESCapabilitiesOverride&) = delete;
+        ScopedGLESCapabilitiesOverride& operator=(const ScopedGLESCapabilitiesOverride&) = delete;
+
+    private:
+        MobileGL::MG_External::GLESCapabilities m_snapshot;
+    };
 } // namespace
 
 TEST(Sanity, BasicAssertions) {
@@ -153,6 +178,74 @@ TEST(DirectGLESSanity, LeavesBaseInstanceBuiltinAloneOutsideVertexShaders) {
     const MobileGL::String source = "#version 320 es\nuint value = gl_BaseInstance;\n";
 
     const auto rewritten = MobileGL::MG_Backend::DirectGLES::EmulateBaseInstanceInVertexShader(
+        source, GL_FRAGMENT_SHADER);
+
+    EXPECT_EQ(rewritten, source);
+}
+
+TEST(DirectGLESSanity, RebasesInstanceIdWhenIndirectDrawsLeakBaseInstance) {
+    const ScopedGLESCapabilitiesOverride capsGuard;
+    auto& caps = MobileGL::MG_Backend::DirectGLES::g_GLESCapabilities;
+    caps.IndirectDrawInstanceIdIncludesBaseInstance = true;
+    // Deliberately not the GLESCapabilities default (8): the injected block must land at
+    // MaxShaderStorageBufferBindings - 1 = 12, so a regression that stops reading the
+    // probed cap and falls back to the struct default would surface as "binding = 7".
+    caps.MaxShaderStorageBufferBindings = 13;
+
+    const MobileGL::String source = R"(#version 310 es
+highp int mg_BaseInstanceLowered;
+void main() {
+    int instance = gl_InstanceID + mg_BaseInstanceLowered;
+    gl_Position = vec4(float(instance));
+}
+)";
+
+    const auto rewritten = MobileGL::MG_Backend::DirectGLES::PromoteDrawParameterGlobalsToUniforms(
+        source, GL_VERTEX_SHADER);
+
+    EXPECT_NE(rewritten.find("int instance = mg_ZeroBasedInstanceID + mg_BaseInstanceLowered;"),
+              MobileGL::String::npos);
+    EXPECT_NE(rewritten.find("#define mg_ZeroBasedInstanceID (gl_InstanceID - ((mg_BaseInstanceWordIndex >= 0) ? "
+                             "int(mg_indirectWords[uint(mg_BaseInstanceWordIndex)]) : 0))"),
+              MobileGL::String::npos);
+    EXPECT_NE(rewritten.find(
+                  "layout(std430, binding = 12) readonly buffer mg_IndirectParams { highp uint mg_indirectWords[]; };"),
+              MobileGL::String::npos);
+    // The one inside the #define machinery must be the only surviving gl_InstanceID.
+    EXPECT_EQ(CountOccurrences(rewritten, "gl_InstanceID"), 1u);
+}
+
+TEST(DirectGLESSanity, KeepsInstanceIdWhenIndirectDrawsAreConforming) {
+    const ScopedGLESCapabilitiesOverride capsGuard;
+    auto& caps = MobileGL::MG_Backend::DirectGLES::g_GLESCapabilities;
+    caps.IndirectDrawInstanceIdIncludesBaseInstance = false;
+    caps.MaxShaderStorageBufferBindings = 13;
+
+    const MobileGL::String source = R"(#version 310 es
+highp int mg_BaseInstanceLowered;
+void main() {
+    int instance = gl_InstanceID + mg_BaseInstanceLowered;
+    gl_Position = vec4(float(instance));
+}
+)";
+
+    const auto rewritten = MobileGL::MG_Backend::DirectGLES::PromoteDrawParameterGlobalsToUniforms(
+        source, GL_VERTEX_SHADER);
+
+    EXPECT_EQ(rewritten.find("mg_ZeroBasedInstanceID"), MobileGL::String::npos);
+    EXPECT_NE(rewritten.find("int instance = gl_InstanceID + mg_BaseInstanceLowered;"), MobileGL::String::npos);
+}
+
+TEST(DirectGLESSanity, LeavesDrawParameterGlobalsAloneOutsideVertexShaders) {
+    const ScopedGLESCapabilitiesOverride capsGuard;
+    auto& caps = MobileGL::MG_Backend::DirectGLES::g_GLESCapabilities;
+    caps.IndirectDrawInstanceIdIncludesBaseInstance = true;
+    caps.MaxShaderStorageBufferBindings = 13;
+
+    const MobileGL::String source =
+        "#version 310 es\nhighp int mg_BaseInstanceLowered;\nint value = gl_InstanceID + mg_BaseInstanceLowered;\n";
+
+    const auto rewritten = MobileGL::MG_Backend::DirectGLES::PromoteDrawParameterGlobalsToUniforms(
         source, GL_FRAGMENT_SHADER);
 
     EXPECT_EQ(rewritten, source);
