@@ -239,6 +239,26 @@ namespace MobileGL::MG_Impl::GLImpl {
         MG_Backend::gBackendFunctionsTable.GL.DrawArraysIndirect(mode, indirect);
     }
 
+    // Flywheel-style engines write GPU-copy descriptors into a FLUSH_EXPLICIT
+    // persistent map and glBindBufferRange that span as an SSBO for a compute
+    // dispatch WITHOUT ever flushing it (undefined per spec, but real drivers'
+    // persistent maps alias GPU-visible memory, so it works there). MobileGL's
+    // persistent maps alias the CPU shadow, so those bytes would never reach the
+    // GPU: push every explicitly-ranged SSBO binding of such maps down right
+    // before each dispatch. Whole-buffer (BindBufferBase) bindings are excluded
+    // on purpose — ranges the app DID flush already arrived, and re-uploading a
+    // 16MB staging ring per dispatch would be prohibitive.
+    static void SyncUnflushedMappedSsboRangesForDispatch() {
+        const auto pointCount = MG_State::pGLContext->GetBufferBindingPointCount(BufferTarget::ShaderStorage);
+        for (SizeT i = 0; i < pointCount; ++i) {
+            auto& point = MG_State::pGLContext->GetBufferBindingPoint(BufferTarget::ShaderStorage, i);
+            if (!point.HasExplicitRange()) continue;
+            const auto& bufferObject = point.GetBoundObject();
+            if (!bufferObject) continue;
+            bufferObject->SyncMappedRangeForGpuRead(point.GetRange());
+        }
+    }
+
     /* @INSERTION_POINT:FUNCTION_IMPLEMENTATION@ */
     void DispatchCompute(GLuint numGroupsX, GLuint numGroupsY, GLuint numGroupsZ) {
         auto dispatchCompute = MG_Backend::gBackendFunctionsTable.GL.DispatchCompute;
@@ -249,6 +269,7 @@ namespace MobileGL::MG_Impl::GLImpl {
             return;
         }
         if (!ValidateCurrentProgramForCompute(__func__)) return;
+        SyncUnflushedMappedSsboRangesForDispatch();
         dispatchCompute(numGroupsX, numGroupsY, numGroupsZ);
     }
 
@@ -262,6 +283,7 @@ namespace MobileGL::MG_Impl::GLImpl {
             return;
         }
         if (!ValidateCurrentProgramForCompute(__func__)) return;
+        SyncUnflushedMappedSsboRangesForDispatch();
         dispatchComputeIndirect(indirect);
     }
 

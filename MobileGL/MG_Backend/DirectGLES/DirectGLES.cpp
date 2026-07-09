@@ -25,9 +25,11 @@
 #include <MG_Util/Converters/MGToGL/RenderStateEnumConverter.h>
 #include <MG_Util/Metrics/BufferMetrics.h>
 #include <MG_Util/Texture/PixelStoreProcessor.h>
+#include <atomic>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <thread>
 #if defined(__linux__) && !defined(__ANDROID__) && __has_include(<X11/Xlib.h>)
 #pragma push_macro("Bool")
 #pragma push_macro("None")
@@ -403,7 +405,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
 #ifdef TRACY_ENABLE
             ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
-            for (Uint unit = 0; unit < MG_State::GLState::TextureState::MAX_TEXTURE_IMAGE_UNITS; ++unit) {
+            // The frontend tracks more image units than ES exposes; binding past the device
+            // limit raises GL_INVALID_VALUE on every dispatch.
+            const Uint unitCount = std::min<Uint>(MG_State::GLState::TextureState::MAX_TEXTURE_IMAGE_UNITS,
+                                                  static_cast<Uint>(std::max(g_GLESCapabilities.MaxImageUnits, 0)));
+            for (Uint unit = 0; unit < unitCount; ++unit) {
                 SyncImageTextureBinding(unit);
             }
         }
@@ -818,6 +824,35 @@ namespace MobileGL::MG_Backend::DirectGLES {
         FramebufferImpl::g_fboBindVersions[(SizeT)target] = slot.GetVersion();
     }
 
+    static void BindCurrentProgramWithResources();
+    static void BindCurrentTextures();
+
+    // Image uniforms take their unit from the layout(binding=N) qualifier baked into
+    // the transpiled ESSL; unlike samplers they must not (and in ES cannot) be
+    // assigned through glUniform1i.
+    static Bool IsImageUniformType(GLenum type) {
+        switch (type) {
+        case 0x904D: /*GL_IMAGE_2D*/
+        case 0x904E: /*GL_IMAGE_3D*/
+        case 0x9050: /*GL_IMAGE_CUBE*/
+        case 0x9051: /*GL_IMAGE_BUFFER*/
+        case 0x9053: /*GL_IMAGE_2D_ARRAY*/
+        case 0x9058: /*GL_INT_IMAGE_2D*/
+        case 0x9059: /*GL_INT_IMAGE_3D*/
+        case 0x905B: /*GL_INT_IMAGE_CUBE*/
+        case 0x905C: /*GL_INT_IMAGE_BUFFER*/
+        case 0x905E: /*GL_INT_IMAGE_2D_ARRAY*/
+        case 0x9063: /*GL_UNSIGNED_INT_IMAGE_2D*/
+        case 0x9064: /*GL_UNSIGNED_INT_IMAGE_3D*/
+        case 0x9066: /*GL_UNSIGNED_INT_IMAGE_CUBE*/
+        case 0x9067: /*GL_UNSIGNED_INT_IMAGE_BUFFER*/
+        case 0x9069: /*GL_UNSIGNED_INT_IMAGE_2D_ARRAY*/
+            return true;
+        default:
+            return false;
+        }
+    }
+
     void PrepareForDraw(DrawSyncBit syncBit) {
 #ifdef TRACY_ENABLE
         ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
@@ -846,45 +881,63 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
         }
 
-        {
+        BindCurrentTextures();
+        BindCurrentProgramWithResources();
+    }
+
+    // Rebinds every frontend texture unit's textures (and sampler objects) on the
+    // backend context. Needed before draws AND compute dispatches: content syncs
+    // (SyncTextureObjectToBackend) bind scratch textures on the active unit as a
+    // side effect, so unit bindings must be re-established afterwards or shaders
+    // sample whatever texture the last sync left behind (e.g. Flywheel's depth
+    // pyramid downsample reading a stale unit-0 binding instead of the depth
+    // attachment).
+    static void BindCurrentTextures() {
 #ifdef TRACY_ENABLE
-            ZoneScopedNC("BindCurrentTextures", TRACY_ZONECOLOR_BACKEND);
+        ZoneScopedNC("BindCurrentTextures", TRACY_ZONECOLOR_BACKEND);
 #endif
-            Int maxTextureUnits = MG_State::GLState::TextureState::MAX_TEXTURE_IMAGE_UNITS;
-            for (Int unit = 0; unit < maxTextureUnits; ++unit) {
-                auto& textureUnit = MG_State::pGLContext->GetTextureUnitObject(unit);
+        Int maxTextureUnits = MG_State::GLState::TextureState::MAX_TEXTURE_IMAGE_UNITS;
+        for (Int unit = 0; unit < maxTextureUnits; ++unit) {
+            auto& textureUnit = MG_State::pGLContext->GetTextureUnitObject(unit);
 
-                for (const auto& bindingSlot : textureUnit.GetAllBindingSlots()) {
-                    const auto& textureObject = bindingSlot.GetBoundObject();
-                    if (!textureObject) continue;
+            for (const auto& bindingSlot : textureUnit.GetAllBindingSlots()) {
+                const auto& textureObject = bindingSlot.GetBoundObject();
+                if (!textureObject) continue;
 
-                    // Bind texture object
-                    auto target = textureObject->GetTarget();
-                    if (!TextureImpl::IsSupportedTextureTarget(target)) {
-                        MGLOG_D("    Texture target %s is not supported, skipping.",
-                                MG_Util::ConvertTextureTargetToString(target).c_str());
-                        continue;
-                    }
-                    const auto& backendTextureIt = TextureImpl::g_backendTextureObjects.find(textureObject.get());
-                    if (backendTextureIt == TextureImpl::g_backendTextureObjects.end()) continue;
+                // Bind texture object
+                auto target = textureObject->GetTarget();
+                if (!TextureImpl::IsSupportedTextureTarget(target)) {
+                    MGLOG_D("    Texture target %s is not supported, skipping.",
+                            MG_Util::ConvertTextureTargetToString(target).c_str());
+                    continue;
+                }
+                const auto& backendTextureIt = TextureImpl::g_backendTextureObjects.find(textureObject.get());
+                if (backendTextureIt == TextureImpl::g_backendTextureObjects.end()) continue;
 
-                    GLenum targetGL = MG_Util::ConvertTextureTargetToGLEnum(target);
-                    backendTextureIt->second->Bind(targetGL, unit);
+                GLenum targetGL = MG_Util::ConvertTextureTargetToGLEnum(target);
+                backendTextureIt->second->Bind(targetGL, unit);
+            }
+
+            // Bind sampler object if necessary
+            const auto& samplerObject = textureUnit.GetSamplerObject();
+            if (samplerObject) {
+                const auto& backendSamplerIt = SamplerImpl::g_backendSamplerObjects.find(samplerObject.get());
+                if (backendSamplerIt != SamplerImpl::g_backendSamplerObjects.end()) {
+                    backendSamplerIt->second->Bind(unit);
                 }
 
-                // Bind sampler object if necessary
-                const auto& samplerObject = textureUnit.GetSamplerObject();
-                if (samplerObject) {
-                    const auto& backendSamplerIt = SamplerImpl::g_backendSamplerObjects.find(samplerObject.get());
-                    if (backendSamplerIt != SamplerImpl::g_backendSamplerObjects.end()) {
-                        backendSamplerIt->second->Bind(unit);
-                    }
-
-                } else {
-                }
+            } else {
             }
         }
+    }
 
+    // Binds the current program's backend object and re-establishes its per-program
+    // resources: global UBO contents, uniform-block bindings, and sampler uniform
+    // units (layout(binding=N) qualifiers are stripped from transpiled ESSL, so the
+    // association must be rebuilt through the API). Compute dispatches depend on
+    // this as much as draws do — e.g. Flywheel's cull shader reads the
+    // _FlwFrameUniforms block and the _flw_depthPyramid sampler.
+    static void BindCurrentProgramWithResources() {
         const auto& currentProgram = MG_State::pGLContext->GetCurrentProgram();
         if (currentProgram && currentProgram->GetLinkStatus()) {
 #ifdef TRACY_ENABLE
@@ -933,6 +986,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
                         auto binding = currentProgram->GetUniformBlockBinding(i);
                         auto& name = currentProgram->GetUniformBlockName(i);
                         GLuint backendBlkIdx = g_GLESFuncs.glGetUniformBlockIndex(backendProgramId, name.c_str());
+                        if (backendBlkIdx == GL_INVALID_INDEX) {
+                            // Not a uniform block in the backend program: either eliminated as
+                            // unused, or an SSBO block (the frontend's reflection lists those
+                            // among uniform blocks); SSBO bindings are baked into the ESSL.
+                            continue;
+                        }
                         g_GLESFuncs.glUniformBlockBinding(backendProgramId, backendBlkIdx, lastUBOBinding);
 
                         // Connect buffer to backend binding point
@@ -970,13 +1029,19 @@ namespace MobileGL::MG_Backend::DirectGLES {
                         if (name.empty()) continue;
                         auto unit = currentProgram->GetUniformSamplerOrImageUnitIndex(loc);
                         if (unit == -1) continue;
+                        const auto uniformType = currentProgram->GetUniformType(loc);
+                        if (IsImageUniformType(uniformType)) {
+                            // ES image units come exclusively from the layout(binding=N)
+                            // qualifier (preserved in the transpiled ESSL); glUniform1i on an
+                            // image uniform is an INVALID_OPERATION.
+                            continue;
+                        }
                         auto locAtBackend = g_GLESFuncs.glGetUniformLocation(
                             backendProgramIt->second->GetBackendProgramId(), name.c_str());
                         g_GLESFuncs.glUniform1i(locAtBackend, unit);
 
                         auto& textureUnit = MG_State::pGLContext->GetTextureUnitObject(unit);
                         auto& samplerObject = textureUnit.GetSamplerObject();
-                        const auto uniformType = currentProgram->GetUniformType(loc);
                         const auto& texture2D = textureUnit.GetBindingSlot(TextureTarget::Texture2D).GetBoundObject();
                         const SharedPtr<MG_State::GLState::SamplerObject>* rawDepthSamplerObject = &samplerObject;
                         if (!*rawDepthSamplerObject && texture2D) {
@@ -1009,25 +1074,27 @@ namespace MobileGL::MG_Backend::DirectGLES {
         }
     }
 
-    void SetCurrentBaseInstance(Uint32 baseInstance) {
+    static SharedPtr<PrgramImpl::BackendProgramObjectImpl> GetCurrentBackendProgram() {
         const auto& currentProgram = MG_State::pGLContext->GetCurrentProgram();
         if (!currentProgram || !currentProgram->GetLinkStatus()) {
-            return;
+            return nullptr;
         }
         const auto& backendProgramIt = PrgramImpl::g_backendProgramObjects.find(currentProgram.get());
         if (backendProgramIt != PrgramImpl::g_backendProgramObjects.end()) {
-            backendProgramIt->second->SetBaseInstance(baseInstance);
+            return backendProgramIt->second;
+        }
+        return nullptr;
+    }
+
+    void SetCurrentBaseInstance(Uint32 baseInstance) {
+        if (const auto program = GetCurrentBackendProgram()) {
+            program->SetBaseInstance(baseInstance);
         }
     }
 
     void SetCurrentDrawID(Uint32 drawId) {
-        const auto& currentProgram = MG_State::pGLContext->GetCurrentProgram();
-        if (!currentProgram || !currentProgram->GetLinkStatus()) {
-            return;
-        }
-        const auto& backendProgramIt = PrgramImpl::g_backendProgramObjects.find(currentProgram.get());
-        if (backendProgramIt != PrgramImpl::g_backendProgramObjects.end()) {
-            backendProgramIt->second->SetDrawID(drawId);
+        if (const auto program = GetCurrentBackendProgram()) {
+            program->SetDrawID(drawId);
         }
     }
 
@@ -1048,18 +1115,35 @@ namespace MobileGL::MG_Backend::DirectGLES {
     // GPU-written command fields at all - so native is never worse. Only client-memory
     // commands take the CPU per-command loop.
     static void ExecuteIndexedIndirectCommands(GLenum mode, GLenum type, SizeT indexSize, const Uint8* commandBytes,
-                                               SizeT commandOffset, Bool hasIndirectBuffer, GLsizei drawcount,
-                                               GLsizei stride, const char* label) {
+                                               SizeT commandOffset,
+                                               const SharedPtr<MG_State::GLState::BufferObject>& drawIndirectBuffer,
+                                               GLsizei drawcount, GLsizei stride, const char* label) {
         (void)label;
-        const Bool useNative = hasIndirectBuffer && SupportsNativeIndirectDraws();
+        const Bool useNative = drawIndirectBuffer != nullptr && SupportsNativeIndirectDraws();
         if (useNative) {
+            // gl_BaseInstance must observe GPU-written command fields; expose the indirect
+            // buffer to the program's mg_IndirectParams SSBO view and address it per draw.
+            const auto backendProgram = GetCurrentBackendProgram();
+            const Int paramsBinding = backendProgram ? backendProgram->GetIndirectParamsBinding() : -1;
+            if (paramsBinding >= 0) {
+                auto* resource = BufferImpl::EnsureBufferResource(drawIndirectBuffer);
+                if (resource && resource->id != 0) {
+                    g_GLESFuncs.glBindBufferBase(GL_SHADER_STORAGE_BUFFER, static_cast<GLuint>(paramsBinding),
+                                                 resource->id);
+                }
+            }
             for (GLsizei i = 0; i < drawcount; ++i) {
-                DrawElementsIndirectCommand cmd{};
-                std::memcpy(&cmd, commandBytes + static_cast<SizeT>(i) * stride, sizeof(cmd));
+                const SizeT cmdByteOffset = commandOffset + static_cast<SizeT>(i) * stride;
                 SetCurrentDrawID(static_cast<Uint32>(i));
-                SetCurrentBaseInstance(cmd.baseInstance);
-                g_GLESFuncs.glDrawElementsIndirect(
-                    mode, type, reinterpret_cast<const void*>(commandOffset + static_cast<SizeT>(i) * stride));
+                if (paramsBinding >= 0 && backendProgram) {
+                    // baseInstance is the 5th word of DrawElementsIndirectCommand.
+                    backendProgram->SetBaseInstanceWordIndex(static_cast<Int32>((cmdByteOffset + 16) / 4));
+                } else {
+                    DrawElementsIndirectCommand cmd{};
+                    std::memcpy(&cmd, commandBytes + static_cast<SizeT>(i) * stride, sizeof(cmd));
+                    SetCurrentBaseInstance(cmd.baseInstance);
+                }
+                g_GLESFuncs.glDrawElementsIndirect(mode, type, reinterpret_cast<const void*>(cmdByteOffset));
             }
         } else {
             for (GLsizei i = 0; i < drawcount; ++i) {
@@ -1081,18 +1165,32 @@ namespace MobileGL::MG_Backend::DirectGLES {
     }
 
     static void ExecuteArraysIndirectCommands(GLenum mode, const Uint8* commandBytes, SizeT commandOffset,
-                                              Bool hasIndirectBuffer, GLsizei drawcount, GLsizei stride,
-                                              const char* label) {
+                                              const SharedPtr<MG_State::GLState::BufferObject>& drawIndirectBuffer,
+                                              GLsizei drawcount, GLsizei stride, const char* label) {
         (void)label;
-        const Bool useNative = hasIndirectBuffer && SupportsNativeIndirectDraws();
+        const Bool useNative = drawIndirectBuffer != nullptr && SupportsNativeIndirectDraws();
         if (useNative) {
+            const auto backendProgram = GetCurrentBackendProgram();
+            const Int paramsBinding = backendProgram ? backendProgram->GetIndirectParamsBinding() : -1;
+            if (paramsBinding >= 0) {
+                auto* resource = BufferImpl::EnsureBufferResource(drawIndirectBuffer);
+                if (resource && resource->id != 0) {
+                    g_GLESFuncs.glBindBufferBase(GL_SHADER_STORAGE_BUFFER, static_cast<GLuint>(paramsBinding),
+                                                 resource->id);
+                }
+            }
             for (GLsizei i = 0; i < drawcount; ++i) {
-                DrawArraysIndirectCommand cmd{};
-                std::memcpy(&cmd, commandBytes + static_cast<SizeT>(i) * stride, sizeof(cmd));
+                const SizeT cmdByteOffset = commandOffset + static_cast<SizeT>(i) * stride;
                 SetCurrentDrawID(static_cast<Uint32>(i));
-                SetCurrentBaseInstance(cmd.baseInstance);
-                g_GLESFuncs.glDrawArraysIndirect(
-                    mode, reinterpret_cast<const void*>(commandOffset + static_cast<SizeT>(i) * stride));
+                if (paramsBinding >= 0 && backendProgram) {
+                    // baseInstance is the 4th word of DrawArraysIndirectCommand.
+                    backendProgram->SetBaseInstanceWordIndex(static_cast<Int32>((cmdByteOffset + 12) / 4));
+                } else {
+                    DrawArraysIndirectCommand cmd{};
+                    std::memcpy(&cmd, commandBytes + static_cast<SizeT>(i) * stride, sizeof(cmd));
+                    SetCurrentBaseInstance(cmd.baseInstance);
+                }
+                g_GLESFuncs.glDrawArraysIndirect(mode, reinterpret_cast<const void*>(cmdByteOffset));
             }
         } else {
             for (GLsizei i = 0; i < drawcount; ++i) {
@@ -1127,13 +1225,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return;
         }
 
-        const auto& backendProgramIt = PrgramImpl::g_backendProgramObjects.find(currentProgram.get());
-        if (backendProgramIt != PrgramImpl::g_backendProgramObjects.end()) {
-            backendProgramIt->second->Use();
-        } else {
-            g_GLESFuncs.glUseProgram(0);
-            MGLOG_E("No backend program found (maybe not synced) for current compute program.");
-        }
+        // Compute shaders sample textures through the same unit bindings as draws
+        // (e.g. Flywheel's depth-pyramid downsample reads the depth attachment on
+        // unit 0), so re-establish unit bindings after the content syncs above.
+        BindCurrentTextures();
+        // Compute programs need the same per-program resource sync as draws:
+        // uniform-block bindings and sampler units only exist through the API
+        // because layout(binding) is stripped from the transpiled ESSL.
+        BindCurrentProgramWithResources();
     }
 
     GLuint GetBackendProgramId(GLuint program) {
@@ -1267,10 +1366,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return;
         }
 
-        const Bool hasIndirectBuffer =
-            MG_State::pGLContext->GetBufferBindingSlot(BufferTarget::DrawIndirect).GetBoundObject() != nullptr;
+        const auto& drawIndirectBuffer =
+            MG_State::pGLContext->GetBufferBindingSlot(BufferTarget::DrawIndirect).GetBoundObject();
         ExecuteIndexedIndirectCommands(mode, type, indexSize, commandBytes, reinterpret_cast<SizeT>(indirect),
-                                       hasIndirectBuffer, drawcount, stride, "MultiDrawElementsIndirect");
+                                       drawIndirectBuffer, drawcount, stride, "MultiDrawElementsIndirect");
     }
 
     void MultiDrawElementsIndirectCount(GLenum mode, GLenum type, const void* indirect, GLintptr drawcount,
@@ -1331,7 +1430,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         std::memcpy(&actualDrawCount, parameterData->data() + drawcount, sizeof(actualDrawCount));
         actualDrawCount = std::min<Uint32>(actualDrawCount, static_cast<Uint32>(maxdrawcount));
         ExecuteIndexedIndirectCommands(mode, type, indexSize, drawData->data() + commandOffset, commandOffset,
-                                       /*hasIndirectBuffer=*/true, static_cast<GLsizei>(actualDrawCount), stride,
+                                       drawBuffer, static_cast<GLsizei>(actualDrawCount), stride,
                                        "MultiDrawElementsIndirectCount");
     }
 
@@ -1362,9 +1461,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return;
         }
 
-        const Bool hasIndirectBuffer =
-            MG_State::pGLContext->GetBufferBindingSlot(BufferTarget::DrawIndirect).GetBoundObject() != nullptr;
-        ExecuteArraysIndirectCommands(mode, commandBytes, reinterpret_cast<SizeT>(indirect), hasIndirectBuffer,
+        const auto& drawIndirectBuffer =
+            MG_State::pGLContext->GetBufferBindingSlot(BufferTarget::DrawIndirect).GetBoundObject();
+        ExecuteArraysIndirectCommands(mode, commandBytes, reinterpret_cast<SizeT>(indirect), drawIndirectBuffer,
                                       drawcount, stride, "MultiDrawArraysIndirect");
     }
 
@@ -1428,10 +1527,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return;
         }
 
-        const Bool hasIndirectBuffer =
-            MG_State::pGLContext->GetBufferBindingSlot(BufferTarget::DrawIndirect).GetBoundObject() != nullptr;
+        const auto& drawIndirectBuffer =
+            MG_State::pGLContext->GetBufferBindingSlot(BufferTarget::DrawIndirect).GetBoundObject();
         ExecuteIndexedIndirectCommands(mode, type, indexSize, commandBytes, reinterpret_cast<SizeT>(indirect),
-                                       hasIndirectBuffer, 1, sizeof(DrawElementsIndirectCommand),
+                                       drawIndirectBuffer, 1, sizeof(DrawElementsIndirectCommand),
                                        "DrawElementsIndirect");
     }
 
@@ -1460,9 +1559,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return;
         }
 
-        const Bool hasIndirectBuffer =
-            MG_State::pGLContext->GetBufferBindingSlot(BufferTarget::DrawIndirect).GetBoundObject() != nullptr;
-        ExecuteArraysIndirectCommands(mode, commandBytes, reinterpret_cast<SizeT>(indirect), hasIndirectBuffer, 1,
+        const auto& drawIndirectBuffer =
+            MG_State::pGLContext->GetBufferBindingSlot(BufferTarget::DrawIndirect).GetBoundObject();
+        ExecuteArraysIndirectCommands(mode, commandBytes, reinterpret_cast<SizeT>(indirect), drawIndirectBuffer, 1,
                                       sizeof(DrawArraysIndirectCommand), "DrawArraysIndirect");
     }
 
@@ -3526,7 +3625,27 @@ namespace MobileGL::MG_Backend::DirectGLES {
     }
 
     namespace {
-        thread_local Bool t_backendContextCurrent = false;
+        // The single backend ES context migrates between app threads (FCL/pojav-style
+        // LWJGL hands the EGL context from JVM thread to JVM thread). Ownership must
+        // live in ONE global slot: a per-thread flag can never be cleared on the
+        // LOSING thread when another thread takes (or destroys/releases) the context,
+        // leaving a stale "current" claim behind. A stale claim makes buffer ops issue
+        // GL calls that silently no-op (no context is current on that thread) while
+        // still updating shadow bookkeeping (bind cache, synced serials), permanently
+        // desynchronizing backend buffer state.
+        std::atomic<std::thread::id> g_backendContextOwnerThread{};
+
+        // Bumped whenever the backend ES context is destroyed; fence handles
+        // created under an older generation belong to a dead context and must
+        // never be passed back to GL (mirrors BufferImpl's context tracking).
+        Uint g_syncContextGeneration = 1;
+
+        // Backend fence handle: a native ES sync plus the ES context
+        // generation it was created under.
+        struct GLESSyncObject {
+            GLsync esSync = nullptr;
+            Uint contextGeneration = 0;
+        };
     }
 
     Bool MakeCurrent() {
@@ -3540,7 +3659,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             MGLOG_E("DirectGLES::MakeCurrent failed: native eglMakeCurrent returned error 0x%04x", error);
             return false;
         }
-        t_backendContextCurrent = true;
+        g_backendContextOwnerThread.store(std::this_thread::get_id(), std::memory_order_release);
         // The ops table may have been unregistered when a previous ES context was
         // destroyed (e.g. a probe context); re-register now that GL is usable.
         BufferImpl::RegisterBufferBackendOps();
@@ -3549,7 +3668,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
     Bool ReleaseCurrent() {
         if (!g_EGLFuncs.eglMakeCurrent || g_Display == EGL_NO_DISPLAY) {
-            t_backendContextCurrent = false;
+            g_backendContextOwnerThread.store(std::thread::id{}, std::memory_order_release);
             return true;
         }
         if (!g_EGLFuncs.eglMakeCurrent(g_Display, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT)) {
@@ -3557,12 +3676,101 @@ namespace MobileGL::MG_Backend::DirectGLES {
             MGLOG_E("DirectGLES::ReleaseCurrent failed: native eglMakeCurrent returned error 0x%04x", error);
             return false;
         }
-        t_backendContextCurrent = false;
+        // Clearing the global owner works from ANY thread (a release request can
+        // legally arrive on a thread other than the current owner); erring towards
+        // "not current" only defers buffer ops, which is always safe.
+        g_backendContextOwnerThread.store(std::thread::id{}, std::memory_order_release);
         return true;
     }
 
     Bool IsBackendContextCurrentOnThisThread() {
-        return t_backendContextCurrent && g_Context != EGL_NO_CONTEXT;
+        if (g_Context == EGL_NO_CONTEXT) {
+            return false;
+        }
+        if (g_backendContextOwnerThread.load(std::memory_order_acquire) != std::this_thread::get_id()) {
+            return false;
+        }
+        // Belt and braces: EGL itself is the ground truth. A migration that bypassed
+        // MakeCurrent()/ReleaseCurrent() must not leave a stale ownership claim
+        // standing, or GL calls would silently no-op while shadow bookkeeping (bind
+        // cache, synced serials) still advances.
+        if (g_EGLFuncs.eglGetCurrentContext && g_EGLFuncs.eglGetCurrentContext() != g_Context) {
+            return false;
+        }
+        return true;
+    }
+
+    BackendSyncHandle FenceSync() {
+        // ES fences can only be created on the thread that owns the ES context
+        // (Flywheel and friends fence on the render thread, which does).
+        // Returning null makes the frontend fall back to an always-signaled
+        // sync object.
+        if (!IsBackendContextCurrentOnThisThread() || !g_GLESFuncs.glFenceSync) {
+            return nullptr;
+        }
+        GLsync esSync = g_GLESFuncs.glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
+        if (esSync == nullptr) {
+            return nullptr;
+        }
+        return new GLESSyncObject{esSync, g_syncContextGeneration};
+    }
+
+    GLenum ClientWaitSync(BackendSyncHandle handle, GLbitfield flags, GLuint64 timeout) {
+        const auto* sync = static_cast<GLESSyncObject*>(handle);
+        if (sync == nullptr) {
+            return GL_ALREADY_SIGNALED;
+        }
+        // The creating ES context is gone: its GPU work either completed or
+        // died with the context; waiting is meaningless either way.
+        if (sync->contextGeneration != g_syncContextGeneration) {
+            return GL_ALREADY_SIGNALED;
+        }
+        // Degraded path: a thread that does not own the ES context cannot
+        // issue GL calls, so report signaled instead of blocking on state we
+        // cannot observe. Fence waits normally arrive on the render thread,
+        // which owns the context.
+        if (!IsBackendContextCurrentOnThisThread() || !g_GLESFuncs.glClientWaitSync) {
+            return GL_ALREADY_SIGNALED;
+        }
+        return g_GLESFuncs.glClientWaitSync(sync->esSync, flags & GL_SYNC_FLUSH_COMMANDS_BIT, timeout);
+    }
+
+    void WaitSync(BackendSyncHandle handle, GLbitfield flags, GLuint64 timeout) {
+        (void)flags;
+        (void)timeout;
+        const auto* sync = static_cast<GLESSyncObject*>(handle);
+        if (sync == nullptr || sync->contextGeneration != g_syncContextGeneration ||
+            !IsBackendContextCurrentOnThisThread() || !g_GLESFuncs.glWaitSync) {
+            return;
+        }
+        // ES 3.0 requires flags == 0 and timeout == GL_TIMEOUT_IGNORED.
+        g_GLESFuncs.glWaitSync(sync->esSync, 0, GL_TIMEOUT_IGNORED);
+    }
+
+    void DeleteSync(BackendSyncHandle handle) {
+        auto* sync = static_cast<GLESSyncObject*>(handle);
+        if (sync == nullptr) {
+            return;
+        }
+        if (sync->contextGeneration == g_syncContextGeneration && IsBackendContextCurrentOnThisThread() &&
+            g_GLESFuncs.glDeleteSync) {
+            g_GLESFuncs.glDeleteSync(sync->esSync);
+        }
+        // Otherwise the ES sync is abandoned; the ES context reclaims all of
+        // its sync objects when it is destroyed.
+        delete sync;
+    }
+
+    Bool GetSyncStatus(BackendSyncHandle handle) {
+        const auto* sync = static_cast<GLESSyncObject*>(handle);
+        if (sync == nullptr || sync->contextGeneration != g_syncContextGeneration ||
+            !IsBackendContextCurrentOnThisThread() || !g_GLESFuncs.glGetSynciv) {
+            return true;
+        }
+        GLint status = GL_SIGNALED;
+        GLsizei length = 0;
+        g_GLESFuncs.glGetSynciv(sync->esSync, GL_SYNC_STATUS, 1, &length, &status);
+        return status == GL_SIGNALED;
     }
 
     void Present() {
@@ -3571,7 +3779,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
     void DestroyEGLContext() {
         BufferImpl::OnBackendContextDestroyed();
-        t_backendContextCurrent = false;
+        g_backendContextOwnerThread.store(std::thread::id{}, std::memory_order_release);
+        // Outstanding fence handles now refer to a dead context; treat them as
+        // signaled from here on.
+        ++g_syncContextGeneration;
         if (g_Display != EGL_NO_DISPLAY) {
             g_EGLFuncs.eglMakeCurrent(g_Display, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
             if (g_Context != EGL_NO_CONTEXT) {

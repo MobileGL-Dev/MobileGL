@@ -866,6 +866,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
             funcsTable.GL.GenerateMipmap = GenerateMipmap;
             funcsTable.GL.ReadPixels = ReadPixels;
             funcsTable.GL.GetTexImage = GetTexImage;
+            funcsTable.GL.FenceSync = FenceSync;
+            funcsTable.GL.ClientWaitSync = ClientWaitSync;
+            funcsTable.GL.WaitSync = WaitSync;
+            funcsTable.GL.DeleteSync = DeleteSync;
+            funcsTable.GL.GetSyncStatus = GetSyncStatus;
             funcsTableInitialized = true;
         }
         return funcsTable;

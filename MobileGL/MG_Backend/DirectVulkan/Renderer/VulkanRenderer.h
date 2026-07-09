@@ -167,6 +167,17 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         VkInstance GetInstance() const;
         Bool IsDrawIndirectCountExtensionEnabled() const;
 
+        // GL fence support, expressed in VkBufferManager frame serials: a fence
+        // captures GetCurrentFrameSerial() at creation and is signaled once
+        // IsFrameSerialComplete() reports that serial complete (the same
+        // busy-tracking horizon used to recycle buffer resources).
+        Uint64 GetCurrentFrameSerial() const;
+        Bool IsFrameSerialComplete(Uint64 serial) const;
+        // Blocking wait for a submitted serial. Returns false when the serial
+        // cannot complete without further submissions (it belongs to the
+        // current, not-yet-presented frame) or when the wait failed.
+        Bool WaitForFrameSerial(Uint64 serial, Uint64 timeoutNs);
+
         void RequestSwapchainResize(Uint32 width, Uint32 height);
         void RecreateSwapchain();
 

@@ -133,11 +133,14 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         m_copyProvider = provider;
     }
 
-    Bool VkBufferManager::IsResourceBusy(const VkBufferResource& resource) const {
+    Uint64 VkBufferManager::GetCompletedSerial() const {
         const Uint64 frameCount = m_initInfo.frameCount > 0 ? m_initInfo.frameCount : 1;
-        Uint64 completed = m_frameSerial > frameCount ? m_frameSerial - frameCount : 0;
-        completed = std::max(completed, m_completedSerialFloor);
-        return resource.lastUseSerial > completed;
+        const Uint64 completed = m_frameSerial > frameCount ? m_frameSerial - frameCount : 0;
+        return std::max(completed, m_completedSerialFloor);
+    }
+
+    Bool VkBufferManager::IsResourceBusy(const VkBufferResource& resource) const {
+        return resource.lastUseSerial > GetCompletedSerial();
     }
 
     Bool VkBufferManager::UploadTransient(BufferKind kind, Uint32 frameIndex, const void* data,

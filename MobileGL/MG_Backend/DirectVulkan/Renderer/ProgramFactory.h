@@ -166,8 +166,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             }
         };
 
-        explicit ProgramFactory(VkDevice device, const VulkanRendererConfig& config, Uint32 maxBindings = 16)
-            : m_device(device), m_config(config), m_maxBindings(maxBindings) {
+        explicit ProgramFactory(VkDevice device, const VulkanRendererConfig& config, Uint32 maxBindings = 16,
+                                Bool shaderDrawParametersEnabled = false)
+            : m_device(device), m_maxBindings(maxBindings), m_config(config),
+              m_shaderDrawParametersEnabled(shaderDrawParametersEnabled) {
             VkProgramObject::s_device = device;
         }
         ~ProgramFactory() = default;
@@ -201,6 +203,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         Uint32 m_maxBindings = 0;
         UnorderedMap<HashType, VkProgramObject> m_cache;
         const VulkanRendererConfig& m_config;
+        // True when the device enabled shaderDrawParameters; gates the InstanceIndex rebase pass
+        // (which needs the DrawParameters capability / gl_BaseInstance builtin).
+        Bool m_shaderDrawParametersEnabled = false;
         mutable ProgramLookupCache m_lastLookup;
         static inline XXH64_state_t* m_hashState = XXH64_createState();
     };

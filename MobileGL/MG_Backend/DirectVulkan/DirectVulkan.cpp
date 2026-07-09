@@ -1342,6 +1342,63 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                               dstY0, dstX1, dstY1, mask, filter);
     }
 
+    namespace {
+        // Backend fence handle: the VkBufferManager frame serial captured at
+        // fence creation. The fence is signaled once every command recorded
+        // under that serial has completed on the GPU (the same busy-tracking
+        // horizon used to recycle buffer resources).
+        struct VulkanSyncObject {
+            Uint64 frameSerial = 0;
+        };
+    } // namespace
+
+    BackendSyncHandle FenceSync() {
+        if (!pVulkanRenderer) {
+            return nullptr;
+        }
+        return new VulkanSyncObject{pVulkanRenderer->GetCurrentFrameSerial()};
+    }
+
+    GLenum ClientWaitSync(BackendSyncHandle handle, GLbitfield flags, GLuint64 timeout) {
+        // Commands are only submitted at Present, so GL_SYNC_FLUSH_COMMANDS_BIT
+        // cannot force progress mid-frame; WaitForFrameSerial reports whether
+        // waiting can succeed at all.
+        (void)flags;
+        const auto* sync = static_cast<VulkanSyncObject*>(handle);
+        if (sync == nullptr || !pVulkanRenderer) {
+            return GL_ALREADY_SIGNALED;
+        }
+        if (pVulkanRenderer->IsFrameSerialComplete(sync->frameSerial)) {
+            return GL_ALREADY_SIGNALED;
+        }
+        if (timeout == 0) {
+            return GL_TIMEOUT_EXPIRED;
+        }
+        return pVulkanRenderer->WaitForFrameSerial(sync->frameSerial, timeout) ? GL_CONDITION_SATISFIED
+                                                                               : GL_TIMEOUT_EXPIRED;
+    }
+
+    void WaitSync(BackendSyncHandle handle, GLbitfield flags, GLuint64 timeout) {
+        // Server-side waits are implicit: the single graphics queue executes
+        // submissions in order, so later GPU work already observes everything
+        // recorded before the fence.
+        (void)handle;
+        (void)flags;
+        (void)timeout;
+    }
+
+    void DeleteSync(BackendSyncHandle handle) {
+        delete static_cast<VulkanSyncObject*>(handle);
+    }
+
+    Bool GetSyncStatus(BackendSyncHandle handle) {
+        const auto* sync = static_cast<VulkanSyncObject*>(handle);
+        if (sync == nullptr || !pVulkanRenderer) {
+            return true;
+        }
+        return pVulkanRenderer->IsFrameSerialComplete(sync->frameSerial);
+    }
+
     void Present() {
         MOBILEGL_ASSERT(pVulkanRenderer, "DirectVulkan::Present called with null VulkanRenderer");
         pVulkanRenderer->Present();

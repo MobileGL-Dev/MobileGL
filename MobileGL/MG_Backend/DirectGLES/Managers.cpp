@@ -34,6 +34,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
     constexpr const char* BASE_INSTANCE_UNIFORM_NAME = "mg_BaseInstance";
     constexpr const char* DRAW_ID_UNIFORM_NAME = "mg_DrawID";
     constexpr const char* BASE_VERTEX_UNIFORM_NAME = "mg_BaseVertex";
+    constexpr const char* BASE_INSTANCE_LOWERED_NAME = "mg_BaseInstanceLowered";
+    constexpr const char* BASE_INSTANCE_WORD_INDEX_UNIFORM_NAME = "mg_BaseInstanceWordIndex";
+    constexpr const char* INDIRECT_PARAMS_BLOCK_NAME = "mg_IndirectParams";
 
     static Bool IsAngleLlvmpipeRenderer() {
         return g_GLESCapabilities.GLESRendererString.find("ANGLE") != String::npos &&
@@ -111,20 +114,28 @@ namespace MobileGL::MG_Backend::DirectGLES {
         if (shaderType != GL_VERTEX_SHADER || source.find("gl_BaseInstance") == String::npos) {
             return source;
         }
-        source = ReplaceIdentifier(std::move(source), "gl_BaseInstance", BASE_INSTANCE_UNIFORM_NAME);
-        return InjectUniformAfterVersion(std::move(source),
+        String replaced = ReplaceIdentifier(source, "gl_BaseInstance", BASE_INSTANCE_UNIFORM_NAME);
+        if (replaced == source) {
+            // Only a substring hit (e.g. gl_BaseInstanceARB inside a SPIRV-Cross #ifdef
+            // fallback); nothing was rewritten, so nothing must be declared either.
+            return source;
+        }
+        return InjectUniformAfterVersion(std::move(replaced),
                                          String("uniform highp int ") + BASE_INSTANCE_UNIFORM_NAME + ";");
     }
 
     // The LowerDrawParametersPass demotes gl_DrawID / gl_BaseInstance / gl_BaseVertex to plain
-    // Private globals named mg_DrawID / mg_BaseInstance / mg_BaseVertex; SPIRV-Cross then emits
-    // them as ordinary global declarations. Turn those declarations into uniforms so the draw
-    // paths can feed real values per (sub-)draw.
+    // Private globals (mg_DrawID / mg_BaseInstanceLowered / mg_BaseVertex); SPIRV-Cross then
+    // emits them as ordinary global declarations. mg_DrawID / mg_BaseVertex become uniforms fed
+    // per (sub-)draw. gl_BaseInstance is special: for indirect draws its value lives in the
+    // (possibly GPU-written) indirect command buffer, so its declaration expands into a
+    // std430 SSBO view of that buffer indexed by a CPU-computed word index, with the plain
+    // mg_BaseInstance uniform as the fallback for non-indirect draws.
     String PromoteDrawParameterGlobalsToUniforms(String source, GLenum shaderType) {
         if (shaderType != GL_VERTEX_SHADER) {
             return source;
         }
-        for (const char* name : {DRAW_ID_UNIFORM_NAME, BASE_INSTANCE_UNIFORM_NAME, BASE_VERTEX_UNIFORM_NAME}) {
+        for (const char* name : {DRAW_ID_UNIFORM_NAME, BASE_VERTEX_UNIFORM_NAME}) {
             for (const char* declPrefix : {"highp int ", "mediump int ", "lowp int ", "int ", "highp uint ",
                                            "mediump uint ", "uint "}) {
                 const String declaration = String(declPrefix) + name + ";";
@@ -142,6 +153,29 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 }
                 break;
             }
+        }
+        for (const char* declPrefix : {"highp int ", "mediump int ", "lowp int ", "int "}) {
+            const String declaration = String(declPrefix) + BASE_INSTANCE_LOWERED_NAME + ";";
+            const SizeT pos = source.find(declaration);
+            if (pos == String::npos) {
+                continue;
+            }
+            const Int paramsBinding = g_GLESCapabilities.MaxShaderStorageBufferBindings > 0
+                                          ? g_GLESCapabilities.MaxShaderStorageBufferBindings - 1
+                                          : 0;
+            String machinery;
+            if (source.find(String("uniform highp int ") + BASE_INSTANCE_UNIFORM_NAME + ";") == String::npos) {
+                machinery += String("uniform highp int ") + BASE_INSTANCE_UNIFORM_NAME + ";\n";
+            }
+            machinery += String("uniform highp int ") + BASE_INSTANCE_WORD_INDEX_UNIFORM_NAME + ";\n";
+            machinery += String("layout(std430, binding = ") + std::to_string(paramsBinding) +
+                         ") readonly buffer " + INDIRECT_PARAMS_BLOCK_NAME +
+                         " { highp uint mg_indirectWords[]; };\n";
+            machinery += String("#define ") + BASE_INSTANCE_LOWERED_NAME + " ((" +
+                         BASE_INSTANCE_WORD_INDEX_UNIFORM_NAME + " >= 0) ? int(mg_indirectWords[uint(" +
+                         BASE_INSTANCE_WORD_INDEX_UNIFORM_NAME + ")]) : " + BASE_INSTANCE_UNIFORM_NAME + ")";
+            source.replace(pos, declaration.size(), machinery);
+            break;
         }
         return source;
     }
@@ -195,6 +229,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 return resource.storageInitialized && !resource.pendingRespecify &&
                        resource.storageSize == bufferObject.GetSize();
             }
+
+
 
             void UploadRangeNow(GLESBufferResource& resource, BufferObject& bufferObject, SizeT start, SizeT end) {
 #ifdef TRACY_ENABLE
@@ -2050,6 +2086,18 @@ namespace MobileGL::MG_Backend::DirectGLES {
             m_baseInstanceUniformLocation = g_GLESFuncs.glGetUniformLocation(m_backendProgramId,
                                                                              BASE_INSTANCE_UNIFORM_NAME);
             m_drawIdUniformLocation = g_GLESFuncs.glGetUniformLocation(m_backendProgramId, DRAW_ID_UNIFORM_NAME);
+            m_baseInstanceWordIndexUniformLocation =
+                g_GLESFuncs.glGetUniformLocation(m_backendProgramId, BASE_INSTANCE_WORD_INDEX_UNIFORM_NAME);
+            // The mg_IndirectParams block binding is baked into the ESSL (ES cannot rebind
+            // SSBO blocks after compile); record it so draws bind the indirect buffer there.
+            m_indirectParamsBinding = -1;
+            if (m_baseInstanceWordIndexUniformLocation >= 0 && g_GLESFuncs.glGetProgramResourceIndex) {
+                const GLuint blockIndex = g_GLESFuncs.glGetProgramResourceIndex(
+                    m_backendProgramId, GL_SHADER_STORAGE_BLOCK, INDIRECT_PARAMS_BLOCK_NAME);
+                if (blockIndex != GL_INVALID_INDEX && g_GLESCapabilities.MaxShaderStorageBufferBindings > 0) {
+                    m_indirectParamsBinding = g_GLESCapabilities.MaxShaderStorageBufferBindings - 1;
+                }
+            }
 
             // Create global UBO
             if (stateProgramObject->GetUBOSize() > 0) {
@@ -2074,10 +2122,19 @@ namespace MobileGL::MG_Backend::DirectGLES {
         }
 
         void BackendProgramObjectImpl::SetBaseInstance(Uint32 baseInstance) const {
-            if (m_baseInstanceUniformLocation < 0) {
-                return;
+            if (m_baseInstanceUniformLocation >= 0) {
+                g_GLESFuncs.glUniform1i(m_baseInstanceUniformLocation, static_cast<GLint>(baseInstance));
             }
-            g_GLESFuncs.glUniform1i(m_baseInstanceUniformLocation, static_cast<GLint>(baseInstance));
+            // A direct value disables the indirect-command-buffer read.
+            if (m_baseInstanceWordIndexUniformLocation >= 0) {
+                g_GLESFuncs.glUniform1i(m_baseInstanceWordIndexUniformLocation, -1);
+            }
+        }
+
+        void BackendProgramObjectImpl::SetBaseInstanceWordIndex(Int32 wordIndex) const {
+            if (m_baseInstanceWordIndexUniformLocation >= 0) {
+                g_GLESFuncs.glUniform1i(m_baseInstanceWordIndexUniformLocation, wordIndex);
+            }
         }
 
         void BackendProgramObjectImpl::SetDrawID(Uint32 drawId) const {

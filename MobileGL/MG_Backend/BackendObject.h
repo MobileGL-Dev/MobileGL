@@ -72,6 +72,10 @@ namespace MobileGL {
         SizeT GetRenderbufferFormatCapabilityTargetIndex();
         void PrintFormatCapabilities(const FormatCapabilityCache& cache);
 
+        // Opaque backend fence-sync handle, created by GLFunctionsTable::FenceSync
+        // and released by GLFunctionsTable::DeleteSync.
+        using BackendSyncHandle = void*;
+
         struct GLFunctionsTable {
             void (*DrawArrays)(GLenum mode, GLint first, GLsizei count);
             void (*DrawElements)(GLenum mode, GLsizei count, GLenum type, const void* indices);
@@ -157,6 +161,16 @@ namespace MobileGL {
             GLint (*GetProgramResourceLocation)(GLuint program, GLenum programInterface, const GLchar* name);
             GLint (*GetProgramResourceLocationIndex)(GLuint program, GLenum programInterface, const GLchar* name);
             void (*ShaderStorageBlockBinding)(GLuint program, GLuint storageBlockIndex, GLuint storageBlockBinding);
+            // GL fence sync objects. All entries are optional (may be null); the
+            // frontend then falls back to always-signaled sync semantics.
+            // FenceSync may itself return null when the backend cannot create a
+            // fence right now (e.g. the calling thread does not own the backend
+            // context); the frontend treats such a sync as always signaled.
+            BackendSyncHandle (*FenceSync)();
+            GLenum (*ClientWaitSync)(BackendSyncHandle sync, GLbitfield flags, GLuint64 timeout);
+            void (*WaitSync)(BackendSyncHandle sync, GLbitfield flags, GLuint64 timeout);
+            void (*DeleteSync)(BackendSyncHandle sync);
+            Bool (*GetSyncStatus)(BackendSyncHandle sync); // true = signaled
         };
         struct GlobalBackendFunctionsTable {
             GLFunctionsTable GL;

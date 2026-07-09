@@ -7,56 +7,120 @@
 // End of Source File Header
 
 #include "GL_Sync.h"
+#include <MG_Backend/BackendObjects.h>
 
 namespace MobileGL::MG_Impl::GLImpl {
     namespace {
-        int g_stubSyncObject = 0;
-    }
+        // Frontend sync object: wraps an optional backend fence handle. A null
+        // backend handle (backend has no fence support, or could not create a
+        // fence at call time) keeps the legacy always-signaled behavior.
+        struct SyncObject {
+            MG_Backend::BackendSyncHandle backendHandle = nullptr;
+            GLenum condition = GL_SYNC_GPU_COMMANDS_COMPLETE;
+            GLbitfield flags = 0;
+        };
 
-    // glSync semantics not really needed right now, stubbing them out
+        // Sync calls may arrive from any thread (launchers migrate the context
+        // across JVM threads), so the live-object registry is mutex-guarded.
+        // Entries left at process shutdown are simply dropped; their backend
+        // handles die with the backend.
+        std::mutex g_syncObjectsMutex;
+        UnorderedMap<GLsync, SyncObject*> g_liveSyncObjects;
+
+        SyncObject* FindSyncObject(GLsync sync) {
+            const std::lock_guard<std::mutex> lock(g_syncObjectsMutex);
+            const auto it = g_liveSyncObjects.find(sync);
+            return it != g_liveSyncObjects.end() ? it->second : nullptr;
+        }
+    } // namespace
 
     GLsync FenceSync(GLenum condition, GLbitfield flags) {
-        (void)condition;
-        (void)flags;
-        return reinterpret_cast<GLsync>(&g_stubSyncObject);
+        auto* syncObject = new SyncObject;
+        syncObject->condition = condition;
+        syncObject->flags = flags;
+        if (const auto backendFenceSync = MG_Backend::gBackendFunctionsTable.GL.FenceSync) {
+            syncObject->backendHandle = backendFenceSync();
+        }
+        const GLsync handle = reinterpret_cast<GLsync>(syncObject);
+        const std::lock_guard<std::mutex> lock(g_syncObjectsMutex);
+        g_liveSyncObjects[handle] = syncObject;
+        return handle;
     }
 
     GLboolean IsSync(GLsync sync) {
-        return sync != nullptr ? GL_TRUE : GL_FALSE;
+        return FindSyncObject(sync) != nullptr ? GL_TRUE : GL_FALSE;
     }
 
     GLenum ClientWaitSync(GLsync sync, GLbitfield flags, GLuint64 timeout) {
-        (void)sync;
-        (void)flags;
-        (void)timeout;
-        return GL_ALREADY_SIGNALED;
+        const auto* syncObject = FindSyncObject(sync);
+        if (!syncObject) {
+            return GL_WAIT_FAILED;
+        }
+        const auto backendClientWaitSync = MG_Backend::gBackendFunctionsTable.GL.ClientWaitSync;
+        if (!backendClientWaitSync || !syncObject->backendHandle) {
+            return GL_ALREADY_SIGNALED; // legacy always-signaled fallback
+        }
+        return backendClientWaitSync(syncObject->backendHandle, flags, timeout);
     }
 
     void WaitSync(GLsync sync, GLbitfield flags, GLuint64 timeout) {
-        (void)sync;
-        (void)flags;
-        (void)timeout;
+        const auto* syncObject = FindSyncObject(sync);
+        if (!syncObject) {
+            return;
+        }
+        const auto backendWaitSync = MG_Backend::gBackendFunctionsTable.GL.WaitSync;
+        if (backendWaitSync && syncObject->backendHandle) {
+            backendWaitSync(syncObject->backendHandle, flags, timeout);
+        }
     }
 
     void DeleteSync(GLsync sync) {
-        (void)sync;
+        if (sync == nullptr) {
+            return; // glDeleteSync(0) is silently ignored
+        }
+        SyncObject* syncObject = nullptr;
+        {
+            const std::lock_guard<std::mutex> lock(g_syncObjectsMutex);
+            const auto it = g_liveSyncObjects.find(sync);
+            if (it == g_liveSyncObjects.end()) {
+                return;
+            }
+            syncObject = it->second;
+            g_liveSyncObjects.erase(it);
+        }
+        const auto backendDeleteSync = MG_Backend::gBackendFunctionsTable.GL.DeleteSync;
+        if (backendDeleteSync && syncObject->backendHandle) {
+            backendDeleteSync(syncObject->backendHandle);
+        }
+        delete syncObject;
     }
 
     void GetSynciv(GLsync sync, GLenum pname, GLsizei bufSize, GLsizei* length, GLint* values) {
-        (void)sync;
+        const auto* syncObject = FindSyncObject(sync);
+        if (!syncObject) {
+            if (length) {
+                *length = 0;
+            }
+            return;
+        }
+
         GLint value = 0;
         switch (pname) {
         case GL_OBJECT_TYPE:
             value = GL_SYNC_FENCE;
             break;
-        case GL_SYNC_STATUS:
-            value = GL_SIGNALED;
+        case GL_SYNC_STATUS: {
+            const auto backendGetSyncStatus = MG_Backend::gBackendFunctionsTable.GL.GetSyncStatus;
+            const Bool signaled = !backendGetSyncStatus || !syncObject->backendHandle ||
+                                  backendGetSyncStatus(syncObject->backendHandle);
+            value = signaled ? GL_SIGNALED : GL_UNSIGNALED;
             break;
+        }
         case GL_SYNC_CONDITION:
-            value = GL_SYNC_GPU_COMMANDS_COMPLETE;
+            value = static_cast<GLint>(syncObject->condition);
             break;
         case GL_SYNC_FLAGS:
-            value = 0;
+            value = static_cast<GLint>(syncObject->flags);
             break;
         default:
             break;

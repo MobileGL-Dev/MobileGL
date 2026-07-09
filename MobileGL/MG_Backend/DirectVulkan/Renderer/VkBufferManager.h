@@ -98,6 +98,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         void OnResourceDestroyed(SharedPtr<MG_State::GLState::BackendBufferResource>&& resource);
 
         Uint64 GetFrameSerial() const { return m_frameSerial; }
+        // Highest frame serial whose GPU work is known complete; serials at or
+        // below it may be considered signaled. Drives IsResourceBusy and the
+        // backend GL fence objects.
+        Uint64 GetCompletedSerial() const;
         // Busy = potentially referenced by GPU work that has not been fenced yet
         // (including commands recorded for the current, unsubmitted frame).
         Bool IsResourceBusy(const VkBufferResource& resource) const;

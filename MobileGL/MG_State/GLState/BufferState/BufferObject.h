@@ -127,6 +127,12 @@ namespace MobileGL {
             // Pushes the persistently-mapped write range to the backend; called by
             // backends at draw time (persistent maps mutate the shadow without API calls).
             void SyncPersistentMappedRange();
+            // App-compat for FLUSH_EXPLICIT persistent maps: engines like Flywheel
+            // write copy descriptors into the mapping and bind that range as an SSBO
+            // without ever flushing it. Undefined per spec, but works on drivers whose
+            // persistent maps alias GPU-visible memory. Ours alias the CPU shadow, so
+            // callers push the GPU-read range down right before it is consumed.
+            void SyncMappedRangeForGpuRead(Range1D range);
             // Shadow-only write used when the backend copies GPU results (e.g. ReadPixels
             // into a pixel-pack buffer) back into the frontend mirror. Does not issue a
             // backend op: the backend storage already holds these bytes.

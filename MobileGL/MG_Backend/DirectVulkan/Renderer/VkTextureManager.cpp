@@ -18,7 +18,12 @@
 #include <memory>
 
 namespace MobileGL::MG_Backend::DirectVulkan {
-    static constexpr VkPipelineStageFlags kGraphicsSampledReadStages = VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT;
+    // Compute shaders may legally sample framebuffer-attached textures (the GL feedback-loop rule
+    // only covers rendering commands; e.g. Flywheel's Hi-Z depth pyramid downsample samples the
+    // depth attachment of the bound draw framebuffer), so sampled-read barriers must cover the
+    // compute stage in addition to the graphics stages.
+    static constexpr VkPipelineStageFlags kSampledReadStages =
+        VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
 
     static Uint32 ComputeFullMipLevelCount(const IntVec3& baseTexelSize) {
         Int maxDimension = std::max<Int>(baseTexelSize.x(),
@@ -145,7 +150,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         case VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_STENCIL_ATTACHMENT_OPTIMAL:
         case VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_STENCIL_READ_ONLY_OPTIMAL:
         case VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL:
-            outSrcStageMask = kGraphicsSampledReadStages;
+            outSrcStageMask = kSampledReadStages;
             outSrcAccessMask = VK_ACCESS_SHADER_READ_BIT;
             return;
         case VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL:
@@ -193,7 +198,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         case VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_STENCIL_ATTACHMENT_OPTIMAL:
         case VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_STENCIL_READ_ONLY_OPTIMAL:
         case VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL:
-            outDstStageMask = kGraphicsSampledReadStages;
+            outDstStageMask = kSampledReadStages;
             outDstAccessMask = VK_ACCESS_SHADER_READ_BIT;
             return;
         case VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL:
@@ -925,7 +930,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
 
         const Bool ok = TransitionImageLayout(commandBuffer, resource->image, resource->layout, targetLayout, srcStageMask,
-                                              kGraphicsSampledReadStages, srcAccessMask,
+                                              kSampledReadStages, srcAccessMask,
                                               VK_ACCESS_SHADER_READ_BIT, resource->aspect, 0, resource->mipLevels,
                                               resource->arrayLayers);
         MOBILEGL_ASSERT(ok, "TransitionTextureForSampling: transition failed for textureId=%d", texture.GetExternalIndex());
@@ -1532,7 +1537,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                    uploadLayout,
                                    finalLayout,
                                    VK_PIPELINE_STAGE_TRANSFER_BIT,
-                                   kGraphicsSampledReadStages,
+                                   kSampledReadStages,
                                    VK_ACCESS_TRANSFER_WRITE_BIT,
                                    VK_ACCESS_SHADER_READ_BIT,
                                    aspectMask, 0, outResource.mipLevels, outResource.arrayLayers);

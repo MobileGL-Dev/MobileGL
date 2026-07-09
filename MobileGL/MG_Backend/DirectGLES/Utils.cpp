@@ -307,10 +307,35 @@ namespace MobileGL::MG_Backend::DirectGLES {
 #ifdef TRACY_ENABLE
             ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
+            // Sampler and uniform-block bindings are re-established at draw time through the
+            // API, so their layout qualifiers are stripped (they may exceed ES limits). SSBO
+            // blocks and image uniforms are different: ES has no glShaderStorageBlockBinding,
+            // and image units cannot be set with glUniform1i, so for those declarations the
+            // binding qualifier is the only binding mechanism and must be preserved.
             static std::regex bindingRegex(R"(layout\s*\(\s*binding\s*=\s*\d+\s*\)\s*)");
-            String result = std::regex_replace(glslCode, bindingRegex, "");
             static std::regex bindingRegex2(R"(layout\s*\(\s*binding\s*=\s*\d+\s*,)");
-            result = std::regex_replace(result, bindingRegex2, "layout(");
+            static std::regex keepBindingRegex(R"(\b(buffer|[iu]?image[A-Za-z0-9]*)\b)");
+
+            String result;
+            result.reserve(glslCode.size());
+            SizeT lineStart = 0;
+            while (lineStart <= glslCode.size()) {
+                SizeT lineEnd = glslCode.find('\n', lineStart);
+                const Bool lastLine = lineEnd == String::npos;
+                String line = glslCode.substr(lineStart, lastLine ? String::npos : lineEnd - lineStart);
+
+                if (!std::regex_search(line, keepBindingRegex)) {
+                    line = std::regex_replace(line, bindingRegex, "");
+                    line = std::regex_replace(line, bindingRegex2, "layout(");
+                }
+
+                result += line;
+                if (lastLine) {
+                    break;
+                }
+                result += '\n';
+                lineStart = lineEnd + 1;
+            }
             return result;
         }
     } // namespace PrgramImpl

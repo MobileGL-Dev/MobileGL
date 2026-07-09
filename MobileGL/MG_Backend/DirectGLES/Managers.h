@@ -8,6 +8,8 @@
 
 #pragma once
 #include <Includes.h>
+#include <atomic>
+#include <mutex>
 #include "DirectGLES.h"
 #include "MG_State/GLState/SamplerState/SamplerObject.h"
 #include "MG_State/GLState/TextureState/TextureEnum.h"
@@ -132,12 +134,16 @@ namespace MobileGL::MG_Backend::DirectGLES {
             Uint contextGeneration = 0;
             // Frontend change serial the backend storage reflects. When immediate
             // ops cannot run (ops unregistered, no current context), this lags and
-            // EnsureBufferResource falls back to a full re-upload.
-            Uint64 syncedChangeSerial = 0;
+            // EnsureBufferResource falls back to a full re-upload. Atomic: read on
+            // the context-owning thread while ops on other threads may update it.
+            std::atomic<Uint64> syncedChangeSerial{0};
             // Ops that arrived while no ES context was current on the calling thread
-            // (or before storage existed); replayed by EnsureBufferResource.
+            // (or before storage existed); replayed by EnsureBufferResource. The ES
+            // context migrates between app threads, so deferring ops can race with
+            // the owning thread replaying them: guard both fields with pendingMutex.
             Bool pendingRespecify = false;
             VecRange1D pendingRanges;
+            std::mutex pendingMutex;
         };
 
         // Registered as the frontend's BufferBackendOps at backend init and on
@@ -317,7 +323,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
             void SyncToBackend(const SharedPtr<MG_State::GLState::ProgramObject>& stateProgramObject);
             void Use() const;
             void SetBaseInstance(Uint32 baseInstance) const;
+            void SetBaseInstanceWordIndex(Int32 wordIndex) const;
             void SetDrawID(Uint32 drawId) const;
+            Int GetIndirectParamsBinding() const { return m_indirectParamsBinding; }
             Uint GetBackendProgramId() const { return m_backendProgramId; }
             Uint GetBackendGlobalUBOId() const { return m_backendGlobalUBOId; }
             Uint32 GetSnormFallbackClampOutputMask() const { return m_snormFallbackClampOutputMask; }
@@ -328,6 +336,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
             Uint m_backendGlobalUBOId = 0;
             Int m_baseInstanceUniformLocation = -1;
             Int m_drawIdUniformLocation = -1;
+            Int m_baseInstanceWordIndexUniformLocation = -1;
+            Int m_indirectParamsBinding = -1;
             Uint32 m_snormFallbackClampOutputMask = 0;
             Uint32 m_unormFallbackClampOutputMask = 0;
             Bool m_isInitialized = false;

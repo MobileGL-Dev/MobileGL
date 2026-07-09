@@ -188,6 +188,7 @@ set(SOURCE_FILES
     MobileGL/MG_Util/ShaderTranspiler/SpirvPasses/RenameSamplerFunctionParameterPass.cpp
     MobileGL/MG_Util/ShaderTranspiler/SpirvPasses/DecomposeWorkgroupVec3Pass.cpp
     MobileGL/MG_Util/ShaderTranspiler/SpirvPasses/LowerDrawParametersPass.cpp
+    MobileGL/MG_Util/ShaderTranspiler/SpirvPasses/RebaseInstanceIndexPass.cpp
 
     MobileGL/MG_Util/BackendLoaders/OpenGL/Loader.cpp
     MobileGL/MG_Util/BackendLoaders/Vulkan/Loader.cpp

@@ -7,6 +7,7 @@
 // End of Source File Header
 
 #include "BufferObject.h"
+#include <algorithm>
 
 namespace MobileGL::MG_State::GLState {
     namespace {
@@ -148,6 +149,21 @@ namespace MobileGL::MG_State::GLState {
         if (m_mappedRange.start >= m_mappedRange.end) return;
 
         NotifySubData(m_mappedRange.start, m_mappedRange.end - m_mappedRange.start);
+    }
+
+    void BufferObject::SyncMappedRangeForGpuRead(Range1D range) {
+        if (!m_isMapped) return;
+        if (!(m_mappingAccess & BufferMappingAccessBit::Persistent)) return;
+        if (!(m_mappingAccess & BufferMappingAccessBit::Write)) return;
+        // Non-FLUSH_EXPLICIT persistent maps are already covered wholesale by
+        // SyncPersistentMappedRange.
+        if (!(m_mappingAccess & BufferMappingAccessBit::FlushExplicit)) return;
+
+        const SizeT start = std::max(range.start, m_mappedRange.start);
+        const SizeT end = std::min({range.end, m_mappedRange.end, m_size});
+        if (start >= end) return;
+
+        NotifySubData(start, end - start);
     }
 
     void BufferObject::WritebackFromBackend(DataPtr data, SizeT atOffset) {

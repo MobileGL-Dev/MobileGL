@@ -30,7 +30,10 @@ namespace MobileGL {
                     case spv::BuiltIn::BaseVertex:
                         return "mg_BaseVertex";
                     case spv::BuiltIn::BaseInstance:
-                        return "mg_BaseInstance";
+                        // Distinct from the mg_BaseInstance uniform: the program manager
+                        // expands this into an expression that can read the (possibly
+                        // GPU-written) indirect command buffer.
+                        return "mg_BaseInstanceLowered";
                     case spv::BuiltIn::DrawIndex:
                         return "mg_DrawID";
                     default:

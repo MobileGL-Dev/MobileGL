@@ -8,6 +8,7 @@
 
 #pragma once
 #include <Includes.h>
+#include <MG_Backend/BackendObject.h>
 #include <MG_State/GLState/FramebufferState/FramebufferObject.h>
 #include <MG_State/GLState/TextureState/TextureState.h>
 #include <MG_State/GLState/SamplerState/SamplerObject.h>
@@ -98,6 +99,16 @@ namespace MobileGL::MG_Backend::DirectGLES {
     // True when the backend ES context is current on the calling thread, i.e.
     // immediate buffer ops may issue GL calls right now.
     Bool IsBackendContextCurrentOnThisThread();
+    // GL fence sync objects, backed by native ES fences. FenceSync returns null
+    // (the frontend then falls back to an always-signaled sync) when the calling
+    // thread does not own the ES context. Waits/queries degrade to "signaled" in
+    // the same situation, and handles created under a since-destroyed ES context
+    // are always treated as signaled.
+    BackendSyncHandle FenceSync();
+    GLenum ClientWaitSync(BackendSyncHandle sync, GLbitfield flags, GLuint64 timeout);
+    void WaitSync(BackendSyncHandle sync, GLbitfield flags, GLuint64 timeout);
+    void DeleteSync(BackendSyncHandle sync);
+    Bool GetSyncStatus(BackendSyncHandle sync);
     void Present();
     void SetEGLFuncsTable(const MG_External::EGLFunctionsTable& eglFuncs);
     void SetGLESFuncsTable(const MG_External::GLESFunctionsTable& glesFuncs);

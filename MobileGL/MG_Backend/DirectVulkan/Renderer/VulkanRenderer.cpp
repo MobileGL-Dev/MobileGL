@@ -1923,7 +1923,8 @@ void main() {
 
         m_pipelineFactory = MakeUnique<PipelineFactory>(m_device, m_config);
         MOBILEGL_ASSERT(m_pipelineFactory != nullptr, "PipelineFactory creation failed.");
-        m_programFactory = MakeUnique<ProgramFactory>(m_device, m_config, maxProgramBindings);
+        m_programFactory = MakeUnique<ProgramFactory>(m_device, m_config, maxProgramBindings,
+                                                      m_shaderDrawParametersFeatureEnabled);
         MOBILEGL_ASSERT(m_programFactory != nullptr, "ProgramFactory creation failed.");
 
         m_samplerManager = MakeUnique<VkSamplerManager>();
@@ -5414,6 +5415,41 @@ void main() {
             VkRenderPassManager::EndRenderPass(frame.commandBuffer);
         }
         return frame.commandBuffer;
+    }
+
+    Uint64 VulkanRenderer::GetCurrentFrameSerial() const {
+        return m_bufferManager.GetFrameSerial();
+    }
+
+    Bool VulkanRenderer::IsFrameSerialComplete(Uint64 serial) const {
+        return serial <= m_bufferManager.GetCompletedSerial();
+    }
+
+    Bool VulkanRenderer::WaitForFrameSerial(Uint64 serial, Uint64 timeoutNs) {
+        (void)timeoutNs;
+        if (IsFrameSerialComplete(serial)) {
+            return true;
+        }
+        // Work recorded under the current serial has not been submitted yet
+        // (submission happens in Present, on this same thread), so blocking
+        // can never make progress; the caller reports a timeout instead.
+        if (serial >= m_bufferManager.GetFrameSerial()) {
+            return false;
+        }
+        if (m_device == VK_NULL_HANDLE || m_graphicsQueue == VK_NULL_HANDLE) {
+            return true;
+        }
+        // The serial was submitted but has not been observed complete. Frame
+        // fences are only waited on when their slot is reused, so the simplest
+        // safe wait is to drain the graphics queue; this over-waits (bounded
+        // by the in-flight frame count) but never deadlocks.
+        const VkResult result = vkQueueWaitIdle(m_graphicsQueue);
+        if (result != VK_SUCCESS) {
+            MGLOG_E("WaitForFrameSerial: vkQueueWaitIdle returned %d", result);
+            return false;
+        }
+        m_bufferManager.NotifyDeviceIdle();
+        return true;
     }
 
     void VulkanRenderer::Present() {

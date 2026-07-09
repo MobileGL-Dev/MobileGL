@@ -27,6 +27,12 @@ namespace MobileGL {
                 // Only for backends without native draw-parameter support (DirectGLES).
                 static bool LowerDrawParametersForEssl(const Vector<Uint32>& inputBinary,
                                                        Vector<uint32_t>& outputBinary);
+                // Rebases loads of the InstanceIndex builtin to (InstanceIndex - BaseInstance) so
+                // shaders see GL's zero-based gl_InstanceID. Vertex shaders only; DirectVulkan
+                // backend only (glslang's relaxed mode aliases gl_InstanceID to gl_InstanceIndex,
+                // which wrongly includes baseInstance).
+                static bool RebaseInstanceIndexForVulkan(const Vector<Uint32>& inputBinary,
+                                                         Vector<uint32_t>& outputBinary);
                 static Result<String> DecompileShader(SpvcSession& session);
             };
         } // namespace ShaderTranspiler

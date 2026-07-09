@@ -8,6 +8,7 @@
 
 #pragma once
 #include <Includes.h>
+#include <MG_Backend/BackendObject.h>
 #include "Renderer/VulkanRenderer.h"
 
 namespace MobileGL::MG_Backend::DirectVulkan {
@@ -89,5 +90,14 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     void GetTexImage(GLenum target, GLint level, GLenum format, GLenum type, GLvoid* pixels);
     void GetTextureImage(const SharedPtr<MG_State::GLState::ITextureObject>& texture, TextureUploadTarget uploadTarget,
                          GLint level, GLenum format, GLenum type, GLsizei bufSize, GLvoid* pixels);
+    // GL fence sync objects, mapped onto the renderer's frame-serial busy
+    // tracking: a fence captures the frame serial current at creation and is
+    // signaled once every command recorded under that serial has completed on
+    // the GPU.
+    BackendSyncHandle FenceSync();
+    GLenum ClientWaitSync(BackendSyncHandle sync, GLbitfield flags, GLuint64 timeout);
+    void WaitSync(BackendSyncHandle sync, GLbitfield flags, GLuint64 timeout);
+    void DeleteSync(BackendSyncHandle sync);
+    Bool GetSyncStatus(BackendSyncHandle sync);
     void Present();
 } // namespace MobileGL::MG_Backend::DirectVulkan
