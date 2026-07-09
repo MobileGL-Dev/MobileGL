@@ -28,6 +28,7 @@
 #include <cctype>
 #include <cstdlib>
 #include <cstring>
+#include <regex>
 
 namespace MobileGL::MG_Backend::DirectGLES {
     constexpr Bool PREFER_MAP_BUFFER_RANGE_FOR_BUFFER_SYNC = false;
@@ -178,6 +179,63 @@ namespace MobileGL::MG_Backend::DirectGLES {
             break;
         }
         return source;
+    }
+
+    // The transpile pipeline invents image binding numbers: when the GL source declares
+    // an image uniform without layout(binding), glslang auto-assigns one (desktop GL
+    // allows that and lets the app pick the unit with glUniform1i, which ES forbids on
+    // image uniforms). The unit the app actually addresses lives in frontend state: the
+    // layout(binding) reflected at link time, or whatever glUniform1i stored afterwards.
+    // Rewrite every image uniform declaration to that unit so imageLoad/Store hits the
+    // unit the app bound with glBindImageTexture.
+    String RebindImageUniformsToFrontendUnits(
+        String source, const SharedPtr<MG_State::GLState::ProgramObject>& stateProgramObject) {
+        if (!stateProgramObject || source.find("image") == String::npos) {
+            return source;
+        }
+        static const std::regex imageDeclRegex(
+            R"((layout\s*\(([^)]*)\)\s*)?uniform\s+(?:(?:readonly|writeonly|coherent|volatile|restrict|highp|mediump|lowp)\s+)*[iu]?image[A-Za-z0-9]+\s+([A-Za-z_][A-Za-z0-9_]*)\s*(\[[^\]]*\])?\s*;)");
+        static const std::regex bindingValueRegex(R"(binding\s*=\s*\d+)");
+
+        String result;
+        result.reserve(source.size());
+        SizeT lineStart = 0;
+        while (lineStart <= source.size()) {
+            const SizeT lineEnd = source.find('\n', lineStart);
+            const Bool lastLine = lineEnd == String::npos;
+            String line = source.substr(lineStart, lastLine ? String::npos : lineEnd - lineStart);
+
+            std::smatch match;
+            if (std::regex_search(line, match, imageDeclRegex)) {
+                const String name = match[3].str();
+                Int location = stateProgramObject->GetUniformLocation(name);
+                if (location < 0) {
+                    location = stateProgramObject->GetUniformLocation(name + "[0]");
+                }
+                if (location >= 0) {
+                    const Int unit = stateProgramObject->GetUniformSamplerOrImageUnitIndex(location);
+                    if (unit >= 0) {
+                        const String bindingText = "binding = " + std::to_string(unit);
+                        if (std::regex_search(line, bindingValueRegex)) {
+                            line = std::regex_replace(line, bindingValueRegex, bindingText);
+                        } else if (match[1].matched) {
+                            const SizeT layoutOpen = line.find('(', match.position(1));
+                            line.insert(layoutOpen + 1, bindingText + ", ");
+                        } else {
+                            line.insert(match.position(0), "layout(" + bindingText + ") ");
+                        }
+                    }
+                }
+            }
+
+            result += line;
+            if (lastLine) {
+                break;
+            }
+            result += '\n';
+            lineStart = lineEnd + 1;
+        }
+        return result;
     }
 
     namespace BufferImpl {
@@ -2025,6 +2083,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
                 source = result;
 
+                source = RebindImageUniformsToFrontendUnits(std::move(source), stateProgramObject);
                 source = RemoveLayoutBinding(source);
                 source = ProcessOutColorLocations(source);
                 source = ForceFlatIntegerVaryings(source, glShaderType);
