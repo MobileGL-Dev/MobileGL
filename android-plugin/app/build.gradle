@@ -32,6 +32,21 @@ def mobileGlAbiFilters = {
             .findAll { !it.isEmpty() }
 }
 
+// Calendar versioning: major = two-digit year, minor = month. The build
+// identifier is the short commit hash, giving version names like 26.07.4e558ee.
+def mobileGlVersionMajor = 26
+def mobileGlVersionMinor = 7
+def mobileGlGitShortHash = {
+    try {
+        def proc = ['git', 'rev-parse', '--short=7', 'HEAD'].execute(null, rootDir)
+        proc.waitFor()
+        def hash = proc.in.text.trim()
+        (proc.exitValue() == 0 && hash) ? hash : 'nogit'
+    } catch (Exception ignored) {
+        'nogit'
+    }
+}()
+
 android {
     namespace 'top.mobilegl.plugin'
     compileSdk 34
@@ -40,8 +55,8 @@ android {
     defaultConfig {
         minSdk 26
         targetSdk 34
-        versionCode 1
-        versionName 'dev'
+        versionCode mobileGlVersionMajor * 100 + mobileGlVersionMinor
+        versionName String.format('%d.%02d.%s', mobileGlVersionMajor, mobileGlVersionMinor, mobileGlGitShortHash)
 
         ndk {
             def abiFiltersOverride = mobileGlAbiFilters()
