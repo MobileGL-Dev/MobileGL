@@ -80,11 +80,16 @@ namespace MobileGL::MG_State {
 
         void GLContext::MarkBufferObjectForDeletion(Uint index) {
             if (ValidateBufferObject(index)) {
+                // GL semantics: deleting a buffer detaches it only from the CURRENT
+                // context's bindings, including the currently bound VAO's attachment
+                // points; attachments in other VAOs must survive (the shared_ptr keeps
+                // the data object alive, matching the spec's deferred deletion). The
+                // previous every-VAO scan was wrong per spec and O(VAOs) per delete —
+                // with one VAO per chunk section, vanilla's steady buffer churn made it
+                // dominate the render thread and FPS decay over session time.
                 auto bufferObject = m_bufferState.GetBufferObject(index);
-                auto& vaos = m_vertexArrayState.GetAllVertexArrays();
-                for (auto& vao : vaos) {
-                    if (vao == nullptr) continue;
-
+                const auto& vao = m_vertexArrayState.GetBoundVertexArray();
+                if (vao != nullptr) {
                     if (vao->GetIndexBufferBindingSlot().GetBoundObject() == bufferObject) {
                         vao->GetIndexBufferBindingSlot().Bind(nullptr);
                     }

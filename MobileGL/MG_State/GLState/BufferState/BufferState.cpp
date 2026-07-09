@@ -64,7 +64,9 @@ namespace MobileGL::MG_State::GLState {
                         }
                     }
                 }
-                m_bufferObjects.erase(it);
+                // Key-based erase skips FastSTL's successor-iterator scan, which is
+                // pure overhead here and dominates delete-heavy frames.
+                m_bufferObjects.erase(index);
             }
             m_indexGenerator.Delete(index);
         }

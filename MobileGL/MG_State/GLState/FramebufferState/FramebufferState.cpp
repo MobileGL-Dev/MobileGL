@@ -65,7 +65,7 @@ namespace MobileGL::MG_State::GLState {
                         bindingSlot.Bind(GetFramebufferObject(0));
                     }
                 }
-                m_framebufferObjects.erase(it);
+                m_framebufferObjects.erase(index);
             }
             m_indexGenerator.Delete(index);
         }
