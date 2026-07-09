@@ -7,14 +7,20 @@
         android:theme="@style/Theme.MobileGLPlugin">
 
         <activity
-            android:name=".PluginActivity"
+            android:name=".PostActivity"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|uiMode"
             android:exported="true"
-            android:theme="@style/Theme.MobileGLPlugin.NoDisplay">
+            android:theme="@style/Theme.MobileGLPlugin">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <activity
+            android:name=".PluginActivity"
+            android:exported="true"
+            android:theme="@style/Theme.MobileGLPlugin.NoDisplay" />
 
         <meta-data
             android:name="fclPlugin"

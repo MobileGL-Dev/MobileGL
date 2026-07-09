@@ -193,6 +193,8 @@ set(SOURCE_FILES
     MobileGL/MG_Util/BackendLoaders/OpenGL/Loader.cpp
     MobileGL/MG_Util/BackendLoaders/Vulkan/Loader.cpp
 
+    MobileGL/MG_Util/SelfTest/DriverPost.cpp
+
     MobileGL/MG_Util/Texture/PixelStoreProcessor.cpp
     MobileGL/MG_Util/Texture/TextureFormatProcessor.cpp
 
@@ -285,6 +287,12 @@ if (APPLE AND NOT MOBILEGL_IOS)
         MobileGL/MG_Impl/CGLImpl/Exporting/Definitions.cpp
         MobileGL/MG_Impl/DyldInterpose/DyldInterpose.cpp
         MobileGL/MG_Impl/NSOpenGLImpl/NSOpenGLImpl.cpp
+    )
+endif()
+
+if (ANDROID)
+    list(APPEND SOURCE_FILES
+        MobileGL/MG_Util/SelfTest/DriverPostJni.cpp
     )
 endif()
 
