@@ -850,3 +850,165 @@ TEST_F(GeneralVertexArrayTest, General_CurrentVertexAttribQueryRejectsOutOfRange
     EXPECT_EQ(uints[0], 1u);
 }
 
+// ---- newly-implemented glVertexAttrib* current-value setter funnels -------------------------------
+
+// Family A: the d/s/bv/iv/uiv/usv forms are value-preserving, NOT normalized; and the short/scalar
+// forms fill omitted components with (0,0,1).
+TEST_F(GeneralVertexArrayTest, CurrentAttrib_NonNormalizedValuePreserving) {
+    CreateVAO();
+    GLfloat out[4];
+
+    // 3-component short: 32767 must stay 32767.0f (proves no normalization), w filled to 1.
+    VertexAttrib3s(1, -5, 0, 32767);
+    GetVertexAttribfv(1, GL_CURRENT_VERTEX_ATTRIB, out);
+    EXPECT_FLOAT_EQ(out[0], -5.0f);
+    EXPECT_FLOAT_EQ(out[1], 0.0f);
+    EXPECT_FLOAT_EQ(out[2], 32767.0f);
+    EXPECT_FLOAT_EQ(out[3], 1.0f);
+
+    // 4-component byte vector: w comes from v[3], not forced to 1.
+    const GLbyte bytes[4] = {1, 2, 3, 4};
+    VertexAttrib4bv(1, bytes);
+    GetVertexAttribfv(1, GL_CURRENT_VERTEX_ATTRIB, out);
+    EXPECT_FLOAT_EQ(out[0], 1.0f);
+    EXPECT_FLOAT_EQ(out[3], 4.0f);
+
+    // ushort 65535 must NOT normalize to 1.0.
+    const GLushort ushorts[4] = {65535, 0, 0, 0};
+    VertexAttrib4usv(1, ushorts);
+    GetVertexAttribfv(1, GL_CURRENT_VERTEX_ATTRIB, out);
+    EXPECT_FLOAT_EQ(out[0], 65535.0f);
+
+    // 1-component double: fills (0,0,1).
+    VertexAttrib1d(1, 0.5);
+    GetVertexAttribfv(1, GL_CURRENT_VERTEX_ATTRIB, out);
+    EXPECT_FLOAT_EQ(out[0], 0.5f);
+    EXPECT_FLOAT_EQ(out[1], 0.0f);
+    EXPECT_FLOAT_EQ(out[2], 0.0f);
+    EXPECT_FLOAT_EQ(out[3], 1.0f);
+
+    EXPECT_EQ(GetError(), GL_NO_ERROR);
+}
+
+// Family B: GL 3.3 Core signed normalization is (2c+1)/(2^b-1) -- maps the full range to exactly
+// [-1,1] (byte -128 -> -1, 127 -> +1) and cannot represent 0 exactly (0 -> 1/255). This is the test
+// that fails against the GL 4.2 c/(2^(b-1)-1) rule.
+TEST_F(GeneralVertexArrayTest, CurrentAttrib_SignedNormalizedUsesGl33Formula) {
+    CreateVAO();
+    GLfloat out[4];
+
+    const GLbyte extremes[4] = {-128, 127, 0, 127};
+    VertexAttrib4Nbv(1, extremes);
+    GetVertexAttribfv(1, GL_CURRENT_VERTEX_ATTRIB, out);
+    EXPECT_FLOAT_EQ(out[0], -1.0f);              // exact, no clamp
+    EXPECT_FLOAT_EQ(out[1], 1.0f);               // exact
+    EXPECT_FLOAT_EQ(out[2], 1.0f / 255.0f);      // 0 -> 1/255, NOT 0.0
+    EXPECT_FLOAT_EQ(out[3], 1.0f);
+
+    const GLshort sExtremes[4] = {-32768, 32767, 0, 0};
+    VertexAttrib4Nsv(1, sExtremes);
+    GetVertexAttribfv(1, GL_CURRENT_VERTEX_ATTRIB, out);
+    EXPECT_FLOAT_EQ(out[0], -1.0f);
+    EXPECT_FLOAT_EQ(out[1], 1.0f);
+
+    // 32-bit signed: endpoints must be exact -- fails if computed in float or if 2*INT_MAX overflows.
+    const GLint iExtremes[4] = {INT_MIN, INT_MAX, 0, 0};
+    VertexAttrib4Niv(1, iExtremes);
+    GetVertexAttribfv(1, GL_CURRENT_VERTEX_ATTRIB, out);
+    EXPECT_FLOAT_EQ(out[0], -1.0f);
+    EXPECT_FLOAT_EQ(out[1], 1.0f);
+
+    EXPECT_EQ(GetError(), GL_NO_ERROR);
+}
+
+// Family B unsigned normalization is unchanged across versions: c/(2^b-1), 0 -> 0, max -> 1.
+TEST_F(GeneralVertexArrayTest, CurrentAttrib_UnsignedNormalized) {
+    CreateVAO();
+    GLfloat out[4];
+
+    const GLushort us[4] = {0, 65535, 0, 0};
+    VertexAttrib4Nusv(1, us);
+    GetVertexAttribfv(1, GL_CURRENT_VERTEX_ATTRIB, out);
+    EXPECT_FLOAT_EQ(out[0], 0.0f);
+    EXPECT_FLOAT_EQ(out[1], 1.0f);
+
+    // 32-bit unsigned endpoints must be exact (needs double divisor).
+    const GLuint ui[4] = {0u, 0xFFFFFFFFu, 0u, 0u};
+    VertexAttrib4Nuiv(1, ui);
+    GetVertexAttribfv(1, GL_CURRENT_VERTEX_ATTRIB, out);
+    EXPECT_FLOAT_EQ(out[0], 0.0f);
+    EXPECT_FLOAT_EQ(out[1], 1.0f);
+
+    EXPECT_EQ(GetError(), GL_NO_ERROR);
+}
+
+// Family C: the I* forms write the INTEGER view verbatim (no float round-trip), fill w with integer 1,
+// and route signed/unsigned to the right setter.
+TEST_F(GeneralVertexArrayTest, CurrentAttrib_IntegerFunnels) {
+    CreateVAO();
+
+    // Scalar signed: w must be the integer 1, not 0.
+    VertexAttribI1i(1, 7);
+    GLint iv[4];
+    GetVertexAttribIiv(1, GL_CURRENT_VERTEX_ATTRIB, iv);
+    EXPECT_EQ(iv[0], 7);
+    EXPECT_EQ(iv[1], 0);
+    EXPECT_EQ(iv[2], 0);
+    EXPECT_EQ(iv[3], 1);
+
+    // INT_MAX must survive verbatim -- would corrupt to 2147483648 through the float view.
+    const GLint big[4] = {INT_MAX, 0, 0, 0};
+    VertexAttribI4iv(1, big);
+    GetVertexAttribIiv(1, GL_CURRENT_VERTEX_ATTRIB, iv);
+    EXPECT_EQ(iv[0], INT_MAX);
+
+    // I4bv sign-extends into the signed view.
+    const GLbyte sb[4] = {-100, 1, 2, 3};
+    VertexAttribI4bv(1, sb);
+    GetVertexAttribIiv(1, GL_CURRENT_VERTEX_ATTRIB, iv);
+    EXPECT_EQ(iv[0], -100);
+
+    // I4ubv zero-extends into the UNSIGNED view (not the normalized-float 4Nubv path).
+    const GLubyte ub[4] = {200, 0, 0, 0};
+    VertexAttribI4ubv(1, ub);
+    GLuint uv[4];
+    GetVertexAttribIuiv(1, GL_CURRENT_VERTEX_ATTRIB, uv);
+    EXPECT_EQ(uv[0], 200u);
+
+    // I2uiv reads exactly 2 elements; w == 1u.
+    const GLuint two[2] = {5u, 6u};
+    VertexAttribI2uiv(1, two);
+    GetVertexAttribIuiv(1, GL_CURRENT_VERTEX_ATTRIB, uv);
+    EXPECT_EQ(uv[0], 5u);
+    EXPECT_EQ(uv[1], 6u);
+    EXPECT_EQ(uv[2], 0u);
+    EXPECT_EQ(uv[3], 1u);
+
+    EXPECT_EQ(GetError(), GL_NO_ERROR);
+}
+
+// Family D: glGetVertexAttribdv reports the float-view current value as four doubles, needs no bound
+// VAO, and enforces the same error rules as its float sibling.
+TEST_F(GeneralVertexArrayTest, CurrentAttrib_GetVertexAttribdv) {
+    CreateVAO();
+
+    VertexAttrib4f(1, 0.25f, 0.5f, 0.75f, 1.0f);
+    GLdouble d[4] = {-1.0, -1.0, -1.0, -1.0};
+    GetVertexAttribdv(1, GL_CURRENT_VERTEX_ATTRIB, d);
+    EXPECT_EQ(GetError(), GL_NO_ERROR);
+    EXPECT_DOUBLE_EQ(d[0], 0.25);
+    EXPECT_DOUBLE_EQ(d[1], 0.5);
+    EXPECT_DOUBLE_EQ(d[2], 0.75);
+    EXPECT_DOUBLE_EQ(d[3], 1.0);
+
+    // Null params -> GL_INVALID_VALUE, nothing written.
+    GetVertexAttribdv(1, GL_CURRENT_VERTEX_ATTRIB, nullptr);
+    EXPECT_EQ(GetError(), GL_INVALID_VALUE);
+
+    // Out-of-range index -> GL_INVALID_VALUE, params untouched.
+    GLdouble d2[4] = {9.0, 9.0, 9.0, 9.0};
+    GetVertexAttribdv(VertexArrayImpl::GetMaxVertexAttribs(), GL_CURRENT_VERTEX_ATTRIB, d2);
+    EXPECT_EQ(GetError(), GL_INVALID_VALUE);
+    EXPECT_DOUBLE_EQ(d2[0], 9.0);
+}
+

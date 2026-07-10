@@ -16,6 +16,31 @@
 
 namespace MobileGL::MG_Impl::GLImpl {
     namespace {
+        // GL 3.3 Core signed normalized fixed-point -> float (spec §2.1.2 Eq 2.2):
+        //   f = (2c + 1) / (2^b - 1)
+        // This maps the FULL signed range [-2^(b-1), 2^(b-1)-1] onto exactly [-1, 1] (so -128 -> -1.0
+        // and 127 -> +1.0 with no clamp), and consequently cannot represent 0 exactly (0 -> 1/(2^b-1)).
+        // NOTE: GL 4.2 later switched signed normalization to f = max(c/(2^(b-1)-1), -1); do NOT use that
+        // form here -- it is not GL 3.3 Core. Unsigned normalization (f = c/(2^b-1)) is unchanged.
+        // The bit width fixes the arithmetic type: 8/16-bit stay exact in int/float, but the 32-bit forms
+        // must use double because 2*INT_MAX overflows int32 and neither 2^32-1 nor 2^31-1 is float-exact.
+        constexpr GLfloat NormalizeSignedByte(GLbyte c) {   // b = 8,  divisor 2^8 - 1  = 255
+            return (2 * static_cast<int>(c) + 1) / 255.0f;
+        }
+        constexpr GLfloat NormalizeSignedShort(GLshort c) { // b = 16, divisor 2^16 - 1 = 65535
+            return (2 * static_cast<int>(c) + 1) / 65535.0f;
+        }
+        constexpr GLfloat NormalizeSignedInt(GLint c) {     // b = 32, divisor 2^32 - 1 (double!)
+            return static_cast<GLfloat>((2.0 * static_cast<double>(c) + 1.0) / 4294967295.0);
+        }
+        constexpr GLfloat NormalizeUnsignedShort(GLushort c) { // b = 16
+            return static_cast<GLfloat>(c) / 65535.0f;
+        }
+        constexpr GLfloat NormalizeUnsignedInt(GLuint c) {     // b = 32 (double!)
+            return static_cast<GLfloat>(static_cast<double>(c) / 4294967295.0);
+        }
+        // (b = 8 unsigned normalization is VertexAttrib4Nub's  x * (1/255).)
+
         static bool ValidateCurrentVertexAttribIndex(GLuint index, const char* funcName) {
             if (!VertexArrayImpl::ValidateVertexAttributeIndex(index)) return false;
             if (index == 0) {
@@ -500,6 +525,152 @@ namespace MobileGL::MG_Impl::GLImpl {
                        static_cast<GLfloat>(v[3]));
     }
 
+    // ---- Stubbed glVertexAttrib* current-value setters, funnelled into the primitives above -------
+    // These add ONLY a null-pointer guard: index validation (incl. the index-0 rejection) is inherited
+    // from VertexAttrib4f / VertexAttribI4i / VertexAttribI4ui via ValidateCurrentVertexAttribIndex, so
+    // the funnels must not re-validate it. Component fill matches the primitives: unspecified middle
+    // components are 0, unspecified w is 1 (integer 1 for the I* forms).
+#define MG_ATTRIB_NULL_GUARD(ptr)                                                                                      \
+    if (!(ptr)) {                                                                                                      \
+        MG_State::pGLContext->RecordError(                                                                            \
+            ErrorCode::InvalidValue,                                                                                   \
+            MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__, "value pointer cannot be null."));               \
+        return;                                                                                                        \
+    }
+
+    // Family A -- GLdouble, value-preserving narrowing to float.
+    void VertexAttrib1d(GLuint index, GLdouble x) { VertexAttrib4f(index, static_cast<GLfloat>(x), 0.0f, 0.0f, 1.0f); }
+    void VertexAttrib2d(GLuint index, GLdouble x, GLdouble y) {
+        VertexAttrib4f(index, static_cast<GLfloat>(x), static_cast<GLfloat>(y), 0.0f, 1.0f);
+    }
+    void VertexAttrib3d(GLuint index, GLdouble x, GLdouble y, GLdouble z) {
+        VertexAttrib4f(index, static_cast<GLfloat>(x), static_cast<GLfloat>(y), static_cast<GLfloat>(z), 1.0f);
+    }
+    void VertexAttrib4d(GLuint index, GLdouble x, GLdouble y, GLdouble z, GLdouble w) {
+        VertexAttrib4f(index, static_cast<GLfloat>(x), static_cast<GLfloat>(y), static_cast<GLfloat>(z),
+                       static_cast<GLfloat>(w));
+    }
+    void VertexAttrib1dv(GLuint index, const GLdouble* v) { MG_ATTRIB_NULL_GUARD(v) VertexAttrib1d(index, v[0]); }
+    void VertexAttrib2dv(GLuint index, const GLdouble* v) { MG_ATTRIB_NULL_GUARD(v) VertexAttrib2d(index, v[0], v[1]); }
+    void VertexAttrib3dv(GLuint index, const GLdouble* v) {
+        MG_ATTRIB_NULL_GUARD(v) VertexAttrib3d(index, v[0], v[1], v[2]);
+    }
+    void VertexAttrib4dv(GLuint index, const GLdouble* v) {
+        MG_ATTRIB_NULL_GUARD(v) VertexAttrib4d(index, v[0], v[1], v[2], v[3]);
+    }
+
+    // Family A -- GLshort, value-preserving (sign kept), NOT normalized.
+    void VertexAttrib1s(GLuint index, GLshort x) { VertexAttrib4f(index, static_cast<GLfloat>(x), 0.0f, 0.0f, 1.0f); }
+    void VertexAttrib2s(GLuint index, GLshort x, GLshort y) {
+        VertexAttrib4f(index, static_cast<GLfloat>(x), static_cast<GLfloat>(y), 0.0f, 1.0f);
+    }
+    void VertexAttrib3s(GLuint index, GLshort x, GLshort y, GLshort z) {
+        VertexAttrib4f(index, static_cast<GLfloat>(x), static_cast<GLfloat>(y), static_cast<GLfloat>(z), 1.0f);
+    }
+    void VertexAttrib4s(GLuint index, GLshort x, GLshort y, GLshort z, GLshort w) {
+        VertexAttrib4f(index, static_cast<GLfloat>(x), static_cast<GLfloat>(y), static_cast<GLfloat>(z),
+                       static_cast<GLfloat>(w));
+    }
+    void VertexAttrib1sv(GLuint index, const GLshort* v) { MG_ATTRIB_NULL_GUARD(v) VertexAttrib1s(index, v[0]); }
+    void VertexAttrib2sv(GLuint index, const GLshort* v) { MG_ATTRIB_NULL_GUARD(v) VertexAttrib2s(index, v[0], v[1]); }
+    void VertexAttrib3sv(GLuint index, const GLshort* v) {
+        MG_ATTRIB_NULL_GUARD(v) VertexAttrib3s(index, v[0], v[1], v[2]);
+    }
+    void VertexAttrib4sv(GLuint index, const GLshort* v) {
+        MG_ATTRIB_NULL_GUARD(v) VertexAttrib4s(index, v[0], v[1], v[2], v[3]);
+    }
+
+    // Family A -- 4-component *v with no scalar sibling, value-preserving. NOT the normalized 4N* forms.
+    void VertexAttrib4bv(GLuint index, const GLbyte* v) {
+        MG_ATTRIB_NULL_GUARD(v)
+        VertexAttrib4f(index, static_cast<GLfloat>(v[0]), static_cast<GLfloat>(v[1]), static_cast<GLfloat>(v[2]),
+                       static_cast<GLfloat>(v[3]));
+    }
+    void VertexAttrib4iv(GLuint index, const GLint* v) {
+        MG_ATTRIB_NULL_GUARD(v)
+        VertexAttrib4f(index, static_cast<GLfloat>(v[0]), static_cast<GLfloat>(v[1]), static_cast<GLfloat>(v[2]),
+                       static_cast<GLfloat>(v[3]));
+    }
+    void VertexAttrib4uiv(GLuint index, const GLuint* v) {
+        MG_ATTRIB_NULL_GUARD(v)
+        VertexAttrib4f(index, static_cast<GLfloat>(v[0]), static_cast<GLfloat>(v[1]), static_cast<GLfloat>(v[2]),
+                       static_cast<GLfloat>(v[3]));
+    }
+    void VertexAttrib4usv(GLuint index, const GLushort* v) {
+        MG_ATTRIB_NULL_GUARD(v)
+        VertexAttrib4f(index, static_cast<GLfloat>(v[0]), static_cast<GLfloat>(v[1]), static_cast<GLfloat>(v[2]),
+                       static_cast<GLfloat>(v[3]));
+    }
+
+    // Family B -- normalized 4N* forms (GL 3.3 Core Eq 2.1/2.2 via the Normalize* helpers).
+    void VertexAttrib4Nbv(GLuint index, const GLbyte* v) {
+        MG_ATTRIB_NULL_GUARD(v)
+        VertexAttrib4f(index, NormalizeSignedByte(v[0]), NormalizeSignedByte(v[1]), NormalizeSignedByte(v[2]),
+                       NormalizeSignedByte(v[3]));
+    }
+    void VertexAttrib4Nsv(GLuint index, const GLshort* v) {
+        MG_ATTRIB_NULL_GUARD(v)
+        VertexAttrib4f(index, NormalizeSignedShort(v[0]), NormalizeSignedShort(v[1]), NormalizeSignedShort(v[2]),
+                       NormalizeSignedShort(v[3]));
+    }
+    void VertexAttrib4Niv(GLuint index, const GLint* v) {
+        MG_ATTRIB_NULL_GUARD(v)
+        VertexAttrib4f(index, NormalizeSignedInt(v[0]), NormalizeSignedInt(v[1]), NormalizeSignedInt(v[2]),
+                       NormalizeSignedInt(v[3]));
+    }
+    void VertexAttrib4Nusv(GLuint index, const GLushort* v) {
+        MG_ATTRIB_NULL_GUARD(v)
+        VertexAttrib4f(index, NormalizeUnsignedShort(v[0]), NormalizeUnsignedShort(v[1]),
+                       NormalizeUnsignedShort(v[2]), NormalizeUnsignedShort(v[3]));
+    }
+    void VertexAttrib4Nuiv(GLuint index, const GLuint* v) {
+        MG_ATTRIB_NULL_GUARD(v)
+        VertexAttrib4f(index, NormalizeUnsignedInt(v[0]), NormalizeUnsignedInt(v[1]), NormalizeUnsignedInt(v[2]),
+                       NormalizeUnsignedInt(v[3]));
+    }
+
+    // Family C -- pure integer forms. Signed -> VertexAttribI4i (sign-extend), unsigned ->
+    // VertexAttribI4ui (zero-extend). w defaults to the integer 1 / 1u. Never touches the float view.
+    void VertexAttribI1i(GLuint index, GLint x) { VertexAttribI4i(index, x, 0, 0, 1); }
+    void VertexAttribI2i(GLuint index, GLint x, GLint y) { VertexAttribI4i(index, x, y, 0, 1); }
+    void VertexAttribI3i(GLuint index, GLint x, GLint y, GLint z) { VertexAttribI4i(index, x, y, z, 1); }
+    void VertexAttribI1ui(GLuint index, GLuint x) { VertexAttribI4ui(index, x, 0u, 0u, 1u); }
+    void VertexAttribI2ui(GLuint index, GLuint x, GLuint y) { VertexAttribI4ui(index, x, y, 0u, 1u); }
+    void VertexAttribI3ui(GLuint index, GLuint x, GLuint y, GLuint z) { VertexAttribI4ui(index, x, y, z, 1u); }
+    void VertexAttribI1iv(GLuint index, const GLint* v) { MG_ATTRIB_NULL_GUARD(v) VertexAttribI1i(index, v[0]); }
+    void VertexAttribI2iv(GLuint index, const GLint* v) { MG_ATTRIB_NULL_GUARD(v) VertexAttribI2i(index, v[0], v[1]); }
+    void VertexAttribI3iv(GLuint index, const GLint* v) {
+        MG_ATTRIB_NULL_GUARD(v) VertexAttribI3i(index, v[0], v[1], v[2]);
+    }
+    void VertexAttribI1uiv(GLuint index, const GLuint* v) { MG_ATTRIB_NULL_GUARD(v) VertexAttribI1ui(index, v[0]); }
+    void VertexAttribI2uiv(GLuint index, const GLuint* v) {
+        MG_ATTRIB_NULL_GUARD(v) VertexAttribI2ui(index, v[0], v[1]);
+    }
+    void VertexAttribI3uiv(GLuint index, const GLuint* v) {
+        MG_ATTRIB_NULL_GUARD(v) VertexAttribI3ui(index, v[0], v[1], v[2]);
+    }
+    void VertexAttribI4bv(GLuint index, const GLbyte* v) {
+        MG_ATTRIB_NULL_GUARD(v)
+        VertexAttribI4i(index, static_cast<GLint>(v[0]), static_cast<GLint>(v[1]), static_cast<GLint>(v[2]),
+                        static_cast<GLint>(v[3]));
+    }
+    void VertexAttribI4sv(GLuint index, const GLshort* v) {
+        MG_ATTRIB_NULL_GUARD(v)
+        VertexAttribI4i(index, static_cast<GLint>(v[0]), static_cast<GLint>(v[1]), static_cast<GLint>(v[2]),
+                        static_cast<GLint>(v[3]));
+    }
+    void VertexAttribI4ubv(GLuint index, const GLubyte* v) {
+        MG_ATTRIB_NULL_GUARD(v)
+        VertexAttribI4ui(index, static_cast<GLuint>(v[0]), static_cast<GLuint>(v[1]), static_cast<GLuint>(v[2]),
+                         static_cast<GLuint>(v[3]));
+    }
+    void VertexAttribI4usv(GLuint index, const GLushort* v) {
+        MG_ATTRIB_NULL_GUARD(v)
+        VertexAttribI4ui(index, static_cast<GLuint>(v[0]), static_cast<GLuint>(v[1]), static_cast<GLuint>(v[2]),
+                         static_cast<GLuint>(v[3]));
+    }
+#undef MG_ATTRIB_NULL_GUARD
+
     void GetVertexAttribfv(GLuint index, GLenum pname, GLfloat* params) {
         if (!params) {
             MG_State::pGLContext->RecordError(
@@ -554,6 +725,66 @@ namespace MobileGL::MG_Impl::GLImpl {
                 ErrorCode::InvalidEnum,
                 MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
                                              "Unsupported float vertex attrib pname: " + std::to_string(pname)));
+            return;
+        }
+    }
+
+    // The double query mirrors GetVertexAttribfv exactly (it is the other float-domain getter): the
+    // current value is read from the float view, and float -> double widening is lossless.
+    void GetVertexAttribdv(GLuint index, GLenum pname, GLdouble* params) {
+        if (!params) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidValue,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__, "params pointer cannot be null."));
+            return;
+        }
+        // GL_CURRENT_VERTEX_ATTRIB is context state and returns before TryGetVertexAttribute, so the
+        // index bound has to be enforced up front or an out-of-range index reads past the array.
+        if (!VertexArrayImpl::ValidateVertexAttributeIndex(index)) return;
+        if (!ValidateVertexAttribPname(pname)) return;
+
+        if (IsCurrentVertexAttribQuery(pname)) {
+            const auto& current = MG_State::pGLContext->GetCurrentVertexAttribute(index);
+            params[0] = static_cast<GLdouble>(current.floatValue[0]);
+            params[1] = static_cast<GLdouble>(current.floatValue[1]);
+            params[2] = static_cast<GLdouble>(current.floatValue[2]);
+            params[3] = static_cast<GLdouble>(current.floatValue[3]);
+            return;
+        }
+
+        const MG_State::GLState::VertexAttribute* attr = nullptr;
+        if (!TryGetVertexAttribute(index, &attr)) return;
+
+        switch (pname) {
+        case GL_VERTEX_ATTRIB_ARRAY_ENABLED:
+            params[0] = attr->Enabled ? 1.0 : 0.0;
+            return;
+        case GL_VERTEX_ATTRIB_ARRAY_SIZE:
+            params[0] = static_cast<GLdouble>(attr->Size);
+            return;
+        case GL_VERTEX_ATTRIB_ARRAY_STRIDE:
+            params[0] = static_cast<GLdouble>(attr->Stride);
+            return;
+        case GL_VERTEX_ATTRIB_ARRAY_TYPE:
+            params[0] = static_cast<GLdouble>(MG_Util::ConvertDataTypeToGLEnum(attr->Type));
+            return;
+        case GL_VERTEX_ATTRIB_ARRAY_NORMALIZED:
+            params[0] = attr->Normalized ? 1.0 : 0.0;
+            return;
+        case GL_VERTEX_ATTRIB_ARRAY_BUFFER_BINDING:
+            params[0] = attr->Buffer ? static_cast<GLdouble>(attr->Buffer->GetExternalIndex()) : 0.0;
+            return;
+        case GL_VERTEX_ATTRIB_ARRAY_INTEGER:
+            params[0] = attr->IsInteger ? 1.0 : 0.0;
+            return;
+        case GL_VERTEX_ATTRIB_ARRAY_DIVISOR:
+            params[0] = static_cast<GLdouble>(attr->Divisor);
+            return;
+        default:
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidEnum,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
+                                             "Unsupported double vertex attrib pname: " + std::to_string(pname)));
             return;
         }
     }

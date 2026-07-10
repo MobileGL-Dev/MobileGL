@@ -26,7 +26,53 @@ namespace MobileGL::MG_Impl::GLImpl {
     void VertexAttrib4Nub(GLuint index, GLubyte x, GLubyte y, GLubyte z, GLubyte w);
     void VertexAttrib4Nubv(GLuint index, const GLubyte* v);
     void VertexAttrib4ubv(GLuint index, const GLubyte* v);
+    // Float-domain current-value setters that funnel into VertexAttrib4f. The d/s/bv/iv/uiv/usv
+    // forms are value-preserving (only the 4N* forms normalize per GL 3.3 Core Eq 2.1/2.2).
+    void VertexAttrib1d(GLuint index, GLdouble x);
+    void VertexAttrib2d(GLuint index, GLdouble x, GLdouble y);
+    void VertexAttrib3d(GLuint index, GLdouble x, GLdouble y, GLdouble z);
+    void VertexAttrib4d(GLuint index, GLdouble x, GLdouble y, GLdouble z, GLdouble w);
+    void VertexAttrib1dv(GLuint index, const GLdouble* v);
+    void VertexAttrib2dv(GLuint index, const GLdouble* v);
+    void VertexAttrib3dv(GLuint index, const GLdouble* v);
+    void VertexAttrib4dv(GLuint index, const GLdouble* v);
+    void VertexAttrib1s(GLuint index, GLshort x);
+    void VertexAttrib2s(GLuint index, GLshort x, GLshort y);
+    void VertexAttrib3s(GLuint index, GLshort x, GLshort y, GLshort z);
+    void VertexAttrib4s(GLuint index, GLshort x, GLshort y, GLshort z, GLshort w);
+    void VertexAttrib1sv(GLuint index, const GLshort* v);
+    void VertexAttrib2sv(GLuint index, const GLshort* v);
+    void VertexAttrib3sv(GLuint index, const GLshort* v);
+    void VertexAttrib4sv(GLuint index, const GLshort* v);
+    void VertexAttrib4bv(GLuint index, const GLbyte* v);
+    void VertexAttrib4iv(GLuint index, const GLint* v);
+    void VertexAttrib4uiv(GLuint index, const GLuint* v);
+    void VertexAttrib4usv(GLuint index, const GLushort* v);
+    void VertexAttrib4Nbv(GLuint index, const GLbyte* v);
+    void VertexAttrib4Nsv(GLuint index, const GLshort* v);
+    void VertexAttrib4Niv(GLuint index, const GLint* v);
+    void VertexAttrib4Nusv(GLuint index, const GLushort* v);
+    void VertexAttrib4Nuiv(GLuint index, const GLuint* v);
+    // Pure-integer current-value setters that funnel into VertexAttribI4i / VertexAttribI4ui and
+    // write the integer view, never the float one.
+    void VertexAttribI1i(GLuint index, GLint x);
+    void VertexAttribI2i(GLuint index, GLint x, GLint y);
+    void VertexAttribI3i(GLuint index, GLint x, GLint y, GLint z);
+    void VertexAttribI1ui(GLuint index, GLuint x);
+    void VertexAttribI2ui(GLuint index, GLuint x, GLuint y);
+    void VertexAttribI3ui(GLuint index, GLuint x, GLuint y, GLuint z);
+    void VertexAttribI1iv(GLuint index, const GLint* v);
+    void VertexAttribI2iv(GLuint index, const GLint* v);
+    void VertexAttribI3iv(GLuint index, const GLint* v);
+    void VertexAttribI1uiv(GLuint index, const GLuint* v);
+    void VertexAttribI2uiv(GLuint index, const GLuint* v);
+    void VertexAttribI3uiv(GLuint index, const GLuint* v);
+    void VertexAttribI4bv(GLuint index, const GLbyte* v);
+    void VertexAttribI4sv(GLuint index, const GLshort* v);
+    void VertexAttribI4ubv(GLuint index, const GLubyte* v);
+    void VertexAttribI4usv(GLuint index, const GLushort* v);
     void GetVertexAttribfv(GLuint index, GLenum pname, GLfloat* params);
+    void GetVertexAttribdv(GLuint index, GLenum pname, GLdouble* params);
     void GetVertexAttribiv(GLuint index, GLenum pname, GLint* params);
     void GetVertexAttribPointerv(GLuint index, GLenum pname, void** pointer);
     void GetVertexAttribIiv(GLuint index, GLenum pname, GLint* params);
