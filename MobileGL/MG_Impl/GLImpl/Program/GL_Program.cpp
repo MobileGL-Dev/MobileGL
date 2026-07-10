@@ -8,6 +8,7 @@
 
 #include "GL_Program.h"
 #include "Config.h"
+#include <MG_Impl/GLImpl/VertexArray/Validators.h>
 #include <MG_State/GLState/Core.h>
 #include <MG_Util/Converters/GLToStr/GLEnumConverter.h>
 #include <MG_Util/Converters/GLToMG/ProgramEnumConverter.h>
@@ -270,7 +271,7 @@ namespace MobileGL::MG_Impl::GLImpl {
     }
 
     void BindAttribLocation_State(GLuint program, GLuint index, const GLchar* name) {
-        if (index >= MG_State::GLState::VertexArrayObject::MAX_VERTEX_ATTRIBS) {
+        if (index >= VertexArrayImpl::GetMaxVertexAttribs()) {
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidValue,
                 MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,

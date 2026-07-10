@@ -27,6 +27,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             Vector<SizeT> bindingBaseOffsets;
             Vector<Uint32> bindingAttributeLocations;
             Vector<Bool> bindingUsesClientMemory;
+            // Locations whose array is ENABLED but whose GL format has no VkFormat mapping. They are
+            // absent from `attributes`, so without this mask the draw path cannot tell them apart from
+            // a genuinely disabled array and would silently feed the shader the current attribute value.
+            Uint32 unsupportedAttribMask = 0;
             VkPipelineVertexInputStateCreateInfo state{
                 VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO
             };

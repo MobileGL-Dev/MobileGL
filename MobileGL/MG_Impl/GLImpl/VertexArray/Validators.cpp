@@ -7,12 +7,22 @@
 // End of Source File Header
 
 #include "Validators.h"
+#include <MG_Backend/BackendObjects.h>
 #include <MG_State/GLState/Core.h>
 #include <MG_State/GLState/ErrorState/Error.h>
 #include <MG_Util/Converters/MGToGL/DataTypeConverter.h>
 #include <MG_Util/Converters/MGToStr/DataTypeConverter.h>
 
 namespace MobileGL::MG_Impl::GLImpl::VertexArrayImpl {
+    Uint GetMaxVertexAttribs() {
+        constexpr Uint capacity = static_cast<Uint>(MG_State::GLState::VertexArrayObject::MAX_VERTEX_ATTRIBS);
+        if (!MG_Backend::pActiveBackendObject) return capacity;
+
+        const Int backendLimit = MG_Backend::pActiveBackendObject->GetDynamicParameters().MaxVertexAttribs;
+        if (backendLimit <= 0) return capacity;
+        return std::min(static_cast<Uint>(backendLimit), capacity);
+    }
+
     Bool ValidateVertexArrayName(Uint index) {
         Bool isValid = MG_State::pGLContext->ValidateVertexArrayName(index);
         if (!isValid) {
@@ -37,13 +47,13 @@ namespace MobileGL::MG_Impl::GLImpl::VertexArrayImpl {
     }
 
     Bool ValidateVertexAttributeIndex(Uint index) {
-        if (index >= MG_State::GLState::VertexArrayObject::MAX_VERTEX_ATTRIBS) {
+        const Uint maxVertexAttribs = GetMaxVertexAttribs();
+        if (index >= maxVertexAttribs) {
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidValue,
                 MakeUnique<GenericErrorInfo>(
                     "MG_Impl/GLImpl", "ValidateVertexAttributeIndex",
-                    std::format("Attribute index {} exceeds maximum of {}.", index,
-                                MG_State::GLState::VertexArrayObject::MAX_VERTEX_ATTRIBS - 1)));
+                    std::format("Attribute index {} exceeds maximum of {}.", index, maxVertexAttribs - 1)));
             return false;
         }
         return true;

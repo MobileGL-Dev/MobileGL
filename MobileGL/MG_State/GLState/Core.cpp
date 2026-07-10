@@ -145,9 +145,32 @@ namespace MobileGL::MG_State {
             return m_vertexArrayState.GetBoundVertexArray();
         }
 
+        VertexAttribTypeInfo ClassifyVertexAttribType(GLenum glType) {
+            switch (glType) {
+            case GL_FLOAT: return {VertexAttribBaseType::Float, 1};
+            case GL_FLOAT_VEC2: return {VertexAttribBaseType::Float, 2};
+            case GL_FLOAT_VEC3: return {VertexAttribBaseType::Float, 3};
+            case GL_FLOAT_VEC4: return {VertexAttribBaseType::Float, 4};
+            case GL_INT: return {VertexAttribBaseType::Int, 1};
+            case GL_INT_VEC2: return {VertexAttribBaseType::Int, 2};
+            case GL_INT_VEC3: return {VertexAttribBaseType::Int, 3};
+            case GL_INT_VEC4: return {VertexAttribBaseType::Int, 4};
+            case GL_UNSIGNED_INT: return {VertexAttribBaseType::Uint, 1};
+            case GL_UNSIGNED_INT_VEC2: return {VertexAttribBaseType::Uint, 2};
+            case GL_UNSIGNED_INT_VEC3: return {VertexAttribBaseType::Uint, 3};
+            case GL_UNSIGNED_INT_VEC4: return {VertexAttribBaseType::Uint, 4};
+            default: return {};
+            }
+        }
+
+        // The three accessors below are reachable from backend draw paths with a location taken from
+        // shader reflection, so the bound must be enforced at runtime rather than by MOBILEGL_ASSERT
+        // (which expands to nothing outside debug builds).
         void GLContext::SetCurrentVertexAttributeFloat(Uint index, const Array<Float, 4>& value) {
-            MOBILEGL_ASSERT(index < m_currentVertexAttributes.size(),
-                            "SetCurrentVertexAttributeFloat: index %u is out of range", index);
+            if (index >= m_currentVertexAttributes.size()) {
+                MGLOG_E("SetCurrentVertexAttributeFloat: index %u is out of range", index);
+                return;
+            }
 
             auto& current = m_currentVertexAttributes[index];
             current.floatValue = value;
@@ -158,8 +181,10 @@ namespace MobileGL::MG_State {
         }
 
         void GLContext::SetCurrentVertexAttributeInt(Uint index, const Array<Int32, 4>& value) {
-            MOBILEGL_ASSERT(index < m_currentVertexAttributes.size(),
-                            "SetCurrentVertexAttributeInt: index %u is out of range", index);
+            if (index >= m_currentVertexAttributes.size()) {
+                MGLOG_E("SetCurrentVertexAttributeInt: index %u is out of range", index);
+                return;
+            }
 
             auto& current = m_currentVertexAttributes[index];
             current.intValue = value;
@@ -170,8 +195,10 @@ namespace MobileGL::MG_State {
         }
 
         void GLContext::SetCurrentVertexAttributeUint(Uint index, const Array<Uint32, 4>& value) {
-            MOBILEGL_ASSERT(index < m_currentVertexAttributes.size(),
-                            "SetCurrentVertexAttributeUint: index %u is out of range", index);
+            if (index >= m_currentVertexAttributes.size()) {
+                MGLOG_E("SetCurrentVertexAttributeUint: index %u is out of range", index);
+                return;
+            }
 
             auto& current = m_currentVertexAttributes[index];
             current.uintValue = value;
@@ -182,8 +209,11 @@ namespace MobileGL::MG_State {
         }
 
         const CurrentVertexAttributeValue& GLContext::GetCurrentVertexAttribute(Uint index) const {
-            MOBILEGL_ASSERT(index < m_currentVertexAttributes.size(),
-                            "GetCurrentVertexAttribute: index %u is out of range", index);
+            static const CurrentVertexAttributeValue defaultValue{};
+            if (index >= m_currentVertexAttributes.size()) {
+                MGLOG_E("GetCurrentVertexAttribute: index %u is out of range", index);
+                return defaultValue;
+            }
             return m_currentVertexAttributes[index];
         }
 

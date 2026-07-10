@@ -725,7 +725,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             std::min(m_vulkanCaps.MaxComputeTextureImageUnits, maxSupportedTextureUnits);
         m_dynamicParameters.MaxCombinedTextureImageUnits =
             std::min(m_vulkanCaps.MaxCombinedTextureImageUnits, maxSupportedTextureUnits);
-        m_dynamicParameters.MaxVertexAttribs = m_vulkanCaps.MaxVertexAttribs;
+        // Never advertise more attributes than the state layer can store: the current-value array and
+        // the Uint32 attribute masks the draw path passes around are both bounded by MAX_VERTEX_ATTRIBS.
+        m_dynamicParameters.MaxVertexAttribs =
+            std::min(m_vulkanCaps.MaxVertexAttribs,
+                     static_cast<Int>(MG_State::GLState::VertexArrayObject::MAX_VERTEX_ATTRIBS));
         m_dynamicParameters.MaxComputeShaderStorageBlocks = m_vulkanCaps.MaxComputeShaderStorageBlocks;
         m_dynamicParameters.MaxCombinedShaderStorageBlocks = m_vulkanCaps.MaxCombinedShaderStorageBlocks;
         m_dynamicParameters.MaxComputeUniformBlocks = m_vulkanCaps.MaxComputeUniformBlocks;

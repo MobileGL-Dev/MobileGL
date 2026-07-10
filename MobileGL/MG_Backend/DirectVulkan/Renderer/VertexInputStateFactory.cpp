@@ -65,6 +65,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         Vector<SizeT> bindingBaseOffsets;
         Vector<Uint32> bindingAttributeLocations;
         Vector<Bool> bindingUsesClientMemory;
+        Uint32 unsupportedAttribMask = 0;
 
         for (Uint32 location = 0; location < MG_State::GLState::VertexArrayObject::MAX_VERTEX_ATTRIBS; ++location) {
             const auto& attr = vao.GetAttribute(location);
@@ -74,15 +75,19 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
             const auto vkFormat = ToVkVertexFormat(attr.Type, attr.Size, attr.Normalized, attr.IsInteger);
             if (vkFormat == VK_FORMAT_UNDEFINED) {
-                MGLOG_D("Skipping unsupported vertex attribute layout (location=%u, type=%s, size=%d)",
+                MGLOG_E("Unsupported vertex attribute layout (location=%u, type=%s, size=%d): the array is "
+                        "enabled but cannot be mapped to a VkFormat",
                         location, MG_Util::ConvertDataTypeToString(attr.Type).c_str(), attr.Size);
+                unsupportedAttribMask |= (1u << location);
                 continue;
             }
 
             const SizeT componentSize = GetComponentSize(attr.Type);
             if (componentSize == 0) {
-                MGLOG_D("Skipping vertex attribute with unknown component size (location=%u, type=%s)",
+                MGLOG_E("Vertex attribute with unknown component size (location=%u, type=%s): the array is "
+                        "enabled but cannot be sized",
                         location, MG_Util::ConvertDataTypeToString(attr.Type).c_str());
+                unsupportedAttribMask |= (1u << location);
                 continue;
             }
 
@@ -112,6 +117,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         entry.bindingBaseOffsets = std::move(bindingBaseOffsets);
         entry.bindingAttributeLocations = std::move(bindingAttributeLocations);
         entry.bindingUsesClientMemory = std::move(bindingUsesClientMemory);
+        entry.unsupportedAttribMask = unsupportedAttribMask;
         entry.state = state;
         entry.state.pVertexBindingDescriptions = entry.bindings.empty() ? nullptr : entry.bindings.data();
         entry.state.pVertexAttributeDescriptions = entry.attributes.empty() ? nullptr : entry.attributes.data();
@@ -126,6 +132,17 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             case 2: return VK_FORMAT_R32G32_SFLOAT;
             case 3: return VK_FORMAT_R32G32B32_SFLOAT;
             case 4: return VK_FORMAT_R32G32B32A32_SFLOAT;
+            default: return VK_FORMAT_UNDEFINED;
+            }
+        case DataType::Float16:
+            // GL_HALF_FLOAT is a floating-point array type: it is never an integer attribute, and
+            // GL_TRUE for `normalized` is ignored for float types rather than selecting a *NORM format.
+            if (isInteger) return VK_FORMAT_UNDEFINED;
+            switch (size) {
+            case 1: return VK_FORMAT_R16_SFLOAT;
+            case 2: return VK_FORMAT_R16G16_SFLOAT;
+            case 3: return VK_FORMAT_R16G16B16_SFLOAT;
+            case 4: return VK_FORMAT_R16G16B16A16_SFLOAT;
             default: return VK_FORMAT_UNDEFINED;
             }
         case DataType::Int32:

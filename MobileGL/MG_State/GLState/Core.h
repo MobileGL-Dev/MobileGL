@@ -31,6 +31,20 @@ namespace MobileGL {
                 Array<Uint32, 4> uintValue{0u, 0u, 0u, 1u};
             };
 
+            // Which of the three views above a shader input of a given GLSL type consumes.
+            enum class VertexAttribBaseType { Unsupported, Float, Int, Uint };
+
+            struct VertexAttribTypeInfo {
+                VertexAttribBaseType baseType = VertexAttribBaseType::Unsupported;
+                Uint componentCount = 0;
+            };
+
+            // Maps a shader vertex-input type (GL_FLOAT_VEC3, GL_INT_VEC2, ...) onto the current-value
+            // view that feeds it. Shared by every backend so that "a disabled array reads the current
+            // value" resolves identically regardless of which backend is active; each backend only
+            // translates the result into its own API call.
+            VertexAttribTypeInfo ClassifyVertexAttribType(GLenum glType);
+
             class GLContext {
             public:
                 GLContext() = default;

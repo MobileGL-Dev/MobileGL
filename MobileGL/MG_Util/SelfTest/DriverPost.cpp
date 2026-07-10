@@ -12,6 +12,9 @@
 #include <MGGitHash.h>
 #include <MG_Backend/DirectGLES/BackendObject_DirectGLES.h>
 #include <MG_Backend/DirectVulkan/BackendObject_DirectVulkan.h>
+// Only for the compile-time MAX_VERTEX_ATTRIBS constant asserted below. The POST still executes no
+// MG_State code: it runs standalone, before MG_State::Init().
+#include <MG_State/GLState/VertexArrayState/VertexArrayObject.h>
 #include <MG_Util/Converters/MGToStr/GLExtensionConverter.h>
 #include <chrono>
 #include <thread>
@@ -167,6 +170,49 @@ namespace MobileGL::MG_Util::SelfTest {
                        : "";
         }
 
+        // ---- Vertex attribute limit --------------------------------------------
+        // GL 3.3 Core mandates GL_MAX_VERTEX_ATTRIBS >= 16 (spec table 6.32); a driver below
+        // that cannot back a conformant core context at all.
+        constexpr Int kGL33MinVertexAttribs = 16;
+
+        // The capacity of the per-context current-vertex-attribute array, which is also the width of
+        // the Uint32 attribute masks the backends pass around. Pinned to the state layer's constant so
+        // the two can never drift: a mismatch between them is precisely the defect this row guards.
+        constexpr Int kMobileGLMaxVertexAttribs = MG_State::GLState::VertexArrayObject::MAX_VERTEX_ATTRIBS;
+        static_assert(kMobileGLMaxVertexAttribs <= 32, "Vertex attribute masks are Uint32");
+        static_assert(kMobileGLMaxVertexAttribs >= kGL33MinVertexAttribs,
+                      "MobileGL cannot advertise a conformant GL 3.3 Core GL_MAX_VERTEX_ATTRIBS");
+
+        // Both backends index a fixed-size, per-context array of current generic vertex attribute
+        // values by shader input location, and both clamp the GL_MAX_VERTEX_ATTRIBS they advertise
+        // to that array's capacity. A driver reporting more attributes than the array can hold used
+        // to make the DirectVulkan draw path walk locations past the end of it -- an out-of-bounds
+        // read in release builds, and a MOBILEGL_ASSERT abort in debug builds -- as soon as a shader
+        // declared a vertex input at a high location whose array was disabled. The clamp closes that
+        // hole, so this row exists to make the underlying driver/host mismatch visible rather than
+        // silently swallowed.
+        void EvaluateVertexAttribLimit(ReportBuilder& builder, Int deviceLimit, const char* rowName,
+                                       const char* driverLimitName) {
+            if (deviceLimit < kGL33MinVertexAttribs) {
+                builder.Fail(rowName,
+                             format("{} = {} (< {}); OpenGL 3.3 Core requires at least {} generic vertex "
+                                    "attributes, so this driver cannot back a conformant core context",
+                                    driverLimitName, deviceLimit, kGL33MinVertexAttribs, kGL33MinVertexAttribs));
+                return;
+            }
+            if (deviceLimit > kMobileGLMaxVertexAttribs) {
+                builder.Warn(rowName,
+                             format("{} = {} (> {}); MobileGL clamps GL_MAX_VERTEX_ATTRIBS to {} because its "
+                                    "current-vertex-attribute storage and its Uint32 attribute masks hold {} "
+                                    "locations, so the driver's extra attributes stay unusable",
+                                    driverLimitName, deviceLimit, kMobileGLMaxVertexAttribs,
+                                    kMobileGLMaxVertexAttribs, kMobileGLMaxVertexAttribs));
+                return;
+            }
+            builder.Pass(rowName, format("{} = {}; MobileGL advertises GL_MAX_VERTEX_ATTRIBS = {}",
+                                         driverLimitName, deviceLimit, deviceLimit));
+        }
+
         void EvaluateGlesChecklist(ReportBuilder& builder, const MG_External::GLESCapabilities& caps,
                                    const MG_External::GLESFunctionsTable& glesFuncs) {
             const Int major = caps.GLESVersion.Major;
@@ -184,6 +230,9 @@ namespace MobileGL::MG_Util::SelfTest {
                 builder.Fail("OpenGL ES version",
                              versionLabel + " (< 3.1: no compute shaders or native indirect draws)");
             }
+
+            EvaluateVertexAttribLimit(builder, caps.MaxVertexAttribs, "Vertex attributes",
+                                      "GL_MAX_VERTEX_ATTRIBS");
 
             if (es31) {
                 GLint maxVertexSsboBlocks = 0;
@@ -1005,6 +1054,9 @@ namespace MobileGL::MG_Util::SelfTest {
                                               "backend requires a Vulkan 1.1 device",
                                               VkApiVersionToString(properties.apiVersion)));
         }
+
+        EvaluateVertexAttribLimit(builder, static_cast<Int>(properties.limits.maxVertexInputAttributes),
+                                  "Vertex attributes", "maxVertexInputAttributes");
 
         Vector<VkExtensionProperties> deviceExtensions;
         Uint32 deviceExtensionCount = 0;

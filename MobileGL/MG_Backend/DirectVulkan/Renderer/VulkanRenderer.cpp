@@ -607,10 +607,20 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
     }
 
+    // Vertex attribute locations are tracked in Uint32 bitmasks, so MAX_VERTEX_ATTRIBS is both the
+    // state-layer storage bound and the width of every mask below. Keep them in lockstep.
+    static constexpr Uint32 kMaxVertexAttribs =
+        static_cast<Uint32>(MG_State::GLState::VertexArrayObject::MAX_VERTEX_ATTRIBS);
+    static_assert(kMaxVertexAttribs <= 32, "Vertex attribute masks are Uint32");
+    // The loops below walk locations [0, kMaxVertexAttribs) and index programObj.vertexInputTypes with
+    // each one, so that array must be at least as wide.
+    static_assert(kMaxVertexAttribs <= ProgramFactory::VkProgramObject::kMaxVertexInputLocations,
+                  "vertexInputTypes is indexed by vertex attribute location");
+
     static Uint32 BuildVertexInputAttributeMask(const Vector<VkVertexInputAttributeDescription>& attributes) {
         Uint32 attributeMask = 0;
         for (const auto& attribute : attributes) {
-            if (attribute.location < 32) {
+            if (attribute.location < kMaxVertexAttribs) {
                 attributeMask |= (1u << attribute.location);
             }
         }
@@ -2194,7 +2204,7 @@ void main() {
         }
 
         SizeT syntheticBinding = vertexInputState.bindings.size();
-        for (Uint32 location = 0; location < 32; ++location) {
+        for (Uint32 location = 0; location < kMaxVertexAttribs; ++location) {
             if ((missingAttribMask & (1u << location)) == 0) {
                 continue;
             }
@@ -2206,9 +2216,13 @@ void main() {
             VkDeviceSize sourceSize = 0;
             const Bool supported = TryGetCurrentVertexAttributeUploadPayload(currentValue, glType, format,
                                                                             sourceData, sourceSize);
-            MOBILEGL_ASSERT(supported,
-                            "DirectVulkan does not support current generic vertex attribute type yet: program=%u location=%u type=0x%x",
-                            program.GetExternalIndex(), location, glType);
+            if (!supported) {
+                // SetupDraw's pre-flight should have rejected this already; never upload a null payload.
+                MGLOG_E("UploadAndBindVertexStreams skipped: unsupported current generic vertex attribute type: "
+                        "program=%u location=%u type=0x%x",
+                        program.GetExternalIndex(), location, glType);
+                return false;
+            }
 
             BufferSlice slice{};
             if (!m_bufferManager.UploadTransient(BufferKind::Vertex, m_frameContext.GetCurrentFrameIndex(),
@@ -2877,7 +2891,7 @@ void main() {
         patchedAttributes.assign(vis.attributes.begin(), vis.attributes.end());
         Bool hasPatchedVertexAttributes = false;
         for (auto& attribute : patchedAttributes) {
-            if (attribute.location >= 32 || (activeAttribMask & (1u << attribute.location)) == 0) {
+            if (attribute.location >= kMaxVertexAttribs || (activeAttribMask & (1u << attribute.location)) == 0) {
                 continue;
             }
 
@@ -2920,7 +2934,7 @@ void main() {
             }
 
             Uint32 syntheticBinding = static_cast<Uint32>(vis.bindings.size());
-            for (Uint32 location = 0; location < 32; ++location) {
+            for (Uint32 location = 0; location < kMaxVertexAttribs; ++location) {
                 if ((missingAttribMask & (1u << location)) == 0) {
                     continue;
                 }
@@ -3295,6 +3309,42 @@ void main() {
                     renderPassEntry->extent.x(),
                     renderPassEntry->extent.y());
             return false;
+        }
+
+        // Vertex-input pre-flight, run before pipeline creation so that a bad attribute can never be
+        // baked into a cached VkPipeline.
+        {
+            const auto& vertexInputState = m_vertexInputStateFactory->GetOrCreateVertexInputState(vao);
+            const Uint32 activeAttribMask = programObj.activeVertexInputLocationMask;
+
+            // An enabled array whose GL type has no VkFormat mapping never reaches the vertex input
+            // state, which makes it indistinguishable from a disabled array: the draw would treat it as
+            // "missing" and silently feed the shader the current attribute value instead of the app's
+            // vertex data. Fail loudly rather than render wrong pixels.
+            const Uint32 brokenAttribMask = vertexInputState.unsupportedAttribMask & activeAttribMask;
+            if (brokenAttribMask != 0) {
+                MGLOG_E("SetupDraw skipped: program=%u reads vertex attribute location mask 0x%x whose enabled "
+                        "array has no supported vertex format",
+                        program.GetExternalIndex(), brokenAttribMask);
+                return false;
+            }
+
+            // Every genuinely disabled attribute the shader reads must have a current-value type we can
+            // synthesize a binding for; otherwise the upload below would push a null payload.
+            const Uint32 missingAttribMask =
+                activeAttribMask & ~BuildVertexInputAttributeMask(vertexInputState.attributes);
+            for (Uint32 location = 0; location < kMaxVertexAttribs; ++location) {
+                if ((missingAttribMask & (1u << location)) == 0) continue;
+
+                const GLenum glType = programObj.vertexInputTypes[location];
+                if (MG_State::GLState::ClassifyVertexAttribType(glType).baseType ==
+                    MG_State::GLState::VertexAttribBaseType::Unsupported) {
+                    MGLOG_E("SetupDraw skipped: program=%u location=%u has no enabled array and its shader input "
+                            "type 0x%x is not supported as a current generic vertex attribute",
+                            program.GetExternalIndex(), location, glType);
+                    return false;
+                }
+            }
         }
 
         auto pipeline = GetOrCreatePipeline(mode, program, programObj, transformFlags, vao, *renderPassEntry);

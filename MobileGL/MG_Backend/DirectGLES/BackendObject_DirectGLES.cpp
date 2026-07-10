@@ -981,7 +981,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
         m_dynamicParameters.MaxVertexTextureImageUnits = m_GLESCapabilities.MaxVertexTextureImageUnits;
         m_dynamicParameters.MaxComputeTextureImageUnits = m_GLESCapabilities.MaxComputeTextureImageUnits;
         m_dynamicParameters.MaxCombinedTextureImageUnits = m_GLESCapabilities.MaxCombinedTextureImageUnits;
-        m_dynamicParameters.MaxVertexAttribs = m_GLESCapabilities.MaxVertexAttribs;
+        // Never advertise more attributes than the state layer can store: the current-value array and
+        // the Uint32 attribute masks the draw path passes around are both bounded by MAX_VERTEX_ATTRIBS.
+        m_dynamicParameters.MaxVertexAttribs =
+            std::min(m_GLESCapabilities.MaxVertexAttribs,
+                     static_cast<Int>(MG_State::GLState::VertexArrayObject::MAX_VERTEX_ATTRIBS));
         m_dynamicParameters.MaxComputeShaderStorageBlocks = m_GLESCapabilities.MaxComputeShaderStorageBlocks;
         m_dynamicParameters.MaxCombinedShaderStorageBlocks = m_GLESCapabilities.MaxCombinedShaderStorageBlocks;
         m_dynamicParameters.MaxComputeUniformBlocks = m_GLESCapabilities.MaxComputeUniformBlocks;

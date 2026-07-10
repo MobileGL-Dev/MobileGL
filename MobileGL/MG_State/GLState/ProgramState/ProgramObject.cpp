@@ -7,6 +7,8 @@
 // End of Source File Header
 
 #include "ProgramObject.h"
+#include <MG_Backend/BackendObjects.h>
+#include <MG_State/GLState/VertexArrayState/VertexArrayObject.h>
 #include <MG_Util/Converters/GLToStr/GLEnumConverter.h>
 #include <MG_Util/ShaderTranspiler/Types.h>
 #include <MG_Util/ShaderTranspiler/ShaderCompiler.h>
@@ -20,6 +22,22 @@ void main() {}
 )";
 
 namespace {
+    // How many vertex input locations reflection may record. Backends consume this through
+    // GetActiveAttributeLocationMask()/GetAttribType(), so a value below the advertised
+    // GL_MAX_VERTEX_ATTRIBS would make a legal attribute location invisible to them -- DirectGLES would
+    // then never feed the shader that attribute's current value. Bounded by the state layer's storage
+    // capacity, which is also the width of the Uint32 masks backends build from it.
+    static MobileGL::Int GetReflectionVertexAttribLimit() {
+        constexpr MobileGL::Int capacity =
+            static_cast<MobileGL::Int>(MobileGL::MG_State::GLState::VertexArrayObject::MAX_VERTEX_ATTRIBS);
+        if (!MobileGL::MG_Backend::pActiveBackendObject) return capacity;
+
+        const MobileGL::Int backendLimit =
+            MobileGL::MG_Backend::pActiveBackendObject->GetDynamicParameters().MaxVertexAttribs;
+        if (backendLimit <= 0) return capacity;
+        return std::min(backendLimit, capacity);
+    }
+
     static MobileGL::String StripArrayElementSuffix(const MobileGL::String& name) {
         const MobileGL::SizeT bracket = name.find('[');
         return bracket == MobileGL::String::npos ? name : name.substr(0, bracket);
@@ -460,7 +478,7 @@ namespace MobileGL::MG_State::GLState {
             maxLoc = std::max(0, inCount - 1);
         }
 
-        GLint maxAttribs = 16; // TODO: get from backend
+        const GLint maxAttribs = GetReflectionVertexAttribLimit();
         MGLOG_D("ProgramObject %u: Reflection - computed maxLoc=%d, using maxAttribs=%d", m_externalIndex, maxLoc,
                 maxAttribs);
 

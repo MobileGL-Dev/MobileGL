@@ -48,7 +48,11 @@ namespace MobileGL::MG_Impl::GLImpl {
         }
 
         static bool ValidateVertexBindingIndex(GLuint bindingindex, const char* funcName) {
-            if (bindingindex >= MG_State::GLState::VertexArrayObject::MAX_VERTEX_ATTRIB_BINDINGS) {
+            // Bound by the same dynamic limit as attribute indices: the default attribute -> binding
+            // mapping is the identity, so a binding point the backend cannot address as an attribute
+            // would resolve into an attribute the backend must then reject on every draw. Real drivers
+            // likewise report MAX_VERTEX_ATTRIB_BINDINGS == MAX_VERTEX_ATTRIBS.
+            if (bindingindex >= VertexArrayImpl::GetMaxVertexAttribs()) {
                 MG_State::pGLContext->RecordError(
                     ErrorCode::InvalidValue,
                     MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", funcName,
@@ -503,6 +507,9 @@ namespace MobileGL::MG_Impl::GLImpl {
                 MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__, "params pointer cannot be null."));
             return;
         }
+        // GL_CURRENT_VERTEX_ATTRIB is context state and returns before TryGetVertexAttribute, so the
+        // index bound has to be enforced up front or an out-of-range index reads past the array.
+        if (!VertexArrayImpl::ValidateVertexAttributeIndex(index)) return;
         if (!ValidateVertexAttribPname(pname)) return;
 
         if (IsCurrentVertexAttribQuery(pname)) {
@@ -558,6 +565,7 @@ namespace MobileGL::MG_Impl::GLImpl {
                 MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__, "params pointer cannot be null."));
             return;
         }
+        if (!VertexArrayImpl::ValidateVertexAttributeIndex(index)) return;
         if (!ValidateVertexAttribPname(pname)) return;
 
         if (IsCurrentVertexAttribQuery(pname)) {
@@ -645,6 +653,7 @@ namespace MobileGL::MG_Impl::GLImpl {
                 MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__, "params pointer cannot be null."));
             return;
         }
+        if (!VertexArrayImpl::ValidateVertexAttributeIndex(index)) return;
         if (!ValidateVertexAttribPname(pname)) return;
 
         if (IsCurrentVertexAttribQuery(pname)) {

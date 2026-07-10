@@ -19,6 +19,7 @@
 #include <MG_Backend/BackendObjects.h>
 #include <MG_Impl/GLImpl/Getter/GL_Getter.h>
 #include <MG_Impl/GLImpl/RenderState/GL_RenderState.h>
+#include <MG_Impl/GLImpl/VertexArray/Validators.h>
 #include <MG_State/GLState/Core.h>
 #include <MG_State/GLState/FramebufferState/FramebufferObject.h>
 #include <MG_State/GLState/TextureState/TextureState.h>
@@ -406,6 +407,55 @@ void main() {
     EXPECT_TRUE(shaderResult) << (shaderResult ? "" : shaderResult.error().log);
 
     MG_Backend::pActiveBackendObject.reset();
+}
+
+// GL_MAX_VERTEX_ATTRIBS must follow the backend but never exceed the state layer's current-value
+// storage: the DirectVulkan draw path indexes that array by shader input location, so advertising more
+// than it can hold is an out-of-bounds read waiting to happen.
+TEST(GetterSanity, ClampsMaxVertexAttribsToCurrentValueStorageCapacity) {
+    using namespace MobileGL;
+    constexpr GLint capacity = MG_State::GLState::VertexArrayObject::MAX_VERTEX_ATTRIBS;
+
+    MG_State::pGLContext = MakeUnique<MG_State::GLState::GLContext>();
+
+    // A driver reporting more attributes than MobileGL can store gets clamped.
+    {
+        MG_Backend::DynamicBackendParameters params;
+        params.MaxVertexAttribs = capacity * 2;
+        MG_Backend::pActiveBackendObject = MakeUnique<DynamicParameterBackend>(params);
+
+        EXPECT_EQ(MG_Impl::GLImpl::VertexArrayImpl::GetMaxVertexAttribs(), static_cast<Uint>(capacity));
+        GLint reported = 0;
+        MG_Impl::GLImpl::GetIntegerv(GL_MAX_VERTEX_ATTRIBS, &reported);
+        EXPECT_EQ(reported, capacity);
+        MG_Backend::pActiveBackendObject.reset();
+    }
+
+    // A driver below the capacity is followed exactly, and validation enforces that same bound.
+    {
+        MG_Backend::DynamicBackendParameters params;
+        params.MaxVertexAttribs = 16;
+        MG_Backend::pActiveBackendObject = MakeUnique<DynamicParameterBackend>(params);
+
+        EXPECT_EQ(MG_Impl::GLImpl::VertexArrayImpl::GetMaxVertexAttribs(), 16u);
+        GLint reported = 0;
+        MG_Impl::GLImpl::GetIntegerv(GL_MAX_VERTEX_ATTRIBS, &reported);
+        EXPECT_EQ(reported, 16);
+
+        MG_State::pGLContext->ClearErrors();
+        EXPECT_FALSE(MG_Impl::GLImpl::VertexArrayImpl::ValidateVertexAttributeIndex(16));
+        EXPECT_TRUE(MG_State::pGLContext->HasGLError());
+        MG_State::pGLContext->ClearErrors();
+        EXPECT_TRUE(MG_Impl::GLImpl::VertexArrayImpl::ValidateVertexAttributeIndex(15));
+        EXPECT_FALSE(MG_State::pGLContext->HasGLError());
+
+        MG_Backend::pActiveBackendObject.reset();
+    }
+
+    // With no active backend the storage capacity is the bound, and nothing dereferences a null backend.
+    EXPECT_EQ(MG_Impl::GLImpl::VertexArrayImpl::GetMaxVertexAttribs(), static_cast<Uint>(capacity));
+
+    MG_State::pGLContext.reset();
 }
 
 TEST(GetterSanity, ReportsKhrSubgroupDynamicParameters) {

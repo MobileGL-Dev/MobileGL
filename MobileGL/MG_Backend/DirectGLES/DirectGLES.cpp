@@ -321,6 +321,52 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
             backendObj->SyncToBackend(currentVAOObject);
         }
+
+        // GL: a shader input whose generic attribute array is DISABLED reads that attribute's *current
+        // value* (context state set by glVertexAttrib*, default (0,0,0,1)) rather than any buffer.
+        // MobileGL stores those values in MG_State only, so without this step the ES driver would feed
+        // the shader its own current values, which MobileGL never writes -- i.e. always (0,0,0,1).
+        // SyncToBackend has already issued glDisableVertexAttribArray for these locations, so the ES
+        // current value is what the shader will actually read.
+        void SyncCurrentVertexAttributeValues() {
+#ifdef TRACY_ENABLE
+            ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
+#endif
+            const auto& program = MG_State::pGLContext->GetCurrentProgram();
+            if (!program) return;
+
+            const auto& vao = MG_State::pGLContext->GetBoundVertexArray();
+            if (!vao) return;
+
+            const Uint32 activeAttribMask = program->GetActiveAttributeLocationMask();
+            if (activeAttribMask == 0) return;
+
+            constexpr Uint32 maxVertexAttribs =
+                static_cast<Uint32>(MG_State::GLState::VertexArrayObject::MAX_VERTEX_ATTRIBS);
+            for (Uint32 location = 0; location < maxVertexAttribs; ++location) {
+                if ((activeAttribMask & (1u << location)) == 0) continue;
+                if (vao->GetAttribute(location).Enabled) continue;
+
+                const auto& currentValue = MG_State::pGLContext->GetCurrentVertexAttribute(location);
+                const auto typeInfo = MG_State::GLState::ClassifyVertexAttribType(program->GetAttribType(location));
+                switch (typeInfo.baseType) {
+                case MG_State::GLState::VertexAttribBaseType::Float:
+                    g_GLESFuncs.glVertexAttrib4fv(location, currentValue.floatValue.data());
+                    break;
+                case MG_State::GLState::VertexAttribBaseType::Int:
+                    g_GLESFuncs.glVertexAttribI4iv(location, currentValue.intValue.data());
+                    break;
+                case MG_State::GLState::VertexAttribBaseType::Uint:
+                    g_GLESFuncs.glVertexAttribI4uiv(location, currentValue.uintValue.data());
+                    break;
+                case MG_State::GLState::VertexAttribBaseType::Unsupported:
+                    MGLOG_E("SyncCurrentVertexAttributeValues: program=%u location=%u has no enabled array and its "
+                            "shader input type 0x%x is not supported as a current generic vertex attribute",
+                            program->GetExternalIndex(), location, program->GetAttribType(location));
+                    break;
+                }
+            }
+        }
     } // namespace VertexArrayImpl
 
     namespace TextureImpl {
@@ -863,6 +909,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 g_GLESFuncs.glBindVertexArray(0);
             }
         }
+
+        VertexArrayImpl::SyncCurrentVertexAttributeValues();
 
         BindCurrentTextures();
         BindCurrentProgramWithResources();

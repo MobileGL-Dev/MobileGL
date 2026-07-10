@@ -11,6 +11,10 @@
 #include <MG_State/GLState/VertexArrayState/VertexArrayObject.h>
 
 namespace MobileGL::MG_Impl::GLImpl::VertexArrayImpl {
+    // The GL-visible GL_MAX_VERTEX_ATTRIBS: min(active backend limit, VertexArrayObject storage
+    // capacity). Falls back to the capacity when no backend is active (unit tests).
+    Uint GetMaxVertexAttribs();
+
     Bool ValidateVertexArrayName(Uint index);
     Bool ValidateVertexArrayObject(Uint index);
     Bool ValidateVertexAttributeIndex(Uint index);

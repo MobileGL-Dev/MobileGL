@@ -9,6 +9,7 @@
 #include "GL_Getter.h"
 #include <Config.h>
 #include <MGGitHash.h>
+#include <MG_Impl/GLImpl/VertexArray/Validators.h>
 #include <MG_State/EGLState/Core.h>
 #include <MG_State/GLState/Core.h>
 #include <MG_State/GLState/ErrorState/ErrorInfo.h>
@@ -1845,7 +1846,10 @@ namespace MobileGL::MG_Impl::GLImpl {
             *params = dynamicParameters.MaxUniformBlockSize;
             break;
         case GL_MAX_VERTEX_ATTRIBS:
-            *params = dynamicParameters.MaxVertexAttribs;
+            // Single source of truth with the validators: the value reported here is exactly the bound
+            // glVertexAttrib*/glGetVertexAttrib*/glBindAttribLocation enforce, and it never exceeds the
+            // state layer's current-value storage capacity.
+            *params = static_cast<GLint>(VertexArrayImpl::GetMaxVertexAttribs());
             break;
         case GL_MAX_VERTEX_TEXTURE_IMAGE_UNITS:
             *params = dynamicParameters.MaxVertexTextureImageUnits;

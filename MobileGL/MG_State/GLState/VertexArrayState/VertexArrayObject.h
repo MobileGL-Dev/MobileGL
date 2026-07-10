@@ -44,8 +44,12 @@ namespace MobileGL {
 
             class VertexArrayObject {
             public:
-                static constexpr int MAX_VERTEX_ATTRIBS = 16;
-                static constexpr int MAX_VERTEX_ATTRIB_BINDINGS = 16;
+                // Storage capacity, not the GL-visible limit. GL_MAX_VERTEX_ATTRIBS is reported as
+                // min(backend limit, MAX_VERTEX_ATTRIBS) and validated against that dynamic value;
+                // 32 is the width of the Uint32 attribute masks the backends pass around, so it is
+                // also the hard ceiling.
+                static constexpr int MAX_VERTEX_ATTRIBS = 32;
+                static constexpr int MAX_VERTEX_ATTRIB_BINDINGS = 32;
 
                 VertexArrayObject(Uint externIndex);
 
@@ -104,14 +108,24 @@ namespace MobileGL {
                 void BumpAttributeSwitchVersion(Uint index);
                 void ResolveAttributeFromBinding(Uint attribIndex);
 
+                // The default mapping is attribute i -> binding point i. Keep it an iota over
+                // MAX_VERTEX_ATTRIBS rather than a literal list: a literal list silently leaves the
+                // tail mapped to binding point 0 whenever the limit grows.
+                static constexpr Array<Uint, MAX_VERTEX_ATTRIBS> MakeIdentityAttributeBindings() {
+                    Array<Uint, MAX_VERTEX_ATTRIBS> mapping{};
+                    for (Uint index = 0; index < static_cast<Uint>(MAX_VERTEX_ATTRIBS); ++index) {
+                        mapping[index] = index;
+                    }
+                    return mapping;
+                }
+
                 const Uint m_externalIndex = 0;
                 Array<VertexAttribute, MAX_VERTEX_ATTRIBS> m_attributes;
                 Array<VertexAttributeVersion, MAX_VERTEX_ATTRIBS> m_attributeVersions;
                 BindingSlot<BufferObject> m_indexBufferBindingSlot;
 
                 Array<VertexBufferBindingPoint, MAX_VERTEX_ATTRIB_BINDINGS> m_bindingPoints;
-                Array<Uint, MAX_VERTEX_ATTRIBS> m_attributeBindingIndex = {0,  1,  2,  3,  4,  5,  6,  7,
-                                                                           8,  9,  10, 11, 12, 13, 14, 15};
+                Array<Uint, MAX_VERTEX_ATTRIBS> m_attributeBindingIndex = MakeIdentityAttributeBindings();
                 Array<Uint, MAX_VERTEX_ATTRIBS> m_attributeRelativeOffset = {};
                 // Set once an attribute (or its binding point) is touched through the
                 // ARB_vertex_attrib_binding API; only such attributes are re-resolved, so the

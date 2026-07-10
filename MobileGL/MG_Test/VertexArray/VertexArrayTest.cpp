@@ -14,6 +14,7 @@
 #include <MG_Impl/GLImpl/Buffer/GL_Buffer.h>
 #include <MG_Impl/GLImpl/Getter/GL_Getter.h>
 #include <MG_Impl/GLImpl/VertexArray/GL_VertexArray.h>
+#include <MG_Impl/GLImpl/VertexArray/Validators.h>
 #include <MG_State/GLState/Core.h>
 
 using namespace MobileGL;
@@ -223,6 +224,75 @@ TEST_F(VertexArrayTest, BoundVAOPreservesState) {
     ASSERT_EQ(attr.Buffer, vbo);
 
     ASSERT_FALSE(vao2->IsAttributeEnabled(0));
+}
+
+// The current-value array must cover the full attribute capacity. It used to be sized 16 while the
+// DirectVulkan draw path indexed it with shader locations up to 31, reading past the end; the only
+// guard was MOBILEGL_ASSERT, which expands to nothing outside debug builds.
+TEST_F(VertexArrayTest, CurrentVertexAttributeStorageCoversFullCapacity) {
+    constexpr Uint capacity = static_cast<Uint>(MG_State::GLState::VertexArrayObject::MAX_VERTEX_ATTRIBS);
+    const Uint highIndex = capacity - 1;
+
+    MG_State::pGLContext->SetCurrentVertexAttributeFloat(highIndex, {1.0f, 2.0f, 3.0f, 4.0f});
+    const auto& stored = MG_State::pGLContext->GetCurrentVertexAttribute(highIndex);
+    EXPECT_FLOAT_EQ(stored.floatValue[0], 1.0f);
+    EXPECT_FLOAT_EQ(stored.floatValue[3], 4.0f);
+
+    // Neighbouring slots keep the GL default of (0, 0, 0, 1).
+    const auto& untouched = MG_State::pGLContext->GetCurrentVertexAttribute(highIndex - 1);
+    EXPECT_FLOAT_EQ(untouched.floatValue[0], 0.0f);
+    EXPECT_FLOAT_EQ(untouched.floatValue[3], 1.0f);
+
+    // Out-of-range access must be bounded at runtime, not just asserted in debug builds.
+    const auto& outOfRange = MG_State::pGLContext->GetCurrentVertexAttribute(capacity);
+    EXPECT_FLOAT_EQ(outOfRange.floatValue[0], 0.0f);
+    EXPECT_FLOAT_EQ(outOfRange.floatValue[3], 1.0f);
+
+    MG_State::pGLContext->SetCurrentVertexAttributeFloat(capacity, {9.0f, 9.0f, 9.0f, 9.0f});
+    EXPECT_FLOAT_EQ(MG_State::pGLContext->GetCurrentVertexAttribute(highIndex).floatValue[0], 1.0f);
+}
+
+// A binding point the backend cannot address as an attribute must be rejected: the default mapping
+// is the identity, so accepting it would resolve into an attribute index the backend then rejects on
+// every draw.
+TEST_F(VertexArrayTest, VertexBindingIndexIsBoundedByTheAdvertisedAttribLimit) {
+    Vector<Uint> vaoNames;
+    MG_State::pGLContext->GenVertexArrayNames(1, vaoNames);
+    MG_State::pGLContext->CreateVertexArrayObject(vaoNames[0]);
+    MG_State::pGLContext->BindVertexArray(vaoNames[0]);
+    MG_State::pGLContext->ClearErrors();
+
+    const GLuint outOfRange = MG_Impl::GLImpl::VertexArrayImpl::GetMaxVertexAttribs();
+    MG_Impl::GLImpl::VertexAttribBinding(0, outOfRange);
+    EXPECT_TRUE(MG_State::pGLContext->HasGLError());
+}
+
+// The default attribute -> binding-point mapping is the identity. It used to be a 16-element literal
+// list, so every attribute at or above 16 silently resolved against binding point 0 instead.
+TEST_F(VertexArrayTest, DefaultAttributeBindingIsIdentityAcrossFullCapacity) {
+    Vector<Uint> vaoNames;
+    MG_State::pGLContext->GenVertexArrayNames(1, vaoNames);
+    auto vao = MG_State::pGLContext->CreateVertexArrayObject(vaoNames[0]);
+    MG_State::pGLContext->BindVertexArray(vaoNames[0]);
+
+    auto vbo = CreateTestVBO();
+
+    constexpr Uint kHighAttrib = 20;
+    static_assert(kHighAttrib >= 16, "must exceed the old 16-entry identity list");
+    static_assert(kHighAttrib < MG_State::GLState::VertexArrayObject::MAX_VERTEX_ATTRIBS);
+    static_assert(kHighAttrib < MG_State::GLState::VertexArrayObject::MAX_VERTEX_ATTRIB_BINDINGS);
+
+    // Binding point kHighAttrib must feed attribute kHighAttrib with no explicit SetAttributeBinding.
+    vao->SetAttributeFormatSeparate(kHighAttrib, 3, DataType::Float32, false, false, 12);
+    vao->SetBindingBuffer(kHighAttrib, vbo, 16, 24);
+
+    const auto& attr = vao->GetAttribute(kHighAttrib);
+    EXPECT_EQ(attr.Buffer, vbo);
+    EXPECT_EQ(attr.Stride, 24);
+    EXPECT_EQ(attr.Offset, 28u); // binding offset (16) + attribute relative offset (12)
+
+    // Attribute 0 must not have been dragged along by binding point kHighAttrib.
+    EXPECT_EQ(vao->GetAttribute(0).Buffer, nullptr);
 }
 
 using namespace MobileGL::MG_Impl::GLImpl;
@@ -674,3 +744,109 @@ TEST_F(GeneralVertexArrayTest, General_ElementBufferBindingPoint) {
 
     EXPECT_EQ(GetError(), GL_NO_ERROR);
 }
+
+// GL_CURRENT_VERTEX_ATTRIB is per-context state that exists for every index below
+// GL_MAX_VERTEX_ATTRIBS, and defaults to (0, 0, 0, 1).
+TEST_F(GeneralVertexArrayTest, General_CurrentVertexAttribRoundTripsAtHighestLegalIndex) {
+    CreateVAO();
+    const GLuint highIndex = VertexArrayImpl::GetMaxVertexAttribs() - 1;
+    ASSERT_GT(highIndex, 0u);
+
+    VertexAttrib4f(highIndex, 1.0f, 2.0f, 3.0f, 4.0f);
+    EXPECT_EQ(GetError(), GL_NO_ERROR);
+
+    GLfloat values[4] = {-1.0f, -1.0f, -1.0f, -1.0f};
+    GetVertexAttribfv(highIndex, GL_CURRENT_VERTEX_ATTRIB, values);
+    EXPECT_EQ(GetError(), GL_NO_ERROR);
+    EXPECT_FLOAT_EQ(values[0], 1.0f);
+    EXPECT_FLOAT_EQ(values[1], 2.0f);
+    EXPECT_FLOAT_EQ(values[2], 3.0f);
+    EXPECT_FLOAT_EQ(values[3], 4.0f);
+
+    // Untouched attributes keep the GL default of (0, 0, 0, 1).
+    GLfloat defaults[4] = {-1.0f, -1.0f, -1.0f, -1.0f};
+    GetVertexAttribfv(highIndex - 1, GL_CURRENT_VERTEX_ATTRIB, defaults);
+    EXPECT_EQ(GetError(), GL_NO_ERROR);
+    EXPECT_FLOAT_EQ(defaults[0], 0.0f);
+    EXPECT_FLOAT_EQ(defaults[1], 0.0f);
+    EXPECT_FLOAT_EQ(defaults[2], 0.0f);
+    EXPECT_FLOAT_EQ(defaults[3], 1.0f);
+}
+
+// glVertexAttrib{1,2,3}f fill the components the caller omitted with (0, 0, 1).
+TEST_F(GeneralVertexArrayTest, General_CurrentVertexAttribFillsOmittedComponents) {
+    CreateVAO();
+
+    VertexAttrib1f(1, 7.0f);
+    GLfloat one[4] = {};
+    GetVertexAttribfv(1, GL_CURRENT_VERTEX_ATTRIB, one);
+    EXPECT_FLOAT_EQ(one[0], 7.0f);
+    EXPECT_FLOAT_EQ(one[1], 0.0f);
+    EXPECT_FLOAT_EQ(one[2], 0.0f);
+    EXPECT_FLOAT_EQ(one[3], 1.0f);
+
+    VertexAttrib2f(2, 7.0f, 8.0f);
+    GLfloat two[4] = {};
+    GetVertexAttribfv(2, GL_CURRENT_VERTEX_ATTRIB, two);
+    EXPECT_FLOAT_EQ(two[1], 8.0f);
+    EXPECT_FLOAT_EQ(two[2], 0.0f);
+    EXPECT_FLOAT_EQ(two[3], 1.0f);
+
+    VertexAttrib3f(3, 7.0f, 8.0f, 9.0f);
+    GLfloat three[4] = {};
+    GetVertexAttribfv(3, GL_CURRENT_VERTEX_ATTRIB, three);
+    EXPECT_FLOAT_EQ(three[2], 9.0f);
+    EXPECT_FLOAT_EQ(three[3], 1.0f);
+
+    EXPECT_EQ(GetError(), GL_NO_ERROR);
+}
+
+// The integer current-value views must survive a round trip without going through float.
+TEST_F(GeneralVertexArrayTest, General_CurrentVertexAttribIntegerRoundTrip) {
+    CreateVAO();
+
+    VertexAttribI4i(1, -5, 6, -7, 8);
+    GLint signedValues[4] = {};
+    GetVertexAttribIiv(1, GL_CURRENT_VERTEX_ATTRIB, signedValues);
+    EXPECT_EQ(signedValues[0], -5);
+    EXPECT_EQ(signedValues[1], 6);
+    EXPECT_EQ(signedValues[2], -7);
+    EXPECT_EQ(signedValues[3], 8);
+
+    VertexAttribI4ui(2, 10u, 20u, 30u, 40u);
+    GLuint unsignedValues[4] = {};
+    GetVertexAttribIuiv(2, GL_CURRENT_VERTEX_ATTRIB, unsignedValues);
+    EXPECT_EQ(unsignedValues[0], 10u);
+    EXPECT_EQ(unsignedValues[3], 40u);
+
+    EXPECT_EQ(GetError(), GL_NO_ERROR);
+}
+
+// The GL_CURRENT_VERTEX_ATTRIB branch returned before any index validation, so an out-of-range
+// index silently read past the current-value array instead of raising GL_INVALID_VALUE.
+TEST_F(GeneralVertexArrayTest, General_CurrentVertexAttribQueryRejectsOutOfRangeIndex) {
+    CreateVAO();
+    const GLuint outOfRange = VertexArrayImpl::GetMaxVertexAttribs();
+
+    GLfloat floats[4] = {-1.0f, -2.0f, -3.0f, -4.0f};
+    GetVertexAttribfv(outOfRange, GL_CURRENT_VERTEX_ATTRIB, floats);
+    EXPECT_EQ(GetError(), GL_INVALID_VALUE);
+    EXPECT_FLOAT_EQ(floats[0], -1.0f);
+    EXPECT_FLOAT_EQ(floats[3], -4.0f);
+
+    GLint ints[4] = {-1, -2, -3, -4};
+    GetVertexAttribiv(outOfRange, GL_CURRENT_VERTEX_ATTRIB, ints);
+    EXPECT_EQ(GetError(), GL_INVALID_VALUE);
+    EXPECT_EQ(ints[0], -1);
+
+    GLint signedInts[4] = {-1, -2, -3, -4};
+    GetVertexAttribIiv(outOfRange, GL_CURRENT_VERTEX_ATTRIB, signedInts);
+    EXPECT_EQ(GetError(), GL_INVALID_VALUE);
+    EXPECT_EQ(signedInts[0], -1);
+
+    GLuint uints[4] = {1u, 2u, 3u, 4u};
+    GetVertexAttribIuiv(outOfRange, GL_CURRENT_VERTEX_ATTRIB, uints);
+    EXPECT_EQ(GetError(), GL_INVALID_VALUE);
+    EXPECT_EQ(uints[0], 1u);
+}
+
