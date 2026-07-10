@@ -1983,6 +1983,8 @@ void main() {
         if (m_device != VK_NULL_HANDLE) {
             VK_VERIFY(vkDeviceWaitIdle(m_device));
         }
+        OnSubmitsCompletedUpTo(m_submitCounter);
+        DestroySubmitFencePool();
 
         DestroyDeferredDepthMipmapCleanup();
         DestroyComputePipelines();
@@ -3203,7 +3205,6 @@ void main() {
         // Begin command recording if not yet
         if (!frame.isCommandRecording) {
             m_frameContext.BeginCommandRecording();
-            m_uniformManager->BeginFrame(m_frameContext.GetCurrentFrameIndex());
         }
 
         auto* activeRenderPass = VkRenderPassManager::GetActiveRenderPass();
@@ -3361,7 +3362,6 @@ void main() {
 
         if (!frame.isCommandRecording) {
             m_frameContext.BeginCommandRecording();
-            m_uniformManager->BeginFrame(m_frameContext.GetCurrentFrameIndex());
         }
 
         if (VkRenderPassManager::GetActiveRenderPass() != nullptr) {
@@ -3397,7 +3397,6 @@ void main() {
 
         if (!frame.isCommandRecording) {
             m_frameContext.BeginCommandRecording();
-            m_uniformManager->BeginFrame(m_frameContext.GetCurrentFrameIndex());
         }
 
         if (VkRenderPassManager::GetActiveRenderPass() != nullptr) {
@@ -3463,7 +3462,6 @@ void main() {
         auto& frame = m_frameContext.GetCurrent();
         if (!frame.isCommandRecording) {
             m_frameContext.BeginCommandRecording();
-            m_uniformManager->BeginFrame(m_frameContext.GetCurrentFrameIndex());
         }
         if (VkRenderPassManager::GetActiveRenderPass() != nullptr) {
             VkRenderPassManager::EndRenderPass(frame.commandBuffer);
@@ -3939,7 +3937,6 @@ void main() {
         auto& frame = m_frameContext.GetCurrent();
         if (!frame.isCommandRecording) {
             m_frameContext.BeginCommandRecording();
-            m_uniformManager->BeginFrame(m_frameContext.GetCurrentFrameIndex());
         }
 
         auto* activeRenderPass = VkRenderPassManager::GetActiveRenderPass();
@@ -4290,7 +4287,6 @@ void main() {
         auto& frame = m_frameContext.GetCurrent();
         if (!frame.isCommandRecording) {
             m_frameContext.BeginCommandRecording();
-            m_uniformManager->BeginFrame(m_frameContext.GetCurrentFrameIndex());
         }
 
         if (VkRenderPassManager::GetActiveRenderPass() != nullptr) {
@@ -4457,7 +4453,6 @@ void main() {
         auto& frame = m_frameContext.GetCurrent();
         if (!frame.isCommandRecording) {
             m_frameContext.BeginCommandRecording();
-            m_uniformManager->BeginFrame(m_frameContext.GetCurrentFrameIndex());
         }
 
         if (VkRenderPassManager::GetActiveRenderPass() != nullptr) {
@@ -4590,29 +4585,16 @@ void main() {
             return true;
         }
 
-        VkPipelineStageFlags waitDstStageMask = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
-        VkSubmitInfo submitInfo{VK_STRUCTURE_TYPE_SUBMIT_INFO};
-        VkSemaphore waitSemaphore = frame.imageAvailableSemaphore;
-        if (!frame.imageAvailableSemaphoreConsumed) {
-            submitInfo.waitSemaphoreCount = 1;
-            submitInfo.pWaitSemaphores = &waitSemaphore;
-            submitInfo.pWaitDstStageMask = &waitDstStageMask;
-        }
-        submitInfo.commandBufferCount = 1;
-        submitInfo.pCommandBuffers = &frame.commandBuffer;
-
-        VkResult result = vkQueueSubmit(m_graphicsQueue, 1, &submitInfo, frame.imageInFlightFence);
-        if (result != VK_SUCCESS) {
-            MGLOG_E("DirectVulkan readback: vkQueueSubmit returned %d", result);
+        if (!SubmitPendingCommandBuffer(frame, frame.imageInFlightFence, /*pooledFence=*/false)) {
             return false;
         }
-        frame.imageAvailableSemaphoreConsumed = true;
 
-        result = vkWaitForFences(m_device, 1, &frame.imageInFlightFence, VK_TRUE, UINT64_MAX);
+        VkResult result = vkWaitForFences(m_device, 1, &frame.imageInFlightFence, VK_TRUE, UINT64_MAX);
         if (result != VK_SUCCESS) {
             MGLOG_E("DirectVulkan readback: vkWaitForFences returned %d", result);
             return false;
         }
+        OnSubmitsCompletedUpTo(frame.lastSubmitIndex);
         result = vkResetFences(m_device, 1, &frame.imageInFlightFence);
         if (result != VK_SUCCESS) {
             MGLOG_E("DirectVulkan readback: vkResetFences returned %d", result);
@@ -4621,6 +4603,12 @@ void main() {
 
         frame.hasCommandBufferRecorded = false;
         frame.isCommandRecording = false;
+        // The wait proved every descriptor set this slot has in flight idle;
+        // rewind the reuse cursors so present-less readback loops stay
+        // bounded (Present is the only other rewind point).
+        if (m_uniformManager) {
+            m_uniformManager->BeginFrame(m_frameContext.GetCurrentFrameIndex());
+        }
         return true;
     }
 
@@ -4639,7 +4627,6 @@ void main() {
         auto& frame = m_frameContext.GetCurrent();
         if (!frame.isCommandRecording) {
             m_frameContext.BeginCommandRecording();
-            m_uniformManager->BeginFrame(m_frameContext.GetCurrentFrameIndex());
         }
         if (VkRenderPassManager::GetActiveRenderPass() != nullptr) {
             VkRenderPassManager::EndRenderPass(frame.commandBuffer);
@@ -4807,7 +4794,6 @@ void main() {
         auto& frame = m_frameContext.GetCurrent();
         if (!frame.isCommandRecording) {
             m_frameContext.BeginCommandRecording();
-            m_uniformManager->BeginFrame(m_frameContext.GetCurrentFrameIndex());
         }
         if (VkRenderPassManager::GetActiveRenderPass() != nullptr) {
             VkRenderPassManager::EndRenderPass(frame.commandBuffer);
@@ -4911,7 +4897,6 @@ void main() {
         auto& frame = m_frameContext.GetCurrent();
         if (!frame.isCommandRecording) {
             m_frameContext.BeginCommandRecording();
-            m_uniformManager->BeginFrame(m_frameContext.GetCurrentFrameIndex());
         }
 
         if (VkRenderPassManager::GetActiveRenderPass() != nullptr) {
@@ -5442,10 +5427,6 @@ void main() {
         return frame.commandBuffer;
     }
 
-    Uint64 VulkanRenderer::GetCurrentFrameSerial() const {
-        return m_bufferManager.GetFrameSerial();
-    }
-
     Bool VulkanRenderer::IsFrameSerialComplete(Uint64 serial) const {
         return serial <= m_bufferManager.GetCompletedSerial();
     }
@@ -5474,6 +5455,222 @@ void main() {
             return false;
         }
         m_bufferManager.NotifyDeviceIdle();
+        OnSubmitsCompletedUpTo(m_submitCounter);
+        return true;
+    }
+
+    Uint64 VulkanRenderer::GetSyncPointSubmitIndex() const {
+        // Commands recorded (or still recording) since the last submission are
+        // carried by the NEXT submission; a fence created now must wait for it.
+        return m_submitCounter + (HasPendingRecordedWork() ? 1 : 0);
+    }
+
+    Bool VulkanRenderer::HasPendingRecordedWork() const {
+        if (m_frameContext.GetFrameCount() == 0) {
+            return false;
+        }
+        const auto& frame = m_frameContext.GetCurrent();
+        return frame.isCommandRecording || frame.hasCommandBufferRecorded;
+    }
+
+    Bool VulkanRenderer::IsSubmitIndexComplete(Uint64 submitIndex) {
+        if (submitIndex <= m_completedSubmitCounter) {
+            return true;
+        }
+        if (submitIndex > m_submitCounter) {
+            return false; // not even submitted; no point polling fences
+        }
+        RefreshCompletedSubmits();
+        return submitIndex <= m_completedSubmitCounter;
+    }
+
+    void VulkanRenderer::RegisterSubmit(VkFence fence, Bool pooledFence) {
+        ++m_submitCounter;
+        m_inFlightSubmits.push_back({m_submitCounter, m_bufferManager.GetFrameSerial(), fence, pooledFence});
+    }
+
+    void VulkanRenderer::RefreshCompletedSubmits() {
+        if (m_device == VK_NULL_HANDLE) {
+            return;
+        }
+        // Prefix-only scan: submissions to a single queue complete in order,
+        // and stopping at the first unsignaled fence stays conservative even
+        // if they did not.
+        while (!m_inFlightSubmits.empty()) {
+            // Copy before OnSubmitsCompletedUpTo erases the front record.
+            const Uint64 frontIndex = m_inFlightSubmits.front().submitIndex;
+            if (vkGetFenceStatus(m_device, m_inFlightSubmits.front().fence) != VK_SUCCESS) {
+                break;
+            }
+            OnSubmitsCompletedUpTo(frontIndex);
+        }
+    }
+
+    void VulkanRenderer::OnSubmitsCompletedUpTo(Uint64 submitIndex) {
+        m_completedSubmitCounter = std::max(m_completedSubmitCounter, submitIndex);
+        while (!m_inFlightSubmits.empty() && m_inFlightSubmits.front().submitIndex <= submitIndex) {
+            SubmitRecord record = m_inFlightSubmits.front();
+            m_inFlightSubmits.erase(m_inFlightSubmits.begin());
+            // Frame-serial completion piggybacks on submission completion.
+            // NotifyFrameSerialComplete refuses the current (still-recording)
+            // serial, so mid-frame flush records do not mark it early.
+            m_bufferManager.NotifyFrameSerialComplete(record.frameSerial);
+            if (!record.pooledFence || m_device == VK_NULL_HANDLE) {
+                continue; // frame-slot fences are reset/destroyed by FrameContext
+            }
+            if (vkResetFences(m_device, 1, &record.fence) == VK_SUCCESS) {
+                m_freeSubmitFences.push_back(record.fence);
+            } else {
+                vkDestroyFence(m_device, record.fence, nullptr);
+            }
+        }
+    }
+
+    VkFence VulkanRenderer::AcquirePooledSubmitFence() {
+        if (!m_freeSubmitFences.empty()) {
+            VkFence fence = m_freeSubmitFences.back();
+            m_freeSubmitFences.pop_back();
+            return fence;
+        }
+        VkFenceCreateInfo fenceInfo{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
+        VkFence fence = VK_NULL_HANDLE;
+        const VkResult result = vkCreateFence(m_device, &fenceInfo, nullptr, &fence);
+        if (result != VK_SUCCESS) {
+            MGLOG_E("AcquirePooledSubmitFence: vkCreateFence returned %d", result);
+            return VK_NULL_HANDLE;
+        }
+        return fence;
+    }
+
+    void VulkanRenderer::DestroySubmitFencePool() {
+        // Callers guarantee device idle, so in-flight fences are inert.
+        for (const auto& record : m_inFlightSubmits) {
+            if (record.pooledFence && m_device != VK_NULL_HANDLE) {
+                vkDestroyFence(m_device, record.fence, nullptr);
+            }
+        }
+        m_inFlightSubmits.clear();
+        for (auto fence : m_freeSubmitFences) {
+            if (m_device != VK_NULL_HANDLE) {
+                vkDestroyFence(m_device, fence, nullptr);
+            }
+        }
+        m_freeSubmitFences.clear();
+        m_completedSubmitCounter = m_submitCounter;
+    }
+
+    Bool VulkanRenderer::SubmitPendingCommandBuffer(FrameContext::FrameData& frame, VkFence fence, Bool pooledFence) {
+        VkPipelineStageFlags waitDstStageMask = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
+        VkSemaphore waitSemaphore = frame.imageAvailableSemaphore;
+        VkSubmitInfo submitInfo{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+        if (!frame.imageAvailableSemaphoreConsumed) {
+            submitInfo.waitSemaphoreCount = 1;
+            submitInfo.pWaitSemaphores = &waitSemaphore;
+            submitInfo.pWaitDstStageMask = &waitDstStageMask;
+        }
+        submitInfo.commandBufferCount = 1;
+        submitInfo.pCommandBuffers = &frame.commandBuffer;
+        const VkResult result = vkQueueSubmit(m_graphicsQueue, 1, &submitInfo, fence);
+        if (result != VK_SUCCESS) {
+            MGLOG_E("SubmitPendingCommandBuffer: vkQueueSubmit returned %d", result);
+            return false;
+        }
+        frame.imageAvailableSemaphoreConsumed = true;
+        frame.hasCommandBufferRecorded = false;
+        RegisterSubmit(fence, pooledFence);
+        frame.lastSubmitIndex = m_submitCounter;
+        return true;
+    }
+
+    Bool VulkanRenderer::FlushPendingCommands() {
+        if (m_device == VK_NULL_HANDLE || m_graphicsQueue == VK_NULL_HANDLE || m_frameContext.GetFrameCount() == 0) {
+            return false;
+        }
+        auto& frame = m_frameContext.GetCurrent();
+        if (!frame.isCommandRecording && !frame.hasCommandBufferRecorded) {
+            return false;
+        }
+        // Acquire the fence while recording is still open: failing here must
+        // not end recording, or the next draw's BeginCommandRecording would
+        // reset the command buffer and silently drop the frame's commands.
+        VkFence fence = AcquirePooledSubmitFence();
+        if (fence == VK_NULL_HANDLE) {
+            return false;
+        }
+        if (frame.isCommandRecording) {
+            if (VkRenderPassManager::GetActiveRenderPass() != nullptr) {
+                VkRenderPassManager::EndRenderPass(frame.commandBuffer);
+            }
+            m_frameContext.EndCommandRecording();
+        }
+        if (!SubmitPendingCommandBuffer(frame, fence, /*pooledFence=*/true)) {
+            // Submit failure (device loss regime): the ended command buffer
+            // stays marked recorded so Present can still try to submit it.
+            m_freeSubmitFences.push_back(fence); // still unsignaled, reusable
+            return false;
+        }
+
+        // The submitted command buffer may still be executing; recording must
+        // restart on a fresh one. If none can be allocated, fall back to
+        // draining this submission so reusing the buffer stays legal.
+        const VkResult retireResult = m_frameContext.RetireCurrentCommandBuffer();
+        if (retireResult != VK_SUCCESS) {
+            MGLOG_E("FlushPendingCommands: RetireCurrentCommandBuffer returned %d; draining submission", retireResult);
+            if (vkWaitForFences(m_device, 1, &fence, VK_TRUE, UINT64_MAX) == VK_SUCCESS) {
+                OnSubmitsCompletedUpTo(m_submitCounter);
+            } else if (vkQueueWaitIdle(m_graphicsQueue) == VK_SUCCESS) {
+                m_bufferManager.NotifyDeviceIdle();
+                OnSubmitsCompletedUpTo(m_submitCounter);
+            } else {
+                // Device is effectively lost; the command buffer may still be
+                // pending, but no recovery can make reuse legal.
+                MGLOG_E("FlushPendingCommands: drain failed; command buffer reuse is unsafe");
+            }
+        }
+        return true;
+    }
+
+    Bool VulkanRenderer::FlushForSyncPoint(Uint64 submitIndex) {
+        // A flush only helps a sync point whose commands are not submitted
+        // yet; for an already-submitted index it would just split the frame's
+        // render pass (a full tile load/store on TBDR GPUs) without advancing
+        // the fence.
+        if (submitIndex <= m_submitCounter) {
+            return false;
+        }
+        return FlushPendingCommands();
+    }
+
+    Bool VulkanRenderer::WaitForSubmitIndex(Uint64 submitIndex, Uint64 timeoutNs, Bool flushIfPending) {
+        if (IsSubmitIndexComplete(submitIndex)) {
+            return true;
+        }
+        if (submitIndex > m_submitCounter) {
+            if (!flushIfPending) {
+                return false;
+            }
+            FlushPendingCommands();
+            if (submitIndex > m_submitCounter) {
+                // Nothing could be submitted (empty batch or submit failure);
+                // the index cannot complete yet.
+                return false;
+            }
+        }
+        for (const auto& record : m_inFlightSubmits) {
+            if (record.submitIndex >= submitIndex) {
+                const VkResult result = vkWaitForFences(m_device, 1, &record.fence, VK_TRUE, timeoutNs);
+                if (result == VK_SUCCESS) {
+                    OnSubmitsCompletedUpTo(record.submitIndex);
+                    return true;
+                }
+                if (result != VK_TIMEOUT) {
+                    MGLOG_E("WaitForSubmitIndex: vkWaitForFences returned %d", result);
+                }
+                return false;
+            }
+        }
+        // No in-flight record at or beyond the index: it was already observed
+        // complete via a fence wait on a later submission.
         return true;
     }
 
@@ -5516,9 +5713,10 @@ void main() {
         if (IsTimerQueryResultReady(record)) {
             return true;
         }
-        // Mirrors ClientWaitSync: WaitForFrameSerial refuses serials that
-        // cannot complete without further submissions (a timestamp written
-        // this frame only executes once Present submits the command buffer).
+        // WaitForFrameSerial refuses serials that cannot complete without
+        // further submissions (a timestamp written this frame only executes
+        // once Present submits the command buffer), so this returns false
+        // instead of deadlocking; the record resolves after a later Present.
         if (!WaitForFrameSerial(record.frameSerial, UINT64_MAX)) {
             return false;
         }
@@ -5547,8 +5745,14 @@ void main() {
         const VkExtent2D presentStatsExtent = m_swapchainObject.GetExtent();
         const char* presentDumpPath = PresentDumpPath();
         const Bool shouldDumpPresent = presentDumpPath != nullptr && PresentDumpMatchesTargetCall();
-        const Bool collectPresentStats = (PresentStatsEnabled() || shouldDumpPresent) && frame.isCommandRecording &&
-                                         presentStatsExtent.width > 0 && presentStatsExtent.height > 0;
+        const Bool wantPresentStats = (PresentStatsEnabled() || shouldDumpPresent) &&
+                                      presentStatsExtent.width > 0 && presentStatsExtent.height > 0;
+        if (wantPresentStats && !frame.isCommandRecording) {
+            // A mid-frame flush may have closed the frame's recording; the
+            // stats copy needs an open command buffer.
+            m_frameContext.BeginCommandRecording();
+        }
+        const Bool collectPresentStats = wantPresentStats && frame.isCommandRecording;
         if (PresentStatsEnabled() && presentDumpPath != nullptr) {
             // Live getenv on purpose (not MG_Config::Features): the retrace
             // harness mutates these two variables at runtime via setenv.
@@ -5623,9 +5827,12 @@ void main() {
         // 1) Submit current frame work.
         auto submitPacket = m_frameContext.GetSubmitInfo(shouldSubmitCommandBuffer, m_imageIndexAcquired);
         VK_VERIFY(vkQueueSubmit(m_graphicsQueue, 1, &submitPacket.submitInfo, frame.imageInFlightFence));
+        RegisterSubmit(frame.imageInFlightFence, /*pooledFence=*/false);
+        frame.lastSubmitIndex = m_submitCounter;
         if (collectPresentStats) {
             VK_VERIFY(vkWaitForFences(m_device, 1, &frame.imageInFlightFence, VK_TRUE, UINT64_MAX),
                       "Present stats, vkWaitForFences");
+            OnSubmitsCompletedUpTo(frame.lastSubmitIndex);
             const auto* pixels = static_cast<const Uint8*>(presentStatsReadback.Map());
             MOBILEGL_ASSERT(pixels != nullptr, "Present stats: failed to map readback buffer");
             SizeT nonBlack = 0;
@@ -5699,9 +5906,21 @@ void main() {
                 m_frameContext.WaitAndAcquireNextImage(m_device, m_swapchainObject.GetHandle(), m_imageIndexAcquired);
         }
         VK_VERIFY(result, "Present, vkAcquireNextImageKHR");
+        // The acquired slot's fence has been waited: its last submission
+        // (and, in queue order, everything before it) is complete. The frame
+        // serials those submissions carried advance the buffer-manager floor
+        // inside OnSubmitsCompletedUpTo.
+        OnSubmitsCompletedUpTo(m_frameContext.GetCurrent().lastSubmitIndex);
         CollectDeferredDepthMipmapCleanup(m_frameContext.GetCurrentFrameIndex());
         m_textureManager->BeginFrame(m_frameContext.GetCurrentFrameIndex());
         m_bufferManager.BeginFrame(m_frameContext.GetCurrentFrameIndex());
+        // Descriptor-set reuse cursors rewind exactly once per frame, here,
+        // after the slot's fence wait proved its previous sets GPU-idle. (The
+        // per-draw-path lazy rewind missed frames whose recording was opened
+        // by a staged buffer copy or timer-query timestamp, leaking a fresh
+        // descriptor set per draw for the whole frame; it would also be unsafe
+        // after a mid-frame FlushPendingCommands, which does not wait.)
+        m_uniformManager->BeginFrame(m_frameContext.GetCurrentFrameIndex());
     }
 
     void VulkanRenderer::CreateInstance() {
@@ -6420,6 +6639,7 @@ void main() {
         }
 
         vkDeviceWaitIdle(m_device);
+        OnSubmitsCompletedUpTo(m_submitCounter);
 
         if (m_timerQueryManager) {
             // The in-progress command buffer is abandoned below (its recording

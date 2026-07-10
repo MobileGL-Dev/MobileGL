@@ -75,6 +75,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         void BeginFrame(Uint32 frameIndex);
         // All previously submitted GPU work has completed (vkDeviceWaitIdle).
         void NotifyDeviceIdle();
+        // A frame slot's submission fence has been waited: every serial up to
+        // and including `serial` is complete. Raises the completed floor so
+        // GetCompletedSerial reflects real fence progress instead of only the
+        // frameSerial-minus-frameCount inference.
+        void NotifyFrameSerialComplete(Uint64 serial);
         void SetCopyCommandProvider(IBufferCopyCommandProvider* provider);
 
         Bool UploadTransient(BufferKind kind, Uint32 frameIndex, const void* data, VkDeviceSize size,

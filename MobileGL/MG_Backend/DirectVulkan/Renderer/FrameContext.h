@@ -47,6 +47,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             Bool isCommandRecording = false;
             Bool hasCommandBufferRecorded = false;
             Bool imageAvailableSemaphoreConsumed = false;
+            // Command buffers submitted mid-frame (FlushPendingCommands) whose
+            // execution is only known complete once this slot's fence has been
+            // waited again; freed at that point.
+            Vector<VkCommandBuffer> retiredCommandBuffers;
+            // Submit-tracker index of this slot's most recent queue submission
+            // (written by the renderer at submit time).
+            Uint64 lastSubmitIndex = 0;
         };
 
         VkResult Initialize(VkDevice device, VkCommandPool commandPool, Uint32 frameCount);
@@ -69,6 +76,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         VkResult WaitAndAcquireNextImage(VkDevice device, VkSwapchainKHR swapchain, Uint32& outImageIndex,
                                          Uint64 timeout = UINT64_MAX, VkFence acquireFence = VK_NULL_HANDLE);
 
+        // Parks the current (already ended and submitted) command buffer on the
+        // slot's retired list and installs a freshly allocated one, so recording
+        // can restart while the submitted buffer is still executing. Retired
+        // buffers are freed after the slot's fence is next waited.
+        VkResult RetireCurrentCommandBuffer();
+
         Uint32 GetCurrentFrameIndex() const;
         Uint32 GetFrameCount() const;
 
@@ -83,10 +96,14 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                            const VkSemaphoreCreateInfo& semaphoreInfo,
                                            const VkFenceCreateInfo& fenceInfo);
         void DestroySyncObjectsForFrame(VkDevice device, Uint32 frameIndex);
+        void FreeRetiredCommandBuffers(FrameData& frame);
 
         Vector<FrameData> m_frames;
         Vector<VkSemaphore> m_swapchainImageRenderFinishedSemaphores;
         Uint32 currentFrameIndex = 0;
         IRecordingObserver* m_recordingObserver = nullptr;
+        // Stored at Initialize for retired-command-buffer management.
+        VkDevice m_device = VK_NULL_HANDLE;
+        VkCommandPool m_commandPool = VK_NULL_HANDLE;
     };
 } // namespace MobileGL::MG_Backend::DirectVulkan

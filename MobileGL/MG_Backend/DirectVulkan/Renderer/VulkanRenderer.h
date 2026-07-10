@@ -173,11 +173,35 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         VkInstance GetInstance() const;
         Bool IsDrawIndirectCountExtensionEnabled() const;
 
-        // GL fence support, expressed in VkBufferManager frame serials: a fence
-        // captures GetCurrentFrameSerial() at creation and is signaled once
-        // IsFrameSerialComplete() reports that serial complete (the same
-        // busy-tracking horizon used to recycle buffer resources).
-        Uint64 GetCurrentFrameSerial() const;
+        // GL fence support, expressed in queue-submission indices backed by
+        // real VkFences. A GL fence captures GetSyncPointSubmitIndex() at
+        // creation: the index of the submission that will carry the commands
+        // recorded so far (m_submitCounter + 1 while work is pending, or
+        // m_submitCounter when nothing has been recorded since the last
+        // submit). It is signaled once that submission's fence is observed
+        // signaled - unlike the frame-serial heuristic, this makes fences
+        // signal as soon as the GPU actually finishes, which MC 1.21.5's
+        // fence-paced ring buffers rely on to recycle their space.
+        Uint64 GetSyncPointSubmitIndex() const;
+        // Non-blocking: polls outstanding submission fences and reports
+        // whether every submission up to `submitIndex` has completed.
+        Bool IsSubmitIndexComplete(Uint64 submitIndex);
+        // Submits the commands recorded so far without waiting (GL flush).
+        // Recording restarts lazily on a fresh command buffer; the submitted
+        // one is retired until the frame slot's fence is next waited. Returns
+        // true when a submission was made.
+        Bool FlushPendingCommands();
+        // Flush gated on usefulness: only flushes when `submitIndex` is still
+        // unsubmitted, so poll loops on already-submitted fences do not split
+        // the frame's render pass (a full tile load/store on TBDR GPUs).
+        Bool FlushForSyncPoint(Uint64 submitIndex);
+        // Blocking wait for a submission index with a nanosecond timeout.
+        // When the index is still unsubmitted and flushIfPending is set, the
+        // pending commands are flushed first so the wait can make progress.
+        Bool WaitForSubmitIndex(Uint64 submitIndex, Uint64 timeoutNs, Bool flushIfPending);
+
+        // Frame-serial completion, still used by the timer-query paths (their
+        // records are bucketed per frame slot).
         Bool IsFrameSerialComplete(Uint64 serial) const;
         // Blocking wait for a submitted serial. Returns false when the serial
         // cannot complete without further submissions (it belongs to the
@@ -244,6 +268,53 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         void QueueClearBufferPayloadForFramebuffer(const MG_State::GLState::FramebufferObject& framebuffer,
                                                   GLenum buffer, GLint drawbuffer,
                                                   const ClearAttachmentPayload& clearPayload);
+
+        // ---- Submission fence tracking (GL sync objects) ----
+        // One record per vkQueueSubmit still in flight, in ascending submit
+        // order. Present/readback submissions reference the frame slot's
+        // fence (not pool-owned); mid-frame flushes use pooled fences that are
+        // recycled once their submission is observed complete.
+        // Not thread-safe: like the rest of the renderer, the tracker relies
+        // on GL calls being serialized (launchers migrate the context across
+        // threads, but calls never run concurrently), so sync-object polls
+        // may mutate it without locking.
+        struct SubmitRecord {
+            Uint64 submitIndex = 0;
+            // Buffer-manager frame serial the submission was made under; its
+            // completion raises the completed-serial floor (timer queries and
+            // buffer busy-tracking live in frame-serial space).
+            Uint64 frameSerial = 0;
+            VkFence fence = VK_NULL_HANDLE;
+            Bool pooledFence = false;
+        };
+        // Registers a submission that vkQueueSubmit just made with `fence`.
+        // Invariant: every graphics-queue submission that outlives its call
+        // site must be registered so GL fences observe it. Exempt are the
+        // texture-upload/preserve submits in VkTextureManager, which
+        // vkWaitForFences inline before returning.
+        void RegisterSubmit(VkFence fence, Bool pooledFence);
+        // Builds the submit packet for the frame's pending command buffer
+        // (consuming the acquire semaphore on the slot's first submission),
+        // submits it with `fence`, and registers the submission. On failure
+        // the frame state is left untouched. Shared by the mid-frame flush
+        // and the readback path so the semaphore-consumption invariant lives
+        // in one place.
+        Bool SubmitPendingCommandBuffer(FrameContext::FrameData& frame, VkFence fence, Bool pooledFence);
+        // Polls in-flight submission fences (prefix order) and advances the
+        // completed counter past every fence observed signaled.
+        void RefreshCompletedSubmits();
+        // All submissions up to `submitIndex` are known complete (their fence
+        // was waited or the device was idled); drops their records and
+        // recycles pooled fences.
+        void OnSubmitsCompletedUpTo(Uint64 submitIndex);
+        VkFence AcquirePooledSubmitFence();
+        void DestroySubmitFencePool();
+        Bool HasPendingRecordedWork() const;
+
+        Vector<SubmitRecord> m_inFlightSubmits;
+        Vector<VkFence> m_freeSubmitFences;
+        Uint64 m_submitCounter = 0;
+        Uint64 m_completedSubmitCounter = 0;
 
         NativeWindowType m_window = 0;
         void* m_platformDisplay = nullptr;

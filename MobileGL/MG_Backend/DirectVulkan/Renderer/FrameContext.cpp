@@ -13,6 +13,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         Destroy(device, commandPool);
         m_frames.assign(frameCount, {});
         currentFrameIndex = 0;
+        m_device = device;
+        m_commandPool = commandPool;
 
         Vector<VkCommandBuffer> commandBuffers(frameCount, VK_NULL_HANDLE);
         VkCommandBufferAllocateInfo allocInfo{};
@@ -55,10 +57,15 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
         DestroySwapchainSemaphores(device);
         if (device != VK_NULL_HANDLE && commandPool != VK_NULL_HANDLE && !m_frames.empty()) {
+            for (auto& frame : m_frames) {
+                FreeRetiredCommandBuffers(frame);
+            }
             vkFreeCommandBuffers(device, commandPool, frameCount, commandBuffers.data());
         }
         m_frames.clear();
         currentFrameIndex = 0;
+        m_device = VK_NULL_HANDLE;
+        m_commandPool = VK_NULL_HANDLE;
     }
 
     FrameContext::FrameData& FrameContext::GetCurrent() {
@@ -214,6 +221,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         if (result != VK_SUCCESS) {
             return result;
         }
+        // The slot's fence has been waited: every command buffer this slot
+        // submitted (including mid-frame flushes) has finished executing.
+        FreeRetiredCommandBuffers(frame);
 
         result = vkAcquireNextImageKHR(device, swapchain, timeout, frame.imageAvailableSemaphore, acquireFence,
                                        &outImageIndex);
@@ -235,6 +245,39 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
     void FrameContext::SetRecordingObserver(IRecordingObserver* observer) {
         m_recordingObserver = observer;
+    }
+
+    VkResult FrameContext::RetireCurrentCommandBuffer() {
+        MOBILEGL_ASSERT(m_device != VK_NULL_HANDLE && m_commandPool != VK_NULL_HANDLE,
+                        "RetireCurrentCommandBuffer requires an initialized FrameContext");
+        auto& frame = GetCurrent();
+        MOBILEGL_ASSERT(!frame.isCommandRecording,
+                        "RetireCurrentCommandBuffer called while the command buffer is still recording");
+
+        VkCommandBufferAllocateInfo allocInfo{};
+        allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+        allocInfo.commandPool = m_commandPool;
+        allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+        allocInfo.commandBufferCount = 1;
+        VkCommandBuffer replacement = VK_NULL_HANDLE;
+        const VkResult result = vkAllocateCommandBuffers(m_device, &allocInfo, &replacement);
+        if (result != VK_SUCCESS) {
+            return result;
+        }
+        frame.retiredCommandBuffers.push_back(frame.commandBuffer);
+        frame.commandBuffer = replacement;
+        return VK_SUCCESS;
+    }
+
+    void FrameContext::FreeRetiredCommandBuffers(FrameData& frame) {
+        if (frame.retiredCommandBuffers.empty()) {
+            return;
+        }
+        if (m_device != VK_NULL_HANDLE && m_commandPool != VK_NULL_HANDLE) {
+            vkFreeCommandBuffers(m_device, m_commandPool, static_cast<Uint32>(frame.retiredCommandBuffers.size()),
+                                 frame.retiredCommandBuffers.data());
+        }
+        frame.retiredCommandBuffers.clear();
     }
 
     void FrameContext::AssertValidFrameIndex(Uint32 frameIndex) const {

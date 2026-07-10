@@ -1366,16 +1366,18 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     }
 
     namespace {
-        // Backend fence handle: the VkBufferManager frame serial captured at
-        // fence creation. The fence is signaled once every command recorded
-        // under that serial has completed on the GPU (the same busy-tracking
-        // horizon used to recycle buffer resources).
+        // Backend fence handle: the queue-submission index captured at fence
+        // creation (see VulkanRenderer::GetSyncPointSubmitIndex). The fence is
+        // signaled once that submission's VkFence has been observed signaled,
+        // so completion tracks the GPU itself rather than the frame-count
+        // inference; MC 1.21.5's fence-paced ring buffers depend on this to
+        // recycle their space instead of growing without bound.
         struct VulkanSyncObject {
-            Uint64 frameSerial = 0;
-            // Renderer generation the serial was issued under (see
+            Uint64 submitIndex = 0;
+            // Renderer generation the index was issued under (see
             // g_rendererGeneration). A stale generation reports the fence
             // signaled: renderer destruction waits for device idle, so the
-            // old renderer's GPU work is long complete, and the serial must
+            // old renderer's GPU work is long complete, and the index must
             // not be compared against the new renderer's restarted counter.
             Uint64 rendererGeneration = 0;
         };
@@ -1385,26 +1387,36 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         if (!pVulkanRenderer) {
             return nullptr;
         }
-        return new VulkanSyncObject{pVulkanRenderer->GetCurrentFrameSerial(), GetRendererGeneration()};
+        return new VulkanSyncObject{pVulkanRenderer->GetSyncPointSubmitIndex(), GetRendererGeneration()};
     }
 
     GLenum ClientWaitSync(BackendSyncHandle handle, GLbitfield flags, GLuint64 timeout) {
-        // Commands are only submitted at Present, so GL_SYNC_FLUSH_COMMANDS_BIT
-        // cannot force progress mid-frame; WaitForFrameSerial reports whether
-        // waiting can succeed at all.
-        (void)flags;
         const auto* sync = static_cast<VulkanSyncObject*>(handle);
         if (sync == nullptr || !pVulkanRenderer || sync->rendererGeneration != GetRendererGeneration()) {
             return GL_ALREADY_SIGNALED;
         }
-        if (pVulkanRenderer->IsFrameSerialComplete(sync->frameSerial)) {
+        if (pVulkanRenderer->IsSubmitIndexComplete(sync->submitIndex)) {
             return GL_ALREADY_SIGNALED;
         }
-        if (timeout == 0) {
-            return GL_TIMEOUT_EXPIRED;
+        // GL_SYNC_FLUSH_COMMANDS_BIT: flush regardless of timeout, so a
+        // zero-timeout poll loop makes progress across calls - but only when
+        // the sync's batch is still unsubmitted; flushing for an already
+        // submitted fence cannot advance it and would split the frame's
+        // render pass on every poll.
+        if ((flags & GL_SYNC_FLUSH_COMMANDS_BIT) != 0) {
+            pVulkanRenderer->FlushForSyncPoint(sync->submitIndex);
         }
-        return pVulkanRenderer->WaitForFrameSerial(sync->frameSerial, timeout) ? GL_CONDITION_SATISFIED
-                                                                               : GL_TIMEOUT_EXPIRED;
+        if (timeout == 0) {
+            return pVulkanRenderer->IsSubmitIndexComplete(sync->submitIndex) ? GL_ALREADY_SIGNALED
+                                                                             : GL_TIMEOUT_EXPIRED;
+        }
+        // Blocking wait: flush even without the flush bit - the sync's batch
+        // can only be submitted from this thread, so waiting on an unflushed
+        // fence would otherwise burn the full timeout with no chance of
+        // success.
+        return pVulkanRenderer->WaitForSubmitIndex(sync->submitIndex, timeout, /*flushIfPending=*/true)
+                   ? GL_CONDITION_SATISFIED
+                   : GL_TIMEOUT_EXPIRED;
     }
 
     void WaitSync(BackendSyncHandle handle, GLbitfield flags, GLuint64 timeout) {
@@ -1425,7 +1437,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         if (sync == nullptr || !pVulkanRenderer || sync->rendererGeneration != GetRendererGeneration()) {
             return true;
         }
-        return pVulkanRenderer->IsFrameSerialComplete(sync->frameSerial);
+        // Pure status read (glGetSynciv must not flush).
+        return pVulkanRenderer->IsSubmitIndexComplete(sync->submitIndex);
     }
 
     namespace {

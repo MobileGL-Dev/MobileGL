@@ -129,6 +129,15 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
     }
 
+    void VkBufferManager::NotifyFrameSerialComplete(Uint64 serial) {
+        // The current serial's work is still being recorded; a completion
+        // report for it (or beyond) can only come from a stale caller.
+        if (serial >= m_frameSerial) {
+            return;
+        }
+        m_completedSerialFloor = std::max(m_completedSerialFloor, serial);
+    }
+
     void VkBufferManager::SetCopyCommandProvider(IBufferCopyCommandProvider* provider) {
         m_copyProvider = provider;
     }
