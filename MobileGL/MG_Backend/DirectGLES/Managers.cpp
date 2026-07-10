@@ -41,13 +41,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
     constexpr const char* ZERO_BASED_INSTANCE_ID_NAME = "mg_ZeroBasedInstanceID";
 
     static Bool IsAngleLlvmpipeRenderer() {
-        return g_GLESCapabilities.GLESRendererString.find("ANGLE") != String::npos &&
-               g_GLESCapabilities.GLESRendererString.find("llvmpipe") != String::npos;
+        return g_GLESCapabilities.IsAngleLlvmpipeRenderer;
     }
 
     static Bool ShouldAvoidSamplerMipmapMinFilterOnAngleLlvmpipe() {
-        const char* value = std::getenv("MOBILEGL_ANGLE_LLVMPIPE_AVOID_SAMPLER_MIPMAP_MIN_FILTER");
-        return value != nullptr && std::strcmp(value, "1") == 0 && IsAngleLlvmpipeRenderer();
+        // IsAngleLlvmpipeRenderer combined with the
+        // MOBILEGL_ANGLE_LLVMPIPE_AVOID_SAMPLER_MIPMAP_MIN_FILTER feature toggle,
+        // both resolved in FillInGLESCapabilities.
+        return g_GLESCapabilities.AvoidSamplerMipmapMinFilter;
     }
 
     static GLenum ResolveBackendMinFilter(const SamplerParameters& samplerParams,

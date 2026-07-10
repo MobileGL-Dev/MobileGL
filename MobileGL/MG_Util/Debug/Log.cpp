@@ -63,6 +63,8 @@ namespace MobileGL {
         void InitFile() {
 #if MOBILEGL_LOG_ENABLE_FILE
             if (!s_logFile) {
+                // MOBILEGL_LOG_FILE_PATH must stay a raw getenv (not MG_Config::Features):
+                // InitFile() runs before MG_ConfigLoader::Init() in MobileGL::Initialize().
                 const char* logPath = std::getenv("MOBILEGL_LOG_FILE_PATH");
                 if (!logPath || !*logPath) {
                     logPath = MOBILEGL_LOG_FILE_PATH;

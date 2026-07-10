@@ -8,8 +8,7 @@
 
 #include "Loader.h"
 
-#include <cstdlib>
-#include <cstring>
+#include <Config.h>
 
 namespace MobileGL::MG_Util::BackendLoader {
     namespace {
@@ -61,11 +60,7 @@ namespace MobileGL::MG_Util::BackendLoader {
         }
 
         Bool IsShaderSubgroupForcedDisabled() {
-            const char* value = std::getenv("MOBILEGL_DISABLE_SUBGROUP");
-            if (!value) {
-                return false;
-            }
-            return std::strcmp(value, "true") == 0 || std::strcmp(value, "TRUE") == 0;
+            return MG_Config::Features.DisableSubgroup;
         }
     } // namespace
 

@@ -12,6 +12,12 @@
 extern char** environ;
 #endif
 
+namespace MobileGL::MG_Config {
+    // Zero/default-initialized at static-init time (all fields have constexpr-friendly
+    // defaults), so it is safe to read even if MG_ConfigLoader::Init has not run yet.
+    FeaturesTable Features;
+} // namespace MobileGL::MG_Config
+
 namespace MobileGL::MG_ConfigLoader {
     static UniquePtr<UnorderedMap<String, String>> acceptedEnvVariablesMap;
 
@@ -60,6 +66,41 @@ namespace MobileGL::MG_ConfigLoader {
         }
     }
 
+    // Unified truthy rule for boolean feature env variables: set, non-empty, not "0",
+    // and not "false" (case-insensitive).
+    static Bool IsTruthyValue(const String& value) {
+        if (value.empty() || value == "0") {
+            return false;
+        }
+        String lowered = value;
+        std::transform(lowered.begin(), lowered.end(), lowered.begin(),
+                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        return lowered != "false";
+    }
+
+    inline Bool QueryEnvFlag(const String& key) {
+        auto it = acceptedEnvVariablesMap->find(key);
+        return it != acceptedEnvVariablesMap->end() && IsTruthyValue(it->second);
+    }
+
+    inline void InitFeatures() {
+        auto& features = MG_Config::Features;
+        features.DisableTimerQuery = QueryEnvFlag("MOBILEGL_DISABLE_TIMERQUERY");
+        features.RetraceUseAngle = QueryEnvFlag("MOBILEGL_RETRACE_USE_ANGLE");
+        QueryEnvVariable("MOBILEGL_RETRACE_ANGLE_DIR", features.RetraceAngleDir, "");
+        features.DisableSubgroup = QueryEnvFlag("MOBILEGL_DISABLE_SUBGROUP");
+        features.VulkanR11G11B10FFallback = QueryEnvFlag("MOBILEGL_VULKAN_R11G11B10F_FALLBACK");
+        features.GlesPresentStats = QueryEnvFlag("MOBILEGL_GLES_PRESENT_STATS");
+        features.AvoidAngleLlvmpipeSamplerMipmapMinFilter =
+            QueryEnvFlag("MOBILEGL_ANGLE_LLVMPIPE_AVOID_SAMPLER_MIPMAP_MIN_FILTER");
+        features.DescriptorStats = QueryEnvFlag("MOBILEGL_DESCRIPTOR_STATS");
+        features.TextureUploadStats = QueryEnvFlag("MOBILEGL_TEXTURE_UPLOAD_STATS");
+        features.VertexInputStats = QueryEnvFlag("MOBILEGL_VERTEX_INPUT_STATS");
+        QueryEnvVariable("MOBILEGL_PRESENT_DUMP_PATH", features.PresentDumpPath, "");
+        features.PresentStats = QueryEnvFlag("MOBILEGL_PRESENT_STATS");
+        features.TraceSkipAutodestroy = QueryEnvFlag("MOBILEGL_TRACE_SKIP_AUTODESTROY");
+    }
+
     inline void InitBackendType() {
         String backendTypeStr;
         QueryEnvVariable("MOBILEGL_BACKEND_TYPE", backendTypeStr, "DirectGLES");
@@ -81,6 +122,7 @@ namespace MobileGL::MG_ConfigLoader {
         InitializeAcceptedEnvVariables();
 
         InitBackendType();
+        InitFeatures();
 
         // Destroy the map since we won't need it anymore
         acceptedEnvVariablesMap.reset();

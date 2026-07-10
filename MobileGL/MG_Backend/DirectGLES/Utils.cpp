@@ -23,7 +23,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
     namespace {
         Flags<PixelFormatNormalizeOptionBit> GetForcedPixelFormatNormalizeOptions() {
             Flags<PixelFormatNormalizeOptionBit> options;
-            if (g_GLESCapabilities.GLESRendererString.find("ANGLE") != String::npos) {
+            if (g_GLESCapabilities.IsAngleRenderer) {
                 options |= PixelFormatNormalizeOptionBit::NoRgb16;
                 options |= PixelFormatNormalizeOptionBit::NoSnorm16;
                 options |= PixelFormatNormalizeOptionBit::NoSnorm8;
