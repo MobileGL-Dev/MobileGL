@@ -8,6 +8,9 @@
 
 #include "DriverPost.h"
 #include "MG_Util/BackendLoaders/OpenGL/Loader.h"
+#include <Config.h>
+#include <chrono>
+#include <thread>
 
 #if !defined(_WIN32)
 #include <dlfcn.h>
@@ -124,6 +127,88 @@ namespace MobileGL::MG_Util::SelfTest {
             builder.Info("GL_RENDERER", caps.GLESRendererString);
             builder.Info("GL_VERSION", caps.GLESVersionString);
         }
+
+        // Timer-query rows: extension presence plus a real GL_TIME_ELAPSED_EXT span
+        // around a trivial workload on the probe context. Requires the probe context
+        // to still be current.
+        void ProbeGlesTimerQuery(ReportBuilder& builder, const MG_External::GLESCapabilities& caps,
+                                 const MG_External::GLESFunctionsTable& glesFuncs) {
+            if (MG_Config::Features.DisableTimerQuery) {
+                builder.Info("Timer queries", "timer queries disabled by MOBILEGL_DISABLE_TIMERQUERY");
+            }
+            if (!caps.SupportsDisjointTimerQuery) {
+                builder.Warn("GL_EXT_disjoint_timer_query",
+                             "not supported; timer queries unavailable; Minecraft F3 GPU% will not show");
+                return;
+            }
+            builder.Pass("GL_EXT_disjoint_timer_query", "extension present");
+
+            if (!glesFuncs.glGenQueries || !glesFuncs.glDeleteQueries || !glesFuncs.glBeginQuery ||
+                !glesFuncs.glEndQuery || !glesFuncs.glGetQueryObjectuiv || !glesFuncs.glGetQueryObjectui64vEXT ||
+                !glesFuncs.glClearColor || !glesFuncs.glClear || !glesFuncs.glFlush || !glesFuncs.glFinish ||
+                !glesFuncs.glGetError) {
+                builder.Fail("Timer query probe",
+                             "GL_EXT_disjoint_timer_query is advertised but the query entry points did not "
+                             "resolve through eglGetProcAddress");
+                return;
+            }
+
+            // Drain stale errors so probe failures are attributable to the probe itself.
+            while (glesFuncs.glGetError() != GL_NO_ERROR) {
+            }
+
+            GLuint queryId = 0;
+            glesFuncs.glGenQueries(1, &queryId);
+            if (queryId == 0) {
+                builder.Fail("Timer query probe", "glGenQueries did not return a query object");
+                return;
+            }
+            const ScopeGuard deleteQuery([&]() { glesFuncs.glDeleteQueries(1, &queryId); });
+
+            glesFuncs.glBeginQuery(GL_TIME_ELAPSED_EXT, queryId);
+            // Trivial workload inside the span: clear the 1x1 probe pbuffer and flush.
+            glesFuncs.glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+            glesFuncs.glClear(GL_COLOR_BUFFER_BIT);
+            glesFuncs.glFlush();
+            glesFuncs.glEndQuery(GL_TIME_ELAPSED_EXT);
+            glesFuncs.glFinish();
+
+            const GLenum spanError = glesFuncs.glGetError();
+            if (spanError != GL_NO_ERROR) {
+                builder.Fail("Timer query probe",
+                             format("GL error 0x{:x} while recording the GL_TIME_ELAPSED_EXT span", spanError));
+                return;
+            }
+
+            // glFinish already drained the GPU, so a conforming driver reports the
+            // result available immediately; the bounded loop only covers drivers
+            // that latch availability lazily. Paced at ~100us per poll to match
+            // the runtime GetQueryResult64 wait loop, bounding the worst case
+            // at ~100ms so a broken driver cannot stall the POST.
+            GLuint available = 0;
+            for (Int attempt = 0; attempt < 1000 && available == 0; ++attempt) {
+                glesFuncs.glGetQueryObjectuiv(queryId, GL_QUERY_RESULT_AVAILABLE, &available);
+                if (available == 0) {
+                    std::this_thread::sleep_for(std::chrono::microseconds(100));
+                }
+            }
+            if (available == 0) {
+                builder.Fail("Timer query probe",
+                             "GL_QUERY_RESULT_AVAILABLE never became true after glFinish "
+                             "(1000 polls over ~100ms)");
+                return;
+            }
+
+            GLuint64 elapsedNs = 0;
+            glesFuncs.glGetQueryObjectui64vEXT(queryId, GL_QUERY_RESULT, &elapsedNs);
+            const GLenum resultError = glesFuncs.glGetError();
+            if (resultError != GL_NO_ERROR) {
+                builder.Fail("Timer query probe",
+                             format("GL error 0x{:x} while reading GL_QUERY_RESULT", resultError));
+                return;
+            }
+            builder.Pass("Timer query probe", format("timer query functional (observed {} ns)", elapsedNs));
+        }
     } // namespace
 
     BackendPostReport RunGlesDriverPost() {
@@ -230,6 +315,7 @@ namespace MobileGL::MG_Util::SelfTest {
             }
             builder.report.rendererInfo = format("{} ({})", caps.GLESRendererString, caps.GLESVersionString);
             EvaluateGlesChecklist(builder, caps, glesFuncs);
+            ProbeGlesTimerQuery(builder, caps, glesFuncs);
         } while (false);
 
         builder.Finalize();
@@ -285,6 +371,232 @@ namespace MobileGL::MG_Util::SelfTest {
         String VkApiVersionToString(Uint32 version) {
             return format("{}.{}.{}", VK_VERSION_MAJOR(version), VK_VERSION_MINOR(version),
                           VK_VERSION_PATCH(version));
+        }
+
+        // Real timestamp-query probe: a throwaway logical device records two
+        // vkCmdWriteTimestamp(BOTTOM_OF_PIPE) queries and reads them back. Every
+        // created object is torn down from a scope guard before the caller's
+        // instance guard runs.
+        void ProbeVulkanTimerQuery(ReportBuilder& builder, PFN_vkGetInstanceProcAddr getInstanceProcAddr,
+                                   VkInstance instance, VkPhysicalDevice physicalDevice,
+                                   Uint32 graphicsQueueFamilyIndex, Uint32 timestampValidBits,
+                                   Float timestampPeriod) {
+            const auto vkCreateDeviceFn =
+                reinterpret_cast<PFN_vkCreateDevice>(getInstanceProcAddr(instance, "vkCreateDevice"));
+            const auto vkDestroyDeviceFn =
+                reinterpret_cast<PFN_vkDestroyDevice>(getInstanceProcAddr(instance, "vkDestroyDevice"));
+            const auto vkGetDeviceQueueFn =
+                reinterpret_cast<PFN_vkGetDeviceQueue>(getInstanceProcAddr(instance, "vkGetDeviceQueue"));
+            const auto vkCreateCommandPoolFn =
+                reinterpret_cast<PFN_vkCreateCommandPool>(getInstanceProcAddr(instance, "vkCreateCommandPool"));
+            const auto vkDestroyCommandPoolFn =
+                reinterpret_cast<PFN_vkDestroyCommandPool>(getInstanceProcAddr(instance, "vkDestroyCommandPool"));
+            const auto vkAllocateCommandBuffersFn = reinterpret_cast<PFN_vkAllocateCommandBuffers>(
+                getInstanceProcAddr(instance, "vkAllocateCommandBuffers"));
+            const auto vkBeginCommandBufferFn =
+                reinterpret_cast<PFN_vkBeginCommandBuffer>(getInstanceProcAddr(instance, "vkBeginCommandBuffer"));
+            const auto vkEndCommandBufferFn =
+                reinterpret_cast<PFN_vkEndCommandBuffer>(getInstanceProcAddr(instance, "vkEndCommandBuffer"));
+            const auto vkCreateQueryPoolFn =
+                reinterpret_cast<PFN_vkCreateQueryPool>(getInstanceProcAddr(instance, "vkCreateQueryPool"));
+            const auto vkDestroyQueryPoolFn =
+                reinterpret_cast<PFN_vkDestroyQueryPool>(getInstanceProcAddr(instance, "vkDestroyQueryPool"));
+            const auto vkCmdResetQueryPoolFn =
+                reinterpret_cast<PFN_vkCmdResetQueryPool>(getInstanceProcAddr(instance, "vkCmdResetQueryPool"));
+            const auto vkCmdWriteTimestampFn =
+                reinterpret_cast<PFN_vkCmdWriteTimestamp>(getInstanceProcAddr(instance, "vkCmdWriteTimestamp"));
+            const auto vkCreateFenceFn =
+                reinterpret_cast<PFN_vkCreateFence>(getInstanceProcAddr(instance, "vkCreateFence"));
+            const auto vkDestroyFenceFn =
+                reinterpret_cast<PFN_vkDestroyFence>(getInstanceProcAddr(instance, "vkDestroyFence"));
+            const auto vkWaitForFencesFn =
+                reinterpret_cast<PFN_vkWaitForFences>(getInstanceProcAddr(instance, "vkWaitForFences"));
+            const auto vkQueueSubmitFn =
+                reinterpret_cast<PFN_vkQueueSubmit>(getInstanceProcAddr(instance, "vkQueueSubmit"));
+            const auto vkGetQueryPoolResultsFn = reinterpret_cast<PFN_vkGetQueryPoolResults>(
+                getInstanceProcAddr(instance, "vkGetQueryPoolResults"));
+            const auto vkDeviceWaitIdleFn =
+                reinterpret_cast<PFN_vkDeviceWaitIdle>(getInstanceProcAddr(instance, "vkDeviceWaitIdle"));
+
+            if (vkCreateDeviceFn == nullptr || vkDestroyDeviceFn == nullptr || vkGetDeviceQueueFn == nullptr ||
+                vkCreateCommandPoolFn == nullptr || vkDestroyCommandPoolFn == nullptr ||
+                vkAllocateCommandBuffersFn == nullptr || vkBeginCommandBufferFn == nullptr ||
+                vkEndCommandBufferFn == nullptr || vkCreateQueryPoolFn == nullptr ||
+                vkDestroyQueryPoolFn == nullptr || vkCmdResetQueryPoolFn == nullptr ||
+                vkCmdWriteTimestampFn == nullptr || vkCreateFenceFn == nullptr || vkDestroyFenceFn == nullptr ||
+                vkWaitForFencesFn == nullptr || vkQueueSubmitFn == nullptr || vkGetQueryPoolResultsFn == nullptr ||
+                vkDeviceWaitIdleFn == nullptr) {
+                builder.Fail("Timer query probe",
+                             "vkGetInstanceProcAddr could not resolve the entry points required for the "
+                             "timestamp probe");
+                return;
+            }
+
+            const Float queuePriority = 1.0f;
+            VkDeviceQueueCreateInfo queueInfo{};
+            queueInfo.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
+            queueInfo.queueFamilyIndex = graphicsQueueFamilyIndex;
+            queueInfo.queueCount = 1;
+            queueInfo.pQueuePriorities = &queuePriority;
+
+            VkDeviceCreateInfo deviceInfo{};
+            deviceInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
+            deviceInfo.queueCreateInfoCount = 1;
+            deviceInfo.pQueueCreateInfos = &queueInfo;
+
+            VkDevice device = VK_NULL_HANDLE;
+            VkResult result = vkCreateDeviceFn(physicalDevice, &deviceInfo, nullptr, &device);
+            if (result != VK_SUCCESS || device == VK_NULL_HANDLE) {
+                builder.Fail("Timer query probe",
+                             format("vkCreateDevice failed (VkResult = {})", static_cast<Int>(result)));
+                return;
+            }
+
+            VkCommandPool commandPool = VK_NULL_HANDLE;
+            VkQueryPool queryPool = VK_NULL_HANDLE;
+            VkFence fence = VK_NULL_HANDLE;
+            Bool fenceWaitTimedOut = false;
+            // Same teardown-on-every-path style as the caller's instance guard; runs
+            // before that guard, so device objects die before the instance does. The
+            // idle wait keeps an in-flight submission from racing object destruction.
+            const ScopeGuard destroyDeviceObjects([&]() {
+                if (fenceWaitTimedOut) {
+                    // The probe fence never signaled within its timeout, so the
+                    // submission may still be executing - or the GPU is hung.
+                    // vkDeviceWaitIdle could then block forever and destroying
+                    // in-flight objects is undefined, so the probe deliberately
+                    // leaks the device objects (device, pools, fence): a hung
+                    // GPU must not hang the POST.
+                    return;
+                }
+                vkDeviceWaitIdleFn(device);
+                if (fence != VK_NULL_HANDLE) {
+                    vkDestroyFenceFn(device, fence, nullptr);
+                }
+                if (queryPool != VK_NULL_HANDLE) {
+                    vkDestroyQueryPoolFn(device, queryPool, nullptr);
+                }
+                if (commandPool != VK_NULL_HANDLE) {
+                    vkDestroyCommandPoolFn(device, commandPool, nullptr);
+                }
+                vkDestroyDeviceFn(device, nullptr);
+            });
+
+            VkQueue queue = VK_NULL_HANDLE;
+            vkGetDeviceQueueFn(device, graphicsQueueFamilyIndex, 0, &queue);
+            if (queue == VK_NULL_HANDLE) {
+                builder.Fail("Timer query probe", "vkGetDeviceQueue returned a null graphics queue");
+                return;
+            }
+
+            VkCommandPoolCreateInfo poolInfo{};
+            poolInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+            poolInfo.queueFamilyIndex = graphicsQueueFamilyIndex;
+            result = vkCreateCommandPoolFn(device, &poolInfo, nullptr, &commandPool);
+            if (result != VK_SUCCESS) {
+                builder.Fail("Timer query probe",
+                             format("vkCreateCommandPool failed (VkResult = {})", static_cast<Int>(result)));
+                return;
+            }
+
+            VkCommandBufferAllocateInfo allocInfo{};
+            allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+            allocInfo.commandPool = commandPool;
+            allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+            allocInfo.commandBufferCount = 1;
+            VkCommandBuffer commandBuffer = VK_NULL_HANDLE;
+            result = vkAllocateCommandBuffersFn(device, &allocInfo, &commandBuffer);
+            if (result != VK_SUCCESS) {
+                builder.Fail("Timer query probe",
+                             format("vkAllocateCommandBuffers failed (VkResult = {})", static_cast<Int>(result)));
+                return;
+            }
+
+            VkQueryPoolCreateInfo queryPoolInfo{};
+            queryPoolInfo.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
+            queryPoolInfo.queryType = VK_QUERY_TYPE_TIMESTAMP;
+            queryPoolInfo.queryCount = 2;
+            result = vkCreateQueryPoolFn(device, &queryPoolInfo, nullptr, &queryPool);
+            if (result != VK_SUCCESS) {
+                builder.Fail("Timer query probe",
+                             format("vkCreateQueryPool failed (VkResult = {})", static_cast<Int>(result)));
+                return;
+            }
+
+            VkCommandBufferBeginInfo beginInfo{};
+            beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+            beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+            result = vkBeginCommandBufferFn(commandBuffer, &beginInfo);
+            if (result != VK_SUCCESS) {
+                builder.Fail("Timer query probe",
+                             format("vkBeginCommandBuffer failed (VkResult = {})", static_cast<Int>(result)));
+                return;
+            }
+            vkCmdResetQueryPoolFn(commandBuffer, queryPool, 0, 2);
+            vkCmdWriteTimestampFn(commandBuffer, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, queryPool, 0);
+            vkCmdWriteTimestampFn(commandBuffer, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, queryPool, 1);
+            result = vkEndCommandBufferFn(commandBuffer);
+            if (result != VK_SUCCESS) {
+                builder.Fail("Timer query probe",
+                             format("vkEndCommandBuffer failed (VkResult = {})", static_cast<Int>(result)));
+                return;
+            }
+
+            VkFenceCreateInfo fenceInfo{};
+            fenceInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+            result = vkCreateFenceFn(device, &fenceInfo, nullptr, &fence);
+            if (result != VK_SUCCESS) {
+                builder.Fail("Timer query probe",
+                             format("vkCreateFence failed (VkResult = {})", static_cast<Int>(result)));
+                return;
+            }
+
+            VkSubmitInfo submitInfo{};
+            submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+            submitInfo.commandBufferCount = 1;
+            submitInfo.pCommandBuffers = &commandBuffer;
+            result = vkQueueSubmitFn(queue, 1, &submitInfo, fence);
+            if (result != VK_SUCCESS) {
+                builder.Fail("Timer query probe",
+                             format("vkQueueSubmit failed (VkResult = {})", static_cast<Int>(result)));
+                return;
+            }
+
+            constexpr Uint64 FenceTimeoutNs = 5'000'000'000ull; // 5 s: a POST must never hang the launcher
+            result = vkWaitForFencesFn(device, 1, &fence, VK_TRUE, FenceTimeoutNs);
+            if (result != VK_SUCCESS) {
+                // Skip the teardown idle wait too (see the scope guard): the
+                // submission is still pending on a possibly-hung GPU.
+                fenceWaitTimedOut = true;
+                builder.Fail("Timer query probe",
+                             format("vkWaitForFences did not signal within 5 s (VkResult = {})",
+                                    static_cast<Int>(result)));
+                return;
+            }
+
+            Uint64 timestamps[2] = {0, 0};
+            result = vkGetQueryPoolResultsFn(device, queryPool, 0, 2, sizeof(timestamps), timestamps,
+                                             sizeof(Uint64), VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT);
+            if (result != VK_SUCCESS) {
+                builder.Fail("Timer query probe",
+                             format("vkGetQueryPoolResults failed (VkResult = {})", static_cast<Int>(result)));
+                return;
+            }
+
+            const Uint64 validMask =
+                timestampValidBits >= 64 ? ~0ull : ((1ull << timestampValidBits) - 1ull);
+            const Uint64 t0 = timestamps[0] & validMask;
+            const Uint64 t1 = timestamps[1] & validMask;
+            if (t1 < t0) {
+                builder.Fail("Timer query probe",
+                             format("timestamps are not monotonic (t0 = {}, t1 = {})", t0, t1));
+                return;
+            }
+            const Uint64 elapsedNs =
+                static_cast<Uint64>(static_cast<Double>(t1 - t0) * static_cast<Double>(timestampPeriod));
+            builder.Pass("Timer query probe",
+                         format("timer query functional (t1 >= t0, elapsed {} ns using timestampPeriod {})",
+                                elapsedNs, timestampPeriod));
         }
     } // namespace
 
@@ -439,17 +751,23 @@ namespace MobileGL::MG_Util::SelfTest {
         devices.resize(deviceCount);
 
         VkPhysicalDevice physicalDevice = VK_NULL_HANDLE;
+        Uint32 graphicsQueueFamilyIndex = 0;
+        Uint32 graphicsQueueTimestampValidBits = 0;
         for (VkPhysicalDevice candidate : devices) {
             Uint32 queueFamilyCount = 0;
             vkGetPhysicalDeviceQueueFamilyPropertiesFn(candidate, &queueFamilyCount, nullptr);
             Vector<VkQueueFamilyProperties> queueFamilies(queueFamilyCount);
             vkGetPhysicalDeviceQueueFamilyPropertiesFn(candidate, &queueFamilyCount, queueFamilies.data());
-            const Bool hasGraphicsQueue =
-                std::any_of(queueFamilies.begin(), queueFamilies.end(), [](const VkQueueFamilyProperties& family) {
-                    return family.queueCount > 0 && (family.queueFlags & VK_QUEUE_GRAPHICS_BIT) != 0;
-                });
-            if (hasGraphicsQueue) {
-                physicalDevice = candidate;
+            for (Uint32 familyIndex = 0; familyIndex < queueFamilyCount; ++familyIndex) {
+                const VkQueueFamilyProperties& family = queueFamilies[familyIndex];
+                if (family.queueCount > 0 && (family.queueFlags & VK_QUEUE_GRAPHICS_BIT) != 0) {
+                    physicalDevice = candidate;
+                    graphicsQueueFamilyIndex = familyIndex;
+                    graphicsQueueTimestampValidBits = family.timestampValidBits;
+                    break;
+                }
+            }
+            if (physicalDevice != VK_NULL_HANDLE) {
                 break;
             }
         }
@@ -574,6 +892,24 @@ namespace MobileGL::MG_Util::SelfTest {
                      indexTypeUint8 ? "supported (native GL_UNSIGNED_BYTE index buffers)" : "not supported");
         builder.Info("Device", String(properties.deviceName));
         builder.Info("Driver version", driverVersionString + " (vendor-encoded)");
+
+        if (MG_Config::Features.DisableTimerQuery) {
+            builder.Info("Timer queries", "timer queries disabled by MOBILEGL_DISABLE_TIMERQUERY");
+        }
+        const Float timestampPeriod = properties.limits.timestampPeriod;
+        if (graphicsQueueTimestampValidBits > 0) {
+            builder.Pass("Timestamp valid bits",
+                         format("timestampValidBits = {} on the graphics queue family",
+                                graphicsQueueTimestampValidBits));
+        } else {
+            builder.Warn("Timestamp valid bits",
+                         "timestampValidBits = 0 on the graphics queue family; timer queries unavailable");
+        }
+        builder.Info("Timestamp period", format("timestampPeriod = {} ns per tick", timestampPeriod));
+        if (graphicsQueueTimestampValidBits > 0) {
+            ProbeVulkanTimerQuery(builder, getInstanceProcAddr, instance, physicalDevice,
+                                  graphicsQueueFamilyIndex, graphicsQueueTimestampValidBits, timestampPeriod);
+        }
 
         builder.Finalize();
         MGLOG_I("Driver POST: Vulkan verdict = %s", builder.report.verdict.c_str());
