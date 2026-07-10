@@ -340,28 +340,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
     BackendObject_DirectVulkan::~BackendObject_DirectVulkan() = default;
 
-    BackendObject_DirectVulkan::BackendObject_DirectVulkan():
-        m_rendererInfo{
-            .RendererName = "Magma",
-            .BackendName = "Direct (Vulkan)",
-            .ExtraVendor = Nullopt,
-            .RendererGLInfo =
-                {
-                    .TargetGLVersion = {3, 3, 0},
-                    .TargetGLSLVersion = {4, 6, 0},
-                    .Extensions = {V_OpenGL30, V_OpenGL31, V_OpenGL32,
-                                   V_OpenGL33, E_GL_ARB_draw_buffers_blend, E_GL_ARB_compute_shader,
-                                   E_GL_ARB_shader_storage_buffer_object, E_GL_ARB_shader_image_load_store,
-                                   E_GL_ARB_program_interface_query, E_GL_ARB_framebuffer_object,
-                                   E_GL_ARB_multi_draw_indirect, E_GL_ARB_indirect_parameters,
-                                   E_GL_EXT_framebuffer_object, E_GL_ARB_depth_texture, E_GL_ARB_buffer_storage,
-                                   E_GL_ARB_texture_storage, E_GL_ARB_direct_state_access,
-                                   E_GL_ARB_shader_draw_parameters, E_GL_ARB_gpu_shader_int64, E_GL_KHR_debug,
-                                   E_GL_ARB_gpu_shader5, E_GL_ARB_multi_bind, E_GL_ARB_shading_language_420pack,
-                                   E_GL_ARB_vertex_attrib_binding, E_GL_ARB_shader_image_size},
-                    .IsCompatibilityProfile = false
-                },
-            .StaticBackendCapability = {.AllowVSOnlyPrograms = false}} {}
+    BackendObject_DirectVulkan::BackendObject_DirectVulkan(): m_rendererInfo{GetRendererIdentity()} {}
 
     Bool BackendObject_DirectVulkan::InitWindowSurface() {
         if (!m_windowHandle.Handle) {
@@ -512,11 +491,56 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         if (!m_initialized) {
             return "<uninitialized DirectVulkan backend>";
         }
+        return FormatBackendAPIVersionString(m_vulkanCaps.DeviceName, m_vulkanCaps.VulkanAPIVersion.toString(),
+                                             m_vulkanCaps.DriverVersionString);
+    }
+
+    const RendererInfo& GetRendererIdentity() {
+        static const RendererInfo rendererInfo = {
+            .RendererName = "Magma",
+            .BackendName = "Direct (Vulkan)",
+            .ExtraVendor = Nullopt,
+            .RendererGLInfo =
+                {
+                    .TargetGLVersion = {3, 3, 0},
+                    .TargetGLSLVersion = {4, 6, 0},
+                    // Baseline advertisement (no shader subgroup, no timer queries); a
+                    // live backend reconciles its copy in UpdateAdvertisedExtensions.
+                    .Extensions = BuildAdvertisedExtensions(false, false),
+                    .IsCompatibilityProfile = false
+                },
+            .StaticBackendCapability = {.AllowVSOnlyPrograms = false}};
+        return rendererInfo;
+    }
+
+    Vector<GLExtension> BuildAdvertisedExtensions(Bool shaderSubgroupSupported, Bool timerQueriesSupported) {
+        Vector<GLExtension> extensions = {V_OpenGL30, V_OpenGL31, V_OpenGL32,
+                                          V_OpenGL33, E_GL_ARB_draw_buffers_blend, E_GL_ARB_compute_shader,
+                                          E_GL_ARB_shader_storage_buffer_object, E_GL_ARB_shader_image_load_store,
+                                          E_GL_ARB_program_interface_query, E_GL_ARB_framebuffer_object,
+                                          E_GL_ARB_multi_draw_indirect, E_GL_ARB_indirect_parameters,
+                                          E_GL_EXT_framebuffer_object, E_GL_ARB_depth_texture, E_GL_ARB_buffer_storage,
+                                          E_GL_ARB_texture_storage, E_GL_ARB_direct_state_access,
+                                          E_GL_ARB_shader_draw_parameters, E_GL_ARB_gpu_shader_int64, E_GL_KHR_debug,
+                                          E_GL_ARB_gpu_shader5, E_GL_ARB_multi_bind, E_GL_ARB_shading_language_420pack,
+                                          E_GL_ARB_vertex_attrib_binding, E_GL_ARB_shader_image_size};
+        if (shaderSubgroupSupported && !MG_Config::Features.DisableSubgroup) {
+            extensions.push_back(E_GL_KHR_shader_subgroup);
+        }
+        // GL_ARB_timer_query gates MC's F3 GPU% (LWJGL checks the extension string);
+        // only advertised when the device actually supports timestamp queries and the
+        // MOBILEGL_DISABLE_TIMERQUERY escape hatch is off.
+        if (timerQueriesSupported && !MG_Config::Features.DisableTimerQuery) {
+            extensions.push_back(E_GL_ARB_timer_query);
+        }
+        return extensions;
+    }
+
+    String FormatBackendAPIVersionString(const String& deviceName, const String& vulkanApiVersionString,
+                                         const String& driverVersionString) {
         // Format:
         // <GPU Name>, Vulkan <Vulkan Version>, Driver <Driver Version>
-        String str = m_vulkanCaps.DeviceName + ", Vulkan " + m_vulkanCaps.VulkanAPIVersion.toString() + ", Driver " +
-                     m_vulkanCaps.DriverVersionString;
-        return str;
+        return deviceName + ", Vulkan " + vulkanApiVersionString + ", Driver " + driverVersionString;
     }
 
     BackendType BackendObject_DirectVulkan::GetBackendType() const {
@@ -615,25 +639,14 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     }
 
     void BackendObject_DirectVulkan::UpdateAdvertisedExtensions() {
-        auto& extensions = m_rendererInfo.RendererGLInfo.Extensions;
-        extensions.erase(std::remove(extensions.begin(), extensions.end(), E_GL_KHR_shader_subgroup),
-                         extensions.end());
-
-        if (m_vulkanCaps.SupportsShaderSubgroup) {
-            extensions.push_back(E_GL_KHR_shader_subgroup);
-        }
-
         // GL_ARB_timer_query gates MC's F3 GPU% (LWJGL checks the extension
         // string). InitCapabilities runs after InitWindowSurface has created
         // and initialized the renderer, so the advertisement can be gated on
         // real device timestamp support. ApplyVulkanCapabilitiesForTesting may
-        // run without a renderer; nothing is advertised then.
-        extensions.erase(std::remove(extensions.begin(), extensions.end(), E_GL_ARB_timer_query),
-                         extensions.end());
-        if (pVulkanRenderer && pVulkanRenderer->IsTimerQuerySupported() &&
-            !MG_Config::Features.DisableTimerQuery) {
-            extensions.push_back(E_GL_ARB_timer_query);
-        }
+        // run without a renderer; no timer query is advertised then. Rebuilding
+        // the whole list keeps re-runs idempotent.
+        m_rendererInfo.RendererGLInfo.Extensions = BuildAdvertisedExtensions(
+            m_vulkanCaps.SupportsShaderSubgroup, pVulkanRenderer && pVulkanRenderer->IsTimerQuerySupported());
     }
 
     void BackendObject_DirectVulkan::UpdateDynamicBackendParameters() {

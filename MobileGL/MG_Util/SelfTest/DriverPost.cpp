@@ -9,6 +9,10 @@
 #include "DriverPost.h"
 #include "MG_Util/BackendLoaders/OpenGL/Loader.h"
 #include <Config.h>
+#include <MGGitHash.h>
+#include <MG_Backend/DirectGLES/BackendObject_DirectGLES.h>
+#include <MG_Backend/DirectVulkan/BackendObject_DirectVulkan.h>
+#include <MG_Util/Converters/MGToStr/GLExtensionConverter.h>
 #include <chrono>
 #include <thread>
 
@@ -18,27 +22,119 @@
 
 namespace MobileGL::MG_Util::SelfTest {
     namespace {
+        // Display ranks for PostCheck::displayRank: within one backend section, FAIL
+        // rows render first, then WARN, PASS, INFO, then the device-driver identity
+        // strings, and always last (regardless of status) the strings MobileGL itself
+        // reports to applications. Rows are stable-sorted, so relative order within a
+        // rank is preserved. Purely cosmetic: the verdict computation is unaffected.
+        enum DisplayRank : Int {
+            RankFail = 0,
+            RankWarn = 1,
+            RankPass = 2,
+            RankInfo = 3,
+            RankDriverReported = 4,
+            RankMobileGLReported = 5,
+        };
+
         struct ReportBuilder {
             BackendPostReport report;
             Bool fatalFailed = false;
             Bool warnUnmet = false;
 
-            void Pass(String name, String detail) { report.checks.push_back({Move(name), "PASS", Move(detail)}); }
+            void Pass(String name, String detail) {
+                report.checks.push_back({Move(name), "PASS", Move(detail), RankPass});
+            }
 
             void Fail(String name, String detail) {
                 fatalFailed = true;
-                report.checks.push_back({Move(name), "FAIL", Move(detail)});
+                report.checks.push_back({Move(name), "FAIL", Move(detail), RankFail});
             }
 
             void Warn(String name, String detail) {
                 warnUnmet = true;
-                report.checks.push_back({Move(name), "WARN", Move(detail)});
+                report.checks.push_back({Move(name), "WARN", Move(detail), RankWarn});
             }
 
-            void Info(String name, String detail) { report.checks.push_back({Move(name), "INFO", Move(detail)}); }
+            void Info(String name, String detail) {
+                report.checks.push_back({Move(name), "INFO", Move(detail), RankInfo});
+            }
 
-            void Finalize() { report.verdict = fatalFailed ? "UNSUPPORTED" : (warnUnmet ? "DEGRADED" : "OK"); }
+            // A "Backend driver reported ..." identity string straight from the device
+            // driver; rendered after the regular rows.
+            void DriverReported(String name, String detail) {
+                report.checks.push_back({Move(name), "INFO", Move(detail), RankDriverReported});
+            }
+
+            // A "MobileGL reported ..." string: what MobileGL itself reports to
+            // applications on this backend; always rendered at the very bottom.
+            void MobileGLReported(String name, String detail) {
+                report.checks.push_back({Move(name), "INFO", Move(detail), RankMobileGLReported});
+            }
+
+            void Finalize() {
+                report.verdict = fatalFailed ? "UNSUPPORTED" : (warnUnmet ? "DEGRADED" : "OK");
+                std::stable_sort(report.checks.begin(), report.checks.end(),
+                                 [](const PostCheck& a, const PostCheck& b) { return a.displayRank < b.displayRank; });
+            }
         };
+
+        // ---- "MobileGL reported ..." row assembly -------------------------------
+        // The vendor/version/renderer strings mirror GL_Getter.cpp's GL_VENDOR /
+        // GL_VERSION / GL_RENDERER cases; the backend API version string and the
+        // extension list come from the per-backend single-source-of-truth helpers
+        // (GetRendererIdentity / FormatBackendAPIVersionString /
+        // BuildAdvertisedExtensions) shared with the real backends.
+
+        // Mirrors GL_Getter.cpp's GL_VENDOR case.
+        String BuildReportedGLVendor(const RendererInfo& identity) {
+            if (identity.ExtraVendor.has_value()) {
+                return format("{}{}", MG_Config::CoreVendor, identity.ExtraVendor.value());
+            }
+            return MG_Config::CoreVendor;
+        }
+
+        // Mirrors GL_Getter.cpp's GL_VERSION case.
+        String BuildReportedGLVersion(const RendererInfo& identity) {
+            return format("{} {} {}, {} Backend, GIT@" GIT_COMMIT_HASH_SHORT,
+                          identity.RendererGLInfo.TargetGLVersion.toString(), MG_Config::ProjectName,
+                          MG_Config::CoreVersion.toFormattedString(MG_Config::DefaultVersionStringFormatAttrib),
+                          identity.BackendName);
+        }
+
+        // Mirrors GL_Getter.cpp's GL_RENDERER case.
+        String BuildReportedGLRenderer(const RendererInfo& identity, const String& backendApiVersionString) {
+            return format("{} ({}) ({})", identity.RendererName, MG_Config::CoreName, backendApiVersionString);
+        }
+
+        // Mirrors GL_Getter.cpp's GL_EXTENSIONS case (space-separated).
+        String JoinAdvertisedExtensions(const Vector<GLExtension>& extensions) {
+            String result;
+            for (const auto& extension : extensions) {
+                if (!result.empty()) {
+                    result += " ";
+                }
+                result += ConvertGLExtToString(extension);
+            }
+            return result;
+        }
+
+        // Appends the four "MobileGL reported ..." rows for one backend section.
+        // GL_VENDOR and GL_VERSION only depend on the backend's static identity, so
+        // they are always concrete; GL_RENDERER and GL_EXTENSIONS need data from the
+        // device probe and degrade to an explanatory detail when it failed.
+        void AppendMobileGLReportedRows(ReportBuilder& builder, const RendererInfo& identity,
+                                        const Optional<String>& backendApiVersionString,
+                                        const Optional<String>& advertisedExtensions) {
+            static const String Unavailable = "unavailable (backend probe failed)";
+            builder.MobileGLReported("MobileGL reported GL_VENDOR", BuildReportedGLVendor(identity));
+            builder.MobileGLReported("MobileGL reported GL_VERSION", BuildReportedGLVersion(identity));
+            builder.MobileGLReported("MobileGL reported GL_RENDERER",
+                                     backendApiVersionString.has_value()
+                                         ? BuildReportedGLRenderer(identity, backendApiVersionString.value())
+                                         : Unavailable);
+            builder.MobileGLReported("MobileGL reported GL_EXTENSIONS",
+                                     advertisedExtensions.has_value() ? advertisedExtensions.value() : Unavailable);
+        }
 
         // Runs a callable when the enclosing scope exits, so driver teardown still happens
         // even if a String/format allocation throws while report rows are being built.
@@ -58,6 +154,17 @@ namespace MobileGL::MG_Util::SelfTest {
                 return "";
             }
             return format(" (EGL error 0x{:x})", eglFuncs.eglGetError());
+        }
+
+        // Suffix folded into each backend's single "Timer queries" row when the user
+        // disabled timer queries; the note rides along with whatever combined verdict
+        // the row carries instead of being a standalone INFO row, and spells out the
+        // cause (the environment variable) and its consequence explicitly.
+        String TimerQueryDisabledNote() {
+            return MG_Config::Features.DisableTimerQuery
+                       ? "; environment variable MOBILEGL_DISABLE_TIMERQUERY is set, disabling timer "
+                         "queries as a result"
+                       : "";
         }
 
         void EvaluateGlesChecklist(ReportBuilder& builder, const MG_External::GLESCapabilities& caps,
@@ -106,10 +213,20 @@ namespace MobileGL::MG_Util::SelfTest {
                 }
             }
 
-            builder.Info("GL_EXT_buffer_storage",
-                         caps.SupportsPersistentMapping ? "supported (persistent buffer mapping)" : "not supported");
-            builder.Info("GL_EXT_base_instance",
-                         caps.SupportsBaseInstance ? "supported (native baseInstance draws)" : "not supported");
+            if (caps.SupportsPersistentMapping) {
+                builder.Pass("GL_EXT_buffer_storage", "supported (persistent buffer mapping)");
+            } else {
+                builder.Info("GL_EXT_buffer_storage",
+                             "not supported; no impact today: the frontend fully emulates persistent "
+                             "mapping regardless of this extension");
+            }
+            if (caps.SupportsBaseInstance) {
+                builder.Pass("GL_EXT_base_instance", "supported (native baseInstance draws)");
+            } else {
+                builder.Info("GL_EXT_base_instance",
+                             "not supported; no impact: the native indirect path deliberately does not "
+                             "rely on it (shader-side emulation handles baseInstance semantics)");
+            }
             if (caps.SupportsNorm16Texture) {
                 builder.Pass("GL_EXT_texture_norm16", "supported");
             } else {
@@ -123,33 +240,37 @@ namespace MobileGL::MG_Util::SelfTest {
                                "zero-based)"
                              : "conforming (zero-based)");
 
-            builder.Info("GL_VENDOR", caps.GLESVendorString);
-            builder.Info("GL_RENDERER", caps.GLESRendererString);
-            builder.Info("GL_VERSION", caps.GLESVersionString);
+            builder.DriverReported("Backend driver reported GL_VENDOR", caps.GLESVendorString);
+            builder.DriverReported("Backend driver reported GL_RENDERER", caps.GLESRendererString);
+            builder.DriverReported("Backend driver reported GL_VERSION", caps.GLESVersionString);
         }
 
-        // Timer-query rows: extension presence plus a real GL_TIME_ELAPSED_EXT span
-        // around a trivial workload on the probe context. Requires the probe context
-        // to still be current.
+        // Single "Timer queries" row: GL_EXT_disjoint_timer_query presence and a real
+        // GL_TIME_ELAPSED_EXT span around a trivial workload on the probe context fold
+        // into one combined verdict (WARN when absent, PASS when the probe works, FAIL
+        // naming the step that broke). Requires the probe context to still be current.
         void ProbeGlesTimerQuery(ReportBuilder& builder, const MG_External::GLESCapabilities& caps,
                                  const MG_External::GLESFunctionsTable& glesFuncs) {
-            if (MG_Config::Features.DisableTimerQuery) {
-                builder.Info("Timer queries", "timer queries disabled by MOBILEGL_DISABLE_TIMERQUERY");
-            }
+            const String disabledNote = TimerQueryDisabledNote();
             if (!caps.SupportsDisjointTimerQuery) {
-                builder.Warn("GL_EXT_disjoint_timer_query",
-                             "not supported; timer queries unavailable; Minecraft F3 GPU% will not show");
+                builder.Warn("Timer queries",
+                             "GL_EXT_disjoint_timer_query not supported; timer queries unavailable; "
+                             "Minecraft F3 GPU% will not show" +
+                                 disabledNote);
                 return;
             }
-            builder.Pass("GL_EXT_disjoint_timer_query", "extension present");
+            // Every emit carries the extension-presence fact the old standalone
+            // GL_EXT_disjoint_timer_query row showed, plus the probe outcome.
+            const String extensionPresent = "GL_EXT_disjoint_timer_query extension present";
+            const auto fail = [&](const String& detail) {
+                builder.Fail("Timer queries", extensionPresent + "; but " + detail + disabledNote);
+            };
 
             if (!glesFuncs.glGenQueries || !glesFuncs.glDeleteQueries || !glesFuncs.glBeginQuery ||
                 !glesFuncs.glEndQuery || !glesFuncs.glGetQueryObjectuiv || !glesFuncs.glGetQueryObjectui64vEXT ||
                 !glesFuncs.glClearColor || !glesFuncs.glClear || !glesFuncs.glFlush || !glesFuncs.glFinish ||
                 !glesFuncs.glGetError) {
-                builder.Fail("Timer query probe",
-                             "GL_EXT_disjoint_timer_query is advertised but the query entry points did not "
-                             "resolve through eglGetProcAddress");
+                fail("the query entry points did not resolve through eglGetProcAddress");
                 return;
             }
 
@@ -160,7 +281,7 @@ namespace MobileGL::MG_Util::SelfTest {
             GLuint queryId = 0;
             glesFuncs.glGenQueries(1, &queryId);
             if (queryId == 0) {
-                builder.Fail("Timer query probe", "glGenQueries did not return a query object");
+                fail("glGenQueries did not return a query object");
                 return;
             }
             const ScopeGuard deleteQuery([&]() { glesFuncs.glDeleteQueries(1, &queryId); });
@@ -175,8 +296,7 @@ namespace MobileGL::MG_Util::SelfTest {
 
             const GLenum spanError = glesFuncs.glGetError();
             if (spanError != GL_NO_ERROR) {
-                builder.Fail("Timer query probe",
-                             format("GL error 0x{:x} while recording the GL_TIME_ELAPSED_EXT span", spanError));
+                fail(format("GL error 0x{:x} while recording the GL_TIME_ELAPSED_EXT span", spanError));
                 return;
             }
 
@@ -193,9 +313,8 @@ namespace MobileGL::MG_Util::SelfTest {
                 }
             }
             if (available == 0) {
-                builder.Fail("Timer query probe",
-                             "GL_QUERY_RESULT_AVAILABLE never became true after glFinish "
-                             "(1000 polls over ~100ms)");
+                fail("GL_QUERY_RESULT_AVAILABLE never became true after glFinish "
+                     "(1000 polls over ~100ms)");
                 return;
             }
 
@@ -203,17 +322,41 @@ namespace MobileGL::MG_Util::SelfTest {
             glesFuncs.glGetQueryObjectui64vEXT(queryId, GL_QUERY_RESULT, &elapsedNs);
             const GLenum resultError = glesFuncs.glGetError();
             if (resultError != GL_NO_ERROR) {
-                builder.Fail("Timer query probe",
-                             format("GL error 0x{:x} while reading GL_QUERY_RESULT", resultError));
+                fail(format("GL error 0x{:x} while reading GL_QUERY_RESULT", resultError));
                 return;
             }
-            builder.Pass("Timer query probe", format("timer query functional (observed {} ns)", elapsedNs));
+            builder.Pass("Timer queries",
+                         extensionPresent + format("; timer query functional (probe observed {} ns)", elapsedNs) +
+                             disabledNote);
         }
+
+        // Everything the "MobileGL reported ..." rows need from the GLES device probe.
+        struct GlesProbeSummary {
+            Bool capsValid = false;
+            MG_External::GLESCapabilities caps{};
+        };
     } // namespace
 
-    BackendPostReport RunGlesDriverPost() {
-        MGLOG_I("Driver POST: probing the device GLES driver");
-        ReportBuilder builder;
+    // The GLES device probe proper. Split out of RunGlesDriverPost so that the
+    // "MobileGL reported ..." rows are appended on every path (including early
+    // probe failures) before the report is finalized.
+    //
+    // The whole EGL bring-up chain (library load, display init, API bind, config,
+    // pbuffer surface, context) is one "ES3 context" row. The detail accumulates one
+    // completed-stage description per stage so no sub-fact of the old per-stage rows
+    // is lost: PASS enumerates every stage's result, FAIL lists the stages that
+    // completed and then names the exact stage that broke with its detail string.
+    static void ProbeGlesDriver(ReportBuilder& builder, GlesProbeSummary& summary) {
+        String chain;
+        const auto stageDone = [&](const String& description) {
+            if (!chain.empty()) {
+                chain += "; ";
+            }
+            chain += description;
+        };
+        const auto failStage = [&](const String& stage, const String& detail) {
+            builder.Fail("ES3 context", (chain.empty() ? "" : chain + "; but ") + stage + ": " + detail);
+        };
 
         MG_External::EGLFunctionsTable eglFuncs{};
         BackendLoader::AcquireEGLFunctions(eglFuncs);
@@ -222,27 +365,23 @@ namespace MobileGL::MG_Util::SelfTest {
                                eglFuncs.eglCreateContext && eglFuncs.eglMakeCurrent && eglFuncs.eglDestroySurface &&
                                eglFuncs.eglDestroyContext && eglFuncs.eglTerminate && eglFuncs.eglGetProcAddress;
         if (!eglLoaded) {
-            builder.Fail("EGL library", "libEGL.so or one of its required entry points is missing");
-            builder.Finalize();
-            return builder.report;
+            failStage("EGL library", "libEGL.so or one of its required entry points is missing");
+            return;
         }
-        builder.Pass("EGL library", "libEGL.so loaded with all required entry points");
+        stageDone("libEGL.so loaded with all required entry points");
 
         EGLDisplay display = eglFuncs.eglGetDisplay(EGL_DEFAULT_DISPLAY);
         if (display == EGL_NO_DISPLAY) {
-            builder.Fail("EGL display", "eglGetDisplay returned EGL_NO_DISPLAY");
-            builder.Finalize();
-            return builder.report;
+            failStage("EGL display", "eglGetDisplay returned EGL_NO_DISPLAY");
+            return;
         }
         EGLint eglMajor = 0;
         EGLint eglMinor = 0;
         if (!eglFuncs.eglInitialize(display, &eglMajor, &eglMinor)) {
-            builder.Fail("EGL display",
-                         "eglInitialize failed on the default display" + EGLErrorSuffix(eglFuncs));
-            builder.Finalize();
-            return builder.report;
+            failStage("EGL display", "eglInitialize failed on the default display" + EGLErrorSuffix(eglFuncs));
+            return;
         }
-        builder.Pass("EGL display", format("EGL {}.{} initialized on the default display", eglMajor, eglMinor));
+        stageDone(format("EGL {}.{} initialized on the default display", eglMajor, eglMinor));
         builder.report.available = true;
 
         EGLSurface surface = EGL_NO_SURFACE;
@@ -262,10 +401,10 @@ namespace MobileGL::MG_Util::SelfTest {
         });
         do {
             if (!eglFuncs.eglBindAPI(EGL_OPENGL_ES_API)) {
-                builder.Fail("OpenGL ES API bind", "eglBindAPI(EGL_OPENGL_ES_API) failed" + EGLErrorSuffix(eglFuncs));
+                failStage("OpenGL ES API bind", "eglBindAPI(EGL_OPENGL_ES_API) failed" + EGLErrorSuffix(eglFuncs));
                 break;
             }
-            builder.Pass("OpenGL ES API bind", "eglBindAPI(EGL_OPENGL_ES_API) succeeded");
+            stageDone("eglBindAPI(EGL_OPENGL_ES_API) succeeded");
 
             const EGLint configAttribs[] = {EGL_SURFACE_TYPE, EGL_PBUFFER_BIT, EGL_RENDERABLE_TYPE, EGL_OPENGL_ES3_BIT,
                                             EGL_RED_SIZE,     8,               EGL_GREEN_SIZE,      8,
@@ -274,49 +413,72 @@ namespace MobileGL::MG_Util::SelfTest {
             EGLConfig config = nullptr;
             EGLint numConfigs = 0;
             if (!eglFuncs.eglChooseConfig(display, configAttribs, &config, 1, &numConfigs)) {
-                builder.Fail("ES3 RGBA8888 pbuffer config", "eglChooseConfig failed" + EGLErrorSuffix(eglFuncs));
+                failStage("ES3 RGBA8888 pbuffer config", "eglChooseConfig failed" + EGLErrorSuffix(eglFuncs));
                 break;
             }
             if (numConfigs < 1) {
                 // No EGL error suffix here: eglChooseConfig succeeded, so it would read EGL_SUCCESS.
-                builder.Fail("ES3 RGBA8888 pbuffer config", "no ES3-capable RGBA8888 pbuffer config");
+                failStage("ES3 RGBA8888 pbuffer config", "no ES3-capable RGBA8888 pbuffer config");
                 break;
             }
-            builder.Pass("ES3 RGBA8888 pbuffer config", "ES3-renderable RGBA8888 pbuffer config found");
+            stageDone("ES3-renderable RGBA8888 pbuffer config found");
 
             const EGLint surfaceAttribs[] = {EGL_WIDTH, 1, EGL_HEIGHT, 1, EGL_NONE};
             surface = eglFuncs.eglCreatePbufferSurface(display, config, surfaceAttribs);
             if (surface == EGL_NO_SURFACE) {
-                builder.Fail("1x1 pbuffer surface",
-                             "eglCreatePbufferSurface failed" + EGLErrorSuffix(eglFuncs));
+                failStage("1x1 pbuffer surface", "eglCreatePbufferSurface failed" + EGLErrorSuffix(eglFuncs));
                 break;
             }
-            builder.Pass("1x1 pbuffer surface", "probe surface created");
+            stageDone("1x1 probe surface created");
 
             const EGLint contextAttribs[] = {EGL_CONTEXT_CLIENT_VERSION, 3, EGL_NONE};
             context = eglFuncs.eglCreateContext(display, config, EGL_NO_CONTEXT, contextAttribs);
             if (context == EGL_NO_CONTEXT) {
-                builder.Fail("OpenGL ES 3 context", "eglCreateContext failed" + EGLErrorSuffix(eglFuncs));
+                failStage("OpenGL ES 3 context", "eglCreateContext failed" + EGLErrorSuffix(eglFuncs));
                 break;
             }
             if (!eglFuncs.eglMakeCurrent(display, surface, surface, context)) {
-                builder.Fail("OpenGL ES 3 context", "eglMakeCurrent failed" + EGLErrorSuffix(eglFuncs));
+                failStage("OpenGL ES 3 context", "eglMakeCurrent failed" + EGLErrorSuffix(eglFuncs));
                 break;
             }
-            builder.Pass("OpenGL ES 3 context", "context created and made current");
+            stageDone("ES 3 context created and made current");
+            builder.Pass("ES3 context", chain);
 
             MG_External::GLESFunctionsTable glesFuncs{};
             BackendLoader::AcquireGLESFunctions(glesFuncs, eglFuncs.eglGetProcAddress);
-            MG_External::GLESCapabilities caps{};
-            if (!BackendLoader::FillInGLESCapabilities(caps, glesFuncs)) {
+            if (!BackendLoader::FillInGLESCapabilities(summary.caps, glesFuncs)) {
                 builder.Fail("GLES capability query",
                              "required GLES entry points could not be resolved through eglGetProcAddress");
                 break;
             }
+            summary.capsValid = true;
+            const MG_External::GLESCapabilities& caps = summary.caps;
             builder.report.rendererInfo = format("{} ({})", caps.GLESRendererString, caps.GLESVersionString);
             EvaluateGlesChecklist(builder, caps, glesFuncs);
             ProbeGlesTimerQuery(builder, caps, glesFuncs);
         } while (false);
+    }
+
+    BackendPostReport RunGlesDriverPost() {
+        MGLOG_I("Driver POST: probing the device GLES driver");
+        ReportBuilder builder;
+        GlesProbeSummary summary;
+        ProbeGlesDriver(builder, summary);
+
+        // "MobileGL reported ..." rows: what applications running on the DirectGLES
+        // backend (Espryt) would see. The backend API version string and the extension
+        // list are built from the probe's own capability data through the same helpers
+        // the real backend uses, so they cannot drift.
+        Optional<String> backendApiVersionString;
+        Optional<String> advertisedExtensions;
+        if (summary.capsValid) {
+            backendApiVersionString = MG_Backend::DirectGLES::FormatBackendAPIVersionString(
+                summary.caps.GLESRendererString, summary.caps.GLESVersion.Major, summary.caps.GLESVersion.Minor);
+            advertisedExtensions = JoinAdvertisedExtensions(
+                MG_Backend::DirectGLES::BuildAdvertisedExtensions(summary.caps.SupportsDisjointTimerQuery));
+        }
+        AppendMobileGLReportedRows(builder, MG_Backend::DirectGLES::GetRendererIdentity(), backendApiVersionString,
+                                   advertisedExtensions);
 
         builder.Finalize();
         MGLOG_I("Driver POST: GLES verdict = %s", builder.report.verdict.c_str());
@@ -373,14 +535,23 @@ namespace MobileGL::MG_Util::SelfTest {
                           VK_VERSION_PATCH(version));
         }
 
-        // Real timestamp-query probe: a throwaway logical device records two
-        // vkCmdWriteTimestamp(BOTTOM_OF_PIPE) queries and reads them back. Every
-        // created object is torn down from a scope guard before the caller's
-        // instance guard runs.
+        // Real timestamp-query probe, emitting the backend's single "Timer queries" row:
+        // a throwaway logical device records two vkCmdWriteTimestamp(BOTTOM_OF_PIPE)
+        // queries and reads them back. Both outcomes state the validBits and period
+        // values (the facts of the old standalone rows): PASS adds the observed span,
+        // FAIL names the step (and VkResult) that broke. Every created object is torn
+        // down from a scope guard before the caller's instance guard runs.
         void ProbeVulkanTimerQuery(ReportBuilder& builder, PFN_vkGetInstanceProcAddr getInstanceProcAddr,
                                    VkInstance instance, VkPhysicalDevice physicalDevice,
                                    Uint32 graphicsQueueFamilyIndex, Uint32 timestampValidBits,
                                    Float timestampPeriod) {
+            const String disabledNote = TimerQueryDisabledNote();
+            const String timestampFacts =
+                format("timestampValidBits = {} on the graphics queue family; timestampPeriod = {} ns per tick",
+                       timestampValidBits, timestampPeriod);
+            const auto fail = [&](const String& detail) {
+                builder.Fail("Timer queries", timestampFacts + "; but " + detail + disabledNote);
+            };
             const auto vkCreateDeviceFn =
                 reinterpret_cast<PFN_vkCreateDevice>(getInstanceProcAddr(instance, "vkCreateDevice"));
             const auto vkDestroyDeviceFn =
@@ -426,9 +597,8 @@ namespace MobileGL::MG_Util::SelfTest {
                 vkCmdWriteTimestampFn == nullptr || vkCreateFenceFn == nullptr || vkDestroyFenceFn == nullptr ||
                 vkWaitForFencesFn == nullptr || vkQueueSubmitFn == nullptr || vkGetQueryPoolResultsFn == nullptr ||
                 vkDeviceWaitIdleFn == nullptr) {
-                builder.Fail("Timer query probe",
-                             "vkGetInstanceProcAddr could not resolve the entry points required for the "
-                             "timestamp probe");
+                fail("vkGetInstanceProcAddr could not resolve the entry points required for the "
+                     "timestamp probe");
                 return;
             }
 
@@ -447,8 +617,7 @@ namespace MobileGL::MG_Util::SelfTest {
             VkDevice device = VK_NULL_HANDLE;
             VkResult result = vkCreateDeviceFn(physicalDevice, &deviceInfo, nullptr, &device);
             if (result != VK_SUCCESS || device == VK_NULL_HANDLE) {
-                builder.Fail("Timer query probe",
-                             format("vkCreateDevice failed (VkResult = {})", static_cast<Int>(result)));
+                fail(format("vkCreateDevice failed (VkResult = {})", static_cast<Int>(result)));
                 return;
             }
 
@@ -485,7 +654,7 @@ namespace MobileGL::MG_Util::SelfTest {
             VkQueue queue = VK_NULL_HANDLE;
             vkGetDeviceQueueFn(device, graphicsQueueFamilyIndex, 0, &queue);
             if (queue == VK_NULL_HANDLE) {
-                builder.Fail("Timer query probe", "vkGetDeviceQueue returned a null graphics queue");
+                fail("vkGetDeviceQueue returned a null graphics queue");
                 return;
             }
 
@@ -494,8 +663,7 @@ namespace MobileGL::MG_Util::SelfTest {
             poolInfo.queueFamilyIndex = graphicsQueueFamilyIndex;
             result = vkCreateCommandPoolFn(device, &poolInfo, nullptr, &commandPool);
             if (result != VK_SUCCESS) {
-                builder.Fail("Timer query probe",
-                             format("vkCreateCommandPool failed (VkResult = {})", static_cast<Int>(result)));
+                fail(format("vkCreateCommandPool failed (VkResult = {})", static_cast<Int>(result)));
                 return;
             }
 
@@ -507,8 +675,7 @@ namespace MobileGL::MG_Util::SelfTest {
             VkCommandBuffer commandBuffer = VK_NULL_HANDLE;
             result = vkAllocateCommandBuffersFn(device, &allocInfo, &commandBuffer);
             if (result != VK_SUCCESS) {
-                builder.Fail("Timer query probe",
-                             format("vkAllocateCommandBuffers failed (VkResult = {})", static_cast<Int>(result)));
+                fail(format("vkAllocateCommandBuffers failed (VkResult = {})", static_cast<Int>(result)));
                 return;
             }
 
@@ -518,8 +685,7 @@ namespace MobileGL::MG_Util::SelfTest {
             queryPoolInfo.queryCount = 2;
             result = vkCreateQueryPoolFn(device, &queryPoolInfo, nullptr, &queryPool);
             if (result != VK_SUCCESS) {
-                builder.Fail("Timer query probe",
-                             format("vkCreateQueryPool failed (VkResult = {})", static_cast<Int>(result)));
+                fail(format("vkCreateQueryPool failed (VkResult = {})", static_cast<Int>(result)));
                 return;
             }
 
@@ -528,8 +694,7 @@ namespace MobileGL::MG_Util::SelfTest {
             beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
             result = vkBeginCommandBufferFn(commandBuffer, &beginInfo);
             if (result != VK_SUCCESS) {
-                builder.Fail("Timer query probe",
-                             format("vkBeginCommandBuffer failed (VkResult = {})", static_cast<Int>(result)));
+                fail(format("vkBeginCommandBuffer failed (VkResult = {})", static_cast<Int>(result)));
                 return;
             }
             vkCmdResetQueryPoolFn(commandBuffer, queryPool, 0, 2);
@@ -537,8 +702,7 @@ namespace MobileGL::MG_Util::SelfTest {
             vkCmdWriteTimestampFn(commandBuffer, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, queryPool, 1);
             result = vkEndCommandBufferFn(commandBuffer);
             if (result != VK_SUCCESS) {
-                builder.Fail("Timer query probe",
-                             format("vkEndCommandBuffer failed (VkResult = {})", static_cast<Int>(result)));
+                fail(format("vkEndCommandBuffer failed (VkResult = {})", static_cast<Int>(result)));
                 return;
             }
 
@@ -546,8 +710,7 @@ namespace MobileGL::MG_Util::SelfTest {
             fenceInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
             result = vkCreateFenceFn(device, &fenceInfo, nullptr, &fence);
             if (result != VK_SUCCESS) {
-                builder.Fail("Timer query probe",
-                             format("vkCreateFence failed (VkResult = {})", static_cast<Int>(result)));
+                fail(format("vkCreateFence failed (VkResult = {})", static_cast<Int>(result)));
                 return;
             }
 
@@ -557,8 +720,7 @@ namespace MobileGL::MG_Util::SelfTest {
             submitInfo.pCommandBuffers = &commandBuffer;
             result = vkQueueSubmitFn(queue, 1, &submitInfo, fence);
             if (result != VK_SUCCESS) {
-                builder.Fail("Timer query probe",
-                             format("vkQueueSubmit failed (VkResult = {})", static_cast<Int>(result)));
+                fail(format("vkQueueSubmit failed (VkResult = {})", static_cast<Int>(result)));
                 return;
             }
 
@@ -568,9 +730,8 @@ namespace MobileGL::MG_Util::SelfTest {
                 // Skip the teardown idle wait too (see the scope guard): the
                 // submission is still pending on a possibly-hung GPU.
                 fenceWaitTimedOut = true;
-                builder.Fail("Timer query probe",
-                             format("vkWaitForFences did not signal within 5 s (VkResult = {})",
-                                    static_cast<Int>(result)));
+                fail(format("vkWaitForFences did not signal within 5 s (VkResult = {})",
+                            static_cast<Int>(result)));
                 return;
             }
 
@@ -578,8 +739,7 @@ namespace MobileGL::MG_Util::SelfTest {
             result = vkGetQueryPoolResultsFn(device, queryPool, 0, 2, sizeof(timestamps), timestamps,
                                              sizeof(Uint64), VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT);
             if (result != VK_SUCCESS) {
-                builder.Fail("Timer query probe",
-                             format("vkGetQueryPoolResults failed (VkResult = {})", static_cast<Int>(result)));
+                fail(format("vkGetQueryPoolResults failed (VkResult = {})", static_cast<Int>(result)));
                 return;
             }
 
@@ -588,36 +748,63 @@ namespace MobileGL::MG_Util::SelfTest {
             const Uint64 t0 = timestamps[0] & validMask;
             const Uint64 t1 = timestamps[1] & validMask;
             if (t1 < t0) {
-                builder.Fail("Timer query probe",
-                             format("timestamps are not monotonic (t0 = {}, t1 = {})", t0, t1));
+                fail(format("timestamps are not monotonic (t0 = {}, t1 = {})", t0, t1));
                 return;
             }
             const Uint64 elapsedNs =
                 static_cast<Uint64>(static_cast<Double>(t1 - t0) * static_cast<Double>(timestampPeriod));
-            builder.Pass("Timer query probe",
-                         format("timer query functional (t1 >= t0, elapsed {} ns using timestampPeriod {})",
-                                elapsedNs, timestampPeriod));
+            builder.Pass("Timer queries",
+                         timestampFacts +
+                             format("; timer query functional (t1 >= t0, probe observed {} ns)", elapsedNs) +
+                             disabledNote);
         }
+
+        // Everything the "MobileGL reported ..." rows need from the Vulkan device probe.
+        struct VulkanProbeSummary {
+            Bool devicePropsValid = false;
+            String deviceName;
+            String apiVersionString;
+            String driverVersionString; // raw hex, vendor-encoded (see RunVulkanDriverPost)
+            Bool shaderSubgroupUsable = false;
+            Bool timerQueriesSupported = false;
+        };
     } // namespace
 
-    BackendPostReport RunVulkanDriverPost() {
-        MGLOG_I("Driver POST: probing the device Vulkan driver");
-        ReportBuilder builder;
+    // The Vulkan device probe proper. Split out of RunVulkanDriverPost so that the
+    // "MobileGL reported ..." rows are appended on every path (including early
+    // probe failures) before the report is finalized.
+    //
+    // The loader bring-up chain (dlopen, instance API version, vkCreateInstance) is one
+    // "Vulkan instance" row, and the two required surface instance extensions are one
+    // "Surface extensions" row. Details carry every sub-fact of the old per-stage rows:
+    // PASS enumerates each stage's result (and each extension's presence), FAIL lists
+    // the stages that completed and then names the exact stage that broke (or states
+    // per extension whether it is present or missing) with the stage detail strings.
+    static void ProbeVulkanDriver(ReportBuilder& builder, VulkanProbeSummary& summary) {
+        String instanceChain;
+        const auto instanceStageDone = [&](const String& description) {
+            if (!instanceChain.empty()) {
+                instanceChain += "; ";
+            }
+            instanceChain += description;
+        };
+        const auto failInstanceStage = [&](const String& stage, const String& detail) {
+            builder.Fail("Vulkan instance",
+                         (instanceChain.empty() ? "" : instanceChain + "; but ") + stage + ": " + detail);
+        };
 
         void* loaderLibrary = OpenVulkanLoaderLibrary();
         if (loaderLibrary == nullptr) {
-            builder.Fail("Vulkan loader", "libvulkan.so could not be loaded; no Vulkan loader on this device");
-            builder.Finalize();
-            return builder.report;
+            failInstanceStage("Vulkan loader", "libvulkan.so could not be loaded; no Vulkan loader on this device");
+            return;
         }
         const auto getInstanceProcAddr =
             reinterpret_cast<PFN_vkGetInstanceProcAddr>(VulkanLoaderSymbol(loaderLibrary, "vkGetInstanceProcAddr"));
         if (getInstanceProcAddr == nullptr) {
-            builder.Fail("Vulkan loader", "vkGetInstanceProcAddr is missing from the Vulkan loader library");
-            builder.Finalize();
-            return builder.report;
+            failInstanceStage("Vulkan loader", "vkGetInstanceProcAddr is missing from the Vulkan loader library");
+            return;
         }
-        builder.Pass("Vulkan loader", "Vulkan loader library loaded and vkGetInstanceProcAddr resolved");
+        instanceStageDone("Vulkan loader library loaded and vkGetInstanceProcAddr resolved");
 
         const auto vkCreateInstanceFn =
             reinterpret_cast<PFN_vkCreateInstance>(getInstanceProcAddr(nullptr, "vkCreateInstance"));
@@ -633,13 +820,13 @@ namespace MobileGL::MG_Util::SelfTest {
         }
         if (vkCreateInstanceFn == nullptr || vkEnumerateInstanceVersionFn == nullptr ||
             instanceApiVersion < VK_API_VERSION_1_1) {
-            builder.Fail("Instance API version",
-                         format("instance API {} (< 1.1); the DirectVulkan backend requires a Vulkan 1.1 instance",
-                                VkApiVersionToString(instanceApiVersion)));
-            builder.Finalize();
-            return builder.report;
+            failInstanceStage("Instance API version",
+                              format("instance API {} (< 1.1); the DirectVulkan backend requires a Vulkan 1.1 "
+                                     "instance",
+                                     VkApiVersionToString(instanceApiVersion)));
+            return;
         }
-        builder.Pass("Instance API version", format("instance API {}", VkApiVersionToString(instanceApiVersion)));
+        instanceStageDone(format("instance API {}", VkApiVersionToString(instanceApiVersion)));
 
         Vector<VkExtensionProperties> instanceExtensions;
         if (vkEnumerateInstanceExtensionPropertiesFn != nullptr) {
@@ -655,19 +842,33 @@ namespace MobileGL::MG_Util::SelfTest {
                 }
             }
         }
-        if (HasVkExtension(instanceExtensions, VK_KHR_SURFACE_EXTENSION_NAME)) {
-            builder.Pass("VK_KHR_surface", "instance extension present");
-        } else {
-            builder.Fail("VK_KHR_surface", "required instance extension missing; on-screen rendering is impossible");
-        }
+        // One row for the required surface instance extensions; the detail states each
+        // extension's presence individually, and a missing one carries the "required
+        // instance extension" fact plus its consequence from the old per-extension rows.
+        {
+            String surfaceDetail;
+            Bool anySurfaceExtensionMissing = false;
+            const auto recordExtension = [&](const char* name, const char* consequence) {
+                if (!surfaceDetail.empty()) {
+                    surfaceDetail += "; ";
+                }
+                if (HasVkExtension(instanceExtensions, name)) {
+                    surfaceDetail += format("{} instance extension present", name);
+                } else {
+                    anySurfaceExtensionMissing = true;
+                    surfaceDetail += format("{} missing (required instance extension; {})", name, consequence);
+                }
+            };
+            recordExtension(VK_KHR_SURFACE_EXTENSION_NAME, "on-screen rendering is impossible");
 #if defined(VK_USE_PLATFORM_ANDROID_KHR)
-        if (HasVkExtension(instanceExtensions, VK_KHR_ANDROID_SURFACE_EXTENSION_NAME)) {
-            builder.Pass("VK_KHR_android_surface", "instance extension present");
-        } else {
-            builder.Fail("VK_KHR_android_surface",
-                         "required instance extension missing; ANativeWindow surfaces cannot be created");
-        }
+            recordExtension(VK_KHR_ANDROID_SURFACE_EXTENSION_NAME, "ANativeWindow surfaces cannot be created");
 #endif
+            if (anySurfaceExtensionMissing) {
+                builder.Fail("Surface extensions", surfaceDetail);
+            } else {
+                builder.Pass("Surface extensions", surfaceDetail);
+            }
+        }
 
         // The probe never creates a surface, so the instance is created without extensions.
         VkApplicationInfo appInfo{};
@@ -683,12 +884,12 @@ namespace MobileGL::MG_Util::SelfTest {
         VkInstance instance = VK_NULL_HANDLE;
         const VkResult createResult = vkCreateInstanceFn(&instanceInfo, nullptr, &instance);
         if (createResult != VK_SUCCESS || instance == VK_NULL_HANDLE) {
-            builder.Fail("Vulkan instance",
-                         format("vkCreateInstance failed (VkResult = {})", static_cast<Int>(createResult)));
-            builder.Finalize();
-            return builder.report;
+            failInstanceStage("Vulkan instance creation",
+                              format("vkCreateInstance failed (VkResult = {})", static_cast<Int>(createResult)));
+            return;
         }
-        builder.Pass("Vulkan instance", "Vulkan 1.1 instance created");
+        instanceStageDone("Vulkan 1.1 instance created");
+        builder.Pass("Vulkan instance", instanceChain);
 
         const auto vkDestroyInstanceFn =
             reinterpret_cast<PFN_vkDestroyInstance>(getInstanceProcAddr(instance, "vkDestroyInstance"));
@@ -722,31 +923,29 @@ namespace MobileGL::MG_Util::SelfTest {
             vkEnumerateDeviceExtensionPropertiesFn == nullptr) {
             builder.Fail("Vulkan core entry points",
                          "vkGetInstanceProcAddr could not resolve required Vulkan 1.0 functions");
-            builder.Finalize();
-            return builder.report;
+            return;
         }
 
+        // Device discovery (physical device enumeration, graphics queue selection, device
+        // API version) is one "Graphics device" row; FAIL names the failing stage.
         Uint32 deviceCount = 0;
         const VkResult countResult = vkEnumeratePhysicalDevicesFn(instance, &deviceCount, nullptr);
         if (countResult != VK_SUCCESS) {
-            builder.Fail("Physical device", format("vkEnumeratePhysicalDevices failed (VkResult = {})",
+            builder.Fail("Graphics device", format("vkEnumeratePhysicalDevices failed (VkResult = {})",
                                                    static_cast<Int>(countResult)));
-            builder.Finalize();
-            return builder.report;
+            return;
         }
         if (deviceCount == 0) {
-            builder.Fail("Physical device", "no Vulkan physical devices found");
-            builder.Finalize();
-            return builder.report;
+            builder.Fail("Graphics device", "no Vulkan physical devices found");
+            return;
         }
         builder.report.available = true;
         Vector<VkPhysicalDevice> devices(deviceCount);
         const VkResult enumerateResult = vkEnumeratePhysicalDevicesFn(instance, &deviceCount, devices.data());
         if (enumerateResult != VK_SUCCESS) {
-            builder.Fail("Physical device", format("vkEnumeratePhysicalDevices failed (VkResult = {})",
+            builder.Fail("Graphics device", format("vkEnumeratePhysicalDevices failed (VkResult = {})",
                                                    static_cast<Int>(enumerateResult)));
-            builder.Finalize();
-            return builder.report;
+            return;
         }
         devices.resize(deviceCount);
 
@@ -772,31 +971,39 @@ namespace MobileGL::MG_Util::SelfTest {
             }
         }
         if (physicalDevice == VK_NULL_HANDLE) {
-            builder.Fail("Graphics queue",
+            builder.Fail("Graphics device",
                          format("none of the {} physical device(s) exposes a graphics queue family", deviceCount));
-            builder.Finalize();
-            return builder.report;
+            return;
         }
 
         VkPhysicalDeviceProperties properties{};
         vkGetPhysicalDevicePropertiesFn(physicalDevice, &properties);
-        builder.Pass("Physical device",
-                     format("{} ({} device(s) enumerated, picked the first with a graphics queue)",
-                            String(properties.deviceName), deviceCount));
-        builder.Pass("Graphics queue", "graphics queue family present");
 
         // driverVersion is vendor-encoded (each vendor packs its own bit layout), so it is
         // reported as raw hex instead of being decoded with the VK_VERSION_* macros.
         const String driverVersionString = format("0x{:08x}", properties.driverVersion);
         builder.report.rendererInfo = format("{} (Vulkan {}, driver {})", String(properties.deviceName),
                                              VkApiVersionToString(properties.apiVersion), driverVersionString);
+        summary.devicePropsValid = true;
+        summary.deviceName = String(properties.deviceName);
+        summary.apiVersionString = VkApiVersionToString(properties.apiVersion);
+        summary.driverVersionString = driverVersionString;
 
+        // The chosen-device facts (name, enumeration count, graphics queue) ride along
+        // on both outcomes so the device API verdict never hides them.
+        const String deviceFacts =
+            format("{} ({} device(s) enumerated, picked the first with a graphics queue); "
+                   "graphics queue family present",
+                   String(properties.deviceName), deviceCount);
         if (properties.apiVersion >= VK_API_VERSION_1_1) {
-            builder.Pass("Device API version", format("Vulkan {}", VkApiVersionToString(properties.apiVersion)));
+            builder.Pass("Graphics device",
+                         deviceFacts +
+                             format("; device API Vulkan {}", VkApiVersionToString(properties.apiVersion)));
         } else {
-            builder.Fail("Device API version",
-                         format("Vulkan {} (< 1.1); the DirectVulkan backend requires a Vulkan 1.1 device",
-                                VkApiVersionToString(properties.apiVersion)));
+            builder.Fail("Graphics device",
+                         deviceFacts + format("; but Device API version: Vulkan {} (< 1.1); the DirectVulkan "
+                                              "backend requires a Vulkan 1.1 device",
+                                              VkApiVersionToString(properties.apiVersion)));
         }
 
         Vector<VkExtensionProperties> deviceExtensions;
@@ -870,6 +1077,10 @@ namespace MobileGL::MG_Util::SelfTest {
             const Bool subgroupUsable = subgroupProperties.subgroupSize > 0 &&
                                         (subgroupProperties.supportedStages & VK_SHADER_STAGE_COMPUTE_BIT) != 0 &&
                                         (subgroupProperties.supportedOperations & VK_SUBGROUP_FEATURE_BASIC_BIT) != 0;
+            // Same usability rule as the Vulkan capability loader's
+            // HasUsableShaderSubgroupSupport, which feeds the GL_KHR_shader_subgroup
+            // advertisement of the real backend.
+            summary.shaderSubgroupUsable = subgroupUsable;
             if (subgroupUsable) {
                 builder.Pass("Compute shader subgroup",
                              format("basic subgroup operations in compute, subgroup size {}",
@@ -882,34 +1093,70 @@ namespace MobileGL::MG_Util::SelfTest {
             builder.Warn("Compute shader subgroup", "subgroup properties could not be queried");
         }
 
-        builder.Info("VK_KHR_draw_indirect_count",
-                     HasVkExtension(deviceExtensions, VK_KHR_DRAW_INDIRECT_COUNT_EXTENSION_NAME)
-                         ? "supported (GPU-driven indirect draw counts)"
-                         : "not supported");
+        if (HasVkExtension(deviceExtensions, VK_KHR_DRAW_INDIRECT_COUNT_EXTENSION_NAME)) {
+            builder.Pass("VK_KHR_draw_indirect_count",
+                         "supported (count-buffer indirect draws run as single native "
+                         "vkCmdDraw*IndirectCount commands)");
+        } else {
+            builder.Warn("VK_KHR_draw_indirect_count",
+                         "not supported; count-buffer indirect draws (glMultiDraw*IndirectCount) fall "
+                         "back to a CPU readback of the parameter buffer and one draw per command");
+        }
         const Bool indexTypeUint8 = HasVkExtension(deviceExtensions, VK_KHR_INDEX_TYPE_UINT8_EXTENSION_NAME) ||
                                     HasVkExtension(deviceExtensions, VK_EXT_INDEX_TYPE_UINT8_EXTENSION_NAME);
-        builder.Info("Index type uint8",
-                     indexTypeUint8 ? "supported (native GL_UNSIGNED_BYTE index buffers)" : "not supported");
-        builder.Info("Device", String(properties.deviceName));
-        builder.Info("Driver version", driverVersionString + " (vendor-encoded)");
-
-        if (MG_Config::Features.DisableTimerQuery) {
-            builder.Info("Timer queries", "timer queries disabled by MOBILEGL_DISABLE_TIMERQUERY");
-        }
-        const Float timestampPeriod = properties.limits.timestampPeriod;
-        if (graphicsQueueTimestampValidBits > 0) {
-            builder.Pass("Timestamp valid bits",
-                         format("timestampValidBits = {} on the graphics queue family",
-                                graphicsQueueTimestampValidBits));
+        if (indexTypeUint8) {
+            builder.Pass("Index type uint8", "supported (native GL_UNSIGNED_BYTE index buffers)");
         } else {
-            builder.Warn("Timestamp valid bits",
-                         "timestampValidBits = 0 on the graphics queue family; timer queries unavailable");
+            builder.Warn("Index type uint8",
+                         "not supported; GL_UNSIGNED_BYTE index buffers cannot be drawn (the backend "
+                         "has no conversion fallback and asserts on uint8 index draws)");
         }
-        builder.Info("Timestamp period", format("timestampPeriod = {} ns per tick", timestampPeriod));
+        builder.DriverReported("Backend driver reported device", String(properties.deviceName));
+        builder.DriverReported("Backend driver reported driver version", driverVersionString + " (vendor-encoded)");
+
+        // Single "Timer queries" row: timestampValidBits, timestampPeriod, and the
+        // functional timestamp probe fold into one combined verdict whose detail
+        // always states the validBits and period values; the
+        // MOBILEGL_DISABLE_TIMERQUERY note is appended to the same row.
+        const Float timestampPeriod = properties.limits.timestampPeriod;
+        // Same support rule as VulkanRenderer::CreateLogicalDeviceAndQueues
+        // (m_timerQuerySupported): usable timer queries need valid timestamp bits on
+        // the graphics queue family and a non-zero tick period.
+        summary.timerQueriesSupported = graphicsQueueTimestampValidBits > 0 && timestampPeriod > 0.0f;
         if (graphicsQueueTimestampValidBits > 0) {
             ProbeVulkanTimerQuery(builder, getInstanceProcAddr, instance, physicalDevice,
                                   graphicsQueueFamilyIndex, graphicsQueueTimestampValidBits, timestampPeriod);
+        } else {
+            builder.Warn("Timer queries",
+                         format("timestampValidBits = 0 on the graphics queue family; timestampPeriod = {} ns "
+                                "per tick; timestamps unsupported on the graphics queue; timer queries "
+                                "unavailable",
+                                timestampPeriod) +
+                             TimerQueryDisabledNote());
         }
+    }
+
+    BackendPostReport RunVulkanDriverPost() {
+        MGLOG_I("Driver POST: probing the device Vulkan driver");
+        ReportBuilder builder;
+        VulkanProbeSummary summary;
+        ProbeVulkanDriver(builder, summary);
+
+        // "MobileGL reported ..." rows: what applications running on the DirectVulkan
+        // backend (Magma) would see. The backend API version string reuses the exact
+        // GetBackendAPIVersionString format, fed with the strings this probe collected
+        // (so the driver version appears in the probe's raw vendor-encoded hex form);
+        // the extension list is built by the same helper the real backend uses.
+        Optional<String> backendApiVersionString;
+        Optional<String> advertisedExtensions;
+        if (summary.devicePropsValid) {
+            backendApiVersionString = MG_Backend::DirectVulkan::FormatBackendAPIVersionString(
+                summary.deviceName, summary.apiVersionString, summary.driverVersionString);
+            advertisedExtensions = JoinAdvertisedExtensions(MG_Backend::DirectVulkan::BuildAdvertisedExtensions(
+                summary.shaderSubgroupUsable, summary.timerQueriesSupported));
+        }
+        AppendMobileGLReportedRows(builder, MG_Backend::DirectVulkan::GetRendererIdentity(), backendApiVersionString,
+                                   advertisedExtensions);
 
         builder.Finalize();
         MGLOG_I("Driver POST: Vulkan verdict = %s", builder.report.verdict.c_str());

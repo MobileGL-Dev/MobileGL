@@ -15,6 +15,11 @@ namespace MobileGL::MG_Util::SelfTest {
         String name;
         String status; // "PASS" | "WARN" | "FAIL" | "INFO"
         String detail;
+        // Display ordering rank within a backend section (lower renders first): FAIL,
+        // WARN, PASS, INFO, then the device-driver identity strings, then the strings
+        // MobileGL itself reports to applications. Rows are stable-sorted by this rank
+        // before the report is returned; it is not serialized to JSON.
+        Int displayRank = 0;
     };
 
     // Verdict for one backend's device driver.

@@ -626,18 +626,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 .ExtraVendor = Nullopt,              // Extra vendor
                 .RendererGLInfo =
                     {
-                        .TargetGLVersion = {3, 3, 0},                      // Target OpenGL Version
-                        .TargetGLSLVersion = {4, 6, 0},                    // Target Shading Language Version
-                        .Extensions = {V_OpenGL30, V_OpenGL31, V_OpenGL32, // OpenGL Extensions
-                                       V_OpenGL33, E_GL_ARB_draw_buffers_blend, E_GL_ARB_compute_shader,
-                                       E_GL_ARB_shader_storage_buffer_object, E_GL_ARB_shader_image_load_store,
-                                       E_GL_ARB_program_interface_query, E_GL_ARB_framebuffer_object,
-                                       E_GL_EXT_framebuffer_object, E_GL_ARB_depth_texture, E_GL_ARB_buffer_storage,
-                                       E_GL_ARB_texture_storage, E_GL_ARB_direct_state_access,
-                                       E_GL_ARB_multi_draw_indirect, E_GL_ARB_indirect_parameters,
-                                       E_GL_ARB_shader_draw_parameters, E_GL_ARB_gpu_shader5, E_GL_ARB_multi_bind,
-                                       E_GL_ARB_shading_language_420pack, E_GL_ARB_vertex_attrib_binding,
-                                       E_GL_ARB_shader_image_size},
+                        .TargetGLVersion = {3, 3, 0},   // Target OpenGL Version
+                        .TargetGLSLVersion = {4, 6, 0}, // Target Shading Language Version
+                        // Baseline advertisement (no timer queries yet); reconciled once
+                        // the ES capabilities exist, see UpdateAdvertisedTimerQueryExtension.
+                        .Extensions = BuildAdvertisedExtensions(false),
                         .IsCompatibilityProfile = false // Is Compatibility Profile
                     },
                 .StaticBackendCapability = {.AllowVSOnlyPrograms = false} // Backend Capability
@@ -655,15 +648,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // m_rendererInfo + UpdateAdvertisedExtensions). InitCapabilities
         // completes inside the first MakeEGLCurrent on a context, so an app
         // thread can only observe the extension string after the
-        // advertisement for its context has settled; erase-then-append keeps
-        // the re-run after a context recreation idempotent.
+        // advertisement for its context has settled; rebuilding the whole
+        // list keeps the re-run after a context recreation idempotent.
         void UpdateAdvertisedTimerQueryExtension() {
-            auto& extensions = MutableRendererInfo().RendererGLInfo.Extensions;
-            extensions.erase(std::remove(extensions.begin(), extensions.end(), E_GL_ARB_timer_query),
-                             extensions.end());
-            if (AreTimerQueriesSupported() && !MG_Config::Features.DisableTimerQuery) {
-                extensions.push_back(E_GL_ARB_timer_query);
-            }
+            MutableRendererInfo().RendererGLInfo.Extensions = BuildAdvertisedExtensions(AreTimerQueriesSupported());
         }
     } // namespace
 
@@ -838,11 +826,39 @@ namespace MobileGL::MG_Backend::DirectGLES {
         if (!m_initialized) {
             return "<uninitialized DirectGLES backend>";
         }
+        return FormatBackendAPIVersionString(m_GLESCapabilities.GLESRendererString,
+                                             m_GLESCapabilities.GLESVersion.Major,
+                                             m_GLESCapabilities.GLESVersion.Minor);
+    }
+
+    const RendererInfo& GetRendererIdentity() {
+        return MutableRendererInfo();
+    }
+
+    Vector<GLExtension> BuildAdvertisedExtensions(Bool timerQueriesSupported) {
+        Vector<GLExtension> extensions = {V_OpenGL30, V_OpenGL31, V_OpenGL32,
+                                          V_OpenGL33, E_GL_ARB_draw_buffers_blend, E_GL_ARB_compute_shader,
+                                          E_GL_ARB_shader_storage_buffer_object, E_GL_ARB_shader_image_load_store,
+                                          E_GL_ARB_program_interface_query, E_GL_ARB_framebuffer_object,
+                                          E_GL_EXT_framebuffer_object, E_GL_ARB_depth_texture, E_GL_ARB_buffer_storage,
+                                          E_GL_ARB_texture_storage, E_GL_ARB_direct_state_access,
+                                          E_GL_ARB_multi_draw_indirect, E_GL_ARB_indirect_parameters,
+                                          E_GL_ARB_shader_draw_parameters, E_GL_ARB_gpu_shader5, E_GL_ARB_multi_bind,
+                                          E_GL_ARB_shading_language_420pack, E_GL_ARB_vertex_attrib_binding,
+                                          E_GL_ARB_shader_image_size};
+        // Only advertised when the device driver actually has usable timer queries
+        // (GL_EXT_disjoint_timer_query plus its entry points) and the
+        // MOBILEGL_DISABLE_TIMERQUERY escape hatch is off.
+        if (timerQueriesSupported && !MG_Config::Features.DisableTimerQuery) {
+            extensions.push_back(E_GL_ARB_timer_query);
+        }
+        return extensions;
+    }
+
+    String FormatBackendAPIVersionString(const String& glesRendererString, Int glesMajor, Int glesMinor) {
         // Format:
         // <OpenGL ES Renderer>, OpenGL ES <OpenGL ES Version>
-        String versionString = std::format("{}, OpenGL ES {}.{}", m_GLESCapabilities.GLESRendererString,
-                                           m_GLESCapabilities.GLESVersion.Major, m_GLESCapabilities.GLESVersion.Minor);
-        return versionString;
+        return std::format("{}, OpenGL ES {}.{}", glesRendererString, glesMajor, glesMinor);
     }
 
     BackendType BackendObject_DirectGLES::GetBackendType() const {

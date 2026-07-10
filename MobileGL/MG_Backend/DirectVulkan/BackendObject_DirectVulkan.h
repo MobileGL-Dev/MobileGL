@@ -47,4 +47,29 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         MG_External::VulkanCapabilities m_vulkanCaps;
         RendererInfo m_rendererInfo;
     };
+
+    // Single-source-of-truth helpers shared with the driver POST
+    // (MG_Util/SelfTest/DriverPost.cpp), so the identity strings and extension list
+    // MobileGL reports to applications on this backend cannot drift from what the
+    // POST screen shows.
+
+    // Static identity of the Magma renderer (renderer/backend names, target GL/GLSL
+    // versions, ExtraVendor) with the baseline extension advertisement (no shader
+    // subgroup, no timer queries). A live backend copies this in its constructor and
+    // reconciles the Extensions in UpdateAdvertisedExtensions once real capabilities
+    // exist; callers that need the advertised list for a known capability set must
+    // use BuildAdvertisedExtensions instead.
+    const RendererInfo& GetRendererIdentity();
+
+    // The full OpenGL extension list Magma advertises (glGetString(GL_EXTENSIONS)) for
+    // a device with the given raw capabilities. The MOBILEGL_DISABLE_SUBGROUP and
+    // MOBILEGL_DISABLE_TIMERQUERY escape hatches are applied inside, so callers pass
+    // the detected device support (passing an already-gated value is harmless).
+    Vector<GLExtension> BuildAdvertisedExtensions(Bool shaderSubgroupSupported, Bool timerQueriesSupported);
+
+    // Format: <GPU Name>, Vulkan <Vulkan Version>, Driver <Driver Version> — the exact
+    // string an initialized backend returns from GetBackendAPIVersionString (and that
+    // ends up inside the application-visible GL_RENDERER string).
+    String FormatBackendAPIVersionString(const String& deviceName, const String& vulkanApiVersionString,
+                                         const String& driverVersionString);
 } // namespace MobileGL::MG_Backend::DirectVulkan

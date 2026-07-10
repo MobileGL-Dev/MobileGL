@@ -47,4 +47,25 @@ namespace MobileGL::MG_Backend::DirectGLES {
         MG_External::GLESCapabilities m_GLESCapabilities;
         DynamicBackendParameters m_dynamicParameters;
     };
+
+    // Single-source-of-truth helpers shared with the driver POST
+    // (MG_Util/SelfTest/DriverPost.cpp), so the identity strings and extension list
+    // MobileGL reports to applications on this backend cannot drift from what the
+    // POST screen shows.
+
+    // Static identity of the Espryt renderer (renderer/backend names, target GL/GLSL
+    // versions, ExtraVendor). The Extensions vector inside is live backend state that
+    // is reconciled after capability init; callers that need the advertised list for
+    // a known capability set must use BuildAdvertisedExtensions instead.
+    const RendererInfo& GetRendererIdentity();
+
+    // The full OpenGL extension list Espryt advertises (glGetString(GL_EXTENSIONS))
+    // for a device whose timer queries are (or are not) usable. The
+    // MOBILEGL_DISABLE_TIMERQUERY escape hatch is applied inside.
+    Vector<GLExtension> BuildAdvertisedExtensions(Bool timerQueriesSupported);
+
+    // Format: <OpenGL ES Renderer>, OpenGL ES <Major>.<Minor> — the exact string an
+    // initialized backend returns from GetBackendAPIVersionString (and that ends up
+    // inside the application-visible GL_RENDERER string).
+    String FormatBackendAPIVersionString(const String& glesRendererString, Int glesMajor, Int glesMinor);
 } // namespace MobileGL::MG_Backend::DirectGLES
