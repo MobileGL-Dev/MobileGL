@@ -18,6 +18,8 @@
 #include <MG_Util/Converters/MGToGL/TextureEnumConverter.h>
 #include <MG_Util/Converters/MGToStr/TextureEnumConverter.h>
 #include <MG_Util/Texture/TextureFormatProcessor.h>
+#include <Config.h>
+#include <algorithm>
 #include <format>
 
 namespace MobileGL::MG_Backend::DirectGLES {
@@ -176,7 +178,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
         Flags<PixelFormatNormalizeOptionBit> GetForcedPixelFormatNormalizeOptions() {
             Flags<PixelFormatNormalizeOptionBit> options;
-            if (g_GLESCapabilities.GLESRendererString.find("ANGLE") != String::npos) {
+            if (g_GLESCapabilities.IsAngleRenderer) {
                 options |= PixelFormatNormalizeOptionBit::NoRgb16;
                 options |= PixelFormatNormalizeOptionBit::NoSnorm16;
                 options |= PixelFormatNormalizeOptionBit::NoSnorm8;
@@ -612,6 +614,57 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 }
             }
         }
+
+        // The advertised renderer info must be mutable after its first use:
+        // E_GL_ARB_timer_query can only be decided once the ES capabilities
+        // are known, long after the list is first read (see
+        // UpdateAdvertisedTimerQueryExtension below).
+        RendererInfo& MutableRendererInfo() {
+            static RendererInfo rendererInfo = {
+                .RendererName = "Espryt",            // Renderer Name
+                .BackendName = "Direct (OpenGL ES)", // Backend Name
+                .ExtraVendor = Nullopt,              // Extra vendor
+                .RendererGLInfo =
+                    {
+                        .TargetGLVersion = {3, 3, 0},                      // Target OpenGL Version
+                        .TargetGLSLVersion = {4, 6, 0},                    // Target Shading Language Version
+                        .Extensions = {V_OpenGL30, V_OpenGL31, V_OpenGL32, // OpenGL Extensions
+                                       V_OpenGL33, E_GL_ARB_draw_buffers_blend, E_GL_ARB_compute_shader,
+                                       E_GL_ARB_shader_storage_buffer_object, E_GL_ARB_shader_image_load_store,
+                                       E_GL_ARB_program_interface_query, E_GL_ARB_framebuffer_object,
+                                       E_GL_EXT_framebuffer_object, E_GL_ARB_depth_texture, E_GL_ARB_buffer_storage,
+                                       E_GL_ARB_texture_storage, E_GL_ARB_direct_state_access,
+                                       E_GL_ARB_multi_draw_indirect, E_GL_ARB_indirect_parameters,
+                                       E_GL_ARB_shader_draw_parameters, E_GL_ARB_gpu_shader5, E_GL_ARB_multi_bind,
+                                       E_GL_ARB_shading_language_420pack, E_GL_ARB_vertex_attrib_binding,
+                                       E_GL_ARB_shader_image_size},
+                        .IsCompatibilityProfile = false // Is Compatibility Profile
+                    },
+                .StaticBackendCapability = {.AllowVSOnlyPrograms = false} // Backend Capability
+            };
+            return rendererInfo;
+        }
+
+        // GL_ARB_timer_query gates MC's F3 GPU% (LWJGL checks the extension
+        // string via glGetStringi plus non-null glQueryCounter and
+        // glGetQueryObject(u)i64v entries). GetRendererInfo is first invoked
+        // from LogBackendInfo() during MG_Backend::Init, BEFORE any ES
+        // context or capabilities exist, so the advertisement cannot be baked
+        // into the static initializer above; it is reconciled here at the end
+        // of InitCapabilities instead (mirroring DirectVulkan's mutable
+        // m_rendererInfo + UpdateAdvertisedExtensions). InitCapabilities
+        // completes inside the first MakeEGLCurrent on a context, so an app
+        // thread can only observe the extension string after the
+        // advertisement for its context has settled; erase-then-append keeps
+        // the re-run after a context recreation idempotent.
+        void UpdateAdvertisedTimerQueryExtension() {
+            auto& extensions = MutableRendererInfo().RendererGLInfo.Extensions;
+            extensions.erase(std::remove(extensions.begin(), extensions.end(), E_GL_ARB_timer_query),
+                             extensions.end());
+            if (AreTimerQueriesSupported() && !MG_Config::Features.DisableTimerQuery) {
+                extensions.push_back(E_GL_ARB_timer_query);
+            }
+        }
     } // namespace
 
     BackendObject_DirectGLES::~BackendObject_DirectGLES() {
@@ -648,6 +701,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return false;
         }
         DirectGLES::SetGLESCapabilities(m_GLESCapabilities);
+        // Now that g_GLESCapabilities knows about GL_EXT_disjoint_timer_query,
+        // reconcile the E_GL_ARB_timer_query advertisement (see the comment on
+        // UpdateAdvertisedTimerQueryExtension for why it cannot happen when
+        // the extension list is first built).
+        UpdateAdvertisedTimerQueryExtension();
         UpdateDynamicBackendParameters();
         ProbeGLESFormatCapabilities(m_GLESFunctions, MutableFormatCapabilities(), m_dynamicParameters);
         PrintFormatCapabilities(GetFormatCapabilities());
@@ -773,29 +831,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
     }
 
     const RendererInfo& BackendObject_DirectGLES::GetRendererInfo() const {
-        static RendererInfo RendererInfo = {
-            .RendererName = "Espryt",            // Renderer Name
-            .BackendName = "Direct (OpenGL ES)", // Backend Name
-            .ExtraVendor = Nullopt,              // Extra vendor
-            .RendererGLInfo =
-                {
-                    .TargetGLVersion = {3, 3, 0},                      // Target OpenGL Version
-                    .TargetGLSLVersion = {4, 6, 0},                    // Target Shading Language Version
-                    .Extensions = {V_OpenGL30, V_OpenGL31, V_OpenGL32, // OpenGL Extensions
-                                   V_OpenGL33, E_GL_ARB_draw_buffers_blend, E_GL_ARB_compute_shader,
-                                   E_GL_ARB_shader_storage_buffer_object, E_GL_ARB_shader_image_load_store,
-                                   E_GL_ARB_program_interface_query, E_GL_ARB_framebuffer_object,
-                                   E_GL_EXT_framebuffer_object, E_GL_ARB_depth_texture, E_GL_ARB_buffer_storage,
-                                   E_GL_ARB_texture_storage, E_GL_ARB_direct_state_access,
-                                   E_GL_ARB_multi_draw_indirect, E_GL_ARB_indirect_parameters,
-                                   E_GL_ARB_shader_draw_parameters, E_GL_ARB_gpu_shader5, E_GL_ARB_multi_bind,
-                                   E_GL_ARB_shading_language_420pack, E_GL_ARB_vertex_attrib_binding,
-                                   E_GL_ARB_shader_image_size},
-                    .IsCompatibilityProfile = false // Is Compatibility Profile
-                },
-            .StaticBackendCapability = {.AllowVSOnlyPrograms = false} // Backend Capability
-        };
-        return RendererInfo;
+        return MutableRendererInfo();
     }
 
     String BackendObject_DirectGLES::GetBackendAPIVersionString() const {
@@ -872,6 +908,26 @@ namespace MobileGL::MG_Backend::DirectGLES {
             funcsTable.GL.WaitSync = WaitSync;
             funcsTable.GL.DeleteSync = DeleteSync;
             funcsTable.GL.GetSyncStatus = GetSyncStatus;
+            // Optional timer-query group: left null (the frontend then falls
+            // back) when disabled via MOBILEGL_DISABLE_TIMERQUERY. The hooks
+            // themselves additionally degrade to null handles / zero results
+            // when GL_EXT_disjoint_timer_query or its entry points are
+            // missing, or when the calling thread does not own the ES
+            // context.
+            if (!MG_Config::Features.DisableTimerQuery) {
+                // AreTimerQueriesSupported is a pure capability read (no
+                // current ES context required, false until the caps are
+                // filled in), which is exactly the dynamic support check
+                // the frontend wants from IsTimerQuerySupported.
+                funcsTable.GL.IsTimerQuerySupported = AreTimerQueriesSupported;
+                funcsTable.GL.BeginTimeElapsedQuery = BeginTimeElapsedQuery;
+                funcsTable.GL.EndTimeElapsedQuery = EndTimeElapsedQuery;
+                funcsTable.GL.QueryCounterTimestamp = QueryCounterTimestamp;
+                funcsTable.GL.IsQueryResultAvailable = IsQueryResultAvailable;
+                funcsTable.GL.GetQueryResult64 = GetQueryResult64;
+                funcsTable.GL.DeleteBackendQuery = DeleteBackendQuery;
+                funcsTable.GL.GetGpuTimestampNs = GetGpuTimestampNs;
+            }
             funcsTableInitialized = true;
         }
         return funcsTable;

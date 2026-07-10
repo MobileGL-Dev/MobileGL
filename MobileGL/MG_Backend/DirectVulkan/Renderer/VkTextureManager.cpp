@@ -12,6 +12,7 @@
 #include "MG_Util/Converters/MGToStr/TextureEnumConverter.h"
 #include "MG_Util/Converters/MGToVk/TextureEnumConverter.h"
 
+#include <Config.h>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -52,11 +53,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     };
 
     static Bool IsR11G11B10FFallbackEnabled() {
-        static const Bool enabled = [] {
-            const char* value = std::getenv("MOBILEGL_VULKAN_R11G11B10F_FALLBACK");
-            return value != nullptr && value[0] != '\0' && std::strcmp(value, "0") != 0;
-        }();
-        return enabled;
+        return MG_Config::Features.VulkanR11G11B10FFallback;
     }
 
     static Bool IsMultisampleTextureUploadTarget(TextureUploadTarget target) {
@@ -387,11 +384,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     }
 
     static Bool ShouldDumpTextureUploadStats() {
-        static const Bool enabled = [] {
-            const char* value = std::getenv("MOBILEGL_TEXTURE_UPLOAD_STATS");
-            return value != nullptr && value[0] != '\0' && std::strcmp(value, "0") != 0;
-        }();
-        return enabled;
+        return MG_Config::Features.TextureUploadStats;
     }
 
     static void DumpTextureSyncStats(Int textureId, TextureInternalFormat format, TextureUploadTarget uploadTarget,

@@ -20,6 +20,7 @@
 #include "VkRenderPassManager.h"
 #include "VkSamplerManager.h"
 #include "VkTextureManager.h"
+#include "VkTimerQueryManager.h"
 #include "MG_Util/Math/VectorTypes.h"
 #include <Includes.h>
 #include <vk_mem_alloc.h>
@@ -101,7 +102,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
     };
 
-    class VulkanRenderer : public IBufferCopyCommandProvider {
+    class VulkanRenderer : public IBufferCopyCommandProvider, public FrameContext::IRecordingObserver {
     public:
         VulkanRenderer(NativeWindowType window, const VulkanRendererConfig& cfg = {});
         ~VulkanRenderer();
@@ -112,6 +113,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // IBufferCopyCommandProvider: recording command buffer, outside any
         // render pass, for immediate staged buffer copies.
         VkCommandBuffer AcquireBufferCopyCommandBuffer() override;
+
+        // FrameContext::IRecordingObserver: prepares the frame's timer-query
+        // pool (harvest + reset) right after the frame command buffer begins
+        // recording, before any render pass.
+        void OnFrameCommandRecordingBegan(VkCommandBuffer commandBuffer) override;
 
         Bool SetupDraw(FrameContext::FrameData& frame, GLenum mode, Flags<DrawSetupAspect> aspects,
                        const DrawCmdParam& drawParams,
@@ -177,6 +183,25 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // cannot complete without further submissions (it belongs to the
         // current, not-yet-presented frame) or when the wait failed.
         Bool WaitForFrameSerial(Uint64 serial, Uint64 timeoutNs);
+
+        // GPU timer queries, backing the GL_TIME_ELAPSED / GL_TIMESTAMP
+        // frontend. Timestamp support (queue timestampValidBits > 0 and a
+        // non-zero timestampPeriod) is cached at device creation.
+        Bool IsTimerQuerySupported() const;
+        // Ensures the frame command buffer is recording (same lazy pattern as
+        // SetupDraw) and writes a bottom-of-pipe timestamp into the current
+        // frame's pool. Null when unsupported or the pool is exhausted.
+        SharedPtr<VkTimerQueryManager::TimestampRecord> WriteTimerQueryTimestamp();
+        // Non-blocking: true once the record's raw ticks are on the CPU
+        // (harvests the slot once its frame serial has completed).
+        Bool IsTimerQueryResultReady(VkTimerQueryManager::TimestampRecord& record);
+        // Blocking wait, mirroring ClientWaitSync's caveat: a record written
+        // this frame cannot complete until Present submits the commands, so
+        // this returns false (result reads as 0) instead of deadlocking.
+        Bool WaitForTimerQueryResult(VkTimerQueryManager::TimestampRecord& record);
+        Uint64 GetTimerQueryElapsedNs(const VkTimerQueryManager::TimestampRecord& begin,
+                                      const VkTimerQueryManager::TimestampRecord& end) const;
+        Uint64 GetTimerQueryTimestampNs(const VkTimerQueryManager::TimestampRecord& record) const;
 
         void RequestSwapchainResize(Uint32 width, Uint32 height);
         void RecreateSwapchain();
@@ -246,6 +271,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         Bool m_multiDrawIndirectFeatureEnabled = false;
         Bool m_shaderDrawParametersExtensionEnabled = false;
         Bool m_shaderDrawParametersFeatureEnabled = false;
+        // Cached at device creation from the graphics queue family properties
+        // and device limits; drives timer-query support.
+        Uint32 m_timestampValidBits = 0;
+        Float m_timestampPeriodNs = 0.0f;
+        Bool m_timerQuerySupported = false;
         using PFNDrawIndexedIndirectCountFunc = void(VKAPI_PTR*)(VkCommandBuffer commandBuffer, VkBuffer buffer,
                                                                  VkDeviceSize offset, VkBuffer countBuffer,
                                                                  VkDeviceSize countBufferOffset, Uint32 maxDrawCount,
@@ -268,6 +298,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         UniquePtr<VkRenderPassManager> m_renderPassManager;
         UniquePtr<VkTextureManager> m_textureManager;
         UniquePtr<VkSamplerManager> m_samplerManager;
+        UniquePtr<VkTimerQueryManager> m_timerQueryManager;
         BlitResources m_blitResources;
         DepthMipmapResources m_depthMipmapResources;
         Vector<DeferredDepthMipmapCleanup> m_deferredDepthMipmapCleanup;

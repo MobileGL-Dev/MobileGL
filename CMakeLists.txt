@@ -222,6 +222,7 @@ set(SOURCE_FILES
     MobileGL/MG_Impl/GLImpl/Exporting/Definitions.cpp
     MobileGL/MG_Impl/GLImpl/Getter/GL_Getter.cpp
     MobileGL/MG_Impl/GLImpl/Sync/GL_Sync.cpp
+    MobileGL/MG_Impl/GLImpl/Query/GL_Query.cpp
 
     MobileGL/MG_Impl/Init.cpp
     MobileGL/MG_Impl/GetProcAddress.cpp
@@ -249,6 +250,7 @@ set(SOURCE_FILES
     MobileGL/MG_Backend/DirectVulkan/Renderer/VertexInputStateFactory.cpp
     MobileGL/MG_Backend/DirectVulkan/Renderer/VkBufferObject.cpp
     MobileGL/MG_Backend/DirectVulkan/Renderer/VkTextureManager.cpp
+    MobileGL/MG_Backend/DirectVulkan/Renderer/VkTimerQueryManager.cpp
     MobileGL/MG_Backend/DirectVulkan/Renderer/VkSamplerManager.cpp
     MobileGL/MG_Backend/DirectVulkan/Renderer/VkClearManager.cpp
     MobileGL/MG_Backend/DirectVulkan/Renderer/VkRenderPassManager.cpp

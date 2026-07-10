@@ -8,21 +8,21 @@
 
 #include "Loader.h"
 #include "MG_Util/Types.h"
+#include <Config.h>
 #if defined(MOBILEGL_IOS)
 #include <dlfcn.h>
 #endif
 
 namespace MobileGL::MG_Util::BackendLoader {
     static Bool UseRetraceAngle() {
-        const char* value = std::getenv("MOBILEGL_RETRACE_USE_ANGLE");
-        return value != nullptr && std::strcmp(value, "1") == 0;
+        return MG_Config::Features.RetraceUseAngle;
     }
 
     static Vector<String> AngleLibNames(const char* name) {
-        const char* angleDir = std::getenv("MOBILEGL_RETRACE_ANGLE_DIR");
-        if (angleDir != nullptr && angleDir[0] != '\0') {
+        const String& angleDir = MG_Config::Features.RetraceAngleDir;
+        if (!angleDir.empty()) {
             String path = angleDir;
-            if (!path.empty() && path.back() != '/') {
+            if (path.back() != '/') {
                 path += "/";
             }
             path += name;
@@ -450,6 +450,8 @@ namespace MobileGL::MG_Util::BackendLoader {
             INIT_GLES_FUNC(glBufferStorageEXT)
             INIT_GLES_FUNC(glGetQueryObjectivEXT)
             INIT_GLES_FUNC(glGetQueryObjecti64vEXT)
+            INIT_GLES_FUNC(glQueryCounterEXT)
+            INIT_GLES_FUNC(glGetQueryObjectui64vEXT)
             INIT_GLES_FUNC(glBindFragDataLocationEXT)
             INIT_GLES_FUNC(glMapBufferOES)
             INIT_GLES_FUNC(glMultiDrawArraysIndirectEXT)
@@ -726,6 +728,9 @@ namespace MobileGL::MG_Util::BackendLoader {
                 if (std::strcmp(extension, "GL_EXT_base_instance") == 0) {
                     caps.SupportsBaseInstance = true;
                 }
+                if (std::strcmp(extension, "GL_EXT_disjoint_timer_query") == 0) {
+                    caps.SupportsDisjointTimerQuery = true;
+                }
             }
         }
 
@@ -910,6 +915,18 @@ namespace MobileGL::MG_Util::BackendLoader {
             ProbeIndirectInstanceIdIncludesBaseInstance(caps, glesFuncs);
         MGLOG_I("    Indirect draw gl_InstanceID includes baseInstance: %s",
                 caps.IndirectDrawInstanceIdIncludesBaseInstance ? "true" : "false");
+
+        caps.IsAngleRenderer = caps.GLESRendererString.find("ANGLE") != String::npos;
+        caps.IsAngleLlvmpipeRenderer =
+            caps.IsAngleRenderer && caps.GLESRendererString.find("llvmpipe") != String::npos;
+        caps.AvoidSamplerMipmapMinFilter =
+            caps.IsAngleLlvmpipeRenderer && MG_Config::Features.AvoidAngleLlvmpipeSamplerMipmapMinFilter;
+        MGLOG_I("    GL_EXT_disjoint_timer_query supported: %s",
+                caps.SupportsDisjointTimerQuery ? "true" : "false");
+        MGLOG_I("    ANGLE renderer: %s", caps.IsAngleRenderer ? "true" : "false");
+        MGLOG_I("    ANGLE llvmpipe renderer: %s", caps.IsAngleLlvmpipeRenderer ? "true" : "false");
+        MGLOG_I("    Avoid sampler mipmap min filter: %s",
+                caps.AvoidSamplerMipmapMinFilter ? "true" : "false");
 
         return true;
     }

@@ -97,6 +97,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         VK_VERIFY(vkBeginCommandBuffer(frame.commandBuffer, &beginInfo), "BeginCommandRecording, vkBeginCommandBuffer");
 
         frame.isCommandRecording = true;
+        if (m_recordingObserver != nullptr) {
+            m_recordingObserver->OnFrameCommandRecordingBegan(frame.commandBuffer);
+        }
         return frame.commandBuffer;
     }
 
@@ -228,6 +231,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
     Uint32 FrameContext::GetFrameCount() const {
         return static_cast<Uint32>(m_frames.size());
+    }
+
+    void FrameContext::SetRecordingObserver(IRecordingObserver* observer) {
+        m_recordingObserver = observer;
     }
 
     void FrameContext::AssertValidFrameIndex(Uint32 frameIndex) const {

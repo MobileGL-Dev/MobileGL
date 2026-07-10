@@ -109,6 +109,31 @@ namespace MobileGL::MG_Backend::DirectGLES {
     void WaitSync(BackendSyncHandle sync, GLbitfield flags, GLuint64 timeout);
     void DeleteSync(BackendSyncHandle sync);
     Bool GetSyncStatus(BackendSyncHandle sync);
+    // True when GL_EXT_disjoint_timer_query and every entry point the timer
+    // hooks below need are present. Also gates the E_GL_ARB_timer_query
+    // advertisement in BackendObject_DirectGLES::InitCapabilities, and is
+    // registered as the GLFunctionsTable::IsTimerQuerySupported hook: a pure
+    // capability read needs no current ES context, and it stays false until
+    // the ES capabilities have been filled in.
+    Bool AreTimerQueriesSupported();
+    // GL timer-query objects, backed by GL_EXT_disjoint_timer_query. The
+    // creators return null (the frontend then falls back to an immediately
+    // available zero result) when the calling thread does not own the ES
+    // context or the extension/entry points are missing, and handles created
+    // under a since-destroyed ES context are always treated as complete with
+    // a zero result (mirrors the fence-sync handles above).
+    BackendQueryHandle BeginTimeElapsedQuery();
+    void EndTimeElapsedQuery(BackendQueryHandle query);
+    BackendQueryHandle QueryCounterTimestamp();
+    Bool IsQueryResultAvailable(BackendQueryHandle query);
+    // Returns true when a final value landed in *outNanoseconds (a zero for
+    // null or stale-generation handles IS final: the frontend may cache it
+    // and release the handle). Returns false only when the calling thread
+    // does not own the ES context, so the value is genuinely unobtainable
+    // right now; the handle stays alive and readable later.
+    Bool GetQueryResult64(BackendQueryHandle query, Bool wait, Uint64* outNanoseconds);
+    void DeleteBackendQuery(BackendQueryHandle query);
+    Int64 GetGpuTimestampNs();
     void Present();
     // Applies (or defers until the window surface exists) the app-requested
     // eglSwapInterval on the native EGL surface.

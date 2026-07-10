@@ -793,6 +793,18 @@ namespace MobileGL::MG_Impl::GLImpl {
             params[0] = static_cast<GLint64>(value);
             return;
         }
+        case GL_TIMESTAMP: {
+            // Handled here (not via the 32-bit GetIntegerv fallback) so the
+            // full 64-bit GPU timestamp survives; LWJGL reads it this way.
+            Int64 timestamp = 0;
+            if (!MG_Config::Features.DisableTimerQuery) {
+                if (const auto getGpuTimestampNs = MG_Backend::gBackendFunctionsTable.GL.GetGpuTimestampNs) {
+                    timestamp = getGpuTimestampNs();
+                }
+            }
+            params[0] = static_cast<GLint64>(timestamp);
+            return;
+        }
         default:
             break;
         }
@@ -1563,9 +1575,17 @@ namespace MobileGL::MG_Impl::GLImpl {
         case GL_TEXTURE_BUFFER_OFFSET_ALIGNMENT:
             *params = 0; // texture-buffer range entrypoints are stubbed
             return;
-        case GL_TIMESTAMP:
-            *params = 0; // timer-query entrypoints are stubbed
+        case GL_TIMESTAMP: {
+            Int64 timestamp = 0;
+            if (!MG_Config::Features.DisableTimerQuery) {
+                if (const auto getGpuTimestampNs = MG_Backend::gBackendFunctionsTable.GL.GetGpuTimestampNs) {
+                    timestamp = getGpuTimestampNs();
+                }
+            }
+            // 32-bit query: clamp per the GL state-query conversion rules.
+            *params = timestamp > static_cast<Int64>(INT_MAX) ? INT_MAX : static_cast<GLint>(timestamp);
             return;
+        }
         case GL_TRANSFORM_FEEDBACK_BUFFER_BINDING:
             if (const auto& obj =
                     MG_State::pGLContext->GetBufferBindingSlot(BufferTarget::TransformFeedback).GetBoundObject()) {

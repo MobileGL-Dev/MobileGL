@@ -14,6 +14,15 @@
 namespace MobileGL::MG_Backend::DirectVulkan {
     extern UniquePtr<VulkanRenderer> pVulkanRenderer;
 
+    // Generation of the live VulkanRenderer instance, mirroring DirectGLES's
+    // g_syncContextGeneration. BackendObject_DirectVulkan bumps it wherever
+    // pVulkanRenderer is reset or recreated; fence and timer-query handles
+    // stamped with an older generation are stale and resolve as signaled /
+    // available with zero results instead of dereferencing the destroyed
+    // renderer's frame serials and query-pool slots.
+    Uint64 GetRendererGeneration();
+    void BumpRendererGeneration();
+
     void ClearBufferfi(GLenum buffer, GLint drawbuffer, GLfloat depth, GLint stencil);
     void ClearBufferfv(GLenum buffer, GLint drawbuffer, const GLfloat* value);
     void ClearBufferuiv(GLenum buffer, GLint drawbuffer, const GLuint* value);
@@ -99,5 +108,26 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     void WaitSync(BackendSyncHandle sync, GLbitfield flags, GLuint64 timeout);
     void DeleteSync(BackendSyncHandle sync);
     Bool GetSyncStatus(BackendSyncHandle sync);
+    // GPU timer queries (GL_TIME_ELAPSED spans and GL_TIMESTAMP one-shots),
+    // backed by per-frame VkQueryPool timestamp slots. All hooks degrade
+    // gracefully: null handles when the renderer is absent, the device lacks
+    // timestamp support, or the frame's pool is exhausted.
+    // Dynamic support check (GLFunctionsTable::IsTimerQuerySupported): true
+    // only while a live renderer exists whose device can actually time.
+    Bool IsTimerQuerySupported();
+    BackendQueryHandle BeginTimeElapsedQuery();
+    void EndTimeElapsedQuery(BackendQueryHandle query);
+    BackendQueryHandle QueryCounterTimestamp();
+    Bool IsQueryResultAvailable(BackendQueryHandle query);
+    // Returns true when a final value was produced (outNanoseconds set; the
+    // frontend may cache it and release the handle), false when the result
+    // cannot be obtained yet (e.g. a wait refused because the records' frame
+    // serial is the current unsubmitted frame) - the handle then stays
+    // readable later.
+    Bool GetQueryResult64(BackendQueryHandle query, Bool wait, Uint64* outNanoseconds);
+    void DeleteBackendQuery(BackendQueryHandle query);
+    // Always 0: Vulkan cannot synchronously sample the GPU clock (timestamps
+    // only exist as vkCmdWriteTimestamp results); the frontend falls back.
+    Int64 GetGpuTimestampNs();
     void Present();
 } // namespace MobileGL::MG_Backend::DirectVulkan

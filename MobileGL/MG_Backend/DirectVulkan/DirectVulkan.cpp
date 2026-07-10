@@ -15,11 +15,34 @@
 #include "MG_Util/Converters/GLToMG/TextureEnumConverter.h"
 #include "MG_Util/Metrics/TextureMetrics.h"
 #include "MG_Util/Miscellany/IndexGenerator.h"
+#include <atomic>
 #include <cstring>
 #include <spirv_reflect.h>
 
 namespace MobileGL::MG_Backend::DirectVulkan {
     UniquePtr<VulkanRenderer> pVulkanRenderer = nullptr;
+
+    namespace {
+        // Generation of the live VulkanRenderer instance, mirroring
+        // DirectGLES's g_syncContextGeneration. BackendObject_DirectVulkan
+        // bumps it (BumpRendererGeneration) wherever pVulkanRenderer is reset
+        // or recreated. Fence and timer-query handles are stamped with the
+        // generation they were created under: a stale stamp means the frame
+        // serials and query-pool slots the handle refers to belong to a
+        // destroyed renderer and must never be dereferenced against the
+        // current one (a new renderer restarts its frame-serial counter and
+        // reuses pool indices). Atomic because handles may be polled from a
+        // thread other than the EGL thread that recreates the renderer.
+        std::atomic<Uint64> g_rendererGeneration{1};
+    } // namespace
+
+    Uint64 GetRendererGeneration() {
+        return g_rendererGeneration.load(std::memory_order_acquire);
+    }
+
+    void BumpRendererGeneration() {
+        g_rendererGeneration.fetch_add(1, std::memory_order_acq_rel);
+    }
 
     namespace {
         struct BufferVariableResource {
@@ -1349,6 +1372,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // horizon used to recycle buffer resources).
         struct VulkanSyncObject {
             Uint64 frameSerial = 0;
+            // Renderer generation the serial was issued under (see
+            // g_rendererGeneration). A stale generation reports the fence
+            // signaled: renderer destruction waits for device idle, so the
+            // old renderer's GPU work is long complete, and the serial must
+            // not be compared against the new renderer's restarted counter.
+            Uint64 rendererGeneration = 0;
         };
     } // namespace
 
@@ -1356,7 +1385,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         if (!pVulkanRenderer) {
             return nullptr;
         }
-        return new VulkanSyncObject{pVulkanRenderer->GetCurrentFrameSerial()};
+        return new VulkanSyncObject{pVulkanRenderer->GetCurrentFrameSerial(), GetRendererGeneration()};
     }
 
     GLenum ClientWaitSync(BackendSyncHandle handle, GLbitfield flags, GLuint64 timeout) {
@@ -1365,7 +1394,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // waiting can succeed at all.
         (void)flags;
         const auto* sync = static_cast<VulkanSyncObject*>(handle);
-        if (sync == nullptr || !pVulkanRenderer) {
+        if (sync == nullptr || !pVulkanRenderer || sync->rendererGeneration != GetRendererGeneration()) {
             return GL_ALREADY_SIGNALED;
         }
         if (pVulkanRenderer->IsFrameSerialComplete(sync->frameSerial)) {
@@ -1393,10 +1422,141 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
     Bool GetSyncStatus(BackendSyncHandle handle) {
         const auto* sync = static_cast<VulkanSyncObject*>(handle);
-        if (sync == nullptr || !pVulkanRenderer) {
+        if (sync == nullptr || !pVulkanRenderer || sync->rendererGeneration != GetRendererGeneration()) {
             return true;
         }
         return pVulkanRenderer->IsFrameSerialComplete(sync->frameSerial);
+    }
+
+    namespace {
+        // Backend timer-query handle: a TIME_ELAPSED span holds a begin and an
+        // end timestamp record; a GL_TIMESTAMP one-shot holds only `end`. The
+        // records are shared (SharedPtr) with the owning pool's pending list,
+        // so deleting the query while results are still in flight is safe.
+        struct VulkanTimerQuery {
+            SharedPtr<VkTimerQueryManager::TimestampRecord> begin;
+            SharedPtr<VkTimerQueryManager::TimestampRecord> end;
+            // Renderer generation the records were written under (see
+            // g_rendererGeneration). A stale generation resolves as available
+            // with a final zero result: the records' pool indices and frame
+            // serials refer to a destroyed renderer and must never be handed
+            // to the current one. DeleteBackendQuery only frees the wrapper
+            // (and, via the SharedPtrs, the records), never pool slots, so
+            // stale queries are always safe to delete.
+            Uint64 rendererGeneration = 0;
+        };
+    } // namespace
+
+    Bool IsTimerQuerySupported() {
+        return pVulkanRenderer != nullptr && pVulkanRenderer->IsTimerQuerySupported();
+    }
+
+    BackendQueryHandle BeginTimeElapsedQuery() {
+        if (!pVulkanRenderer || !pVulkanRenderer->IsTimerQuerySupported()) {
+            return nullptr;
+        }
+        auto begin = pVulkanRenderer->WriteTimerQueryTimestamp();
+        if (!begin) {
+            // Pool exhausted this frame; the frontend falls back on a null handle.
+            return nullptr;
+        }
+        auto* query = new VulkanTimerQuery{};
+        query->begin = std::move(begin);
+        query->rendererGeneration = GetRendererGeneration();
+        return query;
+    }
+
+    void EndTimeElapsedQuery(BackendQueryHandle handle) {
+        auto* query = static_cast<VulkanTimerQuery*>(handle);
+        if (query == nullptr || !pVulkanRenderer) {
+            return;
+        }
+        if (query->rendererGeneration != GetRendererGeneration()) {
+            // The span began under a renderer that has since been destroyed;
+            // never write into the new renderer's pools on its behalf. The
+            // query resolves as available with a zero result.
+            return;
+        }
+        // May be null on pool exhaustion; the query then reads back as 0.
+        query->end = pVulkanRenderer->WriteTimerQueryTimestamp();
+    }
+
+    BackendQueryHandle QueryCounterTimestamp() {
+        if (!pVulkanRenderer || !pVulkanRenderer->IsTimerQuerySupported()) {
+            return nullptr;
+        }
+        auto record = pVulkanRenderer->WriteTimerQueryTimestamp();
+        if (!record) {
+            return nullptr;
+        }
+        auto* query = new VulkanTimerQuery{};
+        query->end = std::move(record);
+        query->rendererGeneration = GetRendererGeneration();
+        return query;
+    }
+
+    Bool IsQueryResultAvailable(BackendQueryHandle handle) {
+        auto* query = static_cast<VulkanTimerQuery*>(handle);
+        // Degraded/stale handles report available; GetQueryResult64 then
+        // resolves them with a final zero result.
+        if (query == nullptr || !pVulkanRenderer || query->rendererGeneration != GetRendererGeneration()) {
+            return true;
+        }
+        if (query->begin && !pVulkanRenderer->IsTimerQueryResultReady(*query->begin)) {
+            return false;
+        }
+        if (query->end && !pVulkanRenderer->IsTimerQueryResultReady(*query->end)) {
+            return false;
+        }
+        return true;
+    }
+
+    Bool GetQueryResult64(BackendQueryHandle handle, Bool wait, Uint64* outNanoseconds) {
+        *outNanoseconds = 0;
+        auto* query = static_cast<VulkanTimerQuery*>(handle);
+        if (query == nullptr || !pVulkanRenderer || query->rendererGeneration != GetRendererGeneration()) {
+            // No renderer, or the records belong to a destroyed renderer: no
+            // real value can ever be produced, so resolve with a final 0.
+            return true;
+        }
+        // With wait, mirrors ClientWaitSync: a query ended this frame cannot
+        // complete until Present submits the commands, so the wait refuses to
+        // block on the current unsubmitted serial. Returning false keeps the
+        // handle alive in the frontend; the query stays readable once a later
+        // Present submits the frame.
+        const auto ensureReady = [&](VkTimerQueryManager::TimestampRecord& record) {
+            return wait ? pVulkanRenderer->WaitForTimerQueryResult(record)
+                        : pVulkanRenderer->IsTimerQueryResultReady(record);
+        };
+        if (query->begin && query->end) {
+            if (!ensureReady(*query->begin) || !ensureReady(*query->end)) {
+                return false;
+            }
+            *outNanoseconds = pVulkanRenderer->GetTimerQueryElapsedNs(*query->begin, *query->end);
+            return true;
+        }
+        if (query->end) {
+            if (!ensureReady(*query->end)) {
+                return false;
+            }
+            *outNanoseconds = pVulkanRenderer->GetTimerQueryTimestampNs(*query->end);
+            return true;
+        }
+        // TIME_ELAPSED span that never got its end timestamp (pool
+        // exhaustion): nothing further can arrive, resolve with a final 0.
+        return true;
+    }
+
+    void DeleteBackendQuery(BackendQueryHandle handle) {
+        delete static_cast<VulkanTimerQuery*>(handle);
+    }
+
+    Int64 GetGpuTimestampNs() {
+        // Vulkan cannot synchronously sample the GPU clock: timestamps only
+        // exist as vkCmdWriteTimestamp results read back later, and
+        // VK_EXT_calibrated_timestamps is not wired up. Returning 0 tells the
+        // frontend GL_TIMESTAMP getter to fall back.
+        return 0;
     }
 
     void Present() {

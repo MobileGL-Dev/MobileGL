@@ -14,6 +14,17 @@
 namespace MobileGL::MG_Backend::DirectVulkan {
     class FrameContext {
     public:
+        // Notified immediately after a frame command buffer begins recording
+        // (before any render pass has been begun); every BeginCommandRecording
+        // caller funnels through this single seam. Implemented by the renderer
+        // to prepare per-frame timer-query pools (vkCmdResetQueryPool must be
+        // recorded outside a render pass).
+        class IRecordingObserver {
+        public:
+            virtual ~IRecordingObserver() = default;
+            virtual void OnFrameCommandRecordingBegan(VkCommandBuffer commandBuffer) = 0;
+        };
+
         struct SubmitInfoPacket {
             VkPipelineStageFlags waitDstStageMask = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
             VkSemaphore waitSemaphore = VK_NULL_HANDLE;
@@ -61,6 +72,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         Uint32 GetCurrentFrameIndex() const;
         Uint32 GetFrameCount() const;
 
+        // Observer may be null (no notifications). Not owned.
+        void SetRecordingObserver(IRecordingObserver* observer);
+
     private:
         void AssertValidFrameIndex(Uint32 frameIndex) const;
         void AssertValidSwapchainImageIndex(Uint32 imageIndex) const;
@@ -73,5 +87,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         Vector<FrameData> m_frames;
         Vector<VkSemaphore> m_swapchainImageRenderFinishedSemaphores;
         Uint32 currentFrameIndex = 0;
+        IRecordingObserver* m_recordingObserver = nullptr;
     };
 } // namespace MobileGL::MG_Backend::DirectVulkan

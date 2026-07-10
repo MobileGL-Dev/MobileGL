@@ -25,7 +25,9 @@
 #include <MG_Util/Converters/MGToGL/RenderStateEnumConverter.h>
 #include <MG_Util/Metrics/BufferMetrics.h>
 #include <MG_Util/Texture/PixelStoreProcessor.h>
+#include <Config.h>
 #include <atomic>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -2445,7 +2447,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
     void MemoryBarrier(GLbitfield barriers) {
         g_GLESFuncs.glMemoryBarrier(barriers);
-        if (g_GLESCapabilities.GLESRendererString.find("ANGLE") != String::npos) {
+        if (g_GLESCapabilities.IsAngleRenderer) {
             g_GLESFuncs.glFlush();
         }
     }
@@ -3334,8 +3336,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
     }
 
     static Bool PresentStatsEnabled() {
-        const char* value = std::getenv("MOBILEGL_GLES_PRESENT_STATS");
-        return value != nullptr && value[0] != '\0' && std::strcmp(value, "0") != 0;
+        // MOBILEGL_GLES_PRESENT_STATS, parsed once in MG_ConfigLoader::Init.
+        return MG_Config::Features.GlesPresentStats;
     }
 
     static void DumpDefaultFramebufferStats() {
@@ -3627,15 +3629,26 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // desynchronizing backend buffer state.
         std::atomic<std::thread::id> g_backendContextOwnerThread{};
 
-        // Bumped whenever the backend ES context is destroyed; fence handles
-        // created under an older generation belong to a dead context and must
-        // never be passed back to GL (mirrors BufferImpl's context tracking).
+        // Bumped whenever the backend ES context is destroyed; fence and
+        // timer-query handles created under an older generation belong to a
+        // dead context and must never be passed back to GL (mirrors
+        // BufferImpl's context tracking).
         Uint g_syncContextGeneration = 1;
 
         // Backend fence handle: a native ES sync plus the ES context
         // generation it was created under.
         struct GLESSyncObject {
             GLsync esSync = nullptr;
+            Uint contextGeneration = 0;
+        };
+
+        // Backend timer-query handle: a native GL query object name plus the
+        // ES context generation it was created under. Stale-generation
+        // handles read as available with a zero result, and deleting them
+        // only frees the wrapper (the dead ES context already reclaimed the
+        // query object).
+        struct GLESQueryObject {
+            GLuint queryId = 0;
             Uint contextGeneration = 0;
         };
     }
@@ -3769,6 +3782,156 @@ namespace MobileGL::MG_Backend::DirectGLES {
         GLsizei length = 0;
         g_GLESFuncs.glGetSynciv(sync->esSync, GL_SYNC_STATUS, 1, &length, &status);
         return status == GL_SIGNALED;
+    }
+
+    // GL timer queries, backed by GL_EXT_disjoint_timer_query. The desktop
+    // tokens from glext.h are used throughout: GL_TIME_ELAPSED (0x88BF),
+    // GL_TIMESTAMP (0x8E28), GL_QUERY_RESULT (0x8866) and
+    // GL_QUERY_RESULT_AVAILABLE (0x8867) are numerically identical to their
+    // _EXT counterparts.
+
+    Bool AreTimerQueriesSupported() {
+        return g_GLESCapabilities.SupportsDisjointTimerQuery && g_GLESFuncs.glGenQueries &&
+               g_GLESFuncs.glDeleteQueries && g_GLESFuncs.glBeginQuery && g_GLESFuncs.glEndQuery &&
+               g_GLESFuncs.glGetQueryObjectuiv && g_GLESFuncs.glQueryCounterEXT &&
+               g_GLESFuncs.glGetQueryObjectui64vEXT;
+    }
+
+    BackendQueryHandle BeginTimeElapsedQuery() {
+        // Query objects can only be created on the thread that owns the ES
+        // context (MC's F3 profiler queries on the render thread, which
+        // does). Returning null makes the frontend fall back to an
+        // immediately available zero result.
+        if (!IsBackendContextCurrentOnThisThread() || !AreTimerQueriesSupported()) {
+            return nullptr;
+        }
+        GLuint queryId = 0;
+        g_GLESFuncs.glGenQueries(1, &queryId);
+        if (queryId == 0) {
+            return nullptr;
+        }
+        g_GLESFuncs.glBeginQuery(GL_TIME_ELAPSED, queryId);
+        return new GLESQueryObject{queryId, g_syncContextGeneration};
+    }
+
+    void EndTimeElapsedQuery(BackendQueryHandle handle) {
+        const auto* query = static_cast<GLESQueryObject*>(handle);
+        if (query == nullptr || query->contextGeneration != g_syncContextGeneration ||
+            !IsBackendContextCurrentOnThisThread() || !g_GLESFuncs.glEndQuery) {
+            return;
+        }
+        // ES tracks the active query per target, not per object, so the
+        // handle only guards the degraded paths above.
+        g_GLESFuncs.glEndQuery(GL_TIME_ELAPSED);
+    }
+
+    BackendQueryHandle QueryCounterTimestamp() {
+        if (!IsBackendContextCurrentOnThisThread() || !AreTimerQueriesSupported()) {
+            return nullptr;
+        }
+        GLuint queryId = 0;
+        g_GLESFuncs.glGenQueries(1, &queryId);
+        if (queryId == 0) {
+            return nullptr;
+        }
+        g_GLESFuncs.glQueryCounterEXT(queryId, GL_TIMESTAMP);
+        return new GLESQueryObject{queryId, g_syncContextGeneration};
+    }
+
+    Bool IsQueryResultAvailable(BackendQueryHandle handle) {
+        const auto* query = static_cast<GLESQueryObject*>(handle);
+        // Null/stale handles report available so the frontend proceeds to
+        // GetQueryResult64, which finalizes them as zero. A thread that does
+        // not own the ES context also reports available: GetQueryResult64
+        // then returns false and the frontend keeps the handle for a later
+        // read from the owning thread.
+        if (query == nullptr || query->contextGeneration != g_syncContextGeneration ||
+            !IsBackendContextCurrentOnThisThread() || !g_GLESFuncs.glGetQueryObjectuiv) {
+            return true;
+        }
+        GLuint available = GL_FALSE;
+        g_GLESFuncs.glGetQueryObjectuiv(query->queryId, GL_QUERY_RESULT_AVAILABLE, &available);
+        return available != GL_FALSE;
+    }
+
+    Bool GetQueryResult64(BackendQueryHandle handle, Bool wait, Uint64* outNanoseconds) {
+        *outNanoseconds = 0;
+        const auto* query = static_cast<GLESQueryObject*>(handle);
+        // Null handles never had a GL query object, handles from a
+        // since-destroyed ES context lost theirs, and missing entry points
+        // can never produce a reading (belt and braces: the creators already
+        // require them): zero is the FINAL result in all three cases, so
+        // report it as produced and let the frontend cache it and release
+        // the handle.
+        if (query == nullptr || query->contextGeneration != g_syncContextGeneration ||
+            !g_GLESFuncs.glGetQueryObjectuiv || !g_GLESFuncs.glGetQueryObjectui64vEXT) {
+            return true;
+        }
+        // A thread that does not own the ES context cannot issue GL calls,
+        // but the result still lands on the owning context eventually: report
+        // "not obtainable yet" so the frontend keeps the handle and a later
+        // availability poll / result read from the owning thread can still
+        // produce the real value.
+        if (!IsBackendContextCurrentOnThisThread()) {
+            return false;
+        }
+        if (wait) {
+            // Reading GL_QUERY_RESULT blocks in the driver until the result
+            // lands, but only after the commands were flushed; flush once,
+            // then poll availability for a bounded ~100ms before dropping to
+            // a glFinish as the last resort (ClientWaitSync has no polling
+            // loop to mirror - it delegates its timeout to the driver, which
+            // a query-object read cannot do).
+            if (g_GLESFuncs.glFlush) {
+                g_GLESFuncs.glFlush();
+            }
+            constexpr Int kMaxAvailabilityPolls = 1000; // ~100ms at 100us per poll
+            GLuint available = GL_FALSE;
+            for (Int i = 0; i < kMaxAvailabilityPolls && available == GL_FALSE; ++i) {
+                g_GLESFuncs.glGetQueryObjectuiv(query->queryId, GL_QUERY_RESULT_AVAILABLE, &available);
+                if (available == GL_FALSE) {
+                    std::this_thread::sleep_for(std::chrono::microseconds(100));
+                }
+            }
+            if (available == GL_FALSE && g_GLESFuncs.glFinish) {
+                g_GLESFuncs.glFinish();
+            }
+        }
+        // GL_EXT_disjoint_timer_query's GPU_DISJOINT_EXT signal is
+        // deliberately ignored: after a disjoint event (power state change,
+        // context switch) the result may be garbage, which is tolerable for
+        // an F3 GPU% readout, and consuming the latched flag here could hide
+        // the event from another observer.
+        GLuint64 result = 0;
+        g_GLESFuncs.glGetQueryObjectui64vEXT(query->queryId, GL_QUERY_RESULT, &result);
+        *outNanoseconds = static_cast<Uint64>(result);
+        return true;
+    }
+
+    void DeleteBackendQuery(BackendQueryHandle handle) {
+        auto* query = static_cast<GLESQueryObject*>(handle);
+        if (query == nullptr) {
+            return;
+        }
+        if (query->contextGeneration == g_syncContextGeneration && IsBackendContextCurrentOnThisThread() &&
+            g_GLESFuncs.glDeleteQueries) {
+            g_GLESFuncs.glDeleteQueries(1, &query->queryId);
+        }
+        // Otherwise the GL query object is abandoned; the ES context reclaims
+        // all of its query objects when it is destroyed.
+        delete query;
+    }
+
+    Int64 GetGpuTimestampNs() {
+        // Synchronous GPU clock sample; 0 tells the frontend GL_TIMESTAMP
+        // getter to fall back.
+        if (!IsBackendContextCurrentOnThisThread() || !AreTimerQueriesSupported() ||
+            !g_GLESFuncs.glGetInteger64v) {
+            return 0;
+        }
+        GLint64 timestamp = 0;
+        g_GLESFuncs.glGetInteger64v(GL_TIMESTAMP, &timestamp);
+        return static_cast<Int64>(timestamp);
     }
 
     void Present() {

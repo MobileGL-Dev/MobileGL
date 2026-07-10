@@ -76,6 +76,11 @@ namespace MobileGL {
         // and released by GLFunctionsTable::DeleteSync.
         using BackendSyncHandle = void*;
 
+        // Opaque backend timer-query handle, created by
+        // GLFunctionsTable::BeginTimeElapsedQuery / QueryCounterTimestamp and
+        // released by GLFunctionsTable::DeleteBackendQuery.
+        using BackendQueryHandle = void*;
+
         struct GLFunctionsTable {
             void (*DrawArrays)(GLenum mode, GLint first, GLsizei count);
             void (*DrawElements)(GLenum mode, GLsizei count, GLenum type, const void* indices);
@@ -171,6 +176,31 @@ namespace MobileGL {
             void (*WaitSync)(BackendSyncHandle sync, GLbitfield flags, GLuint64 timeout);
             void (*DeleteSync)(BackendSyncHandle sync);
             Bool (*GetSyncStatus)(BackendSyncHandle sync); // true = signaled
+            // GL timer-query objects (GL_ARB_timer_query). All entries are
+            // optional (may be null); the frontend then falls back to zero
+            // results and reports GL_QUERY_COUNTER_BITS == 0.
+            // BeginTimeElapsedQuery / QueryCounterTimestamp may themselves
+            // return null when the backend cannot create a query right now;
+            // the frontend treats such a query as immediately available with
+            // a zero result.
+            // Dynamic support check: true only when the live backend can
+            // actually time at the moment of the call (extension / entry
+            // points / timestamp valid bits are known then, not at table
+            // init). Gates the advertised GL_QUERY_COUNTER_BITS.
+            Bool (*IsTimerQuerySupported)();
+            BackendQueryHandle (*BeginTimeElapsedQuery)();            // starts a TIME_ELAPSED span
+            void (*EndTimeElapsedQuery)(BackendQueryHandle query);    // ends the span
+            BackendQueryHandle (*QueryCounterTimestamp)();            // glQueryCounter(GL_TIMESTAMP) one-shot
+            Bool (*IsQueryResultAvailable)(BackendQueryHandle query); // non-blocking
+            // Returns true when a final value was produced (*outNanoseconds
+            // written; the frontend may cache it and release the handle).
+            // Returns false when the result could not be obtained YET - e.g.
+            // a Vulkan wait that refuses to block on a not-yet-submitted
+            // frame serial - in which case the frontend must keep the handle
+            // and leave the query readable later.
+            Bool (*GetQueryResult64)(BackendQueryHandle query, Bool wait, Uint64* outNanoseconds);
+            void (*DeleteBackendQuery)(BackendQueryHandle query);
+            Int64 (*GetGpuTimestampNs)(); // glGetInteger64v(GL_TIMESTAMP); 0 if unsupported
         };
         struct GlobalBackendFunctionsTable {
             GLFunctionsTable GL;

@@ -16,6 +16,7 @@
 #include "MG_Util/Converters/MGToStr/FramebufferEnumConverter.h"
 #include "MG_Util/Converters/MGToVk/TextureEnumConverter.h"
 #include "MG_Util/Metrics/TextureMetrics.h"
+#include <Config.h>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -78,11 +79,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     }
 
     static Bool ShouldDumpDescriptorStats() {
-        static const Bool enabled = [] {
-            const char* value = std::getenv("MOBILEGL_DESCRIPTOR_STATS");
-            return value != nullptr && value[0] != '\0' && std::strcmp(value, "0") != 0;
-        }();
-        return enabled;
+        return MG_Config::Features.DescriptorStats;
     }
 
     Bool UniformManager::Initialize(VkDevice device, VkBufferManager* bufferManager,

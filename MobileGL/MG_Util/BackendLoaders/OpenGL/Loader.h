@@ -611,6 +611,8 @@ namespace MobileGL {
                             GLbitfield flags)
             GL_FUNC_TYPEDEF(void, glGetQueryObjectivEXT, GLuint id, GLenum pname, GLint* params)
             GL_FUNC_TYPEDEF(void, glGetQueryObjecti64vEXT, GLuint id, GLenum pname, GLint64* params)
+            GL_FUNC_TYPEDEF(void, glQueryCounterEXT, GLuint id, GLenum target)
+            GL_FUNC_TYPEDEF(void, glGetQueryObjectui64vEXT, GLuint id, GLenum pname, GLuint64* params)
             GL_FUNC_TYPEDEF(void, glBindFragDataLocationEXT, GLuint program, GLuint colorNumber, const GLchar* name)
             GL_FUNC_TYPEDEF(void*, glMapBufferOES, GLenum target, GLenum access)
 
@@ -1000,6 +1002,8 @@ namespace MobileGL {
             GL_FUNC_DECL(glBufferStorageEXT)
             GL_FUNC_DECL(glGetQueryObjectivEXT)
             GL_FUNC_DECL(glGetQueryObjecti64vEXT)
+            GL_FUNC_DECL(glQueryCounterEXT)
+            GL_FUNC_DECL(glGetQueryObjectui64vEXT)
             GL_FUNC_DECL(glBindFragDataLocationEXT)
             GL_FUNC_DECL(glMapBufferOES)
 
@@ -1019,6 +1023,16 @@ namespace MobileGL {
             Bool SupportsPersistentMapping = false;
             Bool SupportsNorm16Texture = false;
             Bool SupportsBaseInstance = false;
+            // GL_EXT_disjoint_timer_query is present in the extension string.
+            Bool SupportsDisjointTimerQuery = false;
+            // GL_RENDERER contains "ANGLE".
+            Bool IsAngleRenderer = false;
+            // GL_RENDERER contains both "ANGLE" and "llvmpipe".
+            Bool IsAngleLlvmpipeRenderer = false;
+            // IsAngleLlvmpipeRenderer combined with the
+            // MOBILEGL_ANGLE_LLVMPIPE_AVOID_SAMPLER_MIPMAP_MIN_FILTER feature toggle:
+            // sampler min filters should drop their mipmap component.
+            Bool AvoidSamplerMipmapMinFilter = false;
             // True when indirect draws leak the command's baseInstance word ("reserved,
             // must be zero" in unextended ES) into gl_InstanceID. Conforming ES drivers
             // keep gl_InstanceID zero-based; ANGLE's Vulkan backend hands the command

@@ -20,6 +20,7 @@
 #include "MG_Util/Converters/MGToVk/RenderStateEnumConverter.h"
 #include "MG_Util/Converters/MGToVk/TextureEnumConverter.h"
 #include "MG_Util/Metrics/TextureMetrics.h"
+#include <Config.h>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -617,19 +618,19 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     }
 
     static Bool ShouldDumpVertexInputStats() {
-        static const Bool enabled = [] {
-            const char* value = std::getenv("MOBILEGL_VERTEX_INPUT_STATS");
-            return value != nullptr && value[0] != '\0' && std::strcmp(value, "0") != 0;
-        }();
-        return enabled;
+        return MG_Config::Features.VertexInputStats;
     }
 
     static const char* PresentDumpPath() {
-        const char* value = std::getenv("MOBILEGL_PRESENT_DUMP_PATH");
-        return value != nullptr && value[0] != '\0' ? value : nullptr;
+        const String& path = MG_Config::Features.PresentDumpPath;
+        return path.empty() ? nullptr : path.c_str();
     }
 
     static Bool PresentDumpMatchesTargetCall() {
+        // MOBILEGL_PRESENT_DUMP_CALL / MOBILEGL_PRESENT_CURRENT_CALL stay live
+        // getenv on purpose: the retrace harness mutates them at runtime via
+        // setenv to select which eglSwapBuffers call gets dumped, so they must
+        // not be snapshotted into MG_Config::Features at init time.
         const char* target = std::getenv("MOBILEGL_PRESENT_DUMP_CALL");
         if (target == nullptr || target[0] == '\0') {
             return true;
@@ -1573,8 +1574,7 @@ void main() {
         }
 
         static Bool PresentStatsEnabled() {
-            const char* value = std::getenv("MOBILEGL_PRESENT_STATS");
-            return value != nullptr && value[0] == '1' && value[1] == '\0';
+            return MG_Config::Features.PresentStats;
         }
 
         static Bool IsBgraVkFormat(VkFormat format) {
@@ -1894,6 +1894,19 @@ void main() {
         });
         MOBILEGL_ASSERT(succeeded, "VkBufferManager initialization failed.");
         m_bufferManager.SetCopyCommandProvider(this);
+        if (m_timerQuerySupported) {
+            m_timerQueryManager = MakeUnique<VkTimerQueryManager>();
+            if (m_timerQueryManager->Initialize({.device = m_device,
+                                                 .frameCount = m_frameContext.GetFrameCount(),
+                                                 .timestampValidBits = m_timestampValidBits,
+                                                 .timestampPeriodNs = m_timestampPeriodNs})) {
+                m_frameContext.SetRecordingObserver(this);
+            } else {
+                MGLOG_W("VkTimerQueryManager initialization failed; timer queries disabled");
+                m_timerQueryManager.reset();
+                m_timerQuerySupported = false;
+            }
+        }
         m_textureManager = MakeUnique<VkTextureManager>();
         MOBILEGL_ASSERT(m_textureManager != nullptr, "VkTextureManager creation failed.");
         succeeded = m_textureManager->Initialize(
@@ -1987,6 +2000,13 @@ void main() {
         }
         m_vertexInputStateFactory.reset();
         m_bufferManager.Shutdown();
+
+        // Device is idle (vkDeviceWaitIdle above); query pools can be destroyed.
+        m_frameContext.SetRecordingObserver(nullptr);
+        if (m_timerQueryManager) {
+            m_timerQueryManager->Shutdown();
+            m_timerQueryManager.reset();
+        }
 
         if (m_device != VK_NULL_HANDLE) {
             m_frameContext.Destroy(m_device, m_commandPool);
@@ -5457,6 +5477,63 @@ void main() {
         return true;
     }
 
+    void VulkanRenderer::OnFrameCommandRecordingBegan(VkCommandBuffer commandBuffer) {
+        if (m_timerQueryManager) {
+            m_timerQueryManager->OnFrameCommandRecordingBegan(commandBuffer, m_frameContext.GetCurrentFrameIndex(),
+                                                              m_bufferManager.GetFrameSerial());
+        }
+    }
+
+    Bool VulkanRenderer::IsTimerQuerySupported() const {
+        return m_timerQuerySupported && m_timerQueryManager != nullptr;
+    }
+
+    SharedPtr<VkTimerQueryManager::TimestampRecord> VulkanRenderer::WriteTimerQueryTimestamp() {
+        if (!IsTimerQuerySupported() || m_device == VK_NULL_HANDLE || m_frameContext.GetFrameCount() == 0) {
+            return nullptr;
+        }
+        auto& frame = m_frameContext.GetCurrent();
+        if (!frame.isCommandRecording) {
+            m_frameContext.BeginCommandRecording();
+        }
+        // vkCmdWriteTimestamp is valid both inside and outside a render pass,
+        // so any active render pass is left untouched.
+        return m_timerQueryManager->WriteTimestamp(frame.commandBuffer, m_frameContext.GetCurrentFrameIndex(),
+                                                   m_bufferManager.GetFrameSerial());
+    }
+
+    Bool VulkanRenderer::IsTimerQueryResultReady(VkTimerQueryManager::TimestampRecord& record) {
+        if (record.harvested) {
+            return true;
+        }
+        if (!m_timerQueryManager || !IsFrameSerialComplete(record.frameSerial)) {
+            return false;
+        }
+        return m_timerQueryManager->TryHarvest(record);
+    }
+
+    Bool VulkanRenderer::WaitForTimerQueryResult(VkTimerQueryManager::TimestampRecord& record) {
+        if (IsTimerQueryResultReady(record)) {
+            return true;
+        }
+        // Mirrors ClientWaitSync: WaitForFrameSerial refuses serials that
+        // cannot complete without further submissions (a timestamp written
+        // this frame only executes once Present submits the command buffer).
+        if (!WaitForFrameSerial(record.frameSerial, UINT64_MAX)) {
+            return false;
+        }
+        return IsTimerQueryResultReady(record);
+    }
+
+    Uint64 VulkanRenderer::GetTimerQueryElapsedNs(const VkTimerQueryManager::TimestampRecord& begin,
+                                                  const VkTimerQueryManager::TimestampRecord& end) const {
+        return m_timerQueryManager ? m_timerQueryManager->ElapsedNs(begin, end) : 0;
+    }
+
+    Uint64 VulkanRenderer::GetTimerQueryTimestampNs(const VkTimerQueryManager::TimestampRecord& record) const {
+        return m_timerQueryManager ? m_timerQueryManager->TimestampNs(record) : 0;
+    }
+
     void VulkanRenderer::Present() {
         MOBILEGL_ASSERT(m_imageIndexAcquired < m_swapchainObject.GetImageCount(),
                         "Present, acquired image index out of range");
@@ -5473,6 +5550,8 @@ void main() {
         const Bool collectPresentStats = (PresentStatsEnabled() || shouldDumpPresent) && frame.isCommandRecording &&
                                          presentStatsExtent.width > 0 && presentStatsExtent.height > 0;
         if (PresentStatsEnabled() && presentDumpPath != nullptr) {
+            // Live getenv on purpose (not MG_Config::Features): the retrace
+            // harness mutates these two variables at runtime via setenv.
             const char* targetCall = std::getenv("MOBILEGL_PRESENT_DUMP_CALL");
             const char* currentCall = std::getenv("MOBILEGL_PRESENT_CURRENT_CALL");
             std::fprintf(stderr,
@@ -6075,6 +6154,21 @@ void main() {
         vkGetDeviceQueue(m_device, m_physicalDevice.queueFamilies.graphicsFamily, 0, &m_graphicsQueue);
         vkGetDeviceQueue(m_device, m_physicalDevice.queueFamilies.presentFamily, 0, &m_presentQueue);
         MGLOG_I("Queues got successfully.");
+
+        // Timestamp (timer query) support: re-enumerate the graphics queue
+        // family's properties for its timestampValidBits (0 means the queue
+        // cannot write timestamps) and take timestampPeriod (ns per tick) from
+        // the device limits.
+        const auto timestampQueueFamilies = GetQueueFamilyFromPhysicalDevice(m_physicalDevice.handle);
+        m_timestampValidBits = 0;
+        const Int32 graphicsFamilyIndex = m_physicalDevice.queueFamilies.graphicsFamily;
+        if (graphicsFamilyIndex >= 0 && static_cast<SizeT>(graphicsFamilyIndex) < timestampQueueFamilies.size()) {
+            m_timestampValidBits = timestampQueueFamilies[graphicsFamilyIndex].timestampValidBits;
+        }
+        m_timestampPeriodNs = m_physicalDevice.properties.limits.timestampPeriod;
+        m_timerQuerySupported = m_timestampValidBits > 0 && m_timestampPeriodNs > 0.0f;
+        MGLOG_I("Timer queries %s (timestampValidBits=%u, timestampPeriod=%f ns/tick)",
+                m_timerQuerySupported ? "supported" : "not supported", m_timestampValidBits, m_timestampPeriodNs);
     }
 
     void VulkanRenderer::CreateAllocator() {
@@ -6326,6 +6420,14 @@ void main() {
         }
 
         vkDeviceWaitIdle(m_device);
+
+        if (m_timerQueryManager) {
+            // The in-progress command buffer is abandoned below (its recording
+            // flags are force-cleared), so timestamp writes recorded into it
+            // will never execute; resolve or invalidate all pending records now
+            // to keep later waits from hanging on never-available queries.
+            m_timerQueryManager->InvalidatePendingRecords();
+        }
 
         DestroyDeferredDepthMipmapCleanup();
         m_deferredDepthMipmapCleanup.assign(m_frameContext.GetFrameCount(), {});

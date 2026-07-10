@@ -17,17 +17,14 @@
 #include "MG_Util/Converters/MGToVk/TextureEnumConverter.h"
 #include "MG_Util/Texture/TextureFormatProcessor.h"
 
+#include <Config.h>
 #include <cstdlib>
 #include <cstring>
 
 namespace MobileGL::MG_Backend::DirectVulkan {
     namespace {
         Bool IsR11G11B10FFallbackEnabled() {
-            static const Bool enabled = [] {
-                const char* value = std::getenv("MOBILEGL_VULKAN_R11G11B10F_FALLBACK");
-                return value != nullptr && value[0] != '\0' && std::strcmp(value, "0") != 0;
-            }();
-            return enabled;
+            return MG_Config::Features.VulkanR11G11B10FFallback;
         }
 
         Bool IsReleaseCurrentRequest(EGLDisplay dpy, EGLSurface draw, EGLSurface read, EGLContext ctx) {
@@ -374,6 +371,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
         auto nativeWindow = reinterpret_cast<NativeWindowType>(m_windowHandle.Handle);
 
+        // Any renderer instance this assignment replaces is destroyed here;
+        // fence/timer-query handles stamped with the old generation go stale.
+        BumpRendererGeneration();
         pVulkanRenderer = MakeUnique<MG_Backend::DirectVulkan::VulkanRenderer>(nativeWindow);
         MOBILEGL_ASSERT(pVulkanRenderer != nullptr, "InitWindowSurface: VulkanRenderer creation failed");
         pVulkanRenderer->Initialize();
@@ -384,6 +384,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         VulkanRendererConfig config;
         config.SurfaceWidth = static_cast<Uint32>(std::max<EGLint>(width, 1));
         config.SurfaceHeight = static_cast<Uint32>(std::max<EGLint>(height, 1));
+        // Any renderer instance this assignment replaces is destroyed here;
+        // fence/timer-query handles stamped with the old generation go stale.
+        BumpRendererGeneration();
         pVulkanRenderer = MakeUnique<MG_Backend::DirectVulkan::VulkanRenderer>(NativeWindowType{}, config);
         MOBILEGL_ASSERT(pVulkanRenderer != nullptr, "InitPbufferSurface: VulkanRenderer creation failed");
         pVulkanRenderer->Initialize();
@@ -486,12 +489,18 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
     void BackendObject_DirectVulkan::ReleaseEGLResources() {
         const std::lock_guard<std::recursive_mutex> lock(m_eglStateMutex);
+        // Outstanding fence/timer-query handles now refer to a dead renderer;
+        // treat them as signaled/available with zero results from here on.
+        BumpRendererGeneration();
         pVulkanRenderer.reset();
         BackendObject::ReleaseEGLResources();
     }
 
     void BackendObject_DirectVulkan::OnEGLSurfaceReleased(EGLSurface surface) {
         (void)surface;
+        // Outstanding fence/timer-query handles now refer to a dead renderer;
+        // treat them as signaled/available with zero results from here on.
+        BumpRendererGeneration();
         pVulkanRenderer.reset();
     }
 
@@ -574,6 +583,20 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             funcsTable.GL.WaitSync = WaitSync;
             funcsTable.GL.DeleteSync = DeleteSync;
             funcsTable.GL.GetSyncStatus = GetSyncStatus;
+            // Optional timer-query group: left null (the frontend then falls
+            // back) when disabled via MOBILEGL_DISABLE_TIMERQUERY. The hooks
+            // themselves additionally degrade to null handles when the device
+            // lacks timestamp support.
+            if (!MG_Config::Features.DisableTimerQuery) {
+                funcsTable.GL.IsTimerQuerySupported = IsTimerQuerySupported;
+                funcsTable.GL.BeginTimeElapsedQuery = BeginTimeElapsedQuery;
+                funcsTable.GL.EndTimeElapsedQuery = EndTimeElapsedQuery;
+                funcsTable.GL.QueryCounterTimestamp = QueryCounterTimestamp;
+                funcsTable.GL.IsQueryResultAvailable = IsQueryResultAvailable;
+                funcsTable.GL.GetQueryResult64 = GetQueryResult64;
+                funcsTable.GL.DeleteBackendQuery = DeleteBackendQuery;
+                funcsTable.GL.GetGpuTimestampNs = GetGpuTimestampNs;
+            }
             funcsTableInitialized = true;
         }
         return funcsTable;
@@ -598,6 +621,18 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
         if (m_vulkanCaps.SupportsShaderSubgroup) {
             extensions.push_back(E_GL_KHR_shader_subgroup);
+        }
+
+        // GL_ARB_timer_query gates MC's F3 GPU% (LWJGL checks the extension
+        // string). InitCapabilities runs after InitWindowSurface has created
+        // and initialized the renderer, so the advertisement can be gated on
+        // real device timestamp support. ApplyVulkanCapabilitiesForTesting may
+        // run without a renderer; nothing is advertised then.
+        extensions.erase(std::remove(extensions.begin(), extensions.end(), E_GL_ARB_timer_query),
+                         extensions.end());
+        if (pVulkanRenderer && pVulkanRenderer->IsTimerQuerySupported() &&
+            !MG_Config::Features.DisableTimerQuery) {
+            extensions.push_back(E_GL_ARB_timer_query);
         }
     }
 
