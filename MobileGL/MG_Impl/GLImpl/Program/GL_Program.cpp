@@ -424,6 +424,101 @@ namespace MobileGL::MG_Impl::GLImpl {
         }
     }
 
+    void GetActiveUniformsiv_State(GLuint program, GLsizei uniformCount, const GLuint* uniformIndices, GLenum pname,
+                                   GLint* params) {
+        if (uniformCount < 0) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidValue,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
+                                             "uniformCount " + std::to_string(uniformCount) + " is less than 0."));
+            return;
+        }
+
+        // Program-name resolution with the correct two-error split: a live shader name is
+        // GL_INVALID_OPERATION, a never-generated name is GL_INVALID_VALUE. glGetActiveUniformsiv has
+        // no "not linked" error, so unlike TryToGetLinkedProgramForInterfaceQuery there is no
+        // link-status check here; an unlinked program simply has zero active uniforms (handled below).
+        if (!MG_State::pGLContext->ValidateProgramName(program)) {
+            const ErrorCode error = MG_State::pGLContext->ValidateShaderName(program) ? ErrorCode::InvalidOperation
+                                                                                      : ErrorCode::InvalidValue;
+            MG_State::pGLContext->RecordError(
+                error, MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
+                                                    std::to_string(program) + " is not a program object."));
+            return;
+        }
+        auto& programObject = MG_State::pGLContext->GetProgramObject(program);
+        if (!programObject) return;
+
+        switch (pname) {
+        case GL_UNIFORM_TYPE:
+        case GL_UNIFORM_SIZE:
+        case GL_UNIFORM_NAME_LENGTH:
+        case GL_UNIFORM_BLOCK_INDEX:
+        case GL_UNIFORM_OFFSET:
+        case GL_UNIFORM_ARRAY_STRIDE:
+        case GL_UNIFORM_MATRIX_STRIDE:
+        case GL_UNIFORM_IS_ROW_MAJOR:
+            break;
+        default:
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidEnum,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
+                                             "pname " + std::to_string(pname) + " is not an accepted value."));
+            return;
+        }
+
+        if (uniformCount == 0) return;
+        if (uniformIndices == nullptr || params == nullptr) return;
+
+        // Every index must be < the number of active uniforms, checked before any write so params is
+        // left untouched on error. GetUniformCount() is 0 for an unlinked program, which is also the
+        // spec-mandated GL_INVALID_VALUE path for querying an unlinked program (no separate error).
+        const Uint activeUniforms = programObject->GetUniformCount();
+        for (GLsizei i = 0; i < uniformCount; ++i) {
+            if (uniformIndices[i] >= activeUniforms) {
+                MG_State::pGLContext->RecordError(
+                    ErrorCode::InvalidValue,
+                    MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
+                                                 "uniformIndices[" + std::to_string(i) +
+                                                     "] = " + std::to_string(uniformIndices[i]) +
+                                                     " is greater than or equal to the number of active uniforms."));
+                return;
+            }
+        }
+
+        for (GLsizei i = 0; i < uniformCount; ++i) {
+            const Uint idx = uniformIndices[i];
+            switch (pname) {
+            case GL_UNIFORM_TYPE:
+                params[i] = static_cast<GLint>(programObject->GetActiveUniformType(idx));
+                break;
+            case GL_UNIFORM_SIZE:
+                params[i] = programObject->GetActiveUniformArraySize(idx);
+                break;
+            case GL_UNIFORM_NAME_LENGTH:
+                params[i] = static_cast<GLint>(programObject->GetActiveUniformName(idx).length() + 1);
+                break;
+            case GL_UNIFORM_BLOCK_INDEX:
+                params[i] = programObject->GetActiveUniformBlockIndex(idx);
+                break;
+            case GL_UNIFORM_OFFSET:
+                params[i] = programObject->GetActiveUniformOffset(idx);
+                break;
+            case GL_UNIFORM_ARRAY_STRIDE:
+                params[i] = programObject->GetActiveUniformArrayStride(idx);
+                break;
+            case GL_UNIFORM_MATRIX_STRIDE:
+                params[i] = programObject->GetActiveUniformMatrixStride(idx);
+                break;
+            case GL_UNIFORM_IS_ROW_MAJOR:
+                params[i] = programObject->GetActiveUniformIsRowMajor(idx);
+                break;
+            default:
+                break;
+            }
+        }
+    }
+
     void GetAttachedShaders_State(GLuint program, GLsizei maxCount, GLsizei* count, GLuint* shaders) {
         if (maxCount < 0) {
             MG_State::pGLContext->RecordError(
@@ -1501,6 +1596,11 @@ namespace MobileGL::MG_Impl::GLImpl {
     void GetUniformIndices(GLuint program, GLsizei uniformCount, const GLchar* const* uniformNames,
                            GLuint* uniformIndices) {
         GetUniformIndices_State(program, uniformCount, uniformNames, uniformIndices);
+    }
+
+    void GetActiveUniformsiv(GLuint program, GLsizei uniformCount, const GLuint* uniformIndices, GLenum pname,
+                             GLint* params) {
+        GetActiveUniformsiv_State(program, uniformCount, uniformIndices, pname, params);
     }
 
     void GetAttachedShaders(GLuint program, GLsizei maxCount, GLsizei* count, GLuint* shaders) {

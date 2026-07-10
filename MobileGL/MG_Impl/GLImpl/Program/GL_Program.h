@@ -26,6 +26,8 @@ namespace MobileGL::MG_Impl::GLImpl {
                               GLchar* uniformName);
     void GetUniformIndices(GLuint program, GLsizei uniformCount, const GLchar* const* uniformNames,
                            GLuint* uniformIndices);
+    void GetActiveUniformsiv(GLuint program, GLsizei uniformCount, const GLuint* uniformIndices, GLenum pname,
+                             GLint* params);
     void GetAttachedShaders(GLuint program, GLsizei maxCount, GLsizei* count, GLuint* shaders);
     GLint GetAttribLocation(GLuint program, const GLchar* name);
     void GetProgramiv(GLuint program, GLenum pname, GLint* params);

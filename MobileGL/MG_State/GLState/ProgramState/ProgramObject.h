@@ -75,14 +75,79 @@ namespace MobileGL::MG_State::GLState {
             return uniform.glDefineType;
         }
 
+        // Number of active array elements (GL_UNIFORM_SIZE / GL_ARRAY_SIZE); 1 for a non-array.
+        // glslang's TObjectReflection.size only carries the element count for a NON-block array; for
+        // a block array member it reports 1, so take the count from the TType, which is authoritative
+        // for both. GL 3.3 core uniforms are always sized.
         GLint GetActiveUniformArraySize(Uint index) const {
-            auto& uniform = m_program->getUniform(static_cast<Int>(index));
-            return uniform.size;
+            const auto& uniform = m_program->getUniform(static_cast<Int>(index));
+            const glslang::TType* type = uniform.getType();
+            if (type != nullptr && type->isSizedArray()) {
+                return type->getOuterArraySize();
+            }
+            return uniform.size < 1 ? 1 : uniform.size;
         }
 
         Int GetActiveUniformBlockIndex(Uint index) const {
             auto& uniform = m_program->getUniform(static_cast<Int>(index));
             return uniform.index;
+        }
+
+        // GL_UNIFORM_OFFSET: byte offset within the owning named block. glslang already reports -1
+        // for a default-block uniform, which is exactly the spec value there.
+        GLint GetActiveUniformOffset(Uint index) const {
+            return m_program->getUniform(static_cast<Int>(index)).offset;
+        }
+
+        // GL_UNIFORM_ARRAY_STRIDE: byte stride of an array member in a named block; 0 for a non-array
+        // block member; -1 for a default-block uniform. glslang yields arrayStride==0 for the
+        // default-block case, so gate on block membership to return the spec-mandated -1.
+        GLint GetActiveUniformArrayStride(Uint index) const {
+            const auto& uniform = m_program->getUniform(static_cast<Int>(index));
+            return (uniform.index < 0) ? -1 : uniform.arrayStride;
+        }
+
+        // GL_UNIFORM_IS_ROW_MAJOR: 1 only for a row-major matrix in a named block, else 0. The
+        // isMatrix() guard is required -- glslang stamps a block-level layout(row_major) onto
+        // non-matrix members too, so a float/vec in a row_major block would otherwise report 1.
+        // For the glslang build here a block-level layout(row_major) is also resolved onto each
+        // matrix member's own qualifier (verified by GetActiveUniformsivRowMajorBlock), so the member
+        // check suffices; the getUniformBlock() fallback is defensive for a config that instead leaves
+        // an inheriting member's layoutMatrix == ElmNone.
+        GLint GetActiveUniformIsRowMajor(Uint index) const {
+            const auto& uniform = m_program->getUniform(static_cast<Int>(index));
+            if (uniform.index < 0) return 0;
+            const glslang::TType* type = uniform.getType();
+            if (type == nullptr || !type->isMatrix()) return 0;
+            glslang::TLayoutMatrix layoutMatrix = type->getQualifier().layoutMatrix;
+            if (layoutMatrix == glslang::ElmNone) {
+                layoutMatrix = m_program->getUniformBlock(uniform.index).getType()->getQualifier().layoutMatrix;
+            }
+            return (layoutMatrix == glslang::ElmRowMajor) ? 1 : 0;
+        }
+
+        // GL_UNIFORM_MATRIX_STRIDE: byte stride between columns (col-major) / rows (row-major) of a
+        // matrix in a named block; 0 for a non-matrix block member; -1 for a default-block uniform.
+        // glslang exposes no matrix stride, so it is derived from the std140 rule -- each column/row
+        // vector's base alignment rounded up to a vec4 (16 B). MobileGL's SPIR-V path lays every UBO
+        // out as std140 (packed/shared are coerced), so this matches the offsets glslang reports. For
+        // every GL 3.3 float matrix this evaluates to 16, independent of majorness.
+        GLint GetActiveUniformMatrixStride(Uint index) const {
+            const auto& uniform = m_program->getUniform(static_cast<Int>(index));
+            if (uniform.index < 0) return -1;
+            const glslang::TType* type = uniform.getType();
+            if (type == nullptr || !type->isMatrix()) return 0;
+            glslang::TLayoutMatrix layoutMatrix = type->getQualifier().layoutMatrix;
+            if (layoutMatrix == glslang::ElmNone) {
+                layoutMatrix = m_program->getUniformBlock(uniform.index).getType()->getQualifier().layoutMatrix;
+            }
+            const bool rowMajor = (layoutMatrix == glslang::ElmRowMajor);
+            const int strideVectorComponents = rowMajor ? type->getMatrixCols() : type->getMatrixRows();
+            constexpr int scalarSize = 4; // GL 3.3 core uniform matrices are float
+            const int vectorAlignment = (strideVectorComponents <= 1)   ? scalarSize
+                                        : (strideVectorComponents == 2) ? 2 * scalarSize
+                                                                        : 4 * scalarSize;
+            return (vectorAlignment + 15) & ~15; // std140 round-up to a vec4
         }
 
         const glslang::TType* GetUniformTType(Uint location) const {

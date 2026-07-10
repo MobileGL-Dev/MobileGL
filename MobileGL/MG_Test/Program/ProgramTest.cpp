@@ -1602,3 +1602,186 @@ TEST_F(ProgramTest, CompileShaderWithSamplerAsVarName) {
     spvcSession.Compile(&result);
     printf("decomp from fragSpirv:\n%s\n\n", result);
 }
+
+namespace {
+    // Links a VS+FS pair whose fragment shader carries a std140 uniform block (scalar + array + mat4)
+    // plus a default-block sampler, and returns the linked program. matrixLayout lets a test flip the
+    // block to row_major.
+    GLuint LinkUboReflectionProgram(const char* matrixLayout) {
+        char infoLog[1024] = "";
+        const char* vsSrc = R"(#version 330 core
+void main() { gl_Position = vec4(0.0); }
+)";
+        std::string fsSrc = std::string("#version 330 core\n") +
+                            "layout(std140" + matrixLayout + ") uniform Block {\n" +
+                            "    float uScalar;\n" +
+                            "    vec4  uArray[3];\n" +
+                            "    mat4  uMatrix;\n" +
+                            "};\n" +
+                            "uniform sampler2D uTex;\n" +
+                            "out vec4 fragColor;\n" +
+                            "void main() {\n" +
+                            "    fragColor = texture(uTex, uArray[0].xy) * uScalar * uMatrix[0];\n" +
+                            "}\n";
+        const char* fsPtr = fsSrc.c_str();
+
+        GLuint vs = CreateShader(GL_VERTEX_SHADER);
+        ShaderSource(vs, 1, &vsSrc, nullptr);
+        CompileShader(vs);
+        GLint vsStatus = GL_FALSE;
+        GetShaderiv(vs, GL_COMPILE_STATUS, &vsStatus);
+        GetShaderInfoLog(vs, sizeof(infoLog), nullptr, infoLog);
+        EXPECT_EQ(vsStatus, GL_TRUE) << infoLog;
+
+        GLuint fs = CreateShader(GL_FRAGMENT_SHADER);
+        ShaderSource(fs, 1, &fsPtr, nullptr);
+        CompileShader(fs);
+        GLint fsStatus = GL_FALSE;
+        GetShaderiv(fs, GL_COMPILE_STATUS, &fsStatus);
+        GetShaderInfoLog(fs, sizeof(infoLog), nullptr, infoLog);
+        EXPECT_EQ(fsStatus, GL_TRUE) << infoLog;
+
+        GLuint program = CreateProgram();
+        AttachShader(program, vs);
+        AttachShader(program, fs);
+        LinkProgram(program);
+        GLint linkStatus = GL_FALSE;
+        GetProgramiv(program, GL_LINK_STATUS, &linkStatus);
+        GetProgramInfoLog(program, sizeof(infoLog), nullptr, infoLog);
+        EXPECT_EQ(linkStatus, GL_TRUE) << infoLog;
+        return program;
+    }
+
+    GLuint UniformIndexByName(GLuint program, const char* name) {
+        GLuint index = GL_INVALID_INDEX;
+        GetUniformIndices(program, 1, &name, &index);
+        return index;
+    }
+
+    GLint QueryUniformiv(GLuint program, GLuint uniformIndex, GLenum pname) {
+        GLint value = -12345; // sentinel that is not a legal answer for any queried pname
+        GetActiveUniformsiv(program, 1, &uniformIndex, pname, &value);
+        return value;
+    }
+} // namespace
+
+TEST_F(ProgramTest, GetActiveUniformsivStd140Block) {
+    GLuint program = LinkUboReflectionProgram(/*matrixLayout=*/"");
+
+    GLint activeUniforms = 0;
+    GetProgramiv(program, GL_ACTIVE_UNIFORMS, &activeUniforms);
+    EXPECT_EQ(activeUniforms, 4);
+
+    const GLuint s = UniformIndexByName(program, "uScalar");
+    const GLuint a = UniformIndexByName(program, "uArray");
+    const GLuint m = UniformIndexByName(program, "uMatrix");
+    const GLuint t = UniformIndexByName(program, "uTex");
+    ASSERT_NE(s, GL_INVALID_INDEX);
+    ASSERT_NE(a, GL_INVALID_INDEX);
+    ASSERT_NE(m, GL_INVALID_INDEX);
+    ASSERT_NE(t, GL_INVALID_INDEX);
+
+    // Types and sizes.
+    EXPECT_EQ(QueryUniformiv(program, s, GL_UNIFORM_TYPE), GL_FLOAT);
+    EXPECT_EQ(QueryUniformiv(program, a, GL_UNIFORM_TYPE), GL_FLOAT_VEC4);
+    EXPECT_EQ(QueryUniformiv(program, m, GL_UNIFORM_TYPE), GL_FLOAT_MAT4);
+    EXPECT_EQ(QueryUniformiv(program, t, GL_UNIFORM_TYPE), GL_SAMPLER_2D);
+    EXPECT_EQ(QueryUniformiv(program, s, GL_UNIFORM_SIZE), 1);
+    EXPECT_EQ(QueryUniformiv(program, a, GL_UNIFORM_SIZE), 3);
+    EXPECT_EQ(QueryUniformiv(program, m, GL_UNIFORM_SIZE), 1);
+
+    // Block membership: -1 for the default-block sampler.
+    EXPECT_GE(QueryUniformiv(program, s, GL_UNIFORM_BLOCK_INDEX), 0);
+    EXPECT_EQ(QueryUniformiv(program, t, GL_UNIFORM_BLOCK_INDEX), -1);
+
+    // std140 offsets.
+    EXPECT_EQ(QueryUniformiv(program, s, GL_UNIFORM_OFFSET), 0);
+    EXPECT_EQ(QueryUniformiv(program, a, GL_UNIFORM_OFFSET), 16);
+    EXPECT_EQ(QueryUniformiv(program, m, GL_UNIFORM_OFFSET), 64);
+    EXPECT_EQ(QueryUniformiv(program, t, GL_UNIFORM_OFFSET), -1);
+
+    // ARRAY_STRIDE: 16 for the array, 0 for non-array block members, -1 for the default block.
+    EXPECT_EQ(QueryUniformiv(program, a, GL_UNIFORM_ARRAY_STRIDE), 16);
+    EXPECT_EQ(QueryUniformiv(program, s, GL_UNIFORM_ARRAY_STRIDE), 0);
+    EXPECT_EQ(QueryUniformiv(program, m, GL_UNIFORM_ARRAY_STRIDE), 0);
+    EXPECT_EQ(QueryUniformiv(program, t, GL_UNIFORM_ARRAY_STRIDE), -1);
+
+    // MATRIX_STRIDE: 16 for the matrix, 0 for non-matrix block members, -1 for the default block.
+    EXPECT_EQ(QueryUniformiv(program, m, GL_UNIFORM_MATRIX_STRIDE), 16);
+    EXPECT_EQ(QueryUniformiv(program, s, GL_UNIFORM_MATRIX_STRIDE), 0);
+    EXPECT_EQ(QueryUniformiv(program, a, GL_UNIFORM_MATRIX_STRIDE), 0);
+    EXPECT_EQ(QueryUniformiv(program, t, GL_UNIFORM_MATRIX_STRIDE), -1);
+
+    // Column-major block: nothing is row-major.
+    EXPECT_EQ(QueryUniformiv(program, m, GL_UNIFORM_IS_ROW_MAJOR), 0);
+    EXPECT_EQ(QueryUniformiv(program, s, GL_UNIFORM_IS_ROW_MAJOR), 0);
+
+    // NAME_LENGTH includes the terminator and matches glGetActiveUniform's reported name.
+    char nameBuf[64] = "";
+    GLsizei nameLen = 0;
+    GLint size = 0;
+    GLenum type = 0;
+    GetActiveUniform(program, m, sizeof(nameBuf), &nameLen, &size, &type, nameBuf);
+    EXPECT_EQ(QueryUniformiv(program, m, GL_UNIFORM_NAME_LENGTH),
+              static_cast<GLint>(std::strlen(nameBuf) + 1));
+
+    EXPECT_EQ(GetError(), GL_NO_ERROR);
+}
+
+// A block-level layout(row_major) with no per-member qualifier: only the matrix is row-major, and
+// only via the block-inheritance fallback (member layoutMatrix == ElmNone). A naive per-member check
+// returns 0 here.
+TEST_F(ProgramTest, GetActiveUniformsivRowMajorBlock) {
+    GLuint program = LinkUboReflectionProgram(/*matrixLayout=*/", row_major");
+
+    const GLuint s = UniformIndexByName(program, "uScalar");
+    const GLuint a = UniformIndexByName(program, "uArray");
+    const GLuint m = UniformIndexByName(program, "uMatrix");
+    ASSERT_NE(m, GL_INVALID_INDEX);
+
+    EXPECT_EQ(QueryUniformiv(program, m, GL_UNIFORM_IS_ROW_MAJOR), 1);
+    EXPECT_EQ(QueryUniformiv(program, s, GL_UNIFORM_IS_ROW_MAJOR), 0); // non-matrix, isMatrix() guard
+    EXPECT_EQ(QueryUniformiv(program, a, GL_UNIFORM_IS_ROW_MAJOR), 0);
+    EXPECT_EQ(QueryUniformiv(program, m, GL_UNIFORM_MATRIX_STRIDE), 16); // unchanged by majorness
+    EXPECT_EQ(GetError(), GL_NO_ERROR);
+}
+
+TEST_F(ProgramTest, GetActiveUniformsivErrors) {
+    GLuint program = LinkUboReflectionProgram(/*matrixLayout=*/"");
+    GLint activeUniforms = 0;
+    GetProgramiv(program, GL_ACTIVE_UNIFORMS, &activeUniforms);
+    ASSERT_GT(activeUniforms, 0);
+
+    GLuint validIndex = 0;
+    GLint params[4] = {-999, -999, -999, -999};
+
+    // E1: negative count -> GL_INVALID_VALUE, params untouched.
+    GetActiveUniformsiv(program, -1, &validIndex, GL_UNIFORM_TYPE, params);
+    EXPECT_EQ(GetError(), GL_INVALID_VALUE);
+    EXPECT_EQ(params[0], -999);
+
+    // E2: index == ACTIVE_UNIFORMS -> GL_INVALID_VALUE, params untouched.
+    GLuint outOfRange = static_cast<GLuint>(activeUniforms);
+    GetActiveUniformsiv(program, 1, &outOfRange, GL_UNIFORM_TYPE, params);
+    EXPECT_EQ(GetError(), GL_INVALID_VALUE);
+    EXPECT_EQ(params[0], -999);
+
+    // E3: GL 4.2 token -> GL_INVALID_ENUM here.
+    GetActiveUniformsiv(program, 1, &validIndex, GL_UNIFORM_ATOMIC_COUNTER_BUFFER_INDEX, params);
+    EXPECT_EQ(GetError(), GL_INVALID_ENUM);
+    EXPECT_EQ(params[0], -999);
+
+    // E4a: a live shader name -> GL_INVALID_OPERATION.
+    GLuint shader = CreateShader(GL_VERTEX_SHADER);
+    GetActiveUniformsiv(shader, 1, &validIndex, GL_UNIFORM_TYPE, params);
+    EXPECT_EQ(GetError(), GL_INVALID_OPERATION);
+
+    // E4b: a never-generated name -> GL_INVALID_VALUE.
+    GetActiveUniformsiv(9999u, 1, &validIndex, GL_UNIFORM_TYPE, params);
+    EXPECT_EQ(GetError(), GL_INVALID_VALUE);
+
+    // E6: zero count on a linked program is a valid no-op.
+    GetActiveUniformsiv(program, 0, &validIndex, GL_UNIFORM_TYPE, params);
+    EXPECT_EQ(GetError(), GL_NO_ERROR);
+    EXPECT_EQ(params[0], -999);
+}
