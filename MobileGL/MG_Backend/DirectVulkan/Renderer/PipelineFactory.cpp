@@ -126,6 +126,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         XXHASH_VERIFY(XXH64_update(m_hashState, &payload.rasterizationSamples, sizeof(payload.rasterizationSamples)));
         XXHASH_VERIFY(XXH64_update(m_hashState, &payload.subpass, sizeof(payload.subpass)));
         XXHASH_VERIFY(XXH64_update(m_hashState, &payload.topology, sizeof(payload.topology)));
+        XXHASH_VERIFY(
+            XXH64_update(m_hashState, &payload.primitiveRestartEnable, sizeof(payload.primitiveRestartEnable)));
         XXHASH_VERIFY(XXH64_update(m_hashState, &payload.polygonMode, sizeof(payload.polygonMode)));
         XXHASH_VERIFY(XXH64_update(m_hashState, &payload.cullMode, sizeof(payload.cullMode)));
         XXHASH_VERIFY(XXH64_update(m_hashState, &payload.frontFace, sizeof(payload.frontFace)));
@@ -212,6 +214,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
         VkPipelineInputAssemblyStateCreateInfo ia{VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};
         ia.topology = payload.topology;
+        ia.primitiveRestartEnable = payload.primitiveRestartEnable ? VK_TRUE : VK_FALSE;
 
         VkPipelineViewportStateCreateInfo vpci{VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO};
         vpci.viewportCount = 1;

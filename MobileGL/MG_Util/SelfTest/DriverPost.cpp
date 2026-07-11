@@ -1126,6 +1126,11 @@ namespace MobileGL::MG_Util::SelfTest {
             builder.Warn("independentBlend",
                          "unsupported; per-draw-buffer glColorMaski falls back to draw buffer 0 for all attachments");
         }
+        if (features.dualSrcBlend == VK_TRUE) {
+            builder.Pass("dualSrcBlend", "GL_SRC1_* dual-source blend factors supported");
+        } else {
+            builder.Warn("dualSrcBlend", "unsupported; GL_SRC1_* dual-source blend factors hard-fail at draw");
+        }
 
         Bool shaderDrawParameters = false;
         if (vkGetPhysicalDeviceFeatures2Fn != nullptr && properties.apiVersion >= VK_API_VERSION_1_1) {
@@ -1145,6 +1150,26 @@ namespace MobileGL::MG_Util::SelfTest {
         } else {
             builder.Warn("shaderDrawParameters",
                          "unavailable; shaders using gl_DrawID/gl_BaseInstance will not work");
+        }
+
+        Bool primitiveTopologyListRestart = false;
+        if (vkGetPhysicalDeviceFeatures2Fn != nullptr &&
+            HasVkExtension(deviceExtensions, VK_EXT_PRIMITIVE_TOPOLOGY_LIST_RESTART_EXTENSION_NAME)) {
+            VkPhysicalDevicePrimitiveTopologyListRestartFeaturesEXT listRestartFeatures{};
+            listRestartFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PRIMITIVE_TOPOLOGY_LIST_RESTART_FEATURES_EXT;
+            VkPhysicalDeviceFeatures2 features2{};
+            features2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+            features2.pNext = &listRestartFeatures;
+            vkGetPhysicalDeviceFeatures2Fn(physicalDevice, &features2);
+            primitiveTopologyListRestart = listRestartFeatures.primitiveTopologyListRestart == VK_TRUE;
+        }
+        if (primitiveTopologyListRestart) {
+            builder.Pass("primitiveTopologyListRestart",
+                         "primitive restart supported on list topologies (GL_PRIMITIVE_RESTART)");
+        } else {
+            builder.Warn("primitiveTopologyListRestart",
+                         "unsupported; primitive restart works on strip/fan topologies only, list-topology restart "
+                         "hard-fails at draw");
         }
 
         if (vkGetPhysicalDeviceProperties2Fn != nullptr && properties.apiVersion >= VK_API_VERSION_1_1) {

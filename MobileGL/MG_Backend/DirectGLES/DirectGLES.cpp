@@ -564,6 +564,18 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
 #undef SYNC_CAPABILITY
 
+            { // Primitive restart. GLES core has only GL_PRIMITIVE_RESTART_FIXED_INDEX (fixed all-ones
+              // value); both the fixed cap and the (fixed-valued) arbitrary GL_PRIMITIVE_RESTART map to
+              // it. An arbitrary non-fixed restart index is rejected at draw time (see DrawElements).
+                const Bool restart = parameters.PrimitiveRestartFixedIndexEnabled || parameters.PrimitiveRestartEnabled;
+                const Bool syncedRestart = g_syncedRenderStateParameters.PrimitiveRestartFixedIndexEnabled ||
+                                           g_syncedRenderStateParameters.PrimitiveRestartEnabled;
+                if (restart != syncedRestart) {
+                    restart ? g_GLESFuncs.glEnable(GL_PRIMITIVE_RESTART_FIXED_INDEX)
+                            : g_GLESFuncs.glDisable(GL_PRIMITIVE_RESTART_FIXED_INDEX);
+                }
+            }
+
             const auto& ToGLBoolean = [](Bool b) -> GLboolean { return b ? GL_TRUE : GL_FALSE; };
 
             { // Blend State
@@ -1329,12 +1341,38 @@ namespace MobileGL::MG_Backend::DirectGLES {
         g_GLESFuncs.glClear(mask);
     }
 
+    // GLES core supports only GL_PRIMITIVE_RESTART_FIXED_INDEX (fixed all-ones value). If the app
+    // enabled the arbitrary GL_PRIMITIVE_RESTART with a non-fixed index, hard-fail at this draw with
+    // the reason (a fallback would silently drop restarts and corrupt geometry).
+    void CheckPrimitiveRestartSupported(GLenum indexType) {
+        if (!MG_State::pGLContext->IsCapabilityEnabled(CapabilityInput::PrimitiveRestart) ||
+            MG_State::pGLContext->IsCapabilityEnabled(CapabilityInput::PrimitiveRestartFixedIndex)) {
+            return;
+        }
+        Uint32 fixedMax = 0;
+        switch (indexType) {
+        case GL_UNSIGNED_BYTE: fixedMax = 0xFFu; break;
+        case GL_UNSIGNED_SHORT: fixedMax = 0xFFFFu; break;
+        case GL_UNSIGNED_INT: fixedMax = 0xFFFFFFFFu; break;
+        default: return;
+        }
+        const Uint32 restartIndex = MG_State::pGLContext->GetPrimitiveRestartIndex();
+        if (restartIndex != fixedMax) {
+            THROW_EXCEPTION("GL_PRIMITIVE_RESTART with an arbitrary restart index (" + std::to_string(restartIndex) +
+                            ") is not supported by the GLES backend, which only restarts on the fixed index value (" +
+                            std::to_string(fixedMax) +
+                            ") for this index type; use GL_PRIMITIVE_RESTART_FIXED_INDEX or set glPrimitiveRestartIndex "
+                            "to that value.");
+        }
+    }
+
     void DrawElements(GLenum mode, GLsizei count, GLenum type, const void* indices) {
 #if MOBILEGL_LOG_ACTIVE_LEVEL <= MOBILEGL_LOG_LEVEL_DEBUG && MOBILEGL_ENABLE_SCOPE_MARKER
         DebugImpl::OpenGLScopeMarker marker(__func__);
 #endif
         DrawSyncBit syncBit = DrawSyncBit::IndexBuffer;
         PrepareForDraw(syncBit);
+        CheckPrimitiveRestartSupported(type);
         g_GLESFuncs.glDrawElements(mode, count, type, indices);
     }
 
@@ -1360,6 +1398,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 #endif
         DrawSyncBit syncBit = DrawSyncBit::IndexBuffer;
         PrepareForDraw(syncBit);
+        CheckPrimitiveRestartSupported(type);
         g_GLESFuncs.glDrawElementsBaseVertex(mode, count, type, indices, basevertex);
     }
 
@@ -1390,6 +1429,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 #endif
         DrawSyncBit syncBit = DrawSyncBit::IndexBuffer;
         PrepareForDraw(syncBit);
+        CheckPrimitiveRestartSupported(type);
 
         for (GLsizei i = 0; i < drawcount; ++i) {
             g_GLESFuncs.glDrawElements(mode, count[i], type, indices[i]);
@@ -1403,6 +1443,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 #endif
         DrawSyncBit syncBit = DrawSyncBit::IndexBuffer;
         PrepareForDraw(syncBit);
+        CheckPrimitiveRestartSupported(type);
 
         for (GLsizei i = 0; i < drawcount; ++i) {
             g_GLESFuncs.glDrawElementsBaseVertex(mode, count[i], type, indices[i], basevertex[i]);

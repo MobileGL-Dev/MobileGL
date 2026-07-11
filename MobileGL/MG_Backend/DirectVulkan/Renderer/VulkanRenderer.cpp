@@ -2266,6 +2266,31 @@ void main() {
             return false;
         }
 
+        // GL_PRIMITIVE_RESTART uses an arbitrary restart index (glPrimitiveRestartIndex), but Vulkan
+        // only restarts on the fixed all-ones value of the index type. GL_PRIMITIVE_RESTART_FIXED_INDEX
+        // already matches that, so only the arbitrary form needs checking; hard-fail at this draw with
+        // the reason if the index is not the fixed value (a fallback would silently drop restarts).
+        if (MG_State::pGLContext->IsCapabilityEnabled(CapabilityInput::PrimitiveRestart) &&
+            !MG_State::pGLContext->IsCapabilityEnabled(CapabilityInput::PrimitiveRestartFixedIndex)) {
+            const Uint32 restartIndex = MG_State::pGLContext->GetPrimitiveRestartIndex();
+            Uint32 fixedMax = 0;
+            switch (vkIndexType) {
+            case VK_INDEX_TYPE_UINT8: fixedMax = 0xFFu; break;
+            case VK_INDEX_TYPE_UINT16: fixedMax = 0xFFFFu; break;
+            case VK_INDEX_TYPE_UINT32: fixedMax = 0xFFFFFFFFu; break;
+            default: break;
+            }
+            if (restartIndex != fixedMax) {
+                THROW_EXCEPTION("GL_PRIMITIVE_RESTART with an arbitrary restart index (" +
+                                std::to_string(restartIndex) +
+                                ") is not supported by the Vulkan backend, which only restarts on the fixed index "
+                                "value (" +
+                                std::to_string(fixedMax) +
+                                ") for this index type; use GL_PRIMITIVE_RESTART_FIXED_INDEX, or set "
+                                "glPrimitiveRestartIndex to that value.");
+            }
+        }
+
         const auto* indexBuffer = vao.GetIndexBufferBindingSlot().GetBoundObject().get();
         MOBILEGL_ASSERT(indexBuffer != nullptr, "UploadAndBindIndexBuffer requires bound EBO");
         const SizeT indexDataSizeBytes = pIndexBufferView->indexByteSize;
@@ -2973,6 +2998,25 @@ void main() {
                 ? requestedPolygonMode
                 : VK_POLYGON_MODE_FILL;
 
+        const VkPrimitiveTopology vkTopology = MG_Util::ConvertPrimitiveModeToVkEnum(mode);
+        const Bool primitiveRestartEnabled =
+            MG_State::pGLContext->IsCapabilityEnabled(CapabilityInput::PrimitiveRestart) ||
+            MG_State::pGLContext->IsCapabilityEnabled(CapabilityInput::PrimitiveRestartFixedIndex);
+        // Primitive restart on a *list* topology requires the primitiveTopologyListRestart feature;
+        // strip/fan restart works without it. Silently dropping restarts would corrupt geometry, so
+        // hard-fail here (at the draw) with the reason when the device lacks the feature.
+        const auto isListTopology = [](VkPrimitiveTopology t) {
+            return t == VK_PRIMITIVE_TOPOLOGY_POINT_LIST || t == VK_PRIMITIVE_TOPOLOGY_LINE_LIST ||
+                   t == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST ||
+                   t == VK_PRIMITIVE_TOPOLOGY_LINE_LIST_WITH_ADJACENCY ||
+                   t == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST_WITH_ADJACENCY || t == VK_PRIMITIVE_TOPOLOGY_PATCH_LIST;
+        };
+        if (primitiveRestartEnabled && !m_primitiveTopologyListRestartFeatureEnabled && isListTopology(vkTopology)) {
+            THROW_EXCEPTION("Primitive restart on a list topology requires the primitiveTopologyListRestart device "
+                            "feature (VK_EXT_primitive_topology_list_restart), which this device does not support; use "
+                            "a strip/fan topology or a device that supports it.");
+        }
+
         PipelineFactory::PipelineCreatePayload payload {
             .programHash = programObj.hash,
             .vertexInputHash = vertexInputHash,
@@ -2981,7 +3025,8 @@ void main() {
             .colorAttachmentCount = renderPassEntry.colorAttachmentCount,
             .rasterizationSamples = renderPassEntry.sampleCount,
             .subpass = 0,
-            .topology = MG_Util::ConvertPrimitiveModeToVkEnum(mode),
+            .topology = vkTopology,
+            .primitiveRestartEnable = primitiveRestartEnabled,
             .polygonMode = effectivePolygonMode,
             .cullMode = cullFaceEnabled
                 ? MG_Util::ConvertCullFaceModeToVkEnum(MG_State::pGLContext->GetCullFaceMode(), invertClockwise)
@@ -6328,6 +6373,8 @@ void main() {
         m_independentBlendFeatureEnabled = deviceFeatures.independentBlend == VK_TRUE;
         deviceFeatures.fillModeNonSolid = supportedDeviceFeatures.fillModeNonSolid;
         m_fillModeNonSolidFeatureEnabled = deviceFeatures.fillModeNonSolid == VK_TRUE;
+        deviceFeatures.dualSrcBlend = supportedDeviceFeatures.dualSrcBlend;
+        m_dualSrcBlendFeatureEnabled = deviceFeatures.dualSrcBlend == VK_TRUE;
         deviceFeatures.logicOp = supportedDeviceFeatures.logicOp;
         deviceFeatures.shaderClipDistance = supportedDeviceFeatures.shaderClipDistance;
         deviceFeatures.shaderCullDistance = supportedDeviceFeatures.shaderCullDistance;
@@ -6421,6 +6468,30 @@ void main() {
         }
         if (!m_shaderDrawParametersFeatureEnabled) {
             MGLOG_W("shaderDrawParameters is unavailable; shaders using gl_DrawID/gl_BaseInstance will not work");
+        }
+
+        // primitiveTopologyListRestart lets primitive restart work on *list* topologies (strip/fan
+        // restart needs no feature). Optional; enabled via VK_EXT_primitive_topology_list_restart.
+        m_primitiveTopologyListRestartFeatureEnabled = false;
+        VkPhysicalDevicePrimitiveTopologyListRestartFeaturesEXT listRestartFeatures{};
+        listRestartFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PRIMITIVE_TOPOLOGY_LIST_RESTART_FEATURES_EXT;
+        if (IsExtensionSupported(availableExtensions, VK_EXT_PRIMITIVE_TOPOLOGY_LIST_RESTART_EXTENSION_NAME) &&
+            getPhysicalDeviceFeatures2 != nullptr) {
+            VkPhysicalDeviceFeatures2 featureQuery{};
+            featureQuery.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+            featureQuery.pNext = &listRestartFeatures;
+            getPhysicalDeviceFeatures2(m_physicalDevice.handle, &featureQuery);
+            if (listRestartFeatures.primitiveTopologyListRestart == VK_TRUE) {
+                if (!IsExtensionAlreadyEnabled(enabledDeviceExtensions,
+                                               VK_EXT_PRIMITIVE_TOPOLOGY_LIST_RESTART_EXTENSION_NAME)) {
+                    enabledDeviceExtensions.push_back(VK_EXT_PRIMITIVE_TOPOLOGY_LIST_RESTART_EXTENSION_NAME);
+                }
+                listRestartFeatures.pNext = const_cast<void*>(deviceCreateInfo.pNext);
+                deviceCreateInfo.pNext = &listRestartFeatures;
+                m_primitiveTopologyListRestartFeatureEnabled = true;
+                MGLOG_I("Enabled optional device extension: %s",
+                        VK_EXT_PRIMITIVE_TOPOLOGY_LIST_RESTART_EXTENSION_NAME);
+            }
         }
 
         deviceCreateInfo.enabledExtensionCount = static_cast<Uint32>(enabledDeviceExtensions.size());

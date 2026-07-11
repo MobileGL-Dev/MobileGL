@@ -354,6 +354,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // drive a runtime fallback when the device lacks them.
         Bool m_fillModeNonSolidFeatureEnabled = false;
         Bool m_independentBlendFeatureEnabled = false;
+        // dualSrcBlend gates GL_SRC1_* blend factors (glBindFragDataLocationIndexed dual-source blend);
+        // primitiveTopologyListRestart gates primitive restart on *list* topologies (strip/fan restart
+        // needs no feature). Both cached at device creation and drive a hard-fail-at-draw when absent.
+        Bool m_dualSrcBlendFeatureEnabled = false;
+        Bool m_primitiveTopologyListRestartFeatureEnabled = false;
         // Cached at device creation from the graphics queue family properties
         // and device limits; drives timer-query support.
         Uint32 m_timestampValidBits = 0;
