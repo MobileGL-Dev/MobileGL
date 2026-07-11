@@ -234,6 +234,21 @@ namespace MobileGL::MG_Util::SelfTest {
             EvaluateVertexAttribLimit(builder, caps.MaxVertexAttribs, "Vertex attributes",
                                       "GL_MAX_VERTEX_ATTRIBS");
 
+            if (caps.SupportsPolygonMode) {
+                builder.Pass("Polygon mode",
+                             "glPolygonMode GL_LINE/GL_POINT available via GL_NV/ANGLE_polygon_mode");
+            } else {
+                builder.Warn("Polygon mode",
+                             "no GL_NV/ANGLE_polygon_mode; glPolygonMode GL_LINE/GL_POINT falls back to GL_FILL");
+            }
+            if (caps.SupportsIndexedColorMask) {
+                builder.Pass("Indexed color mask",
+                             "per-draw-buffer glColorMaski available (ES 3.2 core or draw_buffers_indexed)");
+            } else {
+                builder.Warn("Indexed color mask",
+                             "no indexed glColorMaski; per-draw-buffer color masks fall back to draw buffer 0");
+            }
+
             if (es31) {
                 GLint maxVertexSsboBlocks = 0;
                 glesFuncs.glGetIntegerv(GL_MAX_VERTEX_SHADER_STORAGE_BLOCKS, &maxVertexSsboBlocks);
@@ -1097,6 +1112,19 @@ namespace MobileGL::MG_Util::SelfTest {
         } else {
             builder.Warn("vertexPipelineStoresAndAtomics",
                          "unsupported; shaders that write storage buffers from the vertex stage will not work");
+        }
+        if (features.fillModeNonSolid == VK_TRUE) {
+            builder.Pass("fillModeNonSolid", "glPolygonMode GL_LINE/GL_POINT rasterization supported");
+        } else {
+            builder.Warn("fillModeNonSolid",
+                         "unsupported; glPolygonMode GL_LINE/GL_POINT falls back to GL_FILL (no wireframe/point "
+                         "rasterization)");
+        }
+        if (features.independentBlend == VK_TRUE) {
+            builder.Pass("independentBlend", "per-draw-buffer glColorMaski and indexed blend state supported");
+        } else {
+            builder.Warn("independentBlend",
+                         "unsupported; per-draw-buffer glColorMaski falls back to draw buffer 0 for all attachments");
         }
 
         Bool shaderDrawParameters = false;
