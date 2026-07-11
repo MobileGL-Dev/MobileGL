@@ -126,6 +126,7 @@ namespace MobileGL::MG_Impl::GLImpl {
                                    GLchar* uniformBlockName);
     void BindFragDataLocation(GLuint program, GLuint colorNumber, const char* name);
     GLint GetFragDataLocation(GLuint program, const char* name);
+    GLint GetFragDataIndex(GLuint program, const char* name);
     void GetProgramInterfaceiv(GLuint program, GLenum programInterface, GLenum pname, GLint* params);
     GLuint GetProgramResourceIndex(GLuint program, GLenum programInterface, const GLchar* name);
     void GetProgramResourceName(GLuint program, GLenum programInterface, GLuint index, GLsizei bufSize,

@@ -1360,6 +1360,11 @@ TEST_F(ProgramTest, CompileAndLinkWithExplicitFragmentOut) {
     GLint fragColorLoc = GetFragDataLocation(program, "fragColor");
     ASSERT_EQ(fragColorLoc, 7);
 
+    // glGetFragDataIndex: a valid user output uses color index 0 (dual-source index 1 is not tracked);
+    // a name that is not an active output returns -1. Neither records a GL error.
+    EXPECT_EQ(GetFragDataIndex(program, "fragColor"), 0);
+    EXPECT_EQ(GetFragDataIndex(program, "notAnActiveOutput"), -1);
+
     auto programObject = MG_State::pGLContext->GetCurrentProgram();
     auto& spirvs = programObject->GetGeneratedSpirv();
     auto& fragSpirv = spirvs[programObject->GetShaderIndexByStage(ShaderStage::Fragment)];
@@ -1553,6 +1558,16 @@ void main() {
 #endif
     fragColor = apply_fog(color, sphericalVertexDistance, cylindricalVertexDistance, FogEnvironmentalStart, FogEnvironmentalEnd, FogRenderDistanceStart, FogRenderDistanceEnd, FogColor);
 })";
+
+TEST_F(ProgramTest, GetFragDataIndexRejectsInvalidProgram) {
+    // A handle that was never generated is rejected and returns -1. Like glGetFragDataLocation, this
+    // routes through the shared program-name check, which records GL_INVALID_VALUE for an unknown name.
+    EXPECT_EQ(GetFragDataIndex(999999u, "fragColor"), -1);
+    EXPECT_EQ(GetError(), GL_INVALID_VALUE);
+    // The name check and the entry point each queue an error for an unknown handle; drain the rest so
+    // no stale error leaks into a later test (the fixture does not reset the error queue).
+    while (GetError() != GL_NO_ERROR) {}
+}
 
 TEST_F(ProgramTest, CompileShaderWithSamplerAsVarName) {
     char infoLog[1024] = "";

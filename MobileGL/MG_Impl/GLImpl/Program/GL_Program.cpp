@@ -1543,6 +1543,35 @@ namespace MobileGL::MG_Impl::GLImpl {
         return programObject->GetFragmentDataLocation(name);
     }
 
+    GLint GetFragDataIndex_State(GLuint program, const char* name) {
+        auto& programObject = TryToGetProgramObject(program);
+        if (programObject == nullptr) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidOperation,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
+                                             std::to_string(program) + " is not the name of a program object."));
+            return -1;
+        }
+        if (name == nullptr) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidValue,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__, "name cannot be null."));
+            return -1;
+        }
+        if (!programObject->GetLinkStatus()) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidOperation,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
+                                             std::to_string(program) + " has not been linked successfully."));
+            return -1;
+        }
+        // A name that is not an active user-defined fragment output (including gl_ built-ins) has no
+        // index. Every bound output uses color index 0: MobileGL does not yet track dual-source
+        // (index 1) bindings -- glBindFragDataLocationIndexed and the layout(index = 1) qualifier are
+        // not supported -- so this is exact for every program that does not use dual-source blending.
+        return programObject->GetFragmentDataLocation(name) < 0 ? -1 : 0;
+    }
+
     void ValidateProgram_State(GLuint program) {
         //            THROW_UNIMPL_EXCEPTION;
     }
@@ -1979,6 +2008,10 @@ namespace MobileGL::MG_Impl::GLImpl {
 
     GLint GetFragDataLocation(GLuint program, const char* name) {
         return GetFragDataLocation_State(program, name);
+    }
+
+    GLint GetFragDataIndex(GLuint program, const char* name) {
+        return GetFragDataIndex_State(program, name);
     }
 
     void GetProgramInterfaceiv(GLuint program, GLenum programInterface, GLenum pname, GLint* params) {
