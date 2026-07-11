@@ -49,6 +49,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // Set when an immediate op could not be applied; forces a full re-upload
         // on the next AcquireResidentSlice.
         Bool pendingFullUpload = false;
+        // Backs a zero-copy coherent persistent map (PipeResource GPU residency): the
+        // buffer is HOST_VISIBLE+COHERENT, persistently mapped, carries every usage and is
+        // never orphaned or recreated. Draw-time acquire binds it directly, no re-upload.
+        Bool persistentMapped = false;
 
         // Cached transient (streaming) slice for the current frame.
         BufferSlice transientSlice{};
@@ -95,6 +99,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         Bool AcquireStreamedSlice(BufferKind kind, const SharedPtr<MG_State::GLState::BufferObject>& bufferObject,
                                   BufferSlice& outSlice);
 
+        // Zero-copy persistent map (PipeResource GPU residency): create (once) a
+        // HOST_VISIBLE+COHERENT, persistently mapped resident buffer carrying every usage,
+        // seed it from the shadow, and return its mapped base for the app to write into
+        // directly. Idempotent. Returns nullptr on failure (frontend keeps its shadow).
+        void* AcquirePersistentMap(MG_State::GLState::BufferObject& bufferObject);
+
         // Immediate ops, dispatched from the frontend BufferBackendOps table.
         void OnRespecify(MG_State::GLState::BufferObject& bufferObject);
         void OnSubData(MG_State::GLState::BufferObject& bufferObject, SizeT offset, SizeT size);
@@ -116,7 +126,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         static VkBufferUsageFlags GetVkBufferUsage(BufferKind kind);
         SharedPtr<VkBufferResource> GetOrCreateResource(const SharedPtr<MG_State::GLState::BufferObject>& bufferObject);
         static VkBufferResource* ResourceOf(MG_State::GLState::BufferObject& bufferObject);
-        Bool CreateResidentStorage(VkBufferResource& resource, VkDeviceSize size, VkBufferUsageFlags usage);
+        Bool CreateResidentStorage(VkBufferResource& resource, VkDeviceSize size, VkBufferUsageFlags usage,
+                                   VkMemoryPropertyFlags requiredFlags = 0);
         // Swap storage (conditional orphan) and refill it from the shadow copy.
         Bool SwapStorageAndUploadAll(VkBufferResource& resource, MG_State::GLState::BufferObject& bufferObject);
         // Record a staging-slice copy into the resident storage, ordered against

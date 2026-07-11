@@ -144,6 +144,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
             Bool pendingRespecify = false;
             VecRange1D pendingRanges;
             std::mutex pendingMutex;
+            // Zero-copy coherent persistent map (EXT_buffer_storage): the GL store is
+            // immutable, persistently+coherently mapped, and persistentPtr is what the app
+            // (and the frontend PipeResource) write into directly. While set, draw-time
+            // sync is a no-op and no per-draw glBufferSubData is issued. Cleared on ES
+            // context loss.
+            Bool persistentMapped = false;
+            void* persistentPtr = nullptr;
         };
 
         // Registered as the frontend's BufferBackendOps at backend init and on

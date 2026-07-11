@@ -621,8 +621,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                         frontendBinding, program.GetUniformBlockName(static_cast<Uint32>(blockIndex)).c_str());
         bufferObject->SyncPersistentMappedRange();
 
-        const auto bufferData = bufferObject->GetDataReadOnly();
-        MOBILEGL_ASSERT(bufferData != nullptr && !bufferData->empty(),
+        MOBILEGL_ASSERT(bufferObject->MappedData() != nullptr && bufferObject->GetSize() != 0,
                         "ResolveUniformBufferPayload: bound UBO data is empty for block '%s'",
                         program.GetUniformBlockName(static_cast<Uint32>(blockIndex)).c_str());
 
@@ -650,7 +649,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
         const VkDeviceSize available = rangeEnd - rangeStart;
         outSize = blockSize;
-        outData = bufferData->data() + static_cast<SizeT>(rangeStart);
+        outData = bufferObject->MappedData() + static_cast<SizeT>(rangeStart);
         if (available < blockSize) {
             static thread_local Vector<Uint8> paddedUbo;
             paddedUbo.assign(static_cast<SizeT>(blockSize), 0);

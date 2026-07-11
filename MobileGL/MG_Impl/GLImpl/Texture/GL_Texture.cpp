@@ -779,7 +779,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         const auto& pixelUnpackBufferObject =
             MG_State::pGLContext->GetBufferBindingSlot(BufferTarget::PixelUnpack).GetBoundObject();
         if (pixelUnpackBufferObject) {
-            originalPixels = reinterpret_cast<const char*>(pixelUnpackBufferObject->GetDataReadOnly()->data()) +
+            originalPixels = reinterpret_cast<const char*>(pixelUnpackBufferObject->MappedData()) +
                              reinterpret_cast<SizeT>(pixels);
         }
         if (!originalPixels) {
@@ -896,7 +896,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         if (pixelUnpackBufferObject) {
             MGLOG_D("TexSubImage2D_State: Using Pixel Unpack Buffer Object ID: %u",
                     pixelUnpackBufferObject->GetExternalIndex());
-            originalPixels = reinterpret_cast<const char*>(pixelUnpackBufferObject->GetDataReadOnly()->data()) +
+            originalPixels = reinterpret_cast<const char*>(pixelUnpackBufferObject->MappedData()) +
                              reinterpret_cast<SizeT>(pixels);
         }
 
@@ -982,7 +982,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         const auto& pixelUnpackBufferObject =
             MG_State::pGLContext->GetBufferBindingSlot(BufferTarget::PixelUnpack).GetBoundObject();
         if (pixelUnpackBufferObject) {
-            originalPixels = reinterpret_cast<const char*>(pixelUnpackBufferObject->GetDataReadOnly()->data()) +
+            originalPixels = reinterpret_cast<const char*>(pixelUnpackBufferObject->MappedData()) +
                              reinterpret_cast<SizeT>(pixels);
         }
         if (!originalPixels) {
@@ -1393,7 +1393,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         if (pixelUnpackBufferObject) {
             MGLOG_D("%s: Using Pixel Unpack Buffer Object ID: %u", __func__,
                     pixelUnpackBufferObject->GetExternalIndex());
-            originalPixels = reinterpret_cast<const char*>(pixelUnpackBufferObject->GetDataReadOnly()->data()) +
+            originalPixels = reinterpret_cast<const char*>(pixelUnpackBufferObject->MappedData()) +
                              reinterpret_cast<SizeT>(pixels);
         }
 
@@ -1512,7 +1512,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         if (pixelUnpackBufferObject) {
             MGLOG_D("%s: Using Pixel Unpack Buffer Object ID: %u", __func__,
                     pixelUnpackBufferObject->GetExternalIndex());
-            originalPixels = reinterpret_cast<const char*>(pixelUnpackBufferObject->GetDataReadOnly()->data()) +
+            originalPixels = reinterpret_cast<const char*>(pixelUnpackBufferObject->MappedData()) +
                              reinterpret_cast<SizeT>(pixels);
         }
 
@@ -1603,7 +1603,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         const auto& pixelUnpackBufferObject =
             MG_State::pGLContext->GetBufferBindingSlot(BufferTarget::PixelUnpack).GetBoundObject();
         if (pixelUnpackBufferObject) {
-            originalPixels = reinterpret_cast<const char*>(pixelUnpackBufferObject->GetDataReadOnly()->data()) +
+            originalPixels = reinterpret_cast<const char*>(pixelUnpackBufferObject->MappedData()) +
                              reinterpret_cast<SizeT>(pixels);
         }
 
@@ -3020,7 +3020,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         const auto& pixelUnpackBufferObject =
             MG_State::pGLContext->GetBufferBindingSlot(BufferTarget::PixelUnpack).GetBoundObject();
         if (pixelUnpackBufferObject) {
-            originalPixels = reinterpret_cast<const char*>(pixelUnpackBufferObject->GetDataReadOnly()->data()) +
+            originalPixels = reinterpret_cast<const char*>(pixelUnpackBufferObject->MappedData()) +
                              reinterpret_cast<SizeT>(pixels);
         }
         if (!originalPixels) {

@@ -673,12 +673,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         const Uint8* base = nullptr;
         SizeT available = 0;
         if (attr.Buffer) {
-            const auto& data = attr.Buffer->GetDataReadOnly();
-            if (!data || attr.Offset >= data->size()) {
+            if (attr.Offset >= attr.Buffer->GetSize()) {
                 return;
             }
-            base = data->data() + attr.Offset;
-            available = data->size() - attr.Offset;
+            base = attr.Buffer->MappedData() + attr.Offset;
+            available = attr.Buffer->GetSize() - attr.Offset;
         } else {
             base = reinterpret_cast<const Uint8*>(attr.Offset);
             available = static_cast<SizeT>(firstVertex + vertexCount) * stride;
@@ -2313,8 +2312,7 @@ void main() {
         auto indexBufferShared = MG_State::pGLContext->GetBufferObject(indexBuffer->GetExternalIndex());
         MOBILEGL_ASSERT(indexBufferShared != nullptr, "UploadAndBindIndexBuffer failed to resolve shared EBO");
         if (ShouldUseTransientVertexIndexBuffer(*indexBufferShared)) {
-            const auto indexData = indexBufferShared->GetDataReadOnly();
-            MOBILEGL_ASSERT(indexData != nullptr && !indexData->empty(), "DrawElements requires non-empty EBO data");
+            MOBILEGL_ASSERT(indexBufferShared->GetSize() != 0, "DrawElements requires non-empty EBO data");
             if (!m_bufferManager.AcquireStreamedSlice(BufferKind::Index, indexBufferShared, slice)) {
                 MOBILEGL_ASSERT(false, "DrawElements skipped: failed to prepare transient index buffer");
                 return false;
@@ -5414,18 +5412,14 @@ void main() {
             return;
         }
 
-        const auto parameterData = parameterBuffer->GetDataReadOnly();
-        const auto drawData = drawBuffer->GetDataReadOnly();
-        if (!parameterData || !drawData) {
-            MGLOG_E("MultiDrawElementsIndirectCount skipped: CPU fallback cannot read buffers");
-            return;
-        }
+        const Uint8* parameterData = parameterBuffer->MappedData();
+        const Uint8* drawData = drawBuffer->MappedData();
         Uint32 actualDrawCount = 0;
-        std::memcpy(&actualDrawCount, parameterData->data() + drawcount, sizeof(actualDrawCount));
+        std::memcpy(&actualDrawCount, parameterData + drawcount, sizeof(actualDrawCount));
         actualDrawCount = std::min<Uint32>(actualDrawCount, static_cast<Uint32>(maxdrawcount));
         for (Uint32 idraw = 0; idraw < actualDrawCount; ++idraw) {
             DrawIndexedCmdParam cmd{};
-            std::memcpy(&cmd, drawData->data() + commandOffset + static_cast<SizeT>(idraw) * stride, sizeof(cmd));
+            std::memcpy(&cmd, drawData + commandOffset + static_cast<SizeT>(idraw) * stride, sizeof(cmd));
             vkCmdDrawIndexed(frame.commandBuffer, cmd.indexCount, cmd.instanceCount, cmd.firstIndex,
                              cmd.vertexOffset, cmd.firstInstance);
         }

@@ -293,7 +293,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 const GLenum usage = MG_Util::ConvertBufferUsageToGLEnum(bufferObject.GetUsage());
                 BindBufferId(TempBufferTarget, resource.id);
                 g_GLESFuncs.glBufferData(TempBufferTarget, (GLsizeiptr)size,
-                                         size > 0 ? bufferObject.GetDataReadOnly()->data() : nullptr, usage);
+                                         size > 0 ? bufferObject.MappedData() : nullptr, usage);
                 resource.storageSize = size;
                 resource.storageInitialized = true;
                 resource.pendingRespecify = false;
@@ -315,12 +315,83 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 if (start >= end) return;
                 BindBufferId(TempBufferTarget, resource.id);
                 g_GLESFuncs.glBufferSubData(TempBufferTarget, (GLintptr)start, (GLsizeiptr)(end - start),
-                                            bufferObject.GetDataReadOnly()->data() + start);
+                                            bufferObject.MappedData() + start);
+            }
+
+            // EXT_buffer_storage bit values (same numeric values as the desktop ARB
+            // tokens); defined locally so this compiles regardless of which GLES headers
+            // expose the EXT tokens.
+            constexpr GLbitfield kMapPersistentBit = 0x0040;
+            constexpr GLbitfield kMapCoherentBit = 0x0080;
+            constexpr GLbitfield kDynamicStorageBit = 0x0100;
+
+            // Zero-copy persistent map: back the buffer with real immutable,
+            // persistently+coherently mapped GL storage (EXT_buffer_storage) and hand the
+            // app that mapped pointer (adopted by the frontend PipeResource). Returns
+            // nullptr when the extension is unavailable or the context is not current, in
+            // which case the frontend keeps its CPU-shadow model. Idempotent.
+            void* Ops_AcquirePersistentMap(BufferObject& bufferObject) {
+                if (!CanTouchGLNow() || !g_GLESFuncs.glBufferStorageEXT || !g_GLESFuncs.glMapBufferRange ||
+                    !g_GLESFuncs.glGenBuffers) {
+                    return nullptr;
+                }
+                const SizeT size = bufferObject.GetSize();
+                if (size == 0) return nullptr;
+
+                auto* resource = static_cast<GLESBufferResource*>(bufferObject.GetBackendResource().get());
+                if (!resource) {
+                    auto created = MakeShared<GLESBufferResource>();
+                    resource = created.get();
+                    bufferObject.SetBackendResource(std::move(created));
+                }
+                resource->contextGeneration = g_bufferContextGeneration;
+
+                if (resource->persistentMapped && resource->persistentPtr && resource->storageSize == size) {
+                    return resource->persistentPtr; // idempotent
+                }
+
+                // Need a fresh id: glBufferStorage fails on a buffer that already has
+                // immutable storage, and any prior mutable store is replaced anyway.
+                if (resource->id != 0) {
+                    g_GLESFuncs.glDeleteBuffers(1, &resource->id);
+                    resource->id = 0;
+                }
+                g_GLESFuncs.glGenBuffers(1, &resource->id);
+                if (resource->id == 0) return nullptr;
+
+                // Seed from the shadow (MappedData() is still the shadow: the frontend
+                // adopts and drops it only after this returns).
+                BindBufferId(TempBufferTarget, resource->id);
+                const void* initial = bufferObject.MappedData();
+                g_GLESFuncs.glBufferStorageEXT(TempBufferTarget, static_cast<GLsizeiptr>(size), initial,
+                                               GL_MAP_WRITE_BIT | kMapPersistentBit | kMapCoherentBit |
+                                                   kDynamicStorageBit);
+                void* ptr = g_GLESFuncs.glMapBufferRange(TempBufferTarget, 0, static_cast<GLsizeiptr>(size),
+                                                         GL_MAP_WRITE_BIT | kMapPersistentBit | kMapCoherentBit);
+                if (!ptr) {
+                    MGLOG_E("Ops_AcquirePersistentMap: glMapBufferRange(persistent) failed for buffer %u",
+                            resource->id);
+                    resource->persistentMapped = false;
+                    resource->persistentPtr = nullptr;
+                    return nullptr;
+                }
+                resource->persistentPtr = ptr;
+                resource->persistentMapped = true;
+                resource->storageSize = size;
+                resource->storageInitialized = true;
+                resource->pendingRespecify = false;
+                {
+                    const std::lock_guard<std::mutex> lock(resource->pendingMutex);
+                    resource->pendingRanges.clear();
+                }
+                resource->syncedChangeSerial = bufferObject.GetChangeSerial();
+                return ptr;
             }
 
             void Ops_Respecify(BufferObject& bufferObject) {
                 auto* resource = ResourceOf(bufferObject);
                 if (!resource) return; // lazy: EnsureBufferResource full-uploads on creation
+                if (resource->persistentMapped) return; // immutable persistent storage is never respecified
                 if (!CanTouchGLNow() || resource->id == 0 ||
                     resource->contextGeneration != g_bufferContextGeneration) {
                     resource->pendingRespecify = true;
@@ -380,7 +451,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                         GL_MAP_WRITE_BIT | (invalidate ? GL_MAP_INVALIDATE_RANGE_BIT : 0) |
                             (unsynchronized ? GL_MAP_UNSYNCHRONIZED_BIT : 0));
                     if (mappedData) {
-                        Memcpy(mappedData, bufferObject.GetDataReadOnly()->data() + range.start,
+                        Memcpy(mappedData, bufferObject.MappedData() + range.start,
                                range.end - range.start);
                         g_GLESFuncs.glUnmapBuffer(TempBufferTarget);
                         resource->syncedChangeSerial = bufferObject.GetChangeSerial();
@@ -419,6 +490,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 .SubData = Ops_SubData,
                 .FlushMappedRange = Ops_FlushMappedRange,
                 .OnDestroy = Ops_OnDestroy,
+                .AcquirePersistentMap = Ops_AcquirePersistentMap,
             };
         } // namespace
 
@@ -491,6 +563,17 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 resource->pendingRespecify = true;
                 resource->pendingRanges.clear();
                 resource->contextGeneration = g_bufferContextGeneration;
+                // The persistent map (and its pointer) died with the old context; the
+                // frontend re-acquires a fresh one on its next map.
+                resource->persistentMapped = false;
+                resource->persistentPtr = nullptr;
+            }
+
+            // Zero-copy coherent persistent buffer: the app writes straight into the
+            // persistently mapped immutable store, so there is nothing to (re)upload at
+            // draw time. This is where the per-draw whole-buffer glBufferSubData used to run.
+            if (resource->persistentMapped && resource->persistentPtr && resource->id != 0) {
+                return resource;
             }
 
             if (resource->id == 0) {

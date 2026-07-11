@@ -49,11 +49,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     }
 
     Bool VkBufferObject::Create(const VkBufferObjectDesc& desc) {
-        return Create(desc.allocator, desc.size, desc.usage, desc.memoryUsage, desc.allocationFlags);
+        return Create(desc.allocator, desc.size, desc.usage, desc.memoryUsage, desc.allocationFlags,
+                      desc.requiredFlags);
     }
 
     Bool VkBufferObject::Create(VmaAllocator allocator, VkDeviceSize size, VkBufferUsageFlags usage,
-                                VmaMemoryUsage memoryUsage, VmaAllocationCreateFlags allocationFlags) {
+                                VmaMemoryUsage memoryUsage, VmaAllocationCreateFlags allocationFlags,
+                                VkMemoryPropertyFlags requiredFlags) {
         MOBILEGL_ASSERT(allocator != nullptr, "VkBufferObject::Create requires valid VMA allocator");
         MOBILEGL_ASSERT(size > 0, "VkBufferObject::Create requires non-zero size");
 
@@ -69,6 +71,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         VmaAllocationCreateInfo allocationInfo{};
         allocationInfo.usage = memoryUsage;
         allocationInfo.flags = allocationFlags;
+        allocationInfo.requiredFlags = requiredFlags;
 
         const VkResult result =
             vmaCreateBuffer(m_allocator, &bufferInfo, &allocationInfo, &m_buffer, &m_allocation, nullptr);

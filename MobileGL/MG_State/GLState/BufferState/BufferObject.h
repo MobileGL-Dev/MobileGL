@@ -9,6 +9,7 @@
 #pragma once
 #include <Includes.h>
 #include <MG_Util/Math/VectorTypes.h>
+#include "PipeResource.h"
 
 namespace MobileGL {
     enum class BufferTarget {
@@ -59,13 +60,9 @@ namespace MobileGL {
     namespace MG_State::GLState {
         class BufferObject;
 
-        // Opaque, refcounted handle to the backend's storage for one buffer
-        // (the pipe_resource analogue). The frontend owns the reference; the
-        // active backend derives from it and attaches its own payload.
-        class BackendBufferResource {
-        public:
-            virtual ~BackendBufferResource() = default;
-        };
+        // BackendBufferResource and PipeResource (the storage abstraction that holds
+        // either the CPU shadow or the backend's persistently-mapped GPU memory) live
+        // in PipeResource.h.
 
         // Immediate buffer transfer interface implemented by the active backend
         // (the pipe_context buffer-op analogue). Ops are invoked at GL call time,
@@ -91,6 +88,17 @@ namespace MobileGL {
             // Final release of the backend resource (called from ~BufferObject).
             // The backend defers actual destruction until the GPU is done with it.
             void (*OnDestroy)(SharedPtr<BackendBufferResource>&& resource) = nullptr;
+            // Zero-copy persistent mapping. For a coherent (non-FLUSH_EXPLICIT) persistent
+            // write map, the backend may hand back a host-visible, COHERENT, persistently
+            // mapped pointer into its own GPU storage for the whole buffer [0, size),
+            // created with every buffer usage and seeded from the shadow. From that point
+            // the GPU buffer is the single source of truth: the app writes into it
+            // directly, all reads/writes resolve against it (HostData()), and NO further
+            // backend transfer ops are dispatched for this buffer. Returns nullptr when the
+            // backend cannot back the map; the frontend then keeps the CPU-shadow model.
+            // Must be idempotent: a second call for an already-backed buffer returns the
+            // same base pointer.
+            void* (*AcquirePersistentMap)(BufferObject& bufferObject) = nullptr;
         };
 
         // Registered by the active backend at init, cleared at shutdown.
@@ -148,7 +156,16 @@ namespace MobileGL {
             BufferUsage GetUsage() const;
             Range1D GetMappedRange() const;
             void* GetMappedPointer() const;
-            const SharedPtr<Data>& GetDataReadOnly() const;
+            // Host-visible base pointer to the buffer's authoritative bytes for
+            // [0, GetSize()): the coherent persistent GPU map when the buffer is
+            // persistent-resident, otherwise the CPU shadow. Every reader goes through
+            // this so no consumer branches on where the bytes live (the class of bug
+            // that a partial persistent-map redirect would reintroduce).
+            const Uint8* MappedData() const;
+            // True once the buffer's bytes were adopted into backend GPU memory (a
+            // coherent persistent map): reads/writes hit GPU memory and no per-write
+            // backend transfer op is dispatched.
+            Bool IsBackendPersistentMapped() const;
             Flags<BufferMappingAccessBit> GetMappingAccess() const;
             GLbitfield GetStorageFlags() const;
             Uint GetExternalIndex() const;
@@ -163,11 +180,18 @@ namespace MobileGL {
             void NotifyRespecify();
             void NotifySubData(SizeT offset, SizeT size);
             void NotifyFlushMappedRange(Range1D range, Flags<BufferMappingAccessBit> appAccess);
+            // A content write of [offset, offset+size) just landed in m_resource. For a
+            // persistent GPU-resident buffer the bytes are already in coherent GPU memory,
+            // so this only bumps the change serial; otherwise it dispatches a backend
+            // SubData transfer to sync the backend's separate GPU copy.
+            void NotifyContentWrite(SizeT offset, SizeT size);
 
             const Uint m_externalIndex = 0;
             SizeT m_size = 0;
             BufferUsage m_usage = BufferUsage::StaticDraw;
-            SharedPtr<Data> m_dataPtr;
+            // Owns the buffer's bytes (CPU shadow or backend persistent GPU map) and
+            // the backend GPU resource. All data access goes through it.
+            PipeResource m_resource;
             Bool m_isMapped;
             Flags<BufferMappingAccessBit> m_mappingAccess;
             Bool m_isImmutableStorage = false;
@@ -176,7 +200,6 @@ namespace MobileGL {
             Range1D m_mappedRange;
             Vector<Uint8> m_stagingData;
             Bool m_ownsStagingData;
-            SharedPtr<BackendBufferResource> m_backendResource;
         };
     } // namespace MG_State::GLState
 } // namespace MobileGL

@@ -691,8 +691,7 @@ TEST_F(GeneralBufferTest, General_PersistentCoherentWriteDirtyWithoutUnmap) {
     bufferObject->SyncPersistentMappedRange();
     EXPECT_GT(bufferObject->GetChangeSerial(), baseSerial);
 
-    const auto data = bufferObject->GetDataReadOnly();
-    EXPECT_EQ(reinterpret_cast<const GLint*>(data->data())[2], 1234);
+    EXPECT_EQ(reinterpret_cast<const GLint*>(bufferObject->MappedData())[2], 1234);
     EXPECT_TRUE(UnmapBuffer(GL_ARRAY_BUFFER));
     EXPECT_EQ(GetError(), GL_NO_ERROR);
 }
@@ -840,4 +839,173 @@ TEST_F(GeneralBufferTest, General_GeneralTest_1) {
     DeleteBuffers(2, toDelete);
 
     EXPECT_EQ(GetError(), GL_NO_ERROR);
+}
+
+// ---------------------------------------------------------------------------
+// Zero-copy persistent-coherent mapping via the PipeResource layer (regression
+// guard for the GpuMemory OOM / rendering-corruption bug). A fake backend hands
+// out a block of "GPU" memory from AcquirePersistentMap; the frontend adopts it
+// as the buffer's storage. The test asserts (a) the app maps straight onto that
+// GPU memory, (b) EVERY reader (MappedData(), the accessor all backend consumers
+// now use) resolves to that same GPU memory rather than a stale shadow - the bug
+// that corrupted UBO/vertex data - and (c) a long map/write/draw loop drives ZERO
+// per-draw backend transfer ops.
+namespace {
+    struct ZeroCopyMockBackend {
+        Vector<Uint8> gpu; // stand-in for host-visible coherent GPU storage
+        int acquireMapCalls = 0;
+        int subDataCalls = 0;
+        int respecifyCalls = 0;
+        int flushCalls = 0;
+        Bool provideMap = true; // false => backend declines, exercising the shadow fallback
+    };
+
+    ZeroCopyMockBackend* g_zeroCopyMock = nullptr;
+
+    void* ZeroCopyMock_AcquirePersistentMap(MG_State::GLState::BufferObject& bufferObject) {
+        if (!g_zeroCopyMock || !g_zeroCopyMock->provideMap) return nullptr;
+        if (g_zeroCopyMock->gpu.size() != bufferObject.GetSize()) {
+            g_zeroCopyMock->gpu.assign(bufferObject.GetSize(), 0);
+            // Seed from the shadow (still current: the frontend adopts only after we return).
+            const Uint8* shadow = bufferObject.MappedData();
+            if (shadow != nullptr && bufferObject.GetSize() > 0) {
+                Memcpy(g_zeroCopyMock->gpu.data(), shadow, bufferObject.GetSize());
+            }
+        }
+        ++g_zeroCopyMock->acquireMapCalls;
+        return g_zeroCopyMock->gpu.data();
+    }
+
+    void ZeroCopyMock_Respecify(MG_State::GLState::BufferObject&) {
+        if (g_zeroCopyMock) ++g_zeroCopyMock->respecifyCalls;
+    }
+    void ZeroCopyMock_SubData(MG_State::GLState::BufferObject&, SizeT, SizeT) {
+        if (g_zeroCopyMock) ++g_zeroCopyMock->subDataCalls;
+    }
+    void ZeroCopyMock_Flush(MG_State::GLState::BufferObject&, Range1D, Flags<BufferMappingAccessBit>) {
+        if (g_zeroCopyMock) ++g_zeroCopyMock->flushCalls;
+    }
+    void ZeroCopyMock_OnDestroy(SharedPtr<MG_State::GLState::BackendBufferResource>&&) {}
+
+    const MG_State::GLState::BufferBackendOps kZeroCopyMockOps = {
+        .Respecify = ZeroCopyMock_Respecify,
+        .SubData = ZeroCopyMock_SubData,
+        .FlushMappedRange = ZeroCopyMock_Flush,
+        .OnDestroy = ZeroCopyMock_OnDestroy,
+        .AcquirePersistentMap = ZeroCopyMock_AcquirePersistentMap,
+    };
+
+    struct ScopedBackendOps {
+        explicit ScopedBackendOps(const MG_State::GLState::BufferBackendOps* ops) {
+            MG_State::GLState::SetBufferBackendOps(ops);
+        }
+        ~ScopedBackendOps() { MG_State::GLState::SetBufferBackendOps(nullptr); }
+    };
+} // namespace
+
+TEST_F(GeneralBufferTest, General_PersistentCoherentZeroCopyStressNoPerDrawReupload) {
+    ZeroCopyMockBackend mock;
+    g_zeroCopyMock = &mock;
+    ScopedBackendOps scopedOps(&kZeroCopyMockOps);
+
+    GLuint buffer = 0;
+    GenBuffers(1, &buffer);
+    BindBuffer(GL_ARRAY_BUFFER, buffer);
+
+    constexpr SizeT kCount = 4096; // 16 KiB of GLint - a "large" dynamic ring buffer
+    Vector<GLint> initial(kCount, 0);
+    BufferStorage(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(kCount * sizeof(GLint)), initial.data(),
+                  GL_MAP_WRITE_BIT | GL_MAP_PERSISTENT_BIT | GL_MAP_COHERENT_BIT);
+    ASSERT_EQ(GetError(), GL_NO_ERROR);
+
+    auto* mapped = static_cast<GLint*>(
+        MapBufferRange(GL_ARRAY_BUFFER, 0, static_cast<GLsizeiptr>(kCount * sizeof(GLint)),
+                       GL_MAP_WRITE_BIT | GL_MAP_PERSISTENT_BIT | GL_MAP_COHERENT_BIT));
+    ASSERT_NE(mapped, nullptr);
+    EXPECT_EQ(mock.acquireMapCalls, 1);
+
+    auto bufferObject = MG_State::pGLContext->GetBufferObject(buffer);
+    ASSERT_NE(bufferObject, nullptr);
+    EXPECT_TRUE(bufferObject->IsBackendPersistentMapped());
+    // The app maps straight onto the backend's GPU storage...
+    EXPECT_EQ(static_cast<void*>(mapped), static_cast<void*>(mock.gpu.data()));
+    // ...and EVERY consumer (they all read MappedData() now) resolves to that same GPU
+    // memory, not a stale shadow. This is the invariant whose violation corrupted UBOs.
+    EXPECT_EQ(static_cast<const void*>(bufferObject->MappedData()), static_cast<const void*>(mock.gpu.data()));
+
+    // Isolate the per-draw behavior: storage creation legitimately issued one Respecify.
+    mock.subDataCalls = 0;
+    mock.flushCalls = 0;
+    mock.respecifyCalls = 0;
+
+    constexpr int kFrames = 240;
+    constexpr int kDrawsPerFrame = 64; // 15,360 draws total
+    for (int frame = 0; frame < kFrames; ++frame) {
+        for (int draw = 0; draw < kDrawsPerFrame; ++draw) {
+            mapped[draw] = frame * 1000 + draw;    // MC writes through the coherent map
+            bufferObject->SyncPersistentMappedRange(); // draw-time hook
+        }
+    }
+
+    // The crux: across 15,360 draws, NOT ONE per-draw backend transfer.
+    EXPECT_EQ(mock.acquireMapCalls, 1);
+    EXPECT_EQ(mock.subDataCalls, 0);
+    EXPECT_EQ(mock.flushCalls, 0);
+    EXPECT_EQ(mock.respecifyCalls, 0);
+
+    // The app's writes are coherently visible in the backend storage (no copy), and a
+    // reader going through MappedData() sees them too.
+    const auto* gpuInts = reinterpret_cast<const GLint*>(mock.gpu.data());
+    const auto* viaMapped = reinterpret_cast<const GLint*>(bufferObject->MappedData());
+    for (int draw = 0; draw < kDrawsPerFrame; ++draw) {
+        EXPECT_EQ(mapped[draw], (kFrames - 1) * 1000 + draw);
+        EXPECT_EQ(gpuInts[draw], (kFrames - 1) * 1000 + draw);
+        EXPECT_EQ(viaMapped[draw], (kFrames - 1) * 1000 + draw);
+    }
+
+    EXPECT_TRUE(UnmapBuffer(GL_ARRAY_BUFFER));
+    EXPECT_EQ(mock.flushCalls, 0);
+    EXPECT_EQ(mock.subDataCalls, 0);
+    g_zeroCopyMock = nullptr;
+}
+
+TEST_F(GeneralBufferTest, General_PersistentCoherentFallbackSyncsPerDrawWhenBackendDeclines) {
+    // Backend cannot back the map => the legacy CPU-shadow path must still be correct,
+    // and this documents the behavior the fix removed (one whole-range transfer per draw),
+    // proving the harness above would catch a regression (non-zero per-draw count).
+    ZeroCopyMockBackend mock;
+    mock.provideMap = false;
+    g_zeroCopyMock = &mock;
+    ScopedBackendOps scopedOps(&kZeroCopyMockOps);
+
+    GLuint buffer = 0;
+    GenBuffers(1, &buffer);
+    BindBuffer(GL_ARRAY_BUFFER, buffer);
+
+    constexpr SizeT kCount = 256;
+    Vector<GLint> initial(kCount, 0);
+    BufferStorage(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(kCount * sizeof(GLint)), initial.data(),
+                  GL_MAP_WRITE_BIT | GL_MAP_PERSISTENT_BIT | GL_MAP_COHERENT_BIT);
+    ASSERT_EQ(GetError(), GL_NO_ERROR);
+
+    auto* mapped = static_cast<GLint*>(
+        MapBufferRange(GL_ARRAY_BUFFER, 0, static_cast<GLsizeiptr>(kCount * sizeof(GLint)),
+                       GL_MAP_WRITE_BIT | GL_MAP_PERSISTENT_BIT | GL_MAP_COHERENT_BIT));
+    ASSERT_NE(mapped, nullptr);
+    EXPECT_EQ(mock.acquireMapCalls, 0); // backend declined => shadow-backed map
+
+    auto bufferObject = MG_State::pGLContext->GetBufferObject(buffer);
+    ASSERT_NE(bufferObject, nullptr);
+    EXPECT_FALSE(bufferObject->IsBackendPersistentMapped());
+
+    constexpr int kDraws = 100;
+    for (int draw = 0; draw < kDraws; ++draw) {
+        mapped[draw % kCount] = draw;
+        bufferObject->SyncPersistentMappedRange();
+    }
+    // Legacy behavior: every draw pushed the whole range -> one SubData per draw.
+    EXPECT_EQ(mock.subDataCalls, kDraws);
+
+    EXPECT_TRUE(UnmapBuffer(GL_ARRAY_BUFFER));
+    g_zeroCopyMock = nullptr;
 }

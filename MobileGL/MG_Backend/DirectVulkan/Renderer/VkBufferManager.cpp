@@ -14,6 +14,19 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT;
         constexpr SizeT kLiveResourcePruneThreshold = 256;
 
+        // A zero-copy persistent buffer is created once and never recreated (the app holds
+        // its mapped pointer), and may be bound to any role, so it carries every usage.
+        // TRANSFER_DST is added by CreateResidentStorage.
+        constexpr VkBufferUsageFlags kPersistentBackedUsage =
+            VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT |
+            VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+            VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_UNIFORM_TEXEL_BUFFER_BIT |
+            VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+        // The app writes into the persistent map with no explicit flush, so its memory must
+        // be host-coherent (Adreno host-visible memory is; requiring it keeps us portable).
+        constexpr VkMemoryPropertyFlags kPersistentBackedRequiredFlags =
+            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+
         using MG_State::GLState::BackendBufferResource;
         using MG_State::GLState::BufferBackendOps;
         using MG_State::GLState::BufferObject;
@@ -40,6 +53,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             }
         }
 
+        void* Ops_AcquirePersistentMap(BufferObject& bufferObject) {
+            if (g_activeBufferManager) {
+                return g_activeBufferManager->AcquirePersistentMap(bufferObject);
+            }
+            return nullptr;
+        }
+
         void Ops_OnDestroy(SharedPtr<BackendBufferResource>&& resource) {
             if (g_activeBufferManager) {
                 g_activeBufferManager->OnResourceDestroyed(std::move(resource));
@@ -55,6 +75,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             .SubData = Ops_SubData,
             .FlushMappedRange = Ops_FlushMappedRange,
             .OnDestroy = Ops_OnDestroy,
+            .AcquirePersistentMap = Ops_AcquirePersistentMap,
         };
     } // namespace
 
@@ -211,7 +232,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     }
 
     Bool VkBufferManager::CreateResidentStorage(VkBufferResource& resource, VkDeviceSize size,
-                                                VkBufferUsageFlags usage) {
+                                                VkBufferUsageFlags usage, VkMemoryPropertyFlags requiredFlags) {
         // Staged range copies write resident storage with vkCmdCopyBuffer.
         usage |= VK_BUFFER_USAGE_TRANSFER_DST_BIT;
         const Bool created = resource.buffer.Create({
@@ -220,6 +241,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             .usage = usage,
             .memoryUsage = VMA_MEMORY_USAGE_AUTO,
             .allocationFlags = kResidentBufferAllocationFlags,
+            .requiredFlags = requiredFlags,
         });
         if (!created || resource.buffer.Map() == nullptr) {
             MGLOG_E("VkBufferManager::CreateResidentStorage failed (size=%llu)",
@@ -243,7 +265,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             resource.pendingFullUpload = true;
             return false;
         }
-        if (!resource.buffer.Upload(bufferObject.GetDataReadOnly()->data(), size, 0)) {
+        if (!resource.buffer.Upload(bufferObject.MappedData(), size, 0)) {
             MGLOG_E("VkBufferManager::SwapStorageAndUploadAll: upload failed");
             resource.pendingFullUpload = true;
             return false;
@@ -258,7 +280,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             return false;
         }
         BufferSlice staging{};
-        if (!m_transientUploadArena.Upload(m_currentFrameIndex, bufferObject.GetDataReadOnly()->data() + offset,
+        if (!m_transientUploadArena.Upload(m_currentFrameIndex, bufferObject.MappedData() + offset,
                                            static_cast<VkDeviceSize>(size), 16, staging)) {
             return false;
         }
@@ -318,7 +340,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             return;
         }
 
-        if (!resource->buffer.Upload(bufferObject.GetDataReadOnly()->data(), size, 0)) {
+        if (!resource->buffer.Upload(bufferObject.MappedData(), size, 0)) {
             MGLOG_E("VkBufferManager::OnRespecify: in-place upload failed");
             resource->pendingFullUpload = true;
         }
@@ -339,7 +361,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
 
         if (!IsResourceBusy(*resource)) {
-            if (!resource->buffer.Upload(bufferObject.GetDataReadOnly()->data() + offset,
+            if (!resource->buffer.Upload(bufferObject.MappedData() + offset,
                                          static_cast<VkDeviceSize>(size), static_cast<VkDeviceSize>(offset))) {
                 MGLOG_E("VkBufferManager::OnSubData: host upload failed");
                 resource->pendingFullUpload = true;
@@ -375,7 +397,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // GL_MAP_UNSYNCHRONIZED_BIT: the app guarantees it does not overwrite
         // data the GPU is still reading; honour it with a direct host write.
         if ((appAccess & BufferMappingAccessBit::Unsynchronized) || !IsResourceBusy(*resource)) {
-            if (!resource->buffer.Upload(bufferObject.GetDataReadOnly()->data() + offset,
+            if (!resource->buffer.Upload(bufferObject.MappedData() + offset,
                                          static_cast<VkDeviceSize>(size), static_cast<VkDeviceSize>(offset))) {
                 MGLOG_E("VkBufferManager::OnFlushMappedRange: host upload failed");
                 resource->pendingFullUpload = true;
@@ -407,6 +429,46 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         m_deferredResourceReleases[m_currentFrameIndex].push_back(std::move(vkResource));
     }
 
+    void* VkBufferManager::AcquirePersistentMap(MG_State::GLState::BufferObject& bufferObject) {
+        const VkDeviceSize size = static_cast<VkDeviceSize>(bufferObject.GetSize());
+        if (size == 0) {
+            return nullptr;
+        }
+
+        auto resource = std::static_pointer_cast<VkBufferResource>(bufferObject.GetBackendResource());
+        if (!resource) {
+            resource = MakeShared<VkBufferResource>();
+            bufferObject.SetBackendResource(resource);
+            TrackLiveResource(resource);
+        }
+
+        // Idempotent: an already-backed buffer returns the same mapped base.
+        if (resource->persistentMapped && resource->buffer.IsValid() && resource->storageSize == size) {
+            return resource->buffer.GetMappedData();
+        }
+
+        // One-time creation of HOST_VISIBLE + HOST_COHERENT, persistently mapped storage
+        // carrying every usage (never recreated, so the app's pointer never dangles). Seed
+        // it from the current shadow - MappedData() is still the shadow here because the
+        // frontend adopts (and drops) the shadow only after this returns.
+        DeferRelease(std::move(resource->buffer));
+        if (!CreateResidentStorage(*resource, size, kPersistentBackedUsage, kPersistentBackedRequiredFlags)) {
+            resource->persistentMapped = false;
+            resource->storageSize = 0;
+            resource->usageFlags = 0;
+            return nullptr;
+        }
+        const Uint8* seed = bufferObject.MappedData();
+        if (seed != nullptr) {
+            resource->buffer.Upload(seed, size, 0);
+        }
+        resource->persistentMapped = true;
+        resource->pendingFullUpload = false;
+        resource->storageSize = size;
+        resource->lastUseSerial = 0;
+        return resource->buffer.GetMappedData();
+    }
+
     Bool VkBufferManager::AcquireResidentSlice(BufferKind kind,
                                                const SharedPtr<MG_State::GLState::BufferObject>& bufferObject,
                                                BufferSlice& outSlice) {
@@ -423,6 +485,14 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             return false;
         }
 
+        // Zero-copy persistent buffers already hold the app's live coherent writes in
+        // host-visible storage carrying every usage; bind directly, no re-upload/staging.
+        if (resource->persistentMapped && resource->buffer.IsValid() && resource->storageSize == size) {
+            resource->lastUseSerial = m_frameSerial;
+            outSlice = resource->buffer.GetSlice(0, size);
+            return outSlice.IsValid();
+        }
+
         const Bool needsRecreate = !resource->buffer.IsValid() || resource->storageSize != size ||
                                    ((resource->usageFlags & requiredUsage) != requiredUsage) ||
                                    resource->pendingFullUpload;
@@ -432,7 +502,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             if (!CreateResidentStorage(*resource, size, usage)) {
                 return false;
             }
-            if (!resource->buffer.Upload(bufferObject->GetDataReadOnly()->data(), size, 0)) {
+            if (!resource->buffer.Upload(bufferObject->MappedData(), size, 0)) {
                 MGLOG_E("VkBufferManager::AcquireResidentSlice failed: initial upload failed");
                 resource->buffer.Destroy();
                 resource->storageSize = 0;
@@ -469,7 +539,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             return true;
         }
 
-        if (!m_transientUploadArena.Upload(m_currentFrameIndex, bufferObject->GetDataReadOnly()->data(), size, 16,
+        if (!m_transientUploadArena.Upload(m_currentFrameIndex, bufferObject->MappedData(), size, 16,
                                            outSlice)) {
             return false;
         }

@@ -126,13 +126,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
         auto drawBuffer = MG_State::pGLContext->GetBufferBindingSlot(BufferTarget::DrawIndirect).GetBoundObject();
         if (drawBuffer) {
             drawBuffer->SyncPersistentMappedRange();
-            const auto drawData = drawBuffer->GetDataReadOnly();
             const SizeT commandOffset = reinterpret_cast<SizeT>(indirect);
-            if (!drawData || commandOffset + requiredBytes > drawData->size()) {
+            if (commandOffset + requiredBytes > drawBuffer->GetSize()) {
                 MGLOG_E("%s skipped: invalid GL_DRAW_INDIRECT_BUFFER binding or range", label);
                 return nullptr;
             }
-            return drawData->data() + commandOffset;
+            return drawBuffer->MappedData() + commandOffset;
         }
 
         if (!indirect) {
@@ -1561,25 +1560,23 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
         drawBuffer->SyncPersistentMappedRange();
         parameterBuffer->SyncPersistentMappedRange();
-        const auto drawData = drawBuffer->GetDataReadOnly();
-        const auto parameterData = parameterBuffer->GetDataReadOnly();
 
         const SizeT commandOffset = reinterpret_cast<SizeT>(indirect);
         const SizeT commandBytes = commandOffset + static_cast<SizeT>(stride) * static_cast<SizeT>(maxdrawcount - 1) +
             sizeof(DrawElementsIndirectCommand);
-        if (!drawData || commandBytes > drawData->size()) {
+        if (commandBytes > drawBuffer->GetSize()) {
             MGLOG_E("MultiDrawElementsIndirectCount skipped: invalid GL_DRAW_INDIRECT_BUFFER binding or range");
             return;
         }
-        if (!parameterData || drawcount < 0 || static_cast<SizeT>(drawcount) + sizeof(Uint32) > parameterData->size()) {
+        if (drawcount < 0 || static_cast<SizeT>(drawcount) + sizeof(Uint32) > parameterBuffer->GetSize()) {
             MGLOG_E("MultiDrawElementsIndirectCount skipped: invalid GL_PARAMETER_BUFFER binding or range");
             return;
         }
 
         Uint32 actualDrawCount = 0;
-        std::memcpy(&actualDrawCount, parameterData->data() + drawcount, sizeof(actualDrawCount));
+        std::memcpy(&actualDrawCount, parameterBuffer->MappedData() + drawcount, sizeof(actualDrawCount));
         actualDrawCount = std::min<Uint32>(actualDrawCount, static_cast<Uint32>(maxdrawcount));
-        ExecuteIndexedIndirectCommands(mode, type, indexSize, drawData->data() + commandOffset, commandOffset,
+        ExecuteIndexedIndirectCommands(mode, type, indexSize, drawBuffer->MappedData() + commandOffset, commandOffset,
                                        drawBuffer, static_cast<GLsizei>(actualDrawCount), stride,
                                        "MultiDrawElementsIndirectCount");
     }

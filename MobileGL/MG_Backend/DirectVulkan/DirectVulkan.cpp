@@ -253,13 +253,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             auto drawBuffer = MG_State::pGLContext->GetBufferBindingSlot(BufferTarget::DrawIndirect).GetBoundObject();
             if (drawBuffer) {
                 drawBuffer->SyncPersistentMappedRange();
-                const auto drawData = drawBuffer->GetDataReadOnly();
                 const SizeT commandOffset = reinterpret_cast<SizeT>(indirect);
-                if (!drawData || commandOffset + requiredBytes > drawData->size()) {
+                if (drawBuffer->MappedData() == nullptr || commandOffset + requiredBytes > drawBuffer->GetSize()) {
                     MGLOG_E("%s skipped: invalid GL_DRAW_INDIRECT_BUFFER binding or range", label);
                     return nullptr;
                 }
-                return drawData->data() + commandOffset;
+                return drawBuffer->MappedData() + commandOffset;
             }
 
             if (!indirect) {
@@ -514,14 +513,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
 
         parameterBuffer->SyncPersistentMappedRange();
-        const auto parameterData = parameterBuffer->GetDataReadOnly();
-        if (!parameterData) {
+        if (parameterBuffer->MappedData() == nullptr) {
             MGLOG_E("MultiDrawArraysIndirectCount skipped: CPU fallback cannot read parameter buffer");
             return;
         }
 
         Uint32 actualDrawCount = 0;
-        std::memcpy(&actualDrawCount, parameterData->data() + drawcount, sizeof(actualDrawCount));
+        std::memcpy(&actualDrawCount, parameterBuffer->MappedData() + drawcount, sizeof(actualDrawCount));
         actualDrawCount = std::min<Uint32>(actualDrawCount, static_cast<Uint32>(maxdrawcount));
         MultiDrawArraysIndirect(mode, indirect, static_cast<GLsizei>(actualDrawCount), stride);
     }

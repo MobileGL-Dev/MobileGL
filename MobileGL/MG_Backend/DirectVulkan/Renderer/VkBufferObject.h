@@ -20,6 +20,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         VkBufferUsageFlags usage = 0;
         VmaMemoryUsage memoryUsage = VMA_MEMORY_USAGE_AUTO;
         VmaAllocationCreateFlags allocationFlags = 0;
+        // Memory property bits the allocation MUST satisfy (e.g. HOST_VISIBLE|HOST_COHERENT
+        // for a persistently-mapped buffer the app writes into without explicit flushes).
+        VkMemoryPropertyFlags requiredFlags = 0;
     };
 
     class VkBufferObject {
@@ -34,7 +37,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
         Bool Create(const VkBufferObjectDesc& desc);
         Bool Create(VmaAllocator allocator, VkDeviceSize size, VkBufferUsageFlags usage,
-                    VmaMemoryUsage memoryUsage, VmaAllocationCreateFlags allocationFlags = 0);
+                    VmaMemoryUsage memoryUsage, VmaAllocationCreateFlags allocationFlags = 0,
+                    VkMemoryPropertyFlags requiredFlags = 0);
         void Destroy();
 
         void* Map();

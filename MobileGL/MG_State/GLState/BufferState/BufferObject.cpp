@@ -24,12 +24,11 @@ namespace MobileGL::MG_State::GLState {
 
     BufferObject::BufferObject(Uint externalIndex)
         : m_externalIndex(externalIndex), m_size(0), m_usage(BufferUsage::StaticDraw), m_isMapped(false),
-          m_mappingAccess(BufferMappingAccessBit::Null), m_mappedRange({0, 0}), m_dataPtr(MakeShared<Data>()),
-          m_ownsStagingData{} {}
+          m_mappingAccess(BufferMappingAccessBit::Null), m_mappedRange({0, 0}), m_ownsStagingData{} {}
 
     BufferObject::~BufferObject() {
-        if (m_backendResource && g_bufferBackendOps && g_bufferBackendOps->OnDestroy) {
-            g_bufferBackendOps->OnDestroy(std::move(m_backendResource));
+        if (m_resource.Backend() && g_bufferBackendOps && g_bufferBackendOps->OnDestroy) {
+            g_bufferBackendOps->OnDestroy(m_resource.ReleaseBackend());
         }
     }
 
@@ -56,13 +55,22 @@ namespace MobileGL::MG_State::GLState {
         }
     }
 
+    void BufferObject::NotifyContentWrite(SizeT offset, SizeT size) {
+        if (m_resource.IsGpuResident()) {
+            // The write already landed in coherent GPU memory; the backend has no separate
+            // copy to sync. Only bump the serial so cached transient slices invalidate.
+            ++m_changeSerial;
+            return;
+        }
+        NotifySubData(offset, size);
+    }
+
     void BufferObject::Respecify(SizeT size, const void* data) {
         ReleaseMemory();
         m_size = size;
-        m_dataPtr->reserve(std::bit_ceil(size)); // power-of-2 reserve
-        m_dataPtr->resize(size);
+        m_resource.ResizeShadow(size);
         if (data && size > 0) {
-            Memcpy(m_dataPtr->data(), data, size);
+            Memcpy(m_resource.Bytes(), data, size);
         }
         m_isImmutableStorage = false;
         m_storageFlags = 0;
@@ -76,12 +84,11 @@ namespace MobileGL::MG_State::GLState {
     void BufferObject::AllocateImmutableStorage(SizeT size, const void* data, GLbitfield storageFlags) {
         ReleaseMemory();
         m_size = size;
-        m_dataPtr->reserve(std::bit_ceil(size));
-        m_dataPtr->resize(size);
+        m_resource.ResizeShadow(size);
         if (data) {
-            Memcpy(m_dataPtr->data(), data, size);
+            Memcpy(m_resource.Bytes(), data, size);
         } else if (size > 0) {
-            Memset(m_dataPtr->data(), 0, size);
+            Memset(m_resource.Bytes(), 0, size);
         }
         m_isImmutableStorage = true;
         m_storageFlags = storageFlags;
@@ -94,8 +101,8 @@ namespace MobileGL::MG_State::GLState {
                         data.size, m_size);
         MOBILEGL_ASSERT(!m_isMapped || (m_mappingAccess & BufferMappingAccessBit::Persistent),
                         "Cannot upload data while buffer is non-persistently mapped.");
-        Memcpy(m_dataPtr->data() + atOffset, data.data, data.size);
-        NotifySubData(atOffset, data.size);
+        Memcpy(m_resource.Bytes() + atOffset, data.data, data.size);
+        NotifyContentWrite(atOffset, data.size);
     }
 
     void BufferObject::SetUsage(BufferUsage usage) {
@@ -105,10 +112,13 @@ namespace MobileGL::MG_State::GLState {
     void BufferObject::ReleaseMemory() {
         if (!m_isMapped) return;
 
-        if (m_mappingAccess & BufferMappingAccessBit::Write) {                // if we wrote to the buffer
-            if (!(m_mappingAccess & BufferMappingAccessBit::FlushExplicit)) { // if we didn't flush explicitly
+        if (m_mappingAccess & BufferMappingAccessBit::Write) { // if we wrote to the buffer
+            // A persistent GPU-resident map wrote straight into coherent GPU memory, so
+            // there is nothing to copy back and no range to push down on unmap.
+            if (!m_resource.IsGpuResident() &&
+                !(m_mappingAccess & BufferMappingAccessBit::FlushExplicit)) { // if we didn't flush explicitly
                 if (!(m_mappingAccess & BufferMappingAccessBit::Persistent)) {
-                    Memcpy(m_dataPtr->data() + m_mappedRange.start, m_stagingData.data(),
+                    Memcpy(m_resource.Bytes() + m_mappedRange.start, m_stagingData.data(),
                            m_mappedRange.end - m_mappedRange.start);
                 }
                 NotifyFlushMappedRange(m_mappedRange, m_mappingAccess);
@@ -135,14 +145,20 @@ namespace MobileGL::MG_State::GLState {
         MOBILEGL_ASSERT(end <= m_mappedRange.end, "Flush range out of bounds: mappedRange.end (%zu) < end (%zu)",
                         m_mappedRange.end, end);
 
+        // FLUSH_EXPLICIT maps are never GPU-resident (only coherent maps are adopted), so
+        // the staged bytes must be copied into the shadow before the backend reads them.
         if (!(m_mappingAccess & BufferMappingAccessBit::Persistent)) {
-            Memcpy(m_dataPtr->data() + start, m_stagingData.data() + offset, length);
+            Memcpy(m_resource.Bytes() + start, m_stagingData.data() + offset, length);
         }
         NotifyFlushMappedRange({start, end}, m_mappingAccess);
     }
 
     void BufferObject::SyncPersistentMappedRange() {
         if (!m_isMapped) return;
+        // GPU-resident: the app already wrote directly into coherent GPU memory. This is
+        // the whole point of the persistent-map path - the per-draw whole-buffer re-upload
+        // that used to run here is gone.
+        if (m_resource.IsGpuResident()) return;
         if (!(m_mappingAccess & BufferMappingAccessBit::Persistent)) return;
         if (!(m_mappingAccess & BufferMappingAccessBit::Write)) return;
         if (m_mappingAccess & BufferMappingAccessBit::FlushExplicit) return;
@@ -153,6 +169,8 @@ namespace MobileGL::MG_State::GLState {
 
     void BufferObject::SyncMappedRangeForGpuRead(Range1D range) {
         if (!m_isMapped) return;
+        // GPU-resident maps already alias GPU-visible memory; nothing to push.
+        if (m_resource.IsGpuResident()) return;
         if (!(m_mappingAccess & BufferMappingAccessBit::Persistent)) return;
         if (!(m_mappingAccess & BufferMappingAccessBit::Write)) return;
         // Non-FLUSH_EXPLICIT persistent maps are already covered wholesale by
@@ -170,7 +188,7 @@ namespace MobileGL::MG_State::GLState {
         MOBILEGL_ASSERT(atOffset + data.size <= m_size,
                         "WritebackFromBackend out of bounds: atOffset (%zu) + data.size (%zu) > m_size (%zu)", atOffset,
                         data.size, m_size);
-        Memcpy(m_dataPtr->data() + atOffset, data.data, data.size);
+        Memcpy(m_resource.Bytes() + atOffset, data.data, data.size);
         ++m_changeSerial;
     }
 
@@ -181,15 +199,15 @@ namespace MobileGL::MG_State::GLState {
                         "UploadSubData out of bounds: atOffset (%zu) + data.size (%zu) > m_size (%zu)", atOffset,
                         data.size, m_size);
 
-        Memcpy(m_dataPtr->data() + atOffset, data.data, data.size);
-        NotifySubData(atOffset, data.size);
+        Memcpy(m_resource.Bytes() + atOffset, data.data, data.size);
+        NotifyContentWrite(atOffset, data.size);
     }
 
     void BufferObject::DownloadSubData(void* dst, SizeT atOffset, SizeT size) const {
         MOBILEGL_ASSERT(atOffset + size <= m_size,
                         "DownloadSubData out of bounds: atOffset (%zu) + size (%zu) > m_size (%zu)", atOffset, size,
                         m_size);
-        Memcpy(dst, m_dataPtr->data() + atOffset, size);
+        Memcpy(dst, m_resource.Bytes() + atOffset, size);
     }
 
     void BufferObject::CopyDataFrom(const SharedPtr<BufferObject>& src, SizeT srcOffset, SizeT dstOffset, SizeT size) {
@@ -204,9 +222,8 @@ namespace MobileGL::MG_State::GLState {
                         "Destination buffer copy out of bounds: dstOffset (%zu) + size (%zu) > m_size (%zu)", dstOffset,
                         size, m_size);
 
-        const Uint8* srcData = src->m_dataPtr->data() + srcOffset;
-        Memcpy(m_dataPtr->data() + dstOffset, srcData, size);
-        NotifySubData(dstOffset, size);
+        Memcpy(m_resource.Bytes() + dstOffset, src->m_resource.Bytes() + srcOffset, size);
+        NotifyContentWrite(dstOffset, size);
     }
 
     void* BufferObject::AcquireMemory(Bool markMapped, Bool read, Bool write) {
@@ -222,14 +239,14 @@ namespace MobileGL::MG_State::GLState {
 
                 if (!(m_mappingAccess &
                       (BufferMappingAccessBit::InvalidateRange | BufferMappingAccessBit::InvalidateBuffer))) {
-                    Memcpy(m_stagingData.data(), m_dataPtr->data(), m_size);
+                    Memcpy(m_stagingData.data(), m_resource.Bytes(), m_size);
                 }
 
                 return m_stagingData.data();
             }
         }
 
-        return m_dataPtr->data();
+        return m_resource.Bytes();
     }
 
     void* BufferObject::AcquireMemoryRange(Range1D range, Flags<BufferMappingAccessBit> access) {
@@ -242,7 +259,20 @@ namespace MobileGL::MG_State::GLState {
 
         if (access & BufferMappingAccessBit::Persistent) {
             m_ownsStagingData = false;
-            return m_dataPtr->data() + range.start;
+            // Zero-copy: for a coherent (non-FLUSH_EXPLICIT) persistent write map, ask the
+            // active backend for host-visible, coherent GPU storage and adopt it as the
+            // single source of truth. The backend seeds it from the current shadow before
+            // returning; AdoptPersistentMap then releases the shadow. Falls back to the
+            // shadow when the backend declines (returns null). Only attempted once - the
+            // storage is immutable and outlives unmap/remap.
+            if (!m_resource.IsGpuResident() && (access & BufferMappingAccessBit::Write) &&
+                !(access & BufferMappingAccessBit::FlushExplicit) && g_bufferBackendOps &&
+                g_bufferBackendOps->AcquirePersistentMap) {
+                if (void* base = g_bufferBackendOps->AcquirePersistentMap(*this)) {
+                    m_resource.AdoptPersistentMap(base);
+                }
+            }
+            return m_resource.Bytes() + range.start;
         }
 
         if (access & BufferMappingAccessBit::Write) {
@@ -250,18 +280,22 @@ namespace MobileGL::MG_State::GLState {
             m_ownsStagingData = true;
 
             if (!(access & (BufferMappingAccessBit::InvalidateRange | BufferMappingAccessBit::InvalidateBuffer))) {
-                Memcpy(m_stagingData.data(), m_dataPtr->data() + range.start, m_stagingData.size());
+                Memcpy(m_stagingData.data(), m_resource.Bytes() + range.start, m_stagingData.size());
             }
 
             return m_stagingData.data();
         } else {
             m_ownsStagingData = false;
-            return m_dataPtr->data() + range.start;
+            return m_resource.Bytes() + range.start;
         }
     }
 
-    const SharedPtr<Data>& BufferObject::GetDataReadOnly() const {
-        return m_dataPtr;
+    const Uint8* BufferObject::MappedData() const {
+        return m_resource.Bytes();
+    }
+
+    Bool BufferObject::IsBackendPersistentMapped() const {
+        return m_resource.IsGpuResident();
     }
 
     SizeT BufferObject::GetSize() const {
@@ -281,11 +315,11 @@ namespace MobileGL::MG_State::GLState {
     }
 
     const SharedPtr<BackendBufferResource>& BufferObject::GetBackendResource() const {
-        return m_backendResource;
+        return m_resource.Backend();
     }
 
     void BufferObject::SetBackendResource(SharedPtr<BackendBufferResource> resource) {
-        m_backendResource = std::move(resource);
+        m_resource.SetBackend(std::move(resource));
     }
 
     Bool BufferObject::IsMapped() const {
@@ -299,12 +333,14 @@ namespace MobileGL::MG_State::GLState {
     void* BufferObject::GetMappedPointer() const {
         if (!m_isMapped) return nullptr;
         if (m_mappingAccess & BufferMappingAccessBit::Persistent) {
-            return const_cast<Uint8*>(m_dataPtr->data()) + m_mappedRange.start;
+            // GPU-resident maps return the coherent GPU pointer; shadow-backed persistent
+            // maps return the shadow. m_resource.Bytes() resolves both.
+            return const_cast<Uint8*>(m_resource.Bytes()) + m_mappedRange.start;
         }
         if (m_ownsStagingData) {
             return const_cast<Uint8*>(m_stagingData.data());
         }
-        return const_cast<Uint8*>(m_dataPtr->data()) + m_mappedRange.start;
+        return const_cast<Uint8*>(m_resource.Bytes()) + m_mappedRange.start;
     }
 
     Flags<BufferMappingAccessBit> BufferObject::GetMappingAccess() const {
