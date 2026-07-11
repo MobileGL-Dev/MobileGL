@@ -352,6 +352,26 @@ namespace MobileGL::MG_State {
             return m_renderState.GetPointSpriteCoordOrigin();
         }
 
+        void GLContext::SetClampReadColor(GLenum clamp) {
+            m_renderState.SetClampReadColor(clamp);
+        }
+
+        GLenum GLContext::GetClampReadColor() const {
+            return m_renderState.GetClampReadColor();
+        }
+
+        void GLContext::SetPolygonMode(GLenum front, GLenum back) {
+            m_renderState.SetPolygonMode(front, back);
+        }
+
+        GLenum GLContext::GetPolygonModeFront() const {
+            return m_renderState.GetPolygonModeFront();
+        }
+
+        GLenum GLContext::GetPolygonModeBack() const {
+            return m_renderState.GetPolygonModeBack();
+        }
+
         void GLContext::SetPointSize(Float size) {
             m_renderState.SetPointSize(size);
         }

@@ -193,7 +193,28 @@ namespace MobileGL::MG_Impl::GLImpl {
     }
 
     void PolygonMode_State(GLenum face, GLenum mode) {
-        // TODO: implement
+        // GL 3.3 core: separate front/back polygon modes were removed in 3.1, so the only legal
+        // face is GL_FRONT_AND_BACK. GL_FRONT / GL_BACK must be rejected (some desktop drivers
+        // leniently accept them, but that is non-conformant). Both errors are GL_INVALID_ENUM and
+        // leave state untouched.
+        if (face != GL_FRONT_AND_BACK) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidEnum,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
+                                             "glPolygonMode face must be GL_FRONT_AND_BACK in the core profile; got " +
+                                                 MG_Util::ConvertGLEnumToString(face) + "."));
+            return;
+        }
+        if (mode != GL_POINT && mode != GL_LINE && mode != GL_FILL) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidEnum,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
+                                             "glPolygonMode mode must be GL_POINT, GL_LINE, or GL_FILL; got " +
+                                                 MG_Util::ConvertGLEnumToString(mode) + "."));
+            return;
+        }
+        // Core sets both faces together; keep two slots so GL_POLYGON_MODE round-trips its two values.
+        MG_State::pGLContext->SetPolygonMode(mode, mode);
     }
 
     void PointSize_State(GLfloat size) {
@@ -503,7 +524,30 @@ namespace MobileGL::MG_Impl::GLImpl {
     }
 
     void ClampColor_State(GLenum target, GLenum clamp) {
-        // TODO: implement
+        // GL 3.3 core: the only legal target is GL_CLAMP_READ_COLOR. The compatibility-only
+        // GL_CLAMP_VERTEX_COLOR / GL_CLAMP_FRAGMENT_COLOR were removed from the core profile and
+        // must be rejected.
+        if (target != GL_CLAMP_READ_COLOR) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidEnum,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
+                                             "glClampColor target must be GL_CLAMP_READ_COLOR in the core profile; "
+                                             "got " +
+                                                 MG_Util::ConvertGLEnumToString(target) + "."));
+            return;
+        }
+        // clamp must be one of GL_TRUE, GL_FALSE, or GL_FIXED_ONLY. NOTE: the Khronos man page's
+        // Errors section wrongly omits GL_FIXED_ONLY, but the spec lists it as legal AND it is the
+        // default value, so it must be accepted here.
+        if (clamp != GL_TRUE && clamp != GL_FALSE && clamp != GL_FIXED_ONLY) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidEnum,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
+                                             "glClampColor clamp must be GL_TRUE, GL_FALSE, or GL_FIXED_ONLY; got " +
+                                                 MG_Util::ConvertGLEnumToString(clamp) + "."));
+            return;
+        }
+        MG_State::pGLContext->SetClampReadColor(clamp);
     }
 
     void BlendFuncSeparate_State(GLenum sfactorRGB, GLenum dfactorRGB, GLenum sfactorAlpha, GLenum dfactorAlpha) {

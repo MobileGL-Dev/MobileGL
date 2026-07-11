@@ -761,3 +761,93 @@ TEST(RenderStateSanity, GetDoublevMatchesGetFloatvWidened) {
 
     MG_State::pGLContext.reset();
 }
+
+TEST(RenderStateSanity, ClampColorStoresAndReadsBack) {
+    using namespace MobileGL;
+    using namespace MobileGL::MG_Impl::GLImpl;
+    MG_State::pGLContext = MakeUnique<MG_State::GLState::GLContext>();
+
+    // Default GL_CLAMP_READ_COLOR is GL_FIXED_ONLY (NOT GL_TRUE/GL_FALSE). glGetIntegerv is the only
+    // getter that faithfully round-trips the tri-state.
+    GLint value = -1;
+    GetIntegerv(GL_CLAMP_READ_COLOR, &value);
+    EXPECT_EQ(value, GL_FIXED_ONLY);
+
+    // All three legal clamp values round-trip.
+    ClampColor(GL_CLAMP_READ_COLOR, GL_TRUE);
+    EXPECT_EQ(GetError(), GL_NO_ERROR);
+    GetIntegerv(GL_CLAMP_READ_COLOR, &value);
+    EXPECT_EQ(value, GL_TRUE);
+
+    ClampColor(GL_CLAMP_READ_COLOR, GL_FALSE);
+    GetIntegerv(GL_CLAMP_READ_COLOR, &value);
+    EXPECT_EQ(value, GL_FALSE);
+
+    // GL_FIXED_ONLY MUST be accepted: the Khronos man page's Errors section wrongly omits it, but the
+    // spec lists it as legal and it is the default. A man-page-faithful implementation would reject
+    // this call -- this assertion is the guard against that regression.
+    ClampColor(GL_CLAMP_READ_COLOR, GL_FIXED_ONLY);
+    EXPECT_EQ(GetError(), GL_NO_ERROR);
+    GetIntegerv(GL_CLAMP_READ_COLOR, &value);
+    EXPECT_EQ(value, GL_FIXED_ONLY);
+
+    // glGetBooleanv converts nonzero to GL_TRUE, so GL_FIXED_ONLY reads back as GL_TRUE (and cannot be
+    // distinguished from GL_TRUE); only GL_FALSE reads GL_FALSE.
+    GLboolean b = GL_FALSE;
+    GetBooleanv(GL_CLAMP_READ_COLOR, &b);
+    EXPECT_EQ(b, GL_TRUE);
+    ClampColor(GL_CLAMP_READ_COLOR, GL_FALSE);
+    GetBooleanv(GL_CLAMP_READ_COLOR, &b);
+    EXPECT_EQ(b, GL_FALSE);
+
+    // Errors leave state unchanged. A non-GL_CLAMP_READ_COLOR target (here GL_FRONT, standing in for
+    // any illegal/compat target) and a bad clamp value both raise GL_INVALID_ENUM.
+    ClampColor(GL_FRONT, GL_TRUE);
+    EXPECT_EQ(GetError(), GL_INVALID_ENUM);
+    ClampColor(GL_CLAMP_READ_COLOR, GL_NICEST);
+    EXPECT_EQ(GetError(), GL_INVALID_ENUM);
+    GetIntegerv(GL_CLAMP_READ_COLOR, &value);
+    EXPECT_EQ(value, GL_FALSE); // unchanged by the failed calls
+
+    MG_State::pGLContext.reset();
+}
+
+TEST(RenderStateSanity, PolygonModeStoresAndReadsBack) {
+    using namespace MobileGL;
+    using namespace MobileGL::MG_Impl::GLImpl;
+    MG_State::pGLContext = MakeUnique<MG_State::GLState::GLContext>();
+
+    // GL_POLYGON_MODE reports TWO values (front, back); default GL_FILL for both.
+    GLint mode[2] = {-1, -1};
+    GetIntegerv(GL_POLYGON_MODE, mode);
+    EXPECT_EQ(mode[0], GL_FILL);
+    EXPECT_EQ(mode[1], GL_FILL);
+
+    // Core sets both faces together; each legal mode round-trips into both slots.
+    PolygonMode(GL_FRONT_AND_BACK, GL_LINE);
+    EXPECT_EQ(GetError(), GL_NO_ERROR);
+    GetIntegerv(GL_POLYGON_MODE, mode);
+    EXPECT_EQ(mode[0], GL_LINE);
+    EXPECT_EQ(mode[1], GL_LINE);
+
+    PolygonMode(GL_FRONT_AND_BACK, GL_POINT);
+    GetIntegerv(GL_POLYGON_MODE, mode);
+    EXPECT_EQ(mode[0], GL_POINT);
+    EXPECT_EQ(mode[1], GL_POINT);
+
+    // Core rejects separate faces: GL_FRONT/GL_BACK were removed in 3.1 core -> GL_INVALID_ENUM, no
+    // state change. (Some desktop drivers leniently accept them; this guards against copying that.)
+    PolygonMode(GL_FRONT, GL_FILL);
+    EXPECT_EQ(GetError(), GL_INVALID_ENUM);
+    PolygonMode(GL_BACK, GL_FILL);
+    EXPECT_EQ(GetError(), GL_INVALID_ENUM);
+    // A bad mode also raises GL_INVALID_ENUM.
+    PolygonMode(GL_FRONT_AND_BACK, GL_LINEAR);
+    EXPECT_EQ(GetError(), GL_INVALID_ENUM);
+
+    GetIntegerv(GL_POLYGON_MODE, mode);
+    EXPECT_EQ(mode[0], GL_POINT); // unchanged by the failed calls
+    EXPECT_EQ(mode[1], GL_POINT);
+
+    MG_State::pGLContext.reset();
+}

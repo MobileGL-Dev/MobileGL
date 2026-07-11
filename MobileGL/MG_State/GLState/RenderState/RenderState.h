@@ -260,6 +260,14 @@ namespace MobileGL {
         Float PointFadeThresholdSize = 1.0f;
         GLenum PointSpriteCoordOrigin = GL_UPPER_LEFT;
 
+        // Color clamping (glClampColor). Core profile exposes only GL_CLAMP_READ_COLOR.
+        GLenum ClampReadColor = GL_FIXED_ONLY;
+
+        // Polygon rasterization mode (glPolygonMode). Core profile sets front and back together,
+        // but GL_POLYGON_MODE still reports both slots, so keep them separate for a faithful query.
+        GLenum PolygonModeFront = GL_FILL;
+        GLenum PolygonModeBack = GL_FILL;
+
         // Scissor
         Bool ColorLogicOpEnabled = false;
         Bool DebugOutputEnabled = false;
@@ -310,6 +318,13 @@ namespace MobileGL {
                 Float GetPointFadeThresholdSize() const;
                 void SetPointSpriteCoordOrigin(GLenum origin);
                 GLenum GetPointSpriteCoordOrigin() const;
+                // Color clamping (glClampColor). Core profile has only GL_CLAMP_READ_COLOR.
+                void SetClampReadColor(GLenum clamp);
+                GLenum GetClampReadColor() const;
+                // Polygon mode (glPolygonMode). Core sets both faces together; the query reports both.
+                void SetPolygonMode(GLenum front, GLenum back);
+                GLenum GetPolygonModeFront() const;
+                GLenum GetPolygonModeBack() const;
 
                 // Capabilities
                 void SetCapability(CapabilityInput cap, Bool enabled);

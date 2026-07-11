@@ -952,6 +952,12 @@ namespace MobileGL::MG_Impl::GLImpl {
             *params = static_cast<GLint>(MG_Util::ConvertBlendFactorToGLEnum(srcRGB));
             return;
         }
+        case GL_CLAMP_READ_COLOR:
+            // Tri-state enum (GL_TRUE / GL_FALSE / GL_FIXED_ONLY). glGetIntegerv returns the raw
+            // enum; GetFloatv/GetDoublev widen it and GetBooleanv converts nonzero to GL_TRUE, so
+            // this single case serves every getter flavor.
+            *params = static_cast<GLint>(MG_State::pGLContext->GetClampReadColor());
+            return;
         case GL_COLOR_CLEAR_VALUE: {
             const FloatVec4& clearColor = MG_State::pGLContext->GetClearColor();
             params[0] = static_cast<GLint>(clearColor.x());
@@ -1364,8 +1370,8 @@ namespace MobileGL::MG_Impl::GLImpl {
             *params = static_cast<GLint>(MG_State::pGLContext->GetPointSize());
             return;
         case GL_POLYGON_MODE:
-            params[0] = GL_FILL;
-            params[1] = GL_FILL;
+            params[0] = static_cast<GLint>(MG_State::pGLContext->GetPolygonModeFront());
+            params[1] = static_cast<GLint>(MG_State::pGLContext->GetPolygonModeBack());
             return;
         case GL_POLYGON_OFFSET_FACTOR:
             *params = static_cast<GLint>(MG_State::pGLContext->GetPolygonOffsetFactor());

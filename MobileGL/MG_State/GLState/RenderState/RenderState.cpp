@@ -103,6 +103,31 @@ namespace MobileGL {
                 return m_parameters.PointSpriteCoordOrigin;
             }
 
+            void RenderState::SetClampReadColor(GLenum clamp) {
+                if (m_parameters.ClampReadColor == clamp) return;
+                m_parameters.ClampReadColor = clamp;
+                ++m_version;
+            }
+
+            GLenum RenderState::GetClampReadColor() const {
+                return m_parameters.ClampReadColor;
+            }
+
+            void RenderState::SetPolygonMode(GLenum front, GLenum back) {
+                if (m_parameters.PolygonModeFront == front && m_parameters.PolygonModeBack == back) return;
+                m_parameters.PolygonModeFront = front;
+                m_parameters.PolygonModeBack = back;
+                ++m_version;
+            }
+
+            GLenum RenderState::GetPolygonModeFront() const {
+                return m_parameters.PolygonModeFront;
+            }
+
+            GLenum RenderState::GetPolygonModeBack() const {
+                return m_parameters.PolygonModeBack;
+            }
+
             void RenderState::SetPointSize(Float size) {
                 if (m_parameters.PointSize == size) return;
 
