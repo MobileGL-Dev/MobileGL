@@ -12,6 +12,7 @@
 #include <MG_State/GLState/Core.h>
 #include <MG_State/GLState/ErrorState/Error.h>
 #include <MG_Util/Converters/GLToMG/DataTypeConverter.h>
+#include <MG_Util/Converters/GLToStr/GLEnumConverter.h>
 #include <MG_Util/Converters/MGToGL/DataTypeConverter.h>
 
 namespace MobileGL::MG_Impl::GLImpl {
@@ -40,6 +41,41 @@ namespace MobileGL::MG_Impl::GLImpl {
             return static_cast<GLfloat>(static_cast<double>(c) / 4294967295.0);
         }
         // (b = 8 unsigned normalization is VertexAttrib4Nub's  x * (1/255).)
+
+        // Sign-extend a `bits`-wide two's-complement field held in the low bits of `field`.
+        constexpr GLint SignExtendField(GLuint field, int bits) {
+            const GLuint signBit = 1u << (bits - 1);
+            return (field & signBit) ? static_cast<GLint>(field | (~0u << bits)) : static_cast<GLint>(field);
+        }
+
+        // Decode one GL_INT_/GL_UNSIGNED_INT_2_10_10_10_REV packed word into four float components.
+        // The _REV layout packs x in bits [0..9], y in [10..19], z in [20..29], w in [30..31]; x/y/z
+        // are 10-bit fields and w is a 2-bit field. Signed fields are two's-complement, and normalized
+        // conversion uses the GL 3.3 (2c+1)/(2^b-1) form (matching NormalizeSigned* above), NOT the
+        // GL 4.2 clamp form.
+        Array<GLfloat, 4> DecodePacked2101010(GLuint value, bool signedType, bool normalized) {
+            const GLuint fx = value & 0x3FFu;
+            const GLuint fy = (value >> 10) & 0x3FFu;
+            const GLuint fz = (value >> 20) & 0x3FFu;
+            const GLuint fw = (value >> 30) & 0x3u;
+            if (signedType) {
+                const GLint sx = SignExtendField(fx, 10);
+                const GLint sy = SignExtendField(fy, 10);
+                const GLint sz = SignExtendField(fz, 10);
+                const GLint sw = SignExtendField(fw, 2);
+                if (normalized) {
+                    return {(2 * sx + 1) / 1023.0f, (2 * sy + 1) / 1023.0f, (2 * sz + 1) / 1023.0f,
+                            (2 * sw + 1) / 3.0f};
+                }
+                return {static_cast<GLfloat>(sx), static_cast<GLfloat>(sy), static_cast<GLfloat>(sz),
+                        static_cast<GLfloat>(sw)};
+            }
+            if (normalized) {
+                return {fx / 1023.0f, fy / 1023.0f, fz / 1023.0f, fw / 3.0f};
+            }
+            return {static_cast<GLfloat>(fx), static_cast<GLfloat>(fy), static_cast<GLfloat>(fz),
+                    static_cast<GLfloat>(fw)};
+        }
 
         static bool ValidateCurrentVertexAttribIndex(GLuint index, const char* funcName) {
             if (!VertexArrayImpl::ValidateVertexAttributeIndex(index)) return false;
@@ -497,6 +533,87 @@ namespace MobileGL::MG_Impl::GLImpl {
             return;
         }
         VertexAttribI4ui(index, v[0], v[1], v[2], v[3]);
+    }
+
+    // Shared body for glVertexAttribP{1,2,3,4}ui(v). These set the CURRENT generic vertex attribute
+    // value (they are the packed members of the immediate VertexAttrib* family, not the array-format
+    // path), so they take the float current-value funnel. The single packed word is always fully
+    // decoded, but only the first `componentCount` components are written; the rest keep the generic
+    // attribute defaults (0, 0, 0, 1). type must be one of the two 2_10_10_10_REV packed enums.
+    static void VertexAttribP_Common(GLuint index, GLenum type, GLboolean normalized, GLuint value,
+                                     int componentCount, const char* funcName) {
+        if (!ValidateCurrentVertexAttribIndex(index, funcName)) return;
+
+        bool signedType;
+        if (type == GL_INT_2_10_10_10_REV) {
+            signedType = true;
+        } else if (type == GL_UNSIGNED_INT_2_10_10_10_REV) {
+            signedType = false;
+        } else {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidEnum,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", funcName,
+                                             "glVertexAttribP*ui type must be GL_INT_2_10_10_10_REV or "
+                                             "GL_UNSIGNED_INT_2_10_10_10_REV; got " +
+                                                 MG_Util::ConvertGLEnumToString(type) + "."));
+            return;
+        }
+
+        const Array<GLfloat, 4> decoded = DecodePacked2101010(value, signedType, normalized == GL_TRUE);
+        Array<GLfloat, 4> out = {0.0f, 0.0f, 0.0f, 1.0f};
+        for (int i = 0; i < componentCount; ++i) out[i] = decoded[i];
+        MG_State::pGLContext->SetCurrentVertexAttributeFloat(index, out);
+    }
+
+    void VertexAttribP1ui(GLuint index, GLenum type, GLboolean normalized, GLuint value) {
+        VertexAttribP_Common(index, type, normalized, value, 1, __func__);
+    }
+    void VertexAttribP2ui(GLuint index, GLenum type, GLboolean normalized, GLuint value) {
+        VertexAttribP_Common(index, type, normalized, value, 2, __func__);
+    }
+    void VertexAttribP3ui(GLuint index, GLenum type, GLboolean normalized, GLuint value) {
+        VertexAttribP_Common(index, type, normalized, value, 3, __func__);
+    }
+    void VertexAttribP4ui(GLuint index, GLenum type, GLboolean normalized, GLuint value) {
+        VertexAttribP_Common(index, type, normalized, value, 4, __func__);
+    }
+
+    // The *uiv forms dereference a pointer to a SINGLE packed GLuint (never an array of N words).
+    void VertexAttribP1uiv(GLuint index, GLenum type, GLboolean normalized, const GLuint* value) {
+        if (!value) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidValue,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__, "value pointer cannot be null."));
+            return;
+        }
+        VertexAttribP_Common(index, type, normalized, value[0], 1, __func__);
+    }
+    void VertexAttribP2uiv(GLuint index, GLenum type, GLboolean normalized, const GLuint* value) {
+        if (!value) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidValue,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__, "value pointer cannot be null."));
+            return;
+        }
+        VertexAttribP_Common(index, type, normalized, value[0], 2, __func__);
+    }
+    void VertexAttribP3uiv(GLuint index, GLenum type, GLboolean normalized, const GLuint* value) {
+        if (!value) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidValue,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__, "value pointer cannot be null."));
+            return;
+        }
+        VertexAttribP_Common(index, type, normalized, value[0], 3, __func__);
+    }
+    void VertexAttribP4uiv(GLuint index, GLenum type, GLboolean normalized, const GLuint* value) {
+        if (!value) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidValue,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__, "value pointer cannot be null."));
+            return;
+        }
+        VertexAttribP_Common(index, type, normalized, value[0], 4, __func__);
     }
 
     void VertexAttrib4Nub(GLuint index, GLubyte x, GLubyte y, GLubyte z, GLubyte w) {

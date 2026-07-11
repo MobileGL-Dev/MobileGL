@@ -1012,3 +1012,118 @@ TEST_F(GeneralVertexArrayTest, CurrentAttrib_GetVertexAttribdv) {
     EXPECT_DOUBLE_EQ(d2[0], 9.0);
 }
 
+// Family E: packed glVertexAttribP*ui. The _REV layout packs x in bits [0..9], y in [10..19],
+// z in [20..29], w in [30..31]; x/y/z are 10-bit fields and w is a 2-bit field.
+// E1: unsigned decode (normalized c/(2^b-1), and unnormalized cast-to-float).
+TEST_F(GeneralVertexArrayTest, CurrentAttrib_PackedUnsigned) {
+    CreateVAO();
+    GLfloat out[4];
+
+    // x=1023, y=0, z=512, w=3.
+    const GLuint packed = 1023u | (0u << 10) | (512u << 20) | (3u << 30); // 0xE00003FF
+    VertexAttribP4ui(1, GL_UNSIGNED_INT_2_10_10_10_REV, GL_TRUE, packed);
+    GetVertexAttribfv(1, GL_CURRENT_VERTEX_ATTRIB, out);
+    EXPECT_EQ(GetError(), GL_NO_ERROR);
+    EXPECT_FLOAT_EQ(out[0], 1.0f);              // 1023/1023
+    EXPECT_FLOAT_EQ(out[1], 0.0f);              // 0/1023
+    EXPECT_FLOAT_EQ(out[2], 512.0f / 1023.0f);  // 10-bit divisor, NOT 1023 for w
+    EXPECT_FLOAT_EQ(out[3], 1.0f);              // 3/3 (2-bit divisor)
+
+    // Unnormalized: the field values are cast straight to float, no scaling.
+    VertexAttribP4ui(1, GL_UNSIGNED_INT_2_10_10_10_REV, GL_FALSE, packed);
+    GetVertexAttribfv(1, GL_CURRENT_VERTEX_ATTRIB, out);
+    EXPECT_FLOAT_EQ(out[0], 1023.0f);
+    EXPECT_FLOAT_EQ(out[2], 512.0f);
+    EXPECT_FLOAT_EQ(out[3], 3.0f);
+    EXPECT_EQ(GetError(), GL_NO_ERROR);
+}
+
+// E2: signed normalization uses the GL 3.3 (2c+1)/(2^b-1) form -- z==0 -> 1/1023 (NOT 0.0), which is
+// exactly what the GL 4.2 c/(2^(b-1)-1) rule would get wrong.
+TEST_F(GeneralVertexArrayTest, CurrentAttrib_PackedSignedUsesGl33Formula) {
+    CreateVAO();
+    GLfloat out[4];
+
+    // x=511 (max +), y=-512 (min, 10-bit 0x200), z=0, w=1 (max + for 2-bit).
+    const GLuint packed = 0x1FFu | (0x200u << 10) | (0u << 20) | (1u << 30);
+    VertexAttribP4ui(1, GL_INT_2_10_10_10_REV, GL_TRUE, packed);
+    GetVertexAttribfv(1, GL_CURRENT_VERTEX_ATTRIB, out);
+    EXPECT_EQ(GetError(), GL_NO_ERROR);
+    EXPECT_FLOAT_EQ(out[0], 1.0f);             // (2*511+1)/1023 = 1023/1023
+    EXPECT_FLOAT_EQ(out[1], -1.0f);            // (2*-512+1)/1023 = -1023/1023
+    EXPECT_FLOAT_EQ(out[2], 1.0f / 1023.0f);   // (2*0+1)/1023 -- 4.2 rule would give 0.0
+    EXPECT_FLOAT_EQ(out[3], 1.0f);             // (2*1+1)/3 = 3/3
+
+    // 2-bit signed minimum: w field = 0b10 = -2 -> (2*-2+1)/3 = -1.0.
+    VertexAttribP4ui(1, GL_INT_2_10_10_10_REV, GL_TRUE, 2u << 30);
+    GetVertexAttribfv(1, GL_CURRENT_VERTEX_ATTRIB, out);
+    EXPECT_FLOAT_EQ(out[3], -1.0f);
+    EXPECT_EQ(GetError(), GL_NO_ERROR);
+}
+
+// E3: P1/P2/P3 consume the first 1/2/3 components from the single packed word; unconsumed components
+// take the (0,0,0,1) defaults, and a shorter call clears stale components from a prior P4 to the slot.
+TEST_F(GeneralVertexArrayTest, CurrentAttrib_PackedComponentCountAndDefaults) {
+    CreateVAO();
+    GLfloat out[4];
+
+    VertexAttribP1ui(1, GL_UNSIGNED_INT_2_10_10_10_REV, GL_FALSE, 5u);
+    GetVertexAttribfv(1, GL_CURRENT_VERTEX_ATTRIB, out);
+    EXPECT_FLOAT_EQ(out[0], 5.0f);
+    EXPECT_FLOAT_EQ(out[1], 0.0f);
+    EXPECT_FLOAT_EQ(out[2], 0.0f);
+    EXPECT_FLOAT_EQ(out[3], 1.0f);
+
+    VertexAttribP2ui(1, GL_UNSIGNED_INT_2_10_10_10_REV, GL_FALSE, 5u | (7u << 10));
+    GetVertexAttribfv(1, GL_CURRENT_VERTEX_ATTRIB, out);
+    EXPECT_FLOAT_EQ(out[1], 7.0f);
+    EXPECT_FLOAT_EQ(out[2], 0.0f);
+    EXPECT_FLOAT_EQ(out[3], 1.0f);
+
+    VertexAttribP3ui(1, GL_UNSIGNED_INT_2_10_10_10_REV, GL_FALSE, 5u | (7u << 10) | (9u << 20));
+    GetVertexAttribfv(1, GL_CURRENT_VERTEX_ATTRIB, out);
+    EXPECT_FLOAT_EQ(out[2], 9.0f);
+    EXPECT_FLOAT_EQ(out[3], 1.0f);
+
+    // Set all four, then a P1 must reset z and w back to the defaults.
+    VertexAttribP4ui(1, GL_UNSIGNED_INT_2_10_10_10_REV, GL_FALSE, 1u | (2u << 10) | (3u << 20) | (1u << 30));
+    VertexAttribP1ui(1, GL_UNSIGNED_INT_2_10_10_10_REV, GL_FALSE, 5u);
+    GetVertexAttribfv(1, GL_CURRENT_VERTEX_ATTRIB, out);
+    EXPECT_FLOAT_EQ(out[0], 5.0f);
+    EXPECT_FLOAT_EQ(out[2], 0.0f); // not stale 3
+    EXPECT_FLOAT_EQ(out[3], 1.0f); // not stale 1-from-w
+    EXPECT_EQ(GetError(), GL_NO_ERROR);
+}
+
+// E4: type/index validation and the uiv single-word form.
+TEST_F(GeneralVertexArrayTest, CurrentAttrib_PackedValidation) {
+    CreateVAO();
+    GLfloat out[4];
+
+    // A non-packed type is GL_INVALID_ENUM and changes nothing.
+    VertexAttribP4ui(1, GL_UNSIGNED_INT_2_10_10_10_REV, GL_FALSE, 42u);
+    VertexAttribP4ui(1, GL_INT, GL_FALSE, 7u); // GL_INT is not a legal packed type
+    EXPECT_EQ(GetError(), GL_INVALID_ENUM);
+    GetVertexAttribfv(1, GL_CURRENT_VERTEX_ATTRIB, out);
+    EXPECT_FLOAT_EQ(out[0], 42.0f); // unchanged by the failed call
+
+    // Attribute 0 is rejected by MobileGL policy (GL_INVALID_OPERATION).
+    VertexAttribP4ui(0, GL_UNSIGNED_INT_2_10_10_10_REV, GL_FALSE, 1u);
+    EXPECT_EQ(GetError(), GL_INVALID_OPERATION);
+
+    // Out-of-range index -> GL_INVALID_VALUE.
+    VertexAttribP4ui(VertexArrayImpl::GetMaxVertexAttribs(), GL_UNSIGNED_INT_2_10_10_10_REV, GL_FALSE, 1u);
+    EXPECT_EQ(GetError(), GL_INVALID_VALUE);
+
+    // The uiv form dereferences a single packed word.
+    const GLuint word = 1023u; // x=1023 normalized -> 1.0
+    VertexAttribP1uiv(2, GL_UNSIGNED_INT_2_10_10_10_REV, GL_TRUE, &word);
+    GetVertexAttribfv(2, GL_CURRENT_VERTEX_ATTRIB, out);
+    EXPECT_EQ(GetError(), GL_NO_ERROR);
+    EXPECT_FLOAT_EQ(out[0], 1.0f);
+
+    // Null uiv pointer -> GL_INVALID_VALUE.
+    VertexAttribP4uiv(1, GL_UNSIGNED_INT_2_10_10_10_REV, GL_FALSE, nullptr);
+    EXPECT_EQ(GetError(), GL_INVALID_VALUE);
+}
+

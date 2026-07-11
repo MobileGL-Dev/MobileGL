@@ -23,6 +23,16 @@ namespace MobileGL::MG_Impl::GLImpl {
     void VertexAttribI4ui(GLuint index, GLuint x, GLuint y, GLuint z, GLuint w);
     void VertexAttribI4iv(GLuint index, const GLint* v);
     void VertexAttribI4uiv(GLuint index, const GLuint* v);
+    // Packed current-value setters (GL_INT_/GL_UNSIGNED_INT_2_10_10_10_REV). Decode one packed word
+    // into the first 1/2/3/4 components of the generic attribute's float current value.
+    void VertexAttribP1ui(GLuint index, GLenum type, GLboolean normalized, GLuint value);
+    void VertexAttribP2ui(GLuint index, GLenum type, GLboolean normalized, GLuint value);
+    void VertexAttribP3ui(GLuint index, GLenum type, GLboolean normalized, GLuint value);
+    void VertexAttribP4ui(GLuint index, GLenum type, GLboolean normalized, GLuint value);
+    void VertexAttribP1uiv(GLuint index, GLenum type, GLboolean normalized, const GLuint* value);
+    void VertexAttribP2uiv(GLuint index, GLenum type, GLboolean normalized, const GLuint* value);
+    void VertexAttribP3uiv(GLuint index, GLenum type, GLboolean normalized, const GLuint* value);
+    void VertexAttribP4uiv(GLuint index, GLenum type, GLboolean normalized, const GLuint* value);
     void VertexAttrib4Nub(GLuint index, GLubyte x, GLubyte y, GLubyte z, GLubyte w);
     void VertexAttrib4Nubv(GLuint index, const GLubyte* v);
     void VertexAttrib4ubv(GLuint index, const GLubyte* v);
