@@ -977,10 +977,22 @@ namespace MobileGL::MG_Backend::DirectGLES {
         m_dynamicParameters.MaxIntegerSamples = m_GLESCapabilities.MaxIntegerSamples;
         m_dynamicParameters.MaxSamples = m_GLESCapabilities.MaxSamples;
         m_dynamicParameters.MaxSampleMaskWords = m_GLESCapabilities.MaxSampleMaskWords;
-        m_dynamicParameters.MaxTextureImageUnits = m_GLESCapabilities.MaxTextureImageUnits;
-        m_dynamicParameters.MaxVertexTextureImageUnits = m_GLESCapabilities.MaxVertexTextureImageUnits;
-        m_dynamicParameters.MaxComputeTextureImageUnits = m_GLESCapabilities.MaxComputeTextureImageUnits;
-        m_dynamicParameters.MaxCombinedTextureImageUnits = m_GLESCapabilities.MaxCombinedTextureImageUnits;
+        // Clamp the advertised sampler limits the same way the DirectVulkan backend does: per-stage
+        // GL_MAX_TEXTURE_IMAGE_UNITS must never exceed host-side fixed arrays sized off it (e.g.
+        // Minecraft's 128-entry Blaze3D GlStateManager.TEXTURES[], iterated by Iris), and the combined
+        // limit must stay within our texture-unit state array capacity.
+        m_dynamicParameters.MaxTextureImageUnits =
+            std::min(m_GLESCapabilities.MaxTextureImageUnits,
+                     static_cast<Int>(MG_State::GLState::TextureState::MAX_PER_STAGE_TEXTURE_IMAGE_UNITS));
+        m_dynamicParameters.MaxVertexTextureImageUnits =
+            std::min(m_GLESCapabilities.MaxVertexTextureImageUnits,
+                     static_cast<Int>(MG_State::GLState::TextureState::MAX_PER_STAGE_TEXTURE_IMAGE_UNITS));
+        m_dynamicParameters.MaxComputeTextureImageUnits =
+            std::min(m_GLESCapabilities.MaxComputeTextureImageUnits,
+                     static_cast<Int>(MG_State::GLState::TextureState::MAX_PER_STAGE_TEXTURE_IMAGE_UNITS));
+        m_dynamicParameters.MaxCombinedTextureImageUnits =
+            std::min(m_GLESCapabilities.MaxCombinedTextureImageUnits,
+                     static_cast<Int>(MG_State::GLState::TextureState::MAX_TEXTURE_IMAGE_UNITS));
         // Never advertise more attributes than the state layer can store: the current-value array and
         // the Uint32 attribute masks the draw path passes around are both bounded by MAX_VERTEX_ATTRIBS.
         m_dynamicParameters.MaxVertexAttribs =

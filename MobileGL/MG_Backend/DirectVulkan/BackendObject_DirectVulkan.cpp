@@ -718,11 +718,21 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         m_dynamicParameters.MaxSampleMaskWords = m_vulkanCaps.MaxSampleMaskWords;
         const Int maxSupportedTextureUnits =
             static_cast<Int>(MG_State::GLState::TextureState::MAX_TEXTURE_IMAGE_UNITS);
-        m_dynamicParameters.MaxTextureImageUnits = std::min(m_vulkanCaps.MaxTextureImageUnits, maxSupportedTextureUnits);
+        // GL_MAX_TEXTURE_IMAGE_UNITS is a *per-stage* sampler limit. Adreno/Qualcomm report a huge
+        // maxPerStageDescriptorSampledImages (descriptor-indexing scale), so clamping it only to our
+        // combined array capacity (192) still advertises 192 per stage. Host code treats this value as
+        // an array bound: Minecraft's Blaze3D GlStateManager.TEXTURES[] holds 128 entries and Iris
+        // iterates [0, GL_MAX_TEXTURE_IMAGE_UNITS) over it (CompositeRenderer.renderAll), so any value
+        // > 128 throws ArrayIndexOutOfBoundsException. Match desktop drivers (32) for the per-stage
+        // limits while keeping the combined limit at our texture-unit array capacity.
+        constexpr Int maxPerStageTextureUnits =
+            static_cast<Int>(MG_State::GLState::TextureState::MAX_PER_STAGE_TEXTURE_IMAGE_UNITS);
+        m_dynamicParameters.MaxTextureImageUnits =
+            std::min(m_vulkanCaps.MaxTextureImageUnits, maxPerStageTextureUnits);
         m_dynamicParameters.MaxVertexTextureImageUnits =
-            std::min(m_vulkanCaps.MaxVertexTextureImageUnits, maxSupportedTextureUnits);
+            std::min(m_vulkanCaps.MaxVertexTextureImageUnits, maxPerStageTextureUnits);
         m_dynamicParameters.MaxComputeTextureImageUnits =
-            std::min(m_vulkanCaps.MaxComputeTextureImageUnits, maxSupportedTextureUnits);
+            std::min(m_vulkanCaps.MaxComputeTextureImageUnits, maxPerStageTextureUnits);
         m_dynamicParameters.MaxCombinedTextureImageUnits =
             std::min(m_vulkanCaps.MaxCombinedTextureImageUnits, maxSupportedTextureUnits);
         // Never advertise more attributes than the state layer can store: the current-value array and
