@@ -26,10 +26,14 @@ namespace MobileGL::MG_State::GLState {
 
         void SetExplicitVertexInLocation(Uint index, const char* name);
         void SetExplicitFragmentOutLocation(Uint index, const char* name);
+        // Dual-source blend color index (glBindFragDataLocationIndexed). Takes effect on next link.
+        void SetExplicitFragmentOutIndex(Uint colorIndex, const char* name);
         void SetMaxFragmentOutputColorNumber(Int maxDrawBuffers) {
             m_maxFragmentOutputColorNumber = maxDrawBuffers;
         }
         Int GetFragmentDataLocation(const char* name);
+        // Bound color index for an active fragment output (0 by default), or -1 if name is not one.
+        Int GetFragmentDataIndex(const char* name);
 
         Vector<SharedPtr<ShaderObject>>& GetAttachedShaders();
         const Vector<SharedPtr<ShaderObject>>& GetAttachedShaders() const;
@@ -361,6 +365,10 @@ namespace MobileGL::MG_State::GLState {
         // FragData (Frag out)
         UnorderedMap<String, Uint> m_explicitFragDataLocation;
         UnorderedMap<String, Uint> m_linkedFragDataLocation;
+        // Dual-source blend color index per output name (glBindFragDataLocationIndexed); snapshotted
+        // into the linked map at link time, like the location maps above.
+        UnorderedMap<String, Uint> m_explicitFragDataIndex;
+        UnorderedMap<String, Uint> m_linkedFragDataIndex;
         Int m_maxFragmentOutputColorNumber = 8;
 
         // Uniforms

@@ -291,6 +291,7 @@ namespace MobileGL::MG_State::GLState {
             m_linkStatus = true;
             m_program = result.value();
             m_linkedFragDataLocation = m_explicitFragDataLocation;
+            m_linkedFragDataIndex = m_explicitFragDataIndex;
             MGLOG_D("ProgramObject %u: LinkProgram succeeded, TProgram ptr %p", m_externalIndex, m_program.get());
         } else {
             m_infoLog = result.error().log;
@@ -692,6 +693,12 @@ namespace MobileGL::MG_State::GLState {
                 m_externalIndex, name, index);
     }
 
+    void ProgramObject::SetExplicitFragmentOutIndex(Uint colorIndex, const char* name) {
+        m_explicitFragDataIndex[name] = colorIndex;
+        MGLOG_D("ProgramObject %u: SetExplicitFragmentOutIndex - stored color index for '%s' -> %u", m_externalIndex,
+                name, colorIndex);
+    }
+
     Bool ProgramObject::ValidateFragmentOutputLocations() {
         if (!m_program) return false;
 
@@ -745,5 +752,14 @@ namespace MobileGL::MG_State::GLState {
             return static_cast<Int>(output.layoutLocation());
         }
         return -1;
+    }
+
+    Int ProgramObject::GetFragmentDataIndex(const char* name) {
+        // Only an active user-defined fragment output has an index; reuse the location lookup to test
+        // that. The color index defaults to 0 unless glBindFragDataLocationIndexed bound it to 1.
+        // (Shader-side layout(index = ...) qualifiers are not reflected here, only API bindings.)
+        if (GetFragmentDataLocation(name) < 0) return -1;
+        const auto it = m_linkedFragDataIndex.find(name);
+        return it != m_linkedFragDataIndex.end() ? static_cast<Int>(it->second) : 0;
     }
 } // namespace MobileGL::MG_State::GLState

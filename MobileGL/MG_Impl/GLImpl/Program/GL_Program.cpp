@@ -1483,7 +1483,7 @@ namespace MobileGL::MG_Impl::GLImpl {
                 length ? *length : 0);
     }
 
-    void BindFragDataLocation_State(GLuint program, GLuint colorNumber, const char* name) {
+    void BindFragDataLocationIndexed_State(GLuint program, GLuint colorNumber, GLuint index, const char* name) {
         auto& programObject = TryToGetProgramObject(program);
         // TryToGetProgramObject already recorded the error for a bad handle (GL_INVALID_VALUE for an
         // unknown name, GL_INVALID_OPERATION for a non-program object); do not record a second one.
@@ -1494,12 +1494,23 @@ namespace MobileGL::MG_Impl::GLImpl {
                 MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__, "name cannot be null."));
             return;
         }
+        // index selects the single (0) or dual-source (1) color; it must be 0 or 1.
+        if (index > 1) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidValue,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__, "index must be 0 or 1."));
+            return;
+        }
         const auto& dynamicParameters = MG_Backend::pActiveBackendObject->GetDynamicParameters();
-        if (colorNumber >= static_cast<GLuint>(dynamicParameters.MaxDrawBuffers)) {
+        // colorNumber is bounded by GL_MAX_DRAW_BUFFERS for index 0, and by
+        // GL_MAX_DUAL_SOURCE_DRAW_BUFFERS (which MobileGL reports as 1) for index 1.
+        const GLuint colorNumberLimit =
+            (index == 0) ? static_cast<GLuint>(dynamicParameters.MaxDrawBuffers) : 1u;
+        if (colorNumber >= colorNumberLimit) {
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidValue,
                 MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
-                                             "colorNumber is greater than or equal to GL_MAX_DRAW_BUFFERS."));
+                                             "colorNumber exceeds the applicable draw-buffer limit."));
             return;
         }
         if (strncmp(name, "gl_", 3) == 0) {
@@ -1510,8 +1521,14 @@ namespace MobileGL::MG_Impl::GLImpl {
             return;
         }
 
-        MGLOG_D("%s: loc %02d = \"%s\"", __func__, colorNumber, name);
+        MGLOG_D("%s: loc %02d index %u = \"%s\"", __func__, colorNumber, index, name);
         programObject->SetExplicitFragmentOutLocation(colorNumber, name);
+        programObject->SetExplicitFragmentOutIndex(index, name);
+    }
+
+    // glBindFragDataLocation is glBindFragDataLocationIndexed with color index 0.
+    void BindFragDataLocation_State(GLuint program, GLuint colorNumber, const char* name) {
+        BindFragDataLocationIndexed_State(program, colorNumber, 0, name);
     }
 
     GLint GetFragDataLocation_State(GLuint program, const char* name) {
@@ -1549,11 +1566,10 @@ namespace MobileGL::MG_Impl::GLImpl {
                                              std::to_string(program) + " has not been linked successfully."));
             return -1;
         }
-        // A name that is not an active user-defined fragment output (including gl_ built-ins) has no
-        // index. Every bound output uses color index 0: MobileGL does not yet track dual-source
-        // (index 1) bindings -- glBindFragDataLocationIndexed and the layout(index = 1) qualifier are
-        // not supported -- so this is exact for every program that does not use dual-source blending.
-        return programObject->GetFragmentDataLocation(name) < 0 ? -1 : 0;
+        // Returns the color index bound by glBindFragDataLocationIndexed (0 by default), or -1 if name
+        // is not an active user-defined output. Note: the index is tracked for reflection but is not
+        // yet plumbed into dual-source blend rendering, and shader-side layout(index=) is not reflected.
+        return programObject->GetFragmentDataIndex(name);
     }
 
     void ValidateProgram_State(GLuint program) {
@@ -1988,6 +2004,10 @@ namespace MobileGL::MG_Impl::GLImpl {
 
     void BindFragDataLocation(GLuint program, GLuint colorNumber, const char* name) {
         BindFragDataLocation_State(program, colorNumber, name);
+    }
+
+    void BindFragDataLocationIndexed(GLuint program, GLuint colorNumber, GLuint index, const char* name) {
+        BindFragDataLocationIndexed_State(program, colorNumber, index, name);
     }
 
     GLint GetFragDataLocation(GLuint program, const char* name) {

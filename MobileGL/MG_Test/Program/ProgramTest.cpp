@@ -1389,6 +1389,30 @@ TEST_F(ProgramTest, CompileAndLinkWithExplicitFragmentOut) {
     // }
     ASSERT_TRUE(pSrcfragOut != nullptr) << "Not found expected string in generated shader.\n(Searching for \"" << needle
                                         << "\")";
+
+    // glBindFragDataLocationIndexed round-trips the color index through a re-link. index 1 requires
+    // colorNumber 0 (GL_MAX_DUAL_SOURCE_DRAW_BUFFERS is 1).
+    BindFragDataLocationIndexed(program, 0, 1, "fragColor");
+    LinkProgram(program);
+    GetProgramiv(program, GL_LINK_STATUS, &linkStatus);
+    ASSERT_EQ(linkStatus, GL_TRUE);
+    EXPECT_EQ(GetFragDataIndex(program, "fragColor"), 1);
+    EXPECT_EQ(GetFragDataIndex(program, "notAnActiveOutput"), -1);
+
+    // glBindFragDataLocation is equivalent to index 0 and resets it.
+    BindFragDataLocation(program, 0, "fragColor");
+    LinkProgram(program);
+    EXPECT_EQ(GetFragDataIndex(program, "fragColor"), 0);
+
+    // Validation: index > 1 and a too-large colorNumber for index 1 are GL_INVALID_VALUE; a gl_ name is
+    // GL_INVALID_OPERATION.
+    BindFragDataLocationIndexed(program, 0, 2, "fragColor");
+    EXPECT_EQ(GetError(), GL_INVALID_VALUE);
+    BindFragDataLocationIndexed(program, 1, 1, "fragColor"); // colorNumber 1 invalid for index 1
+    EXPECT_EQ(GetError(), GL_INVALID_VALUE);
+    BindFragDataLocationIndexed(program, 0, 0, "gl_FragColor");
+    EXPECT_EQ(GetError(), GL_INVALID_OPERATION);
+    EXPECT_EQ(GetError(), GL_NO_ERROR);
 }
 
 const char* vs_sampler_as_varname = R"(#version 330
