@@ -250,6 +250,16 @@ namespace MobileGL {
         FrontFaceMode FrontFaceModeSetting = FrontFaceMode::CounterClockwise;
         ProvokingVertexMode ProvokingVertexModeSetting = ProvokingVertexMode::LastVertex;
 
+        // Hints (glHint). All GL 3.3 core hint targets default to GL_DONT_CARE.
+        GLenum LineSmoothHint = GL_DONT_CARE;
+        GLenum PolygonSmoothHint = GL_DONT_CARE;
+        GLenum TextureCompressionHint = GL_DONT_CARE;
+        GLenum FragmentShaderDerivativeHint = GL_DONT_CARE;
+
+        // Point parameters (glPointParameter). Only the two GL 3.3 core pnames.
+        Float PointFadeThresholdSize = 1.0f;
+        GLenum PointSpriteCoordOrigin = GL_UPPER_LEFT;
+
         // Scissor
         Bool ColorLogicOpEnabled = false;
         Bool DebugOutputEnabled = false;
@@ -293,6 +303,13 @@ namespace MobileGL {
                 void SetPolygonOffset(Float factor, Float units);
                 Float GetPolygonOffsetFactor() const;
                 Float GetPolygonOffsetUnits() const;
+                // Hints. target must be one of the 4 GL 3.3 core hint targets (validated by the caller).
+                void SetHint(GLenum target, GLenum mode);
+                GLenum GetHint(GLenum target) const;
+                void SetPointFadeThresholdSize(Float size);
+                Float GetPointFadeThresholdSize() const;
+                void SetPointSpriteCoordOrigin(GLenum origin);
+                GLenum GetPointSpriteCoordOrigin() const;
 
                 // Capabilities
                 void SetCapability(CapabilityInput cap, Bool enabled);

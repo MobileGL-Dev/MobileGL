@@ -33,7 +33,10 @@ namespace MobileGL::MG_Impl::GLImpl {
     void PointSize(GLfloat size);
     void PointParameterf(GLenum pname, GLfloat param);
     void PointParameteri(GLenum pname, GLint param);
+    void PointParameterfv(GLenum pname, const GLfloat* params);
+    void PointParameteriv(GLenum pname, const GLint* params);
     void PixelStorei(GLenum pname, GLint param);
+    void PixelStoref(GLenum pname, GLfloat param);
     void LogicOp(GLenum opcode);
     void LineWidth(GLfloat width);
     GLboolean IsEnabledi(GLenum target, GLuint index);

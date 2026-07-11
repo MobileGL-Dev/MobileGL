@@ -7,6 +7,7 @@
 // End of Source File Header
 
 #include "GL_RenderState.h"
+#include <cmath>
 #include <MG_State/GLState/Core.h>
 #include <MG_Util/Converters/GLToStr/GLEnumConverter.h>
 #include <MG_Util/Converters/GLToMG/RenderStateEnumConverter.h>
@@ -207,12 +208,67 @@ namespace MobileGL::MG_Impl::GLImpl {
         MG_State::pGLContext->SetPointSize(static_cast<Float>(size));
     }
 
-    void PointParameterf_State(GLenum pname, GLfloat param) {
-        // TODO: implement
+    // Single funnel for all four glPointParameter forms. The two GL 3.3 core pnames both carry one
+    // component, so the *v forms pass params[0], and the integer forms widen to float. The
+    // GL_POINT_SPRITE_COORD_ORIGIN value is an enum passed as a float (36001.0/36002.0 are exact).
+    void PointParameter_State(GLenum pname, GLfloat value) {
+        switch (pname) {
+        case GL_POINT_FADE_THRESHOLD_SIZE:
+            if (value < 0.0f) {
+                MG_State::pGLContext->RecordError(
+                    ErrorCode::InvalidValue,
+                    MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
+                                                 "GL_POINT_FADE_THRESHOLD_SIZE must be non-negative."));
+                return;
+            }
+            MG_State::pGLContext->SetPointFadeThresholdSize(value);
+            return;
+        case GL_POINT_SPRITE_COORD_ORIGIN: {
+            const GLenum origin = static_cast<GLenum>(std::lround(value));
+            if (origin != GL_LOWER_LEFT && origin != GL_UPPER_LEFT) {
+                MG_State::pGLContext->RecordError(
+                    ErrorCode::InvalidEnum,
+                    MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
+                                                 "GL_POINT_SPRITE_COORD_ORIGIN must be GL_LOWER_LEFT or "
+                                                 "GL_UPPER_LEFT."));
+                return;
+            }
+            MG_State::pGLContext->SetPointSpriteCoordOrigin(origin);
+            return;
+        }
+        default:
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidEnum,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
+                                             "Unsupported point parameter pname: " + std::to_string(pname)));
+            return;
+        }
     }
 
+    void PointParameterf_State(GLenum pname, GLfloat param) { PointParameter_State(pname, param); }
+
     void PointParameteri_State(GLenum pname, GLint param) {
-        // TODO: implement
+        PointParameter_State(pname, static_cast<GLfloat>(param));
+    }
+
+    void PointParameterfv_State(GLenum pname, const GLfloat* params) {
+        if (!params) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidValue,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__, "params pointer cannot be null."));
+            return;
+        }
+        PointParameter_State(pname, params[0]);
+    }
+
+    void PointParameteriv_State(GLenum pname, const GLint* params) {
+        if (!params) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidValue,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__, "params pointer cannot be null."));
+            return;
+        }
+        PointParameter_State(pname, static_cast<GLfloat>(params[0]));
     }
 
     void PixelStorei_State(GLenum pname, GLint param) {
@@ -302,7 +358,27 @@ namespace MobileGL::MG_Impl::GLImpl {
     }
 
     void Hint_State(GLenum target, GLenum mode) {
-        // TODO: implement
+        switch (target) {
+        case GL_LINE_SMOOTH_HINT:
+        case GL_POLYGON_SMOOTH_HINT:
+        case GL_TEXTURE_COMPRESSION_HINT:
+        case GL_FRAGMENT_SHADER_DERIVATIVE_HINT:
+            break;
+        default:
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidEnum,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
+                                             "Unsupported hint target: " + std::to_string(target)));
+            return;
+        }
+        if (mode != GL_FASTEST && mode != GL_NICEST && mode != GL_DONT_CARE) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidEnum,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
+                                             "Hint mode must be GL_FASTEST, GL_NICEST or GL_DONT_CARE."));
+            return;
+        }
+        MG_State::pGLContext->SetHint(target, mode);
     }
 
     void FrontFace_State(GLenum mode) {
@@ -672,8 +748,34 @@ namespace MobileGL::MG_Impl::GLImpl {
         PointParameteri_State(pname, param);
     }
 
+    void PointParameterfv(GLenum pname, const GLfloat* params) {
+        PointParameterfv_State(pname, params);
+    }
+
+    void PointParameteriv(GLenum pname, const GLint* params) {
+        PointParameteriv_State(pname, params);
+    }
+
     void PixelStorei(GLenum pname, GLint param) {
         PixelStorei_State(pname, param);
+    }
+
+    void PixelStoref(GLenum pname, GLfloat param) {
+        // Boolean pixel-store pnames convert by a zero-test (0.4 -> TRUE); integer pnames round to
+        // nearest. Branch before converting so a fractional value cannot round a true flag to false.
+        GLint intParam;
+        switch (pname) {
+        case GL_PACK_SWAP_BYTES:
+        case GL_UNPACK_SWAP_BYTES:
+        case GL_PACK_LSB_FIRST:
+        case GL_UNPACK_LSB_FIRST:
+            intParam = (param != 0.0f) ? 1 : 0;
+            break;
+        default:
+            intParam = static_cast<GLint>(std::lround(param));
+            break;
+        }
+        PixelStorei_State(pname, intParam);
     }
 
     void LogicOp(GLenum opcode) {

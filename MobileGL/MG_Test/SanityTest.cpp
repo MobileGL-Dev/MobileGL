@@ -604,3 +604,160 @@ TEST(LogSanity, UsesEnvOverrideForFilePath) {
 
     fs::remove(logPath);
 }
+
+// ---- Pure-state entry points: glHint / glPointParameter* / glPixelStoref / glGetDoublev -----------
+
+TEST(RenderStateSanity, HintStoresAndReadsBack) {
+    using namespace MobileGL;
+    using namespace MobileGL::MG_Impl::GLImpl;
+    MG_State::pGLContext = MakeUnique<MG_State::GLState::GLContext>();
+
+    // Default is GL_DONT_CARE.
+    GLint value = -1;
+    GetIntegerv(GL_LINE_SMOOTH_HINT, &value);
+    EXPECT_EQ(value, GL_DONT_CARE);
+
+    // Each of the 4 core targets round-trips.
+    Hint(GL_LINE_SMOOTH_HINT, GL_NICEST);
+    Hint(GL_POLYGON_SMOOTH_HINT, GL_FASTEST);
+    Hint(GL_TEXTURE_COMPRESSION_HINT, GL_NICEST);
+    Hint(GL_FRAGMENT_SHADER_DERIVATIVE_HINT, GL_FASTEST);
+    EXPECT_EQ(GetError(), GL_NO_ERROR);
+
+    GetIntegerv(GL_LINE_SMOOTH_HINT, &value);
+    EXPECT_EQ(value, GL_NICEST);
+    GetIntegerv(GL_POLYGON_SMOOTH_HINT, &value);
+    EXPECT_EQ(value, GL_FASTEST);
+    GetIntegerv(GL_TEXTURE_COMPRESSION_HINT, &value);
+    EXPECT_EQ(value, GL_NICEST);
+    GetIntegerv(GL_FRAGMENT_SHADER_DERIVATIVE_HINT, &value);
+    EXPECT_EQ(value, GL_FASTEST);
+
+    // glGetBooleanv on a hint is always GL_TRUE (all hint enums are non-zero).
+    GLboolean b = GL_FALSE;
+    GetBooleanv(GL_LINE_SMOOTH_HINT, &b);
+    EXPECT_EQ(b, GL_TRUE);
+
+    // A compatibility-only target and a bad mode both raise GL_INVALID_ENUM and change nothing.
+    Hint(GL_PERSPECTIVE_CORRECTION_HINT, GL_NICEST);
+    EXPECT_EQ(GetError(), GL_INVALID_ENUM);
+    Hint(GL_LINE_SMOOTH_HINT, GL_LINEAR);
+    EXPECT_EQ(GetError(), GL_INVALID_ENUM);
+    GetIntegerv(GL_LINE_SMOOTH_HINT, &value);
+    EXPECT_EQ(value, GL_NICEST); // unchanged by the failed calls
+
+    MG_State::pGLContext.reset();
+}
+
+TEST(RenderStateSanity, PointParameterStoresAndReadsBack) {
+    using namespace MobileGL;
+    using namespace MobileGL::MG_Impl::GLImpl;
+    MG_State::pGLContext = MakeUnique<MG_State::GLState::GLContext>();
+
+    // Defaults: fade threshold 1.0, coord origin GL_UPPER_LEFT.
+    GLfloat f = -1.0f;
+    GetFloatv(GL_POINT_FADE_THRESHOLD_SIZE, &f);
+    EXPECT_FLOAT_EQ(f, 1.0f);
+    GLint origin = -1;
+    GetIntegerv(GL_POINT_SPRITE_COORD_ORIGIN, &origin);
+    EXPECT_EQ(origin, GL_UPPER_LEFT);
+
+    // Scalar float sets the fade threshold; GetFloatv keeps the fractional part, GetIntegerv rounds.
+    PointParameterf(GL_POINT_FADE_THRESHOLD_SIZE, 2.5f);
+    GetFloatv(GL_POINT_FADE_THRESHOLD_SIZE, &f);
+    EXPECT_FLOAT_EQ(f, 2.5f);
+    GLint fi = 0;
+    GetIntegerv(GL_POINT_FADE_THRESHOLD_SIZE, &fi);
+    EXPECT_EQ(fi, 3); // 2.5 rounds to nearest (to even or up; lround gives 3)
+
+    // The v-form reads params[0]; the integer form sets the coord-origin enum.
+    const GLint lowerLeft = GL_LOWER_LEFT;
+    PointParameteriv(GL_POINT_SPRITE_COORD_ORIGIN, &lowerLeft);
+    GetIntegerv(GL_POINT_SPRITE_COORD_ORIGIN, &origin);
+    EXPECT_EQ(origin, GL_LOWER_LEFT);
+    EXPECT_EQ(GetError(), GL_NO_ERROR);
+
+    // Errors: negative fade -> GL_INVALID_VALUE; bad coord-origin -> GL_INVALID_ENUM; compat pname ->
+    // GL_INVALID_ENUM. None change state.
+    PointParameterf(GL_POINT_FADE_THRESHOLD_SIZE, -1.0f);
+    EXPECT_EQ(GetError(), GL_INVALID_VALUE);
+    PointParameteri(GL_POINT_SPRITE_COORD_ORIGIN, GL_FASTEST);
+    EXPECT_EQ(GetError(), GL_INVALID_ENUM);
+    PointParameterf(GL_POINT_SIZE_MIN, 0.0f);
+    EXPECT_EQ(GetError(), GL_INVALID_ENUM);
+
+    GetFloatv(GL_POINT_FADE_THRESHOLD_SIZE, &f);
+    EXPECT_FLOAT_EQ(f, 2.5f); // unchanged
+    GetIntegerv(GL_POINT_SPRITE_COORD_ORIGIN, &origin);
+    EXPECT_EQ(origin, GL_LOWER_LEFT); // unchanged
+
+    MG_State::pGLContext.reset();
+}
+
+TEST(RenderStateSanity, PixelStorefRoundsAndZeroTestsBooleans) {
+    using namespace MobileGL;
+    using namespace MobileGL::MG_Impl::GLImpl;
+    MG_State::pGLContext = MakeUnique<MG_State::GLState::GLContext>();
+
+    // Integer pname: round to nearest.
+    PixelStoref(GL_UNPACK_ROW_LENGTH, 7.4f);
+    GLint iv = 0;
+    GetIntegerv(GL_UNPACK_ROW_LENGTH, &iv);
+    EXPECT_EQ(iv, 7);
+    PixelStoref(GL_UNPACK_ROW_LENGTH, 7.6f);
+    GetIntegerv(GL_UNPACK_ROW_LENGTH, &iv);
+    EXPECT_EQ(iv, 8);
+
+    // Boolean pname: a fractional value must map to TRUE via a zero-test, NOT round-to-zero.
+    PixelStoref(GL_PACK_SWAP_BYTES, 0.4f);
+    GLboolean bv = GL_FALSE;
+    GetBooleanv(GL_PACK_SWAP_BYTES, &bv);
+    EXPECT_EQ(bv, GL_TRUE);
+    PixelStoref(GL_PACK_SWAP_BYTES, 0.0f);
+    GetBooleanv(GL_PACK_SWAP_BYTES, &bv);
+    EXPECT_EQ(bv, GL_FALSE);
+
+    // glPixelStoref matches glPixelStorei for an integer pname.
+    PixelStorei(GL_PACK_ALIGNMENT, 8);
+    GLint viaI = 0;
+    GetIntegerv(GL_PACK_ALIGNMENT, &viaI);
+    PixelStoref(GL_PACK_ALIGNMENT, 8.0f);
+    GLint viaF = 0;
+    GetIntegerv(GL_PACK_ALIGNMENT, &viaF);
+    EXPECT_EQ(viaI, viaF);
+    EXPECT_EQ(GetError(), GL_NO_ERROR);
+
+    MG_State::pGLContext.reset();
+}
+
+TEST(RenderStateSanity, GetDoublevMatchesGetFloatvWidened) {
+    using namespace MobileGL;
+    using namespace MobileGL::MG_Impl::GLImpl;
+    MG_State::pGLContext = MakeUnique<MG_State::GLState::GLContext>();
+
+    // Single-component pname.
+    PointParameterf(GL_POINT_FADE_THRESHOLD_SIZE, 2.5f);
+    GLdouble d1[4] = {-1, -1, -1, -1};
+    GetDoublev(GL_POINT_FADE_THRESHOLD_SIZE, d1);
+    EXPECT_DOUBLE_EQ(d1[0], 2.5);
+    EXPECT_DOUBLE_EQ(d1[1], -1.0); // second component untouched (1-component pname)
+
+    // 2-component pname: GL_DEPTH_RANGE (default 0..1).
+    GLdouble d2[2] = {-1, -1};
+    GetDoublev(GL_DEPTH_RANGE, d2);
+    EXPECT_DOUBLE_EQ(d2[0], 0.0);
+    EXPECT_DOUBLE_EQ(d2[1], 1.0);
+
+    // 4-component pname: GL_COLOR_CLEAR_VALUE (default 0,0,0,1) matches GetFloatv widened.
+    GLfloat cf[4] = {};
+    GetFloatv(GL_COLOR_CLEAR_VALUE, cf);
+    GLdouble cd[4] = {};
+    GetDoublev(GL_COLOR_CLEAR_VALUE, cd);
+    for (int i = 0; i < 4; ++i) EXPECT_DOUBLE_EQ(cd[i], static_cast<GLdouble>(cf[i]));
+
+    // Null params -> GL_INVALID_VALUE.
+    GetDoublev(GL_DEPTH_RANGE, nullptr);
+    EXPECT_EQ(GetError(), GL_INVALID_VALUE);
+
+    MG_State::pGLContext.reset();
+}

@@ -59,6 +59,50 @@ namespace MobileGL {
                 return m_parameters.LineWidth;
             }
 
+            void RenderState::SetHint(GLenum target, GLenum mode) {
+                GLenum* slot = nullptr;
+                switch (target) {
+                case GL_LINE_SMOOTH_HINT: slot = &m_parameters.LineSmoothHint; break;
+                case GL_POLYGON_SMOOTH_HINT: slot = &m_parameters.PolygonSmoothHint; break;
+                case GL_TEXTURE_COMPRESSION_HINT: slot = &m_parameters.TextureCompressionHint; break;
+                case GL_FRAGMENT_SHADER_DERIVATIVE_HINT: slot = &m_parameters.FragmentShaderDerivativeHint; break;
+                default: return;
+                }
+                if (*slot == mode) return;
+                *slot = mode;
+                ++m_version;
+            }
+
+            GLenum RenderState::GetHint(GLenum target) const {
+                switch (target) {
+                case GL_LINE_SMOOTH_HINT: return m_parameters.LineSmoothHint;
+                case GL_POLYGON_SMOOTH_HINT: return m_parameters.PolygonSmoothHint;
+                case GL_TEXTURE_COMPRESSION_HINT: return m_parameters.TextureCompressionHint;
+                case GL_FRAGMENT_SHADER_DERIVATIVE_HINT: return m_parameters.FragmentShaderDerivativeHint;
+                default: return GL_DONT_CARE;
+                }
+            }
+
+            void RenderState::SetPointFadeThresholdSize(Float size) {
+                if (m_parameters.PointFadeThresholdSize == size) return;
+                m_parameters.PointFadeThresholdSize = size;
+                ++m_version;
+            }
+
+            Float RenderState::GetPointFadeThresholdSize() const {
+                return m_parameters.PointFadeThresholdSize;
+            }
+
+            void RenderState::SetPointSpriteCoordOrigin(GLenum origin) {
+                if (m_parameters.PointSpriteCoordOrigin == origin) return;
+                m_parameters.PointSpriteCoordOrigin = origin;
+                ++m_version;
+            }
+
+            GLenum RenderState::GetPointSpriteCoordOrigin() const {
+                return m_parameters.PointSpriteCoordOrigin;
+            }
+
             void RenderState::SetPointSize(Float size) {
                 if (m_parameters.PointSize == size) return;
 

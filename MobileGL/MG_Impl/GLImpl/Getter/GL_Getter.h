@@ -15,6 +15,7 @@ namespace MobileGL::MG_Impl::GLImpl {
     const GLubyte* GetStringi(GLenum name, GLuint index);
     void GetBooleanv(GLenum pname, GLboolean* params);
     void GetFloatv(GLenum pname, GLfloat* params);
+    void GetDoublev(GLenum pname, GLdouble* params);
     void GetIntegerv(GLenum pname, GLint* params);
     void GetInteger64v(GLenum pname, GLint64* params);
     void GetIntegeri_v(GLenum target, GLuint index, GLint* data);

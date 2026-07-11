@@ -125,6 +125,12 @@ namespace MobileGL {
                 void SetPolygonOffset(Float factor, Float units);
                 Float GetPolygonOffsetFactor() const;
                 Float GetPolygonOffsetUnits() const;
+                void SetHint(GLenum target, GLenum mode);
+                GLenum GetHint(GLenum target) const;
+                void SetPointFadeThresholdSize(Float size);
+                Float GetPointFadeThresholdSize() const;
+                void SetPointSpriteCoordOrigin(GLenum origin);
+                GLenum GetPointSpriteCoordOrigin() const;
                 void SetCapability(CapabilityInput cap, Bool enabled);
                 Bool IsCapabilityEnabled(CapabilityInput cap) const;
                 void SetCapabilityIndexed(CapabilityInput cap, Uint index, Bool enabled);

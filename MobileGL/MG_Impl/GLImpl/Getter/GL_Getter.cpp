@@ -7,6 +7,7 @@
 // End of Source File Header
 
 #include "GL_Getter.h"
+#include <cmath>
 #include <Config.h>
 #include <MGGitHash.h>
 #include <MG_Impl/GLImpl/VertexArray/Validators.h>
@@ -562,6 +563,10 @@ namespace MobileGL::MG_Impl::GLImpl {
         case GL_SAMPLE_COVERAGE_VALUE:
             params[0] = MG_State::pGLContext->GetSampleCoverageValue();
             return;
+        case GL_POINT_FADE_THRESHOLD_SIZE:
+            // Float state: read it directly so the fractional part is not lost to the integer path.
+            params[0] = MG_State::pGLContext->GetPointFadeThresholdSize();
+            return;
         default:
             break;
         }
@@ -837,6 +842,46 @@ namespace MobileGL::MG_Impl::GLImpl {
         }
     }
 
+    // glGetDoublev shares GetFloatv's accepted-pname set (and its INVALID_ENUM handling) and widens the
+    // result. MobileGL stores no native-double state (depth range/clear are float), so widening from
+    // float matches the resolution MobileGL actually holds. Only the pname's own component count is
+    // written, never a fixed 4, so a 1-component query cannot overrun the caller's buffer.
+    void GetDoublev(GLenum pname, GLdouble* params) {
+        if (!params) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidValue,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__, "params pointer cannot be null"));
+            return;
+        }
+        GLfloat floats[4] = {};
+        GetFloatv(pname, floats);
+        GLsizei count = 1;
+        switch (pname) {
+        case GL_DEPTH_RANGE:
+        case GL_VIEWPORT_BOUNDS_RANGE:
+        case GL_ALIASED_LINE_WIDTH_RANGE:
+        case GL_ALIASED_POINT_SIZE_RANGE:
+        case GL_POINT_SIZE_RANGE:
+        case GL_SMOOTH_LINE_WIDTH_RANGE:
+        case GL_MAX_VIEWPORT_DIMS:
+            count = 2;
+            break;
+        case GL_BLEND_COLOR:
+        case GL_COLOR_CLEAR_VALUE:
+        case GL_VIEWPORT:
+        case GL_SCISSOR_BOX:
+        case GL_COLOR_WRITEMASK:
+            count = 4;
+            break;
+        default:
+            count = 1;
+            break;
+        }
+        for (GLsizei i = 0; i < count; ++i) {
+            params[i] = static_cast<GLdouble>(floats[i]);
+        }
+    }
+
     void GetIntegerv(GLenum pname, GLint* params) {
         MGLOG_D("glGetIntegerv, pname: %s", MG_Util::ConvertGLEnumToString(pname).c_str());
         if (!params) {
@@ -1063,7 +1108,7 @@ namespace MobileGL::MG_Impl::GLImpl {
             return;
         }
         case GL_FRAGMENT_SHADER_DERIVATIVE_HINT:
-            *params = GL_DONT_CARE;
+            *params = static_cast<GLint>(MG_State::pGLContext->GetHint(pname));
             return;
         case GL_IMPLEMENTATION_COLOR_READ_FORMAT: {
             GLint format = 0;
@@ -1081,7 +1126,7 @@ namespace MobileGL::MG_Impl::GLImpl {
             *params = MG_State::pGLContext->IsCapabilityEnabled(CapabilityInput::LineSmooth) ? GL_TRUE : GL_FALSE;
             return;
         case GL_LINE_SMOOTH_HINT:
-            *params = GL_DONT_CARE;
+            *params = static_cast<GLint>(MG_State::pGLContext->GetHint(pname));
             return;
         case GL_LINE_WIDTH:
             *params = static_cast<GLint>(MG_State::pGLContext->GetLineWidth());
@@ -1290,7 +1335,10 @@ namespace MobileGL::MG_Impl::GLImpl {
             return;
         }
         case GL_POINT_FADE_THRESHOLD_SIZE:
-            *params = 1;
+            *params = static_cast<GLint>(std::lround(MG_State::pGLContext->GetPointFadeThresholdSize()));
+            return;
+        case GL_POINT_SPRITE_COORD_ORIGIN:
+            *params = static_cast<GLint>(MG_State::pGLContext->GetPointSpriteCoordOrigin());
             return;
         case GL_PRIMITIVE_RESTART:
             *params = MG_State::pGLContext->IsCapabilityEnabled(CapabilityInput::PrimitiveRestart) ? GL_TRUE
@@ -1341,7 +1389,7 @@ namespace MobileGL::MG_Impl::GLImpl {
             *params = MG_State::pGLContext->IsCapabilityEnabled(CapabilityInput::PolygonSmooth) ? GL_TRUE : GL_FALSE;
             return;
         case GL_POLYGON_SMOOTH_HINT:
-            *params = GL_DONT_CARE;
+            *params = static_cast<GLint>(MG_State::pGLContext->GetHint(pname));
             return;
         case GL_READ_BUFFER:
             if (const auto& fbo = MG_State::pGLContext->GetFramebufferBindingSlot(FramebufferTarget::Read)
@@ -1571,7 +1619,7 @@ namespace MobileGL::MG_Impl::GLImpl {
             return;
         }
         case GL_TEXTURE_COMPRESSION_HINT:
-            *params = GL_DONT_CARE;
+            *params = static_cast<GLint>(MG_State::pGLContext->GetHint(pname));
             return;
         case GL_TEXTURE_BUFFER_OFFSET_ALIGNMENT:
             *params = 0; // texture-buffer range entrypoints are stubbed

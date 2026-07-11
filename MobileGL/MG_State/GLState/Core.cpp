@@ -328,6 +328,30 @@ namespace MobileGL::MG_State {
             return m_renderState.GetLineWidth();
         }
 
+        void GLContext::SetHint(GLenum target, GLenum mode) {
+            m_renderState.SetHint(target, mode);
+        }
+
+        GLenum GLContext::GetHint(GLenum target) const {
+            return m_renderState.GetHint(target);
+        }
+
+        void GLContext::SetPointFadeThresholdSize(Float size) {
+            m_renderState.SetPointFadeThresholdSize(size);
+        }
+
+        Float GLContext::GetPointFadeThresholdSize() const {
+            return m_renderState.GetPointFadeThresholdSize();
+        }
+
+        void GLContext::SetPointSpriteCoordOrigin(GLenum origin) {
+            m_renderState.SetPointSpriteCoordOrigin(origin);
+        }
+
+        GLenum GLContext::GetPointSpriteCoordOrigin() const {
+            return m_renderState.GetPointSpriteCoordOrigin();
+        }
+
         void GLContext::SetPointSize(Float size) {
             m_renderState.SetPointSize(size);
         }
