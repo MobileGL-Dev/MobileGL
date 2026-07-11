@@ -702,11 +702,47 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 }
             }
 
-            { // Color mask. GLES core has only the non-indexed glColorMask, so sync draw buffer 0.
-                if (parameters.ColorMasks[0] != g_syncedRenderStateParameters.ColorMasks[0]) {
-                    const BoolVec4& colorMask = parameters.ColorMasks[0];
-                    g_GLESFuncs.glColorMask(ToGLBoolean(colorMask.x()), ToGLBoolean(colorMask.y()),
-                                            ToGLBoolean(colorMask.z()), ToGLBoolean(colorMask.w()));
+            { // Color mask. Uniform masks use the non-indexed glColorMask (works everywhere); divergent
+              // per-draw-buffer masks use the indexed glColorMaski when draw_buffers_indexed is
+              // available, otherwise fall back to broadcasting draw buffer 0. Mirrors the blend block.
+                using FBO = MG_State::GLState::FramebufferObject;
+                const auto& targetMasks = parameters.ColorMasks;
+                const auto& syncedMasks = g_syncedRenderStateParameters.ColorMasks;
+
+                Bool anyDirty = false;
+                Bool allSame = true;
+                for (Uint i = 0; i < FBO::MAX_DRAW_BUFFERS; ++i) {
+                    if (targetMasks[i] != syncedMasks[i]) anyDirty = true;
+                    if (i > 0 && targetMasks[i] != targetMasks[0]) allSame = false;
+                }
+
+                if (anyDirty) {
+                    if (allSame || !g_GLESCapabilities.SupportsIndexedColorMask) {
+                        const BoolVec4& m = targetMasks[0];
+                        g_GLESFuncs.glColorMask(ToGLBoolean(m.x()), ToGLBoolean(m.y()), ToGLBoolean(m.z()),
+                                                ToGLBoolean(m.w()));
+                    } else {
+                        const auto colorMaskiFn = g_GLESFuncs.glColorMaski      ? g_GLESFuncs.glColorMaski
+                                                  : g_GLESFuncs.glColorMaskiEXT ? g_GLESFuncs.glColorMaskiEXT
+                                                                                : g_GLESFuncs.glColorMaskiOES;
+                        for (Uint i = 0; i < FBO::MAX_DRAW_BUFFERS; ++i) {
+                            if (targetMasks[i] != syncedMasks[i]) {
+                                const BoolVec4& m = targetMasks[i];
+                                colorMaskiFn(i, ToGLBoolean(m.x()), ToGLBoolean(m.y()), ToGLBoolean(m.z()),
+                                             ToGLBoolean(m.w()));
+                            }
+                        }
+                    }
+                }
+            }
+
+            { // Polygon mode. GLES core has no glPolygonMode; use NV/ANGLE_polygon_mode when present.
+              // Without the extension the mode stays FILL and non-FILL requests are dropped.
+                if (parameters.PolygonModeFront != g_syncedRenderStateParameters.PolygonModeFront &&
+                    g_GLESCapabilities.SupportsPolygonMode) {
+                    const auto polygonModeFn =
+                        g_GLESFuncs.glPolygonModeNV ? g_GLESFuncs.glPolygonModeNV : g_GLESFuncs.glPolygonModeANGLE;
+                    polygonModeFn(GL_FRONT_AND_BACK, parameters.PolygonModeFront);
                 }
             }
 

@@ -82,6 +82,13 @@ namespace MobileGL::MG_Util::BackendLoader {
         }                                                                                                              \
     } while (0);
 
+// Optional (extension-provided) entry points: a null pointer is expected on drivers that lack the
+// extension, so absence is not an error. The call site null-checks before use.
+#define INIT_GLES_FUNC_OPTIONAL(name)                                                                                  \
+    do {                                                                                                               \
+        funcs.name = (MG_External::GLES::name##_PTR)procAddress(#name);                                                \
+    } while (0);
+
         {
             INIT_GLES_FUNC(glActiveTexture)
             INIT_GLES_FUNC(glAttachShader)
@@ -454,6 +461,10 @@ namespace MobileGL::MG_Util::BackendLoader {
             INIT_GLES_FUNC(glGetQueryObjectui64vEXT)
             INIT_GLES_FUNC(glBindFragDataLocationEXT)
             INIT_GLES_FUNC(glMapBufferOES)
+            INIT_GLES_FUNC_OPTIONAL(glPolygonModeNV)
+            INIT_GLES_FUNC_OPTIONAL(glPolygonModeANGLE)
+            INIT_GLES_FUNC_OPTIONAL(glColorMaskiEXT)
+            INIT_GLES_FUNC_OPTIONAL(glColorMaskiOES)
             INIT_GLES_FUNC(glMultiDrawArraysIndirectEXT)
             INIT_GLES_FUNC(glMultiDrawElementsIndirectEXT)
             INIT_GLES_FUNC(glMultiDrawElementsBaseVertexEXT)
@@ -733,6 +744,16 @@ namespace MobileGL::MG_Util::BackendLoader {
                 }
             }
         }
+
+        // Detect optional raster/color-mask entry points by whether they loaded. glColorMaski is GLES
+        // 3.2 core (no extension string), so pointer presence is the reliable signal for all of these.
+        caps.SupportsPolygonMode =
+            glesFuncs.glPolygonModeNV != nullptr || glesFuncs.glPolygonModeANGLE != nullptr;
+        caps.SupportsIndexedColorMask = glesFuncs.glColorMaski != nullptr ||
+                                        glesFuncs.glColorMaskiEXT != nullptr ||
+                                        glesFuncs.glColorMaskiOES != nullptr;
+        MGLOG_I("    glPolygonMode (NV/ANGLE): %s", caps.SupportsPolygonMode ? "yes" : "no");
+        MGLOG_I("    indexed glColorMaski: %s", caps.SupportsIndexedColorMask ? "yes" : "no");
 
         MGLOG_I("OpenGL ES capabilities:");
         glesFuncs.glGetIntegerv(GL_UNIFORM_BUFFER_OFFSET_ALIGNMENT, &caps.UniformBufferOffsetAlignment);

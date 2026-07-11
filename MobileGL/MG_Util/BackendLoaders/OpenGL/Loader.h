@@ -615,6 +615,11 @@ namespace MobileGL {
             GL_FUNC_TYPEDEF(void, glGetQueryObjectui64vEXT, GLuint id, GLenum pname, GLuint64* params)
             GL_FUNC_TYPEDEF(void, glBindFragDataLocationEXT, GLuint program, GLuint colorNumber, const GLchar* name)
             GL_FUNC_TYPEDEF(void*, glMapBufferOES, GLenum target, GLenum access)
+            // Extension aliases for glPolygonMode (GLES core has none) and indexed glColorMaski.
+            GL_FUNC_TYPEDEF(void, glPolygonModeNV, GLenum face, GLenum mode)
+            GL_FUNC_TYPEDEF(void, glPolygonModeANGLE, GLenum face, GLenum mode)
+            GL_FUNC_TYPEDEF(void, glColorMaskiEXT, GLuint index, GLboolean r, GLboolean g, GLboolean b, GLboolean a)
+            GL_FUNC_TYPEDEF(void, glColorMaskiOES, GLuint index, GLboolean r, GLboolean g, GLboolean b, GLboolean a)
 
             GL_FUNC_TYPEDEF(void, glMultiDrawArraysIndirectEXT, GLenum mode, const void* indirect, GLsizei drawcount,
                             GLsizei stride)
@@ -1006,6 +1011,10 @@ namespace MobileGL {
             GL_FUNC_DECL(glGetQueryObjectui64vEXT)
             GL_FUNC_DECL(glBindFragDataLocationEXT)
             GL_FUNC_DECL(glMapBufferOES)
+            GL_FUNC_DECL(glPolygonModeNV)
+            GL_FUNC_DECL(glPolygonModeANGLE)
+            GL_FUNC_DECL(glColorMaskiEXT)
+            GL_FUNC_DECL(glColorMaskiOES)
 
             GL_FUNC_DECL(glMultiDrawArraysIndirectEXT)
             GL_FUNC_DECL(glMultiDrawElementsIndirectEXT)
@@ -1025,6 +1034,12 @@ namespace MobileGL {
             Bool SupportsBaseInstance = false;
             // GL_EXT_disjoint_timer_query is present in the extension string.
             Bool SupportsDisjointTimerQuery = false;
+            // glPolygonModeNV/ANGLE loaded (GL_NV_polygon_mode / GL_ANGLE_polygon_mode). GLES core
+            // has no glPolygonMode, so without this the mode stays FILL.
+            Bool SupportsPolygonMode = false;
+            // An indexed glColorMaski entry point loaded (GLES 3.2 core, or GL_OES/EXT_draw_buffers_indexed).
+            // Without it, only the non-indexed glColorMask (draw buffer 0 broadcast) is available.
+            Bool SupportsIndexedColorMask = false;
             // GL_RENDERER contains "ANGLE".
             Bool IsAngleRenderer = false;
             // GL_RENDERER contains both "ANGLE" and "llvmpipe".
