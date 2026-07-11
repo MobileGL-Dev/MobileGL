@@ -1485,13 +1485,9 @@ namespace MobileGL::MG_Impl::GLImpl {
 
     void BindFragDataLocation_State(GLuint program, GLuint colorNumber, const char* name) {
         auto& programObject = TryToGetProgramObject(program);
-        if (programObject == nullptr) {
-            MG_State::pGLContext->RecordError(
-                ErrorCode::InvalidOperation,
-                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
-                                             std::to_string(program) + " is not the name of a program object."));
-            return;
-        }
+        // TryToGetProgramObject already recorded the error for a bad handle (GL_INVALID_VALUE for an
+        // unknown name, GL_INVALID_OPERATION for a non-program object); do not record a second one.
+        if (!programObject) return;
         if (name == nullptr) {
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidValue,
@@ -1520,13 +1516,7 @@ namespace MobileGL::MG_Impl::GLImpl {
 
     GLint GetFragDataLocation_State(GLuint program, const char* name) {
         auto& programObject = TryToGetProgramObject(program);
-        if (programObject == nullptr) {
-            MG_State::pGLContext->RecordError(
-                ErrorCode::InvalidOperation,
-                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
-                                             std::to_string(program) + " is not the name of a program object."));
-            return -1;
-        }
+        if (!programObject) return -1; // TryToGetProgramObject already recorded the error.
         if (name == nullptr) {
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidValue,
@@ -1545,13 +1535,7 @@ namespace MobileGL::MG_Impl::GLImpl {
 
     GLint GetFragDataIndex_State(GLuint program, const char* name) {
         auto& programObject = TryToGetProgramObject(program);
-        if (programObject == nullptr) {
-            MG_State::pGLContext->RecordError(
-                ErrorCode::InvalidOperation,
-                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
-                                             std::to_string(program) + " is not the name of a program object."));
-            return -1;
-        }
+        if (!programObject) return -1; // TryToGetProgramObject already recorded the error.
         if (name == nullptr) {
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidValue,

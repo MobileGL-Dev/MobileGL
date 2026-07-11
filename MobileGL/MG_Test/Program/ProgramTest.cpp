@@ -1564,8 +1564,10 @@ TEST_F(ProgramTest, GetFragDataIndexRejectsInvalidProgram) {
     // routes through the shared program-name check, which records GL_INVALID_VALUE for an unknown name.
     EXPECT_EQ(GetFragDataIndex(999999u, "fragColor"), -1);
     EXPECT_EQ(GetError(), GL_INVALID_VALUE);
-    // The name check and the entry point each queue an error for an unknown handle; drain the rest so
-    // no stale error leaks into a later test (the fixture does not reset the error queue).
+    // Exactly ONE error is recorded per bad call: the redundant second GL_INVALID_OPERATION that the
+    // FragData entry points used to queue on top of the name check has been removed.
+    EXPECT_EQ(GetError(), GL_NO_ERROR);
+    // Defensive drain: keep the shared error queue clean regardless (the fixture never resets it).
     while (GetError() != GL_NO_ERROR) {}
 }
 
