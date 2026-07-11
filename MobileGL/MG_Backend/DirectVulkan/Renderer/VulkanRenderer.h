@@ -342,6 +342,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         Bool m_multiDrawIndirectFeatureEnabled = false;
         Bool m_shaderDrawParametersExtensionEnabled = false;
         Bool m_shaderDrawParametersFeatureEnabled = false;
+        // fillModeNonSolid gates VK_POLYGON_MODE_LINE/_POINT (glPolygonMode); independentBlend gates
+        // per-draw-buffer color write masks (glColorMaski). Both are cached at device creation and
+        // drive a runtime fallback when the device lacks them.
+        Bool m_fillModeNonSolidFeatureEnabled = false;
+        Bool m_independentBlendFeatureEnabled = false;
         // Cached at device creation from the graphics queue family properties
         // and device limits; drives timer-query support.
         Uint32 m_timestampValidBits = 0;

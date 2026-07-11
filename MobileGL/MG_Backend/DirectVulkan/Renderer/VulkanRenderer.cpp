@@ -2964,12 +2964,14 @@ void main() {
         auto stencilTestEnabled = MG_State::pGLContext->IsCapabilityEnabled(CapabilityInput::StencilTest);
         const StencilFaceState& frontStencil = MG_State::pGLContext->GetStencilState(StencilFace::Front);
         const StencilFaceState& backStencil = MG_State::pGLContext->GetStencilState(StencilFace::Back);
-        auto mask = MG_State::pGLContext->GetColorMask();
-        const auto colorWriteMask = static_cast<VkColorComponentFlags>(
-            (mask.r() ? VK_COLOR_COMPONENT_R_BIT : 0u) |
-            (mask.g() ? VK_COLOR_COMPONENT_G_BIT : 0u) |
-            (mask.b() ? VK_COLOR_COMPONENT_B_BIT : 0u) |
-            (mask.a() ? VK_COLOR_COMPONENT_A_BIT : 0u));
+        const VkPolygonMode requestedPolygonMode =
+            MG_Util::ConvertPolygonModeToVkEnum(MG_State::pGLContext->GetPolygonModeFront());
+        // VK_POLYGON_MODE_LINE/_POINT require the fillModeNonSolid device feature; fall back to
+        // VK_POLYGON_MODE_FILL when the device lacks it.
+        const VkPolygonMode effectivePolygonMode =
+            (requestedPolygonMode == VK_POLYGON_MODE_FILL || m_fillModeNonSolidFeatureEnabled)
+                ? requestedPolygonMode
+                : VK_POLYGON_MODE_FILL;
 
         PipelineFactory::PipelineCreatePayload payload {
             .programHash = programObj.hash,
@@ -2980,6 +2982,7 @@ void main() {
             .rasterizationSamples = renderPassEntry.sampleCount,
             .subpass = 0,
             .topology = MG_Util::ConvertPrimitiveModeToVkEnum(mode),
+            .polygonMode = effectivePolygonMode,
             .cullMode = cullFaceEnabled
                 ? MG_Util::ConvertCullFaceModeToVkEnum(MG_State::pGLContext->GetCullFaceMode(), invertClockwise)
                 : VK_CULL_MODE_NONE,
@@ -3075,7 +3078,16 @@ void main() {
             MG_State::pGLContext->GetBlendFuncIndexed(i, srcRGB, dstRGB, srcAlpha, dstAlpha);
             MG_State::pGLContext->GetBlendEquationIndexed(i, colorEquation, alphaEquation);
             const Bool blendEnabled = MG_State::pGLContext->IsCapabilityEnabledIndexed(CapabilityInput::Blend, i);
-            VkColorComponentFlags attachmentColorWriteMask = colorWriteMask;
+            // Per-draw-buffer color write mask (glColorMaski). Divergent per-attachment masks require
+            // the independentBlend device feature; when it is absent, fall back to draw buffer 0's
+            // mask for every attachment (matching the non-indexed glColorMask broadcast).
+            const BoolVec4 bufferMask =
+                MG_State::pGLContext->GetColorMaskIndexed(m_independentBlendFeatureEnabled ? i : 0);
+            VkColorComponentFlags attachmentColorWriteMask = static_cast<VkColorComponentFlags>(
+                (bufferMask.r() ? VK_COLOR_COMPONENT_R_BIT : 0u) |
+                (bufferMask.g() ? VK_COLOR_COMPONENT_G_BIT : 0u) |
+                (bufferMask.b() ? VK_COLOR_COMPONENT_B_BIT : 0u) |
+                (bufferMask.a() ? VK_COLOR_COMPONENT_A_BIT : 0u));
             Bool effectiveBlendEnabled = blendEnabled;
             MG_State::GLState::ITextureObject* colorAttachmentTexture = nullptr;
             if (!isDefaultDrawFbo && i < drawBuffers.size()) {
@@ -6283,6 +6295,9 @@ void main() {
         VkPhysicalDeviceFeatures deviceFeatures{};
         deviceFeatures.geometryShader = supportedDeviceFeatures.geometryShader;
         deviceFeatures.independentBlend = supportedDeviceFeatures.independentBlend;
+        m_independentBlendFeatureEnabled = deviceFeatures.independentBlend == VK_TRUE;
+        deviceFeatures.fillModeNonSolid = supportedDeviceFeatures.fillModeNonSolid;
+        m_fillModeNonSolidFeatureEnabled = deviceFeatures.fillModeNonSolid == VK_TRUE;
         deviceFeatures.logicOp = supportedDeviceFeatures.logicOp;
         deviceFeatures.shaderClipDistance = supportedDeviceFeatures.shaderClipDistance;
         deviceFeatures.shaderCullDistance = supportedDeviceFeatures.shaderCullDistance;

@@ -13,6 +13,10 @@
 namespace MobileGL {
     namespace MG_Util {
         VkPrimitiveTopology ConvertPrimitiveModeToVkEnum(GLenum mode);
+        // Maps GL_FILL/GL_LINE/GL_POINT to the matching VkPolygonMode. LINE/POINT require the
+        // fillModeNonSolid device feature; the caller is responsible for falling back to FILL when
+        // that feature is unavailable.
+        VkPolygonMode ConvertPolygonModeToVkEnum(GLenum mode);
         VkCullModeFlags ConvertCullFaceModeToVkEnum(CullFaceMode value, Bool invertClockwise = false);
         VkLogicOp ConvertLogicOperationToVkEnum(LogicOperation value);
         VkCompareOp ConvertDepthTestFuncToVkEnum(DepthTestFunc value);

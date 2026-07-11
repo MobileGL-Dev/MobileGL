@@ -126,6 +126,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         XXHASH_VERIFY(XXH64_update(m_hashState, &payload.rasterizationSamples, sizeof(payload.rasterizationSamples)));
         XXHASH_VERIFY(XXH64_update(m_hashState, &payload.subpass, sizeof(payload.subpass)));
         XXHASH_VERIFY(XXH64_update(m_hashState, &payload.topology, sizeof(payload.topology)));
+        XXHASH_VERIFY(XXH64_update(m_hashState, &payload.polygonMode, sizeof(payload.polygonMode)));
         XXHASH_VERIFY(XXH64_update(m_hashState, &payload.cullMode, sizeof(payload.cullMode)));
         XXHASH_VERIFY(XXH64_update(m_hashState, &payload.frontFace, sizeof(payload.frontFace)));
         XXHASH_VERIFY(XXH64_update(m_hashState, &payload.depthTestEnable, sizeof(payload.depthTestEnable)));
@@ -217,7 +218,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         vpci.scissorCount = 1;
 
         VkPipelineRasterizationStateCreateInfo raster{VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};
-        raster.polygonMode = VK_POLYGON_MODE_FILL;
+        raster.polygonMode = payload.polygonMode;
         raster.cullMode = payload.cullMode;
         raster.frontFace = payload.frontFace;
         raster.depthBiasEnable = payload.depthBiasEnable ? VK_TRUE : VK_FALSE;
