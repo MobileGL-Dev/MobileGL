@@ -372,6 +372,14 @@ namespace MobileGL::MG_State {
             return m_renderState.GetPolygonModeBack();
         }
 
+        void GLContext::SetPrimitiveRestartIndex(Uint32 index) {
+            m_renderState.SetPrimitiveRestartIndex(index);
+        }
+
+        Uint32 GLContext::GetPrimitiveRestartIndex() const {
+            return m_renderState.GetPrimitiveRestartIndex();
+        }
+
         void GLContext::SetPointSize(Float size) {
             m_renderState.SetPointSize(size);
         }

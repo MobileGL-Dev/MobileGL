@@ -269,6 +269,10 @@ namespace MobileGL {
         GLenum PolygonModeFront = GL_FILL;
         GLenum PolygonModeBack = GL_FILL;
 
+        // Primitive restart index (glPrimitiveRestartIndex); consumed when GL_PRIMITIVE_RESTART is
+        // enabled during an indexed draw. Default 0.
+        Uint32 PrimitiveRestartIndex = 0;
+
         // Scissor
         Bool ColorLogicOpEnabled = false;
         Bool DebugOutputEnabled = false;
@@ -326,6 +330,8 @@ namespace MobileGL {
                 void SetPolygonMode(GLenum front, GLenum back);
                 GLenum GetPolygonModeFront() const;
                 GLenum GetPolygonModeBack() const;
+                void SetPrimitiveRestartIndex(Uint32 index);
+                Uint32 GetPrimitiveRestartIndex() const;
 
                 // Capabilities
                 void SetCapability(CapabilityInput cap, Bool enabled);

@@ -1351,7 +1351,7 @@ namespace MobileGL::MG_Impl::GLImpl {
                                                                                                     : GL_FALSE;
             return;
         case GL_PRIMITIVE_RESTART_INDEX:
-            *params = 0; // fixed default; PrimitiveRestartIndex entrypoints are stubbed
+            *params = static_cast<GLint>(MG_State::pGLContext->GetPrimitiveRestartIndex());
             return;
         case GL_PROGRAM_BINARY_FORMATS:
             *params = 0; // program-binary entrypoints are stubbed

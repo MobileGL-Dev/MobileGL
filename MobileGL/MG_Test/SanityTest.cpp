@@ -907,3 +907,28 @@ TEST(RenderStateSanity, ColorMaskIndexedStoresAndReadsBack) {
 
     MG_State::pGLContext.reset();
 }
+
+TEST(RenderStateSanity, PrimitiveRestartIndexStoresAndReadsBack) {
+    using namespace MobileGL;
+    using namespace MobileGL::MG_Impl::GLImpl;
+    MG_State::pGLContext = MakeUnique<MG_State::GLState::GLContext>();
+
+    // Default is 0.
+    GLint value = -1;
+    GetIntegerv(GL_PRIMITIVE_RESTART_INDEX, &value);
+    EXPECT_EQ(value, 0);
+
+    // Any GLuint round-trips and generates no error.
+    PrimitiveRestartIndex(0xFFFFu);
+    EXPECT_EQ(GetError(), GL_NO_ERROR);
+    GetIntegerv(GL_PRIMITIVE_RESTART_INDEX, &value);
+    EXPECT_EQ(value, 0xFFFF);
+
+    // The full 32-bit range round-trips (read back as the same bit pattern).
+    PrimitiveRestartIndex(0xFFFFFFFFu);
+    GetIntegerv(GL_PRIMITIVE_RESTART_INDEX, &value);
+    EXPECT_EQ(static_cast<GLuint>(value), 0xFFFFFFFFu);
+    EXPECT_EQ(GetError(), GL_NO_ERROR);
+
+    MG_State::pGLContext.reset();
+}

@@ -53,6 +53,7 @@ namespace MobileGL::MG_Impl::GLImpl {
     void ColorMask(GLboolean red, GLboolean green, GLboolean blue, GLboolean alpha);
     void ColorMaski(GLuint index, GLboolean red, GLboolean green, GLboolean blue, GLboolean alpha);
     void ClampColor(GLenum target, GLenum clamp);
+    void PrimitiveRestartIndex(GLuint index);
     void BlendFuncSeparate(GLenum sfactorRGB, GLenum dfactorRGB, GLenum sfactorAlpha, GLenum dfactorAlpha);
     void BlendEquation(GLenum mode);
     void BlendEquationSeparate(GLenum modeRGB, GLenum modeAlpha);

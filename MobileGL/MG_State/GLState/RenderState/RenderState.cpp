@@ -133,6 +133,16 @@ namespace MobileGL {
                 return m_parameters.PolygonModeBack;
             }
 
+            void RenderState::SetPrimitiveRestartIndex(Uint32 index) {
+                if (m_parameters.PrimitiveRestartIndex == index) return;
+                m_parameters.PrimitiveRestartIndex = index;
+                ++m_version;
+            }
+
+            Uint32 RenderState::GetPrimitiveRestartIndex() const {
+                return m_parameters.PrimitiveRestartIndex;
+            }
+
             void RenderState::SetPointSize(Float size) {
                 if (m_parameters.PointSize == size) return;
 

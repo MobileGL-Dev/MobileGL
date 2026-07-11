@@ -561,6 +561,11 @@ namespace MobileGL::MG_Impl::GLImpl {
             buf, BoolVec4(red != GL_FALSE, green != GL_FALSE, blue != GL_FALSE, alpha != GL_FALSE));
     }
 
+    void PrimitiveRestartIndex_State(GLuint index) {
+        // glPrimitiveRestartIndex accepts any GLuint and generates no error.
+        MG_State::pGLContext->SetPrimitiveRestartIndex(index);
+    }
+
     void ClampColor_State(GLenum target, GLenum clamp) {
         // GL 3.3 core: the only legal target is GL_CLAMP_READ_COLOR. The compatibility-only
         // GL_CLAMP_VERTEX_COLOR / GL_CLAMP_FRAGMENT_COLOR were removed from the core profile and
@@ -922,6 +927,10 @@ namespace MobileGL::MG_Impl::GLImpl {
 
     void ClampColor(GLenum target, GLenum clamp) {
         ClampColor_State(target, clamp);
+    }
+
+    void PrimitiveRestartIndex(GLuint index) {
+        PrimitiveRestartIndex_State(index);
     }
 
     void BlendFuncSeparate(GLenum sfactorRGB, GLenum dfactorRGB, GLenum sfactorAlpha, GLenum dfactorAlpha) {

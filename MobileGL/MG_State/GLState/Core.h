@@ -136,6 +136,8 @@ namespace MobileGL {
                 void SetPolygonMode(GLenum front, GLenum back);
                 GLenum GetPolygonModeFront() const;
                 GLenum GetPolygonModeBack() const;
+                void SetPrimitiveRestartIndex(Uint32 index);
+                Uint32 GetPrimitiveRestartIndex() const;
                 void SetCapability(CapabilityInput cap, Bool enabled);
                 Bool IsCapabilityEnabled(CapabilityInput cap) const;
                 void SetCapabilityIndexed(CapabilityInput cap, Uint index, Bool enabled);
