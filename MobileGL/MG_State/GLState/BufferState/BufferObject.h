@@ -117,6 +117,10 @@ namespace MobileGL {
 
             void UploadData(DataPtr data, SizeT atOffset);
             void UploadSubData(DataPtr data, SizeT atOffset);
+            // Reads `size` bytes from the CPU shadow at `atOffset` into `dst` (glGetBufferSubData).
+            // The shadow reflects CPU writes (BufferData/SubData/maps) and backend write-backs, but not
+            // arbitrary GPU-side writes.
+            void DownloadSubData(void* dst, SizeT atOffset, SizeT size) const;
             void CopyDataFrom(const SharedPtr<BufferObject>& src, SizeT srcOffset, SizeT dstOffset, SizeT size);
 
             void* AcquireMemory(Bool markMapped, Bool read, Bool write);

@@ -185,6 +185,13 @@ namespace MobileGL::MG_State::GLState {
         NotifySubData(atOffset, data.size);
     }
 
+    void BufferObject::DownloadSubData(void* dst, SizeT atOffset, SizeT size) const {
+        MOBILEGL_ASSERT(atOffset + size <= m_size,
+                        "DownloadSubData out of bounds: atOffset (%zu) + size (%zu) > m_size (%zu)", atOffset, size,
+                        m_size);
+        Memcpy(dst, m_dataPtr->data() + atOffset, size);
+    }
+
     void BufferObject::CopyDataFrom(const SharedPtr<BufferObject>& src, SizeT srcOffset, SizeT dstOffset, SizeT size) {
         MOBILEGL_ASSERT(!m_isMapped || (m_mappingAccess & BufferMappingAccessBit::Persistent),
                         "Cannot copy data while destination buffer is non-persistently mapped.");

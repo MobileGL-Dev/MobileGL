@@ -238,6 +238,47 @@ TEST_F(BufferTest, CopyBufferSubData) {
     ASSERT_EQ(srcObj->GetChangeSerial(), srcSerial);
 }
 
+TEST_F(BufferTest, GetBufferSubDataRoundTrip) {
+    using namespace MobileGL::MG_Impl::GLImpl;
+    GLuint buf;
+    GenBuffers(1, &buf);
+    BindBuffer(GL_ARRAY_BUFFER, buf);
+
+    const Vector<Int> src{10, 20, 30, 40, 50, 60, 70, 80};
+    const SizeT bytes = src.size() * sizeof(Int);
+    BufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(bytes), src.data(), GL_STATIC_DRAW);
+    EXPECT_EQ(GetError(), GL_NO_ERROR);
+
+    // Read a middle range [2..6).
+    Vector<Int> mid(4, -1);
+    GetBufferSubData(GL_ARRAY_BUFFER, 2 * sizeof(Int), 4 * sizeof(Int), mid.data());
+    EXPECT_EQ(GetError(), GL_NO_ERROR);
+    EXPECT_EQ(mid, (Vector<Int>{30, 40, 50, 60}));
+
+    // Read the whole buffer back.
+    Vector<Int> whole(src.size(), 0);
+    GetBufferSubData(GL_ARRAY_BUFFER, 0, static_cast<GLsizeiptr>(bytes), whole.data());
+    EXPECT_EQ(whole, src);
+
+    // Out-of-range range -> GL_INVALID_VALUE, destination untouched.
+    Vector<Int> guard(2, 999);
+    GetBufferSubData(GL_ARRAY_BUFFER, static_cast<GLintptr>(bytes) - sizeof(Int), 2 * sizeof(Int), guard.data());
+    EXPECT_EQ(GetError(), GL_INVALID_VALUE);
+    EXPECT_EQ(guard, (Vector<Int>{999, 999}));
+
+    // Negative offset -> GL_INVALID_VALUE.
+    GetBufferSubData(GL_ARRAY_BUFFER, -1, sizeof(Int), guard.data());
+    EXPECT_EQ(GetError(), GL_INVALID_VALUE);
+}
+
+TEST_F(BufferTest, GetBufferSubDataNoBufferBound) {
+    using namespace MobileGL::MG_Impl::GLImpl;
+    BindBuffer(GL_ARRAY_BUFFER, 0); // ensure nothing is bound
+    Int dst = 0;
+    GetBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(Int), &dst);
+    EXPECT_EQ(GetError(), GL_INVALID_OPERATION);
+}
+
 TEST_F(BufferTest, WriteWhileMapped) {
     auto& slot = MobileGL::MG_State::pGLContext->GetBufferBindingSlot(BufferTarget::ShaderStorage);
     Vector<Uint> bufferNames;

@@ -116,6 +116,13 @@ namespace MobileGL::MG_Impl::GLImpl {
         MG_Backend::gBackendFunctionsTable.GL.DrawArrays(mode, first, count);
     }
 
+    void MultiDrawArrays_Backend(GLenum mode, const GLint* first, const GLsizei* count, GLsizei drawcount) {
+#ifdef TRACY_ENABLE
+        ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
+#endif
+        MG_Backend::gBackendFunctionsTable.GL.MultiDrawArrays(mode, first, count, drawcount);
+    }
+
     void DrawElementsBaseVertex_Backend(GLenum mode, GLsizei count, GLenum type, const void* indices,
                                         GLint basevertex) {
 #ifdef TRACY_ENABLE
@@ -424,6 +431,18 @@ namespace MobileGL::MG_Impl::GLImpl {
         if (!ValidateCurrentProgramForExecution(__func__)) return;
         if (!ValidatePrimitiveModeForBackend(__func__, mode)) return;
         DrawArrays_Backend(mode, first, count);
+    }
+
+    void MultiDrawArrays(GLenum mode, const GLint* first, const GLsizei* count, GLsizei drawcount) {
+        if (!ValidateCurrentProgramForExecution(__func__)) return;
+        if (!ValidatePrimitiveModeForBackend(__func__, mode)) return;
+        if (drawcount < 0) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidValue,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__, "drawcount must be non-negative."));
+            return;
+        }
+        MultiDrawArrays_Backend(mode, first, count, drawcount);
     }
 
     void MultiDrawElements(GLenum mode, const GLsizei* count, GLenum type, const void* const* indices,

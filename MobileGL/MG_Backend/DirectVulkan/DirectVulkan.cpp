@@ -1266,6 +1266,33 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         pVulkanRenderer->DrawElements(payload);
     }
 
+    void MultiDrawArrays(GLenum mode, const GLint* first, const GLsizei* count, GLsizei drawcount) {
+        MOBILEGL_ASSERT(pVulkanRenderer, "DirectVulkan::MultiDrawArrays called with null VulkanRenderer");
+        MOBILEGL_ASSERT(MG_State::pGLContext, "DirectVulkan::MultiDrawArrays called with null GL context");
+        if (drawcount <= 0) {
+            return;
+        }
+
+        MultiDrawCmd payload{};
+        payload.mode = mode;
+
+        // TODO: allocate draw cmd buf elsewhere
+        static Vector<DrawCmdParam> params;
+        params.clear();
+        params.resize(drawcount);
+
+        for (GLsizei i = 0; i < drawcount; ++i) {
+            auto& param = params[i];
+            param.vertexCount = count[i] > 0 ? static_cast<Uint32>(count[i]) : 0;
+            param.instanceCount = 1;
+            param.firstVertex = first[i] > 0 ? static_cast<Uint32>(first[i]) : 0;
+            param.firstInstance = 0;
+        }
+        payload.drawCount = static_cast<Uint32>(drawcount);
+        payload.pParams = params.data();
+        pVulkanRenderer->MultiDrawArrays(payload);
+    }
+
     void MultiDrawElements(GLenum mode, const GLsizei* count, GLenum type, const GLvoid* const* indices,
                            GLsizei drawcount) {
         MOBILEGL_ASSERT(pVulkanRenderer, "DirectVulkan::MultiDrawElements called with null VulkanRenderer");

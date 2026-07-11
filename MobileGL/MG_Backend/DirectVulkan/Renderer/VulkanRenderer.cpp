@@ -5195,6 +5195,36 @@ void main() {
             payload.params.firstInstance);
     }
 
+    void VulkanRenderer::MultiDrawArrays(const MultiDrawCmd& payload) {
+        auto& frame = m_frameContext.GetCurrent();
+
+        // One state/pipeline setup covering the union of all sub-draw vertex ranges, then a vkCmdDraw
+        // per range -- mirrors MultiDrawElements.
+        DrawCmdParam vertexRange{};
+        for (Uint32 idraw = 0; idraw < payload.drawCount; ++idraw) {
+            vertexRange.vertexCount = std::max(vertexRange.vertexCount,
+                                               payload.pParams[idraw].firstVertex + payload.pParams[idraw].vertexCount);
+            vertexRange.instanceCount = std::max(vertexRange.instanceCount, payload.pParams[idraw].instanceCount);
+            vertexRange.firstInstance = std::max(vertexRange.firstInstance, payload.pParams[idraw].firstInstance);
+        }
+
+        if (!SetupDraw(frame, payload.mode, 0, vertexRange)) {
+            return;
+        }
+
+        MOBILEGL_ASSERT(frame.isCommandRecording, "%s: frame recording was not started", __func__);
+
+        VkCommandBuffer& commandBuffer = frame.commandBuffer;
+
+        for (Uint32 idraw = 0; idraw < payload.drawCount; ++idraw) {
+            vkCmdDraw(commandBuffer,
+                      payload.pParams[idraw].vertexCount,
+                      payload.pParams[idraw].instanceCount,
+                      payload.pParams[idraw].firstVertex,
+                      payload.pParams[idraw].firstInstance);
+        }
+    }
+
     void VulkanRenderer::MultiDrawElements(const MultiDrawIndexedCmd& payload) {
         auto& frame = m_frameContext.GetCurrent();
 

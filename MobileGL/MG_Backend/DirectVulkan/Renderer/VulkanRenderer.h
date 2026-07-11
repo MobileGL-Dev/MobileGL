@@ -87,6 +87,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         DrawIndexedCmdParam* pParams = nullptr;
     };
 
+    struct MultiDrawCmd {
+        GLenum mode = GL_TRIANGLES;
+        Uint32 drawCount = 0;
+        DrawCmdParam* pParams = nullptr;
+    };
+
     struct QueueFamilyIndices {
         Int32 graphicsFamily = -1;
         Int32 presentFamily = -1;
@@ -161,6 +167,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         static VkMemoryBarrier BuildMemoryBarrierForGlBarriers(GLbitfield barriers);
         void DrawArrays(const DrawCmd& payload);
         void DrawElements(const DrawIndexedCmd& payload);
+        void MultiDrawArrays(const MultiDrawCmd& payload);
         void MultiDrawElements(const MultiDrawIndexedCmd& payloads);
         void MultiDrawElementsIndirect(GLenum mode, GLenum type, const void* indirect, GLsizei drawcount,
                                        GLsizei stride);

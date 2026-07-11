@@ -38,6 +38,7 @@ namespace MobileGL::MG_Impl::GLImpl {
     void DrawArraysIndirect(GLenum mode, const void* indirect);
     void DrawElementsBaseVertex(GLenum mode, GLsizei count, GLenum type, const void* indices, GLint basevertex);
     void DrawArrays(GLenum mode, GLint first, GLsizei count);
+    void MultiDrawArrays(GLenum mode, const GLint* first, const GLsizei* count, GLsizei drawcount);
     void MultiDrawElements(GLenum mode, const GLsizei* count, GLenum type, const void* const* indices,
                            GLsizei drawcount);
     void MultiDrawElementsBaseVertex(GLenum mode, const GLsizei* count, GLenum type, const void* const* indices,

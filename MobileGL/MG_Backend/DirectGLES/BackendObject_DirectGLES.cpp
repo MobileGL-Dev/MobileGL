@@ -874,6 +874,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             funcsTable.GL.DrawArrays = DrawArrays;
             funcsTable.GL.DrawElements = DrawElements;
             funcsTable.GL.DrawElementsBaseVertex = DrawElementsBaseVertex;
+            funcsTable.GL.MultiDrawArrays = MultiDrawArrays;
             funcsTable.GL.MultiDrawElements = MultiDrawElements;
             funcsTable.GL.MultiDrawElementsBaseVertex = MultiDrawElementsBaseVertex;
             funcsTable.GL.MultiDrawElementsIndirect = MultiDrawElementsIndirect;

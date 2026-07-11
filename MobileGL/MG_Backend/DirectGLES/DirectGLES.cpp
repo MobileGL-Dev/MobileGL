@@ -1363,6 +1363,26 @@ namespace MobileGL::MG_Backend::DirectGLES {
         g_GLESFuncs.glDrawElementsBaseVertex(mode, count, type, indices, basevertex);
     }
 
+    void MultiDrawArrays(GLenum mode, const GLint* first, const GLsizei* count, GLsizei drawcount) {
+#if MOBILEGL_LOG_ACTIVE_LEVEL <= MOBILEGL_LOG_LEVEL_DEBUG && MOBILEGL_ENABLE_SCOPE_MARKER
+        DebugImpl::OpenGLScopeMarker marker(__func__);
+#endif
+        DrawSyncBit syncBit = DrawSyncBit::None;
+        PrepareForDraw(syncBit);
+
+        const auto& currentVAO = MG_State::pGLContext->GetBoundVertexArray();
+        for (GLsizei i = 0; i < drawcount; ++i) {
+            // Client-side arrays are uploaded per sub-draw range, like the single DrawArrays path.
+            if (currentVAO) {
+                const auto& backendVAOIt = VertexArrayImpl::g_backendVertexArrayObjects.find(currentVAO.get());
+                if (backendVAOIt != VertexArrayImpl::g_backendVertexArrayObjects.end()) {
+                    backendVAOIt->second->SyncClientSideAttributesForDrawArrays(currentVAO, first[i], count[i]);
+                }
+            }
+            g_GLESFuncs.glDrawArrays(mode, first[i], count[i]);
+        }
+    }
+
     void MultiDrawElements(GLenum mode, const GLsizei* count, GLenum type, const GLvoid* const* indices,
                            GLsizei drawcount) {
 #if MOBILEGL_LOG_ACTIVE_LEVEL <= MOBILEGL_LOG_LEVEL_DEBUG && MOBILEGL_ENABLE_SCOPE_MARKER
