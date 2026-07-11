@@ -702,9 +702,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 }
             }
 
-            { // Color mask
-                if (parameters.ColorMask != g_syncedRenderStateParameters.ColorMask) {
-                    const BoolVec4& colorMask = parameters.ColorMask;
+            { // Color mask. GLES core has only the non-indexed glColorMask, so sync draw buffer 0.
+                if (parameters.ColorMasks[0] != g_syncedRenderStateParameters.ColorMasks[0]) {
+                    const BoolVec4& colorMask = parameters.ColorMasks[0];
                     g_GLESFuncs.glColorMask(ToGLBoolean(colorMask.x()), ToGLBoolean(colorMask.y()),
                                             ToGLBoolean(colorMask.z()), ToGLBoolean(colorMask.w()));
                 }

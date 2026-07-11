@@ -493,6 +493,14 @@ namespace MobileGL::MG_State {
             return m_renderState.GetColorMask();
         }
 
+        void GLContext::SetColorMaskIndexed(Uint index, BoolVec4 mask) {
+            m_renderState.SetColorMaskIndexed(index, mask);
+        }
+
+        BoolVec4 GLContext::GetColorMaskIndexed(Uint index) const {
+            return m_renderState.GetColorMaskIndexed(index);
+        }
+
         void GLContext::SetClearColor(FloatVec4 color) {
             m_renderState.SetClearColor(color);
         }

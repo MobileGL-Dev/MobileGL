@@ -26,7 +26,12 @@ namespace MobileGL {
                 }
             } // namespace
 
-            RenderState::RenderState() {}
+            RenderState::RenderState() {
+                // The color writemask defaults to all-true for every draw buffer.
+                for (auto& mask : m_parameters.ColorMasks) {
+                    mask = BoolVec4(true, true, true, true);
+                }
+            }
 
             Uint RenderState::GetVersion() const {
                 return m_version;
@@ -437,14 +442,30 @@ namespace MobileGL {
 
             // -------------------- Color Mask --------------------
             void RenderState::SetColorMask(BoolVec4 mask) {
-                if (m_parameters.ColorMask == mask) return;
-
-                m_parameters.ColorMask = mask;
-                ++m_version;
+                // glColorMask broadcasts the same mask to every draw buffer.
+                Bool changed = false;
+                for (auto& slot : m_parameters.ColorMasks) {
+                    if (!(slot == mask)) {
+                        slot = mask;
+                        changed = true;
+                    }
+                }
+                if (changed) ++m_version;
             }
 
             BoolVec4 RenderState::GetColorMask() const {
-                return m_parameters.ColorMask;
+                // Non-indexed query reports draw buffer 0.
+                return m_parameters.ColorMasks[0];
+            }
+
+            void RenderState::SetColorMaskIndexed(Uint index, BoolVec4 mask) {
+                if (m_parameters.ColorMasks[index] == mask) return;
+                m_parameters.ColorMasks[index] = mask;
+                ++m_version;
+            }
+
+            BoolVec4 RenderState::GetColorMaskIndexed(Uint index) const {
+                return m_parameters.ColorMasks[index];
             }
 
             // -------------------- Clear State --------------------

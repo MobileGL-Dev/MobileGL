@@ -851,3 +851,55 @@ TEST(RenderStateSanity, PolygonModeStoresAndReadsBack) {
 
     MG_State::pGLContext.reset();
 }
+
+TEST(RenderStateSanity, ColorMaskIndexedStoresAndReadsBack) {
+    using namespace MobileGL;
+    using namespace MobileGL::MG_Impl::GLImpl;
+    constexpr GLuint kMaxDrawBuffers = MG_State::GLState::FramebufferObject::MAX_DRAW_BUFFERS;
+    MG_State::pGLContext = MakeUnique<MG_State::GLState::GLContext>();
+
+    // Default: every draw buffer's writemask is all-true.
+    GLboolean b0[4] = {GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE};
+    GetBooleanv(GL_COLOR_WRITEMASK, b0);
+    EXPECT_EQ(b0[0], GL_TRUE); EXPECT_EQ(b0[1], GL_TRUE);
+    EXPECT_EQ(b0[2], GL_TRUE); EXPECT_EQ(b0[3], GL_TRUE);
+    GLboolean bi[4] = {GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE};
+    GetBooleani_v(GL_COLOR_WRITEMASK, 3, bi);
+    EXPECT_EQ(bi[0], GL_TRUE); EXPECT_EQ(bi[3], GL_TRUE);
+    EXPECT_EQ(GetError(), GL_NO_ERROR);
+
+    // glColorMaski sets ONLY the addressed draw buffer; buffer 0 stays untouched, and the non-indexed
+    // glGetBooleanv still reports buffer 0.
+    ColorMaski(2, GL_FALSE, GL_TRUE, GL_FALSE, GL_TRUE);
+    EXPECT_EQ(GetError(), GL_NO_ERROR);
+    GetBooleani_v(GL_COLOR_WRITEMASK, 2, bi);
+    EXPECT_EQ(bi[0], GL_FALSE); EXPECT_EQ(bi[1], GL_TRUE);
+    EXPECT_EQ(bi[2], GL_FALSE); EXPECT_EQ(bi[3], GL_TRUE);
+    GetBooleanv(GL_COLOR_WRITEMASK, b0);
+    EXPECT_EQ(b0[0], GL_TRUE); EXPECT_EQ(b0[1], GL_TRUE); // buffer 0 unchanged by ColorMaski(2, ...)
+
+    // GLboolean coercion: any nonzero byte enables the component (NOT == GL_TRUE).
+    ColorMaski(1, static_cast<GLboolean>(2), static_cast<GLboolean>(0),
+               static_cast<GLboolean>(2), static_cast<GLboolean>(0));
+    GetBooleani_v(GL_COLOR_WRITEMASK, 1, bi);
+    EXPECT_EQ(bi[0], GL_TRUE);  // 2 -> TRUE
+    EXPECT_EQ(bi[1], GL_FALSE); // 0 -> FALSE
+    EXPECT_EQ(bi[2], GL_TRUE);
+    EXPECT_EQ(bi[3], GL_FALSE);
+
+    // glColorMask (non-indexed) broadcasts to EVERY draw buffer, overwriting the per-buffer masks.
+    ColorMask(GL_FALSE, GL_FALSE, GL_TRUE, GL_TRUE);
+    GetBooleani_v(GL_COLOR_WRITEMASK, 2, bi);
+    EXPECT_EQ(bi[0], GL_FALSE); EXPECT_EQ(bi[2], GL_TRUE); // buffer 2 was overwritten by the broadcast
+    GetBooleani_v(GL_COLOR_WRITEMASK, 1, bi);
+    EXPECT_EQ(bi[0], GL_FALSE); EXPECT_EQ(bi[3], GL_TRUE);
+
+    // Out-of-range index -> GL_INVALID_VALUE, no state change.
+    ColorMaski(kMaxDrawBuffers, GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+    EXPECT_EQ(GetError(), GL_INVALID_VALUE);
+    GetBooleani_v(GL_COLOR_WRITEMASK, 2, bi);
+    EXPECT_EQ(bi[0], GL_FALSE); // unchanged (still the broadcast value)
+    EXPECT_EQ(bi[2], GL_TRUE);
+
+    MG_State::pGLContext.reset();
+}

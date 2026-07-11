@@ -411,7 +411,7 @@ DECLARE_GL_FUNCTION_HEAD(void, BlendFunci, GLuint buf, GLenum src, GLenum dst) D
 DECLARE_GL_FUNCTION_HEAD(void, BlendFunciARB, GLuint buf, GLenum src, GLenum dst) DECLARE_GL_FUNCTION_END_NO_RETURN(void, BlendFunci, buf, src, dst)
 DECLARE_GL_FUNCTION_HEAD(void, BlendFuncSeparatei, GLuint buf, GLenum srcRGB, GLenum dstRGB, GLenum srcAlpha, GLenum dstAlpha) DECLARE_GL_FUNCTION_END_NO_RETURN(void, BlendFuncSeparatei, buf, srcRGB, dstRGB, srcAlpha, dstAlpha)
 DECLARE_GL_FUNCTION_HEAD(void, BlendFuncSeparateiARB, GLuint buf, GLenum srcRGB, GLenum dstRGB, GLenum srcAlpha, GLenum dstAlpha) DECLARE_GL_FUNCTION_END_NO_RETURN(void, BlendFuncSeparatei, buf, srcRGB, dstRGB, srcAlpha, dstAlpha)
-DECLARE_GL_FUNCTION_STUB_HEAD(void, ColorMaski, GLuint index, GLboolean r, GLboolean g, GLboolean b, GLboolean a) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, ColorMaski, index, r, g, b, a)
+DECLARE_GL_FUNCTION_HEAD(void, ColorMaski, GLuint index, GLboolean r, GLboolean g, GLboolean b, GLboolean a) DECLARE_GL_FUNCTION_END_NO_RETURN(void, ColorMaski, index, r, g, b, a)
 DECLARE_GL_FUNCTION_HEAD(GLboolean, IsEnabledi, GLenum target, GLuint index) DECLARE_GL_FUNCTION_END(GLboolean, IsEnabledi, target, index)
 DECLARE_GL_FUNCTION_HEAD(void, DrawElementsBaseVertex, GLenum mode, GLsizei count, GLenum type, const void* indices, GLint basevertex) DECLARE_GL_FUNCTION_END_NO_RETURN(void, DrawElementsBaseVertex, mode, count, type, indices, basevertex)
 DECLARE_GL_FUNCTION_HEAD(void, DrawRangeElementsBaseVertex, GLenum mode, GLuint start, GLuint end, GLsizei count, GLenum type, const void* indices, GLint basevertex) DECLARE_GL_FUNCTION_END_NO_RETURN(void, DrawRangeElementsBaseVertex, mode, start, end, count, type, indices, basevertex)

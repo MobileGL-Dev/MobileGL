@@ -164,6 +164,8 @@ namespace MobileGL {
                 const StencilFaceState& GetStencilState(StencilFace face) const;
                 void SetColorMask(BoolVec4 mask);
                 BoolVec4 GetColorMask() const;
+                void SetColorMaskIndexed(Uint index, BoolVec4 mask);
+                BoolVec4 GetColorMaskIndexed(Uint index) const;
                 void SetClearColor(FloatVec4 color);
                 const FloatVec4& GetClearColor() const;
                 void SetClearDepth(Float depth);

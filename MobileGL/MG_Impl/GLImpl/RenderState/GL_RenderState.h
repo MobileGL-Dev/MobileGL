@@ -51,6 +51,7 @@ namespace MobileGL::MG_Impl::GLImpl {
     void DepthFunc(GLenum func);
     void CullFace(GLenum mode);
     void ColorMask(GLboolean red, GLboolean green, GLboolean blue, GLboolean alpha);
+    void ColorMaski(GLuint index, GLboolean red, GLboolean green, GLboolean blue, GLboolean alpha);
     void ClampColor(GLenum target, GLenum clamp);
     void BlendFuncSeparate(GLenum sfactorRGB, GLenum dfactorRGB, GLenum sfactorAlpha, GLenum dfactorAlpha);
     void BlendEquation(GLenum mode);

@@ -230,8 +230,9 @@ namespace MobileGL {
         DepthTestFunc DepthFunc = DepthTestFunc::Less;
         Bool DepthMask = true;
 
-        // Color Mask
-        BoolVec4 ColorMask = BoolVec4(true, true, true, true);
+        // Color Mask. Per-draw-buffer state (glColorMaski); glColorMask broadcasts to all buffers.
+        // Every entry is initialized to all-true in RenderState's constructor.
+        Array<BoolVec4, MG_State::GLState::FramebufferObject::MAX_DRAW_BUFFERS> ColorMasks;
 
         // Clear State
         FloatVec4 ClearColor = FloatVec4(0.0f, 0.0f, 0.0f, 1.0f);
@@ -358,9 +359,13 @@ namespace MobileGL {
                                   StencilOperation depthPass);
                 const StencilFaceState& GetStencilState(StencilFace face) const;
 
-                // Color Mask
+                // Color Mask. SetColorMask broadcasts to every draw buffer and GetColorMask returns
+                // draw buffer 0; the indexed forms address a single draw buffer (glColorMaski). The
+                // caller is responsible for validating index against MAX_DRAW_BUFFERS.
                 void SetColorMask(BoolVec4 mask);
                 BoolVec4 GetColorMask() const;
+                void SetColorMaskIndexed(Uint index, BoolVec4 mask);
+                BoolVec4 GetColorMaskIndexed(Uint index) const;
 
                 // Clear State
                 void SetClearColor(FloatVec4 color);

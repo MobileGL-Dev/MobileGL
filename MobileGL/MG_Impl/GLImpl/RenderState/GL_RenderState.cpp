@@ -361,6 +361,25 @@ namespace MobileGL::MG_Impl::GLImpl {
             return;
         }
 
+        if (target == GL_COLOR_WRITEMASK) {
+            // Indexed per-draw-buffer color writemask writes 4 booleans (R,G,B,A) for draw buffer
+            // `index`. The non-indexed glGetBooleanv(GL_COLOR_WRITEMASK) reports draw buffer 0.
+            if (index >= MG_State::GLState::FramebufferObject::MAX_DRAW_BUFFERS) {
+                MG_State::pGLContext->RecordError(
+                    ErrorCode::InvalidValue,
+                    MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", "GetBooleani_v_State",
+                                                 "Color writemask draw buffer index " + std::to_string(index) +
+                                                     " is out of range."));
+                return;
+            }
+            const BoolVec4 mask = MG_State::pGLContext->GetColorMaskIndexed(index);
+            data[0] = mask.x() ? GL_TRUE : GL_FALSE;
+            data[1] = mask.y() ? GL_TRUE : GL_FALSE;
+            data[2] = mask.z() ? GL_TRUE : GL_FALSE;
+            data[3] = mask.w() ? GL_TRUE : GL_FALSE;
+            return;
+        }
+
         *data = IsEnabledi_State(target, index);
     }
 
@@ -519,8 +538,27 @@ namespace MobileGL::MG_Impl::GLImpl {
     }
 
     void ColorMask_State(GLboolean red, GLboolean green, GLboolean blue, GLboolean alpha) {
+        // glColorMask broadcasts to every draw buffer. GLboolean coercion: any nonzero value enables
+        // the component; only exactly GL_FALSE disables it.
         MG_State::pGLContext->SetColorMask(
-            BoolVec4(red == GL_TRUE, green == GL_TRUE, blue == GL_TRUE, alpha == GL_TRUE));
+            BoolVec4(red != GL_FALSE, green != GL_FALSE, blue != GL_FALSE, alpha != GL_FALSE));
+    }
+
+    void ColorMaski_State(GLuint buf, GLboolean red, GLboolean green, GLboolean blue, GLboolean alpha) {
+        // Indexed color writemask for the single draw buffer `buf`. buf is a GLuint index, never an
+        // enum, so the only error is GL_INVALID_VALUE when it is out of range (mirrors the indexed
+        // blend entry points, which bound against MAX_DRAW_BUFFERS).
+        if (buf >= MG_State::GLState::FramebufferObject::MAX_DRAW_BUFFERS) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidValue,
+                MakeUnique<GenericErrorInfo>(
+                    "MG_Impl/GLImpl", __func__,
+                    "glColorMaski buffer index " + std::to_string(buf) + " is out of range. Max supported is " +
+                        std::to_string(MG_State::GLState::FramebufferObject::MAX_DRAW_BUFFERS - 1) + "."));
+            return;
+        }
+        MG_State::pGLContext->SetColorMaskIndexed(
+            buf, BoolVec4(red != GL_FALSE, green != GL_FALSE, blue != GL_FALSE, alpha != GL_FALSE));
     }
 
     void ClampColor_State(GLenum target, GLenum clamp) {
@@ -876,6 +914,10 @@ namespace MobileGL::MG_Impl::GLImpl {
 
     void ColorMask(GLboolean red, GLboolean green, GLboolean blue, GLboolean alpha) {
         ColorMask_State(red, green, blue, alpha);
+    }
+
+    void ColorMaski(GLuint index, GLboolean red, GLboolean green, GLboolean blue, GLboolean alpha) {
+        ColorMaski_State(index, red, green, blue, alpha);
     }
 
     void ClampColor(GLenum target, GLenum clamp) {
