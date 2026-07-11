@@ -27,6 +27,12 @@ namespace MobileGL {
         OneMinusConstantColor,
         ConstantAlpha,
         OneMinusConstantAlpha,
+        // Dual-source blend factors (GL_SRC1_*, glBindFragDataLocationIndexed); require the
+        // dualSrcBlend device feature.
+        Src1Color,
+        OneMinusSrc1Color,
+        Src1Alpha,
+        OneMinusSrc1Alpha,
         BlendFactorCount,
         Unknown = -1
     };

@@ -76,6 +76,15 @@ namespace MobileGL {
                 auto& writableType = ent.symbol->getWritableType();
                 writableType.getQualifier().layoutLocation = it->second;
             }
+            // Dual-source blend color index (glBindFragDataLocationIndexed) -> layout(index = N).
+            // Only the non-zero (dual-source) index is emitted: index 0 is the GL default, and
+            // emitting an explicit "index = 0" qualifier would demand GL_EXT_blend_func_extended on
+            // GLES even for ordinary single-source fragment outputs.
+            auto idxIt = m_explicitFragOutIndices.find(name.c_str());
+            if (idxIt != m_explicitFragOutIndices.end() && idxIt->second != 0) {
+                auto& writableType = ent.symbol->getWritableType();
+                writableType.getQualifier().layoutIndex = idxIt->second;
+            }
         }
         if (ShouldAssignPlainUniformLocation(type)) {
             const int size = glslang::TIntermediate::computeTypeUniformLocationSize(type);

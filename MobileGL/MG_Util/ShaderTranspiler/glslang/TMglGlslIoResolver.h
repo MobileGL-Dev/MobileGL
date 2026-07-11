@@ -26,13 +26,15 @@ namespace MobileGL {
     public:
         using ExplicitVarSlotMap = UnorderedMap<String, Uint>;
         TMglGlslIoResolver(const glslang::TIntermediate& intermediate, const ExplicitVarSlotMap& vertexIns,
-                           const ExplicitVarSlotMap& fragOuts, ExplicitVarSlotMap* opaqueUniformBindings)
+                           const ExplicitVarSlotMap& fragOuts, const ExplicitVarSlotMap& fragOutIndices,
+                           ExplicitVarSlotMap* opaqueUniformBindings)
             : TDefaultGlslIoResolver(intermediate), m_explicitVertexIns(vertexIns), m_explicitFragOuts(fragOuts),
-              m_explicitOpaqueUniformBindings(opaqueUniformBindings) {}
+              m_explicitFragOutIndices(fragOutIndices), m_explicitOpaqueUniformBindings(opaqueUniformBindings) {}
         TMglGlslIoResolver(const glslang::TProgram& program, const EShLanguage stage,
                            const ExplicitVarSlotMap& vertexIns, const ExplicitVarSlotMap& fragOuts,
-                           ExplicitVarSlotMap* opaqueUniformBindings)
-            : TMglGlslIoResolver(*program.getIntermediate(stage), vertexIns, fragOuts, opaqueUniformBindings) {}
+                           const ExplicitVarSlotMap& fragOutIndices, ExplicitVarSlotMap* opaqueUniformBindings)
+            : TMglGlslIoResolver(*program.getIntermediate(stage), vertexIns, fragOuts, fragOutIndices,
+                                 opaqueUniformBindings) {}
         void reserverStorageSlot(glslang::TVarEntryInfo& ent, TInfoSink& infoSink) override;
         void reserverResourceSlot(glslang::TVarEntryInfo& ent, TInfoSink& infoSink) override;
         int resolveUniformLocation(EShLanguage stage, glslang::TVarEntryInfo& ent) override;
@@ -43,6 +45,7 @@ namespace MobileGL {
 
         const ExplicitVarSlotMap& m_explicitVertexIns;
         const ExplicitVarSlotMap& m_explicitFragOuts;
+        const ExplicitVarSlotMap& m_explicitFragOutIndices;
         ExplicitVarSlotMap* m_explicitOpaqueUniformBindings = nullptr;
         std::map<glslang::TString, int> m_plainUniformLocationSizeByName;
         std::map<glslang::TString, int> m_plainUniformLocationByName;

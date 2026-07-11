@@ -1040,6 +1040,10 @@ namespace MobileGL {
             // An indexed glColorMaski entry point loaded (GLES 3.2 core, or GL_OES/EXT_draw_buffers_indexed).
             // Without it, only the non-indexed glColorMask (draw buffer 0 broadcast) is available.
             Bool SupportsIndexedColorMask = false;
+            // GL_EXT_blend_func_extended is present: the driver accepts GL_SRC1_* dual-source blend
+            // factors and layout(index = 1) fragment outputs. GLES core has no dual-source blending,
+            // so without this a draw using a SRC1 factor cannot proceed.
+            Bool SupportsDualSourceBlend = false;
             // GL_RENDERER contains "ANGLE".
             Bool IsAngleRenderer = false;
             // GL_RENDERER contains both "ANGLE" and "llvmpipe".

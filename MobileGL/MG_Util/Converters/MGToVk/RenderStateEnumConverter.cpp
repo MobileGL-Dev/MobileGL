@@ -175,6 +175,14 @@ namespace MobileGL {
                 return VK_BLEND_FACTOR_CONSTANT_ALPHA;
             case BlendFactor::OneMinusConstantAlpha:
                 return VK_BLEND_FACTOR_ONE_MINUS_CONSTANT_ALPHA;
+            case BlendFactor::Src1Color:
+                return VK_BLEND_FACTOR_SRC1_COLOR;
+            case BlendFactor::OneMinusSrc1Color:
+                return VK_BLEND_FACTOR_ONE_MINUS_SRC1_COLOR;
+            case BlendFactor::Src1Alpha:
+                return VK_BLEND_FACTOR_SRC1_ALPHA;
+            case BlendFactor::OneMinusSrc1Alpha:
+                return VK_BLEND_FACTOR_ONE_MINUS_SRC1_ALPHA;
             default:
                 return VK_BLEND_FACTOR_ONE;
             }

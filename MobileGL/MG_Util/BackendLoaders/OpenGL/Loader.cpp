@@ -742,6 +742,9 @@ namespace MobileGL::MG_Util::BackendLoader {
                 if (std::strcmp(extension, "GL_EXT_disjoint_timer_query") == 0) {
                     caps.SupportsDisjointTimerQuery = true;
                 }
+                if (std::strcmp(extension, "GL_EXT_blend_func_extended") == 0) {
+                    caps.SupportsDualSourceBlend = true;
+                }
             }
         }
 
@@ -754,6 +757,8 @@ namespace MobileGL::MG_Util::BackendLoader {
                                         glesFuncs.glColorMaskiOES != nullptr;
         MGLOG_I("    glPolygonMode (NV/ANGLE): %s", caps.SupportsPolygonMode ? "yes" : "no");
         MGLOG_I("    indexed glColorMaski: %s", caps.SupportsIndexedColorMask ? "yes" : "no");
+        MGLOG_I("    dual-source blend (EXT_blend_func_extended): %s",
+                caps.SupportsDualSourceBlend ? "yes" : "no");
 
         MGLOG_I("OpenGL ES capabilities:");
         glesFuncs.glGetIntegerv(GL_UNIFORM_BUFFER_OFFSET_ALIGNMENT, &caps.UniformBufferOffsetAlignment);

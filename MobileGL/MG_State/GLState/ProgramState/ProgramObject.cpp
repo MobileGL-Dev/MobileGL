@@ -282,6 +282,7 @@ namespace MobileGL::MG_State::GLState {
         MG_Util::ShaderTranspiler::ProgramAttrib attrib{.shaders = Move(shaders),
                                                         .explicitVertexInLocations = m_explicitAttribLocations,
                                                         .explicitFragmentOutLocations = m_explicitFragDataLocation,
+                                                        .explicitFragmentOutIndices = m_explicitFragDataIndex,
                                                         .explicitOpaqueUniformBindings =
                                                             &m_explicitOpaqueUniformBindings};
 
@@ -579,6 +580,7 @@ namespace MobileGL::MG_State::GLState {
         ProgramAttrib attrib{.shaders = Move(shaders),
                              .explicitVertexInLocations = m_explicitAttribLocations,
                              .explicitFragmentOutLocations = m_explicitFragDataLocation,
+                             .explicitFragmentOutIndices = m_explicitFragDataIndex,
                              .explicitOpaqueUniformBindings = &m_explicitOpaqueUniformBindings};
         MGLOG_D("ProgramObject %u: GenerateBinary - linking program for binary", m_externalIndex);
         auto programResult = ShaderCompiler::LinkProgram(attrib);

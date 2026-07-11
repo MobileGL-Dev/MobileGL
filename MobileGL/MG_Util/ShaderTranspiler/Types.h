@@ -31,6 +31,9 @@ namespace MobileGL {
                 Vector<SharedPtr<glslang::TShader>> shaders;
                 UnorderedMap<String, Uint> explicitVertexInLocations;
                 UnorderedMap<String, Uint> explicitFragmentOutLocations;
+                // Dual-source blend color index per fragment output (glBindFragDataLocationIndexed) ->
+                // emitted as layout(index = N).
+                UnorderedMap<String, Uint> explicitFragmentOutIndices;
                 UnorderedMap<String, Uint>* explicitOpaqueUniformBindings = nullptr;
             };
 

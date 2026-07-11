@@ -135,6 +135,18 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         return attachment;
     }
 
+    static Bool IsDualSourceBlendFactor(BlendFactor v) {
+        switch (v) {
+        case BlendFactor::Src1Color:
+        case BlendFactor::OneMinusSrc1Color:
+        case BlendFactor::Src1Alpha:
+        case BlendFactor::OneMinusSrc1Alpha:
+            return true;
+        default:
+            return false;
+        }
+    }
+
     static Bool ShouldUseTransientVertexIndexBuffer(const MG_State::GLState::BufferObject& bufferObject) {
         switch (bufferObject.GetUsage()) {
         case BufferUsage::StreamDraw:
@@ -3244,6 +3256,20 @@ void main() {
                     textureExternalIndex,
                     program.GetExternalIndex());
 #endif
+            }
+            // Dual-source blending (GL_SRC1_* factors from glBlendFunc paired with
+            // glBindFragDataLocationIndexed) requires the dualSrcBlend device feature. It is detected at
+            // device creation and surfaced in the POST; if a shader actually issues a draw with a SRC1
+            // factor on a device that lacks it, there is no fallback, so hard-fail here at use time
+            // rather than silently mistranslating the blend equation.
+            if (effectiveBlendEnabled && !m_dualSrcBlendFeatureEnabled &&
+                (IsDualSourceBlendFactor(srcRGB) || IsDualSourceBlendFactor(dstRGB) ||
+                 IsDualSourceBlendFactor(srcAlpha) || IsDualSourceBlendFactor(dstAlpha))) {
+                THROW_EXCEPTION(
+                    "Dual-source blending (GL_SRC1_* blend factor) was used on color attachment " +
+                    std::to_string(i) +
+                    ", but the Vulkan device does not support the dualSrcBlend feature (see the "
+                    "dualSrcBlend row in the driver POST). No fallback exists; the draw cannot proceed.");
             }
             payload.colorBlendAttachments[i] = MakeColorBlendAttachmentState(
                 effectiveBlendEnabled,

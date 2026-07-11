@@ -248,6 +248,13 @@ namespace MobileGL::MG_Util::SelfTest {
                 builder.Warn("Indexed color mask",
                              "no indexed glColorMaski; per-draw-buffer color masks fall back to draw buffer 0");
             }
+            if (caps.SupportsDualSourceBlend) {
+                builder.Pass("Dual-source blend",
+                             "GL_SRC1_* dual-source blend factors available via GL_EXT_blend_func_extended");
+            } else {
+                builder.Warn("Dual-source blend",
+                             "no GL_EXT_blend_func_extended; GL_SRC1_* dual-source blend factors hard-fail at draw");
+            }
 
             if (es31) {
                 GLint maxVertexSsboBlocks = 0;

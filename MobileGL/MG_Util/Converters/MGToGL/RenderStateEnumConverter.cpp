@@ -41,6 +41,14 @@ namespace MobileGL {
                 return GL_CONSTANT_ALPHA;
             case BlendFactor::OneMinusConstantAlpha:
                 return GL_ONE_MINUS_CONSTANT_ALPHA;
+            case BlendFactor::Src1Color:
+                return GL_SRC1_COLOR;
+            case BlendFactor::OneMinusSrc1Color:
+                return GL_ONE_MINUS_SRC1_COLOR;
+            case BlendFactor::Src1Alpha:
+                return GL_SRC1_ALPHA;
+            case BlendFactor::OneMinusSrc1Alpha:
+                return GL_ONE_MINUS_SRC1_ALPHA;
             default:
                 return GL_UNKNOWN_MGL;
             }

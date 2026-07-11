@@ -1399,6 +1399,25 @@ TEST_F(ProgramTest, CompileAndLinkWithExplicitFragmentOut) {
     EXPECT_EQ(GetFragDataIndex(program, "fragColor"), 1);
     EXPECT_EQ(GetFragDataIndex(program, "notAnActiveOutput"), -1);
 
+    // The color index must reach the transpiled shader as layout(location = 0, index = 1) so the
+    // driver binds fragColor as the second dual-source input; the SPIR-V Index decoration set from
+    // the glslang layoutIndex round-trips through SPIRV-Cross.
+    auto& spirvsIndexed = programObject->GetGeneratedSpirv();
+    auto& fragSpirvIndexed = spirvsIndexed[programObject->GetShaderIndexByStage(ShaderStage::Fragment)];
+    MG_Util::ShaderTranspiler::SpvcSession spvcSessionIndexed(fragSpirvIndexed,
+                                                              MG_Util::ShaderTranspiler::SessionUsageBit::Transpile);
+    spvc_compiler_options optionsIndexed;
+    spvcSessionIndexed.CreateOptions(&optionsIndexed);
+    spvc_compiler_options_set_uint(optionsIndexed, SPVC_COMPILER_OPTION_GLSL_VERSION, 460);
+    spvc_compiler_options_set_bool(optionsIndexed, SPVC_COMPILER_OPTION_GLSL_ES, SPVC_FALSE);
+    spvcSessionIndexed.SetOptions(optionsIndexed);
+    const char* resultIndexed = nullptr;
+    spvcSessionIndexed.Compile(&resultIndexed);
+    printf("%s\n\n", resultIndexed);
+    const char* indexNeedle = "index = 1";
+    ASSERT_TRUE(strstr(resultIndexed, indexNeedle) != nullptr)
+        << "Expected dual-source color index in generated shader.\n(Searching for \"" << indexNeedle << "\")";
+
     // glBindFragDataLocation is equivalent to index 0 and resets it.
     BindFragDataLocation(program, 0, "fragColor");
     LinkProgram(program);

@@ -205,6 +205,7 @@ namespace MobileGL {
                     resolver =
                         MakeUnique<TMglGlslIoResolver>(*program, (EShLanguage)stage, attrib.explicitVertexInLocations,
                                                        attrib.explicitFragmentOutLocations,
+                                                       attrib.explicitFragmentOutIndices,
                                                        attrib.explicitOpaqueUniformBindings);
                     break;
                 }

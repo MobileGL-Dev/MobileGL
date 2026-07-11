@@ -40,6 +40,14 @@ namespace MobileGL {
                 return "ConstantAlpha";
             case BlendFactor::OneMinusConstantAlpha:
                 return "OneMinusConstantAlpha";
+            case BlendFactor::Src1Color:
+                return "Src1Color";
+            case BlendFactor::OneMinusSrc1Color:
+                return "OneMinusSrc1Color";
+            case BlendFactor::Src1Alpha:
+                return "Src1Alpha";
+            case BlendFactor::OneMinusSrc1Alpha:
+                return "OneMinusSrc1Alpha";
             default:
                 return "Unknown";
             }

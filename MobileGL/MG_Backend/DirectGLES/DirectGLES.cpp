@@ -49,6 +49,18 @@ namespace MobileGL::MG_Backend::DirectGLES {
     static SharedPtr<MG_State::GLState::SamplerObject> g_rawDepthFetchSamplerState;
     static SharedPtr<SamplerImpl::BackendSamplerObject> g_rawDepthFetchSamplerBackend;
 
+    static Bool IsDualSourceBlendFactor(BlendFactor v) {
+        switch (v) {
+        case BlendFactor::Src1Color:
+        case BlendFactor::OneMinusSrc1Color:
+        case BlendFactor::Src1Alpha:
+        case BlendFactor::OneMinusSrc1Alpha:
+            return true;
+        default:
+            return false;
+        }
+    }
+
     enum class DrawSyncBit : Uint32 {
         None = 0,
         IndexBuffer = 1 << 0,
@@ -582,6 +594,27 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 using FBO = MG_State::GLState::FramebufferObject;
                 const auto& targetStates = parameters.BlendStates;
                 auto& syncedStates = g_syncedRenderStateParameters.BlendStates;
+
+                // Dual-source blending (GL_SRC1_* factors from glBlendFunc paired with
+                // glBindFragDataLocationIndexed) needs GL_EXT_blend_func_extended; GLES core has none.
+                // Detected at load and surfaced in the POST. There is no fallback, so if a draw actually
+                // enables blending with a SRC1 factor on a driver that lacks it, hard-fail here at use
+                // time rather than let the driver reject glBlendFuncSeparate and silently mis-blend.
+                if (!g_GLESCapabilities.SupportsDualSourceBlend) {
+                    for (Uint i = 0; i < FBO::MAX_DRAW_BUFFERS; ++i) {
+                        const auto& s = targetStates[i];
+                        if (s.Enabled &&
+                            (IsDualSourceBlendFactor(s.SrcFactorRGB) || IsDualSourceBlendFactor(s.DstFactorRGB) ||
+                             IsDualSourceBlendFactor(s.SrcFactorAlpha) || IsDualSourceBlendFactor(s.DstFactorAlpha))) {
+                            THROW_EXCEPTION(
+                                "Dual-source blending (GL_SRC1_* blend factor) was used on draw buffer " +
+                                std::to_string(i) +
+                                ", but the GLES driver does not expose GL_EXT_blend_func_extended (see the "
+                                "dual-source blend row in the driver POST). No fallback exists; the draw "
+                                "cannot proceed.");
+                        }
+                    }
+                }
 
                 Bool allEnabled = true;
                 Bool allDisabled = true;
