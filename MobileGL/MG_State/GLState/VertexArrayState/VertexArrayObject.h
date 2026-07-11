@@ -22,6 +22,8 @@ namespace MobileGL {
                 int Stride = 0;
                 SizeT Offset = 0;
                 Bool IsInteger = false;
+                // GL_BGRA vertex size: four components in reversed (B,G,R,A) memory order. Size stays 4.
+                Bool IsBgra = false;
                 Uint Divisor = 0;
                 SharedPtr<BufferObject> Buffer;
             };
@@ -58,7 +60,7 @@ namespace MobileGL {
                 Bool IsAttributeEnabled(Uint index) const;
 
                 void SetAttributeFormat(Uint index, int size, DataType type, Bool normalized, int stride, SizeT offset,
-                                        Bool isInteger);
+                                        Bool isInteger, Bool isBgra = false);
 
                 void BindAttributeBuffer(Uint index, const SharedPtr<BufferObject>& buffer);
 

@@ -208,12 +208,12 @@ namespace MobileGL::MG_Impl::GLImpl {
         vao->EnableAttribute(index);
     }
 
-    // TODO: implement GL_BGRA support
     void VertexAttribIPointer_State(GLuint index, GLint size, GLenum type, GLsizei stride, const void* pointer) {
         if (!VertexArrayImpl::ValidateVertexAttributeIndex(index)) return;
 
         DataType dataType = MG_Util::ConvertGLEnumToDataType(type);
-        if (!VertexArrayImpl::ValidateVertexAttribPointerParams(index, size, dataType, stride)) return;
+        // Integer path: never normalized, never BGRA/packed (the validator rejects those).
+        if (!VertexArrayImpl::ValidateVertexAttribFormat(index, size, dataType, false, stride, true)) return;
 
         auto& vao = MG_State::pGLContext->GetBoundVertexArray();
         if (!vao) {
@@ -228,17 +228,17 @@ namespace MobileGL::MG_Impl::GLImpl {
 
         auto offset = reinterpret_cast<SizeT>(pointer);
 
-        vao->SetAttributeFormat(index, size, dataType, false, stride, offset, true);
+        vao->SetAttributeFormat(index, size, dataType, false, stride, offset, true, false);
         vao->BindAttributeBuffer(index, vbo);
     }
 
-    // TODO: implement GL_BGRA support
     void VertexAttribPointer_State(GLuint index, GLint size, GLenum type, GLboolean normalized, GLsizei stride,
                                    const void* pointer) {
         if (!VertexArrayImpl::ValidateVertexAttributeIndex(index)) return;
 
         DataType dataType = MG_Util::ConvertGLEnumToDataType(type);
-        if (!VertexArrayImpl::ValidateVertexAttribPointerParams(index, size, dataType, stride)) return;
+        if (!VertexArrayImpl::ValidateVertexAttribFormat(index, size, dataType, normalized == GL_TRUE, stride, false))
+            return;
 
         auto& vao = MG_State::pGLContext->GetBoundVertexArray();
         if (!vao) {
@@ -253,7 +253,11 @@ namespace MobileGL::MG_Impl::GLImpl {
 
         SizeT offset = reinterpret_cast<SizeT>(pointer);
 
-        vao->SetAttributeFormat(index, size, dataType, normalized, stride, offset, false);
+        // GL_BGRA is a 4-component reversed-order format; store 4 components and mark it BGRA so the
+        // backend can pick the reversed VkFormat / pass GL_BGRA through to a GLES driver.
+        const bool isBgra = (size == static_cast<GLint>(GL_BGRA));
+        const int effectiveSize = isBgra ? 4 : size;
+        vao->SetAttributeFormat(index, effectiveSize, dataType, normalized, stride, offset, false, isBgra);
         vao->BindAttributeBuffer(index, vbo);
     }
 

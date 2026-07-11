@@ -1127,3 +1127,92 @@ TEST_F(GeneralVertexArrayTest, CurrentAttrib_PackedValidation) {
     EXPECT_EQ(GetError(), GL_INVALID_VALUE);
 }
 
+// ---- packed / GL_BGRA vertex ARRAY format (glVertexAttribPointer) --------------------------------
+
+// F1: a 2_10_10_10 array format with size 4 is stored verbatim (normalized or not).
+TEST_F(GeneralVertexArrayTest, ArrayFormat_PackedStored) {
+    CreateVAO();
+    CreateVBO(GL_ARRAY_BUFFER, 64);
+
+    VertexAttribPointer(0, 4, GL_INT_2_10_10_10_REV, GL_TRUE, 0, nullptr);
+    EXPECT_EQ(GetError(), GL_NO_ERROR);
+    const auto& a0 = MG_State::pGLContext->GetBoundVertexArray()->GetAttribute(0);
+    EXPECT_EQ(a0.Size, 4);
+    EXPECT_EQ(a0.Type, DataType::Int2101010Rev);
+    EXPECT_TRUE(a0.Normalized);
+    EXPECT_FALSE(a0.IsBgra);
+    EXPECT_FALSE(a0.IsInteger);
+
+    VertexAttribPointer(1, 4, GL_UNSIGNED_INT_2_10_10_10_REV, GL_FALSE, 0, nullptr);
+    EXPECT_EQ(GetError(), GL_NO_ERROR);
+    const auto& a1 = MG_State::pGLContext->GetBoundVertexArray()->GetAttribute(1);
+    EXPECT_EQ(a1.Type, DataType::Uint2101010Rev);
+    EXPECT_FALSE(a1.Normalized);
+}
+
+// F2: GL_BGRA is stored as size 4 with the IsBgra flag set, for GL_UNSIGNED_BYTE and 2_10_10_10.
+TEST_F(GeneralVertexArrayTest, ArrayFormat_BgraStored) {
+    CreateVAO();
+    CreateVBO(GL_ARRAY_BUFFER, 64);
+
+    VertexAttribPointer(0, GL_BGRA, GL_UNSIGNED_BYTE, GL_TRUE, 0, nullptr);
+    EXPECT_EQ(GetError(), GL_NO_ERROR);
+    const auto& a0 = MG_State::pGLContext->GetBoundVertexArray()->GetAttribute(0);
+    EXPECT_EQ(a0.Size, 4); // GL_BGRA is stored as 4 components
+    EXPECT_EQ(a0.Type, DataType::Uint8);
+    EXPECT_TRUE(a0.IsBgra);
+
+    VertexAttribPointer(1, GL_BGRA, GL_INT_2_10_10_10_REV, GL_TRUE, 0, nullptr);
+    EXPECT_EQ(GetError(), GL_NO_ERROR);
+    const auto& a1 = MG_State::pGLContext->GetBoundVertexArray()->GetAttribute(1);
+    EXPECT_EQ(a1.Size, 4);
+    EXPECT_TRUE(a1.IsBgra);
+    EXPECT_EQ(a1.Type, DataType::Int2101010Rev);
+}
+
+// F3: the float-path error table -- add the format, then hard-fail the illegal combinations.
+TEST_F(GeneralVertexArrayTest, ArrayFormat_FloatPathErrors) {
+    CreateVAO();
+    CreateVBO(GL_ARRAY_BUFFER, 64);
+
+    // 2_10_10_10 requires size 4 or GL_BGRA -> size 3 is GL_INVALID_OPERATION.
+    VertexAttribPointer(0, 3, GL_INT_2_10_10_10_REV, GL_TRUE, 0, nullptr);
+    EXPECT_EQ(GetError(), GL_INVALID_OPERATION);
+
+    // Size-range takes precedence: size 7 (packed or not) is GL_INVALID_VALUE.
+    VertexAttribPointer(0, 7, GL_INT_2_10_10_10_REV, GL_TRUE, 0, nullptr);
+    EXPECT_EQ(GetError(), GL_INVALID_VALUE);
+    VertexAttribPointer(0, 0, GL_FLOAT, GL_FALSE, 0, nullptr);
+    EXPECT_EQ(GetError(), GL_INVALID_VALUE);
+
+    // GL_BGRA requires normalized == GL_TRUE.
+    VertexAttribPointer(0, GL_BGRA, GL_UNSIGNED_BYTE, GL_FALSE, 0, nullptr);
+    EXPECT_EQ(GetError(), GL_INVALID_OPERATION);
+
+    // GL_BGRA requires GL_UNSIGNED_BYTE or a 2_10_10_10 type.
+    VertexAttribPointer(0, GL_BGRA, GL_FLOAT, GL_TRUE, 0, nullptr);
+    EXPECT_EQ(GetError(), GL_INVALID_OPERATION);
+    VertexAttribPointer(0, GL_BGRA, GL_SHORT, GL_TRUE, 0, nullptr);
+    EXPECT_EQ(GetError(), GL_INVALID_OPERATION);
+}
+
+// F4: glVertexAttribIPointer rejects packed types (INVALID_ENUM) and GL_BGRA (INVALID_VALUE); a plain
+// integer format still works.
+TEST_F(GeneralVertexArrayTest, ArrayFormat_IntegerPathRejectsPackedAndBgra) {
+    CreateVAO();
+    CreateVBO(GL_ARRAY_BUFFER, 64);
+
+    VertexAttribIPointer(0, 4, GL_INT_2_10_10_10_REV, 0, nullptr);
+    EXPECT_EQ(GetError(), GL_INVALID_ENUM);
+
+    VertexAttribIPointer(0, GL_BGRA, GL_INT, 0, nullptr);
+    EXPECT_EQ(GetError(), GL_INVALID_VALUE);
+
+    VertexAttribIPointer(0, 4, GL_INT, 0, nullptr);
+    EXPECT_EQ(GetError(), GL_NO_ERROR);
+    const auto& a0 = MG_State::pGLContext->GetBoundVertexArray()->GetAttribute(0);
+    EXPECT_EQ(a0.Type, DataType::Int32);
+    EXPECT_TRUE(a0.IsInteger);
+    EXPECT_FALSE(a0.IsBgra);
+}
+

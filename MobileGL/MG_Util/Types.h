@@ -109,6 +109,10 @@ namespace MobileGL {
         Float32,
         Float64,
         Fixed32,
+        // Packed vertex types (GL_ARB_vertex_type_2_10_10_10_rev): four components (10/10/10/2 bits)
+        // in one 32-bit word. Only valid as a vertex array format with size 4 or GL_BGRA.
+        Int2101010Rev,
+        Uint2101010Rev,
         Unknown = -1
     };
 

@@ -48,7 +48,7 @@ namespace MobileGL::MG_State::GLState {
     }
 
     void VertexArrayObject::SetAttributeFormat(Uint index, int size, DataType type, Bool normalized, int stride,
-                                               SizeT offset, Bool isInteger) {
+                                               SizeT offset, Bool isInteger, Bool isBgra) {
         if (index >= MAX_VERTEX_ATTRIBS) return;
 
         // The classic pointer-style API takes back full ownership of the resolved fields.
@@ -56,7 +56,8 @@ namespace MobileGL::MG_State::GLState {
 
         if (m_attributes[index].Size == size && m_attributes[index].Type == type &&
             m_attributes[index].Normalized == normalized && m_attributes[index].Stride == stride &&
-            m_attributes[index].Offset == offset && m_attributes[index].IsInteger == isInteger) {
+            m_attributes[index].Offset == offset && m_attributes[index].IsInteger == isInteger &&
+            m_attributes[index].IsBgra == isBgra) {
             return;
         }
 
@@ -71,6 +72,7 @@ namespace MobileGL::MG_State::GLState {
         attr.Stride = stride;
         attr.Offset = offset;
         attr.IsInteger = isInteger;
+        attr.IsBgra = isBgra;
 
         BumpAttributeFormatVersion(index);
     }
@@ -191,11 +193,12 @@ namespace MobileGL::MG_State::GLState {
 
         auto& attr = m_attributes[attribIndex];
         if (attr.Size != size || attr.Type != type || attr.Normalized != normalized || attr.IsInteger != isInteger ||
-            m_attributeRelativeOffset[attribIndex] != relativeOffset) {
+            attr.IsBgra || m_attributeRelativeOffset[attribIndex] != relativeOffset) {
             attr.Size = size;
             attr.Type = type;
             attr.Normalized = normalized;
             attr.IsInteger = isInteger;
+            attr.IsBgra = false; // the binding-format path (glVertexAttribFormat) does not carry BGRA
             m_attributeRelativeOffset[attribIndex] = relativeOffset;
             BumpAttributeFormatVersion(attribIndex);
         }

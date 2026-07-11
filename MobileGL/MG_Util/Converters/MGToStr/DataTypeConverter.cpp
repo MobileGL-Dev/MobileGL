@@ -32,6 +32,10 @@ namespace MobileGL {
                 return "Float64";
             case DataType::Fixed32:
                 return "Fixed32";
+            case DataType::Int2101010Rev:
+                return "Int2101010Rev";
+            case DataType::Uint2101010Rev:
+                return "Uint2101010Rev";
             case DataType::Unknown:
             default:
                 return "Unknown";

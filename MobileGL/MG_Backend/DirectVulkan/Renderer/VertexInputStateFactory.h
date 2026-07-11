@@ -49,9 +49,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             const MG_State::GLState::VertexArrayObject& vao, HashType hash);
         const BackendVertexInputState& GetOrCreateVertexInputState(const MG_State::GLState::VertexArrayObject& vao);
         static SizeT GetComponentSize(DataType type);
+        // Tightly-packed byte size of one vertex element for this attribute: componentSize * size for
+        // normal types, and 4 (one packed word) for the 2_10_10_10 types and GL_BGRA. Returns 0 for
+        // an unknown/unsupported type.
+        static SizeT GetAttributeByteSize(DataType type, Int size, Bool isBgra);
 
     private:
-        static VkFormat ToVkVertexFormat(DataType type, Int size, Bool normalized, Bool isInteger);
+        static VkFormat ToVkVertexFormat(DataType type, Int size, Bool normalized, Bool isInteger, Bool isBgra = false);
 
         const VulkanRendererConfig& m_config;
         UnorderedMap<HashType, BackendVertexInputState> m_cache;

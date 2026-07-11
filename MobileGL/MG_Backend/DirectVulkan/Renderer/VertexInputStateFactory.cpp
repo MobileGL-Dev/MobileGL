@@ -29,6 +29,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             XXHASH_VERIFY(XXH64_update(m_hashState, &attr.Stride, sizeof(attr.Stride)));
             XXHASH_VERIFY(XXH64_update(m_hashState, &attr.Offset, sizeof(attr.Offset)));
             XXHASH_VERIFY(XXH64_update(m_hashState, &attr.IsInteger, sizeof(attr.IsInteger)));
+            XXHASH_VERIFY(XXH64_update(m_hashState, &attr.IsBgra, sizeof(attr.IsBgra)));
             XXHASH_VERIFY(XXH64_update(m_hashState, &attr.Divisor, sizeof(attr.Divisor)));
 
             const SizeT bufferKey = reinterpret_cast<SizeT>(attr.Buffer.get());
@@ -73,7 +74,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 continue;
             }
 
-            const auto vkFormat = ToVkVertexFormat(attr.Type, attr.Size, attr.Normalized, attr.IsInteger);
+            const auto vkFormat = ToVkVertexFormat(attr.Type, attr.Size, attr.Normalized, attr.IsInteger, attr.IsBgra);
             if (vkFormat == VK_FORMAT_UNDEFINED) {
                 MGLOG_E("Unsupported vertex attribute layout (location=%u, type=%s, size=%d): the array is "
                         "enabled but cannot be mapped to a VkFormat",
@@ -82,8 +83,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 continue;
             }
 
-            const SizeT componentSize = GetComponentSize(attr.Type);
-            if (componentSize == 0) {
+            const SizeT attribByteSize = GetAttributeByteSize(attr.Type, attr.Size, attr.IsBgra);
+            if (attribByteSize == 0) {
                 MGLOG_E("Vertex attribute with unknown component size (location=%u, type=%s): the array is "
                         "enabled but cannot be sized",
                         location, MG_Util::ConvertDataTypeToString(attr.Type).c_str());
@@ -91,9 +92,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 continue;
             }
 
-            const Uint32 stride = attr.Stride > 0
-                                      ? static_cast<Uint32>(attr.Stride)
-                                      : static_cast<Uint32>(componentSize * static_cast<SizeT>(attr.Size));
+            const Uint32 stride =
+                attr.Stride > 0 ? static_cast<Uint32>(attr.Stride) : static_cast<Uint32>(attribByteSize);
             const VkVertexInputRate inputRate =
                 (attr.Divisor == 0) ? VK_VERTEX_INPUT_RATE_VERTEX : VK_VERTEX_INPUT_RATE_INSTANCE;
 
@@ -124,8 +124,32 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         return entry;
     }
 
-    VkFormat VertexInputStateFactory::ToVkVertexFormat(DataType type, Int size, Bool normalized, Bool isInteger) {
+    VkFormat VertexInputStateFactory::ToVkVertexFormat(DataType type, Int size, Bool normalized, Bool isInteger,
+                                                       Bool isBgra) {
+        if (isBgra) {
+            // GL_BGRA: four reversed-order components, always normalized (enforced at validation), only
+            // legal with GL_UNSIGNED_BYTE or a 2_10_10_10 type. The reversed VkFormats put the
+            // components back into R,G,B,A order for the shader.
+            switch (type) {
+            case DataType::Uint8:
+                return VK_FORMAT_B8G8R8A8_UNORM;
+            case DataType::Uint2101010Rev:
+                return VK_FORMAT_A2R10G10B10_UNORM_PACK32;
+            case DataType::Int2101010Rev:
+                return VK_FORMAT_A2R10G10B10_SNORM_PACK32;
+            default:
+                return VK_FORMAT_UNDEFINED;
+            }
+        }
         switch (type) {
+        case DataType::Uint2101010Rev:
+            // Packed 2_10_10_10 travels the float-normalizing path only; size is always 4. SNORM/UNORM
+            // normalize, SSCALED/USCALED cast the packed field to float.
+            if (isInteger || size != 4) return VK_FORMAT_UNDEFINED;
+            return normalized ? VK_FORMAT_A2B10G10R10_UNORM_PACK32 : VK_FORMAT_A2B10G10R10_USCALED_PACK32;
+        case DataType::Int2101010Rev:
+            if (isInteger || size != 4) return VK_FORMAT_UNDEFINED;
+            return normalized ? VK_FORMAT_A2B10G10R10_SNORM_PACK32 : VK_FORMAT_A2B10G10R10_SSCALED_PACK32;
         case DataType::Float32:
             switch (size) {
             case 1: return VK_FORMAT_R32_SFLOAT;
@@ -247,5 +271,15 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         default:
             return 0;
         }
+    }
+
+    SizeT VertexInputStateFactory::GetAttributeByteSize(DataType type, Int size, Bool isBgra) {
+        // The packed 2_10_10_10 types are a single 32-bit word for all 4 components; GL_BGRA is always
+        // 4 components (GL_UNSIGNED_BYTE x4 = 4 bytes, or a packed word = 4 bytes) -- both are 4 bytes.
+        if (type == DataType::Int2101010Rev || type == DataType::Uint2101010Rev || isBgra) {
+            return 4;
+        }
+        const SizeT componentSize = GetComponentSize(type);
+        return componentSize == 0 ? 0 : componentSize * static_cast<SizeT>(size);
     }
 } // namespace MobileGL::MG_Backend::DirectVulkan

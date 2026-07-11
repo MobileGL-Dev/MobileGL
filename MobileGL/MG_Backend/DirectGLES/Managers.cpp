@@ -572,6 +572,16 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     return 0;
                 }
             }
+
+            // Tightly-packed byte size of one vertex element: 4 for the 2_10_10_10 types and GL_BGRA
+            // (one 32-bit word / 4 bytes), componentSize * size otherwise. 0 for unknown types.
+            SizeT GetAttributeByteSize(DataType type, int size, Bool isBgra) {
+                if (type == DataType::Int2101010Rev || type == DataType::Uint2101010Rev || isBgra) {
+                    return 4;
+                }
+                const SizeT componentSize = GetDataTypeSize(type);
+                return componentSize == 0 ? 0 : componentSize * static_cast<SizeT>(size);
+            }
         } // namespace
 
         BackendVertexArrayObject::BackendVertexArrayObject() {
@@ -665,8 +675,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 }
 
                 if (!attrib.IsInteger) {
+                    // GL_BGRA is passed to the driver as the size argument (the driver reorders BGRA).
+                    const GLint glSize = attrib.IsBgra ? static_cast<GLint>(GL_BGRA) : attrib.Size;
                     g_GLESFuncs.glVertexAttribPointer(
-                        attribIndex, attrib.Size, MG_Util::ConvertDataTypeToGLEnum(attrib.Type),
+                        attribIndex, glSize, MG_Util::ConvertDataTypeToGLEnum(attrib.Type),
                         attrib.Normalized ? GL_TRUE : GL_FALSE, attrib.Stride, (const void*)attrib.Offset);
                 } else {
                     g_GLESFuncs.glVertexAttribIPointer(attribIndex, attrib.Size,
@@ -720,12 +732,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 }
 
                 const auto* clientData = reinterpret_cast<const Uint8*>(attrib.Offset);
-                const SizeT componentSize = GetDataTypeSize(attrib.Type);
-                if (!clientData || componentSize == 0 || attrib.Size <= 0) {
+                const SizeT elementSize = GetAttributeByteSize(attrib.Type, attrib.Size, attrib.IsBgra);
+                if (!clientData || elementSize == 0 || attrib.Size <= 0) {
                     continue;
                 }
 
-                const SizeT elementSize = componentSize * static_cast<SizeT>(attrib.Size);
                 const SizeT stride = attrib.Stride > 0 ? static_cast<SizeT>(attrib.Stride) : elementSize;
                 const SizeT uploadSize = static_cast<SizeT>(first + count - 1) * stride + elementSize;
 
@@ -743,8 +754,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                          GL_STREAM_DRAW);
 
                 if (!attrib.IsInteger) {
+                    const GLint glSize = attrib.IsBgra ? static_cast<GLint>(GL_BGRA) : attrib.Size;
                     g_GLESFuncs.glVertexAttribPointer(
-                        attribIndex, attrib.Size, MG_Util::ConvertDataTypeToGLEnum(attrib.Type),
+                        attribIndex, glSize, MG_Util::ConvertDataTypeToGLEnum(attrib.Type),
                         attrib.Normalized ? GL_TRUE : GL_FALSE, static_cast<GLsizei>(stride), nullptr);
                 } else {
                     g_GLESFuncs.glVertexAttribIPointer(attribIndex, attrib.Size,

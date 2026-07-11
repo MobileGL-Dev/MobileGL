@@ -32,6 +32,10 @@ namespace MobileGL {
                 return DataType::Float32;
             case GL_DOUBLE:
                 return DataType::Float64;
+            case GL_INT_2_10_10_10_REV:
+                return DataType::Int2101010Rev;
+            case GL_UNSIGNED_INT_2_10_10_10_REV:
+                return DataType::Uint2101010Rev;
             default:
                 return DataType::Unknown;
             }
