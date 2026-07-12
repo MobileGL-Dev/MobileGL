@@ -1065,6 +1065,18 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
     Bool VkTextureManager::SyncTexture(MG_State::GLState::ITextureObject &texture,
                                        TextureResource &outResource) {
+        // Cross-draw fast path: if the resource is already built and neither the texture's
+        // pixel content (bumped in MarkStorageDirty) nor its params changed since the last
+        // sync, there is nothing to re-check or re-upload - skip CheckMipmapCompleteness,
+        // SyncTextureResource, SyncTextureViews and the per-level dirty scan. Layout is
+        // maintained separately by the transition path, so the resource still reflects truth.
+        const Uint64 syncingContentVersion = texture.GetContentVersion();
+        if (outResource.image != VK_NULL_HANDLE &&
+            outResource.syncedContentVersion == syncingContentVersion &&
+            outResource.syncedTextureParamsVersion == texture.GetTextureParamsVersion()) {
+            return true;
+        }
+
         TextureUploadTarget uploadTarget = TextureUploadTarget::Unknown;
         IntVec3 texelSize{0, 0, 0};
         SizeT byteSize = 0;
@@ -1111,6 +1123,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         DumpTextureSyncStats(texture.GetExternalIndex(), texture.GetFormat(), uploadTarget, mipLevelCount,
                              texelSize, byteSize, hasDirtyMipLevel);
         if (!hasDirtyMipLevel) {
+            outResource.syncedContentVersion = syncingContentVersion;
             return true;
         }
 
@@ -1118,6 +1131,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             MGLOG_D("%s: UploadDirtyMipLevels failed", __func__);
             return false;
         }
+        outResource.syncedContentVersion = syncingContentVersion;
         return true;
     }
 
