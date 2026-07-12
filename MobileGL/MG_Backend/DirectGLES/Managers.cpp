@@ -749,6 +749,47 @@ namespace MobileGL::MG_Backend::DirectGLES {
             g_boundArrayBufferKnown = false;
         }
 
+        namespace {
+            // Shadow of the GL indexed buffer bindings so redundant glBindBufferBase/Range
+            // (same index + id + range) are skipped. isBase distinguishes a whole-buffer
+            // base bind from a sub-range bind. Fresh/reset context: every point is base(0)
+            // == unbound, which matches the GL default.
+            struct IndexedBufferBinding {
+                Uint id = 0;
+                GLintptr offset = 0;
+                GLsizeiptr size = 0;
+                Bool isBase = true;
+            };
+            constexpr SizeT kMaxIndexedBufferBindings = 64;
+            IndexedBufferBinding g_indexedUBOBindings[kMaxIndexedBufferBindings];
+            IndexedBufferBinding g_indexedSSBOBindings[kMaxIndexedBufferBindings];
+            IndexedBufferBinding* IndexedBindingShadow(GLenum glTarget, Uint index) {
+                if (index >= kMaxIndexedBufferBindings) return nullptr; // out of range: never cache
+                if (glTarget == GL_UNIFORM_BUFFER) return &g_indexedUBOBindings[index];
+                if (glTarget == GL_SHADER_STORAGE_BUFFER) return &g_indexedSSBOBindings[index];
+                return nullptr;
+            }
+        } // namespace
+
+        void BindBufferBaseCached(GLenum glTarget, Uint index, Uint id) {
+            auto* s = IndexedBindingShadow(glTarget, index);
+            if (s && s->isBase && s->id == id) return;
+            g_GLESFuncs.glBindBufferBase(glTarget, index, id);
+            if (s) *s = {id, 0, 0, true};
+        }
+
+        void BindBufferRangeCached(GLenum glTarget, Uint index, Uint id, GLintptr offset, GLsizeiptr size) {
+            auto* s = IndexedBindingShadow(glTarget, index);
+            if (s && !s->isBase && s->id == id && s->offset == offset && s->size == size) return;
+            g_GLESFuncs.glBindBufferRange(glTarget, index, id, offset, size);
+            if (s) *s = {id, offset, size, false};
+        }
+
+        void InvalidateIndexedBufferBindingCache() {
+            for (auto& b : g_indexedUBOBindings) b = {};
+            for (auto& b : g_indexedSSBOBindings) b = {};
+        }
+
         void TrimBufferPool() {
             const std::lock_guard<std::mutex> lock(g_poolMutex);
             if (g_pooledBytes <= kMaxPoolBytes) return;

@@ -177,6 +177,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // glBindBuffer with a redundant-bind cache for GL_ARRAY_BUFFER.
         void BindBufferId(GLenum target, Uint id);
         void InvalidateArrayBufferBindingCache();
+        // Redundant-bind cache for INDEXED buffer bindings (glBindBufferBase/Range on
+        // GL_UNIFORM_BUFFER / GL_SHADER_STORAGE_BUFFER): skips the GL call when the
+        // (id, range) already at that index matches, like the array-buffer/texture/
+        // sampler caches already do. Invalidated on MakeCurrent (context may reset).
+        void BindBufferBaseCached(GLenum glTarget, Uint index, Uint id);
+        void BindBufferRangeCached(GLenum glTarget, Uint index, Uint id, GLintptr offset, GLsizeiptr size);
+        void InvalidateIndexedBufferBindingCache();
         // Buffer-storage pool maintenance. TrimBufferPool evicts over-budget entries
         // (called once per frame from Present); ClearBufferPool drops all pooled ids
         // without glDeleteBuffers (called when the ES context is going away).

@@ -208,7 +208,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 auto& point = MG_State::pGLContext->GetBufferBindingPoint(target, i);
                 auto& obj = point.GetBoundObject();
                 if (!obj) {
-                    g_GLESFuncs.glBindBufferBase(glTarget, static_cast<GLuint>(i), 0);
+                    BindBufferBaseCached(glTarget, static_cast<GLuint>(i), 0);
                     continue;
                 }
 
@@ -222,12 +222,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 const auto& range = point.GetRange();
                 auto backendBufferId = backendResource->id;
                 if (range.start == 0 && range.end >= obj->GetSize()) {
-                    g_GLESFuncs.glBindBufferBase(glTarget, static_cast<GLuint>(i), backendBufferId);
+                    BindBufferBaseCached(glTarget, static_cast<GLuint>(i), backendBufferId);
                 } else {
                     const auto start = std::min(range.start, obj->GetSize());
                     const auto end = std::min(range.end, obj->GetSize());
-                    g_GLESFuncs.glBindBufferRange(glTarget, static_cast<GLuint>(i), backendBufferId,
-                                                  static_cast<GLintptr>(start), static_cast<GLsizeiptr>(end - start));
+                    BindBufferRangeCached(glTarget, static_cast<GLuint>(i), backendBufferId,
+                                          static_cast<GLintptr>(start), static_cast<GLsizeiptr>(end - start));
                 }
             }
         }
@@ -1083,7 +1083,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                         g_GLESFuncs.glBindBuffer(GL_UNIFORM_BUFFER, 0);
                         backendProgram.SetLastUploadedGlobalUboVersion(uboContentVersion);
                     }
-                    g_GLESFuncs.glBindBufferBase(GL_UNIFORM_BUFFER, 0, backendProgram.GetBackendGlobalUBOId());
+                    BufferImpl::BindBufferBaseCached(GL_UNIFORM_BUFFER, 0, backendProgram.GetBackendGlobalUBOId());
                 }
 
                 {
@@ -1111,12 +1111,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
                         if (bufferObj) {
                             auto* backendResource = BufferImpl::EnsureBufferResource(bufferObj);
                             if (backendResource && backendResource->id != 0) {
-                                BufferImpl::BindBufferId(GL_UNIFORM_BUFFER, backendResource->id);
+                                // glBindBufferBase/Range set the generic GL_UNIFORM_BUFFER binding
+                                // as a side effect, so no separate BindBufferId is needed here.
                                 if (range.end == 0) {
-                                    g_GLESFuncs.glBindBufferBase(GL_UNIFORM_BUFFER, lastUBOBinding,
-                                                                 backendResource->id);
+                                    BufferImpl::BindBufferBaseCached(GL_UNIFORM_BUFFER, lastUBOBinding,
+                                                                     backendResource->id);
                                 } else {
-                                    g_GLESFuncs.glBindBufferRange(
+                                    BufferImpl::BindBufferRangeCached(
                                         GL_UNIFORM_BUFFER, lastUBOBinding, backendResource->id,
                                         (GLintptr)range.start, (GLintptr)(range.end - range.start));
                                 }
@@ -1235,8 +1236,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
             if (paramsBinding >= 0) {
                 auto* resource = BufferImpl::EnsureBufferResource(drawIndirectBuffer);
                 if (resource && resource->id != 0) {
-                    g_GLESFuncs.glBindBufferBase(GL_SHADER_STORAGE_BUFFER, static_cast<GLuint>(paramsBinding),
-                                                 resource->id);
+                    BufferImpl::BindBufferBaseCached(GL_SHADER_STORAGE_BUFFER, static_cast<GLuint>(paramsBinding),
+                                                     resource->id);
                 }
             }
             for (GLsizei i = 0; i < drawcount; ++i) {
@@ -1282,8 +1283,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
             if (paramsBinding >= 0) {
                 auto* resource = BufferImpl::EnsureBufferResource(drawIndirectBuffer);
                 if (resource && resource->id != 0) {
-                    g_GLESFuncs.glBindBufferBase(GL_SHADER_STORAGE_BUFFER, static_cast<GLuint>(paramsBinding),
-                                                 resource->id);
+                    BufferImpl::BindBufferBaseCached(GL_SHADER_STORAGE_BUFFER, static_cast<GLuint>(paramsBinding),
+                                                     resource->id);
                 }
             }
             for (GLsizei i = 0; i < drawcount; ++i) {
@@ -3871,6 +3872,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // Conservatively drop the redundant-glUseProgram guard: re-issuing one bind
         // after a MakeCurrent is cheaper than trusting a possibly-reset context.
         PrgramImpl::g_lastUsedBackendProgramId = 0;
+        BufferImpl::InvalidateIndexedBufferBindingCache();
         // eglSwapInterval requires a current context; a request made while none was
         // current (and dropped by the driver) is retried here.
         ApplyRequestedSwapInterval();
