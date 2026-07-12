@@ -179,6 +179,24 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         SwapchainObject& m_swapchainObject;
         UnorderedMap<Uint64, RenderPassEntry> m_renderPasses;
 
+        // Bumped whenever a renderbuffer VkImage is (re)created; together with the texture
+        // manager's image epoch this invalidates the render-pass fast path on any attachment
+        // image recreation.
+        Uint64 m_renderbufferImageEpoch = 1;
+
+        // Per-draw fast-path memo for GetOrCreateRenderPass (dirty-flag state tracking): when the
+        // framebuffer state is provably unchanged since the last resolution, the active render pass
+        // is reused WITHOUT recomputing the expensive per-draw hash. Invalidated by FBO switch /
+        // version change, swapchain rotation, any attachment image recreation (the two epochs),
+        // or a pending clear. Portable to Vulkan 1.1 (no dynamic_rendering / imageless FB needed).
+        Bool m_rpFastValid = false;
+        const MG_State::GLState::FramebufferObject* m_rpFastFbo = nullptr;
+        Uint16 m_rpFastFboVersion = 0;
+        Uint32 m_rpFastSwapchainIndex = 0;
+        Uint64 m_rpFastTexEpoch = 0;
+        Uint64 m_rpFastRbEpoch = 0;
+        Uint64 m_rpFastRenderPassHash = 0;
+
         struct RenderbufferResource {
             WeakPtr<MG_State::GLState::RenderbufferObject> renderbuffer;
             VkImage image = VK_NULL_HANDLE;

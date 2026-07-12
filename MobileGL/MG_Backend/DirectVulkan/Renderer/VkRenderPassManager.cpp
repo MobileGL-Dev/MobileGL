@@ -210,6 +210,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         RenderPassEntry::s_textureResourcesScratch.clear();
         s_activeRenderPass = {};
         s_hasActiveRenderPass = false;
+        m_rpFastValid = false;
     }
 
     void VkRenderPassManager::CollectRenderbufferGarbage() {
@@ -305,6 +306,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         allocationInfo.requiredFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
         VK_VERIFY(vmaCreateImage(m_allocator, &imageInfo, &allocationInfo, &resource.image, &resource.allocation, nullptr),
                   "vmaCreateImage(renderbuffer)");
+        ++m_renderbufferImageEpoch; // a new attachment image invalidates cached render passes
 
         VkImageViewCreateInfo viewInfo{};
         viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
@@ -585,6 +587,25 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
         // retrieve from cache first
         auto* activeRenderPass = GetActiveRenderPass();
+
+        // Dirty-flag state tracking: when the framebuffer state is provably unchanged since the
+        // render pass was last resolved, the active render pass is still valid -> skip the
+        // expensive per-draw ComputeHash (XXH64 over every attachment + a SyncTexture per
+        // attachment). Correctness signals: same FBO object + GetObjectVersion (attachment /
+        // draw-buffer / read-buffer changes bump it), same swapchain image, no attachment VkImage
+        // recreated since (texture + renderbuffer image epochs), and no pending clear (which alters
+        // load ops). Any of these differing forces the full recompute below. Portable to VK 1.1.
+        if (activeRenderPass != nullptr && m_rpFastValid && m_rpFastFbo == &fbo &&
+            m_rpFastFboVersion == fbo.GetObjectVersion() && m_rpFastSwapchainIndex == swapchainImageIndex &&
+            m_rpFastTexEpoch == m_textureManager.GetTextureImageEpoch() &&
+            m_rpFastRbEpoch == m_renderbufferImageEpoch &&
+            m_rpFastRenderPassHash == activeRenderPass->hash && !hasPendingClearOnFramebuffer()) {
+            auto activeIt = m_renderPasses.find(activeRenderPass->hash);
+            if (activeIt != m_renderPasses.end()) {
+                return activeIt->second;
+            }
+        }
+
         auto compatibilityHash = ComputeHash(fbo, swapchainImageIndex, false);
         if (activeRenderPass != nullptr &&
             activeRenderPass->CompatibleWith(compatibilityHash) &&
@@ -593,6 +614,15 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             MOBILEGL_ASSERT(activeIt != m_renderPasses.end(),
                             "GetOrCreateRenderPass: active render pass hash=0x%llx is missing from cache",
                             static_cast<unsigned long long>(activeRenderPass->hash));
+            // Populate the fast-path memo so subsequent unchanged draws skip ComputeHash. Read the
+            // epochs AFTER ComputeHash: its attachment SyncTexture can create an image (bump the epoch).
+            m_rpFastValid = true;
+            m_rpFastFbo = &fbo;
+            m_rpFastFboVersion = fbo.GetObjectVersion();
+            m_rpFastSwapchainIndex = swapchainImageIndex;
+            m_rpFastTexEpoch = m_textureManager.GetTextureImageEpoch();
+            m_rpFastRbEpoch = m_renderbufferImageEpoch;
+            m_rpFastRenderPassHash = activeRenderPass->hash;
             return activeIt->second;
         }
         auto hash = ComputeHash(fbo, swapchainImageIndex, true);
@@ -1069,6 +1099,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     Bool VkRenderPassManager::EndRenderPass(VkCommandBuffer commandBuffer) {
         auto* activeRenderPass = GetActiveRenderPass();
         vkCmdEndRenderPass(commandBuffer);
+        // The fast-path memo reuses the ACTIVE render pass; once the pass ends it must not carry
+        // over (the next span may be a different FBO resolved before its render pass is begun).
+        if (s_renderPassManager != nullptr) {
+            s_renderPassManager->m_rpFastValid = false;
+        }
         if (activeRenderPass != nullptr && !activeRenderPass->trackedAttachmentLayouts.empty()) {
             for (const auto& trackedAttachment : activeRenderPass->trackedAttachmentLayouts) {
                 switch (trackedAttachment.target) {

@@ -21,6 +21,11 @@ class ITextureObject;
 namespace MobileGL::MG_Backend::DirectVulkan {
 class VkTextureManager {
 public:
+    // Monotonic epoch bumped whenever a texture VkImage is (re)created. The render-pass
+    // manager keys its per-draw fast path on this so an attachment's image recreation
+    // invalidates the cached render pass (dirty-flag tracking; portable to Vulkan 1.1).
+    Uint64 GetTextureImageEpoch() const { return m_textureImageEpoch; }
+
     struct TextureIdentity {
         MG_State::GLState::ITextureObject* texture = nullptr;
         Uint64 lifetimeId = 0;
@@ -225,6 +230,8 @@ public:
     };
 
 private:
+    // Bumped in SyncTextureResource right after vmaCreateImage(texture). See GetTextureImageEpoch().
+    Uint64 m_textureImageEpoch = 1;
 
     Bool SyncTexture(MG_State::GLState::ITextureObject &texture,
                      TextureResource &outResource);
