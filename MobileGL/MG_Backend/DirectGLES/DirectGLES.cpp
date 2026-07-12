@@ -291,10 +291,16 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 }
             }
 
-            SyncBufferBindingPoints(BufferTarget::Uniform, GL_UNIFORM_BUFFER);
-            // Graphics shaders may also read SSBOs (e.g. Flywheel's indirect vertex shaders pull
-            // instance data from storage buffers), so keep those binding points in sync for draws
-            // and not just for compute dispatches.
+            // UBO binding points are (re)established per draw by BindCurrentProgramWithResources at
+            // their compacted link-time points: CacheResourceLocations glUniformBlockBinding's the
+            // transpiled ESSL blocks to points 0,1,2,... (layout(binding=N) is stripped from the
+            // ESSL), so those compacted points are the only ones the shader reads. A frontend-indexed
+            // sync here would bind points the shader never reads and is unconditionally overwritten by
+            // the program rebind that always follows in PrepareForDraw - i.e. redundant for draws - so
+            // it is intentionally omitted (see SyncComputeBuffers for the compute path, which needs it).
+            // SSBOs are different: their block bindings are baked into the ESSL at compile time and
+            // BindCurrentProgramWithResources binds no SSBO points, so this is their sole draw-path
+            // binder (e.g. Flywheel's indirect vertex shaders pull instance data from storage buffers).
             SyncBufferBindingPoints(BufferTarget::ShaderStorage, GL_SHADER_STORAGE_BUFFER);
         }
 
