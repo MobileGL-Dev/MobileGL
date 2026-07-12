@@ -193,6 +193,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         for (auto& cacheEntryPair : frame.descriptorSetCacheByLayout) {
             cacheEntryPair.second.cursor = 0;
         }
+        // The frame's descriptor sets are recycled above, so last frame's reuse target
+        // is gone: start the per-draw descriptor-reuse cache fresh this frame.
+        m_hasLastDescriptor = false;
     }
 
     Bool UniformManager::ResolveSamplerDescriptor(VkCommandBuffer commandBuffer,
@@ -806,13 +809,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             frame.activeDescriptorPoolIndex = 0;
         }
 
+        // The descriptor set is chosen AFTER the writes are built (below), so a draw
+        // whose resolved descriptor content matches the previous draw can reuse that
+        // set and skip both AcquireDescriptorSet and vkUpdateDescriptorSets.
         VkDescriptorSet descriptorSet = VK_NULL_HANDLE;
-        VkResult allocResult = AcquireDescriptorSet(frameIndex, programObj, descriptorSet);
-        if (allocResult != VK_SUCCESS || descriptorSet == VK_NULL_HANDLE) {
-            MGLOG_E("UniformDescriptorBinder::BindProgramUniformBuffers failed: descriptor set acquire returned %d",
-                    allocResult);
-            return false;
-        }
 
         MOBILEGL_ASSERT(m_textureManager != nullptr, "BindProgramUniformBuffers: texture manager is null");
         MOBILEGL_ASSERT(m_samplerManager != nullptr, "BindProgramUniformBuffers: sampler manager is null");
@@ -944,8 +944,62 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             }
         }
 
-        if (!writes.empty()) {
-            vkUpdateDescriptorSets(m_device, static_cast<Uint32>(writes.size()), writes.data(), 0, nullptr);
+        // Reuse the previous draw's descriptor set when the resolved content is
+        // byte-identical (only the bind-time dynamic offsets differ). The signature
+        // covers the descriptor-set layout + every write's binding/type/count + the
+        // pointed-to buffer/image/texel-buffer infos (all value-initialized, so no
+        // padding noise). Correctness: bindings are re-resolved every draw, so the
+        // signature always reflects the current state and reuse happens only on an
+        // exact match; the reused set is never re-acquired within a frame (the acquire
+        // cursor only advances), so its written contents survive; the layout is part of
+        // the signature so reuse never crosses programs. Sampler overrides (blits)
+        // bypass and invalidate the cache.
+        const Bool cacheable = (samplerBindingOverride == nullptr);
+        Uint64 signature = 0xcbf29ce484222325ULL;
+        {
+            const auto mix64 = [&signature](Uint64 word) {
+                signature = (signature ^ word) * 0x100000001b3ULL;
+            };
+            // The hashed descriptor payloads (VkDescriptorBufferInfo=24B,
+            // VkDescriptorImageInfo=24B, VkBufferView=8B) are all 8-byte-multiple sized
+            // and value-initialized (padding is zero), so hashing 64-bit words at a time
+            // is exact and ~8x cheaper than byte-wise - the signature is recomputed every
+            // draw, so its own cost has to stay small.
+            const auto mixWords = [&mix64](const void* data, SizeT byteSize) {
+                const auto* words = static_cast<const Uint64*>(data);
+                for (SizeT i = 0; i < byteSize / sizeof(Uint64); ++i) {
+                    mix64(words[i]);
+                }
+            };
+            mixWords(&programObj.descriptorSetLayout, sizeof(programObj.descriptorSetLayout));
+            for (const auto& write : writes) {
+                mix64((static_cast<Uint64>(write.dstBinding) << 40) ^
+                      (static_cast<Uint64>(write.descriptorType) << 8) ^
+                      static_cast<Uint64>(write.descriptorCount));
+            }
+            mixWords(bufferInfos.data(), bufferInfos.size() * sizeof(VkDescriptorBufferInfo));
+            mixWords(imageInfos.data(), imageInfos.size() * sizeof(VkDescriptorImageInfo));
+            mixWords(texelBufferViews.data(), texelBufferViews.size() * sizeof(VkBufferView));
+        }
+
+        if (cacheable && m_hasLastDescriptor && signature == m_lastDescriptorSignature) {
+            descriptorSet = m_lastBoundDescriptorSet;
+        } else {
+            VkResult allocResult = AcquireDescriptorSet(frameIndex, programObj, descriptorSet);
+            if (allocResult != VK_SUCCESS || descriptorSet == VK_NULL_HANDLE) {
+                MGLOG_E("UniformDescriptorBinder::BindProgramUniformBuffers failed: descriptor set acquire returned %d",
+                        allocResult);
+                return false;
+            }
+            for (auto& write : writes) {
+                write.dstSet = descriptorSet;
+            }
+            if (!writes.empty()) {
+                vkUpdateDescriptorSets(m_device, static_cast<Uint32>(writes.size()), writes.data(), 0, nullptr);
+            }
+            m_lastBoundDescriptorSet = descriptorSet;
+            m_lastDescriptorSignature = signature;
+            m_hasLastDescriptor = cacheable;
         }
 
         vkCmdBindDescriptorSets(commandBuffer, bindPoint, programObj.pipelineLayout, 0, 1,

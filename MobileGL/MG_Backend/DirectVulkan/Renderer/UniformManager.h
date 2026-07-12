@@ -121,6 +121,15 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         Vector<VkDescriptorImageInfo> m_imageInfosScratch;
         Vector<VkBufferView> m_texelBufferViewsScratch;
         Vector<Uint32> m_dynamicOffsetsScratch;
+
+        // Descriptor-set reuse across consecutive draws (see BindProgramUniformBuffers).
+        // When a draw's resolved descriptor content is byte-identical to the previous
+        // draw's, reuse the same VkDescriptorSet and skip AcquireDescriptorSet +
+        // vkUpdateDescriptorSets - only the bind-time dynamic offsets differ. Reset each
+        // frame in BeginFrame because the frame's descriptor sets are recycled there.
+        VkDescriptorSet m_lastBoundDescriptorSet = VK_NULL_HANDLE;
+        Uint64 m_lastDescriptorSignature = 0;
+        Bool m_hasLastDescriptor = false;
     };
 } // namespace MobileGL::MG_Backend::DirectVulkan
 
