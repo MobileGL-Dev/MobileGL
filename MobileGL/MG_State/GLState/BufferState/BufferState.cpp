@@ -13,6 +13,9 @@ namespace MobileGL::MG_State::GLState {
         for (SizeT i = 0; i < m_bindingSlots.size(); ++i) {
             m_bindingSlots[i] = BindingSlot<BufferObject>(GlobalBufferTargets[i]);
         }
+        for (SizeT i = 0; i < m_touchedBindPointCount.size(); ++i) {
+            m_touchedBindPointCount[i] = 0;
+        }
     }
 
     const SharedPtr<BufferObject>& BufferState::GetBufferObject(Uint index) {

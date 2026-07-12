@@ -1310,6 +1310,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         BufferTarget bufferTarget = MG_Util::ConvertGLEnumToBufferTarget(target);
         if (!BufferImpl::ValidateBufferBindingPointTarget(bufferTarget)) return;
         if (!BufferImpl::ValidateBufferBindingPointIndex(bufferTarget, pointIndex)) return;
+        MG_State::pGLContext->TouchBufferBindingPoint(bufferTarget, pointIndex);
 
         auto& point = MG_State::pGLContext->GetBufferBindingPoint(bufferTarget, pointIndex);
         SharedPtr<MG_State::GLState::BufferObject> bufferObject;
@@ -1342,6 +1343,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         BufferTarget bufferTarget = MG_Util::ConvertGLEnumToBufferTarget(target);
         if (!BufferImpl::ValidateBufferBindingPointTarget(bufferTarget)) return;
         if (!BufferImpl::ValidateBufferBindingPointIndex(bufferTarget, index)) return;
+        MG_State::pGLContext->TouchBufferBindingPoint(bufferTarget, index);
 
         auto& point = MG_State::pGLContext->GetBufferBindingPoint(bufferTarget, index);
         SharedPtr<MG_State::GLState::BufferObject> bufferObject;

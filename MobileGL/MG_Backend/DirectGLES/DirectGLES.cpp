@@ -201,7 +201,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
 #ifdef TRACY_ENABLE
             ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
-            auto bindingPointCnt = MG_State::pGLContext->GetBufferBindingPointCount(target);
+            // Only sync up to the high-water mark of app-touched points; the fixed array is 36
+            // deep but apps bind a handful, so the never-touched tail is already at GL default 0.
+            auto bindingPointCnt = MG_State::pGLContext->GetTouchedBufferBindingPointCount(target);
             for (SizeT i = 0; i < bindingPointCnt; ++i) {
                 auto& point = MG_State::pGLContext->GetBufferBindingPoint(target, i);
                 auto& obj = point.GetBoundObject();

@@ -36,6 +36,20 @@ namespace MobileGL::MG_State::GLState {
             auto index = std::distance(BufferBindPointTargets.begin(), it);
             return m_bufferBindPointTargets[index].size();
         }
+        // High-water mark of app-touched binding points per target (highest index + 1, 0 if none).
+        // Lets the backend skip syncing the never-touched tail of the fixed 36-point array each draw.
+        void TouchBindPoint(const BufferTarget target, Uint index) {
+            auto it = std::find(BufferBindPointTargets.begin(), BufferBindPointTargets.end(), target);
+            if (it == BufferBindPointTargets.end()) return;
+            auto slot = std::distance(BufferBindPointTargets.begin(), it);
+            if (static_cast<SizeT>(index) + 1 > m_touchedBindPointCount[slot])
+                m_touchedBindPointCount[slot] = static_cast<SizeT>(index) + 1;
+        }
+        SizeT GetTouchedBindPointCount(const BufferTarget target) const {
+            auto it = std::find(BufferBindPointTargets.begin(), BufferBindPointTargets.end(), target);
+            if (it == BufferBindPointTargets.end()) return 0;
+            return m_touchedBindPointCount[std::distance(BufferBindPointTargets.begin(), it)];
+        }
         void MarkBufferObjectForDeletion(Uint index);
         Bool ValidateName(Uint index) const;
         Bool ValidateBufferObject(Uint index) const;
@@ -48,5 +62,6 @@ namespace MobileGL::MG_State::GLState {
         // For glBindBufferBase / glBindBufferRange
         Array<Array<BindingSlotRange1D<BufferObject>, BufferBindingPointCount>, BufferBindPointTargets.size()>
             m_bufferBindPointTargets;
+        Array<SizeT, BufferBindPointTargets.size()> m_touchedBindPointCount;
     };
 } // namespace MobileGL::MG_State::GLState

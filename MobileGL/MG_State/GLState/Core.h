@@ -67,6 +67,12 @@ namespace MobileGL {
                 constexpr SizeT GetBufferBindingPointCount(BufferTarget target) const {
                     return m_bufferState.GetBindingPointCount(target);
                 }
+                void TouchBufferBindingPoint(BufferTarget target, Uint index) {
+                    m_bufferState.TouchBindPoint(target, index);
+                }
+                SizeT GetTouchedBufferBindingPointCount(BufferTarget target) const {
+                    return m_bufferState.GetTouchedBindPointCount(target);
+                }
                 const SharedPtr<BufferObject>& CreateBufferObject(Uint index);
                 void MarkBufferObjectForDeletion(Uint index);
                 Bool ValidateBufferName(Uint index) const;
