@@ -2879,6 +2879,24 @@ void main() {
             return VK_NULL_HANDLE;
         }
 
+        // Fast path: skip the full pipeline resolution when the pipeline state is unchanged from the
+        // previous draw (the common intra-batch case). The key provably covers every
+        // PipelineCreatePayload field: draw mode (topology + polygon-fill depth-bias gate), program
+        // content hash (folds program identity + link version + transform flags + shader stages),
+        // vertex-input hash (VAO layout), render-pass hash (render targets + the draw-buffer/format
+        // driven blend & write-mask gating), and the render-state version (all fixed-function state).
+        // Reset per-frame and on pipeline destruction so m_lastPipelineResult can never dangle.
+        const Uint64 vertexInputHash = m_vertexInputStateFactory->GetOrComputeHash(vao);
+        const Uint64 renderPassHash = renderPassEntry.hash;
+        const Uint renderStateVersion = MG_State::pGLContext->GetRenderStateParametersVersion();
+        if (m_lastPipelineValid && m_lastPipelineResult != VK_NULL_HANDLE && m_lastPipelineMode == mode &&
+            m_lastPipelineProgramHash == programObj.hash && m_lastPipelineVertexInputHash == vertexInputHash &&
+            m_lastPipelineRenderPassHash == renderPassHash &&
+            m_lastPipelineRenderStateVersion == renderStateVersion &&
+            m_lastPipelineTransformFlags == transformFlags) {
+            return m_lastPipelineResult;
+        }
+
 #if MOBILEGL_LOG_ACTIVE_LEVEL <= MOBILEGL_LOG_LEVEL_DEBUG
         const auto& limits = m_physicalDevice.properties.limits;
         if (programObj.fragmentInputComponentCount != 0) {
@@ -2917,7 +2935,7 @@ void main() {
         }
 #endif
 
-        auto vertexInputHash = m_vertexInputStateFactory->GetOrComputeHash(vao);
+        // vertexInputHash was computed above for the fast-path key; reuse it here.
         auto& vis = m_vertexInputStateFactory->GetOrCreateVertexInputState(vao, vertexInputHash);
         const Uint32 vertexInputAttribMask = BuildVertexInputAttributeMask(vis.attributes);
         const Uint32 activeAttribMask = programObj.activeVertexInputLocationMask;
@@ -3279,7 +3297,18 @@ void main() {
                 MG_Util::ConvertBlendEquationToVkEnum(alphaEquation),
                 attachmentColorWriteMask);
         }
-        return m_pipelineFactory->GetOrCreatePipeline(payload);
+        VkPipeline pipeline = m_pipelineFactory->GetOrCreatePipeline(payload);
+        if (pipeline != VK_NULL_HANDLE) {
+            m_lastPipelineValid = true;
+            m_lastPipelineMode = mode;
+            m_lastPipelineProgramHash = programObj.hash;
+            m_lastPipelineVertexInputHash = vertexInputHash;
+            m_lastPipelineRenderPassHash = renderPassHash;
+            m_lastPipelineRenderStateVersion = renderStateVersion;
+            m_lastPipelineTransformFlags = transformFlags;
+            m_lastPipelineResult = pipeline;
+        }
+        return pipeline;
     }
 
     Bool VulkanRenderer::SetupDraw(FrameContext::FrameData& frame, GLenum mode, Flags<DrawSetupAspect> aspects,
@@ -4715,6 +4744,7 @@ void main() {
         if (frame.isCommandRecording) {
             m_frameContext.EndCommandRecording();
             frame.hasCommandBufferRecorded = true;
+            m_lastPipelineValid = false; // command-buffer boundary: drop the pipeline memo
         }
         if (!frame.hasCommandBufferRecorded) {
             return true;
@@ -5978,6 +6008,7 @@ void main() {
         if (frame.isCommandRecording) {
             m_frameContext.EndCommandRecording();
             frame.hasCommandBufferRecorded = true;
+            m_lastPipelineValid = false; // command-buffer boundary: drop the pipeline memo
         }
 
         const auto acquiredImageLayout = m_swapchainObject.GetImageLayout(m_imageIndexAcquired);
@@ -6854,6 +6885,7 @@ void main() {
         if (m_pipelineFactory) {
             m_pipelineFactory->DestroyAll();
         }
+        m_lastPipelineValid = false; // pipelines freed -> the memoized handle would dangle
         DestroyComputePipelines();
         if (m_frameContext.GetFrameCount() > 0) {
             m_frameContext.GetCurrent().isCommandRecording = false;

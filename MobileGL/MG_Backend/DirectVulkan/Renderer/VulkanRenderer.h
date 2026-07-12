@@ -378,6 +378,18 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         FrameContext m_frameContext;
 
         UniquePtr<PipelineFactory> m_pipelineFactory;
+        // Single-slot "last pipeline" memo: skip the per-draw GetOrCreatePipeline work (state
+        // gather + synthetic vertex-input rebuild + payload hash + lookup) when the full pipeline
+        // state is unchanged from the previous draw. The key provably covers every pipeline field.
+        // Reset per-frame and on pipeline destruction so the cached handle can never dangle.
+        Bool m_lastPipelineValid = false;
+        GLenum m_lastPipelineMode = 0;
+        Uint64 m_lastPipelineProgramHash = 0;
+        Uint64 m_lastPipelineVertexInputHash = 0;
+        Uint64 m_lastPipelineRenderPassHash = 0;
+        Uint m_lastPipelineRenderStateVersion = 0;
+        ProgramFactory::CompileOptionFlags m_lastPipelineTransformFlags = {};
+        VkPipeline m_lastPipelineResult = VK_NULL_HANDLE;
         UnorderedMap<ProgramFactory::HashType, VkPipeline> m_computePipelines;
         UniquePtr<ProgramFactory> m_programFactory;
         UniquePtr<UniformManager> m_uniformManager;
