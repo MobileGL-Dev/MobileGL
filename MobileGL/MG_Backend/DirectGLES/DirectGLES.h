@@ -136,6 +136,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
     void DeleteBackendQuery(BackendQueryHandle query);
     Int64 GetGpuTimestampNs();
     void Present();
+    // Frame-completion watermarks for the buffer-storage pool: CurrentFrameSerial()
+    // is bumped once per Present(); CompletedFrameSerial() is the newest frame whose
+    // GPU work has provably finished (advanced by polling a one-fence-per-frame ring).
+    // A buffer retired during frame N is safe to recycle once CompletedFrameSerial() >= N.
+    Uint64 CurrentFrameSerial();
+    Uint64 CompletedFrameSerial();
     // Applies (or defers until the window surface exists) the app-requested
     // eglSwapInterval on the native EGL surface.
     void SetSwapInterval(Int interval);

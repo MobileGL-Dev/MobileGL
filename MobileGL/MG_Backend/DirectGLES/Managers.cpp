@@ -275,6 +275,84 @@ namespace MobileGL::MG_Backend::DirectGLES {
             Vector<SharedPtr<BackendBufferResource>> g_deferredBufferReleases;
             std::mutex g_deferredBufferReleasesMutex;
 
+            // --- Buffer-storage pool (Mesa-style BO recycle) -------------------------
+            // Recycle idle GL buffer ids of an EXACT byte size instead of glDeleteBuffers
+            // (which triggers the kgsl_sharedmem_free -> mmu_unmap -> smmu/power/bandwidth
+            // cascade that dominated per-frame driver cost). An id retired during frame N
+            // is handed back only once the GPU has completed frame N (fence watermark, see
+            // DirectGLES::CompletedFrameSerial), then reseeded in place with glBufferSubData
+            // (no glBufferData realloc). All GL access is on the ES-context-owning thread;
+            // the mutex only guards against off-thread deferred-release enrollment races.
+            struct PooledBuffer {
+                Uint id = 0;
+                SizeT size = 0;
+                Uint contextGeneration = 0;
+                Uint64 retireSerial = 0;
+            };
+            UnorderedMap<SizeT, Vector<PooledBuffer>> g_bufferPool;
+            SizeT g_pooledBytes = 0;
+            std::mutex g_poolMutex;
+            constexpr SizeT kMaxPoolableBufferBytes = 8u * 1024u * 1024u; // bigger buffers: delete now
+            constexpr SizeT kMaxPoolBytes = 64u * 1024u * 1024u;          // total pool budget
+            constexpr SizeT kMaxEntriesPerBucket = 32;
+
+            Bool IsPoolable(const GLESBufferResource& r) {
+                // Require working fences: recycling is gated on the frame-completion
+                // watermark, which only advances if Present can insert/poll fences.
+                return g_GLESFuncs.glFenceSync != nullptr && g_GLESFuncs.glGetSynciv != nullptr &&
+                       r.id != 0 && !r.persistentMapped && r.contextGeneration == g_bufferContextGeneration &&
+                       r.storageInitialized && r.storageSize > 0 && r.storageSize <= kMaxPoolableBufferBytes;
+            }
+
+            // Retire a buffer id into the pool (owning thread; caller verified IsPoolable).
+            // Zeroes r.id to keep the single-owner invariant {live | deferred | pool}.
+            void EnrollIntoPool(GLESBufferResource& r) {
+                if (g_boundArrayBufferKnown && g_boundArrayBufferId == r.id) {
+                    InvalidateArrayBufferBindingCache();
+                }
+                const std::lock_guard<std::mutex> lock(g_poolMutex);
+                auto& bucket = g_bufferPool[r.storageSize];
+                if (bucket.size() >= kMaxEntriesPerBucket || g_pooledBytes + r.storageSize > kMaxPoolBytes) {
+                    g_GLESFuncs.glDeleteBuffers(1, &r.id); // over budget: don't pool
+                    r.id = 0;
+                    return;
+                }
+                // +1: Present increments the serial at frame END, so during the frame
+                // now being built CurrentFrameSerial() reads (frame-1). A buffer used
+                // this frame is only GPU-done once THIS frame's fence (serial+1) signals.
+                bucket.push_back(
+                    {r.id, r.storageSize, r.contextGeneration, DirectGLES::CurrentFrameSerial() + 1});
+                g_pooledBytes += r.storageSize;
+                r.id = 0;
+            }
+
+            // Hand back an idle pooled id of EXACTLY `size` whose GPU work is complete,
+            // else 0. Owning thread only. Drops stale-generation entries encountered.
+            Uint AcquireFromPool(SizeT size) {
+                const Uint64 completed = DirectGLES::CompletedFrameSerial();
+                const std::lock_guard<std::mutex> lock(g_poolMutex);
+                auto it = g_bufferPool.find(size);
+                if (it == g_bufferPool.end()) return 0;
+                auto& bucket = it->second;
+                for (SizeT i = bucket.size(); i-- > 0;) { // newest-first: hottest + most-likely-idle
+                    PooledBuffer& e = bucket[i];
+                    if (e.contextGeneration != g_bufferContextGeneration) {
+                        g_pooledBytes -= e.size; // dead-context id: drop, no GL
+                        bucket[i] = bucket.back();
+                        bucket.pop_back();
+                        continue;
+                    }
+                    if (e.retireSerial <= completed) {
+                        const Uint id = e.id;
+                        g_pooledBytes -= e.size;
+                        bucket[i] = bucket.back();
+                        bucket.pop_back();
+                        return id;
+                    }
+                }
+                return 0;
+            }
+
             GLESBufferResource* ResourceOf(BufferObject& bufferObject) {
                 return static_cast<GLESBufferResource*>(bufferObject.GetBackendResource().get());
             }
@@ -472,6 +550,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     return;
                 }
                 if (CanTouchGLNow()) {
+                    if (IsPoolable(*glesResource)) {
+                        EnrollIntoPool(*glesResource); // recycle instead of glDeleteBuffers
+                        return;
+                    }
                     if (glesResource->id != 0) {
                         if (g_boundArrayBufferKnown && g_boundArrayBufferId == glesResource->id) {
                             InvalidateArrayBufferBindingCache();
@@ -503,6 +585,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 MG_State::GLState::SetBufferBackendOps(nullptr);
             }
             InvalidateArrayBufferBindingCache();
+            // Pooled ids belong to the dying context too; drop them without glDeleteBuffers.
+            ClearBufferPool();
             const std::lock_guard<std::mutex> lock(g_deferredBufferReleasesMutex);
             // The ES context owning these ids is going away; just drop the handles.
             g_deferredBufferReleases.clear();
@@ -524,6 +608,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 auto* glesResource = static_cast<GLESBufferResource*>(resource.get());
                 if (glesResource->contextGeneration != g_bufferContextGeneration) {
                     glesResource->id = 0;
+                    continue;
+                }
+                if (IsPoolable(*glesResource)) {
+                    EnrollIntoPool(*glesResource); // recycle instead of glDeleteBuffers
                     continue;
                 }
                 if (glesResource->id != 0) {
@@ -577,14 +665,36 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
 
             if (resource->id == 0) {
-                g_GLESFuncs.glGenBuffers(1, &resource->id);
-                if (resource->id == 0) {
-                    MGLOG_E("Failed to generate buffer object.");
-                    MGLOG_E("ES glGetError(): %s", MG_Util::ConvertGLEnumToString(g_GLESFuncs.glGetError()).c_str());
-                    return resource;
+                // Try to recycle an idle same-size buffer from the pool (GPU-complete,
+                // exact byte size) and reseed it in place with glBufferSubData, instead
+                // of glGenBuffers + fresh-storage glBufferData (the kgsl alloc path).
+                const SizeT poolSize = bufferObject->GetSize();
+                const Uint reused =
+                    (poolSize > 0 && !resource->persistentMapped) ? AcquireFromPool(poolSize) : 0;
+                if (reused != 0) {
+                    resource->id = reused;
+                    resource->storageSize = poolSize;
+                    resource->storageInitialized = true;
+                    resource->pendingRespecify = false;
+                    BindBufferId(TempBufferTarget, reused);
+                    g_GLESFuncs.glBufferSubData(TempBufferTarget, 0, (GLsizeiptr)poolSize,
+                                                bufferObject->MappedData());
+                    {
+                        const std::lock_guard<std::mutex> lock(resource->pendingMutex);
+                        resource->pendingRanges.clear();
+                    }
+                    resource->syncedChangeSerial = bufferObject->GetChangeSerial();
+                } else {
+                    g_GLESFuncs.glGenBuffers(1, &resource->id);
+                    if (resource->id == 0) {
+                        MGLOG_E("Failed to generate buffer object.");
+                        MGLOG_E("ES glGetError(): %s",
+                                MG_Util::ConvertGLEnumToString(g_GLESFuncs.glGetError()).c_str());
+                        return resource;
+                    }
+                    resource->storageInitialized = false;
+                    resource->pendingRespecify = true;
                 }
-                resource->storageInitialized = false;
-                resource->pendingRespecify = true;
             }
 
             // Push persistently-mapped writes first; lands either as an immediate
@@ -630,6 +740,44 @@ namespace MobileGL::MG_Backend::DirectGLES {
         void InvalidateArrayBufferBindingCache() {
             g_boundArrayBufferId = 0;
             g_boundArrayBufferKnown = false;
+        }
+
+        void TrimBufferPool() {
+            const std::lock_guard<std::mutex> lock(g_poolMutex);
+            if (g_pooledBytes <= kMaxPoolBytes) return;
+            // Over budget: evict oldest-retireSerial entries with real glDeleteBuffers.
+            while (g_pooledBytes > kMaxPoolBytes) {
+                SizeT oldestKey = 0, oldestIdx = 0;
+                Uint64 oldestSerial = ~Uint64{0};
+                Bool found = false;
+                for (auto& kv : g_bufferPool) {
+                    for (SizeT i = 0; i < kv.second.size(); ++i) {
+                        if (kv.second[i].retireSerial < oldestSerial) {
+                            oldestSerial = kv.second[i].retireSerial;
+                            oldestKey = kv.first;
+                            oldestIdx = i;
+                            found = true;
+                        }
+                    }
+                }
+                if (!found) break;
+                auto& bucket = g_bufferPool[oldestKey];
+                PooledBuffer& e = bucket[oldestIdx];
+                if (e.contextGeneration == g_bufferContextGeneration && e.id != 0) {
+                    g_GLESFuncs.glDeleteBuffers(1, &e.id);
+                }
+                g_pooledBytes -= e.size;
+                bucket[oldestIdx] = bucket.back();
+                bucket.pop_back();
+            }
+        }
+
+        void ClearBufferPool() {
+            const std::lock_guard<std::mutex> lock(g_poolMutex);
+            // Ids belong to the dying context; drop without glDeleteBuffers (mirrors
+            // the g_deferredBufferReleases.clear() discipline).
+            g_bufferPool.clear();
+            g_pooledBytes = 0;
         }
     } // namespace BufferImpl
 

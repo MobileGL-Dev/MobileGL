@@ -3818,6 +3818,23 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // BufferImpl's context tracking).
         Uint g_syncContextGeneration = 1;
 
+        // One-fence-per-frame ring driving the buffer-storage pool's recycle gate.
+        // A buffer retired during frame N is safe to reuse once frame N's fence has
+        // signaled. Touched only in Present()/DestroyEGLContext() on the owning
+        // thread -> no lock. Each fence carries the sync generation so a dead-context
+        // GLsync is never polled/deleted. Depth 4 >> the 2-3 frames Adreno keeps in
+        // flight; wrap-before-signal only happens during a stall and just degrades to
+        // the allocate path.
+        std::atomic<Uint64> g_currentFrameSerial{0};
+        std::atomic<Uint64> g_completedFrameSerial{0};
+        constexpr int kFrameFenceRingDepth = 4;
+        struct FrameFence {
+            GLsync sync = nullptr;
+            Uint contextGeneration = 0;
+            Uint64 serial = 0;
+        };
+        FrameFence g_frameFenceRing[kFrameFenceRingDepth];
+
         // Backend fence handle: a native ES sync plus the ES context
         // generation it was created under.
         struct GLESSyncObject {
@@ -4117,8 +4134,44 @@ namespace MobileGL::MG_Backend::DirectGLES {
         return static_cast<Int64>(timestamp);
     }
 
+    Uint64 CurrentFrameSerial() { return g_currentFrameSerial.load(std::memory_order_relaxed); }
+    Uint64 CompletedFrameSerial() { return g_completedFrameSerial.load(std::memory_order_relaxed); }
+
     void Present() {
-            g_EGLFuncs.eglSwapBuffers(g_Display, g_Surface);
+        // Insert one fence per frame BEFORE the swap (eglSwapBuffers' implicit flush
+        // makes it reachable), then non-blocking-poll prior frames' fences AFTER to
+        // advance the completed-frame watermark that gates buffer-pool recycling.
+        const Bool canFence = IsBackendContextCurrentOnThisThread() && g_GLESFuncs.glFenceSync;
+        if (canFence) {
+            const Uint64 serial = g_currentFrameSerial.fetch_add(1, std::memory_order_relaxed) + 1;
+            FrameFence& slot = g_frameFenceRing[serial % kFrameFenceRingDepth];
+            if (slot.sync && slot.contextGeneration == g_syncContextGeneration && g_GLESFuncs.glDeleteSync) {
+                g_GLESFuncs.glDeleteSync(slot.sync);
+            }
+            slot = {g_GLESFuncs.glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0), g_syncContextGeneration, serial};
+        }
+
+        g_EGLFuncs.eglSwapBuffers(g_Display, g_Surface);
+
+        if (canFence && g_GLESFuncs.glGetSynciv) {
+            // Fences signal in submission order within one context, so the highest
+            // signaled serial is a valid contiguous completion watermark.
+            Uint64 completed = g_completedFrameSerial.load(std::memory_order_relaxed);
+            for (FrameFence& slot : g_frameFenceRing) {
+                if (!slot.sync || slot.contextGeneration != g_syncContextGeneration) continue;
+                GLint status = GL_SIGNALED;
+                GLsizei length = 0;
+                g_GLESFuncs.glGetSynciv(slot.sync, GL_SYNC_STATUS, 1, &length, &status);
+                if (status == GL_SIGNALED) {
+                    if (slot.serial > completed) completed = slot.serial;
+                    if (g_GLESFuncs.glDeleteSync) g_GLESFuncs.glDeleteSync(slot.sync);
+                    slot.sync = nullptr;
+                }
+            }
+            g_completedFrameSerial.store(completed, std::memory_order_relaxed);
+        }
+
+        BufferImpl::TrimBufferPool();
     }
 
     void DestroyEGLContext() {
@@ -4127,6 +4180,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // Outstanding fence handles now refer to a dead context; treat them as
         // signaled from here on.
         ++g_syncContextGeneration;
+        // The frame-fence ring's syncs belong to the dead context too; abandon them
+        // (the context reclaims its syncs) and floor the completed watermark to the
+        // current serial so buffers retired under the old context read as GPU-idle.
+        for (FrameFence& slot : g_frameFenceRing) slot = {};
+        g_completedFrameSerial.store(g_currentFrameSerial.load(std::memory_order_relaxed),
+                                     std::memory_order_relaxed);
         if (g_Display != EGL_NO_DISPLAY) {
             g_EGLFuncs.eglMakeCurrent(g_Display, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
             if (g_Context != EGL_NO_CONTEXT) {

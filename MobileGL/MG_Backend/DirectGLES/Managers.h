@@ -177,6 +177,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // glBindBuffer with a redundant-bind cache for GL_ARRAY_BUFFER.
         void BindBufferId(GLenum target, Uint id);
         void InvalidateArrayBufferBindingCache();
+        // Buffer-storage pool maintenance. TrimBufferPool evicts over-budget entries
+        // (called once per frame from Present); ClearBufferPool drops all pooled ids
+        // without glDeleteBuffers (called when the ES context is going away).
+        void TrimBufferPool();
+        void ClearBufferPool();
     } // namespace BufferImpl
 
     namespace VertexArrayImpl {
