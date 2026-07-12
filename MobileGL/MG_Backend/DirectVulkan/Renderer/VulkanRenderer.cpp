@@ -3285,6 +3285,10 @@ void main() {
     Bool VulkanRenderer::SetupDraw(FrameContext::FrameData& frame, GLenum mode, Flags<DrawSetupAspect> aspects,
                                    const DrawCmdParam& drawParams,
                                    const IndexBufferView* pIndexBufferView) {
+        // Sync each sampled texture at most once across this whole draw: the layout
+        // probe loop, the post-transition loop, and ResolveSamplerDescriptor would
+        // otherwise each re-run the full SyncTexture path on the same textures.
+        VkTextureManager::DrawSyncScope drawSyncScope(*m_textureManager);
         m_textureManager->CollectGarbage();
         const auto& drawFbo =
                 MG_State::pGLContext->GetFramebufferBindingSlot(FramebufferTarget::Draw).GetBoundObject();

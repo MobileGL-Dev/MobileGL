@@ -683,10 +683,39 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
     }
 
+    void VkTextureManager::BeginDrawSyncScope() {
+        m_drawSyncedThisDraw.clear();
+        m_drawSyncScopeActive = true;
+    }
+
+    void VkTextureManager::EndDrawSyncScope() {
+        m_drawSyncScopeActive = false;
+        m_drawSyncedThisDraw.clear();
+    }
+
     VkTextureManager::TextureResource* VkTextureManager::SyncTextureAndGetDescriptor(MG_State::GLState::ITextureObject& texture) {
         MOBILEGL_ASSERT(m_device != VK_NULL_HANDLE, "SyncTextureAndGetDescriptor: m_device == VK_NULL_HANDLE");
 
         const TextureIdentity identity = MakeTextureIdentity(&texture);
+
+        // Per-draw memo fast path (see BeginDrawSyncScope): a texture already fully
+        // synced earlier in this draw cannot have changed since (no GL mutation runs
+        // mid-SetupDraw), so skip the heavy SyncTexture work and hand back the
+        // already-synced resource. Layout lives on the resource and is updated by the
+        // transition path, so the short-circuited resource still reflects the truth.
+        const Bool memoActive = m_drawSyncScopeActive;
+        if (memoActive) {
+            for (const TextureIdentity& synced : m_drawSyncedThisDraw) {
+                if (synced == identity) {
+                    auto cachedIt = m_textureResources.find(identity);
+                    if (cachedIt != m_textureResources.end() && cachedIt->second.image != VK_NULL_HANDLE) {
+                        return &(cachedIt->second);
+                    }
+                    break;  // resource unexpectedly gone -> fall through to a full sync
+                }
+            }
+        }
+
         auto aliveIt = m_aliveObjects.find(identity);
         if (aliveIt != m_aliveObjects.end() && aliveIt->second.expired()) {
             EraseTrackedTexture(aliveIt->first);
@@ -715,6 +744,19 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         if (!SyncTexture(texture, it->second)) {
             MGLOG_D("%s: Syncing texture %d failed", __func__, texture.GetExternalIndex());
             return nullptr;
+        }
+
+        if (memoActive) {
+            Bool recorded = false;
+            for (const TextureIdentity& synced : m_drawSyncedThisDraw) {
+                if (synced == identity) {
+                    recorded = true;
+                    break;
+                }
+            }
+            if (!recorded) {
+                m_drawSyncedThisDraw.push_back(identity);
+            }
         }
 
         return &(it->second);

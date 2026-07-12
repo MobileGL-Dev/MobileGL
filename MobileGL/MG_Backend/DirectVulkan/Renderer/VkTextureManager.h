@@ -200,6 +200,30 @@ public:
                                Uint32 layerCount = 1);
 
     SizeT CollectGarbage();
+
+    // Per-draw sync memo. Within a single SetupDraw the same sampled texture is
+    // resolved ~3x (SetupDraw's layout-probe loop, its post-transition loop, and
+    // again inside ResolveSamplerDescriptor). No GL texture mutation can happen
+    // mid-SetupDraw, and layout is tracked on the TextureResource independently of
+    // SyncTexture, so after the first successful sync of a texture in a draw the
+    // heavy SyncTexture work (mip-completeness/resource/view resync + dirty scan)
+    // is pure redundancy. BeginDrawSyncScope opens a window in which repeat
+    // SyncTextureAndGetDescriptor calls short-circuit to the already-synced
+    // resource; EndDrawSyncScope closes it. Use the RAII DrawSyncScope guard.
+    void BeginDrawSyncScope();
+    void EndDrawSyncScope();
+
+    // RAII guard that opens/closes a per-draw sync memo window (see above).
+    class DrawSyncScope {
+    public:
+        explicit DrawSyncScope(VkTextureManager& manager) : m_manager(manager) { m_manager.BeginDrawSyncScope(); }
+        ~DrawSyncScope() { m_manager.EndDrawSyncScope(); }
+        DrawSyncScope(const DrawSyncScope&) = delete;
+        DrawSyncScope& operator=(const DrawSyncScope&) = delete;
+    private:
+        VkTextureManager& m_manager;
+    };
+
 private:
 
     Bool SyncTexture(MG_State::GLState::ITextureObject &texture,
@@ -242,6 +266,10 @@ private:
     Uint32 m_currentFrameIndex = 0;
 
     Uint8 m_gcCounter = 0;
+    // Active only between BeginDrawSyncScope/EndDrawSyncScope; identities of
+    // textures already fully synced in the current draw (small N -> flat scan).
+    Bool m_drawSyncScopeActive = false;
+    Vector<TextureIdentity> m_drawSyncedThisDraw;
     std::unordered_map<TextureIdentity, WeakPtr<MG_State::GLState::ITextureObject>, TextureIdentityHash> m_aliveObjects;
     std::unordered_map<TextureIdentity, TextureResource, TextureIdentityHash> m_textureResources;
     Vector<Vector<TextureResource>> m_deferredReleases;
