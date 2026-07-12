@@ -922,39 +922,78 @@ namespace MobileGL::MG_Backend::DirectGLES {
             m_prevTextureInfo = {};
         }
 
+        // Sets the backend GL unpack state to MobileGL's upload default for the scope,
+        // then restores it. The previous state is read from a shadow instead of via
+        // glGetIntegerv - that query forces a driver pipeline sync and, because texture
+        // uploads run it per dirty texture per frame, it dominated the DirectGLES draw
+        // path. The backend unpack state is set ONLY by MobileGL's own save/restore
+        // helpers (this class, TempPixelStoreParameterSync, the R32F copy path), all of
+        // which restore to the resting default, so the shadow stays accurate; a one-time
+        // forced sync pins the backend to that known default up front. Apply() is
+        // compare-and-set, so the (now redundant) glPixelStorei calls also usually no-op.
         class ScopedDefaultUnpackState {
         public:
             ScopedDefaultUnpackState() {
-                g_GLESFuncs.glGetIntegerv(GL_UNPACK_ALIGNMENT, &m_prevAlignment);
-                g_GLESFuncs.glGetIntegerv(GL_UNPACK_ROW_LENGTH, &m_prevRowLength);
-                g_GLESFuncs.glGetIntegerv(GL_UNPACK_SKIP_ROWS, &m_prevSkipRows);
-                g_GLESFuncs.glGetIntegerv(GL_UNPACK_SKIP_PIXELS, &m_prevSkipPixels);
-                g_GLESFuncs.glGetIntegerv(GL_UNPACK_IMAGE_HEIGHT, &m_prevImageHeight);
-                g_GLESFuncs.glGetIntegerv(GL_UNPACK_SKIP_IMAGES, &m_prevSkipImages);
+                EnsureShadowSynced();
+                m_prevAlignment = s_alignment;
+                m_prevRowLength = s_rowLength;
+                m_prevSkipRows = s_skipRows;
+                m_prevSkipPixels = s_skipPixels;
+                m_prevImageHeight = s_imageHeight;
+                m_prevSkipImages = s_skipImages;
+                Apply(4, 0, 0, 0, 0, 0);
+            }
+
+            ~ScopedDefaultUnpackState() {
+                Apply(m_prevAlignment, m_prevRowLength, m_prevSkipRows, m_prevSkipPixels, m_prevImageHeight,
+                      m_prevSkipImages);
+            }
+
+        private:
+            static void EnsureShadowSynced() {
+                if (s_synced) {
+                    return;
+                }
+                s_synced = true;
                 g_GLESFuncs.glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
                 g_GLESFuncs.glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
                 g_GLESFuncs.glPixelStorei(GL_UNPACK_SKIP_ROWS, 0);
                 g_GLESFuncs.glPixelStorei(GL_UNPACK_SKIP_PIXELS, 0);
                 g_GLESFuncs.glPixelStorei(GL_UNPACK_IMAGE_HEIGHT, 0);
                 g_GLESFuncs.glPixelStorei(GL_UNPACK_SKIP_IMAGES, 0);
+                s_alignment = 4;
+                s_rowLength = 0;
+                s_skipRows = 0;
+                s_skipPixels = 0;
+                s_imageHeight = 0;
+                s_skipImages = 0;
             }
 
-            ~ScopedDefaultUnpackState() {
-                g_GLESFuncs.glPixelStorei(GL_UNPACK_ALIGNMENT, m_prevAlignment);
-                g_GLESFuncs.glPixelStorei(GL_UNPACK_ROW_LENGTH, m_prevRowLength);
-                g_GLESFuncs.glPixelStorei(GL_UNPACK_SKIP_ROWS, m_prevSkipRows);
-                g_GLESFuncs.glPixelStorei(GL_UNPACK_SKIP_PIXELS, m_prevSkipPixels);
-                g_GLESFuncs.glPixelStorei(GL_UNPACK_IMAGE_HEIGHT, m_prevImageHeight);
-                g_GLESFuncs.glPixelStorei(GL_UNPACK_SKIP_IMAGES, m_prevSkipImages);
+            static void Apply(GLint alignment, GLint rowLength, GLint skipRows, GLint skipPixels, GLint imageHeight,
+                              GLint skipImages) {
+                if (alignment != s_alignment) { g_GLESFuncs.glPixelStorei(GL_UNPACK_ALIGNMENT, alignment); s_alignment = alignment; }
+                if (rowLength != s_rowLength) { g_GLESFuncs.glPixelStorei(GL_UNPACK_ROW_LENGTH, rowLength); s_rowLength = rowLength; }
+                if (skipRows != s_skipRows) { g_GLESFuncs.glPixelStorei(GL_UNPACK_SKIP_ROWS, skipRows); s_skipRows = skipRows; }
+                if (skipPixels != s_skipPixels) { g_GLESFuncs.glPixelStorei(GL_UNPACK_SKIP_PIXELS, skipPixels); s_skipPixels = skipPixels; }
+                if (imageHeight != s_imageHeight) { g_GLESFuncs.glPixelStorei(GL_UNPACK_IMAGE_HEIGHT, imageHeight); s_imageHeight = imageHeight; }
+                if (skipImages != s_skipImages) { g_GLESFuncs.glPixelStorei(GL_UNPACK_SKIP_IMAGES, skipImages); s_skipImages = skipImages; }
             }
 
-        private:
             GLint m_prevAlignment = 4;
             GLint m_prevRowLength = 0;
             GLint m_prevSkipRows = 0;
             GLint m_prevSkipPixels = 0;
             GLint m_prevImageHeight = 0;
             GLint m_prevSkipImages = 0;
+
+            // Shadow of the backend GL unpack state (GL defaults). See class comment.
+            static inline Bool s_synced = false;
+            static inline GLint s_alignment = 4;
+            static inline GLint s_rowLength = 0;
+            static inline GLint s_skipRows = 0;
+            static inline GLint s_skipPixels = 0;
+            static inline GLint s_imageHeight = 0;
+            static inline GLint s_skipImages = 0;
         };
 
         static Uint GetNormFallbackComponentCount(TextureInternalFormat format) {
