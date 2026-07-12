@@ -349,6 +349,25 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         return true;
     }
 
+    MG_State::GLState::ITextureObject* UniformManager::ResolveSamplerTextureRaw(
+        const MG_State::GLState::ProgramObject& program, const ProgramFactory::VkProgramObject& programObj,
+        Uint32 binding) {
+        MOBILEGL_ASSERT(MG_State::pGLContext != nullptr, "ResolveSamplerTextureRaw: GL context is null");
+        MOBILEGL_ASSERT(binding < programObj.samplerUniformLocationByBinding.size(),
+                        "ResolveSamplerTextureRaw: sampler location binding %u out of range", binding);
+        MOBILEGL_ASSERT(binding < programObj.samplerTextureTargetByBinding.size(),
+                        "ResolveSamplerTextureRaw: sampler target binding %u out of range", binding);
+
+        const Int location = programObj.samplerUniformLocationByBinding[binding];
+        const Int unit = ResolveSamplerUnitIndex(program, location, binding);
+
+        auto& textureUnit = MG_State::pGLContext->GetTextureUnitObject(unit);
+        const TextureTarget preferredTarget = programObj.samplerTextureTargetByBinding[binding];
+        // GetBoundObject() returns the SharedPtr by const ref; .get() reads the pointer without
+        // touching the refcount (no atomic inc/dec per binding per draw).
+        return textureUnit.GetBindingSlot(preferredTarget).GetBoundObject().get();
+    }
+
     Bool UniformManager::ResolveTexelBufferDescriptor(const MG_State::GLState::ProgramObject& program,
                                                       const ProgramFactory::VkProgramObject& programObj,
                                                       Uint32 binding, Uint32 frameIndex,
@@ -563,14 +582,14 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 continue;
             }
 
-            SharedPtr<MG_State::GLState::ITextureObject> texture;
-            if (!ResolveSamplerTexture(program, programObj, binding, texture) || !texture) {
+            MG_State::GLState::ITextureObject* texture = ResolveSamplerTextureRaw(program, programObj, binding);
+            if (!texture) {
                 continue;
             }
 
-            auto found = std::find(outTextures.begin(), outTextures.end(), texture.get());
+            auto found = std::find(outTextures.begin(), outTextures.end(), texture);
             if (found == outTextures.end()) {
-                outTextures.push_back(texture.get());
+                outTextures.push_back(texture);
             }
         }
         return true;

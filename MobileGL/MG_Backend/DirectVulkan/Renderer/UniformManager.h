@@ -73,6 +73,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         static Bool ResolveSamplerTexture(const MG_State::GLState::ProgramObject& program,
                                    const ProgramFactory::VkProgramObject& programObj, Uint32 binding,
                                    SharedPtr<MG_State::GLState::ITextureObject>& outTexture);
+        // Raw-pointer variant for the per-draw sampled-texture walk (CollectSampledTextures):
+        // the bound texture stays alive through the draw via GL binding state, so callers that
+        // only need the pointer skip the SharedPtr copy's atomic refcount churn.
+        static MG_State::GLState::ITextureObject* ResolveSamplerTextureRaw(
+            const MG_State::GLState::ProgramObject& program,
+            const ProgramFactory::VkProgramObject& programObj, Uint32 binding);
         SharedPtr<MG_State::GLState::ITextureObject> GetFallbackTexture(TextureTarget target) const;
         Bool ResolveSamplerDescriptor(VkCommandBuffer commandBuffer, const MG_State::GLState::ProgramObject& program,
                                       const ProgramFactory::VkProgramObject& programObj, Uint32 binding,
