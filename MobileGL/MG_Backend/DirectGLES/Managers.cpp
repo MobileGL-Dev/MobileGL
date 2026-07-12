@@ -363,6 +363,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
             // (Re)specify backend storage from the shadow copy: glBufferData.
             // The orphaning point - the ES driver performs the actual rename.
+            // TODO(buffer-pool Phase 2): orphan-on-respecify is NOT yet implemented.
+            // When the current id is BUSY (lastUseFrameSerial > CompletedFrameSerial())
+            // && !persistentMapped && !noOrphan, express the orphan as an id-swap
+            // (retire the busy id into the pool, bind a fresh/pooled id) instead of the
+            // in-place glBufferData below, to avoid the driver's own rename/stall. Not
+            // pursued yet: glBufferData/glBufferSubData currently sit below profiler
+            // noise, so respecify is not a hot path in the profiled scenes.
             void RespecifyStorageNow(GLESBufferResource& resource, BufferObject& bufferObject) {
 #ifdef TRACY_ENABLE
                 ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
