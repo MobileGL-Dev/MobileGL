@@ -1128,6 +1128,46 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 return;
             }
 
+            // Fast path: a fully-synced mipmap texture is the common per-draw case.
+            // SyncNeccessaryTextures re-syncs every bound texture each draw, and the
+            // scratch Bind below targets the temp unit - which sequential distinct
+            // textures thrash, forcing a real glBindTexture per texture per draw. When
+            // nothing needs uploading, skip the bind + upload machinery entirely;
+            // BindCurrentTextures() re-establishes the real sampling bindings regardless.
+            if (m_isInitialized && stateTextureObject->GetStorageType() == TextureStorageType::Mipmap) {
+                auto* mipmapObject =
+                    static_cast<MG_State::GLState::TextureObjectMipmap*>(stateTextureObject.get());
+                const auto probeBaseSize = stateTextureObject->GetBaseSize();
+                StateTextureBasicInfo probe = {stateTextureObject->GetFormat(),
+                                               static_cast<SizeT>(probeBaseSize.x()),
+                                               static_cast<SizeT>(probeBaseSize.y()),
+                                               static_cast<SizeT>(probeBaseSize.z()),
+                                               static_cast<SizeT>(mipmapObject->GetMipmapLevelCount()),
+                                               0,
+                                               stateTextureObject->GetSamples(),
+                                               stateTextureObject->HasFixedSampleLocations()};
+                // Equal info => needsRegeneration is false, and canAppendMipmaps is
+                // false too (it requires strictly more mip levels than the last sync).
+                // So the only remaining work would be re-uploading dirty levels.
+                if (probe == m_prevTextureInfo) {
+                    Bool anyDirty = false;
+                    for (const auto& uploadTarget : mipmapObject->GetUploadTargets()) {
+                        for (SizeT level = 0; level < probe.mipmapLevels; ++level) {
+                            if (mipmapObject->IsStorageDirty(uploadTarget, level)) {
+                                anyDirty = true;
+                                break;
+                            }
+                        }
+                        if (anyDirty) break;
+                    }
+                    if (!anyDirty) {
+                        MGLOG_D("Texture ID %u already fully synced, skipping scratch bind + upload.",
+                                m_backendTextureId);
+                        return;
+                    }
+                }
+            }
+
             Bind(target);
             DebugImpl::ErrorLopper::Loop([file = __FILE__, line = __LINE__, func = __func__](GLenum err) {
                 MGLOG_D("%s(%s:%d) ES error: %s", func, file, line, MG_Util::ConvertGLEnumToString(err).c_str());
