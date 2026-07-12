@@ -578,9 +578,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
     Bool UniformManager::ResolveUniformBufferPayload(const MG_State::GLState::ProgramObject& program,
                                                      const ProgramFactory::VkProgramObject& programObj, Uint32 binding,
-                                                     const void*& outData, VkDeviceSize& outSize) const {
-        outData = nullptr;
-        outSize = 0;
+                                                     UboBindResult& out) const {
+        const void* outData = nullptr;
+        VkDeviceSize outSize = 0;
 
         MOBILEGL_ASSERT(MG_State::pGLContext != nullptr, "ResolveUniformBufferPayload: GL context is null");
         MOBILEGL_ASSERT(binding < programObj.bindingKinds.size(),
@@ -596,6 +596,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 outData = emptyGlobalUbo.data();
                 outSize = static_cast<VkDeviceSize>(emptyGlobalUbo.size());
             }
+            // The global UBO is CPU uniform data, not an app buffer -> always UploadTransient.
+            out.payload = outData;
+            out.payloadSize = outSize;
             return outData != nullptr && outSize > 0;
         }
 
@@ -658,6 +661,26 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             paddedUbo.assign(static_cast<SizeT>(blockSize), 0);
             Memcpy(paddedUbo.data(), outData, static_cast<SizeT>(available));
             outData = paddedUbo.data();
+        }
+        out.payload = outData;
+        out.payloadSize = outSize;
+
+        // Zero-copy direct bind: for a persistent-mapped coherent app buffer whose full reflected
+        // block fits within the aligned bound range, point the descriptor straight at the app's
+        // resident VkBuffer (the same buffer the GLES backend binds) with the block range as the
+        // dynamic offset - no per-draw copy into a transient ring. Any gate failing keeps the
+        // UploadTransient payload above. AcquireResidentSlice does the persistent busy-tracking and
+        // (for the persistent case) hits a zero-work fast path returning the whole-buffer slice.
+        if (bufferObject->IsBackendPersistentMapped() && available >= blockSize &&
+            (rangeStart % m_minDynamicOffsetAlignment) == 0) {
+            BufferSlice slice{};
+            if (m_bufferManager->AcquireResidentSlice(BufferKind::Uniform, bufferObject, slice) &&
+                slice.IsValid() && slice.offset == 0 && slice.size >= rangeStart + blockSize) {
+                out.directBindable = true;
+                out.buffer = slice.buffer;
+                out.range = blockSize;
+                out.dynamicOffset = rangeStart;
+            }
         }
         return true;
     }
@@ -850,31 +873,40 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             write.descriptorCount = 1;
 
             if (kind == ProgramFactory::DescriptorBindingKind::UniformBufferDynamic) {
-                const void* payload = nullptr;
-                VkDeviceSize payloadSize = 0;
-                const Bool hasPayload = ResolveUniformBufferPayload(program, programObj, binding, payload, payloadSize);
-                MOBILEGL_ASSERT(hasPayload && payload != nullptr && payloadSize > 0,
+                UboBindResult ubo{};
+                const Bool hasPayload = ResolveUniformBufferPayload(program, programObj, binding, ubo);
+                MOBILEGL_ASSERT(hasPayload && ubo.payload != nullptr && ubo.payloadSize > 0,
                                 "UniformDescriptorBinder::BindProgramUniformBuffers failed: missing UBO payload on binding %u",
                                 binding);
 
-                BufferSlice slice{};
-                if (!m_bufferManager->UploadTransient(BufferKind::Uniform, frameIndex, payload, payloadSize,
-                                                     m_minDynamicOffsetAlignment, slice)) {
-                    MOBILEGL_ASSERT(false, "UniformDescriptorBinder::BindProgramUniformBuffers failed: UBO upload failed on binding %u",
-                            binding);
-                    return false;
-                }
-
                 VkDescriptorBufferInfo bufferInfo{};
-                bufferInfo.buffer = slice.buffer;
+                // Keep offset 0 (sub-range selected via the dynamic offset) so the hashed bufferInfo
+                // is stable across draws and the descriptor-set reuse cache keeps hitting.
                 bufferInfo.offset = 0;
-                bufferInfo.range = payloadSize;
+                Uint32 dynOffset;
+                if (ubo.directBindable) {
+                    // Zero-copy: bind the app's resident VkBuffer directly, no per-draw memcpy.
+                    bufferInfo.buffer = ubo.buffer;
+                    bufferInfo.range = ubo.range;
+                    dynOffset = static_cast<Uint32>(ubo.dynamicOffset);
+                } else {
+                    BufferSlice slice{};
+                    if (!m_bufferManager->UploadTransient(BufferKind::Uniform, frameIndex, ubo.payload,
+                                                          ubo.payloadSize, m_minDynamicOffsetAlignment, slice)) {
+                        MOBILEGL_ASSERT(false, "UniformDescriptorBinder::BindProgramUniformBuffers failed: UBO upload failed on binding %u",
+                                binding);
+                        return false;
+                    }
+                    bufferInfo.buffer = slice.buffer;
+                    bufferInfo.range = ubo.payloadSize;
+                    dynOffset = static_cast<Uint32>(slice.offset);
+                }
                 bufferInfos.push_back(bufferInfo);
 
                 write.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
                 write.pBufferInfo = &bufferInfos.back();
                 writes.push_back(write);
-                dynamicOffsets.push_back(static_cast<Uint32>(slice.offset));
+                dynamicOffsets.push_back(dynOffset);
             } else if (kind == ProgramFactory::DescriptorBindingKind::UniformTexelBuffer) {
                 VkBufferView bufferView = VK_NULL_HANDLE;
                 if (!ResolveTexelBufferDescriptor(program, programObj, binding, frameIndex, bufferView) ||

@@ -89,9 +89,19 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                            const MG_State::GLState::ProgramObject& program,
                                            const ProgramFactory::VkProgramObject& programObj, Uint32 binding,
                                            VkDescriptorImageInfo& outImageInfo) const;
+        // Result of resolving a UBO binding: either a zero-copy direct bind to the app's resident
+        // VkBuffer (the GLES backend's approach - no per-draw copy) or the CPU payload to upload.
+        struct UboBindResult {
+            Bool directBindable = false;
+            VkBuffer buffer = VK_NULL_HANDLE;
+            VkDeviceSize range = 0;         // reflected block size; constant across draws (hashed)
+            VkDeviceSize dynamicOffset = 0; // block range start; moves per draw (NOT hashed)
+            const void* payload = nullptr;  // fallback UploadTransient path
+            VkDeviceSize payloadSize = 0;
+        };
         Bool ResolveUniformBufferPayload(const MG_State::GLState::ProgramObject& program,
                                          const ProgramFactory::VkProgramObject& programObj, Uint32 binding,
-                                         const void*& outData, VkDeviceSize& outSize) const;
+                                         UboBindResult& out) const;
         Bool CreateDescriptorPool(Uint32 maxSets, VkDescriptorPool& outPool) const;
         Bool GrowFrameDescriptorPool(FrameResources& frame, Uint32 frameIndex);
         VkResult AllocateDescriptorSetsFromActivePool(
