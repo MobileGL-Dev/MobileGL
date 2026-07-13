@@ -287,7 +287,15 @@ private:
     // Active only between BeginDrawSyncScope/EndDrawSyncScope; identities of
     // textures already fully synced in the current draw (small N -> flat scan).
     Bool m_drawSyncScopeActive = false;
-    Vector<TextureIdentity> m_drawSyncedThisDraw;
+    // Per-draw sync memo: the identity plus the resolved resource pointer. The pointer is stable
+    // across rehash in the node-based m_textureResources and stays valid for the draw (a texture
+    // synced this draw is alive and is not erased mid-draw), so a repeat sync of the same texture
+    // returns the resource without re-hashing the identity into m_textureResources.
+    struct DrawSyncedTexture {
+        TextureIdentity identity;
+        TextureResource* resource = nullptr;
+    };
+    Vector<DrawSyncedTexture> m_drawSyncedThisDraw;
     std::unordered_map<TextureIdentity, WeakPtr<MG_State::GLState::ITextureObject>, TextureIdentityHash> m_aliveObjects;
     std::unordered_map<TextureIdentity, TextureResource, TextureIdentityHash> m_textureResources;
     Vector<Vector<TextureResource>> m_deferredReleases;

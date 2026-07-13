@@ -705,11 +705,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // transition path, so the short-circuited resource still reflects the truth.
         const Bool memoActive = m_drawSyncScopeActive;
         if (memoActive) {
-            for (const TextureIdentity& synced : m_drawSyncedThisDraw) {
-                if (synced == identity) {
-                    auto cachedIt = m_textureResources.find(identity);
-                    if (cachedIt != m_textureResources.end() && cachedIt->second.image != VK_NULL_HANDLE) {
-                        return &(cachedIt->second);
+            for (const DrawSyncedTexture& synced : m_drawSyncedThisDraw) {
+                if (synced.identity == identity) {
+                    if (synced.resource != nullptr && synced.resource->image != VK_NULL_HANDLE) {
+                        return synced.resource;
                     }
                     break;  // resource unexpectedly gone -> fall through to a full sync
                 }
@@ -748,14 +747,14 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
         if (memoActive) {
             Bool recorded = false;
-            for (const TextureIdentity& synced : m_drawSyncedThisDraw) {
-                if (synced == identity) {
+            for (const DrawSyncedTexture& synced : m_drawSyncedThisDraw) {
+                if (synced.identity == identity) {
                     recorded = true;
                     break;
                 }
             }
             if (!recorded) {
-                m_drawSyncedThisDraw.push_back(identity);
+                m_drawSyncedThisDraw.push_back({identity, &(it->second)});
             }
         }
 
