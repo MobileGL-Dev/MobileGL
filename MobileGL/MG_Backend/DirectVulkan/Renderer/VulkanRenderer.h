@@ -448,6 +448,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         void DestroyComputePipelines();
 
         Bool UploadAndBindVertexBuffers(VkCommandBuffer commandBuffer, const MG_State::GLState::VertexArrayObject& vao,
+                                        const ProgramFactory::VkProgramObject& programObj,
                                         const DrawCmdParam& drawParams);
         Bool UploadAndBindIndexBuffer(FrameContext::FrameData& frame,
                                      const MG_State::GLState::VertexArrayObject& vao,

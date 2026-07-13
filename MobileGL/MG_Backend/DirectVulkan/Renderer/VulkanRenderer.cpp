@@ -2165,11 +2165,11 @@ void main() {
     }
 
     Bool VulkanRenderer::UploadAndBindVertexBuffers(
-        VkCommandBuffer commandBuffer, const MG_State::GLState::VertexArrayObject& vao, const DrawCmdParam& drawParams) {
+        VkCommandBuffer commandBuffer, const MG_State::GLState::VertexArrayObject& vao,
+        const ProgramFactory::VkProgramObject& programObj, const DrawCmdParam& drawParams) {
+        // programObj is resolved once in SetupDraw and passed in; re-resolving it here would repeat
+        // the GetCurrentProgram + GetOrCreateProgram hash lookup every draw.
         auto& vertexInputState = m_vertexInputStateFactory->GetOrCreateVertexInputState(vao);
-        const auto& program = *MG_State::pGLContext->GetCurrentProgram();
-        const auto transformFlags = GetShaderTransformFlags(m_swapchainObject.GetPreTransform());
-        const auto& programObj = m_programFactory->GetOrCreateProgram(program, transformFlags);
         const Uint32 activeAttribMask = programObj.activeVertexInputLocationMask;
         const Uint32 vertexInputAttribMask = BuildVertexInputAttributeMask(vertexInputState.attributes);
         const Uint32 missingAttribMask = activeAttribMask & ~vertexInputAttribMask;
@@ -2181,16 +2181,12 @@ void main() {
         vkBuffers.assign(bindingCount, VK_NULL_HANDLE);
         vkOffsets.assign(bindingCount, 0);
 
-        auto findBufferByKey = [&](SizeT bufferKey) -> const MG_State::GLState::BufferObject* {
+        auto findBufferByKey = [&](SizeT bufferKey) -> const SharedPtr<MG_State::GLState::BufferObject>* {
             const auto& attrs = vao.GetAllAttributes();
             for (Uint32 location = 0; location < MG_State::GLState::VertexArrayObject::MAX_VERTEX_ATTRIBS; ++location) {
                 const auto& attr = attrs[location];
-                if (!attr.Buffer) {
-                    continue;
-                }
-                const auto* buffer = attr.Buffer.get();
-                if (reinterpret_cast<SizeT>(buffer) == bufferKey) {
-                    return buffer;
+                if (attr.Buffer && reinterpret_cast<SizeT>(attr.Buffer.get()) == bufferKey) {
+                    return &attr.Buffer;
                 }
             }
             return nullptr;
@@ -2243,11 +2239,13 @@ void main() {
             }
 
             const SizeT bufferKey = vertexInputState.bindingBufferKeys[binding];
-            const MG_State::GLState::BufferObject* sourceBuffer = findBufferByKey(bufferKey);
-            MOBILEGL_ASSERT(sourceBuffer != nullptr, "UploadAndBindVertexStreams failed to resolve source buffer");
-            auto sourceBufferShared = MG_State::pGLContext->GetBufferObject(sourceBuffer->GetExternalIndex());
-            MOBILEGL_ASSERT(sourceBufferShared != nullptr,
-                            "UploadAndBindVertexStreams failed to resolve shared source buffer");
+            // The VAO attribute already holds the buffer's SharedPtr; use it by reference directly
+            // instead of re-resolving it from the GL context by external index (a map lookup +
+            // atomic refcount every binding every draw).
+            const SharedPtr<MG_State::GLState::BufferObject>* sourceBufferSharedPtr = findBufferByKey(bufferKey);
+            MOBILEGL_ASSERT(sourceBufferSharedPtr != nullptr && *sourceBufferSharedPtr != nullptr,
+                            "UploadAndBindVertexStreams failed to resolve source buffer");
+            const auto& sourceBufferShared = *sourceBufferSharedPtr;
             BufferSlice slice{};
             const SizeT sourceSize = sourceBufferShared->GetSize();
             if (ShouldUseTransientVertexIndexBuffer(*sourceBufferShared)) {
@@ -3564,7 +3562,7 @@ void main() {
             return false;
         }
 
-        auto vtxUploadOk = UploadAndBindVertexBuffers(frame.commandBuffer, vao, drawParams);
+        auto vtxUploadOk = UploadAndBindVertexBuffers(frame.commandBuffer, vao, programObj, drawParams);
         if (!vtxUploadOk) {
             MGLOG_E("SetupDraw skipped: failed to upload vertex buffers");
             return false;
