@@ -206,21 +206,20 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         MOBILEGL_ASSERT(m_samplerManager != nullptr, "ResolveSamplerDescriptor: sampler manager is null");
         MOBILEGL_ASSERT(binding < programObj.samplerNameByBinding.size(),
                         "ResolveSamplerDescriptor: sampler binding %u name lookup out of range", binding);
-        SharedPtr<MG_State::GLState::ITextureObject> texture;
-        const Bool resolvedTexture = ResolveSamplerTexture(program, programObj, binding, texture);
-        if (!resolvedTexture) {
-            MGLOG_E("ResolveSamplerDescriptor: failed to resolve sampler texture for binding %u ('%s')", binding,
-                programObj.samplerNameByBinding[binding].c_str());
-            return false;
-        }
+        // Raw-pointer resolve to skip the SharedPtr atomic refcount churn: the bound texture stays
+        // alive through the draw via GL binding state. Only the fallback path needs a SharedPtr to
+        // keep the fallback texture alive for the rest of this call.
+        MG_State::GLState::ITextureObject* texture = ResolveSamplerTextureRaw(program, programObj, binding);
 
         const Int location = programObj.samplerUniformLocationByBinding[binding];
         const Int unit = ResolveSamplerUnitIndex(program, location, binding);
         auto& textureUnit = MG_State::pGLContext->GetTextureUnitObject(unit);
         const auto samplerOverride = textureUnit.GetSamplerObject();
         const auto preferredTarget = programObj.samplerTextureTargetByBinding[binding];
+        SharedPtr<MG_State::GLState::ITextureObject> fallbackHolder;
         if (texture == nullptr) {
-            texture = GetFallbackTexture(preferredTarget);
+            fallbackHolder = GetFallbackTexture(preferredTarget);
+            texture = fallbackHolder.get();
             MOBILEGL_ASSERT(texture != nullptr,
                             "ResolveSamplerDescriptor: no fallback texture available for binding=%u location=%d unit=%d target=%d",
                             binding, location, unit, static_cast<Int>(preferredTarget));
