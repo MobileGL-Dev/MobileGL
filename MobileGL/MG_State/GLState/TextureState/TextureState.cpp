@@ -104,6 +104,10 @@ namespace MobileGL::MG_State::GLState {
                         imageBinding.Bind(nullptr, 0, GL_FALSE, 0, GL_READ_ONLY, GL_R8);
                     }
                 }
+                // Deleting a texture unbinds it from every unit above; treat that as a binding
+                // change so a cached sampled-texture set (which may hold this raw pointer) is
+                // re-resolved instead of dangling.
+                BumpTextureBindGeneration();
                 m_textureObjects.erase(index);
             }
             m_indexGenerator.Delete(index);

@@ -3389,6 +3389,9 @@ void main() {
         // Begin command recording if not yet
         if (!frame.isCommandRecording) {
             m_frameContext.BeginCommandRecording();
+            // New command buffer: a program/FBO address from a previous frame may have been
+            // recycled, so start the sampled-set skip cache fresh this frame.
+            m_lastSampledSetValid = false;
         }
 
         auto* activeRenderPass = VkRenderPassManager::GetActiveRenderPass();
@@ -3397,9 +3400,31 @@ void main() {
         // which probably indicates it's been gone through codepath like `fbo attach` -> `clear` -> `fbo detach`, and
         // without draws in between to give it a chance to materialize such clear.
         // Deal with this situation here.
-        auto& sampledTextures = m_sampledTexturesScratch; // cleared by CollectSampledTextures
-        Bool hasSampledTextures = m_uniformManager->CollectSampledTextures(program, programObj, sampledTextures);
-        MOBILEGL_ASSERT(hasSampledTextures, "%s: CollectSampledTextures failed", __func__);
+        // Reuse the previous draw's sampled-texture list when the set is provably unchanged (same
+        // program+state+transform and no bind/unbind/delete since), skipping the per-draw GL walk.
+        // The layout/feedback/transition loops below still run on the list every draw, so this only
+        // elides re-resolving *which* textures are sampled, never their layout handling.
+        auto& sampledTextures = m_sampledTexturesScratch;
+        {
+            const Uint programIndex = program.GetExternalIndex();
+            const Uint32 programVersion = program.GetBackendStateVersion();
+            const Uint64 bindGeneration = MG_State::pGLContext->GetTextureBindGeneration();
+            const Bool sampledSetUnchanged =
+                m_lastSampledSetValid && m_lastSampledSetProgramIndex == programIndex &&
+                m_lastSampledSetProgramVersion == programVersion &&
+                m_lastSampledSetTransformFlags == transformFlags &&
+                m_lastSampledSetBindGeneration == bindGeneration;
+            if (!sampledSetUnchanged) {
+                const Bool hasSampledTextures =
+                    m_uniformManager->CollectSampledTextures(program, programObj, sampledTextures);
+                MOBILEGL_ASSERT(hasSampledTextures, "%s: CollectSampledTextures failed", __func__);
+                m_lastSampledSetValid = true;
+                m_lastSampledSetProgramIndex = programIndex;
+                m_lastSampledSetProgramVersion = programVersion;
+                m_lastSampledSetTransformFlags = transformFlags;
+                m_lastSampledSetBindGeneration = bindGeneration;
+            }
+        }
         MGLOG_D("SetupDraw: program=%u drawFbo=%u sampledTextureCount=%zu activeRenderPass=%s",
                 program.GetExternalIndex(), drawFbo ? drawFbo->GetExternalIndex() : 0u, sampledTextures.size(),
                 activeRenderPass ? "true" : "false");

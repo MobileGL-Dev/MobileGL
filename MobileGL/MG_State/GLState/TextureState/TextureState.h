@@ -63,10 +63,20 @@ namespace MobileGL::MG_State::GLState {
         // can stop there instead of walking all MAX_TEXTURE_IMAGE_UNITS units.
         void NoteUnitTouched(Int unit) {
             if (unit > m_maxTouchedUnit && unit < MAX_TEXTURE_IMAGE_UNITS) m_maxTouchedUnit = unit;
+            // Every texture/sampler bind entry point (glBindTexture / glBindTextureUnit /
+            // glBindTextures / glBindSampler) routes through here, so bumping the generation here
+            // - plus in MarkTextureObjectForDeletion for delete-unbind - covers every change to
+            // which texture is bound at which unit. A backend that has cached the per-draw
+            // sampled-texture set can compare this against a snapshot to skip re-resolving it when
+            // no bind changed (the block atlas + lightmap stay bound across a whole terrain batch).
+            ++m_textureBindGeneration;
         }
         Int GetMaxTouchedUnit() const { return m_maxTouchedUnit; }
+        Uint64 GetTextureBindGeneration() const { return m_textureBindGeneration; }
+        void BumpTextureBindGeneration() { ++m_textureBindGeneration; }
 
     private:
+        Uint64 m_textureBindGeneration = 0;
         Int m_maxTouchedUnit = -1;
         Int m_activeTextureUnit = 0;
         Array<TextureUnit, MAX_TEXTURE_IMAGE_UNITS> m_textureUnits;

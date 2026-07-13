@@ -102,6 +102,10 @@ namespace MobileGL {
                 const ImageTextureBinding& GetImageTextureBinding(Int unit) const;
                 void NoteTextureUnitTouched(Int unit) { m_textureState.NoteUnitTouched(unit); }
                 Int GetMaxTouchedTextureUnit() const { return m_textureState.GetMaxTouchedUnit(); }
+                // Monotonic counter bumped whenever a texture bind/unbind/delete changes which
+                // texture is bound at a unit; lets a backend skip re-resolving an unchanged
+                // per-draw sampled-texture set.
+                Uint64 GetTextureBindGeneration() const { return m_textureState.GetTextureBindGeneration(); }
                 Bool ValidateTextureName(Uint index) const;
                 Bool ValidateTextureObject(Uint index) const;
                 Int GetActiveTextureUnit() const;
