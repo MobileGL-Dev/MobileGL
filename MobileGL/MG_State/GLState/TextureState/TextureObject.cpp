@@ -207,10 +207,6 @@ namespace MobileGL {
                 return m_textureParamsVersion;
             }
 
-            Uint64 TextureObjectBase::GetContentVersion() const {
-                return m_contentVersion;
-            }
-
             Int TextureObjectBase::GetSamples() const {
                 return m_samples;
             }
@@ -261,9 +257,6 @@ namespace MobileGL {
 
             void TextureObjectWithOneMipmap::MarkStorageDirty(TextureUploadTarget uploadTarget, Uint mipmapLevel,
                                                               Bool dirty) {
-                if (dirty) {
-                    ++m_contentVersion;
-                }
                 m_textureStorage.MarkDirty(GetIndexOfTextureUploadTarget(uploadTarget), mipmapLevel, dirty);
             }
 

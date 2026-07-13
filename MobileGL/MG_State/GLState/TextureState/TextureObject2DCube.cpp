@@ -41,9 +41,6 @@ namespace MobileGL {
             }
 
             void TextureObject2DCube::MarkStorageDirty(TextureUploadTarget uploadTarget, Uint mipmapLevel, bool dirty) {
-                if (dirty) {
-                    ++m_contentVersion;
-                }
                 m_textureStorage.MarkDirty(GetIndexOfTextureUploadTarget(uploadTarget), mipmapLevel, dirty);
             }
 
