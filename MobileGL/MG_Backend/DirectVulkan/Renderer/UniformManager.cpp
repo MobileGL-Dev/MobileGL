@@ -220,7 +220,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         const Int location = programObj.samplerUniformLocationByBinding[binding];
         const Int unit = ResolveSamplerUnitIndex(program, location, binding);
         auto& textureUnit = MG_State::pGLContext->GetTextureUnitObject(unit);
-        const auto samplerOverride = textureUnit.GetSamplerObject();
+        const auto& samplerOverride = textureUnit.GetSamplerObject();
         const auto preferredTarget = programObj.samplerTextureTargetByBinding[binding];
         SharedPtr<MG_State::GLState::ITextureObject> fallbackHolder;
         if (texture == nullptr) {
@@ -427,7 +427,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
 
         auto* textureBuffer = static_cast<MG_State::GLState::TextureObjectBuffer*>(texture.get());
-        const auto bufferObject = textureBuffer->GetBufferBindingSlot().GetBoundObject();
+        const auto& bufferObject = textureBuffer->GetBufferBindingSlot().GetBoundObject();
         if (bufferObject == nullptr) {
             MGLOG_E("ResolveTexelBufferDescriptor: texture buffer binding %u ('%s') has no GL buffer bound",
                     binding, programObj.samplerNameByBinding[binding].c_str());
@@ -502,7 +502,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                         frontendBinding, programObj.storageBlockNameByBinding[binding].c_str());
 
         auto& bindingPoint = MG_State::pGLContext->GetBufferBindingPoint(BufferTarget::ShaderStorage, frontendBinding);
-        const auto bufferObject = bindingPoint.GetBoundObject();
+        const auto& bufferObject = bindingPoint.GetBoundObject();
         if (bufferObject == nullptr) {
             MGLOG_E("ResolveStorageBufferDescriptor: no SSBO bound at frontend binding %u for block '%s'",
                     frontendBinding, programObj.storageBlockNameByBinding[binding].c_str());
@@ -674,7 +674,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                         frontendBinding, program.GetUniformBlockName(static_cast<Uint32>(blockIndex)).c_str());
 
         auto& bindingPoint = MG_State::pGLContext->GetBufferBindingPoint(BufferTarget::Uniform, frontendBinding);
-        const auto bufferObject = bindingPoint.GetBoundObject();
+        const auto& bufferObject = bindingPoint.GetBoundObject();
         MOBILEGL_ASSERT(bufferObject != nullptr,
                         "ResolveUniformBufferPayload: no UBO bound at frontend binding %u for block '%s'",
                         frontendBinding, program.GetUniformBlockName(static_cast<Uint32>(blockIndex)).c_str());
