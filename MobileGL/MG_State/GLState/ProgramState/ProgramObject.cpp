@@ -7,6 +7,7 @@
 // End of Source File Header
 
 #include "ProgramObject.h"
+#include <atomic>
 #include <MG_Backend/BackendObjects.h>
 #include <MG_State/GLState/VertexArrayState/VertexArrayObject.h>
 #include <MG_Util/Converters/GLToStr/GLEnumConverter.h>
@@ -122,6 +123,12 @@ namespace {
 }
 
 namespace MobileGL::MG_State::GLState {
+    static std::atomic<Uint64> s_nextProgramLifetimeId = 1;
+
+    Uint64 ProgramObject::AllocateLifetimeId() {
+        return s_nextProgramLifetimeId.fetch_add(1, std::memory_order_relaxed);
+    }
+
     void ProgramObject::ResetLinkArtifacts() {
         // Relinking regenerates the SPIR-V, so any backend-cached state keyed on
         // m_backendStateVersion (e.g. the content-hash memo) must be invalidated,

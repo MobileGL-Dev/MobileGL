@@ -3406,11 +3406,11 @@ void main() {
         // elides re-resolving *which* textures are sampled, never their layout handling.
         auto& sampledTextures = m_sampledTexturesScratch;
         {
-            const Uint programIndex = program.GetExternalIndex();
+            const Uint64 programLifetimeId = program.GetLifetimeId();
             const Uint32 programVersion = program.GetBackendStateVersion();
             const Uint64 bindGeneration = MG_State::pGLContext->GetTextureBindGeneration();
             const Bool sampledSetUnchanged =
-                m_lastSampledSetValid && m_lastSampledSetProgramIndex == programIndex &&
+                m_lastSampledSetValid && m_lastSampledSetProgramLifetimeId == programLifetimeId &&
                 m_lastSampledSetProgramVersion == programVersion &&
                 m_lastSampledSetTransformFlags == transformFlags &&
                 m_lastSampledSetBindGeneration == bindGeneration;
@@ -3419,7 +3419,7 @@ void main() {
                     m_uniformManager->CollectSampledTextures(program, programObj, sampledTextures);
                 MOBILEGL_ASSERT(hasSampledTextures, "%s: CollectSampledTextures failed", __func__);
                 m_lastSampledSetValid = true;
-                m_lastSampledSetProgramIndex = programIndex;
+                m_lastSampledSetProgramLifetimeId = programLifetimeId;
                 m_lastSampledSetProgramVersion = programVersion;
                 m_lastSampledSetTransformFlags = transformFlags;
                 m_lastSampledSetBindGeneration = bindGeneration;

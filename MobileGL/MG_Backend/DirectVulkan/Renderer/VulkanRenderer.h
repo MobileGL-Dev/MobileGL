@@ -404,15 +404,16 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         Vector<DeferredDepthMipmapCleanup> m_deferredDepthMipmapCleanup;
 
         // Skip the per-draw CollectSampledTextures walk (~5% of the render thread) when the sampled
-        // texture SET is provably unchanged from the previous draw: same program (external index +
+        // texture SET is provably unchanged from the previous draw: same program (lifetime id +
         // backend-state version, which covers sampler-uniform reassignment / relink) and transform
         // flags, and no texture bind/unbind/delete since (GetTextureBindGeneration). On a hit,
         // m_sampledTexturesScratch still holds the previous draw's list and steps 2-4 (feedback /
         // layout probe / transition) re-run on it, so layout correctness is unaffected - only the GL
-        // walk is skipped. Reset per command-buffer recording so a reused program/FBO address can't
-        // outlive a frame.
+        // walk is skipped. The program lifetime id (never reused, unlike the GL name) and the
+        // monotonic bind generation make the key ABA-proof; the per-command-buffer reset is a cheap
+        // belt-and-suspenders.
         Bool m_lastSampledSetValid = false;
-        Uint m_lastSampledSetProgramIndex = 0;
+        Uint64 m_lastSampledSetProgramLifetimeId = 0;
         Uint32 m_lastSampledSetProgramVersion = 0;
         ProgramFactory::CompileOptionFlags m_lastSampledSetTransformFlags = {};
         Uint64 m_lastSampledSetBindGeneration = 0;

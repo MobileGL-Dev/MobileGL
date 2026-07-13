@@ -16,7 +16,7 @@
 namespace MobileGL::MG_State::GLState {
     class ProgramObject {
     public:
-        ProgramObject(Uint externalIndex) : m_externalIndex(externalIndex) {}
+        ProgramObject(Uint externalIndex) : m_externalIndex(externalIndex), m_lifetimeId(AllocateLifetimeId()) {}
         bool ShaderIsAttached(const SharedPtr<ShaderObject>& shader);
         bool AttachShader(const SharedPtr<ShaderObject>& shader);
         SizeT DetachShader(const SharedPtr<ShaderObject>& shader);
@@ -340,6 +340,11 @@ namespace MobileGL::MG_State::GLState {
         }
 
         Uint GetExternalIndex() const { return m_externalIndex; }
+        // Globally-unique, never-reused id for this program object's lifetime. Unlike the GL
+        // name (external index), which is freed to a LIFO list and immediately handed back by
+        // the next glCreateProgram, this distinguishes a deleted-and-recreated program from the
+        // original, so an identity cache can't false-hit on name recycling.
+        Uint64 GetLifetimeId() const { return m_lifetimeId; }
 
     private:
         void ResetLinkArtifacts();
@@ -349,7 +354,10 @@ namespace MobileGL::MG_State::GLState {
         void AddDefaultFragmentShaderIfMissing();
         Bool ValidateFragmentOutputLocations();
 
+        static Uint64 AllocateLifetimeId();
+
         const Uint m_externalIndex = 0;
+        const Uint64 m_lifetimeId = 0;
         Vector<SharedPtr<ShaderObject>> m_shaders;
         Vector<SharedPtr<ShaderObject>> m_detachedShaders; // Store detached shaders and remove on next link
 
