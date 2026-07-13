@@ -97,6 +97,13 @@ public:
         VkImageViewType viewType = VK_IMAGE_VIEW_TYPE_2D;
         VkSampleCountFlagBits sampleCount = VK_SAMPLE_COUNT_1_BIT;
         Uint16 syncedTextureParamsVersion = 0;
+        // Snapshot of ITextureObject::GetContentVersion() at the last successful sync;
+        // lets SyncTexture skip the whole re-check/re-upload when content is unchanged.
+        Uint64 syncedContentVersion = 0;
+        // Snapshot of the defined mip-level count at the last sync. Folded into the early-out key
+        // as defense-in-depth: any path that grows the level set (which resizes the sampled view)
+        // busts the skip even if it failed to bump the content version.
+        Uint32 syncedMipLevelCount = 0;
 
         TextureResource() = default;
         TextureResource(const TextureResource&) = delete;
@@ -120,6 +127,8 @@ public:
             std::swap(this->viewType, that.viewType);
             std::swap(this->sampleCount, that.sampleCount);
             std::swap(this->syncedTextureParamsVersion, that.syncedTextureParamsVersion);
+            std::swap(this->syncedContentVersion, that.syncedContentVersion);
+            std::swap(this->syncedMipLevelCount, that.syncedMipLevelCount);
         }
 
         void Reset() {
@@ -166,6 +175,8 @@ public:
             viewType = VK_IMAGE_VIEW_TYPE_2D;
             sampleCount = VK_SAMPLE_COUNT_1_BIT;
             syncedTextureParamsVersion = 0;
+            syncedContentVersion = 0;
+            syncedMipLevelCount = 0;
         }
 
         ~TextureResource() {

@@ -332,6 +332,11 @@ namespace MobileGL::MG_Impl::GLImpl {
                 texture.AllocateStorage(uploadTarget, level, {levelTexelSize, levelByteSize});
                 texture.MarkStorageDirty(uploadTarget, level, false);
             }
+            // Mip generation grows/regenerates the level set on the GPU without marking any CPU
+            // level dirty (MarkStorageDirty(...,false) above). Bump the content version so the
+            // backend re-syncs: a cached sampled VkImageView built for the pre-generate level
+            // range would otherwise stay stale and clamp LOD>0 sampling to mip 0.
+            texture.BumpContentVersion();
             return true;
         }
 

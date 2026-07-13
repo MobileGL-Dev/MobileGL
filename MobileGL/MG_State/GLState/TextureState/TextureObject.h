@@ -47,6 +47,10 @@ namespace MobileGL::MG_State::GLState {
         virtual Uint GetImmutableLevels() const = 0;
         virtual void SetImmutableLevels(Uint levels) = 0;
         virtual Uint16 GetTextureParamsVersion() const = 0;
+        // Monotonic counter bumped on every CPU-side pixel mutation (see MarkStorageDirty).
+        // Backends compare it against a per-resource snapshot to skip re-syncing unchanged
+        // textures across draws (e.g. the block atlas bound across a whole terrain batch).
+        virtual Uint64 GetContentVersion() const = 0;
         virtual Int GetSamples() const = 0;
         virtual void SetSamples(Int samples) = 0;
         virtual Bool HasFixedSampleLocations() const = 0;
@@ -86,6 +90,11 @@ namespace MobileGL::MG_State::GLState {
         Uint GetImmutableLevels() const override;
         void SetImmutableLevels(Uint levels) override;
         Uint16 GetTextureParamsVersion() const override;
+        Uint64 GetContentVersion() const override;
+        // Bumps the content version without touching per-level storage-dirty flags. Used when the
+        // set of defined mip levels grows via GPU-side mip generation (glGenerateMipmap): the level
+        // set changed (so a cached sampled view's level range is stale) but no CPU data is dirty.
+        void BumpContentVersion();
         Int GetSamples() const override;
         void SetSamples(Int samples) override;
         Bool HasFixedSampleLocations() const override;
@@ -108,6 +117,9 @@ namespace MobileGL::MG_State::GLState {
         UintVec2 m_levelRange = {0, 1000};
         Uint m_immutableLevels = 0;
         Uint16 m_textureParamsVersion = 0;
+        // Starts at 1 so a freshly-created backend resource (snapshot 0) never spuriously
+        // matches before its first sync. Bumped only on dirty=true in MarkStorageDirty.
+        Uint64 m_contentVersion = 1;
         Int m_samples = 0;
         Bool m_fixedSampleLocations = true;
     };

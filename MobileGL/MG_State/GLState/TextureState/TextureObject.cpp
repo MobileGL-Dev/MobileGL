@@ -207,12 +207,21 @@ namespace MobileGL {
                 return m_textureParamsVersion;
             }
 
+            Uint64 TextureObjectBase::GetContentVersion() const {
+                return m_contentVersion;
+            }
+
+            void TextureObjectBase::BumpContentVersion() {
+                ++m_contentVersion;
+            }
+
             Int TextureObjectBase::GetSamples() const {
                 return m_samples;
             }
 
             void TextureObjectBase::SetSamples(Int samples) {
                 m_samples = samples;
+                ++m_textureParamsVersion;
             }
 
             Bool TextureObjectBase::HasFixedSampleLocations() const {
@@ -221,6 +230,7 @@ namespace MobileGL {
 
             void TextureObjectBase::SetFixedSampleLocations(Bool fixedSampleLocations) {
                 m_fixedSampleLocations = fixedSampleLocations;
+                ++m_textureParamsVersion;
             }
 
             Uint64 TextureObjectBase::GetLifetimeId() const {
@@ -257,6 +267,9 @@ namespace MobileGL {
 
             void TextureObjectWithOneMipmap::MarkStorageDirty(TextureUploadTarget uploadTarget, Uint mipmapLevel,
                                                               Bool dirty) {
+                if (dirty) {
+                    ++m_contentVersion;
+                }
                 m_textureStorage.MarkDirty(GetIndexOfTextureUploadTarget(uploadTarget), mipmapLevel, dirty);
             }
 
