@@ -1901,6 +1901,62 @@ void main() {
         CreateAllocator();
 
         CreateCommandPool();
+
+        // Frames-in-flight is a request, not a guarantee: it also seeds the swapchain image
+        // count (SwapchainObject clamps the hint into [minImageCount, maxImageCount]). Not every
+        // driver/surface supports >= 3 swapchain images, and keeping more frame slots than the
+        // surface can present would leave the surplus slots stalling on vkAcquireNextImageKHR.
+        // So clamp to the surface's real limits here, before any per-frame resource is sized off
+        // it. (The standalone driver POST is headless and has no surface, so this check lives at
+        // renderer init.) Existing logs already report the swapchain's min/actual image count;
+        // this one adds the frames-in-flight decision itself.
+        {
+            // Desired depth comes from the MOBILEGL_MAGMA_FRAMESINFLIGHT env var (so it can be
+            // tuned per device without a rebuild); if unset/invalid, fall back to the config value.
+            Uint32 requestedFramesInFlight = m_config.MaxFramesInFlight;
+            if (const char* framesEnv = std::getenv("MOBILEGL_MAGMA_FRAMESINFLIGHT")) {
+                char* parseEnd = nullptr;
+                const long parsedFrames = std::strtol(framesEnv, &parseEnd, 10);
+                if (parseEnd != framesEnv && *parseEnd == '\0' && parsedFrames >= 1 && parsedFrames <= 64) {
+                    requestedFramesInFlight = static_cast<Uint32>(parsedFrames);
+                    MGLOG_I("MaxFramesInFlight: MOBILEGL_MAGMA_FRAMESINFLIGHT=%ld requested", parsedFrames);
+                } else {
+                    MGLOG_W("MaxFramesInFlight: ignoring invalid MOBILEGL_MAGMA_FRAMESINFLIGHT='%s'; "
+                            "falling back to %u", framesEnv, requestedFramesInFlight);
+                }
+            }
+
+            VkSurfaceCapabilitiesKHR surfaceCaps{};
+            const VkResult capsResult = vkGetPhysicalDeviceSurfaceCapabilitiesKHR(
+                m_physicalDevice.handle, m_surface, &surfaceCaps);
+            if (capsResult != VK_SUCCESS) {
+                MGLOG_W("MaxFramesInFlight: vkGetPhysicalDeviceSurfaceCapabilitiesKHR failed (VkResult=%d); "
+                        "keeping requested %u", static_cast<Int>(capsResult), requestedFramesInFlight);
+            } else {
+                // Frames-in-flight is the CPU pipeline depth; it only needs to stay <= the number
+                // of swapchain images the surface can provide (maxImageCount), so the extra slots
+                // never stall on vkAcquireNextImageKHR. It must NOT be forced up to minImageCount:
+                // the swapchain independently gets >= minImageCount images (SwapchainObject raises
+                // the count), and inflating the CPU depth would only add latency + memory.
+                Uint32 chosenFramesInFlight = requestedFramesInFlight;
+                if (surfaceCaps.maxImageCount != 0 && chosenFramesInFlight > surfaceCaps.maxImageCount) {
+                    chosenFramesInFlight = surfaceCaps.maxImageCount;  // 0 == no upper bound
+                }
+                if (chosenFramesInFlight < 2) {
+                    chosenFramesInFlight = 2;  // never drop below double buffering
+                }
+                m_config.MaxFramesInFlight = chosenFramesInFlight;
+                if (chosenFramesInFlight != requestedFramesInFlight) {
+                    MGLOG_W("MaxFramesInFlight: requested %u unsupported by surface (minImageCount=%u, "
+                            "maxImageCount=%u); using %u", requestedFramesInFlight, surfaceCaps.minImageCount,
+                            surfaceCaps.maxImageCount, chosenFramesInFlight);
+                } else {
+                    MGLOG_I("MaxFramesInFlight: using %u (surface minImageCount=%u, maxImageCount=%u)",
+                            chosenFramesInFlight, surfaceCaps.minImageCount, surfaceCaps.maxImageCount);
+                }
+            }
+        }
+
         VK_VERIFY(m_frameContext.Initialize(m_device, m_commandPool, m_config.MaxFramesInFlight),
                   "CreateFrameContexts");
         MGLOG_I("CreateFrameContexts completed");
