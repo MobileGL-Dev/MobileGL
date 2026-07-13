@@ -8,6 +8,9 @@
 
 #include "Config.h"
 
+#include <cerrno>
+#include <cstdlib>
+
 #ifndef _WIN32
 extern char** environ;
 #endif
@@ -83,13 +86,35 @@ namespace MobileGL::MG_ConfigLoader {
         return it != acceptedEnvVariablesMap->end() && IsTruthyValue(it->second);
     }
 
+    inline Uint32 QueryEnvUint32(const String& key, Uint32 defaultValue, Uint32 minValue, Uint32 maxValue) {
+        auto it = acceptedEnvVariablesMap->find(key);
+        if (it == acceptedEnvVariablesMap->end()) {
+            return defaultValue;
+        }
+
+        const String& value = it->second;
+        char* parseEnd = nullptr;
+        errno = 0;
+        const unsigned long parsedValue = std::strtoul(value.c_str(), &parseEnd, 10);
+        if (parseEnd == value.c_str() || *parseEnd != '\0' || errno == ERANGE || parsedValue < minValue ||
+            parsedValue > maxValue) {
+            MGLOG_W("Config: Ignoring invalid env variable %s='%s'; expected an integer in range [%u, %u], "
+                    "using default %u",
+                    key.c_str(), value.c_str(), minValue, maxValue, defaultValue);
+            return defaultValue;
+        }
+
+        return static_cast<Uint32>(parsedValue);
+    }
+
     inline void InitFeatures() {
         auto& features = MG_Config::Features;
         features.DisableTimerQuery = QueryEnvFlag("MOBILEGL_DISABLE_TIMERQUERY");
         features.RetraceUseAngle = QueryEnvFlag("MOBILEGL_RETRACE_USE_ANGLE");
         QueryEnvVariable("MOBILEGL_RETRACE_ANGLE_DIR", features.RetraceAngleDir, "");
         features.DisableSubgroup = QueryEnvFlag("MOBILEGL_DISABLE_SUBGROUP");
-        features.VulkanR11G11B10FFallback = QueryEnvFlag("MOBILEGL_VULKAN_R11G11B10F_FALLBACK");
+        features.VulkanR11G11B10FFallback = QueryEnvFlag("MOBILEGL_MAGMA_R11G11B10F_FALLBACK");
+        features.MagmaFramesInFlight = QueryEnvUint32("MOBILEGL_MAGMA_FRAMESINFLIGHT", 3, 1, 64);
         features.GlesPresentStats = QueryEnvFlag("MOBILEGL_GLES_PRESENT_STATS");
         features.AvoidAngleLlvmpipeSamplerMipmapMinFilter =
             QueryEnvFlag("MOBILEGL_ANGLE_LLVMPIPE_AVOID_SAMPLER_MIPMAP_MIN_FILTER");

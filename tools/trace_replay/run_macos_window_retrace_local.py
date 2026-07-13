@@ -363,7 +363,7 @@ def run_case(case, backend, replay_exe, mobilegl_library, vulkan_icd):
     ]
     env = os.environ.copy()
     env["MOBILEGL_BACKEND_TYPE"] = backend
-    env["MOBILEGL_VULKAN_R11G11B10F_FALLBACK"] = "1"
+    env["MOBILEGL_MAGMA_R11G11B10F_FALLBACK"] = "1"
     if vulkan_icd:
         env["VK_ICD_FILENAMES"] = vulkan_icd
 

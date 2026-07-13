@@ -1911,20 +1911,10 @@ void main() {
         // renderer init.) Existing logs already report the swapchain's min/actual image count;
         // this one adds the frames-in-flight decision itself.
         {
-            // Desired depth comes from the MOBILEGL_MAGMA_FRAMESINFLIGHT env var (so it can be
-            // tuned per device without a rebuild); if unset/invalid, fall back to the config value.
-            Uint32 requestedFramesInFlight = m_config.MaxFramesInFlight;
-            if (const char* framesEnv = std::getenv("MOBILEGL_MAGMA_FRAMESINFLIGHT")) {
-                char* parseEnd = nullptr;
-                const long parsedFrames = std::strtol(framesEnv, &parseEnd, 10);
-                if (parseEnd != framesEnv && *parseEnd == '\0' && parsedFrames >= 1 && parsedFrames <= 64) {
-                    requestedFramesInFlight = static_cast<Uint32>(parsedFrames);
-                    MGLOG_I("MaxFramesInFlight: MOBILEGL_MAGMA_FRAMESINFLIGHT=%ld requested", parsedFrames);
-                } else {
-                    MGLOG_W("MaxFramesInFlight: ignoring invalid MOBILEGL_MAGMA_FRAMESINFLIGHT='%s'; "
-                            "falling back to %u", framesEnv, requestedFramesInFlight);
-                }
-            }
+            // Desired depth comes from MOBILEGL_MAGMA_FRAMESINFLIGHT, parsed once by ConfigLoader
+            // with a default of 3 when the variable is unset or invalid.
+            Uint32 requestedFramesInFlight = MG_Config::Features.MagmaFramesInFlight;
+            MGLOG_I("MaxFramesInFlight: configured request=%u", requestedFramesInFlight);
 
             VkSurfaceCapabilitiesKHR surfaceCaps{};
             const VkResult capsResult = vkGetPhysicalDeviceSurfaceCapabilitiesKHR(

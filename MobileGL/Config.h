@@ -41,8 +41,10 @@ namespace MobileGL::MG_Config {
         String RetraceAngleDir;
         // MOBILEGL_DISABLE_SUBGROUP: force-disable Vulkan shader subgroup support.
         Bool DisableSubgroup = false;
-        // MOBILEGL_VULKAN_R11G11B10F_FALLBACK: use fallback format for R11G11B10F on Vulkan.
+        // MOBILEGL_MAGMA_R11G11B10F_FALLBACK: use fallback format for R11G11B10F on Vulkan.
         Bool VulkanR11G11B10FFallback = false;
+        // MOBILEGL_MAGMA_FRAMESINFLIGHT: requested Magma frames in flight, defaulting to 3.
+        Uint32 MagmaFramesInFlight = 3;
         // MOBILEGL_GLES_PRESENT_STATS: log present pixel statistics (DirectGLES backend).
         Bool GlesPresentStats = false;
         // MOBILEGL_ANGLE_LLVMPIPE_AVOID_SAMPLER_MIPMAP_MIN_FILTER: avoid mipmap min
