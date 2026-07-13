@@ -99,10 +99,18 @@ namespace MobileGL {
                 SamplerCompareFunc GetSamplerCompareFunc() const;
                 Uint GetExternalIndex() const;
                 Uint16 GetVersion() const;
+                // Globally-unique, never-reused id for this sampler object's lifetime. Lets a
+                // cache distinguish a freed-and-reallocated sampler (same heap address, GL name,
+                // or version count) from the original - the sampler analogue of the texture
+                // lifetime id. Used by the Vulkan backend's per-binding sampler fast path.
+                Uint64 GetLifetimeId() const;
                 const SamplerParameters& GetAllSamplerParameters() const;
 
             private:
+                static Uint64 AllocateLifetimeId();
+
                 const Uint m_externalIndex;
+                const Uint64 m_lifetimeId;
                 Uint16 m_version = 0;
                 SamplerParameters m_samplerParameters;
             };

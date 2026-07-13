@@ -107,6 +107,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         m_minDynamicOffsetAlignment = std::max<VkDeviceSize>(1, minUniformBufferOffsetAlignment);
         m_frameCount = frameCount;
         m_maxBindings = maxBindings;
+        m_samplerResolveMemo.assign(m_maxBindings, SamplerResolveMemo{});
         m_setsPerFrame = setsPerFrame;
         m_peakDescriptorSetsObserved = 0;
         m_textureManager = textureManager;
@@ -196,6 +197,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // The frame's descriptor sets are recycled above, so last frame's reuse target
         // is gone: start the per-draw descriptor-reuse cache fresh this frame.
         m_hasLastDescriptor = false;
+        // Re-fingerprint the bound sampler set fresh this frame so any GL object address
+        // reuse cannot outlive a single frame (see SamplerResolveMemo).
+        for (auto& memo : m_samplerResolveMemo) {
+            memo.valid = false;
+        }
     }
 
     Bool UniformManager::ResolveSamplerDescriptor(VkCommandBuffer commandBuffer,
@@ -274,8 +280,37 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                             "ResolveSamplerDescriptor: invalid sampled image layout=%d for textureId=%d, binding=%u",
                             static_cast<Int>(resource->layout), texture->GetExternalIndex(), binding);
         }
+        // Skip GetOrCreateSampler's per-draw key hash + map lookup when this binding's
+        // sampler object and texture (both by lifetime id + version) are unchanged from the
+        // last draw that resolved it: the resulting sampler key, and therefore the VkSampler
+        // handle, are guaranteed identical. Lifetime ids are never reused, so a freed-and-
+        // reallocated sampler/texture at the same address gets a fresh id and misses instead
+        // of false-hitting. Cached handles live until Shutdown, so the memo can never hand
+        // back a destroyed sampler.
+        VkSampler resolvedSampler = VK_NULL_HANDLE;
+        if (binding < m_samplerResolveMemo.size()) {
+            auto& memo = m_samplerResolveMemo[binding];
+            const Uint64 samplerLifetimeId = samplerToUse->GetLifetimeId();
+            const Uint16 samplerVersion = samplerToUse->GetVersion();
+            const Uint64 textureLifetimeId = texture->GetLifetimeId();
+            const Uint16 textureParamsVersion = texture->GetTextureParamsVersion();
+            if (memo.valid && memo.samplerLifetimeId == samplerLifetimeId && memo.samplerVersion == samplerVersion &&
+                memo.textureLifetimeId == textureLifetimeId && memo.textureParamsVersion == textureParamsVersion) {
+                resolvedSampler = memo.sampler;
+            } else {
+                resolvedSampler = m_samplerManager->GetOrCreateSampler(*samplerToUse, *texture);
+                memo.samplerLifetimeId = samplerLifetimeId;
+                memo.samplerVersion = samplerVersion;
+                memo.textureLifetimeId = textureLifetimeId;
+                memo.textureParamsVersion = textureParamsVersion;
+                memo.sampler = resolvedSampler;
+                memo.valid = true;
+            }
+        } else {
+            resolvedSampler = m_samplerManager->GetOrCreateSampler(*samplerToUse, *texture);
+        }
         outImageInfo = {
-            .sampler = m_samplerManager->GetOrCreateSampler(*samplerToUse, *texture),
+            .sampler = resolvedSampler,
             .imageView = resource->sampledView != VK_NULL_HANDLE ? resource->sampledView : resource->fullView,
             .imageLayout = resource->layout,
         };

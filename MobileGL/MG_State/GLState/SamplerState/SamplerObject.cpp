@@ -8,10 +8,19 @@
 
 #include "SamplerObject.h"
 
+#include <atomic>
+
 namespace MobileGL {
     namespace MG_State {
         namespace GLState {
-            SamplerObject::SamplerObject(Uint externalIndex) : m_externalIndex(externalIndex) {}
+            static std::atomic<Uint64> s_nextSamplerLifetimeId = 1;
+
+            Uint64 SamplerObject::AllocateLifetimeId() {
+                return s_nextSamplerLifetimeId.fetch_add(1, std::memory_order_relaxed);
+            }
+
+            SamplerObject::SamplerObject(Uint externalIndex)
+                : m_externalIndex(externalIndex), m_lifetimeId(AllocateLifetimeId()) {}
 
             void SamplerObject::SetWrapS(SamplerWrapMode mode) {
                 if (mode == m_samplerParameters.wrapS) return;
@@ -137,6 +146,10 @@ namespace MobileGL {
 
             Uint16 SamplerObject::GetVersion() const {
                 return m_version;
+            }
+
+            Uint64 SamplerObject::GetLifetimeId() const {
+                return m_lifetimeId;
             }
         } // namespace GLState
     } // namespace MG_State

@@ -146,6 +146,28 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         VkDescriptorSet m_lastBoundDescriptorSet = VK_NULL_HANDLE;
         Uint64 m_lastDescriptorSignature = 0;
         Bool m_hasLastDescriptor = false;
+
+        // Per-binding fast path over VkSamplerManager's content-hashed sampler cache, which
+        // stays the source of truth: its key hashes all sampler+texture state, so two distinct
+        // sampler objects with identical state still resolve to one VkSampler. This memo only
+        // skips recomputing that hash. Across a draw batch the bound sampler set is stable, so a
+        // binding whose sampler (lifetime id + version, bumped on every setter) and texture
+        // (lifetime id + params version, bumped on the format/border-color setters that feed the
+        // key) are unchanged recycles the VkSampler it resolved last draw; a param change bumps
+        // a version and forces a re-resolve. Both objects are keyed by a never-reused monotonic
+        // lifetime id, so a freed-and-reallocated sampler or texture at the same heap address
+        // always gets a fresh id and misses (a raw pointer would false-hit that ABA) - so a
+        // stale guess can only miss and fall through to the hash, never resolve wrong. Still
+        // reset each frame alongside the descriptor-set cache. Indexed by binding.
+        struct SamplerResolveMemo {
+            Uint64 samplerLifetimeId = 0;
+            Uint64 textureLifetimeId = 0;
+            VkSampler sampler = VK_NULL_HANDLE;
+            Uint16 samplerVersion = 0;
+            Uint16 textureParamsVersion = 0;
+            Bool valid = false;
+        };
+        mutable Vector<SamplerResolveMemo> m_samplerResolveMemo;
     };
 } // namespace MobileGL::MG_Backend::DirectVulkan
 
