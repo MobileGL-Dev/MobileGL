@@ -42,12 +42,12 @@ namespace MobileGL::MG_Config {
         // MOBILEGL_DISABLE_SUBGROUP: force-disable Vulkan shader subgroup support.
         Bool DisableSubgroup = false;
         // MOBILEGL_MAGMA_R11G11B10F_FALLBACK: use fallback format for R11G11B10F on Vulkan.
-        Bool VulkanR11G11B10FFallback = false;
+        Bool MagmaR11G11B10FFallback = false;
         // MOBILEGL_MAGMA_FRAMESINFLIGHT: requested Magma frames in flight, defaulting to 3.
         Uint32 MagmaFramesInFlight = 3;
-        // MOBILEGL_ANGLE_LLVMPIPE_AVOID_SAMPLER_MIPMAP_MIN_FILTER: avoid mipmap min
-        // filters in samplers on ANGLE/llvmpipe renderers.
-        Bool AvoidAngleLlvmpipeSamplerMipmapMinFilter = false;
+        // MOBILEGL_AVOID_SAMPLER_MIPMAP_MIN_FILTER: avoid mipmap min filters in samplers,
+        // resolves certain rendering bugs on ANGLE + llvmpipe.
+        Bool AvoidSamplerMipmapMinFilter = false;
         // MOBILEGL_PRESENT_DUMP_PATH: directory for present frame dumps (DirectVulkan).
         String PresentDumpPath;
         // MOBILEGL_PRESENT_STATS: log present pixel statistics (DirectVulkan backend).

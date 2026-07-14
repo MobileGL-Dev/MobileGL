@@ -150,9 +150,9 @@ bool LoadMobileGL(const Request& request, std::string& error) {
         unsetenv("MOBILEGL_RETRACE_ANGLE_DIR");
     }
     if (request.avoidAngleLlvmpipeSamplerMipmapMinFilter) {
-        setenv("MOBILEGL_ANGLE_LLVMPIPE_AVOID_SAMPLER_MIPMAP_MIN_FILTER", "1", 1);
+        setenv("MOBILEGL_AVOID_SAMPLER_MIPMAP_MIN_FILTER", "1", 1);
     } else {
-        unsetenv("MOBILEGL_ANGLE_LLVMPIPE_AVOID_SAMPLER_MIPMAP_MIN_FILTER");
+        unsetenv("MOBILEGL_AVOID_SAMPLER_MIPMAP_MIN_FILTER");
     }
 
     void* handle = dlopen(request.mobileGlLibrary.c_str(), RTLD_NOW | RTLD_GLOBAL);

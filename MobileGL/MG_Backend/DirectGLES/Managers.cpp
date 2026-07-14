@@ -46,7 +46,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
     static Bool ShouldAvoidSamplerMipmapMinFilterOnAngleLlvmpipe() {
         // IsAngleLlvmpipeRenderer combined with the
-        // MOBILEGL_ANGLE_LLVMPIPE_AVOID_SAMPLER_MIPMAP_MIN_FILTER feature toggle,
+        // MOBILEGL_AVOID_SAMPLER_MIPMAP_MIN_FILTER feature toggle,
         // both resolved in FillInGLESCapabilities.
         return g_GLESCapabilities.AvoidSamplerMipmapMinFilter;
     }

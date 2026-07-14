@@ -1049,7 +1049,7 @@ namespace MobileGL {
             // GL_RENDERER contains both "ANGLE" and "llvmpipe".
             Bool IsAngleLlvmpipeRenderer = false;
             // IsAngleLlvmpipeRenderer combined with the
-            // MOBILEGL_ANGLE_LLVMPIPE_AVOID_SAMPLER_MIPMAP_MIN_FILTER feature toggle:
+            // MOBILEGL_AVOID_SAMPLER_MIPMAP_MIN_FILTER feature toggle:
             // sampler min filters should drop their mipmap component.
             Bool AvoidSamplerMipmapMinFilter = false;
             // True when indirect draws leak the command's baseInstance word ("reserved,

@@ -53,7 +53,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     };
 
     static Bool IsR11G11B10FFallbackEnabled() {
-        return MG_Config::Features.VulkanR11G11B10FFallback;
+        return MG_Config::Features.MagmaR11G11B10FFallback;
     }
 
     static Bool IsMultisampleTextureUploadTarget(TextureUploadTarget target) {

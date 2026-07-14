@@ -946,7 +946,7 @@ namespace MobileGL::MG_Util::BackendLoader {
         caps.IsAngleLlvmpipeRenderer =
             caps.IsAngleRenderer && caps.GLESRendererString.find("llvmpipe") != String::npos;
         caps.AvoidSamplerMipmapMinFilter =
-            caps.IsAngleLlvmpipeRenderer && MG_Config::Features.AvoidAngleLlvmpipeSamplerMipmapMinFilter;
+            caps.IsAngleLlvmpipeRenderer && MG_Config::Features.AvoidSamplerMipmapMinFilter;
         MGLOG_I("    GL_EXT_disjoint_timer_query supported: %s",
                 caps.SupportsDisjointTimerQuery ? "true" : "false");
         MGLOG_I("    ANGLE renderer: %s", caps.IsAngleRenderer ? "true" : "false");
