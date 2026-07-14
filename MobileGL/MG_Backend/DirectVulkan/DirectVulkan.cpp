@@ -230,7 +230,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
 
         MG_State::GLState::ProgramObject* TryGetDirectVulkanProgram(GLuint program) {
-            if (!MG_State::pGLContext || !MG_State::pGLContext->ValidateProgramName(program)) {
+            if (!MG_State::pGLContext->ValidateProgramName(program)) {
                 return nullptr;
             }
             auto& programObject = MG_State::pGLContext->GetProgramObject(program);
@@ -383,33 +383,25 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     }
 
     void ClearBufferfi(GLenum buffer, GLint drawbuffer, GLfloat depth, GLint stencil) {
-        if (!pVulkanRenderer) {
-            return;
-        }
+        MOBILEGL_ASSERT(pVulkanRenderer, "DirectVulkan::ClearBufferfi called with null VulkanRenderer");
         MOBILEGL_ASSERT(MG_State::pGLContext, "DirectVulkan::ClearBufferfi called with null GL context");
         pVulkanRenderer->ClearBufferfi(buffer, drawbuffer, depth, stencil);
     }
 
     void ClearBufferfv(GLenum buffer, GLint drawbuffer, const GLfloat* value) {
-        if (!pVulkanRenderer) {
-            return;
-        }
+        MOBILEGL_ASSERT(pVulkanRenderer, "DirectVulkan::ClearBufferfv called with null VulkanRenderer");
         MOBILEGL_ASSERT(MG_State::pGLContext, "DirectVulkan::ClearBufferfv called with null GL context");
         pVulkanRenderer->ClearBufferfv(buffer, drawbuffer, value);
     }
 
     void ClearBufferuiv(GLenum buffer, GLint drawbuffer, const GLuint* value) {
-        if (!pVulkanRenderer) {
-            return;
-        }
+        MOBILEGL_ASSERT(pVulkanRenderer, "DirectVulkan::ClearBufferuiv called with null VulkanRenderer");
         MOBILEGL_ASSERT(MG_State::pGLContext, "DirectVulkan::ClearBufferuiv called with null GL context");
         pVulkanRenderer->ClearBufferuiv(buffer, drawbuffer, value);
     }
 
     void ClearBufferiv(GLenum buffer, GLint drawbuffer, const GLint* value) {
-        if (!pVulkanRenderer) {
-            return;
-        }
+        MOBILEGL_ASSERT(pVulkanRenderer, "DirectVulkan::ClearBufferiv called with null VulkanRenderer");
         MOBILEGL_ASSERT(MG_State::pGLContext, "DirectVulkan::ClearBufferiv called with null GL context");
         pVulkanRenderer->ClearBufferiv(buffer, drawbuffer, value);
     }
@@ -678,9 +670,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                           srcWidth, srcHeight, srcDepth);
     }
     void GenerateMipmap(GLenum target) {
-        if (!pVulkanRenderer) {
-            return;
-        }
+        MOBILEGL_ASSERT(pVulkanRenderer, "DirectVulkan::GenerateMipmap called with null VulkanRenderer");
         MOBILEGL_ASSERT(MG_State::pGLContext, "DirectVulkan::GenerateMipmap called with null GL context");
         pVulkanRenderer->GenerateMipmap(target);
     }
@@ -720,9 +710,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
     void GetIntegeri_v(GLenum target, GLuint index, GLint* data) {
         if (!data) return;
+        MOBILEGL_ASSERT(pVulkanRenderer, "DirectVulkan::GetIntegeri_v called with null VulkanRenderer");
         switch (target) {
         case GL_MAX_COMPUTE_WORK_GROUP_COUNT:
-            if (!pVulkanRenderer || index >= 3) {
+            if (index >= 3) {
                 *data = 0;
                 return;
             }
@@ -730,7 +721,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 pVulkanRenderer->GetPhysicalDevice().properties.limits.maxComputeWorkGroupCount[index]);
             return;
         case GL_MAX_COMPUTE_WORK_GROUP_SIZE:
-            if (!pVulkanRenderer || index >= 3) {
+            if (index >= 3) {
                 *data = 0;
                 return;
             }
@@ -1210,11 +1201,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         cache.storageBlocks[storageBlockIndex].binding = storageBlockBinding;
     }
     void ReadPixels(GLint x, GLint y, GLsizei width, GLsizei height, GLenum format, GLenum type, void* pixels) {
-        if (!pVulkanRenderer || !MG_State::pGLContext) {
-            // TODO: Route early/default-FBO readbacks through a real DirectVulkan read path instead of returning zeros.
-            ClearReadPixelsOutput(width, height, format, type, pixels);
-            return;
-        }
+        MOBILEGL_ASSERT(pVulkanRenderer, "DirectVulkan::ReadPixels called with null VulkanRenderer");
+        MOBILEGL_ASSERT(MG_State::pGLContext, "DirectVulkan::ReadPixels called with null GL context");
         pVulkanRenderer->ReadPixels(x, y, width, height, format, type, pixels);
     }
     void GetTexImage(GLenum target, GLint level, GLenum format, GLenum type, GLvoid* pixels) {
@@ -1230,10 +1218,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     }
 
     void Clear(GLbitfield mask) {
-        if (!pVulkanRenderer || !MG_State::pGLContext) {
-            // TODO: Preserve pending clears issued before the Vulkan renderer/context is fully attached.
-            return;
-        }
+        MOBILEGL_ASSERT(pVulkanRenderer, "DirectVulkan::Clear called with null VulkanRenderer");
+        MOBILEGL_ASSERT(MG_State::pGLContext, "DirectVulkan::Clear called with null GL context");
         pVulkanRenderer->Clear(mask);
     }
 
@@ -1374,10 +1360,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
     void BlitFramebuffer(GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1, GLint dstX0, GLint dstY0, GLint dstX1,
                          GLint dstY1, GLbitfield mask, GLenum filter) {
-        if (!pVulkanRenderer || !MG_State::pGLContext) {
-            // TODO: Support pre-renderer/default-FBO blits instead of dropping them at the DirectVulkan boundary.
-            return;
-        }
+        MOBILEGL_ASSERT(pVulkanRenderer, "DirectVulkan::BlitFramebuffer called with null VulkanRenderer");
+        MOBILEGL_ASSERT(MG_State::pGLContext, "DirectVulkan::BlitFramebuffer called with null GL context");
         pVulkanRenderer->BlitFramebuffer(srcX0, srcY0, srcX1, srcY1, dstX0, dstY0, dstX1, dstY1, mask, filter);
     }
 
@@ -1409,15 +1393,14 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     } // namespace
 
     BackendSyncHandle FenceSync() {
-        if (!pVulkanRenderer) {
-            return nullptr;
-        }
+        MOBILEGL_ASSERT(pVulkanRenderer, "DirectVulkan::FenceSync called with null VulkanRenderer");
         return new VulkanSyncObject{pVulkanRenderer->GetSyncPointSubmitIndex(), GetRendererGeneration()};
     }
 
     GLenum ClientWaitSync(BackendSyncHandle handle, GLbitfield flags, GLuint64 timeout) {
         const auto* sync = static_cast<VulkanSyncObject*>(handle);
-        if (sync == nullptr || !pVulkanRenderer || sync->rendererGeneration != GetRendererGeneration()) {
+        MOBILEGL_ASSERT(pVulkanRenderer, "DirectVulkan::ClientWaitSync called with null VulkanRenderer");
+        if (sync == nullptr || sync->rendererGeneration != GetRendererGeneration()) {
             return GL_ALREADY_SIGNALED;
         }
         if (pVulkanRenderer->IsSubmitIndexComplete(sync->submitIndex)) {
@@ -1459,7 +1442,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
     Bool GetSyncStatus(BackendSyncHandle handle) {
         const auto* sync = static_cast<VulkanSyncObject*>(handle);
-        if (sync == nullptr || !pVulkanRenderer || sync->rendererGeneration != GetRendererGeneration()) {
+        MOBILEGL_ASSERT(pVulkanRenderer, "DirectVulkan::GetSyncStatus called with null VulkanRenderer");
+        if (sync == nullptr || sync->rendererGeneration != GetRendererGeneration()) {
             return true;
         }
         // Pure status read (glGetSynciv must not flush).
@@ -1486,11 +1470,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     } // namespace
 
     Bool IsTimerQuerySupported() {
-        return pVulkanRenderer != nullptr && pVulkanRenderer->IsTimerQuerySupported();
+        MOBILEGL_ASSERT(pVulkanRenderer, "DirectVulkan::IsTimerQuerySupported called with null VulkanRenderer");
+        return pVulkanRenderer->IsTimerQuerySupported();
     }
 
     BackendQueryHandle BeginTimeElapsedQuery() {
-        if (!pVulkanRenderer || !pVulkanRenderer->IsTimerQuerySupported()) {
+        MOBILEGL_ASSERT(pVulkanRenderer, "DirectVulkan::BeginTimeElapsedQuery called with null VulkanRenderer");
+        if (!pVulkanRenderer->IsTimerQuerySupported()) {
             return nullptr;
         }
         auto begin = pVulkanRenderer->WriteTimerQueryTimestamp();
@@ -1506,7 +1492,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
     void EndTimeElapsedQuery(BackendQueryHandle handle) {
         auto* query = static_cast<VulkanTimerQuery*>(handle);
-        if (query == nullptr || !pVulkanRenderer) {
+        MOBILEGL_ASSERT(pVulkanRenderer, "DirectVulkan::EndTimeElapsedQuery called with null VulkanRenderer");
+        if (query == nullptr) {
             return;
         }
         if (query->rendererGeneration != GetRendererGeneration()) {
@@ -1520,7 +1507,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     }
 
     BackendQueryHandle QueryCounterTimestamp() {
-        if (!pVulkanRenderer || !pVulkanRenderer->IsTimerQuerySupported()) {
+        MOBILEGL_ASSERT(pVulkanRenderer, "DirectVulkan::QueryCounterTimestamp called with null VulkanRenderer");
+        if (!pVulkanRenderer->IsTimerQuerySupported()) {
             return nullptr;
         }
         auto record = pVulkanRenderer->WriteTimerQueryTimestamp();
@@ -1537,7 +1525,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         auto* query = static_cast<VulkanTimerQuery*>(handle);
         // Degraded/stale handles report available; GetQueryResult64 then
         // resolves them with a final zero result.
-        if (query == nullptr || !pVulkanRenderer || query->rendererGeneration != GetRendererGeneration()) {
+        MOBILEGL_ASSERT(pVulkanRenderer, "DirectVulkan::IsQueryResultAvailable called with null VulkanRenderer");
+        if (query == nullptr || query->rendererGeneration != GetRendererGeneration()) {
             return true;
         }
         if (query->begin && !pVulkanRenderer->IsTimerQueryResultReady(*query->begin)) {
@@ -1552,9 +1541,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     Bool GetQueryResult64(BackendQueryHandle handle, Bool wait, Uint64* outNanoseconds) {
         *outNanoseconds = 0;
         auto* query = static_cast<VulkanTimerQuery*>(handle);
-        if (query == nullptr || !pVulkanRenderer || query->rendererGeneration != GetRendererGeneration()) {
-            // No renderer, or the records belong to a destroyed renderer: no
-            // real value can ever be produced, so resolve with a final 0.
+        MOBILEGL_ASSERT(pVulkanRenderer, "DirectVulkan::GetQueryResult64 called with null VulkanRenderer");
+        if (query == nullptr || query->rendererGeneration != GetRendererGeneration()) {
+            // The records belong to a destroyed renderer: no real value can
+            // ever be produced, so resolve with a final 0.
             return true;
         }
         // With wait, mirrors ClientWaitSync: a query ended this frame cannot
