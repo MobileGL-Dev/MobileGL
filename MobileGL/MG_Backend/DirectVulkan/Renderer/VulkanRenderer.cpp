@@ -21,7 +21,6 @@
 #include "MG_Util/Converters/MGToVk/TextureEnumConverter.h"
 #include "MG_Util/Metrics/TextureMetrics.h"
 #include <Config.h>
-#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <vulkan/vulkan_core.h>
@@ -637,24 +636,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             }
         }
         return attributeMask;
-    }
-
-    static const char* PresentDumpPath() {
-        const String& path = MG_Config::Features.PresentDumpPath;
-        return path.empty() ? nullptr : path.c_str();
-    }
-
-    static Bool PresentDumpMatchesTargetCall() {
-        // MOBILEGL_PRESENT_DUMP_CALL / MOBILEGL_PRESENT_CURRENT_CALL stay live
-        // getenv on purpose: the retrace harness mutates them at runtime via
-        // setenv to select which eglSwapBuffers call gets dumped, so they must
-        // not be snapshotted into MG_Config::Features at init time.
-        const char* target = std::getenv("MOBILEGL_PRESENT_DUMP_CALL");
-        if (target == nullptr || target[0] == '\0') {
-            return true;
-        }
-        const char* current = std::getenv("MOBILEGL_PRESENT_CURRENT_CALL");
-        return current != nullptr && std::strcmp(target, current) == 0;
     }
 
     static Bool TryGetCurrentVertexAttributeFormat(GLenum glType, VkFormat& outFormat) {
@@ -1516,10 +1497,6 @@ void main() {
             }
         }
 
-        static Bool PresentStatsEnabled() {
-            return MG_Config::Features.PresentStats;
-        }
-
         static Bool IsBgraVkFormat(VkFormat format) {
             switch (format) {
                 case VK_FORMAT_B8G8R8A8_UNORM:
@@ -1533,65 +1510,46 @@ void main() {
             }
         }
 
-        static VkExtent2D GetPresentedDumpExtent(VkExtent2D rawExtent,
-                                                 VkSurfaceTransformFlagBitsKHR preTransform) {
+        // Remap raw swapchain pixels (top-left origin, preTransform-rotated) into
+        // GL-oriented pixels (bottom-left origin) for the retrace snapshot path.
+        // Mirrors the removed GetPresentedDumpPixel mapping plus the Y-origin flip
+        // apitrace's flipped=true Image expects. Only identity/180 share the
+        // swapchain extent with the default framebuffer; 90/270 swap extents and
+        // are not handled here.
+        static Bool RemapDefaultFboReadbackToGLOrientation(const Uint8* rawPixels,
+                                                            VkExtent2D rawExtent,
+                                                            VkSurfaceTransformFlagBitsKHR preTransform,
+                                                            Uint8* outPixels) {
             if (IsQuarterTurnPreTransform(preTransform)) {
-                return {rawExtent.height, rawExtent.width};
-            }
-            return rawExtent;
-        }
-
-        static const Uint8* GetPresentedDumpPixel(const Uint8* rawPixels,
-                                                  VkExtent2D rawExtent,
-                                                  VkSurfaceTransformFlagBitsKHR preTransform,
-                                                  Uint32 presentedX,
-                                                  Uint32 presentedY) {
-            Uint32 rawX = presentedX;
-            Uint32 rawY = presentedY;
-            switch (preTransform) {
-                case VK_SURFACE_TRANSFORM_ROTATE_90_BIT_KHR:
-                    rawX = rawExtent.width - 1 - presentedY;
-                    rawY = presentedX;
-                    break;
-                case VK_SURFACE_TRANSFORM_ROTATE_180_BIT_KHR:
-                    rawX = rawExtent.width - 1 - presentedX;
-                    rawY = rawExtent.height - 1 - presentedY;
-                    break;
-                case VK_SURFACE_TRANSFORM_ROTATE_270_BIT_KHR:
-                    rawX = presentedY;
-                    rawY = rawExtent.height - 1 - presentedX;
-                    break;
-                default:
-                    break;
-            }
-            return rawPixels + (static_cast<SizeT>(rawY) * rawExtent.width + rawX) * 4;
-        }
-
-        static Bool WritePresentedDumpPpm(const char* path,
-                                          const Uint8* rawPixels,
-                                          VkExtent2D rawExtent,
-                                          VkFormat rawFormat,
-                                          VkSurfaceTransformFlagBitsKHR preTransform) {
-            FILE* dump = std::fopen(path, "wb");
-            if (dump == nullptr) {
                 return false;
             }
-
-            const VkExtent2D presentedExtent = GetPresentedDumpExtent(rawExtent, preTransform);
-            const Bool presentIsBgra = IsBgraVkFormat(rawFormat);
-            std::fprintf(dump, "P6\n%u %u\n255\n", presentedExtent.width, presentedExtent.height);
-            for (Uint32 y = 0; y < presentedExtent.height; ++y) {
-                for (Uint32 x = 0; x < presentedExtent.width; ++x) {
-                    const Uint8* p = GetPresentedDumpPixel(rawPixels, rawExtent, preTransform, x, y);
-                    const Uint8 rgb[3] = {
-                        presentIsBgra ? p[2] : p[0],
-                        p[1],
-                        presentIsBgra ? p[0] : p[2],
-                    };
-                    std::fwrite(rgb, 1, sizeof(rgb), dump);
+            const Uint32 w = rawExtent.width;
+            const Uint32 h = rawExtent.height;
+            if (w == 0 || h == 0) {
+                return false;
+            }
+            for (Uint32 outY = 0; outY < h; ++outY) {
+                const Uint32 displayY = h - 1 - outY; // GL bottom-origin -> display top-origin
+                for (Uint32 outX = 0; outX < w; ++outX) {
+                    const Uint32 displayX = outX;
+                    Uint32 rawX = displayX;
+                    Uint32 rawY = displayY;
+                    switch (preTransform) {
+                        case VK_SURFACE_TRANSFORM_ROTATE_180_BIT_KHR:
+                            rawX = w - 1 - displayX;
+                            rawY = h - 1 - displayY;
+                            break;
+                        default:
+                            break;
+                    }
+                    const Uint8* src = rawPixels + (static_cast<SizeT>(rawY) * w + rawX) * 4;
+                    Uint8* dst = outPixels + (static_cast<SizeT>(outY) * w + outX) * 4;
+                    dst[0] = src[0];
+                    dst[1] = src[1];
+                    dst[2] = src[2];
+                    dst[3] = src[3];
                 }
             }
-            std::fclose(dump);
             return true;
         }
 
@@ -4804,16 +4762,6 @@ void main() {
         const VkImageLayout srcOriginalLayout = readIsDefaultFbo
             ? m_swapchainObject.GetImageLayout(m_imageIndexAcquired)
             : *srcBinding.trackedLayout;
-        if (PresentStatsEnabled()) {
-            std::fprintf(stderr,
-                         "MOBILEGL_READPIXELS_BEGIN defaultFbo=%s x=%d y=%d width=%d height=%d srcLayout=%d recording=%s recorded=%s imageIndex=%u\n",
-                         readIsDefaultFbo ? "true" : "false",
-                         x, y, width, height,
-                         static_cast<Int>(srcOriginalLayout),
-                         frame.isCommandRecording ? "true" : "false",
-                         frame.hasCommandBufferRecorded ? "true" : "false",
-                         m_imageIndexAcquired);
-        }
         if (srcOriginalLayout == VK_IMAGE_LAYOUT_UNDEFINED) {
             MGLOG_E("DirectVulkan::ReadPixels skipped: source image layout is undefined");
             return;
@@ -4890,24 +4838,24 @@ void main() {
             MGLOG_E("DirectVulkan::ReadPixels skipped: failed to map readback buffer");
             return;
         }
-        if (PresentStatsEnabled()) {
-            const SizeT pixelCount = static_cast<SizeT>(width) * static_cast<SizeT>(height);
-            SizeT nonBlack = 0;
-            SizeT nonTransparent = 0;
-            for (SizeT i = 0; i < pixelCount; ++i) {
-                const Uint8* p = mapped + i * 4;
-                if (p[0] != 0 || p[1] != 0 || p[2] != 0) {
-                    ++nonBlack;
-                }
-                if (p[3] != 0) {
-                    ++nonTransparent;
+        const VkFormat srcFormat = readIsDefaultFbo ? m_swapchainObject.GetSurfaceFormat().format : VK_FORMAT_R8G8B8A8_UNORM;
+        if (readIsDefaultFbo) {
+            const VkExtent2D swapchainExtent = m_swapchainObject.GetExtent();
+            const VkSurfaceTransformFlagBitsKHR preTransform = m_swapchainObject.GetPreTransform();
+            if (static_cast<Uint32>(width) == swapchainExtent.width &&
+                static_cast<Uint32>(height) == swapchainExtent.height) {
+                Vector<Uint8> remapped(static_cast<SizeT>(width) * static_cast<SizeT>(height) * 4);
+                if (RemapDefaultFboReadbackToGLOrientation(mapped, swapchainExtent, preTransform,
+                                                           remapped.data())) {
+                    PackReadbackToClientOrPbo(remapped.data(), srcFormat, width, height, format, type, pixels);
+                    return;
                 }
             }
-            std::fprintf(stderr,
-                         "MOBILEGL_READPIXELS_STATS nonBlack=%zu/%zu alpha=%zu/%zu\n",
-                         nonBlack, pixelCount, nonTransparent, pixelCount);
+            MGLOG_W("DirectVulkan::ReadPixels: default-FBO remap skipped (w=%d h=%d swapchain=%ux%u preTransform=%d); "
+                    "falling back to raw readback",
+                    width, height, swapchainExtent.width, swapchainExtent.height,
+                    static_cast<Int>(preTransform));
         }
-        const VkFormat srcFormat = readIsDefaultFbo ? m_swapchainObject.GetSurfaceFormat().format : VK_FORMAT_R8G8B8A8_UNORM;
         PackReadbackToClientOrPbo(mapped, srcFormat, width, height, format, type, pixels);
     }
 
@@ -5918,80 +5866,6 @@ void main() {
         if (activeRenderPass)
             VkRenderPassManager::EndRenderPass(frame.commandBuffer);
 
-        VkBufferObject presentStatsReadback;
-        VkDeviceSize presentStatsReadbackSize = 0;
-        const VkExtent2D presentStatsExtent = m_swapchainObject.GetExtent();
-        const char* presentDumpPath = PresentDumpPath();
-        const Bool shouldDumpPresent = presentDumpPath != nullptr && PresentDumpMatchesTargetCall();
-        const Bool wantPresentStats = (PresentStatsEnabled() || shouldDumpPresent) &&
-                                      presentStatsExtent.width > 0 && presentStatsExtent.height > 0;
-        if (wantPresentStats && !frame.isCommandRecording) {
-            // A mid-frame flush may have closed the frame's recording; the
-            // stats copy needs an open command buffer.
-            m_frameContext.BeginCommandRecording();
-        }
-        const Bool collectPresentStats = wantPresentStats && frame.isCommandRecording;
-        if (PresentStatsEnabled() && presentDumpPath != nullptr) {
-            // Live getenv on purpose (not MG_Config::Features): the retrace
-            // harness mutates these two variables at runtime via setenv.
-            const char* targetCall = std::getenv("MOBILEGL_PRESENT_DUMP_CALL");
-            const char* currentCall = std::getenv("MOBILEGL_PRESENT_CURRENT_CALL");
-            std::fprintf(stderr,
-                         "MOBILEGL_PRESENT_DUMP_GATE target=%s current=%s shouldDump=%s recording=%s size=%ux%u path=%s\n",
-                         targetCall != nullptr ? targetCall : "",
-                         currentCall != nullptr ? currentCall : "",
-                         shouldDumpPresent ? "true" : "false",
-                         frame.isCommandRecording ? "true" : "false",
-                         presentStatsExtent.width, presentStatsExtent.height,
-                         presentDumpPath);
-        }
-        if (collectPresentStats) {
-            presentStatsReadbackSize = static_cast<VkDeviceSize>(presentStatsExtent.width) *
-                                       static_cast<VkDeviceSize>(presentStatsExtent.height) * 4;
-            const Bool readbackCreated = presentStatsReadback.Create({
-                .allocator = m_allocator,
-                .size = presentStatsReadbackSize,
-                .usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                .memoryUsage = VMA_MEMORY_USAGE_AUTO,
-                .allocationFlags = VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT,
-            });
-            MOBILEGL_ASSERT(readbackCreated, "Present stats: failed to create readback buffer");
-
-            VkImageLayout statsOriginalLayout = m_swapchainObject.GetImageLayout(m_imageIndexAcquired);
-            Bool toTransferSrc = VkTextureManager::TransitionImageLayout(
-                frame.commandBuffer, m_swapchainObject.GetImage(m_imageIndexAcquired),
-                statsOriginalLayout, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT,
-                VK_ACCESS_TRANSFER_READ_BIT, VK_IMAGE_ASPECT_COLOR_BIT);
-            MOBILEGL_ASSERT(toTransferSrc, "Present stats: failed to transition swapchain for readback");
-
-            VkBufferImageCopy copyRegion{};
-            copyRegion.bufferOffset = 0;
-            copyRegion.bufferRowLength = 0;
-            copyRegion.bufferImageHeight = 0;
-            copyRegion.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-            copyRegion.imageSubresource.mipLevel = 0;
-            copyRegion.imageSubresource.baseArrayLayer = 0;
-            copyRegion.imageSubresource.layerCount = 1;
-            copyRegion.imageOffset = {0, 0, 0};
-            copyRegion.imageExtent = {presentStatsExtent.width, presentStatsExtent.height, 1};
-            vkCmdCopyImageToBuffer(frame.commandBuffer,
-                                   m_swapchainObject.GetImage(m_imageIndexAcquired),
-                                   VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                                   presentStatsReadback.GetHandle(),
-                                   1,
-                                   &copyRegion);
-
-            Bool restoreLayout = VkTextureManager::TransitionImageLayout(
-                frame.commandBuffer, m_swapchainObject.GetImage(m_imageIndexAcquired),
-                statsOriginalLayout, m_swapchainObject.GetImageLayout(m_imageIndexAcquired),
-                VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT,
-                VK_ACCESS_TRANSFER_READ_BIT,
-                VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT,
-                VK_IMAGE_ASPECT_COLOR_BIT);
-            MOBILEGL_ASSERT(restoreLayout, "Present stats: failed to restore swapchain layout after readback");
-        }
         if (frame.isCommandRecording) {
             m_frameContext.EndCommandRecording();
             frame.hasCommandBufferRecorded = true;
@@ -6008,50 +5882,6 @@ void main() {
         VK_VERIFY(vkQueueSubmit(m_graphicsQueue, 1, &submitPacket.submitInfo, frame.imageInFlightFence));
         RegisterSubmit(frame.imageInFlightFence, /*pooledFence=*/false);
         frame.lastSubmitIndex = m_submitCounter;
-        if (collectPresentStats) {
-            VK_VERIFY(vkWaitForFences(m_device, 1, &frame.imageInFlightFence, VK_TRUE, UINT64_MAX),
-                      "Present stats, vkWaitForFences");
-            OnSubmitsCompletedUpTo(frame.lastSubmitIndex);
-            const auto* pixels = static_cast<const Uint8*>(presentStatsReadback.Map());
-            MOBILEGL_ASSERT(pixels != nullptr, "Present stats: failed to map readback buffer");
-            SizeT nonBlack = 0;
-            SizeT nonTransparent = 0;
-            SizeT colored = 0;
-            const SizeT pixelCount = static_cast<SizeT>(presentStatsExtent.width) *
-                                     static_cast<SizeT>(presentStatsExtent.height);
-            for (SizeT i = 0; i < pixelCount; ++i) {
-                const Uint8* p = pixels + i * 4;
-                if (p[0] != 0 || p[1] != 0 || p[2] != 0) {
-                    ++nonBlack;
-                }
-                const Uint8 minRgb = std::min(p[0], std::min(p[1], p[2]));
-                const Uint8 maxRgb = std::max(p[0], std::max(p[1], p[2]));
-                if (maxRgb - minRgb > 24) {
-                    ++colored;
-                }
-                if (p[3] != 0) {
-                    ++nonTransparent;
-                }
-            }
-            if (PresentStatsEnabled()) {
-                std::fprintf(stderr,
-                             "MOBILEGL_PRESENT_STATS nonBlack=%zu/%zu colored=%zu/%zu alpha=%zu/%zu size=%ux%u\n",
-                             nonBlack, pixelCount, colored, pixelCount, nonTransparent, pixelCount,
-                             presentStatsExtent.width, presentStatsExtent.height);
-            }
-            if (shouldDumpPresent) {
-                const VkFormat presentFormat = m_swapchainObject.GetSurfaceFormat().format;
-                if (WritePresentedDumpPpm(presentDumpPath, pixels, presentStatsExtent, presentFormat,
-                                          m_swapchainObject.GetPreTransform())) {
-                    if (PresentStatsEnabled()) {
-                        std::fprintf(stderr, "MOBILEGL_PRESENT_DUMP_WRITTEN path=%s bytes=%zu\n",
-                                     presentDumpPath, static_cast<SizeT>(pixelCount * 3));
-                    }
-                } else if (PresentStatsEnabled()) {
-                    std::fprintf(stderr, "MOBILEGL_PRESENT_DUMP_FAILED path=%s\n", presentDumpPath);
-                }
-            }
-        }
         frame.isCommandRecording = false;
         frame.hasCommandBufferRecorded = false;
         m_swapchainObject.SetImageLayout(m_imageIndexAcquired, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);

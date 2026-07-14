@@ -183,22 +183,8 @@ public:
     void swapBuffers() override {
         if (surface != EGL_NO_SURFACE) {
             char callNo[32];
-            const char *overrideCallNo = getenv("MOBILEGL_TRACE_CURRENT_CALL_OVERRIDE");
-            if (overrideCallNo != nullptr && overrideCallNo[0] != '\0') {
-                snprintf(callNo, sizeof(callNo), "%s", overrideCallNo);
-            } else {
-                snprintf(callNo, sizeof(callNo), "%u", retrace::callNo);
-            }
-            const char *targetCall = getenv("MOBILEGL_PRESENT_DUMP_CALL");
-            const char *presentStats = getenv("MOBILEGL_PRESENT_STATS");
-            if (targetCall != nullptr && targetCall[0] != '\0' &&
-                presentStats != nullptr && presentStats[0] != '\0' && strcmp(presentStats, "0") != 0) {
-                std::cerr << "MOBILEGL_TRACE_SWAP call=" << callNo
-                          << " target=" << targetCall << "\n";
-            }
-            setenv("MOBILEGL_PRESENT_CURRENT_CALL", callNo, 1);
+            snprintf(callNo, sizeof(callNo), "%u", retrace::callNo);
             gEgl.swapBuffers(gDisplay, surface);
-            unsetenv("MOBILEGL_PRESENT_CURRENT_CALL");
             HoldAfterTargetPresent(callNo);
         }
     }

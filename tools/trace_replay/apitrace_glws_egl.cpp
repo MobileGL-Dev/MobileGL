@@ -410,15 +410,8 @@ public:
             return;
         }
         char callNo[32];
-        const char *overrideCallNo = getenv("MOBILEGL_TRACE_CURRENT_CALL_OVERRIDE");
-        if (overrideCallNo != nullptr && overrideCallNo[0] != '\0') {
-            snprintf(callNo, sizeof(callNo), "%s", overrideCallNo);
-        } else {
-            snprintf(callNo, sizeof(callNo), "%u", retrace::callNo);
-        }
-        setenv("MOBILEGL_PRESENT_CURRENT_CALL", callNo, 1);
+        snprintf(callNo, sizeof(callNo), "%u", retrace::callNo);
         gEgl.swapBuffers(gDisplay, surface);
-        unsetenv("MOBILEGL_PRESENT_CURRENT_CALL");
 #if defined(__APPLE__)
         PumpMacOSEvents();
         if (window && !windowShown) {

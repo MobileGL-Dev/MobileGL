@@ -46,6 +46,7 @@ Implementation notes:
 
 - The trace APK builds independently from FCL and can be launched with `adb shell am start`.
 - The native runner validates inputs, sets `MOBILEGL_BACKEND_TYPE`, loads `libMobileGL.so`, runs apitrace GL retrace, writes `actual.png`, and writes `result.json`.
+- Snapshot capture stays entirely in the retrace layer: apitrace selects the target call, obtains drawable/read-buffer state, calls MobileGL's public `glReadPixels`, and encodes the returned pixels to PNG. MobileGL has no trace-call or output-path hooks.
 - The runner uses a MobileGL-backed EGL window-system shim. GLX calls in PC traces are consumed by apitrace's GLX retrace frontend and mapped onto this EGL shim; the Android runner does not require or call a MobileGL GLX implementation.
 - `DirectGLES` and `DirectVulkan` replay on the Activity `SurfaceView` by default. DirectGLES can still use the old offscreen EGL pbuffer path by passing `use_pbuffer=true`.
 - Golden comparison is implemented in native C++ with libpng RGBA decode and SSIM validation. The Java Activity only passes arguments and displays the native result, so the replay/compare core is not tied to Android UI or Bitmap APIs and can be ported to Linux.

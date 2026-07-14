@@ -219,8 +219,8 @@ python3 "$REPO/3rdparty/apitrace/scripts/retracediff.py" \
 
 For MobileGL target state, inspect MobileGL logs and add temporary focused
 logging in the relevant state sync path. Keep logs scoped to the bad call range
-using call-number markers or a `MOBILEGL_TRACE_CURRENT_CALL_OVERRIDE` style
-guard if available.
+using retrace-side call-number markers rather than backend-specific snapshot
+hooks.
 
 ## Classify the bad call
 

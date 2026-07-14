@@ -27,8 +27,6 @@ namespace MobileGL::MG_Config {
     //
     // Env variables intentionally NOT mirrored here (kept as live std::getenv at their
     // call sites):
-    //   - MOBILEGL_PRESENT_DUMP_CALL / MOBILEGL_PRESENT_CURRENT_CALL: the retrace harness
-    //     mutates them at runtime via setenv, so a one-shot snapshot would go stale.
     //   - DISPLAY: X11 session variable, not MobileGL configuration.
     //   - MOBILEGL_LOG_FILE_PATH: log-file init runs before MG_ConfigLoader::Init
     //     (see MG_Util/Debug/Log.cpp).
@@ -46,10 +44,6 @@ namespace MobileGL::MG_Config {
         // MOBILEGL_AVOID_SAMPLER_MIPMAP_MIN_FILTER: avoid mipmap min filters in samplers,
         // resolves certain rendering bugs on ANGLE + llvmpipe.
         Bool AvoidSamplerMipmapMinFilter = false;
-        // MOBILEGL_PRESENT_DUMP_PATH: directory for present frame dumps (DirectVulkan).
-        String PresentDumpPath;
-        // MOBILEGL_PRESENT_STATS: log present pixel statistics (DirectVulkan backend).
-        Bool PresentStats = false;
         // MOBILEGL_TRACE_SKIP_AUTODESTROY: skip teardown in the ELF destructor (Init.cpp).
         Bool TraceSkipAutodestroy = false;
     };

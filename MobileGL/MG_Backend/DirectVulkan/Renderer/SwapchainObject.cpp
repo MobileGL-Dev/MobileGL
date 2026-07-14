@@ -298,6 +298,30 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             {extentWidth, extentHeight, 1},
             defaultAttachmentByteSize}); // TODO: 4 is format size
 
+        // The default FBO's stencil attachment must track the swapchain extent:
+        // FramebufferObject::CheckCompleteness requires every valid attachment
+        // to share the same dimensions, and Init.cpp leaves a 512x512 placeholder.
+        // Without this the retrace-layer glReadPixels snapshot fails with
+        // GL_INVALID_FRAMEBUFFER_OPERATION on DirectVulkan.
+        TextureInternalFormat stencilFormat = TextureInternalFormat::Depth24Stencil8;
+        switch (m_depthStencilFormat) {
+            case VK_FORMAT_D32_SFLOAT_S8_UINT:
+                stencilFormat = TextureInternalFormat::Depth32FStencil8;
+                break;
+            case VK_FORMAT_D24_UNORM_S8_UINT:
+                stencilFormat = TextureInternalFormat::Depth24Stencil8;
+                break;
+            default:
+                // No stencil plane; mirror the depth format for consistency.
+                stencilFormat = depthFormat;
+                break;
+        }
+        auto* stencilTex = static_cast<MG_State::GLState::TextureObject2D*>(defaultFBOInfo->stencilAttachment.get());
+        stencilTex->SetInternalFormat(stencilFormat);
+        stencilTex->AllocateStorage(TextureUploadTarget::Texture2D, 0, {
+            {extentWidth, extentHeight, 1},
+            defaultAttachmentByteSize}); // TODO: 4 is format size
+
     }
 
     void SwapchainObject::CreateDepthStencilResources(VkDevice device, VkPhysicalDevice physicalDevice) {

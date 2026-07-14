@@ -3,7 +3,6 @@
 #include <dlfcn.h>
 #include "apitrace_exit.hpp"
 #include "png.h"
-#include "trace_parser.hpp"
 
 #include <algorithm>
 #include <cerrno>
@@ -11,12 +10,10 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
-#include <cctype>
 #include <cstring>
 #include <exception>
 #include <fstream>
 #include <iomanip>
-#include <limits>
 #include <memory>
 #include <sstream>
 #include <string>
@@ -357,106 +354,15 @@ void ForceOpaqueAlpha(RgbaImage& image) {
     }
 }
 
-bool ReadPpmRgbAsRgba(const std::string& path, RgbaImage& image, std::string& error) {
-    std::ifstream file(path, std::ios::binary);
-    if (!file) {
-        error = "failed to open PPM: " + path;
-        return false;
-    }
-
-    auto readToken = [&file]() -> std::string {
-        std::string token;
-        char ch = 0;
-        while (file.get(ch)) {
-            if (ch == '#') {
-                file.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
-                continue;
-            }
-            if (!std::isspace(static_cast<unsigned char>(ch))) {
-                token.push_back(ch);
-                break;
-            }
-        }
-        while (file.get(ch)) {
-            if (std::isspace(static_cast<unsigned char>(ch))) {
-                break;
-            }
-            token.push_back(ch);
-        }
-        return token;
-    };
-
-    const std::string magic = readToken();
-    const std::string widthToken = readToken();
-    const std::string heightToken = readToken();
-    const std::string maxToken = readToken();
-    if (magic != "P6" || widthToken.empty() || heightToken.empty() || maxToken != "255") {
-        error = "unsupported PPM header: " + path;
-        return false;
-    }
-
-    image.width = std::stoi(widthToken);
-    image.height = std::stoi(heightToken);
-    if (image.width <= 0 || image.height <= 0) {
-        error = "PPM has invalid dimensions: " + path;
-        return false;
-    }
-
-    std::vector<std::uint8_t> rgb(static_cast<std::size_t>(image.width) * image.height * 3);
-    file.read(reinterpret_cast<char*>(rgb.data()), static_cast<std::streamsize>(rgb.size()));
-    if (file.gcount() != static_cast<std::streamsize>(rgb.size())) {
-        error = "PPM payload is truncated: " + path;
-        return false;
-    }
-
-    image.pixels.resize(static_cast<std::size_t>(image.width) * image.height * 4);
-    for (std::size_t i = 0, j = 0; i < rgb.size(); i += 3, j += 4) {
-        image.pixels[j + 0] = rgb[i + 0];
-        image.pixels[j + 1] = rgb[i + 1];
-        image.pixels[j + 2] = rgb[i + 2];
-        image.pixels[j + 3] = 0xff;
-    }
-    return true;
-}
-
-std::string SnapshotPathForCall(const Request& request, bool usePresentDump) {
+std::string SnapshotPathForCall(const Request& request) {
     char call[16];
-    snprintf(call, sizeof(call), "%010lld", usePresentDump ? request.targetCall + 1 : request.targetCall);
+    snprintf(call, sizeof(call), "%010lld", request.targetCall);
     return request.outputDir + "/actual." + call + ".png";
 }
 
-bool TargetCallSwapsRenderTarget(const Request& request, bool& swapsRenderTarget, std::string& error) {
-    trace::Parser parser;
-    if (!parser.open(request.tracePath.c_str())) {
-        error = "failed to open trace for target call inspection";
-        return false;
-    }
-
-    trace::Call* call = nullptr;
-    while ((call = parser.parse_call()) != nullptr) {
-        const long long callNo = static_cast<long long>(call->no);
-        if (callNo == request.targetCall) {
-            swapsRenderTarget = (call->flags & trace::CALL_FLAG_SWAP_RENDERTARGET) != 0;
-            delete call;
-            return true;
-        }
-        if (callNo > request.targetCall) {
-            delete call;
-            break;
-        }
-        delete call;
-    }
-
-    std::ostringstream message;
-    message << "target_call " << request.targetCall << " was not found in trace";
-    error = message.str();
-    return false;
-}
-
-int RunRetraceMain(const Request& request, bool usePresentDump) {
+int RunRetraceMain(const Request& request) {
     std::string prefix = request.outputDir + "/actual.";
-    const long long snapshotCall = usePresentDump ? request.targetCall + 1 : request.targetCall;
-    std::string callSet = std::to_string(snapshotCall);
+    std::string callSet = std::to_string(request.targetCall);
 
     std::string arg0 = "mobilegl-glretrace";
     std::string argBenchmark = "-b";
@@ -483,12 +389,12 @@ int RunRetraceMain(const Request& request, bool usePresentDump) {
     return MOBILEGL_APITRACE_RETRACE_MAIN(10, argv);
 }
 
-bool RunRetrace(const Request& request, bool usePresentDump, Result& result) {
+bool RunRetrace(const Request& request, Result& result) {
     int status = 0;
     ConfigureHoldEnv(request);
     try {
         ScopedFdRedirect redirect(request.outputDir + "/retrace.log");
-        status = RunRetraceMain(request, usePresentDump);
+        status = RunRetraceMain(request);
     } catch (const MobileGLRetraceExit& retraceExit) {
         status = retraceExit.status;
     } catch (const std::exception& exception) {
@@ -509,54 +415,29 @@ bool RunRetrace(const Request& request, bool usePresentDump, Result& result) {
         return false;
     }
 
-    std::string snapshotPath = SnapshotPathForCall(request, usePresentDump);
-    const std::string presentPath = request.outputDir + "/present.ppm";
-    const bool hasSnapshot = Exists(snapshotPath);
-    const bool hasPresentDump = usePresentDump && Exists(presentPath);
-    if (!hasSnapshot && !hasPresentDump) {
+    std::string snapshotPath = SnapshotPathForCall(request);
+    if (!Exists(snapshotPath)) {
         result.statusCode = STATUS_RETRACE_FAILED;
         result.message = "retrace completed but did not create expected snapshot: " + snapshotPath;
         return false;
     }
-    if (hasSnapshot && !hasPresentDump) {
-        RgbaImage snapshot;
-        std::string imageError;
-        if (!ReadPngRgba(snapshotPath, snapshot, imageError)) {
-            result.statusCode = STATUS_IO_ERROR;
-            result.message = imageError.empty()
-                                     ? "failed to decode snapshot PNG: " + snapshotPath
-                                     : imageError;
-            return false;
-        }
-        ForceOpaqueAlpha(snapshot);
-        if (!WritePngRgba(result.actualPath, snapshot, imageError)) {
-            result.statusCode = STATUS_IO_ERROR;
-            result.message = imageError.empty()
-                                     ? "failed to write snapshot to actual PNG"
-                                     : imageError;
-            return false;
-        }
+
+    RgbaImage snapshot;
+    std::string imageError;
+    if (!ReadPngRgba(snapshotPath, snapshot, imageError)) {
+        result.statusCode = STATUS_IO_ERROR;
+        result.message = imageError.empty()
+                                 ? "failed to decode snapshot PNG: " + snapshotPath
+                                 : imageError;
+        return false;
     }
-    if (usePresentDump) {
-        if (hasPresentDump) {
-            RgbaImage present;
-            std::string imageError;
-            if (!ReadPpmRgbAsRgba(presentPath, present, imageError) ||
-                !WritePngRgba(request.outputDir + "/present.png", present, imageError)) {
-                result.statusCode = STATUS_IO_ERROR;
-                result.message = imageError.empty()
-                                         ? "failed to convert DirectVulkan present dump to PNG"
-                                         : imageError;
-                return false;
-            }
-            if (!WritePngRgba(result.actualPath, present, imageError)) {
-                result.statusCode = STATUS_IO_ERROR;
-                result.message = imageError.empty()
-                                         ? "failed to write DirectVulkan present dump to actual PNG"
-                                         : imageError;
-                return false;
-            }
-        }
+    ForceOpaqueAlpha(snapshot);
+    if (!WritePngRgba(result.actualPath, snapshot, imageError)) {
+        result.statusCode = STATUS_IO_ERROR;
+        result.message = imageError.empty()
+                                 ? "failed to write snapshot to actual PNG"
+                                 : imageError;
+        return false;
     }
     return true;
 }
@@ -927,27 +808,6 @@ Result RunTraceReplay(const Request& request) {
         return result;
     }
 
-    bool usePresentDump = false;
-    if (request.backend == "DirectVulkan") {
-        std::string inspectError;
-        if (!TargetCallSwapsRenderTarget(request, usePresentDump, inspectError)) {
-            result.statusCode = STATUS_INVALID_ARGUMENT;
-            result.message = inspectError;
-            return result;
-        }
-    }
-
-    if (usePresentDump) {
-        std::string presentDumpPath = request.outputDir + "/present.ppm";
-        std::string presentDumpCall = std::to_string(request.targetCall);
-        setenv("MOBILEGL_PRESENT_DUMP_PATH", presentDumpPath.c_str(), 1);
-        setenv("MOBILEGL_PRESENT_DUMP_CALL", presentDumpCall.c_str(), 1);
-    } else {
-        unsetenv("MOBILEGL_PRESENT_STATS");
-        unsetenv("MOBILEGL_PRESENT_DUMP_PATH");
-        unsetenv("MOBILEGL_PRESENT_DUMP_CALL");
-    }
-
     setenv("MOBILEGL_LOG_FILE_PATH", mobileGlLogPath.c_str(), 1);
 
     std::string mobileGlError;
@@ -957,7 +817,7 @@ Result RunTraceReplay(const Request& request) {
         return result;
     }
 
-    if (!RunRetrace(request, usePresentDump, result)) {
+    if (!RunRetrace(request, result)) {
         HoldAfterRetrace(request);
         return result;
     }

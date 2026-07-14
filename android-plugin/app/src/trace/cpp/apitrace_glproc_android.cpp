@@ -1,8 +1,6 @@
 #include "glproc.hpp"
 
 #include <GLES3/gl3.h>
-#include <cstdlib>
-#include <cstdio>
 #include <cstring>
 #include <dlfcn.h>
 
@@ -56,29 +54,6 @@ void MobileGLTraceReadPixels(GLint x, GLint y, GLsizei width, GLsizei height, GL
     if (gRealGlReadPixels != nullptr) {
         gRealGlReadPixels(x, y, width, height, format, type, pixels);
     }
-    const char *stats = getenv("MOBILEGL_PRESENT_STATS");
-    if (stats == nullptr || stats[0] == '\0' || strcmp(stats, "0") == 0 ||
-        pixels == nullptr || width <= 0 || height <= 0 ||
-        format != GL_RGBA || type != GL_UNSIGNED_BYTE) {
-        return;
-    }
-    const auto *bytes = static_cast<const unsigned char *>(pixels);
-    const size_t pixelCount = static_cast<size_t>(width) * static_cast<size_t>(height);
-    size_t nonBlack = 0;
-    size_t nonTransparent = 0;
-    for (size_t i = 0; i < pixelCount; ++i) {
-        const unsigned char *p = bytes + i * 4;
-        if (p[0] != 0 || p[1] != 0 || p[2] != 0) {
-            ++nonBlack;
-        }
-        if (p[3] != 0) {
-            ++nonTransparent;
-        }
-    }
-    fprintf(stderr,
-            "MOBILEGL_GLPROC_READPIXELS x=%d y=%d width=%d height=%d nonBlack=%zu/%zu alpha=%zu/%zu real=%p\n",
-            x, y, width, height, nonBlack, pixelCount, nonTransparent, pixelCount,
-            reinterpret_cast<void *>(gRealGlReadPixels));
 }
 
 void MobileGLTraceGetIntegerv(GLenum pname, GLint *data) {
