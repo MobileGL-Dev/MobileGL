@@ -89,20 +89,6 @@ bool UseAngleForRequest(const Request& request) {
     return value != nullptr && strcmp(value, "1") == 0;
 }
 
-void PrependLibraryPath(const std::string& directory) {
-    if (directory.empty()) {
-        return;
-    }
-
-    const char* current = getenv("LD_LIBRARY_PATH");
-    std::string value = directory;
-    if (current != nullptr && current[0] != '\0') {
-        value += ":";
-        value += current;
-    }
-    setenv("LD_LIBRARY_PATH", value.c_str(), 1);
-}
-
 bool EnsureDirectory(const std::string& path) {
     if (path.empty()) {
         return false;
@@ -153,11 +139,10 @@ bool LoadMobileGL(const Request& request, std::string& error) {
     }
     if (UseAngleForRequest(request)) {
         setenv("MOBILEGL_USE_ANGLE", "1", 1);
-        if (!request.angleLibraryDir.empty()) {
-            PrependLibraryPath(request.angleLibraryDir);
-        }
+        setenv("MOBILEGL_TRACE_ANGLE_VARIANT", request.angleVariant.c_str(), 1);
     } else {
         unsetenv("MOBILEGL_USE_ANGLE");
+        unsetenv("MOBILEGL_TRACE_ANGLE_VARIANT");
     }
     if (request.avoidAngleLlvmpipeSamplerMipmapMinFilter) {
         setenv("MOBILEGL_AVOID_SAMPLER_MIPMAP_MIN_FILTER", "1", 1);
@@ -755,7 +740,7 @@ bool WriteResultJson(const Request& request, const Result& result) {
     file << "  \"actualPath\": \"" << JsonEscape(result.actualPath) << "\",\n";
     file << "  \"diffPath\": \"" << JsonEscape(result.diffPath) << "\",\n";
     file << "  \"backend\": \"" << JsonEscape(request.backend) << "\",\n";
-    file << "  \"angleLibraryDir\": \"" << JsonEscape(request.angleLibraryDir) << "\",\n";
+    file << "  \"angleVariant\": \"" << JsonEscape(request.angleVariant) << "\",\n";
     file << "  \"targetFrame\": " << request.targetFrame << ",\n";
     file << "  \"targetCall\": " << request.targetCall << ",\n";
     file << "  \"width\": " << request.width << ",\n";

@@ -18,7 +18,6 @@ Usage:
     --trace-file FILE_IN_ARCHIVE \
     --golden FILE \
     [--alternate-golden FILE] \
-    [--angle-library-dir DIR] \
     --target-call N \
     --width N \
     --height N \
@@ -33,6 +32,8 @@ Usage:
 
 Set MOBILEGL_USE_ANGLE=1 to run DirectGLES replay with packaged ANGLE
 instead of the device system GLES driver.
+Set MOBILEGL_TRACE_ANGLE_VARIANT to the packaged ANGLE short hash used by
+DirectGLES replay.
 Set MOBILEGL_RETRACE_USE_PBUFFER=1 or pass --use-pbuffer to run DirectGLES
 against an offscreen EGL pbuffer instead of the Activity surface.
 Pass --avoid-angle-llvmpipe-sampler-mipmap-min-filter for DirectGLES traces that
@@ -83,7 +84,6 @@ trace_archive=""
 trace_file=""
 golden_path=""
 alternate_golden_path=""
-angle_library_dir=""
 target_call=""
 width=""
 height=""
@@ -116,7 +116,6 @@ while [ "$#" -gt 0 ]; do
         shift 2
       fi
       ;;
-    --angle-library-dir) angle_library_dir="$(next_arg "$@")"; shift 2 ;;
     --target-call) target_call="$(next_arg "$@")"; shift 2 ;;
     --width) width="$(next_arg "$@")"; shift 2 ;;
     --height) height="$(next_arg "$@")"; shift 2 ;;
@@ -161,11 +160,6 @@ test -f "${golden_path}" || die "golden image does not exist: ${golden_path}"
 if [ -n "${alternate_golden_path}" ]; then
   test -f "${alternate_golden_path}" || die "alternate golden image does not exist: ${alternate_golden_path}"
 fi
-if [ -n "${angle_library_dir}" ]; then
-  test -f "${angle_library_dir}/libEGL_angle.so" || die "ANGLE override is missing libEGL_angle.so: ${angle_library_dir}"
-  test -f "${angle_library_dir}/libGLESv2_angle.so" || die "ANGLE override is missing libGLESv2_angle.so: ${angle_library_dir}"
-fi
-
 safe_case="$(printf '%s' "${case_name}" | sed 's/[^A-Za-z0-9._-]/_/g')"
 app_dir="/data/user/0/${package_name}/files/trace-replay"
 
@@ -203,17 +197,9 @@ prepare_fixture() {
   if [ -n "${alternate_golden_path}" ]; then
     adb_device_path push "$(host_path_for_adb "${alternate_golden_path}")" "/data/local/tmp/mobilegl-${safe_case}.alternate-golden.png"
   fi
-  if [ -n "${angle_library_dir}" ]; then
-    adb_device_path push "$(host_path_for_adb "${angle_library_dir}/libEGL_angle.so")" "/data/local/tmp/mobilegl-${safe_case}.libEGL_angle.so"
-    adb_device_path push "$(host_path_for_adb "${angle_library_dir}/libGLESv2_angle.so")" "/data/local/tmp/mobilegl-${safe_case}.libGLESv2_angle.so"
-  fi
   adb_device_path shell chmod 0644 "/data/local/tmp/mobilegl-${safe_case}.trace" "/data/local/tmp/mobilegl-${safe_case}.golden.png"
   if [ -n "${alternate_golden_path}" ]; then
     adb_device_path shell chmod 0644 "/data/local/tmp/mobilegl-${safe_case}.alternate-golden.png"
-  fi
-  if [ -n "${angle_library_dir}" ]; then
-    adb_device_path shell chmod 0644 "/data/local/tmp/mobilegl-${safe_case}.libEGL_angle.so" \
-      "/data/local/tmp/mobilegl-${safe_case}.libGLESv2_angle.so"
   fi
 }
 
@@ -229,13 +215,6 @@ copy_fixture_to_app() {
   if [ -n "${alternate_golden_path}" ]; then
     adb_device_path shell run-as "${package_name}" cp "${alternate_golden_tmp}" "${app_dir}/input/alternate-golden.png"
   fi
-  if [ -n "${angle_library_dir}" ]; then
-    adb_device_path shell run-as "${package_name}" mkdir -p "${app_dir}/angle"
-    adb_device_path shell run-as "${package_name}" cp "/data/local/tmp/mobilegl-${safe_case}.libEGL_angle.so" \
-      "${app_dir}/angle/libEGL_angle.so"
-    adb_device_path shell run-as "${package_name}" cp "/data/local/tmp/mobilegl-${safe_case}.libGLESv2_angle.so" \
-      "${app_dir}/angle/libGLESv2_angle.so"
-  fi
 }
 
 run_retrace() {
@@ -247,6 +226,7 @@ run_retrace() {
   fi
   if [ "${MOBILEGL_USE_ANGLE:-}" = "1" ] && [ "${backend}" = "DirectGLES" ]; then
     use_angle=1
+    test -n "${MOBILEGL_TRACE_ANGLE_VARIANT:-}" || die "MOBILEGL_TRACE_ANGLE_VARIANT is required for DirectGLES ANGLE replay"
   fi
   if [ "${MOBILEGL_RETRACE_USE_PBUFFER:-}" = "1" ] && [ "${backend}" = "DirectGLES" ]; then
     use_pbuffer=1
@@ -266,9 +246,7 @@ run_retrace() {
   fi
   if [ "${use_angle}" -eq 1 ]; then
     set -- "$@" --ez use_angle true
-    if [ -n "${angle_library_dir}" ]; then
-      set -- "$@" --es angle_library_dir "${app_dir}/angle"
-    fi
+    set -- "$@" --es angle_variant "${MOBILEGL_TRACE_ANGLE_VARIANT}"
   fi
   if [ "${use_pbuffer}" -eq 1 ] && [ "${backend}" = "DirectGLES" ]; then
     set -- "$@" --ez use_pbuffer true

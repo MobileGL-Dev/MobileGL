@@ -9,7 +9,7 @@
 #include "Loader.h"
 #include "MG_Util/Types.h"
 #include <Config.h>
-#if defined(MOBILEGL_IOS)
+#if !defined(__WIN32) && !defined(_WIN32)
 #include <dlfcn.h>
 #endif
 
@@ -17,6 +17,47 @@ namespace MobileGL::MG_Util::BackendLoader {
     static Bool UseAngle() {
         return MG_Config::Features.UseAngle;
     }
+
+#if defined(MOBILEGL_TRACE_ANGLE_VARIANTS) && defined(__ANDROID__)
+    static Bool IsTraceAngleLibrary(const String& name) {
+        return name == "libGLESv2_angle.so" || name == "libEGL_angle.so";
+    }
+
+    static Bool IsAllowedTraceAngleVariant(const String& variant) {
+        return variant == "ec889e6ea831" || variant == "90a62123d794";
+    }
+
+    static Bool ResolveTraceAngleLibraryPath(const String& name, String& path) {
+        const String& variant = MG_Config::Features.TraceAngleVariant;
+        if (!IsAllowedTraceAngleVariant(variant)) {
+            MGLOG_F("Rejected trace ANGLE variant '%s'", variant.c_str());
+            return false;
+        }
+
+        Dl_info mobileGlInfo{};
+        if (dladdr(reinterpret_cast<const void*>(&ResolveTraceAngleLibraryPath), &mobileGlInfo) == 0 ||
+            mobileGlInfo.dli_fname == nullptr) {
+            MGLOG_F("Failed to resolve signed trace native library directory");
+            return false;
+        }
+
+        String nativeLibraryPath = mobileGlInfo.dli_fname;
+        const SizeT separator = nativeLibraryPath.find_last_of('/');
+        if (separator == String::npos) {
+            MGLOG_F("Invalid MobileGL library path: %s", nativeLibraryPath.c_str());
+            return false;
+        }
+
+        const SizeT extension = name.rfind(".so");
+        if (extension == String::npos) {
+            MGLOG_F("Invalid trace ANGLE library name: %s", name.c_str());
+            return false;
+        }
+        path = nativeLibraryPath.substr(0, separator + 1) + name.substr(0, extension) + "_" + variant + ".so";
+        return true;
+    }
+
+#endif
 
     static void* OpenLib(const Vector<String>& names) {
 #if !defined(__WIN32) && !defined(_WIN32) && (!defined(__APPLE__) || defined(MOBILEGL_IOS))
@@ -35,6 +76,22 @@ namespace MobileGL::MG_Util::BackendLoader {
         Int flags = RTLD_LOCAL | RTLD_NOW;
         for (const auto& prefix : LibPathPrefixes) {
             for (const auto& name : names) {
+#if defined(MOBILEGL_TRACE_ANGLE_VARIANTS) && defined(__ANDROID__)
+                if (UseAngle() && IsTraceAngleLibrary(name)) {
+                    String signedPath;
+                    if (!ResolveTraceAngleLibraryPath(name, signedPath)) {
+                        return nullptr;
+                    }
+                    lib = dlopen(signedPath.c_str(), flags);
+                    if (lib == nullptr) {
+                        MGLOG_F("Failed to open signed trace ANGLE library %s: %s",
+                                signedPath.c_str(), dlerror());
+                        return nullptr;
+                    }
+                    MGLOG_I("Loaded signed trace ANGLE library: %s", signedPath.c_str());
+                    return lib;
+                }
+#endif
                 String path_name = prefix + name;
                 if ((lib = dlopen(path_name.c_str(), flags))) {
                     MGLOG_I("Loaded GL backend library: %s", path_name.c_str());
@@ -460,12 +517,18 @@ namespace MobileGL::MG_Util::BackendLoader {
 
     void AcquireEGLFunctions(MG_External::EGLFunctionsTable& funcs) {
         void* eglLib = nullptr;
+#if defined(MOBILEGL_TRACE_ANGLE_VARIANTS) && defined(__ANDROID__)
+        void* angleGlesLib = nullptr;
+#endif
         if (UseAngle()) {
             void* glesLib = OpenLib({"libGLESv2_angle.so"});
             if (!glesLib) {
                 MGLOG_E("Failed to open ANGLE libGLESv2_angle.so");
                 return;
             }
+#if defined(MOBILEGL_TRACE_ANGLE_VARIANTS) && defined(__ANDROID__)
+            angleGlesLib = glesLib;
+#endif
             eglLib = OpenLib({"libEGL_angle.so"});
             if (!eglLib) {
                 MGLOG_E("Failed to open ANGLE libEGL_angle.so");
@@ -484,9 +547,22 @@ namespace MobileGL::MG_Util::BackendLoader {
             return;
         }
 
+        auto resolveEGLProc = [&](const char* name) -> void* {
+#if defined(MOBILEGL_TRACE_ANGLE_VARIANTS) && defined(__ANDROID__)
+            if (UseAngle()) {
+                // Avoid the wrapper's canonical libGLESv2_angle.so lookup:
+                // resolve its forwarding target from the verified variant.
+                String target = "EGL_";
+                target += name + 3;
+                return ProcAddress(angleGlesLib, target.c_str());
+            }
+#endif
+            return ProcAddress(eglLib, name);
+        };
+
 #define INIT_EGL_FUNC(name)                                                                                            \
     do {                                                                                                               \
-        funcs.name = (MG_External::EGL::name##_PTR)ProcAddress(eglLib, #name);                                         \
+        funcs.name = (MG_External::EGL::name##_PTR)resolveEGLProc(#name);                                              \
         if (!funcs.name) {                                                                                             \
             MGLOG_E("Failed to load EGL function: %s", #name);                                                         \
         }                                                                                                              \

@@ -53,7 +53,7 @@ jobs:
       - name: Install ccache
         run: |
           sudo apt-get update
-          sudo apt-get install -y ccache
+          sudo apt-get install -y ccache patchelf
           ccache --version
 
       - name: Setup Android SDK
@@ -83,15 +83,39 @@ jobs:
       - name: Download ANGLE x86_64 libraries
         run: |
           angle_dir="android-plugin/app/src/trace/jniLibs/x86_64"
-          angle_commit="f2a3d510dffd8f6540a52e1a7d0c5787d151075b"
-          angle_base="https://raw.githubusercontent.com/FCL-Team/FoldCraftLauncher/${angle_commit}/FCLauncher/src/main/jniLibs/x86_64"
+          rm -rf "${angle_dir}"
           mkdir -p "${angle_dir}"
-          curl -L --fail --retry 3 -o "${angle_dir}/libEGL_angle.so" "${angle_base}/libEGL_angle.so"
-          curl -L --fail --retry 3 -o "${angle_dir}/libGLESv2_angle.so" "${angle_base}/libGLESv2_angle.so"
-          test -s "${angle_dir}/libEGL_angle.so"
-          test -s "${angle_dir}/libGLESv2_angle.so"
-          echo "c41828768d089899fa058ec0bee711a91be88347f29bdb935223da6be1149c40  ${angle_dir}/libEGL_angle.so" | sha256sum -c -
-          echo "e4f820d99f94365c66df868c7740fef142fe5c0cd7c941790a9e30638857ca4d  ${angle_dir}/libGLESv2_angle.so" | sha256sum -c -
+
+          package_angle_variant() {
+            variant="$1"
+            commit="$2"
+            egl_sha="$3"
+            gles_sha="$4"
+            source_dir="${RUNNER_TEMP}/mobilegl-angle-${variant}"
+            base="https://raw.githubusercontent.com/FCL-Team/FoldCraftLauncher/${commit}/FCLauncher/src/main/jniLibs/x86_64"
+            mkdir -p "${source_dir}"
+            curl -L --fail --retry 3 -o "${source_dir}/libEGL_angle.so" "${base}/libEGL_angle.so"
+            curl -L --fail --retry 3 -o "${source_dir}/libGLESv2_angle.so" "${base}/libGLESv2_angle.so"
+            echo "${egl_sha}  ${source_dir}/libEGL_angle.so" | sha256sum -c -
+            echo "${gles_sha}  ${source_dir}/libGLESv2_angle.so" | sha256sum -c -
+            for library in libEGL_angle libGLESv2_angle; do
+              filename="${library}_${variant}.so"
+              cp "${source_dir}/${library}.so" "${angle_dir}/${filename}"
+              patchelf --set-soname "${filename}" "${angle_dir}/${filename}"
+              test "$(patchelf --print-soname "${angle_dir}/${filename}")" = "${filename}"
+            done
+          }
+
+          package_angle_variant \
+            ec889e6ea831 \
+            f2a3d510dffd8f6540a52e1a7d0c5787d151075b \
+            c41828768d089899fa058ec0bee711a91be88347f29bdb935223da6be1149c40 \
+            e4f820d99f94365c66df868c7740fef142fe5c0cd7c941790a9e30638857ca4d
+          package_angle_variant \
+            90a62123d794 \
+            bdcc96ac11c79001018ae4375eb73cb54a9f682f \
+            d0f4298ccc770cc801fc52e21733521646161e8a4adb3bd0052d9a1b57ee0ca8 \
+            66fdc867e552192d553d59095ea2e3cef4829de65c356f1fd826027b1905972e
 
       - name: Build retrace APKs
         run: gradle --no-daemon -p android-plugin :app:assembleEsprytTraceRelease :app:assembleMagmaTraceRelease -Pmobilegl.abis=all -Pmobilegl.debuggableRelease=true -Pmobilegl.logLevel=MOBILEGL_LOG_LEVEL_INFO --parallel --max-workers "$(nproc)"
@@ -99,6 +123,73 @@ jobs:
           SIGNING_STORE_PASSWORD: ${{ secrets.SIGNING_STORE_PASSWORD }}
           SIGNING_KEY_ALIAS: ${{ secrets.SIGNING_KEY_ALIAS }}
           SIGNING_KEY_PASSWORD: ${{ secrets.SIGNING_KEY_PASSWORD }}
+
+      - name: Verify trace ANGLE packaging
+        run: |
+          expected=(
+            lib/x86_64/libEGL_angle_ec889e6ea831.so
+            lib/x86_64/libGLESv2_angle_ec889e6ea831.so
+            lib/x86_64/libEGL_angle_90a62123d794.so
+            lib/x86_64/libGLESv2_angle_90a62123d794.so
+          )
+          trace_markers=(
+            MOBILEGL_TRACE_ANGLE_VARIANT
+            ec889e6ea831
+            90a62123d794
+            'Rejected trace ANGLE variant'
+            'Loaded signed trace ANGLE library'
+          )
+          mapfile -t trace_apks < <(find android-plugin/app/build/outputs/apk -name 'MobileGL-*Trace-release.apk' | sort)
+          mapfile -t plugin_apks < <(find android-plugin/app/build/outputs/apk -name 'MobileGL-*Plugin-release.apk' | sort)
+          test "${#trace_apks[@]}" -eq 2
+          test "${#plugin_apks[@]}" -eq 2
+
+          extract_dir="${RUNNER_TEMP}/mobilegl-packaged-angle"
+          rm -rf "${extract_dir}"
+          mkdir -p "${extract_dir}"
+          for apk in "${trace_apks[@]}"; do
+            entries="$(unzip -Z1 "${apk}")"
+            packaged_angle_count="$(printf '%s\n' "${entries}" | grep -Ec 'lib/[^/]+/lib(EGL|GLESv2)_angle(_[0-9a-f]+)?\.so$')"
+            test "${packaged_angle_count}" -eq 4
+            for entry in "${expected[@]}"; do
+              printf '%s\n' "${entries}" | grep -Fx "${entry}"
+              extracted="${extract_dir}/$(basename "${apk}")-$(basename "${entry}")"
+              unzip -p "${apk}" "${entry}" > "${extracted}"
+              test "$(patchelf --print-soname "${extracted}")" = "$(basename "${entry}")"
+            done
+            if printf '%s\n' "${entries}" | grep -Eq 'lib/[^/]+/lib(EGL|GLESv2)_angle\.so$'; then
+              echo "Unsuffixed ANGLE library found in ${apk}" >&2
+              exit 1
+            fi
+            mapfile -t mobilegl_entries < <(printf '%s\n' "${entries}" | grep -E '^lib/[^/]+/libMobileGL\.so$')
+            test "${#mobilegl_entries[@]}" -eq 2
+            for entry in "${mobilegl_entries[@]}"; do
+              extracted="${extract_dir}/$(basename "${apk}")-${entry//\//-}"
+              unzip -p "${apk}" "${entry}" > "${extracted}"
+              for marker in "${trace_markers[@]}"; do
+                grep -aFq "${marker}" "${extracted}"
+              done
+            done
+          done
+          for apk in "${plugin_apks[@]}"; do
+            entries="$(unzip -Z1 "${apk}")"
+            if printf '%s\n' "${entries}" | grep -Eq 'lib/[^/]+/lib(EGL|GLESv2)_angle(_[0-9a-f]+)?\.so$'; then
+              echo "ANGLE library found in plugin APK ${apk}" >&2
+              exit 1
+            fi
+            mapfile -t mobilegl_entries < <(printf '%s\n' "${entries}" | grep -E '^lib/[^/]+/libMobileGL\.so$')
+            test "${#mobilegl_entries[@]}" -ge 1
+            for entry in "${mobilegl_entries[@]}"; do
+              extracted="${extract_dir}/$(basename "${apk}")-${entry//\//-}"
+              unzip -p "${apk}" "${entry}" > "${extracted}"
+              for marker in "${trace_markers[@]}"; do
+                if grep -aFq "${marker}" "${extracted}"; then
+                  echo "Trace ANGLE marker '${marker}' found in plugin APK ${apk}" >&2
+                  exit 1
+                fi
+              done
+            done
+          done
 
       - name: Show ccache stats
         if: always()
@@ -337,22 +428,14 @@ jobs:
       - name: Retrace and validate
         env:
           MOBILEGL_USE_ANGLE: ${{ matrix.backend.name == 'DirectGLES' && '1' || '0' }}
+          MOBILEGL_TRACE_ANGLE_VARIANT: ${{ matrix.case.name == 'minecraft-1.21.4-fabric-iris-bliss-in-world' && '90a62123d794' || 'ec889e6ea831' }}
           MOBILEGL_MAGMA_R11G11B10F_FALLBACK: ${{ matrix.backend.name == 'DirectVulkan' && '1' || '0' }}
         run: |
           apk_file="$(find android-retrace-apks -name '${{ matrix.backend.apk }}' -print -quit)"
           extra_retrace_args=()
-          # Bliss-specific workaround: this trace needs the newer ANGLE build
-          # plus sampler mipmap min-filter downgrading on ANGLE llvmpipe.
+          # Bliss needs the newer signed ANGLE variant plus sampler mipmap
+          # min-filter downgrading on ANGLE llvmpipe.
           if [ "${{ matrix.backend.name }}" = "DirectGLES" ] && [ "${{ matrix.case.name }}" = "minecraft-1.21.4-fabric-iris-bliss-in-world" ]; then
-            angle_override_dir="${RUNNER_TEMP}/mobilegl-angle-bliss-x86_64"
-            angle_override_commit="bdcc96ac11c79001018ae4375eb73cb54a9f682f"
-            angle_override_base="https://raw.githubusercontent.com/FCL-Team/FoldCraftLauncher/${angle_override_commit}/FCLauncher/src/main/jniLibs/x86_64"
-            mkdir -p "${angle_override_dir}"
-            curl -L --fail --retry 3 -o "${angle_override_dir}/libEGL_angle.so" "${angle_override_base}/libEGL_angle.so"
-            curl -L --fail --retry 3 -o "${angle_override_dir}/libGLESv2_angle.so" "${angle_override_base}/libGLESv2_angle.so"
-            echo "d0f4298ccc770cc801fc52e21733521646161e8a4adb3bd0052d9a1b57ee0ca8  ${angle_override_dir}/libEGL_angle.so" | sha256sum -c -
-            echo "66fdc867e552192d553d59095ea2e3cef4829de65c356f1fd826027b1905972e  ${angle_override_dir}/libGLESv2_angle.so" | sha256sum -c -
-            extra_retrace_args+=(--angle-library-dir "${angle_override_dir}")
             extra_retrace_args+=(--avoid-angle-llvmpipe-sampler-mipmap-min-filter)
           fi
           timeout "$(( ${{ matrix.case.timeout_seconds }} + 300 ))" sh android-plugin/trace-replay-ci.sh \

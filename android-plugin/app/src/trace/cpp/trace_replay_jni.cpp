@@ -98,7 +98,7 @@ Java_top_mobilegl_plugin_trace_TraceReplayActivity_nativeRunTraceReplay(JNIEnv* 
                                                                         jint cropY,
                                                                         jint cropWidth,
                                                                         jint cropHeight,
-                                                                        jstring angleLibraryDir,
+                                                                        jstring angleVariant,
                                                                         jboolean useAngle,
                                                                         jboolean usePbuffer,
                                                                         jboolean avoidAngleLlvmpipeSamplerMipmapMinFilter) {
@@ -112,7 +112,7 @@ Java_top_mobilegl_plugin_trace_TraceReplayActivity_nativeRunTraceReplay(JNIEnv* 
     request.outputDir = ToString(env, outputDir);
     request.diffPath = ToString(env, diffPath);
     request.backend = ToString(env, backend);
-    request.angleLibraryDir = ToString(env, angleLibraryDir);
+    request.angleVariant = ToString(env, angleVariant);
     request.targetFrame = targetFrame;
     request.targetCall = targetCall;
     request.width = width;

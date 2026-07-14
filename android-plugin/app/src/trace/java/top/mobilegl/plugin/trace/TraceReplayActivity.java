@@ -44,7 +44,6 @@ public final class TraceReplayActivity extends Activity {
         request = TraceReplayRequest.from(
                 intent,
                 getFilesDir(),
-                getApplicationInfo().nativeLibraryDir,
                 getString(top.mobilegl.plugin.R.string.mobilegl_default_backend)
         );
         statusView = new TextView(this);
@@ -111,7 +110,7 @@ public final class TraceReplayActivity extends Activity {
                 request.cropY,
                 request.cropWidth,
                 request.cropHeight,
-                request.angleLibraryDir,
+                request.angleVariant,
                 request.useAngle,
                 request.usePbuffer,
                 request.avoidAngleLlvmpipeSamplerMipmapMinFilter
@@ -141,7 +140,7 @@ public final class TraceReplayActivity extends Activity {
             int cropY,
             int cropWidth,
             int cropHeight,
-            String angleLibraryDir,
+            String angleVariant,
             boolean useAngle,
             boolean usePbuffer,
             boolean avoidAngleLlvmpipeSamplerMipmapMinFilter
@@ -163,7 +162,7 @@ public final class TraceReplayActivity extends Activity {
         final int cropY;
         final int cropWidth;
         final int cropHeight;
-        final String angleLibraryDir;
+        final String angleVariant;
         final boolean useAngle;
         final boolean usePbuffer;
         final boolean avoidAngleLlvmpipeSamplerMipmapMinFilter;
@@ -184,7 +183,7 @@ public final class TraceReplayActivity extends Activity {
                 int cropY,
                 int cropWidth,
                 int cropHeight,
-                String angleLibraryDir,
+                String angleVariant,
                 boolean useAngle,
                 boolean usePbuffer,
                 boolean avoidAngleLlvmpipeSamplerMipmapMinFilter
@@ -204,13 +203,13 @@ public final class TraceReplayActivity extends Activity {
             this.cropY = cropY;
             this.cropWidth = cropWidth;
             this.cropHeight = cropHeight;
-            this.angleLibraryDir = angleLibraryDir;
+            this.angleVariant = angleVariant;
             this.useAngle = useAngle;
             this.usePbuffer = usePbuffer;
             this.avoidAngleLlvmpipeSamplerMipmapMinFilter = avoidAngleLlvmpipeSamplerMipmapMinFilter;
         }
 
-        static TraceReplayRequest from(Intent intent, File filesDir, String nativeLibraryDir, String defaultBackend) {
+        static TraceReplayRequest from(Intent intent, File filesDir, String defaultBackend) {
             String outputDir = readString(intent, "output_dir", new File(filesDir, "trace-replay").getAbsolutePath());
             String diffPath = readString(intent, "diff_path", "");
             return new TraceReplayRequest(
@@ -229,7 +228,7 @@ public final class TraceReplayActivity extends Activity {
                     intent.getIntExtra("crop_y", 0),
                     intent.getIntExtra("crop_width", 0),
                     intent.getIntExtra("crop_height", 0),
-                    readString(intent, "angle_library_dir", nativeLibraryDir),
+                    readString(intent, "angle_variant", ""),
                     intent.getBooleanExtra("use_angle", false),
                     intent.getBooleanExtra("use_pbuffer", false),
                     intent.getBooleanExtra("avoid_angle_llvmpipe_sampler_mipmap_min_filter", false)

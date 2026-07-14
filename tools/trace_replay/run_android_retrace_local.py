@@ -15,6 +15,9 @@ RESULT_ROOT = ROOT / ".trace-work" / "android-retrace-result"
 FIXTURE_ROOT = ROOT / ".trace-work" / "android-retrace-fixture"
 SUMMARY_DIR = ROOT / ".trace-work" / "android-retrace-summary"
 SUMMARY_HTML = "mobilegl-android-retrace-overview.html"
+DEFAULT_ANGLE_VARIANT = "ec889e6ea831"
+BLISS_ANGLE_VARIANT = "90a62123d794"
+BLISS_CASE = "minecraft-1.21.4-fabric-iris-bliss-in-world"
 
 BACKENDS = {
     "DirectGLES": {
@@ -63,6 +66,9 @@ def mark_skipped(case, backend, reason):
         "actualPath": "",
         "diffPath": "",
         "backend": backend,
+        "angleVariant": (
+            BLISS_ANGLE_VARIANT if case["name"] == BLISS_CASE else DEFAULT_ANGLE_VARIANT
+        ) if BACKENDS[backend]["use_angle"] else "",
         "targetCall": case["target_call"],
         "width": case["width"],
         "height": case["height"],
@@ -168,13 +174,19 @@ def run_case(case, backend):
         command[command.index("--target-call"):command.index("--target-call")] = ["--alternate-golden", bash_path(alternate)]
     if backend_info["use_pbuffer"]:
         command.append("--use-pbuffer")
+    if backend_info["use_angle"] and case["name"] == BLISS_CASE:
+        command.append("--avoid-angle-llvmpipe-sampler-mipmap-min-filter")
     env = dict(**__import__("os").environ)
     env["PYTHON"] = "python"
     env["MSYS2_ARG_CONV_EXCL"] = "/data/*"
     if backend_info["use_angle"]:
         env["MOBILEGL_USE_ANGLE"] = "1"
+        env["MOBILEGL_TRACE_ANGLE_VARIANT"] = (
+            BLISS_ANGLE_VARIANT if case["name"] == BLISS_CASE else DEFAULT_ANGLE_VARIANT
+        )
     else:
         env.pop("MOBILEGL_USE_ANGLE", None)
+        env.pop("MOBILEGL_TRACE_ANGLE_VARIANT", None)
     result = subprocess.run(command, cwd=ROOT, env=env)
     copy_goldens(case, backend)
     return result.returncode

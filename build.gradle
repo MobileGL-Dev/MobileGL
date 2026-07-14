@@ -3,6 +3,7 @@ apply plugin: 'com.android.library'
 def mobileGlLogActiveLevel = {
     (rootProject.findProperty('mobilegl.logLevel') ?: System.getenv('MOBILEGL_LOG_ACTIVE_LEVEL') ?: 'MOBILEGL_LOG_LEVEL_INFO') as String
 }
+def standalonePluginBuild = rootProject.name == 'MobileGLPlugin'
 
 android {
     namespace 'top.mobilegl.mobilegl'
@@ -30,6 +31,22 @@ android {
         }
         fordebug {
             debuggable true
+        }
+    }
+    if (standalonePluginBuild) {
+        flavorDimensions 'profile'
+        productFlavors {
+            plugin {
+                dimension 'profile'
+            }
+            trace {
+                dimension 'profile'
+                externalNativeBuild {
+                    cmake {
+                        arguments '-DMOBILEGL_TRACE_ANGLE_VARIANTS=ON'
+                    }
+                }
+            }
         }
     }
     externalNativeBuild {

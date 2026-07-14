@@ -35,6 +35,10 @@ namespace MobileGL::MG_Config {
         Bool DisableTimerQuery = false;
         // MOBILEGL_USE_ANGLE: load ANGLE EGL/GLES libraries.
         Bool UseAngle = false;
+#if defined(MOBILEGL_TRACE_ANGLE_VARIANTS)
+        // MOBILEGL_TRACE_ANGLE_VARIANT: signed trace-APK ANGLE build short hash.
+        String TraceAngleVariant;
+#endif
         // MOBILEGL_DISABLE_SUBGROUP: force-disable Vulkan shader subgroup support.
         Bool DisableSubgroup = false;
         // MOBILEGL_MAGMA_R11G11B10F_FALLBACK: use fallback format for R11G11B10F on Vulkan.

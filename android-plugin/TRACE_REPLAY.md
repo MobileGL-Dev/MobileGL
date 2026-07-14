@@ -39,7 +39,7 @@ crop_width    optional compare crop width
 crop_height   optional compare crop height
 use_angle     optional boolean; DirectGLES uses packaged ANGLE when true
 use_pbuffer   optional boolean; DirectGLES uses an offscreen EGL pbuffer when true
-angle_library_dir optional directory containing libEGL_angle.so and libGLESv2_angle.so; defaults to the APK native library directory
+angle_variant required with use_angle; signed packaged ANGLE short hash (`ec889e6ea831` or `90a62123d794`)
 ```
 
 Implementation notes:
@@ -51,7 +51,7 @@ Implementation notes:
 - `DirectGLES` and `DirectVulkan` replay on the Activity `SurfaceView` by default. DirectGLES can still use the old offscreen EGL pbuffer path by passing `use_pbuffer=true`.
 - Golden comparison is implemented in native C++ with libpng RGBA decode and SSIM validation. The Java Activity only passes arguments and displays the native result, so the replay/compare core is not tied to Android UI or Bitmap APIs and can be ported to Linux.
 - The plugin profile still excludes `libtrace_replay_runner.so`; normal plugin APK behavior is preserved.
-- Set `MOBILEGL_USE_ANGLE=1` when running `trace-replay-ci.sh` to pass `use_angle=true` for DirectGLES. Set `MOBILEGL_RETRACE_USE_PBUFFER=1` or pass `--use-pbuffer` to keep DirectGLES offscreen. The APK must include `libEGL_angle.so` and `libGLESv2_angle.so` under its x86_64 native libraries. The native runner prepends the ANGLE directory to `LD_LIBRARY_PATH` before loading MobileGL.
+- Set `MOBILEGL_USE_ANGLE=1` and `MOBILEGL_TRACE_ANGLE_VARIANT=<short-hash>` when running `trace-replay-ci.sh` for DirectGLES. The trace APK contains both allowlisted ANGLE builds with short-hash filenames and SONAMEs; MobileGL resolves its signed native library directory and loads the selected pair by absolute path. Set `MOBILEGL_RETRACE_USE_PBUFFER=1` or pass `--use-pbuffer` to keep DirectGLES offscreen.
 
 Example core-profile trace smoke command for a debug trace APK:
 
@@ -68,6 +68,8 @@ adb shell am start -a top.mobilegl.plugin.TRACE_REPLAY \
   --es output_dir /data/user/0/top.mobilegl.plugin.espryt.trace/files/trace-replay/output \
   --es diff_path /data/user/0/top.mobilegl.plugin.espryt.trace/files/trace-replay/output/app-diff.png \
   --es backend DirectGLES \
+  --ez use_angle true \
+  --es angle_variant ec889e6ea831 \
   --el target_call 31249 \
   --es ssim_threshold 0.99
 adb shell run-as top.mobilegl.plugin.espryt.trace cat files/trace-replay/output/result.json

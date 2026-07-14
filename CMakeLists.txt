@@ -7,6 +7,7 @@ option(MOBILEGL_BUILD_BENCHMARK   "Build MobileGL benchmarks"                   
 option(MOBILEGL_FORCE_RELEASE_OPT "Enable Release optimization flags in Debug build" ON )
 option(MOBILEGL_ENABLE_TRACY      "Enable tracy for profiling"                       OFF)
 option(MOBILEGL_BUILD_TRACE_REPLAY "Build desktop apitrace replay runner"            OFF)
+option(MOBILEGL_TRACE_ANGLE_VARIANTS "Enable signed trace-APK ANGLE variant loading" OFF)
 option(MOBILEGL_IOS               "Build MobileGL for iOS instead of macOS when APPLE is set" OFF)
 set(MOBILEGL_LOG_ACTIVE_LEVEL "MOBILEGL_LOG_LEVEL_INFO" CACHE STRING "MobileGL active log level macro")
 set(MOBILEGL_VULKAN_LIBRARY "" CACHE FILEPATH "Vulkan loader/MoltenVK library to link for iOS builds")
@@ -357,6 +358,7 @@ target_compile_definitions(${CMAKE_PROJECT_NAME}
         PUBLIC
         ${MOBILEGL_COMPILE_DEF}
         MOBILEGL_LOG_ACTIVE_LEVEL=${MOBILEGL_LOG_ACTIVE_LEVEL}
+        $<$<BOOL:${MOBILEGL_TRACE_ANGLE_VARIANTS}>:MOBILEGL_TRACE_ANGLE_VARIANTS=1>
 )
 
 if(UNIX AND NOT APPLE AND NOT ANDROID)
