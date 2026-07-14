@@ -50,7 +50,7 @@ Implementation notes:
 - `DirectGLES` and `DirectVulkan` replay on the Activity `SurfaceView` by default. DirectGLES can still use the old offscreen EGL pbuffer path by passing `use_pbuffer=true`.
 - Golden comparison is implemented in native C++ with libpng RGBA decode and SSIM validation. The Java Activity only passes arguments and displays the native result, so the replay/compare core is not tied to Android UI or Bitmap APIs and can be ported to Linux.
 - The plugin profile still excludes `libtrace_replay_runner.so`; normal plugin APK behavior is preserved.
-- Set `MOBILEGL_RETRACE_USE_ANGLE=1` when running `trace-replay-ci.sh` to pass `use_angle=true` for DirectGLES. Set `MOBILEGL_RETRACE_USE_PBUFFER=1` or pass `--use-pbuffer` to keep DirectGLES offscreen. The APK must include `libEGL_angle.so` and `libGLESv2_angle.so` under its x86_64 native libraries. The Activity passes Android's `nativeLibraryDir` to native code as `MOBILEGL_RETRACE_ANGLE_DIR`.
+- Set `MOBILEGL_USE_ANGLE=1` when running `trace-replay-ci.sh` to pass `use_angle=true` for DirectGLES. Set `MOBILEGL_RETRACE_USE_PBUFFER=1` or pass `--use-pbuffer` to keep DirectGLES offscreen. The APK must include `libEGL_angle.so` and `libGLESv2_angle.so` under its x86_64 native libraries. The native runner prepends the ANGLE directory to `LD_LIBRARY_PATH` before loading MobileGL.
 
 Example core-profile trace smoke command for a debug trace APK:
 

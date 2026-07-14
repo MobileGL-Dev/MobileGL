@@ -110,8 +110,7 @@ namespace MobileGL::MG_ConfigLoader {
     inline void InitFeatures() {
         auto& features = MG_Config::Features;
         features.DisableTimerQuery = QueryEnvFlag("MOBILEGL_DISABLE_TIMERQUERY");
-        features.RetraceUseAngle = QueryEnvFlag("MOBILEGL_RETRACE_USE_ANGLE");
-        QueryEnvVariable("MOBILEGL_RETRACE_ANGLE_DIR", features.RetraceAngleDir, "");
+        features.UseAngle = QueryEnvFlag("MOBILEGL_USE_ANGLE");
         features.DisableSubgroup = QueryEnvFlag("MOBILEGL_DISABLE_SUBGROUP");
         features.MagmaR11G11B10FFallback = QueryEnvFlag("MOBILEGL_MAGMA_R11G11B10F_FALLBACK");
         features.MagmaFramesInFlight = QueryEnvUint32("MOBILEGL_MAGMA_FRAMESINFLIGHT", 3, 1, 64);

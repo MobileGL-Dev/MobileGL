@@ -88,8 +88,22 @@ bool UseAngleForRequest(const Request& request) {
     if (request.useAngle) {
         return true;
     }
-    const char* value = getenv("MOBILEGL_RETRACE_USE_ANGLE");
+    const char* value = getenv("MOBILEGL_USE_ANGLE");
     return value != nullptr && strcmp(value, "1") == 0;
+}
+
+void PrependLibraryPath(const std::string& directory) {
+    if (directory.empty()) {
+        return;
+    }
+
+    const char* current = getenv("LD_LIBRARY_PATH");
+    std::string value = directory;
+    if (current != nullptr && current[0] != '\0') {
+        value += ":";
+        value += current;
+    }
+    setenv("LD_LIBRARY_PATH", value.c_str(), 1);
 }
 
 bool EnsureDirectory(const std::string& path) {
@@ -141,13 +155,12 @@ bool LoadMobileGL(const Request& request, std::string& error) {
         unsetenv("MOBILEGL_MAGMA_R11G11B10F_FALLBACK");
     }
     if (UseAngleForRequest(request)) {
-        setenv("MOBILEGL_RETRACE_USE_ANGLE", "1", 1);
+        setenv("MOBILEGL_USE_ANGLE", "1", 1);
         if (!request.angleLibraryDir.empty()) {
-            setenv("MOBILEGL_RETRACE_ANGLE_DIR", request.angleLibraryDir.c_str(), 1);
+            PrependLibraryPath(request.angleLibraryDir);
         }
     } else {
-        unsetenv("MOBILEGL_RETRACE_USE_ANGLE");
-        unsetenv("MOBILEGL_RETRACE_ANGLE_DIR");
+        unsetenv("MOBILEGL_USE_ANGLE");
     }
     if (request.avoidAngleLlvmpipeSamplerMipmapMinFilter) {
         setenv("MOBILEGL_AVOID_SAMPLER_MIPMAP_MIN_FILTER", "1", 1);

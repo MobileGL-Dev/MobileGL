@@ -336,7 +336,7 @@ jobs:
 
       - name: Retrace and validate
         env:
-          MOBILEGL_RETRACE_USE_ANGLE: ${{ matrix.backend.name == 'DirectGLES' && '1' || '0' }}
+          MOBILEGL_USE_ANGLE: ${{ matrix.backend.name == 'DirectGLES' && '1' || '0' }}
           MOBILEGL_MAGMA_R11G11B10F_FALLBACK: ${{ matrix.backend.name == 'DirectVulkan' && '1' || '0' }}
         run: |
           apk_file="$(find android-retrace-apks -name '${{ matrix.backend.apk }}' -print -quit)"

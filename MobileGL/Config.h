@@ -35,10 +35,8 @@ namespace MobileGL::MG_Config {
     struct FeaturesTable {
         // MOBILEGL_DISABLE_TIMERQUERY: do not advertise or use GPU timer queries.
         Bool DisableTimerQuery = false;
-        // MOBILEGL_RETRACE_USE_ANGLE: load ANGLE EGL/GLES libraries for retrace runs.
-        Bool RetraceUseAngle = false;
-        // MOBILEGL_RETRACE_ANGLE_DIR: directory searched first for the ANGLE libraries.
-        String RetraceAngleDir;
+        // MOBILEGL_USE_ANGLE: load ANGLE EGL/GLES libraries.
+        Bool UseAngle = false;
         // MOBILEGL_DISABLE_SUBGROUP: force-disable Vulkan shader subgroup support.
         Bool DisableSubgroup = false;
         // MOBILEGL_MAGMA_R11G11B10F_FALLBACK: use fallback format for R11G11B10F on Vulkan.

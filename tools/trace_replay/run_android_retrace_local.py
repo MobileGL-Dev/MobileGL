@@ -172,9 +172,9 @@ def run_case(case, backend):
     env["PYTHON"] = "python"
     env["MSYS2_ARG_CONV_EXCL"] = "/data/*"
     if backend_info["use_angle"]:
-        env["MOBILEGL_RETRACE_USE_ANGLE"] = "1"
+        env["MOBILEGL_USE_ANGLE"] = "1"
     else:
-        env.pop("MOBILEGL_RETRACE_USE_ANGLE", None)
+        env.pop("MOBILEGL_USE_ANGLE", None)
     result = subprocess.run(command, cwd=ROOT, env=env)
     copy_goldens(case, backend)
     return result.returncode

@@ -375,7 +375,7 @@ device or emulator has a trace package from a different keystore, uninstall
 or the install fails with `INSTALL_FAILED_UPDATE_INCOMPATIBLE`.
 
 Match the CI environment (`.github/workflows/apk.yml` matrix): the emulator
-boots with `--gpu software` + `MOBILEGL_RETRACE_USE_ANGLE=1` for `DirectGLES`
+boots with `--gpu software` + `MOBILEGL_USE_ANGLE=1` for `DirectGLES`
 and `--gpu lavapipe` + `MOBILEGL_MAGMA_R11G11B10F_FALLBACK=1` for
 `DirectVulkan`. The emulator's ANGLE-on-Vulkan GLES stack exercises genuinely
 different driver semantics than physical devices (e.g. indirect-draw

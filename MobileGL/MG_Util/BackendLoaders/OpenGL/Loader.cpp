@@ -14,21 +14,8 @@
 #endif
 
 namespace MobileGL::MG_Util::BackendLoader {
-    static Bool UseRetraceAngle() {
-        return MG_Config::Features.RetraceUseAngle;
-    }
-
-    static Vector<String> AngleLibNames(const char* name) {
-        const String& angleDir = MG_Config::Features.RetraceAngleDir;
-        if (!angleDir.empty()) {
-            String path = angleDir;
-            if (path.back() != '/') {
-                path += "/";
-            }
-            path += name;
-            return {path, name};
-        }
-        return {name};
+    static Bool UseAngle() {
+        return MG_Config::Features.UseAngle;
     }
 
     static void* OpenLib(const Vector<String>& names) {
@@ -40,7 +27,7 @@ namespace MobileGL::MG_Util::BackendLoader {
             "/opt/vc/lib/", "/usr/local/lib/", "/usr/lib/", "/usr/lib/x86_64-linux-gnu/",
             "/usr/lib64/", "/lib64/",
 #endif
-            "" // We should put this to the end of the list to avoid breaking `LD_LIBRARY_PATH` usage
+            "" // Keep this last so the dynamic loader can use LD_LIBRARY_PATH.
         };
 
         void* lib = nullptr;
@@ -473,13 +460,13 @@ namespace MobileGL::MG_Util::BackendLoader {
 
     void AcquireEGLFunctions(MG_External::EGLFunctionsTable& funcs) {
         void* eglLib = nullptr;
-        if (UseRetraceAngle()) {
-            void* glesLib = OpenLib(AngleLibNames("libGLESv2_angle.so"));
+        if (UseAngle()) {
+            void* glesLib = OpenLib({"libGLESv2_angle.so"});
             if (!glesLib) {
                 MGLOG_E("Failed to open ANGLE libGLESv2_angle.so");
                 return;
             }
-            eglLib = OpenLib(AngleLibNames("libEGL_angle.so"));
+            eglLib = OpenLib({"libEGL_angle.so"});
             if (!eglLib) {
                 MGLOG_E("Failed to open ANGLE libEGL_angle.so");
                 return;

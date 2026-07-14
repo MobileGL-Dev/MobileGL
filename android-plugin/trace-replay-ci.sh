@@ -31,7 +31,7 @@ Usage:
     [--avoid-angle-llvmpipe-sampler-mipmap-min-filter] \
     --timeout-seconds N
 
-Set MOBILEGL_RETRACE_USE_ANGLE=1 to run DirectGLES replay with packaged ANGLE
+Set MOBILEGL_USE_ANGLE=1 to run DirectGLES replay with packaged ANGLE
 instead of the device system GLES driver.
 Set MOBILEGL_RETRACE_USE_PBUFFER=1 or pass --use-pbuffer to run DirectGLES
 against an offscreen EGL pbuffer instead of the Activity surface.
@@ -245,7 +245,7 @@ run_retrace() {
   if [ -n "${alternate_golden_path}" ]; then
     alternate_golden_app_path="${app_dir}/input/alternate-golden.png"
   fi
-  if [ "${MOBILEGL_RETRACE_USE_ANGLE:-}" = "1" ] && [ "${backend}" = "DirectGLES" ]; then
+  if [ "${MOBILEGL_USE_ANGLE:-}" = "1" ] && [ "${backend}" = "DirectGLES" ]; then
     use_angle=1
   fi
   if [ "${MOBILEGL_RETRACE_USE_PBUFFER:-}" = "1" ] && [ "${backend}" = "DirectGLES" ]; then
