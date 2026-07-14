@@ -383,102 +383,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         return true;
     }
 
-    static Bool ShouldDumpTextureUploadStats() {
-        return MG_Config::Features.TextureUploadStats;
-    }
-
-    static void DumpTextureSyncStats(Int textureId, TextureInternalFormat format, TextureUploadTarget uploadTarget,
-                                     Uint32 mipLevelCount, const IntVec3& texelSize, SizeT byteSize,
-                                     Bool hasDirtyMipLevel) {
-        if (!ShouldDumpTextureUploadStats()) {
-            return;
-        }
-
-        std::fprintf(stderr,
-                     "MOBILEGL_TEXTURE_SYNC_STATS texture=%d format=%s target=%s mips=%u size=%dx%dx%d "
-                     "bytes=%zu dirty=%d\n",
-                     textureId,
-                     MG_Util::ConvertTextureInternalFormatToString(format).c_str(),
-                     MG_Util::ConvertTextureUploadTargetToString(uploadTarget).c_str(),
-                     mipLevelCount,
-                     texelSize.x(),
-                     texelSize.y(),
-                     texelSize.z(),
-                     byteSize,
-                     hasDirtyMipLevel ? 1 : 0);
-    }
-
-    static void DumpTextureUploadStats(Int textureId, TextureUploadTarget target, Uint32 level,
-                                       const IntVec3& texelSize, const void* data, SizeT byteSize, Uint32 channels) {
-        if (channels == 0 && texelSize.x() > 0 && texelSize.y() > 0) {
-            const SizeT depth = static_cast<SizeT>(std::max(texelSize.z(), 1));
-            const SizeT pixelCount = static_cast<SizeT>(texelSize.x()) * static_cast<SizeT>(texelSize.y()) * depth;
-            if (pixelCount > 0 && byteSize % pixelCount == 0) {
-                channels = static_cast<Uint32>(std::min<SizeT>(byteSize / pixelCount, 4));
-            }
-        }
-        if (!ShouldDumpTextureUploadStats() || data == nullptr || byteSize == 0 || channels == 0) {
-            return;
-        }
-
-        const auto* bytes = static_cast<const Uint8*>(data);
-        Uint8 minValue = 255;
-        Uint8 maxValue = 0;
-        SizeT nonZero = 0;
-        Uint64 sum = 0;
-        Uint64 neighborDiff = 0;
-        SizeT neighborCount = 0;
-
-        for (SizeT i = 0; i < byteSize; ++i) {
-            minValue = std::min(minValue, bytes[i]);
-            maxValue = std::max(maxValue, bytes[i]);
-            nonZero += bytes[i] != 0 ? 1 : 0;
-            sum += bytes[i];
-        }
-
-        const SizeT width = static_cast<SizeT>(std::max(texelSize.x(), 0));
-        const SizeT height = static_cast<SizeT>(std::max(texelSize.y(), 0));
-        const SizeT pixelStride = channels;
-        if (width > 1 && height > 0 && byteSize >= width * height * pixelStride) {
-            for (SizeT y = 0; y < height; ++y) {
-                const SizeT row = y * width * pixelStride;
-                for (SizeT x = 1; x < width; ++x) {
-                    const SizeT prev = row + (x - 1) * pixelStride;
-                    const SizeT cur = row + x * pixelStride;
-                    for (SizeT c = 0; c < std::min<SizeT>(channels, 3); ++c) {
-                        neighborDiff += static_cast<Uint64>(
-                            std::abs(static_cast<Int>(bytes[cur + c]) - static_cast<Int>(bytes[prev + c])));
-                        ++neighborCount;
-                    }
-                }
-            }
-        }
-
-        const double avg = byteSize > 0 ? static_cast<double>(sum) / static_cast<double>(byteSize) : 0.0;
-        const double avgNeighborDiff =
-            neighborCount > 0 ? static_cast<double>(neighborDiff) / static_cast<double>(neighborCount) : 0.0;
-        std::fprintf(stderr,
-                     "MOBILEGL_TEXTURE_UPLOAD_STATS texture=%d target=%s level=%u size=%dx%dx%d bytes=%zu "
-                     "channels=%u min=%u max=%u avg=%.2f nonzero=%zu neighborDiff=%.2f first=%u,%u,%u,%u\n",
-                     textureId,
-                     MG_Util::ConvertTextureUploadTargetToString(target).c_str(),
-                     level,
-                     texelSize.x(),
-                     texelSize.y(),
-                     texelSize.z(),
-                     byteSize,
-                     channels,
-                     static_cast<Uint>(minValue),
-                     static_cast<Uint>(maxValue),
-                     avg,
-                     nonZero,
-                     avgNeighborDiff,
-                     byteSize > 0 ? static_cast<Uint>(bytes[0]) : 0u,
-                     byteSize > 1 ? static_cast<Uint>(bytes[1]) : 0u,
-                     byteSize > 2 ? static_cast<Uint>(bytes[2]) : 0u,
-                     byteSize > 3 ? static_cast<Uint>(bytes[3]) : 0u);
-    }
-
     static VkComponentSwizzle ToVkComponentSwizzle(TextureSwizzleParam swizzle) {
         switch (swizzle) {
         case TextureSwizzleParam::Red:
@@ -1123,8 +1027,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 break;
             }
         }
-        DumpTextureSyncStats(texture.GetExternalIndex(), texture.GetFormat(), uploadTarget, mipLevelCount,
-                             texelSize, byteSize, hasDirtyMipLevel);
         if (!hasDirtyMipLevel) {
             outResource.syncedContentVersion = syncingContentVersion;
             outResource.syncedMipLevelCount = syncingMipLevelCount;
@@ -1514,10 +1416,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 if (!uploadItems.back().expandedData.empty()) {
                     uploadItems.back().source = uploadItems.back().expandedData.data();
                 }
-                DumpTextureUploadStats(mipmapTexture.GetExternalIndex(), uploadItems.back().target,
-                                       uploadItems.back().level, uploadItems.back().texelSize,
-                                       uploadItems.back().source, uploadItems.back().uploadByteSize,
-                                       formatInfo.expandRgbToRgba ? 4u : 0u);
                 stagingSize += static_cast<VkDeviceSize>(uploadItems.back().uploadByteSize);
             }
         }

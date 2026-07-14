@@ -639,10 +639,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         return attributeMask;
     }
 
-    static Bool ShouldDumpVertexInputStats() {
-        return MG_Config::Features.VertexInputStats;
-    }
-
     static const char* PresentDumpPath() {
         const String& path = MG_Config::Features.PresentDumpPath;
         return path.empty() ? nullptr : path.c_str();
@@ -659,80 +655,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
         const char* current = std::getenv("MOBILEGL_PRESENT_CURRENT_CALL");
         return current != nullptr && std::strcmp(target, current) == 0;
-    }
-
-    static void DumpVertexInputStats(Uint32 location, const MG_State::GLState::VertexAttribute& attr,
-                                     Uint32 firstVertex, Uint32 vertexCount) {
-        if (!ShouldDumpVertexInputStats() || attr.Type != DataType::Float32 || attr.Size <= 0 || attr.Size > 4) {
-            return;
-        }
-
-        const SizeT componentSize = sizeof(float);
-        const SizeT elementSize = componentSize * static_cast<SizeT>(attr.Size);
-        const SizeT stride = attr.Stride > 0 ? static_cast<SizeT>(attr.Stride) : elementSize;
-        const Uint8* base = nullptr;
-        SizeT available = 0;
-        if (attr.Buffer) {
-            if (attr.Offset >= attr.Buffer->GetSize()) {
-                return;
-            }
-            base = attr.Buffer->MappedData() + attr.Offset;
-            available = attr.Buffer->GetSize() - attr.Offset;
-        } else {
-            base = reinterpret_cast<const Uint8*>(attr.Offset);
-            available = static_cast<SizeT>(firstVertex + vertexCount) * stride;
-        }
-        if (base == nullptr || vertexCount == 0 || available < elementSize) {
-            return;
-        }
-
-        float minValues[4] = {0.0f, 0.0f, 0.0f, 0.0f};
-        float maxValues[4] = {0.0f, 0.0f, 0.0f, 0.0f};
-        Bool initialized = false;
-        SizeT sampled = 0;
-        const Uint32 maxSamples = std::min<Uint32>(vertexCount, 256);
-        for (Uint32 sample = 0; sample < maxSamples; ++sample) {
-            const SizeT offset = static_cast<SizeT>(firstVertex + sample) * stride;
-            if (offset + elementSize > available) {
-                break;
-            }
-
-            const auto* values = reinterpret_cast<const float*>(base + offset);
-            for (Int component = 0; component < attr.Size; ++component) {
-                if (!initialized) {
-                    minValues[component] = values[component];
-                    maxValues[component] = values[component];
-                } else {
-                    minValues[component] = std::min(minValues[component], values[component]);
-                    maxValues[component] = std::max(maxValues[component], values[component]);
-                }
-            }
-            initialized = true;
-            ++sampled;
-        }
-
-        if (!initialized) {
-            return;
-        }
-
-        std::fprintf(stderr,
-                     "MOBILEGL_VERTEX_INPUT_STATS loc=%u buffer=%u size=%d stride=%zu first=%u count=%u sampled=%zu "
-                     "min=(%.3f,%.3f,%.3f,%.3f) max=(%.3f,%.3f,%.3f,%.3f)\n",
-                     location,
-                     attr.Buffer ? attr.Buffer->GetExternalIndex() : 0u,
-                     attr.Size,
-                     stride,
-                     firstVertex,
-                     vertexCount,
-                     sampled,
-                     minValues[0],
-                     minValues[1],
-                     minValues[2],
-                     minValues[3],
-                     maxValues[0],
-                     maxValues[1],
-                     maxValues[2],
-                     maxValues[3]);
     }
 
     static Bool TryGetCurrentVertexAttributeFormat(GLenum glType, VkFormat& outFormat) {
@@ -2189,10 +2111,6 @@ void main() {
             const Uint32 bindingLocation = binding < vertexInputState.bindingAttributeLocations.size()
                                                ? vertexInputState.bindingAttributeLocations[binding]
                                                : static_cast<Uint32>(MG_State::GLState::VertexArrayObject::MAX_VERTEX_ATTRIBS);
-            if (bindingLocation < MG_State::GLState::VertexArrayObject::MAX_VERTEX_ATTRIBS) {
-                DumpVertexInputStats(bindingLocation, vao.GetAttribute(bindingLocation),
-                                     drawParams.firstVertex, drawParams.vertexCount);
-            }
             const Bool usesClientMemory = binding < vertexInputState.bindingUsesClientMemory.size() &&
                                           vertexInputState.bindingUsesClientMemory[binding];
             if (usesClientMemory) {

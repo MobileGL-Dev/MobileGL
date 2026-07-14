@@ -45,17 +45,9 @@ namespace MobileGL::MG_Config {
         Bool VulkanR11G11B10FFallback = false;
         // MOBILEGL_MAGMA_FRAMESINFLIGHT: requested Magma frames in flight, defaulting to 3.
         Uint32 MagmaFramesInFlight = 3;
-        // MOBILEGL_GLES_PRESENT_STATS: log present pixel statistics (DirectGLES backend).
-        Bool GlesPresentStats = false;
         // MOBILEGL_ANGLE_LLVMPIPE_AVOID_SAMPLER_MIPMAP_MIN_FILTER: avoid mipmap min
         // filters in samplers on ANGLE/llvmpipe renderers.
         Bool AvoidAngleLlvmpipeSamplerMipmapMinFilter = false;
-        // MOBILEGL_DESCRIPTOR_STATS: log descriptor binding statistics (DirectVulkan).
-        Bool DescriptorStats = false;
-        // MOBILEGL_TEXTURE_UPLOAD_STATS: log texture upload statistics (DirectVulkan).
-        Bool TextureUploadStats = false;
-        // MOBILEGL_VERTEX_INPUT_STATS: log vertex input statistics (DirectVulkan).
-        Bool VertexInputStats = false;
         // MOBILEGL_PRESENT_DUMP_PATH: directory for present frame dumps (DirectVulkan).
         String PresentDumpPath;
         // MOBILEGL_PRESENT_STATS: log present pixel statistics (DirectVulkan backend).

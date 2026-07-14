@@ -3519,50 +3519,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
         return true;
     }
 
-    static Bool PresentStatsEnabled() {
-        // MOBILEGL_GLES_PRESENT_STATS, parsed once in MG_ConfigLoader::Init.
-        return MG_Config::Features.GlesPresentStats;
-    }
-
-    static void DumpDefaultFramebufferStats() {
-        if (!PresentStatsEnabled() || !g_GLESFuncs.glReadPixels || !g_EGLFuncs.eglQuerySurface ||
-            g_Display == EGL_NO_DISPLAY || g_Surface == EGL_NO_SURFACE) {
-            return;
-        }
-
-        Int width = 0;
-        Int height = 0;
-        if (!QueryCurrentSurfaceSize(width, height)) {
-            return;
-        }
-
-        GLint viewport[4] = {0, 0, 0, 0};
-        g_GLESFuncs.glGetIntegerv(GL_VIEWPORT, viewport);
-        GLint previousReadFramebuffer = 0;
-        g_GLESFuncs.glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &previousReadFramebuffer);
-        g_GLESFuncs.glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
-
-        Vector<Uint8> pixels(static_cast<SizeT>(width) * static_cast<SizeT>(height) * 4);
-        g_GLESFuncs.glReadPixels(0, 0, width, height, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
-
-        SizeT nonBlack = 0;
-        SizeT nonZeroAlpha = 0;
-        for (SizeT offset = 0; offset + 3 < pixels.size(); offset += 4) {
-            if (pixels[offset] != 0 || pixels[offset + 1] != 0 || pixels[offset + 2] != 0) {
-                ++nonBlack;
-            }
-            if (pixels[offset + 3] != 0) {
-                ++nonZeroAlpha;
-            }
-        }
-
-        g_GLESFuncs.glBindFramebuffer(GL_READ_FRAMEBUFFER, static_cast<GLuint>(previousReadFramebuffer));
-        std::fprintf(stderr,
-                     "MOBILEGL_GLES_PRESENT_STATS nonBlack=%zu/%zu alpha=%zu/%zu size=%dx%d viewport=%d,%d,%d,%d\n",
-                     nonBlack, pixels.size() / 4, nonZeroAlpha, pixels.size() / 4, width, height,
-                     viewport[0], viewport[1], viewport[2], viewport[3]);
-    }
-
 #if defined(__linux__) && !defined(__ANDROID__)
     static void* OpenX11Lib() {
         void* x11Lib = dlopen("libX11.so.6", RTLD_LOCAL | RTLD_NOW);

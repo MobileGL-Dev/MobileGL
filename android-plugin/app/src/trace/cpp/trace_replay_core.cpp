@@ -933,8 +933,6 @@ Result RunTraceReplay(const Request& request) {
         unsetenv("MOBILEGL_PRESENT_STATS");
         unsetenv("MOBILEGL_PRESENT_DUMP_PATH");
         unsetenv("MOBILEGL_PRESENT_DUMP_CALL");
-        unsetenv("MOBILEGL_TEXTURE_UPLOAD_STATS");
-        unsetenv("MOBILEGL_DESCRIPTOR_STATS");
     }
 
     setenv("MOBILEGL_LOG_FILE_PATH", mobileGlLogPath.c_str(), 1);

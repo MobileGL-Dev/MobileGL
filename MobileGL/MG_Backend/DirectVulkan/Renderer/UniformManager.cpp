@@ -78,10 +78,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         return uniformUnit >= 0 ? uniformUnit : 0;
     }
 
-    static Bool ShouldDumpDescriptorStats() {
-        return MG_Config::Features.DescriptorStats;
-    }
-
     Bool UniformManager::Initialize(VkDevice device, VkBufferManager* bufferManager,
                                              ProgramFactory* programFactory,
                                              VkDeviceSize minUniformBufferOffsetAlignment, Uint32 frameCount,
@@ -314,21 +310,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             .imageView = resource->sampledView != VK_NULL_HANDLE ? resource->sampledView : resource->fullView,
             .imageLayout = resource->layout,
         };
-        if (ShouldDumpDescriptorStats()) {
-            std::fprintf(stderr,
-                         "MOBILEGL_DESCRIPTOR_STATS program=%u binding=%u name=%s location=%d unit=%d "
-                         "texture=%u target=%d sampler=%p imageView=%p layout=%d\n",
-                         program.GetExternalIndex(),
-                         binding,
-                         programObj.samplerNameByBinding[binding].c_str(),
-                         location,
-                         unit,
-                         texture->GetExternalIndex(),
-                         static_cast<Int>(texture->GetTarget()),
-                         reinterpret_cast<void*>(outImageInfo.sampler),
-                         reinterpret_cast<void*>(outImageInfo.imageView),
-                         static_cast<Int>(outImageInfo.imageLayout));
-        }
         return outImageInfo.sampler != VK_NULL_HANDLE;
     }
 

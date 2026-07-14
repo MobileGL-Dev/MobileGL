@@ -115,12 +115,8 @@ namespace MobileGL::MG_ConfigLoader {
         features.DisableSubgroup = QueryEnvFlag("MOBILEGL_DISABLE_SUBGROUP");
         features.VulkanR11G11B10FFallback = QueryEnvFlag("MOBILEGL_MAGMA_R11G11B10F_FALLBACK");
         features.MagmaFramesInFlight = QueryEnvUint32("MOBILEGL_MAGMA_FRAMESINFLIGHT", 3, 1, 64);
-        features.GlesPresentStats = QueryEnvFlag("MOBILEGL_GLES_PRESENT_STATS");
         features.AvoidAngleLlvmpipeSamplerMipmapMinFilter =
             QueryEnvFlag("MOBILEGL_ANGLE_LLVMPIPE_AVOID_SAMPLER_MIPMAP_MIN_FILTER");
-        features.DescriptorStats = QueryEnvFlag("MOBILEGL_DESCRIPTOR_STATS");
-        features.TextureUploadStats = QueryEnvFlag("MOBILEGL_TEXTURE_UPLOAD_STATS");
-        features.VertexInputStats = QueryEnvFlag("MOBILEGL_VERTEX_INPUT_STATS");
         QueryEnvVariable("MOBILEGL_PRESENT_DUMP_PATH", features.PresentDumpPath, "");
         features.PresentStats = QueryEnvFlag("MOBILEGL_PRESENT_STATS");
         features.TraceSkipAutodestroy = QueryEnvFlag("MOBILEGL_TRACE_SKIP_AUTODESTROY");
