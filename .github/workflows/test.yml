@@ -135,7 +135,7 @@ jobs:
           sudo apt-get install -y libvulkan1 libegl1 libgles2 libgl1-mesa-dri mesa-vulkan-drivers
 
       - name: Download Linux runtime
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v8
         with:
           name: mobilegl-linux-runtime
           path: .
@@ -181,7 +181,7 @@ jobs:
           sudo apt-get install -y libvulkan1 libegl1 libgles2 libgl1-mesa-dri mesa-vulkan-drivers
 
       - name: Download Linux runtime
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v8
         with:
           name: mobilegl-linux-runtime
           path: .
@@ -268,7 +268,7 @@ jobs:
           dpkg -l 'libc++*' 'libegl*' 'libgles*' 'mesa*' 'vulkan*' || true
 
       - name: Download Linux runtime
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v8
         with:
           name: mobilegl-linux-runtime
           path: .
@@ -409,7 +409,7 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Download trace fixture
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v8
         with:
           name: trace-fixture-${{ matrix.case }}
           path: trace-fixture-download
@@ -430,13 +430,13 @@ jobs:
           test -e /usr/lib/x86_64-linux-gnu/libGLESv2.so
 
       - name: Download Linux runtime
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v8
         with:
           name: mobilegl-linux-runtime
           path: .
 
       - name: Download trace replay
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v8
         with:
           name: mobilegl-trace-replay
           path: .
@@ -486,7 +486,7 @@ jobs:
           node-version: '22'
 
       - name: Download retrace results
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v8
         with:
           pattern: retrace-result-*
           path: retrace-artifacts

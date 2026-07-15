@@ -294,7 +294,7 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Download trace fixture
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v8
         with:
           name: MobileGL-trace-fixture-${{ matrix.case.name }}
           path: trace-fixture-download
@@ -330,12 +330,11 @@ jobs:
             /usr/local/lib/android/sdk/system-images/android-35/google_apis/x86_64
           key: ${{ runner.os }}-mobilegl-avd-api35-google_apis-x86_64-pixel_6-v1-${{ hashFiles('android-plugin/run-avd-ci.sh') }}
 
-      - name: Download retrace APKs
-        uses: actions/download-artifact@v5
+      - name: Download retrace APK
+        uses: actions/download-artifact@v8
         with:
-          pattern: MobileGL-retrace-apk-*
+          name: MobileGL-plugin-trace-release-${{ github.sha }}.apk
           path: android-retrace-apks
-          merge-multiple: true
 
       - name: Enable KVM
         run: |
@@ -457,7 +456,7 @@ jobs:
           node-version: '22'
 
       - name: Download Android retrace results
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v8
         with:
           pattern: MobileGL-android-retrace-result-*
           path: retrace-artifacts
