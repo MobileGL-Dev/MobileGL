@@ -1,3 +1,4 @@
+import com.android.build.gradle.internal.api.ApkVariantOutputImpl
 import com.launchers_plugin.renderer.buildscript.RendererConfig
 import com.launchers_plugin.renderer.buildscript.buildEnvs
 import com.launchers_plugin.renderer.buildscript.buildJsonValue
@@ -62,6 +63,9 @@ val mobileGlMonthlyRevision = runGit(
     "--since=${String.format("%d-%02d-01T00:00:00", 2000 + mobileGlVersionMajor, mobileGlVersionMinor)}",
     "HEAD",
 )?.toIntOrNull() ?: 0
+val mobileGlApkSuffix = (findProperty("mobilegl.apkSuffix") ?: System.getenv("MOBILEGL_APK_SUFFIX") ?: mobileGlGitShortHash)
+    .toString()
+    .ifBlank { "nogit" }
 
 val pluginRendererConfig = buildJsonValue {
     renderer(
@@ -185,6 +189,16 @@ android {
         jniLibs {
             useLegacyPackaging = true
             excludes += "**/libSPIRV-Tools-shared.so"
+        }
+    }
+}
+
+android.applicationVariants.configureEach {
+    outputs.configureEach {
+        (this as ApkVariantOutputImpl).outputFileName = when (flavorName) {
+            "plugin" -> "MobileGL-plugin-release-$mobileGlApkSuffix.apk"
+            "trace" -> "MobileGL-plugin-trace-release-$mobileGlApkSuffix.apk"
+            else -> outputFileName
         }
     }
 }
