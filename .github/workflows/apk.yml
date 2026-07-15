@@ -21,7 +21,7 @@ jobs:
 
     steps:
       - name: Checkout repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           submodules: recursive
 
@@ -42,7 +42,7 @@ jobs:
           gradle-version: 8.10.2
 
       - name: Restore ccache
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: .ccache
           key: ${{ runner.os }}-apk-${{ github.job }}-ccache-${{ github.ref_name }}-${{ github.run_id }}
@@ -181,7 +181,7 @@ jobs:
       names: ${{ steps.trace-cases.outputs.names }}
     steps:
       - name: Checkout repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Load trace cases
         id: trace-cases
@@ -200,7 +200,7 @@ jobs:
         case: ${{ fromJSON(needs.trace-cases.outputs.names) }}
     steps:
       - name: Checkout repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Fetch trace fixture
         run: bash .github/scripts/fetch-trace-fixture-lfs.sh '${{ matrix.case }}'
@@ -216,7 +216,7 @@ jobs:
             done
 
       - name: Upload trace fixture
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: MobileGL-trace-fixture-${{ matrix.case }}
           path: trace-fixtures/**
@@ -230,7 +230,7 @@ jobs:
       ANDROID_AVD_HOME: ${{ github.workspace }}/.android/avd
     steps:
       - name: Checkout repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
@@ -242,7 +242,7 @@ jobs:
 
       - name: Restore Android AVD cache
         id: android-avd-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ${{ env.ANDROID_AVD_HOME }}
@@ -292,10 +292,10 @@ jobs:
           swap-size-gb: 16
 
       - name: Checkout repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Download trace fixture
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           name: MobileGL-trace-fixture-${{ matrix.case.name }}
           path: trace-fixture-download
@@ -333,7 +333,7 @@ jobs:
           key: ${{ runner.os }}-mobilegl-avd-api35-google_apis-x86_64-pixel_6-v1-${{ hashFiles('android-plugin/run-avd-ci.sh') }}
 
       - name: Download retrace APKs
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           pattern: MobileGL-retrace-apk-*
           path: android-retrace-apks
@@ -433,7 +433,7 @@ jobs:
 
       - name: Upload Android retrace result
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: MobileGL-android-retrace-result-${{ env.date_today }}-${{ env.short_sha }}-${{ matrix.backend.name }}-${{ matrix.case.name }}
           path: android-retrace-result/**
@@ -447,7 +447,7 @@ jobs:
 
     steps:
       - name: Checkout repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set artifact metadata
         run: |
@@ -460,7 +460,7 @@ jobs:
           node-version: '22'
 
       - name: Download Android retrace results
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           pattern: MobileGL-android-retrace-result-*
           path: retrace-artifacts

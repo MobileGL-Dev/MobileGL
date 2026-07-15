@@ -26,7 +26,7 @@ jobs:
           swap-size-gb: 32
 
       - name: Checkout repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           submodules: recursive
 
@@ -34,7 +34,7 @@ jobs:
         uses: lukka/get-cmake@latest
 
       - name: Restore ccache
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: .ccache
           key: ${{ runner.os }}-test-${{ github.job }}-ccache-${{ github.ref_name }}-${{ github.run_id }}
@@ -112,7 +112,7 @@ jobs:
             "${SHARED_LIBS[@]}"
 
       - name: Upload Linux runtime
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: mobilegl-linux-runtime
           path: ci-artifacts/mobilegl-linux-runtime.tgz
@@ -124,7 +124,7 @@ jobs:
 
     steps:
       - name: Checkout repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Get CMake
         uses: lukka/get-cmake@latest
@@ -135,7 +135,7 @@ jobs:
           sudo apt-get install -y libvulkan1 libegl1 libgles2 libgl1-mesa-dri mesa-vulkan-drivers
 
       - name: Download Linux runtime
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           name: mobilegl-linux-runtime
           path: .
@@ -170,7 +170,7 @@ jobs:
 
     steps:
       - name: Checkout repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Get CMake
         uses: lukka/get-cmake@latest
@@ -181,7 +181,7 @@ jobs:
           sudo apt-get install -y libvulkan1 libegl1 libgles2 libgl1-mesa-dri mesa-vulkan-drivers
 
       - name: Download Linux runtime
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           name: mobilegl-linux-runtime
           path: .
@@ -227,7 +227,7 @@ jobs:
           swap-size-gb: 32
 
       - name: Checkout repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           submodules: recursive
 
@@ -235,7 +235,7 @@ jobs:
         uses: lukka/get-cmake@latest
 
       - name: Restore ccache
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: .ccache
           key: ${{ runner.os }}-test-${{ github.job }}-ccache-${{ github.ref_name }}-${{ github.run_id }}
@@ -268,7 +268,7 @@ jobs:
           dpkg -l 'libc++*' 'libegl*' 'libgles*' 'mesa*' 'vulkan*' || true
 
       - name: Download Linux runtime
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           name: mobilegl-linux-runtime
           path: .
@@ -326,7 +326,7 @@ jobs:
             build-retrace/tools/trace_replay/CTestTestfile.cmake
 
       - name: Upload trace replay
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: mobilegl-trace-replay
           path: ci-artifacts/mobilegl-trace-replay.tgz
@@ -342,7 +342,7 @@ jobs:
       names: ${{ steps.trace-cases.outputs.names }}
     steps:
       - name: Checkout repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Load trace cases
         id: trace-cases
@@ -359,7 +359,7 @@ jobs:
         case: ${{ fromJSON(needs.trace-cases.outputs.names) }}
     steps:
       - name: Checkout repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Fetch trace fixture
         run: bash .github/scripts/fetch-trace-fixture-lfs.sh '${{ matrix.case }}'
@@ -375,7 +375,7 @@ jobs:
             done
 
       - name: Upload trace fixture
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: trace-fixture-${{ matrix.case }}
           path: trace-fixtures/**
@@ -406,10 +406,10 @@ jobs:
           swap-size-gb: 16
 
       - name: Checkout repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Download trace fixture
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           name: trace-fixture-${{ matrix.case }}
           path: trace-fixture-download
@@ -430,13 +430,13 @@ jobs:
           test -e /usr/lib/x86_64-linux-gnu/libGLESv2.so
 
       - name: Download Linux runtime
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           name: mobilegl-linux-runtime
           path: .
 
       - name: Download trace replay
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           name: mobilegl-trace-replay
           path: .
@@ -458,7 +458,7 @@ jobs:
 
       - name: Upload actual image
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: retrace-result-${{ matrix.backend }}-${{ matrix.case }}
           path: |
@@ -474,7 +474,7 @@ jobs:
 
     steps:
       - name: Checkout repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set artifact metadata
         run: |
@@ -487,7 +487,7 @@ jobs:
           node-version: '22'
 
       - name: Download retrace results
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           pattern: retrace-result-*
           path: retrace-artifacts
