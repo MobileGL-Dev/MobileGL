@@ -28,7 +28,6 @@ jobs:
       - name: Set artifact metadata
         run: |
           echo "date_today=$(date +'%Y-%m-%d')" >> "$GITHUB_ENV"
-          echo "short_sha=${GITHUB_SHA::7}" >> "$GITHUB_ENV"
 
       - name: Set up JDK
         uses: actions/setup-java@v5
@@ -74,7 +73,7 @@ jobs:
         run: python update_glslang_sources.py
 
       - name: Build plugin APK
-        run: gradle --no-daemon -p android-plugin :app:assemblePluginRelease -Pmobilegl.apkSuffix="${short_sha}" -Pmobilegl.logLevel=MOBILEGL_LOG_LEVEL_INFO --parallel --max-workers "$(nproc)"
+        run: gradle --no-daemon -p android-plugin :app:assemblePluginRelease -Pmobilegl.apkSuffix="${GITHUB_SHA}" -Pmobilegl.logLevel=MOBILEGL_LOG_LEVEL_INFO --parallel --max-workers "$(nproc)"
         env:
           SIGNING_STORE_PASSWORD: ${{ secrets.SIGNING_STORE_PASSWORD }}
           SIGNING_KEY_ALIAS: ${{ secrets.SIGNING_KEY_ALIAS }}
@@ -116,7 +115,7 @@ jobs:
             66fdc867e552192d553d59095ea2e3cef4829de65c356f1fd826027b1905972e
 
       - name: Build retrace APK
-        run: gradle --no-daemon -p android-plugin :app:assembleTraceRelease -Pmobilegl.apkSuffix="${short_sha}" -Pmobilegl.abis=all -Pmobilegl.debuggableRelease=true -Pmobilegl.logLevel=MOBILEGL_LOG_LEVEL_INFO --parallel --max-workers "$(nproc)"
+        run: gradle --no-daemon -p android-plugin :app:assembleTraceRelease -Pmobilegl.apkSuffix="${GITHUB_SHA}" -Pmobilegl.abis=all -Pmobilegl.debuggableRelease=true -Pmobilegl.logLevel=MOBILEGL_LOG_LEVEL_INFO --parallel --max-workers "$(nproc)"
         env:
           SIGNING_STORE_PASSWORD: ${{ secrets.SIGNING_STORE_PASSWORD }}
           SIGNING_KEY_ALIAS: ${{ secrets.SIGNING_KEY_ALIAS }}
@@ -129,8 +128,8 @@ jobs:
       - name: Verify APK metadata and packaging
         run: |
           AAPT2="$(find "$ANDROID_HOME/build-tools" -name aapt2 -type f | sort -V | tail -n 1)"
-          plugin_apk="android-plugin/app/build/outputs/apk/plugin/release/MobileGL-plugin-release-${short_sha}.apk"
-          trace_apk="android-plugin/app/build/outputs/apk/trace/release/MobileGL-plugin-trace-release-${short_sha}.apk"
+          plugin_apk="android-plugin/app/build/outputs/apk/plugin/release/MobileGL-plugin-release-${GITHUB_SHA}.apk"
+          trace_apk="android-plugin/app/build/outputs/apk/trace/release/MobileGL-plugin-trace-release-${GITHUB_SHA}.apk"
           test -f "${plugin_apk}"
           test -f "${trace_apk}"
           bash .github/scripts/validate-plugin-apks.sh "$AAPT2" "$plugin_apk" "$trace_apk"
@@ -139,8 +138,8 @@ jobs:
         run: |
           APKSIGNER="$(find "$ANDROID_HOME/build-tools" -name apksigner -type f | sort -V | tail -n 1)"
           mapfile -t APKS < <(printf '%s\n' \
-            "android-plugin/app/build/outputs/apk/plugin/release/MobileGL-plugin-release-${short_sha}.apk" \
-            "android-plugin/app/build/outputs/apk/trace/release/MobileGL-plugin-trace-release-${short_sha}.apk")
+            "android-plugin/app/build/outputs/apk/plugin/release/MobileGL-plugin-release-${GITHUB_SHA}.apk" \
+            "android-plugin/app/build/outputs/apk/trace/release/MobileGL-plugin-trace-release-${GITHUB_SHA}.apk")
           for APK in "${APKS[@]}"; do
             if [[ ! -f "$APK" ]]; then
               echo "::error::Expected release APK was not produced: $APK"
@@ -159,16 +158,16 @@ jobs:
       - name: Upload plugin APK
         uses: actions/upload-artifact@v7
         with:
-          name: MobileGL-plugin-${{ env.date_today }}-${{ env.short_sha }}
-          path: android-plugin/app/build/outputs/apk/plugin/release/MobileGL-plugin-release-${{ env.short_sha }}.apk
+          name: MobileGL-plugin-${{ env.date_today }}-${{ github.sha }}
+          path: android-plugin/app/build/outputs/apk/plugin/release/MobileGL-plugin-release-${{ github.sha }}.apk
           archive: false
           if-no-files-found: error
 
       - name: Upload retrace APK
         uses: actions/upload-artifact@v7
         with:
-          name: MobileGL-retrace-apk-${{ env.date_today }}-${{ env.short_sha }}
-          path: android-plugin/app/build/outputs/apk/trace/release/MobileGL-plugin-trace-release-${{ env.short_sha }}.apk
+          name: MobileGL-retrace-apk-${{ env.date_today }}-${{ github.sha }}
+          path: android-plugin/app/build/outputs/apk/trace/release/MobileGL-plugin-trace-release-${{ github.sha }}.apk
           archive: false
           if-no-files-found: error
 
@@ -308,7 +307,6 @@ jobs:
       - name: Set artifact metadata
         run: |
           echo "date_today=$(date +'%Y-%m-%d')" >> "$GITHUB_ENV"
-          echo "short_sha=${GITHUB_SHA::7}" >> "$GITHUB_ENV"
           echo "EMULATOR_LOG=${RUNNER_TEMP}/mobilegl-emulator.log" >> "$GITHUB_ENV"
           echo "EMULATOR_PID_FILE=${RUNNER_TEMP}/mobilegl-emulator.pid" >> "$GITHUB_ENV"
 
@@ -370,7 +368,7 @@ jobs:
           MOBILEGL_TRACE_ANGLE_VARIANT: ${{ matrix.case.name == 'minecraft-1.21.4-fabric-iris-bliss-in-world' && '90a62123d794' || 'ec889e6ea831' }}
           MOBILEGL_MAGMA_R11G11B10F_FALLBACK: ${{ matrix.backend.name == 'DirectVulkan' && '1' || '0' }}
         run: |
-          apk_file="android-retrace-apks/MobileGL-plugin-trace-release-${GITHUB_SHA::7}.apk"
+          apk_file="android-retrace-apks/MobileGL-plugin-trace-release-${GITHUB_SHA}.apk"
           test -f "${apk_file}"
           extra_retrace_args=()
           # Bliss needs the newer signed ANGLE variant plus sampler mipmap
@@ -435,7 +433,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: MobileGL-android-retrace-result-${{ env.date_today }}-${{ env.short_sha }}-${{ matrix.backend.name }}-${{ matrix.case.name }}
+          name: MobileGL-android-retrace-result-${{ env.date_today }}-${{ github.sha }}-${{ matrix.backend.name }}-${{ matrix.case.name }}
           path: android-retrace-result/**
           if-no-files-found: warn
 
@@ -452,7 +450,6 @@ jobs:
       - name: Set artifact metadata
         run: |
           echo "date_today=$(date +'%Y-%m-%d')" >> "$GITHUB_ENV"
-          echo "short_sha=${GITHUB_SHA::7}" >> "$GITHUB_ENV"
 
       - name: Set up Node.js
         uses: actions/setup-node@v7
