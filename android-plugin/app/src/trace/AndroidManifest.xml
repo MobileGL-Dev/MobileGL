@@ -1,7 +1,54 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
     <application>
+        <activity
+            android:name=".PluginActivity"
+            tools:node="remove" />
+        <activity
+            android:name=".PostActivity"
+            tools:node="remove" />
+        <meta-data
+            android:name="fclPlugin"
+            tools:node="remove" />
+        <meta-data
+            android:name="fclPlugin_V2"
+            tools:node="remove" />
+        <meta-data
+            android:name="mobilegl_backend_type_title"
+            tools:node="remove" />
+        <meta-data
+            android:name="mobilegl_disable_timerquery_title"
+            tools:node="remove" />
+        <meta-data
+            android:name="mobilegl_disable_subgroup_title"
+            tools:node="remove" />
+        <meta-data
+            android:name="mobilegl_magma_r11g11b10f_fallback_title"
+            tools:node="remove" />
+        <meta-data
+            android:name="mobilegl_magma_frames_inflight_title"
+            tools:node="remove" />
+        <meta-data
+            android:name="mobilegl_avoid_sampler_mipmap_min_filter_title"
+            tools:node="remove" />
+        <meta-data
+            android:name="mobilegl_use_angle_title"
+            tools:node="remove" />
+        <meta-data
+            android:name="des"
+            tools:node="remove" />
+        <meta-data
+            android:name="renderer"
+            tools:node="remove" />
+        <meta-data
+            android:name="boatEnv"
+            tools:node="remove" />
+        <meta-data
+            android:name="pojavEnv"
+            tools:node="remove" />
+
         <activity
             android:name=".trace.TraceReplayActivity"
             android:exported="true"

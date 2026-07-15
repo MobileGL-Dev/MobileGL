@@ -73,8 +73,8 @@ jobs:
         working-directory: 3rdparty/glslang
         run: python update_glslang_sources.py
 
-      - name: Build plugin APKs
-        run: gradle --no-daemon -p android-plugin :app:assembleEsprytPluginRelease :app:assembleMagmaPluginRelease -Pmobilegl.logLevel=MOBILEGL_LOG_LEVEL_INFO --parallel --max-workers "$(nproc)"
+      - name: Build plugin APK
+        run: gradle --no-daemon -p android-plugin :app:assemblePluginRelease -Pmobilegl.logLevel=MOBILEGL_LOG_LEVEL_INFO --parallel --max-workers "$(nproc)"
         env:
           SIGNING_STORE_PASSWORD: ${{ secrets.SIGNING_STORE_PASSWORD }}
           SIGNING_KEY_ALIAS: ${{ secrets.SIGNING_KEY_ALIAS }}
@@ -115,8 +115,8 @@ jobs:
             d0f4298ccc770cc801fc52e21733521646161e8a4adb3bd0052d9a1b57ee0ca8 \
             66fdc867e552192d553d59095ea2e3cef4829de65c356f1fd826027b1905972e
 
-      - name: Build retrace APKs
-        run: gradle --no-daemon -p android-plugin :app:assembleEsprytTraceRelease :app:assembleMagmaTraceRelease -Pmobilegl.abis=all -Pmobilegl.debuggableRelease=true -Pmobilegl.logLevel=MOBILEGL_LOG_LEVEL_INFO --parallel --max-workers "$(nproc)"
+      - name: Build retrace APK
+        run: gradle --no-daemon -p android-plugin :app:assembleTraceRelease -Pmobilegl.abis=all -Pmobilegl.debuggableRelease=true -Pmobilegl.logLevel=MOBILEGL_LOG_LEVEL_INFO --parallel --max-workers "$(nproc)"
         env:
           SIGNING_STORE_PASSWORD: ${{ secrets.SIGNING_STORE_PASSWORD }}
           SIGNING_KEY_ALIAS: ${{ secrets.SIGNING_KEY_ALIAS }}
@@ -125,6 +125,15 @@ jobs:
       - name: Show ccache stats
         if: always()
         run: ccache --show-stats
+
+      - name: Verify APK metadata and packaging
+        run: |
+          AAPT2="$(find "$ANDROID_HOME/build-tools" -name aapt2 -type f | sort -V | tail -n 1)"
+          plugin_apk="$(find android-plugin/app/build/outputs/apk/plugin/release -name '*.apk' ! -name '*-debug-signed.apk' -print -quit)"
+          trace_apk="$(find android-plugin/app/build/outputs/apk/trace/release -name '*.apk' ! -name '*-debug-signed.apk' -print -quit)"
+          test -n "${plugin_apk}"
+          test -n "${trace_apk}"
+          bash .github/scripts/validate-plugin-apks.sh "$AAPT2" "$plugin_apk" "$trace_apk"
 
       - name: Verify signed APKs
         run: |
@@ -148,14 +157,14 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: MobileGL-plugin-${{ env.date_today }}-${{ env.short_sha }}
-          path: android-plugin/app/build/outputs/apk/*Plugin/release/*.apk
+          path: android-plugin/app/build/outputs/apk/plugin/release/*.apk
           if-no-files-found: error
 
       - name: Upload retrace APK
         uses: actions/upload-artifact@v4
         with:
           name: MobileGL-retrace-apk-${{ env.date_today }}-${{ env.short_sha }}
-          path: android-plugin/app/build/outputs/apk/*Trace/release/*.apk
+          path: android-plugin/app/build/outputs/apk/trace/release/*.apk
           if-no-files-found: error
 
   trace-cases:
@@ -267,14 +276,8 @@ jobs:
       matrix:
         backend:
           - name: DirectGLES
-            id: espryt
-            apk: MobileGL-EsprytTrace-release.apk
-            package: top.mobilegl.plugin.espryt.trace
             gpu: software
           - name: DirectVulkan
-            id: magma
-            apk: MobileGL-MagmaTrace-release.apk
-            package: top.mobilegl.plugin.magma.trace
             gpu: lavapipe
         case: ${{ fromJSON(needs.trace-cases.outputs.android) }}
     steps:
@@ -362,7 +365,7 @@ jobs:
           MOBILEGL_TRACE_ANGLE_VARIANT: ${{ matrix.case.name == 'minecraft-1.21.4-fabric-iris-bliss-in-world' && '90a62123d794' || 'ec889e6ea831' }}
           MOBILEGL_MAGMA_R11G11B10F_FALLBACK: ${{ matrix.backend.name == 'DirectVulkan' && '1' || '0' }}
         run: |
-          apk_file="$(find android-retrace-apks -name '${{ matrix.backend.apk }}' -print -quit)"
+          apk_file="$(find android-retrace-apks -name 'MobileGL-Trace-release.apk' -print -quit)"
           extra_retrace_args=()
           # Bliss needs the newer signed ANGLE variant plus sampler mipmap
           # min-filter downgrading on ANGLE llvmpipe.
@@ -371,7 +374,7 @@ jobs:
           fi
           timeout "$(( ${{ matrix.case.timeout_seconds }} + 300 ))" sh android-plugin/trace-replay-ci.sh \
             --apk-file "${apk_file}" \
-            --package "${{ matrix.backend.package }}" \
+            --package top.mobilegl.plugin.trace \
             --backend "${{ matrix.backend.name }}" \
             --result-root android-retrace-result \
             --fixture-root android-retrace-fixture \

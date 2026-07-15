@@ -14,7 +14,6 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = 'MobileGLPlugin'
-include ':app'
-include ':MobileGL'
-project(':MobileGL').projectDir = file('..')
+rootProject.name = "MobileGLPlugin"
+include(":app", ":MobileGL")
+project(":MobileGL").projectDir = file("..")

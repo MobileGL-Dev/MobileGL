@@ -23,6 +23,31 @@
             android:theme="@style/Theme.MobileGLPlugin.NoDisplay" />
 
         <meta-data
+            android:name="fclPlugin_V2"
+            android:resource="@string/config" />
+        <meta-data
+            android:name="mobilegl_backend_type_title"
+            android:resource="@string/mobilegl_backend_type_title" />
+        <meta-data
+            android:name="mobilegl_disable_timerquery_title"
+            android:resource="@string/mobilegl_disable_timerquery_title" />
+        <meta-data
+            android:name="mobilegl_disable_subgroup_title"
+            android:resource="@string/mobilegl_disable_subgroup_title" />
+        <meta-data
+            android:name="mobilegl_magma_r11g11b10f_fallback_title"
+            android:resource="@string/mobilegl_magma_r11g11b10f_fallback_title" />
+        <meta-data
+            android:name="mobilegl_magma_frames_inflight_title"
+            android:resource="@string/mobilegl_magma_frames_inflight_title" />
+        <meta-data
+            android:name="mobilegl_avoid_sampler_mipmap_min_filter_title"
+            android:resource="@string/mobilegl_avoid_sampler_mipmap_min_filter_title" />
+        <meta-data
+            android:name="mobilegl_use_angle_title"
+            android:resource="@string/mobilegl_use_angle_title" />
+
+        <meta-data
             android:name="fclPlugin"
             android:value="true" />
         <meta-data
