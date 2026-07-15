@@ -157,18 +157,20 @@ jobs:
           done
 
       - name: Upload plugin APK
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: MobileGL-plugin-${{ env.date_today }}-${{ env.short_sha }}
           path: android-plugin/app/build/outputs/apk/plugin/release/MobileGL-plugin-release-${{ env.short_sha }}.apk
-          compression-level: 0
+          archive: false
+          if-no-files-found: error
 
       - name: Upload retrace APK
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: MobileGL-retrace-apk-${{ env.date_today }}-${{ env.short_sha }}
           path: android-plugin/app/build/outputs/apk/trace/release/MobileGL-plugin-trace-release-${{ env.short_sha }}.apk
-          compression-level: 0
+          archive: false
+          if-no-files-found: error
 
   trace-cases:
     name: trace case matrix
