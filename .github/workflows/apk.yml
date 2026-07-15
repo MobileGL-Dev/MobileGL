@@ -53,7 +53,7 @@ jobs:
       - name: Install ccache
         run: |
           sudo apt-get update
-          sudo apt-get install -y ccache patchelf
+          sudo apt-get install -y ccache
           ccache --version
 
       - name: Setup Android SDK
@@ -101,8 +101,6 @@ jobs:
             for library in libEGL_angle libGLESv2_angle; do
               filename="${library}_${variant}.so"
               cp "${source_dir}/${library}.so" "${angle_dir}/${filename}"
-              patchelf --set-soname "${filename}" "${angle_dir}/${filename}"
-              test "$(patchelf --print-soname "${angle_dir}/${filename}")" = "${filename}"
             done
           }
 
