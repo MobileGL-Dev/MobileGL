@@ -489,14 +489,41 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          mapfile -t artifacts < <(
+          declare -A failed_cases=()
+          while IFS= read -r job_name; do
+            case_name="${job_name#retrace (*, }"
+            case_name="${case_name%)}"
+            failed_cases["${case_name}"]=1
+          done < <(
+            gh api --paginate "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/jobs?per_page=100" \
+              --jq '.jobs[] | select(.name | startswith("retrace (")) | select(.conclusion == "failure" or .conclusion == "cancelled" or .conclusion == "timed_out" or .conclusion == "action_required") | .name'
+          )
+
+          if ((${#failed_cases[@]})); then
+            echo "Retaining fixtures for failed retrace case(s):"
+            printf '  %s\n' "${!failed_cases[@]}"
+          else
+            echo "All retrace jobs succeeded; no fixtures need to be retained."
+          fi
+
+          deleted=0
+          retained=0
+          while IFS=$'\t' read -r artifact_id artifact_name; do
+            if [[ "${artifact_name}" == MobileGL-trace-fixture-* ]]; then
+              case_name="${artifact_name#MobileGL-trace-fixture-}"
+              if [[ -v "failed_cases[${case_name}]" ]]; then
+                echo "Retaining ${artifact_name} (${artifact_id}) for failed retrace."
+                ((retained += 1))
+                continue
+              fi
+            fi
+
+            echo "Deleting ${artifact_name} (${artifact_id})"
+            gh api --method DELETE "repos/${GITHUB_REPOSITORY}/actions/artifacts/${artifact_id}"
+            ((deleted += 1))
+          done < <(
             gh api --paginate "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/artifacts?per_page=100" \
               --jq '.artifacts[] | select(.name | startswith("MobileGL-trace-fixture-") or startswith("MobileGL-android-retrace-result-") or startswith("trace-fixture-") or startswith("retrace-result-")) | [.id, .name] | @tsv'
           )
 
-          echo "Found ${#artifacts[@]} intermediate Android artifact(s)."
-          for artifact in "${artifacts[@]}"; do
-            IFS=$'\t' read -r artifact_id artifact_name <<<"${artifact}"
-            echo "Deleting ${artifact_name} (${artifact_id})"
-            gh api --method DELETE "repos/${GITHUB_REPOSITORY}/actions/artifacts/${artifact_id}"
-          done
+          echo "Deleted ${deleted} intermediate Android artifact(s); retained ${retained} failed-retrace fixture(s)."
