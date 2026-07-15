@@ -489,8 +489,14 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh api --paginate "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/artifacts?per_page=100" \
-            --jq '.artifacts[] | select(.name | startswith("MobileGL-trace-fixture-") or startswith("MobileGL-android-retrace-result-")) | .id' |
-            while IFS= read -r artifact_id; do
-              gh api --method DELETE "repos/${GITHUB_REPOSITORY}/actions/artifacts/${artifact_id}"
-            done
+          mapfile -t artifacts < <(
+            gh api --paginate "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/artifacts?per_page=100" \
+              --jq '.artifacts[] | select(.name | startswith("MobileGL-trace-fixture-") or startswith("MobileGL-android-retrace-result-") or startswith("trace-fixture-") or startswith("retrace-result-")) | [.id, .name] | @tsv'
+          )
+
+          echo "Found ${#artifacts[@]} intermediate Android artifact(s)."
+          for artifact in "${artifacts[@]}"; do
+            IFS=$'\t' read -r artifact_id artifact_name <<<"${artifact}"
+            echo "Deleting ${artifact_name} (${artifact_id})"
+            gh api --method DELETE "repos/${GITHUB_REPOSITORY}/actions/artifacts/${artifact_id}"
+          done
