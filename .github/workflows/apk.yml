@@ -365,7 +365,8 @@ jobs:
           MOBILEGL_TRACE_ANGLE_VARIANT: ${{ matrix.case.name == 'minecraft-1.21.4-fabric-iris-bliss-in-world' && '90a62123d794' || 'ec889e6ea831' }}
           MOBILEGL_MAGMA_R11G11B10F_FALLBACK: ${{ matrix.backend.name == 'DirectVulkan' && '1' || '0' }}
         run: |
-          apk_file="$(find android-retrace-apks -name 'MobileGL-Trace-release.apk' -print -quit)"
+          apk_file="$(find android-retrace-apks -name '*.apk' ! -name '*-debug-signed.apk' -print -quit)"
+          test -n "${apk_file}"
           extra_retrace_args=()
           # Bliss needs the newer signed ANGLE variant plus sampler mipmap
           # min-filter downgrading on ANGLE llvmpipe.
