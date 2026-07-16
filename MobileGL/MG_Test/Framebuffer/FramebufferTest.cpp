@@ -32,6 +32,8 @@ namespace {
     Int g_clearNamedFramebufferfvCallCount = 0;
     Int g_clearNamedFramebufferfiCallCount = 0;
     Int g_readPixelsCallCount = 0;
+    GLenum g_lastReadPixelsFormat = GL_NONE;
+    GLenum g_lastReadPixelsType = GL_NONE;
 
     void RecordBlitNamedFramebuffer(const SharedPtr<MG_State::GLState::FramebufferObject>& readFramebuffer,
                                     const SharedPtr<MG_State::GLState::FramebufferObject>& drawFramebuffer,
@@ -66,8 +68,10 @@ namespace {
         ++g_clearNamedFramebufferfiCallCount;
     }
 
-    void RecordReadPixels(GLint, GLint, GLsizei, GLsizei, GLenum, GLenum, void*) {
+    void RecordReadPixels(GLint, GLint, GLsizei, GLsizei, GLenum format, GLenum type, void*) {
         ++g_readPixelsCallCount;
+        g_lastReadPixelsFormat = format;
+        g_lastReadPixelsType = type;
     }
 } // namespace
 
@@ -97,6 +101,8 @@ protected:
         g_clearNamedFramebufferfvCallCount = 0;
         g_clearNamedFramebufferfiCallCount = 0;
         g_readPixelsCallCount = 0;
+        g_lastReadPixelsFormat = GL_NONE;
+        g_lastReadPixelsType = GL_NONE;
         MG_Backend::gBackendFunctionsTable.GL.BlitNamedFramebuffer = nullptr;
         MG_Backend::gBackendFunctionsTable.GL.ClearNamedFramebufferfv = nullptr;
         MG_Backend::gBackendFunctionsTable.GL.ClearNamedFramebufferfi = nullptr;
@@ -253,6 +259,43 @@ TEST_F(FramebufferTest, ReadPixelsRejectsMismatchedPackedTypeFormatPairs) {
     MG_Impl::GLImpl::ReadPixels(0, 0, 4, 4, GL_RGBA, GL_UNSIGNED_BYTE, pixelStorage);
     EXPECT_EQ(g_readPixelsCallCount, 1);
     EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+}
+
+TEST_F(FramebufferTest, ReadPixelsForwardsSingleChannelDesktopClientFormats) {
+    GLuint framebuffer = 0;
+    GLuint texture = 0;
+    MG_Impl::GLImpl::CreateFramebuffers(1, &framebuffer);
+    MG_Impl::GLImpl::CreateTextures(GL_TEXTURE_2D, 1, &texture);
+    MG_Impl::GLImpl::TextureStorage2D(texture, 1, GL_RGBA8, 4, 4);
+    MG_Impl::GLImpl::NamedFramebufferTexture(framebuffer, GL_COLOR_ATTACHMENT0, texture, 0);
+    MG_Impl::GLImpl::BindFramebuffer(GL_READ_FRAMEBUFFER, framebuffer);
+
+    MG_Backend::gBackendFunctionsTable.GL.ReadPixels = RecordReadPixels;
+    Uint8 pixelStorage[4 * 4 * 4] = {};
+
+    // Desktop GL treats GL_GREEN/GL_BLUE/GL_ALPHA as valid ReadPixels client formats (GL CTS
+    // packed_pixels rgba8_format_green failed with GL_INVALID_ENUM before). The state layer must
+    // validate them and forward the raw enum to the backend, which extracts the source channel
+    // from a wide RGBA read.
+    const GLenum singleChannelFormats[] = {GL_GREEN, GL_BLUE, GL_ALPHA};
+    Int expectedCallCount = 0;
+    for (const GLenum format : singleChannelFormats) {
+        MG_Impl::GLImpl::ReadPixels(0, 0, 4, 4, format, GL_UNSIGNED_BYTE, pixelStorage);
+        EXPECT_EQ(g_readPixelsCallCount, ++expectedCallCount);
+        EXPECT_EQ(g_lastReadPixelsFormat, format);
+        EXPECT_EQ(g_lastReadPixelsType, static_cast<GLenum>(GL_UNSIGNED_BYTE));
+        EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+    }
+
+    // Packed-type pairing still applies: packed RGB/RGBA types never pair with single-channel formats.
+    MG_Impl::GLImpl::ReadPixels(0, 0, 4, 4, GL_GREEN, GL_UNSIGNED_SHORT_5_6_5, pixelStorage);
+    EXPECT_EQ(g_readPixelsCallCount, expectedCallCount);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_INVALID_OPERATION);
+
+    // Integer client formats reject floating-point types.
+    MG_Impl::GLImpl::ReadPixels(0, 0, 4, 4, GL_GREEN_INTEGER, GL_FLOAT, pixelStorage);
+    EXPECT_EQ(g_readPixelsCallCount, expectedCallCount);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_INVALID_OPERATION);
 }
 
 TEST_F(FramebufferTest, NamedRenderbufferStorageAndFramebufferAttachDoNotChangeBindings) {

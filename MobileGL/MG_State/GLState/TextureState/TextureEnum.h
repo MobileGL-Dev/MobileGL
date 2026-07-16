@@ -76,6 +76,14 @@ namespace MobileGL {
         BGRInteger,
         RGBAInteger,
         BGRAInteger,
+        // Desktop-GL single-channel client formats (table 3.3): the data holds one component that
+        // feeds the G, B or A channel; the remaining channels default to 0 (color) / 1 (alpha).
+        Green,
+        Blue,
+        Alpha,
+        GreenInteger,
+        BlueInteger,
+        AlphaInteger,
         StencilIndex,
         DepthComponent,
         DepthStencil,

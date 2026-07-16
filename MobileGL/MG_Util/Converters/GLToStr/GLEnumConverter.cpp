@@ -535,6 +535,7 @@ namespace MobileGL {
                 CASE(GL_RED_INTEGER)
                 CASE(GL_GREEN_INTEGER)
                 CASE(GL_BLUE_INTEGER)
+                CASE(GL_ALPHA_INTEGER)
                 CASE(GL_RGB_INTEGER)
                 CASE(GL_RGBA_INTEGER)
                 CASE(GL_BGR_INTEGER)

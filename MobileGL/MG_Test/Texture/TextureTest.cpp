@@ -329,6 +329,100 @@ TEST_F(TextureTest, TexImage2DAcceptsSpecCompliantFormatCombinations) {
     EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
 }
 
+// Desktop GL table 3.3 lists GREEN and BLUE as TexImage client formats (GL CTS packed_pixels
+// rgba8_format_green/blue upload with them and verify the readback): the single input component
+// feeds the named channel, the other color channels default to 0 and alpha to 1.
+TEST_F(TextureTest, BoundTexImage2DUnpacksGreenAndBlueIntoRgba8Channels) {
+    GLuint greenTexture = 0;
+    MG_Impl::GLImpl::GenTextures(1, &greenTexture);
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, greenTexture);
+
+    const Uint8 pixels[] = {
+        10, 20,
+        30, 40,
+    };
+    MG_Impl::GLImpl::PixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    MG_Impl::GLImpl::TexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 2, 2, 0, GL_GREEN, GL_UNSIGNED_BYTE, pixels);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    const auto* storedGreen = GetBoundTexture2DLevelBytes(greenTexture);
+    const Uint8 expectedGreen[] = {
+        0, 10, 0, 255,
+        0, 20, 0, 255,
+        0, 30, 0, 255,
+        0, 40, 0, 255,
+    };
+    for (SizeT i = 0; i < sizeof(expectedGreen); ++i) {
+        EXPECT_EQ(storedGreen[i], expectedGreen[i]) << "byte " << i;
+    }
+
+    GLuint blueTexture = 0;
+    MG_Impl::GLImpl::GenTextures(1, &blueTexture);
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, blueTexture);
+    MG_Impl::GLImpl::TexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 2, 2, 0, GL_BLUE, GL_UNSIGNED_BYTE, pixels);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    const auto* storedBlue = GetBoundTexture2DLevelBytes(blueTexture);
+    const Uint8 expectedBlue[] = {
+        0, 0, 10, 255,
+        0, 0, 20, 255,
+        0, 0, 30, 255,
+        0, 0, 40, 255,
+    };
+    for (SizeT i = 0; i < sizeof(expectedBlue); ++i) {
+        EXPECT_EQ(storedBlue[i], expectedBlue[i]) << "byte " << i;
+    }
+    MG_Impl::GLImpl::PixelStorei(GL_UNPACK_ALIGNMENT, 4);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+}
+
+TEST_F(TextureTest, BoundTexImage2DUnpacksGreenIntegerIntoRgba8UiChannels) {
+    GLuint texture = 0;
+    MG_Impl::GLImpl::GenTextures(1, &texture);
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, texture);
+
+    const Uint8 pixels[] = {
+        10, 20,
+        30, 40,
+    };
+    MG_Impl::GLImpl::PixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    MG_Impl::GLImpl::TexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8UI, 2, 2, 0, GL_GREEN_INTEGER, GL_UNSIGNED_BYTE, pixels);
+    MG_Impl::GLImpl::PixelStorei(GL_UNPACK_ALIGNMENT, 4);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    const auto* stored = GetBoundTexture2DLevelBytes(texture);
+    // Missing integer channels default to R=0, B=0, A=1.
+    const Uint8 expected[] = {
+        0, 10, 0, 1,
+        0, 20, 0, 1,
+        0, 30, 0, 1,
+        0, 40, 0, 1,
+    };
+    for (SizeT i = 0; i < sizeof(expected); ++i) {
+        EXPECT_EQ(stored[i], expected[i]) << "byte " << i;
+    }
+}
+
+TEST_F(TextureTest, TexImage2DSingleChannelFormatsKeepIntegerNessRules) {
+    GLuint texture = 0;
+    MG_Impl::GLImpl::GenTextures(1, &texture);
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, texture);
+
+    // Integer-ness of format and internal format must match (both directions).
+    MG_Impl::GLImpl::TexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 2, 2, 0, GL_GREEN_INTEGER, GL_UNSIGNED_BYTE, nullptr);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_INVALID_OPERATION);
+    MG_Impl::GLImpl::TexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8UI, 2, 2, 0, GL_BLUE, GL_UNSIGNED_BYTE, nullptr);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_INVALID_OPERATION);
+
+    // Integer formats reject floating-point types.
+    MG_Impl::GLImpl::TexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8UI, 2, 2, 0, GL_BLUE_INTEGER, GL_FLOAT, nullptr);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_INVALID_OPERATION);
+
+    // Packed types never pair with single-channel formats.
+    MG_Impl::GLImpl::TexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 2, 2, 0, GL_GREEN, GL_UNSIGNED_SHORT_5_6_5, nullptr);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_INVALID_OPERATION);
+}
+
 TEST_F(TextureTest, TexImage3DRejectsDepthFormatsForThreeDimensionalTarget) {
     GLuint texture = 0;
     MG_Impl::GLImpl::GenTextures(1, &texture);

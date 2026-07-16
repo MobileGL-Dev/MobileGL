@@ -3284,6 +3284,16 @@ namespace MobileGL::MG_Backend::DirectGLES {
         switch (format) {
         case GL_RED:          outMapping = {{0, 0, 0, 0}, 1, false}; return true;
         case GL_RED_INTEGER:  outMapping = {{0, 0, 0, 0}, 1, true};  return true;
+        // Desktop-GL single-channel client formats (GL CTS packed_pixels rgba8_format_green/blue):
+        // the destination holds one component sourced from the named channel of the wide RGBA read.
+        // GL_ALPHA is mapped here from the raw enum because the state layer folds it into Red for the
+        // legacy alpha-texture upload hack.
+        case GL_GREEN:         outMapping = {{1, 0, 0, 0}, 1, false}; return true;
+        case GL_GREEN_INTEGER: outMapping = {{1, 0, 0, 0}, 1, true};  return true;
+        case GL_BLUE:          outMapping = {{2, 0, 0, 0}, 1, false}; return true;
+        case GL_BLUE_INTEGER:  outMapping = {{2, 0, 0, 0}, 1, true};  return true;
+        case GL_ALPHA:         outMapping = {{3, 0, 0, 0}, 1, false}; return true;
+        case GL_ALPHA_INTEGER: outMapping = {{3, 0, 0, 0}, 1, true};  return true;
         case GL_RG:           outMapping = {{0, 1, 0, 0}, 2, false}; return true;
         case GL_RG_INTEGER:   outMapping = {{0, 1, 0, 0}, 2, true};  return true;
         case GL_RGB:          outMapping = {{0, 1, 2, 0}, 3, false}; return true;

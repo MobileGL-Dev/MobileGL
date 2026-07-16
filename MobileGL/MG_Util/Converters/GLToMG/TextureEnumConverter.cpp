@@ -58,9 +58,17 @@ namespace MobileGL {
 
         TextureInputFormat ConvertGLEnumToTextureInputFormat(GLenum format) {
             switch (format) {
+            // Legacy carve-out: GL_ALPHA stays mapped to Red so alpha-texture uploads keep landing in
+            // the R channel of the R8-backed storage (TexImage*_State pairs this with a 0,0,0,R
+            // swizzle). Readback of GL_ALPHA is corrected at the backend, which maps the raw enum to
+            // source channel 3 (DirectGLES GetReadbackChannelMapping).
             case GL_ALPHA:
             case GL_RED:
                 return TextureInputFormat::Red;
+            case GL_GREEN:
+                return TextureInputFormat::Green;
+            case GL_BLUE:
+                return TextureInputFormat::Blue;
             case GL_RG:
                 return TextureInputFormat::RG;
             case GL_RGB:
@@ -73,6 +81,12 @@ namespace MobileGL {
                 return TextureInputFormat::BGRA;
             case GL_RED_INTEGER:
                 return TextureInputFormat::RInteger;
+            case GL_GREEN_INTEGER:
+                return TextureInputFormat::GreenInteger;
+            case GL_BLUE_INTEGER:
+                return TextureInputFormat::BlueInteger;
+            case GL_ALPHA_INTEGER:
+                return TextureInputFormat::AlphaInteger;
             case GL_RG_INTEGER:
                 return TextureInputFormat::RGInteger;
             case GL_RGB_INTEGER:
