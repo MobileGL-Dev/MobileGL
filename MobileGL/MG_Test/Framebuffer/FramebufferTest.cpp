@@ -11,6 +11,7 @@
 #include "Includes.h"
 #include "Init.h"
 #include <MG_Backend/BackendObjects.h>
+#include <MG_Backend/DirectGLES/Utils.h>
 #include <MG_Impl/GLImpl/Buffer/GL_Buffer.h>
 #include <MG_Impl/GLImpl/Framebuffer/GL_Framebuffer.h>
 #include <MG_Impl/GLImpl/Getter/GL_Getter.h>
@@ -495,4 +496,181 @@ TEST_F(FramebufferTest, BlitNamedFramebufferAllowsDefaultFramebufferZero) {
     EXPECT_EQ(MG_State::pGLContext->GetFramebufferBindingSlot(FramebufferTarget::Draw).GetBoundObject(), defaultDraw);
     EXPECT_EQ(MG_State::pGLContext->GetFramebufferBindingSlot(FramebufferTarget::Read).GetBoundObject(), defaultRead);
     EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+}
+
+// ---- Packed-type readback encoding ------------------------------------------------------------------
+// Oracle-independent guard for the DirectGLES client-format readback conversion: feeds known wide RGBA
+// rows through ReadbackImpl::ConvertWideReadbackRow and asserts the exact packed words. Field positions
+// were hand-computed from GL 3.3 table 3.6 and match the GL CTS packed_pixels comparison functions
+// (glcPackedPixelsTests.cpp pack_UNSIGNED_*): non-REV types pack the first format component from the
+// most significant bit, *_REV types from the least significant bit.
+
+namespace {
+    namespace ReadbackImpl = MG_Backend::DirectGLES::ReadbackImpl;
+
+    // Converts a row of wide pixels (4 components of wideType each) into `format`/`type` words.
+    template <typename WordT, typename SrcT>
+    Vector<WordT> ConvertWideRowToPackedWords(const Vector<SrcT>& wide, GLenum wideType, GLenum format,
+                                              GLenum type) {
+        ReadbackImpl::ReadbackChannelMapping mapping{};
+        EXPECT_TRUE(ReadbackImpl::GetReadbackChannelMapping(format, mapping));
+        EXPECT_EQ(ReadbackImpl::GetReadbackDstPixelSize(mapping, type), sizeof(WordT));
+        const SizeT width = wide.size() / 4;
+        Vector<WordT> out(width, static_cast<WordT>(0));
+        ReadbackImpl::ConvertWideReadbackRow(reinterpret_cast<const Uint8*>(wide.data()),
+                                             reinterpret_cast<Uint8*>(out.data()), width, wideType, mapping,
+                                             type);
+        return out;
+    }
+
+    // Normalized encodes read the wide row as RGBA8 (values are v / 255).
+    template <typename WordT>
+    Vector<WordT> ConvertRGBA8Row(const Vector<Uint8>& rgba, GLenum format, GLenum type) {
+        return ConvertWideRowToPackedWords<WordT>(rgba, GL_UNSIGNED_BYTE, format, type);
+    }
+
+    // Wide RGBA8 pattern shared by the normalized-encode tests. Expected fields below are
+    // round(v / 255 * (2^bits - 1)), computed by hand per pixel.
+    //                            R     G     B     A
+    const Vector<Uint8> kRGBA8Row{255,  0,    128,  64,     // P0
+                                  10,   250,  33,   200,    // P1
+                                  85,   170,  255,  0};     // P2
+} // namespace
+
+TEST(PackedReadbackEncodeTest, EncodesUnsignedShort565) {
+    // P0: R=31 G=0 B=round(128*31/255)=16      -> 31<<11 | 0<<5 | 16      = 0xF810
+    // P1: R=round(10*31/255)=1 G=round(250*63/255)=62 B=round(33*31/255)=4 -> 1<<11|62<<5|4 = 0x0FC4
+    // P2: R=round(85*31/255)=10 G=round(170*63/255)=42 B=31               -> 10<<11|42<<5|31 = 0x555F
+    const auto words = ConvertRGBA8Row<Uint16>(kRGBA8Row, GL_RGB, GL_UNSIGNED_SHORT_5_6_5);
+    EXPECT_EQ(words[0], 0xF810u);
+    EXPECT_EQ(words[1], 0x0FC4u);
+    EXPECT_EQ(words[2], 0x555Fu);
+}
+
+TEST(PackedReadbackEncodeTest, EncodesUnsignedShort565Rev) {
+    // REV packs R from the LSB: P2 -> 10 | 42<<5 | 31<<11 = 0xFD4A
+    const auto words = ConvertRGBA8Row<Uint16>(kRGBA8Row, GL_RGB, GL_UNSIGNED_SHORT_5_6_5_REV);
+    EXPECT_EQ(words[2], 0xFD4Au);
+}
+
+TEST(PackedReadbackEncodeTest, EncodesUnsignedShort4444) {
+    // P0: R=15 G=0 B=round(128*15/255)=8 A=round(64*15/255)=4 -> 0xF084
+    // P2: R=round(85*15/255)=5 G=round(170*15/255)=10 B=15 A=0 -> 0x5AF0
+    const auto words = ConvertRGBA8Row<Uint16>(kRGBA8Row, GL_RGBA, GL_UNSIGNED_SHORT_4_4_4_4);
+    EXPECT_EQ(words[0], 0xF084u);
+    EXPECT_EQ(words[2], 0x5AF0u);
+}
+
+TEST(PackedReadbackEncodeTest, EncodesUnsignedShort4444Rev) {
+    // P0 fields R=15 G=0 B=8 A=4 packed from the LSB -> 15 | 0<<4 | 8<<8 | 4<<12 = 0x480F
+    const auto words = ConvertRGBA8Row<Uint16>(kRGBA8Row, GL_RGBA, GL_UNSIGNED_SHORT_4_4_4_4_REV);
+    EXPECT_EQ(words[0], 0x480Fu);
+}
+
+TEST(PackedReadbackEncodeTest, EncodesUnsignedShort5551) {
+    // P0: R=31 G=0 B=16 A=round(64/255)=0  -> 31<<11 | 16<<1        = 0xF820
+    // P1: R=1 G=round(250*31/255)=30 B=4 A=round(200/255)=1 -> 1<<11|30<<6|4<<1|1 = 0x0F89
+    const auto words = ConvertRGBA8Row<Uint16>(kRGBA8Row, GL_RGBA, GL_UNSIGNED_SHORT_5_5_5_1);
+    EXPECT_EQ(words[0], 0xF820u);
+    EXPECT_EQ(words[1], 0x0F89u);
+}
+
+TEST(PackedReadbackEncodeTest, EncodesUnsignedShort1555Rev) {
+    // P1 fields R=1 G=30 B=4 A=1 packed from the LSB -> 1 | 30<<5 | 4<<10 | 1<<15 = 0x93C1
+    const auto words = ConvertRGBA8Row<Uint16>(kRGBA8Row, GL_RGBA, GL_UNSIGNED_SHORT_1_5_5_5_REV);
+    EXPECT_EQ(words[1], 0x93C1u);
+}
+
+TEST(PackedReadbackEncodeTest, EncodesUnsignedInt2101010Rev) {
+    // P0: R=1023 G=0 B=round(128*1023/255)=514 A=round(64*3/255)=1 -> 1023|514<<20|1<<30 = 0x602003FF
+    // P2: R=round(85*1023/255)=341 G=round(170*1023/255)=682 B=1023 A=0 -> 0x3FFAA955
+    const auto words = ConvertRGBA8Row<Uint32>(kRGBA8Row, GL_RGBA, GL_UNSIGNED_INT_2_10_10_10_REV);
+    EXPECT_EQ(words[0], 0x602003FFu);
+    EXPECT_EQ(words[2], 0x3FFAA955u);
+}
+
+TEST(PackedReadbackEncodeTest, EncodesUnsignedInt1010102) {
+    // P2 fields R=341 G=682 B=1023 A=0 packed from the MSB -> 341<<22 | 682<<12 | 1023<<2 = 0x556AAFFC
+    const auto words = ConvertRGBA8Row<Uint32>(kRGBA8Row, GL_RGBA, GL_UNSIGNED_INT_10_10_10_2);
+    EXPECT_EQ(words[2], 0x556AAFFCu);
+}
+
+TEST(PackedReadbackEncodeTest, EncodesUnsignedByte332) {
+    // P0: R=7 G=0 B=round(128*3/255)=2                        -> 7<<5 | 2   = 0xE2
+    // P1: R=round(10*7/255)=0 G=round(250*7/255)=7 B=round(33*3/255)=0 -> 7<<2 = 0x1C
+    const auto words = ConvertRGBA8Row<Uint8>(kRGBA8Row, GL_RGB, GL_UNSIGNED_BYTE_3_3_2);
+    EXPECT_EQ(words[0], 0xE2u);
+    EXPECT_EQ(words[1], 0x1Cu);
+}
+
+TEST(PackedReadbackEncodeTest, EncodesUnsignedByte233Rev) {
+    // P0 fields R=7 G=0 B=2 packed from the LSB -> 7 | 0<<3 | 2<<6 = 0x87
+    const auto words = ConvertRGBA8Row<Uint8>(kRGBA8Row, GL_RGB, GL_UNSIGNED_BYTE_2_3_3_REV);
+    EXPECT_EQ(words[0], 0x87u);
+}
+
+TEST(PackedReadbackEncodeTest, Encodes8888KeepsLegacyByteOrder) {
+    // Regression for the previously supported types: P0 = (255, 0, 128, 64).
+    const auto msbFirst = ConvertRGBA8Row<Uint32>(kRGBA8Row, GL_RGBA, GL_UNSIGNED_INT_8_8_8_8);
+    EXPECT_EQ(msbFirst[0], 0xFF008040u);
+    const auto lsbFirst = ConvertRGBA8Row<Uint32>(kRGBA8Row, GL_RGBA, GL_UNSIGNED_INT_8_8_8_8_REV);
+    EXPECT_EQ(lsbFirst[0], 0x408000FFu);
+}
+
+TEST(PackedReadbackEncodeTest, EncodesBGRAWithChannelMapping) {
+    // BGRA's first format component is Blue: P0 fields B=8 G=0 R=15 A=4 -> 8<<12 | 15<<4 | 4 = 0x80F4
+    const auto words = ConvertRGBA8Row<Uint16>(kRGBA8Row, GL_BGRA, GL_UNSIGNED_SHORT_4_4_4_4);
+    EXPECT_EQ(words[0], 0x80F4u);
+}
+
+TEST(PackedReadbackEncodeTest, EncodesIntegerRGBA2101010RevWithFieldClamp) {
+    // Integer sources clamp to each field's unsigned range (10/10/10/2 bits).
+    const Vector<Uint32> wide{1023u, 1024u, 5u, 4u};
+    const auto words =
+        ConvertWideRowToPackedWords<Uint32>(wide, GL_UNSIGNED_INT, GL_RGBA_INTEGER, GL_UNSIGNED_INT_2_10_10_10_REV);
+    EXPECT_EQ(words[0], 0xC05FFFFFu); // 1023 | 1023<<10 | 5<<20 | 3<<30
+}
+
+TEST(PackedReadbackEncodeTest, EncodesIntegerNegativeValuesClampToZero) {
+    const Vector<Int32> wide{-5, 2, 100000, 1};
+    const auto words =
+        ConvertWideRowToPackedWords<Uint32>(wide, GL_INT, GL_RGBA_INTEGER, GL_UNSIGNED_INT_2_10_10_10_REV);
+    EXPECT_EQ(words[0], 0x7FF00800u); // 0 | 2<<10 | 1023<<20 | 1<<30
+}
+
+TEST(PackedReadbackEncodeTest, EncodesIntegerRGB565) {
+    const Vector<Uint32> wide{31u, 64u, 2u, 0u};
+    const auto words =
+        ConvertWideRowToPackedWords<Uint16>(wide, GL_UNSIGNED_INT, GL_RGB_INTEGER, GL_UNSIGNED_SHORT_5_6_5);
+    EXPECT_EQ(words[0], 0xFFE2u); // 31<<11 | 63<<5 | 2 (G clamps 64 -> 63)
+}
+
+TEST(PackedReadbackEncodeTest, EncodesPackedFloat10F11F11FRev) {
+    // F11(1.0)=0x3C0 F11(0.5)=0x380 F10(0.25)=0x1A0 -> 0x3C0 | 0x380<<11 | 0x1A0<<22 = 0x681C03C0.
+    // Second pixel: values above 65024 clamp to the max finite F11 (0x7BF), negatives go to zero.
+    const Vector<Float> wide{1.0f, 0.5f, 0.25f, 1.0f, 100000.0f, -1.0f, 0.25f, 1.0f};
+    const auto words = ConvertWideRowToPackedWords<Uint32>(wide, GL_FLOAT, GL_RGB, GL_UNSIGNED_INT_10F_11F_11F_REV);
+    EXPECT_EQ(words[0], 0x681C03C0u);
+    EXPECT_EQ(words[1], 0x680007BFu);
+}
+
+TEST(PackedReadbackEncodeTest, EncodesSharedExponent5999Rev) {
+    // (1.0, 0.5, 0.25): shared exponent 16, fields 256/128/64 -> 256 | 128<<9 | 64<<18 | 16<<27
+    const Vector<Float> wide{1.0f, 0.5f, 0.25f, 1.0f};
+    const auto words = ConvertWideRowToPackedWords<Uint32>(wide, GL_FLOAT, GL_RGB, GL_UNSIGNED_INT_5_9_9_9_REV);
+    EXPECT_EQ(words[0], 0x81010100u);
+}
+
+TEST(PackedReadbackEncodeTest, RejectsMismatchedPackedFieldCounts) {
+    ReadbackImpl::ReadbackChannelMapping rgba{};
+    ASSERT_TRUE(ReadbackImpl::GetReadbackChannelMapping(GL_RGBA, rgba));
+    ReadbackImpl::ReadbackChannelMapping rgbInteger{};
+    ASSERT_TRUE(ReadbackImpl::GetReadbackChannelMapping(GL_RGB_INTEGER, rgbInteger));
+
+    // 3-field packed types never pair with 4-component formats and vice versa.
+    EXPECT_EQ(ReadbackImpl::GetReadbackDstPixelSize(rgba, GL_UNSIGNED_SHORT_5_6_5), 0u);
+    EXPECT_EQ(ReadbackImpl::GetReadbackDstPixelSize(rgbInteger, GL_UNSIGNED_SHORT_4_4_4_4), 0u);
+    // Packed-float RGB types never pair with integer formats.
+    EXPECT_EQ(ReadbackImpl::GetReadbackDstPixelSize(rgbInteger, GL_UNSIGNED_INT_5_9_9_9_REV), 0u);
+    EXPECT_EQ(ReadbackImpl::GetReadbackDstPixelSize(rgbInteger, GL_UNSIGNED_INT_10F_11F_11F_REV), 0u);
 }
