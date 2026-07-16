@@ -18,6 +18,9 @@
 #include <MG_Util/Converters/GLToStr/GLEnumConverter.h>
 #include <MG_Util/Converters/MGToGL/TextureEnumConverter.h>
 #include <MG_Util/Converters/MGToGL/FramebufferEnumConverter.h>
+#include <MG_Util/Math/HalfFloat.h>
+
+#include <cmath>
 
 namespace MobileGL::MG_Backend::DirectGLES {
     namespace {
@@ -448,4 +451,381 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
         }
     } // namespace Utils
+
+    // ---- Client-format readback conversion helpers -------------------------------------------------
+    // ReadPixels/GetTexImage read a guaranteed wide RGBA(_INTEGER) layout from the ES driver and repack
+    // it on the CPU into the client's (format, type) layout. Everything here is pure byte shuffling so
+    // unit tests can assert the exact packed words; field positions follow GL 3.3 table 3.6 and mirror
+    // the GL CTS packed_pixels oracle (glcPackedPixelsTests.cpp pack_UNSIGNED_* helpers).
+    namespace ReadbackImpl {
+        using MG_Util::DecodeHalfBitsToFloat;
+        using MG_Util::EncodeFloatToHalfBits;
+
+        Bool GetReadbackChannelMapping(GLenum format, ReadbackChannelMapping& outMapping) {
+            switch (format) {
+            case GL_RED:          outMapping = {{0, 0, 0, 0}, 1, false}; return true;
+            case GL_RED_INTEGER:  outMapping = {{0, 0, 0, 0}, 1, true};  return true;
+            // Desktop-GL single-channel client formats (GL CTS packed_pixels rgba8_format_green/blue):
+            // the destination holds one component sourced from the named channel of the wide RGBA read.
+            // GL_ALPHA is mapped here from the raw enum because the state layer folds it into Red for the
+            // legacy alpha-texture upload hack.
+            case GL_GREEN:         outMapping = {{1, 0, 0, 0}, 1, false}; return true;
+            case GL_GREEN_INTEGER: outMapping = {{1, 0, 0, 0}, 1, true};  return true;
+            case GL_BLUE:          outMapping = {{2, 0, 0, 0}, 1, false}; return true;
+            case GL_BLUE_INTEGER:  outMapping = {{2, 0, 0, 0}, 1, true};  return true;
+            case GL_ALPHA:         outMapping = {{3, 0, 0, 0}, 1, false}; return true;
+            case GL_ALPHA_INTEGER: outMapping = {{3, 0, 0, 0}, 1, true};  return true;
+            case GL_RG:           outMapping = {{0, 1, 0, 0}, 2, false}; return true;
+            case GL_RG_INTEGER:   outMapping = {{0, 1, 0, 0}, 2, true};  return true;
+            case GL_RGB:          outMapping = {{0, 1, 2, 0}, 3, false}; return true;
+            case GL_RGB_INTEGER:  outMapping = {{0, 1, 2, 0}, 3, true};  return true;
+            case GL_BGR:          outMapping = {{2, 1, 0, 0}, 3, false}; return true;
+            case GL_BGR_INTEGER:  outMapping = {{2, 1, 0, 0}, 3, true};  return true;
+            case GL_RGBA:         outMapping = {{0, 1, 2, 3}, 4, false}; return true;
+            case GL_RGBA_INTEGER: outMapping = {{0, 1, 2, 3}, 4, true};  return true;
+            case GL_BGRA:         outMapping = {{2, 1, 0, 3}, 4, false}; return true;
+            case GL_BGRA_INTEGER: outMapping = {{2, 1, 0, 3}, 4, true};  return true;
+            default:
+                return false;
+            }
+        }
+
+        Bool GetPackedReadbackLayout(GLenum type, PackedReadbackLayout& out) {
+            switch (type) {
+            // Non-REV types pack the first format component starting at the most significant bit,
+            // *_REV types starting at the least significant bit (GL CTS pack_UNSIGNED_SHORT_5_6_5:
+            // R bits 15-11; pack_UNSIGNED_SHORT_1_5_5_5_REV: R bits 4-0, A bit 15).
+            case GL_UNSIGNED_BYTE_3_3_2:          out = {3, {3, 3, 2, 0},    {5, 2, 0, 0},    1, false}; return true;
+            case GL_UNSIGNED_BYTE_2_3_3_REV:      out = {3, {3, 3, 2, 0},    {0, 3, 6, 0},    1, false}; return true;
+            case GL_UNSIGNED_SHORT_5_6_5:         out = {3, {5, 6, 5, 0},    {11, 5, 0, 0},   2, false}; return true;
+            case GL_UNSIGNED_SHORT_5_6_5_REV:     out = {3, {5, 6, 5, 0},    {0, 5, 11, 0},   2, false}; return true;
+            case GL_UNSIGNED_SHORT_4_4_4_4:       out = {4, {4, 4, 4, 4},    {12, 8, 4, 0},   2, false}; return true;
+            case GL_UNSIGNED_SHORT_4_4_4_4_REV:   out = {4, {4, 4, 4, 4},    {0, 4, 8, 12},   2, false}; return true;
+            case GL_UNSIGNED_SHORT_5_5_5_1:       out = {4, {5, 5, 5, 1},    {11, 6, 1, 0},   2, false}; return true;
+            case GL_UNSIGNED_SHORT_1_5_5_5_REV:   out = {4, {5, 5, 5, 1},    {0, 5, 10, 15},  2, false}; return true;
+            case GL_UNSIGNED_INT_8_8_8_8:         out = {4, {8, 8, 8, 8},    {24, 16, 8, 0},  4, false}; return true;
+            case GL_UNSIGNED_INT_8_8_8_8_REV:     out = {4, {8, 8, 8, 8},    {0, 8, 16, 24},  4, false}; return true;
+            case GL_UNSIGNED_INT_10_10_10_2:      out = {4, {10, 10, 10, 2}, {22, 12, 2, 0},  4, false}; return true;
+            case GL_UNSIGNED_INT_2_10_10_10_REV:  out = {4, {10, 10, 10, 2}, {0, 10, 20, 30}, 4, false}; return true;
+            // Packed-float RGB types: fields hold unsigned small floats; 5_9_9_9_REV's shared 5-bit
+            // exponent (bits 31-27) is emitted by EncodeSharedExponentRGB9E5, not a component field.
+            case GL_UNSIGNED_INT_10F_11F_11F_REV: out = {3, {11, 11, 10, 0}, {0, 11, 22, 0},  4, true};  return true;
+            case GL_UNSIGNED_INT_5_9_9_9_REV:     out = {3, {9, 9, 9, 0},    {0, 9, 18, 0},   4, true};  return true;
+            default:
+                return false;
+            }
+        }
+
+        SizeT GetReadbackComponentSize(GLenum type) {
+            PackedReadbackLayout packedLayout{};
+            if (GetPackedReadbackLayout(type, packedLayout)) {
+                return packedLayout.byteSize;
+            }
+            switch (type) {
+            case GL_UNSIGNED_BYTE:
+            case GL_BYTE:
+                return 1;
+            case GL_UNSIGNED_SHORT:
+            case GL_SHORT:
+            case GL_HALF_FLOAT:
+                return 2;
+            case GL_UNSIGNED_INT:
+            case GL_INT:
+            case GL_FLOAT:
+                return 4;
+            default:
+                return 0;
+            }
+        }
+
+        SizeT GetReadbackDstPixelSize(const ReadbackChannelMapping& mapping, GLenum type) {
+            PackedReadbackLayout packedLayout{};
+            if (GetPackedReadbackLayout(type, packedLayout)) {
+                if (packedLayout.fieldCount != mapping.channelCount) {
+                    return 0; // 3-field packed types pair with 3-component formats only, 4 with 4
+                }
+                if (mapping.isInteger && packedLayout.isFloatPacked) {
+                    return 0; // packed-float RGB types never pair with integer formats
+                }
+                return packedLayout.byteSize;
+            }
+            if (mapping.isInteger && (type == GL_FLOAT || type == GL_HALF_FLOAT)) {
+                return 0;
+            }
+            const SizeT componentSize = GetReadbackComponentSize(type);
+            return componentSize == 0 ? 0 : static_cast<SizeT>(mapping.channelCount) * componentSize;
+        }
+
+        namespace {
+            // Encodes an unsigned small float with a 5-bit exponent (bias 15) and mantissaBits mantissa
+            // bits, per the EXT_packed_float conversion rules: negatives (including -Inf) go to zero,
+            // +Inf stays +Inf, NaN stays NaN, and finite values above the largest representable value
+            // clamp to it. The mantissa is truncated (rounding mode is implementation-defined).
+            Uint32 EncodeFloatToUnsignedSmallFloat(Float value, Int mantissaBits) {
+                const Uint32 bits = std::bit_cast<Uint32>(value);
+                const Bool negative = (bits & 0x80000000u) != 0;
+                const Uint32 exponent = (bits >> 23) & 0xFFu;
+                const Uint32 mantissa = bits & 0x7FFFFFu;
+                const Uint32 exponentMask = 0x1Fu << mantissaBits;
+                if (exponent == 0xFFu) {
+                    if (mantissa != 0) {
+                        return exponentMask | 1u; // NaN keeps NaN
+                    }
+                    return negative ? 0u : exponentMask; // -Inf -> 0, +Inf -> +Inf
+                }
+                if (negative) {
+                    return 0u;
+                }
+                const Int32 smallExponent = static_cast<Int32>(exponent) - 127 + 15;
+                if (smallExponent >= 31) { // above the largest finite value -> clamp to it
+                    return ((31u - 1u) << mantissaBits) | ((1u << mantissaBits) - 1u);
+                }
+                if (smallExponent <= 0) { // subnormal range: renormalize, flushing tiny values to zero
+                    const Uint32 fullMantissa = mantissa | 0x800000u;
+                    const Int32 shift = (23 - mantissaBits) + 1 - smallExponent;
+                    return shift > 23 ? 0u : fullMantissa >> shift;
+                }
+                return (static_cast<Uint32>(smallExponent) << mantissaBits) |
+                       (mantissa >> (23u - static_cast<Uint32>(mantissaBits)));
+            }
+
+            void WritePackedReadbackWord(Uint8* dst, Uint32 word, SizeT byteSize) {
+                switch (byteSize) {
+                case 1: {
+                    const auto out = static_cast<Uint8>(word);
+                    Memcpy(dst, &out, sizeof(out));
+                    break;
+                }
+                case 2: {
+                    const auto out = static_cast<Uint16>(word);
+                    Memcpy(dst, &out, sizeof(out));
+                    break;
+                }
+                default:
+                    Memcpy(dst, &word, sizeof(word));
+                    break;
+                }
+            }
+        } // namespace
+
+        Uint32 EncodeFloatToUnsignedF11(Float value) { return EncodeFloatToUnsignedSmallFloat(value, 6); }
+        Uint32 EncodeFloatToUnsignedF10(Float value) { return EncodeFloatToUnsignedSmallFloat(value, 5); }
+
+        // RGB9E5 shared-exponent encode, following the EXT_texture_shared_exponent spec algorithm
+        // (N = 9 mantissa bits, B = 15 exponent bias, Emax = 31).
+        Uint32 EncodeSharedExponentRGB9E5(const Float rgb[3]) {
+            constexpr Int kMantissaBits = 9;
+            constexpr Int kExponentBias = 15;
+            constexpr Float kSharedExpMax = 511.0f / 512.0f * 65536.0f; // (2^N-1)/2^N * 2^(Emax-B)
+
+            Float clamped[3];
+            for (Int i = 0; i < 3; ++i) {
+                const Float v = rgb[i];
+                clamped[i] = (std::isnan(v) || v < 0.0f) ? 0.0f : std::min(v, kSharedExpMax);
+            }
+            const Float maxComponent = std::max(clamped[0], std::max(clamped[1], clamped[2]));
+
+            Int sharedExponent = 0; // all-zero input keeps the all-zero word
+            if (maxComponent > 0.0f) {
+                sharedExponent = std::max(-kExponentBias - 1, static_cast<Int>(std::floor(std::log2(maxComponent)))) +
+                                 1 + kExponentBias;
+                const Float maxScaled = std::floor(
+                    maxComponent / std::exp2(static_cast<Float>(sharedExponent - kExponentBias - kMantissaBits)) +
+                    0.5f);
+                if (maxScaled >= 512.0f) { // rounded up to 2^N: bump the shared exponent instead
+                    ++sharedExponent;
+                }
+            }
+
+            const Float scale = std::exp2(static_cast<Float>(sharedExponent - kExponentBias - kMantissaBits));
+            Uint32 word = static_cast<Uint32>(sharedExponent) << 27;
+            for (Int i = 0; i < 3; ++i) {
+                const auto field = static_cast<Uint32>(std::floor(clamped[i] / scale + 0.5f));
+                word |= std::min(field, 511u) << (i * kMantissaBits);
+            }
+            return word;
+        }
+
+        void ConvertWideReadbackRow(const Uint8* src, Uint8* dst, SizeT width, GLenum wideType,
+                                    const ReadbackChannelMapping& mapping, GLenum type) {
+            PackedReadbackLayout packedLayout{};
+            const Bool isPacked = GetPackedReadbackLayout(type, packedLayout);
+            const SizeT dstComponentSize = GetReadbackComponentSize(type);
+            const SizeT dstPixelBytes = GetReadbackDstPixelSize(mapping, type);
+            const SizeT srcPixelBytes = 4 * GetReadbackComponentSize(wideType);
+
+            for (SizeT col = 0; col < width; ++col) {
+                const Uint8* srcPixel = src + col * srcPixelBytes;
+                Uint8* dstPixel = dst + col * dstPixelBytes;
+                if (mapping.isInteger) {
+                    Int64 srcValues[4];
+                    for (Int c = 0; c < 4; ++c) {
+                        srcValues[c] = wideType == GL_INT
+                                           ? static_cast<Int64>(reinterpret_cast<const Int32*>(srcPixel)[c])
+                                           : static_cast<Int64>(reinterpret_cast<const Uint32*>(srcPixel)[c]);
+                    }
+                    if (isPacked) {
+                        // Integer sources clamp each component to the unsigned range of its field
+                        // (GL 3.3 section 4.3.1 final conversion).
+                        Uint32 word = 0;
+                        for (Int ch = 0; ch < packedLayout.fieldCount; ++ch) {
+                            const Int64 fieldMax = (Int64{1} << packedLayout.width[ch]) - 1;
+                            const auto v = static_cast<Uint32>(
+                                std::clamp<Int64>(srcValues[mapping.sourceChannel[ch]], 0, fieldMax));
+                            word |= v << packedLayout.shift[ch];
+                        }
+                        WritePackedReadbackWord(dstPixel, word, packedLayout.byteSize);
+                    } else {
+                        for (Int ch = 0; ch < mapping.channelCount; ++ch) {
+                            const Int64 v = srcValues[mapping.sourceChannel[ch]];
+                            Uint8* dstComponent = dstPixel + static_cast<SizeT>(ch) * dstComponentSize;
+                            switch (type) {
+                            case GL_UNSIGNED_BYTE:
+                                *dstComponent = static_cast<Uint8>(std::clamp<Int64>(v, 0, 255));
+                                break;
+                            case GL_BYTE: {
+                                const auto out = static_cast<Int8>(std::clamp<Int64>(v, -128, 127));
+                                Memcpy(dstComponent, &out, sizeof(out));
+                                break;
+                            }
+                            case GL_UNSIGNED_SHORT: {
+                                const auto out = static_cast<Uint16>(std::clamp<Int64>(v, 0, 65535));
+                                Memcpy(dstComponent, &out, sizeof(out));
+                                break;
+                            }
+                            case GL_SHORT: {
+                                const auto out = static_cast<Int16>(std::clamp<Int64>(v, -32768, 32767));
+                                Memcpy(dstComponent, &out, sizeof(out));
+                                break;
+                            }
+                            case GL_UNSIGNED_INT: {
+                                const auto out = static_cast<Uint32>(std::clamp<Int64>(v, 0, 4294967295LL));
+                                Memcpy(dstComponent, &out, sizeof(out));
+                                break;
+                            }
+                            case GL_INT: {
+                                const auto out =
+                                    static_cast<Int32>(std::clamp<Int64>(v, -2147483648LL, 2147483647LL));
+                                Memcpy(dstComponent, &out, sizeof(out));
+                                break;
+                            }
+                            default:
+                                break;
+                            }
+                        }
+                    }
+                } else {
+                    Float srcValues[4];
+                    switch (wideType) {
+                    case GL_UNSIGNED_BYTE:
+                        for (Int c = 0; c < 4; ++c) {
+                            srcValues[c] = static_cast<Float>(srcPixel[c]) / 255.0f;
+                        }
+                        break;
+                    case GL_BYTE:
+                        for (Int c = 0; c < 4; ++c) {
+                            srcValues[c] = std::max(
+                                static_cast<Float>(reinterpret_cast<const Int8*>(srcPixel)[c]) / 127.0f, -1.0f);
+                        }
+                        break;
+                    case GL_UNSIGNED_SHORT:
+                        for (Int c = 0; c < 4; ++c) {
+                            srcValues[c] =
+                                static_cast<Float>(reinterpret_cast<const Uint16*>(srcPixel)[c]) / 65535.0f;
+                        }
+                        break;
+                    case GL_SHORT:
+                        for (Int c = 0; c < 4; ++c) {
+                            srcValues[c] = std::max(
+                                static_cast<Float>(reinterpret_cast<const Int16*>(srcPixel)[c]) / 32767.0f, -1.0f);
+                        }
+                        break;
+                    case GL_HALF_FLOAT:
+                        for (Int c = 0; c < 4; ++c) {
+                            srcValues[c] = DecodeHalfBitsToFloat(reinterpret_cast<const Uint16*>(srcPixel)[c]);
+                        }
+                        break;
+                    default: // GL_FLOAT
+                        for (Int c = 0; c < 4; ++c) {
+                            srcValues[c] = reinterpret_cast<const Float*>(srcPixel)[c];
+                        }
+                        break;
+                    }
+                    if (isPacked) {
+                        Uint32 word = 0;
+                        if (packedLayout.isFloatPacked) {
+                            const Float fields[3] = {srcValues[mapping.sourceChannel[0]],
+                                                     srcValues[mapping.sourceChannel[1]],
+                                                     srcValues[mapping.sourceChannel[2]]};
+                            word = type == GL_UNSIGNED_INT_5_9_9_9_REV
+                                       ? EncodeSharedExponentRGB9E5(fields)
+                                       : (EncodeFloatToUnsignedF11(fields[0]) << packedLayout.shift[0]) |
+                                             (EncodeFloatToUnsignedF11(fields[1]) << packedLayout.shift[1]) |
+                                             (EncodeFloatToUnsignedF10(fields[2]) << packedLayout.shift[2]);
+                        } else {
+                            // Normalized encode: round(clamp(v, 0, 1) * (2^bits - 1)) into each field.
+                            for (Int ch = 0; ch < packedLayout.fieldCount; ++ch) {
+                                const auto fieldMax = static_cast<Float>((1u << packedLayout.width[ch]) - 1u);
+                                const auto v = static_cast<Uint32>(std::llround(
+                                    std::clamp(srcValues[mapping.sourceChannel[ch]], 0.0f, 1.0f) * fieldMax));
+                                word |= v << packedLayout.shift[ch];
+                            }
+                        }
+                        WritePackedReadbackWord(dstPixel, word, packedLayout.byteSize);
+                    } else {
+                        for (Int ch = 0; ch < mapping.channelCount; ++ch) {
+                            const Float v = srcValues[mapping.sourceChannel[ch]];
+                            Uint8* dstComponent = dstPixel + static_cast<SizeT>(ch) * dstComponentSize;
+                            switch (type) {
+                            case GL_UNSIGNED_BYTE:
+                                *dstComponent =
+                                    static_cast<Uint8>(std::llround(std::clamp(v, 0.0f, 1.0f) * 255.0));
+                                break;
+                            case GL_BYTE: {
+                                const auto out =
+                                    static_cast<Int8>(std::llround(std::clamp(v, -1.0f, 1.0f) * 127.0));
+                                Memcpy(dstComponent, &out, sizeof(out));
+                                break;
+                            }
+                            case GL_UNSIGNED_SHORT: {
+                                const auto out =
+                                    static_cast<Uint16>(std::llround(std::clamp(v, 0.0f, 1.0f) * 65535.0));
+                                Memcpy(dstComponent, &out, sizeof(out));
+                                break;
+                            }
+                            case GL_SHORT: {
+                                const auto out =
+                                    static_cast<Int16>(std::llround(std::clamp(v, -1.0f, 1.0f) * 32767.0));
+                                Memcpy(dstComponent, &out, sizeof(out));
+                                break;
+                            }
+                            case GL_UNSIGNED_INT: {
+                                const auto out = static_cast<Uint32>(
+                                    std::llround(static_cast<Double>(std::clamp(v, 0.0f, 1.0f)) * 4294967295.0));
+                                Memcpy(dstComponent, &out, sizeof(out));
+                                break;
+                            }
+                            case GL_INT: {
+                                const auto out = static_cast<Int32>(
+                                    std::llround(static_cast<Double>(std::clamp(v, -1.0f, 1.0f)) * 2147483647.0));
+                                Memcpy(dstComponent, &out, sizeof(out));
+                                break;
+                            }
+                            case GL_FLOAT:
+                                Memcpy(dstComponent, &v, sizeof(v));
+                                break;
+                            case GL_HALF_FLOAT: {
+                                const Uint16 out = EncodeFloatToHalfBits(v);
+                                Memcpy(dstComponent, &out, sizeof(out));
+                                break;
+                            }
+                            default:
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    } // namespace ReadbackImpl
 } // namespace MobileGL::MG_Backend::DirectGLES
