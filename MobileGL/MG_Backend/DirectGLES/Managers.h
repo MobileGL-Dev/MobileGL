@@ -189,6 +189,43 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // without glDeleteBuffers (called when the ES context is going away).
         void TrimBufferPool();
         void ClearBufferPool();
+
+        // --- Global-UBO ring ------------------------------------------------------
+        // One persistently+coherently mapped buffer (EXT_buffer_storage) shared by
+        // every program's lowered default-uniform block. Each content change is
+        // bump-allocated into a fresh slot and bound with glBindBufferRange, so the
+        // CPU never rewrites bytes the GPU may still be reading — the per-draw
+        // glBufferSubData into one static UBO forced Adreno to resolve that
+        // write-after-read hazard on every uniform-dirtying draw (MC dirties
+        // uniforms every draw). Reclamation rides the Present() frame-fence
+        // watermark; no ring bytes are recycled before their frame's GPU work
+        // completed.
+        //
+        // A program's cached slot, reusable within one frame while the frontend UBO
+        // content version is unchanged. Cross-frame reuse is intentionally not
+        // attempted: later same-frame allocations may recycle bytes of completed
+        // frames, so re-referencing them would need per-bind pinning — rewriting
+        // GetUBOSize() bytes once per program per frame is far cheaper.
+        struct UboRingAllocation {
+            Uint32 contentVersion = ~0u; // frontend UBO content version held at `offset`
+            Uint32 ringGeneration = 0;   // ring identity the slot lives in (0 = never valid)
+            Uint64 frameSerial = ~Uint64{0}; // frame the slot was written in
+            SizeT offset = 0;
+        };
+        // False when the feature is disabled, EXT_buffer_storage / fences are
+        // missing, the ES context is not current, or ring creation already failed
+        // under this context (callers then take the legacy glBufferSubData path).
+        Bool UboRingAvailable();
+        // Bump-allocate `size` bytes aligned to GL_UNIFORM_BUFFER_OFFSET_ALIGNMENT.
+        // Grows the ring (new GL store, generation bump) when the in-flight span
+        // would be overrun. Returns false when storage (re)creation fails.
+        Bool UboRingAllocate(SizeT size, SizeT& outOffset);
+        void* UboRingMappedPtr();
+        Uint UboRingBufferId();
+        Uint32 UboRingGeneration();
+        // Present()-time upkeep: records the frame's high-water mark for reclamation
+        // and deletes grown-away ring stores once the GPU is done with them.
+        void UboRingOnPresent();
     } // namespace BufferImpl
 
     namespace VertexArrayImpl {
@@ -392,6 +429,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
             Vector<SamplerUniformBinding>& GetSamplerUniformBindings() { return m_samplerUniformBindings; }
             Uint32 GetLastUploadedGlobalUboVersion() const { return m_lastUploadedGlobalUboVersion; }
             void SetLastUploadedGlobalUboVersion(Uint32 version) { m_lastUploadedGlobalUboVersion = version; }
+            // Backend-reported GL_UNIFORM_BLOCK_DATA_SIZE of the global block; ring
+            // bindings must span at least this much (may exceed the frontend's
+            // reflected size when the transpiled block pads differently).
+            Int GetGlobalUboBackendBlockSize() const { return m_globalUboBackendBlockSize; }
+            BufferImpl::UboRingAllocation& GetGlobalUboRingAllocation() { return m_globalUboRingAllocation; }
             // Frontend link version this backend program (and its resource caches) was
             // built from; a mismatch means every link-derived cache here is stale.
             Uint32 GetSyncedLinkVersion() const { return m_syncedLinkVersion; }
@@ -410,9 +452,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
             Bool m_isInitialized = false;
 
             Int m_globalUboBackendBlockIndex = -1;
+            Int m_globalUboBackendBlockSize = 0;
             Vector<Int> m_uniformBlockBackendIndices; // frontend block index -> backend index (-1 = absent)
             Vector<SamplerUniformBinding> m_samplerUniformBindings;
             Uint32 m_lastUploadedGlobalUboVersion = ~0u;
+            BufferImpl::UboRingAllocation m_globalUboRingAllocation;
             Uint32 m_syncedLinkVersion = ~0u;
         };
 

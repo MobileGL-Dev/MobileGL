@@ -57,6 +57,10 @@ namespace MobileGL::MG_Config {
         Bool CoherentAsFlush = false;
         // MOBILEGL_TRACE_SKIP_AUTODESTROY: skip teardown in the ELF destructor (Init.cpp).
         Bool TraceSkipAutodestroy = false;
+        // MOBILEGL_DISABLE_UBO_RING: force the DirectGLES global-UBO upload back to the
+        // per-draw glBufferSubData path instead of the persistent-mapped ring allocator
+        // (negative control / driver-bug escape hatch).
+        Bool DisableUboRing = false;
     };
     extern FeaturesTable Features;
 } // namespace MobileGL::MG_Config
