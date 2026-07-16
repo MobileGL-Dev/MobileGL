@@ -113,7 +113,10 @@ namespace MobileGL {
             case TextureInternalFormat::RGB4:
                 return GL_RGB4;
             case TextureInternalFormat::RGB5:
-                return GL_RGB5;
+                // Emit the ES-compatible GL_RGB565 rendition: desktop GL_RGB5 is not a legal
+                // sized internalformat on OpenGL ES backends, GL_RGB565 is (and GL 4.1+
+                // accepts it too via ARB_ES2_compatibility).
+                return GL_RGB565;
             case TextureInternalFormat::RGB8:
                 return GL_RGB8;
             case TextureInternalFormat::RGB8Snorm:

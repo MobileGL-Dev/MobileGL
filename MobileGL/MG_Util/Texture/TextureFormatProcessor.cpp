@@ -282,11 +282,16 @@ namespace MobileGL::MG_Util::TextureFormatProcessor {
             // Color sized other
             case GL_RGB9_E5:
             case GL_R11F_G11F_B10F:
+            case GL_RGB565:
                 *outFormat = GL_RGB;
                 break;
             case GL_RGB10_A2:
             case GL_RGB5_A1:
+            case GL_RGBA4:
                 *outFormat = GL_RGBA;
+                break;
+            case GL_RGB10_A2UI:
+                *outFormat = GL_RGBA_INTEGER;
                 break;
 
             // Depth
@@ -459,10 +464,22 @@ namespace MobileGL::MG_Util::TextureFormatProcessor {
                 *outType = GL_UNSIGNED_INT_10F_11F_11F_REV;
                 break;
             case GL_RGB10_A2:
+            case GL_RGB10_A2UI:
                 *outType = GL_UNSIGNED_INT_2_10_10_10_REV;
                 break;
             case GL_RGB5_A1:
                 *outType = GL_UNSIGNED_SHORT_5_5_5_1;
+                break;
+            // The shadow mip keeps these formats' packed client bytes (legacy copy path),
+            // so the canonical transfer type must stay the packed word — the previous
+            // default (GL_UNSIGNED_BYTE) made the backend read 4 bytes per texel from a
+            // 2-byte-per-texel shadow (KHR-GL33.pixelstoragemodes teximage rgba4/rgb565
+            // sliced/garbled uploads).
+            case GL_RGBA4:
+                *outType = GL_UNSIGNED_SHORT_4_4_4_4;
+                break;
+            case GL_RGB565:
+                *outType = GL_UNSIGNED_SHORT_5_6_5;
                 break;
 
                 // Depth
