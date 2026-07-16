@@ -3269,69 +3269,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
     // GL_RGBA/GL_FLOAT for float buffers plus one implementation-defined pair, while desktop GL clients read
     // back narrower layouts (RED, RG, RGB, BGR, byte-order packed types, ...). For those we read a guaranteed
     // wide RGBA format into scratch memory and repack into the caller's (format, type) layout on the CPU,
-    // honoring the client-side PACK pixel-store parameters.
+    // honoring the client-side PACK pixel-store parameters. The pure repacking helpers live in
+    // ReadbackImpl (Utils.cpp) so unit tests can assert the exact packed words.
 
-    using MG_Util::DecodeHalfBitsToFloat;
-    using MG_Util::EncodeFloatToHalfBits;
-
-    struct ReadbackChannelMapping {
-        Int sourceChannel[4]; // RGBA source channel feeding each destination channel
-        Int channelCount;     // destination channel count
-        Bool isInteger;
-    };
-
-    static Bool GetReadbackChannelMapping(GLenum format, ReadbackChannelMapping& outMapping) {
-        switch (format) {
-        case GL_RED:          outMapping = {{0, 0, 0, 0}, 1, false}; return true;
-        case GL_RED_INTEGER:  outMapping = {{0, 0, 0, 0}, 1, true};  return true;
-        // Desktop-GL single-channel client formats (GL CTS packed_pixels rgba8_format_green/blue):
-        // the destination holds one component sourced from the named channel of the wide RGBA read.
-        // GL_ALPHA is mapped here from the raw enum because the state layer folds it into Red for the
-        // legacy alpha-texture upload hack.
-        case GL_GREEN:         outMapping = {{1, 0, 0, 0}, 1, false}; return true;
-        case GL_GREEN_INTEGER: outMapping = {{1, 0, 0, 0}, 1, true};  return true;
-        case GL_BLUE:          outMapping = {{2, 0, 0, 0}, 1, false}; return true;
-        case GL_BLUE_INTEGER:  outMapping = {{2, 0, 0, 0}, 1, true};  return true;
-        case GL_ALPHA:         outMapping = {{3, 0, 0, 0}, 1, false}; return true;
-        case GL_ALPHA_INTEGER: outMapping = {{3, 0, 0, 0}, 1, true};  return true;
-        case GL_RG:           outMapping = {{0, 1, 0, 0}, 2, false}; return true;
-        case GL_RG_INTEGER:   outMapping = {{0, 1, 0, 0}, 2, true};  return true;
-        case GL_RGB:          outMapping = {{0, 1, 2, 0}, 3, false}; return true;
-        case GL_RGB_INTEGER:  outMapping = {{0, 1, 2, 0}, 3, true};  return true;
-        case GL_BGR:          outMapping = {{2, 1, 0, 0}, 3, false}; return true;
-        case GL_BGR_INTEGER:  outMapping = {{2, 1, 0, 0}, 3, true};  return true;
-        case GL_RGBA:         outMapping = {{0, 1, 2, 3}, 4, false}; return true;
-        case GL_RGBA_INTEGER: outMapping = {{0, 1, 2, 3}, 4, true};  return true;
-        case GL_BGRA:         outMapping = {{2, 1, 0, 3}, 4, false}; return true;
-        case GL_BGRA_INTEGER: outMapping = {{2, 1, 0, 3}, 4, true};  return true;
-        default:
-            return false;
-        }
-    }
-
-    static Bool IsPackedReadback8888Type(GLenum type) {
-        return type == GL_UNSIGNED_INT_8_8_8_8 || type == GL_UNSIGNED_INT_8_8_8_8_REV;
-    }
-
-    static SizeT GetReadbackComponentSize(GLenum type) {
-        switch (type) {
-        case GL_UNSIGNED_BYTE:
-        case GL_BYTE:
-            return 1;
-        case GL_UNSIGNED_SHORT:
-        case GL_SHORT:
-        case GL_HALF_FLOAT:
-            return 2;
-        case GL_UNSIGNED_INT:
-        case GL_INT:
-        case GL_FLOAT:
-        case GL_UNSIGNED_INT_8_8_8_8:
-        case GL_UNSIGNED_INT_8_8_8_8_REV:
-            return 4;
-        default:
-            return 0;
-        }
-    }
+    using ReadbackImpl::GetReadbackChannelMapping;
+    using ReadbackImpl::GetReadbackComponentSize;
+    using ReadbackImpl::GetReadbackDstPixelSize;
+    using ReadbackImpl::ReadbackChannelMapping;
 
     static Bool CanDecodeWideSourceType(GLenum type) {
         switch (type) {
@@ -3379,17 +3323,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
         if (!GetReadbackChannelMapping(format, mapping)) {
             return false;
         }
-        const Bool packed8888 = IsPackedReadback8888Type(type);
-        if (packed8888 && mapping.channelCount != 4) {
+        // Covers unknown types, packed field-count/format mismatches and float types on integer formats.
+        const SizeT dstPixelBytes = GetReadbackDstPixelSize(mapping, type);
+        if (dstPixelBytes == 0) {
             return false;
         }
-        if (mapping.isInteger && (type == GL_FLOAT || type == GL_HALF_FLOAT)) {
-            return false;
-        }
+        ReadbackImpl::PackedReadbackLayout packedLayout{};
+        const Bool isPackedType = ReadbackImpl::GetPackedReadbackLayout(type, packedLayout);
         const SizeT dstComponentSize = GetReadbackComponentSize(type);
-        if (dstComponentSize == 0) {
-            return false;
-        }
 
         if (width <= 0 || height <= 0) {
             return true;
@@ -3473,8 +3414,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // Destination layout is computed from the client-side PACK parameters; only the actual pixel
         // rows are written so skip regions of the destination stay untouched.
         const auto packParams = MG_State::pGLContext->GetPixelStoreParameters(false);
-        const SizeT dstPixelBytes =
-            packed8888 ? sizeof(Uint32) : static_cast<SizeT>(mapping.channelCount) * dstComponentSize;
         const SizeT rowPixels = static_cast<SizeT>(packParams.RowLength > 0 ? packParams.RowLength : width);
         const SizeT dstRowStride = AlignPixelRow(rowPixels * dstPixelBytes, packParams.Alignment);
         const SizeT dstSkipOffset = static_cast<SizeT>(std::max(packParams.SkipRows, 0)) * dstRowStride +
@@ -3497,164 +3436,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
         for (GLsizei row = 0; row < height; ++row) {
             const Uint8* srcRow = wide.data() + static_cast<SizeT>(row) * static_cast<SizeT>(width) * srcPixelBytes;
-            for (GLsizei col = 0; col < width; ++col) {
-                const Uint8* srcPixel = srcRow + static_cast<SizeT>(col) * srcPixelBytes;
-                Uint8* dstPixel = convertedRow.data() + static_cast<SizeT>(col) * dstPixelBytes;
-                if (mapping.isInteger) {
-                    Int64 src[4];
-                    for (Int c = 0; c < 4; ++c) {
-                        src[c] = wideType == GL_INT
-                                     ? static_cast<Int64>(reinterpret_cast<const Int32*>(srcPixel)[c])
-                                     : static_cast<Int64>(reinterpret_cast<const Uint32*>(srcPixel)[c]);
-                    }
-                    if (packed8888) {
-                        Uint32 word = 0;
-                        for (Int ch = 0; ch < 4; ++ch) {
-                            const auto v =
-                                static_cast<Uint32>(std::clamp<Int64>(src[mapping.sourceChannel[ch]], 0, 255));
-                            word |= type == GL_UNSIGNED_INT_8_8_8_8 ? v << (24 - ch * 8) : v << (ch * 8);
-                        }
-                        Memcpy(dstPixel, &word, sizeof(word));
-                    } else {
-                        for (Int ch = 0; ch < mapping.channelCount; ++ch) {
-                            const Int64 v = src[mapping.sourceChannel[ch]];
-                            Uint8* dstComponent = dstPixel + static_cast<SizeT>(ch) * dstComponentSize;
-                            switch (type) {
-                            case GL_UNSIGNED_BYTE:
-                                *dstComponent = static_cast<Uint8>(std::clamp<Int64>(v, 0, 255));
-                                break;
-                            case GL_BYTE: {
-                                const auto out = static_cast<Int8>(std::clamp<Int64>(v, -128, 127));
-                                Memcpy(dstComponent, &out, sizeof(out));
-                                break;
-                            }
-                            case GL_UNSIGNED_SHORT: {
-                                const auto out = static_cast<Uint16>(std::clamp<Int64>(v, 0, 65535));
-                                Memcpy(dstComponent, &out, sizeof(out));
-                                break;
-                            }
-                            case GL_SHORT: {
-                                const auto out = static_cast<Int16>(std::clamp<Int64>(v, -32768, 32767));
-                                Memcpy(dstComponent, &out, sizeof(out));
-                                break;
-                            }
-                            case GL_UNSIGNED_INT: {
-                                const auto out = static_cast<Uint32>(std::clamp<Int64>(v, 0, 4294967295LL));
-                                Memcpy(dstComponent, &out, sizeof(out));
-                                break;
-                            }
-                            case GL_INT: {
-                                const auto out =
-                                    static_cast<Int32>(std::clamp<Int64>(v, -2147483648LL, 2147483647LL));
-                                Memcpy(dstComponent, &out, sizeof(out));
-                                break;
-                            }
-                            default:
-                                break;
-                            }
-                        }
-                    }
-                } else {
-                    Float src[4];
-                    switch (wideType) {
-                    case GL_UNSIGNED_BYTE:
-                        for (Int c = 0; c < 4; ++c) {
-                            src[c] = static_cast<Float>(srcPixel[c]) / 255.0f;
-                        }
-                        break;
-                    case GL_BYTE:
-                        for (Int c = 0; c < 4; ++c) {
-                            src[c] = std::max(
-                                static_cast<Float>(reinterpret_cast<const Int8*>(srcPixel)[c]) / 127.0f, -1.0f);
-                        }
-                        break;
-                    case GL_UNSIGNED_SHORT:
-                        for (Int c = 0; c < 4; ++c) {
-                            src[c] = static_cast<Float>(reinterpret_cast<const Uint16*>(srcPixel)[c]) / 65535.0f;
-                        }
-                        break;
-                    case GL_SHORT:
-                        for (Int c = 0; c < 4; ++c) {
-                            src[c] = std::max(
-                                static_cast<Float>(reinterpret_cast<const Int16*>(srcPixel)[c]) / 32767.0f, -1.0f);
-                        }
-                        break;
-                    case GL_HALF_FLOAT:
-                        for (Int c = 0; c < 4; ++c) {
-                            src[c] = DecodeHalfBitsToFloat(reinterpret_cast<const Uint16*>(srcPixel)[c]);
-                        }
-                        break;
-                    default: // GL_FLOAT
-                        for (Int c = 0; c < 4; ++c) {
-                            src[c] = reinterpret_cast<const Float*>(srcPixel)[c];
-                        }
-                        break;
-                    }
-                    if (packed8888) {
-                        Uint32 word = 0;
-                        for (Int ch = 0; ch < 4; ++ch) {
-                            const auto v = static_cast<Uint32>(
-                                std::llround(std::clamp(src[mapping.sourceChannel[ch]], 0.0f, 1.0f) * 255.0));
-                            word |= type == GL_UNSIGNED_INT_8_8_8_8 ? v << (24 - ch * 8) : v << (ch * 8);
-                        }
-                        Memcpy(dstPixel, &word, sizeof(word));
-                    } else {
-                        for (Int ch = 0; ch < mapping.channelCount; ++ch) {
-                            const Float v = src[mapping.sourceChannel[ch]];
-                            Uint8* dstComponent = dstPixel + static_cast<SizeT>(ch) * dstComponentSize;
-                            switch (type) {
-                            case GL_UNSIGNED_BYTE:
-                                *dstComponent =
-                                    static_cast<Uint8>(std::llround(std::clamp(v, 0.0f, 1.0f) * 255.0));
-                                break;
-                            case GL_BYTE: {
-                                const auto out =
-                                    static_cast<Int8>(std::llround(std::clamp(v, -1.0f, 1.0f) * 127.0));
-                                Memcpy(dstComponent, &out, sizeof(out));
-                                break;
-                            }
-                            case GL_UNSIGNED_SHORT: {
-                                const auto out =
-                                    static_cast<Uint16>(std::llround(std::clamp(v, 0.0f, 1.0f) * 65535.0));
-                                Memcpy(dstComponent, &out, sizeof(out));
-                                break;
-                            }
-                            case GL_SHORT: {
-                                const auto out =
-                                    static_cast<Int16>(std::llround(std::clamp(v, -1.0f, 1.0f) * 32767.0));
-                                Memcpy(dstComponent, &out, sizeof(out));
-                                break;
-                            }
-                            case GL_UNSIGNED_INT: {
-                                const auto out = static_cast<Uint32>(
-                                    std::llround(static_cast<Double>(std::clamp(v, 0.0f, 1.0f)) * 4294967295.0));
-                                Memcpy(dstComponent, &out, sizeof(out));
-                                break;
-                            }
-                            case GL_INT: {
-                                const auto out = static_cast<Int32>(
-                                    std::llround(static_cast<Double>(std::clamp(v, -1.0f, 1.0f)) * 2147483647.0));
-                                Memcpy(dstComponent, &out, sizeof(out));
-                                break;
-                            }
-                            case GL_FLOAT:
-                                Memcpy(dstComponent, &v, sizeof(v));
-                                break;
-                            case GL_HALF_FLOAT: {
-                                const Uint16 out = EncodeFloatToHalfBits(v);
-                                Memcpy(dstComponent, &out, sizeof(out));
-                                break;
-                            }
-                            default:
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
+            ReadbackImpl::ConvertWideReadbackRow(srcRow, convertedRow.data(), static_cast<SizeT>(width), wideType,
+                                                 mapping, type);
 
             if (packParams.SwapBytes) {
-                const SizeT groupSize = packed8888 ? sizeof(Uint32) : dstComponentSize;
+                const SizeT groupSize = isPackedType ? packedLayout.byteSize : dstComponentSize;
                 if (groupSize > 1) {
                     for (SizeT offset = 0; offset + groupSize <= dstRowBytes; offset += groupSize) {
                         std::reverse(convertedRow.data() + offset, convertedRow.data() + offset + groupSize);
@@ -3696,8 +3482,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // of killing the process; spec-invalid combinations are already rejected with GL errors at the state layer.
         const Bool useNativeReadback = IsLegacyNativeReadPixelsFormat(format) && IsLegacyNativeReadPixelsType(type);
         ReadbackChannelMapping conversionMapping{};
-        const Bool convertible =
-            GetReadbackChannelMapping(format, conversionMapping) && GetReadbackComponentSize(type) != 0;
+        const Bool convertible = GetReadbackChannelMapping(format, conversionMapping) &&
+                                 GetReadbackDstPixelSize(conversionMapping, type) != 0;
         if (!useNativeReadback && !convertible) {
             MGLOG_E("ReadPixels: format %s with type %s is not implemented yet, skipping readback",
                     MG_Util::ConvertGLEnumToString(format).c_str(), MG_Util::ConvertGLEnumToString(type).c_str());
@@ -3838,8 +3624,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // spec-invalid combinations are already rejected with GL errors at the state layer.
         const Bool useNativeReadback = IsNativeGetTexImagePair(format, type);
         ReadbackChannelMapping conversionMapping{};
-        const Bool convertible =
-            GetReadbackChannelMapping(format, conversionMapping) && GetReadbackComponentSize(type) != 0;
+        const Bool convertible = GetReadbackChannelMapping(format, conversionMapping) &&
+                                 GetReadbackDstPixelSize(conversionMapping, type) != 0;
         if (!useNativeReadback && !convertible) {
             MGLOG_E("GetTexImage: format %s with type %s is not implemented yet, skipping readback",
                     MG_Util::ConvertGLEnumToString(format).c_str(), MG_Util::ConvertGLEnumToString(type).c_str());
