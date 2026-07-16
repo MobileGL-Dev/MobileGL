@@ -74,6 +74,16 @@ namespace MobileGL::MG_Impl::GLImpl {
             return true;
         }
 
+        Bool ValidateMaxAnisotropy(Float maxAnisotropy, const char* caller) {
+            if (maxAnisotropy >= 1.0f) return true;
+
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidValue,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller,
+                                             "GL_TEXTURE_MAX_ANISOTROPY_EXT must be at least 1.0."));
+            return false;
+        }
+
         template <typename Fn>
         void WithTemporarilyBoundNamedTexture(const SharedPtr<MG_State::GLState::ITextureObject>& textureObject,
                                              Fn&& fn) {
@@ -458,6 +468,9 @@ namespace MobileGL::MG_Impl::GLImpl {
     Bool ValidateTextureParameterForTarget(const SharedPtr<MG_State::GLState::ITextureObject>& textureObject,
                                            GLenum pname, GLint param, const char* caller) {
         const auto target = textureObject->GetTarget();
+        if (pname == GL_TEXTURE_MAX_ANISOTROPY_EXT && !ValidateMaxAnisotropy(param, caller)) {
+            return false;
+        }
         if ((pname == GL_TEXTURE_BASE_LEVEL || pname == GL_TEXTURE_MAX_LEVEL) && param < 0) {
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidValue,
@@ -487,7 +500,8 @@ namespace MobileGL::MG_Impl::GLImpl {
             (pname == GL_TEXTURE_WRAP_S || pname == GL_TEXTURE_WRAP_T || pname == GL_TEXTURE_WRAP_R ||
              pname == GL_TEXTURE_MIN_FILTER || pname == GL_TEXTURE_MAG_FILTER || pname == GL_TEXTURE_MIN_LOD ||
              pname == GL_TEXTURE_MAX_LOD || pname == GL_TEXTURE_LOD_BIAS || pname == GL_TEXTURE_COMPARE_MODE ||
-             pname == GL_TEXTURE_COMPARE_FUNC || pname == GL_TEXTURE_BORDER_COLOR)) {
+             pname == GL_TEXTURE_COMPARE_FUNC || pname == GL_TEXTURE_BORDER_COLOR ||
+             pname == GL_TEXTURE_MAX_ANISOTROPY_EXT)) {
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidOperation,
                 MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller,
@@ -578,6 +592,9 @@ namespace MobileGL::MG_Impl::GLImpl {
         case GL_TEXTURE_LOD_BIAS:
             textureObject->GetSamplerObject()->SetLodBias((GLfloat)param);
             break;
+        case GL_TEXTURE_MAX_ANISOTROPY_EXT:
+            textureObject->GetSamplerObject()->SetMaxAnisotropy(static_cast<GLfloat>(param));
+            break;
         case GL_GENERATE_MIPMAP:
             g_autoGenerateMipmapByTextureId[textureObject->GetExternalIndex()] = (param != GL_FALSE);
             break;
@@ -594,7 +611,10 @@ namespace MobileGL::MG_Impl::GLImpl {
     void TextureParameterObjectf_State(const SharedPtr<MG_State::GLState::ITextureObject>& textureObject, GLenum pname,
                                        GLfloat param, const char* caller) {
         if (!textureObject) return;
-        if (!ValidateTextureParameterForTarget(textureObject, pname, static_cast<GLint>(param), caller)) return;
+        if (pname == GL_TEXTURE_MAX_ANISOTROPY_EXT && !ValidateMaxAnisotropy(param, caller)) return;
+        const GLint validationParam =
+            pname == GL_TEXTURE_MAX_ANISOTROPY_EXT ? 1 : static_cast<GLint>(param);
+        if (!ValidateTextureParameterForTarget(textureObject, pname, validationParam, caller)) return;
 
         switch (pname) {
         case GL_TEXTURE_MAG_FILTER:
@@ -639,6 +659,9 @@ namespace MobileGL::MG_Impl::GLImpl {
             break;
         case GL_TEXTURE_LOD_BIAS:
             textureObject->GetSamplerObject()->SetLodBias(param);
+            break;
+        case GL_TEXTURE_MAX_ANISOTROPY_EXT:
+            textureObject->GetSamplerObject()->SetMaxAnisotropy(param);
             break;
         case GL_GENERATE_MIPMAP:
             g_autoGenerateMipmapByTextureId[textureObject->GetExternalIndex()] = (param != 0.0f);
@@ -708,6 +731,9 @@ namespace MobileGL::MG_Impl::GLImpl {
         case GL_TEXTURE_COMPARE_FUNC:
             *params = (GLint)MG_Util::ConvertSamplerCompareFuncToGLEnum(
                 textureObject->GetSamplerObject()->GetSamplerCompareFunc());
+            break;
+        case GL_TEXTURE_MAX_ANISOTROPY_EXT:
+            *params = static_cast<GLint>(textureObject->GetSamplerObject()->GetMaxAnisotropy());
             break;
         default:
             MG_State::pGLContext->RecordError(
@@ -1082,6 +1108,10 @@ namespace MobileGL::MG_Impl::GLImpl {
             break;
         case GL_TEXTURE_LOD_BIAS:
             textureObject->GetSamplerObject()->SetLodBias(param);
+            break;
+        case GL_TEXTURE_MAX_ANISOTROPY_EXT:
+            if (!ValidateMaxAnisotropy(param, __func__)) return;
+            textureObject->GetSamplerObject()->SetMaxAnisotropy(param);
             break;
         case GL_GENERATE_MIPMAP:
             g_autoGenerateMipmapByTextureId[textureObject->GetExternalIndex()] = (param != 0.0f);
@@ -1883,6 +1913,11 @@ namespace MobileGL::MG_Impl::GLImpl {
                     textureObject->GetSamplerObject()->GetSamplerCompareFunc());
             }
             break;
+        case GL_TEXTURE_MAX_ANISOTROPY_EXT:
+            if (params) {
+                *params = static_cast<GLint>(textureObject->GetSamplerObject()->GetMaxAnisotropy());
+            }
+            break;
         case GL_IMAGE_FORMAT_COMPATIBILITY_TYPE:
             if (params) {
                 *params = GL_IMAGE_FORMAT_COMPATIBILITY_BY_SIZE;
@@ -2027,6 +2062,11 @@ namespace MobileGL::MG_Impl::GLImpl {
             if (params) {
                 *params = (GLfloat)MG_Util::ConvertSamplerCompareFuncToGLEnum(
                     textureObject->GetSamplerObject()->GetSamplerCompareFunc());
+            }
+            break;
+        case GL_TEXTURE_MAX_ANISOTROPY_EXT:
+            if (params) {
+                *params = textureObject->GetSamplerObject()->GetMaxAnisotropy();
             }
             break;
         default:

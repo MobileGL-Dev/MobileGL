@@ -78,6 +78,13 @@ namespace MobileGL {
                 ++m_version;
             }
 
+            void SamplerObject::SetMaxAnisotropy(Float maxAnisotropy) {
+                if (maxAnisotropy == m_samplerParameters.maxAnisotropy) return;
+
+                m_samplerParameters.maxAnisotropy = maxAnisotropy;
+                ++m_version;
+            }
+
             void SamplerObject::SetSamplerCompareFunc(SamplerCompareFunc func) {
                 if (func == m_samplerParameters.compareFunc) return;
 
@@ -126,6 +133,10 @@ namespace MobileGL {
 
             Float SamplerObject::GetLodBias() const {
                 return m_samplerParameters.lodBias;
+            }
+
+            Float SamplerObject::GetMaxAnisotropy() const {
+                return m_samplerParameters.maxAnisotropy;
             }
 
             SamplerCompareMode SamplerObject::GetCompareMode() const {

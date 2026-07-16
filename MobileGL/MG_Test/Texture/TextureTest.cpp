@@ -15,6 +15,7 @@
 #include <MG_Backend/BackendObjects.h>
 #include <MG_Impl/GLImpl/Getter/GL_Getter.h>
 #include <MG_Impl/GLImpl/RenderState/GL_RenderState.h>
+#include <MG_Impl/GLImpl/Sampler/GL_Sampler.h>
 #include <MG_Impl/GLImpl/Texture/GL_Texture.h>
 #include <MG_State/GLState/Core.h>
 #include <MG_State/GLState/TextureState/TextureObject.h>
@@ -130,6 +131,127 @@ TEST_F(TextureTest, CreateTexturesCreatesObjectsWithoutBinding) {
 
     auto& unit = MG_State::pGLContext->GetTextureUnitObject(MG_State::pGLContext->GetActiveTextureUnit());
     EXPECT_EQ(unit.GetBindingSlot(TextureTarget::Texture2D).GetBoundObject(), nullptr);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+}
+
+TEST_F(TextureTest, TextureMaxAnisotropyDefaultsToOneAndRoundTripsWithoutRedundantVersionBumps) {
+    GLuint texture = 0;
+    MG_Impl::GLImpl::GenTextures(1, &texture);
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, texture);
+    ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    const auto textureObject = MG_State::pGLContext->GetTextureObject(texture);
+    ASSERT_NE(textureObject, nullptr);
+    const auto& samplerObject = textureObject->GetSamplerObject();
+    ASSERT_NE(samplerObject, nullptr);
+
+    GLfloat floatValue = 0.0f;
+    MG_Impl::GLImpl::GetTexParameterfv(GL_TEXTURE_2D, GL_TEXTURE_MAX_ANISOTROPY_EXT, &floatValue);
+    EXPECT_FLOAT_EQ(floatValue, 1.0f);
+    EXPECT_FLOAT_EQ(samplerObject->GetMaxAnisotropy(), 1.0f);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    const Uint16 initialVersion = samplerObject->GetVersion();
+    MG_Impl::GLImpl::TexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAX_ANISOTROPY_EXT, 4.0f);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+    EXPECT_FLOAT_EQ(samplerObject->GetMaxAnisotropy(), 4.0f);
+    EXPECT_EQ(samplerObject->GetVersion(), static_cast<Uint16>(initialVersion + 1));
+
+    GLint integerValue = 0;
+    MG_Impl::GLImpl::GetTexParameteriv(GL_TEXTURE_2D, GL_TEXTURE_MAX_ANISOTROPY_EXT, &integerValue);
+    EXPECT_EQ(integerValue, 4);
+    MG_Impl::GLImpl::GetTexParameterfv(GL_TEXTURE_2D, GL_TEXTURE_MAX_ANISOTROPY_EXT, &floatValue);
+    EXPECT_FLOAT_EQ(floatValue, 4.0f);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    const Uint16 setVersion = samplerObject->GetVersion();
+    MG_Impl::GLImpl::TexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAX_ANISOTROPY_EXT, 4.0f);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+    EXPECT_EQ(samplerObject->GetVersion(), setVersion);
+
+    MG_Impl::GLImpl::TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_ANISOTROPY_EXT, 8);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+    EXPECT_FLOAT_EQ(samplerObject->GetMaxAnisotropy(), 8.0f);
+    EXPECT_EQ(samplerObject->GetVersion(), static_cast<Uint16>(setVersion + 1));
+}
+
+TEST_F(TextureTest, TextureMaxAnisotropyBelowOneIsInvalidValueAndPreservesState) {
+    GLuint texture = 0;
+    MG_Impl::GLImpl::GenTextures(1, &texture);
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, texture);
+    ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    const auto textureObject = MG_State::pGLContext->GetTextureObject(texture);
+    ASSERT_NE(textureObject, nullptr);
+    const auto& samplerObject = textureObject->GetSamplerObject();
+    ASSERT_NE(samplerObject, nullptr);
+    const Uint16 initialVersion = samplerObject->GetVersion();
+
+    MG_Impl::GLImpl::TexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAX_ANISOTROPY_EXT, 0.5f);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_INVALID_VALUE);
+    EXPECT_FLOAT_EQ(samplerObject->GetMaxAnisotropy(), 1.0f);
+    EXPECT_EQ(samplerObject->GetVersion(), initialVersion);
+
+    MG_Impl::GLImpl::TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_ANISOTROPY_EXT, 0);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_INVALID_VALUE);
+    EXPECT_FLOAT_EQ(samplerObject->GetMaxAnisotropy(), 1.0f);
+    EXPECT_EQ(samplerObject->GetVersion(), initialVersion);
+}
+
+TEST_F(TextureTest, SamplerMaxAnisotropyUsesTheSameStateAndValidationSemantics) {
+    GLuint sampler = 0;
+    MG_Impl::GLImpl::GenSamplers(1, &sampler);
+    ASSERT_NE(sampler, 0u);
+
+    GLfloat floatValue = 0.0f;
+    MG_Impl::GLImpl::GetSamplerParameterfv(sampler, GL_TEXTURE_MAX_ANISOTROPY_EXT, &floatValue);
+    ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+    EXPECT_FLOAT_EQ(floatValue, 1.0f);
+
+    const auto& samplerObject = MG_State::pGLContext->GetSamplerObject(sampler);
+    ASSERT_NE(samplerObject, nullptr);
+    const Uint16 initialVersion = samplerObject->GetVersion();
+
+    MG_Impl::GLImpl::SamplerParameterf(sampler, GL_TEXTURE_MAX_ANISOTROPY_EXT, 6.0f);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+    EXPECT_FLOAT_EQ(samplerObject->GetMaxAnisotropy(), 6.0f);
+    EXPECT_EQ(samplerObject->GetVersion(), static_cast<Uint16>(initialVersion + 1));
+
+    GLint integerValue = 0;
+    MG_Impl::GLImpl::GetSamplerParameteriv(sampler, GL_TEXTURE_MAX_ANISOTROPY_EXT, &integerValue);
+    EXPECT_EQ(integerValue, 6);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    const Uint16 setVersion = samplerObject->GetVersion();
+    MG_Impl::GLImpl::SamplerParameterf(sampler, GL_TEXTURE_MAX_ANISOTROPY_EXT, 6.0f);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+    EXPECT_EQ(samplerObject->GetVersion(), setVersion);
+
+    MG_Impl::GLImpl::SamplerParameterf(sampler, GL_TEXTURE_MAX_ANISOTROPY_EXT, 0.25f);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_INVALID_VALUE);
+    EXPECT_FLOAT_EQ(samplerObject->GetMaxAnisotropy(), 6.0f);
+    EXPECT_EQ(samplerObject->GetVersion(), setVersion);
+
+    MG_Impl::GLImpl::SamplerParameteri(sampler, GL_TEXTURE_MAX_ANISOTROPY_EXT, 0);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_INVALID_VALUE);
+    EXPECT_FLOAT_EQ(samplerObject->GetMaxAnisotropy(), 6.0f);
+    EXPECT_EQ(samplerObject->GetVersion(), setVersion);
+
+    const GLint signedInvalidValue = -1;
+    MG_Impl::GLImpl::SamplerParameterIiv(sampler, GL_TEXTURE_MAX_ANISOTROPY_EXT, &signedInvalidValue);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_INVALID_VALUE);
+    EXPECT_FLOAT_EQ(samplerObject->GetMaxAnisotropy(), 6.0f);
+    EXPECT_EQ(samplerObject->GetVersion(), setVersion);
+
+    const GLuint unsignedValue = 10;
+    MG_Impl::GLImpl::SamplerParameterIuiv(sampler, GL_TEXTURE_MAX_ANISOTROPY_EXT, &unsignedValue);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+    EXPECT_FLOAT_EQ(samplerObject->GetMaxAnisotropy(), 10.0f);
+    EXPECT_EQ(samplerObject->GetVersion(), static_cast<Uint16>(setVersion + 1));
+
+    GLuint queriedUnsignedValue = 0;
+    MG_Impl::GLImpl::GetSamplerParameterIuiv(sampler, GL_TEXTURE_MAX_ANISOTROPY_EXT, &queriedUnsignedValue);
+    EXPECT_EQ(queriedUnsignedValue, unsignedValue);
     EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
 }
 

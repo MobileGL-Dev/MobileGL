@@ -9,6 +9,7 @@
 #include <gtest/gtest.h>
 #include <cstring>
 #include <map>
+#include <string>
 #include <vector>
 
 #include <MG_Util/BackendLoaders/OpenGL/Loader.h>
@@ -28,6 +29,7 @@ namespace {
         GLenum errorRaisedByDraw = GL_NO_ERROR;
 
         GLenum pendingError = GL_NO_ERROR;
+        std::vector<std::string> extensions;
 
         GLuint nextBufferId = 1;
         GLuint nextShaderId = 1;
@@ -86,7 +88,7 @@ namespace {
                 *data = 1;
                 break;
             case GL_NUM_EXTENSIONS:
-                *data = 0;
+                *data = static_cast<GLint>(g_fake.extensions.size());
                 break;
             default:
                 // Leave the caller's defaults for every other capability query.
@@ -114,9 +116,10 @@ namespace {
                 return reinterpret_cast<const GLubyte*>("");
             }
         };
-        // GL_NUM_EXTENSIONS reports 0 above, so this is never reached; it exists so the
-        // table stays complete if the extension loop ever runs.
-        funcs.glGetStringi = [](GLenum, GLuint) -> const GLubyte* { return nullptr; };
+        funcs.glGetStringi = [](GLenum name, GLuint index) -> const GLubyte* {
+            if (name != GL_EXTENSIONS || index >= g_fake.extensions.size()) return nullptr;
+            return reinterpret_cast<const GLubyte*>(g_fake.extensions[index].c_str());
+        };
         funcs.glGetFloatv = [](GLenum pname, GLfloat* data) {
             switch (pname) {
             // Two-component range queries.
@@ -399,4 +402,21 @@ TEST(IndirectInstanceIdProbe, FillInCapabilitiesWiresProbeResult) {
     EXPECT_TRUE(g_fake.drawIssued);
     EXPECT_FALSE(conformingCaps.IndirectDrawInstanceIdIncludesBaseInstance);
     ExpectProbeReleasedAllObjects();
+}
+
+TEST(TextureAnisotropyCapabilities, ExtensionPresenceIsDetectedExactly) {
+    ResetFakeDriver();
+    g_fake.maxVertexSsboBlocks = 0;
+    const auto funcs = MakeFakeGLESFunctions();
+
+    MobileGL::MG_External::GLESCapabilities absentCaps;
+    ASSERT_TRUE(MobileGL::MG_Util::BackendLoader::FillInGLESCapabilities(absentCaps, funcs));
+    EXPECT_FALSE(absentCaps.SupportsTextureFilterAnisotropy);
+
+    ResetFakeDriver();
+    g_fake.maxVertexSsboBlocks = 0;
+    g_fake.extensions.emplace_back("GL_EXT_texture_filter_anisotropic");
+    MobileGL::MG_External::GLESCapabilities presentCaps;
+    ASSERT_TRUE(MobileGL::MG_Util::BackendLoader::FillInGLESCapabilities(presentCaps, funcs));
+    EXPECT_TRUE(presentCaps.SupportsTextureFilterAnisotropy);
 }
