@@ -750,6 +750,163 @@ TEST_F(TextureTest, GetInternalformativReportsBasicTextureMetadata) {
     EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
 }
 
+TEST_F(TextureTest, BoundTexImage2DExpandsRedUnsignedByteToRgba8) {
+    GLuint texture = 0;
+    MG_Impl::GLImpl::GenTextures(1, &texture);
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, texture);
+
+    const Uint8 pixels[] = {
+        10, 20,
+        30, 40,
+    };
+    MG_Impl::GLImpl::PixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    MG_Impl::GLImpl::TexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 2, 2, 0, GL_RED, GL_UNSIGNED_BYTE, pixels);
+    MG_Impl::GLImpl::PixelStorei(GL_UNPACK_ALIGNMENT, 4);
+
+    const auto* stored = GetBoundTexture2DLevelBytes(texture);
+    const Uint8 expected[] = {
+        10, 0, 0, 255,
+        20, 0, 0, 255,
+        30, 0, 0, 255,
+        40, 0, 0, 255,
+    };
+    for (SizeT i = 0; i < sizeof(expected); ++i) {
+        EXPECT_EQ(stored[i], expected[i]) << "byte " << i;
+    }
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+}
+
+TEST_F(TextureTest, BoundTexSubImage2DExpandsRgUnsignedByteToRgba8) {
+    GLuint texture = 0;
+    MG_Impl::GLImpl::GenTextures(1, &texture);
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, texture);
+    MG_Impl::GLImpl::TexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 2, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+
+    const Uint8 pixels[] = {
+        10, 20,
+        30, 40,
+    };
+    MG_Impl::GLImpl::PixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    MG_Impl::GLImpl::TexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 2, 1, GL_RG, GL_UNSIGNED_BYTE, pixels);
+    MG_Impl::GLImpl::PixelStorei(GL_UNPACK_ALIGNMENT, 4);
+
+    const auto* stored = GetBoundTexture2DLevelBytes(texture);
+    const Uint8 expected[] = {
+        10, 20, 0, 255,
+        30, 40, 0, 255,
+    };
+    for (SizeT i = 0; i < sizeof(expected); ++i) {
+        EXPECT_EQ(stored[i], expected[i]) << "byte " << i;
+    }
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+}
+
+TEST_F(TextureTest, BoundTexImage2DReordersBgrUnsignedByteToRgba8) {
+    GLuint texture = 0;
+    MG_Impl::GLImpl::GenTextures(1, &texture);
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, texture);
+
+    const Uint8 pixels[] = {
+        1, 2, 3,
+        4, 5, 6,
+    };
+    MG_Impl::GLImpl::PixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    MG_Impl::GLImpl::TexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 2, 1, 0, GL_BGR, GL_UNSIGNED_BYTE, pixels);
+    MG_Impl::GLImpl::PixelStorei(GL_UNPACK_ALIGNMENT, 4);
+
+    const auto* stored = GetBoundTexture2DLevelBytes(texture);
+    const Uint8 expected[] = {
+        3, 2, 1, 255,
+        6, 5, 4, 255,
+    };
+    for (SizeT i = 0; i < sizeof(expected); ++i) {
+        EXPECT_EQ(stored[i], expected[i]) << "byte " << i;
+    }
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+}
+
+TEST_F(TextureTest, BoundTexImage2DConvertsRedFloatToRgba8) {
+    GLuint texture = 0;
+    MG_Impl::GLImpl::GenTextures(1, &texture);
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, texture);
+
+    const GLfloat pixels[] = {
+        0.0f, 0.5f,
+        1.0f, 2.0f, // out-of-range values clamp to [0, 1]
+    };
+    MG_Impl::GLImpl::PixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    MG_Impl::GLImpl::TexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 2, 2, 0, GL_RED, GL_FLOAT, pixels);
+    MG_Impl::GLImpl::PixelStorei(GL_UNPACK_ALIGNMENT, 4);
+
+    const auto* stored = GetBoundTexture2DLevelBytes(texture);
+    const Uint8 expected[] = {
+        0, 0, 0, 255,
+        128, 0, 0, 255,
+        255, 0, 0, 255,
+        255, 0, 0, 255,
+    };
+    for (SizeT i = 0; i < sizeof(expected); ++i) {
+        EXPECT_EQ(stored[i], expected[i]) << "byte " << i;
+    }
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+}
+
+TEST_F(TextureTest, BoundTexImage2DExpandsRedIntegerUnsignedShortToRgba8ui) {
+    GLuint texture = 0;
+    MG_Impl::GLImpl::GenTextures(1, &texture);
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, texture);
+
+    const Uint16 pixels[] = {
+        10, 300, // 300 exceeds the 8-bit destination and clamps to 255
+    };
+    MG_Impl::GLImpl::PixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    MG_Impl::GLImpl::TexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8UI, 2, 1, 0, GL_RED_INTEGER, GL_UNSIGNED_SHORT, pixels);
+    MG_Impl::GLImpl::PixelStorei(GL_UNPACK_ALIGNMENT, 4);
+
+    const auto* stored = GetBoundTexture2DLevelBytes(texture);
+    const Uint8 expected[] = {
+        10, 0, 0, 1, // integer formats default missing alpha to 1, not the type maximum
+        255, 0, 0, 1,
+    };
+    for (SizeT i = 0; i < sizeof(expected); ++i) {
+        EXPECT_EQ(stored[i], expected[i]) << "byte " << i;
+    }
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+}
+
+TEST_F(TextureTest, BoundTexImage2DExpandsRedToRgba8WithRowLengthAndSkips) {
+    GLuint texture = 0;
+    MG_Impl::GLImpl::GenTextures(1, &texture);
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, texture);
+
+    const Uint8 pixels[] = {
+        1, 2, 3, 4,
+        5, 6, 7, 8,
+        9, 10, 11, 12,
+    };
+    MG_Impl::GLImpl::PixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    MG_Impl::GLImpl::PixelStorei(GL_UNPACK_ROW_LENGTH, 4);
+    MG_Impl::GLImpl::PixelStorei(GL_UNPACK_SKIP_PIXELS, 1);
+    MG_Impl::GLImpl::PixelStorei(GL_UNPACK_SKIP_ROWS, 1);
+    MG_Impl::GLImpl::TexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 2, 2, 0, GL_RED, GL_UNSIGNED_BYTE, pixels);
+    MG_Impl::GLImpl::PixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+    MG_Impl::GLImpl::PixelStorei(GL_UNPACK_SKIP_PIXELS, 0);
+    MG_Impl::GLImpl::PixelStorei(GL_UNPACK_SKIP_ROWS, 0);
+    MG_Impl::GLImpl::PixelStorei(GL_UNPACK_ALIGNMENT, 4);
+
+    const auto* stored = GetBoundTexture2DLevelBytes(texture);
+    const Uint8 expected[] = {
+        6, 0, 0, 255,
+        7, 0, 0, 255,
+        10, 0, 0, 255,
+        11, 0, 0, 255,
+    };
+    for (SizeT i = 0; i < sizeof(expected); ++i) {
+        EXPECT_EQ(stored[i], expected[i]) << "byte " << i;
+    }
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+}
+
 TEST_F(TextureTest, NormalizeDepth24Stencil8UsesPackedDepthStencilType) {
     GLenum internalFormat = 0;
     GLenum format = 0;
