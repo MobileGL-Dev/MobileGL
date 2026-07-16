@@ -969,7 +969,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 g_uboRing.generation = nextGeneration;
                 g_uboRing.alignment = capsAlignment > 0 ? static_cast<SizeT>(capsAlignment) : 256;
                 g_uboRingFrameMarks.clear();
-                MGLOG_I("Global-UBO ring: %zu MiB persistent store ready (id %u, gen %u, align %zu).",
+                MGLOG_D("Global-UBO ring: %zu MiB persistent store ready (id %u, gen %u, align %zu).",
                         newSize / (1024u * 1024u), id, nextGeneration, g_uboRing.alignment);
                 return true;
             }
