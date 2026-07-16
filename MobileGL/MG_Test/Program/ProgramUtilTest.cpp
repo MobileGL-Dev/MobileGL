@@ -107,7 +107,7 @@ void main() {
 
     PreprocessShaderSource(ShaderStage::Vertex, source);
 
-    EXPECT_EQ(source.find("#version 460 core\n"), 0);
+    EXPECT_EQ(source.find("#version 330 core\n"), 0);
     EXPECT_NE(source.find("in vec3 position;"), String::npos);
     EXPECT_NE(source.find("out vec2 uv;"), String::npos);
     EXPECT_EQ(source.find("attribute"), String::npos);
@@ -136,7 +136,7 @@ void main() {
 
     PreprocessShaderSource(ShaderStage::Fragment, source);
 
-    EXPECT_EQ(source.find("#version 460 core\n"), 0);
+    EXPECT_EQ(source.find("#version 330 core\n"), 0);
     EXPECT_NE(source.find("out vec4 mg_FragColor;\n"), String::npos);
     EXPECT_NE(source.find("in vec2 uv;"), String::npos);
     EXPECT_NE(source.find("texture(texture0, uv)"), String::npos);
@@ -153,6 +153,243 @@ void main() {
     }
 }
 
+TEST_F(ProgramUtilTest, PreprocessMinecraft112BlurShaderKeepsLegacySampleIdentifier) {
+    using namespace MG_Util::ShaderTranspiler;
+
+    // assets/minecraft/shaders/program/blur.fsh from the unmodified Minecraft 1.12 client jar.
+    String source = R"(#version 120
+
+uniform sampler2D DiffuseSampler;
+
+varying vec2 texCoord;
+varying vec2 oneTexel;
+
+uniform vec2 InSize;
+
+uniform vec2 BlurDir;
+uniform float Radius;
+
+void main() {
+    vec4 blurred = vec4(0.0);
+    float totalStrength = 0.0;
+    float totalAlpha = 0.0;
+    float totalSamples = 0.0;
+    for(float r = -Radius; r <= Radius; r += 1.0) {
+        vec4 sample = texture2D(DiffuseSampler, texCoord + oneTexel * r * BlurDir);
+
+		// Accumulate average alpha
+        totalAlpha = totalAlpha + sample.a;
+        totalSamples = totalSamples + 1.0;
+
+		// Accumulate smoothed blur
+        float strength = 1.0 - abs(r / Radius);
+        totalStrength = totalStrength + strength;
+        blurred = blurred + sample;
+    }
+    gl_FragColor = vec4(blurred.rgb / (Radius * 2.0 + 1.0), totalAlpha);
+}
+)";
+
+    PreprocessShaderSource(ShaderStage::Fragment, source);
+
+    EXPECT_EQ(source.find("#version 330 core\n"), 0);
+    EXPECT_NE(source.find("vec4 sample = texture(DiffuseSampler"), String::npos);
+    EXPECT_NE(source.find("totalAlpha = totalAlpha + sample.a;"), String::npos);
+    EXPECT_NE(source.find("float totalSamples = 0.0;"), String::npos);
+    EXPECT_NE(source.find("totalSamples = totalSamples + 1.0;"), String::npos);
+    EXPECT_NE(source.find("blurred = blurred + sample;"), String::npos);
+
+    ShaderAttrib attrib{.shaderType = GL_FRAGMENT_SHADER, .sourceStr = source};
+    auto res = ShaderCompiler::CompileShader(attrib);
+    if (!res) {
+        FAIL() << "errc: " << res.error().errc << "\nlog: " << res.error().log << "\nsource:\n" << source;
+    }
+}
+
+TEST_F(ProgramUtilTest, PreprocessLegacySampleInterfaceIdentifiersKeepNames) {
+    using namespace MG_Util::ShaderTranspiler;
+
+    String vertexSource = R"(#version 150
+attribute vec3 sample;
+
+void main() {
+    gl_Position = vec4(sample, 1.0);
+}
+)";
+    PreprocessShaderSource(ShaderStage::Vertex, vertexSource);
+
+    EXPECT_EQ(vertexSource.find("#version 330 core\n"), 0);
+    EXPECT_NE(vertexSource.find("in vec3 sample;"), String::npos);
+
+    ShaderAttrib vertexAttrib{.shaderType = GL_VERTEX_SHADER, .sourceStr = vertexSource};
+    auto vertexResult = ShaderCompiler::CompileShader(vertexAttrib);
+    if (!vertexResult) {
+        FAIL() << "errc: " << vertexResult.error().errc << "\nlog: " << vertexResult.error().log
+               << "\nsource:\n" << vertexSource;
+    }
+
+    String fragmentSource = R"(#version 150
+uniform sampler2D sample;
+varying vec2 texCoord;
+
+void main() {
+    gl_FragColor = texture2D(sample, texCoord);
+}
+)";
+    PreprocessShaderSource(ShaderStage::Fragment, fragmentSource);
+
+    EXPECT_EQ(fragmentSource.find("#version 330 core\n"), 0);
+    EXPECT_NE(fragmentSource.find("uniform sampler2D sample;"), String::npos);
+    EXPECT_NE(fragmentSource.find("texture(sample, texCoord)"), String::npos);
+
+    ShaderAttrib fragmentAttrib{.shaderType = GL_FRAGMENT_SHADER, .sourceStr = fragmentSource};
+    auto fragmentResult = ShaderCompiler::CompileShader(fragmentAttrib);
+    if (!fragmentResult) {
+        FAIL() << "errc: " << fragmentResult.error().errc << "\nlog: " << fragmentResult.error().log
+               << "\nsource:\n" << fragmentSource;
+    }
+}
+
+TEST_F(ProgramUtilTest, PreprocessEsslVersionsRemainVulkanCompatible) {
+    using namespace MG_Util::ShaderTranspiler;
+
+    const auto verifyVersion = [](const char* inputVersion, const char* expectedVersion) {
+        SCOPED_TRACE(inputVersion);
+        String source = inputVersion;
+        source += R"(
+precision mediump float;
+out vec4 fragColor;
+
+void main() {
+    fragColor = vec4(1.0);
+}
+)";
+        PreprocessShaderSource(ShaderStage::Fragment, source);
+
+        EXPECT_EQ(source.find(expectedVersion), 0);
+
+        ShaderAttrib attrib{.shaderType = GL_FRAGMENT_SHADER, .sourceStr = source};
+        auto res = ShaderCompiler::CompileShader(attrib);
+        if (!res) {
+            FAIL() << "errc: " << res.error().errc << "\nlog: " << res.error().log << "\nsource:\n" << source;
+        }
+    };
+
+    // Preserve the pre-existing desktop-core route: the current resource table cannot parse ESSL built-ins.
+    verifyVersion("#version 300 es", "#version 460 core\n");
+    verifyVersion("#version 310 es", "#version 460 core\n");
+}
+
+TEST_F(ProgramUtilTest, PreprocessModernDesktopVersionsRecognizesUtf8Bom) {
+    using namespace MG_Util::ShaderTranspiler;
+
+    const auto verifyVersion = [](const char* inputVersion) {
+        SCOPED_TRACE(inputVersion);
+        String source = "\xef\xbb\xbf";
+        source += inputVersion;
+        source += R"(
+out vec4 fragColor;
+
+void main() {
+    fragColor = vec4(1.0);
+}
+)";
+        PreprocessShaderSource(ShaderStage::Fragment, source);
+
+        EXPECT_EQ(source.find("#version 460 core\n"), 0);
+        EXPECT_EQ(source.find("\xef\xbb\xbf"), String::npos);
+
+        ShaderAttrib attrib{.shaderType = GL_FRAGMENT_SHADER, .sourceStr = source};
+        auto res = ShaderCompiler::CompileShader(attrib);
+        if (!res) {
+            FAIL() << "errc: " << res.error().errc << "\nlog: " << res.error().log << "\nsource:\n" << source;
+        }
+    };
+
+    verifyVersion("#version 400 core");
+    verifyVersion("#version 460 core");
+}
+
+TEST_F(ProgramUtilTest, PreprocessUsesRealSpacedVersionDirectiveForInjectedOutput) {
+    using namespace MG_Util::ShaderTranspiler;
+
+    String source = R"(// #version 460 core
+/* "#version 400 core" */
+#line 7 "#version 460 core"
+# version 120
+varying vec2 uv;
+
+void main() {
+    gl_FragColor = vec4(uv, 0.0, 1.0);
+}
+)";
+    PreprocessShaderSource(ShaderStage::Fragment, source);
+
+    const SizeT versionPos = source.find("#version 330 core\n");
+    const SizeT outputPos = source.find("out vec4 mg_FragColor;\n");
+    EXPECT_NE(versionPos, String::npos);
+    EXPECT_EQ(outputPos, versionPos + std::strlen("#version 330 core\n"));
+    EXPECT_NE(source.find("// #version 460 core"), String::npos);
+    EXPECT_EQ(source.find("#line"), String::npos);
+
+    ShaderAttrib attrib{.shaderType = GL_FRAGMENT_SHADER, .sourceStr = source};
+    auto res = ShaderCompiler::CompileShader(attrib);
+    if (!res) {
+        FAIL() << "errc: " << res.error().errc << "\nlog: " << res.error().log << "\nsource:\n" << source;
+    }
+}
+
+TEST_F(ProgramUtilTest, PreprocessModernSampleQualifierStaysAtVersion460) {
+    using namespace MG_Util::ShaderTranspiler;
+
+    String source = R"(#version 400 core
+sample in vec4 interpolatedColor;
+out vec4 fragColor;
+
+void main() {
+    fragColor = interpolatedColor;
+}
+)";
+    PreprocessShaderSource(ShaderStage::Fragment, source);
+
+    EXPECT_EQ(source.find("#version 460 core\n"), 0);
+    EXPECT_NE(source.find("sample in vec4 interpolatedColor;"), String::npos);
+
+    ShaderAttrib attrib{.shaderType = GL_FRAGMENT_SHADER, .sourceStr = source};
+    auto res = ShaderCompiler::CompileShader(attrib);
+    if (!res) {
+        FAIL() << "errc: " << res.error().errc << "\nlog: " << res.error().log << "\nsource:\n" << source;
+    }
+}
+
+TEST_F(ProgramUtilTest, PreprocessGpuShader5SampleQualifierUsesVersion460) {
+    using namespace MG_Util::ShaderTranspiler;
+
+    for (const char* extension : {"GL_ARB_gpu_shader5", "GL_NV_gpu_shader5"}) {
+        SCOPED_TRACE(extension);
+        String source = "#version 150\n#extension ";
+        source += extension;
+        source += R"( : enable
+sample in vec4 interpolatedColor;
+out vec4 fragColor;
+
+void main() {
+    fragColor = interpolatedColor;
+}
+)";
+        PreprocessShaderSource(ShaderStage::Fragment, source);
+
+        EXPECT_EQ(source.find("#version 460 core\n"), 0);
+        EXPECT_NE(source.find("sample in vec4 interpolatedColor;"), String::npos);
+
+        ShaderAttrib attrib{.shaderType = GL_FRAGMENT_SHADER, .sourceStr = source};
+        auto res = ShaderCompiler::CompileShader(attrib);
+        if (!res) {
+            FAIL() << "errc: " << res.error().errc << "\nlog: " << res.error().log << "\nsource:\n" << source;
+        }
+    }
+}
+
 TEST_F(ProgramUtilTest, PreprocessLegacyFragmentShaderModernizesFragData) {
     using namespace MG_Util::ShaderTranspiler;
 
@@ -164,7 +401,7 @@ void main() {
 
     PreprocessShaderSource(ShaderStage::Fragment, source);
 
-    EXPECT_EQ(source.find("#version 460 core\n"), 0);
+    EXPECT_EQ(source.find("#version 330 core\n"), 0);
     EXPECT_NE(source.find("layout(location = 0) out vec4 mg_FragData[8];\n"), String::npos);
     EXPECT_NE(source.find("mg_FragData[0] = vec4(1.0);"), String::npos);
     EXPECT_NE(source.find("mg_FragData[1].a = 0.5;"), String::npos);
@@ -182,7 +419,7 @@ TEST_F(ProgramUtilTest, PreprocessKeepsDefaultPrecisionStatements) {
 
     // Mirrors the GL CTS helper shaders (e.g. glcPixelStorageModesTests): the old qualifier strip
     // turned "precision highp float;" into invalid "precision  float;". Precision qualifiers are
-    // legal (and ignored) in the forced 460 core profile, so they now pass through untouched.
+    // legal (and ignored) in the normalized desktop core profile, so they now pass through untouched.
     String source = R"(#version 330
 precision highp float;
 precision mediump int;
@@ -212,7 +449,7 @@ TEST_F(ProgramUtilTest, PreprocessKeepsPrecisionInLegacyShaderForGlslang) {
     using namespace MG_Util::ShaderTranspiler;
 
     // Legacy ES-style shader: precision statements and qualifier macros are left for glslang
-    // (its preprocessor expands the #define; the 460 core parse ignores the qualifiers).
+    // (its preprocessor expands the #define; the normalized 330 core parse ignores the qualifiers).
     String source = R"(#define HIGHP_OR_DEFAULT highp
 precision HIGHP_OR_DEFAULT float;
 precision mediump int;
