@@ -8,6 +8,7 @@
 
 #include "GL_Buffer.h"
 #include "Validators.h"
+#include <Config.h>
 #include <MG_State/GLState/Core.h>
 #include <MG_State/GLState/ErrorState/Error.h>
 #include <MG_Util/Converters/GLToStr/GLEnumConverter.h>
@@ -206,6 +207,26 @@ namespace MobileGL::MG_Impl::GLImpl {
                                                  std::format("Buffer object {} does not exist.", buffer)));
             }
             return bufferObject;
+        }
+
+        // MOBILEGL_COHERENT_AS_FLUSH: rewrite a validated persistent FLUSH_EXPLICIT mapping
+        // request to coherent semantics: the map becomes coherent-persistent (eligible for
+        // the zero-copy backend map, otherwise synced wholesale at draw time), so its writes
+        // reach the GPU without glFlushMappedBufferRange; flush calls on rewritten maps are
+        // tolerated as no-ops by the FlushMappedBufferRange entry points. Non-persistent
+        // maps keep spec FLUSH_EXPLICIT behavior on purpose: the GPU cannot read them while
+        // mapped, so they gain nothing from the rewrite, and honoring only the app's flushed
+        // subranges avoids clobbering GPU-written bytes elsewhere in the mapped range.
+        // Runs after validation so the app's original access combination is what gets
+        // validated (Coherent is injected without requiring GL_MAP_COHERENT_BIT storage).
+        Flags<BufferMappingAccessBit> ApplyCoherentAsFlush(Flags<BufferMappingAccessBit> accessBits) {
+            if (!MG_Config::Features.CoherentAsFlush) return accessBits;
+            if (!(accessBits & BufferMappingAccessBit::FlushExplicit)) return accessBits;
+            if (!(accessBits & BufferMappingAccessBit::Persistent)) return accessBits;
+            accessBits = Flags<BufferMappingAccessBit>(
+                accessBits.GetRaw() & ~static_cast<Uint>(BufferMappingAccessBit::FlushExplicit));
+            accessBits |= BufferMappingAccessBit::Coherent;
+            return accessBits;
         }
 
         Bool ValidateStorageFlags(GLbitfield flags, BufferOp op) {
@@ -465,6 +486,15 @@ namespace MobileGL::MG_Impl::GLImpl {
 
         auto mappingAccess = bufferObject->GetMappingAccess();
         if (!(mappingAccess & BufferMappingAccessBit::FlushExplicit)) {
+            // MOBILEGL_COHERENT_AS_FLUSH strips FLUSH_EXPLICIT from persistent maps at map
+            // time (leaving Persistent|Coherent), so honor the app's flush on such a map as
+            // a no-op: its writes reach the backend without explicit flushes. Other maps
+            // keep the spec error.
+            if (MG_Config::Features.CoherentAsFlush &&
+                (mappingAccess & BufferMappingAccessBit::Persistent) &&
+                (mappingAccess & BufferMappingAccessBit::Coherent)) {
+                return;
+            }
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidOperation,
                 MakeUnique<GenericErrorInfo>(
@@ -605,7 +635,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         }
 
         void* result = bufferObject->AcquireMemoryRange(
-            {static_cast<SizeT>(offset), static_cast<SizeT>(offset + length)}, accessBits);
+            {static_cast<SizeT>(offset), static_cast<SizeT>(offset + length)}, ApplyCoherentAsFlush(accessBits));
         if (!result) {
             MG_State::pGLContext->RecordError(
                 ErrorCode::OutOfMemory,
@@ -1197,7 +1227,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         }
 
         return bufferObject->AcquireMemoryRange({static_cast<SizeT>(offset), static_cast<SizeT>(offset + length)},
-                                                accessBits);
+                                                ApplyCoherentAsFlush(accessBits));
     }
 
     GLboolean UnmapNamedBuffer_State(GLuint buffer) {
@@ -1239,7 +1269,15 @@ namespace MobileGL::MG_Impl::GLImpl {
                                              "Offset and length exceed mapped range."));
             return;
         }
-        if (!(bufferObject->GetMappingAccess() & BufferMappingAccessBit::FlushExplicit)) {
+        const auto namedMappingAccess = bufferObject->GetMappingAccess();
+        if (!(namedMappingAccess & BufferMappingAccessBit::FlushExplicit)) {
+            // See FlushMappedBufferRange_State: rewritten coherent-as-flush persistent maps
+            // tolerate app flushes as no-ops.
+            if (MG_Config::Features.CoherentAsFlush &&
+                (namedMappingAccess & BufferMappingAccessBit::Persistent) &&
+                (namedMappingAccess & BufferMappingAccessBit::Coherent)) {
+                return;
+            }
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidOperation,
                 MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", "FlushMappedNamedBufferRange_State",

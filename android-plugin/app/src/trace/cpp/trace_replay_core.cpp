@@ -149,6 +149,11 @@ bool LoadMobileGL(const Request& request, std::string& error) {
     } else {
         unsetenv("MOBILEGL_AVOID_SAMPLER_MIPMAP_MIN_FILTER");
     }
+    if (request.coherentAsFlush) {
+        setenv("MOBILEGL_COHERENT_AS_FLUSH", "1", 1);
+    } else {
+        unsetenv("MOBILEGL_COHERENT_AS_FLUSH");
+    }
 
     void* handle = dlopen(request.mobileGlLibrary.c_str(), RTLD_NOW | RTLD_GLOBAL);
     if (handle == nullptr) {

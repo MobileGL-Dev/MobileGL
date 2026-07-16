@@ -48,6 +48,7 @@ require 'key:MOBILEGL_DISABLE_SUBGROUP' "$plugin_resource_text" 'V2 Vulkan subgr
 require 'key:MOBILEGL_MAGMA_R11G11B10F_FALLBACK' "$plugin_resource_text" 'V2 Magma format fallback toggle'
 require 'key:MOBILEGL_MAGMA_FRAMESINFLIGHT' "$plugin_resource_text" 'V2 Magma frames-in-flight setting'
 require 'key:MOBILEGL_AVOID_SAMPLER_MIPMAP_MIN_FILTER' "$plugin_resource_text" 'V2 sampler workaround toggle'
+require 'key:MOBILEGL_COHERENT_AS_FLUSH' "$plugin_resource_text" 'V2 coherent-as-flush toggle'
 require 'key:MOBILEGL_USE_ANGLE' "$plugin_resource_text" 'V2 ANGLE toggle'
 
 if [[ $(grep -Fc 'fclPlugin_V2' <<<"$plugin_manifest") -ne 1 ]]; then

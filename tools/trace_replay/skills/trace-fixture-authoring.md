@@ -121,7 +121,10 @@ depends on them - the symptom is geometry that renders live but disappears in
 replay. The in-tree fork shadow-tracks persistent mappings unconditionally;
 if a replay of `full.trace` is already missing content that the live run
 showed, fix capture (wrapper) first - no amount of trimming will bring the
-data back, and the case must be recaptured.
+data back, and the case must be recaptured. There is also a replay-side
+requirement: MobileGL only forwards such never-flushed writes when
+`MOBILEGL_COHERENT_AS_FLUSH=1`, so register the case with
+`"coherent_as_flush": true` (see "Register the case").
 
 ## Select target frame
 
@@ -288,8 +291,12 @@ Values matching the `defaults` block (854x480, `trace.trace`, ssim 0.99, zero
 crop, 900 s timeout) may be omitted. Available per-case keys: `name`,
 `trace_archive`, `trace_file`, `golden`, `alternate_golden`, `target_call`,
 `width`, `height`, `ssim_threshold`, `crop_x/y/width/height`,
-`timeout_seconds`, `ci`. Long single-frame replays of heavy in-world scenes
-need a raised `timeout_seconds` (the Create fixtures use 1800).
+`timeout_seconds`, `ci`, `coherent_as_flush`. Long single-frame replays of
+heavy in-world scenes need a raised `timeout_seconds` (the Create fixtures
+use 1800). Set `"coherent_as_flush": true` for Flywheel-style engines that
+let the GPU read persistent `GL_MAP_FLUSH_EXPLICIT_BIT` mappings they never
+flush (both Create fixtures need it); the case then replays with
+`MOBILEGL_COHERENT_AS_FLUSH=1` on every runner.
 
 Update `tools/trace_replay/README.md` with one fixture sentence and one golden
 image link.

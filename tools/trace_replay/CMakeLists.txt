@@ -299,7 +299,8 @@ function(add_trace_replay_test CASE_NAME BACKEND)
             CROP_X
             CROP_Y
             CROP_WIDTH
-            CROP_HEIGHT)
+            CROP_HEIGHT
+            COHERENT_AS_FLUSH)
     cmake_parse_arguments(TRACE_CASE "" "${oneValueArgs}" "" ${ARGN})
     foreach(required TRACE_ARCHIVE GOLDEN TARGET_CALL WIDTH HEIGHT)
         if(NOT TRACE_CASE_${required})
@@ -343,6 +344,7 @@ function(add_trace_replay_test CASE_NAME BACKEND)
             -DTRACE_CROP_Y=${TRACE_CASE_CROP_Y}
             -DTRACE_CROP_WIDTH=${TRACE_CASE_CROP_WIDTH}
             -DTRACE_CROP_HEIGHT=${TRACE_CASE_CROP_HEIGHT}
+            -DTRACE_COHERENT_AS_FLUSH=${TRACE_CASE_COHERENT_AS_FLUSH}
             -DTRACE_OUTPUT_DIR=${CMAKE_CURRENT_BINARY_DIR}/${CASE_NAME}/${BACKEND}
             -DTRACE_ARTIFACT_DIR=${CMAKE_CURRENT_BINARY_DIR}/${CASE_NAME}/actual-images
             -P ${MOBILEGL_TRACE_ROOT}/run_trace_case.cmake)

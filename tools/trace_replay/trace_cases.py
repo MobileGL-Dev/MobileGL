@@ -91,6 +91,7 @@ def emit_cmake(cases, fixture_root):
         ("CROP_Y", "crop_y", False),
         ("CROP_WIDTH", "crop_width", False),
         ("CROP_HEIGHT", "crop_height", False),
+        ("COHERENT_AS_FLUSH", "coherent_as_flush", False),
     ]
     for case in cases:
         lines.append(f"add_trace_replay_test_for_backends({cmake_quote(case['name'])}")

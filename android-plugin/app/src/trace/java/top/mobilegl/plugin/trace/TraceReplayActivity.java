@@ -113,7 +113,8 @@ public final class TraceReplayActivity extends Activity {
                 request.angleVariant,
                 request.useAngle,
                 request.usePbuffer,
-                request.avoidAngleLlvmpipeSamplerMipmapMinFilter
+                request.avoidAngleLlvmpipeSamplerMipmapMinFilter,
+                request.coherentAsFlush
         );
         Log.i(TAG, result.toString());
         TraceReplayResult finalResult = result;
@@ -143,7 +144,8 @@ public final class TraceReplayActivity extends Activity {
             String angleVariant,
             boolean useAngle,
             boolean usePbuffer,
-            boolean avoidAngleLlvmpipeSamplerMipmapMinFilter
+            boolean avoidAngleLlvmpipeSamplerMipmapMinFilter,
+            boolean coherentAsFlush
     );
 
     private static final class TraceReplayRequest {
@@ -166,6 +168,7 @@ public final class TraceReplayActivity extends Activity {
         final boolean useAngle;
         final boolean usePbuffer;
         final boolean avoidAngleLlvmpipeSamplerMipmapMinFilter;
+        final boolean coherentAsFlush;
 
         private TraceReplayRequest(
                 String tracePath,
@@ -186,7 +189,8 @@ public final class TraceReplayActivity extends Activity {
                 String angleVariant,
                 boolean useAngle,
                 boolean usePbuffer,
-                boolean avoidAngleLlvmpipeSamplerMipmapMinFilter
+                boolean avoidAngleLlvmpipeSamplerMipmapMinFilter,
+                boolean coherentAsFlush
         ) {
             this.tracePath = tracePath;
             this.goldenPath = goldenPath;
@@ -207,6 +211,7 @@ public final class TraceReplayActivity extends Activity {
             this.useAngle = useAngle;
             this.usePbuffer = usePbuffer;
             this.avoidAngleLlvmpipeSamplerMipmapMinFilter = avoidAngleLlvmpipeSamplerMipmapMinFilter;
+            this.coherentAsFlush = coherentAsFlush;
         }
 
         static TraceReplayRequest from(Intent intent, File filesDir, String defaultBackend) {
@@ -231,7 +236,8 @@ public final class TraceReplayActivity extends Activity {
                     readString(intent, "angle_variant", ""),
                     intent.getBooleanExtra("use_angle", false),
                     intent.getBooleanExtra("use_pbuffer", false),
-                    intent.getBooleanExtra("avoid_angle_llvmpipe_sampler_mipmap_min_filter", false)
+                    intent.getBooleanExtra("avoid_angle_llvmpipe_sampler_mipmap_min_filter", false),
+                    intent.getBooleanExtra("coherent_as_flush", false)
             );
         }
 

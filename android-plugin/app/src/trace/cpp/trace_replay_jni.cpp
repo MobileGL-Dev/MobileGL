@@ -101,7 +101,8 @@ Java_top_mobilegl_plugin_trace_TraceReplayActivity_nativeRunTraceReplay(JNIEnv* 
                                                                         jstring angleVariant,
                                                                         jboolean useAngle,
                                                                         jboolean usePbuffer,
-                                                                        jboolean avoidAngleLlvmpipeSamplerMipmapMinFilter) {
+                                                                        jboolean avoidAngleLlvmpipeSamplerMipmapMinFilter,
+                                                                        jboolean coherentAsFlush) {
     mobilegl_trace::Request request;
     request.tracePath = ToString(env, tracePath);
     request.goldenPath = ToString(env, goldenPath);
@@ -126,6 +127,7 @@ Java_top_mobilegl_plugin_trace_TraceReplayActivity_nativeRunTraceReplay(JNIEnv* 
     request.usePbuffer = usePbuffer == JNI_TRUE;
     request.avoidAngleLlvmpipeSamplerMipmapMinFilter =
         avoidAngleLlvmpipeSamplerMipmapMinFilter == JNI_TRUE;
+    request.coherentAsFlush = coherentAsFlush == JNI_TRUE;
 
     ScopedTraceReplayState replayState;
     mobilegl_trace_set_requested_size(request.width, request.height);

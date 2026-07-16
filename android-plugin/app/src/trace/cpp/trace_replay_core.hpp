@@ -36,6 +36,7 @@ struct Request {
     bool useAngle = false;
     bool usePbuffer = true;
     bool avoidAngleLlvmpipeSamplerMipmapMinFilter = false;
+    bool coherentAsFlush = false;
     int holdMs = 0;
 };
 

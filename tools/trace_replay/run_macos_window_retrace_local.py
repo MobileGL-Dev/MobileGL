@@ -361,6 +361,8 @@ def run_case(case, backend, replay_exe, mobilegl_library, vulkan_icd):
         str(case["crop_height"]),
         "--window-surface",
     ]
+    if case.get("coherent_as_flush"):
+        command.append("--coherent-as-flush")
     env = os.environ.copy()
     env["MOBILEGL_BACKEND_TYPE"] = backend
     env["MOBILEGL_MAGMA_R11G11B10F_FALLBACK"] = "1"

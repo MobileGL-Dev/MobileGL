@@ -34,6 +34,9 @@
             android:name="mobilegl_avoid_sampler_mipmap_min_filter_title"
             tools:node="remove" />
         <meta-data
+            android:name="mobilegl_coherent_as_flush_title"
+            tools:node="remove" />
+        <meta-data
             android:name="mobilegl_use_angle_title"
             tools:node="remove" />
         <meta-data

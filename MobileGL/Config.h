@@ -48,6 +48,13 @@ namespace MobileGL::MG_Config {
         // MOBILEGL_AVOID_SAMPLER_MIPMAP_MIN_FILTER: avoid mipmap min filters in samplers,
         // resolves certain rendering bugs on ANGLE + llvmpipe.
         Bool AvoidSamplerMipmapMinFilter = false;
+        // MOBILEGL_COHERENT_AS_FLUSH: app-compat for engines (e.g. Flywheel) that write
+        // GPU-read data through persistent GL_MAP_FLUSH_EXPLICIT_BIT maps they never
+        // flush. Persistent FLUSH_EXPLICIT map requests are rewritten to coherent
+        // semantics: writes reach the backend without glFlushMappedBufferRange, and
+        // flush calls on rewritten maps become error-free no-ops. Non-persistent maps
+        // keep spec FLUSH_EXPLICIT behavior.
+        Bool CoherentAsFlush = false;
         // MOBILEGL_TRACE_SKIP_AUTODESTROY: skip teardown in the ELF destructor (Init.cpp).
         Bool TraceSkipAutodestroy = false;
     };

@@ -27,7 +27,8 @@ void PrintUsage(const char *argv0) {
             << "  --crop-x N                Compare crop x\n"
             << "  --crop-y N                Compare crop y\n"
             << "  --crop-width N            Compare crop width\n"
-            << "  --crop-height N           Compare crop height\n";
+            << "  --crop-height N           Compare crop height\n"
+            << "  --coherent-as-flush       Set MOBILEGL_COHERENT_AS_FLUSH=1 for the replay\n";
 }
 
 bool ReadValue(int argc, char **argv, int &index, std::string &out) {
@@ -113,6 +114,8 @@ bool ParseArgs(int argc, char **argv, mobilegl_trace::Request &request) {
             if (!ReadInt(argc, argv, i, request.cropWidth)) return false;
         } else if (arg == "--crop-height") {
             if (!ReadInt(argc, argv, i, request.cropHeight)) return false;
+        } else if (arg == "--coherent-as-flush") {
+            request.coherentAsFlush = true;
         } else if (arg == "--help" || arg == "-h") {
             return false;
         } else {

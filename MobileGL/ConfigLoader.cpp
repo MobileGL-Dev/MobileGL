@@ -119,6 +119,7 @@ namespace MobileGL::MG_ConfigLoader {
         features.MagmaFramesInFlight = QueryEnvUint32("MOBILEGL_MAGMA_FRAMESINFLIGHT", 3, 1, 64);
         features.AvoidSamplerMipmapMinFilter =
             QueryEnvFlag("MOBILEGL_AVOID_SAMPLER_MIPMAP_MIN_FILTER");
+        features.CoherentAsFlush = QueryEnvFlag("MOBILEGL_COHERENT_AS_FLUSH");
         features.TraceSkipAutodestroy = QueryEnvFlag("MOBILEGL_TRACE_SKIP_AUTODESTROY");
     }
 

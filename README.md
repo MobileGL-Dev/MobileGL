@@ -160,6 +160,7 @@ MobileGL supports runtime configuration via environment variables.
 | `MOBILEGL_MAGMA_R11G11B10F_FALLBACK` | Use Magma's R11G11B10F format fallback. | `0`, `1` | `0` |
 | `MOBILEGL_MAGMA_FRAMESINFLIGHT` | Set Magma frames in flight. | Integer `1`–`64` | `3` |
 | `MOBILEGL_AVOID_SAMPLER_MIPMAP_MIN_FILTER` | Avoid sampler mipmap minification filters. | `0`, `1` | `0` |
+| `MOBILEGL_COHERENT_AS_FLUSH` | Treat persistent `GL_MAP_FLUSH_EXPLICIT_BIT` maps as coherent (app-compat for engines like Flywheel that never flush them). | `0`, `1` | `0` |
 | `VK_ICD_FILENAMES`      | Select the Vulkan ICD used by the Vulkan loader. | Path to an ICD JSON file             | Loader default |
 
 ## Notice

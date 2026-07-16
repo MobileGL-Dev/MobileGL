@@ -176,6 +176,8 @@ def run_case(case, backend):
         command.append("--use-pbuffer")
     if backend_info["use_angle"] and case["name"] == BLISS_CASE:
         command.append("--avoid-angle-llvmpipe-sampler-mipmap-min-filter")
+    if case.get("coherent_as_flush"):
+        command.append("--coherent-as-flush")
     env = dict(**__import__("os").environ)
     env["PYTHON"] = "python"
     env["MSYS2_ARG_CONV_EXCL"] = "/data/*"

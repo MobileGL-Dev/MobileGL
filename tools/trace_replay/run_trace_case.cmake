@@ -23,6 +23,10 @@ set(alternate_golden_args)
 if(DEFINED TRACE_ALTERNATE_GOLDEN AND NOT "${TRACE_ALTERNATE_GOLDEN}" STREQUAL "")
     list(APPEND alternate_golden_args --alternate-golden "${TRACE_ALTERNATE_GOLDEN}")
 endif()
+set(coherent_as_flush_args)
+if(TRACE_COHERENT_AS_FLUSH)
+    list(APPEND coherent_as_flush_args --coherent-as-flush)
+endif()
 
 if(EXISTS "${TRACE_OUTPUT_DIR}")
     file(REMOVE_RECURSE "${TRACE_OUTPUT_DIR}")
@@ -64,6 +68,7 @@ execute_process(
         --crop-y "${TRACE_CROP_Y}"
         --crop-width "${TRACE_CROP_WIDTH}"
         --crop-height "${TRACE_CROP_HEIGHT}"
+        ${coherent_as_flush_args}
         RESULT_VARIABLE replay_result
         OUTPUT_VARIABLE replay_stdout
         ERROR_VARIABLE replay_stderr)

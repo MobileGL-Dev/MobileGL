@@ -44,6 +44,9 @@
             android:name="mobilegl_avoid_sampler_mipmap_min_filter_title"
             android:resource="@string/mobilegl_avoid_sampler_mipmap_min_filter_title" />
         <meta-data
+            android:name="mobilegl_coherent_as_flush_title"
+            android:resource="@string/mobilegl_coherent_as_flush_title" />
+        <meta-data
             android:name="mobilegl_use_angle_title"
             android:resource="@string/mobilegl_use_angle_title" />
 

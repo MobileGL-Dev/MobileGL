@@ -375,6 +375,9 @@ jobs:
           if [ "${{ matrix.backend.name }}" = "DirectGLES" ] && [ "${{ matrix.case.name }}" = "minecraft-1.21.4-fabric-iris-bliss-in-world" ]; then
             extra_retrace_args+=(--avoid-angle-llvmpipe-sampler-mipmap-min-filter)
           fi
+          if [ "${{ matrix.case.coherent_as_flush || false }}" = "true" ]; then
+            extra_retrace_args+=(--coherent-as-flush)
+          fi
           timeout "$(( ${{ matrix.case.timeout_seconds }} + 300 ))" sh android-plugin/trace-replay-ci.sh \
             --apk-file "${apk_file}" \
             --package top.mobilegl.plugin.trace \

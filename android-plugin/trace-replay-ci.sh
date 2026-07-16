@@ -28,6 +28,7 @@ Usage:
     --crop-height N \
     [--use-pbuffer] \
     [--avoid-angle-llvmpipe-sampler-mipmap-min-filter] \
+    [--coherent-as-flush] \
     --timeout-seconds N
 
 Set MOBILEGL_USE_ANGLE=1 to run DirectGLES replay with packaged ANGLE
@@ -38,6 +39,8 @@ Set MOBILEGL_RETRACE_USE_PBUFFER=1 or pass --use-pbuffer to run DirectGLES
 against an offscreen EGL pbuffer instead of the Activity surface.
 Pass --avoid-angle-llvmpipe-sampler-mipmap-min-filter for DirectGLES traces that
 need ANGLE llvmpipe sampler mipmap filters downgraded to avoid driver stalls.
+Pass --coherent-as-flush for traces whose engine writes persistent
+GL_MAP_FLUSH_EXPLICIT_BIT maps it never flushes (MOBILEGL_COHERENT_AS_FLUSH=1).
 EOF
 }
 
@@ -94,6 +97,7 @@ crop_width=""
 crop_height=""
 use_pbuffer=0
 avoid_angle_llvmpipe_sampler_mipmap_min_filter=0
+coherent_as_flush=0
 timeout_seconds=""
 
 while [ "$#" -gt 0 ]; do
@@ -129,6 +133,7 @@ while [ "$#" -gt 0 ]; do
       avoid_angle_llvmpipe_sampler_mipmap_min_filter=1
       shift 1
       ;;
+    --coherent-as-flush) coherent_as_flush=1; shift 1 ;;
     --timeout-seconds) timeout_seconds="$(next_arg "$@")"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) die "unknown argument: $1" ;;
@@ -253,6 +258,9 @@ run_retrace() {
   fi
   if [ "${avoid_angle_llvmpipe_sampler_mipmap_min_filter}" -eq 1 ] && [ "${backend}" = "DirectGLES" ]; then
     set -- "$@" --ez avoid_angle_llvmpipe_sampler_mipmap_min_filter true
+  fi
+  if [ "${coherent_as_flush}" -eq 1 ]; then
+    set -- "$@" --ez coherent_as_flush true
   fi
   set -- "$@" \
     --es output_dir "${app_dir}/output" \

@@ -10,6 +10,7 @@
 
 #include "Includes.h"
 #include "Init.h"
+#include <Config.h>
 #include <MG_State/GLState/Core.h>
 
 #include <MG_Impl/GLImpl/Buffer/GL_Buffer.h>
@@ -1007,5 +1008,175 @@ TEST_F(GeneralBufferTest, General_PersistentCoherentFallbackSyncsPerDrawWhenBack
     EXPECT_EQ(mock.subDataCalls, kDraws);
 
     EXPECT_TRUE(UnmapBuffer(GL_ARRAY_BUFFER));
+    g_zeroCopyMock = nullptr;
+}
+
+// ---------------------------------------------------------------------------
+// MOBILEGL_COHERENT_AS_FLUSH: persistent FLUSH_EXPLICIT mapping requests are
+// rewritten to coherent semantics, so apps that bind mapped ranges for GPU reads
+// without ever calling glFlushMappedBufferRange (e.g. Flywheel's copy descriptors)
+// still get their writes, and their flush calls stay error-free no-ops.
+// Non-persistent maps keep spec FLUSH_EXPLICIT behavior.
+namespace {
+    struct ScopedCoherentAsFlush {
+        ScopedCoherentAsFlush() { MG_Config::Features.CoherentAsFlush = true; }
+        ~ScopedCoherentAsFlush() { MG_Config::Features.CoherentAsFlush = false; }
+    };
+} // namespace
+
+TEST_F(GeneralBufferTest, General_CoherentAsFlush_NonPersistentMapKeepsExplicitFlushSemantics) {
+    ScopedCoherentAsFlush scopedFeature;
+
+    GLuint buffer = CreateBoundBuffer(GL_ARRAY_BUFFER, 64, GL_STATIC_DRAW);
+    const char initial[16] = "0123456789ABCDE";
+    BufferSubData(GL_ARRAY_BUFFER, 20, sizeof(initial), initial);
+
+    auto bufferObject = MG_State::pGLContext->GetBufferObject(buffer);
+    ASSERT_NE(bufferObject, nullptr);
+
+    auto* mapped =
+        static_cast<char*>(MapBufferRange(GL_ARRAY_BUFFER, 20, 16, GL_MAP_WRITE_BIT | GL_MAP_FLUSH_EXPLICIT_BIT));
+    ASSERT_NE(mapped, nullptr);
+    // Non-persistent maps are not rewritten: the FLUSH_EXPLICIT contract stays.
+    EXPECT_TRUE(bufferObject->GetMappingAccess() & BufferMappingAccessBit::FlushExplicit);
+
+    memcpy(mapped, "PARTIAL", 8);
+    memcpy(mapped + 8, "WRITTEN", 8);
+    FlushMappedBufferRange(GL_ARRAY_BUFFER, 0, 8); // flush only the first half
+    EXPECT_EQ(GetError(), GL_NO_ERROR);
+    EXPECT_TRUE(UnmapBuffer(GL_ARRAY_BUFFER));
+
+    // Only the flushed subrange reaches the shadow; the un-flushed half keeps its
+    // previous contents (spec behavior, unchanged by the feature).
+    char readBack[16] = {};
+    GetBufferSubData(GL_ARRAY_BUFFER, 20, sizeof(readBack), readBack);
+    EXPECT_EQ(memcmp(readBack, "PARTIAL", 8), 0);
+    EXPECT_EQ(memcmp(readBack + 8, "89ABCDE", 8), 0);
+    EXPECT_EQ(GetError(), GL_NO_ERROR);
+}
+
+TEST_F(GeneralBufferTest, General_FlushWithoutExplicitBitStillErrorsWhenFeatureOff) {
+    GLuint buffer = CreateBoundBuffer(GL_ARRAY_BUFFER, 64, GL_STATIC_DRAW);
+    (void)buffer;
+    void* mapped = MapBufferRange(GL_ARRAY_BUFFER, 0, 16, GL_MAP_WRITE_BIT);
+    ASSERT_NE(mapped, nullptr);
+    FlushMappedBufferRange(GL_ARRAY_BUFFER, 0, 8);
+    EXPECT_EQ(GetError(), GL_INVALID_OPERATION);
+    EXPECT_TRUE(UnmapBuffer(GL_ARRAY_BUFFER));
+}
+
+TEST_F(GeneralBufferTest, General_CoherentAsFlush_PersistentMapSyncsWithoutExplicitFlush) {
+    ScopedCoherentAsFlush scopedFeature;
+
+    GLuint buffer = 0;
+    GenBuffers(1, &buffer);
+    BindBuffer(GL_ARRAY_BUFFER, buffer);
+
+    GLint initial[] = {10, 20, 30, 40};
+    BufferStorage(GL_ARRAY_BUFFER, sizeof(initial), initial, GL_MAP_WRITE_BIT | GL_MAP_PERSISTENT_BIT);
+    EXPECT_EQ(GetError(), GL_NO_ERROR);
+
+    auto bufferObject = MG_State::pGLContext->GetBufferObject(buffer);
+    ASSERT_NE(bufferObject, nullptr);
+    const Uint64 baseSerial = bufferObject->GetChangeSerial();
+
+    auto* mapped = static_cast<GLint*>(MapBufferRange(
+        GL_ARRAY_BUFFER, 0, sizeof(initial), GL_MAP_WRITE_BIT | GL_MAP_PERSISTENT_BIT | GL_MAP_FLUSH_EXPLICIT_BIT));
+    ASSERT_NE(mapped, nullptr);
+    const auto access = bufferObject->GetMappingAccess();
+    EXPECT_FALSE(access & BufferMappingAccessBit::FlushExplicit);
+    EXPECT_TRUE(access & BufferMappingAccessBit::Coherent);
+
+    mapped[1] = 200;
+    // Un-flushed writes are picked up by the draw-time persistent sync - the coverage
+    // the removed FLUSH_EXPLICIT dispatch hack (SyncMappedRangeForGpuRead) used to add.
+    bufferObject->SyncPersistentMappedRange();
+    EXPECT_GT(bufferObject->GetChangeSerial(), baseSerial);
+    EXPECT_EQ(reinterpret_cast<const GLint*>(bufferObject->MappedData())[1], 200);
+
+    FlushMappedBufferRange(GL_ARRAY_BUFFER, 0, sizeof(GLint));
+    EXPECT_EQ(GetError(), GL_NO_ERROR);
+
+    EXPECT_TRUE(UnmapBuffer(GL_ARRAY_BUFFER));
+    EXPECT_EQ(GetError(), GL_NO_ERROR);
+}
+
+TEST_F(GeneralBufferTest, General_CoherentAsFlush_DsaPersistentMapRewritesAndToleratesFlush) {
+    ScopedCoherentAsFlush scopedFeature;
+
+    GLuint buffer = 0;
+    GenBuffers(1, &buffer);
+
+    GLint initial[] = {1, 2, 3, 4};
+    NamedBufferStorage(buffer, sizeof(initial), initial, GL_MAP_WRITE_BIT | GL_MAP_PERSISTENT_BIT);
+    EXPECT_EQ(GetError(), GL_NO_ERROR);
+
+    auto bufferObject = MG_State::pGLContext->GetBufferObject(buffer);
+    ASSERT_NE(bufferObject, nullptr);
+    const Uint64 baseSerial = bufferObject->GetChangeSerial();
+
+    // The DSA map entry point applies the same rewrite as the bound-target one.
+    auto* mapped = static_cast<GLint*>(MapNamedBufferRange(
+        buffer, 0, sizeof(initial), GL_MAP_WRITE_BIT | GL_MAP_PERSISTENT_BIT | GL_MAP_FLUSH_EXPLICIT_BIT));
+    ASSERT_NE(mapped, nullptr);
+    const auto access = bufferObject->GetMappingAccess();
+    EXPECT_FALSE(access & BufferMappingAccessBit::FlushExplicit);
+    EXPECT_TRUE(access & BufferMappingAccessBit::Coherent);
+
+    mapped[2] = 300;
+    bufferObject->SyncPersistentMappedRange();
+    EXPECT_GT(bufferObject->GetChangeSerial(), baseSerial);
+    EXPECT_EQ(reinterpret_cast<const GLint*>(bufferObject->MappedData())[2], 300);
+
+    // The DSA flush entry point tolerates the app's flush as a no-op too.
+    FlushMappedNamedBufferRange(buffer, 0, sizeof(GLint));
+    EXPECT_EQ(GetError(), GL_NO_ERROR);
+
+    EXPECT_TRUE(UnmapNamedBuffer(buffer));
+    EXPECT_EQ(GetError(), GL_NO_ERROR);
+}
+
+TEST_F(GeneralBufferTest, General_CoherentAsFlush_PersistentMapAdoptsZeroCopyBackendStorage) {
+    ScopedCoherentAsFlush scopedFeature;
+    ZeroCopyMockBackend mock;
+    g_zeroCopyMock = &mock;
+    ScopedBackendOps scopedOps(&kZeroCopyMockOps);
+
+    GLuint buffer = 0;
+    GenBuffers(1, &buffer);
+    BindBuffer(GL_ARRAY_BUFFER, buffer);
+
+    constexpr SizeT kCount = 256;
+    Vector<GLint> initial(kCount, 0);
+    BufferStorage(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(kCount * sizeof(GLint)), initial.data(),
+                  GL_MAP_WRITE_BIT | GL_MAP_PERSISTENT_BIT);
+    ASSERT_EQ(GetError(), GL_NO_ERROR);
+
+    // Flywheel-style map: FLUSH_EXPLICIT and never flushed. Under the feature it becomes
+    // coherent-persistent and takes the zero-copy path: the app writes straight into the
+    // backend's GPU storage, so nothing depends on flush calls.
+    auto* mapped = static_cast<GLint*>(
+        MapBufferRange(GL_ARRAY_BUFFER, 0, static_cast<GLsizeiptr>(kCount * sizeof(GLint)),
+                       GL_MAP_WRITE_BIT | GL_MAP_PERSISTENT_BIT | GL_MAP_FLUSH_EXPLICIT_BIT));
+    ASSERT_NE(mapped, nullptr);
+    EXPECT_EQ(mock.acquireMapCalls, 1);
+
+    auto bufferObject = MG_State::pGLContext->GetBufferObject(buffer);
+    ASSERT_NE(bufferObject, nullptr);
+    EXPECT_TRUE(bufferObject->IsBackendPersistentMapped());
+    EXPECT_EQ(static_cast<void*>(mapped), static_cast<void*>(mock.gpu.data()));
+
+    mock.subDataCalls = 0;
+    mock.flushCalls = 0;
+
+    mapped[7] = 1234;
+    bufferObject->SyncPersistentMappedRange(); // draw-time hook: nothing to transfer
+    EXPECT_EQ(reinterpret_cast<const GLint*>(mock.gpu.data())[7], 1234);
+    EXPECT_EQ(mock.subDataCalls, 0);
+    EXPECT_EQ(mock.flushCalls, 0);
+
+    EXPECT_TRUE(UnmapBuffer(GL_ARRAY_BUFFER));
+    EXPECT_EQ(mock.flushCalls, 0);
+    EXPECT_EQ(GetError(), GL_NO_ERROR);
     g_zeroCopyMock = nullptr;
 }
