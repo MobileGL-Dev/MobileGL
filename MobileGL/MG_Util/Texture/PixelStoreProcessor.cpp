@@ -201,6 +201,12 @@ namespace MobileGL::MG_Util::PixelStoreProcessor {
             switch (format) {
             case TextureInputFormat::Red:          out = {{0, -1, -1, -1}, 1, false}; return true;
             case TextureInputFormat::RInteger:     out = {{0, -1, -1, -1}, 1, true};  return true;
+            case TextureInputFormat::Green:        out = {{-1, 0, -1, -1}, 1, false}; return true;
+            case TextureInputFormat::GreenInteger: out = {{-1, 0, -1, -1}, 1, true};  return true;
+            case TextureInputFormat::Blue:         out = {{-1, -1, 0, -1}, 1, false}; return true;
+            case TextureInputFormat::BlueInteger:  out = {{-1, -1, 0, -1}, 1, true};  return true;
+            case TextureInputFormat::Alpha:        out = {{-1, -1, -1, 0}, 1, false}; return true;
+            case TextureInputFormat::AlphaInteger: out = {{-1, -1, -1, 0}, 1, true};  return true;
             case TextureInputFormat::RG:           out = {{0, 1, -1, -1}, 2, false};  return true;
             case TextureInputFormat::RGInteger:    out = {{0, 1, -1, -1}, 2, true};   return true;
             case TextureInputFormat::RGB:          out = {{0, 1, 2, -1}, 3, false};   return true;

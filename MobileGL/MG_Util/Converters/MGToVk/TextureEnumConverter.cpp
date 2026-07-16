@@ -65,6 +65,16 @@ namespace MobileGL {
                 return VK_FORMAT_R8G8B8A8_UINT;
             case TextureInputFormat::BGRAInteger:
                 return VK_FORMAT_B8G8R8A8_UINT;
+            // Single-channel desktop client formats: the client memory holds one component per pixel,
+            // matching the R8 layouts (the channel it feeds is a pixel-transfer concern, not a layout one).
+            case TextureInputFormat::Green:
+            case TextureInputFormat::Blue:
+            case TextureInputFormat::Alpha:
+                return VK_FORMAT_R8_UNORM;
+            case TextureInputFormat::GreenInteger:
+            case TextureInputFormat::BlueInteger:
+            case TextureInputFormat::AlphaInteger:
+                return VK_FORMAT_R8_UINT;
             case TextureInputFormat::StencilIndex:
                 return VK_FORMAT_S8_UINT;
             case TextureInputFormat::DepthComponent:

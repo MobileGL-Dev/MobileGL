@@ -113,6 +113,12 @@ namespace MobileGL {
             switch (format) {
             case TextureInputFormat::Red:
             case TextureInputFormat::RInteger:
+            case TextureInputFormat::Green:
+            case TextureInputFormat::GreenInteger:
+            case TextureInputFormat::Blue:
+            case TextureInputFormat::BlueInteger:
+            case TextureInputFormat::Alpha:
+            case TextureInputFormat::AlphaInteger:
                 return 1;
             case TextureInputFormat::RG:
             case TextureInputFormat::RGInteger:

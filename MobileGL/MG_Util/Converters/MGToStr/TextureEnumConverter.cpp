@@ -67,6 +67,18 @@ namespace MobileGL {
                 return "RGBAInteger";
             case TextureInputFormat::BGRAInteger:
                 return "BGRAInteger";
+            case TextureInputFormat::Green:
+                return "Green";
+            case TextureInputFormat::Blue:
+                return "Blue";
+            case TextureInputFormat::Alpha:
+                return "Alpha";
+            case TextureInputFormat::GreenInteger:
+                return "GreenInteger";
+            case TextureInputFormat::BlueInteger:
+                return "BlueInteger";
+            case TextureInputFormat::AlphaInteger:
+                return "AlphaInteger";
             case TextureInputFormat::StencilIndex:
                 return "StencilIndex";
             case TextureInputFormat::DepthComponent:
