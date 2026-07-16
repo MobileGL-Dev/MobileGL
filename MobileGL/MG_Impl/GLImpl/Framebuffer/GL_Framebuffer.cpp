@@ -1681,6 +1681,13 @@ namespace MobileGL::MG_Impl::GLImpl {
             }
         }
 
+        // Packed-type/format pairing (GL CTS packed_pixels: e.g. GL_RED with GL_UNSIGNED_SHORT_5_6_5 must
+        // raise an error instead of reaching the backend). Shared with the TexImage/GetTexImage validators;
+        // runs after the depth-stencil branch above so DEPTH_STENCIL with a wrong type keeps GL_INVALID_ENUM.
+        if (!TextureImpl::ValidateClientFormatTypePairing(textureInputFormat, texturePixelDataType)) {
+            return false;
+        }
+
         // Check PBO state
         const auto& pixelPackBufferObject =
             MG_State::pGLContext->GetBufferBindingSlot(BufferTarget::PixelPack).GetBoundObject();

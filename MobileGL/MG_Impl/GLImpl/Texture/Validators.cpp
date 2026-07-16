@@ -235,17 +235,15 @@ namespace MobileGL::MG_Impl::GLImpl::TextureImpl {
                format == TextureInputFormat::StencilIndex;
     }
 
-    // Mirrors the desktop-GL validity matrix used by GL CTS packed_pixels (glcPackedPixelsTests
-    // isFormatValid, INPUT_TEXIMAGE): packed-type/format pairing, depth-vs-color mismatch, and
-    // integer-ness matching all raise GL_INVALID_OPERATION instead of reaching the upload path.
-    Bool ValidateTextureInternalFormatCompatibleWithInput(TextureInputFormat format,
-                                                          TextureInternalFormat internalFormat,
-                                                          TexturePixelDataType type) {
+    // Client-memory format<->type pairing rules shared by pixel uploads (TexImage*) and readbacks
+    // (ReadPixels, GetTexImage). Mirrors the desktop-GL validity matrix used by GL CTS packed_pixels
+    // (glcPackedPixelsTests isFormatValid): packed types constrain the formats they may pair with, and
+    // integer formats reject floating-point types; violations raise GL_INVALID_OPERATION.
+    Bool ValidateClientFormatTypePairing(TextureInputFormat format, TexturePixelDataType type) {
         const auto recordInvalidOperation = [](const char* message) {
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidOperation,
-                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", "ValidateTextureInternalFormatCompatibleWithInput",
-                                             message));
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", "ValidateClientFormatTypePairing", message));
             return false;
         };
 
@@ -286,6 +284,27 @@ namespace MobileGL::MG_Impl::GLImpl::TextureImpl {
         if (IsIntegerColorInputFormat(format) &&
             (type == TexturePixelDataType::Float || type == TexturePixelDataType::HalfFloat)) {
             return recordInvalidOperation("Integer format cannot be used with a floating-point type");
+        }
+
+        return true;
+    }
+
+    // Mirrors the desktop-GL validity matrix used by GL CTS packed_pixels (glcPackedPixelsTests
+    // isFormatValid, INPUT_TEXIMAGE): packed-type/format pairing, depth-vs-color mismatch, and
+    // integer-ness matching all raise GL_INVALID_OPERATION instead of reaching the upload path.
+    Bool ValidateTextureInternalFormatCompatibleWithInput(TextureInputFormat format,
+                                                          TextureInternalFormat internalFormat,
+                                                          TexturePixelDataType type) {
+        const auto recordInvalidOperation = [](const char* message) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidOperation,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", "ValidateTextureInternalFormatCompatibleWithInput",
+                                             message));
+            return false;
+        };
+
+        if (!ValidateClientFormatTypePairing(format, type)) {
+            return false;
         }
 
         // TexImage in core 3.3 has no stencil-only upload path (that arrived with GL 4.4).

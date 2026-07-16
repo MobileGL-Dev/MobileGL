@@ -3760,7 +3760,30 @@ namespace MobileGL::MG_Backend::DirectGLES {
         }
 
         MGLOG_D("ReadPixels: glReadPixels()");
+        DrainESErrors();
         g_GLESFuncs.glReadPixels(x, y, width, height, format, type, pixels);
+        const GLenum nativeReadError = g_GLESFuncs.glGetError();
+        if (nativeReadError != GL_NO_ERROR) {
+            // ES drivers only guarantee GL_RGBA/GL_UNSIGNED_BYTE, GL_RGBA_INTEGER/(U)INT, float RGBA and one
+            // implementation-defined pair; legacy combos like GL_RED/GL_UNSIGNED_INT are rejected by e.g.
+            // Adreno with a GL error and an untouched destination (GL CTS packed_pixels r8_format_red). The
+            // failed read wrote nothing (client memory and PBO alike), so re-service the request through the
+            // wide-format conversion path before any PBO writeback can capture stale contents. The conversion
+            // helper saves/restores the ES pixel-pack binding and handles the state-layer PBO itself.
+            DrainESErrors();
+            MGLOG_D("ReadPixels: native read of %s/%s failed (%s), retrying via client-format conversion",
+                    MG_Util::ConvertGLEnumToString(format).c_str(), MG_Util::ConvertGLEnumToString(type).c_str(),
+                    MG_Util::ConvertGLEnumToString(nativeReadError).c_str());
+            if (ReadPixelsViaFormatConversion(x, y, width, height, format, type, pixels)) {
+                MGLOG_D("ReadPixels: finished via client-format conversion after native failure");
+                return;
+            }
+            MGLOG_E("ReadPixels: native read of %s/%s failed (%s) and no conversion path covers it, "
+                    "skipping readback",
+                    MG_Util::ConvertGLEnumToString(format).c_str(), MG_Util::ConvertGLEnumToString(type).c_str(),
+                    MG_Util::ConvertGLEnumToString(nativeReadError).c_str());
+            return;
+        }
         if (usePBO) {
             // pull back to client memory if PBO is used
             MGLOG_D("ReadPixels: PBO used, mapping buffer to client memory");
