@@ -283,6 +283,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         void QueueClearBufferPayloadForFramebuffer(const MG_State::GLState::FramebufferObject& framebuffer,
                                                   GLenum buffer, GLint drawbuffer,
                                                   const ClearAttachmentPayload& clearPayload);
+        void RecordScissoredClearBuffer(const MG_State::GLState::FramebufferObject& framebuffer,
+                                        GLenum buffer, GLint drawbuffer,
+                                        const ClearAttachmentPayload& clearPayload,
+                                        const VkClearRect& clearRect);
 
         // ---- Submission fence tracking (GL sync objects) ----
         // One record per vkQueueSubmit still in flight, in ascending submit

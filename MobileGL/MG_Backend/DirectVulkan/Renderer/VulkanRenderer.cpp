@@ -21,6 +21,7 @@
 #include "MG_Util/Converters/MGToVk/TextureEnumConverter.h"
 #include "MG_Util/Metrics/TextureMetrics.h"
 #include <Config.h>
+#include <algorithm>
 #include <cstdlib>
 #include <cstring>
 #include <vulkan/vulkan_core.h>
@@ -3771,6 +3772,53 @@ void main() {
             return;
         }
 
+        // Validate (buffer, drawbuffer) up front so GL errors fire regardless of which clear
+        // path is taken below.
+        switch (buffer) {
+            case GL_COLOR:
+                if (drawbuffer < 0 ||
+                    drawbuffer >= static_cast<GLint>(MG_State::GLState::FramebufferObject::MAX_DRAW_BUFFERS)) {
+                    RecordClearBufferError(__func__, ErrorCode::InvalidValue, "color drawbuffer index is out of range");
+                    return;
+                }
+                break;
+            case GL_DEPTH:
+                if (drawbuffer != 0) {
+                    RecordClearBufferError(__func__, ErrorCode::InvalidValue, "depth clear requires drawbuffer 0");
+                    return;
+                }
+                break;
+            case GL_STENCIL:
+                if (drawbuffer != 0) {
+                    RecordClearBufferError(__func__, ErrorCode::InvalidValue, "stencil clear requires drawbuffer 0");
+                    return;
+                }
+                break;
+            case GL_DEPTH_STENCIL:
+                if (drawbuffer != 0) {
+                    RecordClearBufferError(__func__, ErrorCode::InvalidValue, "depth/stencil clear requires drawbuffer 0");
+                    return;
+                }
+                break;
+            default:
+                RecordClearBufferError(__func__, ErrorCode::InvalidEnum, "unsupported clear buffer target");
+                return;
+        }
+
+        // GL 3.3 §4.2.3: ClearBuffer* is clipped by GL_SCISSOR_TEST exactly like Clear.
+        if (MG_State::pGLContext->IsCapabilityEnabled(CapabilityInput::ScissorTest)) {
+            VkClearRect clearRect{};
+            switch (PrepareScissoredClear(framebuffer, clearRect)) {
+            case ScissoredClearPrep::NoOp:
+                return;
+            case ScissoredClearPrep::NotNeeded:
+                break;  // full-coverage scissor: the deferred whole-surface path below is equivalent
+            case ScissoredClearPrep::Ready:
+                RecordScissoredClearBuffer(framebuffer, buffer, drawbuffer, clearPayload, clearRect);
+                return;
+            }
+        }
+
         auto queueAttachmentClear = [&](FramebufferAttachmentType attachmentType) {
             if (attachmentType == FramebufferAttachmentType::None) {
                 return;
@@ -3787,41 +3835,82 @@ void main() {
         };
 
         switch (buffer) {
-            case GL_COLOR: {
-                if (drawbuffer < 0 ||
-                    drawbuffer >= static_cast<GLint>(MG_State::GLState::FramebufferObject::MAX_DRAW_BUFFERS)) {
-                    RecordClearBufferError(__func__, ErrorCode::InvalidValue, "color drawbuffer index is out of range");
-                    return;
-                }
+            case GL_COLOR:
                 queueAttachmentClear(framebuffer.GetDrawBuffers()[drawbuffer]);
                 return;
-            }
             case GL_DEPTH:
-                if (drawbuffer != 0) {
-                    RecordClearBufferError(__func__, ErrorCode::InvalidValue, "depth clear requires drawbuffer 0");
-                    return;
-                }
                 queueAttachmentClear(FramebufferAttachmentType::Depth);
                 return;
             case GL_STENCIL:
-                if (drawbuffer != 0) {
-                    RecordClearBufferError(__func__, ErrorCode::InvalidValue, "stencil clear requires drawbuffer 0");
-                    return;
-                }
                 queueAttachmentClear(FramebufferAttachmentType::Stencil);
                 return;
             case GL_DEPTH_STENCIL:
-                if (drawbuffer != 0) {
-                    RecordClearBufferError(__func__, ErrorCode::InvalidValue, "depth/stencil clear requires drawbuffer 0");
-                    return;
-                }
                 queueAttachmentClear(FramebufferAttachmentType::Depth);
                 queueAttachmentClear(FramebufferAttachmentType::Stencil);
                 return;
             default:
-                RecordClearBufferError(__func__, ErrorCode::InvalidEnum, "unsupported clear buffer target");
                 return;
         }
+    }
+
+    void VulkanRenderer::RecordScissoredClearBuffer(const MG_State::GLState::FramebufferObject& framebuffer,
+                                                    GLenum buffer, GLint drawbuffer,
+                                                    const ClearAttachmentPayload& clearPayload,
+                                                    const VkClearRect& clearRect) {
+        VkClearAttachment clearAttachment{};
+
+        if (buffer == GL_COLOR) {
+            const auto attachmentType = framebuffer.GetDrawBuffers()[drawbuffer];
+            if (attachmentType == FramebufferAttachmentType::None) {
+                return;
+            }
+            const auto& attachment = framebuffer.GetAttachment(attachmentType);
+            if (!attachment.IsComplete()) {
+                return;
+            }
+            const BoolVec4 colorMask = MG_State::pGLContext->GetColorMaskIndexed(static_cast<Uint>(drawbuffer));
+            if (!colorMask.r() && !colorMask.g() && !colorMask.b() && !colorMask.a()) {
+                return;
+            }
+            if (!colorMask.r() || !colorMask.g() || !colorMask.b() || !colorMask.a()) {
+                MGLOG_W("DirectVulkan: scissored glClearBuffer with a partial color mask is not supported");
+                return;
+            }
+            MG_State::GLState::ITextureObject* colorTexture = nullptr;
+            if (attachment.IsTexture()) {
+                colorTexture = attachment.GetTexture().get();
+            }
+            clearAttachment.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+            clearAttachment.colorAttachment = static_cast<Uint32>(drawbuffer);
+            clearAttachment.clearValue.color = {
+                clearPayload.color.x(), clearPayload.color.y(), clearPayload.color.z(),
+                ResolveColorClearAlpha(colorTexture, clearPayload.color.w())
+            };
+        } else {
+            VkImageAspectFlags aspects = 0;
+            if ((clearPayload.mask & GL_DEPTH_BUFFER_BIT) != 0 && MG_State::pGLContext->GetDepthMask() &&
+                framebuffer.GetAttachment(FramebufferAttachmentType::Depth).IsComplete()) {
+                aspects |= VK_IMAGE_ASPECT_DEPTH_BIT;
+            }
+            if ((clearPayload.mask & GL_STENCIL_BUFFER_BIT) != 0 &&
+                framebuffer.GetAttachment(FramebufferAttachmentType::Stencil).IsComplete()) {
+                // GL 3.3 §4.2.3: the clear is masked by the front stencil write mask (see Clear).
+                const Uint32 stencilWriteMask =
+                    MG_State::pGLContext->GetStencilState(StencilFace::Front).WriteMask;
+                if ((stencilWriteMask & 0xFFu) == 0xFFu) {
+                    aspects |= VK_IMAGE_ASPECT_STENCIL_BIT;
+                } else if (stencilWriteMask != 0) {
+                    MGLOG_W("DirectVulkan: scissored glClearBuffer with a partial stencil write mask is not supported");
+                }
+            }
+            if (aspects == 0) {
+                return;
+            }
+            clearAttachment.aspectMask = aspects;
+            clearAttachment.clearValue.depthStencil = {clearPayload.depth, clearPayload.stencil};
+        }
+
+        vkCmdClearAttachments(m_frameContext.GetCurrent().commandBuffer, 1, &clearAttachment, 1, &clearRect);
     }
 
     void VulkanRenderer::QueueClearBufferPayload(GLenum buffer, GLint drawbuffer,
@@ -3836,7 +3925,8 @@ void main() {
     void VulkanRenderer::ClearBufferfi(GLenum buffer, GLint drawbuffer, GLfloat depth, GLint stencil) {
         ClearAttachmentPayload payload{};
         payload.mask = GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT;
-        payload.depth = depth;
+        // Vulkan clear values require depth in [0,1] (VUID-VkClearDepthStencilValue-depth-00022).
+        payload.depth = std::clamp(depth, 0.0f, 1.0f);
         payload.stencil = static_cast<Uint32>(stencil);
         QueueClearBufferPayload(buffer, drawbuffer, payload);
     }
@@ -3853,7 +3943,7 @@ void main() {
                 break;
             case GL_DEPTH:
                 payload.mask = GL_DEPTH_BUFFER_BIT;
-                payload.depth = value[0];
+                payload.depth = std::clamp(value[0], 0.0f, 1.0f);
                 break;
             default:
                 break;
@@ -3875,7 +3965,7 @@ void main() {
                 break;
             case GL_DEPTH:
                 payload.mask = GL_DEPTH_BUFFER_BIT;
-                payload.depth = value[0];
+                payload.depth = std::clamp(value[0], 0.0f, 1.0f);
                 break;
             default:
                 break;
@@ -3891,7 +3981,8 @@ void main() {
         }
         ClearAttachmentPayload payload{};
         payload.mask = GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT;
-        payload.depth = depth;
+        // Vulkan clear values require depth in [0,1] (VUID-VkClearDepthStencilValue-depth-00022).
+        payload.depth = std::clamp(depth, 0.0f, 1.0f);
         payload.stencil = static_cast<Uint32>(stencil);
         QueueClearBufferPayloadForFramebuffer(*framebuffer, buffer, drawbuffer, payload);
     }
