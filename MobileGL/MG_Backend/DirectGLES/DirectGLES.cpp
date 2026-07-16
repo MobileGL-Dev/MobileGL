@@ -3450,14 +3450,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
         auto* textureMipmapObject = static_cast<MG_State::GLState::TextureObjectMipmap*>(textureObject.get());
 
         auto& levelRange = textureMipmapObject->GetLevelRange();
-        MGLOG_D("GetTexImage: mipmap level range = [%d, %d)", levelRange.x(), levelRange.y());
+        MGLOG_D("GetTexImage: mipmap level range = [%d, %d]", levelRange.x(), levelRange.y());
 
-        if (level < levelRange.x() || level >= levelRange.y()) {
-            MGLOG_E("GetTexImage: Requested level %d out of range", level);
-            MOBILEGL_ASSERT(false,
-                            "GetTexImage: Requested level %d is out of range "
-                            "(base level %d, max level %d).",
-                            level, levelRange.x(), levelRange.y());
+        // levelRange.y() is GL_TEXTURE_MAX_LEVEL, an inclusive level index — a single-level
+        // texture has range [0, 0] and level 0 must be readable.
+        if (static_cast<Uint>(level) < levelRange.x() || static_cast<Uint>(level) > levelRange.y()) {
+            MGLOG_E("GetTexImage: Requested level %d is out of range (base level %u, max level %u), skipping readback",
+                    level, levelRange.x(), levelRange.y());
             return;
         }
 
