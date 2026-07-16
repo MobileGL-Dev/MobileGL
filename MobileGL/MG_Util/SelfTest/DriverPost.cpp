@@ -525,11 +525,11 @@ namespace MobileGL::MG_Util::SelfTest {
             summary.capsValid = true;
             const MG_External::GLESCapabilities& caps = summary.caps;
             builder.report.rendererInfo = format("{} ({})", caps.GLESRendererString, caps.GLESVersionString);
+            EvaluateGlesChecklist(builder, caps, glesFuncs);
+            ProbeGlesTimerQuery(builder, caps, glesFuncs);
             builder.report.formatCapabilities.emplace();
             MG_Backend::DirectGLES::PopulateFormatCapabilities(
                 glesFuncs, caps, builder.report.formatCapabilities.value());
-            EvaluateGlesChecklist(builder, caps, glesFuncs);
-            ProbeGlesTimerQuery(builder, caps, glesFuncs);
         } while (false);
     }
 
@@ -1065,14 +1065,6 @@ namespace MobileGL::MG_Util::SelfTest {
         summary.deviceName = String(properties.deviceName);
         summary.apiVersionString = VkApiVersionToString(properties.apiVersion);
         summary.driverVersionString = driverVersionString;
-        if (vkGetPhysicalDeviceFormatPropertiesFn != nullptr) {
-            MG_External::VulkanCapabilities formatProbeCapabilities{};
-            BackendLoader::FillInVulkanCapabilities(formatProbeCapabilities, properties);
-            builder.report.formatCapabilities.emplace();
-            MG_Backend::DirectVulkan::PopulateFormatCapabilities(
-                physicalDevice, vkGetPhysicalDeviceFormatPropertiesFn, formatProbeCapabilities,
-                builder.report.formatCapabilities.value());
-        }
 
         // The chosen-device facts (name, enumeration count, graphics queue) ride along
         // on both outcomes so the device API verdict never hides them.
@@ -1259,6 +1251,14 @@ namespace MobileGL::MG_Util::SelfTest {
                                 "unavailable",
                                 timestampPeriod) +
                              TimerQueryDisabledNote());
+        }
+        if (vkGetPhysicalDeviceFormatPropertiesFn != nullptr) {
+            MG_External::VulkanCapabilities formatProbeCapabilities{};
+            BackendLoader::FillInVulkanCapabilities(formatProbeCapabilities, properties);
+            builder.report.formatCapabilities.emplace();
+            MG_Backend::DirectVulkan::PopulateFormatCapabilities(
+                physicalDevice, vkGetPhysicalDeviceFormatPropertiesFn, formatProbeCapabilities,
+                builder.report.formatCapabilities.value());
         }
     }
 
