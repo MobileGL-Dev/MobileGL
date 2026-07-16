@@ -16,6 +16,7 @@
 #include <MG_Impl/GLImpl/Texture/GL_Texture.h>
 #include <MG_State/GLState/Core.h>
 #include <MG_State/GLState/TextureState/TextureObject.h>
+#include <MG_Util/Converters/MGToMG/TextureEnumConverter.h>
 #include <MG_Util/Texture/TextureFormatProcessor.h>
 
 using namespace MobileGL;
@@ -364,6 +365,56 @@ TEST_F(TextureTest, BoundTexSubImage2DUnpacksPackedBgra8888RevToRgba8) {
     };
     for (SizeT i = 0; i < sizeof(expected); ++i) {
         EXPECT_EQ(stored[i], expected[i]) << "byte " << i;
+    }
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+}
+
+TEST_F(TextureTest, UnsizedRgbaInfersRgba8ForPacked8888Types) {
+    EXPECT_EQ(MG_Util::ConvertInternalFormatToSized(TextureInternalFormat::RGBA, TextureInputFormat::BGRA,
+                                                    TexturePixelDataType::UnsignedInt8888),
+              TextureInternalFormat::RGBA8);
+    EXPECT_EQ(MG_Util::ConvertInternalFormatToSized(TextureInternalFormat::RGBA, TextureInputFormat::BGRA,
+                                                    TexturePixelDataType::UnsignedInt8888Rev),
+              TextureInternalFormat::RGBA8);
+}
+
+TEST_F(TextureTest, BoundTexImageAndSubImage2DUseInferredRgba8ForPackedBgra8888Rev) {
+    GLuint texture = 0;
+    MG_Impl::GLImpl::GenTextures(1, &texture);
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, texture);
+
+    const Uint8 initialPixels[] = {
+        10, 20, 30, 40,
+        50, 60, 70, 80,
+    };
+    MG_Impl::GLImpl::TexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 2, 1, 0, GL_BGRA, GL_UNSIGNED_INT_8_8_8_8_REV,
+                                initialPixels);
+
+    const auto textureObject = MG_State::pGLContext->GetTextureObject(texture);
+    EXPECT_EQ(textureObject->GetFormat(), TextureInternalFormat::RGBA8);
+    const auto* stored = GetBoundTexture2DLevelBytes(texture);
+    const Uint8 expectedInitial[] = {
+        30, 20, 10, 40,
+        70, 60, 50, 80,
+    };
+    for (SizeT i = 0; i < sizeof(expectedInitial); ++i) {
+        EXPECT_EQ(stored[i], expectedInitial[i]) << "initial byte " << i;
+    }
+
+    const Uint8 updatedPixels[] = {
+        90, 100, 110, 120,
+        130, 140, 150, 160,
+    };
+    MG_Impl::GLImpl::TexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 2, 1, GL_BGRA, GL_UNSIGNED_INT_8_8_8_8_REV,
+                                   updatedPixels);
+
+    stored = GetBoundTexture2DLevelBytes(texture);
+    const Uint8 expectedUpdated[] = {
+        110, 100, 90, 120,
+        150, 140, 130, 160,
+    };
+    for (SizeT i = 0; i < sizeof(expectedUpdated); ++i) {
+        EXPECT_EQ(stored[i], expectedUpdated[i]) << "updated byte " << i;
     }
     EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
 }
