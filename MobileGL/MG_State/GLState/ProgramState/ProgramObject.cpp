@@ -360,7 +360,18 @@ namespace MobileGL::MG_State::GLState {
         }
 
         MGLOG_D("ProgramObject %u: DoReflection - building reflection", m_externalIndex);
-        if (!m_program->buildReflection()) {
+        // GL-style reflection naming (GL CTS uniform_block relies on all four):
+        //  - BasicArraySuffix: an array uniform is reported as "arr[0]" per the GL spec.
+        //  - StrictArraySuffix: named-block struct arrays expand per element ("s[0].a",
+        //    "s[1].a", ...) following ARB_program_interface_query rules. Default-block
+        //    (loose) uniforms already expand per element without this option.
+        //  - AllBlockVariables: every member of an active named block is active even when
+        //    no shader statement reads it (ES 3.0/GL 3.3 named-block semantics).
+        //  - SharedStd140UBO: a DECLARED uniform block is active even when no member is
+        //    ever read (reflected from the linker objects). PreprocessShaderSource coerces
+        //    every block to std140, so this covers all of them.
+        if (!m_program->buildReflection(EShReflectionStrictArraySuffix | EShReflectionBasicArraySuffix |
+                                        EShReflectionAllBlockVariables | EShReflectionSharedStd140UBO)) {
             m_linkStatus = false;
             m_infoLog = "Build reflection failed.";
             MGLOG_E("ProgramObject %u: DoReflection - buildReflection() returned false", m_externalIndex);
@@ -483,7 +494,14 @@ namespace MobileGL::MG_State::GLState {
                 continue;
             }
 
-            const auto explicitBinding = m_explicitOpaqueUniformBindings.find(uniform.name);
+            // Reflection names an array "texs[0]" while the layout(binding = N) map from the IO
+            // resolver is keyed by the declared name ("texs"); look up both spellings.
+            auto explicitBinding = m_explicitOpaqueUniformBindings.find(uniform.name);
+            if (explicitBinding == m_explicitOpaqueUniformBindings.end() && uniform.name.length() > 3 &&
+                uniform.name.compare(uniform.name.length() - 3, 3, "[0]") == 0) {
+                explicitBinding =
+                    m_explicitOpaqueUniformBindings.find(uniform.name.substr(0, uniform.name.length() - 3));
+            }
             const int initialUnit =
                 explicitBinding != m_explicitOpaqueUniformBindings.end() ? static_cast<int>(explicitBinding->second) : 0;
             const Int locationSpan = GetUniformLocationSpan(uniform);
@@ -685,7 +703,13 @@ namespace MobileGL::MG_State::GLState {
                     m_globalUboScratch.resize(size);
                 }
                 for (const auto& [name, offset] : meta.plainUniformOffsetsInUBO) {
-                    const auto locationIt = m_uniformLocations.find(name);
+                    // SPIRV-Reflect leaf names never carry a "[0]" suffix; frontend
+                    // reflection keys arrays as "arr[0]" (GL naming), so retry with the
+                    // suffix before declaring the uniform unbacked.
+                    auto locationIt = m_uniformLocations.find(name);
+                    if (locationIt == m_uniformLocations.end()) {
+                        locationIt = m_uniformLocations.find(name + "[0]");
+                    }
                     if (locationIt == m_uniformLocations.end()) {
                         MGLOG_D("ProgramObject %u: GenerateBinary - uniform '%s' offset=%u but not found in "
                                 "m_uniformLocations",

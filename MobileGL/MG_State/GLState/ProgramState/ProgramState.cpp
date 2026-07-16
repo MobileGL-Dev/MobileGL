@@ -29,9 +29,18 @@ namespace MobileGL::MG_State::GLState {
         if (!CheckIndexAvail(program, m_programObjects)) return; // FIXME: add error reporting here
         auto& programObject = m_programObjects[program];
         if (programObject != nullptr) {
+            // Snapshot the attachments: deleting the program is a detach point for shaders
+            // that were flagged with glDeleteShader while still attached.
+            const Vector<SharedPtr<ShaderObject>> attachedShaders = programObject->GetAttachedShaders();
             programObject->MarkAsDeleted();
             programObject.reset();
             m_programIndexGenerator.Delete(program);
+            for (const auto& shader : attachedShaders) {
+                const Uint shaderName = shader->GetExternalIndex();
+                if (CheckIndexAvail(shaderName, m_shaderObjects) && m_shaderObjects[shaderName] == shader) {
+                    ReleaseShaderNameIfOrphaned(shaderName);
+                }
+            }
         }
     }
 
@@ -66,10 +75,33 @@ namespace MobileGL::MG_State::GLState {
         if (!CheckIndexAvail(shader, m_shaderObjects)) return;
         auto& shaderObject = m_shaderObjects[shader];
         if (shaderObject != nullptr) {
-            m_shaderObjects[shader]->MarkAsDeleted();
-            m_shaderObjects[shader].reset();
-            m_shaderIndexGenerator.Delete(shader);
+            // glDeleteShader on an attached shader only FLAGS it; the name stays valid (and
+            // glShaderSource/glCompileShader keep working on it) until the shader is detached
+            // from every program. The GL CTS compiles shaders through exactly this
+            // create-attach-delete-source-compile sequence (uniform_block.common.name_matching).
+            shaderObject->MarkAsDeleted();
+            ReleaseShaderNameIfOrphaned(shader);
         }
+    }
+
+    Bool ProgramState::ShaderHasGLVisibleAttachment(const SharedPtr<ShaderObject>& shaderObject) const {
+        for (const auto& programObject : m_programObjects) {
+            if (programObject != nullptr && programObject->ShaderIsAttachedGLVisible(shaderObject)) {
+                return true;
+            }
+        }
+        // A program deleted while current vacates its table slot but stays alive as the
+        // current program; its attachments still count.
+        return m_currentProgram != nullptr && m_currentProgram->ShaderIsAttachedGLVisible(shaderObject);
+    }
+
+    void ProgramState::ReleaseShaderNameIfOrphaned(Uint shader) {
+        if (!CheckIndexAvail(shader, m_shaderObjects)) return;
+        auto& shaderObject = m_shaderObjects[shader];
+        if (shaderObject == nullptr || !shaderObject->GetDeleteStatus()) return;
+        if (ShaderHasGLVisibleAttachment(shaderObject)) return;
+        shaderObject.reset();
+        m_shaderIndexGenerator.Delete(shader);
     }
 
     Bool ProgramState::ValidateShaderObject(Uint shader) const {

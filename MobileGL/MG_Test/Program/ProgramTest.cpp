@@ -2053,3 +2053,232 @@ void main() {
     EXPECT_EQ(readback, 9.0f); // untouched by the overlong write
     EXPECT_EQ(GetError(), GL_NO_ERROR);
 }
+
+// ---------------------------------------------------------------------------
+// GL CTS KHR-GL33.shaders.uniform_block regression pack. MobileGL's SPIR-V
+// pipeline lays every uniform block out as std140; the frontend implements the
+// GL-visible consequences of that choice: packed/shared qualifiers compile (as
+// std140), reflection uses GL naming ("arr[0]", per-element struct arrays),
+// unused block members stay active, block sizes are vec4-padded, and array
+// strides are std140 even for arrays nested inside struct members.
+// ---------------------------------------------------------------------------
+
+TEST_F(ProgramTest, UniformBlockPackedAndSharedLayoutsCompileAsStd140) {
+    const char* fsSource = R"(#version 330
+layout(packed) uniform PackedBlock {
+    vec4 pv;
+};
+layout(shared, row_major) uniform SharedBlock {
+    float sf;
+    mat4 sm;
+};
+out vec4 o_color;
+void main() {
+    o_color = pv + vec4(sf) + vec4(sm[0][0]);
+})";
+    GLuint program = LinkVsFsProgram(kPassthroughCoordsVs, fsSource);
+
+    // The blocks land on the implementation's chosen layout: std140 offsets.
+    const GLuint pv = UniformIndexByName(program, "pv");
+    const GLuint sf = UniformIndexByName(program, "sf");
+    const GLuint sm = UniformIndexByName(program, "sm");
+    ASSERT_NE(pv, GL_INVALID_INDEX);
+    ASSERT_NE(sf, GL_INVALID_INDEX);
+    ASSERT_NE(sm, GL_INVALID_INDEX);
+    EXPECT_EQ(QueryUniformiv(program, pv, GL_UNIFORM_OFFSET), 0);
+    EXPECT_EQ(QueryUniformiv(program, sf, GL_UNIFORM_OFFSET), 0);
+    EXPECT_EQ(QueryUniformiv(program, sm, GL_UNIFORM_OFFSET), 16);
+    // The remaining qualifiers in the rewritten layout() list survive.
+    EXPECT_EQ(QueryUniformiv(program, sm, GL_UNIFORM_IS_ROW_MAJOR), 1);
+    EXPECT_EQ(GetError(), GL_NO_ERROR);
+}
+
+TEST_F(ProgramTest, UniformBlockReflectsUnusedMembersWithGLNamesAndPaddedSize) {
+    const char* fsSource = R"(#version 330
+layout(std140) uniform Blk {
+    float used;
+    vec4 unusedArr[3];
+    ivec3 tail;
+};
+out vec4 o_color;
+void main() {
+    o_color = vec4(used);
+})";
+    GLuint program = LinkVsFsProgram(kPassthroughCoordsVs, fsSource);
+
+    const GLuint blockIndex = GetUniformBlockIndex(program, "Blk");
+    ASSERT_NE(blockIndex, GL_INVALID_INDEX);
+
+    // All three members are active (unusedArr and tail are never read), the array is
+    // reported under its GL name "unusedArr[0]", and both spellings resolve.
+    const GLuint used = UniformIndexByName(program, "used");
+    const GLuint unusedSuffixed = UniformIndexByName(program, "unusedArr[0]");
+    const GLuint unusedBare = UniformIndexByName(program, "unusedArr");
+    const GLuint tail = UniformIndexByName(program, "tail");
+    ASSERT_NE(used, GL_INVALID_INDEX);
+    ASSERT_NE(unusedSuffixed, GL_INVALID_INDEX);
+    ASSERT_NE(tail, GL_INVALID_INDEX);
+    EXPECT_EQ(unusedSuffixed, unusedBare);
+
+    char nameBuf[64] = "";
+    GLsizei nameLen = 0;
+    GLint arraySize = 0;
+    GLenum type = 0;
+    GetActiveUniform(program, unusedSuffixed, sizeof(nameBuf), &nameLen, &arraySize, &type, nameBuf);
+    EXPECT_STREQ(nameBuf, "unusedArr[0]");
+    EXPECT_EQ(arraySize, 3);
+    EXPECT_EQ(type, static_cast<GLenum>(GL_FLOAT_VEC4));
+
+    // std140 layout of the unused members.
+    EXPECT_EQ(QueryUniformiv(program, unusedSuffixed, GL_UNIFORM_OFFSET), 16);
+    EXPECT_EQ(QueryUniformiv(program, unusedSuffixed, GL_UNIFORM_ARRAY_STRIDE), 16);
+    EXPECT_EQ(QueryUniformiv(program, tail, GL_UNIFORM_OFFSET), 64);
+
+    // GL_UNIFORM_BLOCK_ACTIVE_UNIFORMS agrees with the INDICES list and counts all members.
+    GLint activeInBlock = 0;
+    GetActiveUniformBlockiv(program, blockIndex, GL_UNIFORM_BLOCK_ACTIVE_UNIFORMS, &activeInBlock);
+    ASSERT_EQ(activeInBlock, 3);
+    GLint indices[3] = {-1, -1, -1};
+    GetActiveUniformBlockiv(program, blockIndex, GL_UNIFORM_BLOCK_ACTIVE_UNIFORM_INDICES, indices);
+    for (GLint index : indices) {
+        EXPECT_TRUE(index == static_cast<GLint>(used) || index == static_cast<GLint>(unusedSuffixed) ||
+                    index == static_cast<GLint>(tail));
+    }
+
+    // The block ends with an ivec3 at offset 64 (unpadded end 76); the backend compiles
+    // the std140 block at its vec4-padded size, and the reported size must cover it or
+    // buffers sized from this query are too small to draw with.
+    GLint dataSize = 0;
+    GetActiveUniformBlockiv(program, blockIndex, GL_UNIFORM_BLOCK_DATA_SIZE, &dataSize);
+    EXPECT_EQ(dataSize, 80);
+    EXPECT_EQ(GetError(), GL_NO_ERROR);
+}
+
+TEST_F(ProgramTest, UniformBlockStructArrayExpandsPerElementWithStd140Strides) {
+    const char* fsSource = R"(#version 330
+struct S {
+    ivec2 v[2];
+    float f;
+};
+layout(std140) uniform Blk2 {
+    S s[2];
+} inst;
+out vec4 o_color;
+void main() {
+    o_color = vec4(inst.s[0].f);
+})";
+    GLuint program = LinkVsFsProgram(kPassthroughCoordsVs, fsSource);
+
+    // ARB_program_interface_query naming: one entry per struct array element, prefixed
+    // with the BLOCK name (not the instance name), basic arrays suffixed with "[0]".
+    const GLuint v0 = UniformIndexByName(program, "Blk2.s[0].v[0]");
+    const GLuint f0 = UniformIndexByName(program, "Blk2.s[0].f");
+    const GLuint v1 = UniformIndexByName(program, "Blk2.s[1].v[0]");
+    const GLuint f1 = UniformIndexByName(program, "Blk2.s[1].f");
+    ASSERT_NE(v0, GL_INVALID_INDEX);
+    ASSERT_NE(f0, GL_INVALID_INDEX);
+    ASSERT_NE(v1, GL_INVALID_INDEX);
+    ASSERT_NE(f1, GL_INVALID_INDEX);
+
+    // std140: ivec2 v[2] rounds each element up to a vec4 (stride 16, NOT the tight 8
+    // glslang reflects for arrays nested inside a struct member); struct size rounds to
+    // 48, giving s[1] members a 48-byte bias.
+    EXPECT_EQ(QueryUniformiv(program, v0, GL_UNIFORM_OFFSET), 0);
+    EXPECT_EQ(QueryUniformiv(program, v0, GL_UNIFORM_ARRAY_STRIDE), 16);
+    EXPECT_EQ(QueryUniformiv(program, v0, GL_UNIFORM_SIZE), 2);
+    EXPECT_EQ(QueryUniformiv(program, f0, GL_UNIFORM_OFFSET), 32);
+    EXPECT_EQ(QueryUniformiv(program, v1, GL_UNIFORM_OFFSET), 48);
+    EXPECT_EQ(QueryUniformiv(program, f1, GL_UNIFORM_OFFSET), 80);
+
+    GLint dataSize = 0;
+    const GLuint blockIndex = GetUniformBlockIndex(program, "Blk2");
+    ASSERT_NE(blockIndex, GL_INVALID_INDEX);
+    GetActiveUniformBlockiv(program, blockIndex, GL_UNIFORM_BLOCK_DATA_SIZE, &dataSize);
+    EXPECT_EQ(dataSize, 96);
+    EXPECT_EQ(GetError(), GL_NO_ERROR);
+}
+
+TEST_F(ProgramTest, UniformBlockInstanceArrayReportsPerInstanceBlocks) {
+    const char* fsSource = R"(#version 330
+layout(std140) uniform ArrBlk {
+    vec4 av;
+} insts[2];
+out vec4 o_color;
+void main() {
+    o_color = insts[0].av + insts[1].av;
+})";
+    GLuint program = LinkVsFsProgram(kPassthroughCoordsVs, fsSource);
+
+    const GLuint inst0 = GetUniformBlockIndex(program, "ArrBlk[0]");
+    const GLuint inst1 = GetUniformBlockIndex(program, "ArrBlk[1]");
+    ASSERT_NE(inst0, GL_INVALID_INDEX);
+    ASSERT_NE(inst1, GL_INVALID_INDEX);
+    EXPECT_NE(inst0, inst1);
+    // A bare block name resolves to the first instance.
+    EXPECT_EQ(GetUniformBlockIndex(program, "ArrBlk"), inst0);
+
+    // Every instance of the array shares the single reflected member set.
+    GLint count0 = 0;
+    GLint count1 = 0;
+    GetActiveUniformBlockiv(program, inst0, GL_UNIFORM_BLOCK_ACTIVE_UNIFORMS, &count0);
+    GetActiveUniformBlockiv(program, inst1, GL_UNIFORM_BLOCK_ACTIVE_UNIFORMS, &count1);
+    EXPECT_EQ(count0, 1);
+    EXPECT_EQ(count1, 1);
+    GLint index0 = -1;
+    GLint index1 = -1;
+    GetActiveUniformBlockiv(program, inst0, GL_UNIFORM_BLOCK_ACTIVE_UNIFORM_INDICES, &index0);
+    GetActiveUniformBlockiv(program, inst1, GL_UNIFORM_BLOCK_ACTIVE_UNIFORM_INDICES, &index1);
+    EXPECT_EQ(index0, index1);
+    EXPECT_EQ(static_cast<GLuint>(index0), UniformIndexByName(program, "ArrBlk.av"));
+    EXPECT_EQ(GetError(), GL_NO_ERROR);
+}
+
+TEST_F(ProgramTest, DeleteShaderWhileAttachedKeepsNameUsableUntilDetach) {
+    // GL CTS compiles through exactly this sequence (create, attach, DELETE, source,
+    // compile): glDeleteShader on an attached shader only flags it, and the name must
+    // keep working until the last detach.
+    const char* vsSource = R"(#version 330
+void main() { gl_Position = vec4(0.0); }
+)";
+    const char* fsSource = R"(#version 330
+out vec4 o_color;
+void main() { o_color = vec4(1.0); }
+)";
+
+    GLuint program = CreateProgram();
+    GLuint vs = CreateShader(GL_VERTEX_SHADER);
+    AttachShader(program, vs);
+    DeleteShader(vs);
+    EXPECT_EQ(IsShader(vs), GL_TRUE); // still alive: attached
+
+    ShaderSource(vs, 1, &vsSource, nullptr);
+    CompileShader(vs);
+    GLint status = GL_FALSE;
+    GetShaderiv(vs, GL_COMPILE_STATUS, &status);
+    EXPECT_EQ(status, GL_TRUE);
+    status = GL_FALSE;
+    GetShaderiv(vs, GL_DELETE_STATUS, &status);
+    EXPECT_EQ(status, GL_TRUE);
+
+    GLuint fs = CreateShader(GL_FRAGMENT_SHADER);
+    AttachShader(program, fs);
+    DeleteShader(fs);
+    ShaderSource(fs, 1, &fsSource, nullptr);
+    CompileShader(fs);
+
+    LinkProgram(program);
+    GLint linkStatus = GL_FALSE;
+    char infoLog[1024] = "";
+    GetProgramiv(program, GL_LINK_STATUS, &linkStatus);
+    GetProgramInfoLog(program, sizeof(infoLog), nullptr, infoLog);
+    EXPECT_EQ(linkStatus, GL_TRUE) << infoLog;
+
+    // The last GL-visible detach releases the flagged shader's name.
+    DetachShader(program, vs);
+    EXPECT_EQ(IsShader(vs), GL_FALSE);
+
+    // Deleting the program releases the other flagged shader.
+    DeleteProgram(program);
+    EXPECT_EQ(IsShader(fs), GL_FALSE);
+    EXPECT_EQ(GetError(), GL_NO_ERROR);
+}
