@@ -14,6 +14,7 @@
 #include "SpirvPasses/DecomposeWorkgroupVec3Pass.h"
 #include "SpirvPasses/LowerDrawParametersPass.h"
 #include "SpirvPasses/RebaseInstanceIndexPass.h"
+#include "SpirvPasses/StripUboMemberRelaxedPrecisionPass.h"
 #include "spirv-tools/libspirv.h"
 #include "spirv-tools/optimizer.hpp"
 
@@ -262,6 +263,19 @@ namespace MobileGL {
 
                 Optimizer optimizer(SPV_ENV_VULKAN_1_1);
                 optimizer.RegisterPass(LowerDrawParametersPass::CreateLowerDrawParametersPass());
+
+                return optimizer.Run(inputBinary.data(), inputBinary.size(), &outputBinary, options);
+            }
+
+            bool ShaderCompiler::StripUboMemberRelaxedPrecisionForEssl(const Vector<Uint32>& inputBinary,
+                                                                       Vector<uint32_t>& outputBinary) {
+                using namespace spvtools;
+                OptimizerOptions options;
+                options.set_run_validator(false);
+
+                Optimizer optimizer(SPV_ENV_VULKAN_1_1);
+                optimizer.RegisterPass(
+                    StripUboMemberRelaxedPrecisionPass::CreateStripUboMemberRelaxedPrecisionPass());
 
                 return optimizer.Run(inputBinary.data(), inputBinary.size(), &outputBinary, options);
             }
