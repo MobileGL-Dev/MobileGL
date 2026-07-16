@@ -966,6 +966,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 g_uboRing.generation = nextGeneration;
                 g_uboRing.alignment = pow2;
                 g_uboRingFrameMarks.clear();
+                MGLOG_I("Global-UBO ring: %zu MiB persistent store ready (id %u, gen %u, align %zu).",
+                        newSize / (1024u * 1024u), id, nextGeneration, pow2);
                 return true;
             }
         } // namespace
