@@ -404,9 +404,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
             Vector<UboRingFrameMark> g_uboRingFrameMarks;
 
             // The ES context the ring's id/map belonged to is gone (or was never
-            // seen): drop every handle without GL calls and re-arm creation.
+            // seen): drop every handle without GL calls and re-arm creation. The
+            // generation counter must survive the reset — frame serials also survive
+            // context recreation, so a restarted counter could revalidate a stale
+            // per-program slot cache against the new ring.
             void ResetUboRingForNewContext() {
+                const Uint32 keptGeneration = g_uboRing.generation;
                 g_uboRing = {};
+                g_uboRing.generation = keptGeneration;
                 g_uboRing.contextGeneration = g_bufferContextGeneration;
                 g_retiredUboRings.clear();
                 g_uboRingFrameMarks.clear();
@@ -1067,6 +1072,19 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
 
             if (g_uboRing.id == 0 || g_uboRing.contextGeneration != g_bufferContextGeneration) return;
+            // Retire completed marks here too — UboRingAllocate is the main consumer,
+            // but frames with no global-UBO draws would otherwise let the list grow
+            // one entry per Present, unboundedly.
+            SizeT retiredMarks = 0;
+            for (const auto& mark : g_uboRingFrameMarks) {
+                if (mark.frameSerial > completed) break;
+                if (mark.headAtPresent > g_uboRing.tail) g_uboRing.tail = mark.headAtPresent;
+                ++retiredMarks;
+            }
+            if (retiredMarks > 0) {
+                g_uboRingFrameMarks.erase(g_uboRingFrameMarks.begin(),
+                                          g_uboRingFrameMarks.begin() + static_cast<std::ptrdiff_t>(retiredMarks));
+            }
             // Record this frame's high-water mark (Present just fenced the serial now
             // reported by CurrentFrameSerial()). A fence-less Present repeats the
             // serial; fold into the existing mark.
