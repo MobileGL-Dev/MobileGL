@@ -3628,7 +3628,9 @@ void main() {
                 return;
             }
 
-            if (activeRenderPass && activeRenderPass->CompatibleWith(*renderPassEntry)) {
+            // A still-active pass is necessarily compatible here: the block above ended any
+            // incompatible one and nothing since can change the active pass.
+            if (activeRenderPass) {
                 // Materialize any older whole-attachment clear before applying this
                 // ordered, scissored clear.
                 ClearAttachmentsOnActiveRenderPass(frame.commandBuffer, *renderPassEntry);
@@ -3698,7 +3700,16 @@ void main() {
             if ((mask & GL_STENCIL_BUFFER_BIT) != 0) {
                 const auto& stencilAttachment = fbo->GetAttachment(FramebufferAttachmentType::Stencil);
                 if (stencilAttachment.IsComplete()) {
-                    depthStencilAspects |= VK_IMAGE_ASPECT_STENCIL_BIT;
+                    // GL 3.3 §4.2.3: the clear is masked by the front stencil write mask.
+                    // vkCmdClearAttachments writes every bit, so only a full (8-bit stencil) or
+                    // zero mask can be expressed; treat a partial mask like a partial color mask.
+                    const Uint32 stencilWriteMask =
+                        MG_State::pGLContext->GetStencilState(StencilFace::Front).WriteMask;
+                    if ((stencilWriteMask & 0xFFu) == 0xFFu) {
+                        depthStencilAspects |= VK_IMAGE_ASPECT_STENCIL_BIT;
+                    } else if (stencilWriteMask != 0) {
+                        MGLOG_W("DirectVulkan: scissored glClear with a partial stencil write mask is not supported");
+                    }
                 }
             }
             if (depthStencilAspects != 0) {
