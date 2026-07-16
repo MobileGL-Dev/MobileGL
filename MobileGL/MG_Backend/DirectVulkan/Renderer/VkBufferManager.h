@@ -124,7 +124,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     private:
         Bool InitializeTransientArenas();
         static VkBufferUsageFlags GetVkBufferUsage(BufferKind kind);
-        SharedPtr<VkBufferResource> GetOrCreateResource(const SharedPtr<MG_State::GLState::BufferObject>& bufferObject);
+        VkBufferResource* GetOrCreateResource(const SharedPtr<MG_State::GLState::BufferObject>& bufferObject);
         static VkBufferResource* ResourceOf(MG_State::GLState::BufferObject& bufferObject);
         Bool CreateResidentStorage(VkBufferResource& resource, VkDeviceSize size, VkBufferUsageFlags usage,
                                    VkMemoryPropertyFlags requiredFlags = 0);
