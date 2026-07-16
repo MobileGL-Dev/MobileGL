@@ -7,6 +7,7 @@
 // End of Source File Header
 
 #include "Error.h"
+#include <algorithm>
 #include <MG_Util/Converters/GLToStr/GLEnumConverter.h>
 #include <MG_Util/Converters/MGToGL/ErrorCodeConverter.h>
 
@@ -19,7 +20,15 @@ namespace MobileGL::MG_State::GLState {
             MGLOG_E("Recording OpenGL error (%s):\n%s",
                     MG_Util::ConvertGLEnumToString(MG_Util::ConvertErrorCodeToGLEnum(code)).c_str(),
                     info->toString().c_str());
-            m_errors.push_back(MakeUnique<Error>(code, Move(info)));
+            // GL error semantics are sticky flags, not a queue (GL 3.3 core §2.5): with multiple
+            // error flags, each is set only while currently unset — repeated errors of the same
+            // code are discarded until glGetError reads the flag. Unbounded accumulation leaked
+            // stale errors into later, unrelated glGetError checks (GL CTS deinit noise).
+            const Bool alreadyPending = std::any_of(m_errors.begin(), m_errors.end(),
+                                                    [code](const auto& e) { return e->code == code; });
+            if (!alreadyPending) {
+                m_errors.push_back(MakeUnique<Error>(code, Move(info)));
+            }
         }
     }
 
