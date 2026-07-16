@@ -8,6 +8,7 @@
 
 #include "ProgramObject.h"
 #include <atomic>
+#include <cstring>
 #include <MG_Backend/BackendObjects.h>
 #include <MG_State/GLState/VertexArrayState/VertexArrayObject.h>
 #include <MG_Util/Converters/GLToStr/GLEnumConverter.h>
@@ -85,6 +86,19 @@ namespace {
         default:
             return glType;
         }
+    }
+
+    // How many consecutive uniform locations a uniform occupies. Array uniforms (opaque
+    // or not) span one location per element so glUniform*v(count > 1) and
+    // glGetUniformLocation("arr[k]") can address elements individually; everything else
+    // spans a single location. TObjectReflection.size only carries the element count for
+    // non-block arrays, so prefer the TType, which is authoritative for both.
+    static MobileGL::Int GetUniformLocationSpan(const glslang::TObjectReflection& uniform) {
+        const glslang::TType* type = uniform.getType();
+        if (type != nullptr && type->isSizedArray()) {
+            return std::max(1, type->getOuterArraySize());
+        }
+        return std::max(1, uniform.size);
     }
 
     static bool ComputeShaderDeclaresLocalSize(const MobileGL::String& source) {
@@ -361,8 +375,7 @@ namespace MobileGL::MG_State::GLState {
         for (int i = 0; i < m_activeUniformCount; i++) {
             auto& uniform = m_program->getUniform(i);
             auto location = uniform.layoutLocation();
-            const Int locationSpan =
-                (uniform.getType() && uniform.getType()->isOpaque()) ? std::max(1, uniform.size) : 1;
+            const Int locationSpan = GetUniformLocationSpan(uniform);
             requiredUniformLocations += locationSpan;
             if (location != glslang::TQualifier::layoutLocationEnd) {
                 m_maxUniformLocation = std::max(m_maxUniformLocation, location + locationSpan - 1);
@@ -401,8 +414,7 @@ namespace MobileGL::MG_State::GLState {
                         m_externalIndex, uniform.name.c_str());
                 continue; // will allocate unallocated uniforms later
             }
-            const Int locationSpan =
-                (uniform.getType() && uniform.getType()->isOpaque()) ? std::max(1, uniform.size) : 1;
+            const Int locationSpan = GetUniformLocationSpan(uniform);
             for (Int element = 0; element < locationSpan; ++element) {
                 m_uniformIndexInTProgram[location + element] = i;
             }
@@ -419,8 +431,8 @@ namespace MobileGL::MG_State::GLState {
         });
         for (auto index : unallocatedUniformIndex) {
             auto& uniform = m_program->getUniform(index);
-            const Int locationSpan =
-                (uniform.getType() && uniform.getType()->isOpaque()) ? std::max(1, uniform.size) : 1;
+            const Int locationSpan = GetUniformLocationSpan(uniform);
+            Bool placed = false;
             for (; locNeedle <= m_maxUniformLocation; locNeedle++) {
                 bool hasRoom = locNeedle + locationSpan - 1 <= m_maxUniformLocation;
                 for (Int element = 0; hasRoom && element < locationSpan; ++element) {
@@ -437,7 +449,24 @@ namespace MobileGL::MG_State::GLState {
                         "(index %d)",
                         m_externalIndex, uniform.name.c_str(), locNeedle, locNeedle + locationSpan - 1, index);
                 locNeedle += locationSpan;
+                placed = true;
                 break;
+            }
+            if (!placed) {
+                // Explicit-location uniforms can fragment the space so no contiguous
+                // span is left; grow the table instead of leaving the uniform without
+                // a location (which would make it unsettable via glUniform*).
+                const SizeT base = m_uniformIndexInTProgram.size();
+                m_uniformIndexInTProgram.resize(base + locationSpan, glslang::TQualifier::layoutLocationEnd);
+                m_uniformSamplerOrImageUnitIndex.resize(base + locationSpan, -1);
+                m_maxUniformLocation = static_cast<Uint>(base + locationSpan - 1);
+                for (Int element = 0; element < locationSpan; ++element) {
+                    m_uniformIndexInTProgram[base + element] = index;
+                }
+                m_uniformLocations[uniform.name] = static_cast<Uint>(base);
+                MGLOG_D("ProgramObject %u: Reflection - grew location table to place uniform '%s' at %zu..%zu",
+                        m_externalIndex, uniform.name.c_str(), base, base + locationSpan - 1);
+                locNeedle = base + locationSpan;
             }
         }
 
@@ -457,7 +486,7 @@ namespace MobileGL::MG_State::GLState {
             const auto explicitBinding = m_explicitOpaqueUniformBindings.find(uniform.name);
             const int initialUnit =
                 explicitBinding != m_explicitOpaqueUniformBindings.end() ? static_cast<int>(explicitBinding->second) : 0;
-            const Int locationSpan = std::max(1, uniform.size);
+            const Int locationSpan = GetUniformLocationSpan(uniform);
             for (Int element = 0; element < locationSpan &&
                                   location + element < m_uniformSamplerOrImageUnitIndex.size(); ++element) {
                 m_uniformSamplerOrImageUnitIndex[location + element] =
@@ -622,8 +651,11 @@ namespace MobileGL::MG_State::GLState {
         m_uniformSizesInBytes.clear();
         m_uniformOffsets.clear();
         m_globalUboScratch.clear();
-        m_uniformOffsets.resize(m_maxUniformLocation + 1);
-        m_uniformSizesInBytes.resize(m_maxUniformLocation + 1);
+        // kInvalidUniformOffset marks locations that end up without global-UBO backing
+        // (e.g. the optimizer eliminated every use of the uniform); the fallback pass
+        // below gives those locations tail storage so glUniform* always has a target.
+        m_uniformOffsets.resize(m_maxUniformLocation + 1, kInvalidUniformOffset);
+        m_uniformSizesInBytes.resize(m_maxUniformLocation + 1, 0);
         for (SizeT i = 0; i < m_generatedSpirv.size(); i++) {
             auto& spv = m_generatedSpirv[i];
 
@@ -653,30 +685,88 @@ namespace MobileGL::MG_State::GLState {
                     m_globalUboScratch.resize(size);
                 }
                 for (const auto& [name, offset] : meta.plainUniformOffsetsInUBO) {
-                    if (m_uniformLocations.find(name) != m_uniformLocations.end()) {
-                        m_uniformOffsets[m_uniformLocations[name]] = offset;
-                        MGLOG_D("ProgramObject %u: GenerateBinary - uniform '%s' offset=%u assigned to location %u",
-                                m_externalIndex, name.c_str(), offset, m_uniformLocations[name]);
-            } else {
-                MGLOG_D("ProgramObject %u: GenerateBinary - uniform '%s' offset=%u but not found in "
-                        "m_uniformLocations",
-                        m_externalIndex, name.c_str(), offset);
-            }
-                }
-                for (const auto& [name, size] : meta.plainUniformMemberSizesInBytes) {
-                    if (m_uniformLocations.find(name) != m_uniformLocations.end()) {
-                        m_uniformSizesInBytes[m_uniformLocations[name]] = size;
-                        MGLOG_D("ProgramObject %u: GenerateBinary - uniform '%s' size=%u assigned to location %u",
-                                m_externalIndex, name.c_str(), size, m_uniformLocations[name]);
-            } else {
-                MGLOG_D("ProgramObject %u: GenerateBinary - uniform '%s' size=%u but not found in "
-                        "m_uniformLocations",
-                        m_externalIndex, name.c_str(), size);
-            }
+                    const auto locationIt = m_uniformLocations.find(name);
+                    if (locationIt == m_uniformLocations.end()) {
+                        MGLOG_D("ProgramObject %u: GenerateBinary - uniform '%s' offset=%u but not found in "
+                                "m_uniformLocations",
+                                m_externalIndex, name.c_str(), offset);
+                        continue;
+                    }
+                    const Uint baseLocation = locationIt->second;
+                    if (!IsValidUniformLocation(static_cast<Int>(baseLocation))) {
+                        continue;
+                    }
+
+                    const Int uniformIndex = m_uniformIndexInTProgram[baseLocation];
+                    const GLint arraySize = GetActiveUniformArraySize(uniformIndex);
+                    SizeT memberSize = 0;
+                    const auto sizeIt = meta.plainUniformMemberSizesInBytes.find(name);
+                    if (sizeIt != meta.plainUniformMemberSizesInBytes.end()) {
+                        memberSize = sizeIt->second;
+                    }
+                    Uint arrayStride = 0;
+                    const auto strideIt = meta.plainUniformArrayStridesInUBO.find(name);
+                    if (strideIt != meta.plainUniformArrayStridesInUBO.end()) {
+                        arrayStride = strideIt->second;
+                    }
+
+                    // Array uniforms span one location per element (see DoReflection);
+                    // give each element its real byte offset inside the UBO.
+                    const GLint elementCount = (arraySize > 1 && arrayStride == 0) ? 1 : std::max(arraySize, 1);
+                    for (GLint element = 0; element < elementCount; ++element) {
+                        const Uint location = baseLocation + static_cast<Uint>(element);
+                        if (location > m_maxUniformLocation || m_uniformIndexInTProgram[location] != uniformIndex) {
+                            break;
+                        }
+                        m_uniformOffsets[location] = offset + static_cast<Uint>(element) * arrayStride;
+                        const SizeT consumed = static_cast<SizeT>(element) * arrayStride;
+                        m_uniformSizesInBytes[location] = memberSize > consumed ? memberSize - consumed : 0;
+                    }
+                    MGLOG_D("ProgramObject %u: GenerateBinary - uniform '%s' offset=%u stride=%u size=%zu assigned "
+                            "to locations %u..%u",
+                            m_externalIndex, name.c_str(), offset, arrayStride, memberSize, baseLocation,
+                            baseLocation + static_cast<Uint>(elementCount) - 1);
                 }
                 MGLOG_D("ProgramObject %u: GenerateBinary - finished parsing module %zu metadata",
                         m_externalIndex, i);
             }
+        }
+
+        // Fallback pass: a linked program's active non-opaque uniforms must accept
+        // glUniform*/glGetUniform* even when the optimized SPIR-V no longer contains
+        // them (AggressiveDCE can remove a dead loop together with the only loads of a
+        // uniform -- or the entire global UBO, leaving the scratch unallocated). Hand
+        // such locations CPU-side storage at the (16-byte aligned) tail of the shadow
+        // buffer; backends bind at least the SPIR-V-declared UBO range, and the GPU
+        // never reads these bytes, so this only keeps the GL-visible state coherent.
+        for (Uint location = 0; location <= m_maxUniformLocation; ++location) {
+            if (m_uniformOffsets[location] != kInvalidUniformOffset) continue;
+            if (!IsValidUniformLocation(static_cast<Int>(location))) continue;
+            const auto& uniform = m_program->getUniform(m_uniformIndexInTProgram[location]);
+            const glslang::TType* type = uniform.getType();
+            if (type != nullptr && type->isOpaque()) continue;
+            if (uniform.index >= 0 && uniform.index < m_program->getNumUniformBlocks() &&
+                std::strstr(m_program->getUniformBlock(uniform.index).name.c_str(),
+                            MG_Util::ShaderTranspiler::GLOBAL_UBO_NAME) == nullptr) {
+                // Member of a named uniform block: not settable through glUniform*, so it
+                // needs no global-UBO shadow storage.
+                continue;
+            }
+
+            // std140-style slot: the matrix upload paths write column vectors at
+            // 16-byte strides, so a matrix slot must cover cols * 16 bytes.
+            SizeT slotSize = MG_Util::GetGLTypeSize(uniform.glDefineType);
+            if (type != nullptr && type->isMatrix()) {
+                slotSize = static_cast<SizeT>(type->getMatrixCols()) * 16u;
+            }
+            slotSize = (slotSize + 15u) & ~static_cast<SizeT>(15u);
+            const SizeT slotOffset = (m_globalUboScratch.size() + 15u) & ~static_cast<SizeT>(15u);
+            m_globalUboScratch.resize(slotOffset + slotSize, 0);
+            m_uniformOffsets[location] = static_cast<Uint>(slotOffset);
+            m_uniformSizesInBytes[location] = slotSize;
+            MGLOG_D("ProgramObject %u: GenerateBinary - uniform '%s' location %u has no UBO backing in the "
+                    "generated SPIR-V (optimized out?); allocated %zu fallback bytes at scratch offset %zu",
+                    m_externalIndex, uniform.name.c_str(), location, slotSize, slotOffset);
         }
     }
 
