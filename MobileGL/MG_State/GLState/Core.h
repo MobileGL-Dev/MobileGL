@@ -116,6 +116,9 @@ namespace MobileGL {
                 Uint CreateShader(ShaderStage stage);
                 void MarkProgramForDeletion(Uint index);
                 void MarkShaderForDeletion(Uint index);
+                // Frees a deletion-flagged shader's name once it lost its last GL-visible
+                // attachment (call after glDetachShader).
+                void ReleaseShaderNameIfOrphaned(Uint index);
                 Bool ValidateProgramName(Uint index) const;
                 Bool ValidateShaderName(Uint index) const;
                 const SharedPtr<ProgramObject>& GetProgramObject(Uint index);

@@ -279,6 +279,10 @@ namespace MobileGL::MG_State {
             return m_programState.MarkShaderObjectForDeletion(index);
         }
 
+        void GLContext::ReleaseShaderNameIfOrphaned(const Uint index) {
+            return m_programState.ReleaseShaderNameIfOrphaned(index);
+        }
+
         Bool GLContext::ValidateProgramName(const Uint index) const {
             return m_programState.ValidateProgramObject(index);
         }
