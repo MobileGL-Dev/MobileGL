@@ -15,23 +15,6 @@
 
 namespace MobileGL::MG_Backend {
     namespace {
-        constexpr FormatCapability kPrintedFormatCapabilities[] = {
-            FormatCapability::Creatable,
-            FormatCapability::Sampled,
-            FormatCapability::LinearFilter,
-            FormatCapability::GenerateMipmap,
-            FormatCapability::TextureGather,
-            FormatCapability::TextureShadow,
-            FormatCapability::FramebufferRenderable,
-            FormatCapability::FramebufferLayered,
-            FormatCapability::MultisampleTexture,
-            FormatCapability::MultisampleRenderbuffer,
-            FormatCapability::ColorAttachment,
-            FormatCapability::DepthAttachment,
-            FormatCapability::StencilAttachment,
-            FormatCapability::TextureBuffer,
-        };
-
         Bool IsReleaseCurrentRequest(EGLDisplay dpy, EGLSurface draw, EGLSurface read, EGLContext ctx) {
             (void)dpy;
             return draw == EGL_NO_SURFACE && read == EGL_NO_SURFACE && ctx == EGL_NO_CONTEXT;
@@ -39,40 +22,6 @@ namespace MobileGL::MG_Backend {
 
         std::thread::id CurrentThreadKey() {
             return std::this_thread::get_id();
-        }
-
-        const char* ConvertFormatCapabilityToString(FormatCapability capability) {
-            switch (capability) {
-            case FormatCapability::Creatable:
-                return "Creatable";
-            case FormatCapability::Sampled:
-                return "Sampled";
-            case FormatCapability::LinearFilter:
-                return "LinearFilter";
-            case FormatCapability::GenerateMipmap:
-                return "GenerateMipmap";
-            case FormatCapability::TextureGather:
-                return "TextureGather";
-            case FormatCapability::TextureShadow:
-                return "TextureShadow";
-            case FormatCapability::FramebufferRenderable:
-                return "FramebufferRenderable";
-            case FormatCapability::FramebufferLayered:
-                return "FramebufferLayered";
-            case FormatCapability::MultisampleTexture:
-                return "MultisampleTexture";
-            case FormatCapability::MultisampleRenderbuffer:
-                return "MultisampleRenderbuffer";
-            case FormatCapability::ColorAttachment:
-                return "ColorAttachment";
-            case FormatCapability::DepthAttachment:
-                return "DepthAttachment";
-            case FormatCapability::StencilAttachment:
-                return "StencilAttachment";
-            case FormatCapability::TextureBuffer:
-                return "TextureBuffer";
-            }
-            return "Unknown";
         }
 
         const char* GetFormatCapabilitySupportString(const FormatCapabilityCache& cache,
@@ -94,22 +43,17 @@ namespace MobileGL::MG_Backend {
         }
 
         SizeT GetCapabilityColumnWidth(FormatCapability capability) {
-            SizeT width = std::strlen(ConvertFormatCapabilityToString(capability));
+            SizeT width = std::strlen(GetFormatCapabilityName(capability));
             width = std::max<SizeT>(width, std::strlen("Caveat"));
             return width;
-        }
-
-        String GetFormatCapabilityTargetName(SizeT targetIndex) {
-            if (targetIndex == kFormatCapabilityRenderbufferTargetIndex) return "Renderbuffer";
-            return MG_Util::ConvertTextureTargetToString(static_cast<TextureTarget>(targetIndex));
         }
 
         String BuildFormatCapabilityHeader(SizeT formatNameWidth) {
             std::ostringstream line;
             line << std::left << std::setw(static_cast<Int>(formatNameWidth)) << "";
-            for (FormatCapability capability : kPrintedFormatCapabilities) {
+            for (FormatCapability capability : kReportedFormatCapabilities) {
                 line << " | " << std::left << std::setw(static_cast<Int>(GetCapabilityColumnWidth(capability)))
-                     << ConvertFormatCapabilityToString(capability);
+                     << GetFormatCapabilityName(capability);
             }
             return line.str();
         }
@@ -122,7 +66,7 @@ namespace MobileGL::MG_Backend {
             std::ostringstream line;
             line << std::left << std::setw(static_cast<Int>(formatNameWidth))
                  << MG_Util::ConvertTextureInternalFormatToString(format);
-            for (FormatCapability capability : kPrintedFormatCapabilities) {
+            for (FormatCapability capability : kReportedFormatCapabilities) {
                 line << " | " << std::left << std::setw(static_cast<Int>(GetCapabilityColumnWidth(capability)))
                      << GetFormatCapabilitySupportString(cache, targetIndex, formatIndex, capability);
             }
@@ -158,6 +102,50 @@ namespace MobileGL::MG_Backend {
 
     SizeT GetRenderbufferFormatCapabilityTargetIndex() {
         return kFormatCapabilityRenderbufferTargetIndex;
+    }
+
+    const char* GetFormatCapabilityName(FormatCapability capability) {
+        switch (capability) {
+        case FormatCapability::Creatable:
+            return "Creatable";
+        case FormatCapability::Sampled:
+            return "Sampled";
+        case FormatCapability::LinearFilter:
+            return "LinearFilter";
+        case FormatCapability::GenerateMipmap:
+            return "GenerateMipmap";
+        case FormatCapability::TextureGather:
+            return "TextureGather";
+        case FormatCapability::TextureShadow:
+            return "TextureShadow";
+        case FormatCapability::FramebufferRenderable:
+            return "FramebufferRenderable";
+        case FormatCapability::FramebufferLayered:
+            return "FramebufferLayered";
+        case FormatCapability::MultisampleTexture:
+            return "MultisampleTexture";
+        case FormatCapability::MultisampleRenderbuffer:
+            return "MultisampleRenderbuffer";
+        case FormatCapability::ColorAttachment:
+            return "ColorAttachment";
+        case FormatCapability::DepthAttachment:
+            return "DepthAttachment";
+        case FormatCapability::StencilAttachment:
+            return "StencilAttachment";
+        case FormatCapability::TextureBuffer:
+            return "TextureBuffer";
+        }
+        return "Unknown";
+    }
+
+    String GetFormatCapabilityTargetName(SizeT targetIndex) {
+        if (targetIndex == kFormatCapabilityRenderbufferTargetIndex) {
+            return "Renderbuffer";
+        }
+        if (targetIndex >= kFormatCapabilityTextureTargetCount) {
+            return "Unknown";
+        }
+        return MG_Util::ConvertTextureTargetToString(static_cast<TextureTarget>(targetIndex));
     }
 
     void PrintFormatCapabilities(const FormatCapabilityCache& cache) {

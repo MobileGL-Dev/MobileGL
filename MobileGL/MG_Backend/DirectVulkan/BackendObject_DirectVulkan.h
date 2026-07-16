@@ -12,6 +12,14 @@
 #include <MG_Util/BackendLoaders/Vulkan/Loader.h>
 
 namespace MobileGL::MG_Backend::DirectVulkan {
+    // Populates the same format-capability cache used by backend startup. Passing the
+    // instance-resolved function keeps standalone callers independent of global loader
+    // initialization; the physical device must remain valid for the duration of the call.
+    void PopulateFormatCapabilities(VkPhysicalDevice physicalDevice,
+                                    PFN_vkGetPhysicalDeviceFormatProperties getFormatProperties,
+                                    const MG_External::VulkanCapabilities& capabilities,
+                                    FormatCapabilityCache& cache);
+
     class BackendObject_DirectVulkan : public BackendObject {
     public:
         BackendObject_DirectVulkan();

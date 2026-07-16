@@ -11,6 +11,7 @@
 #ifdef __ANDROID__
 
 #include "DriverPost.h"
+#include <MG_Util/Converters/MGToStr/TextureEnumConverter.h>
 
 #include <jni.h>
 
@@ -19,6 +20,9 @@ namespace {
     using MobileGL::SizeT;
     using MobileGL::String;
     using MobileGL::StringStream;
+    using MobileGL::Uint64;
+    using MobileGL::MG_Backend::FormatCapabilityCache;
+    using MobileGL::MG_Backend::FormatCapabilityFlags;
     using MobileGL::MG_Util::SelfTest::BackendPostReport;
     using MobileGL::MG_Util::SelfTest::PostCheck;
 
@@ -70,6 +74,55 @@ namespace {
         out << '"' << EscapeJsonString(value) << '"';
     }
 
+    Uint64 BuildFormatCapabilityMask(FormatCapabilityFlags capabilities) {
+        Uint64 mask = 0;
+        for (SizeT capabilityIndex = 0;
+             capabilityIndex < MobileGL::MG_Backend::kReportedFormatCapabilities.size(); ++capabilityIndex) {
+            if (MobileGL::MG_Backend::HasFormatCapability(
+                    capabilities, MobileGL::MG_Backend::kReportedFormatCapabilities[capabilityIndex])) {
+                mask |= 1ull << capabilityIndex;
+            }
+        }
+        return mask;
+    }
+
+    void AppendFormatCapabilitiesJson(StringStream& out, const FormatCapabilityCache& cache) {
+        out << ",\"formatCapabilities\":{\"capabilities\":[";
+        for (SizeT capabilityIndex = 0;
+             capabilityIndex < MobileGL::MG_Backend::kReportedFormatCapabilities.size(); ++capabilityIndex) {
+            if (capabilityIndex != 0) {
+                out << ',';
+            }
+            AppendJsonString(
+                out, MobileGL::MG_Backend::GetFormatCapabilityName(
+                         MobileGL::MG_Backend::kReportedFormatCapabilities[capabilityIndex]));
+        }
+        out << "],\"targets\":[";
+        for (SizeT targetIndex = 0; targetIndex < MobileGL::MG_Backend::kFormatCapabilityTargetCount;
+             ++targetIndex) {
+            if (targetIndex != 0) {
+                out << ',';
+            }
+            out << "{\"name\":";
+            AppendJsonString(out, MobileGL::MG_Backend::GetFormatCapabilityTargetName(targetIndex));
+            out << ",\"rows\":[";
+            for (SizeT formatIndex = 0; formatIndex < MobileGL::MG_Backend::kFormatCapabilityFormatCount;
+                 ++formatIndex) {
+                if (formatIndex != 0) {
+                    out << ',';
+                }
+                out << '[';
+                AppendJsonString(
+                    out, MobileGL::MG_Util::ConvertTextureInternalFormatToString(
+                             static_cast<MobileGL::TextureInternalFormat>(formatIndex)));
+                out << ',' << BuildFormatCapabilityMask(cache.FullCaps[targetIndex][formatIndex]);
+                out << ',' << BuildFormatCapabilityMask(cache.CaveatCaps[targetIndex][formatIndex]) << ']';
+            }
+            out << "]}";
+        }
+        out << "]}";
+    }
+
     void AppendBackendReportJson(StringStream& out, const BackendPostReport& report) {
         out << "{\"available\":" << (report.available ? "true" : "false");
         out << ",\"verdict\":";
@@ -90,7 +143,11 @@ namespace {
             AppendJsonString(out, check.detail);
             out << '}';
         }
-        out << "]}";
+        out << ']';
+        if (report.formatCapabilities.has_value()) {
+            AppendFormatCapabilitiesJson(out, report.formatCapabilities.value());
+        }
+        out << '}';
     }
 } // namespace
 

@@ -7,6 +7,7 @@ import android.util.Log;
 import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.View;
+import android.widget.HorizontalScrollView;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
@@ -30,6 +31,15 @@ public final class PostActivity extends Activity {
     private static final int COLOR_DETAIL = 0xFFBBBBBB;
     private static final int COLOR_ROW_EVEN = 0xFF1A1A1A;
     private static final int COLOR_ROW_ODD = 0xFF121212;
+    private static final int COLOR_TABLE_HEADER = 0xFF303030;
+    private static final int COLOR_FORMAT_CELL = 0xFF242424;
+    private static final int COLOR_CAPABILITY_FULL = 0xFF2E7D32;
+    private static final int COLOR_CAPABILITY_CAVEAT = 0xFFFBC02D;
+    private static final int COLOR_CAPABILITY_NONE = 0xFFC62828;
+
+    private static final int FORMAT_COLUMN_WIDTH_DP = 152;
+    private static final int CAPABILITY_COLUMN_WIDTH_DP = 152;
+    private static final int CAPABILITY_ROW_HEIGHT_DP = 36;
 
     private static final String INDICATOR_COLLAPSED = "▸";
     private static final String INDICATOR_EXPANDED = "▾";
@@ -244,25 +254,26 @@ public final class PostActivity extends Activity {
         }
 
         JSONArray checks = backend.optJSONArray("checks");
-        if (checks == null) {
-            return;
-        }
-        LinearLayout table = new LinearLayout(this);
-        table.setOrientation(LinearLayout.VERTICAL);
-        LinearLayout.LayoutParams tableParams = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-        );
-        tableParams.topMargin = dp(6);
-        contentLayout.addView(table, tableParams);
-        int rowIndex = 0;
-        for (int i = 0; i < checks.length(); ++i) {
-            JSONObject check = checks.optJSONObject(i);
-            if (check == null) {
-                continue;
+        if (checks != null) {
+            LinearLayout table = new LinearLayout(this);
+            table.setOrientation(LinearLayout.VERTICAL);
+            LinearLayout.LayoutParams tableParams = new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT
+            );
+            tableParams.topMargin = dp(6);
+            contentLayout.addView(table, tableParams);
+            int rowIndex = 0;
+            for (int i = 0; i < checks.length(); ++i) {
+                JSONObject check = checks.optJSONObject(i);
+                if (check == null) {
+                    continue;
+                }
+                addCheckRow(table, check, rowIndex++);
             }
-            addCheckRow(table, check, rowIndex++);
         }
+
+        renderFormatCapabilities(backend.optJSONObject("formatCapabilities"));
     }
 
     /**
@@ -334,6 +345,178 @@ public final class PostActivity extends Activity {
             detailView.setVisibility(expanded ? View.GONE : View.VISIBLE);
             indicatorView.setText(expanded ? INDICATOR_COLLAPSED : INDICATOR_EXPANDED);
         });
+    }
+
+    /** Adds one initially-collapsed capability matrix for every reported target. */
+    private void renderFormatCapabilities(JSONObject formatCapabilities) {
+        addText("Format capabilities", 14, COLOR_TEXT, true, dp(16));
+        if (formatCapabilities == null) {
+            addText("Format capability table unavailable.", 12, COLOR_INFO, false, dp(4));
+            return;
+        }
+
+        JSONArray capabilities = formatCapabilities.optJSONArray("capabilities");
+        JSONArray targets = formatCapabilities.optJSONArray("targets");
+        if (capabilities == null || capabilities.length() == 0 || targets == null || targets.length() == 0) {
+            addText("Format capability table is empty.", 12, COLOR_INFO, false, dp(4));
+            return;
+        }
+
+        for (int targetIndex = 0; targetIndex < targets.length(); ++targetIndex) {
+            JSONObject target = targets.optJSONObject(targetIndex);
+            if (target != null) {
+                addFormatTargetTable(target, capabilities);
+            }
+        }
+    }
+
+    /**
+     * Adds a target header whose table is created only while expanded. Removing the
+     * table again on collapse avoids retaining all status cells for both backends.
+     */
+    private void addFormatTargetTable(JSONObject target, JSONArray capabilities) {
+        String targetName = target.optString("name", "Unknown target");
+        JSONArray rows = target.optJSONArray("rows");
+        int formatCount = rows == null ? 0 : rows.length();
+
+        LinearLayout section = new LinearLayout(this);
+        section.setOrientation(LinearLayout.VERTICAL);
+        LinearLayout.LayoutParams sectionParams = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+        );
+        sectionParams.topMargin = dp(6);
+        contentLayout.addView(section, sectionParams);
+
+        TextView toggleView = makeText(
+                INDICATOR_COLLAPSED + " " + targetName + " (" + formatCount + " formats)",
+                12,
+                COLOR_TEXT,
+                true
+        );
+        toggleView.setBackgroundColor(COLOR_ROW_EVEN);
+        toggleView.setGravity(Gravity.CENTER_VERTICAL);
+        toggleView.setMinimumHeight(dp(44));
+        toggleView.setPadding(dp(10), dp(6), dp(10), dp(6));
+        section.addView(toggleView, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+        ));
+
+        toggleView.setOnClickListener(view -> {
+            boolean expanded = section.getChildCount() > 1;
+            if (expanded) {
+                section.removeViews(1, section.getChildCount() - 1);
+                toggleView.setText(
+                        INDICATOR_COLLAPSED + " " + targetName + " (" + formatCount + " formats)"
+                );
+                return;
+            }
+
+            section.addView(buildFormatCapabilityTable(capabilities, rows), new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT
+            ));
+            toggleView.setText(
+                    INDICATOR_EXPANDED + " " + targetName + " (" + formatCount + " formats)"
+            );
+        });
+    }
+
+    /** Builds the horizontally-scrollable table for one target. */
+    private HorizontalScrollView buildFormatCapabilityTable(JSONArray capabilities, JSONArray rows) {
+        HorizontalScrollView scrollView = new HorizontalScrollView(this);
+        scrollView.setFillViewport(false);
+        scrollView.setHorizontalScrollBarEnabled(true);
+        scrollView.setPadding(0, dp(2), 0, dp(4));
+
+        LinearLayout table = new LinearLayout(this);
+        table.setOrientation(LinearLayout.VERTICAL);
+        table.addView(buildFormatCapabilityHeader(capabilities));
+
+        if (rows != null) {
+            for (int rowIndex = 0; rowIndex < rows.length(); ++rowIndex) {
+                JSONArray row = rows.optJSONArray(rowIndex);
+                if (row != null) {
+                    table.addView(buildFormatCapabilityRow(capabilities.length(), row));
+                }
+            }
+        }
+
+        scrollView.addView(table, new HorizontalScrollView.LayoutParams(
+                HorizontalScrollView.LayoutParams.WRAP_CONTENT,
+                HorizontalScrollView.LayoutParams.WRAP_CONTENT
+        ));
+        return scrollView;
+    }
+
+    private LinearLayout buildFormatCapabilityHeader(JSONArray capabilities) {
+        LinearLayout header = new LinearLayout(this);
+        header.setOrientation(LinearLayout.HORIZONTAL);
+        addFormatTableCell(header, "Format", FORMAT_COLUMN_WIDTH_DP, COLOR_TABLE_HEADER, COLOR_TEXT, true);
+        for (int capabilityIndex = 0; capabilityIndex < capabilities.length(); ++capabilityIndex) {
+            addFormatTableCell(
+                    header,
+                    capabilities.optString(capabilityIndex, "Capability " + capabilityIndex),
+                    CAPABILITY_COLUMN_WIDTH_DP,
+                    COLOR_TABLE_HEADER,
+                    COLOR_TEXT,
+                    true
+            );
+        }
+        return header;
+    }
+
+    private LinearLayout buildFormatCapabilityRow(int capabilityCount, JSONArray row) {
+        LinearLayout line = new LinearLayout(this);
+        line.setOrientation(LinearLayout.HORIZONTAL);
+
+        addFormatTableCell(
+                line,
+                row.optString(0, "Unknown"),
+                FORMAT_COLUMN_WIDTH_DP,
+                COLOR_FORMAT_CELL,
+                COLOR_TEXT,
+                false
+        );
+
+        long fullMask = row.optLong(1, 0L);
+        long caveatMask = row.optLong(2, 0L);
+        for (int capabilityIndex = 0; capabilityIndex < capabilityCount; ++capabilityIndex) {
+            long capabilityBit = capabilityIndex < Long.SIZE ? 1L << capabilityIndex : 0L;
+            boolean full = capabilityBit != 0L && (fullMask & capabilityBit) != 0L;
+            boolean caveat = !full && capabilityBit != 0L && (caveatMask & capabilityBit) != 0L;
+            addFormatTableCell(
+                    line,
+                    full ? "Full" : caveat ? "Caveat" : "None",
+                    CAPABILITY_COLUMN_WIDTH_DP,
+                    full ? COLOR_CAPABILITY_FULL : caveat ? COLOR_CAPABILITY_CAVEAT : COLOR_CAPABILITY_NONE,
+                    caveat ? 0xFF000000 : 0xFFFFFFFF,
+                    true
+            );
+        }
+        return line;
+    }
+
+    private void addFormatTableCell(LinearLayout row,
+                                    String text,
+                                    int widthDp,
+                                    int backgroundColor,
+                                    int textColor,
+                                    boolean bold) {
+        TextView cell = makeText(text, 10, textColor, bold);
+        cell.setBackgroundColor(backgroundColor);
+        cell.setGravity(Gravity.CENTER);
+        cell.setSingleLine(true);
+        cell.setPadding(dp(6), 0, dp(6), 0);
+
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
+                dp(widthDp),
+                dp(CAPABILITY_ROW_HEIGHT_DP)
+        );
+        params.rightMargin = dp(1);
+        params.bottomMargin = dp(1);
+        row.addView(cell, params);
     }
 
     /** Adds the collapsed "Raw report" toggle plus the (initially hidden) raw JSON dump. */

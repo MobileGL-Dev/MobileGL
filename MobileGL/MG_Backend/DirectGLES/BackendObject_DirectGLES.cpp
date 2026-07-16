@@ -150,23 +150,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
             String Reason;
         };
 
-        constexpr FormatCapability kGLESProbeCapabilities[] = {
-            FormatCapability::Creatable,
-            FormatCapability::Sampled,
-            FormatCapability::LinearFilter,
-            FormatCapability::GenerateMipmap,
-            FormatCapability::TextureGather,
-            FormatCapability::TextureShadow,
-            FormatCapability::FramebufferRenderable,
-            FormatCapability::FramebufferLayered,
-            FormatCapability::MultisampleTexture,
-            FormatCapability::MultisampleRenderbuffer,
-            FormatCapability::ColorAttachment,
-            FormatCapability::DepthAttachment,
-            FormatCapability::StencilAttachment,
-            FormatCapability::TextureBuffer,
-        };
-
         GLESProbeFormatInfo BuildNativeProbeFormatInfo(GLenum requestedInternalFormat) {
             GLESProbeFormatInfo info;
             info.InternalFormat = requestedInternalFormat;
@@ -176,9 +159,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return info;
         }
 
-        Flags<PixelFormatNormalizeOptionBit> GetForcedPixelFormatNormalizeOptions() {
+        Flags<PixelFormatNormalizeOptionBit> GetForcedPixelFormatNormalizeOptions(
+            const MG_External::GLESCapabilities& capabilities) {
             Flags<PixelFormatNormalizeOptionBit> options;
-            if (g_GLESCapabilities.IsAngleRenderer) {
+            if (capabilities.IsAngleRenderer) {
                 options |= PixelFormatNormalizeOptionBit::NoRgb16;
                 options |= PixelFormatNormalizeOptionBit::NoSnorm16;
                 options |= PixelFormatNormalizeOptionBit::NoSnorm8;
@@ -186,11 +170,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return options;
         }
 
-        Flags<PixelFormatNormalizeOptionBit> GetDriverPixelFormatNormalizeOptions() {
+        Flags<PixelFormatNormalizeOptionBit> GetDriverPixelFormatNormalizeOptions(
+            const MG_External::GLESCapabilities& capabilities) {
             Flags<PixelFormatNormalizeOptionBit> options = PixelFormatNormalizeOptionBit::NoDepthComponent32;
             options |= PixelFormatNormalizeOptionBit::NoRGBA8Snorm;
             options |= PixelFormatNormalizeOptionBit::NoRGB16Snorm;
-            if (!g_GLESCapabilities.SupportsNorm16Texture) {
+            if (!capabilities.SupportsNorm16Texture) {
                 options |= PixelFormatNormalizeOptionBit::NoNorm16;
             }
             return options;
@@ -241,21 +226,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return MG_Util::ConvertGLEnumToString(internalFormat);
         }
 
-        String GetFormatCapabilityTargetNameForLog(SizeT targetIndex) {
-            if (targetIndex == GetRenderbufferFormatCapabilityTargetIndex()) {
-                return "Renderbuffer";
-            }
-            if (targetIndex < kFormatCapabilityTextureTargetCount) {
-                return MG_Util::ConvertTextureTargetToString(static_cast<TextureTarget>(targetIndex));
-            }
-            return "Unknown";
-        }
-
         void LogGLESFormatCaveat(TextureInternalFormat logicalFormat,
                                  SizeT targetIndex,
                                  const GLESProbeFormatInfo& fallbackInfo) {
             MGLOG_D("Caveat: %s %s not fully supported. Reason: %s. Fallback: %s",
-                    GetFormatCapabilityTargetNameForLog(targetIndex).c_str(),
+                    GetFormatCapabilityTargetName(targetIndex).c_str(),
                     MG_Util::ConvertTextureInternalFormatToString(logicalFormat).c_str(),
                     fallbackInfo.Reason.c_str(),
                     ConvertFallbackInternalFormatToString(fallbackInfo.InternalFormat).c_str());
@@ -306,7 +281,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                  SizeT formatIndex,
                                  FormatCapabilityFlags caps) {
             Bool added = false;
-            for (FormatCapability capability : kGLESProbeCapabilities) {
+            for (FormatCapability capability : kReportedFormatCapabilities) {
                 if (HasFormatCapability(caps, capability) &&
                     !HasFormatCapability(cache.FullCaps[targetIndex][formatIndex], capability)) {
                     cache.CaveatCaps[targetIndex][formatIndex] |= capability;
@@ -316,7 +291,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return added;
         }
 
-        Int GetGLESFormatMaxSamples(const DynamicBackendParameters& dynamicParameters,
+        Int GetGLESFormatMaxSamples(const MG_External::GLESCapabilities& capabilities,
                                     TextureInternalFormat logicalFormat,
                                     GLenum imageFormat) {
             const Bool isDepth = MG_Util::IsDepthFormatInternalFormat(logicalFormat);
@@ -324,12 +299,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
             const Bool isInteger = imageFormat == GL_RED_INTEGER || imageFormat == GL_RG_INTEGER ||
                                    imageFormat == GL_RGB_INTEGER || imageFormat == GL_RGBA_INTEGER;
             if (isDepth || isStencil) {
-                return dynamicParameters.MaxDepthTextureSamples;
+                return capabilities.MaxDepthTextureSamples;
             }
             if (isInteger) {
-                return dynamicParameters.MaxIntegerSamples;
+                return capabilities.MaxIntegerSamples;
             }
-            return dynamicParameters.MaxColorTextureSamples;
+            return capabilities.MaxColorTextureSamples;
         }
 
         Bool ProbeFramebufferCompletenessForTexture(const MG_External::GLESFunctionsTable& gl,
@@ -527,12 +502,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return sampleCounts;
         }
 
-        void ProbeGLESFormatCapabilities(const MG_External::GLESFunctionsTable& gl,
-                                         FormatCapabilityCache& cache,
-                                         const DynamicBackendParameters& dynamicParameters) {
+        void PopulateFormatCapabilitiesImpl(const MG_External::GLESFunctionsTable& gl,
+                                            const MG_External::GLESCapabilities& capabilities,
+                                            FormatCapabilityCache& cache) {
             cache.Clear();
-            const Flags<PixelFormatNormalizeOptionBit> forcedOptions = GetForcedPixelFormatNormalizeOptions();
-            const Flags<PixelFormatNormalizeOptionBit> driverOptions = GetDriverPixelFormatNormalizeOptions();
+            const Flags<PixelFormatNormalizeOptionBit> forcedOptions =
+                GetForcedPixelFormatNormalizeOptions(capabilities);
+            const Flags<PixelFormatNormalizeOptionBit> driverOptions =
+                GetDriverPixelFormatNormalizeOptions(capabilities);
 
             for (SizeT formatIndex = 0; formatIndex < kFormatCapabilityFormatCount; ++formatIndex) {
                 const auto logicalFormat = static_cast<TextureInternalFormat>(formatIndex);
@@ -594,7 +571,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                         AddFullFormatCaps(cache, renderbufferTargetIndex, formatIndex,
                                           GetRenderbufferFeatureCaps(logicalFormat));
                         const Int maxSamples =
-                            GetGLESFormatMaxSamples(dynamicParameters, logicalFormat, nativeInfo.ImageFormat);
+                            GetGLESFormatMaxSamples(capabilities, logicalFormat, nativeInfo.ImageFormat);
                         cache.SampleCounts[renderbufferTargetIndex][formatIndex] =
                             ProbeRenderbufferSampleCounts(gl, nativeInfo.InternalFormat, logicalFormat, maxSamples);
                     } else {
@@ -608,7 +585,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                         LogGLESFormatCaveat(logicalFormat, renderbufferTargetIndex, fallbackInfo);
                     }
                     const Int maxSamples =
-                        GetGLESFormatMaxSamples(dynamicParameters, logicalFormat, fallbackInfo.ImageFormat);
+                        GetGLESFormatMaxSamples(capabilities, logicalFormat, fallbackInfo.ImageFormat);
                     cache.SampleCounts[renderbufferTargetIndex][formatIndex] =
                         ProbeRenderbufferSampleCounts(gl, fallbackInfo.InternalFormat, logicalFormat, maxSamples);
                 }
@@ -655,6 +632,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
         }
     } // namespace
 
+    void PopulateFormatCapabilities(const MG_External::GLESFunctionsTable& gl,
+                                    const MG_External::GLESCapabilities& capabilities,
+                                    FormatCapabilityCache& cache) {
+        PopulateFormatCapabilitiesImpl(gl, capabilities, cache);
+    }
+
     BackendObject_DirectGLES::~BackendObject_DirectGLES() {
         DestroyEGLContext();
     }
@@ -695,7 +678,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // the extension list is first built).
         UpdateAdvertisedTimerQueryExtension();
         UpdateDynamicBackendParameters();
-        ProbeGLESFormatCapabilities(m_GLESFunctions, MutableFormatCapabilities(), m_dynamicParameters);
+        PopulateFormatCapabilities(m_GLESFunctions, m_GLESCapabilities, MutableFormatCapabilities());
         PrintFormatCapabilities(GetFormatCapabilities());
         return true;
     }

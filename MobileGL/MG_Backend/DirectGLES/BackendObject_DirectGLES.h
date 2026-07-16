@@ -12,6 +12,12 @@
 #include <MG_Util/BackendLoaders/OpenGL/Loader.h>
 
 namespace MobileGL::MG_Backend::DirectGLES {
+    // Populates the same format-capability cache used by backend startup. The caller
+    // must keep the supplied GLES context current for the duration of this call.
+    void PopulateFormatCapabilities(const MG_External::GLESFunctionsTable& gl,
+                                    const MG_External::GLESCapabilities& capabilities,
+                                    FormatCapabilityCache& cache);
+
     class BackendObject_DirectGLES : public BackendObject {
     public:
         ~BackendObject_DirectGLES() override;

@@ -47,6 +47,23 @@ namespace MobileGL {
 
         using FormatCapabilityFlags = Flags<FormatCapability>;
 
+        inline constexpr Array<FormatCapability, 14> kReportedFormatCapabilities = {
+            FormatCapability::Creatable,
+            FormatCapability::Sampled,
+            FormatCapability::LinearFilter,
+            FormatCapability::GenerateMipmap,
+            FormatCapability::TextureGather,
+            FormatCapability::TextureShadow,
+            FormatCapability::FramebufferRenderable,
+            FormatCapability::FramebufferLayered,
+            FormatCapability::MultisampleTexture,
+            FormatCapability::MultisampleRenderbuffer,
+            FormatCapability::ColorAttachment,
+            FormatCapability::DepthAttachment,
+            FormatCapability::StencilAttachment,
+            FormatCapability::TextureBuffer,
+        };
+
         inline constexpr SizeT kFormatCapabilityTextureTargetCount =
             static_cast<SizeT>(TextureTarget::TextureTargetCount);
         inline constexpr SizeT kFormatCapabilityRenderbufferTargetIndex = kFormatCapabilityTextureTargetCount;
@@ -70,6 +87,8 @@ namespace MobileGL {
         Bool HasFormatCapability(FormatCapabilityFlags caps, FormatCapability capability);
         SizeT GetFormatCapabilityTargetIndex(TextureTarget target);
         SizeT GetRenderbufferFormatCapabilityTargetIndex();
+        const char* GetFormatCapabilityName(FormatCapability capability);
+        String GetFormatCapabilityTargetName(SizeT targetIndex);
         void PrintFormatCapabilities(const FormatCapabilityCache& cache);
 
         // Opaque backend fence-sync handle, created by GLFunctionsTable::FenceSync

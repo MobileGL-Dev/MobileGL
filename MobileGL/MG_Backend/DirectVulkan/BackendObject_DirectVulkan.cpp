@@ -182,25 +182,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             return MG_Util::ConvertTextureInternalFormatToVkEnum(*fallbackLogicalFormat);
         }
 
-        constexpr FormatCapability kVulkanProbeCapabilities[] = {
-            FormatCapability::Creatable,
-            FormatCapability::Sampled,
-            FormatCapability::LinearFilter,
-            FormatCapability::GenerateMipmap,
-            FormatCapability::TextureGather,
-            FormatCapability::TextureShadow,
-            FormatCapability::FramebufferRenderable,
-            FormatCapability::FramebufferLayered,
-            FormatCapability::MultisampleTexture,
-            FormatCapability::MultisampleRenderbuffer,
-            FormatCapability::ColorAttachment,
-            FormatCapability::DepthAttachment,
-            FormatCapability::StencilAttachment,
-            FormatCapability::TextureBuffer,
-        };
-
         Bool HasNewCaveatFormatCaps(FormatCapabilityFlags nativeCaps, FormatCapabilityFlags fallbackCaps) {
-            for (FormatCapability capability : kVulkanProbeCapabilities) {
+            for (FormatCapability capability : kReportedFormatCapabilities) {
                 if (HasFormatCapability(fallbackCaps, capability) &&
                     !HasFormatCapability(nativeCaps, capability)) {
                     return true;
@@ -209,21 +192,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             return false;
         }
 
-        String GetFormatCapabilityTargetNameForLog(SizeT targetIndex) {
-            if (targetIndex == GetRenderbufferFormatCapabilityTargetIndex()) {
-                return "Renderbuffer";
-            }
-            if (targetIndex < kFormatCapabilityTextureTargetCount) {
-                return MG_Util::ConvertTextureTargetToString(static_cast<TextureTarget>(targetIndex));
-            }
-            return "Unknown";
-        }
-
         void LogVulkanFormatCaveat(TextureInternalFormat logicalFormat,
                                    SizeT targetIndex,
                                    TextureInternalFormat fallbackFormat) {
             MGLOG_D("Caveat: %s %s not fully supported. Reason: native Vulkan format is not fully supported. Fallback: %s",
-                    GetFormatCapabilityTargetNameForLog(targetIndex).c_str(),
+                    GetFormatCapabilityTargetName(targetIndex).c_str(),
                     MG_Util::ConvertTextureInternalFormatToString(logicalFormat).c_str(),
                     MG_Util::ConvertTextureInternalFormatToString(fallbackFormat).c_str());
         }
@@ -237,11 +210,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             return counts;
         }
 
-        void FillVulkanFormatCapabilities(VkPhysicalDevice physicalDevice,
-                                          const DynamicBackendParameters& dynamicParameters,
-                                          FormatCapabilityCache& cache) {
+        void PopulateFormatCapabilitiesImpl(VkPhysicalDevice physicalDevice,
+                                            PFN_vkGetPhysicalDeviceFormatProperties getFormatProperties,
+                                            const MG_External::VulkanCapabilities& capabilities,
+                                            FormatCapabilityCache& cache) {
             cache.Clear();
-            if (physicalDevice == VK_NULL_HANDLE) {
+            if (physicalDevice == VK_NULL_HANDLE || getFormatProperties == nullptr) {
                 return;
             }
 
@@ -258,12 +232,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
                 VkFormatProperties nativeProperties{};
                 if (nativeFormat != VK_FORMAT_UNDEFINED) {
-                    vkGetPhysicalDeviceFormatProperties(physicalDevice, nativeFormat, &nativeProperties);
+                    getFormatProperties(physicalDevice, nativeFormat, &nativeProperties);
                 }
 
                 VkFormatProperties fallbackProperties{};
                 if (fallbackFormat != VK_FORMAT_UNDEFINED && fallbackFormat != nativeFormat) {
-                    vkGetPhysicalDeviceFormatProperties(physicalDevice, fallbackFormat, &fallbackProperties);
+                    getFormatProperties(physicalDevice, fallbackFormat, &fallbackProperties);
                 }
 
                 for (SizeT targetIndex = 0; targetIndex < kFormatCapabilityTextureTargetCount; ++targetIndex) {
@@ -289,11 +263,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                         const Bool isDepth = MG_Util::IsDepthFormatInternalFormat(logicalFormat);
                         const Bool isStencil = MG_Util::IsStencilFormatInternalFormat(logicalFormat);
                         const Bool isInteger = IsIntegerInternalFormat(logicalFormat);
-                        Int maxSamples = dynamicParameters.MaxColorTextureSamples;
+                        Int maxSamples = capabilities.MaxColorTextureSamples;
                         if (isDepth || isStencil) {
-                            maxSamples = dynamicParameters.MaxDepthTextureSamples;
+                            maxSamples = capabilities.MaxDepthTextureSamples;
                         } else if (isInteger) {
-                            maxSamples = dynamicParameters.MaxIntegerSamples;
+                            maxSamples = capabilities.MaxIntegerSamples;
                         }
                         cache.SampleCounts[targetIndex][formatIndex] = BuildSampleCounts(maxSamples);
                     }
@@ -332,11 +306,18 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                                      cache.CaveatCaps[renderbufferTargetIndex][formatIndex];
                 if (HasFormatCapability(rbCaps, FormatCapability::MultisampleRenderbuffer)) {
                     cache.SampleCounts[renderbufferTargetIndex][formatIndex] =
-                        BuildSampleCounts(dynamicParameters.MaxFramebufferSamples);
+                        BuildSampleCounts(capabilities.MaxFramebufferSamples);
                 }
             }
         }
     } // namespace
+
+    void PopulateFormatCapabilities(VkPhysicalDevice physicalDevice,
+                                    PFN_vkGetPhysicalDeviceFormatProperties getFormatProperties,
+                                    const MG_External::VulkanCapabilities& capabilities,
+                                    FormatCapabilityCache& cache) {
+        PopulateFormatCapabilitiesImpl(physicalDevice, getFormatProperties, capabilities, cache);
+    }
 
     BackendObject_DirectVulkan::~BackendObject_DirectVulkan() = default;
 
@@ -394,7 +375,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
         UpdateDynamicBackendParameters();
         UpdateAdvertisedExtensions();
-        FillVulkanFormatCapabilities(physicalDevice.handle, m_dynamicParameters, MutableFormatCapabilities());
+        PopulateFormatCapabilities(physicalDevice.handle, vkGetPhysicalDeviceFormatProperties, m_vulkanCaps,
+                                   MutableFormatCapabilities());
         PrintFormatCapabilities(GetFormatCapabilities());
         return true;
     }
