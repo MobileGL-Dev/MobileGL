@@ -27,7 +27,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     };
 
     struct PendingClearAttachmentInfo {
+        // Index into the render pass attachment descriptions (VkRenderPassBeginInfo::pClearValues space).
         Uint32 attachmentIndex = 0;
+        // Index into the subpass pColorAttachments (VkClearAttachment::colorAttachment space) — the GL
+        // draw-buffer slot. Differs from attachmentIndex when earlier slots are GL_NONE/incomplete.
+        // Only meaningful for color clears.
+        Uint32 colorAttachmentSlot = 0;
         PendingClearKey key{};
         MG_State::GLState::RenderbufferObject* renderbuffer = nullptr;
         Bool hasInlinePayload = false;

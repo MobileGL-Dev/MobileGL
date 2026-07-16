@@ -718,6 +718,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                     if (hasClear) {
                         pendingClearAttachments.emplace_back(PendingClearAttachmentInfo {
                             .attachmentIndex = attachmentIndex,
+                            .colorAttachmentSlot = i,
                             .key = VkClearManager::MakePendingClearKey(att)
                         });
                     }

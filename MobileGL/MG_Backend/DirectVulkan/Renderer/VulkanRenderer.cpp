@@ -6908,7 +6908,9 @@ void main() {
             clearAttachment.clearValue.depthStencil = {1.0f, 0};
             if ((clearPayload.mask & GL_COLOR_BUFFER_BIT) != 0) {
                 clearAttachment.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-                clearAttachment.colorAttachment = pending.attachmentIndex;
+                // VkClearAttachment::colorAttachment indexes the subpass pColorAttachments (draw-buffer
+                // slot space, with UNUSED holes), not the compacted attachment descriptions.
+                clearAttachment.colorAttachment = pending.colorAttachmentSlot;
                 clearAttachment.clearValue.color = {
                         clearPayload.color.x(),
                         clearPayload.color.y(),
