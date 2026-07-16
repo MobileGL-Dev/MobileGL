@@ -1076,14 +1076,52 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     ZoneScopedNC("UpdateGlobalUBO", TRACY_ZONECOLOR_BACKEND);
 #endif
                     const Uint32 uboContentVersion = currentProgram->GetUBOContentVersion();
-                    if (backendProgram.GetLastUploadedGlobalUboVersion() != uboContentVersion) {
-                        g_GLESFuncs.glBindBuffer(GL_UNIFORM_BUFFER, backendProgram.GetBackendGlobalUBOId());
-                        g_GLESFuncs.glBufferSubData(GL_UNIFORM_BUFFER, 0, currentProgram->GetUBOSize(),
-                                                    currentProgram->MapUBO());
-                        g_GLESFuncs.glBindBuffer(GL_UNIFORM_BUFFER, 0);
-                        backendProgram.SetLastUploadedGlobalUboVersion(uboContentVersion);
+                    const SizeT uboSize = static_cast<SizeT>(currentProgram->GetUBOSize());
+                    // Preferred path: write changed contents into a fresh slot of the
+                    // shared persistent-mapped ring and bind it as a range. The GPU
+                    // never reads bytes the CPU is writing, so the driver has no
+                    // write-after-read hazard to resolve — the in-place glBufferSubData
+                    // below forced Adreno into a ghost/stall on every uniform-dirtying
+                    // draw (MC dirties uniforms every draw), which dominated frame time.
+                    Bool ringBound = false;
+                    if (BufferImpl::UboRingAvailable()) {
+                        const SizeT bindSize =
+                            std::max(uboSize, static_cast<SizeT>(backendProgram.GetGlobalUboBackendBlockSize()));
+                        const Uint64 frameSerial = CurrentFrameSerial();
+                        auto& ringSlot = backendProgram.GetGlobalUboRingAllocation();
+                        Bool slotValid = ringSlot.ringGeneration == BufferImpl::UboRingGeneration() &&
+                                         ringSlot.frameSerial == frameSerial &&
+                                         ringSlot.contentVersion == uboContentVersion;
+                        if (!slotValid) {
+                            SizeT offset = 0;
+                            if (BufferImpl::UboRingAllocate(bindSize, offset)) {
+                                std::memcpy(static_cast<Uint8*>(BufferImpl::UboRingMappedPtr()) + offset,
+                                            currentProgram->MapUBO(), uboSize);
+                                ringSlot = {uboContentVersion, BufferImpl::UboRingGeneration(), frameSerial,
+                                            offset};
+                                slotValid = true;
+                            }
+                        }
+                        if (slotValid) {
+                            BufferImpl::BindBufferRangeCached(GL_UNIFORM_BUFFER, 0, BufferImpl::UboRingBufferId(),
+                                                              static_cast<GLintptr>(ringSlot.offset),
+                                                              static_cast<GLsizeiptr>(bindSize));
+                            ringBound = true;
+                        }
                     }
-                    BufferImpl::BindBufferBaseCached(GL_UNIFORM_BUFFER, 0, backendProgram.GetBackendGlobalUBOId());
+                    if (!ringBound) {
+                        // Fallback (no EXT_buffer_storage / fences, or ring creation
+                        // failed): the original in-place upload.
+                        if (backendProgram.GetLastUploadedGlobalUboVersion() != uboContentVersion) {
+                            g_GLESFuncs.glBindBuffer(GL_UNIFORM_BUFFER, backendProgram.GetBackendGlobalUBOId());
+                            g_GLESFuncs.glBufferSubData(GL_UNIFORM_BUFFER, 0, currentProgram->GetUBOSize(),
+                                                        currentProgram->MapUBO());
+                            g_GLESFuncs.glBindBuffer(GL_UNIFORM_BUFFER, 0);
+                            backendProgram.SetLastUploadedGlobalUboVersion(uboContentVersion);
+                        }
+                        BufferImpl::BindBufferBaseCached(GL_UNIFORM_BUFFER, 0,
+                                                         backendProgram.GetBackendGlobalUBOId());
+                    }
                 }
 
                 {
@@ -4129,6 +4167,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
             g_completedFrameSerial.store(completed, std::memory_order_relaxed);
         }
 
+        // After the watermark advanced: retire grown-away UBO-ring stores and record
+        // the frame's ring high-water mark for slot reclamation.
+        BufferImpl::UboRingOnPresent();
         BufferImpl::TrimBufferPool();
     }
 

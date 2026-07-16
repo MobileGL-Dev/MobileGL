@@ -9,6 +9,7 @@
 #include "Managers.h"
 #include "Utils.h"
 #include "DirectGLES.h"
+#include <Config.h>
 #include <MG_Util/ShaderTranspiler/ShaderCompiler.h>
 
 #include <MG_Util/BackendLoaders/OpenGL/Loader.h>
@@ -270,6 +271,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // an older generation hold ids from a dead context.
             Uint g_bufferContextGeneration = 1;
 
+            // Defined next to the indexed-binding shadow below; forward-declared so
+            // every glDeleteBuffers site in this namespace can scrub stale shadow
+            // entries (GL resets a deleted buffer's indexed bindings to 0, and a
+            // recycled name matching a stale shadow entry would otherwise
+            // false-skip the rebind).
+            void ScrubIndexedBufferBindingShadowForId(Uint id);
+
             // Resources whose owning BufferObject died; ids deleted at the next
             // sync point with a current ES context.
             Vector<SharedPtr<BackendBufferResource>> g_deferredBufferReleases;
@@ -313,6 +321,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 const std::lock_guard<std::mutex> lock(g_poolMutex);
                 auto& bucket = g_bufferPool[r.storageSize];
                 if (bucket.size() >= kMaxEntriesPerBucket || g_pooledBytes + r.storageSize > kMaxPoolBytes) {
+                    ScrubIndexedBufferBindingShadowForId(r.id);
                     g_GLESFuncs.glDeleteBuffers(1, &r.id); // over budget: don't pool
                     r.id = 0;
                     return;
@@ -351,6 +360,56 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     }
                 }
                 return 0;
+            }
+
+            // --- Global-UBO ring (see Managers.h) ------------------------------------
+            constexpr SizeT kUboRingInitialBytes = 4u * 1024u * 1024u;
+            constexpr SizeT kUboRingMaxBytes = 64u * 1024u * 1024u;
+
+            struct UboRingState {
+                Uint id = 0;
+                Uint8* mappedPtr = nullptr;
+                SizeT size = 0;
+                // Monotonic linear cursors: `head` counts every byte ever allocated
+                // (incl. wrap padding); everything below `tail` is GPU-complete. Ring
+                // offset of a linear position is pos % size, so in-flight bytes are
+                // head - tail and must stay <= size.
+                Uint64 head = 0;
+                Uint64 tail = 0;
+                Uint32 generation = 0; // bumped on every (re)create/grow; 0 = never valid
+                Uint contextGeneration = 0;
+                SizeT alignment = 256;
+                // A hard storage-creation failure under this context; stop retrying
+                // per draw (cleared when the context generation moves on).
+                Bool creationFailed = false;
+            };
+            UboRingState g_uboRing;
+
+            // Grown-away ring stores: deletable only once the GPU finished the last
+            // frame that could reference them (same watermark as the buffer pool).
+            struct RetiredUboRing {
+                Uint id = 0;
+                Uint contextGeneration = 0;
+                Uint64 retireSerial = 0;
+            };
+            Vector<RetiredUboRing> g_retiredUboRings;
+
+            // Present()-time high-water marks: every byte below headAtPresent was
+            // written during frames <= frameSerial, so once frameSerial completes,
+            // tail may advance to headAtPresent. FIFO by construction.
+            struct UboRingFrameMark {
+                Uint64 frameSerial = 0;
+                Uint64 headAtPresent = 0;
+            };
+            Vector<UboRingFrameMark> g_uboRingFrameMarks;
+
+            // The ES context the ring's id/map belonged to is gone (or was never
+            // seen): drop every handle without GL calls and re-arm creation.
+            void ResetUboRingForNewContext() {
+                g_uboRing = {};
+                g_uboRing.contextGeneration = g_bufferContextGeneration;
+                g_retiredUboRings.clear();
+                g_uboRingFrameMarks.clear();
             }
 
             GLESBufferResource* ResourceOf(BufferObject& bufferObject) {
@@ -438,6 +497,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // Need a fresh id: glBufferStorage fails on a buffer that already has
                 // immutable storage, and any prior mutable store is replaced anyway.
                 if (resource->id != 0) {
+                    ScrubIndexedBufferBindingShadowForId(resource->id);
                     g_GLESFuncs.glDeleteBuffers(1, &resource->id);
                     resource->id = 0;
                 }
@@ -565,6 +625,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                         if (g_boundArrayBufferKnown && g_boundArrayBufferId == glesResource->id) {
                             InvalidateArrayBufferBindingCache();
                         }
+                        ScrubIndexedBufferBindingShadowForId(glesResource->id);
                         g_GLESFuncs.glDeleteBuffers(1, &glesResource->id);
                         glesResource->id = 0;
                     }
@@ -602,6 +663,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
         void OnBackendContextDestroyed() {
             UnregisterBufferBackendOps();
             ++g_bufferContextGeneration;
+            // The global-UBO ring's id and persistent map died with the context;
+            // drop the handles (no GL) and let the next draw recreate the ring.
+            ResetUboRingForNewContext();
         }
 
         void ProcessDeferredBufferReleases() {
@@ -625,6 +689,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     if (g_boundArrayBufferKnown && g_boundArrayBufferId == glesResource->id) {
                         InvalidateArrayBufferBindingCache();
                     }
+                    ScrubIndexedBufferBindingShadowForId(glesResource->id);
                     g_GLESFuncs.glDeleteBuffers(1, &glesResource->id);
                     glesResource->id = 0;
                 }
@@ -769,6 +834,21 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 if (glTarget == GL_SHADER_STORAGE_BUFFER) return &g_indexedSSBOBindings[index];
                 return nullptr;
             }
+
+            // glDeleteBuffers resets the deleted buffer's bindings (indexed ones
+            // included) to 0 in the current context; mirror that in the shadow, or a
+            // later buffer recycling the same name with a matching range would
+            // false-skip its rebind. Default IndexedBufferBinding{} == base(0) ==
+            // the post-delete GL state.
+            void ScrubIndexedBufferBindingShadowForId(Uint id) {
+                if (id == 0) return;
+                for (auto& binding : g_indexedUBOBindings) {
+                    if (binding.id == id) binding = {};
+                }
+                for (auto& binding : g_indexedSSBOBindings) {
+                    if (binding.id == id) binding = {};
+                }
+            }
         } // namespace
 
         void BindBufferBaseCached(GLenum glTarget, Uint index, Uint id) {
@@ -812,6 +892,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 auto& bucket = g_bufferPool[oldestKey];
                 PooledBuffer& e = bucket[oldestIdx];
                 if (e.contextGeneration == g_bufferContextGeneration && e.id != 0) {
+                    ScrubIndexedBufferBindingShadowForId(e.id);
                     g_GLESFuncs.glDeleteBuffers(1, &e.id);
                 }
                 g_pooledBytes -= e.size;
@@ -826,6 +907,167 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // the g_deferredBufferReleases.clear() discipline).
             g_bufferPool.clear();
             g_pooledBytes = 0;
+        }
+
+        // --- Global-UBO ring (see Managers.h) ------------------------------------
+        namespace {
+            // (Re)create the ring store with room for at least minBytes. Any live
+            // store is retired (deleted once the GPU finished the last frame that
+            // could reference its slots), never deleted in place. Returns false and
+            // leaves the current store untouched when minBytes cannot fit under the
+            // size cap; a GL failure loses the store and latches creationFailed so
+            // draws stop retrying under this context.
+            Bool CreateUboRingStorage(SizeT minBytes) {
+                SizeT newSize = kUboRingInitialBytes;
+                while (newSize < minBytes) newSize *= 2;
+                if (newSize > kUboRingMaxBytes) return false;
+
+                if (g_uboRing.id != 0) {
+                    g_retiredUboRings.push_back(
+                        {g_uboRing.id, g_uboRing.contextGeneration, DirectGLES::CurrentFrameSerial() + 1});
+                }
+                const Uint32 nextGeneration = g_uboRing.generation + 1;
+                g_uboRing.id = 0;
+                g_uboRing.mappedPtr = nullptr;
+
+                Uint id = 0;
+                g_GLESFuncs.glGenBuffers(1, &id);
+                if (id != 0) {
+                    BindBufferId(TempBufferTarget, id);
+                    g_GLESFuncs.glBufferStorageEXT(TempBufferTarget, static_cast<GLsizeiptr>(newSize), nullptr,
+                                                   GL_MAP_WRITE_BIT | kMapPersistentBit | kMapCoherentBit);
+                    void* ptr = g_GLESFuncs.glMapBufferRange(TempBufferTarget, 0, static_cast<GLsizeiptr>(newSize),
+                                                             GL_MAP_WRITE_BIT | kMapPersistentBit | kMapCoherentBit);
+                    if (!ptr) {
+                        g_GLESFuncs.glDeleteBuffers(1, &id);
+                        id = 0;
+                    } else {
+                        g_uboRing.mappedPtr = static_cast<Uint8*>(ptr);
+                    }
+                }
+                if (id == 0) {
+                    MGLOG_E("Global-UBO ring: persistent storage creation failed (%zu bytes); "
+                            "falling back to glBufferSubData uploads.",
+                            newSize);
+                    g_uboRing.creationFailed = true;
+                    return false;
+                }
+
+                const GLint capsAlignment = g_GLESCapabilities.UniformBufferOffsetAlignment;
+                SizeT alignment = capsAlignment > 0 ? static_cast<SizeT>(capsAlignment) : 256;
+                // The cursor math masks with (alignment - 1); spec doesn't promise a
+                // power of two, so round up to one.
+                SizeT pow2 = 1;
+                while (pow2 < alignment) pow2 <<= 1;
+                g_uboRing.id = id;
+                g_uboRing.size = newSize;
+                g_uboRing.head = 0;
+                g_uboRing.tail = 0;
+                g_uboRing.generation = nextGeneration;
+                g_uboRing.alignment = pow2;
+                g_uboRingFrameMarks.clear();
+                return true;
+            }
+        } // namespace
+
+        Bool UboRingAvailable() {
+            if (MG_Config::Features.DisableUboRing) return false;
+            // Reclamation rides the Present fence watermark; without working fences
+            // slots would never be provably GPU-idle (same rule as IsPoolable).
+            if (!g_GLESFuncs.glBufferStorageEXT || !g_GLESFuncs.glMapBufferRange || !g_GLESFuncs.glGenBuffers ||
+                !g_GLESFuncs.glFenceSync || !g_GLESFuncs.glGetSynciv) {
+                return false;
+            }
+            if (!CanTouchGLNow()) return false;
+            if (g_uboRing.contextGeneration != g_bufferContextGeneration) {
+                ResetUboRingForNewContext();
+            }
+            return !g_uboRing.creationFailed;
+        }
+
+        Bool UboRingAllocate(SizeT size, SizeT& outOffset) {
+            if (size == 0 || !UboRingAvailable()) return false;
+            const SizeT alignedSize = (size + g_uboRing.alignment - 1) & ~(g_uboRing.alignment - 1);
+            if (g_uboRing.id == 0 && !CreateUboRingStorage(alignedSize)) {
+                return false;
+            }
+
+            // Advance tail past every frame the GPU provably finished.
+            const Uint64 completed = DirectGLES::CompletedFrameSerial();
+            SizeT retiredMarks = 0;
+            for (const auto& mark : g_uboRingFrameMarks) {
+                if (mark.frameSerial > completed) break;
+                if (mark.headAtPresent > g_uboRing.tail) g_uboRing.tail = mark.headAtPresent;
+                ++retiredMarks;
+            }
+            if (retiredMarks > 0) {
+                g_uboRingFrameMarks.erase(g_uboRingFrameMarks.begin(),
+                                          g_uboRingFrameMarks.begin() + static_cast<std::ptrdiff_t>(retiredMarks));
+            }
+
+            // A slot may not straddle the ring end; pad the cursor to the boundary.
+            SizeT offset = static_cast<SizeT>(g_uboRing.head % g_uboRing.size);
+            if (offset + alignedSize > g_uboRing.size) {
+                g_uboRing.head += g_uboRing.size - offset;
+                offset = 0;
+            }
+
+            if (g_uboRing.head + alignedSize - g_uboRing.tail > g_uboRing.size) {
+                // In-flight span would overrun live slots: grow instead of overwrite.
+                if (CreateUboRingStorage(std::max(g_uboRing.size * 2, alignedSize))) {
+                    offset = 0;
+                } else if (g_uboRing.creationFailed) {
+                    return false; // store lost; callers fall back to glBufferSubData
+                } else {
+                    // At the size cap (>kUboRingMaxBytes of uniforms in flight — not a
+                    // real workload): drain the GPU once rather than corrupt live slots.
+                    if (g_GLESFuncs.glFinish) g_GLESFuncs.glFinish();
+                    g_uboRing.tail = g_uboRing.head;
+                    g_uboRingFrameMarks.clear();
+                    offset = static_cast<SizeT>(g_uboRing.head % g_uboRing.size);
+                    if (offset + alignedSize > g_uboRing.size) {
+                        g_uboRing.head += g_uboRing.size - offset;
+                        offset = 0;
+                    }
+                }
+            }
+
+            g_uboRing.head += alignedSize;
+            outOffset = offset;
+            return true;
+        }
+
+        void* UboRingMappedPtr() { return g_uboRing.mappedPtr; }
+        Uint UboRingBufferId() { return g_uboRing.id; }
+        Uint32 UboRingGeneration() { return g_uboRing.generation; }
+
+        void UboRingOnPresent() {
+            if (!CanTouchGLNow()) return;
+
+            // Delete grown-away stores the GPU is provably done with.
+            const Uint64 completed = DirectGLES::CompletedFrameSerial();
+            for (SizeT i = g_retiredUboRings.size(); i-- > 0;) {
+                RetiredUboRing& entry = g_retiredUboRings[i];
+                const Bool staleContext = entry.contextGeneration != g_bufferContextGeneration;
+                if (!staleContext && entry.retireSerial > completed) continue;
+                if (!staleContext && entry.id != 0) {
+                    ScrubIndexedBufferBindingShadowForId(entry.id);
+                    g_GLESFuncs.glDeleteBuffers(1, &entry.id);
+                }
+                g_retiredUboRings[i] = g_retiredUboRings.back();
+                g_retiredUboRings.pop_back();
+            }
+
+            if (g_uboRing.id == 0 || g_uboRing.contextGeneration != g_bufferContextGeneration) return;
+            // Record this frame's high-water mark (Present just fenced the serial now
+            // reported by CurrentFrameSerial()). A fence-less Present repeats the
+            // serial; fold into the existing mark.
+            const Uint64 serial = DirectGLES::CurrentFrameSerial();
+            if (!g_uboRingFrameMarks.empty() && g_uboRingFrameMarks.back().frameSerial == serial) {
+                g_uboRingFrameMarks.back().headAtPresent = g_uboRing.head;
+            } else {
+                g_uboRingFrameMarks.push_back({serial, g_uboRing.head});
+            }
         }
     } // namespace BufferImpl
 
@@ -2576,13 +2818,24 @@ namespace MobileGL::MG_Backend::DirectGLES {
         void BackendProgramObjectImpl::CacheResourceLocations(
             const SharedPtr<MG_State::GLState::ProgramObject>& stateProgramObject) {
             m_globalUboBackendBlockIndex = -1;
+            m_globalUboBackendBlockSize = 0;
             m_lastUploadedGlobalUboVersion = ~0u;
+            m_globalUboRingAllocation = {};
             if (stateProgramObject->GetUBOSize() > 0) {
                 const Uint blockIndex =
                     g_GLESFuncs.glGetUniformBlockIndex(m_backendProgramId, MG_Util::ShaderTranspiler::GLOBAL_UBO_NAME);
                 if (blockIndex != GL_INVALID_INDEX) {
                     m_globalUboBackendBlockIndex = static_cast<Int>(blockIndex);
                     g_GLESFuncs.glUniformBlockBinding(m_backendProgramId, blockIndex, 0);
+                    // Ring bindings are ranges and must span the block as the backend
+                    // compiled it (its std140 padding may exceed the frontend's
+                    // SPIR-V-reflected size).
+                    if (g_GLESFuncs.glGetActiveUniformBlockiv) {
+                        GLint blockDataSize = 0;
+                        g_GLESFuncs.glGetActiveUniformBlockiv(m_backendProgramId, blockIndex,
+                                                              GL_UNIFORM_BLOCK_DATA_SIZE, &blockDataSize);
+                        m_globalUboBackendBlockSize = static_cast<Int>(blockDataSize);
+                    }
                 } else {
                     MGLOG_W("Program %u has frontend global UBO storage, but backend has no %s block.",
                             stateProgramObject->GetExternalIndex(), MG_Util::ShaderTranspiler::GLOBAL_UBO_NAME);
