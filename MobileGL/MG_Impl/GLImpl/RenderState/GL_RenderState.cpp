@@ -649,7 +649,9 @@ namespace MobileGL::MG_Impl::GLImpl {
     }
 
     void ClearDepth_State(GLclampd depth) {
-        MG_State::pGLContext->SetClearDepth(static_cast<Float>(depth));
+        // GL 3.3 §4.2.3: the clear depth is clamped to [0,1] at specification time (Vulkan clear
+        // values additionally require it: VUID-VkClearDepthStencilValue-depth-00022).
+        MG_State::pGLContext->SetClearDepth(ClampUnitFloat(static_cast<Float>(depth)));
     }
 
     void ClearColor_State(GLfloat red, GLfloat green, GLfloat blue, GLfloat alpha) {
