@@ -48,6 +48,69 @@ namespace MobileGL {
                 return SPVC_BASETYPE_UNKNOWN;
             }
 
+            // Record one flattened leaf uniform of the global UBO into the metadata maps.
+            static void RecordGlobalUboLeaf(const SpvReflectBlockVariable& member, const String& name,
+                                            Uint32 offsetInUBO, SpvcMetadata& metadata) {
+                metadata.plainUniformOffsetsInUBO[name] = offsetInUBO;
+                metadata.plainUniformMemberSizesInBytes[name] = member.size;
+                metadata.plainUniformArrayStridesInUBO[name] =
+                    member.array.dims_count > 0 ? member.array.stride : 0;
+
+                Uint32 vectorSize = member.numeric.vector.component_count;
+                if (vectorSize == 0) vectorSize = 1;
+                Uint32 matCol = member.numeric.matrix.column_count;
+                if (matCol == 0) matCol = 1;
+                metadata.plainUniformMemberTypes[name] = {
+                    .basetype = MapReflectToSpvcBasetype(member),
+                    .vectorSize = vectorSize,
+                    .matCol = matCol,
+                };
+            }
+
+            // Flatten a (possibly nested struct / struct array) member of the global UBO
+            // into leaf entries named the way glslang reflection names plain uniforms:
+            // "s[0].b[1].b" for `uniform S s[2]` with `struct T { vec2 b[2]; }` members.
+            // glUniform* writes are routed per leaf location, so the state layer needs a
+            // byte offset for every leaf, not just for the top-level block members.
+            // `baseOffset` accumulates parent offsets; member.offset is relative to the
+            // enclosing struct (top-level members: relative to the block start).
+            static void FlattenGlobalUboMember(const SpvReflectBlockVariable& member, const String& prefix,
+                                               Uint32 baseOffset, SpvcMetadata& metadata) {
+                const String name = prefix + (member.name != nullptr ? member.name : "");
+                const Uint32 selfOffset = baseOffset + member.offset;
+
+                if (member.member_count == 0 || member.members == nullptr) {
+                    RecordGlobalUboLeaf(member, name, selfOffset, metadata);
+                    return;
+                }
+
+                if (member.array.dims_count == 0) {
+                    // Plain nested struct.
+                    for (Uint32 j = 0; j < member.member_count; ++j) {
+                        FlattenGlobalUboMember(member.members[j], name + ".", selfOffset, metadata);
+                    }
+                    return;
+                }
+
+                if (member.array.dims_count > 1) {
+                    // Arrays of arrays of structs cannot be declared in the GL 3.3-era GLSL
+                    // MobileGL ingests; record the base so at least element 0 resolves.
+                    MGLOG_W("FlattenGlobalUboMember: multi-dimensional struct array '%s' is not supported, "
+                            "flattening element 0 only",
+                            name.c_str());
+                }
+
+                const Uint32 elementCount = member.array.dims[0] > 0 ? member.array.dims[0] : 1;
+                const Uint32 elementStride = member.array.stride;
+                for (Uint32 element = 0; element < elementCount; ++element) {
+                    const String elementPrefix = name + "[" + std::to_string(element) + "].";
+                    const Uint32 elementOffset = selfOffset + element * elementStride;
+                    for (Uint32 j = 0; j < member.member_count; ++j) {
+                        FlattenGlobalUboMember(member.members[j], elementPrefix, elementOffset, metadata);
+                    }
+                }
+            }
+
             SpvcSession::SpvcSession(const Vector<unsigned int>& spirv, Flags<SessionUsageBit> usage)
                 : usage(usage) {
                 if (usage & SessionUsageBit::Transpile) {
@@ -299,20 +362,10 @@ namespace MobileGL {
                     metadata.globalUboSize = block.size;
 
                     for (uint32_t j = 0; j < block.member_count; ++j) {
-                        auto& member = block.members[j];
-                        metadata.plainUniformOffsetsInUBO[member.name] = member.offset;
-                        metadata.plainUniformMemberSizesInBytes[member.name] = member.size;
-
-                        Uint32 vectorSize = member.numeric.vector.component_count;
-                        if (vectorSize == 0) vectorSize = 1;
-                        Uint32 matCol = member.numeric.matrix.column_count;
-                        if (matCol == 0) matCol = 1;
-
-                        metadata.plainUniformMemberTypes[member.name] = {
-                            .basetype = MapReflectToSpvcBasetype(member),
-                            .vectorSize = vectorSize,
-                            .matCol = matCol,
-                        };
+                        // Recurse into nested structs / struct arrays so every leaf
+                        // uniform ("s[0].b[1].b") gets its real byte offset; top-level
+                        // scalars/vectors/matrices flatten to themselves.
+                        FlattenGlobalUboMember(block.members[j], "", 0, metadata);
                     }
                     return SPVC_SUCCESS;
                 }

@@ -1845,3 +1845,211 @@ TEST_F(ProgramTest, GetActiveUniformsivErrors) {
     EXPECT_EQ(GetError(), GL_NO_ERROR);
     EXPECT_EQ(params[0], -999);
 }
+
+namespace {
+    GLuint LinkVsFsProgram(const char* vsSource, const char* fsSource) {
+        char infoLog[4096] = "";
+        GLuint vs = CreateShader(GL_VERTEX_SHADER);
+        ShaderSource(vs, 1, &vsSource, nullptr);
+        CompileShader(vs);
+        GLint vsStatus = GL_FALSE;
+        GetShaderiv(vs, GL_COMPILE_STATUS, &vsStatus);
+        GetShaderInfoLog(vs, sizeof(infoLog), nullptr, infoLog);
+        EXPECT_EQ(vsStatus, GL_TRUE) << infoLog;
+
+        GLuint fs = CreateShader(GL_FRAGMENT_SHADER);
+        ShaderSource(fs, 1, &fsSource, nullptr);
+        CompileShader(fs);
+        GLint fsStatus = GL_FALSE;
+        GetShaderiv(fs, GL_COMPILE_STATUS, &fsStatus);
+        GetShaderInfoLog(fs, sizeof(infoLog), nullptr, infoLog);
+        EXPECT_EQ(fsStatus, GL_TRUE) << infoLog;
+
+        GLuint program = CreateProgram();
+        AttachShader(program, vs);
+        AttachShader(program, fs);
+        LinkProgram(program);
+        GLint linkStatus = GL_FALSE;
+        GetProgramiv(program, GL_LINK_STATUS, &linkStatus);
+        GetProgramInfoLog(program, sizeof(infoLog), nullptr, infoLog);
+        EXPECT_EQ(linkStatus, GL_TRUE) << infoLog;
+        return program;
+    }
+
+    const char* kPassthroughCoordsVs = R"(#version 330
+in vec4 a_position;
+in vec4 a_coords;
+out vec4 coords_in;
+void main() {
+    gl_Position = a_position;
+    coords_in = a_coords;
+})";
+} // namespace
+
+// Repro for KHR-GL33.shaders.loops.do_while_dynamic_iterations.empty_body_* (and the
+// only_continue / unconditional_break variants): the loop is dead code, so the SPIR-V
+// optimizer eliminates it together with the only loads of `one` / `ui_one` -- and with
+// them the entire global UBO. The uniforms stay active in link reflection, so
+// glUniform1i on them must still have backing storage instead of memcpy-ing to null.
+TEST_F(ProgramTest, DoWhileDeadLoopUniformsKeepBackingStorage) {
+    const char* loopBodies[] = {"", "continue;", "break;"};
+    for (const char* body : loopBodies) {
+        const String fsSource = String(R"(#version 330
+uniform int ui_one;
+uniform mediump int one;
+in vec4 coords_in;
+out vec4 o_color;
+void main() {
+    vec4 res = coords_in;
+    mediump int i = 0;
+    do {)") + body + R"(} while (i++ < one*ui_one);
+    o_color = res;
+})";
+        GLuint program = LinkVsFsProgram(kPassthroughCoordsVs, fsSource.c_str());
+
+        const GLint locOne = GetUniformLocation(program, "one");
+        const GLint locUiOne = GetUniformLocation(program, "ui_one");
+        ASSERT_GE(locOne, 0) << "body: '" << body << "'";
+        ASSERT_GE(locUiOne, 0) << "body: '" << body << "'";
+
+        UseProgram(program);
+        Uniform1i(locOne, 1);   // crashed with a null MapUBO() before the fallback storage
+        Uniform1i(locUiOne, 2);
+        EXPECT_EQ(GetError(), GL_NO_ERROR) << "body: '" << body << "'";
+
+        GLint readback = -1;
+        GetUniformiv(program, locOne, &readback);
+        EXPECT_EQ(readback, 1) << "body: '" << body << "'";
+        readback = -1;
+        GetUniformiv(program, locUiOne, &readback);
+        EXPECT_EQ(readback, 2) << "body: '" << body << "'";
+        EXPECT_EQ(GetError(), GL_NO_ERROR) << "body: '" << body << "'";
+    }
+}
+
+// Repro for KHR-GL33.shaders.struct.uniform.*nested_struct_array_*: leaf uniforms of
+// nested struct arrays need (a) one location per array element and (b) real byte
+// offsets inside the global UBO. Before the fix every leaf had a single location and
+// offset 0, so glUniform2fv(loc, 2, ...) tripped the size assert on the neighboring
+// float uniform (and corrupted it in release builds).
+TEST_F(ProgramTest, NestedStructArrayUniformElementWrites) {
+    // Struct shape from CTS glcShaderStructTests nested_struct_array (uniform case).
+    const char* fsSource = R"(#version 330
+struct T {
+    mediump float   a;
+    mediump vec2    b[2];
+};
+struct S {
+    mediump float   a;
+    T               b[3];
+    int             c;
+};
+uniform S s[2];
+in vec4 coords_in;
+out vec4 o_color;
+void main() {
+    mediump float r = (s[0].b[1].b[0].x + s[1].b[2].b[1].y) * s[0].b[0].a;
+    mediump float g = s[1].b[0].b[0].y * s[0].b[2].a * s[1].b[2].a;
+    mediump float b = (s[0].b[2].b[1].y + s[0].b[1].b[0].y + s[1].a) * s[0].b[1].a;
+    mediump float a = float(s[0].c) + s[1].b[2].a - s[1].b[1].a;
+    o_color = vec4(r, g, b, a);
+})";
+    GLuint program = LinkVsFsProgram(kPassthroughCoordsVs, fsSource);
+    UseProgram(program);
+
+    const GLint locVecArray = GetUniformLocation(program, "s[0].b[1].b");
+    ASSERT_GE(locVecArray, 0);
+    // Element locations are consecutive and reachable via the "[k]" suffix.
+    EXPECT_EQ(GetUniformLocation(program, "s[0].b[1].b[0]"), locVecArray);
+    EXPECT_EQ(GetUniformLocation(program, "s[0].b[1].b[1]"), locVecArray + 1);
+    EXPECT_EQ(GetUniformLocation(program, "s[0].b[1].b[2]"), -1);
+
+    // Distinct scalar leaves must land at distinct UBO offsets (they all aliased
+    // offset 0 before the fix).
+    const char* scalarLeaves[] = {"s[0].b[0].a", "s[0].b[1].a", "s[0].b[2].a", "s[1].a", "s[1].b[1].a",
+                                  "s[1].b[2].a"};
+    const GLfloat scalarValues[] = {0.5f, 0.25f, 0.125f, 7.0f, 3.0f, 4.0f};
+    for (SizeT i = 0; i < std::size(scalarLeaves); ++i) {
+        const GLint loc = GetUniformLocation(program, scalarLeaves[i]);
+        ASSERT_GE(loc, 0) << scalarLeaves[i];
+        Uniform1f(loc, scalarValues[i]);
+    }
+
+    // CTS-style whole-array write: glUniform2fv with count = 2 on a vec2[2] leaf.
+    // Before the fix this asserted/corrupted the next uniform ("s[0].b[2].a").
+    const GLfloat vecData[4] = {1.0f, 2.0f, 3.0f, 4.0f};
+    Uniform2fv(locVecArray, 2, vecData);
+    EXPECT_EQ(GetError(), GL_NO_ERROR);
+
+    GLfloat vecReadback[2] = {};
+    GetUniformfv(program, locVecArray, vecReadback);
+    EXPECT_EQ(vecReadback[0], 1.0f);
+    EXPECT_EQ(vecReadback[1], 2.0f);
+    GetUniformfv(program, locVecArray + 1, vecReadback);
+    EXPECT_EQ(vecReadback[0], 3.0f);
+    EXPECT_EQ(vecReadback[1], 4.0f);
+
+    // All scalar leaves survived the array write intact.
+    for (SizeT i = 0; i < std::size(scalarLeaves); ++i) {
+        GLfloat readback = -1.0f;
+        GetUniformfv(program, GetUniformLocation(program, scalarLeaves[i]), &readback);
+        EXPECT_EQ(readback, scalarValues[i]) << scalarLeaves[i];
+    }
+
+    // std140: vec2 array elements inside the struct are 16 bytes apart, and the
+    // per-element offsets differ.
+    auto programObject = MG_State::pGLContext->GetProgramObject(program);
+    ASSERT_NE(programObject, nullptr);
+    const Uint offsetElement0 = programObject->GetUniformOffset(static_cast<Uint>(locVecArray));
+    const Uint offsetElement1 = programObject->GetUniformOffset(static_cast<Uint>(locVecArray + 1));
+    EXPECT_EQ(offsetElement1, offsetElement0 + 16u);
+    EXPECT_EQ(GetError(), GL_NO_ERROR);
+}
+
+// Plain top-level uniform arrays share the same per-element location machinery.
+TEST_F(ProgramTest, PlainArrayUniformElementLocationsAndWrites) {
+    const char* fsSource = R"(#version 330
+uniform float arr[4];
+uniform float guard;
+in vec4 coords_in;
+out vec4 o_color;
+void main() {
+    o_color = vec4(arr[0] + arr[1], arr[2] + arr[3], guard, 1.0);
+})";
+    GLuint program = LinkVsFsProgram(kPassthroughCoordsVs, fsSource);
+    UseProgram(program);
+
+    const GLint locArr = GetUniformLocation(program, "arr");
+    ASSERT_GE(locArr, 0);
+    EXPECT_EQ(GetUniformLocation(program, "arr[0]"), locArr);
+    EXPECT_EQ(GetUniformLocation(program, "arr[2]"), locArr + 2);
+    EXPECT_EQ(GetUniformLocation(program, "arr[4]"), -1);
+
+    const GLint locGuard = GetUniformLocation(program, "guard");
+    ASSERT_GE(locGuard, 0);
+    EXPECT_EQ(GetUniformLocation(program, "guard[0]"), -1); // not an array
+
+    Uniform1f(locGuard, 9.0f);
+
+    const GLfloat values[4] = {1.0f, 2.0f, 3.0f, 4.0f};
+    Uniform1fv(locArr, 4, values);
+    for (int i = 0; i < 4; ++i) {
+        GLfloat readback = -1.0f;
+        GetUniformfv(program, locArr + i, &readback);
+        EXPECT_EQ(readback, values[i]) << "arr[" << i << "]";
+    }
+
+    // Overlong writes stop at the end of the array (GL 3.3 §2.11.4) instead of
+    // spilling into the next uniform.
+    const GLfloat tail[3] = {30.0f, 40.0f, 50.0f};
+    Uniform1fv(GetUniformLocation(program, "arr[2]"), 3, tail);
+    EXPECT_EQ(GetError(), GL_NO_ERROR);
+    GLfloat readback = -1.0f;
+    GetUniformfv(program, locArr + 2, &readback);
+    EXPECT_EQ(readback, 30.0f);
+    GetUniformfv(program, locArr + 3, &readback);
+    EXPECT_EQ(readback, 40.0f);
+    GetUniformfv(program, locGuard, &readback);
+    EXPECT_EQ(readback, 9.0f); // untouched by the overlong write
+    EXPECT_EQ(GetError(), GL_NO_ERROR);
+}

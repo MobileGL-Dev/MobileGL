@@ -735,6 +735,12 @@ namespace MobileGL::MG_Impl::GLImpl {
             auto size = programObject->GetUniformSizesInBytes(location);
             char* pUBO = (char*)programObject->MapUBO();
             auto* ttype = programObject->GetUniformTType(location);
+            if (pUBO == nullptr || offset == MG_State::GLState::ProgramObject::kInvalidUniformOffset ||
+                offset + size > programObject->GetUBOSize()) {
+                MGLOG_E("%s: uniform at program %u location %d has no backing storage; returning nothing", __func__,
+                        program, location);
+                return;
+            }
 
             if (!ttype->isMatrix() || ttype->getMatrixCols() != 3)
                 Memcpy(params, pUBO + offset, size);
@@ -784,6 +790,12 @@ namespace MobileGL::MG_Impl::GLImpl {
         auto size = programObject->GetUniformSizesInBytes(location);
         char* pUBO = static_cast<char*>(programObject->MapUBO());
         auto* ttype = programObject->GetUniformTType(location);
+        if (pUBO == nullptr || offset == MG_State::GLState::ProgramObject::kInvalidUniformOffset ||
+            offset + size > programObject->GetUBOSize()) {
+            MGLOG_E("%s: uniform at program %u location %d has no backing storage; returning nothing", __func__,
+                    program, location);
+            return;
+        }
 
         if constexpr (std::is_same_v<T, GLfloat>) {
             if (ttype->isMatrix() && ttype->getMatrixCols() == 3) {
@@ -900,14 +912,31 @@ namespace MobileGL::MG_Impl::GLImpl {
         if (!programObject.IsUniformOpaqueAtLocation(location)) {
             MGLOG_D("%s: program = %d, location = %d, maxLocation = %d", __func__, programObject.GetExternalIndex(),
                     location, programObject.GetMaxUniformLocation());
-            auto size = programObject.GetUniformSizesInBytes(location);
-            auto offset = programObject.GetUniformOffset(location);
-            MOBILEGL_ASSERT(size >= ItemCount * sizeof(T),
-                            "Uniform size mismatch, expected at least %zu bytes, got %zu bytes.", ItemCount * sizeof(T),
-                            size);
+            const SizeT size = programObject.GetUniformSizesInBytes(location);
+            const Uint offset = programObject.GetUniformOffset(location);
+            char* pUBO = static_cast<char*>(programObject.MapUBO());
+            const SizeT uboSize = programObject.GetUBOSize();
+            SizeT writeSize = ItemCount * sizeof(T);
+            if (size < writeSize) {
+                // Metadata bug: degrade to a clamped copy instead of killing the process.
+                MGLOG_E("%s: uniform size mismatch at program %u location %u: expected at least %zu bytes, got %zu "
+                        "bytes; clamping",
+                        __func__, programObject.GetExternalIndex(), location, ItemCount * sizeof(T), size);
+                writeSize = size;
+            }
+            if (pUBO == nullptr || offset == MG_State::GLState::ProgramObject::kInvalidUniformOffset ||
+                offset + byteOffsetInsideUniform + writeSize > uboSize) {
+                // Should not happen: linking gives every settable uniform backing
+                // storage. Log and drop the write instead of faulting.
+                MGLOG_E("%s: uniform at program %u location %u has no backing storage (ubo=%p offset=%u size=%zu "
+                        "uboSize=%zu); dropping write",
+                        __func__, programObject.GetExternalIndex(), location, static_cast<void*>(pUBO), offset,
+                        writeSize, uboSize);
+                return;
+            }
             MGLOG_D("%s: program = %d, location = %d, byteOffset = %d", __func__, programObject.GetExternalIndex(),
                     location, offset + byteOffsetInsideUniform);
-            Memcpy((char*)programObject.MapUBO() + offset + byteOffsetInsideUniform, value, ItemCount * sizeof(T));
+            Memcpy(pUBO + offset + byteOffsetInsideUniform, value, writeSize);
             programObject.MarkUBOContentDirty();
         } else {
             auto* ttype = programObject.GetUniformTType(location);
@@ -940,6 +969,11 @@ namespace MobileGL::MG_Impl::GLImpl {
         }
 
         for (GLint offset = 0; offset < count; offset++) {
+            if (offset > 0 && !programObject->UniformLocationsAliasSameUniform(location, location + offset)) {
+                // GL 3.3 §2.11.4: values for elements beyond the end of the uniform
+                // array are ignored. Never step onto a neighboring uniform's location.
+                break;
+            }
             if (!programObject->IsValidUniformLocation(location + offset)) {
                 RecordInvalidUniformLocationError(__func__, location + offset, "the current program object");
                 return;
@@ -964,6 +998,10 @@ namespace MobileGL::MG_Impl::GLImpl {
         }
 
         for (GLint offset = 0; offset < count; offset++) {
+            if (offset > 0 && !programObject->UniformLocationsAliasSameUniform(location, location + offset)) {
+                // Values for elements beyond the end of the uniform array are ignored.
+                break;
+            }
             if (!programObject->IsValidUniformLocation(location + offset)) {
                 RecordInvalidUniformLocationError(__func__, location + offset,
                                                   "program " + std::to_string(program));
@@ -1092,6 +1130,10 @@ namespace MobileGL::MG_Impl::GLImpl {
 
         // For matrix uniforms, we handle each matrix individually
         for (GLint i = 0; i < count; i++) {
+            if (i > 0 && !programObject->UniformLocationsAliasSameUniform(location, location + i)) {
+                // Values for elements beyond the end of the uniform array are ignored.
+                break;
+            }
             if (!programObject->IsValidUniformLocation(location + i)) {
                 RecordInvalidUniformLocationError(__func__, location + i, "the current program object");
                 return;
@@ -1124,6 +1166,10 @@ namespace MobileGL::MG_Impl::GLImpl {
         // For matrix uniforms, we handle each matrix individually
         // Handle padding in mat3 correctly!!
         for (GLint i = 0; i < count; i++) {
+            if (i > 0 && !programObject->UniformLocationsAliasSameUniform(location, location + i)) {
+                // Values for elements beyond the end of the uniform array are ignored.
+                break;
+            }
             if (!programObject->IsValidUniformLocation(location + i)) {
                 RecordInvalidUniformLocationError(__func__, location + i, "the current program object");
                 return;
@@ -1159,6 +1205,10 @@ namespace MobileGL::MG_Impl::GLImpl {
 
         // For matrix uniforms, we handle each matrix individually
         for (GLint i = 0; i < count; i++) {
+            if (i > 0 && !programObject->UniformLocationsAliasSameUniform(location, location + i)) {
+                // Values for elements beyond the end of the uniform array are ignored.
+                break;
+            }
             if (!programObject->IsValidUniformLocation(location + i)) {
                 RecordInvalidUniformLocationError(__func__, location + i, "the current program object");
                 return;
@@ -1219,6 +1269,10 @@ namespace MobileGL::MG_Impl::GLImpl {
         }
 
         for (GLint i = 0; i < count; i++) {
+            if (i > 0 && !programObject->UniformLocationsAliasSameUniform(location, location + i)) {
+                // Values for elements beyond the end of the uniform array are ignored.
+                break;
+            }
             if (!programObject->IsValidUniformLocation(location + i)) {
                 RecordInvalidUniformLocationError(__func__, location + i, "program " + std::to_string(program));
                 return;
@@ -1249,6 +1303,10 @@ namespace MobileGL::MG_Impl::GLImpl {
         }
 
         for (GLint i = 0; i < count; i++) {
+            if (i > 0 && !programObject->UniformLocationsAliasSameUniform(location, location + i)) {
+                // Values for elements beyond the end of the uniform array are ignored.
+                break;
+            }
             if (!programObject->IsValidUniformLocation(location + i)) {
                 RecordInvalidUniformLocationError(__func__, location + i, "program " + std::to_string(program));
                 return;
@@ -1283,6 +1341,10 @@ namespace MobileGL::MG_Impl::GLImpl {
         }
 
         for (GLint i = 0; i < count; i++) {
+            if (i > 0 && !programObject->UniformLocationsAliasSameUniform(location, location + i)) {
+                // Values for elements beyond the end of the uniform array are ignored.
+                break;
+            }
             if (!programObject->IsValidUniformLocation(location + i)) {
                 RecordInvalidUniformLocationError(__func__, location + i, "program " + std::to_string(program));
                 return;
