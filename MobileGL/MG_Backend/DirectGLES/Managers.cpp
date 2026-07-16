@@ -2722,6 +2722,20 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     effectiveSpirv = &loweredSpirv;
                 }
 
+                // ESSL stage-matches uniform blocks by member precision, but SPIRV-Cross prints
+                // a RelaxedPrecision member as explicit "mediump" in the vertex stage and as
+                // UNQUALIFIED (mediump-by-default) in the fragment stage; after
+                // ForceSupporterOutput swaps the fragment header to highp, that member reads
+                // back as highp and the ES driver refuses to link ("definitions of uniform
+                // block ... do not match"). Strip the hint from block structs so both stages
+                // declare the member highp; nothing else about emission changes.
+                Vector<unsigned int> uboPrecisionSpirv;
+                if (MG_Util::ShaderTranspiler::ShaderCompiler::StripUboMemberRelaxedPrecisionForEssl(
+                        *effectiveSpirv, uboPrecisionSpirv) &&
+                    !uboPrecisionSpirv.empty()) {
+                    effectiveSpirv = &uboPrecisionSpirv;
+                }
+
                 MG_Util::ShaderTranspiler::SpvcSession spvcSession(*effectiveSpirv,
                     MG_Util::ShaderTranspiler::SessionUsageBit::Transpile);
 
@@ -2732,17 +2746,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                                ResolveBackendEsslVersion());
                 spvc_compiler_options_set_bool(options, SPVC_COMPILER_OPTION_GLSL_ES, SPVC_TRUE);
                 spvc_compiler_options_set_bool(options, SPVC_COMPILER_OPTION_GLSL_VULKAN_SEMANTICS, SPVC_FALSE);
-                // Emit against highp default precision in every stage. SPIRV-Cross's fragment
-                // default is mediump, under which a RelaxedPrecision struct member prints with
-                // NO qualifier; ForceSupporterOutput later swaps the header to highp, silently
-                // flipping such members to highp. A uniform-block member that stays explicitly
-                // "mediump" in the vertex stage then mismatches, and the ES driver refuses to
-                // link ("definitions of uniform block ... do not match"). With highp defaults
-                // every relaxed member is printed with an explicit qualifier in both stages.
-                spvc_compiler_options_set_bool(options, SPVC_COMPILER_OPTION_GLSL_ES_DEFAULT_FLOAT_PRECISION_HIGHP,
-                                               SPVC_TRUE);
-                spvc_compiler_options_set_bool(options, SPVC_COMPILER_OPTION_GLSL_ES_DEFAULT_INT_PRECISION_HIGHP,
-                                               SPVC_TRUE);
 
                 spvcSession.SetOptions(options);
 
