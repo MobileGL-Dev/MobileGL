@@ -1017,3 +1017,57 @@ void main() {
     ASSERT_TRUE(ShaderCompiler::SanitizeAndOptimizeBinary(binRes->at(0), optimized));
 }
 
+
+TEST_F(ProgramUtilTest, PreprocessCoercesBlockPackingQualifiersToStd140) {
+    using namespace MG_Util::ShaderTranspiler;
+
+    // glslang rejects `packed`/`shared` outright when generating SPIR-V, and MobileGL's
+    // UBO layout is always std140 anyway; the preprocessor rewrites the qualifiers so the
+    // validation compile, reflection, and generated SPIR-V all agree on std140 (GL CTS
+    // KHR-GL33.shaders.uniform_block.*.packed/shared).
+    String source = R"(#version 330
+layout(packed) uniform PackedBlock { vec4 pv; };
+layout(shared, row_major) uniform SharedBlock { mat4 sm; };
+layout ( shared ) uniform SpacedBlock { float sx; };
+layout(std140) uniform KeptBlock { float kx; };
+// A non-layout use of the identifier stays untouched (compute storage qualifier).
+void main() {
+    gl_Position = pv + vec4(sm[0][0]) + vec4(sx) + vec4(kx);
+})";
+
+    PreprocessShaderSource(ShaderStage::Vertex, source);
+
+    EXPECT_EQ(source.find("packed"), String::npos);
+    EXPECT_EQ(source.find("layout(shared"), String::npos);
+    EXPECT_NE(source.find("layout(std140) uniform PackedBlock"), String::npos);
+    EXPECT_NE(source.find("layout(std140, row_major) uniform SharedBlock"), String::npos);
+    EXPECT_NE(source.find("layout ( std140 ) uniform SpacedBlock"), String::npos);
+    EXPECT_NE(source.find("layout(std140) uniform KeptBlock"), String::npos);
+
+    ShaderAttrib attrib{.shaderType = GL_VERTEX_SHADER,
+                        .sourceStr = source,
+                        .flags = ShaderCompileBits::CompileForOpenGL};
+    auto res = ShaderCompiler::CompileShader(attrib);
+    if (!res) {
+        FAIL() << "errc: " << res.error().errc << "\nlog: " << res.error().log << "\nsource:\n" << source;
+    }
+}
+
+TEST_F(ProgramUtilTest, PreprocessLeavesComputeSharedStorageQualifierAlone) {
+    using namespace MG_Util::ShaderTranspiler;
+
+    // `shared` is only a packing qualifier inside layout(...); the compute-shader storage
+    // qualifier of the same spelling must survive.
+    String source = R"(#version 430
+layout(local_size_x = 8) in;
+shared float sharedScratch[8];
+layout(shared) uniform Blk { float bx; };
+void main() {
+    sharedScratch[gl_LocalInvocationIndex] = bx;
+})";
+
+    PreprocessShaderSource(ShaderStage::Compute, source);
+
+    EXPECT_NE(source.find("shared float sharedScratch[8];"), String::npos);
+    EXPECT_NE(source.find("layout(std140) uniform Blk"), String::npos);
+}

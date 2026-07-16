@@ -261,6 +261,65 @@ namespace {
         ReplaceIdentifier(source, "GL_ARB_gpu_shader_int64", "MG_DISABLED_GL_ARB_gpu_shader_int64");
     }
 
+    // Rewrite the `packed` / `shared` block-packing qualifiers inside layout(...) declarations to
+    // `std140`. Desktop GL leaves the memory layout of such blocks to the implementation and the
+    // app must query member offsets; MobileGL's SPIR-V pipeline always lays uniform blocks out as
+    // std140 (glslang under a SPIR-V target rejects `packed`/`shared` outright and SPIRV-Cross has
+    // no other packing for UBOs), so std140 IS this implementation's chosen layout. Rewriting at
+    // the source level keeps the validation compile, the reflection the app queries, and the
+    // generated SPIR-V all agreeing on that choice. Both replacement tokens are 6 characters, so
+    // the rewrite is done in place.
+    void CoerceUniformBlockPackingToStd140(MobileGL::String& source) {
+        constexpr const char* layoutToken = "layout";
+        constexpr SizeT layoutLen = 6;
+
+        SizeT pos = 0;
+        while ((pos = source.find(layoutToken, pos)) != MobileGL::String::npos) {
+            const bool hasLeftBoundary = pos == 0 || !IsIdentifierChar(source[pos - 1]);
+            SizeT probe = pos + layoutLen;
+            const bool hasRightBoundary = probe >= source.size() || !IsIdentifierChar(source[probe]);
+            if (!hasLeftBoundary || !hasRightBoundary) {
+                pos = probe;
+                continue;
+            }
+
+            while (probe < source.size() && std::isspace(static_cast<unsigned char>(source[probe]))) {
+                probe++;
+            }
+            if (probe >= source.size() || source[probe] != '(') {
+                pos = probe;
+                continue;
+            }
+
+            // Scan the qualifier list; layout qualifier values may contain parenthesized
+            // constant expressions, so track nesting until the matching ')'.
+            SizeT cursor = probe + 1;
+            int depth = 1;
+            while (cursor < source.size() && depth > 0) {
+                const char ch = source[cursor];
+                if (ch == '(') {
+                    depth++;
+                } else if (ch == ')') {
+                    depth--;
+                } else if (IsIdentifierChar(ch) && (cursor == 0 || !IsIdentifierChar(source[cursor - 1]))) {
+                    SizeT identifierEnd = cursor;
+                    while (identifierEnd < source.size() && IsIdentifierChar(source[identifierEnd])) {
+                        identifierEnd++;
+                    }
+                    const SizeT identifierLen = identifierEnd - cursor;
+                    if (identifierLen == 6 && (source.compare(cursor, 6, "packed") == 0 ||
+                                               source.compare(cursor, 6, "shared") == 0)) {
+                        source.replace(cursor, 6, "std140");
+                    }
+                    cursor = identifierEnd;
+                    continue;
+                }
+                cursor++;
+            }
+            pos = cursor;
+        }
+    }
+
     void ModernizeLegacyGLSL(MobileGL::ShaderStage stage, MobileGL::String& source) {
         // Precision qualifiers (highp/mediump/lowp and default-precision statements) are legal and
         // ignored in the forced "#version 460 core" profile, so glslang handles them natively.
@@ -383,6 +442,7 @@ namespace MobileGL {
                 }
 
                 FilterUnsupportedGpuShaderInt64(source);
+                CoerceUniformBlockPackingToStd140(source);
 
                 // Some shader packs define helpers with built-in GLSL names such as round(), tanh(), or fma().
                 // These may pass OpenGL-style validation but fail when recompiled for Vulkan/SPIR-V generation.
