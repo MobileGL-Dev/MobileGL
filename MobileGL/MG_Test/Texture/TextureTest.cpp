@@ -11,11 +11,14 @@
 #include "Includes.h"
 #include "Init.h"
 #include <MG_Backend/BackendObjects.h>
+#include <MG_Backend/DirectGLES/Managers.h>
 #include <MG_Impl/GLImpl/Getter/GL_Getter.h>
 #include <MG_Impl/GLImpl/RenderState/GL_RenderState.h>
 #include <MG_Impl/GLImpl/Texture/GL_Texture.h>
 #include <MG_State/GLState/Core.h>
 #include <MG_State/GLState/TextureState/TextureObject.h>
+#include <MG_Util/Converters/GLToMG/TextureEnumConverter.h>
+#include <MG_Util/Converters/MGToGL/TextureEnumConverter.h>
 #include <MG_Util/Converters/MGToMG/TextureEnumConverter.h>
 #include <MG_Util/Texture/TextureFormatProcessor.h>
 
@@ -933,6 +936,141 @@ TEST_F(TextureTest, BoundTexSubImage3DRejectsOutOfRangeLevel) {
     const Uint8 pixels[] = {1, 2, 3, 4};
     MG_Impl::GLImpl::TexSubImage3D(GL_TEXTURE_3D, 3, 0, 0, 0, 1, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
     EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_INVALID_VALUE);
+}
+
+// The GL CTS KHR-GL33.pixelstoragemodes.teximage3d cases upload GL_TEXTURE_2D_ARRAY
+// textures through glTexImage3D with UNPACK_ROW_LENGTH / IMAGE_HEIGHT / SKIP_* set to
+// extract a sub-cuboid; this mirrors that shape (scaled down) on the 2D-array target.
+TEST_F(TextureTest, BoundTexImage3DOn2DArrayHonorsUnpackSubcuboidSelection) {
+    GLuint texture = 0;
+    MG_Impl::GLImpl::GenTextures(1, &texture);
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D_ARRAY, texture);
+
+    // Source cuboid: 3x3 RGBA texels per image, 3 images; skip 1 image, 1 row, 1 pixel;
+    // upload the 2x2x2 sub-cuboid. Each source byte equals its own offset, so the stored
+    // shadow bytes must equal the offsets of the selected texels.
+    Uint8 pixels[3 * 3 * 3 * 4];
+    for (SizeT i = 0; i < sizeof(pixels); ++i) {
+        pixels[i] = static_cast<Uint8>(i);
+    }
+
+    MG_Impl::GLImpl::PixelStorei(GL_UNPACK_ROW_LENGTH, 3);
+    MG_Impl::GLImpl::PixelStorei(GL_UNPACK_IMAGE_HEIGHT, 3);
+    MG_Impl::GLImpl::PixelStorei(GL_UNPACK_SKIP_PIXELS, 1);
+    MG_Impl::GLImpl::PixelStorei(GL_UNPACK_SKIP_ROWS, 1);
+    MG_Impl::GLImpl::PixelStorei(GL_UNPACK_SKIP_IMAGES, 1);
+    MG_Impl::GLImpl::TexImage3D(GL_TEXTURE_2D_ARRAY, 0, GL_RGBA8, 2, 2, 2, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+    MG_Impl::GLImpl::PixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+    MG_Impl::GLImpl::PixelStorei(GL_UNPACK_IMAGE_HEIGHT, 0);
+    MG_Impl::GLImpl::PixelStorei(GL_UNPACK_SKIP_PIXELS, 0);
+    MG_Impl::GLImpl::PixelStorei(GL_UNPACK_SKIP_ROWS, 0);
+    MG_Impl::GLImpl::PixelStorei(GL_UNPACK_SKIP_IMAGES, 0);
+
+    const auto textureObject = MG_State::pGLContext->GetTextureObject(texture);
+    ASSERT_NE(textureObject, nullptr);
+    EXPECT_EQ(textureObject->GetTarget(), TextureTarget::Texture2DArray);
+    auto* mipmapObject = static_cast<MG_State::GLState::TextureObjectMipmap*>(textureObject.get());
+    EXPECT_EQ(mipmapObject->GetMipmapTexelSize(TextureUploadTarget::Texture2DArray, 0), IntVec3(2, 2, 2));
+
+    const auto* stored =
+        static_cast<const Uint8*>(mipmapObject->MapMipmapData(TextureUploadTarget::Texture2DArray, 0));
+    ASSERT_NE(stored, nullptr);
+    SizeT storedIndex = 0;
+    for (SizeT image = 1; image <= 2; ++image) {         // SKIP_IMAGES = 1
+        for (SizeT row = 1; row <= 2; ++row) {            // SKIP_ROWS = 1
+            for (SizeT column = 1; column <= 2; ++column) { // SKIP_PIXELS = 1
+                const SizeT srcOffset = image * 36 + row * 12 + column * 4;
+                for (SizeT b = 0; b < 4; ++b, ++storedIndex) {
+                    EXPECT_EQ(stored[storedIndex], static_cast<Uint8>(srcOffset + b)) << "byte " << storedIndex;
+                }
+            }
+        }
+    }
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+}
+
+// The shadow mip for packed sized formats keeps the client's packed bytes, so the
+// canonical transfer triple must name the packed word type; the old default fallback
+// (GL_UNSIGNED_BYTE) made backends read 4 bytes per texel from a 2-byte-per-texel
+// shadow (KHR-GL33.pixelstoragemodes rgba4/rgb565 uploads), and GL_RGB10_A2UI got a
+// non-integer GL_RGB transfer format the driver rejects outright.
+TEST_F(TextureTest, NormalizePixelFormatKeepsPackedTransferTypesForPackedSizedFormats) {
+    using MG_Util::TextureFormatProcessor::NormalizePixelFormat;
+    struct {
+        GLenum internalFormat;
+        GLenum expectedFormat;
+        GLenum expectedType;
+    } cases[] = {
+        {GL_RGBA4, GL_RGBA, GL_UNSIGNED_SHORT_4_4_4_4},
+        {GL_RGB565, GL_RGB, GL_UNSIGNED_SHORT_5_6_5},
+        {GL_RGB10_A2UI, GL_RGBA_INTEGER, GL_UNSIGNED_INT_2_10_10_10_REV},
+        {GL_RGB5_A1, GL_RGBA, GL_UNSIGNED_SHORT_5_5_5_1},
+        {GL_RGB10_A2, GL_RGBA, GL_UNSIGNED_INT_2_10_10_10_REV},
+    };
+    for (const auto& c : cases) {
+        GLenum outInternal = 0, outFormat = 0, outType = 0;
+        NormalizePixelFormat(c.internalFormat, PixelFormatNormalizeOptionBit::None, &outInternal, &outFormat,
+                             &outType);
+        EXPECT_EQ(outInternal, c.internalFormat) << "internalformat 0x" << std::hex << c.internalFormat;
+        EXPECT_EQ(outFormat, c.expectedFormat) << "internalformat 0x" << std::hex << c.internalFormat;
+        EXPECT_EQ(outType, c.expectedType) << "internalformat 0x" << std::hex << c.internalFormat;
+    }
+}
+
+// GL_RGB565 (ARB_ES2_compatibility / GL 4.1, used directly by the GL CTS) must round-trip
+// through the internal-format enums; it had no GLToMG mapping at all, so glTexImage* with
+// GL_RGB565 was rejected as an unknown internal format.
+TEST_F(TextureTest, Rgb565InternalFormatRoundTripsThroughEnumConverters) {
+    EXPECT_EQ(MG_Util::ConvertGLEnumToTextureInternalFormat(GL_RGB565), TextureInternalFormat::RGB5);
+    EXPECT_EQ(MG_Util::ConvertGLEnumToTextureInternalFormat(GL_RGB5), TextureInternalFormat::RGB5);
+    // The ES-facing rendition of RGB5 is GL_RGB565 (desktop GL_RGB5 is not a legal sized
+    // internalformat on OpenGL ES backends).
+    EXPECT_EQ(MG_Util::ConvertTextureInternalFormatToGLEnum(TextureInternalFormat::RGB5),
+              static_cast<GLenum>(GL_RGB565));
+}
+
+// Regression guard: the DirectGLES backend must treat GL_TEXTURE_2D_ARRAY as a
+// syncable target — it used to be skipped entirely, so 2D-array textures were never
+// uploaded or bound (KHR-GL33.pixelstoragemodes.teximage3d.* failed wholesale).
+TEST_F(TextureTest, DirectGLESTreats2DArrayAsSupportedTextureTarget) {
+    using MobileGL::MG_Backend::DirectGLES::TextureImpl::IsSupportedTextureTarget;
+    EXPECT_TRUE(IsSupportedTextureTarget(TextureTarget::Texture2DArray));
+    EXPECT_TRUE(IsSupportedTextureTarget(TextureTarget::Texture3D));
+    EXPECT_TRUE(IsSupportedTextureTarget(TextureTarget::Texture2D));
+    EXPECT_FALSE(IsSupportedTextureTarget(TextureTarget::Texture1D));
+    EXPECT_FALSE(IsSupportedTextureTarget(TextureTarget::Texture1DArray));
+    EXPECT_FALSE(IsSupportedTextureTarget(TextureTarget::TextureRectangle));
+}
+
+// 2D-array textures keep their layer count constant across mip levels (GL 3.3 §3.9);
+// only true 3D textures halve depth per level.
+TEST_F(TextureTest, TexStorage3DOn2DArrayKeepsLayerCountAcrossLevels) {
+    GLuint arrayTexture = 0;
+    MG_Impl::GLImpl::GenTextures(1, &arrayTexture);
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D_ARRAY, arrayTexture);
+    MG_Impl::GLImpl::TexStorage3D(GL_TEXTURE_2D_ARRAY, 3, GL_RGBA8, 8, 8, 4);
+
+    const auto arrayObject = MG_State::pGLContext->GetTextureObject(arrayTexture);
+    ASSERT_NE(arrayObject, nullptr);
+    auto* arrayMipmapObject = static_cast<MG_State::GLState::TextureObjectMipmap*>(arrayObject.get());
+    EXPECT_EQ(arrayMipmapObject->GetMipmapTexelSize(TextureUploadTarget::Texture2DArray, 0), IntVec3(8, 8, 4));
+    EXPECT_EQ(arrayMipmapObject->GetMipmapTexelSize(TextureUploadTarget::Texture2DArray, 1), IntVec3(4, 4, 4));
+    EXPECT_EQ(arrayMipmapObject->GetMipmapTexelSize(TextureUploadTarget::Texture2DArray, 2), IntVec3(2, 2, 4));
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    // Control: a real 3D texture still halves its depth per level.
+    GLuint volumeTexture = 0;
+    MG_Impl::GLImpl::GenTextures(1, &volumeTexture);
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_3D, volumeTexture);
+    MG_Impl::GLImpl::TexStorage3D(GL_TEXTURE_3D, 3, GL_RGBA8, 8, 8, 4);
+
+    const auto volumeObject = MG_State::pGLContext->GetTextureObject(volumeTexture);
+    ASSERT_NE(volumeObject, nullptr);
+    auto* volumeMipmapObject = static_cast<MG_State::GLState::TextureObjectMipmap*>(volumeObject.get());
+    EXPECT_EQ(volumeMipmapObject->GetMipmapTexelSize(TextureUploadTarget::Texture3D, 0), IntVec3(8, 8, 4));
+    EXPECT_EQ(volumeMipmapObject->GetMipmapTexelSize(TextureUploadTarget::Texture3D, 1), IntVec3(4, 4, 2));
+    EXPECT_EQ(volumeMipmapObject->GetMipmapTexelSize(TextureUploadTarget::Texture3D, 2), IntVec3(2, 2, 1));
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
 }
 
 TEST_F(TextureTest, NamedTextureVectorParametersAndGettersWorkWithoutBinding) {
