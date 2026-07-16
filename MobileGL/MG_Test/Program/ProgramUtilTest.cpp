@@ -112,8 +112,14 @@ void main() {
     EXPECT_NE(source.find("out vec2 uv;"), String::npos);
     EXPECT_EQ(source.find("attribute"), String::npos);
     EXPECT_EQ(source.find("varying"), String::npos);
-    EXPECT_EQ(source.find("HIGHP_OR_DEFAULT"), String::npos);
-    EXPECT_EQ(source.find("#define"), String::npos);
+    // Precision-qualifier macros are left for glslang's own preprocessor to expand.
+    EXPECT_NE(source.find("#define HIGHP_OR_DEFAULT highp"), String::npos);
+
+    ShaderAttrib attrib{.shaderType = GL_VERTEX_SHADER, .sourceStr = source};
+    auto res = ShaderCompiler::CompileShader(attrib);
+    if (!res) {
+        FAIL() << "errc: " << res.error().errc << "\nlog: " << res.error().log << "\nsource:\n" << source;
+    }
 }
 
 TEST_F(ProgramUtilTest, PreprocessLegacyFragmentShaderModernizesGlmarkStyleSource) {
@@ -137,9 +143,14 @@ void main() {
     EXPECT_NE(source.find("mg_FragColor = color;"), String::npos);
     EXPECT_EQ(source.find("gl_FragColor"), String::npos);
     EXPECT_EQ(source.find("texture2D"), String::npos);
-    EXPECT_EQ(source.find("MEDIUMP_OR_DEFAULT"), String::npos);
-    EXPECT_EQ(source.find("mediump"), String::npos);
-    EXPECT_EQ(source.find("#define"), String::npos);
+    // Precision-qualifier macros are left for glslang's own preprocessor to expand.
+    EXPECT_NE(source.find("#define MEDIUMP_OR_DEFAULT mediump"), String::npos);
+
+    ShaderAttrib attrib{.shaderType = GL_FRAGMENT_SHADER, .sourceStr = source};
+    auto res = ShaderCompiler::CompileShader(attrib);
+    if (!res) {
+        FAIL() << "errc: " << res.error().errc << "\nlog: " << res.error().log << "\nsource:\n" << source;
+    }
 }
 
 TEST_F(ProgramUtilTest, PreprocessLegacyFragmentShaderModernizesFragData) {
@@ -158,6 +169,65 @@ void main() {
     EXPECT_NE(source.find("mg_FragData[0] = vec4(1.0);"), String::npos);
     EXPECT_NE(source.find("mg_FragData[1].a = 0.5;"), String::npos);
     EXPECT_EQ(source.find("gl_FragData"), String::npos);
+
+    ShaderAttrib attrib{.shaderType = GL_FRAGMENT_SHADER, .sourceStr = source};
+    auto res = ShaderCompiler::CompileShader(attrib);
+    if (!res) {
+        FAIL() << "errc: " << res.error().errc << "\nlog: " << res.error().log << "\nsource:\n" << source;
+    }
+}
+
+TEST_F(ProgramUtilTest, PreprocessKeepsDefaultPrecisionStatements) {
+    using namespace MG_Util::ShaderTranspiler;
+
+    // Mirrors the GL CTS helper shaders (e.g. glcPixelStorageModesTests): the old qualifier strip
+    // turned "precision highp float;" into invalid "precision  float;". Precision qualifiers are
+    // legal (and ignored) in the forced 460 core profile, so they now pass through untouched.
+    String source = R"(#version 330
+precision highp float;
+precision mediump int;
+out vec4 fragColor;
+uniform highp sampler2D tex;
+
+void main() {
+    highp vec2 uv = vec2(0.5);
+    fragColor = texture(tex, uv);
+})";
+
+    PreprocessShaderSource(ShaderStage::Fragment, source);
+
+    EXPECT_NE(source.find("precision highp float;"), String::npos);
+    EXPECT_NE(source.find("precision mediump int;"), String::npos);
+    EXPECT_NE(source.find("uniform highp sampler2D tex;"), String::npos);
+    EXPECT_NE(source.find("fragColor = texture(tex, uv);"), String::npos);
+
+    ShaderAttrib attrib{.shaderType = GL_FRAGMENT_SHADER, .sourceStr = source};
+    auto res = ShaderCompiler::CompileShader(attrib);
+    if (!res) {
+        FAIL() << "errc: " << res.error().errc << "\nlog: " << res.error().log << "\nsource:\n" << source;
+    }
+}
+
+TEST_F(ProgramUtilTest, PreprocessKeepsPrecisionInLegacyShaderForGlslang) {
+    using namespace MG_Util::ShaderTranspiler;
+
+    // Legacy ES-style shader: precision statements and qualifier macros are left for glslang
+    // (its preprocessor expands the #define; the 460 core parse ignores the qualifiers).
+    String source = R"(#define HIGHP_OR_DEFAULT highp
+precision HIGHP_OR_DEFAULT float;
+precision mediump int;
+varying vec2 uv;
+
+void main() {
+    mediump float shade = uv.x;
+    gl_FragColor = vec4(uv, shade, 1.0);
+})";
+
+    PreprocessShaderSource(ShaderStage::Fragment, source);
+
+    EXPECT_NE(source.find("precision HIGHP_OR_DEFAULT float;"), String::npos);
+    EXPECT_NE(source.find("precision mediump int;"), String::npos);
+    EXPECT_NE(source.find("in vec2 uv;"), String::npos);
 
     ShaderAttrib attrib{.shaderType = GL_FRAGMENT_SHADER, .sourceStr = source};
     auto res = ShaderCompiler::CompileShader(attrib);

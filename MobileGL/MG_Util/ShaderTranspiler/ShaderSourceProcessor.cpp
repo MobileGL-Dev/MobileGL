@@ -262,15 +262,8 @@ namespace {
     }
 
     void ModernizeLegacyGLSL(MobileGL::ShaderStage stage, MobileGL::String& source) {
-        RemoveDefineForIdentifier(source, "HIGHP_OR_DEFAULT");
-        RemoveDefineForIdentifier(source, "MEDIUMP_OR_DEFAULT");
-        RemoveDefineForIdentifier(source, "LOWP_OR_DEFAULT");
-        ReplaceIdentifier(source, "HIGHP_OR_DEFAULT", "");
-        ReplaceIdentifier(source, "MEDIUMP_OR_DEFAULT", "");
-        ReplaceIdentifier(source, "LOWP_OR_DEFAULT", "");
-        ReplaceIdentifier(source, "highp", "");
-        ReplaceIdentifier(source, "mediump", "");
-        ReplaceIdentifier(source, "lowp", "");
+        // Precision qualifiers (highp/mediump/lowp and default-precision statements) are legal and
+        // ignored in the forced "#version 460 core" profile, so glslang handles them natively.
 
         ReplaceIdentifier(source, "texture2D", "texture");
         ReplaceIdentifier(source, "texture2DProj", "textureProj");
