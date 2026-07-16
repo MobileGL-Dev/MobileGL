@@ -383,6 +383,86 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         return true;
     }
 
+    // Combined depth-stencil shadow storage keeps the GL client texel layout produced by the state
+    // layer: packed UNSIGNED_INT_24_8 words (depth in bits 8-31, stencil in bits 0-7) for
+    // Depth24Stencil8/DepthStencil, and FLOAT_32_UNSIGNED_INT_24_8_REV pairs (float32 depth word,
+    // then a word with stencil in bits 0-7) for Depth32FStencil8. VkBufferImageCopy regions must
+    // address exactly one aspect, so de-interleave the shadow texels into a depth region (32-bit
+    // words with depth in bits 0-23 for VK_FORMAT_D24_UNORM_S8_UINT, tightly packed float32 for
+    // VK_FORMAT_D32_SFLOAT_S8_UINT) followed by a tightly packed one-byte-per-texel stencil
+    // region. The blob is padded to a 4-byte multiple so subsequent staging offsets keep the
+    // alignment depth-stencil buffer-image copies require.
+    static Bool DeinterleaveDepthStencilSource(const void* source, SizeT sourceByteSize, const IntVec3& texelSize,
+                                               TextureInternalFormat internalFormat, VkFormat imageFormat,
+                                               Vector<Uint8>& outDeinterleavedData, SizeT& outDepthAspectByteSize) {
+        MOBILEGL_ASSERT(source != nullptr, "DeinterleaveDepthStencilSource: source is null");
+
+        const Bool packedDepth24Source = internalFormat == TextureInternalFormat::Depth24Stencil8 ||
+                                         internalFormat == TextureInternalFormat::DepthStencil;
+        const Bool floatDepthSource = internalFormat == TextureInternalFormat::Depth32FStencil8;
+        if (!packedDepth24Source && !floatDepthSource) {
+            return false;
+        }
+        if (imageFormat != VK_FORMAT_D24_UNORM_S8_UINT && imageFormat != VK_FORMAT_D32_SFLOAT_S8_UINT) {
+            return false;
+        }
+
+        const SizeT depth = static_cast<SizeT>(std::max(texelSize.z(), 1));
+        const SizeT pixelCount = static_cast<SizeT>(texelSize.x()) * static_cast<SizeT>(texelSize.y()) * depth;
+        MOBILEGL_ASSERT(pixelCount > 0, "DeinterleaveDepthStencilSource: invalid texel size (%d, %d, %d)",
+                        texelSize.x(), texelSize.y(), texelSize.z());
+        const SizeT sourcePixelSize = packedDepth24Source ? 4 : 8;
+        if (sourceByteSize != pixelCount * sourcePixelSize) {
+            MGLOG_E("DeinterleaveDepthStencilSource: unexpected source byte size=%zu for pixelCount=%zu "
+                    "sourcePixelSize=%zu",
+                    sourceByteSize, pixelCount, sourcePixelSize);
+            return false;
+        }
+
+        const SizeT depthAspectByteSize = pixelCount * sizeof(Uint32);
+        const SizeT paddedByteSize = (depthAspectByteSize + pixelCount + 3) / 4 * 4;
+        outDeinterleavedData.resize(paddedByteSize);
+
+        const auto* src = static_cast<const Uint8*>(source);
+        Uint8* depthDst = outDeinterleavedData.data();
+        Uint8* stencilDst = depthDst + depthAspectByteSize;
+        for (SizeT pixel = 0; pixel < pixelCount; ++pixel) {
+            Uint32 depthWord = 0; // depth in bits 0-23 for D24_UNORM, raw float32 bits for D32_SFLOAT
+            Uint8 stencilValue = 0;
+            if (packedDepth24Source) {
+                Uint32 packed = 0;
+                std::memcpy(&packed, src + pixel * 4, sizeof(packed));
+                stencilValue = static_cast<Uint8>(packed & 0xFFu);
+                const Uint32 depth24 = packed >> 8;
+                if (imageFormat == VK_FORMAT_D24_UNORM_S8_UINT) {
+                    depthWord = depth24;
+                } else {
+                    const Float depthFloat = static_cast<Float>(depth24) / 16777215.0f;
+                    std::memcpy(&depthWord, &depthFloat, sizeof(depthWord));
+                }
+            } else {
+                Uint32 stencilWord = 0;
+                std::memcpy(&depthWord, src + pixel * 8, sizeof(depthWord));
+                std::memcpy(&stencilWord, src + pixel * 8 + sizeof(Uint32), sizeof(stencilWord));
+                stencilValue = static_cast<Uint8>(stencilWord & 0xFFu);
+                if (imageFormat == VK_FORMAT_D24_UNORM_S8_UINT) {
+                    Float depthFloat = 0.0f;
+                    std::memcpy(&depthFloat, &depthWord, sizeof(depthFloat));
+                    depthFloat = std::min(std::max(depthFloat, 0.0f), 1.0f);
+                    depthWord = static_cast<Uint32>(depthFloat * 16777215.0f + 0.5f);
+                }
+            }
+            std::memcpy(depthDst + pixel * sizeof(Uint32), &depthWord, sizeof(depthWord));
+            stencilDst[pixel] = stencilValue;
+        }
+        for (SizeT pad = depthAspectByteSize + pixelCount; pad < paddedByteSize; ++pad) {
+            outDeinterleavedData[pad] = 0;
+        }
+
+        outDepthAspectByteSize = depthAspectByteSize;
+        return true;
+    }
+
     static VkComponentSwizzle ToVkComponentSwizzle(TextureSwizzleParam swizzle) {
         switch (swizzle) {
         case TextureSwizzleParam::Red:
@@ -1353,6 +1433,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             Uint32 level = 0;
             Uint32 baseArrayLayer = 0;
             SizeT uploadByteSize = 0;
+            SizeT depthAspectByteSize = 0;
             IntVec3 texelSize = {0, 0, 0};
             const void* source = nullptr;
             Vector<Uint8> expandedData;
@@ -1367,6 +1448,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             targets.push_back(uploadTarget);
         }
         const TextureFormatInfo formatInfo = ResolveTextureFormatInfo(mipmapTexture.GetFormat());
+
+        // Combined depth-stencil images need per-aspect de-interleaved copies: VkBufferImageCopy's
+        // imageSubresource.aspectMask must have exactly one bit set.
+        const VkImageAspectFlags aspectMask = GetAspectMaskForFormat(outResource.format);
+        const Bool isCombinedDepthStencil = (aspectMask & VK_IMAGE_ASPECT_DEPTH_BIT) != 0 &&
+                                            (aspectMask & VK_IMAGE_ASPECT_STENCIL_BIT) != 0;
 
         VkDeviceSize stagingSize = 0;
         for (const TextureUploadTarget target : targets) {
@@ -1411,6 +1498,18 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                     mipmapTexture.GetExternalIndex(),
                                     MG_Util::ConvertTextureUploadTargetToString(target).c_str(), level);
                     uploadItem.uploadByteSize = uploadItem.expandedData.size();
+                } else if (isCombinedDepthStencil) {
+                    const Bool deinterleaved = DeinterleaveDepthStencilSource(
+                        source, byteSize, texelSize, mipmapTexture.GetFormat(), outResource.format,
+                        uploadItem.expandedData, uploadItem.depthAspectByteSize);
+                    if (!deinterleaved) {
+                        MGLOG_E("UploadDirtyMipLevels: failed to de-interleave depth-stencil textureId=%d target=%s "
+                                "level=%u",
+                                mipmapTexture.GetExternalIndex(),
+                                MG_Util::ConvertTextureUploadTargetToString(target).c_str(), level);
+                        return false;
+                    }
+                    uploadItem.uploadByteSize = uploadItem.expandedData.size();
                 }
                 uploadItems.push_back(Move(uploadItem));
                 if (!uploadItems.back().expandedData.empty()) {
@@ -1421,19 +1520,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
 
         if (uploadItems.empty()) {
-            return true;
-        }
-
-        // Combined depth-stencil images need per-aspect de-interleaved copies (VkBufferImageCopy
-        // aspectMask must have exactly one bit set). Until that is implemented, skip the upload
-        // instead of recording an invalid command buffer that kills the process.
-        const VkImageAspectFlags uploadAspectMask = GetAspectMaskForFormat(outResource.format);
-        if ((uploadAspectMask & VK_IMAGE_ASPECT_DEPTH_BIT) && (uploadAspectMask & VK_IMAGE_ASPECT_STENCIL_BIT)) {
-            MGLOG_E("UploadDirtyMipLevels: skipping unimplemented depth-stencil data upload for textureId=%d",
-                    mipmapTexture.GetExternalIndex());
-            for (const auto& item : uploadItems) {
-                mipmapTexture.MarkStorageDirty(item.target, item.level, false);
-            }
             return true;
         }
 
@@ -1473,7 +1559,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
         VK_VERIFY(vkBeginCommandBuffer(commandBuffer, &beginInfo), "vkBeginCommandBuffer(texture)");
 
-        const VkImageAspectFlags aspectMask = GetAspectMaskForFormat(outResource.format);
         VkPipelineStageFlags uploadSrcStageMask = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
         VkAccessFlags uploadSrcAccessMask = 0;
         GetImageTransitionSourceState(outResource.layout, uploadSrcStageMask, uploadSrcAccessMask);
@@ -1499,8 +1584,19 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             copy.imageOffset = {0, 0, 0};
             copy.imageExtent = {static_cast<Uint32>(item.texelSize.x()), static_cast<Uint32>(item.texelSize.y()),
                                 item.texelSize.z() > 0 ? static_cast<Uint32>(item.texelSize.z()) : 1u};
-            vkCmdCopyBufferToImage(commandBuffer, stagingBuffer, outResource.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                                   1, &copy);
+            if (isCombinedDepthStencil) {
+                // One copy per aspect: the staging blob holds the depth region followed by the
+                // tightly packed one-byte-per-texel stencil region.
+                VkBufferImageCopy aspectCopies[2] = {copy, copy};
+                aspectCopies[0].imageSubresource.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+                aspectCopies[1].imageSubresource.aspectMask = VK_IMAGE_ASPECT_STENCIL_BIT;
+                aspectCopies[1].bufferOffset = item.offset + item.depthAspectByteSize;
+                vkCmdCopyBufferToImage(commandBuffer, stagingBuffer, outResource.image,
+                                       VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 2, aspectCopies);
+            } else {
+                vkCmdCopyBufferToImage(commandBuffer, stagingBuffer, outResource.image,
+                                       VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
+            }
         }
 
         const VkImageLayout finalLayout = ResolveSampledReadOnlyLayout(aspectMask);
