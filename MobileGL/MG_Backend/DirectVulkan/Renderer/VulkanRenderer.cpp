@@ -3598,6 +3598,117 @@ void main() {
             .depth = MG_State::pGLContext->GetClearDepth(),
             .stencil = MG_State::pGLContext->GetClearStencil()
         };
+
+        // A render-pass loadOp clear always covers the complete attachment, while
+        // OpenGL glClear is clipped by GL_SCISSOR_TEST. Blaze3D relies on this for
+        // GuiItemAtlas: animated items clear only their atlas slot before being
+        // redrawn. Queueing that clear as a loadOp erases every cached static item.
+        if (MG_State::pGLContext->IsCapabilityEnabled(CapabilityInput::ScissorTest)) {
+            auto& frame = m_frameContext.GetCurrent();
+            if (!frame.isCommandRecording) {
+                m_frameContext.BeginCommandRecording();
+            }
+
+            auto* activeRenderPass = VkRenderPassManager::GetActiveRenderPass();
+            auto* renderPassEntry = &m_renderPassManager->GetOrCreateRenderPass(*fbo, m_imageIndexAcquired);
+            if (activeRenderPass && !activeRenderPass->CompatibleWith(*renderPassEntry)) {
+                VkRenderPassManager::EndRenderPass(frame.commandBuffer);
+                activeRenderPass = nullptr;
+                renderPassEntry = &m_renderPassManager->GetOrCreateRenderPass(*fbo, m_imageIndexAcquired);
+            }
+            if (renderPassEntry->attachmentCount == 0 ||
+                renderPassEntry->extent.x() <= 0 || renderPassEntry->extent.y() <= 0) {
+                return;
+            }
+
+            if (activeRenderPass && activeRenderPass->CompatibleWith(*renderPassEntry)) {
+                // Materialize any older whole-attachment clear before applying this
+                // ordered, scissored clear.
+                ClearAttachmentsOnActiveRenderPass(frame.commandBuffer, *renderPassEntry);
+            } else {
+                const Bool began = VkRenderPassManager::BeginRenderPass(frame.commandBuffer, *renderPassEntry);
+                MOBILEGL_ASSERT(began, "%s: BeginRenderPass failed", __func__);
+            }
+
+            VkClearRect clearRect{};
+            clearRect.rect = fbo->IsDefaultFramebuffer()
+                ? MakeDefaultFramebufferScissorRect(MG_State::pGLContext->GetScissorBox(),
+                                                    renderPassEntry->extent,
+                                                    m_swapchainObject.GetPreTransform())
+                : MakeClampedScissorRect(MG_State::pGLContext->GetScissorBox(), renderPassEntry->extent);
+            clearRect.baseArrayLayer = 0;
+            clearRect.layerCount = 1;
+            if (clearRect.rect.extent.width == 0 || clearRect.rect.extent.height == 0) {
+                return;
+            }
+
+            Vector<VkClearAttachment> clearAttachments;
+            clearAttachments.reserve(fbo->GetDrawBuffers().size() + 1);
+
+            if ((mask & GL_COLOR_BUFFER_BIT) != 0) {
+                const auto& drawBuffers = fbo->GetDrawBuffers();
+                for (Uint32 drawBufferIndex = 0; drawBufferIndex < drawBuffers.size(); ++drawBufferIndex) {
+                    const auto attachmentType = drawBuffers[drawBufferIndex];
+                    if (attachmentType == FramebufferAttachmentType::None) {
+                        continue;
+                    }
+                    const auto& attachment = fbo->GetAttachment(attachmentType);
+                    if (!attachment.IsComplete()) {
+                        continue;
+                    }
+
+                    const BoolVec4 colorMask = MG_State::pGLContext->GetColorMaskIndexed(drawBufferIndex);
+                    if (!colorMask.r() && !colorMask.g() && !colorMask.b() && !colorMask.a()) {
+                        continue;
+                    }
+                    if (!colorMask.r() || !colorMask.g() || !colorMask.b() || !colorMask.a()) {
+                        MGLOG_W("DirectVulkan: scissored glClear with a partial color mask is not supported");
+                        continue;
+                    }
+
+                    MG_State::GLState::ITextureObject* colorTexture = nullptr;
+                    if (attachment.IsTexture()) {
+                        colorTexture = attachment.GetTexture().get();
+                    }
+                    VkClearAttachment clearAttachment{};
+                    clearAttachment.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+                    clearAttachment.colorAttachment = drawBufferIndex;
+                    clearAttachment.clearValue.color = {
+                        payload.color.x(), payload.color.y(), payload.color.z(),
+                        ResolveColorClearAlpha(colorTexture, payload.color.w())
+                    };
+                    clearAttachments.push_back(clearAttachment);
+                }
+            }
+
+            VkImageAspectFlags depthStencilAspects = 0;
+            if ((mask & GL_DEPTH_BUFFER_BIT) != 0 && MG_State::pGLContext->GetDepthMask()) {
+                const auto& depthAttachment = fbo->GetAttachment(FramebufferAttachmentType::Depth);
+                if (depthAttachment.IsComplete()) {
+                    depthStencilAspects |= VK_IMAGE_ASPECT_DEPTH_BIT;
+                }
+            }
+            if ((mask & GL_STENCIL_BUFFER_BIT) != 0) {
+                const auto& stencilAttachment = fbo->GetAttachment(FramebufferAttachmentType::Stencil);
+                if (stencilAttachment.IsComplete()) {
+                    depthStencilAspects |= VK_IMAGE_ASPECT_STENCIL_BIT;
+                }
+            }
+            if (depthStencilAspects != 0) {
+                VkClearAttachment clearAttachment{};
+                clearAttachment.aspectMask = depthStencilAspects;
+                clearAttachment.clearValue.depthStencil = {payload.depth, payload.stencil};
+                clearAttachments.push_back(clearAttachment);
+            }
+
+            if (!clearAttachments.empty()) {
+                vkCmdClearAttachments(frame.commandBuffer,
+                                      static_cast<Uint32>(clearAttachments.size()), clearAttachments.data(),
+                                      1, &clearRect);
+            }
+            return;
+        }
+
         m_clearManager->QueueClear(mask, payload, *fbo);
         m_renderPassManager->QueueRenderbufferClear(mask, payload, *fbo);
     }
