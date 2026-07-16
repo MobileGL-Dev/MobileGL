@@ -3646,7 +3646,8 @@ void main() {
                                                     m_swapchainObject.GetPreTransform())
                 : MakeClampedScissorRect(MG_State::pGLContext->GetScissorBox(), renderPassEntry->extent);
             clearRect.baseArrayLayer = 0;
-            clearRect.layerCount = 1;
+            // GL 3.3 §4.4.7: clearing a layered framebuffer clears every layer.
+            clearRect.layerCount = renderPassEntry->layers;
             if (clearRect.rect.extent.width == 0 || clearRect.rect.extent.height == 0) {
                 return;
             }
@@ -6885,7 +6886,8 @@ void main() {
                 static_cast<Uint32>(activeRenderPass->extent.y())
         };
         clearRect.baseArrayLayer = 0;
-        clearRect.layerCount = 1;
+        // Compatible entries share the framebuffer layer count; layered attachments clear every layer.
+        clearRect.layerCount = compatibleRenderPassEntry.layers;
 
         for (const auto& pending : compatibleRenderPassEntry.pendingClearAttachments) {
             if (!pending.hasInlinePayload && pending.key.texture == nullptr) {

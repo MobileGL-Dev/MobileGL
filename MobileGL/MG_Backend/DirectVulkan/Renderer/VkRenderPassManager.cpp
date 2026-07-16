@@ -1015,7 +1015,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             hasDepthStencilAttachment,
             renderPassSampleCount,
             extent,
-            static_cast<Int>(framebufferLayers) };
+            framebufferLayers };
         MGLOG_D("VkRenderPassManager::GetOrCreateRenderPass: hash=0x%llx compatibilityHash=0x%llx attachmentCount=%u colorAttachmentCount=%u samples=%d extent=%dx%d",
                 static_cast<unsigned long long>(hash),
                 static_cast<unsigned long long>(compatibilityHash),

@@ -68,7 +68,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         Bool hasDepthStencilAttachment = false;
         VkSampleCountFlagBits sampleCount = VK_SAMPLE_COUNT_1_BIT;
         IntVec2 extent = {0, 0};
-        Uint32 subpass = 0;
+        // VkFramebufferCreateInfo::layers of the entry's framebuffer (>1 for layered GL attachments).
+        Uint32 layers = 1;
 
         RenderPassEntry() = default;
         RenderPassEntry(const RenderPassEntry&) = delete;
@@ -84,7 +85,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             std::swap(hasDepthStencilAttachment, that.hasDepthStencilAttachment);
             std::swap(sampleCount, that.sampleCount);
             std::swap(extent, that.extent);
-            std::swap(subpass, that.subpass);
+            std::swap(layers, that.layers);
         }
         RenderPassEntry(
             Uint64 hash,
@@ -97,7 +98,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             Uint32 colorAttachmentCount,
             Bool hasDepthStencilAttachment,
             VkSampleCountFlagBits sampleCount,
-            IntVec2 extent, int subpass):
+            IntVec2 extent, Uint32 layers):
             hash(hash),
             renderPass(renderpass),
             framebuffer(framebuffer),
@@ -109,7 +110,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             hasDepthStencilAttachment(hasDepthStencilAttachment),
             sampleCount(sampleCount),
             extent(extent),
-            subpass(subpass)
+            layers(layers)
         {}
 
         ~RenderPassEntry() {
