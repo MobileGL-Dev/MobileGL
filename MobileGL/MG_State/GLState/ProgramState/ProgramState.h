@@ -26,11 +26,16 @@ namespace MobileGL::MG_State::GLState {
         Uint CreateShader(ShaderStage stage);
         const SharedPtr<ShaderObject>& GetShaderObject(Uint shader);
         void MarkShaderObjectForDeletion(Uint shader);
+        // Frees a deletion-flagged shader's name once no program holds a GL-visible
+        // attachment to it (the deferred half of glDeleteShader-while-attached).
+        void ReleaseShaderNameIfOrphaned(Uint shader);
         Bool ValidateShaderObject(Uint shader) const;
 
         const SharedPtr<ProgramObject>& GetCurrentProgram() const { return m_currentProgram; }
 
     private:
+        Bool ShaderHasGLVisibleAttachment(const SharedPtr<ShaderObject>& shaderObject) const;
+
         template <typename T>
         static Bool CheckIndexAvail(const SizeT idx, const Vector<T>& vec) {
             return idx < vec.size();

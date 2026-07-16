@@ -339,6 +339,9 @@ namespace MobileGL::MG_Impl::GLImpl {
                 MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__, "Shader is not attached to program."));
             return;
         }
+        // A shader flagged with glDeleteShader lives on while attached; this detach may
+        // have been its last GL-visible attachment.
+        MG_State::pGLContext->ReleaseShaderNameIfOrphaned(shader);
     }
 
     void GetActiveAttrib_State(GLuint program, GLuint index, GLsizei bufSize, GLsizei* length, GLint* size,
@@ -1497,9 +1500,13 @@ namespace MobileGL::MG_Impl::GLImpl {
             MGLOG_D("%s: GL_UNIFORM_BLOCK_REFERENCED_BY_COMPUTE_SHADER = %d", __func__, *params);
             break;
         case GL_UNIFORM_BLOCK_ACTIVE_UNIFORM_INDICES: {
+            // Member entries of an arrayed block are recorded against the first instance;
+            // every instance of the array reports that shared member set (matches
+            // GL_UNIFORM_BLOCK_ACTIVE_UNIFORMS, which scans with the same owner index).
+            const Int ownerIndex = static_cast<Int>(programObject->GetUniformBlockMemberOwnerIndex(uniformBlockIndex));
             GLint uniformIndexCount = 0;
             for (Uint uniformIndex = 0; uniformIndex < programObject->GetUniformCount(); ++uniformIndex) {
-                if (programObject->GetActiveUniformBlockIndex(uniformIndex) != static_cast<Int>(uniformBlockIndex)) {
+                if (programObject->GetActiveUniformBlockIndex(uniformIndex) != ownerIndex) {
                     continue;
                 }
                 params[uniformIndexCount++] = static_cast<GLint>(uniformIndex);
