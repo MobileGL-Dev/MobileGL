@@ -257,6 +257,94 @@ TEST_F(TextureTest, BoundTexImage2DUnpacksPackedBgra8888ToRgba8WithPixelStoreSki
     EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
 }
 
+// GL CTS packed_pixels feeds every format/type/internalformat combination to TexImage and expects
+// GL_INVALID_OPERATION for the invalid ones; these used to slip through validation and SIGTRAP in
+// the shadow-storage upload path.
+TEST_F(TextureTest, TexImage2DRejectsMismatchedFormatCombinations) {
+    GLuint texture = 0;
+    MG_Impl::GLImpl::GenTextures(1, &texture);
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, texture);
+
+    // Depth-stencil internal format with a color format.
+    MG_Impl::GLImpl::TexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH24_STENCIL8, 2, 2, 0, GL_BGR, GL_UNSIGNED_BYTE, nullptr);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_INVALID_OPERATION);
+
+    // Color internal format with a depth format.
+    MG_Impl::GLImpl::TexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 2, 2, 0, GL_DEPTH_COMPONENT, GL_FLOAT, nullptr);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_INVALID_OPERATION);
+
+    // Stencil-only uploads do not exist in core 3.3.
+    MG_Impl::GLImpl::TexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH24_STENCIL8, 2, 2, 0, GL_STENCIL_INDEX, GL_UNSIGNED_BYTE,
+                                nullptr);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_INVALID_OPERATION);
+
+    // Packed depth-stencil type with a color format.
+    MG_Impl::GLImpl::TexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 2, 2, 0, GL_RGBA, GL_UNSIGNED_INT_24_8, nullptr);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_INVALID_OPERATION);
+
+    // DEPTH_STENCIL format requires one of the two packed depth-stencil types.
+    MG_Impl::GLImpl::TexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH24_STENCIL8, 2, 2, 0, GL_DEPTH_STENCIL, GL_UNSIGNED_BYTE,
+                                nullptr);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_INVALID_OPERATION);
+
+    // Integer-ness of format and internal format must match (both directions).
+    MG_Impl::GLImpl::TexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 2, 2, 0, GL_RGBA_INTEGER, GL_UNSIGNED_BYTE, nullptr);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_INVALID_OPERATION);
+    MG_Impl::GLImpl::TexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8UI, 2, 2, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_INVALID_OPERATION);
+
+    // Integer formats cannot be paired with floating-point types.
+    MG_Impl::GLImpl::TexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32I, 2, 2, 0, GL_RGBA_INTEGER, GL_FLOAT, nullptr);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_INVALID_OPERATION);
+
+    // UNSIGNED_INT_5_9_9_9_REV pairs with RGB only.
+    MG_Impl::GLImpl::TexImage2D(GL_TEXTURE_2D, 0, GL_RGB9_E5, 2, 2, 0, GL_RGBA, GL_UNSIGNED_INT_5_9_9_9_REV, nullptr);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_INVALID_OPERATION);
+}
+
+TEST_F(TextureTest, TexImage2DAcceptsSpecCompliantFormatCombinations) {
+    GLuint texture = 0;
+    MG_Impl::GLImpl::GenTextures(1, &texture);
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, texture);
+
+    MG_Impl::GLImpl::TexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH24_STENCIL8, 2, 2, 0, GL_DEPTH_STENCIL,
+                                GL_UNSIGNED_INT_24_8, nullptr);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    // Depth-component internal format accepts DEPTH_STENCIL input (stencil bits are dropped).
+    MG_Impl::GLImpl::TexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT16, 2, 2, 0, GL_DEPTH_STENCIL,
+                                GL_UNSIGNED_INT_24_8, nullptr);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    MG_Impl::GLImpl::TexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8UI, 2, 2, 0, GL_RGBA_INTEGER, GL_UNSIGNED_BYTE, nullptr);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    // Packed RGB types allow the integer variant of the RGB format.
+    MG_Impl::GLImpl::TexImage2D(GL_TEXTURE_2D, 0, GL_RGB8UI, 2, 2, 0, GL_RGB_INTEGER, GL_UNSIGNED_BYTE_3_3_2,
+                                nullptr);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    MG_Impl::GLImpl::TexImage2D(GL_TEXTURE_2D, 0, GL_RGB9_E5, 2, 2, 0, GL_RGB, GL_UNSIGNED_INT_5_9_9_9_REV, nullptr);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+}
+
+TEST_F(TextureTest, TexImage3DRejectsDepthFormatsForThreeDimensionalTarget) {
+    GLuint texture = 0;
+    MG_Impl::GLImpl::GenTextures(1, &texture);
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_3D, texture);
+    MG_Impl::GLImpl::TexImage3D(GL_TEXTURE_3D, 0, GL_DEPTH24_STENCIL8, 2, 2, 2, 0, GL_DEPTH_STENCIL,
+                                GL_UNSIGNED_INT_24_8, nullptr);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_INVALID_OPERATION);
+
+    // 2D-array targets remain valid for depth formats.
+    GLuint arrayTexture = 0;
+    MG_Impl::GLImpl::GenTextures(1, &arrayTexture);
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D_ARRAY, arrayTexture);
+    MG_Impl::GLImpl::TexImage3D(GL_TEXTURE_2D_ARRAY, 0, GL_DEPTH24_STENCIL8, 2, 2, 2, 0, GL_DEPTH_STENCIL,
+                                GL_UNSIGNED_INT_24_8, nullptr);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+}
+
 TEST_F(TextureTest, BoundTexSubImage2DUnpacksPackedBgra8888RevToRgba8) {
     GLuint texture = 0;
     MG_Impl::GLImpl::GenTextures(1, &texture);

@@ -3266,17 +3266,20 @@ namespace MobileGL::MG_Backend::DirectGLES {
         MGLOG_D("ReadPixels: x=%d y=%d w=%d h=%d format=%s type=%s pixels=%p", x, y, width, height,
                 MG_Util::ConvertGLEnumToString(format).c_str(), MG_Util::ConvertGLEnumToString(type).c_str(), pixels);
 
-        MOBILEGL_ASSERT(format == GL_RGBA || format == GL_RGBA_INTEGER || format == GL_RED ||
-                            format == GL_RED_INTEGER || format == GL_DEPTH_COMPONENT || format == GL_STENCIL_INDEX,
-                        "Only GL_RGBA, GL_RGBA_INTEGER, GL_RED, GL_RED_INTEGER, GL_DEPTH_COMPONENT and "
-                        "GL_STENCIL_INDEX are supported currently, "
-                        "while requested %s.",
-                        MG_Util::ConvertGLEnumToString(format).c_str());
-        MOBILEGL_ASSERT(type == GL_UNSIGNED_BYTE || type == GL_UNSIGNED_INT || type == GL_UNSIGNED_INT_2_10_10_10_REV ||
-                            type == GL_INT || type == GL_FLOAT,
-                        "Only GL_UNSIGNED_BYTE, GL_UNSIGNED_INT, GL_UNSIGNED_INT_2_10_10_10_REV, "
-                        "GL_INT and GL_FLOAT are supported currently, while requested %s.",
-                        MG_Util::ConvertGLEnumToString(type).c_str());
+        // Unimplemented readback formats degrade to a logged no-op instead of killing the process;
+        // spec-invalid combinations are already rejected with GL errors at the state layer.
+        if (format != GL_RGBA && format != GL_RGBA_INTEGER && format != GL_RED && format != GL_RED_INTEGER &&
+            format != GL_DEPTH_COMPONENT && format != GL_STENCIL_INDEX) {
+            MGLOG_E("ReadPixels: format %s is not implemented yet, skipping readback",
+                    MG_Util::ConvertGLEnumToString(format).c_str());
+            return;
+        }
+        if (type != GL_UNSIGNED_BYTE && type != GL_UNSIGNED_INT && type != GL_UNSIGNED_INT_2_10_10_10_REV &&
+            type != GL_INT && type != GL_FLOAT) {
+            MGLOG_E("ReadPixels: type %s is not implemented yet, skipping readback",
+                    MG_Util::ConvertGLEnumToString(type).c_str());
+            return;
+        }
 
         MGLOG_D("ReadPixels: SyncNeccessaryTextures()");
         TextureImpl::SyncNeccessaryTextures();
@@ -3362,16 +3365,20 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 MG_Util::ConvertGLEnumToString(target).c_str(), level, MG_Util::ConvertGLEnumToString(format).c_str(),
                 MG_Util::ConvertGLEnumToString(type).c_str(), pixels);
 
-        MOBILEGL_ASSERT(format == GL_RGBA || format == GL_RGBA_INTEGER || format == GL_BGRA,
-                        "Only GL_RGBA, GL_RGBA_INTEGER and GL_BGRA are supported currently, while requested %s.",
-                        MG_Util::ConvertGLEnumToString(format).c_str());
-        MOBILEGL_ASSERT(type == GL_UNSIGNED_BYTE || type == GL_UNSIGNED_INT || type == GL_UNSIGNED_INT_2_10_10_10_REV ||
-                            type == GL_INT || type == GL_FLOAT || type == GL_UNSIGNED_INT_8_8_8_8 ||
-                            type == GL_UNSIGNED_INT_8_8_8_8_REV || type == GL_HALF_FLOAT,
-                        "Only GL_UNSIGNED_BYTE, GL_UNSIGNED_INT, GL_UNSIGNED_INT_2_10_10_10_REV, "
-                        "GL_INT, GL_FLOAT, GL_HALF_FLOAT, GL_UNSIGNED_INT_8_8_8_8 and GL_UNSIGNED_INT_8_8_8_8_REV "
-                        "are supported currently, while requested %s.",
-                        MG_Util::ConvertGLEnumToString(type).c_str());
+        // Unimplemented readback formats degrade to a logged no-op instead of killing the process;
+        // spec-invalid combinations are already rejected with GL errors at the state layer.
+        if (format != GL_RGBA && format != GL_RGBA_INTEGER && format != GL_BGRA) {
+            MGLOG_E("GetTexImage: format %s is not implemented yet, skipping readback",
+                    MG_Util::ConvertGLEnumToString(format).c_str());
+            return;
+        }
+        if (type != GL_UNSIGNED_BYTE && type != GL_UNSIGNED_INT && type != GL_UNSIGNED_INT_2_10_10_10_REV &&
+            type != GL_INT && type != GL_FLOAT && type != GL_UNSIGNED_INT_8_8_8_8 &&
+            type != GL_UNSIGNED_INT_8_8_8_8_REV && type != GL_HALF_FLOAT) {
+            MGLOG_E("GetTexImage: type %s is not implemented yet, skipping readback",
+                    MG_Util::ConvertGLEnumToString(type).c_str());
+            return;
+        }
 
         GLenum esFormat = format, esType = type;
         if (esFormat == GL_BGRA) esFormat = GL_RGBA;

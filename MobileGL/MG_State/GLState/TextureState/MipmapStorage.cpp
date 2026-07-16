@@ -31,11 +31,12 @@ namespace MobileGL {
                 auto& targetData = m_data;
                 MOBILEGL_ASSERT(level < targetData.size(), "UpdateSubData: level out of range");
                 auto& levelData = targetData[level];
-                MOBILEGL_ASSERT(levelData.size() <= input.size, "UpdateSubData: input data larger than allocated");
+                MOBILEGL_ASSERT(input.size <= levelData.size(), "UpdateSubData: input data larger than allocated");
 
                 if (input.data && input.size > 0) {
                     const Uint8* src = static_cast<const Uint8*>(input.data);
-                    Memcpy(levelData.data(), src, input.size);
+                    // Clamp so a size mismatch can never write past the allocation.
+                    Memcpy(levelData.data(), src, std::min(input.size, levelData.size()));
                     m_isDirty[level] = true;
                 }
             }

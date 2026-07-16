@@ -1357,6 +1357,18 @@ namespace MobileGL::MG_Impl::GLImpl {
             return;
         if (!TextureImpl::ValidateTextureLevelWithUploadTarget(textureUploadTarget, level)) return;
 
+        // Depth and depth-stencil formats are not three-dimensional in core GL (2D-array targets are fine).
+        if ((textureUploadTarget == TextureUploadTarget::Texture3D ||
+             textureUploadTarget == TextureUploadTarget::ProxyTexture3D) &&
+            (textureInputFormat == TextureInputFormat::DepthComponent ||
+             textureInputFormat == TextureInputFormat::DepthStencil)) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidOperation,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
+                                             "Depth formats are invalid for 3D texture targets"));
+            return;
+        }
+
         // TODO: GL_INVALID_OPERATION is generated if a non-zero buffer object name is bound to the
         // GL_PIXEL_UNPACK_BUFFER target and the buffer object's data store is currently mapped.
         // GL_INVALID_OPERATION is generated if a non-zero buffer object name is bound to the GL_PIXEL_UNPACK_BUFFER
@@ -2648,17 +2660,25 @@ namespace MobileGL::MG_Impl::GLImpl {
             }
         }
 
-        // Special case for depth/stencil
-        if (textureInputFormat == TextureInputFormat::StencilIndex) {
-            if (textureObject->GetFormat() != TextureInternalFormat::DepthStencil &&
-                textureObject->GetFormat() != TextureInternalFormat::Depth24Stencil8 &&
-                textureObject->GetFormat() != TextureInternalFormat::Depth32FStencil8) {
-                MG_State::pGLContext->RecordError(
-                    ErrorCode::InvalidOperation,
-                    MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", "GetTexImage_State",
-                                                 "No stencil buffer for stencil index format"));
-                return false;
-            }
+        // Shared format/type/internal-format matrix (packed-type pairing, depth-vs-color mismatch,
+        // integer-ness). Also rejects STENCIL_INDEX readback, which needs GL_ARB_texture_stencil8
+        // (not advertised by MobileGL).
+        if (!TextureImpl::ValidateTextureInternalFormatCompatibleWithInput(
+                textureInputFormat, textureObject->GetFormat(), texturePixelDataType)) {
+            return false;
+        }
+
+        // GetTexImage-specific: DEPTH_STENCIL readback needs a depth-stencil texture (a depth-only
+        // texture has no stencil data to return).
+        if (textureInputFormat == TextureInputFormat::DepthStencil &&
+            textureObject->GetFormat() != TextureInternalFormat::DepthStencil &&
+            textureObject->GetFormat() != TextureInternalFormat::Depth24Stencil8 &&
+            textureObject->GetFormat() != TextureInternalFormat::Depth32FStencil8) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidOperation,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", "GetTexImage_State",
+                                             "DEPTH_STENCIL readback requires a depth-stencil texture"));
+            return false;
         }
 
         return true;
