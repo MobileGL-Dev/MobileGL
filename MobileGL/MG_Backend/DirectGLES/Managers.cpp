@@ -1715,6 +1715,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                     0, glFormat, glType, uploadData);
                                 break;
                             case TextureTarget::Texture3D:
+                            case TextureTarget::Texture2DArray:
                                 g_GLESFuncs.glTexImage3D(
                                     glUploadTarget, static_cast<GLint>(level), (GLint)glInternalFormat,
                                     static_cast<GLsizei>(levelTexelSize.x()), static_cast<GLsizei>(levelTexelSize.y()),
@@ -1790,6 +1791,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                                        static_cast<GLsizei>(baseSize.y()));
                             break;
                         case TextureTarget::Texture3D:
+                        case TextureTarget::Texture2DArray:
                             g_GLESFuncs.glTexStorage3D(target, static_cast<GLsizei>(mipmapCount), glInternalFormat,
                                                        static_cast<GLsizei>(baseSize.x()),
                                                        static_cast<GLsizei>(baseSize.y()),
@@ -1835,6 +1837,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                             static_cast<GLsizei>(levelTexelSize.y()), glFormat, glType, uploadData);
                                         break;
                                     case TextureTarget::Texture3D:
+                                    case TextureTarget::Texture2DArray:
                                         g_GLESFuncs.glTexSubImage3D(
                                             glUploadTarget, static_cast<GLint>(level), 0, 0, 0,
                                             static_cast<GLsizei>(levelTexelSize.x()),
@@ -1893,7 +1896,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                         static_cast<GLsizei>(levelTexelSize.y()), 0, glFormat, glType, uploadData);
                                     break;
                                 }
-                                case TextureTarget::Texture3D: {
+                                case TextureTarget::Texture3D:
+                                case TextureTarget::Texture2DArray: {
                                     g_GLESFuncs.glTexImage3D(
                                         glUploadTarget, static_cast<GLint>(level), (GLint)glInternalFormat,
                                         static_cast<GLsizei>(levelTexelSize.x()),
@@ -1987,6 +1991,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                                             uploadData);
                                 break;
                             case TextureTarget::Texture3D:
+                            case TextureTarget::Texture2DArray:
                                 g_GLESFuncs.glTexSubImage3D(glUploadTarget, static_cast<GLint>(level), 0, 0, 0,
                                                             static_cast<GLsizei>(texelSize.x()),
                                                             static_cast<GLsizei>(texelSize.y()),

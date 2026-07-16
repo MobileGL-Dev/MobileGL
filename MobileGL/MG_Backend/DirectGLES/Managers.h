@@ -255,7 +255,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
     namespace TextureImpl {
         inline Bool IsSupportedTextureTarget(TextureTarget target) {
             if (target == TextureTarget::Texture1D || target == TextureTarget::TextureRectangle ||
-                target == TextureTarget::Texture1DArray || target == TextureTarget::Texture2DArray)
+                target == TextureTarget::Texture1DArray)
                 return false;
             return true;
         }

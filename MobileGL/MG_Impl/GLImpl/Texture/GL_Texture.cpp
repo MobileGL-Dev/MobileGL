@@ -284,10 +284,16 @@ namespace MobileGL::MG_Impl::GLImpl {
                 MG_State::GLState::TextureState::MAX_TEXTURE_IMAGE_UNITS));
         }
 
-        Uint ComputeFullMipmapLevelCount(const IntVec3& baseTexelSize) {
+        // Array targets store their layer count in z; layers never participate in mip
+        // reduction (GL 3.3 §3.8.14), only true 3D textures halve their depth per level.
+        Bool DepthParticipatesInMipmapping(TextureTarget target) {
+            return target == TextureTarget::Texture3D;
+        }
+
+        Uint ComputeFullMipmapLevelCount(const IntVec3& baseTexelSize, Bool depthMips) {
             Int maxDimension = std::max<Int>(
                 baseTexelSize.x(),
-                std::max<Int>(baseTexelSize.y(), std::max<Int>(baseTexelSize.z(), 1)));
+                std::max<Int>(baseTexelSize.y(), depthMips ? std::max<Int>(baseTexelSize.z(), 1) : 1));
             Uint mipLevelCount = 1;
             while (maxDimension > 1) {
                 maxDimension = std::max<Int>(maxDimension / 2, 1);
@@ -296,11 +302,12 @@ namespace MobileGL::MG_Impl::GLImpl {
             return mipLevelCount;
         }
 
-        IntVec3 ComputeMipmapTexelSize(const IntVec3& baseTexelSize, Uint relativeLevel) {
+        IntVec3 ComputeMipmapTexelSize(const IntVec3& baseTexelSize, Uint relativeLevel, Bool depthMips) {
             return {
                 std::max<Int>(baseTexelSize.x() >> static_cast<Int>(relativeLevel), 1),
                 std::max<Int>(baseTexelSize.y() >> static_cast<Int>(relativeLevel), 1),
-                std::max<Int>(baseTexelSize.z() >> static_cast<Int>(relativeLevel), 1),
+                depthMips ? std::max<Int>(baseTexelSize.z() >> static_cast<Int>(relativeLevel), 1)
+                          : std::max<Int>(baseTexelSize.z(), 1),
             };
         }
 
@@ -323,9 +330,10 @@ namespace MobileGL::MG_Impl::GLImpl {
             }
 
             const SizeT bytesPerTexel = baseByteSize / baseTexelCount;
-            const Uint requiredLevelCount = ComputeFullMipmapLevelCount(baseTexelSize);
+            const Bool depthMips = DepthParticipatesInMipmapping(texture.GetTarget());
+            const Uint requiredLevelCount = ComputeFullMipmapLevelCount(baseTexelSize, depthMips);
             for (Uint level = 1; level < requiredLevelCount; ++level) {
-                const IntVec3 levelTexelSize = ComputeMipmapTexelSize(baseTexelSize, level);
+                const IntVec3 levelTexelSize = ComputeMipmapTexelSize(baseTexelSize, level, depthMips);
                 const SizeT levelByteSize = bytesPerTexel * static_cast<SizeT>(levelTexelSize.x()) *
                                             static_cast<SizeT>(levelTexelSize.y()) *
                                             static_cast<SizeT>(levelTexelSize.z());
@@ -2939,10 +2947,13 @@ namespace MobileGL::MG_Impl::GLImpl {
         auto* textureMipmapObject = static_cast<MG_State::GLState::TextureObjectMipmap*>(textureObject.get());
 
         textureObject->SetInternalFormat(textureInternalFormat);
+        // Array targets keep their layer count constant across levels; only true 3D
+        // textures halve depth per level (GL 3.3 §3.9 glTexStorage3D).
+        const Bool depthMips = DepthParticipatesInMipmapping(textureObject->GetTarget());
         for (GLsizei level = 0; level < levels; ++level) {
             const GLsizei levelWidth = std::max<GLsizei>(1, width >> level);
             const GLsizei levelHeight = std::max<GLsizei>(1, height >> level);
-            const GLsizei levelDepth = std::max<GLsizei>(1, depth >> level);
+            const GLsizei levelDepth = depthMips ? std::max<GLsizei>(1, depth >> level) : depth;
             const SizeT byteSize = ComputeTextureStorageByteSize(textureInternalFormat, levelWidth, levelHeight,
                                                                  levelDepth);
             textureMipmapObject->AllocateStorage(textureUploadTarget, level,
