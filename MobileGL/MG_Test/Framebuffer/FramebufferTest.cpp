@@ -221,6 +221,40 @@ TEST_F(FramebufferTest, ReadPixelsAllowsPersistentMappedPixelPackBuffer) {
     EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
 }
 
+TEST_F(FramebufferTest, ReadPixelsRejectsMismatchedPackedTypeFormatPairs) {
+    GLuint framebuffer = 0;
+    GLuint texture = 0;
+    MG_Impl::GLImpl::CreateFramebuffers(1, &framebuffer);
+    MG_Impl::GLImpl::CreateTextures(GL_TEXTURE_2D, 1, &texture);
+    MG_Impl::GLImpl::TextureStorage2D(texture, 1, GL_RGBA8, 4, 4);
+    MG_Impl::GLImpl::NamedFramebufferTexture(framebuffer, GL_COLOR_ATTACHMENT0, texture, 0);
+    MG_Impl::GLImpl::BindFramebuffer(GL_READ_FRAMEBUFFER, framebuffer);
+
+    MG_Backend::gBackendFunctionsTable.GL.ReadPixels = RecordReadPixels;
+    Uint8 pixelStorage[4 * 4 * 4] = {};
+
+    // Packed RGB type with a non-RGB format must never reach the backend (GL CTS packed_pixels
+    // reads GL_RED with GL_UNSIGNED_SHORT_5_6_5 and expects an error).
+    MG_Impl::GLImpl::ReadPixels(0, 0, 4, 4, GL_RED, GL_UNSIGNED_SHORT_5_6_5, pixelStorage);
+    EXPECT_EQ(g_readPixelsCallCount, 0);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_INVALID_OPERATION);
+
+    // Packed RGBA type with a non-RGBA/BGRA format is rejected as well.
+    MG_Impl::GLImpl::ReadPixels(0, 0, 4, 4, GL_RGB, GL_UNSIGNED_INT_8_8_8_8, pixelStorage);
+    EXPECT_EQ(g_readPixelsCallCount, 0);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_INVALID_OPERATION);
+
+    // Packed depth-stencil type requires the DEPTH_STENCIL format.
+    MG_Impl::GLImpl::ReadPixels(0, 0, 4, 4, GL_RGBA, GL_UNSIGNED_INT_24_8, pixelStorage);
+    EXPECT_EQ(g_readPixelsCallCount, 0);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_INVALID_OPERATION);
+
+    // A plain RGBA/UNSIGNED_BYTE readback keeps working.
+    MG_Impl::GLImpl::ReadPixels(0, 0, 4, 4, GL_RGBA, GL_UNSIGNED_BYTE, pixelStorage);
+    EXPECT_EQ(g_readPixelsCallCount, 1);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+}
+
 TEST_F(FramebufferTest, NamedRenderbufferStorageAndFramebufferAttachDoNotChangeBindings) {
     GLuint framebuffer = 0;
     GLuint renderbuffer = 0;
