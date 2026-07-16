@@ -1424,6 +1424,19 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             return true;
         }
 
+        // Combined depth-stencil images need per-aspect de-interleaved copies (VkBufferImageCopy
+        // aspectMask must have exactly one bit set). Until that is implemented, skip the upload
+        // instead of recording an invalid command buffer that kills the process.
+        const VkImageAspectFlags uploadAspectMask = GetAspectMaskForFormat(outResource.format);
+        if ((uploadAspectMask & VK_IMAGE_ASPECT_DEPTH_BIT) && (uploadAspectMask & VK_IMAGE_ASPECT_STENCIL_BIT)) {
+            MGLOG_E("UploadDirtyMipLevels: skipping unimplemented depth-stencil data upload for textureId=%d",
+                    mipmapTexture.GetExternalIndex());
+            for (const auto& item : uploadItems) {
+                mipmapTexture.MarkStorageDirty(item.target, item.level, false);
+            }
+            return true;
+        }
+
         VkBuffer stagingBuffer = VK_NULL_HANDLE;
         VmaAllocation stagingAllocation = nullptr;
 
