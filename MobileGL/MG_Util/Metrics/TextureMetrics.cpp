@@ -87,6 +87,9 @@ namespace MobileGL {
             case TextureInternalFormat::RG32F:
             case TextureInternalFormat::RG32I:
             case TextureInternalFormat::RG32UI:
+            // Matches the FLOAT_32_UNSIGNED_INT_24_8_REV client layout the shadow storage keeps:
+            // a float32 depth word followed by a word with stencil in bits 0-7.
+            case TextureInternalFormat::Depth32FStencil8:
                 return 8;
 
             case TextureInternalFormat::RGB32F:
@@ -97,7 +100,6 @@ namespace MobileGL {
             case TextureInternalFormat::RGBA32F:
             case TextureInternalFormat::RGBA32I:
             case TextureInternalFormat::RGBA32UI:
-            case TextureInternalFormat::Depth32FStencil8:
                 return 16;
 
             case TextureInternalFormat::R11FG11FB10F:
@@ -243,8 +245,11 @@ namespace MobileGL {
             case TexturePixelDataType::UnsignedInt101111Rev:
             case TexturePixelDataType::UnsignedInt5999Rev:
             case TexturePixelDataType::UnsignedInt248:
-            case TexturePixelDataType::Float32UnsignedInt248Rev:
                 return 4;
+            // FLOAT_32_UNSIGNED_INT_24_8_REV transfers two 32-bit words per texel:
+            // a float32 depth word followed by a word with stencil in bits 0-7.
+            case TexturePixelDataType::Float32UnsignedInt248Rev:
+                return 8;
             default:
                 return 0;
             }
