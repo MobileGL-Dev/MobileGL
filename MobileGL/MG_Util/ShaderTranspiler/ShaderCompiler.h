@@ -27,6 +27,12 @@ namespace MobileGL {
                 // Only for backends without native draw-parameter support (DirectGLES).
                 static bool LowerDrawParametersForEssl(const Vector<Uint32>& inputBinary,
                                                        Vector<uint32_t>& outputBinary);
+                // Drops RelaxedPrecision member decorations from uniform-block structs so
+                // SPIRV-Cross prints the same (highp) member precision in every stage; ES
+                // drivers reject cross-stage uniform blocks whose member precisions differ.
+                // Only for the DirectGLES transpile path.
+                static bool StripUboMemberRelaxedPrecisionForEssl(const Vector<Uint32>& inputBinary,
+                                                                  Vector<uint32_t>& outputBinary);
                 // Rebases loads of the InstanceIndex builtin to (InstanceIndex - BaseInstance) so
                 // shaders see GL's zero-based gl_InstanceID. Vertex shaders only; DirectVulkan
                 // backend only (glslang's relaxed mode aliases gl_InstanceID to gl_InstanceIndex,
