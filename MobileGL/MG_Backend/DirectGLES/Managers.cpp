@@ -939,6 +939,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     void* ptr = g_GLESFuncs.glMapBufferRange(TempBufferTarget, 0, static_cast<GLsizeiptr>(newSize),
                                                              GL_MAP_WRITE_BIT | kMapPersistentBit | kMapCoherentBit);
                     if (!ptr) {
+                        // The dying id is what the array-buffer cache has recorded as
+                        // bound; a later buffer recycling the name would false-skip.
+                        InvalidateArrayBufferBindingCache();
                         g_GLESFuncs.glDeleteBuffers(1, &id);
                         id = 0;
                     } else {
@@ -954,20 +957,15 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 }
 
                 const GLint capsAlignment = g_GLESCapabilities.UniformBufferOffsetAlignment;
-                SizeT alignment = capsAlignment > 0 ? static_cast<SizeT>(capsAlignment) : 256;
-                // The cursor math masks with (alignment - 1); spec doesn't promise a
-                // power of two, so round up to one.
-                SizeT pow2 = 1;
-                while (pow2 < alignment) pow2 <<= 1;
                 g_uboRing.id = id;
                 g_uboRing.size = newSize;
                 g_uboRing.head = 0;
                 g_uboRing.tail = 0;
                 g_uboRing.generation = nextGeneration;
-                g_uboRing.alignment = pow2;
+                g_uboRing.alignment = capsAlignment > 0 ? static_cast<SizeT>(capsAlignment) : 256;
                 g_uboRingFrameMarks.clear();
                 MGLOG_I("Global-UBO ring: %zu MiB persistent store ready (id %u, gen %u, align %zu).",
-                        newSize / (1024u * 1024u), id, nextGeneration, pow2);
+                        newSize / (1024u * 1024u), id, nextGeneration, g_uboRing.alignment);
                 return true;
             }
         } // namespace
@@ -989,7 +987,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
         Bool UboRingAllocate(SizeT size, SizeT& outOffset) {
             if (size == 0 || !UboRingAvailable()) return false;
-            const SizeT alignedSize = (size + g_uboRing.alignment - 1) & ~(g_uboRing.alignment - 1);
+            // Division-based rounding: the spec doesn't promise a power-of-two
+            // alignment. Slot offsets stay multiples of the alignment because every
+            // slot size is, and wrap padding restarts at ring offset 0.
+            const SizeT alignedSize =
+                (size + g_uboRing.alignment - 1) / g_uboRing.alignment * g_uboRing.alignment;
             if (g_uboRing.id == 0 && !CreateUboRingStorage(alignedSize)) {
                 return false;
             }
@@ -1026,6 +1028,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     if (g_GLESFuncs.glFinish) g_GLESFuncs.glFinish();
                     g_uboRing.tail = g_uboRing.head;
                     g_uboRingFrameMarks.clear();
+                    // Same-frame slots written before the drain may now be recycled by
+                    // the very next allocations; a generation bump keeps later draws
+                    // from rebinding those cached offsets.
+                    ++g_uboRing.generation;
                     offset = static_cast<SizeT>(g_uboRing.head % g_uboRing.size);
                     if (offset + alignedSize > g_uboRing.size) {
                         g_uboRing.head += g_uboRing.size - offset;
