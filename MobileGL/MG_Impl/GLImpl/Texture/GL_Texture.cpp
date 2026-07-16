@@ -887,11 +887,11 @@ namespace MobileGL::MG_Impl::GLImpl {
         auto& activeUnit = MG_State::pGLContext->GetTextureUnitObject(MG_State::pGLContext->GetActiveTextureUnit());
         auto& bindingSlot = activeUnit.GetBindingSlot(textureTarget);
         auto& textureObject = bindingSlot.GetBoundObject();
+        if (!TextureImpl::ValidateTextureObject(textureObject)) return;
         TextureInternalFormat textureInternalFormat = textureObject->GetFormat();
         MGLOG_D("%s: working on texture %d", __func__, textureObject->GetExternalIndex());
 
         // ===================== Error Checking ==============================
-        if (!TextureImpl::ValidateTextureObject(textureObject)) return;
         if (!TextureImpl::ValidateTextureSubImageOffsets(textureObject, xoffset, width, yoffset, height)) return;
         if (!TextureImpl::ValidateTextureInternalFormatCompatibleWithInput(textureInputFormat, textureInternalFormat,
                                                                            texturePixelDataType))
@@ -2329,7 +2329,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         for (SizeT i = 0; i < static_cast<SizeT>(n); ++i) {
             Uint textureName = textures[i];
             if (textureName == 0) continue;
-            if (!TextureImpl::ValidateTextureName(textureName, true)) continue;
+            if (!MG_State::pGLContext->ValidateTextureName(textureName)) continue;
             MG_State::pGLContext->MarkTextureObjectForDeletion(textureName);
         }
     }
@@ -2552,14 +2552,15 @@ namespace MobileGL::MG_Impl::GLImpl {
             return;
         }
 
+        // GL 3.3 core 3.8.1: a name that GenTextures never returned - or that has since been deleted -
+        // is not a legal bind target in the core profile (no application-generated names), and the error
+        // is INVALID_OPERATION, not INVALID_VALUE.
         if (!MG_State::pGLContext->ValidateTextureName(texture)) {
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidOperation,
                 MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", "BindTexture_State", "Invalid texture name"));
             return;
         }
-
-        if (!TextureImpl::ValidateTextureName(texture, true)) return;
 
         // ======================= Processing ================================
         Bool doesTextureExist = MG_State::pGLContext->ValidateTextureObject(texture);
