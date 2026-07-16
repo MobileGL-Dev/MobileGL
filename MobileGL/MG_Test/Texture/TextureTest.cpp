@@ -774,6 +774,167 @@ TEST_F(TextureTest, TextureStorage3DAndSubImageModifyNamedObjectOnly) {
     EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
 }
 
+namespace {
+    const Uint8* GetBoundTexture3DLevelBytes(GLuint texture, Uint level = 0) {
+        const auto textureObject = MG_State::pGLContext->GetTextureObject(texture);
+        auto* mipmapObject = static_cast<MG_State::GLState::TextureObjectMipmap*>(textureObject.get());
+        return static_cast<const Uint8*>(mipmapObject->MapMipmapData(TextureUploadTarget::Texture3D, level));
+    }
+} // namespace
+
+TEST_F(TextureTest, BoundTexImage3DUnsizedRgbaInfersRgba8AndUnpacksBgra8888Rev) {
+    GLuint texture = 0;
+    MG_Impl::GLImpl::GenTextures(1, &texture);
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_3D, texture);
+
+    const Uint8 pixels[] = {
+        10, 20, 30, 40,
+        50, 60, 70, 80,
+        90, 100, 110, 120,
+        130, 140, 150, 160,
+    };
+    MG_Impl::GLImpl::TexImage3D(GL_TEXTURE_3D, 0, GL_RGBA, 2, 1, 2, 0, GL_BGRA, GL_UNSIGNED_INT_8_8_8_8_REV, pixels);
+
+    const auto textureObject = MG_State::pGLContext->GetTextureObject(texture);
+    EXPECT_EQ(textureObject->GetFormat(), TextureInternalFormat::RGBA8);
+
+    const auto* stored = GetBoundTexture3DLevelBytes(texture);
+    ASSERT_NE(stored, nullptr);
+    const Uint8 expected[] = {
+        30, 20, 10, 40,
+        70, 60, 50, 80,
+        110, 100, 90, 120,
+        150, 140, 130, 160,
+    };
+    for (SizeT i = 0; i < sizeof(expected); ++i) {
+        EXPECT_EQ(stored[i], expected[i]) << "byte " << i;
+    }
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+}
+
+TEST_F(TextureTest, BoundTexImage3DHonorsImageHeightAndSkipImages) {
+    GLuint texture = 0;
+    MG_Impl::GLImpl::GenTextures(1, &texture);
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_3D, texture);
+
+    // Source cuboid is 2x3 per image (IMAGE_HEIGHT = 3) with one leading image skipped;
+    // the upload reads a 2x2x2 sub-cuboid.
+    const Uint8 pixels[] = {
+        // image 0 (skipped)
+        0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA,
+        0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA,
+        0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA,
+        // image 1: rows 0-1 are slice 0, row 2 is padding
+        1, 2, 3, 4, 5, 6, 7, 8,
+        9, 10, 11, 12, 13, 14, 15, 16,
+        0xBB, 0xBB, 0xBB, 0xBB, 0xBB, 0xBB, 0xBB, 0xBB,
+        // image 2: rows 0-1 are slice 1, row 2 is padding
+        17, 18, 19, 20, 21, 22, 23, 24,
+        25, 26, 27, 28, 29, 30, 31, 32,
+        0xBB, 0xBB, 0xBB, 0xBB, 0xBB, 0xBB, 0xBB, 0xBB,
+    };
+
+    MG_Impl::GLImpl::PixelStorei(GL_UNPACK_IMAGE_HEIGHT, 3);
+    MG_Impl::GLImpl::PixelStorei(GL_UNPACK_SKIP_IMAGES, 1);
+    MG_Impl::GLImpl::TexImage3D(GL_TEXTURE_3D, 0, GL_RGBA8, 2, 2, 2, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+    MG_Impl::GLImpl::PixelStorei(GL_UNPACK_IMAGE_HEIGHT, 0);
+    MG_Impl::GLImpl::PixelStorei(GL_UNPACK_SKIP_IMAGES, 0);
+
+    const auto* stored = GetBoundTexture3DLevelBytes(texture);
+    ASSERT_NE(stored, nullptr);
+    const Uint8 expected[] = {
+        1, 2, 3, 4, 5, 6, 7, 8,
+        9, 10, 11, 12, 13, 14, 15, 16,
+        17, 18, 19, 20, 21, 22, 23, 24,
+        25, 26, 27, 28, 29, 30, 31, 32,
+    };
+    for (SizeT i = 0; i < sizeof(expected); ++i) {
+        EXPECT_EQ(stored[i], expected[i]) << "byte " << i;
+    }
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+}
+
+TEST_F(TextureTest, BoundTexImage3DConvertsRedToRgba8WithImageHeightAndSkips) {
+    GLuint texture = 0;
+    MG_Impl::GLImpl::GenTextures(1, &texture);
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_3D, texture);
+
+    // Source cuboid: ROW_LENGTH = 3 (1-byte texels, alignment 1), IMAGE_HEIGHT = 2,
+    // skip 1 image, 0 rows, 1 pixel; upload a 2x1x2 sub-cuboid of GL_RED texels.
+    const Uint8 pixels[] = {
+        // image 0 (skipped)
+        90, 91, 92,
+        93, 94, 95,
+        // image 1: row 0 holds slice 0 at x offset 1, row 1 is padding
+        80, 11, 12,
+        81, 82, 83,
+        // image 2: row 0 holds slice 1 at x offset 1, row 1 is padding
+        84, 21, 22,
+        85, 86, 87,
+    };
+
+    MG_Impl::GLImpl::PixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    MG_Impl::GLImpl::PixelStorei(GL_UNPACK_ROW_LENGTH, 3);
+    MG_Impl::GLImpl::PixelStorei(GL_UNPACK_SKIP_PIXELS, 1);
+    MG_Impl::GLImpl::PixelStorei(GL_UNPACK_IMAGE_HEIGHT, 2);
+    MG_Impl::GLImpl::PixelStorei(GL_UNPACK_SKIP_IMAGES, 1);
+    MG_Impl::GLImpl::TexImage3D(GL_TEXTURE_3D, 0, GL_RGBA8, 2, 1, 2, 0, GL_RED, GL_UNSIGNED_BYTE, pixels);
+    MG_Impl::GLImpl::PixelStorei(GL_UNPACK_ALIGNMENT, 4);
+    MG_Impl::GLImpl::PixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+    MG_Impl::GLImpl::PixelStorei(GL_UNPACK_SKIP_PIXELS, 0);
+    MG_Impl::GLImpl::PixelStorei(GL_UNPACK_IMAGE_HEIGHT, 0);
+    MG_Impl::GLImpl::PixelStorei(GL_UNPACK_SKIP_IMAGES, 0);
+
+    const auto* stored = GetBoundTexture3DLevelBytes(texture);
+    ASSERT_NE(stored, nullptr);
+    const Uint8 expected[] = {
+        11, 0, 0, 255, 12, 0, 0, 255,
+        21, 0, 0, 255, 22, 0, 0, 255,
+    };
+    for (SizeT i = 0; i < sizeof(expected); ++i) {
+        EXPECT_EQ(stored[i], expected[i]) << "byte " << i;
+    }
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+}
+
+TEST_F(TextureTest, BoundTexSubImage3DUnpacksPackedBgra8888RevIntoCorrectSlice) {
+    GLuint texture = 0;
+    MG_Impl::GLImpl::GenTextures(1, &texture);
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_3D, texture);
+
+    const Uint8 zeros[2 * 2 * 2 * 4] = {};
+    MG_Impl::GLImpl::TexImage3D(GL_TEXTURE_3D, 0, GL_RGBA8, 2, 2, 2, 0, GL_RGBA, GL_UNSIGNED_BYTE, zeros);
+
+    const Uint8 pixels[] = {10, 20, 30, 40};
+    MG_Impl::GLImpl::TexSubImage3D(GL_TEXTURE_3D, 0, 1, 1, 1, 1, 1, 1, GL_BGRA, GL_UNSIGNED_INT_8_8_8_8_REV, pixels);
+
+    const auto* stored = GetBoundTexture3DLevelBytes(texture);
+    ASSERT_NE(stored, nullptr);
+    Uint8 expected[2 * 2 * 2 * 4] = {};
+    expected[28] = 30;
+    expected[29] = 20;
+    expected[30] = 10;
+    expected[31] = 40;
+    for (SizeT i = 0; i < sizeof(expected); ++i) {
+        EXPECT_EQ(stored[i], expected[i]) << "byte " << i;
+    }
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+}
+
+TEST_F(TextureTest, BoundTexSubImage3DRejectsOutOfRangeLevel) {
+    GLuint texture = 0;
+    MG_Impl::GLImpl::GenTextures(1, &texture);
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_3D, texture);
+
+    const Uint8 zeros[2 * 2 * 2 * 4] = {};
+    MG_Impl::GLImpl::TexImage3D(GL_TEXTURE_3D, 0, GL_RGBA8, 2, 2, 2, 0, GL_RGBA, GL_UNSIGNED_BYTE, zeros);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    const Uint8 pixels[] = {1, 2, 3, 4};
+    MG_Impl::GLImpl::TexSubImage3D(GL_TEXTURE_3D, 3, 0, 0, 0, 1, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_INVALID_VALUE);
+}
+
 TEST_F(TextureTest, NamedTextureVectorParametersAndGettersWorkWithoutBinding) {
     GLuint texture = 0;
     MG_Impl::GLImpl::CreateTextures(GL_TEXTURE_2D, 1, &texture);

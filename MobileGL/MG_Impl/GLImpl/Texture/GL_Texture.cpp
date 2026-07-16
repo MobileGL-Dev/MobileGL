@@ -779,6 +779,12 @@ namespace MobileGL::MG_Impl::GLImpl {
         MOBILEGL_ASSERT(nullptr != static_cast<MG_State::GLState::TextureObjectMipmap*>(textureObject.get()),
                         "Texture object here should always be an object with mipmap");
         auto textureMipmapObject = static_cast<MG_State::GLState::TextureObjectMipmap*>(textureObject.get());
+        if (static_cast<Uint>(level) >= textureMipmapObject->GetMipmapLevelCount()) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidValue,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__, "Texture level is out of range."));
+            return;
+        }
 
         const void* originalPixels = pixels;
         const auto& pixelUnpackBufferObject =
@@ -810,6 +816,14 @@ namespace MobileGL::MG_Impl::GLImpl {
         const SizeT srcSliceSize = static_cast<SizeT>(height) * srcRowSize;
         const SizeT destRowSize = static_cast<SizeT>(texelSize.x()) * internalBpp;
         const SizeT destSliceSize = static_cast<SizeT>(texelSize.y()) * destRowSize;
+
+        if (xoffset + width > static_cast<GLsizei>(texelSize.x()) ||
+            yoffset + height > static_cast<GLsizei>(texelSize.y()) ||
+            zoffset + depth > static_cast<GLsizei>(texelSize.z())) {
+            MGLOG_E("TexSubImage3D_State: Specified region exceeds texture level dimensions");
+            free(processedPixels);
+            return;
+        }
 
         const auto* srcData = static_cast<const Uint8*>(processedPixels);
         Uint8* destData = static_cast<Uint8*>(textureMipmapObject->MapMipmapData(textureUploadTarget, level));
@@ -1378,6 +1392,8 @@ namespace MobileGL::MG_Impl::GLImpl {
         // target and data is not evenly divisible into the number of bytes needed to store in memory a datum
         // indicated by type.
         // ======================= Processing ================================
+        textureInternalFormat =
+            MG_Util::ConvertInternalFormatToSized(textureInternalFormat, textureInputFormat, texturePixelDataType);
         auto& activeUnit = MG_State::pGLContext->GetTextureUnitObject(MG_State::pGLContext->GetActiveTextureUnit());
         auto& bindingSlot = activeUnit.GetBindingSlot(textureTarget);
         Bool isProxy = TextureImpl::IsProxyTextureTarget(textureUploadTarget);
@@ -1419,7 +1435,11 @@ namespace MobileGL::MG_Impl::GLImpl {
         auto textureMipmapObject = static_cast<MG_State::GLState::TextureObjectMipmap*>(textureObject.get());
 
         // Allocate in TextureObject
-        textureMipmapObject->AllocateStorage(textureUploadTarget, level, {{width, height, depth}, internalBytes});
+        if (isProxy) {
+            MGLOG_D("%s: isProxy = true, not allocating", __func__);
+        } else {
+            textureMipmapObject->AllocateStorage(textureUploadTarget, level, {{width, height, depth}, internalBytes});
+        }
 
         if (!originalPixels) {
             MGLOG_D("%s: No input pixel and no PBO bound, no pixel transfer", __func__);
@@ -1446,6 +1466,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         textureMipmapObject->MarkStorageDirty(textureUploadTarget, level, true);
 
         free(processedPixels);
+        MaybeAutoGenerateMipmap(target, textureObject, isProxy, level);
     }
 
     void TexImage2D_State(GLenum target, GLint level, GLint internalformat, GLsizei width, GLsizei height, GLint border,
