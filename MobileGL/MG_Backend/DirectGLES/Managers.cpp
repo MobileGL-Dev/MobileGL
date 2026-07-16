@@ -1405,7 +1405,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 m_prevSkipPixels = s_skipPixels;
                 m_prevImageHeight = s_imageHeight;
                 m_prevSkipImages = s_skipImages;
-                Apply(4, 0, 0, 0, 0, 0);
+                // Shadow mip data is tightly packed (ProcessTexturePixelsDataUnpack emits
+                // width * bpp rows with no padding), so uploads must use UNPACK_ALIGNMENT = 1.
+                // Alignment 4 made the driver read e.g. 7-byte R8 rows at an 8-byte stride,
+                // shifting every row of a non-multiple-of-4 upload by one pixel.
+                Apply(1, 0, 0, 0, 0, 0);
             }
 
             ~ScopedDefaultUnpackState() {
