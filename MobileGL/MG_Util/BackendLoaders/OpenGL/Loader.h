@@ -1031,6 +1031,9 @@ namespace MobileGL {
             String GLESShadingLanguageVersionString;
             Bool SupportsPersistentMapping = false;
             Bool SupportsNorm16Texture = false;
+            // GL_EXT_texture_filter_anisotropic is present, so sampler/texture
+            // anisotropy may be forwarded without raising GL_INVALID_ENUM in GLES.
+            Bool SupportsTextureFilterAnisotropy = false;
             Bool SupportsBaseInstance = false;
             // GL_EXT_disjoint_timer_query is present in the extension string.
             Bool SupportsDisjointTimerQuery = false;

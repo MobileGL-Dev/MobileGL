@@ -99,6 +99,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         XXHASH_VERIFY(XXH64_update(m_hashState, &maxLod, sizeof(maxLod)));
         const auto lodBias = sampler.GetLodBias();
         XXHASH_VERIFY(XXH64_update(m_hashState, &lodBias, sizeof(lodBias)));
+        // Anisotropy is currently an accepted frontend-only state on DirectVulkan.
+        // Keep it out of the key so changing this no-op does not manufacture duplicate
+        // VkSamplers while sampler versioning still exposes the new frontend value.
         const auto compareMode = sampler.GetCompareMode();
         XXHASH_VERIFY(XXH64_update(m_hashState, &compareMode, sizeof(compareMode)));
         const auto compareFunc = ResolveCompareFunc(sampler, texture);
@@ -125,6 +128,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         samplerInfo.addressModeV = ToVkAddressMode(sampler.GetWrapT());
         samplerInfo.addressModeW = ToVkAddressMode(sampler.GetWrapR());
         samplerInfo.mipLodBias = sampler.GetLodBias();
+        // DirectVulkan does not yet plumb samplerAnisotropy feature/limit discovery;
+        // preserve the accepted frontend state without requesting an unsupported feature.
         samplerInfo.anisotropyEnable = VK_FALSE;
         samplerInfo.maxAnisotropy = 1.0f;
         samplerInfo.compareEnable = sampler.GetCompareMode() == SamplerCompareMode::CompareToTexture ? VK_TRUE : VK_FALSE;

@@ -65,6 +65,7 @@ namespace MobileGL {
         Float minLod = -1000.0f;
         Float maxLod = 1000.0f;
         Float lodBias = 0.0f;
+        Float maxAnisotropy = 1.0f;
         SamplerCompareFunc compareFunc = SamplerCompareFunc::Always;
         SamplerCompareMode compareMode = SamplerCompareMode::None;
     };
@@ -83,6 +84,7 @@ namespace MobileGL {
                 void SetMipmapMode(SamplerMipmapMode mode);
                 void SetLodRange(Float minLod, Float maxLod);
                 void SetLodBias(Float bias);
+                void SetMaxAnisotropy(Float maxAnisotropy);
                 void SetSamplerCompareFunc(SamplerCompareFunc func);
                 void SetCompareMode(SamplerCompareMode mode);
 
@@ -95,6 +97,7 @@ namespace MobileGL {
                 Float GetMinLod() const;
                 Float GetMaxLod() const;
                 Float GetLodBias() const;
+                Float GetMaxAnisotropy() const;
                 SamplerCompareMode GetCompareMode() const;
                 SamplerCompareFunc GetSamplerCompareFunc() const;
                 Uint GetExternalIndex() const;
