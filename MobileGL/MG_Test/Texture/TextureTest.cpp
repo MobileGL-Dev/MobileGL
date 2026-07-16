@@ -8,6 +8,8 @@
 
 #include <gtest/gtest.h>
 
+#include <limits>
+
 #include "Includes.h"
 #include "Init.h"
 #include <MG_Backend/BackendObjects.h>
@@ -129,6 +131,123 @@ TEST_F(TextureTest, CreateTexturesCreatesObjectsWithoutBinding) {
     auto& unit = MG_State::pGLContext->GetTextureUnitObject(MG_State::pGLContext->GetActiveTextureUnit());
     EXPECT_EQ(unit.GetBindingSlot(TextureTarget::Texture2D).GetBoundObject(), nullptr);
     EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+}
+
+TEST_F(TextureTest, DeleteGeneratedReservationThenBindCreatesObjectForSubImageUpload) {
+    GLuint texture = 0;
+    MG_Impl::GLImpl::GenTextures(1, &texture);
+    ASSERT_NE(texture, 0u);
+    ASSERT_TRUE(MG_State::pGLContext->ValidateTextureName(texture));
+    ASSERT_FALSE(MG_State::pGLContext->ValidateTextureObject(texture));
+
+    MG_Impl::GLImpl::DeleteTextures(1, &texture);
+    EXPECT_TRUE(MG_State::pGLContext->ValidateTextureName(texture));
+    EXPECT_FALSE(MG_State::pGLContext->ValidateTextureObject(texture));
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, texture);
+
+    const auto textureObject = MG_State::pGLContext->GetTextureObject(texture);
+    ASSERT_NE(textureObject, nullptr);
+    EXPECT_TRUE(MG_State::pGLContext->ValidateTextureName(texture));
+    EXPECT_TRUE(MG_State::pGLContext->ValidateTextureObject(texture));
+    EXPECT_EQ(MG_Impl::GLImpl::IsTexture(texture), GL_TRUE);
+
+    MG_Impl::GLImpl::TexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 2, 1, 0, GL_BGRA,
+                                GL_UNSIGNED_INT_8_8_8_8_REV, nullptr);
+    const Uint8 pixels[] = {
+        10, 20, 30, 40,
+        50, 60, 70, 80,
+    };
+    MG_Impl::GLImpl::TexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 2, 1, GL_BGRA,
+                                   GL_UNSIGNED_INT_8_8_8_8_REV, pixels);
+
+    const auto* stored = GetBoundTexture2DLevelBytes(texture);
+    ASSERT_NE(stored, nullptr);
+    const Uint8 expected[] = {
+        30, 20, 10, 40,
+        70, 60, 50, 80,
+    };
+    EXPECT_EQ(std::memcmp(stored, expected, sizeof(expected)), 0);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+}
+
+TEST_F(TextureTest, DeleteInstantiatedTextureInvalidatesNameUntilRegenerated) {
+    GLuint textures[2] = {};
+    MG_Impl::GLImpl::GenTextures(2, textures);
+    ASSERT_NE(textures[0], 0u);
+    ASSERT_NE(textures[1], 0u);
+
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, textures[0]);
+    ASSERT_TRUE(MG_State::pGLContext->ValidateTextureObject(textures[0]));
+    MG_Impl::GLImpl::DeleteTextures(1, &textures[0]);
+
+    EXPECT_FALSE(MG_State::pGLContext->ValidateTextureName(textures[0]));
+    EXPECT_FALSE(MG_State::pGLContext->ValidateTextureObject(textures[0]));
+
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, textures[1]);
+    const auto fallbackObject = MG_State::pGLContext->GetTextureObject(textures[1]);
+    ASSERT_NE(fallbackObject, nullptr);
+    ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, textures[0]);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_INVALID_VALUE);
+    EXPECT_EQ(MG_State::pGLContext->GetTextureUnitObject(0)
+                  .GetBindingSlot(TextureTarget::Texture2D)
+                  .GetBoundObject(),
+              fallbackObject);
+}
+
+TEST_F(TextureTest, DeleteUnknownNamesIsSilentButBindUnknownNameIsInvalid) {
+    GLuint validTexture = 0;
+    MG_Impl::GLImpl::GenTextures(1, &validTexture);
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, validTexture);
+    const auto boundObject = MG_State::pGLContext->GetTextureObject(validTexture);
+    ASSERT_NE(boundObject, nullptr);
+
+    constexpr GLuint unknownNames[] = {0, std::numeric_limits<GLuint>::max()};
+    MG_Impl::GLImpl::DeleteTextures(2, unknownNames);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, unknownNames[1]);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_INVALID_VALUE);
+    EXPECT_EQ(MG_State::pGLContext->GetTextureUnitObject(0)
+                  .GetBindingSlot(TextureTarget::Texture2D)
+                  .GetBoundObject(),
+              boundObject);
+    EXPECT_FALSE(MG_State::pGLContext->ValidateTextureName(unknownNames[1]));
+    EXPECT_FALSE(MG_State::pGLContext->ValidateTextureObject(unknownNames[1]));
+}
+
+TEST_F(TextureTest, BindTextureUnitEnumAsNameIsSilentNoOp) {
+    GLuint validTexture = 0;
+    MG_Impl::GLImpl::GenTextures(1, &validTexture);
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, validTexture);
+    const auto boundObject = MG_State::pGLContext->GetTextureObject(validTexture);
+    ASSERT_NE(boundObject, nullptr);
+    ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    constexpr GLuint textureUnitEnum = GL_TEXTURE7;
+    ASSERT_FALSE(MG_State::pGLContext->ValidateTextureName(textureUnitEnum));
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, textureUnitEnum);
+
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+    EXPECT_EQ(MG_State::pGLContext->GetTextureUnitObject(0)
+                  .GetBindingSlot(TextureTarget::Texture2D)
+                  .GetBoundObject(),
+              boundObject);
+    EXPECT_FALSE(MG_State::pGLContext->ValidateTextureName(textureUnitEnum));
+    EXPECT_FALSE(MG_State::pGLContext->ValidateTextureObject(textureUnitEnum));
+}
+
+TEST_F(TextureTest, TexSubImage2DWithoutBoundTextureReportsErrorInsteadOfDereferencingNull) {
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, 0);
+    ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    const Uint8 pixel[] = {1, 2, 3, 4};
+    MG_Impl::GLImpl::TexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel);
+
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_INVALID_OPERATION);
 }
 
 TEST_F(TextureTest, TextureStorageAndSubImageModifyNamedObjectOnly) {

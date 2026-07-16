@@ -109,8 +109,8 @@ namespace MobileGL::MG_State::GLState {
                 // re-resolved instead of dangling.
                 BumpTextureBindGeneration();
                 m_textureObjects.erase(index);
+                m_indexGenerator.Delete(index);
             }
-            m_indexGenerator.Delete(index);
         }
     }
 

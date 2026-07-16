@@ -865,11 +865,11 @@ namespace MobileGL::MG_Impl::GLImpl {
         auto& activeUnit = MG_State::pGLContext->GetTextureUnitObject(MG_State::pGLContext->GetActiveTextureUnit());
         auto& bindingSlot = activeUnit.GetBindingSlot(textureTarget);
         auto& textureObject = bindingSlot.GetBoundObject();
+        if (!TextureImpl::ValidateTextureObject(textureObject)) return;
         TextureInternalFormat textureInternalFormat = textureObject->GetFormat();
         MGLOG_D("%s: working on texture %d", __func__, textureObject->GetExternalIndex());
 
         // ===================== Error Checking ==============================
-        if (!TextureImpl::ValidateTextureObject(textureObject)) return;
         if (!TextureImpl::ValidateTextureSubImageOffsets(textureObject, xoffset, width, yoffset, height)) return;
         if (!TextureImpl::ValidateTextureInternalFormatCompatibleWithInput(textureInputFormat, textureInternalFormat,
                                                                            texturePixelDataType))
@@ -2300,7 +2300,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         for (SizeT i = 0; i < static_cast<SizeT>(n); ++i) {
             Uint textureName = textures[i];
             if (textureName == 0) continue;
-            if (!TextureImpl::ValidateTextureName(textureName, true)) continue;
+            if (!MG_State::pGLContext->ValidateTextureName(textureName)) continue;
             MG_State::pGLContext->MarkTextureObjectForDeletion(textureName);
         }
     }
@@ -2523,14 +2523,7 @@ namespace MobileGL::MG_Impl::GLImpl {
             return;
         }
 
-        if (!MG_State::pGLContext->ValidateTextureName(texture)) {
-            MG_State::pGLContext->RecordError(
-                ErrorCode::InvalidOperation,
-                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", "BindTexture_State", "Invalid texture name"));
-            return;
-        }
-
-        if (!TextureImpl::ValidateTextureName(texture, true)) return;
+        if (!TextureImpl::ValidateTextureName(texture)) return;
 
         // ======================= Processing ================================
         Bool doesTextureExist = MG_State::pGLContext->ValidateTextureObject(texture);
