@@ -65,6 +65,11 @@ namespace MobileGL {
                 UnorderedMap<String, unsigned> plainUniformOffsetsInUBO;
                 UnorderedMap<String, SizeT> plainUniformMemberSizesInBytes;
                 UnorderedMap<String, SpvcType> plainUniformMemberTypes;
+                // Byte stride between consecutive array elements of an arrayed plain
+                // uniform (0 for non-arrays). Keyed like the offset map: names are the
+                // flattened leaf names glslang reflection uses ("s[0].b[1].b"), without
+                // a trailing "[0]".
+                UnorderedMap<String, Uint32> plainUniformArrayStridesInUBO;
                 SizeT globalUboSize = 0;
             };
 

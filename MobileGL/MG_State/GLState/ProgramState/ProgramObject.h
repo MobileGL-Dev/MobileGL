@@ -43,8 +43,40 @@ namespace MobileGL::MG_State::GLState {
         Uint GetMaxUniformLocation() const { return m_maxUniformLocation; }
         Int GetUniformLocation(const String& name) const {
             const auto it = m_uniformLocations.find(name);
-            if (it == m_uniformLocations.end()) return -1;
-            return (Int)it->second;
+            if (it != m_uniformLocations.end()) return (Int)it->second;
+
+            // "arr[k]" resolves to the location of element k: glslang reflection stores
+            // arrays under their base name (no "[0]" suffix), and DoReflection reserves
+            // one location per array element, so element k lives at base + k.
+            if (name.length() < 4 || name.back() != ']') return -1;
+            const SizeT bracket = name.rfind('[');
+            // Require at least one digit between the brackets.
+            if (bracket == String::npos || bracket + 1 >= name.length() - 1) return -1;
+            Uint element = 0;
+            for (SizeT i = bracket + 1; i < name.length() - 1; ++i) {
+                if (name[i] < '0' || name[i] > '9') return -1;
+                element = element * 10 + static_cast<Uint>(name[i] - '0');
+                if (element > 0x0FFFFFFFu) return -1;
+            }
+            const auto baseIt = m_uniformLocations.find(name.substr(0, bracket));
+            if (baseIt == m_uniformLocations.end()) return -1;
+            const Int base = (Int)baseIt->second;
+            if (!IsValidUniformLocation(base)) return -1;
+            const Int index = m_uniformIndexInTProgram[base];
+            // "[k]" only addresses arrays ("scalar[0]" is not a uniform name), and only
+            // in-range elements.
+            const glslang::TType* type = m_program->getUniform(index).getType();
+            if (type == nullptr || !type->isArray()) return -1;
+            if (static_cast<GLint>(element) >= GetActiveUniformArraySize(index)) return -1;
+            const Int location = base + (Int)element;
+            if (!UniformLocationsAliasSameUniform(base, location)) return -1;
+            return location;
+        }
+
+        // True when both locations are element slots of the same uniform variable.
+        Bool UniformLocationsAliasSameUniform(Int a, Int b) const {
+            if (!IsValidUniformLocation(a) || !IsValidUniformLocation(b)) return false;
+            return m_uniformIndexInTProgram[a] == m_uniformIndexInTProgram[b];
         }
 
         Int GetActiveUniformIndex(const String& name) const {
@@ -170,6 +202,9 @@ namespace MobileGL::MG_State::GLState {
             auto& uniform = m_program->getUniform(static_cast<Int>(index));
             return uniform.name;
         }
+        // Sentinel for a uniform location without global-UBO backing storage (should not
+        // survive linking: GenerateBinary falls back to tail-allocated scratch storage).
+        static constexpr Uint kInvalidUniformOffset = ~0u;
         Uint GetUniformOffset(Uint location) const { return m_uniformOffsets[location]; }
         Uint GetUniformSizesInBytes(Uint location) const { return MG_Util::GetGLTypeSize(GetUniformType(location)); }
 
