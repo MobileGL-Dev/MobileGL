@@ -3586,6 +3586,13 @@ void main() {
 
     void VulkanRenderer::Clear(GLbitfield mask) {
         m_clearManager->CollectGarbage();
+        if ((mask & (GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT)) == 0) {
+            return;
+        }
+        // GL 3.3 §3.1: when RASTERIZER_DISCARD is enabled, Clear and ClearBuffer* are ignored.
+        if (MG_State::pGLContext->IsCapabilityEnabled(CapabilityInput::RasterizerDiscard)) {
+            return;
+        }
         auto* fbo = MG_State::pGLContext->GetFramebufferBindingSlot(FramebufferTarget::Draw).GetBoundObject().get();
         MOBILEGL_ASSERT(fbo, "VulkanRenderer::Clear: draw framebuffer not found (fbo == nullptr)");
         if (IsUnsupportedFramebufferForDirectVulkan(*fbo)) {
@@ -3717,6 +3724,10 @@ void main() {
             const MG_State::GLState::FramebufferObject& framebuffer, GLenum buffer, GLint drawbuffer,
             const ClearAttachmentPayload& clearPayload) {
         m_clearManager->CollectGarbage();
+        // GL 3.3 §3.1: when RASTERIZER_DISCARD is enabled, Clear and ClearBuffer* are ignored.
+        if (MG_State::pGLContext->IsCapabilityEnabled(CapabilityInput::RasterizerDiscard)) {
+            return;
+        }
         if (IsUnsupportedFramebufferForDirectVulkan(framebuffer)) {
             RecordUnsupportedFramebufferError(__func__);
             return;
