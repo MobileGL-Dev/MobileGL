@@ -8,6 +8,7 @@
 
 #pragma once
 #include <Includes.h>
+#include <MG_Backend/BackendObject.h>
 
 namespace MobileGL::MG_Util::SelfTest {
     // One row of a backend power-on self-test (POST) report.
@@ -33,6 +34,7 @@ namespace MobileGL::MG_Util::SelfTest {
         String verdict = "UNSUPPORTED"; // "OK" | "DEGRADED" | "UNSUPPORTED"
         String rendererInfo;
         Vector<PostCheck> checks;
+        Optional<MG_Backend::FormatCapabilityCache> formatCapabilities;
     };
 
     // Probes the DEVICE GLES driver with self-contained EGL boilerplate (1x1 pbuffer
