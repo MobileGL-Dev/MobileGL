@@ -719,6 +719,50 @@ namespace MobileGL::MG_Backend::DirectGLES {
                         }
                     }
                 }
+
+                Bool allEquationsSame = true;
+                Bool anyEquationDirty = false;
+
+                for (Uint i = 0; i < FBO::MAX_DRAW_BUFFERS; ++i) {
+                    const auto& cur = targetStates[i];
+                    const auto& syn = syncedStates[i];
+
+                    if (cur.ColorEquation != syn.ColorEquation || cur.AlphaEquation != syn.AlphaEquation) {
+                        anyEquationDirty = true;
+                    }
+
+                    if (allEquationsSame && i > 0) {
+                        if (cur.ColorEquation != first.ColorEquation || cur.AlphaEquation != first.AlphaEquation) {
+                            allEquationsSame = false;
+                        }
+                    }
+                }
+
+                if (anyEquationDirty) {
+                    if (allEquationsSame) {
+                        g_GLESFuncs.glBlendEquationSeparate(MG_Util::ConvertBlendEquationToGLEnum(first.ColorEquation),
+                                                            MG_Util::ConvertBlendEquationToGLEnum(first.AlphaEquation));
+
+                        for (auto& syn : syncedStates) {
+                            syn.ColorEquation = first.ColorEquation;
+                            syn.AlphaEquation = first.AlphaEquation;
+                        }
+                    } else {
+                        for (Uint i = 0; i < FBO::MAX_DRAW_BUFFERS; ++i) {
+                            const auto& cur = targetStates[i];
+                            auto& syn = syncedStates[i];
+
+                            if (cur.ColorEquation != syn.ColorEquation || cur.AlphaEquation != syn.AlphaEquation) {
+                                syn.ColorEquation = cur.ColorEquation;
+                                syn.AlphaEquation = cur.AlphaEquation;
+
+                                g_GLESFuncs.glBlendEquationSeparatei(
+                                    i, MG_Util::ConvertBlendEquationToGLEnum(cur.ColorEquation),
+                                    MG_Util::ConvertBlendEquationToGLEnum(cur.AlphaEquation));
+                            }
+                        }
+                    }
+                }
             }
 
             { // Depth state
