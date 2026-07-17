@@ -29,7 +29,32 @@ using namespace MobileGL;
 
 class TextureTest : public ::testing::Test {
 protected:
-    void SetUp() override { MobileGL::Initialize(); }
+    // GL error flags are sticky per error code and the context outlives an individual test in this
+    // binary, so anything an earlier test left pending would be handed to the next GetError() call -
+    // which silently turns error-code assertions into reads of someone else's error. Bounded because
+    // there is one flag per code; a runaway would otherwise hang the suite.
+    static void DrainPendingGlErrors() {
+        for (Int drained = 0; drained < 16 && MG_Impl::GLImpl::GetError() != GL_NO_ERROR; ++drained) {
+        }
+    }
+
+    // The call under test must raise exactly the expected error and nothing more: a second pending
+    // error means one entry point queued several (e.g. a shared validator firing before the
+    // specific check), which GetError() would hand out at unrelated call sites later on.
+    static void ExpectSingleGlError(GLenum expected) {
+        EXPECT_EQ(MG_Impl::GLImpl::GetError(), expected);
+        EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR) << "the call recorded more than one error";
+    }
+
+    void SetUp() override {
+        MobileGL::Initialize();
+        DrainPendingGlErrors();
+    }
+
+    void TearDown() override {
+        // Attribute a leaked error to the test that caused it instead of to whoever runs next.
+        EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR) << "test left an unconsumed GL error behind";
+    }
 };
 
 namespace {
@@ -258,6 +283,31 @@ TEST_F(TextureTest, SamplerMaxAnisotropyUsesTheSameStateAndValidationSemantics) 
     EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
 }
 
+// GL 3.3 core 3.8.2: BindSampler rejects a never-generated or already-deleted name with
+// INVALID_OPERATION, while SamplerParameter* on the same name is INVALID_VALUE - the two paths
+// must not share one validator. Delete of an unknown name stays silent.
+TEST_F(TextureTest, BindSamplerRejectsUnknownNameWithInvalidOperationUnlikeSamplerParameter) {
+    GLuint sampler = 0;
+    MG_Impl::GLImpl::GenSamplers(1, &sampler);
+    ASSERT_NE(sampler, 0u);
+    MG_Impl::GLImpl::BindSampler(0, sampler);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    // Deleting is silent, twice over, and the name is dead afterwards.
+    MG_Impl::GLImpl::DeleteSamplers(1, &sampler);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+    MG_Impl::GLImpl::DeleteSamplers(1, &sampler);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    MG_Impl::GLImpl::BindSampler(0, sampler);
+    ExpectSingleGlError(GL_INVALID_OPERATION);
+
+    // Same dead name through SamplerParameter*: INVALID_VALUE, so the two paths cannot share one
+    // validator - and neither may queue the other's code alongside its own.
+    MG_Impl::GLImpl::SamplerParameteri(sampler, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    ExpectSingleGlError(GL_INVALID_VALUE);
+}
+
 TEST_F(TextureTest, GenThenBindCreatesObjectForUnsizedPackedBgraSubImageUpload) {
     GLuint texture = 0;
     MG_Impl::GLImpl::GenTextures(1, &texture);
@@ -307,10 +357,12 @@ TEST_F(TextureTest, DeleteGeneratedButUnboundNameReleasesReservationAndBindFails
     EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
     EXPECT_FALSE(MG_State::pGLContext->ValidateTextureName(texture));
     EXPECT_FALSE(MG_State::pGLContext->ValidateTextureObject(texture));
+    // IsTexture answers about a dead name without raising anything (GL 3.3 core 6.1.4).
     EXPECT_EQ(MG_Impl::GLImpl::IsTexture(texture), GL_FALSE);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
 
     MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, texture);
-    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_INVALID_OPERATION);
+    ExpectSingleGlError(GL_INVALID_OPERATION);
     EXPECT_FALSE(MG_State::pGLContext->ValidateTextureObject(texture));
 
     // The freed reservation is recycled (the generator's free list is LIFO, so the very same
@@ -340,7 +392,7 @@ TEST_F(TextureTest, DeleteInstantiatedTextureInvalidatesNameUntilRegenerated) {
     ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
 
     MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, textures[0]);
-    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_INVALID_OPERATION);
+    ExpectSingleGlError(GL_INVALID_OPERATION);
     EXPECT_EQ(MG_State::pGLContext->GetTextureUnitObject(0)
                   .GetBindingSlot(TextureTarget::Texture2D)
                   .GetBoundObject(),
@@ -359,7 +411,7 @@ TEST_F(TextureTest, DeleteUnknownNamesIsSilentButBindUnknownNameIsInvalid) {
     EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
 
     MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, unknownNames[1]);
-    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_INVALID_OPERATION);
+    ExpectSingleGlError(GL_INVALID_OPERATION);
     EXPECT_EQ(MG_State::pGLContext->GetTextureUnitObject(0)
                   .GetBindingSlot(TextureTarget::Texture2D)
                   .GetBoundObject(),

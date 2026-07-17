@@ -8,6 +8,8 @@
 
 #include <gtest/gtest.h>
 
+#include <limits>
+
 #include "Includes.h"
 #include "Init.h"
 #include <Config.h>
@@ -20,9 +22,31 @@ using namespace MobileGL;
 
 class BufferTest : public ::testing::Test {
 protected:
-    void SetUp() override { MobileGL::Initialize(); }
+    // GL error flags are sticky per error code and the context outlives an individual test in this
+    // binary, so drain whatever an earlier test left pending - otherwise an error-code assertion
+    // here reads someone else's error. Bounded: one flag per code, so this cannot hang the suite.
+    static void DrainPendingGlErrors() {
+        for (Int drained = 0; drained < 16 && MG_Impl::GLImpl::GetError() != GL_NO_ERROR; ++drained) {
+        }
+    }
 
-    void TearDown() override {}
+    // The call under test must raise exactly the expected error and nothing more: a second pending
+    // error means one entry point queued several, which GetError() would hand out at an unrelated
+    // call site later on.
+    static void ExpectSingleGlError(GLenum expected) {
+        EXPECT_EQ(MG_Impl::GLImpl::GetError(), expected);
+        EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR) << "the call recorded more than one error";
+    }
+
+    void SetUp() override {
+        MobileGL::Initialize();
+        DrainPendingGlErrors();
+    }
+
+    void TearDown() override {
+        // Attribute a leaked error to the test that caused it instead of to whoever runs next.
+        EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR) << "test left an unconsumed GL error behind";
+    }
 };
 
 TEST_F(BufferTest, Binding) {
@@ -103,6 +127,53 @@ TEST_F(BufferTest, GenerateManyNames_NoPrematureCreation) {
         memcpy(actual.data(), p, byteSize);
         EXPECT_EQ(actual, data);
     }
+}
+
+// GL 3.3 core 2.9 name lifecycle. The same three rules are asserted per object family (see the
+// texture/vertex-array/framebuffer/renderbuffer suites): a deleted or never-generated name is
+// INVALID_OPERATION to bind, deleting one is silent, and a generated-but-never-bound reservation
+// is still released so the name gets recycled.
+TEST_F(BufferTest, DeleteOfUnknownOrAlreadyDeletedBufferNameIsSilent) {
+    GLuint buffer = 0;
+    MG_Impl::GLImpl::GenBuffers(1, &buffer);
+    ASSERT_NE(buffer, 0u);
+    ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    MG_Impl::GLImpl::DeleteBuffers(1, &buffer);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    // Double delete, name 0 and a never-generated name must all be ignored without an error.
+    MG_Impl::GLImpl::DeleteBuffers(1, &buffer);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    const GLuint unknownNames[] = {0u, std::numeric_limits<GLuint>::max()};
+    MG_Impl::GLImpl::DeleteBuffers(2, unknownNames);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+}
+
+TEST_F(BufferTest, DeleteGeneratedButUnboundBufferNameReleasesReservationAndBindFails) {
+    GLuint buffer = 0;
+    MG_Impl::GLImpl::GenBuffers(1, &buffer);
+    ASSERT_NE(buffer, 0u);
+    ASSERT_TRUE(MG_State::pGLContext->ValidateBufferName(buffer));
+
+    MG_Impl::GLImpl::DeleteBuffers(1, &buffer);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+    EXPECT_FALSE(MG_State::pGLContext->ValidateBufferName(buffer));
+
+    MG_Impl::GLImpl::BindBuffer(GL_ARRAY_BUFFER, buffer);
+    ExpectSingleGlError(GL_INVALID_OPERATION);
+
+    GLuint recycled = 0;
+    MG_Impl::GLImpl::GenBuffers(1, &recycled);
+    EXPECT_EQ(recycled, buffer);
+}
+
+TEST_F(BufferTest, BindNeverGeneratedBufferNameIsInvalidOperation) {
+    // Not a small literal: other tests in this binary share the context and generate names in
+    // bulk, so a low number may well be a legitimately reserved name here.
+    MG_Impl::GLImpl::BindBuffer(GL_ARRAY_BUFFER, std::numeric_limits<GLuint>::max());
+    ExpectSingleGlError(GL_INVALID_OPERATION);
 }
 
 TEST_F(BufferTest, AcquireMemory) {
