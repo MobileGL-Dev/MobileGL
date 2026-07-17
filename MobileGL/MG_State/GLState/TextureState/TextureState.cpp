@@ -122,11 +122,11 @@ namespace MobileGL::MG_State::GLState {
                 // re-resolved instead of dangling.
                 BumpTextureBindGeneration();
                 m_textureObjects.erase(index);
+                m_indexGenerator.Delete(index);
             }
-            // Release the name itself even when GenTextures only reserved it and no bind ever
-            // instantiated an object: GL 3.3 core 3.8.1 makes a deleted name unused again (so a
-            // later bind of it must fail), and the reservation has to return to the free list.
-            m_indexGenerator.Delete(index);
+            // Compatibility: legacy Minecraft may delete a generated name before its first bind,
+            // then bind and populate that same name. Keep such a reservation alive; only a real
+            // texture object reaching deletion releases its index above.
         }
     }
 

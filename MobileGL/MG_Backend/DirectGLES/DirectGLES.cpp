@@ -1034,7 +1034,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
     }
 
     static void BindCurrentProgramWithResources();
-    static void BindCurrentTextures();
 
     void PrepareForDraw(DrawSyncBit syncBit) {
 #ifdef TRACY_ENABLE
@@ -1077,7 +1076,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
     // sample whatever texture the last sync left behind (e.g. Flywheel's depth
     // pyramid downsample reading a stale unit-0 binding instead of the depth
     // attachment).
-    static void BindCurrentTextures() {
+    void BindCurrentTextures() {
 #ifdef TRACY_ENABLE
         ZoneScopedNC("BindCurrentTextures", TRACY_ZONECOLOR_BACKEND);
 #endif
@@ -1085,27 +1084,52 @@ namespace MobileGL::MG_Backend::DirectGLES {
         const Int maxTouchedUnit = MG_State::pGLContext->GetMaxTouchedTextureUnit();
         for (Int unit = 0; unit <= maxTouchedUnit; ++unit) {
             auto& textureUnit = MG_State::pGLContext->GetTextureUnitObject(unit);
+            Array<Bool, (SizeT)TextureTarget::TextureTargetCount> boundBackendTargets{};
 
             for (const auto& bindingSlot : textureUnit.GetAllBindingSlots()) {
                 const auto& textureObject = bindingSlot.GetBoundObject();
                 if (!textureObject) continue;
-                // A default texture (name 0) that was never given an image is the initial /
-                // "unbound" state of the slot; skip it exactly like the old null slot so bind-0
-                // heavy apps pay nothing per draw for the always-populated slots.
+
+                // An image-less default texture is the frontend's bind-0 state. Defer native
+                // unbinding until all slots have been considered: desktop 1D/1D-array targets
+                // alias ES 2D/2D-array targets, so a default alias must not clear a real binding.
                 if (MG_State::GLState::IsUndefinedDefaultTexture(textureObject.get())) continue;
 
-                // Bind texture object
                 auto target = textureObject->GetTarget();
                 if (!TextureImpl::IsSupportedTextureTarget(target)) {
                     MGLOG_D("    Texture target %s is not supported, skipping.",
                             MG_Util::ConvertTextureTargetToString(target).c_str());
                     continue;
                 }
+                const GLenum targetGL = TextureImpl::ConvertTextureTargetToBackendGLEnum(target);
+
+                // Bind texture object
                 const auto& backendTextureIt = TextureImpl::g_backendTextureObjects.find(textureObject.get());
                 if (backendTextureIt == TextureImpl::g_backendTextureObjects.end()) continue;
 
-                GLenum targetGL = TextureImpl::ConvertTextureTargetToBackendGLEnum(target);
                 backendTextureIt->second->Bind(targetGL, unit);
+                const auto backendTarget = TextureImpl::MapToBackendTextureTarget(target);
+                boundBackendTargets[static_cast<SizeT>(backendTarget)] = true;
+            }
+
+            // Clear each native target that has no resolved frontend binding. This is the backend
+            // half of glBindTexture(..., 0); skipping image-less default objects would otherwise
+            // leave the previously sampled ES texture resident. Deduplicate mapped desktop targets
+            // so 1D/2D and 1D-array/2D-array aliases do not cause redundant binds.
+            Array<Bool, (SizeT)TextureTarget::TextureTargetCount> visitedBackendTargets{};
+            for (const auto& bindingSlot : textureUnit.GetAllBindingSlots()) {
+                const auto target = bindingSlot.GetTarget();
+                if (!TextureImpl::IsSupportedTextureTarget(target)) continue;
+
+                const auto backendTarget = TextureImpl::MapToBackendTextureTarget(target);
+                const auto backendTargetIndex = static_cast<SizeT>(backendTarget);
+                if (visitedBackendTargets[backendTargetIndex]) continue;
+                visitedBackendTargets[backendTargetIndex] = true;
+
+                if (!boundBackendTargets[backendTargetIndex]) {
+                    const GLenum targetGL = TextureImpl::ConvertTextureTargetToBackendGLEnum(target);
+                    TextureImpl::UnbindTexture(unit, targetGL);
+                }
             }
 
             // Bind sampler object if necessary

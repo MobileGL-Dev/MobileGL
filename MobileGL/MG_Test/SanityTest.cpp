@@ -19,6 +19,7 @@
 #include <MG_Backend/BackendObjects.h>
 #include <MG_Impl/GLImpl/Getter/GL_Getter.h>
 #include <MG_Impl/GLImpl/RenderState/GL_RenderState.h>
+#include <MG_Impl/GLImpl/Texture/GL_Texture.h>
 #include <MG_Impl/GLImpl/VertexArray/Validators.h>
 #include <MG_State/GLState/Core.h>
 #include <MG_State/GLState/FramebufferState/FramebufferObject.h>
@@ -103,6 +104,79 @@ namespace {
     private:
         MobileGL::MG_External::GLESCapabilities m_snapshot;
     };
+
+    struct TextureBindCall {
+        GLenum target;
+        GLuint texture;
+    };
+
+    MobileGL::Vector<TextureBindCall>* g_textureBindCalls = nullptr;
+    GLuint g_nextBackendTextureId = 73;
+
+    void RecordTextureBind(GLenum target, GLuint texture) {
+        if (g_textureBindCalls) {
+            g_textureBindCalls->push_back({target, texture});
+        }
+    }
+
+    void GenerateBackendTextures(GLsizei count, GLuint* textures) {
+        for (GLsizei i = 0; i < count; ++i) {
+            textures[i] = g_nextBackendTextureId++;
+        }
+    }
+
+    void DeleteBackendTextures(GLsizei, const GLuint*) {}
+
+    GLenum NoBackendError() {
+        return GL_NO_ERROR;
+    }
+
+    // Isolates the DirectGLES globals touched by the binding-cache regression test. The test
+    // installs only the native ES entry points needed to construct/bind a backend texture and
+    // restores the process-wide state even when a gtest assertion unwinds the test body.
+    struct ScopedDirectGLESTextureBindings {
+        ScopedDirectGLESTextureBindings():
+            previousContext(MobileGL::Move(MobileGL::MG_State::pGLContext)),
+            previousFunctions(MobileGL::MG_Backend::DirectGLES::g_GLESFuncs),
+            previousActiveUnit(MobileGL::MG_Backend::DirectGLES::TextureImpl::g_activeTextureUnit),
+            previousCache(MobileGL::MG_Backend::DirectGLES::TextureImpl::g_boundTexturesCache),
+            previousRegistry(MobileGL::MG_Backend::DirectGLES::TextureImpl::g_backendTextureObjects) {
+            MobileGL::MG_State::pGLContext = MobileGL::MakeUnique<MobileGL::MG_State::GLState::GLContext>();
+            MobileGL::MG_Backend::DirectGLES::TextureImpl::g_activeTextureUnit = 0;
+            MobileGL::MG_Backend::DirectGLES::TextureImpl::g_boundTexturesCache = {};
+            MobileGL::MG_Backend::DirectGLES::TextureImpl::g_backendTextureObjects = {};
+
+            MobileGL::MG_External::GLESFunctionsTable functions{};
+            functions.glBindTexture = RecordTextureBind;
+            functions.glDeleteTextures = DeleteBackendTextures;
+            functions.glGenTextures = GenerateBackendTextures;
+            functions.glGetError = NoBackendError;
+            MobileGL::MG_Backend::DirectGLES::SetGLESFuncsTable(functions);
+            g_textureBindCalls = &bindCalls;
+        }
+
+        ~ScopedDirectGLESTextureBindings() {
+            g_textureBindCalls = nullptr;
+            MobileGL::MG_Backend::DirectGLES::TextureImpl::g_boundTexturesCache = {};
+            MobileGL::MG_Backend::DirectGLES::TextureImpl::g_backendTextureObjects = previousRegistry;
+            MobileGL::MG_Backend::DirectGLES::SetGLESFuncsTable(previousFunctions);
+            MobileGL::MG_Backend::DirectGLES::TextureImpl::g_activeTextureUnit = previousActiveUnit;
+            MobileGL::MG_Backend::DirectGLES::TextureImpl::g_boundTexturesCache = previousCache;
+            MobileGL::MG_State::pGLContext = MobileGL::Move(previousContext);
+        }
+
+        ScopedDirectGLESTextureBindings(const ScopedDirectGLESTextureBindings&) = delete;
+        ScopedDirectGLESTextureBindings& operator=(const ScopedDirectGLESTextureBindings&) = delete;
+
+        MobileGL::Vector<TextureBindCall> bindCalls;
+
+    private:
+        MobileGL::UniquePtr<MobileGL::MG_State::GLState::GLContext> previousContext;
+        MobileGL::MG_External::GLESFunctionsTable previousFunctions;
+        MobileGL::Uint previousActiveUnit;
+        decltype(MobileGL::MG_Backend::DirectGLES::TextureImpl::g_boundTexturesCache) previousCache;
+        decltype(MobileGL::MG_Backend::DirectGLES::TextureImpl::g_backendTextureObjects) previousRegistry;
+    };
 } // namespace
 
 TEST(Sanity, BasicAssertions) {
@@ -146,6 +220,52 @@ TEST(DirectGLESSanity, AdvertisesVoxyRequiredRenderingExtensionsWithoutRaisingGL
               extensions.end());
     EXPECT_EQ(std::find(extensions.begin(), extensions.end(), MobileGL::E_GL_KHR_shader_subgroup),
               extensions.end());
+}
+
+TEST(DirectGLESSanity, BindingZeroClearsPreviousNativeTextureBinding) {
+    using namespace MobileGL;
+    namespace DirectGLES = MG_Backend::DirectGLES;
+
+    ScopedDirectGLESTextureBindings state;
+
+    GLuint frontendTexture = 0;
+    MG_Impl::GLImpl::GenTextures(1, &frontendTexture);
+    ASSERT_NE(frontendTexture, 0u);
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, frontendTexture);
+    const auto& frontendTextureObject = MG_State::pGLContext->GetTextureUnitObject(0)
+                                            .GetBindingSlot(TextureTarget::Texture2D)
+                                            .GetBoundObject();
+    ASSERT_NE(frontendTextureObject, nullptr);
+    ASSERT_EQ(frontendTextureObject->GetExternalIndex(), frontendTexture);
+
+    auto& backendTexture = DirectGLES::TextureImpl::g_backendTextureObjects.GetOrCreate(frontendTextureObject);
+    backendTexture = MakeShared<DirectGLES::TextureImpl::BackendTextureObject>();
+    const GLuint backendTextureId = backendTexture->GetBackendTextureId();
+
+    DirectGLES::BindCurrentTextures();
+    ASSERT_EQ(state.bindCalls.size(), 1u);
+    EXPECT_EQ(state.bindCalls[0].target, GL_TEXTURE_2D);
+    EXPECT_EQ(state.bindCalls[0].texture, backendTextureId);
+
+    // The default 1D slot maps to the same native ES target as 2D. It must not clear and force a
+    // redundant rebind while the real 2D frontend object remains current.
+    DirectGLES::BindCurrentTextures();
+    EXPECT_EQ(state.bindCalls.size(), 1u);
+
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, 0);
+    ASSERT_TRUE(MG_State::GLState::IsUndefinedDefaultTexture(
+        MG_State::pGLContext->GetTextureUnitObject(0)
+            .GetBindingSlot(TextureTarget::Texture2D)
+            .GetBoundObject()
+            .get()));
+
+    DirectGLES::BindCurrentTextures();
+
+    ASSERT_EQ(state.bindCalls.size(), 2u);
+    EXPECT_EQ(state.bindCalls[1].target, GL_TEXTURE_2D);
+    EXPECT_EQ(state.bindCalls[1].texture, 0u);
+    EXPECT_EQ(DirectGLES::TextureImpl::g_boundTexturesCache[0][static_cast<SizeT>(TextureTarget::Texture2D)],
+              nullptr);
 }
 
 TEST(DirectGLESSanity, ProvidesNamedFramebufferBlitForDirectStateAccess) {

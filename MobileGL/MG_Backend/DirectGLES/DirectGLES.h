@@ -19,6 +19,10 @@
     operation Utils::CheckGLESError();
 
 namespace MobileGL::MG_Backend::DirectGLES {
+    // Re-establishes the frontend texture-unit bindings on the native ES context.
+    // Content uploads use scratch bindings, so draws and dispatches call this after
+    // texture synchronization.
+    void BindCurrentTextures();
     void ClearBufferfi(GLenum buffer, GLint drawbuffer, GLfloat depth, GLint stencil);
     void ClearBufferfv(GLenum buffer, GLint drawbuffer, const GLfloat* value);
     void ClearBufferuiv(GLenum buffer, GLint drawbuffer, const GLuint* value);

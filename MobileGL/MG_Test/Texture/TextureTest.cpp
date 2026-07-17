@@ -380,10 +380,10 @@ TEST_F(TextureTest, GenThenBindCreatesObjectForUnsizedPackedBgraSubImageUpload) 
     EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
 }
 
-// GL 3.3 core 3.8.1: DeleteTextures makes the name unused again whether or not a bind ever
-// instantiated an object, so the reservation must go back to the generator's free list rather
-// than leaking, and binding the dead name afterwards must fail.
-TEST_F(TextureTest, DeleteGeneratedButUnboundNameReleasesReservationAndBindFails) {
+// Legacy Minecraft reserves a texture name, deletes it before first bind, then reuses the same
+// name for the atlas upload. Preserve that generated reservation so the later bind can instantiate
+// the object and subsequent sub-image uploads target it instead of the default texture.
+TEST_F(TextureTest, DeleteGeneratedReservationThenBindCreatesObjectForSubImageUpload) {
     GLuint texture = 0;
     MG_Impl::GLImpl::GenTextures(1, &texture);
     ASSERT_NE(texture, 0u);
@@ -392,22 +392,36 @@ TEST_F(TextureTest, DeleteGeneratedButUnboundNameReleasesReservationAndBindFails
 
     MG_Impl::GLImpl::DeleteTextures(1, &texture);
     EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
-    EXPECT_FALSE(MG_State::pGLContext->ValidateTextureName(texture));
+    EXPECT_TRUE(MG_State::pGLContext->ValidateTextureName(texture));
     EXPECT_FALSE(MG_State::pGLContext->ValidateTextureObject(texture));
-    // IsTexture answers about a dead name without raising anything (GL 3.3 core 6.1.4).
     EXPECT_EQ(MG_Impl::GLImpl::IsTexture(texture), GL_FALSE);
     EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
 
     MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, texture);
-    ExpectSingleGlError(GL_INVALID_OPERATION);
-    EXPECT_FALSE(MG_State::pGLContext->ValidateTextureObject(texture));
 
-    // The freed reservation is recycled (the generator's free list is LIFO, so the very same
-    // name comes back) - a delete that skipped the release would hand out a fresh name here.
-    GLuint recycled = 0;
-    MG_Impl::GLImpl::GenTextures(1, &recycled);
-    EXPECT_EQ(recycled, texture);
-    EXPECT_TRUE(MG_State::pGLContext->ValidateTextureName(recycled));
+    const auto textureObject = MG_State::pGLContext->GetTextureObject(texture);
+    ASSERT_NE(textureObject, nullptr);
+    EXPECT_TRUE(MG_State::pGLContext->ValidateTextureName(texture));
+    EXPECT_TRUE(MG_State::pGLContext->ValidateTextureObject(texture));
+    EXPECT_EQ(MG_Impl::GLImpl::IsTexture(texture), GL_TRUE);
+
+    MG_Impl::GLImpl::TexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 2, 1, 0, GL_BGRA,
+                                GL_UNSIGNED_INT_8_8_8_8_REV, nullptr);
+    const Uint8 pixels[] = {
+        10, 20, 30, 40,
+        50, 60, 70, 80,
+    };
+    MG_Impl::GLImpl::TexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 2, 1, GL_BGRA,
+                                   GL_UNSIGNED_INT_8_8_8_8_REV, pixels);
+
+    const auto* stored = GetBoundTexture2DLevelBytes(texture);
+    ASSERT_NE(stored, nullptr);
+    const Uint8 expected[] = {
+        30, 20, 10, 40,
+        70, 60, 50, 80,
+    };
+    EXPECT_EQ(std::memcmp(stored, expected, sizeof(expected)), 0);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
 }
 
 TEST_F(TextureTest, DeleteInstantiatedTextureInvalidatesNameUntilRegenerated) {
