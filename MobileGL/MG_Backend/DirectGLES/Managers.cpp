@@ -2169,6 +2169,16 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 g_GLESFuncs.glTexParameterf(target, GL_TEXTURE_MAX_LOD, samplerParams.maxLod);
                 m_cacheSamplerParameters.maxLod = samplerParams.maxLod;
             }
+            if (m_cacheSamplerParameters.maxAnisotropy != samplerParams.maxAnisotropy) {
+                if (g_GLESCapabilities.SupportsTextureFilterAnisotropy) {
+                    g_GLESFuncs.glTexParameterf(target, GL_TEXTURE_MAX_ANISOTROPY_EXT,
+                                                samplerParams.maxAnisotropy);
+                }
+                // Unsupported GLES backends intentionally treat anisotropy as a
+                // frontend-only no-op; remember the observed value so the cache
+                // remains coherent without issuing an illegal enum every sync.
+                m_cacheSamplerParameters.maxAnisotropy = samplerParams.maxAnisotropy;
+            }
             DebugImpl::ErrorLopper::Loop([file = __FILE__, line = __LINE__, func = __func__](GLenum err) {
                 MGLOG_D("%s(%s:%d) ES error %s", func, file, line, MG_Util::ConvertGLEnumToString(err).c_str());
             });
@@ -3059,6 +3069,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
             if (m_cacheSamplerParameters.maxLod != samplerParams.maxLod) {
                 g_GLESFuncs.glSamplerParameterf(m_backendSamplerId, GL_TEXTURE_MAX_LOD, samplerParams.maxLod);
                 m_cacheSamplerParameters.maxLod = samplerParams.maxLod;
+            }
+            if (m_cacheSamplerParameters.maxAnisotropy != samplerParams.maxAnisotropy) {
+                if (g_GLESCapabilities.SupportsTextureFilterAnisotropy) {
+                    g_GLESFuncs.glSamplerParameterf(m_backendSamplerId, GL_TEXTURE_MAX_ANISOTROPY_EXT,
+                                                    samplerParams.maxAnisotropy);
+                }
+                m_cacheSamplerParameters.maxAnisotropy = samplerParams.maxAnisotropy;
             }
 #undef SYNC_SAMPLER_PARAM_IF_CHANGED
             m_isInitialized = true;

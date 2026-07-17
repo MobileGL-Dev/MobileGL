@@ -14,7 +14,13 @@
 
 namespace MobileGL::MG_Impl::GLImpl {
     namespace {
-        Bool ValidateSamplerParameterValue(GLenum pname, const void* param, Bool isFloat, Bool isInteger) {
+        Float ReadSamplerScalar(const void* param, Bool isFloat, Bool isUnsignedInteger) {
+            if (isFloat) return *(const GLfloat*)param;
+            if (isUnsignedInteger) return static_cast<Float>(*(const GLuint*)param);
+            return static_cast<Float>(*(const GLint*)param);
+        }
+
+        Bool ValidateSamplerParameterValue(GLenum pname, const void* param, Bool isFloat, Bool isUnsignedInteger) {
             if (param == nullptr) return false;
 
             switch (pname) {
@@ -22,6 +28,13 @@ namespace MobileGL::MG_Impl::GLImpl {
             case GL_TEXTURE_MAX_LOD:
             case GL_TEXTURE_LOD_BIAS:
                 return true;
+            case GL_TEXTURE_MAX_ANISOTROPY_EXT:
+                if (ReadSamplerScalar(param, isFloat, isUnsignedInteger) >= 1.0f) return true;
+                MG_State::pGLContext->RecordError(
+                    ErrorCode::InvalidValue,
+                    MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", "SetSamplerParam_State",
+                                                 "GL_TEXTURE_MAX_ANISOTROPY_EXT must be at least 1.0."));
+                return false;
             default:
                 break;
             }
@@ -29,14 +42,15 @@ namespace MobileGL::MG_Impl::GLImpl {
             if (isFloat) {
                 return SamplerImpl::ValidateSamplerFloatParam(pname, *(const GLfloat*)param);
             }
-            if (isInteger) {
+            if (isUnsignedInteger) {
                 return SamplerImpl::ValidateSamplerIntParam(pname, static_cast<GLint>(*(const GLuint*)param));
             }
             return SamplerImpl::ValidateSamplerIntParam(pname, *(const GLint*)param);
         }
     } // namespace
 
-    void SetSamplerParam_State(GLuint sampler, GLenum pname, const void* param, bool isFloat, bool isInteger) {
+    void SetSamplerParam_State(GLuint sampler, GLenum pname, const void* param, bool isFloat,
+                               bool isUnsignedInteger) {
         if (param == nullptr) return;
         if (!SamplerImpl::ValidateSamplerName(sampler)) return;
 
@@ -47,7 +61,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         }
         auto& samplerObj = MG_State::pGLContext->GetSamplerObject(sampler);
         if (!SamplerImpl::ValidateSamplerObject(sampler)) return;
-        if (!ValidateSamplerParameterValue(pname, param, isFloat, isInteger)) return;
+        if (!ValidateSamplerParameterValue(pname, param, isFloat, isUnsignedInteger)) return;
 
         using namespace MG_Util;
         switch (pname) {
@@ -76,6 +90,9 @@ namespace MobileGL::MG_Impl::GLImpl {
         case GL_TEXTURE_LOD_BIAS:
             samplerObj->SetLodBias(*(const GLfloat*)param);
             break;
+        case GL_TEXTURE_MAX_ANISOTROPY_EXT:
+            samplerObj->SetMaxAnisotropy(ReadSamplerScalar(param, isFloat, isUnsignedInteger));
+            break;
         case GL_TEXTURE_COMPARE_MODE:
             samplerObj->SetCompareMode(MG_Util::ConvertGLEnumToSamplerCompareMode(*(const GLint*)param));
             break;
@@ -89,7 +106,8 @@ namespace MobileGL::MG_Impl::GLImpl {
         }
     }
 
-    void GetSamplerParam_State(GLuint sampler, GLenum pname, void* params, bool isFloat, bool isInteger) {
+    void GetSamplerParam_State(GLuint sampler, GLenum pname, void* params, bool isFloat,
+                               bool isUnsignedInteger) {
         if (params == nullptr) return;
         if (!SamplerImpl::ValidateSamplerName(sampler)) return;
 
@@ -128,6 +146,15 @@ namespace MobileGL::MG_Impl::GLImpl {
             break;
         case GL_TEXTURE_LOD_BIAS:
             *(GLfloat*)params = samplerObj->GetLodBias();
+            break;
+        case GL_TEXTURE_MAX_ANISOTROPY_EXT:
+            if (isFloat) {
+                *(GLfloat*)params = samplerObj->GetMaxAnisotropy();
+            } else if (isUnsignedInteger) {
+                *(GLuint*)params = static_cast<GLuint>(samplerObj->GetMaxAnisotropy());
+            } else {
+                *(GLint*)params = static_cast<GLint>(samplerObj->GetMaxAnisotropy());
+            }
             break;
         case GL_TEXTURE_COMPARE_MODE:
             *(GLuint*)params = MG_Util::ConvertSamplerCompareModeToGLEnum(samplerObj->GetCompareMode());
@@ -206,7 +233,16 @@ namespace MobileGL::MG_Impl::GLImpl {
         if (sampler == 0) {
             textureUnit.SetSamplerObject(nullptr);
         } else {
-            if (!SamplerImpl::ValidateSamplerName(sampler)) return;
+            // GL 3.3 core 3.8.2: BindSampler on a name GenSamplers never returned - or one already
+            // deleted - is INVALID_OPERATION. SamplerParameter* raises INVALID_VALUE for the same
+            // name, which is why this cannot go through the shared SamplerImpl validator.
+            if (!MG_State::pGLContext->ValidateSamplerName(sampler)) {
+                MG_State::pGLContext->RecordError(
+                    ErrorCode::InvalidOperation,
+                    MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", "BindSampler_State",
+                                                 std::format("Invalid sampler name {}", sampler)));
+                return;
+            }
             Bool doesSamplerObjectCreated = MG_State::pGLContext->ValidateSamplerObject(sampler);
             if (!doesSamplerObjectCreated) {
                 MG_State::pGLContext->CreateSamplerObject(sampler);
@@ -240,7 +276,7 @@ namespace MobileGL::MG_Impl::GLImpl {
     }
 
     void SamplerParameterIiv(GLuint sampler, GLenum pname, const GLint* param) {
-        SetSamplerParam_State(sampler, pname, param, false, true);
+        SetSamplerParam_State(sampler, pname, param, false, false);
     }
 
     void SamplerParameteriv(GLuint sampler, GLenum pname, const GLint* param) {
@@ -268,7 +304,7 @@ namespace MobileGL::MG_Impl::GLImpl {
     }
 
     void GetSamplerParameterIiv(GLuint sampler, GLenum pname, GLint* params) {
-        GetSamplerParam_State(sampler, pname, params, false, true);
+        GetSamplerParam_State(sampler, pname, params, false, false);
     }
 
     void GetSamplerParameterfv(GLuint sampler, GLenum pname, GLfloat* params) {

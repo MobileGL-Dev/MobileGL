@@ -441,7 +441,10 @@ namespace MobileGL::MG_Impl::GLImpl {
         for (SizeT i = 0; i < static_cast<SizeT>(n); ++i) {
             Uint bufferName = buffers[i];
             if (bufferName == 0) continue;
-            if (!BufferImpl::ValidateBufferName(bufferName, true)) continue;
+            // GL 3.3 core 2.9: names that do not correspond to an existing buffer are silently
+            // ignored here, so probe with the non-recording query - the shared validator would
+            // record INVALID_OPERATION, which is only correct on the bind path.
+            if (!MG_State::pGLContext->ValidateBufferName(bufferName)) continue;
             MG_State::pGLContext->MarkBufferObjectForDeletion(bufferName);
         }
     }

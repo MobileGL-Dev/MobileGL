@@ -8,16 +8,21 @@
 
 #include <gtest/gtest.h>
 
+#include <limits>
+
 #include "Includes.h"
 #include "Init.h"
 #include <MG_Backend/BackendObjects.h>
+#include <MG_Backend/DirectGLES/Managers.h>
 #include <MG_Impl/GLImpl/Getter/GL_Getter.h>
 #include <MG_Impl/GLImpl/RenderState/GL_RenderState.h>
+#include <MG_Impl/GLImpl/Sampler/GL_Sampler.h>
 #include <MG_Impl/GLImpl/Texture/GL_Texture.h>
 #include <MG_State/GLState/Core.h>
 #include <MG_State/GLState/TextureState/TextureObject.h>
-#include <MG_Util/Converters/MGToMG/TextureEnumConverter.h>
 #include <MG_Util/Converters/GLToMG/TextureEnumConverter.h>
+#include <MG_Util/Converters/MGToGL/TextureEnumConverter.h>
+#include <MG_Util/Converters/MGToMG/TextureEnumConverter.h>
 #include <MG_Util/Math/SmallFloat.h>
 #include <MG_Util/Texture/PixelStoreProcessor.h>
 #include <MG_Util/Texture/TextureFormatProcessor.h>
@@ -27,7 +32,32 @@ using namespace MobileGL;
 
 class TextureTest : public ::testing::Test {
 protected:
-    void SetUp() override { MobileGL::Initialize(); }
+    // GL error flags are sticky per error code and the context outlives an individual test in this
+    // binary, so anything an earlier test left pending would be handed to the next GetError() call -
+    // which silently turns error-code assertions into reads of someone else's error. Bounded because
+    // there is one flag per code; a runaway would otherwise hang the suite.
+    static void DrainPendingGlErrors() {
+        for (Int drained = 0; drained < 16 && MG_Impl::GLImpl::GetError() != GL_NO_ERROR; ++drained) {
+        }
+    }
+
+    // The call under test must raise exactly the expected error and nothing more: a second pending
+    // error means one entry point queued several (e.g. a shared validator firing before the
+    // specific check), which GetError() would hand out at unrelated call sites later on.
+    static void ExpectSingleGlError(GLenum expected) {
+        EXPECT_EQ(MG_Impl::GLImpl::GetError(), expected);
+        EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR) << "the call recorded more than one error";
+    }
+
+    void SetUp() override {
+        MobileGL::Initialize();
+        DrainPendingGlErrors();
+    }
+
+    void TearDown() override {
+        // Attribute a leaked error to the test that caused it instead of to whoever runs next.
+        EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR) << "test left an unconsumed GL error behind";
+    }
 };
 
 namespace {
@@ -133,6 +163,295 @@ TEST_F(TextureTest, CreateTexturesCreatesObjectsWithoutBinding) {
     auto& unit = MG_State::pGLContext->GetTextureUnitObject(MG_State::pGLContext->GetActiveTextureUnit());
     EXPECT_EQ(unit.GetBindingSlot(TextureTarget::Texture2D).GetBoundObject(), nullptr);
     EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+}
+
+TEST_F(TextureTest, TextureMaxAnisotropyDefaultsToOneAndRoundTripsWithoutRedundantVersionBumps) {
+    GLuint texture = 0;
+    MG_Impl::GLImpl::GenTextures(1, &texture);
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, texture);
+    ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    const auto textureObject = MG_State::pGLContext->GetTextureObject(texture);
+    ASSERT_NE(textureObject, nullptr);
+    const auto& samplerObject = textureObject->GetSamplerObject();
+    ASSERT_NE(samplerObject, nullptr);
+
+    GLfloat floatValue = 0.0f;
+    MG_Impl::GLImpl::GetTexParameterfv(GL_TEXTURE_2D, GL_TEXTURE_MAX_ANISOTROPY_EXT, &floatValue);
+    EXPECT_FLOAT_EQ(floatValue, 1.0f);
+    EXPECT_FLOAT_EQ(samplerObject->GetMaxAnisotropy(), 1.0f);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    const Uint16 initialVersion = samplerObject->GetVersion();
+    MG_Impl::GLImpl::TexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAX_ANISOTROPY_EXT, 4.0f);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+    EXPECT_FLOAT_EQ(samplerObject->GetMaxAnisotropy(), 4.0f);
+    EXPECT_EQ(samplerObject->GetVersion(), static_cast<Uint16>(initialVersion + 1));
+
+    GLint integerValue = 0;
+    MG_Impl::GLImpl::GetTexParameteriv(GL_TEXTURE_2D, GL_TEXTURE_MAX_ANISOTROPY_EXT, &integerValue);
+    EXPECT_EQ(integerValue, 4);
+    MG_Impl::GLImpl::GetTexParameterfv(GL_TEXTURE_2D, GL_TEXTURE_MAX_ANISOTROPY_EXT, &floatValue);
+    EXPECT_FLOAT_EQ(floatValue, 4.0f);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    const Uint16 setVersion = samplerObject->GetVersion();
+    MG_Impl::GLImpl::TexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAX_ANISOTROPY_EXT, 4.0f);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+    EXPECT_EQ(samplerObject->GetVersion(), setVersion);
+
+    MG_Impl::GLImpl::TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_ANISOTROPY_EXT, 8);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+    EXPECT_FLOAT_EQ(samplerObject->GetMaxAnisotropy(), 8.0f);
+    EXPECT_EQ(samplerObject->GetVersion(), static_cast<Uint16>(setVersion + 1));
+}
+
+TEST_F(TextureTest, TextureMaxAnisotropyBelowOneIsInvalidValueAndPreservesState) {
+    GLuint texture = 0;
+    MG_Impl::GLImpl::GenTextures(1, &texture);
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, texture);
+    ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    const auto textureObject = MG_State::pGLContext->GetTextureObject(texture);
+    ASSERT_NE(textureObject, nullptr);
+    const auto& samplerObject = textureObject->GetSamplerObject();
+    ASSERT_NE(samplerObject, nullptr);
+    const Uint16 initialVersion = samplerObject->GetVersion();
+
+    MG_Impl::GLImpl::TexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAX_ANISOTROPY_EXT, 0.5f);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_INVALID_VALUE);
+    EXPECT_FLOAT_EQ(samplerObject->GetMaxAnisotropy(), 1.0f);
+    EXPECT_EQ(samplerObject->GetVersion(), initialVersion);
+
+    MG_Impl::GLImpl::TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_ANISOTROPY_EXT, 0);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_INVALID_VALUE);
+    EXPECT_FLOAT_EQ(samplerObject->GetMaxAnisotropy(), 1.0f);
+    EXPECT_EQ(samplerObject->GetVersion(), initialVersion);
+}
+
+TEST_F(TextureTest, SamplerMaxAnisotropyUsesTheSameStateAndValidationSemantics) {
+    GLuint sampler = 0;
+    MG_Impl::GLImpl::GenSamplers(1, &sampler);
+    ASSERT_NE(sampler, 0u);
+
+    GLfloat floatValue = 0.0f;
+    MG_Impl::GLImpl::GetSamplerParameterfv(sampler, GL_TEXTURE_MAX_ANISOTROPY_EXT, &floatValue);
+    ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+    EXPECT_FLOAT_EQ(floatValue, 1.0f);
+
+    const auto& samplerObject = MG_State::pGLContext->GetSamplerObject(sampler);
+    ASSERT_NE(samplerObject, nullptr);
+    const Uint16 initialVersion = samplerObject->GetVersion();
+
+    MG_Impl::GLImpl::SamplerParameterf(sampler, GL_TEXTURE_MAX_ANISOTROPY_EXT, 6.0f);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+    EXPECT_FLOAT_EQ(samplerObject->GetMaxAnisotropy(), 6.0f);
+    EXPECT_EQ(samplerObject->GetVersion(), static_cast<Uint16>(initialVersion + 1));
+
+    GLint integerValue = 0;
+    MG_Impl::GLImpl::GetSamplerParameteriv(sampler, GL_TEXTURE_MAX_ANISOTROPY_EXT, &integerValue);
+    EXPECT_EQ(integerValue, 6);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    const Uint16 setVersion = samplerObject->GetVersion();
+    MG_Impl::GLImpl::SamplerParameterf(sampler, GL_TEXTURE_MAX_ANISOTROPY_EXT, 6.0f);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+    EXPECT_EQ(samplerObject->GetVersion(), setVersion);
+
+    MG_Impl::GLImpl::SamplerParameterf(sampler, GL_TEXTURE_MAX_ANISOTROPY_EXT, 0.25f);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_INVALID_VALUE);
+    EXPECT_FLOAT_EQ(samplerObject->GetMaxAnisotropy(), 6.0f);
+    EXPECT_EQ(samplerObject->GetVersion(), setVersion);
+
+    MG_Impl::GLImpl::SamplerParameteri(sampler, GL_TEXTURE_MAX_ANISOTROPY_EXT, 0);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_INVALID_VALUE);
+    EXPECT_FLOAT_EQ(samplerObject->GetMaxAnisotropy(), 6.0f);
+    EXPECT_EQ(samplerObject->GetVersion(), setVersion);
+
+    const GLint signedInvalidValue = -1;
+    MG_Impl::GLImpl::SamplerParameterIiv(sampler, GL_TEXTURE_MAX_ANISOTROPY_EXT, &signedInvalidValue);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_INVALID_VALUE);
+    EXPECT_FLOAT_EQ(samplerObject->GetMaxAnisotropy(), 6.0f);
+    EXPECT_EQ(samplerObject->GetVersion(), setVersion);
+
+    const GLuint unsignedValue = 10;
+    MG_Impl::GLImpl::SamplerParameterIuiv(sampler, GL_TEXTURE_MAX_ANISOTROPY_EXT, &unsignedValue);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+    EXPECT_FLOAT_EQ(samplerObject->GetMaxAnisotropy(), 10.0f);
+    EXPECT_EQ(samplerObject->GetVersion(), static_cast<Uint16>(setVersion + 1));
+
+    GLuint queriedUnsignedValue = 0;
+    MG_Impl::GLImpl::GetSamplerParameterIuiv(sampler, GL_TEXTURE_MAX_ANISOTROPY_EXT, &queriedUnsignedValue);
+    EXPECT_EQ(queriedUnsignedValue, unsignedValue);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+}
+
+// GL 3.3 core 3.8.2: BindSampler rejects a never-generated or already-deleted name with
+// INVALID_OPERATION, while SamplerParameter* on the same name is INVALID_VALUE - the two paths
+// must not share one validator. Delete of an unknown name stays silent.
+TEST_F(TextureTest, BindSamplerRejectsUnknownNameWithInvalidOperationUnlikeSamplerParameter) {
+    GLuint sampler = 0;
+    MG_Impl::GLImpl::GenSamplers(1, &sampler);
+    ASSERT_NE(sampler, 0u);
+    MG_Impl::GLImpl::BindSampler(0, sampler);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    // Deleting is silent, twice over, and the name is dead afterwards.
+    MG_Impl::GLImpl::DeleteSamplers(1, &sampler);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+    MG_Impl::GLImpl::DeleteSamplers(1, &sampler);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    MG_Impl::GLImpl::BindSampler(0, sampler);
+    ExpectSingleGlError(GL_INVALID_OPERATION);
+
+    // Same dead name through SamplerParameter*: INVALID_VALUE, so the two paths cannot share one
+    // validator - and neither may queue the other's code alongside its own.
+    MG_Impl::GLImpl::SamplerParameteri(sampler, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    ExpectSingleGlError(GL_INVALID_VALUE);
+}
+
+TEST_F(TextureTest, GenThenBindCreatesObjectForUnsizedPackedBgraSubImageUpload) {
+    GLuint texture = 0;
+    MG_Impl::GLImpl::GenTextures(1, &texture);
+    ASSERT_NE(texture, 0u);
+    ASSERT_TRUE(MG_State::pGLContext->ValidateTextureName(texture));
+    // GenTextures only reserves the name; the object appears on first bind.
+    ASSERT_FALSE(MG_State::pGLContext->ValidateTextureObject(texture));
+    EXPECT_EQ(MG_Impl::GLImpl::IsTexture(texture), GL_FALSE);
+
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, texture);
+
+    const auto textureObject = MG_State::pGLContext->GetTextureObject(texture);
+    ASSERT_NE(textureObject, nullptr);
+    EXPECT_TRUE(MG_State::pGLContext->ValidateTextureObject(texture));
+    EXPECT_EQ(MG_Impl::GLImpl::IsTexture(texture), GL_TRUE);
+
+    MG_Impl::GLImpl::TexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 2, 1, 0, GL_BGRA,
+                                GL_UNSIGNED_INT_8_8_8_8_REV, nullptr);
+    const Uint8 pixels[] = {
+        10, 20, 30, 40,
+        50, 60, 70, 80,
+    };
+    MG_Impl::GLImpl::TexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 2, 1, GL_BGRA,
+                                   GL_UNSIGNED_INT_8_8_8_8_REV, pixels);
+
+    const auto* stored = GetBoundTexture2DLevelBytes(texture);
+    ASSERT_NE(stored, nullptr);
+    const Uint8 expected[] = {
+        30, 20, 10, 40,
+        70, 60, 50, 80,
+    };
+    EXPECT_EQ(std::memcmp(stored, expected, sizeof(expected)), 0);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+}
+
+// GL 3.3 core 3.8.1: DeleteTextures makes the name unused again whether or not a bind ever
+// instantiated an object, so the reservation must go back to the generator's free list rather
+// than leaking, and binding the dead name afterwards must fail.
+TEST_F(TextureTest, DeleteGeneratedButUnboundNameReleasesReservationAndBindFails) {
+    GLuint texture = 0;
+    MG_Impl::GLImpl::GenTextures(1, &texture);
+    ASSERT_NE(texture, 0u);
+    ASSERT_TRUE(MG_State::pGLContext->ValidateTextureName(texture));
+    ASSERT_FALSE(MG_State::pGLContext->ValidateTextureObject(texture));
+
+    MG_Impl::GLImpl::DeleteTextures(1, &texture);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+    EXPECT_FALSE(MG_State::pGLContext->ValidateTextureName(texture));
+    EXPECT_FALSE(MG_State::pGLContext->ValidateTextureObject(texture));
+    // IsTexture answers about a dead name without raising anything (GL 3.3 core 6.1.4).
+    EXPECT_EQ(MG_Impl::GLImpl::IsTexture(texture), GL_FALSE);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, texture);
+    ExpectSingleGlError(GL_INVALID_OPERATION);
+    EXPECT_FALSE(MG_State::pGLContext->ValidateTextureObject(texture));
+
+    // The freed reservation is recycled (the generator's free list is LIFO, so the very same
+    // name comes back) - a delete that skipped the release would hand out a fresh name here.
+    GLuint recycled = 0;
+    MG_Impl::GLImpl::GenTextures(1, &recycled);
+    EXPECT_EQ(recycled, texture);
+    EXPECT_TRUE(MG_State::pGLContext->ValidateTextureName(recycled));
+}
+
+TEST_F(TextureTest, DeleteInstantiatedTextureInvalidatesNameUntilRegenerated) {
+    GLuint textures[2] = {};
+    MG_Impl::GLImpl::GenTextures(2, textures);
+    ASSERT_NE(textures[0], 0u);
+    ASSERT_NE(textures[1], 0u);
+
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, textures[0]);
+    ASSERT_TRUE(MG_State::pGLContext->ValidateTextureObject(textures[0]));
+    MG_Impl::GLImpl::DeleteTextures(1, &textures[0]);
+
+    EXPECT_FALSE(MG_State::pGLContext->ValidateTextureName(textures[0]));
+    EXPECT_FALSE(MG_State::pGLContext->ValidateTextureObject(textures[0]));
+
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, textures[1]);
+    const auto fallbackObject = MG_State::pGLContext->GetTextureObject(textures[1]);
+    ASSERT_NE(fallbackObject, nullptr);
+    ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, textures[0]);
+    ExpectSingleGlError(GL_INVALID_OPERATION);
+    EXPECT_EQ(MG_State::pGLContext->GetTextureUnitObject(0)
+                  .GetBindingSlot(TextureTarget::Texture2D)
+                  .GetBoundObject(),
+              fallbackObject);
+}
+
+TEST_F(TextureTest, DeleteUnknownNamesIsSilentButBindUnknownNameIsInvalid) {
+    GLuint validTexture = 0;
+    MG_Impl::GLImpl::GenTextures(1, &validTexture);
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, validTexture);
+    const auto boundObject = MG_State::pGLContext->GetTextureObject(validTexture);
+    ASSERT_NE(boundObject, nullptr);
+
+    constexpr GLuint unknownNames[] = {0, std::numeric_limits<GLuint>::max()};
+    MG_Impl::GLImpl::DeleteTextures(2, unknownNames);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, unknownNames[1]);
+    ExpectSingleGlError(GL_INVALID_OPERATION);
+    EXPECT_EQ(MG_State::pGLContext->GetTextureUnitObject(0)
+                  .GetBindingSlot(TextureTarget::Texture2D)
+                  .GetBoundObject(),
+              boundObject);
+    EXPECT_FALSE(MG_State::pGLContext->ValidateTextureName(unknownNames[1]));
+    EXPECT_FALSE(MG_State::pGLContext->ValidateTextureObject(unknownNames[1]));
+}
+
+TEST_F(TextureTest, BindTextureUnitEnumAsNameIsSilentNoOp) {
+    GLuint validTexture = 0;
+    MG_Impl::GLImpl::GenTextures(1, &validTexture);
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, validTexture);
+    const auto boundObject = MG_State::pGLContext->GetTextureObject(validTexture);
+    ASSERT_NE(boundObject, nullptr);
+    ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    constexpr GLuint textureUnitEnum = GL_TEXTURE7;
+    ASSERT_FALSE(MG_State::pGLContext->ValidateTextureName(textureUnitEnum));
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, textureUnitEnum);
+
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+    EXPECT_EQ(MG_State::pGLContext->GetTextureUnitObject(0)
+                  .GetBindingSlot(TextureTarget::Texture2D)
+                  .GetBoundObject(),
+              boundObject);
+    EXPECT_FALSE(MG_State::pGLContext->ValidateTextureName(textureUnitEnum));
+    EXPECT_FALSE(MG_State::pGLContext->ValidateTextureObject(textureUnitEnum));
+}
+
+TEST_F(TextureTest, TexSubImage2DWithoutBoundTextureReportsErrorInsteadOfDereferencingNull) {
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, 0);
+    ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    const Uint8 pixel[] = {1, 2, 3, 4};
+    MG_Impl::GLImpl::TexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel);
+
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_INVALID_OPERATION);
 }
 
 TEST_F(TextureTest, TextureStorageAndSubImageModifyNamedObjectOnly) {
@@ -937,6 +1256,146 @@ TEST_F(TextureTest, BoundTexSubImage3DRejectsOutOfRangeLevel) {
     const Uint8 pixels[] = {1, 2, 3, 4};
     MG_Impl::GLImpl::TexSubImage3D(GL_TEXTURE_3D, 3, 0, 0, 0, 1, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
     EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_INVALID_VALUE);
+}
+
+// The GL CTS KHR-GL33.pixelstoragemodes.teximage3d cases upload GL_TEXTURE_2D_ARRAY
+// textures through glTexImage3D with UNPACK_ROW_LENGTH / IMAGE_HEIGHT / SKIP_* set to
+// extract a sub-cuboid; this mirrors that shape (scaled down) on the 2D-array target.
+TEST_F(TextureTest, BoundTexImage3DOn2DArrayHonorsUnpackSubcuboidSelection) {
+    GLuint texture = 0;
+    MG_Impl::GLImpl::GenTextures(1, &texture);
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D_ARRAY, texture);
+
+    // Source cuboid: 3x3 RGBA texels per image, 3 images; skip 1 image, 1 row, 1 pixel;
+    // upload the 2x2x2 sub-cuboid. Each source byte equals its own offset, so the stored
+    // shadow bytes must equal the offsets of the selected texels.
+    Uint8 pixels[3 * 3 * 3 * 4];
+    for (SizeT i = 0; i < sizeof(pixels); ++i) {
+        pixels[i] = static_cast<Uint8>(i);
+    }
+
+    MG_Impl::GLImpl::PixelStorei(GL_UNPACK_ROW_LENGTH, 3);
+    MG_Impl::GLImpl::PixelStorei(GL_UNPACK_IMAGE_HEIGHT, 3);
+    MG_Impl::GLImpl::PixelStorei(GL_UNPACK_SKIP_PIXELS, 1);
+    MG_Impl::GLImpl::PixelStorei(GL_UNPACK_SKIP_ROWS, 1);
+    MG_Impl::GLImpl::PixelStorei(GL_UNPACK_SKIP_IMAGES, 1);
+    MG_Impl::GLImpl::TexImage3D(GL_TEXTURE_2D_ARRAY, 0, GL_RGBA8, 2, 2, 2, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+    MG_Impl::GLImpl::PixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+    MG_Impl::GLImpl::PixelStorei(GL_UNPACK_IMAGE_HEIGHT, 0);
+    MG_Impl::GLImpl::PixelStorei(GL_UNPACK_SKIP_PIXELS, 0);
+    MG_Impl::GLImpl::PixelStorei(GL_UNPACK_SKIP_ROWS, 0);
+    MG_Impl::GLImpl::PixelStorei(GL_UNPACK_SKIP_IMAGES, 0);
+
+    const auto textureObject = MG_State::pGLContext->GetTextureObject(texture);
+    ASSERT_NE(textureObject, nullptr);
+    EXPECT_EQ(textureObject->GetTarget(), TextureTarget::Texture2DArray);
+    auto* mipmapObject = static_cast<MG_State::GLState::TextureObjectMipmap*>(textureObject.get());
+    EXPECT_EQ(mipmapObject->GetMipmapTexelSize(TextureUploadTarget::Texture2DArray, 0), IntVec3(2, 2, 2));
+
+    const auto* stored =
+        static_cast<const Uint8*>(mipmapObject->MapMipmapData(TextureUploadTarget::Texture2DArray, 0));
+    ASSERT_NE(stored, nullptr);
+    SizeT storedIndex = 0;
+    for (SizeT image = 1; image <= 2; ++image) {         // SKIP_IMAGES = 1
+        for (SizeT row = 1; row <= 2; ++row) {            // SKIP_ROWS = 1
+            for (SizeT column = 1; column <= 2; ++column) { // SKIP_PIXELS = 1
+                const SizeT srcOffset = image * 36 + row * 12 + column * 4;
+                for (SizeT b = 0; b < 4; ++b, ++storedIndex) {
+                    EXPECT_EQ(stored[storedIndex], static_cast<Uint8>(srcOffset + b)) << "byte " << storedIndex;
+                }
+            }
+        }
+    }
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+}
+
+// The shadow mip for packed sized formats keeps the client's packed bytes, so the
+// canonical transfer triple must name the packed word type; the old default fallback
+// (GL_UNSIGNED_BYTE) made backends read 4 bytes per texel from a 2-byte-per-texel
+// shadow (KHR-GL33.pixelstoragemodes rgba4/rgb565 uploads), and GL_RGB10_A2UI got a
+// non-integer GL_RGB transfer format the driver rejects outright.
+TEST_F(TextureTest, NormalizePixelFormatKeepsPackedTransferTypesForPackedSizedFormats) {
+    using MG_Util::TextureFormatProcessor::NormalizePixelFormat;
+    struct {
+        GLenum internalFormat;
+        GLenum expectedFormat;
+        GLenum expectedType;
+    } cases[] = {
+        // RGBA4/RGB565/RGB5_A1 store canonical UNorm8 component shadows (PixelStoreProcessor
+        // GetInternalShadowLayout), so their transfer type is GL_UNSIGNED_BYTE; the 32-bit packed
+        // formats keep the packed word the shadow holds verbatim.
+        {GL_RGBA4, GL_RGBA, GL_UNSIGNED_BYTE},
+        {GL_RGB565, GL_RGB, GL_UNSIGNED_BYTE},
+        {GL_RGB10_A2UI, GL_RGBA_INTEGER, GL_UNSIGNED_INT_2_10_10_10_REV},
+        {GL_RGB5_A1, GL_RGBA, GL_UNSIGNED_BYTE},
+        {GL_RGB10_A2, GL_RGBA, GL_UNSIGNED_INT_2_10_10_10_REV},
+    };
+    for (const auto& c : cases) {
+        GLenum outInternal = 0, outFormat = 0, outType = 0;
+        NormalizePixelFormat(c.internalFormat, PixelFormatNormalizeOptionBit::None, &outInternal, &outFormat,
+                             &outType);
+        EXPECT_EQ(outInternal, c.internalFormat) << "internalformat 0x" << std::hex << c.internalFormat;
+        EXPECT_EQ(outFormat, c.expectedFormat) << "internalformat 0x" << std::hex << c.internalFormat;
+        EXPECT_EQ(outType, c.expectedType) << "internalformat 0x" << std::hex << c.internalFormat;
+    }
+}
+
+// GL_RGB565 (ARB_ES2_compatibility / GL 4.1, used directly by the GL CTS) must round-trip
+// through the internal-format enums; it had no GLToMG mapping at all, so glTexImage* with
+// GL_RGB565 was rejected as an unknown internal format.
+TEST_F(TextureTest, Rgb565InternalFormatRoundTripsThroughEnumConverters) {
+    EXPECT_EQ(MG_Util::ConvertGLEnumToTextureInternalFormat(GL_RGB565), TextureInternalFormat::RGB5);
+    EXPECT_EQ(MG_Util::ConvertGLEnumToTextureInternalFormat(GL_RGB5), TextureInternalFormat::RGB5);
+    // The ES-facing rendition of RGB5 is GL_RGB565 (desktop GL_RGB5 is not a legal sized
+    // internalformat on OpenGL ES backends).
+    EXPECT_EQ(MG_Util::ConvertTextureInternalFormatToGLEnum(TextureInternalFormat::RGB5),
+              static_cast<GLenum>(GL_RGB565));
+}
+
+// Regression guard: the DirectGLES backend must treat GL_TEXTURE_2D_ARRAY as a
+// syncable target — it used to be skipped entirely, so 2D-array textures were never
+// uploaded or bound (KHR-GL33.pixelstoragemodes.teximage3d.* failed wholesale).
+TEST_F(TextureTest, DirectGLESTreats2DArrayAsSupportedTextureTarget) {
+    using MobileGL::MG_Backend::DirectGLES::TextureImpl::IsSupportedTextureTarget;
+    EXPECT_TRUE(IsSupportedTextureTarget(TextureTarget::Texture2DArray));
+    EXPECT_TRUE(IsSupportedTextureTarget(TextureTarget::Texture3D));
+    EXPECT_TRUE(IsSupportedTextureTarget(TextureTarget::Texture2D));
+    // 1D and 1D-array are emulated as 2D / 2D-array (MapToBackendTextureTarget), matching
+    // SPIRV-Cross's ES 1D-as-2D shader emission; only rectangle textures stay unsupported.
+    EXPECT_TRUE(IsSupportedTextureTarget(TextureTarget::Texture1D));
+    EXPECT_TRUE(IsSupportedTextureTarget(TextureTarget::Texture1DArray));
+    EXPECT_FALSE(IsSupportedTextureTarget(TextureTarget::TextureRectangle));
+}
+
+// 2D-array textures keep their layer count constant across mip levels (GL 3.3 §3.9);
+// only true 3D textures halve depth per level.
+TEST_F(TextureTest, TexStorage3DOn2DArrayKeepsLayerCountAcrossLevels) {
+    GLuint arrayTexture = 0;
+    MG_Impl::GLImpl::GenTextures(1, &arrayTexture);
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D_ARRAY, arrayTexture);
+    MG_Impl::GLImpl::TexStorage3D(GL_TEXTURE_2D_ARRAY, 3, GL_RGBA8, 8, 8, 4);
+
+    const auto arrayObject = MG_State::pGLContext->GetTextureObject(arrayTexture);
+    ASSERT_NE(arrayObject, nullptr);
+    auto* arrayMipmapObject = static_cast<MG_State::GLState::TextureObjectMipmap*>(arrayObject.get());
+    EXPECT_EQ(arrayMipmapObject->GetMipmapTexelSize(TextureUploadTarget::Texture2DArray, 0), IntVec3(8, 8, 4));
+    EXPECT_EQ(arrayMipmapObject->GetMipmapTexelSize(TextureUploadTarget::Texture2DArray, 1), IntVec3(4, 4, 4));
+    EXPECT_EQ(arrayMipmapObject->GetMipmapTexelSize(TextureUploadTarget::Texture2DArray, 2), IntVec3(2, 2, 4));
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    // Control: a real 3D texture still halves its depth per level.
+    GLuint volumeTexture = 0;
+    MG_Impl::GLImpl::GenTextures(1, &volumeTexture);
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_3D, volumeTexture);
+    MG_Impl::GLImpl::TexStorage3D(GL_TEXTURE_3D, 3, GL_RGBA8, 8, 8, 4);
+
+    const auto volumeObject = MG_State::pGLContext->GetTextureObject(volumeTexture);
+    ASSERT_NE(volumeObject, nullptr);
+    auto* volumeMipmapObject = static_cast<MG_State::GLState::TextureObjectMipmap*>(volumeObject.get());
+    EXPECT_EQ(volumeMipmapObject->GetMipmapTexelSize(TextureUploadTarget::Texture3D, 0), IntVec3(8, 8, 4));
+    EXPECT_EQ(volumeMipmapObject->GetMipmapTexelSize(TextureUploadTarget::Texture3D, 1), IntVec3(4, 4, 2));
+    EXPECT_EQ(volumeMipmapObject->GetMipmapTexelSize(TextureUploadTarget::Texture3D, 2), IntVec3(2, 2, 1));
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
 }
 
 TEST_F(TextureTest, NamedTextureVectorParametersAndGettersWorkWithoutBinding) {

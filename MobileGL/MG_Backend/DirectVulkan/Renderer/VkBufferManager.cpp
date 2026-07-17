@@ -197,16 +197,20 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         return static_cast<VkBufferResource*>(bufferObject.GetBackendResource().get());
     }
 
-    SharedPtr<VkBufferResource> VkBufferManager::GetOrCreateResource(
+    VkBufferResource* VkBufferManager::GetOrCreateResource(
         const SharedPtr<MG_State::GLState::BufferObject>& bufferObject) {
-        auto existing = std::static_pointer_cast<VkBufferResource>(bufferObject->GetBackendResource());
+        // Return by raw pointer: the resource is owned for its whole lifetime by the BufferObject's
+        // backend-resource SharedPtr (already set, or set below), so callers that only dereference
+        // it avoid a static_pointer_cast + SharedPtr refcount inc/dec on every per-draw buffer bind.
+        const auto& existing = bufferObject->GetBackendResource();
         if (existing) {
-            return existing;
+            return static_cast<VkBufferResource*>(existing.get());
         }
         auto resource = MakeShared<VkBufferResource>();
+        VkBufferResource* raw = resource.get();
         bufferObject->SetBackendResource(resource);
         TrackLiveResource(resource);
-        return resource;
+        return raw;
     }
 
     void VkBufferManager::TrackLiveResource(const SharedPtr<VkBufferResource>& resource) {

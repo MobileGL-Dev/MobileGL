@@ -1364,7 +1364,9 @@ namespace MobileGL::MG_Impl::GLImpl {
         for (SizeT i = 0; i < static_cast<SizeT>(n); ++i) {
             Uint bufferName = renderbuffers[i];
             if (bufferName == 0) continue;
-            if (!FramebufferImpl::ValidateRenderbufferName(bufferName)) continue;
+            // GL 3.3 core 4.4.2: unknown names are silently ignored on delete; the shared bind-path
+            // validator would record INVALID_OPERATION instead.
+            if (!MG_State::pGLContext->ValidateRenderbufferName(bufferName)) continue;
             MG_State::pGLContext->MarkRenderbufferObjectForDeletion(bufferName);
         }
     }
@@ -1387,7 +1389,9 @@ namespace MobileGL::MG_Impl::GLImpl {
         for (SizeT i = 0; i < static_cast<SizeT>(n); ++i) {
             Uint bufferName = framebuffers[i];
             if (bufferName == 0) continue;
-            if (!FramebufferImpl::ValidateFramebufferName(bufferName)) continue;
+            // GL 3.3 core 4.4.1: unknown names are silently ignored on delete; the shared bind-path
+            // validator would record INVALID_OPERATION instead.
+            if (!MG_State::pGLContext->ValidateFramebufferName(bufferName)) continue;
             MG_State::pGLContext->MarkFramebufferObjectForDeletion(bufferName);
         }
     }
@@ -1868,6 +1872,13 @@ namespace MobileGL::MG_Impl::GLImpl {
                                                  "Integer-ness of format does not match the read buffer"));
                 return false;
             }
+        }
+
+        // Packed-type/format pairing (GL CTS packed_pixels: e.g. GL_RED with GL_UNSIGNED_SHORT_5_6_5 must
+        // raise an error instead of reaching the backend). Shared with the TexImage/GetTexImage validators;
+        // runs after the depth-stencil branch above so DEPTH_STENCIL with a wrong type keeps GL_INVALID_ENUM.
+        if (!TextureImpl::ValidateClientFormatTypePairing(textureInputFormat, texturePixelDataType)) {
+            return false;
         }
 
         // Packed-type/format pairing (GL CTS packed_pixels: e.g. GL_RED with GL_UNSIGNED_SHORT_5_6_5 must

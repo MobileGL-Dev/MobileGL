@@ -131,6 +131,9 @@ namespace MobileGL {
             case GL_RGB4:
                 return TextureInternalFormat::RGB4;
             case GL_RGB5:
+            // GL_RGB565 (GL 4.1 / ARB_ES2_compatibility, used directly by the GL CTS) is the
+            // ES-facing rendition of the legacy RGB5 resolution.
+            case GL_RGB565:
                 return TextureInternalFormat::RGB5;
             case GL_RGB8:
                 return TextureInternalFormat::RGB8;

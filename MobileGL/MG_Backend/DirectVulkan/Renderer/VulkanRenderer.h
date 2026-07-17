@@ -131,6 +131,14 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         void ClearAttachmentsOnActiveRenderPass(VkCommandBuffer commandBuffer,
                                                 const RenderPassEntry& compatibleRenderPassEntry);
 
+        enum class ScissoredClearPrep {
+            NotNeeded,  // scissor covers the whole target — take the deferred whole-surface path instead
+            NoOp,       // nothing to clear (degenerate target or empty scissor rect)
+            Ready,      // a render pass is active; record vkCmdClearAttachments with the returned rect
+        };
+        ScissoredClearPrep PrepareScissoredClear(const MG_State::GLState::FramebufferObject& framebuffer,
+                                                 VkClearRect& outClearRect);
+
         void Clear(GLbitfield mask);
         void ClearBufferfi(GLenum buffer, GLint drawbuffer, GLfloat depth, GLint stencil);
         void ClearBufferfv(GLenum buffer, GLint drawbuffer, const GLfloat* value);
@@ -275,6 +283,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         void QueueClearBufferPayloadForFramebuffer(const MG_State::GLState::FramebufferObject& framebuffer,
                                                   GLenum buffer, GLint drawbuffer,
                                                   const ClearAttachmentPayload& clearPayload);
+        void RecordScissoredClearBuffer(const MG_State::GLState::FramebufferObject& framebuffer,
+                                        GLenum buffer, GLint drawbuffer,
+                                        const ClearAttachmentPayload& clearPayload,
+                                        const VkClearRect& clearRect);
 
         // ---- Submission fence tracking (GL sync objects) ----
         // One record per vkQueueSubmit still in flight, in ascending submit

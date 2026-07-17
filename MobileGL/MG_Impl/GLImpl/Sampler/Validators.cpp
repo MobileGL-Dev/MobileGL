@@ -99,6 +99,16 @@ namespace MobileGL::MG_Impl::GLImpl::SamplerImpl {
         case GL_TEXTURE_LOD_BIAS:
             return true;
 
+        case GL_TEXTURE_MAX_ANISOTROPY_EXT:
+            if (!(param >= 1.0f)) {
+                MG_State::pGLContext->RecordError(
+                    ErrorCode::InvalidValue,
+                    MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", "ValidateSamplerFloatParam",
+                                                 "GL_TEXTURE_MAX_ANISOTROPY_EXT must be at least 1.0."));
+                return false;
+            }
+            return true;
+
         case GL_TEXTURE_BORDER_COLOR:
             if (param < 0.0f || param > 1.0f) {
                 MG_State::pGLContext->RecordError(
@@ -121,6 +131,16 @@ namespace MobileGL::MG_Impl::GLImpl::SamplerImpl {
                     ErrorCode::InvalidValue,
                     MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", "ValidateSamplerIntParam",
                                                  "Border color component out of [0,255] range"));
+                return false;
+            }
+            return true;
+
+        case GL_TEXTURE_MAX_ANISOTROPY_EXT:
+            if (param < 1) {
+                MG_State::pGLContext->RecordError(
+                    ErrorCode::InvalidValue,
+                    MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", "ValidateSamplerIntParam",
+                                                 "GL_TEXTURE_MAX_ANISOTROPY_EXT must be at least 1."));
                 return false;
             }
             return true;

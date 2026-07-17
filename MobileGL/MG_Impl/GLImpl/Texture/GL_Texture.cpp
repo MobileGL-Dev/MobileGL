@@ -74,6 +74,16 @@ namespace MobileGL::MG_Impl::GLImpl {
             return true;
         }
 
+        Bool ValidateMaxAnisotropy(Float maxAnisotropy, const char* caller) {
+            if (maxAnisotropy >= 1.0f) return true;
+
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidValue,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller,
+                                             "GL_TEXTURE_MAX_ANISOTROPY_EXT must be at least 1.0."));
+            return false;
+        }
+
         template <typename Fn>
         void WithTemporarilyBoundNamedTexture(const SharedPtr<MG_State::GLState::ITextureObject>& textureObject,
                                              Fn&& fn) {
@@ -284,10 +294,16 @@ namespace MobileGL::MG_Impl::GLImpl {
                 MG_State::GLState::TextureState::MAX_TEXTURE_IMAGE_UNITS));
         }
 
-        Uint ComputeFullMipmapLevelCount(const IntVec3& baseTexelSize) {
+        // Array targets store their layer count in z; layers never participate in mip
+        // reduction (GL 3.3 §3.8.14), only true 3D textures halve their depth per level.
+        Bool DepthParticipatesInMipmapping(TextureTarget target) {
+            return target == TextureTarget::Texture3D;
+        }
+
+        Uint ComputeFullMipmapLevelCount(const IntVec3& baseTexelSize, Bool depthMips) {
             Int maxDimension = std::max<Int>(
                 baseTexelSize.x(),
-                std::max<Int>(baseTexelSize.y(), std::max<Int>(baseTexelSize.z(), 1)));
+                std::max<Int>(baseTexelSize.y(), depthMips ? std::max<Int>(baseTexelSize.z(), 1) : 1));
             Uint mipLevelCount = 1;
             while (maxDimension > 1) {
                 maxDimension = std::max<Int>(maxDimension / 2, 1);
@@ -296,11 +312,12 @@ namespace MobileGL::MG_Impl::GLImpl {
             return mipLevelCount;
         }
 
-        IntVec3 ComputeMipmapTexelSize(const IntVec3& baseTexelSize, Uint relativeLevel) {
+        IntVec3 ComputeMipmapTexelSize(const IntVec3& baseTexelSize, Uint relativeLevel, Bool depthMips) {
             return {
                 std::max<Int>(baseTexelSize.x() >> static_cast<Int>(relativeLevel), 1),
                 std::max<Int>(baseTexelSize.y() >> static_cast<Int>(relativeLevel), 1),
-                std::max<Int>(baseTexelSize.z() >> static_cast<Int>(relativeLevel), 1),
+                depthMips ? std::max<Int>(baseTexelSize.z() >> static_cast<Int>(relativeLevel), 1)
+                          : std::max<Int>(baseTexelSize.z(), 1),
             };
         }
 
@@ -323,9 +340,10 @@ namespace MobileGL::MG_Impl::GLImpl {
             }
 
             const SizeT bytesPerTexel = baseByteSize / baseTexelCount;
-            const Uint requiredLevelCount = ComputeFullMipmapLevelCount(baseTexelSize);
+            const Bool depthMips = DepthParticipatesInMipmapping(texture.GetTarget());
+            const Uint requiredLevelCount = ComputeFullMipmapLevelCount(baseTexelSize, depthMips);
             for (Uint level = 1; level < requiredLevelCount; ++level) {
-                const IntVec3 levelTexelSize = ComputeMipmapTexelSize(baseTexelSize, level);
+                const IntVec3 levelTexelSize = ComputeMipmapTexelSize(baseTexelSize, level, depthMips);
                 const SizeT levelByteSize = bytesPerTexel * static_cast<SizeT>(levelTexelSize.x()) *
                                             static_cast<SizeT>(levelTexelSize.y()) *
                                             static_cast<SizeT>(levelTexelSize.z());
@@ -453,6 +471,9 @@ namespace MobileGL::MG_Impl::GLImpl {
     Bool ValidateTextureParameterForTarget(const SharedPtr<MG_State::GLState::ITextureObject>& textureObject,
                                            GLenum pname, GLint param, const char* caller) {
         const auto target = textureObject->GetTarget();
+        if (pname == GL_TEXTURE_MAX_ANISOTROPY_EXT && !ValidateMaxAnisotropy(param, caller)) {
+            return false;
+        }
         if ((pname == GL_TEXTURE_BASE_LEVEL || pname == GL_TEXTURE_MAX_LEVEL) && param < 0) {
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidValue,
@@ -482,7 +503,8 @@ namespace MobileGL::MG_Impl::GLImpl {
             (pname == GL_TEXTURE_WRAP_S || pname == GL_TEXTURE_WRAP_T || pname == GL_TEXTURE_WRAP_R ||
              pname == GL_TEXTURE_MIN_FILTER || pname == GL_TEXTURE_MAG_FILTER || pname == GL_TEXTURE_MIN_LOD ||
              pname == GL_TEXTURE_MAX_LOD || pname == GL_TEXTURE_LOD_BIAS || pname == GL_TEXTURE_COMPARE_MODE ||
-             pname == GL_TEXTURE_COMPARE_FUNC || pname == GL_TEXTURE_BORDER_COLOR)) {
+             pname == GL_TEXTURE_COMPARE_FUNC || pname == GL_TEXTURE_BORDER_COLOR ||
+             pname == GL_TEXTURE_MAX_ANISOTROPY_EXT)) {
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidOperation,
                 MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller,
@@ -581,6 +603,9 @@ namespace MobileGL::MG_Impl::GLImpl {
         case GL_TEXTURE_LOD_BIAS:
             textureObject->GetSamplerObject()->SetLodBias((GLfloat)param);
             break;
+        case GL_TEXTURE_MAX_ANISOTROPY_EXT:
+            textureObject->GetSamplerObject()->SetMaxAnisotropy(static_cast<GLfloat>(param));
+            break;
         case GL_GENERATE_MIPMAP:
             g_autoGenerateMipmapByTextureId[textureObject->GetExternalIndex()] = (param != GL_FALSE);
             break;
@@ -597,7 +622,10 @@ namespace MobileGL::MG_Impl::GLImpl {
     void TextureParameterObjectf_State(const SharedPtr<MG_State::GLState::ITextureObject>& textureObject, GLenum pname,
                                        GLfloat param, const char* caller) {
         if (!textureObject) return;
-        if (!ValidateTextureParameterForTarget(textureObject, pname, static_cast<GLint>(param), caller)) return;
+        if (pname == GL_TEXTURE_MAX_ANISOTROPY_EXT && !ValidateMaxAnisotropy(param, caller)) return;
+        const GLint validationParam =
+            pname == GL_TEXTURE_MAX_ANISOTROPY_EXT ? 1 : static_cast<GLint>(param);
+        if (!ValidateTextureParameterForTarget(textureObject, pname, validationParam, caller)) return;
 
         switch (pname) {
         case GL_TEXTURE_MAG_FILTER:
@@ -642,6 +670,9 @@ namespace MobileGL::MG_Impl::GLImpl {
             break;
         case GL_TEXTURE_LOD_BIAS:
             textureObject->GetSamplerObject()->SetLodBias(param);
+            break;
+        case GL_TEXTURE_MAX_ANISOTROPY_EXT:
+            textureObject->GetSamplerObject()->SetMaxAnisotropy(param);
             break;
         case GL_GENERATE_MIPMAP:
             g_autoGenerateMipmapByTextureId[textureObject->GetExternalIndex()] = (param != 0.0f);
@@ -711,6 +742,9 @@ namespace MobileGL::MG_Impl::GLImpl {
         case GL_TEXTURE_COMPARE_FUNC:
             *params = (GLint)MG_Util::ConvertSamplerCompareFuncToGLEnum(
                 textureObject->GetSamplerObject()->GetSamplerCompareFunc());
+            break;
+        case GL_TEXTURE_MAX_ANISOTROPY_EXT:
+            *params = static_cast<GLint>(textureObject->GetSamplerObject()->GetMaxAnisotropy());
             break;
         default:
             MG_State::pGLContext->RecordError(
@@ -898,11 +932,11 @@ namespace MobileGL::MG_Impl::GLImpl {
         auto& activeUnit = MG_State::pGLContext->GetTextureUnitObject(MG_State::pGLContext->GetActiveTextureUnit());
         auto& bindingSlot = activeUnit.GetBindingSlot(textureTarget);
         auto& textureObject = bindingSlot.GetBoundObject();
+        if (!TextureImpl::ValidateTextureObject(textureObject)) return;
         TextureInternalFormat textureInternalFormat = textureObject->GetFormat();
         MGLOG_D("%s: working on texture %d", __func__, textureObject->GetExternalIndex());
 
         // ===================== Error Checking ==============================
-        if (!TextureImpl::ValidateTextureObject(textureObject)) return;
         if (!TextureImpl::ValidateTextureSubImageOffsets(textureObject, xoffset, width, yoffset, height)) return;
         if (!TextureImpl::ValidateTextureInternalFormatCompatibleWithInput(textureInputFormat, textureInternalFormat,
                                                                            texturePixelDataType))
@@ -1121,6 +1155,10 @@ namespace MobileGL::MG_Impl::GLImpl {
             break;
         case GL_TEXTURE_LOD_BIAS:
             textureObject->GetSamplerObject()->SetLodBias(param);
+            break;
+        case GL_TEXTURE_MAX_ANISOTROPY_EXT:
+            if (!ValidateMaxAnisotropy(param, __func__)) return;
+            textureObject->GetSamplerObject()->SetMaxAnisotropy(param);
             break;
         case GL_GENERATE_MIPMAP:
             g_autoGenerateMipmapByTextureId[textureObject->GetExternalIndex()] = (param != 0.0f);
@@ -1762,7 +1800,9 @@ namespace MobileGL::MG_Impl::GLImpl {
 
     GLboolean IsTexture_State(GLuint texture) {
         // ======================= Processing ================================
-        if (!TextureImpl::ValidateTextureName(texture, true)) return GL_FALSE;
+        // GL 3.3 core 6.1.4: IsTexture generates no error - an unknown, deleted or merely reserved
+        // name is just GL_FALSE. Probing with the recording validator (as every other Is* entry
+        // point already avoids doing) would leave a spurious INVALID_VALUE behind.
         return MG_State::pGLContext->ValidateTextureObject(texture) ? GL_TRUE : GL_FALSE;
     }
 
@@ -1951,6 +1991,11 @@ namespace MobileGL::MG_Impl::GLImpl {
                     textureObject->GetSamplerObject()->GetSamplerCompareFunc());
             }
             break;
+        case GL_TEXTURE_MAX_ANISOTROPY_EXT:
+            if (params) {
+                *params = static_cast<GLint>(textureObject->GetSamplerObject()->GetMaxAnisotropy());
+            }
+            break;
         case GL_IMAGE_FORMAT_COMPATIBILITY_TYPE:
             if (params) {
                 *params = GL_IMAGE_FORMAT_COMPATIBILITY_BY_SIZE;
@@ -2095,6 +2140,11 @@ namespace MobileGL::MG_Impl::GLImpl {
             if (params) {
                 *params = (GLfloat)MG_Util::ConvertSamplerCompareFuncToGLEnum(
                     textureObject->GetSamplerObject()->GetSamplerCompareFunc());
+            }
+            break;
+        case GL_TEXTURE_MAX_ANISOTROPY_EXT:
+            if (params) {
+                *params = textureObject->GetSamplerObject()->GetMaxAnisotropy();
             }
             break;
         default:
@@ -2368,7 +2418,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         for (SizeT i = 0; i < static_cast<SizeT>(n); ++i) {
             Uint textureName = textures[i];
             if (textureName == 0) continue;
-            if (!TextureImpl::ValidateTextureName(textureName, true)) continue;
+            if (!MG_State::pGLContext->ValidateTextureName(textureName)) continue;
             MG_State::pGLContext->MarkTextureObjectForDeletion(textureName);
         }
     }
@@ -2591,14 +2641,15 @@ namespace MobileGL::MG_Impl::GLImpl {
             return;
         }
 
+        // GL 3.3 core 3.8.1: a name that GenTextures never returned - or that has since been deleted -
+        // is not a legal bind target in the core profile (no application-generated names), and the error
+        // is INVALID_OPERATION, not INVALID_VALUE.
         if (!MG_State::pGLContext->ValidateTextureName(texture)) {
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidOperation,
                 MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", "BindTexture_State", "Invalid texture name"));
             return;
         }
-
-        if (!TextureImpl::ValidateTextureName(texture, true)) return;
 
         // ======================= Processing ================================
         Bool doesTextureExist = MG_State::pGLContext->ValidateTextureObject(texture);
@@ -2994,10 +3045,13 @@ namespace MobileGL::MG_Impl::GLImpl {
         auto* textureMipmapObject = static_cast<MG_State::GLState::TextureObjectMipmap*>(textureObject.get());
 
         textureObject->SetInternalFormat(textureInternalFormat);
+        // Array targets keep their layer count constant across levels; only true 3D
+        // textures halve depth per level (GL 3.3 §3.9 glTexStorage3D).
+        const Bool depthMips = DepthParticipatesInMipmapping(textureObject->GetTarget());
         for (GLsizei level = 0; level < levels; ++level) {
             const GLsizei levelWidth = std::max<GLsizei>(1, width >> level);
             const GLsizei levelHeight = std::max<GLsizei>(1, height >> level);
-            const GLsizei levelDepth = std::max<GLsizei>(1, depth >> level);
+            const GLsizei levelDepth = depthMips ? std::max<GLsizei>(1, depth >> level) : depth;
             const SizeT byteSize = ComputeTextureStorageByteSize(textureInternalFormat, levelWidth, levelHeight,
                                                                  levelDepth);
             textureMipmapObject->AllocateStorage(textureUploadTarget, level,

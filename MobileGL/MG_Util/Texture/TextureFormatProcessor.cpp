@@ -310,10 +310,12 @@ namespace MobileGL::MG_Util::TextureFormatProcessor {
             // Color sized other
             case GL_RGB9_E5:
             case GL_R11F_G11F_B10F:
+            case GL_RGB565:
                 *outFormat = GL_RGB;
                 break;
             case GL_RGB10_A2:
             case GL_RGB5_A1:
+            case GL_RGBA4:
                 *outFormat = GL_RGBA;
                 break;
             case GL_RGB10_A2UI:
@@ -324,13 +326,11 @@ namespace MobileGL::MG_Util::TextureFormatProcessor {
             case GL_R3_G3_B2:
             case GL_RGB4:
             case GL_RGB5:
-            case GL_RGB565:
             case GL_RGB10:
             case GL_RGB12:
                 *outFormat = GL_RGB;
                 break;
             case GL_RGBA2:
-            case GL_RGBA4:
             case GL_RGBA12:
                 *outFormat = GL_RGBA;
                 break;
@@ -544,7 +544,6 @@ namespace MobileGL::MG_Util::TextureFormatProcessor {
             case GL_SRGB_ALPHA:
                 *outType = GL_UNSIGNED_BYTE;
                 break;
-
                 // Depth
             case GL_DEPTH_COMPONENT16:
                 *outType = GL_UNSIGNED_SHORT;
