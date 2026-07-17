@@ -1890,7 +1890,8 @@ void main() {
 
         m_samplerManager = MakeUnique<VkSamplerManager>();
         MOBILEGL_ASSERT(m_samplerManager != nullptr, "VkSamplerManager creation failed.");
-        succeeded = m_samplerManager->Initialize({m_device, &m_config});
+        succeeded = m_samplerManager->Initialize({m_device, &m_config, m_samplerAnisotropyFeatureEnabled,
+                                                  m_physicalDevice.properties.limits.maxSamplerAnisotropy});
         MOBILEGL_ASSERT(succeeded, "VkSamplerManager initialization failed.");
         succeeded = InitializeBlitResources();
         MOBILEGL_ASSERT(succeeded, "Blit pipeline resource initialization failed.");
@@ -6508,6 +6509,10 @@ void main() {
         deviceFeatures.multiDrawIndirect = supportedDeviceFeatures.multiDrawIndirect;
         m_multiDrawIndirectFeatureEnabled = deviceFeatures.multiDrawIndirect == VK_TRUE;
         m_logicOpFeatureEnabled = deviceFeatures.logicOp == VK_TRUE;
+        // Backs GL_TEXTURE_MAX_ANISOTROPY_EXT; optional in Vulkan, so the sampler manager falls back
+        // to isotropic filtering (and the extension goes unadvertised) when the device lacks it.
+        deviceFeatures.samplerAnisotropy = supportedDeviceFeatures.samplerAnisotropy;
+        m_samplerAnisotropyFeatureEnabled = deviceFeatures.samplerAnisotropy == VK_TRUE;
 
         VkDeviceCreateInfo deviceCreateInfo{};
         deviceCreateInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;

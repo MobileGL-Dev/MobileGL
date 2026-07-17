@@ -529,6 +529,13 @@ namespace MobileGL::MG_Impl::GLImpl {
             params[1] = dynamicParameters.AliasedLineWidthRangeMax;
             return;
         }
+        case GL_MAX_TEXTURE_MAX_ANISOTROPY_EXT: {
+            // EXT_texture_filter_anisotropic queries this as a float; the integer path below widens
+            // from here, so this case is the authoritative one.
+            const auto& dynamicParameters = MG_Backend::pActiveBackendObject->GetDynamicParameters();
+            params[0] = dynamicParameters.MaxTextureMaxAnisotropy;
+            return;
+        }
         case GL_ALIASED_POINT_SIZE_RANGE:
         case GL_POINT_SIZE_RANGE: {
             const auto& dynamicParameters = MG_Backend::pActiveBackendObject->GetDynamicParameters();
@@ -1954,6 +1961,10 @@ namespace MobileGL::MG_Impl::GLImpl {
             break;
         case GL_MAX_SAMPLES:
             *params = std::max(dynamicParameters.MaxSamples, kFrontendMaxSamples);
+            break;
+        case GL_MAX_TEXTURE_MAX_ANISOTROPY_EXT:
+            // Float state (see GetFloatv); rounded to nearest for the integer query per GL 3.3 6.1.2.
+            *params = static_cast<GLint>(std::lround(dynamicParameters.MaxTextureMaxAnisotropy));
             break;
         default:
             MGLOG_E("glGetIntegerv: Invalid enum %s (0x%X)", MG_Util::ConvertGLEnumToString(pname).c_str(), pname);

@@ -122,6 +122,10 @@ namespace {
             return table;
         }
         const MobileGL::MG_Backend::DynamicBackendParameters& GetDynamicParameters() const override {
+            return MutableDynamicParameters();
+        }
+        // Lets a test stand in a backend limit (e.g. GL_MAX_TEXTURE_MAX_ANISOTROPY_EXT).
+        static MobileGL::MG_Backend::DynamicBackendParameters& MutableDynamicParameters() {
             static MobileGL::MG_Backend::DynamicBackendParameters params = {};
             return params;
         }
@@ -159,6 +163,30 @@ TEST_F(TextureTest, CreateTexturesCreatesObjectsWithoutBinding) {
 
     auto& unit = MG_State::pGLContext->GetTextureUnitObject(MG_State::pGLContext->GetActiveTextureUnit());
     EXPECT_EQ(unit.GetBindingSlot(TextureTarget::Texture2D).GetBoundObject(), nullptr);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+}
+
+// GL_MAX_TEXTURE_MAX_ANISOTROPY_EXT is float state that must answer every numeric query: GetFloatv
+// is authoritative and GetIntegerv would otherwise fall through to its INVALID_ENUM default.
+TEST_F(TextureTest, MaxTextureMaxAnisotropyIsAnsweredFromTheBackendLimit) {
+    auto backend = MakeUnique<FormatCapabilityBackend>();
+    FormatCapabilityBackend::MutableDynamicParameters().MaxTextureMaxAnisotropy = 16.0f;
+    ScopedBackendOverride override(Move(backend));
+
+    GLfloat floatValue = 0.0f;
+    MG_Impl::GLImpl::GetFloatv(GL_MAX_TEXTURE_MAX_ANISOTROPY_EXT, &floatValue);
+    EXPECT_FLOAT_EQ(floatValue, 16.0f);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    GLint integerValue = 0;
+    MG_Impl::GLImpl::GetIntegerv(GL_MAX_TEXTURE_MAX_ANISOTROPY_EXT, &integerValue);
+    EXPECT_EQ(integerValue, 16);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    // A backend without anisotropy reports the no-anisotropy floor rather than erroring.
+    FormatCapabilityBackend::MutableDynamicParameters().MaxTextureMaxAnisotropy = 1.0f;
+    MG_Impl::GLImpl::GetFloatv(GL_MAX_TEXTURE_MAX_ANISOTROPY_EXT, &floatValue);
+    EXPECT_FLOAT_EQ(floatValue, 1.0f);
     EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
 }
 

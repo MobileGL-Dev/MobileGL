@@ -232,6 +232,9 @@ namespace MobileGL {
 
         struct DynamicBackendParameters {
             SizeT UniformBufferOffsetAlignment = 256;
+            // GL_MAX_TEXTURE_MAX_ANISOTROPY_EXT. 1.0 means the backend cannot filter anisotropically,
+            // which is also why the extension is not advertised in that case.
+            Float MaxTextureMaxAnisotropy = 1.0f;
             Float AliasedLineWidthRangeMin = 1.0f;
             Float AliasedLineWidthRangeMax = 1.0f;
             Float SmoothLineWidthRangeMin = 1.0f;

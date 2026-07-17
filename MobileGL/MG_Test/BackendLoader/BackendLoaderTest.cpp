@@ -12,6 +12,10 @@
 #include <string>
 #include <vector>
 
+#include <algorithm>
+
+#include <MG_Backend/DirectGLES/BackendObject_DirectGLES.h>
+#include <MG_Backend/DirectVulkan/BackendObject_DirectVulkan.h>
 #include <MG_Util/BackendLoaders/OpenGL/Loader.h>
 
 // ProbeIndirectInstanceIdIncludesBaseInstance is driven against a fake GLES driver:
@@ -30,6 +34,11 @@ namespace {
 
         GLenum pendingError = GL_NO_ERROR;
         std::vector<std::string> extensions;
+
+        // GL_MAX_TEXTURE_MAX_ANISOTROPY_EXT the fake reports, and whether it was ever asked:
+        // querying it on a driver without the extension would raise GL_INVALID_ENUM.
+        GLfloat maxTextureMaxAnisotropy = 16.0f;
+        bool maxTextureMaxAnisotropyQueried = false;
 
         GLuint nextBufferId = 1;
         GLuint nextShaderId = 1;
@@ -122,6 +131,10 @@ namespace {
         };
         funcs.glGetFloatv = [](GLenum pname, GLfloat* data) {
             switch (pname) {
+            case GL_MAX_TEXTURE_MAX_ANISOTROPY_EXT:
+                g_fake.maxTextureMaxAnisotropyQueried = true;
+                data[0] = g_fake.maxTextureMaxAnisotropy;
+                break;
             // Two-component range queries.
             case GL_ALIASED_LINE_WIDTH_RANGE:
             case GL_SMOOTH_LINE_WIDTH_RANGE:
@@ -402,6 +415,51 @@ TEST(IndirectInstanceIdProbe, FillInCapabilitiesWiresProbeResult) {
     EXPECT_TRUE(g_fake.drawIssued);
     EXPECT_FALSE(conformingCaps.IndirectDrawInstanceIdIncludesBaseInstance);
     ExpectProbeReleasedAllObjects();
+}
+
+// The extension string is what apps gate on (LWJGL builds GLCapabilities from it), so advertising
+// it on a driver that cannot filter anisotropically would leave them silently on trilinear.
+TEST(TextureAnisotropyCapabilities, ExtensionIsAdvertisedOnlyWhenTheHostDriverSupportsIt) {
+    const auto contains = [](const MobileGL::Vector<MobileGL::GLExtension>& extensions,
+                             MobileGL::GLExtension wanted) {
+        return std::find(extensions.begin(), extensions.end(), wanted) != extensions.end();
+    };
+
+    const auto without = MobileGL::MG_Backend::DirectGLES::BuildAdvertisedExtensions(false, false);
+    EXPECT_FALSE(contains(without, MobileGL::E_GL_EXT_texture_filter_anisotropic));
+    EXPECT_FALSE(contains(without, MobileGL::E_GL_ARB_texture_filter_anisotropic));
+
+    const auto with = MobileGL::MG_Backend::DirectGLES::BuildAdvertisedExtensions(false, true);
+    EXPECT_TRUE(contains(with, MobileGL::E_GL_EXT_texture_filter_anisotropic));
+    EXPECT_TRUE(contains(with, MobileGL::E_GL_ARB_texture_filter_anisotropic));
+
+    // Same rule on the Vulkan backend, where the gate is the samplerAnisotropy device feature.
+    const auto vkWithout = MobileGL::MG_Backend::DirectVulkan::BuildAdvertisedExtensions(false, false, false);
+    EXPECT_FALSE(contains(vkWithout, MobileGL::E_GL_EXT_texture_filter_anisotropic));
+    const auto vkWith = MobileGL::MG_Backend::DirectVulkan::BuildAdvertisedExtensions(false, false, true);
+    EXPECT_TRUE(contains(vkWith, MobileGL::E_GL_EXT_texture_filter_anisotropic));
+    EXPECT_TRUE(contains(vkWith, MobileGL::E_GL_ARB_texture_filter_anisotropic));
+}
+
+TEST(TextureAnisotropyCapabilities, MaxAnisotropyIsQueriedOnlyWhenTheExtensionIsPresent) {
+    ResetFakeDriver();
+    g_fake.maxVertexSsboBlocks = 0;
+    const auto funcs = MakeFakeGLESFunctions();
+
+    MobileGL::MG_External::GLESCapabilities absentCaps;
+    ASSERT_TRUE(MobileGL::MG_Util::BackendLoader::FillInGLESCapabilities(absentCaps, funcs));
+    // Never probed (it would be GL_INVALID_ENUM), and reported as "no anisotropy".
+    EXPECT_FALSE(g_fake.maxTextureMaxAnisotropyQueried);
+    EXPECT_FLOAT_EQ(absentCaps.MaxTextureMaxAnisotropy, 1.0f);
+
+    ResetFakeDriver();
+    g_fake.maxVertexSsboBlocks = 0;
+    g_fake.maxTextureMaxAnisotropy = 16.0f;
+    g_fake.extensions.emplace_back("GL_EXT_texture_filter_anisotropic");
+    MobileGL::MG_External::GLESCapabilities presentCaps;
+    ASSERT_TRUE(MobileGL::MG_Util::BackendLoader::FillInGLESCapabilities(presentCaps, funcs));
+    EXPECT_TRUE(g_fake.maxTextureMaxAnisotropyQueried);
+    EXPECT_FLOAT_EQ(presentCaps.MaxTextureMaxAnisotropy, 16.0f);
 }
 
 TEST(TextureAnisotropyCapabilities, ExtensionPresenceIsDetectedExactly) {
