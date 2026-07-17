@@ -8,6 +8,7 @@
 
 #include "PixelStoreProcessor.h"
 #include "MG_Util/Math/HalfFloat.h"
+#include "MG_Util/Math/SmallFloat.h"
 #include <cmath>
 
 namespace MobileGL::MG_Util::PixelStoreProcessor {
@@ -122,12 +123,29 @@ namespace MobileGL::MG_Util::PixelStoreProcessor {
 
         Bool GetInternalShadowLayout(TextureInternalFormat internal, InternalShadowLayout& out) {
             switch (internal) {
-            case TextureInternalFormat::R8:      out = {1, ShadowComponent::UNorm8, false}; return true;
-            case TextureInternalFormat::RG8:     out = {2, ShadowComponent::UNorm8, false}; return true;
+            case TextureInternalFormat::R8:
+            case TextureInternalFormat::Red:     out = {1, ShadowComponent::UNorm8, false}; return true;
+            case TextureInternalFormat::RG8:
+            case TextureInternalFormat::RG:      out = {2, ShadowComponent::UNorm8, false}; return true;
             case TextureInternalFormat::RGB8:
+            case TextureInternalFormat::RGB:
             case TextureInternalFormat::SRGB8:   out = {3, ShadowComponent::UNorm8, false}; return true;
             case TextureInternalFormat::RGBA8:
+            case TextureInternalFormat::RGBA:
             case TextureInternalFormat::SRGB8Alpha8: out = {4, ShadowComponent::UNorm8, false}; return true;
+
+            // Legacy desktop-GL sized normalized formats are stored in the closest ES-legal layout
+            // (see TextureFormatProcessor::NormalizePixelFormat): 8-bit unorm for <=8-bit channels,
+            // 16-bit unorm for 10/12-bit channels.
+            case TextureInternalFormat::R3G3B2:
+            case TextureInternalFormat::RGB4:
+            case TextureInternalFormat::RGB5:    out = {3, ShadowComponent::UNorm8, false}; return true;
+            case TextureInternalFormat::RGBA2:
+            case TextureInternalFormat::RGBA4:
+            case TextureInternalFormat::RGB5A1:  out = {4, ShadowComponent::UNorm8, false}; return true;
+            case TextureInternalFormat::RGB10:
+            case TextureInternalFormat::RGB12:   out = {3, ShadowComponent::UNorm16, false}; return true;
+            case TextureInternalFormat::RGBA12:  out = {4, ShadowComponent::UNorm16, false}; return true;
 
             case TextureInternalFormat::R8Snorm:    out = {1, ShadowComponent::SNorm8, false}; return true;
             case TextureInternalFormat::RG8Snorm:   out = {2, ShadowComponent::SNorm8, false}; return true;
@@ -185,10 +203,74 @@ namespace MobileGL::MG_Util::PixelStoreProcessor {
             case TextureInternalFormat::RGBA32I: out = {4, ShadowComponent::Int32, true}; return true;
 
             default:
-                // Packed internal layouts (RGB5A1, RGB10A2, RGB9E5, ...), depth/stencil and unsized formats
-                // keep the legacy copy path.
+                // Packed internal layouts (RGB10A2, RGB9E5, ...), depth/stencil and unsized formats
+                // have no component-array shadow layout (packed ones are handled below).
                 return false;
             }
+        }
+
+        // Packed internal formats whose shadow bytes hold the ES upload word directly
+        // (GL_UNSIGNED_INT_2_10_10_10_REV / 5_9_9_9_REV / 10F_11F_11F_REV encoding, 4 bytes/texel).
+        enum class PackedInternalKind {
+            UNorm2101010Rev, // GL_RGB10_A2
+            UInt2101010Rev,  // GL_RGB10_A2UI
+            FloatR11G11B10,  // GL_R11F_G11F_B10F
+            FloatRGB9E5,     // GL_RGB9_E5
+        };
+
+        struct InternalPackedLayout {
+            PackedInternalKind kind;
+            Int channelCount;
+            Bool isInteger;
+        };
+
+        Bool GetInternalPackedLayout(TextureInternalFormat internal, InternalPackedLayout& out) {
+            switch (internal) {
+            case TextureInternalFormat::RGB10A2:
+                out = {PackedInternalKind::UNorm2101010Rev, 4, false};
+                return true;
+            case TextureInternalFormat::RGB10A2UI:
+                out = {PackedInternalKind::UInt2101010Rev, 4, true};
+                return true;
+            case TextureInternalFormat::R11FG11FB10F:
+                out = {PackedInternalKind::FloatR11G11B10, 3, false};
+                return true;
+            case TextureInternalFormat::RGB9E5:
+                out = {PackedInternalKind::FloatRGB9E5, 3, false};
+                return true;
+            default:
+                return false;
+            }
+        }
+
+        Uint32 EncodePackedInternalWordFloat(PackedInternalKind kind, const Float rgba[4]) {
+            switch (kind) {
+            case PackedInternalKind::UNorm2101010Rev: {
+                const auto field = [](Float v, Uint32 maxValue) {
+                    return static_cast<Uint32>(std::llround(std::clamp(v, 0.0f, 1.0f) * static_cast<Float>(maxValue)));
+                };
+                return field(rgba[0], 1023u) | (field(rgba[1], 1023u) << 10) | (field(rgba[2], 1023u) << 20) |
+                       (field(rgba[3], 3u) << 30);
+            }
+            case PackedInternalKind::FloatR11G11B10:
+                return EncodeFloatToUnsignedF11(rgba[0]) | (EncodeFloatToUnsignedF11(rgba[1]) << 11) |
+                       (EncodeFloatToUnsignedF10(rgba[2]) << 22);
+            case PackedInternalKind::FloatRGB9E5:
+                return EncodeSharedExponentRGB9E5(rgba);
+            default:
+                return 0;
+            }
+        }
+
+        Uint32 EncodePackedInternalWordInt(PackedInternalKind kind, const Int64 rgba[4]) {
+            if (kind != PackedInternalKind::UInt2101010Rev) {
+                return 0;
+            }
+            const auto field = [](Int64 v, Int64 maxValue) {
+                return static_cast<Uint32>(std::clamp<Int64>(v, 0, maxValue));
+            };
+            return field(rgba[0], 1023) | (field(rgba[1], 1023) << 10) | (field(rgba[2], 1023) << 20) |
+                   (field(rgba[3], 3) << 30);
         }
 
         struct UnpackChannelMapping {
@@ -301,6 +383,8 @@ namespace MobileGL::MG_Util::PixelStoreProcessor {
             SizeT inputPixelSize;
             SizeT swapGroupSize; // UNPACK_SWAP_BYTES group: packed word size, or the component size
             SizeT internalPixelSize;
+            Bool internalIsPacked;
+            InternalPackedLayout internalPacked;
         };
 
         // Returns true when the (format, type) -> internal-format upload needs a per-texel conversion;
@@ -309,10 +393,16 @@ namespace MobileGL::MG_Util::PixelStoreProcessor {
         Bool GetUnpackConversionSpec(TextureInternalFormat internal, TextureInputFormat format,
                                      TexturePixelDataType type, UnpackConversionSpec& out) {
             InternalShadowLayout layout{};
-            if (!GetInternalShadowLayout(internal, layout)) return false;
+            InternalPackedLayout packedInternal{};
+            const Bool hasComponentLayout = GetInternalShadowLayout(internal, layout);
+            const Bool hasPackedInternal = !hasComponentLayout && GetInternalPackedLayout(internal, packedInternal);
+            if (!hasComponentLayout && !hasPackedInternal) return false;
+            const Bool internalIsInteger = hasComponentLayout ? layout.isInteger : packedInternal.isInteger;
+            const Int internalChannelCount = hasComponentLayout ? layout.channelCount : packedInternal.channelCount;
+
             UnpackChannelMapping mapping{};
             if (!GetUnpackChannelMapping(format, mapping)) return false;
-            if (mapping.isInteger != layout.isInteger) return false; // rejected upstream; stay safe
+            if (mapping.isInteger != internalIsInteger) return false; // rejected upstream; stay safe
 
             PackedTypeLayout packed{};
             const Bool isPacked = GetPackedTypeLayout(type, packed);
@@ -321,6 +411,13 @@ namespace MobileGL::MG_Util::PixelStoreProcessor {
                 // Byte layout already equals the RGBA8 shadow layout on little-endian.
                 if (internal == TextureInternalFormat::RGBA8 && format == TextureInputFormat::RGBA &&
                     type == TexturePixelDataType::UnsignedInt8888Rev) {
+                    return false;
+                }
+                // The client word already equals the packed internal word (memcpy fast path).
+                if (hasPackedInternal && type == TexturePixelDataType::UnsignedInt2101010Rev &&
+                    (format == TextureInputFormat::RGBA || format == TextureInputFormat::RGBAInteger) &&
+                    (packedInternal.kind == PackedInternalKind::UNorm2101010Rev ||
+                     packedInternal.kind == PackedInternalKind::UInt2101010Rev)) {
                     return false;
                 }
             } else {
@@ -338,25 +435,46 @@ namespace MobileGL::MG_Util::PixelStoreProcessor {
                 case TexturePixelDataType::HalfFloat:
                     if (mapping.isInteger) return false; // rejected upstream
                     break;
+                case TexturePixelDataType::UnsignedInt5999Rev:
+                case TexturePixelDataType::UnsignedInt101111Rev:
+                    // Packed-float RGB source words (decoded in ConvertUnpackRow); only pair with
+                    // GL_RGB, which the state layer already enforces.
+                    if (mapping.isInteger || mapping.channelCount != 3) return false;
+                    // The client word already equals the packed internal word.
+                    if (hasPackedInternal &&
+                        ((packedInternal.kind == PackedInternalKind::FloatRGB9E5 &&
+                          type == TexturePixelDataType::UnsignedInt5999Rev) ||
+                         (packedInternal.kind == PackedInternalKind::FloatR11G11B10 &&
+                          type == TexturePixelDataType::UnsignedInt101111Rev))) {
+                        return false;
+                    }
+                    break;
                 default:
                     return false;
                 }
-                if (hasDirect && direct == layout.component && mapping.channelCount == layout.channelCount &&
-                    IsIdentityChannelOrder(mapping)) {
+                if (hasComponentLayout && hasDirect && direct == layout.component &&
+                    mapping.channelCount == layout.channelCount && IsIdentityChannelOrder(mapping)) {
                     return false; // input already matches the shadow layout
                 }
             }
 
             out.mapping = mapping;
-            out.internal = layout;
+            out.internal = hasComponentLayout
+                               ? layout
+                               : InternalShadowLayout{internalChannelCount, ShadowComponent::UNorm8, internalIsInteger};
             out.packed = packed;
             out.isPacked = isPacked;
             out.type = type;
             out.inputPixelSize = GetInputBytesPerPixel(format, type);
+            const Bool isPackedFloatWord = type == TexturePixelDataType::UnsignedInt5999Rev ||
+                                           type == TexturePixelDataType::UnsignedInt101111Rev;
             out.swapGroupSize = isPacked ? static_cast<SizeT>(packed.totalBits / 8)
-                                         : GetBaseTexturePixelDataTypeSize(type);
+                                         : (isPackedFloatWord ? 4 : GetBaseTexturePixelDataTypeSize(type));
+            out.internalIsPacked = hasPackedInternal;
+            out.internalPacked = packedInternal;
             out.internalPixelSize =
-                static_cast<SizeT>(layout.channelCount) * GetShadowComponentSize(layout.component);
+                hasPackedInternal ? 4
+                                  : static_cast<SizeT>(layout.channelCount) * GetShadowComponentSize(layout.component);
             return true;
         }
 
@@ -564,13 +682,36 @@ namespace MobileGL::MG_Util::PixelStoreProcessor {
                             rgba[ch] = DecodeComponentToInt(s + static_cast<SizeT>(pos) * srcComponentSize, conv.type);
                         }
                     }
+                    if (conv.internalIsPacked) {
+                        const Uint32 word = EncodePackedInternalWordInt(conv.internalPacked.kind, rgba);
+                        Memcpy(d, &word, sizeof(word));
+                        continue;
+                    }
                     for (Int ch = 0; ch < conv.internal.channelCount; ++ch) {
                         EncodeShadowComponentInt(d + static_cast<SizeT>(ch) * dstComponentSize,
                                                  conv.internal.component, rgba[ch]);
                     }
                 } else {
                     Float rgba[4] = {0.0f, 0.0f, 0.0f, 1.0f};
-                    if (conv.isPacked) {
+                    if (conv.type == TexturePixelDataType::UnsignedInt5999Rev ||
+                        conv.type == TexturePixelDataType::UnsignedInt101111Rev) {
+                        // Packed-float RGB source word: decode the shared-exponent / small-float fields.
+                        Uint32 word;
+                        Memcpy(&word, s, sizeof(word));
+                        Float comps[3];
+                        if (conv.type == TexturePixelDataType::UnsignedInt5999Rev) {
+                            DecodeSharedExponentRGB9E5(word, comps);
+                        } else {
+                            comps[0] = DecodeUnsignedF11ToFloat(word & 0x7FFu);
+                            comps[1] = DecodeUnsignedF11ToFloat((word >> 11) & 0x7FFu);
+                            comps[2] = DecodeUnsignedF10ToFloat((word >> 22) & 0x3FFu);
+                        }
+                        for (Int ch = 0; ch < 4; ++ch) {
+                            const Int pos = conv.mapping.formatPosition[ch];
+                            if (pos < 0 || pos >= 3) continue;
+                            rgba[ch] = comps[pos];
+                        }
+                    } else if (conv.isPacked) {
                         const Uint32 word = ReadPackedWord(s, conv.packed.totalBits);
                         for (Int ch = 0; ch < 4; ++ch) {
                             const Int pos = conv.mapping.formatPosition[ch];
@@ -586,6 +727,11 @@ namespace MobileGL::MG_Util::PixelStoreProcessor {
                             rgba[ch] =
                                 DecodeComponentToFloat(s + static_cast<SizeT>(pos) * srcComponentSize, conv.type);
                         }
+                    }
+                    if (conv.internalIsPacked) {
+                        const Uint32 word = EncodePackedInternalWordFloat(conv.internalPacked.kind, rgba);
+                        Memcpy(d, &word, sizeof(word));
+                        continue;
                     }
                     for (Int ch = 0; ch < conv.internal.channelCount; ++ch) {
                         EncodeShadowComponentFloat(d + static_cast<SizeT>(ch) * dstComponentSize,
@@ -687,9 +833,16 @@ namespace MobileGL::MG_Util::PixelStoreProcessor {
                 } else {
                     Memcpy(layerDst, layerSrc, static_cast<SizeT>(copyWidth) * pixelSize);
 
-                    if (params.SwapBytes && pixelSize > 1 && !isByteType) {
-                        MGLOG_D("%s: SwapBytes", __func__);
-                        SwapBytes(layerDst, pixelSize, static_cast<SizeT>(copyWidth));
+                    if (params.SwapBytes && !isByteType) {
+                        // GL_UNPACK_SWAP_BYTES swaps within each element (component or packed
+                        // word), never across a whole multi-component pixel.
+                        SizeT swapGroup = GetSizedTexturePixelDataTypeSize(inputDataType);
+                        if (swapGroup == 0) swapGroup = GetBaseTexturePixelDataTypeSize(inputDataType);
+                        if (swapGroup > 1) {
+                            MGLOG_D("%s: SwapBytes (group %d)", __func__, static_cast<Int>(swapGroup));
+                            SwapBytes(layerDst, swapGroup,
+                                      static_cast<SizeT>(copyWidth) * pixelSize / swapGroup);
+                        }
                     }
 
                     if (params.LSBFirst && isBitmap) {
@@ -787,5 +940,178 @@ namespace MobileGL::MG_Util::PixelStoreProcessor {
         }
 
         return outputPixels;
+    }
+
+    namespace {
+        Float DecodeShadowComponentToFloat(const Uint8* p, ShadowComponent component) {
+            switch (component) {
+            case ShadowComponent::UNorm8:
+                return static_cast<Float>(*p) / 255.0f;
+            case ShadowComponent::SNorm8: {
+                Int8 v;
+                Memcpy(&v, p, sizeof(v));
+                return std::max(static_cast<Float>(v) / 127.0f, -1.0f);
+            }
+            case ShadowComponent::UNorm16: {
+                Uint16 v;
+                Memcpy(&v, p, sizeof(v));
+                return static_cast<Float>(v) / 65535.0f;
+            }
+            case ShadowComponent::SNorm16: {
+                Int16 v;
+                Memcpy(&v, p, sizeof(v));
+                return std::max(static_cast<Float>(v) / 32767.0f, -1.0f);
+            }
+            case ShadowComponent::Half: {
+                Uint16 v;
+                Memcpy(&v, p, sizeof(v));
+                return DecodeHalfBitsToFloat(v);
+            }
+            case ShadowComponent::Float32: {
+                Float v;
+                Memcpy(&v, p, sizeof(v));
+                return v;
+            }
+            default:
+                return 0.0f;
+            }
+        }
+
+        Int64 DecodeShadowComponentToInt(const Uint8* p, ShadowComponent component) {
+            switch (component) {
+            case ShadowComponent::UInt8:
+                return *p;
+            case ShadowComponent::Int8: {
+                Int8 v;
+                Memcpy(&v, p, sizeof(v));
+                return v;
+            }
+            case ShadowComponent::UInt16: {
+                Uint16 v;
+                Memcpy(&v, p, sizeof(v));
+                return v;
+            }
+            case ShadowComponent::Int16: {
+                Int16 v;
+                Memcpy(&v, p, sizeof(v));
+                return v;
+            }
+            case ShadowComponent::UInt32: {
+                Uint32 v;
+                Memcpy(&v, p, sizeof(v));
+                return v;
+            }
+            case ShadowComponent::Int32: {
+                Int32 v;
+                Memcpy(&v, p, sizeof(v));
+                return v;
+            }
+            default:
+                return 0;
+            }
+        }
+    } // namespace
+
+    Bool DecodeShadowDataToWideRGBA(TextureInternalFormat internalFormat, const void* src, SizeT pixelCount,
+                                    Vector<Uint8>& outWide, Bool& outIsInteger, Bool& outIsSigned) {
+        if (!src) return false;
+        const Uint8* srcBytes = static_cast<const Uint8*>(src);
+
+        InternalShadowLayout layout{};
+        if (GetInternalShadowLayout(internalFormat, layout)) {
+            const SizeT componentSize = GetShadowComponentSize(layout.component);
+            const SizeT srcPixelSize = static_cast<SizeT>(layout.channelCount) * componentSize;
+            outIsInteger = layout.isInteger;
+            outIsSigned = layout.component == ShadowComponent::Int8 || layout.component == ShadowComponent::Int16 ||
+                          layout.component == ShadowComponent::Int32;
+            outWide.resize(pixelCount * 16);
+            if (layout.isInteger) {
+                auto* dst = reinterpret_cast<Uint32*>(outWide.data());
+                for (SizeT i = 0; i < pixelCount; ++i) {
+                    const Uint8* s = srcBytes + i * srcPixelSize;
+                    for (Int ch = 0; ch < 4; ++ch) {
+                        Int64 v = ch == 3 ? 1 : 0;
+                        if (ch < layout.channelCount) {
+                            v = DecodeShadowComponentToInt(s + static_cast<SizeT>(ch) * componentSize,
+                                                           layout.component);
+                        }
+                        if (outIsSigned) {
+                            const auto out = static_cast<Int32>(v);
+                            Memcpy(&dst[i * 4 + ch], &out, sizeof(out));
+                        } else {
+                            dst[i * 4 + ch] = static_cast<Uint32>(v);
+                        }
+                    }
+                }
+            } else {
+                auto* dst = reinterpret_cast<Float*>(outWide.data());
+                for (SizeT i = 0; i < pixelCount; ++i) {
+                    const Uint8* s = srcBytes + i * srcPixelSize;
+                    for (Int ch = 0; ch < 4; ++ch) {
+                        Float v = ch == 3 ? 1.0f : 0.0f;
+                        if (ch < layout.channelCount) {
+                            v = DecodeShadowComponentToFloat(s + static_cast<SizeT>(ch) * componentSize,
+                                                             layout.component);
+                        }
+                        dst[i * 4 + ch] = v;
+                    }
+                }
+            }
+            return true;
+        }
+
+        InternalPackedLayout packedInternal{};
+        if (GetInternalPackedLayout(internalFormat, packedInternal)) {
+            outIsInteger = packedInternal.isInteger;
+            outIsSigned = false;
+            outWide.resize(pixelCount * 16);
+            if (packedInternal.isInteger) {
+                auto* dst = reinterpret_cast<Uint32*>(outWide.data());
+                for (SizeT i = 0; i < pixelCount; ++i) {
+                    Uint32 word;
+                    Memcpy(&word, srcBytes + i * 4, sizeof(word));
+                    dst[i * 4 + 0] = word & 0x3FFu;
+                    dst[i * 4 + 1] = (word >> 10) & 0x3FFu;
+                    dst[i * 4 + 2] = (word >> 20) & 0x3FFu;
+                    dst[i * 4 + 3] = (word >> 30) & 0x3u;
+                }
+            } else {
+                auto* dst = reinterpret_cast<Float*>(outWide.data());
+                for (SizeT i = 0; i < pixelCount; ++i) {
+                    Uint32 word;
+                    Memcpy(&word, srcBytes + i * 4, sizeof(word));
+                    switch (packedInternal.kind) {
+                    case PackedInternalKind::UNorm2101010Rev:
+                        dst[i * 4 + 0] = static_cast<Float>(word & 0x3FFu) / 1023.0f;
+                        dst[i * 4 + 1] = static_cast<Float>((word >> 10) & 0x3FFu) / 1023.0f;
+                        dst[i * 4 + 2] = static_cast<Float>((word >> 20) & 0x3FFu) / 1023.0f;
+                        dst[i * 4 + 3] = static_cast<Float>((word >> 30) & 0x3u) / 3.0f;
+                        break;
+                    case PackedInternalKind::FloatR11G11B10:
+                        dst[i * 4 + 0] = DecodeUnsignedF11ToFloat(word & 0x7FFu);
+                        dst[i * 4 + 1] = DecodeUnsignedF11ToFloat((word >> 11) & 0x7FFu);
+                        dst[i * 4 + 2] = DecodeUnsignedF10ToFloat((word >> 22) & 0x3FFu);
+                        dst[i * 4 + 3] = 1.0f;
+                        break;
+                    case PackedInternalKind::FloatRGB9E5: {
+                        Float rgb[3];
+                        DecodeSharedExponentRGB9E5(word, rgb);
+                        dst[i * 4 + 0] = rgb[0];
+                        dst[i * 4 + 1] = rgb[1];
+                        dst[i * 4 + 2] = rgb[2];
+                        dst[i * 4 + 3] = 1.0f;
+                        break;
+                    }
+                    default:
+                        dst[i * 4 + 0] = dst[i * 4 + 1] = dst[i * 4 + 2] = 0.0f;
+                        dst[i * 4 + 3] = 1.0f;
+                        break;
+                    }
+                }
+            }
+            return true;
+        }
+
+        return false;
     }
 } // namespace MobileGL::MG_Util::PixelStoreProcessor

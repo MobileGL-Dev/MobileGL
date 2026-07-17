@@ -19,11 +19,14 @@ namespace MobileGL::MG_Util::TextureFormatProcessor {
             applicableOptions |= options & PixelFormatNormalizeOptionBit::NoDepthComponent32;
             break;
         case GL_RGBA16:
+        case GL_RGBA12: // stored as RGBA16 (see NormalizePixelFormat)
         case GL_RG16:
         case GL_R16:
             applicableOptions |= options & PixelFormatNormalizeOptionBit::NoNorm16;
             break;
         case GL_RGB16:
+        case GL_RGB10: // stored as RGB16 (see NormalizePixelFormat)
+        case GL_RGB12: // stored as RGB16 (see NormalizePixelFormat)
             applicableOptions |= options & PixelFormatNormalizeOptionBit::NoNorm16;
             applicableOptions |= options & PixelFormatNormalizeOptionBit::NoRgb16;
             break;
@@ -159,6 +162,30 @@ namespace MobileGL::MG_Util::TextureFormatProcessor {
                 }
                 *outInternalFormat = internalFormat;
                 break;
+            // Legacy desktop-GL sized normalized formats (GL CTS packed_pixels): ES drivers reject them
+            // as internal formats, so store them in the closest ES-legal format with at least the same
+            // per-channel precision (extra precision stays inside the CTS comparison epsilon, which is
+            // derived from the requested format's bit widths). The upload (format, type) below matches
+            // the canonical shadow layout in PixelStoreProcessor (UNorm8 / UNorm16 component arrays).
+            case GL_R3_G3_B2:
+            case GL_RGB4:
+            case GL_RGB5:
+                *outInternalFormat = GL_RGB565;
+                break;
+            case GL_RGB10:
+            case GL_RGB12:
+                *outInternalFormat = (options & PixelFormatNormalizeOptionBit::NoNorm16) ||
+                                             (options & PixelFormatNormalizeOptionBit::NoRgb16)
+                                         ? GL_RGB32F
+                                         : GL_RGB16;
+                break;
+            case GL_RGBA2:
+                *outInternalFormat = GL_RGBA4;
+                break;
+            case GL_RGBA12:
+                *outInternalFormat =
+                    (options & PixelFormatNormalizeOptionBit::NoNorm16) ? GL_RGBA32F : GL_RGBA16;
+                break;
             default:
                 *outInternalFormat = internalFormat;
                 break;
@@ -276,6 +303,7 @@ namespace MobileGL::MG_Util::TextureFormatProcessor {
                 *outFormat = GL_RGB;
                 break;
             case GL_SRGB8_ALPHA8:
+            case GL_SRGB_ALPHA:
                 *outFormat = GL_RGBA;
                 break;
 
@@ -292,6 +320,19 @@ namespace MobileGL::MG_Util::TextureFormatProcessor {
                 break;
             case GL_RGB10_A2UI:
                 *outFormat = GL_RGBA_INTEGER;
+                break;
+
+            // Legacy desktop-GL sized normalized formats
+            case GL_R3_G3_B2:
+            case GL_RGB4:
+            case GL_RGB5:
+            case GL_RGB10:
+            case GL_RGB12:
+                *outFormat = GL_RGB;
+                break;
+            case GL_RGBA2:
+            case GL_RGBA12:
+                *outFormat = GL_RGBA;
                 break;
 
             // Depth
@@ -468,20 +509,41 @@ namespace MobileGL::MG_Util::TextureFormatProcessor {
                 *outType = GL_UNSIGNED_INT_2_10_10_10_REV;
                 break;
             case GL_RGB5_A1:
-                *outType = GL_UNSIGNED_SHORT_5_5_5_1;
-                break;
-            // The shadow mip keeps these formats' packed client bytes (legacy copy path),
-            // so the canonical transfer type must stay the packed word — the previous
-            // default (GL_UNSIGNED_BYTE) made the backend read 4 bytes per texel from a
-            // 2-byte-per-texel shadow (KHR-GL33.pixelstoragemodes teximage rgba4/rgb565
-            // sliced/garbled uploads).
-            case GL_RGBA4:
-                *outType = GL_UNSIGNED_SHORT_4_4_4_4;
-                break;
-            case GL_RGB565:
-                *outType = GL_UNSIGNED_SHORT_5_6_5;
+                // The shadow stores RGB5_A1 as UNorm8x4 (see PixelStoreProcessor); ES accepts
+                // GL_RGBA/GL_UNSIGNED_BYTE uploads for this internal format.
+                *outType = GL_UNSIGNED_BYTE;
                 break;
 
+            // Legacy desktop-GL sized normalized formats: the upload type matches the canonical
+            // shadow layout (UNorm8 for <=8-bit channels, UNorm16 for 10/12-bit channels).
+            case GL_R3_G3_B2:
+            case GL_RGB4:
+            case GL_RGB5:
+            case GL_RGB565:
+            case GL_RGBA2:
+            case GL_RGBA4:
+                *outType = GL_UNSIGNED_BYTE;
+                break;
+            case GL_RGB10:
+            case GL_RGB12:
+                *outType = (options & PixelFormatNormalizeOptionBit::NoNorm16) ||
+                                   (options & PixelFormatNormalizeOptionBit::NoRgb16)
+                               ? GL_FLOAT
+                               : GL_UNSIGNED_SHORT;
+                break;
+            case GL_RGBA12:
+                *outType = (options & PixelFormatNormalizeOptionBit::NoNorm16) ? GL_FLOAT : GL_UNSIGNED_SHORT;
+                break;
+
+            // Unsized color formats keep their byte-per-channel client layout.
+            case GL_RGBA:
+            case GL_RGB:
+            case GL_RG:
+            case GL_RED:
+            case GL_SRGB:
+            case GL_SRGB_ALPHA:
+                *outType = GL_UNSIGNED_BYTE;
+                break;
                 // Depth
             case GL_DEPTH_COMPONENT16:
                 *outType = GL_UNSIGNED_SHORT;

@@ -529,6 +529,13 @@ namespace MobileGL::MG_Impl::GLImpl {
             params[1] = dynamicParameters.AliasedLineWidthRangeMax;
             return;
         }
+        case GL_MAX_TEXTURE_MAX_ANISOTROPY_EXT: {
+            // EXT_texture_filter_anisotropic queries this as a float; the integer path below widens
+            // from here, so this case is the authoritative one.
+            const auto& dynamicParameters = MG_Backend::pActiveBackendObject->GetDynamicParameters();
+            params[0] = dynamicParameters.MaxTextureMaxAnisotropy;
+            return;
+        }
         case GL_ALIASED_POINT_SIZE_RANGE:
         case GL_POINT_SIZE_RANGE: {
             const auto& dynamicParameters = MG_Backend::pActiveBackendObject->GetDynamicParameters();
@@ -1894,15 +1901,13 @@ namespace MobileGL::MG_Impl::GLImpl {
             *params = dynamicParameters.MaxTextureSize;
             break;
         case GL_MAX_UNIFORM_BUFFER_BINDINGS:
-            // Never advertise more indexed binding points than the state layer's fixed per-target
-            // array can store (BufferBindingPointCount): glBindBufferBase rejects indices past
-            // that capacity, and GL CTS's per-case state reset walks every advertised binding
-            // (gluStateReset), so an over-advertised value aborts whole test batches. The floor
-            // equals the GL 3.3 core minimum (36), so the clamp never under-advertises.
-            *params = static_cast<GLint>(std::min<SizeT>(
-                static_cast<SizeT>(std::max(dynamicParameters.MaxUniformBufferBindings,
-                                            kFrontendMinUniformBufferBindings)),
-                MG_State::GLState::BufferBindingPointCount));
+            // Never advertise more bindings than the state layer's indexed-binding array can track
+            // (BufferState::BufferBindingPointCount): glBindBufferBase rejects indices past that
+            // capacity, and the GL CTS per-case state reset calls glBindBufferBase on every
+            // advertised index and expects no error. The floor equals the GL 3.3 core minimum
+            // (36), so the clamp never under-advertises.
+            *params = std::clamp(dynamicParameters.MaxUniformBufferBindings, kFrontendMinUniformBufferBindings,
+                                 static_cast<GLint>(MG_State::GLState::BufferBindingPointCount));
             break;
         case GL_MAX_UNIFORM_BLOCK_SIZE:
             *params = dynamicParameters.MaxUniformBlockSize;
@@ -1962,6 +1967,10 @@ namespace MobileGL::MG_Impl::GLImpl {
             break;
         case GL_MAX_SAMPLES:
             *params = std::max(dynamicParameters.MaxSamples, kFrontendMaxSamples);
+            break;
+        case GL_MAX_TEXTURE_MAX_ANISOTROPY_EXT:
+            // Float state (see GetFloatv); rounded to nearest for the integer query per GL 3.3 6.1.2.
+            *params = static_cast<GLint>(std::lround(dynamicParameters.MaxTextureMaxAnisotropy));
             break;
         default:
             MGLOG_E("glGetIntegerv: Invalid enum %s (0x%X)", MG_Util::ConvertGLEnumToString(pname).c_str(), pname);

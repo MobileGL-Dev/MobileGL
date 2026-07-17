@@ -311,6 +311,8 @@ namespace MobileGL {
                 return TexturePixelDataType::UnsignedInt8888;
             case GL_UNSIGNED_INT_8_8_8_8_REV:
                 return TexturePixelDataType::UnsignedInt8888Rev;
+            case GL_UNSIGNED_INT_10_10_10_2:
+                return TexturePixelDataType::UnsignedInt1010102;
             case GL_UNSIGNED_INT_10F_11F_11F_REV:
                 return TexturePixelDataType::UnsignedInt101111Rev;
             case GL_UNSIGNED_INT_2_10_10_10_REV:

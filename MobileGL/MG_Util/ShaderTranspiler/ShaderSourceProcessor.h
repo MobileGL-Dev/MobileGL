@@ -20,6 +20,14 @@ namespace MobileGL {
     namespace MG_Util {
         namespace ShaderTranspiler {
             void PreprocessShaderSource(ShaderStage stage, String& source);
+
+            // Rewrites a "#version 330 core" directive that PreprocessShaderSource normalized down
+            // from a legacy desktop version back up to "#version 460 core". Returns false (leaving
+            // the source untouched) for anything else: ES, compatibility, or an already-modern
+            // declaration. Exists so a shader that only parses under the laxer 460 rules - e.g. it
+            // uses 420-era syntax without the matching #extension line, which real drivers tend to
+            // accept - can be retried instead of failing to compile.
+            Bool RetargetLegacyVersionDirectiveTo460(String& source);
         } // namespace ShaderTranspiler
     } // namespace MG_Util
 } // namespace MobileGL

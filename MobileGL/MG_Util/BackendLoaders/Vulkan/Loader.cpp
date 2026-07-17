@@ -124,6 +124,7 @@ namespace MobileGL::MG_Util::BackendLoader {
         caps.UniformBufferOffsetAlignment = static_cast<int>(p.limits.minUniformBufferOffsetAlignment);
         caps.AliasedLineWidthRangeMin = p.limits.lineWidthRange[0];
         caps.AliasedLineWidthRangeMax = p.limits.lineWidthRange[1];
+        caps.MaxSamplerAnisotropy = p.limits.maxSamplerAnisotropy;
         caps.SmoothLineWidthRangeMin = p.limits.lineWidthRange[0];
         caps.SmoothLineWidthRangeMax = p.limits.lineWidthRange[1];
         caps.SmoothLineWidthGranularity = p.limits.lineWidthGranularity;
@@ -208,6 +209,7 @@ namespace MobileGL::MG_Util::BackendLoader {
         caps.UniformBufferOffsetAlignment = static_cast<int>(properties.limits.minUniformBufferOffsetAlignment);
         caps.AliasedLineWidthRangeMin = properties.limits.lineWidthRange[0];
         caps.AliasedLineWidthRangeMax = properties.limits.lineWidthRange[1];
+        caps.MaxSamplerAnisotropy = properties.limits.maxSamplerAnisotropy;
         caps.SmoothLineWidthRangeMin = properties.limits.lineWidthRange[0];
         caps.SmoothLineWidthRangeMax = properties.limits.lineWidthRange[1];
         caps.SmoothLineWidthGranularity = properties.limits.lineWidthGranularity;

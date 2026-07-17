@@ -82,7 +82,7 @@ namespace MobileGL::MG_Impl::GLImpl {
             // including index 0 - only an out-of-range index is an error (INVALID_VALUE).
             // "Attribute 0 is immutable" was legacy immediate-mode lore; rejecting it broke GL
             // CTS's per-case state reset, which writes vertexAttrib4f(0, 0,0,0,1) after every case.
-            (void)funcName;
+            static_cast<void>(funcName);
             return VertexArrayImpl::ValidateVertexAttributeIndex(index);
         }
 

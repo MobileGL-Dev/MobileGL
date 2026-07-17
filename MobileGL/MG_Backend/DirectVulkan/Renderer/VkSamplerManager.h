@@ -24,6 +24,10 @@ public:
     struct InitInfo {
         VkDevice device = VK_NULL_HANDLE;
         const VulkanRendererConfig* config = nullptr;
+        // The samplerAnisotropy device feature was requested and granted at vkCreateDevice.
+        Bool samplerAnisotropySupported = false;
+        // VkPhysicalDeviceLimits::maxSamplerAnisotropy.
+        Float maxSamplerAnisotropy = 1.0f;
     };
 
     Bool Initialize(const InitInfo& initInfo);
@@ -49,9 +53,16 @@ private:
                                                  const MG_State::GLState::ITextureObject& texture);
     static VkBorderColor ResolveVkBorderColor(const MG_State::GLState::SamplerObject& sampler,
                                               const MG_State::GLState::ITextureObject& texture);
+    // The anisotropy Vulkan will actually apply: 1.0 (i.e. disabled) unless the feature is on and
+    // the sampler filters linearly both ways, otherwise the GL request clamped to the device limit.
+    // GL happily carries GL_TEXTURE_MAX_ANISOTROPY on a NEAREST sampler (Blaze3D's blocks do exactly
+    // that) while Vulkan forbids anisotropyEnable there, so the GL value must never be forwarded raw.
+    Float ResolveEffectiveMaxAnisotropy(const MG_State::GLState::SamplerObject& sampler) const;
 
     VkDevice m_device = VK_NULL_HANDLE;
     const VulkanRendererConfig* m_config = nullptr;
+    Bool m_samplerAnisotropySupported = false;
+    Float m_maxSamplerAnisotropy = 1.0f;
     UnorderedMap<Uint64, SamplerCacheEntry> m_samplers;
     static inline XXH64_state_t* m_hashState = XXH64_createState();
 };

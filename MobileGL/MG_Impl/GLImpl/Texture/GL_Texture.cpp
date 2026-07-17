@@ -422,10 +422,10 @@ namespace MobileGL::MG_Impl::GLImpl {
                                                  "2D multisample textures must use depth 1."));
                 return false;
             }
-            // Zero layers is NOT an error for multisample arrays: GL 4.5 8.8 only raises
-            // INVALID_VALUE for negative dimensions, and GL CTS's per-case state reset
-            // (gluStateReset) clears the default GL_TEXTURE_2D_MULTISAMPLE_ARRAY texture with
-            // glTexImage3DMultisample(..., depth = 0) after every case.
+            // Zero layers is NOT an error for multisample arrays: depth == 0 (like width/height
+            // == 0) deallocates the image - GL 4.5 8.8 only raises INVALID_VALUE for negative
+            // dimensions, and GL CTS's per-case state reset (gluStateReset) clears the default
+            // GL_TEXTURE_2D_MULTISAMPLE_ARRAY texture with glTexImage3DMultisample(..., 0, 0, 0).
 
             const Int maxSamples = GetMaxSupportedTextureSamples(textureInternalFormat);
             if (samples > maxSamples) {
@@ -576,6 +576,14 @@ namespace MobileGL::MG_Impl::GLImpl {
         case GL_TEXTURE_SWIZZLE_A: {
             auto swizzleParam = MG_Util::ConvertGLEnumPnameToTextureSwizzleParam(pname);
             auto swizzleValue = MG_Util::ConvertGLEnumToTextureSwizzleParam(param);
+            if (swizzleValue == TextureSwizzleParam::Unknown) {
+                // GL CTS texture_swizzle.api_errors: single-value TexParameter* with a value outside
+                // [RED, GREEN, BLUE, ALPHA, ZERO, ONE] must raise GL_INVALID_ENUM.
+                MG_State::pGLContext->RecordError(
+                    ErrorCode::InvalidEnum,
+                    MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller, "Invalid texture swizzle value."));
+                return;
+            }
             textureObject->SetSwizzleParam(swizzleParam, swizzleValue);
             break;
         }
@@ -763,6 +771,23 @@ namespace MobileGL::MG_Impl::GLImpl {
             if (!TextureImpl::ValidateTextureObject(textureObject)) return nullTextureObject;
             return textureObject;
         }
+    }
+
+    // Texture-parameter lookups must not raise GL_INVALID_OPERATION when the default texture
+    // (name 0) is bound: glTexParameter* on default textures is legal GL (the GL CTS state reset
+    // sets swizzles/levels on texture 0 for every unit x target and expects glGetError() to stay
+    // clean). Name 0 resolves to the target's real default texture object, so parameters set on
+    // it are stored and queryable like on any texture.
+    const SharedPtr<MG_State::GLState::ITextureObject>& GetTextureObjectByTargetForParameter(
+        TextureUploadTarget textureUploadTarget, TextureTarget textureTarget) {
+        if (TextureImpl::IsProxyTextureTarget(textureUploadTarget)) {
+            return TextureImpl::pProxyTextureManager->GetProxyTextureObject(textureUploadTarget);
+        }
+        if (textureTarget == TextureTarget::Unknown) {
+            return nullTextureObject;
+        }
+        auto& activeUnit = MG_State::pGLContext->GetTextureUnitObject(MG_State::pGLContext->GetActiveTextureUnit());
+        return activeUnit.GetBindingSlot(textureTarget).GetBoundObject();
     }
 
     void GenerateMipmap_Backend(GLenum target) {
@@ -1072,7 +1097,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         TextureTarget textureTarget = MG_Util::ConvertGLEnumToTextureTarget(target);
 
         // ======================= Processing ================================
-        auto& textureObject = GetTextureObjectByTarget(textureUploadTarget, textureTarget);
+        auto& textureObject = GetTextureObjectByTargetForParameter(textureUploadTarget, textureTarget);
         if (!textureObject) return;
 
         switch (pname) {
@@ -1105,6 +1130,12 @@ namespace MobileGL::MG_Impl::GLImpl {
         case GL_TEXTURE_SWIZZLE_A: {
             auto swizzleParam = MG_Util::ConvertGLEnumPnameToTextureSwizzleParam(pname);
             auto swizzleValue = MG_Util::ConvertGLEnumToTextureSwizzleParam((GLenum)param);
+            if (swizzleValue == TextureSwizzleParam::Unknown) {
+                MG_State::pGLContext->RecordError(
+                    ErrorCode::InvalidEnum,
+                    MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__, "Invalid texture swizzle value."));
+                return;
+            }
             textureObject->SetSwizzleParam(swizzleParam, swizzleValue);
             break;
         }
@@ -1155,7 +1186,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         TextureTarget textureTarget = MG_Util::ConvertGLEnumToTextureTarget(target);
 
         // ======================= Processing ================================
-        auto& textureObject = GetTextureObjectByTarget(textureUploadTarget, textureTarget);
+        auto& textureObject = GetTextureObjectByTargetForParameter(textureUploadTarget, textureTarget);
         if (!textureObject) return;
 
         TextureParameterObject_State(textureObject, pname, param, __func__);
@@ -1171,7 +1202,7 @@ namespace MobileGL::MG_Impl::GLImpl {
             TextureTarget textureTarget = MG_Util::ConvertGLEnumToTextureTarget(target);
 
             // ======================= Processing ================================
-            auto& textureObject = GetTextureObjectByTarget(textureUploadTarget, textureTarget);
+            auto& textureObject = GetTextureObjectByTargetForParameter(textureUploadTarget, textureTarget);
             if (!textureObject) return;
             SetTextureBorderColorFromFloats(textureObject, params);
             break;
@@ -1179,7 +1210,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         case GL_TEXTURE_SWIZZLE_RGBA: {
             TextureUploadTarget textureUploadTarget = MG_Util::ConvertGLEnumToTextureUploadTarget(target);
             TextureTarget textureTarget = MG_Util::ConvertGLEnumToTextureTarget(target);
-            auto& textureObject = GetTextureObjectByTarget(textureUploadTarget, textureTarget);
+            auto& textureObject = GetTextureObjectByTargetForParameter(textureUploadTarget, textureTarget);
             if (!textureObject) return;
             GLint signedParams[4] = {static_cast<GLint>(params[0]), static_cast<GLint>(params[1]),
                                      static_cast<GLint>(params[2]), static_cast<GLint>(params[3])};
@@ -1202,7 +1233,7 @@ namespace MobileGL::MG_Impl::GLImpl {
             TextureTarget textureTarget = MG_Util::ConvertGLEnumToTextureTarget(target);
 
             // ======================= Processing ================================
-            auto& textureObject = GetTextureObjectByTarget(textureUploadTarget, textureTarget);
+            auto& textureObject = GetTextureObjectByTargetForParameter(textureUploadTarget, textureTarget);
             if (!textureObject) return;
             SetTextureBorderColorFromInts(textureObject, params);
             break;
@@ -1210,7 +1241,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         case GL_TEXTURE_SWIZZLE_RGBA: {
             TextureUploadTarget textureUploadTarget = MG_Util::ConvertGLEnumToTextureUploadTarget(target);
             TextureTarget textureTarget = MG_Util::ConvertGLEnumToTextureTarget(target);
-            auto& textureObject = GetTextureObjectByTarget(textureUploadTarget, textureTarget);
+            auto& textureObject = GetTextureObjectByTargetForParameter(textureUploadTarget, textureTarget);
             if (!textureObject) return;
             if (!SetTextureSwizzleParamsFromInts(textureObject, params, __func__)) {
                 return;
@@ -1228,7 +1259,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         case GL_TEXTURE_BORDER_COLOR: {
             TextureUploadTarget textureUploadTarget = MG_Util::ConvertGLEnumToTextureUploadTarget(target);
             TextureTarget textureTarget = MG_Util::ConvertGLEnumToTextureTarget(target);
-            auto& textureObject = GetTextureObjectByTarget(textureUploadTarget, textureTarget);
+            auto& textureObject = GetTextureObjectByTargetForParameter(textureUploadTarget, textureTarget);
             if (!textureObject) return;
             SetTextureBorderColorFromIntegerInts(textureObject, params);
             break;
@@ -1236,7 +1267,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         case GL_TEXTURE_SWIZZLE_RGBA: {
             TextureUploadTarget textureUploadTarget = MG_Util::ConvertGLEnumToTextureUploadTarget(target);
             TextureTarget textureTarget = MG_Util::ConvertGLEnumToTextureTarget(target);
-            auto& textureObject = GetTextureObjectByTarget(textureUploadTarget, textureTarget);
+            auto& textureObject = GetTextureObjectByTargetForParameter(textureUploadTarget, textureTarget);
             if (!textureObject) return;
             GLint signedParams[4] = {static_cast<GLint>(params[0]), static_cast<GLint>(params[1]),
                                      static_cast<GLint>(params[2]), static_cast<GLint>(params[3])};
@@ -1256,7 +1287,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         case GL_TEXTURE_BORDER_COLOR: {
             TextureUploadTarget textureUploadTarget = MG_Util::ConvertGLEnumToTextureUploadTarget(target);
             TextureTarget textureTarget = MG_Util::ConvertGLEnumToTextureTarget(target);
-            auto& textureObject = GetTextureObjectByTarget(textureUploadTarget, textureTarget);
+            auto& textureObject = GetTextureObjectByTargetForParameter(textureUploadTarget, textureTarget);
             if (!textureObject) return;
             SetTextureBorderColorFromUnsignedInts(textureObject, params);
             break;
@@ -1267,7 +1298,7 @@ namespace MobileGL::MG_Impl::GLImpl {
             TextureTarget textureTarget = MG_Util::ConvertGLEnumToTextureTarget(target);
 
             // ======================= Processing ================================
-            auto& textureObject = GetTextureObjectByTarget(textureUploadTarget, textureTarget);
+            auto& textureObject = GetTextureObjectByTargetForParameter(textureUploadTarget, textureTarget);
             if (!textureObject) return;
 
             Vec4<TextureSwizzleParam> swizzleParams;
@@ -1318,6 +1349,8 @@ namespace MobileGL::MG_Impl::GLImpl {
         auto& textureObject =
             isProxy ? TextureImpl::pProxyTextureManager->CreateOrReplaceProxyTextureObject(textureUploadTarget)
                     : bindingSlot.GetBoundObject();
+        // Name 0 resolves to the target's default texture object - a real texture this call
+        // (re)specifies like any other; the slot is never empty anymore.
         if (!TextureImpl::ValidateTextureObject(textureObject)) return;
         if (textureObject->GetStorageType() != TextureStorageType::Mipmap) {
             MG_State::pGLContext->RecordError(
@@ -1359,6 +1392,8 @@ namespace MobileGL::MG_Impl::GLImpl {
         auto& textureObject =
             isProxy ? TextureImpl::pProxyTextureManager->CreateOrReplaceProxyTextureObject(textureUploadTarget)
                     : bindingSlot.GetBoundObject();
+        // Name 0 resolves to the target's default texture object - a real texture this call
+        // (re)specifies like any other; the slot is never empty anymore.
         if (!TextureImpl::ValidateTextureObject(textureObject)) return;
         if (textureObject->GetStorageType() != TextureStorageType::Mipmap) {
             MG_State::pGLContext->RecordError(
@@ -1437,6 +1472,8 @@ namespace MobileGL::MG_Impl::GLImpl {
                     : bindingSlot.GetBoundObject();
 
         // ===================== Error Checking ==============================
+        // Name 0 resolves to the target's default texture object - a real texture this call
+        // (re)specifies like any other; the slot is never empty anymore.
         if (!TextureImpl::ValidateTextureObject(textureObject)) return;
         if (!ValidateTextureMutable(textureObject, __func__)) return;
 
@@ -1556,6 +1593,8 @@ namespace MobileGL::MG_Impl::GLImpl {
                     : bindingSlot.GetBoundObject();
 
         // ===================== Error Checking ==============================
+        // Name 0 resolves to the target's default texture object - a real texture this call
+        // (re)specifies like any other; the slot is never empty anymore.
         if (!TextureImpl::ValidateTextureObject(textureObject)) return;
         if (!ValidateTextureMutable(textureObject, __func__)) return;
 
@@ -1660,6 +1699,8 @@ namespace MobileGL::MG_Impl::GLImpl {
         auto& textureObject =
             isProxy ? TextureImpl::pProxyTextureManager->CreateOrReplaceProxyTextureObject(textureUploadTarget)
                     : bindingSlot.GetBoundObject();
+        // Name 0 resolves to the target's default texture object - a real texture this call
+        // (re)specifies like any other; the slot is never empty anymore.
         if (!TextureImpl::ValidateTextureObject(textureObject)) return;
         if (!ValidateTextureMutable(textureObject, __func__)) return;
 
@@ -1717,7 +1758,8 @@ namespace MobileGL::MG_Impl::GLImpl {
         // TODO: make sure `internalformat` is in one of supported format for TexBuffer
         // GL 3.3 core 3.8.5: buffer zero detaches any buffer from the buffer texture - only a
         // nonzero name that is not an existing buffer object is an error. This is reachable on
-        // the default buffer texture now that binding texture 0 binds a real object.
+        // the default buffer texture (bound whenever texture 0 is bound to GL_TEXTURE_BUFFER),
+        // which the GL CTS state reset detaches with glTexBuffer(..., 0) after every case.
         auto& bufferObject = MG_State::pGLContext->GetBufferObject(buffer);
         if (buffer != 0 && !bufferObject) {
             MG_State::pGLContext->RecordError(
@@ -1733,6 +1775,8 @@ namespace MobileGL::MG_Impl::GLImpl {
         auto& textureObject = bindingSlot.GetBoundObject();
 
         // ===================== Error Checking ==============================
+        // Name 0 is the default buffer texture - a real object the (de)attach operates on, not a
+        // silent no-op; the slot is never empty now that every unit/target holds its default.
         if (!TextureImpl::ValidateTextureObject(textureObject)) return;
         if (textureObject->GetStorageType() != TextureStorageType::Buffer) {
             MG_State::pGLContext->RecordError(
@@ -2625,20 +2669,18 @@ namespace MobileGL::MG_Impl::GLImpl {
 
     void ActiveTexture_State(GLenum texture) {
         // ===================== Error Checking ==============================
-        // GL 3.3 core 3.8: ActiveTexture accepts TEXTUREi for i in
-        // [0, MAX_COMBINED_TEXTURE_IMAGE_UNITS - 1] - NOT a fixed 0..31 range. GL CTS's per-case
-        // state reset walks every advertised combined unit, so rejecting units the getter
-        // advertises aborts whole test batches. The backend already clamps its advertised value
-        // to the state layer's MAX_TEXTURE_IMAGE_UNITS capacity.
-        GLenum maxCombinedUnits = MG_State::GLState::TextureState::MAX_TEXTURE_IMAGE_UNITS;
-        if (MG_Backend::pActiveBackendObject != nullptr) {
-            maxCombinedUnits = std::min<GLenum>(
-                maxCombinedUnits,
-                static_cast<GLenum>(
-                    std::max(MG_Backend::pActiveBackendObject->GetDynamicParameters().MaxCombinedTextureImageUnits,
-                             1)));
+        // GL 3.3 core 3.8: the valid range is [GL_TEXTURE0, GL_TEXTURE0 +
+        // GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS) - NOT a fixed 0..31 range. GL CTS's per-case
+        // state reset iterates every advertised combined unit, so rejecting units the
+        // implementation itself reports would leave a sticky GL_INVALID_ENUM behind and abort
+        // whole test batches. The backend already clamps its advertised value to the state
+        // layer's MAX_TEXTURE_IMAGE_UNITS capacity.
+        Int maxCombinedUnits = static_cast<Int>(MG_State::GLState::TextureState::MAX_TEXTURE_IMAGE_UNITS);
+        if (MG_Backend::pActiveBackendObject) {
+            maxCombinedUnits = std::min(
+                maxCombinedUnits, MG_Backend::pActiveBackendObject->GetDynamicParameters().MaxCombinedTextureImageUnits);
         }
-        if (texture < GL_TEXTURE0 || texture >= GL_TEXTURE0 + maxCombinedUnits) {
+        if (texture < GL_TEXTURE0 || static_cast<Int>(texture - GL_TEXTURE0) >= maxCombinedUnits) {
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidEnum,
                 MakeUnique<GenericErrorInfo>(

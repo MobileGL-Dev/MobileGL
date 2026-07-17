@@ -175,7 +175,7 @@ namespace MobileGL::MG_Impl::GLImpl::TextureImpl {
         return true;
     }
 
-    static Bool IsIntegerColorInputFormat(TextureInputFormat format) {
+    Bool IsIntegerColorInputFormat(TextureInputFormat format) {
         return format == TextureInputFormat::RInteger || format == TextureInputFormat::RGInteger ||
                format == TextureInputFormat::RGBInteger || format == TextureInputFormat::BGRInteger ||
                format == TextureInputFormat::RGBAInteger || format == TextureInputFormat::BGRAInteger ||
@@ -183,7 +183,7 @@ namespace MobileGL::MG_Impl::GLImpl::TextureImpl {
                format == TextureInputFormat::AlphaInteger;
     }
 
-    static Bool IsIntegerColorInternalFormat(TextureInternalFormat internalFormat) {
+    Bool IsIntegerColorInternalFormat(TextureInternalFormat internalFormat) {
         switch (internalFormat) {
             case TextureInternalFormat::R8I:
             case TextureInternalFormat::R8UI:

@@ -66,9 +66,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
     const RendererInfo& GetRendererIdentity();
 
     // The full OpenGL extension list Espryt advertises (glGetString(GL_EXTENSIONS))
-    // for a device whose timer queries are (or are not) usable. The
-    // MOBILEGL_DISABLE_TIMERQUERY escape hatch is applied inside.
-    Vector<GLExtension> BuildAdvertisedExtensions(Bool timerQueriesSupported);
+    // for a device whose timer queries / anisotropic filtering are (or are not) usable.
+    // The MOBILEGL_DISABLE_TIMERQUERY escape hatch is applied inside.
+    Vector<GLExtension> BuildAdvertisedExtensions(Bool timerQueriesSupported, Bool anisotropicFilteringSupported);
 
     // Format: <OpenGL ES Renderer>, OpenGL ES <Major>.<Minor> — the exact string an
     // initialized backend returns from GetBackendAPIVersionString (and that ends up

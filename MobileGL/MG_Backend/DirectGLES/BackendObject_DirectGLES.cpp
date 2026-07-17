@@ -605,9 +605,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     {
                         .TargetGLVersion = {3, 3, 0},   // Target OpenGL Version
                         .TargetGLSLVersion = {4, 6, 0}, // Target Shading Language Version
-                        // Baseline advertisement (no timer queries yet); reconciled once
-                        // the ES capabilities exist, see UpdateAdvertisedTimerQueryExtension.
-                        .Extensions = BuildAdvertisedExtensions(false),
+                        // Baseline advertisement (no timer queries / anisotropy yet); reconciled
+                        // once the ES capabilities exist, see UpdateAdvertisedCapabilityExtensions.
+                        .Extensions = BuildAdvertisedExtensions(false, false),
                         .IsCompatibilityProfile = false // Is Compatibility Profile
                     },
                 .StaticBackendCapability = {.AllowVSOnlyPrograms = false} // Backend Capability
@@ -627,8 +627,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // thread can only observe the extension string after the
         // advertisement for its context has settled; rebuilding the whole
         // list keeps the re-run after a context recreation idempotent.
-        void UpdateAdvertisedTimerQueryExtension() {
-            MutableRendererInfo().RendererGLInfo.Extensions = BuildAdvertisedExtensions(AreTimerQueriesSupported());
+        void UpdateAdvertisedCapabilityExtensions(Bool anisotropicFilteringSupported) {
+            MutableRendererInfo().RendererGLInfo.Extensions =
+                BuildAdvertisedExtensions(AreTimerQueriesSupported(), anisotropicFilteringSupported);
         }
     } // namespace
 
@@ -672,11 +673,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return false;
         }
         DirectGLES::SetGLESCapabilities(m_GLESCapabilities);
-        // Now that g_GLESCapabilities knows about GL_EXT_disjoint_timer_query,
-        // reconcile the E_GL_ARB_timer_query advertisement (see the comment on
-        // UpdateAdvertisedTimerQueryExtension for why it cannot happen when
-        // the extension list is first built).
-        UpdateAdvertisedTimerQueryExtension();
+        // Now that g_GLESCapabilities knows about GL_EXT_disjoint_timer_query and
+        // GL_EXT_texture_filter_anisotropic, reconcile the advertisement (see the comment on
+        // UpdateAdvertisedCapabilityExtensions for why it cannot happen when the extension
+        // list is first built).
+        UpdateAdvertisedCapabilityExtensions(m_GLESCapabilities.SupportsTextureFilterAnisotropy);
         UpdateDynamicBackendParameters();
         PopulateFormatCapabilities(m_GLESFunctions, m_GLESCapabilities, MutableFormatCapabilities());
         PrintFormatCapabilities(GetFormatCapabilities());
@@ -818,7 +819,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         return MutableRendererInfo();
     }
 
-    Vector<GLExtension> BuildAdvertisedExtensions(Bool timerQueriesSupported) {
+    Vector<GLExtension> BuildAdvertisedExtensions(Bool timerQueriesSupported, Bool anisotropicFilteringSupported) {
         Vector<GLExtension> extensions = {V_OpenGL30, V_OpenGL31, V_OpenGL32,
                                           V_OpenGL33, E_GL_ARB_draw_buffers_blend, E_GL_ARB_compute_shader,
                                           E_GL_ARB_shader_storage_buffer_object, E_GL_ARB_shader_image_load_store,
@@ -835,6 +836,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // MOBILEGL_DISABLE_TIMERQUERY escape hatch is off.
         if (timerQueriesSupported && !MG_Config::Features.DisableTimerQuery) {
             extensions.push_back(E_GL_ARB_timer_query);
+        }
+        // Only advertised when the host ES driver actually filters anisotropically: the sampler
+        // state is accepted regardless, but forwarding it would be a no-op without the extension,
+        // and an app that trusts the string (LWJGL builds GLCapabilities from it) would silently
+        // get plain trilinear.
+        if (anisotropicFilteringSupported) {
+            extensions.push_back(E_GL_EXT_texture_filter_anisotropic);
+            extensions.push_back(E_GL_ARB_texture_filter_anisotropic);
         }
         return extensions;
     }
@@ -940,6 +949,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
     void BackendObject_DirectGLES::UpdateDynamicBackendParameters() {
         m_dynamicParameters.UniformBufferOffsetAlignment = m_GLESCapabilities.UniformBufferOffsetAlignment;
+        m_dynamicParameters.MaxTextureMaxAnisotropy = m_GLESCapabilities.MaxTextureMaxAnisotropy;
         m_dynamicParameters.AliasedLineWidthRangeMin = m_GLESCapabilities.AliasedLineWidthRangeMin;
         m_dynamicParameters.AliasedLineWidthRangeMax = m_GLESCapabilities.AliasedLineWidthRangeMax;
         m_dynamicParameters.SmoothLineWidthRangeMin = m_GLESCapabilities.SmoothLineWidthRangeMin;

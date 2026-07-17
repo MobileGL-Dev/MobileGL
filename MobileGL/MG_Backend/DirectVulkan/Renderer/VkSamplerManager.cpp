@@ -58,9 +58,22 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
         m_device = initInfo.device;
         m_config = initInfo.config;
+        m_samplerAnisotropySupported = initInfo.samplerAnisotropySupported;
+        m_maxSamplerAnisotropy = std::max(initInfo.maxSamplerAnisotropy, 1.0f);
         MOBILEGL_ASSERT(m_device != VK_NULL_HANDLE && m_config != nullptr,
                         "VkSamplerManager::Initialize failed: invalid initialization info");
         return true;
+    }
+
+    Float VkSamplerManager::ResolveEffectiveMaxAnisotropy(const MG_State::GLState::SamplerObject& sampler) const {
+        if (!m_samplerAnisotropySupported) return 1.0f;
+        // VUID-VkSamplerCreateInfo-anisotropyEnable-01071/01072: anisotropy requires both filters to
+        // be LINEAR and the value to sit within [1, limits.maxSamplerAnisotropy].
+        if (sampler.GetMinFilter() != SamplerFilterMode::Linear ||
+            sampler.GetMagFilter() != SamplerFilterMode::Linear) {
+            return 1.0f;
+        }
+        return std::clamp(sampler.GetMaxAnisotropy(), 1.0f, m_maxSamplerAnisotropy);
     }
 
     void VkSamplerManager::Shutdown() {
@@ -99,9 +112,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         XXHASH_VERIFY(XXH64_update(m_hashState, &maxLod, sizeof(maxLod)));
         const auto lodBias = sampler.GetLodBias();
         XXHASH_VERIFY(XXH64_update(m_hashState, &lodBias, sizeof(lodBias)));
-        // Anisotropy is currently an accepted frontend-only state on DirectVulkan.
-        // Keep it out of the key so changing this no-op does not manufacture duplicate
-        // VkSamplers while sampler versioning still exposes the new frontend value.
+        // The RESOLVED value, not the GL request: samplers that only differ in an anisotropy Vulkan
+        // will not apply (NEAREST filtering, or requests past the device limit) must still share one
+        // VkSampler, while two samplers that really do differ must not collide onto the first one's.
+        const auto maxAnisotropy = ResolveEffectiveMaxAnisotropy(sampler);
+        XXHASH_VERIFY(XXH64_update(m_hashState, &maxAnisotropy, sizeof(maxAnisotropy)));
         const auto compareMode = sampler.GetCompareMode();
         XXHASH_VERIFY(XXH64_update(m_hashState, &compareMode, sizeof(compareMode)));
         const auto compareFunc = ResolveCompareFunc(sampler, texture);
@@ -128,10 +143,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         samplerInfo.addressModeV = ToVkAddressMode(sampler.GetWrapT());
         samplerInfo.addressModeW = ToVkAddressMode(sampler.GetWrapR());
         samplerInfo.mipLodBias = sampler.GetLodBias();
-        // DirectVulkan does not yet plumb samplerAnisotropy feature/limit discovery;
-        // preserve the accepted frontend state without requesting an unsupported feature.
-        samplerInfo.anisotropyEnable = VK_FALSE;
-        samplerInfo.maxAnisotropy = 1.0f;
+        // Must use the same resolver as BuildSamplerKey - a divergence would either collide two
+        // different samplers or silently create duplicates.
+        const Float maxAnisotropy = ResolveEffectiveMaxAnisotropy(sampler);
+        samplerInfo.anisotropyEnable = maxAnisotropy > 1.0f ? VK_TRUE : VK_FALSE;
+        samplerInfo.maxAnisotropy = maxAnisotropy;
         samplerInfo.compareEnable = sampler.GetCompareMode() == SamplerCompareMode::CompareToTexture ? VK_TRUE : VK_FALSE;
         samplerInfo.compareOp = ToVkCompareOp(ResolveCompareFunc(sampler, texture));
         samplerInfo.maxLod = ResolveEffectiveMaxLod(sampler);
