@@ -2150,8 +2150,8 @@ void main() {
             if (!supported) {
                 // SetupDraw's pre-flight should have rejected this already; never upload a null payload.
                 MGLOG_E("UploadAndBindVertexStreams skipped: unsupported current generic vertex attribute type: "
-                        "program=%u location=%u type=0x%x",
-                        program.GetExternalIndex(), location, glType);
+                        "location=%u type=0x%x",
+                        location, glType);
                 return false;
             }
 

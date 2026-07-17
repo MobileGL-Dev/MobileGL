@@ -1107,9 +1107,10 @@ TEST_F(GeneralVertexArrayTest, CurrentAttrib_PackedValidation) {
     GetVertexAttribfv(1, GL_CURRENT_VERTEX_ATTRIB, out);
     EXPECT_FLOAT_EQ(out[0], 42.0f); // unchanged by the failed call
 
-    // Attribute 0 is rejected by MobileGL policy (GL_INVALID_OPERATION).
+    // Attribute 0's current value is settable in core GL (the GL CTS state reset calls
+    // glVertexAttrib4f(0, ...) on every attribute and expects no error).
     VertexAttribP4ui(0, GL_UNSIGNED_INT_2_10_10_10_REV, GL_FALSE, 1u);
-    EXPECT_EQ(GetError(), GL_INVALID_OPERATION);
+    EXPECT_EQ(GetError(), GL_NO_ERROR);
 
     // Out-of-range index -> GL_INVALID_VALUE.
     VertexAttribP4ui(VertexArrayImpl::GetMaxVertexAttribs(), GL_UNSIGNED_INT_2_10_10_10_REV, GL_FALSE, 1u);

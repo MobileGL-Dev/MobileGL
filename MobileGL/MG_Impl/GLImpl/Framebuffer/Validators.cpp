@@ -76,7 +76,8 @@ namespace MobileGL::MG_Impl::GLImpl::FramebufferImpl {
     }
 
     Bool ValidateRenderbufferName(Uint index, Bool allowZero) {
-        if (index == 0 && !allowZero) {
+        if (index == 0) {
+            if (allowZero) return true; // unbind / detach never needs a live object
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidValue,
                 MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl/FramebufferImpl", "ValidateRenderbufferName",

@@ -78,15 +78,10 @@ namespace MobileGL::MG_Impl::GLImpl {
         }
 
         static bool ValidateCurrentVertexAttribIndex(GLuint index, const char* funcName) {
-            if (!VertexArrayImpl::ValidateVertexAttributeIndex(index)) return false;
-            if (index == 0) {
-                MG_State::pGLContext->RecordError(
-                    ErrorCode::InvalidOperation,
-                    MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", funcName,
-                                                 "Generic vertex attribute 0 current value cannot be modified."));
-                return false;
-            }
-            return true;
+            // Core GL allows setting the current value of every generic attribute, including 0
+            // (the GL CTS state reset calls glVertexAttrib4f(0, ...) and expects no error).
+            static_cast<void>(funcName);
+            return VertexArrayImpl::ValidateVertexAttributeIndex(index);
         }
 
         static bool TryGetVertexAttribute(GLuint index, const MG_State::GLState::VertexAttribute** outAttr) {

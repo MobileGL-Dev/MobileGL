@@ -23,6 +23,8 @@ namespace MobileGL::MG_Impl::GLImpl::TextureImpl {
     Bool ValidateTextureSizeRange(Int width, Int height, Int depth);
     Bool ValidateTextureInternalFormat(TextureInternalFormat format);
     Bool ValidateTextureBorderNumber(Int border);
+    Bool IsIntegerColorInputFormat(TextureInputFormat format);
+    Bool IsIntegerColorInternalFormat(TextureInternalFormat internalFormat);
     Bool ValidateClientFormatTypePairing(TextureInputFormat format, TexturePixelDataType type);
     Bool ValidateTextureInternalFormatCompatibleWithInput(TextureInputFormat format,
                                                           TextureInternalFormat internalFormat,

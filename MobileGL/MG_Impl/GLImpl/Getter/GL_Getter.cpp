@@ -1894,7 +1894,11 @@ namespace MobileGL::MG_Impl::GLImpl {
             *params = dynamicParameters.MaxTextureSize;
             break;
         case GL_MAX_UNIFORM_BUFFER_BINDINGS:
-            *params = std::max(dynamicParameters.MaxUniformBufferBindings, kFrontendMinUniformBufferBindings);
+            // Never advertise more bindings than the state layer's indexed-binding array can track
+            // (BufferState::BufferBindingPointCount): the GL CTS state reset calls glBindBufferBase
+            // on every advertised index and expects no error.
+            *params = std::clamp(dynamicParameters.MaxUniformBufferBindings, kFrontendMinUniformBufferBindings,
+                                 static_cast<GLint>(MG_State::GLState::BufferBindingPointCount));
             break;
         case GL_MAX_UNIFORM_BLOCK_SIZE:
             *params = dynamicParameters.MaxUniformBlockSize;

@@ -17,7 +17,11 @@
 #include <MG_State/GLState/Core.h>
 #include <MG_State/GLState/TextureState/TextureObject.h>
 #include <MG_Util/Converters/MGToMG/TextureEnumConverter.h>
+#include <MG_Util/Converters/GLToMG/TextureEnumConverter.h>
+#include <MG_Util/Math/SmallFloat.h>
+#include <MG_Util/Texture/PixelStoreProcessor.h>
 #include <MG_Util/Texture/TextureFormatProcessor.h>
+#include <cstring>
 
 using namespace MobileGL;
 
@@ -1173,4 +1177,222 @@ TEST_F(TextureTest, NormalizeDepth24Stencil8UsesPackedDepthStencilType) {
     EXPECT_EQ(internalFormat, GL_DEPTH24_STENCIL8);
     EXPECT_EQ(format, GL_DEPTH_STENCIL);
     EXPECT_EQ(type, GL_UNSIGNED_INT_24_8);
+}
+
+// ---- GL CTS packed_pixels / texture_swizzle readback root-cause regressions --------------------
+
+TEST_F(TextureTest, NormalizeLegacySizedFormatsMapToCanonicalShadowLayouts) {
+    struct Case {
+        GLenum requested;
+        GLenum internalFormat;
+        GLenum format;
+        GLenum type;
+    };
+    const Case cases[] = {
+        // Legacy <=8-bit-per-channel formats store as UNorm8 component arrays.
+        {GL_R3_G3_B2, GL_RGB565, GL_RGB, GL_UNSIGNED_BYTE},
+        {GL_RGB4, GL_RGB565, GL_RGB, GL_UNSIGNED_BYTE},
+        {GL_RGB5, GL_RGB565, GL_RGB, GL_UNSIGNED_BYTE},
+        {GL_RGBA2, GL_RGBA4, GL_RGBA, GL_UNSIGNED_BYTE},
+        {GL_RGBA4, GL_RGBA4, GL_RGBA, GL_UNSIGNED_BYTE},
+        {GL_RGB5_A1, GL_RGB5_A1, GL_RGBA, GL_UNSIGNED_BYTE},
+        // 10/12-bit channels store as UNorm16 component arrays.
+        {GL_RGB10, GL_RGB16, GL_RGB, GL_UNSIGNED_SHORT},
+        {GL_RGB12, GL_RGB16, GL_RGB, GL_UNSIGNED_SHORT},
+        {GL_RGBA12, GL_RGBA16, GL_RGBA, GL_UNSIGNED_SHORT},
+        // RGB10_A2UI keeps its native packed layout (was previously unhandled -> broken uploads).
+        {GL_RGB10_A2UI, GL_RGB10_A2UI, GL_RGBA_INTEGER, GL_UNSIGNED_INT_2_10_10_10_REV},
+    };
+    for (const auto& testCase : cases) {
+        GLenum internalFormat = 0;
+        GLenum format = 0;
+        GLenum type = 0;
+        MG_Util::TextureFormatProcessor::NormalizePixelFormat(testCase.requested,
+                                                              PixelFormatNormalizeOptionBit::None,
+                                                              &internalFormat, &format, &type);
+        EXPECT_EQ(internalFormat, testCase.internalFormat) << "requested 0x" << std::hex << testCase.requested;
+        EXPECT_EQ(format, testCase.format) << "requested 0x" << std::hex << testCase.requested;
+        EXPECT_EQ(type, testCase.type) << "requested 0x" << std::hex << testCase.requested;
+    }
+}
+
+TEST_F(TextureTest, ConvertsUnsignedInt1010102PixelDataType) {
+    // GL CTS packed_pixels uploads/reads GL_UNSIGNED_INT_10_10_10_2; the GL->MG mapping was missing,
+    // rejecting every valid combination as GL_INVALID_ENUM.
+    EXPECT_EQ(MG_Util::ConvertGLEnumToTexturePixelDataType(GL_UNSIGNED_INT_10_10_10_2),
+              TexturePixelDataType::UnsignedInt1010102);
+}
+
+TEST_F(TextureTest, TexParameteriRejectsInvalidSwizzleValue) {
+    GLuint texture = 0;
+    MG_Impl::GLImpl::GenTextures(1, &texture);
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, texture);
+
+    // GL CTS texture_swizzle.api_errors: values outside [RED, GREEN, BLUE, ALPHA, ZERO, ONE]
+    // must raise GL_INVALID_ENUM through the single-value TexParameteri path.
+    MG_Impl::GLImpl::TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_SWIZZLE_R, GL_RGB);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_INVALID_ENUM);
+    MG_Impl::GLImpl::TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_SWIZZLE_A, -1);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_INVALID_ENUM);
+
+    MG_Impl::GLImpl::TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_SWIZZLE_R, GL_ALPHA);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, 0);
+}
+
+TEST_F(TextureTest, DefaultTextureOperationsAreSilentNoOps) {
+    // The GL CTS state reset drives texture name 0 through TexParameter*/TexImage*/TexBuffer for
+    // every unit and target and expects glGetError() to stay clean.
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, 0);
+    MG_Impl::GLImpl::TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_SWIZZLE_R, GL_RED);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    MG_Impl::GLImpl::TexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 0, 0, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    MG_Impl::GLImpl::TexBuffer(GL_TEXTURE_BUFFER, GL_R8, 0);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+}
+
+TEST_F(TextureTest, BoundTexImage2DEncodesPackedInternalShadowWords) {
+    // RGB10_A2 / RGB9_E5 / R11F_G11F_B10F shadow bytes hold the ES upload word; uploads from
+    // component client data must encode instead of raw-copying (GL CTS packed_pixels rgb10_a2,
+    // rgb9_e5, r11f_g11f_b10f data comparisons).
+    GLuint texture = 0;
+    MG_Impl::GLImpl::GenTextures(1, &texture);
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, texture);
+
+    const Uint8 rgba8[] = {255, 0, 0, 255};
+    MG_Impl::GLImpl::TexImage2D(GL_TEXTURE_2D, 0, GL_RGB10_A2, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, rgba8);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+    {
+        const auto* stored = GetBoundTexture2DLevelBytes(texture);
+        Uint32 word = 0;
+        std::memcpy(&word, stored, sizeof(word));
+        EXPECT_EQ(word & 0x3FFu, 1023u);      // red = 1.0
+        EXPECT_EQ((word >> 10) & 0x3FFu, 0u); // green = 0
+        EXPECT_EQ((word >> 20) & 0x3FFu, 0u); // blue = 0
+        EXPECT_EQ((word >> 30) & 0x3u, 3u);   // alpha = 1.0
+    }
+
+    const Float rgb[] = {1.0f, 0.5f, 0.25f};
+    MG_Impl::GLImpl::TexImage2D(GL_TEXTURE_2D, 0, GL_RGB9_E5, 1, 1, 0, GL_RGB, GL_FLOAT, rgb);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+    {
+        const auto* stored = GetBoundTexture2DLevelBytes(texture);
+        Uint32 word = 0;
+        std::memcpy(&word, stored, sizeof(word));
+        EXPECT_EQ(word, MG_Util::EncodeSharedExponentRGB9E5(rgb));
+    }
+
+    MG_Impl::GLImpl::TexImage2D(GL_TEXTURE_2D, 0, GL_R11F_G11F_B10F, 1, 1, 0, GL_RGB, GL_FLOAT, rgb);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+    {
+        const auto* stored = GetBoundTexture2DLevelBytes(texture);
+        Uint32 word = 0;
+        std::memcpy(&word, stored, sizeof(word));
+        const Uint32 expected = MG_Util::EncodeFloatToUnsignedF11(rgb[0]) |
+                                (MG_Util::EncodeFloatToUnsignedF11(rgb[1]) << 11) |
+                                (MG_Util::EncodeFloatToUnsignedF10(rgb[2]) << 22);
+        EXPECT_EQ(word, expected);
+    }
+
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, 0);
+}
+
+TEST_F(TextureTest, BoundTexImage2DDecodesPackedFloatSourceTypes) {
+    // 5_9_9_9_REV / 10F_11F_11F_REV client data uploaded into a component internal format must be
+    // decoded per texel (GL CTS packed_pixels uploads every RGB internal format with these types).
+    GLuint texture = 0;
+    MG_Impl::GLImpl::GenTextures(1, &texture);
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, texture);
+
+    const Float rgb[] = {1.0f, 0.5f, 0.25f};
+    const Uint32 word = MG_Util::EncodeSharedExponentRGB9E5(rgb);
+    MG_Impl::GLImpl::TexImage2D(GL_TEXTURE_2D, 0, GL_RGB8, 1, 1, 0, GL_RGB, GL_UNSIGNED_INT_5_9_9_9_REV, &word);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    const auto* stored = GetBoundTexture2DLevelBytes(texture);
+    EXPECT_EQ(stored[0], 255); // 1.0
+    EXPECT_EQ(stored[1], 128); // 0.5
+    EXPECT_EQ(stored[2], 64);  // 0.25
+
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, 0);
+}
+
+TEST_F(TextureTest, UnpackSwapBytesSwapsComponentsNotWholePixels) {
+    // GL_UNPACK_SWAP_BYTES on the identity-layout copy path used to reverse the whole pixel
+    // (4 bytes for GL_RG16), garbling multi-component rows (GL CTS packed_pixels varied_rectangle
+    // GL_UNPACK_SWAP_BYTES cases).
+    GLuint texture = 0;
+    MG_Impl::GLImpl::GenTextures(1, &texture);
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, texture);
+
+    const Uint16 swapped[] = {0x3412, 0x7856}; // byte-swapped {0x1234, 0x5678}
+    MG_Impl::GLImpl::PixelStorei(GL_UNPACK_SWAP_BYTES, GL_TRUE);
+    MG_Impl::GLImpl::PixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    MG_Impl::GLImpl::TexImage2D(GL_TEXTURE_2D, 0, GL_RG16, 1, 1, 0, GL_RG, GL_UNSIGNED_SHORT, swapped);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    const auto* stored = GetBoundTexture2DLevelBytes(texture);
+    Uint16 red = 0;
+    Uint16 green = 0;
+    std::memcpy(&red, stored, sizeof(red));
+    std::memcpy(&green, stored + 2, sizeof(green));
+    EXPECT_EQ(red, 0x1234);
+    EXPECT_EQ(green, 0x5678);
+
+    MG_Impl::GLImpl::PixelStorei(GL_UNPACK_SWAP_BYTES, GL_FALSE);
+    MG_Impl::GLImpl::PixelStorei(GL_UNPACK_ALIGNMENT, 4);
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, 0);
+}
+
+TEST_F(TextureTest, DecodeShadowDataToWideRGBACoversComponentAndPackedLayouts) {
+    // GetTexImage of non-renderable formats reads the CPU shadow; the decode must cover both
+    // component-array and packed internal layouts.
+    Vector<Uint8> wide;
+    Bool isInteger = false;
+    Bool isSigned = false;
+
+    const Uint8 r8[] = {128};
+    ASSERT_TRUE(MG_Util::PixelStoreProcessor::DecodeShadowDataToWideRGBA(TextureInternalFormat::R8, r8, 1, wide,
+                                                                         isInteger, isSigned));
+    EXPECT_FALSE(isInteger);
+    {
+        Float rgba[4];
+        std::memcpy(rgba, wide.data(), sizeof(rgba));
+        EXPECT_NEAR(rgba[0], 128.0f / 255.0f, 1e-6f);
+        EXPECT_EQ(rgba[1], 0.0f);
+        EXPECT_EQ(rgba[2], 0.0f);
+        EXPECT_EQ(rgba[3], 1.0f);
+    }
+
+    const Float rgb[] = {1.0f, 0.5f, 0.25f};
+    const Uint32 e5Word = MG_Util::EncodeSharedExponentRGB9E5(rgb);
+    ASSERT_TRUE(MG_Util::PixelStoreProcessor::DecodeShadowDataToWideRGBA(TextureInternalFormat::RGB9E5, &e5Word, 1,
+                                                                         wide, isInteger, isSigned));
+    EXPECT_FALSE(isInteger);
+    {
+        Float rgba[4];
+        std::memcpy(rgba, wide.data(), sizeof(rgba));
+        EXPECT_NEAR(rgba[0], 1.0f, 1.0f / 256.0f);
+        EXPECT_NEAR(rgba[1], 0.5f, 1.0f / 256.0f);
+        EXPECT_NEAR(rgba[2], 0.25f, 1.0f / 256.0f);
+        EXPECT_EQ(rgba[3], 1.0f);
+    }
+
+    const Uint32 uiWord = 1023u | (511u << 10) | (255u << 20) | (2u << 30); // RGB10_A2UI
+    ASSERT_TRUE(MG_Util::PixelStoreProcessor::DecodeShadowDataToWideRGBA(TextureInternalFormat::RGB10A2UI, &uiWord, 1,
+                                                                         wide, isInteger, isSigned));
+    EXPECT_TRUE(isInteger);
+    EXPECT_FALSE(isSigned);
+    {
+        Uint32 rgba[4];
+        std::memcpy(rgba, wide.data(), sizeof(rgba));
+        EXPECT_EQ(rgba[0], 1023u);
+        EXPECT_EQ(rgba[1], 511u);
+        EXPECT_EQ(rgba[2], 255u);
+        EXPECT_EQ(rgba[3], 2u);
+    }
 }

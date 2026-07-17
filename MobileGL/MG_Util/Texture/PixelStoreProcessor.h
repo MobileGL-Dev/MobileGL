@@ -22,4 +22,12 @@ namespace MobileGL::MG_Util::PixelStoreProcessor {
                                        TextureInputFormat dstInputFormat, TexturePixelDataType dstDataType,
                                        IntVec3 dimension, Bool isBitmap, SizeT& outSize);
     void ProcessColorSwizzle(void* data, SizeT pixelCount, const Vector<TextureSwizzleParam>& swizzle);
+
+    // Decodes the canonical shadow-mip storage of `internalFormat` into wide RGBA texels for CPU
+    // readback (GetTexImage of non-renderable formats). Non-integer formats fill outWide with
+    // 4 Floats per texel; integer formats fill it with 4 Uint32/Int32 per texel and set
+    // outIsInteger (outIsSigned tells signed from unsigned). Missing channels read 0 (G/B) and
+    // 1 / 1.0f (A). Returns false when the format has no canonical shadow layout.
+    Bool DecodeShadowDataToWideRGBA(TextureInternalFormat internalFormat, const void* src, SizeT pixelCount,
+                                    Vector<Uint8>& outWide, Bool& outIsInteger, Bool& outIsSigned);
 } // namespace MobileGL::MG_Util::PixelStoreProcessor

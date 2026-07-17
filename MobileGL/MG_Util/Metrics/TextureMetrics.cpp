@@ -15,10 +15,10 @@ namespace MobileGL {
         SizeT GetSizedInternalFormatSizeInBytes(TextureInternalFormat internal) {
             switch (internal) {
             case TextureInternalFormat::R8:
+            case TextureInternalFormat::Red: // UNorm8 shadow layout
             case TextureInternalFormat::R8Snorm:
             case TextureInternalFormat::R8I:
             case TextureInternalFormat::R8UI:
-            case TextureInternalFormat::R3G3B2:
                 return 1;
 
             case TextureInternalFormat::R16:
@@ -27,14 +27,17 @@ namespace MobileGL {
             case TextureInternalFormat::R16UI:
             case TextureInternalFormat::R16F:
             case TextureInternalFormat::RG8:
+            case TextureInternalFormat::RG: // UNorm8x2 shadow layout
             case TextureInternalFormat::RG8Snorm:
             case TextureInternalFormat::RG8I:
             case TextureInternalFormat::RG8UI:
             case TextureInternalFormat::DepthComponent16:
                 return 2;
 
+            case TextureInternalFormat::R3G3B2: // UNorm8x3 shadow layout
             case TextureInternalFormat::RGB4:
             case TextureInternalFormat::RGB5:
+            case TextureInternalFormat::RGB: // UNorm8x3 shadow layout
             case TextureInternalFormat::RGB8:
             case TextureInternalFormat::RGB8Snorm:
             case TextureInternalFormat::SRGB8:
@@ -43,11 +46,10 @@ namespace MobileGL {
             case TextureInternalFormat::DepthComponent24:
                 return 3;
 
-            case TextureInternalFormat::RGB10:
-            case TextureInternalFormat::RGB12:
             case TextureInternalFormat::RGBA2:
             case TextureInternalFormat::RGBA4:
             case TextureInternalFormat::RGB5A1:
+            case TextureInternalFormat::RGBA: // UNorm8x4 shadow layout
             case TextureInternalFormat::RGBA8:
             case TextureInternalFormat::RGBA8Snorm:
             case TextureInternalFormat::RGBA8I:
@@ -72,6 +74,8 @@ namespace MobileGL {
                 return 4;
 
             case TextureInternalFormat::RGB16:
+            case TextureInternalFormat::RGB10: // UNorm16x3 shadow layout
+            case TextureInternalFormat::RGB12: // UNorm16x3 shadow layout
             case TextureInternalFormat::RGB16Snorm:
             case TextureInternalFormat::RGB16F:
             case TextureInternalFormat::RGB16I:

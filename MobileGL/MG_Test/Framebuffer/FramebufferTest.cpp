@@ -674,3 +674,86 @@ TEST(PackedReadbackEncodeTest, RejectsMismatchedPackedFieldCounts) {
     EXPECT_EQ(ReadbackImpl::GetReadbackDstPixelSize(rgbInteger, GL_UNSIGNED_INT_5_9_9_9_REV), 0u);
     EXPECT_EQ(ReadbackImpl::GetReadbackDstPixelSize(rgbInteger, GL_UNSIGNED_INT_10F_11F_11F_REV), 0u);
 }
+
+// ---- GL CTS packed_pixels readback root-cause regressions --------------------------------------
+
+TEST_F(FramebufferTest, ReadPixelsRejectsIntegerFormatMismatchWithReadBuffer) {
+    GLuint framebuffer = 0;
+    GLuint texture = 0;
+    MG_Impl::GLImpl::CreateFramebuffers(1, &framebuffer);
+    MG_Impl::GLImpl::CreateTextures(GL_TEXTURE_2D, 1, &texture);
+    MG_Impl::GLImpl::TextureStorage2D(texture, 1, GL_RGBA8UI, 4, 4);
+    MG_Impl::GLImpl::NamedFramebufferTexture(framebuffer, GL_COLOR_ATTACHMENT0, texture, 0);
+    MG_Impl::GLImpl::BindFramebuffer(GL_READ_FRAMEBUFFER, framebuffer);
+
+    MG_Backend::gBackendFunctionsTable.GL.ReadPixels = RecordReadPixels;
+    Uint8 pixelStorage[4 * 4 * 4] = {};
+
+    // GL 3.3 section 4.3.1: normalized format on an integer read buffer -> GL_INVALID_OPERATION
+    // (GL CTS packed_pixels expects the error for every mismatched combination).
+    MG_Impl::GLImpl::ReadPixels(0, 0, 4, 4, GL_RGBA, GL_UNSIGNED_BYTE, pixelStorage);
+    EXPECT_EQ(g_readPixelsCallCount, 0);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_INVALID_OPERATION);
+
+    // The matching integer readback stays valid.
+    MG_Impl::GLImpl::ReadPixels(0, 0, 4, 4, GL_RGBA_INTEGER, GL_UNSIGNED_INT, pixelStorage);
+    EXPECT_EQ(g_readPixelsCallCount, 1);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    // And the inverse mismatch: integer format on a normalized attachment.
+    GLuint normalizedTexture = 0;
+    MG_Impl::GLImpl::CreateTextures(GL_TEXTURE_2D, 1, &normalizedTexture);
+    MG_Impl::GLImpl::TextureStorage2D(normalizedTexture, 1, GL_RGBA8, 4, 4);
+    MG_Impl::GLImpl::NamedFramebufferTexture(framebuffer, GL_COLOR_ATTACHMENT0, normalizedTexture, 0);
+    MG_Impl::GLImpl::ReadPixels(0, 0, 4, 4, GL_RGBA_INTEGER, GL_UNSIGNED_INT, pixelStorage);
+    EXPECT_EQ(g_readPixelsCallCount, 1);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_INVALID_OPERATION);
+}
+
+TEST_F(FramebufferTest, BindRenderbufferZeroUnbindsWithoutError) {
+    // The GL CTS state reset calls glBindRenderbuffer(GL_RENDERBUFFER, 0) and expects no error;
+    // name 0 used to be reported as an invalid renderbuffer name.
+    MG_Impl::GLImpl::BindRenderbuffer(GL_RENDERBUFFER, 0);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+}
+
+TEST_F(FramebufferTest, FramebufferTexture3DAttachesSliceWithLayerTracking) {
+    // glFramebufferTexture3D with zoffset used to be rejected outright, leaving a sticky
+    // GL_INVALID_OPERATION behind (GL CTS packed_pixels varied_rectangle runs on GL_TEXTURE_3D).
+    GLuint framebuffer = 0;
+    GLuint texture = 0;
+    MG_Impl::GLImpl::CreateFramebuffers(1, &framebuffer);
+    MG_Impl::GLImpl::CreateTextures(GL_TEXTURE_3D, 1, &texture);
+    MG_Impl::GLImpl::TextureStorage3D(texture, 1, GL_RGBA8, 4, 4, 2);
+
+    MG_Impl::GLImpl::BindFramebuffer(GL_DRAW_FRAMEBUFFER, framebuffer);
+    MG_Impl::GLImpl::FramebufferTexture3D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_3D, texture, 0, 1);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    const auto framebufferObject = MG_State::pGLContext->GetFramebufferObject(framebuffer);
+    ASSERT_NE(framebufferObject, nullptr);
+    const auto& attachment = framebufferObject->GetAttachment(FramebufferAttachmentType::Color0);
+    ASSERT_TRUE(attachment.IsTexture());
+    EXPECT_EQ(attachment.GetTextureLayer(), 1);
+    EXPECT_FALSE(attachment.IsLayered());
+}
+
+TEST_F(FramebufferTest, NonRenderableColorFormatsReportUnsupportedFramebuffer) {
+    // Without a probing backend the conservative list applies: RGB9_E5 is texture-only, so
+    // attaching it must not report GL_FRAMEBUFFER_COMPLETE (GL CTS packed_pixels rgb9_e5 expects
+    // read errors instead of silent unwritten readbacks).
+    GLuint framebuffer = 0;
+    GLuint texture = 0;
+    MG_Impl::GLImpl::CreateFramebuffers(1, &framebuffer);
+    MG_Impl::GLImpl::CreateTextures(GL_TEXTURE_2D, 1, &texture);
+    MG_Impl::GLImpl::TextureStorage2D(texture, 1, GL_RGB9_E5, 4, 4);
+    MG_Impl::GLImpl::NamedFramebufferTexture(framebuffer, GL_COLOR_ATTACHMENT0, texture, 0);
+    MG_Impl::GLImpl::BindFramebuffer(GL_READ_FRAMEBUFFER, framebuffer);
+
+    EXPECT_EQ(MG_Impl::GLImpl::CheckFramebufferStatus(GL_READ_FRAMEBUFFER),
+              static_cast<GLenum>(GL_FRAMEBUFFER_UNSUPPORTED));
+
+    Uint8 pixelStorage[4 * 4 * 4] = {};
+    MG_Impl::GLImpl::ReadPixels(0, 0, 4, 4, GL_RGBA, GL_UNSIGNED_BYTE, pixelStorage);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_INVALID_FRAMEBUFFER_OPERATION);
+}

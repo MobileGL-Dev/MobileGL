@@ -15,6 +15,7 @@
 #include "MG_State/GLState/TextureState/TextureEnum.h"
 #include <MG_State/GLState/TextureState/TextureObject.h>
 #include <MG_State/GLState/Core.h>
+#include <MG_Util/Converters/MGToGL/TextureEnumConverter.h>
 
 namespace MobileGL::MG_Backend::DirectGLES {
     String EmulateBaseInstanceInVertexShader(String source, GLenum shaderType);
@@ -254,10 +255,48 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
     namespace TextureImpl {
         inline Bool IsSupportedTextureTarget(TextureTarget target) {
-            if (target == TextureTarget::Texture1D || target == TextureTarget::TextureRectangle ||
-                target == TextureTarget::Texture1DArray || target == TextureTarget::Texture2DArray)
-                return false;
-            return true;
+            // Rectangle textures need non-normalized sampling ES cannot express; everything else is
+            // either native or emulated (1D -> 2D with height 1, 1D array -> 2D array, see
+            // MapToBackendTextureTarget). SPIRV-Cross already emits the matching ESSL samplers and
+            // coordinate padding for 1D/1D-array shaders.
+            return target != TextureTarget::TextureRectangle;
+        }
+
+        // ES has no 1D targets: 1D textures are stored as 2D (height 1) and 1D arrays as 2D arrays
+        // (height 1, layers in depth). Must match SPIRV-Cross's ES 1D-as-2D shader emulation.
+        inline TextureTarget MapToBackendTextureTarget(TextureTarget target) {
+            switch (target) {
+            case TextureTarget::Texture1D:
+                return TextureTarget::Texture2D;
+            case TextureTarget::Texture1DArray:
+                return TextureTarget::Texture2DArray;
+            default:
+                return target;
+            }
+        }
+
+        inline GLenum ConvertTextureTargetToBackendGLEnum(TextureTarget target) {
+            return MG_Util::ConvertTextureTargetToGLEnum(MapToBackendTextureTarget(target));
+        }
+
+        inline GLenum ConvertTextureUploadTargetToBackendGLEnum(TextureUploadTarget uploadTarget) {
+            switch (uploadTarget) {
+            case TextureUploadTarget::Texture1D:
+                return GL_TEXTURE_2D;
+            case TextureUploadTarget::Texture1DArray:
+                return GL_TEXTURE_2D_ARRAY;
+            default:
+                return MG_Util::ConvertTextureUploadTargetToGLEnum(uploadTarget);
+            }
+        }
+
+        // 1D arrays store layers in the state-side height; the ES 2D-array image keeps height 1 and
+        // moves the layer count into depth.
+        inline IntVec3 GetBackendUploadSize(TextureTarget stateTarget, const IntVec3& texelSize) {
+            if (stateTarget == TextureTarget::Texture1DArray) {
+                return {texelSize.x(), 1, texelSize.y()};
+            }
+            return texelSize;
         }
 
         inline Bool IsMultisampleTextureTarget(TextureTarget target) {
