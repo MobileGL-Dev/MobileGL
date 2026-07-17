@@ -78,15 +78,12 @@ namespace MobileGL::MG_Impl::GLImpl {
         }
 
         static bool ValidateCurrentVertexAttribIndex(GLuint index, const char* funcName) {
-            if (!VertexArrayImpl::ValidateVertexAttributeIndex(index)) return false;
-            if (index == 0) {
-                MG_State::pGLContext->RecordError(
-                    ErrorCode::InvalidOperation,
-                    MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", funcName,
-                                                 "Generic vertex attribute 0 current value cannot be modified."));
-                return false;
-            }
-            return true;
+            // GL 3.3 core 2.7: VertexAttrib* sets the current value of ANY generic attribute,
+            // including index 0 - only an out-of-range index is an error (INVALID_VALUE).
+            // "Attribute 0 is immutable" was legacy immediate-mode lore; rejecting it broke GL
+            // CTS's per-case state reset, which writes vertexAttrib4f(0, 0,0,0,1) after every case.
+            (void)funcName;
+            return VertexArrayImpl::ValidateVertexAttributeIndex(index);
         }
 
         static bool TryGetVertexAttribute(GLuint index, const MG_State::GLState::VertexAttribute** outAttr) {

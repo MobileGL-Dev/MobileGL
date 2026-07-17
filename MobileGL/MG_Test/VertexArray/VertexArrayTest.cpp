@@ -1173,9 +1173,17 @@ TEST_F(GeneralVertexArrayTest, CurrentAttrib_PackedValidation) {
     GetVertexAttribfv(1, GL_CURRENT_VERTEX_ATTRIB, out);
     EXPECT_FLOAT_EQ(out[0], 42.0f); // unchanged by the failed call
 
-    // Attribute 0 is rejected by MobileGL policy (GL_INVALID_OPERATION).
+    // GL 3.3 core 2.7: attribute 0's current value is writable like any other generic
+    // attribute - no error. (An earlier MobileGL policy rejected index 0 with
+    // GL_INVALID_OPERATION, which broke GL CTS's per-case state reset: gluStateReset writes
+    // vertexAttrib4f(0, 0,0,0,1) for every attribute after every case.)
     VertexAttribP4ui(0, GL_UNSIGNED_INT_2_10_10_10_REV, GL_FALSE, 1u);
-    EXPECT_EQ(GetError(), GL_INVALID_OPERATION);
+    EXPECT_EQ(GetError(), GL_NO_ERROR);
+    GetVertexAttribfv(0, GL_CURRENT_VERTEX_ATTRIB, out);
+    EXPECT_EQ(GetError(), GL_NO_ERROR);
+    EXPECT_FLOAT_EQ(out[0], 1.0f); // x field of the packed word
+    VertexAttrib4f(0, 0.0f, 0.0f, 0.0f, 1.0f); // restore the initial current value
+    EXPECT_EQ(GetError(), GL_NO_ERROR);
 
     // Out-of-range index -> GL_INVALID_VALUE.
     VertexAttribP4ui(VertexArrayImpl::GetMaxVertexAttribs(), GL_UNSIGNED_INT_2_10_10_10_REV, GL_FALSE, 1u);

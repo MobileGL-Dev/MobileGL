@@ -76,7 +76,13 @@ namespace MobileGL::MG_Impl::GLImpl::FramebufferImpl {
     }
 
     Bool ValidateRenderbufferName(Uint index, Bool allowZero) {
-        if (index == 0 && !allowZero) {
+        if (index == 0) {
+            // Zero is never a GenRenderbuffers name, so it must not reach the name-table lookup
+            // below: where it is allowed (glBindRenderbuffer / FramebufferRenderbuffer detach) it
+            // means "unbind", and looking it up would record a bogus INVALID_OPERATION - GL CTS's
+            // per-case state reset calls glBindRenderbuffer(GL_RENDERBUFFER, 0) after every case.
+            if (allowZero) return true;
+
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidValue,
                 MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl/FramebufferImpl", "ValidateRenderbufferName",
