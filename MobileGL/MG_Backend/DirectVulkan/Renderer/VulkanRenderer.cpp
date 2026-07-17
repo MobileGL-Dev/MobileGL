@@ -4353,6 +4353,21 @@ void main() {
                                 sourceTexture->GetExternalIndex());
             }
 
+            if (!drawIsDefaultFbo) {
+                // A clear queued for the destination predates this blit in API order;
+                // execute it now, or its deferred materialization would later stomp the
+                // copied contents (MC 26.3 OIT clears cloud_depth, then blits the main
+                // depth into it - the stale loadOp=CLEAR erased the copy).
+                const auto destAttachmentType = ResolveFramebufferCopyAttachmentType(*drawFbo, false, dstBinding.aspectMask);
+                const auto& destAttachment = drawFbo->GetAttachment(destAttachmentType);
+                auto destTexture = destAttachment.GetTexture();
+                MOBILEGL_ASSERT(destTexture != nullptr, "BlitFramebuffer: depth destination texture attachment is null");
+                const Bool dstClearReady = MaterializePendingClearForTexture(frame.commandBuffer, *destTexture);
+                MOBILEGL_ASSERT(dstClearReady,
+                                "BlitFramebuffer: failed to materialize pending clear for depth destination textureId=%d",
+                                destTexture->GetExternalIndex());
+            }
+
             const VkImageLayout srcOriginalLayout = readIsDefaultFbo
                 ? m_swapchainObject.GetDepthStencilImageLayout(m_imageIndexAcquired)
                 : *srcBinding.trackedLayout;
@@ -4487,6 +4502,19 @@ void main() {
             MOBILEGL_ASSERT(clearReady,
                             "BlitFramebuffer: failed to materialize pending clear for source textureId=%d",
                             sourceTexture->GetExternalIndex());
+        }
+
+        if (!drawIsDefaultFbo) {
+            // A clear queued for the destination predates this blit in API order; execute
+            // it now, or its deferred materialization would later stomp the blitted color.
+            const auto& destAttachment = drawFbo->GetAttachment(drawFbo->GetDrawBuffers()[0]);
+            auto destTexture = destAttachment.GetTexture();
+            if (destTexture != nullptr) {
+                const Bool dstClearReady = MaterializePendingClearForTexture(frame.commandBuffer, *destTexture);
+                MOBILEGL_ASSERT(dstClearReady,
+                                "BlitFramebuffer: failed to materialize pending clear for destination textureId=%d",
+                                destTexture->GetExternalIndex());
+            }
         }
 
         VkImageLayout srcLayout = readIsDefaultFbo
@@ -4681,6 +4709,15 @@ void main() {
             MOBILEGL_ASSERT(clearReady,
                             "CopyTexSubImage2D: failed to materialize pending clear for source textureId=%d",
                             sourceTexture->GetExternalIndex());
+        }
+
+        {
+            // A clear queued for the destination predates this copy in API order;
+            // execute it now so the deferred materialization cannot stomp the copy.
+            const Bool dstClearReady = MaterializePendingClearForTexture(frame.commandBuffer, *destinationTexture);
+            MOBILEGL_ASSERT(dstClearReady,
+                            "CopyTexSubImage2D: failed to materialize pending clear for destination textureId=%d",
+                            destinationTexture->GetExternalIndex());
         }
 
         const Bool srcUsesSwapchainDepth = readIsDefaultFbo && (srcBinding.aspectMask & VK_IMAGE_ASPECT_COLOR_BIT) == 0;
