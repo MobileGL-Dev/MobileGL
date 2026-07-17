@@ -503,10 +503,21 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
             for (auto& target : fboTargets) {
                 auto& slot = MG_State::pGLContext->GetFramebufferBindingSlot(target);
-                auto version = slot.GetVersion();
-                if (version == g_fboBindVersions[SizeT(target)]) continue;
-
                 auto& currentFBO = slot.GetBoundObject();
+
+                // The slot version only tracks rebinds; attachment/drawbuffer edits on an
+                // already-bound FBO bump its object version and must re-sync it too (e.g.
+                // Minecraft 26.x reuses one FBO for depth-blit destinations with draw
+                // buffers NONE and for color clears with draw buffer 0 — dropping the
+                // glDrawBuffers change turns every offscreen clear into a no-op).
+                const Uint16 slotVersion = slot.GetVersion();
+                const Uint16 objectVersion = currentFBO ? currentFBO->GetObjectVersion() : 0;
+                auto* currentPtr = currentFBO.get();
+                if (slotVersion == g_fboBindVersions[SizeT(target)] &&
+                    objectVersion == g_fboSyncedObjectVersions[SizeT(target)] &&
+                    currentPtr == g_fboSyncedObjects[SizeT(target)]) {
+                    continue;
+                }
 
                 if (!currentFBO) {
                     MGLOG_E("No FBO is currently bound, cannot sync current FBO.");
@@ -520,6 +531,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
                 if (currentFBO.get() == lastUpdatedFBO) {
                     MGLOG_D("Draw FBO and read FBO are the same, skipping sync.");
+                    g_fboSyncedObjectVersions[SizeT(target)] = objectVersion;
+                    g_fboSyncedObjects[SizeT(target)] = currentPtr;
                     continue;
                 }
 
@@ -531,6 +544,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 }
                 backendObj->SyncToBackend(currentFBO, target);
 
+                g_fboSyncedObjectVersions[SizeT(target)] = objectVersion;
+                g_fboSyncedObjects[SizeT(target)] = currentPtr;
                 lastUpdatedFBO = currentFBO.get();
             }
         }
@@ -1011,8 +1026,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
         ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
         auto& slot = MG_State::pGLContext->GetFramebufferBindingSlot(target);
-        SyncAndBindFramebufferObject(slot.GetBoundObject(), target);
+        const auto& fbo = slot.GetBoundObject();
+        SyncAndBindFramebufferObject(fbo, target);
         FramebufferImpl::g_fboBindVersions[(SizeT)target] = slot.GetVersion();
+        FramebufferImpl::g_fboSyncedObjectVersions[(SizeT)target] = fbo ? fbo->GetObjectVersion() : 0;
+        FramebufferImpl::g_fboSyncedObjects[(SizeT)target] = fbo.get();
     }
 
     static void BindCurrentProgramWithResources();
@@ -1860,6 +1878,24 @@ namespace MobileGL::MG_Backend::DirectGLES {
         MGLOG_D("ES %s(%d, %d, %d, %d, %d, %d, %d, %d, 0x%x, %s)", __func__, srcX0, srcY0, srcX1, srcY1,
                 dstX0, dstY0, dstX1, dstY1, mask, MG_Util::ConvertGLEnumToString(filter).c_str());
         g_GLESFuncs.glBlitFramebuffer(srcX0, srcY0, srcX1, srcY1, dstX0, dstY0, dstX1, dstY1, mask, filter);
+        // Debug-only diagnostics: which GLES depth texture did this blit write?
+#if MOBILEGL_LOG_ACTIVE_LEVEL <= MOBILEGL_LOG_LEVEL_DEBUG
+        if (mask & GL_DEPTH_BUFFER_BIT) {
+            static int diagCount = 0;
+            if ((diagCount++ % 600) < 4) {
+                GLint readFbo = 0, drawFbo = 0, readDepth = 0, drawDepth = 0;
+                g_GLESFuncs.glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &readFbo);
+                g_GLESFuncs.glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &drawFbo);
+                g_GLESFuncs.glGetFramebufferAttachmentParameteriv(GL_READ_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
+                                                                  GL_FRAMEBUFFER_ATTACHMENT_OBJECT_NAME, &readDepth);
+                g_GLESFuncs.glGetFramebufferAttachmentParameteriv(GL_DRAW_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
+                                                                  GL_FRAMEBUFFER_ATTACHMENT_OBJECT_NAME, &drawDepth);
+                MGLOG_D("DBLIT readFbo=%d(depth=%d) -> drawFbo=%d(depth=%d) rect=(%d,%d,%d,%d)->(%d,%d,%d,%d)",
+                        readFbo, readDepth, drawFbo, drawDepth, srcX0, srcY0, srcX1, srcY1, dstX0, dstY0, dstX1,
+                        dstY1);
+            }
+        }
+#endif
         DebugImpl::ErrorLopper::Loop([file = __FILE__, line = __LINE__](auto err) {
             MGLOG_D("ES error (%s:%d): %s", file, line, MG_Util::ConvertGLEnumToString(err).c_str());
         });

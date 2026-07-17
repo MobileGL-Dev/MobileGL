@@ -1177,7 +1177,7 @@ namespace MobileGL::MG_Impl::GLImpl {
             auto& bindingSlot = MG_State::pGLContext->GetFramebufferBindingSlot(FramebufferTarget::Draw);
             auto& fbo = bindingSlot.GetBoundObject();
             const bool isDefaultFBO = (fbo == FramebufferImpl::pDefaultFramebufferInfo->defaultFBO);
-            static GLenum bufs[] = {buf};
+            const GLenum bufs[] = {buf};
             DrawBuffersForFramebuffer_State(fbo, isDefaultFBO, 1, bufs, true);
         }
     }

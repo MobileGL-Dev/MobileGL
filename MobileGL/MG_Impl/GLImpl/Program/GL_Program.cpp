@@ -1406,6 +1406,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         }
 
         const auto& index = programObject->GetUniformBlockIndex(uniformBlockName);
+        MGLOG_D("GBI prog=%u name='%s' -> %d", program, uniformBlockName ? uniformBlockName : "(null)", (Int)index);
         return index;
     }
 
@@ -1429,6 +1430,7 @@ namespace MobileGL::MG_Impl::GLImpl {
                         std::to_string(program) + "."));
             return;
         }
+        MGLOG_D("UBB prog=%u idx=%u binding=%u", program, uniformBlockIndex, uniformBlockBinding);
         programObject->SetUniformBlockBinding(uniformBlockIndex, uniformBlockBinding);
     }
 

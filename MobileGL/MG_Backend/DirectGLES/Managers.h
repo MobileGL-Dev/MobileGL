@@ -408,6 +408,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
         extern StateBackendObjectRegistry<MG_State::GLState::FramebufferObject, BackendFramebufferObject>
             g_backendFramebufferObjects;
         extern Array<Uint16, SizeT(FramebufferTarget::FramebufferTargetCount)> g_fboBindVersions;
+        // Tracks the bound FBO's object version (bumped on any attachment/drawbuffer change)
+        // per target: re-attaching textures or changing draw buffers on an already-bound FBO
+        // must re-sync it even when the binding-slot version has not moved.
+        extern Array<Uint16, SizeT(FramebufferTarget::FramebufferTargetCount)> g_fboSyncedObjectVersions;
+        extern Array<MG_State::GLState::FramebufferObject*, SizeT(FramebufferTarget::FramebufferTargetCount)>
+            g_fboSyncedObjects;
     } // namespace FramebufferImpl
 
     // Image uniforms take their unit from the layout(binding=N) qualifier baked into

@@ -2491,7 +2491,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 drawBufferClean = true;
             }
 
-            if (!drawBufferClean) {
+            // glDrawBuffers writes the state of the FBO bound to GL_DRAW_FRAMEBUFFER.
+            // When this object is only bound as the READ target the call would land on
+            // whatever framebuffer is draw-bound AND falsely stamp this object's memo,
+            // so the later draw-target sync skips as "clean" while the real state is
+            // stale (Minecraft 26.x OIT: the scratch clear-FBO kept draw buffers NONE
+            // from its blit-destination configuration, silently dropping every
+            // offscreen color clear).
+            if (!drawBufferClean && asTarget == FramebufferTarget::Draw) {
                 memcpy(m_frontendDrawBuffers, stateDrawBuffers.data(),
                        FramebufferObject::MAX_DRAW_BUFFERS * sizeof(FramebufferAttachmentType));
                 std::fill(m_backendDrawBuffers, m_backendDrawBuffers + FramebufferObject::MAX_DRAW_BUFFERS, GL_NONE);
@@ -2516,6 +2523,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     nEffectiveBuffers = i + 1;
                 }
                 g_GLESFuncs.glDrawBuffers(nEffectiveBuffers, m_backendDrawBuffers);
+                MGLOG_D("DBAPPLY beFbo=%u target=%d n=%d db0=0x%x feDb0=%d", m_backendFBOId, (int)asTarget,
+                        nEffectiveBuffers, m_backendDrawBuffers[0], (int)stateDrawBuffers[0]);
             }
 
             if (asTarget == FramebufferTarget::Draw) {
@@ -2538,9 +2547,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 PrgramImpl::g_unormFallbackClampOutputMask = unormClampOutputMask;
             }
 
-            // 2. Remap read buffer
+            // 2. Remap read buffer. glReadBuffer writes the READ-bound FBO's state, so
+            // only apply (and stamp the memo) when this object is bound as READ.
             auto frontendReadBuf = stateFBOObject->GetReadBuffer();
-            if (frontendReadBuf != m_frontendReadBuffer) {
+            if (frontendReadBuf != m_frontendReadBuffer && asTarget == FramebufferTarget::Read) {
                 m_frontendReadBuffer = frontendReadBuf;
 
                 GLenum glBackendReadBuffer = GetBackendAttachmentType(frontendReadBuf);
@@ -2647,6 +2657,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
         StateBackendObjectRegistry<MG_State::GLState::FramebufferObject, BackendFramebufferObject>
             g_backendFramebufferObjects;
         Array<Uint16, SizeT(FramebufferTarget::FramebufferTargetCount)> g_fboBindVersions = {0};
+        // Tracks the bound FBO's object version (bumped on any attachment/drawbuffer change)
+        // per target: re-attaching textures or changing draw buffers on an already-bound FBO
+        // must re-sync it even when the binding-slot version has not moved.
+        Array<Uint16, SizeT(FramebufferTarget::FramebufferTargetCount)> g_fboSyncedObjectVersions = {0};
+        Array<MG_State::GLState::FramebufferObject*, SizeT(FramebufferTarget::FramebufferTargetCount)>
+            g_fboSyncedObjects = {};
     } // namespace FramebufferImpl
 
     namespace PrgramImpl {
@@ -2935,6 +2951,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 }
                 m_uniformBlockBackendIndices[static_cast<SizeT>(i)] = static_cast<Int>(backendBlkIdx);
                 g_GLESFuncs.glUniformBlockBinding(m_backendProgramId, backendBlkIdx, lastUBOBinding);
+                MGLOG_D("CACHE prog=%u beProg=%u blk[%d]='%s' beIdx=%u -> bePoint=%u",
+                        stateProgramObject->GetExternalIndex(), m_backendProgramId, i, name.c_str(), backendBlkIdx,
+                        lastUBOBinding);
             }
 
             m_samplerUniformBindings.clear();
