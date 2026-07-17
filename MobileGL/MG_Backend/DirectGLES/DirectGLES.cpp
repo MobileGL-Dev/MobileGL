@@ -1487,7 +1487,102 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
         BindCurrentFBO(FramebufferTarget::Draw);
 
-        g_GLESFuncs.glClear(mask);
+        // Debug-only diagnostics: is each offscreen clear complete and unscissored?
+#if MOBILEGL_LOG_ACTIVE_LEVEL <= MOBILEGL_LOG_LEVEL_DEBUG
+        {
+            static int diagCount = 0;
+            GLint fboId = 0;
+            g_GLESFuncs.glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &fboId);
+            if (fboId != 0 && diagCount++ < 900) {
+                GLint color0 = 0, depthName = 0, box[4] = {0};
+                GLboolean scissor = g_GLESFuncs.glIsEnabled(GL_SCISSOR_TEST);
+                GLboolean cmask[4] = {0};
+                GLfloat cc[4] = {0};
+                g_GLESFuncs.glGetFramebufferAttachmentParameteriv(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                                                                  GL_FRAMEBUFFER_ATTACHMENT_OBJECT_NAME, &color0);
+                g_GLESFuncs.glGetFramebufferAttachmentParameteriv(GL_DRAW_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
+                                                                  GL_FRAMEBUFFER_ATTACHMENT_OBJECT_NAME, &depthName);
+                g_GLESFuncs.glGetIntegerv(GL_SCISSOR_BOX, box);
+                g_GLESFuncs.glGetBooleanv(GL_COLOR_WRITEMASK, cmask);
+                g_GLESFuncs.glGetFloatv(GL_COLOR_CLEAR_VALUE, cc);
+                MGLOG_D("CLEAR fbo=%d color0=%d depth=%d mask=0x%x scissor=%d box=(%d,%d,%d,%d) cmask=%d%d%d%d cc=(%g,%g,%g,%g)",
+                        fboId, color0, depthName, mask, (int)scissor, box[0], box[1], box[2], box[3], (int)cmask[0],
+                        (int)cmask[1], (int)cmask[2], (int)cmask[3], cc[0], cc[1], cc[2], cc[3]);
+            }
+        }
+#endif
+
+        // GLES clamps the glClearColor state to [0,1] (desktop GL keeps it unclamped
+        // for float color buffers). Minecraft's OIT clears its depth-bounds RGBA32F
+        // target to -FLT_MAX as the MAX-blend identity, so an out-of-range clear
+        // color must go through glClearBufferfv, which GLES does not clamp.
+        GLbitfield remainingMask = mask;
+        if ((mask & GL_COLOR_BUFFER_BIT) != 0) {
+            const FloatVec4& cc = MG_State::pGLContext->GetRenderStateParameters().ClearColor;
+            const Bool outOfRange = cc.x() < 0.f || cc.x() > 1.f || cc.y() < 0.f || cc.y() > 1.f || cc.z() < 0.f ||
+                                    cc.z() > 1.f || cc.w() < 0.f || cc.w() > 1.f;
+            GLint clearDrawFbo = 0;
+            g_GLESFuncs.glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &clearDrawFbo);
+            if (outOfRange && clearDrawFbo != 0) {
+                const GLfloat value[4] = {cc.x(), cc.y(), cc.z(), cc.w()};
+                GLint maxDrawBuffers = 0;
+                GLint clearedCount = 0;
+                GLint firstDb = -1;
+                g_GLESFuncs.glGetIntegerv(GL_MAX_DRAW_BUFFERS, &maxDrawBuffers);
+                for (GLint i = 0; i < maxDrawBuffers; ++i) {
+                    GLint db = GL_NONE;
+                    g_GLESFuncs.glGetIntegerv(GL_DRAW_BUFFER0 + static_cast<GLenum>(i), &db);
+                    if (i == 0) firstDb = db;
+                    if (db != GL_NONE) {
+                        g_GLESFuncs.glClearBufferfv(GL_COLOR, i, value);
+                        ++clearedCount;
+                    }
+                }
+                remainingMask &= ~static_cast<GLbitfield>(GL_COLOR_BUFFER_BIT);
+                (void)clearedCount;
+                (void)firstDb;
+                // Debug-only diagnostics: verify the unclamped clear actually landed.
+#if MOBILEGL_LOG_ACTIVE_LEVEL <= MOBILEGL_LOG_LEVEL_DEBUG
+                {
+                    static int diagCount = 0;
+                    if (diagCount++ < 20) {
+                        const GLenum clrErr = g_GLESFuncs.glGetError();
+                        GLint prevRead = 0, prevPbo = 0;
+                        g_GLESFuncs.glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &prevRead);
+                        g_GLESFuncs.glGetIntegerv(GL_PIXEL_PACK_BUFFER_BINDING, &prevPbo);
+                        g_GLESFuncs.glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+                        g_GLESFuncs.glBindFramebuffer(GL_READ_FRAMEBUFFER, (GLuint)clearDrawFbo);
+                        GLint prevReadBuf = GL_COLOR_ATTACHMENT0;
+                        g_GLESFuncs.glGetIntegerv(GL_READ_BUFFER, &prevReadBuf);
+                        g_GLESFuncs.glReadBuffer(GL_COLOR_ATTACHMENT0);
+                        GLfloat rb[4] = {0};
+                        g_GLESFuncs.glReadPixels(100, 100, 1, 1, GL_RGBA, GL_FLOAT, rb);
+                        const GLenum rbErr = g_GLESFuncs.glGetError();
+                        const auto& feFbo =
+                            MG_State::pGLContext->GetFramebufferBindingSlot(FramebufferTarget::Draw).GetBoundObject();
+                        int feDb0 = -1, feDb1 = -1;
+                        Uint feIdx = 0, feVer = 0;
+                        if (feFbo) {
+                            feIdx = feFbo->GetExternalIndex();
+                            feVer = feFbo->GetObjectVersion();
+                            feDb0 = (int)feFbo->GetDrawBuffers()[0];
+                            feDb1 = (int)feFbo->GetDrawBuffers()[1];
+                        }
+                        MGLOG_D("CLEARV fbo=%d clrErr=0x%x rbErr=0x%x cc.x=%g cleared=%d firstDb=0x%x prevReadBuf=0x%x "
+                                "feFbo=%u feVer=%u feDb=[%d,%d] stored=(%g,%g,%g,%g)",
+                                clearDrawFbo, clrErr, rbErr, cc.x(), clearedCount, firstDb, prevReadBuf, feIdx, feVer,
+                                feDb0, feDb1, rb[0], rb[1], rb[2], rb[3]);
+                        g_GLESFuncs.glReadBuffer(static_cast<GLenum>(prevReadBuf));
+                        g_GLESFuncs.glBindFramebuffer(GL_READ_FRAMEBUFFER, (GLuint)prevRead);
+                        g_GLESFuncs.glBindBuffer(GL_PIXEL_PACK_BUFFER, (GLuint)prevPbo);
+                    }
+                }
+#endif
+            }
+        }
+        if (remainingMask != 0) {
+            g_GLESFuncs.glClear(remainingMask);
+        }
     }
 
     // GLES core supports only GL_PRIMITIVE_RESTART_FIXED_INDEX (fixed all-ones value). If the app
