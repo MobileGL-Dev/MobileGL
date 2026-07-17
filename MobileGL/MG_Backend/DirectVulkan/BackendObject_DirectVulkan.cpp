@@ -488,14 +488,15 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                     .TargetGLSLVersion = {4, 6, 0},
                     // Baseline advertisement (no shader subgroup, no timer queries); a
                     // live backend reconciles its copy in UpdateAdvertisedExtensions.
-                    .Extensions = BuildAdvertisedExtensions(false, false),
+                    .Extensions = BuildAdvertisedExtensions(false, false, false),
                     .IsCompatibilityProfile = false
                 },
             .StaticBackendCapability = {.AllowVSOnlyPrograms = false}};
         return rendererInfo;
     }
 
-    Vector<GLExtension> BuildAdvertisedExtensions(Bool shaderSubgroupSupported, Bool timerQueriesSupported) {
+    Vector<GLExtension> BuildAdvertisedExtensions(Bool shaderSubgroupSupported, Bool timerQueriesSupported,
+                                                  Bool anisotropicFilteringSupported) {
         Vector<GLExtension> extensions = {V_OpenGL30, V_OpenGL31, V_OpenGL32,
                                           V_OpenGL33, E_GL_ARB_draw_buffers_blend, E_GL_ARB_compute_shader,
                                           E_GL_ARB_shader_storage_buffer_object, E_GL_ARB_shader_image_load_store,
@@ -515,6 +516,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // MOBILEGL_DISABLE_TIMERQUERY escape hatch is off.
         if (timerQueriesSupported && !MG_Config::Features.DisableTimerQuery) {
             extensions.push_back(E_GL_ARB_timer_query);
+        }
+        // Only advertised when the samplerAnisotropy device feature was granted: without it the
+        // sampler state is accepted but never applied, and an app trusting the string (LWJGL builds
+        // GLCapabilities from it) would think it enabled anisotropic filtering.
+        if (anisotropicFilteringSupported) {
+            extensions.push_back(E_GL_EXT_texture_filter_anisotropic);
+            extensions.push_back(E_GL_ARB_texture_filter_anisotropic);
         }
         return extensions;
     }
@@ -630,7 +638,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // run without a renderer; no timer query is advertised then. Rebuilding
         // the whole list keeps re-runs idempotent.
         m_rendererInfo.RendererGLInfo.Extensions = BuildAdvertisedExtensions(
-            m_vulkanCaps.SupportsShaderSubgroup, pVulkanRenderer && pVulkanRenderer->IsTimerQuerySupported());
+            m_vulkanCaps.SupportsShaderSubgroup, pVulkanRenderer && pVulkanRenderer->IsTimerQuerySupported(),
+            pVulkanRenderer && pVulkanRenderer->IsSamplerAnisotropySupported());
     }
 
     void BackendObject_DirectVulkan::UpdateDynamicBackendParameters() {
@@ -680,6 +689,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         m_dynamicParameters.UniformBufferOffsetAlignment = m_vulkanCaps.UniformBufferOffsetAlignment;
         m_dynamicParameters.AliasedLineWidthRangeMin = m_vulkanCaps.AliasedLineWidthRangeMin;
         m_dynamicParameters.AliasedLineWidthRangeMax = m_vulkanCaps.AliasedLineWidthRangeMax;
+        // Without the samplerAnisotropy feature the limit is unusable, so report 1.0 (no anisotropy)
+        // rather than a maximum the sampler manager will never apply.
+        m_dynamicParameters.MaxTextureMaxAnisotropy =
+            (pVulkanRenderer && pVulkanRenderer->IsSamplerAnisotropySupported()) ? m_vulkanCaps.MaxSamplerAnisotropy
+                                                                                : 1.0f;
         m_dynamicParameters.SmoothLineWidthRangeMin = m_vulkanCaps.SmoothLineWidthRangeMin;
         m_dynamicParameters.SmoothLineWidthRangeMax = m_vulkanCaps.SmoothLineWidthRangeMax;
         m_dynamicParameters.SmoothLineWidthGranularity = m_vulkanCaps.SmoothLineWidthGranularity;

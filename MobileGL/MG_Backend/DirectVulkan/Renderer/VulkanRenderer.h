@@ -227,6 +227,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // frontend. Timestamp support (queue timestampValidBits > 0 and a
         // non-zero timestampPeriod) is cached at device creation.
         Bool IsTimerQuerySupported() const;
+        // The samplerAnisotropy device feature was granted, so GL_TEXTURE_MAX_ANISOTROPY_EXT is
+        // honored rather than accepted-and-ignored.
+        Bool IsSamplerAnisotropySupported() const { return m_samplerAnisotropyFeatureEnabled; }
         // Ensures the frame command buffer is recording (same lazy pattern as
         // SetupDraw) and writes a bottom-of-pipe timestamp into the current
         // frame's pool. Null when unsupported or the pool is exhausted.
@@ -359,6 +362,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         Bool m_indexTypeUint8ExtensionEnabled = false;
         Bool m_logicOpFeatureEnabled = false;
         Bool m_multiDrawIndirectFeatureEnabled = false;
+        Bool m_samplerAnisotropyFeatureEnabled = false;
         Bool m_shaderDrawParametersExtensionEnabled = false;
         Bool m_shaderDrawParametersFeatureEnabled = false;
         // fillModeNonSolid gates VK_POLYGON_MODE_LINE/_POINT (glPolygonMode); independentBlend gates

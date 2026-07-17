@@ -911,6 +911,13 @@ namespace MobileGL::MG_Util::BackendLoader {
         glesFuncs.glGetIntegerv(GL_MAX_VIEWPORTS, &maxViewports);
         glesFuncs.glGetIntegerv(GL_MAX_VIEWPORT_DIMS, maxViewportDims);
         glesFuncs.glGetIntegerv(GL_VIEWPORT_SUBPIXEL_BITS, &viewportSubpixelBits);
+        // Only legal to query once the extension has been seen in the loop above, hence not batched
+        // with the unconditional probes: on a driver without it this raises GL_INVALID_ENUM.
+        if (caps.SupportsTextureFilterAnisotropy) {
+            GLfloat maxTextureMaxAnisotropy = 1.0f;
+            glesFuncs.glGetFloatv(GL_MAX_TEXTURE_MAX_ANISOTROPY_EXT, &maxTextureMaxAnisotropy);
+            caps.MaxTextureMaxAnisotropy = std::max(maxTextureMaxAnisotropy, 1.0f);
+        }
         caps.AliasedLineWidthRangeMin = aliasedLineWidthRange[0];
         caps.AliasedLineWidthRangeMax = aliasedLineWidthRange[1];
         caps.SmoothLineWidthRangeMin = smoothLineWidthRange[0];

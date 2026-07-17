@@ -18,6 +18,9 @@ namespace MobileGL {
             Int UniformBufferOffsetAlignment = 256;
             Float AliasedLineWidthRangeMin = 1.0f;
             Float AliasedLineWidthRangeMax = 1.0f;
+            // VkPhysicalDeviceLimits::maxSamplerAnisotropy. Whether it can be used at all depends on
+            // the samplerAnisotropy feature, which the renderer decides at device creation.
+            Float MaxSamplerAnisotropy = 1.0f;
             Float SmoothLineWidthRangeMin = 1.0f;
             Float SmoothLineWidthRangeMax = 1.0f;
             Float SmoothLineWidthGranularity = 1.0f;

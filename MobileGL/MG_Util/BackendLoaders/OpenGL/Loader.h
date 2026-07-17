@@ -1034,6 +1034,9 @@ namespace MobileGL {
             // GL_EXT_texture_filter_anisotropic is present, so sampler/texture
             // anisotropy may be forwarded without raising GL_INVALID_ENUM in GLES.
             Bool SupportsTextureFilterAnisotropy = false;
+            // GL_MAX_TEXTURE_MAX_ANISOTROPY_EXT of the host driver; only queried when the
+            // extension above is present, and left at 1.0 (no anisotropy) otherwise.
+            Float MaxTextureMaxAnisotropy = 1.0f;
             Bool SupportsBaseInstance = false;
             // GL_EXT_disjoint_timer_query is present in the extension string.
             Bool SupportsDisjointTimerQuery = false;

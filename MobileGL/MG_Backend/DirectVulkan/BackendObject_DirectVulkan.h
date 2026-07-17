@@ -73,7 +73,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     // a device with the given raw capabilities. The MOBILEGL_DISABLE_SUBGROUP and
     // MOBILEGL_DISABLE_TIMERQUERY escape hatches are applied inside, so callers pass
     // the detected device support (passing an already-gated value is harmless).
-    Vector<GLExtension> BuildAdvertisedExtensions(Bool shaderSubgroupSupported, Bool timerQueriesSupported);
+    Vector<GLExtension> BuildAdvertisedExtensions(Bool shaderSubgroupSupported, Bool timerQueriesSupported,
+                                                  Bool anisotropicFilteringSupported);
 
     // Format: <GPU Name>, Vulkan <Vulkan Version>, Driver <Driver Version> — the exact
     // string an initialized backend returns from GetBackendAPIVersionString (and that
