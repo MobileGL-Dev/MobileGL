@@ -422,13 +422,10 @@ namespace MobileGL::MG_Impl::GLImpl {
                                                  "2D multisample textures must use depth 1."));
                 return false;
             }
-            if (textureTarget == TextureTarget::Texture2DMultisampleArray && depth == 0) {
-                MG_State::pGLContext->RecordError(
-                    ErrorCode::InvalidValue,
-                    MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller,
-                                                 "2D multisample array textures must have at least one layer."));
-                return false;
-            }
+            // Zero layers is NOT an error for multisample arrays: GL 4.5 8.8 only raises
+            // INVALID_VALUE for negative dimensions, and GL CTS's per-case state reset
+            // (gluStateReset) clears the default GL_TEXTURE_2D_MULTISAMPLE_ARRAY texture with
+            // glTexImage3DMultisample(..., depth = 0) after every case.
 
             const Int maxSamples = GetMaxSupportedTextureSamples(textureInternalFormat);
             if (samples > maxSamples) {
@@ -1718,8 +1715,11 @@ namespace MobileGL::MG_Impl::GLImpl {
         if (!TextureImpl::ValidateTextureUploadTarget(textureUploadTarget)) return;
         if (!TextureImpl::ValidateTextureInternalFormat(textureInternalFormat)) return;
         // TODO: make sure `internalformat` is in one of supported format for TexBuffer
+        // GL 3.3 core 3.8.5: buffer zero detaches any buffer from the buffer texture - only a
+        // nonzero name that is not an existing buffer object is an error. This is reachable on
+        // the default buffer texture now that binding texture 0 binds a real object.
         auto& bufferObject = MG_State::pGLContext->GetBufferObject(buffer);
-        if (!bufferObject) {
+        if (buffer != 0 && !bufferObject) {
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidOperation,
                 MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
@@ -2578,11 +2578,13 @@ namespace MobileGL::MG_Impl::GLImpl {
         // ===================== Error Checking ==============================
         if (!TextureImpl::ValidateTextureTarget(textureTarget)) return;
 
-        // Name 0 unbinds the current target from the active texture unit.
+        // GL 3.3 core 3.8: name 0 is the target's default texture object - a real texture that
+        // glTexImage*/glTexParameter*/glGetTex* must operate on - not "nothing bound". Binding it
+        // restores the unit/target slot to its initial state.
         if (texture == 0) {
             auto& currentUnit = MG_State::pGLContext->GetTextureUnitObject(activeUnit);
             auto& bindingSlot = currentUnit.GetBindingSlot(textureTarget);
-            bindingSlot.Bind(nullptr);
+            bindingSlot.Bind(MG_State::pGLContext->GetDefaultTextureObject(textureTarget));
             MG_State::pGLContext->NoteTextureUnitTouched(activeUnit);
             return;
         }
@@ -2623,14 +2625,27 @@ namespace MobileGL::MG_Impl::GLImpl {
 
     void ActiveTexture_State(GLenum texture) {
         // ===================== Error Checking ==============================
-        if (texture < GL_TEXTURE0 || texture > GL_TEXTURE31) {
+        // GL 3.3 core 3.8: ActiveTexture accepts TEXTUREi for i in
+        // [0, MAX_COMBINED_TEXTURE_IMAGE_UNITS - 1] - NOT a fixed 0..31 range. GL CTS's per-case
+        // state reset walks every advertised combined unit, so rejecting units the getter
+        // advertises aborts whole test batches. The backend already clamps its advertised value
+        // to the state layer's MAX_TEXTURE_IMAGE_UNITS capacity.
+        GLenum maxCombinedUnits = MG_State::GLState::TextureState::MAX_TEXTURE_IMAGE_UNITS;
+        if (MG_Backend::pActiveBackendObject != nullptr) {
+            maxCombinedUnits = std::min<GLenum>(
+                maxCombinedUnits,
+                static_cast<GLenum>(
+                    std::max(MG_Backend::pActiveBackendObject->GetDynamicParameters().MaxCombinedTextureImageUnits,
+                             1)));
+        }
+        if (texture < GL_TEXTURE0 || texture >= GL_TEXTURE0 + maxCombinedUnits) {
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidEnum,
                 MakeUnique<GenericErrorInfo>(
                     "MG_Impl/GLImpl", "ActiveTexture_State",
-                    std::format("Texture must be one of GL_TEXTUREi, where i is in the range 0 to 31, but got "
+                    std::format("Texture must be one of GL_TEXTUREi, where i is in the range 0 to {}, but got "
                                 "invalid enum: 0x{:X}, which may stand for unit {}.",
-                                texture, texture - GL_TEXTURE0)));
+                                maxCombinedUnits - 1, texture, texture - GL_TEXTURE0)));
             return;
         }
 
@@ -3032,6 +3047,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         auto& bindingSlot = activeUnit.GetBindingSlot(textureTarget);
         auto& textureObject = bindingSlot.GetBoundObject();
         if (!TextureImpl::ValidateTextureObject(textureObject)) return;
+        if (!TextureImpl::ValidateTextureNotDefault(textureObject, __func__)) return;
 
         TextureStorage1D(textureObject->GetExternalIndex(), levels, internalformat, width);
     }
@@ -3046,6 +3062,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         auto& bindingSlot = activeUnit.GetBindingSlot(textureTarget);
         auto& textureObject = bindingSlot.GetBoundObject();
         if (!TextureImpl::ValidateTextureObject(textureObject)) return;
+        if (!TextureImpl::ValidateTextureNotDefault(textureObject, __func__)) return;
 
         TextureStorage2D(textureObject->GetExternalIndex(), levels, internalformat, width, height);
     }
@@ -3061,6 +3078,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         auto& bindingSlot = activeUnit.GetBindingSlot(textureTarget);
         auto& textureObject = bindingSlot.GetBoundObject();
         if (!TextureImpl::ValidateTextureObject(textureObject)) return;
+        if (!TextureImpl::ValidateTextureNotDefault(textureObject, __func__)) return;
 
         TextureStorage3D(textureObject->GetExternalIndex(), levels, internalformat, width, height, depth);
     }
@@ -3216,8 +3234,10 @@ namespace MobileGL::MG_Impl::GLImpl {
         auto& textureUnit = MG_State::pGLContext->GetTextureUnitObject(static_cast<Int>(unit));
         MG_State::pGLContext->NoteTextureUnitTouched(static_cast<Int>(unit));
         if (texture == 0) {
+            // GL 4.5 8.1: texture zero unbinds every target of the unit, i.e. rebinds each
+            // target's default texture object (the unit's initial state).
             for (auto& slot : textureUnit.GetAllBindingSlots()) {
-                slot.Bind(nullptr);
+                slot.Bind(MG_State::pGLContext->GetDefaultTextureObject(slot.GetTarget()));
             }
             return;
         }

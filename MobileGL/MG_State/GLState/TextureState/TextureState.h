@@ -49,6 +49,12 @@ namespace MobileGL::MG_State::GLState {
         void GenerateNames(Uint number, Vector<Uint>& textures);
         const SharedPtr<ITextureObject>& CreateTextureObject(Uint index, TextureTarget target);
         const SharedPtr<ITextureObject>& GetTextureObject(Uint index);
+        // The context's default texture object (name 0) for `target`. GL 3.3 core 3.8: texture
+        // zero names a real, per-target texture object shared by every texture unit; binding 0
+        // binds it, and image/parameter calls on it must work like on any texture. It is not a
+        // GenTextures name: it lives outside m_textureObjects (so glIsTexture(0) stays GL_FALSE
+        // and by-name lookups keep failing for 0) and can never be deleted.
+        const SharedPtr<ITextureObject>& GetDefaultTextureObject(TextureTarget target) const;
         TextureUnit& GetUnitObject(Int unit);
         ImageTextureBinding& GetImageTextureBinding(Int unit);
         const ImageTextureBinding& GetImageTextureBinding(Int unit) const;
@@ -83,5 +89,8 @@ namespace MobileGL::MG_State::GLState {
         Array<ImageTextureBinding, MAX_TEXTURE_IMAGE_UNITS> m_imageTextureBindings;
         IndexGenerator<Uint> m_indexGenerator;
         UnorderedMap<GLuint, SharedPtr<ITextureObject>> m_textureObjects;
+        // One default texture object (external name 0) per target, created with the context and
+        // immortal for its lifetime; the initial binding of every unit/target slot.
+        Array<SharedPtr<ITextureObject>, (int)TextureTarget::TextureTargetCount> m_defaultTextureObjects;
     };
 } // namespace MobileGL::MG_State::GLState

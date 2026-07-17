@@ -29,6 +29,11 @@ namespace MobileGL::MG_Impl::GLImpl::TextureImpl {
                                                           TexturePixelDataType type);
     Bool ValidateTextureLevelWithUploadTarget(TextureUploadTarget target, Int level);
     Bool ValidateTextureObject(SharedPtr<MG_State::GLState::ITextureObject> textureObject);
+    // Rejects the per-target default texture objects (name 0) with GL_INVALID_OPERATION for entry
+    // points that require a GenTextures-created texture, e.g. TexStorage* ("An INVALID_OPERATION
+    // error is generated if zero is bound to target", ARB_texture_storage).
+    Bool ValidateTextureNotDefault(const SharedPtr<MG_State::GLState::ITextureObject>& textureObject,
+                                   const char* caller);
     Bool ValidateTextureTargetUniformity(SharedPtr<MG_State::GLState::ITextureObject> textureObject,
                                          TextureTarget target);
     Bool ValidateTextureSubImageOffsets(SharedPtr<MG_State::GLState::ITextureObject> textureObject, Int xoffset,

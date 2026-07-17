@@ -430,7 +430,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 auto& unit = MG_State::pGLContext->GetTextureUnitObject(index);
                 for (const auto& bindingSlot : unit.GetAllBindingSlots()) {
                     auto& textureObject = bindingSlot.GetBoundObject();
-                    if (textureObject) {
+                    // An image-less default texture (name 0) is the slot's initial / "unbound"
+                    // state; it has nothing to sync, so skip it as cheaply as the old null slot.
+                    if (textureObject && !MG_State::GLState::IsUndefinedDefaultTexture(textureObject.get())) {
                         SyncTextureObjectToBackend(textureObject);
                     }
                 }
@@ -1025,6 +1027,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
             for (const auto& bindingSlot : textureUnit.GetAllBindingSlots()) {
                 const auto& textureObject = bindingSlot.GetBoundObject();
                 if (!textureObject) continue;
+                // A default texture (name 0) that was never given an image is the initial /
+                // "unbound" state of the slot; skip it exactly like the old null slot so bind-0
+                // heavy apps pay nothing per draw for the always-populated slots.
+                if (MG_State::GLState::IsUndefinedDefaultTexture(textureObject.get())) continue;
 
                 // Bind texture object
                 auto target = textureObject->GetTarget();

@@ -154,6 +154,17 @@ namespace MobileGL::MG_State::GLState {
                    : nullptr;
     }
 
+    // The per-target default texture objects (name 0) sit permanently in every texture unit's
+    // binding slots, so "nothing useful bound" is no longer a null slot. While a default texture
+    // has never been given an image (its internal format is still Unknown) it can contribute
+    // nothing to sampling; backends treat such a binding exactly like the old empty slot and
+    // skip per-draw sync/bind work for it. Once an application defines an image on a default
+    // texture it loses this shortcut and is synced like any other texture.
+    inline Bool IsUndefinedDefaultTexture(const ITextureObject* texture) {
+        return texture != nullptr && texture->GetExternalIndex() == 0 &&
+               texture->GetFormat() == TextureInternalFormat::Unknown;
+    }
+
     class TextureObjectWithOneMipmap : public TextureObjectMipmap {
     public:
         TextureObjectWithOneMipmap(TextureTarget target, Uint externalIndex)

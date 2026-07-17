@@ -360,6 +360,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         auto& textureUnit = MG_State::pGLContext->GetTextureUnitObject(unit);
         const TextureTarget preferredTarget = programObj.samplerTextureTargetByBinding[binding];
         outTexture = textureUnit.GetBindingSlot(preferredTarget).GetBoundObject();
+        // The slot always holds at least the target's default texture (name 0). While that
+        // default has no image it is unsampleable; report it as "unbound" so callers keep
+        // taking their fallback paths instead of trying to sync a storage-less texture.
+        if (MG_State::GLState::IsUndefinedDefaultTexture(outTexture.get())) {
+            outTexture.reset();
+        }
 
         return true;
     }
@@ -380,7 +386,15 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         const TextureTarget preferredTarget = programObj.samplerTextureTargetByBinding[binding];
         // GetBoundObject() returns the SharedPtr by const ref; .get() reads the pointer without
         // touching the refcount (no atomic inc/dec per binding per draw).
-        return textureUnit.GetBindingSlot(preferredTarget).GetBoundObject().get();
+        MG_State::GLState::ITextureObject* texture =
+            textureUnit.GetBindingSlot(preferredTarget).GetBoundObject().get();
+        // The slot always holds at least the target's default texture (name 0). While that
+        // default has no image it is unsampleable; report it as "unbound" so the caller
+        // substitutes its fallback texture exactly like it did for the old null slot.
+        if (MG_State::GLState::IsUndefinedDefaultTexture(texture)) {
+            return nullptr;
+        }
+        return texture;
     }
 
     Bool UniformManager::ResolveTexelBufferDescriptor(const MG_State::GLState::ProgramObject& program,

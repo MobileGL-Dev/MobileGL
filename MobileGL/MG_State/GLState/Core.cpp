@@ -226,6 +226,10 @@ namespace MobileGL::MG_State {
             return m_textureState.GetTextureObject(index);
         }
 
+        const SharedPtr<ITextureObject>& GLContext::GetDefaultTextureObject(TextureTarget target) const {
+            return m_textureState.GetDefaultTextureObject(target);
+        }
+
         const SharedPtr<ITextureObject>& GLContext::CreateTextureObject(Uint index, TextureTarget target) {
             return m_textureState.CreateTextureObject(index, target);
         }

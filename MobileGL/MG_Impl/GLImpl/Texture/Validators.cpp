@@ -360,6 +360,19 @@ namespace MobileGL::MG_Impl::GLImpl::TextureImpl {
         return true;
     }
 
+    Bool ValidateTextureNotDefault(const SharedPtr<MG_State::GLState::ITextureObject>& textureObject,
+                                   const char* caller) {
+        if (textureObject && textureObject->GetExternalIndex() == 0) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidOperation,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller,
+                                             "This operation is not allowed on the default texture (zero is "
+                                             "bound to the target)."));
+            return false;
+        }
+        return true;
+    }
+
     Bool ValidateTextureTargetUniformity(SharedPtr<MG_State::GLState::ITextureObject> textureObject,
                                          TextureTarget target) {
         if (!textureObject) return true; // should be created later

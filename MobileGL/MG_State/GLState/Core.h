@@ -95,6 +95,8 @@ namespace MobileGL {
                 // Texture
                 void GenTextureNames(Uint number, Vector<Uint>& textures);
                 const SharedPtr<ITextureObject>& GetTextureObject(Uint index);
+                // Per-target default texture object (name 0); see TextureState::GetDefaultTextureObject.
+                const SharedPtr<ITextureObject>& GetDefaultTextureObject(TextureTarget target) const;
                 const SharedPtr<ITextureObject>& CreateTextureObject(Uint index, TextureTarget target);
                 void MarkTextureObjectForDeletion(Uint index);
                 TextureUnit& GetTextureUnitObject(Int unit);

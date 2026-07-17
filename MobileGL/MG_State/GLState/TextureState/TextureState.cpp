@@ -18,9 +18,51 @@
 #include "TextureObjectStubs.h"
 
 namespace MobileGL::MG_State::GLState {
+    static SharedPtr<ITextureObject> MakeTextureObjectForTarget(Uint index, TextureTarget target) {
+        switch (target) {
+        case TextureTarget::Texture1D:
+            return MakeShared<TextureObject1D>(index);
+        case TextureTarget::TextureCubeMap:
+            return MakeShared<TextureObject2DCube>(index);
+        case TextureTarget::Texture2D:
+            return MakeShared<TextureObject2D>(index);
+        case TextureTarget::Texture3D:
+            return MakeShared<TextureObject3D>(index);
+        case TextureTarget::TextureBuffer:
+            return MakeShared<TextureObjectBuffer>(index);
+
+            // These texture types are still stubbed:
+        case TextureTarget::TextureRectangle:
+            return MakeShared<TextureObjectRectangle>(index);
+        case TextureTarget::Texture2DMultisample:
+            return MakeShared<TextureObject2DMultisample>(index);
+        case TextureTarget::Texture1DArray:
+            return MakeShared<TextureObject1DArray>(index);
+        case TextureTarget::Texture2DArray:
+            return MakeShared<TextureObject2DArray>(index);
+        case TextureTarget::TextureCubeMapArray:
+            return MakeShared<TextureObjectCubeMapArray>(index);
+        case TextureTarget::Texture2DMultisampleArray:
+            return MakeShared<TextureObject2DMultisampleArray>(index);
+        default:
+            MOBILEGL_ASSERT(false, "Unimplemented texture type when creating texture object!: %d", (int)target);
+            return nullptr;
+        }
+    }
+
     TextureState::TextureState() : m_indexGenerator(1024, 1) {
+        // GL 3.3 core 3.8: each target owns one default texture object (name 0) per context,
+        // shared across all texture units, and it is the initial binding of every unit/target
+        // slot. It is created outside m_textureObjects so name-based paths (glIsTexture,
+        // GenTextures/DeleteTextures, by-name DSA lookups) never see it.
+        for (int i = 0; i < (int)TextureTarget::TextureTargetCount; ++i) {
+            m_defaultTextureObjects[i] = MakeTextureObjectForTarget(0, static_cast<TextureTarget>(i));
+        }
         for (int i = 0; i < MAX_TEXTURE_IMAGE_UNITS; ++i) {
             m_textureUnits[i] = TextureUnit();
+            for (auto& bindingSlot : m_textureUnits[i].GetAllBindingSlots()) {
+                bindingSlot.Bind(m_defaultTextureObjects[(int)bindingSlot.GetTarget()]);
+            }
         }
     }
 
@@ -33,6 +75,12 @@ namespace MobileGL::MG_State::GLState {
         return nullTextureObject;
     }
 
+    const SharedPtr<ITextureObject>& TextureState::GetDefaultTextureObject(TextureTarget target) const {
+        MOBILEGL_ASSERT(target > TextureTarget::Unknown && target < TextureTarget::TextureTargetCount,
+                        "GetDefaultTextureObject: invalid texture target %d", (int)target);
+        return m_defaultTextureObjects[(int)target];
+    }
+
     void TextureState::GenerateNames(Uint number, Vector<Uint>& textures) {
         textures.resize(number);
         m_indexGenerator.Generate(number, textures.data());
@@ -40,48 +88,11 @@ namespace MobileGL::MG_State::GLState {
 
     const SharedPtr<ITextureObject>& TextureState::CreateTextureObject(Uint index, TextureTarget target) {
         auto& textureObject = m_textureObjects[index];
-        switch (target) {
-        case TextureTarget::Texture1D:
-            textureObject = MakeShared<TextureObject1D>(index);
-            break;
-        case TextureTarget::TextureCubeMap:
-            textureObject = MakeShared<TextureObject2DCube>(index);
-            break;
-        case TextureTarget::Texture2D:
-            textureObject = MakeShared<TextureObject2D>(index);
-            break;
-        case TextureTarget::Texture3D:
-            textureObject = MakeShared<TextureObject3D>(index);
-            break;
-        case TextureTarget::TextureBuffer:
-            textureObject = MakeShared<TextureObjectBuffer>(index);
-            break;
-
-            // These texture types are still stubbed:
-        case TextureTarget::TextureRectangle:
-            textureObject = MakeShared<TextureObjectRectangle>(index);
-            break;
-        case TextureTarget::Texture2DMultisample:
-            textureObject = MakeShared<TextureObject2DMultisample>(index);
-            break;
-        case TextureTarget::Texture1DArray:
-            textureObject = MakeShared<TextureObject1DArray>(index);
-            break;
-        case TextureTarget::Texture2DArray:
-            textureObject = MakeShared<TextureObject2DArray>(index);
-            break;
-        case TextureTarget::TextureCubeMapArray:
-            textureObject = MakeShared<TextureObjectCubeMapArray>(index);
-            break;
-        case TextureTarget::Texture2DMultisampleArray:
-            textureObject = MakeShared<TextureObject2DMultisampleArray>(index);
-            break;
-        default:
-            MOBILEGL_ASSERT(false, "Unimplemented texture type when creating texture object!: %d", (int)target);
+        textureObject = MakeTextureObjectForTarget(index, target);
+        if (!textureObject) {
             static SharedPtr<ITextureObject> nullTextureObject = nullptr;
             return nullTextureObject;
         }
-
         return textureObject;
     }
 
@@ -94,7 +105,9 @@ namespace MobileGL::MG_State::GLState {
                     auto& bindingSlots = m_textureUnits[unit].GetAllBindingSlots();
                     for (auto& bindingSlot : bindingSlots) {
                         if (bindingSlot.GetBoundObject() == it->second) {
-                            bindingSlot.Bind(nullptr);
+                            // GL 3.3 core 3.8.1: deleting a bound texture rebinds zero, i.e. the
+                            // target's default texture object, on every unit it was bound to.
+                            bindingSlot.Bind(m_defaultTextureObjects[(int)bindingSlot.GetTarget()]);
                         }
                     }
                 }

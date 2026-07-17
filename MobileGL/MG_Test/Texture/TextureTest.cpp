@@ -151,14 +151,20 @@ namespace {
 } // namespace
 
 TEST_F(TextureTest, CreateTexturesCreatesObjectsWithoutBinding) {
+    auto& unit = MG_State::pGLContext->GetTextureUnitObject(MG_State::pGLContext->GetActiveTextureUnit());
+    const auto boundBefore = unit.GetBindingSlot(TextureTarget::Texture2D).GetBoundObject();
+
     GLuint texture = 0;
     MG_Impl::GLImpl::CreateTextures(GL_TEXTURE_2D, 1, &texture);
 
     EXPECT_NE(texture, 0u);
     EXPECT_TRUE(MG_State::pGLContext->ValidateTextureObject(texture));
 
-    auto& unit = MG_State::pGLContext->GetTextureUnitObject(MG_State::pGLContext->GetActiveTextureUnit());
-    EXPECT_EQ(unit.GetBindingSlot(TextureTarget::Texture2D).GetBoundObject(), nullptr);
+    // CreateTextures must not disturb the unit's binding (which is never empty anymore: at
+    // minimum it holds the target's default texture object).
+    EXPECT_EQ(unit.GetBindingSlot(TextureTarget::Texture2D).GetBoundObject(), boundBefore);
+    EXPECT_NE(unit.GetBindingSlot(TextureTarget::Texture2D).GetBoundObject(),
+              MG_State::pGLContext->GetTextureObject(texture));
     EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
 }
 
@@ -441,14 +447,17 @@ TEST_F(TextureTest, BindTextureUnitEnumAsNameIsSilentNoOp) {
     EXPECT_FALSE(MG_State::pGLContext->ValidateTextureObject(textureUnitEnum));
 }
 
-TEST_F(TextureTest, TexSubImage2DWithoutBoundTextureReportsErrorInsteadOfDereferencingNull) {
+TEST_F(TextureTest, TexSubImage2DOnImagelessDefaultTextureReportsErrorInsteadOfDereferencingNull) {
     MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, 0);
     ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
 
+    // Texture zero is a real (default) texture object now, so TexSubImage2D no longer fails for
+    // want of a bound object - it fails because the region exceeds the default texture's (empty
+    // or zero-sized) level 0, which is GL_INVALID_VALUE per GL 3.3 core 3.8.2.
     const Uint8 pixel[] = {1, 2, 3, 4};
     MG_Impl::GLImpl::TexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel);
 
-    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_INVALID_OPERATION);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_INVALID_VALUE);
 }
 
 TEST_F(TextureTest, TextureStorageAndSubImageModifyNamedObjectOnly) {
@@ -1628,4 +1637,273 @@ TEST_F(TextureTest, NormalizeDepth24Stencil8UsesPackedDepthStencilType) {
     EXPECT_EQ(internalFormat, GL_DEPTH24_STENCIL8);
     EXPECT_EQ(format, GL_DEPTH_STENCIL);
     EXPECT_EQ(type, GL_UNSIGNED_INT_24_8);
+}
+
+// ==================== Default texture objects (name 0), GL 3.3 core 3.8 ====================
+
+TEST_F(TextureTest, DefaultTextureIsBoundInitiallyAndIsPerTarget) {
+    // The initial binding of every unit/target slot is the target's default texture object.
+    const auto& default2D = MG_State::pGLContext->GetDefaultTextureObject(TextureTarget::Texture2D);
+    const auto& default3D = MG_State::pGLContext->GetDefaultTextureObject(TextureTarget::Texture3D);
+    ASSERT_NE(default2D, nullptr);
+    ASSERT_NE(default3D, nullptr);
+    EXPECT_NE(default2D, default3D);
+    EXPECT_EQ(default2D->GetExternalIndex(), 0u);
+    EXPECT_EQ(default2D->GetTarget(), TextureTarget::Texture2D);
+    EXPECT_EQ(default3D->GetTarget(), TextureTarget::Texture3D);
+
+    // Binding 0 restores the default object, and the binding query reports name 0.
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, 0);
+    EXPECT_EQ(MG_State::pGLContext->GetTextureUnitObject(0)
+                  .GetBindingSlot(TextureTarget::Texture2D)
+                  .GetBoundObject(),
+              default2D);
+    GLint binding = -1;
+    MG_Impl::GLImpl::GetIntegerv(GL_TEXTURE_BINDING_2D, &binding);
+    EXPECT_EQ(binding, 0);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    // One default per target per context, shared across all texture units.
+    EXPECT_EQ(MG_State::pGLContext->GetTextureUnitObject(5)
+                  .GetBindingSlot(TextureTarget::Texture2D)
+                  .GetBoundObject(),
+              default2D);
+}
+
+TEST_F(TextureTest, DefaultTextureAcceptsImageAndParameterCalls) {
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, 0);
+    ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    // The exact shape of GL CTS's per-case state reset (gluStateReset resetStateGLCore): a
+    // zero-sized TexImage2D plus parameter resets on the default texture, all of which must
+    // succeed without recording anything.
+    MG_Impl::GLImpl::TexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 0, 0, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    MG_Impl::GLImpl::TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+    GLint minFilter = 0;
+    MG_Impl::GLImpl::GetTexParameteriv(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, &minFilter);
+    EXPECT_EQ(minFilter, GL_NEAREST);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    // A real upload works like on any texture: data lands in the default object's shadow store.
+    const Uint8 pixels[] = {
+        1, 2, 3, 4,
+        5, 6, 7, 8,
+    };
+    MG_Impl::GLImpl::TexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 2, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+    const auto& default2D = MG_State::pGLContext->GetDefaultTextureObject(TextureTarget::Texture2D);
+    auto* mipmapObject = static_cast<MG_State::GLState::TextureObjectMipmap*>(default2D.get());
+    EXPECT_EQ(mipmapObject->GetMipmapTexelSize(TextureUploadTarget::Texture2D, 0), IntVec3(2, 1, 1));
+    const auto* stored =
+        static_cast<const Uint8*>(mipmapObject->MapMipmapData(TextureUploadTarget::Texture2D, 0));
+    ASSERT_NE(stored, nullptr);
+    EXPECT_EQ(std::memcmp(stored, pixels, sizeof(pixels)), 0);
+
+    // Restore the CTS-reset shape (zero-sized level 0, default parameters) so later tests see
+    // the default texture in its usual post-reset state regardless of execution order.
+    MG_Impl::GLImpl::TexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 0, 0, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    MG_Impl::GLImpl::TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST_MIPMAP_LINEAR);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+}
+
+TEST_F(TextureTest, DefaultTextureParametersAreSharedAcrossUnits) {
+    MG_Impl::GLImpl::ActiveTexture(GL_TEXTURE0);
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, 0);
+    MG_Impl::GLImpl::TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    // The same default object is bound on every unit, so the parameter shows up on unit 1 too.
+    MG_Impl::GLImpl::ActiveTexture(GL_TEXTURE1);
+    GLint wrapS = 0;
+    MG_Impl::GLImpl::GetTexParameteriv(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, &wrapS);
+    EXPECT_EQ(wrapS, GL_CLAMP_TO_EDGE);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    // The 3D default is a distinct object and keeps its own (initial) wrap mode.
+    GLint wrapS3D = 0;
+    MG_Impl::GLImpl::GetTexParameteriv(GL_TEXTURE_3D, GL_TEXTURE_WRAP_S, &wrapS3D);
+    EXPECT_EQ(wrapS3D, GL_REPEAT);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    MG_Impl::GLImpl::TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+    MG_Impl::GLImpl::ActiveTexture(GL_TEXTURE0);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+}
+
+TEST_F(TextureTest, DefaultTextureIsNotAnObjectNameAndSurvivesDeleteCalls) {
+    // glIsTexture(0) is GL_FALSE (name 0 is never a GenTextures name), with no error.
+    EXPECT_EQ(MG_Impl::GLImpl::IsTexture(0), GL_FALSE);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+    EXPECT_FALSE(MG_State::pGLContext->ValidateTextureObject(0));
+    EXPECT_FALSE(MG_State::pGLContext->ValidateTextureName(0));
+
+    // Deleting name 0 is silently ignored and leaves the default object fully usable.
+    constexpr GLuint zero = 0;
+    MG_Impl::GLImpl::DeleteTextures(1, &zero);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+    EXPECT_NE(MG_State::pGLContext->GetDefaultTextureObject(TextureTarget::Texture2D), nullptr);
+
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, 0);
+    MG_Impl::GLImpl::TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+}
+
+TEST_F(TextureTest, DeletingBoundTextureRebindsDefaultTexture) {
+    GLuint texture = 0;
+    MG_Impl::GLImpl::GenTextures(1, &texture);
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, texture);
+    ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    MG_Impl::GLImpl::DeleteTextures(1, &texture);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    // GL 3.3 core 3.8.1: deleting the bound texture is as if BindTexture(target, 0) had run.
+    EXPECT_EQ(MG_State::pGLContext->GetTextureUnitObject(0)
+                  .GetBindingSlot(TextureTarget::Texture2D)
+                  .GetBoundObject(),
+              MG_State::pGLContext->GetDefaultTextureObject(TextureTarget::Texture2D));
+    GLint binding = -1;
+    MG_Impl::GLImpl::GetIntegerv(GL_TEXTURE_BINDING_2D, &binding);
+    EXPECT_EQ(binding, 0);
+
+    // Image and parameter calls keep working against the (now bound) default texture.
+    MG_Impl::GLImpl::TexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 0, 0, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+}
+
+TEST_F(TextureTest, NamedTextureRebindsAndWorksAfterUsingDefault) {
+    GLuint texture = 0;
+    MG_Impl::GLImpl::GenTextures(1, &texture);
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, texture);
+    const Uint8 pixels[] = {9, 8, 7, 6};
+    MG_Impl::GLImpl::TexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+    ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    // Detour through the default texture, then rebind the named one.
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, 0);
+    MG_Impl::GLImpl::TexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 0, 0, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, texture);
+
+    GLint binding = -1;
+    MG_Impl::GLImpl::GetIntegerv(GL_TEXTURE_BINDING_2D, &binding);
+    EXPECT_EQ(binding, static_cast<GLint>(texture));
+
+    // The named texture's contents were not disturbed by the operations on the default.
+    const auto* stored = GetBoundTexture2DLevelBytes(texture);
+    ASSERT_NE(stored, nullptr);
+    EXPECT_EQ(std::memcmp(stored, pixels, sizeof(pixels)), 0);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    MG_Impl::GLImpl::DeleteTextures(1, &texture);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+}
+
+TEST_F(TextureTest, TexStorageOnDefaultTextureIsInvalidOperation) {
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, 0);
+    ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    // ARB_texture_storage: "An INVALID_OPERATION error is generated if zero is bound to target"
+    // - immutable storage can never be established on a default texture.
+    MG_Impl::GLImpl::TexStorage2D(GL_TEXTURE_2D, 1, GL_RGBA8, 2, 2);
+    ExpectSingleGlError(GL_INVALID_OPERATION);
+    EXPECT_FALSE(MG_State::pGLContext->GetDefaultTextureObject(TextureTarget::Texture2D)->IsImmutable());
+}
+
+TEST_F(TextureTest, CtsStyleStateResetOnDefaultTexturesLeavesNoError) {
+    // Mirrors the texture section of VK-GL-CTS gluStateReset resetStateGLCore, which runs after
+    // EVERY case: bind 0 on each target, clear the default texture's image with a zero-sized
+    // TexImage*, and reset sampler-ish parameters. Any leftover error aborts the whole batch
+    // ("Texture state reset failed"), so this exact sequence must stay clean end to end.
+    const GLfloat borderColor[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+    const auto resetCommonTexParams = [&borderColor](GLenum target) {
+        MG_Impl::GLImpl::TexParameteri(target, GL_TEXTURE_MIN_FILTER, GL_NEAREST_MIPMAP_LINEAR);
+        MG_Impl::GLImpl::TexParameteri(target, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        MG_Impl::GLImpl::TexParameterfv(target, GL_TEXTURE_BORDER_COLOR, borderColor);
+        MG_Impl::GLImpl::TexParameteri(target, GL_TEXTURE_WRAP_S, GL_REPEAT);
+        MG_Impl::GLImpl::TexParameteri(target, GL_TEXTURE_WRAP_T, GL_REPEAT);
+        MG_Impl::GLImpl::TexParameterf(target, GL_TEXTURE_MIN_LOD, -1000.0f);
+        MG_Impl::GLImpl::TexParameterf(target, GL_TEXTURE_MAX_LOD, 1000.0f);
+        MG_Impl::GLImpl::TexParameteri(target, GL_TEXTURE_BASE_LEVEL, 0);
+        MG_Impl::GLImpl::TexParameteri(target, GL_TEXTURE_MAX_LEVEL, 1000);
+        MG_Impl::GLImpl::TexParameterf(target, GL_TEXTURE_LOD_BIAS, 0.0f);
+        MG_Impl::GLImpl::TexParameteri(target, GL_TEXTURE_COMPARE_MODE, GL_NONE);
+        MG_Impl::GLImpl::TexParameteri(target, GL_TEXTURE_COMPARE_FUNC, GL_LEQUAL);
+        MG_Impl::GLImpl::TexParameteri(target, GL_TEXTURE_SWIZZLE_R, GL_RED);
+        MG_Impl::GLImpl::TexParameteri(target, GL_TEXTURE_SWIZZLE_G, GL_GREEN);
+        MG_Impl::GLImpl::TexParameteri(target, GL_TEXTURE_SWIZZLE_B, GL_BLUE);
+        MG_Impl::GLImpl::TexParameteri(target, GL_TEXTURE_SWIZZLE_A, GL_ALPHA);
+    };
+
+    MG_Impl::GLImpl::ActiveTexture(GL_TEXTURE0);
+
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_1D, 0);
+    MG_Impl::GLImpl::TexImage1D(GL_TEXTURE_1D, 0, GL_RGBA, 0, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    resetCommonTexParams(GL_TEXTURE_1D);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR) << "GL_TEXTURE_1D reset failed";
+
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, 0);
+    MG_Impl::GLImpl::TexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 0, 0, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    resetCommonTexParams(GL_TEXTURE_2D);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR) << "GL_TEXTURE_2D reset failed";
+
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_CUBE_MAP, 0);
+    for (int face = 0; face < 6; ++face) {
+        MG_Impl::GLImpl::TexImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X + face, 0, GL_RGBA, 0, 0, 0, GL_RGBA,
+                                    GL_UNSIGNED_BYTE, nullptr);
+    }
+    resetCommonTexParams(GL_TEXTURE_CUBE_MAP);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR) << "GL_TEXTURE_CUBE_MAP reset failed";
+
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D_ARRAY, 0);
+    MG_Impl::GLImpl::TexImage3D(GL_TEXTURE_2D_ARRAY, 0, GL_RGBA, 0, 0, 0, 0, GL_RGBA, GL_UNSIGNED_BYTE,
+                                nullptr);
+    resetCommonTexParams(GL_TEXTURE_2D_ARRAY);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR) << "GL_TEXTURE_2D_ARRAY reset failed";
+
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_3D, 0);
+    MG_Impl::GLImpl::TexImage3D(GL_TEXTURE_3D, 0, GL_RGBA, 0, 0, 0, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    MG_Impl::GLImpl::TexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_R, GL_REPEAT);
+    resetCommonTexParams(GL_TEXTURE_3D);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR) << "GL_TEXTURE_3D reset failed";
+
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_1D_ARRAY, 0);
+    MG_Impl::GLImpl::TexImage2D(GL_TEXTURE_1D_ARRAY, 0, GL_RGBA, 0, 0, 0, GL_RGBA, GL_UNSIGNED_BYTE,
+                                nullptr);
+    resetCommonTexParams(GL_TEXTURE_1D_ARRAY);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR) << "GL_TEXTURE_1D_ARRAY reset failed";
+
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_RECTANGLE, 0);
+    MG_Impl::GLImpl::TexImage2D(GL_TEXTURE_RECTANGLE, 0, GL_RGBA, 0, 0, 0, GL_RGBA, GL_UNSIGNED_BYTE,
+                                nullptr);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR) << "GL_TEXTURE_RECTANGLE reset failed";
+
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_BUFFER, 0);
+    MG_Impl::GLImpl::TexBuffer(GL_TEXTURE_BUFFER, GL_R8, 0);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR) << "GL_TEXTURE_BUFFER reset failed";
+
+    // 3.2-core section: multisample defaults are cleared with ZERO-sized (and, for the array
+    // target, zero-layer) TexImage*Multisample calls - GL only rejects negative dimensions.
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D_MULTISAMPLE, 0);
+    MG_Impl::GLImpl::TexParameteri(GL_TEXTURE_2D_MULTISAMPLE, GL_TEXTURE_SWIZZLE_R, GL_RED);
+    MG_Impl::GLImpl::TexParameteri(GL_TEXTURE_2D_MULTISAMPLE, GL_TEXTURE_SWIZZLE_G, GL_GREEN);
+    MG_Impl::GLImpl::TexParameteri(GL_TEXTURE_2D_MULTISAMPLE, GL_TEXTURE_SWIZZLE_B, GL_BLUE);
+    MG_Impl::GLImpl::TexParameteri(GL_TEXTURE_2D_MULTISAMPLE, GL_TEXTURE_SWIZZLE_A, GL_ALPHA);
+    MG_Impl::GLImpl::TexParameteri(GL_TEXTURE_2D_MULTISAMPLE, GL_TEXTURE_BASE_LEVEL, 0);
+    MG_Impl::GLImpl::TexParameteri(GL_TEXTURE_2D_MULTISAMPLE, GL_TEXTURE_MAX_LEVEL, 1000);
+    MG_Impl::GLImpl::TexImage2DMultisample(GL_TEXTURE_2D_MULTISAMPLE, 1, GL_RGBA8, 0, 0, GL_TRUE);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR) << "GL_TEXTURE_2D_MULTISAMPLE reset failed";
+
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D_MULTISAMPLE_ARRAY, 0);
+    MG_Impl::GLImpl::TexParameteri(GL_TEXTURE_2D_MULTISAMPLE_ARRAY, GL_TEXTURE_SWIZZLE_R, GL_RED);
+    MG_Impl::GLImpl::TexParameteri(GL_TEXTURE_2D_MULTISAMPLE_ARRAY, GL_TEXTURE_SWIZZLE_G, GL_GREEN);
+    MG_Impl::GLImpl::TexParameteri(GL_TEXTURE_2D_MULTISAMPLE_ARRAY, GL_TEXTURE_SWIZZLE_B, GL_BLUE);
+    MG_Impl::GLImpl::TexParameteri(GL_TEXTURE_2D_MULTISAMPLE_ARRAY, GL_TEXTURE_SWIZZLE_A, GL_ALPHA);
+    MG_Impl::GLImpl::TexParameteri(GL_TEXTURE_2D_MULTISAMPLE_ARRAY, GL_TEXTURE_BASE_LEVEL, 0);
+    MG_Impl::GLImpl::TexParameteri(GL_TEXTURE_2D_MULTISAMPLE_ARRAY, GL_TEXTURE_MAX_LEVEL, 1000);
+    MG_Impl::GLImpl::TexImage3DMultisample(GL_TEXTURE_2D_MULTISAMPLE_ARRAY, 1, GL_RGBA8, 0, 0, 0, GL_TRUE);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR) << "GL_TEXTURE_2D_MULTISAMPLE_ARRAY reset failed";
 }
