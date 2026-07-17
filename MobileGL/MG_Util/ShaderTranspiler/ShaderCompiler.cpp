@@ -18,6 +18,7 @@
 #include "spirv-tools/libspirv.h"
 #include "spirv-tools/optimizer.hpp"
 
+#include "ShaderSourceProcessor.h"
 #include <MG_Util/Converters/GLToStr/GLEnumConverter.h>
 #include <MG_Util/Converters/GLToGlslang/ProgramEnumConverter.h>
 
@@ -133,27 +134,23 @@ namespace MobileGL {
                 return Resources;
             }
 
-            Result<SharedPtr<glslang::TShader>> ShaderCompiler::CompileShader(const ShaderAttrib& attrib) {
-                auto shaderType = attrib.shaderType;
-                auto& sourceStr = attrib.sourceStr;
-
-                auto lang = MG_Util::ConvertGLEnumToEShLanguage(shaderType);
-                if (lang == EShLanguage::EShLangCount) {
-                    ResultInfo r;
-                    r.log += "Error: [Preprocess] Unsupported shader type: " + ConvertGLEnumToString(shaderType);
-                    r.errc = -1;
-                    return std::unexpected(r);
-                }
-
+            // One parse attempt. A glslang::TShader cannot be re-parsed, so a retry has to build a
+            // fresh one with byte-identical setup - hence a single factored body rather than two
+            // copies that could drift apart.
+            static Result<SharedPtr<glslang::TShader>> ParseShaderSource(EShLanguage lang, GLenum shaderType,
+                                                                         const String& source,
+                                                                         Flags<ShaderCompileBits> flags) {
                 SharedPtr<glslang::TShader> res;
                 auto& tshader = res;
                 tshader = MakeShared<glslang::TShader>(lang);
-                const char* src[] = {sourceStr.data()};
+                // setStrings gets no length array, so it relies on NUL termination: source must be an
+                // owning buffer that outlives parse(), never a StringView's substring.
+                const char* src[] = {source.c_str()};
                 tshader->setStrings(src, 1);
                 tshader->setNanMinMaxClamp(true);
                 tshader->setInvertY(true);
                 tshader->setPreamble("#undef VULKAN\n");
-                if (attrib.flags & ShaderCompileBits::CompileForOpenGL) {
+                if (flags & ShaderCompileBits::CompileForOpenGL) {
                     tshader->setEnvInput(glslang::EShSourceGlsl, lang, glslang::EShClientVulkan, 450);
                     tshader->setEnvClient(glslang::EShClientOpenGL, glslang::EShTargetOpenGL_450);
                     tshader->setEnvTarget(glslang::EShTargetSpv, glslang::EShTargetSpv_1_3);
@@ -180,6 +177,39 @@ namespace MobileGL {
                 }
 
                 return res;
+            }
+
+            Result<SharedPtr<glslang::TShader>> ShaderCompiler::CompileShader(const ShaderAttrib& attrib) {
+                auto shaderType = attrib.shaderType;
+
+                auto lang = MG_Util::ConvertGLEnumToEShLanguage(shaderType);
+                if (lang == EShLanguage::EShLangCount) {
+                    ResultInfo r;
+                    r.log += "Error: [Preprocess] Unsupported shader type: " + ConvertGLEnumToString(shaderType);
+                    r.errc = -1;
+                    return std::unexpected(r);
+                }
+
+                const String source(attrib.sourceStr);
+                auto result = ParseShaderSource(lang, shaderType, source, attrib.flags);
+                if (result) return result;
+
+                // Legacy desktop sources are normalized to "#version 330 core", which parses under
+                // stricter rules than the 460 they used to be forced to: a shader declaring 330 while
+                // using e.g. layout(binding=...) without the matching #extension line compiles on real
+                // drivers but is rejected here. Retry once at 460 before reporting failure; a genuinely
+                // broken shader fails both attempts and keeps its original diagnostics.
+                String retrySource = source;
+                if (!MG_Util::ShaderTranspiler::RetargetLegacyVersionDirectiveTo460(retrySource)) {
+                    return result;
+                }
+
+                auto retryResult = ParseShaderSource(lang, shaderType, retrySource, attrib.flags);
+                if (!retryResult) return result;
+
+                MGLOG_D("CompileShader: %s only parsed after retargeting its legacy #version to 460",
+                        ConvertGLEnumToString(shaderType).c_str());
+                return retryResult;
             }
 
             Result<SharedPtr<glslang::TProgram>> ShaderCompiler::LinkProgram(const ProgramAttrib& attrib) {

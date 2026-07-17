@@ -556,6 +556,81 @@ TEST_F(ProgramUtilTest, CompileSimpleVertexShader) {
     }
 }
 
+// Legacy desktop sources are normalized to "#version 330 core", which is stricter than the 460 they
+// used to be forced to. A shader declaring 330 while using 420-era syntax without the matching
+// #extension line is accepted by real drivers, so CompileShader retries it at 460 instead of failing.
+TEST_F(ProgramUtilTest, CompileShaderRetriesAt460WhenLegacyVersionRejects420Syntax) {
+    using namespace MG_Util::ShaderTranspiler;
+    String source = R"(#version 330
+layout(binding = 0) uniform sampler2D InSampler;
+in vec2 texCoord;
+out vec4 fragColor;
+void main() {
+    fragColor = texture(InSampler, texCoord);
+})";
+    PreprocessShaderSource(ShaderStage::Fragment, source);
+    // The normal path still emits 330 - the retry must not become the default.
+    ASSERT_EQ(source.find("#version 330 core"), 0u);
+
+    ShaderAttrib attrib{.shaderType = GL_FRAGMENT_SHADER, .sourceStr = source};
+    auto res = ShaderCompiler::CompileShader(attrib);
+    if (!res) {
+        FAIL() << "errc: " << res.error().errc << "\nlog: " << res.error().log;
+    }
+
+    // Same source compiled for the OpenGL environment must take the retry too.
+    ShaderAttrib glAttrib{
+        .shaderType = GL_FRAGMENT_SHADER, .sourceStr = source, .flags = ShaderCompileBits::CompileForOpenGL};
+    auto glRes = ShaderCompiler::CompileShader(glAttrib);
+    if (!glRes) {
+        FAIL() << "errc: " << glRes.error().errc << "\nlog: " << glRes.error().log;
+    }
+}
+
+TEST_F(ProgramUtilTest, CompileShaderStillFailsWithOriginalDiagnosticsWhenRetryCannotHelp) {
+    using namespace MG_Util::ShaderTranspiler;
+    String source = R"(#version 330
+in vec2 texCoord;
+out vec4 fragColor;
+void main() {
+    fragColor = thisFunctionDoesNotExist(texCoord);
+})";
+    PreprocessShaderSource(ShaderStage::Fragment, source);
+
+    ShaderAttrib attrib{.shaderType = GL_FRAGMENT_SHADER, .sourceStr = source};
+    auto res = ShaderCompiler::CompileShader(attrib);
+    ASSERT_FALSE(res);
+    EXPECT_EQ(res.error().errc, -2);
+    EXPECT_NE(res.error().log.find("thisFunctionDoesNotExist"), String::npos) << res.error().log;
+}
+
+TEST_F(ProgramUtilTest, RetargetLegacyVersionDirectiveOnlyTouchesNormalizedDesktopCore) {
+    using namespace MG_Util::ShaderTranspiler;
+
+    String normalized = "#version 330 core\nvoid main() {}\n";
+    EXPECT_TRUE(RetargetLegacyVersionDirectiveTo460(normalized));
+    EXPECT_EQ(normalized.find("#version 460 core"), 0u);
+
+    // Already modern: nothing to retarget.
+    String modern = "#version 460 core\nvoid main() {}\n";
+    EXPECT_FALSE(RetargetLegacyVersionDirectiveTo460(modern));
+    EXPECT_EQ(modern.find("#version 460 core"), 0u);
+
+    // ES and compatibility sources keep what they declared.
+    String es = "#version 300 es\nvoid main() {}\n";
+    EXPECT_FALSE(RetargetLegacyVersionDirectiveTo460(es));
+    EXPECT_EQ(es.find("#version 300 es"), 0u);
+
+    String compat = "#version 330 compatibility\nvoid main() {}\n";
+    EXPECT_FALSE(RetargetLegacyVersionDirectiveTo460(compat));
+    EXPECT_EQ(compat.find("#version 330 compatibility"), 0u);
+
+    // A commented-out directive is not the real one.
+    String commented = "// #version 330 core\nvoid main() {}\n";
+    EXPECT_FALSE(RetargetLegacyVersionDirectiveTo460(commented));
+    EXPECT_EQ(commented.find("#version 460"), String::npos);
+}
+
 const char* fs = R"(#version 150
 
 uniform sampler2D InSampler;

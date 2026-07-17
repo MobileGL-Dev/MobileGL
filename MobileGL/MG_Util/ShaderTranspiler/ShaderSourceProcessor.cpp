@@ -633,6 +633,21 @@ namespace MobileGL {
                 InjectDepthRangeBuiltinShim(stage, source);
             }
 
+            Bool RetargetLegacyVersionDirectiveTo460(String& source) {
+                // Re-inspect rather than searching for the literal directive: it is not necessarily at
+                // offset 0 (a BOM or comments may precede it) and a commented-out "#version" elsewhere
+                // must not be mistaken for the real one.
+                const ShaderLanguageInfo info = InspectShaderLanguage(source);
+                if (!info.HasVersionDirective()) return false;
+                // Only the set NormalizeVersionDirective downgraded: desktop core below 400. ES and
+                // compatibility shaders keep whatever they declared.
+                if (info.profile != ShaderProfile::Core || info.version >= 400) return false;
+
+                source.replace(info.versionDirectiveStart, info.versionDirectiveEnd - info.versionDirectiveStart,
+                               "#version 460 core\n");
+                return true;
+            }
+
         } // namespace ShaderTranspiler
     } // namespace MG_Util
 } // namespace MobileGL
