@@ -1753,7 +1753,9 @@ namespace MobileGL::MG_Impl::GLImpl {
 
     GLboolean IsTexture_State(GLuint texture) {
         // ======================= Processing ================================
-        if (!TextureImpl::ValidateTextureName(texture, true)) return GL_FALSE;
+        // GL 3.3 core 6.1.4: IsTexture generates no error - an unknown, deleted or merely reserved
+        // name is just GL_FALSE. Probing with the recording validator (as every other Is* entry
+        // point already avoids doing) would leave a spurious INVALID_VALUE behind.
         return MG_State::pGLContext->ValidateTextureObject(texture) ? GL_TRUE : GL_FALSE;
     }
 

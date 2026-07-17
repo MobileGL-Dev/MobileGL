@@ -233,7 +233,16 @@ namespace MobileGL::MG_Impl::GLImpl {
         if (sampler == 0) {
             textureUnit.SetSamplerObject(nullptr);
         } else {
-            if (!SamplerImpl::ValidateSamplerName(sampler)) return;
+            // GL 3.3 core 3.8.2: BindSampler on a name GenSamplers never returned - or one already
+            // deleted - is INVALID_OPERATION. SamplerParameter* raises INVALID_VALUE for the same
+            // name, which is why this cannot go through the shared SamplerImpl validator.
+            if (!MG_State::pGLContext->ValidateSamplerName(sampler)) {
+                MG_State::pGLContext->RecordError(
+                    ErrorCode::InvalidOperation,
+                    MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", "BindSampler_State",
+                                                 std::format("Invalid sampler name {}", sampler)));
+                return;
+            }
             Bool doesSamplerObjectCreated = MG_State::pGLContext->ValidateSamplerObject(sampler);
             if (!doesSamplerObjectCreated) {
                 MG_State::pGLContext->CreateSamplerObject(sampler);

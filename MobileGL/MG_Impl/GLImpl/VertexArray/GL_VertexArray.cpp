@@ -288,7 +288,9 @@ namespace MobileGL::MG_Impl::GLImpl {
             GLuint vao = arrays[i];
             if (vao == 0) continue;
 
-            if (!VertexArrayImpl::ValidateVertexArrayName(vao)) continue;
+            // GL 3.3 core 2.10: unknown names are silently ignored on delete; the shared bind-path
+            // validator would record INVALID_OPERATION instead.
+            if (!MG_State::pGLContext->ValidateVertexArrayName(vao)) continue;
 
             if (MG_State::pGLContext->GetBoundVertexArray() &&
                 MG_State::pGLContext->GetBoundVertexArray() == MG_State::pGLContext->GetVertexArrayObject(vao)) {
