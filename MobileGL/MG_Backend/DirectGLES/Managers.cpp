@@ -2285,14 +2285,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
             g_activeTextureUnit = unit;
         }
 
-        void UnbindTexture(Uint unit, GLenum target) { // Active unit will be modified
-            if (unit != g_activeTextureUnit) {
-                ActivateTextureUnit(unit);
-            }
-
+        void UnbindTexture(Uint unit, GLenum target) { // Activates `unit` when an unbind is issued
             auto targetN = static_cast<SizeT>(MG_Util::ConvertGLEnumToTextureTarget(target));
             if (g_boundTexturesCache[unit][targetN] == nullptr) return;
 
+            ActivateTextureUnit(unit);
             g_GLESFuncs.glBindTexture(target, 0);
             g_boundTexturesCache[unit][targetN] = nullptr;
         }
