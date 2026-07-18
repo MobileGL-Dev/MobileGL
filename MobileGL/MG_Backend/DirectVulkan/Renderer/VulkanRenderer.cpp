@@ -3183,17 +3183,30 @@ void main() {
                     colorAttachmentFormat = textureResource->format;
                 }
 
-#if MOBILEGL_LOG_ACTIVE_LEVEL <= MOBILEGL_LOG_LEVEL_DEBUG
-                VkFormatProperties formatProperties{};
-                vkGetPhysicalDeviceFormatProperties(m_physicalDevice.handle, colorAttachmentFormat, &formatProperties);
-                MOBILEGL_ASSERT(
-                    (formatProperties.optimalTilingFeatures & VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BLEND_BIT) != 0,
-                    "GetOrCreatePipeline: blend is enabled on color attachment %u for format=%d textureId=%d, but the format lacks VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BLEND_BIT (program=%u)",
-                    i,
-                    static_cast<Int>(colorAttachmentFormat),
-                    textureExternalIndex,
-                    program.GetExternalIndex());
-#endif
+                // Blending on an attachment whose format lacks
+                // VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BLEND_BIT is invalid pipeline state
+                // (blend support is optional for e.g. 32-bit float formats on some GPUs);
+                // force-disable it instead of baking undefined behavior into the pipeline.
+                static UnorderedMap<Int, Bool> formatBlendSupport;
+                auto blendSupportIt = formatBlendSupport.find(static_cast<Int>(colorAttachmentFormat));
+                if (blendSupportIt == formatBlendSupport.end()) {
+                    VkFormatProperties formatProperties{};
+                    vkGetPhysicalDeviceFormatProperties(m_physicalDevice.handle, colorAttachmentFormat,
+                                                        &formatProperties);
+                    const Bool blendable =
+                        (formatProperties.optimalTilingFeatures & VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BLEND_BIT) != 0;
+                    blendSupportIt =
+                        formatBlendSupport.emplace(static_cast<Int>(colorAttachmentFormat), blendable).first;
+                    if (!blendable) {
+                        MGLOG_E("GetOrCreatePipeline: format=%d lacks VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BLEND_BIT; "
+                                "disabling blending on attachments with this format (first hit: attachment %u textureId=%d program=%u)",
+                                static_cast<Int>(colorAttachmentFormat), i, textureExternalIndex,
+                                program.GetExternalIndex());
+                    }
+                }
+                if (!blendSupportIt->second) {
+                    effectiveBlendEnabled = false;
+                }
             }
             // Dual-source blending (GL_SRC1_* factors from glBlendFunc paired with
             // glBindFragDataLocationIndexed) requires the dualSrcBlend device feature. It is detected at
