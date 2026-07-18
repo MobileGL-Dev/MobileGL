@@ -102,3 +102,33 @@ TEST(EGLStateMakeCurrent, SameThreadRepeatedAttachReleaseDoesNotLeaveStaleOwner)
     EXPECT_TRUE(fixture->State.MakeCurrent(EGL_NO_DISPLAY, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT));
     EXPECT_EQ(fixture->State.ConsumeError(), EGL_SUCCESS);
 }
+
+// The compatibility-profile accessor is affirmative-only (it backs GL_CONTEXT_PROFILE_MASK
+// reporting): attrib-less contexts (profile mask 0) and released threads both answer "not
+// compat" and therefore read as core-profile contexts.
+TEST(EGLStateProfile, CompatibilityProfileRequiresExplicitCompatBit) {
+    auto fixture = CreateFixture();
+
+    EXPECT_FALSE(fixture->State.IsCurrentContextOpenGLCompatibilityProfile());
+
+    EXPECT_TRUE(fixture->State.MakeCurrent(fixture->Display, fixture->Surface, fixture->Surface, fixture->Context));
+    EXPECT_FALSE(fixture->State.IsCurrentContextOpenGLCompatibilityProfile());
+
+    const EGLint compatAttribs[] = {EGL_CONTEXT_MAJOR_VERSION,
+                                    3,
+                                    EGL_CONTEXT_MINOR_VERSION,
+                                    3,
+                                    EGL_CONTEXT_OPENGL_PROFILE_MASK,
+                                    EGL_CONTEXT_OPENGL_COMPATIBILITY_PROFILE_BIT,
+                                    EGL_NONE};
+    const auto compatContext =
+        fixture->State.CreateContext(fixture->Display, fixture->Config, EGL_NO_CONTEXT, compatAttribs);
+    ASSERT_NE(compatContext, EGL_NO_CONTEXT);
+    EXPECT_TRUE(fixture->State.MakeCurrent(fixture->Display, fixture->Surface, fixture->Surface, compatContext));
+    EXPECT_TRUE(fixture->State.IsCurrentContextOpenGLCompatibilityProfile());
+    EXPECT_FALSE(fixture->State.IsCurrentContextOpenGLCoreProfile());
+
+    EXPECT_TRUE(fixture->State.MakeCurrent(EGL_NO_DISPLAY, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT));
+    EXPECT_FALSE(fixture->State.IsCurrentContextOpenGLCompatibilityProfile());
+    EXPECT_EQ(fixture->State.ConsumeError(), EGL_SUCCESS);
+}

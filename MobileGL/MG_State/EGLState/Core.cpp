@@ -764,6 +764,20 @@ namespace MobileGL {
                        ctx->MajorVersion > 3 || (ctx->MajorVersion == 3 && ctx->MinorVersion >= 1);
             }
 
+            Bool EGLContext::IsCurrentContextOpenGLCompatibilityProfile() const {
+                const std::lock_guard<std::recursive_mutex> lock(m_mutex);
+                auto currentIt = m_threadCurrents.find(CurrentThreadKey());
+                if (currentIt == m_threadCurrents.end()) {
+                    return false;
+                }
+                const auto* ctx = TryGetContext(currentIt->second.Context);
+                // Affirmative check: true only when the host explicitly requested the
+                // compatibility bit. Attrib-less contexts report false and thus read as core
+                // for GL_CONTEXT_PROFILE_MASK (EGL defaults 3.x contexts to the core profile).
+                return ctx && ctx->ClientAPI == EGL_OPENGL_API &&
+                       (ctx->OpenGLProfileMask & EGL_CONTEXT_OPENGL_COMPATIBILITY_PROFILE_BIT);
+            }
+
             EGLint EGLContext::GetCurrentContextFlags() const {
                 const std::lock_guard<std::recursive_mutex> lock(m_mutex);
                 auto currentIt = m_threadCurrents.find(CurrentThreadKey());

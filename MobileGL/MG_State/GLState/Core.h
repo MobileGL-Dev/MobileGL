@@ -252,5 +252,12 @@ namespace MobileGL {
         } // namespace GLState
 
         extern UniquePtr<GLState::GLContext> pGLContext;
+
+        // True when relaxed GL semantics apply. Strict core rules are enforced only when the
+        // current EGL context explicitly requested a core profile (core bit in
+        // EGL_CONTEXT_OPENGL_PROFILE_MASK, or a >=3.1 version request without the compatibility
+        // bit) and MOBILEGL_RELAXED_SEMANTICS is off; no current context, legacy version
+        // requests, and the compatibility bit all relax.
+        Bool IsRelaxedSemanticsActive();
     } // namespace MG_State
 } // namespace MobileGL

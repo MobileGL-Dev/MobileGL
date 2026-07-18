@@ -9,12 +9,18 @@
 #include "Core.h"
 #include "MG_State/GLState/RenderbufferState/RenderbufferObject.h"
 #include "MG_State/EGLState/Core.h"
+#include <Config.h>
 
 namespace MobileGL::MG_State {
     void Init() {
         MGLOG_D("Initializing MobileGL State...");
         pGLContext = MakeUnique<GLState::GLContext>();
         pEGLContext = MakeUnique<EGLState::EGLContext>();
+    }
+
+    Bool IsRelaxedSemanticsActive() {
+        return MG_Config::Features.RelaxedSemantics ||
+               !(pEGLContext && pEGLContext->IsCurrentContextOpenGLCoreProfile());
     }
 
     namespace GLState {
@@ -235,7 +241,7 @@ namespace MobileGL::MG_State {
         }
 
         void GLContext::MarkTextureObjectForDeletion(Uint index) {
-            m_textureState.MarkTextureObjectForDeletion(index);
+            m_textureState.MarkTextureObjectForDeletion(index, IsRelaxedSemanticsActive());
         }
 
         TextureUnit& GLContext::GetTextureUnitObject(Int unit) {

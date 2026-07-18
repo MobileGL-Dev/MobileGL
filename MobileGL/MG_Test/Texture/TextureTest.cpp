@@ -12,12 +12,14 @@
 
 #include "Includes.h"
 #include "Init.h"
+#include <Config.h>
 #include <MG_Backend/BackendObjects.h>
 #include <MG_Backend/DirectGLES/Managers.h>
 #include <MG_Impl/GLImpl/Getter/GL_Getter.h>
 #include <MG_Impl/GLImpl/RenderState/GL_RenderState.h>
 #include <MG_Impl/GLImpl/Sampler/GL_Sampler.h>
 #include <MG_Impl/GLImpl/Texture/GL_Texture.h>
+#include <MG_State/EGLState/Core.h>
 #include <MG_State/GLState/Core.h>
 #include <MG_State/GLState/TextureState/TextureObject.h>
 #include <MG_Util/Converters/GLToMG/TextureEnumConverter.h>
@@ -380,10 +382,106 @@ TEST_F(TextureTest, GenThenBindCreatesObjectForUnsizedPackedBgraSubImageUpload) 
     EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
 }
 
-// Legacy Minecraft reserves a texture name, deletes it before first bind, then reuses the same
-// name for the atlas upload. Preserve that generated reservation so the later bind can instantiate
-// the object and subsequent sub-image uploads target it instead of the default texture.
-TEST_F(TextureTest, DeleteGeneratedReservationThenBindCreatesObjectForSubImageUpload) {
+namespace {
+    // Strict core rules only apply when the current EGL context explicitly requested a core
+    // profile; the suite's default (no current context) runs with relaxed semantics. RAII so
+    // a failed ASSERT cannot leave the context current for the rest of the suite.
+    struct ScopedCoreProfileContext {
+        ScopedCoreProfileContext() {
+            auto& egl = *MG_State::pEGLContext;
+            m_display = egl.GetDisplay(EGL_DEFAULT_DISPLAY);
+            EXPECT_NE(m_display, EGL_NO_DISPLAY);
+            EXPECT_TRUE(egl.InitializeDisplay(m_display, nullptr, nullptr));
+            EGLint configCount = 0;
+            EXPECT_TRUE(egl.ChooseConfig(m_display, nullptr, &m_config, 1, &configCount));
+            const EGLint surfaceAttribs[] = {EGL_WIDTH, 1, EGL_HEIGHT, 1, EGL_NONE};
+            m_surface = egl.CreatePbufferSurface(m_display, m_config, surfaceAttribs);
+            EXPECT_NE(m_surface, EGL_NO_SURFACE);
+            const EGLint contextAttribs[] = {EGL_CONTEXT_MAJOR_VERSION,
+                                             3,
+                                             EGL_CONTEXT_MINOR_VERSION,
+                                             3,
+                                             EGL_CONTEXT_OPENGL_PROFILE_MASK,
+                                             EGL_CONTEXT_OPENGL_CORE_PROFILE_BIT,
+                                             EGL_NONE};
+            m_context = egl.CreateContext(m_display, m_config, EGL_NO_CONTEXT, contextAttribs);
+            EXPECT_NE(m_context, EGL_NO_CONTEXT);
+            EXPECT_TRUE(egl.MakeCurrent(m_display, m_surface, m_surface, m_context));
+        }
+        ~ScopedCoreProfileContext() {
+            auto& egl = *MG_State::pEGLContext;
+            egl.MakeCurrent(EGL_NO_DISPLAY, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
+            if (m_context != EGL_NO_CONTEXT) egl.DestroyContext(m_display, m_context);
+            if (m_surface != EGL_NO_SURFACE) egl.DestroySurface(m_display, m_surface);
+        }
+        ScopedCoreProfileContext(const ScopedCoreProfileContext&) = delete;
+        ScopedCoreProfileContext& operator=(const ScopedCoreProfileContext&) = delete;
+
+    private:
+        EGLDisplay m_display = EGL_NO_DISPLAY;
+        EGLConfig m_config = nullptr;
+        EGLSurface m_surface = EGL_NO_SURFACE;
+        MG_State::EGLState::EGLContext::EGLContextHandle m_context = EGL_NO_CONTEXT;
+    };
+
+    // MOBILEGL_RELAXED_SEMANTICS loosens strict core rules even on explicit core-profile
+    // contexts. RAII so a failed ASSERT cannot leak the flag into the rest of the suite.
+    struct ScopedRelaxedSemantics {
+        ScopedRelaxedSemantics(): m_previous(MG_Config::Features.RelaxedSemantics) {
+            MG_Config::Features.RelaxedSemantics = true;
+        }
+        ~ScopedRelaxedSemantics() {
+            MG_Config::Features.RelaxedSemantics = m_previous;
+        }
+        ScopedRelaxedSemantics(const ScopedRelaxedSemantics&) = delete;
+        ScopedRelaxedSemantics& operator=(const ScopedRelaxedSemantics&) = delete;
+
+    private:
+        Bool m_previous;
+    };
+} // namespace
+
+// GL 3.3 core 3.8.1: on an explicit core-profile context, DeleteTextures makes the name unused
+// again whether or not a bind ever instantiated an object, so the reservation must go back to
+// the generator's free list rather than leaking, and binding the dead name afterwards must fail.
+TEST_F(TextureTest, DeleteGeneratedButUnboundNameReleasesReservationAndBindFails) {
+    ScopedCoreProfileContext coreContext;
+    ASSERT_FALSE(MG_State::IsRelaxedSemanticsActive());
+
+    GLuint texture = 0;
+    MG_Impl::GLImpl::GenTextures(1, &texture);
+    ASSERT_NE(texture, 0u);
+    ASSERT_TRUE(MG_State::pGLContext->ValidateTextureName(texture));
+    ASSERT_FALSE(MG_State::pGLContext->ValidateTextureObject(texture));
+
+    MG_Impl::GLImpl::DeleteTextures(1, &texture);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+    EXPECT_FALSE(MG_State::pGLContext->ValidateTextureName(texture));
+    EXPECT_FALSE(MG_State::pGLContext->ValidateTextureObject(texture));
+    // IsTexture answers about a dead name without raising anything (GL 3.3 core 6.1.4).
+    EXPECT_EQ(MG_Impl::GLImpl::IsTexture(texture), GL_FALSE);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, texture);
+    ExpectSingleGlError(GL_INVALID_OPERATION);
+    EXPECT_FALSE(MG_State::pGLContext->ValidateTextureObject(texture));
+
+    // The freed reservation is recycled (the generator's free list is LIFO, so the very same
+    // name comes back) - a delete that skipped the release would hand out a fresh name here.
+    GLuint recycled = 0;
+    MG_Impl::GLImpl::GenTextures(1, &recycled);
+    EXPECT_EQ(recycled, texture);
+    EXPECT_TRUE(MG_State::pGLContext->ValidateTextureName(recycled));
+}
+
+// Relaxed semantics - the default whenever the context did not explicitly request a core
+// profile: legacy Minecraft reserves a texture name, deletes it before first bind, then reuses
+// the same name for the atlas upload. Preserve that generated reservation so the later bind can
+// instantiate the object and subsequent sub-image uploads target it instead of the default
+// texture. Explicit core contexts keep the strict delete semantics asserted above.
+TEST_F(TextureTest, RelaxedDefaultDeleteGeneratedReservationThenBindCreatesObjectForSubImageUpload) {
+    ASSERT_TRUE(MG_State::IsRelaxedSemanticsActive());
+
     GLuint texture = 0;
     MG_Impl::GLImpl::GenTextures(1, &texture);
     ASSERT_NE(texture, 0u);
@@ -421,6 +519,28 @@ TEST_F(TextureTest, DeleteGeneratedReservationThenBindCreatesObjectForSubImageUp
         70, 60, 50, 80,
     };
     EXPECT_EQ(std::memcmp(stored, expected, sizeof(expected)), 0);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+}
+
+// MOBILEGL_RELAXED_SEMANTICS wins even on an explicit core-profile context: the deleted
+// reservation survives and the name stays bindable.
+TEST_F(TextureTest, RelaxedSemanticsOverrideKeepsDeletedReservationOnCoreProfileContext) {
+    ScopedCoreProfileContext coreContext;
+    ScopedRelaxedSemantics relaxedSemantics;
+    ASSERT_TRUE(MG_State::IsRelaxedSemanticsActive());
+
+    GLuint texture = 0;
+    MG_Impl::GLImpl::GenTextures(1, &texture);
+    ASSERT_NE(texture, 0u);
+    MG_Impl::GLImpl::DeleteTextures(1, &texture);
+    EXPECT_TRUE(MG_State::pGLContext->ValidateTextureName(texture));
+
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, texture);
+    EXPECT_TRUE(MG_State::pGLContext->ValidateTextureObject(texture));
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, 0);
+    MG_Impl::GLImpl::DeleteTextures(1, &texture);
     EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
 }
 

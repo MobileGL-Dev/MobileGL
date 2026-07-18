@@ -9,5 +9,6 @@
     <string name="mobilegl_avoid_sampler_mipmap_min_filter_title">Avoid sampler mipmap minification filters</string>
     <string name="mobilegl_coherent_as_flush_title">Treat explicit-flush persistent maps as coherent</string>
     <string name="mobilegl_use_angle_title">Use ANGLE GLES libraries</string>
+    <string name="mobilegl_relaxed_semantics_title">Relaxed GL semantics (legacy app leniencies)</string>
     <string name="mobilegl_default_backend" translatable="false">DirectGLES</string>
 </resources>

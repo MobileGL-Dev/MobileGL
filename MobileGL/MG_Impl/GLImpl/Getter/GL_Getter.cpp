@@ -1734,7 +1734,11 @@ namespace MobileGL::MG_Impl::GLImpl {
             *params = 1024 * 1024; // TODO
             return;
         case GL_CONTEXT_PROFILE_MASK:
-            *params = GL_CONTEXT_CORE_PROFILE_BIT;
+            // Reports the requested context profile (EGL defaults 3.x contexts to core);
+            // MOBILEGL_RELAXED_SEMANTICS loosens behavior without changing the identity.
+            *params = MG_State::pEGLContext && MG_State::pEGLContext->IsCurrentContextOpenGLCompatibilityProfile()
+                          ? GL_CONTEXT_COMPATIBILITY_PROFILE_BIT
+                          : GL_CONTEXT_CORE_PROFILE_BIT;
             return;
         default:
             break;

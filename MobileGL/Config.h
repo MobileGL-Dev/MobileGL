@@ -61,6 +61,12 @@ namespace MobileGL::MG_Config {
         // per-draw glBufferSubData path instead of the persistent-mapped ring allocator
         // (negative control / driver-bug escape hatch).
         Bool DisableUboRing = false;
+        // MOBILEGL_RELAXED_SEMANTICS: relax strict core-profile rules (e.g. VAO-0 draws,
+        // texture-name reuse after delete) even on contexts that explicitly requested a core
+        // profile. Without it, relaxed semantics still apply to every context that did not
+        // explicitly request a core profile via EGL_CONTEXT_OPENGL_PROFILE_MASK / a >=3.1
+        // version request.
+        Bool RelaxedSemantics = false;
     };
     extern FeaturesTable Features;
 } // namespace MobileGL::MG_Config

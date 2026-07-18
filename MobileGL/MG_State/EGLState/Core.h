@@ -59,6 +59,7 @@ namespace MobileGL {
                 Bool ValidateContext(EGLContextHandle context) const;
                 Bool ValidateContextOnDisplay(EGLDisplayHandle display, EGLContextHandle context) const;
                 Bool IsCurrentContextOpenGLCoreProfile() const;
+                Bool IsCurrentContextOpenGLCompatibilityProfile() const;
                 EGLint GetCurrentContextFlags() const;
 
                 // Surface

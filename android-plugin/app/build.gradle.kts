@@ -87,6 +87,7 @@ val pluginRendererConfig = buildJsonValue {
             customizable("MOBILEGL_MAGMA_FRAMESINFLIGHT", "3", RendererConfig.MetaString("mobilegl_magma_frames_inflight_title"))
             toggleable("MOBILEGL_AVOID_SAMPLER_MIPMAP_MIN_FILTER", "1", false, RendererConfig.MetaString("mobilegl_avoid_sampler_mipmap_min_filter_title"))
             toggleable("MOBILEGL_COHERENT_AS_FLUSH", "1", false, RendererConfig.MetaString("mobilegl_coherent_as_flush_title"))
+            toggleable("MOBILEGL_RELAXED_SEMANTICS", "1", false, RendererConfig.MetaString("mobilegl_relaxed_semantics_title"))
             toggleable("MOBILEGL_USE_ANGLE", "1", false, RendererConfig.MetaString("mobilegl_use_angle_title"))
         },
         minMCVer = null,
