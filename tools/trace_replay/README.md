@@ -22,6 +22,8 @@ The bundled fixtures cover:
   ![Minecraft 26.2 main menu golden](fixtures/minecraft-26.2-main-menu.0000101926.png)
 - minecraft-26.2-in-world: captured from Minecraft 26.2 after entering a normal singleplayer world.
   ![Minecraft 26.2 in-world golden](fixtures/minecraft-26.2-in-world.0000519370.png)
+- improved-transparency-minecraft-26.3: captured from the Minecraft 26.3 improved-transparency scene.
+  ![Minecraft 26.3 improved-transparency golden](fixtures/improved-transparency-minecraft-26.3.0002667619.png)
 - minecraft-1.21.4-fabric-common-mods-in-world: captured from Minecraft 1.21.4 Fabric with Sodium, Iris, REI,
   Xaero's Minimap, Xaero's World Map, JourneyMap, and Modern UI, with shader packs disabled.
   ![Minecraft 1.21.4 Fabric common mods in-world golden](fixtures/minecraft-1.21.4-fabric-common-mods-in-world.0000522084.png)
