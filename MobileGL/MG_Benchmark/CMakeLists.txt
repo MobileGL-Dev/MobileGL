@@ -38,6 +38,7 @@ target_link_libraries(
 )
 
 add_test(NAME SanityBench COMMAND SanityBench --benchmark_counters_tabular=true)
+set_tests_properties(SanityBench PROPERTIES LABELS benchmark)
 
 add_subdirectory(Program)
 add_subdirectory(Buffer)

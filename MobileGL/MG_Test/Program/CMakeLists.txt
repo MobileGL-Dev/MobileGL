@@ -39,5 +39,5 @@ target_link_libraries(
 )
 
 include(GoogleTest)
-gtest_discover_tests(ProgramUtilTest DISCOVERY_TIMEOUT 30)
-gtest_discover_tests(ProgramTest DISCOVERY_TIMEOUT 30)
+gtest_discover_tests(ProgramUtilTest DISCOVERY_TIMEOUT 30 PROPERTIES LABELS unit)
+gtest_discover_tests(ProgramTest DISCOVERY_TIMEOUT 30 PROPERTIES LABELS unit)

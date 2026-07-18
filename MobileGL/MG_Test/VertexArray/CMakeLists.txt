@@ -17,4 +17,4 @@ target_link_libraries(
 )
 
 include(GoogleTest)
-gtest_discover_tests(VertexArrayTest DISCOVERY_TIMEOUT 30)
+gtest_discover_tests(VertexArrayTest DISCOVERY_TIMEOUT 30 PROPERTIES LABELS unit)

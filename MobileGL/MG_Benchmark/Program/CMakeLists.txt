@@ -17,3 +17,4 @@ target_link_libraries(
 )
 
 add_test(NAME ProgramBench COMMAND ProgramBench --benchmark_counters_tabular=true)
+set_tests_properties(ProgramBench PROPERTIES LABELS benchmark)

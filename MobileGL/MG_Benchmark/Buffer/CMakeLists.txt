@@ -17,3 +17,4 @@ target_link_libraries(
 )
 
 add_test(NAME BufferBench COMMAND BufferBench --benchmark_counters_tabular=true)
+set_tests_properties(BufferBench PROPERTIES LABELS benchmark)

@@ -476,6 +476,15 @@ if (NOT ANDROID AND NOT MOBILEGL_IOS)
 endif ()
 
 if (NOT ANDROID)
+    # Enable testing in the top-level scope so a CTestTestfile.cmake is emitted
+    # at the build-tree root. This lets `ctest` be invoked from the top-level
+    # build directory (IDE "run all tests", CI) and discover every test in the
+    # subdirectories below, instead of having to descend into each
+    # MG_Test/MG_Benchmark subdirectory. Tests are tagged with CTest labels
+    # (unit / benchmark / integration), so e.g. `ctest -L unit` selects just
+    # the unit suite.
+    enable_testing()
+
     if (MOBILEGL_BUILD_TEST)
         add_subdirectory(MobileGL/MG_Test)
     endif()
@@ -485,7 +494,6 @@ if (NOT ANDROID)
     endif()
 
     if (MOBILEGL_BUILD_TRACE_REPLAY)
-        enable_testing()
         add_subdirectory(tools/trace_replay)
     endif()
 endif()
