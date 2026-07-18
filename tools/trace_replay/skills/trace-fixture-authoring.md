@@ -361,25 +361,29 @@ vulkaninfo | grep -E 'deviceName|VK_EXT_headless_surface'
 
 ## Validate on Android
 
-Build trace APKs:
+Build one generic trace APK. Both backends use this APK and the same package;
+select the backend at replay time with `--backend`.
 
 ```sh
 gradle --no-daemon -p "$REPO/android-plugin" \
-  :app:assembleEsprytTraceRelease \
-  :app:assembleMagmaTraceRelease \
+  :app:assembleTraceRelease \
   -Pmobilegl.abis=all \
   -Pmobilegl.debuggableRelease=true \
   -Pmobilegl.logLevel=MOBILEGL_LOG_LEVEL_INFO \
   --parallel
+
+TRACE_APK=$(find "$REPO/android-plugin/app/build/outputs/apk/trace/release" \
+  -maxdepth 1 -name 'MobileGL-plugin-trace-release-*.apk' -print -quit)
+TRACE_PACKAGE=top.mobilegl.plugin.trace
 ```
 
 Release APKs are only signed when `SIGNING_STORE_PASSWORD`,
 `SIGNING_KEY_ALIAS`, and `SIGNING_KEY_PASSWORD` are set and
 `android-plugin/keystore.jks` exists - an unsigned build still "succeeds" but
-installs fail later with `INSTALL_PARSE_FAILED_NO_CERTIFICATES`. If the
-device or emulator has a trace package from a different keystore, uninstall
-`top.mobilegl.plugin.espryt.trace` / `top.mobilegl.plugin.magma.trace` first
-or the install fails with `INSTALL_FAILED_UPDATE_INCOMPATIBLE`.
+installs fail later with `INSTALL_PARSE_FAILED_NO_CERTIFICATES`. If the device
+or emulator already has `top.mobilegl.plugin.trace` from a different keystore,
+uninstall that one package first or the install fails with
+`INSTALL_FAILED_UPDATE_INCOMPATIBLE`.
 
 Match the CI environment (`.github/workflows/apk.yml` matrix): the emulator
 boots with `--gpu software` + `MOBILEGL_USE_ANGLE=1` for `DirectGLES`
@@ -399,43 +403,43 @@ result directory before each run, or an earlier failure/success can masquerade
 as the current one (identical-to-the-last-digit ssim across "different" runs
 is the tell).
 
-Run DirectGLES:
+Run both backends against the same APK:
 
 ```sh
-sh "$REPO/android-plugin/trace-replay-ci.sh" \
-  --apk-file "$REPO/android-plugin/app/build/outputs/apk/esprytTrace/release/MobileGL-EsprytTrace-release.apk" \
-  --package top.mobilegl.plugin.espryt.trace \
-  --backend DirectGLES \
-  --result-root "$WORK/$CASE/android-result" \
-  --fixture-root "$WORK/$CASE/android-fixture" \
-  --case "$CASE" \
-  --trace-archive "$REPO/tools/trace_replay/fixtures/$CASE.tgz" \
-  --trace-file trace.trace \
-  --golden "$REPO/tools/trace_replay/fixtures/$CASE.$(printf '%010d' "$TARGET_CALL").png" \
-  --target-call "$TARGET_CALL" \
-  --width "$WIDTH" \
-  --height "$HEIGHT" \
-  --ssim-threshold 0.99 \
-  --crop-x 0 \
-  --crop-y 0 \
-  --crop-width 0 \
-  --crop-height 0 \
-  --timeout-seconds 900
+run_android_retrace() {
+  backend="$1"
+  shift
+  sh "$REPO/android-plugin/trace-replay-ci.sh" \
+    --apk-file "$TRACE_APK" \
+    --package "$TRACE_PACKAGE" \
+    --backend "$backend" \
+    --result-root "$WORK/$CASE/android-result-$backend" \
+    --fixture-root "$WORK/$CASE/android-fixture" \
+    --case "$CASE" \
+    --trace-archive "$REPO/tools/trace_replay/fixtures/$CASE.tgz" \
+    --trace-file trace.trace \
+    --golden "$REPO/tools/trace_replay/fixtures/$CASE.$(printf '%010d' "$TARGET_CALL").png" \
+    --target-call "$TARGET_CALL" \
+    --width "$WIDTH" \
+    --height "$HEIGHT" \
+    --ssim-threshold 0.99 \
+    --crop-x 0 \
+    --crop-y 0 \
+    --crop-width 0 \
+    --crop-height 0 \
+    --timeout-seconds 900 \
+    "$@"
+}
+
+run_android_retrace DirectGLES --use-pbuffer
+run_android_retrace DirectVulkan
 ```
-
-Run DirectVulkan with:
-
-- APK: `MobileGL-MagmaTrace-release.apk`
-- package: `top.mobilegl.plugin.magma.trace`
-- backend: `DirectVulkan`
 
 Inspect:
 
-- `$WORK/$CASE/android-result/$CASE-DirectGLES/result.json`
-- `$WORK/$CASE/android-result/$CASE-DirectGLES/$CASE-DirectGLES-actual.png`
-- `$WORK/$CASE/android-result/$CASE-DirectGLES/$CASE-DirectGLES-diff.png`
-- `$WORK/$CASE/android-result/$CASE-DirectGLES/retrace.log`
-- `$WORK/$CASE/android-result/$CASE-DirectGLES/logcat.txt`
+- `$WORK/$CASE/android-result-DirectGLES/$CASE-DirectGLES/result.json`
+- `$WORK/$CASE/android-result-DirectVulkan/$CASE-DirectVulkan/result.json`
+- Each backend's `*-actual.png`, `*-diff.png`, `retrace.log`, and `logcat.txt`
 
 ## Checklist
 

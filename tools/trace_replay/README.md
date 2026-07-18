@@ -173,11 +173,14 @@ or `--skip-case NAME` for known fatal cases.
 
 ## Android device replay
 
-Build and install a trace APK from the repository root:
+Build and install the generic trace APK from the repository root. Both
+`DirectGLES` and `DirectVulkan` use the same APK and package; select the
+backend with the intent's `backend` extra.
 
 ```sh
-gradle --no-daemon -p android-plugin :app:assembleEsprytTraceDebug
-adb install -r android-plugin/app/build/outputs/apk/esprytTrace/debug/MobileGL-EsprytTrace-debug.apk
+gradle --no-daemon -p android-plugin :app:assembleTraceDebug
+TRACE_APK=$(find android-plugin/app/build/outputs/apk/trace/debug -maxdepth 1 -name '*.apk' -print -quit)
+adb install -r "$TRACE_APK"
 ```
 
 Prepare a fixture and copy it into the app-private directory:
@@ -188,7 +191,7 @@ tar -xzf tools/trace_replay/fixtures/openra.tgz -C /tmp/mobilegl-openra
 adb push /tmp/mobilegl-openra/openra.trace /data/local/tmp/mobilegl-openra.trace
 adb push tools/trace_replay/fixtures/openra.0000031249.png /data/local/tmp/mobilegl-openra.golden.png
 
-PKG=top.mobilegl.plugin.espryt.trace
+PKG=top.mobilegl.plugin.trace
 APP_DIR=/data/user/0/$PKG/files/trace-replay
 adb shell run-as $PKG rm -rf files/trace-replay
 adb shell run-as $PKG mkdir -p files/trace-replay/input files/trace-replay/output
@@ -199,6 +202,7 @@ adb shell run-as $PKG cp /data/local/tmp/mobilegl-openra.golden.png files/trace-
 Launch the standalone trace runner Activity:
 
 ```sh
+adb shell am force-stop $PKG
 adb shell am start -W -a top.mobilegl.plugin.TRACE_REPLAY \
   -n $PKG/top.mobilegl.plugin.trace.TraceReplayActivity \
   --es trace_path $APP_DIR/input/openra.trace \
@@ -224,10 +228,11 @@ adb exec-out run-as $PKG cat files/trace-replay/output/actual.png > openra-actua
 adb exec-out run-as $PKG cat files/trace-replay/output/openra-diff.png > openra-diff.png
 ```
 
-For the Vulkan backend, build and install `:app:assembleMagmaTraceDebug`, set
-`PKG=top.mobilegl.plugin.magma.trace`, and pass `--es backend DirectVulkan`.
-DirectGLES also renders to the Activity surface by default; pass
-`--ez use_pbuffer true` to use the offscreen pbuffer path. For cases registered
-with `coherent_as_flush` (Flywheel-style unflushed persistent maps, e.g. the
-Create fixtures), pass `--ez coherent_as_flush true` so the replay runs with
+For Vulkan replay, keep the same APK and `$PKG`, then pass
+`--es backend DirectVulkan`. DirectGLES also renders to the Activity surface by
+default; pass `--ez use_pbuffer true` to use the offscreen pbuffer path. Always
+`adb shell am force-stop $PKG` before another replay: apitrace snapshot state is
+process-local. For cases registered with `coherent_as_flush` (Flywheel-style
+unflushed persistent maps, e.g. the Create fixtures), pass
+`--ez coherent_as_flush true` so the replay runs with
 `MOBILEGL_COHERENT_AS_FLUSH=1`.
