@@ -75,6 +75,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         IntVec2 extent = {0, 0};
         // VkFramebufferCreateInfo::layers of the entry's framebuffer (>1 for layered GL attachments).
         Uint32 layers = 1;
+        // Frame counter value of the last GetOrCreateRenderPass hit; drives cache eviction.
+        Uint64 lastUsedFrame = 0;
 
         RenderPassEntry() = default;
         RenderPassEntry(const RenderPassEntry&) = delete;
@@ -91,6 +93,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             std::swap(sampleCount, that.sampleCount);
             std::swap(extent, that.extent);
             std::swap(layers, that.layers);
+            std::swap(lastUsedFrame, that.lastUsedFrame);
         }
         RenderPassEntry(
             Uint64 hash,
@@ -172,6 +175,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         void QueueRenderbufferClear(const ClearAttachmentPayload& clearPayload,
                                     const MG_State::GLState::FramebufferAttachmentObject& attachment);
         void PopPendingRenderbufferClear(MG_State::GLState::RenderbufferObject* renderbuffer);
+        // Frame boundary hook: ages the render-pass cache and evicts long-unused
+        // entries (their command buffers retired many frames ago).
+        void OnPresent();
         static Bool BeginRenderPass(VkCommandBuffer commandBuffer, RenderPassEntry& renderPassEntry);
         static Bool EndRenderPass(VkCommandBuffer commandBuffer);
         static ActiveRenderPassInfo* GetActiveRenderPass();
@@ -184,6 +190,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         VkTextureManager& m_textureManager;
         SwapchainObject& m_swapchainObject;
         UnorderedMap<Uint64, RenderPassEntry> m_renderPasses;
+        // Monotonic frame counter (bumped in OnPresent) for render-pass cache aging.
+        Uint64 m_frameCounter = 0;
 
         // Bumped whenever a renderbuffer VkImage is (re)created; together with the texture
         // manager's image epoch this invalidates the render-pass fast path on any attachment

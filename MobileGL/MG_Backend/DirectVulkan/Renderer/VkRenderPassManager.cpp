@@ -602,6 +602,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             m_rpFastRenderPassHash == activeRenderPass->hash && !hasPendingClearOnFramebuffer()) {
             auto activeIt = m_renderPasses.find(activeRenderPass->hash);
             if (activeIt != m_renderPasses.end()) {
+                activeIt->second.lastUsedFrame = m_frameCounter;
                 return activeIt->second;
             }
         }
@@ -623,12 +624,15 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             m_rpFastTexEpoch = m_textureManager.GetTextureImageEpoch();
             m_rpFastRbEpoch = m_renderbufferImageEpoch;
             m_rpFastRenderPassHash = activeRenderPass->hash;
+            activeIt->second.lastUsedFrame = m_frameCounter;
             return activeIt->second;
         }
         auto hash = ComputeHash(fbo, swapchainImageIndex, true);
         auto it = m_renderPasses.find(hash);
-        if (it != m_renderPasses.end())
+        if (it != m_renderPasses.end()) {
+            it->second.lastUsedFrame = m_frameCounter;
             return it->second;
+        }
 
         Bool isDefaultFbo = fbo.IsDefaultFramebuffer();
         // Color attachment
@@ -1026,7 +1030,34 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 extent.x(),
                 extent.y());
         auto [insertedIt, _] = m_renderPasses.emplace(hash, Move(renderPassEntry));
+        insertedIt->second.lastUsedFrame = m_frameCounter;
         return insertedIt->second;
+    }
+
+    void VkRenderPassManager::OnPresent() {
+        ++m_frameCounter;
+
+        // Sweep occasionally; evict entries whose last use is far past every
+        // in-flight frame so their VkRenderPass/VkFramebuffer can be destroyed
+        // safely (RenderPassEntry's destructor releases the handles).
+        constexpr Uint64 kSweepInterval = 256;
+        constexpr Uint64 kRetireAgeFrames = 1024;
+        if ((m_frameCounter % kSweepInterval) != 0) {
+            return;
+        }
+
+        const Uint64 activeHash = s_hasActiveRenderPass ? s_activeRenderPass.hash : 0;
+        for (auto it = m_renderPasses.begin(); it != m_renderPasses.end();) {
+            const Bool isActive = s_hasActiveRenderPass && it->first == activeHash;
+            if (!isActive && m_frameCounter - it->second.lastUsedFrame > kRetireAgeFrames) {
+                if (m_rpFastValid && m_rpFastRenderPassHash == it->first) {
+                    m_rpFastValid = false;
+                }
+                it = m_renderPasses.erase(it);
+            } else {
+                ++it;
+            }
+        }
     }
 
     Bool VkRenderPassManager::BeginRenderPass(VkCommandBuffer commandBuffer, RenderPassEntry& renderPassEntry) {
