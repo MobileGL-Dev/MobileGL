@@ -7,6 +7,7 @@
 // End of Source File Header
 
 #include "TextureObject.h"
+#include "MG_State/GLState/Core.h"
 #include "MG_Util/Types.h"
 #include <MG_Util/Metrics/TextureMetrics.h>
 
@@ -51,6 +52,20 @@ namespace MobileGL {
 
             void TextureObjectBase::SetInternalFormat(TextureInternalFormat format) {
                 if (format == m_internalFormat) return;
+
+                // A default texture (name 0) changes IsUndefinedDefaultTexture on the
+                // Unknown<->defined transition, which changes per-draw sampled-set membership
+                // without any bind happening; bump the bind generation so cached sampled sets
+                // re-resolve instead of replaying the stale membership. The identity check
+                // excludes the other externalIndex-0 objects (proxy textures, default-FBO
+                // attachments) whose definedness never feeds sampled-set membership, so e.g.
+                // proxy probes cannot churn the cache.
+                if (m_externalIndex == 0 && pGLContext &&
+                    (m_internalFormat == TextureInternalFormat::Unknown) !=
+                        (format == TextureInternalFormat::Unknown) &&
+                    pGLContext->GetDefaultTextureObject(GetTarget()).get() == this) {
+                    pGLContext->BumpTextureBindGeneration();
+                }
 
                 m_internalFormat = format;
                 ++m_textureParamsVersion;

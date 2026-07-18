@@ -22,6 +22,7 @@
 #include <MG_State/EGLState/Core.h>
 #include <MG_State/GLState/Core.h>
 #include <MG_State/GLState/TextureState/TextureObject.h>
+#include <MG_State/GLState/TextureState/TextureObject2D.h>
 #include <MG_Util/Converters/GLToMG/TextureEnumConverter.h>
 #include <MG_Util/Converters/MGToGL/TextureEnumConverter.h>
 #include <MG_Util/Converters/MGToMG/TextureEnumConverter.h>
@@ -1838,6 +1839,46 @@ TEST_F(TextureTest, DefaultTextureIsBoundInitiallyAndIsPerTarget) {
                   .GetBindingSlot(TextureTarget::Texture2D)
                   .GetBoundObject(),
               default2D);
+}
+
+// Backend sampled-set membership keys off IsUndefinedDefaultTexture, so a default texture
+// crossing the Unknown<->defined boundary must move the bind generation even though no bind
+// happened - a cached sampled set (DirectVulkan walk-skip) would otherwise replay stale
+// membership and never sync/transition the now-image-bearing default. Positioned while the 2D
+// default is still undefined in a single-process run (later tests define it and definedness is
+// irreversible through the GL API); the reverse transition at the end restores that state.
+TEST_F(TextureTest, DefiningImageOnBoundDefaultTextureBumpsBindGeneration) {
+    MG_Impl::GLImpl::ActiveTexture(GL_TEXTURE0);
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, 0);
+    const auto& defaultTexture =
+        MG_State::pGLContext->GetTextureUnitObject(0).GetBindingSlot(TextureTarget::Texture2D).GetBoundObject();
+    ASSERT_TRUE(MG_State::GLState::IsUndefinedDefaultTexture(defaultTexture.get()))
+        << "an earlier test defined the 2D default texture; move this test before it";
+
+    // glTexImage2D on the BOUND name-0 texture (no rebind anywhere) moves the generation
+    // exactly once: the next draw re-collects the sampled set and references the default's
+    // image instead of the fallback.
+    const Uint64 base = MG_State::pGLContext->GetTextureBindGeneration();
+    MG_Impl::GLImpl::TexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+    EXPECT_EQ(MG_State::pGLContext->GetTextureBindGeneration(), base + 1);
+
+    // Re-specifying an already-defined default keeps the cache hot.
+    MG_Impl::GLImpl::TexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+    EXPECT_EQ(MG_State::pGLContext->GetTextureBindGeneration(), base + 1);
+
+    // Other externalIndex-0 objects (proxy textures, default-FBO attachments) are not the
+    // context's default texture; their (re)specification must not churn the cache.
+    auto proxyLike = MakeShared<MG_State::GLState::TextureObject2D>(0u);
+    proxyLike->SetInternalFormat(TextureInternalFormat::RGBA8);
+    EXPECT_EQ(MG_State::pGLContext->GetTextureBindGeneration(), base + 1);
+
+    // The reverse transition (no GL entry point produces it today) is symmetric, and restores
+    // the undefined 2D default the rest of the suite expects.
+    defaultTexture->SetInternalFormat(TextureInternalFormat::Unknown);
+    EXPECT_EQ(MG_State::pGLContext->GetTextureBindGeneration(), base + 2);
+    EXPECT_TRUE(MG_State::GLState::IsUndefinedDefaultTexture(defaultTexture.get()));
 }
 
 TEST_F(TextureTest, DefaultTextureAcceptsImageAndParameterCalls) {

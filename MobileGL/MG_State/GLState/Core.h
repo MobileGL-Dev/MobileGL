@@ -108,6 +108,7 @@ namespace MobileGL {
                 // texture is bound at a unit; lets a backend skip re-resolving an unchanged
                 // per-draw sampled-texture set.
                 Uint64 GetTextureBindGeneration() const { return m_textureState.GetTextureBindGeneration(); }
+                void BumpTextureBindGeneration() { m_textureState.BumpTextureBindGeneration(); }
                 Bool ValidateTextureName(Uint index) const;
                 Bool ValidateTextureObject(Uint index) const;
                 Int GetActiveTextureUnit() const;

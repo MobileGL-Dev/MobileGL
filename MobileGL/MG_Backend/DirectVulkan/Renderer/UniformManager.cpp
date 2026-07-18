@@ -613,7 +613,15 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
             MG_State::GLState::ITextureObject* texture = ResolveSamplerTextureRaw(program, programObj, binding);
             if (!texture) {
-                continue;
+                // ResolveSamplerDescriptor will substitute the fallback texture for this binding;
+                // include it in the sampled set so the pre-render-pass sync/transition pass covers
+                // its first use instead of leaving that work to happen inside an active pass.
+                const TextureTarget preferredTarget = programObj.samplerTextureTargetByBinding[binding];
+                if (preferredTarget != TextureTarget::Texture2D &&
+                    preferredTarget != TextureTarget::TextureRectangle) {
+                    continue;
+                }
+                texture = GetFallbackTexture(preferredTarget).get();
             }
 
             auto found = std::find(outTextures.begin(), outTextures.end(), texture);
