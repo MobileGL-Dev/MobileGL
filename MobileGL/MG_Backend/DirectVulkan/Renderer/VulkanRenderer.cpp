@@ -3756,8 +3756,73 @@ void main() {
             }
         }
 
-        m_clearManager->QueueClear(mask, payload, *fbo);
-        m_renderPassManager->QueueRenderbufferClear(mask, payload, *fbo);
+        // GL 3.3 §4.2.3: glClear honors the write masks. Mirror the scissored path's
+        // gating for the deferred path: drop fully-masked planes, warn on partial
+        // masks vkCmdClear*/loadOp clears cannot express.
+        GLbitfield deferredMask = mask;
+        if ((deferredMask & GL_DEPTH_BUFFER_BIT) != 0 && !MG_State::pGLContext->GetDepthMask()) {
+            deferredMask &= ~static_cast<GLbitfield>(GL_DEPTH_BUFFER_BIT);
+        }
+        if ((deferredMask & GL_STENCIL_BUFFER_BIT) != 0) {
+            const Uint32 stencilWriteMask = MG_State::pGLContext->GetStencilState(StencilFace::Front).WriteMask;
+            if ((stencilWriteMask & 0xFFu) != 0xFFu) {
+                if (stencilWriteMask != 0) {
+                    MGLOG_W("DirectVulkan: deferred glClear with a partial stencil write mask is not supported");
+                }
+                deferredMask &= ~static_cast<GLbitfield>(GL_STENCIL_BUFFER_BIT);
+            }
+        }
+        if ((deferredMask & GL_COLOR_BUFFER_BIT) != 0) {
+            const auto& drawBuffers = fbo->GetDrawBuffers();
+            Bool anyFullMask = false;
+            Bool anyRestrictedMask = false;
+            for (Uint32 drawBufferIndex = 0; drawBufferIndex < drawBuffers.size(); ++drawBufferIndex) {
+                if (drawBuffers[drawBufferIndex] == FramebufferAttachmentType::None) {
+                    continue;
+                }
+                const BoolVec4 colorMask = MG_State::pGLContext->GetColorMaskIndexed(drawBufferIndex);
+                const Bool full = colorMask.r() && colorMask.g() && colorMask.b() && colorMask.a();
+                if (full) {
+                    anyFullMask = true;
+                } else {
+                    anyRestrictedMask = true;
+                    if (colorMask.r() || colorMask.g() || colorMask.b() || colorMask.a()) {
+                        MGLOG_W("DirectVulkan: deferred glClear with a partial color mask is not supported");
+                    }
+                }
+            }
+            if (!anyFullMask) {
+                deferredMask &= ~static_cast<GLbitfield>(GL_COLOR_BUFFER_BIT);
+            } else if (anyRestrictedMask) {
+                // Mixed per-buffer masks: queue only the fully-writable texture targets
+                // individually and drop the framebuffer-level color clear.
+                for (Uint32 drawBufferIndex = 0; drawBufferIndex < drawBuffers.size(); ++drawBufferIndex) {
+                    const auto attachmentType = drawBuffers[drawBufferIndex];
+                    if (attachmentType == FramebufferAttachmentType::None) {
+                        continue;
+                    }
+                    const BoolVec4 colorMask = MG_State::pGLContext->GetColorMaskIndexed(drawBufferIndex);
+                    if (!(colorMask.r() && colorMask.g() && colorMask.b() && colorMask.a())) {
+                        continue;
+                    }
+                    const auto& attachment = fbo->GetAttachment(attachmentType);
+                    if (attachment.IsRenderbuffer()) {
+                        m_renderPassManager->QueueRenderbufferClear(
+                            {.mask = GL_COLOR_BUFFER_BIT, .color = payload.color}, attachment);
+                    } else if (attachment.IsTexture()) {
+                        m_clearManager->QueueClear({.mask = GL_COLOR_BUFFER_BIT, .color = payload.color},
+                                                   attachment);
+                    }
+                }
+                deferredMask &= ~static_cast<GLbitfield>(GL_COLOR_BUFFER_BIT);
+            }
+        }
+        if (deferredMask == 0) {
+            return;
+        }
+
+        m_clearManager->QueueClear(deferredMask, payload, *fbo);
+        m_renderPassManager->QueueRenderbufferClear(deferredMask, payload, *fbo);
     }
 
     void VulkanRenderer::QueueClearBufferPayloadForFramebuffer(
@@ -3820,35 +3885,75 @@ void main() {
             }
         }
 
-        auto queueAttachmentClear = [&](FramebufferAttachmentType attachmentType) {
-            if (attachmentType == FramebufferAttachmentType::None) {
+        auto queueAttachmentClear = [&](FramebufferAttachmentType attachmentType,
+                                        const ClearAttachmentPayload& payload) {
+            if (attachmentType == FramebufferAttachmentType::None || payload.mask == 0) {
                 return;
             }
             const auto& attachment = framebuffer.GetAttachment(attachmentType);
             if (attachment.IsRenderbuffer()) {
-                m_renderPassManager->QueueRenderbufferClear(clearPayload, attachment);
+                m_renderPassManager->QueueRenderbufferClear(payload, attachment);
                 return;
             }
             if (!attachment.IsTexture()) {
                 return;
             }
-            m_clearManager->QueueClear(clearPayload, attachment);
+            m_clearManager->QueueClear(payload, attachment);
+        };
+
+        // GL 3.3 §4.2.3: ClearBuffer* honors the write masks like Clear. Deferred
+        // clears cannot express partial masks; warn and skip those.
+        const auto depthClearAllowed = [&]() -> Bool { return MG_State::pGLContext->GetDepthMask(); };
+        const auto stencilClearAllowed = [&]() -> Bool {
+            const Uint32 stencilWriteMask = MG_State::pGLContext->GetStencilState(StencilFace::Front).WriteMask;
+            if ((stencilWriteMask & 0xFFu) == 0xFFu) {
+                return true;
+            }
+            if (stencilWriteMask != 0) {
+                MGLOG_W("DirectVulkan: deferred glClearBuffer with a partial stencil write mask is not supported");
+            }
+            return false;
         };
 
         switch (buffer) {
-            case GL_COLOR:
-                queueAttachmentClear(framebuffer.GetDrawBuffers()[drawbuffer]);
+            case GL_COLOR: {
+                const BoolVec4 colorMask = MG_State::pGLContext->GetColorMaskIndexed(static_cast<Uint32>(drawbuffer));
+                if (!colorMask.r() && !colorMask.g() && !colorMask.b() && !colorMask.a()) {
+                    return;
+                }
+                if (!(colorMask.r() && colorMask.g() && colorMask.b() && colorMask.a())) {
+                    MGLOG_W("DirectVulkan: deferred glClearBuffer with a partial color mask is not supported");
+                    return;
+                }
+                queueAttachmentClear(framebuffer.GetDrawBuffers()[drawbuffer], clearPayload);
                 return;
+            }
             case GL_DEPTH:
-                queueAttachmentClear(FramebufferAttachmentType::Depth);
+                if (depthClearAllowed()) {
+                    queueAttachmentClear(FramebufferAttachmentType::Depth, clearPayload);
+                }
                 return;
             case GL_STENCIL:
-                queueAttachmentClear(FramebufferAttachmentType::Stencil);
+                if (stencilClearAllowed()) {
+                    queueAttachmentClear(FramebufferAttachmentType::Stencil, clearPayload);
+                }
                 return;
-            case GL_DEPTH_STENCIL:
-                queueAttachmentClear(FramebufferAttachmentType::Depth);
-                queueAttachmentClear(FramebufferAttachmentType::Stencil);
+            case GL_DEPTH_STENCIL: {
+                ClearAttachmentPayload allowedPayload = clearPayload;
+                if (!depthClearAllowed()) {
+                    allowedPayload.mask &= ~static_cast<GLbitfield>(GL_DEPTH_BUFFER_BIT);
+                }
+                if (!stencilClearAllowed()) {
+                    allowedPayload.mask &= ~static_cast<GLbitfield>(GL_STENCIL_BUFFER_BIT);
+                }
+                if ((allowedPayload.mask & GL_DEPTH_BUFFER_BIT) != 0) {
+                    queueAttachmentClear(FramebufferAttachmentType::Depth, allowedPayload);
+                }
+                if ((allowedPayload.mask & GL_STENCIL_BUFFER_BIT) != 0) {
+                    queueAttachmentClear(FramebufferAttachmentType::Stencil, allowedPayload);
+                }
                 return;
+            }
             default:
                 return;
         }
