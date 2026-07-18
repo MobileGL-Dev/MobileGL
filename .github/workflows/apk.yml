@@ -227,6 +227,8 @@ jobs:
     env:
       AVD_NAME: mobilegl-ci
       ANDROID_AVD_HOME: ${{ github.workspace }}/.android/avd
+      ANDROID_HOME: ${{ github.workspace }}/.android/sdk
+      ANDROID_SDK_ROOT: ${{ github.workspace }}/.android/sdk
     steps:
       - name: Checkout repo
         uses: actions/checkout@v6
@@ -245,11 +247,11 @@ jobs:
         with:
           path: |
             ${{ env.ANDROID_AVD_HOME }}
-            /usr/local/lib/android/sdk/emulator
-            /usr/local/lib/android/sdk/platform-tools
-            /usr/local/lib/android/sdk/platforms/android-35
-            /usr/local/lib/android/sdk/system-images/android-35/google_apis/x86_64
-          key: ${{ runner.os }}-mobilegl-avd-api35-google_apis-x86_64-pixel_6-v1-${{ hashFiles('android-plugin/run-avd-ci.sh') }}
+            ${{ env.ANDROID_SDK_ROOT }}/emulator
+            ${{ env.ANDROID_SDK_ROOT }}/platform-tools
+            ${{ env.ANDROID_SDK_ROOT }}/platforms/android-35
+            ${{ env.ANDROID_SDK_ROOT }}/system-images/android-35/google_apis/x86_64
+          key: ${{ runner.os }}-mobilegl-avd-api35-google_apis-x86_64-pixel_6-v2-${{ hashFiles('android-plugin/run-avd-ci.sh') }}
 
       - name: Create AVD
         if: steps.android-avd-cache.outputs.cache-hit != 'true'
@@ -274,6 +276,8 @@ jobs:
     env:
       AVD_NAME: mobilegl-ci
       ANDROID_AVD_HOME: ${{ github.workspace }}/.android/avd
+      ANDROID_HOME: ${{ github.workspace }}/.android/sdk
+      ANDROID_SDK_ROOT: ${{ github.workspace }}/.android/sdk
     strategy:
       fail-fast: false
       max-parallel: 4
@@ -288,7 +292,7 @@ jobs:
       - name: Set Swap Space
         uses: pierotofy/set-swap-space@v1.0
         with:
-          swap-size-gb: 16
+          swap-size-gb: 8
 
       - name: Checkout repo
         uses: actions/checkout@v6
@@ -324,11 +328,11 @@ jobs:
         with:
           path: |
             ${{ env.ANDROID_AVD_HOME }}
-            /usr/local/lib/android/sdk/emulator
-            /usr/local/lib/android/sdk/platform-tools
-            /usr/local/lib/android/sdk/platforms/android-35
-            /usr/local/lib/android/sdk/system-images/android-35/google_apis/x86_64
-          key: ${{ runner.os }}-mobilegl-avd-api35-google_apis-x86_64-pixel_6-v1-${{ hashFiles('android-plugin/run-avd-ci.sh') }}
+            ${{ env.ANDROID_SDK_ROOT }}/emulator
+            ${{ env.ANDROID_SDK_ROOT }}/platform-tools
+            ${{ env.ANDROID_SDK_ROOT }}/platforms/android-35
+            ${{ env.ANDROID_SDK_ROOT }}/system-images/android-35/google_apis/x86_64
+          key: ${{ runner.os }}-mobilegl-avd-api35-google_apis-x86_64-pixel_6-v2-${{ hashFiles('android-plugin/run-avd-ci.sh') }}
 
       - name: Download retrace APK
         uses: actions/download-artifact@v8
@@ -378,27 +382,51 @@ jobs:
           if [ "${{ matrix.case.coherent_as_flush || false }}" = "true" ]; then
             extra_retrace_args+=(--coherent-as-flush)
           fi
-          timeout "$(( ${{ matrix.case.timeout_seconds }} + 300 ))" sh android-plugin/trace-replay-ci.sh \
-            --apk-file "${apk_file}" \
-            --package top.mobilegl.plugin.trace \
-            --backend "${{ matrix.backend.name }}" \
-            --result-root android-retrace-result \
-            --fixture-root android-retrace-fixture \
-            --case "${{ matrix.case.name }}" \
-            --trace-archive "${{ matrix.case.trace_archive }}" \
-            --trace-file "${{ matrix.case.trace_file }}" \
-            --golden "${{ matrix.case.golden }}" \
-            --alternate-golden "${{ matrix.case.alternate_golden || '' }}" \
-            --target-call "${{ matrix.case.target_call }}" \
-            --width "${{ matrix.case.width }}" \
-            --height "${{ matrix.case.height }}" \
-            --ssim-threshold "${{ matrix.case.ssim_threshold || '0.99' }}" \
-            --crop-x "${{ matrix.case.crop_x }}" \
-            --crop-y "${{ matrix.case.crop_y }}" \
-            --crop-width "${{ matrix.case.crop_width }}" \
-            --crop-height "${{ matrix.case.crop_height }}" \
-            --timeout-seconds "${{ matrix.case.timeout_seconds }}" \
-            "${extra_retrace_args[@]}"
+
+          run_retrace() {
+            timeout "$(( ${{ matrix.case.timeout_seconds }} + 300 ))" sh android-plugin/trace-replay-ci.sh \
+              --apk-file "${apk_file}" \
+              --package top.mobilegl.plugin.trace \
+              --backend "${{ matrix.backend.name }}" \
+              --result-root android-retrace-result \
+              --fixture-root android-retrace-fixture \
+              --case "${{ matrix.case.name }}" \
+              --trace-archive "${{ matrix.case.trace_archive }}" \
+              --trace-file "${{ matrix.case.trace_file }}" \
+              --golden "${{ matrix.case.golden }}" \
+              --alternate-golden "${{ matrix.case.alternate_golden || '' }}" \
+              --target-call "${{ matrix.case.target_call }}" \
+              --width "${{ matrix.case.width }}" \
+              --height "${{ matrix.case.height }}" \
+              --ssim-threshold "${{ matrix.case.ssim_threshold || '0.99' }}" \
+              --crop-x "${{ matrix.case.crop_x }}" \
+              --crop-y "${{ matrix.case.crop_y }}" \
+              --crop-width "${{ matrix.case.crop_width }}" \
+              --crop-height "${{ matrix.case.crop_height }}" \
+              --timeout-seconds "${{ matrix.case.timeout_seconds }}" \
+              "${extra_retrace_args[@]}"
+          }
+
+          retrace_status=0
+          run_retrace || retrace_status=$?
+          if [ "${retrace_status}" -eq 75 ]; then
+            echo "::warning::Android emulator infrastructure failed; restarting it and retrying this retrace once."
+            sh android-plugin/run-avd-ci.sh stop \
+              --avd-name "${AVD_NAME}" \
+              --emulator-log "${EMULATOR_LOG}" \
+              --pid-file "${EMULATOR_PID_FILE}"
+            adb kill-server || true
+            sleep 2
+            sh android-plugin/run-avd-ci.sh start \
+              --avd-name "${AVD_NAME}" \
+              --gpu "${{ matrix.backend.gpu }}" \
+              --emulator-log "${EMULATOR_LOG}" \
+              --pid-file "${EMULATOR_PID_FILE}" \
+              --boot-timeout 300
+            run_retrace
+          elif [ "${retrace_status}" -ne 0 ]; then
+            exit "${retrace_status}"
+          fi
 
       - name: Collect retrace summary inputs
         if: always()

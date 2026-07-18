@@ -3,6 +3,7 @@ set -eu
 
 ADB="${ADB:-adb}"
 PYTHON="${PYTHON:-python3}"
+INFRASTRUCTURE_FAILURE_EXIT_CODE=75
 
 usage() {
   cat <<'EOF'
@@ -171,12 +172,32 @@ app_dir="/data/user/0/${package_name}/files/trace-replay"
 collect_run_diagnostics() {
   diagnostics_dir="$1"
   mkdir -p "${diagnostics_dir}"
+  adb_state="$(adb_device_path get-state 2>/dev/null | tr -d '\r' || true)"
+  printf '%s\n' "${adb_state}" > "${diagnostics_dir}/adb-state.txt"
+  : > "${diagnostics_dir}/logcat.txt"
+  if [ "${adb_state}" != "device" ]; then
+    return
+  fi
   "${ADB}" logcat -d -t 2000 > "${diagnostics_dir}/logcat.txt" || true
   adb_device_path shell pidof "${package_name}" > "${diagnostics_dir}/pidof.txt" 2>&1 || true
   adb_device_path shell dumpsys activity activities > "${diagnostics_dir}/activity.txt" 2>&1 || true
   adb_device_path shell run-as "${package_name}" ls -laR "${app_dir}" > "${diagnostics_dir}/app-files.txt" 2>&1 || true
   adb_device_path exec-out run-as "${package_name}" cat "${app_dir}/output/retrace.log" > "${diagnostics_dir}/retrace.log" || true
   adb_device_path exec-out run-as "${package_name}" cat "${app_dir}/output/mobilegl.log" > "${diagnostics_dir}/mobilegl.log" || true
+}
+
+is_infrastructure_failure() {
+  diagnostics_dir="$1"
+  adb_state="$(cat "${diagnostics_dir}/adb-state.txt" 2>/dev/null || true)"
+  if [ "${adb_state}" != "device" ]; then
+    echo "trace-replay-ci.sh: Android device is unavailable (state: ${adb_state:-unknown})" >&2
+    return 0
+  fi
+  if grep -Eq 'Fatal signal [0-9]+.*[(]system_server[)]|F system_server[ :]' "${diagnostics_dir}/logcat.txt"; then
+    echo "trace-replay-ci.sh: Android system_server crashed during retrace" >&2
+    return 0
+  fi
+  return 1
 }
 
 copy_app_artifact() {
@@ -310,6 +331,10 @@ run_retrace() {
     grep -E 'MobileGLTraceRunner|AndroidRuntime|FATAL EXCEPTION|trace_replay|MobileGL|libc' "${result_dir}/logcat.txt" | tail -200 >&2 || true
     echo "trace-replay-ci.sh: app trace-replay files:" >&2
     cat "${result_dir}/app-files.txt" >&2 || true
+    if is_infrastructure_failure "${result_dir}"; then
+      echo "trace-replay-ci.sh: requesting one infrastructure retry" >&2
+      exit "${INFRASTRUCTURE_FAILURE_EXIT_CODE}"
+    fi
     exit 1
   fi
   adb_device_path exec-out run-as "${package_name}" cat "${app_dir}/output/result.json" > "${result_dir}/result.json"
