@@ -1,0 +1,4 @@
+interface:
+  display_name: "RenderDoc Debug on Trace Replay"
+  short_description: "Capture and debug an exact MobileGL trace-replay frame in RenderDoc"
+  default_prompt: "Use $renderdoc-debug-on-trace-replay to capture and validate an exact Android trace-replay frame in RenderDoc."

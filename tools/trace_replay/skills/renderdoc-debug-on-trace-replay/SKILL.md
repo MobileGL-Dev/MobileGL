@@ -1,5 +1,5 @@
 ---
-name: renderdoc-capture-trace-frame
+name: renderdoc-debug-on-trace-replay
 description: Capture and validate an exact frame from a MobileGL apitrace retrace on a connected Android device with RenderDoc/rdc-cli. Use for DirectVulkan or DirectGLES trace replay, mapping a target API call to an eglSwapBuffers frame, producing an .rdc plus a complete command manifest, checking capture stability, or troubleshooting Android TargetControl timing and replay failures.
 ---
 
@@ -19,20 +19,20 @@ adb -s SERIAL shell pm path top.mobilegl.plugin.trace
 rdc doctor
 ```
 
-4. Pass the unpacked `trace.trace`, its golden PNG, the fixture target call, backend, and output path to `tools/trace_replay/capture_android_retrace.py`.
+4. Pass the unpacked `trace.trace`, its golden PNG, the fixture target call, backend, and output path to `tools/trace_replay/skills/renderdoc-debug-on-trace-replay/scripts/capture_android_retrace.py`.
 
 ## Capture
 
 Let the tool infer the zero-based target swap from `eglSwapBuffers` calls:
 
 ```powershell
-python tools/trace_replay/capture_android_retrace.py --trace .trace-work/case/trace.trace --golden tools/trace_replay/fixtures/case.0002667619.png --target-call 2667619 --backend DirectVulkan --output captures/case-vulkan.rdc --serial SERIAL --json
+python tools/trace_replay/skills/renderdoc-debug-on-trace-replay/scripts/capture_android_retrace.py --trace .trace-work/case/trace.trace --golden tools/trace_replay/fixtures/case.0002667619.png --target-call 2667619 --backend DirectVulkan --output captures/case-vulkan.rdc --serial SERIAL --json
 ```
 
 Change only the backend and output for GLES:
 
 ```powershell
-python tools/trace_replay/capture_android_retrace.py --trace .trace-work/case/trace.trace --golden tools/trace_replay/fixtures/case.0002667619.png --target-call 2667619 --backend DirectGLES --output captures/case-gles.rdc --serial SERIAL --json
+python tools/trace_replay/skills/renderdoc-debug-on-trace-replay/scripts/capture_android_retrace.py --trace .trace-work/case/trace.trace --golden tools/trace_replay/fixtures/case.0002667619.png --target-call 2667619 --backend DirectGLES --output captures/case-gles.rdc --serial SERIAL --json
 ```
 
 Use `--target-swap N` when the mapping is already known. Use `--capture-frame N` only to override the backend rule deliberately.

@@ -1,4 +1,0 @@
-interface:
-  display_name: "Capture RenderDoc Trace Frame"
-  short_description: "Capture exact Android Vulkan/GLES trace frames"
-  default_prompt: "Use $renderdoc-capture-trace-frame to capture and validate an exact Android retrace frame."

@@ -1,3 +1,8 @@
+---
+name: trace-fixture-authoring
+description: Author a deterministic MobileGL trace-replay fixture from a captured apitrace - build the in-tree apitrace fork, capture a reproducible scene, frame-trim with gltrim, generate and verify a golden image, package under the archive-size budget, register the case in trace_cases.json, and validate on Linux and Android. Use when adding or re-trimming a trace_replay regression fixture.
+---
+
 # Trace fixture authoring
 
 ## Variables

@@ -1,3 +1,8 @@
+---
+name: mismatch-retrace-debugging
+description: Localize the first divergent render pass and draw call when a MobileGL apitrace fixture replays correctly in a golden environment but renders differently under mobilegl_trace_replay, Android trace replay, or another backend. Use to binary-search pass/draw endpoints, diff GL state around the first bad call, and classify the fault as a vertex/VS, fragment/FS, or framebuffer/composition mismatch.
+---
+
 # Mismatch retrace debugging
 
 Use this when an apitrace fixture replays correctly on one environment but

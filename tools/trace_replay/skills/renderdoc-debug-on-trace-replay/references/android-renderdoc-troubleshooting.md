@@ -2,7 +2,7 @@
 
 ## TargetControl timing
 
-- Start `tools/trace_replay/queue_android_frame.py` before launching `TraceReplayActivity`. A fast retrace can pass the requested frame before a late client connects.
+- Start `tools/trace_replay/skills/renderdoc-debug-on-trace-replay/scripts/queue_android_frame.py` before launching `TraceReplayActivity`. A fast retrace can pass the requested frame before a late client connects.
 - Keep TargetControl connected until `NewCapture` arrives. A queued request alone is not sufficient evidence that the RDC finished.
 - Drain the asynchronous `RegisterAPI` and `CapturableWindowCount` messages before calling `QueueCapture`; otherwise `NewCapture` can be lost.
 - Do not use the daemon-backed `rdc script` path for a capture that may exceed 30 seconds. Its outer RPC times out even when the device later writes a valid RDC. The repository helper imports the RenderDoc module discovered by `rdc` directly and has an independent capture timeout.

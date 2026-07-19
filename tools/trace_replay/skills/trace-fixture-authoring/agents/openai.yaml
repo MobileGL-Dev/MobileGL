@@ -1,0 +1,4 @@
+interface:
+  display_name: "MobileGL Trace Fixture Authoring"
+  short_description: "Author and register a MobileGL trace-replay fixture"
+  default_prompt: "Use $trace-fixture-authoring to author and register a MobileGL trace replay fixture."

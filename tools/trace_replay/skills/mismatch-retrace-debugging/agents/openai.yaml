@@ -1,0 +1,4 @@
+interface:
+  display_name: "MobileGL Mismatch Retrace Debugging"
+  short_description: "Localize the first divergent draw in a mismatching MobileGL retrace"
+  default_prompt: "Use $mismatch-retrace-debugging to find the first divergent render pass and draw call in a MobileGL retrace mismatch."

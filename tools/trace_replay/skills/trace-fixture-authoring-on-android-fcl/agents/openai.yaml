@@ -1,0 +1,4 @@
+interface:
+  display_name: "Trace Fixture Authoring on Android (FCL)"
+  short_description: "Capture and package a MobileGL trace fixture on Android FCL"
+  default_prompt: "Use $trace-fixture-authoring-on-android-fcl to capture a MobileGL trace on my Android device and package it into a replay fixture."
