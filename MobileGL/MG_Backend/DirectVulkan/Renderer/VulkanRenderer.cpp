@@ -25,6 +25,9 @@
 #include <cstdlib>
 #include <cstring>
 #include <vulkan/vulkan_core.h>
+#ifdef __ANDROID__
+#include <sys/system_properties.h>
+#endif
 
 #if defined(__APPLE__)
 #include <CoreGraphics/CoreGraphics.h>
@@ -946,6 +949,7 @@ void main() {
     gl_FragDepth = 0.25 * (depth0 + depth1 + depth2 + depth3);
 }
 )";
+
 
         static Uint32 ComputeFullMipLevelCount(const IntVec3& baseTexelSize) {
             Int maxDimension = std::max<Int>(
@@ -1884,6 +1888,28 @@ void main() {
 
         m_pipelineFactory = MakeUnique<PipelineFactory>(m_device, m_config);
         MOBILEGL_ASSERT(m_pipelineFactory != nullptr, "PipelineFactory creation failed.");
+        {
+            // Qualcomm's pipeline compiler does not keep vertex positions invariant across
+            // the pipelines of a multi-pass depth-equality chain (even with the SPIR-V
+            // Invariant decoration), so a blended depth-writing prepass makes later
+            // equality-compare passes drop whole primitives (MC 26.3 improved-transparency
+            // clouds flicker black). Suppress blended depth writes there; the env variable
+            // forces the quirk on ("0") or off ("1") on any driver.
+            static constexpr Uint32 kVendorIdQualcomm = 0x5143;
+            Bool suppressBlendedDepthWrite = m_physicalDevice.properties.vendorID == kVendorIdQualcomm;
+            if (const char* env = getenv("MOBILEGL_MAGMA_BLENDED_DEPTH_WRITE")) {
+                if (env[0] == '0') {
+                    suppressBlendedDepthWrite = true;
+                } else if (env[0] == '1') {
+                    suppressBlendedDepthWrite = false;
+                }
+            }
+            if (suppressBlendedDepthWrite) {
+                MGLOG_I("DirectVulkan: suppressing depth writes on blended pipelines "
+                        "(driver lacks cross-pipeline position invariance)");
+            }
+            PipelineFactory::SetSuppressBlendedDepthWrite(suppressBlendedDepthWrite);
+        }
         m_programFactory = MakeUnique<ProgramFactory>(m_device, m_config, maxProgramBindings,
                                                       m_shaderDrawParametersFeatureEnabled);
         MOBILEGL_ASSERT(m_programFactory != nullptr, "ProgramFactory creation failed.");

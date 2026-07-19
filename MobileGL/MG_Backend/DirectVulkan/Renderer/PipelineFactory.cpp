@@ -8,6 +8,7 @@
 
 #include "PipelineFactory.h"
 
+
 namespace MobileGL::MG_Backend::DirectVulkan {
     static const char* PrimitiveTopologyToString(VkPrimitiveTopology topology) {
         switch (topology) {
@@ -106,6 +107,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         VkPipelineCacheCreateInfo pipelineCacheInfo{VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO};
         VK_VERIFY(vkCreatePipelineCache(m_device, &pipelineCacheInfo, nullptr, &m_pipelineCache),
                   "vkCreatePipelineCache");
+    }
+
+    void PipelineFactory::SetSuppressBlendedDepthWrite(Bool enabled) {
+        s_suppressBlendedDepthWrite = enabled;
     }
 
     PipelineFactory::~PipelineFactory() {
@@ -257,6 +262,18 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         Vector<VkPipelineColorBlendAttachmentState> colorAttachments(payload.colorAttachmentCount);
         for (Uint32 i = 0; i < payload.colorAttachmentCount; ++i) {
             colorAttachments[i] = payload.colorBlendAttachments[i];
+        }
+        // Suppress depth writes on blended pipelines when the active driver cannot keep
+        // vertex positions invariant across the pipelines of a multi-pass depth-equality
+        // chain (see SetSuppressBlendedDepthWrite). Blended draws that write depth are rare
+        // and the equality-dependent prepass pattern is exactly the case that breaks.
+        if (s_suppressBlendedDepthWrite && depthStencil.depthWriteEnable == VK_TRUE) {
+            for (Uint32 i = 0; i < payload.colorAttachmentCount; ++i) {
+                if (colorAttachments[i].blendEnable == VK_TRUE) {
+                    depthStencil.depthWriteEnable = VK_FALSE;
+                    break;
+                }
+            }
         }
         VkPipelineColorBlendStateCreateInfo blend{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
         blend.logicOpEnable = payload.logicOpEnable ? VK_TRUE : VK_FALSE;

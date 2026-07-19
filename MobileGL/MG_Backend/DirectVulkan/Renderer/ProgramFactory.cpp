@@ -1697,6 +1697,22 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 moduleSpirvs[i] = spv;
             }
 
+            // GL apps depend on cross-program position invariance for multi-pass equality
+            // depth tests (MC 26.3's OIT re-draws the cloud geometry with GEQUAL against the
+            // depth its own first pass wrote); decorate Position outputs Invariant so
+            // per-pipeline compilers cannot vary the position math between passes.
+            {
+                Vector<Uint> invariantSpirv;
+                if (MG_Util::ShaderTranspiler::ShaderCompiler::DecoratePositionInvariantForVulkan(
+                        moduleSpirvs[i], invariantSpirv)) {
+                    moduleSpirvs[i] = std::move(invariantSpirv);
+                } else {
+                    MGLOG_W("ProgramFactory: position-invariant decoration failed for program %u; "
+                            "keeping the original module",
+                            program.GetExternalIndex());
+                }
+            }
+
             // glslang's relaxed-Vulkan mode aliases GL's zero-based gl_InstanceID to Vulkan's
             // gl_InstanceIndex, which wrongly includes the draw's baseInstance. Rebase vertex-stage
             // loads to (InstanceIndex - BaseInstance) so shaders observe GL semantics. Reflection

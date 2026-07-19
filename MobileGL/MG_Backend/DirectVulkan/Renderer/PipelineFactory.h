@@ -62,6 +62,14 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         VkPipeline GetOrCreatePipeline(const PipelineCreatePayload& payload);
         void DestroyAll();
 
+        // Driver quirk: suppress depth writes on blended pipelines. Multi-pass depth-equality
+        // rendering (a blended prepass writes depth that later passes re-test with an
+        // equality-inclusive compare on the re-rasterized geometry) requires cross-pipeline
+        // position invariance that some mobile compilers do not provide, even with the
+        // SPIR-V Invariant decoration; whole primitives then drop out of the later passes.
+        // Set at renderer initialization based on the active driver.
+        static void SetSuppressBlendedDepthWrite(Bool enabled);
+
     private:
         VkPipeline CreatePipeline(const PipelineCreatePayload& payload) const;
 
@@ -70,5 +78,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         VkPipelineCache m_pipelineCache = VK_NULL_HANDLE;
         UnorderedMap<HashType, VkPipeline> m_cache;
         static inline XXH64_state_t* m_hashState = XXH64_createState();
+        static inline Bool s_suppressBlendedDepthWrite = false;
     };
 } // namespace MobileGL::MG_Backend::DirectVulkan

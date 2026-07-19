@@ -39,6 +39,13 @@ namespace MobileGL {
                 // which wrongly includes baseInstance).
                 static bool RebaseInstanceIndexForVulkan(const Vector<Uint32>& inputBinary,
                                                          Vector<uint32_t>& outputBinary);
+                // Adds the Invariant decoration to every Position builtin output. GL apps
+                // routinely rely on cross-program position invariance for multi-pass
+                // equality depth tests (e.g. GEQUAL re-draws of the same geometry), and
+                // mobile drivers that optimize per-pipeline break that without the
+                // decoration. DirectVulkan only.
+                static bool DecoratePositionInvariantForVulkan(const Vector<Uint32>& inputBinary,
+                                                               Vector<uint32_t>& outputBinary);
                 static Result<String> DecompileShader(SpvcSession& session);
             };
         } // namespace ShaderTranspiler
