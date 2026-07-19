@@ -14,8 +14,16 @@
 #include "MG_State/GLState/TextureState/TextureEnum.h"
 
 #include <Includes.h>
+#include <spirv_reflect.h>
 
 namespace MobileGL::MG_Backend::DirectVulkan {
+    enum class SamplerNumericDomain : Uint8 {
+        Unknown = 0,
+        Float,
+        SignedInteger,
+        UnsignedInteger,
+    };
+
     class ProgramFactory {
     public:
         enum class DescriptorBindingKind : Uint8 {
@@ -54,6 +62,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             Vector<String> samplerNameByBinding;
             Vector<Int> samplerUniformLocationByBinding;
             Vector<TextureTarget> samplerTextureTargetByBinding;
+            Vector<SamplerNumericDomain> samplerNumericDomainByBinding;
+            Vector<VkFormat> storageImageFormatByBinding;
+            Vector<Bool> storageImageUsesBindingFormatByBinding;
             Vector<String> storageBlockNameByBinding;
             Vector<Int> storageBlockIndexByBinding;
             Int globalUboBinding = -1;
@@ -82,6 +93,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 samplerNameByBinding = std::move(other.samplerNameByBinding);
                 samplerUniformLocationByBinding = std::move(other.samplerUniformLocationByBinding);
                 samplerTextureTargetByBinding = std::move(other.samplerTextureTargetByBinding);
+                samplerNumericDomainByBinding = std::move(other.samplerNumericDomainByBinding);
+                storageImageFormatByBinding = std::move(other.storageImageFormatByBinding);
+                storageImageUsesBindingFormatByBinding =
+                    std::move(other.storageImageUsesBindingFormatByBinding);
                 storageBlockNameByBinding = std::move(other.storageBlockNameByBinding);
                 storageBlockIndexByBinding = std::move(other.storageBlockIndexByBinding);
                 globalUboBinding = other.globalUboBinding;
@@ -118,6 +133,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 samplerNameByBinding = std::move(other.samplerNameByBinding);
                 samplerUniformLocationByBinding = std::move(other.samplerUniformLocationByBinding);
                 samplerTextureTargetByBinding = std::move(other.samplerTextureTargetByBinding);
+                samplerNumericDomainByBinding = std::move(other.samplerNumericDomainByBinding);
+                storageImageFormatByBinding = std::move(other.storageImageFormatByBinding);
+                storageImageUsesBindingFormatByBinding =
+                    std::move(other.storageImageUsesBindingFormatByBinding);
                 storageBlockNameByBinding = std::move(other.storageBlockNameByBinding);
                 storageBlockIndexByBinding = std::move(other.storageBlockIndexByBinding);
                 globalUboBinding = other.globalUboBinding;
@@ -167,9 +186,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         };
 
         explicit ProgramFactory(VkDevice device, const VulkanRendererConfig& config, Uint32 maxBindings = 16,
-                                Bool shaderDrawParametersEnabled = false)
+                                Bool shaderDrawParametersEnabled = false,
+                                Bool unformattedFloatStorageImagesEnabled = false)
             : m_device(device), m_maxBindings(maxBindings), m_config(config),
-              m_shaderDrawParametersEnabled(shaderDrawParametersEnabled) {
+              m_shaderDrawParametersEnabled(shaderDrawParametersEnabled),
+              m_unformattedFloatStorageImagesEnabled(unformattedFloatStorageImagesEnabled) {
             VkProgramObject::s_device = device;
         }
         ~ProgramFactory() = default;
@@ -180,6 +201,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             const MG_State::GLState::ProgramObject& program, CompileOptionFlags flags);
 
         static VkShaderStageFlagBits ToVkStage(ShaderStage stage);
+        static VkFormat ConvertSpirvImageFormatToVkFormat(SpvImageFormat format);
+        static SamplerNumericDomain UniformTypeToSamplerNumericDomain(GLenum glType);
 
     private:
         struct ProgramLookupCache {
@@ -206,6 +229,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // True when the device enabled shaderDrawParameters; gates the InstanceIndex rebase pass
         // (which needs the DrawParameters capability / gl_BaseInstance builtin).
         Bool m_shaderDrawParametersEnabled = false;
+        // True only when the logical device enabled both
+        // shaderStorageImageReadWithoutFormat and shaderStorageImageWriteWithoutFormat.
+        Bool m_unformattedFloatStorageImagesEnabled = false;
         mutable ProgramLookupCache m_lastLookup;
         static inline XXH64_state_t* m_hashState = XXH64_createState();
     };

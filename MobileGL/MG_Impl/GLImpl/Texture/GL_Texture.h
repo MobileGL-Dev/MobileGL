@@ -11,6 +11,9 @@
 
 namespace MobileGL::MG_Impl::GLImpl {
     /* @INSERTION_POINT:FUNCTION_DECLARATION@ */
+    void ClearTexImage(GLuint texture, GLint level, GLenum format, GLenum type, const void* data);
+    void ClearTexSubImage(GLuint texture, GLint level, GLint xoffset, GLint yoffset, GLint zoffset, GLsizei width,
+                          GLsizei height, GLsizei depth, GLenum format, GLenum type, const void* data);
     void BindImageTexture(GLuint unit, GLuint texture, GLint level, GLboolean layered, GLint layer, GLenum access,
                           GLenum format);
     void GenerateMipmap(GLenum target);
@@ -95,6 +98,8 @@ namespace MobileGL::MG_Impl::GLImpl {
                            GLsizei width, GLsizei height);
     void CopyTexSubImage2D(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLint x, GLint y, GLsizei width,
                            GLsizei height);
+    void CopyTextureSubImage2D(GLuint texture, GLint level, GLint xoffset, GLint yoffset, GLint x, GLint y,
+                               GLsizei width, GLsizei height);
     void CopyTexSubImage1D(GLenum target, GLint level, GLint xoffset, GLint x, GLint y, GLsizei width);
     void CopyTexImage2D(GLenum target, GLint level, GLenum internalformat, GLint x, GLint y, GLsizei width,
                         GLsizei height, GLint border);

@@ -8,6 +8,8 @@
 
 #include "VkTextureManager.h"
 
+#include "ProgramFactory.h"
+
 #include "MG_State/GLState/Core.h"
 #include "MG_Util/Converters/MGToStr/TextureEnumConverter.h"
 #include "MG_Util/Converters/MGToVk/TextureEnumConverter.h"
@@ -17,6 +19,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <memory>
+#include <vulkan/utility/vk_format_utils.h>
 
 namespace MobileGL::MG_Backend::DirectVulkan {
     // Compute shaders may legally sample framebuffer-attached textures (the GL feedback-loop rule
@@ -61,6 +64,59 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                target == TextureUploadTarget::ProxyTexture2DMultisample ||
                target == TextureUploadTarget::Texture2DMultisampleArray ||
                target == TextureUploadTarget::ProxyTexture2DMultisampleArray;
+    }
+
+    static Bool IsMutableStorageImageFormat(VkFormat format) {
+        if (!vkuFormatIsColor(format) || vkuFormatIsCompressed(format)) {
+            return false;
+        }
+
+        // These are the uncompressed color compatibility classes covered by the core GLSL/SPIR-V
+        // storage-image formats. OpenGL mutable texture storage uses image-format compatibility by
+        // size, so a shader may legally reinterpret (for example) RGBA16_UNORM storage as rgba16f. Vulkan
+        // requires the image to be mutable and the view formats to share this exact compatibility
+        // class for the equivalent operation.
+        switch (vkuFormatCompatibilityClass(format)) {
+        case VKU_FORMAT_COMPATIBILITY_CLASS_8BIT:
+        case VKU_FORMAT_COMPATIBILITY_CLASS_16BIT:
+        case VKU_FORMAT_COMPATIBILITY_CLASS_32BIT:
+        case VKU_FORMAT_COMPATIBILITY_CLASS_64BIT:
+        case VKU_FORMAT_COMPATIBILITY_CLASS_128BIT:
+            return true;
+        default:
+            return false;
+        }
+    }
+
+    static Bool HasMatchingColorComponentLayout(VkFormat lhs, VkFormat rhs) {
+        const VKU_FORMAT_INFO lhsInfo = vkuGetFormatInfo(lhs);
+        const VKU_FORMAT_INFO rhsInfo = vkuGetFormatInfo(rhs);
+        if (lhsInfo.component_count == 0 || lhsInfo.component_count != rhsInfo.component_count ||
+            lhsInfo.texel_block_size != rhsInfo.texel_block_size ||
+            lhsInfo.texels_per_block != 1 || rhsInfo.texels_per_block != 1) {
+            return false;
+        }
+        for (Uint32 component = 0; component < lhsInfo.component_count; ++component) {
+            if (lhsInfo.components[component].type != rhsInfo.components[component].type ||
+                lhsInfo.components[component].size != rhsInfo.components[component].size) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    static Bool FormatMatchesSamplerNumericDomain(VkFormat format, SamplerNumericDomain numericDomain) {
+        switch (numericDomain) {
+        case SamplerNumericDomain::Float:
+            return vkuFormatIsSampledFloat(format);
+        case SamplerNumericDomain::SignedInteger:
+            return vkuFormatIsSINT(format);
+        case SamplerNumericDomain::UnsignedInteger:
+            return vkuFormatIsUINT(format);
+        case SamplerNumericDomain::Unknown:
+            return true;
+        }
+        return false;
     }
 
     static Bool TryResolveSampleCountFlagBits(Int requestedSamples, VkSampleCountFlagBits& outSampleCount) {
@@ -767,6 +823,180 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         return perMipSampledView;
     }
 
+    VkImageView VkTextureManager::GetOrCreateSampledImageView(MG_State::GLState::ITextureObject& texture,
+                                                               VkFormat format) {
+        TextureResource* resource = SyncTextureAndGetDescriptor(texture);
+        if (resource == nullptr || resource->image == VK_NULL_HANDLE ||
+            resource->sampledView == VK_NULL_HANDLE) {
+            return VK_NULL_HANDLE;
+        }
+
+        if (format == VK_FORMAT_UNDEFINED || format == resource->format) {
+            return resource->sampledView;
+        }
+        if (!AreSampledImageViewFormatsCompatible(resource->format, format)) {
+            MGLOG_E("%s: incompatible sampled image view format=%d for textureId=%d imageFormat=%d",
+                    __func__, static_cast<Int>(format), texture.GetExternalIndex(),
+                    static_cast<Int>(resource->format));
+            return VK_NULL_HANDLE;
+        }
+        if ((resource->imageCreateFlags & VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT) == 0) {
+            MGLOG_E("%s: textureId=%d needs mutable image format=%d for sampled view format=%d",
+                    __func__, texture.GetExternalIndex(), static_cast<Int>(resource->format),
+                    static_cast<Int>(format));
+            return VK_NULL_HANDLE;
+        }
+
+        const TextureResource::SampledImageViewKey key{
+            .baseMipLevel = resource->sampledBaseMipLevel,
+            .levelCount = resource->sampledLevelCount,
+            .viewType = resource->viewType,
+            .format = format,
+        };
+        const auto existing = resource->alternateSampledViews.find(key);
+        if (existing != resource->alternateSampledViews.end()) {
+            return existing->second;
+        }
+
+        VkFormatProperties formatProperties{};
+        vkGetPhysicalDeviceFormatProperties(m_physicalDevice, format, &formatProperties);
+        if ((formatProperties.optimalTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT) == 0) {
+            MGLOG_E("%s: sampled image view format=%d lacks VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT "
+                    "for textureId=%d (available=0x%x)",
+                    __func__, static_cast<Int>(format), texture.GetExternalIndex(),
+                    static_cast<Uint32>(formatProperties.optimalTilingFeatures));
+            return VK_NULL_HANDLE;
+        }
+
+        const TextureFormatInfo formatInfo = ResolveTextureFormatInfo(texture.GetFormat());
+        const VkComponentMapping sampledComponents = ResolveSampledViewComponents(texture, formatInfo);
+        const VkImageView view = CreateImageView(
+            resource->image, format, VK_IMAGE_ASPECT_COLOR_BIT, resource->viewType,
+            resource->sampledBaseMipLevel, resource->sampledLevelCount, 0, resource->arrayLayers,
+            &sampledComponents, VK_IMAGE_USAGE_SAMPLED_BIT);
+        if (view == VK_NULL_HANDLE) {
+            MGLOG_E("%s: failed to create sampled image view textureId=%d imageFormat=%d viewFormat=%d",
+                    __func__, texture.GetExternalIndex(), static_cast<Int>(resource->format),
+                    static_cast<Int>(format));
+            return VK_NULL_HANDLE;
+        }
+
+        resource->alternateSampledViews.emplace(key, view);
+        MGLOG_D("%s: created sampled image view textureId=%d imageFormat=%d viewFormat=%d mip=[%u,%u)",
+                __func__, texture.GetExternalIndex(), static_cast<Int>(resource->format),
+                static_cast<Int>(format), resource->sampledBaseMipLevel,
+                resource->sampledBaseMipLevel + resource->sampledLevelCount);
+        return view;
+    }
+
+    VkImageView VkTextureManager::GetOrCreateStorageImageView(MG_State::GLState::ITextureObject& texture,
+                                                               Uint32 mipLevel, VkFormat format,
+                                                               Bool layered, Int32 layer) {
+        TextureResource* resource = SyncTextureAndGetDescriptor(texture);
+        if (resource == nullptr || resource->image == VK_NULL_HANDLE || mipLevel >= resource->mipLevels ||
+            resource->sampleCount != VK_SAMPLE_COUNT_1_BIT ||
+            (resource->aspect & VK_IMAGE_ASPECT_COLOR_BIT) == 0) {
+            return VK_NULL_HANDLE;
+        }
+
+        if (format == VK_FORMAT_UNDEFINED) {
+            format = resource->format;
+        }
+        if (!AreStorageImageViewFormatsCompatible(resource->format, format)) {
+            MGLOG_E("%s: incompatible storage image view format=%d for textureId=%d imageFormat=%d",
+                    __func__, static_cast<Int>(format), texture.GetExternalIndex(),
+                    static_cast<Int>(resource->format));
+            return VK_NULL_HANDLE;
+        }
+        if (format != resource->format &&
+            (resource->imageCreateFlags & VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT) == 0) {
+            MGLOG_E("%s: textureId=%d needs mutable image format=%d for storage view format=%d",
+                    __func__, texture.GetExternalIndex(), static_cast<Int>(resource->format),
+                    static_cast<Int>(format));
+            return VK_NULL_HANDLE;
+        }
+
+        Uint32 baseArrayLayer = 0;
+        Uint32 layerCount = resource->arrayLayers;
+        VkImageViewType viewType = resource->viewType;
+        if (!layered) {
+            switch (resource->viewType) {
+            case VK_IMAGE_VIEW_TYPE_1D_ARRAY:
+                viewType = VK_IMAGE_VIEW_TYPE_1D;
+                break;
+            case VK_IMAGE_VIEW_TYPE_2D_ARRAY:
+            case VK_IMAGE_VIEW_TYPE_CUBE:
+            case VK_IMAGE_VIEW_TYPE_CUBE_ARRAY:
+                viewType = VK_IMAGE_VIEW_TYPE_2D;
+                break;
+            case VK_IMAGE_VIEW_TYPE_3D:
+                MGLOG_E("%s: non-layered 3D storage views are unsupported for textureId=%d",
+                        __func__, texture.GetExternalIndex());
+                return VK_NULL_HANDLE;
+            default:
+                break;
+            }
+
+            if (viewType != resource->viewType) {
+                if (layer < 0 || static_cast<Uint32>(layer) >= resource->arrayLayers) {
+                    MGLOG_E("%s: storage image layer=%d is out of range for textureId=%d arrayLayers=%u",
+                            __func__, layer, texture.GetExternalIndex(), resource->arrayLayers);
+                    return VK_NULL_HANDLE;
+                }
+                baseArrayLayer = static_cast<Uint32>(layer);
+                layerCount = 1;
+            }
+        }
+
+        const Bool isFullResourceView = baseArrayLayer == 0 && layerCount == resource->arrayLayers &&
+                                        viewType == resource->viewType;
+        if (format == resource->format && isFullResourceView) {
+            return GetOrCreateViewAtMipLevel(texture, mipLevel);
+        }
+
+        const TextureResource::StorageImageViewKey key{
+            .mipLevel = mipLevel,
+            .baseArrayLayer = baseArrayLayer,
+            .layerCount = layerCount,
+            .viewType = viewType,
+            .format = format,
+        };
+        auto it = resource->storageImageViews.find(key);
+        if (it != resource->storageImageViews.end()) {
+            return it->second;
+        }
+
+        VkFormatFeatureFlags requiredFormatFeatures = VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT;
+        if (format != resource->format &&
+            (format == VK_FORMAT_R32_UINT || format == VK_FORMAT_R32_SINT)) {
+            requiredFormatFeatures |= VK_FORMAT_FEATURE_STORAGE_IMAGE_ATOMIC_BIT;
+        }
+        VkFormatProperties formatProperties{};
+        vkGetPhysicalDeviceFormatProperties(m_physicalDevice, format, &formatProperties);
+        if ((formatProperties.optimalTilingFeatures & requiredFormatFeatures) != requiredFormatFeatures) {
+            MGLOG_E("%s: storage image view format=%d lacks required features=0x%x for textureId=%d "
+                    "(available=0x%x)",
+                    __func__, static_cast<Int>(format), static_cast<Uint32>(requiredFormatFeatures),
+                    texture.GetExternalIndex(), static_cast<Uint32>(formatProperties.optimalTilingFeatures));
+            return VK_NULL_HANDLE;
+        }
+
+        const VkImageView view = CreateImageView(resource->image, format, VK_IMAGE_ASPECT_COLOR_BIT, viewType,
+                                                 mipLevel, 1, baseArrayLayer, layerCount, nullptr,
+                                                 VK_IMAGE_USAGE_STORAGE_BIT);
+        if (view == VK_NULL_HANDLE) {
+            MGLOG_E("%s: failed to create storage image view for textureId=%d mip=%u imageFormat=%d viewFormat=%d",
+                    __func__, texture.GetExternalIndex(), mipLevel, static_cast<Int>(resource->format),
+                    static_cast<Int>(format));
+            return VK_NULL_HANDLE;
+        }
+        resource->storageImageViews.emplace(key, view);
+        MGLOG_D("%s: created storage image view textureId=%d mip=%u imageFormat=%d viewFormat=%d",
+                __func__, texture.GetExternalIndex(), mipLevel, static_cast<Int>(resource->format),
+                static_cast<Int>(format));
+        return view;
+    }
+
     void VkTextureManager::UpdateTrackedImageLayout(MG_State::GLState::ITextureObject* texture, VkImageLayout newLayout) {
         MOBILEGL_ASSERT(texture != nullptr, "UpdateTrackedImageLayout: texture is null");
         auto it = m_textureResources.find(MakeTextureIdentity(texture));
@@ -1085,6 +1315,18 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             return false;
         }
 
+        const VkImageAspectFlags aspect = GetAspectMaskForFormat(format);
+        VkFormatProperties formatProperties{};
+        vkGetPhysicalDeviceFormatProperties(m_physicalDevice, format, &formatProperties);
+        const Bool supportsStorageImage =
+            !isMultisampleTexture &&
+            (aspect & VK_IMAGE_ASPECT_COLOR_BIT) != 0 &&
+            (formatProperties.optimalTilingFeatures & VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT) != 0;
+        VkImageCreateFlags imageCreateFlags = shapeInfo.imageFlags;
+        if (supportsStorageImage && IsMutableStorageImageFormat(format)) {
+            imageCreateFlags |= VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT;
+        }
+
         const Bool compatible = resource.image != VK_NULL_HANDLE && resource.format == format &&
                                 resource.extent.width == static_cast<Uint32>(texelSize.x()) &&
                                 resource.extent.height == static_cast<Uint32>(texelSize.y()) &&
@@ -1092,6 +1334,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                 resource.arrayLayers == shapeInfo.arrayLayers &&
                                 resource.viewType == shapeInfo.viewType &&
                                 resource.sampleCount == resolvedSampleCount &&
+                                resource.imageCreateFlags == imageCreateFlags &&
                                 resource.mipLevels == backingMipLevels;
         if (compatible) {
             if (resource.perMipViews.size() != backingMipLevels) {
@@ -1112,6 +1355,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             resource.arrayLayers == shapeInfo.arrayLayers &&
             resource.viewType == shapeInfo.viewType &&
             resource.sampleCount == resolvedSampleCount &&
+            resource.imageCreateFlags == imageCreateFlags &&
             resolvedSampleCount == VK_SAMPLE_COUNT_1_BIT &&
             resource.mipLevels < backingMipLevels &&
             resource.layout != VK_IMAGE_LAYOUT_UNDEFINED;
@@ -1123,26 +1367,18 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             DeferResourceRelease(Move(resource));
         }
 
-        auto aspect = GetAspectMaskForFormat(format);
-
         VkImageCreateInfo imageInfo{};
         imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
-    imageInfo.flags = shapeInfo.imageFlags;
-    imageInfo.imageType = shapeInfo.imageType;
+        imageInfo.flags = imageCreateFlags;
+        imageInfo.imageType = shapeInfo.imageType;
         imageInfo.extent.width = static_cast<Uint32>(texelSize.x());
         imageInfo.extent.height = static_cast<Uint32>(texelSize.y());
-    imageInfo.extent.depth = shapeInfo.depth;
+        imageInfo.extent.depth = shapeInfo.depth;
         imageInfo.mipLevels = backingMipLevels;
-    imageInfo.arrayLayers = shapeInfo.arrayLayers;
+        imageInfo.arrayLayers = shapeInfo.arrayLayers;
         imageInfo.format = format;
         imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
         imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-        VkFormatProperties formatProperties{};
-        vkGetPhysicalDeviceFormatProperties(m_physicalDevice, format, &formatProperties);
-        const Bool supportsStorageImage =
-            !isMultisampleTexture &&
-            (aspect & VK_IMAGE_ASPECT_COLOR_BIT) != 0 &&
-            (formatProperties.optimalTilingFeatures & VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT) != 0;
         imageInfo.usage = VK_IMAGE_USAGE_SAMPLED_BIT |
                           (supportsStorageImage ? VK_IMAGE_USAGE_STORAGE_BIT : 0) |
                           ((aspect & VK_IMAGE_ASPECT_COLOR_BIT) ? VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT : 0) |
@@ -1153,15 +1389,17 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             imageInfo.usage |= VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
         }
         imageInfo.samples = resolvedSampleCount;
-        if (isMultisampleTexture) {
+        if (isMultisampleTexture || (imageInfo.flags & VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT) != 0) {
             VkImageFormatProperties imageFormatProperties{};
             const VkResult imageFormatResult = vkGetPhysicalDeviceImageFormatProperties(
                 m_physicalDevice, format, imageInfo.imageType, imageInfo.tiling, imageInfo.usage,
                 imageInfo.flags, &imageFormatProperties);
             if (imageFormatResult != VK_SUCCESS ||
-                (imageFormatProperties.sampleCounts & resolvedSampleCount) == 0) {
-                MGLOG_D("%s: sampleCount=%d is unsupported for textureId=%d target=%s format=%d usage=0x%x",
-                        __func__, texture.GetSamples(), texture.GetExternalIndex(),
+                (isMultisampleTexture && (imageFormatProperties.sampleCounts & resolvedSampleCount) == 0)) {
+                MGLOG_D("%s: image flags=0x%x sampleCount=%d are unsupported for textureId=%d target=%s "
+                        "format=%d usage=0x%x",
+                        __func__, static_cast<Uint32>(imageInfo.flags), texture.GetSamples(),
+                        texture.GetExternalIndex(),
                         MG_Util::ConvertTextureUploadTargetToString(uploadTarget).c_str(),
                         static_cast<Int>(format), static_cast<Uint32>(imageInfo.usage));
                 return false;
@@ -1188,6 +1426,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         resource.aspect = aspect;
         resource.viewType = shapeInfo.viewType;
         resource.sampleCount = resolvedSampleCount;
+        resource.imageCreateFlags = imageCreateFlags;
         resource.syncedTextureParamsVersion = 0;
 
         if (preservedResource) {
@@ -1203,7 +1442,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     void VkTextureManager::DeferResourceRelease(TextureResource&& resource) {
         if (resource.image == VK_NULL_HANDLE && resource.fullView == VK_NULL_HANDLE &&
             resource.sampledView == VK_NULL_HANDLE &&
-            resource.perMipViews.empty() && resource.perMipSampledViews.empty()) {
+            resource.perMipViews.empty() && resource.perMipSampledViews.empty() &&
+            resource.attachmentViews.empty() && resource.alternateSampledViews.empty() &&
+            resource.storageImageViews.empty()) {
             return;
         }
 
@@ -1299,6 +1540,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 sampledView = VK_NULL_HANDLE;
             }
         }
+        for (const auto& [_, sampledView] : resource.alternateSampledViews) {
+            DeferViewRelease(sampledView);
+        }
+        resource.alternateSampledViews.clear();
 
         const TextureFormatInfo formatInfo = ResolveTextureFormatInfo(texture.GetFormat());
         const VkComponentMapping sampledComponents = ResolveSampledViewComponents(texture, formatInfo);
@@ -1324,7 +1569,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                                   VkImageViewType viewType, Uint32 baseMipLevel, Uint32 levelCount,
                                                   Uint32 baseArrayLayer,
                                                   Uint32 layerCount,
-                                                  const VkComponentMapping* components) const {
+                                                  const VkComponentMapping* components,
+                                                  VkImageUsageFlags viewUsage) const {
         VkImageViewCreateInfo viewInfo{};
         viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
         viewInfo.image = image;
@@ -1339,6 +1585,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         viewInfo.subresourceRange.levelCount = levelCount;
         viewInfo.subresourceRange.baseArrayLayer = baseArrayLayer;
         viewInfo.subresourceRange.layerCount = layerCount;
+
+        VkImageViewUsageCreateInfo usageInfo{};
+        if (viewUsage != 0) {
+            usageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_USAGE_CREATE_INFO;
+            usageInfo.usage = viewUsage;
+            viewInfo.pNext = &usageInfo;
+        }
 
         VkImageView view = VK_NULL_HANDLE;
         VK_VERIFY(vkCreateImageView(m_device, &viewInfo, nullptr, &view), "vkCreateImageView(texture)");
@@ -1664,5 +1917,56 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             return VK_IMAGE_ASPECT_STENCIL_BIT;
         }
         return imageAspect;
+    }
+
+    VkFormat VkTextureManager::ResolveSampledImageViewFormat(VkFormat imageFormat,
+                                                              SamplerNumericDomain numericDomain) {
+        if (imageFormat == VK_FORMAT_UNDEFINED || numericDomain == SamplerNumericDomain::Unknown ||
+            FormatMatchesSamplerNumericDomain(imageFormat, numericDomain)) {
+            return imageFormat;
+        }
+        if (!IsMutableStorageImageFormat(imageFormat)) {
+            return VK_FORMAT_UNDEFINED;
+        }
+
+        // Preserve component ordering and bit widths. This selects R32_UINT for an R32_SFLOAT
+        // texture sampled by a usampler rather than an arbitrary member (such as
+        // R8G8B8A8_UINT) of Vulkan's broad 32-bit compatibility class.
+        for (Int candidateValue = static_cast<Int>(VK_FORMAT_R4G4_UNORM_PACK8);
+             candidateValue <= static_cast<Int>(VK_FORMAT_ASTC_12x12_SRGB_BLOCK);
+             ++candidateValue) {
+            const VkFormat candidate = static_cast<VkFormat>(candidateValue);
+            if (!IsMutableStorageImageFormat(candidate) ||
+                !FormatMatchesSamplerNumericDomain(candidate, numericDomain) ||
+                !HasMatchingColorComponentLayout(imageFormat, candidate) ||
+                !AreSampledImageViewFormatsCompatible(imageFormat, candidate)) {
+                continue;
+            }
+
+            // If an integer backing is intentionally bit-read through a float sampler, require
+            // a true floating-point view. Normalized/scaled views satisfy OpTypeFloat but apply
+            // an unrelated numeric conversion to those bits.
+            if (numericDomain == SamplerNumericDomain::Float && !vkuFormatIsSFLOAT(candidate)) {
+                continue;
+            }
+            return candidate;
+        }
+        return VK_FORMAT_UNDEFINED;
+    }
+
+    Bool VkTextureManager::AreSampledImageViewFormatsCompatible(VkFormat imageFormat, VkFormat viewFormat) {
+        if (imageFormat == viewFormat) {
+            return true;
+        }
+        return IsMutableStorageImageFormat(imageFormat) && IsMutableStorageImageFormat(viewFormat) &&
+               vkuFormatCompatibilityClass(imageFormat) == vkuFormatCompatibilityClass(viewFormat);
+    }
+
+    Bool VkTextureManager::AreStorageImageViewFormatsCompatible(VkFormat imageFormat, VkFormat viewFormat) {
+        if (imageFormat == viewFormat) {
+            return true;
+        }
+        return IsMutableStorageImageFormat(imageFormat) && IsMutableStorageImageFormat(viewFormat) &&
+               vkuFormatCompatibilityClass(imageFormat) == vkuFormatCompatibilityClass(viewFormat);
     }
 } // namespace MobileGL::MG_Backend::DirectVulkan

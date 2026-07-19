@@ -1175,10 +1175,9 @@ namespace MobileGL::MG_Impl::GLImpl {
             *params = kFrontendMaxFragmentInputComponents;
             return;
         case GL_MAX_FRAGMENT_IMAGE_UNIFORMS:
-            // TODO: Track per-stage image uniform limits separately instead of reusing the compute/backend stage cap.
             *params = MG_Backend::pActiveBackendObject
-                          ? MG_Backend::pActiveBackendObject->GetDynamicParameters().MaxComputeImageUniforms
-                          : MG_Backend::DynamicBackendParameters{}.MaxComputeImageUniforms;
+                          ? MG_Backend::pActiveBackendObject->GetDynamicParameters().MaxFragmentImageUniforms
+                          : MG_Backend::DynamicBackendParameters{}.MaxFragmentImageUniforms;
             return;
         case GL_MAX_FRAGMENT_UNIFORM_COMPONENTS:
             *params = kFrontendMaxFragmentUniformComponents;
@@ -1208,7 +1207,9 @@ namespace MobileGL::MG_Impl::GLImpl {
             *params = kFrontendMaxGeometryTextureImageUnits;
             return;
         case GL_MAX_GEOMETRY_IMAGE_UNIFORMS:
-            *params = 0;
+            *params = MG_Backend::pActiveBackendObject
+                          ? MG_Backend::pActiveBackendObject->GetDynamicParameters().MaxGeometryImageUniforms
+                          : MG_Backend::DynamicBackendParameters{}.MaxGeometryImageUniforms;
             return;
         case GL_MAX_GEOMETRY_TOTAL_OUTPUT_COMPONENTS:
             *params = kFrontendMaxGeometryTotalOutputComponents;
@@ -1277,7 +1278,9 @@ namespace MobileGL::MG_Impl::GLImpl {
             *params = kFrontendMaxVertexAtomicCounters;
             return;
         case GL_MAX_VERTEX_IMAGE_UNIFORMS:
-            *params = 0;
+            *params = MG_Backend::pActiveBackendObject
+                          ? MG_Backend::pActiveBackendObject->GetDynamicParameters().MaxVertexImageUniforms
+                          : MG_Backend::DynamicBackendParameters{}.MaxVertexImageUniforms;
             return;
         case GL_MAX_VERTEX_SHADER_STORAGE_BLOCKS:
             *params = 16; // TODO

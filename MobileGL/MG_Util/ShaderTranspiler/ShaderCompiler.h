@@ -39,6 +39,14 @@ namespace MobileGL {
                 // which wrongly includes baseInstance).
                 static bool RebaseInstanceIndexForVulkan(const Vector<Uint32>& inputBinary,
                                                          Vector<uint32_t>& outputBinary);
+                // Replaces the declared format of float storage images with Unknown and adds the
+                // matching SPIR-V capabilities. DirectVulkan uses this only when both Vulkan
+                // shaderStorageImage*WithoutFormat features are enabled, allowing the
+                // glBindImageTexture format to select the descriptor view at runtime. Integer
+                // storage images deliberately keep their declared format for GL-compatible bit
+                // reinterpretation paths (for example, R32F storage accessed as r32ui).
+                static bool UseUnformattedFloatStorageImagesForVulkan(
+                    const Vector<Uint32>& inputBinary, Vector<uint32_t>& outputBinary);
                 static Result<String> DecompileShader(SpvcSession& session);
             };
         } // namespace ShaderTranspiler

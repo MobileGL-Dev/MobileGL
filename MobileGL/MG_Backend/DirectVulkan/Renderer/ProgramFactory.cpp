@@ -1197,6 +1197,25 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 return TextureTarget::Unknown;
             }
         }
+
+        Bool IsFloatStorageImageUniformType(GLenum uniformType) {
+            switch (uniformType) {
+            case GL_IMAGE_1D:
+            case GL_IMAGE_2D:
+            case GL_IMAGE_3D:
+            case GL_IMAGE_2D_RECT:
+            case GL_IMAGE_CUBE:
+            case GL_IMAGE_BUFFER:
+            case GL_IMAGE_1D_ARRAY:
+            case GL_IMAGE_2D_ARRAY:
+            case GL_IMAGE_CUBE_MAP_ARRAY:
+            case GL_IMAGE_2D_MULTISAMPLE:
+            case GL_IMAGE_2D_MULTISAMPLE_ARRAY:
+                return true;
+            default:
+                return false;
+            }
+        }
     } // namespace
 
     VkShaderStageFlagBits ProgramFactory::ToVkStage(ShaderStage stage) {
@@ -1215,6 +1234,105 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             return VK_SHADER_STAGE_COMPUTE_BIT;
         default:
             return VK_SHADER_STAGE_ALL_GRAPHICS;
+        }
+    }
+
+    VkFormat ProgramFactory::ConvertSpirvImageFormatToVkFormat(SpvImageFormat format) {
+        switch (format) {
+        case SpvImageFormatUnknown: return VK_FORMAT_UNDEFINED;
+        case SpvImageFormatRgba32f: return VK_FORMAT_R32G32B32A32_SFLOAT;
+        case SpvImageFormatRgba16f: return VK_FORMAT_R16G16B16A16_SFLOAT;
+        case SpvImageFormatR32f: return VK_FORMAT_R32_SFLOAT;
+        case SpvImageFormatRgba8: return VK_FORMAT_R8G8B8A8_UNORM;
+        case SpvImageFormatRgba8Snorm: return VK_FORMAT_R8G8B8A8_SNORM;
+        case SpvImageFormatRg32f: return VK_FORMAT_R32G32_SFLOAT;
+        case SpvImageFormatRg16f: return VK_FORMAT_R16G16_SFLOAT;
+        case SpvImageFormatR11fG11fB10f: return VK_FORMAT_B10G11R11_UFLOAT_PACK32;
+        case SpvImageFormatR16f: return VK_FORMAT_R16_SFLOAT;
+        case SpvImageFormatRgba16: return VK_FORMAT_R16G16B16A16_UNORM;
+        case SpvImageFormatRgb10A2: return VK_FORMAT_A2R10G10B10_UNORM_PACK32;
+        case SpvImageFormatRg16: return VK_FORMAT_R16G16_UNORM;
+        case SpvImageFormatRg8: return VK_FORMAT_R8G8_UNORM;
+        case SpvImageFormatR16: return VK_FORMAT_R16_UNORM;
+        case SpvImageFormatR8: return VK_FORMAT_R8_UNORM;
+        case SpvImageFormatRgba16Snorm: return VK_FORMAT_R16G16B16A16_SNORM;
+        case SpvImageFormatRg16Snorm: return VK_FORMAT_R16G16_SNORM;
+        case SpvImageFormatRg8Snorm: return VK_FORMAT_R8G8_SNORM;
+        case SpvImageFormatR16Snorm: return VK_FORMAT_R16_SNORM;
+        case SpvImageFormatR8Snorm: return VK_FORMAT_R8_SNORM;
+        case SpvImageFormatRgba32i: return VK_FORMAT_R32G32B32A32_SINT;
+        case SpvImageFormatRgba16i: return VK_FORMAT_R16G16B16A16_SINT;
+        case SpvImageFormatRgba8i: return VK_FORMAT_R8G8B8A8_SINT;
+        case SpvImageFormatR32i: return VK_FORMAT_R32_SINT;
+        case SpvImageFormatRg32i: return VK_FORMAT_R32G32_SINT;
+        case SpvImageFormatRg16i: return VK_FORMAT_R16G16_SINT;
+        case SpvImageFormatRg8i: return VK_FORMAT_R8G8_SINT;
+        case SpvImageFormatR16i: return VK_FORMAT_R16_SINT;
+        case SpvImageFormatR8i: return VK_FORMAT_R8_SINT;
+        case SpvImageFormatRgba32ui: return VK_FORMAT_R32G32B32A32_UINT;
+        case SpvImageFormatRgba16ui: return VK_FORMAT_R16G16B16A16_UINT;
+        case SpvImageFormatRgba8ui: return VK_FORMAT_R8G8B8A8_UINT;
+        case SpvImageFormatR32ui: return VK_FORMAT_R32_UINT;
+        case SpvImageFormatRgb10a2ui: return VK_FORMAT_A2R10G10B10_UINT_PACK32;
+        case SpvImageFormatRg32ui: return VK_FORMAT_R32G32_UINT;
+        case SpvImageFormatRg16ui: return VK_FORMAT_R16G16_UINT;
+        case SpvImageFormatRg8ui: return VK_FORMAT_R8G8_UINT;
+        case SpvImageFormatR16ui: return VK_FORMAT_R16_UINT;
+        case SpvImageFormatR8ui: return VK_FORMAT_R8_UINT;
+        case SpvImageFormatR64ui: return VK_FORMAT_R64_UINT;
+        case SpvImageFormatR64i: return VK_FORMAT_R64_SINT;
+        case SpvImageFormatMax: return VK_FORMAT_UNDEFINED;
+        }
+        return VK_FORMAT_UNDEFINED;
+    }
+
+    SamplerNumericDomain ProgramFactory::UniformTypeToSamplerNumericDomain(GLenum glType) {
+        switch (glType) {
+        case GL_INT_SAMPLER_1D:
+        case GL_INT_SAMPLER_2D:
+        case GL_INT_SAMPLER_3D:
+        case GL_INT_SAMPLER_CUBE:
+        case GL_INT_SAMPLER_2D_RECT:
+        case GL_INT_SAMPLER_1D_ARRAY:
+        case GL_INT_SAMPLER_2D_ARRAY:
+        case GL_INT_SAMPLER_BUFFER:
+        case GL_INT_SAMPLER_2D_MULTISAMPLE:
+        case GL_INT_SAMPLER_2D_MULTISAMPLE_ARRAY:
+        case GL_INT_SAMPLER_CUBE_MAP_ARRAY:
+            return SamplerNumericDomain::SignedInteger;
+        case GL_UNSIGNED_INT_SAMPLER_1D:
+        case GL_UNSIGNED_INT_SAMPLER_2D:
+        case GL_UNSIGNED_INT_SAMPLER_3D:
+        case GL_UNSIGNED_INT_SAMPLER_CUBE:
+        case GL_UNSIGNED_INT_SAMPLER_2D_RECT:
+        case GL_UNSIGNED_INT_SAMPLER_1D_ARRAY:
+        case GL_UNSIGNED_INT_SAMPLER_2D_ARRAY:
+        case GL_UNSIGNED_INT_SAMPLER_BUFFER:
+        case GL_UNSIGNED_INT_SAMPLER_2D_MULTISAMPLE:
+        case GL_UNSIGNED_INT_SAMPLER_2D_MULTISAMPLE_ARRAY:
+        case GL_UNSIGNED_INT_SAMPLER_CUBE_MAP_ARRAY:
+            return SamplerNumericDomain::UnsignedInteger;
+        case GL_SAMPLER_1D:
+        case GL_SAMPLER_2D:
+        case GL_SAMPLER_3D:
+        case GL_SAMPLER_CUBE:
+        case GL_SAMPLER_2D_RECT:
+        case GL_SAMPLER_1D_ARRAY:
+        case GL_SAMPLER_2D_ARRAY:
+        case GL_SAMPLER_BUFFER:
+        case GL_SAMPLER_2D_MULTISAMPLE:
+        case GL_SAMPLER_2D_MULTISAMPLE_ARRAY:
+        case GL_SAMPLER_CUBE_MAP_ARRAY:
+        case GL_SAMPLER_1D_SHADOW:
+        case GL_SAMPLER_2D_SHADOW:
+        case GL_SAMPLER_CUBE_SHADOW:
+        case GL_SAMPLER_2D_RECT_SHADOW:
+        case GL_SAMPLER_1D_ARRAY_SHADOW:
+        case GL_SAMPLER_2D_ARRAY_SHADOW:
+        case GL_SAMPLER_CUBE_MAP_ARRAY_SHADOW:
+            return SamplerNumericDomain::Float;
+        default:
+            return SamplerNumericDomain::Unknown;
         }
     }
 
@@ -1465,6 +1583,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         entry.samplerNameByBinding.assign(m_maxBindings, String());
         entry.samplerUniformLocationByBinding.assign(m_maxBindings, -1);
         entry.samplerTextureTargetByBinding.assign(m_maxBindings, TextureTarget::Texture2D);
+        entry.samplerNumericDomainByBinding.assign(m_maxBindings, SamplerNumericDomain::Unknown);
+        entry.storageImageFormatByBinding.assign(m_maxBindings, VK_FORMAT_UNDEFINED);
+        entry.storageImageUsesBindingFormatByBinding.assign(m_maxBindings, false);
         entry.storageBlockNameByBinding.assign(m_maxBindings, String());
         entry.storageBlockIndexByBinding.assign(m_maxBindings, -1);
         entry.globalUboBinding = -1;
@@ -1592,10 +1713,54 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                     continue;
                 }
 
-                const TextureTarget target = UniformTypeToTextureTarget(program.GetUniformType(static_cast<Uint>(location)));
+                const GLenum uniformType = program.GetUniformType(static_cast<Uint>(location));
+
+                if (descriptorKind == DescriptorBindingKind::StorageImage) {
+                    const VkFormat reflectedFormat =
+                        ConvertSpirvImageFormatToVkFormat(sampler->image.image_format);
+                    VkFormat& existingFormat = entry.storageImageFormatByBinding[binding];
+                    MOBILEGL_ASSERT(existingFormat == VK_FORMAT_UNDEFINED ||
+                                        reflectedFormat == VK_FORMAT_UNDEFINED ||
+                                        existingFormat == reflectedFormat,
+                                    "ProgramFactory::ReflectLayout: storage image binding %u ('%s') has "
+                                    "conflicting reflected formats (%d vs %d)",
+                                    binding, uniformName.c_str(), static_cast<Int>(existingFormat),
+                                    static_cast<Int>(reflectedFormat));
+                    if (existingFormat == VK_FORMAT_UNDEFINED) {
+                        existingFormat = reflectedFormat;
+                    }
+                    if (m_unformattedFloatStorageImagesEnabled &&
+                        existingFormat == VK_FORMAT_UNDEFINED &&
+                        IsFloatStorageImageUniformType(uniformType)) {
+                        entry.storageImageUsesBindingFormatByBinding[binding] = true;
+                    } else if (reflectedFormat != VK_FORMAT_UNDEFINED) {
+                        // A typed declaration in any stage wins for the entire binding. This is
+                        // required when another stage reaches the same image through an atomic
+                        // path and therefore could not be made formatless.
+                        entry.storageImageUsesBindingFormatByBinding[binding] = false;
+                    }
+                }
+
+                const TextureTarget target = UniformTypeToTextureTarget(uniformType);
                 MOBILEGL_ASSERT(target != TextureTarget::Unknown,
                                 "ProgramFactory::ReflectLayout: failed to resolve texture target for '%s'",
                                 uniformName.c_str());
+                if (descriptorKind == DescriptorBindingKind::CombinedImageSampler) {
+                    const SamplerNumericDomain numericDomain = UniformTypeToSamplerNumericDomain(uniformType);
+                    MOBILEGL_ASSERT(numericDomain != SamplerNumericDomain::Unknown,
+                                    "ProgramFactory::ReflectLayout: failed to resolve sampler numeric domain "
+                                    "for '%s' (uniformType=0x%x)",
+                                    uniformName.c_str(), uniformType);
+                    MOBILEGL_ASSERT(entry.samplerNumericDomainByBinding[binding] ==
+                                            SamplerNumericDomain::Unknown ||
+                                        entry.samplerNumericDomainByBinding[binding] == numericDomain,
+                                    "ProgramFactory::ReflectLayout: sampler binding %u ('%s') has conflicting "
+                                    "numeric domains (%d vs %d)",
+                                    binding, uniformName.c_str(),
+                                    static_cast<Int>(entry.samplerNumericDomainByBinding[binding]),
+                                    static_cast<Int>(numericDomain));
+                    entry.samplerNumericDomainByBinding[binding] = numericDomain;
+                }
                 MOBILEGL_ASSERT(entry.samplerUniformLocationByBinding[binding] < 0 || location < 0 ||
                                     entry.samplerUniformLocationByBinding[binding] == location,
                                 "ProgramFactory::ReflectLayout: texture binding %u maps to conflicting uniform locations (%d vs %d)",
@@ -1719,6 +1884,23 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                         MGLOG_W("ProgramFactory: shaderDrawParameters is unavailable; gl_InstanceID cannot be "
                                 "rebased and instanced draws with a non-zero baseInstance may render incorrectly");
                     }
+                }
+            }
+
+            // When Vulkan can legally access storage images without a statically declared
+            // format, let GL's glBindImageTexture format select the runtime image view. This
+            // provides desktop-driver-compatible behavior for packs such as iterationRP, whose
+            // float image qualifier can disagree with the bound render-target format. Integer
+            // storage images remain formatted so r32ui/r32i bit-reinterpretation paths keep the
+            // exact descriptor format required by their shader operations.
+            if (m_unformattedFloatStorageImagesEnabled) {
+                Vector<Uint> unformattedSpirv;
+                if (MG_Util::ShaderTranspiler::ShaderCompiler::UseUnformattedFloatStorageImagesForVulkan(
+                        moduleSpirvs[i], unformattedSpirv)) {
+                    moduleSpirvs[i] = std::move(unformattedSpirv);
+                } else {
+                    MGLOG_E("ProgramFactory: failed to make float storage images unformatted for program %u",
+                            program.GetExternalIndex());
                 }
             }
         }

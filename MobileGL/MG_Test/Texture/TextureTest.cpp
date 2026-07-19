@@ -158,6 +158,39 @@ namespace {
         auto* mipmapObject = static_cast<MG_State::GLState::TextureObjectMipmap*>(textureObject.get());
         return static_cast<const Uint8*>(mipmapObject->MapMipmapData(TextureUploadTarget::Texture2D, level));
     }
+
+    class ScopedTextureBackendFunctionsOverride {
+    public:
+        ScopedTextureBackendFunctionsOverride(): m_snapshot(MG_Backend::gBackendFunctionsTable) {}
+        ~ScopedTextureBackendFunctionsOverride() { MG_Backend::gBackendFunctionsTable = m_snapshot; }
+
+    private:
+        MG_Backend::GlobalBackendFunctionsTable m_snapshot;
+    };
+
+    struct CopyTexSubImage2DCall {
+        Bool Called = false;
+        GLenum Target = GL_NONE;
+        GLint Level = -1;
+        GLint XOffset = -1;
+        GLint YOffset = -1;
+        GLint X = -1;
+        GLint Y = -1;
+        GLsizei Width = -1;
+        GLsizei Height = -1;
+        GLuint BoundTexture = 0;
+    } g_copyTexSubImage2DCall;
+
+    void RecordCopyTexSubImage2D(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLint x, GLint y,
+                                 GLsizei width, GLsizei height) {
+        g_copyTexSubImage2DCall = {
+            true, target, level, xoffset, yoffset, x, y, width, height,
+            MG_State::pGLContext->GetTextureUnitObject(MG_State::pGLContext->GetActiveTextureUnit())
+                .GetBindingSlot(TextureTarget::Texture2D)
+                .GetBoundObject()
+                ->GetExternalIndex(),
+        };
+    }
 } // namespace
 
 TEST_F(TextureTest, CreateTexturesCreatesObjectsWithoutBinding) {
@@ -175,6 +208,113 @@ TEST_F(TextureTest, CreateTexturesCreatesObjectsWithoutBinding) {
     EXPECT_EQ(unit.GetBindingSlot(TextureTarget::Texture2D).GetBoundObject(), boundBefore);
     EXPECT_NE(unit.GetBindingSlot(TextureTarget::Texture2D).GetBoundObject(),
               MG_State::pGLContext->GetTextureObject(texture));
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+}
+
+TEST_F(TextureTest, ClearTexImageNullClearsWholeNamedTextureAndMarksStorageDirty) {
+    GLuint texture = 0;
+    MG_Impl::GLImpl::GenTextures(1, &texture);
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, texture);
+
+    const Uint8 initialPixels[] = {
+        1, 2, 3, 4,
+        5, 6, 7, 8,
+        9, 10, 11, 12,
+        13, 14, 15, 16,
+    };
+    MG_Impl::GLImpl::TexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 2, 2, 0,
+                                GL_RGBA, GL_UNSIGNED_BYTE, initialPixels);
+
+    const auto textureObject = MG_State::pGLContext->GetTextureObject(texture);
+    auto* mipmapObject = static_cast<MG_State::GLState::TextureObjectMipmap*>(textureObject.get());
+    mipmapObject->MarkStorageDirty(TextureUploadTarget::Texture2D, 0, false);
+
+    MG_Impl::GLImpl::ClearTexImage(texture, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+
+    const Uint8* stored = GetBoundTexture2DLevelBytes(texture);
+    ASSERT_NE(stored, nullptr);
+    const Uint8 zeros[sizeof(initialPixels)] = {};
+    EXPECT_EQ(std::memcmp(stored, zeros, sizeof(zeros)), 0);
+    EXPECT_TRUE(mipmapObject->IsStorageDirty(TextureUploadTarget::Texture2D, 0));
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+}
+
+TEST_F(TextureTest, ClearTexImageRepeatsConvertedClearPixel) {
+    GLuint texture = 0;
+    MG_Impl::GLImpl::GenTextures(1, &texture);
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, texture);
+    MG_Impl::GLImpl::TexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 2, 2, 0,
+                                GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+
+    const Uint8 clearPixel[] = {17, 34, 51, 68};
+    MG_Impl::GLImpl::ClearTexImage(texture, 0, GL_RGBA, GL_UNSIGNED_BYTE, clearPixel);
+
+    const Uint8* stored = GetBoundTexture2DLevelBytes(texture);
+    ASSERT_NE(stored, nullptr);
+    const Uint8 expected[] = {
+        17, 34, 51, 68,
+        17, 34, 51, 68,
+        17, 34, 51, 68,
+        17, 34, 51, 68,
+    };
+    EXPECT_EQ(std::memcmp(stored, expected, sizeof(expected)), 0);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+}
+
+TEST_F(TextureTest, ClearTexSubImageClearsOnlyRequestedRectangle) {
+    GLuint texture = 0;
+    MG_Impl::GLImpl::GenTextures(1, &texture);
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, texture);
+    Uint8 initialPixels[3 * 2 * 4];
+    std::memset(initialPixels, 0x7f, sizeof(initialPixels));
+    MG_Impl::GLImpl::TexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 3, 2, 0,
+                                GL_RGBA, GL_UNSIGNED_BYTE, initialPixels);
+
+    MG_Impl::GLImpl::ClearTexSubImage(texture, 0, 1, 0, 0, 1, 2, 1,
+                                     GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+
+    const Uint8* stored = GetBoundTexture2DLevelBytes(texture);
+    ASSERT_NE(stored, nullptr);
+    for (Int y = 0; y < 2; ++y) {
+        for (Int x = 0; x < 3; ++x) {
+            for (Int channel = 0; channel < 4; ++channel) {
+                EXPECT_EQ(stored[(y * 3 + x) * 4 + channel], x == 1 ? 0 : 0x7f);
+            }
+        }
+    }
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+}
+
+TEST_F(TextureTest, CopyTextureSubImage2DUsesNamedObjectAndRestoresBinding) {
+    const ScopedTextureBackendFunctionsOverride backendGuard;
+    MG_Backend::gBackendFunctionsTable.GL.CopyTexSubImage2D = RecordCopyTexSubImage2D;
+    g_copyTexSubImage2DCall = {};
+
+    GLuint namedTexture = 0;
+    GLuint boundTexture = 0;
+    MG_Impl::GLImpl::CreateTextures(GL_TEXTURE_2D, 1, &namedTexture);
+    MG_Impl::GLImpl::CreateTextures(GL_TEXTURE_2D, 1, &boundTexture);
+    MG_Impl::GLImpl::BindTextureUnit(0, boundTexture);
+
+    const auto boundBefore = MG_State::pGLContext->GetTextureUnitObject(0)
+                                 .GetBindingSlot(TextureTarget::Texture2D)
+                                 .GetBoundObject();
+    MG_Impl::GLImpl::CopyTextureSubImage2D(namedTexture, 2, 3, 4, 5, 6, 7, 8);
+
+    EXPECT_TRUE(g_copyTexSubImage2DCall.Called);
+    EXPECT_EQ(g_copyTexSubImage2DCall.Target, GL_TEXTURE_2D);
+    EXPECT_EQ(g_copyTexSubImage2DCall.Level, 2);
+    EXPECT_EQ(g_copyTexSubImage2DCall.XOffset, 3);
+    EXPECT_EQ(g_copyTexSubImage2DCall.YOffset, 4);
+    EXPECT_EQ(g_copyTexSubImage2DCall.X, 5);
+    EXPECT_EQ(g_copyTexSubImage2DCall.Y, 6);
+    EXPECT_EQ(g_copyTexSubImage2DCall.Width, 7);
+    EXPECT_EQ(g_copyTexSubImage2DCall.Height, 8);
+    EXPECT_EQ(g_copyTexSubImage2DCall.BoundTexture, namedTexture);
+    EXPECT_EQ(MG_State::pGLContext->GetTextureUnitObject(0)
+                  .GetBindingSlot(TextureTarget::Texture2D)
+                  .GetBoundObject(),
+              boundBefore);
     EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
 }
 

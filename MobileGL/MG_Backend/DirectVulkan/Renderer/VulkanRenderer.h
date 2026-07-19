@@ -365,6 +365,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         Bool m_samplerAnisotropyFeatureEnabled = false;
         Bool m_shaderDrawParametersExtensionEnabled = false;
         Bool m_shaderDrawParametersFeatureEnabled = false;
+        Bool m_unformattedFloatStorageImagesEnabled = false;
         // fillModeNonSolid gates VK_POLYGON_MODE_LINE/_POINT (glPolygonMode); independentBlend gates
         // per-draw-buffer color write masks (glColorMaski). Both are cached at device creation and
         // drive a runtime fallback when the device lacks them.
@@ -437,9 +438,53 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // Per-draw scratch buffers (clear keeps capacity) — these paths run for every
         // draw call and must not allocate.
         Vector<MG_State::GLState::ITextureObject*> m_sampledTexturesScratch;
+        Vector<MG_State::GLState::ITextureObject*> m_storageImageTexturesScratch;
         Vector<VkBuffer> m_vertexBuffersScratch;
         Vector<VkDeviceSize> m_vertexOffsetsScratch;
         Vector<VkVertexInputAttributeDescription> m_patchedAttributesScratch;
+        Vector<Float> m_vertexConversionScratch;
+        Vector<Uint8> m_vertexRepackScratch;
+
+        struct ConvertedVertexStreamKey {
+            const MG_State::GLState::BufferObject* buffer = nullptr;
+            Uint64 changeSerial = 0;
+            SizeT baseOffset = 0;
+            Uint32 sourceStride = 0;
+            DataType type = DataType::Float32;
+            Int size = 0;
+            Bool normalized = false;
+            Bool isInteger = false;
+            VertexInputStateFactory::VertexStreamConversion conversion =
+                VertexInputStateFactory::VertexStreamConversion::None;
+
+            Bool operator==(const ConvertedVertexStreamKey& other) const {
+                return buffer == other.buffer && changeSerial == other.changeSerial &&
+                       baseOffset == other.baseOffset && sourceStride == other.sourceStride &&
+                       type == other.type && size == other.size && normalized == other.normalized &&
+                       isInteger == other.isInteger && conversion == other.conversion;
+            }
+        };
+
+        struct ConvertedVertexStreamKeyHash {
+            SizeT operator()(const ConvertedVertexStreamKey& key) const {
+                SizeT hash = std::hash<const void*>{}(key.buffer);
+                auto combine = [&hash](SizeT value) {
+                    hash ^= value + static_cast<SizeT>(0x9e3779b97f4a7c15ull) + (hash << 6) + (hash >> 2);
+                };
+                combine(std::hash<Uint64>{}(key.changeSerial));
+                combine(std::hash<SizeT>{}(key.baseOffset));
+                combine(std::hash<Uint32>{}(key.sourceStride));
+                combine(std::hash<Uint32>{}(static_cast<Uint32>(key.type)));
+                combine(std::hash<Int>{}(key.size));
+                combine(std::hash<Bool>{}(key.normalized));
+                combine(std::hash<Bool>{}(key.isInteger));
+                combine(std::hash<Uint32>{}(static_cast<Uint32>(key.conversion)));
+                return hash;
+            }
+        };
+
+        UnorderedMap<ConvertedVertexStreamKey, BufferSlice, ConvertedVertexStreamKeyHash>
+            m_convertedVertexStreams;
 
         void CreateInstance();
         VkResult SetupDebugMessenger();
@@ -462,10 +507,14 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             const RenderPassEntry& renderPassEntry);
         VkPipeline GetOrCreateComputePipeline(const ProgramFactory::VkProgramObject& programObj);
         void DestroyComputePipelines();
+        Bool PrepareStorageImageTextures(
+            VkCommandBuffer commandBuffer,
+            const MG_State::GLState::ProgramObject& program,
+            const ProgramFactory::VkProgramObject& programObj);
 
         Bool UploadAndBindVertexBuffers(VkCommandBuffer commandBuffer, const MG_State::GLState::VertexArrayObject& vao,
                                         const ProgramFactory::VkProgramObject& programObj,
-                                        const DrawCmdParam& drawParams);
+                                        const DrawCmdParam& drawParams, Bool indexedDraw);
         Bool UploadAndBindIndexBuffer(FrameContext::FrameData& frame,
                                      const MG_State::GLState::VertexArrayObject& vao,
                                       const IndexBufferView* pIndexBufferView = nullptr);

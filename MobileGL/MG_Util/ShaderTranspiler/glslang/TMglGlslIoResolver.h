@@ -37,6 +37,7 @@ namespace MobileGL {
                                  opaqueUniformBindings) {}
         void reserverStorageSlot(glslang::TVarEntryInfo& ent, TInfoSink& infoSink) override;
         void reserverResourceSlot(glslang::TVarEntryInfo& ent, TInfoSink& infoSink) override;
+        int resolveInOutLocation(EShLanguage stage, glslang::TVarEntryInfo& ent) override;
         int resolveUniformLocation(EShLanguage stage, glslang::TVarEntryInfo& ent) override;
 
     protected:

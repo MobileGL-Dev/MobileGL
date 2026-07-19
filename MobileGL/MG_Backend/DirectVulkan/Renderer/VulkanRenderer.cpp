@@ -576,6 +576,88 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
     }
 
+    template <typename ComponentT>
+    static Float ConvertIntegerVertexComponentToFloat(ComponentT value, Bool normalized) {
+        if (!normalized) {
+            return static_cast<Float>(value);
+        }
+        if constexpr (std::is_signed_v<ComponentT>) {
+            const Float scaled = static_cast<Float>(value) /
+                                 static_cast<Float>(std::numeric_limits<ComponentT>::max());
+            return std::max<Float>(-1.0f, scaled);
+        } else {
+            return static_cast<Float>(value) /
+                   static_cast<Float>(std::numeric_limits<ComponentT>::max());
+        }
+    }
+
+    template <typename ComponentT>
+    static Bool ConvertIntegerVertexStreamToFloat32(
+        const MG_State::GLState::VertexAttribute& attribute,
+        const Uint8* sourceData,
+        SizeT sourceStride,
+        SizeT elementCount,
+        Vector<Float>& outData) {
+        if (sourceData == nullptr || attribute.Size < 1 || attribute.Size > 4 || sourceStride == 0) {
+            return false;
+        }
+
+        const SizeT componentCount = static_cast<SizeT>(attribute.Size);
+        outData.resize(elementCount * componentCount);
+        for (SizeT element = 0; element < elementCount; ++element) {
+            const Uint8* sourceElement = sourceData + element * sourceStride;
+            Float* destinationElement = outData.data() + element * componentCount;
+            for (SizeT component = 0; component < componentCount; ++component) {
+                ComponentT value{};
+                Memcpy(&value, sourceElement + component * sizeof(ComponentT), sizeof(ComponentT));
+                destinationElement[component] =
+                    ConvertIntegerVertexComponentToFloat(value, attribute.Normalized);
+            }
+        }
+        return true;
+    }
+
+    static Bool ConvertScaledIntegerVertexStreamToFloat32(
+        const MG_State::GLState::VertexAttribute& attribute,
+        const Uint8* sourceData,
+        SizeT sourceStride,
+        SizeT elementCount,
+        Vector<Float>& outData) {
+        switch (attribute.Type) {
+        case DataType::Int8:
+            return ConvertIntegerVertexStreamToFloat32<Int8>(
+                attribute, sourceData, sourceStride, elementCount, outData);
+        case DataType::Uint8:
+            return ConvertIntegerVertexStreamToFloat32<Uint8>(
+                attribute, sourceData, sourceStride, elementCount, outData);
+        case DataType::Int16:
+            return ConvertIntegerVertexStreamToFloat32<Int16>(
+                attribute, sourceData, sourceStride, elementCount, outData);
+        case DataType::Uint16:
+            return ConvertIntegerVertexStreamToFloat32<Uint16>(
+                attribute, sourceData, sourceStride, elementCount, outData);
+        default:
+            return false;
+        }
+    }
+
+    static Bool RepackVertexStream(const Uint8* sourceData,
+                                   SizeT sourceStride,
+                                   SizeT elementSize,
+                                   SizeT elementCount,
+                                   Vector<Uint8>& outData) {
+        if (sourceData == nullptr || sourceStride == 0 || elementSize == 0) {
+            return false;
+        }
+        outData.resize(elementCount * elementSize);
+        for (SizeT element = 0; element < elementCount; ++element) {
+            Memcpy(outData.data() + element * elementSize,
+                   sourceData + element * sourceStride,
+                   elementSize);
+        }
+        return true;
+    }
+
     static NumericDomain GetNumericDomainForTextureInternalFormat(TextureInternalFormat format) {
         switch (format) {
         case TextureInternalFormat::R8I:
@@ -1885,7 +1967,8 @@ void main() {
         m_pipelineFactory = MakeUnique<PipelineFactory>(m_device, m_config);
         MOBILEGL_ASSERT(m_pipelineFactory != nullptr, "PipelineFactory creation failed.");
         m_programFactory = MakeUnique<ProgramFactory>(m_device, m_config, maxProgramBindings,
-                                                      m_shaderDrawParametersFeatureEnabled);
+                                                      m_shaderDrawParametersFeatureEnabled,
+                                                      m_unformattedFloatStorageImagesEnabled);
         MOBILEGL_ASSERT(m_programFactory != nullptr, "ProgramFactory creation failed.");
 
         m_samplerManager = MakeUnique<VkSamplerManager>();
@@ -1905,7 +1988,7 @@ void main() {
             m_physicalDevice.properties.limits.minUniformBufferOffsetAlignment, m_config.MaxFramesInFlight,
             maxProgramBindings, kDescriptorSetsPerFrame, m_textureManager.get(), m_samplerManager.get());
         MOBILEGL_ASSERT(succeeded, "UniformDescriptorBinder initialization failed.");
-        m_vertexInputStateFactory = MakeUnique<VertexInputStateFactory>(m_config);
+        m_vertexInputStateFactory = MakeUnique<VertexInputStateFactory>(m_config, m_physicalDevice.handle);
         MOBILEGL_ASSERT(m_vertexInputStateFactory != nullptr, "VertexInputStateFactory creation failed.");
 
         // Prime the first frame so Render() always targets an acquired swapchain image.
@@ -1920,6 +2003,7 @@ void main() {
         VK_VERIFY(acquireResult, "Initialize, WaitAndAcquireNextImage");
         m_textureManager->BeginFrame(m_frameContext.GetCurrentFrameIndex());
         m_bufferManager.BeginFrame(m_frameContext.GetCurrentFrameIndex());
+        m_convertedVertexStreams.clear();
 
         MGLOG_D("VulkanRenderer initialized");
     }
@@ -2038,7 +2122,8 @@ void main() {
 
     Bool VulkanRenderer::UploadAndBindVertexBuffers(
         VkCommandBuffer commandBuffer, const MG_State::GLState::VertexArrayObject& vao,
-        const ProgramFactory::VkProgramObject& programObj, const DrawCmdParam& drawParams) {
+        const ProgramFactory::VkProgramObject& programObj, const DrawCmdParam& drawParams,
+        Bool indexedDraw) {
         // programObj is resolved once in SetupDraw and passed in; re-resolving it here would repeat
         // the GetCurrentProgram + GetOrCreateProgram hash lookup every draw.
         auto& vertexInputState = m_vertexInputStateFactory->GetOrCreateVertexInputState(vao);
@@ -2064,6 +2149,39 @@ void main() {
             return nullptr;
         };
 
+        auto uploadConvertedStream = [&](VertexInputStateFactory::VertexStreamConversion conversion,
+                                         const MG_State::GLState::VertexAttribute& attribute,
+                                         const Uint8* sourceData, SizeT sourceStride,
+                                         SizeT elementSize, SizeT elementCount,
+                                         BufferSlice& outSlice) -> Bool {
+            const void* uploadData = nullptr;
+            VkDeviceSize uploadSize = 0;
+            switch (conversion) {
+            case VertexInputStateFactory::VertexStreamConversion::Repack:
+                if (!RepackVertexStream(sourceData, sourceStride, elementSize, elementCount,
+                                        m_vertexRepackScratch)) {
+                    return false;
+                }
+                uploadData = m_vertexRepackScratch.data();
+                uploadSize = static_cast<VkDeviceSize>(m_vertexRepackScratch.size());
+                break;
+            case VertexInputStateFactory::VertexStreamConversion::ScaledIntegerToFloat32:
+                if (!ConvertScaledIntegerVertexStreamToFloat32(attribute, sourceData, sourceStride,
+                                                               elementCount, m_vertexConversionScratch)) {
+                    return false;
+                }
+                uploadData = m_vertexConversionScratch.data();
+                uploadSize = static_cast<VkDeviceSize>(m_vertexConversionScratch.size() * sizeof(Float));
+                break;
+            case VertexInputStateFactory::VertexStreamConversion::None:
+                return false;
+            }
+            return uploadSize > 0 &&
+                   m_bufferManager.UploadTransient(BufferKind::Vertex,
+                                                   m_frameContext.GetCurrentFrameIndex(),
+                                                   uploadData, uploadSize, 16, outSlice);
+        };
+
         for (SizeT binding = 0; binding < bindingCount; ++binding) {
             if (binding >= vertexInputState.bindings.size()) {
                 break;
@@ -2073,28 +2191,53 @@ void main() {
                                                : static_cast<Uint32>(MG_State::GLState::VertexArrayObject::MAX_VERTEX_ATTRIBS);
             const Bool usesClientMemory = binding < vertexInputState.bindingUsesClientMemory.size() &&
                                           vertexInputState.bindingUsesClientMemory[binding];
+            const auto conversion = binding < vertexInputState.bindingConversions.size()
+                                        ? vertexInputState.bindingConversions[binding]
+                                        : VertexInputStateFactory::VertexStreamConversion::None;
             if (usesClientMemory) {
                 const Uint32 location = bindingLocation;
                 MOBILEGL_ASSERT(location < MG_State::GLState::VertexArrayObject::MAX_VERTEX_ATTRIBS,
                                 "UploadAndBindVertexStreams failed to resolve client attribute location");
 
                 const auto& attr = vao.GetAttribute(location);
-                const SizeT componentSize = VertexInputStateFactory::GetComponentSize(attr.Type);
-                const SizeT elementSize = componentSize * static_cast<SizeT>(attr.Size);
+                const SizeT elementSize =
+                    VertexInputStateFactory::GetAttributeByteSize(attr.Type, attr.Size, attr.IsBgra);
                 const SizeT stride = attr.Stride > 0 ? static_cast<SizeT>(attr.Stride) : elementSize;
                 const auto* clientData = reinterpret_cast<const Uint8*>(attr.Offset);
-                if (!clientData || componentSize == 0 || elementSize == 0 || stride == 0) {
+                if (!clientData || elementSize == 0 || stride == 0) {
                     MGLOG_E("UploadAndBindVertexStreams skipped: invalid client vertex attribute at location %u", location);
+                    return false;
+                }
+
+                if (conversion != VertexInputStateFactory::VertexStreamConversion::None && indexedDraw) {
+                    // The current indexed setup only carries indexCount, not the maximum effective
+                    // index. Guessing a client-memory range here can truncate the converted stream.
+                    MGLOG_E("UploadAndBindVertexStreams skipped: converted client-memory attribute "
+                            "location=%u requires an indexed vertex range", location);
+                    return false;
+                }
+                if (conversion != VertexInputStateFactory::VertexStreamConversion::None &&
+                    drawParams.vertexCount == 0) {
+                    MGLOG_E("UploadAndBindVertexStreams skipped: converted client-memory attribute "
+                            "location=%u has an unknown vertex range", location);
                     return false;
                 }
 
                 const Uint32 lastVertex = drawParams.vertexCount > 0
                                               ? drawParams.firstVertex + drawParams.vertexCount - 1
                                               : drawParams.firstVertex;
-                const SizeT uploadSize = static_cast<SizeT>(lastVertex) * stride + elementSize;
                 BufferSlice slice{};
-                if (!m_bufferManager.UploadTransient(BufferKind::Vertex, m_frameContext.GetCurrentFrameIndex(),
-                                                     clientData, static_cast<VkDeviceSize>(uploadSize), 16, slice)) {
+                Bool uploaded = false;
+                if (conversion == VertexInputStateFactory::VertexStreamConversion::None) {
+                    const SizeT uploadSize = static_cast<SizeT>(lastVertex) * stride + elementSize;
+                    uploaded = m_bufferManager.UploadTransient(
+                        BufferKind::Vertex, m_frameContext.GetCurrentFrameIndex(), clientData,
+                        static_cast<VkDeviceSize>(uploadSize), 16, slice);
+                } else {
+                    uploaded = uploadConvertedStream(conversion, attr, clientData, stride, elementSize,
+                                                     static_cast<SizeT>(lastVertex) + 1, slice);
+                }
+                if (!uploaded) {
                     MOBILEGL_ASSERT(false,
                                     "UploadAndBindVertexStreams skipped: failed to upload client attribute binding %zu",
                                     binding);
@@ -2116,6 +2259,64 @@ void main() {
             const auto& sourceBufferShared = *sourceBufferSharedPtr;
             BufferSlice slice{};
             const SizeT sourceSize = sourceBufferShared->GetSize();
+            const SizeT baseOffset =
+                binding < vertexInputState.bindingBaseOffsets.size() ? vertexInputState.bindingBaseOffsets[binding] : 0;
+            MOBILEGL_ASSERT(baseOffset <= sourceSize,
+                            "UploadAndBindVertexStreams skipped: binding %zu base offset %zu exceeds buffer size %zu",
+                            binding, baseOffset, sourceSize);
+
+            if (conversion != VertexInputStateFactory::VertexStreamConversion::None) {
+                MOBILEGL_ASSERT(bindingLocation < MG_State::GLState::VertexArrayObject::MAX_VERTEX_ATTRIBS,
+                                "UploadAndBindVertexStreams failed to resolve converted attribute location");
+                const auto& attr = vao.GetAttribute(bindingLocation);
+                const SizeT elementSize =
+                    VertexInputStateFactory::GetAttributeByteSize(attr.Type, attr.Size, attr.IsBgra);
+                const SizeT sourceStride =
+                    attr.Stride > 0 ? static_cast<SizeT>(attr.Stride) : elementSize;
+                if (sourceBufferShared->MappedData() == nullptr || elementSize == 0 || sourceStride == 0 ||
+                    baseOffset > sourceSize || elementSize > sourceSize - baseOffset) {
+                    MGLOG_E("UploadAndBindVertexStreams skipped: invalid converted source binding=%zu "
+                            "location=%u base=%zu size=%zu element=%zu stride=%zu",
+                            binding, bindingLocation, baseOffset, sourceSize, elementSize, sourceStride);
+                    return false;
+                }
+
+                sourceBufferShared->SyncPersistentMappedRange();
+                const SizeT elementCount = 1 + (sourceSize - baseOffset - elementSize) / sourceStride;
+                const ConvertedVertexStreamKey cacheKey{
+                    .buffer = sourceBufferShared.get(),
+                    .changeSerial = sourceBufferShared->GetChangeSerial(),
+                    .baseOffset = baseOffset,
+                    .sourceStride = static_cast<Uint32>(sourceStride),
+                    .type = attr.Type,
+                    .size = attr.Size,
+                    .normalized = attr.Normalized,
+                    .isInteger = attr.IsInteger,
+                    .conversion = conversion,
+                };
+
+                const Bool cacheable = !sourceBufferShared->IsBackendPersistentMapped();
+                auto cached = cacheable ? m_convertedVertexStreams.find(cacheKey)
+                                        : m_convertedVertexStreams.end();
+                if (cached != m_convertedVertexStreams.end()) {
+                    slice = cached->second;
+                } else {
+                    const Uint8* sourceData = sourceBufferShared->MappedData() + baseOffset;
+                    if (!uploadConvertedStream(conversion, attr, sourceData, sourceStride,
+                                               elementSize, elementCount, slice)) {
+                        MGLOG_E("UploadAndBindVertexStreams skipped: failed to convert binding=%zu location=%u",
+                                binding, bindingLocation);
+                        return false;
+                    }
+                    if (cacheable) {
+                        m_convertedVertexStreams.emplace(cacheKey, slice);
+                    }
+                }
+                vkBuffers[binding] = slice.buffer;
+                vkOffsets[binding] = slice.offset;
+                continue;
+            }
+
             if (ShouldUseTransientVertexIndexBuffer(*sourceBufferShared)) {
                 if (!m_bufferManager.AcquireStreamedSlice(BufferKind::Vertex, sourceBufferShared, slice)) {
                     MOBILEGL_ASSERT(false, "UploadAndBindVertexStreams skipped: failed to upload transient binding %zu", binding);
@@ -2128,11 +2329,6 @@ void main() {
                 }
             }
             vkBuffers[binding] = slice.buffer;
-            const SizeT baseOffset =
-                binding < vertexInputState.bindingBaseOffsets.size() ? vertexInputState.bindingBaseOffsets[binding] : 0;
-            MOBILEGL_ASSERT(baseOffset <= sourceSize,
-                            "UploadAndBindVertexStreams skipped: binding %zu base offset %zu exceeds buffer size %zu",
-                            binding, baseOffset, sourceSize);
             vkOffsets[binding] = slice.offset + static_cast<VkDeviceSize>(baseOffset);
         }
 
@@ -3246,6 +3442,44 @@ void main() {
         return pipeline;
     }
 
+    Bool VulkanRenderer::PrepareStorageImageTextures(
+        VkCommandBuffer commandBuffer,
+        const MG_State::GLState::ProgramObject& program,
+        const ProgramFactory::VkProgramObject& programObj) {
+        auto& storageTextures = m_storageImageTexturesScratch;
+        if (!m_uniformManager->CollectStorageImageTextures(program, programObj, storageTextures)) {
+            MGLOG_E("%s: failed to collect storage images for program=%u",
+                    __func__, program.GetExternalIndex());
+            return false;
+        }
+        if (storageTextures.empty()) {
+            return true;
+        }
+
+        // Image uploads, deferred-clear materialization, and layout barriers are illegal inside
+        // a classic render pass. Do this before sampler preparation as well: a texture used by
+        // both a sampler and an image must stay in GENERAL, and both descriptors must name that
+        // same layout independent of SPIR-V reflection/binding order.
+        if (VkRenderPassManager::GetActiveRenderPass() != nullptr) {
+            VkRenderPassManager::EndRenderPass(commandBuffer);
+        }
+
+        for (auto* texture : storageTextures) {
+            MOBILEGL_ASSERT(texture != nullptr, "%s: collected a null storage texture", __func__);
+            if (!MaterializePendingClearForTexture(commandBuffer, *texture)) {
+                MGLOG_E("%s: failed to materialize pending clear for storage textureId=%d",
+                        __func__, texture->GetExternalIndex());
+                return false;
+            }
+            if (!m_textureManager->TransitionTextureForStorageImage(commandBuffer, *texture)) {
+                MGLOG_E("%s: failed to prepare storage textureId=%d",
+                        __func__, texture->GetExternalIndex());
+                return false;
+            }
+        }
+        return true;
+    }
+
     Bool VulkanRenderer::SetupDraw(FrameContext::FrameData& frame, GLenum mode, Flags<DrawSetupAspect> aspects,
                                    const DrawCmdParam& drawParams,
                                    const IndexBufferView* pIndexBufferView) {
@@ -3271,6 +3505,11 @@ void main() {
             // New command buffer: a program/FBO address from a previous frame may have been
             // recycled, so start the sampled-set skip cache fresh this frame.
             m_lastSampledSetValid = false;
+        }
+
+        if (!PrepareStorageImageTextures(frame.commandBuffer, program, programObj)) {
+            MGLOG_E("SetupDraw skipped: storage image preparation failed");
+            return false;
         }
 
         auto* activeRenderPass = VkRenderPassManager::GetActiveRenderPass();
@@ -3443,7 +3682,8 @@ void main() {
             return false;
         }
 
-        auto vtxUploadOk = UploadAndBindVertexBuffers(frame.commandBuffer, vao, programObj, drawParams);
+        auto vtxUploadOk = UploadAndBindVertexBuffers(
+            frame.commandBuffer, vao, programObj, drawParams, pIndexBufferView != nullptr);
         if (!vtxUploadOk) {
             MGLOG_E("SetupDraw skipped: failed to upload vertex buffers");
             return false;
@@ -3492,6 +3732,11 @@ void main() {
             VkRenderPassManager::EndRenderPass(frame.commandBuffer);
         }
 
+        if (!PrepareStorageImageTextures(frame.commandBuffer, program, programObj)) {
+            MGLOG_E("DispatchCompute skipped: storage image preparation failed");
+            return;
+        }
+
         const VkPipeline pipeline = GetOrCreateComputePipeline(programObj);
         if (pipeline == VK_NULL_HANDLE) {
             MGLOG_E("DispatchCompute skipped: compute pipeline creation failed for program=%u",
@@ -3525,6 +3770,11 @@ void main() {
 
         if (VkRenderPassManager::GetActiveRenderPass() != nullptr) {
             VkRenderPassManager::EndRenderPass(frame.commandBuffer);
+        }
+
+        if (!PrepareStorageImageTextures(frame.commandBuffer, program, programObj)) {
+            MGLOG_E("DispatchComputeIndirect skipped: storage image preparation failed");
+            return;
         }
 
         const VkPipeline pipeline = GetOrCreateComputePipeline(programObj);
@@ -6331,6 +6581,7 @@ void main() {
         CollectDeferredDepthMipmapCleanup(m_frameContext.GetCurrentFrameIndex());
         m_textureManager->BeginFrame(m_frameContext.GetCurrentFrameIndex());
         m_bufferManager.BeginFrame(m_frameContext.GetCurrentFrameIndex());
+        m_convertedVertexStreams.clear();
         // Descriptor-set reuse cursors rewind exactly once per frame, here,
         // after the slot's fence wait proved its previous sets GPU-idle. (The
         // per-draw-path lazy rewind missed frames whose recording was opened
@@ -6648,6 +6899,10 @@ void main() {
         vkGetPhysicalDeviceFeatures(m_physicalDevice.handle, &supportedDeviceFeatures);
 
         VkPhysicalDeviceFeatures deviceFeatures{};
+        // Match GL's robust buffer-fetch behavior where the Vulkan device supports it. This covers
+        // out-of-range fetches; arbitrary GL vertex strides/offsets still need the explicit tight
+        // repack in VertexInputStateFactory when they violate Vulkan's address-alignment rules.
+        deviceFeatures.robustBufferAccess = supportedDeviceFeatures.robustBufferAccess;
         deviceFeatures.geometryShader = supportedDeviceFeatures.geometryShader;
         deviceFeatures.independentBlend = supportedDeviceFeatures.independentBlend;
         m_independentBlendFeatureEnabled = deviceFeatures.independentBlend == VK_TRUE;
@@ -6661,6 +6916,23 @@ void main() {
         deviceFeatures.wideLines = supportedDeviceFeatures.wideLines;
         m_logicOpFeatureEnabled = deviceFeatures.logicOp == VK_TRUE;
         deviceFeatures.shaderInt64 = supportedDeviceFeatures.shaderInt64;
+        // Required for desktop GL image load/store semantics. iterationRP writes storage
+        // images from vertex and fragment stages and uses formats outside Vulkan's small
+        // mandatory storage-image set.
+        deviceFeatures.vertexPipelineStoresAndAtomics =
+            supportedDeviceFeatures.vertexPipelineStoresAndAtomics;
+        deviceFeatures.fragmentStoresAndAtomics = supportedDeviceFeatures.fragmentStoresAndAtomics;
+        deviceFeatures.shaderStorageImageExtendedFormats =
+            supportedDeviceFeatures.shaderStorageImageExtendedFormats;
+        // The formatless float-storage compatibility path must be all-or-nothing: transformed
+        // modules declare both capabilities and image bindings may be read, written, or both.
+        m_unformattedFloatStorageImagesEnabled =
+            supportedDeviceFeatures.shaderStorageImageReadWithoutFormat == VK_TRUE &&
+            supportedDeviceFeatures.shaderStorageImageWriteWithoutFormat == VK_TRUE;
+        if (m_unformattedFloatStorageImagesEnabled) {
+            deviceFeatures.shaderStorageImageReadWithoutFormat = VK_TRUE;
+            deviceFeatures.shaderStorageImageWriteWithoutFormat = VK_TRUE;
+        }
         deviceFeatures.drawIndirectFirstInstance = supportedDeviceFeatures.drawIndirectFirstInstance;
         deviceFeatures.multiDrawIndirect = supportedDeviceFeatures.multiDrawIndirect;
         m_multiDrawIndirectFeatureEnabled = deviceFeatures.multiDrawIndirect == VK_TRUE;
@@ -6780,8 +7052,12 @@ void main() {
 
         deviceCreateInfo.enabledExtensionCount = static_cast<Uint32>(enabledDeviceExtensions.size());
         deviceCreateInfo.ppEnabledExtensionNames = enabledDeviceExtensions.data();
-        MGLOG_I("Device feature support: geometryShader=%s independentBlend=%s logicOp=%s shaderClipDistance=%s "
-                "shaderCullDistance=%s wideLines=%s shaderInt64=%s drawIndirectFirstInstance=%s multiDrawIndirect=%s",
+        MGLOG_I("Device feature support: robustBufferAccess=%s geometryShader=%s independentBlend=%s logicOp=%s shaderClipDistance=%s "
+                "shaderCullDistance=%s wideLines=%s shaderInt64=%s vertexStoresAtomics=%s "
+                "fragmentStoresAtomics=%s storageImageExtendedFormats=%s storageImageReadWithoutFormat=%s "
+                "storageImageWriteWithoutFormat=%s drawIndirectFirstInstance=%s "
+                "multiDrawIndirect=%s",
+            supportedDeviceFeatures.robustBufferAccess ? "true" : "false",
             supportedDeviceFeatures.geometryShader ? "true" : "false",
             supportedDeviceFeatures.independentBlend ? "true" : "false",
             supportedDeviceFeatures.logicOp ? "true" : "false",
@@ -6789,11 +7065,19 @@ void main() {
             supportedDeviceFeatures.shaderCullDistance ? "true" : "false",
             supportedDeviceFeatures.wideLines ? "true" : "false",
             supportedDeviceFeatures.shaderInt64 ? "true" : "false",
+            supportedDeviceFeatures.vertexPipelineStoresAndAtomics ? "true" : "false",
+            supportedDeviceFeatures.fragmentStoresAndAtomics ? "true" : "false",
+            supportedDeviceFeatures.shaderStorageImageExtendedFormats ? "true" : "false",
+            supportedDeviceFeatures.shaderStorageImageReadWithoutFormat ? "true" : "false",
+            supportedDeviceFeatures.shaderStorageImageWriteWithoutFormat ? "true" : "false",
             supportedDeviceFeatures.drawIndirectFirstInstance ? "true" : "false",
             supportedDeviceFeatures.multiDrawIndirect ? "true" : "false");
-        MGLOG_I("Device feature enabled: geometryShader=%s independentBlend=%s logicOp=%s shaderClipDistance=%s "
-                "shaderCullDistance=%s wideLines=%s shaderInt64=%s drawIndirectFirstInstance=%s multiDrawIndirect=%s "
-                "shaderDrawParameters=%s",
+        MGLOG_I("Device feature enabled: robustBufferAccess=%s geometryShader=%s independentBlend=%s logicOp=%s shaderClipDistance=%s "
+                "shaderCullDistance=%s wideLines=%s shaderInt64=%s vertexStoresAtomics=%s "
+                "fragmentStoresAtomics=%s storageImageExtendedFormats=%s storageImageReadWithoutFormat=%s "
+                "storageImageWriteWithoutFormat=%s drawIndirectFirstInstance=%s "
+                "multiDrawIndirect=%s shaderDrawParameters=%s",
+            deviceFeatures.robustBufferAccess ? "true" : "false",
             deviceFeatures.geometryShader ? "true" : "false",
             deviceFeatures.independentBlend ? "true" : "false",
             deviceFeatures.logicOp ? "true" : "false",
@@ -6801,6 +7085,11 @@ void main() {
             deviceFeatures.shaderCullDistance ? "true" : "false",
             deviceFeatures.wideLines ? "true" : "false",
             deviceFeatures.shaderInt64 ? "true" : "false",
+            deviceFeatures.vertexPipelineStoresAndAtomics ? "true" : "false",
+            deviceFeatures.fragmentStoresAndAtomics ? "true" : "false",
+            deviceFeatures.shaderStorageImageExtendedFormats ? "true" : "false",
+            deviceFeatures.shaderStorageImageReadWithoutFormat ? "true" : "false",
+            deviceFeatures.shaderStorageImageWriteWithoutFormat ? "true" : "false",
             deviceFeatures.drawIndirectFirstInstance ? "true" : "false",
             deviceFeatures.multiDrawIndirect ? "true" : "false",
             m_shaderDrawParametersFeatureEnabled ? "true" : "false");
@@ -7127,6 +7416,7 @@ void main() {
                 m_textureManager->BeginFrame(m_frameContext.GetCurrentFrameIndex());
             }
             m_bufferManager.BeginFrame(m_frameContext.GetCurrentFrameIndex());
+            m_convertedVertexStreams.clear();
         }
     }
 

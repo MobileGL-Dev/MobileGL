@@ -7,6 +7,7 @@
 // End of Source File Header
 
 #include <gtest/gtest.h>
+#include <spirv_reflect.h>
 #include <cstring>
 #include <vector>
 
@@ -1323,6 +1324,88 @@ TEST_F(ProgramTest, CompileAndLinkWithExplicitVertexIn) {
     }
     ASSERT_TRUE(pSrcVertIn != nullptr) << "Not found expected string in generated shader.\n(Searching for \"" << needle
                                        << "\")";
+}
+
+TEST_F(ProgramTest, InactiveExplicitVertexBindingsDoNotReserveLocations) {
+    const char* vertexSource = R"(#version 430 compatibility
+
+in vec3 Position;
+in vec2 UV0;
+in vec3 vaPosition;
+
+void main() {
+    gl_Position = vec4(vaPosition, 1.0);
+}
+)";
+    const char* fragmentSource = R"(#version 430 compatibility
+
+out vec4 fragColor;
+
+void main() {
+    fragColor = vec4(1.0);
+}
+)";
+
+    GLuint vertexShader = CreateShader(GL_VERTEX_SHADER);
+    ShaderSource(vertexShader, 1, &vertexSource, nullptr);
+    CompileShader(vertexShader);
+    GLint compileStatus = GL_FALSE;
+    GetShaderiv(vertexShader, GL_COMPILE_STATUS, &compileStatus);
+    ASSERT_EQ(compileStatus, GL_TRUE);
+
+    GLuint fragmentShader = CreateShader(GL_FRAGMENT_SHADER);
+    ShaderSource(fragmentShader, 1, &fragmentSource, nullptr);
+    CompileShader(fragmentShader);
+    GetShaderiv(fragmentShader, GL_COMPILE_STATUS, &compileStatus);
+    ASSERT_EQ(compileStatus, GL_TRUE);
+
+    GLuint program = CreateProgram();
+    AttachShader(program, vertexShader);
+    AttachShader(program, fragmentShader);
+
+    // Iris binds these canonical names before linking every program. Its compatibility
+    // transformer can inject both declarations even when the shader pack instead reads
+    // vaPosition. Inactive API bindings must not consume locations during the link.
+    BindAttribLocation(program, 0, "Position");
+    BindAttribLocation(program, 1, "UV0");
+    LinkProgram(program);
+
+    GLint linkStatus = GL_FALSE;
+    GetProgramiv(program, GL_LINK_STATUS, &linkStatus);
+    ASSERT_EQ(linkStatus, GL_TRUE);
+
+    EXPECT_EQ(GetAttribLocation(program, "Position"), -1);
+    EXPECT_EQ(GetAttribLocation(program, "UV0"), -1);
+    EXPECT_EQ(GetAttribLocation(program, "vaPosition"), 0);
+
+    auto programObject = MG_State::pGLContext->GetProgramObject(program);
+    ASSERT_NE(programObject, nullptr);
+    const Int vertexIndex = programObject->GetShaderIndexByStage(ShaderStage::Vertex);
+    ASSERT_GE(vertexIndex, 0);
+    const auto& spirvs = programObject->GetGeneratedSpirv();
+    ASSERT_LT(static_cast<SizeT>(vertexIndex), spirvs.size());
+
+    const auto& vertexSpirv = spirvs[vertexIndex];
+    spv_reflect::ShaderModule reflection(vertexSpirv.size() * sizeof(Uint), vertexSpirv.data());
+    ASSERT_EQ(reflection.GetResult(), SPV_REFLECT_RESULT_SUCCESS);
+
+    uint32_t inputCount = 0;
+    ASSERT_EQ(reflection.EnumerateInputVariables(&inputCount, nullptr), SPV_REFLECT_RESULT_SUCCESS);
+    Vector<SpvReflectInterfaceVariable*> inputs(inputCount);
+    ASSERT_EQ(reflection.EnumerateInputVariables(&inputCount, inputs.data()), SPV_REFLECT_RESULT_SUCCESS);
+
+    Uint32 userInputCount = 0;
+    Uint32 locationMask = 0;
+    for (const auto* input : inputs) {
+        if (input == nullptr || (input->decoration_flags & SPV_REFLECT_DECORATION_BUILT_IN) != 0) {
+            continue;
+        }
+        ASSERT_LT(input->location, 32u);
+        locationMask |= 1u << input->location;
+        ++userInputCount;
+    }
+    EXPECT_EQ(userInputCount, 1u);
+    EXPECT_EQ(locationMask, 0x1u);
 }
 
 TEST_F(ProgramTest, CompileAndLinkWithExplicitFragmentOut) {

@@ -65,8 +65,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         return true;
     }
 
-    Float VkSamplerManager::ResolveEffectiveMaxAnisotropy(const MG_State::GLState::SamplerObject& sampler) const {
+    Float VkSamplerManager::ResolveEffectiveMaxAnisotropy(const MG_State::GLState::SamplerObject& sampler,
+                                                           Bool forceNearestFiltering) const {
         if (!m_samplerAnisotropySupported) return 1.0f;
+        if (forceNearestFiltering) return 1.0f;
         // VUID-VkSamplerCreateInfo-anisotropyEnable-01071/01072: anisotropy requires both filters to
         // be LINEAR and the value to sit within [1, limits.maxSamplerAnisotropy].
         if (sampler.GetMinFilter() != SamplerFilterMode::Linear ||
@@ -90,9 +92,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     }
 
     Uint64 VkSamplerManager::BuildSamplerKey(const MG_State::GLState::SamplerObject& sampler,
-                                             const MG_State::GLState::ITextureObject& texture) const {
+                                             const MG_State::GLState::ITextureObject& texture,
+                                             Bool forceNearestFiltering) const {
         MOBILEGL_ASSERT(m_config != nullptr, "VkSamplerManager::BuildSamplerKey: m_config is null");
         XXHASH_VERIFY(XXH64_reset(m_hashState, m_config->CacheVersion));
+
+        XXHASH_VERIFY(XXH64_update(m_hashState, &forceNearestFiltering, sizeof(forceNearestFiltering)));
 
         const auto minFilter = sampler.GetMinFilter();
         XXHASH_VERIFY(XXH64_update(m_hashState, &minFilter, sizeof(minFilter)));
@@ -115,7 +120,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // The RESOLVED value, not the GL request: samplers that only differ in an anisotropy Vulkan
         // will not apply (NEAREST filtering, or requests past the device limit) must still share one
         // VkSampler, while two samplers that really do differ must not collide onto the first one's.
-        const auto maxAnisotropy = ResolveEffectiveMaxAnisotropy(sampler);
+        const auto maxAnisotropy = ResolveEffectiveMaxAnisotropy(sampler, forceNearestFiltering);
         XXHASH_VERIFY(XXH64_update(m_hashState, &maxAnisotropy, sizeof(maxAnisotropy)));
         const auto compareMode = sampler.GetCompareMode();
         XXHASH_VERIFY(XXH64_update(m_hashState, &compareMode, sizeof(compareMode)));
@@ -127,8 +132,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     }
 
     VkSampler VkSamplerManager::GetOrCreateSampler(const MG_State::GLState::SamplerObject& sampler,
-                                                   const MG_State::GLState::ITextureObject& texture) {
-        const Uint64 key = BuildSamplerKey(sampler, texture);
+                                                   const MG_State::GLState::ITextureObject& texture,
+                                                   Bool forceNearestFiltering) {
+        const Uint64 key = BuildSamplerKey(sampler, texture, forceNearestFiltering);
         auto it = m_samplers.find(key);
         if (it != m_samplers.end()) {
             return it->second.handle;
@@ -136,16 +142,17 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
         VkSamplerCreateInfo samplerInfo{};
         samplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
-        samplerInfo.magFilter = ToVkFilter(sampler.GetMagFilter());
-        samplerInfo.minFilter = ToVkFilter(sampler.GetMinFilter());
-        samplerInfo.mipmapMode = ToVkMipmapMode(sampler.GetMipmapMode());
+        samplerInfo.magFilter = forceNearestFiltering ? VK_FILTER_NEAREST : ToVkFilter(sampler.GetMagFilter());
+        samplerInfo.minFilter = forceNearestFiltering ? VK_FILTER_NEAREST : ToVkFilter(sampler.GetMinFilter());
+        samplerInfo.mipmapMode = forceNearestFiltering ? VK_SAMPLER_MIPMAP_MODE_NEAREST
+                                                       : ToVkMipmapMode(sampler.GetMipmapMode());
         samplerInfo.addressModeU = ToVkAddressMode(sampler.GetWrapS());
         samplerInfo.addressModeV = ToVkAddressMode(sampler.GetWrapT());
         samplerInfo.addressModeW = ToVkAddressMode(sampler.GetWrapR());
         samplerInfo.mipLodBias = sampler.GetLodBias();
         // Must use the same resolver as BuildSamplerKey - a divergence would either collide two
         // different samplers or silently create duplicates.
-        const Float maxAnisotropy = ResolveEffectiveMaxAnisotropy(sampler);
+        const Float maxAnisotropy = ResolveEffectiveMaxAnisotropy(sampler, forceNearestFiltering);
         samplerInfo.anisotropyEnable = maxAnisotropy > 1.0f ? VK_TRUE : VK_FALSE;
         samplerInfo.maxAnisotropy = maxAnisotropy;
         samplerInfo.compareEnable = sampler.GetCompareMode() == SamplerCompareMode::CompareToTexture ? VK_TRUE : VK_FALSE;

@@ -92,6 +92,120 @@ TEST_F(ProgramUtilTest, RenameSamplerFunctionParameterInSpirvPass) {
     EXPECT_EQ(exactSamplerNameCount, 1u);
 }
 
+TEST_F(ProgramUtilTest, UnformattedFloatStorageImagesKeepIntegerAtomicImagesTyped) {
+    using namespace MG_Util::ShaderTranspiler;
+
+    const String source = R"(#version 430 core
+layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+layout(rgba16, binding = 0) uniform image2D floatImage;
+layout(r32ui, binding = 1) uniform uimage2D atomicImage;
+
+void main() {
+    ivec2 coordinate = ivec2(gl_GlobalInvocationID.xy);
+    imageStore(floatImage, coordinate, imageLoad(floatImage, coordinate));
+    imageAtomicAdd(atomicImage, coordinate, 1u);
+}
+)";
+
+    ShaderAttrib shaderAttrib{.shaderType = GL_COMPUTE_SHADER, .sourceStr = source};
+    auto shaderResult = ShaderCompiler::CompileShader(shaderAttrib);
+    ASSERT_TRUE(shaderResult) << shaderResult.error().log;
+
+    ProgramAttrib programAttrib{.shaders = {shaderResult.value()}};
+    auto programResult = ShaderCompiler::LinkProgram(programAttrib);
+    ASSERT_TRUE(programResult) << programResult.error().log;
+
+    ProgramBinaryAttrib binaryAttrib{.shaderTypes = {GL_COMPUTE_SHADER}, .program = *programResult.value()};
+    auto binaryResult = ShaderCompiler::GetSpirvBinaryFromProgram(binaryAttrib);
+    ASSERT_TRUE(binaryResult) << binaryResult.error().log;
+    ASSERT_EQ(binaryResult->size(), 1u);
+    const auto& inputBinary = binaryResult->front();
+
+    spvtools::SpirvTools tools(SPV_ENV_VULKAN_1_1);
+    String inputText;
+    ASSERT_TRUE(tools.Disassemble(inputBinary, &inputText));
+    EXPECT_NE(inputText.find("2D 0 0 0 2 Rgba16"), String::npos) << inputText;
+    EXPECT_NE(inputText.find("2D 0 0 0 2 R32ui"), String::npos) << inputText;
+    EXPECT_EQ(inputText.find("StorageImageReadWithoutFormat"), String::npos) << inputText;
+    EXPECT_EQ(inputText.find("StorageImageWriteWithoutFormat"), String::npos) << inputText;
+
+    Vector<Uint32> outputBinary;
+    ASSERT_TRUE(ShaderCompiler::UseUnformattedFloatStorageImagesForVulkan(inputBinary, outputBinary));
+
+    String outputText;
+    ASSERT_TRUE(tools.Disassemble(outputBinary, &outputText));
+    EXPECT_EQ(outputText.find("2D 0 0 0 2 Rgba16"), String::npos) << outputText;
+    EXPECT_NE(outputText.find("2D 0 0 0 2 Unknown"), String::npos) << outputText;
+    EXPECT_NE(outputText.find("2D 0 0 0 2 R32ui"), String::npos) << outputText;
+
+    const auto countOccurrences = [](const String& text, const String& needle) {
+        SizeT count = 0;
+        for (SizeT offset = 0; (offset = text.find(needle, offset)) != String::npos;
+             offset += needle.size()) {
+            ++count;
+        }
+        return count;
+    };
+    EXPECT_EQ(countOccurrences(outputText, "OpCapability StorageImageReadWithoutFormat"), 1u)
+        << outputText;
+    EXPECT_EQ(countOccurrences(outputText, "OpCapability StorageImageWriteWithoutFormat"), 1u)
+        << outputText;
+    EXPECT_TRUE(tools.Validate(outputBinary));
+
+    Vector<Uint32> secondOutputBinary;
+    ASSERT_TRUE(ShaderCompiler::UseUnformattedFloatStorageImagesForVulkan(outputBinary, secondOutputBinary));
+    EXPECT_EQ(secondOutputBinary, outputBinary);
+}
+
+TEST_F(ProgramUtilTest, UnformattedFloatStorageImagesKeepFloatAtomicImageTypesTyped) {
+    using namespace MG_Util::ShaderTranspiler;
+
+    const String spirvText = R"(
+               OpCapability Shader
+               OpCapability StorageImageExtendedFormats
+               OpMemoryModel Logical GLSL450
+               OpEntryPoint GLCompute %main "main"
+               OpExecutionMode %main LocalSize 1 1 1
+               OpDecorate %target DescriptorSet 0
+               OpDecorate %target Binding 0
+       %void = OpTypeVoid
+      %float = OpTypeFloat 32
+        %int = OpTypeInt 32 1
+      %v2int = OpTypeVector %int 2
+      %image = OpTypeImage %float 2D 0 0 0 2 R32f
+%imageUniformPtr = OpTypePointer UniformConstant %image
+%imageTexelPtr = OpTypePointer Image %float
+ %mainType = OpTypeFunction %void
+       %zero = OpConstant %int 0
+ %coordinate = OpConstantComposite %v2int %zero %zero
+     %target = OpVariable %imageUniformPtr UniformConstant
+       %main = OpFunction %void None %mainType
+      %entry = OpLabel
+   %texelPtr = OpImageTexelPointer %imageTexelPtr %target %coordinate %zero
+               OpReturn
+               OpFunctionEnd
+)";
+
+    spvtools::SpirvTools tools(SPV_ENV_VULKAN_1_1);
+    Vector<Uint32> inputBinary;
+    ASSERT_TRUE(tools.Assemble(spirvText, &inputBinary));
+
+    Vector<Uint32> outputBinary;
+    ASSERT_TRUE(ShaderCompiler::UseUnformattedFloatStorageImagesForVulkan(inputBinary, outputBinary));
+
+    String outputText;
+    ASSERT_TRUE(tools.Disassemble(outputBinary, &outputText));
+    EXPECT_NE(outputText.find("2D 0 0 0 2 R32f"), String::npos) << outputText;
+    EXPECT_EQ(outputText.find("StorageImageReadWithoutFormat"), String::npos) << outputText;
+    EXPECT_EQ(outputText.find("StorageImageWriteWithoutFormat"), String::npos) << outputText;
+    String validationDiagnostics;
+    tools.SetMessageConsumer([&validationDiagnostics](spv_message_level_t, const char*,
+                                                       const spv_position_t&, const char* message) {
+        validationDiagnostics += message;
+    });
+    EXPECT_TRUE(tools.Validate(outputBinary)) << validationDiagnostics;
+}
+
 TEST_F(ProgramUtilTest, PreprocessLegacyVertexShaderModernizesGlmarkStyleSource) {
     using namespace MG_Util::ShaderTranspiler;
 

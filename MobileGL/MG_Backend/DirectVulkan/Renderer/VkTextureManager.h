@@ -19,6 +19,8 @@ class ITextureObject;
 }
 
 namespace MobileGL::MG_Backend::DirectVulkan {
+enum class SamplerNumericDomain : Uint8;
+
 class VkTextureManager {
 public:
     // Monotonic epoch bumped whenever a texture VkImage is (re)created. The render-pass
@@ -78,6 +80,61 @@ public:
             }
         };
 
+        struct StorageImageViewKey {
+            Uint32 mipLevel = 0;
+            Uint32 baseArrayLayer = 0;
+            Uint32 layerCount = 1;
+            VkImageViewType viewType = VK_IMAGE_VIEW_TYPE_2D;
+            VkFormat format = VK_FORMAT_UNDEFINED;
+
+            Bool operator==(const StorageImageViewKey& other) const {
+                return mipLevel == other.mipLevel &&
+                       baseArrayLayer == other.baseArrayLayer &&
+                       layerCount == other.layerCount &&
+                       viewType == other.viewType &&
+                       format == other.format;
+            }
+        };
+
+        struct SampledImageViewKey {
+            Uint32 baseMipLevel = 0;
+            Uint32 levelCount = 1;
+            VkImageViewType viewType = VK_IMAGE_VIEW_TYPE_2D;
+            VkFormat format = VK_FORMAT_UNDEFINED;
+
+            Bool operator==(const SampledImageViewKey& other) const {
+                return baseMipLevel == other.baseMipLevel &&
+                       levelCount == other.levelCount &&
+                       viewType == other.viewType &&
+                       format == other.format;
+            }
+        };
+
+        struct SampledImageViewKeyHash {
+            SizeT operator()(const SampledImageViewKey& key) const {
+                SizeT hash = std::hash<Uint32>{}(key.baseMipLevel);
+                hash ^= std::hash<Uint32>{}(key.levelCount) + 0x9e3779b9u + (hash << 6) + (hash >> 2);
+                hash ^= std::hash<Uint32>{}(static_cast<Uint32>(key.viewType)) +
+                        0x9e3779b9u + (hash << 6) + (hash >> 2);
+                hash ^= std::hash<Uint32>{}(static_cast<Uint32>(key.format)) +
+                        0x9e3779b9u + (hash << 6) + (hash >> 2);
+                return hash;
+            }
+        };
+
+        struct StorageImageViewKeyHash {
+            SizeT operator()(const StorageImageViewKey& key) const {
+                SizeT hash = std::hash<Uint32>{}(key.mipLevel);
+                hash ^= std::hash<Uint32>{}(key.baseArrayLayer) + 0x9e3779b9u + (hash << 6) + (hash >> 2);
+                hash ^= std::hash<Uint32>{}(key.layerCount) + 0x9e3779b9u + (hash << 6) + (hash >> 2);
+                hash ^= std::hash<Uint32>{}(static_cast<Uint32>(key.viewType)) +
+                        0x9e3779b9u + (hash << 6) + (hash >> 2);
+                hash ^= std::hash<Uint32>{}(static_cast<Uint32>(key.format)) +
+                        0x9e3779b9u + (hash << 6) + (hash >> 2);
+                return hash;
+            }
+        };
+
         VkImage image = VK_NULL_HANDLE;
         VmaAllocation allocation = nullptr;
         VkImageView fullView = VK_NULL_HANDLE;
@@ -85,6 +142,8 @@ public:
         Vector<VkImageView> perMipViews;
         Vector<VkImageView> perMipSampledViews;
         UnorderedMap<AttachmentViewKey, VkImageView, AttachmentViewKeyHash> attachmentViews;
+        UnorderedMap<SampledImageViewKey, VkImageView, SampledImageViewKeyHash> alternateSampledViews;
+        UnorderedMap<StorageImageViewKey, VkImageView, StorageImageViewKeyHash> storageImageViews;
         VkImageLayout layout = VK_IMAGE_LAYOUT_UNDEFINED;
         VkExtent2D extent = {0, 0};
         Uint32 depth = 1;
@@ -96,6 +155,7 @@ public:
         VkImageAspectFlags aspect = VK_IMAGE_ASPECT_NONE;
         VkImageViewType viewType = VK_IMAGE_VIEW_TYPE_2D;
         VkSampleCountFlagBits sampleCount = VK_SAMPLE_COUNT_1_BIT;
+        VkImageCreateFlags imageCreateFlags = 0;
         Uint16 syncedTextureParamsVersion = 0;
         // Snapshot of ITextureObject::GetContentVersion() at the last successful sync;
         // lets SyncTexture skip the whole re-check/re-upload when content is unchanged.
@@ -115,6 +175,8 @@ public:
             std::swap(this->perMipViews, that.perMipViews);
             std::swap(this->perMipSampledViews, that.perMipSampledViews);
             std::swap(this->attachmentViews, that.attachmentViews);
+            std::swap(this->alternateSampledViews, that.alternateSampledViews);
+            std::swap(this->storageImageViews, that.storageImageViews);
             std::swap(this->layout, that.layout);
             std::swap(this->extent, that.extent);
             std::swap(this->depth, that.depth);
@@ -126,6 +188,7 @@ public:
             std::swap(this->aspect, that.aspect);
             std::swap(this->viewType, that.viewType);
             std::swap(this->sampleCount, that.sampleCount);
+            std::swap(this->imageCreateFlags, that.imageCreateFlags);
             std::swap(this->syncedTextureParamsVersion, that.syncedTextureParamsVersion);
             std::swap(this->syncedContentVersion, that.syncedContentVersion);
             std::swap(this->syncedMipLevelCount, that.syncedMipLevelCount);
@@ -153,6 +216,16 @@ public:
                     vkDestroyImageView(s_device, attachmentView, nullptr);
                 }
             }
+            for (const auto& [_, sampledView] : alternateSampledViews) {
+                if (sampledView != VK_NULL_HANDLE) {
+                    vkDestroyImageView(s_device, sampledView, nullptr);
+                }
+            }
+            for (const auto& [_, storageImageView] : storageImageViews) {
+                if (storageImageView != VK_NULL_HANDLE) {
+                    vkDestroyImageView(s_device, storageImageView, nullptr);
+                }
+            }
             if (image != VK_NULL_HANDLE && allocation != nullptr) {
                 vmaDestroyImage(s_allocator, image, allocation);
             }
@@ -161,6 +234,8 @@ public:
             perMipViews.clear();
             perMipSampledViews.clear();
             attachmentViews.clear();
+            alternateSampledViews.clear();
+            storageImageViews.clear();
             image = VK_NULL_HANDLE;
             allocation = nullptr;
             layout = VK_IMAGE_LAYOUT_UNDEFINED;
@@ -174,6 +249,7 @@ public:
             aspect = VK_IMAGE_ASPECT_NONE;
             viewType = VK_IMAGE_VIEW_TYPE_2D;
             sampleCount = VK_SAMPLE_COUNT_1_BIT;
+            imageCreateFlags = 0;
             syncedTextureParamsVersion = 0;
             syncedContentVersion = 0;
             syncedMipLevelCount = 0;
@@ -198,6 +274,9 @@ public:
                                                     Uint32 baseArrayLayer, Uint32 layerCount,
                                                     VkImageViewType viewType);
     VkImageView GetOrCreateSampledViewAtMipLevel(MG_State::GLState::ITextureObject& texture, Uint32 mipLevel);
+    VkImageView GetOrCreateSampledImageView(MG_State::GLState::ITextureObject& texture, VkFormat format);
+    VkImageView GetOrCreateStorageImageView(MG_State::GLState::ITextureObject& texture, Uint32 mipLevel,
+                                            VkFormat format, Bool layered, Int32 layer);
     void UpdateTrackedImageLayout(MG_State::GLState::ITextureObject* texture, VkImageLayout newLayout);
     void UpdateTrackedImageLayoutAfterAttachmentWrite(VkCommandBuffer commandBuffer,
                                                       MG_State::GLState::ITextureObject* texture,
@@ -207,6 +286,9 @@ public:
     Bool TransitionTextureForStorageImage(VkCommandBuffer commandBuffer, MG_State::GLState::ITextureObject& texture);
 
     static VkImageAspectFlags ResolveSampledImageViewAspectMask(VkImageAspectFlags imageAspect);
+    static VkFormat ResolveSampledImageViewFormat(VkFormat imageFormat, SamplerNumericDomain numericDomain);
+    static Bool AreSampledImageViewFormatsCompatible(VkFormat imageFormat, VkFormat viewFormat);
+    static Bool AreStorageImageViewFormatsCompatible(VkFormat imageFormat, VkFormat viewFormat);
 
     static Bool TransitionImageLayout(VkCommandBuffer commandBuffer, VkImage image, VkImageLayout& trackedLayout,
                                VkImageLayout newLayout, VkPipelineStageFlags srcStageMask,
@@ -255,7 +337,8 @@ private:
                                 VkImageViewType viewType, Uint32 baseMipLevel, Uint32 levelCount,
                                 Uint32 baseArrayLayer,
                                 Uint32 layerCount,
-                                const VkComponentMapping* components = nullptr) const;
+                                const VkComponentMapping* components = nullptr,
+                                VkImageUsageFlags viewUsage = 0) const;
     Bool UploadDirtyMipLevels(MG_State::GLState::TextureObjectMipmap &mipmapTexture,
                       TextureUploadTarget uploadTarget,
                       TextureResource &outResource);

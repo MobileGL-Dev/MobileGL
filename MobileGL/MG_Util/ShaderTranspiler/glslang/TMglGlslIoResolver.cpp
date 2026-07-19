@@ -63,7 +63,17 @@ namespace MobileGL {
     void TMglGlslIoResolver::reserverStorageSlot(glslang::TVarEntryInfo& ent, TInfoSink& infoSink) {
         const glslang::TType& type = ent.symbol->getType();
         const glslang::TString& name = ent.symbol->getAccessName();
-        if (currentStage == EShLangVertex && type.getQualifier().isPipeInput()) {
+        // OpenGL assigns generic vertex attribute locations only to active inputs. glslang gathers
+        // both live and dead declarations before mapping, so allowing the default collector to
+        // reserve a dead vertex input would make it consume a location that an active input should
+        // reuse. Other stage interfaces still need the default cross-stage matching behavior.
+        if (!ent.live && currentStage == EShLangVertex && type.getQualifier().isPipeInput()) {
+            return;
+        }
+        // glBindAttribLocation only affects active inputs in the linked program. Applying an API
+        // binding to an inactive declaration would reserve its slot in glslang's collector and
+        // incorrectly push an active, automatically mapped input to a different location.
+        if (ent.live && currentStage == EShLangVertex && type.getQualifier().isPipeInput()) {
             auto it = m_explicitVertexIns.find(name.c_str());
             if (it != m_explicitVertexIns.end()) {
                 auto& writableType = ent.symbol->getWritableType();
@@ -92,6 +102,13 @@ namespace MobileGL {
             recordedSize = std::max(recordedSize, size);
         }
         TDefaultGlslIoResolver::reserverStorageSlot(ent, infoSink);
+    }
+
+    int TMglGlslIoResolver::resolveInOutLocation(EShLanguage stage, glslang::TVarEntryInfo& ent) {
+        if (!ent.live && stage == EShLangVertex && ent.symbol->getType().getQualifier().isPipeInput()) {
+            return ent.newLocation = -1;
+        }
+        return TDefaultGlslIoResolver::resolveInOutLocation(stage, ent);
     }
 
     void TMglGlslIoResolver::reserverResourceSlot(glslang::TVarEntryInfo& ent, TInfoSink& infoSink) {

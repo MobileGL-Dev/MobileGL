@@ -504,7 +504,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                           E_GL_ARB_multi_draw_indirect, E_GL_ARB_indirect_parameters,
                                           E_GL_EXT_framebuffer_object, E_GL_ARB_depth_texture, E_GL_ARB_buffer_storage,
                                           E_GL_ARB_texture_storage, E_GL_ARB_texture_storage_multisample,
-                                          E_GL_ARB_direct_state_access,
+                                          E_GL_ARB_clear_texture, E_GL_ARB_direct_state_access,
                                           E_GL_ARB_shader_draw_parameters, E_GL_ARB_gpu_shader_int64, E_GL_KHR_debug,
                                           E_GL_ARB_gpu_shader5, E_GL_ARB_multi_bind, E_GL_ARB_shading_language_420pack,
                                           E_GL_ARB_vertex_attrib_binding, E_GL_ARB_shader_image_size};
@@ -746,9 +746,24 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         m_dynamicParameters.MaxTextureBufferSize = m_vulkanCaps.MaxTextureBufferSize;
         m_dynamicParameters.MaxUniformBufferBindings = m_vulkanCaps.MaxUniformBufferBindings;
         m_dynamicParameters.MaxUniformBlockSize = m_vulkanCaps.MaxUniformBlockSize;
-        m_dynamicParameters.MaxImageUnits = std::min(m_vulkanCaps.MaxImageUnits, maxSupportedTextureUnits);
-        m_dynamicParameters.MaxCombinedImageUniforms = m_vulkanCaps.MaxCombinedImageUniforms;
-        m_dynamicParameters.MaxComputeImageUniforms = m_vulkanCaps.MaxComputeImageUniforms;
+        m_dynamicParameters.MaxImageUnits =
+            std::max(std::min(m_vulkanCaps.MaxImageUnits, maxSupportedTextureUnits), 0);
+        m_dynamicParameters.MaxCombinedImageUniforms = std::max(m_vulkanCaps.MaxCombinedImageUniforms, 0);
+        const Int maxPerStageImageUniforms =
+            std::min(m_dynamicParameters.MaxImageUnits, m_dynamicParameters.MaxCombinedImageUniforms);
+        // Vulkan uses one descriptor limit for every stage, but non-compute stores/atomics are
+        // optional device features. VulkanRenderer enables each feature whenever the physical
+        // device reports it, so these are the exact limits the logical device can compile and run.
+        m_dynamicParameters.MaxVertexImageUniforms =
+            m_vulkanCaps.SupportsVertexPipelineStoresAndAtomics ? maxPerStageImageUniforms : 0;
+        m_dynamicParameters.MaxGeometryImageUniforms =
+            m_vulkanCaps.SupportsVertexPipelineStoresAndAtomics && m_vulkanCaps.SupportsGeometryShader
+                ? maxPerStageImageUniforms
+                : 0;
+        m_dynamicParameters.MaxFragmentImageUniforms =
+            m_vulkanCaps.SupportsFragmentStoresAndAtomics ? maxPerStageImageUniforms : 0;
+        m_dynamicParameters.MaxComputeImageUniforms =
+            std::min(std::max(m_vulkanCaps.MaxComputeImageUniforms, 0), maxPerStageImageUniforms);
         const Int maxSupportedDrawBuffers =
             static_cast<Int>(MG_State::GLState::FramebufferObject::MAX_DRAW_BUFFERS);
         m_dynamicParameters.MaxDrawBuffers = std::min(m_vulkanCaps.MaxDrawBuffers, maxSupportedDrawBuffers);
