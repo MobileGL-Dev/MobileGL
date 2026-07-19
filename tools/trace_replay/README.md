@@ -93,6 +93,15 @@ The bundled fixtures cover:
 - minecraft-1.21.4-fabric-iris-iterationt-nodsa-in-world: captured from Minecraft 1.21.4 Fabric with Sodium, Iris, and
   iterationT after entering a singleplayer world, with Iris' DSA path disabled.
   ![Minecraft 1.21.4 Fabric Iris iterationT no-DSA in-world golden](fixtures/minecraft-1.21.4-fabric-iris-iterationt-nodsa-in-world.0000115019.png)
+- minecraft-1.21.4-fabric-iris-iterationrp-novidia-in-world: captured from Minecraft 1.21.4 Fabric with Sodium, Iris, and
+  iterationRP after entering a singleplayer world, framing the iterationRP name overlay over a lake with far-shore
+  tree reflections. iterationRP's temporal auto-exposure makes a single-frame trim overexpose and drop the overlay,
+  so the fixture is a prefix trace (all calls up to the target frame) that replays the temporal state. The pack also
+  gates an NVIDIA-only shadow path (`subgroupPartitionNV`, `GL_NV_shader_subgroup_partitioned`) on the GL vendor
+  string, so the capture reports a masked vendor and the trace carries the portable `subgroupShuffleXor` path that
+  non-NVIDIA GPUs take.
+  The trace archive and golden are not committed yet (the repository's Git LFS quota rejects new objects with
+  `GH009`); the case stays registered and its fixture files are hydrated from the trace fixture mirror.
 - minecraft-1.21.4-fabric-iris-photon-v1.1-in-world: captured from Minecraft 1.21.4 Fabric with Sodium, Iris, and
   Photon v1.1 after entering a singleplayer world.
   ![Minecraft 1.21.4 Fabric Iris Photon v1.1 in-world golden](fixtures/minecraft-1.21.4-fabric-iris-photon-v1.1-in-world.0000159866.png)

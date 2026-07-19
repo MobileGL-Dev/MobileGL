@@ -80,10 +80,19 @@ Minecraft specifics that keep the capture deterministic and small:
   `doMobSpawning`, `randomTickSpeed 0`, a fixed `DayTime`, and the player
   `Rotation` that frames the intended subject. The camera snaps to the saved
   rotation on world join, so composition is edited in the save, not in-game.
-- `options.txt`: `pauseOnLostFocus:false`, a low `maxFps` (10 works), and a
-  small `renderDistance` (3). Frame rate and render distance are the two main
-  levers on trace size; a ~35 s in-world session at 10 fps lands well under
-  the archive budget after repack.
+- `options.txt`: `pauseOnLostFocus:false`, a low `maxFps` (10 works), a small
+  `renderDistance` (3), and the capture resolution pinned to `WIDTH` x `HEIGHT`
+  (854x480) via `overrideWidth`/`overrideHeight` (or `--width`/`--height`).
+  These are the main levers on fixture size: a low frame rate keeps the full
+  trace short, a small render distance keeps per-frame geometry down, and the
+  854x480 resolution keeps every render target the frame references small (a
+  trimmed frame's framebuffer/attachment textures scale with resolution
+  squared). A ~35 s in-world session at 10 fps and 854x480 lands well under the
+  archive budget after repack.
+- `maxFps` has a practical floor: Minecraft ignores values below ~10 and falls
+  back to unlimited/vsync (a `maxFps:1` capture rendered ~60 fps and ballooned
+  the trace). 10 is as low as this lever goes, so do not count on a lower frame
+  rate to shrink the frame count further.
 - Enter the world non-interactively with `--quickPlaySingleplayer <world>` so
   every capture takes the same path from boot to gameplay.
 - Keep the game window UNFOCUSED for the whole capture (focus the desktop
@@ -115,6 +124,61 @@ For Java:
 
 An `@argfile` with the full JVM+game command line keeps the invocation
 reproducible across recaptures.
+
+NEVER put a real credential on the traced command line. apitrace records the
+traced process's argv into the trace as a `process.commandLine` property, so
+anything passed there - `--accessToken`, session tokens, API keys - is embedded
+in the trace and ships inside the committed fixture. Minecraft never validates
+`--accessToken` for singleplayer, so pass a placeholder (`--accessToken 0`);
+`--username`/`--uuid` are public and may stay real. Before packaging, grep the
+UNCOMPRESSED trace for the secret to confirm it is absent:
+
+```sh
+"$APITRACE" repack "$WORK/$CASE/trace.trace" /tmp/plain.trace   # decompress
+grep -ac "<secret-prefix>" /tmp/plain.trace                     # must be 0
+```
+
+If a secret has already been captured, it can be scrubbed in place instead of
+recapturing: apitrace's snappy container is `[length][raw snappy]` chunks with
+no checksum, and a high-entropy secret is stored as literal bytes, so replacing
+those bytes with an EQUAL-LENGTH filler keeps the container valid and leaves the
+GL call stream byte-identical. Blank every maximal run of the secret (it splits
+across chunks), then verify: frame count unchanged, the decompressed trace no
+longer contains the secret, and the replayed target frame still matches the
+golden. Treat any already-pushed trace as leaked regardless - rotate the
+credential, since a force-push does not purge the LFS object from the remote.
+
+Watch for vendor-gated shader paths. Shader packs branch on the GL vendor that
+Iris injects (`MC_GL_VENDOR_NVIDIA` / `_AMD` / ...) and compile a
+vendor-exclusive path, so capturing on an NVIDIA card can bake NVIDIA-only GLSL
+into the fixture (iterationRP selects `subgroupPartitionNV` /
+`GL_NV_shader_subgroup_partitioned` instead of the portable
+`subgroupShuffleXor`). Iris resolves the `#ifdef` before `glShaderSource`, so
+only the taken branch is in the trace and the fixture cannot replay on the
+mobile GPUs MobileGL targets. Rather than hunting for a second GPU (the Windows
+per-app GPU preference does NOT change which OpenGL ICD is loaded), mask the
+vendor at capture time with apitrace's own config - point `GLTRACE_CONF` at a
+file containing:
+
+```
+GL_VENDOR = "NoVIDIA (MobileGL spoof)"
+GL_RENDERER = "NoVIDIA (MobileGL spoof)"
+```
+
+The wrapper then returns that from `glGetString`, so the pack compiles the
+portable path while still running on the fast driver. Pick a string that does
+NOT contain the real vendor name as a substring (Iris matches by substring, so
+"Not NVIDIA ..." would still match) and that is self-describing, so nobody later
+mistakes the trace for a capture on different hardware. Afterwards, grep the
+decoded trace to confirm the vendor-exclusive symbols are gone:
+
+```sh
+"$APITRACE" dump "$WORK/$CASE/full.trace" | grep -c subgroupPartitionNV   # must be 0
+```
+
+Software rasterisers are not a substitute here: llvmpipe exposes no
+`GL_KHR_shader_subgroup` at all, and packs that use subgroup ops unguarded
+cannot run on it in any vendor configuration.
 
 Keep `full.trace` until both backends are validated.
 
@@ -177,11 +241,36 @@ name"-style retrace warnings. If content is missing from the trimmed trace
 but present in the full trace, the fix belongs in `3rdparty/apitrace`'s
 frametrim, not in the fixture.
 
+Temporal shaders (auto-exposure / eye adaptation, TAA, temporal reflections -
+e.g. the iterationRP shader pack) break a single-frame `gltrim -f`: the target
+frame reads its predecessors' feedback buffers, which the isolated frame no
+longer contains, so a mid-sequence frame replays overexposed to white (and any
+timed name/version overlay the pack draws in its first seconds silently drops).
+The symptom is a trimmed frame that looks blown-out or washed while the same
+frame of `full.trace` renders correctly, and it gets worse the later the frame.
+When a single-frame trim of such a pack cannot be made to render correctly, keep
+the temporal history instead of the dependency slice: select an early in-world
+target frame and trim a PREFIX with `apitrace trim --calls=0-<target-swap-call>`
+(it preserves call numbers, so `target_call` is just that swap call). The prefix
+replays every frame up to the target, so its temporal buffers are correct.
+Prefer the earliest frame that already shows the intended subject - fewer lead-in
+frames means a smaller archive and a faster CI replay. This deviates from the
+single-frame rule deliberately; note it in the README entry.
+
 ## Generate golden
 
 Generate frame snapshots from the trimmed trace, then choose the snapshot that
 matches the selected frame. The target call used by replay registration must
 come from the trimmed trace, not from a call-filtered full-trace selection.
+
+Generate the golden with the same GL stack the scene was captured on. A headless
+software renderer (llvmpipe) is fine for vanilla and light packs, but heavy
+ray-traced shader packs (compute-driven atmosphere LUTs, screen-space tracing -
+e.g. iterationRP) render as solid black or blown-out white under llvmpipe. Drive
+the golden from a real GPU instead: on Windows a stock `glretrace.exe` (an
+upstream apitrace release works for replay even on an in-tree-fork trace) replays
+the trace on the discrete GPU and snapshots the target call. Read the resulting
+PNG back and confirm the subject actually rendered before trusting it as golden.
 
 ```sh
 mkdir -p "$WORK/$CASE/golden"
@@ -259,6 +348,15 @@ Check the final archive size. The committed fixture archive should be less than
 20 MiB, and should preferably be less than 10 MiB. If it is larger, recapture
 with a shorter run or a lower frame rate / render distance instead of adding
 call-based filtering.
+
+Some packs have an irreducible size floor: a large static lookup table baked
+into the pack (iterationRP ships a ~17 MiB half-float atmosphere LUT that the
+target frame samples) lands in the trace once and does not compress, so every
+variant - single frame, prefix, or full - sits near the same size regardless of
+frame count. When the floor alone exceeds the budget, neither a lower frame rate
+nor fewer frames helps; confirm the fixture is worth the exception and record the
+measured size in the case's README entry rather than chasing an unreachable
+target.
 
 ```sh
 du -h "$REPO/tools/trace_replay/fixtures/$CASE.tgz"
