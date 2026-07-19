@@ -947,6 +947,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
         return m_dynamicParameters;
     }
 
+    void BackendObject_DirectGLES::ApplyGLESCapabilitiesForTesting(
+        const MG_External::GLESCapabilities& capabilities) {
+        m_GLESCapabilities = capabilities;
+        UpdateDynamicBackendParameters();
+    }
+
     void BackendObject_DirectGLES::UpdateDynamicBackendParameters() {
         m_dynamicParameters.UniformBufferOffsetAlignment = m_GLESCapabilities.UniformBufferOffsetAlignment;
         m_dynamicParameters.MaxTextureMaxAnisotropy = m_GLESCapabilities.MaxTextureMaxAnisotropy;
@@ -1003,9 +1009,21 @@ namespace MobileGL::MG_Backend::DirectGLES {
         m_dynamicParameters.MaxUniformBlockSize = m_GLESCapabilities.MaxUniformBlockSize;
         const Int maxSupportedTextureUnits =
             static_cast<Int>(MG_State::GLState::TextureState::MAX_TEXTURE_IMAGE_UNITS);
-        m_dynamicParameters.MaxImageUnits = std::min(m_GLESCapabilities.MaxImageUnits, maxSupportedTextureUnits);
-        m_dynamicParameters.MaxCombinedImageUniforms = m_GLESCapabilities.MaxCombinedImageUniforms;
-        m_dynamicParameters.MaxComputeImageUniforms = m_GLESCapabilities.MaxComputeImageUniforms;
+        m_dynamicParameters.MaxImageUnits =
+            std::max(std::min(m_GLESCapabilities.MaxImageUnits, maxSupportedTextureUnits), 0);
+        m_dynamicParameters.MaxCombinedImageUniforms = std::max(m_GLESCapabilities.MaxCombinedImageUniforms, 0);
+        const auto clampStageImageUniforms = [this](Int stageLimit) {
+            return std::min({std::max(stageLimit, 0), m_dynamicParameters.MaxImageUnits,
+                             m_dynamicParameters.MaxCombinedImageUniforms});
+        };
+        m_dynamicParameters.MaxVertexImageUniforms =
+            clampStageImageUniforms(m_GLESCapabilities.MaxVertexImageUniforms);
+        m_dynamicParameters.MaxGeometryImageUniforms =
+            clampStageImageUniforms(m_GLESCapabilities.MaxGeometryImageUniforms);
+        m_dynamicParameters.MaxFragmentImageUniforms =
+            clampStageImageUniforms(m_GLESCapabilities.MaxFragmentImageUniforms);
+        m_dynamicParameters.MaxComputeImageUniforms =
+            clampStageImageUniforms(m_GLESCapabilities.MaxComputeImageUniforms);
         m_dynamicParameters.MaxDrawBuffers = m_GLESCapabilities.MaxDrawBuffers;
         m_dynamicParameters.MaxColorAttachments = m_GLESCapabilities.MaxColorAttachments;
         m_dynamicParameters.MaxClipDistances = m_GLESCapabilities.MaxClipDistances;

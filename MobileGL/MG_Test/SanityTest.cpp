@@ -24,6 +24,8 @@
 #include <MG_State/GLState/Core.h>
 #include <MG_State/GLState/FramebufferState/FramebufferObject.h>
 #include <MG_State/GLState/TextureState/TextureState.h>
+#include <MG_Backend/DirectVulkan/Renderer/ProgramFactory.h>
+#include <MG_Backend/DirectVulkan/Renderer/UniformManager.h>
 #include <MG_Backend/DirectVulkan/Renderer/VkRenderPassManager.h>
 #include <MG_Backend/DirectVulkan/Renderer/VkTextureManager.h>
 #include <MG_Backend/DirectVulkan/Renderer/VulkanRenderer.h>
@@ -460,6 +462,58 @@ TEST(DirectVulkanSanity, ClampsAdvertisedTextureAndDrawBufferLimitsToFrontendSta
     EXPECT_EQ(lowParams.MaxColorAttachments, 6);
 }
 
+TEST(DirectVulkanSanity, GatesPerStageImageUniformLimitsOnPhysicalDeviceFeatures) {
+    using namespace MobileGL;
+
+    MG_Backend::DirectVulkan::BackendObject_DirectVulkan backend;
+    MG_External::VulkanCapabilities caps;
+    caps.MaxImageUnits = 12;
+    caps.MaxCombinedImageUniforms = 10;
+    caps.MaxComputeImageUniforms = 9;
+    caps.SupportsVertexPipelineStoresAndAtomics = true;
+    caps.SupportsFragmentStoresAndAtomics = true;
+    caps.SupportsGeometryShader = false;
+    backend.ApplyVulkanCapabilitiesForTesting(caps);
+
+    const auto& withoutGeometry = backend.GetDynamicParameters();
+    EXPECT_EQ(withoutGeometry.MaxVertexImageUniforms, 10);
+    EXPECT_EQ(withoutGeometry.MaxGeometryImageUniforms, 0);
+    EXPECT_EQ(withoutGeometry.MaxFragmentImageUniforms, 10);
+    EXPECT_EQ(withoutGeometry.MaxComputeImageUniforms, 9);
+
+    caps.SupportsGeometryShader = true;
+    backend.ApplyVulkanCapabilitiesForTesting(caps);
+    EXPECT_EQ(backend.GetDynamicParameters().MaxGeometryImageUniforms, 10);
+
+    caps.SupportsVertexPipelineStoresAndAtomics = false;
+    caps.SupportsFragmentStoresAndAtomics = false;
+    backend.ApplyVulkanCapabilitiesForTesting(caps);
+    EXPECT_EQ(backend.GetDynamicParameters().MaxVertexImageUniforms, 0);
+    EXPECT_EQ(backend.GetDynamicParameters().MaxGeometryImageUniforms, 0);
+    EXPECT_EQ(backend.GetDynamicParameters().MaxFragmentImageUniforms, 0);
+    EXPECT_EQ(backend.GetDynamicParameters().MaxComputeImageUniforms, 9);
+}
+
+TEST(DirectGLESSanity, PreservesHostPerStageImageUniformLimits) {
+    using namespace MobileGL;
+
+    MG_Backend::DirectGLES::BackendObject_DirectGLES backend;
+    MG_External::GLESCapabilities caps;
+    caps.MaxImageUnits = 8;
+    caps.MaxCombinedImageUniforms = 16;
+    caps.MaxVertexImageUniforms = 2;
+    caps.MaxGeometryImageUniforms = 3;
+    caps.MaxFragmentImageUniforms = 4;
+    caps.MaxComputeImageUniforms = 5;
+    backend.ApplyGLESCapabilitiesForTesting(caps);
+
+    const auto& params = backend.GetDynamicParameters();
+    EXPECT_EQ(params.MaxVertexImageUniforms, 2);
+    EXPECT_EQ(params.MaxGeometryImageUniforms, 3);
+    EXPECT_EQ(params.MaxFragmentImageUniforms, 4);
+    EXPECT_EQ(params.MaxComputeImageUniforms, 5);
+}
+
 TEST(DirectVulkanSanity, AdvertisesSubgroupOnlyWhenVulkanReportsUsableSupport) {
     using namespace MobileGL;
 
@@ -582,6 +636,54 @@ TEST(GetterSanity, ClampsMaxVertexAttribsToCurrentValueStorageCapacity) {
     MG_State::pGLContext.reset();
 }
 
+TEST(GetterSanity, PerStageImageUniformQueriesMatchShaderCompilerLimits) {
+    using namespace MobileGL;
+
+    MG_Backend::DynamicBackendParameters params;
+    params.MaxImageUnits = 8;
+    params.MaxCombinedImageUniforms = 8;
+    params.MaxVertexImageUniforms = 1;
+    params.MaxGeometryImageUniforms = 2;
+    params.MaxFragmentImageUniforms = 3;
+    params.MaxComputeImageUniforms = 4;
+    MG_Backend::pActiveBackendObject = MakeUnique<DynamicParameterBackend>(params);
+
+    GLint reported = -1;
+    MG_Impl::GLImpl::GetIntegerv(GL_MAX_VERTEX_IMAGE_UNIFORMS, &reported);
+    EXPECT_EQ(reported, 1);
+    MG_Impl::GLImpl::GetIntegerv(GL_MAX_GEOMETRY_IMAGE_UNIFORMS, &reported);
+    EXPECT_EQ(reported, 2);
+    MG_Impl::GLImpl::GetIntegerv(GL_MAX_FRAGMENT_IMAGE_UNIFORMS, &reported);
+    EXPECT_EQ(reported, 3);
+    MG_Impl::GLImpl::GetIntegerv(GL_MAX_COMPUTE_IMAGE_UNIFORMS, &reported);
+    EXPECT_EQ(reported, 4);
+
+    const String vertexImageStore = R"(#version 430 core
+layout(r32ui, binding = 0) uniform uimage2D targetImages[gl_MaxVertexImageUniforms];
+void main() {
+    imageStore(targetImages[0], ivec2(0), uvec4(1));
+    gl_Position = vec4(0.0, 0.0, 0.0, 1.0);
+}
+)";
+    auto supported = MG_Util::ShaderTranspiler::ShaderCompiler::CompileShader({
+        .shaderType = GL_VERTEX_SHADER,
+        .sourceStr = vertexImageStore,
+    });
+    EXPECT_TRUE(supported) << (supported ? "" : supported.error().log);
+
+    params.MaxVertexImageUniforms = 0;
+    MG_Backend::pActiveBackendObject = MakeUnique<DynamicParameterBackend>(params);
+    MG_Impl::GLImpl::GetIntegerv(GL_MAX_VERTEX_IMAGE_UNIFORMS, &reported);
+    EXPECT_EQ(reported, 0);
+    auto unsupported = MG_Util::ShaderTranspiler::ShaderCompiler::CompileShader({
+        .shaderType = GL_VERTEX_SHADER,
+        .sourceStr = vertexImageStore,
+    });
+    EXPECT_FALSE(unsupported);
+
+    MG_Backend::pActiveBackendObject.reset();
+}
+
 TEST(GetterSanity, ReportsKhrSubgroupDynamicParameters) {
     using namespace MobileGL;
 
@@ -673,6 +775,175 @@ TEST(DirectVulkanSanity, SampledDepthStencilViewUsesSingleDepthAspect) {
     EXPECT_EQ(VkTextureManager::ResolveSampledImageViewAspectMask(
                   VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT),
               VK_IMAGE_ASPECT_DEPTH_BIT);
+}
+
+TEST(DirectVulkanSanity, SpirvStorageImageFormatsMapToVulkanFormats) {
+    using MobileGL::MG_Backend::DirectVulkan::ProgramFactory;
+
+    struct FormatCase {
+        SpvImageFormat spirv;
+        VkFormat vulkan;
+    };
+    const FormatCase cases[] = {
+        {SpvImageFormatUnknown, VK_FORMAT_UNDEFINED},
+        {SpvImageFormatRgba32f, VK_FORMAT_R32G32B32A32_SFLOAT},
+        {SpvImageFormatRgba16f, VK_FORMAT_R16G16B16A16_SFLOAT},
+        {SpvImageFormatR32f, VK_FORMAT_R32_SFLOAT},
+        {SpvImageFormatRgba8, VK_FORMAT_R8G8B8A8_UNORM},
+        {SpvImageFormatRgba8Snorm, VK_FORMAT_R8G8B8A8_SNORM},
+        {SpvImageFormatRg32f, VK_FORMAT_R32G32_SFLOAT},
+        {SpvImageFormatRg16f, VK_FORMAT_R16G16_SFLOAT},
+        {SpvImageFormatR11fG11fB10f, VK_FORMAT_B10G11R11_UFLOAT_PACK32},
+        {SpvImageFormatR16f, VK_FORMAT_R16_SFLOAT},
+        {SpvImageFormatRgba16, VK_FORMAT_R16G16B16A16_UNORM},
+        {SpvImageFormatRgb10A2, VK_FORMAT_A2R10G10B10_UNORM_PACK32},
+        {SpvImageFormatRg16, VK_FORMAT_R16G16_UNORM},
+        {SpvImageFormatRg8, VK_FORMAT_R8G8_UNORM},
+        {SpvImageFormatR16, VK_FORMAT_R16_UNORM},
+        {SpvImageFormatR8, VK_FORMAT_R8_UNORM},
+        {SpvImageFormatRgba16Snorm, VK_FORMAT_R16G16B16A16_SNORM},
+        {SpvImageFormatRg16Snorm, VK_FORMAT_R16G16_SNORM},
+        {SpvImageFormatRg8Snorm, VK_FORMAT_R8G8_SNORM},
+        {SpvImageFormatR16Snorm, VK_FORMAT_R16_SNORM},
+        {SpvImageFormatR8Snorm, VK_FORMAT_R8_SNORM},
+        {SpvImageFormatRgba32i, VK_FORMAT_R32G32B32A32_SINT},
+        {SpvImageFormatRgba16i, VK_FORMAT_R16G16B16A16_SINT},
+        {SpvImageFormatRgba8i, VK_FORMAT_R8G8B8A8_SINT},
+        {SpvImageFormatR32i, VK_FORMAT_R32_SINT},
+        {SpvImageFormatRg32i, VK_FORMAT_R32G32_SINT},
+        {SpvImageFormatRg16i, VK_FORMAT_R16G16_SINT},
+        {SpvImageFormatRg8i, VK_FORMAT_R8G8_SINT},
+        {SpvImageFormatR16i, VK_FORMAT_R16_SINT},
+        {SpvImageFormatR8i, VK_FORMAT_R8_SINT},
+        {SpvImageFormatRgba32ui, VK_FORMAT_R32G32B32A32_UINT},
+        {SpvImageFormatRgba16ui, VK_FORMAT_R16G16B16A16_UINT},
+        {SpvImageFormatRgba8ui, VK_FORMAT_R8G8B8A8_UINT},
+        {SpvImageFormatR32ui, VK_FORMAT_R32_UINT},
+        {SpvImageFormatRgb10a2ui, VK_FORMAT_A2R10G10B10_UINT_PACK32},
+        {SpvImageFormatRg32ui, VK_FORMAT_R32G32_UINT},
+        {SpvImageFormatRg16ui, VK_FORMAT_R16G16_UINT},
+        {SpvImageFormatRg8ui, VK_FORMAT_R8G8_UINT},
+        {SpvImageFormatR16ui, VK_FORMAT_R16_UINT},
+        {SpvImageFormatR8ui, VK_FORMAT_R8_UINT},
+        {SpvImageFormatR64ui, VK_FORMAT_R64_UINT},
+        {SpvImageFormatR64i, VK_FORMAT_R64_SINT},
+    };
+
+    for (const auto& testCase : cases) {
+        EXPECT_EQ(ProgramFactory::ConvertSpirvImageFormatToVkFormat(testCase.spirv), testCase.vulkan)
+            << "SpvImageFormat=" << static_cast<int>(testCase.spirv);
+    }
+}
+
+TEST(DirectVulkanSanity, MutableStorageImageViewsUseVulkanCompatibilityClasses) {
+    using MobileGL::MG_Backend::DirectVulkan::VkTextureManager;
+
+    EXPECT_TRUE(VkTextureManager::AreStorageImageViewFormatsCompatible(
+        VK_FORMAT_R32_SFLOAT, VK_FORMAT_R32_UINT));
+    EXPECT_TRUE(VkTextureManager::AreStorageImageViewFormatsCompatible(
+        VK_FORMAT_R32_UINT, VK_FORMAT_R32_SINT));
+    EXPECT_TRUE(VkTextureManager::AreStorageImageViewFormatsCompatible(
+        VK_FORMAT_R16G16B16A16_UNORM, VK_FORMAT_R16G16B16A16_SFLOAT));
+    EXPECT_TRUE(VkTextureManager::AreStorageImageViewFormatsCompatible(
+        VK_FORMAT_R32_SFLOAT, VK_FORMAT_R8G8B8A8_UINT));
+    EXPECT_TRUE(VkTextureManager::AreStorageImageViewFormatsCompatible(
+        VK_FORMAT_R32_SFLOAT, VK_FORMAT_R32_SFLOAT));
+    EXPECT_FALSE(VkTextureManager::AreStorageImageViewFormatsCompatible(
+        VK_FORMAT_R32_SFLOAT, VK_FORMAT_R16G16B16A16_SFLOAT));
+    EXPECT_FALSE(VkTextureManager::AreStorageImageViewFormatsCompatible(
+        VK_FORMAT_R32_SFLOAT, VK_FORMAT_D32_SFLOAT));
+}
+
+TEST(DirectVulkanSanity, StorageImageViewFormatUsesBindingOnlyForFormatlessFloatPolicy) {
+    using MobileGL::MG_Backend::DirectVulkan::UniformManager;
+
+    EXPECT_EQ(UniformManager::ResolveStorageImageViewFormat(
+                  VK_FORMAT_UNDEFINED, GL_RGBA16F, VK_FORMAT_R16G16B16A16_UNORM, true),
+              VK_FORMAT_R16G16B16A16_SFLOAT);
+    EXPECT_EQ(UniformManager::ResolveStorageImageViewFormat(
+                  VK_FORMAT_UNDEFINED, GL_RGBA16, VK_FORMAT_R16G16B16A16_SFLOAT, true),
+              VK_FORMAT_R16G16B16A16_UNORM);
+    EXPECT_EQ(UniformManager::ResolveStorageImageViewFormat(
+                  VK_FORMAT_R32_UINT, GL_RGBA16F, VK_FORMAT_R32_SFLOAT, false),
+              VK_FORMAT_R32_UINT);
+    EXPECT_EQ(UniformManager::ResolveStorageImageViewFormat(
+                  VK_FORMAT_UNDEFINED, GL_RGBA16F, VK_FORMAT_R32_SFLOAT, false),
+              VK_FORMAT_R32_SFLOAT);
+    EXPECT_EQ(UniformManager::ResolveStorageImageViewFormat(
+                  VK_FORMAT_UNDEFINED, GL_NONE, VK_FORMAT_R16G16B16A16_SFLOAT, true),
+              VK_FORMAT_UNDEFINED);
+}
+
+TEST(DirectVulkanSanity, ProgramObjectMovePreservesStorageImageFormatPolicy) {
+    using MobileGL::MG_Backend::DirectVulkan::ProgramFactory;
+
+    ProgramFactory::VkProgramObject source;
+    source.storageImageFormatByBinding = {VK_FORMAT_UNDEFINED, VK_FORMAT_R32_UINT};
+    source.storageImageUsesBindingFormatByBinding = {true, false};
+
+    ProgramFactory::VkProgramObject moved(std::move(source));
+    ASSERT_EQ(moved.storageImageFormatByBinding.size(), 2u);
+    ASSERT_EQ(moved.storageImageUsesBindingFormatByBinding.size(), 2u);
+    EXPECT_EQ(moved.storageImageFormatByBinding[0], VK_FORMAT_UNDEFINED);
+    EXPECT_EQ(moved.storageImageFormatByBinding[1], VK_FORMAT_R32_UINT);
+    EXPECT_TRUE(moved.storageImageUsesBindingFormatByBinding[0]);
+    EXPECT_FALSE(moved.storageImageUsesBindingFormatByBinding[1]);
+
+    ProgramFactory::VkProgramObject assigned;
+    assigned = std::move(moved);
+    ASSERT_EQ(assigned.storageImageFormatByBinding.size(), 2u);
+    ASSERT_EQ(assigned.storageImageUsesBindingFormatByBinding.size(), 2u);
+    EXPECT_TRUE(assigned.storageImageUsesBindingFormatByBinding[0]);
+    EXPECT_FALSE(assigned.storageImageUsesBindingFormatByBinding[1]);
+}
+
+TEST(DirectVulkanSanity, SamplerUniformTypesPreserveTheirNumericDomain) {
+    using namespace MobileGL::MG_Backend::DirectVulkan;
+
+    EXPECT_EQ(ProgramFactory::UniformTypeToSamplerNumericDomain(GL_SAMPLER_2D),
+              SamplerNumericDomain::Float);
+    EXPECT_EQ(ProgramFactory::UniformTypeToSamplerNumericDomain(GL_SAMPLER_CUBE_MAP_ARRAY_SHADOW),
+              SamplerNumericDomain::Float);
+    EXPECT_EQ(ProgramFactory::UniformTypeToSamplerNumericDomain(GL_INT_SAMPLER_2D_ARRAY),
+              SamplerNumericDomain::SignedInteger);
+    EXPECT_EQ(ProgramFactory::UniformTypeToSamplerNumericDomain(GL_UNSIGNED_INT_SAMPLER_2D),
+              SamplerNumericDomain::UnsignedInteger);
+    EXPECT_EQ(ProgramFactory::UniformTypeToSamplerNumericDomain(GL_IMAGE_2D),
+              SamplerNumericDomain::Unknown);
+}
+
+TEST(DirectVulkanSanity, SampledViewFormatMatchesSamplerNumericDomainWithoutChangingComponentLayout) {
+    using namespace MobileGL::MG_Backend::DirectVulkan;
+
+    EXPECT_EQ(VkTextureManager::ResolveSampledImageViewFormat(
+                  VK_FORMAT_R32_SFLOAT, SamplerNumericDomain::UnsignedInteger),
+              VK_FORMAT_R32_UINT);
+    EXPECT_EQ(VkTextureManager::ResolveSampledImageViewFormat(
+                  VK_FORMAT_R32_SFLOAT, SamplerNumericDomain::SignedInteger),
+              VK_FORMAT_R32_SINT);
+    EXPECT_EQ(VkTextureManager::ResolveSampledImageViewFormat(
+                  VK_FORMAT_R32_UINT, SamplerNumericDomain::Float),
+              VK_FORMAT_R32_SFLOAT);
+    EXPECT_EQ(VkTextureManager::ResolveSampledImageViewFormat(
+                  VK_FORMAT_R16G16B16A16_SFLOAT, SamplerNumericDomain::UnsignedInteger),
+              VK_FORMAT_R16G16B16A16_UINT);
+    EXPECT_EQ(VkTextureManager::ResolveSampledImageViewFormat(
+                  VK_FORMAT_R8G8B8A8_UNORM, SamplerNumericDomain::UnsignedInteger),
+              VK_FORMAT_R8G8B8A8_UINT);
+    EXPECT_EQ(VkTextureManager::ResolveSampledImageViewFormat(
+                  VK_FORMAT_R32_UINT, SamplerNumericDomain::UnsignedInteger),
+              VK_FORMAT_R32_UINT);
+    EXPECT_EQ(VkTextureManager::ResolveSampledImageViewFormat(
+                  VK_FORMAT_B10G11R11_UFLOAT_PACK32, SamplerNumericDomain::UnsignedInteger),
+              VK_FORMAT_UNDEFINED);
+    EXPECT_EQ(VkTextureManager::ResolveSampledImageViewFormat(
+                  VK_FORMAT_D32_SFLOAT, SamplerNumericDomain::UnsignedInteger),
+              VK_FORMAT_UNDEFINED);
+
+    EXPECT_TRUE(VkTextureManager::AreSampledImageViewFormatsCompatible(
+        VK_FORMAT_R32_SFLOAT, VK_FORMAT_R32_UINT));
+    EXPECT_FALSE(VkTextureManager::AreSampledImageViewFormatsCompatible(
+        VK_FORMAT_R32_SFLOAT, VK_FORMAT_R16G16B16A16_UINT));
 }
 
 TEST(RenderStateSanity, ProvokingVertexUpdatesStateAndValidatesEnum) {

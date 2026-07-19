@@ -19,6 +19,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     public:
         using HashType = Uint64;
 
+        enum class VertexStreamConversion : Uint8 {
+            None = 0,
+            Repack,
+            ScaledIntegerToFloat32,
+        };
+
         struct BackendVertexInputState {
             HashType hash = 0;
             Vector<VkVertexInputBindingDescription> bindings;
@@ -27,6 +33,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             Vector<SizeT> bindingBaseOffsets;
             Vector<Uint32> bindingAttributeLocations;
             Vector<Bool> bindingUsesClientMemory;
+            Vector<VertexStreamConversion> bindingConversions;
             // Locations whose array is ENABLED but whose GL format has no VkFormat mapping. They are
             // absent from `attributes`, so without this mask the draw path cannot tell them apart from
             // a genuinely disabled array and would silently feed the shader the current attribute value.
@@ -36,8 +43,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             };
         };
 
-        explicit VertexInputStateFactory(const VulkanRendererConfig& config):
-            m_config(config) {}
+        VertexInputStateFactory(const VulkanRendererConfig& config, VkPhysicalDevice physicalDevice):
+            m_config(config), m_physicalDevice(physicalDevice) {}
         ~VertexInputStateFactory() = default;
         VertexInputStateFactory(const VertexInputStateFactory&) = delete;
 
@@ -56,8 +63,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
     private:
         static VkFormat ToVkVertexFormat(DataType type, Int size, Bool normalized, Bool isInteger, Bool isBgra = false);
+        static Bool IsScaledIntegerVertexFormat(VkFormat format);
+        static VkFormat ToFloat32VertexFormat(Int componentCount);
+        Bool SupportsVertexBufferFormat(VkFormat format) const;
 
         const VulkanRendererConfig& m_config;
+        VkPhysicalDevice m_physicalDevice = VK_NULL_HANDLE;
         UnorderedMap<HashType, BackendVertexInputState> m_cache;
         static inline XXH64_state_t* m_hashState = XXH64_createState();
     };

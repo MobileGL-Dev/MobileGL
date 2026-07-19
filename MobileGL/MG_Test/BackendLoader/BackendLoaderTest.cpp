@@ -27,6 +27,13 @@ namespace {
     struct FakeDriverState {
         // Behavior knobs, configured per test before running the probe.
         GLint maxVertexSsboBlocks = 4;
+        GLint glesMajorVersion = 3;
+        GLint glesMinorVersion = 1;
+        GLint maxVertexImageUniforms = 2;
+        GLint maxGeometryImageUniforms = 3;
+        GLint maxFragmentImageUniforms = 4;
+        GLint maxComputeImageUniforms = 5;
+        bool maxGeometryImageUniformsQueried = false;
         // Emulates ANGLE-on-Vulkan: the draw reads the indirect command's
         // baseInstance word and exposes it through gl_InstanceID.
         bool drawLeaksBaseInstanceWord = false;
@@ -88,13 +95,26 @@ namespace {
             case GL_MAX_VERTEX_SHADER_STORAGE_BLOCKS:
                 *data = g_fake.maxVertexSsboBlocks;
                 break;
+            case GL_MAX_VERTEX_IMAGE_UNIFORMS:
+                *data = g_fake.maxVertexImageUniforms;
+                break;
+            case GL_MAX_GEOMETRY_IMAGE_UNIFORMS:
+                g_fake.maxGeometryImageUniformsQueried = true;
+                *data = g_fake.maxGeometryImageUniforms;
+                break;
+            case GL_MAX_FRAGMENT_IMAGE_UNIFORMS:
+                *data = g_fake.maxFragmentImageUniforms;
+                break;
+            case GL_MAX_COMPUTE_IMAGE_UNIFORMS:
+                *data = g_fake.maxComputeImageUniforms;
+                break;
             // FillInGLESCapabilities reads the context version before running the
             // baseInstance probe, which requires ES >= 3.1.
             case GL_MAJOR_VERSION:
-                *data = 3;
+                *data = g_fake.glesMajorVersion;
                 break;
             case GL_MINOR_VERSION:
-                *data = 1;
+                *data = g_fake.glesMinorVersion;
                 break;
             case GL_NUM_EXTENSIONS:
                 *data = static_cast<GLint>(g_fake.extensions.size());
@@ -415,6 +435,31 @@ TEST(IndirectInstanceIdProbe, FillInCapabilitiesWiresProbeResult) {
     EXPECT_TRUE(g_fake.drawIssued);
     EXPECT_FALSE(conformingCaps.IndirectDrawInstanceIdIncludesBaseInstance);
     ExpectProbeReleasedAllObjects();
+}
+
+TEST(ImageUniformCapabilities, QueriesRealPerStageLimitsAndConservativelyGatesGeometry) {
+    const auto funcs = MakeFakeGLESFunctions();
+
+    ResetFakeDriver();
+    g_fake.maxVertexSsboBlocks = 0;
+    MobileGL::MG_External::GLESCapabilities es31Caps;
+    ASSERT_TRUE(MobileGL::MG_Util::BackendLoader::FillInGLESCapabilities(es31Caps, funcs));
+    EXPECT_EQ(es31Caps.MaxVertexImageUniforms, g_fake.maxVertexImageUniforms);
+    EXPECT_EQ(es31Caps.MaxGeometryImageUniforms, 0);
+    EXPECT_EQ(es31Caps.MaxFragmentImageUniforms, g_fake.maxFragmentImageUniforms);
+    EXPECT_EQ(es31Caps.MaxComputeImageUniforms, g_fake.maxComputeImageUniforms);
+    EXPECT_FALSE(g_fake.maxGeometryImageUniformsQueried);
+
+    ResetFakeDriver();
+    g_fake.maxVertexSsboBlocks = 0;
+    g_fake.glesMinorVersion = 2;
+    MobileGL::MG_External::GLESCapabilities es32Caps;
+    ASSERT_TRUE(MobileGL::MG_Util::BackendLoader::FillInGLESCapabilities(es32Caps, funcs));
+    EXPECT_EQ(es32Caps.MaxVertexImageUniforms, g_fake.maxVertexImageUniforms);
+    EXPECT_EQ(es32Caps.MaxGeometryImageUniforms, g_fake.maxGeometryImageUniforms);
+    EXPECT_EQ(es32Caps.MaxFragmentImageUniforms, g_fake.maxFragmentImageUniforms);
+    EXPECT_EQ(es32Caps.MaxComputeImageUniforms, g_fake.maxComputeImageUniforms);
+    EXPECT_TRUE(g_fake.maxGeometryImageUniformsQueried);
 }
 
 // The extension string is what apps gate on (LWJGL builds GLCapabilities from it), so advertising

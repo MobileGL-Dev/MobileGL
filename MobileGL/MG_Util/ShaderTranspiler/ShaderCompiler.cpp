@@ -6,6 +6,10 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 // End of Source File Header
 
+#define SPV_ENABLE_UTILITY_CODE
+#include "glslang/SPIRV/spirv.hpp11"
+#undef SPV_ENABLE_UTILITY_CODE
+
 #include "ShaderCompiler.h"
 
 #include "SpirvPasses/EliminateFloatEqualsZeroPass.h"
@@ -19,6 +23,7 @@
 #include "spirv-tools/optimizer.hpp"
 
 #include "ShaderSourceProcessor.h"
+#include <MG_Backend/BackendObjects.h>
 #include <MG_Util/Converters/GLToStr/GLEnumConverter.h>
 #include <MG_Util/Converters/GLToGlslang/ProgramEnumConverter.h>
 #include <cstdlib>
@@ -26,8 +31,8 @@
 namespace MobileGL {
     namespace MG_Util {
         namespace ShaderTranspiler {
-            TBuiltInResource& GetTBuiltInResourceInstance() {
-                static TBuiltInResource Resources{};
+            TBuiltInResource BuildTBuiltInResource() {
+                TBuiltInResource Resources{};
                 Resources.maxLights = 32;
                 Resources.maxClipPlanes = 6;
                 Resources.maxTextureUnits = 32;
@@ -122,6 +127,22 @@ namespace MobileGL {
                 Resources.maxTaskWorkGroupSizeZ_NV = 1;
                 Resources.maxMeshViewCountNV = 4;
 
+                // Resource checking must describe the same backend contract exposed through
+                // glGetIntegerv. Keeping this copy local also avoids racing on a process-global
+                // TBuiltInResource when Iris compiles shaders concurrently.
+                const MG_Backend::DynamicBackendParameters fallbackParameters{};
+                const auto& activeBackend = MG_Backend::pActiveBackendObject;
+                const auto& dynamicParameters =
+                    activeBackend ? activeBackend->GetDynamicParameters() : fallbackParameters;
+                Resources.maxImageUnits = dynamicParameters.MaxImageUnits;
+                Resources.maxCombinedImageUnitsAndFragmentOutputs =
+                    dynamicParameters.MaxImageUnits + dynamicParameters.MaxDrawBuffers;
+                Resources.maxVertexImageUniforms = dynamicParameters.MaxVertexImageUniforms;
+                Resources.maxGeometryImageUniforms = dynamicParameters.MaxGeometryImageUniforms;
+                Resources.maxFragmentImageUniforms = dynamicParameters.MaxFragmentImageUniforms;
+                Resources.maxComputeImageUniforms = dynamicParameters.MaxComputeImageUniforms;
+                Resources.maxCombinedImageUniforms = dynamicParameters.MaxCombinedImageUniforms;
+
                 Resources.limits.nonInductiveForLoops = true;
                 Resources.limits.whileLoops = true;
                 Resources.limits.doWhileLoops = true;
@@ -167,7 +188,8 @@ namespace MobileGL {
                 tshader->setAutoMapLocations(true);
                 tshader->setAutoMapBindings(true);
                 tshader->setGlobalUniformBlockName(GLOBAL_UBO_NAME);
-                if (!tshader->parse(&GetTBuiltInResourceInstance(), 460, ECoreProfile,
+                auto resources = BuildTBuiltInResource();
+                if (!tshader->parse(&resources, 460, ECoreProfile,
                                     /*forceDefaultVersionAndProfile: */ false,
                                     /*forwardCompatible: */ true, EShMsgDefault)) {
                     ResultInfo r;
@@ -389,6 +411,136 @@ namespace MobileGL {
                     }
                     i += length;
                 }
+                return true;
+            }
+
+            bool ShaderCompiler::UseUnformattedFloatStorageImagesForVulkan(
+                const Vector<Uint32>& inputBinary, Vector<uint32_t>& outputBinary) {
+                constexpr SizeT kSpirvHeaderWordCount = 5;
+                outputBinary.clear();
+                if (inputBinary.size() < kSpirvHeaderWordCount || inputBinary[0] != spv::MagicNumber) {
+                    return false;
+                }
+
+                Vector<Uint32> floatTypeIds;
+                Vector<Uint32> resultTypeById(inputBinary[3], 0);
+                Vector<Uint32> pointerPointeeTypeById(inputBinary[3], 0);
+                Bool hasReadWithoutFormatCapability = false;
+                Bool hasWriteWithoutFormatCapability = false;
+                SizeT capabilityInsertOffset = kSpirvHeaderWordCount;
+
+                for (SizeT offset = kSpirvHeaderWordCount; offset < inputBinary.size();) {
+                    const Uint32 instructionWord = inputBinary[offset];
+                    const Uint32 wordCount = instructionWord >> 16u;
+                    const auto opcode = static_cast<spv::Op>(instructionWord & 0xffffu);
+                    if (wordCount == 0 || offset + wordCount > inputBinary.size()) {
+                        return false;
+                    }
+
+                    if (opcode == spv::Op::OpCapability && wordCount >= 2) {
+                        capabilityInsertOffset = offset + wordCount;
+                        const auto capability = static_cast<spv::Capability>(inputBinary[offset + 1]);
+                        hasReadWithoutFormatCapability |=
+                            capability == spv::Capability::StorageImageReadWithoutFormat;
+                        hasWriteWithoutFormatCapability |=
+                            capability == spv::Capability::StorageImageWriteWithoutFormat;
+                    } else if (opcode == spv::Op::OpTypeFloat && wordCount >= 3) {
+                        floatTypeIds.push_back(inputBinary[offset + 1]);
+                    } else if (opcode == spv::Op::OpTypePointer && wordCount >= 4) {
+                        const Uint32 pointerTypeId = inputBinary[offset + 1];
+                        if (pointerTypeId >= pointerPointeeTypeById.size()) {
+                            return false;
+                        }
+                        pointerPointeeTypeById[pointerTypeId] = inputBinary[offset + 3];
+                    }
+
+                    bool hasResult = false;
+                    bool hasResultType = false;
+                    spv::HasResultAndType(opcode, &hasResult, &hasResultType);
+                    if (hasResult && hasResultType && wordCount >= 3) {
+                        const Uint32 resultTypeId = inputBinary[offset + 1];
+                        const Uint32 resultId = inputBinary[offset + 2];
+                        if (resultId >= resultTypeById.size()) {
+                            return false;
+                        }
+                        resultTypeById[resultId] = resultTypeId;
+                    }
+                    offset += wordCount;
+                }
+
+                // OpImageTexelPointer is the bridge to image atomic instructions. Vulkan requires
+                // those image types to retain an atomic-compatible declared format, so exclude only
+                // the exact image types used by an atomic path rather than disabling formatless
+                // access for unrelated float images in the same module.
+                Vector<Uint32> atomicImageTypeIds;
+                for (SizeT offset = kSpirvHeaderWordCount; offset < inputBinary.size();) {
+                    const Uint32 instructionWord = inputBinary[offset];
+                    const Uint32 wordCount = instructionWord >> 16u;
+                    const auto opcode = static_cast<spv::Op>(instructionWord & 0xffffu);
+                    if (opcode == spv::Op::OpImageTexelPointer && wordCount >= 6) {
+                        const Uint32 imageId = inputBinary[offset + 3];
+                        if (imageId >= resultTypeById.size()) {
+                            return false;
+                        }
+                        Uint32 imageTypeId = resultTypeById[imageId];
+                        if (imageTypeId < pointerPointeeTypeById.size() &&
+                            pointerPointeeTypeById[imageTypeId] != 0) {
+                            imageTypeId = pointerPointeeTypeById[imageTypeId];
+                        }
+                        if (imageTypeId != 0 &&
+                            std::find(atomicImageTypeIds.begin(), atomicImageTypeIds.end(), imageTypeId) ==
+                                atomicImageTypeIds.end()) {
+                            atomicImageTypeIds.push_back(imageTypeId);
+                        }
+                    }
+                    offset += wordCount;
+                }
+
+                outputBinary = inputBinary;
+                Bool hasFloatStorageImage = false;
+                for (SizeT offset = kSpirvHeaderWordCount; offset < outputBinary.size();) {
+                    const Uint32 instructionWord = outputBinary[offset];
+                    const Uint32 wordCount = instructionWord >> 16u;
+                    const auto opcode = static_cast<spv::Op>(instructionWord & 0xffffu);
+
+                    // OpTypeImage operands are: result id, sampled type, dim, depth, arrayed,
+                    // multisampled, sampled, image format, and an optional access qualifier.
+                    if (opcode == spv::Op::OpTypeImage && wordCount >= 9) {
+                        const Uint32 imageTypeId = outputBinary[offset + 1];
+                        const Uint32 sampledTypeId = outputBinary[offset + 2];
+                        const Uint32 sampled = outputBinary[offset + 7];
+                        const Bool hasFloatSampledType =
+                            std::find(floatTypeIds.begin(), floatTypeIds.end(), sampledTypeId) != floatTypeIds.end();
+                        const Bool usedByAtomic =
+                            std::find(atomicImageTypeIds.begin(), atomicImageTypeIds.end(), imageTypeId) !=
+                            atomicImageTypeIds.end();
+                        if (sampled == 2 && hasFloatSampledType && !usedByAtomic) {
+                            outputBinary[offset + 8] = static_cast<Uint32>(spv::ImageFormat::Unknown);
+                            hasFloatStorageImage = true;
+                        }
+                    }
+                    offset += wordCount;
+                }
+
+                if (!hasFloatStorageImage) {
+                    return true;
+                }
+
+                Vector<Uint32> addedCapabilities;
+                const Uint32 capabilityInstruction =
+                    (2u << 16u) | static_cast<Uint32>(spv::Op::OpCapability);
+                if (!hasReadWithoutFormatCapability) {
+                    addedCapabilities.push_back(capabilityInstruction);
+                    addedCapabilities.push_back(
+                        static_cast<Uint32>(spv::Capability::StorageImageReadWithoutFormat));
+                }
+                if (!hasWriteWithoutFormatCapability) {
+                    addedCapabilities.push_back(capabilityInstruction);
+                    addedCapabilities.push_back(
+                        static_cast<Uint32>(spv::Capability::StorageImageWriteWithoutFormat));
+                }
+                outputBinary.insert(outputBinary.begin() + static_cast<std::ptrdiff_t>(capabilityInsertOffset),
+                                    addedCapabilities.begin(), addedCapabilities.end());
                 return true;
             }
 

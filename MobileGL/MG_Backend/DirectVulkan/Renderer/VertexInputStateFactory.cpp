@@ -66,6 +66,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         Vector<SizeT> bindingBaseOffsets;
         Vector<Uint32> bindingAttributeLocations;
         Vector<Bool> bindingUsesClientMemory;
+        Vector<VertexStreamConversion> bindingConversions;
         Uint32 unsupportedAttribMask = 0;
 
         for (Uint32 location = 0; location < MG_State::GLState::VertexArrayObject::MAX_VERTEX_ATTRIBS; ++location) {
@@ -74,13 +75,41 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 continue;
             }
 
-            const auto vkFormat = ToVkVertexFormat(attr.Type, attr.Size, attr.Normalized, attr.IsInteger, attr.IsBgra);
-            if (vkFormat == VK_FORMAT_UNDEFINED) {
+            const VkFormat sourceVkFormat =
+                ToVkVertexFormat(attr.Type, attr.Size, attr.Normalized, attr.IsInteger, attr.IsBgra);
+            if (sourceVkFormat == VK_FORMAT_UNDEFINED) {
                 MGLOG_E("Unsupported vertex attribute layout (location=%u, type=%s, size=%d): the array is "
                         "enabled but cannot be mapped to a VkFormat",
                         location, MG_Util::ConvertDataTypeToString(attr.Type).c_str(), attr.Size);
                 unsupportedAttribMask |= (1u << location);
                 continue;
+            }
+
+            VkFormat vkFormat = sourceVkFormat;
+            VertexStreamConversion conversion = VertexStreamConversion::None;
+            if (!SupportsVertexBufferFormat(vkFormat)) {
+                if (IsScaledIntegerVertexFormat(vkFormat)) {
+                    const VkFormat fallbackFormat = ToFloat32VertexFormat(attr.Size);
+                    if (fallbackFormat != VK_FORMAT_UNDEFINED && SupportsVertexBufferFormat(fallbackFormat)) {
+                        vkFormat = fallbackFormat;
+                        conversion = VertexStreamConversion::ScaledIntegerToFloat32;
+                        MGLOG_W("Vertex attribute location=%u format=%d lacks "
+                                "VK_FORMAT_FEATURE_VERTEX_BUFFER_BIT; using float32 stream format=%d "
+                                "(type=%s size=%d normalized=%s integer=%s)",
+                                location, static_cast<Int>(sourceVkFormat), static_cast<Int>(vkFormat),
+                                MG_Util::ConvertDataTypeToString(attr.Type).c_str(), attr.Size,
+                                attr.Normalized ? "true" : "false", attr.IsInteger ? "true" : "false");
+                    }
+                }
+
+                if (conversion == VertexStreamConversion::None) {
+                    MGLOG_E("Unsupported Vulkan vertex format (location=%u, format=%d, type=%s, size=%d): "
+                            "VK_FORMAT_FEATURE_VERTEX_BUFFER_BIT is unavailable and no semantic fallback exists",
+                            location, static_cast<Int>(sourceVkFormat),
+                            MG_Util::ConvertDataTypeToString(attr.Type).c_str(), attr.Size);
+                    unsupportedAttribMask |= (1u << location);
+                    continue;
+                }
             }
 
             const SizeT attribByteSize = GetAttributeByteSize(attr.Type, attr.Size, attr.IsBgra);
@@ -92,8 +121,28 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 continue;
             }
 
-            const Uint32 stride =
+            const Uint32 sourceStride =
                 attr.Stride > 0 ? static_cast<Uint32>(attr.Stride) : static_cast<Uint32>(attribByteSize);
+            const Bool packedAttribute = attr.Type == DataType::Int2101010Rev ||
+                                         attr.Type == DataType::Uint2101010Rev;
+            const SizeT requiredAlignment = packedAttribute ? attribByteSize : GetComponentSize(attr.Type);
+            if (conversion == VertexStreamConversion::None && requiredAlignment > 1 &&
+                ((sourceStride % requiredAlignment) != 0 || (attr.Offset % requiredAlignment) != 0)) {
+                // GL accepts arbitrary byte strides and offsets. Core Vulkan vertex fetches do not
+                // unless VK_EXT_legacy_vertex_attributes is available, so deinterleave this one
+                // attribute into a tightly packed transient stream without changing its format.
+                conversion = VertexStreamConversion::Repack;
+                MGLOG_W("Vertex attribute location=%u uses Vulkan-incompatible alignment "
+                        "(offset=%zu stride=%u required=%zu); using a tightly packed stream",
+                        location, attr.Offset, sourceStride, requiredAlignment);
+            }
+
+            Uint32 stride = sourceStride;
+            if (conversion == VertexStreamConversion::Repack) {
+                stride = static_cast<Uint32>(attribByteSize);
+            } else if (conversion == VertexStreamConversion::ScaledIntegerToFloat32) {
+                stride = static_cast<Uint32>(attr.Size * static_cast<Int>(sizeof(Float)));
+            }
             const VkVertexInputRate inputRate =
                 (attr.Divisor == 0) ? VK_VERTEX_INPUT_RATE_VERTEX : VK_VERTEX_INPUT_RATE_INSTANCE;
 
@@ -103,6 +152,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             bindingBaseOffsets.push_back(attr.Buffer ? attr.Offset : 0);
             bindingAttributeLocations.push_back(location);
             bindingUsesClientMemory.push_back(attr.Buffer == nullptr);
+            bindingConversions.push_back(conversion);
             builder.AddBinding(binding, stride, inputRate);
             builder.AddAttribute(location, binding, vkFormat, 0);
         }
@@ -117,6 +167,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         entry.bindingBaseOffsets = std::move(bindingBaseOffsets);
         entry.bindingAttributeLocations = std::move(bindingAttributeLocations);
         entry.bindingUsesClientMemory = std::move(bindingUsesClientMemory);
+        entry.bindingConversions = std::move(bindingConversions);
         entry.unsupportedAttribMask = unsupportedAttribMask;
         entry.state = state;
         entry.state.pVertexBindingDescriptions = entry.bindings.empty() ? nullptr : entry.bindings.data();
@@ -281,5 +332,48 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
         const SizeT componentSize = GetComponentSize(type);
         return componentSize == 0 ? 0 : componentSize * static_cast<SizeT>(size);
+    }
+
+    Bool VertexInputStateFactory::IsScaledIntegerVertexFormat(VkFormat format) {
+        switch (format) {
+        case VK_FORMAT_R8_USCALED:
+        case VK_FORMAT_R8_SSCALED:
+        case VK_FORMAT_R8G8_USCALED:
+        case VK_FORMAT_R8G8_SSCALED:
+        case VK_FORMAT_R8G8B8_USCALED:
+        case VK_FORMAT_R8G8B8_SSCALED:
+        case VK_FORMAT_R8G8B8A8_USCALED:
+        case VK_FORMAT_R8G8B8A8_SSCALED:
+        case VK_FORMAT_R16_USCALED:
+        case VK_FORMAT_R16_SSCALED:
+        case VK_FORMAT_R16G16_USCALED:
+        case VK_FORMAT_R16G16_SSCALED:
+        case VK_FORMAT_R16G16B16_USCALED:
+        case VK_FORMAT_R16G16B16_SSCALED:
+        case VK_FORMAT_R16G16B16A16_USCALED:
+        case VK_FORMAT_R16G16B16A16_SSCALED:
+            return true;
+        default:
+            return false;
+        }
+    }
+
+    VkFormat VertexInputStateFactory::ToFloat32VertexFormat(Int componentCount) {
+        switch (componentCount) {
+        case 1: return VK_FORMAT_R32_SFLOAT;
+        case 2: return VK_FORMAT_R32G32_SFLOAT;
+        case 3: return VK_FORMAT_R32G32B32_SFLOAT;
+        case 4: return VK_FORMAT_R32G32B32A32_SFLOAT;
+        default: return VK_FORMAT_UNDEFINED;
+        }
+    }
+
+    Bool VertexInputStateFactory::SupportsVertexBufferFormat(VkFormat format) const {
+        if (m_physicalDevice == VK_NULL_HANDLE || format == VK_FORMAT_UNDEFINED) {
+            return false;
+        }
+        VkFormatProperties properties{};
+        vkGetPhysicalDeviceFormatProperties(m_physicalDevice, format, &properties);
+        return (properties.bufferFeatures & VK_FORMAT_FEATURE_VERTEX_BUFFER_BIT) != 0;
     }
 } // namespace MobileGL::MG_Backend::DirectVulkan

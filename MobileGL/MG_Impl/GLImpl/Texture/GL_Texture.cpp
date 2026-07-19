@@ -470,6 +470,210 @@ namespace MobileGL::MG_Impl::GLImpl {
         return textureObject;
     }
 
+    namespace {
+        void RecordClearTextureError(const char* caller, ErrorCode code, const String& message) {
+            MG_State::pGLContext->RecordError(
+                code, MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller, message));
+        }
+
+        SharedPtr<MG_State::GLState::TextureObjectMipmap> GetClearTextureObject(GLuint texture, GLint level,
+                                                                                const char* caller) {
+            if (texture == 0) {
+                RecordClearTextureError(caller, ErrorCode::InvalidOperation,
+                                        "Clear texture operations require a non-zero texture name.");
+                return nullptr;
+            }
+
+            auto textureObject = GetTextureObjectByName(texture, caller);
+            if (!textureObject) return nullptr;
+            if (textureObject->GetStorageType() != TextureStorageType::Mipmap) {
+                RecordClearTextureError(caller, ErrorCode::InvalidOperation,
+                                        "Buffer textures cannot be cleared with glClearTexImage.");
+                return nullptr;
+            }
+
+            auto mipmapTexture = std::static_pointer_cast<MG_State::GLState::TextureObjectMipmap>(textureObject);
+            if (level < 0 || static_cast<Uint>(level) >= mipmapTexture->GetMipmapLevelCount()) {
+                RecordClearTextureError(caller, ErrorCode::InvalidValue,
+                                        std::format("Texture level {} is not defined.", level));
+                return nullptr;
+            }
+            return mipmapTexture;
+        }
+
+        Bool BuildClearPixel(const SharedPtr<MG_State::GLState::TextureObjectMipmap>& textureObject,
+                             GLenum format, GLenum type, const void* data, Vector<Uint8>& clearPixel) {
+            const TextureInputFormat inputFormat = MG_Util::ConvertGLEnumToTextureInputFormat(format);
+            const TexturePixelDataType inputType = MG_Util::ConvertGLEnumToTexturePixelDataType(type);
+            if (!TextureImpl::ValidateTextureInputFormat(inputFormat) ||
+                !TextureImpl::ValidateTexturePixelDataType(inputType) ||
+                !TextureImpl::ValidateTextureInternalFormatCompatibleWithInput(
+                    inputFormat, textureObject->GetFormat(), inputType)) {
+                return false;
+            }
+
+            clearPixel.clear();
+            if (data == nullptr) {
+                // ARB_clear_texture defines a null clear value as all zeroes. Keeping the
+                // pattern empty lets the region writer use a fast memset path.
+                return true;
+            }
+
+            PixelStoreParameters clearPixelStore{};
+            clearPixelStore.Alignment = 1;
+            SizeT clearPixelSize = 0;
+            void* converted = MG_Util::PixelStoreProcessor::ProcessTexturePixelsDataUnpack(
+                data, clearPixelStore, textureObject->GetFormat(), inputFormat, inputType,
+                {1, 1, 1}, false, clearPixelSize);
+            if (!converted || clearPixelSize == 0) {
+                if (converted) free(converted);
+                return false;
+            }
+
+            clearPixel.resize(clearPixelSize);
+            Memcpy(clearPixel.data(), converted, clearPixelSize);
+            free(converted);
+            return true;
+        }
+
+        Bool ClearMipmapRegion(const SharedPtr<MG_State::GLState::TextureObjectMipmap>& textureObject,
+                               TextureUploadTarget uploadTarget, GLint level,
+                               GLint xoffset, GLint yoffset, GLint zoffset,
+                               GLsizei width, GLsizei height, GLsizei depth,
+                               const Vector<Uint8>& clearPixel, const char* caller) {
+            const IntVec3 texelSize = textureObject->GetMipmapTexelSize(uploadTarget, static_cast<Uint>(level));
+            if (texelSize.x() <= 0 || texelSize.y() <= 0 || texelSize.z() <= 0) {
+                RecordClearTextureError(caller, ErrorCode::InvalidOperation,
+                                        "The requested texture level has no storage.");
+                return false;
+            }
+            if (xoffset < 0 || yoffset < 0 || zoffset < 0 ||
+                width < 0 || height < 0 || depth < 0 ||
+                width > texelSize.x() - xoffset ||
+                height > texelSize.y() - yoffset ||
+                depth > texelSize.z() - zoffset) {
+                RecordClearTextureError(caller, ErrorCode::InvalidValue,
+                                        "The clear region lies outside the requested texture level.");
+                return false;
+            }
+            if (width == 0 || height == 0 || depth == 0) return true;
+
+            const SizeT texelCount = static_cast<SizeT>(texelSize.x()) *
+                                     static_cast<SizeT>(texelSize.y()) *
+                                     static_cast<SizeT>(texelSize.z());
+            const SizeT byteSize = textureObject->GetMipmapByteSize(uploadTarget, static_cast<Uint>(level));
+            if (byteSize == 0 || byteSize % texelCount != 0) {
+                RecordClearTextureError(caller, ErrorCode::InvalidOperation,
+                                        "The requested texture storage cannot be cleared.");
+                return false;
+            }
+
+            const SizeT bytesPerTexel = byteSize / texelCount;
+            if (!clearPixel.empty() && clearPixel.size() != bytesPerTexel) {
+                RecordClearTextureError(
+                    caller, ErrorCode::InvalidOperation,
+                    std::format("Converted clear value is {} bytes, but the texture stores {} bytes per texel.",
+                                clearPixel.size(), bytesPerTexel));
+                return false;
+            }
+
+            auto* destination = static_cast<Uint8*>(
+                textureObject->MapMipmapData(uploadTarget, static_cast<Uint>(level)));
+            if (!destination) {
+                RecordClearTextureError(caller, ErrorCode::InvalidOperation,
+                                        "The requested texture level could not be mapped.");
+                return false;
+            }
+
+            const SizeT fullRowBytes = static_cast<SizeT>(texelSize.x()) * bytesPerTexel;
+            const SizeT fullSliceBytes = static_cast<SizeT>(texelSize.y()) * fullRowBytes;
+            const SizeT clearRowBytes = static_cast<SizeT>(width) * bytesPerTexel;
+            Uint8* firstClearRow = nullptr;
+
+            for (GLsizei z = 0; z < depth; ++z) {
+                for (GLsizei y = 0; y < height; ++y) {
+                    Uint8* row = destination +
+                                 static_cast<SizeT>(zoffset + z) * fullSliceBytes +
+                                 static_cast<SizeT>(yoffset + y) * fullRowBytes +
+                                 static_cast<SizeT>(xoffset) * bytesPerTexel;
+                    if (firstClearRow) {
+                        Memcpy(row, firstClearRow, clearRowBytes);
+                        continue;
+                    }
+
+                    firstClearRow = row;
+                    if (clearPixel.empty()) {
+                        Memset(row, 0, clearRowBytes);
+                        continue;
+                    }
+
+                    Memcpy(row, clearPixel.data(), bytesPerTexel);
+                    SizeT filled = bytesPerTexel;
+                    while (filled < clearRowBytes) {
+                        const SizeT copySize = std::min(filled, clearRowBytes - filled);
+                        Memcpy(row + filled, row, copySize);
+                        filled += copySize;
+                    }
+                }
+            }
+
+            textureObject->MarkStorageDirty(uploadTarget, static_cast<Uint>(level), true);
+            return true;
+        }
+    } // namespace
+
+    void ClearTexImage(GLuint texture, GLint level, GLenum format, GLenum type, const void* data) {
+        auto textureObject = GetClearTextureObject(texture, level, __func__);
+        if (!textureObject) return;
+
+        Vector<Uint8> clearPixel;
+        if (!BuildClearPixel(textureObject, format, type, data, clearPixel)) return;
+
+        for (TextureUploadTarget uploadTarget : textureObject->GetUploadTargets()) {
+            const IntVec3 size = textureObject->GetMipmapTexelSize(uploadTarget, static_cast<Uint>(level));
+            if (!ClearMipmapRegion(textureObject, uploadTarget, level, 0, 0, 0,
+                                   size.x(), size.y(), size.z(), clearPixel, __func__)) {
+                return;
+            }
+        }
+    }
+
+    void ClearTexSubImage(GLuint texture, GLint level, GLint xoffset, GLint yoffset, GLint zoffset,
+                          GLsizei width, GLsizei height, GLsizei depth, GLenum format, GLenum type,
+                          const void* data) {
+        auto textureObject = GetClearTextureObject(texture, level, __func__);
+        if (!textureObject) return;
+
+        Vector<Uint8> clearPixel;
+        if (!BuildClearPixel(textureObject, format, type, data, clearPixel)) return;
+
+        const auto& uploadTargets = textureObject->GetUploadTargets();
+        if (textureObject->GetTarget() == TextureTarget::TextureCubeMap) {
+            if (zoffset < 0 || depth < 0 ||
+                static_cast<SizeT>(zoffset) > uploadTargets.size() ||
+                static_cast<SizeT>(depth) > uploadTargets.size() - static_cast<SizeT>(zoffset)) {
+                RecordClearTextureError(__func__, ErrorCode::InvalidValue,
+                                        "The cube-map clear region selects invalid faces.");
+                return;
+            }
+            for (GLsizei face = 0; face < depth; ++face) {
+                if (!ClearMipmapRegion(textureObject, uploadTargets[static_cast<SizeT>(zoffset + face)], level,
+                                       xoffset, yoffset, 0, width, height, 1, clearPixel, __func__)) {
+                    return;
+                }
+            }
+            return;
+        }
+
+        if (uploadTargets.empty()) {
+            RecordClearTextureError(__func__, ErrorCode::InvalidOperation,
+                                    "The requested texture has no upload target.");
+            return;
+        }
+        ClearMipmapRegion(textureObject, uploadTargets.front(), level, xoffset, yoffset, zoffset,
+                          width, height, depth, clearPixel, __func__);
+    }
+
     Bool ValidateTextureParameterForTarget(const SharedPtr<MG_State::GLState::ITextureObject>& textureObject,
                                            GLenum pname, GLint param, const char* caller) {
         const auto target = textureObject->GetTarget();
@@ -3816,6 +4020,14 @@ namespace MobileGL::MG_Impl::GLImpl {
     void CopyTexSubImage2D(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLint x, GLint y, GLsizei width,
                            GLsizei height) {
         CopyTexSubImage2D_Backend(target, level, xoffset, yoffset, x, y, width, height);
+    }
+
+    void CopyTextureSubImage2D(GLuint texture, GLint level, GLint xoffset, GLint yoffset, GLint x, GLint y,
+                               GLsizei width, GLsizei height) {
+        auto textureObject = GetTextureObjectByName(texture, __func__);
+        WithTemporarilyBoundNamedTexture(textureObject, [&](GLenum target) {
+            CopyTexSubImage2D_Backend(target, level, xoffset, yoffset, x, y, width, height);
+        });
     }
 
     void CopyTexSubImage1D(GLenum target, GLint level, GLint xoffset, GLint x, GLint y, GLsizei width) {

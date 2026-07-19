@@ -42,12 +42,21 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         Bool CollectSampledTextures(const MG_State::GLState::ProgramObject& program,
                                     const ProgramFactory::VkProgramObject& programObj,
                                     Vector<MG_State::GLState::ITextureObject*>& outTextures);
+        Bool CollectStorageImageTextures(const MG_State::GLState::ProgramObject& program,
+                                         const ProgramFactory::VkProgramObject& programObj,
+                                         Vector<MG_State::GLState::ITextureObject*>& outTextures) const;
         Bool BindProgramUniformBuffers(VkCommandBuffer commandBuffer,
                                        const MG_State::GLState::ProgramObject& program,
                                        const ProgramFactory::VkProgramObject& programObj,
                                        Uint32 frameIndex,
                                        VkPipelineBindPoint bindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS,
                                        const SamplerBindingOverride* samplerBindingOverride = nullptr);
+
+        // Pure format-policy helper kept public for host regression tests. Formatted storage
+        // images use their shader qualifier; transformed float images use glBindImageTexture's
+        // format and never silently fall back to the backing image format.
+        static VkFormat ResolveStorageImageViewFormat(VkFormat reflectedFormat, GLenum bindingFormat,
+                                                      VkFormat resourceFormat, Bool useBindingFormat);
 
     private:
         struct DescriptorPoolBucket {
@@ -165,9 +174,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             VkSampler sampler = VK_NULL_HANDLE;
             Uint16 samplerVersion = 0;
             Uint16 textureParamsVersion = 0;
+            Bool forceNearestFiltering = false;
             Bool valid = false;
         };
         mutable Vector<SamplerResolveMemo> m_samplerResolveMemo;
     };
 } // namespace MobileGL::MG_Backend::DirectVulkan
-

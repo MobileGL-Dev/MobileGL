@@ -1102,6 +1102,9 @@ namespace MobileGL {
             Int MaxUniformBlockSize = 16384;
             Int MaxImageUnits = 8;
             Int MaxCombinedImageUniforms = 8;
+            Int MaxVertexImageUniforms = 0;
+            Int MaxGeometryImageUniforms = 0;
+            Int MaxFragmentImageUniforms = 8;
             Int MaxComputeImageUniforms = 8;
             Int MaxDrawBuffers = 8;
             Int MaxColorAttachments = 8;

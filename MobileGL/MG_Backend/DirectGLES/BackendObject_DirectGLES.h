@@ -41,6 +41,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
         const MG_External::GLESFunctionsTable& GetGLESFunctions() const;
         const MG_External::EGLFunctionsTable& GetEGLFunctions() const;
+        void ApplyGLESCapabilitiesForTesting(const MG_External::GLESCapabilities& capabilities);
 
     private:
         void UpdateDynamicBackendParameters();

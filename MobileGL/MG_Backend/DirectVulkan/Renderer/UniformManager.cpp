@@ -13,6 +13,7 @@
 #include "MG_State/GLState/ProgramState/ProgramObject.h"
 #include "MG_State/GLState/TextureState/TextureObject2D.h"
 #include "MG_State/GLState/TextureState/TextureObjectBuffer.h"
+#include "MG_Util/Converters/GLToMG/TextureEnumConverter.h"
 #include "MG_Util/Converters/MGToStr/FramebufferEnumConverter.h"
 #include "MG_Util/Converters/MGToVk/TextureEnumConverter.h"
 #include "MG_Util/Metrics/TextureMetrics.h"
@@ -76,6 +77,16 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                         "ResolveSamplerUnitIndex: invalid texture unit for binding %u location %d (unit=%d)", binding,
                         location, uniformUnit);
         return uniformUnit >= 0 ? uniformUnit : 0;
+    }
+
+    VkFormat UniformManager::ResolveStorageImageViewFormat(VkFormat reflectedFormat, GLenum bindingFormat,
+                                                           VkFormat resourceFormat, Bool useBindingFormat) {
+        if (useBindingFormat) {
+            const TextureInternalFormat bindingInternalFormat =
+                MG_Util::ConvertGLEnumToTextureInternalFormat(bindingFormat);
+            return MG_Util::ConvertTextureInternalFormatToVkEnum(bindingInternalFormat);
+        }
+        return reflectedFormat != VK_FORMAT_UNDEFINED ? reflectedFormat : resourceFormat;
     }
 
     Bool UniformManager::Initialize(VkDevice device, VkBufferManager* bufferManager,
@@ -276,6 +287,36 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                             "ResolveSamplerDescriptor: invalid sampled image layout=%d for textureId=%d, binding=%u",
                             static_cast<Int>(resource->layout), texture->GetExternalIndex(), binding);
         }
+
+        MOBILEGL_ASSERT(binding < programObj.samplerNumericDomainByBinding.size(),
+                        "ResolveSamplerDescriptor: sampler numeric-domain binding %u out of range", binding);
+        const SamplerNumericDomain numericDomain = programObj.samplerNumericDomainByBinding[binding];
+        // Vulkan forbids linear filtering and anisotropy for integer sampled-image formats.
+        // Some desktop GL shader packs deliberately bit-read a mutable float texture through a
+        // usampler and still leave the texture's ordinary linear parameters in place; texelFetch
+        // ignores filtering, so a nearest VkSampler preserves the operation while keeping the
+        // descriptor valid.
+        const Bool forceNearestFiltering = numericDomain == SamplerNumericDomain::SignedInteger ||
+                                           numericDomain == SamplerNumericDomain::UnsignedInteger;
+        const VkFormat sampledViewFormat =
+            VkTextureManager::ResolveSampledImageViewFormat(resource->format, numericDomain);
+        if (sampledViewFormat == VK_FORMAT_UNDEFINED) {
+            MGLOG_E("ResolveSamplerDescriptor: no compatible sampled view for binding=%u ('%s') "
+                    "textureId=%d imageFormat=%d numericDomain=%d",
+                    binding, programObj.samplerNameByBinding[binding].c_str(), texture->GetExternalIndex(),
+                    static_cast<Int>(resource->format), static_cast<Int>(numericDomain));
+            return false;
+        }
+        const VkImageView sampledImageView =
+            m_textureManager->GetOrCreateSampledImageView(*texture, sampledViewFormat);
+        if (sampledImageView == VK_NULL_HANDLE) {
+            MGLOG_E("ResolveSamplerDescriptor: failed to resolve sampled view for binding=%u ('%s') "
+                    "textureId=%d imageFormat=%d viewFormat=%d numericDomain=%d",
+                    binding, programObj.samplerNameByBinding[binding].c_str(), texture->GetExternalIndex(),
+                    static_cast<Int>(resource->format), static_cast<Int>(sampledViewFormat),
+                    static_cast<Int>(numericDomain));
+            return false;
+        }
         // Skip GetOrCreateSampler's per-draw key hash + map lookup when this binding's
         // sampler object and texture (both by lifetime id + version) are unchanged from the
         // last draw that resolved it: the resulting sampler key, and therefore the VkSampler
@@ -291,23 +332,27 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             const Uint64 textureLifetimeId = texture->GetLifetimeId();
             const Uint16 textureParamsVersion = texture->GetTextureParamsVersion();
             if (memo.valid && memo.samplerLifetimeId == samplerLifetimeId && memo.samplerVersion == samplerVersion &&
-                memo.textureLifetimeId == textureLifetimeId && memo.textureParamsVersion == textureParamsVersion) {
+                memo.textureLifetimeId == textureLifetimeId && memo.textureParamsVersion == textureParamsVersion &&
+                memo.forceNearestFiltering == forceNearestFiltering) {
                 resolvedSampler = memo.sampler;
             } else {
-                resolvedSampler = m_samplerManager->GetOrCreateSampler(*samplerToUse, *texture);
+                resolvedSampler =
+                    m_samplerManager->GetOrCreateSampler(*samplerToUse, *texture, forceNearestFiltering);
                 memo.samplerLifetimeId = samplerLifetimeId;
                 memo.samplerVersion = samplerVersion;
                 memo.textureLifetimeId = textureLifetimeId;
                 memo.textureParamsVersion = textureParamsVersion;
+                memo.forceNearestFiltering = forceNearestFiltering;
                 memo.sampler = resolvedSampler;
                 memo.valid = true;
             }
         } else {
-            resolvedSampler = m_samplerManager->GetOrCreateSampler(*samplerToUse, *texture);
+            resolvedSampler =
+                m_samplerManager->GetOrCreateSampler(*samplerToUse, *texture, forceNearestFiltering);
         }
         outImageInfo = {
             .sampler = resolvedSampler,
-            .imageView = resource->sampledView != VK_NULL_HANDLE ? resource->sampledView : resource->fullView,
+            .imageView = sampledImageView,
             .imageLayout = resource->layout,
         };
         return outImageInfo.sampler != VK_NULL_HANDLE;
@@ -572,9 +617,32 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
 
         const Uint32 mipLevel = static_cast<Uint32>(std::max<GLint>(0, imageBinding.Level));
-        VkImageView view = m_textureManager->GetOrCreateViewAtMipLevel(*imageBinding.Texture, mipLevel);
+        MOBILEGL_ASSERT(binding < programObj.storageImageFormatByBinding.size(),
+                        "ResolveStorageImageDescriptor: storage image format binding %u out of range", binding);
+        MOBILEGL_ASSERT(binding < programObj.storageImageUsesBindingFormatByBinding.size(),
+                        "ResolveStorageImageDescriptor: storage image format policy binding %u out of range",
+                        binding);
+        const VkFormat reflectedFormat = programObj.storageImageFormatByBinding[binding];
+        const Bool useBindingFormat = programObj.storageImageUsesBindingFormatByBinding[binding];
+        const VkFormat viewFormat = ResolveStorageImageViewFormat(
+            reflectedFormat, imageBinding.Format, resource->format, useBindingFormat);
+        if (viewFormat == VK_FORMAT_UNDEFINED) {
+            MGLOG_E("ResolveStorageImageDescriptor: unsupported glBindImageTexture format=0x%x "
+                    "for binding=%u imageUnit=%d textureId=%d bindingPolicy=%s",
+                    imageBinding.Format, binding, imageUnit, imageBinding.Texture->GetExternalIndex(),
+                    useBindingFormat ? "true" : "false");
+            return false;
+        }
+        const VkImageView view = m_textureManager->GetOrCreateStorageImageView(
+            *imageBinding.Texture, mipLevel, viewFormat, imageBinding.Layered != GL_FALSE, imageBinding.Layer);
         if (view == VK_NULL_HANDLE) {
-            view = resource->fullView;
+            MGLOG_E("ResolveStorageImageDescriptor: failed to resolve storage view textureId=%d mip=%u "
+                    "bindingFormat=0x%x imageFormat=%d reflectedFormat=%d selectedFormat=%d bindingPolicy=%s",
+                    imageBinding.Texture->GetExternalIndex(), mipLevel, imageBinding.Format,
+                    static_cast<Int>(resource->format), static_cast<Int>(reflectedFormat),
+                    static_cast<Int>(viewFormat),
+                    useBindingFormat ? "true" : "false");
+            return false;
         }
         outImageInfo.sampler = VK_NULL_HANDLE;
         outImageInfo.imageView = view;
@@ -626,6 +694,50 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
             auto found = std::find(outTextures.begin(), outTextures.end(), texture);
             if (found == outTextures.end()) {
+                outTextures.push_back(texture);
+            }
+        }
+        return true;
+    }
+
+    Bool UniformManager::CollectStorageImageTextures(
+        const MG_State::GLState::ProgramObject& program,
+        const ProgramFactory::VkProgramObject& programObj,
+        Vector<MG_State::GLState::ITextureObject*>& outTextures) const {
+        outTextures.clear();
+        MOBILEGL_ASSERT(MG_State::pGLContext != nullptr,
+                        "CollectStorageImageTextures: GL context is null");
+
+        const Uint32 bindingCount =
+            std::min<Uint32>(m_maxBindings, static_cast<Uint32>(programObj.bindingKinds.size()));
+        for (Uint32 binding = 0; binding < bindingCount; ++binding) {
+            if (programObj.bindingKinds[binding] != ProgramFactory::DescriptorBindingKind::StorageImage) {
+                continue;
+            }
+            if (binding >= programObj.samplerUniformLocationByBinding.size()) {
+                MGLOG_E("CollectStorageImageTextures: binding %u has no uniform-location mapping", binding);
+                return false;
+            }
+
+            const Int location = programObj.samplerUniformLocationByBinding[binding];
+            if (location < 0) {
+                MGLOG_E("CollectStorageImageTextures: binding %u has no image uniform location", binding);
+                return false;
+            }
+            const Int imageUnit = program.GetUniformSamplerOrImageUnitIndex(static_cast<Uint>(location));
+            if (imageUnit < 0 || imageUnit >= MG_State::GLState::TextureState::MAX_TEXTURE_IMAGE_UNITS) {
+                MGLOG_E("CollectStorageImageTextures: image unit %d is invalid for binding %u",
+                        imageUnit, binding);
+                return false;
+            }
+
+            auto* texture = MG_State::pGLContext->GetImageTextureBinding(imageUnit).Texture.get();
+            if (texture == nullptr) {
+                MGLOG_E("CollectStorageImageTextures: image unit %d is unbound for binding %u",
+                        imageUnit, binding);
+                return false;
+            }
+            if (std::find(outTextures.begin(), outTextures.end(), texture) == outTextures.end()) {
                 outTextures.push_back(texture);
             }
         }

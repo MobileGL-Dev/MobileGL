@@ -34,7 +34,8 @@ public:
     void Shutdown();
 
     VkSampler GetOrCreateSampler(const MG_State::GLState::SamplerObject& sampler,
-                                 const MG_State::GLState::ITextureObject& texture);
+                                 const MG_State::GLState::ITextureObject& texture,
+                                 Bool forceNearestFiltering = false);
 
 private:
     struct SamplerCacheEntry {
@@ -44,7 +45,8 @@ private:
     };
 
     Uint64 BuildSamplerKey(const MG_State::GLState::SamplerObject& sampler,
-                           const MG_State::GLState::ITextureObject& texture) const;
+                           const MG_State::GLState::ITextureObject& texture,
+                           Bool forceNearestFiltering) const;
     static VkFilter ToVkFilter(SamplerFilterMode mode);
     static VkSamplerMipmapMode ToVkMipmapMode(SamplerMipmapMode mode);
     static VkSamplerAddressMode ToVkAddressMode(SamplerWrapMode mode);
@@ -57,7 +59,8 @@ private:
     // the sampler filters linearly both ways, otherwise the GL request clamped to the device limit.
     // GL happily carries GL_TEXTURE_MAX_ANISOTROPY on a NEAREST sampler (Blaze3D's blocks do exactly
     // that) while Vulkan forbids anisotropyEnable there, so the GL value must never be forwarded raw.
-    Float ResolveEffectiveMaxAnisotropy(const MG_State::GLState::SamplerObject& sampler) const;
+    Float ResolveEffectiveMaxAnisotropy(const MG_State::GLState::SamplerObject& sampler,
+                                        Bool forceNearestFiltering) const;
 
     VkDevice m_device = VK_NULL_HANDLE;
     const VulkanRendererConfig* m_config = nullptr;

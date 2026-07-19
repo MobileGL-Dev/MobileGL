@@ -67,6 +67,12 @@ namespace MobileGL {
             Float ViewportBoundsRangeMax = 0.0f;
             Int ViewportSubpixelBits = 0;
             Bool SupportsWideLines = false;
+            // Storage-image descriptors are limited per stage by
+            // maxPerStageDescriptorStorageImages, but writes/atomics outside compute additionally
+            // require these core Vulkan features to be enabled on the logical device.
+            Bool SupportsVertexPipelineStoresAndAtomics = false;
+            Bool SupportsFragmentStoresAndAtomics = false;
+            Bool SupportsGeometryShader = false;
             SizeT MaxShaderStorageBlockSize = 128 * 1024 * 1024;
             Bool SupportsShaderSubgroup = false;
             Uint32 SubgroupSize = 0;

@@ -865,6 +865,9 @@ namespace MobileGL::MG_Util::BackendLoader {
         GLint maxUniformBlockSize = 16384;
         GLint maxImageUnits = 8;
         GLint maxCombinedImageUniforms = 8;
+        GLint maxVertexImageUniforms = 0;
+        GLint maxGeometryImageUniforms = 0;
+        GLint maxFragmentImageUniforms = 8;
         GLint maxComputeImageUniforms = 8;
         GLint maxDrawBuffers = 8;
         GLint maxColorAttachments = 8;
@@ -904,7 +907,16 @@ namespace MobileGL::MG_Util::BackendLoader {
         glesFuncs.glGetIntegerv(GL_MAX_UNIFORM_BLOCK_SIZE, &maxUniformBlockSize);
         glesFuncs.glGetIntegerv(GL_MAX_IMAGE_UNITS, &maxImageUnits);
         glesFuncs.glGetIntegerv(GL_MAX_COMBINED_IMAGE_UNIFORMS, &maxCombinedImageUniforms);
+        glesFuncs.glGetIntegerv(GL_MAX_VERTEX_IMAGE_UNIFORMS, &maxVertexImageUniforms);
+        glesFuncs.glGetIntegerv(GL_MAX_FRAGMENT_IMAGE_UNIFORMS, &maxFragmentImageUniforms);
         glesFuncs.glGetIntegerv(GL_MAX_COMPUTE_IMAGE_UNIFORMS, &maxComputeImageUniforms);
+        // Geometry shaders and their image-uniform query are core only in ES 3.2. DirectGLES
+        // emits ESSL 3.10 on an ES 3.1 context, so reporting zero there is both legal and an
+        // accurate description of what the backend compiler can consume.
+        if (caps.GLESVersion.Major > 3 ||
+            (caps.GLESVersion.Major == 3 && caps.GLESVersion.Minor >= 2)) {
+            glesFuncs.glGetIntegerv(GL_MAX_GEOMETRY_IMAGE_UNIFORMS, &maxGeometryImageUniforms);
+        }
         glesFuncs.glGetIntegerv(GL_MAX_DRAW_BUFFERS, &maxDrawBuffers);
         glesFuncs.glGetIntegerv(GL_MAX_COLOR_ATTACHMENTS, &maxColorAttachments);
         glesFuncs.glGetIntegerv(GL_MAX_CLIP_DISTANCES, &maxClipDistances);
@@ -955,6 +967,9 @@ namespace MobileGL::MG_Util::BackendLoader {
         caps.MaxUniformBlockSize = maxUniformBlockSize;
         caps.MaxImageUnits = maxImageUnits;
         caps.MaxCombinedImageUniforms = maxCombinedImageUniforms;
+        caps.MaxVertexImageUniforms = maxVertexImageUniforms;
+        caps.MaxGeometryImageUniforms = maxGeometryImageUniforms;
+        caps.MaxFragmentImageUniforms = maxFragmentImageUniforms;
         caps.MaxComputeImageUniforms = maxComputeImageUniforms;
         caps.MaxDrawBuffers = maxDrawBuffers;
         caps.MaxColorAttachments = maxColorAttachments;
@@ -1000,6 +1015,9 @@ namespace MobileGL::MG_Util::BackendLoader {
         MGLOG_I("    GL_MAX_UNIFORM_BLOCK_SIZE: %d", caps.MaxUniformBlockSize);
         MGLOG_I("    GL_MAX_IMAGE_UNITS: %d", caps.MaxImageUnits);
         MGLOG_I("    GL_MAX_COMBINED_IMAGE_UNIFORMS: %d", caps.MaxCombinedImageUniforms);
+        MGLOG_I("    GL_MAX_VERTEX_IMAGE_UNIFORMS: %d", caps.MaxVertexImageUniforms);
+        MGLOG_I("    GL_MAX_GEOMETRY_IMAGE_UNIFORMS: %d", caps.MaxGeometryImageUniforms);
+        MGLOG_I("    GL_MAX_FRAGMENT_IMAGE_UNIFORMS: %d", caps.MaxFragmentImageUniforms);
         MGLOG_I("    GL_MAX_COMPUTE_IMAGE_UNIFORMS: %d", caps.MaxComputeImageUniforms);
         MGLOG_I("    GL_MAX_DRAW_BUFFERS: %d", caps.MaxDrawBuffers);
         MGLOG_I("    GL_MAX_COLOR_ATTACHMENTS: %d", caps.MaxColorAttachments);
