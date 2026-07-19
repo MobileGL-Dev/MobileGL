@@ -276,12 +276,10 @@
     },
     {
       "name": "improved-transparency-minecraft-26.3",
-      "ci": false,
       "trace_archive": "improved-transparency-minecraft-26.3.tgz",
       "golden": "improved-transparency-minecraft-26.3.0002667619.png",
       "target_call": 2667619,
-      "timeout_seconds": 1800,
-      "coherent_as_flush": true
+      "timeout_seconds": 1800
     }
   ]
 }
