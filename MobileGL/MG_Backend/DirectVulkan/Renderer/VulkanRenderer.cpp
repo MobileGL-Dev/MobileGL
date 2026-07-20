@@ -19,11 +19,13 @@
 #include "MG_Util/Converters/GLToMG/TextureEnumConverter.h"
 #include "MG_Util/Converters/MGToVk/RenderStateEnumConverter.h"
 #include "MG_Util/Converters/MGToVk/TextureEnumConverter.h"
+#include "MG_Util/Math/HalfFloat.h"
 #include "MG_Util/Metrics/TextureMetrics.h"
 #include <Config.h>
 #include <algorithm>
 #include <cstdlib>
 #include <cstring>
+#include <vulkan/utility/vk_format_utils.h>
 #include <vulkan/vulkan_core.h>
 #ifdef __ANDROID__
 #include <sys/system_properties.h>
@@ -1127,6 +1129,7 @@ void main() {
             VkImage image = VK_NULL_HANDLE;
             VkImageLayout* trackedLayout = nullptr;
             VkImageAspectFlags aspectMask = VK_IMAGE_ASPECT_NONE;
+            VkFormat format = VK_FORMAT_UNDEFINED;
             IntVec2 extent = {0, 0};
             Uint32 mipLevel = 0;
             Uint32 mipLevelCount = 1;
@@ -1290,6 +1293,7 @@ void main() {
                 outBinding.image = swapchainObject.GetImage(swapchainImageIndex);
                 outBinding.trackedLayout = nullptr;
                 outBinding.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+                outBinding.format = swapchainObject.GetSurfaceFormat().format;
                 const auto extent = swapchainObject.GetExtent();
                 outBinding.extent = {static_cast<Int>(extent.width), static_cast<Int>(extent.height)};
                 outBinding.mipLevel = 0;
@@ -1338,6 +1342,7 @@ void main() {
             outBinding.image = resource->image;
             outBinding.trackedLayout = &resource->layout;
             outBinding.aspectMask = resource->aspect;
+            outBinding.format = resource->format;
             const auto attachmentExtent = attachment.GetSize();
             outBinding.extent = {attachmentExtent.x(), attachmentExtent.y()};
             outBinding.mipLevel = static_cast<Uint32>(std::max(attachment.GetTextureLevel(), 0));
@@ -1584,17 +1589,52 @@ void main() {
             }
         }
 
-        static Bool IsBgraVkFormat(VkFormat format) {
-            switch (format) {
+        static Bool DecodeReadbackPixel(const Uint8* source, VkFormat sourceFormat, Float* rgba) {
+            switch (sourceFormat) {
+                case VK_FORMAT_R8G8B8A8_UNORM:
+                case VK_FORMAT_R8G8B8A8_SRGB:
+                    rgba[0] = static_cast<Float>(source[0]) / 255.0f;
+                    rgba[1] = static_cast<Float>(source[1]) / 255.0f;
+                    rgba[2] = static_cast<Float>(source[2]) / 255.0f;
+                    rgba[3] = static_cast<Float>(source[3]) / 255.0f;
+                    return true;
                 case VK_FORMAT_B8G8R8A8_UNORM:
-                case VK_FORMAT_B8G8R8A8_SNORM:
                 case VK_FORMAT_B8G8R8A8_SRGB:
-                case VK_FORMAT_B8G8R8A8_USCALED:
-                case VK_FORMAT_B8G8R8A8_SSCALED:
+                    rgba[0] = static_cast<Float>(source[2]) / 255.0f;
+                    rgba[1] = static_cast<Float>(source[1]) / 255.0f;
+                    rgba[2] = static_cast<Float>(source[0]) / 255.0f;
+                    rgba[3] = static_cast<Float>(source[3]) / 255.0f;
+                    return true;
+                case VK_FORMAT_R16G16B16A16_UNORM:
+                    for (SizeT component = 0; component < 4; ++component) {
+                        Uint16 value = 0;
+                        Memcpy(&value, source + component * sizeof(value), sizeof(value));
+                        rgba[component] = static_cast<Float>(value) / 65535.0f;
+                    }
+                    return true;
+                case VK_FORMAT_R16G16B16A16_SFLOAT:
+                    for (SizeT component = 0; component < 4; ++component) {
+                        Uint16 value = 0;
+                        Memcpy(&value, source + component * sizeof(value), sizeof(value));
+                        rgba[component] = MG_Util::DecodeHalfBitsToFloat(value);
+                    }
+                    return true;
+                case VK_FORMAT_R32G32B32A32_SFLOAT:
+                    Memcpy(rgba, source, sizeof(Float) * 4);
                     return true;
                 default:
                     return false;
             }
+        }
+
+        static Uint8 EncodeReadbackUnorm8(Float value) {
+            if (!(value > 0.0f)) {
+                return 0;
+            }
+            if (value >= 1.0f) {
+                return 255;
+            }
+            return static_cast<Uint8>(value * 255.0f + 0.5f);
         }
 
         // Remap raw swapchain pixels (top-left origin, preTransform-rotated) into
@@ -1606,6 +1646,7 @@ void main() {
         static Bool RemapDefaultFboReadbackToGLOrientation(const Uint8* rawPixels,
                                                             VkExtent2D rawExtent,
                                                             VkSurfaceTransformFlagBitsKHR preTransform,
+                                                            SizeT texelSize,
                                                             Uint8* outPixels) {
             if (IsQuarterTurnPreTransform(preTransform)) {
                 return false;
@@ -1629,12 +1670,9 @@ void main() {
                         default:
                             break;
                     }
-                    const Uint8* src = rawPixels + (static_cast<SizeT>(rawY) * w + rawX) * 4;
-                    Uint8* dst = outPixels + (static_cast<SizeT>(outY) * w + outX) * 4;
-                    dst[0] = src[0];
-                    dst[1] = src[1];
-                    dst[2] = src[2];
-                    dst[3] = src[3];
+                    const Uint8* src = rawPixels + (static_cast<SizeT>(rawY) * w + rawX) * texelSize;
+                    Uint8* dst = outPixels + (static_cast<SizeT>(outY) * w + outX) * texelSize;
+                    Memcpy(dst, src, texelSize);
                 }
             }
             return true;
@@ -1658,12 +1696,11 @@ void main() {
             }
         }
 
-        static void StoreReadbackPixel(const Uint8* src, Bool srcIsBgra, GLenum dstFormat, Uint8* dst) {
-            const Uint8 r = srcIsBgra ? src[2] : src[0];
-            const Uint8 g = src[1];
-            const Uint8 b = srcIsBgra ? src[0] : src[2];
-            const Uint8 a = src[3];
-
+        static void StoreReadbackPixel(const Float* rgba, GLenum dstFormat, Uint8* dst) {
+            const Uint8 r = EncodeReadbackUnorm8(rgba[0]);
+            const Uint8 g = EncodeReadbackUnorm8(rgba[1]);
+            const Uint8 b = EncodeReadbackUnorm8(rgba[2]);
+            const Uint8 a = EncodeReadbackUnorm8(rgba[3]);
             switch (dstFormat) {
                 case GL_RGB:
                     dst[0] = r;
@@ -1692,13 +1729,11 @@ void main() {
             }
         }
 
-        static void StoreReadbackPixelFloat(const Uint8* src, Bool srcIsBgra, GLenum dstFormat, Float* dst) {
-            const Float r = static_cast<Float>(srcIsBgra ? src[2] : src[0]) / 255.0f;
-            const Float g = static_cast<Float>(src[1]) / 255.0f;
-            const Float b = static_cast<Float>(srcIsBgra ? src[0] : src[2]) / 255.0f;
-            const Float a = static_cast<Float>(src[3]) / 255.0f;
-
-            // TODO: extend readback packing to integer/depth formats instead of only normalized color formats.
+        static void StoreReadbackPixelFloat(const Float* rgba, GLenum dstFormat, Float* dst) {
+            const Float r = rgba[0];
+            const Float g = rgba[1];
+            const Float b = rgba[2];
+            const Float a = rgba[3];
             switch (dstFormat) {
                 case GL_RGB:
                     dst[0] = r;
@@ -1756,20 +1791,11 @@ void main() {
                                      (static_cast<SizeT>(width) * static_cast<SizeT>(dstChannels) * dstComponentBytes);
             Vector<Uint8> packed(packedSize, 0);
 
-            const Bool srcIsBgra = IsBgraVkFormat(srcFormat);
-            for (GLsizei row = 0; row < height; ++row) {
-                const Uint8* srcRow = srcPixels + static_cast<SizeT>(row) * static_cast<SizeT>(width) * 4;
-                Uint8* dstRow = packed.data() + dstOffset + static_cast<SizeT>(row) * dstRowStride;
-                for (GLsizei col = 0; col < width; ++col) {
-                    const auto* src = srcRow + static_cast<SizeT>(col) * 4;
-                    auto* dst = dstRow + static_cast<SizeT>(col) * static_cast<SizeT>(dstChannels) *
-                                             dstComponentBytes;
-                    if (type == GL_FLOAT) {
-                        StoreReadbackPixelFloat(src, srcIsBgra, format, reinterpret_cast<Float*>(dst));
-                    } else {
-                        StoreReadbackPixel(src, srcIsBgra, format, dst);
-                    }
-                }
+            if (!VulkanRenderer::ConvertReadbackPixels(srcPixels, srcFormat, width, height, format, type,
+                                                       dstRowStride, packed.data() + dstOffset)) {
+                MGLOG_E("DirectVulkan readback skipped: unsupported source format=%d",
+                        static_cast<Int>(srcFormat));
+                return false;
             }
 
             const auto& pixelPackBufferObject =
@@ -1790,6 +1816,60 @@ void main() {
             return true;
         }
     } // namespace
+
+    SizeT VulkanRenderer::GetReadbackTexelSize(VkFormat sourceFormat) {
+        const VKU_FORMAT_INFO formatInfo = vkuGetFormatInfo(sourceFormat);
+        if (formatInfo.texels_per_block != 1) {
+            return 0;
+        }
+        return formatInfo.texel_block_size;
+    }
+
+    Bool VulkanRenderer::ConvertReadbackPixels(const Uint8* sourcePixels, VkFormat sourceFormat,
+                                               GLsizei width, GLsizei height, GLenum destinationFormat,
+                                               GLenum destinationType, SizeT destinationRowStride,
+                                               Uint8* destinationPixels) {
+        if (width <= 0 || height <= 0) {
+            return true;
+        }
+        if (sourcePixels == nullptr || destinationPixels == nullptr) {
+            return false;
+        }
+
+        const SizeT sourceTexelSize = GetReadbackTexelSize(sourceFormat);
+        const Int destinationChannels = GetReadbackChannelCount(destinationFormat);
+        if (sourceTexelSize == 0 || destinationChannels == 0 ||
+            (destinationType != GL_UNSIGNED_BYTE && destinationType != GL_FLOAT)) {
+            return false;
+        }
+        const SizeT destinationComponentSize = destinationType == GL_FLOAT ? sizeof(Float) : sizeof(Uint8);
+        const SizeT destinationPixelSize = static_cast<SizeT>(destinationChannels) * destinationComponentSize;
+        if (destinationRowStride < static_cast<SizeT>(width) * destinationPixelSize) {
+            return false;
+        }
+
+        for (GLsizei row = 0; row < height; ++row) {
+            const Uint8* sourceRow = sourcePixels +
+                static_cast<SizeT>(row) * static_cast<SizeT>(width) * sourceTexelSize;
+            Uint8* destinationRow = destinationPixels + static_cast<SizeT>(row) * destinationRowStride;
+            for (GLsizei column = 0; column < width; ++column) {
+                const Uint8* source = sourceRow + static_cast<SizeT>(column) * sourceTexelSize;
+                Uint8* destination = destinationRow + static_cast<SizeT>(column) * destinationPixelSize;
+                Float rgba[4]{};
+                if (!DecodeReadbackPixel(source, sourceFormat, rgba)) {
+                    return false;
+                }
+                if (destinationType == GL_FLOAT) {
+                    Float converted[4]{};
+                    StoreReadbackPixelFloat(rgba, destinationFormat, converted);
+                    Memcpy(destination, converted, destinationPixelSize);
+                } else {
+                    StoreReadbackPixel(rgba, destinationFormat, destination);
+                }
+            }
+        }
+        return true;
+    }
 
     VkBool32 VulkanRenderer::DebugCallback(VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
                                            VkDebugUtilsMessageTypeFlagsEXT messageType,
@@ -5366,6 +5446,7 @@ void main() {
                 VK_ACCESS_TRANSFER_WRITE_BIT, dstRestoreAccessMask, copyAspectMask, dstMipLevel, 1);
             MOBILEGL_ASSERT(dstRestored, "%s: failed to restore destination image layout", __func__);
         }
+
     }
 
     Bool VulkanRenderer::SubmitReadbackCommandsAndWait(FrameContext::FrameData& frame) {
@@ -5450,7 +5531,15 @@ void main() {
             return;
         }
 
-        const VkDeviceSize readbackSize = static_cast<VkDeviceSize>(width) * static_cast<VkDeviceSize>(height) * 4;
+        const VkFormat srcFormat = srcBinding.format;
+        const SizeT sourceTexelSize = GetReadbackTexelSize(srcFormat);
+        if (sourceTexelSize == 0) {
+            MGLOG_E("DirectVulkan::ReadPixels skipped: unsupported source format=%d",
+                    static_cast<Int>(srcFormat));
+            return;
+        }
+        const VkDeviceSize readbackSize = static_cast<VkDeviceSize>(width) *
+                                          static_cast<VkDeviceSize>(height) * sourceTexelSize;
         VkBufferObject readback;
         if (!readback.Create({
                 .allocator = m_allocator,
@@ -5486,7 +5575,7 @@ void main() {
         VkBufferImageCopy copyRegion{};
         copyRegion.imageSubresource.aspectMask = srcBinding.aspectMask;
         copyRegion.imageSubresource.mipLevel = srcBinding.mipLevel;
-        copyRegion.imageSubresource.baseArrayLayer = 0;
+        copyRegion.imageSubresource.baseArrayLayer = srcBinding.baseArrayLayer;
         copyRegion.imageSubresource.layerCount = 1;
         copyRegion.imageOffset = {x, y, 0};
         copyRegion.imageExtent = {static_cast<Uint32>(width), static_cast<Uint32>(height), 1};
@@ -5521,14 +5610,18 @@ void main() {
             MGLOG_E("DirectVulkan::ReadPixels skipped: failed to map readback buffer");
             return;
         }
-        const VkFormat srcFormat = readIsDefaultFbo ? m_swapchainObject.GetSurfaceFormat().format : VK_FORMAT_R8G8B8A8_UNORM;
+        if (!readback.Invalidate(readbackSize)) {
+            MGLOG_E("DirectVulkan::ReadPixels skipped: failed to invalidate readback buffer");
+            return;
+        }
         if (readIsDefaultFbo) {
             const VkExtent2D swapchainExtent = m_swapchainObject.GetExtent();
             const VkSurfaceTransformFlagBitsKHR preTransform = m_swapchainObject.GetPreTransform();
             if (static_cast<Uint32>(width) == swapchainExtent.width &&
                 static_cast<Uint32>(height) == swapchainExtent.height) {
-                Vector<Uint8> remapped(static_cast<SizeT>(width) * static_cast<SizeT>(height) * 4);
+                Vector<Uint8> remapped(static_cast<SizeT>(width) * static_cast<SizeT>(height) * sourceTexelSize);
                 if (RemapDefaultFboReadbackToGLOrientation(mapped, swapchainExtent, preTransform,
+                                                           sourceTexelSize,
                                                            remapped.data())) {
                     PackReadbackToClientOrPbo(remapped.data(), srcFormat, width, height, format, type, pixels);
                     return;
@@ -5594,9 +5687,10 @@ void main() {
         }
         if (bufSize >= 0) {
             const Int dstChannels = GetReadbackChannelCount(format);
-            if (type == GL_UNSIGNED_BYTE && dstChannels > 0) {
+            if ((type == GL_UNSIGNED_BYTE || type == GL_FLOAT) && dstChannels > 0) {
+                const SizeT dstComponentSize = type == GL_FLOAT ? sizeof(Float) : sizeof(Uint8);
                 const SizeT minSize = static_cast<SizeT>(width) * static_cast<SizeT>(height) *
-                                      static_cast<SizeT>(dstChannels);
+                                      static_cast<SizeT>(dstChannels) * dstComponentSize;
                 if (static_cast<SizeT>(bufSize) < minSize) {
                     MGLOG_E("DirectVulkan::GetTextureImage skipped: destination buffer is too small");
                     return;
@@ -5604,7 +5698,14 @@ void main() {
             }
         }
 
-        const VkDeviceSize readbackSize = static_cast<VkDeviceSize>(width) * static_cast<VkDeviceSize>(height) * 4;
+        const SizeT sourceTexelSize = GetReadbackTexelSize(resource->format);
+        if (sourceTexelSize == 0) {
+            MGLOG_E("DirectVulkan::GetTexImage skipped: unsupported source format=%d",
+                    static_cast<Int>(resource->format));
+            return;
+        }
+        const VkDeviceSize readbackSize = static_cast<VkDeviceSize>(width) *
+                                          static_cast<VkDeviceSize>(height) * sourceTexelSize;
         VkBufferObject readback;
         if (!readback.Create({
                 .allocator = m_allocator,
@@ -5653,6 +5754,10 @@ void main() {
         const auto* mapped = static_cast<const Uint8*>(readback.Map());
         if (mapped == nullptr) {
             MGLOG_E("DirectVulkan::GetTextureImage skipped: failed to map readback buffer");
+            return;
+        }
+        if (!readback.Invalidate(readbackSize)) {
+            MGLOG_E("DirectVulkan::GetTextureImage skipped: failed to invalidate readback buffer");
             return;
         }
         PackReadbackToClientOrPbo(mapped, resource->format, width, height, format, type, pixels);

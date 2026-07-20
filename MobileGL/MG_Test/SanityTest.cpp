@@ -29,6 +29,7 @@
 #include <MG_Backend/DirectVulkan/Renderer/VkRenderPassManager.h>
 #include <MG_Backend/DirectVulkan/Renderer/VkTextureManager.h>
 #include <MG_Backend/DirectVulkan/Renderer/VulkanRenderer.h>
+#include <MG_Util/Math/HalfFloat.h>
 #include <MG_Util/ShaderTranspiler/ShaderCompiler.h>
 #include <MG_Util/ShaderTranspiler/ShaderSourceProcessor.h>
 #include <MG_Util/Debug/Log.h>
@@ -729,6 +730,68 @@ TEST(DirectVulkanSanity, CommandMemoryBarrierMakesIndirectDrawCommandsVisible) {
     const VkMemoryBarrier storageOnlyBarrier =
         VulkanRenderer::BuildMemoryBarrierForGlBarriers(GL_SHADER_STORAGE_BARRIER_BIT);
     EXPECT_EQ(storageOnlyBarrier.dstAccessMask & VK_ACCESS_INDIRECT_COMMAND_READ_BIT, 0u);
+}
+
+TEST(DirectVulkanSanity, ReadbackUsesTheSourceFormatTexelSize) {
+    using MobileGL::MG_Backend::DirectVulkan::VulkanRenderer;
+
+    EXPECT_EQ(VulkanRenderer::GetReadbackTexelSize(VK_FORMAT_R8G8B8A8_UNORM), 4u);
+    EXPECT_EQ(VulkanRenderer::GetReadbackTexelSize(VK_FORMAT_R16G16B16A16_SFLOAT), 8u);
+    EXPECT_EQ(VulkanRenderer::GetReadbackTexelSize(VK_FORMAT_R32G32B32A32_SFLOAT), 16u);
+}
+
+TEST(DirectVulkanSanity, ReadbackConvertsRgba8AndRgba16fPixels) {
+    using MobileGL::MG_Backend::DirectVulkan::VulkanRenderer;
+    using MobileGL::MG_Util::EncodeFloatToHalfBits;
+
+    const MobileGL::Uint8 rgba8[] = {17, 34, 51, 68, 85, 102, 119, 136};
+    MobileGL::Uint8 rgba8Result[sizeof(rgba8)]{};
+    ASSERT_TRUE(VulkanRenderer::ConvertReadbackPixels(
+        rgba8, VK_FORMAT_R8G8B8A8_UNORM, 2, 1, GL_RGBA, GL_UNSIGNED_BYTE,
+        sizeof(rgba8Result), rgba8Result));
+    EXPECT_TRUE(std::equal(std::begin(rgba8), std::end(rgba8), std::begin(rgba8Result)));
+
+    const MobileGL::Uint8 bgra8[] = {51, 34, 17, 68};
+    MobileGL::Uint8 bgra8Result[4]{};
+    ASSERT_TRUE(VulkanRenderer::ConvertReadbackPixels(
+        bgra8, VK_FORMAT_B8G8R8A8_UNORM, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE,
+        sizeof(bgra8Result), bgra8Result));
+    const MobileGL::Uint8 expectedBgra8[] = {17, 34, 51, 68};
+    EXPECT_TRUE(std::equal(std::begin(expectedBgra8), std::end(expectedBgra8), std::begin(bgra8Result)));
+
+    const MobileGL::Uint16 rgba16f[] = {
+        EncodeFloatToHalfBits(-0.25f), EncodeFloatToHalfBits(0.5f), EncodeFloatToHalfBits(1.5f),
+        EncodeFloatToHalfBits(1.0f), EncodeFloatToHalfBits(0.25f), EncodeFloatToHalfBits(0.0f),
+        EncodeFloatToHalfBits(1.0f), EncodeFloatToHalfBits(0.5f),
+        EncodeFloatToHalfBits(0.75f), EncodeFloatToHalfBits(0.125f), EncodeFloatToHalfBits(-1.0f),
+        EncodeFloatToHalfBits(2.0f), EncodeFloatToHalfBits(1.0f), EncodeFloatToHalfBits(0.75f),
+        EncodeFloatToHalfBits(0.25f), EncodeFloatToHalfBits(0.0f),
+    };
+    constexpr MobileGL::SizeT kDestinationRowStride = 12;
+    MobileGL::Uint8 rgba16fResult[kDestinationRowStride * 2];
+    std::fill(std::begin(rgba16fResult), std::end(rgba16fResult), 0xCD);
+    ASSERT_TRUE(VulkanRenderer::ConvertReadbackPixels(
+        reinterpret_cast<const MobileGL::Uint8*>(rgba16f), VK_FORMAT_R16G16B16A16_SFLOAT,
+        2, 2, GL_RGBA, GL_UNSIGNED_BYTE, kDestinationRowStride, rgba16fResult));
+    const MobileGL::Uint8 expectedRgba16fRow0[] = {0, 128, 255, 255, 64, 0, 255, 128};
+    const MobileGL::Uint8 expectedRgba16fRow1[] = {191, 32, 0, 255, 255, 191, 64, 0};
+    EXPECT_TRUE(std::equal(std::begin(expectedRgba16fRow0), std::end(expectedRgba16fRow0),
+                           std::begin(rgba16fResult)));
+    EXPECT_TRUE(std::equal(std::begin(expectedRgba16fRow1), std::end(expectedRgba16fRow1),
+                           std::begin(rgba16fResult) + kDestinationRowStride));
+    EXPECT_TRUE(std::all_of(std::begin(rgba16fResult) + 8,
+                            std::begin(rgba16fResult) + kDestinationRowStride,
+                            [](MobileGL::Uint8 value) { return value == 0xCD; }));
+
+    MobileGL::Float rgba16fFloatResult[16]{};
+    ASSERT_TRUE(VulkanRenderer::ConvertReadbackPixels(
+        reinterpret_cast<const MobileGL::Uint8*>(rgba16f), VK_FORMAT_R16G16B16A16_SFLOAT,
+        2, 2, GL_RGBA, GL_FLOAT, sizeof(MobileGL::Float) * 8,
+        reinterpret_cast<MobileGL::Uint8*>(rgba16fFloatResult)));
+    EXPECT_FLOAT_EQ(rgba16fFloatResult[0], -0.25f);
+    EXPECT_FLOAT_EQ(rgba16fFloatResult[1], 0.5f);
+    EXPECT_FLOAT_EQ(rgba16fFloatResult[2], 1.5f);
+    EXPECT_FLOAT_EQ(rgba16fFloatResult[3], 1.0f);
 }
 
 TEST(DirectVulkanSanity, DrawIndexedIndirectCommandMatchesGlAndVulkanLayout) {

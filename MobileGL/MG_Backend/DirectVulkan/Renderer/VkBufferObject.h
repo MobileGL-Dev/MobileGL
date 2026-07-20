@@ -44,6 +44,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         void* Map();
         void Unmap();
         Bool Upload(const void* data, VkDeviceSize size, VkDeviceSize offset = 0);
+        Bool Invalidate(VkDeviceSize size = VK_WHOLE_SIZE, VkDeviceSize offset = 0);
 
         VkBuffer GetHandle() const { return m_buffer; }
         VkDeviceSize GetSize() const { return m_size; }

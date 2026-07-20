@@ -157,6 +157,25 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         return true;
     }
 
+    Bool VkBufferObject::Invalidate(VkDeviceSize size, VkDeviceSize offset) {
+        MOBILEGL_ASSERT(IsValid(), "VkBufferObject::Invalidate called on invalid buffer");
+        MOBILEGL_ASSERT(IsMapped(), "VkBufferObject::Invalidate requires mapped memory");
+        MOBILEGL_ASSERT(offset <= m_size, "VkBufferObject::Invalidate offset out of range");
+
+        const VkDeviceSize resolvedSize = size == VK_WHOLE_SIZE ? m_size - offset : size;
+        MOBILEGL_ASSERT(offset + resolvedSize <= m_size, "VkBufferObject::Invalidate range out of bounds");
+        if (resolvedSize == 0) {
+            return true;
+        }
+
+        const VkResult result = vmaInvalidateAllocation(m_allocator, m_allocation, offset, resolvedSize);
+        if (result != VK_SUCCESS) {
+            MGLOG_E("VkBufferObject::Invalidate failed: vmaInvalidateAllocation returned %d", result);
+            return false;
+        }
+        return true;
+    }
+
     BufferSlice VkBufferObject::GetSlice(VkDeviceSize offset, VkDeviceSize size) const {
         MOBILEGL_ASSERT(offset <= m_size, "VkBufferObject::GetSlice offset out of range");
         const VkDeviceSize resolvedSize = (size == VK_WHOLE_SIZE) ? (m_size - offset) : size;

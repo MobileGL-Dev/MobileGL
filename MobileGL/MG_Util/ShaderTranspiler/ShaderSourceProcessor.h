@@ -21,6 +21,16 @@ namespace MobileGL {
         namespace ShaderTranspiler {
             void PreprocessShaderSource(ShaderStage stage, String& source);
 
+            // Some desktop-captured compute shaders build a workgroup-wide linear prefix scan
+            // from subgroupInclusiveAdd plus a shared array of subgroup totals. Qualcomm's
+            // Vulkan driver miscompiles that exact float InclusiveScan path for native subgroups
+            // wider than the capture's 32 lanes. For the narrowly recognized, uniform-control-
+            // flow template, replace the subgroup-local scan with a shared-memory, strict
+            // left-fold over virtual 32-lane segments. Returns true only when the complete safe
+            // template was recognized and rewritten. DirectVulkan calls this through
+            // PreprocessShaderSource; the explicit entry point exists for deterministic tests.
+            Bool RewriteLinearSubgroupPrefixScanForVulkan(ShaderStage stage, Uint32 nativeSubgroupSize, String& source);
+
             // Rewrites a "#version 330 core" directive that PreprocessShaderSource normalized down
             // from a legacy desktop version back up to "#version 460 core". Returns false (leaving
             // the source untouched) for anything else: ES, compatibility, or an already-modern

@@ -18,17 +18,16 @@ SUMMARY_HTML = "mobilegl-android-retrace-overview.html"
 DEFAULT_ANGLE_VARIANT = "ec889e6ea831"
 BLISS_ANGLE_VARIANT = "90a62123d794"
 BLISS_CASE = "minecraft-1.21.4-fabric-iris-bliss-in-world"
+TRACE_APK_DIR = ROOT / "android-plugin" / "app" / "build" / "outputs" / "apk" / "trace" / "debug"
 
 BACKENDS = {
     "DirectGLES": {
-        "apk": ROOT / "android-plugin" / "app" / "build" / "outputs" / "apk" / "esprytTrace" / "debug" / "MobileGL-EsprytTrace-debug.apk",
-        "package": "top.mobilegl.plugin.espryt.trace",
-        "use_angle": True,
+        "package": "top.mobilegl.plugin.trace",
+        "use_angle": False,
         "use_pbuffer": False,
     },
     "DirectVulkan": {
-        "apk": ROOT / "android-plugin" / "app" / "build" / "outputs" / "apk" / "magmaTrace" / "debug" / "MobileGL-MagmaTrace-debug.apk",
-        "package": "top.mobilegl.plugin.magma.trace",
+        "package": "top.mobilegl.plugin.trace",
         "use_angle": False,
         "use_pbuffer": False,
     },
@@ -43,6 +42,11 @@ def safe_case(name):
 
 def is_lfs_pointer(path):
     return path.exists() and path.read_bytes()[:80].startswith(b"version https://git-lfs.github.com/spec/v1")
+
+
+def find_trace_apk():
+    candidates = list(TRACE_APK_DIR.glob("MobileGL-plugin-trace-release-*.apk"))
+    return max(candidates, key=lambda path: path.stat().st_mtime) if candidates else None
 
 
 def bash_path(path):
@@ -117,9 +121,13 @@ def render_summary():
 
 def run_case(case, backend):
     backend_info = BACKENDS[backend]
+    apk = find_trace_apk()
     trace_archive = FIXTURES / case["trace_archive"]
     golden = FIXTURES / case["golden"]
     alternate = FIXTURES / case["alternate_golden"] if case.get("alternate_golden") else None
+    if apk is None:
+        mark_skipped(case, backend, f"SKIPPED_MISSING_APK: no trace APK found under {TRACE_APK_DIR}")
+        return 2
     if not trace_archive.exists() or is_lfs_pointer(trace_archive):
         mark_skipped(case, backend, "SKIPPED_LFS_POINTER: trace archive is missing or still an LFS pointer")
         copy_goldens(case, backend)
@@ -134,7 +142,7 @@ def run_case(case, backend):
         "C:/Program Files/Git/bin/bash.exe",
         "android-plugin/trace-replay-ci.sh",
         "--apk-file",
-        bash_path(backend_info["apk"]),
+        bash_path(apk),
         "--package",
         backend_info["package"],
         "--backend",
