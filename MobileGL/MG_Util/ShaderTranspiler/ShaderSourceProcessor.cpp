@@ -10,10 +10,14 @@
 
 #include <algorithm>
 #include <cctype>
+#include <initializer_list>
+#include <utility>
 #include <MG_Backend/BackendObjects.h>
 
 namespace {
     using MobileGL::SizeT;
+    using MobileGL::String;
+    using MobileGL::Vector;
 
     bool IsIdentifierChar(char ch) {
         return (ch >= '0' && ch <= '9') || (ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') || ch == '_';
@@ -89,6 +93,375 @@ namespace {
         }
 
         return masked;
+    }
+
+    struct CodeToken {
+        String text;
+        SizeT begin = 0;
+        SizeT end = 0;
+    };
+
+    Vector<CodeToken> TokenizeCode(const String& source) {
+        const String masked = MaskCommentsAndQuotedText(source);
+        Vector<CodeToken> tokens;
+        tokens.reserve(source.size() / 4);
+
+        SizeT pos = 0;
+        while (pos < masked.size()) {
+            const char ch = masked[pos];
+            if (std::isspace(static_cast<unsigned char>(ch))) {
+                ++pos;
+                continue;
+            }
+
+            const SizeT begin = pos;
+            if (IsIdentifierStart(ch)) {
+                ++pos;
+                while (pos < masked.size() && IsIdentifierChar(masked[pos])) {
+                    ++pos;
+                }
+            } else if (std::isdigit(static_cast<unsigned char>(ch))) {
+                ++pos;
+                while (pos < masked.size()) {
+                    const char numberChar = masked[pos];
+                    if (!IsIdentifierChar(numberChar) && numberChar != '.') {
+                        break;
+                    }
+                    ++pos;
+                }
+            } else {
+                ++pos;
+                if (pos < masked.size()) {
+                    const String twoChars = masked.substr(begin, 2);
+                    if (twoChars == "==" || twoChars == "!=" || twoChars == "<=" || twoChars == ">=" ||
+                        twoChars == "+=" || twoChars == "-=" || twoChars == "<<" || twoChars == ">>" ||
+                        twoChars == "++" || twoChars == "--" || twoChars == "&&" || twoChars == "||") {
+                        ++pos;
+                    }
+                }
+            }
+
+            tokens.push_back(CodeToken{source.substr(begin, pos - begin), begin, pos});
+        }
+        return tokens;
+    }
+
+    bool IsIdentifierToken(const CodeToken& token) {
+        if (token.text.empty() || !IsIdentifierStart(token.text.front())) {
+            return false;
+        }
+        return std::all_of(token.text.begin() + 1, token.text.end(), IsIdentifierChar);
+    }
+
+    class TokenCursor {
+    public:
+        TokenCursor(const Vector<CodeToken>& tokens, SizeT position) : m_tokens(tokens), m_position(position) {}
+
+        bool Consume(const char* expected) {
+            if (m_position >= m_tokens.size() || m_tokens[m_position].text != expected) {
+                return false;
+            }
+            ++m_position;
+            return true;
+        }
+
+        bool ConsumeAnyIdentifier(String& identifier) {
+            if (m_position >= m_tokens.size() || !IsIdentifierToken(m_tokens[m_position])) {
+                return false;
+            }
+            identifier = m_tokens[m_position++].text;
+            return true;
+        }
+
+        bool ConsumeAnyIdentifier() {
+            if (m_position >= m_tokens.size() || !IsIdentifierToken(m_tokens[m_position])) {
+                return false;
+            }
+            ++m_position;
+            return true;
+        }
+
+        bool ConsumeIdentifier(const String& expected) {
+            if (m_position >= m_tokens.size() || !IsIdentifierToken(m_tokens[m_position]) ||
+                m_tokens[m_position].text != expected) {
+                return false;
+            }
+            ++m_position;
+            return true;
+        }
+
+        SizeT Position() const { return m_position; }
+
+    private:
+        const Vector<CodeToken>& m_tokens;
+        SizeT m_position;
+    };
+
+    SizeT CountToken(const Vector<CodeToken>& tokens, const String& tokenText) {
+        return static_cast<SizeT>(std::count_if(tokens.begin(), tokens.end(),
+                                                [&](const CodeToken& token) { return token.text == tokenText; }));
+    }
+
+    bool HasIdentifierWithPrefixOutsideAllowed(const Vector<CodeToken>& tokens, const String& prefix,
+                                               std::initializer_list<const char*> allowedIdentifiers) {
+        return std::any_of(tokens.begin(), tokens.end(), [&](const CodeToken& token) {
+            if (!IsIdentifierToken(token) || !token.text.starts_with(prefix)) {
+                return false;
+            }
+            return std::none_of(allowedIdentifiers.begin(), allowedIdentifiers.end(),
+                                [&](const char* allowed) { return token.text == allowed; });
+        });
+    }
+
+    bool MatchTokenSequence(const Vector<CodeToken>& tokens, SizeT position,
+                            std::initializer_list<const char*> expected) {
+        if (position + expected.size() > tokens.size()) {
+            return false;
+        }
+        for (const char* token : expected) {
+            if (tokens[position++].text != token) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    struct LinearPrefixScanMatch {
+        SizeT sharedArraySizeBegin = 0;
+        SizeT sharedArraySizeEnd = 0;
+        SizeT scanBegin = 0;
+        SizeT scanEnd = 0;
+        String cache;
+        String importance;
+        String prefixSum;
+        String loopLength;
+        String loopIndex;
+        String sum;
+    };
+
+    bool ParseLinearPrefixScanTemplate(const Vector<CodeToken>& tokens, LinearPrefixScanMatch& match) {
+        // The workaround deliberately recognizes one complete algorithm, not merely the
+        // subgroupInclusiveAdd token. Changing scratch storage is only safe when that storage is
+        // private to this scan and the workgroup has exactly 1024 X invocations.
+        SizeT localSizeDeclarationCount = 0;
+        for (SizeT i = 0; i < tokens.size(); ++i) {
+            if (MatchTokenSequence(tokens, i, {"layout", "(", "local_size_x", "=", "1024", ")", "in", ";"})) {
+                ++localSizeDeclarationCount;
+            }
+        }
+        if (localSizeDeclarationCount != 1) {
+            return false;
+        }
+
+        SizeT sharedDeclarationIndex = String::npos;
+        SizeT sharedDeclarationCount = 0;
+        String cacheName;
+        for (SizeT i = 0; i + 6 < tokens.size(); ++i) {
+            if (tokens[i].text != "shared" || tokens[i + 1].text != "float" || !IsIdentifierToken(tokens[i + 2]) ||
+                tokens[i + 3].text != "[" || tokens[i + 4].text != "64" || tokens[i + 5].text != "]" ||
+                tokens[i + 6].text != ";") {
+                continue;
+            }
+            ++sharedDeclarationCount;
+            sharedDeclarationIndex = i;
+            cacheName = tokens[i + 2].text;
+        }
+        if (sharedDeclarationCount != 1) {
+            return false;
+        }
+
+        SizeT scanTokenIndex = String::npos;
+        SizeT scanCount = 0;
+        for (SizeT i = 0; i + 7 < tokens.size(); ++i) {
+            if (tokens[i].text == "float" && IsIdentifierToken(tokens[i + 1]) && tokens[i + 2].text == "=" &&
+                tokens[i + 3].text == "subgroupInclusiveAdd" && tokens[i + 4].text == "(" &&
+                IsIdentifierToken(tokens[i + 5]) && tokens[i + 6].text == ")" && tokens[i + 7].text == ";") {
+                ++scanCount;
+                scanTokenIndex = i;
+            }
+        }
+        if (scanCount != 1 || sharedDeclarationIndex >= scanTokenIndex) {
+            return false;
+        }
+
+        TokenCursor cursor(tokens, scanTokenIndex);
+        String prefixSum;
+        String importance;
+        String loopLength;
+        String loopIndex;
+        String sum;
+        if (!cursor.Consume("float") || !cursor.ConsumeAnyIdentifier(prefixSum) || !cursor.Consume("=") ||
+            !cursor.Consume("subgroupInclusiveAdd") || !cursor.Consume("(") ||
+            !cursor.ConsumeAnyIdentifier(importance) || !cursor.Consume(")") || !cursor.Consume(";") ||
+            !cursor.Consume("if") || !cursor.Consume("(") || !cursor.Consume("gl_SubgroupInvocationID") ||
+            !cursor.Consume("==") || !cursor.Consume("gl_SubgroupSize") || !cursor.Consume("-") ||
+            !cursor.Consume("1u") || !cursor.Consume(")") || !cursor.ConsumeIdentifier(cacheName) ||
+            !cursor.Consume("[") || !cursor.Consume("gl_SubgroupID") || !cursor.Consume("]") || !cursor.Consume("=") ||
+            !cursor.ConsumeIdentifier(prefixSum) || !cursor.Consume(";") || !cursor.Consume("barrier") ||
+            !cursor.Consume("(") || !cursor.Consume(")") || !cursor.Consume(";") || !cursor.Consume("uint") ||
+            !cursor.ConsumeAnyIdentifier(loopLength) || !cursor.Consume("=") || !cursor.Consume("uint") ||
+            !cursor.Consume("(") || !cursor.Consume("findMSB") || !cursor.Consume("(") ||
+            !cursor.Consume("gl_NumSubgroups") || !cursor.Consume(")") || !cursor.Consume(")") ||
+            !cursor.Consume(";") || !cursor.ConsumeIdentifier(loopLength) || !cursor.Consume("+=") ||
+            !cursor.Consume("uint") || !cursor.Consume("(") || !cursor.Consume("gl_NumSubgroups") ||
+            !cursor.Consume("-") || !cursor.Consume("(") || !cursor.Consume("1u") || !cursor.Consume("<<") ||
+            !cursor.Consume("(") || !cursor.ConsumeIdentifier(loopLength) || !cursor.Consume("-") ||
+            !cursor.Consume("1u") || !cursor.Consume(")") || !cursor.Consume(")") || !cursor.Consume(">") ||
+            !cursor.Consume("0u") || !cursor.Consume(")") || !cursor.Consume(";") || !cursor.Consume("for") ||
+            !cursor.Consume("(") || !cursor.Consume("uint") || !cursor.ConsumeAnyIdentifier(loopIndex) ||
+            !cursor.Consume("=") || !cursor.Consume("0") || !cursor.Consume(";") ||
+            !cursor.ConsumeIdentifier(loopIndex) || !cursor.Consume("<") || !cursor.ConsumeIdentifier(loopLength) ||
+            !cursor.Consume(";") || !cursor.ConsumeIdentifier(loopIndex) || !cursor.Consume("++") ||
+            !cursor.Consume(")") || !cursor.Consume("{") || !cursor.Consume("if") || !cursor.Consume("(") ||
+            !cursor.Consume("(") || !cursor.Consume("gl_SubgroupID") || !cursor.Consume("&") || !cursor.Consume("(") ||
+            !cursor.Consume("1u") || !cursor.Consume("<<") || !cursor.ConsumeIdentifier(loopIndex) ||
+            !cursor.Consume(")") || !cursor.Consume(")") || !cursor.Consume(">") || !cursor.Consume("0u") ||
+            !cursor.Consume(")") || !cursor.Consume("{") || !cursor.ConsumeIdentifier(prefixSum) ||
+            !cursor.Consume("+=") || !cursor.ConsumeIdentifier(cacheName) || !cursor.Consume("[") ||
+            !cursor.Consume("(") || !cursor.Consume("gl_SubgroupID") || !cursor.Consume(">>") ||
+            !cursor.ConsumeIdentifier(loopIndex) || !cursor.Consume("<<") || !cursor.ConsumeIdentifier(loopIndex) ||
+            !cursor.Consume(")") || !cursor.Consume("-") || !cursor.Consume("1u") || !cursor.Consume("]") ||
+            !cursor.Consume(";") || !cursor.Consume("if") || !cursor.Consume("(") ||
+            !cursor.Consume("gl_SubgroupInvocationID") || !cursor.Consume("==") || !cursor.Consume("gl_SubgroupSize") ||
+            !cursor.Consume("-") || !cursor.Consume("1u") || !cursor.Consume(")") ||
+            !cursor.ConsumeIdentifier(cacheName) || !cursor.Consume("[") || !cursor.Consume("gl_SubgroupID") ||
+            !cursor.Consume("]") || !cursor.Consume("=") || !cursor.ConsumeIdentifier(prefixSum) ||
+            !cursor.Consume(";") || !cursor.Consume("}") || !cursor.Consume("barrier") || !cursor.Consume("(") ||
+            !cursor.Consume(")") || !cursor.Consume(";") || !cursor.Consume("}") || !cursor.Consume("if") ||
+            !cursor.Consume("(") || !cursor.Consume("gl_LocalInvocationID") || !cursor.Consume(".") ||
+            !cursor.Consume("x") || !cursor.Consume("==") || !cursor.Consume("uint") || !cursor.Consume("(") ||
+            !cursor.Consume("1024") || !cursor.Consume("-") || !cursor.Consume("1") || !cursor.Consume(")") ||
+            !cursor.Consume(")") || !cursor.ConsumeIdentifier(cacheName) || !cursor.Consume("[") ||
+            !cursor.Consume("0") || !cursor.Consume("]") || !cursor.Consume("=") ||
+            !cursor.ConsumeIdentifier(prefixSum) || !cursor.Consume(";") || !cursor.Consume("barrier") ||
+            !cursor.Consume("(") || !cursor.Consume(")") || !cursor.Consume(";") || !cursor.Consume("float") ||
+            !cursor.ConsumeAnyIdentifier(sum) || !cursor.Consume("=") || !cursor.ConsumeIdentifier(cacheName) ||
+            !cursor.Consume("[") || !cursor.Consume("0") || !cursor.Consume("]") || !cursor.Consume(";")) {
+            return false;
+        }
+        const SizeT scanEndToken = cursor.Position() - 1;
+
+        // Require the scan's immediate consumer as well. This makes the match specific to a
+        // linear distribution warp, and avoids changing unrelated prefix scans which may rely on
+        // the implementation's native subgroup partitioning.
+        if (!cursor.Consume("float") || !cursor.ConsumeAnyIdentifier() || !cursor.Consume("=") ||
+            !cursor.Consume("(") || !cursor.ConsumeIdentifier(prefixSum) || !cursor.Consume("-") ||
+            !cursor.ConsumeIdentifier(importance) || !cursor.Consume(")") || !cursor.Consume("/") ||
+            !cursor.ConsumeIdentifier(sum) || !cursor.Consume("-") || !cursor.Consume("float") ||
+            !cursor.Consume("(") || !cursor.Consume("gl_LocalInvocationID") || !cursor.Consume(".") ||
+            !cursor.Consume("x") || !cursor.Consume("+") || !cursor.Consume("1u") || !cursor.Consume(")") ||
+            !cursor.Consume("/") || !cursor.Consume("float") || !cursor.Consume("(") || !cursor.Consume("1024") ||
+            !cursor.Consume(")") || !cursor.Consume(";")) {
+            return false;
+        }
+
+        // No other use may share the scratch array, and no additional subgroup operation or
+        // builtin may silently retain native-64 semantics after this module becomes virtual-32.
+        if (CountToken(tokens, cacheName) != 6 || CountToken(tokens, "subgroupInclusiveAdd") != 1 ||
+            CountToken(tokens, "gl_SubgroupInvocationID") != 2 || CountToken(tokens, "gl_SubgroupSize") != 2 ||
+            CountToken(tokens, "gl_SubgroupID") != 4 || CountToken(tokens, "gl_NumSubgroups") != 2 ||
+            CountToken(tokens, "gl_LocalInvocationID") != 2 || CountToken(tokens, "barrier") != 3 ||
+            CountToken(tokens, "findMSB") != 1 ||
+            HasIdentifierWithPrefixOutsideAllowed(tokens, "subgroup", {"subgroupInclusiveAdd"}) ||
+            HasIdentifierWithPrefixOutsideAllowed(
+                tokens, "gl_Subgroup",
+                {"gl_SubgroupInvocationID", "gl_SubgroupSize", "gl_SubgroupID", "gl_NumSubgroups"})) {
+            return false;
+        }
+
+        // The scan must be at the top level of the sole main() body. Its existing barriers already
+        // require uniform control flow; this check prevents us from introducing extra barriers in
+        // a nested branch or loop.
+        SizeT mainOpenBrace = String::npos;
+        SizeT mainCloseBrace = String::npos;
+        SizeT mainCount = 0;
+        for (SizeT i = 0; i + 4 < tokens.size(); ++i) {
+            if (!MatchTokenSequence(tokens, i, {"void", "main", "(", ")", "{"})) {
+                continue;
+            }
+            ++mainCount;
+            mainOpenBrace = i + 4;
+            int depth = 1;
+            for (SizeT j = mainOpenBrace + 1; j < tokens.size(); ++j) {
+                if (tokens[j].text == "{")
+                    ++depth;
+                else if (tokens[j].text == "}" && --depth == 0) {
+                    mainCloseBrace = j;
+                    break;
+                }
+            }
+        }
+        if (mainCount != 1 || mainCloseBrace == String::npos || scanTokenIndex <= mainOpenBrace ||
+            scanEndToken >= mainCloseBrace) {
+            return false;
+        }
+        int depthAtScan = 1;
+        for (SizeT i = mainOpenBrace + 1; i < scanTokenIndex; ++i) {
+            if (tokens[i].text == "{")
+                ++depthAtScan;
+            else if (tokens[i].text == "}")
+                --depthAtScan;
+        }
+        if (depthAtScan != 1) {
+            return false;
+        }
+
+        constexpr const char* injectedNames[] = {"mglPrefixScanLane",  "mglVirtualSubgroupInvocation",
+                                                 "mglVirtualSubgroup", "mglVirtualSubgroupBase",
+                                                 "mglPrefixLane",      "mglVirtualSubgroupCount"};
+        for (const char* injectedName : injectedNames) {
+            if (CountToken(tokens, injectedName) != 0) {
+                return false;
+            }
+        }
+
+        match.sharedArraySizeBegin = tokens[sharedDeclarationIndex + 4].begin;
+        match.sharedArraySizeEnd = tokens[sharedDeclarationIndex + 4].end;
+        match.scanBegin = tokens[scanTokenIndex].begin;
+        match.scanEnd = tokens[scanEndToken].end;
+        match.cache = std::move(cacheName);
+        match.importance = std::move(importance);
+        match.prefixSum = std::move(prefixSum);
+        match.loopLength = std::move(loopLength);
+        match.loopIndex = std::move(loopIndex);
+        match.sum = std::move(sum);
+        return true;
+    }
+
+    String BuildLinearPrefixScanReplacement(const LinearPrefixScanMatch& match) {
+        String replacement;
+        replacement.reserve(1800);
+        replacement += "uint mglPrefixScanLane = gl_LocalInvocationID.x;\n";
+        replacement += "uint mglVirtualSubgroupInvocation = mglPrefixScanLane & 31u;\n";
+        replacement += "uint mglVirtualSubgroup = mglPrefixScanLane >> 5u;\n";
+        replacement += "const uint mglVirtualSubgroupCount = 32u;\n";
+        replacement += match.cache + "[mglPrefixScanLane] = " + match.importance + ";\n";
+        replacement += "barrier();\n";
+        replacement += "float " + match.prefixSum + " = 0.0f;\n";
+        replacement += "uint mglVirtualSubgroupBase = mglVirtualSubgroup << 5u;\n";
+        replacement += "for (uint mglPrefixLane = mglVirtualSubgroupBase; "
+                       "mglPrefixLane <= mglPrefixScanLane; ++mglPrefixLane) {\n";
+        replacement += match.prefixSum + " += " + match.cache + "[mglPrefixLane];\n";
+        replacement += "}\n";
+        replacement += "barrier();\n";
+        replacement += "if (mglVirtualSubgroupInvocation == 31u) " + match.cache +
+                       "[mglVirtualSubgroup] = " + match.prefixSum + ";\n";
+        replacement += "barrier();\n";
+        replacement += "uint " + match.loopLength + " = uint(findMSB(mglVirtualSubgroupCount));\n";
+        replacement +=
+            match.loopLength + " += uint(mglVirtualSubgroupCount - (1u << (" + match.loopLength + " - 1u)) > 0u);\n";
+        replacement += "for (uint " + match.loopIndex + " = 0u; " + match.loopIndex + " < " + match.loopLength +
+                       "; ++" + match.loopIndex + ") {\n";
+        replacement += "if ((mglVirtualSubgroup & (1u << " + match.loopIndex + ")) > 0u) {\n";
+        replacement += match.prefixSum + " += " + match.cache + "[(mglVirtualSubgroup >> " + match.loopIndex + " << " +
+                       match.loopIndex + ") - 1u];\n";
+        replacement += "if (mglVirtualSubgroupInvocation == 31u) " + match.cache +
+                       "[mglVirtualSubgroup] = " + match.prefixSum + ";\n";
+        replacement += "}\nbarrier();\n}\n";
+        replacement += "if (mglPrefixScanLane == 1023u) " + match.cache + "[0] = " + match.prefixSum + ";\n";
+        replacement += "barrier();\n";
+        replacement += "float " + match.sum + " = " + match.cache + "[0];";
+        return replacement;
     }
 
     void SkipDirectiveWhitespace(const MobileGL::String& source, SizeT& pos, SizeT lineEnd) {
@@ -576,6 +949,36 @@ namespace {
 namespace MobileGL {
     namespace MG_Util {
         namespace ShaderTranspiler {
+            Bool RewriteLinearSubgroupPrefixScanForVulkan(ShaderStage stage, Uint32 nativeSubgroupSize,
+                                                          String& source) {
+                constexpr Uint32 capturedSubgroupSize = 32;
+                if (stage != ShaderStage::Compute || nativeSubgroupSize <= capturedSubgroupSize ||
+                    nativeSubgroupSize % capturedSubgroupSize != 0) {
+                    return false;
+                }
+
+                // Vulkan subgroup widths are powers of two. Keep the workaround restricted to
+                // wider widths which are a power-of-two multiple of the captured 32-lane model.
+                const Uint32 subgroupScale = nativeSubgroupSize / capturedSubgroupSize;
+                if ((subgroupScale & (subgroupScale - 1u)) != 0u) {
+                    return false;
+                }
+
+                const Vector<CodeToken> tokens = TokenizeCode(source);
+                LinearPrefixScanMatch match;
+                if (!ParseLinearPrefixScanTemplate(tokens, match)) {
+                    return false;
+                }
+
+                const String replacement = BuildLinearPrefixScanReplacement(match);
+                source.replace(match.scanBegin, match.scanEnd - match.scanBegin, replacement);
+                // The declaration occurs before the replaced scan, so its original offsets remain
+                // valid after the first replacement.
+                source.replace(match.sharedArraySizeBegin, match.sharedArraySizeEnd - match.sharedArraySizeBegin,
+                               "1024");
+                return true;
+            }
+
             void PreprocessShaderSource(ShaderStage stage, String& source) {
                 // Normalize while the inspector's source span still refers to the untouched input. Later passes
                 // remove comments and directives, so any subsequent insertion re-inspects the current source.
@@ -631,6 +1034,13 @@ namespace MobileGL {
                 RenameBuiltinShadowingFunction(source, "max3", "mg_max3");
                 ModernizeLegacyGLSL(stage, source);
                 InjectDepthRangeBuiltinShim(stage, source);
+
+                const auto& activeBackend = MG_Backend::pActiveBackendObject;
+                if (stage == ShaderStage::Compute && activeBackend &&
+                    activeBackend->GetBackendType() == BackendType::DirectVulkan) {
+                    RewriteLinearSubgroupPrefixScanForVulkan(stage, activeBackend->GetDynamicParameters().SubgroupSize,
+                                                             source);
+                }
             }
 
             Bool RetargetLegacyVersionDirectiveTo460(String& source) {

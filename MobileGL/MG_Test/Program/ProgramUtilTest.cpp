@@ -8,7 +8,9 @@
 
 #include <gtest/gtest.h>
 
+#include <cstring>
 #include <string>
+#include <utility>
 
 #include "Includes.h"
 #include "Init.h"
@@ -1496,4 +1498,129 @@ void main() {
 
     EXPECT_NE(source.find("shared float sharedScratch[8];"), String::npos);
     EXPECT_NE(source.find("layout(std140) uniform Blk"), String::npos);
+}
+
+namespace {
+    String MakeLinearSubgroupPrefixScanShader() {
+        return R"(#version 460 core
+#extension GL_KHR_shader_subgroup_arithmetic : enable
+layout(local_size_x = 1024) in;
+shared float prefixSumCache[64];
+
+layout(std430, binding = 0) writeonly buffer OutputBuffer {
+    float outputValues[];
+};
+
+void main() {
+    float importance = 1.0f;
+    float prefixSum = subgroupInclusiveAdd(importance);
+    if (gl_SubgroupInvocationID == gl_SubgroupSize - 1u) prefixSumCache[gl_SubgroupID] = prefixSum;
+    barrier();
+    uint loopLength = uint(findMSB(gl_NumSubgroups));
+    loopLength += uint(gl_NumSubgroups - (1u << (loopLength - 1u)) > 0u);
+    for (uint i = 0; i < loopLength; i++) {
+        if ((gl_SubgroupID & (1u << i)) > 0u) {
+            prefixSum += prefixSumCache[(gl_SubgroupID >> i << i) - 1u];
+            if (gl_SubgroupInvocationID == gl_SubgroupSize - 1u) prefixSumCache[gl_SubgroupID] = prefixSum;
+        }
+        barrier();
+    }
+    if (gl_LocalInvocationID.x == uint(1024 - 1)) prefixSumCache[0] = prefixSum;
+    barrier();
+    float sum = prefixSumCache[0];
+    float warp = (prefixSum - importance) / sum - float(gl_LocalInvocationID.x + 1u) / float(1024);
+    outputValues[gl_GlobalInvocationID.x] = warp;
+}
+)";
+    }
+} // namespace
+
+TEST_F(ProgramUtilTest, RewriteLinearSubgroupPrefixScanUsesSharedMemoryAndProducesValidSpirv) {
+    using namespace MG_Util::ShaderTranspiler;
+
+    String source = MakeLinearSubgroupPrefixScanShader();
+    ASSERT_TRUE(RewriteLinearSubgroupPrefixScanForVulkan(ShaderStage::Compute, 64, source));
+
+    EXPECT_NE(source.find("shared float prefixSumCache[1024]"), String::npos) << source;
+    EXPECT_NE(source.find("mglVirtualSubgroupInvocation"), String::npos) << source;
+    EXPECT_NE(source.find("for (uint mglPrefixLane"), String::npos) << source;
+    EXPECT_EQ(source.find("subgroupInclusiveAdd"), String::npos) << source;
+    EXPECT_EQ(source.find("gl_Subgroup"), String::npos) << source;
+
+    const String onceRewritten = source;
+    EXPECT_FALSE(RewriteLinearSubgroupPrefixScanForVulkan(ShaderStage::Compute, 64, source));
+    EXPECT_EQ(source, onceRewritten);
+
+    ShaderAttrib shaderAttrib{.shaderType = GL_COMPUTE_SHADER, .sourceStr = source};
+    auto shaderResult = ShaderCompiler::CompileShader(shaderAttrib);
+    ASSERT_TRUE(shaderResult) << shaderResult.error().log << "\nsource:\n" << source;
+
+    ProgramAttrib programAttrib{.shaders = {shaderResult.value()}};
+    auto programResult = ShaderCompiler::LinkProgram(programAttrib);
+    ASSERT_TRUE(programResult) << programResult.error().log;
+
+    ProgramBinaryAttrib binaryAttrib{.shaderTypes = {GL_COMPUTE_SHADER}, .program = *programResult.value()};
+    auto binaryResult = ShaderCompiler::GetSpirvBinaryFromProgram(binaryAttrib);
+    ASSERT_TRUE(binaryResult) << binaryResult.error().log;
+    ASSERT_EQ(binaryResult->size(), 1u);
+
+    String validationDiagnostics;
+    spvtools::SpirvTools tools(SPV_ENV_VULKAN_1_1);
+    tools.SetMessageConsumer([&](spv_message_level_t, const char*, const spv_position_t&, const char* message) {
+        validationDiagnostics += message;
+        validationDiagnostics += '\n';
+    });
+    EXPECT_TRUE(tools.Validate(binaryResult->front())) << validationDiagnostics;
+
+    String spirvText;
+    ASSERT_TRUE(tools.Disassemble(binaryResult->front(), &spirvText));
+    EXPECT_EQ(spirvText.find("OpGroupNonUniform"), String::npos) << spirvText;
+}
+
+TEST_F(ProgramUtilTest, RewriteLinearSubgroupPrefixScanRejectsOtherStagesAndSubgroupWidths) {
+    using namespace MG_Util::ShaderTranspiler;
+
+    const String original = MakeLinearSubgroupPrefixScanShader();
+    for (const auto& [stage, subgroupSize] :
+         {std::pair{ShaderStage::Compute, Uint32{32}}, std::pair{ShaderStage::Fragment, Uint32{64}},
+          std::pair{ShaderStage::Compute, Uint32{96}}}) {
+        String source = original;
+        EXPECT_FALSE(RewriteLinearSubgroupPrefixScanForVulkan(stage, subgroupSize, source));
+        EXPECT_EQ(source, original);
+    }
+}
+
+TEST_F(ProgramUtilTest, RewriteLinearSubgroupPrefixScanRejectsPartialOrUnsafeTemplateMatches) {
+    using namespace MG_Util::ShaderTranspiler;
+
+    const auto expectUnchanged = [](String source) {
+        const String original = source;
+        EXPECT_FALSE(RewriteLinearSubgroupPrefixScanForVulkan(ShaderStage::Compute, 64, source));
+        EXPECT_EQ(source, original);
+    };
+
+    String wrongLocalSize = MakeLinearSubgroupPrefixScanShader();
+    wrongLocalSize.replace(wrongLocalSize.find("local_size_x = 1024"), std::strlen("local_size_x = 1024"),
+                           "local_size_x = 512");
+    expectUnchanged(std::move(wrongLocalSize));
+
+    String cacheHasAnotherUse = MakeLinearSubgroupPrefixScanShader();
+    cacheHasAnotherUse.insert(cacheHasAnotherUse.find("float importance"), "prefixSumCache[0] = 0.0f;\n    ");
+    expectUnchanged(std::move(cacheHasAnotherUse));
+
+    String extraSubgroupBuiltin = MakeLinearSubgroupPrefixScanShader();
+    extraSubgroupBuiltin.insert(extraSubgroupBuiltin.find("float importance"),
+                                "uvec4 extraMask = gl_SubgroupEqMask;\n    ");
+    expectUnchanged(std::move(extraSubgroupBuiltin));
+
+    String alteredBarrier = MakeLinearSubgroupPrefixScanShader();
+    alteredBarrier.replace(alteredBarrier.find("barrier();"), std::strlen("barrier();"), "memoryBarrierShared();");
+    expectUnchanged(std::move(alteredBarrier));
+
+    String nestedScan = MakeLinearSubgroupPrefixScanShader();
+    nestedScan.insert(nestedScan.find("float prefixSum ="), "if (importance > 0.0f) {\n    ");
+    const SizeT consumerEnd = nestedScan.find(';', nestedScan.find("float warp ="));
+    ASSERT_NE(consumerEnd, String::npos);
+    nestedScan.insert(consumerEnd + 1, "\n    }");
+    expectUnchanged(std::move(nestedScan));
 }

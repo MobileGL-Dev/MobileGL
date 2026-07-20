@@ -165,6 +165,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                               GLsizei srcWidth, GLsizei srcHeight, GLsizei srcDepth);
         void GenerateMipmap(GLenum target);
         void ReadPixels(GLint x, GLint y, GLsizei width, GLsizei height, GLenum format, GLenum type, void* pixels);
+        static SizeT GetReadbackTexelSize(VkFormat sourceFormat);
+        static Bool ConvertReadbackPixels(const Uint8* sourcePixels, VkFormat sourceFormat,
+                                          GLsizei width, GLsizei height, GLenum destinationFormat,
+                                          GLenum destinationType, SizeT destinationRowStride,
+                                          Uint8* destinationPixels);
         void GetTexImage(GLenum target, GLint level, GLenum format, GLenum type, GLvoid* pixels);
         void GetTextureImage(const SharedPtr<MG_State::GLState::ITextureObject>& texture,
                              TextureUploadTarget uploadTarget, GLint level, GLenum format, GLenum type,
