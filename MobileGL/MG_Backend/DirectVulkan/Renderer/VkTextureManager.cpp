@@ -1341,7 +1341,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             (aspect & VK_IMAGE_ASPECT_COLOR_BIT) != 0 &&
             (formatProperties.optimalTilingFeatures & VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT) != 0;
         VkImageCreateFlags imageCreateFlags = shapeInfo.imageFlags;
-        if (supportsStorageImage && IsMutableStorageImageFormat(format)) {
+        if (supportsStorageImage && IsMutableStorageImageFormat(format) &&
+            m_mutableFormatUnsupported.find(format) == m_mutableFormatUnsupported.end()) {
             imageCreateFlags |= VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT;
         }
 
@@ -1409,9 +1410,27 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         imageInfo.samples = resolvedSampleCount;
         if (isMultisampleTexture || (imageInfo.flags & VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT) != 0) {
             VkImageFormatProperties imageFormatProperties{};
-            const VkResult imageFormatResult = vkGetPhysicalDeviceImageFormatProperties(
+            VkResult imageFormatResult = vkGetPhysicalDeviceImageFormatProperties(
                 m_physicalDevice, format, imageInfo.imageType, imageInfo.tiling, imageInfo.usage,
                 imageInfo.flags, &imageFormatProperties);
+            if (imageFormatResult != VK_SUCCESS && !isMultisampleTexture &&
+                (imageInfo.flags & VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT) != 0) {
+                // Losing reinterpreted views only degrades the formatless-image feature for
+                // this texture; failing creation would lose the texture entirely, so retry
+                // as a plain immutable-format image.
+                MGLOG_W("%s: mutable image format=%d is unsupported for textureId=%d; creating "
+                        "without VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT (format reinterpretation "
+                        "will be unavailable for it)",
+                        __func__, static_cast<Int>(format), texture.GetExternalIndex());
+                // Remember the verdict so later syncs of same-format textures neither retry
+                // the probe nor flag-mismatch against this image and recreate it.
+                m_mutableFormatUnsupported.insert(format);
+                imageInfo.flags &= ~VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT;
+                imageCreateFlags = imageInfo.flags;
+                imageFormatResult = vkGetPhysicalDeviceImageFormatProperties(
+                    m_physicalDevice, format, imageInfo.imageType, imageInfo.tiling, imageInfo.usage,
+                    imageInfo.flags, &imageFormatProperties);
+            }
             if (imageFormatResult != VK_SUCCESS ||
                 (isMultisampleTexture && (imageFormatProperties.sampleCounts & resolvedSampleCount) == 0)) {
                 MGLOG_D("%s: image flags=0x%x sampleCount=%d are unsupported for textureId=%d target=%s "

@@ -80,6 +80,10 @@ namespace MobileGL::MG_Config {
         // rewrites the recognized workgroup prefix-scan template on Qualcomm devices with
         // subgroups wider than 32 lanes (see ShaderSourceProcessor's quirk registry).
         QuirkOverride SubgroupPrefixScanQuirk = QuirkOverride::Auto;
+        // MOBILEGL_DISABLE_ROBUST_BUFFER_ACCESS: leave the Vulkan robustBufferAccess device
+        // feature off. It is enabled by default to match GL's defined out-of-range fetch
+        // behavior; this escape hatch exists to measure or dodge its GPU cost on a device.
+        Bool DisableRobustBufferAccess = false;
     };
     extern FeaturesTable Features;
 } // namespace MobileGL::MG_Config

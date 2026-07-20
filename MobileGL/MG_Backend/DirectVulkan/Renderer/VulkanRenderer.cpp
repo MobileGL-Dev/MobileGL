@@ -1622,6 +1622,63 @@ void main() {
                 case VK_FORMAT_R32G32B32A32_SFLOAT:
                     Memcpy(rgba, source, sizeof(Float) * 4);
                     return true;
+                // Single- and dual-channel formats the reinterpretation feature makes common
+                // as readback sources (iterationRP custom images are R32F/R32UI-class).
+                // Missing channels take GL's defaults: 0 for GB, 1 for alpha.
+                case VK_FORMAT_R32_SFLOAT: {
+                    Float value = 0.0f;
+                    Memcpy(&value, source, sizeof(value));
+                    rgba[0] = value;
+                    rgba[1] = 0.0f;
+                    rgba[2] = 0.0f;
+                    rgba[3] = 1.0f;
+                    return true;
+                }
+                case VK_FORMAT_R32G32_SFLOAT: {
+                    Float values[2] = {0.0f, 0.0f};
+                    Memcpy(values, source, sizeof(values));
+                    rgba[0] = values[0];
+                    rgba[1] = values[1];
+                    rgba[2] = 0.0f;
+                    rgba[3] = 1.0f;
+                    return true;
+                }
+                case VK_FORMAT_R32_UINT: {
+                    Uint32 value = 0;
+                    Memcpy(&value, source, sizeof(value));
+                    rgba[0] = static_cast<Float>(value);
+                    rgba[1] = 0.0f;
+                    rgba[2] = 0.0f;
+                    rgba[3] = 1.0f;
+                    return true;
+                }
+                case VK_FORMAT_R32_SINT: {
+                    Int32 value = 0;
+                    Memcpy(&value, source, sizeof(value));
+                    rgba[0] = static_cast<Float>(value);
+                    rgba[1] = 0.0f;
+                    rgba[2] = 0.0f;
+                    rgba[3] = 1.0f;
+                    return true;
+                }
+                case VK_FORMAT_R16_SFLOAT: {
+                    Uint16 value = 0;
+                    Memcpy(&value, source, sizeof(value));
+                    rgba[0] = MG_Util::DecodeHalfBitsToFloat(value);
+                    rgba[1] = 0.0f;
+                    rgba[2] = 0.0f;
+                    rgba[3] = 1.0f;
+                    return true;
+                }
+                case VK_FORMAT_R16G16_SFLOAT:
+                    for (SizeT component = 0; component < 2; ++component) {
+                        Uint16 value = 0;
+                        Memcpy(&value, source + component * sizeof(value), sizeof(value));
+                        rgba[component] = MG_Util::DecodeHalfBitsToFloat(value);
+                    }
+                    rgba[2] = 0.0f;
+                    rgba[3] = 1.0f;
+                    return true;
                 default:
                     return false;
             }
@@ -7166,7 +7223,10 @@ void main() {
         // Match GL's robust buffer-fetch behavior where the Vulkan device supports it. This covers
         // out-of-range fetches; arbitrary GL vertex strides/offsets still need the explicit tight
         // repack in VertexInputStateFactory when they violate Vulkan's address-alignment rules.
-        deviceFeatures.robustBufferAccess = supportedDeviceFeatures.robustBufferAccess;
+        // MOBILEGL_DISABLE_ROBUST_BUFFER_ACCESS leaves it off to measure or dodge its GPU cost.
+        deviceFeatures.robustBufferAccess = MG_Config::Features.DisableRobustBufferAccess
+                                                ? VK_FALSE
+                                                : supportedDeviceFeatures.robustBufferAccess;
         deviceFeatures.geometryShader = supportedDeviceFeatures.geometryShader;
         deviceFeatures.independentBlend = supportedDeviceFeatures.independentBlend;
         m_independentBlendFeatureEnabled = deviceFeatures.independentBlend == VK_TRUE;
@@ -7196,6 +7256,15 @@ void main() {
         if (m_unformattedFloatStorageImagesEnabled) {
             deviceFeatures.shaderStorageImageReadWithoutFormat = VK_TRUE;
             deviceFeatures.shaderStorageImageWriteWithoutFormat = VK_TRUE;
+        } else {
+            // Surface the degradation instead of failing silently: shader packs that bind a
+            // float storage image with a format different from its declaration (e.g.
+            // iterationRP) will render incorrectly on this device.
+            MGLOG_W("CreateLogicalDeviceAndQueues: shaderStorageImage*WithoutFormat unavailable "
+                    "(read=%d write=%d); float storage-image format reinterpretation is disabled "
+                    "and packs relying on it may misrender",
+                    supportedDeviceFeatures.shaderStorageImageReadWithoutFormat,
+                    supportedDeviceFeatures.shaderStorageImageWriteWithoutFormat);
         }
         deviceFeatures.drawIndirectFirstInstance = supportedDeviceFeatures.drawIndirectFirstInstance;
         deviceFeatures.multiDrawIndirect = supportedDeviceFeatures.multiDrawIndirect;

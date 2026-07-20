@@ -13,6 +13,7 @@
 #include <MG_State/GLState/TextureState/TextureObject.h>
 #include <vk_mem_alloc.h>
 #include <unordered_map>
+#include <unordered_set>
 
 namespace MobileGL::MG_State::GLState {
 class ITextureObject;
@@ -384,6 +385,9 @@ private:
         TextureResource* resource = nullptr;
     };
     Vector<DrawSyncedTexture> m_drawSyncedThisDraw;
+    // Formats whose mutable-image probe failed on this device; their images are created
+    // without MUTABLE_FORMAT_BIT so repeat syncs neither re-probe nor flag-mismatch.
+    std::unordered_set<VkFormat> m_mutableFormatUnsupported;
     std::unordered_map<TextureIdentity, WeakPtr<MG_State::GLState::ITextureObject>, TextureIdentityHash> m_aliveObjects;
     std::unordered_map<TextureIdentity, TextureResource, TextureIdentityHash> m_textureResources;
     Vector<Vector<TextureResource>> m_deferredReleases;

@@ -794,6 +794,33 @@ TEST(DirectVulkanSanity, ReadbackConvertsRgba8AndRgba16fPixels) {
     EXPECT_FLOAT_EQ(rgba16fFloatResult[3], 1.0f);
 }
 
+TEST(DirectVulkanSanity, ReadbackDecodesSingleChannel32BitFormats) {
+    using MobileGL::MG_Backend::DirectVulkan::VulkanRenderer;
+
+    // The reinterpretation feature makes R32F/R32UI-class images common readback sources
+    // (iterationRP custom images). Missing channels take GL defaults: 0 for GB, 1 for alpha.
+    const MobileGL::Float r32f[] = {0.75f, -2.0f};
+    MobileGL::Float r32fResult[8]{};
+    ASSERT_TRUE(VulkanRenderer::ConvertReadbackPixels(
+        reinterpret_cast<const MobileGL::Uint8*>(r32f), VK_FORMAT_R32_SFLOAT,
+        2, 1, GL_RGBA, GL_FLOAT, sizeof(MobileGL::Float) * 8,
+        reinterpret_cast<MobileGL::Uint8*>(r32fResult)));
+    EXPECT_FLOAT_EQ(r32fResult[0], 0.75f);
+    EXPECT_FLOAT_EQ(r32fResult[1], 0.0f);
+    EXPECT_FLOAT_EQ(r32fResult[2], 0.0f);
+    EXPECT_FLOAT_EQ(r32fResult[3], 1.0f);
+    EXPECT_FLOAT_EQ(r32fResult[4], -2.0f);
+
+    const MobileGL::Uint32 r32ui[] = {12345u};
+    MobileGL::Float r32uiResult[4]{};
+    ASSERT_TRUE(VulkanRenderer::ConvertReadbackPixels(
+        reinterpret_cast<const MobileGL::Uint8*>(r32ui), VK_FORMAT_R32_UINT,
+        1, 1, GL_RGBA, GL_FLOAT, sizeof(MobileGL::Float) * 4,
+        reinterpret_cast<MobileGL::Uint8*>(r32uiResult)));
+    EXPECT_FLOAT_EQ(r32uiResult[0], 12345.0f);
+    EXPECT_FLOAT_EQ(r32uiResult[3], 1.0f);
+}
+
 TEST(DirectVulkanSanity, DrawIndexedIndirectCommandMatchesGlAndVulkanLayout) {
     using namespace MobileGL::MG_Backend::DirectVulkan;
 
