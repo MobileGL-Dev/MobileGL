@@ -1724,6 +1724,21 @@ namespace MobileGL::MG_Impl::GLImpl {
             return;
         }
 
+        // RGTC is a 2D-only compression scheme, so a 3D target rejects it. This has to be tested on
+        // the raw enum: the RGTC formats resolve to plain R8/RG8/SNORM storage on the way in (see
+        // GLToMG's TextureEnumConverter), so once the internal format is converted there is nothing
+        // left to distinguish them from an ordinary one- or two-channel upload.
+        if ((textureUploadTarget == TextureUploadTarget::Texture3D ||
+             textureUploadTarget == TextureUploadTarget::ProxyTexture3D) &&
+            (internalformat == GL_COMPRESSED_RED_RGTC1 || internalformat == GL_COMPRESSED_SIGNED_RED_RGTC1 ||
+             internalformat == GL_COMPRESSED_RG_RGTC2 || internalformat == GL_COMPRESSED_SIGNED_RG_RGTC2)) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidOperation,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
+                                             "RGTC compressed formats are invalid for 3D texture targets"));
+            return;
+        }
+
         // TODO: GL_INVALID_OPERATION is generated if a non-zero buffer object name is bound to the
         // GL_PIXEL_UNPACK_BUFFER target and the buffer object's data store is currently mapped.
         // GL_INVALID_OPERATION is generated if a non-zero buffer object name is bound to the GL_PIXEL_UNPACK_BUFFER

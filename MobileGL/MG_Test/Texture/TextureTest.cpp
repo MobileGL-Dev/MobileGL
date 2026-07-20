@@ -1557,6 +1557,28 @@ TEST_F(TextureTest, CompressedInternalFormatsResolveToTheirUncompressedStorage) 
     }
 }
 
+// RGTC compresses 4x4 blocks of a 2D image and has no 3D form, so glTexImage3D must reject it even
+// though the same enum is accepted on a 2D target. The generic compressed formats carry no such
+// restriction and stay legal in 3D.
+TEST_F(TextureTest, RgtcInternalFormatsAreRejectedOnThreeDimensionalTargets) {
+    const GLenum rgtc[] = {GL_COMPRESSED_RED_RGTC1, GL_COMPRESSED_SIGNED_RED_RGTC1, GL_COMPRESSED_RG_RGTC2,
+                           GL_COMPRESSED_SIGNED_RG_RGTC2};
+    for (const GLenum internalFormat : rgtc) {
+        GLuint texture = 0;
+        MG_Impl::GLImpl::GenTextures(1, &texture);
+        MG_Impl::GLImpl::BindTexture(GL_TEXTURE_3D, texture);
+        MG_Impl::GLImpl::TexImage3D(GL_TEXTURE_3D, 0, internalFormat, 4, 4, 4, 0, GL_RED, GL_UNSIGNED_BYTE, nullptr);
+        EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_INVALID_OPERATION)
+            << "internalFormat 0x" << std::hex << internalFormat;
+    }
+
+    GLuint generic = 0;
+    MG_Impl::GLImpl::GenTextures(1, &generic);
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_3D, generic);
+    MG_Impl::GLImpl::TexImage3D(GL_TEXTURE_3D, 0, GL_COMPRESSED_RGBA, 4, 4, 4, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+}
+
 TEST_F(TextureTest, TextureStorage3DAndSubImageModifyNamedObjectOnly) {
     GLuint texture = 0;
     MG_Impl::GLImpl::CreateTextures(GL_TEXTURE_3D, 1, &texture);
