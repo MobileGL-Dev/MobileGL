@@ -429,8 +429,10 @@ namespace MobileGL::MG_Impl::GLImpl {
 
             const Int maxSamples = GetMaxSupportedTextureSamples(textureInternalFormat);
             if (samples > maxSamples) {
+                // GL specifies INVALID_OPERATION - not INVALID_VALUE - when the sample count
+                // exceeds what the format supports, and the native Adreno driver agrees.
                 MG_State::pGLContext->RecordError(
-                    ErrorCode::InvalidValue,
+                    ErrorCode::InvalidOperation,
                     MakeUnique<GenericErrorInfo>(
                         "MG_Impl/GLImpl", caller,
                         std::format("Sample count {} exceeds the supported maximum {} for this texture format.",
