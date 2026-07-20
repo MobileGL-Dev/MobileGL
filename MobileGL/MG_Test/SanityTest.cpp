@@ -999,9 +999,27 @@ TEST(DirectVulkanSanity, SampledViewFormatMatchesSamplerNumericDomainWithoutChan
     EXPECT_EQ(VkTextureManager::ResolveSampledImageViewFormat(
                   VK_FORMAT_B10G11R11_UFLOAT_PACK32, SamplerNumericDomain::UnsignedInteger),
               VK_FORMAT_UNDEFINED);
+
+    // Depth/stencil formats never resolve through color-class reinterpretation; they pass
+    // through unchanged so the existing depth-aspect sampled view is used. Combined
+    // depth-stencil formats are multi-numeric (vkuFormatIsSampledFloat is false for them),
+    // so without the passthrough a plain sampler2D/sampler2DShadow on GL_DEPTH24_STENCIL8
+    // would resolve to UNDEFINED and the draw would be dropped.
+    EXPECT_EQ(VkTextureManager::ResolveSampledImageViewFormat(
+                  VK_FORMAT_D24_UNORM_S8_UINT, SamplerNumericDomain::Float),
+              VK_FORMAT_D24_UNORM_S8_UINT);
+    EXPECT_EQ(VkTextureManager::ResolveSampledImageViewFormat(
+                  VK_FORMAT_D32_SFLOAT_S8_UINT, SamplerNumericDomain::Float),
+              VK_FORMAT_D32_SFLOAT_S8_UINT);
+    EXPECT_EQ(VkTextureManager::ResolveSampledImageViewFormat(
+                  VK_FORMAT_D32_SFLOAT, SamplerNumericDomain::Float),
+              VK_FORMAT_D32_SFLOAT);
+    EXPECT_EQ(VkTextureManager::ResolveSampledImageViewFormat(
+                  VK_FORMAT_D24_UNORM_S8_UINT, SamplerNumericDomain::UnsignedInteger),
+              VK_FORMAT_D24_UNORM_S8_UINT);
     EXPECT_EQ(VkTextureManager::ResolveSampledImageViewFormat(
                   VK_FORMAT_D32_SFLOAT, SamplerNumericDomain::UnsignedInteger),
-              VK_FORMAT_UNDEFINED);
+              VK_FORMAT_D32_SFLOAT);
 
     EXPECT_TRUE(VkTextureManager::AreSampledImageViewFormatsCompatible(
         VK_FORMAT_R32_SFLOAT, VK_FORMAT_R32_UINT));

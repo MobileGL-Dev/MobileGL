@@ -176,6 +176,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             Uint16 textureParamsVersion = 0;
             Bool forceNearestFiltering = false;
             Bool valid = false;
+            // ResolveSampledImageViewFormat is pure in (image format, numeric domain), but a
+            // domain mismatch walks a ~184-entry format table. Memo the resolution per binding
+            // so a reinterpreted sampler pays that scan once, not once per draw.
+            VkFormat viewFormatSource = VK_FORMAT_UNDEFINED;
+            SamplerNumericDomain viewFormatDomain = SamplerNumericDomain::Unknown;
+            VkFormat viewFormat = VK_FORMAT_UNDEFINED;
+            Bool viewFormatValid = false;
         };
         mutable Vector<SamplerResolveMemo> m_samplerResolveMemo;
     };

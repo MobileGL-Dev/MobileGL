@@ -1921,6 +1921,15 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
     VkFormat VkTextureManager::ResolveSampledImageViewFormat(VkFormat imageFormat,
                                                               SamplerNumericDomain numericDomain) {
+        // Depth/stencil images always sample through the existing depth-aspect sampledView.
+        // Combined formats (D24S8, D32FS8) are multi-numeric, so vkuFormatIsSampledFloat is
+        // false for them by design, yet their depth aspect reads as float in every GL depth
+        // texture mode; Vulkan also forbids reinterpreting them through color-class views.
+        // Integer domains keep the same view (pre-reinterpretation behavior for stencil-index
+        // style access) rather than failing the draw.
+        if (vkuFormatIsDepthOrStencil(imageFormat)) {
+            return imageFormat;
+        }
         if (imageFormat == VK_FORMAT_UNDEFINED || numericDomain == SamplerNumericDomain::Unknown ||
             FormatMatchesSamplerNumericDomain(imageFormat, numericDomain)) {
             return imageFormat;

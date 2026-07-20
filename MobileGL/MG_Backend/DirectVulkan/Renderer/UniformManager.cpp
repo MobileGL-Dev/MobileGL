@@ -298,8 +298,23 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // descriptor valid.
         const Bool forceNearestFiltering = numericDomain == SamplerNumericDomain::SignedInteger ||
                                            numericDomain == SamplerNumericDomain::UnsignedInteger;
-        const VkFormat sampledViewFormat =
-            VkTextureManager::ResolveSampledImageViewFormat(resource->format, numericDomain);
+        SamplerResolveMemo* viewFormatMemo =
+            binding < m_samplerResolveMemo.size() ? &m_samplerResolveMemo[binding] : nullptr;
+        VkFormat sampledViewFormat;
+        if (viewFormatMemo != nullptr && viewFormatMemo->viewFormatValid &&
+            viewFormatMemo->viewFormatSource == resource->format &&
+            viewFormatMemo->viewFormatDomain == numericDomain) {
+            sampledViewFormat = viewFormatMemo->viewFormat;
+        } else {
+            sampledViewFormat =
+                VkTextureManager::ResolveSampledImageViewFormat(resource->format, numericDomain);
+            if (viewFormatMemo != nullptr) {
+                viewFormatMemo->viewFormatSource = resource->format;
+                viewFormatMemo->viewFormatDomain = numericDomain;
+                viewFormatMemo->viewFormat = sampledViewFormat;
+                viewFormatMemo->viewFormatValid = true;
+            }
+        }
         if (sampledViewFormat == VK_FORMAT_UNDEFINED) {
             MGLOG_E("ResolveSamplerDescriptor: no compatible sampled view for binding=%u ('%s') "
                     "textureId=%d imageFormat=%d numericDomain=%d",
@@ -307,8 +322,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                     static_cast<Int>(resource->format), static_cast<Int>(numericDomain));
             return false;
         }
+        // No reinterpretation requested: bind the depth-or-color aspect view the sync above
+        // already produced instead of re-entering GetOrCreateSampledImageView's sync path.
         const VkImageView sampledImageView =
-            m_textureManager->GetOrCreateSampledImageView(*texture, sampledViewFormat);
+            sampledViewFormat == resource->format
+                ? resource->sampledView
+                : m_textureManager->GetOrCreateSampledImageView(*texture, sampledViewFormat);
         if (sampledImageView == VK_NULL_HANDLE) {
             MGLOG_E("ResolveSamplerDescriptor: failed to resolve sampled view for binding=%u ('%s') "
                     "textureId=%d imageFormat=%d viewFormat=%d numericDomain=%d",
