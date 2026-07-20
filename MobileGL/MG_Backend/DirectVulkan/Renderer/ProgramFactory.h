@@ -223,6 +223,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // can be pinned by tests. A false negative loses the exemption, so such a shader is
         // stripped conservatively and forfeits its depth write.
         static Bool ReflectedFragmentReplacesDepth(const SpvReflectShaderModule& reflectModule);
+        // True when an entry point reads the InstanceIndex builtin. Only gates a diagnostic:
+        // without shaderDrawParameters such a shader cannot have gl_InstanceID rebased.
+        static Bool ReflectedReadsInstanceIndexBuiltin(const SpvReflectShaderModule& reflectModule);
 
     private:
         struct ProgramLookupCache {
