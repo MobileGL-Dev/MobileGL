@@ -2216,11 +2216,17 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 return;
             }
 
-            if (TextureImpl::IsMultisampleTextureTarget(targetInternal)) {
+            // Multisample targets reject the *sampler* parameters (LOD range, border color) but
+            // GL_TEXTURE_SWIZZLE_* is texture state, not sampler state, and ES accepts it on them.
+            // Bailing out entirely used to drop every swizzle write on the floor, which is what the
+            // frontend already assumes is legal (see GL_Texture.cpp's MS-invalid pname list, which
+            // deliberately omits the swizzle enums). Note the caches for the skipped parameters are
+            // still refreshed so they never look stale, but m_cacheSwizzleParams must NOT be, or the
+            // change detection below would swallow the very writes we came here to emit.
+            const Bool isMultisampleTarget = TextureImpl::IsMultisampleTextureTarget(targetInternal);
+            if (isMultisampleTarget) {
                 m_cacheLodRange = stateTextureObject->GetLevelRange();
-                m_cacheSwizzleParams = stateTextureObject->GetAllSwizzleParams();
                 m_cacheBorderColor = stateTextureObject->GetBorderColor();
-                return;
             }
 
             Bind(target);
@@ -2233,14 +2239,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
             const auto& levelRange = stateTextureObject->GetLevelRange();
 
-            if (m_cacheLodRange.x() != levelRange.x()) {
+            if (!isMultisampleTarget && m_cacheLodRange.x() != levelRange.x()) {
                 g_GLESFuncs.glTexParameteri(target, GL_TEXTURE_BASE_LEVEL, static_cast<GLint>(levelRange.x()));
                 m_cacheLodRange.x() = levelRange.x();
             }
             DebugImpl::ErrorLopper::Loop([file = __FILE__, line = __LINE__, func = __func__](GLenum err) {
                 MGLOG_D("%s(%s:%d) ES error %s", func, file, line, MG_Util::ConvertGLEnumToString(err).c_str());
             });
-            if (m_cacheLodRange.y() != levelRange.y()) {
+            if (!isMultisampleTarget && m_cacheLodRange.y() != levelRange.y()) {
                 g_GLESFuncs.glTexParameteri(target, GL_TEXTURE_MAX_LEVEL, static_cast<GLint>(levelRange.y()));
                 m_cacheLodRange.y() = levelRange.y();
             }
@@ -2266,7 +2272,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 });
             }
 
-            if (m_cacheBorderColor != stateTextureObject->GetBorderColor()) {
+            if (!isMultisampleTarget && m_cacheBorderColor != stateTextureObject->GetBorderColor()) {
                 const auto& borderColor = stateTextureObject->GetBorderColor();
                 GLfloat borderColorArray[4] = {borderColor.x(), borderColor.y(), borderColor.z(), borderColor.w()};
                 g_GLESFuncs.glTexParameterfv(target, GL_TEXTURE_BORDER_COLOR, borderColorArray);
