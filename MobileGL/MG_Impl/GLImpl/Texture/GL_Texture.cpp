@@ -456,6 +456,17 @@ namespace MobileGL::MG_Impl::GLImpl {
             textureMipmapObject->AllocateStorage(textureUploadTarget, 0, {{width, height, depth}, 0});
             textureMipmapObject->MarkStorageDirty(textureUploadTarget, 0, false);
         }
+
+        // Compressed texture upload is not implemented yet. GL_NUM_COMPRESSED_TEXTURE_FORMATS
+        // reports 0, so every compressed internalformat is by definition unsupported and
+        // GL_INVALID_ENUM is the specified error - unlike THROW_UNIMPL_EXCEPTION, which unwinds
+        // a C++ exception through the C GL ABI and takes the process down.
+        void RecordUnsupportedCompressedFormat(const char* caller) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidEnum,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller,
+                                             "Compressed texture formats are not supported."));
+        }
     } // namespace
 
     const SharedPtr<MG_State::GLState::ITextureObject>& GetTextureObjectByName(GLuint texture, const char* caller) {
@@ -2594,7 +2605,13 @@ namespace MobileGL::MG_Impl::GLImpl {
     }
 
     void GetCompressedTexImage_State(GLenum target, GLint level, void* img) {
-        // TODO: implement
+        // TODO: implement compressed readback. Reporting success while writing nothing hands
+        // the caller stale memory with GL_NO_ERROR; no texture can be compressed yet, and GL
+        // specifies GL_INVALID_OPERATION when the bound level is not compressed.
+        MG_State::pGLContext->RecordError(
+            ErrorCode::InvalidOperation,
+            MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
+                                         "Texture level is not stored in a compressed format."));
     }
 
     void GenTextures_State(GLsizei n, GLuint* textures) {
@@ -2781,20 +2798,20 @@ namespace MobileGL::MG_Impl::GLImpl {
     void CompressedTexSubImage3D_State(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLint zoffset,
                                        GLsizei width, GLsizei height, GLsizei depth, GLenum format, GLsizei imageSize,
                                        const void* data) {
-        // TODO: implement
-        THROW_UNIMPL_EXCEPTION;
+        // TODO: implement compressed upload - see CompressedTexImage2D_State.
+        RecordUnsupportedCompressedFormat(__func__);
     }
 
     void CompressedTexSubImage2D_State(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLsizei width,
                                        GLsizei height, GLenum format, GLsizei imageSize, const void* data) {
-        // TODO: implement
-        THROW_UNIMPL_EXCEPTION;
+        // TODO: implement compressed upload - see CompressedTexImage2D_State.
+        RecordUnsupportedCompressedFormat(__func__);
     }
 
     void CompressedTexSubImage1D_State(GLenum target, GLint level, GLint xoffset, GLsizei width, GLenum format,
                                        GLsizei imageSize, const void* data) {
-        // TODO: implement
-        THROW_UNIMPL_EXCEPTION;
+        // TODO: implement compressed upload - see CompressedTexImage2D_State.
+        RecordUnsupportedCompressedFormat(__func__);
     }
 
     void CompressedTexImage3D_State(GLenum target, GLint level, GLenum internalformat, GLsizei width, GLsizei height,
@@ -2804,8 +2821,8 @@ namespace MobileGL::MG_Impl::GLImpl {
         auto& textureObject = GetTextureObjectByTarget(textureUploadTarget, textureTarget);
         if (!ValidateTextureMutable(textureObject, __func__)) return;
 
-        // TODO: implement
-        THROW_UNIMPL_EXCEPTION;
+        // TODO: implement compressed upload - see CompressedTexImage2D_State.
+        RecordUnsupportedCompressedFormat(__func__);
     }
 
     void CompressedTexImage2D_State(GLenum target, GLint level, GLenum internalformat, GLsizei width, GLsizei height,
@@ -2815,8 +2832,11 @@ namespace MobileGL::MG_Impl::GLImpl {
         auto& textureObject = GetTextureObjectByTarget(textureUploadTarget, textureTarget);
         if (!ValidateTextureMutable(textureObject, __func__)) return;
 
-        // TODO: implement
-        THROW_UNIMPL_EXCEPTION;
+        // TODO: implement compressed upload. Until then report the spec error for an
+        // unsupported compressed format rather than throwing - a C++ exception unwinding
+        // through the C GL ABI is a hard crash for the caller, while GL_INVALID_ENUM is
+        // exactly what GL_NUM_COMPRESSED_TEXTURE_FORMATS == 0 promises.
+        RecordUnsupportedCompressedFormat(__func__);
     }
 
     void CompressedTexImage1D_State(GLenum target, GLint level, GLenum internalformat, GLsizei width, GLint border,
@@ -2826,8 +2846,8 @@ namespace MobileGL::MG_Impl::GLImpl {
         auto& textureObject = GetTextureObjectByTarget(textureUploadTarget, textureTarget);
         if (!ValidateTextureMutable(textureObject, __func__)) return;
 
-        // TODO: implement
-        THROW_UNIMPL_EXCEPTION;
+        // TODO: implement compressed upload - see CompressedTexImage2D_State.
+        RecordUnsupportedCompressedFormat(__func__);
     }
 
     void BindTexture_State(GLenum target, GLuint texture) {
