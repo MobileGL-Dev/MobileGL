@@ -2226,10 +2226,94 @@ void main() {
         MGLOG_I("VulkanRenderer shut down completed");
     }
 
+    // Scans the draw's index range from host-visible index bytes and returns the largest
+    // fetchable vertex index. Usable only when the draw's range is exactly its
+    // IndexBufferView (drawParams.indexRangeIsExactView). The view's byte offset is either
+    // an offset into the bound element-array buffer or, with no bound buffer, a raw client
+    // pointer. Primitive-restart sentinels are skipped so they cannot inflate the bound.
+    static Bool TryComputeMaxIndexFromHostBytes(const MG_State::GLState::VertexArrayObject& vao,
+                                                const IndexBufferView& indexView, Uint32& outMaxIndex) {
+        SizeT indexSize = 0;
+        switch (indexView.indexType) {
+        case GL_UNSIGNED_BYTE: indexSize = 1; break;
+        case GL_UNSIGNED_SHORT: indexSize = 2; break;
+        case GL_UNSIGNED_INT: indexSize = 4; break;
+        default: return false;
+        }
+
+        const Uint8* indexBytes = nullptr;
+        const auto& indexBufferShared = vao.GetIndexBufferBindingSlot().GetBoundObject();
+        if (indexBufferShared != nullptr) {
+            const SizeT bufferSize = indexBufferShared->GetSize();
+            if (indexBufferShared->MappedData() == nullptr || indexView.indexByteOffset > bufferSize ||
+                indexView.indexByteSize > bufferSize - indexView.indexByteOffset) {
+                return false;
+            }
+            indexBufferShared->SyncPersistentMappedRange();
+            indexBytes = indexBufferShared->MappedData() + indexView.indexByteOffset;
+        } else {
+            indexBytes = reinterpret_cast<const Uint8*>(indexView.indexByteOffset);
+            if (indexBytes == nullptr) {
+                return false;
+            }
+        }
+
+        const SizeT indexCount = indexView.indexByteSize / indexSize;
+        // The all-ones sentinel is only a restart marker when primitive restart is enabled;
+        // with restart off it is a legitimate index and excluding it would truncate the
+        // converted stream by exactly that vertex.
+        const Bool primitiveRestartActive =
+            MG_State::pGLContext->IsCapabilityEnabled(CapabilityInput::PrimitiveRestart) ||
+            MG_State::pGLContext->IsCapabilityEnabled(CapabilityInput::PrimitiveRestartFixedIndex);
+        const Uint32 restartSentinel = indexSize == 1 ? 0xFFu : indexSize == 2 ? 0xFFFFu : 0xFFFFFFFFu;
+        Uint32 maxIndex = 0;
+        Bool sawIndex = false;
+        for (SizeT i = 0; i < indexCount; ++i) {
+            Uint32 index = 0;
+            switch (indexSize) {
+            case 1: index = indexBytes[i]; break;
+            case 2: index = reinterpret_cast<const Uint16*>(indexBytes)[i]; break;
+            default: index = reinterpret_cast<const Uint32*>(indexBytes)[i]; break;
+            }
+            if (primitiveRestartActive && index == restartSentinel) {
+                continue;
+            }
+            maxIndex = std::max(maxIndex, index);
+            sawIndex = true;
+        }
+        if (!sawIndex) {
+            return false;
+        }
+        outMaxIndex = maxIndex;
+        return true;
+    }
+
     Bool VulkanRenderer::UploadAndBindVertexBuffers(
         VkCommandBuffer commandBuffer, const MG_State::GLState::VertexArrayObject& vao,
         const ProgramFactory::VkProgramObject& programObj, const DrawCmdParam& drawParams,
-        Bool indexedDraw) {
+        const IndexBufferView* pIndexBufferView) {
+        const Bool indexedDraw = pIndexBufferView != nullptr;
+        // Exclusive upper bound on the vertex-stream elements this draw can fetch through
+        // vertex-rate bindings, or 0 when unbounded (indirect/multi draws). Computed lazily
+        // because the index scan is only worth doing when a conversion actually needs it.
+        SizeT drawElementBound = 0;
+        Bool drawElementBoundComputed = false;
+        auto resolveDrawElementBound = [&]() -> SizeT {
+            if (drawElementBoundComputed) {
+                return drawElementBound;
+            }
+            drawElementBoundComputed = true;
+            if (!indexedDraw) {
+                drawElementBound = static_cast<SizeT>(drawParams.firstVertex) + drawParams.vertexCount;
+            } else if (drawParams.indexRangeIsExactView) {
+                Uint32 maxIndex = 0;
+                if (TryComputeMaxIndexFromHostBytes(vao, *pIndexBufferView, maxIndex)) {
+                    drawElementBound = static_cast<SizeT>(maxIndex) + 1 +
+                                       static_cast<SizeT>(std::max(drawParams.baseVertex, 0));
+                }
+            }
+            return drawElementBound;
+        };
         // programObj is resolved once in SetupDraw and passed in; re-resolving it here would repeat
         // the GetCurrentProgram + GetOrCreateProgram hash lookup every draw.
         auto& vertexInputState = m_vertexInputStateFactory->GetOrCreateVertexInputState(vao);
@@ -2315,33 +2399,35 @@ void main() {
                     return false;
                 }
 
-                if (conversion != VertexInputStateFactory::VertexStreamConversion::None && indexedDraw) {
-                    // The current indexed setup only carries indexCount, not the maximum effective
-                    // index. Guessing a client-memory range here can truncate the converted stream.
-                    MGLOG_E("UploadAndBindVertexStreams skipped: converted client-memory attribute "
-                            "location=%u requires an indexed vertex range", location);
-                    return false;
-                }
-                if (conversion != VertexInputStateFactory::VertexStreamConversion::None &&
-                    drawParams.vertexCount == 0) {
-                    MGLOG_E("UploadAndBindVertexStreams skipped: converted client-memory attribute "
-                            "location=%u has an unknown vertex range", location);
-                    return false;
-                }
-
-                const Uint32 lastVertex = drawParams.vertexCount > 0
-                                              ? drawParams.firstVertex + drawParams.vertexCount - 1
-                                              : drawParams.firstVertex;
+                // Client arrays have no queryable size, so bound the upload by the draw's
+                // real fetch range. For indexed draws that means scanning the index bytes:
+                // the guessed vertexCount (indexCount + baseVertex) can both truncate draws
+                // whose max index exceeds their index count and over-read below it.
+                const SizeT clientElementBound = resolveDrawElementBound();
                 BufferSlice slice{};
                 Bool uploaded = false;
                 if (conversion == VertexInputStateFactory::VertexStreamConversion::None) {
-                    const SizeT uploadSize = static_cast<SizeT>(lastVertex) * stride + elementSize;
+                    const SizeT lastVertex =
+                        clientElementBound > 0
+                            ? clientElementBound - 1
+                            : (drawParams.vertexCount > 0
+                                   ? static_cast<SizeT>(drawParams.firstVertex) + drawParams.vertexCount - 1
+                                   : static_cast<SizeT>(drawParams.firstVertex));
+                    const SizeT uploadSize = lastVertex * stride + elementSize;
                     uploaded = m_bufferManager.UploadTransient(
                         BufferKind::Vertex, m_frameContext.GetCurrentFrameIndex(), clientData,
                         static_cast<VkDeviceSize>(uploadSize), 16, slice);
                 } else {
+                    if (clientElementBound == 0) {
+                        // Indirect/multi indexed draws have no CPU-visible index range and a
+                        // client array has no size to fall back to; a guessed range could
+                        // truncate the converted stream, so skip the draw loudly.
+                        MGLOG_E("UploadAndBindVertexStreams skipped: converted client-memory attribute "
+                                "location=%u has no computable vertex range", location);
+                        return false;
+                    }
                     uploaded = uploadConvertedStream(conversion, attr, clientData, stride, elementSize,
-                                                     static_cast<SizeT>(lastVertex) + 1, slice);
+                                                     clientElementBound, slice);
                 }
                 if (!uploaded) {
                     MOBILEGL_ASSERT(false,
@@ -2388,7 +2474,23 @@ void main() {
                 }
 
                 sourceBufferShared->SyncPersistentMappedRange();
-                const SizeT elementCount = 1 + (sourceSize - baseOffset - elementSize) / sourceStride;
+                const SizeT availableElementCount = 1 + (sourceSize - baseOffset - elementSize) / sourceStride;
+                const Bool cacheable = !sourceBufferShared->IsBackendPersistentMapped();
+                // Convert only what this draw can fetch instead of the whole buffer tail.
+                // Instance-rate bindings index by instance, not the vertex range, so they
+                // keep the tail. Indexed draws from cacheable buffers also keep the tail: a
+                // single cached whole-range conversion per frame is cheaper than a per-draw
+                // index scan. Persistent-mapped buffers are uncacheable and reconvert every
+                // draw, so for them the scan plus bounded conversion is the cheaper trade.
+                const Bool vertexRateBinding =
+                    vertexInputState.bindings[binding].inputRate == VK_VERTEX_INPUT_RATE_VERTEX;
+                SizeT elementCount = availableElementCount;
+                if (vertexRateBinding && (!indexedDraw || !cacheable)) {
+                    const SizeT elementBound = resolveDrawElementBound();
+                    if (elementBound > 0) {
+                        elementCount = std::min(elementCount, elementBound);
+                    }
+                }
                 const ConvertedVertexStreamKey cacheKey{
                     .buffer = sourceBufferShared.get(),
                     .changeSerial = sourceBufferShared->GetChangeSerial(),
@@ -2401,12 +2503,18 @@ void main() {
                     .conversion = conversion,
                 };
 
-                const Bool cacheable = !sourceBufferShared->IsBackendPersistentMapped();
-                auto cached = cacheable ? m_convertedVertexStreams.find(cacheKey)
-                                        : m_convertedVertexStreams.end();
-                if (cached != m_convertedVertexStreams.end()) {
-                    slice = cached->second;
-                } else {
+                Bool reusedCachedStream = false;
+                if (cacheable) {
+                    const auto cached = m_convertedVertexStreams.find(cacheKey);
+                    // A cached conversion covering at least this draw's range is a strict
+                    // prefix match: converted streams are tightly packed from element 0.
+                    if (cached != m_convertedVertexStreams.end() &&
+                        cached->second.elementCount >= elementCount) {
+                        slice = cached->second.slice;
+                        reusedCachedStream = true;
+                    }
+                }
+                if (!reusedCachedStream) {
                     const Uint8* sourceData = sourceBufferShared->MappedData() + baseOffset;
                     if (!uploadConvertedStream(conversion, attr, sourceData, sourceStride,
                                                elementSize, elementCount, slice)) {
@@ -2415,7 +2523,8 @@ void main() {
                         return false;
                     }
                     if (cacheable) {
-                        m_convertedVertexStreams.emplace(cacheKey, slice);
+                        m_convertedVertexStreams[cacheKey] =
+                            ConvertedVertexStream{slice, elementCount, sourceBufferShared};
                     }
                 }
                 vkBuffers[binding] = slice.buffer;
@@ -3809,7 +3918,7 @@ void main() {
         }
 
         auto vtxUploadOk = UploadAndBindVertexBuffers(
-            frame.commandBuffer, vao, programObj, drawParams, pIndexBufferView != nullptr);
+            frame.commandBuffer, vao, programObj, drawParams, pIndexBufferView);
         if (!vtxUploadOk) {
             MGLOG_E("SetupDraw skipped: failed to upload vertex buffers");
             return false;
@@ -6023,6 +6132,10 @@ void main() {
         vertexRange.instanceCount = payload.params.instanceCount;
         vertexRange.firstVertex = 0;
         vertexRange.firstInstance = static_cast<Uint32>(payload.params.firstInstance);
+        vertexRange.baseVertex = payload.params.vertexOffset;
+        // Direct DrawElements fetches exactly the indices in its view, so vertex-stream
+        // conversion may bound its work by scanning them.
+        vertexRange.indexRangeIsExactView = true;
 
         if (!SetupDraw(frame, payload.mode, DrawSetupAspect::IndexBuffer, vertexRange,
                        &payload.indexBufferView)) {

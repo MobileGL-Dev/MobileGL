@@ -51,6 +51,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         Uint32 instanceCount = 1;
         Uint32 firstVertex = 0;
         Uint32 firstInstance = 0;
+        // Indexed-draw metadata for bounding vertex-stream conversion. baseVertex is the
+        // draw's base-vertex offset; indexRangeIsExactView is true only when the draw
+        // fetches exactly the indices its IndexBufferView describes (direct DrawElements;
+        // multi/indirect forms leave it false because the CPU cannot bound their ranges).
+        Int32 baseVertex = 0;
+        Bool indexRangeIsExactView = false;
     };
 
     struct DrawIndexedCmdParam {
@@ -488,7 +494,18 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             }
         };
 
-        UnorderedMap<ConvertedVertexStreamKey, BufferSlice, ConvertedVertexStreamKeyHash>
+        struct ConvertedVertexStream {
+            BufferSlice slice;
+            // Number of source elements the cached slice covers. A draw needing a prefix of
+            // this range reuses the slice (converted streams are tightly packed); a draw
+            // needing more reconverts and replaces the entry, so per (buffer, layout) a
+            // frame converts at most the largest range any draw asked for.
+            SizeT elementCount = 0;
+            // Pins the source buffer for the frame so its heap address cannot be reused by
+            // a new BufferObject while this pointer-keyed entry is alive.
+            SharedPtr<const MG_State::GLState::BufferObject> sourcePin;
+        };
+        UnorderedMap<ConvertedVertexStreamKey, ConvertedVertexStream, ConvertedVertexStreamKeyHash>
             m_convertedVertexStreams;
 
         void CreateInstance();
@@ -519,7 +536,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
         Bool UploadAndBindVertexBuffers(VkCommandBuffer commandBuffer, const MG_State::GLState::VertexArrayObject& vao,
                                         const ProgramFactory::VkProgramObject& programObj,
-                                        const DrawCmdParam& drawParams, Bool indexedDraw);
+                                        const DrawCmdParam& drawParams,
+                                        const IndexBufferView* pIndexBufferView);
         Bool UploadAndBindIndexBuffer(FrameContext::FrameData& frame,
                                      const MG_State::GLState::VertexArrayObject& vao,
                                       const IndexBufferView* pIndexBufferView = nullptr);

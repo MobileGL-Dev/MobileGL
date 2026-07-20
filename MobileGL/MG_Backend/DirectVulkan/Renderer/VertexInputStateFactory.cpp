@@ -126,8 +126,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             const Bool packedAttribute = attr.Type == DataType::Int2101010Rev ||
                                          attr.Type == DataType::Uint2101010Rev;
             const SizeT requiredAlignment = packedAttribute ? attribByteSize : GetComponentSize(attr.Type);
+            // For a client-memory array attr.Offset holds the raw client pointer, and the
+            // draw path re-uploads the data to a 16-aligned transient slice with attribute
+            // offset 0, so only the stride can violate Vulkan's fetch alignment there.
+            const Bool clientMemoryAttribute = attr.Buffer == nullptr;
             if (conversion == VertexStreamConversion::None && requiredAlignment > 1 &&
-                ((sourceStride % requiredAlignment) != 0 || (attr.Offset % requiredAlignment) != 0)) {
+                ((sourceStride % requiredAlignment) != 0 ||
+                 (!clientMemoryAttribute && (attr.Offset % requiredAlignment) != 0))) {
                 // GL accepts arbitrary byte strides and offsets. Core Vulkan vertex fetches do not
                 // unless VK_EXT_legacy_vertex_attributes is available, so deinterleave this one
                 // attribute into a tightly packed transient stream without changing its format.
