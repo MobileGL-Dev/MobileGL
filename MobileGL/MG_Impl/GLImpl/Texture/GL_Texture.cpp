@@ -493,8 +493,15 @@ namespace MobileGL::MG_Impl::GLImpl {
             }
 
             auto mipmapTexture = std::static_pointer_cast<MG_State::GLState::TextureObjectMipmap>(textureObject);
-            if (level < 0 || static_cast<Uint>(level) >= mipmapTexture->GetMipmapLevelCount()) {
+            if (level < 0) {
                 RecordClearTextureError(caller, ErrorCode::InvalidValue,
+                                        std::format("Texture level {} is negative.", level));
+                return nullptr;
+            }
+            // ARB_clear_texture: clearing an image that was never defined by TexImage*/
+            // TexStorage* is INVALID_OPERATION, not INVALID_VALUE.
+            if (static_cast<Uint>(level) >= mipmapTexture->GetMipmapLevelCount()) {
+                RecordClearTextureError(caller, ErrorCode::InvalidOperation,
                                         std::format("Texture level {} is not defined.", level));
                 return nullptr;
             }
@@ -536,6 +543,12 @@ namespace MobileGL::MG_Impl::GLImpl {
             return true;
         }
 
+        // Writes the clear into the CPU shadow and marks the whole level dirty, exactly like
+        // TexSubImage*_State does. Shared limitation of the level-granular shadow sync: the
+        // shadow does not reflect GPU-side writes (FBO rendering, imageStore), so a PARTIAL
+        // clear of a GPU-written level re-uploads stale shadow bytes outside the region on
+        // the next sync. Full-level clears (glClearTexImage, or a sub-clear covering the
+        // level) rewrite the entire shadow and are always correct.
         Bool ClearMipmapRegion(const SharedPtr<MG_State::GLState::TextureObjectMipmap>& textureObject,
                                TextureUploadTarget uploadTarget, GLint level,
                                GLint xoffset, GLint yoffset, GLint zoffset,
@@ -4025,8 +4038,21 @@ namespace MobileGL::MG_Impl::GLImpl {
     void CopyTextureSubImage2D(GLuint texture, GLint level, GLint xoffset, GLint yoffset, GLint x, GLint y,
                                GLsizei width, GLsizei height) {
         auto textureObject = GetTextureObjectByName(texture, __func__);
-        WithTemporarilyBoundNamedTexture(textureObject, [&](GLenum target) {
-            CopyTexSubImage2D_Backend(target, level, xoffset, yoffset, x, y, width, height);
+        if (!textureObject) return;
+        // GL 4.6 sec. 8.8: the 2D form only accepts these effective targets; cube maps must
+        // go through CopyTextureSubImage3D with the face as a layer.
+        const auto target = textureObject->GetTarget();
+        if (target != TextureTarget::Texture2D && target != TextureTarget::Texture1DArray &&
+            target != TextureTarget::TextureRectangle) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidOperation,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
+                                             "CopyTextureSubImage2D requires a 2D, 1D-array, or "
+                                             "rectangle texture."));
+            return;
+        }
+        WithTemporarilyBoundNamedTexture(textureObject, [&](GLenum glTarget) {
+            CopyTexSubImage2D_Backend(glTarget, level, xoffset, yoffset, x, y, width, height);
         });
     }
 

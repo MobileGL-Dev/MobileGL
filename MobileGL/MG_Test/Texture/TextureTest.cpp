@@ -318,6 +318,49 @@ TEST_F(TextureTest, CopyTextureSubImage2DUsesNamedObjectAndRestoresBinding) {
     EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
 }
 
+TEST_F(TextureTest, CopyTextureSubImage2DRejectsCubeMapTargets) {
+    const ScopedTextureBackendFunctionsOverride backendGuard;
+    MG_Backend::gBackendFunctionsTable.GL.CopyTexSubImage2D = RecordCopyTexSubImage2D;
+    g_copyTexSubImage2DCall = {};
+
+    GLuint cubeTexture = 0;
+    MG_Impl::GLImpl::CreateTextures(GL_TEXTURE_CUBE_MAP, 1, &cubeTexture);
+    MG_Impl::GLImpl::CopyTextureSubImage2D(cubeTexture, 0, 0, 0, 0, 0, 1, 1);
+
+    // GL 4.6 sec. 8.8: the 2D form only accepts 2D/1D-array/rectangle effective targets.
+    EXPECT_FALSE(g_copyTexSubImage2DCall.Called);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), static_cast<GLenum>(GL_INVALID_OPERATION));
+}
+
+TEST_F(TextureTest, ClearTexImageErrorContracts) {
+    GLuint texture = 0;
+    MG_Impl::GLImpl::GenTextures(1, &texture);
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, texture);
+    MG_Impl::GLImpl::TexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 2, 2, 0,
+                                GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+
+    // Zero texture name is INVALID_OPERATION (ARB_clear_texture).
+    MG_Impl::GLImpl::ClearTexImage(0, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), static_cast<GLenum>(GL_INVALID_OPERATION));
+
+    // A negative level is INVALID_VALUE...
+    MG_Impl::GLImpl::ClearTexImage(texture, -1, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), static_cast<GLenum>(GL_INVALID_VALUE));
+
+    // ...but clearing a level that was never defined is INVALID_OPERATION.
+    MG_Impl::GLImpl::ClearTexImage(texture, 5, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), static_cast<GLenum>(GL_INVALID_OPERATION));
+
+    // A clear region outside the level is INVALID_VALUE.
+    MG_Impl::GLImpl::ClearTexSubImage(texture, 0, 1, 1, 0, 4, 4, 1,
+                                      GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), static_cast<GLenum>(GL_INVALID_VALUE));
+
+    // An invalid pixel-transfer format is INVALID_ENUM from the shared validators.
+    MG_Impl::GLImpl::ClearTexImage(texture, 0, GL_NONE, GL_UNSIGNED_BYTE, nullptr);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), static_cast<GLenum>(GL_INVALID_ENUM));
+}
+
 // GL_MAX_TEXTURE_MAX_ANISOTROPY_EXT is float state that must answer every numeric query: GetFloatv
 // is authoritative and GetIntegerv would otherwise fall through to its INVALID_ENUM default.
 TEST_F(TextureTest, MaxTextureMaxAnisotropyIsAnsweredFromTheBackendLimit) {
