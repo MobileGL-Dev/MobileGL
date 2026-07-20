@@ -134,6 +134,10 @@ namespace MobileGL::MG_State::GLState {
         virtual const IntVec3 GetMipmapTexelSize(TextureUploadTarget target, Uint mipmapLevel) const = 0;
         virtual const SizeT GetMipmapByteSize(TextureUploadTarget target, Uint mipmapLevel) const = 0;
         virtual void AllocateStorage(TextureUploadTarget uploadTarget, Uint mipmapLevel, MipmapInput input) = 0;
+        // AllocateStorage only ever grows the chain. Callers that define the complete level set -
+        // glTexStorage*, mip regeneration, or a level-0 respecification at a new size - drop the
+        // leftovers explicitly, so a stale tail can never make the texture silently incomplete.
+        virtual void TruncateMipmapLevels(TextureUploadTarget uploadTarget, Uint levelCount) = 0;
         virtual void UpdateMipmapSubData(TextureUploadTarget uploadTarget, Uint mipmapLevel, DataPtr input) = 0;
         virtual void* MapMipmapData(TextureUploadTarget uploadTarget, Uint mipmapLevel) = 0;
         virtual void MarkStorageDirty(TextureUploadTarget uploadTarget, Uint mipmapLevel, Bool dirty = true) = 0;
@@ -175,6 +179,7 @@ namespace MobileGL::MG_State::GLState {
         const IntVec3 GetMipmapTexelSize(TextureUploadTarget target, Uint mipmapLevel) const override;
         const SizeT GetMipmapByteSize(TextureUploadTarget target, Uint mipmapLevel) const override;
         void AllocateStorage(TextureUploadTarget uploadTarget, Uint mipmapLevel, MipmapInput input) override;
+        void TruncateMipmapLevels(TextureUploadTarget uploadTarget, Uint levelCount) override;
         void UpdateMipmapSubData(TextureUploadTarget uploadTarget, Uint mipmapLevel, DataPtr input) override;
         void* MapMipmapData(TextureUploadTarget uploadTarget, Uint mipmapLevel) override;
         void MarkStorageDirty(TextureUploadTarget uploadTarget, Uint mipmapLevel, Bool dirty) override;

@@ -29,6 +29,14 @@ namespace MobileGL {
                     m_storage[targetIndex].AllocateLevel(level, input);
                 }
 
+                // Per-target, like AllocateLevel: cube-map faces are respecified independently, so
+                // truncating one face must not disturb the others.
+                void TruncateToLevelCount(Uint targetIndex, SizeT levelCount) {
+                    MOBILEGL_ASSERT(targetIndex < TargetCount, "TruncateToLevelCount: target invalid");
+
+                    m_storage[targetIndex].TruncateToLevelCount(levelCount);
+                }
+
                 void UpdateSubData(Uint targetIndex, Uint level, DataPtr input) {
                     MOBILEGL_ASSERT(targetIndex < TargetCount, "UpdateSubData: target invalid");
                     m_storage[targetIndex].UpdateSubData(level, input);

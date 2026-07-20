@@ -1427,6 +1427,95 @@ TEST_F(TextureTest, TextureStorage1DAndSubImageModifyNamedObjectOnly) {
     EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
 }
 
+// Building a mip chain top-down - upload level N, then level 0 - must not destroy the levels
+// already uploaded. AllocateLevel used to resize() the storage down to level+1 on every call, so
+// the level-0 upload truncated the chain to a single level; the higher level then read back as
+// {0,0,0}, IsComplete() rejected the zero-then-nonzero pattern, and DirectGLES answered that by
+// skipping the texture's sync entirely. This is the shape KHR-GL33.texture_repeat_mode uses, and
+// it accounted for 108 CTS failures in every GL version.
+TEST_F(TextureTest, TexImage2DOnLevelZeroKeepsAnAlreadyUploadedHigherLevel) {
+    GLuint texture = 0;
+    MG_Impl::GLImpl::GenTextures(1, &texture);
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, texture);
+
+    MG_Impl::GLImpl::TexImage2D(GL_TEXTURE_2D, 1, GL_RGBA8, 49, 23, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    MG_Impl::GLImpl::TexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 98, 46, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+
+    const auto textureObject = MG_State::pGLContext->GetTextureObject(texture);
+    auto* mipmapObject = static_cast<MG_State::GLState::TextureObjectMipmap*>(textureObject.get());
+    ASSERT_NE(mipmapObject, nullptr);
+    EXPECT_EQ(mipmapObject->GetMipmapLevelCount(), 2u);
+    EXPECT_EQ(mipmapObject->GetMipmapTexelSize(TextureUploadTarget::Texture2D, 0), IntVec3(98, 46, 1));
+    EXPECT_EQ(mipmapObject->GetMipmapTexelSize(TextureUploadTarget::Texture2D, 1), IntVec3(49, 23, 1));
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+}
+
+// The other half of the contract: respecifying a level 0 that already held an image still drops
+// the chain, exactly as before. Minecraft rebinds the block-atlas name and calls glTexImage2D on
+// level 0 before uploading the new levels; leaving the previous chain in place would strand a tail
+// at the wrong sizes and - because Mojang terminates its chains with a 0x0 level - reproduce the
+// same incomplete-texture black atlas the fix above exists to prevent.
+TEST_F(TextureTest, TexImage2DRespecifyingAnExistingLevelZeroDropsTheStaleChain) {
+    GLuint texture = 0;
+    MG_Impl::GLImpl::GenTextures(1, &texture);
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, texture);
+
+    MG_Impl::GLImpl::TexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 8, 8, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    MG_Impl::GLImpl::TexImage2D(GL_TEXTURE_2D, 1, GL_RGBA8, 4, 4, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    MG_Impl::GLImpl::TexImage2D(GL_TEXTURE_2D, 2, GL_RGBA8, 2, 2, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+
+    const auto textureObject = MG_State::pGLContext->GetTextureObject(texture);
+    auto* mipmapObject = static_cast<MG_State::GLState::TextureObjectMipmap*>(textureObject.get());
+    ASSERT_NE(mipmapObject, nullptr);
+    ASSERT_EQ(mipmapObject->GetMipmapLevelCount(), 3u);
+
+    MG_Impl::GLImpl::TexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 16, 16, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+
+    EXPECT_EQ(mipmapObject->GetMipmapLevelCount(), 1u);
+    EXPECT_EQ(mipmapObject->GetMipmapTexelSize(TextureUploadTarget::Texture2D, 0), IntVec3(16, 16, 1));
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+}
+
+// Same-size respecification has to drop the chain too. The Mipmap Levels video setting rebuilds
+// the atlas at identical dimensions with a different level count, so a size-change-only test would
+// let the old tail survive.
+TEST_F(TextureTest, TexImage2DRespecifyingLevelZeroAtTheSameSizeStillDropsTheChain) {
+    GLuint texture = 0;
+    MG_Impl::GLImpl::GenTextures(1, &texture);
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, texture);
+
+    MG_Impl::GLImpl::TexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 8, 8, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    MG_Impl::GLImpl::TexImage2D(GL_TEXTURE_2D, 1, GL_RGBA8, 4, 4, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    MG_Impl::GLImpl::TexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 8, 8, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+
+    const auto textureObject = MG_State::pGLContext->GetTextureObject(texture);
+    auto* mipmapObject = static_cast<MG_State::GLState::TextureObjectMipmap*>(textureObject.get());
+    ASSERT_NE(mipmapObject, nullptr);
+    EXPECT_EQ(mipmapObject->GetMipmapLevelCount(), 1u);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+}
+
+// glTexStorage2D defines exactly `levels` levels. AllocateStorage only grows now, so the immutable
+// path has to drop a longer pre-existing chain explicitly.
+TEST_F(TextureTest, TexStorage2DTrimsALongerPreExistingMipChain) {
+    GLuint texture = 0;
+    MG_Impl::GLImpl::GenTextures(1, &texture);
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, texture);
+
+    MG_Impl::GLImpl::TexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 8, 8, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    MG_Impl::GLImpl::TexImage2D(GL_TEXTURE_2D, 1, GL_RGBA8, 4, 4, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    MG_Impl::GLImpl::TexImage2D(GL_TEXTURE_2D, 2, GL_RGBA8, 2, 2, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    MG_Impl::GLImpl::TexImage2D(GL_TEXTURE_2D, 3, GL_RGBA8, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+
+    MG_Impl::GLImpl::TexStorage2D(GL_TEXTURE_2D, 2, GL_RGBA8, 8, 8);
+
+    const auto textureObject = MG_State::pGLContext->GetTextureObject(texture);
+    auto* mipmapObject = static_cast<MG_State::GLState::TextureObjectMipmap*>(textureObject.get());
+    ASSERT_NE(mipmapObject, nullptr);
+    EXPECT_EQ(mipmapObject->GetMipmapLevelCount(), 2u);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+}
+
 TEST_F(TextureTest, TextureStorage3DAndSubImageModifyNamedObjectOnly) {
     GLuint texture = 0;
     MG_Impl::GLImpl::CreateTextures(GL_TEXTURE_3D, 1, &texture);

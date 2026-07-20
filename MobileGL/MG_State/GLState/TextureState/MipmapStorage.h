@@ -19,6 +19,10 @@ namespace MobileGL {
             public:
                 SizeT GetLevelCount() const;
                 void AllocateLevel(Uint level, MipmapInput input);
+                // Discard every level at or above levelCount. AllocateLevel never shrinks, so this
+                // is the only way a chain gets shorter - use it where the caller defines the whole
+                // level set (glTexStorage*, mip regeneration, atlas respecification).
+                void TruncateToLevelCount(SizeT levelCount);
                 void UpdateSubData(Uint level, DataPtr input);
                 void* MapData(Uint level);
                 IntVec3 GetTexelSize(Uint level) const;

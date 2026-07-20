@@ -350,6 +350,10 @@ namespace MobileGL::MG_Impl::GLImpl {
                 texture.AllocateStorage(uploadTarget, level, {levelTexelSize, levelByteSize});
                 texture.MarkStorageDirty(uploadTarget, level, false);
             }
+            // glGenerateMipmap defines exactly levels 0..requiredLevelCount-1. AllocateStorage only
+            // grows, so a previously longer chain (a bigger base image before respecification) would
+            // otherwise keep a tail of stale levels here and read as incomplete.
+            texture.TruncateMipmapLevels(uploadTarget, requiredLevelCount);
             // Mip generation grows/regenerates the level set on the GPU without marking any CPU
             // level dirty (MarkStorageDirty(...,false) above). Bump the content version so the
             // backend re-syncs: a cached sampled VkImageView built for the pre-generate level
@@ -456,7 +460,44 @@ namespace MobileGL::MG_Impl::GLImpl {
             textureObject->SetSamples(samples);
             textureObject->SetFixedSampleLocations(fixedsamplelocations == GL_TRUE);
             textureMipmapObject->AllocateStorage(textureUploadTarget, 0, {{width, height, depth}, 0});
+            // Multisample textures are single-level by definition, so a name that previously held a
+            // mip chain must not keep its tail now that AllocateStorage only grows.
+            textureMipmapObject->TruncateMipmapLevels(textureUploadTarget, 1);
             textureMipmapObject->MarkStorageDirty(textureUploadTarget, 0, false);
+        }
+
+        // Redefining level 0 of a texture that already had a base image drops the rest of the chain,
+        // which is exactly what AllocateLevel used to do implicitly for every level. Keeping that
+        // behaviour for level 0 - and only for level 0 - is what makes the grow-only change safe:
+        // any level-0 respecification leaves the chain in precisely the state it would have had
+        // before, while an upload to level N no longer destroys the levels beneath it.
+        //
+        // Why it has to be *every* level-0 respecification and not just a size change: Minecraft's
+        // Mipmap Levels setting rebuilds the block atlas at the SAME dimensions with a different
+        // level count. A size-only test would leave the old tail in place, and because Mojang
+        // terminates its chains with a 0x0 level the result is the zero-then-nonzero pattern that
+        // IsComplete() rejects (TextureObject.cpp) - whereupon DirectGLES skips syncing the texture
+        // entirely (Managers.cpp) and the atlas samples black.
+        //
+        // The "already has a base image" test is what lets the fix work at all: a level that was
+        // never written reads back as {0,0,0}, so building a chain top-down - upload level N first,
+        // then level 0 - must not discard the levels just uploaded. That ordering is what
+        // KHR-GL33.texture_repeat_mode does.
+        // Scoped to the respecified upload target only, which is what AllocateLevel already did.
+        // Cube maps keep six independent chains while reporting a single level count (face +X), so
+        // respecifying a face other than +X can leave the count longer than that face - but that
+        // asymmetry predates this change and widening the truncation to all six faces would destroy
+        // mip data for faces the application never touched. Left alone deliberately.
+        void DiscardMipmapChainOnBaseRespecification(MG_State::GLState::TextureObjectMipmap* texture,
+                                                     TextureUploadTarget uploadTarget, Uint level) {
+            if (level != 0) return;
+
+            const IntVec3 existingBaseSize = texture->GetMipmapTexelSize(uploadTarget, 0);
+            const Bool hasExistingBaseImage =
+                existingBaseSize.x() > 0 && existingBaseSize.y() > 0 && existingBaseSize.z() > 0;
+            if (!hasExistingBaseImage) return;
+
+            texture->TruncateMipmapLevels(uploadTarget, 1);
         }
 
         // Compressed texture upload is not implemented yet. GL_NUM_COMPRESSED_TEXTURE_FORMATS
@@ -1740,6 +1781,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         if (isProxy) {
             MGLOG_D("%s: isProxy = true, not allocating", __func__);
         } else {
+            DiscardMipmapChainOnBaseRespecification(textureMipmapObject, textureUploadTarget, level);
             textureMipmapObject->AllocateStorage(textureUploadTarget, level, {{width, height, depth}, internalBytes});
         }
 
@@ -1867,6 +1909,7 @@ namespace MobileGL::MG_Impl::GLImpl {
             MGLOG_D("%s: isProxy = true, not allocating", __func__);
         } else {
             MGLOG_D("%s: Allocating %d bytes at mip %d", __func__, internalBytes, level);
+            DiscardMipmapChainOnBaseRespecification(textureMipmapObject, textureUploadTarget, level);
             textureMipmapObject->AllocateStorage(textureUploadTarget, level,
                                                  {{width, height, 1}, internalBytes});
         }
@@ -1955,6 +1998,7 @@ namespace MobileGL::MG_Impl::GLImpl {
                         "Texture object here should always be an object with mipmap");
         auto textureMipmapObject = static_cast<MG_State::GLState::TextureObjectMipmap*>(textureObject.get());
         if (!isProxy) {
+            DiscardMipmapChainOnBaseRespecification(textureMipmapObject, textureUploadTarget, level);
             textureMipmapObject->AllocateStorage(textureUploadTarget, level, {{width, 1, 1}, internalBytes});
         }
 
@@ -3195,6 +3239,9 @@ namespace MobileGL::MG_Impl::GLImpl {
             textureMipmapObject->AllocateStorage(textureUploadTarget, level, {{levelWidth, 1, 1}, byteSize});
             textureMipmapObject->MarkStorageDirty(textureUploadTarget, level, false);
         }
+        // Immutable storage defines exactly `levels` levels; AllocateStorage only grows, so a
+        // longer pre-existing chain has to be dropped explicitly.
+        textureMipmapObject->TruncateMipmapLevels(textureUploadTarget, static_cast<Uint>(levels));
         textureObject->SetImmutableLevels(static_cast<Uint>(levels));
     }
 
@@ -3247,6 +3294,8 @@ namespace MobileGL::MG_Impl::GLImpl {
             textureMipmapObject->AllocateStorage(textureUploadTarget, level, {{levelWidth, levelHeight, 1}, byteSize});
             textureMipmapObject->MarkStorageDirty(textureUploadTarget, level, false);
         }
+        // See TextureStorage1D.
+        textureMipmapObject->TruncateMipmapLevels(textureUploadTarget, static_cast<Uint>(levels));
         textureObject->SetImmutableLevels(static_cast<Uint>(levels));
     }
 
@@ -3299,6 +3348,8 @@ namespace MobileGL::MG_Impl::GLImpl {
                                                  {{levelWidth, levelHeight, levelDepth}, byteSize});
             textureMipmapObject->MarkStorageDirty(textureUploadTarget, level, false);
         }
+        // See TextureStorage1D.
+        textureMipmapObject->TruncateMipmapLevels(textureUploadTarget, static_cast<Uint>(levels));
         textureObject->SetImmutableLevels(static_cast<Uint>(levels));
     }
 

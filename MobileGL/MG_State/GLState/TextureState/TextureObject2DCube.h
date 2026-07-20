@@ -22,6 +22,7 @@ namespace MobileGL {
                 const IntVec3 GetMipmapTexelSize(TextureUploadTarget target, Uint mipmapLevel) const override;
                 const SizeT GetMipmapByteSize(TextureUploadTarget target, Uint mipmapLevel) const override;
                 void AllocateStorage(TextureUploadTarget uploadTarget, Uint mipmapLevel, MipmapInput input) override;
+                void TruncateMipmapLevels(TextureUploadTarget uploadTarget, Uint levelCount) override;
                 void UpdateMipmapSubData(TextureUploadTarget uploadTarget, Uint mipmapLevel, DataPtr input) override;
                 void* MapMipmapData(TextureUploadTarget uploadTarget, Uint mipmapLevel) override;
                 void MarkStorageDirty(TextureUploadTarget uploadTarget, Uint mipmapLevel, bool dirty) override;

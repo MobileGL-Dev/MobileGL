@@ -16,15 +16,30 @@ namespace MobileGL {
             }
 
             void MipmapStorage::AllocateLevel(Uint level, MipmapInput input) {
-                m_data.reserve(std::bit_ceil(level + 1));
-                m_data.resize(level + 1);
-                m_texelSizes.reserve(std::bit_ceil(level + 1));
-                m_texelSizes.resize(level + 1);
-                m_texelSizes[level] = input.texelSize;
-                m_isDirty.resize(level + 1, false);
+                // Grow only. GL respecifies exactly the level it is handed, so allocating level 0
+                // must not disturb the levels above it - but resize() shrinks as readily as it
+                // grows, so this used to truncate the whole chain to a single level. Callers that
+                // genuinely redefine the complete level set say so with TruncateToLevelCount.
+                const SizeT requiredLevelCount = static_cast<SizeT>(level) + 1;
+                if (m_data.size() < requiredLevelCount) {
+                    m_data.reserve(std::bit_ceil(requiredLevelCount));
+                    m_data.resize(requiredLevelCount);
+                    m_texelSizes.reserve(std::bit_ceil(requiredLevelCount));
+                    m_texelSizes.resize(requiredLevelCount);
+                    m_isDirty.resize(requiredLevelCount, false);
+                }
 
+                m_texelSizes[level] = input.texelSize;
                 auto& data = m_data[level];
                 data.resize(input.byteSize, 0);
+            }
+
+            void MipmapStorage::TruncateToLevelCount(SizeT levelCount) {
+                if (levelCount >= m_data.size()) return;
+
+                m_data.resize(levelCount);
+                m_texelSizes.resize(levelCount);
+                m_isDirty.resize(levelCount);
             }
 
             void MipmapStorage::UpdateSubData(Uint level, DataPtr input) {
@@ -55,6 +70,7 @@ namespace MobileGL {
             }
 
             SizeT MipmapStorage::GetByteSize(Uint level) const {
+                if (level >= m_data.size()) return 0;
                 return m_data[level].size();
             }
 
