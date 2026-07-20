@@ -255,6 +255,37 @@ namespace MobileGL {
                 return TextureInternalFormat::DepthComponent;
             case GL_DEPTH_STENCIL:
                 return TextureInternalFormat::DepthStencil;
+            // Compressed internal formats resolve to the uncompressed storage that backs them.
+            //
+            // For the six generic formats this is exactly what GL prescribes: the implementation
+            // picks a specific compressed format, and when none is available it falls back to the
+            // corresponding base format. Nothing downstream ever sees a compressed enum, so the
+            // metrics, pixel-store and backend tables keep their "one format, N bytes per texel"
+            // invariant instead of each needing a compressed-aware arm.
+            //
+            // The four RGTC formats are a deliberate deviation: they are specific formats that GL
+            // 3.3 requires, but ES exposes no RGTC compressor to hand the data to. Storing the
+            // texels uncompressed keeps them renderable at the cost of the memory saving, which is
+            // strictly better than the INVALID_ENUM the application used to get. Note the signed
+            // variants must land on SNORM storage - CTS uploads them as GL_BYTE.
+            case GL_COMPRESSED_RED:
+            case GL_COMPRESSED_RED_RGTC1:
+                return TextureInternalFormat::R8;
+            case GL_COMPRESSED_SIGNED_RED_RGTC1:
+                return TextureInternalFormat::R8Snorm;
+            case GL_COMPRESSED_RG:
+            case GL_COMPRESSED_RG_RGTC2:
+                return TextureInternalFormat::RG8;
+            case GL_COMPRESSED_SIGNED_RG_RGTC2:
+                return TextureInternalFormat::RG8Snorm;
+            case GL_COMPRESSED_RGB:
+                return TextureInternalFormat::RGB8;
+            case GL_COMPRESSED_RGBA:
+                return TextureInternalFormat::RGBA8;
+            case GL_COMPRESSED_SRGB:
+                return TextureInternalFormat::SRGB8;
+            case GL_COMPRESSED_SRGB_ALPHA:
+                return TextureInternalFormat::SRGB8Alpha8;
             case GL_ALPHA:
             case GL_RED:
                 return TextureInternalFormat::Red;

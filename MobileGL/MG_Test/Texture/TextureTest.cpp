@@ -1516,6 +1516,47 @@ TEST_F(TextureTest, TexStorage2DTrimsALongerPreExistingMipChain) {
     EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
 }
 
+// glTexImage2D used to reject every GL_COMPRESSED_* internal format with GL_INVALID_ENUM, because
+// none of them mapped to a TextureInternalFormat and the "unknown format" gate fired. They now
+// resolve to the uncompressed storage that backs them - what GL prescribes for the generic formats,
+// and a deliberate deviation for RGTC, which ES cannot compress. The (format, type) pairs below are
+// the ones KHR-GL33.packed_pixels uploads with, so this table doubles as a pin for those 480 cases.
+TEST_F(TextureTest, CompressedInternalFormatsResolveToTheirUncompressedStorage) {
+    struct Case {
+        GLenum internalFormat;
+        GLenum format;
+        GLenum type;
+        TextureInternalFormat expected;
+    };
+    const Case cases[] = {
+        {GL_COMPRESSED_RED, GL_RED, GL_UNSIGNED_BYTE, TextureInternalFormat::R8},
+        {GL_COMPRESSED_RG, GL_RG, GL_UNSIGNED_BYTE, TextureInternalFormat::RG8},
+        {GL_COMPRESSED_RGB, GL_RGB, GL_UNSIGNED_BYTE, TextureInternalFormat::RGB8},
+        {GL_COMPRESSED_RGBA, GL_RGBA, GL_UNSIGNED_BYTE, TextureInternalFormat::RGBA8},
+        {GL_COMPRESSED_SRGB, GL_RGB, GL_UNSIGNED_BYTE, TextureInternalFormat::SRGB8},
+        {GL_COMPRESSED_SRGB_ALPHA, GL_RGBA, GL_UNSIGNED_BYTE, TextureInternalFormat::SRGB8Alpha8},
+        {GL_COMPRESSED_RED_RGTC1, GL_RED, GL_UNSIGNED_BYTE, TextureInternalFormat::R8},
+        {GL_COMPRESSED_RG_RGTC2, GL_RG, GL_UNSIGNED_BYTE, TextureInternalFormat::RG8},
+        // The signed RGTC pair is uploaded as GL_BYTE and must land on SNORM storage - resolving
+        // them to plain R8/RG8 would silently reinterpret negative texels.
+        {GL_COMPRESSED_SIGNED_RED_RGTC1, GL_RED, GL_BYTE, TextureInternalFormat::R8Snorm},
+        {GL_COMPRESSED_SIGNED_RG_RGTC2, GL_RG, GL_BYTE, TextureInternalFormat::RG8Snorm},
+    };
+
+    MG_Impl::GLImpl::PixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    for (const auto& c : cases) {
+        GLuint texture = 0;
+        MG_Impl::GLImpl::GenTextures(1, &texture);
+        MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, texture);
+        MG_Impl::GLImpl::TexImage2D(GL_TEXTURE_2D, 0, c.internalFormat, 4, 4, 0, c.format, c.type, nullptr);
+
+        const auto textureObject = MG_State::pGLContext->GetTextureObject(texture);
+        ASSERT_NE(textureObject, nullptr) << "internalFormat 0x" << std::hex << c.internalFormat;
+        EXPECT_EQ(textureObject->GetFormat(), c.expected) << "internalFormat 0x" << std::hex << c.internalFormat;
+        EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR) << "internalFormat 0x" << std::hex << c.internalFormat;
+    }
+}
+
 TEST_F(TextureTest, TextureStorage3DAndSubImageModifyNamedObjectOnly) {
     GLuint texture = 0;
     MG_Impl::GLImpl::CreateTextures(GL_TEXTURE_3D, 1, &texture);
