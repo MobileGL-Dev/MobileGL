@@ -96,6 +96,77 @@ namespace {
         return masked;
     }
 
+    // Blank out block comments in place, leaving line comments and every other byte where it is.
+    //
+    // The passes that follow scan the source as raw text, so block comments have to stop being
+    // visible to them - but they must not be *deleted*: replacing the bytes with spaces keeps every
+    // later offset valid and keeps newlines, so glslang's diagnostics still point at the line the
+    // application wrote. It also has to be lexically aware. A banner line such as
+    //
+    //     //*** lighting pass ***
+    //
+    // contains "/*" one byte in, and a naive search for that opener treats the rest of the file as
+    // an unterminated comment.
+    void BlankBlockComments(MobileGL::String& source) {
+        enum class Region { Code, SingleLineComment, MultiLineComment, QuotedText };
+
+        Region region = Region::Code;
+        char quote = '\0';
+        bool escaped = false;
+
+        for (SizeT pos = 0; pos < source.size(); pos++) {
+            const char ch = source[pos];
+            const char next = pos + 1 < source.size() ? source[pos + 1] : '\0';
+
+            if (region == Region::Code) {
+                if (ch == '/' && next == '/') {
+                    pos++;
+                    region = Region::SingleLineComment;
+                } else if (ch == '/' && next == '*') {
+                    source[pos] = ' ';
+                    source[pos + 1] = ' ';
+                    pos++;
+                    region = Region::MultiLineComment;
+                } else if (ch == '"' || ch == '\'') {
+                    quote = ch;
+                    escaped = false;
+                    region = Region::QuotedText;
+                }
+                continue;
+            }
+
+            if (region == Region::SingleLineComment) {
+                if (ch == '\n' || ch == '\r') region = Region::Code;
+                continue;
+            }
+
+            if (region == Region::MultiLineComment) {
+                if (ch == '*' && next == '/') {
+                    source[pos] = ' ';
+                    source[pos + 1] = ' ';
+                    pos++;
+                    region = Region::Code;
+                } else if (ch != '\n' && ch != '\r') {
+                    source[pos] = ' ';
+                }
+                continue;
+            }
+
+            // GLSL has no multi-line string literals, so a quote that reaches end of line was never
+            // a literal to begin with - most likely an apostrophe in a #error or #pragma message.
+            // Ending the region here keeps one stray apostrophe from swallowing the rest of the file.
+            if (ch == '\n' || ch == '\r') {
+                region = Region::Code;
+            } else if (escaped) {
+                escaped = false;
+            } else if (ch == '\\') {
+                escaped = true;
+            } else if (ch == quote) {
+                region = Region::Code;
+            }
+        }
+    }
+
     struct CodeToken {
         String text;
         SizeT begin = 0;
@@ -686,7 +757,10 @@ namespace {
 
     void RenameBuiltinShadowingFunction(MobileGL::String& source, const char* from, const char* to) {
         const MobileGL::String fromName = from;
-        if (!HasSingleLineFunctionDefinition(source, fromName)) {
+        // Decide from a comment-free view. A commented-out definition is not a definition, and
+        // acting on one renames every genuine call to the builtin to a name nothing defines - which
+        // then fails to resolve. Line comments survive BlankBlockComments, so this matters.
+        if (!HasSingleLineFunctionDefinition(MaskCommentsAndQuotedText(source), fromName)) {
             return;
         }
 
@@ -1078,18 +1152,7 @@ namespace MobileGL {
                 const ShaderLanguageInfo originalLanguage = InspectShaderLanguage(source);
                 NormalizeVersionDirective(source, originalLanguage);
 
-                // remove multi-line comment
-                size_t commentStartPos = source.find("/*");
-                while (commentStartPos != String::npos) {
-                    size_t commentEndPos = source.find("*/", commentStartPos);
-                    if (commentEndPos == String::npos) {
-                        source.erase(commentStartPos);
-                        break;
-                    }
-                    // + length of "*/"
-                    source = source.replace(commentStartPos, commentEndPos - commentStartPos + 2, "");
-                    commentStartPos = source.find("/*", commentStartPos);
-                }
+                BlankBlockComments(source);
 
                 // remove #line directives
                 SizeT linedirPos = source.find("#line");

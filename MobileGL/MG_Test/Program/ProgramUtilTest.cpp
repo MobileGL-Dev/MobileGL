@@ -455,6 +455,77 @@ void main() {
     }
 }
 
+// A banner line like "//*** NOTE ***" contains "/*" at offset 1 and no "*/" anywhere after it. The
+// old hand-rolled comment stripper searched for "/*" with no lexical state, found that, failed to
+// find a terminator, and erased everything from there to the end of the file - deleting the entire
+// shader. Banner comments in that exact shape are common in Iris and OptiFine packs.
+TEST_F(ProgramUtilTest, PreprocessKeepsShaderBodyAfterAStarredLineComment) {
+    using namespace MG_Util::ShaderTranspiler;
+
+    String source = R"(#version 330 core
+//*** lighting pass ***
+out vec4 fragColor;
+void main() {
+    fragColor = vec4(1.0);
+}
+)";
+    PreprocessShaderSource(ShaderStage::Fragment, source);
+
+    EXPECT_NE(source.find("void main()"), String::npos) << "shader body was truncated:\n" << source;
+    EXPECT_NE(source.find("fragColor = vec4(1.0);"), String::npos);
+
+    ShaderAttrib attrib{.shaderType = GL_FRAGMENT_SHADER, .sourceStr = source};
+    auto res = ShaderCompiler::CompileShader(attrib);
+    if (!res) {
+        FAIL() << "errc: " << res.error().errc << "\nlog: " << res.error().log << "\nsource:\n" << source;
+    }
+}
+
+// The builtin-shadowing rename only fires when the shader really defines its own round/tanh/etc.
+// Deciding that from a commented-out definition renames every genuine call to the builtin to a
+// mg_ name that nothing defines, which fails to link.
+TEST_F(ProgramUtilTest, PreprocessIgnoresCommentedOutBuiltinShadowingDefinition) {
+    using namespace MG_Util::ShaderTranspiler;
+
+    String source = R"(#version 330 core
+// float round(float x) { return floor(x + 0.5); }
+out vec4 fragColor;
+void main() {
+    fragColor = vec4(round(1.25));
+}
+)";
+    PreprocessShaderSource(ShaderStage::Fragment, source);
+
+    EXPECT_NE(source.find("round(1.25)"), String::npos) << "call was renamed from a comment:\n" << source;
+    EXPECT_EQ(source.find("mg_round"), String::npos);
+}
+
+// A block-commented extension directive must not be treated as a real one - the int64 filter turns
+// unsupported directives into #error, so reading one out of a comment manufactures a compile
+// failure for a shader that never asked for the extension.
+TEST_F(ProgramUtilTest, PreprocessIgnoresBlockCommentedExtensionDirectives) {
+    using namespace MG_Util::ShaderTranspiler;
+
+    String source = R"(#version 330 core
+/*
+#extension GL_ARB_gpu_shader_int64 : require
+*/
+out vec4 fragColor;
+void main() {
+    fragColor = vec4(1.0);
+}
+)";
+    PreprocessShaderSource(ShaderStage::Fragment, source);
+
+    EXPECT_EQ(source.find("#error"), String::npos) << "#error synthesized from a comment:\n" << source;
+
+    ShaderAttrib attrib{.shaderType = GL_FRAGMENT_SHADER, .sourceStr = source};
+    auto res = ShaderCompiler::CompileShader(attrib);
+    if (!res) {
+        FAIL() << "errc: " << res.error().errc << "\nlog: " << res.error().log << "\nsource:\n" << source;
+    }
+}
+
 TEST_F(ProgramUtilTest, PreprocessModernSampleQualifierStaysAtVersion460) {
     using namespace MG_Util::ShaderTranspiler;
 
