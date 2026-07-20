@@ -9,7 +9,23 @@ fi
 case_name="$1"
 fixture_dir="${2:-tools/trace_replay/fixtures}"
 python_bin="${PYTHON:-python3}"
-mirror_base="${MOBILEGL_TRACE_FIXTURE_MIRROR_BASE:-https://repo.miawa.cn/mgl/tools/trace_replay/fixtures}"
+# Fixture mirrors, tried in order before falling back to Git LFS. Override the
+# whole list with MOBILEGL_TRACE_FIXTURE_MIRROR_BASES (whitespace separated);
+# MOBILEGL_TRACE_FIXTURE_MIRROR_BASE still works and is tried first.
+default_mirror_bases=(
+  "https://git.hit.moe/swung0x48/MobileGL/media/branch/dev/tools/trace_replay/fixtures"
+  "https://repo.miawa.cn/mgl/tools/trace_replay/fixtures"
+)
+if [ -n "${MOBILEGL_TRACE_FIXTURE_MIRROR_BASES:-}" ]; then
+  read -r -a mirror_bases <<< "${MOBILEGL_TRACE_FIXTURE_MIRROR_BASES}"
+else
+  mirror_bases=("${default_mirror_bases[@]}")
+fi
+if [ -n "${MOBILEGL_TRACE_FIXTURE_MIRROR_BASE:-}" ]; then
+  mirror_bases=("${MOBILEGL_TRACE_FIXTURE_MIRROR_BASE}" "${mirror_bases[@]}")
+fi
+# Optional bearer token for mirrors that require authentication (private Gitea).
+mirror_token="${MOBILEGL_TRACE_FIXTURE_MIRROR_TOKEN:-}"
 download_attempts="${MOBILEGL_TRACE_FIXTURE_DOWNLOAD_ATTEMPTS:-5}"
 retry_delay="${MOBILEGL_TRACE_FIXTURE_RETRY_DELAY:-2}"
 
@@ -30,7 +46,8 @@ fixture_list="$("${python_bin}" tools/trace_replay/trace_cases.py \
   --format fixture-files \
   --case "${case_name}" \
   --fixture-root "${fixture_dir}")"
-mapfile -t files <<< "${fixture_list}"
+# Strip CR so the script also works when python emits CRLF (Git Bash on Windows).
+mapfile -t files < <(printf '%s\n' "${fixture_list}" | tr -d '\r')
 
 include="$(IFS=,; echo "${files[*]}")"
 if [ "${case_name}" = "OpenRA" ]; then
@@ -106,6 +123,7 @@ fetch_file_from_mirror() {
   local attempt
   local partial_size
   local curl_status
+  local curl_auth
 
   metadata="$(get_lfs_metadata "${file}")" || return 1
   read -r expected_oid expected_size <<< "${metadata}"
@@ -136,7 +154,11 @@ fetch_file_from_mirror() {
       echo "Starting mirror download for ${file} (attempt ${attempt}/${download_attempts})"
     fi
 
-    if curl -L --fail --show-error --continue-at - --output "${tmp_file}" "${url}"; then
+    curl_auth=()
+    if [ -n "${mirror_token}" ]; then
+      curl_auth=(--header "Authorization: token ${mirror_token}")
+    fi
+    if curl -L --fail --show-error --continue-at - "${curl_auth[@]}" --output "${tmp_file}" "${url}"; then
       if verify_fixture_file "${tmp_file}" "${file}" "${expected_oid}" "${expected_size}"; then
         mv "${tmp_file}" "${file}"
         return 0
@@ -184,10 +206,19 @@ fetch_from_mirror() {
   for file in "${files[@]}"; do
     local name
     local url
+    local base
+    local fetched=0
     name="$(basename "${file}")"
-    url="${mirror_base%/}/${name}"
-    echo "Fetching trace fixture from mirror: ${url}"
-    if ! fetch_file_from_mirror "${file}" "${url}"; then
+    for base in "${mirror_bases[@]}"; do
+      url="${base%/}/${name}"
+      echo "Fetching trace fixture from mirror: ${url}"
+      if fetch_file_from_mirror "${file}" "${url}"; then
+        fetched=1
+        break
+      fi
+      echo "Mirror did not serve ${name}; trying the next mirror" >&2
+    done
+    if [ "${fetched}" -ne 1 ]; then
       return 1
     fi
   done
@@ -196,7 +227,7 @@ fetch_from_mirror() {
 if fetch_from_mirror; then
   echo "Fetched trace fixture files for ${case_name} from mirror: ${include}"
 else
-  echo "Mirror fetch failed for ${case_name}; falling back to Git LFS: ${include}"
+  echo "All mirrors failed for ${case_name}; falling back to Git LFS: ${include}"
   git lfs install --local
   git lfs pull --include="${include}" --exclude=""
 fi

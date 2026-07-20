@@ -19,7 +19,12 @@ RESULT_ROOT = ROOT / ".trace-work" / "macos-window-retrace-result"
 WORK_ROOT = ROOT / ".trace-work" / "macos-window-retrace-work"
 SUMMARY_DIR = ROOT / ".trace-work" / "macos-window-retrace-summary"
 SUMMARY_HTML = "mobilegl-macos-window-vulkan-retrace-overview.html"
-DEFAULT_MIRROR_BASE = "https://repo.miawa.cn/mgl/tools/trace_replay/fixtures"
+# Fixture mirrors, tried in order before Git LFS.
+DEFAULT_MIRROR_BASES = [
+    "https://git.hit.moe/swung0x48/MobileGL/media/branch/dev/tools/trace_replay/fixtures",
+    "https://repo.miawa.cn/mgl/tools/trace_replay/fixtures",
+]
+DEFAULT_MIRROR_BASE = DEFAULT_MIRROR_BASES[0]
 BACKENDS = ("DirectVulkan",)
 CASES = load_trace_cases()
 
@@ -100,34 +105,35 @@ def default_vulkan_icd(mobilegl_library):
     return ""
 
 
-def download_fixture(path, mirror_base):
+def download_fixture(path, mirror_bases):
+    """Try each mirror in order; return on the first that serves a good file."""
+    if isinstance(mirror_bases, str):
+        mirror_bases = [mirror_bases]
     path.parent.mkdir(parents=True, exist_ok=True)
-    url = f"{mirror_base.rstrip('/')}/{path.name}"
     tmp = path.with_suffix(path.suffix + ".tmp")
-    command = [
-        "curl",
-        "-L",
-        "--fail",
-        "--retry",
-        "3",
-        "--retry-delay",
-        "2",
-        "--continue-at",
-        "-",
-        "-o",
-        str(tmp),
-        url,
-    ]
-    result = subprocess.run(command, text=True, capture_output=True)
-    if result.returncode != 0:
-        return path, False, result.stderr.strip() or result.stdout.strip()
-    tmp.replace(path)
-    if is_bad_fixture(path):
-        return path, False, "downloaded fixture is empty or still an LFS pointer"
-    return path, True, ""
+    token = os.environ.get("MOBILEGL_TRACE_FIXTURE_MIRROR_TOKEN", "")
+    errors = []
+    for mirror_base in mirror_bases:
+        url = f"{mirror_base.rstrip('/')}/{path.name}"
+        command = ["curl", "-L", "--fail", "--retry", "3", "--retry-delay", "2",
+                   "--continue-at", "-"]
+        if token:
+            command += ["--header", f"Authorization: token {token}"]
+        command += ["-o", str(tmp), url]
+        result = subprocess.run(command, text=True, capture_output=True)
+        if result.returncode != 0:
+            errors.append(f"{mirror_base}: {result.stderr.strip() or result.stdout.strip()}")
+            tmp.unlink(missing_ok=True)
+            continue
+        tmp.replace(path)
+        if is_bad_fixture(path):
+            errors.append(f"{mirror_base}: downloaded fixture is empty or still an LFS pointer")
+            continue
+        return path, True, ""
+    return path, False, "; ".join(errors)
 
 
-def hydrate_fixtures(cases, fetch, mirror_base, download_jobs):
+def hydrate_fixtures(cases, fetch, mirror_bases, download_jobs):
     required = []
     seen = set()
     for case in cases:
@@ -149,7 +155,7 @@ def hydrate_fixtures(cases, fetch, mirror_base, download_jobs):
     print(f"fixtures: downloading {len(required)} file(s) with {download_jobs} worker(s)", flush=True)
     failures = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=download_jobs) as executor:
-        futures = [executor.submit(download_fixture, path, mirror_base) for path in required]
+        futures = [executor.submit(download_fixture, path, mirror_bases) for path in required]
         for future in concurrent.futures.as_completed(futures):
             path, ok, message = future.result()
             if ok:
@@ -434,7 +440,9 @@ def parse_args():
     parser.add_argument("--keep-results", action="store_true", help="Do not clear previous result/work roots.")
     parser.add_argument("--no-render", action="store_true", help="Do not render the HTML summary.")
     parser.add_argument("--fetch-fixtures", action=argparse.BooleanOptionalAction, default=True, help="Hydrate missing fixtures before running.")
-    parser.add_argument("--fixture-mirror-base", default=os.environ.get("MOBILEGL_TRACE_FIXTURE_MIRROR_BASE", DEFAULT_MIRROR_BASE))
+    parser.add_argument("--fixture-mirror-base", action="append", dest="fixture_mirror_bases",
+                        help="Fixture mirror base URL; repeatable, tried in order. "
+                             "Defaults to the hit.moe mirror then the miawa mirror.")
     parser.add_argument("--download-jobs", type=int, default=4, help="Parallel fixture download count.")
     parser.add_argument("--continue-after-fatal", action="store_true", help="Continue launching later cases after a fatal native-window replay.")
     return parser.parse_args()
@@ -463,7 +471,10 @@ def main():
         print(f"missing MobileGL library: {mobilegl_library}", file=sys.stderr)
         return 2
 
-    if not hydrate_fixtures(selected_cases, args.fetch_fixtures, args.fixture_mirror_base, max(1, args.download_jobs)):
+    mirror_bases = args.fixture_mirror_bases or [
+        b for b in os.environ.get("MOBILEGL_TRACE_FIXTURE_MIRROR_BASES", "").split() or []
+    ] or ([os.environ["MOBILEGL_TRACE_FIXTURE_MIRROR_BASE"]] if os.environ.get("MOBILEGL_TRACE_FIXTURE_MIRROR_BASE") else DEFAULT_MIRROR_BASES)
+    if not hydrate_fixtures(selected_cases, args.fetch_fixtures, mirror_bases, max(1, args.download_jobs)):
         return 2
 
     if not args.keep_results:
