@@ -135,6 +135,8 @@ namespace MobileGL::MG_ConfigLoader {
         features.DisableUboRing = QueryEnvFlag("MOBILEGL_DISABLE_UBO_RING");
         features.RelaxedSemantics = QueryEnvFlag("MOBILEGL_RELAXED_SEMANTICS");
         features.SubgroupPrefixScanQuirk = QueryEnvQuirkOverride("MOBILEGL_QUIRK_SUBGROUP_PREFIX_SCAN");
+        features.MagmaDisableBlendedDepthWriteQuirk =
+            QueryEnvQuirkOverride("MOBILEGL_MAGMA_DISABLE_BLENDED_DEPTH_WRITE");
         features.DisableRobustBufferAccess = QueryEnvFlag("MOBILEGL_DISABLE_ROBUST_BUFFER_ACCESS");
     }
 

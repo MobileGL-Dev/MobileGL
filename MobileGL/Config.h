@@ -80,6 +80,11 @@ namespace MobileGL::MG_Config {
         // rewrites the recognized workgroup prefix-scan template on Qualcomm devices with
         // subgroups wider than 32 lanes (see ShaderSourceProcessor's quirk registry).
         QuirkOverride SubgroupPrefixScanQuirk = QuirkOverride::Auto;
+        // MOBILEGL_MAGMA_DISABLE_BLENDED_DEPTH_WRITE: overrides the DirectVulkan quirk that
+        // strips depth writes from blended pipelines on drivers without cross-pipeline
+        // vertex position invariance (see VulkanRenderer's PipelineFactory setup). Auto
+        // detects Qualcomm.
+        QuirkOverride MagmaDisableBlendedDepthWriteQuirk = QuirkOverride::Auto;
         // MOBILEGL_DISABLE_ROBUST_BUFFER_ACCESS: leave the Vulkan robustBufferAccess device
         // feature off. It is enabled by default to match GL's defined out-of-range fetch
         // behavior; this escape hatch exists to measure or dodge its GPU cost on a device.

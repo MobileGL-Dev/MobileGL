@@ -2112,20 +2112,20 @@ void main() {
             // the pipelines of a multi-pass depth-equality chain (even with the SPIR-V
             // Invariant decoration), so a blended depth-writing prepass makes later
             // equality-compare passes drop whole primitives (MC 26.3 improved-transparency
-            // clouds flicker black). Suppress blended depth writes there; the env variable
-            // forces the quirk on ("0") or off ("1") on any driver.
+            // clouds flicker black). Suppress blended depth writes there;
+            // MOBILEGL_MAGMA_DISABLE_BLENDED_DEPTH_WRITE forces the quirk on or off on any
+            // driver.
             static constexpr Uint32 kVendorIdQualcomm = 0x5143;
-            Bool suppressBlendedDepthWrite = m_physicalDevice.properties.vendorID == kVendorIdQualcomm;
-            if (const char* env = getenv("MOBILEGL_MAGMA_BLENDED_DEPTH_WRITE")) {
-                if (env[0] == '0') {
-                    suppressBlendedDepthWrite = true;
-                } else if (env[0] == '1') {
-                    suppressBlendedDepthWrite = false;
-                }
-            }
+            const MG_Config::QuirkOverride quirkOverride =
+                MG_Config::Features.MagmaDisableBlendedDepthWriteQuirk;
+            const Bool suppressBlendedDepthWrite =
+                quirkOverride == MG_Config::QuirkOverride::ForceOn ||
+                (quirkOverride == MG_Config::QuirkOverride::Auto &&
+                 m_physicalDevice.properties.vendorID == kVendorIdQualcomm);
             if (suppressBlendedDepthWrite) {
                 MGLOG_I("DirectVulkan: suppressing depth writes on blended pipelines "
-                        "(driver lacks cross-pipeline position invariance)");
+                        "(driver lacks cross-pipeline position invariance)%s",
+                        quirkOverride == MG_Config::QuirkOverride::ForceOn ? " (forced on)" : "");
             }
             PipelineFactory::SetSuppressBlendedDepthWrite(suppressBlendedDepthWrite);
         }
