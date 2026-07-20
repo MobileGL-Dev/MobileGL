@@ -833,6 +833,58 @@ namespace {
         return info.HasVersionDirective() ? info.versionDirectiveEnd : 0;
     }
 
+    // GLSL's #line takes integer expressions only, but plenty of shader-pack preprocessors emit the
+    // C form with a quoted filename. Deleting every #line outright made those harmless - at the cost
+    // of __LINE__ reporting the position in MobileGL's rewritten text rather than the one the pack
+    // author wrote, and of every later diagnostic pointing at the wrong line. Dropping just the
+    // quoted operand keeps the directive doing its job and still hands glslang something it accepts.
+    void NormalizeLineDirectives(MobileGL::String& source) {
+        const MobileGL::String masked = MaskCommentsAndQuotedText(source);
+        const SizeT versionEnd = FindAfterVersionDirective(source);
+        MobileGL::String result;
+        result.reserve(source.size());
+
+        SizeT lineStart = 0;
+        while (lineStart <= source.size()) {
+            SizeT lineEnd = source.find('\n', lineStart);
+            const bool lastLine = lineEnd == MobileGL::String::npos;
+            if (lastLine) lineEnd = source.size();
+
+            SizeT probe = lineStart;
+            while (probe < lineEnd && (source[probe] == ' ' || source[probe] == '\t')) probe++;
+
+            const bool isLineDirective = masked.compare(probe, 5, "#line") == 0 &&
+                                         (probe + 5 >= lineEnd || !IsIdentifierChar(source[probe + 5]));
+            if (isLineDirective && lineStart < versionEnd) {
+                // #version has to be the first token in the shader, so a #line ahead of it could
+                // never have taken effect. Drop it rather than hand glslang a source it must reject
+                // - some pack preprocessors emit their directives before the version line.
+            } else if (isLineDirective) {
+                // Keep everything up to the first quote that the masker identified as string text.
+                SizeT quotePos = MobileGL::String::npos;
+                for (SizeT i = probe + 5; i < lineEnd; i++) {
+                    if (source[i] == '"' || source[i] == '\'') {
+                        quotePos = i;
+                        break;
+                    }
+                }
+                if (quotePos != MobileGL::String::npos) {
+                    result.append(source, lineStart, quotePos - lineStart);
+                } else {
+                    result.append(source, lineStart, lineEnd - lineStart);
+                }
+            } else {
+                result.append(source, lineStart, lineEnd - lineStart);
+            }
+
+            if (lastLine) break;
+            result.push_back('\n');
+            lineStart = lineEnd + 1;
+        }
+
+        source = std::move(result);
+    }
+
     bool IsExtensionAdvertised(MobileGL::GLExtension extension) {
         const auto& activeBackendObject = MobileGL::MG_Backend::pActiveBackendObject;
         if (!activeBackendObject) {
@@ -1154,19 +1206,7 @@ namespace MobileGL {
 
                 BlankBlockComments(source);
 
-                // remove #line directives
-                SizeT linedirPos = source.find("#line");
-                while (linedirPos != String::npos) {
-                    SizeT newlinePos = source.find('\n', linedirPos);
-                    if (newlinePos == String::npos) {
-                        source.erase(linedirPos);
-                        break;
-                    }
-
-                    // Preserve a line break so adjacent preprocessor directives do not merge.
-                    source = source.replace(linedirPos, newlinePos - linedirPos + 1, "\n");
-                    linedirPos = source.find("#line", linedirPos);
-                }
+                NormalizeLineDirectives(source);
 
                 // remove "noperspective"
                 const char* str_np = "noperspective";

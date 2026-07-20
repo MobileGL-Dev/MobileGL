@@ -446,6 +446,9 @@ void main() {
     EXPECT_NE(versionPos, String::npos);
     EXPECT_EQ(outputPos, versionPos + std::strlen("#version 330 core\n"));
     EXPECT_NE(source.find("// #version 460 core"), String::npos);
+    // This #line sits ahead of the version directive, where GLSL would never have honoured it, so
+    // it is still dropped. Directives that follow the version line are kept - see
+    // PreprocessKeepsPlainLineDirectivesAndSparesLookalikeIdentifiers.
     EXPECT_EQ(source.find("#line"), String::npos);
 
     ShaderAttrib attrib{.shaderType = GL_FRAGMENT_SHADER, .sourceStr = source};
@@ -518,6 +521,34 @@ void main() {
     PreprocessShaderSource(ShaderStage::Fragment, source);
 
     EXPECT_EQ(source.find("#error"), String::npos) << "#error synthesized from a comment:\n" << source;
+
+    ShaderAttrib attrib{.shaderType = GL_FRAGMENT_SHADER, .sourceStr = source};
+    auto res = ShaderCompiler::CompileShader(attrib);
+    if (!res) {
+        FAIL() << "errc: " << res.error().errc << "\nlog: " << res.error().log << "\nsource:\n" << source;
+    }
+}
+
+// KHR-GL33.shaders.preprocessor.builtin.line_* checks that __LINE__ follows #line. That only works
+// if the directive reaches glslang, so a plain integer form must pass through untouched - while
+// "#linear" and friends must not be mistaken for it.
+TEST_F(ProgramUtilTest, PreprocessKeepsPlainLineDirectivesAndSparesLookalikeIdentifiers) {
+    using namespace MG_Util::ShaderTranspiler;
+
+    String source = R"(#version 330 core
+out vec4 fragColor;
+#line 42
+float linear(float x) { return x; }
+void main() {
+#line 100
+    fragColor = vec4(linear(float(__LINE__)));
+}
+)";
+    PreprocessShaderSource(ShaderStage::Fragment, source);
+
+    EXPECT_NE(source.find("#line 42"), String::npos) << source;
+    EXPECT_NE(source.find("#line 100"), String::npos) << source;
+    EXPECT_NE(source.find("float linear(float x)"), String::npos) << "identifier lookalike was eaten:\n" << source;
 
     ShaderAttrib attrib{.shaderType = GL_FRAGMENT_SHADER, .sourceStr = source};
     auto res = ShaderCompiler::CompileShader(attrib);
