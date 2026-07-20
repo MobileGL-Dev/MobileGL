@@ -27,8 +27,10 @@ namespace MobileGL {
             // wider than the capture's 32 lanes. For the narrowly recognized, uniform-control-
             // flow template, replace the subgroup-local scan with a shared-memory, strict
             // left-fold over virtual 32-lane segments. Returns true only when the complete safe
-            // template was recognized and rewritten. DirectVulkan calls this through
-            // PreprocessShaderSource; the explicit entry point exists for deterministic tests.
+            // template was recognized and rewritten. PreprocessShaderSource reaches this through
+            // its device-quirk registry: by default only on detected Qualcomm Vulkan devices,
+            // overridable either way with MOBILEGL_QUIRK_SUBGROUP_PREFIX_SCAN=1/0. The explicit
+            // entry point exists for deterministic tests.
             Bool RewriteLinearSubgroupPrefixScanForVulkan(ShaderStage stage, Uint32 nativeSubgroupSize, String& source);
 
             // Rewrites a "#version 330 core" directive that PreprocessShaderSource normalized down

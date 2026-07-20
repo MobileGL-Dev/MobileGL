@@ -1623,4 +1623,26 @@ TEST_F(ProgramUtilTest, RewriteLinearSubgroupPrefixScanRejectsPartialOrUnsafeTem
     ASSERT_NE(consumerEnd, String::npos);
     nestedScan.insert(consumerEnd + 1, "\n    }");
     expectUnchanged(std::move(nestedScan));
+
+    // ARB/NV spellings of lane-width-sensitive builtins must block the rewrite exactly
+    // like their KHR counterparts.
+    String arbSubgroupBuiltin = MakeLinearSubgroupPrefixScanShader();
+    arbSubgroupBuiltin.insert(arbSubgroupBuiltin.find("float importance"),
+                              "uint arbLane = gl_SubGroupInvocationARB;\n    ");
+    expectUnchanged(std::move(arbSubgroupBuiltin));
+
+    String arbBallotCall = MakeLinearSubgroupPrefixScanShader();
+    arbBallotCall.insert(arbBallotCall.find("float importance"),
+                         "uint64_t arbMask = ballotARB(true);\n    ");
+    expectUnchanged(std::move(arbBallotCall));
+
+    String nvWarpBuiltin = MakeLinearSubgroupPrefixScanShader();
+    nvWarpBuiltin.insert(nvWarpBuiltin.find("float importance"),
+                         "uint warpSize = gl_WarpSizeNV;\n    ");
+    expectUnchanged(std::move(nvWarpBuiltin));
+
+    String nvShuffleCall = MakeLinearSubgroupPrefixScanShader();
+    nvShuffleCall.insert(nvShuffleCall.find("float importance"),
+                         "float other = shuffleNV(1.0f, 0u, 32u);\n    ");
+    expectUnchanged(std::move(nvShuffleCall));
 }

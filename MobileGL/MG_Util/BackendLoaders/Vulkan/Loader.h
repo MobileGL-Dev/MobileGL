@@ -15,6 +15,8 @@ namespace MobileGL {
             Version VulkanAPIVersion{1, 0, 0};
             String DeviceName;
             String DriverVersionString;
+            // VkPhysicalDeviceProperties::vendorID, for device-quirk vendor gating.
+            Uint32 VendorId = 0;
             Int UniformBufferOffsetAlignment = 256;
             Float AliasedLineWidthRangeMin = 1.0f;
             Float AliasedLineWidthRangeMax = 1.0f;

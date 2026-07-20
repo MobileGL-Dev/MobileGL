@@ -121,6 +121,7 @@ namespace MobileGL::MG_Util::BackendLoader {
         caps.VulkanAPIVersion = DecodeApiVersion(p.apiVersion);
         caps.DeviceName = p.deviceName;
         caps.DriverVersionString = DecodeDriverVersion(p.driverVersion);
+        caps.VendorId = p.vendorID;
         caps.UniformBufferOffsetAlignment = static_cast<int>(p.limits.minUniformBufferOffsetAlignment);
         caps.AliasedLineWidthRangeMin = p.limits.lineWidthRange[0];
         caps.AliasedLineWidthRangeMax = p.limits.lineWidthRange[1];
@@ -210,6 +211,7 @@ namespace MobileGL::MG_Util::BackendLoader {
         caps.VulkanAPIVersion = DecodeApiVersion(properties.apiVersion);
         caps.DeviceName = properties.deviceName;
         caps.DriverVersionString = DecodeDriverVersion(properties.driverVersion);
+        caps.VendorId = properties.vendorID;
         caps.UniformBufferOffsetAlignment = static_cast<int>(properties.limits.minUniformBufferOffsetAlignment);
         caps.AliasedLineWidthRangeMin = properties.limits.lineWidthRange[0];
         caps.AliasedLineWidthRangeMax = properties.limits.lineWidthRange[1];

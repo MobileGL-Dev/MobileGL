@@ -230,6 +230,21 @@ namespace MobileGL {
             void (*SetSwapInterval)(Int interval);
         };
 
+        // Coarse GPU vendor identity for gating device-specific quirks. Detected from the
+        // Vulkan physical-device vendorID or the GLES GL_VENDOR/GL_RENDERER strings; stays
+        // Unknown when detection is inconclusive, in which case auto-gated quirks stay off.
+        enum class GpuVendorKind : Uint8 {
+            Unknown = 0,
+            Qualcomm,
+            Arm,
+            Nvidia,
+            Amd,
+            Intel,
+            ImgTec,
+            // Software rasterizers (llvmpipe/lavapipe, SwiftShader).
+            Software,
+        };
+
         struct DynamicBackendParameters {
             SizeT UniformBufferOffsetAlignment = 256;
             // GL_MAX_TEXTURE_MAX_ANISOTROPY_EXT. 1.0 means the backend cannot filter anisotropically,
@@ -291,6 +306,7 @@ namespace MobileGL {
             Uint32 SubgroupSupportedStages = 0;
             Uint32 SubgroupSupportedFeatures = 0;
             Bool SubgroupQuadOperationsInAllStages = false;
+            GpuVendorKind GpuVendor = GpuVendorKind::Unknown;
         };
 
         enum class WindowBackend {

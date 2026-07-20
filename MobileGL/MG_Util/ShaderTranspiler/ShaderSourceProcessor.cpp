@@ -12,6 +12,7 @@
 #include <cctype>
 #include <initializer_list>
 #include <utility>
+#include <Config.h>
 #include <MG_Backend/BackendObjects.h>
 
 namespace {
@@ -365,7 +366,21 @@ namespace {
             HasIdentifierWithPrefixOutsideAllowed(tokens, "subgroup", {"subgroupInclusiveAdd"}) ||
             HasIdentifierWithPrefixOutsideAllowed(
                 tokens, "gl_Subgroup",
-                {"gl_SubgroupInvocationID", "gl_SubgroupSize", "gl_SubgroupID", "gl_NumSubgroups"})) {
+                {"gl_SubgroupInvocationID", "gl_SubgroupSize", "gl_SubgroupID", "gl_NumSubgroups"}) ||
+            // ARB/NV spellings of lane-width-sensitive builtins and functions
+            // (gl_SubGroupSizeARB, ballotARB, gl_WarpSizeNV, shuffleNV, ...) must block the
+            // rewrite just like their KHR counterparts: they would silently keep native-width
+            // semantics in a module rewritten to the virtual 32-lane model.
+            HasIdentifierWithPrefixOutsideAllowed(tokens, "gl_SubGroup", {}) ||
+            HasIdentifierWithPrefixOutsideAllowed(tokens, "gl_Warp", {}) ||
+            HasIdentifierWithPrefixOutsideAllowed(tokens, "gl_Thread", {}) ||
+            HasIdentifierWithPrefixOutsideAllowed(tokens, "gl_SMID", {}) ||
+            HasIdentifierWithPrefixOutsideAllowed(tokens, "ballot", {}) ||
+            HasIdentifierWithPrefixOutsideAllowed(tokens, "shuffle", {}) ||
+            HasIdentifierWithPrefixOutsideAllowed(tokens, "readInvocation", {}) ||
+            HasIdentifierWithPrefixOutsideAllowed(tokens, "readFirstInvocation", {}) ||
+            HasIdentifierWithPrefixOutsideAllowed(tokens, "anyInvocation", {}) ||
+            HasIdentifierWithPrefixOutsideAllowed(tokens, "allInvocations", {})) {
             return false;
         }
 
@@ -967,6 +982,14 @@ namespace MobileGL {
                 const Vector<CodeToken> tokens = TokenizeCode(source);
                 LinearPrefixScanMatch match;
                 if (!ParseLinearPrefixScanTemplate(tokens, match)) {
+                    // Diagnosability: when the trigger op is present but the template no longer
+                    // matches (e.g. the pack shipped a new shader revision), the affected device
+                    // silently falls back to the driver's miscompiled path. Make that visible.
+                    if (CountToken(tokens, "subgroupInclusiveAdd") > 0) {
+                        MGLOG_W("%s: subgroupInclusiveAdd present but the linear prefix-scan template "
+                                "did not match; the wide-subgroup rewrite was NOT applied",
+                                __func__);
+                    }
                     return false;
                 }
 
@@ -978,6 +1001,76 @@ namespace MobileGL {
                                "1024");
                 return true;
             }
+
+            namespace {
+                struct ShaderSourceQuirkContext {
+                    ShaderStage stage = ShaderStage::Unknown;
+                    BackendType backend = BackendType::Unknown;
+                    MG_Backend::GpuVendorKind vendor = MG_Backend::GpuVendorKind::Unknown;
+                    Uint32 subgroupSize = 0;
+                };
+
+                // Device-quirk registry. Every entry is a narrowly scoped source rewrite that
+                // works around a specific driver defect. A quirk runs when its env override
+                // forces it on, or when the override is Auto and DeviceApplies matches the
+                // detected device. ForceOn bypasses only the device gate - each Apply keeps
+                // its own structural safety checks. Add new per-device workarounds here
+                // instead of open-coding them in PreprocessShaderSource.
+                struct ShaderSourceQuirk {
+                    const char* name;
+                    MG_Config::QuirkOverride (*GetOverride)();
+                    Bool (*DeviceApplies)(const ShaderSourceQuirkContext&);
+                    Bool (*Apply)(const ShaderSourceQuirkContext&, String&);
+                };
+
+                constexpr ShaderSourceQuirk kShaderSourceQuirks[] = {
+                    {
+                        // MOBILEGL_QUIRK_SUBGROUP_PREFIX_SCAN
+                        "subgroup-prefix-scan-rewrite",
+                        [] { return MG_Config::Features.SubgroupPrefixScanQuirk; },
+                        [](const ShaderSourceQuirkContext& ctx) {
+                            // Qualcomm's Vulkan driver miscompiles the recognized float
+                            // InclusiveScan pattern for native subgroups wider than the
+                            // captured 32 lanes; other vendors compile it correctly and
+                            // should keep their native scan.
+                            return ctx.backend == BackendType::DirectVulkan &&
+                                   ctx.vendor == MG_Backend::GpuVendorKind::Qualcomm;
+                        },
+                        [](const ShaderSourceQuirkContext& ctx, String& source) {
+                            return RewriteLinearSubgroupPrefixScanForVulkan(ctx.stage, ctx.subgroupSize,
+                                                                            source);
+                        },
+                    },
+                };
+
+                void ApplyShaderSourceQuirks(ShaderStage stage, String& source) {
+                    const auto& activeBackend = MG_Backend::pActiveBackendObject;
+                    if (!activeBackend) {
+                        return;
+                    }
+                    const auto& dynamicParameters = activeBackend->GetDynamicParameters();
+                    const ShaderSourceQuirkContext quirkContext{
+                        stage,
+                        activeBackend->GetBackendType(),
+                        dynamicParameters.GpuVendor,
+                        dynamicParameters.SubgroupSize,
+                    };
+                    for (const ShaderSourceQuirk& quirk : kShaderSourceQuirks) {
+                        const MG_Config::QuirkOverride quirkOverride = quirk.GetOverride();
+                        if (quirkOverride == MG_Config::QuirkOverride::ForceOff) {
+                            continue;
+                        }
+                        if (quirkOverride == MG_Config::QuirkOverride::Auto &&
+                            !quirk.DeviceApplies(quirkContext)) {
+                            continue;
+                        }
+                        if (quirk.Apply(quirkContext, source)) {
+                            MGLOG_I("ApplyShaderSourceQuirks: applied '%s'%s", quirk.name,
+                                    quirkOverride == MG_Config::QuirkOverride::ForceOn ? " (forced on)" : "");
+                        }
+                    }
+                }
+            } // namespace
 
             void PreprocessShaderSource(ShaderStage stage, String& source) {
                 // Normalize while the inspector's source span still refers to the untouched input. Later passes
@@ -1035,12 +1128,7 @@ namespace MobileGL {
                 ModernizeLegacyGLSL(stage, source);
                 InjectDepthRangeBuiltinShim(stage, source);
 
-                const auto& activeBackend = MG_Backend::pActiveBackendObject;
-                if (stage == ShaderStage::Compute && activeBackend &&
-                    activeBackend->GetBackendType() == BackendType::DirectVulkan) {
-                    RewriteLinearSubgroupPrefixScanForVulkan(stage, activeBackend->GetDynamicParameters().SubgroupSize,
-                                                             source);
-                }
+                ApplyShaderSourceQuirks(stage, source);
             }
 
             Bool RetargetLegacyVersionDirectiveTo460(String& source) {

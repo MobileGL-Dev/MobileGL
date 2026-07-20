@@ -86,6 +86,17 @@ namespace MobileGL::MG_ConfigLoader {
         return it != acceptedEnvVariablesMap->end() && IsTruthyValue(it->second);
     }
 
+    // Quirk overrides are tri-state: an unset variable keeps device auto-detection, a truthy
+    // value forces the quirk on, anything else set ("0", "false", "") forces it off.
+    inline MG_Config::QuirkOverride QueryEnvQuirkOverride(const String& key) {
+        auto it = acceptedEnvVariablesMap->find(key);
+        if (it == acceptedEnvVariablesMap->end()) {
+            return MG_Config::QuirkOverride::Auto;
+        }
+        return IsTruthyValue(it->second) ? MG_Config::QuirkOverride::ForceOn
+                                         : MG_Config::QuirkOverride::ForceOff;
+    }
+
     inline Uint32 QueryEnvUint32(const String& key, Uint32 defaultValue, Uint32 minValue, Uint32 maxValue) {
         auto it = acceptedEnvVariablesMap->find(key);
         if (it == acceptedEnvVariablesMap->end()) {
@@ -123,6 +134,7 @@ namespace MobileGL::MG_ConfigLoader {
         features.TraceSkipAutodestroy = QueryEnvFlag("MOBILEGL_TRACE_SKIP_AUTODESTROY");
         features.DisableUboRing = QueryEnvFlag("MOBILEGL_DISABLE_UBO_RING");
         features.RelaxedSemantics = QueryEnvFlag("MOBILEGL_RELAXED_SEMANTICS");
+        features.SubgroupPrefixScanQuirk = QueryEnvQuirkOverride("MOBILEGL_QUIRK_SUBGROUP_PREFIX_SCAN");
     }
 
     inline void InitBackendType() {

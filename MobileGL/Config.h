@@ -20,6 +20,15 @@ namespace MobileGL::MG_Config {
 
     extern BackendType ActiveBackendType;
 
+    // Tri-state override for device-specific quirks: Auto lets the detected device decide,
+    // ForceOn/ForceOff bypass the detection in either direction. ForceOn only bypasses the
+    // device gate - each quirk keeps its structural safety checks.
+    enum class QuirkOverride : Uint8 {
+        Auto = 0,
+        ForceOn,
+        ForceOff,
+    };
+
     // Feature toggles parsed once from environment variables in MG_ConfigLoader::Init()
     // (ConfigLoader.cpp), before the accepted-env map is destroyed. All Bool fields share
     // one truthy rule: the variable is set, non-empty, not "0", and not "false"
@@ -67,6 +76,10 @@ namespace MobileGL::MG_Config {
         // explicitly request a core profile via EGL_CONTEXT_OPENGL_PROFILE_MASK / a >=3.1
         // version request.
         Bool RelaxedSemantics = false;
+        // MOBILEGL_QUIRK_SUBGROUP_PREFIX_SCAN: overrides the shader-source quirk that
+        // rewrites the recognized workgroup prefix-scan template on Qualcomm devices with
+        // subgroups wider than 32 lanes (see ShaderSourceProcessor's quirk registry).
+        QuirkOverride SubgroupPrefixScanQuirk = QuirkOverride::Auto;
     };
     extern FeaturesTable Features;
 } // namespace MobileGL::MG_Config

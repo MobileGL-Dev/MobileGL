@@ -794,5 +794,32 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                     m_vulkanCaps.MaxShaderStorageBlockSize,
                     m_dynamicParameters.MaxShaderStorageBlockSize);
         }
+        switch (m_vulkanCaps.VendorId) {
+        case 0x5143u: // VK_VENDOR_ID: Qualcomm
+            m_dynamicParameters.GpuVendor = GpuVendorKind::Qualcomm;
+            break;
+        case 0x13B5u: // ARM
+            m_dynamicParameters.GpuVendor = GpuVendorKind::Arm;
+            break;
+        case 0x10DEu: // NVIDIA
+            m_dynamicParameters.GpuVendor = GpuVendorKind::Nvidia;
+            break;
+        case 0x1002u: // AMD
+            m_dynamicParameters.GpuVendor = GpuVendorKind::Amd;
+            break;
+        case 0x8086u: // Intel
+            m_dynamicParameters.GpuVendor = GpuVendorKind::Intel;
+            break;
+        case 0x1010u: // Imagination
+            m_dynamicParameters.GpuVendor = GpuVendorKind::ImgTec;
+            break;
+        case 0x10005u: // Mesa software (lavapipe)
+        case 0x1AE0u:  // Google (SwiftShader)
+            m_dynamicParameters.GpuVendor = GpuVendorKind::Software;
+            break;
+        default:
+            m_dynamicParameters.GpuVendor = GpuVendorKind::Unknown;
+            break;
+        }
     }
 } // namespace MobileGL::MG_Backend::DirectVulkan

@@ -1035,6 +1035,32 @@ namespace MobileGL::MG_Backend::DirectGLES {
         m_dynamicParameters.ViewportSubpixelBits = m_GLESCapabilities.ViewportSubpixelBits;
         m_dynamicParameters.SupportsWideLines =
             m_GLESCapabilities.AliasedLineWidthRangeMax > 1.0f || m_GLESCapabilities.SmoothLineWidthRangeMax > 1.0f;
+
+        const auto containsAny = [](const String& haystack, std::initializer_list<const char*> needles) {
+            return std::any_of(needles.begin(), needles.end(), [&](const char* needle) {
+                return haystack.find(needle) != String::npos;
+            });
+        };
+        const String vendorAndRenderer =
+            m_GLESCapabilities.GLESVendorString + " " + m_GLESCapabilities.GLESRendererString;
+        if (containsAny(vendorAndRenderer, {"llvmpipe", "SwiftShader", "softpipe"})) {
+            // Check software rasterizers first: ANGLE-on-llvmpipe reports both.
+            m_dynamicParameters.GpuVendor = GpuVendorKind::Software;
+        } else if (containsAny(vendorAndRenderer, {"Qualcomm", "Adreno"})) {
+            m_dynamicParameters.GpuVendor = GpuVendorKind::Qualcomm;
+        } else if (containsAny(vendorAndRenderer, {"Mali", "ARM"})) {
+            m_dynamicParameters.GpuVendor = GpuVendorKind::Arm;
+        } else if (containsAny(vendorAndRenderer, {"NVIDIA"})) {
+            m_dynamicParameters.GpuVendor = GpuVendorKind::Nvidia;
+        } else if (containsAny(vendorAndRenderer, {"AMD", "Radeon"})) {
+            m_dynamicParameters.GpuVendor = GpuVendorKind::Amd;
+        } else if (containsAny(vendorAndRenderer, {"Intel"})) {
+            m_dynamicParameters.GpuVendor = GpuVendorKind::Intel;
+        } else if (containsAny(vendorAndRenderer, {"Imagination", "PowerVR"})) {
+            m_dynamicParameters.GpuVendor = GpuVendorKind::ImgTec;
+        } else {
+            m_dynamicParameters.GpuVendor = GpuVendorKind::Unknown;
+        }
     }
 
     const MG_External::GLESFunctionsTable& BackendObject_DirectGLES::GetGLESFunctions() const {
