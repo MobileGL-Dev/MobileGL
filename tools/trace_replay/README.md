@@ -93,7 +93,7 @@ The bundled fixtures cover:
 - minecraft-1.21.4-fabric-iris-iterationt-nodsa-in-world: captured from Minecraft 1.21.4 Fabric with Sodium, Iris, and
   iterationT after entering a singleplayer world, with Iris' DSA path disabled.
   ![Minecraft 1.21.4 Fabric Iris iterationT no-DSA in-world golden](fixtures/minecraft-1.21.4-fabric-iris-iterationt-nodsa-in-world.0000115019.png)
-- minecraft-1.21.4-fabric-iris-iterationrp-novidia-in-world: captured from Minecraft 1.21.4 Fabric with Sodium, Iris, and
+- minecraft-1.21.4-fabric-iris-iterationrp-in-world: captured from Minecraft 1.21.4 Fabric with Sodium, Iris, and
   iterationRP after entering a singleplayer world, framing the iterationRP name overlay over a lake with far-shore
   tree reflections. iterationRP's temporal auto-exposure makes a single-frame trim overexpose and drop the overlay,
   so the fixture is a prefix trace (all calls up to the target frame) that replays the temporal state. The pack also

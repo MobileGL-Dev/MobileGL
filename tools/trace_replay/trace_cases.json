@@ -282,10 +282,10 @@
       "timeout_seconds": 1800
     },
     {
-      "name": "minecraft-1.21.4-fabric-iris-iterationrp-novidia-in-world",
+      "name": "minecraft-1.21.4-fabric-iris-iterationrp-in-world",
       "ci": false,
-      "trace_archive": "minecraft-1.21.4-fabric-iris-iterationrp-novidia-in-world.tgz",
-      "golden": "minecraft-1.21.4-fabric-iris-iterationrp-novidia-in-world.0000202020.png",
+      "trace_archive": "minecraft-1.21.4-fabric-iris-iterationrp-in-world.tgz",
+      "golden": "minecraft-1.21.4-fabric-iris-iterationrp-in-world.0000202020.png",
       "target_call": 202020,
       "timeout_seconds": 1800
     }
