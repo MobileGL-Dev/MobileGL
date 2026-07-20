@@ -295,7 +295,13 @@ DECLARE_GL_FUNCTION_HEAD(void, VertexAttribDivisor, GLuint index, GLuint divisor
 DECLARE_GL_FUNCTION_STUB_HEAD(void, BindTransformFeedback, GLenum target, GLuint id) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, BindTransformFeedback, target, id)
 DECLARE_GL_FUNCTION_STUB_HEAD(void, DeleteTransformFeedbacks, GLsizei n, const GLuint* ids) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, DeleteTransformFeedbacks, n, ids)
 DECLARE_GL_FUNCTION_STUB_HEAD(void, GenTransformFeedbacks, GLsizei n, GLuint* ids) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, GenTransformFeedbacks, n, ids)
-DECLARE_GL_FUNCTION_STUB_HEAD(GLboolean, IsTransformFeedback, GLuint id) DECLARE_GL_FUNCTION_STUB_END(GLboolean, IsTransformFeedback, id)
+// Transform feedback objects are not implemented, so no name is ever a live object. The shared
+// stub returns (type)1, telling a probing caller that every id it invents already exists; GL_FALSE
+// is both truthful and what the spec requires for a name that was never generated.
+MOBILEGL_GL_API GLboolean glIsTransformFeedback(GLuint id) {
+    MGLOG_W("Stub function: %s(...)", __FUNCTION__);
+    return GL_FALSE;
+}
 DECLARE_GL_FUNCTION_STUB_HEAD(void, PauseTransformFeedback) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, PauseTransformFeedback)
 DECLARE_GL_FUNCTION_STUB_HEAD(void, ResumeTransformFeedback) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, ResumeTransformFeedback)
 DECLARE_GL_FUNCTION_STUB_HEAD(void, GetProgramBinary, GLuint program, GLsizei bufSize, GLsizei* length, GLenum* binaryFormat, void* binary) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, GetProgramBinary, program, bufSize, length, binaryFormat, binary)
@@ -2583,7 +2589,10 @@ DECLARE_GL_FUNCTION_STUB_HEAD(void, TransformFeedbackStreamAttribsNV, GLsizei co
 DECLARE_GL_FUNCTION_STUB_HEAD(void, BindTransformFeedbackNV, GLenum target, GLuint id) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, BindTransformFeedbackNV, target, id)
 DECLARE_GL_FUNCTION_STUB_HEAD(void, DeleteTransformFeedbacksNV, GLsizei n, const GLuint* ids) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, DeleteTransformFeedbacksNV, n, ids)
 DECLARE_GL_FUNCTION_STUB_HEAD(void, GenTransformFeedbacksNV, GLsizei n, GLuint* ids) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, GenTransformFeedbacksNV, n, ids)
-DECLARE_GL_FUNCTION_STUB_HEAD(GLboolean, IsTransformFeedbackNV, GLuint id) DECLARE_GL_FUNCTION_STUB_END(GLboolean, IsTransformFeedbackNV, id)
+MOBILEGL_GL_API GLboolean glIsTransformFeedbackNV(GLuint id) {
+    MGLOG_W("Stub function: %s(...)", __FUNCTION__);
+    return GL_FALSE;
+}
 DECLARE_GL_FUNCTION_STUB_HEAD(void, PauseTransformFeedbackNV, void) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, PauseTransformFeedbackNV, )
 DECLARE_GL_FUNCTION_STUB_HEAD(void, ResumeTransformFeedbackNV, void) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, ResumeTransformFeedbackNV, )
 DECLARE_GL_FUNCTION_STUB_HEAD(void, DrawTransformFeedbackNV, GLenum mode, GLuint id) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, DrawTransformFeedbackNV, mode, id)
