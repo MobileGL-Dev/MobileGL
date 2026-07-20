@@ -1808,6 +1808,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 layoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
             } else if (kind == DescriptorBindingKind::StorageImage) {
                 layoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+                entry.hasStorageImages = true;
             } else {
                 layoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
             }

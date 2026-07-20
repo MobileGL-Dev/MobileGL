@@ -67,6 +67,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             Vector<Bool> storageImageUsesBindingFormatByBinding;
             Vector<String> storageBlockNameByBinding;
             Vector<Int> storageBlockIndexByBinding;
+            // Set once during ReflectLayout so the per-draw path can skip the whole
+            // storage-image preparation for the overwhelming majority of programs.
+            Bool hasStorageImages = false;
             Int globalUboBinding = -1;
             Uint32 activeVertexInputLocationMask = 0;
             Array<GLenum, kMaxVertexInputLocations> vertexInputTypes{};
@@ -99,6 +102,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                     std::move(other.storageImageUsesBindingFormatByBinding);
                 storageBlockNameByBinding = std::move(other.storageBlockNameByBinding);
                 storageBlockIndexByBinding = std::move(other.storageBlockIndexByBinding);
+                hasStorageImages = other.hasStorageImages;
                 globalUboBinding = other.globalUboBinding;
                 activeVertexInputLocationMask = other.activeVertexInputLocationMask;
                 vertexInputTypes = other.vertexInputTypes;
@@ -110,6 +114,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 other.hash = 0;
                 other.descriptorSetLayout = VK_NULL_HANDLE;
                 other.pipelineLayout = VK_NULL_HANDLE;
+                other.hasStorageImages = false;
                 other.globalUboBinding = -1;
                 other.activeVertexInputLocationMask = 0;
                 other.activeFragmentOutputLocationMask = 0;
@@ -139,6 +144,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                     std::move(other.storageImageUsesBindingFormatByBinding);
                 storageBlockNameByBinding = std::move(other.storageBlockNameByBinding);
                 storageBlockIndexByBinding = std::move(other.storageBlockIndexByBinding);
+                hasStorageImages = other.hasStorageImages;
                 globalUboBinding = other.globalUboBinding;
                 activeVertexInputLocationMask = other.activeVertexInputLocationMask;
                 vertexInputTypes = other.vertexInputTypes;
@@ -150,6 +156,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 other.hash = 0;
                 other.descriptorSetLayout = VK_NULL_HANDLE;
                 other.pipelineLayout = VK_NULL_HANDLE;
+                other.hasStorageImages = false;
                 other.globalUboBinding = -1;
                 other.activeVertexInputLocationMask = 0;
                 other.activeFragmentOutputLocationMask = 0;

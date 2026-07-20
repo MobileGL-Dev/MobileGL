@@ -3552,6 +3552,9 @@ void main() {
         VkCommandBuffer commandBuffer,
         const MG_State::GLState::ProgramObject& program,
         const ProgramFactory::VkProgramObject& programObj) {
+        if (!programObj.hasStorageImages) {
+            return true;
+        }
         auto& storageTextures = m_storageImageTexturesScratch;
         if (!m_uniformManager->CollectStorageImageTextures(program, programObj, storageTextures)) {
             MGLOG_E("%s: failed to collect storage images for program=%u",
@@ -3559,6 +3562,24 @@ void main() {
             return false;
         }
         if (storageTextures.empty()) {
+            return true;
+        }
+
+        // Steady-state fast path: when every collected texture is already resident in GENERAL
+        // with no pending clear and no dirty content, the loop below has nothing to record, so
+        // keep the render pass alive instead of splitting it on every storage-image draw (on
+        // tiled GPUs each split is a full tile load/store). GL makes cross-draw image-store
+        // coherence the app's job (glMemoryBarrier), so no implicit barrier is owed here.
+        Bool anyNeedsPreparation = false;
+        for (auto* texture : storageTextures) {
+            MOBILEGL_ASSERT(texture != nullptr, "%s: collected a null storage texture", __func__);
+            if (m_textureManager->NeedsStorageImagePreparation(*texture) ||
+                m_clearManager->HasPendingClear(texture)) {
+                anyNeedsPreparation = true;
+                break;
+            }
+        }
+        if (!anyNeedsPreparation) {
             return true;
         }
 
@@ -3571,7 +3592,6 @@ void main() {
         }
 
         for (auto* texture : storageTextures) {
-            MOBILEGL_ASSERT(texture != nullptr, "%s: collected a null storage texture", __func__);
             if (!MaterializePendingClearForTexture(commandBuffer, *texture)) {
                 MGLOG_E("%s: failed to materialize pending clear for storage textureId=%d",
                         __func__, texture->GetExternalIndex());

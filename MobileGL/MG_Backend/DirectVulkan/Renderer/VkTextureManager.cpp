@@ -1140,6 +1140,24 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         return ok;
     }
 
+    Bool VkTextureManager::NeedsStorageImagePreparation(MG_State::GLState::ITextureObject& texture) const {
+        const auto it = m_textureResources.find(MakeTextureIdentity(&texture));
+        if (it == m_textureResources.end()) {
+            return true;
+        }
+        const TextureResource& resource = it->second;
+        if (resource.image == VK_NULL_HANDLE || resource.layout != VK_IMAGE_LAYOUT_GENERAL) {
+            return true;
+        }
+        // Mirror SyncTexture's cross-draw skip condition: any version drift means the sync
+        // path may upload or rebuild, both of which need the render pass ended first.
+        const auto* mipTexture = MG_State::GLState::AsMipmapTexture(&texture);
+        const Uint32 mipLevelCount = mipTexture != nullptr ? mipTexture->GetMipmapLevelCount() : 0u;
+        return resource.syncedContentVersion != texture.GetContentVersion() ||
+               resource.syncedTextureParamsVersion != texture.GetTextureParamsVersion() ||
+               resource.syncedMipLevelCount != mipLevelCount;
+    }
+
     Bool VkTextureManager::TransitionImageLayout(VkCommandBuffer commandBuffer, VkImage image,
                                                  VkImageLayout& trackedLayout, VkImageLayout newLayout,
                                                  VkPipelineStageFlags srcStageMask, VkPipelineStageFlags dstStageMask,

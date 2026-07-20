@@ -284,6 +284,11 @@ public:
                                                       VkImageLayout newLayout);
     Bool TransitionTextureForSampling(VkCommandBuffer commandBuffer, MG_State::GLState::ITextureObject& texture);
     Bool TransitionTextureForStorageImage(VkCommandBuffer commandBuffer, MG_State::GLState::ITextureObject& texture);
+    // Non-mutating probe for the per-draw storage-image fast path: true when preparing this
+    // texture as a storage image may need work that is illegal inside a render pass (resource
+    // creation, dirty-content upload, or a layout transition to GENERAL). Unknown state reports
+    // true - a false positive merely ends the render pass, a false negative would skip a barrier.
+    Bool NeedsStorageImagePreparation(MG_State::GLState::ITextureObject& texture) const;
 
     static VkImageAspectFlags ResolveSampledImageViewAspectMask(VkImageAspectFlags imageAspect);
     static VkFormat ResolveSampledImageViewFormat(VkFormat imageFormat, SamplerNumericDomain numericDomain);
