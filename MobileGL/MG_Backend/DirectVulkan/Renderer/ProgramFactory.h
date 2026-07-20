@@ -78,6 +78,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             ShaderStage rasterizationProducerStage = ShaderStage::Unknown;
             Uint32 producerOutputComponentCount = 0;
             Uint32 fragmentInputComponentCount = 0;
+            // The fragment module declares the DepthReplacing execution mode (writes
+            // gl_FragDepth); shader-computed depth is immune to the cross-pipeline
+            // position-invariance quirk (see PipelineFactory::ShouldSuppressDepthWrite).
+            Bool fragmentReplacesDepth = false;
 
             static inline VkDevice s_device = VK_NULL_HANDLE;
 
@@ -111,6 +115,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 rasterizationProducerStage = other.rasterizationProducerStage;
                 producerOutputComponentCount = other.producerOutputComponentCount;
                 fragmentInputComponentCount = other.fragmentInputComponentCount;
+                fragmentReplacesDepth = other.fragmentReplacesDepth;
                 other.hash = 0;
                 other.descriptorSetLayout = VK_NULL_HANDLE;
                 other.pipelineLayout = VK_NULL_HANDLE;
@@ -121,6 +126,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 other.rasterizationProducerStage = ShaderStage::Unknown;
                 other.producerOutputComponentCount = 0;
                 other.fragmentInputComponentCount = 0;
+                other.fragmentReplacesDepth = false;
             }
             VkProgramObject& operator=(VkProgramObject&& other) noexcept {
                 if (this == &other) {
@@ -153,6 +159,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 rasterizationProducerStage = other.rasterizationProducerStage;
                 producerOutputComponentCount = other.producerOutputComponentCount;
                 fragmentInputComponentCount = other.fragmentInputComponentCount;
+                fragmentReplacesDepth = other.fragmentReplacesDepth;
                 other.hash = 0;
                 other.descriptorSetLayout = VK_NULL_HANDLE;
                 other.pipelineLayout = VK_NULL_HANDLE;
@@ -163,6 +170,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 other.rasterizationProducerStage = ShaderStage::Unknown;
                 other.producerOutputComponentCount = 0;
                 other.fragmentInputComponentCount = 0;
+                other.fragmentReplacesDepth = false;
                 return *this;
             }
 
@@ -210,6 +218,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         static VkShaderStageFlagBits ToVkStage(ShaderStage stage);
         static VkFormat ConvertSpirvImageFormatToVkFormat(SpvImageFormat format);
         static SamplerNumericDomain UniformTypeToSamplerNumericDomain(GLenum glType);
+        // True when any entry point declares the DepthReplacing execution mode, i.e. the
+        // shader assigns gl_FragDepth. Exposed so the blended depth-write quirk's exemption
+        // can be pinned by tests. A false negative loses the exemption, so such a shader is
+        // stripped conservatively and forfeits its depth write.
+        static Bool ReflectedFragmentReplacesDepth(const SpvReflectShaderModule& reflectModule);
 
     private:
         struct ProgramLookupCache {

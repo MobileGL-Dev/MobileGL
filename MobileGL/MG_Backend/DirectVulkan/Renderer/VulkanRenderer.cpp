@@ -2112,18 +2112,16 @@ void main() {
             // the pipelines of a multi-pass depth-equality chain (even with the SPIR-V
             // Invariant decoration), so a blended depth-writing prepass makes later
             // equality-compare passes drop whole primitives (MC 26.3 improved-transparency
-            // clouds flicker black). Suppress blended depth writes there;
+            // clouds flicker black). Suppress depth writes on accumulation-blended pipelines
+            // there (see PipelineFactory::ShouldSuppressDepthWrite for the exact scope);
             // MOBILEGL_MAGMA_DISABLE_BLENDED_DEPTH_WRITE forces the quirk on or off on any
             // driver.
-            static constexpr Uint32 kVendorIdQualcomm = 0x5143;
             const MG_Config::QuirkOverride quirkOverride =
                 MG_Config::Features.MagmaDisableBlendedDepthWriteQuirk;
-            const Bool suppressBlendedDepthWrite =
-                quirkOverride == MG_Config::QuirkOverride::ForceOn ||
-                (quirkOverride == MG_Config::QuirkOverride::Auto &&
-                 m_physicalDevice.properties.vendorID == kVendorIdQualcomm);
+            const Bool suppressBlendedDepthWrite = PipelineFactory::ShouldSuppressBlendedDepthWriteForDevice(
+                quirkOverride, m_physicalDevice.properties.vendorID);
             if (suppressBlendedDepthWrite) {
-                MGLOG_I("DirectVulkan: suppressing depth writes on blended pipelines "
+                MGLOG_I("DirectVulkan: suppressing depth writes on accumulation-blended pipelines "
                         "(driver lacks cross-pipeline position invariance)%s",
                         quirkOverride == MG_Config::QuirkOverride::ForceOn ? " (forced on)" : "");
             }
@@ -3466,6 +3464,7 @@ void main() {
             .backStencilPassOp = MG_Util::ConvertStencilOperationToVkEnum(backStencil.PassDepthPassOp),
             .backStencilDepthFailOp = MG_Util::ConvertStencilOperationToVkEnum(backStencil.PassDepthFailOp),
             .backStencilCompareOp = MG_Util::ConvertDepthTestFuncToVkEnum(backStencil.Func),
+            .fragmentReplacesDepth = programObj.fragmentReplacesDepth,
             .stages = &programObj.stages,
             .vertexInputState = pipelineVertexInputState
         };
@@ -3670,6 +3669,16 @@ void main() {
                                 "disabling blending on attachments with this format (first hit: attachment %u textureId=%d program=%u)",
                                 static_cast<Int>(colorAttachmentFormat), i, textureExternalIndex,
                                 program.GetExternalIndex());
+                        if (PipelineFactory::IsSuppressBlendedDepthWriteEnabled()) {
+                            // With blending force-disabled the blended depth-write quirk can
+                            // never fire for pipelines on this format, so a depth-equality
+                            // chain that accumulates into it (MC 26.3 OIT depth_bounds on
+                            // RGBA32F) keeps its depth writes and may flicker on this driver.
+                            MGLOG_W("GetOrCreatePipeline: format=%d is not blendable, so the blended "
+                                    "depth-write quirk cannot apply to it; depth-equality chains "
+                                    "accumulating into this format may flicker",
+                                    static_cast<Int>(colorAttachmentFormat));
+                        }
                     }
                 }
                 if (!blendSupportIt->second) {

@@ -49,6 +49,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             VkStencilOp backStencilPassOp = VK_STENCIL_OP_KEEP;
             VkStencilOp backStencilDepthFailOp = VK_STENCIL_OP_KEEP;
             VkCompareOp backStencilCompareOp = VK_COMPARE_OP_ALWAYS;
+            // The fragment module writes gl_FragDepth (SPIR-V DepthReplacing); exempts the
+            // pipeline from the blended depth-write quirk (see ShouldSuppressDepthWrite).
+            Bool fragmentReplacesDepth = false;
             Array<VkPipelineColorBlendAttachmentState, kMaxColorAttachments> colorBlendAttachments{};
             const Vector<VkPipelineShaderStageCreateInfo>* stages = nullptr;
             const VkPipelineVertexInputStateCreateInfo* vertexInputState = nullptr;
@@ -62,13 +65,26 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         VkPipeline GetOrCreatePipeline(const PipelineCreatePayload& payload);
         void DestroyAll();
 
-        // Driver quirk: suppress depth writes on blended pipelines. Multi-pass depth-equality
-        // rendering (a blended prepass writes depth that later passes re-test with an
-        // equality-inclusive compare on the re-rasterized geometry) requires cross-pipeline
-        // position invariance that some mobile compilers do not provide, even with the
-        // SPIR-V Invariant decoration; whole primitives then drop out of the later passes.
-        // Set at renderer initialization based on the active driver.
+        // Driver quirk: suppress depth writes on accumulation-blended pipelines. Multi-pass
+        // depth-equality rendering (a blended prepass writes depth that later passes re-test
+        // with an equality-inclusive compare on the re-rasterized geometry) requires
+        // cross-pipeline position invariance that some mobile compilers do not provide, even
+        // with the SPIR-V Invariant decoration; whole primitives then drop out of the later
+        // passes. Only order-independent accumulation blends (MIN/MAX, additive ONE+ONE) are
+        // stripped - that is the signature of such equality chains (MC 26.3 OIT) - while
+        // sorted-transparency "over" compositing (e.g. vanilla MC water, SRC_ALPHA factors),
+        // which draws each surface once and depends on its depth writes to occlude later
+        // passes, keeps them. Set at renderer initialization based on the active driver.
         static void SetSuppressBlendedDepthWrite(Bool enabled);
+        static Bool IsSuppressBlendedDepthWriteEnabled() { return s_suppressBlendedDepthWrite; }
+        // Device gate for the quirk: ForceOn/ForceOff bypass detection, Auto enables it on
+        // the known-affected vendor (Qualcomm).
+        static Bool ShouldSuppressBlendedDepthWriteForDevice(MG_Config::QuirkOverride quirkOverride,
+                                                             Uint32 vendorId);
+        // Pure per-pipeline strip decision (exempts gl_FragDepth writers, masked-out and
+        // non-accumulation blends); combined with the device flag in CreatePipeline. Static
+        // and payload-only so tests can pin the contract without a VkDevice.
+        static Bool ShouldSuppressDepthWrite(const PipelineCreatePayload& payload);
 
     private:
         VkPipeline CreatePipeline(const PipelineCreatePayload& payload) const;

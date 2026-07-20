@@ -1218,6 +1218,22 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
     } // namespace
 
+    // A shader that assigns gl_FragDepth (SPIR-V DepthReplacing) supplies depth itself
+    // instead of taking the pipeline's interpolated Z, so a driver that varies the vertex
+    // position math between pipelines cannot desynchronize it; the blended depth-write
+    // quirk therefore leaves it alone (see PipelineFactory::ShouldSuppressDepthWrite).
+    Bool ProgramFactory::ReflectedFragmentReplacesDepth(const SpvReflectShaderModule& reflectModule) {
+        for (Uint32 entryIndex = 0; entryIndex < reflectModule.entry_point_count; ++entryIndex) {
+            const SpvReflectEntryPoint& entryPoint = reflectModule.entry_points[entryIndex];
+            for (Uint32 modeIndex = 0; modeIndex < entryPoint.execution_mode_count; ++modeIndex) {
+                if (entryPoint.execution_modes[modeIndex] == SpvExecutionModeDepthReplacing) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
     VkShaderStageFlagBits ProgramFactory::ToVkStage(ShaderStage stage) {
         switch (stage) {
         case ShaderStage::Vertex:
@@ -1512,6 +1528,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                                 VkProgramObject& entry) const {
         entry.activeFragmentOutputLocationMask = 0;
         entry.fragmentOutputTypes.fill(0);
+        entry.fragmentReplacesDepth = false;
 
         for (SizeT moduleIndex = 0; moduleIndex < shaders.size() && moduleIndex < spirv.size(); ++moduleIndex) {
             if (!shaders[moduleIndex] || shaders[moduleIndex]->GetShaderStage() != ShaderStage::Fragment) {
@@ -1532,6 +1549,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             if (createResult != SPV_REFLECT_RESULT_SUCCESS) {
                 continue;
             }
+
+            entry.fragmentReplacesDepth = ReflectedFragmentReplacesDepth(reflectModule);
 
             uint32_t outputCount = 0;
             SpvReflectResult reflectResult = spvReflectEnumerateOutputVariables(&reflectModule, &outputCount, nullptr);

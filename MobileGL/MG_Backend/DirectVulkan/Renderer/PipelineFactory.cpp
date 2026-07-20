@@ -109,8 +109,79 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                   "vkCreatePipelineCache");
     }
 
+    // Must be called once, before any pipeline is created: the flag is not part of the
+    // pipeline hash, so flipping it mid-life would serve cached pipelines built under the
+    // old value.
     void PipelineFactory::SetSuppressBlendedDepthWrite(Bool enabled) {
         s_suppressBlendedDepthWrite = enabled;
+    }
+
+    Bool PipelineFactory::ShouldSuppressBlendedDepthWriteForDevice(MG_Config::QuirkOverride quirkOverride,
+                                                                   Uint32 vendorId) {
+        static constexpr Uint32 kVendorIdQualcomm = 0x5143;
+        switch (quirkOverride) {
+        case MG_Config::QuirkOverride::ForceOn:
+            return true;
+        case MG_Config::QuirkOverride::ForceOff:
+            return false;
+        case MG_Config::QuirkOverride::Auto:
+        default:
+            return vendorId == kVendorIdQualcomm;
+        }
+    }
+
+    namespace {
+        // Order-independent accumulation blending: the write order of overlapping fragments
+        // does not change the result, which is what lets multi-pass chains re-rasterize the
+        // same geometry and combine per-pass contributions (MC 26.3 OIT: GL_MAX depth
+        // bounds, additive ONE+ONE transmittance/accumulate). Sorted-transparency "over"
+        // compositing (SRC_ALPHA-style factors) is order-dependent, drawn once per surface,
+        // and relies on its depth writes for occlusion - it must not be treated as hazardous.
+        // MIN/MAX ignore blend factors entirely per the Vulkan spec.
+        //
+        // Deliberately color-channel only. A separate-alpha accumulation
+        // (glBlendEquationSeparate(GL_FUNC_ADD, GL_MAX)) whose color channel is an ordinary
+        // over-blend is not treated as hazardous: no known content pairs that shape with a
+        // depth-equality chain, and widening the test would re-capture sorted transparency.
+        Bool IsAccumulationBlend(const VkPipelineColorBlendAttachmentState& attachment) {
+            if (attachment.colorBlendOp == VK_BLEND_OP_MIN || attachment.colorBlendOp == VK_BLEND_OP_MAX) {
+                return true;
+            }
+            return attachment.colorBlendOp == VK_BLEND_OP_ADD &&
+                   attachment.srcColorBlendFactor == VK_BLEND_FACTOR_ONE &&
+                   attachment.dstColorBlendFactor == VK_BLEND_FACTOR_ONE;
+        }
+    } // namespace
+
+    Bool PipelineFactory::ShouldSuppressDepthWrite(const PipelineCreatePayload& payload) {
+        if (!payload.depthWriteEnable) {
+            return false;
+        }
+        // A shader that assigns gl_FragDepth supplies depth itself rather than taking the
+        // pipeline's interpolated Z, so a driver that varies the vertex position math
+        // between pipelines cannot desynchronize it. (A gl_FragDepth = gl_FragCoord.z
+        // passthrough is the exception that stays exposed; no known content pairs one with
+        // an equality chain, and 26.3's composite is a genuine computed-depth writer.)
+        if (payload.fragmentReplacesDepth) {
+            return false;
+        }
+        for (Uint32 i = 0; i < payload.colorAttachmentCount; ++i) {
+            const VkPipelineColorBlendAttachmentState& attachment = payload.colorBlendAttachments[i];
+            if (attachment.blendEnable != VK_TRUE) {
+                continue;
+            }
+            // All color writes masked: blending is moot (depth-prepass pattern that left
+            // GL_BLEND enabled); stripping the depth write would delete the whole prepass.
+            if (attachment.colorWriteMask == 0) {
+                continue;
+            }
+            // Any attachment qualifies, not just attachment 0: the 26.3 transmittance pass
+            // accumulates into a 2-target MRT and must stay stripped.
+            if (IsAccumulationBlend(attachment)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     PipelineFactory::~PipelineFactory() {
@@ -157,6 +228,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             XXH64_update(m_hashState, &payload.backStencilDepthFailOp, sizeof(payload.backStencilDepthFailOp)));
         XXHASH_VERIFY(
             XXH64_update(m_hashState, &payload.backStencilCompareOp, sizeof(payload.backStencilCompareOp)));
+        XXHASH_VERIFY(
+            XXH64_update(m_hashState, &payload.fragmentReplacesDepth, sizeof(payload.fragmentReplacesDepth)));
         if (payload.colorAttachmentCount > 0) {
             XXHASH_VERIFY(XXH64_update(
                 m_hashState,
@@ -263,17 +336,16 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         for (Uint32 i = 0; i < payload.colorAttachmentCount; ++i) {
             colorAttachments[i] = payload.colorBlendAttachments[i];
         }
-        // Suppress depth writes on blended pipelines when the active driver cannot keep
-        // vertex positions invariant across the pipelines of a multi-pass depth-equality
-        // chain (see SetSuppressBlendedDepthWrite). Blended draws that write depth are rare
-        // and the equality-dependent prepass pattern is exactly the case that breaks.
-        if (s_suppressBlendedDepthWrite && depthStencil.depthWriteEnable == VK_TRUE) {
-            for (Uint32 i = 0; i < payload.colorAttachmentCount; ++i) {
-                if (colorAttachments[i].blendEnable == VK_TRUE) {
-                    depthStencil.depthWriteEnable = VK_FALSE;
-                    break;
-                }
-            }
+        // Suppress depth writes on accumulation-blended pipelines when the active driver
+        // cannot keep vertex positions invariant across the pipelines of a multi-pass
+        // depth-equality chain (see SetSuppressBlendedDepthWrite). The decision is narrowed
+        // in ShouldSuppressDepthWrite: sorted-transparency "over" blends (vanilla MC water),
+        // gl_FragDepth writers, and masked-out attachments keep their depth writes.
+        // This bakes the decision into the pipeline, which only works because depth write is
+        // static state here - adding VK_DYNAMIC_STATE_DEPTH_WRITE_ENABLE to kDynamicStates
+        // would let the record-time value override it and silently disable the quirk.
+        if (s_suppressBlendedDepthWrite && ShouldSuppressDepthWrite(payload)) {
+            depthStencil.depthWriteEnable = VK_FALSE;
         }
         VkPipelineColorBlendStateCreateInfo blend{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
         blend.logicOpEnable = payload.logicOpEnable ? VK_TRUE : VK_FALSE;

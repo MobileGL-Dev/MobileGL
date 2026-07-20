@@ -81,9 +81,11 @@ namespace MobileGL::MG_Config {
         // subgroups wider than 32 lanes (see ShaderSourceProcessor's quirk registry).
         QuirkOverride SubgroupPrefixScanQuirk = QuirkOverride::Auto;
         // MOBILEGL_MAGMA_DISABLE_BLENDED_DEPTH_WRITE: overrides the DirectVulkan quirk that
-        // strips depth writes from blended pipelines on drivers without cross-pipeline
-        // vertex position invariance (see VulkanRenderer's PipelineFactory setup). Auto
-        // detects Qualcomm.
+        // strips depth writes from accumulation-blended pipelines (MIN/MAX or additive
+        // ONE+ONE - the multi-pass depth-equality signature) on drivers without
+        // cross-pipeline vertex position invariance. Sorted-transparency "over" blends,
+        // gl_FragDepth writers, and fully color-masked attachments are exempt (see
+        // PipelineFactory::ShouldSuppressDepthWrite). Auto detects Qualcomm.
         QuirkOverride MagmaDisableBlendedDepthWriteQuirk = QuirkOverride::Auto;
         // MOBILEGL_DISABLE_ROBUST_BUFFER_ACCESS: leave the Vulkan robustBufferAccess device
         // feature off. It is enabled by default to match GL's defined out-of-range fetch
