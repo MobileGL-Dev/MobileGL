@@ -455,6 +455,15 @@ jobs:
           if [ '${{ matrix.backend }}' = 'DirectVulkan' ]; then
             export MOBILEGL_MAGMA_R11G11B10F_FALLBACK=1
           fi
+          # The blended depth-write quirk auto-enables only on Qualcomm, which no CI
+          # runner has, so force it on for the OIT case it exists to fix. ForceOn
+          # bypasses only the vendor gate, so this exercises the real strip on
+          # lavapipe. The Android AVD lane deliberately leaves it off, keeping the
+          # unstripped path covered for the same trace.
+          if [ '${{ matrix.backend }}' = 'DirectVulkan' ] \
+             && [ '${{ matrix.case }}' = 'improved-transparency-minecraft-26.3' ]; then
+            export MOBILEGL_MAGMA_DISABLE_BLENDED_DEPTH_WRITE=1
+          fi
           ctest -V --no-tests=error -R '^MobileGLTraceReplay\.${{ matrix.case }}\.${{ matrix.backend }}$'
 
       - name: Upload actual image
