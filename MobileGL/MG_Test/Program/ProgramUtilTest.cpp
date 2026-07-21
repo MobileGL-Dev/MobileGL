@@ -238,6 +238,77 @@ void main() {
     }
 }
 
+// KHR-GL33.shaders.preprocessor.* — a block comment is one preprocessing token that the C/GLSL
+// preprocessor replaces with a single space, even when it spans newlines inside a directive. glslang
+// handles this natively, so MobileGL must not mangle it. These reproduce the CTS cases that failed
+// because comment blanking preserved the interior newline, truncating multi-line #define bodies.
+static void ExpectCompiles(MobileGL::ShaderStage stage, GLenum glStage, MobileGL::String source) {
+    using namespace MG_Util::ShaderTranspiler;
+    PreprocessShaderSource(stage, source);
+    ShaderAttrib attrib{.shaderType = glStage, .sourceStr = source};
+    auto res = ShaderCompiler::CompileShader(attrib);
+    if (!res) {
+        FAIL() << "errc: " << res.error().errc << "\nlog: " << res.error().log << "\nsource:\n" << source;
+    }
+}
+
+TEST_F(ProgramUtilTest, PreprocessMultilineCommentInDefineBodyCompiles) {
+    ExpectCompiles(ShaderStage::Fragment, GL_FRAGMENT_SHADER,
+                   R"(#version 330
+precision mediump float;
+out float out0;
+#define VALUE /* current
+            value */ 4.2
+
+void main()
+{
+    out0 = VALUE;
+})");
+}
+
+TEST_F(ProgramUtilTest, PreprocessRedefineObjectMultilineCommentCompiles) {
+    ExpectCompiles(ShaderStage::Fragment, GL_FRAGMENT_SHADER,
+                   R"(#version 330
+precision mediump float;
+out float out0;
+#    define  VAL1 1.0
+#define        VAL2 2.0
+
+#define RES2 /* fdsjklfdsjkl
+                dsfjkhfdsjkh
+                fdsjklhfdsjkh */ (RES1 * VAL2)
+#define RES1    (VAL2 / VAL1)
+#define RES2    /* ewrlkjhsadf */ (RES1 * VAL2)
+#define VALUE    (RES2 + RES1)
+
+void main()
+{
+    out0 = VALUE;
+})");
+}
+
+TEST_F(ProgramUtilTest, PreprocessFunctionMacroRedefinitionMultilineCommentCompiles) {
+    ExpectCompiles(ShaderStage::Fragment, GL_FRAGMENT_SHADER,
+                   R"(#version 330
+precision mediump float;
+out float out0;
+# define FUNC(a,b)        (a  +b)
+# define FUNC(a,b)(a    /* comment
+                         */ +b)
+
+void main()
+{
+    out0 = FUNC(1.0, 2.0);
+})");
+}
+
+// Note: KHR-GL3x.shaders.preprocessor.conditional_inclusion.basic_2 (`#define AAA defined(BBB)` used
+// in `#if !AAA`) is intentionally NOT handled here. Generating the `defined` operator via macro
+// expansion is undefined per the C/GLSL preprocessor spec, and glslang deliberately rejects it
+// ("'defined' : cannot use in preprocessor expression when expanded from macros"). Making it pass
+// would require MobileGL to run its own macro expansion ahead of glslang, which is exactly the
+// preprocessing we defer to glslang; the two cases stay failing by design.
+
 TEST_F(ProgramUtilTest, PreprocessLegacyFragmentShaderModernizesGlmarkStyleSource) {
     using namespace MG_Util::ShaderTranspiler;
 

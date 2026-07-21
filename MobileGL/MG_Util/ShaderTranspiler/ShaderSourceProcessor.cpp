@@ -956,15 +956,28 @@ namespace {
             return;
         }
 
+        // Detect the directive on a comment/string-masked copy so a commented-out
+        // "#extension GL_ARB_gpu_shader_int64" is never turned into a synthesized #error. Comments are
+        // no longer blanked in the delivered source (glslang handles them), so this pass must mask
+        // locally like its siblings. Masking preserves offsets, so edits collected against the scan
+        // apply verbatim to `source`; they are applied back-to-front to keep earlier offsets valid.
+        const MobileGL::String scan = MaskCommentsAndQuotedText(source);
+        struct DirectiveEdit {
+            SizeT pos;
+            SizeT len;
+            MobileGL::String replacement;
+        };
+        Vector<DirectiveEdit> edits;
+
         SizeT lineStart = 0;
-        while (lineStart < source.size()) {
-            SizeT lineEnd = source.find('\n', lineStart);
+        while (lineStart < scan.size()) {
+            SizeT lineEnd = scan.find('\n', lineStart);
             const bool hasLineBreak = lineEnd != MobileGL::String::npos;
             if (!hasLineBreak) {
-                lineEnd = source.size();
+                lineEnd = scan.size();
             }
 
-            const MobileGL::String line = source.substr(lineStart, lineEnd - lineStart);
+            const MobileGL::String line = scan.substr(lineStart, lineEnd - lineStart);
             SizeT probe = 0;
             while (probe < line.size() && std::isspace(static_cast<unsigned char>(line[probe]))) {
                 probe++;
@@ -1006,16 +1019,12 @@ namespace {
                             const MobileGL::String behavior = TrimDirectiveToken(line.substr(probe));
                             const SizeT replaceLen = lineEnd - lineStart + (hasLineBreak ? 1 : 0);
                             if (behavior == "require") {
-                                const MobileGL::String replacement =
-                                    "#error GL_ARB_gpu_shader_int64 is not advertised by MobileGL\n";
-                                source.replace(lineStart, replaceLen, replacement);
-                                lineStart += replacement.size();
+                                edits.push_back({lineStart, replaceLen,
+                                                 "#error GL_ARB_gpu_shader_int64 is not advertised by MobileGL\n"});
                             } else if (behavior == "enable" || behavior == "warn") {
-                                source.replace(lineStart, replaceLen, "\n");
-                                lineStart++;
-                            } else {
-                                lineStart = lineEnd + (hasLineBreak ? 1 : 0);
+                                edits.push_back({lineStart, replaceLen, "\n"});
                             }
+                            lineStart = lineEnd + (hasLineBreak ? 1 : 0);
                             continue;
                         }
                     }
@@ -1023,6 +1032,10 @@ namespace {
             }
 
             lineStart = lineEnd + (hasLineBreak ? 1 : 0);
+        }
+
+        for (auto it = edits.rbegin(); it != edits.rend(); ++it) {
+            source.replace(it->pos, it->len, it->replacement);
         }
 
         ReplaceIdentifier(source, "GL_ARB_gpu_shader_int64", "MG_DISABLED_GL_ARB_gpu_shader_int64");
@@ -1247,8 +1260,13 @@ namespace MobileGL {
                 const ShaderLanguageInfo originalLanguage = InspectShaderLanguage(source);
                 NormalizeVersionDirective(source, originalLanguage);
 
-                BlankBlockComments(source);
-
+                // Comments are left intact for glslang's own preprocessor: a block comment is a single
+                // preprocessing token that collapses to one space even across newlines and inside a
+                // directive, so blanking it here (which preserved the interior newlines) truncated
+                // multi-line #define bodies and broke otherwise-valid shaders (KHR-GL3x.shaders.
+                // preprocessor multiline_comment_define / redefine_object / function_redefinition).
+                // Every MobileGL pass that must ignore comment/string text already masks them locally
+                // via MaskCommentsAndQuotedText/TokenizeCode, so the source we hand glslang keeps them.
                 NormalizeLineDirectives(source);
 
                 // noperspective is intentionally NOT touched here. It is core in desktop GLSL (1.30+)
