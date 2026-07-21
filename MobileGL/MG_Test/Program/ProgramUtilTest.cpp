@@ -1089,6 +1089,174 @@ TEST_F(ProgramUtilTest, CompileFragmentShaderWithDiscard) {
     }
 }
 
+// noperspective is core desktop GLSL (1.30+) and maps to the SPIR-V NoPerspective decoration. It must
+// reach glslang (not be stripped as text) so the SPIR-V carries the decoration; SPIRV-Cross then emits
+// ESSL `noperspective` + the GL_NV_shader_noperspective_interpolation extension. Shader packs
+// (Iris/Complementary) depend on it, and KHR-GL33.glsl_noperspective fails if the result matches
+// smooth. This is the DirectGLES path with the NV extension available (SPIRV-Cross's default).
+TEST_F(ProgramUtilTest, NoperspectiveInterpolationSurvivesToEssl) {
+    using namespace MG_Util::ShaderTranspiler;
+
+    String fs = R"(#version 330 core
+noperspective in vec4 vColor;
+out vec4 fragColor;
+void main() { fragColor = vColor; }
+)";
+    ShaderAttrib attrib{.shaderType = GL_FRAGMENT_SHADER, .sourceStr = fs};
+    auto res = ShaderCompiler::CompileShader(attrib);
+    if (!res) FAIL() << "compile errc: " << res.error().errc << "\nlog: " << res.error().log;
+
+    ProgramAttrib programAttrib{.shaders = {res.value()}};
+    auto program_res = ShaderCompiler::LinkProgram(programAttrib);
+    if (!program_res) FAIL() << "link errc: " << program_res.error().errc << "\nlog: " << program_res.error().log;
+
+    ProgramBinaryAttrib binaryAttrib{.shaderTypes = {GL_FRAGMENT_SHADER}, .program = *program_res.value()};
+    auto bin_res = ShaderCompiler::GetSpirvBinaryFromProgram(binaryAttrib);
+    if (!bin_res) FAIL() << "spirv errc: " << bin_res.error().errc << "\nlog: " << bin_res.error().log;
+    ASSERT_EQ(bin_res.value().size(), 1u);
+
+    SpvcSession session(bin_res.value()[0], SessionUsageBit::Transpile);
+    auto essl = ShaderCompiler::DecompileShader(session);
+    if (!essl) FAIL() << "decompile errc: " << essl.error().errc << "\nlog: " << essl.error().log;
+
+    EXPECT_NE(essl.value().find("noperspective"), String::npos)
+        << "noperspective was lost before it reached SPIR-V:\n" << essl.value();
+    EXPECT_NE(essl.value().find("GL_NV_shader_noperspective_interpolation"), String::npos)
+        << "SPIRV-Cross must require the NV extension for ES noperspective:\n" << essl.value();
+}
+
+// The old handling was a naked substring erase of "noperspective", so any identifier that merely
+// contained those characters (a uniform named noperspectiveBlend, say) got mangled. Removing the
+// strip fixes it - glslang, which is identifier-aware, is the only thing that should see the keyword.
+TEST_F(ProgramUtilTest, PreprocessDoesNotCorruptIdentifiersContainingNoperspective) {
+    using namespace MG_Util::ShaderTranspiler;
+
+    String source = R"(#version 330 core
+uniform float noperspectiveBlend;
+out vec4 fragColor;
+void main() { fragColor = vec4(noperspectiveBlend); }
+)";
+    PreprocessShaderSource(ShaderStage::Fragment, source);
+    EXPECT_NE(source.find("noperspectiveBlend"), String::npos)
+        << "identifier was corrupted by substring stripping:\n" << source;
+}
+
+// The DirectGLES fallback for devices without GL_NV_shader_noperspective_interpolation: stripping the
+// NoPerspective decoration makes SPIRV-Cross emit a plain smooth varying with no `#extension … :
+// require`, so the shader still compiles (rendering as smooth) instead of being rejected by the driver.
+TEST_F(ProgramUtilTest, StripNoPerspectiveFallbackProducesPlainEssl) {
+    using namespace MG_Util::ShaderTranspiler;
+
+    String fs = R"(#version 330 core
+noperspective in vec4 vColor;
+out vec4 fragColor;
+void main() { fragColor = vColor; }
+)";
+    ShaderAttrib attrib{.shaderType = GL_FRAGMENT_SHADER, .sourceStr = fs};
+    auto res = ShaderCompiler::CompileShader(attrib);
+    if (!res) FAIL() << "compile errc: " << res.error().errc << "\nlog: " << res.error().log;
+
+    ProgramAttrib programAttrib{.shaders = {res.value()}};
+    auto program_res = ShaderCompiler::LinkProgram(programAttrib);
+    if (!program_res) FAIL() << "link errc: " << program_res.error().errc << "\nlog: " << program_res.error().log;
+
+    ProgramBinaryAttrib binaryAttrib{.shaderTypes = {GL_FRAGMENT_SHADER}, .program = *program_res.value()};
+    auto bin_res = ShaderCompiler::GetSpirvBinaryFromProgram(binaryAttrib);
+    if (!bin_res) FAIL() << "spirv errc: " << bin_res.error().errc << "\nlog: " << bin_res.error().log;
+    ASSERT_EQ(bin_res.value().size(), 1u);
+
+    // Precondition: with the decoration present the default decompile requires the NV extension.
+    {
+        SpvcSession session(bin_res.value()[0], SessionUsageBit::Transpile);
+        auto essl = ShaderCompiler::DecompileShader(session);
+        if (!essl) FAIL() << "decompile errc: " << essl.error().errc;
+        ASSERT_NE(essl.value().find("noperspective"), String::npos) << essl.value();
+    }
+
+    // The fallback strips the decoration -> plain smooth ESSL, no extension require.
+    Vector<Uint32> stripped;
+    ASSERT_TRUE(ShaderCompiler::StripNoPerspectiveForEssl(bin_res.value()[0], stripped));
+    ASSERT_FALSE(stripped.empty());
+
+    SpvcSession session(stripped, SessionUsageBit::Transpile);
+    auto essl = ShaderCompiler::DecompileShader(session);
+    if (!essl) FAIL() << "decompile errc: " << essl.error().errc << "\nlog: " << essl.error().log;
+    EXPECT_EQ(essl.value().find("noperspective"), String::npos)
+        << "the decoration should be gone:\n" << essl.value();
+    EXPECT_EQ(essl.value().find("GL_NV_shader_noperspective_interpolation"), String::npos)
+        << "no extension require without the decoration:\n" << essl.value();
+}
+
+// Directly exercises BOTH decoration forms StripNoPerspectivePass handles: a plain-variable
+// OpDecorate NoPerspective (in-operand 1) and an interface-block-member OpMemberDecorate NoPerspective
+// (in-operand 2). The ESSL round-trip tests above use only a scalar input, so they never reach the
+// member-decorate branch, which a block varying like `in Block { noperspective vec4 c; }` (common in
+// shader packs) produces. Unrelated decorations (Flat, Location) must survive untouched.
+TEST_F(ProgramUtilTest, StripNoPerspectivePassRemovesBothDecorateForms) {
+    using namespace MG_Util::ShaderTranspiler;
+
+    const String spirvText = R"(
+               OpCapability Shader
+               OpMemoryModel Logical GLSL450
+               OpEntryPoint Fragment %main "main" %plainVar %blockVar %flatVar
+               OpExecutionMode %main OriginUpperLeft
+               OpName %main "main"
+               OpDecorate %plainVar Location 0
+               OpDecorate %plainVar NoPerspective
+               OpMemberDecorate %Block 0 NoPerspective
+               OpDecorate %blockVar Location 1
+               OpDecorate %flatVar Location 2
+               OpDecorate %flatVar Flat
+       %void = OpTypeVoid
+     %mainFn = OpTypeFunction %void
+      %float = OpTypeFloat 32
+    %v4float = OpTypeVector %float 4
+        %int = OpTypeInt 32 1
+    %inV4Ptr = OpTypePointer Input %v4float
+   %plainVar = OpVariable %inV4Ptr Input
+      %Block = OpTypeStruct %v4float
+ %inBlockPtr = OpTypePointer Input %Block
+   %blockVar = OpVariable %inBlockPtr Input
+   %inIntPtr = OpTypePointer Input %int
+    %flatVar = OpVariable %inIntPtr Input
+       %main = OpFunction %void None %mainFn
+   %mainBody = OpLabel
+               OpReturn
+               OpFunctionEnd
+)";
+
+    spvtools::SpirvTools tools(SPV_ENV_VULKAN_1_1);
+    Vector<uint32_t> inputBinary;
+    ASSERT_TRUE(tools.Assemble(spirvText, &inputBinary));
+
+    const auto countNoPerspective = [](const String& text) {
+        SizeT count = 0, offset = 0;
+        while ((offset = text.find("NoPerspective", offset)) != String::npos) {
+            ++count;
+            offset += std::strlen("NoPerspective");
+        }
+        return count;
+    };
+
+    String inputText;
+    ASSERT_TRUE(tools.Disassemble(inputBinary, &inputText));
+    ASSERT_EQ(countNoPerspective(inputText), 2u)
+        << "fixture must carry both a plain and a member NoPerspective:\n" << inputText;
+
+    Vector<uint32_t> outputBinary;
+    ASSERT_TRUE(ShaderCompiler::StripNoPerspectiveForEssl(inputBinary, outputBinary));
+    ASSERT_FALSE(outputBinary.empty());
+
+    String outputText;
+    ASSERT_TRUE(tools.Disassemble(outputBinary, &outputText));
+    EXPECT_EQ(countNoPerspective(outputText), 0u)
+        << "both NoPerspective decorations (OpDecorate and OpMemberDecorate) must be stripped:\n" << outputText;
+    EXPECT_NE(outputText.find("Flat"), String::npos)
+        << "the unrelated Flat decoration must survive:\n" << outputText;
+    EXPECT_NE(outputText.find("Location"), String::npos)
+        << "Location decorations must survive:\n" << outputText;
+}
+
 const char* vs_location = R"(#version 460
 
 in vec4 Position;

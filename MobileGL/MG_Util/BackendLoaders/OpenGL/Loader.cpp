@@ -811,6 +811,9 @@ namespace MobileGL::MG_Util::BackendLoader {
                 if (std::strcmp(extension, "GL_EXT_blend_func_extended") == 0) {
                     caps.SupportsDualSourceBlend = true;
                 }
+                if (std::strcmp(extension, "GL_NV_shader_noperspective_interpolation") == 0) {
+                    caps.SupportsNoperspectiveInterpolation = true;
+                }
             }
         }
 

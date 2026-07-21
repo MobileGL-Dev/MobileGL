@@ -33,6 +33,11 @@ namespace MobileGL {
                 // Only for the DirectGLES transpile path.
                 static bool StripUboMemberRelaxedPrecisionForEssl(const Vector<Uint32>& inputBinary,
                                                                   Vector<uint32_t>& outputBinary);
+                // Removes NoPerspective decorations so SPIRV-Cross emits plain (smooth) ESSL varyings.
+                // DirectGLES fallback only, for devices lacking GL_NV_shader_noperspective_interpolation
+                // (SPIRV-Cross would otherwise require that extension and the driver would reject it).
+                static bool StripNoPerspectiveForEssl(const Vector<Uint32>& inputBinary,
+                                                      Vector<uint32_t>& outputBinary);
                 // Rebases loads of the InstanceIndex builtin to (InstanceIndex - BaseInstance) so
                 // shaders see GL's zero-based gl_InstanceID. Vertex shaders only; DirectVulkan
                 // backend only (glslang's relaxed mode aliases gl_InstanceID to gl_InstanceIndex,

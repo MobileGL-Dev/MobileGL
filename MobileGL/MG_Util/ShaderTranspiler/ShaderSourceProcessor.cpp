@@ -1251,15 +1251,13 @@ namespace MobileGL {
 
                 NormalizeLineDirectives(source);
 
-                // remove "noperspective"
-                const char* str_np = "noperspective";
-                const SizeT len_np = strlen(str_np);
-                SizeT noperspectivePos = source.find(str_np);
-                while (noperspectivePos != String::npos) {
-                    // + length of "\n"
-                    source = source.replace(noperspectivePos, len_np, "");
-                    noperspectivePos = source.find(str_np);
-                }
+                // noperspective is intentionally NOT touched here. It is core in desktop GLSL (1.30+)
+                // and maps to the core SPIR-V NoPerspective decoration, which DirectVulkan renders
+                // natively and SPIRV-Cross turns into ESSL `noperspective` + the
+                // GL_NV_shader_noperspective_interpolation extension. The old naked substring erase
+                // both discarded that interpolation (shader packs need it) and corrupted any
+                // identifier that merely contained the word. The GLES fallback for devices without
+                // the extension lives in the backend, where device capabilities are known.
 
                 FilterUnsupportedGpuShaderInt64(source);
                 CoerceUniformBlockPackingToStd140(source);

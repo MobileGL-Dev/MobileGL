@@ -2790,6 +2790,20 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     effectiveSpirv = &uboPrecisionSpirv;
                 }
 
+                // noperspective is core desktop GLSL and reaches here as the SPIR-V NoPerspective
+                // decoration. SPIRV-Cross renders it as ESSL `noperspective` + `#extension
+                // GL_NV_shader_noperspective_interpolation : require`; on a driver without that
+                // extension the require fails, so strip the decoration first and let the varying
+                // fall back to smooth interpolation. Devices that have the extension keep the
+                // decoration and get true screen-linear interpolation.
+                Vector<unsigned int> noperspectiveSpirv;
+                if (!g_GLESCapabilities.SupportsNoperspectiveInterpolation &&
+                    MG_Util::ShaderTranspiler::ShaderCompiler::StripNoPerspectiveForEssl(
+                        *effectiveSpirv, noperspectiveSpirv) &&
+                    !noperspectiveSpirv.empty()) {
+                    effectiveSpirv = &noperspectiveSpirv;
+                }
+
                 MG_Util::ShaderTranspiler::SpvcSession spvcSession(*effectiveSpirv,
                     MG_Util::ShaderTranspiler::SessionUsageBit::Transpile);
 

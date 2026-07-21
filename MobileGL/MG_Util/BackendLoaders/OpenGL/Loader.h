@@ -1050,6 +1050,11 @@ namespace MobileGL {
             // factors and layout(index = 1) fragment outputs. GLES core has no dual-source blending,
             // so without this a draw using a SRC1 factor cannot proceed.
             Bool SupportsDualSourceBlend = false;
+            // GL_NV_shader_noperspective_interpolation is present: the driver accepts the
+            // `noperspective` interpolation qualifier in ESSL. GLES core has none, so without this
+            // SPIRV-Cross's `#extension ... : require` would fail to compile and MobileGL falls back
+            // to stripping the NoPerspective decoration (smooth interpolation) via StripNoPerspectivePass.
+            Bool SupportsNoperspectiveInterpolation = false;
             // GL_RENDERER contains "ANGLE".
             Bool IsAngleRenderer = false;
             // GL_RENDERER contains both "ANGLE" and "llvmpipe".
