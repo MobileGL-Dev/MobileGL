@@ -1002,8 +1002,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
         } else {
             MGLOG_D("Binding default framebuffer as %s FBO", (target == FramebufferTarget::Read ? "READ" : "DRAW"));
-            g_GLESFuncs.glBindFramebuffer(target == FramebufferTarget::Draw ? GL_DRAW_FRAMEBUFFER : GL_READ_FRAMEBUFFER,
-                                          0);
+            // Through the shadow: a raw bind here would leave the shadow claiming
+            // the previous user FBO, false-skipping its next re-bind.
+            FramebufferImpl::BindFramebufferId(
+                target == FramebufferTarget::Draw ? GL_DRAW_FRAMEBUFFER : GL_READ_FRAMEBUFFER, 0);
         }
     }
 
@@ -1013,8 +1015,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
         ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
         if (!framebuffer || framebuffer == MG_Impl::GLImpl::FramebufferImpl::pDefaultFramebufferInfo->defaultFBO) {
-            g_GLESFuncs.glBindFramebuffer(target == FramebufferTarget::Draw ? GL_DRAW_FRAMEBUFFER : GL_READ_FRAMEBUFFER,
-                                          0);
+            FramebufferImpl::BindFramebufferId(
+                target == FramebufferTarget::Draw ? GL_DRAW_FRAMEBUFFER : GL_READ_FRAMEBUFFER, 0);
             return;
         }
 
@@ -3993,9 +3995,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // accepted and repacks on the CPU.
         if (convertible) {
             // GL_PACK_IMAGE_HEIGHT/GL_PACK_SKIP_IMAGES only apply to 3D/array image
-            // readbacks; 2D targets must ignore them (GL 3.3 section 6.1.4).
-            const Bool applyPackImageParams =
-                backendAttachTarget == GL_TEXTURE_3D || backendAttachTarget == GL_TEXTURE_2D_ARRAY;
+            // readbacks (cube-map arrays address as arrays); 2D targets must ignore
+            // them (GL 3.3 section 6.1.4).
+            const Bool applyPackImageParams = backendAttachTarget == GL_TEXTURE_3D ||
+                                              backendAttachTarget == GL_TEXTURE_2D_ARRAY ||
+                                              backendAttachTarget == GL_TEXTURE_CUBE_MAP_ARRAY;
             // 3D/array images read back every slice, but the FBO path can only read one layer:
             // multi-slice reads are served from the CPU shadow (slice-major, tight layout).
             const GLsizei sliceCount = std::max(size.z(), 1);

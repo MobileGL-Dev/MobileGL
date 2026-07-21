@@ -863,6 +863,16 @@ namespace MobileGL::MG_Backend::DirectGLES {
             g_boundPixelUnpackBufferKnown = false;
         }
 
+        void NoteBufferIdDeleted(Uint id) {
+            if (id == 0) {
+                return;
+            }
+            if (g_boundArrayBufferKnown && g_boundArrayBufferId == id) {
+                InvalidateArrayBufferBindingCache();
+            }
+            ScrubBufferBindingShadowsForId(id);
+        }
+
         namespace {
             // Shadow of the GL indexed buffer bindings so redundant glBindBufferBase/Range
             // (same index + id + range) are skipped. isBase distinguishes a whole-buffer
@@ -1202,6 +1212,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
             for (auto& bufferId : m_clientAttributeBufferIds) {
                 if (bufferId != 0) {
+                    BufferImpl::NoteBufferIdDeleted(bufferId);
                     g_GLESFuncs.glDeleteBuffers(1, &bufferId);
                     bufferId = 0;
                 }

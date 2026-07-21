@@ -1680,13 +1680,22 @@ namespace {
         if (!g_deletedTextureIds) return;
         for (GLsizei i = 0; i < count; ++i) g_deletedTextureIds->push_back(textures[i]);
     }
+
+    // Clears the recording hook even when a gtest assertion unwinds the test body
+    // (a dangling pointer to the dead stack vector would corrupt later tests).
+    struct ScopedDeletedTextureRecording {
+        explicit ScopedDeletedTextureRecording(MobileGL::Vector<GLuint>& sink) { g_deletedTextureIds = &sink; }
+        ~ScopedDeletedTextureRecording() { g_deletedTextureIds = nullptr; }
+        ScopedDeletedTextureRecording(const ScopedDeletedTextureRecording&) = delete;
+        ScopedDeletedTextureRecording& operator=(const ScopedDeletedTextureRecording&) = delete;
+    };
 } // namespace
 
 TEST(DirectGLESBackendTexture, DestructorDeletesIdAndScrubsBindingCache) {
     using namespace MobileGL::MG_Backend::DirectGLES;
     ScopedDirectGLESTextureBindings scoped; // installs glGenTextures/glBindTexture mocks + resets caches
     MobileGL::Vector<GLuint> deleted;
-    g_deletedTextureIds = &deleted;
+    ScopedDeletedTextureRecording recording(deleted);
     auto functions = g_GLESFuncs;
     functions.glDeleteTextures = SG_DeleteTextures;
     SetGLESFuncsTable(functions);
@@ -1714,5 +1723,16 @@ TEST(DirectGLESBackendTexture, DestructorDeletesIdAndScrubsBindingCache) {
         --TextureImpl::g_textureContextGeneration; // restore for later tests
         EXPECT_EQ(deleted.size(), 1u);
     }
-    g_deletedTextureIds = nullptr;
+}
+
+TEST(DirectGLESStateGuards, DefaultFramebufferBindGoesThroughShadow) {
+    using namespace MobileGL::MG_Backend::DirectGLES;
+    ScopedStateGuardMocks mocks;
+
+    // The regression this guards against: binding framebuffer 0 raw while the
+    // shadow keeps a user-FBO id makes the next re-bind of that FBO false-skip.
+    FramebufferImpl::BindFramebufferId(GL_DRAW_FRAMEBUFFER, 7);
+    FramebufferImpl::BindFramebufferId(GL_DRAW_FRAMEBUFFER, 0); // default-FBO path must use this API
+    FramebufferImpl::BindFramebufferId(GL_DRAW_FRAMEBUFFER, 7); // must reach the driver again
+    EXPECT_EQ(mocks.log.Count("BindFramebuffer:"), 3u);
 }

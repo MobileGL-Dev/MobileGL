@@ -189,6 +189,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
         void BindPixelPackBufferId(Uint id);
         void BindPixelUnpackBufferId(Uint id);
         void InvalidatePixelBufferBindingCaches();
+        // A GL buffer id is being deleted by code outside BufferImpl (e.g. the VAO
+        // client-attribute staging buffers): scrub every buffer-binding shadow that
+        // could false-skip when the name is recycled.
+        void NoteBufferIdDeleted(Uint id);
         // Redundant-bind cache for INDEXED buffer bindings (glBindBufferBase/Range on
         // GL_UNIFORM_BUFFER / GL_SHADER_STORAGE_BUFFER): skips the GL call when the
         // (id, range) already at that index matches, like the array-buffer/texture/
