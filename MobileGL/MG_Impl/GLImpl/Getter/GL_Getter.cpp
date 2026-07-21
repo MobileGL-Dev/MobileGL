@@ -1996,4 +1996,12 @@ namespace MobileGL::MG_Impl::GLImpl {
         }
         return MG_Util::ConvertErrorCodeToGLEnum(error->get()->code);
     }
+
+    GLenum GetGraphicsResetStatus() {
+        // MobileGL does not implement robustness reset notification, so report GL_NO_ERROR
+        // ("no reset detected"). Returning the generic stub's (GLenum)1 makes dEQP read a lost
+        // device after every case (gl3cTestPackages.cpp:121) and, under the default
+        // --deqp-terminate-on-device-lost=enable, tear the whole CTS run down.
+        return GL_NO_ERROR;
+    }
 } // namespace MobileGL::MG_Impl::GLImpl
