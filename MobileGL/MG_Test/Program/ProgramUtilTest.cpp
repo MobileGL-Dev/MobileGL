@@ -426,6 +426,62 @@ void main() {
     verifyVersion("#version 460 core");
 }
 
+// KHR-GL33.shaders.preprocessor.directive.version_* (also re-run verbatim under GL40-GL44): the
+// compiler must REJECT a malformed #version line. MobileGL used to rewrite the whole line to
+// "#version 330 core" whenever it could scrape a leading integer - or treat an unknown profile token
+// as core - which silently legalized every form below. CTS compiles the shader's own #version
+// verbatim, so the rejection has to survive preprocessing (and the 460 retry).
+TEST_F(ProgramUtilTest, PreprocessRejectsMalformedVersionDirectives) {
+    using namespace MG_Util::ShaderTranspiler;
+
+    const char* body = "\nout vec4 fragColor;\nvoid main() { fragColor = vec4(1.0); }\n";
+    const auto rejects = [](const String& fullSource) {
+        String src = fullSource;
+        PreprocessShaderSource(ShaderStage::Fragment, src);
+        ShaderAttrib attrib{.shaderType = GL_FRAGMENT_SHADER, .sourceStr = src};
+        auto res = ShaderCompiler::CompileShader(attrib);
+        return res ? false : true;  // "rejects" == compile failed
+    };
+
+    // Silently legalized today - the five this fix must flip to rejection:
+    EXPECT_TRUE(rejects(String("#version 329") + body))        << "329 is not a real version";
+    EXPECT_TRUE(rejects(String("#version 331") + body))        << "331 is not a real version";
+    EXPECT_TRUE(rejects(String("#version 330 foo") + body))    << "unknown profile keyword";
+    EXPECT_TRUE(rejects(String("#version 330.0") + body))      << "float literal, not an int token";
+    EXPECT_TRUE(rejects(String("#version 330 foobar") + body)) << "trailing tokens after a valid decl";
+
+    // Already rejected (no leading integer, or #version is not the first token) - pinned so a future
+    // change to the normalizer cannot start legalizing them either:
+    EXPECT_TRUE(rejects(String("#version") + body))            << "missing version number";
+    EXPECT_TRUE(rejects(String("#version foobar") + body))     << "identifier where the int belongs";
+    EXPECT_TRUE(rejects(String("#version AAA") + body))        << "identifier where the int belongs";
+    EXPECT_TRUE(rejects(String("precision mediump float;\n#version 330") + body))
+        << "#version must be the first statement";
+    EXPECT_TRUE(rejects(String("#define FOO BAR\n#version 330") + body))
+        << "#version must precede a #define";
+}
+
+// The PASS half of the same CTS group: a valid decl, and #version preceded only by whitespace or a
+// comment, must still compile. Guards the fix above from over-rejecting.
+TEST_F(ProgramUtilTest, PreprocessKeepsValidVersionDirectivesCompiling) {
+    using namespace MG_Util::ShaderTranspiler;
+
+    const char* body = "\nout vec4 fragColor;\nvoid main() { fragColor = vec4(1.0); }\n";
+    const auto compiles = [](const String& fullSource) {
+        String src = fullSource;
+        PreprocessShaderSource(ShaderStage::Fragment, src);
+        ShaderAttrib attrib{.shaderType = GL_FRAGMENT_SHADER, .sourceStr = src};
+        auto res = ShaderCompiler::CompileShader(attrib);
+        return res ? true : false;
+    };
+
+    EXPECT_TRUE(compiles(String("#version 330 core") + body));
+    EXPECT_TRUE(compiles(String("\n#version 330 core") + body))
+        << "leading whitespace is legal before #version";
+    EXPECT_TRUE(compiles(String("// test\n#version 330 core") + body))
+        << "a leading comment is legal before #version";
+}
+
 TEST_F(ProgramUtilTest, PreprocessUsesRealSpacedVersionDirectiveForInjectedOutput) {
     using namespace MG_Util::ShaderTranspiler;
 
@@ -847,6 +903,16 @@ TEST_F(ProgramUtilTest, RetargetLegacyVersionDirectiveOnlyTouchesNormalizedDeskt
     String commented = "// #version 330 core\nvoid main() {}\n";
     EXPECT_FALSE(RetargetLegacyVersionDirectiveTo460(commented));
     EXPECT_EQ(commented.find("#version 460"), String::npos);
+
+    // A malformed directive must NOT be rescued to 460 - that is what silently legalized the CTS
+    // directive.version_* rejection cases. The bad version stays put so glslang keeps rejecting it.
+    String badNumber = "#version 331\nvoid main() {}\n";
+    EXPECT_FALSE(RetargetLegacyVersionDirectiveTo460(badNumber));
+    EXPECT_EQ(badNumber.find("#version 460"), String::npos);
+
+    String badProfile = "#version 330 foo\nvoid main() {}\n";
+    EXPECT_FALSE(RetargetLegacyVersionDirectiveTo460(badProfile));
+    EXPECT_EQ(badProfile.find("#version 460"), String::npos);
 }
 
 const char* fs = R"(#version 150

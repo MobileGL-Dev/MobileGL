@@ -573,6 +573,23 @@ namespace {
                static_cast<unsigned char>(source[1]) == 0xbb && static_cast<unsigned char>(source[2]) == 0xbf;
     }
 
+    // The GLSL versions MobileGL is willing to normalize. Anything else in a #version line - a number
+    // that is not a real language version (329, 331), a bad profile keyword, a float/identifier where
+    // the integer belongs, or trailing tokens - is left untouched so glslang rejects it, matching
+    // KHR-GL33.shaders.preprocessor.directive.version_*. The set is deliberately generous (every real
+    // desktop and ES version) so the normalizer never starts rejecting a form it used to accept.
+    bool IsRecognizedGlslVersion(unsigned version) {
+        switch (version) {
+            case 100: case 110: case 120: case 130: case 140: case 150:
+            case 300: case 310: case 320:
+            case 330: case 400: case 410: case 420: case 430:
+            case 440: case 450: case 460:
+                return true;
+            default:
+                return false;
+        }
+    }
+
     struct ShaderLanguageInfo {
         unsigned version = 110;
         MobileGL::ShaderProfile profile = MobileGL::ShaderProfile::Core;
@@ -580,6 +597,9 @@ namespace {
         SizeT versionDirectiveEnd = MobileGL::String::npos;
         bool hasUtf8Bom = false;
         bool enablesGpuShader5 = false;
+        // Whether the parsed #version directive is a well-formed one MobileGL should rewrite. A
+        // malformed directive (see IsRecognizedGlslVersion) is left alone for glslang to reject.
+        bool hasValidVersionDirective = false;
 
         bool HasVersionDirective() const { return versionDirectiveStart != MobileGL::String::npos; }
     };
@@ -623,13 +643,25 @@ namespace {
                         info.versionDirectiveEnd = lineEnd + (hasLineBreak ? 1 : 0);
                         SkipDirectiveWhitespace(code, probe, lineEnd);
                         const MobileGL::String profile = ReadDirectiveIdentifier(code, probe, lineEnd);
-                        if (profile == "es" || profile == "ES") {
+                        bool profileTokenValid = true;
+                        if (profile.empty() || profile == "core") {
+                            info.profile = MobileGL::ShaderProfile::Core;
+                        } else if (profile == "es" || profile == "ES") {
                             info.profile = MobileGL::ShaderProfile::ES;
                         } else if (profile == "compatibility") {
                             info.profile = MobileGL::ShaderProfile::Compatibility;
                         } else {
+                            // "#version 330 foo": an unrecognized profile keyword. Keep Core for any
+                            // downstream routing, but mark the directive malformed.
                             info.profile = MobileGL::ShaderProfile::Core;
+                            profileTokenValid = false;
                         }
+                        // Comments are already masked to spaces, so anything non-blank left on the
+                        // line is real trailing garbage: "#version 330 foobar" / "#version 330.0".
+                        SkipDirectiveWhitespace(code, probe, lineEnd);
+                        const bool hasTrailingTokens = probe < lineEnd;
+                        info.hasValidVersionDirective =
+                            IsRecognizedGlslVersion(info.version) && profileTokenValid && !hasTrailingTokens;
                     }
                 } else if (directive == "extension") {
                     SkipDirectiveWhitespace(code, probe, lineEnd);
@@ -676,6 +708,17 @@ namespace {
     }
 
     void NormalizeVersionDirective(MobileGL::String& source, const ShaderLanguageInfo& info) {
+        // A malformed #version (329, 331, bad profile, float/trailing tokens) is left exactly as the
+        // application wrote it so glslang rejects it - rewriting it to "#version 330 core" would
+        // silently legalize the CTS directive.version_* rejection cases. Still drop a leading BOM so
+        // the reported error is the bad version rather than a stray byte-order mark.
+        if (info.HasVersionDirective() && !info.hasValidVersionDirective) {
+            if (info.hasUtf8Bom) {
+                source.erase(0, 3);
+            }
+            return;
+        }
+
         const MobileGL::String replacement = GetNormalizedVersionDirective(info);
         if (info.HasVersionDirective()) {
             source.replace(info.versionDirectiveStart, info.versionDirectiveEnd - info.versionDirectiveStart,
@@ -1240,6 +1283,10 @@ namespace MobileGL {
                 // must not be mistaken for the real one.
                 const ShaderLanguageInfo info = InspectShaderLanguage(source);
                 if (!info.HasVersionDirective()) return false;
+                // Never rescue a malformed directive to 460: that is precisely what re-legalized the
+                // CTS directive.version_* rejection cases after the first compile failed. The shader-
+                // pack retry this exists for only ever sees a valid low version (a real "#version 330").
+                if (!info.hasValidVersionDirective) return false;
                 // Only the set NormalizeVersionDirective downgraded: desktop core below 400. ES and
                 // compatibility shaders keep whatever they declared.
                 if (info.profile != ShaderProfile::Core || info.version >= 400) return false;
