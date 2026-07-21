@@ -258,11 +258,14 @@ TEST(PipelineQuirkStripDecision, MinBlendIsStripped) {
     EXPECT_TRUE(PipelineFactory::ShouldSuppressDepthWrite(payload));
 }
 
-TEST(PipelineQuirkStripDecision, AdditiveOnePlusOneIsStripped) {
-    // MC 26.3 OIT transmittance/accumulate: ONE+ONE additive accumulation writing depth.
+TEST(PipelineQuirkStripDecision, AdditiveOnePlusOneIsNotStripped) {
+    // ONE+ONE additive with a depth write matched zero draws of the 26.3 chain in the
+    // fixture sweep (transmittance/accumulate disable depth writes themselves); the only
+    // real content with this shape was harmless additive glow effects (Create). A quirk
+    // touches as little unrelated content as possible, so the shape stays exempt.
     const auto payload = MakeDepthWritingPayload(MakeBlendAttachment(
         true, VK_BLEND_FACTOR_ONE, VK_BLEND_FACTOR_ONE, VK_BLEND_OP_ADD, kFullColorWriteMask));
-    EXPECT_TRUE(PipelineFactory::ShouldSuppressDepthWrite(payload));
+    EXPECT_FALSE(PipelineFactory::ShouldSuppressDepthWrite(payload));
 }
 
 TEST(PipelineQuirkStripDecision, SortedTransparencyOverBlendIsNotStripped) {
@@ -285,9 +288,10 @@ TEST(PipelineQuirkStripDecision, EffectivelyOpaqueBlendIsNotStripped) {
 
 TEST(PipelineQuirkStripDecision, FullyMaskedAccumulationBlendIsNotStripped) {
     // Depth-prepass pattern: colorMask(0,0,0,0) with blending left enabled - blending is
-    // moot, and stripping would delete the entire prepass.
+    // moot, and stripping would delete the entire prepass. MAX so the exemption, not the
+    // blend-op filter, is what keeps the depth write.
     const auto payload = MakeDepthWritingPayload(MakeBlendAttachment(
-        true, VK_BLEND_FACTOR_ONE, VK_BLEND_FACTOR_ONE, VK_BLEND_OP_ADD, 0));
+        true, VK_BLEND_FACTOR_ONE, VK_BLEND_FACTOR_ONE, VK_BLEND_OP_MAX, 0));
     EXPECT_FALSE(PipelineFactory::ShouldSuppressDepthWrite(payload));
 }
 
@@ -314,8 +318,8 @@ TEST(PipelineQuirkStripDecision, FragDepthWriterIsExempt) {
 }
 
 TEST(PipelineQuirkStripDecision, AccumulationOnSecondaryAttachmentIsStripped) {
-    // The hazard is not limited to attachment 0: the 26.3 transmittance pass accumulates
-    // into a 2-target MRT.
+    // The scan is not limited to attachment 0: an extremum accumulation on any live
+    // attachment marks the pipeline.
     PipelineFactory::PipelineCreatePayload payload{};
     payload.colorAttachmentCount = 2;
     payload.depthTestEnable = true;
@@ -323,21 +327,20 @@ TEST(PipelineQuirkStripDecision, AccumulationOnSecondaryAttachmentIsStripped) {
     payload.colorBlendAttachments[0] = MakeBlendAttachment(
         false, VK_BLEND_FACTOR_ONE, VK_BLEND_FACTOR_ZERO, VK_BLEND_OP_ADD, kFullColorWriteMask);
     payload.colorBlendAttachments[1] = MakeBlendAttachment(
-        true, VK_BLEND_FACTOR_ONE, VK_BLEND_FACTOR_ONE, VK_BLEND_OP_ADD, kFullColorWriteMask);
+        true, VK_BLEND_FACTOR_ONE, VK_BLEND_FACTOR_ONE, VK_BLEND_OP_MAX, kFullColorWriteMask);
     EXPECT_TRUE(PipelineFactory::ShouldSuppressDepthWrite(payload));
 }
 
 TEST(PipelineQuirkStripDecision, AlphaWeightedAdditiveIsNotStripped) {
-    // SRC_ALPHA,ONE additive is order-independent in the color channel but is the classic
-    // *sorted* particle/glow blend, not an OIT accumulation pass. Pins the src==ONE clause:
-    // without it this state would be stripped.
+    // SRC_ALPHA,ONE additive: the classic *sorted* particle/glow blend. Kept exempt like
+    // every other ADD-op shape now that the strip is extremum-only.
     const auto payload = MakeDepthWritingPayload(MakeBlendAttachment(
         true, VK_BLEND_FACTOR_SRC_ALPHA, VK_BLEND_FACTOR_ONE, VK_BLEND_OP_ADD, kFullColorWriteMask));
     EXPECT_FALSE(PipelineFactory::ShouldSuppressDepthWrite(payload));
 }
 
 TEST(PipelineQuirkStripDecision, ReverseSubtractIsNotStripped) {
-    // Deliberate narrowing: only MIN/MAX and ONE+ONE ADD carry the equality-chain
+    // Deliberate narrowing: only the MIN/MAX extremum ops carry the depth-bounds
     // signature. SUBTRACT-class ops stay outside the quirk until content demands them.
     const auto payload = MakeDepthWritingPayload(MakeBlendAttachment(
         true, VK_BLEND_FACTOR_ONE, VK_BLEND_FACTOR_ONE, VK_BLEND_OP_REVERSE_SUBTRACT,
@@ -348,7 +351,7 @@ TEST(PipelineQuirkStripDecision, ReverseSubtractIsNotStripped) {
 TEST(PipelineQuirkStripDecision, PartiallyMaskedAccumulationIsStripped) {
     // Only a fully masked attachment is exempt; a live alpha channel still accumulates.
     const auto payload = MakeDepthWritingPayload(MakeBlendAttachment(
-        true, VK_BLEND_FACTOR_ONE, VK_BLEND_FACTOR_ONE, VK_BLEND_OP_ADD, VK_COLOR_COMPONENT_A_BIT));
+        true, VK_BLEND_FACTOR_ONE, VK_BLEND_FACTOR_ONE, VK_BLEND_OP_MAX, VK_COLOR_COMPONENT_A_BIT));
     EXPECT_TRUE(PipelineFactory::ShouldSuppressDepthWrite(payload));
 }
 

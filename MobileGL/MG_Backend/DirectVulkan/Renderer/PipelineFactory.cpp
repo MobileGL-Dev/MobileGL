@@ -131,25 +131,25 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     }
 
     namespace {
-        // Order-independent accumulation blending: the write order of overlapping fragments
-        // does not change the result, which is what lets multi-pass chains re-rasterize the
-        // same geometry and combine per-pass contributions (MC 26.3 OIT: GL_MAX depth
-        // bounds, additive ONE+ONE transmittance/accumulate). Sorted-transparency "over"
-        // compositing (SRC_ALPHA-style factors) is order-dependent, drawn once per surface,
-        // and relies on its depth writes for occlusion - it must not be treated as hazardous.
-        // MIN/MAX ignore blend factors entirely per the Vulkan spec.
+        // MIN/MAX extremum blending: the signature of a depth-bounds accumulation pass
+        // (MC 26.3 OIT writes vec4(-linD, linD, deviceZ, 0) under GL_MAX while writing
+        // depth for its equality chain). MIN/MAX ignore blend factors per the Vulkan spec.
         //
-        // Deliberately color-channel only. A separate-alpha accumulation
-        // (glBlendEquationSeparate(GL_FUNC_ADD, GL_MAX)) whose color channel is an ordinary
-        // over-blend is not treated as hazardous: no known content pairs that shape with a
-        // depth-equality chain, and widening the test would re-capture sorted transparency.
+        // Deliberately the ONLY shape stripped. A quirk should touch as little unrelated
+        // content as possible, and a trace sweep of every fixture showed the wider
+        // alternatives all cost more than they fix:
+        //   - additive ONE+ONE with a depth write matched zero draws of the 26.3 chain
+        //     (its transmittance/accumulate passes disable depth writes themselves) - the
+        //     only real content it caught was harmless additive glow effects (Create);
+        //   - sorted-transparency "over" blends (SRC_ALPHA-style) are order-dependent,
+        //     drawn once per surface, and rely on their depth writes for occlusion;
+        //   - separate-alpha accumulation over an over-blending color channel has no
+        //     known pairing with a depth-equality chain (color channel only, see tests).
+        // If a future workload pairs another blend shape with an equality chain, widen
+        // this with that evidence in hand rather than pre-emptively.
         Bool IsAccumulationBlend(const VkPipelineColorBlendAttachmentState& attachment) {
-            if (attachment.colorBlendOp == VK_BLEND_OP_MIN || attachment.colorBlendOp == VK_BLEND_OP_MAX) {
-                return true;
-            }
-            return attachment.colorBlendOp == VK_BLEND_OP_ADD &&
-                   attachment.srcColorBlendFactor == VK_BLEND_FACTOR_ONE &&
-                   attachment.dstColorBlendFactor == VK_BLEND_FACTOR_ONE;
+            return attachment.colorBlendOp == VK_BLEND_OP_MIN ||
+                   attachment.colorBlendOp == VK_BLEND_OP_MAX;
         }
     } // namespace
 

@@ -70,11 +70,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // with an equality-inclusive compare on the re-rasterized geometry) requires
         // cross-pipeline position invariance that some mobile compilers do not provide, even
         // with the SPIR-V Invariant decoration; whole primitives then drop out of the later
-        // passes. Only order-independent accumulation blends (MIN/MAX, additive ONE+ONE) are
-        // stripped - that is the signature of such equality chains (MC 26.3 OIT) - while
-        // sorted-transparency "over" compositing (e.g. vanilla MC water, SRC_ALPHA factors),
-        // which draws each surface once and depends on its depth writes to occlude later
-        // passes, keeps them. Set at renderer initialization based on the active driver.
+        // passes. Only MIN/MAX extremum blends are stripped - the signature of such a
+        // chain's depth-bounds pass (MC 26.3 OIT), and per a fixture-wide trace sweep the
+        // only depth-writing shape the chain actually uses - so every other blend
+        // (sorted-transparency "over" like vanilla MC water, additive glows, ...) keeps
+        // its depth writes. Set at renderer initialization based on the active driver.
         static void SetSuppressBlendedDepthWrite(Bool enabled);
         static Bool IsSuppressBlendedDepthWriteEnabled() { return s_suppressBlendedDepthWrite; }
         // Device gate for the quirk: ForceOn/ForceOff bypass detection, Auto enables it on

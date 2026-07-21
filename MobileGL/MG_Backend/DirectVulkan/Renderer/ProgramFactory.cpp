@@ -1547,6 +1547,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                             "ProgramFactory::ReflectFragmentOutputs: failed to create reflection module (result=%d)",
                             static_cast<Int>(createResult));
             if (createResult != SPV_REFLECT_RESULT_SUCCESS) {
+                // Fail toward the exemption: stripping a genuine gl_FragDepth writer would
+                // corrupt its depth output outright, while wrongly exempting an accumulation
+                // pass merely reverts that one program to the pre-quirk behavior.
+                entry.fragmentReplacesDepth = true;
                 continue;
             }
 

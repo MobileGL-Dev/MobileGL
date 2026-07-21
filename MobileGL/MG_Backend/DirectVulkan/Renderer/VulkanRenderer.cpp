@@ -3552,6 +3552,17 @@ void main() {
                 (bufferMask.a() ? VK_COLOR_COMPONENT_A_BIT : 0u));
             Bool effectiveBlendEnabled = blendEnabled;
             MG_State::GLState::ITextureObject* colorAttachmentTexture = nullptr;
+            if (isDefaultDrawFbo && i < drawBuffers.size() &&
+                drawBuffers[i] == FramebufferAttachmentType::None) {
+                // The default framebuffer spans the same MAX_DRAW_BUFFERS slots as an FBO
+                // (slot 0 is the back buffer, or None after glDrawBuffer(GL_NONE); slots
+                // 1+ are always None). Discard writes and blend state for the None slots
+                // like the FBO path below does, so stale indexed blend state on phantom
+                // slots cannot leak into the pipeline - most notably into the blended
+                // depth-write quirk's accumulation scan.
+                attachmentColorWriteMask = 0;
+                effectiveBlendEnabled = false;
+            }
             if (!isDefaultDrawFbo && i < drawBuffers.size()) {
                 const auto drawBuffer = drawBuffers[i];
                 colorAttachmentTexture = resolveCompleteColorAttachmentTexture(i);
