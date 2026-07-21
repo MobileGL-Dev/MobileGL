@@ -1563,6 +1563,56 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return convertedData.data();
         }
 
+        // RGB565/RGB5_A1 shadow data is stored as 8-bit unorm; uploading it as GL_UNSIGNED_BYTE
+        // leaves the 8-bit -> 5/6-bit requantization to the driver, whose rounding direction is
+        // implementation-defined: Adreno rounds to nearest (lossless round trip) but Mali floors,
+        // drifting mid-range texels one 5-bit step down and failing the KHR-GL3x
+        // pixelstoragemodes.teximage3d rgb565/rgb5a1 1/32-eps checks. Repack the shadow rows into
+        // the packed 16-bit client type with round-to-nearest instead - that recovers the original
+        // 5/6-bit values exactly (the shadow expansion round(v * 255 / max) is injective), so the
+        // driver stores them verbatim with no requantization left to its discretion. 4-bit formats
+        // (RGBA4) are exempt: their 8-bit expansion (v * 17) is exact under either rounding.
+        // Always retargets *inOutType for these formats (even for null data) so every upload of a
+        // level uses the same client type.
+        static const void* PreparePackedNormUpload(TextureInternalFormat format, const IntVec3& texelSize,
+                                                   const void* data, SizeT byteSize, GLenum* inOutType,
+                                                   Vector<Uint8>& packedData) {
+            if (format != TextureInternalFormat::RGB5 && format != TextureInternalFormat::RGB5A1) {
+                return data;
+            }
+            const Bool hasAlpha = format == TextureInternalFormat::RGB5A1;
+            const GLenum packedType = hasAlpha ? GL_UNSIGNED_SHORT_5_5_5_1 : GL_UNSIGNED_SHORT_5_6_5;
+            // Idempotent across a region's level loop: glType is shared, so later levels arrive with
+            // the already-retargeted packed type and must still be converted.
+            if (*inOutType != GL_UNSIGNED_BYTE && *inOutType != packedType) {
+                return data;
+            }
+            *inOutType = packedType;
+            if (data == nullptr || byteSize == 0) {
+                return data;
+            }
+            const SizeT srcPixelBytes = hasAlpha ? 4 : 3;
+            const SizeT texelCount = std::min(static_cast<SizeT>(std::max(texelSize.x(), 0)) *
+                                                  static_cast<SizeT>(std::max(texelSize.y(), 0)) *
+                                                  static_cast<SizeT>(std::max(texelSize.z(), 1)),
+                                              byteSize / srcPixelBytes);
+            packedData.resize(texelCount * sizeof(Uint16));
+            const Uint8* src = static_cast<const Uint8*>(data);
+            auto* dst = reinterpret_cast<Uint16*>(packedData.data());
+            for (SizeT i = 0; i < texelCount; ++i, src += srcPixelBytes) {
+                const Uint32 r = (static_cast<Uint32>(src[0]) * 31u + 127u) / 255u;
+                const Uint32 b = (static_cast<Uint32>(src[2]) * 31u + 127u) / 255u;
+                if (hasAlpha) {
+                    const Uint32 g = (static_cast<Uint32>(src[1]) * 31u + 127u) / 255u;
+                    dst[i] = static_cast<Uint16>((r << 11) | (g << 6) | (b << 1) | (src[3] >= 128 ? 1u : 0u));
+                } else {
+                    const Uint32 g = (static_cast<Uint32>(src[1]) * 63u + 127u) / 255u;
+                    dst[i] = static_cast<Uint16>((r << 11) | (g << 5) | b);
+                }
+            }
+            return packedData.data();
+        }
+
         void BackendTextureObject::SyncMipmapsToBackend(
             const SharedPtr<MG_State::GLState::ITextureObject>& stateTextureObject) {
             if (!stateTextureObject) {
@@ -1706,6 +1756,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
                             const void* uploadData = PrepareNormFloatFallbackUpload(
                                 textureMipmapObject->GetFormat(), levelTexelSize, pData, levelByteSize, glType,
                                 convertedUploadData);
+                            Vector<Uint8> packedUploadData;
+                            uploadData = PreparePackedNormUpload(textureMipmapObject->GetFormat(), levelTexelSize,
+                                                                 uploadData, levelByteSize, &glType, packedUploadData);
 
                             DebugImpl::ErrorLopper::Clear();
                             g_GLESFuncs.glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
@@ -1831,6 +1884,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                     const void* uploadData = PrepareNormFloatFallbackUpload(
                                         textureMipmapObject->GetFormat(), levelTexelSize, pData, levelByteSize, glType,
                                         convertedUploadData);
+                                    Vector<Uint8> packedUploadData;
+                                    uploadData =
+                                        PreparePackedNormUpload(textureMipmapObject->GetFormat(), levelTexelSize,
+                                                                uploadData, levelByteSize, &glType, packedUploadData);
 
                                     DebugImpl::ErrorLopper::Clear();
                                     g_GLESFuncs.glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
@@ -1885,6 +1942,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                 const void* uploadData = PrepareNormFloatFallbackUpload(
                                     textureMipmapObject->GetFormat(), levelTexelSize, pData, levelByteSize, glType,
                                     convertedUploadData);
+                                Vector<Uint8> packedUploadData;
+                                uploadData =
+                                    PreparePackedNormUpload(textureMipmapObject->GetFormat(), levelTexelSize,
+                                                            uploadData, levelByteSize, &glType, packedUploadData);
                                 MGLOG_D("%s: target: %s: syncing mip %d: %dx%dx%d, byteSize = %d, pData = %p, "
                                         "levelDirty = %s",
                                         __func__, MG_Util::ConvertTextureUploadTargetToString(uploadTarget).c_str(),
@@ -1990,6 +2051,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
                             const void* uploadData = PrepareNormFloatFallbackUpload(
                                 textureMipmapObject->GetFormat(), texelSize, mipData, byteSize, glType,
                                 convertedUploadData);
+                            Vector<Uint8> packedUploadData;
+                            uploadData = PreparePackedNormUpload(textureMipmapObject->GetFormat(), texelSize,
+                                                                 uploadData, byteSize, &glType, packedUploadData);
                             const IntVec3 uploadSize =
                                 GetBackendUploadSize(stateTextureObject->GetTarget(), texelSize);
                             switch (MapToBackendTextureTarget(stateTextureObject->GetTarget())) {
