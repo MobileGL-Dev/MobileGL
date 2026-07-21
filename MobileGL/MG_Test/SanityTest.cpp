@@ -1431,3 +1431,288 @@ TEST(RenderStateSanity, PrimitiveRestartIndexStoresAndReadsBack) {
 
     MG_State::pGLContext.reset();
 }
+
+
+// ---- DirectGLES readback driver-state shadows ----------------------------------------------------
+// Regression coverage for the readback-path state-leak overhaul: the pixel-PBO
+// binding cache, the framebuffer-binding shadow, the PACK pixel-store shadow and
+// the scratch-FBO attachment shadow must (a) leave the driver in the documented
+// resting state, (b) skip redundant GL calls, and (c) scrub correctly on
+// deletion. All drive the real Managers.cpp implementations against a recording
+// mock GLES table.
+namespace {
+    struct StateGuardCallLog {
+        MobileGL::Vector<MobileGL::String> calls;
+
+        MobileGL::SizeT Count(const MobileGL::String& prefix) const {
+            MobileGL::SizeT n = 0;
+            for (const auto& c : calls) {
+                if (c.compare(0, prefix.size(), prefix) == 0) ++n;
+            }
+            return n;
+        }
+    };
+
+    StateGuardCallLog* g_stateGuardLog = nullptr;
+    GLuint g_nextStateGuardFBOId = 201;
+
+    void SG_Log(MobileGL::String entry) {
+        if (g_stateGuardLog) g_stateGuardLog->calls.push_back(MobileGL::Move(entry));
+    }
+    void SG_BindBuffer(GLenum target, GLuint buffer) {
+        SG_Log("BindBuffer:" + std::to_string(target) + ":" + std::to_string(buffer));
+    }
+    void SG_BindFramebuffer(GLenum target, GLuint framebuffer) {
+        SG_Log("BindFramebuffer:" + std::to_string(target) + ":" + std::to_string(framebuffer));
+    }
+    void SG_GetIntegerv(GLenum pname, GLint* data) {
+        SG_Log("GetIntegerv:" + std::to_string(pname));
+        if (data) *data = 0;
+    }
+    void SG_PixelStorei(GLenum pname, GLint param) {
+        SG_Log("PixelStorei:" + std::to_string(pname) + ":" + std::to_string(param));
+    }
+    void SG_GenFramebuffers(GLsizei count, GLuint* framebuffers) {
+        for (GLsizei i = 0; i < count; ++i) framebuffers[i] = g_nextStateGuardFBOId++;
+    }
+    void SG_FramebufferTexture2D(GLenum target, GLenum attachment, GLenum textarget, GLuint texture, GLint level) {
+        SG_Log("FramebufferTexture2D:" + std::to_string(target) + ":" + std::to_string(attachment) + ":" +
+               std::to_string(textarget) + ":" + std::to_string(texture) + ":" + std::to_string(level));
+    }
+    void SG_FramebufferTextureLayer(GLenum target, GLenum attachment, GLuint texture, GLint level, GLint layer) {
+        SG_Log("FramebufferTextureLayer:" + std::to_string(target) + ":" + std::to_string(attachment) + ":" +
+               std::to_string(texture) + ":" + std::to_string(level) + ":" + std::to_string(layer));
+    }
+    void SG_ReadBuffer(GLenum src) {
+        SG_Log("ReadBuffer:" + std::to_string(src));
+    }
+    void SG_DrawBuffers(GLsizei n, const GLenum* bufs) {
+        SG_Log("DrawBuffers:" + std::to_string(n) + ":" + std::to_string(n > 0 && bufs ? bufs[0] : 0));
+    }
+    GLenum SG_NoError() {
+        return GL_NO_ERROR;
+    }
+
+    // Installs the recording table and resets every readback driver-state shadow on
+    // both ends, so these tests cannot bleed into (or inherit from) other tests.
+    struct ScopedStateGuardMocks {
+        ScopedStateGuardMocks(): previousFunctions(MobileGL::MG_Backend::DirectGLES::g_GLESFuncs) {
+            ResetShadows();
+            MobileGL::MG_External::GLESFunctionsTable functions{};
+            functions.glBindBuffer = SG_BindBuffer;
+            functions.glBindFramebuffer = SG_BindFramebuffer;
+            functions.glGetIntegerv = SG_GetIntegerv;
+            functions.glPixelStorei = SG_PixelStorei;
+            functions.glGenFramebuffers = SG_GenFramebuffers;
+            functions.glFramebufferTexture2D = SG_FramebufferTexture2D;
+            functions.glFramebufferTextureLayer = SG_FramebufferTextureLayer;
+            functions.glReadBuffer = SG_ReadBuffer;
+            functions.glDrawBuffers = SG_DrawBuffers;
+            functions.glGetError = SG_NoError;
+            MobileGL::MG_Backend::DirectGLES::SetGLESFuncsTable(functions);
+            g_stateGuardLog = &log;
+        }
+
+        ~ScopedStateGuardMocks() {
+            g_stateGuardLog = nullptr;
+            MobileGL::MG_Backend::DirectGLES::SetGLESFuncsTable(previousFunctions);
+            ResetShadows();
+        }
+
+        ScopedStateGuardMocks(const ScopedStateGuardMocks&) = delete;
+        ScopedStateGuardMocks& operator=(const ScopedStateGuardMocks&) = delete;
+
+        static void ResetShadows() {
+            MobileGL::MG_Backend::DirectGLES::BufferImpl::InvalidatePixelBufferBindingCaches();
+            MobileGL::MG_Backend::DirectGLES::FramebufferImpl::InvalidateFramebufferBindingCache();
+            MobileGL::MG_Backend::DirectGLES::PixelStoreImpl::InvalidatePackStateCache();
+            MobileGL::MG_Backend::DirectGLES::ScratchFBOImpl::OnBackendContextDestroyed();
+        }
+
+        StateGuardCallLog log;
+        MobileGL::MG_External::GLESFunctionsTable previousFunctions;
+    };
+} // namespace
+
+TEST(DirectGLESStateGuards, PixelPackBindingCacheSkipsRedundantBindsAndRestsAtZero) {
+    using namespace MobileGL::MG_Backend::DirectGLES;
+    ScopedStateGuardMocks mocks;
+
+    BufferImpl::BindPixelPackBufferId(5);
+    EXPECT_EQ(mocks.log.Count("BindBuffer:"), 1u);
+    BufferImpl::BindPixelPackBufferId(5); // redundant: must not reach the driver
+    EXPECT_EQ(mocks.log.Count("BindBuffer:"), 1u);
+    BufferImpl::BindPixelPackBufferId(0); // scope exit: resting state
+    EXPECT_EQ(mocks.log.Count("BindBuffer:"), 2u);
+    BufferImpl::BindPixelPackBufferId(0);
+    EXPECT_EQ(mocks.log.Count("BindBuffer:"), 2u);
+
+    // After invalidation (MakeCurrent / context reset) the first bind must reach
+    // the driver again even for the same value.
+    BufferImpl::InvalidatePixelBufferBindingCaches();
+    BufferImpl::BindPixelPackBufferId(0);
+    EXPECT_EQ(mocks.log.Count("BindBuffer:"), 3u);
+}
+
+TEST(DirectGLESStateGuards, FramebufferBindingShadowPinsOnceThenSkips) {
+    using namespace MobileGL::MG_Backend::DirectGLES;
+    ScopedStateGuardMocks mocks;
+
+    // Cold path: one driver query pins the shadow; further reads are free.
+    (void)FramebufferImpl::CurrentFramebufferBinding(MobileGL::FramebufferTarget::Read);
+    EXPECT_EQ(mocks.log.Count("GetIntegerv:"), 1u);
+    (void)FramebufferImpl::CurrentFramebufferBinding(MobileGL::FramebufferTarget::Read);
+    EXPECT_EQ(mocks.log.Count("GetIntegerv:"), 1u);
+
+    FramebufferImpl::BindFramebufferId(GL_READ_FRAMEBUFFER, 7);
+    EXPECT_EQ(mocks.log.Count("BindFramebuffer:"), 1u);
+    FramebufferImpl::BindFramebufferId(GL_READ_FRAMEBUFFER, 7);
+    EXPECT_EQ(mocks.log.Count("BindFramebuffer:"), 1u);
+    // GL_FRAMEBUFFER touches both targets; DRAW is still unknown so it must bind.
+    FramebufferImpl::BindFramebufferId(GL_FRAMEBUFFER, 7);
+    EXPECT_EQ(mocks.log.Count("BindFramebuffer:"), 2u);
+    // Both halves now match: no further calls for either single target.
+    FramebufferImpl::BindFramebufferId(GL_DRAW_FRAMEBUFFER, 7);
+    FramebufferImpl::BindFramebufferId(GL_READ_FRAMEBUFFER, 7);
+    FramebufferImpl::BindFramebufferId(GL_FRAMEBUFFER, 7);
+    EXPECT_EQ(mocks.log.Count("BindFramebuffer:"), 2u);
+    EXPECT_EQ(FramebufferImpl::CurrentFramebufferBinding(MobileGL::FramebufferTarget::Draw), 7u);
+    EXPECT_EQ(mocks.log.Count("GetIntegerv:"), 1u); // shadow answered, no new query
+}
+
+TEST(DirectGLESStateGuards, PackStateShadowAppliesMinimalDeltas) {
+    using namespace MobileGL::MG_Backend::DirectGLES;
+    ScopedStateGuardMocks mocks;
+
+    // First application pins all four parameters.
+    PixelStoreImpl::ApplyPackState(PixelStoreImpl::PackState{4, 0, 0, 0});
+    EXPECT_EQ(mocks.log.Count("PixelStorei:"), 4u);
+    // Identical state: zero driver calls.
+    PixelStoreImpl::ApplyPackState(PixelStoreImpl::PackState{4, 0, 0, 0});
+    EXPECT_EQ(mocks.log.Count("PixelStorei:"), 4u);
+    // One field changed: exactly one driver call.
+    PixelStoreImpl::ApplyPackState(PixelStoreImpl::PackState{1, 0, 0, 0});
+    EXPECT_EQ(mocks.log.Count("PixelStorei:"), 5u);
+
+    const auto current = PixelStoreImpl::CurrentPackState();
+    EXPECT_EQ(current.Alignment, 1);
+    EXPECT_EQ(current.RowLength, 0);
+    EXPECT_EQ(current.SkipRows, 0);
+    EXPECT_EQ(current.SkipPixels, 0);
+}
+
+TEST(DirectGLESStateGuards, ScratchFBODetachesCrossAspectResidue) {
+    using namespace MobileGL::MG_Backend::DirectGLES;
+    ScopedStateGuardMocks mocks;
+
+    auto& fb = ScratchFBOImpl::TempFramebuffer();
+    EXPECT_NE(ScratchFBOImpl::EnsureId(fb), 0u);
+
+    // A depth copy leaves a DEPTH_STENCIL attachment (the pre-fix code never
+    // detached it, wedging every later color readback through this FBO).
+    ScratchFBOImpl::EnsureDepthAttachment2D(fb, GL_DRAW_FRAMEBUFFER, 11, GL_TEXTURE_2D, 0, /*withStencil=*/true);
+    const MobileGL::String dsAttach = "FramebufferTexture2D:" + std::to_string(GL_DRAW_FRAMEBUFFER) + ":" +
+                                      std::to_string(GL_DEPTH_STENCIL_ATTACHMENT);
+    EXPECT_EQ(mocks.log.Count(dsAttach), 1u);
+
+    // The next color use must detach the stale depth-stencil attachment exactly once.
+    mocks.log.calls.clear();
+    ScratchFBOImpl::EnsureColorAttachment2D(fb, GL_READ_FRAMEBUFFER, 22, GL_TEXTURE_2D, 0);
+    const MobileGL::String dsDetach = "FramebufferTexture2D:" + std::to_string(GL_READ_FRAMEBUFFER) + ":" +
+                                      std::to_string(GL_DEPTH_STENCIL_ATTACHMENT) + ":" +
+                                      std::to_string(GL_TEXTURE_2D) + ":0:0";
+    const MobileGL::String colorAttach = "FramebufferTexture2D:" + std::to_string(GL_READ_FRAMEBUFFER) + ":" +
+                                         std::to_string(GL_COLOR_ATTACHMENT0) + ":" +
+                                         std::to_string(GL_TEXTURE_2D) + ":22:0";
+    EXPECT_EQ(mocks.log.Count(dsDetach), 1u);
+    EXPECT_EQ(mocks.log.Count(colorAttach), 1u);
+
+    // Back-to-back identical color use: no driver traffic at all.
+    mocks.log.calls.clear();
+    ScratchFBOImpl::EnsureColorAttachment2D(fb, GL_READ_FRAMEBUFFER, 22, GL_TEXTURE_2D, 0);
+    EXPECT_EQ(mocks.log.Count("FramebufferTexture2D:"), 0u);
+}
+
+TEST(DirectGLESStateGuards, ScratchFBOTextureDeletionForcesFullScrub) {
+    using namespace MobileGL::MG_Backend::DirectGLES;
+    ScopedStateGuardMocks mocks;
+
+    auto& fb = ScratchFBOImpl::TempFramebuffer();
+    ScratchFBOImpl::EnsureId(fb);
+    ScratchFBOImpl::EnsureColorAttachment2D(fb, GL_READ_FRAMEBUFFER, 22, GL_TEXTURE_2D, 0);
+
+    // The attached texture id dies: the shadow can no longer vouch for the FBO
+    // (ES does not auto-detach from unbound FBOs, and the name may be recycled),
+    // so the next use must scrub and re-attach instead of skipping.
+    ScratchFBOImpl::NoteTextureIdDeleted(22);
+    mocks.log.calls.clear();
+    ScratchFBOImpl::EnsureColorAttachment2D(fb, GL_READ_FRAMEBUFFER, 22, GL_TEXTURE_2D, 0);
+    EXPECT_GE(mocks.log.Count("FramebufferTexture2D:"), 2u); // scrub (color + depth) ...
+    const MobileGL::String colorAttach = "FramebufferTexture2D:" + std::to_string(GL_READ_FRAMEBUFFER) + ":" +
+                                         std::to_string(GL_COLOR_ATTACHMENT0) + ":" +
+                                         std::to_string(GL_TEXTURE_2D) + ":22:0";
+    EXPECT_EQ(mocks.log.Count(colorAttach), 1u); // ... then the real re-attach
+}
+
+TEST(DirectGLESStateGuards, ScratchFBOReadDrawBufferStateCached) {
+    using namespace MobileGL::MG_Backend::DirectGLES;
+    ScopedStateGuardMocks mocks;
+
+    auto& fb = ScratchFBOImpl::BlitReadFramebuffer();
+    ScratchFBOImpl::EnsureId(fb);
+
+    // Fresh FBOs default to COLOR_ATTACHMENT0 for both buffers: no call needed.
+    ScratchFBOImpl::EnsureReadBuffer(fb, GL_COLOR_ATTACHMENT0);
+    EXPECT_EQ(mocks.log.Count("ReadBuffer:"), 0u);
+    // Depth blits want GL_NONE; the transition costs one call, repeats are free.
+    ScratchFBOImpl::EnsureReadBuffer(fb, GL_NONE);
+    ScratchFBOImpl::EnsureReadBuffer(fb, GL_NONE);
+    EXPECT_EQ(mocks.log.Count("ReadBuffer:"), 1u);
+    ScratchFBOImpl::EnsureDrawBuffer(fb, GL_NONE);
+    ScratchFBOImpl::EnsureDrawBuffer(fb, GL_NONE);
+    EXPECT_EQ(mocks.log.Count("DrawBuffers:"), 1u);
+}
+
+namespace {
+    MobileGL::Vector<GLuint>* g_deletedTextureIds = nullptr;
+
+    void SG_DeleteTextures(GLsizei count, const GLuint* textures) {
+        if (!g_deletedTextureIds) return;
+        for (GLsizei i = 0; i < count; ++i) g_deletedTextureIds->push_back(textures[i]);
+    }
+} // namespace
+
+TEST(DirectGLESBackendTexture, DestructorDeletesIdAndScrubsBindingCache) {
+    using namespace MobileGL::MG_Backend::DirectGLES;
+    ScopedDirectGLESTextureBindings scoped; // installs glGenTextures/glBindTexture mocks + resets caches
+    MobileGL::Vector<GLuint> deleted;
+    g_deletedTextureIds = &deleted;
+    auto functions = g_GLESFuncs;
+    functions.glDeleteTextures = SG_DeleteTextures;
+    SetGLESFuncsTable(functions);
+
+    const auto texture2DSlot = static_cast<MobileGL::SizeT>(MobileGL::TextureTarget::Texture2D);
+    GLuint id = 0;
+    {
+        auto backendTexture = MobileGL::MakeShared<TextureImpl::BackendTextureObject>();
+        id = backendTexture->GetBackendTextureId();
+        ASSERT_NE(id, 0u);
+        backendTexture->Bind(GL_TEXTURE_2D, 0);
+        ASSERT_EQ(TextureImpl::g_boundTexturesCache[0][texture2DSlot], backendTexture.get());
+    }
+    // Frontend glDeleteTextures used to leak the backend id forever and leave the
+    // cache pointer dangling (heap-address reuse then false-skips a later Bind).
+    ASSERT_EQ(deleted.size(), 1u);
+    EXPECT_EQ(deleted[0], id);
+    EXPECT_EQ(TextureImpl::g_boundTexturesCache[0][texture2DSlot], nullptr);
+
+    // A wrapper whose context died must NOT delete a foreign (recycled) name.
+    {
+        auto backendTexture = MobileGL::MakeShared<TextureImpl::BackendTextureObject>();
+        ++TextureImpl::g_textureContextGeneration;
+        backendTexture.reset();
+        --TextureImpl::g_textureContextGeneration; // restore for later tests
+        EXPECT_EQ(deleted.size(), 1u);
+    }
+    g_deletedTextureIds = nullptr;
+}

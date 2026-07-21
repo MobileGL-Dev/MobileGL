@@ -267,16 +267,26 @@ namespace MobileGL::MG_Backend::DirectGLES {
             Uint g_boundArrayBufferId = 0;
             Bool g_boundArrayBufferKnown = false;
 
+            // Driver-level GL_PIXEL_PACK/UNPACK_BUFFER binding shadows (see
+            // Managers.h). Resting state between operations is 0; scopes in the
+            // readback/upload paths bind what they need through the cache and
+            // return to 0, so a stale user PBO can never capture a later
+            // readback that meant to target client memory.
+            Uint g_boundPixelPackBufferId = 0;
+            Bool g_boundPixelPackBufferKnown = false;
+            Uint g_boundPixelUnpackBufferId = 0;
+            Bool g_boundPixelUnpackBufferKnown = false;
+
             // Bumped whenever the backend ES context is destroyed; resources with
             // an older generation hold ids from a dead context.
             Uint g_bufferContextGeneration = 1;
 
             // Defined next to the indexed-binding shadow below; forward-declared so
             // every glDeleteBuffers site in this namespace can scrub stale shadow
-            // entries (GL resets a deleted buffer's indexed bindings to 0, and a
-            // recycled name matching a stale shadow entry would otherwise
-            // false-skip the rebind).
-            void ScrubIndexedBufferBindingShadowForId(Uint id);
+            // entries (GL resets a deleted buffer's bindings - indexed and pixel
+            // pack/unpack alike - to 0, and a recycled name matching a stale shadow
+            // entry would otherwise false-skip the rebind).
+            void ScrubBufferBindingShadowsForId(Uint id);
 
             // Resources whose owning BufferObject died; ids deleted at the next
             // sync point with a current ES context.
@@ -318,10 +328,16 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 if (g_boundArrayBufferKnown && g_boundArrayBufferId == r.id) {
                     InvalidateArrayBufferBindingCache();
                 }
+                // Pooling keeps the id alive (and thus any driver binding of it);
+                // drop to unknown rather than claiming the post-delete 0 state.
+                if ((g_boundPixelPackBufferKnown && g_boundPixelPackBufferId == r.id) ||
+                    (g_boundPixelUnpackBufferKnown && g_boundPixelUnpackBufferId == r.id)) {
+                    InvalidatePixelBufferBindingCaches();
+                }
                 const std::lock_guard<std::mutex> lock(g_poolMutex);
                 auto& bucket = g_bufferPool[r.storageSize];
                 if (bucket.size() >= kMaxEntriesPerBucket || g_pooledBytes + r.storageSize > kMaxPoolBytes) {
-                    ScrubIndexedBufferBindingShadowForId(r.id);
+                    ScrubBufferBindingShadowsForId(r.id);
                     g_GLESFuncs.glDeleteBuffers(1, &r.id); // over budget: don't pool
                     r.id = 0;
                     return;
@@ -502,7 +518,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // Need a fresh id: glBufferStorage fails on a buffer that already has
                 // immutable storage, and any prior mutable store is replaced anyway.
                 if (resource->id != 0) {
-                    ScrubIndexedBufferBindingShadowForId(resource->id);
+                    ScrubBufferBindingShadowsForId(resource->id);
                     g_GLESFuncs.glDeleteBuffers(1, &resource->id);
                     resource->id = 0;
                 }
@@ -630,7 +646,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                         if (g_boundArrayBufferKnown && g_boundArrayBufferId == glesResource->id) {
                             InvalidateArrayBufferBindingCache();
                         }
-                        ScrubIndexedBufferBindingShadowForId(glesResource->id);
+                        ScrubBufferBindingShadowsForId(glesResource->id);
                         g_GLESFuncs.glDeleteBuffers(1, &glesResource->id);
                         glesResource->id = 0;
                     }
@@ -668,6 +684,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
         void OnBackendContextDestroyed() {
             UnregisterBufferBackendOps();
             ++g_bufferContextGeneration;
+            InvalidateArrayBufferBindingCache();
+            InvalidateIndexedBufferBindingCache();
+            InvalidatePixelBufferBindingCaches();
             // The global-UBO ring's id and persistent map died with the context;
             // drop the handles (no GL) and let the next draw recreate the ring.
             ResetUboRingForNewContext();
@@ -694,7 +713,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     if (g_boundArrayBufferKnown && g_boundArrayBufferId == glesResource->id) {
                         InvalidateArrayBufferBindingCache();
                     }
-                    ScrubIndexedBufferBindingShadowForId(glesResource->id);
+                    ScrubBufferBindingShadowsForId(glesResource->id);
                     g_GLESFuncs.glDeleteBuffers(1, &glesResource->id);
                     glesResource->id = 0;
                 }
@@ -819,6 +838,31 @@ namespace MobileGL::MG_Backend::DirectGLES {
             g_boundArrayBufferKnown = false;
         }
 
+        void BindPixelPackBufferId(Uint id) {
+            if (g_boundPixelPackBufferKnown && g_boundPixelPackBufferId == id) {
+                return;
+            }
+            g_GLESFuncs.glBindBuffer(GL_PIXEL_PACK_BUFFER, id);
+            g_boundPixelPackBufferId = id;
+            g_boundPixelPackBufferKnown = true;
+        }
+
+        void BindPixelUnpackBufferId(Uint id) {
+            if (g_boundPixelUnpackBufferKnown && g_boundPixelUnpackBufferId == id) {
+                return;
+            }
+            g_GLESFuncs.glBindBuffer(GL_PIXEL_UNPACK_BUFFER, id);
+            g_boundPixelUnpackBufferId = id;
+            g_boundPixelUnpackBufferKnown = true;
+        }
+
+        void InvalidatePixelBufferBindingCaches() {
+            g_boundPixelPackBufferId = 0;
+            g_boundPixelPackBufferKnown = false;
+            g_boundPixelUnpackBufferId = 0;
+            g_boundPixelUnpackBufferKnown = false;
+        }
+
         namespace {
             // Shadow of the GL indexed buffer bindings so redundant glBindBufferBase/Range
             // (same index + id + range) are skipped. isBase distinguishes a whole-buffer
@@ -840,18 +884,24 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 return nullptr;
             }
 
-            // glDeleteBuffers resets the deleted buffer's bindings (indexed ones
-            // included) to 0 in the current context; mirror that in the shadow, or a
-            // later buffer recycling the same name with a matching range would
-            // false-skip its rebind. Default IndexedBufferBinding{} == base(0) ==
-            // the post-delete GL state.
-            void ScrubIndexedBufferBindingShadowForId(Uint id) {
+            // glDeleteBuffers resets the deleted buffer's bindings (indexed and
+            // pixel pack/unpack ones included) to 0 in the current context; mirror
+            // that in the shadows, or a later buffer recycling the same name with a
+            // matching shadow entry would false-skip its rebind. Default
+            // IndexedBufferBinding{} == base(0) == the post-delete GL state.
+            void ScrubBufferBindingShadowsForId(Uint id) {
                 if (id == 0) return;
                 for (auto& binding : g_indexedUBOBindings) {
                     if (binding.id == id) binding = {};
                 }
                 for (auto& binding : g_indexedSSBOBindings) {
                     if (binding.id == id) binding = {};
+                }
+                if (g_boundPixelPackBufferKnown && g_boundPixelPackBufferId == id) {
+                    g_boundPixelPackBufferId = 0;
+                }
+                if (g_boundPixelUnpackBufferKnown && g_boundPixelUnpackBufferId == id) {
+                    g_boundPixelUnpackBufferId = 0;
                 }
             }
         } // namespace
@@ -897,7 +947,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 auto& bucket = g_bufferPool[oldestKey];
                 PooledBuffer& e = bucket[oldestIdx];
                 if (e.contextGeneration == g_bufferContextGeneration && e.id != 0) {
-                    ScrubIndexedBufferBindingShadowForId(e.id);
+                    ScrubBufferBindingShadowsForId(e.id);
                     g_GLESFuncs.glDeleteBuffers(1, &e.id);
                 }
                 g_pooledBytes -= e.size;
@@ -1064,7 +1114,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 const Bool staleContext = entry.contextGeneration != g_bufferContextGeneration;
                 if (!staleContext && entry.retireSerial > completed) continue;
                 if (!staleContext && entry.id != 0) {
-                    ScrubIndexedBufferBindingShadowForId(entry.id);
+                    ScrubBufferBindingShadowsForId(entry.id);
                     g_GLESFuncs.glDeleteBuffers(1, &entry.id);
                 }
                 g_retiredUboRings[i] = g_retiredUboRings.back();
@@ -1324,12 +1374,34 @@ namespace MobileGL::MG_Backend::DirectGLES {
             ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
             g_GLESFuncs.glGenTextures(1, &m_backendTextureId);
+            m_contextGeneration = g_textureContextGeneration;
             if (m_backendTextureId == 0) {
                 MGLOG_E("Failed to generate texture object.");
                 MGLOG_E("ES glGetError(): %s", MG_Util::ConvertGLEnumToString(g_GLESFuncs.glGetError()).c_str());
             } else {
                 MGLOG_D("Generated texture object with ID: %u.", m_backendTextureId);
             }
+        }
+
+        BackendTextureObject::~BackendTextureObject() {
+            if (m_backendTextureId == 0) {
+                return;
+            }
+            // Scrub every driver-state shadow that could false-skip when the name
+            // or this heap address is recycled - regardless of whether the id can
+            // still be deleted.
+            ScratchFBOImpl::NoteTextureIdDeleted(m_backendTextureId);
+            for (auto& unitCache : g_boundTexturesCache) {
+                for (auto& boundTexture : unitCache) {
+                    if (boundTexture == this) {
+                        boundTexture = nullptr;
+                    }
+                }
+            }
+            if (m_contextGeneration == g_textureContextGeneration && g_GLESFuncs.glDeleteTextures) {
+                g_GLESFuncs.glDeleteTextures(1, &m_backendTextureId);
+            }
+            m_backendTextureId = 0;
         }
 
         void BackendTextureObject::Bind(GLenum target, Uint unit) {
@@ -1364,7 +1436,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
         void BackendTextureObject::RecreateBackendTexture() {
             if (m_backendTextureId != 0) {
-                g_GLESFuncs.glDeleteTextures(1, &m_backendTextureId);
+                ScratchFBOImpl::NoteTextureIdDeleted(m_backendTextureId);
+                if (m_contextGeneration == g_textureContextGeneration) {
+                    g_GLESFuncs.glDeleteTextures(1, &m_backendTextureId);
+                }
                 for (auto& unitCache : g_boundTexturesCache) {
                     for (auto& boundTexture : unitCache) {
                         if (boundTexture == this) {
@@ -1375,6 +1450,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
 
             g_GLESFuncs.glGenTextures(1, &m_backendTextureId);
+            m_contextGeneration = g_textureContextGeneration;
             if (m_backendTextureId == 0) {
                 MGLOG_E("Failed to regenerate texture object.");
                 MGLOG_E("ES glGetError(): %s", MG_Util::ConvertGLEnumToString(g_GLESFuncs.glGetError()).c_str());
@@ -1391,7 +1467,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // glGetIntegerv - that query forces a driver pipeline sync and, because texture
         // uploads run it per dirty texture per frame, it dominated the DirectGLES draw
         // path. The backend unpack state is set ONLY by MobileGL's own save/restore
-        // helpers (this class, TempPixelStoreParameterSync, the R32F copy path), all of
+        // helpers (this class and, historically, the R32F copy path), all of
         // which restore to the resting default, so the shadow stays accurate; a one-time
         // forced sync pins the backend to that known default up front. Apply() is
         // compare-and-set, so the (now redundant) glPixelStorei calls also usually no-op.
@@ -2365,6 +2441,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         }
 
         Uint g_activeTextureUnit = 0;
+        Uint g_textureContextGeneration = 1;
         Array<Array<BackendTextureObject*, (SizeT)TextureTarget::TextureTargetCount>,
               MG_State::GLState::TextureState::MAX_TEXTURE_IMAGE_UNITS>
             g_boundTexturesCache;
@@ -2390,9 +2467,59 @@ namespace MobileGL::MG_Backend::DirectGLES {
             ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
             if (target == FramebufferTarget::Read)
-                g_GLESFuncs.glBindFramebuffer(GL_READ_FRAMEBUFFER, m_backendFBOId);
+                BindFramebufferId(GL_READ_FRAMEBUFFER, m_backendFBOId);
             else
-                g_GLESFuncs.glBindFramebuffer(GL_DRAW_FRAMEBUFFER, m_backendFBOId);
+                BindFramebufferId(GL_DRAW_FRAMEBUFFER, m_backendFBOId);
+        }
+
+        namespace {
+            // Driver-level framebuffer-binding shadow (see Managers.h). Indexed by
+            // FramebufferTarget {Draw, Read}.
+            Array<Uint, SizeT(FramebufferTarget::FramebufferTargetCount)> g_driverFBOBindings = {0, 0};
+            Array<Bool, SizeT(FramebufferTarget::FramebufferTargetCount)> g_driverFBOBindingKnown = {false, false};
+        } // namespace
+
+        void BindFramebufferId(GLenum fbTarget, Uint id) {
+            const Bool bindsDraw = fbTarget == GL_DRAW_FRAMEBUFFER || fbTarget == GL_FRAMEBUFFER;
+            const Bool bindsRead = fbTarget == GL_READ_FRAMEBUFFER || fbTarget == GL_FRAMEBUFFER;
+            const SizeT drawIdx = SizeT(FramebufferTarget::Draw);
+            const SizeT readIdx = SizeT(FramebufferTarget::Read);
+            const Bool drawMatches =
+                !bindsDraw || (g_driverFBOBindingKnown[drawIdx] && g_driverFBOBindings[drawIdx] == id);
+            const Bool readMatches =
+                !bindsRead || (g_driverFBOBindingKnown[readIdx] && g_driverFBOBindings[readIdx] == id);
+            if (drawMatches && readMatches) {
+                return;
+            }
+            g_GLESFuncs.glBindFramebuffer(fbTarget, id);
+            if (bindsDraw) {
+                g_driverFBOBindings[drawIdx] = id;
+                g_driverFBOBindingKnown[drawIdx] = true;
+            }
+            if (bindsRead) {
+                g_driverFBOBindings[readIdx] = id;
+                g_driverFBOBindingKnown[readIdx] = true;
+            }
+        }
+
+        Uint CurrentFramebufferBinding(FramebufferTarget target) {
+            const SizeT idx = SizeT(target);
+            if (!g_driverFBOBindingKnown[idx]) {
+                // Cold path: pin the shadow from the driver once (init probes and
+                // pre-shadow code bind raw but restore what they found).
+                GLint binding = 0;
+                g_GLESFuncs.glGetIntegerv(
+                    target == FramebufferTarget::Read ? GL_READ_FRAMEBUFFER_BINDING : GL_DRAW_FRAMEBUFFER_BINDING,
+                    &binding);
+                g_driverFBOBindings[idx] = static_cast<Uint>(binding);
+                g_driverFBOBindingKnown[idx] = true;
+            }
+            return g_driverFBOBindings[idx];
+        }
+
+        void InvalidateFramebufferBindingCache() {
+            g_driverFBOBindings = {0, 0};
+            g_driverFBOBindingKnown = {false, false};
         }
 
         void BackendFramebufferObject::InvalidateSyncedState() {
@@ -2446,7 +2573,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     if (glTextureTarget == GL_UNKNOWN_MGL) {
                         glTextureTarget = TextureImpl::ConvertTextureTargetToBackendGLEnum(textureObject->GetTarget());
                     }
-                    backendTextureObject->Bind(glTextureTarget);
+                    // glBindTexture rejects cube-face enums (INVALID_ENUM with no
+                    // bind, while Bind() would still record the cube-map cache slot
+                    // as bound): bind via the owning cube target; the attach below
+                    // keeps the face target.
+                    const Bool isCubeFace = glTextureTarget >= GL_TEXTURE_CUBE_MAP_POSITIVE_X &&
+                                            glTextureTarget <= GL_TEXTURE_CUBE_MAP_NEGATIVE_Z;
+                    backendTextureObject->Bind(isCubeFace ? GL_TEXTURE_CUBE_MAP : glTextureTarget);
                     g_GLESFuncs.glFramebufferTexture2D(glFBOTarget, glBackendAttachment, glTextureTarget,
                                                        backendTextureObject->GetBackendTextureId(),
                                                        static_cast<GLint>(attachmentObject.GetTextureLevel()));
@@ -2745,6 +2878,295 @@ namespace MobileGL::MG_Backend::DirectGLES {
         Array<MG_State::GLState::FramebufferObject*, SizeT(FramebufferTarget::FramebufferTargetCount)>
             g_fboSyncedObjects = {};
     } // namespace FramebufferImpl
+
+    namespace ScratchFBOImpl {
+        namespace {
+            ScratchFramebuffer g_tempFramebuffer;
+            ScratchFramebuffer g_blitReadFramebuffer;
+            ScratchFramebuffer g_blitDrawFramebuffer;
+            Uint g_completeTinyFBOId = 0;
+            Uint g_completeTinyRBOId = 0;
+
+            // Detach every point the shadow no longer vouches for. Used when the
+            // shadow is unknown (context reset, texture id deleted while attached).
+            void ScrubAllAttachments(ScratchFramebuffer& fb, GLenum fbTarget) {
+                g_GLESFuncs.glFramebufferTexture2D(fbTarget, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, 0, 0);
+                g_GLESFuncs.glFramebufferTexture2D(fbTarget, GL_DEPTH_STENCIL_ATTACHMENT, GL_TEXTURE_2D, 0, 0);
+                fb.colorTex = 0;
+                fb.colorTarget = 0;
+                fb.colorLevel = 0;
+                fb.colorLayer = -1;
+                fb.depthTex = 0;
+                fb.depthTarget = 0;
+                fb.depthLevel = 0;
+                fb.depthHasStencil = false;
+                fb.attachmentsKnown = true;
+            }
+
+            void PrepareForUse(ScratchFramebuffer& fb, GLenum fbTarget) {
+                if (!fb.attachmentsKnown) {
+                    ScrubAllAttachments(fb, fbTarget);
+                }
+            }
+
+            // The post-attach glGetError probe below must not misread an error some
+            // earlier operation left queued; drain before attaching (rare path -
+            // only runs when the attachment actually changes).
+            void DrainPendingGLErrors() {
+                while (g_GLESFuncs.glGetError() != GL_NO_ERROR) {
+                }
+            }
+
+            // Record the color point as detached when the shadow said something was
+            // there; the actual detach call is the caller's (it may be replaced by
+            // the new attach directly when the point is being overwritten).
+            void RecordNoColor(ScratchFramebuffer& fb) {
+                fb.colorTex = 0;
+                fb.colorTarget = 0;
+                fb.colorLevel = 0;
+                fb.colorLayer = -1;
+            }
+
+            void RecordNoDepth(ScratchFramebuffer& fb) {
+                fb.depthTex = 0;
+                fb.depthTarget = 0;
+                fb.depthLevel = 0;
+                fb.depthHasStencil = false;
+            }
+        } // namespace
+
+        ScratchFramebuffer& TempFramebuffer() {
+            return g_tempFramebuffer;
+        }
+        ScratchFramebuffer& BlitReadFramebuffer() {
+            return g_blitReadFramebuffer;
+        }
+        ScratchFramebuffer& BlitDrawFramebuffer() {
+            return g_blitDrawFramebuffer;
+        }
+
+        Uint EnsureId(ScratchFramebuffer& fb) {
+            if (fb.id == 0) {
+                g_GLESFuncs.glGenFramebuffers(1, &fb.id);
+                // A fresh FBO has nothing attached and COLOR_ATTACHMENT0 read/draw
+                // buffers (the ES defaults for a non-default framebuffer).
+                fb.attachmentsKnown = true;
+                RecordNoColor(fb);
+                RecordNoDepth(fb);
+                fb.readBuffer = GL_COLOR_ATTACHMENT0;
+                fb.drawBuffer = GL_COLOR_ATTACHMENT0;
+            }
+            return fb.id;
+        }
+
+        void EnsureColorAttachment2D(ScratchFramebuffer& fb, GLenum fbTarget, Uint tex, GLenum texTarget,
+                                     GLint level) {
+            PrepareForUse(fb, fbTarget);
+            if (fb.depthTex != 0) {
+                g_GLESFuncs.glFramebufferTexture2D(fbTarget, GL_DEPTH_STENCIL_ATTACHMENT, GL_TEXTURE_2D, 0, 0);
+                RecordNoDepth(fb);
+            }
+            if (fb.colorTex == tex && fb.colorTarget == texTarget && fb.colorLevel == level && fb.colorLayer < 0) {
+                return;
+            }
+            if (fb.colorTex != 0) {
+                // Detach first: if the new attach fails, the point must read as
+                // missing (incomplete FBO), not silently keep the old texture.
+                g_GLESFuncs.glFramebufferTexture2D(fbTarget, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, 0, 0);
+            }
+            DrainPendingGLErrors();
+            g_GLESFuncs.glFramebufferTexture2D(fbTarget, GL_COLOR_ATTACHMENT0, texTarget, tex, level);
+            if (g_GLESFuncs.glGetError() != GL_NO_ERROR) {
+                RecordNoColor(fb);
+                return;
+            }
+            fb.colorTex = tex;
+            fb.colorTarget = texTarget;
+            fb.colorLevel = level;
+            fb.colorLayer = -1;
+        }
+
+        void EnsureColorAttachmentLayer(ScratchFramebuffer& fb, GLenum fbTarget, Uint tex, GLint level, GLint layer) {
+            PrepareForUse(fb, fbTarget);
+            if (fb.depthTex != 0) {
+                g_GLESFuncs.glFramebufferTexture2D(fbTarget, GL_DEPTH_STENCIL_ATTACHMENT, GL_TEXTURE_2D, 0, 0);
+                RecordNoDepth(fb);
+            }
+            if (fb.colorTex == tex && fb.colorTarget == 0 && fb.colorLevel == level && fb.colorLayer == layer) {
+                return;
+            }
+            if (fb.colorTex != 0) {
+                g_GLESFuncs.glFramebufferTexture2D(fbTarget, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, 0, 0);
+            }
+            DrainPendingGLErrors();
+            g_GLESFuncs.glFramebufferTextureLayer(fbTarget, GL_COLOR_ATTACHMENT0, tex, level, layer);
+            if (g_GLESFuncs.glGetError() != GL_NO_ERROR) {
+                RecordNoColor(fb);
+                return;
+            }
+            fb.colorTex = tex;
+            fb.colorTarget = 0;
+            fb.colorLevel = level;
+            fb.colorLayer = layer;
+        }
+
+        void EnsureDepthAttachment2D(ScratchFramebuffer& fb, GLenum fbTarget, Uint tex, GLenum texTarget, GLint level,
+                                     Bool withStencil) {
+            PrepareForUse(fb, fbTarget);
+            if (fb.colorTex != 0) {
+                g_GLESFuncs.glFramebufferTexture2D(fbTarget, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, 0, 0);
+                RecordNoColor(fb);
+            }
+            if (fb.depthTex == tex && fb.depthTarget == texTarget && fb.depthLevel == level &&
+                fb.depthHasStencil == withStencil) {
+                return;
+            }
+            if (fb.depthTex != 0) {
+                // One call clears both depth and stencil points regardless of how
+                // the previous attachment was made.
+                g_GLESFuncs.glFramebufferTexture2D(fbTarget, GL_DEPTH_STENCIL_ATTACHMENT, GL_TEXTURE_2D, 0, 0);
+            }
+            DrainPendingGLErrors();
+            g_GLESFuncs.glFramebufferTexture2D(fbTarget,
+                                               withStencil ? GL_DEPTH_STENCIL_ATTACHMENT : GL_DEPTH_ATTACHMENT,
+                                               texTarget, tex, level);
+            if (g_GLESFuncs.glGetError() != GL_NO_ERROR) {
+                RecordNoDepth(fb);
+                return;
+            }
+            fb.depthTex = tex;
+            fb.depthTarget = texTarget;
+            fb.depthLevel = level;
+            fb.depthHasStencil = withStencil;
+        }
+
+        void EnsureNoColorAttachment(ScratchFramebuffer& fb, GLenum fbTarget) {
+            PrepareForUse(fb, fbTarget);
+            if (fb.colorTex != 0) {
+                g_GLESFuncs.glFramebufferTexture2D(fbTarget, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, 0, 0);
+                RecordNoColor(fb);
+            }
+        }
+
+        void EnsureNoDepthAttachment(ScratchFramebuffer& fb, GLenum fbTarget) {
+            PrepareForUse(fb, fbTarget);
+            if (fb.depthTex != 0) {
+                g_GLESFuncs.glFramebufferTexture2D(fbTarget, GL_DEPTH_STENCIL_ATTACHMENT, GL_TEXTURE_2D, 0, 0);
+                RecordNoDepth(fb);
+            }
+        }
+
+        void EnsureReadBuffer(ScratchFramebuffer& fb, GLenum readBuffer) {
+            if (fb.readBuffer == readBuffer) {
+                return;
+            }
+            g_GLESFuncs.glReadBuffer(readBuffer);
+            fb.readBuffer = readBuffer;
+        }
+
+        void EnsureDrawBuffer(ScratchFramebuffer& fb, GLenum drawBuffer) {
+            if (fb.drawBuffer == drawBuffer) {
+                return;
+            }
+            g_GLESFuncs.glDrawBuffers(1, &drawBuffer);
+            fb.drawBuffer = drawBuffer;
+        }
+
+        Uint EnsureCompleteTinyFramebufferId() {
+            if (g_completeTinyFBOId != 0) {
+                return g_completeTinyFBOId;
+            }
+            // One-time creation: the renderbuffer binding is context state with no
+            // shadow, so save/restore it by query here (cold path only).
+            GLint prevRenderbuffer = 0;
+            g_GLESFuncs.glGetIntegerv(GL_RENDERBUFFER_BINDING, &prevRenderbuffer);
+            g_GLESFuncs.glGenFramebuffers(1, &g_completeTinyFBOId);
+            g_GLESFuncs.glGenRenderbuffers(1, &g_completeTinyRBOId);
+            FramebufferImpl::BindFramebufferId(GL_FRAMEBUFFER, g_completeTinyFBOId);
+            g_GLESFuncs.glBindRenderbuffer(GL_RENDERBUFFER, g_completeTinyRBOId);
+            g_GLESFuncs.glRenderbufferStorage(GL_RENDERBUFFER, GL_RGBA8, 1, 1);
+            g_GLESFuncs.glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER,
+                                                  g_completeTinyRBOId);
+            const GLenum drawBuffer = GL_COLOR_ATTACHMENT0;
+            g_GLESFuncs.glDrawBuffers(1, &drawBuffer);
+            g_GLESFuncs.glReadBuffer(GL_COLOR_ATTACHMENT0);
+            MOBILEGL_ASSERT(g_GLESFuncs.glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE,
+                            "Scratch 1x1 framebuffer is incomplete.");
+            g_GLESFuncs.glBindRenderbuffer(GL_RENDERBUFFER, static_cast<Uint>(prevRenderbuffer));
+            return g_completeTinyFBOId;
+        }
+
+        void NoteTextureIdDeleted(Uint textureId) {
+            if (textureId == 0) {
+                return;
+            }
+            for (ScratchFramebuffer* fb : {&g_tempFramebuffer, &g_blitReadFramebuffer, &g_blitDrawFramebuffer}) {
+                if (fb->colorTex == textureId || fb->depthTex == textureId) {
+                    fb->attachmentsKnown = false;
+                }
+            }
+        }
+
+        void OnBackendContextDestroyed() {
+            g_tempFramebuffer = {};
+            g_blitReadFramebuffer = {};
+            g_blitDrawFramebuffer = {};
+            g_completeTinyFBOId = 0;
+            g_completeTinyRBOId = 0;
+        }
+    } // namespace ScratchFBOImpl
+
+    namespace PixelStoreImpl {
+        namespace {
+            PackState g_packState;
+            Bool g_packStateKnown = false;
+
+            void PinPackState(const PackState& value) {
+                g_GLESFuncs.glPixelStorei(GL_PACK_ALIGNMENT, value.Alignment);
+                g_GLESFuncs.glPixelStorei(GL_PACK_ROW_LENGTH, value.RowLength);
+                g_GLESFuncs.glPixelStorei(GL_PACK_SKIP_ROWS, value.SkipRows);
+                g_GLESFuncs.glPixelStorei(GL_PACK_SKIP_PIXELS, value.SkipPixels);
+                g_packState = value;
+                g_packStateKnown = true;
+            }
+        } // namespace
+
+        void ApplyPackState(const PackState& desired) {
+            if (!g_packStateKnown) {
+                PinPackState(desired);
+                return;
+            }
+            if (desired.Alignment != g_packState.Alignment) {
+                g_GLESFuncs.glPixelStorei(GL_PACK_ALIGNMENT, desired.Alignment);
+                g_packState.Alignment = desired.Alignment;
+            }
+            if (desired.RowLength != g_packState.RowLength) {
+                g_GLESFuncs.glPixelStorei(GL_PACK_ROW_LENGTH, desired.RowLength);
+                g_packState.RowLength = desired.RowLength;
+            }
+            if (desired.SkipRows != g_packState.SkipRows) {
+                g_GLESFuncs.glPixelStorei(GL_PACK_SKIP_ROWS, desired.SkipRows);
+                g_packState.SkipRows = desired.SkipRows;
+            }
+            if (desired.SkipPixels != g_packState.SkipPixels) {
+                g_GLESFuncs.glPixelStorei(GL_PACK_SKIP_PIXELS, desired.SkipPixels);
+                g_packState.SkipPixels = desired.SkipPixels;
+            }
+        }
+
+        PackState CurrentPackState() {
+            if (!g_packStateKnown) {
+                // Fresh/unknown context: pin to the GL defaults (what a new context
+                // starts with; writing them makes the shadow authoritative either way).
+                PinPackState(PackState{});
+            }
+            return g_packState;
+        }
+
+        void InvalidatePackStateCache() {
+            g_packStateKnown = false;
+        }
+    } // namespace PixelStoreImpl
 
     namespace PrgramImpl {
         Uint32 g_snormFallbackClampOutputMask = 0;

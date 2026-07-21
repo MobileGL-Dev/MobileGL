@@ -2069,41 +2069,104 @@ namespace MobileGL::MG_Backend::DirectGLES {
         return true;
     }
 
-    static GLuint s_prevDrawFBO = 0;
-    static GLuint s_prevReadFBO = 0;
-    void BindTempFBO(Bool isRead) {
-        MGLOG_D("%s: Binding temporary FBO for operations like CopyTexImage2D that require framebuffer binding, "
-                "previous draw FBO=%u, read FBO=%u",
-                __func__, s_prevDrawFBO, s_prevReadFBO);
-        static GLuint tempFBO = 0;
-        if (!tempFBO) {
-            g_GLESFuncs.glGenFramebuffers(1, &tempFBO);
-        }
-        if (isRead) {
-            g_GLESFuncs.glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, (GLint*)&s_prevReadFBO);
-            g_GLESFuncs.glBindFramebuffer(GL_READ_FRAMEBUFFER, tempFBO);
-        } else {
-            g_GLESFuncs.glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, (GLint*)&s_prevDrawFBO);
-            g_GLESFuncs.glBindFramebuffer(GL_DRAW_FRAMEBUFFER, tempFBO);
-        }
-    }
-    void RestoreFBOFromTemp(Bool isRead) {
-        if (isRead) {
-            MGLOG_D("%s: Restoring previous read FBO=%u", __func__, s_prevReadFBO);
-            g_GLESFuncs.glBindFramebuffer(GL_READ_FRAMEBUFFER, s_prevReadFBO);
-        } else {
-            MGLOG_D("%s: Restoring previous draw FBO=%u", __func__, s_prevDrawFBO);
-            g_GLESFuncs.glBindFramebuffer(GL_DRAW_FRAMEBUFFER, s_prevDrawFBO);
-        }
-    }
+    // ---- Scoped driver-state guards for the readback/copy/blit emulation paths --------------------
+    // These paths borrow driver state (FBO bindings, scratch-FBO attachments, PACK
+    // pixel-store, the pack-PBO binding, scissor) that the app never asked to
+    // change; every mutation is scoped by an RAII guard so no exit path can leak
+    // it. Saves/restores go through the DirectGLES driver-state shadows
+    // (Managers.h) instead of glGetIntegerv - no driver round-trips, and redundant
+    // rebinds/resets no-op.
 
-    class TempFBOBinder {
+    // Saves the driver READ/DRAW framebuffer binding(s) and restores them on exit.
+    // Per-instance state: nesting-safe.
+    class ScopedFramebufferBinding {
     public:
-        TempFBOBinder(Bool isRead) : m_isRead(isRead) { BindTempFBO(isRead); }
-        ~TempFBOBinder() { RestoreFBOFromTemp(m_isRead); }
+        ScopedFramebufferBinding(Bool saveRead, Bool saveDraw) : m_saveRead(saveRead), m_saveDraw(saveDraw) {
+            if (m_saveRead) m_prevRead = FramebufferImpl::CurrentFramebufferBinding(FramebufferTarget::Read);
+            if (m_saveDraw) m_prevDraw = FramebufferImpl::CurrentFramebufferBinding(FramebufferTarget::Draw);
+        }
+        ~ScopedFramebufferBinding() {
+            if (m_saveRead) FramebufferImpl::BindFramebufferId(GL_READ_FRAMEBUFFER, m_prevRead);
+            if (m_saveDraw) FramebufferImpl::BindFramebufferId(GL_DRAW_FRAMEBUFFER, m_prevDraw);
+        }
+        ScopedFramebufferBinding(const ScopedFramebufferBinding&) = delete;
+        ScopedFramebufferBinding& operator=(const ScopedFramebufferBinding&) = delete;
 
     private:
-        const Bool m_isRead = false;
+        const Bool m_saveRead;
+        const Bool m_saveDraw;
+        GLuint m_prevRead = 0;
+        GLuint m_prevDraw = 0;
+    };
+
+    // Applies a PACK pixel-store configuration and restores the previous one on exit.
+    class ScopedPackState {
+    public:
+        explicit ScopedPackState(const PixelStoreImpl::PackState& desired)
+            : m_prev(PixelStoreImpl::CurrentPackState()) {
+            PixelStoreImpl::ApplyPackState(desired);
+        }
+        ~ScopedPackState() { PixelStoreImpl::ApplyPackState(m_prev); }
+        ScopedPackState(const ScopedPackState&) = delete;
+        ScopedPackState& operator=(const ScopedPackState&) = delete;
+
+    private:
+        const PixelStoreImpl::PackState m_prev;
+    };
+
+    // The frontend's current PACK parameters, for readbacks the ES driver serves
+    // directly with the client's layout.
+    static PixelStoreImpl::PackState PackStateFromContext() {
+        const auto packParams = MG_State::pGLContext->GetPixelStoreParameters(false);
+        return {static_cast<GLint>(packParams.Alignment), static_cast<GLint>(packParams.RowLength),
+                static_cast<GLint>(packParams.SkipRows), static_cast<GLint>(packParams.SkipPixels)};
+    }
+
+    // Binds a pixel PACK buffer (0 = client memory) for the scope and returns the
+    // binding to the resting 0 state on exit, so no later readback can accidentally
+    // capture into a stale PBO.
+    class ScopedPixelPackBuffer {
+    public:
+        explicit ScopedPixelPackBuffer(GLuint id) { BufferImpl::BindPixelPackBufferId(id); }
+        ~ScopedPixelPackBuffer() { BufferImpl::BindPixelPackBufferId(0); }
+        ScopedPixelPackBuffer(const ScopedPixelPackBuffer&) = delete;
+        ScopedPixelPackBuffer& operator=(const ScopedPixelPackBuffer&) = delete;
+    };
+
+    // Force-disables GL_SCISSOR_TEST for the scope (emulation blits and clears are
+    // scissored; readback copies must not be clipped by app scissor state) and
+    // restores the app state on exit, tracked via the render-state shadow.
+    class ScopedScissorDisable {
+    public:
+        ScopedScissorDisable() : m_wasEnabled(RenderStateImpl::g_syncedRenderStateParameters.ScissorTestEnabled) {
+            if (m_wasEnabled) g_GLESFuncs.glDisable(GL_SCISSOR_TEST);
+        }
+        ~ScopedScissorDisable() {
+            if (m_wasEnabled) g_GLESFuncs.glEnable(GL_SCISSOR_TEST);
+        }
+        ScopedScissorDisable(const ScopedScissorDisable&) = delete;
+        ScopedScissorDisable& operator=(const ScopedScissorDisable&) = delete;
+
+    private:
+        const Bool m_wasEnabled;
+    };
+
+    // Binds the shared scratch FBO at READ (isRead) or DRAW for one temp operation,
+    // restoring the previous binding on exit. Attachments are managed through the
+    // ScratchFBOImpl attachment shadow by the caller (see Framebuffer()).
+    class TempFBOBinder {
+    public:
+        explicit TempFBOBinder(Bool isRead)
+            : m_binding(/*saveRead=*/isRead, /*saveDraw=*/!isRead),
+              m_target(isRead ? GL_READ_FRAMEBUFFER : GL_DRAW_FRAMEBUFFER) {
+            FramebufferImpl::BindFramebufferId(m_target, ScratchFBOImpl::EnsureId(Framebuffer()));
+        }
+        ScratchFBOImpl::ScratchFramebuffer& Framebuffer() const { return ScratchFBOImpl::TempFramebuffer(); }
+        GLenum Target() const { return m_target; }
+
+    private:
+        ScopedFramebufferBinding m_binding;
+        const GLenum m_target;
     };
 
     static Bool IsDepthOnlyFormat(TextureInternalFormat format) {
@@ -2254,57 +2317,18 @@ namespace MobileGL::MG_Backend::DirectGLES {
         while (g_GLESFuncs.glGetError() != GL_NO_ERROR) {}
     }
 
+    // Binds a guaranteed-complete 1x1 scratch framebuffer at both targets for the
+    // scope (GenerateMipmap must respecify texture storage while no incomplete
+    // user FBO is bound); restores the previous bindings on exit.
     class ScopedCompleteFramebufferBinding {
     public:
-        ScopedCompleteFramebufferBinding() {
-            GLint prevReadFBO = 0;
-            GLint prevDrawFBO = 0;
-            g_GLESFuncs.glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &prevReadFBO);
-            g_GLESFuncs.glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &prevDrawFBO);
-            g_GLESFuncs.glGetIntegerv(GL_RENDERBUFFER_BINDING, &m_prevRenderbuffer);
-            m_prevReadFBO = static_cast<GLuint>(prevReadFBO);
-            m_prevDrawFBO = static_cast<GLuint>(prevDrawFBO);
-
-            EnsureScratchFBO();
-            g_GLESFuncs.glBindFramebuffer(GL_READ_FRAMEBUFFER, s_scratchFBO);
-            g_GLESFuncs.glBindFramebuffer(GL_DRAW_FRAMEBUFFER, s_scratchFBO);
-        }
-
-        ~ScopedCompleteFramebufferBinding() {
-            g_GLESFuncs.glBindFramebuffer(GL_READ_FRAMEBUFFER, m_prevReadFBO);
-            g_GLESFuncs.glBindFramebuffer(GL_DRAW_FRAMEBUFFER, m_prevDrawFBO);
-            g_GLESFuncs.glBindRenderbuffer(GL_RENDERBUFFER, static_cast<GLuint>(m_prevRenderbuffer));
+        ScopedCompleteFramebufferBinding() : m_binding(/*saveRead=*/true, /*saveDraw=*/true) {
+            FramebufferImpl::BindFramebufferId(GL_FRAMEBUFFER, ScratchFBOImpl::EnsureCompleteTinyFramebufferId());
         }
 
     private:
-        static void EnsureScratchFBO() {
-            if (s_scratchFBO != 0) {
-                return;
-            }
-
-            g_GLESFuncs.glGenFramebuffers(1, &s_scratchFBO);
-            g_GLESFuncs.glGenRenderbuffers(1, &s_scratchRBO);
-            g_GLESFuncs.glBindFramebuffer(GL_FRAMEBUFFER, s_scratchFBO);
-            g_GLESFuncs.glBindRenderbuffer(GL_RENDERBUFFER, s_scratchRBO);
-            g_GLESFuncs.glRenderbufferStorage(GL_RENDERBUFFER, GL_RGBA8, 1, 1);
-            g_GLESFuncs.glFramebufferRenderbuffer(
-                GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, s_scratchRBO);
-            const GLenum drawBuffer = GL_COLOR_ATTACHMENT0;
-            g_GLESFuncs.glDrawBuffers(1, &drawBuffer);
-            g_GLESFuncs.glReadBuffer(GL_COLOR_ATTACHMENT0);
-            MOBILEGL_ASSERT(g_GLESFuncs.glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE,
-                            "GenerateMipmap scratch framebuffer is incomplete.");
-        }
-
-        GLuint m_prevReadFBO = 0;
-        GLuint m_prevDrawFBO = 0;
-        GLint m_prevRenderbuffer = 0;
-        static GLuint s_scratchFBO;
-        static GLuint s_scratchRBO;
+        ScopedFramebufferBinding m_binding;
     };
-
-    GLuint ScopedCompleteFramebufferBinding::s_scratchFBO = 0;
-    GLuint ScopedCompleteFramebufferBinding::s_scratchRBO = 0;
 
     class ScopedDetachedTextureFramebufferAttachments {
     public:
@@ -2313,13 +2337,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
             if (texture == nullptr) {
                 return;
             }
-
-            GLint prevReadFBO = 0;
-            GLint prevDrawFBO = 0;
-            g_GLESFuncs.glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &prevReadFBO);
-            g_GLESFuncs.glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &prevDrawFBO);
-            m_prevReadFBO = static_cast<GLuint>(prevReadFBO);
-            m_prevDrawFBO = static_cast<GLuint>(prevDrawFBO);
 
             const auto backendTextureIt = TextureImpl::g_backendTextureObjects.find(texture.get());
             if (backendTextureIt == TextureImpl::g_backendTextureObjects.end() || !backendTextureIt->second) {
@@ -2361,7 +2378,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     }
 
                     const GLuint backendFBOId = backendFBO->GetBackendFramebufferId();
-                    g_GLESFuncs.glBindFramebuffer(GL_DRAW_FRAMEBUFFER, backendFBOId);
+                    FramebufferImpl::BindFramebufferId(GL_DRAW_FRAMEBUFFER, backendFBOId);
                     if (attachmentObject.IsLayered()) {
                         g_GLESFuncs.glFramebufferTexture(GL_DRAW_FRAMEBUFFER, backendAttachment, 0, 0);
                     } else {
@@ -2378,7 +2395,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
         ~ScopedDetachedTextureFramebufferAttachments() {
             for (const auto& attachment : m_detachedAttachments) {
-                g_GLESFuncs.glBindFramebuffer(GL_DRAW_FRAMEBUFFER, attachment.framebuffer);
+                FramebufferImpl::BindFramebufferId(GL_DRAW_FRAMEBUFFER, attachment.framebuffer);
                 if (attachment.layered) {
                     g_GLESFuncs.glFramebufferTexture(
                         GL_DRAW_FRAMEBUFFER, attachment.attachment, attachment.texture, attachment.level);
@@ -2388,8 +2405,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
                         attachment.texture, attachment.level);
                 }
             }
-            g_GLESFuncs.glBindFramebuffer(GL_READ_FRAMEBUFFER, m_prevReadFBO);
-            g_GLESFuncs.glBindFramebuffer(GL_DRAW_FRAMEBUFFER, m_prevDrawFBO);
         }
 
     private:
@@ -2402,51 +2417,30 @@ namespace MobileGL::MG_Backend::DirectGLES {
             Bool layered = false;
         };
 
-        GLuint m_prevReadFBO = 0;
-        GLuint m_prevDrawFBO = 0;
+        // Declared first so its restore runs after the reattach loop in the dtor.
+        ScopedFramebufferBinding m_binding{/*saveRead=*/true, /*saveDraw=*/true};
         Vector<DetachedAttachment> m_detachedAttachments;
     };
 
+    // Binds the scratch blit READ/DRAW framebuffers with scissor forced off (blits
+    // are scissored) for one texture-to-texture copy; restores the bindings and the
+    // scissor state on exit. Attachments on the two scratch FBOs are managed by the
+    // blit helpers through the ScratchFBOImpl attachment shadow.
     class ScopedDepthBlitState {
     public:
-        ScopedDepthBlitState() {
-            g_GLESFuncs.glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, reinterpret_cast<GLint*>(&m_prevReadFBO));
-            g_GLESFuncs.glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, reinterpret_cast<GLint*>(&m_prevDrawFBO));
-            g_GLESFuncs.glGetBooleanv(GL_SCISSOR_TEST, &m_prevScissorEnabled);
-            g_GLESFuncs.glDisable(GL_SCISSOR_TEST);
-
-            if (s_readFBO == 0) {
-                g_GLESFuncs.glGenFramebuffers(1, &s_readFBO);
-            }
-            if (s_drawFBO == 0) {
-                g_GLESFuncs.glGenFramebuffers(1, &s_drawFBO);
-            }
-            g_GLESFuncs.glBindFramebuffer(GL_READ_FRAMEBUFFER, s_readFBO);
+        ScopedDepthBlitState() : m_binding(/*saveRead=*/true, /*saveDraw=*/true) {
+            FramebufferImpl::BindFramebufferId(GL_READ_FRAMEBUFFER,
+                                               ScratchFBOImpl::EnsureId(ScratchFBOImpl::BlitReadFramebuffer()));
             AssertNoGLError("bind depth blit read framebuffer");
-            g_GLESFuncs.glBindFramebuffer(GL_DRAW_FRAMEBUFFER, s_drawFBO);
+            FramebufferImpl::BindFramebufferId(GL_DRAW_FRAMEBUFFER,
+                                               ScratchFBOImpl::EnsureId(ScratchFBOImpl::BlitDrawFramebuffer()));
             AssertNoGLError("bind depth blit draw framebuffer");
         }
 
-        ~ScopedDepthBlitState() {
-            g_GLESFuncs.glBindFramebuffer(GL_READ_FRAMEBUFFER, m_prevReadFBO);
-            g_GLESFuncs.glBindFramebuffer(GL_DRAW_FRAMEBUFFER, m_prevDrawFBO);
-            if (m_prevScissorEnabled == GL_TRUE) {
-                g_GLESFuncs.glEnable(GL_SCISSOR_TEST);
-            } else {
-                g_GLESFuncs.glDisable(GL_SCISSOR_TEST);
-            }
-        }
-
     private:
-        GLuint m_prevReadFBO = 0;
-        GLuint m_prevDrawFBO = 0;
-        GLboolean m_prevScissorEnabled = GL_FALSE;
-        static GLuint s_readFBO;
-        static GLuint s_drawFBO;
+        ScopedScissorDisable m_scissorOff;
+        ScopedFramebufferBinding m_binding;
     };
-
-    GLuint ScopedDepthBlitState::s_readFBO = 0;
-    GLuint ScopedDepthBlitState::s_drawFBO = 0;
 
     static void BlitDepthTexture2D(GLuint srcTexture, GLint srcLevel, GLint srcX, GLint srcY, GLsizei srcWidth,
                                    GLsizei srcHeight, GLuint dstTexture, GLint dstLevel, GLint dstX, GLint dstY,
@@ -2458,20 +2452,17 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
         ClearGLErrors();
         ScopedDepthBlitState state;
-        g_GLESFuncs.glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, 0, 0);
-        AssertNoGLError("detach depth blit read color texture");
-        g_GLESFuncs.glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, 0, 0);
-        AssertNoGLError("detach depth blit draw color texture");
-        g_GLESFuncs.glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, srcTexture,
-                                           srcLevel);
+        auto& readFB = ScratchFBOImpl::BlitReadFramebuffer();
+        auto& drawFB = ScratchFBOImpl::BlitDrawFramebuffer();
+        ScratchFBOImpl::EnsureDepthAttachment2D(readFB, GL_READ_FRAMEBUFFER, srcTexture, GL_TEXTURE_2D, srcLevel,
+                                                /*withStencil=*/false);
         AssertNoGLError("attach depth blit source texture");
-        g_GLESFuncs.glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, dstTexture,
-                                           dstLevel);
+        ScratchFBOImpl::EnsureDepthAttachment2D(drawFB, GL_DRAW_FRAMEBUFFER, dstTexture, GL_TEXTURE_2D, dstLevel,
+                                                /*withStencil=*/false);
         AssertNoGLError("attach depth blit destination texture");
-        g_GLESFuncs.glReadBuffer(GL_NONE);
+        ScratchFBOImpl::EnsureReadBuffer(readFB, GL_NONE);
         AssertNoGLError("set depth blit read buffer");
-        const GLenum drawBuffer = GL_NONE;
-        g_GLESFuncs.glDrawBuffers(1, &drawBuffer);
+        ScratchFBOImpl::EnsureDrawBuffer(drawFB, GL_NONE);
         AssertNoGLError("set depth blit draw buffer");
         MOBILEGL_ASSERT(g_GLESFuncs.glCheckFramebufferStatus(GL_READ_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE,
                         "Depth blit read framebuffer is incomplete.");
@@ -2497,24 +2488,15 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
         ClearGLErrors();
         ScopedDepthBlitState state;
-        g_GLESFuncs.glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, 0, 0);
-        AssertNoGLError("detach color blit read depth texture");
-        g_GLESFuncs.glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, 0, 0);
-        AssertNoGLError("detach color blit draw depth texture");
-        g_GLESFuncs.glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_STENCIL_ATTACHMENT, GL_TEXTURE_2D, 0, 0);
-        AssertNoGLError("detach color blit read stencil texture");
-        g_GLESFuncs.glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_STENCIL_ATTACHMENT, GL_TEXTURE_2D, 0, 0);
-        AssertNoGLError("detach color blit draw stencil texture");
-        g_GLESFuncs.glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, srcTexture,
-                                           srcLevel);
+        auto& readFB = ScratchFBOImpl::BlitReadFramebuffer();
+        auto& drawFB = ScratchFBOImpl::BlitDrawFramebuffer();
+        ScratchFBOImpl::EnsureColorAttachment2D(readFB, GL_READ_FRAMEBUFFER, srcTexture, GL_TEXTURE_2D, srcLevel);
         AssertNoGLError("attach color blit source texture");
-        g_GLESFuncs.glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, dstTexture,
-                                           dstLevel);
+        ScratchFBOImpl::EnsureColorAttachment2D(drawFB, GL_DRAW_FRAMEBUFFER, dstTexture, GL_TEXTURE_2D, dstLevel);
         AssertNoGLError("attach color blit destination texture");
-        g_GLESFuncs.glReadBuffer(GL_COLOR_ATTACHMENT0);
+        ScratchFBOImpl::EnsureReadBuffer(readFB, GL_COLOR_ATTACHMENT0);
         AssertNoGLError("set color blit read buffer");
-        const GLenum drawBuffer = GL_COLOR_ATTACHMENT0;
-        g_GLESFuncs.glDrawBuffers(1, &drawBuffer);
+        ScratchFBOImpl::EnsureDrawBuffer(drawFB, GL_COLOR_ATTACHMENT0);
         AssertNoGLError("set color blit draw buffer");
         MOBILEGL_ASSERT(g_GLESFuncs.glCheckFramebufferStatus(GL_READ_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE,
                         "Color blit read framebuffer is incomplete.");
@@ -2539,75 +2521,38 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
         ClearGLErrors();
         ScopedDepthBlitState state;
-        g_GLESFuncs.glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, srcTexture,
-                                           srcLevel);
+        auto& readFB = ScratchFBOImpl::BlitReadFramebuffer();
+        ScratchFBOImpl::EnsureColorAttachment2D(readFB, GL_READ_FRAMEBUFFER, srcTexture, GL_TEXTURE_2D, srcLevel);
         AssertNoGLError("attach R32F copy source texture");
-        g_GLESFuncs.glReadBuffer(GL_COLOR_ATTACHMENT0);
+        ScratchFBOImpl::EnsureReadBuffer(readFB, GL_COLOR_ATTACHMENT0);
         AssertNoGLError("set R32F copy read buffer");
         MOBILEGL_ASSERT(g_GLESFuncs.glCheckFramebufferStatus(GL_READ_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE,
                         "R32F copy read framebuffer is incomplete.");
         AssertNoGLError("check R32F copy read framebuffer");
 
-        GLint prevPackBuffer = 0;
-        GLint prevUnpackBuffer = 0;
-        GLint prevPackAlignment = 4;
-        GLint prevUnpackAlignment = 4;
-        GLint prevPackRowLength = 0;
-        GLint prevUnpackRowLength = 0;
-        GLint prevPackSkipRows = 0;
-        GLint prevUnpackSkipRows = 0;
-        GLint prevPackSkipPixels = 0;
-        GLint prevUnpackSkipPixels = 0;
-        GLint prevActiveTexture = GL_TEXTURE0;
-        GLint prevBoundTexture = 0;
-
-        g_GLESFuncs.glGetIntegerv(GL_PIXEL_PACK_BUFFER_BINDING, &prevPackBuffer);
-        g_GLESFuncs.glGetIntegerv(GL_PIXEL_UNPACK_BUFFER_BINDING, &prevUnpackBuffer);
-        g_GLESFuncs.glGetIntegerv(GL_PACK_ALIGNMENT, &prevPackAlignment);
-        g_GLESFuncs.glGetIntegerv(GL_UNPACK_ALIGNMENT, &prevUnpackAlignment);
-        g_GLESFuncs.glGetIntegerv(GL_PACK_ROW_LENGTH, &prevPackRowLength);
-        g_GLESFuncs.glGetIntegerv(GL_UNPACK_ROW_LENGTH, &prevUnpackRowLength);
-        g_GLESFuncs.glGetIntegerv(GL_PACK_SKIP_ROWS, &prevPackSkipRows);
-        g_GLESFuncs.glGetIntegerv(GL_UNPACK_SKIP_ROWS, &prevUnpackSkipRows);
-        g_GLESFuncs.glGetIntegerv(GL_PACK_SKIP_PIXELS, &prevPackSkipPixels);
-        g_GLESFuncs.glGetIntegerv(GL_UNPACK_SKIP_PIXELS, &prevUnpackSkipPixels);
-        g_GLESFuncs.glGetIntegerv(GL_ACTIVE_TEXTURE, &prevActiveTexture);
-
-        g_GLESFuncs.glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
-        g_GLESFuncs.glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
-        g_GLESFuncs.glPixelStorei(GL_PACK_ALIGNMENT, 4);
-        g_GLESFuncs.glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
-        g_GLESFuncs.glPixelStorei(GL_PACK_ROW_LENGTH, 0);
-        g_GLESFuncs.glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
-        g_GLESFuncs.glPixelStorei(GL_PACK_SKIP_ROWS, 0);
-        g_GLESFuncs.glPixelStorei(GL_UNPACK_SKIP_ROWS, 0);
-        g_GLESFuncs.glPixelStorei(GL_PACK_SKIP_PIXELS, 0);
-        g_GLESFuncs.glPixelStorei(GL_UNPACK_SKIP_PIXELS, 0);
-
         Vector<Float> pixels(static_cast<SizeT>(width) * static_cast<SizeT>(height));
-        g_GLESFuncs.glReadPixels(srcX, srcY, width, height, GL_RED, GL_FLOAT, pixels.data());
-        AssertNoGLError("read R32F copy pixels");
+        {
+            ScopedPixelPackBuffer packBuffer(0);
+            ScopedPackState packState(PixelStoreImpl::PackState{4, 0, 0, 0});
+            g_GLESFuncs.glReadPixels(srcX, srcY, width, height, GL_RED, GL_FLOAT, pixels.data());
+            AssertNoGLError("read R32F copy pixels");
+        }
 
-        g_GLESFuncs.glActiveTexture(GL_TEXTURE0 + TextureImpl::TempTextureUnit);
-        g_GLESFuncs.glGetIntegerv(GL_TEXTURE_BINDING_2D, &prevBoundTexture);
+        // Upload side: the rows are tightly packed floats, which the resting driver
+        // UNPACK state (4/0/0/0, maintained by ScopedDefaultUnpackState) parses
+        // correctly; the unpack-PBO binding rests at 0 by the same discipline (the
+        // call below no-ops unless something diverged).
+        BufferImpl::BindPixelUnpackBufferId(0);
+        TextureImpl::ActivateTextureUnit(TextureImpl::TempTextureUnit);
         g_GLESFuncs.glBindTexture(dstTarget, dstTexture);
         g_GLESFuncs.glTexSubImage2D(dstTarget, dstLevel, dstX, dstY, width, height, GL_RED, GL_FLOAT, pixels.data());
         AssertNoGLError("upload R32F copy pixels");
-
-        g_GLESFuncs.glBindTexture(dstTarget, static_cast<GLuint>(prevBoundTexture));
-        g_GLESFuncs.glActiveTexture(static_cast<GLenum>(prevActiveTexture));
-        TextureImpl::g_activeTextureUnit =
-            static_cast<Uint>(static_cast<GLenum>(prevActiveTexture) - GL_TEXTURE0);
-        g_GLESFuncs.glBindBuffer(GL_PIXEL_PACK_BUFFER, static_cast<GLuint>(prevPackBuffer));
-        g_GLESFuncs.glBindBuffer(GL_PIXEL_UNPACK_BUFFER, static_cast<GLuint>(prevUnpackBuffer));
-        g_GLESFuncs.glPixelStorei(GL_PACK_ALIGNMENT, prevPackAlignment);
-        g_GLESFuncs.glPixelStorei(GL_UNPACK_ALIGNMENT, prevUnpackAlignment);
-        g_GLESFuncs.glPixelStorei(GL_PACK_ROW_LENGTH, prevPackRowLength);
-        g_GLESFuncs.glPixelStorei(GL_UNPACK_ROW_LENGTH, prevUnpackRowLength);
-        g_GLESFuncs.glPixelStorei(GL_PACK_SKIP_ROWS, prevPackSkipRows);
-        g_GLESFuncs.glPixelStorei(GL_UNPACK_SKIP_ROWS, prevUnpackSkipRows);
-        g_GLESFuncs.glPixelStorei(GL_PACK_SKIP_PIXELS, prevPackSkipPixels);
-        g_GLESFuncs.glPixelStorei(GL_UNPACK_SKIP_PIXELS, prevUnpackSkipPixels);
+        // Re-bind what the texture-binding cache says lives on the temp unit so the
+        // cache stays truthful without a driver query.
+        auto* cachedBound =
+            TextureImpl::g_boundTexturesCache[TextureImpl::TempTextureUnit]
+                                             [static_cast<SizeT>(MG_Util::ConvertGLEnumToTextureTarget(dstTarget))];
+        g_GLESFuncs.glBindTexture(dstTarget, cachedBound ? cachedBound->GetBackendTextureId() : 0);
     }
 
     static void GenerateDepthTexture2DMipmap(
@@ -2720,6 +2665,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
             });
         } else {
             MGLOG_D("%s: Backend depth", __func__);
+            // nullptr means "uninitialized storage" only while no unpack PBO is
+            // bound; enforce the resting 0 state instead of assuming it (no-op
+            // through the binding cache unless something diverged).
+            BufferImpl::BindPixelUnpackBufferId(0);
             g_GLESFuncs.glTexImage2D(target, level, (GLint)internalformat, width, height, border, format, type,
                                      nullptr);
             DebugImpl::ErrorLopper::Loop([file = __FILE__, line = __LINE__](auto err) {
@@ -2731,9 +2680,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 MGLOG_D("ES error (%s:%d): %s", file, line, MG_Util::ConvertGLEnumToString(err).c_str());
             });
 
-            GLenum attachment = isStencilFormat ? GL_DEPTH_STENCIL_ATTACHMENT : GL_DEPTH_ATTACHMENT;
             TempFBOBinder tempFBOBinder(false);
-            g_GLESFuncs.glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, attachment, target, currentTex, level);
+            ScopedScissorDisable scissorOff; // the depth-copy blit below is scissored like any blit
+            ScratchFBOImpl::EnsureDepthAttachment2D(tempFBOBinder.Framebuffer(), GL_DRAW_FRAMEBUFFER,
+                                                    static_cast<Uint>(currentTex), target, level, isStencilFormat);
 
             if (g_GLESFuncs.glCheckFramebufferStatus(GL_DRAW_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
                 MGLOG_E("ES glCheckFramebufferStatus(GL_DRAW_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE");
@@ -2810,9 +2760,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
             DebugImpl::ErrorLopper::Loop([file = __FILE__, line = __LINE__](auto err) {
                 MGLOG_D("ES error (%s:%d): %s", file, line, MG_Util::ConvertGLEnumToString(err).c_str());
             });
-            GLenum attachment = isStencilFormat ? GL_DEPTH_STENCIL_ATTACHMENT : GL_DEPTH_ATTACHMENT;
             TempFBOBinder tempFBOBinder(false);
-            g_GLESFuncs.glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, attachment, target, currentTex, level);
+            ScopedScissorDisable scissorOff; // the depth-copy blit below is scissored like any blit
+            ScratchFBOImpl::EnsureDepthAttachment2D(tempFBOBinder.Framebuffer(), GL_DRAW_FRAMEBUFFER, currentTex,
+                                                    target, level, isStencilFormat);
             DebugImpl::ErrorLopper::Loop([file = __FILE__, line = __LINE__](auto err) {
                 MGLOG_D("ES error (%s:%d): %s", file, line, MG_Util::ConvertGLEnumToString(err).c_str());
             });
@@ -2857,13 +2808,15 @@ namespace MobileGL::MG_Backend::DirectGLES {
         const GLenum backendTarget =
             TextureImpl::ConvertTextureTargetToBackendGLEnum(MG_Util::ConvertGLEnumToTextureTarget(target));
         backendTexture->Bind(backendTarget, unitIndex);
-        DebugImpl::ErrorLopper::Clear();
         // ANGLE/Mesa may validate the currently bound FBO while generating mipmaps.
         // Also detach the source texture from synced FBO objects for ANGLE's validation.
         ScopedDetachedTextureFramebufferAttachments detachedAttachments(texture);
-        DebugImpl::ErrorLopper::Clear();
         // Bind a complete internal FBO that does not reference the source texture.
         ScopedCompleteFramebufferBinding completeFramebuffer;
+        // ErrorLopper is compiled out at the default log level; RecordGLError below
+        // forwards the next queued error to the APP, so stale flags from earlier
+        // best-effort calls must be drained by the always-live helper.
+        ClearGLErrors();
         g_GLESFuncs.glGenerateMipmap(backendTarget);
         RecordGLError("glGenerateMipmap", backendTarget, texture->GetFormat());
     }
@@ -2925,7 +2878,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
         if (srcTexture->GetFormat() == TextureInternalFormat::R32F ||
             dstTexture->GetFormat() == TextureInternalFormat::R32F) {
-            DebugImpl::ErrorLopper::Clear();
+            // The single glGetError below decides the fallback dispatch, and
+            // ErrorLopper::Clear is compiled out at the default log level - drain
+            // with the always-live helper so a stale flag cannot misroute a
+            // succeeded native copy into the 2D-only fallback.
+            ClearGLErrors();
             g_GLESFuncs.glCopyImageSubData(srcBackendTexture->GetBackendTextureId(), srcTarget, srcLevel, srcX, srcY, srcZ,
                                            dstBackendTexture->GetBackendTextureId(), dstTarget, dstLevel, dstX, dstY, dstZ,
                                            srcWidth, srcHeight, srcDepth);
@@ -2944,7 +2901,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return;
         }
 
-        DebugImpl::ErrorLopper::Clear();
+        ClearGLErrors();
         g_GLESFuncs.glCopyImageSubData(srcBackendTexture->GetBackendTextureId(), srcTarget, srcLevel, srcX, srcY, srcZ,
                                        dstBackendTexture->GetBackendTextureId(), dstTarget, dstLevel, dstX, dstY, dstZ,
                                        srcWidth, srcHeight, srcDepth);
@@ -3167,6 +3124,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
         FramebufferImpl::SyncCurrentFBO();
         RenderStateImpl::SyncRenderState();
 
+        // SyncCurrentFBO early-outs for the default framebuffer, so without this
+        // bind a user-FBO -> default-FBO switch would leave the clear landing on
+        // the stale driver DRAW binding (the fi/fv/uiv siblings all bind too).
+        BindCurrentFBO(FramebufferTarget::Draw);
+
         g_GLESFuncs.glClearBufferiv(buffer, drawbuffer, value);
     }
 
@@ -3214,74 +3176,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
         ForceBindCurrentFBO(FramebufferTarget::Draw);
     }
 
-    class TempPixelStoreParameterSync {
-    public:
-        TempPixelStoreParameterSync(Bool isUnpack) : m_isUnpack(isUnpack) {
-            const auto& currentParams = MG_State::pGLContext->GetPixelStoreParameters(isUnpack);
-            m_prevParams = QueryCurrentGLPixelStoreParams(isUnpack);
-            Sync(isUnpack, currentParams);
-        }
-
-        ~TempPixelStoreParameterSync() { Sync(m_isUnpack, m_prevParams); }
-
-    private:
-        const Bool m_isUnpack;
-
-        PixelStoreParameters m_prevParams;
-
-        static PixelStoreParameters QueryCurrentGLPixelStoreParams(Bool isUnpack) {
-            PixelStoreParameters p;
-            if (!isUnpack) {
-                g_GLESFuncs.glGetIntegerv(GL_PACK_ALIGNMENT, (GLint*)&p.Alignment);
-                g_GLESFuncs.glGetIntegerv(GL_PACK_ROW_LENGTH, (GLint*)&p.RowLength);
-                g_GLESFuncs.glGetIntegerv(GL_PACK_SKIP_ROWS, (GLint*)&p.SkipRows);
-                g_GLESFuncs.glGetIntegerv(GL_PACK_SKIP_PIXELS, (GLint*)&p.SkipPixels);
-                // g_GLESFuncs.glGetIntegerv(GL_PACK_IMAGE_HEIGHT, (GLint*)&p.ImageHeight);
-                // g_GLESFuncs.glGetIntegerv(GL_PACK_SKIP_IMAGES, (GLint*)&p.SkipImages);
-                // GLint tmp;
-                // g_GLESFuncs.glGetIntegerv(GL_PACK_SWAP_BYTES, &tmp);
-                // p.SwapBytes = tmp ? true : false;
-                // g_GLESFuncs.glGetIntegerv(GL_PACK_LSB_FIRST, &tmp);
-                // p.LSBFirst = tmp ? true : false;
-            } else {
-                g_GLESFuncs.glGetIntegerv(GL_UNPACK_ALIGNMENT, (GLint*)&p.Alignment);
-                g_GLESFuncs.glGetIntegerv(GL_UNPACK_ROW_LENGTH, (GLint*)&p.RowLength);
-                g_GLESFuncs.glGetIntegerv(GL_UNPACK_SKIP_ROWS, (GLint*)&p.SkipRows);
-                g_GLESFuncs.glGetIntegerv(GL_UNPACK_SKIP_PIXELS, (GLint*)&p.SkipPixels);
-                g_GLESFuncs.glGetIntegerv(GL_UNPACK_IMAGE_HEIGHT, (GLint*)&p.ImageHeight);
-                g_GLESFuncs.glGetIntegerv(GL_UNPACK_SKIP_IMAGES, (GLint*)&p.SkipImages);
-                // GLint tmp;
-                // g_GLESFuncs.glGetIntegerv(GL_UNPACK_SWAP_BYTES, &tmp);
-                // p.SwapBytes = tmp ? true : false;
-                // g_GLESFuncs.glGetIntegerv(GL_UNPACK_LSB_FIRST, &tmp);
-                // p.LSBFirst = tmp ? true : false;
-            }
-            return p;
-        }
-
-        static void Sync(Bool isUnpack, const PixelStoreParameters& params) {
-            if (!isUnpack) {
-                g_GLESFuncs.glPixelStorei(GL_PACK_ALIGNMENT, params.Alignment);
-                g_GLESFuncs.glPixelStorei(GL_PACK_ROW_LENGTH, params.RowLength);
-                g_GLESFuncs.glPixelStorei(GL_PACK_SKIP_ROWS, params.SkipRows);
-                g_GLESFuncs.glPixelStorei(GL_PACK_SKIP_PIXELS, params.SkipPixels);
-                // g_GLESFuncs.glPixelStorei(GL_PACK_IMAGE_HEIGHT, params.ImageHeight);
-                // g_GLESFuncs.glPixelStorei(GL_PACK_SKIP_IMAGES, params.SkipImages);
-                // g_GLESFuncs.glPixelStorei(GL_PACK_SWAP_BYTES, params.SwapBytes ? GL_TRUE : GL_FALSE);
-                // g_GLESFuncs.glPixelStorei(GL_PACK_LSB_FIRST, params.LSBFirst ? GL_TRUE : GL_FALSE);
-            } else {
-                g_GLESFuncs.glPixelStorei(GL_UNPACK_ALIGNMENT, params.Alignment);
-                g_GLESFuncs.glPixelStorei(GL_UNPACK_ROW_LENGTH, params.RowLength);
-                g_GLESFuncs.glPixelStorei(GL_UNPACK_SKIP_ROWS, params.SkipRows);
-                g_GLESFuncs.glPixelStorei(GL_UNPACK_SKIP_PIXELS, params.SkipPixels);
-                g_GLESFuncs.glPixelStorei(GL_UNPACK_IMAGE_HEIGHT, params.ImageHeight);
-                g_GLESFuncs.glPixelStorei(GL_UNPACK_SKIP_IMAGES, params.SkipImages);
-                // g_GLESFuncs.glPixelStorei(GL_UNPACK_SWAP_BYTES, params.SwapBytes ? GL_TRUE : GL_FALSE);
-                // g_GLESFuncs.glPixelStorei(GL_UNPACK_LSB_FIRST, params.LSBFirst ? GL_TRUE : GL_FALSE);
-            }
-        }
-    };
-
     static SizeT AlignPixelRow(SizeT rowBytes, Int alignment) {
         const SizeT resolvedAlignment = static_cast<SizeT>(std::max(alignment, 1));
         return (rowBytes + resolvedAlignment - 1) & ~(resolvedAlignment - 1);
@@ -3293,16 +3187,17 @@ namespace MobileGL::MG_Backend::DirectGLES {
         }
 
         Vector<Uint32> raw(static_cast<SizeT>(width) * static_cast<SizeT>(height));
-        GLint prevPixelPackBuffer = 0;
-        g_GLESFuncs.glGetIntegerv(GL_PIXEL_PACK_BUFFER_BINDING, &prevPixelPackBuffer);
-        g_GLESFuncs.glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
-        g_GLESFuncs.glPixelStorei(GL_PACK_ALIGNMENT, 1);
-        g_GLESFuncs.glPixelStorei(GL_PACK_ROW_LENGTH, 0);
-        g_GLESFuncs.glPixelStorei(GL_PACK_SKIP_ROWS, 0);
-        g_GLESFuncs.glPixelStorei(GL_PACK_SKIP_PIXELS, 0);
-        g_GLESFuncs.glReadPixels(x, y, width, height, GL_DEPTH_COMPONENT, GL_UNSIGNED_INT, raw.data());
-        const GLenum readError = g_GLESFuncs.glGetError();
-        g_GLESFuncs.glBindBuffer(GL_PIXEL_PACK_BUFFER, static_cast<GLuint>(prevPixelPackBuffer));
+        GLenum readError = GL_NO_ERROR;
+        {
+            ScopedPixelPackBuffer packBuffer(0);
+            ScopedPackState packState(PixelStoreImpl::PackState{1, 0, 0, 0});
+            // Drain first: a stale flag some earlier best-effort call left queued
+            // must not be misattributed to this read (it would silently drop the
+            // whole readback in production builds where ErrorLopper is compiled out).
+            ClearGLErrors();
+            g_GLESFuncs.glReadPixels(x, y, width, height, GL_DEPTH_COMPONENT, GL_UNSIGNED_INT, raw.data());
+            readError = g_GLESFuncs.glGetError();
+        }
         if (readError != GL_NO_ERROR) {
             MGLOG_E("ReadPixels: depth GL_FLOAT fallback read failed: %s",
                     MG_Util::ConvertGLEnumToString(readError).c_str());
@@ -3350,16 +3245,15 @@ namespace MobileGL::MG_Backend::DirectGLES {
         }
 
         Vector<Uint8> raw(static_cast<SizeT>(width) * static_cast<SizeT>(height));
-        GLint prevPixelPackBuffer = 0;
-        g_GLESFuncs.glGetIntegerv(GL_PIXEL_PACK_BUFFER_BINDING, &prevPixelPackBuffer);
-        g_GLESFuncs.glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
-        g_GLESFuncs.glPixelStorei(GL_PACK_ALIGNMENT, 1);
-        g_GLESFuncs.glPixelStorei(GL_PACK_ROW_LENGTH, 0);
-        g_GLESFuncs.glPixelStorei(GL_PACK_SKIP_ROWS, 0);
-        g_GLESFuncs.glPixelStorei(GL_PACK_SKIP_PIXELS, 0);
-        g_GLESFuncs.glReadPixels(x, y, width, height, GL_STENCIL_INDEX, GL_UNSIGNED_BYTE, raw.data());
-        const GLenum readError = g_GLESFuncs.glGetError();
-        g_GLESFuncs.glBindBuffer(GL_PIXEL_PACK_BUFFER, static_cast<GLuint>(prevPixelPackBuffer));
+        GLenum readError = GL_NO_ERROR;
+        {
+            ScopedPixelPackBuffer packBuffer(0);
+            ScopedPackState packState(PixelStoreImpl::PackState{1, 0, 0, 0});
+            // Drain first: see ReadPixelsDepthFloatViaUnsignedInt.
+            ClearGLErrors();
+            g_GLESFuncs.glReadPixels(x, y, width, height, GL_STENCIL_INDEX, GL_UNSIGNED_BYTE, raw.data());
+            readError = g_GLESFuncs.glGetError();
+        }
         if (readError != GL_NO_ERROR) {
             MGLOG_E("ReadPixels: stencil GL_UNSIGNED_INT fallback read failed: %s",
                     MG_Util::ConvertGLEnumToString(readError).c_str());
@@ -3540,13 +3434,17 @@ namespace MobileGL::MG_Backend::DirectGLES {
     }
 
     // Repacks wide RGBA(_INTEGER) rows into the client's (format, type) layout, honoring the
-    // client-side PACK parameters and the bound pixel-pack buffer. `wide` holds `height` rows of
-    // `width` texels, 4 components x GetReadbackComponentSize(wideType) bytes each.
-    // honorPackImageParams: GL_PACK_IMAGE_HEIGHT / GL_PACK_SKIP_IMAGES apply to GetTexImage of 3D
-    // images only; ReadPixels ignores them (GL 3.3 section 4.3.1).
-    static Bool StoreWideRowsToClient(const Uint8* wide, GLenum wideType, GLsizei width, GLsizei height,
-                                      const ReadbackChannelMapping& mapping, GLenum type, void* pixels,
-                                      Bool honorPackImageParams) {
+    // client-side PACK parameters and the bound pixel-pack buffer. `wide` holds
+    // `sliceHeight * sliceCount` rows of `width` texels (slice-major, tightly stacked),
+    // 4 components x GetReadbackComponentSize(wideType) bytes each.
+    // applyPackImageParams: GL_PACK_IMAGE_HEIGHT / GL_PACK_SKIP_IMAGES apply only to GetTexImage
+    // of 3D/array images; ReadPixels and 2D GetTexImage ignore them (GL 3.3 sections 4.3.1, 6.1.4).
+    // Per the GL addressing rules, slice k row j lands at
+    // SKIP_IMAGES*imageStride + SKIP_ROWS*rowStride + SKIP_PIXELS*pixelBytes
+    //   + k*imageStride + j*rowStride, with imageStride = max(IMAGE_HEIGHT, sliceHeight)*rowStride.
+    static Bool StoreWideRowsToClient(const Uint8* wide, GLenum wideType, GLsizei width, GLsizei sliceHeight,
+                                      GLsizei sliceCount, const ReadbackChannelMapping& mapping, GLenum type,
+                                      void* pixels, Bool applyPackImageParams) {
         const SizeT dstPixelBytes = GetReadbackDstPixelSize(mapping, type);
         if (dstPixelBytes == 0) {
             return false;
@@ -3559,23 +3457,27 @@ namespace MobileGL::MG_Backend::DirectGLES {
             MG_State::pGLContext->GetBufferBindingSlot(BufferTarget::PixelPack).GetBoundObject();
 
         // Destination layout is computed from the client-side PACK parameters; only the actual pixel
-        // rows are written so skip regions of the destination stay untouched. GL_PACK_SKIP_IMAGES
-        // skips whole 2D images of GL_PACK_IMAGE_HEIGHT (or `height`) rows for 3D readbacks.
+        // rows are written so skip regions of the destination stay untouched.
         const auto packParams = MG_State::pGLContext->GetPixelStoreParameters(false);
         const SizeT rowPixels = static_cast<SizeT>(packParams.RowLength > 0 ? packParams.RowLength : width);
         const SizeT dstRowStride = AlignPixelRow(rowPixels * dstPixelBytes, packParams.Alignment);
-        const SizeT imageRows = static_cast<SizeT>(packParams.ImageHeight > 0 ? packParams.ImageHeight : height);
+        const SizeT imageRows =
+            applyPackImageParams && packParams.ImageHeight > 0
+                ? static_cast<SizeT>(packParams.ImageHeight)
+                : static_cast<SizeT>(sliceHeight);
+        const SizeT dstImageStride = imageRows * dstRowStride;
         const SizeT skipImages =
-            honorPackImageParams ? static_cast<SizeT>(std::max(packParams.SkipImages, 0)) : SizeT{0};
-        const SizeT dstSkipOffset = skipImages * imageRows * dstRowStride +
+            applyPackImageParams ? static_cast<SizeT>(std::max(packParams.SkipImages, 0)) : SizeT{0};
+        const SizeT dstSkipOffset = skipImages * dstImageStride +
                                     static_cast<SizeT>(std::max(packParams.SkipRows, 0)) * dstRowStride +
                                     static_cast<SizeT>(std::max(packParams.SkipPixels, 0)) * dstPixelBytes;
         const SizeT dstRowBytes = static_cast<SizeT>(width) * dstPixelBytes;
 
         const SizeT pboBaseOffset = reinterpret_cast<SizeT>(pixels); // with a PBO, `pixels` is an offset
         if (pixelPackBufferObject) {
-            const SizeT requiredSize =
-                pboBaseOffset + dstSkipOffset + static_cast<SizeT>(height - 1) * dstRowStride + dstRowBytes;
+            const SizeT requiredSize = pboBaseOffset + dstSkipOffset +
+                                       static_cast<SizeT>(sliceCount - 1) * dstImageStride +
+                                       static_cast<SizeT>(sliceHeight - 1) * dstRowStride + dstRowBytes;
             if (requiredSize > pixelPackBufferObject->GetSize()) {
                 MGLOG_E("Readback conversion: pixel pack buffer is too small");
                 return true;
@@ -3586,26 +3488,31 @@ namespace MobileGL::MG_Backend::DirectGLES {
         const SizeT srcPixelBytes = 4 * srcComponentSize;
         Vector<Uint8> convertedRow(dstRowBytes);
 
-        for (GLsizei row = 0; row < height; ++row) {
-            const Uint8* srcRow = wide + static_cast<SizeT>(row) * static_cast<SizeT>(width) * srcPixelBytes;
-            ReadbackImpl::ConvertWideReadbackRow(srcRow, convertedRow.data(), static_cast<SizeT>(width), wideType,
-                                                 mapping, type);
+        for (GLsizei slice = 0; slice < sliceCount; ++slice) {
+            for (GLsizei row = 0; row < sliceHeight; ++row) {
+                const SizeT flatRow = static_cast<SizeT>(slice) * static_cast<SizeT>(sliceHeight) +
+                                      static_cast<SizeT>(row);
+                const Uint8* srcRow = wide + flatRow * static_cast<SizeT>(width) * srcPixelBytes;
+                ReadbackImpl::ConvertWideReadbackRow(srcRow, convertedRow.data(), static_cast<SizeT>(width), wideType,
+                                                     mapping, type);
 
-            if (packParams.SwapBytes) {
-                const SizeT groupSize = isPackedType ? packedLayout.byteSize : dstComponentSize;
-                if (groupSize > 1) {
-                    for (SizeT offset = 0; offset + groupSize <= dstRowBytes; offset += groupSize) {
-                        std::reverse(convertedRow.data() + offset, convertedRow.data() + offset + groupSize);
+                if (packParams.SwapBytes) {
+                    const SizeT groupSize = isPackedType ? packedLayout.byteSize : dstComponentSize;
+                    if (groupSize > 1) {
+                        for (SizeT offset = 0; offset + groupSize <= dstRowBytes; offset += groupSize) {
+                            std::reverse(convertedRow.data() + offset, convertedRow.data() + offset + groupSize);
+                        }
                     }
                 }
-            }
 
-            const SizeT dstOffset = dstSkipOffset + static_cast<SizeT>(row) * dstRowStride;
-            if (pixelPackBufferObject) {
-                pixelPackBufferObject->WritebackFromBackend({convertedRow.data(), dstRowBytes},
-                                                            pboBaseOffset + dstOffset);
-            } else {
-                Memcpy(static_cast<Uint8*>(pixels) + dstOffset, convertedRow.data(), dstRowBytes);
+                const SizeT dstOffset = dstSkipOffset + static_cast<SizeT>(slice) * dstImageStride +
+                                        static_cast<SizeT>(row) * dstRowStride;
+                if (pixelPackBufferObject) {
+                    pixelPackBufferObject->WritebackFromBackend({convertedRow.data(), dstRowBytes},
+                                                                pboBaseOffset + dstOffset);
+                } else {
+                    Memcpy(static_cast<Uint8*>(pixels) + dstOffset, convertedRow.data(), dstRowBytes);
+                }
             }
         }
         return true;
@@ -3684,13 +3591,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
         }
 
-        GLint prevPixelPackBuffer = 0;
-        g_GLESFuncs.glGetIntegerv(GL_PIXEL_PACK_BUFFER_BINDING, &prevPixelPackBuffer);
-        g_GLESFuncs.glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
-        g_GLESFuncs.glPixelStorei(GL_PACK_ALIGNMENT, 1);
-        g_GLESFuncs.glPixelStorei(GL_PACK_ROW_LENGTH, 0);
-        g_GLESFuncs.glPixelStorei(GL_PACK_SKIP_ROWS, 0);
-        g_GLESFuncs.glPixelStorei(GL_PACK_SKIP_PIXELS, 0);
+        ScopedPixelPackBuffer packBuffer(0);
+        ScopedPackState packState(PixelStoreImpl::PackState{1, 0, 0, 0});
 
         Vector<Uint8> wide;
         GLenum wideType = GL_NONE;
@@ -3719,7 +3621,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 break;
             }
         }
-        g_GLESFuncs.glBindBuffer(GL_PIXEL_PACK_BUFFER, static_cast<GLuint>(prevPixelPackBuffer));
         if (wideType == GL_NONE) {
             MGLOG_E("Readback conversion: ES accepted no wide read type for format %s type %s, skipping readback",
                     MG_Util::ConvertGLEnumToString(format).c_str(), MG_Util::ConvertGLEnumToString(type).c_str());
@@ -3748,7 +3649,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             ExpandNarrowWideRead(wide, static_cast<SizeT>(width) * static_cast<SizeT>(height), readChannels, wideType);
         }
 
-        if (!StoreWideRowsToClient(wide.data(), wideType, width, height, mapping, type, pixels,
+        if (!StoreWideRowsToClient(wide.data(), wideType, width, height, /*sliceCount=*/1, mapping, type, pixels,
                                    honorPackImageParams)) {
             return false;
         }
@@ -3765,7 +3666,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
     // authoritative, which holds for non-renderable formats (they can never be GPU-written).
     static Bool GetTexImageViaShadowConversion(MG_State::GLState::TextureObjectMipmap* textureMipmapObject,
                                                TextureUploadTarget uploadTarget, GLint level, GLsizei width,
-                                               GLsizei height, GLenum format, GLenum type, void* pixels) {
+                                               GLsizei sliceHeight, GLsizei sliceCount, GLenum format, GLenum type,
+                                               void* pixels, Bool applyPackImageParams) {
         ReadbackChannelMapping mapping{};
         if (!GetReadbackChannelMapping(format, mapping)) {
             return false;
@@ -3773,7 +3675,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         if (GetReadbackDstPixelSize(mapping, type) == 0) {
             return false;
         }
-        if (width <= 0 || height <= 0) {
+        if (width <= 0 || sliceHeight <= 0 || sliceCount <= 0) {
             return true;
         }
         const auto& pixelPackBufferObject =
@@ -3791,7 +3693,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
         Bool isInteger = false;
         Bool isSigned = false;
         if (!MG_Util::PixelStoreProcessor::DecodeShadowDataToWideRGBA(
-                textureMipmapObject->GetFormat(), shadow, static_cast<SizeT>(width) * static_cast<SizeT>(height),
+                textureMipmapObject->GetFormat(), shadow,
+                static_cast<SizeT>(width) * static_cast<SizeT>(sliceHeight) * static_cast<SizeT>(sliceCount),
                 wide, isInteger, isSigned)) {
             return false;
         }
@@ -3800,8 +3703,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return false;
         }
         const GLenum wideType = isInteger ? (isSigned ? GL_INT : GL_UNSIGNED_INT) : GL_FLOAT;
-        if (!StoreWideRowsToClient(wide.data(), wideType, width, height, mapping, type, pixels,
-                                   /*honorPackImageParams=*/true)) {
+        if (!StoreWideRowsToClient(wide.data(), wideType, width, sliceHeight, sliceCount, mapping, type, pixels,
+                                   applyPackImageParams)) {
             return false;
         }
         MGLOG_D("GetTexImage: converted %s/%s from the CPU shadow copy",
@@ -3845,8 +3748,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
         MGLOG_D("ReadPixels: BindCurrentFBO(Read)");
         BindCurrentFBO(FramebufferTarget::Read);
 
-        MGLOG_D("ReadPixels: Applying TempPixelStoreParameterSync (PACK)");
-        TempPixelStoreParameterSync tempPackParamsSync(false);
+        MGLOG_D("ReadPixels: Applying the PACK pixel-store scope");
+        ScopedPackState packParamsScope(PackStateFromContext());
 
         GLenum fbStatus = g_GLESFuncs.glCheckFramebufferStatus(GL_READ_FRAMEBUFFER);
         MGLOG_D("ReadPixels: GL_READ_FRAMEBUFFER status = %s", MG_Util::ConvertGLEnumToString(fbStatus).c_str());
@@ -3884,27 +3787,28 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return;
         }
 
-        // Handle PBO
+        // Handle PBO. The pack binding is scoped: it returns to the resting 0 state
+        // on every exit path, so a later readback can never land in a stale PBO
+        // (the driver-level binding used to stay on the user PBO after this call,
+        // capturing subsequent client-memory readbacks into it).
         auto& pixelPackBufferObject =
             MG_State::pGLContext->GetBufferBindingSlot(BufferTarget::PixelPack).GetBoundObject();
-        Bool usePBO;
-        GLuint prevPixelPackBuffer = 0;
+        Bool usePBO = false;
+        GLuint packBufferId = 0;
         if (pixelPackBufferObject) {
             auto* backendResource = BufferImpl::EnsureBufferResource(pixelPackBufferObject);
             MGLOG_D("ReadPixels: Using PBO %u", pixelPackBufferObject->GetExternalIndex());
-            usePBO = true;
-
             if (!backendResource || backendResource->id == 0) {
                 MGLOG_E("ReadPixels: No backend buffer found for PBO %u.",
                         pixelPackBufferObject ? pixelPackBufferObject->GetExternalIndex() : 0);
                 return;
             }
-            BufferImpl::BindBufferId(GL_PIXEL_PACK_BUFFER, backendResource->id);
-            g_GLESFuncs.glGetIntegerv(GL_PIXEL_PACK_BUFFER_BINDING, (GLint*)&prevPixelPackBuffer);
+            usePBO = true;
+            packBufferId = backendResource->id;
         } else {
-            usePBO = false;
             MGLOG_D("ReadPixels: Not using PBO");
         }
+        ScopedPixelPackBuffer packBufferBinding(packBufferId);
 
         MGLOG_D("ReadPixels: glReadPixels()");
         DrainESErrors();
@@ -3945,8 +3849,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
             } else {
                 MGLOG_E("ReadPixels: glMapBufferRange returned nullptr");
             }
-            MGLOG_D("ReadPixels: Restoring previous pixel pack buffer binding %u", prevPixelPackBuffer);
-            g_GLESFuncs.glBindBuffer(GL_PIXEL_PACK_BUFFER, prevPixelPackBuffer);
         }
         MGLOG_D("ReadPixels: finished");
     }
@@ -4025,24 +3927,22 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
         MGLOG_D("GetTexImage: Binding temporary FBO");
         TempFBOBinder tempFBOBinder(true);
+        auto& tempFB = tempFBOBinder.Framebuffer();
 
-        MGLOG_D("GetTexImage: glFramebufferTexture2D(level=%d)", level);
-        // The temp FBO is reused across GetTexImage calls: detach the previous color attachment first
-        // so a failed attach below leaves the FBO incomplete instead of silently reading stale contents.
-        g_GLESFuncs.glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, 0, 0);
+        MGLOG_D("GetTexImage: attaching level %d to the scratch FBO", level);
         const GLenum backendAttachTarget = TextureImpl::ConvertTextureUploadTargetToBackendGLEnum(
             MG_Util::ConvertGLEnumToTextureUploadTarget(target));
         if (backendAttachTarget == GL_TEXTURE_3D || backendAttachTarget == GL_TEXTURE_2D_ARRAY) {
             // ES cannot attach 3D/array textures through glFramebufferTexture2D; read layer 0. Reads
             // of deeper slices are served from the CPU shadow instead (see the shadow-first branch).
-            g_GLESFuncs.glFramebufferTextureLayer(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, backendTexId, level, 0);
+            ScratchFBOImpl::EnsureColorAttachmentLayer(tempFB, GL_READ_FRAMEBUFFER, backendTexId, level, 0);
         } else {
-            g_GLESFuncs.glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
-                                               backendAttachTarget == GL_UNKNOWN_MGL ? target : backendAttachTarget,
-                                               backendTexId, level);
+            ScratchFBOImpl::EnsureColorAttachment2D(
+                tempFB, GL_READ_FRAMEBUFFER, backendTexId,
+                backendAttachTarget == GL_UNKNOWN_MGL ? target : backendAttachTarget, level);
         }
         MGLOG_D("GetTexImage: glReadBuffer(GL_COLOR_ATTACHMENT0)");
-        g_GLESFuncs.glReadBuffer(GL_COLOR_ATTACHMENT0);
+        ScratchFBOImpl::EnsureReadBuffer(tempFB, GL_COLOR_ATTACHMENT0);
 
         GLenum fbStatus = g_GLESFuncs.glCheckFramebufferStatus(GL_READ_FRAMEBUFFER);
         MGLOG_D("GetTexImage: GL_READ_FRAMEBUFFER status = %s", MG_Util::ConvertGLEnumToString(fbStatus).c_str());
@@ -4055,8 +3955,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
             MGLOG_D("ES error (%s:%d): %s", file, line, MG_Util::ConvertGLEnumToString(err).c_str());
         });
 
-        MGLOG_D("GetTexImage: Applying TempPixelStoreParameterSync (PACK)");
-        TempPixelStoreParameterSync tempPackParamsSync(false);
+        MGLOG_D("GetTexImage: Applying the PACK pixel-store scope");
+        ScopedPackState packParamsScope(PackStateFromContext());
 
         DebugImpl::ErrorLopper::Loop([file = __FILE__, line = __LINE__](auto err) {
             MGLOG_D("ES error (%s:%d): %s", file, line, MG_Util::ConvertGLEnumToString(err).c_str());
@@ -4092,25 +3992,29 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // for normalized attachments), while the conversion path reads a wide format that is always
         // accepted and repacks on the CPU.
         if (convertible) {
+            // GL_PACK_IMAGE_HEIGHT/GL_PACK_SKIP_IMAGES only apply to 3D/array image
+            // readbacks; 2D targets must ignore them (GL 3.3 section 6.1.4).
+            const Bool applyPackImageParams =
+                backendAttachTarget == GL_TEXTURE_3D || backendAttachTarget == GL_TEXTURE_2D_ARRAY;
             // 3D/array images read back every slice, but the FBO path can only read one layer:
-            // multi-slice reads are served from the CPU shadow (depth as extra rows, tight layout).
-            const GLsizei shadowRows = size.y() * std::max(size.z(), 1);
+            // multi-slice reads are served from the CPU shadow (slice-major, tight layout).
+            const GLsizei sliceCount = std::max(size.z(), 1);
             const Bool multiSlice = size.z() > 1;
             if (multiSlice &&
                 GetTexImageViaShadowConversion(textureMipmapObject,
                                                MG_Util::ConvertGLEnumToTextureUploadTarget(target), level, size.x(),
-                                               shadowRows, format, type, pixels)) {
+                                               size.y(), sliceCount, format, type, pixels, applyPackImageParams)) {
                 MGLOG_D("GetTexImage: finished via shadow conversion");
                 return;
             }
             if (tempFBOComplete && ReadPixelsViaFormatConversion(0, 0, size.x(), size.y(), format, type, pixels,
-                                                                 /*honorPackImageParams=*/true)) {
+                                                                 applyPackImageParams)) {
                 MGLOG_D("GetTexImage: finished via client-format conversion");
                 return;
             }
             if (GetTexImageViaShadowConversion(textureMipmapObject,
                                                MG_Util::ConvertGLEnumToTextureUploadTarget(target), level, size.x(),
-                                               shadowRows, format, type, pixels)) {
+                                               size.y(), sliceCount, format, type, pixels, applyPackImageParams)) {
                 MGLOG_D("GetTexImage: finished via shadow conversion");
                 return;
             }
@@ -4127,26 +4031,26 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return;
         }
 
-        // Handle PBO
+        // Handle PBO. The pack binding is scoped: it returns to the resting 0 state
+        // on every exit path, so a later readback can never land in a stale PBO.
         auto& pixelPackBufferObject =
             MG_State::pGLContext->GetBufferBindingSlot(BufferTarget::PixelPack).GetBoundObject();
-        Bool usePBO;
-        GLuint prevPixelPackBuffer = 0;
+        Bool usePBO = false;
+        GLuint packBufferId = 0;
         if (pixelPackBufferObject) {
             auto* backendResource = BufferImpl::EnsureBufferResource(pixelPackBufferObject);
             MGLOG_D("GetTexImage: Using PBO %u", pixelPackBufferObject->GetExternalIndex());
-            usePBO = true;
             if (!backendResource || backendResource->id == 0) {
                 MGLOG_E("GetTexImage: No backend buffer found for PBO %u.",
                         pixelPackBufferObject ? pixelPackBufferObject->GetExternalIndex() : 0);
                 return;
             }
-            BufferImpl::BindBufferId(GL_PIXEL_PACK_BUFFER, backendResource->id);
-            g_GLESFuncs.glGetIntegerv(GL_PIXEL_PACK_BUFFER_BINDING, (GLint*)&prevPixelPackBuffer);
+            usePBO = true;
+            packBufferId = backendResource->id;
         } else {
-            usePBO = false;
             MGLOG_D("GetTexImage: Not using PBO");
         }
+        ScopedPixelPackBuffer packBufferBinding(packBufferId);
 
         DebugImpl::ErrorLopper::Loop([file = __FILE__, line = __LINE__](auto err) {
             MGLOG_D("ES error (%s:%d): %s", file, line, MG_Util::ConvertGLEnumToString(err).c_str());
@@ -4173,9 +4077,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
             } else {
                 MGLOG_E("ReadPixels: glMapBufferRange returned nullptr");
             }
-            MGLOG_D("ReadPixels: Restoring previous pixel pack buffer binding %u", prevPixelPackBuffer);
-
-            g_GLESFuncs.glBindBuffer(GL_PIXEL_PACK_BUFFER, prevPixelPackBuffer);
         }
 
         DebugImpl::ErrorLopper::Loop([file = __FILE__, line = __LINE__](auto err) {
@@ -4531,6 +4432,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // after a MakeCurrent is cheaper than trusting a possibly-reset context.
         PrgramImpl::g_lastUsedBackendProgramId = 0;
         BufferImpl::InvalidateIndexedBufferBindingCache();
+        BufferImpl::InvalidatePixelBufferBindingCaches();
+        FramebufferImpl::InvalidateFramebufferBindingCache();
+        PixelStoreImpl::InvalidatePackStateCache();
         // eglSwapInterval requires a current context; a request made while none was
         // current (and dropped by the driver) is retried here.
         ApplyRequestedSwapInterval();
@@ -4839,6 +4743,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
     void DestroyEGLContext() {
         BufferImpl::OnBackendContextDestroyed();
+        ScratchFBOImpl::OnBackendContextDestroyed();
+        FramebufferImpl::InvalidateFramebufferBindingCache();
+        PixelStoreImpl::InvalidatePackStateCache();
+        // Texture ids belong to the dying context; wrappers destroyed later must
+        // not glDeleteTextures a recycled name in a successor context.
+        ++TextureImpl::g_textureContextGeneration;
         g_backendContextOwnerThread.store(std::thread::id{}, std::memory_order_release);
         // Outstanding fence handles now refer to a dead context; treat them as
         // signaled from here on.

@@ -178,6 +178,17 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // glBindBuffer with a redundant-bind cache for GL_ARRAY_BUFFER.
         void BindBufferId(GLenum target, Uint id);
         void InvalidateArrayBufferBindingCache();
+        // Redundant-bind caches for the driver-level GL_PIXEL_PACK/UNPACK_BUFFER
+        // bindings. Every backend readback (glReadPixels / pack-PBO map) and pixel
+        // upload site routes its binding through these so the shadow always matches
+        // the driver; the resting state between operations is 0, which keeps any
+        // path that implicitly assumes "no PBO bound" correct. Scrubbed when a
+        // buffer id is deleted/pooled (GL resets a deleted buffer's bindings to 0,
+        // and a recycled name matching the shadow would false-skip the rebind) and
+        // invalidated on MakeCurrent (context may reset).
+        void BindPixelPackBufferId(Uint id);
+        void BindPixelUnpackBufferId(Uint id);
+        void InvalidatePixelBufferBindingCaches();
         // Redundant-bind cache for INDEXED buffer bindings (glBindBufferBase/Range on
         // GL_UNIFORM_BUFFER / GL_SHADER_STORAGE_BUFFER): skips the GL call when the
         // (id, range) already at that index matches, like the array-buffer/texture/
@@ -332,6 +343,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
         class BackendTextureObject {
         public:
             BackendTextureObject();
+            // Deletes the GL texture (frontend glDeleteTextures used to leak every
+            // backend id for the context lifetime) and scrubs the binding/scratch-FBO
+            // shadows so a recycled name or heap address cannot false-skip a rebind.
+            ~BackendTextureObject();
+            BackendTextureObject(const BackendTextureObject&) = delete;
+            BackendTextureObject& operator=(const BackendTextureObject&) = delete;
             void SyncMipmapsToBackend(const SharedPtr<MG_State::GLState::ITextureObject>& stateTextureObject);
             void SyncBuiltinSamplerToBackend(const SharedPtr<MG_State::GLState::ITextureObject>& stateTextureObject);
             void SyncTextureParamsToBackend(const SharedPtr<MG_State::GLState::ITextureObject>& stateTextureObject);
@@ -343,6 +360,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
             void RecreateBackendTexture();
 
             Uint m_backendTextureId = 0;
+            // ES context generation the id was created under; a dtor running after
+            // that context died must not delete a foreign (recycled) name.
+            Uint m_contextGeneration = 0;
             Bool m_isInitialized = false;
             Bool m_imageBindableStorageRequired = false;
             Bool m_backendStorageImmutable = false;
@@ -367,6 +387,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
                      MG_State::GLState::TextureState::MAX_TEXTURE_IMAGE_UNITS>
             g_boundTexturesCache;
         extern Uint g_activeTextureUnit;
+        // Bumped when the backend ES context is destroyed; texture ids stamped with
+        // an older generation belong to a dead context and must not be deleted.
+        extern Uint g_textureContextGeneration;
     } // namespace TextureImpl
 
     namespace FramebufferImpl {
@@ -418,7 +441,98 @@ namespace MobileGL::MG_Backend::DirectGLES {
         extern Array<Uint16, SizeT(FramebufferTarget::FramebufferTargetCount)> g_fboSyncedObjectVersions;
         extern Array<MG_State::GLState::FramebufferObject*, SizeT(FramebufferTarget::FramebufferTargetCount)>
             g_fboSyncedObjects;
+
+        // Driver-level READ/DRAW framebuffer-binding shadow. Every backend
+        // glBindFramebuffer routes through BindFramebufferId so scoped helpers can
+        // save/restore the current binding without a glGetIntegerv round-trip (that
+        // query forces a driver pipeline sync) and so redundant rebinds no-op.
+        // Starts unknown; the first CurrentFramebufferBinding() query pins it from
+        // the driver once. Invalidated on MakeCurrent (context may reset).
+        // GL_FRAMEBUFFER binds both targets.
+        void BindFramebufferId(GLenum fbTarget, Uint id);
+        Uint CurrentFramebufferBinding(FramebufferTarget target);
+        void InvalidateFramebufferBindingCache();
     } // namespace FramebufferImpl
+
+    // Shared scratch framebuffers for the readback/copy/blit emulation paths, with a
+    // driver-side attachment shadow: repeated uses skip redundant detach/attach GL
+    // calls, and an attachment left by one use (e.g. a depth copy's DEPTH_STENCIL
+    // texture) is detached exactly when a later use of another aspect would
+    // otherwise inherit it (stale cross-aspect attachments made the shared temp FBO
+    // incomplete and silently degraded later readbacks).
+    namespace ScratchFBOImpl {
+        struct ScratchFramebuffer {
+            Uint id = 0;
+            // false => attachment state unknown; scrub every point on next use.
+            // A fresh FBO starts with nothing attached, so creation sets it true.
+            Bool attachmentsKnown = false;
+            Uint colorTex = 0;
+            GLenum colorTarget = 0;
+            GLint colorLevel = 0;
+            GLint colorLayer = -1; // >= 0 => attached via glFramebufferTextureLayer
+            Uint depthTex = 0;
+            GLenum depthTarget = 0;
+            GLint depthLevel = 0;
+            Bool depthHasStencil = false;
+            // Per-FBO read/draw buffer state (0 = unknown, set on first use).
+            GLenum readBuffer = 0;
+            GLenum drawBuffer = 0;
+        };
+        ScratchFramebuffer& TempFramebuffer();     // GetTexImage READ / CopyTex*Image2D depth DRAW
+        ScratchFramebuffer& BlitReadFramebuffer(); // texture-to-texture blit source
+        ScratchFramebuffer& BlitDrawFramebuffer(); // texture-to-texture blit destination
+        // Returns the GL id, generating it if needed (requires a current ES context).
+        Uint EnsureId(ScratchFramebuffer& fb);
+        // The fb must currently be bound at fbTarget (glReadBuffer/glDrawBuffers
+        // target the READ/DRAW binding respectively). Each Ensure* performs the
+        // minimal detach/attach set and keeps the shadow in sync; a failed attach
+        // records the point as detached so the completeness check fails instead of
+        // silently reading a stale attachment.
+        void EnsureColorAttachment2D(ScratchFramebuffer& fb, GLenum fbTarget, Uint tex, GLenum texTarget, GLint level);
+        void EnsureColorAttachmentLayer(ScratchFramebuffer& fb, GLenum fbTarget, Uint tex, GLint level, GLint layer);
+        void EnsureDepthAttachment2D(ScratchFramebuffer& fb, GLenum fbTarget, Uint tex, GLenum texTarget, GLint level,
+                                     Bool withStencil);
+        void EnsureNoColorAttachment(ScratchFramebuffer& fb, GLenum fbTarget);
+        void EnsureNoDepthAttachment(ScratchFramebuffer& fb, GLenum fbTarget);
+        void EnsureReadBuffer(ScratchFramebuffer& fb, GLenum readBuffer);
+        void EnsureDrawBuffer(ScratchFramebuffer& fb, GLenum drawBuffer);
+        // A 1x1 RGBA8-renderbuffer-complete FBO (GenerateMipmap needs a complete
+        // binding while respecifying texture storage). Attachment is set once at
+        // creation and never changes.
+        Uint EnsureCompleteTinyFramebufferId();
+        // A backend texture id is being deleted or respecified: a scratch FBO still
+        // referencing it would hold a dangling attachment (ES only auto-detaches
+        // from the *bound* framebuffer), and a recycled name could false-skip a
+        // re-attach; force a full scrub on next use.
+        void NoteTextureIdDeleted(Uint textureId);
+        // The ES context (and the scratch FBO ids with it) is going away.
+        void OnBackendContextDestroyed();
+    } // namespace ScratchFBOImpl
+
+    // Driver-level GL_PACK_* pixel-store shadow, the readback-side sibling of the
+    // upload path's ScopedDefaultUnpackState (Managers.cpp): the backend PACK state
+    // is written ONLY through ApplyPackState, so scoped helpers can save/restore it
+    // from the shadow instead of glGetIntegerv (which forces a driver pipeline
+    // sync), and redundant glPixelStorei calls no-op. The first Apply/Current call
+    // pins the driver to the shadow by writing all fields once. Invalidated on
+    // MakeCurrent (context may reset). PACK_IMAGE_HEIGHT/SKIP_IMAGES/SWAP_BYTES/
+    // LSB_FIRST have no ES equivalents; readbacks honor them on the CPU from the
+    // frontend context state instead.
+    namespace PixelStoreImpl {
+        struct PackState {
+            GLint Alignment = 4;
+            GLint RowLength = 0;
+            GLint SkipRows = 0;
+            GLint SkipPixels = 0;
+            Bool operator==(const PackState& o) const {
+                return Alignment == o.Alignment && RowLength == o.RowLength && SkipRows == o.SkipRows &&
+                       SkipPixels == o.SkipPixels;
+            }
+        };
+        void ApplyPackState(const PackState& desired);
+        PackState CurrentPackState();
+        void InvalidatePackStateCache();
+    } // namespace PixelStoreImpl
 
     // Image uniforms take their unit from the layout(binding=N) qualifier baked into
     // the transpiled ESSL; unlike samplers they must not (and in ES cannot) be
