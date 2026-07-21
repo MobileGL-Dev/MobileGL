@@ -1848,7 +1848,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                                                  uploadData, levelByteSize, &glType, packedUploadData);
 
                             DebugImpl::ErrorLopper::Clear();
-                            g_GLESFuncs.glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
+                            BufferImpl::BindPixelUnpackBufferId(0); // no-op once the resting 0 state is pinned
                             const IntVec3 uploadSize =
                                 GetBackendUploadSize(stateTextureObject->GetTarget(), levelTexelSize);
                             switch (MapToBackendTextureTarget(stateTextureObject->GetTarget())) {
@@ -1900,7 +1900,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     const auto& uploadTargets = textureMipmapObject->GetUploadTargets();
                     if (TextureImpl::IsMultisampleTextureTarget(targetInternal)) {
                         DebugImpl::ErrorLopper::Clear();
-                        g_GLESFuncs.glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
+                        BufferImpl::BindPixelUnpackBufferId(0); // no-op once the resting 0 state is pinned
                         switch (targetInternal) {
                         case TextureTarget::Texture2DMultisample:
                             g_GLESFuncs.glTexStorage2DMultisample(
@@ -1927,7 +1927,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                         }
                     } else if (stateTextureObject->IsImmutable() || m_imageBindableStorageRequired) {
                         DebugImpl::ErrorLopper::Clear();
-                        g_GLESFuncs.glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
+                        BufferImpl::BindPixelUnpackBufferId(0); // no-op once the resting 0 state is pinned
                         const IntVec3 storageSize = GetBackendUploadSize(targetInternal, baseSize);
                         switch (MapToBackendTextureTarget(targetInternal)) {
                         case TextureTarget::Texture2D:
@@ -1977,7 +1977,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                                                 uploadData, levelByteSize, &glType, packedUploadData);
 
                                     DebugImpl::ErrorLopper::Clear();
-                                    g_GLESFuncs.glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
+                                    BufferImpl::BindPixelUnpackBufferId(0); // no-op once the resting 0 state is pinned
                                     const IntVec3 uploadSize =
                                         GetBackendUploadSize(targetInternal, levelTexelSize);
                                     switch (MapToBackendTextureTarget(targetInternal)) {
@@ -2040,7 +2040,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                         levelByteSize, pData, levelDirty ? "true" : "false");
 
                                 DebugImpl::ErrorLopper::Clear();
-                                g_GLESFuncs.glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
+                                BufferImpl::BindPixelUnpackBufferId(0); // no-op once the resting 0 state is pinned
                                 auto textureTarget = stateTextureObject->GetTarget();
                                 const IntVec3 uploadSize = GetBackendUploadSize(textureTarget, levelTexelSize);
                                 switch (MapToBackendTextureTarget(textureTarget)) {
@@ -2126,7 +2126,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                         textureMipmapObject->GetMipmapTexelSize(uploadTarget, level).y(), byteSize);
 
                             auto glUploadTarget = ConvertTextureUploadTargetToBackendGLEnum(uploadTarget);
-                            g_GLESFuncs.glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
+                            BufferImpl::BindPixelUnpackBufferId(0); // no-op once the resting 0 state is pinned
                             DebugImpl::ErrorLopper::Loop(
                                 [file = __FILE__, line = __LINE__, func = __func__](GLenum err) {
                                     MGLOG_D("%s(%s:%d) ES error: %s", func, file, line,
