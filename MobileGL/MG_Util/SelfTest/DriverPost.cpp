@@ -401,6 +401,230 @@ namespace MobileGL::MG_Util::SelfTest {
                              disabledNote);
         }
 
+        // Compiles + links a two-stage program on the probe context. Returns 0 on failure and writes a
+        // human-readable reason into |detail|.
+        GLuint CompileLinkProgram(const MG_External::GLESFunctionsTable& g, const char* vs, const char* fs,
+                                  String& detail) {
+            const auto compile = [&](GLenum stage, const char* src, GLuint& out) -> bool {
+                out = g.glCreateShader(stage);
+                if (out == 0) {
+                    detail = "glCreateShader returned 0";
+                    return false;
+                }
+                g.glShaderSource(out, 1, &src, nullptr);
+                g.glCompileShader(out);
+                GLint ok = GL_FALSE;
+                g.glGetShaderiv(out, GL_COMPILE_STATUS, &ok);
+                if (ok != GL_TRUE) {
+                    GLchar log[512] = {};
+                    GLsizei len = 0;
+                    g.glGetShaderInfoLog(out, static_cast<GLsizei>(sizeof(log) - 1), &len, log);
+                    detail = format("{} shader compile failed: {}",
+                                    stage == GL_VERTEX_SHADER ? "vertex" : "fragment",
+                                    len > 0 ? log : "(no info log)");
+                    return false;
+                }
+                return true;
+            };
+            GLuint v = 0, f = 0;
+            const ScopeGuard delV([&]() { if (v) g.glDeleteShader(v); });
+            const ScopeGuard delF([&]() { if (f) g.glDeleteShader(f); });
+            if (!compile(GL_VERTEX_SHADER, vs, v) || !compile(GL_FRAGMENT_SHADER, fs, f)) {
+                return 0;
+            }
+            const GLuint prog = g.glCreateProgram();
+            if (prog == 0) {
+                detail = "glCreateProgram returned 0";
+                return 0;
+            }
+            g.glAttachShader(prog, v);
+            g.glAttachShader(prog, f);
+            g.glLinkProgram(prog);
+            GLint linked = GL_FALSE;
+            g.glGetProgramiv(prog, GL_LINK_STATUS, &linked);
+            if (linked != GL_TRUE) {
+                detail = "program link failed";
+                g.glDeleteProgram(prog);
+                return 0;
+            }
+            return prog;
+        }
+
+        // "noperspective interpolation" row - a real correctness render, not just a compile. A viewport-
+        // filling quad is drawn with strong perspective (left clip-w 1, right clip-w 8) and a varying that
+        // runs 0..1 across it. At the screen centre screen-linear interpolation gives 0.5 while perspective-
+        // correct gives 1/(w+1) ~= 0.11, so reading the centre texel tells the two apart. The varying is
+        // carried either through the native `noperspective` qualifier (extension present) or through the
+        // exact gl_Position.w / gl_FragCoord.w rewrite MobileGL applies when it is absent. Verdict:
+        //   PASS  - extension present and the native noperspective result is screen-linear;
+        //   WARN  - extension absent but the gl_Position.w/gl_FragCoord.w emulation renders screen-linear
+        //           (correct, just the fallback path shipping shader packs hit on such devices);
+        //   FAIL  - either path renders perspective-correct / wrong (noperspective does not actually work),
+        //           or the program will not compile/link, or the render errors.
+        // Requires the probe context to still be current.
+        void ProbeGlesNoperspective(ReportBuilder& builder, const MG_External::GLESCapabilities& caps,
+                                    const MG_External::GLESFunctionsTable& g) {
+            const Bool native = caps.SupportsNoperspectiveInterpolation;
+            const String pathNote = native ? "GL_NV_shader_noperspective_interpolation present (native path)"
+                                           : "GL_NV_shader_noperspective_interpolation absent (gl_Position.w / "
+                                             "gl_FragCoord.w emulation path)";
+            const auto fail = [&](const String& detail) {
+                builder.Fail("noperspective interpolation", pathNote + "; " + detail);
+            };
+
+            if (!g.glCreateShader || !g.glShaderSource || !g.glCompileShader || !g.glGetShaderiv ||
+                !g.glGetShaderInfoLog || !g.glDeleteShader || !g.glCreateProgram || !g.glAttachShader ||
+                !g.glLinkProgram || !g.glGetProgramiv || !g.glUseProgram || !g.glDeleteProgram ||
+                !g.glGenFramebuffers || !g.glBindFramebuffer || !g.glDeleteFramebuffers ||
+                !g.glGenRenderbuffers || !g.glBindRenderbuffer || !g.glRenderbufferStorage ||
+                !g.glFramebufferRenderbuffer || !g.glDeleteRenderbuffers || !g.glCheckFramebufferStatus ||
+                !g.glGenBuffers || !g.glBindBuffer || !g.glBufferData || !g.glDeleteBuffers ||
+                !g.glGetAttribLocation || !g.glVertexAttribPointer || !g.glEnableVertexAttribArray ||
+                !g.glViewport || !g.glClearColor || !g.glClear || !g.glDrawArrays || !g.glReadPixels ||
+                !g.glFinish || !g.glGetError) {
+                fail("the render entry points did not resolve through eglGetProcAddress");
+                return;
+            }
+
+            // Match MobileGL's own ESSL target (the device's version). At #version 300 es some drivers
+            // (Adreno) still treat `noperspective` as reserved even with the extension enabled; the ES 3.2
+            // form the backend actually emits compiles. Emulated shaders are version-agnostic but use the
+            // same header for consistency.
+            const Int esslVer = caps.GLESVersion.Major * 100 + caps.GLESVersion.Minor * 10;
+            const String header = format("#version {} es\n", esslVer >= 300 ? esslVer : 300);
+            static const char* const kVsNativeBody =
+                "#extension GL_NV_shader_noperspective_interpolation : require\n"
+                "in vec4 a_pos;\n"
+                "in float a_v;\n"
+                "noperspective out highp float v_out;\n"
+                "void main() { gl_Position = a_pos; v_out = a_v; }\n";
+            static const char* const kFsNativeBody =
+                "#extension GL_NV_shader_noperspective_interpolation : require\n"
+                "precision highp float;\n"
+                "noperspective in highp float v_out;\n"
+                "out vec4 fragColor;\n"
+                "void main() { fragColor = vec4(v_out, 0.0, 0.0, 1.0); }\n";
+            // Exactly MobileGL's emulation (verified against EmulateNoPerspectivePass output): pre-multiply
+            // the varying by clip-w in the vertex stage, recover with gl_FragCoord.w in the fragment stage,
+            // no noperspective qualifier (so the driver interpolates it perspective-correct).
+            static const char* const kVsEmuBody =
+                "in vec4 a_pos;\n"
+                "in float a_v;\n"
+                "out highp float v_out;\n"
+                "void main() { gl_Position = a_pos; v_out = a_v * gl_Position.w; }\n";
+            static const char* const kFsEmuBody =
+                "precision highp float;\n"
+                "in highp float v_out;\n"
+                "out vec4 fragColor;\n"
+                "void main() { fragColor = vec4(v_out * gl_FragCoord.w, 0.0, 0.0, 1.0); }\n";
+
+            while (g.glGetError() != GL_NO_ERROR) {
+            }
+
+            const String vsSrc = header + (native ? kVsNativeBody : kVsEmuBody);
+            const String fsSrc = header + (native ? kFsNativeBody : kFsEmuBody);
+            String linkDetail;
+            const GLuint prog = CompileLinkProgram(g, vsSrc.c_str(), fsSrc.c_str(), linkDetail);
+            if (prog == 0) {
+                fail(native ? "a noperspective program failed to build though the extension is advertised: " +
+                                  linkDetail
+                            : "the emulation program failed to build: " + linkDetail);
+                return;
+            }
+            const ScopeGuard delProg([&]() { g.glDeleteProgram(prog); });
+
+            // 9x9 so the centre texel (4,4) sits exactly at NDC (0,0).
+            constexpr GLsizei kDim = 9;
+            GLuint rbo = 0, fbo = 0, vbo = 0;
+            g.glGenRenderbuffers(1, &rbo);
+            const ScopeGuard delRbo([&]() { if (rbo) g.glDeleteRenderbuffers(1, &rbo); });
+            g.glBindRenderbuffer(GL_RENDERBUFFER, rbo);
+            g.glRenderbufferStorage(GL_RENDERBUFFER, GL_RGBA8, kDim, kDim);
+            g.glGenFramebuffers(1, &fbo);
+            const ScopeGuard delFbo([&]() {
+                if (fbo) {
+                    g.glBindFramebuffer(GL_FRAMEBUFFER, 0);
+                    g.glDeleteFramebuffers(1, &fbo);
+                }
+            });
+            g.glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+            g.glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, rbo);
+            if (g.glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+                fail("the probe framebuffer is incomplete");
+                return;
+            }
+
+            // Interleaved [vec4 clip-pos, float v]. Left w=1, right w=8; x/y pre-multiplied by w so the quad
+            // still fills NDC after the perspective divide.
+            const GLfloat verts[] = {
+                -1.f, -1.f, 0.f, 1.f, 0.f, //
+                8.f,  -8.f, 0.f, 8.f, 1.f, //
+                -1.f, 1.f,  0.f, 1.f, 0.f, //
+                8.f,  8.f,  0.f, 8.f, 1.f, //
+            };
+            g.glGenBuffers(1, &vbo);
+            const ScopeGuard delVbo([&]() { if (vbo) g.glDeleteBuffers(1, &vbo); });
+            g.glBindBuffer(GL_ARRAY_BUFFER, vbo);
+            g.glBufferData(GL_ARRAY_BUFFER, sizeof(verts), verts, GL_STATIC_DRAW);
+
+            g.glUseProgram(prog);
+            const GLint posLoc = g.glGetAttribLocation(prog, "a_pos");
+            const GLint vLoc = g.glGetAttribLocation(prog, "a_v");
+            if (posLoc < 0 || vLoc < 0) {
+                fail("the probe vertex attributes did not resolve");
+                return;
+            }
+            g.glEnableVertexAttribArray(static_cast<GLuint>(posLoc));
+            g.glVertexAttribPointer(static_cast<GLuint>(posLoc), 4, GL_FLOAT, GL_FALSE, 5 * sizeof(GLfloat),
+                                    reinterpret_cast<const void*>(0));
+            g.glEnableVertexAttribArray(static_cast<GLuint>(vLoc));
+            g.glVertexAttribPointer(static_cast<GLuint>(vLoc), 1, GL_FLOAT, GL_FALSE, 5 * sizeof(GLfloat),
+                                    reinterpret_cast<const void*>(4 * sizeof(GLfloat)));
+
+            g.glViewport(0, 0, kDim, kDim);
+            g.glClearColor(0.f, 0.f, 0.f, 1.f);
+            g.glClear(GL_COLOR_BUFFER_BIT);
+            g.glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+            g.glFinish();
+
+            const GLenum drawError = g.glGetError();
+            if (drawError != GL_NO_ERROR) {
+                fail(format("GL error 0x{:x} while rendering the probe quad", drawError));
+                return;
+            }
+
+            GLubyte center[4] = {};
+            g.glReadPixels(kDim / 2, kDim / 2, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, center);
+            const GLenum readError = g.glGetError();
+            if (readError != GL_NO_ERROR) {
+                fail(format("GL error 0x{:x} while reading the probe pixel back", readError));
+                return;
+            }
+
+            // At the centre: screen-linear -> 0.5 (~128); perspective-correct -> 1/(8+1) ~= 0.111 (~28).
+            const float observed = static_cast<float>(center[0]) / 255.0f;
+            const int observedByte = center[0];
+            constexpr float kScreenLinear = 0.5f;
+            const bool screenLinear = observed > 0.5f * (kScreenLinear + 1.0f / 9.0f); // midpoint ~= 0.306
+            if (!screenLinear) {
+                fail(format("the centre texel read {} (~{:.3f}); expected the screen-linear ~0.5 - "
+                            "interpolation came out perspective-correct, so noperspective does not work here",
+                            observedByte, observed));
+                return;
+            }
+            if (native) {
+                builder.Pass("noperspective interpolation",
+                             pathNote + format("; native noperspective renders screen-linear (centre {} ~= 0.5)",
+                                               observedByte));
+            } else {
+                builder.Warn("noperspective interpolation",
+                             pathNote +
+                                 format("; the emulation renders screen-linear correctly (centre {} ~= 0.5), "
+                                        "but this is the fallback path with less driver coverage",
+                                        observedByte));
+            }
+        }
+
         // Everything the "MobileGL reported ..." rows need from the GLES device probe.
         struct GlesProbeSummary {
             Bool capsValid = false;
@@ -527,6 +751,7 @@ namespace MobileGL::MG_Util::SelfTest {
             builder.report.rendererInfo = format("{} ({})", caps.GLESRendererString, caps.GLESVersionString);
             EvaluateGlesChecklist(builder, caps, glesFuncs);
             ProbeGlesTimerQuery(builder, caps, glesFuncs);
+            ProbeGlesNoperspective(builder, caps, glesFuncs);
             builder.report.formatCapabilities.emplace();
             MG_Backend::DirectGLES::PopulateFormatCapabilities(
                 glesFuncs, caps, builder.report.formatCapabilities.value());
