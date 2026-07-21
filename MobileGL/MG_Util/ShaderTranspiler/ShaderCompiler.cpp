@@ -21,6 +21,7 @@
 #include "SpirvPasses/RebaseInstanceIndexPass.h"
 #include "SpirvPasses/StripUboMemberRelaxedPrecisionPass.h"
 #include "SpirvPasses/StripNoPerspectivePass.h"
+#include "SpirvPasses/EmulateNoPerspectivePass.h"
 #include "spirv-tools/libspirv.h"
 #include "spirv-tools/optimizer.hpp"
 
@@ -343,6 +344,18 @@ namespace MobileGL {
 
                 Optimizer optimizer(SPV_ENV_VULKAN_1_1);
                 optimizer.RegisterPass(StripNoPerspectivePass::CreateStripNoPerspectivePass());
+
+                return optimizer.Run(inputBinary.data(), inputBinary.size(), &outputBinary, options);
+            }
+
+            bool ShaderCompiler::EmulateNoPerspectiveForEssl(const Vector<Uint32>& inputBinary,
+                                                             Vector<uint32_t>& outputBinary) {
+                using namespace spvtools;
+                OptimizerOptions options;
+                options.set_run_validator(false);
+
+                Optimizer optimizer(SPV_ENV_VULKAN_1_1);
+                optimizer.RegisterPass(EmulateNoPerspectivePass::CreateEmulateNoPerspectivePass());
 
                 return optimizer.Run(inputBinary.data(), inputBinary.size(), &outputBinary, options);
             }

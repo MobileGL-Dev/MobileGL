@@ -38,6 +38,11 @@ namespace MobileGL {
                 // (SPIRV-Cross would otherwise require that extension and the driver would reject it).
                 static bool StripNoPerspectiveForEssl(const Vector<Uint32>& inputBinary,
                                                       Vector<uint32_t>& outputBinary);
+                // Emulates noperspective (screen-linear) interpolation via gl_Position.w / gl_FragCoord.w
+                // so no NV extension is needed; strips what it cannot emulate. DirectGLES fallback for
+                // devices lacking GL_NV_shader_noperspective_interpolation. See EmulateNoPerspectivePass.
+                static bool EmulateNoPerspectiveForEssl(const Vector<Uint32>& inputBinary,
+                                                        Vector<uint32_t>& outputBinary);
                 // Rebases loads of the InstanceIndex builtin to (InstanceIndex - BaseInstance) so
                 // shaders see GL's zero-based gl_InstanceID. Vertex shaders only; DirectVulkan
                 // backend only (glslang's relaxed mode aliases gl_InstanceID to gl_InstanceIndex,

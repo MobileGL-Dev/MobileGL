@@ -1257,6 +1257,185 @@ TEST_F(ProgramUtilTest, StripNoPerspectivePassRemovesBothDecorateForms) {
         << "Location decorations must survive:\n" << outputText;
 }
 
+// Phase 2 emulation - fragment side. On a device without the NV extension the NoPerspective input is
+// recovered as `load * gl_FragCoord.w` and the decoration removed; gl_FragCoord is synthesized because
+// the shader did not otherwise use it. The emulated SPIR-V must validate and decompile without the
+// extension require.
+TEST_F(ProgramUtilTest, EmulateNoperspectiveFragmentRecoversWithFragCoordW) {
+    using namespace MG_Util::ShaderTranspiler;
+
+    String fs = R"(#version 330 core
+noperspective in vec4 vColor;
+out vec4 f;
+void main() { f = vColor; }
+)";
+    ShaderAttrib attrib{.shaderType = GL_FRAGMENT_SHADER, .sourceStr = fs};
+    auto res = ShaderCompiler::CompileShader(attrib);
+    if (!res) FAIL() << "compile: " << res.error().log;
+    ProgramAttrib pa{.shaders = {res.value()}};
+    auto pr = ShaderCompiler::LinkProgram(pa);
+    if (!pr) FAIL() << "link: " << pr.error().log;
+    ProgramBinaryAttrib ba{.shaderTypes = {GL_FRAGMENT_SHADER}, .program = *pr.value()};
+    auto br = ShaderCompiler::GetSpirvBinaryFromProgram(ba);
+    if (!br) FAIL() << "spirv: " << br.error().log;
+    ASSERT_EQ(br.value().size(), 1u);
+
+    Vector<uint32_t> emulated;
+    ASSERT_TRUE(ShaderCompiler::EmulateNoPerspectiveForEssl(br.value()[0], emulated));
+    ASSERT_FALSE(emulated.empty());
+
+    spvtools::SpirvTools tools(SPV_ENV_VULKAN_1_1);
+    String dis;
+    ASSERT_TRUE(tools.Disassemble(emulated, &dis));
+    ASSERT_TRUE(tools.Validate(emulated)) << "emulated SPIR-V must be valid:\n" << dis;
+    EXPECT_EQ(dis.find("NoPerspective"), String::npos) << "decoration must be stripped:\n" << dis;
+    EXPECT_NE(dis.find("FragCoord"), String::npos) << "gl_FragCoord must be synthesized:\n" << dis;
+    EXPECT_NE(dis.find("OpVectorTimesScalar"), String::npos) << "the recovery multiply must be present:\n" << dis;
+
+    SpvcSession session(emulated, SessionUsageBit::Transpile);
+    auto essl = ShaderCompiler::DecompileShader(session);
+    if (!essl) FAIL() << "decompile: " << essl.error().log;
+    EXPECT_EQ(essl.value().find("noperspective"), String::npos) << essl.value();
+    EXPECT_EQ(essl.value().find("GL_NV_shader_noperspective_interpolation"), String::npos) << essl.value();
+    EXPECT_NE(essl.value().find("gl_FragCoord"), String::npos) << "recovery must reference gl_FragCoord:\n" << essl.value();
+}
+
+// Phase 2 emulation - vertex side. The NoPerspective output is pre-multiplied by gl_Position.w before
+// return and the decoration removed. Emulated SPIR-V must validate and decompile without the extension.
+TEST_F(ProgramUtilTest, EmulateNoperspectiveVertexPreMultipliesByPositionW) {
+    using namespace MG_Util::ShaderTranspiler;
+
+    String vs = R"(#version 330 core
+in vec4 pos;
+noperspective out vec4 vColor;
+void main() { gl_Position = pos; vColor = pos; }
+)";
+    ShaderAttrib attrib{.shaderType = GL_VERTEX_SHADER, .sourceStr = vs};
+    auto res = ShaderCompiler::CompileShader(attrib);
+    if (!res) FAIL() << "compile: " << res.error().log;
+    ProgramAttrib pa{.shaders = {res.value()}};
+    auto pr = ShaderCompiler::LinkProgram(pa);
+    if (!pr) FAIL() << "link: " << pr.error().log;
+    ProgramBinaryAttrib ba{.shaderTypes = {GL_VERTEX_SHADER}, .program = *pr.value()};
+    auto br = ShaderCompiler::GetSpirvBinaryFromProgram(ba);
+    if (!br) FAIL() << "spirv: " << br.error().log;
+    ASSERT_EQ(br.value().size(), 1u);
+
+    Vector<uint32_t> emulated;
+    ASSERT_TRUE(ShaderCompiler::EmulateNoPerspectiveForEssl(br.value()[0], emulated));
+    ASSERT_FALSE(emulated.empty());
+
+    spvtools::SpirvTools tools(SPV_ENV_VULKAN_1_1);
+    String dis;
+    ASSERT_TRUE(tools.Disassemble(emulated, &dis));
+    ASSERT_TRUE(tools.Validate(emulated)) << "emulated SPIR-V must be valid:\n" << dis;
+    EXPECT_EQ(dis.find("NoPerspective"), String::npos) << "decoration must be stripped:\n" << dis;
+    EXPECT_NE(dis.find("OpVectorTimesScalar"), String::npos) << "the pre-multiply must be present:\n" << dis;
+
+    SpvcSession session(emulated, SessionUsageBit::Transpile);
+    auto essl = ShaderCompiler::DecompileShader(session);
+    if (!essl) FAIL() << "decompile: " << essl.error().log;
+    EXPECT_EQ(essl.value().find("noperspective"), String::npos) << essl.value();
+    EXPECT_NE(essl.value().find("gl_Position"), String::npos) << "pre-multiply must reference gl_Position:\n" << essl.value();
+}
+
+namespace {
+// Compiles one shader stage through the full pipeline and returns its SPIR-V, or fails the test.
+MobileGL::Vector<uint32_t> CompileStageSpirv(GLenum type, const char* src) {
+    using namespace MG_Util::ShaderTranspiler;
+    ShaderAttrib attrib{.shaderType = type, .sourceStr = src};
+    auto res = ShaderCompiler::CompileShader(attrib);
+    EXPECT_TRUE(static_cast<bool>(res)) << (res ? "" : res.error().log);
+    if (!res) return {};
+    ProgramAttrib pa{.shaders = {res.value()}};
+    auto pr = ShaderCompiler::LinkProgram(pa);
+    EXPECT_TRUE(static_cast<bool>(pr)) << (pr ? "" : pr.error().log);
+    if (!pr) return {};
+    ProgramBinaryAttrib ba{.shaderTypes = {type}, .program = *pr.value()};
+    auto br = ShaderCompiler::GetSpirvBinaryFromProgram(ba);
+    EXPECT_TRUE(static_cast<bool>(br)) << (br ? "" : br.error().log);
+    if (!br || br.value().empty()) return {};
+    return br.value()[0];
+}
+} // namespace
+
+// Regression: the vertex pre-multiply must be applied exactly once (in main), not once per function.
+// glslang does not inline, so a helper function survives as its own OpFunction; instrumenting its
+// return too would scale the varying by gl_Position.w twice (w^2).
+TEST_F(ProgramUtilTest, EmulateNoperspectiveVertexWithHelperScalesExactlyOnce) {
+    using namespace MG_Util::ShaderTranspiler;
+    // helper() returns via OpReturnValue and adds (no vector*scalar), so the ONLY OpVectorTimesScalar
+    // in the module is the emulation's pre-multiply. The old all-functions code injected it at both
+    // helper's and main's return -> count 2; restricted to the entry function it is 1.
+    auto spirv = CompileStageSpirv(GL_VERTEX_SHADER, R"(#version 330 core
+in vec4 pos;
+noperspective out vec4 vColor;
+vec4 helper(vec4 x) { return x + vec4(1.0); }
+void main() { gl_Position = pos; vColor = helper(pos); }
+)");
+    ASSERT_FALSE(spirv.empty());
+
+    Vector<uint32_t> emulated;
+    ASSERT_TRUE(ShaderCompiler::EmulateNoPerspectiveForEssl(spirv, emulated));
+    spvtools::SpirvTools tools(SPV_ENV_VULKAN_1_1);
+    String dis;
+    ASSERT_TRUE(tools.Disassemble(emulated, &dis));
+    ASSERT_TRUE(tools.Validate(emulated)) << dis;
+
+    SizeT count = 0, off = 0;
+    while ((off = dis.find("OpVectorTimesScalar", off)) != String::npos) {
+        ++count;
+        off += std::strlen("OpVectorTimesScalar");
+    }
+    EXPECT_EQ(count, 1u) << "the gl_Position.w pre-multiply must happen exactly once, not per function:\n" << dis;
+}
+
+// Regression: a single-component read (vColor.x), which glslang lowers via OpAccessChain, must still be
+// recovered with gl_FragCoord.w - not silently left un-scaled.
+TEST_F(ProgramUtilTest, EmulateNoperspectiveFragmentComponentReadIsRecovered) {
+    using namespace MG_Util::ShaderTranspiler;
+    auto spirv = CompileStageSpirv(GL_FRAGMENT_SHADER, R"(#version 330 core
+noperspective in vec4 vColor;
+out vec4 f;
+void main() { f = vec4(vColor.x); }
+)");
+    ASSERT_FALSE(spirv.empty());
+
+    Vector<uint32_t> emulated;
+    ASSERT_TRUE(ShaderCompiler::EmulateNoPerspectiveForEssl(spirv, emulated));
+    spvtools::SpirvTools tools(SPV_ENV_VULKAN_1_1);
+    String dis;
+    ASSERT_TRUE(tools.Disassemble(emulated, &dis));
+    ASSERT_TRUE(tools.Validate(emulated)) << dis;
+    EXPECT_EQ(dis.find("NoPerspective"), String::npos) << dis;
+    EXPECT_NE(dis.find("FragCoord"), String::npos)
+        << "the component read must still be recovered via gl_FragCoord.w:\n" << dis;
+}
+
+// Coverage: a scalar float varying exercises the OpFMul path; a vector varying the OpVectorTimesScalar
+// path; multiple noperspective varyings in one stage are all handled.
+TEST_F(ProgramUtilTest, EmulateNoperspectiveHandlesScalarAndMultipleVaryings) {
+    using namespace MG_Util::ShaderTranspiler;
+    auto spirv = CompileStageSpirv(GL_FRAGMENT_SHADER, R"(#version 330 core
+noperspective in float a;
+noperspective in vec2 b;
+out vec4 f;
+void main() { f = vec4(a, b, 1.0); }
+)");
+    ASSERT_FALSE(spirv.empty());
+
+    Vector<uint32_t> emulated;
+    ASSERT_TRUE(ShaderCompiler::EmulateNoPerspectiveForEssl(spirv, emulated));
+    spvtools::SpirvTools tools(SPV_ENV_VULKAN_1_1);
+    String dis;
+    ASSERT_TRUE(tools.Disassemble(emulated, &dis));
+    ASSERT_TRUE(tools.Validate(emulated)) << dis;
+    EXPECT_EQ(dis.find("NoPerspective"), String::npos) << dis;
+    EXPECT_NE(dis.find("OpFMul"), String::npos) << "the scalar varying must scale with OpFMul:\n" << dis;
+    EXPECT_NE(dis.find("OpVectorTimesScalar"), String::npos)
+        << "the vector varying must scale with OpVectorTimesScalar:\n" << dis;
+}
+
 const char* vs_location = R"(#version 460
 
 in vec4 Position;
