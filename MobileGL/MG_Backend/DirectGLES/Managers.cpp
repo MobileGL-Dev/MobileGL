@@ -2535,6 +2535,28 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return false;
         }
 
+        void BackendFramebufferObject::SyncReadBufferToBackend(
+            const SharedPtr<MG_State::GLState::FramebufferObject>& stateFBOObject) {
+            if (!stateFBOObject) {
+                return;
+            }
+            auto frontendReadBuf = stateFBOObject->GetReadBuffer();
+            if (frontendReadBuf == m_frontendReadBuffer) {
+                return;
+            }
+            m_frontendReadBuffer = frontendReadBuf;
+
+            GLenum glBackendReadBuffer = GetBackendAttachmentType(frontendReadBuf);
+            if (m_backendReadBuffer != glBackendReadBuffer) {
+                m_backendReadBuffer = glBackendReadBuffer;
+                // glReadBuffer targets whatever FBO is bound to GL_READ_FRAMEBUFFER. When this is
+                // reached from SyncCurrentFBO's "same FBO as draw" skip path the backend FBO was
+                // only bound as DRAW, so bind it as READ first to route the read buffer correctly.
+                Bind(FramebufferTarget::Read);
+                g_GLESFuncs.glReadBuffer(glBackendReadBuffer);
+            }
+        }
+
         void BackendFramebufferObject::SyncToBackend(
             const SharedPtr<MG_State::GLState::FramebufferObject>& stateFBOObject, FramebufferTarget asTarget) {
 #ifdef TRACY_ENABLE
@@ -2616,16 +2638,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
             // 2. Remap read buffer. glReadBuffer writes the READ-bound FBO's state, so
             // only apply (and stamp the memo) when this object is bound as READ.
-            auto frontendReadBuf = stateFBOObject->GetReadBuffer();
-            if (frontendReadBuf != m_frontendReadBuffer && asTarget == FramebufferTarget::Read) {
-                m_frontendReadBuffer = frontendReadBuf;
-
-                GLenum glBackendReadBuffer = GetBackendAttachmentType(frontendReadBuf);
-
-                if (m_backendReadBuffer != glBackendReadBuffer) {
-                    m_backendReadBuffer = glBackendReadBuffer;
-                    g_GLESFuncs.glReadBuffer(glBackendReadBuffer);
-                }
+            if (asTarget == FramebufferTarget::Read) {
+                SyncReadBufferToBackend(stateFBOObject);
             }
 
             // -------------------- Attach texture to backend FBO -----------------------

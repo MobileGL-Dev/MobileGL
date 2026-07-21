@@ -531,6 +531,18 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
                 if (currentFBO.get() == lastUpdatedFBO) {
                     MGLOG_D("Draw FBO and read FBO are the same, skipping sync.");
+                    // The attachment/draw-buffer work was already done for this GL FBO as the DRAW
+                    // target, but the read buffer (glReadBuffer) is READ-target-specific and would
+                    // be dropped by this skip. Apply it so reads target the right attachment (e.g.
+                    // KHR-GL33.draw_buffers reads each COLOR_ATTACHMENT while the FBO stays bound as
+                    // GL_FRAMEBUFFER — without this every glReadBuffer is a no-op and all reads hit
+                    // COLOR_ATTACHMENT0).
+                    if (target == FramebufferTarget::Read) {
+                        const auto& syncedFBOIt = g_backendFramebufferObjects.find(currentFBO.get());
+                        if (syncedFBOIt != g_backendFramebufferObjects.end() && syncedFBOIt->second) {
+                            syncedFBOIt->second->SyncReadBufferToBackend(currentFBO);
+                        }
+                    }
                     g_fboSyncedObjectVersions[SizeT(target)] = objectVersion;
                     g_fboSyncedObjects[SizeT(target)] = currentPtr;
                     continue;

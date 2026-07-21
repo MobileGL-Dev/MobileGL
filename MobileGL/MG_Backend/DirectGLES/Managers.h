@@ -375,6 +375,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
             BackendFramebufferObject();
             void SyncToBackend(const SharedPtr<MG_State::GLState::FramebufferObject>& stateFBOObject,
                                FramebufferTarget asTarget);
+            // Apply only this FBO's read buffer (glReadBuffer) to the backend. Split out so it can
+            // still run when SyncCurrentFBO skips the READ-target sync because the same GL FBO is
+            // bound as both draw and read (otherwise glReadBuffer changes would be silently dropped).
+            void SyncReadBufferToBackend(const SharedPtr<MG_State::GLState::FramebufferObject>& stateFBOObject);
             void InvalidateSyncedState();
             Uint GetBackendFramebufferId() const { return m_backendFBOId; }
             void Bind(FramebufferTarget target) const;
