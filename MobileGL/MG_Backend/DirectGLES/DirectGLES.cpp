@@ -4002,6 +4002,15 @@ namespace MobileGL::MG_Backend::DirectGLES {
         GLuint backendTexId = backendTextureIt->second->GetBackendTextureId();
         MGLOG_D("GetTexImage: backend texture id = %u", backendTexId);
 
+        // Force pending rendering to complete before reading the texture back through the temp READ FBO.
+        // Tile-based GPUs (Mali) do not guarantee that a render into this texture through its own FBO has
+        // been resolved to memory when it is subsequently sampled through a *different* (temp) FBO: the
+        // cross-FBO glReadPixels below races the deferred tile resolve and returns the pre-render (clear)
+        // contents, so distinct render targets read back byte-identical (e.g. KHR-GLxx.glsl_noperspective
+        // fails on Mali-G715, all four programs reading as the clear colour). glGetTexImage is already a
+        // CPU/GPU sync point, so the extra drain is negligible; Adreno resolves eagerly and is unaffected.
+        g_GLESFuncs.glFinish();
+
         MGLOG_D("GetTexImage: Binding temporary FBO");
         TempFBOBinder tempFBOBinder(true);
 
