@@ -1910,8 +1910,10 @@ void main() {
                 case VK_FORMAT_R16G16_UNORM:          out = {ReadbackSourceClass::Float, 2, 16}; return true;
                 case VK_FORMAT_R16G16B16A16_UNORM:    out = {ReadbackSourceClass::Float, 4, 16}; return true;
                 // --- SRGB (decode to linear like GL readback of sRGB textures) ---
-                case VK_FORMAT_R8G8B8A8_SRGB:         out = {ReadbackSourceClass::Float, 4, 8, false, true}; return true;
-                case VK_FORMAT_B8G8R8A8_SRGB:         out = {ReadbackSourceClass::Float, 4, 8, false, true, true}; return true;
+                // GL GetTexImage/ReadPixels of sRGB textures return the raw sRGB-encoded
+                // bytes (GL 3.3 has no FRAMEBUFFER_SRGB read decode) - do NOT linearize.
+                case VK_FORMAT_R8G8B8A8_SRGB:         out = {ReadbackSourceClass::Float, 4, 8}; return true;
+                case VK_FORMAT_B8G8R8A8_SRGB:         out = {ReadbackSourceClass::Float, 4, 8, false, false, true}; return true;
                 // --- SNORM ---
                 case VK_FORMAT_R8_SNORM:              out = {ReadbackSourceClass::Float, 1, 8, true};  return true;
                 case VK_FORMAT_R8G8_SNORM:            out = {ReadbackSourceClass::Float, 2, 8, true};  return true;
@@ -2216,8 +2218,9 @@ void main() {
         }
 
         static Bool PackReadbackToClientOrPbo(const Uint8* srcPixels, VkFormat srcFormat, GLsizei width,
-                                              GLsizei height, GLenum format, GLenum type, void* pixels) {
-            if (width <= 0 || height <= 0) {
+                                              GLsizei sliceHeight, GLsizei sliceCount, GLenum format, GLenum type,
+                                              void* pixels, Bool applyPackImageParams) {
+            if (width <= 0 || sliceHeight <= 0 || sliceCount <= 0) {
                 return true;
             }
 
@@ -2230,7 +2233,8 @@ void main() {
 
             Vector<Uint8> wide;
             GLenum wideType = GL_FLOAT;
-            if (!DecodeReadbackRowsToWide(srcPixels, srcFormat, width, height, wide, wideType)) {
+            if (!DecodeReadbackRowsToWide(srcPixels, srcFormat, width,
+                                          sliceHeight * sliceCount, wide, wideType)) {
                 MGLOG_E("DirectVulkan readback skipped: unsupported source format=%d",
                         static_cast<Int>(srcFormat));
                 return false;
@@ -2243,9 +2247,9 @@ void main() {
                 return false;
             }
 
-            return DirectGLES::ReadbackImpl::StoreWideRowsToClient(wide.data(), wideType, width, height,
-                                                                   /*sliceCount=*/1, mapping, type, pixels,
-                                                                   /*applyPackImageParams=*/false);
+            return DirectGLES::ReadbackImpl::StoreWideRowsToClient(wide.data(), wideType, width, sliceHeight,
+                                                                   sliceCount, mapping, type, pixels,
+                                                                   applyPackImageParams);
         }
     } // namespace
 
@@ -6333,7 +6337,8 @@ void main() {
                 if (RemapDefaultFboReadbackToGLOrientation(mapped, swapchainExtent, preTransform,
                                                            sourceTexelSize,
                                                            remapped.data())) {
-                    PackReadbackToClientOrPbo(remapped.data(), srcFormat, width, height, format, type, pixels);
+                    PackReadbackToClientOrPbo(remapped.data(), srcFormat, width, height, 1, format, type, pixels,
+                                              /*applyPackImageParams=*/false);
                     return;
                 }
             }
@@ -6342,7 +6347,8 @@ void main() {
                     width, height, swapchainExtent.width, swapchainExtent.height,
                     static_cast<Int>(preTransform));
         }
-        PackReadbackToClientOrPbo(mapped, srcFormat, width, height, format, type, pixels);
+        PackReadbackToClientOrPbo(mapped, srcFormat, width, height, 1, format, type, pixels,
+                                  /*applyPackImageParams=*/false);
     }
 
     void VulkanRenderer::GetTexImage(GLenum target, GLint level, GLenum format, GLenum type, GLvoid* pixels) {
@@ -6395,6 +6401,17 @@ void main() {
         if (width <= 0 || height <= 0) {
             return;
         }
+        // GetTexImage returns every slice of a 3D level and every layer of an array
+        // level; GL_PACK_IMAGE_HEIGHT / GL_PACK_SKIP_IMAGES apply to the 3D/array
+        // destination layout (GL 3.3 section 6.1.4).
+        const auto imageTextureTarget = textureObject->GetTarget();
+        const Bool is3dImage = imageTextureTarget == TextureTarget::Texture3D;
+        const Bool isArrayImage = imageTextureTarget == TextureTarget::Texture1DArray ||
+                                  imageTextureTarget == TextureTarget::Texture2DArray ||
+                                  imageTextureTarget == TextureTarget::TextureCubeMapArray;
+        const GLsizei depthSlices = is3dImage ? std::max<GLsizei>(texelSize.z(), 1) : 1;
+        const GLsizei arrayLayers = isArrayImage ? static_cast<GLsizei>(resource->arrayLayers) : 1;
+        const GLsizei sliceCount = std::max<GLsizei>(depthSlices * arrayLayers, 1);
         if (bufSize >= 0) {
             const Int dstChannels = GetReadbackChannelCount(format);
             if ((type == GL_UNSIGNED_BYTE || type == GL_FLOAT) && dstChannels > 0) {
@@ -6415,7 +6432,8 @@ void main() {
             return;
         }
         const VkDeviceSize readbackSize = static_cast<VkDeviceSize>(width) *
-                                          static_cast<VkDeviceSize>(height) * sourceTexelSize;
+                                          static_cast<VkDeviceSize>(height) *
+                                          static_cast<VkDeviceSize>(sliceCount) * sourceTexelSize;
         VkBufferObject readback;
         if (!readback.Create({
                 .allocator = m_allocator,
@@ -6443,8 +6461,9 @@ void main() {
         copyRegion.imageSubresource.aspectMask = resource->aspect;
         copyRegion.imageSubresource.mipLevel = static_cast<Uint32>(level);
         copyRegion.imageSubresource.baseArrayLayer = 0;
-        copyRegion.imageSubresource.layerCount = 1;
-        copyRegion.imageExtent = {static_cast<Uint32>(width), static_cast<Uint32>(height), 1};
+        copyRegion.imageSubresource.layerCount = static_cast<Uint32>(arrayLayers);
+        copyRegion.imageExtent = {static_cast<Uint32>(width), static_cast<Uint32>(height),
+                                  static_cast<Uint32>(depthSlices)};
         vkCmdCopyImageToBuffer(frame.commandBuffer, resource->image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                                readback.GetHandle(), 1, &copyRegion);
 
@@ -6470,7 +6489,8 @@ void main() {
             MGLOG_E("DirectVulkan::GetTextureImage skipped: failed to invalidate readback buffer");
             return;
         }
-        PackReadbackToClientOrPbo(mapped, resource->format, width, height, format, type, pixels);
+        PackReadbackToClientOrPbo(mapped, resource->format, width, height, sliceCount, format, type, pixels,
+                                  /*applyPackImageParams=*/is3dImage || isArrayImage);
     }
 
     void VulkanRenderer::GenerateMipmap(GLenum target) {
