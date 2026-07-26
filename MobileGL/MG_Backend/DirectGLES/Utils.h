@@ -88,6 +88,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // bytes, dst receives width * GetReadbackDstPixelSize(mapping, type) bytes.
         void ConvertWideReadbackRow(const Uint8* src, Uint8* dst, SizeT width, GLenum wideType,
                                     const ReadbackChannelMapping& mapping, GLenum type);
+
+        // Stores wide RGBA(_INTEGER) rows into the client pointer or the bound PACK pixel buffer,
+        // honoring the client-side PACK pixel-store parameters (row length, alignment, skips,
+        // swap-bytes, and - when applyPackImageParams - image height/skip images). Shared by the
+        // DirectGLES and DirectVulkan readback conversion paths.
+        Bool StoreWideRowsToClient(const Uint8* wide, GLenum wideType, GLsizei width, GLsizei sliceHeight,
+                                   GLsizei sliceCount, const ReadbackChannelMapping& mapping, GLenum type,
+                                   void* pixels, Bool applyPackImageParams);
     } // namespace ReadbackImpl
 
     namespace PrgramImpl {
