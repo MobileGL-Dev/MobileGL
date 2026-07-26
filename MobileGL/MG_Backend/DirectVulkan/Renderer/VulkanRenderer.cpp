@@ -1951,6 +1951,8 @@ void main() {
                 // --- packed / special ---
                 case VK_FORMAT_A2B10G10R10_UNORM_PACK32:
                 case VK_FORMAT_A2B10G10R10_UINT_PACK32:
+                case VK_FORMAT_A2R10G10B10_UNORM_PACK32:
+                case VK_FORMAT_A2R10G10B10_UINT_PACK32:
                 case VK_FORMAT_B10G11R11_UFLOAT_PACK32:
                 case VK_FORMAT_E5B9G9R9_UFLOAT_PACK32:
                 case VK_FORMAT_R5G6B5_UNORM_PACK16:
@@ -1960,7 +1962,8 @@ void main() {
                 case VK_FORMAT_B5G5R5A1_UNORM_PACK16:
                 case VK_FORMAT_R4G4B4A4_UNORM_PACK16:
                 case VK_FORMAT_B4G4R4A4_UNORM_PACK16:
-                    out.sourceClass = format == VK_FORMAT_A2B10G10R10_UINT_PACK32 ?
+                    out.sourceClass = (format == VK_FORMAT_A2B10G10R10_UINT_PACK32 ||
+                                       format == VK_FORMAT_A2R10G10B10_UINT_PACK32) ?
                         ReadbackSourceClass::UnsignedInt : ReadbackSourceClass::Float;
                     out.special = format;
                     return true;
@@ -2033,6 +2036,15 @@ void main() {
                     rgba[0] = static_cast<Float>(word & 0x3FFu) / 1023.0f;
                     rgba[1] = static_cast<Float>((word >> 10) & 0x3FFu) / 1023.0f;
                     rgba[2] = static_cast<Float>((word >> 20) & 0x3FFu) / 1023.0f;
+                    rgba[3] = static_cast<Float>((word >> 30) & 0x3u) / 3.0f;
+                    return;
+                }
+                case VK_FORMAT_A2R10G10B10_UNORM_PACK32: {
+                    Uint32 word = 0;
+                    Memcpy(&word, source, sizeof(word));
+                    rgba[2] = static_cast<Float>(word & 0x3FFu) / 1023.0f;
+                    rgba[1] = static_cast<Float>((word >> 10) & 0x3FFu) / 1023.0f;
+                    rgba[0] = static_cast<Float>((word >> 20) & 0x3FFu) / 1023.0f;
                     rgba[3] = static_cast<Float>((word >> 30) & 0x3u) / 3.0f;
                     return;
                 }
@@ -2186,6 +2198,13 @@ void main() {
                     rgba[0] = word & 0x3FFu;
                     rgba[1] = (word >> 10) & 0x3FFu;
                     rgba[2] = (word >> 20) & 0x3FFu;
+                    rgba[3] = (word >> 30) & 0x3u;
+                } else if (srcFormat == VK_FORMAT_A2R10G10B10_UINT_PACK32) {
+                    Uint32 word = 0;
+                    Memcpy(&word, source, sizeof(word));
+                    rgba[2] = word & 0x3FFu;
+                    rgba[1] = (word >> 10) & 0x3FFu;
+                    rgba[0] = (word >> 20) & 0x3FFu;
                     rgba[3] = (word >> 30) & 0x3u;
                 } else {
                     for (Int c = 0; c < desc.channels; ++c) {

@@ -133,9 +133,11 @@ namespace MobileGL {
             case TextureInternalFormat::RGBA8Snorm:
                 return VK_FORMAT_R8G8B8A8_SNORM;
             case TextureInternalFormat::RGB10A2:
-                return VK_FORMAT_A2R10G10B10_UNORM_PACK32;
+                // GL_UNSIGNED_INT_2_10_10_10_REV puts R in bits 0-9, which is Vulkan's
+                // A2B10G10R10 layout - A2R10G10B10 silently swaps R and B on upload.
+                return VK_FORMAT_A2B10G10R10_UNORM_PACK32;
             case TextureInternalFormat::RGB10A2UI:
-                return VK_FORMAT_A2R10G10B10_UINT_PACK32;
+                return VK_FORMAT_A2B10G10R10_UINT_PACK32;
             case TextureInternalFormat::RGBA16:
                 return VK_FORMAT_R16G16B16A16_UNORM;
             case TextureInternalFormat::RGBA16Snorm:
