@@ -1,0 +1,104 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 1a38c21..b0b6ce2 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -22,7 +22,7 @@ INCLUDE (FindPkgConfig)
+ 
+ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+ 
+-if(${CMAKE_SYSTEM_NAME} MATCHES "Linux|FreeBSD")
++if(${CMAKE_SYSTEM_NAME} MATCHES "Linux|FreeBSD|Android")
+ 	set(DEFAULT_EGL ON)
+ 	set(DEFAULT_GLX ON)
+ 	set(DEFAULT_WGL OFF)
+@@ -499,13 +499,18 @@ if(GBM_FOUND)
+ 	endif(HAVE_LIBCACA)
+ endif(GBM_FOUND)
+ 
+-if(PIGLIT_BUILD_EGL_TESTS)
+-	pkg_check_modules(EGL REQUIRED egl)
++# EGL *support* (PIGLIT_HAS_EGL, e.g. the surfaceless_egl waffle platform) is
++# independent of building the EGL test binaries, which additionally need X11.
++pkg_check_modules(EGL egl)
++if(EGL_FOUND)
+ 	set(PIGLIT_HAS_EGL True)
+ 	add_definitions(-DPIGLIT_HAS_EGL)
+ 	include_directories(${EGL_INCLUDE_DIRS})
+ 	add_definitions (${EGL_CFLAGS_OTHER})
+ endif()
++if(PIGLIT_BUILD_EGL_TESTS AND NOT EGL_FOUND)
++	message(FATAL_ERROR "PIGLIT_BUILD_EGL_TESTS requires EGL")
++endif()
+ 
+ # Put all executables into the bin subdirectory
+ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${piglit_BINARY_DIR}/bin)
+diff --git a/tests/CMakeLists.txt b/tests/CMakeLists.txt
+index e3c964a..36e2109 100644
+--- a/tests/CMakeLists.txt
++++ b/tests/CMakeLists.txt
+@@ -35,9 +35,9 @@ add_subdirectory (llvmpipe)
+ add_subdirectory (perf)
+ add_subdirectory (wgl)
+ 
+-IF(EGL_FOUND)
++IF(PIGLIT_BUILD_EGL_TESTS)
+ 	add_subdirectory (egl)
+-ENDIF(EGL_FOUND)
++ENDIF(PIGLIT_BUILD_EGL_TESTS)
+ 
+ IF(PIGLIT_BUILD_CL_TESTS)
+ 	add_subdirectory (cl)
+diff --git a/tests/util/piglit-dispatch-init.c b/tests/util/piglit-dispatch-init.c
+index 3d9772d..e036eac 100644
+--- a/tests/util/piglit-dispatch-init.c
++++ b/tests/util/piglit-dispatch-init.c
+@@ -322,14 +322,19 @@ piglit_dispatch_default_init(piglit_dispatch_api api)
+ 		break;
+ 	}
+ 
+-	if (gl_fw) {
+-		piglit_dispatch_init(api,
+-				     get_wfl_core_proc,
+-				     get_wfl_ext_proc,
+-				     default_unsupported,
+-				     default_get_proc_address_failure);
+-	} else
+-#endif
++	/* MobileGL piglit harness: always use the waffle resolvers in waffle
++	 * builds. This function runs while the waffle framework is still being
++	 * constructed, so gl_fw is NULL here and the gl_fw branch never fired;
++	 * the fallback resolvers bind GL functions via the SYSTEM libEGL's
++	 * eglGetProcAddress (a DT_NEEDED symbol), which on Android is the raw
++	 * GLES driver rather than the waffle-selected EGL implementation.
++	 */
++	piglit_dispatch_init(api,
++			     get_wfl_core_proc,
++			     get_wfl_ext_proc,
++			     default_unsupported,
++			     default_get_proc_address_failure);
++#else
+ 	{
+ 
+ 		piglit_dispatch_init(api,
+@@ -338,6 +343,7 @@ piglit_dispatch_default_init(piglit_dispatch_api api)
+ 				     default_unsupported,
+ 				     default_get_proc_address_failure);
+ 	}
++#endif
+ 
+ 	already_initialized = true;
+ }
+diff --git a/tests/util/piglit-util-gl.c b/tests/util/piglit-util-gl.c
+index 16eb425..7f2796c 100644
+--- a/tests/util/piglit-util-gl.c
++++ b/tests/util/piglit-util-gl.c
+@@ -47,6 +47,9 @@ bool piglit_is_core_profile;
+ bool piglit_is_gles(void)
+ {
+ 	const char *version_string = (const char *) glGetString(GL_VERSION);
++	if (getenv("PIGLIT_DEBUG_VERSION_STRING"))
++		printf("piglit: debug: GL_VERSION = \"%s\"\n",
++		       version_string ? version_string : "(null)");
+ 	return strncmp("OpenGL ES", version_string, 9) == 0;
+ }
+ 

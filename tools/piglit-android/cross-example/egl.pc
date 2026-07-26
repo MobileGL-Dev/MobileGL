@@ -1,0 +1,8 @@
+# Stub egl.pc for cross-building waffle/piglit against the NDK.
+# The NDK's own EGL headers are 1.4-era; point Cflags at MobileGL's bundled
+# EGL 1.5 headers (include/EGL) instead. -lEGL resolves to the NDK stub.
+Name: egl
+Description: EGL 1.5 headers (MobileGL bundled) + NDK libEGL stub
+Version: 1.5
+Libs: -lEGL
+Cflags: -IMOBILEGL_REPO/include

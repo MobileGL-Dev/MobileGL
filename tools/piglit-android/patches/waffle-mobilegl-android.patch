@@ -1,0 +1,445 @@
+diff --git a/meson.build b/meson.build
+index 7060fce..dcd45ed 100644
+--- a/meson.build
++++ b/meson.build
+@@ -78,7 +78,11 @@ else
+   dep_egl = dependency('egl', required : get_option('surfaceless_egl'))
+   build_surfaceless = dep_egl.found()
+ 
+-  dep_egl = dependency('egl', required : get_option('wayland'))
++  # Don't clobber a dep_egl found for surfaceless_egl when wayland is
++  # disabled (a disabled-feature dependency() returns not-found).
++  if not dep_egl.found()
++    dep_egl = dependency('egl', required : get_option('wayland'))
++  endif
+   dep_wayland_client = dependency(
+     'wayland-client', version : '>= 1.10', required : get_option('wayland'),
+   )
+diff --git a/src/waffle/egl/wegl_context.c b/src/waffle/egl/wegl_context.c
+index 26362a9..a26c27f 100644
+--- a/src/waffle/egl/wegl_context.c
++++ b/src/waffle/egl/wegl_context.c
+@@ -2,6 +2,8 @@
+ // SPDX-License-Identifier: BSD-2-Clause
+ 
+ #include <assert.h>
++#include <stdlib.h>
++#include <string.h>
+ 
+ #include <EGL/egl.h>
+ #include <EGL/eglext.h>
+@@ -19,6 +21,25 @@
+ #define EGL_CONTEXT_OPENGL_ROBUST_ACCESS  0x31B2
+ #endif
+ 
++// MobileGL piglit harness: WAFFLE_FORCE_GL_CONTEXT_VERSION="33core" upgrades
++// every desktop-GL context request to at least that version/profile (never
++// downgrades). MobileGL implements exactly GL 3.3 core; piglit tests that ask
++// for a low compat context (supports_gl_compat_version=10) would otherwise
++// get a context whose version string reflects the raw backend, and skip.
++static bool
++force_gl_context_version(EGLint *major, EGLint *minor, bool *core)
++{
++    const char *env = getenv("WAFFLE_FORCE_GL_CONTEXT_VERSION");
++    if (!env || strlen(env) < 2)
++        return false;
++    if (env[0] < '1' || env[0] > '9' || env[1] < '0' || env[1] > '9')
++        return false;
++    *major = env[0] - '0';
++    *minor = env[1] - '0';
++    *core = strstr(env, "core") != NULL;
++    return true;
++}
++
+ static bool
+ bind_api(struct wegl_platform *plat, int32_t waffle_context_api)
+ {
+@@ -61,13 +82,30 @@ create_real_context(struct wegl_config *config,
+         context_flags |= EGL_CONTEXT_OPENGL_DEBUG_BIT_KHR;
+     }
+ 
++    // Effective version/profile for desktop GL, possibly upgraded by
++    // WAFFLE_FORCE_GL_CONTEXT_VERSION (never downgraded).
++    EGLint eff_major = attrs->context_major_version;
++    EGLint eff_minor = attrs->context_minor_version;
++    int32_t eff_profile = attrs->context_profile;
++    if (waffle_context_api == WAFFLE_CONTEXT_OPENGL) {
++        EGLint f_major, f_minor;
++        bool f_core;
++        if (force_gl_context_version(&f_major, &f_minor, &f_core) &&
++            10 * f_major + f_minor > 10 * eff_major + eff_minor) {
++            eff_major = f_major;
++            eff_minor = f_minor;
++            if (f_core)
++                eff_profile = WAFFLE_CONTEXT_CORE_PROFILE;
++        }
++    }
++
+     switch (waffle_context_api) {
+         case WAFFLE_CONTEXT_OPENGL:
+             if (dpy->KHR_create_context) {
+                 attrib_list[i++] = EGL_CONTEXT_MAJOR_VERSION_KHR;
+-                attrib_list[i++] = attrs->context_major_version;
++                attrib_list[i++] = eff_major;
+                 attrib_list[i++] = EGL_CONTEXT_MINOR_VERSION_KHR;
+-                attrib_list[i++] = attrs->context_minor_version;
++                attrib_list[i++] = eff_minor;
+             }
+             else {
+                 assert(attrs->context_major_version == 1);
+@@ -92,9 +130,9 @@ create_real_context(struct wegl_config *config,
+                 }
+             }
+ 
+-            if (wcore_config_attrs_version_ge(attrs, 32))  {
++            if (10 * eff_major + eff_minor >= 32)  {
+                 assert(dpy->KHR_create_context);
+-                switch (attrs->context_profile) {
++                switch (eff_profile) {
+                     case WAFFLE_CONTEXT_CORE_PROFILE:
+                         attrib_list[i++] = EGL_CONTEXT_OPENGL_PROFILE_MASK_KHR;
+                         attrib_list[i++] = EGL_CONTEXT_OPENGL_CORE_PROFILE_BIT_KHR;
+diff --git a/src/waffle/egl/wegl_platform.c b/src/waffle/egl/wegl_platform.c
+index 6fe72ba..c3d72b1 100644
+--- a/src/waffle/egl/wegl_platform.c
++++ b/src/waffle/egl/wegl_platform.c
+@@ -13,11 +13,24 @@
+ #include "wegl_platform.h"
+ 
+ #ifdef WAFFLE_HAS_ANDROID
+-static const char *libEGL_filename = "libEGL.so";
++static const char *libEGL_default_filename = "libEGL.so";
+ #else
+-static const char *libEGL_filename = "libEGL.so.1";
++static const char *libEGL_default_filename = "libEGL.so.1";
+ #endif
+ 
++// MobileGL piglit harness: allow overriding which library provides the EGL
++// entry points (e.g. WAFFLE_EGL_LIBRARY=libMobileGL.so). MobileGL exports the
++// full EGL API under the real egl* names, so waffle can drive it directly
++// while the system libEGL.so stays untouched for MobileGL's own backend use.
++static const char *
++egl_library_name(void)
++{
++    const char *env = getenv("WAFFLE_EGL_LIBRARY");
++    if (env && env[0])
++        return env;
++    return libEGL_default_filename;
++}
++
+ static bool
+ supports_egl_khr_display(const struct wegl_platform *plat,
+                          const char *client_extensions)
+@@ -120,7 +133,7 @@ wegl_platform_teardown(struct wegl_platform *self)
+             ok = false;
+             wcore_errorf(WAFFLE_ERROR_UNKNOWN,
+                          "dlclose(\"%s\") failed: %s",
+-                         libEGL_filename, dlerror());
++                         egl_library_name(), dlerror());
+         }
+         self->egl.handle = NULL;
+     }
+@@ -132,12 +145,19 @@ wegl_platform_teardown(struct wegl_platform *self)
+ bool
+ wegl_platform_init(struct wegl_platform *self, EGLenum egl_platform)
+ {
+-    static const char *const dso_names[] = {
++    static const char *dso_names[] = {
+         "libGL.so.1",
+         "libGLESv1_CM.so.1",
+         "libGLESv2.so.2",
+     };
+ 
++    // MobileGL piglit harness: let waffle_dl_sym(WAFFLE_DL_OPENGL, ...)
++    // resolve desktop-GL symbols from an alternate library (MobileGL exports
++    // real gl* names). Android has no libGL.so.1.
++    const char *gl_override = getenv("WAFFLE_GL_LIBRARY");
++    if (gl_override && gl_override[0])
++        dso_names[0] = gl_override;
++
+     wcore_platform_init(&self->wcore);
+     posix_platform_init(&self->wcore, dso_names);
+ 
+@@ -146,11 +166,11 @@ wegl_platform_init(struct wegl_platform *self, EGLenum egl_platform)
+     // Most Waffle platforms will call eglCreateWindowSurface.
+     self->egl_surface_type_mask = EGL_WINDOW_BIT;
+ 
+-    self->egl.handle = dlopen(libEGL_filename, RTLD_LAZY | RTLD_LOCAL);
++    self->egl.handle = dlopen(egl_library_name(), RTLD_LAZY | RTLD_LOCAL);
+     if (!self->egl.handle) {
+         wcore_errorf(WAFFLE_ERROR_FATAL,
+                      "dlopen(\"%s\") failed: %s",
+-                     libEGL_filename, dlerror());
++                     egl_library_name(), dlerror());
+         return false;
+     }
+ 
+@@ -158,7 +178,7 @@ wegl_platform_init(struct wegl_platform *self, EGLenum egl_platform)
+     self->egl.function = dlsym(self->egl.handle, "egl" #function);             \
+     if (!self->egl.function) {                                                 \
+         wcore_errorf(WAFFLE_ERROR_FATAL, "dlsym(\"%s\", \"%s\") failed: %s",   \
+-                     libEGL_filename, "egl" #function, dlerror());             \
++                     egl_library_name(), "egl" #function, dlerror());          \
+         goto error;                                                            \
+     }
+ 
+diff --git a/src/waffle/meson.build b/src/waffle/meson.build
+index 2ae4c40..e336566 100644
+--- a/src/waffle/meson.build
++++ b/src/waffle/meson.build
+@@ -22,6 +22,16 @@ deps_for_waffle = [
+   idep_threads,
+ ]
+ 
++# MobileGL piglit harness: the Android imagereader window mode in
++# surfaceless_egl needs AImageReader (libmediandk) and ANativeWindow
++# (libandroid).
++if build_surfaceless and host_machine.system() == 'android'
++  deps_for_waffle += [
++    cc.find_library('mediandk'),
++    cc.find_library('android'),
++  ]
++endif
++
+ files_libwaffle = files(
+   'api/api_priv.c',
+   'api/waffle_attrib_list.c',
+diff --git a/src/waffle/surfaceless_egl/sl_platform.c b/src/waffle/surfaceless_egl/sl_platform.c
+index 30018c1..2c0024c 100644
+--- a/src/waffle/surfaceless_egl/sl_platform.c
++++ b/src/waffle/surfaceless_egl/sl_platform.c
+@@ -101,7 +101,7 @@ static const struct wcore_platform_vtbl sl_platform_vtbl = {
+         .destroy = sl_window_destroy,
+         .show = sl_window_show,
+         .resize = sl_window_resize,
+-        .swap_buffers = wegl_surface_swap_buffers,
++        .swap_buffers = sl_window_swap_buffers,
+         .get_native = sl_window_get_native,
+     },
+ };
+diff --git a/src/waffle/surfaceless_egl/sl_platform.h b/src/waffle/surfaceless_egl/sl_platform.h
+index a97fabe..a1c91aa 100644
+--- a/src/waffle/surfaceless_egl/sl_platform.h
++++ b/src/waffle/surfaceless_egl/sl_platform.h
+@@ -5,7 +5,6 @@
+ 
+ #include <stdbool.h>
+ #include <stdlib.h>
+-#include <gbm.h>
+ 
+ #undef linux
+ 
+diff --git a/src/waffle/surfaceless_egl/sl_window.c b/src/waffle/surfaceless_egl/sl_window.c
+index 0c54613..d18f8b3 100644
+--- a/src/waffle/surfaceless_egl/sl_window.c
++++ b/src/waffle/surfaceless_egl/sl_window.c
+@@ -9,18 +9,108 @@
+ #include "wcore_tinfo.h"
+ 
+ #include "wegl_config.h"
++#include "wegl_display.h"
++#include "wegl_platform.h"
+ #include "wegl_util.h"
+ 
+ #include "sl_display.h"
+ #include "sl_platform.h"
+ #include "sl_window.h"
+ 
++#ifdef __ANDROID__
++#include <android/hardware_buffer.h>
++#include <android/native_window.h>
++#include <media/NdkImageReader.h>
++
++// MobileGL piglit harness: back "windows" with an AImageReader-provided
++// ANativeWindow instead of an EGL pbuffer. MobileGL's DirectVulkan backend
++// needs a real ANativeWindow on Android because the device ICD lacks
++// VK_EXT_headless_surface (which its pbuffer path requires).
++static bool
++sl_android_window_mode(void)
++{
++    const char *env = getenv("WAFFLE_ANDROID_WINDOW");
++    return env && strcmp(env, "imagereader") == 0;
++}
++
++static bool
++sl_imagereader_init(struct sl_window *self,
++                    struct wcore_config *wc_config,
++                    int32_t width, int32_t height)
++{
++    struct wegl_config *config = wegl_config(wc_config);
++    struct wegl_display *dpy = wegl_display(wc_config->display);
++    struct wegl_platform *plat = wegl_platform(dpy->wcore.platform);
++    AImageReader *reader = NULL;
++    ANativeWindow *window = NULL;
++
++    media_status_t st = AImageReader_newWithUsage(
++        width, height, AIMAGE_FORMAT_RGBA_8888,
++        AHARDWAREBUFFER_USAGE_GPU_COLOR_OUTPUT |
++            AHARDWAREBUFFER_USAGE_GPU_SAMPLED_IMAGE,
++        8, &reader);
++    if (st != AMEDIA_OK || !reader) {
++        wcore_errorf(WAFFLE_ERROR_UNKNOWN,
++                     "AImageReader_newWithUsage(%dx%d) failed: %d",
++                     width, height, (int)st);
++        return false;
++    }
++
++    st = AImageReader_getWindow(reader, &window);
++    if (st != AMEDIA_OK || !window) {
++        wcore_errorf(WAFFLE_ERROR_UNKNOWN,
++                     "AImageReader_getWindow failed: %d", (int)st);
++        AImageReader_delete(reader);
++        return false;
++    }
++
++    // MobileGL reads EGL_WIDTH/EGL_HEIGHT from the window-surface attrib
++    // list (non-standard); unknown attribs are ignored.
++    EGLint attrib_list[] = {
++        EGL_RENDER_BUFFER, EGL_BACK_BUFFER,
++        EGL_WIDTH, width,
++        EGL_HEIGHT, height,
++        EGL_NONE,
++    };
++
++    self->wegl.egl = plat->egl.CreateWindowSurface(
++        dpy->egl, config->egl, (EGLNativeWindowType)window, attrib_list);
++    if (!self->wegl.egl) {
++        wegl_emit_error(plat, "eglCreateWindowSurface");
++        AImageReader_delete(reader);
++        return false;
++    }
++
++    self->reader = reader;
++    return true;
++}
++
++static void
++sl_imagereader_drain(struct sl_window *self)
++{
++    if (!self->reader)
++        return;
++
++    // Keep the BufferQueue from filling up: nobody displays these frames,
++    // so consume-and-drop the latest (which also releases all older ones).
++    AImage *image = NULL;
++    if (AImageReader_acquireLatestImage(self->reader, &image) == AMEDIA_OK &&
++        image)
++        AImage_delete(image);
++}
++#endif // __ANDROID__
++
+ bool
+ sl_window_destroy(struct wcore_window *wc_self)
+ {
+     struct sl_window *self = sl_window(wegl_surface(wc_self));
+     bool ok = wegl_surface_teardown(&self->wegl);
+ 
++#ifdef __ANDROID__
++    if (self->reader)
++        AImageReader_delete(self->reader);
++#endif
++
+     free(self);
+     return ok;
+ }
+@@ -52,6 +142,11 @@ sl_window_create(struct wcore_platform *wc_plat,
+ 
+     wcore_window_init(&self->wegl.wcore, wc_config);
+ 
++#ifdef __ANDROID__
++    if (sl_android_window_mode())
++        ok = sl_imagereader_init(self, wc_config, width, height);
++    else
++#endif
+     ok = wegl_pbuffer_init(&self->wegl, wc_config, width, height);
+     if (!ok)
+         goto error;
+@@ -71,6 +166,18 @@ sl_window_show(struct wcore_window *wc_self)
+     return true;
+ }
+ 
++bool
++sl_window_swap_buffers(struct wcore_window *wc_self)
++{
++    bool ok = wegl_surface_swap_buffers(wc_self);
++
++#ifdef __ANDROID__
++    sl_imagereader_drain(sl_window(wegl_surface(wc_self)));
++#endif
++
++    return ok;
++}
++
+ bool
+ sl_window_resize(struct wcore_window *wc_self,
+                  int32_t width, int32_t height)
+@@ -83,6 +190,36 @@ sl_window_resize(struct wcore_window *wc_self,
+     struct wcore_tinfo *tinfo;
+     bool ok = true;
+ 
++#ifdef __ANDROID__
++    if (self->reader) {
++        // ImageReader-backed window: build a fresh reader + EGL window
++        // surface at the new size, make it current, then retire the old one.
++        struct sl_window new_win;
++        memset(&new_win, 0, sizeof(new_win));
++        wcore_window_init(&new_win.wegl.wcore, self->wc_config);
++
++        ok = sl_imagereader_init(&new_win, self->wc_config, width, height);
++        if (!ok)
++            return false;
++
++        tinfo = wcore_tinfo_get();
++        wc_ctx = tinfo->current_context;
++
++        ok = wegl_make_current(wc_plat, wc_dpy, &new_win.wegl.wcore, wc_ctx);
++        if (!ok) {
++            wegl_surface_teardown(&new_win.wegl);
++            AImageReader_delete(new_win.reader);
++            return false;
++        }
++
++        wegl_surface_teardown(&self->wegl);
++        AImageReader_delete(self->reader);
++        self->wegl.egl = new_win.wegl.egl;
++        self->reader = new_win.reader;
++        return true;
++    }
++#endif
++
+     // Create a new pbuffer for the resized window.
+     ok = wegl_pbuffer_init(&new_wegl, self->wc_config, width, height);
+     if (!ok)
+diff --git a/src/waffle/surfaceless_egl/sl_window.h b/src/waffle/surfaceless_egl/sl_window.h
+index 8a96239..65a86ad 100644
+--- a/src/waffle/surfaceless_egl/sl_window.h
++++ b/src/waffle/surfaceless_egl/sl_window.h
+@@ -9,9 +9,18 @@
+ 
+ struct wcore_platform;
+ 
++#ifdef __ANDROID__
++typedef struct AImageReader AImageReader;
++#endif
++
+ struct sl_window {
+     struct wegl_surface wegl;
+     struct wcore_config *wc_config;
++#ifdef __ANDROID__
++    // Non-NULL when the window is backed by an AImageReader ANativeWindow
++    // (WAFFLE_ANDROID_WINDOW=imagereader) instead of an EGL pbuffer.
++    AImageReader *reader;
++#endif
+ };
+ 
+ DEFINE_CONTAINER_CAST_FUNC(sl_window,
+@@ -31,6 +40,9 @@ sl_window_destroy(struct wcore_window *wc_self);
+ bool
+ sl_window_show(struct wcore_window *wc_self);
+ 
++bool
++sl_window_swap_buffers(struct wcore_window *wc_self);
++
+ bool
+ sl_window_resize(struct wcore_window *wc_self,
+                  int32_t width, int32_t height);

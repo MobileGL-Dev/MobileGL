@@ -1,0 +1,4 @@
+interface:
+  display_name: "MobileGL piglit on Android"
+  short_description: "Run piglit GL tests on-device against MobileGL backends"
+  default_prompt: "Use $piglit-on-android to run the piglit OpenGL 3.3 core suite on the connected Android device against MobileGL's DirectGLES and DirectVulkan backends and summarize the results."
