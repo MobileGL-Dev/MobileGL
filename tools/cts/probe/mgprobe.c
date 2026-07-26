@@ -77,6 +77,7 @@ typedef void *EGLNativeWindowType;
 #define GL_TEXTURE_MIN_FILTER 0x2801
 #define GL_TEXTURE_MAG_FILTER 0x2800
 #define GL_NEAREST 0x2600
+#define GL_RENDERBUFFER 0x8D41
 
 typedef EGLDisplay (*P_getDisplay)(EGLNativeDisplayType);
 typedef EGLBoolean (*P_initialize)(EGLDisplay, EGLint *, EGLint *);
@@ -105,6 +106,10 @@ typedef void (*P_glBindFramebuffer)(unsigned int, unsigned int);
 typedef void (*P_glFramebufferTexture2D)(unsigned int, unsigned int, unsigned int, unsigned int, int);
 typedef unsigned int (*P_glCheckFramebufferStatus)(unsigned int);
 typedef void (*P_glViewport)(int, int, int, int);
+typedef void (*P_glGenRenderbuffers)(int, unsigned int *);
+typedef void (*P_glBindRenderbuffer)(unsigned int, unsigned int);
+typedef void (*P_glRenderbufferStorage)(unsigned int, unsigned int, int, int);
+typedef void (*P_glFramebufferRenderbuffer)(unsigned int, unsigned int, unsigned int, unsigned int);
 
 static void *g_lib;
 static void *S(const char *n) { return dlsym(g_lib, n); }
@@ -256,6 +261,10 @@ int main(int argc, char **argv) {
     P_glFramebufferTexture2D glFramebufferTexture2D_ = (P_glFramebufferTexture2D)S("glFramebufferTexture2D");
     P_glCheckFramebufferStatus glCheckFramebufferStatus_ = (P_glCheckFramebufferStatus)S("glCheckFramebufferStatus");
     P_glViewport glViewport_ = (P_glViewport)S("glViewport");
+    P_glGenRenderbuffers glGenRenderbuffers_ = (P_glGenRenderbuffers)S("glGenRenderbuffers");
+    P_glBindRenderbuffer glBindRenderbuffer_ = (P_glBindRenderbuffer)S("glBindRenderbuffer");
+    P_glRenderbufferStorage glRenderbufferStorage_ = (P_glRenderbufferStorage)S("glRenderbufferStorage");
+    P_glFramebufferRenderbuffer glFramebufferRenderbuffer_ = (P_glFramebufferRenderbuffer)S("glFramebufferRenderbuffer");
 
     int major = -1, minor = -1, profile = -1;
     glGetIntegerv_(GL_MAJOR_VERSION, &major);
@@ -306,11 +315,43 @@ int main(int argc, char **argv) {
         printf("  user-FBO incomplete status=0x%x\n", fbst);
     }
 
+    /* FBO with a RENDERBUFFER colour attachment. This is what dEQP's
+     * FboRenderContext allocates for --deqp-surface-type=fbo, so it is the path
+     * that actually decides a conformance run - a texture-attached FBO working
+     * says nothing about it. */
+    unsigned int rbo = 0, rfbo = 0;
+    int rboOk = 0;
+    if (glGenRenderbuffers_ && glBindRenderbuffer_ && glRenderbufferStorage_ && glFramebufferRenderbuffer_) {
+        glGenRenderbuffers_(1, &rbo);
+        glBindRenderbuffer_(GL_RENDERBUFFER, rbo);
+        glRenderbufferStorage_(GL_RENDERBUFFER, GL_RGBA8, DIM, DIM);
+        glBindRenderbuffer_(GL_RENDERBUFFER, 0);
+        glGenFramebuffers_(1, &rfbo);
+        glBindFramebuffer_(GL_FRAMEBUFFER, rfbo);
+        glFramebufferRenderbuffer_(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, rbo);
+        unsigned int rst = glCheckFramebufferStatus_(GL_FRAMEBUFFER);
+        if (rst == GL_FRAMEBUFFER_COMPLETE) {
+            glViewport_(0, 0, DIM, DIM);
+            glClearColor_(0.1f, 0.7f, 0.3f, 1.0f);
+            glClear_(GL_COLOR_BUFFER_BIT);
+            if (glFinish_) glFinish_();
+            memset(px, 0, sizeof px);
+            glReadPixels_(DIM / 2, DIM / 2, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, px);
+            rboOk = near8(px[0], 26, 10) && near8(px[1], 179, 10) && near8(px[2], 77, 10);
+            printf("  rbo-FBO readback    (%u,%u,%u,%u) %s\n", px[0], px[1], px[2], px[3],
+                   rboOk ? "ok" : "BROKEN");
+        } else {
+            printf("  rbo-FBO incomplete status=0x%x\n", rst);
+        }
+    } else {
+        printf("  rbo-FBO skipped (renderbuffer entry points unavailable)\n");
+    }
+
     unsigned glerr = glGetError_ ? glGetError_() : 0;
-    int ok = fboOk && (major > 3 || (major == 3 && minor >= 3)) && (profile & 1) && glerr == 0;
-    printf("%s backend=%s surface=%s default_fb=%s user_fbo=%s glerr=0x%x\n",
+    int ok = fboOk && rboOk && (major > 3 || (major == 3 && minor >= 3)) && (profile & 1) && glerr == 0;
+    printf("%s backend=%s surface=%s default_fb=%s user_fbo=%s rbo_fbo=%s glerr=0x%x\n",
            ok ? "PASS" : "FAIL", backend, surface, defOk ? "ok" : "broken",
-           fboOk ? "ok" : "broken", glerr);
+           fboOk ? "ok" : "broken", rboOk ? "ok" : "broken", glerr);
 
     fflush(stdout);
     /* MobileGL aborts in static teardown; leave before that runs. */

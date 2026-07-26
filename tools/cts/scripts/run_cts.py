@@ -95,6 +95,8 @@ def main():
                     help="seconds before giving up on one glcts invocation (a GPU hang never returns)")
     ap.add_argument("--skip-file", default=None,
                     help="file of case names to exclude, e.g. cases known to hang the device")
+    ap.add_argument("--env", action="append", default=[], metavar="K=V",
+                    help="extra environment variable for glcts (repeatable)")
     args = ap.parse_args()
 
     os.makedirs(args.outdir, exist_ok=True)
@@ -148,9 +150,10 @@ def main():
             continue
         adb(args.serial, "shell", f"rm -f {dev_qpa}", timeout=60)
 
+        extra_env = "".join(f"{kv} " for kv in args.env)
         cmd = (
             f"cd {args.device_dir} && "
-            f"MOBILEGL_BACKEND_TYPE={args.backend} LD_LIBRARY_PATH=. "
+            f"MOBILEGL_BACKEND_TYPE={args.backend} LD_LIBRARY_PATH=. {extra_env}"
             f"./glcts --deqp-caselist-file={dev_list} "
             f"--deqp-surface-type={args.surface} "
             f"--deqp-terminate-on-device-lost=disable "
