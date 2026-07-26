@@ -1,0 +1,30 @@
+; MobileGL WGL exports. The wgl* entry points are defined without
+; __declspec(dllexport) because wingdi.h pre-declares them (with _GDI32_ they
+; become plain declarations, and MSVC rejects adding dllexport afterwards),
+; so this .def file is what actually exports them from the DLL.
+EXPORTS
+    wglChoosePixelFormat
+    wglCopyContext
+    wglCreateContext
+    wglCreateLayerContext
+    wglDeleteContext
+    wglDescribeLayerPlane
+    wglDescribePixelFormat
+    wglGetCurrentContext
+    wglGetCurrentDC
+    wglGetDefaultProcAddress
+    wglGetLayerPaletteEntries
+    wglGetPixelFormat
+    wglGetProcAddress
+    wglMakeCurrent
+    wglRealizeLayerPalette
+    wglSetLayerPaletteEntries
+    wglSetPixelFormat
+    wglShareLists
+    wglSwapBuffers
+    wglSwapLayerBuffers
+    wglSwapMultipleBuffers
+    wglUseFontBitmapsA
+    wglUseFontBitmapsW
+    wglUseFontOutlinesA
+    wglUseFontOutlinesW

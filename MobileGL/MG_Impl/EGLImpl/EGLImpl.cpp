@@ -49,6 +49,8 @@ namespace MobileGL::MG_Impl::EGLImpl {
             return MG_Backend::WindowBackend::Android;
 #elif defined(__APPLE__)
             return MG_Backend::WindowBackend::MetalLayer;
+#elif defined(_WIN32)
+            return MG_Backend::WindowBackend::Win32;
 #elif defined(__linux__)
             return MG_Backend::WindowBackend::X11;
 #else

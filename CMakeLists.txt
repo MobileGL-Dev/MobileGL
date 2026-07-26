@@ -303,6 +303,13 @@ if (ANDROID)
     )
 endif()
 
+if (WIN32)
+    list(APPEND SOURCE_FILES
+        MobileGL/MG_Impl/WGLImpl/WGLImpl.cpp
+        MobileGL/MG_Impl/WGLImpl/Exporting/Definitions.cpp
+    )
+endif()
+
 set(MOBILEGL_LINK_LIBRARIES
         glslang::glslang
         spirv-cross-c
@@ -331,9 +338,17 @@ set(MOBILEGL_INCLUDE_DIR
         ${SPIRV-Headers_SOURCE_DIR}/include
 )
 
-add_library(${CMAKE_PROJECT_NAME} SHARED 
+add_library(${CMAKE_PROJECT_NAME} SHARED
     ${SOURCE_FILES}
 )
+
+if (WIN32)
+    # The wgl* entry points are exported via .def (see the comment in wgl.def);
+    # only the shared library links it.
+    target_sources(${CMAKE_PROJECT_NAME} PRIVATE
+        MobileGL/MG_Impl/WGLImpl/Exporting/wgl.def
+    )
+endif()
 
 if (CMAKE_BUILD_TYPE STREQUAL "Debug")
     set_target_properties(${CMAKE_PROJECT_NAME} PROPERTIES
@@ -375,6 +390,18 @@ if(UNIX AND NOT APPLE AND NOT ANDROID)
             COMMENT "Creating ${MOBILEGL_LOADER_ALIAS} alias for Linux GL/EGL loaders"
         )
     endforeach()
+endif()
+
+if(WIN32)
+    # Drop-in for the classic GL loader path: a copy named opengl32.dll placed
+    # next to a host executable is what LoadLibrary("opengl32.dll") and gdi32's
+    # pixel-format forwarding will resolve.
+    add_custom_command(TARGET ${CMAKE_PROJECT_NAME} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "$<TARGET_FILE:${CMAKE_PROJECT_NAME}>"
+                "$<TARGET_FILE_DIR:${CMAKE_PROJECT_NAME}>/opengl32.dll"
+        COMMENT "Creating opengl32.dll drop-in copy"
+    )
 endif()
 
 if(NOT ANDROID)

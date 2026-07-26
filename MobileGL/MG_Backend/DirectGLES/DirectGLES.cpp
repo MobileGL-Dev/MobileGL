@@ -4307,9 +4307,23 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
         if (!ChooseConfigForSurface(surfaceBit, g_Config, window)) return false;
 
-        const EGLint contextAttribs[] = {EGL_CONTEXT_CLIENT_VERSION, 3, EGL_NONE};
+        // Negotiate the highest ES 3.x context. Version-strict EGL implementations
+        // (ANGLE) return exactly the requested minor, and a bare CLIENT_VERSION 3
+        // request yields a 3.0 context that lacks the 3.1/3.2 texture targets the
+        // capability probes exercise; mobile drivers ignore the minor and hand out
+        // their maximum either way.
+        for (const EGLint minorVersion : {2, 1, 0}) {
+            const EGLint contextAttribs[] = {EGL_CONTEXT_MAJOR_VERSION, 3,
+                                             EGL_CONTEXT_MINOR_VERSION, minorVersion,
+                                             EGL_NONE};
+            g_Context = g_EGLFuncs.eglCreateContext(g_Display, g_Config, EGL_NO_CONTEXT, contextAttribs);
+            if (g_Context != EGL_NO_CONTEXT) {
+                return true;
+            }
+        }
 
-        g_Context = g_EGLFuncs.eglCreateContext(g_Display, g_Config, EGL_NO_CONTEXT, contextAttribs);
+        const EGLint legacyContextAttribs[] = {EGL_CONTEXT_CLIENT_VERSION, 3, EGL_NONE};
+        g_Context = g_EGLFuncs.eglCreateContext(g_Display, g_Config, EGL_NO_CONTEXT, legacyContextAttribs);
         return g_Context != EGL_NO_CONTEXT;
     }
 

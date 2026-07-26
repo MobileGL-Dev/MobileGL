@@ -34,6 +34,7 @@
 #define MOBILEGL_EGL_API MOBILEGL_API
 #define MOBILEGL_CGL_API MOBILEGL_API
 #define MOBILEGL_NSOPENGL_API MOBILEGL_API
+#define MOBILEGL_WGL_API MOBILEGL_API
 
 // ====================== MobileGL configurations ======================= //
 #ifndef MOBILEGL_LOG_ACTIVE_LEVEL

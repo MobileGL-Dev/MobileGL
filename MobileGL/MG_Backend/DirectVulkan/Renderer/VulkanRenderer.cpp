@@ -7560,6 +7560,10 @@ void main() {
         MOBILEGL_ASSERT(hwnd, "HWND is null");
 
         VkWin32SurfaceCreateInfoKHR sci{VK_STRUCTURE_TYPE_WIN32_SURFACE_CREATE_INFO_KHR};
+        sci.hinstance = reinterpret_cast<HINSTANCE>(GetWindowLongPtrW(hwnd, GWLP_HINSTANCE));
+        if (!sci.hinstance) {
+            sci.hinstance = GetModuleHandleW(nullptr);
+        }
         sci.hwnd = hwnd;
         VK_VERIFY(vkCreateWin32SurfaceKHR(m_instance, &sci, nullptr, &m_surface), "vkCreateWin32SurfaceKHR failed");
 #elif defined VK_USE_PLATFORM_METAL_EXT

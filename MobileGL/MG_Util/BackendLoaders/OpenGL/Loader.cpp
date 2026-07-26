@@ -9,7 +9,12 @@
 #include "Loader.h"
 #include "MG_Util/Types.h"
 #include <Config.h>
-#if !defined(__WIN32) && !defined(_WIN32)
+#if defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN 1
+#endif
+#include <windows.h>
+#else
 #include <dlfcn.h>
 #endif
 
@@ -60,7 +65,14 @@ namespace MobileGL::MG_Util::BackendLoader {
 #endif
 
     static void* OpenLib(const Vector<String>& names) {
-#if !defined(__WIN32) && !defined(_WIN32) && (!defined(__APPLE__) || defined(MOBILEGL_IOS))
+#if defined(_WIN32)
+        for (const auto& name : names) {
+            if (HMODULE lib = LoadLibraryA(name.c_str())) {
+                MGLOG_I("Loaded GL backend library: %s", name.c_str());
+                return reinterpret_cast<void*>(lib);
+            }
+        }
+#elif !defined(__APPLE__) || defined(MOBILEGL_IOS)
         static const String LibPathPrefixes[] = {
 #if defined(MOBILEGL_IOS)
             "@rpath/", "@executable_path/Frameworks/", "@loader_path/Frameworks/",
@@ -104,7 +116,9 @@ namespace MobileGL::MG_Util::BackendLoader {
     }
 
     inline void* ProcAddress(void* lib, const char* name) {
-#if !defined(__WIN32) && !defined(_WIN32) && (!defined(__APPLE__) || defined(MOBILEGL_IOS))
+#if defined(_WIN32)
+        return reinterpret_cast<void*>(::GetProcAddress(reinterpret_cast<HMODULE>(lib), name));
+#elif !defined(__APPLE__) || defined(MOBILEGL_IOS)
         return dlsym(lib, name);
 #else
         return nullptr;
@@ -520,6 +534,15 @@ namespace MobileGL::MG_Util::BackendLoader {
 #if defined(MOBILEGL_TRACE_ANGLE_VARIANTS) && defined(__ANDROID__)
         void* angleGlesLib = nullptr;
 #endif
+#if defined(_WIN32)
+        // ANGLE is the GLES provider on Windows regardless of UseAngle(). Preload
+        // libGLESv2.dll so libEGL.dll resolves its dependency from the same directory.
+        if (!OpenLib({"libGLESv2.dll"})) {
+            MGLOG_E("Failed to open ANGLE libGLESv2.dll");
+            return;
+        }
+        eglLib = OpenLib({"libEGL.dll"});
+#else
         if (UseAngle()) {
             void* glesLib = OpenLib({"libGLESv2_angle.so"});
             if (!glesLib) {
@@ -541,6 +564,7 @@ namespace MobileGL::MG_Util::BackendLoader {
             eglLib = OpenLib({"libEGL.so"});
 #endif
         }
+#endif // !_WIN32
 
         if (!eglLib) {
             MGLOG_E("Failed to open EGL library");

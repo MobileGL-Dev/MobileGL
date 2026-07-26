@@ -701,9 +701,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
         if ((handle.Backend != WindowBackend::Android &&
              handle.Backend != WindowBackend::X11 &&
-             handle.Backend != WindowBackend::MetalLayer) ||
+             handle.Backend != WindowBackend::MetalLayer &&
+             handle.Backend != WindowBackend::Win32) ||
             !handle.Handle) {
-            MGLOG_E("DirectGLES backend only supports Android, X11, and CAMetalLayer native windows");
+            MGLOG_E("DirectGLES backend only supports Android, X11, CAMetalLayer, and Win32 native windows");
             return false;
         }
 

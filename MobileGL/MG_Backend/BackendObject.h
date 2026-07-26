@@ -313,7 +313,8 @@ namespace MobileGL {
             Android,
             X11,
             MetalLayer,
-            // TODO: Wayland, Windows, etc.
+            Win32, // Handle is an HWND
+            // TODO: Wayland, etc.
             WindowBackendCount,
             Unknown = -1
         };

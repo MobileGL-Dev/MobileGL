@@ -9,6 +9,7 @@
 #include "Init.h"
 #include "Config.h"
 #include <MG_Backend/BackendObjects.h>
+#include <MG_Backend/DirectVulkan/DirectVulkan.h>
 #include <MG_State/GLState/Core.h>
 #include <MG_State/EGLState/Core.h>
 #include <MG_Impl/GLImpl/Texture/ProxyTexture.h>
@@ -87,17 +88,35 @@ namespace MobileGL {
 #endif
 
 #ifdef _WIN32
-    BOOL WINAPI DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserved) {
-        switch (ul_reason_for_call) {
-        case DLL_PROCESS_ATTACH:
-            Initialize();
-            break;
-
-        case DLL_PROCESS_DETACH:
-            Destroy();
-            break;
+    namespace {
+        // Called on DLL_PROCESS_DETACH, which runs BEFORE the CRT executes this
+        // DLL's static destructors. Releasing (deliberately leaking) the global
+        // singletons here keeps those destructors from tearing down the backend
+        // inside a dying process - other threads have already been terminated,
+        // so Vulkan/GLES cleanup crashes with the process half-dead. The process
+        // is exiting; the OS reclaims everything.
+        void AbandonAtProcessExit() {
+            MGLOG_I("MobileGL: process detach, abandoning global state");
+            MG_Backend::DirectVulkan::pVulkanRenderer.release();
+            MG_Backend::pActiveBackendObject.release();
+            MG_State::pGLContext.release();
+            MG_State::pEGLContext.release();
+            MG_Impl::GLImpl::TextureImpl::pProxyTextureManager.release();
+            MG_Impl::GLImpl::FramebufferImpl::pDefaultFramebufferInfo.release();
+            MGLOG_I("MobileGL: global state abandoned");
         }
-        return TRUE;
-    }
+    } // namespace
 #endif
 } // namespace MobileGL
+
+#ifdef _WIN32
+// Initialization is NOT done here: MobileGL::Initialize() loads libraries
+// (Vulkan/ANGLE) and spins up glslang, none of which is safe under the loader
+// lock. The WGL host layer calls Initialize() lazily on its first entry point.
+extern "C" BOOL WINAPI DllMain(HINSTANCE, DWORD reason, LPVOID) {
+    if (reason == DLL_PROCESS_DETACH) {
+        MobileGL::AbandonAtProcessExit();
+    }
+    return TRUE;
+}
+#endif
