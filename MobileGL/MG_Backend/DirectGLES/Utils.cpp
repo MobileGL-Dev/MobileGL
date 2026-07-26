@@ -342,6 +342,41 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
             return result;
         }
+
+        String RemoveClipDistanceRedeclaration(const String& glslCode) {
+#ifdef TRACY_ENABLE
+            ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
+#endif
+            // Adreno rejects any redeclaration of gl_ClipDistance/gl_CullDistance ("reserved
+            // built-in name") even with GL_EXT_clip_cull_distance required, but accepts plain
+            // usage of the builtin. Drop the desktop-style redeclaration line SPIRV-Cross
+            // prints; the "#extension GL_EXT_clip_cull_distance : require" line stays.
+            static const std::regex redeclarationRegex(
+                R"(^\s*(?:out|in)\s+(?:(?:high|medium|low)p\s+)?float\s+gl_(?:Clip|Cull)Distance\[[0-9]+\];\s*$)");
+
+            String result;
+            result.reserve(glslCode.size());
+            SizeT lineStart = 0;
+            Bool firstLine = true;
+            while (lineStart <= glslCode.size()) {
+                SizeT lineEnd = glslCode.find('\n', lineStart);
+                const Bool lastLine = lineEnd == String::npos;
+                String line = glslCode.substr(lineStart, lastLine ? String::npos : lineEnd - lineStart);
+
+                if (!std::regex_match(line, redeclarationRegex)) {
+                    if (!firstLine) {
+                        result += '\n';
+                    }
+                    result += line;
+                    firstLine = false;
+                }
+                if (lastLine) {
+                    break;
+                }
+                lineStart = lineEnd + 1;
+            }
+            return result;
+        }
     } // namespace PrgramImpl
 
     namespace Utils {

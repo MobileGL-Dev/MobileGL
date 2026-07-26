@@ -3291,6 +3291,19 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
             auto& shaderSpirvs = stateProgramObject->GetGeneratedSpirv();
 
+            // Adreno's ESSL compiler mishandles gl_ClipDistance (rejects redeclarations,
+            // miscompiles non-constant-index writes and constant-index gl_in element reads,
+            // crashes on whole-array gl_in reads) and cannot dynamically index the global
+            // const struct[] LUTs SPIRV-Cross likes to emit. Gate the workarounds to
+            // Qualcomm; MOBILEGL_QUIRK_CLIP_DISTANCE overrides the device detection.
+            const MG_Config::QuirkOverride clipDistanceQuirkOverride =
+                MG_Config::Features.ClipDistanceQuirk;
+            const Bool applyClipDistanceQuirk =
+                clipDistanceQuirkOverride == MG_Config::QuirkOverride::ForceOn ||
+                (clipDistanceQuirkOverride == MG_Config::QuirkOverride::Auto &&
+                 pActiveBackendObject &&
+                 pActiveBackendObject->GetDynamicParameters().GpuVendor == GpuVendorKind::Qualcomm);
+
             for (int index = 0; index < attachedShaders.size(); ++index) {
                 auto& shader = attachedShaders[index];
                 GLenum glShaderType = MG_Util::ConvertShaderStageToGLEnum(shader->GetShaderStage());
@@ -3337,6 +3350,37 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     effectiveSpirv = &foldedOffsetSpirv;
                 } else {
                     MGLOG_W("FoldConstOffsetFor1DFetchForEssl failed, continuing with unfolded SPIR-V.");
+                }
+
+                // Adreno quirk: shadow gl_ClipDistance in Private arrays so the transpiled
+                // ESSL only writes the builtin with literal constant indices (flushed before
+                // EmitVertex/return) and only reads gl_in clip distances through dynamic loop
+                // indices - the shapes this driver compiles correctly. Must run after the
+                // access-chain clamp above so the flush indices stay literal constants.
+                Vector<unsigned int> clipDistanceSpirv;
+                if (applyClipDistanceQuirk &&
+                    (glShaderType == GL_VERTEX_SHADER || glShaderType == GL_GEOMETRY_SHADER)) {
+                    if (MG_Util::ShaderTranspiler::ShaderCompiler::LowerClipDistanceForEssl(
+                            *effectiveSpirv, clipDistanceSpirv) &&
+                        !clipDistanceSpirv.empty()) {
+                        effectiveSpirv = &clipDistanceSpirv;
+                    } else {
+                        MGLOG_W("LowerClipDistanceForEssl failed, continuing with unlowered SPIR-V.");
+                    }
+                }
+
+                // Adreno quirk: split single constant-composite stores of struct arrays so
+                // SPIRV-Cross does not promote them to global const struct[] LUTs, which this
+                // driver cannot dynamically index ("Cannot offset into the structure").
+                Vector<unsigned int> structLutSpirv;
+                if (applyClipDistanceQuirk) {
+                    if (MG_Util::ShaderTranspiler::ShaderCompiler::DefeatConstStructArrayLutForEssl(
+                            *effectiveSpirv, structLutSpirv) &&
+                        !structLutSpirv.empty()) {
+                        effectiveSpirv = &structLutSpirv;
+                    } else {
+                        MGLOG_W("DefeatConstStructArrayLutForEssl failed, continuing with unsplit SPIR-V.");
+                    }
                 }
 
                 // ESSL stage-matches uniform blocks by member precision, but SPIRV-Cross prints
@@ -3397,6 +3441,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
                 source = RebindImageUniformsToFrontendUnits(std::move(source), stateProgramObject);
                 source = RemoveLayoutBinding(source);
+                if (applyClipDistanceQuirk) {
+                    // Adreno rejects the gl_ClipDistance redeclaration SPIRV-Cross still emits
+                    // ("reserved built-in name") but accepts plain usage with
+                    // GL_EXT_clip_cull_distance required; drop the line, keep the #extension.
+                    source = RemoveClipDistanceRedeclaration(source);
+                }
                 source = ProcessOutColorLocations(source);
                 source = ForceFlatIntegerVaryings(source, glShaderType);
                 source = EmulateBaseInstanceInVertexShader(std::move(source), glShaderType);

@@ -43,6 +43,20 @@ namespace MobileGL {
                 // transpile path.
                 static bool FoldConstOffsetFor1DFetchForEssl(const Vector<Uint32>& inputBinary,
                                                              Vector<uint32_t>& outputBinary);
+                // Shadows gl_ClipDistance in Private mg_ClipDistance/mg_ClipDistanceIn arrays so
+                // the decompiled ESSL only writes the builtin with literal constant indices
+                // (flush before EmitVertex/return) and only reads gl_in clip distances with
+                // dynamic loop indices (copy loop): the other shapes miscompile or crash
+                // Adreno's ESSL compiler. Vertex/geometry stages; DirectGLES transpile path on
+                // Qualcomm only (quirk-gated). See LowerClipDistanceForEsslPass.
+                static bool LowerClipDistanceForEssl(const Vector<Uint32>& inputBinary,
+                                                     Vector<uint32_t>& outputBinary);
+                // Splits a Function-storage array-of-structs variable's single constant-composite
+                // store into per-element stores so SPIRV-Cross does not hoist it into a global
+                // const struct[] LUT, which Adreno cannot dynamically index. DirectGLES
+                // transpile path on Qualcomm only (quirk-gated). See DefeatConstStructArrayLutPass.
+                static bool DefeatConstStructArrayLutForEssl(const Vector<Uint32>& inputBinary,
+                                                             Vector<uint32_t>& outputBinary);
                 // Drops RelaxedPrecision member decorations from uniform-block structs so
                 // SPIRV-Cross prints the same (highp) member precision in every stage; ES
                 // drivers reject cross-stage uniform blocks whose member precisions differ.

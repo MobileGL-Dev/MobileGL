@@ -80,6 +80,11 @@ namespace MobileGL::MG_Config {
         // rewrites the recognized workgroup prefix-scan template on Qualcomm devices with
         // subgroups wider than 32 lanes (see ShaderSourceProcessor's quirk registry).
         QuirkOverride SubgroupPrefixScanQuirk = QuirkOverride::Auto;
+        // MOBILEGL_QUIRK_CLIP_DISTANCE: overrides the DirectGLES quirk that lowers
+        // gl_ClipDistance for Adreno's ESSL compiler (shadow Private arrays with
+        // constant-index builtin flushes, dynamic-index gl_in copy loop, redeclaration
+        // strip, and const struct-array LUT splitting). Auto detects Qualcomm.
+        QuirkOverride ClipDistanceQuirk = QuirkOverride::Auto;
         // MOBILEGL_MAGMA_DISABLE_BLENDED_DEPTH_WRITE: overrides the DirectVulkan quirk that
         // strips depth writes from accumulation-blended pipelines (MIN/MAX or additive
         // ONE+ONE - the multi-pass depth-equality signature) on drivers without
