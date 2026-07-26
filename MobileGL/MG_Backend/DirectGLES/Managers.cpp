@@ -1262,14 +1262,30 @@ namespace MobileGL::MG_Backend::DirectGLES {
             const auto& allAttributes = stateVAOObject->GetAllAttributes();
             for (Uint attribIndex = 0; attribIndex < allAttributes.size(); ++attribIndex) {
                 const auto& attrib = allAttributes[attribIndex];
+                const Uint32 attribBit = 1u << attribIndex;
+
+                // An enabled attrib with neither a buffer object nor a client pointer has no
+                // source; GL tolerates the state (only draws consuming it are undefined), but
+                // Adreno's ES driver memcpys the "client array" from address 0 at draw time
+                // (SIGSEGV). Keep such attribs disabled on the backend VAO and re-enable them
+                // the moment they gain a source - the mask-vs-current compare below triggers
+                // the enable even when only the Buffer/Format versions changed.
+                const Bool unsourceable = attrib.Enabled && !attrib.Buffer && attrib.Offset == 0;
+                const Bool wasForceDisabled = (m_forceDisabledAttribsMask & attribBit) != 0;
+
                 Bool needsSyncSwitch = allAttributeVersions[attribIndex].SwitchVersion !=
                                        m_syncedAttributeVersions[attribIndex].SwitchVersion;
-                if (needsSyncSwitch) {
-                    if (attrib.Enabled) {
+                if (needsSyncSwitch || unsourceable != wasForceDisabled) {
+                    if (attrib.Enabled && !unsourceable) {
                         g_GLESFuncs.glEnableVertexAttribArray(attribIndex);
                     } else {
                         g_GLESFuncs.glDisableVertexAttribArray(attribIndex);
                     }
+                }
+                if (unsourceable) {
+                    m_forceDisabledAttribsMask |= attribBit;
+                } else {
+                    m_forceDisabledAttribsMask &= ~attribBit;
                 }
 
                 Bool needsSyncFormat = allAttributeVersions[attribIndex].FormatVersion !=
@@ -1278,7 +1294,17 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                        m_syncedAttributeVersions[attribIndex].BufferVersion;
                 if (!needsSyncFormat && !needsSyncBuffer) continue;
 
+                if (unsourceable) continue;
+
+                // Client-side array with a non-null pointer: the pointer is uploaded and applied
+                // per draw by SyncClientSideAttributesForDrawArrays.
+                if (!attrib.Buffer) continue;
+
                 if (!BindAttributeBuffer(attrib)) {
+                    if (attrib.Enabled) {
+                        g_GLESFuncs.glDisableVertexAttribArray(attribIndex);
+                        m_forceDisabledAttribsMask |= attribBit;
+                    }
                     continue;
                 }
 
@@ -3285,6 +3311,32 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     MG_Util::ShaderTranspiler::ShaderCompiler::LowerDrawParametersForEssl(spirvCode, loweredSpirv) &&
                     !loweredSpirv.empty()) {
                     effectiveSpirv = &loweredSpirv;
+                }
+
+                // GL 3.3 only promises undefined *values* for out-of-bounds array indexing, but
+                // Adreno's ESSL compiler constant-folds a provably out-of-bounds local-array
+                // index into poison that corrupts the whole shader's output. Clamp every
+                // access-chain index to its declared bounds before transpiling.
+                Vector<unsigned int> clampedSpirv;
+                if (MG_Util::ShaderTranspiler::ShaderCompiler::ClampAccessChainIndicesForEssl(*effectiveSpirv,
+                                                                                              clampedSpirv) &&
+                    !clampedSpirv.empty()) {
+                    effectiveSpirv = &clampedSpirv;
+                } else {
+                    MGLOG_W("ClampAccessChainIndicesForEssl failed, continuing with unclamped SPIR-V.");
+                }
+
+                // SPIRV-Cross emulates 1D samplers as 2D for ES: it widens texelFetch coordinates
+                // to ivec2 but keeps the ConstOffset operand scalar, which is not a valid ESSL
+                // texelFetchOffset overload (Adreno rejects it). Fold the constant offset into the
+                // coordinate instead (texelFetchOffset(t,P,l,o) == texelFetch(t,P+o,l)).
+                Vector<unsigned int> foldedOffsetSpirv;
+                if (MG_Util::ShaderTranspiler::ShaderCompiler::FoldConstOffsetFor1DFetchForEssl(
+                        *effectiveSpirv, foldedOffsetSpirv) &&
+                    !foldedOffsetSpirv.empty()) {
+                    effectiveSpirv = &foldedOffsetSpirv;
+                } else {
+                    MGLOG_W("FoldConstOffsetFor1DFetchForEssl failed, continuing with unfolded SPIR-V.");
                 }
 
                 // ESSL stage-matches uniform blocks by member precision, but SPIRV-Cross prints

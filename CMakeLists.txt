@@ -194,6 +194,7 @@ set(SOURCE_FILES
     MobileGL/MG_Util/ShaderTranspiler/SpirvPasses/StripUboMemberRelaxedPrecisionPass.cpp
     MobileGL/MG_Util/ShaderTranspiler/SpirvPasses/StripNoPerspectivePass.cpp
     MobileGL/MG_Util/ShaderTranspiler/SpirvPasses/EmulateNoPerspectivePass.cpp
+    MobileGL/MG_Util/ShaderTranspiler/SpirvPasses/FoldConstOffsetFor1DFetchPass.cpp
 
     MobileGL/MG_Util/BackendLoaders/OpenGL/Loader.cpp
     MobileGL/MG_Util/BackendLoaders/Vulkan/Loader.cpp

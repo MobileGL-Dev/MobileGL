@@ -27,6 +27,22 @@ namespace MobileGL {
                 // Only for backends without native draw-parameter support (DirectGLES).
                 static bool LowerDrawParametersForEssl(const Vector<Uint32>& inputBinary,
                                                        Vector<uint32_t>& outputBinary);
+                // Clamps every access-chain index to its declared bounds (spirv-tools
+                // GraphicsRobustAccessPass). GL 3.3 only promises undefined *values* for
+                // out-of-bounds indexing, but Adreno's ESSL compiler constant-folds a provably
+                // out-of-bounds local-array index into poison that corrupts the whole shader's
+                // output; clamping restores the "some value from the array" contract. Only for
+                // the DirectGLES transpile path.
+                static bool ClampAccessChainIndicesForEssl(const Vector<Uint32>& inputBinary,
+                                                           Vector<uint32_t>& outputBinary);
+                // Folds the ConstOffset image operand of Dim1D OpImageFetch into the integer
+                // coordinate (texelFetchOffset(t,P,l,o) == texelFetch(t,P+o,l)). SPIRV-Cross
+                // emulates 1D samplers as 2D for ES: it widens the coordinate to ivec2 but keeps
+                // the scalar offset, and ESSL has no texelFetchOffset(sampler2D, ivec2, int,
+                // scalar) overload, so Adreno rejects the shader. Only for the DirectGLES
+                // transpile path.
+                static bool FoldConstOffsetFor1DFetchForEssl(const Vector<Uint32>& inputBinary,
+                                                             Vector<uint32_t>& outputBinary);
                 // Drops RelaxedPrecision member decorations from uniform-block structs so
                 // SPIRV-Cross prints the same (highp) member precision in every stage; ES
                 // drivers reject cross-stage uniform blocks whose member precisions differ.

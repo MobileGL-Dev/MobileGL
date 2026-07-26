@@ -449,6 +449,20 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     }
                 }
             }
+
+            // Textures attached only to the READ framebuffer (blit / ReadPixels sources) need
+            // their content synced too, or the backend reads stale texel data.
+            const auto& readFBO =
+                MG_State::pGLContext->GetFramebufferBindingSlot(FramebufferTarget::Read).GetBoundObject();
+            if (readFBO && readFBO != currentFBO) {
+                for (const auto& attachment : readFBO->GetAllAttachmentObjects()) {
+                    if (!attachment.IsTexture()) continue;
+                    auto& textureObject = attachment.GetTexture();
+                    if (textureObject) {
+                        SyncTextureObjectToBackend(textureObject);
+                    }
+                }
+            }
         }
 
         static Bool SupportsLayeredImageBinding(TextureTarget target) {

@@ -258,6 +258,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
         private:
             Uint m_backendVAOId = 0;
             Array<Uint, MG_State::GLState::VertexArrayObject::MAX_VERTEX_ATTRIBS> m_clientAttributeBufferIds;
+            // Attribs the frontend has Enabled but that have no source at all (no buffer object
+            // and NULL client pointer). GL keeps such attribs latently enabled, but Adreno's ES
+            // driver treats them as client arrays and memcpys from address 0 at draw time
+            // (SIGSEGV), so they are kept disabled on the backend VAO until they gain a source.
+            Uint32 m_forceDisabledAttribsMask = 0;
             Bool m_isInitialized = false;
             Uint16 m_syncedIndexBufferVersion = 0;
             Array<MG_State::GLState::VertexAttributeVersion, MG_State::GLState::VertexArrayObject::MAX_VERTEX_ATTRIBS>

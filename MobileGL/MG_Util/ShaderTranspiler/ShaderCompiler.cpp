@@ -22,6 +22,7 @@
 #include "SpirvPasses/StripUboMemberRelaxedPrecisionPass.h"
 #include "SpirvPasses/StripNoPerspectivePass.h"
 #include "SpirvPasses/EmulateNoPerspectivePass.h"
+#include "SpirvPasses/FoldConstOffsetFor1DFetchPass.h"
 #include "spirv-tools/libspirv.h"
 #include "spirv-tools/optimizer.hpp"
 
@@ -319,6 +320,30 @@ namespace MobileGL {
 
                 Optimizer optimizer(SPV_ENV_VULKAN_1_1);
                 optimizer.RegisterPass(LowerDrawParametersPass::CreateLowerDrawParametersPass());
+
+                return optimizer.Run(inputBinary.data(), inputBinary.size(), &outputBinary, options);
+            }
+
+            bool ShaderCompiler::ClampAccessChainIndicesForEssl(const Vector<Uint32>& inputBinary,
+                                                                Vector<uint32_t>& outputBinary) {
+                using namespace spvtools;
+                OptimizerOptions options;
+                options.set_run_validator(false);
+
+                Optimizer optimizer(SPV_ENV_VULKAN_1_1);
+                optimizer.RegisterPass(CreateGraphicsRobustAccessPass());
+
+                return optimizer.Run(inputBinary.data(), inputBinary.size(), &outputBinary, options);
+            }
+
+            bool ShaderCompiler::FoldConstOffsetFor1DFetchForEssl(const Vector<Uint32>& inputBinary,
+                                                                  Vector<uint32_t>& outputBinary) {
+                using namespace spvtools;
+                OptimizerOptions options;
+                options.set_run_validator(false);
+
+                Optimizer optimizer(SPV_ENV_VULKAN_1_1);
+                optimizer.RegisterPass(FoldConstOffsetFor1DFetchPass::CreateFoldConstOffsetFor1DFetchPass());
 
                 return optimizer.Run(inputBinary.data(), inputBinary.size(), &outputBinary, options);
             }
