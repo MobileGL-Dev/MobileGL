@@ -1,0 +1,4 @@
+interface:
+  display_name: "OpenGL CTS on MobileGL (Android)"
+  short_description: "Build and run VK-GL-CTS KHR-GL33 against MobileGL and report per-backend conformance"
+  default_prompt: "Use $gl-cts-on-mobilegl to run the OpenGL 3.3 core CTS against MobileGL on my Android device and report the conformance rate for DirectGLES and DirectVulkan."
