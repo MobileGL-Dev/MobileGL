@@ -9,10 +9,14 @@
 #pragma once
 #include <Includes.h>
 
+// Severity-ordered: a build compiled at level X keeps X and everything MORE
+// severe. INFO builds must keep WARN/ERROR/FATAL — the old ordering
+// (WARN=1/ERROR=2 below INFO=3) compiled every warning and error out of
+// release builds and hid real backend failures.
 #define MOBILEGL_LOG_LEVEL_DEBUG 0
-#define MOBILEGL_LOG_LEVEL_WARN 1
-#define MOBILEGL_LOG_LEVEL_ERROR 2
-#define MOBILEGL_LOG_LEVEL_INFO 3
+#define MOBILEGL_LOG_LEVEL_INFO 1
+#define MOBILEGL_LOG_LEVEL_WARN 2
+#define MOBILEGL_LOG_LEVEL_ERROR 3
 #define MOBILEGL_LOG_LEVEL_FATAL 4
 
 #define MOBILEGL_LOG_INTERNAL(levelTag, androidLogLevel, fmt, ...)                                                     \
