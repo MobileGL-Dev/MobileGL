@@ -791,6 +791,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 case TextureTarget::Texture2D:
                 case TextureTarget::Texture2DArray:
                 case TextureTarget::Texture2DMultisample:
+                case TextureTarget::Texture2DMultisampleArray:
+                case TextureTarget::Texture3D:
+                case TextureTarget::TextureCubeMap:
+                case TextureTarget::TextureCubeMapArray:
                 case TextureTarget::TextureRectangle: {
                     desc.flags = 0;
                     desc.format = isDefaultFbo ?

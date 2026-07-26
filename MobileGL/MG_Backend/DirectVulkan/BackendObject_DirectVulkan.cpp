@@ -140,6 +140,20 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             case TextureInternalFormat::RGB:
             case TextureInternalFormat::RGB8:
                 return TextureInternalFormat::RGBA8;
+            // Legacy low-bit-depth formats with no (or rarely supported) native Vulkan
+            // encoding; a wider normalized fallback keeps at least the required precision.
+            case TextureInternalFormat::R3G3B2:
+            case TextureInternalFormat::RGB4:
+            case TextureInternalFormat::RGB5:
+            case TextureInternalFormat::RGBA2:
+            case TextureInternalFormat::RGBA4:
+            case TextureInternalFormat::RGB5A1:
+                return TextureInternalFormat::RGBA8;
+            case TextureInternalFormat::RGB10:
+                return TextureInternalFormat::RGB10A2;
+            case TextureInternalFormat::RGB12:
+            case TextureInternalFormat::RGBA12:
+                return TextureInternalFormat::RGBA16;
             case TextureInternalFormat::SRGB8:
                 return TextureInternalFormat::SRGB8Alpha8;
             case TextureInternalFormat::RGB8Snorm:
