@@ -95,15 +95,16 @@ namespace MobileGL {
         // inside a dying process - other threads have already been terminated,
         // so Vulkan/GLES cleanup crashes with the process half-dead. The process
         // is exiting; the OS reclaims everything.
+        // No logging here: this runs under the loader lock after every other
+        // thread was terminated, where the log mutex/heap/stdio may be in any
+        // state. Plain pointer stores only.
         void AbandonAtProcessExit() {
-            MGLOG_I("MobileGL: process detach, abandoning global state");
             MG_Backend::DirectVulkan::pVulkanRenderer.release();
             MG_Backend::pActiveBackendObject.release();
             MG_State::pGLContext.release();
             MG_State::pEGLContext.release();
             MG_Impl::GLImpl::TextureImpl::pProxyTextureManager.release();
             MG_Impl::GLImpl::FramebufferImpl::pDefaultFramebufferInfo.release();
-            MGLOG_I("MobileGL: global state abandoned");
         }
     } // namespace
 #endif

@@ -6865,18 +6865,32 @@ void main() {
     }
 
     void VulkanRenderer::Present() {
-        if (m_swapchainObject.GetHandle() == VK_NULL_HANDLE) {
-            // No swapchain yet (the window had a zero-area surface at initialization).
-            // Try to bring one up now that the window may have a real size; if it is
-            // still zero-area there is nothing to present to.
-            RecreateSwapchain();
-            if (m_swapchainObject.GetHandle() == VK_NULL_HANDLE) {
-                MGLOG_D("Present skipped: still no swapchain (zero-area window)");
+        if (m_swapchainObject.GetHandle() == VK_NULL_HANDLE || m_presentSuspended) {
+            // No usable swapchain: the window was zero-area at initialization, or
+            // presentation was suspended when the window minimized. Try to bring a
+            // swapchain up now that the window may have a real size; until then, drop
+            // this frame's recording instead of submitting - a submit would wait on a
+            // never-signaled acquire semaphore and reuse a still-signaled fence.
+            if (!RecreateSwapchain()) {
+                auto& suspendedFrame = m_frameContext.GetCurrent();
+                if (VkRenderPassManager::GetActiveRenderPass()) {
+                    VkRenderPassManager::EndRenderPass(suspendedFrame.commandBuffer);
+                }
+                if (suspendedFrame.isCommandRecording) {
+                    m_frameContext.EndCommandRecording();
+                }
+                suspendedFrame.isCommandRecording = false;
+                suspendedFrame.hasCommandBufferRecorded = false;
+                m_lastPipelineValid = false;
+                MGLOG_D("Present skipped: no usable swapchain (zero-area window)");
                 return;
             }
+            m_presentSuspended = false;
             const VkResult acquireResult =
                 m_frameContext.WaitAndAcquireNextImage(m_device, m_swapchainObject.GetHandle(), m_imageIndexAcquired);
-            VK_VERIFY(acquireResult, "Present, deferred first WaitAndAcquireNextImage");
+            if (acquireResult != VK_SUBOPTIMAL_KHR) {
+                VK_VERIFY(acquireResult, "Present, deferred first WaitAndAcquireNextImage");
+            }
         }
         MOBILEGL_ASSERT(m_imageIndexAcquired < m_swapchainObject.GetImageCount(),
                         "Present, acquired image index out of range");
@@ -6911,14 +6925,26 @@ void main() {
         auto result = vkQueuePresentKHR(m_presentQueue, &presentPacket.presentInfo);
         if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR) {
             MGLOG_D("Present, vkQueuePresentKHR got %d, recreating swapchain", result);
-            RecreateSwapchain();
+            if (!RecreateSwapchain()) {
+                // Window went zero-area (minimize) with the swapchain out of date:
+                // stop submitting/acquiring until it has a size again.
+                m_presentSuspended = true;
+                m_swapchainResizeRequested = false;
+                MGLOG_D("Present, zero-area window with out-of-date swapchain; suspending presentation");
+                return;
+            }
             m_swapchainResizeRequested = false;
             result = VK_SUCCESS;
         }
         VK_VERIFY(result, "Present, vkQueuePresentKHR");
         if (m_swapchainResizeRequested) {
             MGLOG_D("Present, processing requested swapchain resize");
-            RecreateSwapchain();
+            if (!RecreateSwapchain()) {
+                m_presentSuspended = true;
+                m_swapchainResizeRequested = false;
+                MGLOG_D("Present, zero-area window on requested resize; suspending presentation");
+                return;
+            }
             m_swapchainResizeRequested = false;
         }
 
@@ -6929,7 +6955,12 @@ void main() {
         result = m_frameContext.WaitAndAcquireNextImage(m_device, m_swapchainObject.GetHandle(), m_imageIndexAcquired);
         if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR) {
             MGLOG_D("Present, vkAcquireNextImageKHR got %d, recreating swapchain", result);
-            RecreateSwapchain();
+            if (!RecreateSwapchain()) {
+                m_presentSuspended = true;
+                m_swapchainResizeRequested = false;
+                MGLOG_D("Present, zero-area window on next-frame acquire; suspending presentation");
+                return;
+            }
             m_swapchainResizeRequested = false;
             result =
                 m_frameContext.WaitAndAcquireNextImage(m_device, m_swapchainObject.GetHandle(), m_imageIndexAcquired);
@@ -7743,13 +7774,13 @@ void main() {
         m_swapchainObject.Shutdown(m_device);
     }
 
-    void VulkanRenderer::RecreateSwapchain() {
+    Bool VulkanRenderer::RecreateSwapchain() {
         // Handle cases like minimize on Windows, where swapchain could return a 0x0 extent
         const auto swapchainCapabilities =
             SwapchainObject::GetSwapchainCapabilities(m_physicalDevice.handle, m_surface);
         if (swapchainCapabilities.capabilities.currentExtent.width == 0 ||
             swapchainCapabilities.capabilities.currentExtent.height == 0) {
-            return;
+            return false;
         }
 
         vkDeviceWaitIdle(m_device);
@@ -7793,6 +7824,7 @@ void main() {
             m_bufferManager.BeginFrame(m_frameContext.GetCurrentFrameIndex());
             m_convertedVertexStreams.clear();
         }
+        return true;
     }
 
     const PhysicalDevice& VulkanRenderer::GetPhysicalDevice() const {

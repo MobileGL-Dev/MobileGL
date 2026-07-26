@@ -257,7 +257,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         Uint64 GetTimerQueryTimestampNs(const VkTimerQueryManager::TimestampRecord& record) const;
 
         void RequestSwapchainResize(Uint32 width, Uint32 height);
-        void RecreateSwapchain();
+        // Returns false when the surface is zero-area (minimized/hidden window):
+        // no new swapchain is installed and presentation must stay suspended.
+        Bool RecreateSwapchain();
 
     private:
         struct BlitUniformData {
@@ -355,6 +357,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         void* m_platformCloseDisplay = nullptr;
         VulkanRendererConfig m_config;
         Bool m_swapchainResizeRequested = false;
+        // Presentation is suspended while the window is zero-area (minimized): the
+        // swapchain is unusable/out of date, so Present drops frames instead of
+        // submitting on a signaled fence / presenting never-acquired images.
+        Bool m_presentSuspended = false;
 
         // Vulkan objects
         Bool m_validationLayersEnabled = false;
