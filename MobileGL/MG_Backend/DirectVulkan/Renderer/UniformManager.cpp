@@ -765,7 +765,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
     Bool UniformManager::ResolveUniformBufferPayload(const MG_State::GLState::ProgramObject& program,
                                                      const ProgramFactory::VkProgramObject& programObj, Uint32 binding,
-                                                     UboBindResult& out) const {
+                                                     Uint32 arrayElement, UboBindResult& out) const {
         const void* outData = nullptr;
         VkDeviceSize outSize = 0;
 
@@ -791,7 +791,19 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
         MOBILEGL_ASSERT(binding < programObj.uniformBlockIndexByBinding.size(),
                         "ResolveUniformBufferPayload: UBO mapping binding %u out of range", binding);
-        const Int blockIndex = programObj.uniformBlockIndexByBinding[binding];
+        Int blockIndex = programObj.uniformBlockIndexByBinding[binding];
+        if (arrayElement > 0) {
+            const auto arrayIt = programObj.arrayedUniformBlockIndicesByBinding.find(binding);
+            const Bool elementValid = arrayIt != programObj.arrayedUniformBlockIndicesByBinding.end() &&
+                                      arrayElement < arrayIt->second.size();
+            MOBILEGL_ASSERT(elementValid,
+                            "ResolveUniformBufferPayload: UBO binding %u has no array element %u", binding,
+                            arrayElement);
+            if (!elementValid) {
+                return false;
+            }
+            blockIndex = arrayIt->second[arrayElement];
+        }
         MOBILEGL_ASSERT(blockIndex >= 0,
                         "ResolveUniformBufferPayload: no uniform block mapped to descriptor binding %u", binding);
 
@@ -1038,11 +1050,17 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         imageInfos.clear();
         texelBufferViews.clear();
         dynamicOffsets.clear();
+        // Arrayed UBO bindings contribute extra buffer infos and dynamic offsets; reserve for
+        // the worst case so the pBufferInfo pointers taken below never dangle on reallocation.
+        Uint32 uboArrayExtra = 0;
+        for (const auto& arrayEntry : programObj.arrayedUniformBlockIndicesByBinding) {
+            uboArrayExtra += static_cast<Uint32>(arrayEntry.second.size()) - 1u;
+        }
         writes.reserve(m_maxBindings);
-        bufferInfos.reserve(m_maxBindings);
+        bufferInfos.reserve(m_maxBindings + uboArrayExtra);
         imageInfos.reserve(m_maxBindings);
         texelBufferViews.reserve(m_maxBindings);
-        dynamicOffsets.reserve(programObj.dynamicBindings.size());
+        dynamicOffsets.reserve(programObj.dynamicBindings.size() + uboArrayExtra);
 
         const Uint32 bindingCount =
             std::min<Uint32>(m_maxBindings, static_cast<Uint32>(programObj.bindingKinds.size()));
@@ -1060,40 +1078,51 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             write.descriptorCount = 1;
 
             if (kind == ProgramFactory::DescriptorBindingKind::UniformBufferDynamic) {
-                UboBindResult ubo{};
-                const Bool hasPayload = ResolveUniformBufferPayload(program, programObj, binding, ubo);
-                MOBILEGL_ASSERT(hasPayload && ubo.payload != nullptr && ubo.payloadSize > 0,
-                                "UniformDescriptorBinder::BindProgramUniformBuffers failed: missing UBO payload on binding %u",
-                                binding);
+                const Uint32 descriptorCount =
+                    binding < programObj.bindingDescriptorCounts.size()
+                        ? std::max<Uint32>(1, programObj.bindingDescriptorCounts[binding])
+                        : 1u;
+                const SizeT firstBufferInfoIndex = bufferInfos.size();
+                for (Uint32 element = 0; element < descriptorCount; ++element) {
+                    UboBindResult ubo{};
+                    const Bool hasPayload =
+                        ResolveUniformBufferPayload(program, programObj, binding, element, ubo);
+                    MOBILEGL_ASSERT(hasPayload && ubo.payload != nullptr && ubo.payloadSize > 0,
+                                    "UniformDescriptorBinder::BindProgramUniformBuffers failed: missing UBO payload on binding %u element %u",
+                                    binding, element);
 
-                VkDescriptorBufferInfo bufferInfo{};
-                // Keep offset 0 (sub-range selected via the dynamic offset) so the hashed bufferInfo
-                // is stable across draws and the descriptor-set reuse cache keeps hitting.
-                bufferInfo.offset = 0;
-                Uint32 dynOffset;
-                if (ubo.directBindable) {
-                    // Zero-copy: bind the app's resident VkBuffer directly, no per-draw memcpy.
-                    bufferInfo.buffer = ubo.buffer;
-                    bufferInfo.range = ubo.range;
-                    dynOffset = static_cast<Uint32>(ubo.dynamicOffset);
-                } else {
-                    BufferSlice slice{};
-                    if (!m_bufferManager->UploadTransient(BufferKind::Uniform, frameIndex, ubo.payload,
-                                                          ubo.payloadSize, m_minDynamicOffsetAlignment, slice)) {
-                        MOBILEGL_ASSERT(false, "UniformDescriptorBinder::BindProgramUniformBuffers failed: UBO upload failed on binding %u",
-                                binding);
-                        return false;
+                    VkDescriptorBufferInfo bufferInfo{};
+                    // Keep offset 0 (sub-range selected via the dynamic offset) so the hashed bufferInfo
+                    // is stable across draws and the descriptor-set reuse cache keeps hitting.
+                    bufferInfo.offset = 0;
+                    Uint32 dynOffset;
+                    if (ubo.directBindable) {
+                        // Zero-copy: bind the app's resident VkBuffer directly, no per-draw memcpy.
+                        bufferInfo.buffer = ubo.buffer;
+                        bufferInfo.range = ubo.range;
+                        dynOffset = static_cast<Uint32>(ubo.dynamicOffset);
+                    } else {
+                        BufferSlice slice{};
+                        if (!m_bufferManager->UploadTransient(BufferKind::Uniform, frameIndex, ubo.payload,
+                                                              ubo.payloadSize, m_minDynamicOffsetAlignment, slice)) {
+                            MOBILEGL_ASSERT(false, "UniformDescriptorBinder::BindProgramUniformBuffers failed: UBO upload failed on binding %u element %u",
+                                    binding, element);
+                            return false;
+                        }
+                        bufferInfo.buffer = slice.buffer;
+                        bufferInfo.range = ubo.payloadSize;
+                        dynOffset = static_cast<Uint32>(slice.offset);
                     }
-                    bufferInfo.buffer = slice.buffer;
-                    bufferInfo.range = ubo.payloadSize;
-                    dynOffset = static_cast<Uint32>(slice.offset);
+                    bufferInfos.push_back(bufferInfo);
+                    // Dynamic offsets are consumed in binding order, then array element order,
+                    // matching Vulkan's dynamic-offset consumption rules.
+                    dynamicOffsets.push_back(dynOffset);
                 }
-                bufferInfos.push_back(bufferInfo);
 
                 write.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
-                write.pBufferInfo = &bufferInfos.back();
+                write.descriptorCount = descriptorCount;
+                write.pBufferInfo = &bufferInfos[firstBufferInfoIndex];
                 writes.push_back(write);
-                dynamicOffsets.push_back(dynOffset);
             } else if (kind == ProgramFactory::DescriptorBindingKind::UniformTexelBuffer) {
                 VkBufferView bufferView = VK_NULL_HANDLE;
                 if (!ResolveTexelBufferDescriptor(program, programObj, binding, frameIndex, bufferView) ||

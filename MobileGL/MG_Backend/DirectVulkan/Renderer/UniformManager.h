@@ -116,7 +116,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         };
         Bool ResolveUniformBufferPayload(const MG_State::GLState::ProgramObject& program,
                                          const ProgramFactory::VkProgramObject& programObj, Uint32 binding,
-                                         UboBindResult& out) const;
+                                         Uint32 arrayElement, UboBindResult& out) const;
         Bool CreateDescriptorPool(Uint32 maxSets, VkDescriptorPool& outPool) const;
         Bool GrowFrameDescriptorPool(FrameResources& frame, Uint32 frameIndex);
         VkResult AllocateDescriptorSetsFromActivePool(
