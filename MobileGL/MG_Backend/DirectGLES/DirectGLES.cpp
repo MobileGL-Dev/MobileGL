@@ -3435,90 +3435,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
         return componentType != 0 ? static_cast<GLenum>(componentType) : GL_UNSIGNED_NORMALIZED;
     }
 
-    // Repacks wide RGBA(_INTEGER) rows into the client's (format, type) layout, honoring the
-    // client-side PACK parameters and the bound pixel-pack buffer. `wide` holds
-    // `sliceHeight * sliceCount` rows of `width` texels (slice-major, tightly stacked),
-    // 4 components x GetReadbackComponentSize(wideType) bytes each.
-    // applyPackImageParams: GL_PACK_IMAGE_HEIGHT / GL_PACK_SKIP_IMAGES apply only to GetTexImage
-    // of 3D/array images; ReadPixels and 2D GetTexImage ignore them (GL 3.3 sections 4.3.1, 6.1.4).
-    // Per the GL addressing rules, slice k row j lands at
-    // SKIP_IMAGES*imageStride + SKIP_ROWS*rowStride + SKIP_PIXELS*pixelBytes
-    //   + k*imageStride + j*rowStride, with imageStride = max(IMAGE_HEIGHT, sliceHeight)*rowStride.
-    static Bool StoreWideRowsToClient(const Uint8* wide, GLenum wideType, GLsizei width, GLsizei sliceHeight,
-                                      GLsizei sliceCount, const ReadbackChannelMapping& mapping, GLenum type,
-                                      void* pixels, Bool applyPackImageParams) {
-        const SizeT dstPixelBytes = GetReadbackDstPixelSize(mapping, type);
-        if (dstPixelBytes == 0) {
-            return false;
-        }
-        ReadbackImpl::PackedReadbackLayout packedLayout{};
-        const Bool isPackedType = ReadbackImpl::GetPackedReadbackLayout(type, packedLayout);
-        const SizeT dstComponentSize = GetReadbackComponentSize(type);
-
-        const auto& pixelPackBufferObject =
-            MG_State::pGLContext->GetBufferBindingSlot(BufferTarget::PixelPack).GetBoundObject();
-
-        // Destination layout is computed from the client-side PACK parameters; only the actual pixel
-        // rows are written so skip regions of the destination stay untouched.
-        const auto packParams = MG_State::pGLContext->GetPixelStoreParameters(false);
-        const SizeT rowPixels = static_cast<SizeT>(packParams.RowLength > 0 ? packParams.RowLength : width);
-        const SizeT dstRowStride = AlignPixelRow(rowPixels * dstPixelBytes, packParams.Alignment);
-        const SizeT imageRows =
-            applyPackImageParams && packParams.ImageHeight > 0
-                ? static_cast<SizeT>(packParams.ImageHeight)
-                : static_cast<SizeT>(sliceHeight);
-        const SizeT dstImageStride = imageRows * dstRowStride;
-        const SizeT skipImages =
-            applyPackImageParams ? static_cast<SizeT>(std::max(packParams.SkipImages, 0)) : SizeT{0};
-        const SizeT dstSkipOffset = skipImages * dstImageStride +
-                                    static_cast<SizeT>(std::max(packParams.SkipRows, 0)) * dstRowStride +
-                                    static_cast<SizeT>(std::max(packParams.SkipPixels, 0)) * dstPixelBytes;
-        const SizeT dstRowBytes = static_cast<SizeT>(width) * dstPixelBytes;
-
-        const SizeT pboBaseOffset = reinterpret_cast<SizeT>(pixels); // with a PBO, `pixels` is an offset
-        if (pixelPackBufferObject) {
-            const SizeT requiredSize = pboBaseOffset + dstSkipOffset +
-                                       static_cast<SizeT>(sliceCount - 1) * dstImageStride +
-                                       static_cast<SizeT>(sliceHeight - 1) * dstRowStride + dstRowBytes;
-            if (requiredSize > pixelPackBufferObject->GetSize()) {
-                MGLOG_E("Readback conversion: pixel pack buffer is too small");
-                return true;
-            }
-        }
-
-        const SizeT srcComponentSize = GetReadbackComponentSize(wideType);
-        const SizeT srcPixelBytes = 4 * srcComponentSize;
-        Vector<Uint8> convertedRow(dstRowBytes);
-
-        for (GLsizei slice = 0; slice < sliceCount; ++slice) {
-            for (GLsizei row = 0; row < sliceHeight; ++row) {
-                const SizeT flatRow = static_cast<SizeT>(slice) * static_cast<SizeT>(sliceHeight) +
-                                      static_cast<SizeT>(row);
-                const Uint8* srcRow = wide + flatRow * static_cast<SizeT>(width) * srcPixelBytes;
-                ReadbackImpl::ConvertWideReadbackRow(srcRow, convertedRow.data(), static_cast<SizeT>(width), wideType,
-                                                     mapping, type);
-
-                if (packParams.SwapBytes) {
-                    const SizeT groupSize = isPackedType ? packedLayout.byteSize : dstComponentSize;
-                    if (groupSize > 1) {
-                        for (SizeT offset = 0; offset + groupSize <= dstRowBytes; offset += groupSize) {
-                            std::reverse(convertedRow.data() + offset, convertedRow.data() + offset + groupSize);
-                        }
-                    }
-                }
-
-                const SizeT dstOffset = dstSkipOffset + static_cast<SizeT>(slice) * dstImageStride +
-                                        static_cast<SizeT>(row) * dstRowStride;
-                if (pixelPackBufferObject) {
-                    pixelPackBufferObject->WritebackFromBackend({convertedRow.data(), dstRowBytes},
-                                                                pboBaseOffset + dstOffset);
-                } else {
-                    Memcpy(static_cast<Uint8*>(pixels) + dstOffset, convertedRow.data(), dstRowBytes);
-                }
-            }
-        }
-        return true;
-    }
 
     // Reads the current READ framebuffer as wide RGBA(_INTEGER) and repacks the pixels into the client's
     // (format, type) layout. Returns false when the combination is not convertible (the caller keeps its
@@ -3651,7 +3567,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             ExpandNarrowWideRead(wide, static_cast<SizeT>(width) * static_cast<SizeT>(height), readChannels, wideType);
         }
 
-        if (!StoreWideRowsToClient(wide.data(), wideType, width, height, /*sliceCount=*/1, mapping, type, pixels,
+        if (!ReadbackImpl::StoreWideRowsToClient(wide.data(), wideType, width, height, /*sliceCount=*/1, mapping, type, pixels,
                                    honorPackImageParams)) {
             return false;
         }
@@ -3705,7 +3621,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return false;
         }
         const GLenum wideType = isInteger ? (isSigned ? GL_INT : GL_UNSIGNED_INT) : GL_FLOAT;
-        if (!StoreWideRowsToClient(wide.data(), wideType, width, sliceHeight, sliceCount, mapping, type, pixels,
+        if (!ReadbackImpl::StoreWideRowsToClient(wide.data(), wideType, width, sliceHeight, sliceCount, mapping, type, pixels,
                                    applyPackImageParams)) {
             return false;
         }
