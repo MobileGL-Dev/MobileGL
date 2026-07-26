@@ -141,7 +141,8 @@ complete one.
 
 | Flag | Why it is not optional |
 | --- | --- |
-| `--deqp-surface-type=fbo` | On DirectVulkan, `glReadPixels` from the **default framebuffer returns all zeros** with no GL error. dEQP verifies nearly everything through `glReadPixels`, so rendering to the surface scores DirectVulkan near zero for a reason unrelated to conformance. FBO readback is correct on both backends. Use it for **both** backends so the two numbers stay comparable. |
+| `--deqp-surface-type=fbo` | On DirectVulkan, `glReadPixels` from the **default framebuffer returns all zeros** with no GL error. dEQP verifies nearly everything through `glReadPixels`, so rendering to the surface scores DirectVulkan near zero for a reason unrelated to conformance. Use it for **both** backends so the two numbers stay comparable. |
+| `MOBILEGL_CTS_FBO_COLOR_TEXTURE=1` | **`--deqp-surface-type=fbo` alone is not enough.** dEQP's `FboRenderContext` allocates a *renderbuffer* colour attachment, and DirectVulkan returns zeros from a renderbuffer-attached FBO too — only a *texture*-attached FBO reads back correctly. This env var (a patch to `framework/opengl/gluFboRenderContext.cpp`, off by default) switches the attachment to a texture and isolates that single defect. Measured effect: `KHR-GL33.shaders.loops.for_constant_iterations.*` goes 0/62 → 62/62, and the whole-suite DirectVulkan conformance rate goes 46.15% → 72.74%. DirectGLES is bit-identical either way (93.05%), which is the control proving the switch is neutral where readback works. |
 | `--deqp-terminate-on-device-lost=disable` | Defaults to *enable*, which calls `glGetGraphicsResetStatus()` after every case. That is GL 4.5 / `KHR_robustness`, absent from GL 3.3 core, so the pointer is null and the process segfaults on the first case. Desktop drivers expose the extension, which is why upstream never trips on it. |
 
 ## Cases that take the device down
@@ -153,10 +154,31 @@ adb entirely. Keep them in a `--skip-file`, and expect to find more:
   and then stopped responding to adb altogether.
 - `KHR-GL33.framebuffer_blit.multisampled_to_singlesampled_blit_color_config_test`
   — rebooted an Adreno 830 phone after 862 cases, on DirectGLES.
+- `KHR-GL33.framebuffer_blit.multisampled_to_singlesampled_blit_depth_config_test`
+  — same, on both backends (found and quarantined automatically by the runner).
+- `KHR-GL33.texture_repeat_mode.rgb565_11x131_0_clamp_to_edge` — on DirectVulkan.
+
+The whole `framebuffer_blit.multisampled_to_singlesampled_*` family is suspect;
+treat a new variant as a device-hang candidate rather than a normal failure.
 
 When a run dies, pull `/data/local/tmp/mgcts/chunk.qpa` — it survives the reboot,
 and the last `#beginTestCaseResult` with no matching `#endTestCaseResult` names
 the case that did it.
+
+## Reference results
+
+`opengl-cts-4.6.8.1`, KHR-GL33 mustpass (`gl33-main.txt`, 9886 cases), Adreno 830
+/ Android 15, MobileGL `dev`@199164c2, 9884 measured / 0 unrun / 2 quarantined.
+Conformance rate = Pass + NotSupported, as Khronos scores a submission.
+
+| backend | conformance | strict Pass | Fail | Crash | InternalError | DeviceHang |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| DirectGLES | **93.05%** | 85.94% | 679 | 1 | 6 | 1 |
+| DirectVulkan (texture FBO) | **72.74%** | 65.71% | 2394 | 294 | 5 | 1 |
+| DirectVulkan (stock renderbuffer FBO) | 46.15% | 39.11% | 5024 | 292 | 5 | 2 |
+
+The third row is what stock dEQP reports; the gap to the second row is entirely
+the renderbuffer-FBO readback defect.
 
 ## MobileGL constraints the port works around
 
