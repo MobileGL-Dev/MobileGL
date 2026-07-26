@@ -211,6 +211,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         Uint64 m_rpFastRbEpoch = 0;
         Uint64 m_rpFastRenderPassHash = 0;
 
+    public:
         struct RenderbufferResource {
             WeakPtr<MG_State::GLState::RenderbufferObject> renderbuffer;
             VkImage image = VK_NULL_HANDLE;
@@ -227,6 +228,14 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             void Destroy(VkDevice device, VmaAllocator allocator);
         };
 
+        // Public so the renderer's blit/copy/readback bindings can source renderbuffer
+        // attachments the same way texture attachments go through the texture manager.
+        RenderbufferResource* GetOrCreateRenderbufferResource(
+            const SharedPtr<MG_State::GLState::RenderbufferObject>& renderbuffer);
+        Bool GetPendingRenderbufferClear(MG_State::GLState::RenderbufferObject* renderbuffer,
+                                         ClearAttachmentPayload& outPayload) const;
+
+    private:
         struct PendingRenderbufferClear {
             WeakPtr<MG_State::GLState::RenderbufferObject> renderbuffer;
             ClearAttachmentPayload payload{};
@@ -235,10 +244,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         UnorderedMap<MG_State::GLState::RenderbufferObject*, RenderbufferResource> m_renderbufferResources;
         UnorderedMap<MG_State::GLState::RenderbufferObject*, PendingRenderbufferClear> m_pendingRenderbufferClears;
 
-        RenderbufferResource* GetOrCreateRenderbufferResource(
-            const SharedPtr<MG_State::GLState::RenderbufferObject>& renderbuffer);
-        Bool GetPendingRenderbufferClear(MG_State::GLState::RenderbufferObject* renderbuffer,
-                                         ClearAttachmentPayload& outPayload) const;
         Bool HasPendingRenderbufferClear(
             const MG_State::GLState::FramebufferAttachmentObject& attachment) const;
         void CollectRenderbufferGarbage();

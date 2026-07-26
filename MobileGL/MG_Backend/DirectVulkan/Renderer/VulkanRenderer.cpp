@@ -1274,7 +1274,8 @@ void main() {
 
         static Bool ResolveColorBlitBinding(MG_State::GLState::FramebufferObject& fbo, Bool isReadFramebuffer,
                                             Uint32 swapchainImageIndex, SwapchainObject& swapchainObject,
-                                            VkTextureManager& textureManager, BlitImageBinding& outBinding) {
+                                            VkTextureManager& textureManager,
+                                            VkRenderPassManager& renderPassManager, BlitImageBinding& outBinding) {
             const Bool isDefaultFbo = fbo.IsDefaultFramebuffer();
             const FramebufferAttachmentType attachmentType =
                 isReadFramebuffer ? fbo.GetReadBuffer() : fbo.GetDrawBuffers()[0];
@@ -1316,8 +1317,24 @@ void main() {
                 return false;
             }
             if (attachment.IsRenderbuffer()) {
-                MGLOG_E("BlitFramebuffer skipped: renderbuffer attachments are not supported yet");
-                return false;
+                const auto& renderbuffer = attachment.GetRenderbuffer();
+                auto* rbResource = renderPassManager.GetOrCreateRenderbufferResource(renderbuffer);
+                if (rbResource == nullptr || (rbResource->aspect & VK_IMAGE_ASPECT_COLOR_BIT) == 0) {
+                    MGLOG_E("BlitFramebuffer skipped: %s framebuffer color renderbuffer %u is unsupported",
+                            outBinding.label, renderbuffer->GetExternalIndex());
+                    return false;
+                }
+                outBinding.image = rbResource->image;
+                outBinding.trackedLayout = &rbResource->layout;
+                outBinding.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+                outBinding.format = rbResource->format;
+                outBinding.extent = {static_cast<Int>(rbResource->extent.width),
+                                     static_cast<Int>(rbResource->extent.height)};
+                outBinding.mipLevel = 0;
+                outBinding.mipLevelCount = 1;
+                outBinding.baseArrayLayer = 0;
+                outBinding.layerCount = 1;
+                return true;
             }
             if (!attachment.IsTexture()) {
                 MGLOG_E("BlitFramebuffer skipped: unsupported framebuffer attachment type");
@@ -1355,6 +1372,7 @@ void main() {
         static Bool ResolveFramebufferBlitBinding(MG_State::GLState::FramebufferObject& fbo, Bool isReadFramebuffer,
                                                   Uint32 swapchainImageIndex, SwapchainObject& swapchainObject,
                                                   VkTextureManager& textureManager,
+                                                  VkRenderPassManager& renderPassManager,
                                                   VkImageAspectFlags requiredAspectMask,
                                                   BlitImageBinding& outBinding) {
             const Bool isDefaultFbo = fbo.IsDefaultFramebuffer();
@@ -1398,8 +1416,29 @@ void main() {
                 return false;
             }
             if (attachment.IsRenderbuffer()) {
-                MGLOG_E("BlitFramebuffer skipped: renderbuffer attachments are not supported yet");
-                return false;
+                const auto& renderbuffer = attachment.GetRenderbuffer();
+                auto* rbResource = renderPassManager.GetOrCreateRenderbufferResource(renderbuffer);
+                if (rbResource == nullptr) {
+                    MGLOG_E("BlitFramebuffer skipped: %s framebuffer renderbuffer %u is unsupported",
+                            outBinding.label, renderbuffer->GetExternalIndex());
+                    return false;
+                }
+                if ((rbResource->aspect & requiredAspectMask) != requiredAspectMask) {
+                    MGLOG_E("BlitFramebuffer skipped: %s framebuffer renderbuffer %u is missing aspect mask=0x%x",
+                            outBinding.label, renderbuffer->GetExternalIndex(),
+                            static_cast<Uint32>(requiredAspectMask));
+                    return false;
+                }
+                outBinding.image = rbResource->image;
+                outBinding.trackedLayout = &rbResource->layout;
+                outBinding.aspectMask = requiredAspectMask;
+                outBinding.extent = {static_cast<Int>(rbResource->extent.width),
+                                     static_cast<Int>(rbResource->extent.height)};
+                outBinding.mipLevel = 0;
+                outBinding.mipLevelCount = 1;
+                outBinding.baseArrayLayer = 0;
+                outBinding.layerCount = 1;
+                return true;
             }
             if (!attachment.IsTexture()) {
                 MGLOG_E("BlitFramebuffer skipped: unsupported framebuffer attachment type");
@@ -1470,6 +1509,7 @@ void main() {
         static Bool ResolveTextureCopySourceBinding(MG_State::GLState::FramebufferObject& fbo, Uint32 swapchainImageIndex,
                                                     SwapchainObject& swapchainObject,
                                                     VkTextureManager& textureManager,
+                                                    VkRenderPassManager& renderPassManager,
                                                     VkImageAspectFlags requiredAspectMask,
                                                     BlitImageBinding& outBinding) {
             const Bool isDefaultFbo = fbo.IsDefaultFramebuffer();
@@ -1514,8 +1554,30 @@ void main() {
                 return false;
             }
             if (attachment.IsRenderbuffer()) {
-                MGLOG_E("CopyTexSubImage2D skipped: renderbuffer read attachments are not supported yet");
-                return false;
+                const auto& renderbuffer = attachment.GetRenderbuffer();
+                auto* rbResource = renderPassManager.GetOrCreateRenderbufferResource(renderbuffer);
+                if (rbResource == nullptr) {
+                    MGLOG_E("CopyTexSubImage2D skipped: read framebuffer renderbuffer %u is unsupported",
+                            renderbuffer->GetExternalIndex());
+                    return false;
+                }
+                if ((rbResource->aspect & requiredAspectMask) != requiredAspectMask) {
+                    MGLOG_E("CopyTexSubImage2D skipped: read framebuffer renderbuffer %u aspect mask=0x%x "
+                            "does not satisfy requested mask=0x%x",
+                            renderbuffer->GetExternalIndex(), static_cast<Uint32>(rbResource->aspect),
+                            static_cast<Uint32>(requiredAspectMask));
+                    return false;
+                }
+                outBinding.image = rbResource->image;
+                outBinding.trackedLayout = &rbResource->layout;
+                outBinding.aspectMask = requiredAspectMask;
+                outBinding.extent = {static_cast<Int>(rbResource->extent.width),
+                                     static_cast<Int>(rbResource->extent.height)};
+                outBinding.mipLevel = 0;
+                outBinding.mipLevelCount = 1;
+                outBinding.baseArrayLayer = 0;
+                outBinding.layerCount = 1;
+                return true;
             }
             if (!attachment.IsTexture()) {
                 MGLOG_E("CopyTexSubImage2D skipped: unsupported read framebuffer attachment type");
@@ -3552,6 +3614,7 @@ void main() {
                 (bufferMask.a() ? VK_COLOR_COMPONENT_A_BIT : 0u));
             Bool effectiveBlendEnabled = blendEnabled;
             MG_State::GLState::ITextureObject* colorAttachmentTexture = nullptr;
+            MG_State::GLState::RenderbufferObject* colorAttachmentRenderbuffer = nullptr;
             if (isDefaultDrawFbo && i < drawBuffers.size() &&
                 drawBuffers[i] == FramebufferAttachmentType::None) {
                 // The default framebuffer spans the same MAX_DRAW_BUFFERS slots as an FBO
@@ -3566,11 +3629,23 @@ void main() {
             if (!isDefaultDrawFbo && i < drawBuffers.size()) {
                 const auto drawBuffer = drawBuffers[i];
                 colorAttachmentTexture = resolveCompleteColorAttachmentTexture(i);
-                if (drawBuffer == FramebufferAttachmentType::None || colorAttachmentTexture == nullptr) {
+                if (colorAttachmentTexture == nullptr && drawBuffer != FramebufferAttachmentType::None) {
+                    const auto& attachment = drawFboBinding->GetAttachment(drawBuffer);
+                    if (attachment.IsRenderbuffer() && attachment.IsComplete()) {
+                        colorAttachmentRenderbuffer = attachment.GetRenderbuffer().get();
+                    }
+                }
+                if (drawBuffer == FramebufferAttachmentType::None ||
+                    (colorAttachmentTexture == nullptr && colorAttachmentRenderbuffer == nullptr)) {
                     // GL ignores writes and per-target blend state for GL_NONE draw buffer slots.
                     // Depth-only or otherwise unattached draw buffers should also discard color writes.
                     attachmentColorWriteMask = 0;
                     effectiveBlendEnabled = false;
+                }
+                if (colorAttachmentRenderbuffer != nullptr) {
+                    const SizeT componentCount = MG_Util::GetBaseInternalFormatComponentCount(
+                        colorAttachmentRenderbuffer->GetInternalFormat());
+                    attachmentColorWriteMask &= GetSupportedColorWriteMaskForComponentCount(componentCount);
                 }
                 if (colorAttachmentTexture != nullptr) {
                     auto* texture = colorAttachmentTexture;
@@ -3648,10 +3723,14 @@ void main() {
                 Int textureExternalIndex = -1;
                 if (isDefaultDrawFbo) {
                     colorAttachmentFormat = m_swapchainObject.GetSurfaceFormat().format;
+                } else if (colorAttachmentRenderbuffer != nullptr) {
+                    textureExternalIndex = static_cast<Int>(colorAttachmentRenderbuffer->GetExternalIndex());
+                    colorAttachmentFormat = MG_Util::ConvertTextureInternalFormatToVkEnum(
+                        colorAttachmentRenderbuffer->GetInternalFormat());
                 } else {
                     auto* texture = colorAttachmentTexture;
                     MOBILEGL_ASSERT(texture != nullptr,
-                                    "GetOrCreatePipeline: blend is enabled on draw buffer %u but no complete texture attachment is bound",
+                                    "GetOrCreatePipeline: blend is enabled on draw buffer %u but no complete color attachment is bound",
                                     i);
                     textureExternalIndex = texture->GetExternalIndex();
                     auto* textureResource = m_textureManager->SyncTextureAndGetDescriptor(*texture);
@@ -4802,6 +4881,98 @@ void main() {
         return true;
     }
 
+    Bool VulkanRenderer::MaterializePendingClearForRenderbuffer(
+        VkCommandBuffer commandBuffer, const SharedPtr<MG_State::GLState::RenderbufferObject>& renderbuffer) {
+        if (renderbuffer == nullptr) {
+            return true;
+        }
+        ClearAttachmentPayload clearPayload{};
+        if (!m_renderPassManager->GetPendingRenderbufferClear(renderbuffer.get(), clearPayload)) {
+            return true;
+        }
+        MOBILEGL_ASSERT(VkRenderPassManager::GetActiveRenderPass() == nullptr,
+                        "MaterializePendingClearForRenderbuffer requires no active render pass");
+
+        auto* resource = m_renderPassManager->GetOrCreateRenderbufferResource(renderbuffer);
+        if (resource == nullptr) {
+            MGLOG_E("MaterializePendingClearForRenderbuffer: no resource for renderbuffer %u",
+                    renderbuffer->GetExternalIndex());
+            return false;
+        }
+
+        VkPipelineStageFlags srcStageMask = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+        VkAccessFlags srcAccessMask = 0;
+        GetImageTransitionSourceState(resource->layout, srcStageMask, srcAccessMask);
+
+        Bool ok = VkTextureManager::TransitionImageLayout(
+            commandBuffer, resource->image, resource->layout, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            srcStageMask, VK_PIPELINE_STAGE_TRANSFER_BIT, srcAccessMask, VK_ACCESS_TRANSFER_WRITE_BIT,
+            resource->aspect, 0, 1, 1);
+        MOBILEGL_ASSERT(ok,
+                        "MaterializePendingClearForRenderbuffer: failed to transition renderbuffer %u to TRANSFER_DST",
+                        renderbuffer->GetExternalIndex());
+
+        VkImageSubresourceRange subresourceRange{};
+        subresourceRange.baseMipLevel = 0;
+        subresourceRange.levelCount = 1;
+        subresourceRange.baseArrayLayer = 0;
+        subresourceRange.layerCount = 1;
+
+        VkImageLayout steadyLayout;
+        if ((resource->aspect & VK_IMAGE_ASPECT_COLOR_BIT) != 0) {
+            subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+            VkClearColorValue clearValue{};
+            clearValue.float32[0] = clearPayload.color.x();
+            clearValue.float32[1] = clearPayload.color.y();
+            clearValue.float32[2] = clearPayload.color.z();
+            // RGB renderbuffers are backed by an RGBA image; the missing alpha reads as 1.
+            clearValue.float32[3] =
+                MG_Util::GetBaseInternalFormatComponentCount(renderbuffer->GetInternalFormat()) == 3 ?
+                    1.0f : clearPayload.color.w();
+            vkCmdClearColorImage(commandBuffer, resource->image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                                 &clearValue, 1, &subresourceRange);
+            steadyLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        } else {
+            VkImageAspectFlags clearAspectMask = 0;
+            if ((resource->aspect & VK_IMAGE_ASPECT_DEPTH_BIT) != 0 &&
+                (clearPayload.mask & GL_DEPTH_BUFFER_BIT) != 0) {
+                clearAspectMask |= VK_IMAGE_ASPECT_DEPTH_BIT;
+            }
+            if ((resource->aspect & VK_IMAGE_ASPECT_STENCIL_BIT) != 0 &&
+                (clearPayload.mask & GL_STENCIL_BUFFER_BIT) != 0) {
+                clearAspectMask |= VK_IMAGE_ASPECT_STENCIL_BIT;
+            }
+            if (clearAspectMask != 0) {
+                subresourceRange.aspectMask = clearAspectMask;
+                VkClearDepthStencilValue clearValue{};
+                clearValue.depth = clearPayload.depth;
+                clearValue.stencil = clearPayload.stencil;
+                vkCmdClearDepthStencilImage(commandBuffer, resource->image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                                            &clearValue, 1, &subresourceRange);
+            }
+            steadyLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+        }
+
+        VkImageLayout clearLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        ok = VkTextureManager::TransitionImageLayout(
+            commandBuffer, resource->image, clearLayout, steadyLayout,
+            VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT,
+            VK_ACCESS_TRANSFER_WRITE_BIT,
+            VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
+                VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT |
+                VK_ACCESS_TRANSFER_READ_BIT,
+            resource->aspect, 0, 1, 1);
+        MOBILEGL_ASSERT(ok,
+                        "MaterializePendingClearForRenderbuffer: failed to transition renderbuffer %u to steady layout",
+                        renderbuffer->GetExternalIndex());
+        resource->layout = steadyLayout;
+
+        m_renderPassManager->PopPendingRenderbufferClear(renderbuffer.get());
+        MGLOG_D("MaterializePendingClearForRenderbuffer: renderbuffer %u pending clear materialized",
+                renderbuffer->GetExternalIndex());
+        return true;
+    }
+
     Bool VulkanRenderer::TryBlitToDefaultFramebufferWithShader(FrameContext::FrameData& frame,
                                                                MG_State::GLState::FramebufferObject& readFbo,
                                                                MG_State::GLState::FramebufferObject& drawFbo,
@@ -4815,8 +4986,10 @@ void main() {
 
         BlitImageBinding srcBinding{};
         BlitImageBinding dstBinding{};
-        if (!ResolveColorBlitBinding(readFbo, true, m_imageIndexAcquired, m_swapchainObject, *m_textureManager, srcBinding) ||
-            !ResolveColorBlitBinding(drawFbo, false, m_imageIndexAcquired, m_swapchainObject, *m_textureManager, dstBinding)) {
+        if (!ResolveColorBlitBinding(readFbo, true, m_imageIndexAcquired, m_swapchainObject, *m_textureManager,
+                                     *m_renderPassManager, srcBinding) ||
+            !ResolveColorBlitBinding(drawFbo, false, m_imageIndexAcquired, m_swapchainObject, *m_textureManager,
+                                     *m_renderPassManager, dstBinding)) {
             return false;
         }
         if (srcBinding.trackedLayout == nullptr) {
@@ -5002,9 +5175,11 @@ void main() {
             BlitImageBinding srcBinding{};
             BlitImageBinding dstBinding{};
             if (!ResolveFramebufferBlitBinding(*readFbo, true, m_imageIndexAcquired, m_swapchainObject,
-                                               *m_textureManager, VK_IMAGE_ASPECT_DEPTH_BIT, srcBinding) ||
+                                               *m_textureManager, *m_renderPassManager,
+                                               VK_IMAGE_ASPECT_DEPTH_BIT, srcBinding) ||
                 !ResolveFramebufferBlitBinding(*drawFbo, false, m_imageIndexAcquired, m_swapchainObject,
-                                               *m_textureManager, VK_IMAGE_ASPECT_DEPTH_BIT, dstBinding)) {
+                                               *m_textureManager, *m_renderPassManager,
+                                               VK_IMAGE_ASPECT_DEPTH_BIT, dstBinding)) {
                 return;
             }
 
@@ -5169,8 +5344,10 @@ void main() {
 
         BlitImageBinding srcBinding{};
         BlitImageBinding dstBinding{};
-        if (!ResolveColorBlitBinding(*readFbo, true, m_imageIndexAcquired, m_swapchainObject, *m_textureManager, srcBinding) ||
-            !ResolveColorBlitBinding(*drawFbo, false, m_imageIndexAcquired, m_swapchainObject, *m_textureManager, dstBinding)) {
+        if (!ResolveColorBlitBinding(*readFbo, true, m_imageIndexAcquired, m_swapchainObject, *m_textureManager,
+                                     *m_renderPassManager, srcBinding) ||
+            !ResolveColorBlitBinding(*drawFbo, false, m_imageIndexAcquired, m_swapchainObject, *m_textureManager,
+                                     *m_renderPassManager, dstBinding)) {
             return;
         }
 
@@ -5374,7 +5551,7 @@ void main() {
 
         BlitImageBinding srcBinding{};
         if (!ResolveTextureCopySourceBinding(*readFbo, m_imageIndexAcquired, m_swapchainObject, *m_textureManager,
-                                             dstBinding.aspectMask, srcBinding)) {
+                                             *m_renderPassManager, dstBinding.aspectMask, srcBinding)) {
             RecordTextureCopyError(__func__, ErrorCode::InvalidOperation,
                                    "CopyTexSubImage2D requires a complete read attachment compatible with the destination texture.");
             return;
@@ -5715,7 +5892,7 @@ void main() {
         const Bool readIsDefaultFbo = readFbo->IsDefaultFramebuffer();
         BlitImageBinding srcBinding{};
         if (!ResolveColorBlitBinding(*readFbo, true, m_imageIndexAcquired, m_swapchainObject, *m_textureManager,
-                                     srcBinding)) {
+                                     *m_renderPassManager, srcBinding)) {
             return;
         }
         if (!readIsDefaultFbo) {
@@ -5726,6 +5903,12 @@ void main() {
                 MOBILEGL_ASSERT(clearReady,
                                 "ReadPixels: failed to materialize pending clear for source textureId=%d",
                                 sourceTexture->GetExternalIndex());
+            } else if (sourceAttachment.IsRenderbuffer()) {
+                const Bool clearReady =
+                    MaterializePendingClearForRenderbuffer(frame.commandBuffer, sourceAttachment.GetRenderbuffer());
+                MOBILEGL_ASSERT(clearReady,
+                                "ReadPixels: failed to materialize pending clear for source renderbuffer %u",
+                                sourceAttachment.GetRenderbuffer()->GetExternalIndex());
             }
         }
 
