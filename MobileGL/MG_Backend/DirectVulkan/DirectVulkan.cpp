@@ -20,7 +20,8 @@
 #include <spirv_reflect.h>
 
 namespace MobileGL::MG_Backend::DirectVulkan {
-    UniquePtr<VulkanRenderer> pVulkanRenderer = nullptr;
+    // Leak-at-exit storage; see GlobalObjects.cpp.
+    UniquePtr<VulkanRenderer>& pVulkanRenderer = *new UniquePtr<VulkanRenderer>();
 
     namespace {
         // Generation of the live VulkanRenderer instance, mirroring

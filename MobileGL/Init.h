@@ -11,6 +11,12 @@
 
 namespace MobileGL {
     void Initialize();
+    // Thread-safe, idempotent, and re-entrant wrapper around Initialize().
+    // Host layers (EGL/WGL/CGL entry points) call this lazily on first use so
+    // MobileGL's lifecycle never depends on ELF/DLL static constructors, and
+    // so a fresh init can follow a full Destroy() (e.g. after the last
+    // eglTerminate).
+    void EnsureInitialized();
     void Destroy();
 
     namespace MG_Util::Debug {

@@ -138,8 +138,9 @@ namespace MobileGL::MG_Impl::WGLImpl {
         void EnsureInitialized() {
             // Initialize() loads backend libraries and glslang, which must not run
             // under the loader lock; first WGL call is the earliest safe moment.
-            static std::once_flag once;
-            std::call_once(once, [] { MobileGL::Initialize(); });
+            // MobileGL::EnsureInitialized (not a local once_flag) so a fresh init
+            // can follow a full teardown from the last eglTerminate.
+            MobileGL::EnsureInitialized();
         }
 
         EGLDisplay EnsureDisplay() {

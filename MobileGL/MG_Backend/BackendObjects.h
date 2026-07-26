@@ -13,6 +13,6 @@
 #include "DirectVulkan/BackendObject_DirectVulkan.h"
 
 namespace MobileGL::MG_Backend {
-    extern UniquePtr<BackendObject> pActiveBackendObject;
+    extern UniquePtr<BackendObject>& pActiveBackendObject;
     extern GlobalBackendFunctionsTable gBackendFunctionsTable;
 } // namespace MobileGL::MG_Backend

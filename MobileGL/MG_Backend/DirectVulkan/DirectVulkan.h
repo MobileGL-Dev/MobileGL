@@ -12,7 +12,7 @@
 #include "Renderer/VulkanRenderer.h"
 
 namespace MobileGL::MG_Backend::DirectVulkan {
-    extern UniquePtr<VulkanRenderer> pVulkanRenderer;
+    extern UniquePtr<VulkanRenderer>& pVulkanRenderer;
 
     // Generation of the live VulkanRenderer instance, mirroring DirectGLES's
     // g_syncContextGeneration. BackendObject_DirectVulkan bumps it wherever

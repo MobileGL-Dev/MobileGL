@@ -721,5 +721,6 @@ namespace MobileGL::MG_State {
         }
     } // namespace GLState
 
-    UniquePtr<GLState::GLContext> pGLContext;
+    // Leak-at-exit storage; see GlobalObjects.cpp.
+    UniquePtr<GLState::GLContext>& pGLContext = *new UniquePtr<GLState::GLContext>();
 } // namespace MobileGL::MG_State

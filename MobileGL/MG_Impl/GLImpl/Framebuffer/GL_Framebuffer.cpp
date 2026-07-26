@@ -2144,6 +2144,7 @@ namespace MobileGL::MG_Impl::GLImpl {
     }
 
     namespace FramebufferImpl {
-        UniquePtr<DefaultFramebufferInfo> pDefaultFramebufferInfo;
+        // Leak-at-exit storage; see GlobalObjects.cpp.
+        UniquePtr<DefaultFramebufferInfo>& pDefaultFramebufferInfo = *new UniquePtr<DefaultFramebufferInfo>();
     } // namespace FramebufferImpl
 } // namespace MobileGL::MG_Impl::GLImpl

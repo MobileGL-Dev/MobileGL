@@ -252,7 +252,7 @@ namespace MobileGL {
             };
         } // namespace GLState
 
-        extern UniquePtr<GLState::GLContext> pGLContext;
+        extern UniquePtr<GLState::GLContext>& pGLContext;
 
         // True when relaxed GL semantics apply. Strict core rules are enforced only when the
         // current EGL context explicitly requested a core profile (core bit in

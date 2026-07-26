@@ -78,6 +78,6 @@ namespace MobileGL::MG_Impl::GLImpl {
             SharedPtr<MG_State::GLState::ITextureObject> stencilAttachment;
         };
 
-        extern UniquePtr<DefaultFramebufferInfo> pDefaultFramebufferInfo;
+        extern UniquePtr<DefaultFramebufferInfo>& pDefaultFramebufferInfo;
     } // namespace FramebufferImpl
 } // namespace MobileGL::MG_Impl::GLImpl

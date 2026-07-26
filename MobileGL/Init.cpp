@@ -15,9 +15,18 @@
 #include <MG_Impl/GLImpl/Texture/ProxyTexture.h>
 #include <MG_Impl/GLImpl/Framebuffer/GL_Framebuffer.h>
 
+#include <atomic>
+#include <mutex>
+
 namespace MobileGL {
     namespace {
-        Bool g_isInitialized = false;
+        std::atomic<Bool> g_isInitialized = false;
+        thread_local Bool tl_initializing = false;
+
+        std::mutex& InitMutex() {
+            static std::mutex mutex;
+            return mutex;
+        }
 
         void DestroyImpl(Bool logLifecycle) {
             if (!g_isInitialized) {
@@ -65,59 +74,35 @@ namespace MobileGL {
         MGLOG_I("MobileGL initialized");
     }
 
+    void EnsureInitialized() {
+        if (g_isInitialized.load(std::memory_order_acquire)) {
+            return;
+        }
+        // Re-entrant call while this thread is already inside Initialize()
+        // (e.g. an init step routing back through a public entry point).
+        if (tl_initializing) {
+            return;
+        }
+        const std::lock_guard<std::mutex> lock(InitMutex());
+        if (g_isInitialized.load(std::memory_order_acquire)) {
+            return;
+        }
+        tl_initializing = true;
+        Initialize();
+        tl_initializing = false;
+    }
+
     void Destroy() {
         DestroyImpl(true);
     }
 
-#if defined(__linux__) || defined(__APPLE__)
-    __attribute__((constructor)) static void AutoInit() {
-        Initialize();
-    }
-
-    __attribute__((destructor)) static void AutoDestroy() {
-        if (MG_Config::Features.TraceSkipAutodestroy) {
-            return;
-        }
-#if defined(__APPLE__)
-        // macOS injected dylibs can run destructors after logging/backend static state is already torn down.
-        return;
-#else
-        DestroyImpl(false);
-#endif
-    }
-#endif
-
-#ifdef _WIN32
-    namespace {
-        // Called on DLL_PROCESS_DETACH, which runs BEFORE the CRT executes this
-        // DLL's static destructors. Releasing (deliberately leaking) the global
-        // singletons here keeps those destructors from tearing down the backend
-        // inside a dying process - other threads have already been terminated,
-        // so Vulkan/GLES cleanup crashes with the process half-dead. The process
-        // is exiting; the OS reclaims everything.
-        // No logging here: this runs under the loader lock after every other
-        // thread was terminated, where the log mutex/heap/stdio may be in any
-        // state. Plain pointer stores only.
-        void AbandonAtProcessExit() {
-            MG_Backend::DirectVulkan::pVulkanRenderer.release();
-            MG_Backend::pActiveBackendObject.release();
-            MG_State::pGLContext.release();
-            MG_State::pEGLContext.release();
-            MG_Impl::GLImpl::TextureImpl::pProxyTextureManager.release();
-            MG_Impl::GLImpl::FramebufferImpl::pDefaultFramebufferInfo.release();
-        }
-    } // namespace
-#endif
+    // MobileGL's lifecycle is owned entirely by the host-API layers
+    // (EGL/WGL/CGL): initialization happens lazily on the first entry point
+    // via EnsureInitialized(), and full teardown happens deterministically
+    // when the last EGL display is terminated with nothing current (EGLImpl
+    // calls Destroy()). There is intentionally no static constructor, no
+    // static destructor, and no DllMain: the global singletons use
+    // leak-at-exit storage (see GlobalObjects.cpp), so a process that exits
+    // without eglTerminate simply leaks them to the OS instead of running
+    // backend destructors during static teardown.
 } // namespace MobileGL
-
-#ifdef _WIN32
-// Initialization is NOT done here: MobileGL::Initialize() loads libraries
-// (Vulkan/ANGLE) and spins up glslang, none of which is safe under the loader
-// lock. The WGL host layer calls Initialize() lazily on its first entry point.
-extern "C" BOOL WINAPI DllMain(HINSTANCE, DWORD reason, LPVOID) {
-    if (reason == DLL_PROCESS_DETACH) {
-        MobileGL::AbandonAtProcessExit();
-    }
-    return TRUE;
-}
-#endif

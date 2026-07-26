@@ -8,6 +8,7 @@
 
 #include "EGLImpl.h"
 #include "../GetProcAddress.h"
+#include <Init.h>
 #include <MG_Backend/BackendObjects.h>
 #include <MG_State/EGLState/Core.h>
 #include <mutex>
@@ -23,6 +24,17 @@ namespace MobileGL::MG_Impl::EGLImpl {
                 MGLOG_E("pEGLContext is null. MG_State may not be initialized.");
             }
             return MG_State::pEGLContext.get();
+        }
+
+        // Entry points that can legitimately be an application's FIRST EGL
+        // call (display/proc-address/string queries) lazily bring MobileGL
+        // up here, so the library needs no static constructor and can
+        // re-initialize after the last eglTerminate tore everything down.
+        // Teardown-ish entry points keep using GetState() and fail benignly
+        // when MobileGL is not initialized.
+        EGLStateContext* GetStateEnsureInitialized() {
+            MobileGL::EnsureInitialized();
+            return GetState();
         }
 
         MG_Backend::BackendObject* GetBackendObject(EGLStateContext* state) {
@@ -189,7 +201,7 @@ namespace MobileGL::MG_Impl::EGLImpl {
     }
 
     EGLBoolean Initialize(EGLDisplay dpy, EGLint* major, EGLint* minor) {
-        auto* state = GetState();
+        auto* state = GetStateEnsureInitialized();
         if (!state) {
             return EGL_FALSE;
         }
@@ -210,7 +222,7 @@ namespace MobileGL::MG_Impl::EGLImpl {
     }
 
     EGLDisplay GetDisplay(NativeDisplayType display) {
-        auto* state = GetState();
+        auto* state = GetStateEnsureInitialized();
         if (!state) {
             return EGL_NO_DISPLAY;
         }
@@ -315,6 +327,14 @@ namespace MobileGL::MG_Impl::EGLImpl {
         if (auto* backendObject = MG_Backend::pActiveBackendObject.get()) {
             backendObject->ReleaseEGLResources();
         }
+        // The last initialized display is gone and nothing is current on any
+        // thread: tear the whole library down deterministically inside the
+        // EGL lifecycle (backend, GL/EGL state, glslang). A later EGL call
+        // re-initializes lazily via GetStateEnsureInitialized(); process exit
+        // then has nothing left to destroy.
+        if (!state->HasAnyInitializedDisplay() && !state->HasAnyCurrentContext()) {
+            MobileGL::Destroy();
+        }
         return EGL_TRUE;
     }
 
@@ -347,7 +367,7 @@ namespace MobileGL::MG_Impl::EGLImpl {
     }
 
     EGLBoolean BindAPI(EGLenum api) {
-        auto* state = GetState();
+        auto* state = GetStateEnsureInitialized();
         if (!state) {
             return EGL_FALSE;
         }
@@ -380,7 +400,7 @@ namespace MobileGL::MG_Impl::EGLImpl {
     }
 
     char const* QueryString(EGLDisplay display, EGLint name) {
-        auto* state = GetState();
+        auto* state = GetStateEnsureInitialized();
         if (!state) {
             return nullptr;
         }
@@ -643,7 +663,7 @@ namespace MobileGL::MG_Impl::EGLImpl {
     EGLDisplay GetPlatformDisplay(EGLenum platform, void* native_display, const EGLAttrib* attrib_list) {
         (void)attrib_list;
 
-        auto* state = GetState();
+        auto* state = GetStateEnsureInitialized();
         if (!state) {
             return EGL_NO_DISPLAY;
         }
@@ -739,6 +759,7 @@ namespace MobileGL::MG_Impl::EGLImpl {
         if (!name) {
             return nullptr;
         }
+        MobileGL::EnsureInitialized();
 
         MGLOG_D("eglGetProcAddress(%s)", name);
         void* proc = MG_Impl::GetProcAddress(name);

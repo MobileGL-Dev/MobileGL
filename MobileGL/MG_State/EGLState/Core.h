@@ -39,6 +39,10 @@ namespace MobileGL {
                 Bool IsDisplayInitialized(EGLDisplayHandle display) const;
                 Bool InitializeDisplay(EGLDisplayHandle display, EGLint* major, EGLint* minor);
                 Bool TerminateDisplay(EGLDisplayHandle display);
+                // Whole-library idle checks used by EGLImpl::Terminate to decide
+                // when the last eglTerminate may tear MobileGL down entirely.
+                Bool HasAnyInitializedDisplay() const;
+                Bool HasAnyCurrentContext() const;
 
                 // Config
                 Bool ChooseConfig(EGLDisplayHandle display, const EGLint* attribList, EGLConfigHandle* configs,
@@ -262,6 +266,6 @@ namespace MobileGL {
             };
         } // namespace EGLState
 
-        extern UniquePtr<EGLState::EGLContext> pEGLContext;
+        extern UniquePtr<EGLState::EGLContext>& pEGLContext;
     } // namespace MG_State
 } // namespace MobileGL

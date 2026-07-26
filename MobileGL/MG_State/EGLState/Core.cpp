@@ -368,6 +368,26 @@ namespace MobileGL {
                 return true;
             }
 
+            Bool EGLContext::HasAnyInitializedDisplay() const {
+                const std::lock_guard<std::recursive_mutex> lock(m_mutex);
+                for (const auto& [handle, displayObject] : m_displays) {
+                    if (displayObject.Initialized) {
+                        return true;
+                    }
+                }
+                return false;
+            }
+
+            Bool EGLContext::HasAnyCurrentContext() const {
+                const std::lock_guard<std::recursive_mutex> lock(m_mutex);
+                for (const auto& [threadId, current] : m_threadCurrents) {
+                    if (current.Context != nullptr) {
+                        return true;
+                    }
+                }
+                return false;
+            }
+
             Bool EGLContext::ChooseConfig(EGLDisplayHandle display, const EGLint* attribList, EGLConfigHandle* configs,
                                           EGLint configSize, EGLint* numConfig) {
                 const std::lock_guard<std::recursive_mutex> lock(m_mutex);
@@ -1415,6 +1435,7 @@ namespace MobileGL {
             }
         } // namespace EGLState
 
-        UniquePtr<EGLState::EGLContext> pEGLContext;
+        // Leak-at-exit storage; see GlobalObjects.cpp.
+        UniquePtr<EGLState::EGLContext>& pEGLContext = *new UniquePtr<EGLState::EGLContext>();
     } // namespace MG_State
 } // namespace MobileGL

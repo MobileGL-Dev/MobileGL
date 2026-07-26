@@ -14,7 +14,13 @@ namespace MobileGL {
     } // namespace MG_Config
 
     namespace MG_Backend {
-        UniquePtr<BackendObject> pActiveBackendObject;
+        // Leak-at-exit storage: the UniquePtr itself lives on the heap and is
+        // never destroyed by the runtime, so process exit runs no backend
+        // destructors (static destruction order across TUs is undefined).
+        // Deterministic teardown happens inside the EGL lifecycle instead:
+        // the last eglTerminate calls MobileGL::Destroy(), which .reset()s
+        // these singletons while the process is still healthy.
+        UniquePtr<BackendObject>& pActiveBackendObject = *new UniquePtr<BackendObject>();
         GlobalBackendFunctionsTable gBackendFunctionsTable;
     } // namespace MG_Backend
 } // namespace MobileGL

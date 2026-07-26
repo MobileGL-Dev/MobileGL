@@ -14,7 +14,8 @@
 #include <MG_State/GLState/TextureState/TextureObjectStubs.h>
 
 namespace MobileGL::MG_Impl::GLImpl::TextureImpl {
-    UniquePtr<ProxyTextureManager> pProxyTextureManager;
+    // Leak-at-exit storage; see GlobalObjects.cpp.
+    UniquePtr<ProxyTextureManager>& pProxyTextureManager = *new UniquePtr<ProxyTextureManager>();
 
     Bool IsProxyTextureTarget(TextureUploadTarget target) {
         switch (target) {

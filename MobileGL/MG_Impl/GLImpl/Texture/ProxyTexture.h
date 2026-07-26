@@ -23,5 +23,5 @@ namespace MobileGL::MG_Impl::GLImpl::TextureImpl {
         UnorderedMap<TextureUploadTarget, SharedPtr<MG_State::GLState::ITextureObject>> m_proxyTexturesMap;
     };
 
-    extern UniquePtr<ProxyTextureManager> pProxyTextureManager;
+    extern UniquePtr<ProxyTextureManager>& pProxyTextureManager;
 } // namespace MobileGL::MG_Impl::GLImpl::TextureImpl
