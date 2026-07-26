@@ -87,7 +87,7 @@ def main():
     ap.add_argument("--device-dir", default="/data/local/tmp/mgcts")
     ap.add_argument("--surface", default="fbo", help="--deqp-surface-type value")
     ap.add_argument("--max-rounds", type=int, default=4000)
-    ap.add_argument("--max-empty-streak", type=int, default=8,
+    ap.add_argument("--max-empty-streak", type=int, default=64,
                     help="abort after this many consecutive chunks that produce no log at all")
     ap.add_argument("--min-mem-kb", type=int, default=400000,
                     help="pause when the device drops below this much available memory")
