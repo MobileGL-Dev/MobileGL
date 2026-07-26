@@ -251,11 +251,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         const auto internalFormat = renderbuffer->GetInternalFormat();
         const VkFormat format = MG_Util::ConvertTextureInternalFormatToVkEnum(internalFormat);
         const VkImageAspectFlags aspect = ResolveImageAspectMaskForFormat(format);
-        if ((aspect & VK_IMAGE_ASPECT_COLOR_BIT) != 0) {
-            MGLOG_E("GetOrCreateRenderbufferResource: color renderbuffer %u is not supported by DirectVulkan render passes yet",
-                    renderbuffer->GetExternalIndex());
-            return nullptr;
-        }
+        // Renderbuffers are never sampled (GL has no way to bind one to a sampler), so the
+        // usage set is attachment + transfer: transfer covers readback (vkCmdCopyImageToBuffer),
+        // BlitFramebuffer, CopyTexImage sources, and out-of-render-pass clear materialization.
+        const VkImageUsageFlags imageUsage =
+            ((aspect & VK_IMAGE_ASPECT_COLOR_BIT) != 0 ? VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT
+                                                       : VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT) |
+            VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
 
         auto& resource = m_renderbufferResources[renderbuffer.get()];
         const Bool needsCreate =
@@ -285,7 +287,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         imageInfo.format = format;
         imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
         imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-        imageInfo.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
+        imageInfo.usage = imageUsage;
         imageInfo.samples = sampleCount;
         imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
 
@@ -386,6 +388,18 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     void VkRenderPassManager::QueueRenderbufferClear(
         GLbitfield mask, const ClearFramebufferPayload& clearPayload,
         const MG_State::GLState::FramebufferObject& drawFbo) {
+        if ((mask & GL_COLOR_BUFFER_BIT) != 0) {
+            // Color renderbuffer draw buffers take the framebuffer-level clear too; texture
+            // attachments are skipped by the per-attachment overload's IsRenderbuffer guard.
+            for (const auto attachmentType : drawFbo.GetDrawBuffers()) {
+                if (attachmentType == FramebufferAttachmentType::None) {
+                    continue;
+                }
+                QueueRenderbufferClear(
+                    ClearAttachmentPayload{.mask = GL_COLOR_BUFFER_BIT, .color = clearPayload.color},
+                    drawFbo.GetAttachment(attachmentType));
+            }
+        }
         if ((mask & GL_DEPTH_BUFFER_BIT) != 0) {
             QueueRenderbufferClear(
                 ClearAttachmentPayload{.mask = GL_DEPTH_BUFFER_BIT, .depth = clearPayload.depth},
@@ -682,6 +696,83 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // assuming default FBO has the right param
         for (Uint32 i = 0; i < colorAttachmentSlotCount; ++i) {
             auto drawbuf = drawbufs[i];
+
+            // Renderbuffer color attachments mirror the texture path below, with the
+            // resource (image/view/format/layout) coming from the render-pass manager's
+            // renderbuffer store instead of the texture manager.
+            if (drawbuf != FramebufferAttachmentType::None && !isDefaultFbo) {
+                const auto& rbAtt = fbo.GetAttachment(drawbuf);
+                if (rbAtt.IsRenderbuffer() && rbAtt.IsComplete()) {
+                    const auto& renderbuffer = rbAtt.GetRenderbuffer();
+                    auto* rbResource = GetOrCreateRenderbufferResource(renderbuffer);
+                    if (rbResource == nullptr || (rbResource->aspect & VK_IMAGE_ASPECT_COLOR_BIT) == 0) {
+                        MGLOG_E("GetOrCreateRenderPass: draw buffer slot %u on FBO %u has an unsupported color "
+                                "renderbuffer %u; using VK_ATTACHMENT_UNUSED",
+                                i, fbo.GetExternalIndex(), renderbuffer->GetExternalIndex());
+                        continue;
+                    }
+
+                    const Uint32 rbAttachmentIndex = static_cast<Uint32>(attachmentDescriptions.size());
+                    attachmentDescriptions.emplace_back();
+                    VkAttachmentDescription& rbDesc = attachmentDescriptions.back();
+
+                    ClearAttachmentPayload rbClearPayload{};
+                    Bool rbHasClear = GetPendingRenderbufferClear(renderbuffer.get(), rbClearPayload) &&
+                                      (rbClearPayload.mask & GL_COLOR_BUFFER_BIT) != 0;
+                    if (rbHasClear &&
+                        MG_Util::GetBaseInternalFormatComponentCount(renderbuffer->GetInternalFormat()) == 3) {
+                        // RGB renderbuffers are backed by an RGBA image; the missing alpha reads as 1.
+                        rbClearPayload.color =
+                            FloatVec4(rbClearPayload.color.x(), rbClearPayload.color.y(),
+                                      rbClearPayload.color.z(), 1.0f);
+                    }
+
+                    const VkImageLayout trackedRbLayout = rbResource->layout;
+                    rbDesc.flags = 0;
+                    rbDesc.format = rbResource->format;
+                    rbDesc.samples = rbResource->sampleCount;
+                    rbDesc.loadOp = rbHasClear ? VK_ATTACHMENT_LOAD_OP_CLEAR :
+                                    (trackedRbLayout == VK_IMAGE_LAYOUT_UNDEFINED ? VK_ATTACHMENT_LOAD_OP_DONT_CARE
+                                                                                  : VK_ATTACHMENT_LOAD_OP_LOAD);
+                    rbDesc.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+                    rbDesc.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+                    rbDesc.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+                    rbDesc.initialLayout = (rbHasClear || trackedRbLayout == VK_IMAGE_LAYOUT_UNDEFINED) ?
+                        VK_IMAGE_LAYOUT_UNDEFINED : trackedRbLayout;
+                    rbDesc.finalLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+                    adoptRenderPassSampleCount(rbResource->sampleCount, "color",
+                                               static_cast<Int>(renderbuffer->GetExternalIndex()));
+
+                    if (rbHasClear) {
+                        pendingClearAttachments.emplace_back(PendingClearAttachmentInfo {
+                            .attachmentIndex = rbAttachmentIndex,
+                            .colorAttachmentSlot = i,
+                            .renderbuffer = renderbuffer.get(),
+                            .hasInlinePayload = true,
+                            .inlinePayload = rbClearPayload,
+                        });
+                    }
+
+                    if (width == 0)
+                        width = static_cast<Int>(rbResource->extent.width);
+                    if (height == 0)
+                        height = static_cast<Int>(rbResource->extent.height);
+
+                    trackedAttachmentLayouts.emplace_back(TrackedAttachmentLayoutInfo {
+                        .target = TrackedAttachmentTarget::Renderbuffer,
+                        .renderbuffer = renderbuffer,
+                        .finalLayout = rbDesc.finalLayout,
+                    });
+                    textureResources.emplace_back(nullptr);
+                    attachmentViews.emplace_back(rbResource->view);
+                    MOBILEGL_ASSERT(attachmentViews.back() != VK_NULL_HANDLE,
+                                    "GetOrCreateRenderPass: renderbuffer view missing at color attachment %d", i);
+
+                    colorAttachmentRefs[i].attachment = rbAttachmentIndex;
+                    continue;
+                }
+            }
+
             auto* texture = ResolveCompleteColorAttachmentTexture(fbo, drawbuf, i);
             if (texture == nullptr)
                 continue;
@@ -700,6 +791,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 case TextureTarget::Texture2D:
                 case TextureTarget::Texture2DArray:
                 case TextureTarget::Texture2DMultisample:
+                case TextureTarget::Texture2DMultisampleArray:
+                case TextureTarget::Texture3D:
+                case TextureTarget::TextureCubeMap:
+                case TextureTarget::TextureCubeMapArray:
                 case TextureTarget::TextureRectangle: {
                     desc.flags = 0;
                     desc.format = isDefaultFbo ?

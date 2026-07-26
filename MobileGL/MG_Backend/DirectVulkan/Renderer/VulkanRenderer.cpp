@@ -7,6 +7,8 @@
 // End of Source File Header
 
 #include "VulkanRenderer.h"
+
+#include "MG_Backend/DirectGLES/Utils.h"
 #include "VertexInputStateFactory.h"
 #include "VertexInputStateBuilder.h"
 
@@ -1274,7 +1276,8 @@ void main() {
 
         static Bool ResolveColorBlitBinding(MG_State::GLState::FramebufferObject& fbo, Bool isReadFramebuffer,
                                             Uint32 swapchainImageIndex, SwapchainObject& swapchainObject,
-                                            VkTextureManager& textureManager, BlitImageBinding& outBinding) {
+                                            VkTextureManager& textureManager,
+                                            VkRenderPassManager& renderPassManager, BlitImageBinding& outBinding) {
             const Bool isDefaultFbo = fbo.IsDefaultFramebuffer();
             const FramebufferAttachmentType attachmentType =
                 isReadFramebuffer ? fbo.GetReadBuffer() : fbo.GetDrawBuffers()[0];
@@ -1316,8 +1319,24 @@ void main() {
                 return false;
             }
             if (attachment.IsRenderbuffer()) {
-                MGLOG_E("BlitFramebuffer skipped: renderbuffer attachments are not supported yet");
-                return false;
+                const auto& renderbuffer = attachment.GetRenderbuffer();
+                auto* rbResource = renderPassManager.GetOrCreateRenderbufferResource(renderbuffer);
+                if (rbResource == nullptr || (rbResource->aspect & VK_IMAGE_ASPECT_COLOR_BIT) == 0) {
+                    MGLOG_E("BlitFramebuffer skipped: %s framebuffer color renderbuffer %u is unsupported",
+                            outBinding.label, renderbuffer->GetExternalIndex());
+                    return false;
+                }
+                outBinding.image = rbResource->image;
+                outBinding.trackedLayout = &rbResource->layout;
+                outBinding.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+                outBinding.format = rbResource->format;
+                outBinding.extent = {static_cast<Int>(rbResource->extent.width),
+                                     static_cast<Int>(rbResource->extent.height)};
+                outBinding.mipLevel = 0;
+                outBinding.mipLevelCount = 1;
+                outBinding.baseArrayLayer = 0;
+                outBinding.layerCount = 1;
+                return true;
             }
             if (!attachment.IsTexture()) {
                 MGLOG_E("BlitFramebuffer skipped: unsupported framebuffer attachment type");
@@ -1355,6 +1374,7 @@ void main() {
         static Bool ResolveFramebufferBlitBinding(MG_State::GLState::FramebufferObject& fbo, Bool isReadFramebuffer,
                                                   Uint32 swapchainImageIndex, SwapchainObject& swapchainObject,
                                                   VkTextureManager& textureManager,
+                                                  VkRenderPassManager& renderPassManager,
                                                   VkImageAspectFlags requiredAspectMask,
                                                   BlitImageBinding& outBinding) {
             const Bool isDefaultFbo = fbo.IsDefaultFramebuffer();
@@ -1398,8 +1418,29 @@ void main() {
                 return false;
             }
             if (attachment.IsRenderbuffer()) {
-                MGLOG_E("BlitFramebuffer skipped: renderbuffer attachments are not supported yet");
-                return false;
+                const auto& renderbuffer = attachment.GetRenderbuffer();
+                auto* rbResource = renderPassManager.GetOrCreateRenderbufferResource(renderbuffer);
+                if (rbResource == nullptr) {
+                    MGLOG_E("BlitFramebuffer skipped: %s framebuffer renderbuffer %u is unsupported",
+                            outBinding.label, renderbuffer->GetExternalIndex());
+                    return false;
+                }
+                if ((rbResource->aspect & requiredAspectMask) != requiredAspectMask) {
+                    MGLOG_E("BlitFramebuffer skipped: %s framebuffer renderbuffer %u is missing aspect mask=0x%x",
+                            outBinding.label, renderbuffer->GetExternalIndex(),
+                            static_cast<Uint32>(requiredAspectMask));
+                    return false;
+                }
+                outBinding.image = rbResource->image;
+                outBinding.trackedLayout = &rbResource->layout;
+                outBinding.aspectMask = requiredAspectMask;
+                outBinding.extent = {static_cast<Int>(rbResource->extent.width),
+                                     static_cast<Int>(rbResource->extent.height)};
+                outBinding.mipLevel = 0;
+                outBinding.mipLevelCount = 1;
+                outBinding.baseArrayLayer = 0;
+                outBinding.layerCount = 1;
+                return true;
             }
             if (!attachment.IsTexture()) {
                 MGLOG_E("BlitFramebuffer skipped: unsupported framebuffer attachment type");
@@ -1470,6 +1511,7 @@ void main() {
         static Bool ResolveTextureCopySourceBinding(MG_State::GLState::FramebufferObject& fbo, Uint32 swapchainImageIndex,
                                                     SwapchainObject& swapchainObject,
                                                     VkTextureManager& textureManager,
+                                                    VkRenderPassManager& renderPassManager,
                                                     VkImageAspectFlags requiredAspectMask,
                                                     BlitImageBinding& outBinding) {
             const Bool isDefaultFbo = fbo.IsDefaultFramebuffer();
@@ -1514,8 +1556,30 @@ void main() {
                 return false;
             }
             if (attachment.IsRenderbuffer()) {
-                MGLOG_E("CopyTexSubImage2D skipped: renderbuffer read attachments are not supported yet");
-                return false;
+                const auto& renderbuffer = attachment.GetRenderbuffer();
+                auto* rbResource = renderPassManager.GetOrCreateRenderbufferResource(renderbuffer);
+                if (rbResource == nullptr) {
+                    MGLOG_E("CopyTexSubImage2D skipped: read framebuffer renderbuffer %u is unsupported",
+                            renderbuffer->GetExternalIndex());
+                    return false;
+                }
+                if ((rbResource->aspect & requiredAspectMask) != requiredAspectMask) {
+                    MGLOG_E("CopyTexSubImage2D skipped: read framebuffer renderbuffer %u aspect mask=0x%x "
+                            "does not satisfy requested mask=0x%x",
+                            renderbuffer->GetExternalIndex(), static_cast<Uint32>(rbResource->aspect),
+                            static_cast<Uint32>(requiredAspectMask));
+                    return false;
+                }
+                outBinding.image = rbResource->image;
+                outBinding.trackedLayout = &rbResource->layout;
+                outBinding.aspectMask = requiredAspectMask;
+                outBinding.extent = {static_cast<Int>(rbResource->extent.width),
+                                     static_cast<Int>(rbResource->extent.height)};
+                outBinding.mipLevel = 0;
+                outBinding.mipLevelCount = 1;
+                outBinding.baseArrayLayer = 0;
+                outBinding.layerCount = 1;
+                return true;
             }
             if (!attachment.IsTexture()) {
                 MGLOG_E("CopyTexSubImage2D skipped: unsupported read framebuffer attachment type");
@@ -1819,58 +1883,369 @@ void main() {
             }
         }
 
+        // Generic VkFormat texel decode into the wide RGBA row layouts the shared readback
+        // store expects: GL_FLOAT rows for normalized/float sources, GL_INT / GL_UNSIGNED_INT
+        // rows for integer sources. Missing channels take GL defaults (0,0,0,1).
+        enum class ReadbackSourceClass : Uint8 { Unsupported, Float, SignedInt, UnsignedInt };
+
+        struct ReadbackSourceDesc {
+            ReadbackSourceClass sourceClass = ReadbackSourceClass::Unsupported;
+            Int channels = 0;       // component count stored per texel
+            Int componentBits = 0;  // per-component bits for regular formats; 0 for special packed
+            Bool isSnorm = false;
+            Bool isSrgb = false;
+            Bool bgraSwizzle = false;
+            VkFormat special = VK_FORMAT_UNDEFINED; // set for packed/special formats
+        };
+
+        static Bool GetReadbackSourceDesc(VkFormat format, ReadbackSourceDesc& out) {
+            out = ReadbackSourceDesc{};
+            switch (format) {
+                // --- regular UNORM ---
+                case VK_FORMAT_R8_UNORM:              out = {ReadbackSourceClass::Float, 1, 8};  return true;
+                case VK_FORMAT_R8G8_UNORM:            out = {ReadbackSourceClass::Float, 2, 8};  return true;
+                case VK_FORMAT_R8G8B8A8_UNORM:        out = {ReadbackSourceClass::Float, 4, 8};  return true;
+                case VK_FORMAT_B8G8R8A8_UNORM:        out = {ReadbackSourceClass::Float, 4, 8, false, false, true}; return true;
+                case VK_FORMAT_R16_UNORM:             out = {ReadbackSourceClass::Float, 1, 16}; return true;
+                case VK_FORMAT_R16G16_UNORM:          out = {ReadbackSourceClass::Float, 2, 16}; return true;
+                case VK_FORMAT_R16G16B16A16_UNORM:    out = {ReadbackSourceClass::Float, 4, 16}; return true;
+                // --- SRGB (decode to linear like GL readback of sRGB textures) ---
+                case VK_FORMAT_R8G8B8A8_SRGB:         out = {ReadbackSourceClass::Float, 4, 8, false, true}; return true;
+                case VK_FORMAT_B8G8R8A8_SRGB:         out = {ReadbackSourceClass::Float, 4, 8, false, true, true}; return true;
+                // --- SNORM ---
+                case VK_FORMAT_R8_SNORM:              out = {ReadbackSourceClass::Float, 1, 8, true};  return true;
+                case VK_FORMAT_R8G8_SNORM:            out = {ReadbackSourceClass::Float, 2, 8, true};  return true;
+                case VK_FORMAT_R8G8B8A8_SNORM:        out = {ReadbackSourceClass::Float, 4, 8, true};  return true;
+                case VK_FORMAT_R16_SNORM:             out = {ReadbackSourceClass::Float, 1, 16, true}; return true;
+                case VK_FORMAT_R16G16_SNORM:          out = {ReadbackSourceClass::Float, 2, 16, true}; return true;
+                case VK_FORMAT_R16G16B16A16_SNORM:    out = {ReadbackSourceClass::Float, 4, 16, true}; return true;
+                // --- SFLOAT ---
+                case VK_FORMAT_R16_SFLOAT:            out = {ReadbackSourceClass::Float, 1, 16}; out.special = format; return true;
+                case VK_FORMAT_R16G16_SFLOAT:         out = {ReadbackSourceClass::Float, 2, 16}; out.special = format; return true;
+                case VK_FORMAT_R16G16B16A16_SFLOAT:   out = {ReadbackSourceClass::Float, 4, 16}; out.special = format; return true;
+                case VK_FORMAT_R32_SFLOAT:            out = {ReadbackSourceClass::Float, 1, 32}; out.special = format; return true;
+                case VK_FORMAT_R32G32_SFLOAT:         out = {ReadbackSourceClass::Float, 2, 32}; out.special = format; return true;
+                case VK_FORMAT_R32G32B32A32_SFLOAT:   out = {ReadbackSourceClass::Float, 4, 32}; out.special = format; return true;
+                // --- UINT ---
+                case VK_FORMAT_R8_UINT:               out = {ReadbackSourceClass::UnsignedInt, 1, 8};  return true;
+                case VK_FORMAT_R8G8_UINT:             out = {ReadbackSourceClass::UnsignedInt, 2, 8};  return true;
+                case VK_FORMAT_R8G8B8A8_UINT:         out = {ReadbackSourceClass::UnsignedInt, 4, 8};  return true;
+                case VK_FORMAT_R16_UINT:              out = {ReadbackSourceClass::UnsignedInt, 1, 16}; return true;
+                case VK_FORMAT_R16G16_UINT:           out = {ReadbackSourceClass::UnsignedInt, 2, 16}; return true;
+                case VK_FORMAT_R16G16B16A16_UINT:     out = {ReadbackSourceClass::UnsignedInt, 4, 16}; return true;
+                case VK_FORMAT_R32_UINT:              out = {ReadbackSourceClass::UnsignedInt, 1, 32}; return true;
+                case VK_FORMAT_R32G32_UINT:           out = {ReadbackSourceClass::UnsignedInt, 2, 32}; return true;
+                case VK_FORMAT_R32G32B32A32_UINT:     out = {ReadbackSourceClass::UnsignedInt, 4, 32}; return true;
+                // --- SINT ---
+                case VK_FORMAT_R8_SINT:               out = {ReadbackSourceClass::SignedInt, 1, 8};  return true;
+                case VK_FORMAT_R8G8_SINT:             out = {ReadbackSourceClass::SignedInt, 2, 8};  return true;
+                case VK_FORMAT_R8G8B8A8_SINT:         out = {ReadbackSourceClass::SignedInt, 4, 8};  return true;
+                case VK_FORMAT_R16_SINT:              out = {ReadbackSourceClass::SignedInt, 1, 16}; return true;
+                case VK_FORMAT_R16G16_SINT:           out = {ReadbackSourceClass::SignedInt, 2, 16}; return true;
+                case VK_FORMAT_R16G16B16A16_SINT:     out = {ReadbackSourceClass::SignedInt, 4, 16}; return true;
+                case VK_FORMAT_R32_SINT:              out = {ReadbackSourceClass::SignedInt, 1, 32}; return true;
+                case VK_FORMAT_R32G32_SINT:           out = {ReadbackSourceClass::SignedInt, 2, 32}; return true;
+                case VK_FORMAT_R32G32B32A32_SINT:     out = {ReadbackSourceClass::SignedInt, 4, 32}; return true;
+                // --- packed / special ---
+                case VK_FORMAT_A2B10G10R10_UNORM_PACK32:
+                case VK_FORMAT_A2B10G10R10_UINT_PACK32:
+                case VK_FORMAT_B10G11R11_UFLOAT_PACK32:
+                case VK_FORMAT_E5B9G9R9_UFLOAT_PACK32:
+                case VK_FORMAT_R5G6B5_UNORM_PACK16:
+                case VK_FORMAT_B5G6R5_UNORM_PACK16:
+                case VK_FORMAT_A1R5G5B5_UNORM_PACK16:
+                case VK_FORMAT_R5G5B5A1_UNORM_PACK16:
+                case VK_FORMAT_B5G5R5A1_UNORM_PACK16:
+                case VK_FORMAT_R4G4B4A4_UNORM_PACK16:
+                case VK_FORMAT_B4G4R4A4_UNORM_PACK16:
+                    out.sourceClass = format == VK_FORMAT_A2B10G10R10_UINT_PACK32 ?
+                        ReadbackSourceClass::UnsignedInt : ReadbackSourceClass::Float;
+                    out.special = format;
+                    return true;
+                default:
+                    return false;
+            }
+        }
+
+        static Float SrgbToLinear(Float value) {
+            if (value <= 0.04045f) {
+                return value / 12.92f;
+            }
+            return std::pow((value + 0.055f) / 1.055f, 2.4f);
+        }
+
+        static Float DecodeUnsignedF11(Uint32 bits) {
+            const Uint32 exponent = (bits >> 6) & 0x1F;
+            const Uint32 mantissa = bits & 0x3F;
+            if (exponent == 0) {
+                return static_cast<Float>(mantissa) / 64.0f * std::pow(2.0f, -14.0f);
+            }
+            if (exponent == 31) {
+                return mantissa == 0 ? std::numeric_limits<Float>::infinity()
+                                     : std::numeric_limits<Float>::quiet_NaN();
+            }
+            return (1.0f + static_cast<Float>(mantissa) / 64.0f) *
+                   std::pow(2.0f, static_cast<Float>(static_cast<Int>(exponent)) - 15.0f);
+        }
+
+        static Float DecodeUnsignedF10(Uint32 bits) {
+            const Uint32 exponent = (bits >> 5) & 0x1F;
+            const Uint32 mantissa = bits & 0x1F;
+            if (exponent == 0) {
+                return static_cast<Float>(mantissa) / 32.0f * std::pow(2.0f, -14.0f);
+            }
+            if (exponent == 31) {
+                return mantissa == 0 ? std::numeric_limits<Float>::infinity()
+                                     : std::numeric_limits<Float>::quiet_NaN();
+            }
+            return (1.0f + static_cast<Float>(mantissa) / 32.0f) *
+                   std::pow(2.0f, static_cast<Float>(static_cast<Int>(exponent)) - 15.0f);
+        }
+
+        static void DecodeReadbackTexelSpecialFloat(const Uint8* source, VkFormat format, Float* rgba) {
+            rgba[0] = 0.0f; rgba[1] = 0.0f; rgba[2] = 0.0f; rgba[3] = 1.0f;
+            switch (format) {
+                case VK_FORMAT_R16_SFLOAT:
+                case VK_FORMAT_R16G16_SFLOAT:
+                case VK_FORMAT_R16G16B16A16_SFLOAT: {
+                    const Int channels = format == VK_FORMAT_R16_SFLOAT ? 1 :
+                                         (format == VK_FORMAT_R16G16_SFLOAT ? 2 : 4);
+                    for (Int c = 0; c < channels; ++c) {
+                        Uint16 bits = 0;
+                        Memcpy(&bits, source + static_cast<SizeT>(c) * sizeof(bits), sizeof(bits));
+                        rgba[c] = MG_Util::DecodeHalfBitsToFloat(bits);
+                    }
+                    return;
+                }
+                case VK_FORMAT_R32_SFLOAT:
+                case VK_FORMAT_R32G32_SFLOAT:
+                case VK_FORMAT_R32G32B32A32_SFLOAT: {
+                    const Int channels = format == VK_FORMAT_R32_SFLOAT ? 1 :
+                                         (format == VK_FORMAT_R32G32_SFLOAT ? 2 : 4);
+                    Memcpy(rgba, source, static_cast<SizeT>(channels) * sizeof(Float));
+                    return;
+                }
+                case VK_FORMAT_A2B10G10R10_UNORM_PACK32: {
+                    Uint32 word = 0;
+                    Memcpy(&word, source, sizeof(word));
+                    rgba[0] = static_cast<Float>(word & 0x3FFu) / 1023.0f;
+                    rgba[1] = static_cast<Float>((word >> 10) & 0x3FFu) / 1023.0f;
+                    rgba[2] = static_cast<Float>((word >> 20) & 0x3FFu) / 1023.0f;
+                    rgba[3] = static_cast<Float>((word >> 30) & 0x3u) / 3.0f;
+                    return;
+                }
+                case VK_FORMAT_B10G11R11_UFLOAT_PACK32: {
+                    Uint32 word = 0;
+                    Memcpy(&word, source, sizeof(word));
+                    rgba[0] = DecodeUnsignedF11(word & 0x7FFu);
+                    rgba[1] = DecodeUnsignedF11((word >> 11) & 0x7FFu);
+                    rgba[2] = DecodeUnsignedF10((word >> 22) & 0x3FFu);
+                    return;
+                }
+                case VK_FORMAT_E5B9G9R9_UFLOAT_PACK32: {
+                    Uint32 word = 0;
+                    Memcpy(&word, source, sizeof(word));
+                    const Int exponent = static_cast<Int>((word >> 27) & 0x1Fu) - 15 - 9;
+                    const Float scale = std::pow(2.0f, static_cast<Float>(exponent));
+                    rgba[0] = static_cast<Float>(word & 0x1FFu) * scale;
+                    rgba[1] = static_cast<Float>((word >> 9) & 0x1FFu) * scale;
+                    rgba[2] = static_cast<Float>((word >> 18) & 0x1FFu) * scale;
+                    return;
+                }
+                case VK_FORMAT_R5G6B5_UNORM_PACK16:
+                case VK_FORMAT_B5G6R5_UNORM_PACK16: {
+                    Uint16 word = 0;
+                    Memcpy(&word, source, sizeof(word));
+                    const Float c0 = static_cast<Float>((word >> 11) & 0x1Fu) / 31.0f;
+                    const Float c1 = static_cast<Float>((word >> 5) & 0x3Fu) / 63.0f;
+                    const Float c2 = static_cast<Float>(word & 0x1Fu) / 31.0f;
+                    const Bool bgr = format == VK_FORMAT_B5G6R5_UNORM_PACK16;
+                    rgba[0] = bgr ? c2 : c0;
+                    rgba[1] = c1;
+                    rgba[2] = bgr ? c0 : c2;
+                    return;
+                }
+                case VK_FORMAT_A1R5G5B5_UNORM_PACK16: {
+                    Uint16 word = 0;
+                    Memcpy(&word, source, sizeof(word));
+                    rgba[3] = static_cast<Float>((word >> 15) & 0x1u);
+                    rgba[0] = static_cast<Float>((word >> 10) & 0x1Fu) / 31.0f;
+                    rgba[1] = static_cast<Float>((word >> 5) & 0x1Fu) / 31.0f;
+                    rgba[2] = static_cast<Float>(word & 0x1Fu) / 31.0f;
+                    return;
+                }
+                case VK_FORMAT_R5G5B5A1_UNORM_PACK16: {
+                    Uint16 word = 0;
+                    Memcpy(&word, source, sizeof(word));
+                    rgba[0] = static_cast<Float>((word >> 11) & 0x1Fu) / 31.0f;
+                    rgba[1] = static_cast<Float>((word >> 6) & 0x1Fu) / 31.0f;
+                    rgba[2] = static_cast<Float>((word >> 1) & 0x1Fu) / 31.0f;
+                    rgba[3] = static_cast<Float>(word & 0x1u);
+                    return;
+                }
+                case VK_FORMAT_B5G5R5A1_UNORM_PACK16: {
+                    Uint16 word = 0;
+                    Memcpy(&word, source, sizeof(word));
+                    rgba[2] = static_cast<Float>((word >> 11) & 0x1Fu) / 31.0f;
+                    rgba[1] = static_cast<Float>((word >> 6) & 0x1Fu) / 31.0f;
+                    rgba[0] = static_cast<Float>((word >> 1) & 0x1Fu) / 31.0f;
+                    rgba[3] = static_cast<Float>(word & 0x1u);
+                    return;
+                }
+                case VK_FORMAT_R4G4B4A4_UNORM_PACK16: {
+                    Uint16 word = 0;
+                    Memcpy(&word, source, sizeof(word));
+                    rgba[0] = static_cast<Float>((word >> 12) & 0xFu) / 15.0f;
+                    rgba[1] = static_cast<Float>((word >> 8) & 0xFu) / 15.0f;
+                    rgba[2] = static_cast<Float>((word >> 4) & 0xFu) / 15.0f;
+                    rgba[3] = static_cast<Float>(word & 0xFu) / 15.0f;
+                    return;
+                }
+                case VK_FORMAT_B4G4R4A4_UNORM_PACK16: {
+                    Uint16 word = 0;
+                    Memcpy(&word, source, sizeof(word));
+                    rgba[2] = static_cast<Float>((word >> 12) & 0xFu) / 15.0f;
+                    rgba[1] = static_cast<Float>((word >> 8) & 0xFu) / 15.0f;
+                    rgba[0] = static_cast<Float>((word >> 4) & 0xFu) / 15.0f;
+                    rgba[3] = static_cast<Float>(word & 0xFu) / 15.0f;
+                    return;
+                }
+                default:
+                    return;
+            }
+        }
+
+        static Bool DecodeReadbackRowsToWide(const Uint8* srcPixels, VkFormat srcFormat, GLsizei width,
+                                             GLsizei height, Vector<Uint8>& outWide, GLenum& outWideType) {
+            ReadbackSourceDesc desc{};
+            if (!GetReadbackSourceDesc(srcFormat, desc)) {
+                return false;
+            }
+            const SizeT texelSize = VulkanRenderer::GetReadbackTexelSize(srcFormat);
+            if (texelSize == 0) {
+                return false;
+            }
+            const SizeT pixelCount = static_cast<SizeT>(width) * static_cast<SizeT>(height);
+            outWide.assign(pixelCount * 4 * sizeof(Uint32), 0);
+
+            if (desc.sourceClass == ReadbackSourceClass::Float) {
+                outWideType = GL_FLOAT;
+                Float* wide = reinterpret_cast<Float*>(outWide.data());
+                for (SizeT i = 0; i < pixelCount; ++i) {
+                    const Uint8* source = srcPixels + i * texelSize;
+                    Float rgba[4] = {0.0f, 0.0f, 0.0f, 1.0f};
+                    if (desc.special != VK_FORMAT_UNDEFINED) {
+                        DecodeReadbackTexelSpecialFloat(source, desc.special, rgba);
+                    } else {
+                        for (Int c = 0; c < desc.channels; ++c) {
+                            Float value = 0.0f;
+                            if (desc.componentBits == 8) {
+                                if (desc.isSnorm) {
+                                    Int8 raw = 0;
+                                    Memcpy(&raw, source + c, sizeof(raw));
+                                    value = std::max(static_cast<Float>(raw) / 127.0f, -1.0f);
+                                } else {
+                                    value = static_cast<Float>(source[c]) / 255.0f;
+                                }
+                            } else { // 16
+                                if (desc.isSnorm) {
+                                    Int16 raw = 0;
+                                    Memcpy(&raw, source + static_cast<SizeT>(c) * 2, sizeof(raw));
+                                    value = std::max(static_cast<Float>(raw) / 32767.0f, -1.0f);
+                                } else {
+                                    Uint16 raw = 0;
+                                    Memcpy(&raw, source + static_cast<SizeT>(c) * 2, sizeof(raw));
+                                    value = static_cast<Float>(raw) / 65535.0f;
+                                }
+                            }
+                            if (desc.isSrgb && c < 3) {
+                                value = SrgbToLinear(value);
+                            }
+                            rgba[c] = value;
+                        }
+                        if (desc.bgraSwizzle) {
+                            std::swap(rgba[0], rgba[2]);
+                        }
+                    }
+                    Memcpy(wide + i * 4, rgba, sizeof(rgba));
+                }
+                return true;
+            }
+
+            // Integer classes: decode to 4 x (U)Int32 per texel; missing alpha reads 1.
+            outWideType = desc.sourceClass == ReadbackSourceClass::SignedInt ? GL_INT : GL_UNSIGNED_INT;
+            Uint32* wide = reinterpret_cast<Uint32*>(outWide.data());
+            for (SizeT i = 0; i < pixelCount; ++i) {
+                const Uint8* source = srcPixels + i * texelSize;
+                Uint32 rgba[4] = {0, 0, 0, 1};
+                if (srcFormat == VK_FORMAT_A2B10G10R10_UINT_PACK32) {
+                    Uint32 word = 0;
+                    Memcpy(&word, source, sizeof(word));
+                    rgba[0] = word & 0x3FFu;
+                    rgba[1] = (word >> 10) & 0x3FFu;
+                    rgba[2] = (word >> 20) & 0x3FFu;
+                    rgba[3] = (word >> 30) & 0x3u;
+                } else {
+                    for (Int c = 0; c < desc.channels; ++c) {
+                        if (desc.componentBits == 8) {
+                            if (desc.sourceClass == ReadbackSourceClass::SignedInt) {
+                                Int8 raw = 0;
+                                Memcpy(&raw, source + c, sizeof(raw));
+                                rgba[c] = static_cast<Uint32>(static_cast<Int32>(raw));
+                            } else {
+                                rgba[c] = source[c];
+                            }
+                        } else if (desc.componentBits == 16) {
+                            if (desc.sourceClass == ReadbackSourceClass::SignedInt) {
+                                Int16 raw = 0;
+                                Memcpy(&raw, source + static_cast<SizeT>(c) * 2, sizeof(raw));
+                                rgba[c] = static_cast<Uint32>(static_cast<Int32>(raw));
+                            } else {
+                                Uint16 raw = 0;
+                                Memcpy(&raw, source + static_cast<SizeT>(c) * 2, sizeof(raw));
+                                rgba[c] = raw;
+                            }
+                        } else {
+                            Memcpy(&rgba[c], source + static_cast<SizeT>(c) * 4, sizeof(Uint32));
+                        }
+                    }
+                }
+                Memcpy(wide + i * 4, rgba, sizeof(rgba));
+            }
+            return true;
+        }
+
         static Bool PackReadbackToClientOrPbo(const Uint8* srcPixels, VkFormat srcFormat, GLsizei width,
                                               GLsizei height, GLenum format, GLenum type, void* pixels) {
             if (width <= 0 || height <= 0) {
                 return true;
             }
-            if (type != GL_UNSIGNED_BYTE && type != GL_FLOAT) {
-                MGLOG_E("DirectVulkan readback skipped: unsupported type=0x%x", type);
+
+            DirectGLES::ReadbackImpl::ReadbackChannelMapping mapping{};
+            if (!DirectGLES::ReadbackImpl::GetReadbackChannelMapping(format, mapping) ||
+                DirectGLES::ReadbackImpl::GetReadbackDstPixelSize(mapping, type) == 0) {
+                MGLOG_E("DirectVulkan readback skipped: unsupported format=0x%x type=0x%x", format, type);
                 return false;
             }
 
-            const Int dstChannels = GetReadbackChannelCount(format);
-            if (dstChannels == 0) {
-                MGLOG_E("DirectVulkan readback skipped: unsupported format=0x%x", format);
-                return false;
-            }
-
-            const auto packParams = MG_State::pGLContext->GetPixelStoreParameters(false);
-            const SizeT dstComponentBytes = type == GL_FLOAT ? sizeof(Float) : sizeof(Uint8);
-            const SizeT rowPixels = static_cast<SizeT>(packParams.RowLength > 0 ? packParams.RowLength : width);
-            const SizeT dstRowStride = AlignPixelRow(rowPixels * static_cast<SizeT>(dstChannels) * dstComponentBytes,
-                                                     packParams.Alignment);
-            const SizeT dstOffset = static_cast<SizeT>(std::max(packParams.SkipRows, 0)) * dstRowStride +
-                                    static_cast<SizeT>(std::max(packParams.SkipPixels, 0)) *
-                                        static_cast<SizeT>(dstChannels) * dstComponentBytes;
-            const SizeT packedSize = dstOffset +
-                                     (static_cast<SizeT>(height - 1) * dstRowStride) +
-                                     (static_cast<SizeT>(width) * static_cast<SizeT>(dstChannels) * dstComponentBytes);
-            Vector<Uint8> packed(packedSize, 0);
-
-            if (!VulkanRenderer::ConvertReadbackPixels(srcPixels, srcFormat, width, height, format, type,
-                                                       dstRowStride, packed.data() + dstOffset)) {
+            Vector<Uint8> wide;
+            GLenum wideType = GL_FLOAT;
+            if (!DecodeReadbackRowsToWide(srcPixels, srcFormat, width, height, wide, wideType)) {
                 MGLOG_E("DirectVulkan readback skipped: unsupported source format=%d",
                         static_cast<Int>(srcFormat));
                 return false;
             }
 
-            const auto& pixelPackBufferObject =
-                MG_State::pGLContext->GetBufferBindingSlot(BufferTarget::PixelPack).GetBoundObject();
-            if (pixelPackBufferObject) {
-                const SizeT pboOffset = reinterpret_cast<SizeT>(pixels);
-                if (pboOffset + packed.size() > pixelPackBufferObject->GetSize()) {
-                    MGLOG_E("DirectVulkan readback skipped: pixel pack buffer is too small");
-                    return false;
-                }
-                pixelPackBufferObject->WritebackFromBackend({packed.data(), packed.size()}, pboOffset);
-                return true;
+            const Bool sourceIsInteger = wideType == GL_INT || wideType == GL_UNSIGNED_INT;
+            if (sourceIsInteger != mapping.isInteger) {
+                MGLOG_E("DirectVulkan readback skipped: integerness mismatch (format=0x%x source=%d)",
+                        format, static_cast<Int>(srcFormat));
+                return false;
             }
 
-            if (pixels != nullptr && !packed.empty()) {
-                Memcpy(pixels, packed.data(), packed.size());
-            }
-            return true;
+            return DirectGLES::ReadbackImpl::StoreWideRowsToClient(wide.data(), wideType, width, height,
+                                                                   /*sliceCount=*/1, mapping, type, pixels,
+                                                                   /*applyPackImageParams=*/false);
         }
     } // namespace
 
@@ -3560,6 +3935,7 @@ void main() {
                 (bufferMask.a() ? VK_COLOR_COMPONENT_A_BIT : 0u));
             Bool effectiveBlendEnabled = blendEnabled;
             MG_State::GLState::ITextureObject* colorAttachmentTexture = nullptr;
+            MG_State::GLState::RenderbufferObject* colorAttachmentRenderbuffer = nullptr;
             if (isDefaultDrawFbo && i < drawBuffers.size() &&
                 drawBuffers[i] == FramebufferAttachmentType::None) {
                 // The default framebuffer spans the same MAX_DRAW_BUFFERS slots as an FBO
@@ -3574,11 +3950,23 @@ void main() {
             if (!isDefaultDrawFbo && i < drawBuffers.size()) {
                 const auto drawBuffer = drawBuffers[i];
                 colorAttachmentTexture = resolveCompleteColorAttachmentTexture(i);
-                if (drawBuffer == FramebufferAttachmentType::None || colorAttachmentTexture == nullptr) {
+                if (colorAttachmentTexture == nullptr && drawBuffer != FramebufferAttachmentType::None) {
+                    const auto& attachment = drawFboBinding->GetAttachment(drawBuffer);
+                    if (attachment.IsRenderbuffer() && attachment.IsComplete()) {
+                        colorAttachmentRenderbuffer = attachment.GetRenderbuffer().get();
+                    }
+                }
+                if (drawBuffer == FramebufferAttachmentType::None ||
+                    (colorAttachmentTexture == nullptr && colorAttachmentRenderbuffer == nullptr)) {
                     // GL ignores writes and per-target blend state for GL_NONE draw buffer slots.
                     // Depth-only or otherwise unattached draw buffers should also discard color writes.
                     attachmentColorWriteMask = 0;
                     effectiveBlendEnabled = false;
+                }
+                if (colorAttachmentRenderbuffer != nullptr) {
+                    const SizeT componentCount = MG_Util::GetBaseInternalFormatComponentCount(
+                        colorAttachmentRenderbuffer->GetInternalFormat());
+                    attachmentColorWriteMask &= GetSupportedColorWriteMaskForComponentCount(componentCount);
                 }
                 if (colorAttachmentTexture != nullptr) {
                     auto* texture = colorAttachmentTexture;
@@ -3656,10 +4044,14 @@ void main() {
                 Int textureExternalIndex = -1;
                 if (isDefaultDrawFbo) {
                     colorAttachmentFormat = m_swapchainObject.GetSurfaceFormat().format;
+                } else if (colorAttachmentRenderbuffer != nullptr) {
+                    textureExternalIndex = static_cast<Int>(colorAttachmentRenderbuffer->GetExternalIndex());
+                    colorAttachmentFormat = MG_Util::ConvertTextureInternalFormatToVkEnum(
+                        colorAttachmentRenderbuffer->GetInternalFormat());
                 } else {
                     auto* texture = colorAttachmentTexture;
                     MOBILEGL_ASSERT(texture != nullptr,
-                                    "GetOrCreatePipeline: blend is enabled on draw buffer %u but no complete texture attachment is bound",
+                                    "GetOrCreatePipeline: blend is enabled on draw buffer %u but no complete color attachment is bound",
                                     i);
                     textureExternalIndex = texture->GetExternalIndex();
                     auto* textureResource = m_textureManager->SyncTextureAndGetDescriptor(*texture);
@@ -4810,6 +5202,98 @@ void main() {
         return true;
     }
 
+    Bool VulkanRenderer::MaterializePendingClearForRenderbuffer(
+        VkCommandBuffer commandBuffer, const SharedPtr<MG_State::GLState::RenderbufferObject>& renderbuffer) {
+        if (renderbuffer == nullptr) {
+            return true;
+        }
+        ClearAttachmentPayload clearPayload{};
+        if (!m_renderPassManager->GetPendingRenderbufferClear(renderbuffer.get(), clearPayload)) {
+            return true;
+        }
+        MOBILEGL_ASSERT(VkRenderPassManager::GetActiveRenderPass() == nullptr,
+                        "MaterializePendingClearForRenderbuffer requires no active render pass");
+
+        auto* resource = m_renderPassManager->GetOrCreateRenderbufferResource(renderbuffer);
+        if (resource == nullptr) {
+            MGLOG_E("MaterializePendingClearForRenderbuffer: no resource for renderbuffer %u",
+                    renderbuffer->GetExternalIndex());
+            return false;
+        }
+
+        VkPipelineStageFlags srcStageMask = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+        VkAccessFlags srcAccessMask = 0;
+        GetImageTransitionSourceState(resource->layout, srcStageMask, srcAccessMask);
+
+        Bool ok = VkTextureManager::TransitionImageLayout(
+            commandBuffer, resource->image, resource->layout, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            srcStageMask, VK_PIPELINE_STAGE_TRANSFER_BIT, srcAccessMask, VK_ACCESS_TRANSFER_WRITE_BIT,
+            resource->aspect, 0, 1, 1);
+        MOBILEGL_ASSERT(ok,
+                        "MaterializePendingClearForRenderbuffer: failed to transition renderbuffer %u to TRANSFER_DST",
+                        renderbuffer->GetExternalIndex());
+
+        VkImageSubresourceRange subresourceRange{};
+        subresourceRange.baseMipLevel = 0;
+        subresourceRange.levelCount = 1;
+        subresourceRange.baseArrayLayer = 0;
+        subresourceRange.layerCount = 1;
+
+        VkImageLayout steadyLayout;
+        if ((resource->aspect & VK_IMAGE_ASPECT_COLOR_BIT) != 0) {
+            subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+            VkClearColorValue clearValue{};
+            clearValue.float32[0] = clearPayload.color.x();
+            clearValue.float32[1] = clearPayload.color.y();
+            clearValue.float32[2] = clearPayload.color.z();
+            // RGB renderbuffers are backed by an RGBA image; the missing alpha reads as 1.
+            clearValue.float32[3] =
+                MG_Util::GetBaseInternalFormatComponentCount(renderbuffer->GetInternalFormat()) == 3 ?
+                    1.0f : clearPayload.color.w();
+            vkCmdClearColorImage(commandBuffer, resource->image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                                 &clearValue, 1, &subresourceRange);
+            steadyLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        } else {
+            VkImageAspectFlags clearAspectMask = 0;
+            if ((resource->aspect & VK_IMAGE_ASPECT_DEPTH_BIT) != 0 &&
+                (clearPayload.mask & GL_DEPTH_BUFFER_BIT) != 0) {
+                clearAspectMask |= VK_IMAGE_ASPECT_DEPTH_BIT;
+            }
+            if ((resource->aspect & VK_IMAGE_ASPECT_STENCIL_BIT) != 0 &&
+                (clearPayload.mask & GL_STENCIL_BUFFER_BIT) != 0) {
+                clearAspectMask |= VK_IMAGE_ASPECT_STENCIL_BIT;
+            }
+            if (clearAspectMask != 0) {
+                subresourceRange.aspectMask = clearAspectMask;
+                VkClearDepthStencilValue clearValue{};
+                clearValue.depth = clearPayload.depth;
+                clearValue.stencil = clearPayload.stencil;
+                vkCmdClearDepthStencilImage(commandBuffer, resource->image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                                            &clearValue, 1, &subresourceRange);
+            }
+            steadyLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+        }
+
+        VkImageLayout clearLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        ok = VkTextureManager::TransitionImageLayout(
+            commandBuffer, resource->image, clearLayout, steadyLayout,
+            VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT,
+            VK_ACCESS_TRANSFER_WRITE_BIT,
+            VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
+                VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT |
+                VK_ACCESS_TRANSFER_READ_BIT,
+            resource->aspect, 0, 1, 1);
+        MOBILEGL_ASSERT(ok,
+                        "MaterializePendingClearForRenderbuffer: failed to transition renderbuffer %u to steady layout",
+                        renderbuffer->GetExternalIndex());
+        resource->layout = steadyLayout;
+
+        m_renderPassManager->PopPendingRenderbufferClear(renderbuffer.get());
+        MGLOG_D("MaterializePendingClearForRenderbuffer: renderbuffer %u pending clear materialized",
+                renderbuffer->GetExternalIndex());
+        return true;
+    }
+
     Bool VulkanRenderer::TryBlitToDefaultFramebufferWithShader(FrameContext::FrameData& frame,
                                                                MG_State::GLState::FramebufferObject& readFbo,
                                                                MG_State::GLState::FramebufferObject& drawFbo,
@@ -4823,8 +5307,10 @@ void main() {
 
         BlitImageBinding srcBinding{};
         BlitImageBinding dstBinding{};
-        if (!ResolveColorBlitBinding(readFbo, true, m_imageIndexAcquired, m_swapchainObject, *m_textureManager, srcBinding) ||
-            !ResolveColorBlitBinding(drawFbo, false, m_imageIndexAcquired, m_swapchainObject, *m_textureManager, dstBinding)) {
+        if (!ResolveColorBlitBinding(readFbo, true, m_imageIndexAcquired, m_swapchainObject, *m_textureManager,
+                                     *m_renderPassManager, srcBinding) ||
+            !ResolveColorBlitBinding(drawFbo, false, m_imageIndexAcquired, m_swapchainObject, *m_textureManager,
+                                     *m_renderPassManager, dstBinding)) {
             return false;
         }
         if (srcBinding.trackedLayout == nullptr) {
@@ -5010,9 +5496,11 @@ void main() {
             BlitImageBinding srcBinding{};
             BlitImageBinding dstBinding{};
             if (!ResolveFramebufferBlitBinding(*readFbo, true, m_imageIndexAcquired, m_swapchainObject,
-                                               *m_textureManager, VK_IMAGE_ASPECT_DEPTH_BIT, srcBinding) ||
+                                               *m_textureManager, *m_renderPassManager,
+                                               VK_IMAGE_ASPECT_DEPTH_BIT, srcBinding) ||
                 !ResolveFramebufferBlitBinding(*drawFbo, false, m_imageIndexAcquired, m_swapchainObject,
-                                               *m_textureManager, VK_IMAGE_ASPECT_DEPTH_BIT, dstBinding)) {
+                                               *m_textureManager, *m_renderPassManager,
+                                               VK_IMAGE_ASPECT_DEPTH_BIT, dstBinding)) {
                 return;
             }
 
@@ -5177,8 +5665,10 @@ void main() {
 
         BlitImageBinding srcBinding{};
         BlitImageBinding dstBinding{};
-        if (!ResolveColorBlitBinding(*readFbo, true, m_imageIndexAcquired, m_swapchainObject, *m_textureManager, srcBinding) ||
-            !ResolveColorBlitBinding(*drawFbo, false, m_imageIndexAcquired, m_swapchainObject, *m_textureManager, dstBinding)) {
+        if (!ResolveColorBlitBinding(*readFbo, true, m_imageIndexAcquired, m_swapchainObject, *m_textureManager,
+                                     *m_renderPassManager, srcBinding) ||
+            !ResolveColorBlitBinding(*drawFbo, false, m_imageIndexAcquired, m_swapchainObject, *m_textureManager,
+                                     *m_renderPassManager, dstBinding)) {
             return;
         }
 
@@ -5382,7 +5872,7 @@ void main() {
 
         BlitImageBinding srcBinding{};
         if (!ResolveTextureCopySourceBinding(*readFbo, m_imageIndexAcquired, m_swapchainObject, *m_textureManager,
-                                             dstBinding.aspectMask, srcBinding)) {
+                                             *m_renderPassManager, dstBinding.aspectMask, srcBinding)) {
             RecordTextureCopyError(__func__, ErrorCode::InvalidOperation,
                                    "CopyTexSubImage2D requires a complete read attachment compatible with the destination texture.");
             return;
@@ -5723,7 +6213,7 @@ void main() {
         const Bool readIsDefaultFbo = readFbo->IsDefaultFramebuffer();
         BlitImageBinding srcBinding{};
         if (!ResolveColorBlitBinding(*readFbo, true, m_imageIndexAcquired, m_swapchainObject, *m_textureManager,
-                                     srcBinding)) {
+                                     *m_renderPassManager, srcBinding)) {
             return;
         }
         if (!readIsDefaultFbo) {
@@ -5734,6 +6224,12 @@ void main() {
                 MOBILEGL_ASSERT(clearReady,
                                 "ReadPixels: failed to materialize pending clear for source textureId=%d",
                                 sourceTexture->GetExternalIndex());
+            } else if (sourceAttachment.IsRenderbuffer()) {
+                const Bool clearReady =
+                    MaterializePendingClearForRenderbuffer(frame.commandBuffer, sourceAttachment.GetRenderbuffer());
+                MOBILEGL_ASSERT(clearReady,
+                                "ReadPixels: failed to materialize pending clear for source renderbuffer %u",
+                                sourceAttachment.GetRenderbuffer()->GetExternalIndex());
             }
         }
 

@@ -1094,9 +1094,17 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 for (auto* binding : bindings) {
                     MOBILEGL_ASSERT(binding != nullptr, "ProgramFactory: null descriptor binding reflection record");
                     const auto kind = ReflectDescriptorTypeToBindingKind(binding->descriptor_type);
-                    MOBILEGL_ASSERT(binding->count == 1,
-                                    "ProgramFactory: descriptor arrays are unsupported (name='%s' count=%u)",
-                                    binding->name ? binding->name : "<null>", binding->count);
+                    // UBO instance arrays (uniform Block {...} b[N];) occupy one binding with
+                    // descriptorCount = N; other descriptor arrays stay unsupported and must
+                    // fail program creation cleanly rather than continue with corrupt state.
+                    if (binding->count != 1 && kind != ProgramFactory::DescriptorBindingKind::UniformBufferDynamic) {
+                        MGLOG_E("ProgramFactory: descriptor arrays are unsupported for this descriptor "
+                                "kind (name='%s' count=%u type=%d)",
+                                binding->name ? binding->name : "<null>", binding->count,
+                                static_cast<Int>(binding->descriptor_type));
+                        destroyReflectModules();
+                        return false;
+                    }
 
                     DescriptorKey key{};
                     key.kind = kind;
@@ -1613,6 +1621,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         entry.storageBlockIndexByBinding.assign(m_maxBindings, -1);
         entry.globalUboBinding = -1;
         entry.dynamicBindings.clear();
+        entry.bindingDescriptorCounts.assign(m_maxBindings, 1);
+        entry.arrayedUniformBlockIndicesByBinding.clear();
 
         // Use SpvcSession (Reflection mode) to reflect all SPIR-V modules in a single pass per module
         for (const auto& module : spirv) {
@@ -1627,6 +1637,27 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             MOBILEGL_ASSERT(createReflectResult == SPV_REFLECT_RESULT_SUCCESS,
                             "ProgramFactory::ReflectLayout: failed to create reflection module (result=%d)",
                             static_cast<Int>(createReflectResult));
+
+            // Descriptor counts per binding (UBO instance arrays reflect count > 1).
+            UnorderedMap<Uint32, Uint32> descriptorCountByBinding;
+            {
+                uint32_t countProbe = 0;
+                if (spvReflectEnumerateDescriptorBindings(&reflectModule, &countProbe, nullptr) ==
+                        SPV_REFLECT_RESULT_SUCCESS &&
+                    countProbe > 0) {
+                    Vector<SpvReflectDescriptorBinding*> probeBindings(countProbe);
+                    if (spvReflectEnumerateDescriptorBindings(&reflectModule, &countProbe,
+                                                              probeBindings.data()) ==
+                        SPV_REFLECT_RESULT_SUCCESS) {
+                        for (const auto* probeBinding : probeBindings) {
+                            if (probeBinding != nullptr) {
+                                descriptorCountByBinding[probeBinding->binding] =
+                                    std::max<Uint32>(1, probeBinding->count);
+                            }
+                        }
+                    }
+                }
+            }
 
             // Reflect uniform buffers
             auto ubos = session.GetShaderInterface(SPVC_RESOURCE_TYPE_UNIFORM_BUFFER);
@@ -1653,9 +1684,69 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                     continue;
                 }
 
-                const Uint blockIndex = program.GetUniformBlockIndex(ubo.name.c_str());
-                if (blockIndex == 0xFFFFFFFFu) {
-                    MGLOG_D("ProgramFactory::ReflectLayout: skipping inactive UBO '%s' at binding %u",
+                const auto countIt = descriptorCountByBinding.find(binding);
+                const Uint32 descriptorCount =
+                    countIt != descriptorCountByBinding.end() ? countIt->second : 1u;
+
+                if (descriptorCount <= 1) {
+                    const Uint blockIndex = program.GetUniformBlockIndex(ubo.name.c_str());
+                    if (blockIndex == 0xFFFFFFFFu) {
+                        MGLOG_D("ProgramFactory::ReflectLayout: skipping inactive UBO '%s' at binding %u",
+                                ubo.name.c_str(), binding);
+                        continue;
+                    }
+
+                    MOBILEGL_ASSERT(entry.bindingKinds[binding] == DescriptorBindingKind::None ||
+                                        entry.bindingKinds[binding] == DescriptorBindingKind::UniformBufferDynamic,
+                                    "ProgramFactory::ReflectLayout: descriptor binding %u has conflicting kinds for UBO '%s'",
+                                    binding, ubo.name.c_str());
+                    entry.bindingKinds[binding] = DescriptorBindingKind::UniformBufferDynamic;
+                    MOBILEGL_ASSERT(entry.globalUboBinding != static_cast<Int>(binding),
+                                    "ProgramFactory::ReflectLayout: regular UBO '%s' collides with global UBO binding %u",
+                                    ubo.name.c_str(), binding);
+                    MOBILEGL_ASSERT(entry.uniformBlockIndexByBinding[binding] < 0 ||
+                                        entry.uniformBlockIndexByBinding[binding] == static_cast<Int>(blockIndex),
+                                    "ProgramFactory::ReflectLayout: descriptor binding %u maps to conflicting UBO blocks (%d vs %u)",
+                                    binding, entry.uniformBlockIndexByBinding[binding], blockIndex);
+                    entry.uniformBlockIndexByBinding[binding] = static_cast<Int>(blockIndex);
+                    continue;
+                }
+
+                // UBO instance array: one binding, descriptorCount elements. GL exposes each
+                // element as its own active block named "Name[i]"; map every element to its
+                // GL block index so the descriptor write can gather per-element buffer ranges.
+                if (descriptorCount > m_maxBindings) {
+                    MGLOG_E("ProgramFactory::ReflectLayout: UBO array '%s' count %u exceeds maxBindings=%u; "
+                            "leaving binding %u unmapped",
+                            ubo.name.c_str(), descriptorCount, m_maxBindings, binding);
+                    continue;
+                }
+                Vector<Int> elementBlockIndices;
+                elementBlockIndices.reserve(descriptorCount);
+                for (Uint32 element = 0; element < descriptorCount; ++element) {
+                    String elementName = ubo.name + "[" + std::to_string(element) + "]";
+                    Uint elementBlockIndex = program.GetUniformBlockIndex(elementName.c_str());
+                    if (elementBlockIndex == 0xFFFFFFFFu && element == 0) {
+                        // Some frontends report the first element under the bare block name.
+                        elementBlockIndex = program.GetUniformBlockIndex(ubo.name.c_str());
+                    }
+                    if (elementBlockIndex == 0xFFFFFFFFu) {
+                        // Degrade rather than corrupt: reuse element 0's block if we have one,
+                        // otherwise give up on the binding (same observable behavior as an
+                        // inactive block: wrong values, but no crash).
+                        MGLOG_E("ProgramFactory::ReflectLayout: UBO array '%s' element %u has no active "
+                                "GL uniform block",
+                                ubo.name.c_str(), element);
+                        if (!elementBlockIndices.empty()) {
+                            elementBlockIndex = static_cast<Uint>(elementBlockIndices.front());
+                        } else {
+                            break;
+                        }
+                    }
+                    elementBlockIndices.push_back(static_cast<Int>(elementBlockIndex));
+                }
+                if (elementBlockIndices.size() != descriptorCount) {
+                    MGLOG_E("ProgramFactory::ReflectLayout: skipping unresolved UBO array '%s' at binding %u",
                             ubo.name.c_str(), binding);
                     continue;
                 }
@@ -1665,14 +1756,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                 "ProgramFactory::ReflectLayout: descriptor binding %u has conflicting kinds for UBO '%s'",
                                 binding, ubo.name.c_str());
                 entry.bindingKinds[binding] = DescriptorBindingKind::UniformBufferDynamic;
-                MOBILEGL_ASSERT(entry.globalUboBinding != static_cast<Int>(binding),
-                                "ProgramFactory::ReflectLayout: regular UBO '%s' collides with global UBO binding %u",
-                                ubo.name.c_str(), binding);
-                MOBILEGL_ASSERT(entry.uniformBlockIndexByBinding[binding] < 0 ||
-                                    entry.uniformBlockIndexByBinding[binding] == static_cast<Int>(blockIndex),
-                                "ProgramFactory::ReflectLayout: descriptor binding %u maps to conflicting UBO blocks (%d vs %u)",
-                                binding, entry.uniformBlockIndexByBinding[binding], blockIndex);
-                entry.uniformBlockIndexByBinding[binding] = static_cast<Int>(blockIndex);
+                entry.bindingDescriptorCounts[binding] = static_cast<Uint16>(descriptorCount);
+                entry.uniformBlockIndexByBinding[binding] = elementBlockIndices[0];
+                entry.arrayedUniformBlockIndicesByBinding[binding] = Move(elementBlockIndices);
             }
 
             // Reflect sampled images, storage images, samplerBuffer uniforms, and SSBOs.
@@ -1819,7 +1905,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
             VkDescriptorSetLayoutBinding layoutBinding{};
             layoutBinding.binding = binding;
-            layoutBinding.descriptorCount = 1;
+            layoutBinding.descriptorCount = entry.bindingDescriptorCounts[binding];
             layoutBinding.stageFlags = VK_SHADER_STAGE_ALL;
             layoutBinding.pImmutableSamplers = nullptr;
             if (kind == DescriptorBindingKind::UniformBufferDynamic) {

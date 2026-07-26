@@ -375,7 +375,23 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         switch (format) {
         case TextureInternalFormat::RGB:
         case TextureInternalFormat::RGB8:
+        // Legacy low-bit RGB formats share the UNorm8 canonical shadow layout (see
+        // TextureFormatProcessor), so they upload exactly like RGB8 with an alpha expand.
+        case TextureInternalFormat::R3G3B2:
+        case TextureInternalFormat::RGB4:
+        case TextureInternalFormat::RGB5:
             return {VK_FORMAT_R8G8B8A8_UNORM, true, 1, {0xFF, 0x00, 0x00, 0x00}};
+        // Low-bit RGBA formats: UNorm8x4 canonical shadow, no expansion needed.
+        case TextureInternalFormat::RGBA2:
+        case TextureInternalFormat::RGBA4:
+        case TextureInternalFormat::RGB5A1:
+            return {VK_FORMAT_R8G8B8A8_UNORM, false, 0, {0, 0, 0, 0}};
+        // 10/12-bit RGB(A): UNorm16 canonical shadow.
+        case TextureInternalFormat::RGB10:
+        case TextureInternalFormat::RGB12:
+            return {VK_FORMAT_R16G16B16A16_UNORM, true, 2, {0xFF, 0xFF, 0x00, 0x00}};
+        case TextureInternalFormat::RGBA12:
+            return {VK_FORMAT_R16G16B16A16_UNORM, false, 0, {0, 0, 0, 0}};
         case TextureInternalFormat::SRGB8:
             return {VK_FORMAT_R8G8B8A8_SRGB, true, 1, {0xFF, 0x00, 0x00, 0x00}};
         case TextureInternalFormat::RGB8Snorm:

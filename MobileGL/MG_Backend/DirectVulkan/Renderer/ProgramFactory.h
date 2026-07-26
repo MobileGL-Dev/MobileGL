@@ -59,6 +59,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             Vector<DescriptorBindingKind> bindingKinds;
             Vector<Uint32> dynamicBindings;
             Vector<Int> uniformBlockIndexByBinding;
+            // Descriptor count per binding (1 except for UBO instance arrays, which occupy one
+            // binding with descriptorCount = N).
+            Vector<Uint16> bindingDescriptorCounts;
+            // Per-element GL uniform block indices for arrayed UBO bindings (count > 1);
+            // element 0 of a non-arrayed binding stays in uniformBlockIndexByBinding.
+            UnorderedMap<Uint32, Vector<Int>> arrayedUniformBlockIndicesByBinding;
             Vector<String> samplerNameByBinding;
             Vector<Int> samplerUniformLocationByBinding;
             Vector<TextureTarget> samplerTextureTargetByBinding;
@@ -97,6 +103,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 bindingKinds = std::move(other.bindingKinds);
                 dynamicBindings = std::move(other.dynamicBindings);
                 uniformBlockIndexByBinding = std::move(other.uniformBlockIndexByBinding);
+                bindingDescriptorCounts = std::move(other.bindingDescriptorCounts);
+                arrayedUniformBlockIndicesByBinding = std::move(other.arrayedUniformBlockIndicesByBinding);
                 samplerNameByBinding = std::move(other.samplerNameByBinding);
                 samplerUniformLocationByBinding = std::move(other.samplerUniformLocationByBinding);
                 samplerTextureTargetByBinding = std::move(other.samplerTextureTargetByBinding);
@@ -141,6 +149,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 bindingKinds = std::move(other.bindingKinds);
                 dynamicBindings = std::move(other.dynamicBindings);
                 uniformBlockIndexByBinding = std::move(other.uniformBlockIndexByBinding);
+                bindingDescriptorCounts = std::move(other.bindingDescriptorCounts);
+                arrayedUniformBlockIndicesByBinding = std::move(other.arrayedUniformBlockIndicesByBinding);
                 samplerNameByBinding = std::move(other.samplerNameByBinding);
                 samplerUniformLocationByBinding = std::move(other.samplerUniformLocationByBinding);
                 samplerTextureTargetByBinding = std::move(other.samplerTextureTargetByBinding);

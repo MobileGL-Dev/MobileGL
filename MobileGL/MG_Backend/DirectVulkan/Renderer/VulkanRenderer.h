@@ -561,6 +561,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                                    GLenum filter);
         Bool MaterializePendingClearForTexture(VkCommandBuffer commandBuffer,
                                                MG_State::GLState::ITextureObject& texture);
+        Bool MaterializePendingClearForRenderbuffer(
+            VkCommandBuffer commandBuffer,
+            const SharedPtr<MG_State::GLState::RenderbufferObject>& renderbuffer);
         VkPipeline GetOrCreateBlitPipeline(const RenderPassEntry& renderPassEntry);
         Bool GenerateDepthMipmapWithShader(FrameContext::FrameData& frame,
                                            MG_State::GLState::ITextureObject& texture,
