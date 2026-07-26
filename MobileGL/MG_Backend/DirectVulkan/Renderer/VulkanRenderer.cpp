@@ -2153,15 +2153,23 @@ void main() {
         MOBILEGL_ASSERT(m_vertexInputStateFactory != nullptr, "VertexInputStateFactory creation failed.");
 
         // Prime the first frame so Render() always targets an acquired swapchain image.
-        VkResult acquireResult =
-            m_frameContext.WaitAndAcquireNextImage(m_device, m_swapchainObject.GetHandle(), m_imageIndexAcquired);
-        if (acquireResult == VK_ERROR_OUT_OF_DATE_KHR || acquireResult == VK_SUBOPTIMAL_KHR) {
-            MGLOG_D("Initialize, vkAcquireNextImageKHR got %d, recreating swapchain", acquireResult);
-            RecreateSwapchain();
-            acquireResult =
+        // A zero-area window (GLFW's hidden helper window during the WGL bootstrap, or a
+        // window that is already minimized) legitimately yields no swapchain here; defer
+        // the first acquire to Present in that case instead of acquiring from a null
+        // swapchain handle.
+        if (m_swapchainObject.GetHandle() != VK_NULL_HANDLE) {
+            VkResult acquireResult =
                 m_frameContext.WaitAndAcquireNextImage(m_device, m_swapchainObject.GetHandle(), m_imageIndexAcquired);
+            if (acquireResult == VK_ERROR_OUT_OF_DATE_KHR || acquireResult == VK_SUBOPTIMAL_KHR) {
+                MGLOG_D("Initialize, vkAcquireNextImageKHR got %d, recreating swapchain", acquireResult);
+                RecreateSwapchain();
+                acquireResult =
+                    m_frameContext.WaitAndAcquireNextImage(m_device, m_swapchainObject.GetHandle(), m_imageIndexAcquired);
+            }
+            VK_VERIFY(acquireResult, "Initialize, WaitAndAcquireNextImage");
+        } else {
+            MGLOG_W("DirectVulkan: no swapchain at initialization (zero-area window); deferring first acquire");
         }
-        VK_VERIFY(acquireResult, "Initialize, WaitAndAcquireNextImage");
         m_textureManager->BeginFrame(m_frameContext.GetCurrentFrameIndex());
         m_bufferManager.BeginFrame(m_frameContext.GetCurrentFrameIndex());
         m_convertedVertexStreams.clear();
@@ -6857,6 +6865,19 @@ void main() {
     }
 
     void VulkanRenderer::Present() {
+        if (m_swapchainObject.GetHandle() == VK_NULL_HANDLE) {
+            // No swapchain yet (the window had a zero-area surface at initialization).
+            // Try to bring one up now that the window may have a real size; if it is
+            // still zero-area there is nothing to present to.
+            RecreateSwapchain();
+            if (m_swapchainObject.GetHandle() == VK_NULL_HANDLE) {
+                MGLOG_D("Present skipped: still no swapchain (zero-area window)");
+                return;
+            }
+            const VkResult acquireResult =
+                m_frameContext.WaitAndAcquireNextImage(m_device, m_swapchainObject.GetHandle(), m_imageIndexAcquired);
+            VK_VERIFY(acquireResult, "Present, deferred first WaitAndAcquireNextImage");
+        }
         MOBILEGL_ASSERT(m_imageIndexAcquired < m_swapchainObject.GetImageCount(),
                         "Present, acquired image index out of range");
         m_renderPassManager->OnPresent();
@@ -7560,10 +7581,7 @@ void main() {
         MOBILEGL_ASSERT(hwnd, "HWND is null");
 
         VkWin32SurfaceCreateInfoKHR sci{VK_STRUCTURE_TYPE_WIN32_SURFACE_CREATE_INFO_KHR};
-        sci.hinstance = reinterpret_cast<HINSTANCE>(GetWindowLongPtrW(hwnd, GWLP_HINSTANCE));
-        if (!sci.hinstance) {
-            sci.hinstance = GetModuleHandleW(nullptr);
-        }
+        sci.hinstance = GetModuleHandleW(nullptr);
         sci.hwnd = hwnd;
         VK_VERIFY(vkCreateWin32SurfaceKHR(m_instance, &sci, nullptr, &m_surface), "vkCreateWin32SurfaceKHR failed");
 #elif defined VK_USE_PLATFORM_METAL_EXT
