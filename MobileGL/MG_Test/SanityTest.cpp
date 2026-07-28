@@ -33,6 +33,7 @@
 #include <MG_Util/ShaderTranspiler/ShaderCompiler.h>
 #include <MG_Util/ShaderTranspiler/ShaderSourceProcessor.h>
 #include <MG_Util/Debug/Log.h>
+#include <FastSTL/UnorderedMap.h>
 
 namespace {
     class DynamicParameterBackend final : public MobileGL::MG_Backend::BackendObject {
@@ -1735,4 +1736,62 @@ TEST(DirectGLESStateGuards, DefaultFramebufferBindGoesThroughShadow) {
     FramebufferImpl::BindFramebufferId(GL_DRAW_FRAMEBUFFER, 0); // default-FBO path must use this API
     FramebufferImpl::BindFramebufferId(GL_DRAW_FRAMEBUFFER, 7); // must reach the driver again
     EXPECT_EQ(mocks.log.Count("BindFramebuffer:"), 3u);
+}
+
+// FastSTL::unordered_map::erase(iterator) regression coverage. The open-addressing
+// iterator constructor snaps forward from a tombstoned slot to the successor, so
+// erase must NOT advance the rebuilt iterator again: the old double-advance skipped
+// one live element per erase, and erasing the element in the highest occupied
+// bucket pushed the returned index past bucket_count where it never compared equal
+// to end() again - erase-while-iterating sweeps (pipeline/program cache eviction)
+// then ran off the bucket array and fed garbage handles to vkDestroyPipeline
+// (device crash on first mass eviction during world load).
+TEST(FastSTLSanity, EraseWhileIteratingVisitsEveryElementExactlyOnce) {
+    FastSTL::unordered_map<MobileGL::Uint64, MobileGL::Uint64> map;
+    constexpr MobileGL::Uint64 kCount = 1000;
+    for (MobileGL::Uint64 key = 0; key < kCount; ++key) {
+        map.emplace(key * 0x9e3779b97f4a7c15ull, key);
+    }
+    ASSERT_EQ(map.size(), kCount);
+
+    MobileGL::SizeT visited = 0;
+    for (auto it = map.begin(); it != map.end();) {
+        it = map.erase(it);
+        ++visited;
+        ASSERT_LE(visited, kCount); // old code: runaway past end / skipped entries
+    }
+    EXPECT_EQ(visited, kCount);
+    EXPECT_EQ(map.size(), 0u);
+}
+
+TEST(FastSTLSanity, EraseReturnsTheSuccessorElement) {
+    FastSTL::unordered_map<MobileGL::Uint32, MobileGL::Uint32> map;
+    for (MobileGL::Uint32 key = 1; key <= 64; ++key) {
+        map.emplace(key, key);
+    }
+
+    // Erasing every other visited element must still visit all 64 exactly once:
+    // the iterator returned by erase names the very next element, not one past it.
+    MobileGL::SizeT visited = 0;
+    MobileGL::SizeT erased = 0;
+    for (auto it = map.begin(); it != map.end();) {
+        ++visited;
+        if ((visited & 1) != 0) {
+            it = map.erase(it);
+            ++erased;
+        } else {
+            ++it;
+        }
+        ASSERT_LE(visited, 64u);
+    }
+    EXPECT_EQ(visited, 64u);
+    EXPECT_EQ(map.size(), 64u - erased);
+}
+
+TEST(FastSTLSanity, ErasingTheOnlyElementReturnsEnd) {
+    FastSTL::unordered_map<MobileGL::Uint32, MobileGL::Uint32> map;
+    map.emplace(42u, 1u);
+    auto next = map.erase(map.begin());
+    EXPECT_EQ(next, map.end());
+    EXPECT_TRUE(map.empty());
 }
