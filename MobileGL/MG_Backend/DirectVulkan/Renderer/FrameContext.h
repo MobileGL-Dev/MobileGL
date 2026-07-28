@@ -40,6 +40,16 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             VkPresentInfoKHR presentInfo{VK_STRUCTURE_TYPE_PRESENT_INFO_KHR};
         };
 
+        // A command buffer submitted mid-frame (FlushPendingCommands), tagged
+        // with the submit-tracker index it was submitted under so it can be
+        // freed as soon as that submission is observed complete - without
+        // waiting for the slot's fence to be waited again (present-less flush
+        // loops never wait it).
+        struct RetiredCommandBuffer {
+            VkCommandBuffer commandBuffer = VK_NULL_HANDLE;
+            Uint64 submitIndex = 0;
+        };
+
         struct FrameData {
             VkCommandBuffer commandBuffer = VK_NULL_HANDLE;
             VkSemaphore imageAvailableSemaphore = VK_NULL_HANDLE;
@@ -47,10 +57,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             Bool isCommandRecording = false;
             Bool hasCommandBufferRecorded = false;
             Bool imageAvailableSemaphoreConsumed = false;
-            // Command buffers submitted mid-frame (FlushPendingCommands) whose
-            // execution is only known complete once this slot's fence has been
-            // waited again; freed at that point.
-            Vector<VkCommandBuffer> retiredCommandBuffers;
+            // Command buffers submitted mid-frame (FlushPendingCommands),
+            // appended in submit order; freed once their submission is known
+            // complete (fence wait or completion poll).
+            Vector<RetiredCommandBuffer> retiredCommandBuffers;
             // Submit-tracker index of this slot's most recent queue submission
             // (written by the renderer at submit time).
             Uint64 lastSubmitIndex = 0;
@@ -79,8 +89,18 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // Parks the current (already ended and submitted) command buffer on the
         // slot's retired list and installs a freshly allocated one, so recording
         // can restart while the submitted buffer is still executing. Retired
-        // buffers are freed after the slot's fence is next waited.
+        // buffers are freed after the slot's fence is next waited, or as soon
+        // as their submission is observed complete.
         VkResult RetireCurrentCommandBuffer();
+
+        // Frees every retired command buffer whose tagged submission index is
+        // known complete. Driven by the renderer's submit tracker on completion
+        // events (fence waits and non-blocking polls), so present-less flush
+        // loops reclaim their buffers without any extra wait.
+        void FreeRetiredCommandBuffersCompletedUpTo(Uint64 completedSubmitIndex);
+        // Frees every slot's retired command buffers. Only valid when the
+        // caller has proven every queue submission complete.
+        void FreeAllRetiredCommandBuffers();
 
         Uint32 GetCurrentFrameIndex() const;
         Uint32 GetFrameCount() const;

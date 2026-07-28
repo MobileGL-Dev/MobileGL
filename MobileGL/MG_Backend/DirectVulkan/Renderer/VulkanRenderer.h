@@ -345,6 +345,15 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         VkFence AcquirePooledSubmitFence();
         void DestroySubmitFencePool();
         Bool HasPendingRecordedWork() const;
+        // Frame-boundary housekeeping for paths that never reach Present's
+        // tail (present-less readback loops, suspended presentation, blocking
+        // sync waits): runs the same per-frame drains Present performs, but
+        // only when every queue submission has been observed complete AND no
+        // recorded-but-unsubmitted commands exist - i.e. when CPU-GPU overlap
+        // is provably already zero. Never blocks (non-blocking fence poll
+        // only), so the presenting path's frames-in-flight pipelining is
+        // untouched. Returns true when the drain ran.
+        Bool TryDrainFrameTransients();
 
         Vector<SubmitRecord> m_inFlightSubmits;
         Vector<VkFence> m_freeSubmitFences;

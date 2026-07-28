@@ -141,6 +141,15 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         m_transientUploadArena.BeginFrame(frameIndex);
     }
 
+    void VkBufferManager::CollectAllDeferredReleases() {
+        for (Uint32 frameIndex = 0; frameIndex < m_deferredBufferReleases.size(); ++frameIndex) {
+            CollectDeferredReleases(frameIndex);
+        }
+        for (Uint32 frameIndex = 0; frameIndex < m_transientUploadArena.GetFrameCount(); ++frameIndex) {
+            m_transientUploadArena.CollectDeferredReleases(frameIndex);
+        }
+    }
+
     void VkBufferManager::NotifyDeviceIdle() {
         // Everything submitted so far has completed. Work recorded for the
         // current frame has not been submitted yet, so the current serial

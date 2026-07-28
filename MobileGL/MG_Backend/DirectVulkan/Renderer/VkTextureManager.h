@@ -267,6 +267,10 @@ public:
     Bool Initialize(const InitInfo& initInfo);
     void Shutdown();
     void BeginFrame(Uint32 frameIndex);
+    // Drains every frame slot's deferred image/view releases. Only valid when
+    // the caller has proven every queue submission complete; used by the
+    // present-less frame-boundary drain.
+    void CollectAllDeferredReleases();
 
     TextureResource* SyncTextureAndGetDescriptor(
         MG_State::GLState::ITextureObject& texture);

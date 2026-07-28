@@ -264,7 +264,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         if (result != VK_SUCCESS) {
             return result;
         }
-        frame.retiredCommandBuffers.push_back(frame.commandBuffer);
+        // lastSubmitIndex was just written by the renderer for the submission
+        // that carried this command buffer.
+        frame.retiredCommandBuffers.push_back({frame.commandBuffer, frame.lastSubmitIndex});
         frame.commandBuffer = replacement;
         return VK_SUCCESS;
     }
@@ -274,10 +276,38 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             return;
         }
         if (m_device != VK_NULL_HANDLE && m_commandPool != VK_NULL_HANDLE) {
-            vkFreeCommandBuffers(m_device, m_commandPool, static_cast<Uint32>(frame.retiredCommandBuffers.size()),
-                                 frame.retiredCommandBuffers.data());
+            for (const auto& retired : frame.retiredCommandBuffers) {
+                vkFreeCommandBuffers(m_device, m_commandPool, 1, &retired.commandBuffer);
+            }
         }
         frame.retiredCommandBuffers.clear();
+    }
+
+    void FrameContext::FreeRetiredCommandBuffersCompletedUpTo(Uint64 completedSubmitIndex) {
+        if (m_device == VK_NULL_HANDLE || m_commandPool == VK_NULL_HANDLE) {
+            return;
+        }
+        for (auto& frame : m_frames) {
+            // Retired buffers are appended in submit order, so the completed
+            // ones form a prefix.
+            SizeT completedCount = 0;
+            while (completedCount < frame.retiredCommandBuffers.size() &&
+                   frame.retiredCommandBuffers[completedCount].submitIndex <= completedSubmitIndex) {
+                vkFreeCommandBuffers(m_device, m_commandPool, 1,
+                                     &frame.retiredCommandBuffers[completedCount].commandBuffer);
+                ++completedCount;
+            }
+            if (completedCount > 0) {
+                frame.retiredCommandBuffers.erase(frame.retiredCommandBuffers.begin(),
+                                                  frame.retiredCommandBuffers.begin() + completedCount);
+            }
+        }
+    }
+
+    void FrameContext::FreeAllRetiredCommandBuffers() {
+        for (auto& frame : m_frames) {
+            FreeRetiredCommandBuffers(frame);
+        }
     }
 
     void FrameContext::AssertValidFrameIndex(Uint32 frameIndex) const {

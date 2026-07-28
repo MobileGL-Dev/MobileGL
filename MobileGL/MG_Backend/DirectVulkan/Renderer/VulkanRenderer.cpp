@@ -6204,12 +6204,12 @@ void main() {
 
         frame.hasCommandBufferRecorded = false;
         frame.isCommandRecording = false;
-        // The wait proved every descriptor set this slot has in flight idle;
-        // rewind the reuse cursors so present-less readback loops stay
-        // bounded (Present is the only other rewind point).
-        if (m_uniformManager) {
-            m_uniformManager->BeginFrame(m_frameContext.GetCurrentFrameIndex());
-        }
+        // The wait proved every submission complete, so the full frame-boundary
+        // drain applies: descriptor cursors, transient arenas, deferred
+        // texture/buffer releases, retired command buffers and the converted
+        // vertex-stream cache all rewind here, keeping present-less readback
+        // loops bounded (Present is the only other drain point).
+        TryDrainFrameTransients();
         return true;
     }
 
@@ -7123,6 +7123,9 @@ void main() {
         }
         m_bufferManager.NotifyDeviceIdle();
         OnSubmitsCompletedUpTo(m_submitCounter);
+        // The queue was just drained; take the free frame-boundary drain when
+        // nothing is recorded (present-less timer-query loops). No-op otherwise.
+        TryDrainFrameTransients();
         return true;
     }
 
@@ -7191,6 +7194,54 @@ void main() {
                 vkDestroyFence(m_device, record.fence, nullptr);
             }
         }
+        // Mid-frame-flushed command buffers whose submission just completed can
+        // be freed now; present-less flush loops have no other reclaim point.
+        m_frameContext.FreeRetiredCommandBuffersCompletedUpTo(m_completedSubmitCounter);
+    }
+
+    Bool VulkanRenderer::TryDrainFrameTransients() {
+        if (m_device == VK_NULL_HANDLE || m_frameContext.GetFrameCount() == 0) {
+            return false;
+        }
+        if (m_completedSubmitCounter != m_submitCounter) {
+            RefreshCompletedSubmits();
+            if (m_completedSubmitCounter != m_submitCounter) {
+                return false;
+            }
+        }
+        if (HasPendingRecordedWork()) {
+            return false;
+        }
+
+        // Every submission is complete and nothing recorded references the
+        // per-frame transients, so the drains Present's tail performs are safe
+        // here too. Raise the buffer manager's completed floor first: the
+        // serial inference (frameSerial - frameCount) is only justified by
+        // Present's slot-fence cadence, and the extra BeginFrame below would
+        // otherwise inflate it past reality.
+        m_bufferManager.NotifyDeviceIdle();
+
+        const Uint32 frameIndex = m_frameContext.GetCurrentFrameIndex();
+        m_frameContext.FreeAllRetiredCommandBuffers();
+        for (Uint32 slot = 0; slot < m_deferredDepthMipmapCleanup.size(); ++slot) {
+            CollectDeferredDepthMipmapCleanup(slot);
+        }
+        if (m_textureManager) {
+            m_textureManager->CollectAllDeferredReleases();
+            m_textureManager->BeginFrame(frameIndex);
+        }
+        m_bufferManager.CollectAllDeferredReleases();
+        m_bufferManager.BeginFrame(frameIndex);
+        // The cached conversion slices point into the transient arena the
+        // BeginFrame above just rewound; drop them together.
+        m_convertedVertexStreams.clear();
+        if (m_uniformManager) {
+            m_uniformManager->BeginFrame(frameIndex);
+        }
+        if (m_renderPassManager) {
+            m_renderPassManager->OnPresent();
+        }
+        return true;
     }
 
     VkFence VulkanRenderer::AcquirePooledSubmitFence() {
@@ -7253,6 +7304,10 @@ void main() {
         if (m_device == VK_NULL_HANDLE || m_graphicsQueue == VK_NULL_HANDLE || m_frameContext.GetFrameCount() == 0) {
             return false;
         }
+        // Non-blocking completion poll: gives flush-only workloads (no sync
+        // objects, no present) a point where finished submissions retire their
+        // pooled fences and mid-frame command buffers.
+        RefreshCompletedSubmits();
         auto& frame = m_frameContext.GetCurrent();
         if (!frame.isCommandRecording && !frame.hasCommandBufferRecorded) {
             return false;
@@ -7328,6 +7383,10 @@ void main() {
                 const VkResult result = vkWaitForFences(m_device, 1, &record.fence, VK_TRUE, timeoutNs);
                 if (result == VK_SUCCESS) {
                     OnSubmitsCompletedUpTo(record.submitIndex);
+                    // The wait already stalled the pipeline; if it happens to
+                    // have drained everything (present-less fence loops), take
+                    // the free frame-boundary drain. No-op otherwise.
+                    TryDrainFrameTransients();
                     return true;
                 }
                 if (result != VK_TIMEOUT) {
@@ -7417,6 +7476,13 @@ void main() {
                 suspendedFrame.isCommandRecording = false;
                 suspendedFrame.hasCommandBufferRecorded = false;
                 m_lastPipelineValid = false;
+                // The dropped recording is never submitted, so once the fence
+                // poll shows the pre-suspension submissions complete the frame
+                // transients (descriptor sets, transient arenas, deferred
+                // releases, conversion caches) can rewind; without this a
+                // minimized-window app accumulates them for the whole
+                // suspension.
+                TryDrainFrameTransients();
                 MGLOG_D("Present skipped: no usable swapchain (zero-area window)");
                 return;
             }

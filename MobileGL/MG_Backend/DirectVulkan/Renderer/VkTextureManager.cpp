@@ -629,6 +629,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         CollectDeferredReleases(frameIndex);
     }
 
+    void VkTextureManager::CollectAllDeferredReleases() {
+        const SizeT frameCount = std::min(m_deferredReleases.size(), m_deferredViewReleases.size());
+        for (SizeT frameIndex = 0; frameIndex < frameCount; ++frameIndex) {
+            CollectDeferredReleases(static_cast<Uint32>(frameIndex));
+        }
+    }
+
     void VkTextureManager::EraseTrackedTexture(const TextureIdentity& identity) {
         auto resourceIt = m_textureResources.find(identity);
         if (resourceIt != m_textureResources.end()) {
