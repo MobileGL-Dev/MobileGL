@@ -133,4 +133,33 @@ namespace MobileGL::MG_Impl::GLImpl {
             values[0] = value;
         }
     }
+
+    void DestroyAllSyncObjects() {
+        // Detach the registry under the lock, release outside it. Entries the app
+        // already deleted were erased by DeleteSync, so nothing here double-frees;
+        // a DeleteSync racing this sweep finds an empty registry and returns. A
+        // thread still blocked inside ClientWaitSync/GetSynciv during teardown
+        // holds a raw SyncObject* these deletes invalidate - the same undefined
+        // race an app-driven DeleteSync already has.
+        UnorderedMap<GLsync, SyncObject*> orphans;
+        {
+            const std::lock_guard<std::mutex> lock(g_syncObjectsMutex);
+            orphans.swap(g_liveSyncObjects);
+        }
+        if (orphans.empty()) {
+            return;
+        }
+        // Both backends' DeleteSync only free the heap wrapper once their GL
+        // context/renderer is gone (generation/current-thread guards), so this is
+        // safe after the backend has released its EGL resources - but not after
+        // the function table itself is cleared.
+        const auto backendDeleteSync = MG_Backend::gBackendFunctionsTable.GL.DeleteSync;
+        for (const auto& [_, syncObject] : orphans) {
+            if (backendDeleteSync && syncObject->backendHandle) {
+                backendDeleteSync(syncObject->backendHandle);
+            }
+            delete syncObject;
+        }
+        MGLOG_D("DestroyAllSyncObjects: reclaimed %zu sync object(s) the app left undeleted", orphans.size());
+    }
 } // namespace MobileGL::MG_Impl::GLImpl

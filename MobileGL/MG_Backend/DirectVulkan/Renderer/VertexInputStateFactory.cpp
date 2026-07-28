@@ -32,6 +32,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             XXHASH_VERIFY(XXH64_update(m_hashState, &attr.IsBgra, sizeof(attr.IsBgra)));
             XXHASH_VERIFY(XXH64_update(m_hashState, &attr.Divisor, sizeof(attr.Divisor)));
 
+            // The buffer's heap address is an identity component of the key: a freed
+            // buffer's reused address can alias an old cache entry, but only under a
+            // byte-identical attribute layout - and the entry payload is a pure function
+            // of the hashed inputs, with the draw path re-resolving bindingBufferKeys
+            // against the live VAO attribute pointers, so an aliased hit returns exactly
+            // what a rebuild would. Address drift only grows the map; the OnFrameBoundary
+            // aging sweep bounds that.
             const SizeT bufferKey = reinterpret_cast<SizeT>(attr.Buffer.get());
             XXHASH_VERIFY(XXH64_update(m_hashState, &bufferKey, sizeof(bufferKey)));
         }
@@ -58,6 +65,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         const MG_State::GLState::VertexArrayObject& vao, HashType hash) {
         auto it = m_cache.find(hash);
         if (it != m_cache.end()) {
+            it->second.lastUsedFrameBoundary = m_frameBoundaryCounter;
             return it->second;
         }
 
@@ -166,6 +174,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
         auto& entry = m_cache[hash];
         entry.hash = hash;
+        entry.lastUsedFrameBoundary = m_frameBoundaryCounter;
         entry.bindings = builder.GetBindings();
         entry.attributes = builder.GetAttributes();
         entry.bindingBufferKeys = std::move(bindingBufferKeys);
@@ -178,6 +187,30 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         entry.state.pVertexBindingDescriptions = entry.bindings.empty() ? nullptr : entry.bindings.data();
         entry.state.pVertexAttributeDescriptions = entry.attributes.empty() ? nullptr : entry.attributes.data();
         return entry;
+    }
+
+    void VertexInputStateFactory::OnFrameBoundary() {
+        ++m_frameBoundaryCounter;
+
+        // Sweep occasionally; evict entries whose last hit is far in the past.
+        // Erasure happens only here, never mid-frame: the draw path holds a
+        // reference into the current entry across its setup, and unordered_map
+        // erase would invalidate it. Entries are CPU-side only, so no GPU-idle
+        // proof is needed; an evicted entry that is used again is simply rebuilt
+        // from the VAO state (same hash, same content).
+        constexpr Uint64 kSweepInterval = 256;
+        constexpr Uint64 kRetireAgeBoundaries = 1024;
+        if ((m_frameBoundaryCounter % kSweepInterval) != 0) {
+            return;
+        }
+
+        for (auto it = m_cache.begin(); it != m_cache.end();) {
+            if (m_frameBoundaryCounter - it->second.lastUsedFrameBoundary > kRetireAgeBoundaries) {
+                it = m_cache.erase(it);
+            } else {
+                ++it;
+            }
+        }
     }
 
     VkFormat VertexInputStateFactory::ToVkVertexFormat(DataType type, Int size, Bool normalized, Bool isInteger,

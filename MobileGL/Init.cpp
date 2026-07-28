@@ -14,6 +14,7 @@
 #include <MG_State/EGLState/Core.h>
 #include <MG_Impl/GLImpl/Texture/ProxyTexture.h>
 #include <MG_Impl/GLImpl/Framebuffer/GL_Framebuffer.h>
+#include <MG_Impl/GLImpl/Sync/GL_Sync.h>
 
 #include <atomic>
 #include <mutex>
@@ -37,6 +38,12 @@ namespace MobileGL {
                 MGLOG_I("MobileGL closing...");
             }
             glslang::FinalizeProcess();
+            // GL syncs die with their contexts, and every context is gone by the
+            // time full teardown runs: drain the live-sync registry while the
+            // backend function table can still release the backend handles (and
+            // before a re-initialized library could pair them with the wrong
+            // backend's DeleteSync).
+            MG_Impl::GLImpl::DestroyAllSyncObjects();
             MG_Backend::pActiveBackendObject.reset();
             MG_State::pGLContext.reset();
             MG_State::pEGLContext.reset();

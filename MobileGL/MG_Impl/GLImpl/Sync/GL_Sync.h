@@ -16,4 +16,12 @@ namespace MobileGL::MG_Impl::GLImpl {
     void WaitSync(GLsync sync, GLbitfield flags, GLuint64 timeout);
     void DeleteSync(GLsync sync);
     void GetSynciv(GLsync sync, GLenum pname, GLsizei bufSize, GLsizei* length, GLint* values);
+    // Destroys every still-registered sync object exactly as DeleteSync would.
+    // GL requires syncs to die with their context; called only from full library
+    // teardown (DestroyImpl), where no context survives on any thread, so the
+    // process-global registry can be drained wholesale. Must run while the
+    // backend function table is still populated: each backend handle has to be
+    // released by the backend that created it, never by a later re-initialized
+    // one.
+    void DestroyAllSyncObjects();
 } // namespace MobileGL::MG_Impl::GLImpl

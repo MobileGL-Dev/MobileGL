@@ -7269,6 +7269,12 @@ void main() {
         if (m_uniformManager) {
             m_uniformManager->OnFrameBoundary();
         }
+        if (m_vertexInputStateFactory) {
+            m_vertexInputStateFactory->OnFrameBoundary();
+        }
+        if (m_samplerManager) {
+            m_samplerManager->OnFrameBoundary();
+        }
         return true;
     }
 
@@ -7534,6 +7540,8 @@ void main() {
             m_lastPipelineResult = VK_NULL_HANDLE;
         }
         m_uniformManager->OnFrameBoundary();
+        m_vertexInputStateFactory->OnFrameBoundary();
+        m_samplerManager->OnFrameBoundary();
         auto& frame = m_frameContext.GetCurrent();
         auto* activeRenderPass = VkRenderPassManager::GetActiveRenderPass();
         if (activeRenderPass)

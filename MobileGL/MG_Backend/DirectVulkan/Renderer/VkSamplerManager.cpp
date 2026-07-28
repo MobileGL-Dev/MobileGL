@@ -89,6 +89,33 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
         m_device = VK_NULL_HANDLE;
         m_config = nullptr;
+        m_frameBoundaryCounter = 0;
+    }
+
+    void VkSamplerManager::OnFrameBoundary() {
+        ++m_frameBoundaryCounter;
+
+        // Sweep occasionally; destroy samplers whose last use is far past every
+        // in-flight frame. Destroy and erase must stay atomic, or Shutdown would
+        // double-free the handle; an evicted key that recurs simply re-creates
+        // its sampler on the next miss.
+        constexpr Uint64 kSweepInterval = 256;
+        constexpr Uint64 kRetireAgeBoundaries = 1024;
+        if ((m_frameBoundaryCounter % kSweepInterval) != 0) {
+            return;
+        }
+
+        for (auto it = m_samplers.begin(); it != m_samplers.end();) {
+            auto& entry = it->second;
+            if (m_frameBoundaryCounter - entry.lastUsedFrameBoundary > kRetireAgeBoundaries) {
+                if (m_device != VK_NULL_HANDLE && entry.handle != VK_NULL_HANDLE) {
+                    vkDestroySampler(m_device, entry.handle, nullptr);
+                }
+                it = m_samplers.erase(it);
+            } else {
+                ++it;
+            }
+        }
     }
 
     Uint64 VkSamplerManager::BuildSamplerKey(const MG_State::GLState::SamplerObject& sampler,
@@ -137,6 +164,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         const Uint64 key = BuildSamplerKey(sampler, texture, forceNearestFiltering);
         auto it = m_samplers.find(key);
         if (it != m_samplers.end()) {
+            it->second.lastUsedFrameBoundary = m_frameBoundaryCounter;
             return it->second.handle;
         }
 
@@ -169,6 +197,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         entry.handle = vkSampler;
         entry.externalIndex = sampler.GetExternalIndex();
         entry.version = sampler.GetVersion();
+        entry.lastUsedFrameBoundary = m_frameBoundaryCounter;
         m_samplers[key] = entry;
         return vkSampler;
     }
