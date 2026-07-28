@@ -114,7 +114,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
     };
 
-    class VulkanRenderer : public IBufferCopyCommandProvider, public FrameContext::IRecordingObserver {
+    class VulkanRenderer : public IBufferCopyCommandProvider,
+                           public FrameContext::IRecordingObserver,
+                           public VkRenderPassManager::IEvictionObserver,
+                           public ProgramFactory::IEvictionObserver {
     public:
         VulkanRenderer(NativeWindowType window, const VulkanRendererConfig& cfg = {});
         ~VulkanRenderer();
@@ -130,6 +133,20 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // pool (harvest + reset) right after the frame command buffer begins
         // recording, before any render pass.
         void OnFrameCommandRecordingBegan(VkCommandBuffer commandBuffer) override;
+
+        // VkRenderPassManager::IEvictionObserver: the render-pass aging sweep is
+        // destroying a VkRenderPass; evict every graphics pipeline hashed on the
+        // dying handle (they share its >1024-boundary idleness, so immediate
+        // destruction is safe) and drop the last-pipeline memo if any went.
+        void OnRenderPassDestroyed(VkRenderPass renderPass) override;
+
+        // ProgramFactory::IEvictionObserver: an aged-out program entry was
+        // destroyed; evict its compute pipeline and graphics pipelines (same
+        // idleness guarantee - they are only bound through draws/dispatches that
+        // stamp the program entry) and purge the descriptor-set cache entries
+        // keyed by its now-recyclable VkDescriptorSetLayout handle.
+        void OnProgramEvicted(ProgramFactory::HashType programHash,
+                              VkDescriptorSetLayout descriptorSetLayout) override;
 
         Bool SetupDraw(FrameContext::FrameData& frame, GLenum mode, Flags<DrawSetupAspect> aspects,
                        const DrawCmdParam& drawParams,

@@ -2529,6 +2529,11 @@ void main() {
                                                       m_shaderDrawParametersFeatureEnabled,
                                                       m_unformattedFloatStorageImagesEnabled);
         MOBILEGL_ASSERT(m_programFactory != nullptr, "ProgramFactory creation failed.");
+        // Aging evictions (render passes and program entries) must purge the dependent
+        // pipeline / compute-pipeline / descriptor-set caches in the same step; both
+        // sweeps only run from the frame-boundary seams, long after initialization.
+        m_renderPassManager->SetEvictionObserver(this);
+        m_programFactory->SetEvictionObserver(this);
 
         m_samplerManager = MakeUnique<VkSamplerManager>();
         MOBILEGL_ASSERT(m_samplerManager != nullptr, "VkSamplerManager creation failed.");
@@ -2588,6 +2593,15 @@ void main() {
 
         DestroyDeferredDepthMipmapCleanup();
         DestroyComputePipelines();
+
+        // No sweep runs during teardown, but the observers point at this renderer
+        // and the factories die at different times below; disconnect them first.
+        if (m_renderPassManager) {
+            m_renderPassManager->SetEvictionObserver(nullptr);
+        }
+        if (m_programFactory) {
+            m_programFactory->SetEvictionObserver(nullptr);
+        }
 
         m_pipelineFactory.reset();
         ShutdownBlitResources();
@@ -7241,6 +7255,20 @@ void main() {
         if (m_renderPassManager) {
             m_renderPassManager->OnPresent();
         }
+        // Present-less loops cross frame boundaries here, so the content-addressed
+        // caches age on the same cadence as Present's tail. The pipeline memo can
+        // survive across these boundaries (no per-frame reset on this path), so it
+        // must drop whenever the sweep destroys anything.
+        if (m_programFactory) {
+            m_programFactory->OnFrameBoundary();
+        }
+        if (m_pipelineFactory && m_pipelineFactory->OnFrameBoundary() > 0) {
+            m_lastPipelineValid = false;
+            m_lastPipelineResult = VK_NULL_HANDLE;
+        }
+        if (m_uniformManager) {
+            m_uniformManager->OnFrameBoundary();
+        }
         return true;
     }
 
@@ -7496,6 +7524,16 @@ void main() {
         MOBILEGL_ASSERT(m_imageIndexAcquired < m_swapchainObject.GetImageCount(),
                         "Present, acquired image index out of range");
         m_renderPassManager->OnPresent();
+        // Age the content-addressed caches on the same frame-boundary cadence. Each
+        // keeps its own internal 256-sweep gate, so the per-frame cost is one counter
+        // increment and compare per cache; entries used by this frame's still-
+        // unsubmitted recording were stamped this boundary and can never age out.
+        m_programFactory->OnFrameBoundary();
+        if (m_pipelineFactory->OnFrameBoundary() > 0) {
+            m_lastPipelineValid = false; // an aged-out pipeline may still be memoized
+            m_lastPipelineResult = VK_NULL_HANDLE;
+        }
+        m_uniformManager->OnFrameBoundary();
         auto& frame = m_frameContext.GetCurrent();
         auto* activeRenderPass = VkRenderPassManager::GetActiveRenderPass();
         if (activeRenderPass)
@@ -8526,6 +8564,43 @@ void main() {
             }
         }
         m_computePipelines.clear();
+    }
+
+    void VulkanRenderer::OnRenderPassDestroyed(VkRenderPass renderPass) {
+        if (m_pipelineFactory == nullptr) {
+            return;
+        }
+        // The render-pass sweep's >1024-boundary idle guarantee covers these pipelines
+        // too (they are only bound by draws that hit the dying entry), so the factory
+        // destroys them immediately. The memo must drop as well: it can hand out a
+        // cached handle without touching the factory.
+        if (m_pipelineFactory->EvictByRenderPass(renderPass) > 0) {
+            m_lastPipelineValid = false;
+            m_lastPipelineResult = VK_NULL_HANDLE;
+        }
+    }
+
+    void VulkanRenderer::OnProgramEvicted(ProgramFactory::HashType programHash,
+                                          VkDescriptorSetLayout descriptorSetLayout) {
+        // Same >1024-boundary idleness as the program entry: its compute pipeline is
+        // only dispatched, and its graphics pipelines only bound, through paths that
+        // stamp the entry, so immediate destruction is GPU-safe. (The graphics memo
+        // never holds compute pipelines; it only needs invalidating for the factory
+        // eviction below.)
+        const auto computeIt = m_computePipelines.find(programHash);
+        if (computeIt != m_computePipelines.end()) {
+            if (computeIt->second != VK_NULL_HANDLE && m_device != VK_NULL_HANDLE) {
+                vkDestroyPipeline(m_device, computeIt->second, nullptr);
+            }
+            m_computePipelines.erase(computeIt);
+        }
+        if (m_pipelineFactory != nullptr && m_pipelineFactory->EvictByProgramHash(programHash) > 0) {
+            m_lastPipelineValid = false;
+            m_lastPipelineResult = VK_NULL_HANDLE;
+        }
+        if (m_uniformManager != nullptr) {
+            m_uniformManager->OnDescriptorSetLayoutDestroyed(descriptorSetLayout);
+        }
     }
 
     VkPipeline VulkanRenderer::GetOrCreateComputePipeline(const ProgramFactory::VkProgramObject& programObj) {

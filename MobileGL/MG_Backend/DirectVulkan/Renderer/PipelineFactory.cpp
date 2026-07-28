@@ -243,21 +243,98 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         const HashType hash = ComputeHash(payload);
         auto it = m_cache.find(hash);
         if (it != m_cache.end()) {
-            return it->second;
+            it->second.lastUsedFrame = m_frameCounter;
+            return it->second.pipeline;
         }
 
         VkPipeline pipeline = CreatePipeline(payload);
-        m_cache.emplace(hash, pipeline);
+        m_cache.emplace(hash, PipelineCacheEntry{pipeline, payload.programHash, payload.renderPass,
+                                                 m_frameCounter});
         return pipeline;
     }
 
     void PipelineFactory::DestroyAll() {
         for (auto& pair : m_cache) {
-            if (pair.second != VK_NULL_HANDLE) {
-                vkDestroyPipeline(m_device, pair.second, nullptr);
+            if (pair.second.pipeline != VK_NULL_HANDLE) {
+                vkDestroyPipeline(m_device, pair.second.pipeline, nullptr);
             }
         }
         m_cache.clear();
+    }
+
+    Uint32 PipelineFactory::OnFrameBoundary() {
+        ++m_frameCounter;
+
+        // Sweep cadence and retire age mirror VkRenderPassManager::OnPresent: an entry
+        // idle for more than kRetireAgeFrames frame boundaries cannot be referenced by
+        // any in-flight command buffer (frames-in-flight <= MOBILEGL_MAGMA_FRAMESINFLIGHT),
+        // so immediate vkDestroyPipeline is safe. The caller must drop its "last
+        // pipeline" memo when this returns non-zero: the memo can return a cached
+        // handle without touching this cache, so an evicted pipeline may still be
+        // memoized (present-less flush loops never reset the memo per frame).
+        constexpr Uint64 kSweepInterval = 256;
+        constexpr Uint64 kRetireAgeFrames = 1024;
+        if ((m_frameCounter % kSweepInterval) != 0) {
+            return 0;
+        }
+
+        Uint32 evicted = 0;
+        for (auto it = m_cache.begin(); it != m_cache.end();) {
+            if (m_frameCounter - it->second.lastUsedFrame > kRetireAgeFrames) {
+                if (it->second.pipeline != VK_NULL_HANDLE) {
+                    vkDestroyPipeline(m_device, it->second.pipeline, nullptr);
+                }
+                it = m_cache.erase(it);
+                ++evicted;
+            } else {
+                ++it;
+            }
+        }
+        if (evicted > 0) {
+            MGLOG_D("PipelineFactory::OnFrameBoundary: evicted %u idle pipelines (%zu remain)", evicted,
+                    m_cache.size());
+        }
+        return evicted;
+    }
+
+    Uint32 PipelineFactory::EvictByRenderPass(VkRenderPass renderPass) {
+        Uint32 evicted = 0;
+        for (auto it = m_cache.begin(); it != m_cache.end();) {
+            if (it->second.renderPass == renderPass) {
+                if (it->second.pipeline != VK_NULL_HANDLE) {
+                    vkDestroyPipeline(m_device, it->second.pipeline, nullptr);
+                }
+                it = m_cache.erase(it);
+                ++evicted;
+            } else {
+                ++it;
+            }
+        }
+        if (evicted > 0) {
+            MGLOG_D("PipelineFactory::EvictByRenderPass: evicted %u pipelines for destroyed render pass",
+                    evicted);
+        }
+        return evicted;
+    }
+
+    Uint32 PipelineFactory::EvictByProgramHash(HashType programHash) {
+        Uint32 evicted = 0;
+        for (auto it = m_cache.begin(); it != m_cache.end();) {
+            if (it->second.programHash == programHash) {
+                if (it->second.pipeline != VK_NULL_HANDLE) {
+                    vkDestroyPipeline(m_device, it->second.pipeline, nullptr);
+                }
+                it = m_cache.erase(it);
+                ++evicted;
+            } else {
+                ++it;
+            }
+        }
+        if (evicted > 0) {
+            MGLOG_D("PipelineFactory::EvictByProgramHash: evicted %u pipelines for program hash 0x%llx",
+                    evicted, static_cast<unsigned long long>(programHash));
+        }
+        return evicted;
     }
 
     VkPipeline PipelineFactory::CreatePipeline(const PipelineCreatePayload& payload) const {

@@ -1950,11 +1950,17 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
         auto it = m_cache.find(hash);
         if (it != m_cache.end()) {
+            // Every draw/dispatch funnels through this lookup (the renderer memos only
+            // skip re-hashing, never the factory lookup), so an actively-used entry is
+            // stamped at least once per frame boundary and can never be aged out while
+            // any in-flight command buffer still references it.
+            it->second.lastUsedFrame = m_frameCounter;
             return it->second;
         }
 
         auto& entry = m_cache[hash];
         entry.hash = hash;
+        entry.lastUsedFrame = m_frameCounter;
         auto& shaders = program.GetAttachedShaders();
         auto& spirv = program.GetGeneratedSpirv();
         Vector<Vector<Uint>> moduleSpirvs(spirv.size());
@@ -2067,5 +2073,43 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         ReflectLayout(program, moduleSpirvs, entry);
 
         return entry;
+    }
+
+    void ProgramFactory::OnFrameBoundary() {
+        ++m_frameCounter;
+
+        // Sweep cadence and retire age mirror VkRenderPassManager::OnPresent: an entry
+        // idle for more than kRetireAgeFrames frame boundaries cannot be referenced by
+        // any in-flight command buffer (frames-in-flight <= MOBILEGL_MAGMA_FRAMESINFLIGHT),
+        // so its shader modules and layouts are destroyed immediately - no deferred-
+        // destroy machinery needed. Eviction is content-based, never tied to
+        // glDeleteProgram: the cache is content-hash-shared across GL programs, so a
+        // delete-driven erase could free an entry another live program still resolves.
+        // An evicted entry self-heals - the frontend program keeps its generated
+        // SPIR-V, so the next GetOrCreateProgram rebuilds it (this also covers the
+        // renderer's internal blit/depth-mipmap programs).
+        constexpr Uint64 kSweepInterval = 256;
+        constexpr Uint64 kRetireAgeFrames = 1024;
+        if ((m_frameCounter % kSweepInterval) != 0) {
+            return;
+        }
+
+        for (auto it = m_cache.begin(); it != m_cache.end();) {
+            if (m_frameCounter - it->second.lastUsedFrame > kRetireAgeFrames) {
+                const HashType hash = it->first;
+                const VkDescriptorSetLayout descriptorSetLayout = it->second.descriptorSetLayout;
+                MGLOG_D("ProgramFactory::OnFrameBoundary: evicting idle program entry hash=0x%llx",
+                        static_cast<unsigned long long>(hash));
+                // erase runs ~VkProgramObject (modules/layouts destroyed); notify after
+                // so an observer never observes a half-destroyed entry through a lookup.
+                // Observers only need the handle values to purge their keyed caches.
+                it = m_cache.erase(it);
+                if (m_evictionObserver != nullptr) {
+                    m_evictionObserver->OnProgramEvicted(hash, descriptorSetLayout);
+                }
+            } else {
+                ++it;
+            }
+        }
     }
 } // namespace MobileGL::MG_Backend::DirectVulkan

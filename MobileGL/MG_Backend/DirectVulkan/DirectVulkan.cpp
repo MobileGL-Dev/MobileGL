@@ -61,6 +61,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         };
 
         struct ProgramResourceCache {
+            // Lifetime id of the program the cached reflection belongs to. GL names are
+            // recycled (IndexGenerator hands freed indices straight back), and a
+            // recreated program's backendStateVersion restarts at the same small values,
+            // so the version alone can collide; the never-reused lifetime id makes the
+            // slot's ownership unambiguous.
+            Uint64 programLifetimeId = 0;
             Uint32 backendStateVersion = 0;
             Vector<StorageBlockResource> storageBlocks;
             Vector<BufferVariableResource> bufferVariables;
@@ -82,6 +88,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             Uint32 baseInstance = 0;
         };
 
+        // Keyed by GL program name so the freed-name reuse in IndexGenerator bounds the
+        // map at the peak-simultaneous-program high-water mark; each slot's ownership is
+        // checked against the program's lifetime id before it is served (see
+        // GetProgramResourceCache). Cleared wholesale at EGL teardown via
+        // ClearProgramResourceCaches.
         UnorderedMap<GLuint, ProgramResourceCache> g_programResourceCaches;
 
         void ClearReadPixelsOutput(GLsizei width, GLsizei height, GLenum format, GLenum type, void* pixels) {
@@ -142,13 +153,19 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
         ProgramResourceCache& GetProgramResourceCache(const MG_State::GLState::ProgramObject& program) {
             auto& cache = g_programResourceCaches[program.GetExternalIndex()];
+            const Uint64 programLifetimeId = program.GetLifetimeId();
             const Uint32 backendStateVersion = program.GetBackendStateVersion();
-            if (cache.backendStateVersion == backendStateVersion &&
+            // The lifetime id must match too: a new program that reuses a deleted
+            // program's name and happens to land on the same backendStateVersion (both
+            // count from zero) would otherwise be served the dead program's reflection.
+            if (cache.programLifetimeId == programLifetimeId &&
+                cache.backendStateVersion == backendStateVersion &&
                 (!cache.storageBlocks.empty() || !cache.bufferVariables.empty())) {
                 return cache;
             }
 
             cache = {};
+            cache.programLifetimeId = programLifetimeId;
             cache.backendStateVersion = backendStateVersion;
 
             Vector<SpvReflectShaderModule> modules;
@@ -365,6 +382,15 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             }
         }
     } // namespace
+
+    void ClearProgramResourceCaches() {
+        // Called from EGL teardown while the backend's m_eglStateMutex is held; GL
+        // calls are serialized in this codebase (contexts migrate threads but never
+        // run concurrently), so no other thread can be inside the unsynchronized map.
+        // Live programs in another context self-heal: their entry rebuilds from the
+        // retained generated SPIR-V on the next resource query.
+        g_programResourceCaches.clear();
+    }
 
     GLuint GetShaderStorageBlockIndex(const MG_State::GLState::ProgramObject& program, const String& name) {
         auto& cache = GetProgramResourceCache(program);

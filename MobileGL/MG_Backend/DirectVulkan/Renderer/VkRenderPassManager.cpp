@@ -1194,6 +1194,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 if (m_rpFastValid && m_rpFastRenderPassHash == it->first) {
                     m_rpFastValid = false;
                 }
+                // Notify while the handle is still alive: pipelines hashed on it share
+                // the entry's >kRetireAgeFrames idleness (they are only bound by draws
+                // that hit this entry), so the observer may destroy them immediately.
+                if (m_evictionObserver != nullptr) {
+                    m_evictionObserver->OnRenderPassDestroyed(it->second.renderPass);
+                }
                 it = m_renderPasses.erase(it);
             } else {
                 ++it;

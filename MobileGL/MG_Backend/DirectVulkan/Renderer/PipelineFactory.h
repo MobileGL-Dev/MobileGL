@@ -65,6 +65,26 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         VkPipeline GetOrCreatePipeline(const PipelineCreatePayload& payload);
         void DestroyAll();
 
+        // Frame boundary hook: ages the pipeline cache and destroys long-unused entries
+        // (their command buffers retired many frames ago), mirroring
+        // VkRenderPassManager::OnPresent's sweep. Returns the number of pipelines
+        // destroyed so the caller can drop any memoized VkPipeline handle.
+        Uint32 OnFrameBoundary();
+        // Destroys every cached pipeline hashed on `renderPass`. Only safe when the
+        // caller guarantees GPU idleness for them - the render-pass manager calls this
+        // (via the renderer) for passes its own >1024-boundary-idle sweep just evicted,
+        // and a pipeline hashed on that handle is only ever bound by draws that also
+        // hit the render-pass entry. Also closes the handle-recycling hazard: a
+        // recycled VkRenderPass value must never serve a stale pipeline. Returns the
+        // number destroyed (callers invalidate memos when non-zero); linear scan is
+        // fine, evictions are rare.
+        Uint32 EvictByRenderPass(VkRenderPass renderPass);
+        // Destroys every cached pipeline built from the program with content hash
+        // `programHash`. Called from the ProgramFactory eviction path, which proves the
+        // same >1024-boundary idleness (the program's pipelines are only bound by draws
+        // that stamp its factory entry). Returns the number destroyed.
+        Uint32 EvictByProgramHash(HashType programHash);
+
         // Driver quirk: suppress depth writes on accumulation-blended pipelines. Multi-pass
         // depth-equality rendering (a blended prepass writes depth that later passes re-test
         // with an equality-inclusive compare on the re-rasterized geometry) requires
@@ -87,12 +107,26 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         static Bool ShouldSuppressDepthWrite(const PipelineCreatePayload& payload);
 
     private:
+        struct PipelineCacheEntry {
+            VkPipeline pipeline = VK_NULL_HANDLE;
+            // The hashed inputs the eviction paths key on: programHash ties the entry to
+            // its ProgramFactory entry, renderPass records the exact handle the hash
+            // folded in (the hash is one-way, so targeted eviction needs them verbatim).
+            HashType programHash = 0;
+            VkRenderPass renderPass = VK_NULL_HANDLE;
+            // Frame-boundary counter value of the last GetOrCreatePipeline hit; drives
+            // cache eviction (see OnFrameBoundary).
+            Uint64 lastUsedFrame = 0;
+        };
+
         VkPipeline CreatePipeline(const PipelineCreatePayload& payload) const;
 
         VkDevice m_device = VK_NULL_HANDLE;
         const VulkanRendererConfig& m_config;
         VkPipelineCache m_pipelineCache = VK_NULL_HANDLE;
-        UnorderedMap<HashType, VkPipeline> m_cache;
+        UnorderedMap<HashType, PipelineCacheEntry> m_cache;
+        // Monotonic frame-boundary counter (bumped in OnFrameBoundary) for cache aging.
+        Uint64 m_frameCounter = 0;
         static inline XXH64_state_t* m_hashState = XXH64_createState();
         static inline Bool s_suppressBlendedDepthWrite = false;
     };

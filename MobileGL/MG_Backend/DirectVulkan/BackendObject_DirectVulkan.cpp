@@ -469,6 +469,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // treat them as signaled/available with zero results from here on.
         BumpRendererGeneration();
         pVulkanRenderer.reset();
+        // The reflection cache is file-scope, not renderer-owned; without this the
+        // deleted programs' reflection strings survive full context teardown.
+        ClearProgramResourceCaches();
         BackendObject::ReleaseEGLResources();
     }
 
@@ -478,6 +481,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // treat them as signaled/available with zero results from here on.
         BumpRendererGeneration();
         pVulkanRenderer.reset();
+        // The reflection cache is file-scope, not renderer-owned; without this the
+        // deleted programs' reflection strings survive full context teardown.
+        ClearProgramResourceCaches();
     }
 
     const RendererInfo& BackendObject_DirectVulkan::GetRendererInfo() const {

@@ -39,6 +39,18 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         void Shutdown();
 
         void BeginFrame(Uint32 frameIndex);
+        // A ProgramFactory eviction just destroyed this layout: purge every frame
+        // slot's cached descriptor sets for it, so a recycled handle value can never
+        // stale-hit sets written for the dead layout's bindings. The sets themselves
+        // are only dropped, never freed - the frame pools are created without
+        // FREE_DESCRIPTOR_SET_BIT and are never reset mid-life, so their pool slots
+        // stay occupied until Shutdown destroys the pools wholesale.
+        void OnDescriptorSetLayoutDestroyed(VkDescriptorSetLayout descriptorSetLayout);
+        // Frame boundary hook: ages the per-layout descriptor-set caches and drops
+        // long-unused entries (mirroring VkRenderPassManager::OnPresent's sweep), so a
+        // shader-churn session's peak layout population does not pin its tracking
+        // vectors forever. Same pool-slot caveat as above.
+        void OnFrameBoundary();
         Bool CollectSampledTextures(const MG_State::GLState::ProgramObject& program,
                                     const ProgramFactory::VkProgramObject& programObj,
                                     Vector<MG_State::GLState::ITextureObject*>& outTextures);
@@ -68,6 +80,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         struct DescriptorSetCacheEntry {
             Vector<VkDescriptorSet> sets;
             Uint32 cursor = 0;
+            // Frame-boundary counter value of the last AcquireDescriptorSet hit; drives
+            // cache eviction (see OnFrameBoundary).
+            Uint64 lastUsedFrame = 0;
         };
 
         struct FrameResources {
@@ -131,6 +146,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         Vector<FrameResources> m_frames;
 
         VkDeviceSize m_minDynamicOffsetAlignment = 1;
+        // Monotonic frame-boundary counter (bumped in OnFrameBoundary) for
+        // descriptor-set cache aging.
+        Uint64 m_frameCounter = 0;
         Uint32 m_frameCount = 0;
         Uint32 m_maxBindings = 0;
         Uint32 m_setsPerFrame = 0;

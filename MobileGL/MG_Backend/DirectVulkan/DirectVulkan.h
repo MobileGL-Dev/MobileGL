@@ -23,6 +23,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     Uint64 GetRendererGeneration();
     void BumpRendererGeneration();
 
+    // Drops every cached program-resource reflection entry (CPU-side strings/vectors
+    // only, no Vulkan handles). Called at EGL teardown next to the renderer reset;
+    // safe because GL calls are serialized in this codebase, and any still-live
+    // program rebuilds its entry from the retained generated SPIR-V on demand.
+    void ClearProgramResourceCaches();
+
     void ClearBufferfi(GLenum buffer, GLint drawbuffer, GLfloat depth, GLint stencil);
     void ClearBufferfv(GLenum buffer, GLint drawbuffer, const GLfloat* value);
     void ClearBufferuiv(GLenum buffer, GLint drawbuffer, const GLuint* value);

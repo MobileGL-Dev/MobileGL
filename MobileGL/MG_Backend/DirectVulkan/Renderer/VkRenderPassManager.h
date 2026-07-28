@@ -157,10 +157,26 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     class VkRenderPassManager {
     public:
         using HashType = Uint64;
+
+        // Notified from the OnPresent sweep for each aged-out entry, BEFORE the entry
+        // destructor destroys its VkRenderPass: pipelines are hashed on the raw handle,
+        // and once destroyed the value may be recycled for an incompatible pass, so
+        // dependent caches must purge everything keyed on it in the same step. The
+        // wholesale paths (Shutdown/RecreateSwapchain) do not notify - their callers
+        // already drop every pipeline outright.
+        class IEvictionObserver {
+        public:
+            virtual ~IEvictionObserver() = default;
+            virtual void OnRenderPassDestroyed(VkRenderPass renderPass) = 0;
+        };
+
         VkRenderPassManager(VkDevice device,
             VkPhysicalDevice physicalDevice, VmaAllocator allocator, const VulkanRendererConfig& config,
             VkClearManager& clearManager, VkTextureManager& textureManager, SwapchainObject& swapchainObject);
         ~VkRenderPassManager();
+
+        // Observer may be null (no notifications). Not owned.
+        void SetEvictionObserver(IEvictionObserver* observer) { m_evictionObserver = observer; }
 
         Bool Initialize();
         void Shutdown();
@@ -192,6 +208,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         UnorderedMap<Uint64, RenderPassEntry> m_renderPasses;
         // Monotonic frame counter (bumped in OnPresent) for render-pass cache aging.
         Uint64 m_frameCounter = 0;
+        IEvictionObserver* m_evictionObserver = nullptr;
 
         // Bumped whenever a renderbuffer VkImage is (re)created; together with the texture
         // manager's image epoch this invalidates the render-pass fast path on any attachment

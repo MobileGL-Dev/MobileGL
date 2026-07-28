@@ -88,6 +88,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             // gl_FragDepth); shader-computed depth is immune to the cross-pipeline
             // position-invariance quirk (see PipelineFactory::ShouldSuppressDepthWrite).
             Bool fragmentReplacesDepth = false;
+            // Frame-boundary counter value of the last GetOrCreateProgram hit; drives
+            // cache eviction (see OnFrameBoundary).
+            Uint64 lastUsedFrame = 0;
 
             static inline VkDevice s_device = VK_NULL_HANDLE;
 
@@ -124,6 +127,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 producerOutputComponentCount = other.producerOutputComponentCount;
                 fragmentInputComponentCount = other.fragmentInputComponentCount;
                 fragmentReplacesDepth = other.fragmentReplacesDepth;
+                lastUsedFrame = other.lastUsedFrame;
                 other.hash = 0;
                 other.descriptorSetLayout = VK_NULL_HANDLE;
                 other.pipelineLayout = VK_NULL_HANDLE;
@@ -135,6 +139,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 other.producerOutputComponentCount = 0;
                 other.fragmentInputComponentCount = 0;
                 other.fragmentReplacesDepth = false;
+                other.lastUsedFrame = 0;
             }
             VkProgramObject& operator=(VkProgramObject&& other) noexcept {
                 if (this == &other) {
@@ -170,6 +175,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 producerOutputComponentCount = other.producerOutputComponentCount;
                 fragmentInputComponentCount = other.fragmentInputComponentCount;
                 fragmentReplacesDepth = other.fragmentReplacesDepth;
+                lastUsedFrame = other.lastUsedFrame;
                 other.hash = 0;
                 other.descriptorSetLayout = VK_NULL_HANDLE;
                 other.pipelineLayout = VK_NULL_HANDLE;
@@ -181,6 +187,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 other.producerOutputComponentCount = 0;
                 other.fragmentInputComponentCount = 0;
                 other.fragmentReplacesDepth = false;
+                other.lastUsedFrame = 0;
                 return *this;
             }
 
@@ -210,6 +217,18 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             }
         };
 
+        // Notified when the OnFrameBoundary sweep destroys an aged-out cache entry,
+        // carrying the entry's content hash and the VkDescriptorSetLayout it owned.
+        // Dependent caches (compute pipelines, PipelineFactory entries, UniformManager's
+        // per-layout descriptor sets) must purge in the same step: after vkDestroy the
+        // layout handle value may be recycled for an unrelated layout, and the program
+        // hash may be re-inserted by a later rebuild of the same content.
+        class IEvictionObserver {
+        public:
+            virtual ~IEvictionObserver() = default;
+            virtual void OnProgramEvicted(HashType programHash, VkDescriptorSetLayout descriptorSetLayout) = 0;
+        };
+
         explicit ProgramFactory(VkDevice device, const VulkanRendererConfig& config, Uint32 maxBindings = 16,
                                 Bool shaderDrawParametersEnabled = false,
                                 Bool unformattedFloatStorageImagesEnabled = false)
@@ -224,6 +243,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         HashType ComputeHash(const MG_State::GLState::ProgramObject& program, CompileOptionFlags flags) const;
         const VkProgramObject& GetOrCreateProgram(
             const MG_State::GLState::ProgramObject& program, CompileOptionFlags flags);
+
+        // Observer may be null (no notifications). Not owned.
+        void SetEvictionObserver(IEvictionObserver* observer) { m_evictionObserver = observer; }
+        // Frame boundary hook: ages the program cache and evicts long-unused entries
+        // (their command buffers retired many frames ago), mirroring
+        // VkRenderPassManager::OnPresent's sweep.
+        void OnFrameBoundary();
 
         static VkShaderStageFlagBits ToVkStage(ShaderStage stage);
         static VkFormat ConvertSpirvImageFormatToVkFormat(SpvImageFormat format);
@@ -266,6 +292,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // shaderStorageImageReadWithoutFormat and shaderStorageImageWriteWithoutFormat.
         Bool m_unformattedFloatStorageImagesEnabled = false;
         mutable ProgramLookupCache m_lastLookup;
+        // Monotonic frame-boundary counter (bumped in OnFrameBoundary) for cache aging.
+        Uint64 m_frameCounter = 0;
+        IEvictionObserver* m_evictionObserver = nullptr;
         static inline XXH64_state_t* m_hashState = XXH64_createState();
     };
 } // namespace MobileGL::MG_Backend::DirectVulkan
