@@ -85,6 +85,8 @@ namespace MobileGL::MG_Impl {
         GETPROC(CGLGetPixelFormat, name);
         GETPROC(CGLSetCurrentContext, name);
         GETPROC(CGLGetCurrentContext, name);
+        GETPROC(CGLSetVirtualScreen, name);
+        GETPROC(CGLGetVirtualScreen, name);
         GETPROC(CGLSetParameter, name);
         GETPROC(CGLGetParameter, name);
         GETPROC(CGLUpdateContext, name);

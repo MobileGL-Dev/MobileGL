@@ -71,6 +71,14 @@ MOBILEGL_CGL_API CGLContextObj CGLGetCurrentContext(void) {
     return MobileGL::MG_Impl::CGLImpl::GetCurrentContext();
 }
 
+MOBILEGL_CGL_API CGLError CGLSetVirtualScreen(CGLContextObj ctx, GLint screen) {
+    return MobileGL::MG_Impl::CGLImpl::SetVirtualScreen(ctx, screen);
+}
+
+MOBILEGL_CGL_API CGLError CGLGetVirtualScreen(CGLContextObj ctx, GLint* screen) {
+    return MobileGL::MG_Impl::CGLImpl::GetVirtualScreen(ctx, screen);
+}
+
 MOBILEGL_CGL_API CGLError CGLSetParameter(CGLContextObj ctx, CGLContextParameter pname, const GLint* params) {
     return MobileGL::MG_Impl::CGLImpl::SetParameter(ctx, pname, params);
 }

@@ -455,8 +455,21 @@ if (ANDROID)
 endif()
 
 if (APPLE AND NOT MOBILEGL_IOS)
+    # MobileGL statically embeds glslang, SPIRV-Tools, and SPIRV-Cross. When
+    # this dylib is injected with DYLD_INSERT_LIBRARIES, exporting those C++
+    # symbols interposes incompatible copies embedded by host libraries such
+    # as shaderc. Keep only the public GL/EGL/CGL loader surface globally
+    # visible; GetProcAddress can still return pointers to hidden internals.
+    set(MOBILEGL_MACOS_EXPORTED_SYMBOLS
+        "${CMAKE_CURRENT_SOURCE_DIR}/MobileGL/MG_Impl/DyldInterpose/ExportedSymbols.txt")
+    target_link_options(${CMAKE_PROJECT_NAME} PRIVATE
+        "LINKER:-exported_symbols_list,${MOBILEGL_MACOS_EXPORTED_SYMBOLS}")
+    set_property(TARGET ${CMAKE_PROJECT_NAME} APPEND PROPERTY
+        LINK_DEPENDS "${MOBILEGL_MACOS_EXPORTED_SYMBOLS}")
+
     target_link_libraries(${CMAKE_PROJECT_NAME} PUBLIC
         "-framework Cocoa"
+        "-framework CoreVideo"
         "-framework QuartzCore"
         "-framework Foundation"
         "-framework OpenGL"
@@ -464,6 +477,7 @@ if (APPLE AND NOT MOBILEGL_IOS)
     if(TARGET ${CMAKE_PROJECT_NAME}_s)
         target_link_libraries(${CMAKE_PROJECT_NAME}_s PUBLIC
             "-framework Cocoa"
+            "-framework CoreVideo"
             "-framework QuartzCore"
             "-framework Foundation"
             "-framework OpenGL"

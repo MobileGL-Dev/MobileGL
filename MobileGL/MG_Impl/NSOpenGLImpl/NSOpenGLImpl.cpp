@@ -29,9 +29,18 @@ namespace MobileGL::MG_Impl::NSOpenGLImpl {
         char kContextViewKey;
         char kContextLayerKey;
 
-        std::once_flag g_installOnce;
         IMP g_pixelFormatDealloc = nullptr;
         IMP g_contextDealloc = nullptr;
+
+        std::mutex& HookInstallMutex() {
+            static auto* mutex = new std::mutex();
+            return *mutex;
+        }
+
+        Bool& HooksInstalled() {
+            static auto* installed = new Bool(false);
+            return *installed;
+        }
 
         template <typename Fn>
         Fn ObjcMsgSend() {
@@ -431,12 +440,12 @@ namespace MobileGL::MG_Impl::NSOpenGLImpl {
             method_setImplementation(method, replacement);
         }
 
-        void InstallHooksOnce() {
+        Bool InstallHooksOnce() {
             Class pixelFormatClass = objc_getClass("NSOpenGLPixelFormat");
             Class contextClass = objc_getClass("NSOpenGLContext");
             if (!pixelFormatClass || !contextClass) {
                 MGLOG_W("NSOpenGLImpl: NSOpenGL classes are not loaded; hooks not installed");
-                return;
+                return false;
             }
 
             ReplaceInstanceMethod(pixelFormatClass, "initWithAttributes:",
@@ -471,11 +480,34 @@ namespace MobileGL::MG_Impl::NSOpenGLImpl {
             ReplaceInstanceMethod(contextClass, "dealloc", reinterpret_cast<IMP>(ContextDealloc), &g_contextDealloc);
 
             MGLOG_I("NSOpenGLImpl hooks installed");
+            return true;
         }
     } // namespace
 
     void InstallHooks() {
-        std::call_once(g_installOnce, InstallHooksOnce);
+        const std::lock_guard<std::mutex> lock(HookInstallMutex());
+        if (!HooksInstalled()) {
+            // Do not permanently consume the install attempt when the OpenGL
+            // framework has not registered its Objective-C classes yet. The
+            // dyld bootstrap normally runs after framework dependencies, but
+            // an explicitly loaded/static-linked MobileGL can arrive earlier.
+            HooksInstalled() = InstallHooksOnce();
+        }
     }
 } // namespace MobileGL::MG_Impl::NSOpenGLImpl
+
+namespace {
+    // SDL's Cocoa backend creates NSOpenGLPixelFormat/NSOpenGLContext before
+    // its first dlsym("glGetString") or other MobileGL host-API call. Install
+    // only the lightweight Objective-C dispatch hooks while the injected dylib
+    // is loading so those first Cocoa objects are routed through CGLImpl. The
+    // hooked context constructor reaches EGLImpl::GetDisplay(), which performs
+    // the full, thread-safe MobileGL initialization outside this bootstrap.
+    //
+    // There is intentionally no matching destructor: backend teardown remains
+    // owned by the EGL lifecycle and process-exit globals remain leak-at-exit.
+    __attribute__((constructor)) void BootstrapNSOpenGLHooks() {
+        MobileGL::MG_Impl::NSOpenGLImpl::InstallHooks();
+    }
+} // namespace
 #endif

@@ -24,6 +24,7 @@ namespace MobileGL::MG_Impl::CGLImpl {
             GLint Samples = 0;
             GLint Profile = kCGLOGLPVersion_3_2_Core;
             GLint RendererId = 0x4d474c;
+            GLint DisplayMask = 0;
         };
 
         struct ContextObject {
@@ -133,6 +134,9 @@ namespace MobileGL::MG_Impl::CGLImpl {
                 break;
             case kCGLPFARendererID:
                 pixelFormat.RendererId = value;
+                break;
+            case kCGLPFADisplayMask:
+                pixelFormat.DisplayMask = value;
                 break;
             default:
                 break;
@@ -343,6 +347,9 @@ namespace MobileGL::MG_Impl::CGLImpl {
         case kCGLPFARendererID:
             *value = pixelFormat->RendererId;
             return kCGLNoError;
+        case kCGLPFADisplayMask:
+            *value = pixelFormat->DisplayMask;
+            return kCGLNoError;
         case kCGLPFAOpenGLProfile:
             *value = pixelFormat->Profile;
             return kCGLNoError;
@@ -479,6 +486,32 @@ namespace MobileGL::MG_Impl::CGLImpl {
         auto& currentContexts = CurrentContexts();
         auto it = currentContexts.find(CurrentThreadKey());
         return it == currentContexts.end() ? nullptr : it->second;
+    }
+
+    CGLError SetVirtualScreen(CGLContextObj ctx, GLint screen) {
+        const std::lock_guard<std::recursive_mutex> lock(RegistryMutex());
+        auto* object = TryGetContext(ctx);
+        if (!object) {
+            return kCGLBadContext;
+        }
+        if (screen != 0) {
+            return kCGLBadValue;
+        }
+        object->VirtualScreen = screen;
+        return kCGLNoError;
+    }
+
+    CGLError GetVirtualScreen(CGLContextObj ctx, GLint* screen) {
+        const std::lock_guard<std::recursive_mutex> lock(RegistryMutex());
+        auto* object = TryGetContext(ctx);
+        if (!object) {
+            return kCGLBadContext;
+        }
+        if (!screen) {
+            return kCGLBadAddress;
+        }
+        *screen = object->VirtualScreen;
+        return kCGLNoError;
     }
 
     CGLError SetParameter(CGLContextObj ctx, CGLContextParameter pname, const GLint* params) {

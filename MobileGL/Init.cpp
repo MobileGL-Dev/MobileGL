@@ -107,9 +107,11 @@ namespace MobileGL {
     // (EGL/WGL/CGL): initialization happens lazily on the first entry point
     // via EnsureInitialized(), and full teardown happens deterministically
     // when the last EGL display is terminated with nothing current (EGLImpl
-    // calls Destroy()). There is intentionally no static constructor, no
-    // static destructor, and no DllMain: the global singletons use
-    // leak-at-exit storage (see GlobalObjects.cpp), so a process that exits
+    // calls Destroy()). There is intentionally no backend-initializing static
+    // constructor, no static destructor, and no DllMain: the global singletons
+    // use leak-at-exit storage (see GlobalObjects.cpp), so a process that exits
     // without eglTerminate simply leaks them to the OS instead of running
-    // backend destructors during static teardown.
+    // backend destructors during static teardown. macOS has a lightweight
+    // dyld constructor that installs NSOpenGL dispatch hooks only; full backend
+    // initialization still enters here from the first hooked CGL context.
 } // namespace MobileGL

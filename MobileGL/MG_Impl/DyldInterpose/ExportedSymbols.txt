@@ -1,0 +1,10 @@
+# Public CGL entry points.
+_CGL*
+
+# Public EGL entry points.
+_egl*
+
+# Public OpenGL and GLX entry points. OpenGL function names always use an
+# uppercase letter or digit after the "gl" prefix; excluding lowercase here
+# deliberately prevents glslang_* from matching this pattern.
+_gl[A-Z0-9]*

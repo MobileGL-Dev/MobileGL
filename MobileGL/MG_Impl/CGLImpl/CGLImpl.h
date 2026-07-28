@@ -32,6 +32,8 @@ namespace MobileGL::MG_Impl::CGLImpl {
 
     CGLError SetCurrentContext(CGLContextObj ctx);
     CGLContextObj GetCurrentContext();
+    CGLError SetVirtualScreen(CGLContextObj ctx, GLint screen);
+    CGLError GetVirtualScreen(CGLContextObj ctx, GLint* screen);
     CGLError SetParameter(CGLContextObj ctx, CGLContextParameter pname, const GLint* params);
     CGLError GetParameter(CGLContextObj ctx, CGLContextParameter pname, GLint* params);
     CGLError UpdateContext(CGLContextObj ctx);
