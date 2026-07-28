@@ -230,6 +230,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
     public:
         struct RenderbufferResource {
+            // deadSinceFrame sentinel: the owning weak reference has not been observed
+            // expired. Dead resources age past every in-flight frame before Destroy
+            // (see CollectRenderbufferGarbage); the GPU may still reference the image
+            // for frames-in-flight frames after the GL object dies.
+            static constexpr Uint64 kNeverObservedDead = UINT64_MAX;
+
             WeakPtr<MG_State::GLState::RenderbufferObject> renderbuffer;
             VkImage image = VK_NULL_HANDLE;
             VmaAllocation allocation = nullptr;
@@ -241,6 +247,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             VkSampleCountFlagBits sampleCount = VK_SAMPLE_COUNT_1_BIT;
             TextureInternalFormat internalFormat = TextureInternalFormat::Unknown;
             Int samples = 0;
+            // m_frameCounter value at which the weak reference was first seen expired.
+            Uint64 deadSinceFrame = kNeverObservedDead;
 
             void Destroy(VkDevice device, VmaAllocator allocator);
         };

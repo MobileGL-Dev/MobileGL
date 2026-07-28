@@ -368,6 +368,7 @@ private:
     static TextureIdentity MakeTextureIdentity(MG_State::GLState::ITextureObject* texture);
     void EraseTrackedTexture(const TextureIdentity& identity);
     void PruneStaleTextureAliases(MG_State::GLState::ITextureObject* texture);
+    SizeT PruneDeadTextures();
 
     VkDevice m_device = VK_NULL_HANDLE;
     VkPhysicalDevice m_physicalDevice = VK_NULL_HANDLE;
@@ -377,6 +378,9 @@ private:
     Uint32 m_currentFrameIndex = 0;
 
     Uint8 m_gcCounter = 0;
+    // Frame-boundary GC gate: counts BeginFrame calls, not draws, so texture churn
+    // through non-draw paths (FBO clears, readbacks) still reaches the prune.
+    Uint32 m_gcFrameCounter = 0;
     // Active only between BeginDrawSyncScope/EndDrawSyncScope; identities of
     // textures already fully synced in the current draw (small N -> flat scan).
     Bool m_drawSyncScopeActive = false;

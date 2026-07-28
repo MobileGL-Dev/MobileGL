@@ -627,6 +627,19 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                         frameIndex, m_deferredViewReleases.size());
         m_currentFrameIndex = frameIndex;
         CollectDeferredReleases(frameIndex);
+
+        // Frame-boundary GC: every 64 frame boundaries (~1 s at 60 fps) bounds the reclaim
+        // latency for dead textures regardless of draw traffic — workloads that churn
+        // textures through clears/readbacks alone never reach the draw-gated
+        // CollectGarbage. Must run after CollectDeferredReleases above: the prune defers
+        // its releases into this frame's slot, which was just drained, so they are
+        // destroyed only after the slot's fence has been waited again one full frame-ring
+        // cycle from now (never while an in-flight frame may still reference them).
+        constexpr Uint32 kGcFrameInterval = 64;
+        ++m_gcFrameCounter;
+        if (m_gcFrameCounter % kGcFrameInterval == 0) {
+            PruneDeadTextures();
+        }
     }
 
     void VkTextureManager::CollectAllDeferredReleases() {
@@ -709,9 +722,22 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // construction introduces a new identity. Doing this unconditionally made every
         // sampled-texture sync scan the entire alive-texture map per draw.
         if (aliveIt == m_aliveObjects.end()) {
+            WeakPtr<MG_State::GLState::ITextureObject> aliveTexture;
             const auto& liveTexture = MG_State::pGLContext->GetTextureObject(texture.GetExternalIndex());
             if (liveTexture && liveTexture.get() == &texture) {
-                m_aliveObjects[identity] = WeakPtr<MG_State::GLState::ITextureObject>(liveTexture);
+                aliveTexture = liveTexture;
+            } else {
+                // The name lookup legally fails while the object is alive: the name was
+                // deleted with the texture still attached to an FBO (the attachment's
+                // SharedPtr keeps it alive), or the name was reused by a new texture, or
+                // this is a default texture object (name 0 lives outside the name map).
+                // Register through the object's own control block so the resource created
+                // below still participates in weak-expiry GC instead of becoming an
+                // orphan no reclamation path can reach until Shutdown.
+                aliveTexture = texture.weak_from_this();
+            }
+            if (!aliveTexture.expired()) {
+                m_aliveObjects[identity] = Move(aliveTexture);
                 PruneStaleTextureAliases(&texture);
             }
         }
@@ -1219,10 +1245,22 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     }
 
     SizeT VkTextureManager::CollectGarbage() {
+        // Draw-gated stagger (1 in 256 calls): keeps the per-draw cost at one counter
+        // bump. The guaranteed reclaim path is the frame-boundary prune in BeginFrame;
+        // this remains as a cheap assist so draw-heavy workloads reclaim sooner.
         m_gcCounter++;
         if (m_gcCounter != 0) {
             return 0;
         }
+        return PruneDeadTextures();
+    }
+
+    SizeT VkTextureManager::PruneDeadTextures() {
+        // Erasing entries would dangle the raw TextureResource pointers memoized for the
+        // current draw; every call path (BeginFrame, and CollectGarbage at the top of a
+        // freshly opened draw-sync scope) runs before any memo entry is recorded.
+        MOBILEGL_ASSERT(m_drawSyncedThisDraw.empty(),
+                        "PruneDeadTextures: draw-sync memo holds raw resource pointers an erase would dangle");
 
         Vector<MG_State::GLState::ITextureObject*> expiredTextures;
         expiredTextures.reserve(m_aliveObjects.size());
@@ -1234,7 +1272,25 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         for (auto* texture : expiredTextures) {
             PruneStaleTextureAliases(texture);
         }
-        return expiredTextures.size();
+        SizeT prunedCount = expiredTextures.size();
+
+        // Orphan sweep: after the pass above, m_aliveObjects holds only live entries.
+        // Registration in SyncTextureAndGetDescriptor cannot fail for a SharedPtr-owned
+        // texture (weak_from_this fallback), so a resource whose identity has no alive
+        // entry has no trackable owner: its GL-side object is gone, or was never
+        // shared-owned, in which case recreation on a later sync is the safe fallback.
+        // Destruction goes through the per-frame deferred queues, never immediate.
+        Vector<TextureIdentity> orphanIdentities;
+        for (auto it = m_textureResources.begin(); it != m_textureResources.end(); ++it) {
+            if (m_aliveObjects.find(it->first) == m_aliveObjects.end()) {
+                orphanIdentities.emplace_back(it->first);
+            }
+        }
+        for (const auto& identity : orphanIdentities) {
+            EraseTrackedTexture(identity);
+        }
+        prunedCount += orphanIdentities.size();
+        return prunedCount;
     }
 
     Bool VkTextureManager::SyncTexture(MG_State::GLState::ITextureObject &texture,

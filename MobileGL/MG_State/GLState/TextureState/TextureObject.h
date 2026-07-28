@@ -15,7 +15,11 @@
 #include <MG_Util/Math/VectorTypes.h>
 
 namespace MobileGL::MG_State::GLState {
-    class ITextureObject {
+    // Texture objects are always SharedPtr-owned (TextureState creates every instance via
+    // MakeShared, including the per-target default objects). enable_shared_from_this lets
+    // backends that only receive a reference (e.g. syncing a name-deleted texture kept
+    // alive by an FBO attachment) still register a weak liveness reference for GC.
+    class ITextureObject : public std::enable_shared_from_this<ITextureObject> {
     public:
         using TargetEnum = TextureTarget;
         virtual ~ITextureObject() = default;

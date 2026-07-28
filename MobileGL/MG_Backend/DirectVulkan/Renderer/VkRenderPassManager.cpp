@@ -180,6 +180,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         sampleCount = VK_SAMPLE_COUNT_1_BIT;
         internalFormat = TextureInternalFormat::Unknown;
         samples = 0;
+        deadSinceFrame = kNeverObservedDead;
     }
 
     VkRenderPassManager::VkRenderPassManager(VkDevice device,
@@ -214,21 +215,38 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     }
 
     void VkRenderPassManager::CollectRenderbufferGarbage() {
-        Vector<MG_State::GLState::RenderbufferObject*> deadRenderbuffers;
-        deadRenderbuffers.reserve(m_renderbufferResources.size());
-        for (auto& [renderbuffer, resource] : m_renderbufferResources) {
+        // Two-phase reclamation: a dead renderbuffer's VkImage may still be referenced by
+        // command buffers submitted up to frames-in-flight frames ago (it was legally
+        // attached and drawn right up to its deletion), so the first observation of an
+        // expired weak reference only stamps the current frame counter; Destroy runs once
+        // enough frame boundaries have passed that the stamping frame's submission fence
+        // has provably been waited. MaxFramesInFlight + 2 covers the frame ring plus one
+        // boundary for the recording-to-submit gap and one because OnPresent runs ahead
+        // of Present's fence wait; the floor of 8 keeps a margin over the default ring of
+        // 3 while still releasing multi-MB attachment memory promptly (the render-pass
+        // cache's 1024-frame retirement would pin it for no additional safety).
+        const Uint64 retireAgeFrames =
+            std::max<Uint64>(8, static_cast<Uint64>(m_config.MaxFramesInFlight) + 2);
+        for (auto it = m_renderbufferResources.begin(); it != m_renderbufferResources.end();) {
+            auto& resource = it->second;
             const auto liveRenderbuffer = resource.renderbuffer.lock();
-            if (!liveRenderbuffer || liveRenderbuffer.get() != renderbuffer) {
-                deadRenderbuffers.emplace_back(renderbuffer);
+            if (liveRenderbuffer && liveRenderbuffer.get() == it->first) {
+                resource.deadSinceFrame = RenderbufferResource::kNeverObservedDead;
+                ++it;
+                continue;
             }
-        }
-        for (auto* renderbuffer : deadRenderbuffers) {
-            auto resourceIt = m_renderbufferResources.find(renderbuffer);
-            if (resourceIt != m_renderbufferResources.end()) {
-                resourceIt->second.Destroy(m_device, m_allocator);
-                m_renderbufferResources.erase(resourceIt);
+            if (resource.deadSinceFrame == RenderbufferResource::kNeverObservedDead) {
+                resource.deadSinceFrame = m_frameCounter;
+                ++it;
+                continue;
             }
-            m_pendingRenderbufferClears.erase(renderbuffer);
+            if (m_frameCounter - resource.deadSinceFrame < retireAgeFrames) {
+                ++it;
+                continue;
+            }
+            m_pendingRenderbufferClears.erase(it->first);
+            resource.Destroy(m_device, m_allocator);
+            it = m_renderbufferResources.erase(it);
         }
     }
 
@@ -270,6 +288,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             resource.samples != renderbuffer->GetSamples();
         if (!needsCreate) {
             resource.renderbuffer = renderbuffer;
+            // A new renderbuffer at a recycled address may adopt a compatible entry that
+            // was already stamped dead; it is alive again, so cancel the aging.
+            resource.deadSinceFrame = RenderbufferResource::kNeverObservedDead;
             return &resource;
         }
 
@@ -1177,6 +1198,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
     void VkRenderPassManager::OnPresent() {
         ++m_frameCounter;
+
+        // Runs every frame boundary, ahead of the render-pass sweep gate below: the walk
+        // is O(#renderbuffer resources) — single digits in practice — and per-frame
+        // invocation keeps dead-resource reclaim latency at the aging bound instead of
+        // coupling it to renderbuffer *use* (the GetOrCreateRenderbufferResource call
+        // site never runs again once an app stops using renderbuffers).
+        CollectRenderbufferGarbage();
 
         // Sweep occasionally; evict entries whose last use is far past every
         // in-flight frame so their VkRenderPass/VkFramebuffer can be destroyed
