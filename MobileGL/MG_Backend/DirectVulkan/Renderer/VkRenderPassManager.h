@@ -158,16 +158,20 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     public:
         using HashType = Uint64;
 
-        // Notified from the OnPresent sweep for each aged-out entry, BEFORE the entry
-        // destructor destroys its VkRenderPass: pipelines are hashed on the raw handle,
-        // and once destroyed the value may be recycled for an incompatible pass, so
-        // dependent caches must purge everything keyed on it in the same step. The
-        // wholesale paths (Shutdown/RecreateSwapchain) do not notify - their callers
-        // already drop every pipeline outright.
+        // Notified once per OnPresent sweep with every aged-out entry's VkRenderPass
+        // value: pipelines are hashed on the raw handle, and once destroyed the value
+        // may be recycled for an incompatible pass, so dependent caches must purge
+        // everything keyed on them before any new pass can be created (the sweep and
+        // the notification run back-to-back with no creation in between; observers
+        // compare the values, never dereference them). Batched so a mass-idle cohort
+        // (shader-pack switch, dimension exit) costs the observer one pipeline-cache
+        // scan, not one per dying pass. The wholesale paths
+        // (Shutdown/RecreateSwapchain) do not notify - their callers already drop
+        // every pipeline outright.
         class IEvictionObserver {
         public:
             virtual ~IEvictionObserver() = default;
-            virtual void OnRenderPassDestroyed(VkRenderPass renderPass) = 0;
+            virtual void OnRenderPassesDestroyed(const Vector<VkRenderPass>& renderPasses) = 0;
         };
 
         VkRenderPassManager(VkDevice device,
@@ -266,12 +270,28 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             ClearAttachmentPayload payload{};
         };
 
+        // A superseded renderbuffer backing (glRenderbufferStorage respecify) parked
+        // until enough frame boundaries have passed that no in-flight command buffer
+        // can still reference it; destroyed in OnPresent (see RetireAgeFrames).
+        struct DeferredRenderbufferRelease {
+            VkImage image = VK_NULL_HANDLE;
+            VmaAllocation allocation = nullptr;
+            VkImageView view = VK_NULL_HANDLE;
+            Uint64 deferredAtFrame = 0;
+        };
+
         UnorderedMap<MG_State::GLState::RenderbufferObject*, RenderbufferResource> m_renderbufferResources;
         UnorderedMap<MG_State::GLState::RenderbufferObject*, PendingRenderbufferClear> m_pendingRenderbufferClears;
+        Vector<DeferredRenderbufferRelease> m_deferredRenderbufferReleases;
 
         Bool HasPendingRenderbufferClear(
             const MG_State::GLState::FramebufferAttachmentObject& attachment) const;
         void CollectRenderbufferGarbage();
+        // Frame-boundary margin after which a resource last referenced by a retired
+        // GL object (or superseded backing) is provably past every in-flight frame.
+        Uint64 RetireAgeFrames() const;
+        void DeferRenderbufferBackingRelease(RenderbufferResource& resource);
+        void CollectDeferredRenderbufferReleases(Bool destroyAll);
 
         static inline XXH64_state_t* m_hashState = XXH64_createState();
         static inline ActiveRenderPassInfo s_activeRenderPass{};

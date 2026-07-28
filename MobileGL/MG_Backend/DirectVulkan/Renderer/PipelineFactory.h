@@ -70,15 +70,15 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // VkRenderPassManager::OnPresent's sweep. Returns the number of pipelines
         // destroyed so the caller can drop any memoized VkPipeline handle.
         Uint32 OnFrameBoundary();
-        // Destroys every cached pipeline hashed on `renderPass`. Only safe when the
-        // caller guarantees GPU idleness for them - the render-pass manager calls this
-        // (via the renderer) for passes its own >1024-boundary-idle sweep just evicted,
-        // and a pipeline hashed on that handle is only ever bound by draws that also
-        // hit the render-pass entry. Also closes the handle-recycling hazard: a
-        // recycled VkRenderPass value must never serve a stale pipeline. Returns the
-        // number destroyed (callers invalidate memos when non-zero); linear scan is
-        // fine, evictions are rare.
-        Uint32 EvictByRenderPass(VkRenderPass renderPass);
+        // Destroys every cached pipeline hashed on one of `renderPasses`. Only safe
+        // when the caller guarantees GPU idleness for them - the render-pass manager
+        // calls this (via the renderer) for passes its own >1024-boundary-idle sweep
+        // just evicted, and a pipeline hashed on those handles is only ever bound by
+        // draws that also hit the render-pass entries. Also closes the handle-recycling
+        // hazard: a recycled VkRenderPass value must never serve a stale pipeline.
+        // Batched: one cache scan regardless of how many passes died in the sweep.
+        // Returns the number destroyed (callers invalidate memos when non-zero).
+        Uint32 EvictByRenderPasses(const Vector<VkRenderPass>& renderPasses);
         // Destroys every cached pipeline built from the program with content hash
         // `programHash`. Called from the ProgramFactory eviction path, which proves the
         // same >1024-boundary idleness (the program's pipelines are only bound by draws

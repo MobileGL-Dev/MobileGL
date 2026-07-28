@@ -171,7 +171,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         m_programFactory = nullptr;
         m_device = VK_NULL_HANDLE;
         m_minDynamicOffsetAlignment = 1;
-        m_frameCounter = 0;
         m_frameCount = 0;
         m_maxBindings = 0;
         m_setsPerFrame = 0;
@@ -216,49 +215,33 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         SizeT purgedSets = 0;
         for (auto& frame : m_frames) {
             const auto it = frame.descriptorSetCacheByLayout.find(descriptorSetLayout);
-            if (it != frame.descriptorSetCacheByLayout.end()) {
-                purgedSets += it->second.sets.size();
-                frame.descriptorSetCacheByLayout.erase(it);
+            if (it == frame.descriptorSetCacheByLayout.end()) {
+                continue;
             }
+            // Free the sets back to their pools and credit the bucket accounting, so
+            // program churn recycles pool capacity instead of abandoning the slots.
+            // GPU-safe: the layout only dies after >1024 idle frame boundaries, so no
+            // in-flight command buffer references these sets.
+            for (const auto& cached : it->second.sets) {
+                if (cached.set == VK_NULL_HANDLE) {
+                    continue;
+                }
+                vkFreeDescriptorSets(m_device, cached.pool, 1, &cached.set);
+                const auto bucket = std::find_if(
+                    frame.descriptorPools.begin(), frame.descriptorPools.end(),
+                    [&cached](const DescriptorPoolBucket& candidate) { return candidate.handle == cached.pool; });
+                if (bucket != frame.descriptorPools.end() && bucket->allocatedSets > 0) {
+                    --bucket->allocatedSets;
+                }
+            }
+            purgedSets += it->second.sets.size();
+            frame.descriptorSetCacheByLayout.erase(it);
         }
         if (purgedSets > 0) {
             // The per-draw reuse memo folds the layout handle into its signature; drop
             // it so a recycled handle value cannot revive a purged set mid-frame.
             m_hasLastDescriptor = false;
-            MGLOG_D("UniformDescriptorBinder: purged %zu descriptor sets for destroyed layout", purgedSets);
-        }
-    }
-
-    void UniformManager::OnFrameBoundary() {
-        ++m_frameCounter;
-
-        // Sweep cadence and retire age mirror VkRenderPassManager::OnPresent. Only the
-        // CPU-side tracking is reclaimed here: the sets' pool slots stay occupied until
-        // Shutdown destroys the pools (no FREE_DESCRIPTOR_SET_BIT, no mid-life pool
-        // reset), exactly as they would had the entry been kept. What the sweep buys is
-        // that an idle layout's tracking vectors stop accumulating, and that a
-        // destroyed-then-recycled layout handle finds no stale entry to hit.
-        constexpr Uint64 kSweepInterval = 256;
-        constexpr Uint64 kRetireAgeFrames = 1024;
-        if ((m_frameCounter % kSweepInterval) != 0) {
-            return;
-        }
-
-        SizeT purgedSets = 0;
-        for (auto& frame : m_frames) {
-            for (auto it = frame.descriptorSetCacheByLayout.begin();
-                 it != frame.descriptorSetCacheByLayout.end();) {
-                if (m_frameCounter - it->second.lastUsedFrame > kRetireAgeFrames) {
-                    purgedSets += it->second.sets.size();
-                    it = frame.descriptorSetCacheByLayout.erase(it);
-                } else {
-                    ++it;
-                }
-            }
-        }
-        if (purgedSets > 0) {
-            m_hasLastDescriptor = false;
-            MGLOG_D("UniformDescriptorBinder::OnFrameBoundary: dropped %zu idle descriptor sets", purgedSets);
+            MGLOG_D("UniformDescriptorBinder: freed %zu descriptor sets for destroyed layout", purgedSets);
         }
     }
 
@@ -962,6 +945,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
         VkDescriptorPoolCreateInfo poolInfo{};
         poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+        // FREE_DESCRIPTOR_SET_BIT lets a destroyed layout's cached sets be freed back
+        // (OnDescriptorSetLayoutDestroyed) so program churn recycles pool capacity.
+        // The cost is on set allocation only, which happens when a layout's per-frame
+        // cache grows - never on the per-draw reuse path.
+        poolInfo.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
         poolInfo.maxSets = maxSets;
         poolInfo.poolSizeCount = static_cast<Uint32>(std::size(poolSizes));
         poolInfo.pPoolSizes = poolSizes;
@@ -1040,12 +1028,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                                   VkDescriptorSet& outDescriptorSet) {
         auto& frame = m_frames[frameIndex];
         auto& cache = frame.descriptorSetCacheByLayout[programObj.descriptorSetLayout];
-        // Every layout used in a frame is acquired at least once (the per-draw
-        // descriptor-reuse memo starts each frame invalidated and folds the layout
-        // into its signature), so an actively-used entry is stamped every frame.
-        cache.lastUsedFrame = m_frameCounter;
         if (cache.cursor < cache.sets.size()) {
-            outDescriptorSet = cache.sets[cache.cursor++];
+            outDescriptorSet = cache.sets[cache.cursor++].set;
         } else {
             VkResult allocResult = AllocateDescriptorSetsFromActivePool(frameIndex, programObj, outDescriptorSet);
             if (allocResult == VK_ERROR_OUT_OF_POOL_MEMORY || allocResult == VK_ERROR_FRAGMENTED_POOL) {
@@ -1059,7 +1043,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 return allocResult;
             }
 
-            cache.sets.push_back(outDescriptorSet);
+            // The successful allocation came from the bucket the alloc helper left
+            // active; record it so a layout-destroyed purge can free the set back.
+            cache.sets.push_back({outDescriptorSet, frame.descriptorPools[frame.activeDescriptorPoolIndex].handle});
             ++cache.cursor;
             MGLOG_D("UniformDescriptorBinder: cached descriptor set count for frame=%u grew to %zu", frameIndex,
                     cache.sets.size());

@@ -7228,11 +7228,10 @@ void main() {
         }
 
         // Every submission is complete and nothing recorded references the
-        // per-frame transients, so the drains Present's tail performs are safe
-        // here too. Raise the buffer manager's completed floor first: the
-        // serial inference (frameSerial - frameCount) is only justified by
-        // Present's slot-fence cadence, and the extra BeginFrame below would
-        // otherwise inflate it past reality.
+        // per-frame transients. Pure-reclaim work runs on every drain: it only
+        // releases memory that is provably dead, never invalidates anything a
+        // later draw would have to rebuild. Raise the buffer manager's
+        // completed floor first so busy-tracking reflects the proven idleness.
         m_bufferManager.NotifyDeviceIdle();
 
         const Uint32 frameIndex = m_frameContext.GetCurrentFrameIndex();
@@ -7242,32 +7241,44 @@ void main() {
         }
         if (m_textureManager) {
             m_textureManager->CollectAllDeferredReleases();
-            m_textureManager->BeginFrame(frameIndex);
         }
         m_bufferManager.CollectAllDeferredReleases();
+        // Descriptor cursors rewind on every drain (the pre-drain readback path
+        // already did exactly this), keeping fence/readback loops' set usage bounded.
+        if (m_uniformManager) {
+            m_uniformManager->BeginFrame(frameIndex);
+        }
+
+        // Frame-boundary-equivalent work - transient arena rewind (which invalidates
+        // the conversion cache) and the cache-aging clocks - is gated to every 8th
+        // drain since the last Present: a presenting app's mid-frame readbacks/waits
+        // must neither force re-conversion/re-upload churn for the rest of the frame
+        // nor multiply the aging rate (which would shrink the 1024-boundary retire
+        // window and thrash periodically-used pipelines/programs), while present-less
+        // loops still rewind the arena and age their caches every 8 iterations -
+        // bounded by 8 iterations' transient usage.
+        ++m_drainsSinceLastPresent;
+        if ((m_drainsSinceLastPresent % 8) != 0) {
+            return true;
+        }
+        if (m_textureManager) {
+            m_textureManager->BeginFrame(frameIndex);
+        }
         m_bufferManager.BeginFrame(frameIndex);
         // The cached conversion slices point into the transient arena the
         // BeginFrame above just rewound; drop them together.
         m_convertedVertexStreams.clear();
-        if (m_uniformManager) {
-            m_uniformManager->BeginFrame(frameIndex);
-        }
         if (m_renderPassManager) {
             m_renderPassManager->OnPresent();
         }
-        // Present-less loops cross frame boundaries here, so the content-addressed
-        // caches age on the same cadence as Present's tail. The pipeline memo can
-        // survive across these boundaries (no per-frame reset on this path), so it
-        // must drop whenever the sweep destroys anything.
+        // The pipeline memo can survive across these boundaries (no per-frame reset
+        // on this path), so it must drop whenever the sweep destroys anything.
         if (m_programFactory) {
             m_programFactory->OnFrameBoundary();
         }
         if (m_pipelineFactory && m_pipelineFactory->OnFrameBoundary() > 0) {
             m_lastPipelineValid = false;
             m_lastPipelineResult = VK_NULL_HANDLE;
-        }
-        if (m_uniformManager) {
-            m_uniformManager->OnFrameBoundary();
         }
         if (m_vertexInputStateFactory) {
             m_vertexInputStateFactory->OnFrameBoundary();
@@ -7365,6 +7376,14 @@ void main() {
             m_freeSubmitFences.push_back(fence); // still unsignaled, reusable
             return false;
         }
+
+        // Command-buffer boundary: the pipeline memo must not survive it, or a
+        // pipeline bound only through memo hits is never re-stamped in the factory
+        // cache and the aging sweep could destroy it while the flushed submission
+        // still references it. Mirrors the drops at the readback and Present
+        // boundaries; costs one full pipeline lookup on the next draw.
+        m_lastPipelineValid = false;
+        m_lastPipelineResult = VK_NULL_HANDLE;
 
         // The submitted command buffer may still be executing; recording must
         // restart on a fresh one. If none can be allocated, fall back to
@@ -7530,16 +7549,20 @@ void main() {
         MOBILEGL_ASSERT(m_imageIndexAcquired < m_swapchainObject.GetImageCount(),
                         "Present, acquired image index out of range");
         m_renderPassManager->OnPresent();
+        // A real presented frame is the canonical aging cadence; mid-frame drains
+        // count against this and only age when presents stop coming.
+        m_drainsSinceLastPresent = 0;
         // Age the content-addressed caches on the same frame-boundary cadence. Each
         // keeps its own internal 256-sweep gate, so the per-frame cost is one counter
         // increment and compare per cache; entries used by this frame's still-
-        // unsubmitted recording were stamped this boundary and can never age out.
+        // unsubmitted recording were stamped this boundary (every command-buffer
+        // boundary drops the pipeline memo, so the first draw of each recording
+        // performs a real, stamping lookup) and can never age out.
         m_programFactory->OnFrameBoundary();
         if (m_pipelineFactory->OnFrameBoundary() > 0) {
             m_lastPipelineValid = false; // an aged-out pipeline may still be memoized
             m_lastPipelineResult = VK_NULL_HANDLE;
         }
-        m_uniformManager->OnFrameBoundary();
         m_vertexInputStateFactory->OnFrameBoundary();
         m_samplerManager->OnFrameBoundary();
         auto& frame = m_frameContext.GetCurrent();
@@ -8574,15 +8597,15 @@ void main() {
         m_computePipelines.clear();
     }
 
-    void VulkanRenderer::OnRenderPassDestroyed(VkRenderPass renderPass) {
+    void VulkanRenderer::OnRenderPassesDestroyed(const Vector<VkRenderPass>& renderPasses) {
         if (m_pipelineFactory == nullptr) {
             return;
         }
         // The render-pass sweep's >1024-boundary idle guarantee covers these pipelines
-        // too (they are only bound by draws that hit the dying entry), so the factory
+        // too (they are only bound by draws that hit the dying entries), so the factory
         // destroys them immediately. The memo must drop as well: it can hand out a
         // cached handle without touching the factory.
-        if (m_pipelineFactory->EvictByRenderPass(renderPass) > 0) {
+        if (m_pipelineFactory->EvictByRenderPasses(renderPasses) > 0) {
             m_lastPipelineValid = false;
             m_lastPipelineResult = VK_NULL_HANDLE;
         }

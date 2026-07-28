@@ -207,11 +207,53 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             resource.Destroy(m_device, m_allocator);
         }
         m_renderbufferResources.clear();
+        CollectDeferredRenderbufferReleases(/*destroyAll=*/true); // caller guarantees device idle
         m_pendingRenderbufferClears.clear();
         RenderPassEntry::s_textureResourcesScratch.clear();
         s_activeRenderPass = {};
         s_hasActiveRenderPass = false;
         m_rpFastValid = false;
+    }
+
+    Uint64 VkRenderPassManager::RetireAgeFrames() const {
+        // MaxFramesInFlight + 2 covers the frame ring plus one boundary for the
+        // recording-to-submit gap and one because OnPresent runs ahead of Present's
+        // fence wait; the floor of 8 keeps a margin over the default ring of 3 while
+        // still releasing multi-MB attachment memory promptly (the render-pass cache's
+        // 1024-frame retirement would pin it for no additional safety).
+        return std::max<Uint64>(8, static_cast<Uint64>(m_config.MaxFramesInFlight) + 2);
+    }
+
+    void VkRenderPassManager::DeferRenderbufferBackingRelease(RenderbufferResource& resource) {
+        // The superseded backing may still be referenced by in-flight command buffers
+        // (glRenderbufferStorage can respecify a renderbuffer drawn this very frame),
+        // so it is parked and destroyed only after RetireAgeFrames() boundaries.
+        if (resource.image == VK_NULL_HANDLE && resource.view == VK_NULL_HANDLE) {
+            return;
+        }
+        m_deferredRenderbufferReleases.push_back({resource.image, resource.allocation, resource.view, m_frameCounter});
+        resource.image = VK_NULL_HANDLE;
+        resource.allocation = nullptr;
+        resource.view = VK_NULL_HANDLE;
+    }
+
+    void VkRenderPassManager::CollectDeferredRenderbufferReleases(Bool destroyAll) {
+        if (m_deferredRenderbufferReleases.empty()) {
+            return;
+        }
+        const Uint64 retireAgeFrames = RetireAgeFrames();
+        std::erase_if(m_deferredRenderbufferReleases, [&](DeferredRenderbufferRelease& release) {
+            if (!destroyAll && m_frameCounter - release.deferredAtFrame < retireAgeFrames) {
+                return false;
+            }
+            if (release.view != VK_NULL_HANDLE) {
+                vkDestroyImageView(m_device, release.view, nullptr);
+            }
+            if (release.image != VK_NULL_HANDLE) {
+                vmaDestroyImage(m_allocator, release.image, release.allocation);
+            }
+            return true;
+        });
     }
 
     void VkRenderPassManager::CollectRenderbufferGarbage() {
@@ -220,13 +262,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // attached and drawn right up to its deletion), so the first observation of an
         // expired weak reference only stamps the current frame counter; Destroy runs once
         // enough frame boundaries have passed that the stamping frame's submission fence
-        // has provably been waited. MaxFramesInFlight + 2 covers the frame ring plus one
-        // boundary for the recording-to-submit gap and one because OnPresent runs ahead
-        // of Present's fence wait; the floor of 8 keeps a margin over the default ring of
-        // 3 while still releasing multi-MB attachment memory promptly (the render-pass
-        // cache's 1024-frame retirement would pin it for no additional safety).
-        const Uint64 retireAgeFrames =
-            std::max<Uint64>(8, static_cast<Uint64>(m_config.MaxFramesInFlight) + 2);
+        // has provably been waited (see RetireAgeFrames).
+        const Uint64 retireAgeFrames = RetireAgeFrames();
         for (auto it = m_renderbufferResources.begin(); it != m_renderbufferResources.end();) {
             auto& resource = it->second;
             const auto liveRenderbuffer = resource.renderbuffer.lock();
@@ -294,6 +331,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             return &resource;
         }
 
+        // Respecify: park the old backing for aged destruction instead of destroying
+        // inline - it may still be referenced by in-flight command buffers.
+        DeferRenderbufferBackingRelease(resource);
         resource.Destroy(m_device, m_allocator);
         resource.renderbuffer = renderbuffer;
 
@@ -1205,6 +1245,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // coupling it to renderbuffer *use* (the GetOrCreateRenderbufferResource call
         // site never runs again once an app stops using renderbuffers).
         CollectRenderbufferGarbage();
+        CollectDeferredRenderbufferReleases(/*destroyAll=*/false);
 
         // Sweep occasionally; evict entries whose last use is far past every
         // in-flight frame so their VkRenderPass/VkFramebuffer can be destroyed
@@ -1215,6 +1256,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             return;
         }
 
+        // Collect the dying handles and notify once after the loop: pipelines hashed
+        // on them share the entries' >kRetireAgeFrames idleness (they are only bound
+        // by draws that hit those entries), so the observer may destroy them
+        // immediately - and a single batched notification costs one pipeline-cache
+        // scan instead of one per evicted pass.
+        Vector<VkRenderPass> destroyedRenderPasses;
         const Uint64 activeHash = s_hasActiveRenderPass ? s_activeRenderPass.hash : 0;
         for (auto it = m_renderPasses.begin(); it != m_renderPasses.end();) {
             const Bool isActive = s_hasActiveRenderPass && it->first == activeHash;
@@ -1222,16 +1269,14 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 if (m_rpFastValid && m_rpFastRenderPassHash == it->first) {
                     m_rpFastValid = false;
                 }
-                // Notify while the handle is still alive: pipelines hashed on it share
-                // the entry's >kRetireAgeFrames idleness (they are only bound by draws
-                // that hit this entry), so the observer may destroy them immediately.
-                if (m_evictionObserver != nullptr) {
-                    m_evictionObserver->OnRenderPassDestroyed(it->second.renderPass);
-                }
+                destroyedRenderPasses.push_back(it->second.renderPass);
                 it = m_renderPasses.erase(it);
             } else {
                 ++it;
             }
+        }
+        if (!destroyedRenderPasses.empty() && m_evictionObserver != nullptr) {
+            m_evictionObserver->OnRenderPassesDestroyed(destroyedRenderPasses);
         }
     }
 

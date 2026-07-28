@@ -134,11 +134,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // recording, before any render pass.
         void OnFrameCommandRecordingBegan(VkCommandBuffer commandBuffer) override;
 
-        // VkRenderPassManager::IEvictionObserver: the render-pass aging sweep is
-        // destroying a VkRenderPass; evict every graphics pipeline hashed on the
+        // VkRenderPassManager::IEvictionObserver: the render-pass aging sweep just
+        // destroyed these VkRenderPasses; evict every graphics pipeline hashed on a
         // dying handle (they share its >1024-boundary idleness, so immediate
         // destruction is safe) and drop the last-pipeline memo if any went.
-        void OnRenderPassDestroyed(VkRenderPass renderPass) override;
+        void OnRenderPassesDestroyed(const Vector<VkRenderPass>& renderPasses) override;
 
         // ProgramFactory::IEvictionObserver: an aged-out program entry was
         // destroyed; evict its compute pipeline and graphics pipelines (same
@@ -376,6 +376,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         Vector<VkFence> m_freeSubmitFences;
         Uint64 m_submitCounter = 0;
         Uint64 m_completedSubmitCounter = 0;
+        // Drains since the last Present, gating the drain's frame-boundary-equivalent
+        // work (arena rewind + cache aging): a presenting app's mid-frame
+        // readbacks/waits must neither churn the transient caches nor accelerate the
+        // aging clocks, while present-less loops still cross a boundary every few
+        // iterations. Reset in Present.
+        Uint32 m_drainsSinceLastPresent = 0;
 
         NativeWindowType m_window = 0;
         void* m_platformDisplay = nullptr;
