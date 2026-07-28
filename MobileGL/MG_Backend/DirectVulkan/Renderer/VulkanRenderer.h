@@ -399,6 +399,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         Vector<VkExtensionProperties> m_extensions;
         VkInstance m_instance = VK_NULL_HANDLE;
         VkDebugUtilsMessengerEXT m_debugMessenger = VK_NULL_HANDLE;
+        // Fallback reporting channel for drivers that ship the validation layers but
+        // only expose the older VK_EXT_debug_report (Adreno 650 / Vulkan 1.1.128).
+        VkDebugReportCallbackEXT m_debugReportCallback = VK_NULL_HANDLE;
         PhysicalDevice m_physicalDevice;
         VkDevice m_device = VK_NULL_HANDLE;
         VmaAllocator m_allocator = nullptr;
@@ -549,6 +552,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         void CreateInstance();
         VkResult SetupDebugMessenger();
         VkResult DestroyDebugMessenger();
+        VkResult SetupDebugReportCallback();
+        void DestroyDebugReportCallback();
         VkDebugUtilsMessengerCreateInfoEXT PopulateDebugMessengerCreateInfo();
         void CreateSurface();
         void PickPhysicalDevice();

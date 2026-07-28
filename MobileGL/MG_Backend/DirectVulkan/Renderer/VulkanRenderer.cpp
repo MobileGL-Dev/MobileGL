@@ -1016,7 +1016,18 @@ layout(location = 0) in vec2 vTexCoord;
 layout(location = 0) out vec4 outColor;
 
 void main() {
-    outColor = texture(uSource, vTexCoord);
+    // Explicit LOD, not texture(): a blit reads exactly the selected level, so
+    // derivative-based mip selection has no business here. It is also load-bearing:
+    // on Adreno 650 (driver 512.502) an implicit-LOD sample of this single-mip
+    // UBWC render target through the pre-rotation (ROTATE_90) mapping reads past
+    // the image's allocation - despite the sampler's maxLod=0 and a nominal 1:1
+    // texel mapping whose LOD is 0, so the driver's implicit-LOD path itself is at
+    // fault - and page-faults the GPU once the neighbouring memory is returned to
+    // the kernel (frame 2 of Minecraft 26.2's resource reload; the kernel then
+    // invalidates the context and the next submit dies with EDEADLK ->
+    // VK_ERROR_DEVICE_LOST at Present). Verified on device: texture() faults on
+    // the second frame every run, textureLod survives with identical state.
+    outColor = textureLod(uSource, vTexCoord, 0.0);
 }
 )";
 
@@ -2563,11 +2574,22 @@ void main() {
         if (m_swapchainObject.GetHandle() != VK_NULL_HANDLE) {
             VkResult acquireResult =
                 m_frameContext.WaitAndAcquireNextImage(m_device, m_swapchainObject.GetHandle(), m_imageIndexAcquired);
-            if (acquireResult == VK_ERROR_OUT_OF_DATE_KHR || acquireResult == VK_SUBOPTIMAL_KHR) {
+            if (acquireResult == VK_ERROR_OUT_OF_DATE_KHR) {
+                // Nothing was acquired and no semaphore signal was armed, so
+                // rebuilding and re-acquiring on the same semaphore is safe.
                 MGLOG_D("Initialize, vkAcquireNextImageKHR got %d, recreating swapchain", acquireResult);
                 RecreateSwapchain();
                 acquireResult =
                     m_frameContext.WaitAndAcquireNextImage(m_device, m_swapchainObject.GetHandle(), m_imageIndexAcquired);
+            } else if (acquireResult == VK_SUBOPTIMAL_KHR) {
+                // The image is usable, and its acquire signal is already armed on
+                // imageAvailableSemaphore. Re-acquiring here would arm a second
+                // signal on a binary semaphore whose first one nobody has waited on
+                // yet; keep the image and let Present rebuild after the frame that
+                // consumes the signal.
+                MGLOG_D("Initialize, vkAcquireNextImageKHR got VK_SUBOPTIMAL_KHR; deferring swapchain rebuild");
+                m_swapchainResizeRequested = true;
+                acquireResult = VK_SUCCESS;
             }
             VK_VERIFY(acquireResult, "Initialize, WaitAndAcquireNextImage");
         } else {
@@ -2693,6 +2715,7 @@ void main() {
             DestroyDebugMessenger();
             m_debugMessenger = VK_NULL_HANDLE;
         }
+        DestroyDebugReportCallback();
 
         if (m_instance != VK_NULL_HANDLE) {
             vkDestroyInstance(m_instance, nullptr);
@@ -7542,7 +7565,11 @@ void main() {
             m_presentSuspended = false;
             const VkResult acquireResult =
                 m_frameContext.WaitAndAcquireNextImage(m_device, m_swapchainObject.GetHandle(), m_imageIndexAcquired);
-            if (acquireResult != VK_SUBOPTIMAL_KHR) {
+            if (acquireResult == VK_SUBOPTIMAL_KHR) {
+                // Usable image with its acquire signal already armed; rebuild only
+                // once a submit has consumed it (see step 4 at the end of Present).
+                m_swapchainResizeRequested = true;
+            } else {
                 VK_VERIFY(acquireResult, "Present, deferred first WaitAndAcquireNextImage");
             }
         }
@@ -7570,16 +7597,24 @@ void main() {
         if (activeRenderPass)
             VkRenderPassManager::EndRenderPass(frame.commandBuffer);
 
+        // Transition while this frame's recording is still open. A frame that
+        // rendered only into FBOs has no default-framebuffer render pass, and that
+        // pass's finalLayout is the only other thing that carries the swapchain
+        // image to PRESENT_SRC_KHR - so closing the buffer first, which made
+        // TransitionToPresent refuse to record, handed the image to
+        // vkQueuePresentKHR in the layout it was acquired in (UNDEFINED on a fresh
+        // swapchain). The SetImageLayout below then made the tracker's
+        // disagreement with reality permanent for that image index.
+        const auto acquiredImageLayout = m_swapchainObject.GetImageLayout(m_imageIndexAcquired);
+        m_frameContext.TransitionToPresent(m_swapchainObject.GetImage(m_imageIndexAcquired), acquiredImageLayout);
+
         if (frame.isCommandRecording) {
             m_frameContext.EndCommandRecording();
             frame.hasCommandBufferRecorded = true;
             m_lastPipelineValid = false; // command-buffer boundary: drop the pipeline memo
         }
 
-        const auto acquiredImageLayout = m_swapchainObject.GetImageLayout(m_imageIndexAcquired);
-        const Bool needsLayoutTransitionForPresent =
-            m_frameContext.TransitionToPresent(m_swapchainObject.GetImage(m_imageIndexAcquired), acquiredImageLayout);
-        const Bool shouldSubmitCommandBuffer = frame.hasCommandBufferRecorded || needsLayoutTransitionForPresent;
+        const Bool shouldSubmitCommandBuffer = frame.hasCommandBufferRecorded;
 
         // 1) Submit current frame work.
         auto submitPacket = m_frameContext.GetSubmitInfo(shouldSubmitCommandBuffer, m_imageIndexAcquired);
@@ -7623,7 +7658,17 @@ void main() {
 
         // 4) Wait/reset/acquire for next frame.
         result = m_frameContext.WaitAndAcquireNextImage(m_device, m_swapchainObject.GetHandle(), m_imageIndexAcquired);
-        if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR) {
+        if (result == VK_SUBOPTIMAL_KHR) {
+            // An image was acquired and its signal is armed on this slot's
+            // imageAvailableSemaphore. Rebuilding now would mean re-acquiring on
+            // that same binary semaphore, arming a second signal while the first is
+            // still unwaited. Keep the image: the rebuild runs at the top of the
+            // next Present's step 4 above, once this frame's submit has consumed it.
+            MGLOG_D("Present, vkAcquireNextImageKHR got VK_SUBOPTIMAL_KHR; deferring swapchain rebuild");
+            m_swapchainResizeRequested = true;
+            result = VK_SUCCESS;
+        } else if (result == VK_ERROR_OUT_OF_DATE_KHR) {
+            // Nothing acquired, nothing signaled: safe to rebuild and re-acquire.
             MGLOG_D("Present, vkAcquireNextImageKHR got %d, recreating swapchain", result);
             if (!RecreateSwapchain()) {
                 m_presentSuspended = true;
@@ -7670,6 +7715,24 @@ void main() {
         }
 
         m_validationLayersEnabled = m_config.EnableValidationLayers && validationLayerAvailable;
+
+        // The debug messenger is a VK_EXT_debug_utils object, but a driver can ship
+        // the validation layers while exposing only the older VK_EXT_debug_report
+        // (Adreno 650 / Vulkan 1.1.128 does exactly that). Requesting the extension
+        // unconditionally tripped the required-extension assert below, aborting every
+        // validation-enabled build in CreateInstance. Keep the layers - they still
+        // validate, and on Android they report to logcat on their own - and drop only
+        // the messenger.
+        const Bool debugUtilsAvailable =
+            m_validationLayersEnabled && IsExtensionSupported(m_extensions, VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
+        // Without a reporting channel the layers validate but say nothing, so fall
+        // back to VK_EXT_debug_report when debug_utils is missing.
+        const Bool debugReportAvailable = m_validationLayersEnabled && !debugUtilsAvailable &&
+                                          IsExtensionSupported(m_extensions, VK_EXT_DEBUG_REPORT_EXTENSION_NAME);
+        if (m_validationLayersEnabled && !debugUtilsAvailable) {
+            MGLOG_I("%s not available; validation reports via %s instead.", VK_EXT_DEBUG_UTILS_EXTENSION_NAME,
+                    debugReportAvailable ? VK_EXT_DEBUG_REPORT_EXTENSION_NAME : "(no channel)");
+        }
 
         // ---------------- App info -------------------
         VkApplicationInfo appInfo = {};
@@ -7721,8 +7784,10 @@ void main() {
         }
 #endif
 
-        if (m_validationLayersEnabled) {
+        if (debugUtilsAvailable) {
             exts.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
+        } else if (debugReportAvailable) {
+            exts.push_back(VK_EXT_DEBUG_REPORT_EXTENSION_NAME);
         }
 
         MGLOG_I("Enabling %d Vulkan instance extensions:", exts.size());
@@ -7747,7 +7812,8 @@ void main() {
             MGLOG_I("Enabling validation layer...");
             instanceInfo.enabledLayerCount = static_cast<uint32_t>(std::size(s_validationLayerNames));
             instanceInfo.ppEnabledLayerNames = s_validationLayerNames;
-            instanceInfo.pNext = &debugMessengerCreateInfo;
+            // Chaining the messenger create-info is only legal with the extension on.
+            instanceInfo.pNext = debugUtilsAvailable ? &debugMessengerCreateInfo : nullptr;
         } else {
             instanceInfo.enabledLayerCount = 0;
             instanceInfo.pNext = nullptr;
@@ -7755,7 +7821,40 @@ void main() {
 
         VK_VERIFY(vkCreateInstance(&instanceInfo, nullptr, &m_instance), "vkCreateInstance failed");
 
-        if (m_validationLayersEnabled) VK_VERIFY(SetupDebugMessenger());
+        if (debugUtilsAvailable) {
+            VK_VERIFY(SetupDebugMessenger());
+        } else if (debugReportAvailable) {
+            VK_VERIFY(SetupDebugReportCallback());
+        }
+    }
+
+    static VKAPI_ATTR VkBool32 VKAPI_CALL DebugReportCallback(VkDebugReportFlagsEXT flags, VkDebugReportObjectTypeEXT,
+                                                              Uint64, size_t, Int32 messageCode, const char* pLayerPrefix,
+                                                              const char* pMessage, void*) {
+        if ((flags & (VK_DEBUG_REPORT_ERROR_BIT_EXT | VK_DEBUG_REPORT_WARNING_BIT_EXT |
+                      VK_DEBUG_REPORT_PERFORMANCE_WARNING_BIT_EXT)) != 0) {
+            MGLOG_F("[Vulkan %s %d] %s", pLayerPrefix ? pLayerPrefix : "?", messageCode, pMessage ? pMessage : "");
+        }
+        return VK_FALSE;
+    }
+
+    VkResult VulkanRenderer::SetupDebugReportCallback() {
+        auto vkCreateDebugReportCallbackEXT =
+            (PFN_vkCreateDebugReportCallbackEXT)vkGetInstanceProcAddr(m_instance, "vkCreateDebugReportCallbackEXT");
+        if (!vkCreateDebugReportCallbackEXT) return VK_ERROR_EXTENSION_NOT_PRESENT;
+        VkDebugReportCallbackCreateInfoEXT createInfo{VK_STRUCTURE_TYPE_DEBUG_REPORT_CALLBACK_CREATE_INFO_EXT};
+        createInfo.flags = VK_DEBUG_REPORT_ERROR_BIT_EXT | VK_DEBUG_REPORT_WARNING_BIT_EXT |
+                           VK_DEBUG_REPORT_PERFORMANCE_WARNING_BIT_EXT;
+        createInfo.pfnCallback = &DebugReportCallback;
+        return vkCreateDebugReportCallbackEXT(m_instance, &createInfo, nullptr, &m_debugReportCallback);
+    }
+
+    void VulkanRenderer::DestroyDebugReportCallback() {
+        if (m_debugReportCallback == VK_NULL_HANDLE) return;
+        auto func = (PFN_vkDestroyDebugReportCallbackEXT)vkGetInstanceProcAddr(m_instance,
+                                                                               "vkDestroyDebugReportCallbackEXT");
+        if (func != nullptr) func(m_instance, m_debugReportCallback, nullptr);
+        m_debugReportCallback = VK_NULL_HANDLE;
     }
 
     VkResult VulkanRenderer::SetupDebugMessenger() {

@@ -150,12 +150,30 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
     Bool FrameContext::TransitionToPresent(VkImage image, VkImageLayout oldLayout, VkImageLayout presentLayout) {
         auto& frame = GetCurrent();
-        if (frame.hasCommandBufferRecorded || frame.isCommandRecording || oldLayout == presentLayout ||
-            oldLayout == VK_IMAGE_LAYOUT_SHARED_PRESENT_KHR) {
+        if (oldLayout == presentLayout || oldLayout == VK_IMAGE_LAYOUT_SHARED_PRESENT_KHR) {
             return false;
         }
 
-        auto& commandBuffer = BeginCommandRecording();
+        // The barrier belongs in the frame's own recording. Bailing out because
+        // something was already recorded (the previous behaviour) dropped the
+        // transition entirely for every frame that never ran a default-framebuffer
+        // render pass - the only other thing that carries the image to
+        // PRESENT_SRC_KHR, via that pass's finalLayout - so the swapchain image was
+        // handed to the WSI still in the layout it was acquired in.
+        // A closed-but-unsubmitted buffer can only come from a submit that already
+        // failed (SubmitPendingCommandBuffer leaves the flag set on error), and
+        // appending to it is illegal while reopening would reset the frame's own
+        // commands away. The device is gone on that path anyway - stay silent-safe
+        // rather than trade a lost device for a barrier into a closed buffer.
+        if (frame.hasCommandBufferRecorded) {
+            MGLOG_E("TransitionToPresent: command buffer already closed; skipping the present barrier");
+            return false;
+        }
+
+        // Reopening a recording here would vkResetCommandBuffer this frame's own
+        // commands away, so append to the open one and let the caller close it.
+        const Bool openedRecording = !frame.isCommandRecording;
+        VkCommandBuffer commandBuffer = openedRecording ? BeginCommandRecording() : frame.commandBuffer;
 
         VkImageMemoryBarrier presentBarrier{};
         presentBarrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
@@ -174,7 +192,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0,
                              nullptr, 0, nullptr, 1, &presentBarrier);
 
-        EndCommandRecording();
+        if (openedRecording) {
+            EndCommandRecording();
+        }
         return true;
     }
 
@@ -227,12 +247,21 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
         result = vkAcquireNextImageKHR(device, swapchain, timeout, frame.imageAvailableSemaphore, acquireFence,
                                        &outImageIndex);
-        if (result != VK_SUCCESS) {
+        // VK_SUBOPTIMAL_KHR is a success code: an image *was* acquired and
+        // imageAvailableSemaphore *will* be signaled. Bailing out on it skipped both
+        // the consumed-flag reset (leaving a stale "already consumed", so the next
+        // submit never waited on the pending signal) and the fence reset (leaving
+        // the slot's fence signaled for the next submit to reuse). Only a genuine
+        // failure - VK_ERROR_OUT_OF_DATE_KHR and friends, where nothing is acquired
+        // and nothing is signaled - skips the bookkeeping.
+        if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR) {
             return result;
         }
 
         frame.imageAvailableSemaphoreConsumed = false;
-        return vkResetFences(device, 1, &frame.imageInFlightFence);
+        const VkResult resetResult = vkResetFences(device, 1, &frame.imageInFlightFence);
+        // Hand the acquire's own code back so the caller can schedule a rebuild.
+        return resetResult == VK_SUCCESS ? result : resetResult;
     }
 
     Uint32 FrameContext::GetCurrentFrameIndex() const {
