@@ -587,6 +587,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         m_allocator = initInfo.allocator;
         m_commandPool = initInfo.commandPool;
         m_graphicsQueue = initInfo.graphicsQueue;
+        m_imageFormatListSupported = initInfo.imageFormatListSupported;
         m_currentFrameIndex = 0;
         m_deferredReleases.clear();
         m_deferredReleases.resize(initInfo.frameCount);
@@ -609,6 +610,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         DestroyDeferredReleases();
         m_textureResources.clear();
         m_aliveObjects.clear();
+        m_storageImageTextures.clear();
 
         m_device = VK_NULL_HANDLE;
         m_physicalDevice = VK_NULL_HANDLE;
@@ -656,6 +658,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             m_textureResources.erase(resourceIt);
         }
         m_aliveObjects.erase(identity);
+        m_storageImageTextures.erase(identity);
     }
 
     void VkTextureManager::PruneStaleTextureAliases(MG_State::GLState::ITextureObject* texture) {
@@ -1189,13 +1192,36 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         return ok;
     }
 
+    void VkTextureManager::MarkStorageImageTexture(MG_State::GLState::ITextureObject& texture) {
+        m_storageImageTextures.insert(MakeTextureIdentity(&texture));
+    }
+
+    Bool VkTextureManager::NeedsStorageUsageUpgrade(MG_State::GLState::ITextureObject& texture) const {
+        const TextureIdentity identity = MakeTextureIdentity(&texture);
+        if (m_storageImageTextures.find(identity) == m_storageImageTextures.end()) {
+            return false;
+        }
+        const auto it = m_textureResources.find(identity);
+        // No image yet: the first sync creates it with STORAGE straight away, so there is nothing
+        // to preserve and nothing to order against.
+        return it != m_textureResources.end() && it->second.image != VK_NULL_HANDLE &&
+               !it->second.storageUsageResolved;
+    }
+
     Bool VkTextureManager::NeedsStorageImagePreparation(MG_State::GLState::ITextureObject& texture) const {
-        const auto it = m_textureResources.find(MakeTextureIdentity(&texture));
+        const TextureIdentity identity = MakeTextureIdentity(&texture);
+        const auto it = m_textureResources.find(identity);
         if (it == m_textureResources.end()) {
             return true;
         }
         const TextureResource& resource = it->second;
         if (resource.image == VK_NULL_HANDLE || resource.layout != VK_IMAGE_LAYOUT_GENERAL) {
+            return true;
+        }
+        // The image predates this texture's first image-unit binding, so it was created without
+        // STORAGE usage and has to be recreated - which is illegal inside a render pass.
+        if (!resource.storageUsageResolved &&
+            m_storageImageTextures.find(identity) != m_storageImageTextures.end()) {
             return true;
         }
         // Mirror SyncTexture's cross-draw skip condition: any version drift means the sync
@@ -1304,7 +1330,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         const auto* syncingMipTexture = MG_State::GLState::AsMipmapTexture(&texture);
         const Uint32 syncingMipLevelCount =
             syncingMipTexture != nullptr ? syncingMipTexture->GetMipmapLevelCount() : 0u;
-        if (outResource.image != VK_NULL_HANDLE &&
+        // A pending storage-usage upgrade also has to bust the skip: nothing about the texture's
+        // content or params changed, but the image itself must be recreated with STORAGE usage
+        // before it can back an image-unit descriptor.
+        const Bool storageUpgradePending =
+            !outResource.storageUsageResolved &&
+            m_storageImageTextures.find(MakeTextureIdentity(&texture)) != m_storageImageTextures.end();
+        if (outResource.image != VK_NULL_HANDLE && !storageUpgradePending &&
             outResource.syncedContentVersion == syncingContentVersion &&
             outResource.syncedTextureParamsVersion == texture.GetTextureParamsVersion() &&
             outResource.syncedMipLevelCount == syncingMipLevelCount) {
@@ -1415,14 +1447,42 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         const VkImageAspectFlags aspect = GetAspectMaskForFormat(format);
         VkFormatProperties formatProperties{};
         vkGetPhysicalDeviceFormatProperties(m_physicalDevice, format, &formatProperties);
-        const Bool supportsStorageImage =
+        // Only textures that have actually been bound to a GL image unit get STORAGE usage (and
+        // the MUTABLE_FORMAT it drags in for format-reinterpreting image views). Requesting it
+        // for every storage-capable colour texture costs real bandwidth: Adreno cannot keep UBWC
+        // compression on an image that may be written through a storage descriptor, so the whole
+        // render target - MC's included - runs uncompressed. MarkStorageImageTexture upgrades a
+        // texture before its first image-unit draw, and the usage below feeds the compatibility
+        // check so the upgrade recreates the image.
+        const Bool markedAsStorageImage =
+            m_storageImageTextures.find(MakeTextureIdentity(
+                const_cast<MG_State::GLState::ITextureObject*>(&texture))) != m_storageImageTextures.end();
+        // Storage-image CAPABILITY (does the format allow it at all) is deliberately separate from
+        // whether this texture actually needs the usage. MUTABLE_FORMAT keys off capability, as
+        // before: format-reinterpreting views are not a storage-only concern - the SAMPLED path
+        // needs them too (GetOrCreateSampledImageView bails out without it, see ~line 892), so
+        // tying MUTABLE_FORMAT to the image-unit mark would break sampled format reinterpretation
+        // for every texture that never becomes a storage image.
+        const Bool storageImageCapable =
             !isMultisampleTexture &&
             (aspect & VK_IMAGE_ASPECT_COLOR_BIT) != 0 &&
             (formatProperties.optimalTilingFeatures & VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT) != 0;
+        const Bool supportsStorageImage = storageImageCapable && markedAsStorageImage;
         VkImageCreateFlags imageCreateFlags = shapeInfo.imageFlags;
-        if (supportsStorageImage && IsMutableStorageImageFormat(format) &&
+        if (storageImageCapable && IsMutableStorageImageFormat(format) &&
             m_mutableFormatUnsupported.find(format) == m_mutableFormatUnsupported.end()) {
             imageCreateFlags |= VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT;
+        }
+
+        VkImageUsageFlags desiredUsage =
+            VK_IMAGE_USAGE_SAMPLED_BIT |
+            (supportsStorageImage ? VK_IMAGE_USAGE_STORAGE_BIT : 0) |
+            ((aspect & VK_IMAGE_ASPECT_COLOR_BIT) ? VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT : 0) |
+            (((aspect & VK_IMAGE_ASPECT_DEPTH_BIT) || (aspect & VK_IMAGE_ASPECT_STENCIL_BIT)) ?
+                 VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT :
+                 0);
+        if (!isMultisampleTexture) {
+            desiredUsage |= VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
         }
 
         const Bool compatible = resource.image != VK_NULL_HANDLE && resource.format == format &&
@@ -1433,6 +1493,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                 resource.viewType == shapeInfo.viewType &&
                                 resource.sampleCount == resolvedSampleCount &&
                                 resource.imageCreateFlags == imageCreateFlags &&
+                                resource.usageFlags == desiredUsage &&
                                 resource.mipLevels == backingMipLevels;
         if (compatible) {
             if (resource.perMipViews.size() != backingMipLevels) {
@@ -1441,6 +1502,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             if (resource.perMipSampledViews.size() != backingMipLevels) {
                 resource.perMipSampledViews.resize(backingMipLevels, VK_NULL_HANDLE);
             }
+            // Keeping the image is itself the answer to the mark: either it already carries
+            // STORAGE, or this format can never carry it. Either way there is nothing left to
+            // recreate, so stop reporting the texture as needing preparation.
+            resource.storageUsageResolved = markedAsStorageImage;
             return true;
         }
 
@@ -1455,7 +1520,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             resource.sampleCount == resolvedSampleCount &&
             resource.imageCreateFlags == imageCreateFlags &&
             resolvedSampleCount == VK_SAMPLE_COUNT_1_BIT &&
-            resource.mipLevels < backingMipLevels &&
+            // '<=' rather than '<': a storage-usage upgrade recreates the image with an
+            // unchanged mip count, and its contents (a render target's pixels live only on the
+            // GPU) still have to survive. The vkCmdCopyImage below copies min(mipLevels).
+            resource.mipLevels <= backingMipLevels &&
             resource.layout != VK_IMAGE_LAYOUT_UNDEFINED;
 
         std::unique_ptr<TextureResource> preservedResource;
@@ -1477,16 +1545,37 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         imageInfo.format = format;
         imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
         imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-        imageInfo.usage = VK_IMAGE_USAGE_SAMPLED_BIT |
-                          (supportsStorageImage ? VK_IMAGE_USAGE_STORAGE_BIT : 0) |
-                          ((aspect & VK_IMAGE_ASPECT_COLOR_BIT) ? VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT : 0) |
-                          (((aspect & VK_IMAGE_ASPECT_DEPTH_BIT) || (aspect & VK_IMAGE_ASPECT_STENCIL_BIT)) ?
-                               VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT :
-                               0);
-        if (!isMultisampleTexture) {
-            imageInfo.usage |= VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
-        }
+        imageInfo.usage = desiredUsage;
         imageInfo.samples = resolvedSampleCount;
+
+        // Bound the mutability. A blindly-mutable image has to be laid out so that ANY format in
+        // its compatibility class can be viewed, which costs bandwidth compression on tilers;
+        // naming the exact set instead lets the driver keep it. Only safe when that set really is
+        // exhaustive, so it is restricted to textures that are not image-unit bound: sampled views
+        // can only ever ask for ResolveSampledImageViewFormat's output, whereas glBindImageTexture
+        // may name any compatible format, which nothing here can enumerate ahead of time.
+        Vector<VkFormat> viewFormats;
+        VkImageFormatListCreateInfo formatListInfo{};
+        if (m_imageFormatListSupported && !supportsStorageImage &&
+            (imageInfo.flags & VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT) != 0) {
+            viewFormats.push_back(format);
+            for (const SamplerNumericDomain domain : {SamplerNumericDomain::Float,
+                                                      SamplerNumericDomain::SignedInteger,
+                                                      SamplerNumericDomain::UnsignedInteger}) {
+                const VkFormat viewFormat = ResolveSampledImageViewFormat(format, domain);
+                if (viewFormat == VK_FORMAT_UNDEFINED) {
+                    continue;
+                }
+                if (std::find(viewFormats.begin(), viewFormats.end(), viewFormat) == viewFormats.end()) {
+                    viewFormats.push_back(viewFormat);
+                }
+            }
+            formatListInfo.sType = VK_STRUCTURE_TYPE_IMAGE_FORMAT_LIST_CREATE_INFO;
+            formatListInfo.viewFormatCount = static_cast<Uint32>(viewFormats.size());
+            formatListInfo.pViewFormats = viewFormats.data();
+            imageInfo.pNext = &formatListInfo;
+        }
+
         if (isMultisampleTexture || (imageInfo.flags & VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT) != 0) {
             VkImageFormatProperties imageFormatProperties{};
             VkResult imageFormatResult = vkGetPhysicalDeviceImageFormatProperties(
@@ -1543,6 +1632,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         resource.viewType = shapeInfo.viewType;
         resource.sampleCount = resolvedSampleCount;
         resource.imageCreateFlags = imageCreateFlags;
+        resource.usageFlags = imageInfo.usage;
+        resource.storageUsageResolved = markedAsStorageImage;
         resource.syncedTextureParamsVersion = 0;
 
         if (preservedResource) {

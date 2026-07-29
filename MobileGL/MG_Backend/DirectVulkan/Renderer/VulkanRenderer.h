@@ -576,8 +576,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             const RenderPassEntry& renderPassEntry);
         VkPipeline GetOrCreateComputePipeline(const ProgramFactory::VkProgramObject& programObj);
         void DestroyComputePipelines();
+        // Takes the frame rather than a command buffer: a first-time storage-usage upgrade has to
+        // flush the pending recording (see the body), which retires the current command buffer.
         Bool PrepareStorageImageTextures(
-            VkCommandBuffer commandBuffer,
+            FrameContext::FrameData& frame,
             const MG_State::GLState::ProgramObject& program,
             const ProgramFactory::VkProgramObject& programObj);
 
@@ -639,6 +641,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                                  const PhysicalDevice& compareWithDevice,
                                                  PhysicalDevice& outBetterDevice);
         static constexpr const char* s_validationLayerNames[] = {"VK_LAYER_KHRONOS_validation"};
+        // VK_KHR_image_format_list: lets MUTABLE_FORMAT images declare their exact view-format
+        // set so the driver can keep bandwidth compression (see CreateLogicalDeviceAndQueues).
+        Bool m_imageFormatListExtensionEnabled = false;
+
         static constexpr const char* s_deviceExtensionNames[] = {VK_KHR_SWAPCHAIN_EXTENSION_NAME};
         static Bool CheckValidationLayerSupport();
 

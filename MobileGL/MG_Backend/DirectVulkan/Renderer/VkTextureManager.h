@@ -53,6 +53,9 @@ public:
         VkCommandPool commandPool = VK_NULL_HANDLE;
         VkQueue graphicsQueue = VK_NULL_HANDLE;
         Uint32 frameCount = 0;
+        // VK_KHR_image_format_list is enabled: MUTABLE_FORMAT images can name the exact set of
+        // formats they will be viewed as, which is what lets a tiler keep them compressed.
+        Bool imageFormatListSupported = false;
     };
 
     struct TextureResource {
@@ -157,6 +160,17 @@ public:
         VkImageViewType viewType = VK_IMAGE_VIEW_TYPE_2D;
         VkSampleCountFlagBits sampleCount = VK_SAMPLE_COUNT_1_BIT;
         VkImageCreateFlags imageCreateFlags = 0;
+        // Usage the live image was created with. STORAGE is only requested for textures that
+        // have actually been bound to a GL image unit, because on Adreno a storage-capable
+        // image loses UBWC bandwidth compression; a later image binding upgrades the usage
+        // and recreates the image, so the resolved usage has to be part of the compatibility
+        // check that decides whether the existing image can be kept.
+        VkImageUsageFlags usageFlags = 0;
+        // True once this image was (re)resolved while the texture was already marked as an
+        // image-unit texture. Distinguishes "not upgraded yet" from "cannot be upgraded"
+        // (a format whose optimalTilingFeatures lack STORAGE_IMAGE never gains the bit), so
+        // NeedsStorageImagePreparation cannot ask for a recreate that will never happen.
+        Bool storageUsageResolved = false;
         Uint16 syncedTextureParamsVersion = 0;
         // Snapshot of ITextureObject::GetContentVersion() at the last successful sync;
         // lets SyncTexture skip the whole re-check/re-upload when content is unchanged.
@@ -190,6 +204,8 @@ public:
             std::swap(this->viewType, that.viewType);
             std::swap(this->sampleCount, that.sampleCount);
             std::swap(this->imageCreateFlags, that.imageCreateFlags);
+            std::swap(this->usageFlags, that.usageFlags);
+            std::swap(this->storageUsageResolved, that.storageUsageResolved);
             std::swap(this->syncedTextureParamsVersion, that.syncedTextureParamsVersion);
             std::swap(this->syncedContentVersion, that.syncedContentVersion);
             std::swap(this->syncedMipLevelCount, that.syncedMipLevelCount);
@@ -251,6 +267,8 @@ public:
             viewType = VK_IMAGE_VIEW_TYPE_2D;
             sampleCount = VK_SAMPLE_COUNT_1_BIT;
             imageCreateFlags = 0;
+            usageFlags = 0;
+            storageUsageResolved = false;
             syncedTextureParamsVersion = 0;
             syncedContentVersion = 0;
             syncedMipLevelCount = 0;
@@ -289,6 +307,17 @@ public:
                                                       VkImageLayout newLayout);
     Bool TransitionTextureForSampling(VkCommandBuffer commandBuffer, MG_State::GLState::ITextureObject& texture);
     Bool TransitionTextureForStorageImage(VkCommandBuffer commandBuffer, MG_State::GLState::ITextureObject& texture);
+    // Records that this texture is bound to a GL image unit, so its image must carry
+    // VK_IMAGE_USAGE_STORAGE_BIT. Must be called before NeedsStorageImagePreparation, and
+    // therefore before the render pass is committed: an image that has to be upgraded is
+    // recreated, which is illegal inside a render pass. Sticky for the texture's lifetime -
+    // GL lets an image binding come and go, and re-creating the image every time it does
+    // would cost far more than the compression it wins back.
+    void MarkStorageImageTexture(MG_State::GLState::ITextureObject& texture);
+    // True when this texture is marked but its live image predates the mark, i.e. the next sync
+    // will recreate it with STORAGE usage and copy the old contents forward. Callers use this to
+    // submit their pending recording first, so that copy cannot read pre-flush content.
+    Bool NeedsStorageUsageUpgrade(MG_State::GLState::ITextureObject& texture) const;
     // Non-mutating probe for the per-draw storage-image fast path: true when preparing this
     // texture as a storage image may need work that is illegal inside a render pass (resource
     // creation, dirty-content upload, or a layout transition to GENERAL). Unknown state reports
@@ -375,6 +404,7 @@ private:
     VmaAllocator m_allocator = nullptr;
     VkCommandPool m_commandPool = VK_NULL_HANDLE;
     VkQueue m_graphicsQueue = VK_NULL_HANDLE;
+    Bool m_imageFormatListSupported = false;
     Uint32 m_currentFrameIndex = 0;
 
     Uint8 m_gcCounter = 0;
@@ -398,6 +428,8 @@ private:
     std::unordered_set<VkFormat> m_mutableFormatUnsupported;
     std::unordered_map<TextureIdentity, WeakPtr<MG_State::GLState::ITextureObject>, TextureIdentityHash> m_aliveObjects;
     std::unordered_map<TextureIdentity, TextureResource, TextureIdentityHash> m_textureResources;
+    // Textures that have been bound to a GL image unit (see MarkStorageImageTexture).
+    std::unordered_set<TextureIdentity, TextureIdentityHash> m_storageImageTextures;
     Vector<Vector<TextureResource>> m_deferredReleases;
     Vector<Vector<VkImageView>> m_deferredViewReleases;
 };

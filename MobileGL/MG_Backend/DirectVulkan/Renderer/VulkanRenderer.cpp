@@ -2491,7 +2491,7 @@ void main() {
         MOBILEGL_ASSERT(m_textureManager != nullptr, "VkTextureManager creation failed.");
         succeeded = m_textureManager->Initialize(
             {m_device, m_physicalDevice.handle, m_allocator, m_commandPool, m_graphicsQueue,
-             m_frameContext.GetFrameCount()});
+             m_frameContext.GetFrameCount(), m_imageFormatListExtensionEnabled});
         MOBILEGL_ASSERT(succeeded, "VkTextureManager initialization failed.");
         m_clearManager = MakeUnique<VkClearManager>();
         MOBILEGL_ASSERT(m_clearManager != nullptr, "VkClearManager creation failed.");
@@ -4193,7 +4193,7 @@ void main() {
     }
 
     Bool VulkanRenderer::PrepareStorageImageTextures(
-        VkCommandBuffer commandBuffer,
+        FrameContext::FrameData& frame,
         const MG_State::GLState::ProgramObject& program,
         const ProgramFactory::VkProgramObject& programObj) {
         if (!programObj.hasStorageImages) {
@@ -4214,9 +4214,18 @@ void main() {
         // keep the render pass alive instead of splitting it on every storage-image draw (on
         // tiled GPUs each split is a full tile load/store). GL makes cross-draw image-store
         // coherence the app's job (glMemoryBarrier), so no implicit barrier is owed here.
-        Bool anyNeedsPreparation = false;
+        // Record every image-unit binding before probing anything: a texture whose image was
+        // created without STORAGE usage (the default - it costs UBWC compression on Adreno)
+        // needs a recreate, and the probe below is what ends the render pass so that recreate
+        // lands here rather than mid-pass. This cannot be folded into the probe loop, which
+        // stops at the first texture that needs work and would leave the rest unmarked.
         for (auto* texture : storageTextures) {
             MOBILEGL_ASSERT(texture != nullptr, "%s: collected a null storage texture", __func__);
+            m_textureManager->MarkStorageImageTexture(*texture);
+        }
+
+        Bool anyNeedsPreparation = false;
+        for (auto* texture : storageTextures) {
             if (m_textureManager->NeedsStorageImagePreparation(*texture) ||
                 m_clearManager->HasPendingClear(texture)) {
                 anyNeedsPreparation = true;
@@ -4227,21 +4236,51 @@ void main() {
             return true;
         }
 
+        // A first-time storage-usage upgrade recreates the image and carries the old contents
+        // forward with an out-of-band, immediately-submitted copy (PreserveTextureContentsOnRecreate).
+        // Whatever this frame already recorded into the old image is still sitting unsubmitted in
+        // this command buffer, so that copy would read pre-frame content and this frame's rendering
+        // into the texture would be lost - precisely the render-target-then-image-unit case this
+        // whole path exists for. Submit what is recorded first; the copy then queues behind it.
+        Bool anyNeedsStorageUpgrade = false;
+        for (auto* texture : storageTextures) {
+            if (m_textureManager->NeedsStorageUsageUpgrade(*texture)) {
+                anyNeedsStorageUpgrade = true;
+                break;
+            }
+        }
+        if (anyNeedsStorageUpgrade && HasPendingRecordedWork()) {
+            if (FlushPendingCommands()) {
+                // Fresh command buffer: the sampled-descriptor-set memo describes bindings that
+                // only existed in the retired one. FlushPendingCommands drops the pipeline memo
+                // itself; this is the other command-buffer-scoped cache.
+                m_lastSampledSetValid = false;
+            } else {
+                // Best effort: the upgrade still produces a correct image, only its preserved
+                // contents may predate this frame's writes. Dropping the draw would be worse.
+                MGLOG_E("%s: flush before a storage-usage image upgrade failed; preserved contents "
+                        "may be stale for one frame", __func__);
+            }
+        }
+        if (!frame.isCommandRecording) {
+            m_frameContext.BeginCommandRecording();
+        }
+
         // Image uploads, deferred-clear materialization, and layout barriers are illegal inside
         // a classic render pass. Do this before sampler preparation as well: a texture used by
         // both a sampler and an image must stay in GENERAL, and both descriptors must name that
         // same layout independent of SPIR-V reflection/binding order.
         if (VkRenderPassManager::GetActiveRenderPass() != nullptr) {
-            VkRenderPassManager::EndRenderPass(commandBuffer);
+            VkRenderPassManager::EndRenderPass(frame.commandBuffer);
         }
 
         for (auto* texture : storageTextures) {
-            if (!MaterializePendingClearForTexture(commandBuffer, *texture)) {
+            if (!MaterializePendingClearForTexture(frame.commandBuffer, *texture)) {
                 MGLOG_E("%s: failed to materialize pending clear for storage textureId=%d",
                         __func__, texture->GetExternalIndex());
                 return false;
             }
-            if (!m_textureManager->TransitionTextureForStorageImage(commandBuffer, *texture)) {
+            if (!m_textureManager->TransitionTextureForStorageImage(frame.commandBuffer, *texture)) {
                 MGLOG_E("%s: failed to prepare storage textureId=%d",
                         __func__, texture->GetExternalIndex());
                 return false;
@@ -4286,7 +4325,7 @@ void main() {
             m_lastSampledSetValid = false;
         }
 
-        if (!PrepareStorageImageTextures(frame.commandBuffer, program, programObj)) {
+        if (!PrepareStorageImageTextures(frame, program, programObj)) {
             MGLOG_E("SetupDraw skipped: storage image preparation failed");
             return false;
         }
@@ -4511,7 +4550,7 @@ void main() {
             VkRenderPassManager::EndRenderPass(frame.commandBuffer);
         }
 
-        if (!PrepareStorageImageTextures(frame.commandBuffer, program, programObj)) {
+        if (!PrepareStorageImageTextures(frame, program, programObj)) {
             MGLOG_E("DispatchCompute skipped: storage image preparation failed");
             return;
         }
@@ -4551,7 +4590,7 @@ void main() {
             VkRenderPassManager::EndRenderPass(frame.commandBuffer);
         }
 
-        if (!PrepareStorageImageTextures(frame.commandBuffer, program, programObj)) {
+        if (!PrepareStorageImageTextures(frame, program, programObj)) {
             MGLOG_E("DispatchComputeIndirect skipped: storage image preparation failed");
             return;
         }
@@ -8157,6 +8196,18 @@ void main() {
 
         const Vector<VkExtensionProperties> availableExtensions = EnumerateDeviceExtensions(m_physicalDevice.handle);
         ResolveOptionalDeviceExtensions(availableExtensions, enabledDeviceExtensions);
+
+        // VK_KHR_image_format_list lets a MUTABLE_FORMAT image declare exactly which formats it
+        // may be viewed as. Adreno drops UBWC bandwidth compression on a blindly-mutable image
+        // (measured: 65 -> 80 fps in MC 26.2 once mutability is not requested); an explicit,
+        // compression-compatible format list is the portable way to keep both.
+        m_imageFormatListExtensionEnabled =
+            IsExtensionSupported(availableExtensions, VK_KHR_IMAGE_FORMAT_LIST_EXTENSION_NAME);
+        if (m_imageFormatListExtensionEnabled) {
+            enabledDeviceExtensions.push_back(VK_KHR_IMAGE_FORMAT_LIST_EXTENSION_NAME);
+        }
+        MGLOG_I("VK_KHR_image_format_list enabled: %s",
+                m_imageFormatListExtensionEnabled ? "true" : "false");
         MGLOG_I("VK_KHR_draw_indirect_count enabled: %s", m_drawIndirectCountExtensionEnabled ? "true" : "false");
 
         m_indexTypeUint8ExtensionEnabled = false;
