@@ -384,24 +384,28 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             const Uint16 samplerVersion = samplerToUse->GetVersion();
             const Uint64 textureLifetimeId = texture->GetLifetimeId();
             const Uint16 textureParamsVersion = texture->GetTextureParamsVersion();
+            // The sampler's LOD clamp depends on how many levels the sampled view exposes, and that
+            // follows uploads as well as GL parameters - so it belongs in the memo key too.
+            const Uint32 viewLevelCount = resource->sampledLevelCount;
             if (memo.valid && memo.samplerLifetimeId == samplerLifetimeId && memo.samplerVersion == samplerVersion &&
                 memo.textureLifetimeId == textureLifetimeId && memo.textureParamsVersion == textureParamsVersion &&
-                memo.forceNearestFiltering == forceNearestFiltering) {
+                memo.forceNearestFiltering == forceNearestFiltering && memo.viewLevelCount == viewLevelCount) {
                 resolvedSampler = memo.sampler;
             } else {
-                resolvedSampler =
-                    m_samplerManager->GetOrCreateSampler(*samplerToUse, *texture, forceNearestFiltering);
+                resolvedSampler = m_samplerManager->GetOrCreateSampler(*samplerToUse, *texture,
+                                                                       forceNearestFiltering, viewLevelCount);
                 memo.samplerLifetimeId = samplerLifetimeId;
                 memo.samplerVersion = samplerVersion;
                 memo.textureLifetimeId = textureLifetimeId;
                 memo.textureParamsVersion = textureParamsVersion;
                 memo.forceNearestFiltering = forceNearestFiltering;
+                memo.viewLevelCount = viewLevelCount;
                 memo.sampler = resolvedSampler;
                 memo.valid = true;
             }
         } else {
-            resolvedSampler =
-                m_samplerManager->GetOrCreateSampler(*samplerToUse, *texture, forceNearestFiltering);
+            resolvedSampler = m_samplerManager->GetOrCreateSampler(*samplerToUse, *texture, forceNearestFiltering,
+                                                                   resource->sampledLevelCount);
         }
         outImageInfo = {
             .sampler = resolvedSampler,
@@ -440,6 +444,48 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             .imageLayout = resource->layout,
         };
         return outImageInfo.sampler != VK_NULL_HANDLE;
+    }
+
+    Bool UniformManager::ProgramSamplesOnlySingleLevelTextures(
+        const MG_State::GLState::ProgramObject& program, const ProgramFactory::VkProgramObject& programObj) {
+        Bool sawSampler = false;
+        for (Uint32 binding = 0; binding < programObj.bindingKinds.size(); ++binding) {
+            if (programObj.bindingKinds[binding] != ProgramFactory::DescriptorBindingKind::CombinedImageSampler) {
+                continue;
+            }
+            const auto* texture = ResolveSamplerTextureRaw(program, programObj, binding);
+            if (texture == nullptr) return false;
+            const auto& levelRange = texture->GetLevelRange();
+            if (levelRange.x() != levelRange.y()) return false;
+
+            // An explicit-LOD sample is a single filtered tap, so it also gives up anisotropic
+            // filtering - which a single-level view can still have. Resolve the sampler exactly
+            // the way ResolveSamplerDescriptor does and bail if anisotropy would apply.
+            const Int location = programObj.samplerUniformLocationByBinding[binding];
+            const Int unit = ResolveSamplerUnitIndex(program, location, binding);
+            const auto& samplerOverride = MG_State::pGLContext->GetTextureUnitObject(unit).GetSamplerObject();
+            const auto* effectiveSampler =
+                samplerOverride ? samplerOverride.get() : texture->GetSamplerObject().get();
+            if (effectiveSampler == nullptr) return false;
+            if (effectiveSampler->GetMaxAnisotropy() > 1.0f &&
+                effectiveSampler->GetMinFilter() == SamplerFilterMode::Linear &&
+                effectiveSampler->GetMagFilter() == SamplerFilterMode::Linear) {
+                return false;
+            }
+
+            // An explicit LOD 0 makes lambda exactly 0, which is the magnification side of the
+            // min/mag decision. That only matches the implicit form when lambda could not have been
+            // positive anyway (the LOD clamp already pins it at or below 0), or when the two
+            // filters are the same and the choice cannot be observed.
+            const Float effectiveMaxLod = effectiveSampler->GetMipmapMode() == SamplerMipmapMode::None
+                                              ? 0.0f
+                                              : effectiveSampler->GetMaxLod();
+            if (effectiveMaxLod > 0.0f && effectiveSampler->GetMinFilter() != effectiveSampler->GetMagFilter()) {
+                return false;
+            }
+            sawSampler = true;
+        }
+        return sawSampler;
     }
 
     Bool UniformManager::ResolveSamplerTexture(const MG_State::GLState::ProgramObject& program,

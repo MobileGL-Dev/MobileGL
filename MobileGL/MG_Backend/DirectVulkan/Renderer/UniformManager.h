@@ -69,6 +69,16 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         static VkFormat ResolveStorageImageViewFormat(VkFormat reflectedFormat, GLenum bindingFormat,
                                                       VkFormat resourceFormat, Bool useBindingFormat);
 
+        // True when the program reads at least one sampler and every one of them is bound to a
+        // texture whose GL level range is a single level. Such a sampler resolves to
+        // minLod = maxLod = 0 (see VkSamplerManager::GetOrCreateSampler), so an implicit-LOD sample
+        // and an explicit LOD 0 sample must read the same texel - which is what makes the
+        // ExplicitLod0Sampling SPIR-V rewrite safe to request. Deliberately conservative: it reads
+        // only GL state, so a texture that ends up single-level for another reason (one uploaded
+        // level under a wide level range) merely misses the rewrite.
+        static Bool ProgramSamplesOnlySingleLevelTextures(const MG_State::GLState::ProgramObject& program,
+                                                          const ProgramFactory::VkProgramObject& programObj);
+
     private:
         struct DescriptorPoolBucket {
             VkDescriptorPool handle = VK_NULL_HANDLE;
@@ -191,6 +201,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             Uint64 samplerLifetimeId = 0;
             Uint64 textureLifetimeId = 0;
             VkSampler sampler = VK_NULL_HANDLE;
+            Uint32 viewLevelCount = 0;
             Uint16 samplerVersion = 0;
             Uint16 textureParamsVersion = 0;
             Bool forceNearestFiltering = false;

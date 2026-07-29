@@ -42,6 +42,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             SurfaceRotate90 = 1 << 2,
             SurfaceRotate180 = 1 << 3,
             SurfaceRotate270 = 1 << 4,
+            // Rewrites the fragment stage's implicit-LOD image samples to explicit LOD 0.
+            // Only ever set for a draw whose every sampler binding is clamped to a single mip
+            // level, which makes the two forms produce identical texels (the implicit lambda is
+            // clamped into [minLod, maxLod] = [0, 0] regardless of derivatives or bias).
+            ExplicitLod0Sampling = 1 << 5,
         };
         using CompileOptionFlags = Flags<CompileOptionBit>;
         using HashType = Uint64;

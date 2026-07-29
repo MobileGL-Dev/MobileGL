@@ -51,6 +51,18 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         Float ResolveEffectiveMinLod(const MG_State::GLState::SamplerObject& sampler, Float effectiveMaxLod) {
             return std::min(sampler.GetMinLod(), effectiveMaxLod);
         }
+
+        // A single-level view can only ever deliver the base level, but the LOD clamp must not be
+        // collapsed to exactly 0: both GL and Vulkan pick magFilter over minFilter from the
+        // *clamped* lambda, so maxLod = 0 would make every fragment magnify and quietly retire the
+        // min filter. 0.25 is the value VkSamplerCreateInfo's own note prescribes for emulating
+        // GL's non-mipmapped minification - large enough for lambda to stay positive, small enough
+        // that a NEAREST mip mode still rounds down to level 0. Clamped rather than assigned, so a
+        // texture whose GL_TEXTURE_MAX_LOD really is 0 keeps magnifying as GL says it must.
+        Float ResolveSingleLevelMaxLod(const MG_State::GLState::SamplerObject& sampler, Bool singleLevelView) {
+            const Float maxLod = ResolveEffectiveMaxLod(sampler);
+            return singleLevelView ? std::min(maxLod, 0.25f) : maxLod;
+        }
     } // namespace
 
     Bool VkSamplerManager::Initialize(const InitInfo& initInfo) {
@@ -120,11 +132,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
     Uint64 VkSamplerManager::BuildSamplerKey(const MG_State::GLState::SamplerObject& sampler,
                                              const MG_State::GLState::ITextureObject& texture,
-                                             Bool forceNearestFiltering) const {
+                                             Bool forceNearestFiltering, Bool singleLevelView) const {
         MOBILEGL_ASSERT(m_config != nullptr, "VkSamplerManager::BuildSamplerKey: m_config is null");
         XXHASH_VERIFY(XXH64_reset(m_hashState, m_config->CacheVersion));
 
         XXHASH_VERIFY(XXH64_update(m_hashState, &forceNearestFiltering, sizeof(forceNearestFiltering)));
+        XXHASH_VERIFY(XXH64_update(m_hashState, &singleLevelView, sizeof(singleLevelView)));
 
         const auto minFilter = sampler.GetMinFilter();
         XXHASH_VERIFY(XXH64_update(m_hashState, &minFilter, sizeof(minFilter)));
@@ -138,7 +151,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         XXHASH_VERIFY(XXH64_update(m_hashState, &wrapT, sizeof(wrapT)));
         const auto wrapR = sampler.GetWrapR();
         XXHASH_VERIFY(XXH64_update(m_hashState, &wrapR, sizeof(wrapR)));
-        const auto maxLod = ResolveEffectiveMaxLod(sampler);
+        const auto maxLod = ResolveSingleLevelMaxLod(sampler, singleLevelView);
         const auto minLod = ResolveEffectiveMinLod(sampler, maxLod);
         XXHASH_VERIFY(XXH64_update(m_hashState, &minLod, sizeof(minLod)));
         XXHASH_VERIFY(XXH64_update(m_hashState, &maxLod, sizeof(maxLod)));
@@ -160,8 +173,17 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
     VkSampler VkSamplerManager::GetOrCreateSampler(const MG_State::GLState::SamplerObject& sampler,
                                                    const MG_State::GLState::ITextureObject& texture,
-                                                   Bool forceNearestFiltering) {
-        const Uint64 key = BuildSamplerKey(sampler, texture, forceNearestFiltering);
+                                                   Bool forceNearestFiltering, Uint32 viewLevelCount) {
+        // A view that exposes a single mip level has no second level to blend with, so GL's
+        // *_MIPMAP_* minification filters degenerate to plain filtering on the base level -
+        // sampling is unchanged by pinning the Vulkan sampler to NEAREST mip mode at LOD 0.
+        // It is not cosmetic: MobileGL backs such a view with a fully allocated mip chain whose
+        // tail is never written, and a LINEAR mip mode lets the texture unit issue the level+1
+        // fetch anyway. On Adreno that fetch lands in uninitialized UBWC pages (or past the
+        // allocation for a genuinely single-level image) and faults the GPU - the same failure
+        // the default-framebuffer blit shader had to work around with an explicit-LOD sample.
+        const Bool singleLevelView = viewLevelCount == 1;
+        const Uint64 key = BuildSamplerKey(sampler, texture, forceNearestFiltering, singleLevelView);
         auto it = m_samplers.find(key);
         if (it != m_samplers.end()) {
             it->second.lastUsedFrameBoundary = m_frameBoundaryCounter;
@@ -172,8 +194,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         samplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
         samplerInfo.magFilter = forceNearestFiltering ? VK_FILTER_NEAREST : ToVkFilter(sampler.GetMagFilter());
         samplerInfo.minFilter = forceNearestFiltering ? VK_FILTER_NEAREST : ToVkFilter(sampler.GetMinFilter());
-        samplerInfo.mipmapMode = forceNearestFiltering ? VK_SAMPLER_MIPMAP_MODE_NEAREST
-                                                       : ToVkMipmapMode(sampler.GetMipmapMode());
+        samplerInfo.mipmapMode = (forceNearestFiltering || singleLevelView)
+                                     ? VK_SAMPLER_MIPMAP_MODE_NEAREST
+                                     : ToVkMipmapMode(sampler.GetMipmapMode());
         samplerInfo.addressModeU = ToVkAddressMode(sampler.GetWrapS());
         samplerInfo.addressModeV = ToVkAddressMode(sampler.GetWrapT());
         samplerInfo.addressModeW = ToVkAddressMode(sampler.GetWrapR());
@@ -185,7 +208,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         samplerInfo.maxAnisotropy = maxAnisotropy;
         samplerInfo.compareEnable = sampler.GetCompareMode() == SamplerCompareMode::CompareToTexture ? VK_TRUE : VK_FALSE;
         samplerInfo.compareOp = ToVkCompareOp(ResolveCompareFunc(sampler, texture));
-        samplerInfo.maxLod = ResolveEffectiveMaxLod(sampler);
+        // Must match BuildSamplerKey's resolution exactly.
+        samplerInfo.maxLod = ResolveSingleLevelMaxLod(sampler, singleLevelView);
         samplerInfo.minLod = ResolveEffectiveMinLod(sampler, samplerInfo.maxLod);
         samplerInfo.borderColor = ResolveVkBorderColor(sampler, texture);
         samplerInfo.unnormalizedCoordinates = VK_FALSE;

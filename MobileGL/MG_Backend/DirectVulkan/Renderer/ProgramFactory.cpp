@@ -923,6 +923,206 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             ProgramFactory::CompileOptionFlags m_transformFlags;
         };
 
+        // Adreno 650 (driver 512.502) faults the GPU on an implicit-LOD sample of a full-screen
+        // colour render target: the texture unit's derivative path reads outside the image's
+        // allocation even though the sampler clamps LOD to 0 and the mapping is 1:1. MobileGL's
+        // own default-framebuffer blit shader works around it with textureLod, but an
+        // application's shader (Minecraft's blit.fsh is `texture(InSampler, texCoord)`) cannot be
+        // edited - so rewrite the sample at the SPIR-V level instead.
+        //
+        // The rewrite is only requested for draws whose every sampler binding is clamped to one
+        // mip level, where explicit LOD 0 is exactly what the implicit form must already produce:
+        // lambda' = clamp(lambda + bias, minLod, maxLod) with minLod = maxLod = 0. Bias and MinLod
+        // operands are therefore dropped rather than translated.
+        class ForceExplicitLod0SamplePass final : public spvtools::opt::Pass {
+        public:
+            const char* name() const override { return "force-explicit-lod0-sample"; }
+
+            Status Process() override {
+                Bool isFragment = false;
+                for (auto& entryPoint : get_module()->entry_points()) {
+                    if (entryPoint.opcode() != spv::Op::OpEntryPoint) continue;
+                    if (static_cast<spv::ExecutionModel>(entryPoint.GetSingleWordInOperand(0)) ==
+                        spv::ExecutionModel::Fragment) {
+                        isFragment = true;
+                        break;
+                    }
+                }
+                if (!isFragment) return Status::SuccessWithoutChange;
+
+                // Plan first, mutate second. Materializing the LOD constant is itself a module
+                // change, so it must not happen unless at least one rewrite is going to follow -
+                // otherwise the pass would grow the binary while reporting SuccessWithoutChange.
+                Vector<RewritePlan> plans;
+                for (auto& function : *get_module()) {
+                    for (auto& block : function) {
+                        for (auto& inst : block) {
+                            RewritePlan plan{};
+                            if (PlanRewrite(&inst, plan)) plans.push_back(Move(plan));
+                        }
+                    }
+                }
+                if (plans.empty()) return Status::SuccessWithoutChange;
+
+                const Uint32 zeroId = GetFloatZeroId();
+                if (zeroId == 0) return Status::SuccessWithoutChange;
+
+                for (auto& plan : plans) {
+                    plan.operands.push_back({SPV_OPERAND_TYPE_ID, {zeroId}});
+                    for (auto& operand : plan.trailingOperands) {
+                        plan.operands.push_back(operand);
+                    }
+                    plan.instruction->SetOpcode(plan.opcode);
+                    plan.instruction->SetInOperands(Move(plan.operands));
+                }
+                // Opcodes and operand lists changed underneath every cached analysis.
+                context()->InvalidateAnalysesExceptFor(spvtools::opt::IRContext::kAnalysisNone);
+                return Status::SuccessWithChange;
+            }
+
+        private:
+            struct RewritePlan {
+                spvtools::opt::Instruction* instruction = nullptr;
+                spv::Op opcode = spv::Op::OpNop;
+                // Everything up to and including the Image Operands mask; the Lod id and the
+                // trailing operand values are appended once the constant exists.
+                Vector<spvtools::opt::Operand> operands;
+                Vector<spvtools::opt::Operand> trailingOperands;
+            };
+
+            // Image Operands bits that may accompany an implicit-LOD sample, in the canonical
+            // ascending order SPIR-V requires the operand values to appear in.
+            static constexpr Uint32 kBias = 0x1;
+            static constexpr Uint32 kLod = 0x2;
+            static constexpr Uint32 kGrad = 0x4;
+            static constexpr Uint32 kConstOffset = 0x8;
+            static constexpr Uint32 kOffset = 0x10;
+            static constexpr Uint32 kConstOffsets = 0x20;
+            static constexpr Uint32 kSample = 0x40;
+            static constexpr Uint32 kMinLod = 0x80;
+            static constexpr Uint32 kKnownMask = 0xFF;
+
+            Uint32 GetFloatZeroId() {
+                // Reuse a 32-bit float type already in the module; a shader that samples always has
+                // one, and looking it up avoids depending on type-creation API details.
+                Uint32 floatTypeId = 0;
+                for (auto& inst : get_module()->types_values()) {
+                    if (inst.opcode() == spv::Op::OpTypeFloat && inst.NumInOperands() >= 1 &&
+                        inst.GetSingleWordInOperand(0) == 32) {
+                        floatTypeId = inst.result_id();
+                        break;
+                    }
+                }
+                if (floatTypeId == 0) return 0;
+
+                const auto* floatType = context()->get_type_mgr()->GetType(floatTypeId);
+                if (floatType == nullptr) return 0;
+                const auto zeroBits = std::bit_cast<Uint32>(0.0f);
+                const auto* zeroConst = context()->get_constant_mgr()->GetConstant(floatType, {zeroBits});
+                if (zeroConst == nullptr) return 0;
+                auto* zeroInst = context()->get_constant_mgr()->GetDefiningInstruction(zeroConst);
+                return zeroInst != nullptr ? zeroInst->result_id() : 0;
+            }
+
+            static Bool MapOpcode(spv::Op op, spv::Op& outOpcode, Uint32& outFixedOperandCount) {
+                switch (op) {
+                case spv::Op::OpImageSampleImplicitLod:
+                    outOpcode = spv::Op::OpImageSampleExplicitLod;
+                    outFixedOperandCount = 2; // sampled image, coordinate
+                    return true;
+                case spv::Op::OpImageSampleProjImplicitLod:
+                    outOpcode = spv::Op::OpImageSampleProjExplicitLod;
+                    outFixedOperandCount = 2;
+                    return true;
+                case spv::Op::OpImageSampleDrefImplicitLod:
+                    outOpcode = spv::Op::OpImageSampleDrefExplicitLod;
+                    outFixedOperandCount = 3; // sampled image, coordinate, Dref
+                    return true;
+                case spv::Op::OpImageSampleProjDrefImplicitLod:
+                    outOpcode = spv::Op::OpImageSampleProjDrefExplicitLod;
+                    outFixedOperandCount = 3;
+                    return true;
+                default:
+                    return false;
+                }
+            }
+
+            static Bool PlanRewrite(spvtools::opt::Instruction* inst, RewritePlan& outPlan) {
+                spv::Op newOpcode = spv::Op::OpNop;
+                Uint32 fixedCount = 0;
+                if (!MapOpcode(inst->opcode(), newOpcode, fixedCount)) return false;
+                if (inst->NumInOperands() < fixedCount) return false;
+
+                Uint32 mask = 0;
+                Uint32 next = fixedCount;
+                if (inst->NumInOperands() > fixedCount) {
+                    mask = inst->GetSingleWordInOperand(fixedCount);
+                    next = fixedCount + 1;
+                }
+                // An operand this pass does not model would be silently reordered or dropped, and
+                // Grad cannot legally accompany an implicit-LOD sample: leave such an instruction be.
+                if ((mask & ~kKnownMask) != 0 || (mask & kGrad) != 0) return false;
+
+                Vector<spvtools::opt::Operand> fixedOperands;
+                fixedOperands.reserve(fixedCount + 1);
+                for (Uint32 i = 0; i < fixedCount; ++i) {
+                    fixedOperands.push_back(inst->GetInOperand(i));
+                }
+
+                // Collect the surviving operand values in the same ascending-bit order they were
+                // encoded in, so the rebuilt list stays canonical.
+                Uint32 keptMask = kLod;
+                Vector<spvtools::opt::Operand> keptOperands;
+                static constexpr Uint32 kOrderedBits[] = {kBias,   kLod,          kGrad,   kConstOffset,
+                                                          kOffset, kConstOffsets, kSample, kMinLod};
+                for (const Uint32 bit : kOrderedBits) {
+                    if ((mask & bit) == 0) continue;
+                    if (next >= inst->NumInOperands()) return false;
+                    const spvtools::opt::Operand value = inst->GetInOperand(next++);
+                    // Bias and MinLod only shift a lambda that is already clamped to 0, and any
+                    // original Lod is replaced by the constant the caller appends.
+                    if (bit == kBias || bit == kMinLod || bit == kLod) continue;
+                    keptMask |= bit;
+                    keptOperands.push_back(value);
+                }
+
+                fixedOperands.push_back({SPV_OPERAND_TYPE_IMAGE, {keptMask}});
+                outPlan.instruction = inst;
+                outPlan.opcode = newOpcode;
+                outPlan.operands = Move(fixedOperands);
+                outPlan.trailingOperands = Move(keptOperands);
+                return true;
+            }
+        };
+
+        spvtools::Optimizer::PassToken CreateForceExplicitLod0SamplePass() {
+            return spvtools::Optimizer::PassToken(MakeUnique<ForceExplicitLod0SamplePass>());
+        }
+
+        Bool TransformSpirvForExplicitLod0Sampling(const Vector<Uint>& input, Vector<Uint>& output) {
+            if (input.empty()) {
+                output.clear();
+                return true;
+            }
+            spvtools::Optimizer optimizer(SPV_ENV_VULKAN_1_3);
+            spvtools::OptimizerOptions options;
+            // Matches the position-fix pass: this build of spirv-tools asserts rather than
+            // reporting, so validation stays off in the shipping path.
+            options.set_run_validator(false);
+            optimizer.SetMessageConsumer([](spv_message_level_t, const char*, const spv_position_t&,
+                                            const char* message) {
+                MGLOG_E("Vulkan: explicit-LOD0 pass: %s", message != nullptr ? message : "");
+            });
+            optimizer.RegisterPass(CreateForceExplicitLod0SamplePass());
+
+            const Bool success = optimizer.Run(input.data(), input.size(), &output, options);
+            if (!success) {
+                MGLOG_E("Vulkan: explicit-LOD0 sampling pass failed; keeping the original module");
+                output = input;
+            }
+            return success;
+        }
+
         spvtools::Optimizer::PassToken CreateGlToVulkanPositionFixPass(
             ProgramFactory::CompileOptionFlags transformFlags) {
             return spvtools::Optimizer::PassToken(MakeUnique<GlToVulkanPositionFixPass>(transformFlags));
@@ -1976,6 +2176,14 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 TransformSpirvForVulkanPositionFix(spv, moduleSpirvs[i], flags);
             } else {
                 moduleSpirvs[i] = spv;
+            }
+
+            if ((flags & ProgramFactory::CompileOptionBit::ExplicitLod0Sampling) && shaders[i] &&
+                shaders[i]->GetShaderStage() == ShaderStage::Fragment) {
+                Vector<Uint> explicitLodSpirv;
+                if (TransformSpirvForExplicitLod0Sampling(moduleSpirvs[i], explicitLodSpirv)) {
+                    moduleSpirvs[i] = Move(explicitLodSpirv);
+                }
             }
 
             // GL apps depend on cross-program position invariance for multi-pass equality

@@ -334,16 +334,32 @@ namespace MobileGL::MG_State::GLState {
         // draw. The memo is keyed by (backendStateVersion, flags); ResetLinkArtifacts and
         // the binding setters below invalidate it by bumping m_backendStateVersion.
         Bool GetBackendHashMemo(Uint flags, Uint64& outHash) const {
-            if (m_backendHashMemoVersion != m_backendStateVersion || m_backendHashMemoFlags != flags) {
-                return false;
+            if (m_backendHashMemoVersion != m_backendStateVersion) return false;
+            for (const auto& slot : m_backendHashMemoSlots) {
+                if (slot.valid && slot.flags == flags) {
+                    outHash = slot.hash;
+                    return true;
+                }
             }
-            outHash = m_backendHashMemo;
-            return true;
+            return false;
         }
         void SetBackendHashMemo(Uint flags, Uint64 hash) const {
-            m_backendHashMemo = hash;
-            m_backendHashMemoVersion = m_backendStateVersion;
-            m_backendHashMemoFlags = flags;
+            if (m_backendHashMemoVersion != m_backendStateVersion) {
+                for (auto& slot : m_backendHashMemoSlots) slot.valid = false;
+                m_backendHashMemoVersion = m_backendStateVersion;
+                m_backendHashMemoNextSlot = 0;
+            }
+            for (auto& slot : m_backendHashMemoSlots) {
+                if (slot.valid && slot.flags == flags) {
+                    slot.hash = hash;
+                    return;
+                }
+            }
+            auto& slot = m_backendHashMemoSlots[m_backendHashMemoNextSlot];
+            slot.flags = flags;
+            slot.hash = hash;
+            slot.valid = true;
+            m_backendHashMemoNextSlot = (m_backendHashMemoNextSlot + 1) % kBackendHashMemoSlotCount;
         }
 
         void SetUniformSamplerOrImageUnitIndex(Uint location, Int unit) {
@@ -527,10 +543,19 @@ namespace MobileGL::MG_State::GLState {
         Uint32 m_backendStateVersion = 0;
 
         // Backend-owned content-hash memo (see GetBackendHashMemo): valid only while
-        // m_backendStateVersion and the compile flags match the recorded values.
-        mutable Uint64 m_backendHashMemo = 0;
+        // m_backendStateVersion matches. Several slots, not one: a backend may resolve the same
+        // program under more than one compile-flag set within a frame (surface rotation, and the
+        // explicit-LOD sampling variant), and a single slot would then miss on every lookup and
+        // re-hash the program's whole SPIR-V once per draw.
+        static constexpr SizeT kBackendHashMemoSlotCount = 4;
+        struct BackendHashMemoSlot {
+            Uint64 hash = 0;
+            Uint flags = 0;
+            Bool valid = false;
+        };
+        mutable Array<BackendHashMemoSlot, kBackendHashMemoSlotCount> m_backendHashMemoSlots{};
+        mutable SizeT m_backendHashMemoNextSlot = 0;
         mutable Uint32 m_backendHashMemoVersion = ~0u;
-        mutable Uint m_backendHashMemoFlags = 0;
         Uint32 m_uboContentVersion = 0;
         Uint32 m_linkVersion = 0;
     };

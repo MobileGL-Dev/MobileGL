@@ -4267,7 +4267,16 @@ void main() {
         const auto& vao = *MG_State::pGLContext->GetBoundVertexArray();
         const auto& program = *MG_State::pGLContext->GetCurrentProgram();
         ProgramFactory::CompileOptionFlags transformFlags = GetShaderTransformFlags(m_swapchainObject.GetPreTransform());
-        const auto& programObj = m_programFactory->GetOrCreateProgram(program, transformFlags);
+        const auto* programObjPtr = &m_programFactory->GetOrCreateProgram(program, transformFlags);
+        // Sampling a colour render target through the driver's implicit-LOD path faults the GPU on
+        // Adreno 650 (see ForceExplicitLod0SamplePass); ask for the explicit-LOD variant when doing
+        // so cannot change a texel, i.e. when every sampler this program reads is pinned to a
+        // single mip level.
+        if (UniformManager::ProgramSamplesOnlySingleLevelTextures(program, *programObjPtr)) {
+            transformFlags |= ProgramFactory::CompileOptionBit::ExplicitLod0Sampling;
+            programObjPtr = &m_programFactory->GetOrCreateProgram(program, transformFlags);
+        }
+        const auto& programObj = *programObjPtr;
 
         // Begin command recording if not yet
         if (!frame.isCommandRecording) {

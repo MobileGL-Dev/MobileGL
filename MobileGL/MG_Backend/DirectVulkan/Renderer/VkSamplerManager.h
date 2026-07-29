@@ -33,9 +33,12 @@ public:
     Bool Initialize(const InitInfo& initInfo);
     void Shutdown();
 
+    // viewLevelCount is the mip-level count of the image view this sampler will be paired
+    // with; 0 means "unknown, do not narrow". See GetOrCreateSampler for why it matters.
     VkSampler GetOrCreateSampler(const MG_State::GLState::SamplerObject& sampler,
                                  const MG_State::GLState::ITextureObject& texture,
-                                 Bool forceNearestFiltering = false);
+                                 Bool forceNearestFiltering = false,
+                                 Uint32 viewLevelCount = 0);
     // Frame boundary hook: ages the sampler cache and destroys samplers not used
     // for many frames. The key hashes continuous float state (lodBias, LOD clamps,
     // anisotropy), so an app animating those would otherwise mint an unbounded
@@ -61,7 +64,7 @@ private:
 
     Uint64 BuildSamplerKey(const MG_State::GLState::SamplerObject& sampler,
                            const MG_State::GLState::ITextureObject& texture,
-                           Bool forceNearestFiltering) const;
+                           Bool forceNearestFiltering, Bool singleLevelView) const;
     static VkFilter ToVkFilter(SamplerFilterMode mode);
     static VkSamplerMipmapMode ToVkMipmapMode(SamplerMipmapMode mode);
     static VkSamplerAddressMode ToVkAddressMode(SamplerWrapMode mode);
