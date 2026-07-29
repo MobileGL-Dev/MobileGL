@@ -274,6 +274,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         Uint64 GetTimerQueryTimestampNs(const VkTimerQueryManager::TimestampRecord& record) const;
 
         void RequestSwapchainResize(Uint32 width, Uint32 height);
+        // Re-query the surface and report whether the live swapchain no longer matches it
+        // (size or orientation). This - not a VK_SUBOPTIMAL_KHR result - is what decides a
+        // rebuild, so a surface the driver merely considers suboptimal cannot thrash.
+        Bool SwapchainIsOutOfDate();
         // Returns false when the surface is zero-area (minimized/hidden window):
         // no new swapchain is installed and presentation must stay suspended.
         Bool RecreateSwapchain();

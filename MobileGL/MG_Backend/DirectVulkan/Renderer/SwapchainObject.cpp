@@ -247,6 +247,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
         m_surfaceFormat = {createInfo.imageFormat, createInfo.imageColorSpace};
         m_extent = createInfo.imageExtent;
+        // The surface-space extent this swapchain was built from, i.e. before the
+        // quarter-turn swap above. Out-of-date checks must compare in THIS space: comparing a
+        // freshly queried currentExtent against the swapped m_extent flips axes every rotation
+        // and makes the comparison alternate forever.
+        m_surfaceExtent = defaultFramebufferExtent;
         m_preTransform = createInfo.preTransform;
 
         VK_VERIFY(vkCreateSwapchainKHR(device, &createInfo, nullptr, &m_swapchain));

@@ -35,6 +35,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         VkSwapchainKHR GetHandle() const { return m_swapchain; }
         const VkSurfaceFormatKHR& GetSurfaceFormat() const { return m_surfaceFormat; }
         VkExtent2D GetExtent() const { return m_extent; }
+        // Surface-space extent (before the pre-rotation quarter-turn swap) this swapchain was
+        // created from - the value to compare a freshly queried currentExtent against.
+        VkExtent2D GetSurfaceExtent() const { return m_surfaceExtent; }
         VkSurfaceTransformFlagBitsKHR GetPreTransform() const { return m_preTransform; }
         const Vector<VkImage>& GetImages() const { return m_images; }
         const Vector<VkImageView>& GetImageViews() const { return m_imageViews; }
@@ -63,6 +66,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         VkSwapchainKHR m_swapchain = VK_NULL_HANDLE;
         VkSurfaceFormatKHR m_surfaceFormat{};
         VkExtent2D m_extent{};
+        VkExtent2D m_surfaceExtent{};
         VkSurfaceTransformFlagBitsKHR m_preTransform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;
         Vector<VkImage> m_images;
         Vector<VkImageView> m_imageViews;

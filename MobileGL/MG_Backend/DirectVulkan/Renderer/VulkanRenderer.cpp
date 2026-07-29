@@ -2583,12 +2583,10 @@ void main() {
                     m_frameContext.WaitAndAcquireNextImage(m_device, m_swapchainObject.GetHandle(), m_imageIndexAcquired);
             } else if (acquireResult == VK_SUBOPTIMAL_KHR) {
                 // The image is usable, and its acquire signal is already armed on
-                // imageAvailableSemaphore. Re-acquiring here would arm a second
-                // signal on a binary semaphore whose first one nobody has waited on
-                // yet; keep the image and let Present rebuild after the frame that
-                // consumes the signal.
-                MGLOG_D("Initialize, vkAcquireNextImageKHR got VK_SUBOPTIMAL_KHR; deferring swapchain rebuild");
-                m_swapchainResizeRequested = true;
+                // imageAvailableSemaphore. Re-acquiring here would arm a second signal on a
+                // binary semaphore whose first one nobody has waited on yet; keep the image.
+                // Only a real surface change schedules a rebuild.
+                m_swapchainResizeRequested = m_swapchainResizeRequested || SwapchainIsOutOfDate();
                 acquireResult = VK_SUCCESS;
             }
             VK_VERIFY(acquireResult, "Initialize, WaitAndAcquireNextImage");
@@ -7566,9 +7564,9 @@ void main() {
             const VkResult acquireResult =
                 m_frameContext.WaitAndAcquireNextImage(m_device, m_swapchainObject.GetHandle(), m_imageIndexAcquired);
             if (acquireResult == VK_SUBOPTIMAL_KHR) {
-                // Usable image with its acquire signal already armed; rebuild only
-                // once a submit has consumed it (see step 4 at the end of Present).
-                m_swapchainResizeRequested = true;
+                // Usable image with its acquire signal already armed; a rebuild is scheduled
+                // only if the surface genuinely no longer matches (see step 4 of Present).
+                m_swapchainResizeRequested = m_swapchainResizeRequested || SwapchainIsOutOfDate();
             } else {
                 VK_VERIFY(acquireResult, "Present, deferred first WaitAndAcquireNextImage");
             }
@@ -7628,7 +7626,15 @@ void main() {
         // 2) Present current frame.
         auto presentPacket = m_frameContext.GetPresentInfo(m_swapchainObject.GetHandle(), m_imageIndexAcquired);
         auto result = vkQueuePresentKHR(m_presentQueue, &presentPacket.presentInfo);
-        if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR) {
+        if (result == VK_SUBOPTIMAL_KHR) {
+            // Suboptimal is not a reason to rebuild on its own: a driver may report it for a
+            // surface whose size and orientation still match what we built from (Android does
+            // this routinely), and rebuilding on it alone destroys every pipeline and
+            // reallocates the default framebuffer once per frame - flicker, then garbage.
+            // Defer to the surface-capabilities comparison below.
+            result = VK_SUCCESS;
+        }
+        if (result == VK_ERROR_OUT_OF_DATE_KHR) {
             MGLOG_D("Present, vkQueuePresentKHR got %d, recreating swapchain", result);
             if (!RecreateSwapchain()) {
                 // Window went zero-area (minimize) with the swapchain out of date:
@@ -7642,6 +7648,13 @@ void main() {
             result = VK_SUCCESS;
         }
         VK_VERIFY(result, "Present, vkQueuePresentKHR");
+        // The authoritative check, done here - after the frame is presented, before the next
+        // acquire. This is what makes a launcher-side resolution change take effect: shrinking
+        // the window's buffer (SurfaceHolder.setFixedSize) moves currentExtent, the swapchain
+        // follows, and the compositor scales the smaller image up to the view for free.
+        if (!m_swapchainResizeRequested && SwapchainIsOutOfDate()) {
+            m_swapchainResizeRequested = true;
+        }
         if (m_swapchainResizeRequested) {
             MGLOG_D("Present, processing requested swapchain resize");
             if (!RecreateSwapchain()) {
@@ -7659,13 +7672,12 @@ void main() {
         // 4) Wait/reset/acquire for next frame.
         result = m_frameContext.WaitAndAcquireNextImage(m_device, m_swapchainObject.GetHandle(), m_imageIndexAcquired);
         if (result == VK_SUBOPTIMAL_KHR) {
-            // An image was acquired and its signal is armed on this slot's
-            // imageAvailableSemaphore. Rebuilding now would mean re-acquiring on
-            // that same binary semaphore, arming a second signal while the first is
-            // still unwaited. Keep the image: the rebuild runs at the top of the
-            // next Present's step 4 above, once this frame's submit has consumed it.
-            MGLOG_D("Present, vkAcquireNextImageKHR got VK_SUBOPTIMAL_KHR; deferring swapchain rebuild");
-            m_swapchainResizeRequested = true;
+            // An image WAS acquired and its signal is armed on this slot's
+            // imageAvailableSemaphore, so the frame proceeds normally. Whether a rebuild is
+            // actually needed is decided by the surface-capabilities comparison at the next
+            // Present - suboptimal alone must not schedule one, or a driver that reports it
+            // every frame would rebuild every frame.
+            m_swapchainResizeRequested = m_swapchainResizeRequested || SwapchainIsOutOfDate();
             result = VK_SUCCESS;
         } else if (result == VK_ERROR_OUT_OF_DATE_KHR) {
             // Nothing acquired, nothing signaled: safe to rebuild and re-acquire.
@@ -8598,6 +8610,38 @@ void main() {
 
     const PhysicalDevice& VulkanRenderer::GetPhysicalDevice() const {
         return m_physicalDevice;
+    }
+
+    Bool VulkanRenderer::SwapchainIsOutOfDate() {
+        if (m_surface == VK_NULL_HANDLE || m_swapchainObject.GetHandle() == VK_NULL_HANDLE) {
+            return false;
+        }
+        VkSurfaceCapabilitiesKHR surfaceCaps{};
+        if (vkGetPhysicalDeviceSurfaceCapabilitiesKHR(m_physicalDevice.handle, m_surface, &surfaceCaps) !=
+            VK_SUCCESS) {
+            return false;
+        }
+        // A driver-defined currentExtent (UINT32_MAX) means the surface takes its size from the
+        // swapchain, so there is nothing to compare against - the app's requested size wins and
+        // only an explicit RequestSwapchainResize can change it.
+        if (surfaceCaps.currentExtent.width == UINT32_MAX || surfaceCaps.currentExtent.height == UINT32_MAX) {
+            return false;
+        }
+        // Compare in SURFACE space against the extent the live swapchain was created from. Using
+        // the swapchain's own (quarter-turn swapped) extent here would report a difference on
+        // every rotated frame and rebuild forever.
+        const VkExtent2D builtFrom = m_swapchainObject.GetSurfaceExtent();
+        const Bool extentChanged = surfaceCaps.currentExtent.width != builtFrom.width ||
+                                   surfaceCaps.currentExtent.height != builtFrom.height;
+        const Bool transformChanged = surfaceCaps.currentTransform != m_swapchainObject.GetPreTransform();
+        if (!extentChanged && !transformChanged) {
+            return false;
+        }
+        MGLOG_I("Swapchain out of date: surface %ux%u transform %u -> %ux%u transform %u",
+                builtFrom.width, builtFrom.height, static_cast<Uint32>(m_swapchainObject.GetPreTransform()),
+                surfaceCaps.currentExtent.width, surfaceCaps.currentExtent.height,
+                static_cast<Uint32>(surfaceCaps.currentTransform));
+        return true;
     }
 
     void VulkanRenderer::RequestSwapchainResize(Uint32 width, Uint32 height) {
