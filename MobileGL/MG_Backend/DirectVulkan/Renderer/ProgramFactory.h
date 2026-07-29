@@ -47,6 +47,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             // level, which makes the two forms produce identical texels (the implicit lambda is
             // clamped into [minLod, maxLod] = [0, 0] regardless of derivatives or bias).
             ExplicitLod0Sampling = 1 << 5,
+            // Fragment arithmetic may run at relaxed (fp16) precision. Only requested for draws
+            // where every sampled texture and every colour attachment is an 8-bit-or-less
+            // normalized format, so nothing the shader reads or writes carries more precision
+            // than fp16 already represents exactly.
+            RelaxedFragmentPrecision = 1 << 6,
         };
         using CompileOptionFlags = Flags<CompileOptionBit>;
         using HashType = Uint64;

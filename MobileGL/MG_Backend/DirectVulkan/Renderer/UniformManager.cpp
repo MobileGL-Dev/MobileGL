@@ -16,6 +16,7 @@
 #include "MG_Util/Converters/GLToMG/TextureEnumConverter.h"
 #include "MG_Util/Converters/MGToStr/FramebufferEnumConverter.h"
 #include "MG_Util/Converters/MGToVk/TextureEnumConverter.h"
+#include <vulkan/utility/vk_format_utils.h>
 #include "MG_Util/Metrics/TextureMetrics.h"
 #include <Config.h>
 #include <cstdio>
@@ -444,6 +445,64 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             .imageLayout = resource->layout,
         };
         return outImageInfo.sampler != VK_NULL_HANDLE;
+    }
+
+    namespace {
+        // fp16 carries an 11-bit mantissa, so an 8-bit normalized channel round-trips exactly.
+        // Anything wider - 16-bit normalized, half float, full float, and every packed HDR
+        // encoding - holds precision or range that relaxing the arithmetic would throw away.
+        Bool IsLowPrecisionNormalizedFormat(VkFormat format) {
+            if (format == VK_FORMAT_UNDEFINED) return false;
+            if (!vkuFormatIsUNORM(format) && !vkuFormatIsSNORM(format) && !vkuFormatIsSRGB(format)) {
+                return false;
+            }
+            const struct VKU_FORMAT_INFO info = vkuGetFormatInfo(format);
+            for (Uint32 i = 0; i < info.component_count; ++i) {
+                if (info.components[i].size > 8) return false;
+            }
+            return info.component_count > 0;
+        }
+    } // namespace
+
+    Bool UniformManager::DrawTargetIsLowPrecision(const MG_State::GLState::FramebufferObject* drawFramebuffer) {
+        // Default framebuffer: the swapchain is an 8-bit normalized surface.
+        if (drawFramebuffer == nullptr) return true;
+
+        Bool sawColour = false;
+        for (Int i = static_cast<Int>(FramebufferAttachmentType::Color0);
+             i < static_cast<Int>(FramebufferAttachmentType::FramebufferAttachmentTypeCount);
+             ++i) {
+            const auto& attachment =
+                drawFramebuffer->GetAttachment(static_cast<FramebufferAttachmentType>(i));
+            VkFormat format = VK_FORMAT_UNDEFINED;
+            if (const auto& texture = attachment.GetTexture()) {
+                format = MG_Util::ConvertTextureInternalFormatToVkEnum(texture->GetFormat());
+            } else if (const auto& renderbuffer = attachment.GetRenderbuffer()) {
+                format = MG_Util::ConvertTextureInternalFormatToVkEnum(
+                    renderbuffer->GetInternalFormat());
+            } else {
+                continue;
+            }
+            if (!IsLowPrecisionNormalizedFormat(format)) return false;
+            sawColour = true;
+        }
+        return sawColour;
+    }
+
+    Bool UniformManager::ProgramSamplesOnlyLowPrecisionTextures(
+        const MG_State::GLState::ProgramObject& program, const ProgramFactory::VkProgramObject& programObj) {
+        for (Uint32 binding = 0; binding < programObj.bindingKinds.size(); ++binding) {
+            if (programObj.bindingKinds[binding] != ProgramFactory::DescriptorBindingKind::CombinedImageSampler) {
+                continue;
+            }
+            const auto* texture = ResolveSamplerTextureRaw(program, programObj, binding);
+            // An unresolvable binding is unknown territory, not licence to relax.
+            if (texture == nullptr) return false;
+            const VkFormat format =
+                MG_Util::ConvertTextureInternalFormatToVkEnum(texture->GetFormat());
+            if (!IsLowPrecisionNormalizedFormat(format)) return false;
+        }
+        return true;
     }
 
     Bool UniformManager::ProgramSamplesOnlySingleLevelTextures(

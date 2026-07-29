@@ -4315,6 +4315,15 @@ void main() {
             transformFlags |= ProgramFactory::CompileOptionBit::ExplicitLod0Sampling;
             programObjPtr = &m_programFactory->GetOrCreateProgram(program, transformFlags);
         }
+        // fp16 fragment arithmetic is only sound when nothing this draw reads or writes carries
+        // more than 8 normalized bits per channel. A shaderpack's HDR gbuffer, or a data texture
+        // holding positions, must keep full precision - and SPIR-V cannot tell, since sampler2D
+        // yields vec4 whatever the bound format is, so the decision has to be made here.
+        if (UniformManager::ProgramSamplesOnlyLowPrecisionTextures(program, *programObjPtr) &&
+            UniformManager::DrawTargetIsLowPrecision(drawFbo.get())) {
+            transformFlags |= ProgramFactory::CompileOptionBit::RelaxedFragmentPrecision;
+            programObjPtr = &m_programFactory->GetOrCreateProgram(program, transformFlags);
+        }
         const auto& programObj = *programObjPtr;
 
         // Begin command recording if not yet

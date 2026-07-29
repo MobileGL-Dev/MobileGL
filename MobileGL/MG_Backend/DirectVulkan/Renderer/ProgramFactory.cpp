@@ -12,7 +12,10 @@
 #include "MG_Util/ShaderTranspiler/ShaderCompiler.h"
 #include "MG_Util/ShaderTranspiler/SpvcSession.h"
 #include "MG_Util/ShaderTranspiler/Types.h"
+#include <cmath>
+#include <cstdio>
 #include <cstring>
+#include <unordered_set>
 #include <spirv-tools/libspirv.h>
 #include <spirv-tools/optimizer.hpp>
 #include <source/opt/build_module.h>
@@ -1099,6 +1102,374 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             return spvtools::Optimizer::PassToken(MakeUnique<ForceExplicitLod0SamplePass>());
         }
 
+        // TEMP-PERFDIAG: measure what fragment-stage fp32 costs on this GPU. Desktop GLSL carries
+        // no precision qualifiers, so everything reaches the driver as full fp32 while Adreno runs
+        // fp16 at twice the rate. Decorating every float-typed result in a fragment entry point
+        // with RelaxedPrecision is the blunt "all mediump" upper bound - it changes results, so it
+        // is a probe, not a shipping transform. Toggled by /sdcard/MG/exp_relaxed_precision.
+        class RelaxedPrecisionProbePass final : public spvtools::opt::Pass {
+        public:
+            const char* name() const override { return "relaxed-precision-probe"; }
+
+            Status Process() override {
+                Bool isFragment = false;
+                for (auto& entryPoint : get_module()->entry_points()) {
+                    if (entryPoint.opcode() != spv::Op::OpEntryPoint) continue;
+                    if (static_cast<spv::ExecutionModel>(entryPoint.GetSingleWordInOperand(0)) ==
+                        spv::ExecutionModel::Fragment) {
+                        isFragment = true;
+                        break;
+                    }
+                }
+                if (!isFragment) return Status::SuccessWithoutChange;
+
+                // Every 32-bit-float scalar/vector/matrix type in the module. Anything wider (f64)
+                // or narrower is left alone: RelaxedPrecision only has meaning for 32-bit floats.
+                std::unordered_set<Uint32> relaxableTypes;
+                for (auto& type : get_module()->types_values()) {
+                    const Uint32 typeId = type.result_id();
+                    if (typeId == 0) continue;
+                    switch (type.opcode()) {
+                    case spv::Op::OpTypeFloat:
+                        if (type.GetSingleWordInOperand(0) == 32) relaxableTypes.insert(typeId);
+                        break;
+                    case spv::Op::OpTypeVector:
+                    case spv::Op::OpTypeMatrix:
+                        if (relaxableTypes.count(type.GetSingleWordInOperand(0)) != 0) {
+                            relaxableTypes.insert(typeId);
+                        }
+                        break;
+                    default:
+                        break;
+                    }
+                }
+                if (relaxableTypes.empty()) return Status::SuccessWithoutChange;
+
+                Vector<Uint32> targets;
+                for (auto& function : *get_module()) {
+                    for (auto& block : function) {
+                        for (auto& inst : block) {
+                            const Uint32 resultId = inst.result_id();
+                            if (resultId == 0) continue;
+                            if (relaxableTypes.count(inst.type_id()) == 0) continue;
+                            targets.push_back(resultId);
+                        }
+                    }
+                }
+                if (targets.empty()) return Status::SuccessWithoutChange;
+
+                for (const Uint32 id : targets) {
+                    context()->get_decoration_mgr()->AddDecoration(
+                        id, static_cast<Uint32>(spv::Decoration::RelaxedPrecision));
+                }
+                context()->InvalidateAnalysesExceptFor(spvtools::opt::IRContext::kAnalysisNone);
+                return Status::SuccessWithChange;
+            }
+        };
+
+        // Relax fragment-stage arithmetic that provably came out of a texture read. Desktop GLSL
+        // has no precision qualifiers, so every fragment value reaches the driver as fp32 while
+        // Adreno runs fp16 at twice the rate - and a texel is at most 8 bits per channel, which
+        // fp16's 11-bit mantissa carries exactly. Seeding at image reads and propagating only
+        // through operations whose every input is already relaxed keeps everything the shader
+        // computes from other sources (screen coordinates, depth, wide-range uniforms) at full
+        // precision, which is where fp16 would actually go wrong: fp16 cannot even represent a
+        // 3044-pixel gl_FragCoord.x exactly.
+        class RelaxTextureDerivedPrecisionPass final : public spvtools::opt::Pass {
+        public:
+            const char* name() const override { return "relax-texture-derived-precision"; }
+
+            Status Process() override {
+                if (!IsFragmentEntryPoint()) return Status::SuccessWithoutChange;
+                // A shader that drives depth or coverage itself is out of scope: those values must
+                // stay exact, and proving which computations feed them is not worth it here.
+                if (WritesDepthOrSampleMask()) return Status::SuccessWithoutChange;
+
+                CollectRelaxableFloatTypes();
+                if (m_relaxableTypes.empty()) return Status::SuccessWithoutChange;
+
+                // Whitelisting from texture reads captures nothing in practice: MC's fragment
+                // shaders multiply every texel by an interpolated colour and a UBO value, so one
+                // un-relaxed operand vetoes the whole expression (measured: no fps change).
+                // Taint the few genuinely precision-critical sources instead and relax the rest.
+                std::unordered_set<Uint32> tainted;
+                CollectPrecisionCriticalSeeds(tainted);
+                Bool grew = true;
+                while (grew) {
+                    grew = false;
+                    for (auto& function : *get_module()) {
+                        for (auto& block : function) {
+                            for (auto& inst : block) {
+                                const Uint32 resultId = inst.result_id();
+                                if (resultId == 0 || tainted.count(resultId) != 0) continue;
+                                if (!AnyOperandTainted(inst, tainted)) continue;
+                                tainted.insert(resultId);
+                                grew = true;
+                            }
+                        }
+                    }
+                }
+
+                std::unordered_set<Uint32> relaxed;
+                for (auto& function : *get_module()) {
+                    for (auto& block : function) {
+                        for (auto& inst : block) {
+                            const Uint32 resultId = inst.result_id();
+                            if (resultId == 0 || tainted.count(resultId) != 0) continue;
+                            if (m_relaxableTypes.count(inst.type_id()) == 0) continue;
+                            relaxed.insert(resultId);
+                        }
+                    }
+                }
+                if (relaxed.empty()) return Status::SuccessWithoutChange;
+
+                for (const Uint32 id : relaxed) {
+                    context()->get_decoration_mgr()->AddDecoration(
+                        id, static_cast<Uint32>(spv::Decoration::RelaxedPrecision));
+                }
+                context()->InvalidateAnalysesExceptFor(spvtools::opt::IRContext::kAnalysisNone);
+                return Status::SuccessWithChange;
+            }
+
+        private:
+            std::unordered_set<Uint32> m_relaxableTypes;
+
+            Bool IsFragmentEntryPoint() const {
+                for (auto& entryPoint : get_module()->entry_points()) {
+                    if (entryPoint.opcode() != spv::Op::OpEntryPoint) continue;
+                    if (static_cast<spv::ExecutionModel>(entryPoint.GetSingleWordInOperand(0)) ==
+                        spv::ExecutionModel::Fragment) {
+                        return true;
+                    }
+                }
+                return false;
+            }
+
+            Bool WritesDepthOrSampleMask() const {
+                for (auto& annotation : get_module()->annotations()) {
+                    if (annotation.opcode() != spv::Op::OpDecorate) continue;
+                    if (static_cast<spv::Decoration>(annotation.GetSingleWordInOperand(1)) !=
+                        spv::Decoration::BuiltIn) {
+                        continue;
+                    }
+                    const auto builtIn = static_cast<spv::BuiltIn>(annotation.GetSingleWordInOperand(2));
+                    if (builtIn == spv::BuiltIn::FragDepth || builtIn == spv::BuiltIn::SampleMask) {
+                        return true;
+                    }
+                }
+                return false;
+            }
+
+            void CollectRelaxableFloatTypes() {
+                m_relaxableTypes.clear();
+                for (auto& type : get_module()->types_values()) {
+                    const Uint32 typeId = type.result_id();
+                    if (typeId == 0) continue;
+                    switch (type.opcode()) {
+                    case spv::Op::OpTypeFloat:
+                        if (type.GetSingleWordInOperand(0) == 32) m_relaxableTypes.insert(typeId);
+                        break;
+                    case spv::Op::OpTypeVector:
+                        if (m_relaxableTypes.count(type.GetSingleWordInOperand(0)) != 0) {
+                            m_relaxableTypes.insert(typeId);
+                        }
+                        break;
+                    default:
+                        break;
+                    }
+                }
+            }
+
+            void CollectImageReadSeeds(std::unordered_set<Uint32>& relaxed) const {
+                for (auto& function : *get_module()) {
+                    for (auto& block : function) {
+                        for (auto& inst : block) {
+                            const Uint32 resultId = inst.result_id();
+                            if (resultId == 0 || m_relaxableTypes.count(inst.type_id()) == 0) continue;
+                            // Interpolated user varyings seed too, or propagation dies at the
+                            // first `texel * vertexColour`: the load of an Input can never be
+                            // relaxed by the rule below (its operand is a pointer), so a single
+                            // varying vetoes every downstream operation. This is what ESSL's
+                            // mediump varyings already mean. Built-ins are excluded - gl_FragCoord
+                            // carries pixel coordinates that fp16 cannot represent exactly.
+                            if (inst.opcode() == spv::Op::OpLoad && IsNonBuiltInFragmentInput(inst)) {
+                                relaxed.insert(resultId);
+                                continue;
+                            }
+                            switch (inst.opcode()) {
+                            case spv::Op::OpImageSampleImplicitLod:
+                            case spv::Op::OpImageSampleExplicitLod:
+                            case spv::Op::OpImageSampleProjImplicitLod:
+                            case spv::Op::OpImageSampleProjExplicitLod:
+                            case spv::Op::OpImageSampleDrefImplicitLod:
+                            case spv::Op::OpImageSampleDrefExplicitLod:
+                            case spv::Op::OpImageFetch:
+                            case spv::Op::OpImageRead:
+                            case spv::Op::OpImageGather:
+                                relaxed.insert(resultId);
+                                break;
+                            default:
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+
+            // OpLoad straight out of a fragment Input variable that carries no BuiltIn decoration.
+            // Only a direct load counts: a load through an access chain could be indexing a
+            // structure whose other members are not interpolated colour data.
+            Bool IsNonBuiltInFragmentInput(const spvtools::opt::Instruction& load) const {
+                const Uint32 pointerId = load.GetSingleWordInOperand(0);
+                const auto* pointer = context()->get_def_use_mgr()->GetDef(pointerId);
+                if (pointer == nullptr || pointer->opcode() != spv::Op::OpVariable) return false;
+                if (static_cast<spv::StorageClass>(pointer->GetSingleWordInOperand(0)) !=
+                    spv::StorageClass::Input) {
+                    return false;
+                }
+                Bool isBuiltIn = false;
+                context()->get_decoration_mgr()->ForEachDecoration(
+                    pointerId, static_cast<Uint32>(spv::Decoration::BuiltIn),
+                    [&isBuiltIn](const spvtools::opt::Instruction&) { isBuiltIn = true; });
+                return !isBuiltIn;
+            }
+
+            // A float constant small enough that fp16 represents it without surprise. Colour math
+            // constants (0, 1, 0.5, 255, gamma exponents) all live here; anything larger is
+            // treated as unknown so it stops propagation.
+            Bool IsBoundedFloatConstant(Uint32 id) const {
+                const auto* constant = context()->get_constant_mgr()->FindDeclaredConstant(id);
+                if (constant == nullptr) return false;
+                if (const auto* scalar = constant->AsFloatConstant()) {
+                    const float value = scalar->GetFloat();
+                    return std::isfinite(value) && std::fabs(value) <= 1024.0f;
+                }
+                if (const auto* composite = constant->AsVectorConstant()) {
+                    for (const auto* component : composite->GetComponents()) {
+                        const auto* scalar = component->AsFloatConstant();
+                        if (scalar == nullptr) return false;
+                        const float value = scalar->GetFloat();
+                        if (!std::isfinite(value) || std::fabs(value) > 1024.0f) return false;
+                    }
+                    return true;
+                }
+                return false;
+            }
+
+            // Precision-critical sources: a built-in fragment input. gl_FragCoord is the one that
+            // matters - fp16 cannot represent a 3044-pixel x coordinate exactly, and anything
+            // derived from it (screen-space effects, manual depth reconstruction) would visibly
+            // quantise. Everything else a fragment shader reads is colour-range data.
+            void CollectPrecisionCriticalSeeds(std::unordered_set<Uint32>& tainted) const {
+                for (auto& function : *get_module()) {
+                    for (auto& block : function) {
+                        for (auto& inst : block) {
+                            if (inst.opcode() != spv::Op::OpLoad || inst.result_id() == 0) continue;
+                            if (IsBuiltInInputLoad(inst)) tainted.insert(inst.result_id());
+                        }
+                    }
+                }
+            }
+
+            Bool IsBuiltInInputLoad(const spvtools::opt::Instruction& load) const {
+                const Uint32 pointerId = load.GetSingleWordInOperand(0);
+                const auto* pointer = context()->get_def_use_mgr()->GetDef(pointerId);
+                if (pointer == nullptr || pointer->opcode() != spv::Op::OpVariable) return false;
+                if (static_cast<spv::StorageClass>(pointer->GetSingleWordInOperand(0)) !=
+                    spv::StorageClass::Input) {
+                    return false;
+                }
+                Bool isBuiltIn = false;
+                context()->get_decoration_mgr()->ForEachDecoration(
+                    pointerId, static_cast<Uint32>(spv::Decoration::BuiltIn),
+                    [&isBuiltIn](const spvtools::opt::Instruction&) { isBuiltIn = true; });
+                return isBuiltIn;
+            }
+
+            Bool AnyOperandTainted(const spvtools::opt::Instruction& inst,
+                                   const std::unordered_set<Uint32>& tainted) const {
+                const Uint32 operandCount = inst.NumInOperands();
+                for (Uint32 i = 0; i < operandCount; ++i) {
+                    const auto& operand = inst.GetInOperand(i);
+                    if (!spvIsIdType(operand.type)) continue;
+                    if (IsNonNumericOperand(inst, i)) continue;
+                    if (tainted.count(operand.words[0]) != 0) return true;
+                }
+                return false;
+            }
+
+            Bool AllValueOperandsRelaxed(const spvtools::opt::Instruction& inst,
+                                         const std::unordered_set<Uint32>& relaxed) const {
+                switch (inst.opcode()) {
+                // Pointer-typed plumbing: relaxing the loaded value would say nothing about the
+                // memory it came from, and the pointer operand can never be in the set.
+                case spv::Op::OpLoad:
+                case spv::Op::OpStore:
+                case spv::Op::OpAccessChain:
+                case spv::Op::OpInBoundsAccessChain:
+                case spv::Op::OpFunctionCall:
+                    return false;
+                default:
+                    break;
+                }
+
+                Bool sawValueOperand = false;
+                Bool allRelaxed = true;
+                const Uint32 operandCount = inst.NumInOperands();
+                for (Uint32 i = 0; i < operandCount; ++i) {
+                    const auto& operand = inst.GetInOperand(i);
+                    if (!spvIsIdType(operand.type)) continue; // literals: selectors, swizzle indices
+                    const Uint32 id = operand.words[0];
+                    // OpPhi's block labels, OpSelect's condition and OpExtInst's instruction-set id
+                    // are ids that carry no numeric precision; skip them rather than let them veto.
+                    if (IsNonNumericOperand(inst, i)) continue;
+                    sawValueOperand = true;
+                    if (relaxed.count(id) != 0) continue;
+                    if (IsBoundedFloatConstant(id)) continue;
+                    allRelaxed = false;
+                    break;
+                }
+                return sawValueOperand && allRelaxed;
+            }
+
+            static Bool IsNonNumericOperand(const spvtools::opt::Instruction& inst, Uint32 index) {
+                switch (inst.opcode()) {
+                case spv::Op::OpPhi:
+                    return (index % 2) == 1; // parent block labels
+                case spv::Op::OpSelect:
+                    return index == 0; // condition
+                case spv::Op::OpExtInst:
+                    return index == 0; // extended instruction set
+                default:
+                    return false;
+                }
+            }
+        };
+
+        // TEMP-PERFDIAG: A/B switch between the scoped transform and the all-float upper bound.
+        Bool PerfDiagRelaxAllPrecision() {
+            static const Bool enabled = [] {
+                std::FILE* probe = std::fopen("/sdcard/MG/exp_relaxed_precision_all", "rb");
+                if (probe == nullptr) return false;
+                std::fclose(probe);
+                MGLOG_I("[PERFDIAG] fragment RelaxedPrecision: ALL floats (upper-bound probe)");
+                return true;
+            }();
+            return enabled;
+        }
+
+        // TEMP-PERFDIAG: lets a run turn the transform off entirely for an A/B baseline.
+        Bool PerfDiagRelaxedPrecisionEnabled() {
+            static const Bool disabled = [] {
+                std::FILE* probe = std::fopen("/sdcard/MG/exp_no_relaxed_precision", "rb");
+                if (probe == nullptr) return false;
+                std::fclose(probe);
+                MGLOG_I("[PERFDIAG] fragment RelaxedPrecision DISABLED");
+                return true;
+            }();
+            return !disabled;
+        }
+
         Bool TransformSpirvForExplicitLod0Sampling(const Vector<Uint>& input, Vector<Uint>& output) {
             if (input.empty()) {
                 output.clear();
@@ -1126,6 +1497,37 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         spvtools::Optimizer::PassToken CreateGlToVulkanPositionFixPass(
             ProgramFactory::CompileOptionFlags transformFlags) {
             return spvtools::Optimizer::PassToken(MakeUnique<GlToVulkanPositionFixPass>(transformFlags));
+        }
+
+        // TEMP-PERFDIAG
+        Bool TransformSpirvForRelaxedPrecisionProbe(const Vector<Uint>& input, Vector<Uint>& output) {
+            if (input.empty()) {
+                output.clear();
+                return true;
+            }
+            spvtools::Optimizer optimizer(SPV_ENV_VULKAN_1_3);
+            spvtools::OptimizerOptions options;
+            options.set_run_validator(false);
+            optimizer.SetMessageConsumer([](spv_message_level_t, const char*, const spv_position_t&,
+                                            const char* message) {
+                MGLOG_E("Vulkan: relaxed-precision probe: %s", message != nullptr ? message : "");
+            });
+            // SSA promotion first: glslang emits function-local variables with stores and loads,
+            // and a load can never be relaxed (its operand is a pointer), so without this the
+            // propagation below dies at the first temporary.
+            optimizer.RegisterPass(spvtools::CreateLocalMultiStoreElimPass());
+            if (PerfDiagRelaxAllPrecision()) {
+                optimizer.RegisterPass(spvtools::Optimizer::PassToken(MakeUnique<RelaxedPrecisionProbePass>()));
+            } else {
+                optimizer.RegisterPass(
+                    spvtools::Optimizer::PassToken(MakeUnique<RelaxTextureDerivedPrecisionPass>()));
+            }
+            const Bool success = optimizer.Run(input.data(), input.size(), &output, options);
+            if (!success) {
+                MGLOG_E("Vulkan: relaxed-precision probe failed; keeping the original module");
+                output = input;
+            }
+            return success;
         }
 
         Bool TransformSpirvForVulkanPositionFix(const Vector<Uint>& input, Vector<Uint>& output,
@@ -2183,6 +2585,15 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 Vector<Uint> explicitLodSpirv;
                 if (TransformSpirvForExplicitLod0Sampling(moduleSpirvs[i], explicitLodSpirv)) {
                     moduleSpirvs[i] = Move(explicitLodSpirv);
+                }
+            }
+
+            if ((flags & ProgramFactory::CompileOptionBit::RelaxedFragmentPrecision) &&
+                PerfDiagRelaxedPrecisionEnabled() && shaders[i] &&
+                shaders[i]->GetShaderStage() == ShaderStage::Fragment) {
+                Vector<Uint> relaxedSpirv;
+                if (TransformSpirvForRelaxedPrecisionProbe(moduleSpirvs[i], relaxedSpirv)) {
+                    moduleSpirvs[i] = Move(relaxedSpirv);
                 }
             }
 

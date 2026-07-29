@@ -76,6 +76,15 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // ExplicitLod0Sampling SPIR-V rewrite safe to request. Deliberately conservative: it reads
         // only GL state, so a texture that ends up single-level for another reason (one uploaded
         // level under a wide level range) merely misses the rewrite.
+        // True when every texture this program samples is an 8-bit-or-less normalized format, so
+        // relaxing the fragment stage to fp16 cannot lose a bit the texel ever carried. Says
+        // nothing about the render target - the caller must check that too.
+        static Bool ProgramSamplesOnlyLowPrecisionTextures(const MG_State::GLState::ProgramObject& program,
+                                                          const ProgramFactory::VkProgramObject& programObj);
+        // True when every colour attachment the draw writes is an 8-bit-or-less normalized
+        // format (nullptr = default framebuffer, which is). Blending happens at attachment
+        // precision, so a wider target must keep the fragment stage at full precision.
+        static Bool DrawTargetIsLowPrecision(const MG_State::GLState::FramebufferObject* drawFramebuffer);
         static Bool ProgramSamplesOnlySingleLevelTextures(const MG_State::GLState::ProgramObject& program,
                                                           const ProgramFactory::VkProgramObject& programObj);
 
