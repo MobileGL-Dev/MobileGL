@@ -121,6 +121,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                SharedPtr<MG_State::GLState::ITextureObject>& outTexture);
 
         Uint8 m_gcCounter = 0;
+    public:
+        // Lock-free probe for the consecutive-draw fast path: any pending clear
+        // forces the full SetupDraw path (which materializes/consumes it).
+        Bool HasAnyPendingClears() const { return m_pendingCount.load(std::memory_order_relaxed) != 0; }
+
+    private:
         mutable std::mutex m_mutex;
         // Lock-free mirror of m_pendingClears.size(), maintained under m_mutex
         // by every mutation. The per-draw probes (HasPendingClear/GetPending*)

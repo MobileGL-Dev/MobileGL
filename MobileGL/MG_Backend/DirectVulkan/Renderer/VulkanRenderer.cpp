@@ -4444,6 +4444,129 @@ void main() {
         return true;
     }
 
+
+    Bool VulkanRenderer::TrySetupDrawFastPath(FrameContext::FrameData& frame, GLenum mode,
+                                              Flags<DrawSetupAspect> aspects, const DrawCmdParam& drawParams,
+                                              const IndexBufferView* pIndexBufferView) {
+        const SetupDrawSnapshot& snap = m_setupDrawSnapshot;
+        if (!snap.valid || !frame.isCommandRecording) {
+            return false;
+        }
+        if (snap.aspects != aspects.GetRaw() || snap.mode != mode) {
+            return false;
+        }
+        if (m_clearManager->HasAnyPendingClears()) {
+            return false;
+        }
+        const auto* activeRenderPass = VkRenderPassManager::GetActiveRenderPass();
+        if (activeRenderPass == nullptr || activeRenderPass->hash != snap.renderPassHash ||
+            snap.imageIndex != m_imageIndexAcquired) {
+            return false;
+        }
+        const auto& program = *MG_State::pGLContext->GetCurrentProgram();
+        if (program.GetLifetimeId() != snap.programLifetimeId ||
+            program.GetBackendStateVersion() != snap.programVersion) {
+            return false;
+        }
+        const auto& vao = *MG_State::pGLContext->GetBoundVertexArray();
+        if (static_cast<const void*>(&vao) != snap.vao || vao.GetConfigVersion() != snap.vaoConfigVersion) {
+            return false;
+        }
+        const auto& drawFbo =
+            MG_State::pGLContext->GetFramebufferBindingSlot(FramebufferTarget::Draw).GetBoundObject();
+        if (static_cast<const void*>(drawFbo.get()) != snap.drawFbo ||
+            drawFbo->GetObjectVersion() != snap.fboVersion) {
+            return false;
+        }
+        if (MG_State::pGLContext->GetRenderStateParametersVersion() != snap.renderStateVersion ||
+            MG_State::pGLContext->GetTextureBindGeneration() != snap.bindGeneration) {
+            return false;
+        }
+        if (GetShaderTransformFlags(m_swapchainObject.GetPreTransform()).GetRaw() != snap.baseTransformFlags) {
+            return false;
+        }
+        if (m_textureManager->GetResourceEraseEpoch() != snap.textureEraseEpoch ||
+            m_textureManager->GetTextureImageEpoch() != snap.textureImageEpoch ||
+            m_renderPassManager->GetRenderbufferImageEpoch() != snap.renderbufferImageEpoch) {
+            return false;
+        }
+
+        // Same sampled set as the snapshotting draw (program/bind keys above);
+        // verify content and params are untouched and every layout is still
+        // sampleable, then stamp recording use exactly as the full path would.
+        // A feedback case (sampled texture written by the active pass) fails the
+        // layout check and falls back to the full path's end-pass handling.
+        const auto& sampledTextures = m_sampledTexturesScratch;
+        const auto& sampledResources = m_sampledResourcesScratch;
+        if (sampledResources.size() != sampledTextures.size()) {
+            return false;
+        }
+        Uint64 contentSum = 0;
+        Uint64 paramsSum = 0;
+        for (SizeT i = 0; i < sampledTextures.size(); ++i) {
+            const auto* sampledTexture = sampledTextures[i];
+            if (sampledTexture == nullptr) {
+                continue;
+            }
+            const auto* resource = sampledResources[i];
+            if (resource == nullptr || !IsValidSampledImageLayout(resource->layout)) {
+                return false;
+            }
+            contentSum += sampledTexture->GetContentVersion();
+            paramsSum += sampledTexture->GetTextureParamsVersion();
+        }
+        if (contentSum != snap.sampledContentSum || paramsSum != snap.sampledParamsSum) {
+            return false;
+        }
+        for (SizeT i = 0; i < sampledTextures.size(); ++i) {
+            if (sampledTextures[i] != nullptr && sampledResources[i] != nullptr) {
+                m_textureManager->StampResourceRecordingUse(*sampledResources[i]);
+            }
+        }
+
+        // Everything the full path would re-resolve is provably unchanged; run
+        // only the per-draw tail.
+        if (!g_dynamicStateShadow.graphicsPipelineValid ||
+            g_dynamicStateShadow.graphicsPipeline != snap.pipeline) {
+            vkCmdBindPipeline(frame.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, snap.pipeline);
+            g_dynamicStateShadow.graphicsPipelineValid = true;
+            g_dynamicStateShadow.graphicsPipeline = snap.pipeline;
+        }
+        const auto& programObj = m_programFactory->GetOrCreateProgram(
+            program, ProgramFactory::CompileOptionFlags(snap.resolvedTransformFlags));
+        if (!m_uniformManager->BindProgramUniformBuffers(frame.commandBuffer, program, programObj,
+                                                         m_frameContext.GetCurrentFrameIndex())) {
+            return false;
+        }
+        if (!UploadAndBindVertexBuffers(frame.commandBuffer, vao, programObj, drawParams, pIndexBufferView)) {
+            return false;
+        }
+        if (aspects & DrawSetupAspect::IndexBuffer) {
+            const Bool idxUploadOk = UploadAndBindIndexBuffer(frame, vao, pIndexBufferView);
+            MOBILEGL_ASSERT(idxUploadOk, "SetupDraw fast path: failed to upload index buffer");
+        }
+        ApplyGLViewportState(frame.commandBuffer, snap.renderPassExtent, m_swapchainObject.GetPreTransform(),
+                             snap.drawFboIsDefault);
+        ApplyBlendConstants(frame.commandBuffer);
+        ApplyPolygonOffsetState(frame.commandBuffer);
+        ApplyLineWidthState(frame.commandBuffer);
+        ApplyStencilState(frame.commandBuffer);
+        const Bool scissorEnabled = MG_State::pGLContext->IsCapabilityEnabled(CapabilityInput::ScissorTest);
+        VkRect2D scissor{};
+        if (scissorEnabled) {
+            const auto& scissorBox = MG_State::pGLContext->GetScissorBox();
+            scissor = snap.drawFboIsDefault
+                ? MakeDefaultFramebufferScissorRect(scissorBox, snap.renderPassExtent,
+                                                    m_swapchainObject.GetPreTransform())
+                : MakeClampedScissorRect(scissorBox, snap.renderPassExtent);
+        } else {
+            scissor.offset = {0, 0};
+            scissor.extent = { (Uint)snap.renderPassExtent.x(), (Uint)snap.renderPassExtent.y() };
+        }
+        ShadowedSetScissor(frame.commandBuffer, scissor);
+        return true;
+    }
+
     Bool VulkanRenderer::SetupDraw(FrameContext::FrameData& frame, GLenum mode, Flags<DrawSetupAspect> aspects,
                                    const DrawCmdParam& drawParams,
                                    const IndexBufferView* pIndexBufferView) {
@@ -4452,6 +4575,12 @@ void main() {
         // otherwise each re-run the full SyncTexture path on the same textures.
         VkTextureManager::DrawSyncScope drawSyncScope(*m_textureManager);
         m_textureManager->CollectGarbage();
+        if (TrySetupDrawFastPath(frame, mode, aspects, drawParams, pIndexBufferView)) {
+            return true;
+        }
+        // The fast path declined: whatever it saw may be stale. The full path
+        // below re-resolves everything and refreshes the snapshot on success.
+        m_setupDrawSnapshot.valid = false;
         const auto& drawFbo =
                 MG_State::pGLContext->GetFramebufferBindingSlot(FramebufferTarget::Draw).GetBoundObject();
         if (drawFbo != nullptr && IsUnsupportedFramebufferForDirectVulkan(*drawFbo)) {
@@ -4790,6 +4919,48 @@ void main() {
             scissor.extent = { (Uint)renderPassEntry->extent.x(), (Uint)renderPassEntry->extent.y() };
         }
         ShadowedSetScissor(frame.commandBuffer, scissor);
+
+        // Snapshot the fully resolved configuration for the consecutive-draw
+        // fast path (see TrySetupDrawFastPath).
+        {
+            auto& snap = m_setupDrawSnapshot;
+            const auto* nowActiveRenderPass = VkRenderPassManager::GetActiveRenderPass();
+            if (nowActiveRenderPass != nullptr && !programObj.hasStorageImages) {
+                snap.valid = true;
+                snap.aspects = aspects.GetRaw();
+                snap.mode = mode;
+                snap.programLifetimeId = program.GetLifetimeId();
+                snap.programVersion = program.GetBackendStateVersion();
+                snap.vao = &vao;
+                snap.vaoConfigVersion = vao.GetConfigVersion();
+                snap.drawFbo = drawFbo.get();
+                snap.fboVersion = drawFbo->GetObjectVersion();
+                snap.drawFboIsDefault = drawFbo->IsDefaultFramebuffer();
+                snap.renderStateVersion = MG_State::pGLContext->GetRenderStateParametersVersion();
+                snap.bindGeneration = MG_State::pGLContext->GetTextureBindGeneration();
+                snap.baseTransformFlags = GetShaderTransformFlags(m_swapchainObject.GetPreTransform()).GetRaw();
+                snap.resolvedTransformFlags = transformFlags.GetRaw();
+                snap.renderPassHash = nowActiveRenderPass->hash;
+                snap.imageIndex = m_imageIndexAcquired;
+                snap.textureEraseEpoch = m_textureManager->GetResourceEraseEpoch();
+                snap.textureImageEpoch = m_textureManager->GetTextureImageEpoch();
+                snap.renderbufferImageEpoch = m_renderPassManager->GetRenderbufferImageEpoch();
+                snap.renderPassExtent = renderPassEntry->extent;
+                snap.pipeline = pipeline;
+                Uint64 snapContentSum = 0;
+                Uint64 snapParamsSum = 0;
+                for (const auto* sampledTexture : sampledTextures) {
+                    if (sampledTexture != nullptr) {
+                        snapContentSum += sampledTexture->GetContentVersion();
+                        snapParamsSum += sampledTexture->GetTextureParamsVersion();
+                    }
+                }
+                snap.sampledContentSum = snapContentSum;
+                snap.sampledParamsSum = snapParamsSum;
+            } else {
+                snap.valid = false;
+            }
+        }
         return true;
     }
 
@@ -7809,6 +7980,7 @@ void main() {
     void VulkanRenderer::OnFrameCommandRecordingBegan(VkCommandBuffer commandBuffer) {
         // Dynamic state does not survive a command-buffer boundary.
         ResetDynamicStateShadow();
+        m_setupDrawSnapshot.valid = false;
         if (m_uniformManager) {
             m_uniformManager->OnCommandBufferBoundary();
         }
@@ -7932,6 +8104,7 @@ void main() {
             // A recreated pipeline could reuse a freed handle value and alias
             // the bind-dedup shadow; force the next draw to re-bind.
             g_dynamicStateShadow.graphicsPipelineValid = false;
+            m_setupDrawSnapshot.valid = false;
         }
         m_vertexInputStateFactory->OnFrameBoundary();
         m_samplerManager->OnFrameBoundary();
@@ -8959,6 +9132,7 @@ void main() {
         }
         InvalidatePipelineMemo(); // pipelines freed -> the memoized handle would dangle
         g_dynamicStateShadow.graphicsPipelineValid = false;
+        m_setupDrawSnapshot.valid = false;
         DestroyComputePipelines();
         if (m_frameContext.GetFrameCount() > 0) {
             m_frameContext.GetCurrent().isCommandRecording = false;

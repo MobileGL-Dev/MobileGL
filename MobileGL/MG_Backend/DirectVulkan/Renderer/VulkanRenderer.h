@@ -151,6 +151,14 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         Bool SetupDraw(FrameContext::FrameData& frame, GLenum mode, Flags<DrawSetupAspect> aspects,
                        const DrawCmdParam& drawParams,
                        const IndexBufferView* pIndexBufferView = nullptr);
+        // ANGLE-style consecutive-draw fast path: SetupDraw snapshots the fully
+        // resolved draw configuration; the next draw whose cheap version/identity
+        // checks all match skips the resolution half (LOD probe, sampled-set
+        // walk, render-pass and pipeline resolution) and jumps straight to the
+        // per-draw tail. Returns false (leaving no side effects that the full
+        // path cannot redo idempotently) whenever anything might have changed.
+        Bool TrySetupDrawFastPath(FrameContext::FrameData& frame, GLenum mode, Flags<DrawSetupAspect> aspects,
+                                  const DrawCmdParam& drawParams, const IndexBufferView* pIndexBufferView);
         void ClearAttachmentsOnActiveRenderPass(VkCommandBuffer commandBuffer,
                                                 const RenderPassEntry& compatibleRenderPassEntry);
 
@@ -520,6 +528,39 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         Uint64 m_lastLodParamsSum = 0;
         ProgramFactory::CompileOptionFlags m_lastLodBaseFlags = {};
         ProgramFactory::CompileOptionFlags m_lastLodResultFlags = {};
+
+        // Snapshot behind TrySetupDrawFastPath. Values only: the program and
+        // render-pass caches are open-addressing maps whose entries move on
+        // insert, so no pointers into them are cached; the pipeline handle is
+        // protected by the command-buffer-boundary reset plus the mid-frame
+        // pipeline-destruction resets, and monotonic epochs guard everything
+        // that can be destroyed or recreated between draws.
+        struct SetupDrawSnapshot {
+            Bool valid = false;
+            Uint8 aspects = 0;
+            GLenum mode = 0;
+            Uint64 programLifetimeId = 0;
+            Uint32 programVersion = 0;
+            const void* vao = nullptr;
+            Uint32 vaoConfigVersion = 0;
+            const void* drawFbo = nullptr;
+            Uint16 fboVersion = 0;
+            Bool drawFboIsDefault = false;
+            Uint renderStateVersion = 0;
+            Uint64 bindGeneration = 0;
+            Uint32 baseTransformFlags = 0;
+            Uint32 resolvedTransformFlags = 0;
+            Uint64 renderPassHash = 0;
+            Uint32 imageIndex = 0;
+            Uint64 textureEraseEpoch = 0;
+            Uint64 textureImageEpoch = 0;
+            Uint64 renderbufferImageEpoch = 0;
+            Uint64 sampledContentSum = 0;
+            Uint64 sampledParamsSum = 0;
+            IntVec2 renderPassExtent = {0, 0};
+            VkPipeline pipeline = VK_NULL_HANDLE;
+        };
+        SetupDrawSnapshot m_setupDrawSnapshot;
 
         // Per-draw scratch buffers (clear keeps capacity) — these paths run for every
         // draw call and must not allocate.

@@ -28,6 +28,9 @@ public:
     // manager keys its per-draw fast path on this so an attachment's image recreation
     // invalidates the cached render pass (dirty-flag tracking; portable to Vulkan 1.1).
     Uint64 GetTextureImageEpoch() const { return m_textureImageEpoch; }
+    // Bumped whenever any tracked texture resource is erased; cached
+    // TextureResource pointers are valid only while this is unchanged.
+    Uint64 GetResourceEraseEpoch() const { return m_resourceEraseEpoch; }
 
     struct TextureIdentity {
         MG_State::GLState::ITextureObject* texture = nullptr;

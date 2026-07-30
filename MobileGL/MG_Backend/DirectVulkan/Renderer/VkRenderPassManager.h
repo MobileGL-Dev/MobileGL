@@ -238,6 +238,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // image recreation.
         Uint64 m_renderbufferImageEpoch = 1;
 
+    public:
+        // Bumped whenever a renderbuffer backing is (re)created; consecutive-draw
+        // snapshots include it so an attachment respecify forces a re-resolve.
+        Uint64 GetRenderbufferImageEpoch() const { return m_renderbufferImageEpoch; }
+
+    private:
+
         // Per-draw fast-path memo for GetOrCreateRenderPass (dirty-flag state tracking): when the
         // framebuffer state is provably unchanged since the last resolution, the active render pass
         // is reused WITHOUT recomputing the expensive per-draw hash. Invalidated by FBO switch /
