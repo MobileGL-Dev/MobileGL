@@ -4041,12 +4041,15 @@ void main() {
             payload.backStencilCompareOp = VK_COMPARE_OP_ALWAYS;
         }
         const Uint32 fragmentOutputMask = programObj.activeFragmentOutputLocationMask;
-        MOBILEGL_ASSERT(
-            (fragmentOutputMask >> payload.colorAttachmentCount) == 0,
-            "GetOrCreatePipeline: fragmentOutputMask=0x%x exceeds colorAttachmentCount=%u for program=%u",
-            fragmentOutputMask,
-            payload.colorAttachmentCount,
-            program.GetExternalIndex());
+        // Outputs at locations past the render pass's trimmed colour span are
+        // simply discarded - GL's semantic for a fragment output whose draw
+        // buffer is GL_NONE (the trailing UNUSED slots no longer occupy
+        // references, see GetOrCreateRenderPass).
+        if ((fragmentOutputMask >> payload.colorAttachmentCount) != 0) {
+            MGLOG_D("GetOrCreatePipeline: fragmentOutputMask=0x%x exceeds colorAttachmentCount=%u for program=%u; "
+                    "outputs past the span are discarded",
+                    fragmentOutputMask, payload.colorAttachmentCount, program.GetExternalIndex());
+        }
         MOBILEGL_ASSERT(payload.colorAttachmentCount <= PipelineFactory::PipelineCreatePayload::kMaxColorAttachments,
                         "GetOrCreatePipeline: colorAttachmentCount=%u exceeds payload capacity",
                         payload.colorAttachmentCount);

@@ -1187,6 +1187,22 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
         const Bool hasDepthStencilAttachment = depthAttachmentRef.attachment != VK_ATTACHMENT_UNUSED;
 
+        // Declare only the used colour-reference span. The GL draw-buffer array
+        // always spans 8 slots, so passes used to declare colorAttachmentCount=8
+        // with trailing VK_ATTACHMENT_UNUSED holes - and Adreno configures its
+        // per-pixel render-backend/export path from the DECLARED count, so every
+        // fragment of every pass paid the 8-target export cost (measured on
+        // Adreno 650 / MC 26.2: 11.9 -> 7.5 ms of GPU time per frame, with the
+        // single-quad swapchain blit pass alone dropping 1.26 -> 0.40 ms).
+        // Interior GL_NONE holes keep their slots so fragment-output locations
+        // still line up; a fragment output at a location past the trimmed count
+        // is discarded, which is exactly GL's semantic for writing to a draw
+        // buffer set to GL_NONE.
+        while (!colorAttachmentRefs.empty() &&
+               colorAttachmentRefs.back().attachment == VK_ATTACHMENT_UNUSED) {
+            colorAttachmentRefs.pop_back();
+        }
+
         // Subpass
         VkSubpassDescription subpassDesc;
         subpassDesc.flags = 0;
