@@ -611,6 +611,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             ReclaimCompletedUploads(/*waitAll=*/true);
         }
         DestroyDeferredReleases();
+        ++m_resourceEraseEpoch;  // every memoized resource pointer dies with the map
         m_textureResources.clear();
         m_aliveObjects.clear();
         m_storageImageTextures.clear();
@@ -663,6 +664,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
         m_aliveObjects.erase(identity);
         m_storageImageTextures.erase(identity);
+        // Invalidate every cross-draw sampled-texture memo: the erased
+        // resource's address may be reused by a future emplace.
+        ++m_resourceEraseEpoch;
     }
 
     void VkTextureManager::PruneStaleTextureAliases(MG_State::GLState::ITextureObject* texture) {
@@ -718,45 +722,63 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             }
         }
 
-        auto aliveIt = m_aliveObjects.find(identity);
-        if (aliveIt != m_aliveObjects.end() && aliveIt->second.expired()) {
-            EraseTrackedTexture(aliveIt->first);
-            aliveIt = m_aliveObjects.end();
-        }
-
-        // Only (re)register and prune when this (texture, lifetime) pair is new: stale
-        // aliases can only come into existence through an address reuse, which by
-        // construction introduces a new identity. Doing this unconditionally made every
-        // sampled-texture sync scan the entire alive-texture map per draw.
-        if (aliveIt == m_aliveObjects.end()) {
-            WeakPtr<MG_State::GLState::ITextureObject> aliveTexture;
-            const auto& liveTexture = MG_State::pGLContext->GetTextureObject(texture.GetExternalIndex());
-            if (liveTexture && liveTexture.get() == &texture) {
-                aliveTexture = liveTexture;
-            } else {
-                // The name lookup legally fails while the object is alive: the name was
-                // deleted with the texture still attached to an FBO (the attachment's
-                // SharedPtr keeps it alive), or the name was reused by a new texture, or
-                // this is a default texture object (name 0 lives outside the name map).
-                // Register through the object's own control block so the resource created
-                // below still participates in weak-expiry GC instead of becoming an
-                // orphan no reclamation path can reach until Shutdown.
-                aliveTexture = texture.weak_from_this();
-            }
-            if (!aliveTexture.expired()) {
-                m_aliveObjects[identity] = Move(aliveTexture);
-                PruneStaleTextureAliases(&texture);
+        // Cross-draw memo probe (see SyncedTextureMemoEntry): skips both map
+        // lookups and the (re)registration path for repeat-bound textures.
+        TextureResource* resourcePtr = nullptr;
+        for (Uint32 i = 0; i < kSyncedTextureMemoSize; ++i) {
+            const SyncedTextureMemoEntry& memo = m_syncedTextureMemo[i];
+            if (memo.texture == &texture && memo.lifetimeId == identity.lifetimeId &&
+                memo.eraseEpoch == m_resourceEraseEpoch) {
+                resourcePtr = memo.resource;
+                break;
             }
         }
 
-        auto it = m_textureResources.find(identity);
-        if (it == m_textureResources.end()) {
-            TextureResource initial{};
-            auto [insertIt, _] = m_textureResources.emplace(identity, Move(initial));
-            it = insertIt;
+        if (resourcePtr == nullptr) {
+            auto aliveIt = m_aliveObjects.find(identity);
+            if (aliveIt != m_aliveObjects.end() && aliveIt->second.expired()) {
+                EraseTrackedTexture(aliveIt->first);
+                aliveIt = m_aliveObjects.end();
+            }
+
+            // Only (re)register and prune when this (texture, lifetime) pair is new: stale
+            // aliases can only come into existence through an address reuse, which by
+            // construction introduces a new identity. Doing this unconditionally made every
+            // sampled-texture sync scan the entire alive-texture map per draw.
+            if (aliveIt == m_aliveObjects.end()) {
+                WeakPtr<MG_State::GLState::ITextureObject> aliveTexture;
+                const auto& liveTexture = MG_State::pGLContext->GetTextureObject(texture.GetExternalIndex());
+                if (liveTexture && liveTexture.get() == &texture) {
+                    aliveTexture = liveTexture;
+                } else {
+                    // The name lookup legally fails while the object is alive: the name was
+                    // deleted with the texture still attached to an FBO (the attachment's
+                    // SharedPtr keeps it alive), or the name was reused by a new texture, or
+                    // this is a default texture object (name 0 lives outside the name map).
+                    // Register through the object's own control block so the resource created
+                    // below still participates in weak-expiry GC instead of becoming an
+                    // orphan no reclamation path can reach until Shutdown.
+                    aliveTexture = texture.weak_from_this();
+                }
+                if (!aliveTexture.expired()) {
+                    m_aliveObjects[identity] = Move(aliveTexture);
+                    PruneStaleTextureAliases(&texture);
+                }
+            }
+
+            auto it = m_textureResources.find(identity);
+            if (it == m_textureResources.end()) {
+                TextureResource initial{};
+                auto [insertIt, _] = m_textureResources.emplace(identity, Move(initial));
+                it = insertIt;
+            }
+            resourcePtr = &(it->second);
+            m_syncedTextureMemo[m_syncedTextureMemoNext] =
+                SyncedTextureMemoEntry{&texture, identity.lifetimeId, m_resourceEraseEpoch, resourcePtr};
+            m_syncedTextureMemoNext = (m_syncedTextureMemoNext + 1) % kSyncedTextureMemoSize;
         }
 
-        if (!SyncTexture(texture, it->second)) {
+        if (!SyncTexture(texture, *resourcePtr)) {
             MGLOG_D("%s: Syncing texture %d failed", __func__, texture.GetExternalIndex());
             return nullptr;
         }
@@ -770,11 +792,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 }
             }
             if (!recorded) {
-                m_drawSyncedThisDraw.push_back({identity, &(it->second)});
+                m_drawSyncedThisDraw.push_back({identity, resourcePtr});
             }
         }
 
-        return &(it->second);
+        return resourcePtr;
     }
 
     VkImageView VkTextureManager::GetOrCreateViewAtMipLevel(MG_State::GLState::ITextureObject& texture, Uint32 mipLevel) {

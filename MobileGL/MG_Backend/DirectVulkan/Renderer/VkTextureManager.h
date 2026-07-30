@@ -454,6 +454,23 @@ private:
         TextureResource* resource = nullptr;
     };
     Vector<DrawSyncedTexture> m_drawSyncedThisDraw;
+    // Cross-draw sampled-texture memo: the same few textures (atlas, lightmap)
+    // are resolved on every draw, so cache their resource pointers and skip the
+    // alive/resource map lookups. Node-based std::unordered_map keeps the
+    // pointees stable across inserts; erases bump m_resourceEraseEpoch, which
+    // every memo entry must match. SyncTexture still runs on memo hits, so
+    // content/param freshness is unaffected. A dead-then-reused texture address
+    // cannot false-hit: the new object carries a new lifetime id.
+    struct SyncedTextureMemoEntry {
+        const MG_State::GLState::ITextureObject* texture = nullptr;
+        Uint64 lifetimeId = 0;
+        Uint64 eraseEpoch = 0;
+        TextureResource* resource = nullptr;
+    };
+    static constexpr Uint32 kSyncedTextureMemoSize = 8;
+    SyncedTextureMemoEntry m_syncedTextureMemo[kSyncedTextureMemoSize];
+    Uint32 m_syncedTextureMemoNext = 0;
+    Uint64 m_resourceEraseEpoch = 1;
     // Formats whose mutable-image probe failed on this device; their images are created
     // without MUTABLE_FORMAT_BIT so repeat syncs neither re-probe nor flag-mismatch.
     std::unordered_set<VkFormat> m_mutableFormatUnsupported;
