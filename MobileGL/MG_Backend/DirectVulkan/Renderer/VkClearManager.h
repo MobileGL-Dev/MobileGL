@@ -14,6 +14,7 @@
 #include "MG_Util/Math/VectorTypes.h"
 
 #include <Includes.h>
+#include <atomic>
 #include <unordered_map>
 
 namespace MobileGL::MG_Backend::DirectVulkan {
@@ -121,6 +122,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
         Uint8 m_gcCounter = 0;
         mutable std::mutex m_mutex;
+        // Lock-free mirror of m_pendingClears.size(), maintained under m_mutex
+        // by every mutation. The per-draw probes (HasPendingClear/GetPending*)
+        // read it before taking the lock: during draw batches the pending set
+        // is almost always empty, so this turns several locked map probes per
+        // draw into one relaxed load.
+        std::atomic<Uint32> m_pendingCount{0};
         std::unordered_map<PendingClearKey, ClearAttachmentPayload, PendingClearKeyHash> m_pendingClears;
         std::unordered_map<TextureIdentity, WeakPtr<MG_State::GLState::ITextureObject>, TextureIdentityHash> m_aliveObjects;
     };

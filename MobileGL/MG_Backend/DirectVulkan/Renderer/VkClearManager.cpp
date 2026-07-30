@@ -93,6 +93,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         const std::lock_guard<std::mutex> lock(m_mutex);
         m_pendingClears.clear();
         m_aliveObjects.clear();
+        m_pendingCount.store(static_cast<Uint32>(m_pendingClears.size()), std::memory_order_relaxed);
     }
 
     TextureIdentity VkClearManager::MakeTextureIdentity(MG_State::GLState::ITextureObject* texture) {
@@ -127,6 +128,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             m_pendingClears.erase(key);
         }
         m_aliveObjects.erase(identity);
+        m_pendingCount.store(static_cast<Uint32>(m_pendingClears.size()), std::memory_order_relaxed);
     }
 
     Bool VkClearManager::LockTextureIdentityLocked(const TextureIdentity& identity,
@@ -221,6 +223,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         m_aliveObjects[MakeTextureIdentity(texture.get())] = texture;
         auto& pending = m_pendingClears[key];
         MergeClearPayload(pending, clearPayload);
+        m_pendingCount.store(static_cast<Uint32>(m_pendingClears.size()), std::memory_order_relaxed);
     }
 
     void VkClearManager::QueueClear(const ClearAttachmentPayload& clearPayload,
@@ -238,11 +241,16 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         m_aliveObjects[MakeTextureIdentity(texture.get())] = texture;
         auto& pending = m_pendingClears[key];
         MergeClearPayload(pending, clearPayload);
+        m_pendingCount.store(static_cast<Uint32>(m_pendingClears.size()), std::memory_order_relaxed);
     }
 
     Bool VkClearManager::HasPendingClear(MG_State::GLState::ITextureObject* texture) {
         if (texture == nullptr) {
             return false;
+        }
+
+        if (m_pendingCount.load(std::memory_order_relaxed) == 0) {
+            return false;  // per-draw hot path: nothing pending anywhere
         }
 
         const Uint64 lifetimeId = texture->GetLifetimeId();
@@ -259,6 +267,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     Bool VkClearManager::HasPendingClear(const PendingClearKey& key) {
         if (key.texture == nullptr) {
             return false;
+        }
+        if (m_pendingCount.load(std::memory_order_relaxed) == 0) {
+            return false;  // per-draw hot path: nothing pending anywhere
         }
 
         const std::lock_guard<std::mutex> lock(m_mutex);
@@ -286,6 +297,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                          SharedPtr<MG_State::GLState::ITextureObject>& outTexture) {
         if (key.texture == nullptr) {
             return false;
+        }
+        if (m_pendingCount.load(std::memory_order_relaxed) == 0) {
+            return false;  // per-draw hot path: nothing pending anywhere
         }
 
         const std::lock_guard<std::mutex> lock(m_mutex);
@@ -325,6 +339,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         if (texture == nullptr) {
             return false;
         }
+        if (m_pendingCount.load(std::memory_order_relaxed) == 0) {
+            return false;  // per-draw hot path: nothing pending anywhere
+        }
 
         const Uint64 lifetimeId = texture->GetLifetimeId();
         const std::lock_guard<std::mutex> lock(m_mutex);
@@ -345,6 +362,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             return;
         }
 
+        if (m_pendingCount.load(std::memory_order_relaxed) == 0) {
+            return;  // per-draw hot path: nothing pending anywhere
+        }
         const TextureIdentity identity = MakeTextureIdentity(texture);
         MGLOG_D("%s: Pop all pending clears for texture %d", __func__, texture->GetExternalIndex());
         const std::lock_guard<std::mutex> lock(m_mutex);
@@ -361,6 +381,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             auto it = m_pendingClears.find(key);
             if (it != m_pendingClears.end()) {
                 m_pendingClears.erase(it);
+            m_pendingCount.store(static_cast<Uint32>(m_pendingClears.size()), std::memory_order_relaxed);
             }
         }
 
