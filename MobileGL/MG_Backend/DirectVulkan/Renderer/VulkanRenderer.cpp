@@ -7809,6 +7809,9 @@ void main() {
     void VulkanRenderer::OnFrameCommandRecordingBegan(VkCommandBuffer commandBuffer) {
         // Dynamic state does not survive a command-buffer boundary.
         ResetDynamicStateShadow();
+        if (m_uniformManager) {
+            m_uniformManager->OnCommandBufferBoundary();
+        }
         // Pre-pass stream bookkeeping: a fresh frame recording references no
         // textures yet.
         if (m_textureManager) {
