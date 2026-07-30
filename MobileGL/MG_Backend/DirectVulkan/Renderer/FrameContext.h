@@ -29,7 +29,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             VkPipelineStageFlags waitDstStageMask = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
             VkSemaphore waitSemaphore = VK_NULL_HANDLE;
             VkSemaphore signalSemaphore = VK_NULL_HANDLE;
-            VkCommandBuffer commandBuffer = VK_NULL_HANDLE;
+            // [0] = pre-pass command buffer (when recorded), then the frame
+            // command buffer; submitInfo.pCommandBuffers points here.
+            VkCommandBuffer commandBuffers[2] = {VK_NULL_HANDLE, VK_NULL_HANDLE};
             VkSubmitInfo submitInfo{VK_STRUCTURE_TYPE_SUBMIT_INFO};
         };
 
@@ -52,10 +54,18 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
         struct FrameData {
             VkCommandBuffer commandBuffer = VK_NULL_HANDLE;
+            // Pre-pass work stream: out-of-pass commands (deferred clear
+            // materialization, sampled-layout transitions) for resources the
+            // frame's recording has not touched yet. Submitted immediately
+            // BEFORE commandBuffer in the same vkQueueSubmit, so recording
+            // into it never has to split the frame's active render pass.
+            VkCommandBuffer preCommandBuffer = VK_NULL_HANDLE;
             VkSemaphore imageAvailableSemaphore = VK_NULL_HANDLE;
             VkFence imageInFlightFence = VK_NULL_HANDLE;
             Bool isCommandRecording = false;
             Bool hasCommandBufferRecorded = false;
+            Bool isPreCommandRecording = false;
+            Bool hasPreCommandBufferRecorded = false;
             Bool imageAvailableSemaphoreConsumed = false;
             // Command buffers submitted mid-frame (FlushPendingCommands),
             // appended in submit order; freed once their submission is known
@@ -77,6 +87,14 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         VkCommandBuffer& BeginCommandRecording(VkCommandBufferUsageFlags flags = 0,
                                                const VkCommandBufferInheritanceInfo* pInheritanceInfo = nullptr);
         void EndCommandRecording();
+        // Lazily opens the pre-pass work stream (see FrameData::preCommandBuffer).
+        VkCommandBuffer BeginPreCommandRecording();
+        // Closes the pre stream if open, marking it for submission ahead of the
+        // frame command buffer. Safe to call when it never opened.
+        void EndPreCommandRecordingIfOpen();
+        // Drops an in-progress or recorded-but-unsubmitted pre stream (dropped
+        // frame recordings, swapchain recreation).
+        void AbandonPreCommandRecording();
         VkResult InitializeSwapchainSemaphores(VkDevice device, Uint32 swapchainImageCount);
         void DestroySwapchainSemaphores(VkDevice device);
         Bool TransitionToPresent(VkImage image, VkImageLayout oldLayout,
@@ -91,7 +109,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // can restart while the submitted buffer is still executing. Retired
         // buffers are freed after the slot's fence is next waited, or as soon
         // as their submission is observed complete.
-        VkResult RetireCurrentCommandBuffer();
+        VkResult RetireCurrentCommandBuffer(Bool retirePreCommandBuffer = false);
 
         // Frees every retired command buffer whose tagged submission index is
         // known complete. Driven by the renderer's submit tracker on completion

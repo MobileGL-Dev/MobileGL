@@ -16,18 +16,19 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         m_device = device;
         m_commandPool = commandPool;
 
-        Vector<VkCommandBuffer> commandBuffers(frameCount, VK_NULL_HANDLE);
+        Vector<VkCommandBuffer> commandBuffers(frameCount * 2, VK_NULL_HANDLE);
         VkCommandBufferAllocateInfo allocInfo{};
         allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
         allocInfo.commandPool = commandPool;
         allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-        allocInfo.commandBufferCount = frameCount;
+        allocInfo.commandBufferCount = frameCount * 2;
         VkResult result = vkAllocateCommandBuffers(device, &allocInfo, commandBuffers.data());
         if (result != VK_SUCCESS) {
             return result;
         }
         for (Uint32 i = 0; i < frameCount; ++i) {
             m_frames[i].commandBuffer = commandBuffers[i];
+            m_frames[i].preCommandBuffer = commandBuffers[frameCount + i];
         }
 
         VkSemaphoreCreateInfo semaphoreInfo{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
@@ -47,9 +48,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
     void FrameContext::Destroy(VkDevice device, VkCommandPool commandPool) {
         const Uint32 frameCount = static_cast<Uint32>(m_frames.size());
-        Vector<VkCommandBuffer> commandBuffers(frameCount, VK_NULL_HANDLE);
+        Vector<VkCommandBuffer> commandBuffers(frameCount * 2, VK_NULL_HANDLE);
         for (Uint32 i = 0; i < frameCount; ++i) {
             commandBuffers[i] = m_frames[i].commandBuffer;
+            commandBuffers[frameCount + i] = m_frames[i].preCommandBuffer;
         }
 
         for (Uint32 i = 0; i < frameCount; ++i) {
@@ -60,7 +62,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             for (auto& frame : m_frames) {
                 FreeRetiredCommandBuffers(frame);
             }
-            vkFreeCommandBuffers(device, commandPool, frameCount, commandBuffers.data());
+            vkFreeCommandBuffers(device, commandPool, frameCount * 2, commandBuffers.data());
         }
         m_frames.clear();
         currentFrameIndex = 0;
@@ -87,6 +89,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         currentFrameIndex = (currentFrameIndex + 1) % static_cast<Uint32>(m_frames.size());
         GetCurrent().isCommandRecording = false;
         GetCurrent().hasCommandBufferRecorded = false;
+        GetCurrent().isPreCommandRecording = false;
+        GetCurrent().hasPreCommandBufferRecorded = false;
     }
 
     VkCommandBuffer& FrameContext::BeginCommandRecording(VkCommandBufferUsageFlags flags,
@@ -116,6 +120,41 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         VK_VERIFY(vkEndCommandBuffer(frame.commandBuffer), "EndCommandRecording, vkEndCommandBuffer");
         frame.isCommandRecording = false;
         frame.hasCommandBufferRecorded = true;
+    }
+
+    VkCommandBuffer FrameContext::BeginPreCommandRecording() {
+        auto& frame = GetCurrent();
+        if (frame.isPreCommandRecording) {
+            return frame.preCommandBuffer;
+        }
+        MOBILEGL_ASSERT(!frame.hasPreCommandBufferRecorded,
+                        "BeginPreCommandRecording: a recorded pre stream is still awaiting submission");
+        VK_VERIFY(vkResetCommandBuffer(frame.preCommandBuffer, 0), "BeginPreCommandRecording, vkResetCommandBuffer");
+        VkCommandBufferBeginInfo beginInfo{};
+        beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+        VK_VERIFY(vkBeginCommandBuffer(frame.preCommandBuffer, &beginInfo),
+                  "BeginPreCommandRecording, vkBeginCommandBuffer");
+        frame.isPreCommandRecording = true;
+        return frame.preCommandBuffer;
+    }
+
+    void FrameContext::EndPreCommandRecordingIfOpen() {
+        auto& frame = GetCurrent();
+        if (!frame.isPreCommandRecording) {
+            return;
+        }
+        VK_VERIFY(vkEndCommandBuffer(frame.preCommandBuffer), "EndPreCommandRecordingIfOpen, vkEndCommandBuffer");
+        frame.isPreCommandRecording = false;
+        frame.hasPreCommandBufferRecorded = true;
+    }
+
+    void FrameContext::AbandonPreCommandRecording() {
+        auto& frame = GetCurrent();
+        if (frame.isPreCommandRecording) {
+            VK_VERIFY(vkEndCommandBuffer(frame.preCommandBuffer), "AbandonPreCommandRecording, vkEndCommandBuffer");
+        }
+        frame.isPreCommandRecording = false;
+        frame.hasPreCommandBufferRecorded = false;
     }
 
     VkResult FrameContext::InitializeSwapchainSemaphores(VkDevice device, Uint32 swapchainImageCount) {
@@ -202,17 +241,27 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                                                Uint32 swapchainImageIndex) const {
         const auto& frame = GetCurrent();
         MOBILEGL_ASSERT(!frame.isCommandRecording, "GetSubmitInfo called while command buffer recording is still active");
+        MOBILEGL_ASSERT(!frame.isPreCommandRecording,
+                        "GetSubmitInfo called while the pre-pass stream is still recording");
         AssertValidSwapchainImageIndex(swapchainImageIndex);
         SubmitInfoPacket packet{};
         packet.waitSemaphore = frame.imageAvailableSemaphore;
         packet.signalSemaphore = m_swapchainImageRenderFinishedSemaphores[swapchainImageIndex];
-        packet.commandBuffer = frame.commandBuffer;
+
+        Uint32 commandBufferCount = 0;
+        // The pre-pass stream executes strictly before the frame's commands.
+        if (frame.hasPreCommandBufferRecorded) {
+            packet.commandBuffers[commandBufferCount++] = frame.preCommandBuffer;
+        }
+        if (shouldSubmitCommandBuffer) {
+            packet.commandBuffers[commandBufferCount++] = frame.commandBuffer;
+        }
 
         packet.submitInfo.waitSemaphoreCount = frame.imageAvailableSemaphoreConsumed ? 0U : 1U;
         packet.submitInfo.pWaitSemaphores = frame.imageAvailableSemaphoreConsumed ? nullptr : &packet.waitSemaphore;
         packet.submitInfo.pWaitDstStageMask = frame.imageAvailableSemaphoreConsumed ? nullptr : &packet.waitDstStageMask;
-        packet.submitInfo.commandBufferCount = shouldSubmitCommandBuffer ? 1U : 0U;
-        packet.submitInfo.pCommandBuffers = shouldSubmitCommandBuffer ? &packet.commandBuffer : nullptr;
+        packet.submitInfo.commandBufferCount = commandBufferCount;
+        packet.submitInfo.pCommandBuffers = commandBufferCount > 0 ? packet.commandBuffers : nullptr;
         packet.submitInfo.signalSemaphoreCount = 1;
         packet.submitInfo.pSignalSemaphores = &packet.signalSemaphore;
         return packet;
@@ -276,12 +325,14 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         m_recordingObserver = observer;
     }
 
-    VkResult FrameContext::RetireCurrentCommandBuffer() {
+    VkResult FrameContext::RetireCurrentCommandBuffer(Bool retirePreCommandBuffer) {
         MOBILEGL_ASSERT(m_device != VK_NULL_HANDLE && m_commandPool != VK_NULL_HANDLE,
                         "RetireCurrentCommandBuffer requires an initialized FrameContext");
         auto& frame = GetCurrent();
         MOBILEGL_ASSERT(!frame.isCommandRecording,
                         "RetireCurrentCommandBuffer called while the command buffer is still recording");
+        MOBILEGL_ASSERT(!frame.isPreCommandRecording,
+                        "RetireCurrentCommandBuffer called while the pre-pass stream is still recording");
 
         VkCommandBufferAllocateInfo allocInfo{};
         allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
@@ -289,9 +340,19 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
         allocInfo.commandBufferCount = 1;
         VkCommandBuffer replacement = VK_NULL_HANDLE;
-        const VkResult result = vkAllocateCommandBuffers(m_device, &allocInfo, &replacement);
+        VkResult result = vkAllocateCommandBuffers(m_device, &allocInfo, &replacement);
         if (result != VK_SUCCESS) {
             return result;
+        }
+        if (retirePreCommandBuffer) {
+            VkCommandBuffer preReplacement = VK_NULL_HANDLE;
+            result = vkAllocateCommandBuffers(m_device, &allocInfo, &preReplacement);
+            if (result != VK_SUCCESS) {
+                vkFreeCommandBuffers(m_device, m_commandPool, 1, &replacement);
+                return result;
+            }
+            frame.retiredCommandBuffers.push_back({frame.preCommandBuffer, frame.lastSubmitIndex});
+            frame.preCommandBuffer = preReplacement;
         }
         // lastSubmitIndex was just written by the renderer for the submission
         // that carried this command buffer.

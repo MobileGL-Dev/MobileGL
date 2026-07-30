@@ -1049,6 +1049,16 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         return view;
     }
 
+    void VkTextureManager::StampTextureRecordingUse(MG_State::GLState::ITextureObject* texture) {
+        if (texture == nullptr) {
+            return;
+        }
+        auto it = m_textureResources.find(MakeTextureIdentity(texture));
+        if (it != m_textureResources.end()) {
+            it->second.lastRecordingGeneration = m_recordingGeneration;
+        }
+    }
+
     void VkTextureManager::UpdateTrackedImageLayout(MG_State::GLState::ITextureObject* texture, VkImageLayout newLayout) {
         MOBILEGL_ASSERT(texture != nullptr, "UpdateTrackedImageLayout: texture is null");
         auto it = m_textureResources.find(MakeTextureIdentity(texture));
@@ -1076,6 +1086,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         MOBILEGL_ASSERT(writtenMipLevel < resource.mipLevels,
                         "UpdateTrackedImageLayoutAfterAttachmentWrite: textureId=%d mipLevel=%u out of range %u",
                         texture->GetExternalIndex(), writtenMipLevel, resource.mipLevels);
+        // Pre-pass stream bookkeeping: the render pass that just ended wrote this image.
+        StampResourceRecordingUse(resource);
 
         if (resource.layout != newLayout && resource.mipLevels > 1) {
             VkPipelineStageFlags srcStageMask = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
@@ -1160,6 +1172,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                               VK_ACCESS_SHADER_READ_BIT, resource->aspect, 0, resource->mipLevels,
                                               resource->arrayLayers);
         MOBILEGL_ASSERT(ok, "TransitionTextureForSampling: transition failed for textureId=%d", texture.GetExternalIndex());
+        // Pre-pass stream bookkeeping: a command referencing the image was recorded.
+        StampResourceRecordingUse(*resource);
         return ok;
     }
 
@@ -1189,6 +1203,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                               resource->aspect, 0, resource->mipLevels, resource->arrayLayers);
         MOBILEGL_ASSERT(ok, "TransitionTextureForStorageImage: transition failed for textureId=%d",
                         texture.GetExternalIndex());
+        // Pre-pass stream bookkeeping: a command referencing the image was recorded.
+        StampResourceRecordingUse(*resource);
         return ok;
     }
 

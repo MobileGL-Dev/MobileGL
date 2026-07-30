@@ -4397,8 +4397,30 @@ void main() {
                     static_cast<Int>(textureResource->layout));
             if (m_clearManager->HasPendingClear(sampledTexture) ||
                 !IsValidSampledImageLayout(textureResource->layout)) {
+                // Out-of-pass work is needed (deferred clear materialization or
+                // a sampled-layout transition). When the open frame recording
+                // has not referenced this image yet, that work can execute
+                // ahead of the WHOLE recording - record it into the pre-pass
+                // stream instead of splitting the active render pass (ANGLE's
+                // outside-render-pass command stream, restricted to the
+                // provably reorderable case).
+                if (activeRenderPass != nullptr &&
+                    !m_frameContext.GetCurrent().hasPreCommandBufferRecorded &&
+                    !m_textureManager->WasTouchedThisRecording(*textureResource)) {
+                    VkCommandBuffer preCommandBuffer = m_frameContext.BeginPreCommandRecording();
+                    const Bool preClearReady =
+                        MaterializePendingClearForTexture(preCommandBuffer, *sampledTexture);
+                    MOBILEGL_ASSERT(preClearReady,
+                                    "%s: pre-pass MaterializePendingClearForTexture failed for textureId=%d",
+                                    __func__, sampledTexture->GetExternalIndex());
+                    const Bool preTransitionReady =
+                        m_textureManager->TransitionTextureForSampling(preCommandBuffer, *sampledTexture);
+                    MOBILEGL_ASSERT(preTransitionReady,
+                                    "%s: pre-pass TransitionTextureForSampling failed for textureId=%d",
+                                    __func__, sampledTexture->GetExternalIndex());
+                    continue;
+                }
                 needSampledTextureTransitions = true;
-                break;
             }
         }
 
@@ -4422,6 +4444,10 @@ void main() {
             MOBILEGL_ASSERT(transitionedResource != nullptr,
                             "%s: post-transition SyncTextureAndGetDescriptor failed for textureId=%d",
                             __func__, sampledTexture->GetExternalIndex());
+            // Pre-pass stream bookkeeping: the draw about to be recorded reads
+            // this image, so later out-of-pass work on it can no longer jump
+            // ahead of the recording.
+            m_textureManager->StampResourceRecordingUse(*transitionedResource);
             MGLOG_D("SetupDraw: sampled textureId=%d layout(after)=%s(%d)",
                     sampledTexture->GetExternalIndex(), VkImageLayoutToString(transitionedResource->layout),
                     static_cast<Int>(transitionedResource->layout));
@@ -5230,8 +5256,12 @@ void main() {
         if (!m_clearManager->GetPendingClears(&texture, pendingClears)) {
             return true;
         }
-        MOBILEGL_ASSERT(VkRenderPassManager::GetActiveRenderPass() == nullptr,
-                        "MaterializePendingClearForTexture requires no active render pass");
+        // A pass may stay open on the FRAME command buffer while this clear is
+        // recorded into the pre-pass stream (a different command buffer that
+        // executes strictly before the frame's commands).
+        MOBILEGL_ASSERT(VkRenderPassManager::GetActiveRenderPass() == nullptr ||
+                            commandBuffer != m_frameContext.GetCurrent().commandBuffer,
+                        "MaterializePendingClearForTexture requires no active render pass on the target buffer");
 
         auto* resource = m_textureManager->SyncTextureAndGetDescriptor(texture);
         MOBILEGL_ASSERT(resource != nullptr,
@@ -6276,7 +6306,11 @@ void main() {
             frame.hasCommandBufferRecorded = true;
             m_lastPipelineValid = false; // command-buffer boundary: drop the pipeline memo
         }
-        if (!frame.hasCommandBufferRecorded) {
+        // The pre-pass stream must never be submitted later than the recording
+        // it was paired with (frame commands recorded after a pre-pass move
+        // rely on the moved work having executed first).
+        m_frameContext.EndPreCommandRecordingIfOpen();
+        if (!frame.hasCommandBufferRecorded && !frame.hasPreCommandBufferRecorded) {
             return true;
         }
 
@@ -7411,8 +7445,18 @@ void main() {
             submitInfo.pWaitSemaphores = &waitSemaphore;
             submitInfo.pWaitDstStageMask = &waitDstStageMask;
         }
-        submitInfo.commandBufferCount = 1;
-        submitInfo.pCommandBuffers = &frame.commandBuffer;
+        // The pre-pass stream, when recorded, executes strictly before the
+        // frame's commands within the same submission.
+        VkCommandBuffer commandBuffers[2] = {VK_NULL_HANDLE, VK_NULL_HANDLE};
+        Uint32 commandBufferCount = 0;
+        if (frame.hasPreCommandBufferRecorded) {
+            commandBuffers[commandBufferCount++] = frame.preCommandBuffer;
+        }
+        if (frame.hasCommandBufferRecorded) {
+            commandBuffers[commandBufferCount++] = frame.commandBuffer;
+        }
+        submitInfo.commandBufferCount = commandBufferCount;
+        submitInfo.pCommandBuffers = commandBuffers;
         const VkResult result = vkQueueSubmit(m_graphicsQueue, 1, &submitInfo, fence);
         if (result != VK_SUCCESS) {
             MGLOG_E("SubmitPendingCommandBuffer: vkQueueSubmit returned %d", result);
@@ -7420,6 +7464,7 @@ void main() {
         }
         frame.imageAvailableSemaphoreConsumed = true;
         frame.hasCommandBufferRecorded = false;
+        frame.hasPreCommandBufferRecorded = false;
         RegisterSubmit(fence, pooledFence);
         frame.lastSubmitIndex = m_submitCounter;
         return true;
@@ -7450,6 +7495,8 @@ void main() {
             }
             m_frameContext.EndCommandRecording();
         }
+        m_frameContext.EndPreCommandRecordingIfOpen();
+        const Bool submittingPreCommandBuffer = frame.hasPreCommandBufferRecorded;
         if (!SubmitPendingCommandBuffer(frame, fence, /*pooledFence=*/true)) {
             // Submit failure (device loss regime): the ended command buffer
             // stays marked recorded so Present can still try to submit it.
@@ -7468,7 +7515,7 @@ void main() {
         // The submitted command buffer may still be executing; recording must
         // restart on a fresh one. If none can be allocated, fall back to
         // draining this submission so reusing the buffer stays legal.
-        const VkResult retireResult = m_frameContext.RetireCurrentCommandBuffer();
+        const VkResult retireResult = m_frameContext.RetireCurrentCommandBuffer(submittingPreCommandBuffer);
         if (retireResult != VK_SUCCESS) {
             MGLOG_E("FlushPendingCommands: RetireCurrentCommandBuffer returned %d; draining submission", retireResult);
             if (vkWaitForFences(m_device, 1, &fence, VK_TRUE, UINT64_MAX) == VK_SUCCESS) {
@@ -7534,6 +7581,11 @@ void main() {
     }
 
     void VulkanRenderer::OnFrameCommandRecordingBegan(VkCommandBuffer commandBuffer) {
+        // Pre-pass stream bookkeeping: a fresh frame recording references no
+        // textures yet.
+        if (m_textureManager) {
+            m_textureManager->AdvanceRecordingGeneration();
+        }
         if (m_timerQueryManager) {
             m_timerQueryManager->OnFrameCommandRecordingBegan(commandBuffer, m_frameContext.GetCurrentFrameIndex(),
                                                               m_bufferManager.GetFrameSerial());
@@ -7606,6 +7658,7 @@ void main() {
                 if (suspendedFrame.isCommandRecording) {
                     m_frameContext.EndCommandRecording();
                 }
+                m_frameContext.AbandonPreCommandRecording();
                 suspendedFrame.isCommandRecording = false;
                 suspendedFrame.hasCommandBufferRecorded = false;
                 m_lastPipelineValid = false;
@@ -7670,16 +7723,19 @@ void main() {
             frame.hasCommandBufferRecorded = true;
             m_lastPipelineValid = false; // command-buffer boundary: drop the pipeline memo
         }
+        m_frameContext.EndPreCommandRecordingIfOpen();
 
         const Bool shouldSubmitCommandBuffer = frame.hasCommandBufferRecorded;
 
-        // 1) Submit current frame work.
+        // 1) Submit current frame work (the pre-pass stream, when recorded,
+        //    rides the same submission strictly ahead of the frame commands).
         auto submitPacket = m_frameContext.GetSubmitInfo(shouldSubmitCommandBuffer, m_imageIndexAcquired);
         VK_VERIFY(vkQueueSubmit(m_graphicsQueue, 1, &submitPacket.submitInfo, frame.imageInFlightFence));
         RegisterSubmit(frame.imageInFlightFence, /*pooledFence=*/false);
         frame.lastSubmitIndex = m_submitCounter;
         frame.isCommandRecording = false;
         frame.hasCommandBufferRecorded = false;
+        frame.hasPreCommandBufferRecorded = false;
         m_swapchainObject.SetImageLayout(m_imageIndexAcquired, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
 
         // 2) Present current frame.
@@ -8673,6 +8729,10 @@ void main() {
         if (m_frameContext.GetFrameCount() > 0) {
             m_frameContext.GetCurrent().isCommandRecording = false;
             m_frameContext.GetCurrent().hasCommandBufferRecorded = false;
+            // The pre-pass stream paired with the abandoned recording is
+            // dropped with it (its next Begin resets the buffer).
+            m_frameContext.GetCurrent().isPreCommandRecording = false;
+            m_frameContext.GetCurrent().hasPreCommandBufferRecorded = false;
         }
         const Bool okArena = m_bufferManager.RecreateTransientArenas(m_frameContext.GetFrameCount());
         MOBILEGL_ASSERT(okArena, "RecreateSwapchain: buffer manager transient arena initialization failed");

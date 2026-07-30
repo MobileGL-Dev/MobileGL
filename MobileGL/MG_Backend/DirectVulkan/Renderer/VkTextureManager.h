@@ -172,6 +172,13 @@ public:
         // NeedsStorageImagePreparation cannot ask for a recreate that will never happen.
         Bool storageUsageResolved = false;
         Uint16 syncedTextureParamsVersion = 0;
+        // Recording generation (VkTextureManager::GetRecordingGeneration) of the last
+        // command referencing this image that was recorded into the CURRENT frame
+        // command buffer. An image untouched by the open recording may have its
+        // out-of-pass work (deferred clears, sampled-layout transitions) recorded
+        // into the frame's PRE command buffer - which executes strictly before the
+        // frame's commands - instead of splitting the active render pass.
+        Uint64 lastRecordingGeneration = 0;
         // Snapshot of ITextureObject::GetContentVersion() at the last successful sync;
         // lets SyncTexture skip the whole re-check/re-upload when content is unchanged.
         Uint64 syncedContentVersion = 0;
@@ -207,6 +214,7 @@ public:
             std::swap(this->usageFlags, that.usageFlags);
             std::swap(this->storageUsageResolved, that.storageUsageResolved);
             std::swap(this->syncedTextureParamsVersion, that.syncedTextureParamsVersion);
+            std::swap(this->lastRecordingGeneration, that.lastRecordingGeneration);
             std::swap(this->syncedContentVersion, that.syncedContentVersion);
             std::swap(this->syncedMipLevelCount, that.syncedMipLevelCount);
         }
@@ -307,6 +315,21 @@ public:
                                                       VkImageLayout newLayout);
     Bool TransitionTextureForSampling(VkCommandBuffer commandBuffer, MG_State::GLState::ITextureObject& texture);
     Bool TransitionTextureForStorageImage(VkCommandBuffer commandBuffer, MG_State::GLState::ITextureObject& texture);
+
+    // Recording-generation bookkeeping for the pre-pass command stream. The
+    // generation advances every time the frame command buffer (re)begins
+    // recording; a resource whose stamp does not match was not referenced by
+    // any command in the open recording, so its out-of-pass work may safely
+    // execute ahead of the whole recording (in the pre command buffer).
+    void AdvanceRecordingGeneration() { ++m_recordingGeneration; }
+    void StampResourceRecordingUse(TextureResource& resource) const {
+        resource.lastRecordingGeneration = m_recordingGeneration;
+    }
+    // Map-lookup variant for callers that only hold the GL texture object.
+    void StampTextureRecordingUse(MG_State::GLState::ITextureObject* texture);
+    Bool WasTouchedThisRecording(const TextureResource& resource) const {
+        return resource.lastRecordingGeneration == m_recordingGeneration;
+    }
     // Records that this texture is bound to a GL image unit, so its image must carry
     // VK_IMAGE_USAGE_STORAGE_BIT. Must be called before NeedsStorageImagePreparation, and
     // therefore before the render pass is committed: an image that has to be upgraded is
@@ -364,6 +387,9 @@ public:
 private:
     // Bumped in SyncTextureResource right after vmaCreateImage(texture). See GetTextureImageEpoch().
     Uint64 m_textureImageEpoch = 1;
+    // See AdvanceRecordingGeneration. Starts above every resource's default
+    // stamp of 0 so a fresh resource counts as untouched.
+    Uint64 m_recordingGeneration = 1;
 
     Bool SyncTexture(MG_State::GLState::ITextureObject &texture,
                      TextureResource &outResource);

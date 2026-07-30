@@ -1395,6 +1395,17 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         renderPassBeginInfo.pClearValues = clearValues.data();
 
         vkCmdBeginRenderPass(commandBuffer, &renderPassBeginInfo, VK_SUBPASS_CONTENTS_INLINE);
+        // Pre-pass stream bookkeeping: this pass's attachment images are now
+        // referenced by the open frame recording.
+        if (s_textureManager != nullptr) {
+            for (const auto& tracked : renderPassEntry.trackedAttachmentLayouts) {
+                if (tracked.target == TrackedAttachmentTarget::Texture) {
+                    if (const auto texture = tracked.texture.lock()) {
+                        s_textureManager->StampTextureRecordingUse(texture.get());
+                    }
+                }
+            }
+        }
         for (const auto& pending: renderPassEntry.pendingClearAttachments) {
             if (pending.hasInlinePayload) {
                 if (s_renderPassManager != nullptr) {
