@@ -233,6 +233,19 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // points where this becomes unknown.
         Bool graphicsPipelineValid = false;
         VkPipeline graphicsPipeline = VK_NULL_HANDLE;
+        // Index/vertex buffer binds are command-buffer state too. Terrain
+        // sections and GUI quads share one sequential index buffer, and GUI
+        // batches often reuse a vertex arena buffer, so skipping identical
+        // rebinds removes a large share of per-draw driver calls.
+        Bool indexBindValid = false;
+        VkBuffer indexBuffer = VK_NULL_HANDLE;
+        VkDeviceSize indexOffset = 0;
+        VkIndexType indexType = VK_INDEX_TYPE_MAX_ENUM;
+        static constexpr Uint32 kMaxShadowedVertexBindings = 8;
+        Bool vertexBindValid = false;
+        Uint32 vertexBindingCount = 0;
+        VkBuffer vertexBuffers[kMaxShadowedVertexBindings] = {};
+        VkDeviceSize vertexOffsets[kMaxShadowedVertexBindings] = {};
         Bool viewportValid = false;
         VkViewport viewport{};
         Bool scissorValid = false;
@@ -3183,8 +3196,29 @@ void main() {
         }
 
         if (bindingCount > 0) {
-            vkCmdBindVertexBuffers(commandBuffer, 0, static_cast<Uint32>(bindingCount), vkBuffers.data(),
-                                   vkOffsets.data());
+            auto& shadow = g_dynamicStateShadow;
+            const Uint32 count = static_cast<Uint32>(bindingCount);
+            Bool identical = shadow.vertexBindValid && shadow.vertexBindingCount == count &&
+                             count <= DynamicStateShadow::kMaxShadowedVertexBindings;
+            if (identical) {
+                for (Uint32 i = 0; i < count; ++i) {
+                    if (shadow.vertexBuffers[i] != vkBuffers[i] || shadow.vertexOffsets[i] != vkOffsets[i]) {
+                        identical = false;
+                        break;
+                    }
+                }
+            }
+            if (!identical) {
+                vkCmdBindVertexBuffers(commandBuffer, 0, count, vkBuffers.data(), vkOffsets.data());
+                if (count <= DynamicStateShadow::kMaxShadowedVertexBindings) {
+                    shadow.vertexBindValid = true;
+                    shadow.vertexBindingCount = count;
+                    std::copy_n(vkBuffers.data(), count, shadow.vertexBuffers);
+                    std::copy_n(vkOffsets.data(), count, shadow.vertexOffsets);
+                } else {
+                    shadow.vertexBindValid = false;
+                }
+            }
         }
         return true;
     }
@@ -3254,8 +3288,17 @@ void main() {
             MGLOG_E("DrawElements skipped: failed to sync resident index buffer");
             return false;
         }
-        vkCmdBindIndexBuffer(frame.commandBuffer, slice.buffer,
-                             slice.offset + static_cast<VkDeviceSize>(pIndexBufferView->indexByteOffset), vkIndexType);
+        const VkDeviceSize indexBindOffset =
+            slice.offset + static_cast<VkDeviceSize>(pIndexBufferView->indexByteOffset);
+        auto& shadow = g_dynamicStateShadow;
+        if (!shadow.indexBindValid || shadow.indexBuffer != slice.buffer ||
+            shadow.indexOffset != indexBindOffset || shadow.indexType != vkIndexType) {
+            vkCmdBindIndexBuffer(frame.commandBuffer, slice.buffer, indexBindOffset, vkIndexType);
+            shadow.indexBindValid = true;
+            shadow.indexBuffer = slice.buffer;
+            shadow.indexOffset = indexBindOffset;
+            shadow.indexType = vkIndexType;
+        }
         return true;
     }
 
@@ -3823,11 +3866,11 @@ void main() {
         // vertex-input hash (VAO layout), render-pass hash (render targets + the draw-buffer/format
         // driven blend & write-mask gating), and the render-state version (all fixed-function state).
         // Reset per-frame and on pipeline destruction so a memoized handle can never dangle.
-        const Uint64 vertexInputHash = m_vertexInputStateFactory->GetOrComputeHash(vao);
         // The identity hash mixes buffer heap addresses (per-chunk VBOs mint a new
         // one per buffer); the memo and the pipeline payload key on the resolved
         // LAYOUT hash instead, so draws over identical layouts share one pipeline.
-        auto& vis = m_vertexInputStateFactory->GetOrCreateVertexInputState(vao, vertexInputHash);
+        // The one-arg fetch rides the VAO's state-pointer memo (no hash, no map).
+        auto& vis = m_vertexInputStateFactory->GetOrCreateVertexInputState(vao);
         const Uint64 vertexLayoutHash = vis.layoutHash;
         const Uint64 renderPassHash = renderPassEntry.hash;
         const Uint renderStateVersion = MG_State::pGLContext->GetRenderStateParametersVersion();

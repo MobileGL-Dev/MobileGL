@@ -104,6 +104,23 @@ namespace MobileGL {
                     m_backendHashMemoVersion = m_configVersion;
                 }
 
+                // Backend-owned resolved-state memo: an opaque pointer into the
+                // backend's vertex-input-state cache plus the cache's eviction
+                // epoch, valid while the config version matches. Lets the
+                // per-draw path skip the content hash AND the cache lookup; the
+                // epoch guards against the cache evicting the pointee.
+                Bool GetBackendStateMemo(const void*& outState, Uint64& outEpoch) const {
+                    if (m_backendStateMemoVersion != m_configVersion) return false;
+                    outState = m_backendStateMemo;
+                    outEpoch = m_backendStateMemoEpoch;
+                    return true;
+                }
+                void SetBackendStateMemo(const void* state, Uint64 epoch) const {
+                    m_backendStateMemo = state;
+                    m_backendStateMemoEpoch = epoch;
+                    m_backendStateMemoVersion = m_configVersion;
+                }
+
             private:
                 void BumpAttributeFormatVersion(Uint index);
                 void BumpAttributeBufferVersion(Uint index);
@@ -137,6 +154,9 @@ namespace MobileGL {
                 Uint32 m_configVersion = 0;
                 mutable Uint64 m_backendHashMemo = 0;
                 mutable Uint32 m_backendHashMemoVersion = ~0u;
+                mutable const void* m_backendStateMemo = nullptr;
+                mutable Uint64 m_backendStateMemoEpoch = 0;
+                mutable Uint32 m_backendStateMemoVersion = ~0u;
             };
         } // namespace GLState
     } // namespace MG_State

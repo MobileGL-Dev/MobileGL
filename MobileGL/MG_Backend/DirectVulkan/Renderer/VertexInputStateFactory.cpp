@@ -58,15 +58,27 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
     const VertexInputStateFactory::BackendVertexInputState& VertexInputStateFactory::GetOrCreateVertexInputState(
         const MG_State::GLState::VertexArrayObject& vao) {
-        return GetOrCreateVertexInputState(vao, GetOrComputeHash(vao));
+        // Per-draw fast path: the VAO carries a pointer to its resolved entry,
+        // valid while its config version and the cache's eviction epoch both
+        // match - no re-hash, no map lookup.
+        const void* memoState = nullptr;
+        Uint64 memoEpoch = 0;
+        if (vao.GetBackendStateMemo(memoState, memoEpoch) && memoEpoch == m_evictionEpoch) {
+            const auto* entry = static_cast<const BackendVertexInputState*>(memoState);
+            entry->lastUsedFrameBoundary = m_frameBoundaryCounter;
+            return *entry;
+        }
+        const BackendVertexInputState& entry = GetOrCreateVertexInputState(vao, GetOrComputeHash(vao));
+        vao.SetBackendStateMemo(&entry, m_evictionEpoch);
+        return entry;
     }
 
     const VertexInputStateFactory::BackendVertexInputState& VertexInputStateFactory::GetOrCreateVertexInputState(
         const MG_State::GLState::VertexArrayObject& vao, HashType hash) {
         auto it = m_cache.find(hash);
         if (it != m_cache.end()) {
-            it->second.lastUsedFrameBoundary = m_frameBoundaryCounter;
-            return it->second;
+            it->second->lastUsedFrameBoundary = m_frameBoundaryCounter;
+            return *it->second;
         }
 
         VertexInputStateBuilder builder;
@@ -172,7 +184,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
         const auto& state = builder.Build();
 
-        auto& entry = m_cache[hash];
+        auto& slot = m_cache[hash];
+        if (!slot) {
+            slot = MakeUnique<BackendVertexInputState>();
+        }
+        BackendVertexInputState& entry = *slot;
         entry.hash = hash;
         entry.lastUsedFrameBoundary = m_frameBoundaryCounter;
         entry.bindings = builder.GetBindings();
@@ -221,8 +237,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
 
         for (auto it = m_cache.begin(); it != m_cache.end();) {
-            if (m_frameBoundaryCounter - it->second.lastUsedFrameBoundary > kRetireAgeBoundaries) {
+            if (m_frameBoundaryCounter - it->second->lastUsedFrameBoundary > kRetireAgeBoundaries) {
                 it = m_cache.erase(it);
+                // Invalidate every VAO's state-pointer memo: the erased node's
+                // address may be reused by a future insert.
+                ++m_evictionEpoch;
             } else {
                 ++it;
             }

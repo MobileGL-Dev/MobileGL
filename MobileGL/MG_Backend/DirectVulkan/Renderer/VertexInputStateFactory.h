@@ -36,7 +36,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             HashType layoutHash = 0;
             // Frame boundary of the last cache hit; entries idle past the
             // OnFrameBoundary retirement age are evicted (CPU heap only).
-            Uint64 lastUsedFrameBoundary = 0;
+            // Mutable: the VAO's state-pointer memo fast path stamps it through
+            // a const entry reference.
+            mutable Uint64 lastUsedFrameBoundary = 0;
             Vector<VkVertexInputBindingDescription> bindings;
             Vector<VkVertexInputAttributeDescription> attributes;
             Vector<SizeT> bindingBufferKeys;
@@ -87,9 +89,19 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
         const VulkanRendererConfig& m_config;
         VkPhysicalDevice m_physicalDevice = VK_NULL_HANDLE;
-        UnorderedMap<HashType, BackendVertexInputState> m_cache;
+        // Values are heap-allocated: FastSTL::unordered_map is open-addressing,
+        // so INSERT invalidates references to stored values. The draw path (and
+        // the VAOs' state-pointer memos) hold entry pointers across inserts;
+        // only the unique_ptr cell moves, never the pointee.
+        UnorderedMap<HashType, UniquePtr<BackendVertexInputState>> m_cache;
         // Monotonic frame-boundary counter (bumped in OnFrameBoundary) for cache aging.
         Uint64 m_frameBoundaryCounter = 0;
+        // Bumped whenever any cache entry is erased. VAOs memo a raw pointer to
+        // their heap-allocated entry (stable across map insert/rehash by
+        // construction); a memo is honored only while its recorded epoch
+        // matches, so an evicted entry can never be dereferenced through a
+        // stale memo.
+        Uint64 m_evictionEpoch = 1;
         static inline XXH64_state_t* m_hashState = XXH64_createState();
     };
 } // namespace MobileGL::MG_Backend::DirectVulkan
