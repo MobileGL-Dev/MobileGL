@@ -177,6 +177,22 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         entry.lastUsedFrameBoundary = m_frameBoundaryCounter;
         entry.bindings = builder.GetBindings();
         entry.attributes = builder.GetAttributes();
+        // See the layoutHash declaration: hash only the resolved layout, never
+        // buffer identities, so identical layouts across VAOs/buffers agree.
+        XXHASH_VERIFY(XXH64_reset(m_hashState, 0));
+        for (const auto& binding : entry.bindings) {
+            XXHASH_VERIFY(XXH64_update(m_hashState, &binding.binding, sizeof(binding.binding)));
+            XXHASH_VERIFY(XXH64_update(m_hashState, &binding.stride, sizeof(binding.stride)));
+            XXHASH_VERIFY(XXH64_update(m_hashState, &binding.inputRate, sizeof(binding.inputRate)));
+        }
+        for (const auto& attribute : entry.attributes) {
+            XXHASH_VERIFY(XXH64_update(m_hashState, &attribute.location, sizeof(attribute.location)));
+            XXHASH_VERIFY(XXH64_update(m_hashState, &attribute.binding, sizeof(attribute.binding)));
+            XXHASH_VERIFY(XXH64_update(m_hashState, &attribute.format, sizeof(attribute.format)));
+            XXHASH_VERIFY(XXH64_update(m_hashState, &attribute.offset, sizeof(attribute.offset)));
+        }
+        XXHASH_VERIFY(XXH64_update(m_hashState, &unsupportedAttribMask, sizeof(unsupportedAttribMask)));
+        entry.layoutHash = XXH64_digest(m_hashState);
         entry.bindingBufferKeys = std::move(bindingBufferKeys);
         entry.bindingBaseOffsets = std::move(bindingBaseOffsets);
         entry.bindingAttributeLocations = std::move(bindingAttributeLocations);

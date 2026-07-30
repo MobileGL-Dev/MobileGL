@@ -226,6 +226,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     // set (blit, depth-mipmap) binds - their static state makes the
     // corresponding dynamic values undefined per the spec.
     struct DynamicStateShadow {
+        // Last graphics pipeline bound on the frame command buffer. Pipeline
+        // binds are command-buffer state (they survive render-pass boundaries),
+        // so the same reset points that invalidate dynamic state - recording
+        // (re)begin and the aux blit pipelines' raw binds - are exactly the
+        // points where this becomes unknown.
+        Bool graphicsPipelineValid = false;
+        VkPipeline graphicsPipeline = VK_NULL_HANDLE;
         Bool viewportValid = false;
         VkViewport viewport{};
         Bool scissorValid = false;
@@ -3815,16 +3822,24 @@ void main() {
         // content hash (folds program identity + link version + transform flags + shader stages),
         // vertex-input hash (VAO layout), render-pass hash (render targets + the draw-buffer/format
         // driven blend & write-mask gating), and the render-state version (all fixed-function state).
-        // Reset per-frame and on pipeline destruction so m_lastPipelineResult can never dangle.
+        // Reset per-frame and on pipeline destruction so a memoized handle can never dangle.
         const Uint64 vertexInputHash = m_vertexInputStateFactory->GetOrComputeHash(vao);
+        // The identity hash mixes buffer heap addresses (per-chunk VBOs mint a new
+        // one per buffer); the memo and the pipeline payload key on the resolved
+        // LAYOUT hash instead, so draws over identical layouts share one pipeline.
+        auto& vis = m_vertexInputStateFactory->GetOrCreateVertexInputState(vao, vertexInputHash);
+        const Uint64 vertexLayoutHash = vis.layoutHash;
         const Uint64 renderPassHash = renderPassEntry.hash;
         const Uint renderStateVersion = MG_State::pGLContext->GetRenderStateParametersVersion();
-        if (m_lastPipelineValid && m_lastPipelineResult != VK_NULL_HANDLE && m_lastPipelineMode == mode &&
-            m_lastPipelineProgramHash == programObj.hash && m_lastPipelineVertexInputHash == vertexInputHash &&
-            m_lastPipelineRenderPassHash == renderPassHash &&
-            m_lastPipelineRenderStateVersion == renderStateVersion &&
-            m_lastPipelineTransformFlags == transformFlags) {
-            return m_lastPipelineResult;
+        for (Uint32 i = 0; i < m_pipelineMemoCount; ++i) {
+            const PipelineMemoEntry& entry = m_pipelineMemo[i];
+            if (entry.pipeline != VK_NULL_HANDLE && entry.mode == mode &&
+                entry.programHash == programObj.hash && entry.vertexInputHash == vertexLayoutHash &&
+                entry.renderPassHash == renderPassHash &&
+                entry.renderStateVersion == renderStateVersion &&
+                entry.transformFlags == transformFlags) {
+                return entry.pipeline;
+            }
         }
 
 #if MOBILEGL_LOG_ACTIVE_LEVEL <= MOBILEGL_LOG_LEVEL_DEBUG
@@ -3865,8 +3880,6 @@ void main() {
         }
 #endif
 
-        // vertexInputHash was computed above for the fast-path key; reuse it here.
-        auto& vis = m_vertexInputStateFactory->GetOrCreateVertexInputState(vao, vertexInputHash);
         const Uint32 vertexInputAttribMask = BuildVertexInputAttributeMask(vis.attributes);
         const Uint32 activeAttribMask = programObj.activeVertexInputLocationMask;
         const Uint32 missingAttribMask = activeAttribMask & ~vertexInputAttribMask;
@@ -3977,7 +3990,7 @@ void main() {
 
         PipelineFactory::PipelineCreatePayload payload {
             .programHash = programObj.hash,
-            .vertexInputHash = vertexInputHash,
+            .vertexInputHash = vertexLayoutHash,
             .pipelineLayout = programObj.pipelineLayout,
             .renderPass = renderPassEntry.renderPass,
             .colorAttachmentCount = renderPassEntry.colorAttachmentCount,
@@ -4284,14 +4297,16 @@ void main() {
         }
         VkPipeline pipeline = m_pipelineFactory->GetOrCreatePipeline(payload);
         if (pipeline != VK_NULL_HANDLE) {
-            m_lastPipelineValid = true;
-            m_lastPipelineMode = mode;
-            m_lastPipelineProgramHash = programObj.hash;
-            m_lastPipelineVertexInputHash = vertexInputHash;
-            m_lastPipelineRenderPassHash = renderPassHash;
-            m_lastPipelineRenderStateVersion = renderStateVersion;
-            m_lastPipelineTransformFlags = transformFlags;
-            m_lastPipelineResult = pipeline;
+            PipelineMemoEntry& entry = m_pipelineMemo[m_pipelineMemoNext];
+            entry.mode = mode;
+            entry.programHash = programObj.hash;
+            entry.vertexInputHash = vertexLayoutHash;
+            entry.renderPassHash = renderPassHash;
+            entry.renderStateVersion = renderStateVersion;
+            entry.transformFlags = transformFlags;
+            entry.pipeline = pipeline;
+            m_pipelineMemoNext = (m_pipelineMemoNext + 1) % kPipelineMemoSize;
+            m_pipelineMemoCount = std::min(m_pipelineMemoCount + 1, kPipelineMemoSize);
         }
         return pipeline;
     }
@@ -4629,7 +4644,11 @@ void main() {
             MOBILEGL_ASSERT(ok, "%s: BeginRenderPass failed", __func__);
         }
 
-        vkCmdBindPipeline(frame.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+        if (!g_dynamicStateShadow.graphicsPipelineValid || g_dynamicStateShadow.graphicsPipeline != pipeline) {
+            vkCmdBindPipeline(frame.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+            g_dynamicStateShadow.graphicsPipelineValid = true;
+            g_dynamicStateShadow.graphicsPipeline = pipeline;
+        }
 
         const Bool boundUniforms = m_uniformManager->BindProgramUniformBuffers(
             frame.commandBuffer, program, programObj, m_frameContext.GetCurrentFrameIndex());
@@ -6412,7 +6431,7 @@ void main() {
         if (frame.isCommandRecording) {
             m_frameContext.EndCommandRecording();
             frame.hasCommandBufferRecorded = true;
-            m_lastPipelineValid = false; // command-buffer boundary: drop the pipeline memo
+            InvalidatePipelineMemo(); // command-buffer boundary: drop the pipeline memo
         }
         // The pre-pass stream must never be submitted later than the recording
         // it was paired with (frame commands recorded after a pre-pass move
@@ -7499,8 +7518,7 @@ void main() {
             m_programFactory->OnFrameBoundary();
         }
         if (m_pipelineFactory && m_pipelineFactory->OnFrameBoundary() > 0) {
-            m_lastPipelineValid = false;
-            m_lastPipelineResult = VK_NULL_HANDLE;
+            InvalidatePipelineMemo();
         }
         if (m_vertexInputStateFactory) {
             m_vertexInputStateFactory->OnFrameBoundary();
@@ -7617,8 +7635,7 @@ void main() {
         // cache and the aging sweep could destroy it while the flushed submission
         // still references it. Mirrors the drops at the readback and Present
         // boundaries; costs one full pipeline lookup on the next draw.
-        m_lastPipelineValid = false;
-        m_lastPipelineResult = VK_NULL_HANDLE;
+        InvalidatePipelineMemo();
 
         // The submitted command buffer may still be executing; recording must
         // restart on a fresh one. If none can be allocated, fall back to
@@ -7771,7 +7788,7 @@ void main() {
                 m_frameContext.AbandonPreCommandRecording();
                 suspendedFrame.isCommandRecording = false;
                 suspendedFrame.hasCommandBufferRecorded = false;
-                m_lastPipelineValid = false;
+                InvalidatePipelineMemo();
                 // The dropped recording is never submitted, so once the fence
                 // poll shows the pre-suspension submissions complete the frame
                 // transients (descriptor sets, transient arenas, deferred
@@ -7807,8 +7824,10 @@ void main() {
         // performs a real, stamping lookup) and can never age out.
         m_programFactory->OnFrameBoundary();
         if (m_pipelineFactory->OnFrameBoundary() > 0) {
-            m_lastPipelineValid = false; // an aged-out pipeline may still be memoized
-            m_lastPipelineResult = VK_NULL_HANDLE;
+            InvalidatePipelineMemo(); // an aged-out pipeline may still be memoized
+            // A recreated pipeline could reuse a freed handle value and alias
+            // the bind-dedup shadow; force the next draw to re-bind.
+            g_dynamicStateShadow.graphicsPipelineValid = false;
         }
         m_vertexInputStateFactory->OnFrameBoundary();
         m_samplerManager->OnFrameBoundary();
@@ -7831,7 +7850,7 @@ void main() {
         if (frame.isCommandRecording) {
             m_frameContext.EndCommandRecording();
             frame.hasCommandBufferRecorded = true;
-            m_lastPipelineValid = false; // command-buffer boundary: drop the pipeline memo
+            InvalidatePipelineMemo(); // command-buffer boundary: drop the pipeline memo
         }
         m_frameContext.EndPreCommandRecordingIfOpen();
 
@@ -8834,7 +8853,8 @@ void main() {
         if (m_pipelineFactory) {
             m_pipelineFactory->DestroyAll();
         }
-        m_lastPipelineValid = false; // pipelines freed -> the memoized handle would dangle
+        InvalidatePipelineMemo(); // pipelines freed -> the memoized handle would dangle
+        g_dynamicStateShadow.graphicsPipelineValid = false;
         DestroyComputePipelines();
         if (m_frameContext.GetFrameCount() > 0) {
             m_frameContext.GetCurrent().isCommandRecording = false;
@@ -8997,8 +9017,7 @@ void main() {
         // destroys them immediately. The memo must drop as well: it can hand out a
         // cached handle without touching the factory.
         if (m_pipelineFactory->EvictByRenderPasses(renderPasses) > 0) {
-            m_lastPipelineValid = false;
-            m_lastPipelineResult = VK_NULL_HANDLE;
+            InvalidatePipelineMemo();
         }
     }
 
@@ -9017,8 +9036,7 @@ void main() {
             m_computePipelines.erase(computeIt);
         }
         if (m_pipelineFactory != nullptr && m_pipelineFactory->EvictByProgramHash(programHash) > 0) {
-            m_lastPipelineValid = false;
-            m_lastPipelineResult = VK_NULL_HANDLE;
+            InvalidatePipelineMemo();
         }
         if (m_uniformManager != nullptr) {
             m_uniformManager->OnDescriptorSetLayoutDestroyed(descriptorSetLayout);

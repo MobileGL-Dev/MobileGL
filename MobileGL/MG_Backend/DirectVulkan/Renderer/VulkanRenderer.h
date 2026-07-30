@@ -455,14 +455,30 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // gather + synthetic vertex-input rebuild + payload hash + lookup) when the full pipeline
         // state is unchanged from the previous draw. The key provably covers every pipeline field.
         // Reset per-frame and on pipeline destruction so the cached handle can never dangle.
-        Bool m_lastPipelineValid = false;
-        GLenum m_lastPipelineMode = 0;
-        Uint64 m_lastPipelineProgramHash = 0;
-        Uint64 m_lastPipelineVertexInputHash = 0;
-        Uint64 m_lastPipelineRenderPassHash = 0;
-        Uint m_lastPipelineRenderStateVersion = 0;
-        ProgramFactory::CompileOptionFlags m_lastPipelineTransformFlags = {};
-        VkPipeline m_lastPipelineResult = VK_NULL_HANDLE;
+        // Small N-way pipeline-resolution memo (round-robin replacement). A
+        // single-entry memo thrashed on draw sequences that alternate a few
+        // pipelines (GUI text/quad program ping-pong), paying the full
+        // payload-hash lookup per draw; eight entries cover such working sets
+        // while keeping the hit path a trivial linear scan.
+        struct PipelineMemoEntry {
+            GLenum mode = 0;
+            Uint64 programHash = 0;
+            Uint64 vertexInputHash = 0;
+            Uint64 renderPassHash = 0;
+            Uint renderStateVersion = 0;
+            ProgramFactory::CompileOptionFlags transformFlags = {};
+            VkPipeline pipeline = VK_NULL_HANDLE;
+        };
+        static constexpr Uint32 kPipelineMemoSize = 8;
+        PipelineMemoEntry m_pipelineMemo[kPipelineMemoSize];
+        Uint32 m_pipelineMemoCount = 0;
+        Uint32 m_pipelineMemoNext = 0;
+        // Drops every memoized pipeline handle. Required at command-buffer
+        // boundaries and whenever any pipeline may have been destroyed.
+        void InvalidatePipelineMemo() {
+            m_pipelineMemoCount = 0;
+            m_pipelineMemoNext = 0;
+        }
         UnorderedMap<ProgramFactory::HashType, VkPipeline> m_computePipelines;
         UniquePtr<ProgramFactory> m_programFactory;
         UniquePtr<UniformManager> m_uniformManager;

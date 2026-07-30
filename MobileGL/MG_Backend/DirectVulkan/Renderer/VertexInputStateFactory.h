@@ -27,6 +27,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
         struct BackendVertexInputState {
             HashType hash = 0;
+            // Hash of the resolved Vulkan vertex layout only (bindings, attributes,
+            // unsupported mask) - NO buffer identities. `hash` mixes buffer heap
+            // addresses so per-chunk VBOs mint a fresh identity per buffer; keying
+            // pipelines on that minted one VkPipeline per chunk section for an
+            // identical layout, defeating pipeline reuse and the per-draw memo.
+            // Pipelines depend only on the layout, so they key on this instead.
+            HashType layoutHash = 0;
             // Frame boundary of the last cache hit; entries idle past the
             // OnFrameBoundary retirement age are evicted (CPU heap only).
             Uint64 lastUsedFrameBoundary = 0;
