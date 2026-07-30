@@ -18,6 +18,7 @@
 #include "MG_Util/Converters/MGToVk/TextureEnumConverter.h"
 #include "MG_Util/Metrics/TextureMetrics.h"
 #include <Config.h>
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -204,6 +205,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // The frame's descriptor sets are recycled above, so last frame's reuse target
         // is gone: start the per-draw descriptor-reuse cache fresh this frame.
         m_hasLastDescriptor = false;
+        m_lastBindValid = false;
         // Re-fingerprint the bound sampler set fresh this frame so any GL object address
         // reuse cannot outlive a single frame (see SamplerResolveMemo).
         for (auto& memo : m_samplerResolveMemo) {
@@ -1189,16 +1191,47 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                         bufferInfo.range = ubo.range;
                         dynOffset = static_cast<Uint32>(ubo.dynamicOffset);
                     } else {
-                        BufferSlice slice{};
-                        if (!m_bufferManager->UploadTransient(BufferKind::Uniform, frameIndex, ubo.payload,
-                                                              ubo.payloadSize, m_minDynamicOffsetAlignment, slice)) {
-                            MOBILEGL_ASSERT(false, "UniformDescriptorBinder::BindProgramUniformBuffers failed: UBO upload failed on binding %u element %u",
-                                    binding, element);
-                            return false;
+                        // Global-UBO slice reuse (see GlobalUboSliceMemo): unchanged
+                        // uniform bytes re-use the slice already uploaded this frame.
+                        const Bool isGlobalUbo =
+                            programObj.globalUboBinding == static_cast<Int>(binding) && element == 0;
+                        const Uint64 uboFrameSerial = m_bufferManager->GetFrameSerial();
+                        const Uint64 uboProgramLifetimeId = program.GetLifetimeId();
+                        const Uint32 uboContentVersion = program.GetUBOContentVersion();
+                        Bool reusedSlice = false;
+                        if (isGlobalUbo) {
+                            for (const auto& memo : m_globalUboMemo) {
+                                if (memo.buffer != VK_NULL_HANDLE &&
+                                    memo.programLifetimeId == uboProgramLifetimeId &&
+                                    memo.frameSerial == uboFrameSerial &&
+                                    memo.uboContentVersion == uboContentVersion &&
+                                    memo.range == static_cast<VkDeviceSize>(ubo.payloadSize)) {
+                                    bufferInfo.buffer = memo.buffer;
+                                    bufferInfo.range = memo.range;
+                                    dynOffset = static_cast<Uint32>(memo.offset);
+                                    reusedSlice = true;
+                                    break;
+                                }
+                            }
                         }
-                        bufferInfo.buffer = slice.buffer;
-                        bufferInfo.range = ubo.payloadSize;
-                        dynOffset = static_cast<Uint32>(slice.offset);
+                        if (!reusedSlice) {
+                            BufferSlice slice{};
+                            if (!m_bufferManager->UploadTransient(BufferKind::Uniform, frameIndex, ubo.payload,
+                                                                  ubo.payloadSize, m_minDynamicOffsetAlignment, slice)) {
+                                MOBILEGL_ASSERT(false, "UniformDescriptorBinder::BindProgramUniformBuffers failed: UBO upload failed on binding %u element %u",
+                                        binding, element);
+                                return false;
+                            }
+                            bufferInfo.buffer = slice.buffer;
+                            bufferInfo.range = ubo.payloadSize;
+                            dynOffset = static_cast<Uint32>(slice.offset);
+                            if (isGlobalUbo) {
+                                m_globalUboMemo[m_globalUboMemoNext] = GlobalUboSliceMemo{
+                                    uboProgramLifetimeId, uboFrameSerial, uboContentVersion,
+                                    slice.buffer, slice.offset, static_cast<VkDeviceSize>(ubo.payloadSize)};
+                                m_globalUboMemoNext = (m_globalUboMemoNext + 1) % kGlobalUboMemoSize;
+                            }
+                        }
                     }
                     bufferInfos.push_back(bufferInfo);
                     // Dynamic offsets are consumed in binding order, then array element order,
@@ -1337,8 +1370,34 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             m_hasLastDescriptor = cacheable;
         }
 
-        vkCmdBindDescriptorSets(commandBuffer, bindPoint, programObj.pipelineLayout, 0, 1,
-                                &descriptorSet, static_cast<Uint32>(dynamicOffsets.size()), dynamicOffsets.data());
+        // Skip the driver call when this exact binding is already live on the
+        // command buffer (see the bind-dedup shadow in the header).
+        const Uint32 offsetCount = static_cast<Uint32>(dynamicOffsets.size());
+        Bool identicalBind = m_lastBindValid && m_lastBindSet == descriptorSet &&
+                             m_lastBindLayout == programObj.pipelineLayout && m_lastBindPoint == bindPoint &&
+                             m_lastBindOffsetCount == offsetCount && offsetCount <= kMaxShadowedDynamicOffsets;
+        if (identicalBind) {
+            for (Uint32 i = 0; i < offsetCount; ++i) {
+                if (m_lastBindOffsets[i] != dynamicOffsets[i]) {
+                    identicalBind = false;
+                    break;
+                }
+            }
+        }
+        if (!identicalBind) {
+            vkCmdBindDescriptorSets(commandBuffer, bindPoint, programObj.pipelineLayout, 0, 1,
+                                    &descriptorSet, offsetCount, dynamicOffsets.data());
+            if (offsetCount <= kMaxShadowedDynamicOffsets) {
+                m_lastBindValid = true;
+                m_lastBindSet = descriptorSet;
+                m_lastBindLayout = programObj.pipelineLayout;
+                m_lastBindPoint = bindPoint;
+                m_lastBindOffsetCount = offsetCount;
+                std::copy_n(dynamicOffsets.data(), offsetCount, m_lastBindOffsets);
+            } else {
+                m_lastBindValid = false;
+            }
+        }
         return true;
     }
 } // namespace MobileGL::MG_Backend::DirectVulkan

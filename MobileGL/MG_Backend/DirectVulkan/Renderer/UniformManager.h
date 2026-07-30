@@ -39,6 +39,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         void Shutdown();
 
         void BeginFrame(Uint32 frameIndex);
+        // A command buffer (re)began recording: descriptor bindings recorded into
+        // the previous buffer do not carry over, so drop the bind-dedup shadow.
+        void OnCommandBufferBoundary() { m_lastBindValid = false; }
         // A ProgramFactory eviction just destroyed this layout: purge every frame
         // slot's cached descriptor sets for it, so a recycled handle value can never
         // stale-hit sets written for the dead layout's bindings. The sets are
@@ -184,6 +187,35 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         VkDescriptorSet m_lastBoundDescriptorSet = VK_NULL_HANDLE;
         Uint64 m_lastDescriptorSignature = 0;
         Bool m_hasLastDescriptor = false;
+
+        // vkCmdBindDescriptorSets dedup: consecutive draws with a static uniform
+        // block resolve to the same set AND the same dynamic offsets, so the
+        // driver call can be skipped outright. Command-buffer-scope state; reset
+        // via OnCommandBufferBoundary whenever a recording (re)begins. Keyed on
+        // layout+bind point, so a pipeline-layout switch always rebinds.
+        static constexpr Uint32 kMaxShadowedDynamicOffsets = 8;
+        Bool m_lastBindValid = false;
+        VkDescriptorSet m_lastBindSet = VK_NULL_HANDLE;
+        VkPipelineLayout m_lastBindLayout = VK_NULL_HANDLE;
+        VkPipelineBindPoint m_lastBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+        Uint32 m_lastBindOffsetCount = 0;
+        Uint32 m_lastBindOffsets[kMaxShadowedDynamicOffsets] = {};
+
+        // Global-UBO transient-slice reuse: MC leaves the default uniform block
+        // untouched across long GUI/terrain runs, so the per-draw re-upload of
+        // the same bytes can reuse the slice uploaded earlier THIS frame (frame
+        // serial guards arena recycling; the content version guards writes).
+        struct GlobalUboSliceMemo {
+            Uint64 programLifetimeId = 0;
+            Uint64 frameSerial = 0;
+            Uint32 uboContentVersion = 0;
+            VkBuffer buffer = VK_NULL_HANDLE;
+            VkDeviceSize offset = 0;
+            VkDeviceSize range = 0;
+        };
+        static constexpr Uint32 kGlobalUboMemoSize = 4;
+        GlobalUboSliceMemo m_globalUboMemo[kGlobalUboMemoSize];
+        Uint32 m_globalUboMemoNext = 0;
 
         // Per-binding fast path over VkSamplerManager's content-hashed sampler cache, which
         // stays the source of truth: its key hashes all sampler+texture state, so two distinct
