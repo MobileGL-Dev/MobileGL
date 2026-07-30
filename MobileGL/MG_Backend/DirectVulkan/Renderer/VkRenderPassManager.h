@@ -42,6 +42,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     struct TrackedAttachmentLayoutInfo {
         TrackedAttachmentTarget target = TrackedAttachmentTarget::Texture;
         WeakPtr<MG_State::GLState::ITextureObject> texture;
+        // Identity-compare shortcut for the per-draw "does the active pass use
+        // this sampled texture" probe: comparing this against a LIVE texture's
+        // address needs no weak_ptr::lock (two refcount atomics per probe).
+        // May dangle once the texture dies - compare only, never dereference.
+        MG_State::GLState::ITextureObject* textureRaw = nullptr;
         WeakPtr<MG_State::GLState::RenderbufferObject> renderbuffer;
         Uint32 textureMipLevel = 0;
         Uint32 swapchainImageIndex = 0;

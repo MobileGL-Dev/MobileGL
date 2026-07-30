@@ -507,9 +507,28 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         ProgramFactory::CompileOptionFlags m_lastSampledSetTransformFlags = {};
         Uint64 m_lastSampledSetBindGeneration = 0;
 
+        // Memo for the per-draw explicit-LOD-0 eligibility probe
+        // (ProgramSamplesOnlySingleLevelTextures): same key family as the
+        // sampled-set memo, plus the sampled textures' params-version sum so a
+        // level-range or filter change re-probes. On a hit the resolved
+        // transform flags are reused, which also collapses the two
+        // GetOrCreateProgram lookups into one.
+        Bool m_lastLodDecisionValid = false;
+        Uint64 m_lastLodProgramLifetimeId = 0;
+        Uint32 m_lastLodProgramVersion = 0;
+        Uint64 m_lastLodBindGeneration = 0;
+        Uint64 m_lastLodParamsSum = 0;
+        ProgramFactory::CompileOptionFlags m_lastLodBaseFlags = {};
+        ProgramFactory::CompileOptionFlags m_lastLodResultFlags = {};
+
         // Per-draw scratch buffers (clear keeps capacity) — these paths run for every
         // draw call and must not allocate.
         Vector<MG_State::GLState::ITextureObject*> m_sampledTexturesScratch;
+        // Parallel to m_sampledTexturesScratch, refilled by every SetupDraw's
+        // first sampled-texture loop: the resolved backend resources, so the
+        // post-transition loop can skip re-resolving textures whose layout is
+        // already sampleable.
+        Vector<VkTextureManager::TextureResource*> m_sampledResourcesScratch;
         Vector<MG_State::GLState::ITextureObject*> m_storageImageTexturesScratch;
         Vector<VkBuffer> m_vertexBuffersScratch;
         Vector<VkDeviceSize> m_vertexOffsetsScratch;

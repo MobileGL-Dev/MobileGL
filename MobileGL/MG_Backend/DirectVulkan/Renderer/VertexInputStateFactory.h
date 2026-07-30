@@ -50,6 +50,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             // absent from `attributes`, so without this mask the draw path cannot tell them apart from
             // a genuinely disabled array and would silently feed the shader the current attribute value.
             Uint32 unsupportedAttribMask = 0;
+            // Bitmask of `attributes[i].location` - the draw path needs it up to
+            // three times per draw, so it is baked once at build time.
+            Uint32 attributeLocationMask = 0;
             VkPipelineVertexInputStateCreateInfo state{
                 VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO
             };

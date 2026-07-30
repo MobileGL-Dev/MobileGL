@@ -966,6 +966,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                         trackedAttachmentLayouts.emplace_back(TrackedAttachmentLayoutInfo {
                             .target = TrackedAttachmentTarget::Texture,
                             .texture = att.GetTexture(),
+                            .textureRaw = att.GetTexture().get(),
                             .textureMipLevel = attachmentMipLevel,
                             .finalLayout = desc.finalLayout,
                         });
@@ -1142,6 +1143,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 trackedAttachmentLayouts.emplace_back(TrackedAttachmentLayoutInfo {
                     .target = TrackedAttachmentTarget::Texture,
                     .texture = selectedDepthStencilAttachment->GetTexture(),
+                    .textureRaw = selectedDepthStencilAttachment->GetTexture().get(),
                     .textureMipLevel = attachmentMipLevel,
                     .finalLayout = depthAttachmentDescription.finalLayout,
                 });

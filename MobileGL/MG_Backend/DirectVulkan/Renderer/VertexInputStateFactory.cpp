@@ -209,6 +209,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
         XXHASH_VERIFY(XXH64_update(m_hashState, &unsupportedAttribMask, sizeof(unsupportedAttribMask)));
         entry.layoutHash = XXH64_digest(m_hashState);
+        entry.attributeLocationMask = 0;
+        for (const auto& attribute : entry.attributes) {
+            if (attribute.location < 32u) {
+                entry.attributeLocationMask |= (1u << attribute.location);
+            }
+        }
         entry.bindingBufferKeys = std::move(bindingBufferKeys);
         entry.bindingBaseOffsets = std::move(bindingBaseOffsets);
         entry.bindingAttributeLocations = std::move(bindingAttributeLocations);

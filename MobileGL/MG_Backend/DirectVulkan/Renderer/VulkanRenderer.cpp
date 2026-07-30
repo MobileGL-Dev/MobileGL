@@ -835,16 +835,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     static_assert(kMaxVertexAttribs <= ProgramFactory::VkProgramObject::kMaxVertexInputLocations,
                   "vertexInputTypes is indexed by vertex attribute location");
 
-    static Uint32 BuildVertexInputAttributeMask(const Vector<VkVertexInputAttributeDescription>& attributes) {
-        Uint32 attributeMask = 0;
-        for (const auto& attribute : attributes) {
-            if (attribute.location < kMaxVertexAttribs) {
-                attributeMask |= (1u << attribute.location);
-            }
-        }
-        return attributeMask;
-    }
-
     static Bool TryGetCurrentVertexAttributeFormat(GLenum glType, VkFormat& outFormat) {
         switch (glType) {
         case GL_FLOAT:
@@ -995,8 +985,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             if (trackedAttachment.target != TrackedAttachmentTarget::Texture) {
                 continue;
             }
-            const auto trackedTexture = trackedAttachment.texture.lock();
-            if (trackedTexture && trackedTexture.get() == &texture) {
+            // Raw identity compare (see textureRaw): the caller's texture is
+            // live, so a dangling tracked pointer can never equal its address
+            // unless the allocator reused it - and that false positive merely
+            // ends the render pass early, never misses a genuine use.
+            if (trackedAttachment.textureRaw == &texture) {
                 return true;
             }
         }
@@ -2931,7 +2924,7 @@ void main() {
         // the GetCurrentProgram + GetOrCreateProgram hash lookup every draw.
         auto& vertexInputState = m_vertexInputStateFactory->GetOrCreateVertexInputState(vao);
         const Uint32 activeAttribMask = programObj.activeVertexInputLocationMask;
-        const Uint32 vertexInputAttribMask = BuildVertexInputAttributeMask(vertexInputState.attributes);
+        const Uint32 vertexInputAttribMask = vertexInputState.attributeLocationMask;
         const Uint32 missingAttribMask = activeAttribMask & ~vertexInputAttribMask;
 
         const auto bindingCount = vertexInputState.bindings.size() + static_cast<SizeT>(std::popcount(missingAttribMask));
@@ -3923,7 +3916,7 @@ void main() {
         }
 #endif
 
-        const Uint32 vertexInputAttribMask = BuildVertexInputAttributeMask(vis.attributes);
+        const Uint32 vertexInputAttribMask = vis.attributeLocationMask;
         const Uint32 activeAttribMask = programObj.activeVertexInputLocationMask;
         const Uint32 missingAttribMask = activeAttribMask & ~vertexInputAttribMask;
         auto& patchedAttributes = m_patchedAttributesScratch;
@@ -4468,16 +4461,52 @@ void main() {
         const auto& vao = *MG_State::pGLContext->GetBoundVertexArray();
         const auto& program = *MG_State::pGLContext->GetCurrentProgram();
         ProgramFactory::CompileOptionFlags transformFlags = GetShaderTransformFlags(m_swapchainObject.GetPreTransform());
-        const auto* programObjPtr = &m_programFactory->GetOrCreateProgram(program, transformFlags);
         // Sampling a colour render target through the driver's implicit-LOD path faults the GPU on
         // Adreno 650 (see ForceExplicitLod0SamplePass); ask for the explicit-LOD variant when doing
         // so cannot change a texel, i.e. when every sampler this program reads is pinned to a
-        // single mip level.
-        if (UniformManager::ProgramSamplesOnlySingleLevelTextures(program, *programObjPtr)) {
-            transformFlags |= ProgramFactory::CompileOptionBit::ExplicitLod0Sampling;
-            programObjPtr = &m_programFactory->GetOrCreateProgram(program, transformFlags);
+        // single mip level. The probe walks every sampler binding, so its verdict is memoized
+        // under the sampled-set memo's key plus the sampled textures' params-version sum (level
+        // range and filter changes live there); the previous draw's texture list is valid for the
+        // sum exactly when that key matches (same program, same binds).
+        {
+            const Uint64 lodProgramLifetimeId = program.GetLifetimeId();
+            const Uint32 lodProgramVersion = program.GetBackendStateVersion();
+            const Uint64 lodBindGeneration = MG_State::pGLContext->GetTextureBindGeneration();
+            Bool lodMemoHit = false;
+            if (m_lastLodDecisionValid && m_lastSampledSetValid &&
+                m_lastLodProgramLifetimeId == lodProgramLifetimeId &&
+                m_lastLodProgramVersion == lodProgramVersion &&
+                m_lastLodBindGeneration == lodBindGeneration && m_lastLodBaseFlags == transformFlags &&
+                m_lastSampledSetProgramLifetimeId == lodProgramLifetimeId &&
+                m_lastSampledSetProgramVersion == lodProgramVersion &&
+                m_lastSampledSetBindGeneration == lodBindGeneration) {
+                Uint64 paramsSum = 0;
+                for (const auto* sampledTexture : m_sampledTexturesScratch) {
+                    if (sampledTexture != nullptr) {
+                        paramsSum += sampledTexture->GetTextureParamsVersion();
+                    }
+                }
+                if (paramsSum == m_lastLodParamsSum) {
+                    transformFlags = m_lastLodResultFlags;
+                    lodMemoHit = true;
+                }
+            }
+            if (!lodMemoHit) {
+                const ProgramFactory::CompileOptionFlags baseFlags = transformFlags;
+                const auto& baseProgramObj = m_programFactory->GetOrCreateProgram(program, transformFlags);
+                if (UniformManager::ProgramSamplesOnlySingleLevelTextures(program, baseProgramObj)) {
+                    transformFlags |= ProgramFactory::CompileOptionBit::ExplicitLod0Sampling;
+                }
+                m_lastLodDecisionValid = true;
+                m_lastLodProgramLifetimeId = lodProgramLifetimeId;
+                m_lastLodProgramVersion = lodProgramVersion;
+                m_lastLodBindGeneration = lodBindGeneration;
+                m_lastLodBaseFlags = baseFlags;
+                m_lastLodResultFlags = transformFlags;
+                m_lastLodParamsSum = 0;  // filled below once the sampled set is known
+            }
         }
-        const auto& programObj = *programObjPtr;
+        const auto& programObj = m_programFactory->GetOrCreateProgram(program, transformFlags);
 
         // Begin command recording if not yet
         if (!frame.isCommandRecording) {
@@ -4522,6 +4551,18 @@ void main() {
                 m_lastSampledSetTransformFlags = transformFlags;
                 m_lastSampledSetBindGeneration = bindGeneration;
             }
+            // Complete a freshly-made LOD decision (see above): its params sum
+            // can only be taken once the sampled set is known. A genuine
+            // all-zero sum merely re-probes next draw.
+            if (m_lastLodDecisionValid && m_lastLodParamsSum == 0) {
+                Uint64 paramsSum = 0;
+                for (const auto* sampledTexture : sampledTextures) {
+                    if (sampledTexture != nullptr) {
+                        paramsSum += sampledTexture->GetTextureParamsVersion();
+                    }
+                }
+                m_lastLodParamsSum = paramsSum;
+            }
         }
         MGLOG_D("SetupDraw: program=%u drawFbo=%u sampledTextureCount=%zu activeRenderPass=%s",
                 program.GetExternalIndex(), drawFbo ? drawFbo->GetExternalIndex() : 0u, sampledTextures.size(),
@@ -4545,7 +4586,10 @@ void main() {
             activeRenderPass = nullptr;
         }
         Bool needSampledTextureTransitions = false;
-        for (auto* sampledTexture : sampledTextures) {
+        auto& sampledResources = m_sampledResourcesScratch;
+        sampledResources.assign(sampledTextures.size(), nullptr);
+        for (SizeT sampledIndex = 0; sampledIndex < sampledTextures.size(); ++sampledIndex) {
+            auto* sampledTexture = sampledTextures[sampledIndex];
             if (!sampledTexture) {
                 continue;
             }
@@ -4554,6 +4598,7 @@ void main() {
             MOBILEGL_ASSERT(textureResource != nullptr,
                             "%s: SyncTextureAndGetDescriptor failed for textureId=%d",
                             __func__, sampledTexture->GetExternalIndex());
+            sampledResources[sampledIndex] = textureResource;
             MGLOG_D("SetupDraw: sampled textureId=%d layout(before)=%s(%d)",
                     sampledTexture->GetExternalIndex(), VkImageLayoutToString(textureResource->layout),
                     static_cast<Int>(textureResource->layout));
@@ -4592,8 +4637,21 @@ void main() {
             activeRenderPass = nullptr;
         }
 
-        for (auto* sampledTexture : sampledTextures) {
+        for (SizeT sampledIndex = 0; sampledIndex < sampledTextures.size(); ++sampledIndex) {
+            auto* sampledTexture = sampledTextures[sampledIndex];
             if (!sampledTexture) {
+                continue;
+            }
+            // Fast path: the first loop already resolved this texture, nothing
+            // is pending against it, and its layout is still sampleable (the
+            // layout re-check covers an EndRenderPass between the loops having
+            // rewritten an attachment's layout). Skipping the materialize +
+            // transition + re-resolve chain here is the difference between one
+            // pointer read and three calls per sampled texture per draw.
+            if (auto* fastResource = sampledResources[sampledIndex];
+                fastResource != nullptr && !m_clearManager->HasPendingClear(sampledTexture) &&
+                IsValidSampledImageLayout(fastResource->layout)) {
+                m_textureManager->StampResourceRecordingUse(*fastResource);
                 continue;
             }
             const Bool clearReady = MaterializePendingClearForTexture(frame.commandBuffer, *sampledTexture);
@@ -4659,7 +4717,7 @@ void main() {
             // Every genuinely disabled attribute the shader reads must have a current-value type we can
             // synthesize a binding for; otherwise the upload below would push a null payload.
             const Uint32 missingAttribMask =
-                activeAttribMask & ~BuildVertexInputAttributeMask(vertexInputState.attributes);
+                activeAttribMask & ~vertexInputState.attributeLocationMask;
             for (Uint32 location = 0; location < kMaxVertexAttribs; ++location) {
                 if ((missingAttribMask & (1u << location)) == 0) continue;
 
