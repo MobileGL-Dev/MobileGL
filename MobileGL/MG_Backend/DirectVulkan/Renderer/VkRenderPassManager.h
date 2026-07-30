@@ -188,8 +188,22 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         HashType ComputeHash(
             const MG_State::GLState::FramebufferObject& fbo,
             Uint32 swapchainImageIndex,
-            Bool includePendingClear = true);
-        RenderPassEntry& GetOrCreateRenderPass(const MG_State::GLState::FramebufferObject& fbo, Uint32 swapchainImageIndex);
+            Bool includePendingClear = true,
+            Bool includeDefaultFboDepthStencil = true);
+        // drawUsesDepthStencil: whether the operation about to run inside the pass
+        // reads or writes the depth/stencil buffer (depth test or stencil test
+        // enabled, or a depth/stencil clear). Only consulted for the DEFAULT
+        // framebuffer: EGL undefines its ancillary buffers at every swap, so a
+        // default-FBO pass whose draws provably never touch depth/stencil is
+        // created WITHOUT the depth attachment - on a tiler that skips the whole
+        // depth tile load AND store. The flavor only escalates: once a pass with
+        // depth is active, later depth-less draws keep using it, and a depth-using
+        // draw against a depth-less active pass resolves to a new (incompatible)
+        // entry, which the caller's compatibility check turns into a pass split;
+        // the new pass's depth loads DONT_CARE (content was undefined all along).
+        RenderPassEntry& GetOrCreateRenderPass(const MG_State::GLState::FramebufferObject& fbo,
+                                               Uint32 swapchainImageIndex,
+                                               Bool drawUsesDepthStencil = true);
         void QueueRenderbufferClear(GLbitfield mask, const ClearFramebufferPayload& clearPayload,
                                     const MG_State::GLState::FramebufferObject& drawFbo);
         void QueueRenderbufferClear(const ClearAttachmentPayload& clearPayload,
@@ -231,6 +245,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         Uint64 m_rpFastTexEpoch = 0;
         Uint64 m_rpFastRbEpoch = 0;
         Uint64 m_rpFastRenderPassHash = 0;
+        // Whether the memoized entry carries a depth/stencil attachment; a
+        // default-FBO resolution whose effective depth request differs must
+        // miss the memo (the depth-less/depth-full flavors hash differently).
+        Bool m_rpFastHadDepthStencil = false;
 
     public:
         struct RenderbufferResource {

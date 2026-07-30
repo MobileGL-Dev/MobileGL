@@ -52,6 +52,21 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         void SetImageLayout(Uint32 index, VkImageLayout layout);
         SizeT GetImageCount() const { return m_images.size(); }
 
+        // EGL content-validity tracking for the default framebuffer. A color
+        // buffer's content is undefined once its image has been presented
+        // (EGL_BUFFER_DESTROYED swap behaviour, the implementation default),
+        // and every ancillary (depth/stencil) buffer's content is undefined
+        // after ANY swap regardless of swap behaviour (EGL 1.5 §3.10.1). The
+        // render-pass manager turns an undefined attachment's tile load into
+        // LOAD_OP_DONT_CARE. Flags start false (a fresh swapchain image holds
+        // garbage) and a render pass storing into an attachment sets it back
+        // to defined.
+        Bool IsImageContentDefined(Uint32 index) const;
+        void SetImageContentDefined(Uint32 index, Bool defined);
+        Bool IsDepthStencilContentDefined(Uint32 index) const;
+        void SetDepthStencilContentDefined(Uint32 index, Bool defined);
+        void SetAllDepthStencilContentUndefined();
+
     private:
         void CreateImageViews(VkDevice device);
         void CreateDepthStencilResources(VkDevice device, VkPhysicalDevice physicalDevice);
@@ -77,5 +92,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         Vector<VkDeviceMemory> m_depthStencilImageMemories;
         Vector<VkImageView> m_depthStencilImageViews;
         Vector<VkImageLayout> m_depthStencilImageLayouts;
+        Vector<Bool> m_imageContentDefined;
+        Vector<Bool> m_depthStencilContentDefined;
     };
 } // namespace MobileGL::MG_Backend::DirectVulkan

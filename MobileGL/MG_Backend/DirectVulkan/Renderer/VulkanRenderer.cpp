@@ -4427,11 +4427,19 @@ void main() {
                     static_cast<Int>(transitionedResource->layout));
         }
 
-        auto* renderPassEntry = &m_renderPassManager->GetOrCreateRenderPass(*drawFbo, m_imageIndexAcquired);
+        // Depth/stencil participation of THIS draw, for the default-FBO depth-less
+        // pass flavor (GL: a disabled depth/stencil test neither reads nor writes
+        // its buffer).
+        const Bool drawUsesDepthStencil =
+            MG_State::pGLContext->IsCapabilityEnabled(CapabilityInput::DepthTest) ||
+            MG_State::pGLContext->IsCapabilityEnabled(CapabilityInput::StencilTest);
+        auto* renderPassEntry =
+            &m_renderPassManager->GetOrCreateRenderPass(*drawFbo, m_imageIndexAcquired, drawUsesDepthStencil);
         if (activeRenderPass && !activeRenderPass->CompatibleWith(*renderPassEntry)) {
             VkRenderPassManager::EndRenderPass(frame.commandBuffer);
             activeRenderPass = nullptr;
-            renderPassEntry = &m_renderPassManager->GetOrCreateRenderPass(*drawFbo, m_imageIndexAcquired);
+            renderPassEntry =
+                &m_renderPassManager->GetOrCreateRenderPass(*drawFbo, m_imageIndexAcquired, drawUsesDepthStencil);
         }
         if (renderPassEntry->attachmentCount == 0 || renderPassEntry->extent.x() <= 0 || renderPassEntry->extent.y() <= 0) {
             MGLOG_D("SetupDraw skipped: drawFbo=%u resolved to an empty render pass (attachmentCount=%u extent=%dx%d)",
@@ -5453,7 +5461,10 @@ void main() {
                         "TryBlitToDefaultFramebufferWithShader: failed to create sampled view for textureId=%d mip=%u",
                         sourceTexture->GetExternalIndex(), srcBinding.mipLevel);
 
-        auto& renderPassEntry = m_renderPassManager->GetOrCreateRenderPass(drawFbo, m_imageIndexAcquired);
+        // A color-only blit never touches depth/stencil: let the default-FBO pass
+        // it opens skip the depth attachment (depth-less flavor).
+        auto& renderPassEntry =
+            m_renderPassManager->GetOrCreateRenderPass(drawFbo, m_imageIndexAcquired, /*drawUsesDepthStencil=*/false);
         const Bool ok = VkRenderPassManager::BeginRenderPass(frame.commandBuffer, renderPassEntry);
         MOBILEGL_ASSERT(ok, "%s: BeginRenderPass failed", __func__);
 
@@ -7696,6 +7707,13 @@ void main() {
             result = VK_SUCCESS;
         }
         VK_VERIFY(result, "Present, vkQueuePresentKHR");
+        // EGL swap semantics: the presented color buffer's content is undefined the
+        // next time this image is acquired (EGL_BUFFER_DESTROYED, the default swap
+        // behaviour), and EVERY ancillary depth/stencil buffer's content is
+        // undefined after any swap. The render-pass manager turns the undefined
+        // attachments' next tile loads into LOAD_OP_DONT_CARE.
+        m_swapchainObject.SetImageContentDefined(m_imageIndexAcquired, false);
+        m_swapchainObject.SetAllDepthStencilContentUndefined();
         // The authoritative check, done here - after the frame is presented, before the next
         // acquire. This is what makes a launcher-side resolution change take effect: shrinking
         // the window's buffer (SurfaceHolder.setFixedSize) moves currentExtent, the swapchain

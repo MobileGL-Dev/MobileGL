@@ -481,7 +481,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     }
 
     VkRenderPassManager::HashType VkRenderPassManager::ComputeHash(
-        const MG_State::GLState::FramebufferObject& fbo, Uint32 swapchainImageIndex, Bool includePendingClear) {
+        const MG_State::GLState::FramebufferObject& fbo, Uint32 swapchainImageIndex, Bool includePendingClear,
+        Bool includeDefaultFboDepthStencil) {
         XXHASH_VERIFY(XXH64_reset(m_hashState, m_config.CacheVersion));
         const Bool isDefaultFbo = fbo.IsDefaultFramebuffer();
         if (isDefaultFbo) {
@@ -560,9 +561,17 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                          attachment <= FramebufferAttachmentType::BackRight);
                     if (isDefaultColorAttachment) {
                         currentLayout = m_swapchainObject.GetImageLayout(swapchainImageIndex);
+                        // Content validity feeds the attachment's loadOp (see the
+                        // creation path), so it must key the cache as well.
+                        if (!m_swapchainObject.IsImageContentDefined(swapchainImageIndex)) {
+                            currentLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+                        }
                     } else if (attachment == FramebufferAttachmentType::Depth ||
                                attachment == FramebufferAttachmentType::Stencil) {
                         currentLayout = m_swapchainObject.GetDepthStencilImageLayout(swapchainImageIndex);
+                        if (!m_swapchainObject.IsDepthStencilContentDefined(swapchainImageIndex)) {
+                            currentLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+                        }
                     }
                 } else {
                     auto* textureResource = m_textureManager.SyncTextureAndGetDescriptor(*texture);
@@ -617,14 +626,49 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             combineFramebufferAttachmentObjHash(drawbuf);
         }
 
-        combineFramebufferAttachmentObjHash(FramebufferAttachmentType::Depth);
-        combineFramebufferAttachmentObjHash(FramebufferAttachmentType::Stencil);
+        // The depth-less default-FBO flavor omits the depth/stencil attachment
+        // entirely, so it must hash differently from the depth-full flavor.
+        const Bool depthStencilIncluded = !isDefaultFbo || includeDefaultFboDepthStencil;
+        XXHASH_VERIFY(XXH64_update(m_hashState, &depthStencilIncluded, sizeof(depthStencilIncluded)));
+        if (depthStencilIncluded) {
+            combineFramebufferAttachmentObjHash(FramebufferAttachmentType::Depth);
+            combineFramebufferAttachmentObjHash(FramebufferAttachmentType::Stencil);
+        }
 
         return XXH64_digest(m_hashState);
     }
 
     RenderPassEntry& VkRenderPassManager::GetOrCreateRenderPass(const MG_State::GLState::FramebufferObject& fbo,
-                                                                Uint32 swapchainImageIndex) {
+                                                                Uint32 swapchainImageIndex,
+                                                                Bool drawUsesDepthStencil) {
+        // Resolve the default-FBO depth flavor (see the header comment): keep the
+        // depth attachment when the caller needs it, when a depth/stencil clear is
+        // pending, or when the active pass already carries it (escalate-only, so
+        // alternating depth-less draws never split an established depth pass).
+        Bool includeDefaultFboDepthStencil = true;
+        if (fbo.IsDefaultFramebuffer()) {
+            Bool activeDefaultHasDepthStencil = false;
+            if (const auto* active = GetActiveRenderPass()) {
+                Bool activeIsSwapchainPass = false;
+                Bool activeHasSwapchainDepthStencil = false;
+                for (const auto& tracked : active->trackedAttachmentLayouts) {
+                    activeIsSwapchainPass |= tracked.target == TrackedAttachmentTarget::SwapchainColor;
+                    activeHasSwapchainDepthStencil |=
+                        tracked.target == TrackedAttachmentTarget::SwapchainDepthStencil;
+                }
+                activeDefaultHasDepthStencil = activeIsSwapchainPass && activeHasSwapchainDepthStencil;
+            }
+            const auto& defaultDepthAtt = fbo.GetAttachment(FramebufferAttachmentType::Depth);
+            const auto& defaultStencilAtt = fbo.GetAttachment(FramebufferAttachmentType::Stencil);
+            const Bool pendingDepthStencilClear =
+                (defaultDepthAtt.IsTexture() && m_clearManager.HasPendingClear(defaultDepthAtt)) ||
+                HasPendingRenderbufferClear(defaultDepthAtt) ||
+                (defaultStencilAtt.IsTexture() && m_clearManager.HasPendingClear(defaultStencilAtt)) ||
+                HasPendingRenderbufferClear(defaultStencilAtt);
+            includeDefaultFboDepthStencil =
+                drawUsesDepthStencil || activeDefaultHasDepthStencil || pendingDepthStencilClear;
+        }
+
         auto hasPendingClearOnFramebuffer = [&]() -> Bool {
             const auto& drawBuffers = fbo.GetDrawBuffers();
             for (auto attachment : drawBuffers) {
@@ -674,6 +718,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             m_rpFastFboVersion == fbo.GetObjectVersion() && m_rpFastSwapchainIndex == swapchainImageIndex &&
             m_rpFastTexEpoch == m_textureManager.GetTextureImageEpoch() &&
             m_rpFastRbEpoch == m_renderbufferImageEpoch &&
+            (!fbo.IsDefaultFramebuffer() || m_rpFastHadDepthStencil == includeDefaultFboDepthStencil) &&
             m_rpFastRenderPassHash == activeRenderPass->hash && !hasPendingClearOnFramebuffer()) {
             auto activeIt = m_renderPasses.find(activeRenderPass->hash);
             if (activeIt != m_renderPasses.end()) {
@@ -682,7 +727,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             }
         }
 
-        auto compatibilityHash = ComputeHash(fbo, swapchainImageIndex, false);
+        auto compatibilityHash = ComputeHash(fbo, swapchainImageIndex, false, includeDefaultFboDepthStencil);
         if (activeRenderPass != nullptr &&
             activeRenderPass->CompatibleWith(compatibilityHash) &&
             !hasPendingClearOnFramebuffer()) {
@@ -699,10 +744,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             m_rpFastTexEpoch = m_textureManager.GetTextureImageEpoch();
             m_rpFastRbEpoch = m_renderbufferImageEpoch;
             m_rpFastRenderPassHash = activeRenderPass->hash;
+            m_rpFastHadDepthStencil = activeIt->second.hasDepthStencilAttachment;
             activeIt->second.lastUsedFrame = m_frameCounter;
             return activeIt->second;
         }
-        auto hash = ComputeHash(fbo, swapchainImageIndex, true);
+        auto hash = ComputeHash(fbo, swapchainImageIndex, true, includeDefaultFboDepthStencil);
         auto it = m_renderPasses.find(hash);
         if (it != m_renderPasses.end()) {
             it->second.lastUsedFrame = m_frameCounter;
@@ -894,6 +940,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                         MOBILEGL_ASSERT(swapchainImageIndex < swapchainViews.size(),
                                         "GetOrCreateRenderPass: swapchain image index out of range");
                         trackedColorLayout = m_swapchainObject.GetImageLayout(swapchainImageIndex);
+                        // EGL: a presented color buffer's content is undefined when its
+                        // image comes back around (EGL_BUFFER_DESTROYED, the default
+                        // swap behaviour) - skip the tile load instead of reloading
+                        // stale pixels nobody may rely on.
+                        if (!hasClear && !m_swapchainObject.IsImageContentDefined(swapchainImageIndex)) {
+                            trackedColorLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+                        }
                         trackedAttachmentLayouts.emplace_back(TrackedAttachmentLayoutInfo {
                             .target = TrackedAttachmentTarget::SwapchainColor,
                             .swapchainImageIndex = swapchainImageIndex,
@@ -976,6 +1029,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         };
         const auto* selectedDepthStencilAttachment = isUsableDepthStencilAttachment(depthAtt) ? &depthAtt :
                                                      (isUsableDepthStencilAttachment(stencilAtt) ? &stencilAtt : nullptr);
+        // Depth-less default-FBO flavor: nothing in this pass touches depth/stencil
+        // and their content is undefined anyway (EGL swap), so drop the attachment
+        // and its whole tile load + store.
+        if (isDefaultFbo && !includeDefaultFboDepthStencil) {
+            selectedDepthStencilAttachment = nullptr;
+        }
         const Bool hasDistinctDepthAndStencilAttachments =
             isUsableDepthStencilAttachment(depthAtt) && isUsableDepthStencilAttachment(stencilAtt) &&
             !sameDepthStencilAttachmentObject(depthAtt, stencilAtt);
@@ -994,6 +1053,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             VkImageLayout trackedDepthLayout = isDefaultFbo ?
                 m_swapchainObject.GetDepthStencilImageLayout(swapchainImageIndex) :
                 VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+            // EGL 1.5 §3.10.1: every ancillary (depth/stencil) buffer's content is
+            // undefined after a swap, so the first default-FBO pass of a frame can
+            // skip the depth/stencil tile load outright.
+            if (isDefaultFbo && !m_swapchainObject.IsDepthStencilContentDefined(swapchainImageIndex)) {
+                trackedDepthLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+            }
             depthAttachmentDescription.flags = 0;
             VkSampleCountFlagBits depthAttachmentSampleCount = VK_SAMPLE_COUNT_1_BIT;
             Int depthAttachmentId = 0;
@@ -1382,11 +1447,15 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                     case TrackedAttachmentTarget::SwapchainColor:
                         MOBILEGL_ASSERT(s_swapchainObject != nullptr, "EndRenderPass: swapchain object is null");
                         s_swapchainObject->SetImageLayout(trackedAttachment.swapchainImageIndex, trackedAttachment.finalLayout);
+                        // The pass stored into the attachment: its content is defined
+                        // until the image is next presented.
+                        s_swapchainObject->SetImageContentDefined(trackedAttachment.swapchainImageIndex, true);
                         break;
                     case TrackedAttachmentTarget::SwapchainDepthStencil:
                         MOBILEGL_ASSERT(s_swapchainObject != nullptr, "EndRenderPass: swapchain object is null");
                         s_swapchainObject->SetDepthStencilImageLayout(trackedAttachment.swapchainImageIndex,
                                                                       trackedAttachment.finalLayout);
+                        s_swapchainObject->SetDepthStencilContentDefined(trackedAttachment.swapchainImageIndex, true);
                         break;
                     default:
                         MOBILEGL_ASSERT(false, "EndRenderPass: unsupported tracked attachment target=%d",

@@ -262,6 +262,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         m_images.resize(imageCount, VK_NULL_HANDLE);
         VK_VERIFY(vkGetSwapchainImagesKHR(device, m_swapchain, &imageCount, m_images.data()));
         m_imageLayouts.assign(imageCount, VK_IMAGE_LAYOUT_UNDEFINED);
+        // Fresh swapchain images hold garbage until a render pass stores into them.
+        m_imageContentDefined.assign(imageCount, false);
+        m_depthStencilContentDefined.assign(imageCount, false);
 
         CreateImageViews(device);
         CreateDepthStencilResources(device, physicalDevice);
@@ -433,7 +436,37 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
         m_images.clear();
         m_imageLayouts.clear();
+        m_imageContentDefined.clear();
+        m_depthStencilContentDefined.clear();
         m_preTransform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;
+    }
+
+    Bool SwapchainObject::IsImageContentDefined(Uint32 index) const {
+        MOBILEGL_ASSERT(index < m_imageContentDefined.size(), "Swapchain image content index out of range");
+        return m_imageContentDefined[index];
+    }
+
+    void SwapchainObject::SetImageContentDefined(Uint32 index, Bool defined) {
+        MOBILEGL_ASSERT(index < m_imageContentDefined.size(), "Swapchain image content index out of range");
+        m_imageContentDefined[index] = defined;
+    }
+
+    Bool SwapchainObject::IsDepthStencilContentDefined(Uint32 index) const {
+        MOBILEGL_ASSERT(index < m_depthStencilContentDefined.size(),
+                        "Swapchain depth/stencil content index out of range");
+        return m_depthStencilContentDefined[index];
+    }
+
+    void SwapchainObject::SetDepthStencilContentDefined(Uint32 index, Bool defined) {
+        MOBILEGL_ASSERT(index < m_depthStencilContentDefined.size(),
+                        "Swapchain depth/stencil content index out of range");
+        m_depthStencilContentDefined[index] = defined;
+    }
+
+    void SwapchainObject::SetAllDepthStencilContentUndefined() {
+        for (SizeT i = 0; i < m_depthStencilContentDefined.size(); ++i) {
+            m_depthStencilContentDefined[i] = false;
+        }
     }
 
     VkImage SwapchainObject::GetImage(Uint32 index) const {
