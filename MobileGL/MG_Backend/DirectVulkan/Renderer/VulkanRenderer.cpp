@@ -217,6 +217,53 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         return static_cast<Int>((static_cast<Int64>(value) * toExtent + fromExtent / 2) / fromExtent);
     }
 
+    // Redundant dynamic-state elimination for the per-draw hot path: within one
+    // command-buffer recording, a vkCmdSet* whose values already match what the
+    // command buffer holds is skipped. Valid because every PipelineFactory
+    // pipeline declares the same eight dynamic states, so the values persist
+    // across those pipeline binds; the shadow resets whenever a recording
+    // (re)begins, and whenever an auxiliary pipeline with a narrower dynamic
+    // set (blit, depth-mipmap) binds - their static state makes the
+    // corresponding dynamic values undefined per the spec.
+    struct DynamicStateShadow {
+        Bool viewportValid = false;
+        VkViewport viewport{};
+        Bool scissorValid = false;
+        VkRect2D scissor{};
+        Bool blendConstantsValid = false;
+        Float blendConstants[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+        Bool depthBiasValid = false;
+        Float depthBiasConstantFactor = 0.0f;
+        Float depthBiasSlopeFactor = 0.0f;
+        Bool lineWidthValid = false;
+        Float lineWidth = 0.0f;
+        Bool stencilValid = false;
+        Uint32 stencilFrontCompareMask = 0;
+        Uint32 stencilBackCompareMask = 0;
+        Uint32 stencilFrontWriteMask = 0;
+        Uint32 stencilBackWriteMask = 0;
+        Uint32 stencilFrontReference = 0;
+        Uint32 stencilBackReference = 0;
+    };
+    static DynamicStateShadow g_dynamicStateShadow;
+
+    static void ResetDynamicStateShadow() {
+        g_dynamicStateShadow = {};
+    }
+
+    static void ShadowedSetScissor(VkCommandBuffer commandBuffer, const VkRect2D& scissor) {
+        auto& shadow = g_dynamicStateShadow;
+        if (shadow.scissorValid && shadow.scissor.offset.x == scissor.offset.x &&
+            shadow.scissor.offset.y == scissor.offset.y &&
+            shadow.scissor.extent.width == scissor.extent.width &&
+            shadow.scissor.extent.height == scissor.extent.height) {
+            return;
+        }
+        shadow.scissorValid = true;
+        shadow.scissor = scissor;
+        vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
+    }
+
     static void ApplyGLViewportState(VkCommandBuffer commandBuffer,
                                      const IntVec2& framebufferExtent,
                                      VkSurfaceTransformFlagBitsKHR preTransform,
@@ -246,6 +293,14 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         viewport.height = static_cast<float>(viewportHeight);
         viewport.minDepth = depthRange.x();
         viewport.maxDepth = depthRange.y();
+        auto& shadow = g_dynamicStateShadow;
+        if (shadow.viewportValid && shadow.viewport.x == viewport.x && shadow.viewport.y == viewport.y &&
+            shadow.viewport.width == viewport.width && shadow.viewport.height == viewport.height &&
+            shadow.viewport.minDepth == viewport.minDepth && shadow.viewport.maxDepth == viewport.maxDepth) {
+            return;
+        }
+        shadow.viewportValid = true;
+        shadow.viewport = viewport;
         vkCmdSetViewport(commandBuffer, 0, 1, &viewport);
     }
 
@@ -257,6 +312,17 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             blendColor.z(),
             blendColor.w(),
         };
+        auto& shadow = g_dynamicStateShadow;
+        if (shadow.blendConstantsValid && shadow.blendConstants[0] == blendConstants[0] &&
+            shadow.blendConstants[1] == blendConstants[1] && shadow.blendConstants[2] == blendConstants[2] &&
+            shadow.blendConstants[3] == blendConstants[3]) {
+            return;
+        }
+        shadow.blendConstantsValid = true;
+        shadow.blendConstants[0] = blendConstants[0];
+        shadow.blendConstants[1] = blendConstants[1];
+        shadow.blendConstants[2] = blendConstants[2];
+        shadow.blendConstants[3] = blendConstants[3];
         vkCmdSetBlendConstants(commandBuffer, blendConstants);
     }
 
@@ -272,8 +338,17 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     }
 
     static void ApplyPolygonOffsetState(VkCommandBuffer commandBuffer) {
-        vkCmdSetDepthBias(commandBuffer, MG_State::pGLContext->GetPolygonOffsetUnits(), 0.0f,
-                          MG_State::pGLContext->GetPolygonOffsetFactor());
+        const Float constantFactor = MG_State::pGLContext->GetPolygonOffsetUnits();
+        const Float slopeFactor = MG_State::pGLContext->GetPolygonOffsetFactor();
+        auto& shadow = g_dynamicStateShadow;
+        if (shadow.depthBiasValid && shadow.depthBiasConstantFactor == constantFactor &&
+            shadow.depthBiasSlopeFactor == slopeFactor) {
+            return;
+        }
+        shadow.depthBiasValid = true;
+        shadow.depthBiasConstantFactor = constantFactor;
+        shadow.depthBiasSlopeFactor = slopeFactor;
+        vkCmdSetDepthBias(commandBuffer, constantFactor, 0.0f, slopeFactor);
     }
 
     static void ApplyLineWidthState(VkCommandBuffer commandBuffer) {
@@ -288,6 +363,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 lineWidth = maxLineWidth;
             }
         }
+        auto& shadow = g_dynamicStateShadow;
+        if (shadow.lineWidthValid && shadow.lineWidth == lineWidth) {
+            return;
+        }
+        shadow.lineWidthValid = true;
+        shadow.lineWidth = lineWidth;
         vkCmdSetLineWidth(commandBuffer, lineWidth);
     }
 
@@ -336,15 +417,31 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     static void ApplyStencilState(VkCommandBuffer commandBuffer) {
         const StencilFaceState& frontStencil = MG_State::pGLContext->GetStencilState(StencilFace::Front);
         const StencilFaceState& backStencil = MG_State::pGLContext->GetStencilState(StencilFace::Back);
+        const Uint32 frontReference = static_cast<Uint32>(std::max(frontStencil.Ref, 0));
+        const Uint32 backReference = static_cast<Uint32>(std::max(backStencil.Ref, 0));
+
+        auto& shadow = g_dynamicStateShadow;
+        if (shadow.stencilValid && shadow.stencilFrontCompareMask == frontStencil.ValueMask &&
+            shadow.stencilBackCompareMask == backStencil.ValueMask &&
+            shadow.stencilFrontWriteMask == frontStencil.WriteMask &&
+            shadow.stencilBackWriteMask == backStencil.WriteMask &&
+            shadow.stencilFrontReference == frontReference && shadow.stencilBackReference == backReference) {
+            return;
+        }
+        shadow.stencilValid = true;
+        shadow.stencilFrontCompareMask = frontStencil.ValueMask;
+        shadow.stencilBackCompareMask = backStencil.ValueMask;
+        shadow.stencilFrontWriteMask = frontStencil.WriteMask;
+        shadow.stencilBackWriteMask = backStencil.WriteMask;
+        shadow.stencilFrontReference = frontReference;
+        shadow.stencilBackReference = backReference;
 
         vkCmdSetStencilCompareMask(commandBuffer, VK_STENCIL_FACE_FRONT_BIT, frontStencil.ValueMask);
         vkCmdSetStencilCompareMask(commandBuffer, VK_STENCIL_FACE_BACK_BIT, backStencil.ValueMask);
         vkCmdSetStencilWriteMask(commandBuffer, VK_STENCIL_FACE_FRONT_BIT, frontStencil.WriteMask);
         vkCmdSetStencilWriteMask(commandBuffer, VK_STENCIL_FACE_BACK_BIT, backStencil.WriteMask);
-        vkCmdSetStencilReference(commandBuffer, VK_STENCIL_FACE_FRONT_BIT,
-                                 static_cast<Uint32>(std::max(frontStencil.Ref, 0)));
-        vkCmdSetStencilReference(commandBuffer, VK_STENCIL_FACE_BACK_BIT,
-                                 static_cast<Uint32>(std::max(backStencil.Ref, 0)));
+        vkCmdSetStencilReference(commandBuffer, VK_STENCIL_FACE_FRONT_BIT, frontReference);
+        vkCmdSetStencilReference(commandBuffer, VK_STENCIL_FACE_BACK_BIT, backReference);
     }
 
     enum class NumericDomain {
@@ -3653,6 +3750,10 @@ void main() {
             vkCmdSetScissor(frame.commandBuffer, 0, 1, &scissor);
 
             vkCmdBindPipeline(frame.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+            // The depth-mipmap pipeline's narrower dynamic set (viewport/scissor
+            // only) leaves the other dynamic states undefined; its raw scissor
+            // and viewport writes also bypass the shadow.
+            ResetDynamicStateShadow();
 
             std::fill(depthProgramData,
                       depthProgramData + m_depthMipmapResources.program->GetUBOSize(),
@@ -4565,7 +4666,7 @@ void main() {
             scissor.offset = {0, 0};
             scissor.extent = { (Uint)renderPassEntry->extent.x(), (Uint)renderPassEntry->extent.y() };
         }
-        vkCmdSetScissor(frame.commandBuffer, 0, 1, &scissor);
+        ShadowedSetScissor(frame.commandBuffer, scissor);
         return true;
     }
 
@@ -5510,6 +5611,10 @@ void main() {
         const VkPipeline pipeline = GetOrCreateBlitPipeline(renderPassEntry);
         MOBILEGL_ASSERT(pipeline != VK_NULL_HANDLE, "TryBlitToDefaultFramebufferWithShader: blit pipeline is null");
         vkCmdBindPipeline(frame.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+        // The blit pipeline's narrower dynamic set (viewport/scissor only)
+        // leaves the other dynamic states undefined; its raw viewport/scissor
+        // writes also bypass the shadow.
+        ResetDynamicStateShadow();
 
         auto* blitProgramData = static_cast<Uint8*>(m_blitResources.program->MapUBO());
         MOBILEGL_ASSERT(blitProgramData != nullptr, "TryBlitToDefaultFramebufferWithShader: blit UBO is null");
@@ -7581,6 +7686,8 @@ void main() {
     }
 
     void VulkanRenderer::OnFrameCommandRecordingBegan(VkCommandBuffer commandBuffer) {
+        // Dynamic state does not survive a command-buffer boundary.
+        ResetDynamicStateShadow();
         // Pre-pass stream bookkeeping: a fresh frame recording references no
         // textures yet.
         if (m_textureManager) {
