@@ -1436,8 +1436,17 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             return false;
         }
         const Bool isMultisampleTexture = IsMultisampleTextureUploadTarget(uploadTarget);
+        // A texture that has only ever defined level 0 gets a single-level backing
+        // (ANGLE's model). Preallocating the full chain put every render target
+        // onto Adreno's multi-mip image layout and grew each texture by a third
+        // for levels most textures never define. Once a second level is defined
+        // the backing is recreated ONE time with the full chain (the
+        // preserve-copy path below carries the pixels over), so sequentially-
+        // defined atlas mips do not recreate per level, and glGenerateMipmap -
+        // which defines every level before syncing - works unchanged.
         const Uint32 backingMipLevels =
-            isMultisampleTexture ? 1u : std::max(mipLevels, ComputeFullMipLevelCount(texelSize));
+            isMultisampleTexture ? 1u
+            : (mipLevels > 1 ? std::max(mipLevels, ComputeFullMipLevelCount(texelSize)) : 1u);
         TextureShapeInfo shapeInfo{};
         const Bool supportedShape = TryResolveTextureShapeInfo(texture, uploadTarget, texelSize, shapeInfo);
         MOBILEGL_ASSERT(supportedShape,
