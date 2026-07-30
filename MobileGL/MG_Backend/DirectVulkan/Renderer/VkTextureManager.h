@@ -420,6 +420,11 @@ private:
     void DeferViewRelease(VkImageView view);
     void CollectDeferredReleases(Uint32 frameIndex);
     void DestroyDeferredReleases();
+    // Frees the fence/command buffer/staging buffer of every in-flight texture
+    // upload whose fence has signaled (submission order = completion order on
+    // the single queue, so the scan stops at the first still-pending entry).
+    // waitAll blocks on every entry - Shutdown's drain.
+    void ReclaimCompletedUploads(Bool waitAll = false);
     static TextureIdentity MakeTextureIdentity(MG_State::GLState::ITextureObject* texture);
     void EraseTrackedTexture(const TextureIdentity& identity);
     void PruneStaleTextureAliases(MG_State::GLState::ITextureObject* texture);
@@ -458,5 +463,16 @@ private:
     std::unordered_set<TextureIdentity, TextureIdentityHash> m_storageImageTextures;
     Vector<Vector<TextureResource>> m_deferredReleases;
     Vector<Vector<VkImageView>> m_deferredViewReleases;
+    // Texture uploads are submitted out-of-band but NOT waited on (waiting
+    // behind the queue serialized the CPU against the previous frame's GPU
+    // work every time an animated atlas re-uploaded). Their transient objects
+    // are parked here and reclaimed once the upload fence signals.
+    struct PendingUploadReclaim {
+        VkFence fence = VK_NULL_HANDLE;
+        VkCommandBuffer commandBuffer = VK_NULL_HANDLE;
+        VkBuffer stagingBuffer = VK_NULL_HANDLE;
+        VmaAllocation stagingAllocation = nullptr;
+    };
+    Vector<PendingUploadReclaim> m_pendingUploadReclaims;
 };
 } // namespace MobileGL::MG_Backend::DirectVulkan

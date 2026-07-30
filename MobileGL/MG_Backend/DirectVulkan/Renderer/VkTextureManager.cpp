@@ -607,6 +607,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     }
 
     void VkTextureManager::Shutdown() {
+        if (m_device != VK_NULL_HANDLE) {
+            ReclaimCompletedUploads(/*waitAll=*/true);
+        }
         DestroyDeferredReleases();
         m_textureResources.clear();
         m_aliveObjects.clear();
@@ -629,6 +632,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                         frameIndex, m_deferredViewReleases.size());
         m_currentFrameIndex = frameIndex;
         CollectDeferredReleases(frameIndex);
+        ReclaimCompletedUploads();
 
         // Frame-boundary GC: every 64 frame boundaries (~1 s at 60 fps) bounds the reclaim
         // latency for dead textures regardless of draw traffic — workloads that churn
@@ -1708,6 +1712,28 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         m_deferredViewReleases[frameIndex].clear();
     }
 
+    void VkTextureManager::ReclaimCompletedUploads(Bool waitAll) {
+        if (m_pendingUploadReclaims.empty()) {
+            return;
+        }
+
+        SizeT completed = 0;
+        for (; completed < m_pendingUploadReclaims.size(); ++completed) {
+            PendingUploadReclaim& entry = m_pendingUploadReclaims[completed];
+            if (waitAll) {
+                VK_VERIFY(vkWaitForFences(m_device, 1, &entry.fence, VK_TRUE, UINT64_MAX),
+                          "vkWaitForFences(texture upload reclaim)");
+            } else if (vkGetFenceStatus(m_device, entry.fence) != VK_SUCCESS) {
+                break;
+            }
+            vkDestroyFence(m_device, entry.fence, nullptr);
+            vkFreeCommandBuffers(m_device, m_commandPool, 1, &entry.commandBuffer);
+            vmaDestroyBuffer(m_allocator, entry.stagingBuffer, entry.stagingAllocation);
+        }
+        m_pendingUploadReclaims.erase(m_pendingUploadReclaims.begin(),
+                                      m_pendingUploadReclaims.begin() + static_cast<std::ptrdiff_t>(completed));
+    }
+
     void VkTextureManager::DestroyDeferredReleases() {
         for (auto& deferredReleases : m_deferredReleases) {
             deferredReleases.clear();
@@ -2014,11 +2040,23 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         VK_VERIFY(vkCreateFence(m_device, &fenceInfo, nullptr, &uploadFence), "vkCreateFence(texture upload)");
 
         VK_VERIFY(vkQueueSubmit(m_graphicsQueue, 1, &submitInfo, uploadFence), "vkQueueSubmit(texture)");
-        VK_VERIFY(vkWaitForFences(m_device, 1, &uploadFence, VK_TRUE, UINT64_MAX), "vkWaitForFences(texture upload)");
-        vkDestroyFence(m_device, uploadFence, nullptr);
-        vkFreeCommandBuffers(m_device, m_commandPool, 1, &commandBuffer);
-
-        vmaDestroyBuffer(m_allocator, stagingBuffer, stagingAllocation);
+        // Do NOT wait the fence here: this submit sits behind the previous
+        // frame's rendering on the queue, so a synchronous wait stalls the CPU
+        // until the GPU drains - a per-frame vkQueueWaitIdle for any workload
+        // with animated textures. Ordering against the current frame's draws is
+        // already guaranteed (its command buffer is submitted later, at
+        // present), so only the transient objects need to survive execution;
+        // park them until the fence signals.
+        m_pendingUploadReclaims.push_back({uploadFence, commandBuffer, stagingBuffer, stagingAllocation});
+        ReclaimCompletedUploads();
+        // Backstop for pathological upload storms: bound in-flight staging
+        // memory by blocking on the oldest upload only once the list is deep.
+        constexpr SizeT kMaxPendingTextureUploads = 16;
+        if (m_pendingUploadReclaims.size() > kMaxPendingTextureUploads) {
+            VK_VERIFY(vkWaitForFences(m_device, 1, &m_pendingUploadReclaims.front().fence, VK_TRUE, UINT64_MAX),
+                      "vkWaitForFences(texture upload backstop)");
+            ReclaimCompletedUploads();
+        }
 
         if (!ok) {
             MGLOG_D("%s: texture upload cmd failed", __func__);
