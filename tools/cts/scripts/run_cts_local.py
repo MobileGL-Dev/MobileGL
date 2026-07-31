@@ -14,9 +14,10 @@ Usage:
 """
 
 import argparse
+import glob
 import os
 import re
-import signal
+import resource
 import subprocess
 import sys
 import time
@@ -52,6 +53,11 @@ def main():
     ap.add_argument("--caselist", required=True)
     ap.add_argument("--outdir", required=True)
     ap.add_argument("--surface", default="fbo", help="--deqp-surface-type value")
+    # Without an explicit size, dEQP's FboRenderContext sizes the wrapper FBO to
+    # GL_MAX_RENDERBUFFER_SIZE (16384^2 here) and size-derived test allocations
+    # explode (a 4-sample 16K depth texture alone is 4 GiB).
+    ap.add_argument("--surface-size", type=int, default=256,
+                    help="--deqp-surface-width/height value")
     ap.add_argument("--max-rounds", type=int, default=4000)
     ap.add_argument("--max-empty-streak", type=int, default=64,
                     help="abort after this many consecutive chunks that produce no log at all")
@@ -97,6 +103,18 @@ def main():
     started = time.time()
     empty_streak = 0
 
+    # Resume: results in chunk files from an interrupted run still count. The
+    # case that was open when that run died is re-tried rather than assumed bad.
+    prior_chunks = sorted(glob.glob(os.path.join(args.outdir, "chunk*.qpa")))
+    for prior in prior_chunks:
+        finished, _ = completed_cases(prior)
+        done.update(finished)
+    if prior_chunks:
+        chunk = int(re.search(r"chunk(\d+)\.qpa$", prior_chunks[-1]).group(1)) + 1
+        remaining = [c for c in remaining if c not in done]
+        print(f"[run_cts_local] resuming: {len(done)} case(s) already measured, "
+              f"{len(remaining)} to go")
+
     while remaining and chunk < args.max_rounds:
         listfile = os.path.abspath(os.path.join(args.outdir, "remaining.txt"))
         with open(listfile, "w", encoding="utf-8", newline="\n") as fh:
@@ -107,6 +125,8 @@ def main():
             glcts,
             f"--deqp-caselist-file={listfile}",
             f"--deqp-surface-type={args.surface}",
+            f"--deqp-surface-width={args.surface_size}",
+            f"--deqp-surface-height={args.surface_size}",
             "--deqp-terminate-on-device-lost=disable",
             # A wedged case aborts the process instead of stalling the chunk;
             # the runner then records it as Crash and resumes past it.
@@ -117,9 +137,12 @@ def main():
         ]
         timed_out = False
         try:
+            # RLIMIT_CORE=0: MobileGL asserts abort with a core dump, and writing
+            # a multi-GB glcts core image after every crash dominates wall time.
             subprocess.run(cmd, cwd=workdir, env=env, timeout=args.chunk_timeout,
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                           start_new_session=True)
+                           start_new_session=True,
+                           preexec_fn=lambda: resource.setrlimit(resource.RLIMIT_CORE, (0, 0)))
         except subprocess.TimeoutExpired:
             timed_out = True
             print(f"[run_cts_local] chunk {chunk:04d} timed out after {args.chunk_timeout}s",
