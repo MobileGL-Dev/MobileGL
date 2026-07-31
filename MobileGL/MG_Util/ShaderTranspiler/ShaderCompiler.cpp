@@ -220,18 +220,14 @@ namespace MobileGL {
                 auto result = ParseShaderSource(lang, shaderType, source, attrib.flags);
                 if (result) return result;
 
-                // Legacy desktop sources are normalized to "#version 330 core", which parses under
-                // stricter rules than the 460 they used to be forced to: a shader declaring 330 while
-                // using e.g. layout(binding=...) without the matching #extension line compiles on real
-                // drivers but is rejected here. Retry once at 460 before reporting failure; a genuinely
-                // broken shader fails both attempts and keeps its original diagnostics.
-                //
-                // Arrays of arrays are the exception: every desktop driver rejects them below 430
-                // (the GL33 CTS requires the compile failure), so re-legalizing them at 460 would
-                // trade a conformance failure for no real-world shader gain.
-                if (result.error().log.find("arrays of arrays") != String::npos) {
-                    return result;
-                }
+                // Legacy desktop sources are normalized to "#version 330 core" (with a marker on the
+                // directive), which parses under stricter rules than the 460 they used to be forced
+                // to: a shader declaring 110-150 while using e.g. layout(binding=...) without the
+                // matching #extension line compiles on real drivers but is rejected here. Retry once
+                // at 460 before reporting failure; a genuinely broken shader fails both attempts and
+                // keeps its original diagnostics. Application-declared 330+ sources carry no marker
+                // and keep their declared version's strict rules (the GL CTS negative-compile cases
+                // depend on that).
                 String retrySource = source;
                 if (!MG_Util::ShaderTranspiler::RetargetLegacyVersionDirectiveTo460(retrySource)) {
                     return result;

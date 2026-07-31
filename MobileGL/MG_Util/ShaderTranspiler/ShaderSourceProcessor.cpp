@@ -688,6 +688,10 @@ namespace {
         return info;
     }
 
+    // Stamped onto the normalized directive when a legacy (or absent) desktop
+    // version was rewritten to 330; consumed by RetargetLegacyVersionDirectiveTo460.
+    constexpr const char* kNormalizedLegacyMarker = "/*mobilegl-normalized-legacy*/";
+
     MobileGL::String GetNormalizedVersionDirective(const ShaderLanguageInfo& info) {
         if (info.profile == MobileGL::ShaderProfile::ES) {
             // Preserve the pre-existing behavior for standard lowercase "es" directives. MobileGL's Vulkan
@@ -702,9 +706,23 @@ namespace {
             return "#version 460 compatibility\n";
         }
 
+        // An explicitly declared modern core version keeps its number: the GL CTS
+        // negative-compile cases (reserved names, layout-qualifier forms, missing
+        // overloads) rely on the declared version's rules, and raising it would
+        // silently legalize them. gpu_shader5 opt-ins keep the 460 escalation -
+        // Vulkan glslang's ARB_gpu_shader5 support is not complete enough alone.
+        if (info.hasValidVersionDirective && info.version >= 330 && !info.enablesGpuShader5) {
+            return "#version " + std::to_string(info.version) + " core\n";
+        }
+
         const bool useLegacyDesktopVersion =
             info.version < 400 && !info.enablesGpuShader5;
-        return useLegacyDesktopVersion ? "#version 330 core\n" : "#version 460 core\n";
+        // The trailing marker records that this 330 came from a legacy declaration
+        // (or none at all), so the compile-failure retry may re-raise it to 460.
+        // An application's own "#version 330" never carries it and keeps strict
+        // 3.30 semantics.
+        return useLegacyDesktopVersion ? MobileGL::String("#version 330 core ") + kNormalizedLegacyMarker + "\n"
+                                       : "#version 460 core\n";
     }
 
     void NormalizeVersionDirective(MobileGL::String& source, const ShaderLanguageInfo& info) {
@@ -1306,6 +1324,18 @@ namespace MobileGL {
                 // Only the set NormalizeVersionDirective downgraded: desktop core below 400. ES and
                 // compatibility shaders keep whatever they declared.
                 if (info.profile != ShaderProfile::Core || info.version >= 400) return false;
+                // Only rescue MobileGL's own legacy normalization (marked on the directive line).
+                // An application-declared "#version 330" keeps strict 3.30 semantics: raising it
+                // would re-legalize the CTS negative-compile cases (reserved names, arrays of
+                // arrays, missing overloads).
+                SizeT lineEnd = source.find('\n', info.versionDirectiveStart);
+                if (lineEnd == MobileGL::String::npos) {
+                    lineEnd = source.size();
+                }
+                const SizeT markerPos = source.find(kNormalizedLegacyMarker, info.versionDirectiveStart);
+                if (markerPos == MobileGL::String::npos || markerPos > lineEnd) {
+                    return false;
+                }
 
                 source.replace(info.versionDirectiveStart, info.versionDirectiveEnd - info.versionDirectiveStart,
                                "#version 460 core\n");
