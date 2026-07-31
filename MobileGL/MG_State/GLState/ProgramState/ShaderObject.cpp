@@ -169,6 +169,15 @@ namespace MobileGL::MG_State::GLState {
             }
         }
 
+        const std::optional<String> reservedError =
+            MG_Util::ShaderTranspiler::FindReservedIdentifierViolation(compileSource);
+        if (reservedError) {
+            m_compileStatus = false;
+            m_shader.reset();
+            m_infoLog = *reservedError;
+            return;
+        }
+
         // Compile for OpenGL here, so that we can do validation and link
         // like a real OpenGL driver at linking stage
         // Will compile for other backends later.

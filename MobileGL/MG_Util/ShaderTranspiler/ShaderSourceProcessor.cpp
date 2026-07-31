@@ -1342,6 +1342,105 @@ namespace MobileGL {
                 return true;
             }
 
+            std::optional<String> FindReservedIdentifierViolation(const String& source) {
+                // Reserved anywhere; glslang accepts them as plain identifiers.
+                static constexpr const char* kAlwaysReserved[] = {
+                    "image1DShadow",
+                    "image2DShadow",
+                    "image1DArrayShadow",
+                    "image2DArrayShadow",
+                };
+                // Keywords legal only inside a layout(...) qualifier list.
+                static constexpr const char* kLayoutOnlyKeywords[] = {
+                    "packed",
+                    "row_major",
+                };
+
+                const auto isIdentChar = [](char c) {
+                    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_';
+                };
+
+                const SizeT length = source.size();
+                SizeT i = 0;
+                Int layoutParenDepth = 0;   // >0 while inside layout(...)
+                Bool pendingLayoutParen = false; // saw "layout", awaiting its '('
+                while (i < length) {
+                    const char c = source[i];
+                    // Comments.
+                    if (c == '/' && i + 1 < length && source[i + 1] == '/') {
+                        while (i < length && source[i] != '\n') ++i;
+                        continue;
+                    }
+                    if (c == '/' && i + 1 < length && source[i + 1] == '*') {
+                        i += 2;
+                        while (i + 1 < length && !(source[i] == '*' && source[i + 1] == '/')) ++i;
+                        i = (i + 1 < length) ? i + 2 : length;
+                        continue;
+                    }
+                    // Preprocessor lines stay out of scope (macro names may shadow anything).
+                    if (c == '#' && (i == 0 || source[i - 1] == '\n' ||
+                                     source.find_last_not_of(" \t", i - 1) == MobileGL::String::npos ||
+                                     source[source.find_last_not_of(" \t", i - 1)] == '\n')) {
+                        while (i < length && source[i] != '\n') {
+                            if (source[i] == '\\' && i + 1 < length && source[i + 1] == '\n') ++i;
+                            ++i;
+                        }
+                        continue;
+                    }
+                    if (c == '(') {
+                        if (pendingLayoutParen) {
+                            layoutParenDepth = 1;
+                            pendingLayoutParen = false;
+                        } else if (layoutParenDepth > 0) {
+                            ++layoutParenDepth;
+                        }
+                        ++i;
+                        continue;
+                    }
+                    if (c == ')') {
+                        if (layoutParenDepth > 0) --layoutParenDepth;
+                        ++i;
+                        continue;
+                    }
+                    if (c == ' ' || c == '\t' || c == '\r' || c == '\n') {
+                        ++i;
+                        continue;
+                    }
+                    if (isIdentChar(c) && !(c >= '0' && c <= '9')) {
+                        const SizeT start = i;
+                        while (i < length && isIdentChar(source[i])) ++i;
+                        const StringView word(source.data() + start, i - start);
+                        if (word == "layout") {
+                            pendingLayoutParen = true;
+                            continue;
+                        }
+                        pendingLayoutParen = false;
+                        for (const char* reserved : kAlwaysReserved) {
+                            if (word == reserved) {
+                                return String("ERROR: reserved identifier '") + reserved + "' may not be used.";
+                            }
+                        }
+                        if (layoutParenDepth == 0) {
+                            for (const char* keyword : kLayoutOnlyKeywords) {
+                                if (word == keyword) {
+                                    return String("ERROR: '") + keyword +
+                                        "' is a keyword and may not be used as an identifier.";
+                                }
+                            }
+                        }
+                        continue;
+                    }
+                    if (isIdentChar(c)) { // digit-led token: skip the whole number/identifier tail
+                        while (i < length && isIdentChar(source[i])) ++i;
+                        pendingLayoutParen = false;
+                        continue;
+                    }
+                    pendingLayoutParen = false;
+                    ++i;
+                }
+                return std::nullopt;
+            }
+
         } // namespace ShaderTranspiler
     } // namespace MG_Util
 } // namespace MobileGL

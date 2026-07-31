@@ -40,6 +40,11 @@ namespace MobileGL {
             // uses 420-era syntax without the matching #extension line, which real drivers tend to
             // accept - can be retried instead of failing to compile.
             Bool RetargetLegacyVersionDirectiveTo460(String& source);
+
+            // GLSL reserves a few names glslang happily accepts as identifiers ("packed",
+            // "row_major" outside a layout(...) list, the image*Shadow family). Returns the
+            // compile-error text for the first violation, or nullopt for a clean source.
+            std::optional<String> FindReservedIdentifierViolation(const String& source);
         } // namespace ShaderTranspiler
     } // namespace MG_Util
 } // namespace MobileGL
