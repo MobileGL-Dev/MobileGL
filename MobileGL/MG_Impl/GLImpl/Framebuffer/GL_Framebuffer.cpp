@@ -147,6 +147,136 @@ namespace MobileGL::MG_Impl::GLImpl {
                 MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", functionName, detail));
         }
 
+        GLint ClassifyAttachmentComponentType(TextureInternalFormat internalFormat,
+                                              FramebufferAttachmentType attachmentType) {
+            // A stencil value is an unsigned integer index regardless of the depth half
+            // of a packed format.
+            if (attachmentType == FramebufferAttachmentType::Stencil) return GL_UNSIGNED_INT;
+            switch (internalFormat) {
+            case TextureInternalFormat::R16F:
+            case TextureInternalFormat::RG16F:
+            case TextureInternalFormat::RGB16F:
+            case TextureInternalFormat::RGBA16F:
+            case TextureInternalFormat::R32F:
+            case TextureInternalFormat::RG32F:
+            case TextureInternalFormat::RGB32F:
+            case TextureInternalFormat::RGBA32F:
+            case TextureInternalFormat::R11FG11FB10F:
+            case TextureInternalFormat::RGB9E5:
+            case TextureInternalFormat::DepthComponent32F:
+            case TextureInternalFormat::Depth32FStencil8:
+                return GL_FLOAT;
+            case TextureInternalFormat::R8I:
+            case TextureInternalFormat::R16I:
+            case TextureInternalFormat::R32I:
+            case TextureInternalFormat::RG8I:
+            case TextureInternalFormat::RG16I:
+            case TextureInternalFormat::RG32I:
+            case TextureInternalFormat::RGB8I:
+            case TextureInternalFormat::RGB16I:
+            case TextureInternalFormat::RGB32I:
+            case TextureInternalFormat::RGBA8I:
+            case TextureInternalFormat::RGBA16I:
+            case TextureInternalFormat::RGBA32I:
+                return GL_INT;
+            case TextureInternalFormat::R8UI:
+            case TextureInternalFormat::R16UI:
+            case TextureInternalFormat::R32UI:
+            case TextureInternalFormat::RG8UI:
+            case TextureInternalFormat::RG16UI:
+            case TextureInternalFormat::RG32UI:
+            case TextureInternalFormat::RGB8UI:
+            case TextureInternalFormat::RGB16UI:
+            case TextureInternalFormat::RGB32UI:
+            case TextureInternalFormat::RGBA8UI:
+            case TextureInternalFormat::RGBA16UI:
+            case TextureInternalFormat::RGBA32UI:
+            case TextureInternalFormat::RGB10A2UI:
+                return GL_UNSIGNED_INT;
+            case TextureInternalFormat::R8Snorm:
+            case TextureInternalFormat::R16Snorm:
+            case TextureInternalFormat::RG8Snorm:
+            case TextureInternalFormat::RG16Snorm:
+            case TextureInternalFormat::RGB8Snorm:
+            case TextureInternalFormat::RGB16Snorm:
+            case TextureInternalFormat::RGBA8Snorm:
+            case TextureInternalFormat::RGBA16Snorm:
+                return GL_SIGNED_NORMALIZED;
+            case TextureInternalFormat::Unknown:
+                return GL_NONE;
+            default:
+                return GL_UNSIGNED_NORMALIZED;
+            }
+        }
+
+        // Handles the format-derived pnames shared by GetFramebufferAttachmentParameteriv
+        // and its DSA variant. Returns true when pname was one of them.
+        Bool TryAnswerAttachmentFormatQuery(const MG_State::GLState::FramebufferAttachmentObject* attachmentObject,
+                                            FramebufferAttachmentType attachmentType, GLenum pname, GLint* params,
+                                            const char* caller) {
+            switch (pname) {
+            case GL_FRAMEBUFFER_ATTACHMENT_RED_SIZE:
+            case GL_FRAMEBUFFER_ATTACHMENT_GREEN_SIZE:
+            case GL_FRAMEBUFFER_ATTACHMENT_BLUE_SIZE:
+            case GL_FRAMEBUFFER_ATTACHMENT_ALPHA_SIZE:
+            case GL_FRAMEBUFFER_ATTACHMENT_DEPTH_SIZE:
+            case GL_FRAMEBUFFER_ATTACHMENT_STENCIL_SIZE:
+            case GL_FRAMEBUFFER_ATTACHMENT_COMPONENT_TYPE:
+            case GL_FRAMEBUFFER_ATTACHMENT_COLOR_ENCODING:
+                break;
+            default:
+                return false;
+            }
+
+            if (attachmentObject == nullptr || attachmentObject->IsEmpty() || !attachmentObject->IsValid()) {
+                // With OBJECT_TYPE == GL_NONE only OBJECT_TYPE and OBJECT_NAME may be queried.
+                MG_State::pGLContext->RecordError(
+                    ErrorCode::InvalidOperation,
+                    MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller,
+                                                 "No image is attached to the queried attachment point."));
+                return true;
+            }
+
+            TextureInternalFormat internalFormat = TextureInternalFormat::Unknown;
+            if (attachmentObject->IsTexture() && attachmentObject->GetTexture()) {
+                internalFormat = attachmentObject->GetTexture()->GetFormat();
+            } else if (attachmentObject->IsRenderbuffer() && attachmentObject->GetRenderbuffer()) {
+                internalFormat = attachmentObject->GetRenderbuffer()->GetInternalFormat();
+            }
+            const auto sizes = MG_Util::GetComponentSizesForInternalFormat(internalFormat);
+
+            switch (pname) {
+            case GL_FRAMEBUFFER_ATTACHMENT_RED_SIZE:
+                *params = sizes.Red;
+                break;
+            case GL_FRAMEBUFFER_ATTACHMENT_GREEN_SIZE:
+                *params = sizes.Green;
+                break;
+            case GL_FRAMEBUFFER_ATTACHMENT_BLUE_SIZE:
+                *params = sizes.Blue;
+                break;
+            case GL_FRAMEBUFFER_ATTACHMENT_ALPHA_SIZE:
+                *params = sizes.Alpha;
+                break;
+            case GL_FRAMEBUFFER_ATTACHMENT_DEPTH_SIZE:
+                *params = sizes.Depth;
+                break;
+            case GL_FRAMEBUFFER_ATTACHMENT_STENCIL_SIZE:
+                *params = sizes.Stencil;
+                break;
+            case GL_FRAMEBUFFER_ATTACHMENT_COLOR_ENCODING:
+                *params = (internalFormat == TextureInternalFormat::SRGB8 ||
+                           internalFormat == TextureInternalFormat::SRGB8Alpha8)
+                    ? GL_SRGB
+                    : GL_LINEAR;
+                break;
+            case GL_FRAMEBUFFER_ATTACHMENT_COMPONENT_TYPE:
+                *params = ClassifyAttachmentComponentType(internalFormat, attachmentType);
+                break;
+            }
+            return true;
+        }
+
         Bool ResolveRepresentableFramebufferTextureUploadTarget(const MG_State::GLState::ITextureObject& textureObject,
                                                                 TextureUploadTarget& outUploadTarget,
                                                                 Bool& outLayered) {
@@ -412,6 +542,27 @@ namespace MobileGL::MG_Impl::GLImpl {
         FramebufferTarget framebufferTarget = MG_Util::ConvertGLEnumToFramebufferTarget(target);
         if (!FramebufferImpl::ValidateFramebufferTarget(framebufferTarget)) return;
 
+        // Default-framebuffer attachment names (GL_DEPTH, GL_STENCIL, GL_FRONT/GL_BACK
+        // variants) alias onto the equivalent attachment points.
+        switch (attachment) {
+        case GL_DEPTH:
+            attachment = GL_DEPTH_ATTACHMENT;
+            break;
+        case GL_STENCIL:
+            attachment = GL_STENCIL_ATTACHMENT;
+            break;
+        case GL_FRONT:
+        case GL_FRONT_LEFT:
+        case GL_FRONT_RIGHT:
+        case GL_BACK:
+        case GL_BACK_LEFT:
+        case GL_BACK_RIGHT:
+            attachment = GL_COLOR_ATTACHMENT0;
+            break;
+        default:
+            break;
+        }
+
         const Bool depthStencilAlias = attachment == GL_DEPTH_STENCIL_ATTACHMENT;
         FramebufferAttachmentType attachmentType = depthStencilAlias
             ? FramebufferAttachmentType::Depth
@@ -505,6 +656,10 @@ namespace MobileGL::MG_Impl::GLImpl {
                 : GL_FALSE;
             break;
         default:
+            if (TryAnswerAttachmentFormatQuery(attachmentObject, attachmentType, pname, params,
+                                               "GetFramebufferAttachmentParameteriv_State")) {
+                return;
+            }
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidEnum,
                 MakeUnique<GenericErrorInfo>(
@@ -1527,6 +1682,9 @@ namespace MobileGL::MG_Impl::GLImpl {
                 : GL_FALSE;
             break;
         default:
+            if (TryAnswerAttachmentFormatQuery(attachmentObject, attachmentType, pname, params, caller)) {
+                return;
+            }
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidEnum,
                 MakeUnique<GenericErrorInfo>(
