@@ -91,6 +91,9 @@ namespace MobileGL {
             case TextureInternalFormat::RG32F:
             case TextureInternalFormat::RG32I:
             case TextureInternalFormat::RG32UI:
+            // Shadow bytes hold the GL_FLOAT_32_UNSIGNED_INT_24_8_REV wire format
+            // (float depth + a word whose low 8 bits are stencil), 8 bytes/texel.
+            case TextureInternalFormat::Depth32FStencil8:
                 return 8;
 
             case TextureInternalFormat::RGB32F:
@@ -101,7 +104,6 @@ namespace MobileGL {
             case TextureInternalFormat::RGBA32F:
             case TextureInternalFormat::RGBA32I:
             case TextureInternalFormat::RGBA32UI:
-            case TextureInternalFormat::Depth32FStencil8:
                 return 16;
 
             case TextureInternalFormat::R11FG11FB10F:

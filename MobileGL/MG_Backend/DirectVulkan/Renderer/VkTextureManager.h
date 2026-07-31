@@ -481,6 +481,9 @@ private:
     std::unordered_map<TextureIdentity, TextureResource, TextureIdentityHash> m_textureResources;
     // Textures that have been bound to a GL image unit (see MarkStorageImageTexture).
     std::unordered_set<TextureIdentity, TextureIdentityHash> m_storageImageTextures;
+    // Supported multisample counts per format, so repeat texture syncs do not
+    // re-query vkGetPhysicalDeviceImageFormatProperties.
+    std::unordered_map<VkFormat, VkSampleCountFlags> m_multisampleCountsByFormat;
     Vector<Vector<TextureResource>> m_deferredReleases;
     Vector<Vector<VkImageView>> m_deferredViewReleases;
     // Texture uploads are submitted out-of-band but NOT waited on (waiting
