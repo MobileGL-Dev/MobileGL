@@ -29,17 +29,25 @@ namespace MobileGL::MG_State::GLState {
         if (!CheckIndexAvail(program, m_programObjects)) return; // FIXME: add error reporting here
         auto& programObject = m_programObjects[program];
         if (programObject != nullptr) {
-            // Snapshot the attachments: deleting the program is a detach point for shaders
-            // that were flagged with glDeleteShader while still attached.
-            const Vector<SharedPtr<ShaderObject>> attachedShaders = programObject->GetAttachedShaders();
             programObject->MarkAsDeleted();
-            programObject.reset();
-            m_programIndexGenerator.Delete(program);
-            for (const auto& shader : attachedShaders) {
-                const Uint shaderName = shader->GetExternalIndex();
-                if (CheckIndexAvail(shaderName, m_shaderObjects) && m_shaderObjects[shaderName] == shader) {
-                    ReleaseShaderNameIfOrphaned(shaderName);
-                }
+            // A program in use is only FLAGGED: its name (and every program query) stays
+            // valid until it stops being current, at which point UseProgram finishes the job.
+            if (programObject == m_currentProgram) return;
+            DestroyProgramSlot(program);
+        }
+    }
+
+    void ProgramState::DestroyProgramSlot(const Uint program) {
+        auto& programObject = m_programObjects[program];
+        // Snapshot the attachments: deleting the program is a detach point for shaders
+        // that were flagged with glDeleteShader while still attached.
+        const Vector<SharedPtr<ShaderObject>> attachedShaders = programObject->GetAttachedShaders();
+        programObject.reset();
+        m_programIndexGenerator.Delete(program);
+        for (const auto& shader : attachedShaders) {
+            const Uint shaderName = shader->GetExternalIndex();
+            if (CheckIndexAvail(shaderName, m_shaderObjects) && m_shaderObjects[shaderName] == shader) {
+                ReleaseShaderNameIfOrphaned(shaderName);
             }
         }
     }
@@ -49,10 +57,22 @@ namespace MobileGL::MG_State::GLState {
     }
 
     void ProgramState::UseProgram(Uint program) {
+        const SharedPtr<ProgramObject> previous = m_currentProgram;
+
         if (program == 0) m_currentProgram.reset();
 
-        if (!CheckIndexAvail(program, m_programObjects)) return;
-        m_currentProgram = m_programObjects[program];
+        if (CheckIndexAvail(program, m_programObjects)) {
+            m_currentProgram = m_programObjects[program];
+        }
+
+        // A deletion flagged while the program was current takes effect the moment it
+        // stops being current.
+        if (previous != nullptr && previous != m_currentProgram && previous->GetDeleteStatus()) {
+            const Uint previousName = previous->GetExternalIndex();
+            if (CheckIndexAvail(previousName, m_programObjects) && m_programObjects[previousName] == previous) {
+                DestroyProgramSlot(previousName);
+            }
+        }
     }
 
     Uint ProgramState::CreateShader(ShaderStage stage) {

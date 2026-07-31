@@ -35,6 +35,9 @@ namespace MobileGL::MG_State::GLState {
 
     private:
         Bool ShaderHasGLVisibleAttachment(const SharedPtr<ShaderObject>& shaderObject) const;
+        // Frees the name slot and releases orphaned attached shaders; the immediate half
+        // of glDeleteProgram (deferred while the program is current).
+        void DestroyProgramSlot(Uint program);
 
         template <typename T>
         static Bool CheckIndexAvail(const SizeT idx, const Vector<T>& vec) {

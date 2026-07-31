@@ -844,19 +844,13 @@ namespace MobileGL::MG_Impl::GLImpl {
     }
 
     GLboolean IsProgram_State(GLuint program) {
-        /* FIXME: Handle situations that:
-         * A program object marked for deletion with glDeleteProgram but still in use as part of current
-         * rendering state is still considered a program object and glIsProgram will return GL_TRUE.
-         */
+        // Deletion-flagged names stay valid while the object is still GL-visible (program in
+        // use, shader attached), so name validity is exactly the Is* answer.
         if (program == 0) return GL_FALSE;
         return MG_State::pGLContext->ValidateProgramName(program) ? GL_TRUE : GL_FALSE;
     }
 
     GLboolean IsShader_State(GLuint shader) {
-        /* FIXME: Handle situations that:
-         * A shader object marked for deletion with glDeleteShader but still attached to a program object is still
-         * considered a shader object and glIsShader will return GL_TRUE.
-         */
         if (shader == 0) return GL_FALSE;
         return MG_State::pGLContext->ValidateShaderName(shader) ? GL_TRUE : GL_FALSE;
     }
