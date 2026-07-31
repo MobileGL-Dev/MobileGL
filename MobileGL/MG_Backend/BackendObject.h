@@ -300,6 +300,13 @@ namespace MobileGL {
             Float ViewportBoundsRangeMin = 0.0f;
             Float ViewportBoundsRangeMax = 0.0f;
             Int ViewportSubpixelBits = 0;
+            // GL 4.x fragment-interpolation offset limits. These defaults are the
+            // core minimums and are replaced by live GLES/Vulkan device limits.
+            Float MinFragmentInterpolationOffset = -0.5f;
+            // For four fractional bits the greatest required legal offset is
+            // 0.5 - 2^-4 = 0.4375 (GL 4.6 table 23.70).
+            Float MaxFragmentInterpolationOffset = 0.4375f;
+            Int FragmentInterpolationOffsetBits = 4;
             Bool SupportsWideLines = false;
             SizeT MaxShaderStorageBlockSize = 128 * 1024 * 1024;
             Uint32 SubgroupSize = 0;

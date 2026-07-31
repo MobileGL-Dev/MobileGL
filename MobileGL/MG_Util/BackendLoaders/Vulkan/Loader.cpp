@@ -9,6 +9,7 @@
 #include "Loader.h"
 
 #include <Config.h>
+#include <cmath>
 
 namespace MobileGL::MG_Util::BackendLoader {
     namespace {
@@ -38,6 +39,25 @@ namespace MobileGL::MG_Util::BackendLoader {
                                                    limits.framebufferDepthSampleCounts &
                                                    limits.framebufferStencilSampleCounts;
             return MaxSampleCountFromFlags(commonFlags);
+        }
+
+        void FillFragmentInterpolationLimits(MG_External::VulkanCapabilities& caps,
+                                             const VkPhysicalDeviceLimits& limits) {
+            caps.MinFragmentInterpolationOffset =
+                std::isfinite(limits.minInterpolationOffset) && limits.minInterpolationOffset <= -0.5f
+                    ? limits.minInterpolationOffset
+                    : -0.5f;
+
+            caps.MaxFragmentInterpolationOffset = 0.4375f;
+            caps.FragmentInterpolationOffsetBits = 4;
+            const Int bits = static_cast<Int>(limits.subPixelInterpolationOffsetBits);
+            if (bits >= 4 && std::isfinite(limits.maxInterpolationOffset)) {
+                const Float requiredMaxOffset = 0.5f - std::ldexp(1.0f, -bits);
+                if (limits.maxInterpolationOffset >= requiredMaxOffset) {
+                    caps.MaxFragmentInterpolationOffset = limits.maxInterpolationOffset;
+                    caps.FragmentInterpolationOffsetBits = bits;
+                }
+            }
         }
 
         VulkanDynamicFunctions LoadVulkanDynamicFunctions(VkInstance instance) {
@@ -171,6 +191,7 @@ namespace MobileGL::MG_Util::BackendLoader {
         caps.ViewportBoundsRangeMin = p.limits.viewportBoundsRange[0];
         caps.ViewportBoundsRangeMax = p.limits.viewportBoundsRange[1];
         caps.ViewportSubpixelBits = static_cast<Int>(p.limits.viewportSubPixelBits);
+        FillFragmentInterpolationLimits(caps, p.limits);
 
         VkPhysicalDeviceFeatures supportedFeatures{};
         vkGetPhysicalDeviceFeatures(physicalDevice, &supportedFeatures);
@@ -261,6 +282,7 @@ namespace MobileGL::MG_Util::BackendLoader {
         caps.ViewportBoundsRangeMin = properties.limits.viewportBoundsRange[0];
         caps.ViewportBoundsRangeMax = properties.limits.viewportBoundsRange[1];
         caps.ViewportSubpixelBits = static_cast<Int>(properties.limits.viewportSubPixelBits);
+        FillFragmentInterpolationLimits(caps, properties.limits);
         caps.SupportsWideLines = false;
         // This helper only receives properties, not VkPhysicalDeviceFeatures. Leave optional
         // stage writes disabled rather than inferring them from descriptor limits alone.

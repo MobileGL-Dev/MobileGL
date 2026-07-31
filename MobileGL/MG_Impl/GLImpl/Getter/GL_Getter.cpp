@@ -465,6 +465,14 @@ namespace MobileGL::MG_Impl::GLImpl {
         case GL_STENCIL_TEST:
             *params = MG_State::pGLContext->IsCapabilityEnabled(CapabilityInput::StencilTest) ? GL_TRUE : GL_FALSE;
             return;
+        case GL_MIN_FRAGMENT_INTERPOLATION_OFFSET:
+        case GL_MAX_FRAGMENT_INTERPOLATION_OFFSET:
+        case GL_FRAGMENT_INTERPOLATION_OFFSET_BITS: {
+            GLfloat value = 0.0f;
+            GetFloatv(pname, &value);
+            *params = value != 0.0f ? GL_TRUE : GL_FALSE;
+            return;
+        }
         default:
             break;
         }
@@ -518,6 +526,19 @@ namespace MobileGL::MG_Impl::GLImpl {
             const auto& dynamicParameters = MG_Backend::pActiveBackendObject->GetDynamicParameters();
             params[0] = dynamicParameters.ViewportBoundsRangeMin;
             params[1] = dynamicParameters.ViewportBoundsRangeMax;
+            return;
+        }
+        case GL_MIN_FRAGMENT_INTERPOLATION_OFFSET:
+        case GL_MAX_FRAGMENT_INTERPOLATION_OFFSET:
+        case GL_FRAGMENT_INTERPOLATION_OFFSET_BITS: {
+            const auto& dynamicParameters = MG_Backend::pActiveBackendObject->GetDynamicParameters();
+            if (pname == GL_MIN_FRAGMENT_INTERPOLATION_OFFSET) {
+                params[0] = dynamicParameters.MinFragmentInterpolationOffset;
+            } else if (pname == GL_MAX_FRAGMENT_INTERPOLATION_OFFSET) {
+                params[0] = dynamicParameters.MaxFragmentInterpolationOffset;
+            } else {
+                params[0] = static_cast<GLfloat>(dynamicParameters.FragmentInterpolationOffsetBits);
+            }
             return;
         }
         case GL_DEPTH_CLEAR_VALUE:
@@ -1956,6 +1977,15 @@ namespace MobileGL::MG_Impl::GLImpl {
             break;
         case GL_SUBPIXEL_BITS:
             *params = std::max(dynamicParameters.ViewportSubpixelBits, kFrontendSubpixelBits);
+            break;
+        case GL_MIN_FRAGMENT_INTERPOLATION_OFFSET:
+            *params = static_cast<GLint>(std::lround(dynamicParameters.MinFragmentInterpolationOffset));
+            break;
+        case GL_MAX_FRAGMENT_INTERPOLATION_OFFSET:
+            *params = static_cast<GLint>(std::lround(dynamicParameters.MaxFragmentInterpolationOffset));
+            break;
+        case GL_FRAGMENT_INTERPOLATION_OFFSET_BITS:
+            *params = dynamicParameters.FragmentInterpolationOffsetBits;
             break;
         case GL_UNIFORM_BUFFER_OFFSET_ALIGNMENT:
             *params = static_cast<Int>(dynamicParameters.UniformBufferOffsetAlignment);

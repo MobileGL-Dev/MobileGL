@@ -197,13 +197,13 @@ TEST(DirectGLESSanity, AdvertisesDepthTextureForGlmarkShadowScenes) {
     EXPECT_NE(std::find(extensions.begin(), extensions.end(), MobileGL::E_GL_ARB_depth_texture), extensions.end());
 }
 
-TEST(DirectGLESSanity, AdvertisesVoxyRequiredRenderingExtensionsWithoutRaisingGLVersion) {
+TEST(DirectGLESSanity, AdvertisesVoxyRequiredRenderingExtensionsAtExperimentalCTSVersion) {
     MobileGL::MG_Backend::DirectGLES::BackendObject_DirectGLES backend;
     const auto& rendererInfo = backend.GetRendererInfo().RendererGLInfo;
     const auto& extensions = rendererInfo.Extensions;
 
-    EXPECT_EQ(rendererInfo.TargetGLVersion.Major, 3);
-    EXPECT_EQ(rendererInfo.TargetGLVersion.Minor, 3);
+    EXPECT_EQ(rendererInfo.TargetGLVersion.Major, 4);
+    EXPECT_EQ(rendererInfo.TargetGLVersion.Minor, 6);
     EXPECT_EQ(rendererInfo.TargetGLVersion.Patch, 0);
 
     EXPECT_NE(std::find(extensions.begin(), extensions.end(), MobileGL::E_GL_ARB_compute_shader),
@@ -397,13 +397,13 @@ TEST(DirectVulkanSanity, RenderPassExtentUsesSwapchainSizeOnlyForDefaultFramebuf
               MobileGL::IntVec2(512, 512));
 }
 
-TEST(DirectVulkanSanity, AdvertisesVoxyRequiredRenderingExtensionsWithoutRaisingGLVersion) {
+TEST(DirectVulkanSanity, AdvertisesVoxyRequiredRenderingExtensionsAtExperimentalCTSVersion) {
     MobileGL::MG_Backend::DirectVulkan::BackendObject_DirectVulkan backend;
     const auto& rendererInfo = backend.GetRendererInfo().RendererGLInfo;
     const auto& extensions = rendererInfo.Extensions;
 
-    EXPECT_EQ(rendererInfo.TargetGLVersion.Major, 3);
-    EXPECT_EQ(rendererInfo.TargetGLVersion.Minor, 3);
+    EXPECT_EQ(rendererInfo.TargetGLVersion.Major, 4);
+    EXPECT_EQ(rendererInfo.TargetGLVersion.Minor, 6);
     EXPECT_EQ(rendererInfo.TargetGLVersion.Patch, 0);
 
     EXPECT_NE(std::find(extensions.begin(), extensions.end(), MobileGL::E_GL_ARB_compute_shader),
@@ -514,6 +514,50 @@ TEST(DirectGLESSanity, PreservesHostPerStageImageUniformLimits) {
     EXPECT_EQ(params.MaxGeometryImageUniforms, 3);
     EXPECT_EQ(params.MaxFragmentImageUniforms, 4);
     EXPECT_EQ(params.MaxComputeImageUniforms, 5);
+}
+
+TEST(FragmentInterpolationCapabilities, PlumbsGLESAndBothVulkanPropertyPaths) {
+    using namespace MobileGL;
+
+    MG_External::GLESCapabilities glesCaps;
+    glesCaps.MinFragmentInterpolationOffset = -0.75f;
+    glesCaps.MaxFragmentInterpolationOffset = 0.625f;
+    glesCaps.FragmentInterpolationOffsetBits = 6;
+    MG_Backend::DirectGLES::BackendObject_DirectGLES glesBackend;
+    glesBackend.ApplyGLESCapabilitiesForTesting(glesCaps);
+    EXPECT_FLOAT_EQ(glesBackend.GetDynamicParameters().MinFragmentInterpolationOffset, -0.75f);
+    EXPECT_FLOAT_EQ(glesBackend.GetDynamicParameters().MaxFragmentInterpolationOffset, 0.625f);
+    EXPECT_EQ(glesBackend.GetDynamicParameters().FragmentInterpolationOffsetBits, 6);
+
+    VkPhysicalDeviceProperties properties{};
+    // A common Vulkan limit pair: max is one representable 4-bit step below 0.5.
+    properties.limits.minInterpolationOffset = -0.5f;
+    properties.limits.maxInterpolationOffset = 0.4375f;
+    properties.limits.subPixelInterpolationOffsetBits = 4;
+    MG_External::VulkanCapabilities vkCaps;
+    MG_Util::BackendLoader::FillInVulkanCapabilities(vkCaps, properties);
+    EXPECT_FLOAT_EQ(vkCaps.MinFragmentInterpolationOffset, -0.5f);
+    EXPECT_FLOAT_EQ(vkCaps.MaxFragmentInterpolationOffset, 0.4375f);
+    EXPECT_EQ(vkCaps.FragmentInterpolationOffsetBits, 4);
+
+    vkCaps.MinFragmentInterpolationOffset = -0.875f;
+    vkCaps.MaxFragmentInterpolationOffset = 0.75f;
+    vkCaps.FragmentInterpolationOffsetBits = 7;
+    MG_Backend::DirectVulkan::BackendObject_DirectVulkan vkBackend;
+    vkBackend.ApplyVulkanCapabilitiesForTesting(vkCaps);
+    EXPECT_FLOAT_EQ(vkBackend.GetDynamicParameters().MinFragmentInterpolationOffset, -0.875f);
+    EXPECT_FLOAT_EQ(vkBackend.GetDynamicParameters().MaxFragmentInterpolationOffset, 0.75f);
+    EXPECT_EQ(vkBackend.GetDynamicParameters().FragmentInterpolationOffsetBits, 7);
+
+    // Invalid/zero host data cannot under-advertise the OpenGL 4 minimums.
+    MG_External::VulkanCapabilities invalidCaps;
+    invalidCaps.MinFragmentInterpolationOffset = 0.0f;
+    invalidCaps.MaxFragmentInterpolationOffset = 0.0f;
+    invalidCaps.FragmentInterpolationOffsetBits = 0;
+    vkBackend.ApplyVulkanCapabilitiesForTesting(invalidCaps);
+    EXPECT_LE(vkBackend.GetDynamicParameters().MinFragmentInterpolationOffset, -0.5f);
+    EXPECT_FLOAT_EQ(vkBackend.GetDynamicParameters().MaxFragmentInterpolationOffset, 0.4375f);
+    EXPECT_EQ(vkBackend.GetDynamicParameters().FragmentInterpolationOffsetBits, 4);
 }
 
 TEST(DirectVulkanSanity, AdvertisesSubgroupOnlyWhenVulkanReportsUsableSupport) {
@@ -636,6 +680,48 @@ TEST(GetterSanity, ClampsMaxVertexAttribsToCurrentValueStorageCapacity) {
     EXPECT_EQ(MG_Impl::GLImpl::VertexArrayImpl::GetMaxVertexAttribs(), static_cast<Uint>(capacity));
 
     MG_State::pGLContext.reset();
+}
+
+TEST(GetterSanity, ReportsFragmentInterpolationLimitsForFloatAndIntegerQueries) {
+    using namespace MobileGL;
+
+    auto previousContext = Move(MG_State::pGLContext);
+    auto previousBackend = Move(MG_Backend::pActiveBackendObject);
+    MG_State::pGLContext = MakeUnique<MG_State::GLState::GLContext>();
+
+    MG_Backend::DynamicBackendParameters params;
+    params.MinFragmentInterpolationOffset = -0.75f;
+    params.MaxFragmentInterpolationOffset = 0.4375f;
+    params.FragmentInterpolationOffsetBits = 6;
+    MG_Backend::pActiveBackendObject = MakeUnique<DynamicParameterBackend>(params);
+
+    GLfloat floatValue = 0.0f;
+    MG_Impl::GLImpl::GetFloatv(GL_MIN_FRAGMENT_INTERPOLATION_OFFSET, &floatValue);
+    EXPECT_FLOAT_EQ(floatValue, -0.75f);
+    MG_Impl::GLImpl::GetFloatv(GL_MAX_FRAGMENT_INTERPOLATION_OFFSET, &floatValue);
+    EXPECT_FLOAT_EQ(floatValue, 0.4375f);
+    MG_Impl::GLImpl::GetFloatv(GL_FRAGMENT_INTERPOLATION_OFFSET_BITS, &floatValue);
+    EXPECT_FLOAT_EQ(floatValue, 6.0f);
+
+    GLint intValue = 0;
+    MG_Impl::GLImpl::GetIntegerv(GL_MIN_FRAGMENT_INTERPOLATION_OFFSET, &intValue);
+    EXPECT_EQ(intValue, -1);
+    MG_Impl::GLImpl::GetIntegerv(GL_MAX_FRAGMENT_INTERPOLATION_OFFSET, &intValue);
+    EXPECT_EQ(intValue, 0);
+    MG_Impl::GLImpl::GetIntegerv(GL_FRAGMENT_INTERPOLATION_OFFSET_BITS, &intValue);
+    EXPECT_EQ(intValue, 6);
+
+    GLboolean boolValue = GL_FALSE;
+    MG_Impl::GLImpl::GetBooleanv(GL_MIN_FRAGMENT_INTERPOLATION_OFFSET, &boolValue);
+    EXPECT_EQ(boolValue, GL_TRUE);
+    MG_Impl::GLImpl::GetBooleanv(GL_MAX_FRAGMENT_INTERPOLATION_OFFSET, &boolValue);
+    EXPECT_EQ(boolValue, GL_TRUE);
+    MG_Impl::GLImpl::GetBooleanv(GL_FRAGMENT_INTERPOLATION_OFFSET_BITS, &boolValue);
+    EXPECT_EQ(boolValue, GL_TRUE);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    MG_Backend::pActiveBackendObject = Move(previousBackend);
+    MG_State::pGLContext = Move(previousContext);
 }
 
 TEST(GetterSanity, PerStageImageUniformQueriesMatchShaderCompilerLimits) {

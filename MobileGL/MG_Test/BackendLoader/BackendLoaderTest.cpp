@@ -34,6 +34,11 @@ namespace {
         GLint maxFragmentImageUniforms = 4;
         GLint maxComputeImageUniforms = 5;
         bool maxGeometryImageUniformsQueried = false;
+        GLfloat minFragmentInterpolationOffset = -0.75f;
+        GLfloat maxFragmentInterpolationOffset = 0.625f;
+        GLint fragmentInterpolationOffsetBits = 6;
+        bool fragmentInterpolationLimitsQueried = false;
+        bool fragmentInterpolationQueryRaisesError = false;
         // Emulates ANGLE-on-Vulkan: the draw reads the indirect command's
         // baseInstance word and exposes it through gl_InstanceID.
         bool drawLeaksBaseInstanceWord = false;
@@ -108,6 +113,14 @@ namespace {
             case GL_MAX_COMPUTE_IMAGE_UNIFORMS:
                 *data = g_fake.maxComputeImageUniforms;
                 break;
+            case GL_FRAGMENT_INTERPOLATION_OFFSET_BITS:
+                g_fake.fragmentInterpolationLimitsQueried = true;
+                if (g_fake.fragmentInterpolationQueryRaisesError) {
+                    g_fake.pendingError = GL_INVALID_ENUM;
+                } else {
+                    *data = g_fake.fragmentInterpolationOffsetBits;
+                }
+                break;
             // FillInGLESCapabilities reads the context version before running the
             // baseInstance probe, which requires ES >= 3.1.
             case GL_MAJOR_VERSION:
@@ -154,6 +167,22 @@ namespace {
             case GL_MAX_TEXTURE_MAX_ANISOTROPY_EXT:
                 g_fake.maxTextureMaxAnisotropyQueried = true;
                 data[0] = g_fake.maxTextureMaxAnisotropy;
+                break;
+            case GL_MIN_FRAGMENT_INTERPOLATION_OFFSET:
+                g_fake.fragmentInterpolationLimitsQueried = true;
+                if (g_fake.fragmentInterpolationQueryRaisesError) {
+                    g_fake.pendingError = GL_INVALID_ENUM;
+                } else {
+                    data[0] = g_fake.minFragmentInterpolationOffset;
+                }
+                break;
+            case GL_MAX_FRAGMENT_INTERPOLATION_OFFSET:
+                g_fake.fragmentInterpolationLimitsQueried = true;
+                if (g_fake.fragmentInterpolationQueryRaisesError) {
+                    g_fake.pendingError = GL_INVALID_ENUM;
+                } else {
+                    data[0] = g_fake.maxFragmentInterpolationOffset;
+                }
                 break;
             // Two-component range queries.
             case GL_ALIASED_LINE_WIDTH_RANGE:
@@ -460,6 +489,52 @@ TEST(ImageUniformCapabilities, QueriesRealPerStageLimitsAndConservativelyGatesGe
     EXPECT_EQ(es32Caps.MaxFragmentImageUniforms, g_fake.maxFragmentImageUniforms);
     EXPECT_EQ(es32Caps.MaxComputeImageUniforms, g_fake.maxComputeImageUniforms);
     EXPECT_TRUE(g_fake.maxGeometryImageUniformsQueried);
+}
+
+TEST(FragmentInterpolationCapabilities, QueriesOnlyWhenSupportedAndPreservesDriverLimits) {
+    const auto funcs = MakeFakeGLESFunctions();
+
+    ResetFakeDriver();
+    g_fake.maxVertexSsboBlocks = 0;
+    MobileGL::MG_External::GLESCapabilities unsupportedCaps;
+    ASSERT_TRUE(MobileGL::MG_Util::BackendLoader::FillInGLESCapabilities(unsupportedCaps, funcs));
+    EXPECT_FALSE(unsupportedCaps.SupportsShaderMultisampleInterpolation);
+    EXPECT_FALSE(g_fake.fragmentInterpolationLimitsQueried);
+    EXPECT_FLOAT_EQ(unsupportedCaps.MinFragmentInterpolationOffset, -0.5f);
+    EXPECT_FLOAT_EQ(unsupportedCaps.MaxFragmentInterpolationOffset, 0.4375f);
+    EXPECT_EQ(unsupportedCaps.FragmentInterpolationOffsetBits, 4);
+
+    ResetFakeDriver();
+    g_fake.maxVertexSsboBlocks = 0;
+    g_fake.extensions.emplace_back("GL_OES_shader_multisample_interpolation");
+    // A stale error from an earlier capability probe must not make the optional
+    // interpolation query look like it failed.
+    g_fake.pendingError = GL_INVALID_OPERATION;
+    MobileGL::MG_External::GLESCapabilities supportedCaps;
+    ASSERT_TRUE(MobileGL::MG_Util::BackendLoader::FillInGLESCapabilities(supportedCaps, funcs));
+    EXPECT_TRUE(supportedCaps.SupportsShaderMultisampleInterpolation);
+    EXPECT_TRUE(g_fake.fragmentInterpolationLimitsQueried);
+    EXPECT_FLOAT_EQ(supportedCaps.MinFragmentInterpolationOffset, g_fake.minFragmentInterpolationOffset);
+    EXPECT_FLOAT_EQ(supportedCaps.MaxFragmentInterpolationOffset, g_fake.maxFragmentInterpolationOffset);
+    EXPECT_EQ(supportedCaps.FragmentInterpolationOffsetBits, g_fake.fragmentInterpolationOffsetBits);
+    EXPECT_EQ(funcs.glGetError(), GL_NO_ERROR);
+}
+
+TEST(FragmentInterpolationCapabilities, QueryErrorIsDrainedAndFallsBackToCoreMinimums) {
+    ResetFakeDriver();
+    g_fake.maxVertexSsboBlocks = 0;
+    g_fake.extensions.emplace_back("GL_OES_shader_multisample_interpolation");
+    g_fake.fragmentInterpolationQueryRaisesError = true;
+    const auto funcs = MakeFakeGLESFunctions();
+
+    MobileGL::MG_External::GLESCapabilities caps;
+    ASSERT_TRUE(MobileGL::MG_Util::BackendLoader::FillInGLESCapabilities(caps, funcs));
+
+    EXPECT_TRUE(g_fake.fragmentInterpolationLimitsQueried);
+    EXPECT_FLOAT_EQ(caps.MinFragmentInterpolationOffset, -0.5f);
+    EXPECT_FLOAT_EQ(caps.MaxFragmentInterpolationOffset, 0.4375f);
+    EXPECT_EQ(caps.FragmentInterpolationOffsetBits, 4);
+    EXPECT_EQ(funcs.glGetError(), GL_NO_ERROR);
 }
 
 // The extension string is what apps gate on (LWJGL builds GLCapabilities from it), so advertising

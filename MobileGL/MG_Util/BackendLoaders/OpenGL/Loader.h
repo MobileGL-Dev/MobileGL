@@ -1055,6 +1055,9 @@ namespace MobileGL {
             // SPIRV-Cross's `#extension ... : require` would fail to compile and MobileGL falls back
             // to stripping the NoPerspective decoration (smooth interpolation) via StripNoPerspectivePass.
             Bool SupportsNoperspectiveInterpolation = false;
+            // GLES 3.2 core or GL_OES_shader_multisample_interpolation exposes
+            // interpolateAtOffset and the three fragment-offset limit queries.
+            Bool SupportsShaderMultisampleInterpolation = false;
             // GL_RENDERER contains "ANGLE".
             Bool IsAngleRenderer = false;
             // GL_RENDERER contains both "ANGLE" and "llvmpipe".
@@ -1120,6 +1123,9 @@ namespace MobileGL {
             Float ViewportBoundsRangeMin = 0.0f;
             Float ViewportBoundsRangeMax = 0.0f;
             Int ViewportSubpixelBits = 0;
+            Float MinFragmentInterpolationOffset = -0.5f;
+            Float MaxFragmentInterpolationOffset = 0.4375f;
+            Int FragmentInterpolationOffsetBits = 4;
         };
     } // namespace MG_External
 

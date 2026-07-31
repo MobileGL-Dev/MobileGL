@@ -68,6 +68,9 @@ namespace MobileGL {
             Float ViewportBoundsRangeMin = 0.0f;
             Float ViewportBoundsRangeMax = 0.0f;
             Int ViewportSubpixelBits = 0;
+            Float MinFragmentInterpolationOffset = -0.5f;
+            Float MaxFragmentInterpolationOffset = 0.4375f;
+            Int FragmentInterpolationOffsetBits = 4;
             Bool SupportsWideLines = false;
             // Storage-image descriptors are limited per stage by
             // maxPerStageDescriptorStorageImages, but writes/atomics outside compute additionally

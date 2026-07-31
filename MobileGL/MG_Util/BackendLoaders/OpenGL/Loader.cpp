@@ -9,6 +9,7 @@
 #include "Loader.h"
 #include "MG_Util/Types.h"
 #include <Config.h>
+#include <cmath>
 #if defined(_WIN32)
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN 1
@@ -838,8 +839,14 @@ namespace MobileGL::MG_Util::BackendLoader {
                 if (std::strcmp(extension, "GL_NV_shader_noperspective_interpolation") == 0) {
                     caps.SupportsNoperspectiveInterpolation = true;
                 }
+                if (std::strcmp(extension, "GL_OES_shader_multisample_interpolation") == 0) {
+                    caps.SupportsShaderMultisampleInterpolation = true;
+                }
             }
         }
+        caps.SupportsShaderMultisampleInterpolation =
+            caps.SupportsShaderMultisampleInterpolation || caps.GLESVersion.Major > 3 ||
+            (caps.GLESVersion.Major == 3 && caps.GLESVersion.Minor >= 2);
 
         // Detect optional raster/color-mask entry points by whether they loaded. glColorMaski is GLES
         // 3.2 core (no extension string), so pointer presence is the reliable signal for all of these.
@@ -900,6 +907,9 @@ namespace MobileGL::MG_Util::BackendLoader {
         GLint maxColorAttachments = 8;
         GLint maxClipDistances = 8;
         GLint maxViewports = 16;
+        GLfloat minFragmentInterpolationOffset = -0.5f;
+        GLfloat maxFragmentInterpolationOffset = 0.4375f;
+        GLint fragmentInterpolationOffsetBits = 4;
         glesFuncs.glGetFloatv(GL_ALIASED_LINE_WIDTH_RANGE, aliasedLineWidthRange);
         glesFuncs.glGetFloatv(GL_SMOOTH_LINE_WIDTH_RANGE, smoothLineWidthRange);
         glesFuncs.glGetFloatv(GL_SMOOTH_LINE_WIDTH_GRANULARITY, &smoothLineWidthGranularity);
@@ -950,6 +960,29 @@ namespace MobileGL::MG_Util::BackendLoader {
         glesFuncs.glGetIntegerv(GL_MAX_VIEWPORTS, &maxViewports);
         glesFuncs.glGetIntegerv(GL_MAX_VIEWPORT_DIMS, maxViewportDims);
         glesFuncs.glGetIntegerv(GL_VIEWPORT_SUBPIXEL_BITS, &viewportSubpixelBits);
+        if (caps.SupportsShaderMultisampleInterpolation && glesFuncs.glGetFloatv) {
+            const auto drainErrors = [&glesFuncs]() {
+                Bool hadError = false;
+                if (glesFuncs.glGetError) {
+                    while (glesFuncs.glGetError() != GL_NO_ERROR) hadError = true;
+                }
+                return hadError;
+            };
+
+            // Isolate these optional queries from errors raised by preceding capability
+            // probes, then consume any query error so initialization never leaks it into
+            // the application's first glGetError call.
+            drainErrors();
+            glesFuncs.glGetFloatv(GL_MIN_FRAGMENT_INTERPOLATION_OFFSET, &minFragmentInterpolationOffset);
+            glesFuncs.glGetFloatv(GL_MAX_FRAGMENT_INTERPOLATION_OFFSET, &maxFragmentInterpolationOffset);
+            glesFuncs.glGetIntegerv(GL_FRAGMENT_INTERPOLATION_OFFSET_BITS, &fragmentInterpolationOffsetBits);
+            if (drainErrors()) {
+                MGLOG_W("Fragment interpolation limit query failed; using OpenGL minimums");
+                minFragmentInterpolationOffset = -0.5f;
+                maxFragmentInterpolationOffset = 0.4375f;
+                fragmentInterpolationOffsetBits = 4;
+            }
+        }
         // Only legal to query once the extension has been seen in the loop above, hence not batched
         // with the unconditional probes: on a driver without it this raises GL_INVALID_ENUM.
         if (caps.SupportsTextureFilterAnisotropy) {
@@ -1007,6 +1040,19 @@ namespace MobileGL::MG_Util::BackendLoader {
         caps.ViewportBoundsRangeMin = viewportBoundsRange[0];
         caps.ViewportBoundsRangeMax = viewportBoundsRange[1];
         caps.ViewportSubpixelBits = viewportSubpixelBits;
+        caps.MinFragmentInterpolationOffset =
+            std::isfinite(minFragmentInterpolationOffset) && minFragmentInterpolationOffset <= -0.5f
+                ? minFragmentInterpolationOffset
+                : -0.5f;
+        caps.MaxFragmentInterpolationOffset = 0.4375f;
+        caps.FragmentInterpolationOffsetBits = 4;
+        if (fragmentInterpolationOffsetBits >= 4 && std::isfinite(maxFragmentInterpolationOffset)) {
+            const Float requiredMaxOffset = 0.5f - std::ldexp(1.0f, -fragmentInterpolationOffsetBits);
+            if (maxFragmentInterpolationOffset >= requiredMaxOffset) {
+                caps.MaxFragmentInterpolationOffset = maxFragmentInterpolationOffset;
+                caps.FragmentInterpolationOffsetBits = fragmentInterpolationOffsetBits;
+            }
+        }
         MGLOG_I("    GL_ALIASED_LINE_WIDTH_RANGE: [%.3f, %.3f]", caps.AliasedLineWidthRangeMin,
                 caps.AliasedLineWidthRangeMax);
         MGLOG_I("    GL_SMOOTH_LINE_WIDTH_RANGE: [%.3f, %.3f]", caps.SmoothLineWidthRangeMin,

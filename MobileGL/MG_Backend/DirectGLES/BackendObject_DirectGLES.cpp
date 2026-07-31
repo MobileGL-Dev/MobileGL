@@ -20,6 +20,7 @@
 #include <MG_Util/Texture/TextureFormatProcessor.h>
 #include <Config.h>
 #include <algorithm>
+#include <cmath>
 #include <format>
 
 namespace MobileGL::MG_Backend::DirectGLES {
@@ -603,7 +604,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 .ExtraVendor = Nullopt,              // Extra vendor
                 .RendererGLInfo =
                     {
-                        .TargetGLVersion = {3, 3, 0},   // Target OpenGL Version
+                        .TargetGLVersion = {4, 6, 0},   // Experimental GL CTS target version
                         .TargetGLSLVersion = {4, 6, 0}, // Target Shading Language Version
                         // Baseline advertisement (no timer queries / anisotropy yet); reconciled
                         // once the ES capabilities exist, see UpdateAdvertisedCapabilityExtensions.
@@ -1034,6 +1035,24 @@ namespace MobileGL::MG_Backend::DirectGLES {
         m_dynamicParameters.ViewportBoundsRangeMin = m_GLESCapabilities.ViewportBoundsRangeMin;
         m_dynamicParameters.ViewportBoundsRangeMax = m_GLESCapabilities.ViewportBoundsRangeMax;
         m_dynamicParameters.ViewportSubpixelBits = m_GLESCapabilities.ViewportSubpixelBits;
+        m_dynamicParameters.MinFragmentInterpolationOffset =
+            std::isfinite(m_GLESCapabilities.MinFragmentInterpolationOffset) &&
+                    m_GLESCapabilities.MinFragmentInterpolationOffset <= -0.5f
+                ? m_GLESCapabilities.MinFragmentInterpolationOffset
+                : -0.5f;
+        m_dynamicParameters.MaxFragmentInterpolationOffset = 0.4375f;
+        m_dynamicParameters.FragmentInterpolationOffsetBits = 4;
+        if (m_GLESCapabilities.FragmentInterpolationOffsetBits >= 4 &&
+            std::isfinite(m_GLESCapabilities.MaxFragmentInterpolationOffset)) {
+            const Float requiredMaxOffset =
+                0.5f - std::ldexp(1.0f, -m_GLESCapabilities.FragmentInterpolationOffsetBits);
+            if (m_GLESCapabilities.MaxFragmentInterpolationOffset >= requiredMaxOffset) {
+                m_dynamicParameters.MaxFragmentInterpolationOffset =
+                    m_GLESCapabilities.MaxFragmentInterpolationOffset;
+                m_dynamicParameters.FragmentInterpolationOffsetBits =
+                    m_GLESCapabilities.FragmentInterpolationOffsetBits;
+            }
+        }
         m_dynamicParameters.SupportsWideLines =
             m_GLESCapabilities.AliasedLineWidthRangeMax > 1.0f || m_GLESCapabilities.SmoothLineWidthRangeMax > 1.0f;
 

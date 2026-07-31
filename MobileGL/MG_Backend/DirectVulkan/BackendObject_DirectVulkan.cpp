@@ -18,6 +18,7 @@
 #include "MG_Util/Texture/TextureFormatProcessor.h"
 
 #include <Config.h>
+#include <cmath>
 #include <cstdlib>
 #include <cstring>
 
@@ -505,7 +506,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             .ExtraVendor = Nullopt,
             .RendererGLInfo =
                 {
-                    .TargetGLVersion = {3, 3, 0},
+                    .TargetGLVersion = {4, 6, 0}, // Experimental GL CTS target version
                     .TargetGLSLVersion = {4, 6, 0},
                     // Baseline advertisement (no shader subgroup, no timer queries); a
                     // live backend reconciles its copy in UpdateAdvertisedExtensions.
@@ -796,6 +797,23 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         m_dynamicParameters.ViewportBoundsRangeMin = m_vulkanCaps.ViewportBoundsRangeMin;
         m_dynamicParameters.ViewportBoundsRangeMax = m_vulkanCaps.ViewportBoundsRangeMax;
         m_dynamicParameters.ViewportSubpixelBits = m_vulkanCaps.ViewportSubpixelBits;
+        m_dynamicParameters.MinFragmentInterpolationOffset =
+            std::isfinite(m_vulkanCaps.MinFragmentInterpolationOffset) &&
+                    m_vulkanCaps.MinFragmentInterpolationOffset <= -0.5f
+                ? m_vulkanCaps.MinFragmentInterpolationOffset
+                : -0.5f;
+        m_dynamicParameters.MaxFragmentInterpolationOffset = 0.4375f;
+        m_dynamicParameters.FragmentInterpolationOffsetBits = 4;
+        if (m_vulkanCaps.FragmentInterpolationOffsetBits >= 4 &&
+            std::isfinite(m_vulkanCaps.MaxFragmentInterpolationOffset)) {
+            const Float requiredMaxOffset =
+                0.5f - std::ldexp(1.0f, -m_vulkanCaps.FragmentInterpolationOffsetBits);
+            if (m_vulkanCaps.MaxFragmentInterpolationOffset >= requiredMaxOffset) {
+                m_dynamicParameters.MaxFragmentInterpolationOffset = m_vulkanCaps.MaxFragmentInterpolationOffset;
+                m_dynamicParameters.FragmentInterpolationOffsetBits =
+                    m_vulkanCaps.FragmentInterpolationOffsetBits;
+            }
+        }
         m_dynamicParameters.SupportsWideLines = m_vulkanCaps.SupportsWideLines;
         m_dynamicParameters.MaxShaderStorageBlockSize =
             std::min(m_vulkanCaps.MaxShaderStorageBlockSize, kMaxAdvertisedShaderStorageBlockSize);
