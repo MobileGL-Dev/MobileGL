@@ -205,6 +205,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // CPU repacking into the requested client layout).
         void ReadDepthStencilPixels(MG_State::GLState::FramebufferObject& readFbo, GLint x, GLint y, GLsizei width,
                                     GLsizei height, GLenum format, GLenum type, void* pixels);
+        // Copy-and-repack core shared by depth-stencil ReadPixels and GetTexImage;
+        // expects command recording to be active and any render pass already ended.
+        void ReadDepthStencilImageToClient(VkImage image, VkFormat vkFormat, VkImageLayout* trackedLayout,
+                                           VkImageAspectFlags imageAspect, Uint32 mipLevel, Uint32 baseArrayLayer,
+                                           GLint x, GLint y, GLsizei width, GLsizei height, GLenum format, GLenum type,
+                                           void* pixels);
         static SizeT GetReadbackTexelSize(VkFormat sourceFormat);
         static Bool ConvertReadbackPixels(const Uint8* sourcePixels, VkFormat sourceFormat,
                                           GLsizei width, GLsizei height, GLenum destinationFormat,

@@ -7024,6 +7024,18 @@ void main() {
             return;
         }
 
+        ReadDepthStencilImageToClient(image, vkFormat, trackedLayout, imageAspect, mipLevel, baseArrayLayer, x, y,
+                                      width, height, format, type, pixels);
+    }
+
+    void VulkanRenderer::ReadDepthStencilImageToClient(VkImage image, VkFormat vkFormat, VkImageLayout* trackedLayout,
+                                                       VkImageAspectFlags imageAspect, Uint32 mipLevel,
+                                                       Uint32 baseArrayLayer, GLint x, GLint y, GLsizei width,
+                                                       GLsizei height, GLenum format, GLenum type, void* pixels) {
+        const Bool wantDepth = format != GL_STENCIL_INDEX;
+        const Bool wantStencil = format != GL_DEPTH_COMPONENT;
+        auto& frame = m_frameContext.GetCurrent();
+
         if (*trackedLayout == VK_IMAGE_LAYOUT_UNDEFINED) {
             MGLOG_E("DirectVulkan::ReadDepthStencilPixels skipped: source layout is undefined");
             return;
@@ -7272,10 +7284,6 @@ void main() {
                     textureObject->GetExternalIndex());
             return;
         }
-        if ((resource->aspect & VK_IMAGE_ASPECT_COLOR_BIT) == 0) {
-            MGLOG_E("DirectVulkan::GetTexImage skipped: only color textures are supported right now");
-            return;
-        }
 
         auto& frame = m_frameContext.GetCurrent();
         if (!frame.isCommandRecording) {
@@ -7288,6 +7296,25 @@ void main() {
         MOBILEGL_ASSERT(clearReady,
                         "GetTexImage: failed to materialize pending clear for textureId=%d",
                         textureObject->GetExternalIndex());
+
+        if ((resource->aspect & VK_IMAGE_ASPECT_COLOR_BIT) == 0) {
+            if (format == GL_DEPTH_COMPONENT || format == GL_DEPTH_STENCIL || format == GL_STENCIL_INDEX) {
+                const auto levelSize =
+                    textureMipmapObject->GetMipmapTexelSize(textureUploadTarget, static_cast<Uint>(level));
+                const Bool isCubeFace = textureUploadTarget >= TextureUploadTarget::CubeMapPositiveX &&
+                    textureUploadTarget <= TextureUploadTarget::CubeMapNegativeZ;
+                const Uint32 arrayLayer = isCubeFace
+                    ? static_cast<Uint32>(textureUploadTarget) -
+                        static_cast<Uint32>(TextureUploadTarget::CubeMapPositiveX)
+                    : 0;
+                ReadDepthStencilImageToClient(resource->image, resource->format, &resource->layout, resource->aspect,
+                                              static_cast<Uint32>(level), arrayLayer, 0, 0, levelSize.x(),
+                                              levelSize.y(), format, type, pixels);
+            } else {
+                MGLOG_E("DirectVulkan::GetTexImage skipped: color query of a non-color texture");
+            }
+            return;
+        }
 
         const auto texelSize = textureMipmapObject->GetMipmapTexelSize(textureUploadTarget, static_cast<Uint>(level));
         const GLsizei width = texelSize.x();
