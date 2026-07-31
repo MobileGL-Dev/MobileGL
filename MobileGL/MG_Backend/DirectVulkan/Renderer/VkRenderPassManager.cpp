@@ -16,31 +16,21 @@
 
 namespace MobileGL::MG_Backend::DirectVulkan {
     static Bool TryResolveSampleCountFlagBits(Int requestedSamples, VkSampleCountFlagBits& outSampleCount) {
-        switch (requestedSamples <= 0 ? 1 : requestedSamples) {
-        case 1:
+        // GL promises "at least the requested samples", so a non-power-of-two
+        // request (legal in GL, e.g. 3) rounds up to the next Vulkan bit.
+        if (requestedSamples <= 1) {
             outSampleCount = VK_SAMPLE_COUNT_1_BIT;
             return true;
-        case 2:
-            outSampleCount = VK_SAMPLE_COUNT_2_BIT;
-            return true;
-        case 4:
-            outSampleCount = VK_SAMPLE_COUNT_4_BIT;
-            return true;
-        case 8:
-            outSampleCount = VK_SAMPLE_COUNT_8_BIT;
-            return true;
-        case 16:
-            outSampleCount = VK_SAMPLE_COUNT_16_BIT;
-            return true;
-        case 32:
-            outSampleCount = VK_SAMPLE_COUNT_32_BIT;
-            return true;
-        case 64:
-            outSampleCount = VK_SAMPLE_COUNT_64_BIT;
-            return true;
-        default:
+        }
+        if (requestedSamples > 64) {
             return false;
         }
+        Uint32 bit = 1;
+        while (bit < static_cast<Uint32>(requestedSamples)) {
+            bit <<= 1;
+        }
+        outSampleCount = static_cast<VkSampleCountFlagBits>(bit);
+        return true;
     }
 
     static VkImageAspectFlags ResolveImageAspectMaskForFormat(VkFormat format) {
@@ -313,6 +303,46 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             ((aspect & VK_IMAGE_ASPECT_COLOR_BIT) != 0 ? VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT
                                                        : VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT) |
             VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+
+        // GL allows the implementation to allocate more samples than requested
+        // (glRenderbufferStorageMultisample only promises "at least"), and devices
+        // like llvmpipe expose 1x/4x but not 2x. Round the request up to the
+        // nearest supported count for this format.
+        if (renderbuffer->GetSamples() > 0) {
+            auto supportedIt = m_attachmentSampleCountsByFormat.find(format);
+            if (supportedIt == m_attachmentSampleCountsByFormat.end()) {
+                VkImageFormatProperties formatProperties{};
+                VkSampleCountFlags supported = VK_SAMPLE_COUNT_1_BIT;
+                if (vkGetPhysicalDeviceImageFormatProperties(m_physicalDevice, format, VK_IMAGE_TYPE_2D,
+                                                             VK_IMAGE_TILING_OPTIMAL, imageUsage, 0,
+                                                             &formatProperties) == VK_SUCCESS) {
+                    supported = formatProperties.sampleCounts;
+                }
+                supportedIt = m_attachmentSampleCountsByFormat.emplace(format, supported).first;
+            }
+            const VkSampleCountFlags supported = supportedIt->second;
+            if ((supported & sampleCount) == 0) {
+                // Smallest supported count above the request, else the largest below it.
+                Uint32 rounded = 0;
+                for (Uint32 bit = static_cast<Uint32>(sampleCount) << 1; bit <= VK_SAMPLE_COUNT_64_BIT; bit <<= 1) {
+                    if ((supported & bit) != 0) {
+                        rounded = bit;
+                        break;
+                    }
+                }
+                if (rounded == 0) {
+                    for (Uint32 bit = static_cast<Uint32>(sampleCount) >> 1; bit != 0; bit >>= 1) {
+                        if ((supported & bit) != 0) {
+                            rounded = bit;
+                            break;
+                        }
+                    }
+                }
+                if (rounded != 0) {
+                    sampleCount = static_cast<VkSampleCountFlagBits>(rounded);
+                }
+            }
+        }
 
         auto& resource = m_renderbufferResources[renderbuffer.get()];
         const Bool needsCreate =

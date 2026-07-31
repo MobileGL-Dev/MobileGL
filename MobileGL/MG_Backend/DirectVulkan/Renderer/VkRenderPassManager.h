@@ -313,6 +313,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         UnorderedMap<MG_State::GLState::RenderbufferObject*, RenderbufferResource> m_renderbufferResources;
         UnorderedMap<MG_State::GLState::RenderbufferObject*, PendingRenderbufferClear> m_pendingRenderbufferClears;
         Vector<DeferredRenderbufferRelease> m_deferredRenderbufferReleases;
+        // Supported sample counts per attachment format, so per-draw resource lookups
+        // do not repeat vkGetPhysicalDeviceImageFormatProperties.
+        UnorderedMap<VkFormat, VkSampleCountFlags> m_attachmentSampleCountsByFormat;
 
         Bool HasPendingRenderbufferClear(
             const MG_State::GLState::FramebufferAttachmentObject& attachment) const;
