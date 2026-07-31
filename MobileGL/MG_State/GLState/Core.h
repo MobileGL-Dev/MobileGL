@@ -216,6 +216,7 @@ namespace MobileGL {
                     m_transformFeedbackActive = true;
                     m_transformFeedbackPrimitiveMode = primitiveMode;
                     m_transformFeedbackProgram = program;
+                    ++m_transformFeedbackGeneration;
                 }
                 void EndTransformFeedback() {
                     m_transformFeedbackActive = false;
@@ -226,6 +227,9 @@ namespace MobileGL {
                 const SharedPtr<ProgramObject>& GetTransformFeedbackProgram() const {
                     return m_transformFeedbackProgram;
                 }
+                // Bumped on every BeginTransformFeedback; the backend uses it to
+                // distinguish "resume appending" from "fresh capture".
+                Uint64 GetTransformFeedbackGeneration() const { return m_transformFeedbackGeneration; }
 
                 // Framebuffer
                 void GenFramebufferNames(Uint number, Vector<Uint>& framebuffers);
@@ -262,6 +266,7 @@ namespace MobileGL {
                 Bool m_transformFeedbackActive = false;
                 GLenum m_transformFeedbackPrimitiveMode = GL_POINTS;
                 SharedPtr<ProgramObject> m_transformFeedbackProgram;
+                Uint64 m_transformFeedbackGeneration = 0;
                 TextureState m_textureState;
                 ProgramState m_programState;
                 RenderState m_renderState;

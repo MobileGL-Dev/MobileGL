@@ -231,6 +231,21 @@ namespace MobileGL::MG_State::GLState {
         return m_resource.Bytes();
     }
 
+    Bool BufferObject::EnsureGpuResidentStorage() {
+        if (m_resource.IsGpuResident()) {
+            return true;
+        }
+        if (m_size == 0 || g_bufferBackendOps == nullptr || g_bufferBackendOps->AcquirePersistentMap == nullptr) {
+            return false;
+        }
+        void* base = g_bufferBackendOps->AcquirePersistentMap(*this);
+        if (base == nullptr) {
+            return false;
+        }
+        m_resource.AdoptPersistentMap(base);
+        return true;
+    }
+
     void* BufferObject::AcquireMemoryRange(Range1D range, Flags<BufferMappingAccessBit> access) {
         MOBILEGL_ASSERT(range.end <= m_size && range.start <= range.end,
                         "AcquireMemoryRange out of bounds: range (%zu, %zu) exceeds m_size (%zu)", range.start,

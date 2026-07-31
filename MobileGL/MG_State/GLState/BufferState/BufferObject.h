@@ -133,6 +133,11 @@ namespace MobileGL {
 
             void* AcquireMemory(Bool markMapped, Bool read, Bool write);
             void* AcquireMemoryRange(Range1D range, Flags<BufferMappingAccessBit> access);
+            // Adopt backend host-visible coherent GPU storage as the source of truth
+            // (used for GPU-written targets like transform feedback capture, so
+            // MapBuffer/GetBufferSubData read real GPU results). No-op when already
+            // resident or when the backend declines.
+            Bool EnsureGpuResidentStorage();
             void ReleaseMemory();
             void FlushMemoryRange(SizeT offset, SizeT length);
 

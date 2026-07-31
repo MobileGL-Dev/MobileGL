@@ -67,8 +67,12 @@ namespace MobileGL::MG_Impl::GLImpl {
         }
 
         // While transform feedback is active the draw's primitive type must match
-        // the feedback primitive mode (GL 3.3 core 13.2.2).
-        if (MG_State::pGLContext->IsTransformFeedbackActive()) {
+        // the feedback primitive mode (GL 3.3 core 13.2.2). With a geometry shader
+        // the constraint moves to the shader's output primitive type instead, so
+        // the draw mode itself is unconstrained here.
+        if (MG_State::pGLContext->IsTransformFeedbackActive() &&
+            !(MG_State::pGLContext->GetTransformFeedbackProgram() &&
+              MG_State::pGLContext->GetTransformFeedbackProgram()->GetShaderIndexByStage(ShaderStage::Geometry) >= 0)) {
             const GLenum feedbackMode = MG_State::pGLContext->GetTransformFeedbackPrimitiveMode();
             Bool compatible = false;
             switch (feedbackMode) {
@@ -514,6 +518,18 @@ namespace MobileGL::MG_Impl::GLImpl {
             return;
         }
         MG_State::pGLContext->EndTransformFeedback();
+        // Captured results must be visible to MapBuffer/GetBufferSubData after
+        // End; the capture targets are host-coherent GPU memory, so completing
+        // the GPU work is all that is required.
+        auto& backendGL = MG_Backend::gBackendFunctionsTable.GL;
+        if (backendGL.FenceSync && backendGL.ClientWaitSync) {
+            if (auto sync = backendGL.FenceSync()) {
+                backendGL.ClientWaitSync(sync, GL_SYNC_FLUSH_COMMANDS_BIT, ~0ull);
+                if (backendGL.DeleteSync) {
+                    backendGL.DeleteSync(sync);
+                }
+            }
+        }
     }
 
 } // namespace MobileGL::MG_Impl::GLImpl

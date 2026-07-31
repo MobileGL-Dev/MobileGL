@@ -923,6 +923,163 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             ProgramFactory::CompileOptionFlags m_transformFlags;
         };
 
+        // Decorates the module's captured varyings for VK_EXT_transform_feedback:
+        // user outputs get XfbBuffer/XfbStride/Offset directly; a captured
+        // gl_Position (a gl_PerVertex member) is mirrored into a dedicated output
+        // variable copied before every OpReturn, BEFORE the position fixup runs,
+        // so the captured value is the shader's own (pre-remap) gl_Position.
+        class XfbCaptureDecoratePass final : public spvtools::opt::Pass {
+        public:
+            struct CapturedVarying {
+                std::string name;
+                Uint32 bufferIndex = 0;
+                Uint32 offsetBytes = 0;
+            };
+            const char* name() const override { return "mobilegl-xfb-capture-decorate"; }
+            XfbCaptureDecoratePass(Vector<CapturedVarying> varyings, Vector<Uint32> strides)
+                : m_varyings(Move(varyings)), m_strides(Move(strides)) {}
+
+            Status Process() override {
+                using namespace spvtools::opt;
+                if (m_varyings.empty()) return Status::SuccessWithoutChange;
+
+                auto entryPointIter = get_module()->entry_points().begin();
+                if (entryPointIter == get_module()->entry_points().end()) return Status::SuccessWithoutChange;
+                spvtools::opt::Instruction* entryPoint = &*entryPointIter;
+                const Uint32 entryFunctionId = entryPoint->GetSingleWordInOperand(1);
+
+                // Name -> result id map from the debug section.
+                std::unordered_map<std::string, Uint32> idsByName;
+                for (auto& debugInst : get_module()->debugs2()) {
+                    if (debugInst.opcode() != spv::Op::OpName) continue;
+                    idsByName[debugInst.GetInOperand(1).AsString()] = debugInst.GetSingleWordInOperand(0);
+                }
+
+                auto* decorationManager = context()->get_decoration_mgr();
+                const auto decorateForXfb = [&](Uint32 targetId, Uint32 bufferIndex, Uint32 offsetBytes) {
+                    const Uint32 stride = bufferIndex < m_strides.size() ? m_strides[bufferIndex] : 0;
+                    decorationManager->AddDecorationVal(targetId, static_cast<Uint32>(spv::Decoration::XfbBuffer),
+                                                        bufferIndex);
+                    decorationManager->AddDecorationVal(targetId, static_cast<Uint32>(spv::Decoration::XfbStride),
+                                                        stride);
+                    decorationManager->AddDecorationVal(targetId, static_cast<Uint32>(spv::Decoration::Offset),
+                                                        offsetBytes);
+                };
+
+                Bool modified = false;
+                Bool needsPositionMirror = false;
+                Uint32 positionBufferIndex = 0;
+                Uint32 positionOffset = 0;
+                for (const auto& varying : m_varyings) {
+                    if (varying.name == "gl_Position") {
+                        needsPositionMirror = true;
+                        positionBufferIndex = varying.bufferIndex;
+                        positionOffset = varying.offsetBytes;
+                        continue;
+                    }
+                    const auto idIt = idsByName.find(varying.name);
+                    if (idIt == idsByName.end()) {
+                        MGLOG_E("XfbCaptureDecoratePass: no SPIR-V variable named '%s'", varying.name.c_str());
+                        continue;
+                    }
+                    decorateForXfb(idIt->second, varying.bufferIndex, varying.offsetBytes);
+                    modified = true;
+                }
+
+                if (needsPositionMirror) {
+                    modified |= MirrorPositionForCapture(entryFunctionId, *entryPoint, positionBufferIndex,
+                                                         positionOffset, decorateForXfb);
+                }
+
+                if (!modified) return Status::SuccessWithoutChange;
+
+                context()->AddCapability(spv::Capability::TransformFeedback);
+                {
+                    auto executionMode = MakeUnique<spvtools::opt::Instruction>(
+                        context(), spv::Op::OpExecutionMode, 0, 0,
+                        std::initializer_list<spvtools::opt::Operand>{
+                            {SPV_OPERAND_TYPE_ID, {entryPoint->GetSingleWordInOperand(1)}},
+                            {SPV_OPERAND_TYPE_EXECUTION_MODE, {static_cast<Uint32>(spv::ExecutionMode::Xfb)}}});
+                    get_module()->AddExecutionMode(Move(executionMode));
+                }
+                context()->InvalidateAnalysesExceptFor(spvtools::opt::IRContext::kAnalysisNone);
+                return Status::SuccessWithChange;
+            }
+
+        private:
+            template <typename DecorateFn>
+            Bool MirrorPositionForCapture(Uint32 entryFunctionId, spvtools::opt::Instruction& entryPoint,
+                                          Uint32 bufferIndex, Uint32 offsetBytes, const DecorateFn& decorateForXfb) {
+                const Uint32 entryPointModel = entryPoint.GetSingleWordInOperand(0);
+                using namespace spvtools::opt;
+                PositionTargetInfo target{};
+                if (!FindPositionTarget(context(), &target)) {
+                    MGLOG_E("XfbCaptureDecoratePass: gl_Position capture requested but no position output found");
+                    return false;
+                }
+                if (!target.isMember) {
+                    // Standalone gl_Position variable: decorate it directly.
+                    decorateForXfb(target.variableId, bufferIndex, offsetBytes);
+                    return true;
+                }
+
+                auto* typeManager = context()->get_type_mgr();
+                const Uint32 mirrorPointerTypeId =
+                    typeManager->FindPointerToType(target.vectorTypeId, spv::StorageClass::Output);
+                if (mirrorPointerTypeId == 0) return false;
+
+                const Uint32 mirrorVariableId = context()->TakeNextId();
+                auto mirrorVariable = MakeUnique<Instruction>(
+                    context(), spv::Op::OpVariable, mirrorPointerTypeId, mirrorVariableId,
+                    std::initializer_list<Operand>{
+                        {SPV_OPERAND_TYPE_STORAGE_CLASS, {static_cast<Uint32>(spv::StorageClass::Output)}}});
+                get_module()->AddGlobalValue(Move(mirrorVariable));
+
+                // A free output location: past every explicitly decorated output.
+                Uint32 mirrorLocation = 0;
+                for (auto& annotation : get_module()->annotations()) {
+                    if (annotation.opcode() != spv::Op::OpDecorate ||
+                        annotation.GetSingleWordInOperand(1) != static_cast<Uint32>(spv::Decoration::Location)) {
+                        continue;
+                    }
+                    mirrorLocation = std::max(mirrorLocation, annotation.GetSingleWordInOperand(2) + 1);
+                }
+                auto* decorationManager = context()->get_decoration_mgr();
+                decorationManager->AddDecorationVal(mirrorVariableId,
+                                                    static_cast<Uint32>(spv::Decoration::Location), mirrorLocation);
+                decorateForXfb(mirrorVariableId, bufferIndex, offsetBytes);
+                entryPoint.AddOperand({SPV_OPERAND_TYPE_ID, {mirrorVariableId}});
+
+                auto* function = context()->GetFunction(entryFunctionId);
+                if (function == nullptr) return false;
+                const auto model = static_cast<spv::ExecutionModel>(entryPointModel);
+                Bool injected = false;
+                for (auto& block : *function) {
+                    for (auto instIter = block.begin(); instIter != block.end(); ++instIter) {
+                        // Geometry stages capture per emitted vertex; other stages at return.
+                        const Bool isInjectionSite =
+                            model == spv::ExecutionModel::Geometry
+                                ? instIter->opcode() == spv::Op::OpEmitVertex
+                                : instIter->opcode() == spv::Op::OpReturn;
+                        if (!isInjectionSite) continue;
+                        InstructionBuilder builder(context(), &*instIter, IRContext::kAnalysisNone);
+                        const Uint32 memberIndexId = builder.GetUintConstantId(target.memberIndex);
+                        auto* access =
+                            builder.AddAccessChain(target.vectorPtrTypeId, target.variableId, {memberIndexId});
+                        if (access == nullptr) return injected;
+                        auto* value = builder.AddLoad(target.vectorTypeId, access->result_id());
+                        if (value == nullptr) return injected;
+                        builder.AddStore(mirrorVariableId, value->result_id());
+                        injected = true;
+                    }
+                }
+                return injected;
+            }
+
+            Vector<CapturedVarying> m_varyings;
+            Vector<Uint32> m_strides;
+        };
+
         // Adreno 650 (driver 512.502) faults the GPU on an implicit-LOD sample of a full-screen
         // colour render target: the texture unit's derivative path reads outside the image's
         // allocation even though the sampler clamps LOD to 0 and the mapping is 1:1. MobileGL's
@@ -1126,6 +1283,41 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         spvtools::Optimizer::PassToken CreateGlToVulkanPositionFixPass(
             ProgramFactory::CompileOptionFlags transformFlags) {
             return spvtools::Optimizer::PassToken(MakeUnique<GlToVulkanPositionFixPass>(transformFlags));
+        }
+
+        Bool TransformSpirvForXfbCapture(const Vector<Uint>& input, Vector<Uint>& output,
+                                         const MG_State::GLState::ProgramObject& program) {
+            if (input.empty()) {
+                output.clear();
+                return true;
+            }
+            Vector<XfbCaptureDecoratePass::CapturedVarying> varyings;
+            varyings.reserve(program.GetTransformFeedbackVaryingCount());
+            for (const auto& varying : program.GetTransformFeedbackVaryings()) {
+                varyings.push_back({varying.name, varying.bufferIndex, varying.offsetBytes});
+            }
+            Vector<Uint32> strides;
+            strides.reserve(program.GetTransformFeedbackBufferCount());
+            for (SizeT i = 0; i < program.GetTransformFeedbackBufferCount(); ++i) {
+                strides.push_back(program.GetTransformFeedbackStride(static_cast<Uint32>(i)));
+            }
+
+            spvtools::Optimizer optimizer(SPV_ENV_VULKAN_1_3);
+            spvtools::OptimizerOptions options;
+            options.set_run_validator(false);
+            optimizer.SetMessageConsumer([](spv_message_level_t, const char*, const spv_position_t&,
+                                            const char* message) {
+                MGLOG_E("Vulkan: xfb capture pass: %s", message != nullptr ? message : "");
+            });
+            optimizer.RegisterPass(spvtools::Optimizer::PassToken(
+                MakeUnique<XfbCaptureDecoratePass>(Move(varyings), Move(strides))));
+
+            const Bool success = optimizer.Run(input.data(), input.size(), &output, options);
+            if (!success) {
+                MGLOG_E("Vulkan: xfb capture decoration pass failed; keeping the original module");
+                output = input;
+            }
+            return success;
         }
 
         Bool TransformSpirvForVulkanPositionFix(const Vector<Uint>& input, Vector<Uint>& output,
@@ -2173,7 +2365,17 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
             // Apply position fixup if needed
             if (fixupStage != ShaderStage::Unknown && shaders[i] && shaders[i]->GetShaderStage() == fixupStage) {
-                TransformSpirvForVulkanPositionFix(spv, moduleSpirvs[i], flags);
+                const Vector<Uint>* fixupInput = &spv;
+                Vector<Uint> xfbSpirv;
+                if ((flags & ProgramFactory::CompileOptionBit::XfbCapture) &&
+                    program.GetTransformFeedbackVaryingCount() > 0) {
+                    // Decorate BEFORE the position fixup so a captured gl_Position
+                    // mirror copies the shader's own (pre-remap) value.
+                    if (TransformSpirvForXfbCapture(spv, xfbSpirv, program)) {
+                        fixupInput = &xfbSpirv;
+                    }
+                }
+                TransformSpirvForVulkanPositionFix(*fixupInput, moduleSpirvs[i], flags);
             } else {
                 moduleSpirvs[i] = spv;
             }

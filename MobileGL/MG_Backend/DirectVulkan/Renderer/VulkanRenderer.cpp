@@ -2581,6 +2581,7 @@ void main() {
             .transientMemoryUsage = VMA_MEMORY_USAGE_AUTO,
             .transientAllocationFlags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT,
             .transientPersistentMapping = true,
+            .transformFeedbackUsageEnabled = m_transformFeedbackFeatureEnabled,
         });
         MOBILEGL_ASSERT(succeeded, "VkBufferManager initialization failed.");
         m_bufferManager.SetCopyCommandProvider(this);
@@ -2745,6 +2746,7 @@ void main() {
             m_textureManager.reset();
         }
         m_vertexInputStateFactory.reset();
+        m_xfbCounterBuffer.Destroy();
         m_bufferManager.Shutdown();
 
         // Device is idle (vkDeviceWaitIdle above); query pools can be destroyed.
@@ -4618,6 +4620,11 @@ void main() {
         const auto& vao = *MG_State::pGLContext->GetBoundVertexArray();
         const auto& program = *MG_State::pGLContext->GetCurrentProgram();
         ProgramFactory::CompileOptionFlags transformFlags = GetShaderTransformFlags(m_swapchainObject.GetPreTransform());
+        // Captured draws take the xfb-decorated program variant.
+        if (m_transformFeedbackFeatureEnabled && MG_State::pGLContext->IsTransformFeedbackActive() &&
+            program.GetTransformFeedbackVaryingCount() > 0) {
+            transformFlags |= ProgramFactory::CompileOptionBit::XfbCapture;
+        }
         // Sampling a colour render target through the driver's implicit-LOD path faults the GPU on
         // Adreno 650 (see ForceExplicitLod0SamplePass); ask for the explicit-LOD variant when doing
         // so cannot change a texel, i.e. when every sampler this program reads is pinned to a
@@ -7292,6 +7299,100 @@ void main() {
         resource->layout = finalLayout;
     }
 
+    Bool VulkanRenderer::BeginXfbCaptureForDraw(FrameContext::FrameData& frame) {
+        if (!m_transformFeedbackFeatureEnabled || MG_State::pGLContext == nullptr ||
+            !MG_State::pGLContext->IsTransformFeedbackActive()) {
+            return false;
+        }
+        const auto& program = MG_State::pGLContext->GetTransformFeedbackProgram();
+        if (!program || program->GetTransformFeedbackVaryingCount() == 0) {
+            return false;
+        }
+        const SizeT bufferCount = std::min<SizeT>(program->GetTransformFeedbackBufferCount(), 4);
+        if (bufferCount == 0) {
+            return false;
+        }
+
+        if (!m_xfbCounterBuffer.IsValid()) {
+            if (!m_xfbCounterBuffer.Create({
+                    .allocator = m_allocator,
+                    .size = 16,
+                    .usage = VK_BUFFER_USAGE_TRANSFORM_FEEDBACK_COUNTER_BUFFER_BIT_EXT |
+                             VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                    .memoryUsage = VMA_MEMORY_USAGE_AUTO,
+                })) {
+                MGLOG_E("BeginXfbCaptureForDraw: failed to create the counter buffer");
+                return false;
+            }
+        }
+
+        VkBuffer buffers[4] = {};
+        VkDeviceSize offsets[4] = {};
+        VkDeviceSize sizes[4] = {};
+        for (SizeT i = 0; i < bufferCount; ++i) {
+            auto& point = MG_State::pGLContext->GetBufferBindingPoint(BufferTarget::TransformFeedback,
+                                                                      static_cast<Uint>(i));
+            const auto& bufferObject = point.GetBoundObject();
+            if (bufferObject == nullptr) {
+                return false;
+            }
+            // Host-visible coherent GPU residency: the capture writes land where
+            // MapBuffer/GetBufferSubData read.
+            bufferObject->EnsureGpuResidentStorage();
+            BufferSlice slice{};
+            if (!m_bufferManager.AcquireResidentSlice(BufferKind::Vertex, bufferObject, slice)) {
+                MGLOG_E("BeginXfbCaptureForDraw: failed to acquire capture buffer %zu", i);
+                return false;
+            }
+            const Range1D range = point.GetRange();
+            const VkDeviceSize rangeStart = static_cast<VkDeviceSize>(range.start);
+            const VkDeviceSize rangeSize = range.end > range.start
+                ? static_cast<VkDeviceSize>(range.end - range.start)
+                : VK_WHOLE_SIZE;
+            buffers[i] = slice.buffer;
+            offsets[i] = slice.offset + rangeStart;
+            sizes[i] = rangeSize;
+        }
+
+        s_vkCmdBindTransformFeedbackBuffersEXT(frame.commandBuffer, 0, static_cast<Uint32>(bufferCount), buffers,
+                                               offsets, sizes);
+
+        const Uint64 generation = MG_State::pGLContext->GetTransformFeedbackGeneration();
+        const Bool resume = m_xfbCountersValid && m_xfbLastSeenGeneration == generation;
+        m_xfbLastSeenGeneration = generation;
+
+        VkBuffer counterBuffers[4] = {};
+        VkDeviceSize counterOffsets[4] = {};
+        for (SizeT i = 0; i < bufferCount; ++i) {
+            counterBuffers[i] = m_xfbCounterBuffer.GetHandle();
+            counterOffsets[i] = static_cast<VkDeviceSize>(i) * 4;
+        }
+        if (resume) {
+            s_vkCmdBeginTransformFeedbackEXT(frame.commandBuffer, 0, static_cast<Uint32>(bufferCount),
+                                             counterBuffers, counterOffsets);
+        } else {
+            s_vkCmdBeginTransformFeedbackEXT(frame.commandBuffer, 0, 0, nullptr, nullptr);
+        }
+        return true;
+    }
+
+    void VulkanRenderer::EndXfbCaptureForDraw(FrameContext::FrameData& frame, Bool began) {
+        if (!began) {
+            return;
+        }
+        const auto& program = MG_State::pGLContext->GetTransformFeedbackProgram();
+        const SizeT bufferCount = program ? std::min<SizeT>(program->GetTransformFeedbackBufferCount(), 4) : 0;
+        VkBuffer counterBuffers[4] = {};
+        VkDeviceSize counterOffsets[4] = {};
+        for (SizeT i = 0; i < bufferCount; ++i) {
+            counterBuffers[i] = m_xfbCounterBuffer.GetHandle();
+            counterOffsets[i] = static_cast<VkDeviceSize>(i) * 4;
+        }
+        s_vkCmdEndTransformFeedbackEXT(frame.commandBuffer, 0, static_cast<Uint32>(bufferCount), counterBuffers,
+                                       counterOffsets);
+        m_xfbCountersValid = true;
+    }
+
     void VulkanRenderer::DrawArrays(const DrawCmd& payload) {
         auto& frame = m_frameContext.GetCurrent();
 
@@ -7303,11 +7404,13 @@ void main() {
 
         VkCommandBuffer& commandBuffer = frame.commandBuffer;
 
+        const Bool xfbActive = BeginXfbCaptureForDraw(frame);
         vkCmdDraw(commandBuffer,
             payload.params.vertexCount,
             payload.params.instanceCount,
             payload.params.firstVertex,
             payload.params.firstInstance);
+        EndXfbCaptureForDraw(frame, xfbActive);
     }
 
     void VulkanRenderer::DrawElements(const DrawIndexedCmd& payload) {
@@ -7334,12 +7437,14 @@ void main() {
 
         VkCommandBuffer& commandBuffer = frame.commandBuffer;
 
+        const Bool xfbActive = BeginXfbCaptureForDraw(frame);
         vkCmdDrawIndexed(commandBuffer,
             payload.params.indexCount,
             payload.params.instanceCount,
             payload.params.firstIndex,
             payload.params.vertexOffset,
             payload.params.firstInstance);
+        EndXfbCaptureForDraw(frame, xfbActive);
     }
 
     void VulkanRenderer::MultiDrawArrays(const MultiDrawCmd& payload) {
@@ -8817,6 +8922,31 @@ void main() {
             }
         }
 
+        // VK_EXT_transform_feedback backs GL transform feedback capture.
+        m_transformFeedbackFeatureEnabled = false;
+        VkPhysicalDeviceTransformFeedbackFeaturesEXT transformFeedbackFeatures{};
+        transformFeedbackFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TRANSFORM_FEEDBACK_FEATURES_EXT;
+        if (IsExtensionSupported(availableExtensions, VK_EXT_TRANSFORM_FEEDBACK_EXTENSION_NAME) &&
+            getPhysicalDeviceFeatures2 != nullptr) {
+            VkPhysicalDeviceFeatures2 featureQuery{};
+            featureQuery.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+            featureQuery.pNext = &transformFeedbackFeatures;
+            getPhysicalDeviceFeatures2(m_physicalDevice.handle, &featureQuery);
+            if (transformFeedbackFeatures.transformFeedback == VK_TRUE) {
+                if (!IsExtensionAlreadyEnabled(enabledDeviceExtensions, VK_EXT_TRANSFORM_FEEDBACK_EXTENSION_NAME)) {
+                    enabledDeviceExtensions.push_back(VK_EXT_TRANSFORM_FEEDBACK_EXTENSION_NAME);
+                }
+                transformFeedbackFeatures.geometryStreams = VK_FALSE;
+                transformFeedbackFeatures.pNext = const_cast<void*>(deviceCreateInfo.pNext);
+                deviceCreateInfo.pNext = &transformFeedbackFeatures;
+                m_transformFeedbackFeatureEnabled = true;
+                MGLOG_I("Enabled optional device extension: %s", VK_EXT_TRANSFORM_FEEDBACK_EXTENSION_NAME);
+            }
+        }
+        if (!m_transformFeedbackFeatureEnabled) {
+            MGLOG_W("VK_EXT_transform_feedback is unavailable; transform feedback capture will not work");
+        }
+
         deviceCreateInfo.enabledExtensionCount = static_cast<Uint32>(enabledDeviceExtensions.size());
         deviceCreateInfo.ppEnabledExtensionNames = enabledDeviceExtensions.data();
         MGLOG_I("Device feature support: robustBufferAccess=%s geometryShader=%s independentBlend=%s logicOp=%s shaderClipDistance=%s "
@@ -8871,6 +9001,20 @@ void main() {
         if (m_drawIndirectCountExtensionEnabled && s_vkCmdDrawIndexedIndirectCount == nullptr) {
             MGLOG_W("VK_KHR_draw_indirect_count enabled but vkCmdDrawIndexedIndirectCount entry point is missing, will continue as if VK_KHR_draw_indirect_count is not supported!");
             m_drawIndirectCountExtensionEnabled = false;
+        }
+
+        if (m_transformFeedbackFeatureEnabled) {
+            s_vkCmdBindTransformFeedbackBuffersEXT = reinterpret_cast<PFN_vkCmdBindTransformFeedbackBuffersEXT>(
+                vkGetDeviceProcAddr(m_device, "vkCmdBindTransformFeedbackBuffersEXT"));
+            s_vkCmdBeginTransformFeedbackEXT = reinterpret_cast<PFN_vkCmdBeginTransformFeedbackEXT>(
+                vkGetDeviceProcAddr(m_device, "vkCmdBeginTransformFeedbackEXT"));
+            s_vkCmdEndTransformFeedbackEXT = reinterpret_cast<PFN_vkCmdEndTransformFeedbackEXT>(
+                vkGetDeviceProcAddr(m_device, "vkCmdEndTransformFeedbackEXT"));
+            if (s_vkCmdBindTransformFeedbackBuffersEXT == nullptr || s_vkCmdBeginTransformFeedbackEXT == nullptr ||
+                s_vkCmdEndTransformFeedbackEXT == nullptr) {
+                MGLOG_W("VK_EXT_transform_feedback entry points missing; transform feedback capture disabled");
+                m_transformFeedbackFeatureEnabled = false;
+            }
         }
         MGLOG_I("index type uint8 enabled: %s", m_indexTypeUint8ExtensionEnabled ? "true" : "false");
         MGLOG_I("Logical device created.");

@@ -47,6 +47,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             // level, which makes the two forms produce identical texels (the implicit lambda is
             // clamped into [minLod, maxLod] = [0, 0] regardless of derivatives or bias).
             ExplicitLod0Sampling = 1 << 5,
+            // Decorates the last vertex-processing stage's captured varyings with
+            // XfbBuffer/XfbStride/Offset (VK_EXT_transform_feedback). Set only for draws
+            // recorded while GL transform feedback is active, so plain draws keep the
+            // undecorated variant.
+            XfbCapture = 1 << 6,
         };
         using CompileOptionFlags = Flags<CompileOptionBit>;
         using HashType = Uint64;

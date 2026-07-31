@@ -31,6 +31,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         VmaMemoryUsage transientMemoryUsage = VMA_MEMORY_USAGE_AUTO;
         VmaAllocationCreateFlags transientAllocationFlags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT;
         Bool transientPersistentMapping = false;
+        // VK_EXT_transform_feedback is enabled: persistent-map storage additionally
+        // carries the transform feedback usage so capture targets can bind directly.
+        Bool transformFeedbackUsageEnabled = false;
     };
 
     // The DirectVulkan storage behind one frontend buffer (pipe_resource analogue).

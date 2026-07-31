@@ -22,6 +22,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
             VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_UNIFORM_TEXEL_BUFFER_BIT |
             VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+        // Appended to kPersistentBackedUsage when VK_EXT_transform_feedback is enabled
+        // (see VkBufferManagerInitInfo::transformFeedbackUsageEnabled).
+        constexpr VkBufferUsageFlags kTransformFeedbackUsage =
+            VK_BUFFER_USAGE_TRANSFORM_FEEDBACK_BUFFER_BIT_EXT;
         // The app writes into the persistent map with no explicit flush, so its memory must
         // be host-coherent (Adreno host-visible memory is; requiring it keeps us portable).
         constexpr VkMemoryPropertyFlags kPersistentBackedRequiredFlags =
@@ -465,7 +469,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // it from the current shadow - MappedData() is still the shadow here because the
         // frontend adopts (and drops) the shadow only after this returns.
         DeferRelease(std::move(resource->buffer));
-        if (!CreateResidentStorage(*resource, size, kPersistentBackedUsage, kPersistentBackedRequiredFlags)) {
+        const VkBufferUsageFlags persistentUsage =
+            kPersistentBackedUsage |
+            (m_initInfo.transformFeedbackUsageEnabled ? kTransformFeedbackUsage : 0);
+        if (!CreateResidentStorage(*resource, size, persistentUsage, kPersistentBackedRequiredFlags)) {
             resource->persistentMapped = false;
             resource->storageSize = 0;
             resource->usageFlags = 0;

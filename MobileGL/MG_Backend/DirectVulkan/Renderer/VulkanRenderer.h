@@ -455,6 +455,23 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                                                  Uint32 stride);
         static inline PFNDrawIndexedIndirectCountFunc s_vkCmdDrawIndexedIndirectCount = nullptr;
 
+        // VK_EXT_transform_feedback (GL transform feedback capture)
+        Bool m_transformFeedbackFeatureEnabled = false;
+        static inline PFN_vkCmdBindTransformFeedbackBuffersEXT s_vkCmdBindTransformFeedbackBuffersEXT = nullptr;
+        static inline PFN_vkCmdBeginTransformFeedbackEXT s_vkCmdBeginTransformFeedbackEXT = nullptr;
+        static inline PFN_vkCmdEndTransformFeedbackEXT s_vkCmdEndTransformFeedbackEXT = nullptr;
+        // Counter buffers (one 4-byte slot per capture binding) let consecutive
+        // draws within one glBeginTransformFeedback append GL-style.
+        VkBufferObject m_xfbCounterBuffer;
+        // Non-zero while inside a GL Begin/End with at least one captured draw
+        // recorded; selects counter-buffer resume on the next captured draw.
+        Bool m_xfbCountersValid = false;
+        Uint64 m_xfbLastSeenGeneration = 0;
+        // Wraps a recorded draw with BeginTransformFeedbackEXT/EndTransformFeedbackEXT
+        // when GL transform feedback is active; binds capture buffers on demand.
+        Bool BeginXfbCaptureForDraw(FrameContext::FrameData& frame);
+        void EndXfbCaptureForDraw(FrameContext::FrameData& frame, Bool began);
+
         VkCommandPool m_commandPool = VK_NULL_HANDLE;
 
         VkBufferManager m_bufferManager;

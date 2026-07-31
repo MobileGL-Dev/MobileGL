@@ -1932,6 +1932,12 @@ namespace MobileGL::MG_Impl::GLImpl {
         case GL_MAX_VERTEX_STREAMS:
             *params = 1;
             break;
+        case GL_TRANSFORM_FEEDBACK_ACTIVE:
+            *params = MG_State::pGLContext->IsTransformFeedbackActive() ? 1 : 0;
+            break;
+        case GL_TRANSFORM_FEEDBACK_PAUSED:
+            *params = 0;
+            break;
         case GL_MAX_TEXTURE_IMAGE_UNITS:
             *params = dynamicParameters.MaxTextureImageUnits;
             break;
