@@ -2020,7 +2020,14 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                         aspectMask, 0, outResource.mipLevels, outResource.arrayLayers);
         MOBILEGL_ASSERT(ok, "TransitionImageLayout to VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL failed");
 
+        // Array textures keep their GL "depth" in VkImage array layers, so the
+        // copy must address layerCount, not imageExtent.depth (which is invalid
+        // for 2D images and silently dropped every layer past the first).
+        const Bool depthSelectsArrayLayer = outResource.viewType == VK_IMAGE_VIEW_TYPE_1D_ARRAY ||
+                                            outResource.viewType == VK_IMAGE_VIEW_TYPE_2D_ARRAY ||
+                                            outResource.viewType == VK_IMAGE_VIEW_TYPE_CUBE_ARRAY;
         for (const auto& item : uploadItems) {
+            const Uint32 depthOrLayers = item.texelSize.z() > 0 ? static_cast<Uint32>(item.texelSize.z()) : 1u;
             VkBufferImageCopy copy{};
             copy.bufferOffset = item.offset;
             copy.bufferRowLength = 0;
@@ -2028,10 +2035,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             copy.imageSubresource.aspectMask = aspectMask;
             copy.imageSubresource.mipLevel = item.level;
             copy.imageSubresource.baseArrayLayer = item.baseArrayLayer;
-            copy.imageSubresource.layerCount = 1;
+            copy.imageSubresource.layerCount = depthSelectsArrayLayer ? depthOrLayers : 1;
             copy.imageOffset = {0, 0, 0};
             copy.imageExtent = {static_cast<Uint32>(item.texelSize.x()), static_cast<Uint32>(item.texelSize.y()),
-                                item.texelSize.z() > 0 ? static_cast<Uint32>(item.texelSize.z()) : 1u};
+                                depthSelectsArrayLayer ? 1u : depthOrLayers};
             vkCmdCopyBufferToImage(commandBuffer, stagingBuffer, outResource.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                                    1, &copy);
         }
