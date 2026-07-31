@@ -48,6 +48,72 @@ namespace MobileGL::MG_Impl::GLImpl {
         return true;
     }
 
+    // Primitives a draw of `count` vertices in `mode` assembles (0 for
+    // incomplete primitives). Used for the CPU-side transform feedback
+    // primitive accounting.
+    static Uint64 CountPrimitivesForDraw(GLenum mode, GLsizei count) {
+        if (count <= 0) return 0;
+        switch (mode) {
+        case GL_POINTS: return static_cast<Uint64>(count);
+        case GL_LINES: return static_cast<Uint64>(count / 2);
+        case GL_LINE_STRIP: return count >= 2 ? static_cast<Uint64>(count - 1) : 0;
+        case GL_LINE_LOOP: return count >= 2 ? static_cast<Uint64>(count) : 0;
+        case GL_TRIANGLES: return static_cast<Uint64>(count / 3);
+        case GL_TRIANGLE_STRIP:
+        case GL_TRIANGLE_FAN: return count >= 3 ? static_cast<Uint64>(count - 2) : 0;
+        default: return 0;
+        }
+    }
+
+    // Accumulate the transform feedback primitive counter for a captured draw.
+    // Draws without a geometry stage write exactly the primitives they assemble,
+    // clamped by the capture buffers' remaining capacity (a full buffer stops
+    // recording whole primitives, which is what PRIMITIVES_WRITTEN reports).
+    // Geometry amplification is not modelled here.
+    static void AccountTransformFeedbackPrimitives(GLenum mode, GLsizei count) {
+        if (!MG_State::pGLContext->IsTransformFeedbackActive()) return;
+        Uint64 primitives = CountPrimitivesForDraw(mode, count);
+        if (primitives == 0) return;
+
+        Uint64 verticesPerPrimitive = 1;
+        switch (mode) {
+        case GL_LINES:
+        case GL_LINE_STRIP:
+        case GL_LINE_LOOP:
+            verticesPerPrimitive = 2;
+            break;
+        case GL_TRIANGLES:
+        case GL_TRIANGLE_STRIP:
+        case GL_TRIANGLE_FAN:
+            verticesPerPrimitive = 3;
+            break;
+        default:
+            break;
+        }
+
+        const auto& program = MG_State::pGLContext->GetTransformFeedbackProgram();
+        if (program != nullptr) {
+            // Capacity in captured vertices = the tightest bound buffer.
+            Uint64 capacityVertices = ~0ull;
+            for (SizeT i = 0; i < program->GetTransformFeedbackBufferCount(); ++i) {
+                const Uint32 stride = program->GetTransformFeedbackStride(static_cast<Uint32>(i));
+                if (stride == 0) continue;
+                const auto& point = MG_State::pGLContext->GetBufferBindingPoint(BufferTarget::TransformFeedback,
+                                                                                static_cast<Uint>(i));
+                const Range1D range = point.GetRange();
+                const Uint64 bytes = range.end > range.start ? static_cast<Uint64>(range.end - range.start) : 0;
+                capacityVertices = std::min<Uint64>(capacityVertices, bytes / stride);
+            }
+            if (capacityVertices != ~0ull) {
+                const Uint64 usedVertices = MG_State::pGLContext->GetTransformFeedbackCapturedVertices();
+                const Uint64 remainingVertices = capacityVertices > usedVertices ? capacityVertices - usedVertices : 0;
+                primitives = std::min<Uint64>(primitives, remainingVertices / verticesPerPrimitive);
+            }
+        }
+        MG_State::pGLContext->AddTransformFeedbackPrimitives(primitives);
+        MG_State::pGLContext->AddTransformFeedbackCapturedVertices(primitives * verticesPerPrimitive);
+    }
+
     static Bool ValidatePrimitiveModeForBackend(const char* functionName, GLenum mode) {
         const auto& activeBackendObject = MG_Backend::pActiveBackendObject;
         if (!activeBackendObject) {
@@ -425,12 +491,14 @@ namespace MobileGL::MG_Impl::GLImpl {
     void DrawElementsBaseVertex(GLenum mode, GLsizei count, GLenum type, const void* indices, GLint basevertex) {
         if (!ValidateCurrentProgramForExecution(__func__)) return;
         if (!ValidatePrimitiveModeForBackend(__func__, mode)) return;
+        AccountTransformFeedbackPrimitives(mode, count);
         DrawElementsBaseVertex_Backend(mode, count, type, indices, basevertex);
     }
 
     void DrawArrays(GLenum mode, GLint first, GLsizei count) {
         if (!ValidateCurrentProgramForExecution(__func__)) return;
         if (!ValidatePrimitiveModeForBackend(__func__, mode)) return;
+        AccountTransformFeedbackPrimitives(mode, count);
         DrawArrays_Backend(mode, first, count);
     }
 
@@ -467,6 +535,7 @@ namespace MobileGL::MG_Impl::GLImpl {
     void DrawElements(GLenum mode, GLsizei count, GLenum type, const void* indices) {
         if (!ValidateCurrentProgramForExecution(__func__)) return;
         if (!ValidatePrimitiveModeForBackend(__func__, mode)) return;
+        AccountTransformFeedbackPrimitives(mode, count);
         DrawElements_Backend(mode, count, type, indices);
     }
 

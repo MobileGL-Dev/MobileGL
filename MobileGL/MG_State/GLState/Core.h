@@ -217,6 +217,7 @@ namespace MobileGL {
                     m_transformFeedbackPrimitiveMode = primitiveMode;
                     m_transformFeedbackProgram = program;
                     ++m_transformFeedbackGeneration;
+                    m_transformFeedbackCapturedVertices = 0;
                 }
                 void EndTransformFeedback() {
                     m_transformFeedbackActive = false;
@@ -230,6 +231,19 @@ namespace MobileGL {
                 // Bumped on every BeginTransformFeedback; the backend uses it to
                 // distinguish "resume appending" from "fresh capture".
                 Uint64 GetTransformFeedbackGeneration() const { return m_transformFeedbackGeneration; }
+                // CPU-side primitive accounting for the transform feedback queries:
+                // every captured draw adds its primitive count (draws without a
+                // geometry stage write exactly what they generate).
+                void AddTransformFeedbackPrimitives(Uint64 primitives) {
+                    m_transformFeedbackPrimitiveCounter += primitives;
+                }
+                Uint64 GetTransformFeedbackPrimitiveCounter() const { return m_transformFeedbackPrimitiveCounter; }
+                // Vertices already captured since BeginTransformFeedback (drives the
+                // buffer-capacity clamp on the primitives-written accounting).
+                void AddTransformFeedbackCapturedVertices(Uint64 vertices) {
+                    m_transformFeedbackCapturedVertices += vertices;
+                }
+                Uint64 GetTransformFeedbackCapturedVertices() const { return m_transformFeedbackCapturedVertices; }
 
                 // Framebuffer
                 void GenFramebufferNames(Uint number, Vector<Uint>& framebuffers);
@@ -267,6 +281,8 @@ namespace MobileGL {
                 GLenum m_transformFeedbackPrimitiveMode = GL_POINTS;
                 SharedPtr<ProgramObject> m_transformFeedbackProgram;
                 Uint64 m_transformFeedbackGeneration = 0;
+                Uint64 m_transformFeedbackPrimitiveCounter = 0;
+                Uint64 m_transformFeedbackCapturedVertices = 0;
                 TextureState m_textureState;
                 ProgramState m_programState;
                 RenderState m_renderState;

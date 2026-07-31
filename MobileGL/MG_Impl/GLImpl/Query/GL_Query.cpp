@@ -27,6 +27,8 @@ namespace MobileGL::MG_Impl::GLImpl {
             Bool ended = false;
             Bool resultCached = false;
             Uint64 cachedResult = 0;
+            // Transform feedback primitive counter at BeginQuery time.
+            Uint64 counterSnapshot = 0;
         };
 
         // Query calls may arrive from any thread (launchers migrate the context
@@ -41,6 +43,9 @@ namespace MobileGL::MG_Impl::GLImpl {
         GLuint g_nextQueryId = 1;
         // Id of the query currently active on GL_TIME_ELAPSED (0 = none).
         GLuint g_activeTimeElapsedQueryId = 0;
+        // Ids of the queries active on the transform feedback targets (0 = none).
+        GLuint g_activePrimitivesWrittenQueryId = 0;
+        GLuint g_activePrimitivesGeneratedQueryId = 0;
 
         Bool TimerQueryDisabled() {
             return MG_Config::Features.DisableTimerQuery;
@@ -204,10 +209,12 @@ namespace MobileGL::MG_Impl::GLImpl {
     }
 
     void BeginQuery(GLenum target, GLuint id) {
-        if (target != GL_TIME_ELAPSED) {
-            // Only GL_TIME_ELAPSED timer queries are implemented (occlusion and
-            // primitive queries remain stubs); GL_TIMESTAMP is not a valid
-            // BeginQuery target either.
+        const Bool isTransformFeedbackQuery =
+            target == GL_TRANSFORM_FEEDBACK_PRIMITIVES_WRITTEN || target == GL_PRIMITIVES_GENERATED;
+        if (target != GL_TIME_ELAPSED && !isTransformFeedbackQuery) {
+            // GL_TIME_ELAPSED timer queries and the transform feedback primitive
+            // queries are implemented (occlusion queries remain stubs);
+            // GL_TIMESTAMP is not a valid BeginQuery target either.
             RecordQueryError(ErrorCode::InvalidEnum, __FUNCTION__, "Query target is not supported.");
             return;
         }
@@ -221,9 +228,13 @@ namespace MobileGL::MG_Impl::GLImpl {
             RecordQueryError(ErrorCode::InvalidOperation, __FUNCTION__, "Query object does not exist.");
             return;
         }
-        if (g_activeTimeElapsedQueryId != 0) {
+        GLuint& activeQueryId = isTransformFeedbackQuery
+            ? (target == GL_TRANSFORM_FEEDBACK_PRIMITIVES_WRITTEN ? g_activePrimitivesWrittenQueryId
+                                                                  : g_activePrimitivesGeneratedQueryId)
+            : g_activeTimeElapsedQueryId;
+        if (activeQueryId != 0) {
             RecordQueryError(ErrorCode::InvalidOperation, __FUNCTION__,
-                             "A query is already active on GL_TIME_ELAPSED.");
+                             "A query is already active on this target.");
             return;
         }
         if (queryObject->active) {
@@ -239,25 +250,47 @@ namespace MobileGL::MG_Impl::GLImpl {
         ResetQueryObjectLocked(queryObject); // discard any previous result
         queryObject->target = target;
         queryObject->active = true;
-        const auto beginTimeElapsedQuery = MG_Backend::gBackendFunctionsTable.GL.BeginTimeElapsedQuery;
-        queryObject->backendHandle =
-            (!TimerQueryDisabled() && beginTimeElapsedQuery) ? beginTimeElapsedQuery() : nullptr;
-        g_activeTimeElapsedQueryId = id;
+        if (isTransformFeedbackQuery) {
+            // CPU accounting: captured draws bump the context counter; the query
+            // result is the delta between Begin and End. Without geometry-stage
+            // amplification the assembled count IS the written/generated count.
+            queryObject->counterSnapshot = MG_State::pGLContext->GetTransformFeedbackPrimitiveCounter();
+        } else {
+            const auto beginTimeElapsedQuery = MG_Backend::gBackendFunctionsTable.GL.BeginTimeElapsedQuery;
+            queryObject->backendHandle =
+                (!TimerQueryDisabled() && beginTimeElapsedQuery) ? beginTimeElapsedQuery() : nullptr;
+        }
+        activeQueryId = id;
     }
 
     void EndQuery(GLenum target) {
-        if (target != GL_TIME_ELAPSED) {
+        const Bool isTransformFeedbackQuery =
+            target == GL_TRANSFORM_FEEDBACK_PRIMITIVES_WRITTEN || target == GL_PRIMITIVES_GENERATED;
+        if (target != GL_TIME_ELAPSED && !isTransformFeedbackQuery) {
             RecordQueryError(ErrorCode::InvalidEnum, __FUNCTION__, "Query target is not supported.");
             return;
         }
         const std::lock_guard<std::mutex> lock(g_queryObjectsMutex);
-        if (g_activeTimeElapsedQueryId == 0) {
-            RecordQueryError(ErrorCode::InvalidOperation, __FUNCTION__, "No query is active on GL_TIME_ELAPSED.");
+        GLuint& activeQueryId = isTransformFeedbackQuery
+            ? (target == GL_TRANSFORM_FEEDBACK_PRIMITIVES_WRITTEN ? g_activePrimitivesWrittenQueryId
+                                                                  : g_activePrimitivesGeneratedQueryId)
+            : g_activeTimeElapsedQueryId;
+        if (activeQueryId == 0) {
+            RecordQueryError(ErrorCode::InvalidOperation, __FUNCTION__, "No query is active on this target.");
             return;
         }
-        auto* queryObject = FindQueryObjectLocked(g_activeTimeElapsedQueryId);
+        auto* queryObject = FindQueryObjectLocked(activeQueryId);
         if (!queryObject) {
-            g_activeTimeElapsedQueryId = 0; // should not happen; keep state consistent
+            activeQueryId = 0; // should not happen; keep state consistent
+            return;
+        }
+        if (isTransformFeedbackQuery) {
+            queryObject->cachedResult =
+                MG_State::pGLContext->GetTransformFeedbackPrimitiveCounter() - queryObject->counterSnapshot;
+            queryObject->resultCached = true;
+            queryObject->active = false;
+            queryObject->ended = true;
+            activeQueryId = 0;
             return;
         }
         EndTimeElapsedQueryLocked(queryObject);
