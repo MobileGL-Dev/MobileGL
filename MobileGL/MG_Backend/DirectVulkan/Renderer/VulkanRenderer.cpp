@@ -6800,6 +6800,11 @@ void main() {
             return;
         }
 
+        if (format == GL_DEPTH_COMPONENT || format == GL_DEPTH_STENCIL || format == GL_STENCIL_INDEX) {
+            ReadDepthStencilPixels(*readFbo, x, y, width, height, format, type, pixels);
+            return;
+        }
+
         auto& frame = m_frameContext.GetCurrent();
         if (!frame.isCommandRecording) {
             m_frameContext.BeginCommandRecording();
@@ -6943,6 +6948,301 @@ void main() {
         }
         PackReadbackToClientOrPbo(mapped, srcFormat, width, height, 1, format, type, pixels,
                                   /*applyPackImageParams=*/false);
+    }
+
+    void VulkanRenderer::ReadDepthStencilPixels(MG_State::GLState::FramebufferObject& readFbo, GLint x, GLint y,
+                                                GLsizei width, GLsizei height, GLenum format, GLenum type,
+                                                void* pixels) {
+        if (readFbo.IsDefaultFramebuffer()) {
+            MGLOG_E("DirectVulkan::ReadDepthStencilPixels skipped: default framebuffer readback is unsupported");
+            return;
+        }
+        if (width <= 0 || height <= 0) {
+            return;
+        }
+
+        const Bool wantDepth = format != GL_STENCIL_INDEX;
+        const Bool wantStencil = format != GL_DEPTH_COMPONENT;
+        // GL_DEPTH_STENCIL requires both halves; the state layer already rejected
+        // framebuffers lacking either, so resolving via the depth attachment is enough.
+        const auto attachmentType = wantDepth ? MobileGL::FramebufferAttachmentType::Depth
+                                              : MobileGL::FramebufferAttachmentType::Stencil;
+        const auto& attachment = readFbo.GetAttachment(attachmentType);
+        if (!attachment.IsValid() || attachment.IsEmpty()) {
+            MGLOG_E("DirectVulkan::ReadDepthStencilPixels skipped: no depth/stencil attachment image");
+            return;
+        }
+
+        auto& frame = m_frameContext.GetCurrent();
+        if (!frame.isCommandRecording) {
+            m_frameContext.BeginCommandRecording();
+        }
+        if (VkRenderPassManager::GetActiveRenderPass() != nullptr) {
+            VkRenderPassManager::EndRenderPass(frame.commandBuffer);
+        }
+
+        VkImage image = VK_NULL_HANDLE;
+        VkFormat vkFormat = VK_FORMAT_UNDEFINED;
+        VkImageLayout* trackedLayout = nullptr;
+        VkImageAspectFlags imageAspect = VK_IMAGE_ASPECT_NONE;
+        Uint32 mipLevel = 0;
+        Uint32 baseArrayLayer = 0;
+        if (attachment.IsTexture() && attachment.GetTexture()) {
+            auto textureObject = attachment.GetTexture();
+            const Bool clearReady = MaterializePendingClearForTexture(frame.commandBuffer, *textureObject);
+            MOBILEGL_ASSERT(clearReady, "ReadDepthStencilPixels: failed to materialize pending clear for textureId=%d",
+                            textureObject->GetExternalIndex());
+            auto* resource = m_textureManager->SyncTextureAndGetDescriptor(*textureObject);
+            if (resource == nullptr || resource->image == VK_NULL_HANDLE) {
+                MGLOG_E("DirectVulkan::ReadDepthStencilPixels skipped: failed to sync depth textureId=%u",
+                        textureObject->GetExternalIndex());
+                return;
+            }
+            image = resource->image;
+            vkFormat = resource->format;
+            trackedLayout = &resource->layout;
+            imageAspect = resource->aspect;
+            mipLevel = static_cast<Uint32>(std::max(attachment.GetTextureLevel(), 0));
+            baseArrayLayer = static_cast<Uint32>(std::max(attachment.GetTextureLayer(), 0));
+        } else if (attachment.IsRenderbuffer() && attachment.GetRenderbuffer()) {
+            const auto& renderbufferObject = attachment.GetRenderbuffer();
+            const Bool clearReady = MaterializePendingClearForRenderbuffer(frame.commandBuffer, renderbufferObject);
+            MOBILEGL_ASSERT(clearReady,
+                            "ReadDepthStencilPixels: failed to materialize pending clear for renderbuffer %u",
+                            renderbufferObject->GetExternalIndex());
+            auto* resource = m_renderPassManager->GetOrCreateRenderbufferResource(renderbufferObject);
+            if (resource == nullptr || resource->image == VK_NULL_HANDLE) {
+                MGLOG_E("DirectVulkan::ReadDepthStencilPixels skipped: failed to resolve renderbuffer %u",
+                        renderbufferObject->GetExternalIndex());
+                return;
+            }
+            image = resource->image;
+            vkFormat = resource->format;
+            trackedLayout = &resource->layout;
+            imageAspect = resource->aspect;
+        } else {
+            return;
+        }
+
+        if (*trackedLayout == VK_IMAGE_LAYOUT_UNDEFINED) {
+            MGLOG_E("DirectVulkan::ReadDepthStencilPixels skipped: source layout is undefined");
+            return;
+        }
+        if (wantDepth && (imageAspect & VK_IMAGE_ASPECT_DEPTH_BIT) == 0) {
+            MGLOG_E("DirectVulkan::ReadDepthStencilPixels skipped: attachment has no depth aspect");
+            return;
+        }
+        if (wantStencil && (imageAspect & VK_IMAGE_ASPECT_STENCIL_BIT) == 0) {
+            MGLOG_E("DirectVulkan::ReadDepthStencilPixels skipped: attachment has no stencil aspect");
+            return;
+        }
+
+        // Per-aspect buffer-copy texel sizes (Vulkan defines the depth aspect of packed
+        // formats to copy as its own tightly defined layout).
+        SizeT depthCopyBytes = 0;
+        switch (vkFormat) {
+        case VK_FORMAT_D16_UNORM:
+            depthCopyBytes = 2;
+            break;
+        case VK_FORMAT_X8_D24_UNORM_PACK32:
+        case VK_FORMAT_D24_UNORM_S8_UINT:
+        case VK_FORMAT_D32_SFLOAT:
+        case VK_FORMAT_D32_SFLOAT_S8_UINT:
+            depthCopyBytes = 4;
+            break;
+        case VK_FORMAT_S8_UINT:
+            break;
+        default:
+            MGLOG_E("DirectVulkan::ReadDepthStencilPixels skipped: unsupported source format=%d",
+                    static_cast<Int>(vkFormat));
+            return;
+        }
+
+        const SizeT pixelCount = static_cast<SizeT>(width) * static_cast<SizeT>(height);
+        const VkDeviceSize depthBytes = wantDepth ? pixelCount * depthCopyBytes : 0;
+        // Buffer offsets for depth/stencil copies must be 4-byte aligned.
+        const VkDeviceSize stencilOffset = (depthBytes + 3) & ~VkDeviceSize{3};
+        const VkDeviceSize stencilBytes = wantStencil ? pixelCount : 0;
+        VkBufferObject readback;
+        if (!readback.Create({
+                .allocator = m_allocator,
+                .size = stencilOffset + stencilBytes,
+                .usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                .memoryUsage = VMA_MEMORY_USAGE_AUTO,
+                .allocationFlags = VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT,
+            })) {
+            MGLOG_E("DirectVulkan::ReadDepthStencilPixels skipped: failed to create readback buffer");
+            return;
+        }
+
+        const VkImageLayout originalLayout = *trackedLayout;
+        VkPipelineStageFlags srcStageMask = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+        VkAccessFlags srcAccessMask = 0;
+        GetImageTransitionSourceState(originalLayout, srcStageMask, srcAccessMask);
+        Bool ok = VkTextureManager::TransitionImageLayout(
+            frame.commandBuffer, image, *trackedLayout, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, srcStageMask,
+            VK_PIPELINE_STAGE_TRANSFER_BIT, srcAccessMask, VK_ACCESS_TRANSFER_READ_BIT, imageAspect, mipLevel, 1);
+        MOBILEGL_ASSERT(ok, "%s: failed to transition depth-stencil source image", __func__);
+
+        VkBufferImageCopy regions[2]{};
+        Uint32 regionCount = 0;
+        if (wantDepth) {
+            auto& region = regions[regionCount++];
+            region.bufferOffset = 0;
+            region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+            region.imageSubresource.mipLevel = mipLevel;
+            region.imageSubresource.baseArrayLayer = baseArrayLayer;
+            region.imageSubresource.layerCount = 1;
+            region.imageOffset = {x, y, 0};
+            region.imageExtent = {static_cast<Uint32>(width), static_cast<Uint32>(height), 1};
+        }
+        if (wantStencil) {
+            auto& region = regions[regionCount++];
+            region.bufferOffset = stencilOffset;
+            region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_STENCIL_BIT;
+            region.imageSubresource.mipLevel = mipLevel;
+            region.imageSubresource.baseArrayLayer = baseArrayLayer;
+            region.imageSubresource.layerCount = 1;
+            region.imageOffset = {x, y, 0};
+            region.imageExtent = {static_cast<Uint32>(width), static_cast<Uint32>(height), 1};
+        }
+        vkCmdCopyImageToBuffer(frame.commandBuffer, image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, readback.GetHandle(),
+                               regionCount, regions);
+
+        VkPipelineStageFlags restoreStageMask = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+        VkAccessFlags restoreAccessMask = 0;
+        GetImageTransitionDestinationState(originalLayout, restoreStageMask, restoreAccessMask);
+        ok = VkTextureManager::TransitionImageLayout(
+            frame.commandBuffer, image, *trackedLayout, originalLayout, VK_PIPELINE_STAGE_TRANSFER_BIT,
+            restoreStageMask, VK_ACCESS_TRANSFER_READ_BIT, restoreAccessMask, imageAspect, mipLevel, 1);
+        MOBILEGL_ASSERT(ok, "%s: failed to restore depth-stencil source image layout", __func__);
+
+        if (!SubmitReadbackCommandsAndWait(frame)) {
+            return;
+        }
+        const auto* mapped = static_cast<const Uint8*>(readback.Map());
+        if (mapped == nullptr || !readback.Invalidate(stencilOffset + stencilBytes)) {
+            MGLOG_E("DirectVulkan::ReadDepthStencilPixels skipped: failed to map readback buffer");
+            return;
+        }
+        const Uint8* depthSrc = mapped;
+        const Uint8* stencilSrc = mapped + stencilOffset;
+
+        const auto depthValueAt = [&](SizeT i) -> Float {
+            switch (vkFormat) {
+            case VK_FORMAT_D16_UNORM: {
+                Uint16 raw = 0;
+                Memcpy(&raw, depthSrc + i * 2, sizeof(raw));
+                return static_cast<Float>(raw) / 65535.0f;
+            }
+            case VK_FORMAT_X8_D24_UNORM_PACK32:
+            case VK_FORMAT_D24_UNORM_S8_UINT: {
+                Uint32 raw = 0;
+                Memcpy(&raw, depthSrc + i * 4, sizeof(raw));
+                return static_cast<Float>(raw & 0xFFFFFFu) / static_cast<Float>(0xFFFFFFu);
+            }
+            default: { // D32_SFLOAT / D32_SFLOAT_S8_UINT
+                Float raw = 0.0f;
+                Memcpy(&raw, depthSrc + i * 4, sizeof(raw));
+                return raw;
+            }
+            }
+        };
+
+        SizeT dstPixelBytes = 0;
+        switch (type) {
+        case GL_FLOAT:
+        case GL_UNSIGNED_INT:
+        case GL_UNSIGNED_INT_24_8:
+            dstPixelBytes = 4;
+            break;
+        case GL_UNSIGNED_SHORT:
+            dstPixelBytes = 2;
+            break;
+        case GL_UNSIGNED_BYTE:
+            dstPixelBytes = 1;
+            break;
+        case GL_FLOAT_32_UNSIGNED_INT_24_8_REV:
+            dstPixelBytes = 8;
+            break;
+        default:
+            MGLOG_E("DirectVulkan::ReadDepthStencilPixels skipped: unsupported type=0x%x", type);
+            return;
+        }
+
+        Vector<Uint8> packed(pixelCount * dstPixelBytes);
+        for (SizeT i = 0; i < pixelCount; ++i) {
+            Uint8* dst = packed.data() + i * dstPixelBytes;
+            switch (type) {
+            case GL_FLOAT: {
+                const Float value = depthValueAt(i);
+                Memcpy(dst, &value, sizeof(value));
+                break;
+            }
+            case GL_UNSIGNED_SHORT: {
+                const Uint16 value =
+                    static_cast<Uint16>(std::lround(static_cast<double>(depthValueAt(i)) * 65535.0));
+                Memcpy(dst, &value, sizeof(value));
+                break;
+            }
+            case GL_UNSIGNED_INT: {
+                const Uint32 value = format == GL_STENCIL_INDEX
+                    ? stencilSrc[i]
+                    : static_cast<Uint32>(static_cast<double>(depthValueAt(i)) * 4294967295.0);
+                Memcpy(dst, &value, sizeof(value));
+                break;
+            }
+            case GL_UNSIGNED_BYTE: {
+                dst[0] = stencilSrc[i];
+                break;
+            }
+            case GL_UNSIGNED_INT_24_8: {
+                const Uint32 depth24 =
+                    static_cast<Uint32>(std::lround(static_cast<double>(depthValueAt(i)) * 16777215.0)) & 0xFFFFFFu;
+                const Uint32 value = (depth24 << 8) | stencilSrc[i];
+                Memcpy(dst, &value, sizeof(value));
+                break;
+            }
+            case GL_FLOAT_32_UNSIGNED_INT_24_8_REV: {
+                const Float depthValue = depthValueAt(i);
+                const Uint32 stencilValue = stencilSrc[i];
+                Memcpy(dst, &depthValue, sizeof(depthValue));
+                Memcpy(dst + 4, &stencilValue, sizeof(stencilValue));
+                break;
+            }
+            default:
+                break;
+            }
+        }
+
+        // Store honoring the client pack state (single slice).
+        const auto& pixelPackBufferObject =
+            MG_State::pGLContext->GetBufferBindingSlot(BufferTarget::PixelPack).GetBoundObject();
+        const auto packParams = MG_State::pGLContext->GetPixelStoreParameters(false);
+        const SizeT rowPixels = static_cast<SizeT>(packParams.RowLength > 0 ? packParams.RowLength : width);
+        const SizeT packAlignment = packParams.Alignment > 0 ? static_cast<SizeT>(packParams.Alignment) : 1;
+        const SizeT dstRowStride = ((rowPixels * dstPixelBytes) + packAlignment - 1) / packAlignment * packAlignment;
+        const SizeT dstSkipOffset = static_cast<SizeT>(std::max(packParams.SkipRows, 0)) * dstRowStride +
+            static_cast<SizeT>(std::max(packParams.SkipPixels, 0)) * dstPixelBytes;
+        const SizeT dstRowBytes = static_cast<SizeT>(width) * dstPixelBytes;
+        const SizeT pboBaseOffset = reinterpret_cast<SizeT>(pixels);
+        if (pixelPackBufferObject != nullptr) {
+            const SizeT requiredSize =
+                pboBaseOffset + dstSkipOffset + static_cast<SizeT>(height - 1) * dstRowStride + dstRowBytes;
+            if (requiredSize > pixelPackBufferObject->GetSize()) {
+                MGLOG_E("DirectVulkan::ReadDepthStencilPixels skipped: pixel pack buffer is too small");
+                return;
+            }
+        }
+        for (GLsizei row = 0; row < height; ++row) {
+            Uint8* srcRow = packed.data() + static_cast<SizeT>(row) * dstRowBytes;
+            const SizeT dstOffset = dstSkipOffset + static_cast<SizeT>(row) * dstRowStride;
+            if (pixelPackBufferObject != nullptr) {
+                pixelPackBufferObject->WritebackFromBackend({srcRow, dstRowBytes}, pboBaseOffset + dstOffset);
+            } else {
+                Memcpy(static_cast<Uint8*>(pixels) + dstOffset, srcRow, dstRowBytes);
+            }
+        }
     }
 
     void VulkanRenderer::GetTexImage(GLenum target, GLint level, GLenum format, GLenum type, GLvoid* pixels) {

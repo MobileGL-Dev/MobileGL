@@ -212,8 +212,8 @@ namespace MobileGL::MG_Impl::GLImpl {
         // Handles the format-derived pnames shared by GetFramebufferAttachmentParameteriv
         // and its DSA variant. Returns true when pname was one of them.
         Bool TryAnswerAttachmentFormatQuery(const MG_State::GLState::FramebufferAttachmentObject* attachmentObject,
-                                            FramebufferAttachmentType attachmentType, GLenum pname, GLint* params,
-                                            const char* caller) {
+                                            FramebufferAttachmentType attachmentType, Bool depthStencilAlias,
+                                            GLenum pname, GLint* params, const char* caller) {
             switch (pname) {
             case GL_FRAMEBUFFER_ATTACHMENT_RED_SIZE:
             case GL_FRAMEBUFFER_ATTACHMENT_GREEN_SIZE:
@@ -226,6 +226,18 @@ namespace MobileGL::MG_Impl::GLImpl {
                 break;
             default:
                 return false;
+            }
+
+            if (pname == GL_FRAMEBUFFER_ATTACHMENT_COMPONENT_TYPE && depthStencilAlias) {
+                // The depth and stencil components have different types, so the combined
+                // attachment name has no single answer.
+                MG_State::pGLContext->RecordError(
+                    ErrorCode::InvalidOperation,
+                    MakeUnique<GenericErrorInfo>(
+                        "MG_Impl/GLImpl", caller,
+                        "GL_FRAMEBUFFER_ATTACHMENT_COMPONENT_TYPE cannot be queried on "
+                        "GL_DEPTH_STENCIL_ATTACHMENT."));
+                return true;
             }
 
             if (attachmentObject == nullptr || attachmentObject->IsEmpty() || !attachmentObject->IsValid()) {
@@ -579,19 +591,39 @@ namespace MobileGL::MG_Impl::GLImpl {
             return;
         }
 
+        Bool depthStencilMismatch = false;
         const auto* attachmentObject = [&]() -> const MG_State::GLState::FramebufferAttachmentObject* {
             if (!depthStencilAlias) {
                 return &framebufferObject->GetAttachment(attachmentType);
             }
 
             const auto& depthAttachment = framebufferObject->GetAttachment(FramebufferAttachmentType::Depth);
-            if (depthAttachment.IsValid() && !depthAttachment.IsEmpty()) return &depthAttachment;
-
             const auto& stencilAttachment = framebufferObject->GetAttachment(FramebufferAttachmentType::Stencil);
-            if (stencilAttachment.IsValid() && !stencilAttachment.IsEmpty()) return &stencilAttachment;
-
+            const Bool depthLive = depthAttachment.IsValid() && !depthAttachment.IsEmpty();
+            const Bool stencilLive = stencilAttachment.IsValid() && !stencilAttachment.IsEmpty();
+            if (depthLive && stencilLive) {
+                const Bool sameObject = depthAttachment.IsTexture() == stencilAttachment.IsTexture() &&
+                    (!depthAttachment.IsTexture() || depthAttachment.GetTexture() == stencilAttachment.GetTexture()) &&
+                    (!depthAttachment.IsRenderbuffer() ||
+                     depthAttachment.GetRenderbuffer() == stencilAttachment.GetRenderbuffer());
+                depthStencilMismatch = !sameObject;
+            } else {
+                // GL_DEPTH_STENCIL_ATTACHMENT means "both halves"; a lone half does not answer it.
+                depthStencilMismatch = depthLive != stencilLive;
+            }
+            if (depthLive) return &depthAttachment;
+            if (stencilLive) return &stencilAttachment;
             return nullptr;
         }();
+
+        if (depthStencilMismatch) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidOperation,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", "GetFramebufferAttachmentParameteriv_State",
+                                             "GL_DEPTH_STENCIL_ATTACHMENT query with different depth and stencil "
+                                             "attachment images."));
+            return;
+        }
 
         switch (pname) {
         case GL_FRAMEBUFFER_ATTACHMENT_OBJECT_TYPE:
@@ -656,7 +688,7 @@ namespace MobileGL::MG_Impl::GLImpl {
                 : GL_FALSE;
             break;
         default:
-            if (TryAnswerAttachmentFormatQuery(attachmentObject, attachmentType, pname, params,
+            if (TryAnswerAttachmentFormatQuery(attachmentObject, attachmentType, depthStencilAlias, pname, params,
                                                "GetFramebufferAttachmentParameteriv_State")) {
                 return;
             }
@@ -1623,19 +1655,39 @@ namespace MobileGL::MG_Impl::GLImpl {
             : MG_Util::ConvertGLEnumToFramebufferAttachmentType(attachment);
         if (!FramebufferImpl::ValidateFramebufferAttachmentType(attachmentType)) return;
 
+        Bool depthStencilMismatch = false;
         const auto* attachmentObject = [&]() -> const MG_State::GLState::FramebufferAttachmentObject* {
             if (!depthStencilAlias) {
                 return &framebufferObject->GetAttachment(attachmentType);
             }
 
             const auto& depthAttachment = framebufferObject->GetAttachment(FramebufferAttachmentType::Depth);
-            if (depthAttachment.IsValid() && !depthAttachment.IsEmpty()) return &depthAttachment;
-
             const auto& stencilAttachment = framebufferObject->GetAttachment(FramebufferAttachmentType::Stencil);
-            if (stencilAttachment.IsValid() && !stencilAttachment.IsEmpty()) return &stencilAttachment;
-
+            const Bool depthLive = depthAttachment.IsValid() && !depthAttachment.IsEmpty();
+            const Bool stencilLive = stencilAttachment.IsValid() && !stencilAttachment.IsEmpty();
+            if (depthLive && stencilLive) {
+                const Bool sameObject = depthAttachment.IsTexture() == stencilAttachment.IsTexture() &&
+                    (!depthAttachment.IsTexture() || depthAttachment.GetTexture() == stencilAttachment.GetTexture()) &&
+                    (!depthAttachment.IsRenderbuffer() ||
+                     depthAttachment.GetRenderbuffer() == stencilAttachment.GetRenderbuffer());
+                depthStencilMismatch = !sameObject;
+            } else {
+                // GL_DEPTH_STENCIL_ATTACHMENT means "both halves"; a lone half does not answer it.
+                depthStencilMismatch = depthLive != stencilLive;
+            }
+            if (depthLive) return &depthAttachment;
+            if (stencilLive) return &stencilAttachment;
             return nullptr;
         }();
+
+        if (depthStencilMismatch) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidOperation,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller,
+                                             "GL_DEPTH_STENCIL_ATTACHMENT query with different depth and stencil "
+                                             "attachment images."));
+            return;
+        }
 
         switch (pname) {
         case GL_FRAMEBUFFER_ATTACHMENT_OBJECT_TYPE:
@@ -1682,7 +1734,8 @@ namespace MobileGL::MG_Impl::GLImpl {
                 : GL_FALSE;
             break;
         default:
-            if (TryAnswerAttachmentFormatQuery(attachmentObject, attachmentType, pname, params, caller)) {
+            if (TryAnswerAttachmentFormatQuery(attachmentObject, attachmentType, depthStencilAlias, pname, params,
+                                               caller)) {
                 return;
             }
             MG_State::pGLContext->RecordError(

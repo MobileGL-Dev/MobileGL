@@ -200,6 +200,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                               GLsizei srcWidth, GLsizei srcHeight, GLsizei srcDepth);
         void GenerateMipmap(GLenum target);
         void ReadPixels(GLint x, GLint y, GLsizei width, GLsizei height, GLenum format, GLenum type, void* pixels);
+        // GL_DEPTH_COMPONENT / GL_DEPTH_STENCIL / GL_STENCIL_INDEX readback from the
+        // read framebuffer's depth/stencil attachment (per-aspect buffer copies with
+        // CPU repacking into the requested client layout).
+        void ReadDepthStencilPixels(MG_State::GLState::FramebufferObject& readFbo, GLint x, GLint y, GLsizei width,
+                                    GLsizei height, GLenum format, GLenum type, void* pixels);
         static SizeT GetReadbackTexelSize(VkFormat sourceFormat);
         static Bool ConvertReadbackPixels(const Uint8* sourcePixels, VkFormat sourceFormat,
                                           GLsizei width, GLsizei height, GLenum destinationFormat,
