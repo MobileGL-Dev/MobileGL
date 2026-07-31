@@ -503,9 +503,13 @@ namespace MobileGL {
                 s.Depth = 32;
                 s.Stencil = 8;
                 break;
+            case TextureInternalFormat::Unknown:
+                // Queried for attachments that have no storage yet (e.g. framebuffer
+                // parameter queries on the initial state); every size stays 0.
+                break;
             default:
-                MOBILEGL_ASSERT(false, "Unimplemented internal format in GetComponentSizesForInternalFormat: %d",
-                                static_cast<Int>(internal));
+                MGLOG_W("Unimplemented internal format in GetComponentSizesForInternalFormat: %d",
+                        static_cast<Int>(internal));
                 break;
             }
 

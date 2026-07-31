@@ -1694,7 +1694,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         allocationInfo.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
         allocationInfo.requiredFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
         VK_VERIFY(vmaCreateImage(m_allocator, &imageInfo, &allocationInfo, &resource.image, &resource.allocation, nullptr),
-                  "vmaCreateImage(texture)");
+                  "vmaCreateImage(texture) textureId=%d extent=%ux%u depth=%u layers=%u mips=%u samples=%d format=%d",
+                  texture.GetExternalIndex(), imageInfo.extent.width, imageInfo.extent.height,
+                  imageInfo.extent.depth, imageInfo.arrayLayers, imageInfo.mipLevels,
+                  static_cast<Int>(imageInfo.samples), static_cast<Int>(imageInfo.format));
         ++m_textureImageEpoch; // a new attachment image invalidates cached render passes
 
         resource.layout = VK_IMAGE_LAYOUT_UNDEFINED;
