@@ -2848,7 +2848,9 @@ void main() {
         }
 
         const Uint8* indexBytes = nullptr;
-        const auto& indexBufferShared = vao.GetIndexBufferBindingSlot().GetBoundObject();
+        const auto& indexBufferShared = indexView.forceClientMemory
+            ? SharedPtr<MG_State::GLState::BufferObject>{}
+            : vao.GetIndexBufferBindingSlot().GetBoundObject();
         if (indexBufferShared != nullptr) {
             const SizeT bufferSize = indexBufferShared->GetSize();
             if (indexBufferShared->MappedData() == nullptr || indexView.indexByteOffset > bufferSize ||
@@ -3262,7 +3264,8 @@ void main() {
             }
         }
 
-        const auto* indexBuffer = vao.GetIndexBufferBindingSlot().GetBoundObject().get();
+        const auto* indexBuffer =
+            pIndexBufferView->forceClientMemory ? nullptr : vao.GetIndexBufferBindingSlot().GetBoundObject().get();
         if (indexBuffer == nullptr) {
             // No element-array buffer: the view's byte offset is a raw client pointer
             // (desktop drivers accept client-memory indices and the GL CTS relies on

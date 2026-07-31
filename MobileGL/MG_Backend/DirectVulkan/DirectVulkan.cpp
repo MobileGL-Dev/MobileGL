@@ -1250,9 +1250,75 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         pVulkanRenderer->Clear(mask);
     }
 
+    // Vulkan has no LINE_LOOP topology; rewrite the draw as an indexed LINE_STRIP
+    // whose synthesized index list revisits the first vertex at the end.
+    static void DrawLineLoopAsIndexedStrip(const Vector<Uint32>& closedIndices, GLint basevertex) {
+        DrawIndexedCmd payload{};
+        payload.mode = GL_LINE_STRIP;
+        payload.indexBufferView.indexType = GL_UNSIGNED_INT;
+        payload.indexBufferView.indexByteOffset = reinterpret_cast<SizeT>(closedIndices.data());
+        payload.indexBufferView.indexByteSize = closedIndices.size() * sizeof(Uint32);
+        payload.indexBufferView.forceClientMemory = true;
+        payload.params.indexCount = static_cast<Uint32>(closedIndices.size());
+        payload.params.instanceCount = 1;
+        payload.params.vertexOffset = basevertex;
+        pVulkanRenderer->DrawElements(payload);
+    }
+
+    // Resolve a DrawElements index list (bound element-array buffer or client
+    // memory) into uint32 values with the loop-closing first index appended.
+    static Bool BuildClosedLineLoopIndices(GLsizei count, GLenum type, const void* indices,
+                                           Vector<Uint32>& outIndices) {
+        const SizeT indexSize = MG_Util::GetGLTypeSize(type);
+        if (indexSize == 0 || count < 2) {
+            return false;
+        }
+        const Uint8* indexBytes = nullptr;
+        const auto& vao = *MG_State::pGLContext->GetBoundVertexArray();
+        const auto& indexBufferShared = vao.GetIndexBufferBindingSlot().GetBoundObject();
+        if (indexBufferShared != nullptr) {
+            const SizeT offset = reinterpret_cast<SizeT>(indices);
+            const SizeT bufferSize = indexBufferShared->GetSize();
+            if (indexBufferShared->MappedData() == nullptr || offset > bufferSize ||
+                static_cast<SizeT>(count) * indexSize > bufferSize - offset) {
+                return false;
+            }
+            indexBufferShared->SyncPersistentMappedRange();
+            indexBytes = indexBufferShared->MappedData() + offset;
+        } else {
+            indexBytes = static_cast<const Uint8*>(indices);
+            if (indexBytes == nullptr) {
+                return false;
+            }
+        }
+        outIndices.resize(static_cast<SizeT>(count) + 1);
+        for (GLsizei i = 0; i < count; ++i) {
+            switch (indexSize) {
+            case 1: outIndices[i] = indexBytes[i]; break;
+            case 2: outIndices[i] = reinterpret_cast<const Uint16*>(indexBytes)[i]; break;
+            default: outIndices[i] = reinterpret_cast<const Uint32*>(indexBytes)[i]; break;
+            }
+        }
+        outIndices[count] = outIndices[0];
+        return true;
+    }
+
     void DrawArrays(GLenum mode, GLint first, GLsizei count) {
         MOBILEGL_ASSERT(pVulkanRenderer, "DirectVulkan::DrawArrays called with null VulkanRenderer");
         MOBILEGL_ASSERT(MG_State::pGLContext, "DirectVulkan::DrawArrays called with null GL context");
+
+        if (mode == GL_LINE_LOOP) {
+            if (count < 2) {
+                return;
+            }
+            Vector<Uint32> closedIndices(static_cast<SizeT>(count) + 1);
+            for (GLsizei i = 0; i < count; ++i) {
+                closedIndices[i] = static_cast<Uint32>(first + i);
+            }
+            closedIndices[count] = static_cast<Uint32>(first);
+            DrawLineLoopAsIndexedStrip(closedIndices, 0);
+            return;
+        }
 
         DrawCmd payload{};
         payload.mode = mode;
@@ -1265,6 +1331,14 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     void DrawElements(GLenum mode, GLsizei count, GLenum type, const void* indices) {
         MOBILEGL_ASSERT(pVulkanRenderer, "DirectVulkan::DrawElements called with null VulkanRenderer");
         MOBILEGL_ASSERT(MG_State::pGLContext, "DirectVulkan::DrawElements called with null GL context");
+
+        if (mode == GL_LINE_LOOP) {
+            Vector<Uint32> closedIndices;
+            if (BuildClosedLineLoopIndices(count, type, indices, closedIndices)) {
+                DrawLineLoopAsIndexedStrip(closedIndices, 0);
+            }
+            return;
+        }
 
         DrawIndexedCmd payload{};
         payload.mode = mode;
@@ -1334,6 +1408,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     void DrawElementsBaseVertex(GLenum mode, GLsizei count, GLenum type, const GLvoid* indices, GLint basevertex) {
         MOBILEGL_ASSERT(pVulkanRenderer, "DirectVulkan::DrawElementsBaseVertex called with null VulkanRenderer");
         MOBILEGL_ASSERT(MG_State::pGLContext, "DirectVulkan::DrawElementsBaseVertex called with null GL context");
+        if (mode == GL_LINE_LOOP) {
+            Vector<Uint32> closedIndices;
+            if (BuildClosedLineLoopIndices(count, type, indices, closedIndices)) {
+                DrawLineLoopAsIndexedStrip(closedIndices, basevertex);
+            }
+            return;
+        }
         DrawIndexedCmd payload{};
         payload.mode = mode;
         payload.indexBufferView.indexType = type;

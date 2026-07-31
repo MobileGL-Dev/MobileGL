@@ -25,6 +25,11 @@ namespace MobileGL {
             case GL_TRIANGLE_FAN:
                 return VK_PRIMITIVE_TOPOLOGY_TRIANGLE_FAN;
             case GL_LINE_LOOP:
+                // DrawArrays/DrawElements rewrite line loops into closed indexed
+                // strips; entry points without that rewrite (instanced/indirect)
+                // degrade to an open strip, which only misses the closing segment.
+                MGLOG_W("GL_LINE_LOOP without index rewrite; drawing as LINE_STRIP");
+                return VK_PRIMITIVE_TOPOLOGY_LINE_STRIP;
             default:
                 MGLOG_W("Unrecognized primitive topology");
                 return VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;

@@ -57,15 +57,6 @@ namespace MobileGL::MG_Impl::GLImpl {
             return false;
         }
 
-        if (activeBackendObject->GetBackendType() == BackendType::DirectVulkan && mode == GL_LINE_LOOP) {
-            MG_State::pGLContext->RecordError(
-                ErrorCode::InvalidOperation,
-                MakeUnique<GenericErrorInfo>(
-                    "MG_Impl/GLImpl", functionName,
-                    "Primitive mode GL_LINE_LOOP is not supported by the DirectVulkan backend."));
-            return false;
-        }
-
         const auto& vao = MG_State::pGLContext->GetBoundVertexArray();
         if (vao && vao->GetExternalIndex() == 0 && !MG_State::IsRelaxedSemanticsActive()) {
             MG_State::pGLContext->RecordError(

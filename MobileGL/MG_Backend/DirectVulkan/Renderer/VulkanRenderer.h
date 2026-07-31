@@ -76,6 +76,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         GLenum indexType = GL_UNSIGNED_SHORT;
         SizeT indexByteOffset = 0;
         SizeT indexByteSize = 0;
+        // Interpret indexByteOffset as a raw client pointer even when an element
+        // array buffer is bound (backend-synthesized index lists, e.g. the
+        // GL_LINE_LOOP -> LINE_STRIP rewrite).
+        Bool forceClientMemory = false;
     };
 
     struct DrawIndexedCmd {
