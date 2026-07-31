@@ -613,6 +613,18 @@ namespace MobileGL::MG_Impl::GLImpl {
             *params = programObject->GetActiveUniformBlocksMaxNameLength() + 1;
             MGLOG_D("%s: %s = %d", __func__, MG_Util::ConvertGLEnumToString(pname).c_str(), *params);
             break;
+        case GL_TRANSFORM_FEEDBACK_VARYINGS:
+            *params = static_cast<GLint>(programObject->GetTransformFeedbackVaryingCount());
+            MGLOG_D("%s: %s = %d", __func__, MG_Util::ConvertGLEnumToString(pname).c_str(), *params);
+            break;
+        case GL_TRANSFORM_FEEDBACK_BUFFER_MODE:
+            *params = static_cast<GLint>(programObject->GetTransformFeedbackBufferMode());
+            MGLOG_D("%s: %s = %d", __func__, MG_Util::ConvertGLEnumToString(pname).c_str(), *params);
+            break;
+        case GL_TRANSFORM_FEEDBACK_VARYING_MAX_LENGTH:
+            *params = programObject->GetTransformFeedbackVaryingMaxLength();
+            MGLOG_D("%s: %s = %d", __func__, MG_Util::ConvertGLEnumToString(pname).c_str(), *params);
+            break;
         case GL_COMPUTE_WORK_GROUP_SIZE: { // GL >= 4.3
             if (!programObject->GetLinkStatus() || programObject->GetShaderIndexByStage(ShaderStage::Compute) < 0) {
                 MG_State::pGLContext->RecordError(
@@ -632,9 +644,6 @@ namespace MobileGL::MG_Impl::GLImpl {
 
         case GL_PROGRAM_BINARY_LENGTH:
 
-        case GL_TRANSFORM_FEEDBACK_BUFFER_MODE:
-        case GL_TRANSFORM_FEEDBACK_VARYINGS:
-        case GL_TRANSFORM_FEEDBACK_VARYING_MAX_LENGTH:
         case GL_GEOMETRY_VERTICES_OUT:
         case GL_GEOMETRY_INPUT_TYPE:
         case GL_GEOMETRY_OUTPUT_TYPE:
@@ -857,6 +866,18 @@ namespace MobileGL::MG_Impl::GLImpl {
         if (!programObject) return;
         MGLOG_D("%s: linking program %d", __func__, program);
 
+        // Relinking the program an active transform feedback captures from would
+        // invalidate its varyings mid-capture (GL 3.3 core 2.11.3).
+        if (MG_State::pGLContext->IsTransformFeedbackActive() &&
+            MG_State::pGLContext->GetTransformFeedbackProgram().get() == programObject.get()) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidOperation,
+                MakeUnique<GenericErrorInfo>(
+                    "MG_Impl/GLImpl", __func__,
+                    "The program used by active transform feedback cannot be relinked."));
+            return;
+        }
+
         static Bool allowVSOnlyPrograms;
         static Bool initialized = false;
         if (!initialized) {
@@ -899,6 +920,16 @@ namespace MobileGL::MG_Impl::GLImpl {
 
     void UseProgram_State(GLuint program) {
         MGLOG_D("UseProgram_State: program=%u", program);
+
+        // GL 3.3 core 2.11.3: the program in use may not change while transform
+        // feedback is active (there is no pause in 3.3).
+        if (MG_State::pGLContext->IsTransformFeedbackActive()) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidOperation,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
+                                             "The current program cannot change while transform feedback is active."));
+            return;
+        }
 
         if (program == 0) {
             MG_State::pGLContext->UseProgram(0);
@@ -2224,5 +2255,67 @@ namespace MobileGL::MG_Impl::GLImpl {
 
     void ValidateProgram(GLuint program) {
         ValidateProgram_State(program);
+    }
+
+    void TransformFeedbackVaryings(GLuint program, GLsizei count, const GLchar* const* varyings, GLenum bufferMode) {
+        auto& programObject = TryToGetProgramObject(program);
+        if (!programObject) return;
+        if (bufferMode != GL_INTERLEAVED_ATTRIBS && bufferMode != GL_SEPARATE_ATTRIBS) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidEnum,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__, "bufferMode is not a valid capture mode."));
+            return;
+        }
+        if (count < 0) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidValue,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__, "count must be non-negative."));
+            return;
+        }
+        // GL 3.3 core: SEPARATE_ATTRIBS count may not exceed the separate-attrib limit.
+        if (bufferMode == GL_SEPARATE_ATTRIBS && count > 4) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidValue,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
+                                             "count exceeds GL_MAX_TRANSFORM_FEEDBACK_SEPARATE_ATTRIBS."));
+            return;
+        }
+        Vector<String> names;
+        names.reserve(static_cast<SizeT>(count));
+        for (GLsizei i = 0; i < count; ++i) {
+            names.emplace_back(varyings != nullptr && varyings[i] != nullptr ? varyings[i] : "");
+        }
+        programObject->SetTransformFeedbackVaryings(Move(names), bufferMode);
+    }
+
+    void GetTransformFeedbackVarying(GLuint program, GLuint index, GLsizei bufSize, GLsizei* length, GLsizei* size,
+                                     GLenum* type, GLchar* name) {
+        auto& programObject = TryToGetProgramObject(program);
+        if (!programObject) return;
+        if (!programObject->GetLinkStatus()) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidOperation,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
+                                             std::to_string(program) + " has not been successfully linked."));
+            return;
+        }
+        const auto* varying = programObject->GetTransformFeedbackVarying(index);
+        if (varying == nullptr) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidValue,
+                MakeUnique<GenericErrorInfo>(
+                    "MG_Impl/GLImpl", __func__,
+                    "index is not an active transform feedback varying of the program."));
+            return;
+        }
+        if (size != nullptr) *size = varying->size;
+        if (type != nullptr) *type = varying->type;
+        GLsizei written = 0;
+        if (name != nullptr && bufSize > 0) {
+            written = std::min<GLsizei>(bufSize - 1, static_cast<GLsizei>(varying->name.size()));
+            Memcpy(name, varying->name.data(), static_cast<SizeT>(written));
+            name[written] = '\0';
+        }
+        if (length != nullptr) *length = written;
     }
 } // namespace MobileGL::MG_Impl::GLImpl

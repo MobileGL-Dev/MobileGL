@@ -211,6 +211,22 @@ namespace MobileGL {
                 void SetScissorBox(IntVec4 box);      // x, y, width, height
                 const IntVec4& GetScissorBox() const; // x, y, width, height
 
+                // Transform feedback (GL 3.0 core Begin/End; no feedback objects yet)
+                void BeginTransformFeedback(GLenum primitiveMode, const SharedPtr<ProgramObject>& program) {
+                    m_transformFeedbackActive = true;
+                    m_transformFeedbackPrimitiveMode = primitiveMode;
+                    m_transformFeedbackProgram = program;
+                }
+                void EndTransformFeedback() {
+                    m_transformFeedbackActive = false;
+                    m_transformFeedbackProgram.reset();
+                }
+                Bool IsTransformFeedbackActive() const { return m_transformFeedbackActive; }
+                GLenum GetTransformFeedbackPrimitiveMode() const { return m_transformFeedbackPrimitiveMode; }
+                const SharedPtr<ProgramObject>& GetTransformFeedbackProgram() const {
+                    return m_transformFeedbackProgram;
+                }
+
                 // Framebuffer
                 void GenFramebufferNames(Uint number, Vector<Uint>& framebuffers);
                 const SharedPtr<FramebufferObject>& GetFramebufferObject(Uint index);
@@ -243,6 +259,9 @@ namespace MobileGL {
                 BufferState m_bufferState;
                 VertexArrayState m_vertexArrayState;
                 Array<CurrentVertexAttributeValue, VertexArrayObject::MAX_VERTEX_ATTRIBS> m_currentVertexAttributes{};
+                Bool m_transformFeedbackActive = false;
+                GLenum m_transformFeedbackPrimitiveMode = GL_POINTS;
+                SharedPtr<ProgramObject> m_transformFeedbackProgram;
                 TextureState m_textureState;
                 ProgramState m_programState;
                 RenderState m_renderState;

@@ -1351,6 +1351,14 @@ namespace MobileGL::MG_Impl::GLImpl {
         BufferTarget bufferTarget = MG_Util::ConvertGLEnumToBufferTarget(target);
         if (!BufferImpl::ValidateBufferBindingPointTarget(bufferTarget)) return;
         if (!BufferImpl::ValidateBufferBindingPointIndex(bufferTarget, pointIndex)) return;
+        if (bufferTarget == BufferTarget::TransformFeedback && MG_State::pGLContext->IsTransformFeedbackActive()) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidOperation,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
+                                             "Transform feedback buffer bindings cannot change while transform "
+                                             "feedback is active."));
+            return;
+        }
         MG_State::pGLContext->TouchBufferBindingPoint(bufferTarget, pointIndex);
 
         auto& point = MG_State::pGLContext->GetBufferBindingPoint(bufferTarget, pointIndex);
@@ -1384,6 +1392,14 @@ namespace MobileGL::MG_Impl::GLImpl {
         BufferTarget bufferTarget = MG_Util::ConvertGLEnumToBufferTarget(target);
         if (!BufferImpl::ValidateBufferBindingPointTarget(bufferTarget)) return;
         if (!BufferImpl::ValidateBufferBindingPointIndex(bufferTarget, index)) return;
+        if (bufferTarget == BufferTarget::TransformFeedback && MG_State::pGLContext->IsTransformFeedbackActive()) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidOperation,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
+                                             "Transform feedback buffer bindings cannot change while transform "
+                                             "feedback is active."));
+            return;
+        }
         MG_State::pGLContext->TouchBufferBindingPoint(bufferTarget, index);
 
         auto& point = MG_State::pGLContext->GetBufferBindingPoint(bufferTarget, index);

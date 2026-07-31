@@ -465,6 +465,33 @@ namespace MobileGL::MG_State::GLState {
             return it == m_shaders.end() ? -1 : (Int)std::distance(m_shaders.begin(), it);
         }
 
+        // Transform feedback (GL 3.0 core: glTransformFeedbackVaryings applies on
+        // the NEXT link; the linked snapshot below is what draws and queries see).
+        struct XfbVarying {
+            String name;
+            GLenum type = GL_FLOAT;
+            GLint size = 1;           // array element count
+            Uint32 bufferIndex = 0;   // capture buffer slot
+            Uint32 offsetBytes = 0;   // offset within the capture buffer
+            Uint32 byteSize = 0;      // bytes captured per vertex for this varying
+        };
+        void SetTransformFeedbackVaryings(Vector<String>&& names, GLenum bufferMode) {
+            m_requestedXfbVaryings = Move(names);
+            m_requestedXfbBufferMode = bufferMode;
+        }
+        GLenum GetTransformFeedbackBufferMode() const { return m_xfbBufferMode; }
+        SizeT GetTransformFeedbackVaryingCount() const { return m_xfbVaryings.size(); }
+        const XfbVarying* GetTransformFeedbackVarying(SizeT index) const {
+            return index < m_xfbVaryings.size() ? &m_xfbVaryings[index] : nullptr;
+        }
+        const Vector<XfbVarying>& GetTransformFeedbackVaryings() const { return m_xfbVaryings; }
+        // Stride of one captured vertex in the given capture buffer slot.
+        Uint32 GetTransformFeedbackStride(Uint32 bufferIndex) const {
+            return bufferIndex < m_xfbStrides.size() ? m_xfbStrides[bufferIndex] : 0;
+        }
+        SizeT GetTransformFeedbackBufferCount() const { return m_xfbStrides.size(); }
+        Int GetTransformFeedbackVaryingMaxLength() const { return m_xfbVaryingNameMaxLength; }
+
         Uint GetExternalIndex() const { return m_externalIndex; }
         // Globally-unique, never-reused id for this program object's lifetime. Unlike the GL
         // name (external index), which is freed to a LIFO list and immediately handed back by
@@ -475,6 +502,10 @@ namespace MobileGL::MG_State::GLState {
     private:
         void ResetLinkArtifacts();
         void DoReflection();
+        // Resolves the requested transform feedback varyings against the linked
+        // vertex stage; fails the link (GL semantics) on unknown or duplicate
+        // names or exceeded capture limits.
+        Bool ResolveTransformFeedbackVaryings();
         void GenerateBinary();
         void WaitUntilGenerationCompleted() const;
         void AddDefaultFragmentShaderIfMissing();
@@ -558,5 +589,13 @@ namespace MobileGL::MG_State::GLState {
         mutable Uint32 m_backendHashMemoVersion = ~0u;
         Uint32 m_uboContentVersion = 0;
         Uint32 m_linkVersion = 0;
+
+        // Transform feedback: request (applies at next link) and linked snapshot.
+        Vector<String> m_requestedXfbVaryings;
+        GLenum m_requestedXfbBufferMode = GL_INTERLEAVED_ATTRIBS;
+        Vector<XfbVarying> m_xfbVaryings;
+        Vector<Uint32> m_xfbStrides;
+        GLenum m_xfbBufferMode = GL_INTERLEAVED_ATTRIBS;
+        Int m_xfbVaryingNameMaxLength = 0;
     };
 } // namespace MobileGL::MG_State::GLState

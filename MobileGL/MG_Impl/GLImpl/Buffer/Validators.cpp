@@ -60,6 +60,11 @@ namespace MobileGL::MG_Impl::GLImpl::BufferImpl {
                 MG_Backend::pActiveBackendObject->GetDynamicParameters().MaxShaderStorageBufferBindings;
             pointCount = std::min(pointCount, static_cast<SizeT>(std::max(backendCount, 0)));
         }
+        if (target == BufferTarget::TransformFeedback) {
+            // GL_MAX_TRANSFORM_FEEDBACK_SEPARATE_ATTRIBS bounds the indexed capture
+            // binding points in GL 3.3 (no ARB_transform_feedback3).
+            pointCount = std::min<SizeT>(pointCount, 4);
+        }
 
         if (index < pointCount) {
             return true;

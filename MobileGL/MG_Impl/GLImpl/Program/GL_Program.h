@@ -138,4 +138,7 @@ namespace MobileGL::MG_Impl::GLImpl {
     GLint GetProgramResourceLocationIndex(GLuint program, GLenum programInterface, const GLchar* name);
     void ShaderStorageBlockBinding(GLuint program, GLuint storageBlockIndex, GLuint storageBlockBinding);
     void ValidateProgram(GLuint program);
+    void TransformFeedbackVaryings(GLuint program, GLsizei count, const GLchar* const* varyings, GLenum bufferMode);
+    void GetTransformFeedbackVarying(GLuint program, GLuint index, GLsizei bufSize, GLsizei* length, GLsizei* size,
+                                     GLenum* type, GLchar* name);
 } // namespace MobileGL::MG_Impl::GLImpl

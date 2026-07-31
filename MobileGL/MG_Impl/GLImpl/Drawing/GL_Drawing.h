@@ -11,6 +11,8 @@
 
 namespace MobileGL::MG_Impl::GLImpl {
     /* @INSERTION_POINT:FUNCTION_DECLARATION@ */
+    void BeginTransformFeedback(GLenum primitiveMode);
+    void EndTransformFeedback(void);
     void DispatchCompute(GLuint numGroupsX, GLuint numGroupsY, GLuint numGroupsZ);
     void DispatchComputeIndirect(GLintptr indirect);
     void MemoryBarrier(GLbitfield barriers);

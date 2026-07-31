@@ -170,7 +170,161 @@ namespace MobileGL::MG_State::GLState {
         m_uniformNameMaxLength = 0;
         m_attribInNameMaxLength = 0;
         m_uniformBlockNameMaxLength = 0;
+        m_xfbVaryings.clear();
+        m_xfbStrides.clear();
+        m_xfbBufferMode = GL_INTERLEAVED_ATTRIBS;
+        m_xfbVaryingNameMaxLength = 0;
         m_linkStatus = false;
+    }
+
+    namespace {
+        // GL type enum for a vertex-stage output symbol captured by transform
+        // feedback. Covers the scalar/vector/matrix float+integer types transform
+        // feedback may legally capture in GL 3.3.
+        Bool ResolveXfbSymbolType(const glslang::TType& type, GLenum& outType, GLint& outArraySize,
+                                  Uint32& outBytesPerElement) {
+            outArraySize = type.isArray() ? type.getOuterArraySize() : 1;
+            const Int columns = type.isMatrix() ? type.getMatrixCols() : 1;
+            const Int components = type.isMatrix() ? type.getMatrixRows()
+                                                   : (type.isVector() ? type.getVectorSize() : 1);
+            const glslang::TBasicType basic = type.getBasicType();
+            static constexpr GLenum kFloatTypes[5] = {0, GL_FLOAT, GL_FLOAT_VEC2, GL_FLOAT_VEC3, GL_FLOAT_VEC4};
+            static constexpr GLenum kIntTypes[5] = {0, GL_INT, GL_INT_VEC2, GL_INT_VEC3, GL_INT_VEC4};
+            static constexpr GLenum kUintTypes[5] = {0, GL_UNSIGNED_INT, GL_UNSIGNED_INT_VEC2, GL_UNSIGNED_INT_VEC3,
+                                                     GL_UNSIGNED_INT_VEC4};
+            if (type.isMatrix()) {
+                if (basic != glslang::EbtFloat) return false;
+                static constexpr GLenum kMatTypes[5][5] = {
+                    {}, {},
+                    {0, 0, GL_FLOAT_MAT2, GL_FLOAT_MAT2x3, GL_FLOAT_MAT2x4},
+                    {0, 0, GL_FLOAT_MAT3x2, GL_FLOAT_MAT3, GL_FLOAT_MAT3x4},
+                    {0, 0, GL_FLOAT_MAT4x2, GL_FLOAT_MAT4x3, GL_FLOAT_MAT4},
+                };
+                if (columns < 2 || columns > 4 || components < 2 || components > 4) return false;
+                outType = kMatTypes[columns][components];
+            } else if (components >= 1 && components <= 4) {
+                switch (basic) {
+                case glslang::EbtFloat: outType = kFloatTypes[components]; break;
+                case glslang::EbtInt: outType = kIntTypes[components]; break;
+                case glslang::EbtUint: outType = kUintTypes[components]; break;
+                default: return false;
+                }
+            } else {
+                return false;
+            }
+            outBytesPerElement = static_cast<Uint32>(columns * components) * 4u;
+            return true;
+        }
+    } // namespace
+
+    Bool ProgramObject::ResolveTransformFeedbackVaryings() {
+        m_xfbVaryings.clear();
+        m_xfbStrides.clear();
+        m_xfbBufferMode = m_requestedXfbBufferMode;
+        m_xfbVaryingNameMaxLength = 0;
+        if (m_requestedXfbVaryings.empty()) {
+            return true;
+        }
+
+        // Capture happens at the last vertex-processing stage (geometry, then
+        // tessellation evaluation, then vertex).
+        const glslang::TIntermediate* captureIntermediate = nullptr;
+        for (EShLanguage stage : {EShLangGeometry, EShLangTessEvaluation, EShLangVertex}) {
+            captureIntermediate = m_program->getIntermediate(stage);
+            if (captureIntermediate != nullptr) {
+                break;
+            }
+        }
+        if (captureIntermediate == nullptr) {
+            m_infoLog = "Transform feedback varyings requested but the program has no vertex-processing stage.";
+            return false;
+        }
+        const glslang::TIntermAggregate* linkerObjects = captureIntermediate->findLinkerObjects();
+
+        const Bool interleaved = m_xfbBufferMode == GL_INTERLEAVED_ATTRIBS;
+        Uint32 interleavedOffset = 0;
+        for (SizeT i = 0; i < m_requestedXfbVaryings.size(); ++i) {
+            const String& name = m_requestedXfbVaryings[i];
+            for (SizeT j = 0; j < i; ++j) {
+                if (m_requestedXfbVaryings[j] == name) {
+                    m_infoLog = "Transform feedback varying '" + name + "' is specified more than once.";
+                    return false;
+                }
+            }
+
+            XfbVarying varying;
+            varying.name = name;
+            Uint32 bytesPerElement = 0;
+            Bool resolved = false;
+            if (name == "gl_Position") {
+                varying.type = GL_FLOAT_VEC4;
+                varying.size = 1;
+                bytesPerElement = 16;
+                resolved = true;
+            } else if (name == "gl_PointSize") {
+                varying.type = GL_FLOAT;
+                varying.size = 1;
+                bytesPerElement = 4;
+                resolved = true;
+            } else if (linkerObjects != nullptr) {
+                for (const auto* node : linkerObjects->getSequence()) {
+                    const glslang::TIntermSymbol* symbol = node->getAsSymbolNode();
+                    if (symbol == nullptr || symbol->getType().getQualifier().storage != glslang::EvqVaryingOut) {
+                        continue;
+                    }
+                    if (symbol->getName() != name.c_str()) {
+                        continue;
+                    }
+                    resolved = ResolveXfbSymbolType(symbol->getType(), varying.type, varying.size, bytesPerElement);
+                    break;
+                }
+            }
+            if (!resolved) {
+                m_infoLog = "Transform feedback varying '" + name + "' is not an output of the vertex stage.";
+                return false;
+            }
+
+            varying.byteSize = bytesPerElement * static_cast<Uint32>(varying.size);
+            if (interleaved) {
+                varying.bufferIndex = 0;
+                varying.offsetBytes = interleavedOffset;
+                interleavedOffset += varying.byteSize;
+            } else {
+                varying.bufferIndex = static_cast<Uint32>(i);
+                varying.offsetBytes = 0;
+            }
+            m_xfbVaryingNameMaxLength =
+                std::max(m_xfbVaryingNameMaxLength, static_cast<Int>(name.size()) + 1);
+            m_xfbVaryings.push_back(Move(varying));
+        }
+
+        constexpr Uint32 kMaxSeparateAttribs = 4;
+        constexpr Uint32 kMaxSeparateComponents = 4;
+        constexpr Uint32 kMaxInterleavedComponents = 64;
+        if (interleaved) {
+            if (interleavedOffset > kMaxInterleavedComponents * 4) {
+                m_infoLog = "Transform feedback interleaved capture exceeds "
+                            "GL_MAX_TRANSFORM_FEEDBACK_INTERLEAVED_COMPONENTS.";
+                return false;
+            }
+            m_xfbStrides.assign(1, interleavedOffset);
+        } else {
+            if (m_xfbVaryings.size() > kMaxSeparateAttribs) {
+                m_infoLog = "Transform feedback separate capture exceeds "
+                            "GL_MAX_TRANSFORM_FEEDBACK_SEPARATE_ATTRIBS.";
+                return false;
+            }
+            m_xfbStrides.resize(m_xfbVaryings.size());
+            for (SizeT i = 0; i < m_xfbVaryings.size(); ++i) {
+                if (m_xfbVaryings[i].byteSize > kMaxSeparateComponents * 4) {
+                    m_infoLog = "Transform feedback varying '" + m_xfbVaryings[i].name +
+                                "' exceeds GL_MAX_TRANSFORM_FEEDBACK_SEPARATE_COMPONENTS.";
+                    return false;
+                }
+                m_xfbStrides[i] = m_xfbVaryings[i].byteSize;
+            }
+        }
+        return true;
     }
 
     bool ProgramObject::ShaderIsAttached(const SharedPtr<ShaderObject>& shader) {
@@ -325,6 +479,12 @@ namespace MobileGL::MG_State::GLState {
         DoReflection();
         MGLOG_D("ProgramObject %u: Reflection done (linkStatus=%d)", m_externalIndex, (int)m_linkStatus);
         if (!ValidateFragmentOutputLocations()) {
+            return;
+        }
+        if (!ResolveTransformFeedbackVaryings()) {
+            m_linkStatus = false;
+            MGLOG_E("ProgramObject %u: transform feedback varying resolution failed: %s", m_externalIndex,
+                    m_infoLog.c_str());
             return;
         }
 

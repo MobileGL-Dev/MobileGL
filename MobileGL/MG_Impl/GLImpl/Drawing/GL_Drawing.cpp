@@ -66,6 +66,34 @@ namespace MobileGL::MG_Impl::GLImpl {
             return false;
         }
 
+        // While transform feedback is active the draw's primitive type must match
+        // the feedback primitive mode (GL 3.3 core 13.2.2).
+        if (MG_State::pGLContext->IsTransformFeedbackActive()) {
+            const GLenum feedbackMode = MG_State::pGLContext->GetTransformFeedbackPrimitiveMode();
+            Bool compatible = false;
+            switch (feedbackMode) {
+            case GL_POINTS:
+                compatible = mode == GL_POINTS;
+                break;
+            case GL_LINES:
+                compatible = mode == GL_LINES || mode == GL_LINE_STRIP || mode == GL_LINE_LOOP;
+                break;
+            case GL_TRIANGLES:
+                compatible = mode == GL_TRIANGLES || mode == GL_TRIANGLE_STRIP || mode == GL_TRIANGLE_FAN;
+                break;
+            default:
+                break;
+            }
+            if (!compatible) {
+                MG_State::pGLContext->RecordError(
+                    ErrorCode::InvalidOperation,
+                    MakeUnique<GenericErrorInfo>(
+                        "MG_Impl/GLImpl", functionName,
+                        "Primitive mode is incompatible with the active transform feedback primitive mode."));
+                return false;
+            }
+        }
+
         return true;
     }
 
@@ -436,6 +464,56 @@ namespace MobileGL::MG_Impl::GLImpl {
         if (!ValidateCurrentProgramForExecution(__func__)) return;
         if (!ValidatePrimitiveModeForBackend(__func__, mode)) return;
         DrawElements_Backend(mode, count, type, indices);
+    }
+
+    void BeginTransformFeedback(GLenum primitiveMode) {
+        if (primitiveMode != GL_POINTS && primitiveMode != GL_LINES && primitiveMode != GL_TRIANGLES) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidEnum,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
+                                             "primitiveMode must be GL_POINTS, GL_LINES or GL_TRIANGLES."));
+            return;
+        }
+        if (MG_State::pGLContext->IsTransformFeedbackActive()) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidOperation,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__, "Transform feedback is already active."));
+            return;
+        }
+        const auto& program = MG_State::pGLContext->GetCurrentProgram();
+        if (!program || !program->GetLinkStatus() || program->GetTransformFeedbackVaryingCount() == 0) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidOperation,
+                MakeUnique<GenericErrorInfo>(
+                    "MG_Impl/GLImpl", __func__,
+                    "No program with transform feedback varyings is active."));
+            return;
+        }
+        // Every capture buffer slot the program's mode uses must have a buffer bound.
+        const SizeT usedBufferCount = program->GetTransformFeedbackBufferCount();
+        for (SizeT i = 0; i < usedBufferCount; ++i) {
+            const auto& point = MG_State::pGLContext->GetBufferBindingPoint(BufferTarget::TransformFeedback,
+                                                                            static_cast<Uint>(i));
+            if (point.GetBoundObject() == nullptr) {
+                MG_State::pGLContext->RecordError(
+                    ErrorCode::InvalidOperation,
+                    MakeUnique<GenericErrorInfo>(
+                        "MG_Impl/GLImpl", __func__,
+                        "Transform feedback buffer binding point " + std::to_string(i) + " has no buffer bound."));
+                return;
+            }
+        }
+        MG_State::pGLContext->BeginTransformFeedback(primitiveMode, program);
+    }
+
+    void EndTransformFeedback(void) {
+        if (!MG_State::pGLContext->IsTransformFeedbackActive()) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidOperation,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__, "Transform feedback is not active."));
+            return;
+        }
+        MG_State::pGLContext->EndTransformFeedback();
     }
 
 } // namespace MobileGL::MG_Impl::GLImpl
