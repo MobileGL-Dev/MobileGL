@@ -3263,7 +3263,32 @@ void main() {
         }
 
         const auto* indexBuffer = vao.GetIndexBufferBindingSlot().GetBoundObject().get();
-        MOBILEGL_ASSERT(indexBuffer != nullptr, "UploadAndBindIndexBuffer requires bound EBO");
+        if (indexBuffer == nullptr) {
+            // No element-array buffer: the view's byte offset is a raw client pointer
+            // (desktop drivers accept client-memory indices and the GL CTS relies on
+            // this even in core contexts). Snapshot the data into a transient slice.
+            const auto* clientIndices = reinterpret_cast<const void*>(pIndexBufferView->indexByteOffset);
+            if (clientIndices == nullptr || pIndexBufferView->indexByteSize == 0) {
+                MGLOG_E("DrawElements skipped: no element array buffer bound and no client index data");
+                return false;
+            }
+            BufferSlice slice{};
+            if (!m_bufferManager.UploadTransient(BufferKind::Index, m_frameContext.GetCurrentFrameIndex(),
+                                                 clientIndices, pIndexBufferView->indexByteSize, 4, slice)) {
+                MGLOG_E("DrawElements skipped: failed to upload client index data");
+                return false;
+            }
+            auto& shadow = g_dynamicStateShadow;
+            if (!shadow.indexBindValid || shadow.indexBuffer != slice.buffer ||
+                shadow.indexOffset != slice.offset || shadow.indexType != vkIndexType) {
+                vkCmdBindIndexBuffer(frame.commandBuffer, slice.buffer, slice.offset, vkIndexType);
+                shadow.indexBindValid = true;
+                shadow.indexBuffer = slice.buffer;
+                shadow.indexOffset = slice.offset;
+                shadow.indexType = vkIndexType;
+            }
+            return true;
+        }
         const SizeT indexDataSizeBytes = pIndexBufferView->indexByteSize;
         MOBILEGL_ASSERT(pIndexBufferView->indexByteOffset + indexDataSizeBytes <= indexBuffer->GetSize(),
                         "DrawElements index range out of bounds");
