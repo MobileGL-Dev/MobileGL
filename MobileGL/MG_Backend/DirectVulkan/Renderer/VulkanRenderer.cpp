@@ -9256,7 +9256,20 @@ void main() {
             ClearAttachmentPayload clearPayload{};
             SharedPtr<MG_State::GLState::ITextureObject> liveTexture;
             if (pending.hasInlinePayload) {
-                clearPayload = pending.inlinePayload;
+                // The inline payload is baked into the cached RenderPassEntry and outlives
+                // its consumption at pass begin (loadOp CLEAR). Replaying it here would
+                // wipe every draw already recorded in the pass, so only clear while the
+                // renderbuffer's clear is still actually pending, and take the live
+                // payload (a newer glClear may carry different values).
+                if (!m_renderPassManager->GetPendingRenderbufferClear(pending.renderbuffer, clearPayload)) {
+                    continue;
+                }
+                if ((clearPayload.mask & GL_COLOR_BUFFER_BIT) != 0 && pending.renderbuffer != nullptr &&
+                    MG_Util::GetBaseInternalFormatComponentCount(pending.renderbuffer->GetInternalFormat()) == 3) {
+                    // RGB renderbuffers are backed by an RGBA image; the missing alpha reads as 1.
+                    clearPayload.color = FloatVec4(clearPayload.color.x(), clearPayload.color.y(),
+                                                   clearPayload.color.z(), 1.0f);
+                }
             } else {
                 if (!m_clearManager->GetPendingClear(pending.key, clearPayload, liveTexture)) {
                     continue;
