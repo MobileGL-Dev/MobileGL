@@ -49,10 +49,18 @@ namespace MobileGL::MG_Impl::GLImpl {
 
     static bool CheckProgramNameValidity(GLuint program) {
         if (!MG_State::pGLContext->ValidateProgramName(program)) {
+            // Programs and shaders share one name space: a name that exists but
+            // belongs to a shader is INVALID_OPERATION, a name GL never handed
+            // out is INVALID_VALUE (GL 3.3 core 2.11.x).
+            const ErrorCode error = MG_State::pGLContext->ValidateShaderName(program)
+                ? ErrorCode::InvalidOperation
+                : ErrorCode::InvalidValue;
             MG_State::pGLContext->RecordError(
-                ErrorCode::InvalidValue,
+                error,
                 MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
-                                             std::to_string(program) + " is not a valid name."));
+                                             std::to_string(program) +
+                                                 (error == ErrorCode::InvalidOperation ? " is not a program object."
+                                                                                       : " is not a valid name.")));
             return false;
         }
         return true;
