@@ -225,6 +225,13 @@ namespace MobileGL {
                 // using e.g. layout(binding=...) without the matching #extension line compiles on real
                 // drivers but is rejected here. Retry once at 460 before reporting failure; a genuinely
                 // broken shader fails both attempts and keeps its original diagnostics.
+                //
+                // Arrays of arrays are the exception: every desktop driver rejects them below 430
+                // (the GL33 CTS requires the compile failure), so re-legalizing them at 460 would
+                // trade a conformance failure for no real-world shader gain.
+                if (result.error().log.find("arrays of arrays") != String::npos) {
+                    return result;
+                }
                 String retrySource = source;
                 if (!MG_Util::ShaderTranspiler::RetargetLegacyVersionDirectiveTo460(retrySource)) {
                     return result;
