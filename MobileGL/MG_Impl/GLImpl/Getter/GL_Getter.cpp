@@ -1922,6 +1922,16 @@ namespace MobileGL::MG_Impl::GLImpl {
         case GL_MAX_TRANSFORM_FEEDBACK_SEPARATE_COMPONENTS:
             *params = kFrontendMaxTransformFeedbackSeparateComponents;
             break;
+        // ARB_transform_feedback3 limits. The GL CTS queries these before checking
+        // whether the extension is advertised and requires no GL error; desktop
+        // drivers all accept them, so answer with the separate-attrib capacity and
+        // the single vertex stream the backends provide.
+        case GL_MAX_TRANSFORM_FEEDBACK_BUFFERS:
+            *params = kFrontendMaxTransformFeedbackSeparateAttribs;
+            break;
+        case GL_MAX_VERTEX_STREAMS:
+            *params = 1;
+            break;
         case GL_MAX_TEXTURE_IMAGE_UNITS:
             *params = dynamicParameters.MaxTextureImageUnits;
             break;
