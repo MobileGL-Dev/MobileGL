@@ -1,4 +1,31 @@
-# Running the OpenGL CTS (VK-GL-CTS / KHR-GL33) against MobileGL on Android
+# Running the OpenGL CTS against MobileGL
+
+This directory contains two supported paths:
+
+- Android arm64 / MobileGL EGL: the KHR-GL33 workflow documented below and in
+  `skills/gl-cts-on-mobilegl/SKILL.md`.
+- Windows x64 / MobileGL WGL: the GL30-GL46 pipeline in
+  `scripts/wgl_glcts_pipeline.py`, documented by
+  `skills/wgl-gl-cts-on-mobilegl/SKILL.md`.
+
+Windows prerequisites are Git, Python 3.9+, CMake, Visual Studio 2022's Desktop
+C++ workload, and a Vulkan SDK visible to CMake. DirectVulkan also needs a
+working Vulkan loader plus a GPU-vendor ICD and driver; the SDK alone is not a
+GPU driver.
+
+For Windows, start with:
+
+```powershell
+python tools\cts\scripts\wgl_glcts_pipeline.py --help
+```
+
+The pipeline builds MobileGL as a drop-in `opengl32.dll`, builds or reuses
+`glcts.exe`, checks that WGL loaded MobileGL rather than the system driver,
+resumes individual suites after crashes/timeouts, and writes Markdown plus JSON
+reports below the printed `runs/<first-16-of-run-fingerprint>` directory. Its
+manifest records provenance and the runner settings used to validate a resume.
+
+## Android KHR-GL33 workflow
 
 Goal: measure how much of the OpenGL 3.3 core-profile conformance suite MobileGL
 passes, separately for each backend (`DirectGLES`, `DirectVulkan`).

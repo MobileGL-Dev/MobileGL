@@ -1,0 +1,4 @@
+interface:
+  display_name: "WGL GL CTS on MobileGL"
+  short_description: "Build MobileGL WGL and run GL30-GL46 CTS on Windows"
+  default_prompt: "Use $wgl-gl-cts-on-mobilegl to build MobileGL's WGL DLL and run the selected OpenGL CTS suites on Windows."

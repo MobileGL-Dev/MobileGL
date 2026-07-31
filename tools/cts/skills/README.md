@@ -16,3 +16,4 @@ Each skill is a self-contained package, matching the layout used by
 | Skill | What it does |
 | --- | --- |
 | [gl-cts-on-mobilegl](gl-cts-on-mobilegl/SKILL.md) | Build VK-GL-CTS `glcts` as a standalone Android arm64 binary against MobileGL's own EGL, run KHR-GL33, and report a per-backend OpenGL 3.3 core conformance rate. |
+| [wgl-gl-cts-on-mobilegl](wgl-gl-cts-on-mobilegl/SKILL.md) | Build MobileGL's Windows x64 WGL drop-in, run GL30-GL46 core CTS against DirectGLES and DirectVulkan, resume safely, and emit validated reports. |

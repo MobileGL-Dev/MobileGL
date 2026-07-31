@@ -25,3 +25,5 @@ MobileGL/MG*/cmake-build*
 /android-plugin/app/src/trace/jniLibs
 /android-plugin/local.properties
 tools/trace_replay/work/
+__pycache__/
+*.py[cod]
