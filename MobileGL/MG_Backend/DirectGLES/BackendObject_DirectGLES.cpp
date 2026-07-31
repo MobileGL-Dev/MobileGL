@@ -604,7 +604,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 .ExtraVendor = Nullopt,              // Extra vendor
                 .RendererGLInfo =
                     {
-                        .TargetGLVersion = {4, 6, 0},   // Experimental GL CTS target version
+                        .TargetGLVersion = {3, 3, 0},   // GL target version
                         .TargetGLSLVersion = {4, 6, 0}, // Target Shading Language Version
                         // Baseline advertisement (no timer queries / anisotropy yet); reconciled
                         // once the ES capabilities exist, see UpdateAdvertisedCapabilityExtensions.

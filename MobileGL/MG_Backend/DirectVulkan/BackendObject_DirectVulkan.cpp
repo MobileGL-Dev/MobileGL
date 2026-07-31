@@ -506,7 +506,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             .ExtraVendor = Nullopt,
             .RendererGLInfo =
                 {
-                    .TargetGLVersion = {4, 6, 0}, // Experimental GL CTS target version
+                    .TargetGLVersion = {3, 3, 0},
                     .TargetGLSLVersion = {4, 6, 0},
                     // Baseline advertisement (no shader subgroup, no timer queries); a
                     // live backend reconciles its copy in UpdateAdvertisedExtensions.
