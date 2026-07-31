@@ -6246,11 +6246,18 @@ void main() {
         if (!readIsDefaultFbo) {
             const auto& sourceAttachment = readFbo->GetAttachment(readFbo->GetReadBuffer());
             auto sourceTexture = sourceAttachment.GetTexture();
-            MOBILEGL_ASSERT(sourceTexture != nullptr, "BlitFramebuffer: source texture attachment is null");
-            const Bool clearReady = MaterializePendingClearForTexture(frame.commandBuffer, *sourceTexture);
-            MOBILEGL_ASSERT(clearReady,
-                            "BlitFramebuffer: failed to materialize pending clear for source textureId=%d",
-                            sourceTexture->GetExternalIndex());
+            if (sourceTexture != nullptr) {
+                const Bool clearReady = MaterializePendingClearForTexture(frame.commandBuffer, *sourceTexture);
+                MOBILEGL_ASSERT(clearReady,
+                                "BlitFramebuffer: failed to materialize pending clear for source textureId=%d",
+                                sourceTexture->GetExternalIndex());
+            } else if (sourceAttachment.IsRenderbuffer()) {
+                const Bool clearReady =
+                    MaterializePendingClearForRenderbuffer(frame.commandBuffer, sourceAttachment.GetRenderbuffer());
+                MOBILEGL_ASSERT(clearReady,
+                                "BlitFramebuffer: failed to materialize pending clear for source renderbuffer %u",
+                                sourceAttachment.GetRenderbuffer()->GetExternalIndex());
+            }
         }
 
         if (!drawIsDefaultFbo) {
@@ -6263,6 +6270,12 @@ void main() {
                 MOBILEGL_ASSERT(dstClearReady,
                                 "BlitFramebuffer: failed to materialize pending clear for destination textureId=%d",
                                 destTexture->GetExternalIndex());
+            } else if (destAttachment.IsRenderbuffer()) {
+                const Bool dstClearReady =
+                    MaterializePendingClearForRenderbuffer(frame.commandBuffer, destAttachment.GetRenderbuffer());
+                MOBILEGL_ASSERT(dstClearReady,
+                                "BlitFramebuffer: failed to materialize pending clear for destination renderbuffer %u",
+                                destAttachment.GetRenderbuffer()->GetExternalIndex());
             }
         }
 
