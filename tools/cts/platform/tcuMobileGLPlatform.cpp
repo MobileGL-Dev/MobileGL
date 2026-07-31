@@ -1,5 +1,5 @@
 /*-------------------------------------------------------------------------
- * dEQP platform port for MobileGL on Android
+ * dEQP platform port for MobileGL (Android and desktop Linux)
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -28,14 +28,17 @@
  *  - A real surface is always created. MobileGL rejects EGL_NO_SURFACE with
  *    EGL_BAD_MATCH, and --deqp-surface-type=fbo asks the platform for
  *    SURFACETYPE_DONT_CARE, so "no surface" is not an option.
- *  - Window surfaces are backed by an AImageReader rather than an Activity,
- *    which is what lets the suite run as a plain adb-shell binary. DirectVulkan
- *    needs this: its pbuffer path requires VK_EXT_headless_surface, which
- *    Adreno's Android driver does not expose.
+ *  - On Android, window surfaces are backed by an AImageReader rather than an
+ *    Activity, which is what lets the suite run as a plain adb-shell binary.
+ *    DirectVulkan needs this: its pbuffer path requires VK_EXT_headless_surface,
+ *    which Adreno's Android driver does not expose.
+ *  - On desktop Linux, only pbuffer surfaces are offered. DirectVulkan's
+ *    pbuffer path works there because desktop Vulkan loaders expose
+ *    VK_EXT_headless_surface.
  *
  * Environment:
  *   MOBILEGL_CTS_LIB      path/soname of the MobileGL library (default libMobileGL.so)
- *   MOBILEGL_CTS_SURFACE  "window" (default) or "pbuffer"
+ *   MOBILEGL_CTS_SURFACE  "window" (Android default) or "pbuffer" (desktop default/only)
  *   MOBILEGL_BACKEND_TYPE read by MobileGL itself; set it before launching
  *//*--------------------------------------------------------------------*/
 
@@ -58,9 +61,11 @@
 #include "tcuPlatform.hpp"
 #include "tcuRenderTarget.hpp"
 
+#if defined(__ANDROID__)
 #include <android/hardware_buffer.h>
 #include <android/native_window.h>
 #include <media/NdkImageReader.h>
+#endif
 
 using std::string;
 using std::vector;
@@ -88,13 +93,24 @@ static string getLibraryName(void)
     return (env && env[0]) ? string(env) : string("libMobileGL.so");
 }
 
-//! Window surfaces default on: they are the only kind DirectVulkan can use.
+#if defined(__ANDROID__)
+//! Window surfaces default on: they are the only kind DirectVulkan can use
+//! on Android (its pbuffer path needs VK_EXT_headless_surface).
 static bool useWindowSurface(void)
 {
     const char *env = std::getenv("MOBILEGL_CTS_SURFACE");
     return !(env && string(env) == "pbuffer");
 }
+#else
+//! Desktop: pbuffer only. VK_EXT_headless_surface is available there and no
+//! Activity-free native window abstraction exists.
+static bool useWindowSurface(void)
+{
+    return false;
+}
+#endif
 
+#if defined(__ANDROID__)
 /*--------------------------------------------------------------------*//*!
  * \brief A real ANativeWindow with no Activity behind it.
  *
@@ -160,6 +176,12 @@ private:
     AImageReader *m_reader;
     ANativeWindow *m_window;
 };
+#else
+//! Never instantiated on desktop; keeps EglRenderContext's member deletable.
+class ImageReaderWindow
+{
+};
+#endif
 
 class GetProcFuncLoader : public glw::FunctionLoader
 {
@@ -352,6 +374,7 @@ EglRenderContext::EglRenderContext(const glu::RenderConfig &config, const tcu::C
 
     if (wantWindow)
     {
+#if defined(__ANDROID__)
         m_window = new ImageReaderWindow(width, height);
 
         eglw::EGLint visualId = 0;
@@ -361,6 +384,9 @@ EglRenderContext::EglRenderContext(const glu::RenderConfig &config, const tcu::C
         m_eglSurface = m_egl.createWindowSurface(m_eglDisplay, eglConfig,
                                                  (eglw::EGLNativeWindowType)m_window->getWindow(), nullptr);
         EGLU_CHECK_MSG(m_egl, "eglCreateWindowSurface()");
+#else
+        throw tcu::NotSupportedError("Window surfaces are not supported by the desktop MobileGL platform");
+#endif
     }
     else
     {

@@ -21,6 +21,7 @@ CTS_TOOLS = os.path.dirname(HERE)
 COPIES = [
     (os.path.join(CTS_TOOLS, "platform"), "framework/platform/mobilegl", None),
     (os.path.join(CTS_TOOLS, "targets"), "targets/mobilegl", ["mobilegl.cmake", "ndk-modern.cmake"]),
+    (os.path.join(CTS_TOOLS, "targets"), "targets/mobilegl-desktop", ["mobilegl-desktop.cmake"]),
 ]
 
 
