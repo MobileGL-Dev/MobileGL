@@ -1693,11 +1693,21 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         VmaAllocationCreateInfo allocationInfo{};
         allocationInfo.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
         allocationInfo.requiredFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
-        VK_VERIFY(vmaCreateImage(m_allocator, &imageInfo, &allocationInfo, &resource.image, &resource.allocation, nullptr),
-                  "vmaCreateImage(texture) textureId=%d extent=%ux%u depth=%u layers=%u mips=%u samples=%d format=%d",
-                  texture.GetExternalIndex(), imageInfo.extent.width, imageInfo.extent.height,
-                  imageInfo.extent.depth, imageInfo.arrayLayers, imageInfo.mipLevels,
-                  static_cast<Int>(imageInfo.samples), static_cast<Int>(imageInfo.format));
+        // Soft failure like the unsupported-sample-count path above: a driver can pass the
+        // vkGetPhysicalDeviceImageFormatProperties pre-check yet still refuse the creation
+        // (e.g. multisampled depth on lavapipe); the texture simply stays unbacked.
+        const VkResult createImageResult =
+            vmaCreateImage(m_allocator, &imageInfo, &allocationInfo, &resource.image, &resource.allocation, nullptr);
+        if (createImageResult != VK_SUCCESS) {
+            MGLOG_F("SyncTextureResource: vmaCreateImage failed (%d) textureId=%d extent=%ux%u depth=%u layers=%u "
+                    "mips=%u samples=%d format=%d",
+                    createImageResult, texture.GetExternalIndex(), imageInfo.extent.width, imageInfo.extent.height,
+                    imageInfo.extent.depth, imageInfo.arrayLayers, imageInfo.mipLevels,
+                    static_cast<Int>(imageInfo.samples), static_cast<Int>(imageInfo.format));
+            resource.image = VK_NULL_HANDLE;
+            resource.allocation = nullptr;
+            return false;
+        }
         ++m_textureImageEpoch; // a new attachment image invalidates cached render passes
 
         resource.layout = VK_IMAGE_LAYOUT_UNDEFINED;

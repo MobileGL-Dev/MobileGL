@@ -52,19 +52,29 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     }
 } // namespace MobileGL::MG_Backend::DirectVulkan
 
+// The context line (__VA_ARGS__ = its own format string + args) must be a SEPARATE log
+// call: appending its format to the base format while its arguments precede the base
+// arguments makes every conversion read the wrong slot (a %s pulling an int crashes).
 #define VK_VERIFY(expr, ...)                                                                                           \
     do {                                                                                                               \
         VkResult _vk_verify_result = (expr);                                                                           \
         if (_vk_verify_result != VK_SUCCESS) {                                                                         \
-            MGLOG_F("Vulkan error %s (%d) at %s:%d" __VA_OPT__(" - ") __VA_ARGS__,                                  \
+            __VA_OPT__(MGLOG_F(__VA_ARGS__);)                                                                          \
+            MGLOG_F("Vulkan error %s (%d) at %s:%d",                                                                   \
                     MobileGL::MG_Backend::DirectVulkan::VkResultToString(_vk_verify_result),                          \
                     _vk_verify_result, __FILE__, __LINE__);                                                            \
         }                                                                                                              \
-        MOBILEGL_ASSERT(_vk_verify_result == VK_SUCCESS, "Vulkan error %s (%d) at %s:%d" __VA_OPT__(" - ") __VA_ARGS__, MobileGL::MG_Backend::DirectVulkan::VkResultToString(_vk_verify_result), _vk_verify_result, __FILE__, __LINE__);  \
+        MOBILEGL_ASSERT(_vk_verify_result == VK_SUCCESS, "Vulkan error %s (%d) at %s:%d",                              \
+                        MobileGL::MG_Backend::DirectVulkan::VkResultToString(_vk_verify_result),                       \
+                        _vk_verify_result, __FILE__, __LINE__);                                                        \
     } while (0)
 
 #define XXHASH_VERIFY(expr, ...)                                                                                       \
     do {                                                                                                               \
         XXH_errorcode _xxh_verify_result = (expr);                                                                     \
-        MOBILEGL_ASSERT(_xxh_verify_result == XXH_OK, "XXHash error %d at %s:%d" __VA_OPT__(" - ") __VA_ARGS__, _xxh_verify_result, __FILE__, __LINE__);  \
+        if (_xxh_verify_result != XXH_OK) {                                                                            \
+            __VA_OPT__(MGLOG_F(__VA_ARGS__);)                                                                          \
+        }                                                                                                              \
+        MOBILEGL_ASSERT(_xxh_verify_result == XXH_OK, "XXHash error %d at %s:%d", _xxh_verify_result, __FILE__,        \
+                        __LINE__);                                                                                     \
     } while (0)
