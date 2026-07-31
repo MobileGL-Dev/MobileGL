@@ -255,8 +255,10 @@ namespace MobileGL {
             case TexturePixelDataType::UnsignedInt101111Rev:
             case TexturePixelDataType::UnsignedInt5999Rev:
             case TexturePixelDataType::UnsignedInt248:
-            case TexturePixelDataType::Float32UnsignedInt248Rev:
                 return 4;
+            case TexturePixelDataType::Float32UnsignedInt248Rev:
+                // A 32-bit float depth word followed by a 32-bit word holding stencil.
+                return 8;
             default:
                 return 0;
             }
