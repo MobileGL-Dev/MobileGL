@@ -2820,7 +2820,22 @@ namespace MobileGL::MG_Impl::GLImpl {
                                          "The attachment specified by the read buffer is incomplete."));               \
         return false;                                                                                                  \
     }
-        if (isDepth) {
+        if (isDepth && isStencil) {
+            // A combined internalformat copies both halves, so the read framebuffer
+            // must populate both attachment points.
+            const auto& stencilAttachment = currentReadFBO->GetAttachment(FramebufferAttachmentType::Stencil);
+            const auto& depthAttachment = currentReadFBO->GetAttachment(FramebufferAttachmentType::Depth);
+            if (!depthAttachment.IsValid() || depthAttachment.IsEmpty() || !stencilAttachment.IsValid() ||
+                stencilAttachment.IsEmpty()) {
+                MG_State::pGLContext->RecordError(
+                    ErrorCode::InvalidOperation,
+                    MakeUnique<GenericErrorInfo>(
+                        "MG_Impl/GLImpl", "CopyTexImage2D_State",
+                        "DEPTH_STENCIL copy requires both depth and stencil attachments in the read framebuffer."));
+                return false;
+            }
+            GET_SRC_INTERNAL_FORMAT(FramebufferAttachmentType::Depth);
+        } else if (isDepth) {
             GET_SRC_INTERNAL_FORMAT(FramebufferAttachmentType::Depth);
         } else if (isStencil) {
             GET_SRC_INTERNAL_FORMAT(FramebufferAttachmentType::Stencil);

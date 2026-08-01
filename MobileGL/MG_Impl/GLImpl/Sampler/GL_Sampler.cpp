@@ -185,6 +185,11 @@ namespace MobileGL::MG_Impl::GLImpl {
         static thread_local Vector<GLuint> names;
         MG_State::pGLContext->GenSamplerNames(count, names);
         Memcpy(samplers, names.data(), count * sizeof(GLuint));
+        // Unlike textures/buffers, glGenSamplers CREATES the sampler objects: each name
+        // is immediately a sampler (glIsSampler == GL_TRUE before any bind).
+        for (GLsizei i = 0; i < count; ++i) {
+            MG_State::pGLContext->CreateSamplerObject(names[i]);
+        }
     }
 
     void DeleteSamplers_State(GLsizei count, const GLuint* samplers) {
