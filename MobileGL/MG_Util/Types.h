@@ -181,7 +181,19 @@ namespace MobileGL {
         explicit BindingSlotRange1D(TargetEnum target, const Range1D& range = Range1D())
             : BindingSlot<ObjectType>(target), m_range(range) {}
 
-        Range1D GetRange() const { return m_range; }
+        // The range the binding actually covers right now. A whole-buffer binding
+        // (glBindBufferBase) does not freeze anything: GL resolves it against the
+        // object's size at every use, so a glBufferData issued after the bind has to
+        // be visible here - binding an empty buffer and giving it storage afterwards
+        // is ordinary application code. Only glBindBufferRange pins a fixed window.
+        Range1D GetRange() const {
+            if (!m_hasExplicitRange) {
+                if (const auto& object = this->GetBoundObject()) {
+                    return Range1D(0, object->GetSize());
+                }
+            }
+            return m_range;
+        }
 
         Bool HasExplicitRange() const { return m_hasExplicitRange; }
 
