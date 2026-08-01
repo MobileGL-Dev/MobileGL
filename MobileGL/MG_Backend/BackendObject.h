@@ -225,6 +225,10 @@ namespace MobileGL {
             // GetQueryResult64 / DeleteBackendQuery like timer queries.
             BackendQueryHandle (*BeginOcclusionQuery)();
             void (*EndOcclusionQuery)(BackendQueryHandle query);
+            // Transform feedback primitive queries backed by real GPU query pools
+            // (optional; null = frontend falls back to CPU accounting).
+            BackendQueryHandle (*BeginXfbPrimitivesQuery)(Bool generated);
+            void (*EndXfbPrimitivesQuery)(BackendQueryHandle query);
             Int64 (*GetGpuTimestampNs)(); // glGetInteger64v(GL_TIMESTAMP); 0 if unsupported
         };
         struct GlobalBackendFunctionsTable {

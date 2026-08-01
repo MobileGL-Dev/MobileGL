@@ -2786,6 +2786,10 @@ void main() {
             vkDestroyQueryPool(m_device, m_occlusionQueryPool, nullptr);
             m_occlusionQueryPool = VK_NULL_HANDLE;
         }
+        if (m_xfbQueryPool != VK_NULL_HANDLE) {
+            vkDestroyQueryPool(m_device, m_xfbQueryPool, nullptr);
+            m_xfbQueryPool = VK_NULL_HANDLE;
+        }
         m_bufferManager.Shutdown();
 
         // Device is idle (vkDeviceWaitIdle above); query pools can be destroyed.
@@ -7788,6 +7792,7 @@ void main() {
         VkCommandBuffer& commandBuffer = frame.commandBuffer;
 
         const Bool xfbActive = BeginXfbCaptureForDraw(frame);
+        BeginXfbQueryForDraw(commandBuffer);
         const Bool occlusionActive = BeginOcclusionForDraw(commandBuffer);
         vkCmdDraw(commandBuffer,
             payload.params.vertexCount,
@@ -7796,6 +7801,7 @@ void main() {
             payload.params.firstInstance);
         EndOcclusionForDraw(commandBuffer, occlusionActive);
         EndXfbCaptureForDraw(frame, xfbActive);
+        EndXfbQueryForDraw(commandBuffer);
     }
 
     Bool VulkanRenderer::StartOcclusionQueryCapture() {
@@ -7855,6 +7861,91 @@ void main() {
         return true;
     }
 
+    Bool VulkanRenderer::StartXfbQueryCapture(Uint32 kind) {
+        if (!m_xfbQueriesSupported || !m_hostQueryResetEnabled || s_vkResetQueryPool == nullptr ||
+            s_vkCmdBeginQueryIndexedEXT == nullptr || kind > 1) {
+            return false;
+        }
+        if (m_xfbQueryPool == VK_NULL_HANDLE) {
+            VkQueryPoolCreateInfo poolInfo{};
+            poolInfo.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
+            poolInfo.queryType = VK_QUERY_TYPE_TRANSFORM_FEEDBACK_STREAM_EXT;
+            poolInfo.queryCount = kXfbQuerySlots;
+            if (vkCreateQueryPool(m_device, &poolInfo, nullptr, &m_xfbQueryPool) != VK_SUCCESS) {
+                MGLOG_E("StartXfbQueryCapture: vkCreateQueryPool failed");
+                m_xfbQueryPool = VK_NULL_HANDLE;
+                return false;
+            }
+            s_vkResetQueryPool(m_device, m_xfbQueryPool, 0, kXfbQuerySlots);
+        }
+        m_xfbQueryActiveSlots[kind].clear();
+        m_xfbQueryCaptureActive[kind] = true;
+        return true;
+    }
+
+    void VulkanRenderer::StopXfbQueryCapture(Uint32 kind, Vector<Uint32>& outSlots) {
+        if (kind > 1) {
+            return;
+        }
+        outSlots = Move(m_xfbQueryActiveSlots[kind]);
+        m_xfbQueryActiveSlots[kind].clear();
+        m_xfbQueryCaptureActive[kind] = false;
+    }
+
+    Bool VulkanRenderer::ResolveXfbQueryResult(const Vector<Uint32>& slots, Bool wantGenerated, Uint64& outPrimitives) {
+        outPrimitives = 0;
+        if (slots.empty() || m_xfbQueryPool == VK_NULL_HANDLE) {
+            return true;
+        }
+        auto& frame = m_frameContext.GetCurrent();
+        if (frame.isCommandRecording) {
+            if (VkRenderPassManager::GetActiveRenderPass() != nullptr) {
+                VkRenderPassManager::EndRenderPass(frame.commandBuffer);
+            }
+            if (!SubmitReadbackCommandsAndWait(frame)) {
+                return false;
+            }
+        }
+        for (const Uint32 slot : slots) {
+            Uint64 pair[2] = {0, 0}; // {primitivesWritten, primitivesNeeded}
+            const VkResult result =
+                vkGetQueryPoolResults(m_device, m_xfbQueryPool, slot, 1, sizeof(pair), pair, sizeof(pair),
+                                      VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT);
+            if (result == VK_SUCCESS) {
+                outPrimitives += pair[wantGenerated ? 1 : 0];
+            }
+        }
+        return true;
+    }
+
+    void VulkanRenderer::BeginXfbQueryForDraw(VkCommandBuffer commandBuffer) {
+        m_xfbQuerySlotOpen = false;
+        if ((!m_xfbQueryCaptureActive[0] && !m_xfbQueryCaptureActive[1]) || m_xfbQueryPool == VK_NULL_HANDLE) {
+            return;
+        }
+        const Uint32 slot = m_xfbQuerySlotCursor;
+        m_xfbQuerySlotCursor = (m_xfbQuerySlotCursor + 1) % kXfbQuerySlots;
+        // Slots are never host-reset at read time (both GL targets may reference one
+        // slot); recycle them here instead.
+        s_vkResetQueryPool(m_device, m_xfbQueryPool, slot, 1);
+        s_vkCmdBeginQueryIndexedEXT(commandBuffer, m_xfbQueryPool, slot, 0, 0);
+        for (Uint32 kind = 0; kind < 2; ++kind) {
+            if (m_xfbQueryCaptureActive[kind]) {
+                m_xfbQueryActiveSlots[kind].push_back(slot);
+            }
+        }
+        m_xfbQuerySlotOpen = true;
+        m_xfbQueryOpenSlot = slot;
+    }
+
+    void VulkanRenderer::EndXfbQueryForDraw(VkCommandBuffer commandBuffer) {
+        if (!m_xfbQuerySlotOpen) {
+            return;
+        }
+        s_vkCmdEndQueryIndexedEXT(commandBuffer, m_xfbQueryPool, m_xfbQueryOpenSlot, 0);
+        m_xfbQuerySlotOpen = false;
+    }
+
     Bool VulkanRenderer::BeginOcclusionForDraw(VkCommandBuffer commandBuffer) {
         if (!m_occlusionCaptureActive || m_occlusionQueryPool == VK_NULL_HANDLE) {
             return false;
@@ -7902,6 +7993,7 @@ void main() {
         VkCommandBuffer& commandBuffer = frame.commandBuffer;
 
         const Bool xfbActive = BeginXfbCaptureForDraw(frame);
+        BeginXfbQueryForDraw(commandBuffer);
         const Bool occlusionActive = BeginOcclusionForDraw(commandBuffer);
         vkCmdDrawIndexed(commandBuffer,
             payload.params.indexCount,
@@ -7911,6 +8003,7 @@ void main() {
             payload.params.firstInstance);
         EndOcclusionForDraw(commandBuffer, occlusionActive);
         EndXfbCaptureForDraw(frame, xfbActive);
+        EndXfbQueryForDraw(commandBuffer);
     }
 
     void VulkanRenderer::MultiDrawArrays(const MultiDrawCmd& payload) {
@@ -9517,6 +9610,20 @@ void main() {
             if (s_vkResetQueryPool == nullptr) {
                 m_hostQueryResetEnabled = false;
             }
+        }
+        if (m_transformFeedbackFeatureEnabled) {
+            s_vkCmdBeginQueryIndexedEXT = reinterpret_cast<PFN_vkCmdBeginQueryIndexedEXT>(
+                vkGetDeviceProcAddr(m_device, "vkCmdBeginQueryIndexedEXT"));
+            s_vkCmdEndQueryIndexedEXT = reinterpret_cast<PFN_vkCmdEndQueryIndexedEXT>(
+                vkGetDeviceProcAddr(m_device, "vkCmdEndQueryIndexedEXT"));
+            VkPhysicalDeviceTransformFeedbackPropertiesEXT xfbProperties{};
+            xfbProperties.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TRANSFORM_FEEDBACK_PROPERTIES_EXT;
+            VkPhysicalDeviceProperties2 properties2{};
+            properties2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
+            properties2.pNext = &xfbProperties;
+            vkGetPhysicalDeviceProperties2(m_physicalDevice.handle, &properties2);
+            m_xfbQueriesSupported = xfbProperties.transformFeedbackQueries == VK_TRUE &&
+                s_vkCmdBeginQueryIndexedEXT != nullptr && s_vkCmdEndQueryIndexedEXT != nullptr;
         }
         MGLOG_I("index type uint8 enabled: %s", m_indexTypeUint8ExtensionEnabled ? "true" : "false");
         MGLOG_I("Logical device created.");

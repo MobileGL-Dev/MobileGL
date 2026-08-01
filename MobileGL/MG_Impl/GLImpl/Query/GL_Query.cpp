@@ -278,9 +278,11 @@ namespace MobileGL::MG_Impl::GLImpl {
         queryObject->target = target;
         queryObject->active = true;
         if (isTransformFeedbackQuery) {
-            // CPU accounting: captured draws bump the context counter; the query
-            // result is the delta between Begin and End. Without geometry-stage
-            // amplification the assembled count IS the written/generated count.
+            // Prefer real GPU transform-feedback queries (exact with geometry shaders);
+            // the CPU accounting delta stays as the fallback when the backend lacks them.
+            const auto beginXfbPrimitivesQuery = MG_Backend::gBackendFunctionsTable.GL.BeginXfbPrimitivesQuery;
+            queryObject->backendHandle =
+                beginXfbPrimitivesQuery ? beginXfbPrimitivesQuery(target == GL_PRIMITIVES_GENERATED) : nullptr;
             queryObject->counterSnapshot = MG_State::pGLContext->GetTransformFeedbackPrimitiveCounter();
         } else if (isOcclusionQuery) {
             queryObject->backendHandle = MG_Backend::gBackendFunctionsTable.GL.BeginOcclusionQuery();
@@ -318,9 +320,16 @@ namespace MobileGL::MG_Impl::GLImpl {
             return;
         }
         if (isTransformFeedbackQuery) {
-            queryObject->cachedResult =
-                MG_State::pGLContext->GetTransformFeedbackPrimitiveCounter() - queryObject->counterSnapshot;
-            queryObject->resultCached = true;
+            if (queryObject->backendHandle) {
+                if (const auto endXfbPrimitivesQuery = MG_Backend::gBackendFunctionsTable.GL.EndXfbPrimitivesQuery) {
+                    endXfbPrimitivesQuery(queryObject->backendHandle);
+                }
+                // Result comes from the GPU query at read time.
+            } else {
+                queryObject->cachedResult =
+                    MG_State::pGLContext->GetTransformFeedbackPrimitiveCounter() - queryObject->counterSnapshot;
+                queryObject->resultCached = true;
+            }
             queryObject->active = false;
             queryObject->ended = true;
             activeQueryId = 0;

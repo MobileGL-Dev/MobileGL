@@ -123,6 +123,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     // only while a live renderer exists whose device can actually time.
     Bool IsTimerQuerySupported();
     BackendQueryHandle BeginTimeElapsedQuery();
+    BackendQueryHandle BeginXfbPrimitivesQuery(Bool generated);
+    void EndXfbPrimitivesQuery(BackendQueryHandle query);
     BackendQueryHandle BeginOcclusionQuery();
     void EndOcclusionQuery(BackendQueryHandle query);
     void EndTimeElapsedQuery(BackendQueryHandle query);

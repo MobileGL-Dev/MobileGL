@@ -1564,7 +1564,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // records are shared (SharedPtr) with the owning pool's pending list,
         // so deleting the query while results are still in flight is safe.
         struct VulkanTimerQuery {
-            enum class Kind : Uint8 { Timer, Occlusion };
+            enum class Kind : Uint8 { Timer, Occlusion, XfbWritten, XfbGenerated };
             Kind kind = Kind::Timer;
             SharedPtr<VkTimerQueryManager::TimestampRecord> begin;
             SharedPtr<VkTimerQueryManager::TimestampRecord> end;
@@ -1668,6 +1668,17 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             *outNanoseconds = samples;
             return true;
         }
+        if (query->kind == VulkanTimerQuery::Kind::XfbWritten ||
+            query->kind == VulkanTimerQuery::Kind::XfbGenerated) {
+            Uint64 primitives = 0;
+            if (!pVulkanRenderer->ResolveXfbQueryResult(query->occlusionSlots,
+                                                        query->kind == VulkanTimerQuery::Kind::XfbGenerated,
+                                                        primitives)) {
+                return false;
+            }
+            *outNanoseconds = primitives;
+            return true;
+        }
         // With wait, mirrors ClientWaitSync: a query ended this frame cannot
         // complete until Present submits the commands, so the wait refuses to
         // block on the current unsubmitted serial. Returning false keeps the
@@ -1698,6 +1709,27 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
     void DeleteBackendQuery(BackendQueryHandle handle) {
         delete static_cast<VulkanTimerQuery*>(handle);
+    }
+
+    BackendQueryHandle BeginXfbPrimitivesQuery(Bool generated) {
+        MOBILEGL_ASSERT(pVulkanRenderer, "DirectVulkan::BeginXfbPrimitivesQuery called with null VulkanRenderer");
+        if (!pVulkanRenderer->StartXfbQueryCapture(generated ? 1u : 0u)) {
+            return nullptr;
+        }
+        auto* query = new VulkanTimerQuery{};
+        query->kind = generated ? VulkanTimerQuery::Kind::XfbGenerated : VulkanTimerQuery::Kind::XfbWritten;
+        query->rendererGeneration = GetRendererGeneration();
+        return query;
+    }
+
+    void EndXfbPrimitivesQuery(BackendQueryHandle handle) {
+        auto* query = static_cast<VulkanTimerQuery*>(handle);
+        MOBILEGL_ASSERT(pVulkanRenderer, "DirectVulkan::EndXfbPrimitivesQuery called with null VulkanRenderer");
+        if (query == nullptr || query->rendererGeneration != GetRendererGeneration()) {
+            return;
+        }
+        pVulkanRenderer->StopXfbQueryCapture(
+            query->kind == VulkanTimerQuery::Kind::XfbGenerated ? 1u : 0u, query->occlusionSlots);
     }
 
     BackendQueryHandle BeginOcclusionQuery() {

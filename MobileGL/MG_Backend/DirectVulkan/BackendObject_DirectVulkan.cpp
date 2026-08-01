@@ -639,6 +639,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             // exist even when timer queries are disabled.
             funcsTable.GL.BeginOcclusionQuery = BeginOcclusionQuery;
             funcsTable.GL.EndOcclusionQuery = EndOcclusionQuery;
+            funcsTable.GL.BeginXfbPrimitivesQuery = BeginXfbPrimitivesQuery;
+            funcsTable.GL.EndXfbPrimitivesQuery = EndXfbPrimitivesQuery;
             funcsTable.GL.IsQueryResultAvailable = IsQueryResultAvailable;
             funcsTable.GL.GetQueryResult64 = GetQueryResult64;
             funcsTable.GL.DeleteBackendQuery = DeleteBackendQuery;

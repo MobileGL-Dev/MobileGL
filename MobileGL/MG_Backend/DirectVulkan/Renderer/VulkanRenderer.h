@@ -503,6 +503,30 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         Uint32 m_occlusionSlotCursor = 0;
         Bool m_occlusionCaptureActive = false;
         Vector<Uint32> m_occlusionActiveSlots;
+        // Transform feedback primitive queries: one pool slot per captured draw yields
+        // the (written, needed) pair; GL_TRANSFORM_FEEDBACK_PRIMITIVES_WRITTEN sums the
+        // first, GL_PRIMITIVES_GENERATED the second - exact with geometry shaders,
+        // unlike the CPU fallback accounting.
+        Bool m_xfbQueriesSupported = false;
+        PFN_vkCmdBeginQueryIndexedEXT s_vkCmdBeginQueryIndexedEXT = nullptr;
+        PFN_vkCmdEndQueryIndexedEXT s_vkCmdEndQueryIndexedEXT = nullptr;
+        VkQueryPool m_xfbQueryPool = VK_NULL_HANDLE;
+        static constexpr Uint32 kXfbQuerySlots = 8192;
+        Uint32 m_xfbQuerySlotCursor = 0;
+        Bool m_xfbQueryCaptureActive[2] = {false, false}; // [0]=written, [1]=generated
+        Vector<Uint32> m_xfbQueryActiveSlots[2];
+        Bool m_xfbQuerySlotOpen = false;
+        Uint32 m_xfbQueryOpenSlot = 0;
+
+    public:
+        // kind: 0 = PRIMITIVES_WRITTEN, 1 = PRIMITIVES_GENERATED.
+        Bool StartXfbQueryCapture(Uint32 kind);
+        void StopXfbQueryCapture(Uint32 kind, Vector<Uint32>& outSlots);
+        Bool ResolveXfbQueryResult(const Vector<Uint32>& slots, Bool wantGenerated, Uint64& outPrimitives);
+
+    private:
+        void BeginXfbQueryForDraw(VkCommandBuffer commandBuffer);
+        void EndXfbQueryForDraw(VkCommandBuffer commandBuffer);
 
         VkCommandPool m_commandPool = VK_NULL_HANDLE;
 
