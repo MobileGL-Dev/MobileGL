@@ -30,6 +30,14 @@ namespace MobileGL {
                 // degrade to an open strip, which only misses the closing segment.
                 MGLOG_W("GL_LINE_LOOP without index rewrite; drawing as LINE_STRIP");
                 return VK_PRIMITIVE_TOPOLOGY_LINE_STRIP;
+            case GL_LINES_ADJACENCY:
+                return VK_PRIMITIVE_TOPOLOGY_LINE_LIST_WITH_ADJACENCY;
+            case GL_LINE_STRIP_ADJACENCY:
+                return VK_PRIMITIVE_TOPOLOGY_LINE_STRIP_WITH_ADJACENCY;
+            case GL_TRIANGLES_ADJACENCY:
+                return VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST_WITH_ADJACENCY;
+            case GL_TRIANGLE_STRIP_ADJACENCY:
+                return VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP_WITH_ADJACENCY;
             default:
                 MGLOG_W("Unrecognized primitive topology");
                 return VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
