@@ -324,6 +324,13 @@ namespace MobileGL {
             Float MaxFragmentInterpolationOffset = 0.4375f;
             Int FragmentInterpolationOffsetBits = 4;
             Bool SupportsWideLines = false;
+            // Whether a framebuffer whose depth and stencil attachments are distinct
+            // images can be rendered to. GL only requires support when both refer to the
+            // same image and lets an implementation answer GL_FRAMEBUFFER_UNSUPPORTED
+            // otherwise, which is what DirectVulkan (one combined attachment) and the
+            // real ES drivers behind DirectGLES both do. Defaults to true so a backend
+            // that never sets it keeps the permissive behaviour.
+            Bool SupportsDistinctDepthStencilAttachments = true;
             SizeT MaxShaderStorageBlockSize = 128 * 1024 * 1024;
             Uint32 SubgroupSize = 0;
             Uint32 SubgroupSupportedStages = 0;

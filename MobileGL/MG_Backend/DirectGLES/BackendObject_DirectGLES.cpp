@@ -357,6 +357,42 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return complete;
         }
 
+        // Whether the driver renders to a framebuffer whose depth and stencil come from
+        // two different renderbuffers. GL only requires support when both attachments are
+        // the same image, and ES drivers commonly answer GL_FRAMEBUFFER_UNSUPPORTED here;
+        // reporting COMPLETE from the frontend and then rendering into a framebuffer the
+        // driver refuses leaves the results silently empty.
+        Bool ProbeDistinctDepthStencilAttachments(const MG_External::GLESFunctionsTable& gl) {
+            if (!gl.glGenFramebuffers || !gl.glBindFramebuffer || !gl.glFramebufferRenderbuffer ||
+                !gl.glCheckFramebufferStatus || !gl.glDeleteFramebuffers || !gl.glGenRenderbuffers ||
+                !gl.glBindRenderbuffer || !gl.glRenderbufferStorage || !gl.glDeleteRenderbuffers) {
+                return true;
+            }
+
+            GLint prevFramebuffer = 0, prevRenderbuffer = 0;
+            gl.glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prevFramebuffer);
+            gl.glGetIntegerv(GL_RENDERBUFFER_BINDING, &prevRenderbuffer);
+
+            GLuint framebuffer = 0;
+            GLuint renderbuffers[2] = {0, 0};
+            gl.glGenFramebuffers(1, &framebuffer);
+            gl.glGenRenderbuffers(2, renderbuffers);
+            gl.glBindRenderbuffer(GL_RENDERBUFFER, renderbuffers[0]);
+            gl.glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT16, 4, 4);
+            gl.glBindRenderbuffer(GL_RENDERBUFFER, renderbuffers[1]);
+            gl.glRenderbufferStorage(GL_RENDERBUFFER, GL_STENCIL_INDEX8, 4, 4);
+            gl.glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
+            gl.glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, renderbuffers[0]);
+            gl.glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_STENCIL_ATTACHMENT, GL_RENDERBUFFER, renderbuffers[1]);
+            const Bool supported = gl.glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
+
+            gl.glBindFramebuffer(GL_FRAMEBUFFER, static_cast<GLuint>(prevFramebuffer));
+            gl.glBindRenderbuffer(GL_RENDERBUFFER, static_cast<GLuint>(prevRenderbuffer));
+            gl.glDeleteFramebuffers(1, &framebuffer);
+            gl.glDeleteRenderbuffers(2, renderbuffers);
+            return supported;
+        }
+
         Bool ProbeFramebufferCompletenessForRenderbuffer(const MG_External::GLESFunctionsTable& gl,
                                                         GLuint renderbuffer,
                                                         TextureInternalFormat format) {
@@ -1046,6 +1082,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
             clampStageImageUniforms(m_GLESCapabilities.MaxFragmentImageUniforms);
         m_dynamicParameters.MaxComputeImageUniforms =
             clampStageImageUniforms(m_GLESCapabilities.MaxComputeImageUniforms);
+        m_dynamicParameters.SupportsDistinctDepthStencilAttachments =
+            ProbeDistinctDepthStencilAttachments(DirectGLES::g_GLESFuncs);
         m_dynamicParameters.MaxDrawBuffers = m_GLESCapabilities.MaxDrawBuffers;
         m_dynamicParameters.MaxColorAttachments = m_GLESCapabilities.MaxColorAttachments;
         m_dynamicParameters.MaxClipDistances = m_GLESCapabilities.MaxClipDistances;

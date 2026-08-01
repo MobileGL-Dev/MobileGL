@@ -22,9 +22,21 @@
 
 namespace MobileGL::MG_Impl::GLImpl {
     namespace {
-        Bool IsActiveBackendDirectVulkan() {
+        // GL only requires support for framebuffers whose depth and stencil attachments
+        // are the same image; anything else may be reported GL_FRAMEBUFFER_UNSUPPORTED.
+        // DirectVulkan cannot form two separate attachments at all, and the real ES
+        // drivers behind DirectGLES answer UNSUPPORTED for it too - so saying COMPLETE
+        // and then rendering into a framebuffer the driver refuses produced silently
+        // empty results (KHR-GL3x.packed_depth_stencil.verify_mixed_attachments).
+        Bool ActiveBackendRejectsDistinctDepthStencil() {
             auto* activeBackend = MG_Backend::pActiveBackendObject.get();
-            return activeBackend != nullptr && activeBackend->GetBackendType() == BackendType::DirectVulkan;
+            if (activeBackend == nullptr) {
+                return false;
+            }
+            if (activeBackend->GetBackendType() == BackendType::DirectVulkan) {
+                return true;
+            }
+            return !activeBackend->GetDynamicParameters().SupportsDistinctDepthStencilAttachments;
         }
 
         Bool HasDistinctCompleteDepthStencilTextureAttachments(
@@ -66,7 +78,7 @@ namespace MobileGL::MG_Impl::GLImpl {
                    (depthAttachment.IsTexture() || stencilAttachment.IsTexture());
         }
 
-        Bool IsUnsupportedFramebufferForDirectVulkan(
+        Bool HasUnsupportedDistinctDepthStencilAttachments(
             const MG_State::GLState::FramebufferObject& framebufferObject) {
             // TODO: Keep this in sync with DirectVulkan renderbuffer support as color renderbuffer rendering lands.
             return HasDistinctCompleteDepthStencilTextureAttachments(framebufferObject) ||
@@ -1631,8 +1643,8 @@ namespace MobileGL::MG_Impl::GLImpl {
         if (HasNonRenderableColorAttachment(*framebufferObject)) {
             return GL_FRAMEBUFFER_UNSUPPORTED;
         }
-        if (IsActiveBackendDirectVulkan() &&
-            IsUnsupportedFramebufferForDirectVulkan(*framebufferObject)) {
+        if (ActiveBackendRejectsDistinctDepthStencil() &&
+            HasUnsupportedDistinctDepthStencilAttachments(*framebufferObject)) {
             return GL_FRAMEBUFFER_UNSUPPORTED;
         }
         return GL_FRAMEBUFFER_COMPLETE;
@@ -1659,8 +1671,8 @@ namespace MobileGL::MG_Impl::GLImpl {
         if (HasNonRenderableColorAttachment(*framebufferObject)) {
             return GL_FRAMEBUFFER_UNSUPPORTED;
         }
-        if (IsActiveBackendDirectVulkan() &&
-            IsUnsupportedFramebufferForDirectVulkan(*framebufferObject)) {
+        if (ActiveBackendRejectsDistinctDepthStencil() &&
+            HasUnsupportedDistinctDepthStencilAttachments(*framebufferObject)) {
             return GL_FRAMEBUFFER_UNSUPPORTED;
         }
         return GL_FRAMEBUFFER_COMPLETE;
