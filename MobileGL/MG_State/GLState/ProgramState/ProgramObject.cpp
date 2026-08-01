@@ -324,7 +324,74 @@ namespace MobileGL::MG_State::GLState {
                 m_xfbStrides[i] = m_xfbVaryings[i].byteSize;
             }
         }
+
+        ResolveGsTriangleStripCapture(captureIntermediate);
         return true;
+    }
+
+    namespace {
+        // Extracts a geometry shader's per-invocation EmitVertex/EndPrimitive sequence
+        // when it is statically knowable (no emit inside selection/loop/switch). Vulkan
+        // transform feedback captures triangle strips in plain (i, i+1, i+2) order while
+        // GL decomposes odd strip triangles as (i+1, i, i+2) (GL 4.6 table 10.1); with
+        // the static strip lengths the capture buffer can be reordered after EndTF.
+        class GsEmitSequenceTraverser final : public glslang::TIntermTraverser {
+        public:
+            bool visitAggregate(glslang::TVisit, glslang::TIntermAggregate* node) override {
+                if (node->getOp() == glslang::EOpEmitVertex) {
+                    ++emitCount;
+                    hasEmit = true;
+                } else if (node->getOp() == glslang::EOpEndPrimitive) {
+                    FlushStrip();
+                }
+                return true;
+            }
+            bool visitSelection(glslang::TVisit, glslang::TIntermSelection*) override {
+                inControlFlow = true;
+                return true;
+            }
+            bool visitLoop(glslang::TVisit, glslang::TIntermLoop*) override {
+                inControlFlow = true;
+                return true;
+            }
+            bool visitSwitch(glslang::TVisit, glslang::TIntermSwitch*) override {
+                inControlFlow = true;
+                return true;
+            }
+            void FlushStrip() {
+                if (emitCount >= 3) {
+                    stripTriangles.push_back(static_cast<Uint32>(emitCount - 2));
+                }
+                emitCount = 0;
+            }
+
+            Vector<Uint32> stripTriangles;
+            Uint32 emitCount = 0;
+            Bool hasEmit = false;
+            Bool inControlFlow = false;
+        };
+    } // namespace
+
+    void ProgramObject::ResolveGsTriangleStripCapture(const glslang::TIntermediate* captureIntermediate) {
+        m_gsStripTriangles.clear();
+        m_gsStripCaptureFixup = false;
+        if (captureIntermediate == nullptr || m_program == nullptr) {
+            return;
+        }
+        if (m_program->getIntermediate(EShLangGeometry) != captureIntermediate) {
+            return;
+        }
+        if (captureIntermediate->getOutputPrimitive() != glslang::ElgTriangleStrip) {
+            return;
+        }
+        GsEmitSequenceTraverser traverser;
+        const_cast<glslang::TIntermediate*>(captureIntermediate)->getTreeRoot()->traverse(&traverser);
+        traverser.FlushStrip(); // the invocation end acts as an implicit EndPrimitive
+        if (!traverser.hasEmit || traverser.inControlFlow || traverser.stripTriangles.empty()) {
+            return;
+        }
+        m_gsStripTriangles = Move(traverser.stripTriangles);
+        m_gsStripCaptureFixup = true;
     }
 
     bool ProgramObject::ShaderIsAttached(const SharedPtr<ShaderObject>& shader) {

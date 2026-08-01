@@ -218,6 +218,7 @@ namespace MobileGL {
                     m_transformFeedbackProgram = program;
                     ++m_transformFeedbackGeneration;
                     m_transformFeedbackCapturedVertices = 0;
+                    m_transformFeedbackInputPrimitives = 0;
                 }
                 void EndTransformFeedback() {
                     m_transformFeedbackActive = false;
@@ -244,6 +245,12 @@ namespace MobileGL {
                     m_transformFeedbackCapturedVertices += vertices;
                 }
                 Uint64 GetTransformFeedbackCapturedVertices() const { return m_transformFeedbackCapturedVertices; }
+                // Raw assembled input primitives fed to the capture stage since Begin
+                // (pre-clamp; drives the GS strip capture-order fixup at EndTF).
+                void AddTransformFeedbackInputPrimitives(Uint64 primitives) {
+                    m_transformFeedbackInputPrimitives += primitives;
+                }
+                Uint64 GetTransformFeedbackInputPrimitives() const { return m_transformFeedbackInputPrimitives; }
 
                 // Framebuffer
                 void GenFramebufferNames(Uint number, Vector<Uint>& framebuffers);
@@ -283,6 +290,7 @@ namespace MobileGL {
                 Uint64 m_transformFeedbackGeneration = 0;
                 Uint64 m_transformFeedbackPrimitiveCounter = 0;
                 Uint64 m_transformFeedbackCapturedVertices = 0;
+                Uint64 m_transformFeedbackInputPrimitives = 0;
                 TextureState m_textureState;
                 ProgramState m_programState;
                 RenderState m_renderState;

@@ -74,6 +74,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         if (!MG_State::pGLContext->IsTransformFeedbackActive()) return;
         Uint64 primitives = CountPrimitivesForDraw(mode, count);
         if (primitives == 0) return;
+        MG_State::pGLContext->AddTransformFeedbackInputPrimitives(primitives);
 
         Uint64 verticesPerPrimitive = 1;
         switch (mode) {
@@ -579,6 +580,66 @@ namespace MobileGL::MG_Impl::GLImpl {
         MG_State::pGLContext->BeginTransformFeedback(primitiveMode, program);
     }
 
+    // Vulkan transform feedback captures triangle strips in plain (i, i+1, i+2)
+    // vertex order, but GL decomposes odd strip triangles as (i+1, i, i+2)
+    // (GL 4.6 table 10.1). With the geometry stage's statically-known strip
+    // lengths the captured records are reordered in place: swap the first two
+    // vertex records of every odd triangle within each emitted strip.
+    static void FixupGsStripCaptureOrder(const SharedPtr<MG_State::GLState::ProgramObject>& program,
+                                         Uint64 inputPrimitives) {
+        if (program == nullptr || !program->HasGsTriangleStripCaptureFixup() || inputPrimitives == 0) {
+            return;
+        }
+        const auto& stripTriangles = program->GetGsStripTriangles();
+
+        // Global triangle indices whose leading vertex pair must swap.
+        Vector<Uint64> swapTriangles;
+        Uint64 triangleBase = 0;
+        for (Uint64 input = 0; input < inputPrimitives; ++input) {
+            for (const Uint32 stripLength : stripTriangles) {
+                for (Uint32 t = 1; t < stripLength; t += 2) {
+                    swapTriangles.push_back(triangleBase + t);
+                }
+                triangleBase += stripLength;
+            }
+        }
+        if (swapTriangles.empty()) {
+            return;
+        }
+
+        for (SizeT bufferIndex = 0; bufferIndex < program->GetTransformFeedbackBufferCount(); ++bufferIndex) {
+            const Uint32 stride = program->GetTransformFeedbackStride(static_cast<Uint32>(bufferIndex));
+            if (stride == 0) continue;
+            const auto& bindingPoint =
+                MG_State::pGLContext->GetBufferBindingPoint(BufferTarget::TransformFeedback,
+                                                            static_cast<Uint>(bufferIndex));
+            const auto& buffer = bindingPoint.GetBoundObject();
+            if (buffer == nullptr) continue;
+            const Range1D range = bindingPoint.GetRange();
+            const Uint8* mapped = buffer->MappedData();
+            if (mapped == nullptr) continue;
+            // The geometry stage amplifies, so the CPU vertex counter does not bound
+            // the capture; the binding range's whole-triangle capacity does.
+            const Uint64 rangeBytes = range.end > range.start ? static_cast<Uint64>(range.end - range.start) : 0;
+            const Uint64 capturedTriangles = std::min<Uint64>(triangleBase, (rangeBytes / stride) / 3);
+
+            // Observed Vulkan capture order for odd strip triangles is (i, i+2, i+1)
+            // (winding preserved by swapping the trailing pair); GL wants
+            // (i+1, i, i+2), which is one rotation away: (a,b,c) -> (c,a,b).
+            Vector<Uint8> scratch(stride);
+            for (const Uint64 triangle : swapTriangles) {
+                if (triangle >= capturedTriangles) break;
+                const SizeT v0Offset = static_cast<SizeT>(range.start) + static_cast<SizeT>(triangle * 3) * stride;
+                const SizeT v1Offset = v0Offset + stride;
+                const SizeT v2Offset = v1Offset + stride;
+                Memcpy(scratch.data(), mapped + v2Offset, stride);
+                buffer->WritebackFromBackend({const_cast<Uint8*>(mapped) + v1Offset, stride}, v2Offset);
+                buffer->WritebackFromBackend({const_cast<Uint8*>(mapped) + v0Offset, stride}, v1Offset);
+                buffer->WritebackFromBackend({scratch.data(), stride}, v0Offset);
+            }
+        }
+    }
+
     void EndTransformFeedback(void) {
         if (!MG_State::pGLContext->IsTransformFeedbackActive()) {
             MG_State::pGLContext->RecordError(
@@ -586,6 +647,8 @@ namespace MobileGL::MG_Impl::GLImpl {
                 MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__, "Transform feedback is not active."));
             return;
         }
+        const auto capturedProgram = MG_State::pGLContext->GetTransformFeedbackProgram();
+        const Uint64 inputPrimitives = MG_State::pGLContext->GetTransformFeedbackInputPrimitives();
         MG_State::pGLContext->EndTransformFeedback();
         // Captured results must be visible to MapBuffer/GetBufferSubData after
         // End; the capture targets are host-coherent GPU memory, so completing
@@ -599,6 +662,7 @@ namespace MobileGL::MG_Impl::GLImpl {
                 }
             }
         }
+        FixupGsStripCaptureOrder(capturedProgram, inputPrimitives);
     }
 
 } // namespace MobileGL::MG_Impl::GLImpl

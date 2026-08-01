@@ -491,6 +491,12 @@ namespace MobileGL::MG_State::GLState {
         }
         SizeT GetTransformFeedbackBufferCount() const { return m_xfbStrides.size(); }
         Int GetTransformFeedbackVaryingMaxLength() const { return m_xfbVaryingNameMaxLength; }
+        // True when the capture stage is a triangle-strip geometry shader with a
+        // statically-known emit sequence: the Vulkan capture order then needs the GL
+        // odd-triangle vertex swap after EndTransformFeedback.
+        Bool HasGsTriangleStripCaptureFixup() const { return m_gsStripCaptureFixup; }
+        // Triangles per strip, in emission order, for ONE geometry invocation.
+        const Vector<Uint32>& GetGsStripTriangles() const { return m_gsStripTriangles; }
 
         Uint GetExternalIndex() const { return m_externalIndex; }
         // Globally-unique, never-reused id for this program object's lifetime. Unlike the GL
@@ -506,6 +512,7 @@ namespace MobileGL::MG_State::GLState {
         // vertex stage; fails the link (GL semantics) on unknown or duplicate
         // names or exceeded capture limits.
         Bool ResolveTransformFeedbackVaryings();
+        void ResolveGsTriangleStripCapture(const glslang::TIntermediate* captureIntermediate);
         void GenerateBinary();
         void WaitUntilGenerationCompleted() const;
         void AddDefaultFragmentShaderIfMissing();
@@ -595,6 +602,8 @@ namespace MobileGL::MG_State::GLState {
         GLenum m_requestedXfbBufferMode = GL_INTERLEAVED_ATTRIBS;
         Vector<XfbVarying> m_xfbVaryings;
         Vector<Uint32> m_xfbStrides;
+        Vector<Uint32> m_gsStripTriangles;
+        Bool m_gsStripCaptureFixup = false;
         GLenum m_xfbBufferMode = GL_INTERLEAVED_ATTRIBS;
         Int m_xfbVaryingNameMaxLength = 0;
     };
