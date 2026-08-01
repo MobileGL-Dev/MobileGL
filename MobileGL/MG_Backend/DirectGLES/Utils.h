@@ -104,6 +104,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
         String ClampNormFallbackOutputs(String glslCode, GLenum shaderType, Uint32 snormOutputMask,
                                         Uint32 unormOutputMask);
         String ForceFlatIntegerVaryings(const String& glslCode, GLenum shaderType);
+        // Legacy GLSL's gl_FragColor is broadcast to every enabled draw buffer (GL 4.6
+        // 15.2.3), but ShaderSourceProcessor lowers it to the single output mg_FragColor,
+        // which only ever reaches draw buffer 0. Replicates it across `drawBufferCount`
+        // outputs and copies the value into them at the end of main. A no-op for
+        // drawBufferCount <= 1, i.e. for everything but a framebuffer that actually
+        // enables several draw buffers, so the ordinary single-target shader is untouched.
+        String BroadcastLegacyFragColor(String glslCode, GLenum shaderType, Uint drawBufferCount);
         String RemoveLayoutBinding(const String& glslCode);
         // Prefix of the per-sampler float uniform that carries GL_TEXTURE_LOD_BIAS into
         // the shader (see EmulateTextureLodBias); the suffix is the sampler's own name.

@@ -1120,6 +1120,23 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 g_lastUsedBackendProgramId = 0;
                 return;
             }
+            // Read from the frontend rather than from the backend framebuffer sync, which
+            // only runs later in PrepareForDraw: a program compiled against a stale count
+            // would not be relinked until the draw after the one that needed it.
+            {
+                Uint enabledDrawBuffers = 0;
+                if (const auto& drawFBO =
+                        MG_State::pGLContext->GetFramebufferBindingSlot(FramebufferTarget::Draw).GetBoundObject()) {
+                    const auto& drawBuffers = drawFBO->GetDrawBuffers();
+                    for (Uint i = 0; i < MG_State::GLState::FramebufferObject::MAX_DRAW_BUFFERS; ++i) {
+                        if (drawBuffers[i] != FramebufferAttachmentType::None) {
+                            enabledDrawBuffers = i + 1;
+                        }
+                    }
+                }
+                g_fragColorBroadcastCount = std::max<Uint>(enabledDrawBuffers, 1);
+            }
+
             const auto& backendProgramIt = g_backendProgramObjects.find(currentProgram.get());
             Bool exist = (backendProgramIt != g_backendProgramObjects.end());
             auto& backendObj = exist ? backendProgramIt->second : g_backendProgramObjects.GetOrCreate(currentProgram);
@@ -1133,7 +1150,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 if (!backendObj->GetBackendProgramId() ||
                     backendObj->GetSyncedLinkVersion() != currentProgram->GetLinkVersion() ||
                     backendObj->GetSnormFallbackClampOutputMask() != g_snormFallbackClampOutputMask ||
-                    backendObj->GetUnormFallbackClampOutputMask() != g_unormFallbackClampOutputMask) {
+                    backendObj->GetUnormFallbackClampOutputMask() != g_unormFallbackClampOutputMask ||
+                    backendObj->GetFragColorBroadcastCount() != g_fragColorBroadcastCount) {
                     backendObj->SyncToBackend(currentProgram);
                 }
             }

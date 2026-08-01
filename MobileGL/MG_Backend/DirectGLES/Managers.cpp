@@ -3181,6 +3181,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
     namespace PrgramImpl {
         Uint32 g_snormFallbackClampOutputMask = 0;
+        Uint g_fragColorBroadcastCount = 1;
         Uint32 g_unormFallbackClampOutputMask = 0;
         Uint g_lastUsedBackendProgramId = 0;
         StateBackendObjectRegistry<MG_State::GLState::ProgramObject, BackendProgramObjectImpl> g_backendProgramObjects;
@@ -3234,6 +3235,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     stateProgramObject->GetExternalIndex(), m_backendProgramId);
             m_snormFallbackClampOutputMask = g_snormFallbackClampOutputMask;
             m_unormFallbackClampOutputMask = g_unormFallbackClampOutputMask;
+            m_fragColorBroadcastCount = g_fragColorBroadcastCount;
 
             // Detach all existing shaders
             GLint attachedCount = 0;
@@ -3347,6 +3349,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 source = RemoveLayoutBinding(source);
                 source = ProcessOutColorLocations(source);
                 source = ForceFlatIntegerVaryings(source, glShaderType);
+                source = BroadcastLegacyFragColor(std::move(source), glShaderType, m_fragColorBroadcastCount);
                 source = EmulateTextureLodBias(source);
                 source = EmulateBaseInstanceInVertexShader(std::move(source), glShaderType);
                 source = PromoteDrawParameterGlobalsToUniforms(std::move(source), glShaderType);

@@ -279,6 +279,55 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return glslCode;
         }
 
+        String BroadcastLegacyFragColor(String glslCode, GLenum shaderType, Uint drawBufferCount) {
+#ifdef TRACY_ENABLE
+            ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
+#endif
+            // The name is the marker: ShaderSourceProcessor only emits it when the source
+            // wrote gl_FragColor, and such a shader can have no other output.
+            static const char* const kLoweredName = "mg_FragColor";
+            if (shaderType != GL_FRAGMENT_SHADER || drawBufferCount <= 1) {
+                return glslCode;
+            }
+            static const std::regex declRegex(
+                R"(layout\s*\(\s*location\s*=\s*0\s*\)\s*out\s+((?:lowp|mediump|highp)\s+)?vec4\s+mg_FragColor\s*;)");
+            std::smatch declMatch;
+            if (!std::regex_search(glslCode, declMatch, declRegex)) {
+                return glslCode;
+            }
+            const String precision = declMatch[1].matched ? declMatch[1].str() : String();
+
+            String replicaDecls;
+            String replicaCopies;
+            for (Uint location = 1; location < drawBufferCount; ++location) {
+                const String name = String(kLoweredName) + "_" + std::to_string(location);
+                replicaDecls += "\nlayout(location = " + std::to_string(location) + ") out " + precision + "vec4 " +
+                                name + ";";
+                replicaCopies += "\n    " + name + " = " + kLoweredName + ";";
+            }
+
+            static const std::regex mainRegex(R"(void\s+main\s*\([^)]*\)\s*\{)");
+            std::smatch mainMatch;
+            if (!std::regex_search(glslCode, mainMatch, mainRegex)) {
+                return glslCode;
+            }
+            SizeT bracePos = static_cast<SizeT>(mainMatch.position(0) + mainMatch.length(0) - 1);
+            Int depth = 0;
+            for (SizeT pos = bracePos; pos < glslCode.size(); ++pos) {
+                if (glslCode[pos] == '{') {
+                    ++depth;
+                } else if (glslCode[pos] == '}') {
+                    --depth;
+                    if (depth == 0) {
+                        glslCode.insert(pos, replicaCopies + "\n");
+                        break;
+                    }
+                }
+            }
+            glslCode.insert(static_cast<SizeT>(declMatch.position(0)) + declMatch[0].str().size(), replicaDecls);
+            return glslCode;
+        }
+
         String ForceFlatIntegerVaryings(const String& glslCode, GLenum shaderType) {
 #ifdef TRACY_ENABLE
             ZoneScopedC(TRACY_ZONECOLOR_BACKEND);

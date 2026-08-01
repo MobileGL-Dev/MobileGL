@@ -596,6 +596,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             Uint GetBackendGlobalUBOId() const { return m_backendGlobalUBOId; }
             Uint32 GetSnormFallbackClampOutputMask() const { return m_snormFallbackClampOutputMask; }
             Uint32 GetUnormFallbackClampOutputMask() const { return m_unormFallbackClampOutputMask; }
+            Uint GetFragColorBroadcastCount() const { return m_fragColorBroadcastCount; }
 
             Bool HasGlobalUboBlock() const { return m_globalUboBackendBlockIndex >= 0; }
             const Vector<Int>& GetUniformBlockBackendIndices() const { return m_uniformBlockBackendIndices; }
@@ -622,6 +623,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
             Int m_indirectParamsBinding = -1;
             Uint32 m_snormFallbackClampOutputMask = 0;
             Uint32 m_unormFallbackClampOutputMask = 0;
+            // Draw buffers a legacy gl_FragColor write has to reach (see
+            // PrgramImpl::BroadcastLegacyFragColor); 1 keeps the plain single-output shader.
+            Uint m_fragColorBroadcastCount = 1;
             Bool m_isInitialized = false;
 
             Int m_globalUboBackendBlockIndex = -1;
@@ -635,6 +639,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
         extern Uint32 g_snormFallbackClampOutputMask;
         extern Uint32 g_unormFallbackClampOutputMask;
+        // Draw buffers the current draw framebuffer enables. Like the clamp masks above it
+        // is framebuffer state that the shader has to be compiled against, so a program
+        // whose snapshot no longer matches is relinked.
+        extern Uint g_fragColorBroadcastCount;
         // Backend id of the last glUseProgram issued through this backend; lets Use()
         // skip redundant rebinds. Reset to 0 wherever glUseProgram(0) is issued or the
         // ES context is recreated.

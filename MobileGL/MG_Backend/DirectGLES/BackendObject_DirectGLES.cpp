@@ -832,6 +832,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                           E_GL_ARB_multi_draw_indirect, E_GL_ARB_indirect_parameters,
                                           E_GL_ARB_shader_draw_parameters, E_GL_ARB_gpu_shader5, E_GL_ARB_multi_bind,
                                           E_GL_ARB_shading_language_420pack, E_GL_ARB_vertex_attrib_binding,
+                                          // Both are core from GL 3.2/3.3 on and implemented here for
+                                          // every advertised version, but an app targeting 3.0/3.1
+                                          // only reaches them through the extension string - the CTS
+                                          // picks a whole different shader for draw_buffers without
+                                          // explicit_attrib_location. DirectVulkan advertises both.
+                                          E_GL_ARB_explicit_attrib_location, E_GL_ARB_texture_multisample,
                                           E_GL_ARB_shader_image_size};
         // Only advertised when the device driver actually has usable timer queries
         // (GL_EXT_disjoint_timer_query plus its entry points) and the
