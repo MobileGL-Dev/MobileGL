@@ -66,7 +66,13 @@ namespace MobileGL::MG_Util::TextureFormatProcessor {
             switch (internalFormat) {
             case GL_DEPTH_COMPONENT32:
                 if (options & PixelFormatNormalizeOptionBit::NoDepthComponent32) {
-                    *outInternalFormat = GL_DEPTH_COMPONENT;
+                    // The unsized GL_DEPTH_COMPONENT base format is not a legal
+                    // glTexStorage/glRenderbufferStorage internal format on ES, which left
+                    // the attachment with no storage at all (KHR-GL3x.framebuffer_blit's
+                    // GL_DEPTH_COMPONENT32 config then read an incomplete framebuffer).
+                    // GL_DEPTH_COMPONENT32F is the sized ES format that keeps the requested
+                    // 32-bit depth footprint.
+                    *outInternalFormat = GL_DEPTH_COMPONENT32F;
                     break;
                 }
                 *outInternalFormat = internalFormat;
@@ -552,7 +558,9 @@ namespace MobileGL::MG_Util::TextureFormatProcessor {
                 *outType = GL_UNSIGNED_INT;
                 break;
             case GL_DEPTH_COMPONENT32:
-                *outType = GL_UNSIGNED_INT;
+                // Follows the internal-format normalization above: ES only accepts
+                // GL_FLOAT data for a GL_DEPTH_COMPONENT32F store.
+                *outType = (options & PixelFormatNormalizeOptionBit::NoDepthComponent32) ? GL_FLOAT : GL_UNSIGNED_INT;
                 break;
             case GL_DEPTH_COMPONENT32F:
                 *outType = GL_FLOAT;
