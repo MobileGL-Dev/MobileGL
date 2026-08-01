@@ -211,6 +211,14 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                            VkImageAspectFlags imageAspect, Uint32 mipLevel, Uint32 baseArrayLayer,
                                            GLint x, GLint y, GLsizei width, GLsizei height, GLenum format, GLenum type,
                                            void* pixels);
+        // Same-extent depth blit between images of different depth formats: host
+        // round-trip with a per-texel re-encode (see BlitNamedFramebuffer).
+        Bool BlitDepthAcrossFormats(FrameContext::FrameData& frame, VkImage srcImage, VkFormat srcFormat,
+                                    VkImageLayout* srcTrackedLayout, Uint32 srcMipLevel, Uint32 srcBaseArrayLayer,
+                                    VkImage dstImage, VkFormat dstFormat, VkImageLayout* dstTrackedLayout,
+                                    Uint32 dstMipLevel, Uint32 dstBaseArrayLayer, GLint srcX, GLint srcY, GLint dstX,
+                                    GLint dstY, GLint width, GLint height, VkImageLayout srcRestoreLayout,
+                                    VkImageLayout dstRestoreLayout, Bool stencilAspect);
         static SizeT GetReadbackTexelSize(VkFormat sourceFormat);
         static Bool ConvertReadbackPixels(const Uint8* sourcePixels, VkFormat sourceFormat,
                                           GLsizei width, GLsizei height, GLenum destinationFormat,

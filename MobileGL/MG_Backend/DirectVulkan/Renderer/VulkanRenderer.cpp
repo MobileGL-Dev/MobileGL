@@ -1529,6 +1529,7 @@ void main() {
                 }
 
                 outBinding.image = swapchainObject.GetDepthStencilImage(swapchainImageIndex);
+                outBinding.format = swapchainObject.GetDepthStencilFormat();
                 outBinding.aspectMask = requiredAspectMask;
                 return true;
             }
@@ -1555,6 +1556,7 @@ void main() {
                 outBinding.image = rbResource->image;
                 outBinding.trackedLayout = &rbResource->layout;
                 outBinding.aspectMask = requiredAspectMask;
+                outBinding.format = rbResource->format;
                 outBinding.extent = {static_cast<Int>(rbResource->extent.width),
                                      static_cast<Int>(rbResource->extent.height)};
                 outBinding.mipLevel = 0;
@@ -1585,6 +1587,7 @@ void main() {
             outBinding.image = resource->image;
             outBinding.trackedLayout = &resource->layout;
             outBinding.aspectMask = requiredAspectMask;
+            outBinding.format = resource->format;
             const auto attachmentExtent = attachment.GetSize();
             outBinding.extent = {attachmentExtent.x(), attachmentExtent.y()};
             outBinding.mipLevel = static_cast<Uint32>(std::max(attachment.GetTextureLevel(), 0));
@@ -1694,6 +1697,7 @@ void main() {
                 outBinding.image = rbResource->image;
                 outBinding.trackedLayout = &rbResource->layout;
                 outBinding.aspectMask = requiredAspectMask;
+                outBinding.format = rbResource->format;
                 outBinding.extent = {static_cast<Int>(rbResource->extent.width),
                                      static_cast<Int>(rbResource->extent.height)};
                 outBinding.mipLevel = 0;
@@ -1725,6 +1729,7 @@ void main() {
             outBinding.image = resource->image;
             outBinding.trackedLayout = &resource->layout;
             outBinding.aspectMask = requiredAspectMask;
+            outBinding.format = resource->format;
             const auto attachmentExtent = attachment.GetSize();
             outBinding.extent = {attachmentExtent.x(), attachmentExtent.y()};
             outBinding.mipLevel = static_cast<Uint32>(std::max(attachment.GetTextureLevel(), 0));
@@ -6078,28 +6083,56 @@ void main() {
                                               GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1,
                                               GLint dstX0, GLint dstY0, GLint dstX1, GLint dstY1,
                                               GLbitfield mask, GLenum filter) {
-        static constexpr GLbitfield kSupportedBlitMask = GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT;
+        static constexpr GLbitfield kSupportedBlitMask =
+            GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT;
         if ((mask & ~kSupportedBlitMask) != 0) {
             MGLOG_E("BlitFramebuffer skipped: unsupported mask bits=0x%x", static_cast<Uint32>(mask));
             return;
         }
         const Bool isColorBlit = (mask & GL_COLOR_BUFFER_BIT) != 0;
         const Bool isDepthBlit = (mask & GL_DEPTH_BUFFER_BIT) != 0;
-        if (!isColorBlit && !isDepthBlit) {
-            return;
-        }
-        if (isColorBlit && isDepthBlit) {
-            MGLOG_E("BlitFramebuffer skipped: combined color+depth blits are not supported yet (mask=0x%x)",
-                    static_cast<Uint32>(mask));
+        const Bool isStencilBlit = (mask & GL_STENCIL_BUFFER_BIT) != 0;
+        if (!isColorBlit && !isDepthBlit && !isStencilBlit) {
             return;
         }
         if (filter != GL_NEAREST && filter != GL_LINEAR) {
             MGLOG_E("BlitFramebuffer skipped: unsupported filter=0x%x", static_cast<Uint32>(filter));
             return;
         }
-        if (isDepthBlit && filter != GL_NEAREST) {
-            MGLOG_E("BlitFramebuffer skipped: depth blits currently require GL_NEAREST");
+        if ((isDepthBlit || isStencilBlit) && filter != GL_NEAREST) {
+            MGLOG_E("BlitFramebuffer skipped: depth/stencil blits require GL_NEAREST");
             return;
+        }
+
+        // The scissor test clips blit writes: intersect the destination rectangle with
+        // the scissor box and shrink the source proportionally.
+        if (MG_State::pGLContext->IsCapabilityEnabled(CapabilityInput::ScissorTest)) {
+            const IntVec4& scissor = MG_State::pGLContext->GetScissorBox();
+            const auto clipAxis = [](GLint& d0, GLint& d1, GLint& s0, GLint& s1, GLint clipLo, GLint clipHi) -> Bool {
+                const Bool dstFlipped = d1 < d0;
+                GLint lo = dstFlipped ? d1 : d0;
+                GLint hi = dstFlipped ? d0 : d1;
+                const GLint newLo = std::max(lo, clipLo);
+                const GLint newHi = std::min(hi, clipHi);
+                if (newLo >= newHi) {
+                    return false;
+                }
+                const double srcSpan = static_cast<double>(s1 - s0);
+                const double dstSpan = static_cast<double>(d1 - d0);
+                const double scale = dstSpan != 0.0 ? srcSpan / dstSpan : 0.0;
+                const GLint origD0 = d0;
+                const GLint clippedD0 = dstFlipped ? newHi : newLo;
+                const GLint clippedD1 = dstFlipped ? newLo : newHi;
+                s0 = s0 + static_cast<GLint>(std::lround((clippedD0 - origD0) * scale));
+                s1 = s0 + static_cast<GLint>(std::lround((clippedD1 - clippedD0) * scale));
+                d0 = clippedD0;
+                d1 = clippedD1;
+                return true;
+            };
+            if (!clipAxis(dstX0, dstX1, srcX0, srcX1, scissor.x(), scissor.x() + scissor.z()) ||
+                !clipAxis(dstY0, dstY1, srcY0, srcY1, scissor.y(), scissor.y() + scissor.w())) {
+                return; // fully scissored out
+            }
         }
 
         MOBILEGL_ASSERT(readFbo != nullptr, "VulkanRenderer::BlitFramebuffer: read framebuffer is null");
@@ -6133,15 +6166,18 @@ void main() {
             return;
         }
 
-        if (isDepthBlit) {
+        Vector<VkImageAspectFlagBits> depthStencilAspects;
+        if (isDepthBlit) depthStencilAspects.push_back(VK_IMAGE_ASPECT_DEPTH_BIT);
+        if (isStencilBlit) depthStencilAspects.push_back(VK_IMAGE_ASPECT_STENCIL_BIT);
+        for (const VkImageAspectFlagBits depthStencilAspect : depthStencilAspects) {
             BlitImageBinding srcBinding{};
             BlitImageBinding dstBinding{};
             if (!ResolveFramebufferBlitBinding(*readFbo, true, m_imageIndexAcquired, m_swapchainObject,
                                                *m_textureManager, *m_renderPassManager,
-                                               VK_IMAGE_ASPECT_DEPTH_BIT, srcBinding) ||
+                                               depthStencilAspect, srcBinding) ||
                 !ResolveFramebufferBlitBinding(*drawFbo, false, m_imageIndexAcquired, m_swapchainObject,
                                                *m_textureManager, *m_renderPassManager,
-                                               VK_IMAGE_ASPECT_DEPTH_BIT, dstBinding)) {
+                                               depthStencilAspect, dstBinding)) {
                 return;
             }
 
@@ -6162,12 +6198,18 @@ void main() {
             if (!readIsDefaultFbo) {
                 const auto sourceAttachmentType = ResolveFramebufferCopyAttachmentType(*readFbo, true, srcBinding.aspectMask);
                 const auto& sourceAttachment = readFbo->GetAttachment(sourceAttachmentType);
-                auto sourceTexture = sourceAttachment.GetTexture();
-                MOBILEGL_ASSERT(sourceTexture != nullptr, "BlitFramebuffer: depth source texture attachment is null");
-                const Bool clearReady = MaterializePendingClearForTexture(frame.commandBuffer, *sourceTexture);
-                MOBILEGL_ASSERT(clearReady,
-                                "BlitFramebuffer: failed to materialize pending clear for depth source textureId=%d",
-                                sourceTexture->GetExternalIndex());
+                if (auto sourceTexture = sourceAttachment.GetTexture(); sourceTexture != nullptr) {
+                    const Bool clearReady = MaterializePendingClearForTexture(frame.commandBuffer, *sourceTexture);
+                    MOBILEGL_ASSERT(clearReady,
+                                    "BlitFramebuffer: failed to materialize pending clear for depth source textureId=%d",
+                                    sourceTexture->GetExternalIndex());
+                } else if (sourceAttachment.IsRenderbuffer()) {
+                    const Bool clearReady = MaterializePendingClearForRenderbuffer(frame.commandBuffer,
+                                                                                   sourceAttachment.GetRenderbuffer());
+                    MOBILEGL_ASSERT(clearReady,
+                                    "BlitFramebuffer: failed to materialize pending clear for depth source renderbuffer %u",
+                                    sourceAttachment.GetRenderbuffer()->GetExternalIndex());
+                }
             }
 
             if (!drawIsDefaultFbo) {
@@ -6177,12 +6219,18 @@ void main() {
                 // depth into it - the stale loadOp=CLEAR erased the copy).
                 const auto destAttachmentType = ResolveFramebufferCopyAttachmentType(*drawFbo, false, dstBinding.aspectMask);
                 const auto& destAttachment = drawFbo->GetAttachment(destAttachmentType);
-                auto destTexture = destAttachment.GetTexture();
-                MOBILEGL_ASSERT(destTexture != nullptr, "BlitFramebuffer: depth destination texture attachment is null");
-                const Bool dstClearReady = MaterializePendingClearForTexture(frame.commandBuffer, *destTexture);
-                MOBILEGL_ASSERT(dstClearReady,
-                                "BlitFramebuffer: failed to materialize pending clear for depth destination textureId=%d",
-                                destTexture->GetExternalIndex());
+                if (auto destTexture = destAttachment.GetTexture(); destTexture != nullptr) {
+                    const Bool dstClearReady = MaterializePendingClearForTexture(frame.commandBuffer, *destTexture);
+                    MOBILEGL_ASSERT(dstClearReady,
+                                    "BlitFramebuffer: failed to materialize pending clear for depth destination textureId=%d",
+                                    destTexture->GetExternalIndex());
+                } else if (destAttachment.IsRenderbuffer()) {
+                    const Bool dstClearReady = MaterializePendingClearForRenderbuffer(frame.commandBuffer,
+                                                                                      destAttachment.GetRenderbuffer());
+                    MOBILEGL_ASSERT(dstClearReady,
+                                    "BlitFramebuffer: failed to materialize pending clear for depth destination renderbuffer %u",
+                                    destAttachment.GetRenderbuffer()->GetExternalIndex());
+                }
             }
 
             const VkImageLayout srcOriginalLayout = readIsDefaultFbo
@@ -6199,6 +6247,26 @@ void main() {
             const VkImageLayout dstRestoreLayout = dstOriginalLayout == VK_IMAGE_LAYOUT_UNDEFINED
                 ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL
                 : dstOriginalLayout;
+
+            // vkCmdCopyImage requires identical depth formats; a mismatched pair (e.g.
+            // a D24S8 renderbuffer into a DEPTH_COMPONENT24 texture backed by the
+            // D32_SFLOAT fallback) round-trips the region through the host with a
+            // per-texel re-encode instead.
+            if (srcBinding.format != dstBinding.format) {
+                if (readIsDefaultFbo || drawIsDefaultFbo) {
+                    MGLOG_E("BlitFramebuffer skipped: cross-format depth/stencil blit with the default framebuffer");
+                    return;
+                }
+                if (!BlitDepthAcrossFormats(frame, srcBinding.image, srcBinding.format, srcBinding.trackedLayout,
+                                            srcBinding.mipLevel, srcBinding.baseArrayLayer, dstBinding.image,
+                                            dstBinding.format, dstBinding.trackedLayout, dstBinding.mipLevel,
+                                            dstBinding.baseArrayLayer, srcX0, srcY0, dstX0, dstY0, srcX1 - srcX0,
+                                            srcY1 - srcY0, srcOriginalLayout, dstRestoreLayout,
+                                            depthStencilAspect == VK_IMAGE_ASPECT_STENCIL_BIT)) {
+                    return;
+                }
+                continue;
+            }
 
             VkPipelineStageFlags srcStageMask = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
             VkAccessFlags srcAccessMask = 0;
@@ -6301,6 +6369,8 @@ void main() {
                     dstBinding.mipLevel, dstBinding.mipLevelCount);
                 MOBILEGL_ASSERT(ok, "%s: failed to restore depth destination image layout", __func__);
             }
+        }
+        if (!isColorBlit) {
             return;
         }
 
@@ -7008,6 +7078,189 @@ void main() {
         }
         PackReadbackToClientOrPbo(mapped, srcFormat, width, height, 1, format, type, pixels,
                                   /*applyPackImageParams=*/false, /*applyReadColorClamp=*/true);
+    }
+
+    Bool VulkanRenderer::BlitDepthAcrossFormats(FrameContext::FrameData& frame, VkImage srcImage, VkFormat srcFormat,
+                                                VkImageLayout* srcTrackedLayout, Uint32 srcMipLevel,
+                                                Uint32 srcBaseArrayLayer, VkImage dstImage, VkFormat dstFormat,
+                                                VkImageLayout* dstTrackedLayout, Uint32 dstMipLevel,
+                                                Uint32 dstBaseArrayLayer, GLint srcX, GLint srcY, GLint dstX,
+                                                GLint dstY, GLint width, GLint height,
+                                                VkImageLayout srcRestoreLayout, VkImageLayout dstRestoreLayout,
+                                                Bool stencilAspect) {
+        const auto aspectMaskForFormat = [](VkFormat format) -> VkImageAspectFlags {
+            switch (format) {
+            case VK_FORMAT_D16_UNORM:
+            case VK_FORMAT_X8_D24_UNORM_PACK32:
+            case VK_FORMAT_D32_SFLOAT:
+                return VK_IMAGE_ASPECT_DEPTH_BIT;
+            case VK_FORMAT_D24_UNORM_S8_UINT:
+            case VK_FORMAT_D32_SFLOAT_S8_UINT:
+                return VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT;
+            default:
+                return VK_IMAGE_ASPECT_COLOR_BIT;
+            }
+        };
+        const auto depthTexelSize = [](VkFormat format) -> SizeT {
+            switch (format) {
+            case VK_FORMAT_D16_UNORM:
+                return 2;
+            case VK_FORMAT_X8_D24_UNORM_PACK32:
+            case VK_FORMAT_D24_UNORM_S8_UINT:
+            case VK_FORMAT_D32_SFLOAT:
+            case VK_FORMAT_D32_SFLOAT_S8_UINT:
+                return 4;
+            default:
+                return 0;
+            }
+        };
+        // The stencil aspect of every supported format copies as one byte per texel,
+        // so a cross-format stencil "blit" is a raw pass-through.
+        const SizeT srcTexel = stencilAspect ? 1 : depthTexelSize(srcFormat);
+        const SizeT dstTexel = stencilAspect ? 1 : depthTexelSize(dstFormat);
+        if (srcTexel == 0 || dstTexel == 0 || width <= 0 || height <= 0) {
+            MGLOG_E("BlitDepthAcrossFormats skipped: unsupported formats src=%d dst=%d",
+                    static_cast<Int>(srcFormat), static_cast<Int>(dstFormat));
+            return false;
+        }
+        const SizeT pixelCount = static_cast<SizeT>(width) * static_cast<SizeT>(height);
+
+        VkBufferObject readback;
+        if (!readback.Create({
+                .allocator = m_allocator,
+                .size = pixelCount * srcTexel,
+                .usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                .memoryUsage = VMA_MEMORY_USAGE_AUTO,
+                .allocationFlags = VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT,
+            })) {
+            return false;
+        }
+
+        VkPipelineStageFlags srcStageMask = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+        VkAccessFlags srcAccessMask = 0;
+        GetImageTransitionSourceState(*srcTrackedLayout, srcStageMask, srcAccessMask);
+        Bool ok = VkTextureManager::TransitionImageLayout(
+            frame.commandBuffer, srcImage, *srcTrackedLayout, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, srcStageMask,
+            VK_PIPELINE_STAGE_TRANSFER_BIT, srcAccessMask, VK_ACCESS_TRANSFER_READ_BIT,
+            aspectMaskForFormat(srcFormat), srcMipLevel, 1);
+        MOBILEGL_ASSERT(ok, "BlitDepthAcrossFormats: source transition failed");
+
+        VkBufferImageCopy readRegion{};
+        readRegion.imageSubresource.aspectMask =
+            stencilAspect ? VK_IMAGE_ASPECT_STENCIL_BIT : VK_IMAGE_ASPECT_DEPTH_BIT;
+        readRegion.imageSubresource.mipLevel = srcMipLevel;
+        readRegion.imageSubresource.baseArrayLayer = srcBaseArrayLayer;
+        readRegion.imageSubresource.layerCount = 1;
+        readRegion.imageOffset = {srcX, srcY, 0};
+        readRegion.imageExtent = {static_cast<Uint32>(width), static_cast<Uint32>(height), 1};
+        vkCmdCopyImageToBuffer(frame.commandBuffer, srcImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                               readback.GetHandle(), 1, &readRegion);
+
+        VkPipelineStageFlags srcRestoreStage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+        VkAccessFlags srcRestoreAccess = 0;
+        GetImageTransitionDestinationState(srcRestoreLayout, srcRestoreStage, srcRestoreAccess);
+        ok = VkTextureManager::TransitionImageLayout(
+            frame.commandBuffer, srcImage, *srcTrackedLayout, srcRestoreLayout, VK_PIPELINE_STAGE_TRANSFER_BIT,
+            srcRestoreStage, VK_ACCESS_TRANSFER_READ_BIT, srcRestoreAccess,
+            aspectMaskForFormat(srcFormat), srcMipLevel, 1);
+        MOBILEGL_ASSERT(ok, "BlitDepthAcrossFormats: source restore failed");
+
+        if (!SubmitReadbackCommandsAndWait(frame)) {
+            return false;
+        }
+        const auto* mapped = static_cast<const Uint8*>(readback.Map());
+        if (mapped == nullptr || !readback.Invalidate(pixelCount * srcTexel)) {
+            return false;
+        }
+
+        // Decode source depths to float, re-encode into the destination texel layout.
+        Vector<Uint8> encoded(pixelCount * dstTexel);
+        if (stencilAspect) {
+            Memcpy(encoded.data(), mapped, pixelCount);
+        }
+        for (SizeT i = 0; !stencilAspect && i < pixelCount; ++i) {
+            Float depthValue = 0.0f;
+            switch (srcFormat) {
+            case VK_FORMAT_D16_UNORM: {
+                Uint16 raw = 0;
+                Memcpy(&raw, mapped + i * 2, sizeof(raw));
+                depthValue = static_cast<Float>(raw) / 65535.0f;
+                break;
+            }
+            case VK_FORMAT_X8_D24_UNORM_PACK32:
+            case VK_FORMAT_D24_UNORM_S8_UINT: {
+                Uint32 raw = 0;
+                Memcpy(&raw, mapped + i * 4, sizeof(raw));
+                depthValue = static_cast<Float>(raw & 0xFFFFFFu) / static_cast<Float>(0xFFFFFFu);
+                break;
+            }
+            default: {
+                Memcpy(&depthValue, mapped + i * 4, sizeof(depthValue));
+                break;
+            }
+            }
+            Uint8* dst = encoded.data() + i * dstTexel;
+            switch (dstFormat) {
+            case VK_FORMAT_D16_UNORM: {
+                const Uint16 value =
+                    static_cast<Uint16>(std::lround(static_cast<double>(std::clamp(depthValue, 0.0f, 1.0f)) * 65535.0));
+                Memcpy(dst, &value, sizeof(value));
+                break;
+            }
+            case VK_FORMAT_X8_D24_UNORM_PACK32:
+            case VK_FORMAT_D24_UNORM_S8_UINT: {
+                const Uint32 value = static_cast<Uint32>(
+                    std::lround(static_cast<double>(std::clamp(depthValue, 0.0f, 1.0f)) * 16777215.0));
+                Memcpy(dst, &value, sizeof(value));
+                break;
+            }
+            default:
+                Memcpy(dst, &depthValue, sizeof(depthValue));
+                break;
+            }
+        }
+
+        // Upload the converted region; recording restarted after the readback flush.
+        if (!frame.isCommandRecording) {
+            m_frameContext.BeginCommandRecording();
+        }
+        BufferSlice slice{};
+        if (!m_bufferManager.UploadTransient(BufferKind::Vertex, m_frameContext.GetCurrentFrameIndex(), encoded.data(),
+                                             encoded.size(), 4, slice)) {
+            MGLOG_E("BlitDepthAcrossFormats: staging upload failed");
+            return false;
+        }
+
+        VkPipelineStageFlags dstStageMask = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+        VkAccessFlags dstAccessMask = 0;
+        GetImageTransitionSourceState(*dstTrackedLayout, dstStageMask, dstAccessMask);
+        ok = VkTextureManager::TransitionImageLayout(
+            frame.commandBuffer, dstImage, *dstTrackedLayout, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, dstStageMask,
+            VK_PIPELINE_STAGE_TRANSFER_BIT, dstAccessMask, VK_ACCESS_TRANSFER_WRITE_BIT,
+            aspectMaskForFormat(dstFormat), dstMipLevel, 1);
+        MOBILEGL_ASSERT(ok, "BlitDepthAcrossFormats: destination transition failed");
+
+        VkBufferImageCopy writeRegion{};
+        writeRegion.bufferOffset = slice.offset;
+        writeRegion.imageSubresource.aspectMask =
+            stencilAspect ? VK_IMAGE_ASPECT_STENCIL_BIT : VK_IMAGE_ASPECT_DEPTH_BIT;
+        writeRegion.imageSubresource.mipLevel = dstMipLevel;
+        writeRegion.imageSubresource.baseArrayLayer = dstBaseArrayLayer;
+        writeRegion.imageSubresource.layerCount = 1;
+        writeRegion.imageOffset = {dstX, dstY, 0};
+        writeRegion.imageExtent = {static_cast<Uint32>(width), static_cast<Uint32>(height), 1};
+        vkCmdCopyBufferToImage(frame.commandBuffer, slice.buffer, dstImage, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1,
+                               &writeRegion);
+
+        VkPipelineStageFlags dstRestoreStage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+        VkAccessFlags dstRestoreAccess = 0;
+        GetImageTransitionDestinationState(dstRestoreLayout, dstRestoreStage, dstRestoreAccess);
+        ok = VkTextureManager::TransitionImageLayout(
+            frame.commandBuffer, dstImage, *dstTrackedLayout, dstRestoreLayout, VK_PIPELINE_STAGE_TRANSFER_BIT,
+            dstRestoreStage, VK_ACCESS_TRANSFER_WRITE_BIT, dstRestoreAccess,
+            aspectMaskForFormat(dstFormat), dstMipLevel, 1);
+        MOBILEGL_ASSERT(ok, "BlitDepthAcrossFormats: destination restore failed");
+        return true;
     }
 
     void VulkanRenderer::ReadDepthStencilPixels(MG_State::GLState::FramebufferObject& readFbo, GLint x, GLint y,
