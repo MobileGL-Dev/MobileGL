@@ -213,8 +213,13 @@ namespace MobileGL::MG_Impl::GLImpl {
 
             GLint maxSamples = 0;
             for (const auto& attachment : drawFbo->GetAllAttachmentObjects()) {
-                if (!attachment.IsRenderbuffer() || !attachment.GetRenderbuffer()) continue;
-                maxSamples = std::max(maxSamples, static_cast<GLint>(attachment.GetRenderbuffer()->GetSamples()));
+                if (attachment.IsRenderbuffer() && attachment.GetRenderbuffer()) {
+                    maxSamples = std::max(maxSamples, static_cast<GLint>(attachment.GetRenderbuffer()->GetSamples()));
+                } else if (attachment.IsTexture() && attachment.GetTexture()) {
+                    // Multisample texture attachments count too (GL_SAMPLE_BUFFERS must
+                    // report 1 for any multisampled draw framebuffer).
+                    maxSamples = std::max(maxSamples, static_cast<GLint>(attachment.GetTexture()->GetSamples()));
+                }
             }
             return maxSamples;
         }
