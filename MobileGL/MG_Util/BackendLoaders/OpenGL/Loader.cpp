@@ -929,6 +929,15 @@ namespace MobileGL::MG_Util::BackendLoader {
         glesFuncs.glGetIntegerv(GL_MAX_INTEGER_SAMPLES, &maxIntegerSamples);
         glesFuncs.glGetIntegerv(GL_MAX_SAMPLES, &maxSamples);
         glesFuncs.glGetIntegerv(GL_MAX_SAMPLE_MASK_WORDS, &maxSampleMaskWords);
+        // MobileGL's sample-mask state only stores a single 32-bit word (see
+        // RenderState::SampleMaskValue) and SampleMaski_State() rejects any
+        // maskNumber other than 0. Advertising the real driver's value here (e.g.
+        // NVIDIA's GLES driver reports 2) makes glSampleMaski(1, ...) - which
+        // dEQP's per-case gluStateReset always issues up to GL_MAX_SAMPLE_MASK_WORDS -
+        // raise GL_INVALID_VALUE and aborts the whole glcts process after every
+        // single test case. 1 is a spec-legal value (the minimum required), so cap
+        // to what is actually implemented instead of forwarding the raw driver limit.
+        maxSampleMaskWords = std::min(maxSampleMaskWords, 1);
         glesFuncs.glGetIntegerv(GL_MAX_TEXTURE_IMAGE_UNITS, &maxTextureImageUnits);
         glesFuncs.glGetIntegerv(GL_MAX_VERTEX_TEXTURE_IMAGE_UNITS, &maxVertexTextureImageUnits);
         glesFuncs.glGetIntegerv(GL_MAX_COMPUTE_TEXTURE_IMAGE_UNITS, &maxComputeTextureImageUnits);
