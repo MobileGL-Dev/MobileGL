@@ -576,6 +576,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 Int backendLocation = -1;
                 GLenum uniformType = 0;
                 Int lastAssignedUnit = -1;
+                // Location of this sampler's emulated GL_TEXTURE_LOD_BIAS uniform
+                // (PrgramImpl::EmulateTextureLodBias), -1 when the shader has none.
+                // lastAssignedLodBias mirrors the value the program currently holds,
+                // so an unbiased shader issues no per-draw glUniform1f at all.
+                Int lodBiasLocation = -1;
+                Float lastAssignedLodBias = 0.0f;
             };
 
             BackendProgramObjectImpl();

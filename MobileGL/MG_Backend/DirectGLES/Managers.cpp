@@ -3347,6 +3347,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 source = RemoveLayoutBinding(source);
                 source = ProcessOutColorLocations(source);
                 source = ForceFlatIntegerVaryings(source, glShaderType);
+                source = EmulateTextureLodBias(source);
                 source = EmulateBaseInstanceInVertexShader(std::move(source), glShaderType);
                 source = PromoteDrawParameterGlobalsToUniforms(std::move(source), glShaderType);
                 source = ForceSupporterOutput(source);
@@ -3524,6 +3525,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 binding.backendLocation = backendLoc;
                 binding.uniformType = uniformType;
                 binding.lastAssignedUnit = -1;
+                // Present only for the samplers EmulateTextureLodBias actually rewrote; the
+                // pass names it after the sampler, which SPIRV-Cross preserves verbatim.
+                binding.lodBiasLocation =
+                    g_GLESFuncs.glGetUniformLocation(m_backendProgramId, (String(LOD_BIAS_UNIFORM_PREFIX) + name).c_str());
+                binding.lastAssignedLodBias = 0.0f;
                 m_samplerUniformBindings.push_back(binding);
             }
         }

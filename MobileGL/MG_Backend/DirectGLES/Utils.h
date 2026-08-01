@@ -105,6 +105,18 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                         Uint32 unormOutputMask);
         String ForceFlatIntegerVaryings(const String& glslCode, GLenum shaderType);
         String RemoveLayoutBinding(const String& glslCode);
+        // Prefix of the per-sampler float uniform that carries GL_TEXTURE_LOD_BIAS into
+        // the shader (see EmulateTextureLodBias); the suffix is the sampler's own name.
+        constexpr const char* LOD_BIAS_UNIFORM_PREFIX = "mg_lodBias_";
+        // ES has no per-texture/sampler LOD bias at all (GL_TEXTURE_LOD_BIAS is desktop
+        // only; Vulkan spells it VkSamplerCreateInfo::mipLodBias), so it has to reach the
+        // shader as a uniform and be folded into every lookup's level of detail. Declares
+        // one `uniform highp float mg_lodBias_<sampler>;` per mip-capable sampler and adds
+        // it to the bias / explicit-LOD argument of every lookup that takes one. Draws push
+        // the bound texture's (or sampler object's) value into it; a shader whose samplers
+        // all have a zero bias is therefore unaffected. Returns the source unchanged when
+        // there is nothing to rewrite.
+        String EmulateTextureLodBias(const String& glslCode);
     } // namespace PrgramImpl
 
     namespace Utils {

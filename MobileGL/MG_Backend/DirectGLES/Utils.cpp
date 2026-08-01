@@ -22,6 +22,9 @@
 #include <MG_Util/Math/SmallFloat.h>
 
 #include <cmath>
+#include <cctype>
+#include <cstring>
+#include <regex>
 
 namespace MobileGL::MG_Backend::DirectGLES {
     namespace {
@@ -339,6 +342,166 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 }
                 result += '\n';
                 lineStart = lineEnd + 1;
+            }
+            return result;
+        }
+
+        namespace {
+            // How a lookup carries its level of detail, and how many arguments it takes
+            // before the optional bias.
+            struct LodLookupForm {
+                const char* name;
+                Int requiredArgs; // arguments before the optional bias (implicit form)
+                Int explicitLodArg; // index of the explicit LOD argument, -1 for implicit
+            };
+
+            // texelFetch* is deliberately absent: an integer fetch names its level directly
+            // and takes no LOD bias. textureGather has no bias either. textureGrad* derives
+            // the LOD from gradients and offers no argument to fold a bias into, so it is
+            // left alone rather than rewritten incorrectly.
+            constexpr LodLookupForm LOD_LOOKUP_FORMS[] = {
+                {"textureProjLodOffset", 0, 2}, {"textureProjOffset", 4, -1}, {"textureProjLod", 0, 2},
+                {"textureLodOffset", 0, 2},     {"textureOffset", 3, -1},     {"textureProj", 2, -1},
+                {"textureLod", 0, 2},           {"texture", 2, -1},
+            };
+
+            // Sampler types with no mip chain, or whose GLSL lookups have no bias overload
+            // at all (the array-shadow forms), so nothing can or should be folded in.
+            Bool IsBiasableSamplerType(const String& samplerType) {
+                if (samplerType.find("MS") != String::npos) return false;      // multisample
+                if (samplerType.find("Buffer") != String::npos) return false;  // texture buffer
+                if (samplerType.find("Rect") != String::npos) return false;    // rectangle: no mips
+                if (samplerType == "sampler2DArrayShadow") return false;
+                if (samplerType == "samplerCubeArrayShadow") return false;
+                return true;
+            }
+
+            Bool IsIdentifierChar(char c) { return std::isalnum(static_cast<unsigned char>(c)) || c == '_'; }
+
+            // Byte offsets of the top-level argument separators and of the closing paren,
+            // starting from the '(' at openParen. Empty when the parentheses do not balance.
+            Vector<SizeT> SplitCallArguments(const String& code, SizeT openParen) {
+                Vector<SizeT> marks;
+                Int depth = 0;
+                for (SizeT i = openParen; i < code.size(); ++i) {
+                    const char c = code[i];
+                    if (c == '(' || c == '[') {
+                        ++depth;
+                    } else if (c == ']') {
+                        --depth;
+                    } else if (c == ')') {
+                        --depth;
+                        if (depth == 0) {
+                            marks.push_back(i);
+                            return marks;
+                        }
+                    } else if (c == ',' && depth == 1) {
+                        marks.push_back(i);
+                    }
+                }
+                return {};
+            }
+        } // namespace
+
+        String EmulateTextureLodBias(const String& glslCode) {
+#ifdef TRACY_ENABLE
+            ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
+#endif
+            if (glslCode.find("sampler") == String::npos || glslCode.find("texture") == String::npos) {
+                return glslCode;
+            }
+
+            // Collect the mip-capable sampler uniforms this shader declares.
+            static const std::regex samplerDeclRegex(
+                R"(uniform\s+(?:(?:highp|mediump|lowp)\s+)?([iu]?sampler[A-Za-z0-9]*)\s+([A-Za-z_][A-Za-z0-9_]*)\s*;)");
+            UnorderedMap<String, String> samplerNames; // name -> bias uniform name
+            for (std::sregex_iterator it(glslCode.begin(), glslCode.end(), samplerDeclRegex), end; it != end; ++it) {
+                const String samplerType = (*it)[1].str();
+                if (!IsBiasableSamplerType(samplerType)) continue;
+                const String name = (*it)[2].str();
+                samplerNames.emplace(name, String(LOD_BIAS_UNIFORM_PREFIX) + name);
+            }
+            if (samplerNames.empty()) {
+                return glslCode;
+            }
+
+            // Rewrite the lookups. Right-to-left so earlier offsets stay valid, and only for
+            // samplers named directly as the first argument (SPIRV-Cross never produces an
+            // expression there for ES output, which has no separate sampler objects).
+            String result = glslCode;
+            Vector<String> usedSamplers;
+            for (SizeT scan = result.size(); scan-- > 0;) {
+                if (result[scan] != 't') continue;
+                if (scan > 0 && IsIdentifierChar(result[scan - 1])) continue;
+
+                const LodLookupForm* form = nullptr;
+                SizeT openParen = 0;
+                for (const auto& candidate : LOD_LOOKUP_FORMS) {
+                    const SizeT nameLength = std::strlen(candidate.name);
+                    if (result.compare(scan, nameLength, candidate.name) != 0) continue;
+                    SizeT after = result.find_first_not_of(" \t", scan + nameLength);
+                    if (after == String::npos || result[after] != '(') continue;
+                    form = &candidate;
+                    openParen = after;
+                    break;
+                }
+                if (form == nullptr) continue;
+
+                const Vector<SizeT> marks = SplitCallArguments(result, openParen);
+                if (marks.empty()) continue;
+                const SizeT argCount = marks.size();
+                const SizeT closeParen = marks.back();
+
+                // First argument must be one of our samplers.
+                const SizeT firstArgStart = result.find_first_not_of(" \t", openParen + 1);
+                SizeT firstArgEnd = marks.front();
+                while (firstArgEnd > firstArgStart && (result[firstArgEnd - 1] == ' ' || result[firstArgEnd - 1] == '\t')) {
+                    --firstArgEnd;
+                }
+                if (firstArgStart == String::npos || firstArgEnd <= firstArgStart) continue;
+                const String samplerName = result.substr(firstArgStart, firstArgEnd - firstArgStart);
+                const auto samplerIt = samplerNames.find(samplerName);
+                if (samplerIt == samplerNames.end()) continue;
+
+                const String& biasName = samplerIt->second;
+                if (form->explicitLodArg >= 0) {
+                    // Explicit LOD: the bias adds to it, as Vulkan does for
+                    // OpImageSampleExplicitLod and as the CTS reference expects.
+                    const SizeT lodIndex = static_cast<SizeT>(form->explicitLodArg);
+                    if (argCount <= lodIndex) continue;
+                    const SizeT lodStart = marks[lodIndex - 1] + 1;
+                    const SizeT lodEnd = marks[lodIndex];
+                    result.insert(lodEnd, String(") + ") + biasName + ")");
+                    result.insert(lodStart, "((");
+                } else {
+                    const SizeT required = static_cast<SizeT>(form->requiredArgs);
+                    if (argCount == required) {
+                        result.insert(closeParen, String(", ") + biasName);
+                    } else if (argCount == required + 1) {
+                        const SizeT biasStart = marks[argCount - 2] + 1;
+                        result.insert(closeParen, String(") + ") + biasName + ")");
+                        result.insert(biasStart, "((");
+                    } else {
+                        continue;
+                    }
+                }
+                usedSamplers.push_back(samplerName);
+            }
+            if (usedSamplers.empty()) {
+                return glslCode;
+            }
+
+            // Declare the bias uniforms that were actually referenced, right after the
+            // sampler declaration line they belong to.
+            for (const auto& samplerName : usedSamplers) {
+                const String& biasName = samplerNames[samplerName];
+                if (result.find(String("float ") + biasName + ";") != String::npos) continue;
+                const std::regex declRegex(
+                    R"(uniform\s+(?:(?:highp|mediump|lowp)\s+)?[iu]?sampler[A-Za-z0-9]*\s+)" + samplerName + R"(\s*;)");
+                std::smatch match;
+                if (!std::regex_search(result, match, declRegex)) continue;
+                const SizeT declEnd = static_cast<SizeT>(match.position(0)) + match[0].str().size();
+                result.insert(declEnd, String("\nuniform highp float ") + biasName + ";");
             }
             return result;
         }
