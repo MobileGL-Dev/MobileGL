@@ -303,7 +303,47 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
 
         const auto internalFormat = renderbuffer->GetInternalFormat();
-        const VkFormat format = MG_Util::ConvertTextureInternalFormatToVkEnum(internalFormat);
+        // Three-channel color formats widen to their RGBA twin exactly like textures do
+        // (VkTextureManager::ResolveTextureFormatInfo): blits/resolves between a
+        // renderbuffer and a texture of the same GL format then see one VkFormat.
+        const VkFormat format = [&]() -> VkFormat {
+            switch (internalFormat) {
+            case TextureInternalFormat::RGB:
+            case TextureInternalFormat::RGB8:
+            case TextureInternalFormat::R3G3B2:
+            case TextureInternalFormat::RGB4:
+            case TextureInternalFormat::RGB5:
+                return VK_FORMAT_R8G8B8A8_UNORM;
+            case TextureInternalFormat::SRGB8:
+                return VK_FORMAT_R8G8B8A8_SRGB;
+            case TextureInternalFormat::RGB8Snorm:
+                return VK_FORMAT_R8G8B8A8_SNORM;
+            case TextureInternalFormat::RGB10:
+            case TextureInternalFormat::RGB12:
+            case TextureInternalFormat::RGB16:
+                return VK_FORMAT_R16G16B16A16_UNORM;
+            case TextureInternalFormat::RGB16Snorm:
+                return VK_FORMAT_R16G16B16A16_SNORM;
+            case TextureInternalFormat::RGB16F:
+                return VK_FORMAT_R16G16B16A16_SFLOAT;
+            case TextureInternalFormat::RGB32F:
+                return VK_FORMAT_R32G32B32A32_SFLOAT;
+            case TextureInternalFormat::RGB8I:
+                return VK_FORMAT_R8G8B8A8_SINT;
+            case TextureInternalFormat::RGB8UI:
+                return VK_FORMAT_R8G8B8A8_UINT;
+            case TextureInternalFormat::RGB16I:
+                return VK_FORMAT_R16G16B16A16_SINT;
+            case TextureInternalFormat::RGB16UI:
+                return VK_FORMAT_R16G16B16A16_UINT;
+            case TextureInternalFormat::RGB32I:
+                return VK_FORMAT_R32G32B32A32_SINT;
+            case TextureInternalFormat::RGB32UI:
+                return VK_FORMAT_R32G32B32A32_UINT;
+            default:
+                return MG_Util::ConvertTextureInternalFormatToVkEnum(internalFormat);
+            }
+        }();
         const VkImageAspectFlags aspect = ResolveImageAspectMaskForFormat(format);
         // Renderbuffers are never sampled (GL has no way to bind one to a sampler), so the
         // usage set is attachment + transfer: transfer covers readback (vkCmdCopyImageToBuffer),

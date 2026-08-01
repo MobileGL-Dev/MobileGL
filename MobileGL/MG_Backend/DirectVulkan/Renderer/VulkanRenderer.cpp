@@ -1253,6 +1253,7 @@ void main() {
             VkImageLayout* trackedLayout = nullptr;
             VkImageAspectFlags aspectMask = VK_IMAGE_ASPECT_NONE;
             VkFormat format = VK_FORMAT_UNDEFINED;
+            VkSampleCountFlagBits sampleCount = VK_SAMPLE_COUNT_1_BIT;
             IntVec2 extent = {0, 0};
             Uint32 mipLevel = 0;
             Uint32 mipLevelCount = 1;
@@ -1451,6 +1452,7 @@ void main() {
                 outBinding.trackedLayout = &rbResource->layout;
                 outBinding.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
                 outBinding.format = rbResource->format;
+                outBinding.sampleCount = rbResource->sampleCount;
                 outBinding.extent = {static_cast<Int>(rbResource->extent.width),
                                      static_cast<Int>(rbResource->extent.height)};
                 outBinding.mipLevel = 0;
@@ -1483,6 +1485,7 @@ void main() {
             outBinding.trackedLayout = &resource->layout;
             outBinding.aspectMask = resource->aspect;
             outBinding.format = resource->format;
+            outBinding.sampleCount = resource->sampleCount;
             const auto attachmentExtent = attachment.GetSize();
             outBinding.extent = {attachmentExtent.x(), attachmentExtent.y()};
             outBinding.mipLevel = static_cast<Uint32>(std::max(attachment.GetTextureLevel(), 0));
@@ -1536,7 +1539,11 @@ void main() {
 
             const auto& attachment = fbo.GetAttachment(attachmentType);
             if (!attachment.IsComplete()) {
-                MGLOG_E("BlitFramebuffer skipped: %s framebuffer attachment is incomplete", outBinding.label);
+                MGLOG_E("BlitFramebuffer skipped: %s framebuffer attachment is incomplete (fbo=%u attachmentType=%d "
+                        "isTexture=%d isRenderbuffer=%d texId=%d)",
+                        outBinding.label, fbo.GetExternalIndex(), static_cast<Int>(attachmentType),
+                        attachment.IsTexture() ? 1 : 0, attachment.IsRenderbuffer() ? 1 : 0,
+                        attachment.IsTexture() && attachment.GetTexture() ? static_cast<Int>(attachment.GetTexture()->GetExternalIndex()) : -1);
                 return false;
             }
             if (attachment.IsRenderbuffer()) {
@@ -1557,6 +1564,7 @@ void main() {
                 outBinding.trackedLayout = &rbResource->layout;
                 outBinding.aspectMask = requiredAspectMask;
                 outBinding.format = rbResource->format;
+                outBinding.sampleCount = rbResource->sampleCount;
                 outBinding.extent = {static_cast<Int>(rbResource->extent.width),
                                      static_cast<Int>(rbResource->extent.height)};
                 outBinding.mipLevel = 0;
@@ -1588,6 +1596,7 @@ void main() {
             outBinding.trackedLayout = &resource->layout;
             outBinding.aspectMask = requiredAspectMask;
             outBinding.format = resource->format;
+            outBinding.sampleCount = resource->sampleCount;
             const auto attachmentExtent = attachment.GetSize();
             outBinding.extent = {attachmentExtent.x(), attachmentExtent.y()};
             outBinding.mipLevel = static_cast<Uint32>(std::max(attachment.GetTextureLevel(), 0));
@@ -1698,6 +1707,7 @@ void main() {
                 outBinding.trackedLayout = &rbResource->layout;
                 outBinding.aspectMask = requiredAspectMask;
                 outBinding.format = rbResource->format;
+                outBinding.sampleCount = rbResource->sampleCount;
                 outBinding.extent = {static_cast<Int>(rbResource->extent.width),
                                      static_cast<Int>(rbResource->extent.height)};
                 outBinding.mipLevel = 0;
@@ -1730,6 +1740,7 @@ void main() {
             outBinding.trackedLayout = &resource->layout;
             outBinding.aspectMask = requiredAspectMask;
             outBinding.format = resource->format;
+            outBinding.sampleCount = resource->sampleCount;
             const auto attachmentExtent = attachment.GetSize();
             outBinding.extent = {attachmentExtent.x(), attachmentExtent.y()};
             outBinding.mipLevel = static_cast<Uint32>(std::max(attachment.GetTextureLevel(), 0));
@@ -6178,7 +6189,9 @@ void main() {
                 !ResolveFramebufferBlitBinding(*drawFbo, false, m_imageIndexAcquired, m_swapchainObject,
                                                *m_textureManager, *m_renderPassManager,
                                                depthStencilAspect, dstBinding)) {
-                return;
+                // A buffer named in the mask but absent from either framebuffer copies
+                // nothing for that buffer; the other requested buffers still blit.
+                continue;
             }
 
             if (srcX1 < srcX0 || srcY1 < srcY0 || dstX1 < dstX0 || dstY1 < dstY0) {
@@ -6493,10 +6506,26 @@ void main() {
             ApplyNativeBlitDefaultFramebufferTransform(m_swapchainObject.GetPreTransform(), dstBinding, blitRegion);
         }
 
-        vkCmdBlitImage(frame.commandBuffer,
-                       srcBinding.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                       dstBinding.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                       1, &blitRegion, filter == GL_LINEAR ? VK_FILTER_LINEAR : VK_FILTER_NEAREST);
+        if (srcBinding.sampleCount != VK_SAMPLE_COUNT_1_BIT && dstBinding.sampleCount == VK_SAMPLE_COUNT_1_BIT) {
+            // GL multisample resolve blits are 1:1 by spec; vkCmdBlitImage cannot read a
+            // multisampled source.
+            VkImageResolve resolveRegion{};
+            resolveRegion.srcSubresource = blitRegion.srcSubresource;
+            resolveRegion.srcOffset = {std::min(srcX0, srcX1), std::min(srcY0, srcY1), 0};
+            resolveRegion.dstSubresource = blitRegion.dstSubresource;
+            resolveRegion.dstOffset = {std::min(dstX0, dstX1), std::min(dstY0, dstY1), 0};
+            resolveRegion.extent = {static_cast<Uint32>(std::abs(srcX1 - srcX0)),
+                                    static_cast<Uint32>(std::abs(srcY1 - srcY0)), 1};
+            vkCmdResolveImage(frame.commandBuffer,
+                              srcBinding.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                              dstBinding.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                              1, &resolveRegion);
+        } else {
+            vkCmdBlitImage(frame.commandBuffer,
+                           srcBinding.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                           dstBinding.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                           1, &blitRegion, filter == GL_LINEAR ? VK_FILTER_LINEAR : VK_FILTER_NEAREST);
+        }
 
         VkPipelineStageFlags srcRestoreStageMask = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
         VkAccessFlags srcRestoreAccessMask = 0;
