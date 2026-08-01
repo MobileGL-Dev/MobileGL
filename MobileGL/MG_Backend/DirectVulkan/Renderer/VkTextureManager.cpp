@@ -830,7 +830,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             return VK_NULL_HANDLE;
         }
 
-        if (baseArrayLayer == 0 && layerCount == resource->arrayLayers && viewType == resource->viewType) {
+        const Bool framebufferSrgbEnabled =
+            MG_State::pGLContext->IsCapabilityEnabled(MobileGL::CapabilityInput::FramebufferSrgb);
+        const VkFormat attachmentFormat = ResolveSrgbAttachmentWriteFormat(resource->format, framebufferSrgbEnabled);
+
+        if (attachmentFormat == resource->format && baseArrayLayer == 0 && layerCount == resource->arrayLayers &&
+            viewType == resource->viewType) {
             return GetOrCreateViewAtMipLevel(texture, mipLevel);
         }
 
@@ -839,6 +844,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             .baseArrayLayer = baseArrayLayer,
             .layerCount = layerCount,
             .viewType = viewType,
+            .viewFormat = attachmentFormat,
         };
         auto it = resource->attachmentViews.find(key);
         if (it == resource->attachmentViews.end()) {
@@ -849,7 +855,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             return attachmentView;
         }
 
-        attachmentView = CreateImageView(resource->image, resource->format, resource->aspect, viewType,
+        attachmentView = CreateImageView(resource->image, attachmentFormat, resource->aspect, viewType,
                                          mipLevel, 1, baseArrayLayer, layerCount);
         if (attachmentView == VK_NULL_HANDLE) {
             MGLOG_D("%s: CreateImageView failed for textureId=%d mipLevel=%u baseArrayLayer=%u layerCount=%u viewType=%d",
@@ -1438,10 +1444,22 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                                const IntVec3 &texelSize, SizeT byteSize, Uint32 mipLevels,
                                                TextureResource &resource) {
         const TextureFormatInfo formatInfo = ResolveTextureFormatInfo(texture.GetFormat());
-        const VkFormat format = formatInfo.format;
+        VkFormat format = formatInfo.format;
         if (format == VK_FORMAT_UNDEFINED) {
             MGLOG_D("%s: format == VK_FORMAT_UNDEFINED", __func__);
             return false;
+        }
+        // X8_D24 lacks optimal-tiling support on several drivers (lavapipe included);
+        // D32_SFLOAT holds every 24-bit depth value exactly, and the upload path
+        // converts the shadow words to float (see the pure-depth branch below).
+        if (format == VK_FORMAT_X8_D24_UNORM_PACK32) {
+            VkFormatProperties formatProperties{};
+            vkGetPhysicalDeviceFormatProperties(m_physicalDevice, format, &formatProperties);
+            constexpr VkFormatFeatureFlags kDepthAttachmentAndSample =
+                VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT;
+            if ((formatProperties.optimalTilingFeatures & kDepthAttachmentAndSample) != kDepthAttachmentAndSample) {
+                format = VK_FORMAT_D32_SFLOAT;
+            }
         }
         if (texelSize.x() <= 0 || texelSize.y() <= 0 /*|| byteSize == 0*/) {
             MGLOG_D("%s: texelSize or byteSize is zero", __func__);
@@ -1511,6 +1529,14 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         const Bool supportsStorageImage = storageImageCapable && markedAsStorageImage;
         VkImageCreateFlags imageCreateFlags = shapeInfo.imageFlags;
         if (storageImageCapable && IsMutableStorageImageFormat(format) &&
+            m_mutableFormatUnsupported.find(format) == m_mutableFormatUnsupported.end()) {
+            imageCreateFlags |= VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT;
+        }
+        // sRGB color images attach through their UNORM twin while GL_FRAMEBUFFER_SRGB is
+        // disabled (see ResolveSrgbAttachmentWriteFormat), which needs format-reinterpreting
+        // views - multisample sRGB render targets included.
+        if (ResolveSrgbAttachmentWriteFormat(format, false) != format &&
+            (aspect & VK_IMAGE_ASPECT_COLOR_BIT) != 0 &&
             m_mutableFormatUnsupported.find(format) == m_mutableFormatUnsupported.end()) {
             imageCreateFlags |= VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT;
         }
@@ -2063,6 +2089,51 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 item.expandedData = Move(deinterleaved);
                 item.source = item.expandedData.data();
                 item.uploadByteSize = item.expandedData.size();
+                item.offset = stagingSize;
+                stagingSize += static_cast<VkDeviceSize>(item.uploadByteSize);
+            }
+        }
+
+        // Pure-depth images whose canonical shadow layout differs from the image texel
+        // layout (the shadow keeps a full-scale 16/32-bit unorm word or a float; the
+        // image may be X8_D24 or a D32_SFLOAT fallback) convert per texel here.
+        if (uploadAspectMask == VK_IMAGE_ASPECT_DEPTH_BIT) {
+            const TextureInternalFormat depthInternal = mipmapTexture.GetFormat();
+            const Bool shadowIsFloat = depthInternal == TextureInternalFormat::DepthComponent32F;
+            const Bool dstIsFloat = outResource.format == VK_FORMAT_D32_SFLOAT;
+            const Bool dstIsD24Word = outResource.format == VK_FORMAT_X8_D24_UNORM_PACK32;
+            stagingSize = 0;
+            for (auto& item : uploadItems) {
+                const SizeT texelCount = static_cast<SizeT>(item.texelSize.x()) *
+                                         static_cast<SizeT>(item.texelSize.y()) *
+                                         static_cast<SizeT>(std::max(item.texelSize.z(), 1));
+                const SizeT shadowTexelSize = item.uploadByteSize / std::max<SizeT>(texelCount, 1);
+                const Bool needsConversion =
+                    (dstIsFloat && !shadowIsFloat) || (dstIsD24Word && shadowTexelSize == 4 && !shadowIsFloat);
+                if (needsConversion) {
+                    Vector<Uint8> converted(texelCount * 4);
+                    const Uint8* shadow = static_cast<const Uint8*>(item.source);
+                    for (SizeT t = 0; t < texelCount; ++t) {
+                        Uint32 wide = 0;
+                        if (shadowTexelSize == 2) {
+                            Uint16 raw = 0;
+                            std::memcpy(&raw, shadow + t * 2, sizeof(raw));
+                            wide = (static_cast<Uint32>(raw) << 16) | raw;
+                        } else {
+                            std::memcpy(&wide, shadow + t * 4, sizeof(wide));
+                        }
+                        if (dstIsFloat) {
+                            const float value = static_cast<float>(static_cast<double>(wide) / 4294967295.0);
+                            std::memcpy(converted.data() + t * 4, &value, sizeof(value));
+                        } else { // X8_D24: depth in the low 24 bits of a 32-bit word
+                            const Uint32 word = wide >> 8;
+                            std::memcpy(converted.data() + t * 4, &word, sizeof(word));
+                        }
+                    }
+                    item.expandedData = Move(converted);
+                    item.source = item.expandedData.data();
+                    item.uploadByteSize = item.expandedData.size();
+                }
                 item.offset = stagingSize;
                 stagingSize += static_cast<VkDeviceSize>(item.uploadByteSize);
             }

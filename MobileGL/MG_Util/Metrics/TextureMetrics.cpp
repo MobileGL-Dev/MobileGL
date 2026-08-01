@@ -43,8 +43,11 @@ namespace MobileGL {
             case TextureInternalFormat::SRGB8:
             case TextureInternalFormat::RGB8I:
             case TextureInternalFormat::RGB8UI:
-            case TextureInternalFormat::DepthComponent24:
                 return 3;
+            // Canonical depth shadow is a full 32-bit unorm word (see PixelStoreProcessor),
+            // converted at upload to the image's own 24/32-bit layout.
+            case TextureInternalFormat::DepthComponent24:
+                return 4;
 
             case TextureInternalFormat::RGBA2:
             case TextureInternalFormat::RGBA4:

@@ -95,6 +95,7 @@ namespace MobileGL::MG_Util::PixelStoreProcessor {
             Int32,
             Half,
             Float32,
+            UNorm32, // 32-bit fixed-point depth shadow
         };
 
         struct InternalShadowLayout {
@@ -123,6 +124,21 @@ namespace MobileGL::MG_Util::PixelStoreProcessor {
 
         Bool GetInternalShadowLayout(TextureInternalFormat internal, InternalShadowLayout& out) {
             switch (internal) {
+            // Depth shadows follow TextureFormatProcessor::NormalizePixelFormat: 16-bit
+            // unorm for DEPTH_COMPONENT16, 32-bit unorm for the 24/32-bit fixed-point
+            // depths, float for DEPTH_COMPONENT32F.
+            case TextureInternalFormat::DepthComponent16:
+                out = {1, ShadowComponent::UNorm16, false};
+                return true;
+            case TextureInternalFormat::DepthComponent24:
+            case TextureInternalFormat::DepthComponent32:
+            case TextureInternalFormat::DepthComponent:
+                out = {1, ShadowComponent::UNorm32, false};
+                return true;
+            case TextureInternalFormat::DepthComponent32F:
+                out = {1, ShadowComponent::Float32, false};
+                return true;
+
             case TextureInternalFormat::R8:
             case TextureInternalFormat::Red:     out = {1, ShadowComponent::UNorm8, false}; return true;
             case TextureInternalFormat::RG8:
@@ -299,8 +315,10 @@ namespace MobileGL::MG_Util::PixelStoreProcessor {
             case TextureInputFormat::RGBAInteger:  out = {{0, 1, 2, 3}, 4, true};     return true;
             case TextureInputFormat::BGRA:         out = {{2, 1, 0, 3}, 4, false};    return true;
             case TextureInputFormat::BGRAInteger:  out = {{2, 1, 0, 3}, 4, true};     return true;
+            // A depth value converts like a single normalized/float channel.
+            case TextureInputFormat::DepthComponent: out = {{0, -1, -1, -1}, 1, false}; return true;
             default:
-                return false; // depth / stencil / unknown
+                return false; // stencil / packed depth-stencil / unknown
             }
         }
 
@@ -346,8 +364,7 @@ namespace MobileGL::MG_Util::PixelStoreProcessor {
                 out = isInteger ? ShadowComponent::Int16 : ShadowComponent::SNorm16;
                 return true;
             case TexturePixelDataType::UnsignedInt:
-                if (!isInteger) return false; // no 32-bit normalized shadow layout
-                out = ShadowComponent::UInt32;
+                out = isInteger ? ShadowComponent::UInt32 : ShadowComponent::UNorm32;
                 return true;
             case TexturePixelDataType::Int:
                 if (!isInteger) return false;
@@ -617,6 +634,12 @@ namespace MobileGL::MG_Util::PixelStoreProcessor {
             case ShadowComponent::Float32:
                 Memcpy(dst, &v, sizeof(v));
                 break;
+            case ShadowComponent::UNorm32: {
+                const auto out = static_cast<Uint32>(
+                    std::llround(static_cast<double>(std::clamp(v, 0.0f, 1.0f)) * 4294967295.0));
+                Memcpy(dst, &out, sizeof(out));
+                break;
+            }
             default:
                 break; // integer components never reach the float encoder
             }
@@ -770,6 +793,64 @@ namespace MobileGL::MG_Util::PixelStoreProcessor {
         const Int effectiveWidth = (params.RowLength > 0) ? params.RowLength : width;
         const Int effectiveHeight = (params.ImageHeight > 0) ? params.ImageHeight : height;
         const SizeT inputRowStride = CalculateRowStride(effectiveWidth, pixelSize, params.Alignment);
+
+        // GL_DEPTH_COMPONENT client data may populate a packed depth-stencil internal
+        // format (the stencil half becomes zero); the generic channel converter cannot
+        // express the packed shadow words, so convert here.
+        const Bool packedDepthStencilInternal = targetInternalFormat == TextureInternalFormat::Depth24Stencil8 ||
+            targetInternalFormat == TextureInternalFormat::DepthStencil ||
+            targetInternalFormat == TextureInternalFormat::Depth32FStencil8;
+        if (!isBitmap && packedDepthStencilInternal && textureInputFormat == TextureInputFormat::DepthComponent &&
+            (inputDataType == TexturePixelDataType::Float || inputDataType == TexturePixelDataType::UnsignedInt ||
+             inputDataType == TexturePixelDataType::UnsignedShort)) {
+            const Bool floatShadow = targetInternalFormat == TextureInternalFormat::Depth32FStencil8;
+            const SizeT outPixelSize = floatShadow ? 8 : 4;
+            outSize = static_cast<SizeT>(width) * height * std::max(depth, 1) * outPixelSize;
+            Uint8* outputPixels = static_cast<Uint8*>(malloc(outSize));
+            if (!outputPixels) {
+                outSize = 0;
+                return nullptr;
+            }
+            const Uint8* srcBase = static_cast<const Uint8*>(inputPixels) +
+                static_cast<SizeT>(params.SkipImages) * static_cast<SizeT>(effectiveHeight) * inputRowStride +
+                static_cast<SizeT>(params.SkipRows) * inputRowStride +
+                static_cast<SizeT>(params.SkipPixels) * pixelSize;
+            Uint8* dst = outputPixels;
+            for (Int z = 0; z < std::max(depth, 1); ++z) {
+                for (Int y = 0; y < height; ++y) {
+                    const Uint8* srcRow = srcBase +
+                        static_cast<SizeT>(z) * static_cast<SizeT>(effectiveHeight) * inputRowStride +
+                        static_cast<SizeT>(y) * inputRowStride;
+                    for (Int x = 0; x < width; ++x) {
+                        Float depthValue = 0.0f;
+                        if (inputDataType == TexturePixelDataType::Float) {
+                            Memcpy(&depthValue, srcRow + static_cast<SizeT>(x) * 4, sizeof(depthValue));
+                        } else if (inputDataType == TexturePixelDataType::UnsignedInt) {
+                            Uint32 raw = 0;
+                            Memcpy(&raw, srcRow + static_cast<SizeT>(x) * 4, sizeof(raw));
+                            depthValue = static_cast<Float>(static_cast<double>(raw) / 4294967295.0);
+                        } else {
+                            Uint16 raw = 0;
+                            Memcpy(&raw, srcRow + static_cast<SizeT>(x) * 2, sizeof(raw));
+                            depthValue = static_cast<Float>(raw) / 65535.0f;
+                        }
+                        if (floatShadow) {
+                            const Uint32 stencilWord = 0;
+                            Memcpy(dst, &depthValue, sizeof(depthValue));
+                            Memcpy(dst + 4, &stencilWord, sizeof(stencilWord));
+                            dst += 8;
+                        } else {
+                            const Uint32 depth24 = static_cast<Uint32>(
+                                std::llround(static_cast<double>(std::clamp(depthValue, 0.0f, 1.0f)) * 16777215.0));
+                            const Uint32 word = depth24 << 8;
+                            Memcpy(dst, &word, sizeof(word));
+                            dst += 4;
+                        }
+                    }
+                }
+            }
+            return outputPixels;
+        }
 
         UnpackConversionSpec conversion{};
         const Bool needConversion =
@@ -971,6 +1052,11 @@ namespace MobileGL::MG_Util::PixelStoreProcessor {
                 Float v;
                 Memcpy(&v, p, sizeof(v));
                 return v;
+            }
+            case ShadowComponent::UNorm32: {
+                Uint32 v;
+                Memcpy(&v, p, sizeof(v));
+                return static_cast<Float>(static_cast<double>(v) / 4294967295.0);
             }
             default:
                 return 0.0f;
