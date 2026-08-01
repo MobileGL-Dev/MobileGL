@@ -578,6 +578,9 @@ namespace MobileGL::MG_Impl::GLImpl {
             }
         }
         MG_State::pGLContext->BeginTransformFeedback(primitiveMode, program);
+        if (const auto beginXfb = MG_Backend::gBackendFunctionsTable.GL.BeginTransformFeedback) {
+            beginXfb(primitiveMode);
+        }
     }
 
     // Vulkan transform feedback captures triangle strips in plain (i, i+1, i+2)
@@ -649,6 +652,11 @@ namespace MobileGL::MG_Impl::GLImpl {
         }
         const auto capturedProgram = MG_State::pGLContext->GetTransformFeedbackProgram();
         const Uint64 inputPrimitives = MG_State::pGLContext->GetTransformFeedbackInputPrimitives();
+        // Closed while the capture state is still active: a backend that captures
+        // through its own driver reads the capture program and buffer bindings here.
+        if (const auto endXfb = MG_Backend::gBackendFunctionsTable.GL.EndTransformFeedback) {
+            endXfb();
+        }
         MG_State::pGLContext->EndTransformFeedback();
         // Captured results must be visible to MapBuffer/GetBufferSubData after
         // End; the capture targets are host-coherent GPU memory, so completing

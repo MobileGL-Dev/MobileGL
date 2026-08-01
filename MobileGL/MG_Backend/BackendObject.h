@@ -229,6 +229,13 @@ namespace MobileGL {
             // (optional; null = frontend falls back to CPU accounting).
             BackendQueryHandle (*BeginXfbPrimitivesQuery)(Bool generated);
             void (*EndXfbPrimitivesQuery)(BackendQueryHandle query);
+            // Transform feedback capture spans, for backends whose own GL/ES driver
+            // performs the capture (DirectGLES). Both optional; null means the backend
+            // drives capture from its draw recording instead (DirectVulkan). End is
+            // called while the frontend capture state is still active, so the backend
+            // can still see the capture program and buffer bindings.
+            void (*BeginTransformFeedback)(GLenum primitiveMode);
+            void (*EndTransformFeedback)();
             Int64 (*GetGpuTimestampNs)(); // glGetInteger64v(GL_TIMESTAMP); 0 if unsupported
         };
         struct GlobalBackendFunctionsTable {

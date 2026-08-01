@@ -3386,6 +3386,26 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 MGLOG_D("Processed shader source length: %zu", source.length());
             }
 
+            // Transform feedback capture runs on the real driver (see XfbImpl in
+            // DirectGLES.cpp), so the capture set has to be declared on the backend
+            // program before it links. SPIRV-Cross keeps user output names verbatim in
+            // the transpiled ESSL (`out vec4 result_0;` stays `result_0`), so the
+            // frontend's requested names carry over unchanged.
+            if (stateProgramObject->GetTransformFeedbackVaryingCount() > 0 &&
+                g_GLESFuncs.glTransformFeedbackVaryings != nullptr) {
+                const auto& xfbVaryings = stateProgramObject->GetTransformFeedbackVaryings();
+                Vector<const GLchar*> xfbNames;
+                xfbNames.reserve(xfbVaryings.size());
+                for (const auto& xfbVarying : xfbVaryings) {
+                    xfbNames.push_back(xfbVarying.name.c_str());
+                }
+                MGLOG_D("Declaring %zu transform feedback varyings on program %u", xfbNames.size(),
+                        m_backendProgramId);
+                g_GLESFuncs.glTransformFeedbackVaryings(m_backendProgramId, static_cast<GLsizei>(xfbNames.size()),
+                                                        xfbNames.data(),
+                                                        stateProgramObject->GetTransformFeedbackBufferMode());
+            }
+
             // Link program
             MGLOG_D("Linking program %u", m_backendProgramId);
             g_GLESFuncs.glLinkProgram(m_backendProgramId);

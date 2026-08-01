@@ -945,6 +945,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
             funcsTable.GL.IsQueryResultAvailable = IsQueryResultAvailable;
             funcsTable.GL.GetQueryResult64 = GetQueryResult64;
             funcsTable.GL.DeleteBackendQuery = DeleteBackendQuery;
+            // Transform feedback is captured by the real ES driver rather than
+            // reconstructed from the draw recording, so the frontend has to hand the
+            // span boundaries over.
+            funcsTable.GL.BeginTransformFeedback = XfbImpl::BeginTransformFeedback;
+            funcsTable.GL.EndTransformFeedback = XfbImpl::EndTransformFeedback;
             funcsTableInitialized = true;
         }
         return funcsTable;

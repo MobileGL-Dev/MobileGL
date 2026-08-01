@@ -159,6 +159,18 @@ namespace MobileGL::MG_Backend::DirectGLES {
     void SetGLESCapabilities(const MG_External::GLESCapabilities& capabilities);
     void DestroyEGLContext();
 
+    // Transform feedback capture spans, performed by the real ES driver. The
+    // capture set is declared on the backend program at link time; the driver-side
+    // begin is deferred to the first draw of the span (ES needs the capturing
+    // program current and the capture buffers bound), and the end also mirrors the
+    // captured bytes back into the frontend buffer shadows.
+    namespace XfbImpl {
+        Bool AreTransformFeedbacksSupported();
+        void BeginTransformFeedback(GLenum primitiveMode);
+        void EndTransformFeedback();
+        void OnBackendContextDestroyed();
+    } // namespace XfbImpl
+
     extern MG_External::EGLFunctionsTable g_EGLFuncs;
     extern MG_External::GLESFunctionsTable g_GLESFuncs;
     extern MG_External::GLESCapabilities g_GLESCapabilities;

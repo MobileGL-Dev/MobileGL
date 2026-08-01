@@ -321,6 +321,115 @@ namespace MobileGL::MG_Backend::DirectGLES {
         }
     } // namespace BufferImpl
 
+    // Transform feedback is captured by the real ES driver: the backend program
+    // declares the capture set at link time (see BackendProgramObjectImpl::SyncToBackend)
+    // and the span below wraps the driver's own glBeginTransformFeedback/glEndTransformFeedback.
+    //
+    // The driver-side Begin is deferred from the frontend's glBeginTransformFeedback to
+    // the first draw of the span: ES requires the capturing program to be current and
+    // the capture buffers bound when Begin is issued, and both of those only become true
+    // once PrepareForDraw has run. A span that never draws therefore never touches the
+    // driver at all, which is also what the GL semantics amount to.
+    namespace XfbImpl {
+        namespace {
+            struct XfbCaptureTarget {
+                SharedPtr<MG_State::GLState::BufferObject> buffer;
+                Uint backendId = 0;
+                SizeT start = 0;
+                SizeT end = 0;
+            };
+
+            Bool g_xfbPending = false; // frontend Begin seen, driver capture not started yet
+            Bool g_xfbStarted = false; // driver capture running
+            GLenum g_xfbPrimitiveMode = GL_POINTS;
+            Vector<XfbCaptureTarget> g_xfbTargets;
+        } // namespace
+
+        Bool AreTransformFeedbacksSupported() {
+            return g_GLESFuncs.glBeginTransformFeedback != nullptr &&
+                   g_GLESFuncs.glEndTransformFeedback != nullptr &&
+                   g_GLESFuncs.glTransformFeedbackVaryings != nullptr;
+        }
+
+        void BeginTransformFeedback(GLenum primitiveMode) {
+            if (!AreTransformFeedbacksSupported()) return;
+            g_xfbPrimitiveMode = primitiveMode;
+            g_xfbPending = true;
+            g_xfbStarted = false;
+            g_xfbTargets.clear();
+        }
+
+        // Tail of PrepareForDraw: the program is bound and every buffer the draw needs
+        // is up to date, so the capture buffers can be bound and the span opened.
+        void StartPendingTransformFeedback() {
+            if (!g_xfbPending) return;
+            g_xfbPending = false;
+            const auto& program = MG_State::pGLContext->GetTransformFeedbackProgram();
+            if (!program) return;
+
+            // Snapshot what the driver is about to capture into. GL forbids rebinding the
+            // capture buffers while the span is open, so this stays valid until End, and
+            // recording it here keeps End independent of the frontend capture state.
+            const SizeT bufferCount = program->GetTransformFeedbackBufferCount();
+            for (SizeT i = 0; i < bufferCount; ++i) {
+                auto& point = MG_State::pGLContext->GetBufferBindingPoint(BufferTarget::TransformFeedback,
+                                                                          static_cast<Uint>(i));
+                const auto& bufferObject = point.GetBoundObject();
+                if (!bufferObject) continue;
+                auto* backendResource = BufferImpl::EnsureBufferResource(bufferObject);
+                if (!backendResource || backendResource->id == 0) continue;
+                const Range1D range = point.GetRange();
+                const SizeT start = std::min(range.start, bufferObject->GetSize());
+                const SizeT end = std::min(range.end, bufferObject->GetSize());
+                if (end <= start) continue;
+                g_xfbTargets.push_back({bufferObject, backendResource->id, start, end});
+            }
+
+            BufferImpl::SyncBufferBindingPoints(BufferTarget::TransformFeedback, GL_TRANSFORM_FEEDBACK_BUFFER);
+            g_GLESFuncs.glBeginTransformFeedback(g_xfbPrimitiveMode);
+            g_xfbStarted = true;
+        }
+
+        void EndTransformFeedback() {
+            g_xfbPending = false;
+            if (!g_xfbStarted) return;
+            g_xfbStarted = false;
+            g_GLESFuncs.glEndTransformFeedback();
+
+            // The GPU wrote the capture buffers behind the frontend's back, so the CPU
+            // shadows that back MapBuffer/GetBufferSubData still hold the pre-draw bytes.
+            // Mirror the captured ranges into them. Buffers whose storage the backend
+            // already owns (coherent persistent map) need nothing: reads resolve against
+            // that storage directly.
+            if (g_GLESFuncs.glMapBufferRange != nullptr && g_GLESFuncs.glUnmapBuffer != nullptr) {
+                for (const auto& target : g_xfbTargets) {
+                    if (!target.buffer || target.buffer->IsBackendPersistentMapped()) continue;
+                    const SizeT size = target.end - target.start;
+                    BufferImpl::BindBufferId(BufferImpl::TempBufferTarget, target.backendId);
+                    void* mapped = g_GLESFuncs.glMapBufferRange(BufferImpl::TempBufferTarget,
+                                                                static_cast<GLintptr>(target.start),
+                                                                static_cast<GLsizeiptr>(size), GL_MAP_READ_BIT);
+                    if (mapped == nullptr) {
+                        MGLOG_E("EndTransformFeedback: failed to map backend buffer %u for capture readback",
+                                target.backendId);
+                        continue;
+                    }
+                    target.buffer->WritebackFromBackend({mapped, size}, target.start);
+                    g_GLESFuncs.glUnmapBuffer(BufferImpl::TempBufferTarget);
+                }
+            }
+            g_xfbTargets.clear();
+        }
+
+        // The ES context went away (or is being torn down): the span, its buffer ids and
+        // the frontend objects it pinned all belonged to it.
+        void OnBackendContextDestroyed() {
+            g_xfbPending = false;
+            g_xfbStarted = false;
+            g_xfbTargets.clear();
+        }
+    } // namespace XfbImpl
+
     namespace VertexArrayImpl {
         void SyncCurrentVAO() {
 #ifdef TRACY_ENABLE
@@ -1081,6 +1190,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
         BindCurrentTextures();
         BindCurrentProgramWithResources();
+
+        // Last: opening the capture span needs the program current and the capture
+        // buffers bound, and ES rejects most binding changes once it is open.
+        XfbImpl::StartPendingTransformFeedback();
     }
 
     // Rebinds every frontend texture unit's textures (and sampler objects) on the
@@ -4737,6 +4850,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
     void DestroyEGLContext() {
         BufferImpl::OnBackendContextDestroyed();
+        XfbImpl::OnBackendContextDestroyed();
         ScratchFBOImpl::OnBackendContextDestroyed();
         FramebufferImpl::InvalidateFramebufferBindingCache();
         PixelStoreImpl::InvalidatePackStateCache();
