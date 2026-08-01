@@ -28,6 +28,7 @@
 		</description>
 		<renderer_list>
 			<r>Magma*</r>
+			<r>Espryt*</r>
 		</renderer_list>
 		<t>KHR-GL30.api.coverage</t>
 		<t>KHR-GL31.api.coverage</t>
