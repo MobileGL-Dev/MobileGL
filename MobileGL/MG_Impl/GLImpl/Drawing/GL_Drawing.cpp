@@ -590,6 +590,12 @@ namespace MobileGL::MG_Impl::GLImpl {
     // vertex records of every odd triangle within each emitted strip.
     static void FixupGsStripCaptureOrder(const SharedPtr<MG_State::GLState::ProgramObject>& program,
                                          Uint64 inputPrimitives) {
+        // Only Vulkan-order captures need this. A backend that runs the capture on its
+        // own GL/ES driver (it owns the span, hence the EndTransformFeedback entry) has
+        // already produced GL's vertex order, and reordering it again would corrupt it.
+        if (MG_Backend::gBackendFunctionsTable.GL.EndTransformFeedback != nullptr) {
+            return;
+        }
         if (program == nullptr || !program->HasGsTriangleStripCaptureFixup() || inputPrimitives == 0) {
             return;
         }

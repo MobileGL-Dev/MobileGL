@@ -942,6 +942,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // when the timer-query group above is disabled.
             funcsTable.GL.BeginOcclusionQuery = BeginOcclusionQuery;
             funcsTable.GL.EndOcclusionQuery = EndOcclusionQuery;
+            // Real driver primitive counters: the frontend's CPU accounting cannot see a
+            // geometry shader's amplification.
+            funcsTable.GL.BeginXfbPrimitivesQuery = BeginXfbPrimitivesQuery;
+            funcsTable.GL.EndXfbPrimitivesQuery = EndXfbPrimitivesQuery;
             funcsTable.GL.IsQueryResultAvailable = IsQueryResultAvailable;
             funcsTable.GL.GetQueryResult64 = GetQueryResult64;
             funcsTable.GL.DeleteBackendQuery = DeleteBackendQuery;

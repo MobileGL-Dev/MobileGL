@@ -135,6 +135,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
     // flow through GetQueryResult64/DeleteBackendQuery like the timer queries above.
     BackendQueryHandle BeginOcclusionQuery();
     void EndOcclusionQuery(BackendQueryHandle query);
+    // GL_TRANSFORM_FEEDBACK_PRIMITIVES_WRITTEN / GL_PRIMITIVES_GENERATED, also core ES
+    // (GL_PRIMITIVES_GENERATED from ES 3.2 on). Null when the target is unavailable, in
+    // which case the frontend falls back to counting primitives from the draw calls.
+    BackendQueryHandle BeginXfbPrimitivesQuery(Bool generated);
+    void EndXfbPrimitivesQuery(BackendQueryHandle query);
     Bool IsQueryResultAvailable(BackendQueryHandle query);
     // Returns true when a final value landed in *outNanoseconds (a zero for
     // null or stale-generation handles IS final: the frontend may cache it
