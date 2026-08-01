@@ -2177,6 +2177,181 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                       sizeof(DrawArraysIndirectCommand), "DrawArraysIndirect");
     }
 
+    static void DrainBlitErrors() {
+        while (g_GLESFuncs.glGetError() != GL_NO_ERROR) {
+        }
+    }
+
+    // Sized internal format of the currently bound READ framebuffer's read colour
+    // attachment, 0 when it cannot be determined.
+    static GLenum QueryReadColorAttachmentInternalFormat() {
+        GLint attachmentType = 0;
+        GLint attachmentName = 0;
+        g_GLESFuncs.glGetFramebufferAttachmentParameteriv(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                                                          GL_FRAMEBUFFER_ATTACHMENT_OBJECT_TYPE, &attachmentType);
+        g_GLESFuncs.glGetFramebufferAttachmentParameteriv(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                                                          GL_FRAMEBUFFER_ATTACHMENT_OBJECT_NAME, &attachmentName);
+        if (attachmentName == 0) {
+            return 0;
+        }
+        GLint internalFormat = 0;
+        if (attachmentType == GL_RENDERBUFFER) {
+            if (!g_GLESFuncs.glGetRenderbufferParameteriv) return 0;
+            GLint previous = 0;
+            g_GLESFuncs.glGetIntegerv(GL_RENDERBUFFER_BINDING, &previous);
+            g_GLESFuncs.glBindRenderbuffer(GL_RENDERBUFFER, static_cast<GLuint>(attachmentName));
+            g_GLESFuncs.glGetRenderbufferParameteriv(GL_RENDERBUFFER, GL_RENDERBUFFER_INTERNAL_FORMAT,
+                                                     &internalFormat);
+            g_GLESFuncs.glBindRenderbuffer(GL_RENDERBUFFER, static_cast<GLuint>(previous));
+        } else if (attachmentType == GL_TEXTURE) {
+            if (!g_GLESFuncs.glGetTexLevelParameteriv) return 0;
+            // The resolve source of interest is always a multisample 2D texture; a
+            // single-sample source would not have taken the fallback in the first place.
+            GLint previous = 0;
+            g_GLESFuncs.glGetIntegerv(GL_TEXTURE_BINDING_2D_MULTISAMPLE, &previous);
+            g_GLESFuncs.glBindTexture(GL_TEXTURE_2D_MULTISAMPLE, static_cast<GLuint>(attachmentName));
+            g_GLESFuncs.glGetTexLevelParameteriv(GL_TEXTURE_2D_MULTISAMPLE, 0, GL_TEXTURE_INTERNAL_FORMAT,
+                                                 &internalFormat);
+            g_GLESFuncs.glBindTexture(GL_TEXTURE_2D_MULTISAMPLE, static_cast<GLuint>(previous));
+        }
+        return static_cast<GLenum>(internalFormat);
+    }
+
+    // ES rejects any blit out of a multisample read framebuffer whose format differs
+    // from the draw framebuffer's. Desktop GL only requires identical formats when BOTH
+    // framebuffers are multisampled, so a multisample resolve is allowed to convert
+    // format on the way out (KHR-GL3x.framebuffer_blit resolves an R8/R16F multisample
+    // texture straight into an RGBA8 target). Emulate it in two steps: resolve into a
+    // scratch buffer of the source's own format, then run the caller's blit from there -
+    // that second one is single-sample on both sides, where ES does allow conversion.
+    static Bool ResolveThenBlit(GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1, GLint dstX0, GLint dstY0,
+                                GLint dstX1, GLint dstY1, GLenum filter) {
+        static Uint s_resolveFramebuffer = 0;
+        static Uint s_resolveRenderbuffer = 0;
+        static GLenum s_resolveFormat = 0;
+        static GLsizei s_resolveWidth = 0;
+        static GLsizei s_resolveHeight = 0;
+        static Uint s_resolveContextGeneration = ~0u;
+
+        if (!g_GLESFuncs.glGenFramebuffers || !g_GLESFuncs.glGenRenderbuffers ||
+            !g_GLESFuncs.glRenderbufferStorage || !g_GLESFuncs.glFramebufferRenderbuffer) {
+            return false;
+        }
+        const GLenum sourceFormat = QueryReadColorAttachmentInternalFormat();
+        if (sourceFormat == 0) {
+            return false;
+        }
+
+        const GLint left = std::min(srcX0, srcX1);
+        const GLint right = std::max(srcX0, srcX1);
+        const GLint bottom = std::min(srcY0, srcY1);
+        const GLint top = std::max(srcY0, srcY1);
+        const GLsizei width = static_cast<GLsizei>(right - left);
+        const GLsizei height = static_cast<GLsizei>(top - bottom);
+        if (width <= 0 || height <= 0) {
+            return false;
+        }
+
+        if (s_resolveContextGeneration != TextureImpl::g_textureContextGeneration) {
+            // The ids belonged to a dead context; the context reclaimed them with it.
+            s_resolveFramebuffer = 0;
+            s_resolveRenderbuffer = 0;
+            s_resolveFormat = 0;
+            s_resolveContextGeneration = TextureImpl::g_textureContextGeneration;
+        }
+        if (s_resolveFramebuffer == 0) {
+            g_GLESFuncs.glGenFramebuffers(1, &s_resolveFramebuffer);
+            g_GLESFuncs.glGenRenderbuffers(1, &s_resolveRenderbuffer);
+            if (s_resolveFramebuffer == 0 || s_resolveRenderbuffer == 0) return false;
+            s_resolveFormat = 0;
+        }
+
+        GLint previousRenderbuffer = 0;
+        g_GLESFuncs.glGetIntegerv(GL_RENDERBUFFER_BINDING, &previousRenderbuffer);
+        if (s_resolveFormat != sourceFormat || s_resolveWidth < width || s_resolveHeight < height) {
+            s_resolveWidth = std::max(s_resolveWidth, width);
+            s_resolveHeight = std::max(s_resolveHeight, height);
+            g_GLESFuncs.glBindRenderbuffer(GL_RENDERBUFFER, s_resolveRenderbuffer);
+            g_GLESFuncs.glRenderbufferStorage(GL_RENDERBUFFER, sourceFormat, s_resolveWidth, s_resolveHeight);
+            s_resolveFormat = sourceFormat;
+        }
+        g_GLESFuncs.glBindRenderbuffer(GL_RENDERBUFFER, static_cast<GLuint>(previousRenderbuffer));
+
+        GLint previousDraw = 0;
+        GLint previousRead = 0;
+        g_GLESFuncs.glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &previousDraw);
+        g_GLESFuncs.glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &previousRead);
+
+        g_GLESFuncs.glBindFramebuffer(GL_DRAW_FRAMEBUFFER, s_resolveFramebuffer);
+        g_GLESFuncs.glFramebufferRenderbuffer(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER,
+                                              s_resolveRenderbuffer);
+        Bool resolved = g_GLESFuncs.glCheckFramebufferStatus(GL_DRAW_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
+        if (resolved) {
+            DrainBlitErrors();
+            g_GLESFuncs.glBlitFramebuffer(left, bottom, right, top, 0, 0, width, height, GL_COLOR_BUFFER_BIT,
+                                          GL_NEAREST);
+            resolved = g_GLESFuncs.glGetError() == GL_NO_ERROR;
+        }
+        if (resolved) {
+            // Mirror the caller's orientation into the scratch-relative source rect so a
+            // flipped blit stays flipped.
+            const GLint blitX0 = srcX0 <= srcX1 ? 0 : width;
+            const GLint blitX1 = srcX0 <= srcX1 ? width : 0;
+            const GLint blitY0 = srcY0 <= srcY1 ? 0 : height;
+            const GLint blitY1 = srcY0 <= srcY1 ? height : 0;
+            g_GLESFuncs.glBindFramebuffer(GL_READ_FRAMEBUFFER, s_resolveFramebuffer);
+            g_GLESFuncs.glBindFramebuffer(GL_DRAW_FRAMEBUFFER, static_cast<GLuint>(previousDraw));
+            DrainBlitErrors();
+            g_GLESFuncs.glBlitFramebuffer(blitX0, blitY0, blitX1, blitY1, dstX0, dstY0, dstX1, dstY1,
+                                          GL_COLOR_BUFFER_BIT, filter);
+            resolved = g_GLESFuncs.glGetError() == GL_NO_ERROR;
+        }
+
+        g_GLESFuncs.glBindFramebuffer(GL_READ_FRAMEBUFFER, static_cast<GLuint>(previousRead));
+        g_GLESFuncs.glBindFramebuffer(GL_DRAW_FRAMEBUFFER, static_cast<GLuint>(previousDraw));
+        FramebufferImpl::InvalidateFramebufferBindingCache();
+        if (!resolved) {
+            MGLOG_E("BlitFramebuffer: multisample resolve fallback failed");
+        }
+        return resolved;
+    }
+
+    static void IssueBlitWithResolveFallback(GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1, GLint dstX0,
+                                             GLint dstY0, GLint dstX1, GLint dstY1, GLbitfield mask, GLenum filter) {
+        DrainBlitErrors();
+        g_GLESFuncs.glBlitFramebuffer(srcX0, srcY0, srcX1, srcY1, dstX0, dstY0, dstX1, dstY1, mask, filter);
+        if (g_GLESFuncs.glGetError() == GL_NO_ERROR || (mask & GL_COLOR_BUFFER_BIT) == 0) {
+            return;
+        }
+        // Only the multisample-resolve format mismatch is worth a second attempt; a
+        // source that is not multisampled would have hit the same restriction on desktop.
+        GLint readSamples = 0;
+        GLint drawSamples = 0;
+        {
+            GLint previousRead = 0;
+            g_GLESFuncs.glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &previousRead);
+            GLint previousDraw = 0;
+            g_GLESFuncs.glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &previousDraw);
+            g_GLESFuncs.glBindFramebuffer(GL_FRAMEBUFFER, static_cast<GLuint>(previousRead));
+            g_GLESFuncs.glGetIntegerv(GL_SAMPLES, &readSamples);
+            g_GLESFuncs.glBindFramebuffer(GL_FRAMEBUFFER, static_cast<GLuint>(previousDraw));
+            g_GLESFuncs.glGetIntegerv(GL_SAMPLES, &drawSamples);
+            g_GLESFuncs.glBindFramebuffer(GL_READ_FRAMEBUFFER, static_cast<GLuint>(previousRead));
+            g_GLESFuncs.glBindFramebuffer(GL_DRAW_FRAMEBUFFER, static_cast<GLuint>(previousDraw));
+            FramebufferImpl::InvalidateFramebufferBindingCache();
+        }
+        if (readSamples <= 0 || drawSamples > 0) {
+            return;
+        }
+        if (ResolveThenBlit(srcX0, srcY0, srcX1, srcY1, dstX0, dstY0, dstX1, dstY1, filter) &&
+            (mask & ~static_cast<GLbitfield>(GL_COLOR_BUFFER_BIT)) != 0) {
+            DrainBlitErrors();
+            g_GLESFuncs.glBlitFramebuffer(srcX0, srcY0, srcX1, srcY1, dstX0, dstY0, dstX1, dstY1,
+                                          mask & ~static_cast<GLbitfield>(GL_COLOR_BUFFER_BIT), filter);
+            DrainBlitErrors();
+        }
+    }
+
     void BlitFramebuffer(GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1, GLint dstX0, GLint dstY0, GLint dstX1,
                          GLint dstY1, GLbitfield mask, GLenum filter) {
 #if MOBILEGL_LOG_ACTIVE_LEVEL <= MOBILEGL_LOG_LEVEL_DEBUG && MOBILEGL_ENABLE_SCOPE_MARKER
@@ -2203,7 +2378,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         });
         MGLOG_D("ES %s(%d, %d, %d, %d, %d, %d, %d, %d, 0x%x, %s)", __func__, srcX0, srcY0, srcX1, srcY1, dstX0, dstY0,
                 dstX1, dstY1, mask, MG_Util::ConvertGLEnumToString(filter).c_str());
-        g_GLESFuncs.glBlitFramebuffer(srcX0, srcY0, srcX1, srcY1, dstX0, dstY0, dstX1, dstY1, mask, filter);
+        IssueBlitWithResolveFallback(srcX0, srcY0, srcX1, srcY1, dstX0, dstY0, dstX1, dstY1, mask, filter);
         DebugImpl::ErrorLopper::Loop([file = __FILE__, line = __LINE__](auto err) {
             MGLOG_D("ES error (%s:%d): %s", file, line, MG_Util::ConvertGLEnumToString(err).c_str());
         });
@@ -2225,7 +2400,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
         MGLOG_D("ES %s(%d, %d, %d, %d, %d, %d, %d, %d, 0x%x, %s)", __func__, srcX0, srcY0, srcX1, srcY1,
                 dstX0, dstY0, dstX1, dstY1, mask, MG_Util::ConvertGLEnumToString(filter).c_str());
-        g_GLESFuncs.glBlitFramebuffer(srcX0, srcY0, srcX1, srcY1, dstX0, dstY0, dstX1, dstY1, mask, filter);
+        IssueBlitWithResolveFallback(srcX0, srcY0, srcX1, srcY1, dstX0, dstY0, dstX1, dstY1, mask, filter);
         // Debug-only diagnostics: which GLES depth texture did this blit write?
 #if MOBILEGL_LOG_ACTIVE_LEVEL <= MOBILEGL_LOG_LEVEL_DEBUG
         if (mask & GL_DEPTH_BUFFER_BIT) {
