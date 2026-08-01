@@ -274,6 +274,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             VkImage image = VK_NULL_HANDLE;
             VmaAllocation allocation = nullptr;
             VkImageView view = VK_NULL_HANDLE;
+            // UNORM reinterpretation of an sRGB image, used as the attachment view while
+            // GL_FRAMEBUFFER_SRGB is disabled (raw writes). Null for non-sRGB formats.
+            VkImageView unormTwinView = VK_NULL_HANDLE;
             VkImageLayout layout = VK_IMAGE_LAYOUT_UNDEFINED;
             VkFormat format = VK_FORMAT_UNDEFINED;
             VkImageAspectFlags aspect = VK_IMAGE_ASPECT_NONE;
@@ -307,6 +310,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             VkImage image = VK_NULL_HANDLE;
             VmaAllocation allocation = nullptr;
             VkImageView view = VK_NULL_HANDLE;
+            VkImageView unormTwinView = VK_NULL_HANDLE;
             Uint64 deferredAtFrame = 0;
         };
 

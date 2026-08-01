@@ -52,6 +52,25 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     }
 } // namespace MobileGL::MG_Backend::DirectVulkan
 
+namespace MobileGL::MG_Backend::DirectVulkan {
+    // GL renders into sRGB color attachments RAW while GL_FRAMEBUFFER_SRGB is disabled
+    // (the core-profile default); Vulkan sRGB attachments always encode on write. The
+    // attachment view (and render pass format) therefore drops to the UNORM twin
+    // whenever the capability is off. Sampled views keep the sRGB format (decode on
+    // sample is unconditional in GL).
+    inline VkFormat ResolveSrgbAttachmentWriteFormat(VkFormat format, bool framebufferSrgbEnabled) {
+        if (framebufferSrgbEnabled) return format;
+        switch (format) {
+        case VK_FORMAT_R8G8B8A8_SRGB:
+            return VK_FORMAT_R8G8B8A8_UNORM;
+        case VK_FORMAT_B8G8R8A8_SRGB:
+            return VK_FORMAT_B8G8R8A8_UNORM;
+        default:
+            return format;
+        }
+    }
+} // namespace MobileGL::MG_Backend::DirectVulkan
+
 // The context line (__VA_ARGS__ = its own format string + args) must be a SEPARATE log
 // call: appending its format to the base format while its arguments precede the base
 // arguments makes every conversion read the wrong slot (a %s pulling an int crashes).

@@ -156,6 +156,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         if (view != VK_NULL_HANDLE) {
             vkDestroyImageView(device, view, nullptr);
         }
+        if (unormTwinView != VK_NULL_HANDLE) {
+            vkDestroyImageView(device, unormTwinView, nullptr);
+        }
         if (image != VK_NULL_HANDLE && allocation != nullptr) {
             vmaDestroyImage(allocator, image, allocation);
         }
@@ -163,6 +166,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         image = VK_NULL_HANDLE;
         allocation = nullptr;
         view = VK_NULL_HANDLE;
+        unormTwinView = VK_NULL_HANDLE;
         layout = VK_IMAGE_LAYOUT_UNDEFINED;
         format = VK_FORMAT_UNDEFINED;
         aspect = VK_IMAGE_ASPECT_NONE;
@@ -221,10 +225,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         if (resource.image == VK_NULL_HANDLE && resource.view == VK_NULL_HANDLE) {
             return;
         }
-        m_deferredRenderbufferReleases.push_back({resource.image, resource.allocation, resource.view, m_frameCounter});
+        m_deferredRenderbufferReleases.push_back(
+            {resource.image, resource.allocation, resource.view, resource.unormTwinView, m_frameCounter});
         resource.image = VK_NULL_HANDLE;
         resource.allocation = nullptr;
         resource.view = VK_NULL_HANDLE;
+        resource.unormTwinView = VK_NULL_HANDLE;
     }
 
     void VkRenderPassManager::CollectDeferredRenderbufferReleases(Bool destroyAll) {
@@ -238,6 +244,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             }
             if (release.view != VK_NULL_HANDLE) {
                 vkDestroyImageView(m_device, release.view, nullptr);
+            }
+            if (release.unormTwinView != VK_NULL_HANDLE) {
+                vkDestroyImageView(m_device, release.unormTwinView, nullptr);
             }
             if (release.image != VK_NULL_HANDLE) {
                 vmaDestroyImage(m_allocator, release.image, release.allocation);
@@ -381,6 +390,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         imageInfo.usage = imageUsage;
         imageInfo.samples = sampleCount;
         imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+        // sRGB renderbuffers attach through their UNORM twin while GL_FRAMEBUFFER_SRGB
+        // is disabled, which needs a format-reinterpreting second view.
+        const Bool hasUnormTwin = ResolveSrgbAttachmentWriteFormat(format, false) != format;
+        if (hasUnormTwin) {
+            imageInfo.flags |= VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT;
+        }
 
         VkImageFormatProperties imageFormatProperties{};
         const VkResult imageFormatResult = vkGetPhysicalDeviceImageFormatProperties(
@@ -415,6 +430,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         viewInfo.subresourceRange.layerCount = 1;
         VK_VERIFY(vkCreateImageView(m_device, &viewInfo, nullptr, &resource.view),
                   "vkCreateImageView(renderbuffer)");
+        if (hasUnormTwin) {
+            viewInfo.format = ResolveSrgbAttachmentWriteFormat(format, false);
+            VK_VERIFY(vkCreateImageView(m_device, &viewInfo, nullptr, &resource.unormTwinView),
+                      "vkCreateImageView(renderbuffer unorm twin)");
+        }
 
         resource.layout = VK_IMAGE_LAYOUT_UNDEFINED;
         resource.format = format;
@@ -518,6 +538,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         if (isDefaultFbo) {
             XXHASH_VERIFY(XXH64_update(m_hashState, &swapchainImageIndex, sizeof(swapchainImageIndex)));
         }
+        // sRGB attachments switch between their sRGB and UNORM-twin views with this
+        // capability (ResolveSrgbAttachmentWriteFormat), changing the render pass formats.
+        const Bool framebufferSrgbEnabled =
+            MG_State::pGLContext->IsCapabilityEnabled(MobileGL::CapabilityInput::FramebufferSrgb);
+        XXHASH_VERIFY(XXH64_update(m_hashState, &framebufferSrgbEnabled, sizeof(framebufferSrgbEnabled)));
         auto& drawBuffers = fbo.GetDrawBuffers();
         XXHASH_VERIFY(XXH64_update(m_hashState, drawBuffers.data(), drawBuffers.size() * sizeof(drawBuffers[0])));
         auto readBuffer = fbo.GetReadBuffer();
@@ -865,8 +890,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                     }
 
                     const VkImageLayout trackedRbLayout = rbResource->layout;
+                    const Bool rbFramebufferSrgb =
+                        MG_State::pGLContext->IsCapabilityEnabled(MobileGL::CapabilityInput::FramebufferSrgb);
+                    const VkFormat rbAttachmentFormat =
+                        ResolveSrgbAttachmentWriteFormat(rbResource->format, rbFramebufferSrgb);
                     rbDesc.flags = 0;
-                    rbDesc.format = rbResource->format;
+                    rbDesc.format = rbAttachmentFormat;
                     rbDesc.samples = rbResource->sampleCount;
                     rbDesc.loadOp = rbHasClear ? VK_ATTACHMENT_LOAD_OP_CLEAR :
                                     (trackedRbLayout == VK_IMAGE_LAYOUT_UNDEFINED ? VK_ATTACHMENT_LOAD_OP_DONT_CARE
@@ -901,7 +930,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                         .finalLayout = rbDesc.finalLayout,
                     });
                     textureResources.emplace_back(nullptr);
-                    attachmentViews.emplace_back(rbResource->view);
+                    attachmentViews.emplace_back(rbAttachmentFormat != rbResource->format ? rbResource->unormTwinView
+                                                                                          : rbResource->view);
                     MOBILEGL_ASSERT(attachmentViews.back() != VK_NULL_HANDLE,
                                     "GetOrCreateRenderPass: renderbuffer view missing at color attachment %d", i);
 
@@ -990,7 +1020,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                         MOBILEGL_ASSERT(textureResource,
                                         "GetOrCreateRenderPass: SyncTextureAndGetDescriptor failed at color attachment %d", i);
                         textureResources.emplace_back(textureResource);
-                        desc.format = textureResource->format;
+                        desc.format = ResolveSrgbAttachmentWriteFormat(
+                            textureResource->format,
+                            MG_State::pGLContext->IsCapabilityEnabled(MobileGL::CapabilityInput::FramebufferSrgb));
                         attachmentSampleCount = textureResource->sampleCount;
                         trackedColorLayout = textureResource->layout;
                         trackedAttachmentLayouts.emplace_back(TrackedAttachmentLayoutInfo {

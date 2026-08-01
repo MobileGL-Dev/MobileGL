@@ -67,12 +67,16 @@ public:
             Uint32 baseArrayLayer = 0;
             Uint32 layerCount = 1;
             VkImageViewType viewType = VK_IMAGE_VIEW_TYPE_2D;
+            // May differ from the image format: sRGB images attach through their UNORM
+            // twin while GL_FRAMEBUFFER_SRGB is disabled.
+            VkFormat viewFormat = VK_FORMAT_UNDEFINED;
 
             Bool operator==(const AttachmentViewKey& other) const {
                 return mipLevel == other.mipLevel &&
                        baseArrayLayer == other.baseArrayLayer &&
                        layerCount == other.layerCount &&
-                       viewType == other.viewType;
+                       viewType == other.viewType &&
+                       viewFormat == other.viewFormat;
             }
         };
 
@@ -82,6 +86,8 @@ public:
                 hash ^= std::hash<Uint32>{}(key.baseArrayLayer) + 0x9e3779b9u + (hash << 6) + (hash >> 2);
                 hash ^= std::hash<Uint32>{}(key.layerCount) + 0x9e3779b9u + (hash << 6) + (hash >> 2);
                 hash ^= std::hash<Uint32>{}(static_cast<Uint32>(key.viewType)) +
+                        0x9e3779b9u + (hash << 6) + (hash >> 2);
+                hash ^= std::hash<Uint32>{}(static_cast<Uint32>(key.viewFormat)) +
                         0x9e3779b9u + (hash << 6) + (hash >> 2);
                 return hash;
             }
