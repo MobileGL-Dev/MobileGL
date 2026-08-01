@@ -2357,9 +2357,29 @@ void main() {
             return true;
         }
 
+        // True floating-point color formats are exempt from GL_FIXED_ONLY read clamping.
+        static Bool IsFloatingPointReadbackFormat(VkFormat format) {
+            switch (format) {
+            case VK_FORMAT_R16_SFLOAT:
+            case VK_FORMAT_R16G16_SFLOAT:
+            case VK_FORMAT_R16G16B16_SFLOAT:
+            case VK_FORMAT_R16G16B16A16_SFLOAT:
+            case VK_FORMAT_R32_SFLOAT:
+            case VK_FORMAT_R32G32_SFLOAT:
+            case VK_FORMAT_R32G32B32_SFLOAT:
+            case VK_FORMAT_R32G32B32A32_SFLOAT:
+            case VK_FORMAT_B10G11R11_UFLOAT_PACK32:
+            case VK_FORMAT_E5B9G9R9_UFLOAT_PACK32:
+                return true;
+            default:
+                return false;
+            }
+        }
+
         static Bool PackReadbackToClientOrPbo(const Uint8* srcPixels, VkFormat srcFormat, GLsizei width,
                                               GLsizei sliceHeight, GLsizei sliceCount, GLenum format, GLenum type,
-                                              void* pixels, Bool applyPackImageParams) {
+                                              void* pixels, Bool applyPackImageParams,
+                                              Bool applyReadColorClamp = false) {
             if (width <= 0 || sliceHeight <= 0 || sliceCount <= 0) {
                 return true;
             }
@@ -2378,6 +2398,21 @@ void main() {
                 MGLOG_E("DirectVulkan readback skipped: unsupported source format=%d",
                         static_cast<Int>(srcFormat));
                 return false;
+            }
+
+            // glReadPixels final conversion: GL_CLAMP_READ_COLOR defaults to GL_FIXED_ONLY,
+            // clamping fixed-point (normalized) buffers to [0,1] - visible for SNORM reads.
+            if (applyReadColorClamp && wideType == GL_FLOAT) {
+                const GLenum clampMode = MG_State::pGLContext->GetClampReadColor();
+                const Bool clamp = clampMode == GL_TRUE ||
+                    (clampMode == GL_FIXED_ONLY && !IsFloatingPointReadbackFormat(srcFormat));
+                if (clamp) {
+                    Float* values = reinterpret_cast<Float*>(wide.data());
+                    const SizeT count = wide.size() / sizeof(Float);
+                    for (SizeT i = 0; i < count; ++i) {
+                        values[i] = std::min(std::max(values[i], 0.0f), 1.0f);
+                    }
+                }
             }
 
             const Bool sourceIsInteger = wideType == GL_INT || wideType == GL_UNSIGNED_INT;
@@ -6937,7 +6972,7 @@ void main() {
                                                            sourceTexelSize,
                                                            remapped.data())) {
                     PackReadbackToClientOrPbo(remapped.data(), srcFormat, width, height, 1, format, type, pixels,
-                                              /*applyPackImageParams=*/false);
+                                              /*applyPackImageParams=*/false, /*applyReadColorClamp=*/true);
                     return;
                 }
             }
@@ -6947,7 +6982,7 @@ void main() {
                     static_cast<Int>(preTransform));
         }
         PackReadbackToClientOrPbo(mapped, srcFormat, width, height, 1, format, type, pixels,
-                                  /*applyPackImageParams=*/false);
+                                  /*applyPackImageParams=*/false, /*applyReadColorClamp=*/true);
     }
 
     void VulkanRenderer::ReadDepthStencilPixels(MG_State::GLState::FramebufferObject& readFbo, GLint x, GLint y,
