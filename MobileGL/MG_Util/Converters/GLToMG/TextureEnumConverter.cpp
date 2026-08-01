@@ -251,6 +251,8 @@ namespace MobileGL {
                 return TextureInternalFormat::Depth24Stencil8;
             case GL_DEPTH32F_STENCIL8:
                 return TextureInternalFormat::Depth32FStencil8;
+            case GL_STENCIL_INDEX8:
+                return TextureInternalFormat::StencilIndex8;
             case GL_DEPTH_COMPONENT:
                 return TextureInternalFormat::DepthComponent;
             case GL_DEPTH_STENCIL:

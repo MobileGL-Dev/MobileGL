@@ -162,6 +162,7 @@ namespace MobileGL {
         DepthComponent32F,
         Depth24Stencil8,
         Depth32FStencil8,
+        StencilIndex8,
 
         DepthComponent,
         DepthStencil,

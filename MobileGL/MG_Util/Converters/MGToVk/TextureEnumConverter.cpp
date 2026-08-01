@@ -226,6 +226,8 @@ namespace MobileGL {
                 return VK_FORMAT_D24_UNORM_S8_UINT;
             case TextureInternalFormat::Depth32FStencil8:
                 return VK_FORMAT_D32_SFLOAT_S8_UINT;
+            case TextureInternalFormat::StencilIndex8:
+                return VK_FORMAT_S8_UINT;
             case TextureInternalFormat::DepthComponent32:
                 return VK_FORMAT_D32_SFLOAT;
             case TextureInternalFormat::DepthStencil:

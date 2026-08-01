@@ -18,6 +18,7 @@ namespace MobileGL {
             case TextureInternalFormat::Red: // UNorm8 shadow layout
             case TextureInternalFormat::R8Snorm:
             case TextureInternalFormat::R8I:
+            case TextureInternalFormat::StencilIndex8:
             case TextureInternalFormat::R8UI:
                 return 1;
 
@@ -506,6 +507,9 @@ namespace MobileGL {
                 break;
             case TextureInternalFormat::Depth32FStencil8:
                 s.Depth = 32;
+                s.Stencil = 8;
+                break;
+            case TextureInternalFormat::StencilIndex8:
                 s.Stencil = 8;
                 break;
             case TextureInternalFormat::Unknown:

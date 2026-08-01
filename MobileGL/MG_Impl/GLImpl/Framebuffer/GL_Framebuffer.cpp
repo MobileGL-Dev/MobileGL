@@ -45,10 +45,32 @@ namespace MobileGL::MG_Impl::GLImpl {
                    depthAttachment.GetTextureLevel() != stencilAttachment.GetTextureLevel();
         }
 
+        // Mirrors the renderer-side gate: distinct depth/stencil renderbuffers (or a
+        // renderbuffer paired with a texture) cannot form one Vulkan depth-stencil
+        // attachment, and GL permits reporting such framebuffers as UNSUPPORTED.
+        Bool HasDistinctCompleteDepthStencilRenderbufferAttachments(
+            const MG_State::GLState::FramebufferObject& framebufferObject) {
+            if (framebufferObject.GetExternalIndex() == 0) {
+                return false;
+            }
+
+            const auto& depthAttachment = framebufferObject.GetAttachment(FramebufferAttachmentType::Depth);
+            const auto& stencilAttachment = framebufferObject.GetAttachment(FramebufferAttachmentType::Stencil);
+            if (!depthAttachment.IsComplete() || !stencilAttachment.IsComplete()) {
+                return false;
+            }
+            if (depthAttachment.IsRenderbuffer() && stencilAttachment.IsRenderbuffer()) {
+                return depthAttachment.GetRenderbuffer().get() != stencilAttachment.GetRenderbuffer().get();
+            }
+            return (depthAttachment.IsRenderbuffer() || stencilAttachment.IsRenderbuffer()) &&
+                   (depthAttachment.IsTexture() || stencilAttachment.IsTexture());
+        }
+
         Bool IsUnsupportedFramebufferForDirectVulkan(
             const MG_State::GLState::FramebufferObject& framebufferObject) {
             // TODO: Keep this in sync with DirectVulkan renderbuffer support as color renderbuffer rendering lands.
-            return HasDistinctCompleteDepthStencilTextureAttachments(framebufferObject);
+            return HasDistinctCompleteDepthStencilTextureAttachments(framebufferObject) ||
+                   HasDistinctCompleteDepthStencilRenderbufferAttachments(framebufferObject);
         }
 
         Bool HasDefinedAttachment(const MG_State::GLState::FramebufferObject& framebufferObject) {

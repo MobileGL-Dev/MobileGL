@@ -28,6 +28,7 @@ namespace MobileGL {
 
         bool IsStencilFormatInternalFormat(TextureInternalFormat internalformat) {
             switch (internalformat) {
+            case TextureInternalFormat::StencilIndex8:
             case TextureInternalFormat::Depth24Stencil8:
             case TextureInternalFormat::Depth32FStencil8:
             case TextureInternalFormat::DepthStencil:
