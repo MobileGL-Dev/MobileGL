@@ -438,6 +438,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
         extern StateBackendObjectRegistry<MG_State::GLState::FramebufferObject, BackendFramebufferObject>
             g_backendFramebufferObjects;
+        // True when the read buffer names a fixed-point (norm/snorm) attachment that the
+        // backend actually stores in a floating-point format. GL clamps a read from a
+        // fixed-point colour buffer to [0,1] (GL_CLAMP_READ_COLOR defaults to
+        // GL_FIXED_ONLY); the substituted float storage would not, so the readback path
+        // has to apply the clamp itself.
+        Bool IsFixedPointFallbackReadAttachment();
+
         extern Array<Uint16, SizeT(FramebufferTarget::FramebufferTargetCount)> g_fboBindVersions;
         // Tracks the bound FBO's object version (bumped on any attachment/drawbuffer change)
         // per target: re-attaching textures or changing draw buffers on an already-bound FBO

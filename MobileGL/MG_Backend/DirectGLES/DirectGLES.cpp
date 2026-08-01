@@ -163,6 +163,23 @@ namespace MobileGL::MG_Backend::DirectGLES {
         case GL_UNSIGNED_INT_SAMPLER_CUBE_MAP_ARRAY:
         case GL_SAMPLER_CUBE_MAP_ARRAY_SHADOW:
             return TextureTarget::TextureCubeMapArray;
+        case GL_SAMPLER_2D_RECT:
+        case GL_INT_SAMPLER_2D_RECT:
+        case GL_UNSIGNED_INT_SAMPLER_2D_RECT:
+        case GL_SAMPLER_2D_RECT_SHADOW:
+            return TextureTarget::TextureRectangle;
+        case GL_SAMPLER_2D_MULTISAMPLE:
+        case GL_INT_SAMPLER_2D_MULTISAMPLE:
+        case GL_UNSIGNED_INT_SAMPLER_2D_MULTISAMPLE:
+            return TextureTarget::Texture2DMultisample;
+        case GL_SAMPLER_2D_MULTISAMPLE_ARRAY:
+        case GL_INT_SAMPLER_2D_MULTISAMPLE_ARRAY:
+        case GL_UNSIGNED_INT_SAMPLER_2D_MULTISAMPLE_ARRAY:
+            return TextureTarget::Texture2DMultisampleArray;
+        case GL_SAMPLER_BUFFER:
+        case GL_INT_SAMPLER_BUFFER:
+        case GL_UNSIGNED_INT_SAMPLER_BUFFER:
+            return TextureTarget::TextureBuffer;
         default:
             return TextureTarget::Unknown;
         }
@@ -1272,11 +1289,32 @@ namespace MobileGL::MG_Backend::DirectGLES {
 #ifdef TRACY_ENABLE
         ZoneScopedNC("BindCurrentTextures", TRACY_ZONECOLOR_BACKEND);
 #endif
+        // Frontend target the current program samples at a given unit; resolves an
+        // aliased native binding when two real textures compete for it (see below).
+        // Only consulted on a conflict, so the ordinary unit costs nothing.
+        const auto& currentProgram = MG_State::pGLContext->GetCurrentProgram();
+        const auto sampledTargetForUnit = [&currentProgram](Int unit) {
+            if (!currentProgram || !currentProgram->GetLinkStatus()) {
+                return TextureTarget::Unknown;
+            }
+            const Uint maxUniformLocation = currentProgram->GetMaxUniformLocation();
+            for (Uint location = 0; location <= maxUniformLocation; ++location) {
+                if (currentProgram->GetUniformSamplerOrImageUnitIndex(location) != unit) continue;
+                const auto target = SamplerUniformTextureTarget(currentProgram->GetUniformType(location));
+                if (target != TextureTarget::Unknown) {
+                    return target;
+                }
+            }
+            return TextureTarget::Unknown;
+        };
+
         // Units past the frontend's high-water mark have provably-empty slots.
         const Int maxTouchedUnit = MG_State::pGLContext->GetMaxTouchedTextureUnit();
         for (Int unit = 0; unit <= maxTouchedUnit; ++unit) {
             auto& textureUnit = MG_State::pGLContext->GetTextureUnitObject(unit);
             Array<Bool, (SizeT)TextureTarget::TextureTargetCount> boundBackendTargets{};
+            Array<TextureTarget, (SizeT)TextureTarget::TextureTargetCount> claimedByFrontendTarget{};
+            claimedByFrontendTarget.fill(TextureTarget::Unknown);
 
             // Two passes over the slots, because desktop 1D/1D-array targets alias ES
             // 2D/2D-array targets: a unit can hold a real texture on one of an aliased
@@ -1307,7 +1345,18 @@ namespace MobileGL::MG_Backend::DirectGLES {
                         continue;
                     }
                     const auto backendTarget = TextureImpl::MapToBackendTextureTarget(target);
-                    if (isDefaultObject && boundBackendTargets[static_cast<SizeT>(backendTarget)]) continue;
+                    const SizeT backendTargetIndex = static_cast<SizeT>(backendTarget);
+                    if (isDefaultObject && boundBackendTargets[backendTargetIndex]) continue;
+
+                    // Two REAL textures can want the same native target as well - an app is
+                    // free to keep a 1D texture and a 2D texture bound to one unit, and GL
+                    // resolves which one is sampled from the shader's sampler type. Ask the
+                    // program; without an answer the first binding placed stands rather than
+                    // being silently overwritten by whichever slot comes last.
+                    if (!isDefaultObject && boundBackendTargets[backendTargetIndex] &&
+                        claimedByFrontendTarget[backendTargetIndex] != target) {
+                        if (sampledTargetForUnit(unit) != target) continue;
+                    }
                     const GLenum targetGL = TextureImpl::ConvertTextureTargetToBackendGLEnum(target);
 
                     // Bind texture object
@@ -1315,7 +1364,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     if (backendTextureIt == TextureImpl::g_backendTextureObjects.end()) continue;
 
                     backendTextureIt->second->Bind(targetGL, unit);
-                    boundBackendTargets[static_cast<SizeT>(backendTarget)] = true;
+                    boundBackendTargets[backendTargetIndex] = true;
+                    claimedByFrontendTarget[backendTargetIndex] = target;
                 }
             }
 
@@ -3887,7 +3937,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
     // (format, type) layout. Returns false when the combination is not convertible (the caller keeps its
     // "not implemented" skip); returns true when the request was handled, even if it degraded to a logged no-op.
     static Bool ReadPixelsViaFormatConversion(GLint x, GLint y, GLsizei width, GLsizei height, GLenum format,
-                                              GLenum type, void* pixels, Bool honorPackImageParams = false) {
+                                              GLenum type, void* pixels, Bool honorPackImageParams = false,
+                                              Bool applyFixedPointReadClamp = true) {
         ReadbackChannelMapping mapping{};
         if (!GetReadbackChannelMapping(format, mapping)) {
             return false;
@@ -4012,6 +4063,45 @@ namespace MobileGL::MG_Backend::DirectGLES {
         }
         if (readChannels < 4) {
             ExpandNarrowWideRead(wide, static_cast<SizeT>(width) * static_cast<SizeT>(height), readChannels, wideType);
+        }
+
+        // GL clamps a read from a fixed-point colour buffer to [0,1] (GL_CLAMP_READ_COLOR
+        // defaults to GL_FIXED_ONLY). Formats the backend substitutes with a floating-point
+        // one keep the out-of-range value the app stored, so apply the clamp here - a
+        // GL_R16_SNORM target holding -0.125 must still read back as 0.
+        // glReadPixels only: GL_CLAMP_READ_COLOR does not apply to glGetTexImage, which
+        // reaches this helper through the same scratch-framebuffer path.
+        if (applyFixedPointReadClamp && FramebufferImpl::IsFixedPointFallbackReadAttachment()) {
+            const SizeT componentSize = GetReadbackComponentSize(wideType);
+            const SizeT valueCount = componentSize != 0 ? wide.size() / componentSize : 0;
+            switch (wideType) {
+            case GL_FLOAT: {
+                auto* values = reinterpret_cast<Float*>(wide.data());
+                for (SizeT i = 0; i < valueCount; ++i) values[i] = std::clamp(values[i], 0.0f, 1.0f);
+                break;
+            }
+            case GL_HALF_FLOAT: {
+                auto* values = reinterpret_cast<Uint16*>(wide.data());
+                for (SizeT i = 0; i < valueCount; ++i) {
+                    values[i] = MG_Util::EncodeFloatToHalfBits(
+                        std::clamp(MG_Util::DecodeHalfBitsToFloat(values[i]), 0.0f, 1.0f));
+                }
+                break;
+            }
+            case GL_SHORT: {
+                // Signed normalized: the negative half is exactly what the clamp removes.
+                auto* values = reinterpret_cast<Int16*>(wide.data());
+                for (SizeT i = 0; i < valueCount; ++i) values[i] = std::max<Int16>(values[i], 0);
+                break;
+            }
+            case GL_BYTE: {
+                auto* values = reinterpret_cast<Int8*>(wide.data());
+                for (SizeT i = 0; i < valueCount; ++i) values[i] = std::max<Int8>(values[i], 0);
+                break;
+            }
+            default:
+                break;
+            }
         }
 
         if (!ReadbackImpl::StoreWideRowsToClient(wide.data(), wideType, width, height, /*sliceCount=*/1, mapping, type, pixels,
@@ -4393,7 +4483,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 return;
             }
             if (tempFBOComplete && ReadPixelsViaFormatConversion(0, 0, size.x(), size.y(), format, type, pixels,
-                                                                 applyPackImageParams)) {
+                                                                 applyPackImageParams,
+                                                                 /*applyFixedPointReadClamp=*/false)) {
                 MGLOG_D("GetTexImage: finished via client-format conversion");
                 return;
             }

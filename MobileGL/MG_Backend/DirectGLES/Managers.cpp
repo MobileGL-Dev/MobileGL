@@ -2679,6 +2679,31 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return false;
         }
 
+        Bool IsFixedPointFallbackReadAttachment() {
+            const auto& readFBO =
+                MG_State::pGLContext->GetFramebufferBindingSlot(FramebufferTarget::Read).GetBoundObject();
+            if (!readFBO) {
+                return false;
+            }
+            const auto readBuffer = readFBO->GetReadBuffer();
+            if (readBuffer < FramebufferAttachmentType::Color0 || readBuffer > FramebufferAttachmentType::Color31) {
+                return false;
+            }
+            // Any signed-normalized attachment, not just the ones currently substituted:
+            // ES has no GL_CLAMP_READ_COLOR at all, so even a natively stored SNORM buffer
+            // hands back the negative half that desktop GL clamps away.
+            const auto& attachmentObject = readFBO->GetAttachment(readBuffer);
+            if (attachmentObject.IsTexture()) {
+                const auto& textureObject = attachmentObject.GetTexture();
+                return textureObject && IsSnormFormat(textureObject->GetFormat());
+            }
+            if (attachmentObject.IsRenderbuffer()) {
+                const auto& renderbufferObject = attachmentObject.GetRenderbuffer();
+                return renderbufferObject && IsSnormFormat(renderbufferObject->GetInternalFormat());
+            }
+            return false;
+        }
+
         void BackendFramebufferObject::SyncReadBufferToBackend(
             const SharedPtr<MG_State::GLState::FramebufferObject>& stateFBOObject) {
             if (!stateFBOObject) {
