@@ -3632,12 +3632,16 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
     static Bool IsLegacyNativeReadPixelsFormat(GLenum format) {
         return format == GL_RGBA || format == GL_RGBA_INTEGER || format == GL_RED || format == GL_RED_INTEGER ||
-               format == GL_DEPTH_COMPONENT || format == GL_STENCIL_INDEX;
+               format == GL_DEPTH_COMPONENT || format == GL_STENCIL_INDEX || format == GL_DEPTH_STENCIL;
     }
 
     static Bool IsLegacyNativeReadPixelsType(GLenum type) {
+        // GL_UNSIGNED_INT_24_8 / GL_FLOAT_32_UNSIGNED_INT_24_8_REV are only ever valid
+        // paired with GL_DEPTH_STENCIL (packed_depth_stencil.verify_read_pixels); the real
+        // driver already implements this readback natively.
         return type == GL_UNSIGNED_BYTE || type == GL_UNSIGNED_INT || type == GL_UNSIGNED_INT_2_10_10_10_REV ||
-               type == GL_INT || type == GL_FLOAT;
+               type == GL_INT || type == GL_FLOAT || type == GL_UNSIGNED_INT_24_8 ||
+               type == GL_FLOAT_32_UNSIGNED_INT_24_8_REV;
     }
 
     void ReadPixels(GLint x, GLint y, GLsizei width, GLsizei height, GLenum format, GLenum type, void* pixels) {
@@ -3782,6 +3786,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
         if (format == GL_RGBA_INTEGER) {
             return type == GL_INT || type == GL_UNSIGNED_INT || type == GL_UNSIGNED_INT_2_10_10_10_REV;
         }
+        if (format == GL_DEPTH_STENCIL) {
+            return type == GL_UNSIGNED_INT_24_8 || type == GL_FLOAT_32_UNSIGNED_INT_24_8_REV;
+        }
         return false;
     }
 
@@ -3850,7 +3857,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
         MGLOG_D("GetTexImage: attaching level %d to the scratch FBO", level);
         const GLenum backendAttachTarget = TextureImpl::ConvertTextureUploadTargetToBackendGLEnum(
             MG_Util::ConvertGLEnumToTextureUploadTarget(target));
-        if (backendAttachTarget == GL_TEXTURE_3D || backendAttachTarget == GL_TEXTURE_2D_ARRAY) {
+        // GL_DEPTH_STENCIL can't be attached as a color attachment (glCheckFramebufferStatus
+        // would report it incomplete); it has its own combined depth+stencil attachment point.
+        // glReadBuffer only selects among color attachments, so it does not apply here.
+        if (format == GL_DEPTH_STENCIL) {
+            ScratchFBOImpl::EnsureDepthAttachment2D(
+                tempFB, GL_READ_FRAMEBUFFER, backendTexId,
+                backendAttachTarget == GL_UNKNOWN_MGL ? target : backendAttachTarget, level, /*withStencil=*/true);
+        } else if (backendAttachTarget == GL_TEXTURE_3D || backendAttachTarget == GL_TEXTURE_2D_ARRAY) {
             // ES cannot attach 3D/array textures through glFramebufferTexture2D; read layer 0. Reads
             // of deeper slices are served from the CPU shadow instead (see the shadow-first branch).
             ScratchFBOImpl::EnsureColorAttachmentLayer(tempFB, GL_READ_FRAMEBUFFER, backendTexId, level, 0);
@@ -3859,8 +3873,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 tempFB, GL_READ_FRAMEBUFFER, backendTexId,
                 backendAttachTarget == GL_UNKNOWN_MGL ? target : backendAttachTarget, level);
         }
-        MGLOG_D("GetTexImage: glReadBuffer(GL_COLOR_ATTACHMENT0)");
-        ScratchFBOImpl::EnsureReadBuffer(tempFB, GL_COLOR_ATTACHMENT0);
+        if (format != GL_DEPTH_STENCIL) {
+            MGLOG_D("GetTexImage: glReadBuffer(GL_COLOR_ATTACHMENT0)");
+            ScratchFBOImpl::EnsureReadBuffer(tempFB, GL_COLOR_ATTACHMENT0);
+        }
 
         GLenum fbStatus = g_GLESFuncs.glCheckFramebufferStatus(GL_READ_FRAMEBUFFER);
         MGLOG_D("GetTexImage: GL_READ_FRAMEBUFFER status = %s", MG_Util::ConvertGLEnumToString(fbStatus).c_str());
