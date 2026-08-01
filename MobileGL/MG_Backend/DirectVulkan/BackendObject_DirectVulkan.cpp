@@ -529,7 +529,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                           E_GL_ARB_texture_multisample, E_GL_ARB_clear_texture, E_GL_ARB_direct_state_access,
                                           E_GL_ARB_shader_draw_parameters, E_GL_ARB_gpu_shader_int64, E_GL_KHR_debug,
                                           E_GL_ARB_gpu_shader5, E_GL_ARB_multi_bind, E_GL_ARB_shading_language_420pack,
-                                          E_GL_ARB_vertex_attrib_binding, E_GL_ARB_shader_image_size};
+                                          E_GL_ARB_vertex_attrib_binding, E_GL_ARB_shader_image_size,
+                                          E_GL_ARB_explicit_attrib_location};
         if (shaderSubgroupSupported && !MG_Config::Features.DisableSubgroup) {
             extensions.push_back(E_GL_KHR_shader_subgroup);
         }
