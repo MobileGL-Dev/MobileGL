@@ -130,6 +130,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
     BackendQueryHandle BeginTimeElapsedQuery();
     void EndTimeElapsedQuery(BackendQueryHandle query);
     BackendQueryHandle QueryCounterTimestamp();
+    // GL_ANY_SAMPLES_PASSED(_CONSERVATIVE) occlusion queries: core ES3, independent of
+    // GL_EXT_disjoint_timer_query and of MOBILEGL_DISABLE_TIMERQUERY. Results/deletion
+    // flow through GetQueryResult64/DeleteBackendQuery like the timer queries above.
+    BackendQueryHandle BeginOcclusionQuery();
+    void EndOcclusionQuery(BackendQueryHandle query);
     Bool IsQueryResultAvailable(BackendQueryHandle query);
     // Returns true when a final value landed in *outNanoseconds (a zero for
     // null or stale-generation handles IS final: the frontend may cache it

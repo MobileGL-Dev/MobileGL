@@ -4360,6 +4360,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
         struct GLESQueryObject {
             GLuint queryId = 0;
             Uint contextGeneration = 0;
+            // GL_ANY_SAMPLES_PASSED result is 0/1 and only ever reachable through the
+            // core (non-extension) glGetQueryObjectuiv getter - GL_EXT_disjoint_timer_query's
+            // 64-bit glGetQueryObjectui64vEXT is timer-specific and may be entirely absent
+            // on drivers that otherwise fully support core ES3 occlusion queries.
+            Bool isOcclusion = false;
         };
     }
 
@@ -4552,6 +4557,38 @@ namespace MobileGL::MG_Backend::DirectGLES {
         return new GLESQueryObject{queryId, g_syncContextGeneration};
     }
 
+    // GL_SAMPLES_PASSED/GL_ANY_SAMPLES_PASSED(_CONSERVATIVE) occlusion queries. Unlike the
+    // timer queries above, these are core ES 3.0 (no GL_EXT_disjoint_timer_query needed).
+    Bool AreOcclusionQueriesSupported() {
+        return g_GLESFuncs.glGenQueries && g_GLESFuncs.glDeleteQueries && g_GLESFuncs.glBeginQuery &&
+               g_GLESFuncs.glEndQuery && g_GLESFuncs.glGetQueryObjectuiv;
+    }
+
+    BackendQueryHandle BeginOcclusionQuery() {
+        if (!IsBackendContextCurrentOnThisThread() || !AreOcclusionQueriesSupported()) {
+            return nullptr;
+        }
+        GLuint queryId = 0;
+        g_GLESFuncs.glGenQueries(1, &queryId);
+        if (queryId == 0) {
+            return nullptr;
+        }
+        // ES only implements the boolean ANY_SAMPLES_PASSED variant, not an exact
+        // GL_SAMPLES_PASSED count; the frontend already coerces ANY_SAMPLES_PASSED*
+        // targets to boolean, and desktop GL_SAMPLES_PASSED reads a 0/1 approximation.
+        g_GLESFuncs.glBeginQuery(GL_ANY_SAMPLES_PASSED, queryId);
+        return new GLESQueryObject{queryId, g_syncContextGeneration, /*isOcclusion=*/true};
+    }
+
+    void EndOcclusionQuery(BackendQueryHandle handle) {
+        const auto* query = static_cast<GLESQueryObject*>(handle);
+        if (query == nullptr || query->contextGeneration != g_syncContextGeneration ||
+            !IsBackendContextCurrentOnThisThread() || !g_GLESFuncs.glEndQuery) {
+            return;
+        }
+        g_GLESFuncs.glEndQuery(GL_ANY_SAMPLES_PASSED);
+    }
+
     Bool IsQueryResultAvailable(BackendQueryHandle handle) {
         const auto* query = static_cast<GLESQueryObject*>(handle);
         // Null/stale handles report available so the frontend proceeds to
@@ -4578,7 +4615,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // report it as produced and let the frontend cache it and release
         // the handle.
         if (query == nullptr || query->contextGeneration != g_syncContextGeneration ||
-            !g_GLESFuncs.glGetQueryObjectuiv || !g_GLESFuncs.glGetQueryObjectui64vEXT) {
+            !g_GLESFuncs.glGetQueryObjectuiv ||
+            (!query->isOcclusion && !g_GLESFuncs.glGetQueryObjectui64vEXT)) {
             return true;
         }
         // A thread that does not own the ES context cannot issue GL calls,
@@ -4616,6 +4654,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // context switch) the result may be garbage, which is tolerable for
         // an F3 GPU% readout, and consuming the latched flag here could hide
         // the event from another observer.
+        if (query->isOcclusion) {
+            GLuint result32 = 0;
+            g_GLESFuncs.glGetQueryObjectuiv(query->queryId, GL_QUERY_RESULT, &result32);
+            *outNanoseconds = static_cast<Uint64>(result32);
+            return true;
+        }
         GLuint64 result = 0;
         g_GLESFuncs.glGetQueryObjectui64vEXT(query->queryId, GL_QUERY_RESULT, &result);
         *outNanoseconds = static_cast<Uint64>(result);

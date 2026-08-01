@@ -935,11 +935,16 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 funcsTable.GL.BeginTimeElapsedQuery = BeginTimeElapsedQuery;
                 funcsTable.GL.EndTimeElapsedQuery = EndTimeElapsedQuery;
                 funcsTable.GL.QueryCounterTimestamp = QueryCounterTimestamp;
-                funcsTable.GL.IsQueryResultAvailable = IsQueryResultAvailable;
-                funcsTable.GL.GetQueryResult64 = GetQueryResult64;
-                funcsTable.GL.DeleteBackendQuery = DeleteBackendQuery;
                 funcsTable.GL.GetGpuTimestampNs = GetGpuTimestampNs;
             }
+            // Occlusion queries are core ES3 (independent of MOBILEGL_DISABLE_TIMERQUERY)
+            // and share the handle-based result/delete entries, which must exist even
+            // when the timer-query group above is disabled.
+            funcsTable.GL.BeginOcclusionQuery = BeginOcclusionQuery;
+            funcsTable.GL.EndOcclusionQuery = EndOcclusionQuery;
+            funcsTable.GL.IsQueryResultAvailable = IsQueryResultAvailable;
+            funcsTable.GL.GetQueryResult64 = GetQueryResult64;
+            funcsTable.GL.DeleteBackendQuery = DeleteBackendQuery;
             funcsTableInitialized = true;
         }
         return funcsTable;
