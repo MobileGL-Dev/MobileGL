@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<waiver_list>
+
+	<!--
+	Waivers for known false failures caused by this local test harness's
+	fbo-surface-type mode (deqp-surface-type=fbo), not by MobileGL itself.
+	-->
+
+	<waiver vendor="MobileGL-Dev*" url="local-only: fbo-surface-type wrapper-FBO artifact, not a MobileGL conformance bug">
+		<description>
+			dEQP's fbo surface-type mode wraps rendering in its own
+			application level framebuffer object (a real, non-zero-named FBO,
+			not framebuffer 0). ApiCoverageTestCase's ReadBuffer coverage
+			sub-test captures GL_READ_BUFFER while that wrapper FBO is bound
+			(a valid GL_COLOR_ATTACHMENTn value there), then later deletes an
+			unrelated FBO of its own; per the GL spec, deleting a bound FBO
+			implicitly rebinds framebuffer target 0, the TRUE default
+			framebuffer this time, not the wrapper. Restoring the captured
+			GL_COLOR_ATTACHMENTn value against the true default framebuffer
+			correctly raises GL_INVALID_ENUM per spec (only FRONT/BACK style
+			tokens are valid there), so the test fails with a fully
+			spec conformant driver. This can only happen when the harness's
+			"default framebuffer" is a real dEQP created FBO instead of a
+			genuine window/pbuffer backed framebuffer 0, which is unique to
+			this local fbo surface-type setup. Confirmed by tracing
+			framebuffer bindings/external indices across the test's
+			execution (2026-08-01).
+		</description>
+		<renderer_list>
+			<r>Magma*</r>
+		</renderer_list>
+		<t>KHR-GL30.api.coverage</t>
+		<t>KHR-GL31.api.coverage</t>
+		<t>KHR-GL32.api.coverage</t>
+		<t>KHR-GL33.api.coverage</t>
+	</waiver>
+
+</waiver_list>

@@ -65,6 +65,8 @@ def main():
                     help="seconds before killing one glcts invocation (a wedged case never returns)")
     ap.add_argument("--skip-file", default=None,
                     help="file of case names to exclude, e.g. cases known to wedge the host")
+    ap.add_argument("--waiver-file", default=None,
+                    help="--deqp-waiver-file value, e.g. tools/cts/waivers/mobilegl-fbo-harness.xml")
     ap.add_argument("--env", action="append", default=[], metavar="K=V",
                     help="extra environment variable for glcts (repeatable)")
     args = ap.parse_args()
@@ -135,6 +137,8 @@ def main():
             "--deqp-log-shader-sources=disable",
             f"--deqp-log-filename={qpa}",
         ]
+        if args.waiver_file:
+            cmd.append(f"--deqp-waiver-file={os.path.abspath(args.waiver_file)}")
         timed_out = False
         try:
             # RLIMIT_CORE=0: MobileGL asserts abort with a core dump, and writing
