@@ -46,6 +46,8 @@ namespace MobileGL::MG_Impl::GLImpl {
         // Ids of the queries active on the transform feedback targets (0 = none).
         GLuint g_activePrimitivesWrittenQueryId = 0;
         GLuint g_activePrimitivesGeneratedQueryId = 0;
+        // Id of the query active on GL_SAMPLES_PASSED (0 = none).
+        GLuint g_activeSamplesPassedQueryId = 0;
 
         Bool TimerQueryDisabled() {
             return MG_Config::Features.DisableTimerQuery;
@@ -131,6 +133,11 @@ namespace MobileGL::MG_Impl::GLImpl {
                         outValue = 0;
                         return true;
                     }
+                    // ANY_SAMPLES_PASSED* report a boolean.
+                    if (queryObject->target == GL_ANY_SAMPLES_PASSED ||
+                        queryObject->target == GL_ANY_SAMPLES_PASSED_CONSERVATIVE) {
+                        result = result != 0 ? 1 : 0;
+                    }
                     // Final value produced (or no GetQueryResult64 hook: the
                     // query degrades to a zero result); the backend handle is
                     // consumed and the value cached for later reads.
@@ -185,7 +192,24 @@ namespace MobileGL::MG_Impl::GLImpl {
             }
             QueryObject* queryObject = it->second;
             if (queryObject->active) {
-                EndTimeElapsedQueryLocked(queryObject); // implicitly end before deletion
+                // Implicitly end before deletion, releasing the matching active slot.
+                if (queryObject->target == GL_SAMPLES_PASSED || queryObject->target == GL_ANY_SAMPLES_PASSED ||
+                    queryObject->target == GL_ANY_SAMPLES_PASSED_CONSERVATIVE) {
+                    if (const auto endOcclusionQuery = MG_Backend::gBackendFunctionsTable.GL.EndOcclusionQuery;
+                        endOcclusionQuery && queryObject->backendHandle) {
+                        endOcclusionQuery(queryObject->backendHandle);
+                    }
+                    queryObject->active = false;
+                    g_activeSamplesPassedQueryId = 0;
+                } else if (queryObject->target == GL_TRANSFORM_FEEDBACK_PRIMITIVES_WRITTEN ||
+                           queryObject->target == GL_PRIMITIVES_GENERATED) {
+                    queryObject->active = false;
+                    (queryObject->target == GL_TRANSFORM_FEEDBACK_PRIMITIVES_WRITTEN
+                         ? g_activePrimitivesWrittenQueryId
+                         : g_activePrimitivesGeneratedQueryId) = 0;
+                } else {
+                    EndTimeElapsedQueryLocked(queryObject);
+                }
             }
             if (queryObject->backendHandle) {
                 if (const auto deleteBackendQuery = MG_Backend::gBackendFunctionsTable.GL.DeleteBackendQuery) {
@@ -211,10 +235,13 @@ namespace MobileGL::MG_Impl::GLImpl {
     void BeginQuery(GLenum target, GLuint id) {
         const Bool isTransformFeedbackQuery =
             target == GL_TRANSFORM_FEEDBACK_PRIMITIVES_WRITTEN || target == GL_PRIMITIVES_GENERATED;
-        if (target != GL_TIME_ELAPSED && !isTransformFeedbackQuery) {
-            // GL_TIME_ELAPSED timer queries and the transform feedback primitive
-            // queries are implemented (occlusion queries remain stubs);
-            // GL_TIMESTAMP is not a valid BeginQuery target either.
+        const Bool isOcclusionQuery =
+            (target == GL_SAMPLES_PASSED || target == GL_ANY_SAMPLES_PASSED ||
+             target == GL_ANY_SAMPLES_PASSED_CONSERVATIVE) &&
+            MG_Backend::gBackendFunctionsTable.GL.BeginOcclusionQuery != nullptr;
+        if (target != GL_TIME_ELAPSED && !isTransformFeedbackQuery && !isOcclusionQuery) {
+            // GL_TIMESTAMP is not a valid BeginQuery target; the occlusion targets
+            // need backend support.
             RecordQueryError(ErrorCode::InvalidEnum, __FUNCTION__, "Query target is not supported.");
             return;
         }
@@ -231,7 +258,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         GLuint& activeQueryId = isTransformFeedbackQuery
             ? (target == GL_TRANSFORM_FEEDBACK_PRIMITIVES_WRITTEN ? g_activePrimitivesWrittenQueryId
                                                                   : g_activePrimitivesGeneratedQueryId)
-            : g_activeTimeElapsedQueryId;
+            : (isOcclusionQuery ? g_activeSamplesPassedQueryId : g_activeTimeElapsedQueryId);
         if (activeQueryId != 0) {
             RecordQueryError(ErrorCode::InvalidOperation, __FUNCTION__,
                              "A query is already active on this target.");
@@ -255,6 +282,8 @@ namespace MobileGL::MG_Impl::GLImpl {
             // result is the delta between Begin and End. Without geometry-stage
             // amplification the assembled count IS the written/generated count.
             queryObject->counterSnapshot = MG_State::pGLContext->GetTransformFeedbackPrimitiveCounter();
+        } else if (isOcclusionQuery) {
+            queryObject->backendHandle = MG_Backend::gBackendFunctionsTable.GL.BeginOcclusionQuery();
         } else {
             const auto beginTimeElapsedQuery = MG_Backend::gBackendFunctionsTable.GL.BeginTimeElapsedQuery;
             queryObject->backendHandle =
@@ -266,7 +295,11 @@ namespace MobileGL::MG_Impl::GLImpl {
     void EndQuery(GLenum target) {
         const Bool isTransformFeedbackQuery =
             target == GL_TRANSFORM_FEEDBACK_PRIMITIVES_WRITTEN || target == GL_PRIMITIVES_GENERATED;
-        if (target != GL_TIME_ELAPSED && !isTransformFeedbackQuery) {
+        const Bool isOcclusionQuery =
+            (target == GL_SAMPLES_PASSED || target == GL_ANY_SAMPLES_PASSED ||
+             target == GL_ANY_SAMPLES_PASSED_CONSERVATIVE) &&
+            MG_Backend::gBackendFunctionsTable.GL.BeginOcclusionQuery != nullptr;
+        if (target != GL_TIME_ELAPSED && !isTransformFeedbackQuery && !isOcclusionQuery) {
             RecordQueryError(ErrorCode::InvalidEnum, __FUNCTION__, "Query target is not supported.");
             return;
         }
@@ -274,7 +307,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         GLuint& activeQueryId = isTransformFeedbackQuery
             ? (target == GL_TRANSFORM_FEEDBACK_PRIMITIVES_WRITTEN ? g_activePrimitivesWrittenQueryId
                                                                   : g_activePrimitivesGeneratedQueryId)
-            : g_activeTimeElapsedQueryId;
+            : (isOcclusionQuery ? g_activeSamplesPassedQueryId : g_activeTimeElapsedQueryId);
         if (activeQueryId == 0) {
             RecordQueryError(ErrorCode::InvalidOperation, __FUNCTION__, "No query is active on this target.");
             return;
@@ -288,6 +321,16 @@ namespace MobileGL::MG_Impl::GLImpl {
             queryObject->cachedResult =
                 MG_State::pGLContext->GetTransformFeedbackPrimitiveCounter() - queryObject->counterSnapshot;
             queryObject->resultCached = true;
+            queryObject->active = false;
+            queryObject->ended = true;
+            activeQueryId = 0;
+            return;
+        }
+        if (isOcclusionQuery) {
+            if (const auto endOcclusionQuery = MG_Backend::gBackendFunctionsTable.GL.EndOcclusionQuery;
+                endOcclusionQuery && queryObject->backendHandle) {
+                endOcclusionQuery(queryObject->backendHandle);
+            }
             queryObject->active = false;
             queryObject->ended = true;
             activeQueryId = 0;
@@ -336,9 +379,25 @@ namespace MobileGL::MG_Impl::GLImpl {
         switch (pname) {
         case GL_CURRENT_QUERY: {
             const std::lock_guard<std::mutex> lock(g_queryObjectsMutex);
-            // Only GL_TIME_ELAPSED queries can be active; GL_TIMESTAMP queries
-            // never are, and other targets remain unimplemented.
-            *params = target == GL_TIME_ELAPSED ? static_cast<GLint>(g_activeTimeElapsedQueryId) : 0;
+            switch (target) {
+            case GL_TIME_ELAPSED:
+                *params = static_cast<GLint>(g_activeTimeElapsedQueryId);
+                break;
+            case GL_SAMPLES_PASSED:
+            case GL_ANY_SAMPLES_PASSED:
+            case GL_ANY_SAMPLES_PASSED_CONSERVATIVE:
+                *params = static_cast<GLint>(g_activeSamplesPassedQueryId);
+                break;
+            case GL_TRANSFORM_FEEDBACK_PRIMITIVES_WRITTEN:
+                *params = static_cast<GLint>(g_activePrimitivesWrittenQueryId);
+                break;
+            case GL_PRIMITIVES_GENERATED:
+                *params = static_cast<GLint>(g_activePrimitivesGeneratedQueryId);
+                break;
+            default:
+                *params = 0;
+                break;
+            }
             return;
         }
         case GL_QUERY_COUNTER_BITS: {
@@ -346,7 +405,13 @@ namespace MobileGL::MG_Impl::GLImpl {
             // time: IsTimerQuerySupported is the dynamic truth (extension /
             // entry points / timestamp valid bits at call time, not at table
             // init), and the MOBILEGL_DISABLE_TIMERQUERY kill switch always
-            // wins. Non-timer targets remain unimplemented and report 0.
+            // wins.
+            if (target == GL_SAMPLES_PASSED || target == GL_ANY_SAMPLES_PASSED ||
+                target == GL_ANY_SAMPLES_PASSED_CONSERVATIVE) {
+                const Bool occlusionSupported = MG_Backend::gBackendFunctionsTable.GL.BeginOcclusionQuery != nullptr;
+                *params = occlusionSupported ? (target == GL_SAMPLES_PASSED ? 32 : 1) : 0;
+                return;
+            }
             const Bool timerTarget = target == GL_TIME_ELAPSED || target == GL_TIMESTAMP;
             const auto isTimerQuerySupported = MG_Backend::gBackendFunctionsTable.GL.IsTimerQuerySupported;
             const Bool supported =

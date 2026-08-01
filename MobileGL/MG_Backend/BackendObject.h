@@ -220,6 +220,11 @@ namespace MobileGL {
             // and leave the query readable later.
             Bool (*GetQueryResult64)(BackendQueryHandle query, Bool wait, Uint64* outNanoseconds);
             void (*DeleteBackendQuery)(BackendQueryHandle query);
+            // GL_SAMPLES_PASSED occlusion queries (optional; null = unsupported,
+            // the frontend then rejects the target). Results/deletion flow through
+            // GetQueryResult64 / DeleteBackendQuery like timer queries.
+            BackendQueryHandle (*BeginOcclusionQuery)();
+            void (*EndOcclusionQuery)(BackendQueryHandle query);
             Int64 (*GetGpuTimestampNs)(); // glGetInteger64v(GL_TIMESTAMP); 0 if unsupported
         };
         struct GlobalBackendFunctionsTable {

@@ -1564,8 +1564,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // records are shared (SharedPtr) with the owning pool's pending list,
         // so deleting the query while results are still in flight is safe.
         struct VulkanTimerQuery {
+            enum class Kind : Uint8 { Timer, Occlusion };
+            Kind kind = Kind::Timer;
             SharedPtr<VkTimerQueryManager::TimestampRecord> begin;
             SharedPtr<VkTimerQueryManager::TimestampRecord> end;
+            // Kind::Occlusion - pool slots recorded between Begin/End; summed at result time.
+            Vector<Uint32> occlusionSlots;
             // Renderer generation the records were written under (see
             // g_rendererGeneration). A stale generation resolves as available
             // with a final zero result: the records' pool indices and frame
@@ -1655,6 +1659,15 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             // ever be produced, so resolve with a final 0.
             return true;
         }
+        if (query->kind == VulkanTimerQuery::Kind::Occlusion) {
+            Uint64 samples = 0;
+            if (!pVulkanRenderer->ResolveOcclusionQueryResult(query->occlusionSlots, samples)) {
+                return false;
+            }
+            query->occlusionSlots.clear(); // slots are recycled by the resolve
+            *outNanoseconds = samples;
+            return true;
+        }
         // With wait, mirrors ClientWaitSync: a query ended this frame cannot
         // complete until Present submits the commands, so the wait refuses to
         // block on the current unsubmitted serial. Returning false keeps the
@@ -1685,6 +1698,26 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
     void DeleteBackendQuery(BackendQueryHandle handle) {
         delete static_cast<VulkanTimerQuery*>(handle);
+    }
+
+    BackendQueryHandle BeginOcclusionQuery() {
+        MOBILEGL_ASSERT(pVulkanRenderer, "DirectVulkan::BeginOcclusionQuery called with null VulkanRenderer");
+        if (!pVulkanRenderer->StartOcclusionQueryCapture()) {
+            return nullptr;
+        }
+        auto* query = new VulkanTimerQuery{};
+        query->kind = VulkanTimerQuery::Kind::Occlusion;
+        query->rendererGeneration = GetRendererGeneration();
+        return query;
+    }
+
+    void EndOcclusionQuery(BackendQueryHandle handle) {
+        auto* query = static_cast<VulkanTimerQuery*>(handle);
+        MOBILEGL_ASSERT(pVulkanRenderer, "DirectVulkan::EndOcclusionQuery called with null VulkanRenderer");
+        if (query == nullptr || query->rendererGeneration != GetRendererGeneration()) {
+            return;
+        }
+        pVulkanRenderer->StopOcclusionQueryCapture(query->occlusionSlots);
     }
 
     Int64 GetGpuTimestampNs() {

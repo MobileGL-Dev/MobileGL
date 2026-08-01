@@ -635,6 +635,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 funcsTable.GL.DeleteBackendQuery = DeleteBackendQuery;
                 funcsTable.GL.GetGpuTimestampNs = GetGpuTimestampNs;
             }
+            // Occlusion queries share the handle-based result/delete entries, which must
+            // exist even when timer queries are disabled.
+            funcsTable.GL.BeginOcclusionQuery = BeginOcclusionQuery;
+            funcsTable.GL.EndOcclusionQuery = EndOcclusionQuery;
+            funcsTable.GL.IsQueryResultAvailable = IsQueryResultAvailable;
+            funcsTable.GL.GetQueryResult64 = GetQueryResult64;
+            funcsTable.GL.DeleteBackendQuery = DeleteBackendQuery;
             funcsTableInitialized = true;
         }
         return funcsTable;

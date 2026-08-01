@@ -296,6 +296,15 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                       const VkTimerQueryManager::TimestampRecord& end) const;
         Uint64 GetTimerQueryTimestampNs(const VkTimerQueryManager::TimestampRecord& record) const;
 
+        // GL_SAMPLES_PASSED occlusion queries: every app draw between Start and Stop is
+        // wrapped in a Vulkan occlusion query slot; the result is the slot sum. Requires
+        // hostQueryReset for slot recycling - Start fails (frontend keeps the query
+        // unsupported) when the device lacks it.
+        Bool StartOcclusionQueryCapture();
+        void StopOcclusionQueryCapture(Vector<Uint32>& outSlots);
+        // Flushes pending commands, waits, sums the slots, and recycles them.
+        Bool ResolveOcclusionQueryResult(const Vector<Uint32>& slots, Uint64& outSamples);
+
         void RequestSwapchainResize(Uint32 width, Uint32 height);
         // Re-query the surface and report whether the live swapchain no longer matches it
         // (size or orientation). This - not a VK_SUBOPTIMAL_KHR result - is what decides a
@@ -482,6 +491,18 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // when GL transform feedback is active; binds capture buffers on demand.
         Bool BeginXfbCaptureForDraw(FrameContext::FrameData& frame);
         void EndXfbCaptureForDraw(FrameContext::FrameData& frame, Bool began);
+        // Wrap one app draw in an occlusion-query slot while a GL_SAMPLES_PASSED
+        // query is active. Returns whether a slot was begun (End must mirror it).
+        Bool BeginOcclusionForDraw(VkCommandBuffer commandBuffer);
+        void EndOcclusionForDraw(VkCommandBuffer commandBuffer, Bool began);
+        Bool m_occlusionQueryPreciseEnabled = false;
+        Bool m_hostQueryResetEnabled = false;
+        PFN_vkResetQueryPool s_vkResetQueryPool = nullptr;
+        VkQueryPool m_occlusionQueryPool = VK_NULL_HANDLE;
+        static constexpr Uint32 kOcclusionQuerySlots = 8192;
+        Uint32 m_occlusionSlotCursor = 0;
+        Bool m_occlusionCaptureActive = false;
+        Vector<Uint32> m_occlusionActiveSlots;
 
         VkCommandPool m_commandPool = VK_NULL_HANDLE;
 

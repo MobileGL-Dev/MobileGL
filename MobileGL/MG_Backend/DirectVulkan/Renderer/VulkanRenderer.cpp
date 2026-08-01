@@ -2782,6 +2782,10 @@ void main() {
         }
         m_vertexInputStateFactory.reset();
         m_xfbCounterBuffer.Destroy();
+        if (m_occlusionQueryPool != VK_NULL_HANDLE) {
+            vkDestroyQueryPool(m_device, m_occlusionQueryPool, nullptr);
+            m_occlusionQueryPool = VK_NULL_HANDLE;
+        }
         m_bufferManager.Shutdown();
 
         // Device is idle (vkDeviceWaitIdle above); query pools can be destroyed.
@@ -4059,6 +4063,23 @@ void main() {
         auto colorLogicOpEnabled =
             MG_State::pGLContext->IsCapabilityEnabled(CapabilityInput::ColorLogicOp) && m_logicOpFeatureEnabled;
         auto stencilTestEnabled = MG_State::pGLContext->IsCapabilityEnabled(CapabilityInput::StencilTest);
+        // A framebuffer without a depth (stencil) attachment behaves as if the depth
+        // (stencil) test always passes and nothing is written - even when the bound
+        // image is a packed depth-stencil texture attached through only one half.
+        {
+            const auto& gatingFbo =
+                MG_State::pGLContext->GetFramebufferBindingSlot(FramebufferTarget::Draw).GetBoundObject();
+            if (gatingFbo != nullptr && !gatingFbo->IsDefaultFramebuffer()) {
+                const auto& depthAtt = gatingFbo->GetAttachment(MobileGL::FramebufferAttachmentType::Depth);
+                const auto& stencilAtt = gatingFbo->GetAttachment(MobileGL::FramebufferAttachmentType::Stencil);
+                if (!depthAtt.IsValid() || depthAtt.IsEmpty()) {
+                    depthTestEnabled = false;
+                }
+                if (!stencilAtt.IsValid() || stencilAtt.IsEmpty()) {
+                    stencilTestEnabled = false;
+                }
+            }
+        }
         const StencilFaceState& frontStencil = MG_State::pGLContext->GetStencilState(StencilFace::Front);
         const StencilFaceState& backStencil = MG_State::pGLContext->GetStencilState(StencilFace::Back);
         const VkPolygonMode requestedPolygonMode =
@@ -7767,12 +7788,93 @@ void main() {
         VkCommandBuffer& commandBuffer = frame.commandBuffer;
 
         const Bool xfbActive = BeginXfbCaptureForDraw(frame);
+        const Bool occlusionActive = BeginOcclusionForDraw(commandBuffer);
         vkCmdDraw(commandBuffer,
             payload.params.vertexCount,
             payload.params.instanceCount,
             payload.params.firstVertex,
             payload.params.firstInstance);
+        EndOcclusionForDraw(commandBuffer, occlusionActive);
         EndXfbCaptureForDraw(frame, xfbActive);
+    }
+
+    Bool VulkanRenderer::StartOcclusionQueryCapture() {
+        if (!m_hostQueryResetEnabled || s_vkResetQueryPool == nullptr) {
+            return false;
+        }
+        if (m_occlusionQueryPool == VK_NULL_HANDLE) {
+            VkQueryPoolCreateInfo poolInfo{};
+            poolInfo.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
+            poolInfo.queryType = VK_QUERY_TYPE_OCCLUSION;
+            poolInfo.queryCount = kOcclusionQuerySlots;
+            if (vkCreateQueryPool(m_device, &poolInfo, nullptr, &m_occlusionQueryPool) != VK_SUCCESS) {
+                MGLOG_E("StartOcclusionQueryCapture: vkCreateQueryPool failed");
+                m_occlusionQueryPool = VK_NULL_HANDLE;
+                return false;
+            }
+            s_vkResetQueryPool(m_device, m_occlusionQueryPool, 0, kOcclusionQuerySlots);
+        }
+        m_occlusionActiveSlots.clear();
+        m_occlusionCaptureActive = true;
+        return true;
+    }
+
+    void VulkanRenderer::StopOcclusionQueryCapture(Vector<Uint32>& outSlots) {
+        outSlots = Move(m_occlusionActiveSlots);
+        m_occlusionActiveSlots.clear();
+        m_occlusionCaptureActive = false;
+    }
+
+    Bool VulkanRenderer::ResolveOcclusionQueryResult(const Vector<Uint32>& slots, Uint64& outSamples) {
+        outSamples = 0;
+        if (slots.empty()) {
+            return true;
+        }
+        if (m_occlusionQueryPool == VK_NULL_HANDLE) {
+            return true;
+        }
+        auto& frame = m_frameContext.GetCurrent();
+        if (frame.isCommandRecording) {
+            if (VkRenderPassManager::GetActiveRenderPass() != nullptr) {
+                VkRenderPassManager::EndRenderPass(frame.commandBuffer);
+            }
+            if (!SubmitReadbackCommandsAndWait(frame)) {
+                return false;
+            }
+        }
+        for (const Uint32 slot : slots) {
+            Uint64 value = 0;
+            const VkResult result =
+                vkGetQueryPoolResults(m_device, m_occlusionQueryPool, slot, 1, sizeof(value), &value, sizeof(value),
+                                      VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT);
+            if (result == VK_SUCCESS) {
+                outSamples += value;
+            }
+            s_vkResetQueryPool(m_device, m_occlusionQueryPool, slot, 1);
+        }
+        return true;
+    }
+
+    Bool VulkanRenderer::BeginOcclusionForDraw(VkCommandBuffer commandBuffer) {
+        if (!m_occlusionCaptureActive || m_occlusionQueryPool == VK_NULL_HANDLE) {
+            return false;
+        }
+        const Uint32 slot = m_occlusionSlotCursor;
+        m_occlusionSlotCursor = (m_occlusionSlotCursor + 1) % kOcclusionQuerySlots;
+        // Slots recycle after their read; a wrapped-past unread slot is stale, so
+        // reset it here (host reset - the slot's prior GPU use has long retired).
+        s_vkResetQueryPool(m_device, m_occlusionQueryPool, slot, 1);
+        vkCmdBeginQuery(commandBuffer, m_occlusionQueryPool, slot,
+                        m_occlusionQueryPreciseEnabled ? VK_QUERY_CONTROL_PRECISE_BIT : 0);
+        m_occlusionActiveSlots.push_back(slot);
+        return true;
+    }
+
+    void VulkanRenderer::EndOcclusionForDraw(VkCommandBuffer commandBuffer, Bool began) {
+        if (!began) {
+            return;
+        }
+        vkCmdEndQuery(commandBuffer, m_occlusionQueryPool, m_occlusionActiveSlots.back());
     }
 
     void VulkanRenderer::DrawElements(const DrawIndexedCmd& payload) {
@@ -7800,12 +7902,14 @@ void main() {
         VkCommandBuffer& commandBuffer = frame.commandBuffer;
 
         const Bool xfbActive = BeginXfbCaptureForDraw(frame);
+        const Bool occlusionActive = BeginOcclusionForDraw(commandBuffer);
         vkCmdDrawIndexed(commandBuffer,
             payload.params.indexCount,
             payload.params.instanceCount,
             payload.params.firstIndex,
             payload.params.vertexOffset,
             payload.params.firstInstance);
+        EndOcclusionForDraw(commandBuffer, occlusionActive);
         EndXfbCaptureForDraw(frame, xfbActive);
     }
 
@@ -9163,6 +9267,10 @@ void main() {
         // to isotropic filtering (and the extension goes unadvertised) when the device lacks it.
         deviceFeatures.samplerAnisotropy = supportedDeviceFeatures.samplerAnisotropy;
         m_samplerAnisotropyFeatureEnabled = deviceFeatures.samplerAnisotropy == VK_TRUE;
+        // GL_SAMPLES_PASSED needs exact sample counts; without the feature the boolean
+        // occlusion result still satisfies any-samples-style consumers.
+        deviceFeatures.occlusionQueryPrecise = supportedDeviceFeatures.occlusionQueryPrecise;
+        m_occlusionQueryPreciseEnabled = deviceFeatures.occlusionQueryPrecise == VK_TRUE;
 
         VkDeviceCreateInfo deviceCreateInfo{};
         deviceCreateInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
@@ -9309,6 +9417,27 @@ void main() {
             MGLOG_W("VK_EXT_transform_feedback is unavailable; transform feedback capture will not work");
         }
 
+        // Host query reset lets the occlusion-query ring recycle slots without a
+        // command-buffer round trip.
+        m_hostQueryResetEnabled = false;
+        VkPhysicalDeviceHostQueryResetFeatures hostQueryResetFeatures{};
+        hostQueryResetFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_HOST_QUERY_RESET_FEATURES;
+        if (IsExtensionSupported(availableExtensions, VK_EXT_HOST_QUERY_RESET_EXTENSION_NAME) &&
+            getPhysicalDeviceFeatures2 != nullptr) {
+            VkPhysicalDeviceFeatures2 featureQuery{};
+            featureQuery.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+            featureQuery.pNext = &hostQueryResetFeatures;
+            getPhysicalDeviceFeatures2(m_physicalDevice.handle, &featureQuery);
+            if (hostQueryResetFeatures.hostQueryReset == VK_TRUE) {
+                if (!IsExtensionAlreadyEnabled(enabledDeviceExtensions, VK_EXT_HOST_QUERY_RESET_EXTENSION_NAME)) {
+                    enabledDeviceExtensions.push_back(VK_EXT_HOST_QUERY_RESET_EXTENSION_NAME);
+                }
+                hostQueryResetFeatures.pNext = const_cast<void*>(deviceCreateInfo.pNext);
+                deviceCreateInfo.pNext = &hostQueryResetFeatures;
+                m_hostQueryResetEnabled = true;
+            }
+        }
+
         deviceCreateInfo.enabledExtensionCount = static_cast<Uint32>(enabledDeviceExtensions.size());
         deviceCreateInfo.ppEnabledExtensionNames = enabledDeviceExtensions.data();
         MGLOG_I("Device feature support: robustBufferAccess=%s geometryShader=%s independentBlend=%s logicOp=%s shaderClipDistance=%s "
@@ -9376,6 +9505,17 @@ void main() {
                 s_vkCmdEndTransformFeedbackEXT == nullptr) {
                 MGLOG_W("VK_EXT_transform_feedback entry points missing; transform feedback capture disabled");
                 m_transformFeedbackFeatureEnabled = false;
+            }
+        }
+        if (m_hostQueryResetEnabled) {
+            s_vkResetQueryPool =
+                reinterpret_cast<PFN_vkResetQueryPool>(vkGetDeviceProcAddr(m_device, "vkResetQueryPool"));
+            if (s_vkResetQueryPool == nullptr) {
+                s_vkResetQueryPool =
+                    reinterpret_cast<PFN_vkResetQueryPool>(vkGetDeviceProcAddr(m_device, "vkResetQueryPoolEXT"));
+            }
+            if (s_vkResetQueryPool == nullptr) {
+                m_hostQueryResetEnabled = false;
             }
         }
         MGLOG_I("index type uint8 enabled: %s", m_indexTypeUint8ExtensionEnabled ? "true" : "false");
