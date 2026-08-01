@@ -9933,7 +9933,17 @@ void main() {
             VkPhysicalDeviceProperties2 properties2{};
             properties2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
             properties2.pNext = &xfbProperties;
-            vkGetPhysicalDeviceProperties2(m_physicalDevice.handle, &properties2);
+            // Resolved via proc addr: vkGetPhysicalDeviceProperties2 is Vulkan 1.1, and Android's
+            // libvulkan.so only exports it from API 28 while minSdk is 26.
+            auto getPhysicalDeviceProperties2 = reinterpret_cast<PFN_vkGetPhysicalDeviceProperties2>(
+                vkGetInstanceProcAddr(m_instance, "vkGetPhysicalDeviceProperties2"));
+            if (getPhysicalDeviceProperties2 == nullptr) {
+                getPhysicalDeviceProperties2 = reinterpret_cast<PFN_vkGetPhysicalDeviceProperties2>(
+                    vkGetInstanceProcAddr(m_instance, "vkGetPhysicalDeviceProperties2KHR"));
+            }
+            if (getPhysicalDeviceProperties2 != nullptr) {
+                getPhysicalDeviceProperties2(m_physicalDevice.handle, &properties2);
+            }
             m_xfbQueriesSupported = xfbProperties.transformFeedbackQueries == VK_TRUE &&
                 s_vkCmdBeginQueryIndexedEXT != nullptr && s_vkCmdEndQueryIndexedEXT != nullptr;
         }
