@@ -431,6 +431,15 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         void* m_platformDisplay = nullptr;
         void* m_platformLibrary = nullptr;
         void* m_platformCloseDisplay = nullptr;
+        // Some real ICDs (e.g. NVIDIA's proprietary Linux driver) don't implement
+        // VK_EXT_headless_surface at all. Detected once in CreateInstance() from the
+        // enumerated instance extensions; when false, CreateSurface() falls back to a
+        // hidden Xlib window instead of vkCreateHeadlessSurfaceEXT.
+        Bool m_headlessSurfaceSupported = true;
+        // Set when CreateSurface() had to create its own Xlib window for the fallback
+        // above (rather than being handed one by the caller), so Shutdown() knows it
+        // owns that window and must destroy it.
+        Bool m_ownsFallbackXlibWindow = false;
         VulkanRendererConfig m_config;
         Bool m_swapchainResizeRequested = false;
         // Presentation is suspended while the window is zero-area (minimized): the

@@ -2866,6 +2866,15 @@ void main() {
 
 #if defined(VK_USE_PLATFORM_XLIB_KHR)
         if (m_platformDisplay != nullptr) {
+            if (m_ownsFallbackXlibWindow && m_window != 0 && m_platformLibrary != nullptr) {
+                using XDestroyWindowFn = int (*)(Display*, Window);
+                auto* destroyWindow = reinterpret_cast<XDestroyWindowFn>(dlsym(m_platformLibrary, "XDestroyWindow"));
+                if (destroyWindow) {
+                    destroyWindow(static_cast<Display*>(m_platformDisplay), static_cast<Window>(m_window));
+                }
+                m_window = 0;
+                m_ownsFallbackXlibWindow = false;
+            }
             using XCloseDisplayFn = int (*)(Display*);
             auto* closeDisplay = reinterpret_cast<XCloseDisplayFn>(m_platformCloseDisplay);
             if (closeDisplay) {
@@ -9284,6 +9293,18 @@ void main() {
         if (!m_window) {
 #ifdef VK_USE_PLATFORM_METAL_EXT
             exts.push_back(VK_EXT_METAL_SURFACE_EXTENSION_NAME);
+#elif defined VK_USE_PLATFORM_XLIB_KHR
+            m_headlessSurfaceSupported = IsExtensionSupported(m_extensions, VK_EXT_HEADLESS_SURFACE_EXTENSION_NAME);
+            if (m_headlessSurfaceSupported) {
+                exts.push_back(VK_EXT_HEADLESS_SURFACE_EXTENSION_NAME);
+            } else {
+                // Real ICDs (e.g. NVIDIA's proprietary Linux driver) may not implement
+                // VK_EXT_headless_surface at all. CreateSurface() falls back to a
+                // hidden Xlib window in that case, so request that extension instead.
+                MGLOG_I("%s not available; falling back to a hidden %s surface for the pbuffer context.",
+                        VK_EXT_HEADLESS_SURFACE_EXTENSION_NAME, VK_KHR_XLIB_SURFACE_EXTENSION_NAME);
+                exts.push_back(VK_KHR_XLIB_SURFACE_EXTENSION_NAME);
+            }
 #else
             exts.push_back(VK_EXT_HEADLESS_SURFACE_EXTENSION_NAME);
 #endif
@@ -9985,6 +10006,21 @@ void main() {
             m_window = reinterpret_cast<NativeWindowType>(
                 CreateInternalMetalLayer(m_config.SurfaceWidth, m_config.SurfaceHeight, &m_platformDisplay));
             m_platformLibrary = reinterpret_cast<void*>(m_window);
+#elif defined VK_USE_PLATFORM_XLIB_KHR
+            if (m_headlessSurfaceSupported) {
+                auto* createHeadlessSurface =
+                    reinterpret_cast<PFN_vkCreateHeadlessSurfaceEXT>(
+                        vkGetInstanceProcAddr(m_instance, "vkCreateHeadlessSurfaceEXT"));
+                MOBILEGL_ASSERT(createHeadlessSurface != nullptr,
+                                "VK_EXT_headless_surface is not available for DirectVulkan pbuffer surface");
+                VkHeadlessSurfaceCreateInfoEXT sci{VK_STRUCTURE_TYPE_HEADLESS_SURFACE_CREATE_INFO_EXT};
+                VK_VERIFY(createHeadlessSurface(m_instance, &sci, nullptr, &m_surface),
+                          "vkCreateHeadlessSurfaceEXT failed");
+                return;
+            }
+            // VK_EXT_headless_surface unavailable on this ICD: fall through to the
+            // Xlib branch below, which creates a hidden window since m_window is
+            // still null here.
 #else
             auto* createHeadlessSurface =
                 reinterpret_cast<PFN_vkCreateHeadlessSurfaceEXT>(
@@ -10019,7 +10055,8 @@ void main() {
         sci.pLayer = reinterpret_cast<const void*>(m_window);
         VK_VERIFY(vkCreateMetalSurfaceEXT(m_instance, &sci, nullptr, &m_surface), "vkCreateMetalSurfaceEXT failed");
 #elif defined VK_USE_PLATFORM_XLIB_KHR
-        MOBILEGL_ASSERT(m_window, "X11 Window is null");
+        // m_window may legitimately still be null here: the pbuffer/headless-fallback
+        // path below creates its own window when the caller didn't provide one.
 
         void* x11Lib = dlopen("libX11.so.6", RTLD_LOCAL | RTLD_NOW);
         if (!x11Lib) {
@@ -10038,6 +10075,38 @@ void main() {
         m_platformDisplay = display;
         m_platformLibrary = x11Lib;
         m_platformCloseDisplay = reinterpret_cast<void*>(xCloseDisplay);
+
+        if (!m_window) {
+            // Pbuffer/headless fallback: the ICD didn't implement
+            // VK_EXT_headless_surface (e.g. NVIDIA's proprietary Linux driver), so
+            // CreateInstance() requested VK_KHR_xlib_surface instead and left
+            // m_window null for us to fill in here. This window is never mapped -
+            // it exists only to give the WSI a valid drawable - so nothing is ever
+            // shown on screen; the swapchain image backs the GL default framebuffer
+            // exactly like the headless-surface path does.
+            using XDefaultRootWindowFn = Window (*)(Display*);
+            using XDefaultScreenFn = int (*)(Display*);
+            using XBlackPixelFn = unsigned long (*)(Display*, int);
+            using XCreateSimpleWindowFn = Window (*)(Display*, Window, int, int, unsigned int, unsigned int,
+                                                      unsigned int, unsigned long, unsigned long);
+            auto* xDefaultRootWindow = reinterpret_cast<XDefaultRootWindowFn>(dlsym(x11Lib, "XDefaultRootWindow"));
+            auto* xDefaultScreen = reinterpret_cast<XDefaultScreenFn>(dlsym(x11Lib, "XDefaultScreen"));
+            auto* xBlackPixel = reinterpret_cast<XBlackPixelFn>(dlsym(x11Lib, "XBlackPixel"));
+            auto* xCreateSimpleWindow =
+                reinterpret_cast<XCreateSimpleWindowFn>(dlsym(x11Lib, "XCreateSimpleWindow"));
+            MOBILEGL_ASSERT(xDefaultRootWindow && xDefaultScreen && xBlackPixel && xCreateSimpleWindow,
+                            "Failed to resolve XCreateSimpleWindow dependencies for the Xlib pbuffer fallback");
+
+            const int screen = xDefaultScreen(display);
+            const Uint32 width = std::max<Uint32>(m_config.SurfaceWidth, 1);
+            const Uint32 height = std::max<Uint32>(m_config.SurfaceHeight, 1);
+            const Window fallbackWindow = xCreateSimpleWindow(display, xDefaultRootWindow(display), 0, 0, width,
+                                                               height, 0, xBlackPixel(display, screen),
+                                                               xBlackPixel(display, screen));
+            MOBILEGL_ASSERT(fallbackWindow != 0, "XCreateSimpleWindow failed for the Xlib pbuffer fallback");
+            m_window = static_cast<NativeWindowType>(fallbackWindow);
+            m_ownsFallbackXlibWindow = true;
+        }
 
         VkXlibSurfaceCreateInfoKHR sci{VK_STRUCTURE_TYPE_XLIB_SURFACE_CREATE_INFO_KHR};
         sci.dpy = display;
