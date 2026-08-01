@@ -6982,11 +6982,14 @@ void main() {
         }
 
         const Bool readIsDefaultFbo = readFbo->IsDefaultFramebuffer();
-        BlitImageBinding srcBinding{};
-        if (!ResolveColorBlitBinding(*readFbo, true, m_imageIndexAcquired, m_swapchainObject, *m_textureManager,
-                                     *m_renderPassManager, srcBinding)) {
-            return;
-        }
+        // Materialize any pending clear on the read-buffer attachment BEFORE resolving the
+        // blit binding below: for a renderbuffer/texture that has never been part of any
+        // render pass yet (e.g. a GL_NONE draw buffer slot whose attachment is only ever
+        // touched via an explicit glReadBuffer), materializing lazily creates its backing
+        // Vulkan resource for the first time. UnorderedMap (FastSTL, open-addressing) may
+        // rehash on that insertion, invalidating any RenderbufferResource*/TextureResource*
+        // obtained beforehand - so ResolveColorBlitBinding's cached `trackedLayout` pointer
+        // must be taken AFTER this, never before it.
         if (!readIsDefaultFbo) {
             const auto& sourceAttachment = readFbo->GetAttachment(readFbo->GetReadBuffer());
             auto sourceTexture = sourceAttachment.GetTexture();
@@ -7002,6 +7005,12 @@ void main() {
                                 "ReadPixels: failed to materialize pending clear for source renderbuffer %u",
                                 sourceAttachment.GetRenderbuffer()->GetExternalIndex());
             }
+        }
+
+        BlitImageBinding srcBinding{};
+        if (!ResolveColorBlitBinding(*readFbo, true, m_imageIndexAcquired, m_swapchainObject, *m_textureManager,
+                                     *m_renderPassManager, srcBinding)) {
+            return;
         }
 
         const VkImageLayout srcOriginalLayout = readIsDefaultFbo
