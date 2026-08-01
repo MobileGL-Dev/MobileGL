@@ -58,11 +58,26 @@ def main():
     # explode (a 4-sample 16K depth texture alone is 4 GiB).
     ap.add_argument("--surface-size", type=int, default=256,
                     help="--deqp-surface-width/height value")
+    # With DONT_CARE depth/stencil bits dEQP's FboRenderContext picks the first entry of
+    # its own format list, GL_DEPTH32F_STENCIL8. framebuffer_blit meanwhile hardcodes
+    # GL_DEPTH24_STENCIL8 for its own buffers whenever it detects an FBO surface, then
+    # blits depth between the two - which the spec forbids for mismatched formats, so a
+    # conformant driver has to fail it. Asking for a config the test agrees with avoids
+    # the contradiction instead of papering over it.
+    ap.add_argument("--gl-config-name", default="rgba8888d24s8",
+                    help="--deqp-gl-config-name value (empty string to leave it unset)")
     ap.add_argument("--max-rounds", type=int, default=4000)
     ap.add_argument("--max-empty-streak", type=int, default=64,
                     help="abort after this many consecutive chunks that produce no log at all")
     ap.add_argument("--chunk-timeout", type=int, default=1800,
                     help="seconds before killing one glcts invocation (a wedged case never returns)")
+    # dEQP's watchdog aborts the process when a single case exceeds a hardcoded 30s
+    # (framework/common/tcuApp.hpp), which is not a hang on a CPU rasterizer - some
+    # texture_swizzle cases legitimately take ~17s each and cross it once the process is
+    # warm, so they came back as spurious Timeouts. dEQP's own default is off; the
+    # chunk-timeout above is what actually rescues a genuinely wedged case.
+    ap.add_argument("--watchdog", default="disable", choices=["enable", "disable"],
+                    help="--deqp-watchdog value")
     ap.add_argument("--skip-file", default=None,
                     help="file of case names to exclude, e.g. cases known to wedge the host")
     ap.add_argument("--waiver-file", default=None,
@@ -130,13 +145,13 @@ def main():
             f"--deqp-surface-width={args.surface_size}",
             f"--deqp-surface-height={args.surface_size}",
             "--deqp-terminate-on-device-lost=disable",
-            # A wedged case aborts the process instead of stalling the chunk;
-            # the runner then records it as Crash and resumes past it.
-            "--deqp-watchdog=enable",
+            f"--deqp-watchdog={args.watchdog}",
             "--deqp-log-images=disable",
             "--deqp-log-shader-sources=disable",
             f"--deqp-log-filename={qpa}",
         ]
+        if args.gl_config_name:
+            cmd.append(f"--deqp-gl-config-name={args.gl_config_name}")
         if args.waiver_file:
             cmd.append(f"--deqp-waiver-file={os.path.abspath(args.waiver_file)}")
         timed_out = False
