@@ -1213,30 +1213,45 @@ namespace MobileGL::MG_Backend::DirectGLES {
             auto& textureUnit = MG_State::pGLContext->GetTextureUnitObject(unit);
             Array<Bool, (SizeT)TextureTarget::TextureTargetCount> boundBackendTargets{};
 
-            for (const auto& bindingSlot : textureUnit.GetAllBindingSlots()) {
-                const auto& textureObject = bindingSlot.GetBoundObject();
-                if (!textureObject) continue;
+            // Two passes over the slots, because desktop 1D/1D-array targets alias ES
+            // 2D/2D-array targets: a unit can hold a real texture on one of an aliased
+            // pair and a default (name 0) object on the other, and one native binding
+            // has to serve both. A default object only carries the app's bind-0 state,
+            // so a real texture always wins the alias - binding it second would leave
+            // the shader sampling an empty texture (an app that gives name 0 an image
+            // then still keeps the default's binding when nothing else claims the
+            // native target). Pass 0 places the real textures, pass 1 fills in the
+            // defaults for native targets that are still unclaimed.
+            for (Int pass = 0; pass < 2; ++pass) {
+                for (const auto& bindingSlot : textureUnit.GetAllBindingSlots()) {
+                    const auto& textureObject = bindingSlot.GetBoundObject();
+                    if (!textureObject) continue;
 
-                // An image-less default texture is the frontend's bind-0 state. Defer native
-                // unbinding until all slots have been considered: desktop 1D/1D-array targets
-                // alias ES 2D/2D-array targets, so a default alias must not clear a real binding.
-                if (MG_State::GLState::IsUndefinedDefaultTexture(textureObject.get())) continue;
+                    // An image-less default texture is the frontend's bind-0 state. Defer native
+                    // unbinding until all slots have been considered: a default alias must not
+                    // clear a real binding either.
+                    if (MG_State::GLState::IsUndefinedDefaultTexture(textureObject.get())) continue;
 
-                auto target = textureObject->GetTarget();
-                if (!TextureImpl::IsSupportedTextureTarget(target)) {
-                    MGLOG_D("    Texture target %s is not supported, skipping.",
-                            MG_Util::ConvertTextureTargetToString(target).c_str());
-                    continue;
+                    const Bool isDefaultObject = textureObject->GetExternalIndex() == 0;
+                    if (isDefaultObject != (pass == 1)) continue;
+
+                    auto target = textureObject->GetTarget();
+                    if (!TextureImpl::IsSupportedTextureTarget(target)) {
+                        MGLOG_D("    Texture target %s is not supported, skipping.",
+                                MG_Util::ConvertTextureTargetToString(target).c_str());
+                        continue;
+                    }
+                    const auto backendTarget = TextureImpl::MapToBackendTextureTarget(target);
+                    if (isDefaultObject && boundBackendTargets[static_cast<SizeT>(backendTarget)]) continue;
+                    const GLenum targetGL = TextureImpl::ConvertTextureTargetToBackendGLEnum(target);
+
+                    // Bind texture object
+                    const auto& backendTextureIt = TextureImpl::g_backendTextureObjects.find(textureObject.get());
+                    if (backendTextureIt == TextureImpl::g_backendTextureObjects.end()) continue;
+
+                    backendTextureIt->second->Bind(targetGL, unit);
+                    boundBackendTargets[static_cast<SizeT>(backendTarget)] = true;
                 }
-                const GLenum targetGL = TextureImpl::ConvertTextureTargetToBackendGLEnum(target);
-
-                // Bind texture object
-                const auto& backendTextureIt = TextureImpl::g_backendTextureObjects.find(textureObject.get());
-                if (backendTextureIt == TextureImpl::g_backendTextureObjects.end()) continue;
-
-                backendTextureIt->second->Bind(targetGL, unit);
-                const auto backendTarget = TextureImpl::MapToBackendTextureTarget(target);
-                boundBackendTargets[static_cast<SizeT>(backendTarget)] = true;
             }
 
             // Clear each native target that has no resolved frontend binding. This is the backend
