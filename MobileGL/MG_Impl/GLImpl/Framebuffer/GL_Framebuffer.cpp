@@ -101,7 +101,14 @@ namespace MobileGL::MG_Impl::GLImpl {
         // shared-exponent, SNORM, three-channel norm16/float32/sRGB and three-channel integer formats.
         // Desktop GL treats those as texture-only too (not in the GL 3.3 required-renderable list), so
         // reporting GL_FRAMEBUFFER_UNSUPPORTED for them is legal.
-        Bool IsColorInternalFormatRenderable(TextureInternalFormat format) {
+        //
+        // `capabilityTargetIndex` is the row of the cache the attachment actually lives in;
+        // kFormatCapabilityTargetCount asks about the format in general. Asking per target matters
+        // because a capability recorded for one of them says nothing about the others: DirectGLES
+        // widens three-channel formats to four channels to keep them renderable as *multisample*
+        // storage, and a format that survives only through that substitution is still texture-only
+        // on every ordinary target.
+        Bool IsColorInternalFormatRenderable(TextureInternalFormat format, SizeT capabilityTargetIndex) {
             const SizeT formatIndex = static_cast<SizeT>(format);
             if (MG_Backend::pActiveBackendObject && formatIndex < MG_Backend::kFormatCapabilityFormatCount) {
                 const auto& cache = MG_Backend::pActiveBackendObject->GetFormatCapabilities();
@@ -113,8 +120,11 @@ namespace MobileGL::MG_Impl::GLImpl {
                                                                      MG_Backend::FormatCapability::Creatable);
                 }
                 if (cachePopulated) {
-                    for (SizeT targetIndex = 0; targetIndex < MG_Backend::kFormatCapabilityTargetCount;
-                         ++targetIndex) {
+                    const Bool singleTarget = capabilityTargetIndex < MG_Backend::kFormatCapabilityTargetCount;
+                    const SizeT firstTarget = singleTarget ? capabilityTargetIndex : 0;
+                    const SizeT lastTarget =
+                        singleTarget ? capabilityTargetIndex + 1 : MG_Backend::kFormatCapabilityTargetCount;
+                    for (SizeT targetIndex = firstTarget; targetIndex < lastTarget; ++targetIndex) {
                         if (MG_Backend::HasFormatCapability(cache.FullCaps[targetIndex][formatIndex],
                                                             MG_Backend::FormatCapability::FramebufferRenderable) ||
                             MG_Backend::HasFormatCapability(cache.CaveatCaps[targetIndex][formatIndex],
@@ -163,12 +173,17 @@ namespace MobileGL::MG_Impl::GLImpl {
                 const auto& attachment = attachments[i];
                 if (!attachment.IsValid()) continue;
                 TextureInternalFormat format = TextureInternalFormat::Unknown;
+                SizeT capabilityTargetIndex = MG_Backend::kFormatCapabilityTargetCount;
                 if (attachment.IsTexture() && attachment.GetTexture()) {
                     format = attachment.GetTexture()->GetFormat();
+                    capabilityTargetIndex =
+                        MG_Backend::GetFormatCapabilityTargetIndex(attachment.GetTexture()->GetTarget());
                 } else if (attachment.IsRenderbuffer() && attachment.GetRenderbuffer()) {
                     format = attachment.GetRenderbuffer()->GetInternalFormat();
+                    capabilityTargetIndex = MG_Backend::GetRenderbufferFormatCapabilityTargetIndex();
                 }
-                if (format != TextureInternalFormat::Unknown && !IsColorInternalFormatRenderable(format)) {
+                if (format != TextureInternalFormat::Unknown &&
+                    !IsColorInternalFormatRenderable(format, capabilityTargetIndex)) {
                     return true;
                 }
             }
