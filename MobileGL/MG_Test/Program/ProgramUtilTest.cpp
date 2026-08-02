@@ -223,7 +223,7 @@ void main() {
 
     PreprocessShaderSource(ShaderStage::Vertex, source);
 
-    EXPECT_EQ(source.find("#version 330 core\n"), 0);
+    EXPECT_EQ(source.find("#version 330 core "), 0);
     EXPECT_NE(source.find("in vec3 position;"), String::npos);
     EXPECT_NE(source.find("out vec2 uv;"), String::npos);
     EXPECT_EQ(source.find("attribute"), String::npos);
@@ -323,7 +323,7 @@ void main() {
 
     PreprocessShaderSource(ShaderStage::Fragment, source);
 
-    EXPECT_EQ(source.find("#version 330 core\n"), 0);
+    EXPECT_EQ(source.find("#version 330 core "), 0);
     EXPECT_NE(source.find("out vec4 mg_FragColor;\n"), String::npos);
     EXPECT_NE(source.find("in vec2 uv;"), String::npos);
     EXPECT_NE(source.find("texture(texture0, uv)"), String::npos);
@@ -379,7 +379,7 @@ void main() {
 
     PreprocessShaderSource(ShaderStage::Fragment, source);
 
-    EXPECT_EQ(source.find("#version 330 core\n"), 0);
+    EXPECT_EQ(source.find("#version 330 core "), 0);
     EXPECT_NE(source.find("vec4 sample = texture(DiffuseSampler"), String::npos);
     EXPECT_NE(source.find("totalAlpha = totalAlpha + sample.a;"), String::npos);
     EXPECT_NE(source.find("float totalSamples = 0.0;"), String::npos);
@@ -405,7 +405,7 @@ void main() {
 )";
     PreprocessShaderSource(ShaderStage::Vertex, vertexSource);
 
-    EXPECT_EQ(vertexSource.find("#version 330 core\n"), 0);
+    EXPECT_EQ(vertexSource.find("#version 330 core "), 0);
     EXPECT_NE(vertexSource.find("in vec3 sample;"), String::npos);
 
     ShaderAttrib vertexAttrib{.shaderType = GL_VERTEX_SHADER, .sourceStr = vertexSource};
@@ -425,7 +425,7 @@ void main() {
 )";
     PreprocessShaderSource(ShaderStage::Fragment, fragmentSource);
 
-    EXPECT_EQ(fragmentSource.find("#version 330 core\n"), 0);
+    EXPECT_EQ(fragmentSource.find("#version 330 core "), 0);
     EXPECT_NE(fragmentSource.find("uniform sampler2D sample;"), String::npos);
     EXPECT_NE(fragmentSource.find("texture(sample, texCoord)"), String::npos);
 
@@ -483,7 +483,9 @@ void main() {
 )";
         PreprocessShaderSource(ShaderStage::Fragment, source);
 
-        EXPECT_EQ(source.find("#version 460 core\n"), 0);
+        // An explicitly declared modern core version keeps its number (see "keep declared modern
+        // GLSL versions strict"); only the BOM goes.
+        EXPECT_EQ(source.find(String(inputVersion) + "\n"), 0);
         EXPECT_EQ(source.find("\xef\xbb\xbf"), String::npos);
 
         ShaderAttrib attrib{.shaderType = GL_FRAGMENT_SHADER, .sourceStr = source};
@@ -568,10 +570,12 @@ void main() {
 )";
     PreprocessShaderSource(ShaderStage::Fragment, source);
 
-    const SizeT versionPos = source.find("#version 330 core\n");
+    const SizeT versionPos = source.find("#version 330 core ");
     const SizeT outputPos = source.find("out vec4 mg_FragColor;\n");
     EXPECT_NE(versionPos, String::npos);
-    EXPECT_EQ(outputPos, versionPos + std::strlen("#version 330 core\n"));
+    // The normalized directive carries a marker recording that this 330 came from a legacy
+    // declaration, so measure the line rather than assuming its length.
+    EXPECT_EQ(outputPos, source.find('\n', versionPos) + 1);
     EXPECT_NE(source.find("// #version 460 core"), String::npos);
     // This #line sits ahead of the version directive, where GLSL would never have honoured it, so
     // it is still dropped. Directives that follow the version line are kept - see
@@ -684,7 +688,7 @@ void main() {
     }
 }
 
-TEST_F(ProgramUtilTest, PreprocessModernSampleQualifierStaysAtVersion460) {
+TEST_F(ProgramUtilTest, PreprocessModernSampleQualifierStaysAtItsDeclaredVersion) {
     using namespace MG_Util::ShaderTranspiler;
 
     String source = R"(#version 400 core
@@ -697,7 +701,7 @@ void main() {
 )";
     PreprocessShaderSource(ShaderStage::Fragment, source);
 
-    EXPECT_EQ(source.find("#version 460 core\n"), 0);
+    EXPECT_EQ(source.find("#version 400 core\n"), 0);
     EXPECT_NE(source.find("sample in vec4 interpolatedColor;"), String::npos);
 
     ShaderAttrib attrib{.shaderType = GL_FRAGMENT_SHADER, .sourceStr = source};
@@ -746,7 +750,7 @@ void main() {
 
     PreprocessShaderSource(ShaderStage::Fragment, source);
 
-    EXPECT_EQ(source.find("#version 330 core\n"), 0);
+    EXPECT_EQ(source.find("#version 330 core "), 0);
     EXPECT_NE(source.find("layout(location = 0) out vec4 mg_FragData[8];\n"), String::npos);
     EXPECT_NE(source.find("mg_FragData[0] = vec4(1.0);"), String::npos);
     EXPECT_NE(source.find("mg_FragData[1].a = 0.5;"), String::npos);
@@ -902,16 +906,17 @@ TEST_F(ProgramUtilTest, CompileSimpleVertexShader) {
 }
 
 // Legacy desktop sources are normalized to "#version 330 core", which is stricter than the 460 they
-// used to be forced to. A shader declaring 330 while using 420-era syntax without the matching
-// #extension line is accepted by real drivers, so CompileShader retries it at 460 instead of failing.
-TEST_F(ProgramUtilTest, CompileShaderRetriesAt460WhenLegacyVersionRejects420Syntax) {
+// used to be forced to. A legacy shader using 420-era syntax without the matching #extension line
+// is accepted by real drivers, so CompileShader retries the normalized source at 460 rather than
+// failing. Only MobileGL's own normalization is rescued this way - an application-declared
+// "#version 330" keeps strict 3.30 semantics, which is what the CTS negative-compile cases need.
+TEST_F(ProgramUtilTest, CompileShaderRetriesAt460WhenNormalizedLegacyVersionRejects420Syntax) {
     using namespace MG_Util::ShaderTranspiler;
-    String source = R"(#version 330
+    String source = R"(#version 130
 layout(binding = 0) uniform sampler2D InSampler;
-in vec2 texCoord;
-out vec4 fragColor;
+varying vec2 texCoord;
 void main() {
-    fragColor = texture(InSampler, texCoord);
+    gl_FragColor = texture2D(InSampler, texCoord);
 })";
     PreprocessShaderSource(ShaderStage::Fragment, source);
     // The normal path still emits 330 - the retry must not become the default.
@@ -952,9 +957,20 @@ void main() {
 TEST_F(ProgramUtilTest, RetargetLegacyVersionDirectiveOnlyTouchesNormalizedDesktopCore) {
     using namespace MG_Util::ShaderTranspiler;
 
-    String normalized = "#version 330 core\nvoid main() {}\n";
+    // Only MobileGL's own normalization is retargetable, and it is recognised by the marker the
+    // preprocessor leaves on the directive line - so normalize a legacy source rather than
+    // hand-writing the directive the marker belongs to.
+    String normalized = "#version 130\nvoid main() {}\n";
+    PreprocessShaderSource(ShaderStage::Vertex, normalized);
+    ASSERT_EQ(normalized.find("#version 330 core "), 0u);
     EXPECT_TRUE(RetargetLegacyVersionDirectiveTo460(normalized));
     EXPECT_EQ(normalized.find("#version 460 core"), 0u);
+
+    // An application that declared 330 itself keeps strict 3.30 semantics: raising it would
+    // re-legalize the CTS negative-compile cases.
+    String declared330 = "#version 330 core\nvoid main() {}\n";
+    EXPECT_FALSE(RetargetLegacyVersionDirectiveTo460(declared330));
+    EXPECT_EQ(declared330.find("#version 330 core"), 0u);
 
     // Already modern: nothing to retarget.
     String modern = "#version 460 core\nvoid main() {}\n";

@@ -1867,11 +1867,13 @@ TEST_F(TextureTest, DirectGLESTreats2DArrayAsSupportedTextureTarget) {
     EXPECT_TRUE(IsSupportedTextureTarget(TextureTarget::Texture2DArray));
     EXPECT_TRUE(IsSupportedTextureTarget(TextureTarget::Texture3D));
     EXPECT_TRUE(IsSupportedTextureTarget(TextureTarget::Texture2D));
-    // 1D and 1D-array are emulated as 2D / 2D-array (MapToBackendTextureTarget), matching
-    // SPIRV-Cross's ES 1D-as-2D shader emission; only rectangle textures stay unsupported.
+    // Every desktop-only target is stored on an ES one (MapToBackendTextureTarget): 1D and
+    // 1D-array as 2D / 2D-array, matching SPIRV-Cross's ES 1D-as-2D shader emission, and
+    // rectangle as a plain 2D - it is single-level and already clamps, so only the
+    // non-normalized coordinates differ and LowerRectImagesForEssl handles those.
     EXPECT_TRUE(IsSupportedTextureTarget(TextureTarget::Texture1D));
     EXPECT_TRUE(IsSupportedTextureTarget(TextureTarget::Texture1DArray));
-    EXPECT_FALSE(IsSupportedTextureTarget(TextureTarget::TextureRectangle));
+    EXPECT_TRUE(IsSupportedTextureTarget(TextureTarget::TextureRectangle));
 }
 
 // 2D-array textures keep their layer count constant across mip levels (GL 3.3 §3.9);
