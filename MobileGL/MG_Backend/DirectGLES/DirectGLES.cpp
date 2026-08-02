@@ -738,6 +738,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
         static Bool g_hasSyncedRenderState = false;
         static RenderStateParameters g_syncedRenderStateParameters;
         static IntVec4 g_syncedBackendViewport = IntVec4(-1, -1, -1, -1);
+        // GLES starts with sRGB framebuffer encoding on, so the first sync always has to push the
+        // frontend's (desktop-GL default) disabled state down.
+        static Bool g_syncedSrgbFramebufferWrites = true;
         void SyncRenderState() {
 #ifdef TRACY_ENABLE
             ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
@@ -783,6 +786,19 @@ namespace MobileGL::MG_Backend::DirectGLES {
             SYNC_CAPABILITY(CullFace, GL_CULL_FACE);
 
 #undef SYNC_CAPABILITY
+
+            { // sRGB framebuffer writes. GLES core always encodes a write into an sRGB attachment,
+              // while GL_FRAMEBUFFER_SRGB is disabled by default in desktop GL and the frontend
+              // never turns it on, so the driver has to be told to write raw. Without this a render
+              // into an sRGB colour buffer comes back encoded once too often (the shader's own
+              // decode on the next fetch then leaves the value one conversion short).
+                const Bool srgbWrites = MG_State::pGLContext->IsCapabilityEnabled(CapabilityInput::FramebufferSrgb);
+                if (g_GLESCapabilities.SupportsSrgbWriteControl && srgbWrites != g_syncedSrgbFramebufferWrites) {
+                    srgbWrites ? g_GLESFuncs.glEnable(GL_FRAMEBUFFER_SRGB)
+                               : g_GLESFuncs.glDisable(GL_FRAMEBUFFER_SRGB);
+                    g_syncedSrgbFramebufferWrites = srgbWrites;
+                }
+            }
 
             { // Primitive restart. GLES core has only GL_PRIMITIVE_RESTART_FIXED_INDEX (fixed all-ones
               // value); both the fixed cap and the (fixed-valued) arbitrary GL_PRIMITIVE_RESTART map to

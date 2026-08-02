@@ -1031,6 +1031,10 @@ namespace MobileGL {
             String GLESShadingLanguageVersionString;
             Bool SupportsPersistentMapping = false;
             Bool SupportsNorm16Texture = false;
+            // GL_EXT_sRGB_write_control is present, so GL_FRAMEBUFFER_SRGB can be turned off.
+            // GLES has no such switch in core: writes into an sRGB attachment are ALWAYS encoded,
+            // while desktop GL leaves GL_FRAMEBUFFER_SRGB disabled by default and writes raw.
+            Bool SupportsSrgbWriteControl = false;
             // GL_EXT_texture_filter_anisotropic is present, so sampler/texture
             // anisotropy may be forwarded without raising GL_INVALID_ENUM in GLES.
             Bool SupportsTextureFilterAnisotropy = false;
