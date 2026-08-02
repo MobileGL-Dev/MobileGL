@@ -241,6 +241,32 @@ namespace MobileGL::MG_State {
         }
 
         void GLContext::MarkTextureObjectForDeletion(Uint index) {
+            // GL 3.3 core 4.4.2: deleting a texture whose image is attached to the framebuffer
+            // that is currently bound acts as if FramebufferTexture* had been called with texture
+            // zero for every attachment point it occupied there. Framebuffers that are NOT bound
+            // keep the orphaned attachment, so only the bound ones are touched.
+            //
+            // Without this the framebuffer object goes on holding the deleted texture alive as its
+            // attachment, and a later read through that framebuffer returns the dead texture's
+            // contents rather than those of whatever the application put in its place - the name
+            // it deleted usually comes straight back from the next glGenTextures, so the two are
+            // indistinguishable from the outside (KHR-GL32.packed_pixels read a stale gradient).
+            if (const auto& textureObject = m_textureState.GetTextureObject(index)) {
+                for (SizeT targetIndex = 0; targetIndex < SizeT(FramebufferTarget::FramebufferTargetCount);
+                     ++targetIndex) {
+                    const auto& framebuffer =
+                        GetFramebufferBindingSlot(static_cast<FramebufferTarget>(targetIndex)).GetBoundObject();
+                    if (!framebuffer || framebuffer->IsDefaultFramebuffer()) {
+                        continue;
+                    }
+                    const auto& attachments = framebuffer->GetAllAttachmentObjects();
+                    for (SizeT i = 0; i < attachments.size(); ++i) {
+                        if (attachments[i].IsTexture() && attachments[i].GetTexture() == textureObject) {
+                            framebuffer->Detach(static_cast<FramebufferAttachmentType>(i));
+                        }
+                    }
+                }
+            }
             m_textureState.MarkTextureObjectForDeletion(index, IsRelaxedSemanticsActive());
         }
 
