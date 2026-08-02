@@ -588,11 +588,18 @@ namespace MobileGL::MG_Backend::DirectGLES {
                         }
                     }
 
+                    // 1D, 1D-array and rectangle textures live on an ES target (see
+                    // TextureImpl::MapToBackendTextureTarget), so they have to be probed there too -
+                    // probing the desktop-only target itself always failed, which left those slots
+                    // of the cache empty and stopped any fallback format from being selected for
+                    // them (a GL_DEPTH_COMPONENT32 1D texture then got no storage at all).
+                    const TextureTarget probeTarget = TextureImpl::MapToBackendTextureTarget(target);
+
                     Bool shouldProbeFallback = hasForcedFallback;
                     if (!hasForcedFallback) {
                         Bool nativeRenderable = false;
                         const Bool nativeCreated =
-                            ProbeTexture(gl, target, nativeInfo.InternalFormat, nativeInfo.ImageFormat,
+                            ProbeTexture(gl, probeTarget, nativeInfo.InternalFormat, nativeInfo.ImageFormat,
                                          nativeInfo.ImageType, logicalFormat, &nativeRenderable);
                         if (nativeCreated) {
                             AddFullFormatCaps(cache, targetIndex, formatIndex,
@@ -607,7 +614,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     if (shouldProbeFallback && fallbackInfo.InternalFormat != GL_UNKNOWN_MGL) {
                         Bool fallbackRenderable = false;
                         const Bool fallbackCreated =
-                            ProbeTexture(gl, target, fallbackInfo.InternalFormat, fallbackInfo.ImageFormat,
+                            ProbeTexture(gl, probeTarget, fallbackInfo.InternalFormat, fallbackInfo.ImageFormat,
                                          fallbackInfo.ImageType, logicalFormat, &fallbackRenderable);
                         if (fallbackCreated) {
                             if (AddCaveatFormatCaps(cache, targetIndex, formatIndex,
