@@ -1196,8 +1196,16 @@ namespace MobileGL::MG_Backend::DirectGLES {
         ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
         auto& slot = MG_State::pGLContext->GetFramebufferBindingSlot(target);
-        if (slot.GetVersion() == FramebufferImpl::g_fboBindVersions[(SizeT)target]) return;
-
+        // No fast path on the binding slot's version. It is a 16-bit counter that only
+        // ForceBindCurrentFBO ever stamps here, so the comparison was against an arbitrarily old
+        // snapshot and any later slot version that happened to land on it - one wrap of the
+        // counter, or simply enough rebinds - read as "already bound" and left the driver on a
+        // completely different framebuffer. KHR-GL32.packed_pixels then read its gradient back
+        // out of the previous subtest's framebuffer.
+        //
+        // Skipping the work is BindFramebufferId's job anyway: it shadows the driver's own
+        // draw/read bindings and drops the glBindFramebuffer when the target already holds the id,
+        // which is where the cost actually is. What is left here is one registry lookup.
         const auto& currentFBO = slot.GetBoundObject();
         if (currentFBO && currentFBO != MG_Impl::GLImpl::FramebufferImpl::pDefaultFramebufferInfo->defaultFBO) {
             const auto& backendFBOIt = FramebufferImpl::g_backendFramebufferObjects.find(currentFBO.get());
