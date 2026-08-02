@@ -7793,6 +7793,20 @@ void main() {
 
         const Uint32 baseMipLevel = std::min(static_cast<Uint32>(texture->GetLevelRange().x()), currentMipLevelCount - 1);
 
+        // A texture that has only ever defined level 0 carries a single-level backing, so defining
+        // the rest of the chain below recreates the image and carries the old contents over with a
+        // copy that is submitted and waited on out of band. Anything this frame has already
+        // recorded into the old image is not submitted yet, so that copy would read pre-flush
+        // content and every generated level would descend from a stale level 0 - the same hazard
+        // the storage-usage upgrade flushes for before its own preserve-copy.
+        if (m_textureManager->NeedsMipChainGrowth(*texture) && HasPendingRecordedWork()) {
+            if (FlushPendingCommands()) {
+                // Fresh command buffer: the sampled-descriptor-set memo describes bindings that
+                // only existed in the retired one.
+                m_lastSampledSetValid = false;
+            }
+        }
+
         auto& frame = m_frameContext.GetCurrent();
         if (!frame.isCommandRecording) {
             m_frameContext.BeginCommandRecording();

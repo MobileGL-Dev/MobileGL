@@ -1246,6 +1246,20 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                !it->second.storageUsageResolved;
     }
 
+    Bool VkTextureManager::NeedsMipChainGrowth(MG_State::GLState::ITextureObject& texture) const {
+        const TextureIdentity identity = MakeTextureIdentity(&texture);
+        const auto it = m_textureResources.find(identity);
+        // No image yet: the first sync sizes the chain from the levels the texture already
+        // defines, so nothing is recreated and there is nothing to order against.
+        if (it == m_textureResources.end() || it->second.image == VK_NULL_HANDLE) {
+            return false;
+        }
+        const TextureResource& resource = it->second;
+        const IntVec3 extent = {static_cast<Int>(resource.extent.width), static_cast<Int>(resource.extent.height),
+                                static_cast<Int>(resource.depth)};
+        return resource.mipLevels < ComputeFullMipLevelCount(extent);
+    }
+
     Bool VkTextureManager::NeedsStorageImagePreparation(MG_State::GLState::ITextureObject& texture) const {
         const TextureIdentity identity = MakeTextureIdentity(&texture);
         const auto it = m_textureResources.find(identity);

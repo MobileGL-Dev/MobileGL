@@ -350,6 +350,10 @@ public:
     // will recreate it with STORAGE usage and copy the old contents forward. Callers use this to
     // submit their pending recording first, so that copy cannot read pre-flush content.
     Bool NeedsStorageUsageUpgrade(MG_State::GLState::ITextureObject& texture) const;
+    // The same ordering question for the other recreate-and-preserve trigger: true when this
+    // texture's live image carries a shorter mip chain than a full one, so defining the missing
+    // levels recreates it and copies the old contents forward.
+    Bool NeedsMipChainGrowth(MG_State::GLState::ITextureObject& texture) const;
     // Non-mutating probe for the per-draw storage-image fast path: true when preparing this
     // texture as a storage image may need work that is illegal inside a render pass (resource
     // creation, dirty-content upload, or a layout transition to GENERAL). Unknown state reports
