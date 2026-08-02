@@ -48,15 +48,31 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return options;
         }
 
-        Flags<PixelFormatNormalizeOptionBit> GetRuntimeFallbackNormalizeOptions(GLenum requestedInternalFormat) {
+        Flags<PixelFormatNormalizeOptionBit>
+        GetRuntimeFallbackNormalizeOptions(GLenum requestedInternalFormat, Bool mustStayRenderable) {
             using namespace MG_Util::TextureFormatProcessor;
-            const Flags<PixelFormatNormalizeOptionBit> forcedOptions =
-                GetApplicablePixelFormatNormalizeOptions(requestedInternalFormat, GetForcedPixelFormatNormalizeOptions());
+            Flags<PixelFormatNormalizeOptionBit> extraOptions;
+            if (mustStayRenderable) {
+                extraOptions |= PixelFormatNormalizeOptionBit::NoThreeChannelRenderTarget;
+            }
+            const Flags<PixelFormatNormalizeOptionBit> forcedOptions = GetApplicablePixelFormatNormalizeOptions(
+                requestedInternalFormat, GetForcedPixelFormatNormalizeOptions() | extraOptions);
             if (forcedOptions) {
                 return forcedOptions;
             }
-            return GetApplicablePixelFormatNormalizeOptions(requestedInternalFormat,
-                                                            GetDriverPixelFormatNormalizeOptions());
+            return GetApplicablePixelFormatNormalizeOptions(
+                requestedInternalFormat, GetDriverPixelFormatNormalizeOptions() | extraOptions);
+        }
+
+        // Multisample textures can only ever be rendered into, never uploaded to, so a fallback
+        // format for them has to stay colour-renderable - a three-channel float fallback is a legal
+        // ES texture format but not a legal multisample storage format. Widening to four channels
+        // is safe here precisely because there is no transfer path that would have to expand
+        // three-channel client data, and the alpha the draw writes for a three-channel source is
+        // already the 1.0 the frontend format implies.
+        Bool TargetRequiresRenderableFormat(SizeT targetIndex) {
+            return targetIndex == static_cast<SizeT>(TextureTarget::Texture2DMultisample) ||
+                   targetIndex == static_cast<SizeT>(TextureTarget::Texture2DMultisampleArray);
         }
 
         Bool HasCachedFormatCapability(TextureInternalFormat internalFormat,
@@ -116,7 +132,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
             const GLenum requestedInternalFormat = MG_Util::ConvertTextureInternalFormatToGLEnum(internalFormat);
             Flags<PixelFormatNormalizeOptionBit> options;
             if (!pActiveBackendObject || ShouldUseCaveatFormat(internalFormat, targetIndex)) {
-                options = GetRuntimeFallbackNormalizeOptions(requestedInternalFormat);
+                options = GetRuntimeFallbackNormalizeOptions(requestedInternalFormat,
+                                                             TargetRequiresRenderableFormat(targetIndex));
             }
             NormalizePixelFormat(requestedInternalFormat, options, outInternalFormat, outFormat, outType);
         }

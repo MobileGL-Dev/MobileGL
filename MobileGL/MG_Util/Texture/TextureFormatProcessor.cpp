@@ -29,11 +29,13 @@ namespace MobileGL::MG_Util::TextureFormatProcessor {
         case GL_RGB12: // stored as RGB16 (see NormalizePixelFormat)
             applicableOptions |= options & PixelFormatNormalizeOptionBit::NoNorm16;
             applicableOptions |= options & PixelFormatNormalizeOptionBit::NoRgb16;
+            applicableOptions |= options & PixelFormatNormalizeOptionBit::NoThreeChannelRenderTarget;
             break;
         case GL_RGB16_SNORM:
             applicableOptions |= options & PixelFormatNormalizeOptionBit::NoRGB16Snorm;
             applicableOptions |= options & PixelFormatNormalizeOptionBit::NoNorm16;
             applicableOptions |= options & PixelFormatNormalizeOptionBit::NoSnorm16;
+            applicableOptions |= options & PixelFormatNormalizeOptionBit::NoThreeChannelRenderTarget;
             break;
         case GL_RGBA16_SNORM:
         case GL_RG16_SNORM:
@@ -46,6 +48,9 @@ namespace MobileGL::MG_Util::TextureFormatProcessor {
             applicableOptions |= options & PixelFormatNormalizeOptionBit::NoRGBA8Snorm;
             break;
         case GL_RGB8_SNORM:
+            applicableOptions |= options & PixelFormatNormalizeOptionBit::NoSnorm8;
+            applicableOptions |= options & PixelFormatNormalizeOptionBit::NoThreeChannelRenderTarget;
+            break;
         case GL_RG8_SNORM:
         case GL_R8_SNORM:
             applicableOptions |= options & PixelFormatNormalizeOptionBit::NoSnorm8;
@@ -87,6 +92,13 @@ namespace MobileGL::MG_Util::TextureFormatProcessor {
                 *outInternalFormat = internalFormat;
                 break;
             case GL_RGB16:
+                if (options & PixelFormatNormalizeOptionBit::NoThreeChannelRenderTarget) {
+                    // GL_RGB32F is a legal ES texture format but is not colour-renderable, so
+                    // glTexStorage2DMultisample rejects it and the attachment ends up with no
+                    // storage at all.
+                    *outInternalFormat = GL_RGBA32F;
+                    break;
+                }
                 if ((options & PixelFormatNormalizeOptionBit::NoNorm16) ||
                     (options & PixelFormatNormalizeOptionBit::NoRgb16)) {
                     *outInternalFormat = GL_RGB32F;
@@ -117,6 +129,10 @@ namespace MobileGL::MG_Util::TextureFormatProcessor {
                 *outInternalFormat = internalFormat;
                 break;
             case GL_RGB16_SNORM:
+                if (options & PixelFormatNormalizeOptionBit::NoThreeChannelRenderTarget) {
+                    *outInternalFormat = GL_RGBA16F;
+                    break;
+                }
                 if ((options & PixelFormatNormalizeOptionBit::NoNorm16) ||
                     (options & PixelFormatNormalizeOptionBit::NoRGB16Snorm) ||
                     (options & PixelFormatNormalizeOptionBit::NoSnorm16)) {
@@ -150,6 +166,10 @@ namespace MobileGL::MG_Util::TextureFormatProcessor {
                 *outInternalFormat = internalFormat;
                 break;
             case GL_RGB8_SNORM:
+                if (options & PixelFormatNormalizeOptionBit::NoThreeChannelRenderTarget) {
+                    *outInternalFormat = GL_RGBA16F;
+                    break;
+                }
                 if (options & PixelFormatNormalizeOptionBit::NoSnorm8) {
                     *outInternalFormat = GL_RGB16F;
                     break;

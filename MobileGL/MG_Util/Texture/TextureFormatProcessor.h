@@ -18,6 +18,12 @@ namespace MobileGL {
         NoDepthComponent32 = 1 << 4,
         NoRGBA8Snorm = 1 << 5,
         NoRGB16Snorm = 1 << 6,
+        // The target must be colour-renderable and ES has no renderable three-channel
+        // form of the requested format, so it has to be widened to the four-channel one.
+        // Only meaningful for multisample textures: those can never be uploaded to, only
+        // rendered into, so the extra alpha comes from the draw (1.0 for an RGB source)
+        // and no transfer path has to expand three-channel client data.
+        NoThreeChannelRenderTarget = 1 << 7,
         None = 0,
     };
     namespace MG_Util::TextureFormatProcessor {
