@@ -2597,8 +2597,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
         if (!wantDepth && !wantStencil) {
             return false;
         }
-        // Reading the stencil back needs a stencil texture view, which is ES 3.1 state.
-        if (wantStencil && !g_GLESFuncs.glTexParameteri) {
+        // Sampling the stencil half of a packed texture goes through
+        // GL_DEPTH_STENCIL_TEXTURE_MODE, which is ES 3.1 state; on an older driver the pname
+        // would just raise GL_INVALID_ENUM and the shader would read depth bits as stencil.
+        const Bool supportsStencilTextureMode = g_GLESCapabilities.GLESVersion.Major > 3 ||
+                                                (g_GLESCapabilities.GLESVersion.Major == 3 &&
+                                                 g_GLESCapabilities.GLESVersion.Minor >= 1);
+        if (wantStencil && !supportsStencilTextureMode) {
             return false;
         }
 
