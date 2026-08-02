@@ -2382,15 +2382,462 @@ namespace MobileGL::MG_Backend::DirectGLES {
         return resolved;
     }
 
+    // ---------------------------------------------------------------------------------
+    // Single-sample -> multisample blit ("replicate")
+    //
+    // Desktop GL replicates the source sample into every destination sample when the read
+    // framebuffer is single-sampled and the draw framebuffer is not. ES forbids the whole
+    // call ("INVALID_OPERATION if SAMPLE_BUFFERS for the draw framebuffer is greater than
+    // zero"), so the blit silently did nothing - KHR-GL3x.packed_depth_stencil.blit's
+    // second loop then read a destination that still held its clear values.
+    //
+    // Emulated by drawing a full-screen triangle into the multisample framebuffer: every
+    // pixel is fully covered, so every sample of it receives the same value, which is
+    // exactly what the replicate rule asks for. Depth comes from gl_FragDepth; stencil has
+    // no shader output on ES, so it is written one bit plane at a time with REPLACE and a
+    // discard for the pixels whose source bit is clear.
+    namespace ReplicateBlitImpl {
+        static Uint s_contextGeneration = ~0u;
+        static GLuint s_framebuffer = 0;
+        static GLuint s_texture = 0;
+        static GLenum s_textureFormat = 0;
+        static GLsizei s_textureWidth = 0;
+        static GLsizei s_textureHeight = 0;
+        static GLuint s_vertexArray = 0;
+        static GLuint s_depthProgram = 0;
+        static GLuint s_stencilProgram = 0;
+        static GLint s_depthUvTransform = -1;
+        static GLint s_stencilUvTransform = -1;
+        static GLint s_stencilBit = -1;
+        static Bool s_programsFailed = false;
+
+        static const char* const kVertexSource =
+            "#version 300 es\n"
+            "uniform vec4 uUvTransform;\n"
+            "out vec2 vUv;\n"
+            "void main() {\n"
+            "    vec2 p = vec2(float((gl_VertexID << 1) & 2), float(gl_VertexID & 2));\n"
+            "    gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);\n"
+            "    vUv = p * uUvTransform.xy + uUvTransform.zw;\n"
+            "}\n";
+
+        static const char* const kDepthFragmentSource =
+            "#version 300 es\n"
+            "precision highp float;\n"
+            "precision highp sampler2D;\n"
+            "uniform sampler2D uSource;\n"
+            "in vec2 vUv;\n"
+            "void main() {\n"
+            "    gl_FragDepth = texture(uSource, vUv).r;\n"
+            "}\n";
+
+        static const char* const kStencilFragmentSource =
+            "#version 300 es\n"
+            "precision highp float;\n"
+            "precision highp usampler2D;\n"
+            "uniform usampler2D uSource;\n"
+            "uniform uint uBit;\n"
+            "in vec2 vUv;\n"
+            "void main() {\n"
+            "    if ((texture(uSource, vUv).r & uBit) == 0u) discard;\n"
+            "}\n";
+
+        static GLuint BuildProgram(const char* fragmentSource) {
+            const GLuint vertexShader = g_GLESFuncs.glCreateShader(GL_VERTEX_SHADER);
+            const GLuint fragmentShader = g_GLESFuncs.glCreateShader(GL_FRAGMENT_SHADER);
+            if (vertexShader == 0 || fragmentShader == 0) {
+                return 0;
+            }
+            g_GLESFuncs.glShaderSource(vertexShader, 1, &kVertexSource, nullptr);
+            g_GLESFuncs.glCompileShader(vertexShader);
+            g_GLESFuncs.glShaderSource(fragmentShader, 1, &fragmentSource, nullptr);
+            g_GLESFuncs.glCompileShader(fragmentShader);
+
+            const GLuint program = g_GLESFuncs.glCreateProgram();
+            GLint linked = GL_FALSE;
+            if (program != 0) {
+                g_GLESFuncs.glAttachShader(program, vertexShader);
+                g_GLESFuncs.glAttachShader(program, fragmentShader);
+                g_GLESFuncs.glLinkProgram(program);
+                g_GLESFuncs.glGetProgramiv(program, GL_LINK_STATUS, &linked);
+            }
+            g_GLESFuncs.glDeleteShader(vertexShader);
+            g_GLESFuncs.glDeleteShader(fragmentShader);
+            if (linked != GL_TRUE) {
+                if (program != 0) g_GLESFuncs.glDeleteProgram(program);
+                return 0;
+            }
+            return program;
+        }
+
+        static Bool EnsureResources() {
+            if (s_contextGeneration != TextureImpl::g_textureContextGeneration) {
+                // The ids belonged to a dead context; the context reclaimed them with it.
+                s_framebuffer = 0;
+                s_texture = 0;
+                s_textureFormat = 0;
+                s_textureWidth = 0;
+                s_textureHeight = 0;
+                s_vertexArray = 0;
+                s_depthProgram = 0;
+                s_stencilProgram = 0;
+                s_programsFailed = false;
+                s_contextGeneration = TextureImpl::g_textureContextGeneration;
+            }
+            if (s_programsFailed) {
+                return false;
+            }
+            if (s_depthProgram == 0) {
+                s_depthProgram = BuildProgram(kDepthFragmentSource);
+                s_stencilProgram = BuildProgram(kStencilFragmentSource);
+                if (s_depthProgram == 0 || s_stencilProgram == 0) {
+                    s_programsFailed = true;
+                    MGLOG_E("BlitFramebuffer: could not build the multisample replicate programs");
+                    return false;
+                }
+                s_depthUvTransform = g_GLESFuncs.glGetUniformLocation(s_depthProgram, "uUvTransform");
+                s_stencilUvTransform = g_GLESFuncs.glGetUniformLocation(s_stencilProgram, "uUvTransform");
+                s_stencilBit = g_GLESFuncs.glGetUniformLocation(s_stencilProgram, "uBit");
+            }
+            if (s_framebuffer == 0) {
+                g_GLESFuncs.glGenFramebuffers(1, &s_framebuffer);
+                if (s_framebuffer == 0) return false;
+            }
+            if (s_vertexArray == 0) {
+                g_GLESFuncs.glGenVertexArrays(1, &s_vertexArray);
+                if (s_vertexArray == 0) return false;
+            }
+            return true;
+        }
+
+        // Sized internal format of the read framebuffer's depth (or, failing that, stencil)
+        // attachment. The scratch copy has to use the very same one: ES rejects a
+        // depth/stencil blit between differing formats even when both sides are single-sampled.
+        static GLenum QueryReadDepthStencilFormat(GLenum* outAttachment) {
+            const GLenum attachments[] = {GL_DEPTH_ATTACHMENT, GL_STENCIL_ATTACHMENT};
+            for (const GLenum attachment : attachments) {
+                GLint objectType = 0;
+                GLint objectName = 0;
+                g_GLESFuncs.glGetFramebufferAttachmentParameteriv(GL_READ_FRAMEBUFFER, attachment,
+                                                                  GL_FRAMEBUFFER_ATTACHMENT_OBJECT_TYPE, &objectType);
+                g_GLESFuncs.glGetFramebufferAttachmentParameteriv(GL_READ_FRAMEBUFFER, attachment,
+                                                                  GL_FRAMEBUFFER_ATTACHMENT_OBJECT_NAME, &objectName);
+                if (objectName == 0) {
+                    continue;
+                }
+                GLint internalFormat = 0;
+                if (objectType == GL_RENDERBUFFER) {
+                    GLint previous = 0;
+                    g_GLESFuncs.glGetIntegerv(GL_RENDERBUFFER_BINDING, &previous);
+                    g_GLESFuncs.glBindRenderbuffer(GL_RENDERBUFFER, static_cast<GLuint>(objectName));
+                    g_GLESFuncs.glGetRenderbufferParameteriv(GL_RENDERBUFFER, GL_RENDERBUFFER_INTERNAL_FORMAT,
+                                                             &internalFormat);
+                    g_GLESFuncs.glBindRenderbuffer(GL_RENDERBUFFER, static_cast<GLuint>(previous));
+                } else if (objectType == GL_TEXTURE) {
+                    GLint previous = 0;
+                    g_GLESFuncs.glGetIntegerv(GL_TEXTURE_BINDING_2D, &previous);
+                    g_GLESFuncs.glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(objectName));
+                    g_GLESFuncs.glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_INTERNAL_FORMAT,
+                                                         &internalFormat);
+                    g_GLESFuncs.glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(previous));
+                }
+                if (internalFormat != 0) {
+                    if (outAttachment) *outAttachment = attachment;
+                    return static_cast<GLenum>(internalFormat);
+                }
+            }
+            return 0;
+        }
+
+        static Bool FormatHasDepth(GLenum internalFormat) {
+            return internalFormat == GL_DEPTH_COMPONENT16 || internalFormat == GL_DEPTH_COMPONENT24 ||
+                   internalFormat == GL_DEPTH_COMPONENT32F || internalFormat == GL_DEPTH24_STENCIL8 ||
+                   internalFormat == GL_DEPTH32F_STENCIL8;
+        }
+
+        static Bool FormatHasStencil(GLenum internalFormat) {
+            return internalFormat == GL_DEPTH24_STENCIL8 || internalFormat == GL_DEPTH32F_STENCIL8 ||
+                   internalFormat == GL_STENCIL_INDEX8;
+        }
+
+        static GLenum ScratchAttachmentFor(GLenum internalFormat) {
+            if (FormatHasDepth(internalFormat) && FormatHasStencil(internalFormat)) {
+                return GL_DEPTH_STENCIL_ATTACHMENT;
+            }
+            return FormatHasDepth(internalFormat) ? GL_DEPTH_ATTACHMENT : GL_STENCIL_ATTACHMENT;
+        }
+    } // namespace ReplicateBlitImpl
+
+    // Returns true when the request was serviced (or is not this fallback's business).
+    static Bool ReplicateBlitIntoMultisampleDraw(GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1, GLint dstX0,
+                                                 GLint dstY0, GLint dstX1, GLint dstY1, GLbitfield mask) {
+        using namespace ReplicateBlitImpl;
+        if ((mask & (GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT)) == 0) {
+            return false;
+        }
+        if (!EnsureResources()) {
+            return false;
+        }
+
+        const GLsizei srcWidth = static_cast<GLsizei>(std::abs(srcX1 - srcX0));
+        const GLsizei srcHeight = static_cast<GLsizei>(std::abs(srcY1 - srcY0));
+        const GLsizei dstWidth = static_cast<GLsizei>(std::abs(dstX1 - dstX0));
+        const GLsizei dstHeight = static_cast<GLsizei>(std::abs(dstY1 - dstY0));
+        if (srcWidth <= 0 || srcHeight <= 0 || dstWidth <= 0 || dstHeight <= 0) {
+            return false;
+        }
+
+        GLenum readAttachment = GL_DEPTH_ATTACHMENT;
+        const GLenum sourceFormat = QueryReadDepthStencilFormat(&readAttachment);
+        if (sourceFormat == 0) {
+            return false;
+        }
+        const Bool wantDepth = (mask & GL_DEPTH_BUFFER_BIT) != 0 && FormatHasDepth(sourceFormat);
+        const Bool wantStencil = (mask & GL_STENCIL_BUFFER_BIT) != 0 && FormatHasStencil(sourceFormat);
+        if (!wantDepth && !wantStencil) {
+            return false;
+        }
+        // Reading the stencil back needs a stencil texture view, which is ES 3.1 state.
+        if (wantStencil && !g_GLESFuncs.glTexParameteri) {
+            return false;
+        }
+
+        GLint previousDraw = 0;
+        GLint previousRead = 0;
+        g_GLESFuncs.glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &previousDraw);
+        g_GLESFuncs.glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &previousRead);
+        GLint previousActiveTexture = 0;
+        g_GLESFuncs.glGetIntegerv(GL_ACTIVE_TEXTURE, &previousActiveTexture);
+
+        // Copy the source rectangle into a scratch texture of its own format: both sides of
+        // that blit are single-sampled, which ES does allow.
+        Bool ok = true;
+        if (s_texture == 0 || s_textureFormat != sourceFormat || s_textureWidth < srcWidth ||
+            s_textureHeight < srcHeight) {
+            if (s_texture != 0) {
+                g_GLESFuncs.glDeleteTextures(1, &s_texture); // immutable storage cannot be resized
+                s_texture = 0;
+            }
+            s_textureWidth = std::max(s_textureWidth, srcWidth);
+            s_textureHeight = std::max(s_textureHeight, srcHeight);
+            g_GLESFuncs.glGenTextures(1, &s_texture);
+            if (s_texture == 0) {
+                ok = false;
+            } else {
+                g_GLESFuncs.glActiveTexture(GL_TEXTURE0);
+                g_GLESFuncs.glBindTexture(GL_TEXTURE_2D, s_texture);
+                DrainBlitErrors();
+                g_GLESFuncs.glTexStorage2D(GL_TEXTURE_2D, 1, sourceFormat, s_textureWidth, s_textureHeight);
+                ok = g_GLESFuncs.glGetError() == GL_NO_ERROR;
+                g_GLESFuncs.glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+                g_GLESFuncs.glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+                g_GLESFuncs.glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+                g_GLESFuncs.glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+                s_textureFormat = ok ? sourceFormat : 0;
+            }
+        }
+
+        if (ok) {
+            g_GLESFuncs.glBindFramebuffer(GL_DRAW_FRAMEBUFFER, s_framebuffer);
+            g_GLESFuncs.glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, ScratchAttachmentFor(sourceFormat), GL_TEXTURE_2D,
+                                               s_texture, 0);
+            ok = g_GLESFuncs.glCheckFramebufferStatus(GL_DRAW_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
+        }
+        if (ok) {
+            const GLint left = std::min(srcX0, srcX1);
+            const GLint bottom = std::min(srcY0, srcY1);
+            DrainBlitErrors();
+            g_GLESFuncs.glBlitFramebuffer(left, bottom, left + srcWidth, bottom + srcHeight, 0, 0, srcWidth, srcHeight,
+                                          mask & (GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT), GL_NEAREST);
+            ok = g_GLESFuncs.glGetError() == GL_NO_ERROR;
+        }
+
+        g_GLESFuncs.glBindFramebuffer(GL_DRAW_FRAMEBUFFER, static_cast<GLuint>(previousDraw));
+        g_GLESFuncs.glBindFramebuffer(GL_READ_FRAMEBUFFER, static_cast<GLuint>(previousRead));
+        FramebufferImpl::InvalidateFramebufferBindingCache();
+        if (!ok) {
+            g_GLESFuncs.glActiveTexture(static_cast<GLenum>(previousActiveTexture));
+            MGLOG_E("BlitFramebuffer: could not stage the source for the multisample replicate");
+            return false;
+        }
+
+        // Everything below draws into the caller's multisample draw framebuffer, so the
+        // pipeline state it depends on is saved and put back byte for byte - the sync layer's
+        // shadow of the driver state has to stay true.
+        GLint previousProgram = 0;
+        GLint previousVertexArray = 0;
+        GLint previousTexture = 0;
+        GLint previousViewport[4] = {0, 0, 0, 0};
+        GLint previousScissorBox[4] = {0, 0, 0, 0};
+        GLboolean previousColorMask[4] = {GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE};
+        GLint previousDepthFunc = GL_LESS;
+        GLboolean previousDepthMask = GL_TRUE;
+        GLint previousStencilFunc[2] = {GL_ALWAYS, GL_ALWAYS};
+        GLint previousStencilRef[2] = {0, 0};
+        GLint previousStencilValueMask[2] = {~0, ~0};
+        GLint previousStencilWriteMask[2] = {~0, ~0};
+        GLint previousStencilFail[2] = {GL_KEEP, GL_KEEP};
+        GLint previousStencilDepthFail[2] = {GL_KEEP, GL_KEEP};
+        GLint previousStencilPass[2] = {GL_KEEP, GL_KEEP};
+        g_GLESFuncs.glGetIntegerv(GL_CURRENT_PROGRAM, &previousProgram);
+        g_GLESFuncs.glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &previousVertexArray);
+        g_GLESFuncs.glGetIntegerv(GL_TEXTURE_BINDING_2D, &previousTexture);
+        g_GLESFuncs.glGetIntegerv(GL_VIEWPORT, previousViewport);
+        g_GLESFuncs.glGetIntegerv(GL_SCISSOR_BOX, previousScissorBox);
+        g_GLESFuncs.glGetBooleanv(GL_COLOR_WRITEMASK, previousColorMask);
+        g_GLESFuncs.glGetIntegerv(GL_DEPTH_FUNC, &previousDepthFunc);
+        g_GLESFuncs.glGetBooleanv(GL_DEPTH_WRITEMASK, &previousDepthMask);
+        g_GLESFuncs.glGetIntegerv(GL_STENCIL_FUNC, &previousStencilFunc[0]);
+        g_GLESFuncs.glGetIntegerv(GL_STENCIL_BACK_FUNC, &previousStencilFunc[1]);
+        g_GLESFuncs.glGetIntegerv(GL_STENCIL_REF, &previousStencilRef[0]);
+        g_GLESFuncs.glGetIntegerv(GL_STENCIL_BACK_REF, &previousStencilRef[1]);
+        g_GLESFuncs.glGetIntegerv(GL_STENCIL_VALUE_MASK, &previousStencilValueMask[0]);
+        g_GLESFuncs.glGetIntegerv(GL_STENCIL_BACK_VALUE_MASK, &previousStencilValueMask[1]);
+        g_GLESFuncs.glGetIntegerv(GL_STENCIL_WRITEMASK, &previousStencilWriteMask[0]);
+        g_GLESFuncs.glGetIntegerv(GL_STENCIL_BACK_WRITEMASK, &previousStencilWriteMask[1]);
+        g_GLESFuncs.glGetIntegerv(GL_STENCIL_FAIL, &previousStencilFail[0]);
+        g_GLESFuncs.glGetIntegerv(GL_STENCIL_BACK_FAIL, &previousStencilFail[1]);
+        g_GLESFuncs.glGetIntegerv(GL_STENCIL_PASS_DEPTH_FAIL, &previousStencilDepthFail[0]);
+        g_GLESFuncs.glGetIntegerv(GL_STENCIL_BACK_PASS_DEPTH_FAIL, &previousStencilDepthFail[1]);
+        g_GLESFuncs.glGetIntegerv(GL_STENCIL_PASS_DEPTH_PASS, &previousStencilPass[0]);
+        g_GLESFuncs.glGetIntegerv(GL_STENCIL_BACK_PASS_DEPTH_PASS, &previousStencilPass[1]);
+
+        struct CapabilityState {
+            GLenum cap;
+            GLboolean enabled;
+        };
+        CapabilityState capabilities[] = {
+            {GL_SCISSOR_TEST, GL_FALSE},     {GL_DEPTH_TEST, GL_FALSE},
+            {GL_STENCIL_TEST, GL_FALSE},     {GL_CULL_FACE, GL_FALSE},
+            {GL_BLEND, GL_FALSE},            {GL_RASTERIZER_DISCARD, GL_FALSE},
+            {GL_POLYGON_OFFSET_FILL, GL_FALSE}, {GL_SAMPLE_ALPHA_TO_COVERAGE, GL_FALSE},
+            {GL_SAMPLE_COVERAGE, GL_FALSE},  {GL_SAMPLE_MASK, GL_FALSE},
+        };
+        for (CapabilityState& capability : capabilities) {
+            capability.enabled = g_GLESFuncs.glIsEnabled(capability.cap);
+        }
+
+        const GLint dstLeft = std::min(dstX0, dstX1);
+        const GLint dstBottom = std::min(dstY0, dstY1);
+        const Bool mirrorX = (srcX1 > srcX0) != (dstX1 > dstX0);
+        const Bool mirrorY = (srcY1 > srcY0) != (dstY1 > dstY0);
+        // The scratch holds the source rectangle at its origin, so the texture is larger than
+        // the copied region: scale the [0,1] quad coordinates down to the region it occupies.
+        const Float uvScaleX = static_cast<Float>(srcWidth) / static_cast<Float>(s_textureWidth);
+        const Float uvScaleY = static_cast<Float>(srcHeight) / static_cast<Float>(s_textureHeight);
+        const Float uvTransform[4] = {mirrorX ? -uvScaleX : uvScaleX, mirrorY ? -uvScaleY : uvScaleY,
+                                      mirrorX ? uvScaleX : 0.0f, mirrorY ? uvScaleY : 0.0f};
+
+        g_GLESFuncs.glBindVertexArray(s_vertexArray);
+        g_GLESFuncs.glActiveTexture(GL_TEXTURE0);
+        g_GLESFuncs.glBindTexture(GL_TEXTURE_2D, s_texture);
+        g_GLESFuncs.glViewport(dstLeft, dstBottom, dstWidth, dstHeight);
+        g_GLESFuncs.glScissor(dstLeft, dstBottom, dstWidth, dstHeight);
+        g_GLESFuncs.glEnable(GL_SCISSOR_TEST);
+        g_GLESFuncs.glDisable(GL_CULL_FACE);
+        g_GLESFuncs.glDisable(GL_BLEND);
+        g_GLESFuncs.glDisable(GL_RASTERIZER_DISCARD);
+        g_GLESFuncs.glDisable(GL_POLYGON_OFFSET_FILL);
+        g_GLESFuncs.glDisable(GL_SAMPLE_ALPHA_TO_COVERAGE);
+        g_GLESFuncs.glDisable(GL_SAMPLE_COVERAGE);
+        g_GLESFuncs.glDisable(GL_SAMPLE_MASK);
+        g_GLESFuncs.glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
+        DrainBlitErrors();
+
+        if (wantDepth) {
+            if (FormatHasStencil(sourceFormat)) {
+                g_GLESFuncs.glTexParameteri(GL_TEXTURE_2D, GL_DEPTH_STENCIL_TEXTURE_MODE, GL_DEPTH_COMPONENT);
+            }
+            g_GLESFuncs.glUseProgram(s_depthProgram);
+            g_GLESFuncs.glUniform4f(s_depthUvTransform, uvTransform[0], uvTransform[1], uvTransform[2],
+                                    uvTransform[3]);
+            g_GLESFuncs.glEnable(GL_DEPTH_TEST);
+            g_GLESFuncs.glDepthFunc(GL_ALWAYS);
+            g_GLESFuncs.glDepthMask(GL_TRUE);
+            g_GLESFuncs.glDisable(GL_STENCIL_TEST);
+            g_GLESFuncs.glDrawArrays(GL_TRIANGLES, 0, 3);
+        }
+
+        if (wantStencil) {
+            g_GLESFuncs.glTexParameteri(GL_TEXTURE_2D, GL_DEPTH_STENCIL_TEXTURE_MODE, GL_STENCIL_INDEX);
+            g_GLESFuncs.glUseProgram(s_stencilProgram);
+            g_GLESFuncs.glUniform4f(s_stencilUvTransform, uvTransform[0], uvTransform[1], uvTransform[2],
+                                    uvTransform[3]);
+            g_GLESFuncs.glDisable(GL_DEPTH_TEST);
+            g_GLESFuncs.glDepthMask(GL_FALSE);
+            g_GLESFuncs.glEnable(GL_STENCIL_TEST);
+            // The bit planes are written by ORing in the set bits, so the destination has to
+            // start from zero. The blit overwrites the whole rectangle anyway, and the scissor
+            // keeps the clear inside it.
+            const GLint zero = 0;
+            g_GLESFuncs.glStencilMask(0xFFu);
+            g_GLESFuncs.glClearBufferiv(GL_STENCIL, 0, &zero);
+            g_GLESFuncs.glStencilFunc(GL_ALWAYS, 0xFF, 0xFFu);
+            g_GLESFuncs.glStencilOp(GL_KEEP, GL_KEEP, GL_REPLACE);
+            for (Uint bit = 0; bit < 8; ++bit) {
+                g_GLESFuncs.glStencilMask(1u << bit);
+                g_GLESFuncs.glUniform1ui(s_stencilBit, 1u << bit);
+                g_GLESFuncs.glDrawArrays(GL_TRIANGLES, 0, 3);
+            }
+            g_GLESFuncs.glTexParameteri(GL_TEXTURE_2D, GL_DEPTH_STENCIL_TEXTURE_MODE, GL_DEPTH_COMPONENT);
+        }
+
+        const Bool replicated = g_GLESFuncs.glGetError() == GL_NO_ERROR;
+
+        g_GLESFuncs.glUseProgram(static_cast<GLuint>(previousProgram));
+        g_GLESFuncs.glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(previousTexture));
+        g_GLESFuncs.glActiveTexture(static_cast<GLenum>(previousActiveTexture));
+        g_GLESFuncs.glBindVertexArray(static_cast<GLuint>(previousVertexArray));
+        g_GLESFuncs.glViewport(previousViewport[0], previousViewport[1], previousViewport[2], previousViewport[3]);
+        g_GLESFuncs.glScissor(previousScissorBox[0], previousScissorBox[1], previousScissorBox[2],
+                              previousScissorBox[3]);
+        g_GLESFuncs.glColorMask(previousColorMask[0], previousColorMask[1], previousColorMask[2],
+                                previousColorMask[3]);
+        g_GLESFuncs.glDepthFunc(static_cast<GLenum>(previousDepthFunc));
+        g_GLESFuncs.glDepthMask(previousDepthMask);
+        const GLenum faces[2] = {GL_FRONT, GL_BACK};
+        for (SizeT face = 0; face < 2; ++face) {
+            g_GLESFuncs.glStencilFuncSeparate(faces[face], static_cast<GLenum>(previousStencilFunc[face]),
+                                              previousStencilRef[face],
+                                              static_cast<GLuint>(previousStencilValueMask[face]));
+            g_GLESFuncs.glStencilOpSeparate(faces[face], static_cast<GLenum>(previousStencilFail[face]),
+                                            static_cast<GLenum>(previousStencilDepthFail[face]),
+                                            static_cast<GLenum>(previousStencilPass[face]));
+            g_GLESFuncs.glStencilMaskSeparate(faces[face], static_cast<GLuint>(previousStencilWriteMask[face]));
+        }
+        for (const CapabilityState& capability : capabilities) {
+            if (capability.enabled) {
+                g_GLESFuncs.glEnable(capability.cap);
+            } else {
+                g_GLESFuncs.glDisable(capability.cap);
+            }
+        }
+        // The per-draw-buffer colour masks are not covered by the non-indexed glColorMask above.
+        for (Uint index = 0; index < MG_State::GLState::FramebufferObject::MAX_DRAW_BUFFERS; ++index) {
+            const BoolVec4& colorMask = RenderStateImpl::g_syncedRenderStateParameters.ColorMasks[index];
+            if (g_GLESFuncs.glColorMaski) {
+                g_GLESFuncs.glColorMaski(index, colorMask.x() ? GL_TRUE : GL_FALSE, colorMask.y() ? GL_TRUE : GL_FALSE,
+                                         colorMask.z() ? GL_TRUE : GL_FALSE, colorMask.w() ? GL_TRUE : GL_FALSE);
+            }
+        }
+        DrainBlitErrors();
+
+        if (!replicated) {
+            MGLOG_E("BlitFramebuffer: multisample replicate fallback failed");
+        }
+        return replicated;
+    }
+
     static void IssueBlitWithResolveFallback(GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1, GLint dstX0,
                                              GLint dstY0, GLint dstX1, GLint dstY1, GLbitfield mask, GLenum filter) {
         DrainBlitErrors();
         g_GLESFuncs.glBlitFramebuffer(srcX0, srcY0, srcX1, srcY1, dstX0, dstY0, dstX1, dstY1, mask, filter);
-        if (g_GLESFuncs.glGetError() == GL_NO_ERROR || (mask & GL_COLOR_BUFFER_BIT) == 0) {
+        if (g_GLESFuncs.glGetError() == GL_NO_ERROR) {
             return;
         }
-        // Only the multisample-resolve format mismatch is worth a second attempt; a
-        // source that is not multisampled would have hit the same restriction on desktop.
+        // Two ES restrictions desktop GL does not have are worth a second attempt: a
+        // multisample resolve that also converts colour format, and any blit into a
+        // multisample draw framebuffer. Both need to know how the two sides are sampled.
         GLint readSamples = 0;
         GLint drawSamples = 0;
         {
@@ -2406,7 +2853,17 @@ namespace MobileGL::MG_Backend::DirectGLES {
             g_GLESFuncs.glBindFramebuffer(GL_DRAW_FRAMEBUFFER, static_cast<GLuint>(previousDraw));
             FramebufferImpl::InvalidateFramebufferBindingCache();
         }
-        if (readSamples <= 0 || drawSamples > 0) {
+        if (readSamples <= 0 && drawSamples > 0) {
+            // Single-sample source into a multisample destination: ES rejects the call
+            // outright, desktop GL replicates the source sample into every destination one.
+            if (ReplicateBlitIntoMultisampleDraw(srcX0, srcY0, srcX1, srcY1, dstX0, dstY0, dstX1, dstY1, mask)) {
+                if ((mask & GL_COLOR_BUFFER_BIT) != 0) {
+                    MGLOG_E("BlitFramebuffer: colour replicate into a multisample draw framebuffer is not emulated");
+                }
+            }
+            return;
+        }
+        if (readSamples <= 0 || drawSamples > 0 || (mask & GL_COLOR_BUFFER_BIT) == 0) {
             return;
         }
         if (ResolveThenBlit(srcX0, srcY0, srcX1, srcY1, dstX0, dstY0, dstX1, dstY1, filter) &&
