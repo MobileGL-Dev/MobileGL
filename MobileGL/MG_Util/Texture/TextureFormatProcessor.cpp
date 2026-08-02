@@ -36,6 +36,9 @@ namespace MobileGL::MG_Util::TextureFormatProcessor {
             applicableOptions |= options & PixelFormatNormalizeOptionBit::NoNorm16;
             applicableOptions |= options & PixelFormatNormalizeOptionBit::NoSnorm16;
             applicableOptions |= options & PixelFormatNormalizeOptionBit::NoThreeChannelRenderTarget;
+            if (options & PixelFormatNormalizeOptionBit::NoThreeChannelRenderTarget) {
+                applicableOptions |= options & PixelFormatNormalizeOptionBit::NoSnorm16RenderTarget;
+            }
             break;
         case GL_RGBA16_SNORM:
         case GL_RG16_SNORM:
@@ -130,7 +133,11 @@ namespace MobileGL::MG_Util::TextureFormatProcessor {
                 break;
             case GL_RGB16_SNORM:
                 if (options & PixelFormatNormalizeOptionBit::NoThreeChannelRenderTarget) {
-                    *outInternalFormat = GL_RGBA16F;
+                    // A half float loses the low bits of a 16-bit SNORM channel, so keep the
+                    // signed-normalized encoding whenever the driver can render to it.
+                    *outInternalFormat = (options & PixelFormatNormalizeOptionBit::NoSnorm16RenderTarget)
+                                             ? GL_RGBA16F
+                                             : GL_RGBA16_SNORM;
                     break;
                 }
                 if ((options & PixelFormatNormalizeOptionBit::NoNorm16) ||

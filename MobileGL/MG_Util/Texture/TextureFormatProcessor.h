@@ -24,6 +24,11 @@ namespace MobileGL {
         // rendered into, so the extra alpha comes from the draw (1.0 for an RGB source)
         // and no transfer path has to expand three-channel client data.
         NoThreeChannelRenderTarget = 1 << 7,
+        // Pairs with the bit above: the widened four-channel format has to stay renderable AND
+        // keep 16-bit signed-normalized precision, which needs both EXT_texture_norm16 and
+        // EXT_render_snorm. Without them the only renderable widening left is a half float, whose
+        // 11-bit mantissa cannot represent a 16-bit SNORM channel exactly.
+        NoSnorm16RenderTarget = 1 << 8,
         None = 0,
     };
     namespace MG_Util::TextureFormatProcessor {

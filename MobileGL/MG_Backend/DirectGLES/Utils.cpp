@@ -49,12 +49,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
         }
 
         Flags<PixelFormatNormalizeOptionBit>
-        GetRuntimeFallbackNormalizeOptions(GLenum requestedInternalFormat, Bool mustStayRenderable) {
+        GetRuntimeFallbackNormalizeOptions(GLenum requestedInternalFormat,
+                                           Flags<PixelFormatNormalizeOptionBit> extraOptions) {
             using namespace MG_Util::TextureFormatProcessor;
-            Flags<PixelFormatNormalizeOptionBit> extraOptions;
-            if (mustStayRenderable) {
-                extraOptions |= PixelFormatNormalizeOptionBit::NoThreeChannelRenderTarget;
-            }
             const Flags<PixelFormatNormalizeOptionBit> forcedOptions = GetApplicablePixelFormatNormalizeOptions(
                 requestedInternalFormat, GetForcedPixelFormatNormalizeOptions() | extraOptions);
             if (forcedOptions) {
@@ -73,6 +70,18 @@ namespace MobileGL::MG_Backend::DirectGLES {
         Bool TargetRequiresRenderableFormat(SizeT targetIndex) {
             return targetIndex == static_cast<SizeT>(TextureTarget::Texture2DMultisample) ||
                    targetIndex == static_cast<SizeT>(TextureTarget::Texture2DMultisampleArray);
+        }
+
+        Flags<PixelFormatNormalizeOptionBit> GetRenderTargetNormalizeOptions(SizeT targetIndex) {
+            Flags<PixelFormatNormalizeOptionBit> options;
+            if (!TargetRequiresRenderableFormat(targetIndex)) {
+                return options;
+            }
+            options |= PixelFormatNormalizeOptionBit::NoThreeChannelRenderTarget;
+            if (!g_GLESCapabilities.SupportsRenderSnorm || !g_GLESCapabilities.SupportsNorm16Texture) {
+                options |= PixelFormatNormalizeOptionBit::NoSnorm16RenderTarget;
+            }
+            return options;
         }
 
         Bool HasCachedFormatCapability(TextureInternalFormat internalFormat,
@@ -133,7 +142,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             Flags<PixelFormatNormalizeOptionBit> options;
             if (!pActiveBackendObject || ShouldUseCaveatFormat(internalFormat, targetIndex)) {
                 options = GetRuntimeFallbackNormalizeOptions(requestedInternalFormat,
-                                                             TargetRequiresRenderableFormat(targetIndex));
+                                                             GetRenderTargetNormalizeOptions(targetIndex));
             }
             NormalizePixelFormat(requestedInternalFormat, options, outInternalFormat, outFormat, outType);
         }

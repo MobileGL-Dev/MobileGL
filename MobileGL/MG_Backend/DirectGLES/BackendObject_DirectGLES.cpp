@@ -213,6 +213,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
             if (options & PixelFormatNormalizeOptionBit::NoThreeChannelRenderTarget) {
                 reasons.push_back("no three-channel multisample storage format on OpenGL ES");
             }
+            if (options & PixelFormatNormalizeOptionBit::NoSnorm16RenderTarget) {
+                reasons.push_back("EXT_render_snorm not supported");
+            }
 
             String reason;
             for (SizeT i = 0; i < reasons.size(); ++i) {
@@ -576,6 +579,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     Flags<PixelFormatNormalizeOptionBit> targetOptions;
                     if (IsGLESProbeMultisampleTarget(target)) {
                         targetOptions |= PixelFormatNormalizeOptionBit::NoThreeChannelRenderTarget;
+                        if (!capabilities.SupportsRenderSnorm || !capabilities.SupportsNorm16Texture) {
+                            targetOptions |= PixelFormatNormalizeOptionBit::NoSnorm16RenderTarget;
+                        }
                     }
                     GLESProbeFormatInfo fallbackInfo = outerFallbackInfo;
                     Bool hasForcedFallback = outerHasForcedFallback;

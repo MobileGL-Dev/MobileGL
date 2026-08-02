@@ -1031,6 +1031,9 @@ namespace MobileGL {
             String GLESShadingLanguageVersionString;
             Bool SupportsPersistentMapping = false;
             Bool SupportsNorm16Texture = false;
+            // GL_EXT_render_snorm is present, so the signed-normalized formats are colour-renderable
+            // (and usable as multisample texture storage) rather than texture-only.
+            Bool SupportsRenderSnorm = false;
             // GL_EXT_sRGB_write_control is present, so GL_FRAMEBUFFER_SRGB can be turned off.
             // GLES has no such switch in core: writes into an sRGB attachment are ALWAYS encoded,
             // while desktop GL leaves GL_FRAMEBUFFER_SRGB disabled by default and writes raw.

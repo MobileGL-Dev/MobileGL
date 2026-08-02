@@ -824,6 +824,9 @@ namespace MobileGL::MG_Util::BackendLoader {
                 if (std::strcmp(extension, "GL_EXT_texture_norm16") == 0) {
                     caps.SupportsNorm16Texture = true;
                 }
+                if (std::strcmp(extension, "GL_EXT_render_snorm") == 0) {
+                    caps.SupportsRenderSnorm = true;
+                }
                 if (std::strcmp(extension, "GL_EXT_sRGB_write_control") == 0) {
                     caps.SupportsSrgbWriteControl = true;
                 }
