@@ -3344,6 +3344,17 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     effectiveSpirv = &noperspectiveSpirv;
                 }
 
+                // ES has no rectangle sampler, and SPIRV-Cross refuses the whole module rather
+                // than approximating one. Where every use takes integer texel coordinates a
+                // rectangle image is indistinguishable from a 2D one, so rewrite the type and let
+                // it through; the pass declines anything it cannot convert exactly.
+                Vector<unsigned int> rectLoweredSpirv;
+                if (MG_Util::ShaderTranspiler::ShaderCompiler::LowerRectImagesForEssl(*effectiveSpirv,
+                                                                                       rectLoweredSpirv) &&
+                    !rectLoweredSpirv.empty()) {
+                    effectiveSpirv = &rectLoweredSpirv;
+                }
+
                 MG_Util::ShaderTranspiler::SpvcSession spvcSession(*effectiveSpirv,
                     MG_Util::ShaderTranspiler::SessionUsageBit::Transpile);
 

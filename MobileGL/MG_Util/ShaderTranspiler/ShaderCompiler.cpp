@@ -363,6 +363,86 @@ namespace MobileGL {
                 return optimizer.Run(inputBinary.data(), inputBinary.size(), &outputBinary, options);
             }
 
+            bool ShaderCompiler::LowerRectImagesForEssl(const Vector<Uint32>& inputBinary,
+                                                        Vector<uint32_t>& outputBinary) {
+                constexpr SizeT kSpirvHeaderWordCount = 5;
+                // OpTypeImage: [0] opcode/wordcount, [1] result id, [2] sampled type, [3] Dim, ...
+                constexpr SizeT kTypeImageDimWordIndex = 3;
+                constexpr SizeT kTypeImageMinWordCount = 9;
+                outputBinary.clear();
+                if (inputBinary.size() < kSpirvHeaderWordCount || inputBinary[0] != spv::MagicNumber) {
+                    return false;
+                }
+
+                Vector<SizeT> rectDimWordOffsets;
+                Vector<SizeT> rectCapabilityWordOffsets;
+                Bool hasNormalizedCoordinateLookup = false;
+                for (SizeT offset = kSpirvHeaderWordCount; offset < inputBinary.size();) {
+                    const Uint32 instructionWord = inputBinary[offset];
+                    const SizeT wordCount = instructionWord >> 16u;
+                    const auto opcode = static_cast<spv::Op>(instructionWord & 0xffffu);
+                    if (wordCount == 0 || offset + wordCount > inputBinary.size()) {
+                        return false;
+                    }
+
+                    if (opcode == spv::Op::OpTypeImage && wordCount >= kTypeImageMinWordCount) {
+                        if (static_cast<spv::Dim>(inputBinary[offset + kTypeImageDimWordIndex]) == spv::Dim::Rect) {
+                            rectDimWordOffsets.push_back(offset + kTypeImageDimWordIndex);
+                        }
+                    } else if (opcode == spv::Op::OpCapability && wordCount >= 2) {
+                        const auto capability = static_cast<spv::Capability>(inputBinary[offset + 1]);
+                        if (capability == spv::Capability::SampledRect ||
+                            capability == spv::Capability::ImageRect) {
+                            rectCapabilityWordOffsets.push_back(offset + 1);
+                        }
+                    } else {
+                        switch (opcode) {
+                        // Everything that takes normalized coordinates. Tracing each one back to
+                        // its image type would let a module mix a normalized 2D lookup with a
+                        // rectangle fetch, but the extra reach is not worth the risk of getting
+                        // the trace wrong: decline the whole module instead.
+                        case spv::Op::OpImageSampleImplicitLod:
+                        case spv::Op::OpImageSampleExplicitLod:
+                        case spv::Op::OpImageSampleDrefImplicitLod:
+                        case spv::Op::OpImageSampleDrefExplicitLod:
+                        case spv::Op::OpImageSampleProjImplicitLod:
+                        case spv::Op::OpImageSampleProjExplicitLod:
+                        case spv::Op::OpImageSampleProjDrefImplicitLod:
+                        case spv::Op::OpImageSampleProjDrefExplicitLod:
+                        case spv::Op::OpImageGather:
+                        case spv::Op::OpImageDrefGather:
+                        case spv::Op::OpImageSparseSampleImplicitLod:
+                        case spv::Op::OpImageSparseSampleExplicitLod:
+                        case spv::Op::OpImageSparseSampleDrefImplicitLod:
+                        case spv::Op::OpImageSparseSampleDrefExplicitLod:
+                        case spv::Op::OpImageSparseGather:
+                        case spv::Op::OpImageSparseDrefGather:
+                            hasNormalizedCoordinateLookup = true;
+                            break;
+                        default:
+                            break;
+                        }
+                    }
+                    offset += wordCount;
+                }
+
+                if (rectDimWordOffsets.empty() || hasNormalizedCoordinateLookup) {
+                    return false;
+                }
+
+                outputBinary.assign(inputBinary.begin(), inputBinary.end());
+                for (const SizeT dimWordOffset : rectDimWordOffsets) {
+                    outputBinary[dimWordOffset] = static_cast<Uint32>(spv::Dim::Dim2D);
+                }
+                // The rectangle capabilities describe types that no longer exist. Shader is always
+                // declared by a graphics module, so restating it keeps the word count intact
+                // without leaving a capability SPIRV-Cross would key off.
+                for (const SizeT capabilityWordOffset : rectCapabilityWordOffsets) {
+                    outputBinary[capabilityWordOffset] = static_cast<Uint32>(spv::Capability::Shader);
+                }
+                return true;
+            }
+
             bool ShaderCompiler::RebaseInstanceIndexForVulkan(const Vector<Uint32>& inputBinary,
                                                               Vector<uint32_t>& outputBinary) {
                 using namespace spvtools;

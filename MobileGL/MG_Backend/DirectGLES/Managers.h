@@ -270,18 +270,21 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
     namespace TextureImpl {
         inline Bool IsSupportedTextureTarget(TextureTarget target) {
-            // Rectangle textures need non-normalized sampling ES cannot express; everything else is
-            // either native or emulated (1D -> 2D with height 1, 1D array -> 2D array, see
-            // MapToBackendTextureTarget). SPIRV-Cross already emits the matching ESSL samplers and
-            // coordinate padding for 1D/1D-array shaders.
-            return target != TextureTarget::TextureRectangle;
+            // Every desktop-only target is stored on an ES one; see MapToBackendTextureTarget.
+            (void)target;
+            return true;
         }
 
-        // ES has no 1D targets: 1D textures are stored as 2D (height 1) and 1D arrays as 2D arrays
-        // (height 1, layers in depth). Must match SPIRV-Cross's ES 1D-as-2D shader emulation.
+        // ES has none of the desktop-only targets: 1D textures are stored as 2D (height 1), 1D
+        // arrays as 2D arrays (height 1, layers in depth), and rectangle textures as plain 2D -
+        // they are single-level and already clamp, so only the non-normalized coordinates differ.
+        // Must match the shader-side emulation: SPIRV-Cross handles 1D/1D-array itself, and
+        // ShaderCompiler::LowerRectImagesForEssl rewrites rectangle images (declining any module
+        // whose lookups are not integer-coordinate, which SPIRV-Cross then still rejects).
         inline TextureTarget MapToBackendTextureTarget(TextureTarget target) {
             switch (target) {
             case TextureTarget::Texture1D:
+            case TextureTarget::TextureRectangle:
                 return TextureTarget::Texture2D;
             case TextureTarget::Texture1DArray:
                 return TextureTarget::Texture2DArray;
@@ -297,6 +300,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         inline GLenum ConvertTextureUploadTargetToBackendGLEnum(TextureUploadTarget uploadTarget) {
             switch (uploadTarget) {
             case TextureUploadTarget::Texture1D:
+            case TextureUploadTarget::TextureRectangle:
                 return GL_TEXTURE_2D;
             case TextureUploadTarget::Texture1DArray:
                 return GL_TEXTURE_2D_ARRAY;
