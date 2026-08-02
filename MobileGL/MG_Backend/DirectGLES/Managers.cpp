@@ -3258,6 +3258,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
             MGLOG_D("Syncing program to backend. State program ID: %u, Backend ID: %u",
                     stateProgramObject->GetExternalIndex(), m_backendProgramId);
+            m_backendProgramUsable = true;
             m_snormFallbackClampOutputMask = g_snormFallbackClampOutputMask;
             m_unormFallbackClampOutputMask = g_unormFallbackClampOutputMask;
             m_fragColorBroadcastCount = g_fragColorBroadcastCount;
@@ -3365,6 +3366,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     r.log += spvcSession.GetLastErrorString();
                     r.errc = -5;
                     MGLOG_E("%s", r.log.c_str());
+                    m_backendProgramUsable = false;
                     continue;
                 }
 
@@ -3406,6 +3408,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     Vector<GLchar> log(logLength);
                     g_GLESFuncs.glGetShaderInfoLog(backendShaderId, logLength, nullptr, log.data());
                     MGLOG_E("Shader compilation failed for backend ID %u: %s", backendShaderId, log.data());
+                    m_backendProgramUsable = false;
                     continue;
                 }
 
@@ -3441,6 +3444,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
             GLint linkStatus;
             g_GLESFuncs.glGetProgramiv(m_backendProgramId, GL_LINK_STATUS, &linkStatus);
+            m_backendProgramUsable = m_backendProgramUsable && linkStatus == GL_TRUE;
             if (linkStatus != GL_TRUE) {
                 GLint logLength;
                 g_GLESFuncs.glGetProgramiv(m_backendProgramId, GL_INFO_LOG_LENGTH, &logLength);
@@ -3566,12 +3570,18 @@ namespace MobileGL::MG_Backend::DirectGLES {
 #ifdef TRACY_ENABLE
             ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
-            if (g_lastUsedBackendProgramId == m_backendProgramId) {
+            // glUseProgram on a program that did not link is an INVALID_OPERATION and
+            // leaves the *previous* program current, so the draw would silently render
+            // with an unrelated shader (KHR-GL3x.texture_size_promotion read another
+            // test case's alpha that way once a sampler2DRect stage failed to
+            // transpile). Bind nothing instead: the draw is then a visible no-op.
+            const Uint programToBind = m_backendProgramUsable ? m_backendProgramId : 0;
+            if (g_lastUsedBackendProgramId == programToBind) {
                 return;
             }
-            MGLOG_D("Using program %u", m_backendProgramId);
-            g_GLESFuncs.glUseProgram(m_backendProgramId);
-            g_lastUsedBackendProgramId = m_backendProgramId;
+            MGLOG_D("Using program %u", programToBind);
+            g_GLESFuncs.glUseProgram(programToBind);
+            g_lastUsedBackendProgramId = programToBind;
         }
 
         void BackendProgramObjectImpl::SetBaseInstance(Uint32 baseInstance) const {

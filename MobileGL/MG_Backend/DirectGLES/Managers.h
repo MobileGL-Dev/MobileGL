@@ -600,6 +600,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
             void SetDrawID(Uint32 drawId) const;
             Int GetIndirectParamsBinding() const { return m_indirectParamsBinding; }
             Uint GetBackendProgramId() const { return m_backendProgramId; }
+            // False when the last SyncToBackend could not produce a usable program (a
+            // shader failed to transpile or compile, or the link itself failed). Use()
+            // must not leave the previously bound program current in that case.
+            Bool IsBackendProgramUsable() const { return m_backendProgramUsable; }
             Uint GetBackendGlobalUBOId() const { return m_backendGlobalUBOId; }
             Uint32 GetSnormFallbackClampOutputMask() const { return m_snormFallbackClampOutputMask; }
             Uint32 GetUnormFallbackClampOutputMask() const { return m_unormFallbackClampOutputMask; }
@@ -634,6 +638,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // PrgramImpl::BroadcastLegacyFragColor); 1 keeps the plain single-output shader.
             Uint m_fragColorBroadcastCount = 1;
             Bool m_isInitialized = false;
+            Bool m_backendProgramUsable = false;
 
             Int m_globalUboBackendBlockIndex = -1;
             Int m_globalUboBackendBlockSize = 0;
