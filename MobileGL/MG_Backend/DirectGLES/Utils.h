@@ -40,6 +40,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
         void GenerateRenderbufferFormatInfo(TextureInternalFormat internalFormat, GLenum* outInternalFormat,
                                             GLenum* outFormat, GLenum* outType);
         Bool ShouldUseCaveatTextureFormat(TextureInternalFormat internalFormat, TextureTarget target);
+
+        // True when the format the texture is actually created with has an alpha channel the
+        // frontend format does not (the three-channel multisample widening). GL reads such a
+        // channel back as 1.0, so any swizzle source of ALPHA has to be answered with ONE.
+        Bool BackendTextureFormatAddsAlpha(TextureInternalFormat internalFormat, TextureTarget target);
         Bool ShouldUseCaveatRenderbufferFormat(TextureInternalFormat internalFormat);
     } // namespace TextureImpl
 

@@ -177,6 +177,22 @@ namespace MobileGL::MG_Backend::DirectGLES {
         Bool ShouldUseCaveatRenderbufferFormat(TextureInternalFormat internalFormat) {
             return ShouldUseCaveatFormat(internalFormat, GetRenderbufferFormatCapabilityTargetIndex());
         }
+
+        Bool BackendTextureFormatAddsAlpha(TextureInternalFormat internalFormat, TextureTarget target) {
+            const SizeT targetIndex =
+                target == TextureTarget::Unknown ? kFormatCapabilityTargetCount : GetFormatCapabilityTargetIndex(target);
+            if (!TargetRequiresRenderableFormat(targetIndex)) {
+                return false;
+            }
+            if (pActiveBackendObject && !ShouldUseCaveatFormat(internalFormat, targetIndex)) {
+                return false;
+            }
+            const GLenum requestedInternalFormat = MG_Util::ConvertTextureInternalFormatToGLEnum(internalFormat);
+            const Flags<PixelFormatNormalizeOptionBit> options =
+                GetRuntimeFallbackNormalizeOptions(requestedInternalFormat,
+                                                   GetRenderTargetNormalizeOptions(targetIndex));
+            return static_cast<Bool>(options & PixelFormatNormalizeOptionBit::NoThreeChannelRenderTarget);
+        }
     } // namespace TextureImpl
     namespace PrgramImpl {
         String ProcessOutColorLocations(const String& glslCode) {

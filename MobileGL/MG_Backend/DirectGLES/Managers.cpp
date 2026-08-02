@@ -2405,7 +2405,19 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 MGLOG_D("%s(%s:%d) ES error %s", func, file, line, MG_Util::ConvertGLEnumToString(err).c_str());
             });
 
-            const auto& swizzleParams = stateTextureObject->GetAllSwizzleParams();
+            // A three-channel format widened to four for a multisample target (see
+            // NormalizePixelFormat) gains an alpha channel the frontend format does not have, and
+            // whatever the draw that filled it wrote there is not what GL would report: a format
+            // without alpha reads back as 1.0. Answer the ALPHA swizzle source with ONE so the
+            // promotion stays invisible, composed with the swizzle the application asked for.
+            Vec4<TextureSwizzleParam> swizzleParams = stateTextureObject->GetAllSwizzleParams();
+            if (TextureImpl::BackendTextureFormatAddsAlpha(stateTextureObject->GetFormat(), targetInternal)) {
+                for (SizeT channel = 0; channel < 4; ++channel) {
+                    if (swizzleParams[channel] == TextureSwizzleParam::Alpha) {
+                        swizzleParams[channel] = TextureSwizzleParam::One;
+                    }
+                }
+            }
             if (swizzleParams != m_cacheSwizzleParams) {
 #define SYNC_TEX_SWIZZLE_PARAM_IF_CHANGED(func, glEnum)                                                                \
     if (m_cacheSwizzleParams.func != swizzleParams.func) {                                                             \
