@@ -518,6 +518,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // when GL transform feedback is active; binds capture buffers on demand.
         Bool BeginXfbCaptureForDraw(FrameContext::FrameData& frame);
         void EndXfbCaptureForDraw(FrameContext::FrameData& frame, Bool began);
+        // Makes the captured bytes visible to whatever reads them next. Deferred rather than
+        // recorded next to the capture, because the capturing draw runs inside a render pass
+        // that declares no self-dependency.
+        void MakeXfbWritesVisible();
+        Bool m_xfbWritesPendingVisibility = false;
         // Wrap one app draw in an occlusion-query slot while a GL_SAMPLES_PASSED
         // query is active. Returns whether a slot was begun (End must mirror it).
         Bool BeginOcclusionForDraw(VkCommandBuffer commandBuffer);

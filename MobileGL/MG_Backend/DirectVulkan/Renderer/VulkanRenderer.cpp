@@ -4692,6 +4692,7 @@ void main() {
         // Sync each sampled texture at most once across this whole draw: the layout
         // probe loop, the post-transition loop, and ResolveSamplerDescriptor would
         // otherwise each re-run the full SyncTexture path on the same textures.
+        MakeXfbWritesVisible();
         VkTextureManager::DrawSyncScope drawSyncScope(*m_textureManager);
         m_textureManager->CollectGarbage();
         if (TrySetupDrawFastPath(frame, mode, aspects, drawParams, pIndexBufferView)) {
@@ -6920,6 +6921,7 @@ void main() {
     }
 
     Bool VulkanRenderer::FinishPendingGpuWork() {
+        MakeXfbWritesVisible();
         auto& frame = m_frameContext.GetCurrent();
         if (!frame.isCommandRecording) {
             return true;
@@ -8140,6 +8142,41 @@ void main() {
         s_vkCmdEndTransformFeedbackEXT(frame.commandBuffer, 0, static_cast<Uint32>(bufferCount), counterBuffers,
                                        counterOffsets);
         m_xfbCountersValid[counterSlot] = true;
+        m_xfbWritesPendingVisibility = true;
+    }
+
+    // GL makes transform feedback results visible to every later command on their own, with no
+    // glMemoryBarrier in between - unlike shader storage writes, which is why the barrier the
+    // Vulkan memory model requires has to be supplied here rather than by the application. It
+    // cannot be recorded where the write happens (inside the capturing draw's render pass, which
+    // declares no self-dependency), so it is emitted at the next point that could read the
+    // captured buffer: the following draw, or a readback.
+    void VulkanRenderer::MakeXfbWritesVisible() {
+        if (!m_xfbWritesPendingVisibility) {
+            return;
+        }
+        m_xfbWritesPendingVisibility = false;
+        auto& frame = m_frameContext.GetCurrent();
+        if (!frame.isCommandRecording) {
+            m_frameContext.BeginCommandRecording();
+        }
+        if (VkRenderPassManager::GetActiveRenderPass() != nullptr) {
+            VkRenderPassManager::EndRenderPass(frame.commandBuffer);
+        }
+        VkMemoryBarrier memoryBarrier{};
+        memoryBarrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+        memoryBarrier.srcAccessMask =
+                VK_ACCESS_TRANSFORM_FEEDBACK_WRITE_BIT_EXT | VK_ACCESS_TRANSFORM_FEEDBACK_COUNTER_WRITE_BIT_EXT;
+        // Every way a captured buffer can be read back: replayed as vertex attributes or indices
+        // by glDrawTransformFeedback, sampled through a uniform or storage binding, sourced as an
+        // indirect command, copied out, or mapped.
+        memoryBarrier.dstAccessMask =
+                VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT | VK_ACCESS_INDEX_READ_BIT | VK_ACCESS_UNIFORM_READ_BIT |
+                VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_INDIRECT_COMMAND_READ_BIT | VK_ACCESS_TRANSFER_READ_BIT |
+                VK_ACCESS_HOST_READ_BIT | VK_ACCESS_MEMORY_READ_BIT |
+                VK_ACCESS_TRANSFORM_FEEDBACK_COUNTER_READ_BIT_EXT;
+        vkCmdPipelineBarrier(frame.commandBuffer, VK_PIPELINE_STAGE_TRANSFORM_FEEDBACK_BIT_EXT,
+                             VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 1, &memoryBarrier, 0, nullptr, 0, nullptr);
     }
 
     void VulkanRenderer::DrawArrays(const DrawCmd& payload) {
