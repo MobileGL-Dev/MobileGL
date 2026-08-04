@@ -325,11 +325,16 @@ namespace MobileGL::MG_Impl::GLImpl {
     }
 
     void DeleteProgram_State(GLuint program) {
+        // "If program is zero, it is silently ignored" (GL 4.6 core 7.3) - unlike every
+        // other program entry point, where 0 is a name GL never handed out.
+        if (program == 0) return;
         if (!CheckProgramNameValidity(program)) return;
         MG_State::pGLContext->MarkProgramForDeletion(program);
     }
 
     void DeleteShader_State(GLuint shader) {
+        // Same silent-zero rule as glDeleteProgram (GL 4.6 core 7.1).
+        if (shader == 0) return;
         if (!CheckShaderNameValidity(shader)) return;
         MG_State::pGLContext->MarkShaderForDeletion(shader);
     }
