@@ -348,6 +348,58 @@ namespace MobileGL {
 
             // TODO: add other texture types as needed
 
+        Bool IsMipmapCompleteForFilter(const ITextureObject* texture, Bool mipmapped) {
+            if (texture == nullptr) return true;
+            if (!texture->IsComplete()) return false;
+            if (!mipmapped) return true;
+
+            const auto* mipmapTexture = AsMipmapTexture(texture);
+            if (mipmapTexture == nullptr) return true; // no mip chain to be incomplete about
+
+            const UintVec2& levelRange = texture->GetLevelRange();
+            const Uint baseLevel = levelRange.x();
+            const Uint storedLevels = mipmapTexture->GetMipmapLevelCount();
+            if (baseLevel >= storedLevels) return false;
+
+            // An array texture's layer count is not a dimension of the image: it stays put all
+            // the way down the chain (GL 4.6 core 8.14.3). GetMipmapTexelSize reports it in the
+            // slot after the image's own dimensions.
+            const TextureTarget target = texture->GetTarget();
+            Int shrinkingComponents = 3;
+            if (target == TextureTarget::Texture1DArray) {
+                shrinkingComponents = 1;
+            } else if (target == TextureTarget::Texture2DArray || target == TextureTarget::TextureCubeMapArray) {
+                shrinkingComponents = 2;
+            }
+
+            for (const auto uploadTarget : texture->GetUploadTargets()) {
+                const IntVec3 baseSize = mipmapTexture->GetMipmapTexelSize(uploadTarget, baseLevel);
+                Int largest = 0;
+                for (Int component = 0; component < shrinkingComponents; ++component) {
+                    largest = std::max(largest, baseSize[component]);
+                }
+                if (largest <= 0) return false;
+
+                // p = log2 of the largest base dimension: the last level the chain needs
+                // before every dimension has reached 1. TEXTURE_MAX_LEVEL can cut it short.
+                Uint p = 0;
+                for (Int extent = largest; extent > 1; extent >>= 1) ++p;
+                const Uint lastLevel = std::min(baseLevel + p, levelRange.y());
+
+                for (Uint level = baseLevel; level <= lastLevel; ++level) {
+                    if (level >= storedLevels) return false;
+                    const IntVec3 actual = mipmapTexture->GetMipmapTexelSize(uploadTarget, level);
+                    for (Int component = 0; component < 3; ++component) {
+                        const Int expected = component < shrinkingComponents
+                            ? std::max(1, baseSize[component] >> (level - baseLevel))
+                            : baseSize[component];
+                        if (actual[component] != expected) return false;
+                    }
+                }
+            }
+            return true;
+        }
+
         } // namespace GLState
     } // namespace MG_State
 } // namespace MobileGL

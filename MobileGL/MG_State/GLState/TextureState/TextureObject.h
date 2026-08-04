@@ -156,6 +156,14 @@ namespace MobileGL::MG_State::GLState {
                    ? static_cast<TextureObjectMipmap*>(texture)
                    : nullptr;
     }
+    // Whether the texture satisfies the mipmap-completeness rules a minification filter
+    // that samples the mip chain imposes (GL 4.6 core 8.17): every level from the base to
+    // the effective max must exist at exactly half the previous one's size. `mipmapped` is
+    // the effective sampler's answer to "does this filter read more than the base level" -
+    // when it is false only base-level completeness matters, which the ordinary
+    // IsComplete() already covers. Sampling an incomplete texture returns (0, 0, 0, 1).
+    Bool IsMipmapCompleteForFilter(const ITextureObject* texture, Bool mipmapped);
+
     inline const TextureObjectMipmap* AsMipmapTexture(const ITextureObject* texture) {
         return (texture && texture->GetStorageType() == TextureStorageType::Mipmap)
                    ? static_cast<const TextureObjectMipmap*>(texture)

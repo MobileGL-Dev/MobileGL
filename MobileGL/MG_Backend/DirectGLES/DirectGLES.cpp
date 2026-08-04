@@ -1613,6 +1613,20 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     }
                     const GLenum targetGL = TextureImpl::ConvertTextureTargetToBackendGLEnum(target);
 
+                    // A texture whose mip chain does not satisfy the filter's completeness
+                    // rules samples as (0, 0, 0, 1). The ES driver cannot work that out for
+                    // itself here: the backend texture is immutable storage, so a level the
+                    // application redefined at the wrong size never reached it. Leaving the
+                    // native target unbound produces exactly the incomplete-texture result.
+                    const auto& effectiveSampler = textureUnit.GetSamplerObject()
+                        ? textureUnit.GetSamplerObject()
+                        : textureObject->GetSamplerObject();
+                    const Bool mipmappedFilter =
+                        effectiveSampler && effectiveSampler->GetMipmapMode() != SamplerMipmapMode::None;
+                    if (!MG_State::GLState::IsMipmapCompleteForFilter(textureObject.get(), mipmappedFilter)) {
+                        continue;
+                    }
+
                     // Bind texture object
                     const auto& backendTextureIt = TextureImpl::g_backendTextureObjects.find(textureObject.get());
                     if (backendTextureIt == TextureImpl::g_backendTextureObjects.end()) continue;
