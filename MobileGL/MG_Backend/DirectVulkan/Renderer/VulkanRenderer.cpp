@@ -8013,6 +8013,18 @@ void main() {
         }
 
         resource->layout = finalLayout;
+
+        // The chain above is GPU work recorded into this frame's command buffer, which is not
+        // submitted until the frame ends - but a texture upload goes out on a command buffer of
+        // its own the moment it happens. A glTexSubImage2D into a level this just generated
+        // would therefore reach the GPU FIRST and be overwritten by these blits, which is how
+        // KHR-GL40.texture_gather.base-level lost the texels it wrote into level 1 right after
+        // generating the chain. Submitting here is what orders the two.
+        if (HasPendingRecordedWork() && FlushPendingCommands()) {
+            // Fresh command buffer: the sampled-descriptor-set memo describes bindings that
+            // only existed in the retired one.
+            m_lastSampledSetValid = false;
+        }
     }
 
     Uint32 VulkanRenderer::CurrentXfbCounterSlot() {
