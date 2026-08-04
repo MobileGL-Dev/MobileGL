@@ -397,11 +397,19 @@ namespace MobileGL {
                         }
                     } else {
                         switch (opcode) {
-                        // Everything that takes normalized coordinates. Tracing each one back to
-                        // its image type would let a module mix a normalized 2D lookup with a
-                        // rectangle fetch, but the extra reach is not worth the risk of getting
-                        // the trace wrong: decline the whole module instead.
-                        case spv::Op::OpImageSampleImplicitLod:
+                        // Normalized-coordinate lookups whose ESSL form the backend's
+                        // NormalizeRectSamplerCoordinates post-pass cannot repair: the
+                        // coordinate is either fused with something else in a single argument
+                        // (the Dref sample forms carry the compare value in coord.z) or the
+                        // divide would have to happen after a projective divide. Tracing each
+                        // one back to its image type would let a module mix a normalized 2D
+                        // lookup with a rectangle fetch, but the extra reach is not worth the
+                        // risk of getting the trace wrong: decline the whole module instead.
+                        //
+                        // OpImageSampleImplicitLod, OpImageGather and OpImageDrefGather are
+                        // absent because all three become an ESSL call whose argument 1 is the
+                        // bare texel-space coordinate, which the post-pass divides by the
+                        // texture size.
                         case spv::Op::OpImageSampleExplicitLod:
                         case spv::Op::OpImageSampleDrefImplicitLod:
                         case spv::Op::OpImageSampleDrefExplicitLod:
@@ -409,8 +417,6 @@ namespace MobileGL {
                         case spv::Op::OpImageSampleProjExplicitLod:
                         case spv::Op::OpImageSampleProjDrefImplicitLod:
                         case spv::Op::OpImageSampleProjDrefExplicitLod:
-                        case spv::Op::OpImageGather:
-                        case spv::Op::OpImageDrefGather:
                         case spv::Op::OpImageSparseSampleImplicitLod:
                         case spv::Op::OpImageSparseSampleExplicitLod:
                         case spv::Op::OpImageSparseSampleDrefImplicitLod:

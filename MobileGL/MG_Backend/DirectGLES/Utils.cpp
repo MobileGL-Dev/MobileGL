@@ -596,6 +596,67 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
             return result;
         }
+
+        String NormalizeRectSamplerCoordinates(const String& glslCode,
+                                               const Vector<String>& rectSamplerNames) {
+#ifdef TRACY_ENABLE
+            ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
+#endif
+            if (rectSamplerNames.empty() || glslCode.find("texture") == String::npos) {
+                return glslCode;
+            }
+
+            // Lookups whose argument 1 is a plain (non-projective) texel-space coordinate on a
+            // rectangle sampler. texelFetch* is absent on purpose: its coordinates are integer
+            // texels on the 2D target too, so it already lands in the right place.
+            static const char* const kRectCoordinateLookups[] = {
+                "textureGatherOffsets", "textureGatherOffset", "textureGather",
+                "textureOffset",        "texture",
+            };
+
+            String result = glslCode;
+            // Right to left, so the offsets of the not-yet-rewritten calls stay valid.
+            for (SizeT scan = result.size(); scan-- > 0;) {
+                if (result[scan] != 't') continue;
+                if (scan > 0 && IsIdentifierChar(result[scan - 1])) continue;
+
+                SizeT openParen = 0;
+                Bool matched = false;
+                for (const char* name : kRectCoordinateLookups) {
+                    const SizeT nameLength = std::strlen(name);
+                    if (result.compare(scan, nameLength, name) != 0) continue;
+                    const SizeT after = result.find_first_not_of(" \t", scan + nameLength);
+                    if (after == String::npos || result[after] != '(') continue;
+                    openParen = after;
+                    matched = true;
+                    break;
+                }
+                if (!matched) continue;
+
+                const Vector<SizeT> marks = SplitCallArguments(result, openParen);
+                if (marks.size() < 2) continue; // needs a sampler and a coordinate
+
+                const SizeT firstArgStart = result.find_first_not_of(" \t", openParen + 1);
+                SizeT firstArgEnd = marks.front();
+                while (firstArgEnd > firstArgStart &&
+                       (result[firstArgEnd - 1] == ' ' || result[firstArgEnd - 1] == '\t')) {
+                    --firstArgEnd;
+                }
+                if (firstArgStart == String::npos || firstArgEnd <= firstArgStart) continue;
+                const String samplerName = result.substr(firstArgStart, firstArgEnd - firstArgStart);
+                if (std::find(rectSamplerNames.begin(), rectSamplerNames.end(), samplerName) ==
+                    rectSamplerNames.end()) {
+                    continue;
+                }
+
+                // Wrap argument 1: (coord) / vec2(textureSize(sampler, 0)).
+                const SizeT coordStart = marks[0] + 1;
+                const SizeT coordEnd = marks[1];
+                result.insert(coordEnd, String(") / vec2(textureSize(") + samplerName + ", 0)))");
+                result.insert(coordStart, "((");
+            }
+            return result;
+        }
     } // namespace PrgramImpl
 
     namespace Utils {
