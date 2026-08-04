@@ -630,6 +630,32 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 resource->syncedChangeSerial = bufferObject.GetChangeSerial();
             }
 
+            // A shader wrote this buffer through a storage/atomic-counter binding, so the ES
+            // driver's copy is ahead of the frontend shadow. Pull the whole thing back so
+            // MapBuffer/GetBufferSubData/CopyBufferSubData see the real results.
+            void Ops_ReadbackFromGpu(BufferObject& bufferObject) {
+                auto* resource = ResourceOf(bufferObject);
+                if (!resource || resource->id == 0 || !resource->storageInitialized) return;
+                if (resource->persistentMapped) return; // shadow already IS the GPU storage
+                if (!CanTouchGLNow() || resource->contextGeneration != g_bufferContextGeneration) return;
+                if (!g_GLESFuncs.glMapBufferRange || !g_GLESFuncs.glUnmapBuffer) return;
+                const SizeT size = std::min<SizeT>(bufferObject.GetSize(), resource->storageSize);
+                if (size == 0) return;
+
+                BindBufferId(TempBufferTarget, resource->id);
+                void* mapped = g_GLESFuncs.glMapBufferRange(TempBufferTarget, 0, static_cast<GLsizeiptr>(size),
+                                                            GL_MAP_READ_BIT);
+                if (mapped == nullptr) {
+                    MGLOG_E("Ops_ReadbackFromGpu: glMapBufferRange(read) failed for buffer %u", resource->id);
+                    return;
+                }
+                bufferObject.WritebackFromBackend({mapped, size}, 0);
+                g_GLESFuncs.glUnmapBuffer(TempBufferTarget);
+                // The shadow now matches the backend byte for byte; without this the next
+                // draw would see a newer change serial and re-upload the readback over it.
+                resource->syncedChangeSerial = bufferObject.GetChangeSerial();
+            }
+
             void Ops_OnDestroy(SharedPtr<BackendBufferResource>&& resource) {
                 if (!resource) return;
                 auto* glesResource = static_cast<GLESBufferResource*>(resource.get());
@@ -662,6 +688,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 .FlushMappedRange = Ops_FlushMappedRange,
                 .OnDestroy = Ops_OnDestroy,
                 .AcquirePersistentMap = Ops_AcquirePersistentMap,
+                .ReadbackFromGpu = Ops_ReadbackFromGpu,
             };
         } // namespace
 

@@ -295,6 +295,20 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
         }
 
+        // Called once the storage-buffer points are bound and the draw/dispatch is about to
+        // go out: whatever the shader writes there lands in the ES driver's buffers, behind
+        // the frontend's CPU shadow. Flagging them makes the next MapBuffer/GetBufferSubData
+        // pull the real contents back (BufferObject::SyncGpuWrites).
+        void MarkShaderStorageBuffersGpuWritten() {
+            const SizeT bindingPointCnt =
+                MG_State::pGLContext->GetTouchedBufferBindingPointCount(BufferTarget::ShaderStorage);
+            for (SizeT i = 0; i < bindingPointCnt; ++i) {
+                const auto& obj =
+                    MG_State::pGLContext->GetBufferBindingPoint(BufferTarget::ShaderStorage, i).GetBoundObject();
+                if (obj) obj->MarkGpuWritten();
+            }
+        }
+
         void SyncBoundBuffer(BufferTarget target, GLenum glTarget) {
 #ifdef TRACY_ENABLE
             ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
@@ -367,6 +381,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // BindCurrentProgramWithResources binds no SSBO points, so this is their sole draw-path
             // binder (e.g. Flywheel's indirect vertex shaders pull instance data from storage buffers).
             SyncBufferBindingPoints(BufferTarget::ShaderStorage, GL_SHADER_STORAGE_BUFFER);
+            MarkShaderStorageBuffersGpuWritten();
         }
 
         void SyncComputeBuffers(Bool includeDispatchIndirectBuffer) {
@@ -376,6 +391,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             ProcessDeferredBufferReleases();
             SyncBufferBindingPoints(BufferTarget::Uniform, GL_UNIFORM_BUFFER);
             SyncBufferBindingPoints(BufferTarget::ShaderStorage, GL_SHADER_STORAGE_BUFFER);
+            MarkShaderStorageBuffersGpuWritten();
             if (includeDispatchIndirectBuffer) {
                 SyncBoundBuffer(BufferTarget::DispatchIndirect, GL_DISPATCH_INDIRECT_BUFFER);
             }

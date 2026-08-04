@@ -99,6 +99,13 @@ namespace MobileGL {
             // Must be idempotent: a second call for an already-backed buffer returns the
             // same base pointer.
             void* (*AcquirePersistentMap)(BufferObject& bufferObject) = nullptr;
+            // Pulls the backend's current contents for the whole buffer into the shadow
+            // (through WritebackFromBackend). Only ever called for a buffer the GPU may
+            // have written behind the frontend's back - a shader storage or atomic counter
+            // binding of a draw or dispatch - because nothing else can desynchronise the
+            // shadow. Backends that cannot read their storage back leave this null; the
+            // shadow then keeps its pre-dispatch bytes, which is the old behaviour.
+            void (*ReadbackFromGpu)(BufferObject& bufferObject) = nullptr;
         };
 
         // Registered by the active backend at init, cleared at shutdown.
@@ -149,6 +156,14 @@ namespace MobileGL {
             // backend op: the backend storage already holds these bytes.
             void WritebackFromBackend(DataPtr data, SizeT atOffset);
 
+            // A draw or dispatch just ran with this buffer bound where a shader can write
+            // it (shader storage / atomic counter): the GPU copy may now differ from the
+            // shadow, so the next read has to pull it back.
+            void MarkGpuWritten();
+            // Refreshes the shadow from the backend when a GPU write is outstanding. Called
+            // from every path that reads the shadow on the app's behalf.
+            void SyncGpuWrites();
+
             Bool IsMapped() const;
             Bool IsImmutableStorage() const;
             SizeT GetSize() const;
@@ -196,6 +211,8 @@ namespace MobileGL {
             Bool m_isImmutableStorage = false;
             GLbitfield m_storageFlags = 0;
             Uint64 m_changeSerial = 0;
+            // Set by MarkGpuWritten, cleared by SyncGpuWrites once the shadow is refreshed.
+            Bool m_gpuWritePending = false;
             Range1D m_mappedRange;
             Vector<Uint8> m_stagingData;
             Bool m_ownsStagingData;

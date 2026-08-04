@@ -174,6 +174,24 @@ namespace MobileGL::MG_State::GLState {
         ++m_changeSerial;
     }
 
+    void BufferObject::MarkGpuWritten() {
+        // A GPU-resident buffer has no separate shadow to refresh: reads already resolve
+        // against the coherent map the shader wrote into.
+        if (m_resource.IsGpuResident()) return;
+        m_gpuWritePending = true;
+    }
+
+    void BufferObject::SyncGpuWrites() {
+        if (!m_gpuWritePending) return;
+        // Cleared unconditionally: without a readback op the shadow can never catch up,
+        // and retrying on every subsequent read would only repeat the same no-op.
+        m_gpuWritePending = false;
+        if (m_size == 0 || g_bufferBackendOps == nullptr || g_bufferBackendOps->ReadbackFromGpu == nullptr) {
+            return;
+        }
+        g_bufferBackendOps->ReadbackFromGpu(*this);
+    }
+
     void BufferObject::UploadSubData(DataPtr data, SizeT atOffset) {
         MOBILEGL_ASSERT(!m_isMapped || (m_mappingAccess & BufferMappingAccessBit::Persistent),
                         "Cannot upload sub data while buffer is non-persistently mapped.");
@@ -204,11 +222,13 @@ namespace MobileGL::MG_State::GLState {
                         "Destination buffer copy out of bounds: dstOffset (%zu) + size (%zu) > m_size (%zu)", dstOffset,
                         size, m_size);
 
+        src->SyncGpuWrites();
         Memcpy(m_resource.Bytes() + dstOffset, src->m_resource.Bytes() + srcOffset, size);
         NotifyContentWrite(dstOffset, size);
     }
 
     void* BufferObject::AcquireMemory(Bool markMapped, Bool read, Bool write) {
+        SyncGpuWrites();
         if (markMapped) {
             m_isMapped = true;
             m_mappingAccess = (read ? BufferMappingAccessBit::Read : BufferMappingAccessBit::Null) |
@@ -250,6 +270,10 @@ namespace MobileGL::MG_State::GLState {
         MOBILEGL_ASSERT(range.end <= m_size && range.start <= range.end,
                         "AcquireMemoryRange out of bounds: range (%zu, %zu) exceeds m_size (%zu)", range.start,
                         range.end, m_size);
+        // The app is about to look at the bytes; a shader may have rewritten them since
+        // the shadow was last authoritative. Also needed for a write map without an
+        // invalidate bit, whose staging copy is seeded from the shadow.
+        SyncGpuWrites();
         m_isMapped = true;
         m_mappingAccess = access;
         m_mappedRange = range;

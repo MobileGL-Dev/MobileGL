@@ -878,6 +878,7 @@ namespace MobileGL::MG_Impl::GLImpl {
             return;
         }
 
+        bufferObject->SyncGpuWrites();
         bufferObject->DownloadSubData(data, static_cast<SizeT>(offset), static_cast<SizeT>(size));
     }
 
