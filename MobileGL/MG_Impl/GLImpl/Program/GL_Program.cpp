@@ -205,6 +205,50 @@ namespace MobileGL::MG_Impl::GLImpl {
         }
     }
 
+    // The GL_UNIFORM interface and glGetActiveUniform(s)iv are the same query in two
+    // spellings, so they answer from the same place - the frontend reflection. The backend
+    // program is not that place: it does not exist at all for a program whose types its
+    // shading language cannot express (a double-precision uniform has no ESSL form), and
+    // the interface queries would then describe a program with no uniforms.
+    //
+    // Writes the GL_UNIFORM value of `prop` for active uniform `index`; false for a prop
+    // the reflection does not model, which the caller forwards to the backend instead.
+    Bool GetUniformResourceProp(const SharedPtr<MG_State::GLState::ProgramObject>& programObject, Uint index,
+                                GLenum prop, GLint* out) {
+        switch (prop) {
+        case GL_TYPE:
+            *out = static_cast<GLint>(programObject->GetActiveUniformType(index));
+            return true;
+        case GL_ARRAY_SIZE:
+            *out = programObject->GetActiveUniformArraySize(index);
+            return true;
+        case GL_NAME_LENGTH:
+            *out = static_cast<GLint>(programObject->GetActiveUniformName(index).length() + 1);
+            return true;
+        case GL_BLOCK_INDEX:
+            *out = programObject->GetActiveUniformBlockIndex(index);
+            return true;
+        case GL_OFFSET:
+            *out = programObject->GetActiveUniformOffset(index);
+            return true;
+        case GL_ARRAY_STRIDE:
+            *out = programObject->GetActiveUniformArrayStride(index);
+            return true;
+        case GL_MATRIX_STRIDE:
+            *out = programObject->GetActiveUniformMatrixStride(index);
+            return true;
+        case GL_IS_ROW_MAJOR:
+            *out = programObject->GetActiveUniformIsRowMajor(index);
+            return true;
+        case GL_LOCATION:
+            // A block member has no location; GetUniformLocation already reports -1 for one.
+            *out = programObject->GetUniformLocation(programObject->GetActiveUniformName(index));
+            return true;
+        default:
+            return false;
+        }
+    }
+
     void CopyStr(GLsizei bufSize, GLsizei* length, GLchar* dst, const char* src, GLsizei srcLength) {
         if (bufSize <= 0) {
             if (length) *length = 0;
@@ -2526,6 +2570,17 @@ namespace MobileGL::MG_Impl::GLImpl {
                                              "Backend does not support program interface queries."));
             return;
         }
+        if (programInterface == GL_UNIFORM) {
+            if (pname == GL_ACTIVE_RESOURCES) {
+                *params = static_cast<GLint>(programObject->GetUniformCount());
+                return;
+            }
+            if (pname == GL_MAX_NAME_LENGTH) {
+                // Stored as the bare length; GL_MAX_NAME_LENGTH counts the terminator.
+                *params = programObject->GetUniformMaxLength() + 1;
+                return;
+            }
+        }
         getProgramInterfaceiv(program, programInterface, pname, params);
     }
 
@@ -2534,6 +2589,10 @@ namespace MobileGL::MG_Impl::GLImpl {
         if (!programObject) return GL_INVALID_INDEX;
         if (!ValidateNamedProgramResourceInterface(programInterface, __func__)) return GL_INVALID_INDEX;
         if (!name) return GL_INVALID_INDEX;
+        if (programInterface == GL_UNIFORM) {
+            const Int uniformIndex = programObject->GetActiveUniformIndex(name);
+            return uniformIndex < 0 ? GL_INVALID_INDEX : static_cast<GLuint>(uniformIndex);
+        }
         auto getProgramResourceIndex = MG_Backend::gBackendFunctionsTable.GL.GetProgramResourceIndex;
         if (!getProgramResourceIndex) {
             MG_State::pGLContext->RecordError(
@@ -2570,6 +2629,13 @@ namespace MobileGL::MG_Impl::GLImpl {
                 MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__, "bufSize must be non-negative."));
             return;
         }
+        if (programInterface == GL_UNIFORM) {
+            // Same index space GetProgramResourceIndex answers in, and the range check above
+            // already used it.
+            const String& uniformName = programObject->GetActiveUniformName(index);
+            CopyStr(bufSize, length, name, uniformName.c_str(), static_cast<GLsizei>(uniformName.length()));
+            return;
+        }
         auto getProgramResourceName = MG_Backend::gBackendFunctionsTable.GL.GetProgramResourceName;
         if (!getProgramResourceName) {
             MG_State::pGLContext->RecordError(
@@ -2589,6 +2655,36 @@ namespace MobileGL::MG_Impl::GLImpl {
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidValue, MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
                                                                       "propCount and bufSize must be non-negative."));
+            return;
+        }
+        if (programInterface == GL_UNIFORM) {
+            if (index >= programObject->GetUniformCount()) {
+                MG_State::pGLContext->RecordError(
+                    ErrorCode::InvalidValue,
+                    MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__, "index is out of range."));
+                return;
+            }
+            if (props == nullptr || params == nullptr) return;
+            GLsizei written = 0;
+            for (GLsizei i = 0; i < propCount && written < bufSize; ++i) {
+                GLint value = 0;
+                if (!GetUniformResourceProp(programObject, index, props[i], &value)) {
+                    // GL_ATOMIC_COUNTER_BUFFER_INDEX and the GL_REFERENCED_BY_* stage props are
+                    // not modelled here; ask the backend, which indexes resources by name.
+                    auto backendGetIndex = MG_Backend::gBackendFunctionsTable.GL.GetProgramResourceIndex;
+                    auto backendGetiv = MG_Backend::gBackendFunctionsTable.GL.GetProgramResourceiv;
+                    if (backendGetIndex && backendGetiv) {
+                        const GLuint backendIndex = backendGetIndex(program, GL_UNIFORM,
+                                                                   programObject->GetActiveUniformName(index).c_str());
+                        if (backendIndex != GL_INVALID_INDEX) {
+                            GLsizei one = 0;
+                            backendGetiv(program, GL_UNIFORM, backendIndex, 1, &props[i], 1, &one, &value);
+                        }
+                    }
+                }
+                params[written++] = value;
+            }
+            if (length) *length = written;
             return;
         }
         auto getProgramResourceiv = MG_Backend::gBackendFunctionsTable.GL.GetProgramResourceiv;
