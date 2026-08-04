@@ -24,6 +24,19 @@ namespace MobileGL {
             TextureObjectBase::TextureObjectBase(TextureTarget target, Uint externalIndex)
                 : m_externalIndex(externalIndex), m_lifetimeId(AllocateLifetimeId()), m_target(target) {
                 m_sampler = MakeShared<SamplerObject>(0);
+                if (target == TextureTarget::TextureRectangle) {
+                    // A rectangle texture has no mip chain, so its initial sampler state is not
+                    // the shared one: TEXTURE_MIN_FILTER is LINEAR and TEXTURE_WRAP_S/T are
+                    // CLAMP_TO_EDGE (GL 4.6 core table 23.15). Leaving the 2D default of
+                    // NEAREST_MIPMAP_LINEAR in place makes the texture mipmap-incomplete from
+                    // birth, and every lookup that the application never re-filtered reads
+                    // (0, 0, 0, 1) instead of its contents.
+                    m_sampler->SetMinFilter(SamplerFilterMode::Linear);
+                    m_sampler->SetMipmapMode(SamplerMipmapMode::None);
+                    m_sampler->SetWrapS(SamplerWrapMode::ClampToEdge);
+                    m_sampler->SetWrapT(SamplerWrapMode::ClampToEdge);
+                    m_sampler->SetWrapR(SamplerWrapMode::ClampToEdge);
+                }
             }
 
             TextureInternalFormat TextureObjectBase::GetFormat() const {
