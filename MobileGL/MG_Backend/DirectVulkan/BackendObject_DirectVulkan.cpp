@@ -530,7 +530,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                           E_GL_ARB_shader_draw_parameters, E_GL_ARB_gpu_shader_int64, E_GL_KHR_debug,
                                           E_GL_ARB_gpu_shader5, E_GL_ARB_multi_bind, E_GL_ARB_shading_language_420pack,
                                           E_GL_ARB_vertex_attrib_binding, E_GL_ARB_shader_image_size,
-                                          E_GL_ARB_explicit_attrib_location};
+                                          E_GL_ARB_explicit_attrib_location,
+                                          // Advertised with GL_NUM_PROGRAM_BINARY_FORMATS = 0, which the
+                                          // extension explicitly permits. It is also the only thing that
+                                          // exposes glProgramParameteri before GL 4.1.
+                                          E_GL_ARB_get_program_binary};
         if (shaderSubgroupSupported && !MG_Config::Features.DisableSubgroup) {
             extensions.push_back(E_GL_KHR_shader_subgroup);
         }
