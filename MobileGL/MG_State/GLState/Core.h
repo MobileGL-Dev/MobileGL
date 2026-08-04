@@ -274,6 +274,9 @@ namespace MobileGL {
                 // A name glGenTransformFeedbacks handed out and glDeleteTransformFeedbacks
                 // has not taken back. Name 0 is always valid.
                 Bool ValidateTransformFeedbackName(Uint index) const;
+                // What glIsTransformFeedback reports: a generated name only becomes the name
+                // of an object once it has been bound at least once (GL 4.6 core 13.2.1).
+                Bool IsTransformFeedbackObject(Uint index) const;
                 void BindTransformFeedbackObject(Uint index);
                 void MarkTransformFeedbackObjectForDeletion(Uint index);
                 Uint GetBoundTransformFeedbackName() const { return m_boundTransformFeedback; }
@@ -344,6 +347,7 @@ namespace MobileGL {
                     Uint64 inputPrimitives = 0;
                     Uint64 recordedVertices = 0;
                     Bool hasCompletedSpan = false;
+                    Bool everBound = false;
                 };
                 void SaveBoundTransformFeedbackState();
                 void RestoreBoundTransformFeedbackState();

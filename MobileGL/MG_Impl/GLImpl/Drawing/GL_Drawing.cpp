@@ -909,8 +909,9 @@ namespace MobileGL::MG_Impl::GLImpl {
     }
 
     GLboolean IsTransformFeedback(GLuint id) {
-        // Name 0 is the default object, which glIsTransformFeedback reports as not an object.
-        return (id != 0 && MG_State::pGLContext->ValidateTransformFeedbackName(id)) ? GL_TRUE : GL_FALSE;
+        // Name 0 is the default object, and a name glGenTransformFeedbacks handed out only
+        // becomes the name of an object once it has been bound.
+        return MG_State::pGLContext->IsTransformFeedbackObject(id) ? GL_TRUE : GL_FALSE;
     }
 
     // glDrawTransformFeedback[Stream][Instanced]: replays the vertices the named object

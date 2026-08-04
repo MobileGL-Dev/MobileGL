@@ -798,7 +798,14 @@ namespace MobileGL::MG_State {
             if (index == m_boundTransformFeedback) return;
             SaveBoundTransformFeedbackState();
             m_boundTransformFeedback = index;
+            m_transformFeedbackObjects[index].everBound = true;
             RestoreBoundTransformFeedbackState();
+        }
+
+        Bool GLContext::IsTransformFeedbackObject(Uint index) const {
+            if (index == 0 || !m_transformFeedbackNames.IsValid(index)) return false;
+            const auto it = m_transformFeedbackObjects.find(index);
+            return it != m_transformFeedbackObjects.end() && it->second.everBound;
         }
 
         void GLContext::MarkTransformFeedbackObjectForDeletion(Uint index) {
