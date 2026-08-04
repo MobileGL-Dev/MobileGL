@@ -561,6 +561,16 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         auto resource = GetOrCreateResource(bufferObject);
         bufferObject->SyncPersistentMappedRange();
 
+        // A persistently mapped resource's storage IS the application's copy of the bytes -
+        // the frontend adopted it in place of the shadow and hands out pointers into it, and
+        // a shader can have written bytes the shadow never saw (a transform feedback
+        // capture). Streaming a second copy would feed this draw the stale shadow, and the
+        // downgrade below would release the storage the application still points at,
+        // breaking the "never recreated" promise AcquirePersistentMap makes.
+        if (resource->persistentMapped) {
+            return AcquireResidentSlice(kind, bufferObject, outSlice);
+        }
+
         const VkDeviceSize size = static_cast<VkDeviceSize>(bufferObject->GetSize());
         if (size == 0) {
             MGLOG_E("VkBufferManager::AcquireStreamedSlice failed: buffer size is zero");
