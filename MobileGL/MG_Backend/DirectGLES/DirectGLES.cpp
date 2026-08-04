@@ -3953,6 +3953,78 @@ namespace MobileGL::MG_Backend::DirectGLES {
         }
     }
 
+    // ES has no colour-renderable three-channel float format, and its glGenerateMipmap
+    // requires one, so it rejects GL_RGB16F and GL_RGB32F outright where every desktop
+    // driver accepts them. Both store a plain array of floats, and a format the driver
+    // cannot render into is a format nothing can have rendered into - so the frontend's own
+    // copy of the texels is the authority, and the chain can be filtered there and carried
+    // down by the ordinary upload path. Returns false for anything else, leaving the
+    // driver's answer (including its error) in place.
+    static Bool GenerateThreeChannelFloatMipmapOnCpu(
+        const SharedPtr<MG_State::GLState::ITextureObject>& texture) {
+        if (!texture) return false;
+        const TextureInternalFormat format = texture->GetFormat();
+        const Bool isHalf = format == TextureInternalFormat::RGB16F;
+        if (!isHalf && format != TextureInternalFormat::RGB32F) return false;
+
+        auto* mipmapTexture = MG_State::GLState::AsMipmapTexture(texture.get());
+        if (mipmapTexture == nullptr) return false;
+        const Uint levelCount = mipmapTexture->GetMipmapLevelCount();
+        constexpr Int kChannels = 3;
+
+        for (const auto uploadTarget : texture->GetUploadTargets()) {
+            for (Uint level = 1; level < levelCount; ++level) {
+                const IntVec3 srcSize = mipmapTexture->GetMipmapTexelSize(uploadTarget, level - 1);
+                const IntVec3 dstSize = mipmapTexture->GetMipmapTexelSize(uploadTarget, level);
+                if (srcSize.x() <= 0 || srcSize.y() <= 0 || dstSize.x() <= 0 || dstSize.y() <= 0) return false;
+                auto* src = static_cast<Uint8*>(mipmapTexture->MapMipmapData(uploadTarget, level - 1));
+                auto* dst = static_cast<Uint8*>(mipmapTexture->MapMipmapData(uploadTarget, level));
+                if (src == nullptr || dst == nullptr) return false;
+
+                const SizeT componentBytes = isHalf ? sizeof(Uint16) : sizeof(Float);
+                const SizeT texelBytes = componentBytes * kChannels;
+                const auto load = [&](const Uint8* base, Int x, Int y, Int channel) {
+                    const Uint8* texel = base + (static_cast<SizeT>(y) * srcSize.x() + x) * texelBytes +
+                                         channel * componentBytes;
+                    if (isHalf) {
+                        Uint16 bits = 0;
+                        Memcpy(&bits, texel, sizeof(bits));
+                        return MG_Util::DecodeHalfBitsToFloat(bits);
+                    }
+                    Float value = 0.0f;
+                    Memcpy(&value, texel, sizeof(value));
+                    return value;
+                };
+
+                // Box filter over the 2x2 source footprint, clamped where a dimension is
+                // already 1 (GL 4.6 core 8.14.4 leaves the exact filter to the implementation
+                // and this is the one it describes for power-of-two levels).
+                for (Int y = 0; y < dstSize.y(); ++y) {
+                    for (Int x = 0; x < dstSize.x(); ++x) {
+                        const Int x0 = std::min(x * 2, srcSize.x() - 1);
+                        const Int x1 = std::min(x * 2 + 1, srcSize.x() - 1);
+                        const Int y0 = std::min(y * 2, srcSize.y() - 1);
+                        const Int y1 = std::min(y * 2 + 1, srcSize.y() - 1);
+                        for (Int channel = 0; channel < kChannels; ++channel) {
+                            const Float average = 0.25f * (load(src, x0, y0, channel) + load(src, x1, y0, channel) +
+                                                           load(src, x0, y1, channel) + load(src, x1, y1, channel));
+                            Uint8* texel = dst + (static_cast<SizeT>(y) * dstSize.x() + x) * texelBytes +
+                                           channel * componentBytes;
+                            if (isHalf) {
+                                const Uint16 bits = MG_Util::EncodeFloatToHalfBits(average);
+                                Memcpy(texel, &bits, sizeof(bits));
+                            } else {
+                                Memcpy(texel, &average, sizeof(average));
+                            }
+                        }
+                    }
+                }
+                mipmapTexture->MarkStorageDirty(uploadTarget, level, true);
+            }
+        }
+        return true;
+    }
+
     void GenerateMipmap(GLenum target) {
 #if MOBILEGL_LOG_ACTIVE_LEVEL <= MOBILEGL_LOG_LEVEL_DEBUG && MOBILEGL_ENABLE_SCOPE_MARKER
         DebugImpl::OpenGLScopeMarker marker(__func__);
@@ -3962,8 +4034,15 @@ namespace MobileGL::MG_Backend::DirectGLES {
         auto& slot = unit.GetBindingSlot(MG_Util::ConvertGLEnumToTextureTarget(target));
         auto& texture = slot.GetBoundObject();
         MOBILEGL_ASSERT(texture != nullptr, "GenerateMipmap requires a bound texture.");
-        if (texture->GetFormat() == TextureInternalFormat::R11FG11FB10F || IsDepthOnlyFormat(texture->GetFormat())) {
+        if (texture->GetFormat() == TextureInternalFormat::R11FG11FB10F || IsDepthOnlyFormat(texture->GetFormat()) ||
+            texture->GetFormat() == TextureInternalFormat::RGB16F ||
+            texture->GetFormat() == TextureInternalFormat::RGB32F) {
             EnsureGenerateMipmapStorageAllocated(texture);
+        }
+        // Filtered on the CPU before the backend sync, so the dirty levels ride down with it.
+        if (GenerateThreeChannelFloatMipmapOnCpu(texture)) {
+            TextureImpl::SyncTextureObjectToBackend(texture);
+            return;
         }
         auto& backendTexture = TextureImpl::SyncTextureObjectToBackend(texture);
 
