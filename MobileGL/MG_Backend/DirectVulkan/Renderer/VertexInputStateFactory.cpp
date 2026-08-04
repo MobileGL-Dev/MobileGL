@@ -87,6 +87,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         Vector<Uint32> bindingAttributeLocations;
         Vector<Bool> bindingUsesClientMemory;
         Vector<VertexStreamConversion> bindingConversions;
+        Vector<VkVertexInputBindingDivisorDescriptionEXT> bindingDivisors;
         Uint32 unsupportedAttribMask = 0;
 
         for (Uint32 location = 0; location < MG_State::GLState::VertexArrayObject::MAX_VERTEX_ATTRIBS; ++location) {
@@ -180,6 +181,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             bindingConversions.push_back(conversion);
             builder.AddBinding(binding, stride, inputRate);
             builder.AddAttribute(location, binding, vkFormat, 0);
+            // Divisor 1 is what VK_VERTEX_INPUT_RATE_INSTANCE already means; only anything
+            // else needs the extension to say it.
+            if (inputRate == VK_VERTEX_INPUT_RATE_INSTANCE && attr.Divisor != 1) {
+                bindingDivisors.push_back({binding, static_cast<Uint32>(attr.Divisor)});
+            }
         }
 
         const auto& state = builder.Build();
@@ -191,6 +197,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         BackendVertexInputState& entry = *slot;
         entry.hash = hash;
         entry.lastUsedFrameBoundary = m_frameBoundaryCounter;
+        entry.bindingDivisors = Move(bindingDivisors);
         entry.bindings = builder.GetBindings();
         entry.attributes = builder.GetAttributes();
         // See the layoutHash declaration: hash only the resolved layout, never
@@ -206,6 +213,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             XXHASH_VERIFY(XXH64_update(m_hashState, &attribute.binding, sizeof(attribute.binding)));
             XXHASH_VERIFY(XXH64_update(m_hashState, &attribute.format, sizeof(attribute.format)));
             XXHASH_VERIFY(XXH64_update(m_hashState, &attribute.offset, sizeof(attribute.offset)));
+        }
+        for (const auto& divisor : entry.bindingDivisors) {
+            XXHASH_VERIFY(XXH64_update(m_hashState, &divisor.binding, sizeof(divisor.binding)));
+            XXHASH_VERIFY(XXH64_update(m_hashState, &divisor.divisor, sizeof(divisor.divisor)));
         }
         XXHASH_VERIFY(XXH64_update(m_hashState, &unsupportedAttribMask, sizeof(unsupportedAttribMask)));
         entry.layoutHash = XXH64_digest(m_hashState);
@@ -224,6 +235,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         entry.state = state;
         entry.state.pVertexBindingDescriptions = entry.bindings.empty() ? nullptr : entry.bindings.data();
         entry.state.pVertexAttributeDescriptions = entry.attributes.empty() ? nullptr : entry.attributes.data();
+        if (!entry.bindingDivisors.empty()) {
+            entry.divisorState.vertexBindingDivisorCount = static_cast<Uint32>(entry.bindingDivisors.size());
+            entry.divisorState.pVertexBindingDivisors = entry.bindingDivisors.data();
+            entry.state.pNext = &entry.divisorState;
+        } else {
+            entry.state.pNext = nullptr;
+        }
         return entry;
     }
 

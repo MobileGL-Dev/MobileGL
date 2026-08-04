@@ -53,6 +53,14 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             // Bitmask of `attributes[i].location` - the draw path needs it up to
             // three times per draw, so it is baked once at build time.
             Uint32 attributeLocationMask = 0;
+            // Per-binding glVertexAttribDivisor values other than 1. Vulkan's instance input
+            // rate advances once per instance and nothing else, so anything else has to be
+            // stated through VK_EXT_vertex_attribute_divisor. Empty when every instanced
+            // binding uses divisor 1, which is what the plain input rate already means.
+            Vector<VkVertexInputBindingDivisorDescriptionEXT> bindingDivisors;
+            VkPipelineVertexInputDivisorStateCreateInfoEXT divisorState{
+                VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_DIVISOR_STATE_CREATE_INFO_EXT
+            };
             VkPipelineVertexInputStateCreateInfo state{
                 VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO
             };

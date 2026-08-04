@@ -9894,6 +9894,36 @@ void main() {
             MGLOG_W("VK_EXT_transform_feedback is unavailable; transform feedback capture will not work");
         }
 
+        // VK_EXT_vertex_attribute_divisor. Vulkan's instance input rate advances an attribute
+        // once per instance and nothing else, so without this every glVertexAttribDivisor value
+        // collapses to 1 and an attribute meant to change every N instances changes every one.
+        m_vertexAttributeDivisorEnabled = false;
+        VkPhysicalDeviceVertexAttributeDivisorFeaturesEXT vertexAttributeDivisorFeatures{};
+        vertexAttributeDivisorFeatures.sType =
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VERTEX_ATTRIBUTE_DIVISOR_FEATURES_EXT;
+        if (IsExtensionSupported(availableExtensions, VK_EXT_VERTEX_ATTRIBUTE_DIVISOR_EXTENSION_NAME) &&
+            getPhysicalDeviceFeatures2 != nullptr) {
+            VkPhysicalDeviceFeatures2 featureQuery{};
+            featureQuery.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+            featureQuery.pNext = &vertexAttributeDivisorFeatures;
+            getPhysicalDeviceFeatures2(m_physicalDevice.handle, &featureQuery);
+            if (vertexAttributeDivisorFeatures.vertexAttributeInstanceRateDivisor == VK_TRUE) {
+                if (!IsExtensionAlreadyEnabled(enabledDeviceExtensions,
+                                               VK_EXT_VERTEX_ATTRIBUTE_DIVISOR_EXTENSION_NAME)) {
+                    enabledDeviceExtensions.push_back(VK_EXT_VERTEX_ATTRIBUTE_DIVISOR_EXTENSION_NAME);
+                }
+                vertexAttributeDivisorFeatures.vertexAttributeInstanceRateZeroDivisor = VK_FALSE;
+                vertexAttributeDivisorFeatures.pNext = const_cast<void*>(deviceCreateInfo.pNext);
+                deviceCreateInfo.pNext = &vertexAttributeDivisorFeatures;
+                m_vertexAttributeDivisorEnabled = true;
+                MGLOG_I("Enabled optional device extension: %s", VK_EXT_VERTEX_ATTRIBUTE_DIVISOR_EXTENSION_NAME);
+            }
+        }
+        if (!m_vertexAttributeDivisorEnabled) {
+            MGLOG_W("VK_EXT_vertex_attribute_divisor is unavailable; a glVertexAttribDivisor other "
+                    "than 1 will advance its attribute once per instance");
+        }
+
         // Host query reset lets the occlusion-query ring recycle slots without a
         // command-buffer round trip.
         m_hostQueryResetEnabled = false;

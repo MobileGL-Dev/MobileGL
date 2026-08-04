@@ -494,6 +494,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
         // VK_EXT_transform_feedback (GL transform feedback capture)
         Bool m_transformFeedbackFeatureEnabled = false;
+        // VK_EXT_vertex_attribute_divisor: without it every non-zero glVertexAttribDivisor
+        // behaves as 1, because that is all Vulkan's instance input rate can express.
+        Bool m_vertexAttributeDivisorEnabled = false;
         static inline PFN_vkCmdBindTransformFeedbackBuffersEXT s_vkCmdBindTransformFeedbackBuffersEXT = nullptr;
         static inline PFN_vkCmdBeginTransformFeedbackEXT s_vkCmdBeginTransformFeedbackEXT = nullptr;
         static inline PFN_vkCmdEndTransformFeedbackEXT s_vkCmdEndTransformFeedbackEXT = nullptr;

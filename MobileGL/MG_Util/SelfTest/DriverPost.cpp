@@ -298,6 +298,25 @@ namespace MobileGL::MG_Util::SelfTest {
                              "not supported; no impact: the native indirect path deliberately does not "
                              "rely on it (shader-side emulation handles baseInstance semantics)");
             }
+            if (glesFuncs.glPatchParameteri != nullptr) {
+                builder.Pass("Tessellation patch parameters",
+                             "glPatchParameteri present (GL_PATCH_VERTICES reaches the driver)");
+            } else {
+                builder.Warn("Tessellation patch parameters",
+                             "glPatchParameteri missing (pre-ES 3.2 without GL_EXT_tessellation_shader); "
+                             "GL_PATCH_VERTICES stays at the driver default of 3 and a patch draw of any "
+                             "other size renders nothing");
+            }
+            if (glesFuncs.glGenTransformFeedbacks != nullptr && glesFuncs.glBindTransformFeedback != nullptr &&
+                glesFuncs.glPauseTransformFeedback != nullptr && glesFuncs.glResumeTransformFeedback != nullptr) {
+                builder.Pass("Transform feedback objects",
+                             "supported (each GL transform feedback object gets one of the driver's, so "
+                             "several can hold a paused capture at once)");
+            } else {
+                builder.Warn("Transform feedback objects",
+                             "entry points missing; every GL transform feedback object shares the driver's "
+                             "default one, so a second object cannot open a capture while the first is paused");
+            }
             if (caps.SupportsNorm16Texture) {
                 builder.Pass("GL_EXT_texture_norm16", "supported");
             } else {
@@ -1410,6 +1429,27 @@ namespace MobileGL::MG_Util::SelfTest {
             builder.Warn("primitiveTopologyListRestart",
                          "unsupported; primitive restart works on strip/fan topologies only, list-topology restart "
                          "hard-fails at draw");
+        }
+
+        Bool vertexAttributeInstanceRateDivisor = false;
+        if (vkGetPhysicalDeviceFeatures2Fn != nullptr &&
+            HasVkExtension(deviceExtensions, VK_EXT_VERTEX_ATTRIBUTE_DIVISOR_EXTENSION_NAME)) {
+            VkPhysicalDeviceVertexAttributeDivisorFeaturesEXT divisorFeatures{};
+            divisorFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VERTEX_ATTRIBUTE_DIVISOR_FEATURES_EXT;
+            VkPhysicalDeviceFeatures2 features2{};
+            features2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+            features2.pNext = &divisorFeatures;
+            vkGetPhysicalDeviceFeatures2Fn(physicalDevice, &features2);
+            vertexAttributeInstanceRateDivisor = divisorFeatures.vertexAttributeInstanceRateDivisor == VK_TRUE;
+        }
+        if (vertexAttributeInstanceRateDivisor) {
+            builder.Pass("vertexAttributeInstanceRateDivisor",
+                         "supported (glVertexAttribDivisor advances an attribute every N instances)");
+        } else {
+            builder.Warn("vertexAttributeInstanceRateDivisor",
+                         "unsupported; Vulkan's instance input rate can only advance once per instance, so "
+                         "every non-zero glVertexAttribDivisor behaves as 1 and instanced attributes meant to "
+                         "change every N instances change every one");
         }
 
         if (vkGetPhysicalDeviceProperties2Fn != nullptr && properties.apiVersion >= VK_API_VERSION_1_1) {
