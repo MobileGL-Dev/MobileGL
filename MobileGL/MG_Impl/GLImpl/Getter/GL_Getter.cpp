@@ -1912,6 +1912,12 @@ namespace MobileGL::MG_Impl::GLImpl {
         case GL_MAX_SAMPLE_MASK_WORDS:
             *params = dynamicParameters.MaxSampleMaskWords;
             break;
+        case GL_MIN_PROGRAM_TEXTURE_GATHER_OFFSET:
+            *params = dynamicParameters.MinProgramTextureGatherOffset;
+            break;
+        case GL_MAX_PROGRAM_TEXTURE_GATHER_OFFSET:
+            *params = dynamicParameters.MaxProgramTextureGatherOffset;
+            break;
         case GL_MAX_SHADER_STORAGE_BUFFER_BINDINGS:
             *params = static_cast<GLint>(GetIndexedBufferQueryPointCount(BufferTarget::ShaderStorage));
             break;

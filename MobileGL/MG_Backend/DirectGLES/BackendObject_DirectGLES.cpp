@@ -1072,6 +1072,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
         m_dynamicParameters.MaxIntegerSamples = m_GLESCapabilities.MaxIntegerSamples;
         m_dynamicParameters.MaxSamples = m_GLESCapabilities.MaxSamples;
         m_dynamicParameters.MaxSampleMaskWords = m_GLESCapabilities.MaxSampleMaskWords;
+        m_dynamicParameters.MinProgramTextureGatherOffset = m_GLESCapabilities.MinProgramTextureGatherOffset;
+        m_dynamicParameters.MaxProgramTextureGatherOffset = m_GLESCapabilities.MaxProgramTextureGatherOffset;
         // Clamp the advertised sampler limits the same way the DirectVulkan backend does: per-stage
         // GL_MAX_TEXTURE_IMAGE_UNITS must never exceed host-side fixed arrays sized off it (e.g.
         // Minecraft's 128-entry Blaze3D GlStateManager.TEXTURES[], iterated by Iris), and the combined

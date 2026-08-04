@@ -916,6 +916,10 @@ namespace MobileGL::MG_Util::BackendLoader {
         GLfloat minFragmentInterpolationOffset = -0.5f;
         GLfloat maxFragmentInterpolationOffset = 0.4375f;
         GLint fragmentInterpolationOffsetBits = 4;
+        // Core minimums of both APIs (GL 4.6 table 23.53, ES 3.1 table 20.40); the probe
+        // below only ever widens them.
+        GLint minProgramTextureGatherOffset = -8;
+        GLint maxProgramTextureGatherOffset = 7;
         glesFuncs.glGetFloatv(GL_ALIASED_LINE_WIDTH_RANGE, aliasedLineWidthRange);
         glesFuncs.glGetFloatv(GL_SMOOTH_LINE_WIDTH_RANGE, smoothLineWidthRange);
         glesFuncs.glGetFloatv(GL_SMOOTH_LINE_WIDTH_GRANULARITY, &smoothLineWidthGranularity);
@@ -944,6 +948,12 @@ namespace MobileGL::MG_Util::BackendLoader {
         // single test case. 1 is a spec-legal value (the minimum required), so cap
         // to what is actually implemented instead of forwarding the raw driver limit.
         maxSampleMaskWords = std::min(maxSampleMaskWords, 1);
+        glesFuncs.glGetIntegerv(GL_MIN_PROGRAM_TEXTURE_GATHER_OFFSET, &minProgramTextureGatherOffset);
+        glesFuncs.glGetIntegerv(GL_MAX_PROGRAM_TEXTURE_GATHER_OFFSET, &maxProgramTextureGatherOffset);
+        // A driver that leaves the probe untouched (pre-ES 3.1, or an ignored enum) must not
+        // drag the advertised range below what GL 4.0 requires of us.
+        minProgramTextureGatherOffset = std::min(minProgramTextureGatherOffset, -8);
+        maxProgramTextureGatherOffset = std::max(maxProgramTextureGatherOffset, 7);
         glesFuncs.glGetIntegerv(GL_MAX_TEXTURE_IMAGE_UNITS, &maxTextureImageUnits);
         glesFuncs.glGetIntegerv(GL_MAX_VERTEX_TEXTURE_IMAGE_UNITS, &maxVertexTextureImageUnits);
         glesFuncs.glGetIntegerv(GL_MAX_COMPUTE_TEXTURE_IMAGE_UNITS, &maxComputeTextureImageUnits);
@@ -1027,6 +1037,8 @@ namespace MobileGL::MG_Util::BackendLoader {
         caps.MaxIntegerSamples = maxIntegerSamples;
         caps.MaxSamples = maxSamples;
         caps.MaxSampleMaskWords = maxSampleMaskWords;
+        caps.MinProgramTextureGatherOffset = minProgramTextureGatherOffset;
+        caps.MaxProgramTextureGatherOffset = maxProgramTextureGatherOffset;
         caps.MaxTextureImageUnits = maxTextureImageUnits;
         caps.MaxVertexTextureImageUnits = maxVertexTextureImageUnits;
         caps.MaxComputeTextureImageUnits = maxComputeTextureImageUnits;

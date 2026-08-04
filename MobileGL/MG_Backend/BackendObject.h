@@ -288,6 +288,10 @@ namespace MobileGL {
             Int MaxIntegerSamples = 1;
             Int MaxSamples = 1;
             Int MaxSampleMaskWords = 1;
+            // GL_MIN/MAX_PROGRAM_TEXTURE_GATHER_OFFSET. Defaults are the GL 4.0 core
+            // minimums, which every ES 3.1 driver also guarantees.
+            Int MinProgramTextureGatherOffset = -8;
+            Int MaxProgramTextureGatherOffset = 7;
             Int MaxTextureImageUnits = 32;
             Int MaxVertexTextureImageUnits = 32;
             Int MaxComputeTextureImageUnits = 32;
