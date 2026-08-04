@@ -154,6 +154,17 @@ namespace MobileGL {
                 return m_parameters.PointSize;
             }
 
+            void RenderState::SetPatchVertices(Uint vertices) {
+                if (m_parameters.PatchVertices == vertices) return;
+
+                m_parameters.PatchVertices = vertices;
+                ++m_version;
+            }
+
+            Uint RenderState::GetPatchVertices() const {
+                return m_parameters.PatchVertices;
+            }
+
             void RenderState::SetPolygonOffset(Float factor, Float units) {
                 if (m_parameters.PolygonOffsetFactor == factor && m_parameters.PolygonOffsetUnits == units) return;
 

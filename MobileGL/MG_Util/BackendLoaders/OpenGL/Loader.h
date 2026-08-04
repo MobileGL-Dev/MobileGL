@@ -1102,6 +1102,8 @@ namespace MobileGL {
             Int MaxIntegerSamples = 1;
             Int MaxSamples = 1;
             Int MaxSampleMaskWords = 1;
+            Int MaxPatchVertices = 32;
+            Int MaxTessGenLevel = 64;
             Int MinProgramTextureGatherOffset = -8;
             Int MaxProgramTextureGatherOffset = 7;
             Int MaxTextureImageUnits = 32;

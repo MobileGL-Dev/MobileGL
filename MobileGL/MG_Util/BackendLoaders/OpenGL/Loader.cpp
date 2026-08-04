@@ -920,6 +920,8 @@ namespace MobileGL::MG_Util::BackendLoader {
         // below only ever widens them.
         GLint minProgramTextureGatherOffset = -8;
         GLint maxProgramTextureGatherOffset = 7;
+        GLint maxPatchVertices = 32;
+        GLint maxTessGenLevel = 64;
         glesFuncs.glGetFloatv(GL_ALIASED_LINE_WIDTH_RANGE, aliasedLineWidthRange);
         glesFuncs.glGetFloatv(GL_SMOOTH_LINE_WIDTH_RANGE, smoothLineWidthRange);
         glesFuncs.glGetFloatv(GL_SMOOTH_LINE_WIDTH_GRANULARITY, &smoothLineWidthGranularity);
@@ -948,6 +950,8 @@ namespace MobileGL::MG_Util::BackendLoader {
         // single test case. 1 is a spec-legal value (the minimum required), so cap
         // to what is actually implemented instead of forwarding the raw driver limit.
         maxSampleMaskWords = std::min(maxSampleMaskWords, 1);
+        glesFuncs.glGetIntegerv(GL_MAX_PATCH_VERTICES, &maxPatchVertices);
+        glesFuncs.glGetIntegerv(GL_MAX_TESS_GEN_LEVEL, &maxTessGenLevel);
         glesFuncs.glGetIntegerv(GL_MIN_PROGRAM_TEXTURE_GATHER_OFFSET, &minProgramTextureGatherOffset);
         glesFuncs.glGetIntegerv(GL_MAX_PROGRAM_TEXTURE_GATHER_OFFSET, &maxProgramTextureGatherOffset);
         // A driver that leaves the probe untouched (pre-ES 3.1, or an ignored enum) must not
@@ -1037,6 +1041,8 @@ namespace MobileGL::MG_Util::BackendLoader {
         caps.MaxIntegerSamples = maxIntegerSamples;
         caps.MaxSamples = maxSamples;
         caps.MaxSampleMaskWords = maxSampleMaskWords;
+        caps.MaxPatchVertices = maxPatchVertices;
+        caps.MaxTessGenLevel = maxTessGenLevel;
         caps.MinProgramTextureGatherOffset = minProgramTextureGatherOffset;
         caps.MaxProgramTextureGatherOffset = maxProgramTextureGatherOffset;
         caps.MaxTextureImageUnits = maxTextureImageUnits;

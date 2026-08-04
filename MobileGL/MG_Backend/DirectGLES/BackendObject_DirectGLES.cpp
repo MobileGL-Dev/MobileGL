@@ -1034,6 +1034,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // Transform feedback is captured by the real ES driver rather than
             // reconstructed from the draw recording, so the frontend has to hand the
             // span boundaries over.
+            funcsTable.GL.PatchParameteri = DirectGLES::PatchParameteri;
             funcsTable.GL.BeginTransformFeedback = XfbImpl::BeginTransformFeedback;
             funcsTable.GL.EndTransformFeedback = XfbImpl::EndTransformFeedback;
             funcsTable.GL.PauseTransformFeedback = XfbImpl::PauseTransformFeedback;
@@ -1080,6 +1081,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
         m_dynamicParameters.MaxIntegerSamples = m_GLESCapabilities.MaxIntegerSamples;
         m_dynamicParameters.MaxSamples = m_GLESCapabilities.MaxSamples;
         m_dynamicParameters.MaxSampleMaskWords = m_GLESCapabilities.MaxSampleMaskWords;
+        m_dynamicParameters.MaxPatchVertices = m_GLESCapabilities.MaxPatchVertices;
+        m_dynamicParameters.MaxTessGenLevel = m_GLESCapabilities.MaxTessGenLevel;
         m_dynamicParameters.MinProgramTextureGatherOffset = m_GLESCapabilities.MinProgramTextureGatherOffset;
         m_dynamicParameters.MaxProgramTextureGatherOffset = m_GLESCapabilities.MaxProgramTextureGatherOffset;
         // Clamp the advertised sampler limits the same way the DirectVulkan backend does: per-stage

@@ -4025,6 +4025,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
         return true;
     }
 
+    void PatchParameteri(GLenum pname, GLint value) {
+        if (g_GLESFuncs.glPatchParameteri == nullptr) return;
+        g_GLESFuncs.glPatchParameteri(pname, value);
+    }
+
     void GenerateMipmap(GLenum target) {
 #if MOBILEGL_LOG_ACTIVE_LEVEL <= MOBILEGL_LOG_LEVEL_DEBUG && MOBILEGL_ENABLE_SCOPE_MARKER
         DebugImpl::OpenGLScopeMarker marker(__func__);

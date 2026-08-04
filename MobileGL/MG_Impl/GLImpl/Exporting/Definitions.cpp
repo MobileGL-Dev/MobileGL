@@ -424,7 +424,7 @@ DECLARE_GL_FUNCTION_STUB_HEAD(void, GetnUniformfv, GLuint program, GLint locatio
 DECLARE_GL_FUNCTION_STUB_HEAD(void, GetnUniformiv, GLuint program, GLint location, GLsizei bufSize, GLint* params) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, GetnUniformiv, program, location, bufSize, params)
 DECLARE_GL_FUNCTION_STUB_HEAD(void, GetnUniformuiv, GLuint program, GLint location, GLsizei bufSize, GLuint* params) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, GetnUniformuiv, program, location, bufSize, params)
 DECLARE_GL_FUNCTION_STUB_HEAD(void, MinSampleShading, GLfloat value) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, MinSampleShading, value)
-DECLARE_GL_FUNCTION_STUB_HEAD(void, PatchParameteri, GLenum pname, GLint value) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, PatchParameteri, pname, value)
+DECLARE_GL_FUNCTION_HEAD(void, PatchParameteri, GLenum pname, GLint value) DECLARE_GL_FUNCTION_END_NO_RETURN(void, PatchParameteri, pname, value)
 DECLARE_GL_FUNCTION_HEAD(void, TexParameterIiv, GLenum target, GLenum pname, const GLint* params) DECLARE_GL_FUNCTION_END_NO_RETURN(void, TexParameterIiv, target, pname, params)
 DECLARE_GL_FUNCTION_HEAD(void, TexParameterIuiv, GLenum target, GLenum pname, const GLuint* params) DECLARE_GL_FUNCTION_END_NO_RETURN(void, TexParameterIuiv, target, pname, params)
 DECLARE_GL_FUNCTION_HEAD(void, GetTexParameterIiv, GLenum target, GLenum pname, GLint* params) DECLARE_GL_FUNCTION_END_NO_RETURN(void, GetTexParameterIiv, target, pname, params)

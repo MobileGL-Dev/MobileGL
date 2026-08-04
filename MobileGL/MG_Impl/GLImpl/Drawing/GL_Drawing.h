@@ -25,6 +25,7 @@ namespace MobileGL::MG_Impl::GLImpl {
     void DrawTransformFeedbackStreamInstanced(GLenum mode, GLuint id, GLuint stream, GLsizei instancecount);
     void DispatchCompute(GLuint numGroupsX, GLuint numGroupsY, GLuint numGroupsZ);
     void DispatchComputeIndirect(GLintptr indirect);
+    void PatchParameteri(GLenum pname, GLint value);
     void MemoryBarrier(GLbitfield barriers);
     void MemoryBarrierByRegion(GLbitfield barriers);
     void MultiDrawElementsIndirect(GLenum mode, GLenum type, const void* indirect, GLsizei drawcount, GLsizei stride);

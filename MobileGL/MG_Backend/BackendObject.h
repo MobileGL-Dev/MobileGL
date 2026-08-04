@@ -234,6 +234,8 @@ namespace MobileGL {
             // drives capture from its draw recording instead (DirectVulkan). End is
             // called while the frontend capture state is still active, so the backend
             // can still see the capture program and buffer bindings.
+            // GL_PATCH_VERTICES; ES 3.2 spells it the same way.
+            void (*PatchParameteri)(GLenum pname, GLint value);
             void (*BeginTransformFeedback)(GLenum primitiveMode);
             void (*EndTransformFeedback)();
             // ARB_transform_feedback2. A backend that leaves these null keeps the single
@@ -295,6 +297,9 @@ namespace MobileGL {
             Int MaxIntegerSamples = 1;
             Int MaxSamples = 1;
             Int MaxSampleMaskWords = 1;
+            // Tessellation limits; defaults are the GL 4.0 core minimums.
+            Int MaxPatchVertices = 32;
+            Int MaxTessGenLevel = 64;
             // GL_MIN/MAX_PROGRAM_TEXTURE_GATHER_OFFSET. Defaults are the GL 4.0 core
             // minimums, which every ES 3.1 driver also guarantees.
             Int MinProgramTextureGatherOffset = -8;

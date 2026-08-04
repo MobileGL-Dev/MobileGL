@@ -224,6 +224,8 @@ namespace MobileGL {
         IntVec4 Viewport = IntVec4(0, 0, 0, 0); // x, y, width, height
         Float LineWidth = 1.0f;
         Float PointSize = 1.0f;
+        // GL_PATCH_VERTICES: how many vertices one tessellation patch consumes.
+        Uint PatchVertices = 3;
         Float PolygonOffsetFactor = 0.0f;
         Float PolygonOffsetUnits = 0.0f;
 
@@ -319,6 +321,8 @@ namespace MobileGL {
                 Float GetLineWidth() const;
                 void SetPointSize(Float size);
                 Float GetPointSize() const;
+                void SetPatchVertices(Uint vertices);
+                Uint GetPatchVertices() const;
                 void SetPolygonOffset(Float factor, Float units);
                 Float GetPolygonOffsetFactor() const;
                 Float GetPolygonOffsetUnits() const;

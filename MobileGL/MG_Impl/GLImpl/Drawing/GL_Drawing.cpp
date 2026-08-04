@@ -11,6 +11,7 @@
 #include <MG_State/GLState/Core.h>
 #include <MG_State/EGLState/Core.h>
 #include <MG_Backend/BackendObjects.h>
+#include "../Getter/GL_Getter.h"
 
 namespace MobileGL::MG_Impl::GLImpl {
     static Bool ValidateCurrentProgramForExecution(const char* functionName) {
@@ -484,6 +485,28 @@ namespace MobileGL::MG_Impl::GLImpl {
         }
         if (!ValidateCurrentProgramForCompute(__func__)) return;
         dispatchComputeIndirect(indirect);
+    }
+
+    void PatchParameteri(GLenum pname, GLint value) {
+        if (pname != GL_PATCH_VERTICES) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidEnum,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__, "pname must be GL_PATCH_VERTICES."));
+            return;
+        }
+        GLint maxPatchVertices = 32;
+        GetIntegerv(GL_MAX_PATCH_VERTICES, &maxPatchVertices);
+        if (value <= 0 || value > maxPatchVertices) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidValue,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
+                                             "value must be in [1, GL_MAX_PATCH_VERTICES]."));
+            return;
+        }
+        MG_State::pGLContext->SetPatchVertices(static_cast<Uint>(value));
+        if (const auto patchParameteri = MG_Backend::gBackendFunctionsTable.GL.PatchParameteri) {
+            patchParameteri(pname, value);
+        }
     }
 
     void MemoryBarrier(GLbitfield barriers) {

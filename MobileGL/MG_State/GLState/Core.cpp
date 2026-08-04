@@ -424,6 +424,14 @@ namespace MobileGL::MG_State {
             m_renderState.SetPointSize(size);
         }
 
+        void GLContext::SetPatchVertices(Uint vertices) {
+            m_renderState.SetPatchVertices(vertices);
+        }
+
+        Uint GLContext::GetPatchVertices() const {
+            return m_renderState.GetPatchVertices();
+        }
+
         Float GLContext::GetPointSize() const {
             return m_renderState.GetPointSize();
         }

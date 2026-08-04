@@ -169,6 +169,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
     // begin is deferred to the first draw of the span (ES needs the capturing
     // program current and the capture buffers bound), and the end also mirrors the
     // captured bytes back into the frontend buffer shadows.
+    void PatchParameteri(GLenum pname, GLint value);
+
     namespace XfbImpl {
         Bool AreTransformFeedbacksSupported();
         void BeginTransformFeedback(GLenum primitiveMode);

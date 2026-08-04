@@ -138,6 +138,8 @@ namespace MobileGL {
                 Float GetLineWidth() const;
                 void SetPointSize(Float size);
                 Float GetPointSize() const;
+                void SetPatchVertices(Uint vertices);
+                Uint GetPatchVertices() const;
                 void SetPolygonOffset(Float factor, Float units);
                 Float GetPolygonOffsetFactor() const;
                 Float GetPolygonOffsetUnits() const;

@@ -1917,6 +1917,15 @@ namespace MobileGL::MG_Impl::GLImpl {
         case GL_MAX_SAMPLE_MASK_WORDS:
             *params = dynamicParameters.MaxSampleMaskWords;
             break;
+        case GL_PATCH_VERTICES:
+            *params = static_cast<GLint>(MG_State::pGLContext->GetPatchVertices());
+            break;
+        case GL_MAX_PATCH_VERTICES:
+            *params = dynamicParameters.MaxPatchVertices;
+            break;
+        case GL_MAX_TESS_GEN_LEVEL:
+            *params = dynamicParameters.MaxTessGenLevel;
+            break;
         case GL_MIN_PROGRAM_TEXTURE_GATHER_OFFSET:
             *params = dynamicParameters.MinProgramTextureGatherOffset;
             break;
