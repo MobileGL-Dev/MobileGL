@@ -8,6 +8,8 @@
 
 #include "GL_Program.h"
 #include "Config.h"
+#include <cmath>
+#include <limits>
 #include <MG_Impl/GLImpl/VertexArray/Validators.h>
 #include <MG_State/GLState/Core.h>
 #include <MG_Util/Converters/GLToStr/GLEnumConverter.h>
@@ -830,7 +832,8 @@ namespace MobileGL::MG_Impl::GLImpl {
         }
 
         if constexpr (std::is_same_v<T, GLfloat>) {
-            if (ttype->isMatrix() && ttype->getMatrixCols() == 3) {
+            if (ttype->getBasicType() != glslang::EbtDouble && ttype->isMatrix() &&
+                ttype->getMatrixCols() == 3) {
                 auto* pBase = pUBO + offset;
                 for (int i = 0; i < ttype->getMatrixRows(); i++) {
                     Memcpy(reinterpret_cast<char*>(params) + ttype->getMatrixCols() * sizeof(GLfloat) * i,
@@ -840,7 +843,44 @@ namespace MobileGL::MG_Impl::GLImpl {
             }
         }
 
+        // A double-precision uniform is the one case where the stored component type can
+        // differ from the queried one for a non-opaque uniform, and the difference is not
+        // just a reinterpretation: it is twice as wide, so a raw copy would overrun the
+        // caller's buffer as well as return nonsense. Read component by component and let
+        // GL's conversion rules (7.6: round to nearest for the integer queries) apply.
+        if (ttype->getBasicType() == glslang::EbtDouble) {
+            const Int columns = ttype->isMatrix() ? ttype->getMatrixCols() : 1;
+            const Int rows = ttype->isMatrix() ? ttype->getMatrixRows()
+                                               : (ttype->isVector() ? ttype->getVectorSize() : 1);
+            // The slot the linker handed out is exactly `columns` columns wide, so it also
+            // states the column stride - which for a double matrix is not a float's 16 bytes.
+            const SizeT columnStride = columns > 0 ? size / static_cast<SizeT>(columns) : size;
+            for (Int column = 0; column < columns; ++column) {
+                for (Int row = 0; row < rows; ++row) {
+                    GLdouble component = 0.0;
+                    Memcpy(&component, pUBO + offset + column * columnStride + row * sizeof(GLdouble),
+                           sizeof(component));
+                    if constexpr (std::is_integral_v<T>) {
+                        // Rounded to the nearest integer and clamped into the queried type's
+                        // range, so a negative double read through glGetUniformuiv is 0
+                        // rather than its two's complement.
+                        const GLdouble rounded = std::nearbyint(component);
+                        const GLdouble lowest = static_cast<GLdouble>(std::numeric_limits<T>::lowest());
+                        const GLdouble highest = static_cast<GLdouble>(std::numeric_limits<T>::max());
+                        params[column * rows + row] = static_cast<T>(std::clamp(rounded, lowest, highest));
+                    } else {
+                        params[column * rows + row] = static_cast<T>(component);
+                    }
+                }
+            }
+            return;
+        }
+
         Memcpy(params, pUBO + offset, size);
+    }
+
+    void GetUniformdv_State(GLuint program, GLint location, GLdouble* params) {
+        GetUniformScalar_State(program, location, params);
     }
 
     void GetUniformfv_State(GLuint program, GLint location, GLfloat* params) {
@@ -1058,6 +1098,38 @@ namespace MobileGL::MG_Impl::GLImpl {
                 return;
             }
             Uniform_State<ItemCount>(*programObject, location + offset, value + offset * ItemCount);
+        }
+    }
+
+    // glUniform*d / glUniformMatrix*dv. The vector forms need nothing beyond the shared
+    // upload template - it is already typed on the component - but a matrix does: the
+    // column stride the linker used for a double matrix is not the 16 bytes a float one
+    // gets. It is not guessed here; the slot the uniform was given is exactly `columns`
+    // columns wide, so dividing states the stride the rest of the pipeline agreed on.
+    template <typename Program>
+    void UniformMatrixdv_Object(Program& programObject, GLint location, GLsizei count, GLboolean transpose,
+                                const GLdouble* value, Int columns, Int rows) {
+        const SizeT slotSize = programObject.GetUniformSizesInBytes(location);
+        const SizeT columnStride = columns > 0 ? slotSize / static_cast<SizeT>(columns) : slotSize;
+        const SizeT componentCount = static_cast<SizeT>(columns) * static_cast<SizeT>(rows);
+        Vector<GLdouble> column(static_cast<SizeT>(rows));
+        for (GLint matrix = 0; matrix < count; ++matrix) {
+            if (matrix > 0 && !programObject.UniformLocationsAliasSameUniform(location, location + matrix)) break;
+            if (!programObject.IsValidUniformLocation(location + matrix)) {
+                RecordInvalidUniformLocationError(__func__, location + matrix, "the current program object");
+                return;
+            }
+            const GLdouble* source = value + matrix * componentCount;
+            for (Int c = 0; c < columns; ++c) {
+                for (Int r = 0; r < rows; ++r) {
+                    column[r] = transpose == GL_TRUE ? source[r * columns + c] : source[c * rows + r];
+                }
+                Uniform_State<1>(programObject, location + matrix, column.data(), c * columnStride);
+                for (Int r = 1; r < rows; ++r) {
+                    Uniform_State<1>(programObject, location + matrix, column.data() + r,
+                                     c * columnStride + r * sizeof(GLdouble));
+                }
+            }
         }
     }
 
@@ -1869,6 +1941,312 @@ namespace MobileGL::MG_Impl::GLImpl {
         GLuint v[] = {v0, v1, v2, v3};
         Uniform4uiv(location, 1, v);
     }
+    void Uniform1d(GLint location, GLdouble v0) {
+        const GLdouble v[] = {v0};
+        Uniformv_State<1>(location, 1, v);
+    }
+
+    void Uniform1dv(GLint location, GLsizei count, const GLdouble* value) {
+        Uniformv_State<1>(location, count, value);
+    }
+
+    void ProgramUniform1d(GLuint program, GLint location, GLdouble v0) {
+        const GLdouble v[] = {v0};
+        ProgramUniformv_State<1>(program, location, 1, v);
+    }
+
+    void ProgramUniform1dv(GLuint program, GLint location, GLsizei count, const GLdouble* value) {
+        ProgramUniformv_State<1>(program, location, count, value);
+    }
+    void Uniform2d(GLint location, GLdouble v0, GLdouble v1) {
+        const GLdouble v[] = {v0, v1};
+        Uniformv_State<2>(location, 1, v);
+    }
+
+    void Uniform2dv(GLint location, GLsizei count, const GLdouble* value) {
+        Uniformv_State<2>(location, count, value);
+    }
+
+    void ProgramUniform2d(GLuint program, GLint location, GLdouble v0, GLdouble v1) {
+        const GLdouble v[] = {v0, v1};
+        ProgramUniformv_State<2>(program, location, 1, v);
+    }
+
+    void ProgramUniform2dv(GLuint program, GLint location, GLsizei count, const GLdouble* value) {
+        ProgramUniformv_State<2>(program, location, count, value);
+    }
+    void Uniform3d(GLint location, GLdouble v0, GLdouble v1, GLdouble v2) {
+        const GLdouble v[] = {v0, v1, v2};
+        Uniformv_State<3>(location, 1, v);
+    }
+
+    void Uniform3dv(GLint location, GLsizei count, const GLdouble* value) {
+        Uniformv_State<3>(location, count, value);
+    }
+
+    void ProgramUniform3d(GLuint program, GLint location, GLdouble v0, GLdouble v1, GLdouble v2) {
+        const GLdouble v[] = {v0, v1, v2};
+        ProgramUniformv_State<3>(program, location, 1, v);
+    }
+
+    void ProgramUniform3dv(GLuint program, GLint location, GLsizei count, const GLdouble* value) {
+        ProgramUniformv_State<3>(program, location, count, value);
+    }
+    void Uniform4d(GLint location, GLdouble v0, GLdouble v1, GLdouble v2, GLdouble v3) {
+        const GLdouble v[] = {v0, v1, v2, v3};
+        Uniformv_State<4>(location, 1, v);
+    }
+
+    void Uniform4dv(GLint location, GLsizei count, const GLdouble* value) {
+        Uniformv_State<4>(location, count, value);
+    }
+
+    void ProgramUniform4d(GLuint program, GLint location, GLdouble v0, GLdouble v1, GLdouble v2, GLdouble v3) {
+        const GLdouble v[] = {v0, v1, v2, v3};
+        ProgramUniformv_State<4>(program, location, 1, v);
+    }
+
+    void ProgramUniform4dv(GLuint program, GLint location, GLsizei count, const GLdouble* value) {
+        ProgramUniformv_State<4>(program, location, count, value);
+    }
+    void UniformMatrix2dv(GLint location, GLsizei count, GLboolean transpose, const GLdouble* value) {
+        if (location == -1) return;
+        auto& programObject = MG_State::pGLContext->GetCurrentProgram();
+        if (programObject == nullptr) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidOperation,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__, "There is no current program object."));
+            return;
+        }
+        UniformMatrixdv_Object(*programObject, location, count, transpose, value, 2, 2);
+    }
+
+    void ProgramUniformMatrix2dv(GLuint program, GLint location, GLsizei count, GLboolean transpose,
+                                      const GLdouble* value) {
+        if (location == -1) return;
+        auto& programObject = TryToGetProgramObject(program);
+        if (!programObject) return;
+        if (!programObject->GetLinkStatus()) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidOperation,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
+                                             "program " + std::to_string(program) + " is not linked."));
+            return;
+        }
+        UniformMatrixdv_Object(*programObject, location, count, transpose, value, 2, 2);
+    }
+    void UniformMatrix3dv(GLint location, GLsizei count, GLboolean transpose, const GLdouble* value) {
+        if (location == -1) return;
+        auto& programObject = MG_State::pGLContext->GetCurrentProgram();
+        if (programObject == nullptr) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidOperation,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__, "There is no current program object."));
+            return;
+        }
+        UniformMatrixdv_Object(*programObject, location, count, transpose, value, 3, 3);
+    }
+
+    void ProgramUniformMatrix3dv(GLuint program, GLint location, GLsizei count, GLboolean transpose,
+                                      const GLdouble* value) {
+        if (location == -1) return;
+        auto& programObject = TryToGetProgramObject(program);
+        if (!programObject) return;
+        if (!programObject->GetLinkStatus()) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidOperation,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
+                                             "program " + std::to_string(program) + " is not linked."));
+            return;
+        }
+        UniformMatrixdv_Object(*programObject, location, count, transpose, value, 3, 3);
+    }
+    void UniformMatrix4dv(GLint location, GLsizei count, GLboolean transpose, const GLdouble* value) {
+        if (location == -1) return;
+        auto& programObject = MG_State::pGLContext->GetCurrentProgram();
+        if (programObject == nullptr) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidOperation,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__, "There is no current program object."));
+            return;
+        }
+        UniformMatrixdv_Object(*programObject, location, count, transpose, value, 4, 4);
+    }
+
+    void ProgramUniformMatrix4dv(GLuint program, GLint location, GLsizei count, GLboolean transpose,
+                                      const GLdouble* value) {
+        if (location == -1) return;
+        auto& programObject = TryToGetProgramObject(program);
+        if (!programObject) return;
+        if (!programObject->GetLinkStatus()) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidOperation,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
+                                             "program " + std::to_string(program) + " is not linked."));
+            return;
+        }
+        UniformMatrixdv_Object(*programObject, location, count, transpose, value, 4, 4);
+    }
+    void UniformMatrix2x3dv(GLint location, GLsizei count, GLboolean transpose, const GLdouble* value) {
+        if (location == -1) return;
+        auto& programObject = MG_State::pGLContext->GetCurrentProgram();
+        if (programObject == nullptr) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidOperation,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__, "There is no current program object."));
+            return;
+        }
+        UniformMatrixdv_Object(*programObject, location, count, transpose, value, 2, 3);
+    }
+
+    void ProgramUniformMatrix2x3dv(GLuint program, GLint location, GLsizei count, GLboolean transpose,
+                                      const GLdouble* value) {
+        if (location == -1) return;
+        auto& programObject = TryToGetProgramObject(program);
+        if (!programObject) return;
+        if (!programObject->GetLinkStatus()) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidOperation,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
+                                             "program " + std::to_string(program) + " is not linked."));
+            return;
+        }
+        UniformMatrixdv_Object(*programObject, location, count, transpose, value, 2, 3);
+    }
+    void UniformMatrix2x4dv(GLint location, GLsizei count, GLboolean transpose, const GLdouble* value) {
+        if (location == -1) return;
+        auto& programObject = MG_State::pGLContext->GetCurrentProgram();
+        if (programObject == nullptr) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidOperation,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__, "There is no current program object."));
+            return;
+        }
+        UniformMatrixdv_Object(*programObject, location, count, transpose, value, 2, 4);
+    }
+
+    void ProgramUniformMatrix2x4dv(GLuint program, GLint location, GLsizei count, GLboolean transpose,
+                                      const GLdouble* value) {
+        if (location == -1) return;
+        auto& programObject = TryToGetProgramObject(program);
+        if (!programObject) return;
+        if (!programObject->GetLinkStatus()) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidOperation,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
+                                             "program " + std::to_string(program) + " is not linked."));
+            return;
+        }
+        UniformMatrixdv_Object(*programObject, location, count, transpose, value, 2, 4);
+    }
+    void UniformMatrix3x2dv(GLint location, GLsizei count, GLboolean transpose, const GLdouble* value) {
+        if (location == -1) return;
+        auto& programObject = MG_State::pGLContext->GetCurrentProgram();
+        if (programObject == nullptr) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidOperation,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__, "There is no current program object."));
+            return;
+        }
+        UniformMatrixdv_Object(*programObject, location, count, transpose, value, 3, 2);
+    }
+
+    void ProgramUniformMatrix3x2dv(GLuint program, GLint location, GLsizei count, GLboolean transpose,
+                                      const GLdouble* value) {
+        if (location == -1) return;
+        auto& programObject = TryToGetProgramObject(program);
+        if (!programObject) return;
+        if (!programObject->GetLinkStatus()) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidOperation,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
+                                             "program " + std::to_string(program) + " is not linked."));
+            return;
+        }
+        UniformMatrixdv_Object(*programObject, location, count, transpose, value, 3, 2);
+    }
+    void UniformMatrix3x4dv(GLint location, GLsizei count, GLboolean transpose, const GLdouble* value) {
+        if (location == -1) return;
+        auto& programObject = MG_State::pGLContext->GetCurrentProgram();
+        if (programObject == nullptr) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidOperation,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__, "There is no current program object."));
+            return;
+        }
+        UniformMatrixdv_Object(*programObject, location, count, transpose, value, 3, 4);
+    }
+
+    void ProgramUniformMatrix3x4dv(GLuint program, GLint location, GLsizei count, GLboolean transpose,
+                                      const GLdouble* value) {
+        if (location == -1) return;
+        auto& programObject = TryToGetProgramObject(program);
+        if (!programObject) return;
+        if (!programObject->GetLinkStatus()) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidOperation,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
+                                             "program " + std::to_string(program) + " is not linked."));
+            return;
+        }
+        UniformMatrixdv_Object(*programObject, location, count, transpose, value, 3, 4);
+    }
+    void UniformMatrix4x2dv(GLint location, GLsizei count, GLboolean transpose, const GLdouble* value) {
+        if (location == -1) return;
+        auto& programObject = MG_State::pGLContext->GetCurrentProgram();
+        if (programObject == nullptr) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidOperation,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__, "There is no current program object."));
+            return;
+        }
+        UniformMatrixdv_Object(*programObject, location, count, transpose, value, 4, 2);
+    }
+
+    void ProgramUniformMatrix4x2dv(GLuint program, GLint location, GLsizei count, GLboolean transpose,
+                                      const GLdouble* value) {
+        if (location == -1) return;
+        auto& programObject = TryToGetProgramObject(program);
+        if (!programObject) return;
+        if (!programObject->GetLinkStatus()) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidOperation,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
+                                             "program " + std::to_string(program) + " is not linked."));
+            return;
+        }
+        UniformMatrixdv_Object(*programObject, location, count, transpose, value, 4, 2);
+    }
+    void UniformMatrix4x3dv(GLint location, GLsizei count, GLboolean transpose, const GLdouble* value) {
+        if (location == -1) return;
+        auto& programObject = MG_State::pGLContext->GetCurrentProgram();
+        if (programObject == nullptr) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidOperation,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__, "There is no current program object."));
+            return;
+        }
+        UniformMatrixdv_Object(*programObject, location, count, transpose, value, 4, 3);
+    }
+
+    void ProgramUniformMatrix4x3dv(GLuint program, GLint location, GLsizei count, GLboolean transpose,
+                                      const GLdouble* value) {
+        if (location == -1) return;
+        auto& programObject = TryToGetProgramObject(program);
+        if (!programObject) return;
+        if (!programObject->GetLinkStatus()) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidOperation,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
+                                             "program " + std::to_string(program) + " is not linked."));
+            return;
+        }
+        UniformMatrixdv_Object(*programObject, location, count, transpose, value, 4, 3);
+    }
+    void GetUniformdv(GLuint program, GLint location, GLdouble* params) {
+        GetUniformdv_State(program, location, params);
+    }
+
     void Uniform1fv(GLint location, GLsizei count, const GLfloat* value) {
         Uniform1fv_State(location, count, value);
     }
