@@ -115,7 +115,36 @@ namespace MobileGL::MG_Impl::GLImpl {
         MG_State::pGLContext->AddTransformFeedbackCapturedVertices(primitives * verticesPerPrimitive);
     }
 
+    // Every primitive mode a draw command accepts (GL 4.6 core table 10.1, plus
+    // GL_PATCHES for the tessellation pipeline). Anything else is GL_INVALID_ENUM.
+    static Bool IsAcceptedPrimitiveMode(GLenum mode) {
+        switch (mode) {
+        case GL_POINTS:
+        case GL_LINES:
+        case GL_LINE_LOOP:
+        case GL_LINE_STRIP:
+        case GL_LINES_ADJACENCY:
+        case GL_LINE_STRIP_ADJACENCY:
+        case GL_TRIANGLES:
+        case GL_TRIANGLE_STRIP:
+        case GL_TRIANGLE_FAN:
+        case GL_TRIANGLES_ADJACENCY:
+        case GL_TRIANGLE_STRIP_ADJACENCY:
+        case GL_PATCHES:
+            return true;
+        default:
+            return false;
+        }
+    }
+
     static Bool ValidatePrimitiveModeForBackend(const char* functionName, GLenum mode) {
+        if (!IsAcceptedPrimitiveMode(mode)) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidEnum,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", functionName, "mode is not an accepted primitive type."));
+            return false;
+        }
+
         const auto& activeBackendObject = MG_Backend::pActiveBackendObject;
         if (!activeBackendObject) {
             MG_State::pGLContext->RecordError(
@@ -166,6 +195,58 @@ namespace MobileGL::MG_Impl::GLImpl {
         }
 
         return true;
+    }
+
+    // Byte size of the command structures the indirect draws read (GL 4.6 core 10.3.10).
+    constexpr SizeT kDrawArraysIndirectCommandBytes = 4 * sizeof(Uint32);
+    constexpr SizeT kDrawElementsIndirectCommandBytes = 5 * sizeof(Uint32);
+
+    // Shared preconditions of every *Indirect draw: `indirect` is a byte offset into the
+    // buffer bound to GL_DRAW_INDIRECT_BUFFER, must be 4-byte aligned, and the whole
+    // command has to lie inside that buffer.
+    static Bool ValidateIndirectDrawSource(const char* functionName, const void* indirect, SizeT commandBytes) {
+        const auto offset = reinterpret_cast<uintptr_t>(indirect);
+        if (offset % 4 != 0) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidValue,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", functionName,
+                                             "indirect offset must be a multiple of 4."));
+            return false;
+        }
+
+        const auto& buffer = MG_State::pGLContext->GetBufferBindingSlot(BufferTarget::DrawIndirect).GetBoundObject();
+        if (!buffer) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidOperation,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", functionName,
+                                             "No buffer is bound to GL_DRAW_INDIRECT_BUFFER."));
+            return false;
+        }
+
+        if (offset + commandBytes > buffer->GetSize()) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidOperation,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", functionName,
+                                             "The indirect command extends past the end of the bound "
+                                             "GL_DRAW_INDIRECT_BUFFER."));
+            return false;
+        }
+        return true;
+    }
+
+    // Index type accepted by the DrawElements family (GL 4.6 core 10.3.9).
+    static Bool ValidateDrawElementsIndexType(const char* functionName, GLenum type) {
+        switch (type) {
+        case GL_UNSIGNED_BYTE:
+        case GL_UNSIGNED_SHORT:
+        case GL_UNSIGNED_INT:
+            return true;
+        default:
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidEnum,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", functionName, "type is not an accepted index type."));
+            return false;
+        }
     }
 
     void Clear_Backend(GLbitfield mask) {
@@ -467,6 +548,8 @@ namespace MobileGL::MG_Impl::GLImpl {
     void DrawElementsIndirect(GLenum mode, GLenum type, const void* indirect) {
         if (!ValidateCurrentProgramForExecution(__func__)) return;
         if (!ValidatePrimitiveModeForBackend(__func__, mode)) return;
+        if (!ValidateDrawElementsIndexType(__func__, type)) return;
+        if (!ValidateIndirectDrawSource(__func__, indirect, kDrawElementsIndirectCommandBytes)) return;
         DrawElementsIndirect_Backend(mode, type, indirect);
     }
 
@@ -486,6 +569,7 @@ namespace MobileGL::MG_Impl::GLImpl {
     void DrawArraysIndirect(GLenum mode, const void* indirect) {
         if (!ValidateCurrentProgramForExecution(__func__)) return;
         if (!ValidatePrimitiveModeForBackend(__func__, mode)) return;
+        if (!ValidateIndirectDrawSource(__func__, indirect, kDrawArraysIndirectCommandBytes)) return;
         DrawArraysIndirect_Backend(mode, indirect);
     }
 
