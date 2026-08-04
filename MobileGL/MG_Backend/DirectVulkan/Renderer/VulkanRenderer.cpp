@@ -8405,6 +8405,16 @@ void main() {
         }
     }
 
+    // Byte size of the command structures GL defines for the indirect draws (GL 4.6 core
+    // 10.3.10): four uint32 for DrawArraysIndirectCommand, five for DrawElementsIndirect-
+    // Command. These bound the read out of GL_DRAW_INDIRECT_BUFFER and are the default
+    // stride, so they must be GL's sizes and not this renderer's own draw-parameter
+    // structs - DrawCmdParam carries two extra members and is 24 bytes, which made every
+    // glDrawArraysIndirect on a tightly-sized indirect buffer look out of range and draw
+    // nothing.
+    constexpr SizeT kGLDrawArraysIndirectCommandBytes = 4 * sizeof(Uint32);
+    constexpr SizeT kGLDrawElementsIndirectCommandBytes = 5 * sizeof(Uint32);
+
     void VulkanRenderer::MultiDrawElementsIndirectCount(GLenum mode, GLenum type, const void* indirect,
                                                         GLintptr drawcount, GLsizei maxdrawcount, GLsizei stride) {
         auto& frame = m_frameContext.GetCurrent();
@@ -8413,11 +8423,11 @@ void main() {
             return;
         }
         if (stride == 0) {
-            stride = sizeof(DrawIndexedCmdParam);
+            stride = kGLDrawElementsIndirectCommandBytes;
         }
-        if (stride < static_cast<GLsizei>(sizeof(DrawIndexedCmdParam))) {
+        if (stride < static_cast<GLsizei>(kGLDrawElementsIndirectCommandBytes)) {
             MGLOG_E("MultiDrawElementsIndirectCount skipped: stride %d is smaller than command size %zu",
-                    stride, sizeof(DrawIndexedCmdParam));
+                    stride, kGLDrawElementsIndirectCommandBytes);
             return;
         }
 
@@ -8436,7 +8446,7 @@ void main() {
 
         const SizeT commandOffset = reinterpret_cast<SizeT>(indirect);
         const SizeT commandBytes = commandOffset +
-            static_cast<SizeT>(stride) * static_cast<SizeT>(maxdrawcount - 1) + sizeof(DrawIndexedCmdParam);
+            static_cast<SizeT>(stride) * static_cast<SizeT>(maxdrawcount - 1) + kGLDrawElementsIndirectCommandBytes;
         auto drawBuffer = MG_State::pGLContext->GetBufferBindingSlot(BufferTarget::DrawIndirect).GetBoundObject();
         if (!drawBuffer || commandBytes > drawBuffer->GetSize()) {
             MGLOG_E("MultiDrawElementsIndirectCount skipped: invalid GL_DRAW_INDIRECT_BUFFER binding or range");
@@ -8514,11 +8524,11 @@ void main() {
             return;
         }
         if (stride == 0) {
-            stride = sizeof(DrawIndexedCmdParam);
+            stride = kGLDrawElementsIndirectCommandBytes;
         }
-        if (stride < static_cast<GLsizei>(sizeof(DrawIndexedCmdParam))) {
+        if (stride < static_cast<GLsizei>(kGLDrawElementsIndirectCommandBytes)) {
             MGLOG_E("MultiDrawElementsIndirect skipped: stride %d is smaller than command size %zu",
-                    stride, sizeof(DrawIndexedCmdParam));
+                    stride, kGLDrawElementsIndirectCommandBytes);
             return;
         }
 
@@ -8537,7 +8547,7 @@ void main() {
 
         const SizeT commandOffset = reinterpret_cast<SizeT>(indirect);
         const SizeT commandBytes = commandOffset +
-            static_cast<SizeT>(stride) * static_cast<SizeT>(drawcount - 1) + sizeof(DrawIndexedCmdParam);
+            static_cast<SizeT>(stride) * static_cast<SizeT>(drawcount - 1) + kGLDrawElementsIndirectCommandBytes;
         auto drawBuffer = MG_State::pGLContext->GetBufferBindingSlot(BufferTarget::DrawIndirect).GetBoundObject();
         if (!drawBuffer || commandBytes > drawBuffer->GetSize()) {
             MGLOG_E("MultiDrawElementsIndirect skipped: invalid GL_DRAW_INDIRECT_BUFFER binding or range");
@@ -8596,17 +8606,17 @@ void main() {
             return;
         }
         if (stride == 0) {
-            stride = sizeof(DrawCmdParam);
+            stride = kGLDrawArraysIndirectCommandBytes;
         }
-        if (stride < static_cast<GLsizei>(sizeof(DrawCmdParam))) {
+        if (stride < static_cast<GLsizei>(kGLDrawArraysIndirectCommandBytes)) {
             MGLOG_E("MultiDrawArraysIndirect skipped: stride %d is smaller than command size %zu",
-                    stride, sizeof(DrawCmdParam));
+                    stride, kGLDrawArraysIndirectCommandBytes);
             return;
         }
 
         const SizeT commandOffset = reinterpret_cast<SizeT>(indirect);
         const SizeT commandBytes = commandOffset +
-            static_cast<SizeT>(stride) * static_cast<SizeT>(drawcount - 1) + sizeof(DrawCmdParam);
+            static_cast<SizeT>(stride) * static_cast<SizeT>(drawcount - 1) + kGLDrawArraysIndirectCommandBytes;
         auto drawBuffer = MG_State::pGLContext->GetBufferBindingSlot(BufferTarget::DrawIndirect).GetBoundObject();
         if (!drawBuffer || commandBytes > drawBuffer->GetSize()) {
             MGLOG_E("MultiDrawArraysIndirect skipped: invalid GL_DRAW_INDIRECT_BUFFER binding or range");
