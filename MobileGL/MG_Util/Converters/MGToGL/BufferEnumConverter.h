@@ -14,6 +14,6 @@ namespace MobileGL {
     namespace MG_Util {
         GLenum ConvertBufferTargetToGLEnum(BufferTarget bufferTarget);
         GLenum ConvertBufferUsageToGLEnum(BufferUsage usage);
-        GLbitfield ConvertBufferMappingAccessToGLEnum(BufferMappingAccessBit access);
+        GLbitfield ConvertBufferMappingAccessToGLEnum(Flags<BufferMappingAccessBit> access);
     } // namespace MG_Util
 } // namespace MobileGL

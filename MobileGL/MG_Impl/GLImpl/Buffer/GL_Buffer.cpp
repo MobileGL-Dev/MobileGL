@@ -330,11 +330,20 @@ namespace MobileGL::MG_Impl::GLImpl {
                     } else if (access & BufferMappingAccessBit::Write) {
                         *params = GL_WRITE_ONLY;
                     } else {
-                        *params = 0;
+                        *params = GL_READ_WRITE;
                     }
                 } else {
-                    *params = 0;
+                    // Initial value, and what glUnmapBuffer restores (GL 4.6 core table 6.2).
+                    *params = GL_READ_WRITE;
                 }
+                break;
+            case GL_BUFFER_ACCESS_FLAGS:
+                // The MapBufferRange flags verbatim; glMapBuffer's access enum has already been
+                // normalised into the same bits. Zero while the buffer is not mapped.
+                *params = bufferObject->IsMapped()
+                    ? static_cast<GLint>(
+                          MG_Util::ConvertBufferMappingAccessToGLEnum(bufferObject->GetMappingAccess()))
+                    : 0;
                 break;
             case GL_BUFFER_MAPPED:
                 *params = bufferObject->IsMapped() ? GL_TRUE : GL_FALSE;

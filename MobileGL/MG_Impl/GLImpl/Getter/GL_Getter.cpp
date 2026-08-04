@@ -1030,6 +1030,11 @@ namespace MobileGL::MG_Impl::GLImpl {
             *params = obj ? static_cast<GLint>(obj->GetExternalIndex()) : 0;
             return;
         }
+        case GL_DRAW_INDIRECT_BUFFER_BINDING: {
+            auto& obj = MG_State::pGLContext->GetBufferBindingSlot(BufferTarget::DrawIndirect).GetBoundObject();
+            *params = obj ? static_cast<GLint>(obj->GetExternalIndex()) : 0;
+            return;
+        }
         case GL_MAX_DEBUG_GROUP_STACK_DEPTH:
             *params = 0; // debug-group entrypoints are stubbed
             return;

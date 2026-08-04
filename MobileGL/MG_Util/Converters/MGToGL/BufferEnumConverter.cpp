@@ -73,7 +73,7 @@ namespace MobileGL {
             }
         }
 
-        GLbitfield ConvertBufferMappingAccessToGLEnum(BufferMappingAccessBit access) {
+        GLbitfield ConvertBufferMappingAccessToGLEnum(Flags<BufferMappingAccessBit> access) {
             GLbitfield result = 0;
             if (access & BufferMappingAccessBit::Read) result |= GL_MAP_READ_BIT;
             if (access & BufferMappingAccessBit::Write) result |= GL_MAP_WRITE_BIT;
