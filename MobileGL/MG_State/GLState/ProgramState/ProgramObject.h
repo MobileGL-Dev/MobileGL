@@ -497,6 +497,10 @@ namespace MobileGL::MG_State::GLState {
         Bool HasGsTriangleStripCaptureFixup() const { return m_gsStripCaptureFixup; }
         // Triangles per strip, in emission order, for ONE geometry invocation.
         const Vector<Uint32>& GetGsStripTriangles() const { return m_gsStripTriangles; }
+        // GL_GEOMETRY_INPUT_TYPE of the linked geometry stage (GL_POINTS, GL_LINES,
+        // GL_LINES_ADJACENCY, GL_TRIANGLES or GL_TRIANGLES_ADJACENCY), or GL_NONE when the
+        // program has no geometry stage. Draws must present a compatible primitive type.
+        GLenum GetGeometryInputType() const { return m_gsInputPrimitive; }
 
         Uint GetExternalIndex() const { return m_externalIndex; }
         // Globally-unique, never-reused id for this program object's lifetime. Unlike the GL
@@ -604,6 +608,7 @@ namespace MobileGL::MG_State::GLState {
         Vector<Uint32> m_xfbStrides;
         Vector<Uint32> m_gsStripTriangles;
         Bool m_gsStripCaptureFixup = false;
+        GLenum m_gsInputPrimitive = GL_NONE;
         GLenum m_xfbBufferMode = GL_INTERLEAVED_ATTRIBS;
         Int m_xfbVaryingNameMaxLength = 0;
     };

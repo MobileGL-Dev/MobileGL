@@ -174,6 +174,7 @@ namespace MobileGL::MG_State::GLState {
         m_xfbStrides.clear();
         m_xfbBufferMode = GL_INTERLEAVED_ATTRIBS;
         m_xfbVaryingNameMaxLength = 0;
+        m_gsInputPrimitive = GL_NONE;
         m_linkStatus = false;
     }
 
@@ -540,6 +541,20 @@ namespace MobileGL::MG_State::GLState {
             m_infoLog = result.error().log;
             MGLOG_E("ProgramObject %u: LinkProgram failed. InfoLog:\n%s", m_externalIndex, m_infoLog.c_str());
             return;
+        }
+
+        // GL_GEOMETRY_INPUT_TYPE. A draw's primitive type has to be compatible with it
+        // (GL 4.6 core 11.3.1), so it is resolved for every link, not only a capturing one.
+        m_gsInputPrimitive = GL_NONE;
+        if (const glslang::TIntermediate* gs = m_program->getIntermediate(EShLangGeometry)) {
+            switch (gs->getInputPrimitive()) {
+            case glslang::ElgPoints: m_gsInputPrimitive = GL_POINTS; break;
+            case glslang::ElgLines: m_gsInputPrimitive = GL_LINES; break;
+            case glslang::ElgLinesAdjacency: m_gsInputPrimitive = GL_LINES_ADJACENCY; break;
+            case glslang::ElgTriangles: m_gsInputPrimitive = GL_TRIANGLES; break;
+            case glslang::ElgTrianglesAdjacency: m_gsInputPrimitive = GL_TRIANGLES_ADJACENCY; break;
+            default: break;
+            }
         }
 
         MGLOG_D("ProgramObject %u: Starting reflection", m_externalIndex);

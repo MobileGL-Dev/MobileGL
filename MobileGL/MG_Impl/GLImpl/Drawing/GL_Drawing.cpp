@@ -162,6 +162,43 @@ namespace MobileGL::MG_Impl::GLImpl {
             return false;
         }
 
+        // A geometry stage only accepts the primitive types that decompose into its declared
+        // input primitive (GL 4.6 core 11.3.1); anything else is INVALID_OPERATION. GL_PATCHES
+        // is the tessellation pipeline's input and reaches the geometry stage already
+        // converted, so it is not constrained here.
+        const auto& currentProgram = MG_State::pGLContext->GetCurrentProgram();
+        const GLenum gsInput = currentProgram ? currentProgram->GetGeometryInputType() : GL_NONE;
+        if (gsInput != GL_NONE && mode != GL_PATCHES) {
+            Bool compatible = false;
+            switch (gsInput) {
+            case GL_POINTS:
+                compatible = mode == GL_POINTS;
+                break;
+            case GL_LINES:
+                compatible = mode == GL_LINES || mode == GL_LINE_STRIP || mode == GL_LINE_LOOP;
+                break;
+            case GL_LINES_ADJACENCY:
+                compatible = mode == GL_LINES_ADJACENCY || mode == GL_LINE_STRIP_ADJACENCY;
+                break;
+            case GL_TRIANGLES:
+                compatible = mode == GL_TRIANGLES || mode == GL_TRIANGLE_STRIP || mode == GL_TRIANGLE_FAN;
+                break;
+            case GL_TRIANGLES_ADJACENCY:
+                compatible = mode == GL_TRIANGLES_ADJACENCY || mode == GL_TRIANGLE_STRIP_ADJACENCY;
+                break;
+            default:
+                break;
+            }
+            if (!compatible) {
+                MG_State::pGLContext->RecordError(
+                    ErrorCode::InvalidOperation,
+                    MakeUnique<GenericErrorInfo>(
+                        "MG_Impl/GLImpl", functionName,
+                        "Primitive mode is incompatible with the geometry shader's input primitive type."));
+                return false;
+            }
+        }
+
         // While transform feedback is active the draw's primitive type must match
         // the feedback primitive mode (GL 3.3 core 13.2.2). With a geometry shader
         // the constraint moves to the shader's output primitive type instead, so
