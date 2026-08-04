@@ -910,7 +910,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                           // picks a whole different shader for draw_buffers without
                                           // explicit_attrib_location. DirectVulkan advertises both.
                                           E_GL_ARB_explicit_attrib_location, E_GL_ARB_texture_multisample,
-                                          E_GL_ARB_shader_image_size};
+                                          E_GL_ARB_shader_image_size,
+                                          // Advertised with GL_NUM_PROGRAM_BINARY_FORMATS = 0, which the
+                                          // extension explicitly permits. It is also the only thing that
+                                          // exposes glProgramParameteri before GL 4.1.
+                                          E_GL_ARB_get_program_binary};
         // Only advertised when the device driver actually has usable timer queries
         // (GL_EXT_disjoint_timer_query plus its entry points) and the
         // MOBILEGL_DISABLE_TIMERQUERY escape hatch is off.

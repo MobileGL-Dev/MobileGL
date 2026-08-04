@@ -377,6 +377,17 @@ namespace MobileGL::MG_State::GLState {
 
         Bool GetDeleteStatus() const { return m_deleteStatus; }
         Bool GetLinkStatus() const { return m_linkStatus; }
+        // GL_PROGRAM_BINARY_RETRIEVABLE_HINT. MobileGL exposes no program binary format
+        // (GL_NUM_PROGRAM_BINARY_FORMATS is 0), so the hint is pure state - which is all
+        // ARB_get_program_binary requires of it.
+        Bool GetBinaryRetrievableHint() const { return m_binaryRetrievableHint; }
+        void SetBinaryRetrievableHint(Bool hint) { m_binaryRetrievableHint = hint; }
+        // glProgramBinary always fails here (there is no format it could accept) and the
+        // spec then requires the program's LINK_STATUS to read FALSE.
+        void MarkLinkFailedByProgramBinary() {
+            ResetLinkArtifacts();
+            m_infoLog = "No program binary format is supported.";
+        }
         Bool GetValidateStatus() const { return m_validateStatus; }
         Int GetActiveAtomicCounterCount() const { return m_program->getNumAtomicCounters(); }
         Int GetActiveAttributesCount() const { return m_program->getNumPipeInputs(); }
@@ -593,6 +604,7 @@ namespace MobileGL::MG_State::GLState {
         String m_infoLog;
         Bool m_deleteStatus = false;
         Bool m_linkStatus = false;
+        Bool m_binaryRetrievableHint = false;
         Bool m_validateStatus = true;
         Uint32 m_backendStateVersion = 0;
 

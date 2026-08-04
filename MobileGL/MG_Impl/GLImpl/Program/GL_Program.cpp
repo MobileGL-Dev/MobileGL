@@ -648,6 +648,13 @@ namespace MobileGL::MG_Impl::GLImpl {
         }
 
         case GL_PROGRAM_BINARY_LENGTH:
+            // No program binary format is exposed, so a program never has a retrievable
+            // binary and its length is zero (ARB_get_program_binary).
+            *params = 0;
+            break;
+        case GL_PROGRAM_BINARY_RETRIEVABLE_HINT:
+            *params = programObject->GetBinaryRetrievableHint() ? GL_TRUE : GL_FALSE;
+            break;
 
         case GL_GEOMETRY_VERTICES_OUT:
         case GL_GEOMETRY_INPUT_TYPE:
@@ -2256,6 +2263,65 @@ namespace MobileGL::MG_Impl::GLImpl {
 
     void ValidateProgram(GLuint program) {
         ValidateProgram_State(program);
+    }
+
+    // ARB_get_program_binary with no supported binary format (GL_NUM_PROGRAM_BINARY_FORMATS
+    // is 0, which the extension explicitly allows). The three entry points below are what an
+    // application - and dEQP's function loader - reach through the extension; without it
+    // glProgramParameteri is not exposed in a 4.0 context at all.
+    void ProgramParameteri(GLuint program, GLenum pname, GLint value) {
+        auto& programObject = TryToGetProgramObject(program);
+        if (!programObject) return;
+        if (pname != GL_PROGRAM_BINARY_RETRIEVABLE_HINT) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidEnum,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__, "pname is not an accepted value."));
+            return;
+        }
+        if (value != GL_TRUE && value != GL_FALSE) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidValue,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__, "value must be GL_TRUE or GL_FALSE."));
+            return;
+        }
+        programObject->SetBinaryRetrievableHint(value == GL_TRUE);
+    }
+
+    void GetProgramBinary(GLuint program, GLsizei bufSize, GLsizei* length, GLenum* binaryFormat, void* binary) {
+        (void)binaryFormat;
+        (void)binary;
+        auto& programObject = TryToGetProgramObject(program);
+        if (!programObject) return;
+        if (bufSize < 0) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidValue,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__, "bufSize must be non-negative."));
+            return;
+        }
+        if (length) *length = 0;
+        // GL_PROGRAM_BINARY_LENGTH is always zero here, which the spec makes an error to ask for.
+        MG_State::pGLContext->RecordError(
+            ErrorCode::InvalidOperation,
+            MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__, "The program has no retrievable binary."));
+    }
+
+    void ProgramBinary(GLuint program, GLenum binaryFormat, const void* binary, GLsizei length) {
+        (void)binaryFormat;
+        (void)binary;
+        auto& programObject = TryToGetProgramObject(program);
+        if (!programObject) return;
+        if (length < 0) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidValue,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__, "length must be non-negative."));
+            return;
+        }
+        // No format is supported, so every binary is rejected - and the program's link status
+        // has to read FALSE afterwards.
+        programObject->MarkLinkFailedByProgramBinary();
+        MG_State::pGLContext->RecordError(
+            ErrorCode::InvalidEnum,
+            MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__, "binaryFormat is not a supported format."));
     }
 
     void TransformFeedbackVaryings(GLuint program, GLsizei count, const GLchar* const* varyings, GLenum bufferMode) {
