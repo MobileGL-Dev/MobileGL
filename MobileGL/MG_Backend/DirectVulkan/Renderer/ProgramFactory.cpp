@@ -1761,6 +1761,25 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             XXHASH_VERIFY(XXH64_update(m_hashState, &binding, sizeof(binding)));
         }
 
+        // The transform feedback capture layout is baked into the modules by
+        // XfbCaptureDecoratePass rather than coming from the SPIR-V, so it has to be part of
+        // the key: two programs can share every shader and still capture differently, which
+        // is exactly what changing the buffer mode does (glTransformFeedbackVaryings with the
+        // same varyings but GL_SEPARATE_ATTRIBS instead of GL_INTERLEAVED_ATTRIBS). Only
+        // hashed for a capturing compile, so nothing else changes key.
+        if (flags & CompileOptionBit::XfbCapture) {
+            for (const auto& varying : program.GetTransformFeedbackVaryings()) {
+                XXHASH_VERIFY(XXH64_update(m_hashState, varying.name.data(), varying.name.size()));
+                XXHASH_VERIFY(XXH64_update(m_hashState, &varying.bufferIndex, sizeof(varying.bufferIndex)));
+                XXHASH_VERIFY(XXH64_update(m_hashState, &varying.offsetBytes, sizeof(varying.offsetBytes)));
+            }
+            const SizeT bufferCount = program.GetTransformFeedbackBufferCount();
+            for (SizeT i = 0; i < bufferCount; ++i) {
+                const Uint32 stride = program.GetTransformFeedbackStride(static_cast<Uint32>(i));
+                XXHASH_VERIFY(XXH64_update(m_hashState, &stride, sizeof(stride)));
+            }
+        }
+
         HashType hash = XXH64_digest(m_hashState);
         return hash;
     }
