@@ -8086,8 +8086,11 @@ void main() {
                 return false;
             }
             // Host-visible coherent GPU residency: the capture writes land where
-            // MapBuffer/GetBufferSubData read.
+            // MapBuffer/GetBufferSubData read. Coherence makes them visible once they
+            // have happened, so the buffer is also flagged for the wait that a later CPU
+            // read has to perform - the capture is a GPU write like any shader's.
             bufferObject->EnsureGpuResidentStorage();
+            bufferObject->MarkGpuWritten();
             BufferSlice slice{};
             if (!m_bufferManager.AcquireResidentSlice(BufferKind::Vertex, bufferObject, slice)) {
                 MGLOG_E("BeginXfbCaptureForDraw: failed to acquire capture buffer %zu", i);
