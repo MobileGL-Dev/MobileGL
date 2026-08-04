@@ -1578,6 +1578,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             // (and, via the SharedPtrs, the records), never pool slots, so
             // stale queries are always safe to delete.
             Uint64 rendererGeneration = 0;
+            // Kind::XfbGenerated - the frontend's paused-draw primitive counter when the
+            // query began. VK_QUERY_TYPE_TRANSFORM_FEEDBACK_STREAM_EXT counts only what the
+            // capture saw, so a draw made while the span was paused is invisible to it -
+            // but GL_PRIMITIVES_GENERATED counts what the last vertex processing stage
+            // emitted regardless. The delta closes that gap at result time.
+            Uint64 pausedPrimitiveSnapshot = 0;
         };
     } // namespace
 
@@ -1676,6 +1682,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                                         primitives)) {
                 return false;
             }
+            if (query->kind == VulkanTimerQuery::Kind::XfbGenerated && MG_State::pGLContext != nullptr) {
+                primitives += MG_State::pGLContext->GetTransformFeedbackPausedPrimitiveCounter() -
+                              query->pausedPrimitiveSnapshot;
+            }
             *outNanoseconds = primitives;
             return true;
         }
@@ -1719,6 +1729,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         auto* query = new VulkanTimerQuery{};
         query->kind = generated ? VulkanTimerQuery::Kind::XfbGenerated : VulkanTimerQuery::Kind::XfbWritten;
         query->rendererGeneration = GetRendererGeneration();
+        query->pausedPrimitiveSnapshot =
+            MG_State::pGLContext ? MG_State::pGLContext->GetTransformFeedbackPausedPrimitiveCounter() : 0;
         return query;
     }
 

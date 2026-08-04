@@ -221,7 +221,7 @@ namespace MobileGL {
                     m_transformFeedbackPaused = false;
                     m_transformFeedbackPrimitiveMode = primitiveMode;
                     m_transformFeedbackProgram = program;
-                    ++m_transformFeedbackGeneration;
+                    m_transformFeedbackGeneration = ++m_transformFeedbackNextGeneration;
                     m_transformFeedbackCapturedVertices = 0;
                     m_transformFeedbackInputPrimitives = 0;
                 }
@@ -251,6 +251,15 @@ namespace MobileGL {
                     m_transformFeedbackPrimitiveCounter += primitives;
                 }
                 Uint64 GetTransformFeedbackPrimitiveCounter() const { return m_transformFeedbackPrimitiveCounter; }
+                // Primitives a draw assembled while the capture was paused. GL counts those in
+                // PRIMITIVES_GENERATED, but a backend that answers the query with its own
+                // transform feedback counter cannot see them - nothing was being captured.
+                void AddTransformFeedbackPausedPrimitives(Uint64 primitives) {
+                    m_transformFeedbackPausedPrimitiveCounter += primitives;
+                }
+                Uint64 GetTransformFeedbackPausedPrimitiveCounter() const {
+                    return m_transformFeedbackPausedPrimitiveCounter;
+                }
                 // Vertices already captured since BeginTransformFeedback (drives the
                 // buffer-capacity clamp on the primitives-written accounting).
                 void AddTransformFeedbackCapturedVertices(Uint64 vertices) {
@@ -327,9 +336,12 @@ namespace MobileGL {
                 GLenum m_transformFeedbackPrimitiveMode = GL_POINTS;
                 SharedPtr<ProgramObject> m_transformFeedbackProgram;
                 Uint64 m_transformFeedbackGeneration = 0;
+                // Source of the per-span ids above; never rolls back with an object switch.
+                Uint64 m_transformFeedbackNextGeneration = 0;
                 // Not object state: the transform feedback queries snapshot it at BeginQuery
                 // and take the delta at EndQuery, which spans whatever objects were used.
                 Uint64 m_transformFeedbackPrimitiveCounter = 0;
+                Uint64 m_transformFeedbackPausedPrimitiveCounter = 0;
                 Uint64 m_transformFeedbackCapturedVertices = 0;
                 Uint64 m_transformFeedbackInputPrimitives = 0;
 
@@ -345,6 +357,7 @@ namespace MobileGL {
                     Bool paused = false;
                     GLenum primitiveMode = GL_POINTS;
                     SharedPtr<ProgramObject> program;
+                    Uint64 generation = 0;
                     Uint64 capturedVertices = 0;
                     Uint64 inputPrimitives = 0;
                     Uint64 recordedVertices = 0;

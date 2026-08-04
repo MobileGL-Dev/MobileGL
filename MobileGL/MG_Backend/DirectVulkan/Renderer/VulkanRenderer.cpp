@@ -2798,6 +2798,10 @@ void main() {
         }
         m_vertexInputStateFactory.reset();
         m_xfbCounterBuffer.Destroy();
+        m_xfbCounterSlotByObject.clear();
+        m_xfbNextCounterSlot = 0;
+        m_xfbCountersValid.fill(false);
+        m_xfbLastSeenGeneration.fill(0);
         if (m_occlusionQueryPool != VK_NULL_HANDLE) {
             vkDestroyQueryPool(m_device, m_occlusionQueryPool, nullptr);
             m_occlusionQueryPool = VK_NULL_HANDLE;
@@ -8000,9 +8004,28 @@ void main() {
         resource->layout = finalLayout;
     }
 
+    Uint32 VulkanRenderer::CurrentXfbCounterSlot() {
+        const Uint name = MG_State::pGLContext->GetBoundTransformFeedbackName();
+        const auto it = m_xfbCounterSlotByObject.find(name);
+        if (it != m_xfbCounterSlotByObject.end()) {
+            return it->second;
+        }
+        // Past the tracked set every object shares slot group 0. Only concurrently-paused
+        // spans need distinct groups, and applications do not keep sixteen of those open.
+        const Uint32 slot = m_xfbNextCounterSlot < kXfbCounterObjectSlots ? m_xfbNextCounterSlot++ : 0;
+        m_xfbCounterSlotByObject[name] = slot;
+        return slot;
+    }
+
     Bool VulkanRenderer::BeginXfbCaptureForDraw(FrameContext::FrameData& frame) {
         if (!m_transformFeedbackFeatureEnabled || MG_State::pGLContext == nullptr ||
             !MG_State::pGLContext->IsTransformFeedbackActive()) {
+            return false;
+        }
+        // A paused span captures nothing, and the counter buffers keep their values, so the
+        // next resumed draw appends exactly where the last captured one stopped - which is
+        // what pause/resume means (ARB_transform_feedback2).
+        if (MG_State::pGLContext->IsTransformFeedbackPaused()) {
             return false;
         }
         const auto& program = MG_State::pGLContext->GetTransformFeedbackProgram();
@@ -8017,7 +8040,7 @@ void main() {
         if (!m_xfbCounterBuffer.IsValid()) {
             if (!m_xfbCounterBuffer.Create({
                     .allocator = m_allocator,
-                    .size = 16,
+                    .size = 16 * kXfbCounterObjectSlots,
                     .usage = VK_BUFFER_USAGE_TRANSFORM_FEEDBACK_COUNTER_BUFFER_BIT_EXT |
                              VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                     .memoryUsage = VMA_MEMORY_USAGE_AUTO,
@@ -8058,15 +8081,16 @@ void main() {
         s_vkCmdBindTransformFeedbackBuffersEXT(frame.commandBuffer, 0, static_cast<Uint32>(bufferCount), buffers,
                                                offsets, sizes);
 
+        const Uint32 counterSlot = CurrentXfbCounterSlot();
         const Uint64 generation = MG_State::pGLContext->GetTransformFeedbackGeneration();
-        const Bool resume = m_xfbCountersValid && m_xfbLastSeenGeneration == generation;
-        m_xfbLastSeenGeneration = generation;
+        const Bool resume = m_xfbCountersValid[counterSlot] && m_xfbLastSeenGeneration[counterSlot] == generation;
+        m_xfbLastSeenGeneration[counterSlot] = generation;
 
         VkBuffer counterBuffers[4] = {};
         VkDeviceSize counterOffsets[4] = {};
         for (SizeT i = 0; i < bufferCount; ++i) {
             counterBuffers[i] = m_xfbCounterBuffer.GetHandle();
-            counterOffsets[i] = static_cast<VkDeviceSize>(i) * 4;
+            counterOffsets[i] = static_cast<VkDeviceSize>(counterSlot) * 16 + static_cast<VkDeviceSize>(i) * 4;
         }
         if (resume) {
             s_vkCmdBeginTransformFeedbackEXT(frame.commandBuffer, 0, static_cast<Uint32>(bufferCount),
@@ -8083,15 +8107,16 @@ void main() {
         }
         const auto& program = MG_State::pGLContext->GetTransformFeedbackProgram();
         const SizeT bufferCount = program ? std::min<SizeT>(program->GetTransformFeedbackBufferCount(), 4) : 0;
+        const Uint32 counterSlot = CurrentXfbCounterSlot();
         VkBuffer counterBuffers[4] = {};
         VkDeviceSize counterOffsets[4] = {};
         for (SizeT i = 0; i < bufferCount; ++i) {
             counterBuffers[i] = m_xfbCounterBuffer.GetHandle();
-            counterOffsets[i] = static_cast<VkDeviceSize>(i) * 4;
+            counterOffsets[i] = static_cast<VkDeviceSize>(counterSlot) * 16 + static_cast<VkDeviceSize>(i) * 4;
         }
         s_vkCmdEndTransformFeedbackEXT(frame.commandBuffer, 0, static_cast<Uint32>(bufferCount), counterBuffers,
                                        counterOffsets);
-        m_xfbCountersValid = true;
+        m_xfbCountersValid[counterSlot] = true;
     }
 
     void VulkanRenderer::DrawArrays(const DrawCmd& payload) {

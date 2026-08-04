@@ -764,6 +764,7 @@ namespace MobileGL::MG_State {
             object.paused = m_transformFeedbackPaused;
             object.primitiveMode = m_transformFeedbackPrimitiveMode;
             object.program = m_transformFeedbackProgram;
+            object.generation = m_transformFeedbackGeneration;
             object.capturedVertices = m_transformFeedbackCapturedVertices;
             object.inputPrimitives = m_transformFeedbackInputPrimitives;
         }
@@ -783,6 +784,10 @@ namespace MobileGL::MG_State {
             m_transformFeedbackPaused = object.paused;
             m_transformFeedbackPrimitiveMode = object.primitiveMode;
             m_transformFeedbackProgram = object.program;
+            // The generation identifies one capture span, and a span belongs to the object
+            // that opened it - a backend keys its append state on it, so switching objects
+            // has to bring the right one back.
+            m_transformFeedbackGeneration = object.generation;
             m_transformFeedbackCapturedVertices = object.capturedVertices;
             m_transformFeedbackInputPrimitives = object.inputPrimitives;
         }

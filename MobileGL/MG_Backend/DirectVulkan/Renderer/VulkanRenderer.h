@@ -498,12 +498,19 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         static inline PFN_vkCmdBeginTransformFeedbackEXT s_vkCmdBeginTransformFeedbackEXT = nullptr;
         static inline PFN_vkCmdEndTransformFeedbackEXT s_vkCmdEndTransformFeedbackEXT = nullptr;
         // Counter buffers (one 4-byte slot per capture binding) let consecutive
-        // draws within one glBeginTransformFeedback append GL-style.
+        // draws within one glBeginTransformFeedback append GL-style. Transform feedback
+        // objects can each hold an open, paused span at the same time, so the counters are
+        // per object: one group of four slots each, handed out on first use.
+        static constexpr SizeT kXfbCounterObjectSlots = 16;
         VkBufferObject m_xfbCounterBuffer;
-        // Non-zero while inside a GL Begin/End with at least one captured draw
-        // recorded; selects counter-buffer resume on the next captured draw.
-        Bool m_xfbCountersValid = false;
-        Uint64 m_xfbLastSeenGeneration = 0;
+        UnorderedMap<Uint, Uint32> m_xfbCounterSlotByObject;
+        Uint32 m_xfbNextCounterSlot = 0;
+        // Set for a slot once a captured draw has been recorded into its span; selects
+        // counter-buffer resume on the next captured draw of the same span.
+        Array<Bool, kXfbCounterObjectSlots> m_xfbCountersValid{};
+        Array<Uint64, kXfbCounterObjectSlots> m_xfbLastSeenGeneration{};
+        // Counter slot group of the bound transform feedback object.
+        Uint32 CurrentXfbCounterSlot();
         // Wraps a recorded draw with BeginTransformFeedbackEXT/EndTransformFeedbackEXT
         // when GL transform feedback is active; binds capture buffers on demand.
         Bool BeginXfbCaptureForDraw(FrameContext::FrameData& frame);

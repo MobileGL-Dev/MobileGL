@@ -75,7 +75,10 @@ namespace MobileGL::MG_Impl::GLImpl {
         if (!MG_State::pGLContext->IsTransformFeedbackActive()) return;
         // A paused span captures nothing, so a draw made while paused contributes to
         // PRIMITIVES_GENERATED but not to TRANSFORM_FEEDBACK_PRIMITIVES_WRITTEN.
-        if (MG_State::pGLContext->IsTransformFeedbackPaused()) return;
+        if (MG_State::pGLContext->IsTransformFeedbackPaused()) {
+            MG_State::pGLContext->AddTransformFeedbackPausedPrimitives(CountPrimitivesForDraw(mode, count));
+            return;
+        }
         Uint64 primitives = CountPrimitivesForDraw(mode, count);
         if (primitives == 0) return;
         MG_State::pGLContext->AddTransformFeedbackInputPrimitives(primitives);
