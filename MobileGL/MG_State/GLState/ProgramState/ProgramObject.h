@@ -474,6 +474,9 @@ namespace MobileGL::MG_State::GLState {
             Uint32 bufferIndex = 0;   // capture buffer slot
             Uint32 offsetBytes = 0;   // offset within the capture buffer
             Uint32 byteSize = 0;      // bytes captured per vertex for this varying
+            // Offset within the gap-free record a backend that cannot express the GL
+            // layout captures into; see NeedsScatteredTransformFeedbackCapture.
+            Uint32 packedOffsetBytes = 0;
         };
         void SetTransformFeedbackVaryings(Vector<String>&& names, GLenum bufferMode) {
             m_requestedXfbVaryings = Move(names);
@@ -491,6 +494,15 @@ namespace MobileGL::MG_State::GLState {
         }
         SizeT GetTransformFeedbackBufferCount() const { return m_xfbStrides.size(); }
         Int GetTransformFeedbackVaryingMaxLength() const { return m_xfbVaryingNameMaxLength; }
+        // True when the capture layout uses gl_SkipComponents / gl_NextBuffer
+        // (ARB_transform_feedback3), which no ES driver can express: it can only pack every
+        // captured varying into one record with no gaps. A backend that captures through
+        // such a driver has to capture into scratch storage and scatter the records into the
+        // application's buffers itself, using packedOffsetBytes as the source offset and
+        // (bufferIndex, offsetBytes, stride) as the destination.
+        Bool NeedsScatteredTransformFeedbackCapture() const { return m_xfbNeedsScatteredCapture; }
+        // Bytes one gap-free captured record occupies.
+        Uint32 GetTransformFeedbackPackedStride() const { return m_xfbPackedStride; }
         // True when the capture stage is a triangle-strip geometry shader with a
         // statically-known emit sequence: the Vulkan capture order then needs the GL
         // odd-triangle vertex swap after EndTransformFeedback.
@@ -611,5 +623,7 @@ namespace MobileGL::MG_State::GLState {
         GLenum m_gsInputPrimitive = GL_NONE;
         GLenum m_xfbBufferMode = GL_INTERLEAVED_ATTRIBS;
         Int m_xfbVaryingNameMaxLength = 0;
+        Bool m_xfbNeedsScatteredCapture = false;
+        Uint32 m_xfbPackedStride = 0;
     };
 } // namespace MobileGL::MG_State::GLState

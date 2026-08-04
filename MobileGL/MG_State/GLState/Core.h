@@ -211,9 +211,12 @@ namespace MobileGL {
                 void SetScissorBox(IntVec4 box);      // x, y, width, height
                 const IntVec4& GetScissorBox() const; // x, y, width, height
 
-                // Transform feedback (GL 3.0 core Begin/End; no feedback objects yet)
+                // Transform feedback. The fields below are the state of the transform
+                // feedback object currently bound to GL_TRANSFORM_FEEDBACK; see the object
+                // block further down for how a bind swaps them.
                 void BeginTransformFeedback(GLenum primitiveMode, const SharedPtr<ProgramObject>& program) {
                     m_transformFeedbackActive = true;
+                    m_transformFeedbackPaused = false;
                     m_transformFeedbackPrimitiveMode = primitiveMode;
                     m_transformFeedbackProgram = program;
                     ++m_transformFeedbackGeneration;
@@ -222,9 +225,16 @@ namespace MobileGL {
                 }
                 void EndTransformFeedback() {
                     m_transformFeedbackActive = false;
+                    m_transformFeedbackPaused = false;
                     m_transformFeedbackProgram.reset();
+                    // What glDrawTransformFeedback on this object replays from now on.
+                    auto& object = m_transformFeedbackObjects[m_boundTransformFeedback];
+                    object.recordedVertices = m_transformFeedbackCapturedVertices;
+                    object.hasCompletedSpan = true;
                 }
                 Bool IsTransformFeedbackActive() const { return m_transformFeedbackActive; }
+                Bool IsTransformFeedbackPaused() const { return m_transformFeedbackPaused; }
+                void SetTransformFeedbackPaused(Bool paused) { m_transformFeedbackPaused = paused; }
                 GLenum GetTransformFeedbackPrimitiveMode() const { return m_transformFeedbackPrimitiveMode; }
                 const SharedPtr<ProgramObject>& GetTransformFeedbackProgram() const {
                     return m_transformFeedbackProgram;
@@ -251,6 +261,29 @@ namespace MobileGL {
                     m_transformFeedbackInputPrimitives += primitives;
                 }
                 Uint64 GetTransformFeedbackInputPrimitives() const { return m_transformFeedbackInputPrimitives; }
+
+                // Transform feedback objects (ARB_transform_feedback2 / GL 4.0 core).
+                // The capture state above and the indexed GL_TRANSFORM_FEEDBACK_BUFFER
+                // binding points are object state, but the context keeps exactly one live
+                // copy of both so that every existing reader - the backends' per-draw sync,
+                // the drawing and getter paths - needs no notion of which object owns them.
+                // A bind therefore saves the live copy into the outgoing object and restores
+                // the incoming one's. Object 0 is the default object and always exists.
+                static constexpr Uint MAX_TRANSFORM_FEEDBACK_BUFFERS = 4;
+                void GenTransformFeedbackNames(Uint number, Vector<Uint>& ids);
+                // A name glGenTransformFeedbacks handed out and glDeleteTransformFeedbacks
+                // has not taken back. Name 0 is always valid.
+                Bool ValidateTransformFeedbackName(Uint index) const;
+                void BindTransformFeedbackObject(Uint index);
+                void MarkTransformFeedbackObjectForDeletion(Uint index);
+                Uint GetBoundTransformFeedbackName() const { return m_boundTransformFeedback; }
+                // Vertices the object captured in its last completed span; the vertex count
+                // glDrawTransformFeedback replays.
+                Uint64 GetTransformFeedbackRecordedVertices(Uint index) const;
+                // Whether the object has ever completed a capture span. glDrawTransformFeedback
+                // on an object that has not is INVALID_OPERATION, which a zero vertex count
+                // cannot express: an empty completed span is legal and draws nothing.
+                Bool HasTransformFeedbackCompletedSpan(Uint index) const;
 
                 // Framebuffer
                 void GenFramebufferNames(Uint number, Vector<Uint>& framebuffers);
@@ -285,12 +318,40 @@ namespace MobileGL {
                 VertexArrayState m_vertexArrayState;
                 Array<CurrentVertexAttributeValue, VertexArrayObject::MAX_VERTEX_ATTRIBS> m_currentVertexAttributes{};
                 Bool m_transformFeedbackActive = false;
+                Bool m_transformFeedbackPaused = false;
                 GLenum m_transformFeedbackPrimitiveMode = GL_POINTS;
                 SharedPtr<ProgramObject> m_transformFeedbackProgram;
                 Uint64 m_transformFeedbackGeneration = 0;
+                // Not object state: the transform feedback queries snapshot it at BeginQuery
+                // and take the delta at EndQuery, which spans whatever objects were used.
                 Uint64 m_transformFeedbackPrimitiveCounter = 0;
                 Uint64 m_transformFeedbackCapturedVertices = 0;
                 Uint64 m_transformFeedbackInputPrimitives = 0;
+
+                // Everything a transform feedback object owns while it is NOT the bound one.
+                struct TransformFeedbackObjectState {
+                    struct SavedBufferBinding {
+                        SharedPtr<BufferObject> buffer;
+                        Range1D range;
+                        Bool hasExplicitRange = false;
+                    };
+                    Array<SavedBufferBinding, MAX_TRANSFORM_FEEDBACK_BUFFERS> bindings;
+                    Bool active = false;
+                    Bool paused = false;
+                    GLenum primitiveMode = GL_POINTS;
+                    SharedPtr<ProgramObject> program;
+                    Uint64 capturedVertices = 0;
+                    Uint64 inputPrimitives = 0;
+                    Uint64 recordedVertices = 0;
+                    Bool hasCompletedSpan = false;
+                };
+                void SaveBoundTransformFeedbackState();
+                void RestoreBoundTransformFeedbackState();
+                // operator[] materialises an entry with the default state on first touch, so
+                // the default object (name 0) needs no seeding here.
+                UnorderedMap<Uint, TransformFeedbackObjectState> m_transformFeedbackObjects;
+                IndexGenerator<Uint> m_transformFeedbackNames;
+                Uint m_boundTransformFeedback = 0;
                 TextureState m_textureState;
                 ProgramState m_programState;
                 RenderState m_renderState;

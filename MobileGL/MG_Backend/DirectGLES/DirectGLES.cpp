@@ -407,6 +407,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
     // the capture buffers bound when Begin is issued, and both of those only become true
     // once PrepareForDraw has run. A span that never draws therefore never touches the
     // driver at all, which is also what the GL semantics amount to.
+    //
+    // Transform feedback objects (ARB_transform_feedback2) are ES 3.0 core, so each
+    // frontend object gets one of the driver's: a paused span lives inside the ES object,
+    // which is the only way several of them can be paused at once - and the only reason
+    // the default object alone would not do.
     namespace XfbImpl {
         namespace {
             struct XfbCaptureTarget {
@@ -416,10 +421,161 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 SizeT end = 0;
             };
 
-            Bool g_xfbPending = false; // frontend Begin seen, driver capture not started yet
-            Bool g_xfbStarted = false; // driver capture running
-            GLenum g_xfbPrimitiveMode = GL_POINTS;
-            Vector<XfbCaptureTarget> g_xfbTargets;
+            // Per frontend transform feedback object. The default object (name 0) maps to
+            // the driver's default object (id 0) and is always present.
+            struct XfbObjectState {
+                GLuint esId = 0;
+                Bool pending = false; // frontend Begin seen, driver capture not started yet
+                Bool started = false; // driver capture running
+                Bool paused = false;  // frontend Pause seen and not yet resumed
+                GLenum primitiveMode = GL_POINTS;
+                Vector<XfbCaptureTarget> targets;
+                // Set for a layout ES cannot express (gl_SkipComponents / gl_NextBuffer):
+                // the driver captures gap-free records into the scratch buffer below and
+                // End scatters them into `targets`.
+                Bool scattered = false;
+                SharedPtr<MG_State::GLState::ProgramObject> scatterProgram;
+                SizeT scatterCapacityVertices = 0;
+            };
+
+            // One scratch ES buffer serves every scattered capture: only one span can be
+            // recording at a time (the driver would reject a second Begin), so its contents
+            // are consumed by the End that follows.
+            GLuint g_scatterBufferId = 0;
+            SizeT g_scatterBufferSize = 0;
+
+            UnorderedMap<GLuint, XfbObjectState> g_xfbObjects;
+            GLuint g_currentXfbName = 0;
+
+            XfbObjectState& CurrentXfb() {
+                return g_xfbObjects[g_currentXfbName];
+            }
+
+            Bool AreTransformFeedbackObjectsSupported() {
+                return g_GLESFuncs.glGenTransformFeedbacks != nullptr &&
+                       g_GLESFuncs.glBindTransformFeedback != nullptr &&
+                       g_GLESFuncs.glDeleteTransformFeedbacks != nullptr &&
+                       g_GLESFuncs.glPauseTransformFeedback != nullptr &&
+                       g_GLESFuncs.glResumeTransformFeedback != nullptr;
+            }
+
+            // Mirrors one capture span's results into the frontend CPU shadows. The GPU wrote
+            // the capture buffers behind the frontend's back, so the shadows that back
+            // MapBuffer/GetBufferSubData still hold the pre-draw bytes. Buffers whose storage
+            // the backend already owns (coherent persistent map) need nothing: reads resolve
+            // against that storage directly.
+            void ReadbackCapturedRanges(Vector<XfbCaptureTarget>& targets) {
+                if (g_GLESFuncs.glMapBufferRange != nullptr && g_GLESFuncs.glUnmapBuffer != nullptr) {
+                    for (const auto& target : targets) {
+                        if (!target.buffer || target.buffer->IsBackendPersistentMapped()) continue;
+                        const SizeT size = target.end - target.start;
+                        BufferImpl::BindBufferId(BufferImpl::TempBufferTarget, target.backendId);
+                        void* mapped = g_GLESFuncs.glMapBufferRange(BufferImpl::TempBufferTarget,
+                                                                    static_cast<GLintptr>(target.start),
+                                                                    static_cast<GLsizeiptr>(size), GL_MAP_READ_BIT);
+                        if (mapped == nullptr) {
+                            MGLOG_E("EndTransformFeedback: failed to map backend buffer %u for capture readback",
+                                    target.backendId);
+                            continue;
+                        }
+                        target.buffer->WritebackFromBackend({mapped, size}, target.start);
+                        g_GLESFuncs.glUnmapBuffer(BufferImpl::TempBufferTarget);
+                    }
+                }
+                targets.clear();
+            }
+
+            // Binds a scratch buffer, sized for `capacityVertices` gap-free records, to
+            // capture point 0 in place of the application's buffers. Returns false when the
+            // scratch storage cannot be provided, in which case the caller falls back to the
+            // direct binding (which produces a wrong layout, but is what happened before).
+            Bool BindScatterCaptureBuffer(SizeT packedStride, SizeT capacityVertices) {
+                if (packedStride == 0 || capacityVertices == 0) return false;
+                if (g_GLESFuncs.glGenBuffers == nullptr || g_GLESFuncs.glBufferData == nullptr) return false;
+                const SizeT required = packedStride * capacityVertices;
+                if (g_scatterBufferId == 0) {
+                    g_GLESFuncs.glGenBuffers(1, &g_scatterBufferId);
+                    if (g_scatterBufferId == 0) return false;
+                    g_scatterBufferSize = 0;
+                }
+                if (g_scatterBufferSize < required) {
+                    BufferImpl::BindBufferId(BufferImpl::TempBufferTarget, g_scatterBufferId);
+                    g_GLESFuncs.glBufferData(BufferImpl::TempBufferTarget, static_cast<GLsizeiptr>(required), nullptr,
+                                             GL_DYNAMIC_COPY);
+                    g_scatterBufferSize = required;
+                }
+                // Point 0 carries every captured varying (the ES capture is INTERLEAVED); the
+                // other points must be cleared or the driver would still write the app's buffers.
+                BufferImpl::BindBufferRangeCached(GL_TRANSFORM_FEEDBACK_BUFFER, 0, g_scatterBufferId, 0,
+                                                  static_cast<GLsizeiptr>(required));
+                const SizeT pointCount =
+                    MG_State::pGLContext->GetTouchedBufferBindingPointCount(BufferTarget::TransformFeedback);
+                for (SizeT i = 1; i < pointCount; ++i) {
+                    BufferImpl::BindBufferBaseCached(GL_TRANSFORM_FEEDBACK_BUFFER, static_cast<Uint>(i), 0);
+                }
+                return true;
+            }
+
+            // Distributes the gap-free records the driver captured into the application's
+            // buffers at the offsets the GL layout asks for. Only the bytes a varying actually
+            // occupies are written, so the holes gl_SkipComponents asks for keep whatever the
+            // application had put there - which is the whole point of the feature.
+            void ScatterCapturedRecords(XfbObjectState& xfb) {
+                const auto& program = xfb.scatterProgram;
+                if (!program || xfb.targets.empty()) return;
+                if (g_GLESFuncs.glMapBufferRange == nullptr || g_GLESFuncs.glUnmapBuffer == nullptr) return;
+
+                const SizeT packedStride = program->GetTransformFeedbackPackedStride();
+                const SizeT vertices = std::min<SizeT>(
+                    static_cast<SizeT>(MG_State::pGLContext->GetTransformFeedbackCapturedVertices()),
+                    xfb.scatterCapacityVertices);
+                if (packedStride == 0 || vertices == 0) return;
+
+                BufferImpl::BindBufferId(BufferImpl::TempBufferTarget, g_scatterBufferId);
+                const void* packed = g_GLESFuncs.glMapBufferRange(BufferImpl::TempBufferTarget, 0,
+                                                                  static_cast<GLsizeiptr>(packedStride * vertices),
+                                                                  GL_MAP_READ_BIT);
+                if (packed == nullptr) {
+                    MGLOG_E("EndTransformFeedback: failed to map the scatter capture buffer");
+                    return;
+                }
+
+                // One staged copy per destination buffer: start from what the application had
+                // (the shadow is authoritative - uploads go shadow -> ES, and previous captures
+                // were mirrored back into it), patch the captured varyings in, then push the
+                // whole range down once.
+                for (SizeT targetIndex = 0; targetIndex < xfb.targets.size(); ++targetIndex) {
+                    const auto& target = xfb.targets[targetIndex];
+                    if (!target.buffer) continue;
+                    const SizeT stride = program->GetTransformFeedbackStride(static_cast<Uint32>(targetIndex));
+                    if (stride == 0) continue;
+                    const SizeT rangeBytes = target.end - target.start;
+                    Vector<Uint8> staged(rangeBytes);
+                    Memcpy(staged.data(), target.buffer->MappedData() + target.start, rangeBytes);
+
+                    for (const auto& varying : program->GetTransformFeedbackVaryings()) {
+                        if (varying.bufferIndex != targetIndex) continue;
+                        for (SizeT v = 0; v < vertices; ++v) {
+                            const SizeT dstOffset = v * stride + varying.offsetBytes;
+                            if (dstOffset + varying.byteSize > rangeBytes) break;
+                            Memcpy(staged.data() + dstOffset,
+                                   static_cast<const Uint8*>(packed) + v * packedStride + varying.packedOffsetBytes,
+                                   varying.byteSize);
+                        }
+                    }
+
+                    target.buffer->WritebackFromBackend({staged.data(), rangeBytes}, target.start);
+                    if (g_GLESFuncs.glBufferSubData != nullptr) {
+                        BufferImpl::BindBufferId(BufferImpl::TempBufferTarget, target.backendId);
+                        g_GLESFuncs.glBufferSubData(BufferImpl::TempBufferTarget,
+                                                    static_cast<GLintptr>(target.start),
+                                                    static_cast<GLsizeiptr>(rangeBytes), staged.data());
+                    }
+                    BufferImpl::BindBufferId(BufferImpl::TempBufferTarget, g_scatterBufferId);
+                }
+                g_GLESFuncs.glUnmapBuffer(BufferImpl::TempBufferTarget);
+                xfb.targets.clear();
+            }
         } // namespace
 
         Bool AreTransformFeedbacksSupported() {
@@ -430,17 +586,23 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
         void BeginTransformFeedback(GLenum primitiveMode) {
             if (!AreTransformFeedbacksSupported()) return;
-            g_xfbPrimitiveMode = primitiveMode;
-            g_xfbPending = true;
-            g_xfbStarted = false;
-            g_xfbTargets.clear();
+            auto& xfb = CurrentXfb();
+            xfb.primitiveMode = primitiveMode;
+            xfb.pending = true;
+            xfb.started = false;
+            xfb.paused = false;
+            xfb.targets.clear();
         }
 
         // Tail of PrepareForDraw: the program is bound and every buffer the draw needs
         // is up to date, so the capture buffers can be bound and the span opened.
         void StartPendingTransformFeedback() {
-            if (!g_xfbPending) return;
-            g_xfbPending = false;
+            auto& xfb = CurrentXfb();
+            // A span that was paused before its first draw must not open here: the draw is
+            // not captured, and opening the span would also subject it to the capture
+            // primitive-mode rule the paused draw is exempt from.
+            if (!xfb.pending || xfb.paused) return;
+            xfb.pending = false;
             const auto& program = MG_State::pGLContext->GetTransformFeedbackProgram();
             if (!program) return;
 
@@ -459,51 +621,103 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 const SizeT start = std::min(range.start, bufferObject->GetSize());
                 const SizeT end = std::min(range.end, bufferObject->GetSize());
                 if (end <= start) continue;
-                g_xfbTargets.push_back({bufferObject, backendResource->id, start, end});
+                xfb.targets.push_back({bufferObject, backendResource->id, start, end});
             }
 
             BufferImpl::SyncBufferBindingPoints(BufferTarget::TransformFeedback, GL_TRANSFORM_FEEDBACK_BUFFER);
-            g_GLESFuncs.glBeginTransformFeedback(g_xfbPrimitiveMode);
-            g_xfbStarted = true;
+
+            // A layout with holes or several interleaved buffers is not expressible on ES:
+            // capture gap-free into scratch storage and place the records at End instead.
+            xfb.scattered = false;
+            xfb.scatterProgram.reset();
+            xfb.scatterCapacityVertices = 0;
+            if (program->NeedsScatteredTransformFeedbackCapture()) {
+                SizeT capacityVertices = ~SizeT(0);
+                for (SizeT i = 0; i < xfb.targets.size(); ++i) {
+                    const SizeT stride = program->GetTransformFeedbackStride(static_cast<Uint32>(i));
+                    if (stride == 0) continue;
+                    capacityVertices =
+                        std::min<SizeT>(capacityVertices, (xfb.targets[i].end - xfb.targets[i].start) / stride);
+                }
+                if (capacityVertices == ~SizeT(0)) capacityVertices = 0;
+                if (BindScatterCaptureBuffer(program->GetTransformFeedbackPackedStride(), capacityVertices)) {
+                    xfb.scattered = true;
+                    xfb.scatterProgram = program;
+                    xfb.scatterCapacityVertices = capacityVertices;
+                }
+            }
+
+            g_GLESFuncs.glBeginTransformFeedback(xfb.primitiveMode);
+            xfb.started = true;
         }
 
         void EndTransformFeedback() {
-            g_xfbPending = false;
-            if (!g_xfbStarted) return;
-            g_xfbStarted = false;
+            auto& xfb = CurrentXfb();
+            xfb.pending = false;
+            xfb.paused = false;
+            if (!xfb.started) return;
+            xfb.started = false;
             g_GLESFuncs.glEndTransformFeedback();
-
-            // The GPU wrote the capture buffers behind the frontend's back, so the CPU
-            // shadows that back MapBuffer/GetBufferSubData still hold the pre-draw bytes.
-            // Mirror the captured ranges into them. Buffers whose storage the backend
-            // already owns (coherent persistent map) need nothing: reads resolve against
-            // that storage directly.
-            if (g_GLESFuncs.glMapBufferRange != nullptr && g_GLESFuncs.glUnmapBuffer != nullptr) {
-                for (const auto& target : g_xfbTargets) {
-                    if (!target.buffer || target.buffer->IsBackendPersistentMapped()) continue;
-                    const SizeT size = target.end - target.start;
-                    BufferImpl::BindBufferId(BufferImpl::TempBufferTarget, target.backendId);
-                    void* mapped = g_GLESFuncs.glMapBufferRange(BufferImpl::TempBufferTarget,
-                                                                static_cast<GLintptr>(target.start),
-                                                                static_cast<GLsizeiptr>(size), GL_MAP_READ_BIT);
-                    if (mapped == nullptr) {
-                        MGLOG_E("EndTransformFeedback: failed to map backend buffer %u for capture readback",
-                                target.backendId);
-                        continue;
-                    }
-                    target.buffer->WritebackFromBackend({mapped, size}, target.start);
-                    g_GLESFuncs.glUnmapBuffer(BufferImpl::TempBufferTarget);
-                }
+            if (xfb.scattered) {
+                ScatterCapturedRecords(xfb);
+                xfb.scattered = false;
+                xfb.scatterProgram.reset();
+            } else {
+                ReadbackCapturedRanges(xfb.targets);
             }
-            g_xfbTargets.clear();
         }
 
-        // The ES context went away (or is being torn down): the span, its buffer ids and
-        // the frontend objects it pinned all belonged to it.
+        void PauseTransformFeedback() {
+            auto& xfb = CurrentXfb();
+            xfb.paused = true;
+            // A span the driver never opened (paused before the first draw) has nothing to
+            // pause; the flag above is what holds the deferred Begin back until the resume.
+            if (!xfb.started || g_GLESFuncs.glPauseTransformFeedback == nullptr) return;
+            g_GLESFuncs.glPauseTransformFeedback();
+        }
+
+        void ResumeTransformFeedback() {
+            auto& xfb = CurrentXfb();
+            xfb.paused = false;
+            if (!xfb.started || g_GLESFuncs.glResumeTransformFeedback == nullptr) return;
+            g_GLESFuncs.glResumeTransformFeedback();
+        }
+
+        void BindTransformFeedback(GLuint name) {
+            if (!AreTransformFeedbackObjectsSupported()) {
+                // Without driver objects there is only the default span; keep the frontend
+                // name so the bookkeeping below stays consistent.
+                g_currentXfbName = name;
+                return;
+            }
+            auto& xfb = g_xfbObjects[name];
+            if (name != 0 && xfb.esId == 0) {
+                g_GLESFuncs.glGenTransformFeedbacks(1, &xfb.esId);
+            }
+            g_GLESFuncs.glBindTransformFeedback(GL_TRANSFORM_FEEDBACK, xfb.esId);
+            g_currentXfbName = name;
+        }
+
+        void DeleteTransformFeedback(GLuint name) {
+            const auto it = g_xfbObjects.find(name);
+            if (it == g_xfbObjects.end()) return;
+            if (it->second.esId != 0 && g_GLESFuncs.glDeleteTransformFeedbacks != nullptr) {
+                g_GLESFuncs.glDeleteTransformFeedbacks(1, &it->second.esId);
+            }
+            g_xfbObjects.erase(it);
+            // The frontend reverts to the default object when the bound one is deleted.
+            if (g_currentXfbName == name) {
+                BindTransformFeedback(0);
+            }
+        }
+
+        // The ES context went away (or is being torn down): the spans, their buffer ids, the
+        // driver objects and the frontend objects they pinned all belonged to it.
         void OnBackendContextDestroyed() {
-            g_xfbPending = false;
-            g_xfbStarted = false;
-            g_xfbTargets.clear();
+            g_xfbObjects.clear();
+            g_currentXfbName = 0;
+            g_scatterBufferId = 0;
+            g_scatterBufferSize = 0;
         }
     } // namespace XfbImpl
 

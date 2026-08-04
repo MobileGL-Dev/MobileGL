@@ -13,6 +13,16 @@ namespace MobileGL::MG_Impl::GLImpl {
     /* @INSERTION_POINT:FUNCTION_DECLARATION@ */
     void BeginTransformFeedback(GLenum primitiveMode);
     void EndTransformFeedback(void);
+    void PauseTransformFeedback(void);
+    void ResumeTransformFeedback(void);
+    void GenTransformFeedbacks(GLsizei n, GLuint* ids);
+    void DeleteTransformFeedbacks(GLsizei n, const GLuint* ids);
+    void BindTransformFeedback(GLenum target, GLuint id);
+    GLboolean IsTransformFeedback(GLuint id);
+    void DrawTransformFeedback(GLenum mode, GLuint id);
+    void DrawTransformFeedbackInstanced(GLenum mode, GLuint id, GLsizei instancecount);
+    void DrawTransformFeedbackStream(GLenum mode, GLuint id, GLuint stream);
+    void DrawTransformFeedbackStreamInstanced(GLenum mode, GLuint id, GLuint stream, GLsizei instancecount);
     void DispatchCompute(GLuint numGroupsX, GLuint numGroupsY, GLuint numGroupsZ);
     void DispatchComputeIndirect(GLintptr indirect);
     void MemoryBarrier(GLbitfield barriers);

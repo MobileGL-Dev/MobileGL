@@ -173,6 +173,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
         Bool AreTransformFeedbacksSupported();
         void BeginTransformFeedback(GLenum primitiveMode);
         void EndTransformFeedback();
+        void PauseTransformFeedback();
+        void ResumeTransformFeedback();
+        void BindTransformFeedback(GLuint name);
+        void DeleteTransformFeedback(GLuint name);
         void OnBackendContextDestroyed();
     } // namespace XfbImpl
 

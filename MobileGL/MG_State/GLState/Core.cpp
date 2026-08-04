@@ -745,6 +745,83 @@ namespace MobileGL::MG_State {
         Bool GLContext::ValidateRenderbufferObject(Uint index) const {
             return m_renderbufferState.ValidateRenderbufferObject(index);
         }
+
+        void GLContext::SaveBoundTransformFeedbackState() {
+            auto& object = m_transformFeedbackObjects[m_boundTransformFeedback];
+            for (Uint i = 0; i < MAX_TRANSFORM_FEEDBACK_BUFFERS; ++i) {
+                const auto& point = m_bufferState.GetBindingPoint(BufferTarget::TransformFeedback, i);
+                object.bindings[i] = {point.GetBoundObject(), point.GetRange(), point.HasExplicitRange()};
+            }
+            object.active = m_transformFeedbackActive;
+            object.paused = m_transformFeedbackPaused;
+            object.primitiveMode = m_transformFeedbackPrimitiveMode;
+            object.program = m_transformFeedbackProgram;
+            object.capturedVertices = m_transformFeedbackCapturedVertices;
+            object.inputPrimitives = m_transformFeedbackInputPrimitives;
+        }
+
+        void GLContext::RestoreBoundTransformFeedbackState() {
+            const auto& object = m_transformFeedbackObjects[m_boundTransformFeedback];
+            for (Uint i = 0; i < MAX_TRANSFORM_FEEDBACK_BUFFERS; ++i) {
+                auto& point = m_bufferState.GetBindingPoint(BufferTarget::TransformFeedback, i);
+                point.Bind(object.bindings[i].buffer);
+                if (object.bindings[i].buffer) {
+                    point.SetRange(object.bindings[i].range, object.bindings[i].hasExplicitRange);
+                } else {
+                    point.ClearRange();
+                }
+            }
+            m_transformFeedbackActive = object.active;
+            m_transformFeedbackPaused = object.paused;
+            m_transformFeedbackPrimitiveMode = object.primitiveMode;
+            m_transformFeedbackProgram = object.program;
+            m_transformFeedbackCapturedVertices = object.capturedVertices;
+            m_transformFeedbackInputPrimitives = object.inputPrimitives;
+        }
+
+        void GLContext::GenTransformFeedbackNames(Uint number, Vector<Uint>& ids) {
+            ids.resize(number);
+            if (number == 0) return;
+            m_transformFeedbackNames.Generate(number, ids.data());
+            // A generated name already denotes an object with the default state, so that a
+            // bind never has to distinguish "first use" from any later one.
+            for (const Uint id : ids) {
+                m_transformFeedbackObjects[id] = {};
+            }
+        }
+
+        Bool GLContext::ValidateTransformFeedbackName(Uint index) const {
+            return index == 0 || m_transformFeedbackNames.IsValid(index);
+        }
+
+        void GLContext::BindTransformFeedbackObject(Uint index) {
+            if (index == m_boundTransformFeedback) return;
+            SaveBoundTransformFeedbackState();
+            m_boundTransformFeedback = index;
+            RestoreBoundTransformFeedbackState();
+        }
+
+        void GLContext::MarkTransformFeedbackObjectForDeletion(Uint index) {
+            if (index == 0 || !m_transformFeedbackNames.IsValid(index)) return;
+            // Deleting the bound object reverts to the default one (GL 4.6 core 13.2.1);
+            // its state is dropped rather than saved back into the dying object.
+            if (index == m_boundTransformFeedback) {
+                m_boundTransformFeedback = 0;
+                RestoreBoundTransformFeedbackState();
+            }
+            m_transformFeedbackObjects.erase(index);
+            m_transformFeedbackNames.Delete(index);
+        }
+
+        Uint64 GLContext::GetTransformFeedbackRecordedVertices(Uint index) const {
+            const auto it = m_transformFeedbackObjects.find(index);
+            return it == m_transformFeedbackObjects.end() ? 0 : it->second.recordedVertices;
+        }
+
+        Bool GLContext::HasTransformFeedbackCompletedSpan(Uint index) const {
+            const auto it = m_transformFeedbackObjects.find(index);
+            return it != m_transformFeedbackObjects.end() && it->second.hasCompletedSpan;
+        }
     } // namespace GLState
 
     // Leak-at-exit storage; see GlobalObjects.cpp.

@@ -16,6 +16,9 @@ namespace MobileGL::MG_Impl::GLImpl {
     void BeginQuery(GLenum target, GLuint id);
     void EndQuery(GLenum target);
     void GetQueryiv(GLenum target, GLenum pname, GLint* params);
+    void BeginQueryIndexed(GLenum target, GLuint index, GLuint id);
+    void EndQueryIndexed(GLenum target, GLuint index);
+    void GetQueryIndexediv(GLenum target, GLuint index, GLenum pname, GLint* params);
     void GetQueryObjectiv(GLuint id, GLenum pname, GLint* params);
     void GetQueryObjectuiv(GLuint id, GLenum pname, GLuint* params);
     void GetQueryObjecti64v(GLuint id, GLenum pname, GLint64* params);

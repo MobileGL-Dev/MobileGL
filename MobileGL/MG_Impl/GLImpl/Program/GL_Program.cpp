@@ -920,9 +920,11 @@ namespace MobileGL::MG_Impl::GLImpl {
     void UseProgram_State(GLuint program) {
         MGLOG_D("UseProgram_State: program=%u", program);
 
-        // GL 3.3 core 2.11.3: the program in use may not change while transform
-        // feedback is active (there is no pause in 3.3).
-        if (MG_State::pGLContext->IsTransformFeedbackActive()) {
+        // The program in use may not change while transform feedback is active - unless
+        // the capture is paused, which is exactly what ARB_transform_feedback2 added the
+        // pause for (GL 4.6 core 7.3).
+        if (MG_State::pGLContext->IsTransformFeedbackActive() &&
+            !MG_State::pGLContext->IsTransformFeedbackPaused()) {
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidOperation,
                 MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
@@ -2283,6 +2285,31 @@ namespace MobileGL::MG_Impl::GLImpl {
         names.reserve(static_cast<SizeT>(count));
         for (GLsizei i = 0; i < count; ++i) {
             names.emplace_back(varyings != nullptr && varyings[i] != nullptr ? varyings[i] : "");
+        }
+        // ARB_transform_feedback3's special names only mean anything in an interleaved
+        // capture, and gl_NextBuffer cannot advance past the last capture buffer.
+        constexpr Uint maxTransformFeedbackBuffers = 4;
+        Uint nextBufferCount = 0;
+        for (const String& name : names) {
+            const Bool isNextBuffer = name == "gl_NextBuffer";
+            const Bool isSkipComponents = name.size() == 18 && name.compare(0, 17, "gl_SkipComponents") == 0 &&
+                                          name[17] >= '1' && name[17] <= '4';
+            if (!isNextBuffer && !isSkipComponents) continue;
+            if (bufferMode != GL_INTERLEAVED_ATTRIBS) {
+                MG_State::pGLContext->RecordError(
+                    ErrorCode::InvalidOperation,
+                    MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
+                                                 "'" + name + "' requires GL_INTERLEAVED_ATTRIBS."));
+                return;
+            }
+            if (isNextBuffer && ++nextBufferCount >= maxTransformFeedbackBuffers) {
+                MG_State::pGLContext->RecordError(
+                    ErrorCode::InvalidOperation,
+                    MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
+                                                 "More gl_NextBuffer entries than "
+                                                 "GL_MAX_TRANSFORM_FEEDBACK_BUFFERS allows."));
+                return;
+            }
         }
         programObject->SetTransformFeedbackVaryings(Move(names), bufferMode);
     }

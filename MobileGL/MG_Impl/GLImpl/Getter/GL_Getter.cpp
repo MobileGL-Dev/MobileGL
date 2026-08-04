@@ -1952,7 +1952,10 @@ namespace MobileGL::MG_Impl::GLImpl {
             *params = MG_State::pGLContext->IsTransformFeedbackActive() ? 1 : 0;
             break;
         case GL_TRANSFORM_FEEDBACK_PAUSED:
-            *params = 0;
+            *params = MG_State::pGLContext->IsTransformFeedbackPaused() ? 1 : 0;
+            break;
+        case GL_TRANSFORM_FEEDBACK_BINDING:
+            *params = static_cast<GLint>(MG_State::pGLContext->GetBoundTransformFeedbackName());
             break;
         case GL_MAX_TEXTURE_IMAGE_UNITS:
             *params = dynamicParameters.MaxTextureImageUnits;

@@ -174,6 +174,8 @@ namespace MobileGL::MG_State::GLState {
         m_xfbStrides.clear();
         m_xfbBufferMode = GL_INTERLEAVED_ATTRIBS;
         m_xfbVaryingNameMaxLength = 0;
+        m_xfbNeedsScatteredCapture = false;
+        m_xfbPackedStride = 0;
         m_gsInputPrimitive = GL_NONE;
         m_linkStatus = false;
     }
@@ -223,6 +225,8 @@ namespace MobileGL::MG_State::GLState {
         m_xfbStrides.clear();
         m_xfbBufferMode = m_requestedXfbBufferMode;
         m_xfbVaryingNameMaxLength = 0;
+        m_xfbNeedsScatteredCapture = false;
+        m_xfbPackedStride = 0;
         if (m_requestedXfbVaryings.empty()) {
             return true;
         }
@@ -244,8 +248,27 @@ namespace MobileGL::MG_State::GLState {
 
         const Bool interleaved = m_xfbBufferMode == GL_INTERLEAVED_ATTRIBS;
         Uint32 interleavedOffset = 0;
+        // ARB_transform_feedback3 lets an interleaved capture leave holes (gl_SkipComponents1..4)
+        // and move on to the next buffer (gl_NextBuffer). Both only affect where the following
+        // varyings land, so they are consumed here and never become XfbVaryings of their own -
+        // which also keeps them out of the name list a backend declares on its own driver.
+        Uint32 interleavedBufferIndex = 0;
+        Vector<Uint32> interleavedStrides;
         for (SizeT i = 0; i < m_requestedXfbVaryings.size(); ++i) {
             const String& name = m_requestedXfbVaryings[i];
+            if (interleaved && name == "gl_NextBuffer") {
+                interleavedStrides.push_back(interleavedOffset);
+                interleavedOffset = 0;
+                ++interleavedBufferIndex;
+                m_xfbNeedsScatteredCapture = true;
+                continue;
+            }
+            if (interleaved && name.size() == 18 && name.compare(0, 17, "gl_SkipComponents") == 0 &&
+                name[17] >= '1' && name[17] <= '4') {
+                interleavedOffset += static_cast<Uint32>(name[17] - '0') * 4;
+                m_xfbNeedsScatteredCapture = true;
+                continue;
+            }
             for (SizeT j = 0; j < i; ++j) {
                 if (m_requestedXfbVaryings[j] == name) {
                     m_infoLog = "Transform feedback varying '" + name + "' is specified more than once.";
@@ -286,12 +309,14 @@ namespace MobileGL::MG_State::GLState {
             }
 
             varying.byteSize = bytesPerElement * static_cast<Uint32>(varying.size);
+            varying.packedOffsetBytes = m_xfbPackedStride;
+            m_xfbPackedStride += varying.byteSize;
             if (interleaved) {
-                varying.bufferIndex = 0;
+                varying.bufferIndex = interleavedBufferIndex;
                 varying.offsetBytes = interleavedOffset;
                 interleavedOffset += varying.byteSize;
             } else {
-                varying.bufferIndex = static_cast<Uint32>(i);
+                varying.bufferIndex = static_cast<Uint32>(m_xfbVaryings.size());
                 varying.offsetBytes = 0;
             }
             m_xfbVaryingNameMaxLength =
@@ -302,13 +327,22 @@ namespace MobileGL::MG_State::GLState {
         constexpr Uint32 kMaxSeparateAttribs = 4;
         constexpr Uint32 kMaxSeparateComponents = 4;
         constexpr Uint32 kMaxInterleavedComponents = 64;
+        constexpr Uint32 kMaxTransformFeedbackBuffers = 4;
         if (interleaved) {
-            if (interleavedOffset > kMaxInterleavedComponents * 4) {
-                m_infoLog = "Transform feedback interleaved capture exceeds "
-                            "GL_MAX_TRANSFORM_FEEDBACK_INTERLEAVED_COMPONENTS.";
+            interleavedStrides.push_back(interleavedOffset);
+            if (interleavedStrides.size() > kMaxTransformFeedbackBuffers) {
+                m_infoLog = "Transform feedback capture uses more buffers than "
+                            "GL_MAX_TRANSFORM_FEEDBACK_BUFFERS.";
                 return false;
             }
-            m_xfbStrides.assign(1, interleavedOffset);
+            for (const Uint32 stride : interleavedStrides) {
+                if (stride > kMaxInterleavedComponents * 4) {
+                    m_infoLog = "Transform feedback interleaved capture exceeds "
+                                "GL_MAX_TRANSFORM_FEEDBACK_INTERLEAVED_COMPONENTS.";
+                    return false;
+                }
+            }
+            m_xfbStrides = Move(interleavedStrides);
         } else {
             if (m_xfbVaryings.size() > kMaxSeparateAttribs) {
                 m_infoLog = "Transform feedback separate capture exceeds "

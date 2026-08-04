@@ -7,6 +7,7 @@
 // End of Source File Header
 
 #include "GL_Query.h"
+#include "../Getter/GL_Getter.h"
 #include <Config.h>
 #include <MG_Backend/BackendObjects.h>
 #include <MG_State/GLState/Core.h>
@@ -465,5 +466,43 @@ namespace MobileGL::MG_Impl::GLImpl {
             return;
         }
         *params = static_cast<GLuint64>(value);
+    }
+
+    namespace {
+        // The indexed query entry points differ from the plain ones only in the vertex
+        // stream they address (GL 4.6 core 4.2.1): index must be below GL_MAX_VERTEX_STREAMS
+        // for the two transform feedback targets and zero for every other target. With a
+        // single vertex stream both bounds are 1, so a valid call is always index 0 and
+        // forwards to the unindexed implementation.
+        Bool ValidateQueryStreamIndex(const char* function, GLenum target, GLuint index) {
+            const Bool perStreamTarget =
+                target == GL_PRIMITIVES_GENERATED || target == GL_TRANSFORM_FEEDBACK_PRIMITIVES_WRITTEN;
+            GLint maxVertexStreams = 1;
+            if (perStreamTarget) {
+                GetIntegerv(GL_MAX_VERTEX_STREAMS, &maxVertexStreams);
+            }
+            if (index < static_cast<GLuint>(std::max(maxVertexStreams, 1))) {
+                return true;
+            }
+            RecordQueryError(ErrorCode::InvalidValue, function,
+                             perStreamTarget ? "index is not less than GL_MAX_VERTEX_STREAMS."
+                                             : "index must be zero for this query target.");
+            return false;
+        }
+    } // namespace
+
+    void BeginQueryIndexed(GLenum target, GLuint index, GLuint id) {
+        if (!ValidateQueryStreamIndex(__FUNCTION__, target, index)) return;
+        BeginQuery(target, id);
+    }
+
+    void EndQueryIndexed(GLenum target, GLuint index) {
+        if (!ValidateQueryStreamIndex(__FUNCTION__, target, index)) return;
+        EndQuery(target);
+    }
+
+    void GetQueryIndexediv(GLenum target, GLuint index, GLenum pname, GLint* params) {
+        if (!ValidateQueryStreamIndex(__FUNCTION__, target, index)) return;
+        GetQueryiv(target, pname, params);
     }
 } // namespace MobileGL::MG_Impl::GLImpl

@@ -72,6 +72,9 @@ namespace MobileGL::MG_Impl::GLImpl {
     // Geometry amplification is not modelled here.
     static void AccountTransformFeedbackPrimitives(GLenum mode, GLsizei count) {
         if (!MG_State::pGLContext->IsTransformFeedbackActive()) return;
+        // A paused span captures nothing, so a draw made while paused contributes to
+        // PRIMITIVES_GENERATED but not to TRANSFORM_FEEDBACK_PRIMITIVES_WRITTEN.
+        if (MG_State::pGLContext->IsTransformFeedbackPaused()) return;
         Uint64 primitives = CountPrimitivesForDraw(mode, count);
         if (primitives == 0) return;
         MG_State::pGLContext->AddTransformFeedbackInputPrimitives(primitives);
@@ -202,8 +205,11 @@ namespace MobileGL::MG_Impl::GLImpl {
         // While transform feedback is active the draw's primitive type must match
         // the feedback primitive mode (GL 3.3 core 13.2.2). With a geometry shader
         // the constraint moves to the shader's output primitive type instead, so
-        // the draw mode itself is unconstrained here.
+        // the draw mode itself is unconstrained here. A paused span is exempt: it
+        // captures nothing, so there is nothing for the mode to be incompatible with
+        // (GL 4.6 core 13.2.3).
         if (MG_State::pGLContext->IsTransformFeedbackActive() &&
+            !MG_State::pGLContext->IsTransformFeedbackPaused() &&
             !(MG_State::pGLContext->GetTransformFeedbackProgram() &&
               MG_State::pGLContext->GetTransformFeedbackProgram()->GetShaderIndexByStage(ShaderStage::Geometry) >= 0)) {
             const GLenum feedbackMode = MG_State::pGLContext->GetTransformFeedbackPrimitiveMode();
@@ -684,9 +690,12 @@ namespace MobileGL::MG_Impl::GLImpl {
                     "No program with transform feedback varyings is active."));
             return;
         }
-        // Every capture buffer slot the program's mode uses must have a buffer bound.
+        // Every capture buffer slot the program's mode uses must have a buffer bound. A slot
+        // of stride 0 - two consecutive gl_NextBuffer entries - captures nothing and so needs
+        // no binding.
         const SizeT usedBufferCount = program->GetTransformFeedbackBufferCount();
         for (SizeT i = 0; i < usedBufferCount; ++i) {
+            if (program->GetTransformFeedbackStride(static_cast<Uint32>(i)) == 0) continue;
             const auto& point = MG_State::pGLContext->GetBufferBindingPoint(BufferTarget::TransformFeedback,
                                                                             static_cast<Uint>(i));
             if (point.GetBoundObject() == nullptr) {
@@ -798,6 +807,176 @@ namespace MobileGL::MG_Impl::GLImpl {
             }
         }
         FixupGsStripCaptureOrder(capturedProgram, inputPrimitives);
+    }
+
+    void PauseTransformFeedback(void) {
+        if (!MG_State::pGLContext->IsTransformFeedbackActive() ||
+            MG_State::pGLContext->IsTransformFeedbackPaused()) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidOperation,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
+                                             "Transform feedback is not active, or is already paused."));
+            return;
+        }
+        MG_State::pGLContext->SetTransformFeedbackPaused(true);
+        if (const auto pauseXfb = MG_Backend::gBackendFunctionsTable.GL.PauseTransformFeedback) {
+            pauseXfb();
+        }
+    }
+
+    void ResumeTransformFeedback(void) {
+        if (!MG_State::pGLContext->IsTransformFeedbackActive() ||
+            !MG_State::pGLContext->IsTransformFeedbackPaused()) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidOperation,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__, "Transform feedback is not paused."));
+            return;
+        }
+        MG_State::pGLContext->SetTransformFeedbackPaused(false);
+        if (const auto resumeXfb = MG_Backend::gBackendFunctionsTable.GL.ResumeTransformFeedback) {
+            resumeXfb();
+        }
+    }
+
+    void GenTransformFeedbacks(GLsizei n, GLuint* ids) {
+        if (n < 0) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidValue,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__, "n must be non-negative."));
+            return;
+        }
+        if (n == 0 || ids == nullptr) return;
+        Vector<Uint> names;
+        MG_State::pGLContext->GenTransformFeedbackNames(static_cast<Uint>(n), names);
+        Memcpy(ids, names.data(), static_cast<SizeT>(n) * sizeof(GLuint));
+    }
+
+    void DeleteTransformFeedbacks(GLsizei n, const GLuint* ids) {
+        if (n < 0) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidValue,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__, "n must be non-negative."));
+            return;
+        }
+        if (ids == nullptr) return;
+        for (GLsizei i = 0; i < n; ++i) {
+            const GLuint id = ids[i];
+            // Unknown names and 0 are silently ignored; an object whose capture span is
+            // still open is not (GL 4.6 core 13.2.1).
+            if (id == 0 || !MG_State::pGLContext->ValidateTransformFeedbackName(id)) continue;
+            if (id == MG_State::pGLContext->GetBoundTransformFeedbackName() &&
+                MG_State::pGLContext->IsTransformFeedbackActive()) {
+                MG_State::pGLContext->RecordError(
+                    ErrorCode::InvalidOperation,
+                    MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
+                                                 "Cannot delete a transform feedback object whose capture is active."));
+                continue;
+            }
+            if (const auto deleteXfb = MG_Backend::gBackendFunctionsTable.GL.DeleteTransformFeedback) {
+                deleteXfb(id);
+            }
+            MG_State::pGLContext->MarkTransformFeedbackObjectForDeletion(id);
+        }
+    }
+
+    void BindTransformFeedback(GLenum target, GLuint id) {
+        if (target != GL_TRANSFORM_FEEDBACK) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidEnum,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__, "target must be GL_TRANSFORM_FEEDBACK."));
+            return;
+        }
+        // A running capture pins its object; only a paused one may be swapped out.
+        if (MG_State::pGLContext->IsTransformFeedbackActive() &&
+            !MG_State::pGLContext->IsTransformFeedbackPaused()) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidOperation,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
+                                             "Transform feedback is active and not paused."));
+            return;
+        }
+        if (!MG_State::pGLContext->ValidateTransformFeedbackName(id)) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidOperation,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
+                                             std::to_string(id) + " is not a transform feedback object name."));
+            return;
+        }
+        MG_State::pGLContext->BindTransformFeedbackObject(id);
+        if (const auto bindXfb = MG_Backend::gBackendFunctionsTable.GL.BindTransformFeedback) {
+            bindXfb(id);
+        }
+    }
+
+    GLboolean IsTransformFeedback(GLuint id) {
+        // Name 0 is the default object, which glIsTransformFeedback reports as not an object.
+        return (id != 0 && MG_State::pGLContext->ValidateTransformFeedbackName(id)) ? GL_TRUE : GL_FALSE;
+    }
+
+    // glDrawTransformFeedback[Stream][Instanced]: replays the vertices the named object
+    // captured in its last completed span, as if by glDrawArraysInstanced with that count
+    // (GL 4.6 core 10.3.7).
+    static void DrawTransformFeedbackImpl(const char* functionName, GLenum mode, GLuint id, GLuint stream,
+                                          GLsizei instancecount) {
+        if (!ValidateCurrentProgramForExecution(functionName)) return;
+        if (!ValidatePrimitiveModeForBackend(functionName, mode)) return;
+        if (instancecount < 0) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidValue,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", functionName, "instancecount must be non-negative."));
+            return;
+        }
+        if (!MG_State::pGLContext->ValidateTransformFeedbackName(id)) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidValue,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", functionName,
+                                             std::to_string(id) + " is not a transform feedback object name."));
+            return;
+        }
+        // GL_MAX_VERTEX_STREAMS is 1, so stream 0 is the only one that exists.
+        if (stream != 0) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidValue,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", functionName,
+                                             "stream must be less than GL_MAX_VERTEX_STREAMS."));
+            return;
+        }
+        // Drawing from an object whose capture is currently open is legal and deliberate:
+        // it is how a transform feedback result is fed straight back into the next span
+        // (ARB_transform_feedback2 lists no such restriction).
+        if (!MG_State::pGLContext->HasTransformFeedbackCompletedSpan(id)) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidOperation,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", functionName,
+                                             "glEndTransformFeedback has never been called for this object."));
+            return;
+        }
+
+        const Uint64 vertices = MG_State::pGLContext->GetTransformFeedbackRecordedVertices(id);
+        if (vertices == 0) return;
+        const auto count = static_cast<GLsizei>(vertices);
+        AccountTransformFeedbackPrimitives(mode, count);
+        if (instancecount == 1) {
+            DrawArrays_Backend(mode, 0, count);
+        } else {
+            DrawArraysInstanced_Backend(mode, 0, count, instancecount);
+        }
+    }
+
+    void DrawTransformFeedback(GLenum mode, GLuint id) {
+        DrawTransformFeedbackImpl(__func__, mode, id, 0, 1);
+    }
+
+    void DrawTransformFeedbackInstanced(GLenum mode, GLuint id, GLsizei instancecount) {
+        DrawTransformFeedbackImpl(__func__, mode, id, 0, instancecount);
+    }
+
+    void DrawTransformFeedbackStream(GLenum mode, GLuint id, GLuint stream) {
+        DrawTransformFeedbackImpl(__func__, mode, id, stream, 1);
+    }
+
+    void DrawTransformFeedbackStreamInstanced(GLenum mode, GLuint id, GLuint stream, GLsizei instancecount) {
+        DrawTransformFeedbackImpl(__func__, mode, id, stream, instancecount);
     }
 
 } // namespace MobileGL::MG_Impl::GLImpl

@@ -292,18 +292,12 @@ DECLARE_GL_FUNCTION_HEAD(void, SamplerParameterfv, GLuint sampler, GLenum pname,
 DECLARE_GL_FUNCTION_HEAD(void, GetSamplerParameteriv, GLuint sampler, GLenum pname, GLint* params) DECLARE_GL_FUNCTION_END_NO_RETURN(void, GetSamplerParameteriv, sampler, pname, params)
 DECLARE_GL_FUNCTION_HEAD(void, GetSamplerParameterfv, GLuint sampler, GLenum pname, GLfloat* params) DECLARE_GL_FUNCTION_END_NO_RETURN(void, GetSamplerParameterfv, sampler, pname, params)
 DECLARE_GL_FUNCTION_HEAD(void, VertexAttribDivisor, GLuint index, GLuint divisor) DECLARE_GL_FUNCTION_END_NO_RETURN(void, VertexAttribDivisor, index, divisor)
-DECLARE_GL_FUNCTION_STUB_HEAD(void, BindTransformFeedback, GLenum target, GLuint id) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, BindTransformFeedback, target, id)
-DECLARE_GL_FUNCTION_STUB_HEAD(void, DeleteTransformFeedbacks, GLsizei n, const GLuint* ids) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, DeleteTransformFeedbacks, n, ids)
-DECLARE_GL_FUNCTION_STUB_HEAD(void, GenTransformFeedbacks, GLsizei n, GLuint* ids) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, GenTransformFeedbacks, n, ids)
-// Transform feedback objects are not implemented, so no name is ever a live object. The shared
-// stub returns (type)1, telling a probing caller that every id it invents already exists; GL_FALSE
-// is both truthful and what the spec requires for a name that was never generated.
-MOBILEGL_GL_API GLboolean glIsTransformFeedback(GLuint id) {
-    MGLOG_W("Stub function: %s(...)", __FUNCTION__);
-    return GL_FALSE;
-}
-DECLARE_GL_FUNCTION_STUB_HEAD(void, PauseTransformFeedback) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, PauseTransformFeedback)
-DECLARE_GL_FUNCTION_STUB_HEAD(void, ResumeTransformFeedback) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, ResumeTransformFeedback)
+DECLARE_GL_FUNCTION_HEAD(void, BindTransformFeedback, GLenum target, GLuint id) DECLARE_GL_FUNCTION_END_NO_RETURN(void, BindTransformFeedback, target, id)
+DECLARE_GL_FUNCTION_HEAD(void, DeleteTransformFeedbacks, GLsizei n, const GLuint* ids) DECLARE_GL_FUNCTION_END_NO_RETURN(void, DeleteTransformFeedbacks, n, ids)
+DECLARE_GL_FUNCTION_HEAD(void, GenTransformFeedbacks, GLsizei n, GLuint* ids) DECLARE_GL_FUNCTION_END_NO_RETURN(void, GenTransformFeedbacks, n, ids)
+DECLARE_GL_FUNCTION_HEAD(GLboolean, IsTransformFeedback, GLuint id) DECLARE_GL_FUNCTION_END(GLboolean, IsTransformFeedback, id)
+DECLARE_GL_FUNCTION_HEAD(void, PauseTransformFeedback) DECLARE_GL_FUNCTION_END_NO_RETURN(void, PauseTransformFeedback)
+DECLARE_GL_FUNCTION_HEAD(void, ResumeTransformFeedback) DECLARE_GL_FUNCTION_END_NO_RETURN(void, ResumeTransformFeedback)
 DECLARE_GL_FUNCTION_STUB_HEAD(void, GetProgramBinary, GLuint program, GLsizei bufSize, GLsizei* length, GLenum* binaryFormat, void* binary) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, GetProgramBinary, program, bufSize, length, binaryFormat, binary)
 DECLARE_GL_FUNCTION_STUB_HEAD(void, ProgramBinary, GLuint program, GLenum binaryFormat, const void* binary, GLsizei length) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, ProgramBinary, program, binaryFormat, binary, length)
 DECLARE_GL_FUNCTION_STUB_HEAD(void, ProgramParameteri, GLuint program, GLenum pname, GLint value) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, ProgramParameteri, program, pname, value)
@@ -942,11 +936,11 @@ DECLARE_GL_FUNCTION_STUB_HEAD(void, UniformSubroutinesuiv, GLenum shadertype, GL
 DECLARE_GL_FUNCTION_STUB_HEAD(void, GetUniformSubroutineuiv, GLenum shadertype, GLint location, GLuint* params) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, GetUniformSubroutineuiv, shadertype, location, params)
 DECLARE_GL_FUNCTION_STUB_HEAD(void, GetProgramStageiv, GLuint program, GLenum shadertype, GLenum pname, GLint* values) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, GetProgramStageiv, program, shadertype, pname, values)
 DECLARE_GL_FUNCTION_STUB_HEAD(void, PatchParameterfv, GLenum pname, const GLfloat* values) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, PatchParameterfv, pname, values)
-DECLARE_GL_FUNCTION_STUB_HEAD(void, DrawTransformFeedback, GLenum mode, GLuint id) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, DrawTransformFeedback, mode, id)
-DECLARE_GL_FUNCTION_STUB_HEAD(void, DrawTransformFeedbackStream, GLenum mode, GLuint id, GLuint stream) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, DrawTransformFeedbackStream, mode, id, stream)
-DECLARE_GL_FUNCTION_STUB_HEAD(void, BeginQueryIndexed, GLenum target, GLuint index, GLuint id) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, BeginQueryIndexed, target, index, id)
-DECLARE_GL_FUNCTION_STUB_HEAD(void, EndQueryIndexed, GLenum target, GLuint index) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, EndQueryIndexed, target, index)
-DECLARE_GL_FUNCTION_STUB_HEAD(void, GetQueryIndexediv, GLenum target, GLuint index, GLenum pname, GLint* params) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, GetQueryIndexediv, target, index, pname, params)
+DECLARE_GL_FUNCTION_HEAD(void, DrawTransformFeedback, GLenum mode, GLuint id) DECLARE_GL_FUNCTION_END_NO_RETURN(void, DrawTransformFeedback, mode, id)
+DECLARE_GL_FUNCTION_HEAD(void, DrawTransformFeedbackStream, GLenum mode, GLuint id, GLuint stream) DECLARE_GL_FUNCTION_END_NO_RETURN(void, DrawTransformFeedbackStream, mode, id, stream)
+DECLARE_GL_FUNCTION_HEAD(void, BeginQueryIndexed, GLenum target, GLuint index, GLuint id) DECLARE_GL_FUNCTION_END_NO_RETURN(void, BeginQueryIndexed, target, index, id)
+DECLARE_GL_FUNCTION_HEAD(void, EndQueryIndexed, GLenum target, GLuint index) DECLARE_GL_FUNCTION_END_NO_RETURN(void, EndQueryIndexed, target, index)
+DECLARE_GL_FUNCTION_HEAD(void, GetQueryIndexediv, GLenum target, GLuint index, GLenum pname, GLint* params) DECLARE_GL_FUNCTION_END_NO_RETURN(void, GetQueryIndexediv, target, index, pname, params)
 DECLARE_GL_FUNCTION_STUB_HEAD(void, ProgramUniform1d, GLuint program, GLint location, GLdouble v0) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, ProgramUniform1d, program, location, v0)
 DECLARE_GL_FUNCTION_STUB_HEAD(void, ProgramUniform1dv, GLuint program, GLint location, GLsizei count, const GLdouble* value) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, ProgramUniform1dv, program, location, count, value)
 DECLARE_GL_FUNCTION_STUB_HEAD(void, ProgramUniform2d, GLuint program, GLint location, GLdouble v0, GLdouble v1) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, ProgramUniform2d, program, location, v0, v1)
@@ -988,8 +982,8 @@ DECLARE_GL_FUNCTION_HEAD(void, DrawArraysInstancedBaseInstance, GLenum mode, GLi
 DECLARE_GL_FUNCTION_HEAD(void, DrawElementsInstancedBaseInstance, GLenum mode, GLsizei count, GLenum type, const void* indices, GLsizei instancecount, GLuint baseinstance) DECLARE_GL_FUNCTION_END_NO_RETURN(void, DrawElementsInstancedBaseInstance, mode, count, type, indices, instancecount, baseinstance)
 DECLARE_GL_FUNCTION_HEAD(void, DrawElementsInstancedBaseVertexBaseInstance, GLenum mode, GLsizei count, GLenum type, const void* indices, GLsizei instancecount, GLint basevertex, GLuint baseinstance) DECLARE_GL_FUNCTION_END_NO_RETURN(void, DrawElementsInstancedBaseVertexBaseInstance, mode, count, type, indices, instancecount, basevertex, baseinstance)
 DECLARE_GL_FUNCTION_STUB_HEAD(void, GetActiveAtomicCounterBufferiv, GLuint program, GLuint bufferIndex, GLenum pname, GLint* params) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, GetActiveAtomicCounterBufferiv, program, bufferIndex, pname, params)
-DECLARE_GL_FUNCTION_STUB_HEAD(void, DrawTransformFeedbackInstanced, GLenum mode, GLuint id, GLsizei instancecount) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, DrawTransformFeedbackInstanced, mode, id, instancecount)
-DECLARE_GL_FUNCTION_STUB_HEAD(void, DrawTransformFeedbackStreamInstanced, GLenum mode, GLuint id, GLuint stream, GLsizei instancecount) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, DrawTransformFeedbackStreamInstanced, mode, id, stream, instancecount)
+DECLARE_GL_FUNCTION_HEAD(void, DrawTransformFeedbackInstanced, GLenum mode, GLuint id, GLsizei instancecount) DECLARE_GL_FUNCTION_END_NO_RETURN(void, DrawTransformFeedbackInstanced, mode, id, instancecount)
+DECLARE_GL_FUNCTION_HEAD(void, DrawTransformFeedbackStreamInstanced, GLenum mode, GLuint id, GLuint stream, GLsizei instancecount) DECLARE_GL_FUNCTION_END_NO_RETURN(void, DrawTransformFeedbackStreamInstanced, mode, id, stream, instancecount)
 DECLARE_GL_FUNCTION_STUB_HEAD(void, ClearBufferData, GLenum target, GLenum internalformat, GLenum format, GLenum type, const void* data) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, ClearBufferData, target, internalformat, format, type, data)
 DECLARE_GL_FUNCTION_STUB_HEAD(void, ClearBufferSubData, GLenum target, GLenum internalformat, GLintptr offset, GLsizeiptr size, GLenum format, GLenum type, const void* data) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, ClearBufferSubData, target, internalformat, offset, size, format, type, data)
 DECLARE_GL_FUNCTION_STUB_HEAD(void, GetInternalformati64v, GLenum target, GLenum internalformat, GLenum pname, GLsizei count, GLint64* params) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, GetInternalformati64v, target, internalformat, pname, count, params)

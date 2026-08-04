@@ -1032,6 +1032,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // span boundaries over.
             funcsTable.GL.BeginTransformFeedback = XfbImpl::BeginTransformFeedback;
             funcsTable.GL.EndTransformFeedback = XfbImpl::EndTransformFeedback;
+            funcsTable.GL.PauseTransformFeedback = XfbImpl::PauseTransformFeedback;
+            funcsTable.GL.ResumeTransformFeedback = XfbImpl::ResumeTransformFeedback;
+            funcsTable.GL.BindTransformFeedback = XfbImpl::BindTransformFeedback;
+            funcsTable.GL.DeleteTransformFeedback = XfbImpl::DeleteTransformFeedback;
             funcsTableInitialized = true;
         }
         return funcsTable;
