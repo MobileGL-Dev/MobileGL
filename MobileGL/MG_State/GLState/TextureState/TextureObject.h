@@ -164,6 +164,12 @@ namespace MobileGL::MG_State::GLState {
     // IsComplete() already covers. Sampling an incomplete texture returns (0, 0, 0, 1).
     Bool IsMipmapCompleteForFilter(const ITextureObject* texture, Bool mipmapped);
 
+    // The rule above asked as the backends need it: does a lookup on this texture read
+    // (0, 0, 0, 1) instead of its contents? `effectiveSampler` is the sampler object bound
+    // to the unit when there is one, otherwise the texture's own. A backend answers yes by
+    // routing the texture to whatever it already uses for "nothing is bound there".
+    Bool SamplesAsIncompleteTexture(const ITextureObject* texture, const SamplerObject* effectiveSampler);
+
     inline const TextureObjectMipmap* AsMipmapTexture(const ITextureObject* texture) {
         return (texture && texture->GetStorageType() == TextureStorageType::Mipmap)
                    ? static_cast<const TextureObjectMipmap*>(texture)

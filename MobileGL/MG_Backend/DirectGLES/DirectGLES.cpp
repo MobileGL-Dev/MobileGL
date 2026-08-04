@@ -1621,9 +1621,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     const auto& effectiveSampler = textureUnit.GetSamplerObject()
                         ? textureUnit.GetSamplerObject()
                         : textureObject->GetSamplerObject();
-                    const Bool mipmappedFilter =
-                        effectiveSampler && effectiveSampler->GetMipmapMode() != SamplerMipmapMode::None;
-                    if (!MG_State::GLState::IsMipmapCompleteForFilter(textureObject.get(), mipmappedFilter)) {
+                    if (MG_State::GLState::SamplesAsIncompleteTexture(textureObject.get(),
+                                                                      effectiveSampler.get())) {
                         continue;
                     }
 

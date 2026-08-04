@@ -266,6 +266,14 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         const auto& samplerOverride = textureUnit.GetSamplerObject();
         const auto preferredTarget = programObj.samplerTextureTargetByBinding[binding];
         SharedPtr<MG_State::GLState::ITextureObject> fallbackHolder;
+        // A texture that fails the completeness rules for the filter in effect reads
+        // (0, 0, 0, 1), which is exactly what the fallback texture holds - so it takes the
+        // same route as a sampler with nothing bound.
+        if (texture != nullptr &&
+            MG_State::GLState::SamplesAsIncompleteTexture(
+                texture, samplerOverride ? samplerOverride.get() : texture->GetSamplerObject().get())) {
+            texture = nullptr;
+        }
         if (texture == nullptr) {
             fallbackHolder = GetFallbackTexture(preferredTarget);
             texture = fallbackHolder.get();
@@ -769,6 +777,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             fallbackTexture->SetInternalFormat(TextureInternalFormat::RGBA8);
             fallbackTexture->AllocateStorage(TextureUploadTarget::Texture2D, 0,
                                              {.texelSize = {1, 1, 1}, .byteSize = 4});
+            // (0, 0, 0, 1): what GL reads from a texture that is not complete, and the only
+            // sensible answer for a sampler with nothing bound.
+            static Uint8 kOpaqueBlackTexel[4] = {0, 0, 0, 255};
+            fallbackTexture->UpdateMipmapSubData(TextureUploadTarget::Texture2D, 0,
+                                                 {kOpaqueBlackTexel, sizeof(kOpaqueBlackTexel)});
             fallbackTexture->MarkStorageDirty(TextureUploadTarget::Texture2D, 0, true);
             m_fallbackTexture2D = fallbackTexture;
         }

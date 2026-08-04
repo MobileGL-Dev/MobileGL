@@ -348,6 +348,12 @@ namespace MobileGL {
 
             // TODO: add other texture types as needed
 
+        Bool SamplesAsIncompleteTexture(const ITextureObject* texture, const SamplerObject* effectiveSampler) {
+            const Bool mipmapped =
+                effectiveSampler != nullptr && effectiveSampler->GetMipmapMode() != SamplerMipmapMode::None;
+            return !IsMipmapCompleteForFilter(texture, mipmapped);
+        }
+
         Bool IsMipmapCompleteForFilter(const ITextureObject* texture, Bool mipmapped) {
             if (texture == nullptr) return true;
             if (!texture->IsComplete()) return false;
