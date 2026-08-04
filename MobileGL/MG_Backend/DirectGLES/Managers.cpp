@@ -3384,18 +3384,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 }
 
                 // ES has no rectangle sampler, and SPIRV-Cross refuses the whole module rather
-                // than approximating one. Rewriting the type to 2D is exact for a lookup that
-                // takes integer texel coordinates and needs the coordinate divided by the
-                // texture size for one that does not - see NormalizeRectSamplerCoordinates
-                // below, which the ESSL the transpiler produces goes through. The pass declines
-                // anything neither step can convert.
+                // than approximating one. The shared pass turns the type into the 2D one and
+                // divides the coordinate of every normalized-coordinate lookup by the texture
+                // size, which is the whole of the difference between the two.
                 Vector<unsigned int> rectLoweredSpirv;
-                Bool loweredRectImages = false;
-                if (MG_Util::ShaderTranspiler::ShaderCompiler::LowerRectImagesForEssl(*effectiveSpirv,
-                                                                                       rectLoweredSpirv) &&
+                if (MG_Util::ShaderTranspiler::ShaderCompiler::LowerRectImages(*effectiveSpirv, rectLoweredSpirv) &&
                     !rectLoweredSpirv.empty()) {
                     effectiveSpirv = &rectLoweredSpirv;
-                    loweredRectImages = true;
                 }
 
                 MG_Util::ShaderTranspiler::SpvcSession spvcSession(*effectiveSpirv,
@@ -3432,26 +3427,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 source = ForceFlatIntegerVaryings(source, glShaderType);
                 source = BroadcastLegacyFragColor(std::move(source), glShaderType, m_fragColorBroadcastCount);
                 source = EmulateTextureLodBias(source);
-                if (loweredRectImages) {
-                    // The image type is 2D now, so the transpiled lookups address [0,1]; the
-                    // application wrote them in texels. Only the frontend still knows which
-                    // samplers were declared rectangle.
-                    Vector<String> rectSamplerNames;
-                    const Uint uniformCount = stateProgramObject->GetUniformCount();
-                    for (Uint i = 0; i < uniformCount; ++i) {
-                        switch (stateProgramObject->GetActiveUniformType(i)) {
-                        case GL_SAMPLER_2D_RECT:
-                        case GL_SAMPLER_2D_RECT_SHADOW:
-                        case GL_INT_SAMPLER_2D_RECT:
-                        case GL_UNSIGNED_INT_SAMPLER_2D_RECT:
-                            rectSamplerNames.push_back(stateProgramObject->GetActiveUniformName(i));
-                            break;
-                        default:
-                            break;
-                        }
-                    }
-                    source = NormalizeRectSamplerCoordinates(source, rectSamplerNames);
-                }
                 source = EmulateBaseInstanceInVertexShader(std::move(source), glShaderType);
                 source = PromoteDrawParameterGlobalsToUniforms(std::move(source), glShaderType);
                 source = ForceSupporterOutput(source);

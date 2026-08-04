@@ -279,7 +279,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // arrays as 2D arrays (height 1, layers in depth), and rectangle textures as plain 2D -
         // they are single-level and already clamp, so only the non-normalized coordinates differ.
         // Must match the shader-side emulation: SPIRV-Cross handles 1D/1D-array itself, and
-        // ShaderCompiler::LowerRectImagesForEssl rewrites rectangle images (declining any module
+        // ShaderCompiler::LowerRectImages rewrites rectangle images (declining any module
         // whose lookups are not integer-coordinate, which SPIRV-Cross then still rejects).
         inline TextureTarget MapToBackendTextureTarget(TextureTarget target) {
             switch (target) {

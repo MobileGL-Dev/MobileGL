@@ -2388,6 +2388,17 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 }
             }
 
+            // Vulkan's SPIR-V environment has no rectangle image dimension, so a
+            // GL_TEXTURE_RECTANGLE lookup has to become the 2D one the texture is really
+            // stored as - which addresses [0,1] where the application addressed texels.
+            {
+                Vector<Uint> rectLoweredSpirv;
+                if (MG_Util::ShaderTranspiler::ShaderCompiler::LowerRectImages(moduleSpirvs[i], rectLoweredSpirv) &&
+                    !rectLoweredSpirv.empty()) {
+                    moduleSpirvs[i] = Move(rectLoweredSpirv);
+                }
+            }
+
             // GL apps depend on cross-program position invariance for multi-pass equality
             // depth tests (MC 26.3's OIT re-draws the cloud geometry with GEQUAL against the
             // depth its own first pass wrote); decorate Position outputs Invariant so

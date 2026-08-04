@@ -1870,7 +1870,7 @@ TEST_F(TextureTest, DirectGLESTreats2DArrayAsSupportedTextureTarget) {
     // Every desktop-only target is stored on an ES one (MapToBackendTextureTarget): 1D and
     // 1D-array as 2D / 2D-array, matching SPIRV-Cross's ES 1D-as-2D shader emission, and
     // rectangle as a plain 2D - it is single-level and already clamps, so only the
-    // non-normalized coordinates differ and LowerRectImagesForEssl handles those.
+    // non-normalized coordinates differ and LowerRectImages handles those.
     EXPECT_TRUE(IsSupportedTextureTarget(TextureTarget::Texture1D));
     EXPECT_TRUE(IsSupportedTextureTarget(TextureTarget::Texture1DArray));
     EXPECT_TRUE(IsSupportedTextureTarget(TextureTarget::TextureRectangle));

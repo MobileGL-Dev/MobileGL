@@ -43,20 +43,15 @@ namespace MobileGL {
                 // devices lacking GL_NV_shader_noperspective_interpolation. See EmulateNoPerspectivePass.
                 static bool EmulateNoPerspectiveForEssl(const Vector<Uint32>& inputBinary,
                                                         Vector<uint32_t>& outputBinary);
-                // Rewrites rectangle images (Dim::Rect) to plain 2D so SPIRV-Cross can emit ESSL
-                // for them at all - it refuses outright ("Rectangle textures are not supported on
-                // OpenGL ES"), which left the whole program unlinkable. Only valid while every use
-                // of the image takes integer texel coordinates (texelFetch / textureSize), where a
-                // rectangle target and a 2D target are indistinguishable; a normalized-coordinate
-                // lookup would also need its coordinates divided by the texture size, so the pass
-                // declines those modules instead of emitting something subtly wrong. Returns false
-                // when it changed nothing or cannot safely convert. DirectGLES only.
-                static bool LowerRectImagesForEssl(const Vector<Uint32>& inputBinary,
-                                                   Vector<uint32_t>& outputBinary);
                 // Rebases loads of the InstanceIndex builtin to (InstanceIndex - BaseInstance) so
                 // shaders see GL's zero-based gl_InstanceID. Vertex shaders only; DirectVulkan
                 // backend only (glslang's relaxed mode aliases gl_InstanceID to gl_InstanceIndex,
                 // which wrongly includes baseInstance).
+                // GL_TEXTURE_RECTANGLE emulated on a plain 2D texture, for every backend:
+                // divides the coordinate of each normalized-coordinate lookup by the texture
+                // size and rewrites the image type to 2D. See NormalizeRectCoordinatesPass for
+                // what it declines and why.
+                static bool LowerRectImages(const Vector<Uint32>& inputBinary, Vector<uint32_t>& outputBinary);
                 static bool RebaseInstanceIndexForVulkan(const Vector<Uint32>& inputBinary,
                                                          Vector<uint32_t>& outputBinary);
                 // Adds the Invariant decoration to every Position builtin output. GL apps

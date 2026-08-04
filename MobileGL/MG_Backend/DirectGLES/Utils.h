@@ -129,15 +129,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // all have a zero bias is therefore unaffected. Returns the source unchanged when
         // there is nothing to rewrite.
         String EmulateTextureLodBias(const String& glslCode);
-        // GL_TEXTURE_RECTANGLE is emulated on an ES 2D texture and LowerRectImagesForEssl
-        // rewrites the image type to match, but a rectangle lookup addresses texels
-        // directly while a 2D one addresses [0,1] - so every lookup that takes normalized
-        // coordinates has to divide by the texture's size. `rectSamplerNames` is the set of
-        // samplers the program declared as rectangle; texelFetch is left alone (its
-        // coordinates are unnormalized on both targets) and so is anything projective,
-        // which LowerRectImagesForEssl still declines outright.
-        String NormalizeRectSamplerCoordinates(const String& glslCode,
-                                               const Vector<String>& rectSamplerNames);
     } // namespace PrgramImpl
 
     namespace Utils {
