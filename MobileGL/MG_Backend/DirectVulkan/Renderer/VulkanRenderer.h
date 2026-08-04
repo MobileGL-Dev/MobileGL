@@ -795,6 +795,14 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                            VkImageLayout finalLayout);
         Bool SubmitReadbackCommandsAndWait(FrameContext::FrameData& frame);
 
+    public:
+        // Submits whatever is recorded and waits for it. The CPU is about to read memory
+        // a shader wrote (a mapped shader storage buffer), and coherent host-visible
+        // storage only guarantees visibility once the work that produced it has retired.
+        Bool FinishPendingGpuWork();
+
+    private:
+
         void ShutdownSwapchain();
 
         // Static functions

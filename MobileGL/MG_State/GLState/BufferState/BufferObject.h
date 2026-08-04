@@ -157,8 +157,10 @@ namespace MobileGL {
             void WritebackFromBackend(DataPtr data, SizeT atOffset);
 
             // A draw or dispatch just ran with this buffer bound where a shader can write
-            // it (shader storage / atomic counter): the GPU copy may now differ from the
-            // shadow, so the next read has to pull it back.
+            // it (shader storage / atomic counter). The next read has to reconcile with
+            // that: pull the bytes back, or - when the shadow already IS coherent GPU
+            // memory - wait for the work that wrote them to retire. Which of the two is
+            // the backend's business; the flag only says a GPU write is outstanding.
             void MarkGpuWritten();
             // Refreshes the shadow from the backend when a GPU write is outstanding. Called
             // from every path that reads the shadow on the app's behalf.

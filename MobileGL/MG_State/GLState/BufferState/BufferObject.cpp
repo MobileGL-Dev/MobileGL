@@ -175,9 +175,6 @@ namespace MobileGL::MG_State::GLState {
     }
 
     void BufferObject::MarkGpuWritten() {
-        // A GPU-resident buffer has no separate shadow to refresh: reads already resolve
-        // against the coherent map the shader wrote into.
-        if (m_resource.IsGpuResident()) return;
         m_gpuWritePending = true;
     }
 

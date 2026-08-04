@@ -650,6 +650,14 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             return false;
         }
 
+        // The shader may write this buffer, and those writes land in GPU memory behind the
+        // frontend's CPU shadow - which is what MapBuffer and GetBufferSubData read.
+        // Host-visible coherent GPU residency makes the shadow BE that memory, so the
+        // results are visible without a readback path, exactly as for a capture buffer.
+        bufferObject->EnsureGpuResidentStorage();
+        // ... and the read that follows has to wait for this draw or dispatch to retire.
+        bufferObject->MarkGpuWritten();
+
         BufferSlice slice{};
         if (!m_bufferManager->AcquireResidentSlice(BufferKind::ShaderStorage, bufferObject, slice) || !slice.IsValid()) {
             MGLOG_E("ResolveStorageBufferDescriptor: failed to sync GL buffer %u for block '%s'",

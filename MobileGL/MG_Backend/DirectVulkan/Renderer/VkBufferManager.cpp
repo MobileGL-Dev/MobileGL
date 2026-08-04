@@ -7,6 +7,8 @@
 // End of Source File Header
 
 #include "VkBufferManager.h"
+#include "../DirectVulkan.h"
+#include "VulkanRenderer.h"
 
 namespace MobileGL::MG_Backend::DirectVulkan {
     namespace {
@@ -57,6 +59,18 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             }
         }
 
+        // The CPU is about to read a buffer a shader wrote. Its bytes live in coherent
+        // host-visible GPU storage (EnsureGpuResidentStorage adopts it when the buffer is
+        // bound as a shader storage buffer), so nothing needs copying - but coherence only
+        // says the writes are visible once they have happened, so the work has to retire
+        // first.
+        void Ops_ReadbackFromGpu(BufferObject& bufferObject) {
+            (void)bufferObject;
+            if (pVulkanRenderer) {
+                pVulkanRenderer->FinishPendingGpuWork();
+            }
+        }
+
         void* Ops_AcquirePersistentMap(BufferObject& bufferObject) {
             if (g_activeBufferManager) {
                 return g_activeBufferManager->AcquirePersistentMap(bufferObject);
@@ -80,6 +94,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             .FlushMappedRange = Ops_FlushMappedRange,
             .OnDestroy = Ops_OnDestroy,
             .AcquirePersistentMap = Ops_AcquirePersistentMap,
+            .ReadbackFromGpu = Ops_ReadbackFromGpu,
         };
     } // namespace
 

@@ -6919,6 +6919,17 @@ void main() {
 
     }
 
+    Bool VulkanRenderer::FinishPendingGpuWork() {
+        auto& frame = m_frameContext.GetCurrent();
+        if (!frame.isCommandRecording) {
+            return true;
+        }
+        if (VkRenderPassManager::GetActiveRenderPass() != nullptr) {
+            VkRenderPassManager::EndRenderPass(frame.commandBuffer);
+        }
+        return SubmitReadbackCommandsAndWait(frame);
+    }
+
     Bool VulkanRenderer::SubmitReadbackCommandsAndWait(FrameContext::FrameData& frame) {
         if (frame.isCommandRecording) {
             m_frameContext.EndCommandRecording();
