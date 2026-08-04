@@ -1366,6 +1366,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         if (buffer == 0) {
             point.Bind(nullptr);
             point.SetRange(Range1D(0, 0));
+            GetBufferBindingSlot(bufferTarget).Bind(nullptr);
             return;
         }
 
@@ -1384,6 +1385,12 @@ namespace MobileGL::MG_Impl::GLImpl {
         } else {
             point.ClearRange();
         }
+        // The indexed bind also binds to the generic binding point of the same target
+        // (GL 4.6 core 6.1.1). Callers rely on it: the texture_gather tests set up their
+        // SSBO with BindBufferBase and then size it through glBufferData on the generic
+        // target alone, which would otherwise raise GL_INVALID_OPERATION and leave the
+        // buffer with no storage.
+        GetBufferBindingSlot(bufferTarget).Bind(bufferObject);
     }
 
     void BindBufferRange_State(GLenum target, GLuint index, GLuint buffer, GLintptr offset, GLsizeiptr size) {
@@ -1407,6 +1414,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         if (buffer == 0) {
             point.Bind(nullptr);
             point.SetRange(Range1D(0, 0));
+            GetBufferBindingSlot(bufferTarget).Bind(nullptr);
             return;
         }
 
@@ -1424,6 +1432,8 @@ namespace MobileGL::MG_Impl::GLImpl {
         } else {
             point.ClearRange();
         }
+        // Also the generic binding point, exactly as BindBufferBase (GL 4.6 core 6.1.1).
+        GetBufferBindingSlot(bufferTarget).Bind(bufferObject);
     }
 
     /* @INSERTION_POINT:FUNCTION_IMPLEMENTATION@ */
