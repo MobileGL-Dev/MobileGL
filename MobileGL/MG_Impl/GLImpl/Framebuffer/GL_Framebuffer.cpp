@@ -1666,6 +1666,138 @@ namespace MobileGL::MG_Impl::GLImpl {
         ClearNamedFramebufferuiv_Backend(framebufferObject, buffer, drawbuffer, value);
     }
 
+    // glInvalidateFramebuffer and its three siblings only grant the implementation permission to
+    // throw the named attachments' contents away - "become undefined" is satisfied by keeping them
+    // - so MobileGL validates the call and leaves the contents alone. Discarding is a bandwidth
+    // optimisation that would need a backend dependency; it can be added later without changing
+    // what any of these entry points promise. The conformance tests exercise the validation, which
+    // is the part that was missing.
+    Bool ValidateInvalidateAttachments_State(const SharedPtr<MG_State::GLState::FramebufferObject>& framebuffer,
+                                             GLsizei numAttachments, const GLenum* attachments, const char* caller) {
+        if (numAttachments < 0) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidValue,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller, "numAttachments cannot be negative."));
+            return false;
+        }
+        if (numAttachments > 0 && attachments == nullptr) {
+            return false;
+        }
+
+        // Which tokens name an attachment depends on which framebuffer is affected: the default one
+        // has buffers, a framebuffer object has attachment points (GL 4.6 core 9.2.7).
+        const Bool isDefaultFramebuffer = framebuffer->IsDefaultFramebuffer();
+        for (GLsizei at = 0; at < numAttachments; ++at) {
+            const GLenum attachment = attachments[at];
+            if (isDefaultFramebuffer) {
+                switch (attachment) {
+                case GL_FRONT_LEFT:
+                case GL_FRONT_RIGHT:
+                case GL_BACK_LEFT:
+                case GL_BACK_RIGHT:
+                case GL_DEPTH:
+                case GL_STENCIL:
+                    continue;
+                default:
+                    MG_State::pGLContext->RecordError(
+                        ErrorCode::InvalidEnum,
+                        MakeUnique<GenericErrorInfo>(
+                            "MG_Impl/GLImpl", caller,
+                            std::format("{} does not name a buffer of the default framebuffer.",
+                                        MG_Util::ConvertGLEnumToString(attachment))));
+                    return false;
+                }
+            }
+
+            if (attachment == GL_DEPTH_ATTACHMENT || attachment == GL_STENCIL_ATTACHMENT ||
+                attachment == GL_DEPTH_STENCIL_ATTACHMENT) {
+                continue;
+            }
+            if (attachment < GL_COLOR_ATTACHMENT0 || attachment > GL_COLOR_ATTACHMENT31) {
+                MG_State::pGLContext->RecordError(
+                    ErrorCode::InvalidEnum,
+                    MakeUnique<GenericErrorInfo>(
+                        "MG_Impl/GLImpl", caller,
+                        std::format("{} does not name an attachment point of a framebuffer object.",
+                                    MG_Util::ConvertGLEnumToString(attachment))));
+                return false;
+            }
+            // A COLOR_ATTACHMENTm token past the limit is a well-formed enum naming a point that
+            // does not exist, which is INVALID_OPERATION rather than INVALID_ENUM.
+            const auto attachmentType = MG_Util::ConvertGLEnumToFramebufferAttachmentType(attachment);
+            if (!FramebufferImpl::ValidateColorAttachmentInRange(attachmentType, caller)) return false;
+        }
+        return true;
+    }
+
+    Bool ValidateInvalidateSubRegion_State(GLsizei width, GLsizei height, const char* caller) {
+        if (width < 0 || height < 0) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidValue,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller, "width and height cannot be negative."));
+            return false;
+        }
+        return true;
+    }
+
+    SharedPtr<MG_State::GLState::FramebufferObject> GetFramebufferObjectForInvalidate_State(GLenum target,
+                                                                                           const char* caller) {
+        const FramebufferTarget framebufferTarget =
+            MG_Util::ConvertGLEnumToFramebufferTarget(target == GL_FRAMEBUFFER ? GL_DRAW_FRAMEBUFFER : target);
+        if (!FramebufferImpl::ValidateFramebufferTarget(framebufferTarget)) return nullptr;
+        auto framebufferObject = MG_State::pGLContext->GetFramebufferBindingSlot(framebufferTarget).GetBoundObject();
+        if (!framebufferObject) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidOperation,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller,
+                                             "Framebuffer target is bound to no framebuffer object."));
+        }
+        return framebufferObject;
+    }
+
+    void InvalidateNamedFramebufferData_State(GLuint framebuffer, GLsizei numAttachments, const GLenum* attachments) {
+        auto framebufferObject =
+            GetFramebufferObjectForNamedClear(framebuffer, "InvalidateNamedFramebufferData_State");
+        if (!framebufferObject) return;
+        ValidateInvalidateAttachments_State(framebufferObject, numAttachments, attachments,
+                                            "InvalidateNamedFramebufferData_State");
+    }
+
+    void InvalidateNamedFramebufferSubData_State(GLuint framebuffer, GLsizei numAttachments,
+                                                 const GLenum* attachments, GLint x, GLint y, GLsizei width,
+                                                 GLsizei height) {
+        (void)x;
+        (void)y;
+        auto framebufferObject =
+            GetFramebufferObjectForNamedClear(framebuffer, "InvalidateNamedFramebufferSubData_State");
+        if (!framebufferObject) return;
+        if (!ValidateInvalidateAttachments_State(framebufferObject, numAttachments, attachments,
+                                                 "InvalidateNamedFramebufferSubData_State")) {
+            return;
+        }
+        ValidateInvalidateSubRegion_State(width, height, "InvalidateNamedFramebufferSubData_State");
+    }
+
+    void InvalidateFramebuffer_State(GLenum target, GLsizei numAttachments, const GLenum* attachments) {
+        auto framebufferObject = GetFramebufferObjectForInvalidate_State(target, "InvalidateFramebuffer_State");
+        if (!framebufferObject) return;
+        ValidateInvalidateAttachments_State(framebufferObject, numAttachments, attachments,
+                                            "InvalidateFramebuffer_State");
+    }
+
+    void InvalidateSubFramebuffer_State(GLenum target, GLsizei numAttachments, const GLenum* attachments, GLint x,
+                                        GLint y, GLsizei width, GLsizei height) {
+        (void)x;
+        (void)y;
+        auto framebufferObject = GetFramebufferObjectForInvalidate_State(target, "InvalidateSubFramebuffer_State");
+        if (!framebufferObject) return;
+        if (!ValidateInvalidateAttachments_State(framebufferObject, numAttachments, attachments,
+                                                 "InvalidateSubFramebuffer_State")) {
+            return;
+        }
+        ValidateInvalidateSubRegion_State(width, height, "InvalidateSubFramebuffer_State");
+    }
+
     void DeleteRenderbuffers_State(GLsizei n, const GLuint* renderbuffers) {
         if (n < 0) {
             MG_State::pGLContext->RecordError(
@@ -2351,6 +2483,24 @@ namespace MobileGL::MG_Impl::GLImpl {
     void ClearBufferiv(GLenum buffer, GLint drawbuffer, const GLint* value) {
         if (!ValidateClearBufferiv_State(buffer, drawbuffer)) return;
         ClearBufferiv_Backend(buffer, drawbuffer, value);
+    }
+
+    void InvalidateNamedFramebufferData(GLuint framebuffer, GLsizei numAttachments, const GLenum* attachments) {
+        InvalidateNamedFramebufferData_State(framebuffer, numAttachments, attachments);
+    }
+
+    void InvalidateNamedFramebufferSubData(GLuint framebuffer, GLsizei numAttachments, const GLenum* attachments,
+                                           GLint x, GLint y, GLsizei width, GLsizei height) {
+        InvalidateNamedFramebufferSubData_State(framebuffer, numAttachments, attachments, x, y, width, height);
+    }
+
+    void InvalidateFramebuffer(GLenum target, GLsizei numAttachments, const GLenum* attachments) {
+        InvalidateFramebuffer_State(target, numAttachments, attachments);
+    }
+
+    void InvalidateSubFramebuffer(GLenum target, GLsizei numAttachments, const GLenum* attachments, GLint x, GLint y,
+                                  GLsizei width, GLsizei height) {
+        InvalidateSubFramebuffer_State(target, numAttachments, attachments, x, y, width, height);
     }
 
     void ClearNamedFramebufferiv(GLuint framebuffer, GLenum buffer, GLint drawbuffer, const GLint* value) {

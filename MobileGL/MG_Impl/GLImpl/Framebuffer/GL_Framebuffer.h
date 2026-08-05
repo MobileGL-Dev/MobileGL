@@ -58,6 +58,12 @@ namespace MobileGL::MG_Impl::GLImpl {
     void NamedFramebufferReadBuffer(GLuint framebuffer, GLenum src);
     void ClearNamedFramebufferfv(GLuint framebuffer, GLenum buffer, GLint drawbuffer, const GLfloat* value);
     void ClearNamedFramebufferfi(GLuint framebuffer, GLenum buffer, GLint drawbuffer, GLfloat depth, GLint stencil);
+    void InvalidateNamedFramebufferData(GLuint framebuffer, GLsizei numAttachments, const GLenum* attachments);
+    void InvalidateNamedFramebufferSubData(GLuint framebuffer, GLsizei numAttachments, const GLenum* attachments,
+                                           GLint x, GLint y, GLsizei width, GLsizei height);
+    void InvalidateFramebuffer(GLenum target, GLsizei numAttachments, const GLenum* attachments);
+    void InvalidateSubFramebuffer(GLenum target, GLsizei numAttachments, const GLenum* attachments, GLint x, GLint y,
+                                  GLsizei width, GLsizei height);
     void ClearNamedFramebufferiv(GLuint framebuffer, GLenum buffer, GLint drawbuffer, const GLint* value);
     void ClearNamedFramebufferuiv(GLuint framebuffer, GLenum buffer, GLint drawbuffer, const GLuint* value);
     GLenum CheckNamedFramebufferStatus(GLuint framebuffer, GLenum target);
