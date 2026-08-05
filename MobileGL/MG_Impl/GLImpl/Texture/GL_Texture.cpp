@@ -211,6 +211,14 @@ namespace MobileGL::MG_Impl::GLImpl {
             }
         }
 
+        // TextureInternalFormat has no compressed enumerator and CompressedTexImage* rejects every
+        // compressed format up front, so no texture image MobileGL holds can be compressed. Written
+        // as a predicate rather than a literal false so both level-parameter getters stay in step
+        // once compressed formats do land.
+        Bool IsCompressedTextureFormat(TextureInternalFormat) {
+            return false;
+        }
+
         GLint GetTextureLevelComponentParameter(TextureInternalFormat textureInternalFormat, GLenum pname) {
             const ComponentSizes componentSizes = MG_Util::GetComponentSizesForInternalFormat(textureInternalFormat);
             switch (pname) {
@@ -1444,6 +1452,13 @@ namespace MobileGL::MG_Impl::GLImpl {
         // ======================= Processing ================================
         auto& textureObject = GetTextureObjectByTargetForParameter(textureUploadTarget, textureTarget);
         if (!textureObject) return;
+
+        // The per-object setters run this before writing, and glTexParameterfv/glTextureParameterfv
+        // funnel everything that is not a vector pname down here - so without it the float forms of
+        // the setter accepted sampler state on a multisample texture, a mipmapping filter on a
+        // rectangle texture and a negative base level, all of which the integer forms rejected.
+        const GLint validationParam = pname == GL_TEXTURE_MAX_ANISOTROPY_EXT ? 1 : static_cast<GLint>(param);
+        if (!ValidateTextureParameterForTarget(textureObject, pname, validationParam, __func__)) return;
 
         switch (pname) {
         case GL_TEXTURE_MAG_FILTER:
@@ -2756,10 +2771,21 @@ namespace MobileGL::MG_Impl::GLImpl {
             break;
         case GL_TEXTURE_COMPRESSED:
             if (params) {
-                *params = GL_FALSE;
+                *params = IsCompressedTextureFormat(textureObject->GetFormat()) ? GL_TRUE : GL_FALSE;
             }
             break;
         case GL_TEXTURE_COMPRESSED_IMAGE_SIZE:
+            // GL 4.6 core 8.11: there is no compressed size to report for an image whose internal
+            // format is uncompressed, nor for a proxy target, and the query is INVALID_OPERATION
+            // rather than a zero.
+            if (isProxy || !IsCompressedTextureFormat(textureObject->GetFormat())) {
+                MG_State::pGLContext->RecordError(
+                    ErrorCode::InvalidOperation,
+                    MakeUnique<GenericErrorInfo>(
+                        "MG_Impl/GLImpl", "GetTexLevelParameteriv_State",
+                        "GL_TEXTURE_COMPRESSED_IMAGE_SIZE needs a compressed, non-proxy texture image."));
+                return;
+            }
             if (params) {
                 *params = 0;
             }
@@ -2868,10 +2894,20 @@ namespace MobileGL::MG_Impl::GLImpl {
             break;
         case GL_TEXTURE_COMPRESSED:
             if (params) {
-                *params = 0.0f;
+                *params = IsCompressedTextureFormat(textureObject->GetFormat()) ? 1.0f : 0.0f;
             }
             break;
         case GL_TEXTURE_COMPRESSED_IMAGE_SIZE:
+            // See GetTexLevelParameteriv_State: uncompressed images and proxy targets have no
+            // compressed size to report, so GL 4.6 core 8.11 makes the query an error.
+            if (isProxy || !IsCompressedTextureFormat(textureObject->GetFormat())) {
+                MG_State::pGLContext->RecordError(
+                    ErrorCode::InvalidOperation,
+                    MakeUnique<GenericErrorInfo>(
+                        "MG_Impl/GLImpl", "GetTexLevelParameterfv_State",
+                        "GL_TEXTURE_COMPRESSED_IMAGE_SIZE needs a compressed, non-proxy texture image."));
+                return;
+            }
             if (params) {
                 *params = 0.0f;
             }
