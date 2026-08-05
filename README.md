@@ -14,7 +14,7 @@ MobileGL is a *free* and *open-source* project that implements a desktop **OpenG
 
 > [!NOTE]
 >
-> **Status:** In development. Parts of the codebase are incomplete. Current short-term target: **OpenGL 3.3 (Core Profile)**.
+> **Status:** In development. Parts of the codebase are incomplete. Current short-term target: **OpenGL 4.2 (Core Profile)**.
 
 ## Project positioning
 
