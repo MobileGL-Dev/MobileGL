@@ -67,6 +67,10 @@ namespace MobileGL::MG_Impl::GLImpl {
     void ClearNamedFramebufferiv(GLuint framebuffer, GLenum buffer, GLint drawbuffer, const GLint* value);
     void ClearNamedFramebufferuiv(GLuint framebuffer, GLenum buffer, GLint drawbuffer, const GLuint* value);
     GLenum CheckNamedFramebufferStatus(GLuint framebuffer, GLenum target);
+    void GetFramebufferParameteriv(GLenum target, GLenum pname, GLint* params);
+    void FramebufferParameteri(GLenum target, GLenum pname, GLint param);
+    void GetNamedFramebufferParameteriv(GLuint framebuffer, GLenum pname, GLint* params);
+    void NamedFramebufferParameteri(GLuint framebuffer, GLenum pname, GLint param);
     void GetNamedFramebufferAttachmentParameteriv(GLuint framebuffer, GLenum attachment, GLenum pname, GLint* params);
     void BlitNamedFramebuffer(GLuint readFramebuffer, GLuint drawFramebuffer, GLint srcX0, GLint srcY0, GLint srcX1,
                               GLint srcY1, GLint dstX0, GLint dstY0, GLint dstX1, GLint dstY1, GLbitfield mask,

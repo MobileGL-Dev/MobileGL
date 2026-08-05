@@ -119,6 +119,58 @@ namespace MobileGL::MG_Impl::GLImpl::FramebufferImpl {
         return false;
     }
 
+    Bool ValidateFramebufferParameterPname(GLenum pname, Bool isDefaultFramebuffer, Bool forSetter,
+                                           const char* caller) {
+        Bool isDefaultParameter = false;
+        switch (pname) {
+        case GL_FRAMEBUFFER_DEFAULT_WIDTH:
+        case GL_FRAMEBUFFER_DEFAULT_HEIGHT:
+        case GL_FRAMEBUFFER_DEFAULT_LAYERS:
+        case GL_FRAMEBUFFER_DEFAULT_SAMPLES:
+        case GL_FRAMEBUFFER_DEFAULT_FIXED_SAMPLE_LOCATIONS:
+            isDefaultParameter = true;
+            break;
+        case GL_DOUBLEBUFFER:
+        case GL_IMPLEMENTATION_COLOR_READ_FORMAT:
+        case GL_IMPLEMENTATION_COLOR_READ_TYPE:
+        case GL_SAMPLES:
+        case GL_SAMPLE_BUFFERS:
+        case GL_STEREO:
+            // Queryable only; glFramebufferParameteri sets none of these.
+            if (forSetter) {
+                MG_State::pGLContext->RecordError(
+                    ErrorCode::InvalidEnum,
+                    MakeUnique<GenericErrorInfo>(
+                        "MG_Impl/GLImpl/FramebufferImpl", caller,
+                        std::format("pname {} is not settable on a framebuffer.",
+                                    MG_Util::ConvertGLEnumToString(pname))));
+                return false;
+            }
+            break;
+        default:
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidEnum,
+                MakeUnique<GenericErrorInfo>(
+                    "MG_Impl/GLImpl/FramebufferImpl", caller,
+                    std::format("pname {} is not a framebuffer parameter.",
+                                MG_Util::ConvertGLEnumToString(pname))));
+            return false;
+        }
+
+        // The default framebuffer has no DEFAULT_* state of its own - its shape comes from the
+        // surface - so those names are accepted enums it simply cannot answer or accept.
+        if (isDefaultFramebuffer && isDefaultParameter) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidOperation,
+                MakeUnique<GenericErrorInfo>(
+                    "MG_Impl/GLImpl/FramebufferImpl", caller,
+                    std::format("pname {} does not apply to the default framebuffer.",
+                                MG_Util::ConvertGLEnumToString(pname))));
+            return false;
+        }
+        return true;
+    }
+
     Bool ValidateReadFramebufferForCopy(const char* caller) {
         auto& framebufferObject =
             MG_State::pGLContext->GetFramebufferBindingSlot(FramebufferTarget::Read).GetBoundObject();

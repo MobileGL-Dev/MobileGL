@@ -25,4 +25,10 @@ namespace MobileGL::MG_Impl::GLImpl::FramebufferImpl {
     // not be multisampled. Incompleteness is INVALID_FRAMEBUFFER_OPERATION, the other two are
     // INVALID_OPERATION.
     Bool ValidateReadFramebufferForCopy(const char* caller);
+    // The pname sets of glGet/FramebufferParameteri (GL 4.6 core 9.2.3). Order matters and is part
+    // of the contract: a name outside the table is INVALID_ENUM, and only then is a name that the
+    // DEFAULT framebuffer does not answer INVALID_OPERATION. Testing the framebuffer kind first
+    // would turn GL_FRAMEBUFFER_DEFAULT_WIDTH on framebuffer zero into the wrong error.
+    Bool ValidateFramebufferParameterPname(GLenum pname, Bool isDefaultFramebuffer, Bool forSetter,
+                                           const char* caller);
 } // namespace MobileGL::MG_Impl::GLImpl::FramebufferImpl

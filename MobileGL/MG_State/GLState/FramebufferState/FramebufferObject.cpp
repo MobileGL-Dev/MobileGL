@@ -185,6 +185,20 @@ namespace MobileGL::MG_State::GLState {
         return m_externalIndex;
     }
 
+#define MOBILEGL_DEFINE_FRAMEBUFFER_DEFAULT_SETTER(name, member, type)                                                \
+    void FramebufferObject::Set##name(type value) {                                                                    \
+        if (member == value) return;                                                                                    \
+        member = value;                                                                                                 \
+        ++m_objectVersion;                                                                                              \
+    }
+
+    MOBILEGL_DEFINE_FRAMEBUFFER_DEFAULT_SETTER(DefaultWidth, m_defaultWidth, Int)
+    MOBILEGL_DEFINE_FRAMEBUFFER_DEFAULT_SETTER(DefaultHeight, m_defaultHeight, Int)
+    MOBILEGL_DEFINE_FRAMEBUFFER_DEFAULT_SETTER(DefaultLayers, m_defaultLayers, Int)
+    MOBILEGL_DEFINE_FRAMEBUFFER_DEFAULT_SETTER(DefaultSamples, m_defaultSamples, Int)
+    MOBILEGL_DEFINE_FRAMEBUFFER_DEFAULT_SETTER(DefaultFixedSampleLocations, m_defaultFixedSampleLocations, Bool)
+#undef MOBILEGL_DEFINE_FRAMEBUFFER_DEFAULT_SETTER
+
     void FramebufferObject::BumpAttachmentVersion(FramebufferAttachmentType type) {
         ++m_attachmentVersions[static_cast<SizeT>(type)];
         ++m_objectVersion;

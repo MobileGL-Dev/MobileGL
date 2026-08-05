@@ -129,6 +129,19 @@ namespace MobileGL {
             void SetReadBuffer(FramebufferAttachmentType buf);
             FramebufferAttachmentType GetReadBuffer() const { return m_readBuffer; }
 
+            // GL_ARB_framebuffer_no_attachments state (GL 4.6 core table 23.24). The shape a
+            // framebuffer with no attachments would rasterize at; all zero / FALSE until set.
+            Int GetDefaultWidth() const { return m_defaultWidth; }
+            Int GetDefaultHeight() const { return m_defaultHeight; }
+            Int GetDefaultLayers() const { return m_defaultLayers; }
+            Int GetDefaultSamples() const { return m_defaultSamples; }
+            Bool GetDefaultFixedSampleLocations() const { return m_defaultFixedSampleLocations; }
+            void SetDefaultWidth(Int value);
+            void SetDefaultHeight(Int value);
+            void SetDefaultLayers(Int value);
+            void SetDefaultSamples(Int value);
+            void SetDefaultFixedSampleLocations(Bool value);
+
             FramebufferAttachmentVersionArray GetAllFramebufferAttachmentVersions() const {
                 return m_attachmentVersions;
             }
@@ -147,6 +160,12 @@ namespace MobileGL {
 
             FramebufferAttachmentArray m_drawBuffers; // Probably no versioning needed for this, just check equality
             FramebufferAttachmentType m_readBuffer = FramebufferAttachmentType::None;
+
+            Int m_defaultWidth = 0;
+            Int m_defaultHeight = 0;
+            Int m_defaultLayers = 0;
+            Int m_defaultSamples = 0;
+            Bool m_defaultFixedSampleLocations = false;
 
             // This version will bump when draw/read buffer changes (by `glDrawBuffer(s)`/`glReadBuffer`)
             Uint16 m_objectVersion = 0;

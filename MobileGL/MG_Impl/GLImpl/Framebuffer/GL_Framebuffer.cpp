@@ -8,6 +8,7 @@
 
 #include "GL_Framebuffer.h"
 #include "Validators.h"
+#include <MG_Util/Texture/TextureFormatProcessor.h>
 #include "Config.h"
 #include <MG_Backend/BackendObjects.h>
 #include <MG_Util/Metrics/TextureMetrics.h>
@@ -2131,6 +2132,124 @@ namespace MobileGL::MG_Impl::GLImpl {
         return GL_FRAMEBUFFER_COMPLETE;
     }
 
+    // GL_ARB_framebuffer_no_attachments plus the queryable framebuffer state of GL 4.6 core 9.2.3.
+    // The DEFAULT_* half is real state on the framebuffer object; the rest is derived from the
+    // attachments, and matches what glGetIntegerv answers for the bound framebuffer.
+    void GetFramebufferParameteriv_Object(const SharedPtr<MG_State::GLState::FramebufferObject>& framebufferObject,
+                                          GLenum pname, GLint* params, const char* caller) {
+        if (params == nullptr) return;
+        if (!FramebufferImpl::ValidateFramebufferParameterPname(pname, framebufferObject->IsDefaultFramebuffer(),
+                                                                /*forSetter=*/false, caller)) {
+            return;
+        }
+
+        const auto resolveSampleCount = [&]() {
+            GLint maxSamples = 0;
+            for (const auto& attachment : framebufferObject->GetAllAttachmentObjects()) {
+                if (attachment.IsRenderbuffer() && attachment.GetRenderbuffer()) {
+                    maxSamples = std::max(maxSamples, static_cast<GLint>(attachment.GetRenderbuffer()->GetSamples()));
+                } else if (attachment.IsTexture() && attachment.GetTexture()) {
+                    maxSamples = std::max(maxSamples, static_cast<GLint>(attachment.GetTexture()->GetSamples()));
+                }
+            }
+            return maxSamples;
+        };
+
+        switch (pname) {
+        case GL_FRAMEBUFFER_DEFAULT_WIDTH:
+            *params = framebufferObject->GetDefaultWidth();
+            break;
+        case GL_FRAMEBUFFER_DEFAULT_HEIGHT:
+            *params = framebufferObject->GetDefaultHeight();
+            break;
+        case GL_FRAMEBUFFER_DEFAULT_LAYERS:
+            *params = framebufferObject->GetDefaultLayers();
+            break;
+        case GL_FRAMEBUFFER_DEFAULT_SAMPLES:
+            *params = framebufferObject->GetDefaultSamples();
+            break;
+        case GL_FRAMEBUFFER_DEFAULT_FIXED_SAMPLE_LOCATIONS:
+            *params = framebufferObject->GetDefaultFixedSampleLocations() ? GL_TRUE : GL_FALSE;
+            break;
+        case GL_SAMPLES:
+            *params = resolveSampleCount();
+            break;
+        case GL_SAMPLE_BUFFERS:
+            *params = resolveSampleCount() > 0 ? 1 : 0;
+            break;
+        case GL_IMPLEMENTATION_COLOR_READ_FORMAT:
+        case GL_IMPLEMENTATION_COLOR_READ_TYPE: {
+            const auto readBuffer = framebufferObject->GetReadBuffer();
+            TextureInternalFormat internalFormat = TextureInternalFormat::Unknown;
+            if (readBuffer != FramebufferAttachmentType::None) {
+                const auto& attachment = framebufferObject->GetAttachment(readBuffer);
+                if (attachment.IsTexture() && attachment.GetTexture()) {
+                    internalFormat = attachment.GetTexture()->GetFormat();
+                } else if (attachment.IsRenderbuffer() && attachment.GetRenderbuffer()) {
+                    internalFormat = attachment.GetRenderbuffer()->GetInternalFormat();
+                }
+            }
+            if (internalFormat == TextureInternalFormat::Unknown) {
+                *params = 0;
+                break;
+            }
+            const GLenum glInternalFormat = MG_Util::ConvertTextureInternalFormatToGLEnum(internalFormat);
+            GLenum normalizedInternalFormat = glInternalFormat;
+            GLenum format = GL_RGBA;
+            GLenum type = GL_UNSIGNED_BYTE;
+            MG_Util::TextureFormatProcessor::NormalizePixelFormat(glInternalFormat, PixelFormatNormalizeOptionBit::None,
+                                                                  &normalizedInternalFormat, &format, &type);
+            *params = static_cast<GLint>(pname == GL_IMPLEMENTATION_COLOR_READ_FORMAT ? format : type);
+            break;
+        }
+        case GL_DOUBLEBUFFER:
+            // Only the window-system surface is ever double buffered; a framebuffer object never is.
+            *params = framebufferObject->IsDefaultFramebuffer() ? GL_TRUE : GL_FALSE;
+            break;
+        case GL_STEREO:
+            // Stereo surfaces are not exposed, matching what glGetIntegerv reports.
+            *params = GL_FALSE;
+            break;
+        default:
+            break;
+        }
+    }
+
+    void FramebufferParameteri_Object(const SharedPtr<MG_State::GLState::FramebufferObject>& framebufferObject,
+                                      GLenum pname, GLint param, const char* caller) {
+        if (!FramebufferImpl::ValidateFramebufferParameterPname(pname, framebufferObject->IsDefaultFramebuffer(),
+                                                                /*forSetter=*/true, caller)) {
+            return;
+        }
+        if (pname != GL_FRAMEBUFFER_DEFAULT_FIXED_SAMPLE_LOCATIONS && param < 0) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidValue,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller,
+                                             "Framebuffer default parameters must be non-negative."));
+            return;
+        }
+
+        switch (pname) {
+        case GL_FRAMEBUFFER_DEFAULT_WIDTH:
+            framebufferObject->SetDefaultWidth(param);
+            break;
+        case GL_FRAMEBUFFER_DEFAULT_HEIGHT:
+            framebufferObject->SetDefaultHeight(param);
+            break;
+        case GL_FRAMEBUFFER_DEFAULT_LAYERS:
+            framebufferObject->SetDefaultLayers(param);
+            break;
+        case GL_FRAMEBUFFER_DEFAULT_SAMPLES:
+            framebufferObject->SetDefaultSamples(param);
+            break;
+        case GL_FRAMEBUFFER_DEFAULT_FIXED_SAMPLE_LOCATIONS:
+            framebufferObject->SetDefaultFixedSampleLocations(param != GL_FALSE);
+            break;
+        default:
+            break;
+        }
+    }
+
     void GetFramebufferAttachmentParameteriv_Object(
         const SharedPtr<MG_State::GLState::FramebufferObject>& framebufferObject, GLenum attachment, GLenum pname,
         GLint* params, const char* caller) {
@@ -2248,6 +2367,54 @@ namespace MobileGL::MG_Impl::GLImpl {
         if (!framebufferObject) return;
         GetFramebufferAttachmentParameteriv_Object(framebufferObject, attachment, pname, params,
                                                   "GetNamedFramebufferAttachmentParameteriv_State");
+    }
+
+    // The by-target forms resolve the binding; the by-name forms take zero as the default
+    // framebuffer, exactly as the other DSA framebuffer entry points do (GL 4.6 core 9.2.3).
+    void GetFramebufferParameteriv_State(GLenum target, GLenum pname, GLint* params) {
+        if (target == GL_FRAMEBUFFER) target = GL_DRAW_FRAMEBUFFER;
+        const auto framebufferTarget = MG_Util::ConvertGLEnumToFramebufferTarget(target);
+        if (!FramebufferImpl::ValidateFramebufferTarget(framebufferTarget)) return;
+        auto& framebufferObject = MG_State::pGLContext->GetFramebufferBindingSlot(framebufferTarget).GetBoundObject();
+        if (!framebufferObject) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidOperation,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", "GetFramebufferParameteriv_State",
+                                             "Framebuffer target is bound to no framebuffer object."));
+            return;
+        }
+        GetFramebufferParameteriv_Object(framebufferObject, pname, params, "GetFramebufferParameteriv_State");
+    }
+
+    void FramebufferParameteri_State(GLenum target, GLenum pname, GLint param) {
+        if (target == GL_FRAMEBUFFER) target = GL_DRAW_FRAMEBUFFER;
+        const auto framebufferTarget = MG_Util::ConvertGLEnumToFramebufferTarget(target);
+        if (!FramebufferImpl::ValidateFramebufferTarget(framebufferTarget)) return;
+        auto& framebufferObject = MG_State::pGLContext->GetFramebufferBindingSlot(framebufferTarget).GetBoundObject();
+        if (!framebufferObject) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidOperation,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", "FramebufferParameteri_State",
+                                             "Framebuffer target is bound to no framebuffer object."));
+            return;
+        }
+        FramebufferParameteri_Object(framebufferObject, pname, param, "FramebufferParameteri_State");
+    }
+
+    void GetNamedFramebufferParameteriv_State(GLuint framebuffer, GLenum pname, GLint* params) {
+        auto framebufferObject = framebuffer == 0
+            ? FramebufferImpl::pDefaultFramebufferInfo->defaultFBO
+            : GetNamedFramebufferObject_State(framebuffer, "GetNamedFramebufferParameteriv_State");
+        if (!framebufferObject) return;
+        GetFramebufferParameteriv_Object(framebufferObject, pname, params, "GetNamedFramebufferParameteriv_State");
+    }
+
+    void NamedFramebufferParameteri_State(GLuint framebuffer, GLenum pname, GLint param) {
+        auto framebufferObject = framebuffer == 0
+            ? FramebufferImpl::pDefaultFramebufferInfo->defaultFBO
+            : GetNamedFramebufferObject_State(framebuffer, "NamedFramebufferParameteri_State");
+        if (!framebufferObject) return;
+        FramebufferParameteri_Object(framebufferObject, pname, param, "NamedFramebufferParameteri_State");
     }
 
     void BlitNamedFramebuffer_State(GLuint readFramebuffer, GLuint drawFramebuffer, GLint srcX0, GLint srcY0,
@@ -2894,6 +3061,22 @@ namespace MobileGL::MG_Impl::GLImpl {
 
     GLenum CheckNamedFramebufferStatus(GLuint framebuffer, GLenum target) {
         return CheckNamedFramebufferStatus_State(framebuffer, target);
+    }
+
+    void GetFramebufferParameteriv(GLenum target, GLenum pname, GLint* params) {
+        GetFramebufferParameteriv_State(target, pname, params);
+    }
+
+    void FramebufferParameteri(GLenum target, GLenum pname, GLint param) {
+        FramebufferParameteri_State(target, pname, param);
+    }
+
+    void GetNamedFramebufferParameteriv(GLuint framebuffer, GLenum pname, GLint* params) {
+        GetNamedFramebufferParameteriv_State(framebuffer, pname, params);
+    }
+
+    void NamedFramebufferParameteri(GLuint framebuffer, GLenum pname, GLint param) {
+        NamedFramebufferParameteri_State(framebuffer, pname, param);
     }
 
     void GetNamedFramebufferAttachmentParameteriv(GLuint framebuffer, GLenum attachment, GLenum pname, GLint* params) {
