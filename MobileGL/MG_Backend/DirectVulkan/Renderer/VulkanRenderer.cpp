@@ -4209,6 +4209,7 @@ void main() {
             .subpass = 0,
             .topology = vkTopology,
             .primitiveRestartEnable = primitiveRestartEnabled,
+            .patchControlPoints = static_cast<Uint32>(MG_State::pGLContext->GetPatchVertices()),
             .polygonMode = effectivePolygonMode,
             .cullMode = cullFaceEnabled
                 ? MG_Util::ConvertCullFaceModeToVkEnum(MG_State::pGLContext->GetCullFaceMode(), invertClockwise)
@@ -9794,6 +9795,7 @@ void main() {
                                                 ? VK_FALSE
                                                 : supportedDeviceFeatures.robustBufferAccess;
         deviceFeatures.geometryShader = supportedDeviceFeatures.geometryShader;
+        deviceFeatures.tessellationShader = supportedDeviceFeatures.tessellationShader;
         deviceFeatures.independentBlend = supportedDeviceFeatures.independentBlend;
         m_independentBlendFeatureEnabled = deviceFeatures.independentBlend == VK_TRUE;
         deviceFeatures.fillModeNonSolid = supportedDeviceFeatures.fillModeNonSolid;

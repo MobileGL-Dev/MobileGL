@@ -38,6 +38,10 @@ namespace MobileGL {
                 return VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST_WITH_ADJACENCY;
             case GL_TRIANGLE_STRIP_ADJACENCY:
                 return VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP_WITH_ADJACENCY;
+            case GL_PATCHES:
+                // The tessellator decides what a patch becomes; its vertex count is pipeline
+                // state (patchControlPoints), not part of the topology.
+                return VK_PRIMITIVE_TOPOLOGY_PATCH_LIST;
             default:
                 MGLOG_W("Unrecognized primitive topology");
                 return VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;

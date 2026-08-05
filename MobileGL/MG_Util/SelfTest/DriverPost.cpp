@@ -1431,6 +1431,18 @@ namespace MobileGL::MG_Util::SelfTest {
                          "hard-fails at draw");
         }
 
+        // Core 1.0 features the backend turns GL stages into pipeline stages with.
+        VkPhysicalDeviceFeatures coreFeatures{};
+        vkGetPhysicalDeviceFeatures(physicalDevice, &coreFeatures);
+        if (coreFeatures.tessellationShader == VK_TRUE) {
+            builder.Pass("tessellationShader",
+                         "supported (GL_PATCHES draws run the tessellation control/evaluation stages)");
+        } else {
+            builder.Warn("tessellationShader",
+                         "unsupported; a program with a tessellation control/evaluation shader cannot build a "
+                         "pipeline, so GL_PATCHES draws render nothing");
+        }
+
         Bool vertexAttributeInstanceRateDivisor = false;
         if (vkGetPhysicalDeviceFeatures2Fn != nullptr &&
             HasVkExtension(deviceExtensions, VK_EXT_VERTEX_ATTRIBUTE_DIVISOR_EXTENSION_NAME)) {

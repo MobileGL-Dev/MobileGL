@@ -205,6 +205,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         XXHASH_VERIFY(XXH64_update(m_hashState, &payload.topology, sizeof(payload.topology)));
         XXHASH_VERIFY(
             XXH64_update(m_hashState, &payload.primitiveRestartEnable, sizeof(payload.primitiveRestartEnable)));
+        XXHASH_VERIFY(XXH64_update(m_hashState, &payload.patchControlPoints, sizeof(payload.patchControlPoints)));
         XXHASH_VERIFY(XXH64_update(m_hashState, &payload.polygonMode, sizeof(payload.polygonMode)));
         XXHASH_VERIFY(XXH64_update(m_hashState, &payload.cullMode, sizeof(payload.cullMode)));
         XXHASH_VERIFY(XXH64_update(m_hashState, &payload.frontFace, sizeof(payload.frontFace)));
@@ -380,6 +381,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         ia.topology = payload.topology;
         ia.primitiveRestartEnable = payload.primitiveRestartEnable ? VK_TRUE : VK_FALSE;
 
+        // Only a patch topology has a tessellation stage to configure; leaving the pointer null
+        // otherwise is what the spec expects.
+        VkPipelineTessellationStateCreateInfo tessellation{VK_STRUCTURE_TYPE_PIPELINE_TESSELLATION_STATE_CREATE_INFO};
+        tessellation.patchControlPoints = payload.patchControlPoints;
+
         VkPipelineViewportStateCreateInfo vpci{VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO};
         vpci.viewportCount = 1;
         vpci.scissorCount = 1;
@@ -444,6 +450,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         gpi.pStages = payload.stages->data();
         gpi.pVertexInputState = payload.vertexInputState;
         gpi.pInputAssemblyState = &ia;
+        gpi.pTessellationState =
+            payload.topology == VK_PRIMITIVE_TOPOLOGY_PATCH_LIST ? &tessellation : nullptr;
         gpi.pViewportState = &vpci;
         gpi.pRasterizationState = &raster;
         gpi.pMultisampleState = &ms;

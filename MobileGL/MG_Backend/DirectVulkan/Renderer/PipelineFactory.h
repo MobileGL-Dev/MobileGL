@@ -30,6 +30,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             Uint32 subpass = 0;
             VkPrimitiveTopology topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
             Bool primitiveRestartEnable = false;
+            // GL_PATCH_VERTICES; only read for a PATCH_LIST topology.
+            Uint32 patchControlPoints = 3;
             VkPolygonMode polygonMode = VK_POLYGON_MODE_FILL;
             VkCullModeFlags cullMode = VK_CULL_MODE_BACK_BIT;
             VkFrontFace frontFace = VK_FRONT_FACE_CLOCKWISE;
