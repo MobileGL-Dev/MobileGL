@@ -1143,6 +1143,7 @@ namespace MobileGL::MG_Impl::GLImpl {
 
         const FramebufferAttachmentType attachmentType = MG_Util::ConvertGLEnumToFramebufferAttachmentType(attachment);
         if (!FramebufferImpl::ValidateFramebufferAttachmentType(attachmentType)) return;
+        if (!FramebufferImpl::ValidateColorAttachmentInRange(attachmentType, functionName)) return;
         if (!TextureImpl::ValidateTextureName(texture, true)) return;
 
         if (texture == 0) {
@@ -1239,6 +1240,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         FramebufferTarget framebufferTarget = MG_Util::ConvertGLEnumToFramebufferTarget(target);
         RenderbufferTarget rbTarget = MG_Util::ConvertGLEnumToRenderbufferTarget(renderbuffertarget);
         if (!FramebufferImpl::ValidateFramebufferAttachmentType(attachmentType)) return;
+        if (!FramebufferImpl::ValidateColorAttachmentInRange(attachmentType, "FramebufferRenderbuffer_State")) return;
         if (!FramebufferImpl::ValidateFramebufferTarget(framebufferTarget)) return;
         if (!FramebufferImpl::ValidateRenderbufferTarget(rbTarget)) return;
         auto& bindingSlot = MG_State::pGLContext->GetFramebufferBindingSlot(framebufferTarget);
@@ -1283,6 +1285,8 @@ namespace MobileGL::MG_Impl::GLImpl {
         FramebufferAttachmentType attachmentType = MG_Util::ConvertGLEnumToFramebufferAttachmentType(attachment);
         RenderbufferTarget rbTarget = MG_Util::ConvertGLEnumToRenderbufferTarget(renderbuffertarget);
         if (!FramebufferImpl::ValidateFramebufferAttachmentType(attachmentType)) return;
+        if (!FramebufferImpl::ValidateColorAttachmentInRange(attachmentType, "NamedFramebufferRenderbuffer_State"))
+            return;
         if (!FramebufferImpl::ValidateRenderbufferTarget(rbTarget)) return;
 
         if (renderbuffer == 0) {

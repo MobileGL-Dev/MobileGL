@@ -121,6 +121,27 @@ namespace MobileGL::MG_Impl::GLImpl {
             return static_cast<int>(size * MG_Util::GetGLTypeSize(type));
         }
 
+        // glBindVertexBuffers / glVertexArrayVertexBuffers take a range of binding points, and a
+        // range that runs past the last one is INVALID_OPERATION rather than the INVALID_VALUE a
+        // single out-of-range index gets (GL 4.6 core 10.3.1).
+        static bool ValidateVertexBindingRange(GLuint first, GLsizei count, const char* funcName) {
+            if (count < 0) {
+                MG_State::pGLContext->RecordError(
+                    ErrorCode::InvalidValue,
+                    MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", funcName, "count must be non-negative."));
+                return false;
+            }
+            if (static_cast<Uint64>(first) + static_cast<Uint64>(count) >
+                VertexArrayImpl::GetMaxVertexAttribBindings()) {
+                MG_State::pGLContext->RecordError(
+                    ErrorCode::InvalidOperation,
+                    MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", funcName,
+                                                 "first + count exceeds GL_MAX_VERTEX_ATTRIB_BINDINGS."));
+                return false;
+            }
+            return true;
+        }
+
         static bool ValidateVertexBindingIndex(GLuint bindingindex, const char* funcName) {
             if (bindingindex >= VertexArrayImpl::GetMaxVertexAttribBindings()) {
                 MG_State::pGLContext->RecordError(
@@ -408,6 +429,7 @@ namespace MobileGL::MG_Impl::GLImpl {
                                         const GLintptr* offsets, const GLsizei* strides) {
         auto vao = GetNamedVertexArrayObject_State(vaobj, "VertexArrayVertexBuffers_State");
         if (!vao) return;
+        if (!ValidateVertexBindingRange(first, count, "VertexArrayVertexBuffers_State")) return;
         for (GLsizei i = 0; i < count; ++i) {
             if (!buffers) {
                 VertexBufferBinding_State(vao, first + i, 0, 0, 16, "VertexArrayVertexBuffers_State");
@@ -1209,6 +1231,7 @@ namespace MobileGL::MG_Impl::GLImpl {
                            const GLsizei* strides) {
         auto vao = GetBoundVertexArrayOrError("BindVertexBuffers");
         if (!vao) return;
+        if (!ValidateVertexBindingRange(first, count, "BindVertexBuffers")) return;
         for (GLsizei i = 0; i < count; ++i) {
             if (!buffers) {
                 VertexBufferBinding_State(vao, first + i, 0, 0, 16, "BindVertexBuffers");

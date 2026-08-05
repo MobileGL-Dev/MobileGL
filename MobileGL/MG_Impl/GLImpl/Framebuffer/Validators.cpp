@@ -7,6 +7,7 @@
 // End of Source File Header
 
 #include "Validators.h"
+#include <MG_Backend/BackendObjects.h>
 #include <MG_State/GLState/Core.h>
 #include <MG_State/GLState/ErrorState/Error.h>
 #include <MG_Util/Converters/GLToStr/GLEnumConverter.h>
@@ -55,6 +56,26 @@ namespace MobileGL::MG_Impl::GLImpl::FramebufferImpl {
                 MakeUnique<GenericErrorInfo>(
                     "MG_Impl/GLImpl/FramebufferImpl", "ValidateFramebufferAttachmentType",
                     std::format("Attachment type {} ({}) is not valid.", attachmentStr, glAttachmentStr)));
+            return false;
+        }
+        return true;
+    }
+
+    Bool ValidateColorAttachmentInRange(FramebufferAttachmentType attachment, const char* caller) {
+        const auto first = static_cast<SizeT>(FramebufferAttachmentType::Color0);
+        const auto index = static_cast<SizeT>(attachment);
+        if (index < first) return true;
+        const auto colorIndex = index - first;
+        const auto limit = static_cast<SizeT>(
+            MG_Backend::pActiveBackendObject ? MG_Backend::pActiveBackendObject->GetDynamicParameters()
+                                                   .MaxColorAttachments
+                                             : static_cast<Int>(MG_State::GLState::FramebufferObject::MAX_DRAW_BUFFERS));
+        if (colorIndex >= limit) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidOperation,
+                MakeUnique<GenericErrorInfo>(
+                    "MG_Impl/GLImpl/FramebufferImpl", caller,
+                    std::format("Colour attachment {} is beyond GL_MAX_COLOR_ATTACHMENTS ({}).", colorIndex, limit)));
             return false;
         }
         return true;
