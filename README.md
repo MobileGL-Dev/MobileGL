@@ -164,11 +164,6 @@ MobileGL supports runtime configuration via environment variables.
 | `MOBILEGL_COHERENT_AS_FLUSH` | Treat persistent `GL_MAP_FLUSH_EXPLICIT_BIT` maps as coherent (app-compat for engines like Flywheel that never flush them). | `0`, `1` | `0` |
 | `VK_ICD_FILENAMES`      | Select the Vulkan ICD used by the Vulkan loader. | Path to an ICD JSON file             | Loader default |
 
-## Notice
-
-* MobileGL is **not** production-ready currently.
-* Some `OpenGL 3.3 (Core Profile)` features are still missing or under development.
-
 ## License
 
 This project is distributed under **GNU LGPL v3.0**. See the `LICENSE` file in the repository for detailed information.

@@ -507,14 +507,15 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     Vector<GLExtension> BuildAdvertisedExtensions(Bool shaderSubgroupSupported, Bool timerQueriesSupported,
                                                   Bool anisotropicFilteringSupported) {
         Vector<GLExtension> extensions = {
-            V_OpenGL30, V_OpenGL31, V_OpenGL32, V_OpenGL33, E_GL_ARB_draw_buffers_blend, E_GL_ARB_compute_shader,
-            E_GL_ARB_shader_storage_buffer_object, E_GL_ARB_shader_image_load_store, E_GL_ARB_program_interface_query,
-            E_GL_ARB_framebuffer_object, E_GL_ARB_multi_draw_indirect, E_GL_ARB_indirect_parameters,
-            E_GL_EXT_framebuffer_object, E_GL_ARB_depth_texture, E_GL_ARB_buffer_storage, E_GL_ARB_texture_storage,
-            E_GL_ARB_texture_storage_multisample, E_GL_ARB_texture_multisample, E_GL_ARB_clear_texture,
-            E_GL_ARB_direct_state_access, E_GL_ARB_shader_draw_parameters, E_GL_ARB_gpu_shader_int64, E_GL_KHR_debug,
-            E_GL_ARB_gpu_shader5, E_GL_ARB_multi_bind, E_GL_ARB_shading_language_420pack,
-            E_GL_ARB_vertex_attrib_binding, E_GL_ARB_shader_image_size, E_GL_ARB_explicit_attrib_location,
+            V_OpenGL30, V_OpenGL31, V_OpenGL32, V_OpenGL33, V_OpenGL40, E_GL_ARB_draw_buffers_blend,
+            E_GL_ARB_compute_shader, E_GL_ARB_shader_storage_buffer_object, E_GL_ARB_shader_image_load_store,
+            E_GL_ARB_program_interface_query, E_GL_ARB_framebuffer_object, E_GL_ARB_multi_draw_indirect,
+            E_GL_ARB_indirect_parameters, E_GL_EXT_framebuffer_object, E_GL_ARB_depth_texture, E_GL_ARB_buffer_storage,
+            E_GL_ARB_texture_storage, E_GL_ARB_texture_storage_multisample, E_GL_ARB_texture_multisample,
+            E_GL_ARB_clear_texture, E_GL_ARB_direct_state_access, E_GL_ARB_shader_draw_parameters,
+            E_GL_ARB_gpu_shader_int64, E_GL_KHR_debug, E_GL_ARB_gpu_shader5, E_GL_ARB_multi_bind,
+            E_GL_ARB_shading_language_420pack, E_GL_ARB_vertex_attrib_binding, E_GL_ARB_shader_image_size,
+            E_GL_ARB_explicit_attrib_location,
             // Advertised with GL_NUM_PROGRAM_BINARY_FORMATS = 0, which the
             // extension explicitly permits. It is also the only thing that
             // exposes glProgramParameteri before GL 4.1.
