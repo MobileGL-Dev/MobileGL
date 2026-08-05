@@ -837,6 +837,10 @@ namespace MobileGL::MG_Util::BackendLoader {
                     std::strcmp(extension, "GL_OES_texture_border_clamp") == 0) {
                     caps.SupportsTextureBorderClamp = true;
                 }
+                if (std::strcmp(extension, "GL_EXT_texture_cube_map_array") == 0 ||
+                    std::strcmp(extension, "GL_OES_texture_cube_map_array") == 0) {
+                    caps.SupportsTextureCubeMapArray = true;
+                }
                 if (std::strcmp(extension, "GL_EXT_base_instance") == 0) {
                     caps.SupportsBaseInstance = true;
                 }
@@ -1021,6 +1025,7 @@ namespace MobileGL::MG_Util::BackendLoader {
         // Core from ES 3.2 on, whatever the extension string says.
         if (caps.GLESVersion.Major > 3 || (caps.GLESVersion.Major == 3 && caps.GLESVersion.Minor >= 2)) {
             caps.SupportsTextureBorderClamp = true;
+            caps.SupportsTextureCubeMapArray = true;
         }
         if (caps.SupportsTextureFilterAnisotropy) {
             GLfloat maxTextureMaxAnisotropy = 1.0f;

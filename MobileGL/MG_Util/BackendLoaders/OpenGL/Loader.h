@@ -1045,6 +1045,8 @@ namespace MobileGL {
             // EXT/OES_texture_border_clamp before that. Without it every border-colour parameter
             // raises INVALID_ENUM on the driver, so the syncs have to be gated on it.
             Bool SupportsTextureBorderClamp = false;
+            // GL_TEXTURE_CUBE_MAP_ARRAY: ES 3.2 core, or EXT/OES_texture_cube_map_array before it.
+            Bool SupportsTextureCubeMapArray = false;
             // GL_MAX_TEXTURE_MAX_ANISOTROPY_EXT of the host driver; only queried when the
             // extension above is present, and left at 1.0 (no anisotropy) otherwise.
             Float MaxTextureMaxAnisotropy = 1.0f;

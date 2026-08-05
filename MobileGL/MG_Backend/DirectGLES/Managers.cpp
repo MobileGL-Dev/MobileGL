@@ -1888,6 +1888,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                 break;
                             case TextureTarget::Texture3D:
                             case TextureTarget::Texture2DArray:
+                            // ES 3.2 has GL_TEXTURE_CUBE_MAP_ARRAY natively and it stores exactly
+                            // like a 2D array whose depth is 6 * the cube count.
+                            case TextureTarget::TextureCubeMapArray:
                                 g_GLESFuncs.glTexImage3D(
                                     glUploadTarget, static_cast<GLint>(level), (GLint)glInternalFormat,
                                     static_cast<GLsizei>(uploadSize.x()), static_cast<GLsizei>(uploadSize.y()),
@@ -1965,6 +1968,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                             break;
                         case TextureTarget::Texture3D:
                         case TextureTarget::Texture2DArray:
+                        case TextureTarget::TextureCubeMapArray:
                             g_GLESFuncs.glTexStorage3D(target, static_cast<GLsizei>(mipmapCount), glInternalFormat,
                                                        static_cast<GLsizei>(storageSize.x()),
                                                        static_cast<GLsizei>(storageSize.y()),
@@ -2017,6 +2021,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                         break;
                                     case TextureTarget::Texture3D:
                                     case TextureTarget::Texture2DArray:
+                                    case TextureTarget::TextureCubeMapArray:
                                         g_GLESFuncs.glTexSubImage3D(
                                             glUploadTarget, static_cast<GLint>(level), 0, 0, 0,
                                             static_cast<GLsizei>(uploadSize.x()),
@@ -2080,7 +2085,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                     break;
                                 }
                                 case TextureTarget::Texture3D:
-                                case TextureTarget::Texture2DArray: {
+                                case TextureTarget::Texture2DArray:
+                                case TextureTarget::TextureCubeMapArray: {
                                     g_GLESFuncs.glTexImage3D(
                                         glUploadTarget, static_cast<GLint>(level), (GLint)glInternalFormat,
                                         static_cast<GLsizei>(uploadSize.x()),
@@ -2180,6 +2186,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                 break;
                             case TextureTarget::Texture3D:
                             case TextureTarget::Texture2DArray:
+                            // ES 3.2 has GL_TEXTURE_CUBE_MAP_ARRAY natively and it stores exactly
+                            // like a 2D array whose depth is 6 * the cube count.
+                            case TextureTarget::TextureCubeMapArray:
                                 g_GLESFuncs.glTexSubImage3D(glUploadTarget, static_cast<GLint>(level), 0, 0, 0,
                                                             static_cast<GLsizei>(uploadSize.x()),
                                                             static_cast<GLsizei>(uploadSize.y()),
@@ -2630,6 +2639,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 } else if (const auto uploadTarget = attachmentObject.GetTextureUploadTarget();
                            uploadTarget == TextureUploadTarget::Texture3D ||
                            uploadTarget == TextureUploadTarget::Texture2DArray ||
+                           uploadTarget == TextureUploadTarget::Texture1DArray ||
+                           uploadTarget == TextureUploadTarget::CubeMapArray ||
                            uploadTarget == TextureUploadTarget::Texture2DMultisampleArray) {
                     // Single slice/layer of a 3D or array texture: ES has no
                     // glFramebufferTexture3D, layers attach via glFramebufferTextureLayer.

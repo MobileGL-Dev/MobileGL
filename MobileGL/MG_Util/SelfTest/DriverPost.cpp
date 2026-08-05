@@ -309,6 +309,16 @@ namespace MobileGL::MG_Util::SelfTest {
                              "sampling outside a GL_CLAMP_TO_BORDER texture reads the driver's default "
                              "border instead of the requested colour");
             }
+            if (caps.SupportsTextureCubeMapArray) {
+                builder.Pass("Texture cube map array",
+                             "supported (GL_TEXTURE_CUBE_MAP_ARRAY textures get real storage and can be "
+                             "attached to a framebuffer)");
+            } else {
+                builder.Warn("Texture cube map array",
+                             "not supported (pre-ES 3.2 without GL_EXT/OES_texture_cube_map_array); a cube "
+                             "map array texture gets no driver storage at all, so sampling one reads nothing "
+                             "and rendering to one does not reach the screen");
+            }
             if (glesFuncs.glPatchParameteri != nullptr) {
                 builder.Pass("Tessellation patch parameters",
                              "glPatchParameteri present (GL_PATCH_VERTICES reaches the driver)");
