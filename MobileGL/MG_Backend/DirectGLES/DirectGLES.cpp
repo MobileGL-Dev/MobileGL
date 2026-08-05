@@ -4431,6 +4431,40 @@ namespace MobileGL::MG_Backend::DirectGLES {
         ForceBindCurrentFBO(FramebufferTarget::Draw);
     }
 
+    void ClearNamedFramebufferiv(const SharedPtr<MG_State::GLState::FramebufferObject>& framebuffer,
+                                 GLenum buffer, GLint drawbuffer, const GLint* value) {
+#if MOBILEGL_LOG_ACTIVE_LEVEL <= MOBILEGL_LOG_LEVEL_DEBUG && MOBILEGL_ENABLE_SCOPE_MARKER
+        DebugImpl::OpenGLScopeMarker marker(__func__);
+#endif
+        TextureImpl::SyncNeccessaryTextures();
+        RenderStateImpl::SyncRenderState();
+
+        SyncAndBindFramebufferObject(framebuffer, FramebufferTarget::Draw, true);
+        g_GLESFuncs.glClearBufferiv(buffer, drawbuffer, value);
+        DebugImpl::ErrorLopper::Loop([file = __FILE__, line = __LINE__](auto err) {
+            MGLOG_D("ES error (%s:%d): %s", file, line, MG_Util::ConvertGLEnumToString(err).c_str());
+        });
+
+        ForceBindCurrentFBO(FramebufferTarget::Draw);
+    }
+
+    void ClearNamedFramebufferuiv(const SharedPtr<MG_State::GLState::FramebufferObject>& framebuffer,
+                                  GLenum buffer, GLint drawbuffer, const GLuint* value) {
+#if MOBILEGL_LOG_ACTIVE_LEVEL <= MOBILEGL_LOG_LEVEL_DEBUG && MOBILEGL_ENABLE_SCOPE_MARKER
+        DebugImpl::OpenGLScopeMarker marker(__func__);
+#endif
+        TextureImpl::SyncNeccessaryTextures();
+        RenderStateImpl::SyncRenderState();
+
+        SyncAndBindFramebufferObject(framebuffer, FramebufferTarget::Draw, true);
+        g_GLESFuncs.glClearBufferuiv(buffer, drawbuffer, value);
+        DebugImpl::ErrorLopper::Loop([file = __FILE__, line = __LINE__](auto err) {
+            MGLOG_D("ES error (%s:%d): %s", file, line, MG_Util::ConvertGLEnumToString(err).c_str());
+        });
+
+        ForceBindCurrentFBO(FramebufferTarget::Draw);
+    }
+
     static SizeT AlignPixelRow(SizeT rowBytes, Int alignment) {
         const SizeT resolvedAlignment = static_cast<SizeT>(std::max(alignment, 1));
         return (rowBytes + resolvedAlignment - 1) & ~(resolvedAlignment - 1);

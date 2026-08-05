@@ -145,6 +145,10 @@ namespace MobileGL {
                                             GLenum buffer, GLint drawbuffer, const GLfloat* value);
             void (*ClearNamedFramebufferfi)(const SharedPtr<MG_State::GLState::FramebufferObject>& framebuffer,
                                             GLenum buffer, GLint drawbuffer, GLfloat depth, GLint stencil);
+            void (*ClearNamedFramebufferiv)(const SharedPtr<MG_State::GLState::FramebufferObject>& framebuffer,
+                                            GLenum buffer, GLint drawbuffer, const GLint* value);
+            void (*ClearNamedFramebufferuiv)(const SharedPtr<MG_State::GLState::FramebufferObject>& framebuffer,
+                                             GLenum buffer, GLint drawbuffer, const GLuint* value);
             void (*BlitFramebuffer)(GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1, GLint dstX0, GLint dstY0,
                                     GLint dstX1, GLint dstY1, GLbitfield mask, GLenum filter);
             void (*BlitNamedFramebuffer)(const SharedPtr<MG_State::GLState::FramebufferObject>& readFramebuffer,

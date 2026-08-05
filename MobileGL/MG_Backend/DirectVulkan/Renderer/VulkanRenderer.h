@@ -181,6 +181,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         void ClearBufferiv(GLenum buffer, GLint drawbuffer, const GLint* value);
         void ClearNamedFramebufferfv(const SharedPtr<MG_State::GLState::FramebufferObject>& framebuffer,
                                      GLenum buffer, GLint drawbuffer, const GLfloat* value);
+        void ClearNamedFramebufferiv(const SharedPtr<MG_State::GLState::FramebufferObject>& framebuffer,
+                                     GLenum buffer, GLint drawbuffer, const GLint* value);
+        void ClearNamedFramebufferuiv(const SharedPtr<MG_State::GLState::FramebufferObject>& framebuffer,
+                                      GLenum buffer, GLint drawbuffer, const GLuint* value);
         void ClearNamedFramebufferfi(const SharedPtr<MG_State::GLState::FramebufferObject>& framebuffer,
                                      GLenum buffer, GLint drawbuffer, GLfloat depth, GLint stencil);
         void BlitFramebuffer(GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1,

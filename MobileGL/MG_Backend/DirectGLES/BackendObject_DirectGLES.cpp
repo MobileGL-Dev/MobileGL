@@ -988,6 +988,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
             funcsTable.GL.ClearBufferuiv = ClearBufferuiv;
             funcsTable.GL.ClearBufferiv = ClearBufferiv;
             funcsTable.GL.ClearNamedFramebufferfv = ClearNamedFramebufferfv;
+            funcsTable.GL.ClearNamedFramebufferiv = ClearNamedFramebufferiv;
+            funcsTable.GL.ClearNamedFramebufferuiv = ClearNamedFramebufferuiv;
             funcsTable.GL.ClearNamedFramebufferfi = ClearNamedFramebufferfi;
             funcsTable.GL.BlitFramebuffer = BlitFramebuffer;
             funcsTable.GL.BlitNamedFramebuffer = BlitNamedFramebuffer;

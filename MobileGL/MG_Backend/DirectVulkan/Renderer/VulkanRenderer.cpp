@@ -5771,6 +5771,46 @@ void main() {
         QueueClearBufferPayloadForFramebuffer(*framebuffer, buffer, drawbuffer, payload);
     }
 
+    // The integer clears carry the same payload as their target-based siblings; only the
+    // destination differs, so they queue against the named framebuffer rather than the bound one.
+    void VulkanRenderer::ClearNamedFramebufferiv(
+            const SharedPtr<MG_State::GLState::FramebufferObject>& framebuffer, GLenum buffer, GLint drawbuffer,
+            const GLint* value) {
+        if (!framebuffer || value == nullptr) {
+            return;
+        }
+        ClearAttachmentPayload payload{};
+        switch (buffer) {
+            case GL_COLOR:
+                payload.mask = GL_COLOR_BUFFER_BIT;
+                payload.color = FloatVec4(static_cast<Float>(value[0]), static_cast<Float>(value[1]),
+                                          static_cast<Float>(value[2]), static_cast<Float>(value[3]));
+                break;
+            case GL_STENCIL:
+                payload.mask = GL_STENCIL_BUFFER_BIT;
+                payload.stencil = static_cast<Uint32>(std::max(value[0], 0));
+                break;
+            default:
+                break;
+        }
+        QueueClearBufferPayloadForFramebuffer(*framebuffer, buffer, drawbuffer, payload);
+    }
+
+    void VulkanRenderer::ClearNamedFramebufferuiv(
+            const SharedPtr<MG_State::GLState::FramebufferObject>& framebuffer, GLenum buffer, GLint drawbuffer,
+            const GLuint* value) {
+        if (!framebuffer || value == nullptr) {
+            return;
+        }
+        ClearAttachmentPayload payload{};
+        if (buffer == GL_COLOR) {
+            payload.mask = GL_COLOR_BUFFER_BIT;
+            payload.color = FloatVec4(static_cast<Float>(value[0]), static_cast<Float>(value[1]),
+                                      static_cast<Float>(value[2]), static_cast<Float>(value[3]));
+        }
+        QueueClearBufferPayloadForFramebuffer(*framebuffer, buffer, drawbuffer, payload);
+    }
+
     void VulkanRenderer::ClearNamedFramebufferfi(
             const SharedPtr<MG_State::GLState::FramebufferObject>& framebuffer, GLenum buffer, GLint drawbuffer,
             GLfloat depth, GLint stencil) {

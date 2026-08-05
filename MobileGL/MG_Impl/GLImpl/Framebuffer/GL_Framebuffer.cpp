@@ -467,6 +467,26 @@ namespace MobileGL::MG_Impl::GLImpl {
         clearNamedFramebufferfi(framebuffer, buffer, drawbuffer, depth, stencil);
     }
 
+    void ClearNamedFramebufferiv_Backend(const SharedPtr<MG_State::GLState::FramebufferObject>& framebuffer,
+                                         GLenum buffer, GLint drawbuffer, const GLint* value) {
+        auto clearNamedFramebufferiv = MG_Backend::gBackendFunctionsTable.GL.ClearNamedFramebufferiv;
+        if (!clearNamedFramebufferiv) {
+            MGLOG_E("glClearNamedFramebufferiv skipped: backend does not implement explicit framebuffer clear.");
+            return;
+        }
+        clearNamedFramebufferiv(framebuffer, buffer, drawbuffer, value);
+    }
+
+    void ClearNamedFramebufferuiv_Backend(const SharedPtr<MG_State::GLState::FramebufferObject>& framebuffer,
+                                          GLenum buffer, GLint drawbuffer, const GLuint* value) {
+        auto clearNamedFramebufferuiv = MG_Backend::gBackendFunctionsTable.GL.ClearNamedFramebufferuiv;
+        if (!clearNamedFramebufferuiv) {
+            MGLOG_E("glClearNamedFramebufferuiv skipped: backend does not implement explicit framebuffer clear.");
+            return;
+        }
+        clearNamedFramebufferuiv(framebuffer, buffer, drawbuffer, value);
+    }
+
     void SampleMaski_State(GLuint maskNumber, GLbitfield mask) {
         if (maskNumber != 0) {
             MG_State::pGLContext->RecordError(
@@ -1586,6 +1606,66 @@ namespace MobileGL::MG_Impl::GLImpl {
         ClearNamedFramebufferfi_Backend(framebufferObject, buffer, drawbuffer, depth, stencil);
     }
 
+    // Which buffers the integer clears accept is narrower than the float one, and differs between
+    // them: signed values can clear COLOR or STENCIL, unsigned only COLOR (GL 4.6 core 17.4.3.1).
+    // Only the colour buffer is indexed; a stencil clear names the single stencil buffer, so any
+    // drawbuffer other than 0 is out of range rather than merely unused.
+    Bool ValidateNamedClearIntegerv_State(GLenum buffer, GLint drawbuffer, const void* value, Bool allowStencil,
+                                          const char* caller) {
+        if (!value) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidValue,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller, "value pointer cannot be null."));
+            return false;
+        }
+
+        if (buffer == GL_COLOR) {
+            if (drawbuffer < 0 ||
+                drawbuffer >= static_cast<GLint>(MG_State::GLState::FramebufferObject::MAX_DRAW_BUFFERS)) {
+                MG_State::pGLContext->RecordError(
+                    ErrorCode::InvalidValue,
+                    MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller, "color drawbuffer index is out of range."));
+                return false;
+            }
+            return true;
+        }
+
+        if (buffer == GL_STENCIL && allowStencil) {
+            if (drawbuffer != 0) {
+                MG_State::pGLContext->RecordError(
+                    ErrorCode::InvalidValue,
+                    MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller, "stencil clear requires drawbuffer 0."));
+                return false;
+            }
+            return true;
+        }
+
+        MG_State::pGLContext->RecordError(
+            ErrorCode::InvalidEnum,
+            MakeUnique<GenericErrorInfo>(
+                "MG_Impl/GLImpl", caller,
+                std::format("buffer {} is not accepted for this clear.", MG_Util::ConvertGLEnumToString(buffer))));
+        return false;
+    }
+
+    void ClearNamedFramebufferiv_State(GLuint framebuffer, GLenum buffer, GLint drawbuffer, const GLint* value) {
+        auto framebufferObject = GetFramebufferObjectForNamedClear(framebuffer, "ClearNamedFramebufferiv_State");
+        if (!framebufferObject) return;
+        if (!ValidateNamedClearIntegerv_State(buffer, drawbuffer, value, true, "ClearNamedFramebufferiv_State")) {
+            return;
+        }
+        ClearNamedFramebufferiv_Backend(framebufferObject, buffer, drawbuffer, value);
+    }
+
+    void ClearNamedFramebufferuiv_State(GLuint framebuffer, GLenum buffer, GLint drawbuffer, const GLuint* value) {
+        auto framebufferObject = GetFramebufferObjectForNamedClear(framebuffer, "ClearNamedFramebufferuiv_State");
+        if (!framebufferObject) return;
+        if (!ValidateNamedClearIntegerv_State(buffer, drawbuffer, value, false, "ClearNamedFramebufferuiv_State")) {
+            return;
+        }
+        ClearNamedFramebufferuiv_Backend(framebufferObject, buffer, drawbuffer, value);
+    }
+
     void DeleteRenderbuffers_State(GLsizei n, const GLuint* renderbuffers) {
         if (n < 0) {
             MG_State::pGLContext->RecordError(
@@ -2271,6 +2351,14 @@ namespace MobileGL::MG_Impl::GLImpl {
     void ClearBufferiv(GLenum buffer, GLint drawbuffer, const GLint* value) {
         if (!ValidateClearBufferiv_State(buffer, drawbuffer)) return;
         ClearBufferiv_Backend(buffer, drawbuffer, value);
+    }
+
+    void ClearNamedFramebufferiv(GLuint framebuffer, GLenum buffer, GLint drawbuffer, const GLint* value) {
+        ClearNamedFramebufferiv_State(framebuffer, buffer, drawbuffer, value);
+    }
+
+    void ClearNamedFramebufferuiv(GLuint framebuffer, GLenum buffer, GLint drawbuffer, const GLuint* value) {
+        ClearNamedFramebufferuiv_State(framebuffer, buffer, drawbuffer, value);
     }
 
     void SampleMaski(GLuint maskNumber, GLbitfield mask) {

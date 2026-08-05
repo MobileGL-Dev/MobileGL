@@ -440,6 +440,20 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         pVulkanRenderer->ClearNamedFramebufferfv(framebuffer, buffer, drawbuffer, value);
     }
 
+    void ClearNamedFramebufferiv(const SharedPtr<MG_State::GLState::FramebufferObject>& framebuffer, GLenum buffer,
+                                 GLint drawbuffer, const GLint* value) {
+        MOBILEGL_ASSERT(pVulkanRenderer, "DirectVulkan::ClearNamedFramebufferiv called with null VulkanRenderer");
+        MOBILEGL_ASSERT(MG_State::pGLContext, "DirectVulkan::ClearNamedFramebufferiv called with null GL context");
+        pVulkanRenderer->ClearNamedFramebufferiv(framebuffer, buffer, drawbuffer, value);
+    }
+
+    void ClearNamedFramebufferuiv(const SharedPtr<MG_State::GLState::FramebufferObject>& framebuffer, GLenum buffer,
+                                  GLint drawbuffer, const GLuint* value) {
+        MOBILEGL_ASSERT(pVulkanRenderer, "DirectVulkan::ClearNamedFramebufferuiv called with null VulkanRenderer");
+        MOBILEGL_ASSERT(MG_State::pGLContext, "DirectVulkan::ClearNamedFramebufferuiv called with null GL context");
+        pVulkanRenderer->ClearNamedFramebufferuiv(framebuffer, buffer, drawbuffer, value);
+    }
+
     void ClearNamedFramebufferfi(const SharedPtr<MG_State::GLState::FramebufferObject>& framebuffer, GLenum buffer,
                                  GLint drawbuffer, GLfloat depth, GLint stencil) {
         MOBILEGL_ASSERT(pVulkanRenderer, "DirectVulkan::ClearNamedFramebufferfi called with null VulkanRenderer");

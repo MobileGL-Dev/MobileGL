@@ -597,6 +597,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             funcsTable.GL.ClearBufferiv = ClearBufferiv;
             funcsTable.GL.ClearNamedFramebufferfv = ClearNamedFramebufferfv;
             funcsTable.GL.ClearNamedFramebufferfi = ClearNamedFramebufferfi;
+            funcsTable.GL.ClearNamedFramebufferiv = ClearNamedFramebufferiv;
+            funcsTable.GL.ClearNamedFramebufferuiv = ClearNamedFramebufferuiv;
             funcsTable.GL.BlitFramebuffer = BlitFramebuffer;
             funcsTable.GL.BlitNamedFramebuffer = BlitNamedFramebuffer;
             funcsTable.GL.CopyTexImage2D = CopyTexImage2D;
