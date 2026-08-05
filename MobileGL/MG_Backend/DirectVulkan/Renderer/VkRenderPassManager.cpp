@@ -50,7 +50,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
     }
 
-    static Float ResolveColorClearAlpha(const MG_State::GLState::ITextureObject* texture, Float requestedAlpha) {
+    static Bool ColorFormatLacksAlpha(const MG_State::GLState::ITextureObject* texture) {
+        return texture != nullptr && MG_Util::GetBaseInternalFormatComponentCount(texture->GetFormat()) == 3;
+    }
+
+    [[maybe_unused]] static Float ResolveColorClearAlpha(const MG_State::GLState::ITextureObject* texture, Float requestedAlpha) {
         if (texture != nullptr && MG_Util::GetBaseInternalFormatComponentCount(texture->GetFormat()) == 3) {
             return 1.0f;
         }
@@ -526,7 +530,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         pending.renderbuffer = renderbuffer;
         pending.payload.mask |= clearPayload.mask;
         if ((clearPayload.mask & GL_COLOR_BUFFER_BIT) != 0) {
+            // The whole colour description, not just the float vector: an integer clear keeps its
+            // value in colorInt/colorUint, and dropping the encoding here would leave the pending
+            // clear reading as an all-zero float one.
             pending.payload.color = clearPayload.color;
+            pending.payload.colorEncoding = clearPayload.colorEncoding;
+            pending.payload.colorInt = clearPayload.colorInt;
+            pending.payload.colorUint = clearPayload.colorUint;
         }
         if ((clearPayload.mask & GL_DEPTH_BUFFER_BIT) != 0) {
             pending.payload.depth = clearPayload.depth;
@@ -924,9 +934,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                     if (rbHasClear &&
                         MG_Util::GetBaseInternalFormatComponentCount(renderbuffer->GetInternalFormat()) == 3) {
                         // RGB renderbuffers are backed by an RGBA image; the missing alpha reads as 1.
-                        rbClearPayload.color =
-                            FloatVec4(rbClearPayload.color.x(), rbClearPayload.color.y(),
-                                      rbClearPayload.color.z(), 1.0f);
+                        ForceOpaqueClearAlpha(rbClearPayload);
                     }
 
                     const VkImageLayout trackedRbLayout = rbResource->layout;
@@ -1496,12 +1504,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 }
             }
             if ((clearPayload.mask & GL_COLOR_BUFFER_BIT) != 0) {
-                clearValues[pending.attachmentIndex].color = {
-                    clearPayload.color.x(),
-                    clearPayload.color.y(),
-                    clearPayload.color.z(),
-                    ResolveColorClearAlpha(liveTexture.get(), clearPayload.color.w())
-                };
+                clearValues[pending.attachmentIndex].color =
+                    MakeVkClearColorValue(clearPayload, ColorFormatLacksAlpha(liveTexture.get()));
             }
             if ((clearPayload.mask & GL_DEPTH_BUFFER_BIT) != 0) {
                 clearValues[pending.attachmentIndex].depthStencil.depth = clearPayload.depth;

@@ -17,6 +17,45 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                target <= TextureUploadTarget::CubeMapNegativeZ;
     }
 
+    VkClearColorValue MakeVkClearColorValue(const ClearAttachmentPayload& payload, Bool formatLacksAlpha) {
+        VkClearColorValue clearValue{};
+        switch (payload.colorEncoding) {
+        case ClearColorEncoding::Int:
+            clearValue.int32[0] = payload.colorInt.x();
+            clearValue.int32[1] = payload.colorInt.y();
+            clearValue.int32[2] = payload.colorInt.z();
+            clearValue.int32[3] = formatLacksAlpha ? 1 : payload.colorInt.w();
+            break;
+        case ClearColorEncoding::Uint:
+            clearValue.uint32[0] = payload.colorUint.x();
+            clearValue.uint32[1] = payload.colorUint.y();
+            clearValue.uint32[2] = payload.colorUint.z();
+            clearValue.uint32[3] = formatLacksAlpha ? 1u : payload.colorUint.w();
+            break;
+        case ClearColorEncoding::Float:
+            clearValue.float32[0] = payload.color.x();
+            clearValue.float32[1] = payload.color.y();
+            clearValue.float32[2] = payload.color.z();
+            clearValue.float32[3] = formatLacksAlpha ? 1.0f : payload.color.w();
+            break;
+        }
+        return clearValue;
+    }
+
+    void ForceOpaqueClearAlpha(ClearAttachmentPayload& payload) {
+        switch (payload.colorEncoding) {
+        case ClearColorEncoding::Int:
+            payload.colorInt = IntVec4(payload.colorInt.x(), payload.colorInt.y(), payload.colorInt.z(), 1);
+            break;
+        case ClearColorEncoding::Uint:
+            payload.colorUint = UintVec4(payload.colorUint.x(), payload.colorUint.y(), payload.colorUint.z(), 1u);
+            break;
+        case ClearColorEncoding::Float:
+            payload.color = FloatVec4(payload.color.x(), payload.color.y(), payload.color.z(), 1.0f);
+            break;
+        }
+    }
+
     static Bool PendingClearMatchesTextureIdentity(const PendingClearKey& key, const TextureIdentity& identity) {
         return key.texture == identity.texture && key.textureLifetimeId == identity.lifetimeId;
     }

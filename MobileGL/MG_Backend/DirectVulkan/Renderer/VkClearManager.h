@@ -24,12 +24,31 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         Uint32 stencil{};
     };
 
+    // A colour clear reaches us from one of glClear/ClearBufferfv, ClearBufferiv or
+    // ClearBufferuiv, and Vulkan reads VkClearColorValue's union according to the destination
+    // image's format rather than converting between the members - a float written where an
+    // integer format is expected is reinterpreted bit for bit, not rounded. Remember which entry
+    // point supplied the value so the member written when the clear is materialized matches.
+    enum class ClearColorEncoding : Uint8 { Float, Int, Uint };
+
     struct ClearAttachmentPayload {
         GLbitfield mask = 0;
         FloatVec4 color = FloatVec4(0.0f, 0.0f, 0.0f, 0.0f);
+        ClearColorEncoding colorEncoding = ClearColorEncoding::Float;
+        IntVec4 colorInt = IntVec4(0, 0, 0, 0);
+        UintVec4 colorUint = UintVec4(0u, 0u, 0u, 0u);
         Float depth = 1.0f;
         Uint32 stencil = 0;
     };
+
+    // Builds the clear value for `payload` in the union member its encoding calls for.
+    // `formatLacksAlpha` applies GL's rule that a format without an alpha channel reads as one,
+    // expressed in whichever type matches (GL 4.6 core 15.2.3).
+    VkClearColorValue MakeVkClearColorValue(const ClearAttachmentPayload& payload, Bool formatLacksAlpha);
+
+    // Applies that same rule in place, for the paths that have to bake it into the payload before
+    // the destination is known.
+    void ForceOpaqueClearAlpha(ClearAttachmentPayload& payload);
 
     struct PendingClearKey {
         MG_State::GLState::ITextureObject* texture = nullptr;

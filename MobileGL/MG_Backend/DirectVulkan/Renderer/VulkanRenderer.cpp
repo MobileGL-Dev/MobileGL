@@ -190,11 +190,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
     }
 
-    static Float ResolveColorClearAlpha(const MG_State::GLState::ITextureObject* texture, Float requestedAlpha) {
-        if (texture != nullptr && MG_Util::GetBaseInternalFormatComponentCount(texture->GetFormat()) == 3) {
-            return 1.0f;
-        }
-        return requestedAlpha;
+    // GL 4.6 core 15.2.3: a colour format with no alpha channel reads as if alpha were one.
+    // The substitution has to happen in the clear value's own type, so this reports the condition
+    // and MakeVkClearColorValue applies it to whichever union member the encoding selects.
+    static Bool ColorFormatLacksAlpha(const MG_State::GLState::ITextureObject* texture) {
+        return texture != nullptr && MG_Util::GetBaseInternalFormatComponentCount(texture->GetFormat()) == 3;
     }
 
     static Bool IsQuarterTurnPreTransform(VkSurfaceTransformFlagBitsKHR preTransform) {
@@ -5401,9 +5401,11 @@ void main() {
                         VkClearAttachment clearAttachment{};
                         clearAttachment.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
                         clearAttachment.colorAttachment = drawBufferIndex;
+                        // glClear only ever supplies float values (ClearFramebufferPayload has no
+                        // other form), so the float member is always the right one here.
                         clearAttachment.clearValue.color = {
                             payload.color.x(), payload.color.y(), payload.color.z(),
-                            ResolveColorClearAlpha(colorTexture, payload.color.w())
+                            ColorFormatLacksAlpha(colorTexture) ? 1.0f : payload.color.w()
                         };
                         clearAttachments[clearAttachmentCount++] = clearAttachment;
                     }
@@ -5680,10 +5682,8 @@ void main() {
             }
             clearAttachment.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
             clearAttachment.colorAttachment = static_cast<Uint32>(drawbuffer);
-            clearAttachment.clearValue.color = {
-                clearPayload.color.x(), clearPayload.color.y(), clearPayload.color.z(),
-                ResolveColorClearAlpha(colorTexture, clearPayload.color.w())
-            };
+            clearAttachment.clearValue.color =
+                MakeVkClearColorValue(clearPayload, ColorFormatLacksAlpha(colorTexture));
         } else {
             VkImageAspectFlags aspects = 0;
             if ((clearPayload.mask & GL_DEPTH_BUFFER_BIT) != 0 && MG_State::pGLContext->GetDepthMask() &&
@@ -5783,8 +5783,8 @@ void main() {
         switch (buffer) {
             case GL_COLOR:
                 payload.mask = GL_COLOR_BUFFER_BIT;
-                payload.color = FloatVec4(static_cast<Float>(value[0]), static_cast<Float>(value[1]),
-                                          static_cast<Float>(value[2]), static_cast<Float>(value[3]));
+                payload.colorEncoding = ClearColorEncoding::Int;
+                payload.colorInt = IntVec4(value[0], value[1], value[2], value[3]);
                 break;
             case GL_STENCIL:
                 payload.mask = GL_STENCIL_BUFFER_BIT;
@@ -5805,8 +5805,8 @@ void main() {
         ClearAttachmentPayload payload{};
         if (buffer == GL_COLOR) {
             payload.mask = GL_COLOR_BUFFER_BIT;
-            payload.color = FloatVec4(static_cast<Float>(value[0]), static_cast<Float>(value[1]),
-                                      static_cast<Float>(value[2]), static_cast<Float>(value[3]));
+            payload.colorEncoding = ClearColorEncoding::Uint;
+            payload.colorUint = UintVec4(value[0], value[1], value[2], value[3]);
         }
         QueueClearBufferPayloadForFramebuffer(*framebuffer, buffer, drawbuffer, payload);
     }
@@ -5833,8 +5833,8 @@ void main() {
         switch (buffer) {
             case GL_COLOR:
                 payload.mask = GL_COLOR_BUFFER_BIT;
-                payload.color = FloatVec4(static_cast<Float>(value[0]), static_cast<Float>(value[1]),
-                                          static_cast<Float>(value[2]), static_cast<Float>(value[3]));
+                payload.colorEncoding = ClearColorEncoding::Uint;
+                payload.colorUint = UintVec4(value[0], value[1], value[2], value[3]);
                 break;
             case GL_STENCIL:
                 payload.mask = GL_STENCIL_BUFFER_BIT;
@@ -5854,8 +5854,8 @@ void main() {
         switch (buffer) {
             case GL_COLOR:
                 payload.mask = GL_COLOR_BUFFER_BIT;
-                payload.color = FloatVec4(static_cast<Float>(value[0]), static_cast<Float>(value[1]),
-                                          static_cast<Float>(value[2]), static_cast<Float>(value[3]));
+                payload.colorEncoding = ClearColorEncoding::Int;
+                payload.colorInt = IntVec4(value[0], value[1], value[2], value[3]);
                 break;
             case GL_STENCIL:
                 payload.mask = GL_STENCIL_BUFFER_BIT;
@@ -5917,11 +5917,8 @@ void main() {
             const auto& clearPayload = pendingClear.payload;
             if ((resource->aspect & VK_IMAGE_ASPECT_COLOR_BIT) != 0) {
                 subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-                VkClearColorValue clearValue{};
-                clearValue.float32[0] = clearPayload.color.x();
-                clearValue.float32[1] = clearPayload.color.y();
-                clearValue.float32[2] = clearPayload.color.z();
-                clearValue.float32[3] = ResolveColorClearAlpha(&texture, clearPayload.color.w());
+                const VkClearColorValue clearValue =
+                    MakeVkClearColorValue(clearPayload, ColorFormatLacksAlpha(&texture));
                 vkCmdClearColorImage(commandBuffer, resource->image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                                      &clearValue, 1, &subresourceRange);
             } else {
@@ -6003,14 +6000,10 @@ void main() {
         VkImageLayout steadyLayout;
         if ((resource->aspect & VK_IMAGE_ASPECT_COLOR_BIT) != 0) {
             subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-            VkClearColorValue clearValue{};
-            clearValue.float32[0] = clearPayload.color.x();
-            clearValue.float32[1] = clearPayload.color.y();
-            clearValue.float32[2] = clearPayload.color.z();
             // RGB renderbuffers are backed by an RGBA image; the missing alpha reads as 1.
-            clearValue.float32[3] =
-                MG_Util::GetBaseInternalFormatComponentCount(renderbuffer->GetInternalFormat()) == 3 ?
-                    1.0f : clearPayload.color.w();
+            const VkClearColorValue clearValue = MakeVkClearColorValue(
+                clearPayload,
+                MG_Util::GetBaseInternalFormatComponentCount(renderbuffer->GetInternalFormat()) == 3);
             vkCmdClearColorImage(commandBuffer, resource->image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                                  &clearValue, 1, &subresourceRange);
             steadyLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
@@ -10662,12 +10655,8 @@ void main() {
                 // VkClearAttachment::colorAttachment indexes the subpass pColorAttachments (draw-buffer
                 // slot space, with UNUSED holes), not the compacted attachment descriptions.
                 clearAttachment.colorAttachment = pending.colorAttachmentSlot;
-                clearAttachment.clearValue.color = {
-                        clearPayload.color.x(),
-                        clearPayload.color.y(),
-                        clearPayload.color.z(),
-                        ResolveColorClearAlpha(liveTexture.get(), clearPayload.color.w())
-                };
+                clearAttachment.clearValue.color =
+                        MakeVkClearColorValue(clearPayload, ColorFormatLacksAlpha(liveTexture.get()));
             } else {
                 if ((clearPayload.mask & GL_DEPTH_BUFFER_BIT) != 0) {
                     clearAttachment.aspectMask |= VK_IMAGE_ASPECT_DEPTH_BIT;
