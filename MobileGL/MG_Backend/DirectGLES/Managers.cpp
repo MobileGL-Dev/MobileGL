@@ -2532,6 +2532,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
 #ifdef TRACY_ENABLE
             ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
+            // Identity until a non-identity draw-buffer array forces a relocation. A framebuffer
+            // that is never draw-bound never runs the recompute, so the table has to start out
+            // matching what the attachment loop will physically do.
+            for (Uint i = 0; i < MAX_COLOR_ATTACHMENT_SLOTS; ++i) {
+                m_backendColorSlots[i] = GL_COLOR_ATTACHMENT0 + i;
+            }
             g_GLESFuncs.glGenFramebuffers(1, &m_backendFBOId);
             if (m_backendFBOId == 0) {
                 MGLOG_E("Failed to generate framebuffer object.");
@@ -2605,6 +2611,16 @@ namespace MobileGL::MG_Backend::DirectGLES {
             std::fill(std::begin(m_frontendDrawBuffers), std::end(m_frontendDrawBuffers),
                       FramebufferAttachmentType::Unknown);
             std::fill(std::begin(m_backendDrawBuffers), std::end(m_backendDrawBuffers), GL_NONE);
+            // NOTE: this does NOT empty the backend ES framebuffer - m_backendFBOId keeps every
+            // attachment it had, possibly under a non-identity permutation. Declaring the table
+            // identity here is safe only because every attachment version below is invalidated too,
+            // so the next sync re-attaches all non-empty attachments at their identity points AND
+            // (see SyncToBackend's attachment loop) detaches any colour point whose frontend owner
+            // is empty. Without that detach a stale image would survive under a point the table now
+            // claims for a different, empty attachment.
+            for (Uint i = 0; i < MAX_COLOR_ATTACHMENT_SLOTS; ++i) {
+                m_backendColorSlots[i] = GL_COLOR_ATTACHMENT0 + i;
+            }
             m_frontendReadBuffer = FramebufferAttachmentType::Unknown;
             m_backendReadBuffer = GL_NONE;
             std::fill(m_syncedFrontendAttachmentVersions.begin(), m_syncedFrontendAttachmentVersions.end(),
@@ -2796,6 +2812,95 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
         }
 
+        Bool BackendFramebufferObject::RecomputeBackendColorSlots(
+            const FramebufferObject::FramebufferAttachmentArray& stateDrawBuffers) {
+            // Only the first GL_MAX_COLOR_ATTACHMENTS points exist in the backend. The frontend's own
+            // limit (ValidateColorAttachmentInRange, which reads the clamped
+            // GetDynamicParameters().MaxColorAttachments) is never larger than this raw ES cap, so an
+            // index the frontend accepted is always < slotCount. Indices at or above it can never own
+            // an image and stay on their identity point - never touched, never a GL error.
+            const Uint slotCount =
+                std::min<Uint>(MAX_COLOR_ATTACHMENT_SLOTS,
+                               static_cast<Uint>(std::max<Int>(g_GLESCapabilities.MaxColorAttachments, 1)));
+
+            GLenum newSlots[MAX_COLOR_ATTACHMENT_SLOTS];
+            for (Uint i = 0; i < MAX_COLOR_ATTACHMENT_SLOTS; ++i) {
+                newSlots[i] = GL_COLOR_ATTACHMENT0 + i;
+            }
+            Bool assigned[MAX_COLOR_ATTACHMENT_SLOTS] = {false};
+            Bool slotTaken[MAX_COLOR_ATTACHMENT_SLOTS] = {false};
+
+            // 1. ES pins draw-buffer slot s to GL_COLOR_ATTACHMENTs, so an attachment named by draw
+            //    buffer slot s has no choice: its image must sit at backend point s. This has to
+            //    agree with the compaction the caller just pushed through glDrawBuffers.
+            for (Uint s = 0; s < FramebufferObject::MAX_DRAW_BUFFERS && s < slotCount; ++s) {
+                const auto frontendBuf = stateDrawBuffers[s];
+                if (frontendBuf < FramebufferAttachmentType::Color0 ||
+                    frontendBuf > FramebufferAttachmentType::Color31) {
+                    continue; // GL_NONE, or a default-framebuffer FRONT/BACK token: never relocated.
+                }
+                const Uint a =
+                    static_cast<Uint>(frontendBuf) - static_cast<Uint>(FramebufferAttachmentType::Color0);
+                // Neither guard may ever fire: a duplicate draw buffer is already INVALID_OPERATION
+                // and an out-of-range one is rejected by ValidateColorAttachmentInRange. If one did
+                // fire the table would disagree with the glDrawBuffers the caller already issued,
+                // which is the exact non-injectivity this table exists to remove.
+                MOBILEGL_ASSERT(a < slotCount && !assigned[a],
+                                "Draw buffer %u names colour attachment %u which is out of range or duplicated.", s,
+                                a);
+                if (a >= slotCount || assigned[a]) {
+                    continue;
+                }
+                newSlots[a] = GL_COLOR_ATTACHMENT0 + s;
+                assigned[a] = true;
+                slotTaken[s] = true;
+            }
+
+            // 2. Everything else keeps its identity point when that point survived step 1. This is
+            //    what makes the ordinary drawBuffers[s] == COLOR_ATTACHMENTs case a strict no-op:
+            //    the table stays identity, nothing moves, no attachment is re-issued.
+            for (Uint a = 0; a < slotCount; ++a) {
+                if (assigned[a] || slotTaken[a]) {
+                    continue;
+                }
+                newSlots[a] = GL_COLOR_ATTACHMENT0 + a;
+                assigned[a] = true;
+                slotTaken[a] = true;
+            }
+
+            // 3. What is left are attachments whose identity point step 1 took away. Park them on the
+            //    lowest free point. They are not draw buffers, so nothing is rendered through them;
+            //    they only have to stay addressable for glReadBuffer and blits, and the map has to
+            //    stay injective so reading one of them cannot land on another's image.
+            for (Uint a = 0; a < slotCount; ++a) {
+                if (assigned[a]) {
+                    continue;
+                }
+                for (Uint s = 0; s < slotCount; ++s) {
+                    if (!slotTaken[s]) {
+                        newSlots[a] = GL_COLOR_ATTACHMENT0 + s;
+                        assigned[a] = true;
+                        slotTaken[s] = true;
+                        break;
+                    }
+                }
+            }
+
+            Bool moved = false;
+            for (Uint a = 0; a < MAX_COLOR_ATTACHMENT_SLOTS; ++a) {
+                if (m_backendColorSlots[a] == newSlots[a]) {
+                    continue;
+                }
+                m_backendColorSlots[a] = newSlots[a];
+                moved = true;
+                // This attachment's image now belongs at a different backend point. Its frontend
+                // version has not changed, so the attachment loop would skip it; force it.
+                m_syncedFrontendAttachmentVersions[static_cast<SizeT>(FramebufferAttachmentType::Color0) + a] =
+                    static_cast<Uint16>(~0u);
+            }
+            return moved;
+        }
+
         void BackendFramebufferObject::SyncToBackend(
             const SharedPtr<MG_State::GLState::FramebufferObject>& stateFBOObject, FramebufferTarget asTarget) {
 #ifdef TRACY_ENABLE
@@ -2851,6 +2956,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     nEffectiveBuffers = i + 1;
                 }
                 g_GLESFuncs.glDrawBuffers(nEffectiveBuffers, m_backendDrawBuffers);
+                // The line above pinned backend point s to draw-buffer slot s, so the images have to
+                // be moved under those points. Rebuild the whole colour map and, when anything moved,
+                // also drop the read-buffer memo: SyncReadBufferToBackend keys it on the frontend
+                // enum alone, which does not change when the point under it does.
+                if (RecomputeBackendColorSlots(stateDrawBuffers)) {
+                    m_frontendReadBuffer = FramebufferAttachmentType::Unknown;
+                }
                 MGLOG_D("DBAPPLY beFbo=%u target=%d n=%d db0=0x%x feDb0=%d", m_backendFBOId, (int)asTarget,
                         nEffectiveBuffers, m_backendDrawBuffers[0], (int)stateDrawBuffers[0]);
             }
@@ -2896,6 +3008,22 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
                 // relevant FRONTEND!!! version should be checked and updated
                 if (m_syncedFrontendAttachmentVersions[i] != attachmentVersions[i]) {
+                    // SyncAttachmentObject only ever attaches: for an empty frontend attachment it
+                    // returns true and issues nothing, so the point keeps whatever was there. That is
+                    // what makes m_backendColorSlots a permutation of the PHYSICAL layout rather than
+                    // a claim about one - a point handed to an attachment with no image would
+                    // otherwise still hold the previous owner's image and glReadBuffer would return
+                    // it. Bounded by GL_MAX_COLOR_ATTACHMENTS because GL_COLOR_ATTACHMENTn above the
+                    // driver's limit is INVALID_ENUM, and restricted to colour points because
+                    // FRONT_LEFT/BACK_LEFT and co. are not ES attachment points at all.
+                    const Bool isColorPoint =
+                        frontendType >= FramebufferAttachmentType::Color0 &&
+                        frontendType <= FramebufferAttachmentType::Color31 &&
+                        (static_cast<Int>(frontendType) - static_cast<Int>(FramebufferAttachmentType::Color0)) <
+                            g_GLESCapabilities.MaxColorAttachments;
+                    if (isColorPoint && attachmentObject.IsEmpty() && glBackendAttachment != GL_NONE) {
+                        g_GLESFuncs.glFramebufferRenderbuffer(glFBOTarget, glBackendAttachment, GL_RENDERBUFFER, 0);
+                    }
                     if (SyncAttachmentObject(glFBOTarget, attachmentObject, glBackendAttachment)) {
                         m_syncedFrontendAttachmentVersions[i] = attachmentVersions[i];
                     }
@@ -2957,21 +3085,18 @@ namespace MobileGL::MG_Backend::DirectGLES {
         }
 
         GLenum BackendFramebufferObject::GetBackendAttachmentType(FramebufferAttachmentType frontendAtt) const {
-            GLenum glBackendReadBuffer = GL_NONE;
-            auto it = std::find(m_frontendDrawBuffers, m_frontendDrawBuffers + FramebufferObject::MAX_DRAW_BUFFERS,
-                                frontendAtt);
-            Bool notFound = (it == m_frontendDrawBuffers + FramebufferObject::MAX_DRAW_BUFFERS);
-            if (notFound) {
-                MGLOG_D(
-                    "%s: frontendAtt not found in draw buffer (probably not remapped), just use the same as frontend",
-                    __func__);
-                glBackendReadBuffer = MG_Util::ConvertFramebufferAttachmentTypeToGLEnum(frontendAtt);
-            } else {
-                MGLOG_D("%s: frontendAtt found in draw buffer, keep it consistent as in read buffers", __func__);
-                auto index = std::distance(m_frontendDrawBuffers, it);
-                glBackendReadBuffer = m_backendDrawBuffers[index];
+            // Only colour attachments are ever relocated; depth/stencil, the default framebuffer's
+            // FRONT/BACK names and None map straight through.
+            if (frontendAtt < FramebufferAttachmentType::Color0 || frontendAtt > FramebufferAttachmentType::Color31) {
+                return MG_Util::ConvertFramebufferAttachmentTypeToGLEnum(frontendAtt);
             }
-            return glBackendReadBuffer;
+            // The table is a permutation of the backend colour points, so this is the one point that
+            // owns this attachment. Searching the draw-buffer array instead returned the identity
+            // point for every attachment that was not a draw buffer - which is exactly the point a
+            // relocated draw buffer had just taken over, so COLOR_ATTACHMENT0 read back the image of
+            // whatever attachment was last made the draw buffer.
+            const Uint index = static_cast<Uint>(frontendAtt) - static_cast<Uint>(FramebufferAttachmentType::Color0);
+            return m_backendColorSlots[index];
         }
 
         StateBackendObjectRegistry<MG_State::GLState::FramebufferObject, BackendFramebufferObject>

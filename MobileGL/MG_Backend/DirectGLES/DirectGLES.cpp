@@ -2511,9 +2511,19 @@ namespace MobileGL::MG_Backend::DirectGLES {
     static GLenum QueryReadColorAttachmentInternalFormat() {
         GLint attachmentType = 0;
         GLint attachmentName = 0;
-        g_GLESFuncs.glGetFramebufferAttachmentParameteriv(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+        // Ask the point the backend read buffer actually names, not COLOR_ATTACHMENT0. The colour map
+        // in BackendFramebufferObject is a permutation, so the read attachment's image only sits at
+        // CA0 when that map is identity; querying CA0 unconditionally would size the resolve
+        // renderbuffer from a different attachment's format and either convert wrongly or fail the
+        // blit outright.
+        GLint readBuffer = GL_COLOR_ATTACHMENT0;
+        g_GLESFuncs.glGetIntegerv(GL_READ_BUFFER, &readBuffer);
+        if (readBuffer < GL_COLOR_ATTACHMENT0 || readBuffer > GL_COLOR_ATTACHMENT31) {
+            readBuffer = GL_COLOR_ATTACHMENT0;
+        }
+        g_GLESFuncs.glGetFramebufferAttachmentParameteriv(GL_READ_FRAMEBUFFER, static_cast<GLenum>(readBuffer),
                                                           GL_FRAMEBUFFER_ATTACHMENT_OBJECT_TYPE, &attachmentType);
-        g_GLESFuncs.glGetFramebufferAttachmentParameteriv(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+        g_GLESFuncs.glGetFramebufferAttachmentParameteriv(GL_READ_FRAMEBUFFER, static_cast<GLenum>(readBuffer),
                                                           GL_FRAMEBUFFER_ATTACHMENT_OBJECT_NAME, &attachmentName);
         if (attachmentName == 0) {
             return 0;

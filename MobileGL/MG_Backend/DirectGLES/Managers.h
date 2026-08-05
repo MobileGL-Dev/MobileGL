@@ -433,6 +433,28 @@ namespace MobileGL::MG_Backend::DirectGLES {
                this array could be provided as data directly to ES `glDrawBuffers` function
              */
             GLenum m_backendDrawBuffers[MG_State::GLState::FramebufferObject::MAX_DRAW_BUFFERS] = {GL_NONE};
+
+            static constexpr Uint MAX_COLOR_ATTACHMENT_SLOTS =
+                static_cast<Uint>(FramebufferAttachmentType::Color31) -
+                static_cast<Uint>(FramebufferAttachmentType::Color0) + 1;
+            /* Where each frontend GL_COLOR_ATTACHMENTn image physically lives in the backend ES
+               framebuffer, as a GL_COLOR_ATTACHMENTm enum. ES only accepts glDrawBuffers bufs[s] ==
+               GL_COLOR_ATTACHMENTs, so a GL draw-buffer slot s naming attachment a forces a's image
+               under backend slot s. This table is the single owner of that decision and is kept a
+               PERMUTATION of the backend colour slots: every other attachment keeps its identity
+               slot when that slot survived, and is parked on the lowest free slot when it did not.
+               Deriving the point per-query from the draw-buffer array instead handed the identity
+               point to any attachment that was not a draw buffer - i.e. exactly the point a
+               relocated draw buffer had just taken over. The permutation is only true of the
+               PHYSICAL framebuffer because the attachment loop detaches a point whose frontend
+               owner is empty; do not remove that detach. */
+            GLenum m_backendColorSlots[MAX_COLOR_ATTACHMENT_SLOTS] = {GL_NONE};
+            /* Rebuild m_backendColorSlots from the frontend draw-buffer array. Returns true when any
+               attachment moved, i.e. when the physical attachments and the memoised read buffer have
+               to be re-applied. */
+            Bool RecomputeBackendColorSlots(
+                const MG_State::GLState::FramebufferObject::FramebufferAttachmentArray& stateDrawBuffers);
+
             FramebufferAttachmentType m_frontendReadBuffer = FramebufferAttachmentType::Color0;
             GLenum m_backendReadBuffer = GL_COLOR_ATTACHMENT0;
 
