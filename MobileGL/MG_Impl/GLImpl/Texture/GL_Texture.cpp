@@ -3793,23 +3793,43 @@ namespace MobileGL::MG_Impl::GLImpl {
         GetTextureImage(texture, level, format, type, bufSize, pixels);
     }
 
+    // A buffer texture carries none of the sampler or level state these queries report. Reached by
+    // name there is no target token to blame, so the wrong object is INVALID_OPERATION rather than
+    // the INVALID_ENUM the target forms report for an unaccepted target (GL 4.6 core 8.11).
+    static Bool ValidateNamedTextureHasParameters(const SharedPtr<MG_State::GLState::ITextureObject>& textureObject,
+                                                  const char* caller) {
+        if (!textureObject) return false;
+        if (textureObject->GetStorageType() == TextureStorageType::Buffer) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidOperation,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller,
+                                             "The effective target of `texture` has no texture parameters."));
+            return false;
+        }
+        return true;
+    }
+
     void GetTextureParameteriv(GLuint texture, GLenum pname, GLint* params) {
         auto textureObject = GetTextureObjectByName(texture, __func__);
+        if (!ValidateNamedTextureHasParameters(textureObject, __func__)) return;
         WithTemporarilyBoundNamedTexture(textureObject, [&](GLenum target) { GetTexParameteriv_State(target, pname, params); });
     }
 
     void GetTextureParameterfv(GLuint texture, GLenum pname, GLfloat* params) {
         auto textureObject = GetTextureObjectByName(texture, __func__);
+        if (!ValidateNamedTextureHasParameters(textureObject, __func__)) return;
         WithTemporarilyBoundNamedTexture(textureObject, [&](GLenum target) { GetTexParameterfv_State(target, pname, params); });
     }
 
     void GetTextureParameterIiv(GLuint texture, GLenum pname, GLint* params) {
         auto textureObject = GetTextureObjectByName(texture, __func__);
+        if (!ValidateNamedTextureHasParameters(textureObject, __func__)) return;
         WithTemporarilyBoundNamedTexture(textureObject, [&](GLenum target) { GetTexParameterIiv_State(target, pname, params); });
     }
 
     void GetTextureParameterIuiv(GLuint texture, GLenum pname, GLuint* params) {
         auto textureObject = GetTextureObjectByName(texture, __func__);
+        if (!ValidateNamedTextureHasParameters(textureObject, __func__)) return;
         WithTemporarilyBoundNamedTexture(textureObject, [&](GLenum target) { GetTexParameterIuiv_State(target, pname, params); });
     }
 

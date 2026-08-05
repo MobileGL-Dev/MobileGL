@@ -77,8 +77,8 @@ mustpass list, lavapipe / Mesa 25.2.8, `--deqp-surface-type=fbo`.
 
 | backend | conformance | strict Pass | Fail | InternalError | Crash |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| DirectGLES | **74.66%** | 67.12% | 86 | 8 | 0 |
-| DirectVulkan | **73.05%** | 72.78% | 89 | 8 | 3 |
+| DirectGLES | **74.93%** | 67.39% | 85 | 8 | 0 |
+| DirectVulkan | **73.32%** | 73.05% | 88 | 8 | 3 |
 
 `textures_storage_multisample_*` is 54 of what remains on either backend and
 needs a feature rather than a fix: a multisample texture has to be attachable to

@@ -147,8 +147,8 @@ mustpass list, Mesa 25.2.8, `--deqp-surface-type=fbo`.
 
 | backend | renderer | conformance | strict Pass | Fail | InternalError | Crash |
 | --- | --- | ---: | ---: | ---: | ---: | ---: |
-| DirectGLES | Espryt | **74.66%** | 67.12% | 86 | 8 | 0 |
-| DirectVulkan | Magma | **73.05%** | 72.78% | 89 | 8 | 3 |
+| DirectGLES | Espryt | **74.93%** | 67.39% | 85 | 8 | 0 |
+| DirectVulkan | Magma | **73.32%** | 73.05% | 88 | 8 | 3 |
 
 ## Contents
 
