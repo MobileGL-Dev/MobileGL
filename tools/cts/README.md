@@ -1,12 +1,15 @@
 # Running the OpenGL CTS against MobileGL
 
-This directory contains two supported paths:
+This directory contains three supported paths:
 
 - Android arm64 / MobileGL EGL: the KHR-GL33 workflow documented below and in
   `skills/gl-cts-on-mobilegl/SKILL.md`.
 - Windows x64 / MobileGL WGL: the GL30-GL46 pipeline in
   `scripts/wgl_glcts_pipeline.py`, documented by
   `skills/wgl-gl-cts-on-mobilegl/SKILL.md`.
+- Desktop Linux x64 / MobileGL EGL: `scripts/run_cts_local.py` against the
+  `mobilegl-desktop` VK-GL-CTS target, documented in "Desktop Linux workflow"
+  below. This is the path that needs no device and no GPU.
 
 Windows prerequisites are Git, Python 3.9+, CMake, Visual Studio 2022's Desktop
 C++ workload, and a Vulkan SDK visible to CMake. DirectVulkan also needs a
@@ -24,6 +27,63 @@ The pipeline builds MobileGL as a drop-in `opengl32.dll`, builds or reuses
 resumes individual suites after crashes/timeouts, and writes Markdown plus JSON
 reports below the printed `runs/<first-16-of-run-fingerprint>` directory. Its
 manifest records provenance and the runner settings used to validate a resume.
+
+## Desktop Linux workflow
+
+The `mobilegl-desktop` target builds `glcts` as an ordinary host executable that
+reaches OpenGL only through `libMobileGL.so`. Both backends run headless with no
+GPU at all, which makes this the cheapest way to measure a single test group
+while working on it.
+
+Apt packages: `mesa-vulkan-drivers` (lavapipe, for DirectVulkan),
+`libegl1-mesa-dev` and `libgles2-mesa-dev` (the system EGL/ES that DirectGLES
+drives), `libvulkan-dev`, `ninja-build`.
+
+```sh
+cmake -S . -B build-linux -G Ninja -DCMAKE_BUILD_TYPE=Release \
+      -DMOBILEGL_BUILD_TEST=OFF -DMOBILEGL_BUILD_BENCHMARK=OFF
+cmake --build build-linux --parallel "$(nproc)"
+
+python tools/cts/scripts/sync_to_cts.py "$CTS"
+git -C "$CTS" apply <path-to>/tools/cts/patches/0001-fbo-color-texture-attachment.patch
+cmake -S "$CTS" -B "$CTS/build-cts" -G Ninja -DDEQP_TARGET=mobilegl-desktop \
+      -DCMAKE_BUILD_TYPE=Release
+ninja -C "$CTS/build-cts" glcts
+
+python tools/cts/scripts/run_cts_local.py --backend DirectGLES \
+    --glcts "$CTS/build-cts/external/openglcts/modules/glcts" \
+    --lib build-linux/libMobileGL.so \
+    --caselist cases.txt --outdir runs/gles --env EGL_PLATFORM=surfaceless
+python tools/cts/scripts/qpa_report.py runs/gles --label DirectGLES
+```
+
+`EGL_PLATFORM=surfaceless` is not optional for DirectGLES: without a `/dev/dri`
+node Mesa's EGL fails `eglInitialize` on the default display, and MobileGL
+reports that as `EGL_BAD_ALLOC` out of `eglCreatePbufferSurface`. DirectVulkan
+needs nothing extra - lavapipe exposes `VK_EXT_headless_surface`, which is what
+the desktop platform port's pbuffer path requires.
+
+Two known differences from a real GPU, both MobileGL's rather than the harness's:
+DirectVulkan reads back zeros from the **default** framebuffer (a user FBO,
+renderbuffer- or texture-attached, is correct on both backends), and lavapipe
+supports renderbuffer formats that Adreno reports as unsupported, so the Android
+runs see `NotSupported` where these do not.
+
+### Reference results: KHR-GL45.direct_state_access
+
+`opengl-cts-4.6.8.1`, the 371 `direct_state_access` cases of the `gl45-main`
+mustpass list, lavapipe / Mesa 25.2.8, `--deqp-surface-type=fbo`.
+
+| backend | conformance | strict Pass | Fail | InternalError | Crash |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| DirectGLES | **66.85%** | 59.30% | 115 | 8 | 0 |
+| DirectVulkan | **72.51%** | 72.24% | 91 | 8 | 3 |
+
+The bulk of what remains is two groups that need features rather than fixes:
+`textures_storage_multisample_*` (60 cases) needs sampleable multisample
+textures, and `textures_buffer_*` (30) needs buffer textures to survive a
+`texelFetch`. `program_pipelines_*` needs ARB_separate_shader_objects, which is
+stubbed throughout.
 
 ## Android KHR-GL33 workflow
 
