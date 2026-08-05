@@ -2458,6 +2458,33 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 }
             }
 
+            // A 64-bit vertex input has to arrive as its 32-bit word pair: VK_FORMAT_R64*_SFLOAT is
+            // optional and lavapipe advertises none of them at all. The pass is unconditional so it
+            // always agrees with the Float64 case in VertexInputStateFactory::ToVkVertexFormat, and
+            // ReflectVertexInputs below then sees an ordinary uvec2/uvec4 input.
+            //
+            // Failure here is not recoverable and must not be swallowed: ToVkVertexFormat has already
+            // committed to R32G32{,B32A32}_UINT for the attribute, so a module still declaring
+            // `in double` would reconcile to Unknown and build a pipeline with a UINT format under a
+            // double input - garbage with no diagnostic anywhere.
+            if (shaders[i] && shaders[i]->GetShaderStage() == ShaderStage::Vertex) {
+                Vector<Uint> packedSpirv;
+                const Bool packOk = MG_Util::ShaderTranspiler::ShaderCompiler::PackDoubleVertexInputsForVulkan(
+                    moduleSpirvs[i], packedSpirv);
+                MOBILEGL_ASSERT(packOk,
+                                "ProgramFactory: 64-bit vertex input packing failed for program %u; the "
+                                "vertex-input format and the shader input type now disagree",
+                                program.GetExternalIndex());
+                if (packOk) {
+                    moduleSpirvs[i] = std::move(packedSpirv);
+                } else {
+                    MGLOG_E("ProgramFactory: failed to pack 64-bit vertex inputs for program %u; "
+                            "double-typed vertex attributes will be fetched as uint32 words and not "
+                            "reinterpreted",
+                            program.GetExternalIndex());
+                }
+            }
+
             // When Vulkan can legally access storage images without a statically declared
             // format, let GL's glBindImageTexture format select the runtime image view. This
             // provides desktop-driver-compatible behavior for packs such as iterationRP, whose

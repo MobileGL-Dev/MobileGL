@@ -57,7 +57,7 @@ namespace MobileGL::MG_State::GLState {
         if (m_attributes[index].Size == size && m_attributes[index].Type == type &&
             m_attributes[index].Normalized == normalized && m_attributes[index].Stride == stride &&
             m_attributes[index].Offset == offset && m_attributes[index].IsInteger == isInteger &&
-            m_attributes[index].IsBgra == isBgra) {
+            m_attributes[index].IsBgra == isBgra && !m_attributes[index].IsLong) {
             return;
         }
 
@@ -73,6 +73,11 @@ namespace MobileGL::MG_State::GLState {
         attr.Offset = offset;
         attr.IsInteger = isInteger;
         attr.IsBgra = isBgra;
+        // glVertexAttribPointer / glVertexAttribIPointer are never the long form, so they always
+        // take the attribute back out of it - and "only IsLong changed" is a real change that has to
+        // reach the backends, which is why the early-out above tests it too. Cleared inside the
+        // mutation block so the clear and the version bump stay atomic.
+        attr.IsLong = false;
 
         BumpAttributeFormatVersion(index);
     }
@@ -212,18 +217,21 @@ namespace MobileGL::MG_State::GLState {
     }
 
     void VertexArrayObject::SetAttributeFormatSeparate(Uint attribIndex, int size, DataType type, Bool normalized,
-                                                       Bool isInteger, Uint relativeOffset, Bool isBgra) {
+                                                       Bool isInteger, Uint relativeOffset, Bool isBgra,
+                                                       Bool isLong) {
         if (attribIndex >= MAX_VERTEX_ATTRIBS) return;
         if (size < 1 || size > 4) return;
 
         auto& attr = m_attributes[attribIndex];
         if (attr.Size != size || attr.Type != type || attr.Normalized != normalized || attr.IsInteger != isInteger ||
-            attr.IsBgra != isBgra || m_attributeRelativeOffset[attribIndex] != relativeOffset) {
+            attr.IsBgra != isBgra || attr.IsLong != isLong ||
+            m_attributeRelativeOffset[attribIndex] != relativeOffset) {
             attr.Size = size;
             attr.Type = type;
             attr.Normalized = normalized;
             attr.IsInteger = isInteger;
             attr.IsBgra = isBgra;
+            attr.IsLong = isLong;
             m_attributeRelativeOffset[attribIndex] = relativeOffset;
             BumpAttributeFormatVersion(attribIndex);
         }

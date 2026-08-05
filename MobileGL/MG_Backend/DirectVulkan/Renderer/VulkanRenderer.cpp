@@ -9925,6 +9925,12 @@ void main() {
         deviceFeatures.wideLines = supportedDeviceFeatures.wideLines;
         m_logicOpFeatureEnabled = deviceFeatures.logicOp == VK_TRUE;
         deviceFeatures.shaderInt64 = supportedDeviceFeatures.shaderInt64;
+        // Required for any module that declares OpCapability Float64 - which is every shader with a
+        // double in it, including the 64-bit vertex attribute path (the attribute itself arrives as
+        // uint32 words, but the bitcast result and everything computed from it is Float64). Without
+        // it vkCreateShaderModule is invalid usage (VUID-VkShaderModuleCreateInfo-pCode-08740),
+        // which is why SupportsFloat64VertexAttributes gates the entry point on the same feature.
+        deviceFeatures.shaderFloat64 = supportedDeviceFeatures.shaderFloat64;
         // Required for desktop GL image load/store semantics. iterationRP writes storage
         // images from vertex and fragment stages and uses formats outside Vulkan's small
         // mandatory storage-image set.

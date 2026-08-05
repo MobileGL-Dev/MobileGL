@@ -1114,6 +1114,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // given - provided the driver resolved the entry point at all.
         m_dynamicParameters.SupportsPerLayerFramebufferAttachment =
             DirectGLES::g_GLESFuncs.glFramebufferTextureLayer != nullptr;
+        // Not a driver question and never will be: OpenGL ES has no double-precision vertex format
+        // and ESSL has no fp64 type to consume one with, so a 64-bit vertex attribute has nowhere to
+        // land on this backend regardless of what the driver underneath happens to support.
+        m_dynamicParameters.SupportsFloat64VertexAttributes = false;
         m_dynamicParameters.MaxDrawBuffers = m_GLESCapabilities.MaxDrawBuffers;
         m_dynamicParameters.MaxColorAttachments = m_GLESCapabilities.MaxColorAttachments;
         m_dynamicParameters.MaxClipDistances = m_GLESCapabilities.MaxClipDistances;

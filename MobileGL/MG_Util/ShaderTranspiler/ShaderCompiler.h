@@ -54,6 +54,13 @@ namespace MobileGL {
                 static bool LowerRectImages(const Vector<Uint32>& inputBinary, Vector<uint32_t>& outputBinary);
                 static bool RebaseInstanceIndexForVulkan(const Vector<Uint32>& inputBinary,
                                                          Vector<uint32_t>& outputBinary);
+                // Re-declares 64-bit float vertex inputs as their 32-bit unsigned word pair
+                // (double -> uvec2, dvec2 -> uvec4) and bitcasts them back to double at entry, so no
+                // VK_FORMAT_R64*_SFLOAT is needed - lavapipe advertises none of them for vertex
+                // buffers. Vertex stage, DirectVulkan only; pairs with the Float64 case in
+                // VertexInputStateFactory::ToVkVertexFormat.
+                static bool PackDoubleVertexInputsForVulkan(const Vector<Uint32>& inputBinary,
+                                                            Vector<uint32_t>& outputBinary);
                 // Adds the Invariant decoration to every Position builtin output. GL apps
                 // routinely rely on cross-program position invariance for multi-pass
                 // equality depth tests (e.g. GEQUAL re-draws of the same geometry), and

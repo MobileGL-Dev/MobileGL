@@ -23,6 +23,12 @@ namespace MobileGL {
                 SizeT Offset = 0;
                 Bool IsInteger = false;
                 // GL_BGRA vertex size: four components in reversed (B,G,R,A) memory order. Size stays 4.
+                // Set only by the long (L) format entry points. It is NOT implied by
+                // Type == Float64: VertexAttribFormat(GL_DOUBLE) also reads doubles from memory but
+                // asks for them *converted to float*, while VertexAttribLFormat keeps all 64 bits
+                // (GL 4.6 core 10.3.2). Backends have to tell the two apart, and it is what
+                // GL_VERTEX_ATTRIB_ARRAY_LONG reports.
+                Bool IsLong = false;
                 Bool IsBgra = false;
                 Uint Divisor = 0;
                 SharedPtr<BufferObject> Buffer;
@@ -88,7 +94,8 @@ namespace MobileGL {
                 void SetBindingDivisor(Uint bindingIndex, Uint divisor);
                 void SetAttributeBinding(Uint attribIndex, Uint bindingIndex);
                 void SetAttributeFormatSeparate(Uint attribIndex, int size, DataType type, Bool normalized,
-                                                Bool isInteger, Uint relativeOffset, Bool isBgra = false);
+                                                Bool isInteger, Uint relativeOffset, Bool isBgra = false,
+                                                Bool isLong = false);
 
                 // The binding-point view the attributes were resolved from. Kept queryable
                 // because glGetVertexArrayIndexed[64]iv reports it verbatim, and the resolved

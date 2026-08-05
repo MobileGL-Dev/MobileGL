@@ -810,6 +810,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             }
         }
         m_dynamicParameters.SupportsWideLines = m_vulkanCaps.SupportsWideLines;
+        m_dynamicParameters.SupportsFloat64VertexAttributes = m_vulkanCaps.SupportsShaderFloat64;
         m_dynamicParameters.MaxShaderStorageBlockSize =
             std::min(m_vulkanCaps.MaxShaderStorageBlockSize, kMaxAdvertisedShaderStorageBlockSize);
         if (m_vulkanCaps.SupportsShaderSubgroup) {

@@ -359,6 +359,13 @@ namespace MobileGL {
             // array layer with no notion of a 3D depth slice, so it does not yet. Defaults to false
             // so a backend that never sets it gets the conservative answer.
             Bool SupportsPerLayerFramebufferAttachment = false;
+            // Whether glVertexAttribLFormat / glVertexArrayAttribLFormat can be honoured, i.e.
+            // whether a 64-bit vertex attribute can actually reach a shader unconverted. Detected,
+            // never assumed: DirectVulkan needs VkPhysicalDeviceFeatures::shaderFloat64 (the
+            // attribute travels as its 32-bit word pair, so no VK_FORMAT_R64* is required, but the
+            // bitcast result is Float64); DirectGLES can never have it, ESSL having no fp64 type at
+            // all. Defaults to false so a backend that never sets it gets the conservative answer.
+            Bool SupportsFloat64VertexAttributes = false;
             SizeT MaxShaderStorageBlockSize = 128 * 1024 * 1024;
             Uint32 SubgroupSize = 0;
             Uint32 SubgroupSupportedStages = 0;

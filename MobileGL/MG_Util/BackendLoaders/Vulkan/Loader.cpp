@@ -198,6 +198,7 @@ namespace MobileGL::MG_Util::BackendLoader {
         VkPhysicalDeviceFeatures supportedFeatures{};
         vkGetPhysicalDeviceFeatures(physicalDevice, &supportedFeatures);
         caps.SupportsWideLines = supportedFeatures.wideLines == VK_TRUE;
+        caps.SupportsShaderFloat64 = supportedFeatures.shaderFloat64 == VK_TRUE;
         caps.SupportsVertexPipelineStoresAndAtomics =
             supportedFeatures.vertexPipelineStoresAndAtomics == VK_TRUE;
         caps.SupportsFragmentStoresAndAtomics = supportedFeatures.fragmentStoresAndAtomics == VK_TRUE;
@@ -288,6 +289,7 @@ namespace MobileGL::MG_Util::BackendLoader {
         caps.ViewportSubpixelBits = static_cast<Int>(properties.limits.viewportSubPixelBits);
         FillFragmentInterpolationLimits(caps, properties.limits);
         caps.SupportsWideLines = false;
+        caps.SupportsShaderFloat64 = false;
         // This helper only receives properties, not VkPhysicalDeviceFeatures. Leave optional
         // stage writes disabled rather than inferring them from descriptor limits alone.
         caps.SupportsVertexPipelineStoresAndAtomics = false;

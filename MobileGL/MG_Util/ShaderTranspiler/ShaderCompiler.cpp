@@ -18,6 +18,7 @@
 #include "SpirvPasses/DecomposeWorkgroupVec3Pass.h"
 #include "SpirvPasses/DecoratePositionInvariantPass.h"
 #include "SpirvPasses/LowerDrawParametersPass.h"
+#include "SpirvPasses/PackDoubleVertexInputsPass.h"
 #include "SpirvPasses/RebaseInstanceIndexPass.h"
 #include "SpirvPasses/NormalizeRectCoordinatesPass.h"
 #include "SpirvPasses/StripUboMemberRelaxedPrecisionPass.h"
@@ -323,6 +324,18 @@ namespace MobileGL {
 
                 Optimizer optimizer(SPV_ENV_VULKAN_1_1);
                 optimizer.RegisterPass(LowerDrawParametersPass::CreateLowerDrawParametersPass());
+
+                return optimizer.Run(inputBinary.data(), inputBinary.size(), &outputBinary, options);
+            }
+
+            bool ShaderCompiler::PackDoubleVertexInputsForVulkan(const Vector<Uint32>& inputBinary,
+                                                                 Vector<uint32_t>& outputBinary) {
+                using namespace spvtools;
+                OptimizerOptions options;
+                options.set_run_validator(false);
+
+                Optimizer optimizer(SPV_ENV_VULKAN_1_1);
+                optimizer.RegisterPass(PackDoubleVertexInputsPass::CreatePackDoubleVertexInputsPass());
 
                 return optimizer.Run(inputBinary.data(), inputBinary.size(), &outputBinary, options);
             }

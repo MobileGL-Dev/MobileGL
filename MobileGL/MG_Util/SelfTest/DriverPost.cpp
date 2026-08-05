@@ -319,6 +319,14 @@ namespace MobileGL::MG_Util::SelfTest {
                              "map array texture gets no driver storage at all, so sampling one reads nothing "
                              "and rendering to one does not reach the screen");
             }
+            // Reported rather than probed: this one cannot come out any other way. OpenGL ES has no
+            // double-precision vertex format and ESSL has no fp64 type, so there is no driver and no
+            // extension that could make it work - the row exists so the loss is named at startup
+            // instead of discovered as an unexplained GL_INVALID_OPERATION at draw setup.
+            builder.Warn("64-bit vertex attributes",
+                         "not supported on any GLES driver (ES has no GL_DOUBLE vertex format and ESSL has "
+                         "no fp64 type); glVertexAttribLFormat / glVertexArrayAttribLFormat report "
+                         "GL_INVALID_OPERATION - use the Vulkan backend if the application needs them");
             if (glesFuncs.glPatchParameteri != nullptr) {
                 builder.Pass("Tessellation patch parameters",
                              "glPatchParameteri present (GL_PATCH_VERTICES reaches the driver)");
@@ -1410,6 +1418,14 @@ namespace MobileGL::MG_Util::SelfTest {
             builder.Pass("dualSrcBlend", "GL_SRC1_* dual-source blend factors supported");
         } else {
             builder.Warn("dualSrcBlend", "unsupported; GL_SRC1_* dual-source blend factors hard-fail at draw");
+        }
+        if (features.shaderFloat64 == VK_TRUE) {
+            builder.Pass("shaderFloat64",
+                         "GLSL double/dvec/dmat and 64-bit vertex attributes (glVertexAttribLFormat) supported");
+        } else {
+            builder.Warn("shaderFloat64",
+                         "unsupported; any shader declaring a double fails to create a shader module, and "
+                         "glVertexAttribLFormat reports GL_INVALID_OPERATION instead of feeding the attribute");
         }
 
         Bool shaderDrawParameters = false;

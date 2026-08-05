@@ -74,6 +74,10 @@ namespace MobileGL {
             Float MaxFragmentInterpolationOffset = 0.4375f;
             Int FragmentInterpolationOffsetBits = 4;
             Bool SupportsWideLines = false;
+            // VkPhysicalDeviceFeatures::shaderFloat64. Any module declaring OpCapability Float64
+            // needs it, which includes every 64-bit vertex attribute: the attribute itself arrives
+            // as 32-bit words, but the bitcast result and everything computed from it is Float64.
+            Bool SupportsShaderFloat64 = false;
             // Storage-image descriptors are limited per stage by
             // maxPerStageDescriptorStorageImages, but writes/atomics outside compute additionally
             // require these core Vulkan features to be enabled on the logical device.

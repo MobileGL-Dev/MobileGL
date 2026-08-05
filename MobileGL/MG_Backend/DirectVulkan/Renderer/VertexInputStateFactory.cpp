@@ -29,6 +29,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             XXHASH_VERIFY(XXH64_update(m_hashState, &attr.Stride, sizeof(attr.Stride)));
             XXHASH_VERIFY(XXH64_update(m_hashState, &attr.Offset, sizeof(attr.Offset)));
             XXHASH_VERIFY(XXH64_update(m_hashState, &attr.IsInteger, sizeof(attr.IsInteger)));
+            XXHASH_VERIFY(XXH64_update(m_hashState, &attr.IsLong, sizeof(attr.IsLong)));
             XXHASH_VERIFY(XXH64_update(m_hashState, &attr.IsBgra, sizeof(attr.IsBgra)));
             XXHASH_VERIFY(XXH64_update(m_hashState, &attr.Divisor, sizeof(attr.Divisor)));
 
@@ -97,7 +98,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             }
 
             const VkFormat sourceVkFormat =
-                ToVkVertexFormat(attr.Type, attr.Size, attr.Normalized, attr.IsInteger, attr.IsBgra);
+                ToVkVertexFormat(attr.Type, attr.Size, attr.Normalized, attr.IsInteger, attr.IsBgra, attr.IsLong);
             if (sourceVkFormat == VK_FORMAT_UNDEFINED) {
                 MGLOG_E("Unsupported vertex attribute layout (location=%u, type=%s, size=%d): the array is "
                         "enabled but cannot be mapped to a VkFormat",
@@ -273,7 +274,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     }
 
     VkFormat VertexInputStateFactory::ToVkVertexFormat(DataType type, Int size, Bool normalized, Bool isInteger,
-                                                       Bool isBgra) {
+                                                       Bool isBgra, Bool isLong) {
         if (isBgra) {
             // GL_BGRA: four reversed-order components, always normalized (enforced at validation), only
             // legal with GL_UNSIGNED_BYTE or a 2_10_10_10 type. The reversed VkFormats put the
@@ -298,6 +299,22 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         case DataType::Int2101010Rev:
             if (isInteger || size != 4) return VK_FORMAT_UNDEFINED;
             return normalized ? VK_FORMAT_A2B10G10R10_SNORM_PACK32 : VK_FORMAT_A2B10G10R10_SSCALED_PACK32;
+        case DataType::Float64:
+            // A 64-bit attribute is fetched as its 32-bit word pair and bitcast back to double in the
+            // shader (PackDoubleVertexInputsPass does the shader half). That is bit-exact and, unlike
+            // VK_FORMAT_R64*_SFLOAT, needs no format capability: lavapipe reports bufferFeatures = 0
+            // for every R64 float format, so a native 64-bit vertex fetch is simply unavailable there
+            // while shaderFloat64 is not. Both halves key off nothing but the attribute being long,
+            // so they always agree without extra plumbing.
+            if (!isLong || isInteger || normalized) return VK_FORMAT_UNDEFINED;
+            switch (size) {
+            case 1: return VK_FORMAT_R32G32_UINT;
+            case 2: return VK_FORMAT_R32G32B32A32_UINT;
+            // A dvec3/dvec4 input is 6/8 uint32 components: no single VkFormat, and GL spreads it
+            // over two attribute locations, which the location-per-VAO-index model here does not
+            // express. Declined rather than fetched wrong.
+            default: return VK_FORMAT_UNDEFINED;
+            }
         case DataType::Float32:
             switch (size) {
             case 1: return VK_FORMAT_R32_SFLOAT;

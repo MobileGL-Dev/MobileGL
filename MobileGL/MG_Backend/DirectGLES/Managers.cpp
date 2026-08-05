@@ -1305,6 +1305,22 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                        m_syncedAttributeVersions[attribIndex].BufferVersion;
                 if (!needsSyncFormat && !needsSyncBuffer) continue;
 
+                // Defence in depth. The frontend already declines glVertexAttribLFormat on this
+                // backend (SupportsFloat64VertexAttributes is false - ES has no GL_DOUBLE vertex
+                // format and ESSL has no fp64 type), so IsLong should never arrive here; if it ever
+                // did, passing GL_DOUBLE to glVertexAttribPointer would only raise GL_INVALID_ENUM on
+                // the real driver. Disabling rather than merely skipping matters: becoming long bumps
+                // FormatVersion, not SwitchVersion, so the enable/disable block above will not run
+                // again and an already-enabled array would stay enabled with no pointer and no
+                // ARRAY_BUFFER binding - which ES 3.1+ makes an INVALID_OPERATION at draw.
+                if (attrib.IsLong) {
+                    MGLOG_E("DirectGLES: vertex attribute %u is a 64-bit (GL_DOUBLE) array, which this "
+                            "backend cannot feed - disabling the array",
+                            attribIndex);
+                    g_GLESFuncs.glDisableVertexAttribArray(attribIndex);
+                    continue;
+                }
+
                 if (!BindAttributeBuffer(attrib)) {
                     continue;
                 }
@@ -1363,6 +1379,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
             for (Uint attribIndex = 0; attribIndex < allAttributes.size(); ++attribIndex) {
                 const auto& attrib = allAttributes[attribIndex];
                 if (!attrib.Enabled || attrib.Buffer) {
+                    continue;
+                }
+
+                // Same reason as SyncToBackend: there is no ES vertex format for a 64-bit array, and
+                // this path only ever reaches glVertexAttribPointer/IPointer.
+                if (attrib.IsLong) {
+                    g_GLESFuncs.glDisableVertexAttribArray(attribIndex);
                     continue;
                 }
 

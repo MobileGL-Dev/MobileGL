@@ -8,6 +8,7 @@
 
 #include "GL_VertexArray.h"
 #include "Validators.h"
+#include <MG_Backend/BackendObjects.h>
 #include <MG_Impl/GLImpl/Buffer/Validators.h>
 #include <MG_State/GLState/Core.h>
 #include <MG_State/GLState/ErrorState/Error.h>
@@ -173,6 +174,9 @@ namespace MobileGL::MG_Impl::GLImpl {
             case GL_CURRENT_VERTEX_ATTRIB:
             case GL_VERTEX_ATTRIB_ARRAY_BUFFER_BINDING:
             case GL_VERTEX_ATTRIB_ARRAY_INTEGER:
+            // Core since GL 4.1 (ARB_vertex_attrib_64bit). It was rejected while no attribute could
+            // ever be long; now that IsLong is real state the pname has to be accepted.
+            case GL_VERTEX_ATTRIB_ARRAY_LONG:
             case GL_VERTEX_ATTRIB_ARRAY_DIVISOR:
             case GL_VERTEX_ATTRIB_ARRAY_POINTER:
                 return true;
@@ -460,19 +464,38 @@ namespace MobileGL::MG_Impl::GLImpl {
                                         relativeoffset, isBgra);
     }
 
-    // The long (64-bit) attribute format. MobileGL has no 64-bit vertex attributes, so nothing is
-    // recorded; what the entry point owes the application is the parameter validation, which is
-    // observable through glGetError regardless of whether the format could be used in a draw.
-    static void VertexAttribLFormatSeparate_State(GLuint attribindex, GLint size, GLenum type,
+    // The long (64-bit) attribute format: the values reach the shader as doubles, unconverted
+    // (GL 4.6 core 10.3.2). ValidateVertexAttribLFormat has already pinned type to GL_DOUBLE, so the
+    // recorded DataType is always Float64 - what IsLong adds is that this is the *unconverted* form,
+    // as opposed to VertexAttribFormat(GL_DOUBLE), which asks for a float conversion.
+    //
+    // Whether the backend can feed it is detected, not assumed: DirectVulkan needs shaderFloat64,
+    // and DirectGLES can never have it at all. A backend without it declines here, loudly - GL error
+    // plus a log line naming the reason - rather than accepting state no draw could honour and
+    // rendering garbage. The matching startup POST row is in MG_Util/SelfTest/DriverPost.cpp.
+    static void VertexAttribLFormatSeparate_State(const SharedPtr<MG_State::GLState::VertexArrayObject>& vao,
+                                                  GLuint attribindex, GLint size, GLenum type,
                                                   GLuint relativeoffset) {
         if (!VertexArrayImpl::ValidateVertexAttributeIndex(attribindex)) return;
         if (!VertexArrayImpl::ValidateVertexAttribLFormat(attribindex, size, type)) return;
         if (!VertexArrayImpl::ValidateVertexAttribRelativeOffset(relativeoffset)) return;
 
-        MG_State::pGLContext->RecordError(
-            ErrorCode::InvalidOperation,
-            MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", "VertexAttribLFormat",
-                                         "64-bit vertex attributes are not supported."));
+        if (!MG_Backend::pActiveBackendObject ||
+            !MG_Backend::pActiveBackendObject->GetDynamicParameters().SupportsFloat64VertexAttributes) {
+            MGLOG_I("VertexAttribLFormat: attribute %u asked for a 64-bit (GL_DOUBLE) format, but this "
+                    "backend has no double-precision vertex attribute support - see the "
+                    "\"64-bit vertex attributes\" / \"shaderFloat64\" POST row for what that costs",
+                    attribindex);
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidOperation,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", "VertexAttribLFormat",
+                                             "64-bit vertex attributes are not supported by this backend."));
+            return;
+        }
+
+        vao->SetAttributeFormatSeparate(attribindex, size, MG_Util::ConvertGLEnumToDataType(type),
+                                        /*normalized: */ false, /*isInteger: */ false, relativeoffset,
+                                        /*isBgra: */ false, /*isLong: */ true);
     }
 
     void VertexArrayAttribFormat_State(GLuint vaobj, GLuint attribindex, GLint size, GLenum type,
@@ -915,6 +938,9 @@ namespace MobileGL::MG_Impl::GLImpl {
         case GL_VERTEX_ATTRIB_ARRAY_INTEGER:
             params[0] = attr->IsInteger ? 1.0f : 0.0f;
             return;
+        case GL_VERTEX_ATTRIB_ARRAY_LONG:
+            params[0] = attr->IsLong ? 1.0f : 0.0f;
+            return;
         case GL_VERTEX_ATTRIB_ARRAY_DIVISOR:
             params[0] = static_cast<GLfloat>(attr->Divisor);
             return;
@@ -975,6 +1001,9 @@ namespace MobileGL::MG_Impl::GLImpl {
         case GL_VERTEX_ATTRIB_ARRAY_INTEGER:
             params[0] = attr->IsInteger ? 1.0 : 0.0;
             return;
+        case GL_VERTEX_ATTRIB_ARRAY_LONG:
+            params[0] = attr->IsLong ? 1.0 : 0.0;
+            return;
         case GL_VERTEX_ATTRIB_ARRAY_DIVISOR:
             params[0] = static_cast<GLdouble>(attr->Divisor);
             return;
@@ -1030,6 +1059,9 @@ namespace MobileGL::MG_Impl::GLImpl {
             return;
         case GL_VERTEX_ATTRIB_ARRAY_INTEGER:
             params[0] = attr->IsInteger ? GL_TRUE : GL_FALSE;
+            return;
+        case GL_VERTEX_ATTRIB_ARRAY_LONG:
+            params[0] = attr->IsLong ? GL_TRUE : GL_FALSE;
             return;
         case GL_VERTEX_ATTRIB_ARRAY_DIVISOR:
             params[0] = static_cast<GLint>(attr->Divisor);
@@ -1164,8 +1196,7 @@ namespace MobileGL::MG_Impl::GLImpl {
             *param = attr.IsInteger ? GL_TRUE : GL_FALSE;
             return;
         case GL_VERTEX_ATTRIB_ARRAY_LONG:
-            // 64-bit attributes are not supported, so no attribute is ever a long one.
-            *param = GL_FALSE;
+            *param = attr.IsLong ? GL_TRUE : GL_FALSE;
             return;
         case GL_VERTEX_ATTRIB_ARRAY_DIVISOR:
             *param = static_cast<GLint>(attr.Divisor);
@@ -1259,13 +1290,13 @@ namespace MobileGL::MG_Impl::GLImpl {
     void VertexAttribLFormat(GLuint attribindex, GLint size, GLenum type, GLuint relativeoffset) {
         auto vao = GetBoundVertexArrayOrError("VertexAttribLFormat");
         if (!vao) return;
-        VertexAttribLFormatSeparate_State(attribindex, size, type, relativeoffset);
+        VertexAttribLFormatSeparate_State(vao, attribindex, size, type, relativeoffset);
     }
 
     void VertexArrayAttribLFormat(GLuint vaobj, GLuint attribindex, GLint size, GLenum type, GLuint relativeoffset) {
         auto vao = GetNamedVertexArrayObject_State(vaobj, "VertexArrayAttribLFormat");
         if (!vao) return;
-        VertexAttribLFormatSeparate_State(attribindex, size, type, relativeoffset);
+        VertexAttribLFormatSeparate_State(vao, attribindex, size, type, relativeoffset);
     }
 
     void VertexAttribBinding(GLuint attribindex, GLuint bindingindex) {

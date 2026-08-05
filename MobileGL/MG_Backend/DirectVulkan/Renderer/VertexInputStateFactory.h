@@ -93,7 +93,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         static SizeT GetAttributeByteSize(DataType type, Int size, Bool isBgra);
 
     private:
-        static VkFormat ToVkVertexFormat(DataType type, Int size, Bool normalized, Bool isInteger, Bool isBgra = false);
+        static VkFormat ToVkVertexFormat(DataType type, Int size, Bool normalized, Bool isInteger, Bool isBgra = false,
+                                         Bool isLong = false);
         static Bool IsScaledIntegerVertexFormat(VkFormat format);
         static VkFormat ToFloat32VertexFormat(Int componentCount);
         Bool SupportsVertexBufferFormat(VkFormat format) const;
