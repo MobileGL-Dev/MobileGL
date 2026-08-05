@@ -810,6 +810,29 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             }
         }
         m_dynamicParameters.SupportsWideLines = m_vulkanCaps.SupportsWideLines;
+        // A 2D or 2D multisample array texture is a VK_IMAGE_TYPE_2D image whose GL depth IS its
+        // arrayLayers, so a GL layer is a Vulkan array layer with nothing to translate.
+        // ResolveAttachmentBaseArrayLayer already passes the attachment's layer through. The other
+        // layered targets are declared separately as their own machinery lands.
+        {
+            using DynParams = MG_Backend::DynamicBackendParameters;
+            m_dynamicParameters.PerLayerFramebufferAttachmentTargets |=
+                DynParams::PerLayerFramebufferAttachmentBit(TextureTarget::Texture2DArray) |
+                DynParams::PerLayerFramebufferAttachmentBit(TextureTarget::Texture2DMultisampleArray);
+            // A cube map array is one 2D image with arrayLayers = 6 * cubeCount, so a GL layer is a
+            // Vulkan array layer here too - but the image cannot be created without imageCubeArray.
+            // A 3D texture's GL layer is a z slice, which only a 2D view over a 2D-array-compatible
+            // image can name. Optimistic: a format that refuses the flag is caught at image creation
+            // and declines the slice view there, which the clear path handles as a soft miss.
+            if (m_vulkanCaps.Supports2DArrayCompatible3DImages) {
+                m_dynamicParameters.PerLayerFramebufferAttachmentTargets |=
+                    DynParams::PerLayerFramebufferAttachmentBit(TextureTarget::Texture3D);
+            }
+            if (m_vulkanCaps.SupportsImageCubeArray) {
+                m_dynamicParameters.PerLayerFramebufferAttachmentTargets |=
+                    DynParams::PerLayerFramebufferAttachmentBit(TextureTarget::TextureCubeMapArray);
+            }
+        }
         m_dynamicParameters.SupportsFloat64VertexAttributes = m_vulkanCaps.SupportsShaderFloat64;
         m_dynamicParameters.MaxShaderStorageBlockSize =
             std::min(m_vulkanCaps.MaxShaderStorageBlockSize, kMaxAdvertisedShaderStorageBlockSize);

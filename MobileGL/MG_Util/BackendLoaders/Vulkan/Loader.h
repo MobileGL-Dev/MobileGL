@@ -78,6 +78,18 @@ namespace MobileGL {
             // needs it, which includes every 64-bit vertex attribute: the attribute itself arrives
             // as 32-bit words, but the bitcast result and everything computed from it is Float64.
             Bool SupportsShaderFloat64 = false;
+            // VkPhysicalDeviceFeatures::imageCubeArray. Required before a
+            // VK_IMAGE_VIEW_TYPE_CUBE_ARRAY view may be created at all
+            // (VUID-VkImageViewCreateInfo-viewType-01004), which is every cube map array texture -
+            // both its sampled view and its full view.
+            Bool SupportsImageCubeArray = false;
+            // VK_IMAGE_CREATE_2D_ARRAY_COMPATIBLE_BIT on a 3D colour image, i.e. whether one z slice
+            // of a GL_TEXTURE_3D texture can be named by a 2D view and attached to a framebuffer.
+            // Vulkan 1.1 core, but per format+usage - this is an OPTIMISTIC summary probed over the
+            // common colour attachment formats. The authoritative answer is taken per format at
+            // image creation in VkTextureManager, which withdraws the flag and remembers the verdict
+            // when a driver refuses it.
+            Bool Supports2DArrayCompatible3DImages = false;
             // Storage-image descriptors are limited per stage by
             // maxPerStageDescriptorStorageImages, but writes/atomics outside compute additionally
             // require these core Vulkan features to be enabled on the logical device.

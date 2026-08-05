@@ -1069,10 +1069,35 @@ namespace MobileGL::MG_Impl::GLImpl {
         case TextureTarget::Texture2DMultisampleArray:
             textureUploadTarget = TextureUploadTarget::Texture2DMultisampleArray;
             break;
+        case TextureTarget::Texture1DArray:
+            textureUploadTarget = TextureUploadTarget::Texture1DArray;
+            break;
+        case TextureTarget::TextureCubeMapArray:
+            textureUploadTarget = TextureUploadTarget::CubeMapArray;
+            break;
         default:
-            RecordUnsupportedFramebufferTextureAttachmentError(
-                __func__, "FramebufferTextureLayer requires a 3D, 2D array or 2D multisample array texture.");
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidOperation,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
+                                             "FramebufferTextureLayer requires a 3D, array, 2D multisample "
+                                             "array, or cube map array texture."));
             return;
+        }
+        // The same backend question the DSA twin asks. GL 4.6 core 9.2.8 makes the two entry points
+        // equivalent, so they have to decline in the same places - leaving this one ungated is what
+        // let an unrepresentable attachment reach the renderer, and it also refused cube map arrays
+        // that GL requires it to accept.
+        {
+            const auto& layerLimits = MG_Backend::pActiveBackendObject
+                                          ? MG_Backend::pActiveBackendObject->GetDynamicParameters()
+                                          : MG_Backend::DynamicBackendParameters{};
+            const TextureTarget layeredTarget = textureObject->GetTarget();
+            if ((layer != 0 || layeredTarget == TextureTarget::TextureCubeMapArray) &&
+                !layerLimits.SupportsPerLayerFramebufferAttachment(layeredTarget)) {
+                RecordUnsupportedFramebufferTextureAttachmentError(
+                    __func__, "This backend does not resolve a framebuffer attachment's layer onto its image.");
+                return;
+            }
         }
         AttachFramebufferTextureLayer(__func__, target, attachment, texture, level, layer, textureUploadTarget);
     }
@@ -1433,11 +1458,19 @@ namespace MobileGL::MG_Impl::GLImpl {
         // so a slice lands outside the image and the renderer asserts on the clear. Letting it
         // through there would only move the failure downstream, so it is declined instead - layer
         // zero always works, being the plain first-slice attachment.
-        const Bool backsLayeredAttachment = limits.SupportsPerLayerFramebufferAttachment;
-        // A cube map array additionally has no image shape at all in VkTextureManager, so on that
-        // backend it cannot be an attachment whatever the layer is.
-        const Bool isCubeMapArray = textureObject->GetTarget() == TextureTarget::TextureCubeMapArray;
-        if ((layer != 0 && !backsLayeredAttachment) || (isCubeMapArray && !backsLayeredAttachment)) {
+        // ...and it is a DIFFERENT question per target: a 2D/2D-multisample array layer is a Vulkan
+        // array layer, a 3D layer is a z slice, and a cube map array needs a cube-compatible image
+        // before it has any layer to name. Ask the backend about this texture's target rather than
+        // guessing from one blanket flag.
+        const TextureTarget layeredTextureTarget = textureObject->GetTarget();
+        const Bool backsThisTargetsLayers = limits.SupportsPerLayerFramebufferAttachment(layeredTextureTarget);
+        // Layer zero of a 3D or array texture is the plain first-slice attachment every backend can
+        // already express, so it stays legal even where per-layer selection is not backed. A cube map
+        // array has no such fallback: layer zero is still one face of one cube inside a
+        // cube-compatible image, so it needs the same support layer 5 does.
+        const Bool needsPerLayerSupport =
+            layer != 0 || layeredTextureTarget == TextureTarget::TextureCubeMapArray;
+        if (needsPerLayerSupport && !backsThisTargetsLayers) {
             RecordUnsupportedFramebufferTextureAttachmentError(
                 __func__, "This backend does not resolve a framebuffer attachment's layer onto its image.");
             return;

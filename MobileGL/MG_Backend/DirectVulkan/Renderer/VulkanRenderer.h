@@ -815,6 +815,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                                    GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1,
                                                    GLint dstX0, GLint dstY0, GLint dstX1, GLint dstY1,
                                                    GLenum filter);
+        // Clears one z slice of a VK_IMAGE_TYPE_3D colour image. See the call site in
+        // MaterializePendingClearForTexture for why a transfer clear cannot do this.
+        Bool ClearDepthSliceWithRenderPass(VkCommandBuffer commandBuffer,
+                                           MG_State::GLState::ITextureObject& texture, Uint32 mipLevel,
+                                           Uint32 depthSlice, const VkClearValue& clearValue);
         Bool MaterializePendingClearForTexture(VkCommandBuffer commandBuffer,
                                                MG_State::GLState::ITextureObject& texture);
         Bool MaterializePendingClearForRenderbuffer(

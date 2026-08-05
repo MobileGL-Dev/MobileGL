@@ -1112,8 +1112,24 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // SyncAttachmentObject routes a layered upload target to glFramebufferTextureLayer with the
         // attachment's layer passed through, so this backend really does render to the layer it was
         // given - provided the driver resolved the entry point at all.
-        m_dynamicParameters.SupportsPerLayerFramebufferAttachment =
-            DirectGLES::g_GLESFuncs.glFramebufferTextureLayer != nullptr;
+        // SyncAttachmentObject (Managers.cpp, the glFramebufferTextureLayer branch) routes exactly
+        // five upload targets to glFramebufferTextureLayer with the attachment's layer passed
+        // through, so this backend really does render to the layer it was given - provided the driver
+        // resolved the entry point at all. The cube map array is the one target that also needs
+        // ES-level support before it has any storage to attach.
+        m_dynamicParameters.PerLayerFramebufferAttachmentTargets = 0;
+        if (DirectGLES::g_GLESFuncs.glFramebufferTextureLayer != nullptr) {
+            using DynParams = MG_Backend::DynamicBackendParameters;
+            m_dynamicParameters.PerLayerFramebufferAttachmentTargets |=
+                DynParams::PerLayerFramebufferAttachmentBit(TextureTarget::Texture3D) |
+                DynParams::PerLayerFramebufferAttachmentBit(TextureTarget::Texture1DArray) |
+                DynParams::PerLayerFramebufferAttachmentBit(TextureTarget::Texture2DArray) |
+                DynParams::PerLayerFramebufferAttachmentBit(TextureTarget::Texture2DMultisampleArray);
+            if (m_GLESCapabilities.SupportsTextureCubeMapArray) {
+                m_dynamicParameters.PerLayerFramebufferAttachmentTargets |=
+                    DynParams::PerLayerFramebufferAttachmentBit(TextureTarget::TextureCubeMapArray);
+            }
+        }
         // Not a driver question and never will be: OpenGL ES has no double-precision vertex format
         // and ESSL has no fp64 type to consume one with, so a 64-bit vertex attribute has nowhere to
         // land on this backend regardless of what the driver underneath happens to support.

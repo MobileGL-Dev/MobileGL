@@ -564,6 +564,27 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             outShape.depth = 1;
             outShape.arrayLayers = 6;
             return true;
+        case TextureUploadTarget::CubeMapArray:
+        case TextureUploadTarget::ProxyCubeMapArray:
+            // GL_TEXTURE_CUBE_MAP_ARRAY is an array texture whose layers happen to be cube faces:
+            // one 2D image with arrayLayers = 6 * cubeCount, CUBE_COMPATIBLE so the whole thing can
+            // be sampled as a samplerCubeArray. glTexStorage3D hands the 6*n through as the GL depth
+            // and the upload path's depthSelectsArrayLayer already lists VK_IMAGE_VIEW_TYPE_CUBE_ARRAY,
+            // so the copies address layers correctly.
+            //
+            // A depth that is not a whole number of cubes, or a non-square level, has no Vulkan shape
+            // - declined the way every other unrepresentable target is. This function's Bool return
+            // exists for exactly that; asserting here would abort the process on ordinary application
+            // input, GL_PROXY_TEXTURE_CUBE_MAP_ARRAY above all.
+            if (texelSize.z() <= 0 || (texelSize.z() % 6) != 0 || texelSize.x() != texelSize.y()) {
+                return false;
+            }
+            outShape.imageType = VK_IMAGE_TYPE_2D;
+            outShape.viewType = VK_IMAGE_VIEW_TYPE_CUBE_ARRAY;
+            outShape.imageFlags = VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT;
+            outShape.depth = 1;
+            outShape.arrayLayers = static_cast<Uint32>(texelSize.z());
+            return true;
         default:
             return false;
         }
@@ -822,8 +843,23 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         if (resource == nullptr || resource->image == VK_NULL_HANDLE || mipLevel >= resource->mipLevels) {
             return VK_NULL_HANDLE;
         }
-        if (layerCount == 0 || baseArrayLayer >= resource->arrayLayers ||
-            baseArrayLayer + layerCount > resource->arrayLayers) {
+        // A 3D image has arrayLayers == 1 and keeps its GL layers on the z axis, so a per-slice
+        // attachment view is a 2D view whose "array layer" is the slice - legal only on a
+        // 2D-array-compatible image (VUID-VkImageViewCreateInfo-image-04970), which
+        // SyncTextureResource asks for and may have had refused per format.
+        if (resource->viewType == VK_IMAGE_VIEW_TYPE_3D && viewType == VK_IMAGE_VIEW_TYPE_2D) {
+            const Uint32 sliceCount = std::max(resource->depth >> mipLevel, 1u);
+            if ((resource->imageCreateFlags & VK_IMAGE_CREATE_2D_ARRAY_COMPATIBLE_BIT) == 0 ||
+                layerCount == 0 || baseArrayLayer >= sliceCount || baseArrayLayer + layerCount > sliceCount) {
+                MGLOG_D("%s: cannot name slice span [%u, %u) of 3D textureId=%d (mip %u has %u slices, "
+                        "2D-array-compatible=%d)",
+                        __func__, baseArrayLayer, baseArrayLayer + layerCount, texture.GetExternalIndex(),
+                        mipLevel, sliceCount,
+                        (int)((resource->imageCreateFlags & VK_IMAGE_CREATE_2D_ARRAY_COMPATIBLE_BIT) != 0));
+                return VK_NULL_HANDLE;
+            }
+        } else if (layerCount == 0 || baseArrayLayer >= resource->arrayLayers ||
+                   baseArrayLayer + layerCount > resource->arrayLayers) {
             MGLOG_D("%s: invalid layer span [%u, %u) for textureId=%d arrayLayers=%u",
                     __func__, baseArrayLayer, baseArrayLayer + layerCount, texture.GetExternalIndex(),
                     resource->arrayLayers);
@@ -1492,11 +1528,17 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // preserve-copy path below carries the pixels over), so sequentially-
         // defined atlas mips do not recreate per level, and glGenerateMipmap -
         // which defines every level before syncing - works unchanged.
-        const Uint32 backingMipLevels =
-            isMultisampleTexture ? 1u
-            : (mipLevels > 1 ? std::max(mipLevels, ComputeFullMipLevelCount(texelSize)) : 1u);
         TextureShapeInfo shapeInfo{};
         const Bool supportedShape = TryResolveTextureShapeInfo(texture, uploadTarget, texelSize, shapeInfo);
+        // ComputeFullMipLevelCount takes max(x, y, z), and for every ARRAY shape z is the layer
+        // count, not a mip-able axis: a 4x4 array with 192 layers asked for 6 levels on an image
+        // whose legal maximum is 3 (VUID-VkImageCreateInfo-mipLevels-00958). Only the image's own
+        // extent - width, height and shapeInfo.depth, which is 1 for every array - can bound it.
+        // lavapipe has been letting this through unvalidated; a strict driver would not.
+        const IntVec3 mipExtent{texelSize.x(), texelSize.y(), static_cast<Int>(shapeInfo.depth)};
+        const Uint32 fullMipLevels = ComputeFullMipLevelCount(mipExtent);
+        const Uint32 backingMipLevels =
+            isMultisampleTexture ? 1u : (mipLevels > 1 ? std::min(std::max(mipLevels, fullMipLevels), fullMipLevels) : 1u);
         if (!supportedShape) {
             // A gap in this backend's coverage, not a broken invariant: the GL front end accepts
             // targets this manager has no Vulkan image shape for yet (cube map arrays above all).
@@ -1554,6 +1596,15 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             (formatProperties.optimalTilingFeatures & VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT) != 0;
         const Bool supportsStorageImage = storageImageCapable && markedAsStorageImage;
         VkImageCreateFlags imageCreateFlags = shapeInfo.imageFlags;
+        // One z slice of a 3D texture can only be attached to a framebuffer through a 2D view over
+        // it, which needs the image to be 2D-array-compatible (Vulkan 1.1 core, promoted from
+        // VK_KHR_maintenance1). Asked for optimistically and withdrawn per format below if the
+        // driver refuses - losing it only costs per-slice attachment, while failing creation would
+        // lose the texture entirely.
+        if (shapeInfo.imageType == VK_IMAGE_TYPE_3D && !isMultisampleTexture &&
+            m_2dArrayCompatibleUnsupported.find(format) == m_2dArrayCompatibleUnsupported.end()) {
+            imageCreateFlags |= VK_IMAGE_CREATE_2D_ARRAY_COMPATIBLE_BIT;
+        }
         if (storageImageCapable && IsMutableStorageImageFormat(format) &&
             m_mutableFormatUnsupported.find(format) == m_mutableFormatUnsupported.end()) {
             imageCreateFlags |= VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT;
@@ -1711,7 +1762,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             imageInfo.pNext = &formatListInfo;
         }
 
-        if (isMultisampleTexture || (imageInfo.flags & VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT) != 0) {
+        if (isMultisampleTexture || (imageInfo.flags & (VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT |
+                                                        VK_IMAGE_CREATE_2D_ARRAY_COMPATIBLE_BIT)) != 0) {
             VkImageFormatProperties imageFormatProperties{};
             VkResult imageFormatResult = vkGetPhysicalDeviceImageFormatProperties(
                 m_physicalDevice, format, imageInfo.imageType, imageInfo.tiling, imageInfo.usage,
@@ -1729,6 +1781,22 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 // the probe nor flag-mismatch against this image and recreate it.
                 m_mutableFormatUnsupported.insert(format);
                 imageInfo.flags &= ~VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT;
+                imageCreateFlags = imageInfo.flags;
+                imageFormatResult = vkGetPhysicalDeviceImageFormatProperties(
+                    m_physicalDevice, format, imageInfo.imageType, imageInfo.tiling, imageInfo.usage,
+                    imageInfo.flags, &imageFormatProperties);
+            }
+            if (imageFormatResult != VK_SUCCESS && !isMultisampleTexture &&
+                (imageInfo.flags & VK_IMAGE_CREATE_2D_ARRAY_COMPATIBLE_BIT) != 0) {
+                // Losing 2D-array compatibility only costs per-slice framebuffer attachment for this
+                // format; failing creation would lose the texture entirely. Remembered so later syncs
+                // neither reprobe nor flag-mismatch against this image and recreate it.
+                MGLOG_W("%s: VK_IMAGE_CREATE_2D_ARRAY_COMPATIBLE_BIT is unsupported for format=%d "
+                        "textureId=%d; creating without it (per-slice framebuffer attachment will be "
+                        "unavailable for it)",
+                        __func__, static_cast<Int>(format), texture.GetExternalIndex());
+                m_2dArrayCompatibleUnsupported.insert(format);
+                imageInfo.flags &= ~VK_IMAGE_CREATE_2D_ARRAY_COMPATIBLE_BIT;
                 imageCreateFlags = imageInfo.flags;
                 imageFormatResult = vkGetPhysicalDeviceImageFormatProperties(
                     m_physicalDevice, format, imageInfo.imageType, imageInfo.tiling, imageInfo.usage,

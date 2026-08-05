@@ -87,9 +87,20 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     static VkImageViewType ResolveAttachmentViewType(
         const MG_State::GLState::FramebufferAttachmentObject& attachment,
         const VkTextureManager::TextureResource& resource) {
-        return !attachment.IsLayered() && IsCubeMapFaceUploadTarget(attachment.GetTextureUploadTarget()) ?
-            VK_IMAGE_VIEW_TYPE_2D :
-            resource.viewType;
+        if (attachment.IsLayered()) {
+            return resource.viewType;
+        }
+        // A non-layered attachment names ONE layer, so the view over it is a plain 2D view whatever
+        // the image's own view type is. The cube-face upload targets always meant this; a cube map
+        // array attached through glFramebufferTextureLayer means it too, and a CUBE_ARRAY view over
+        // a single layer is not a legal attachment. The CUBE arm is inert today - no frontend path
+        // produces a non-layered cube attachment without a face upload target - and is kept for
+        // symmetry with CUBE_ARRAY.
+        if (IsCubeMapFaceUploadTarget(attachment.GetTextureUploadTarget()) ||
+            resource.viewType == VK_IMAGE_VIEW_TYPE_CUBE_ARRAY || resource.viewType == VK_IMAGE_VIEW_TYPE_CUBE) {
+            return VK_IMAGE_VIEW_TYPE_2D;
+        }
+        return resource.viewType;
     }
 
     static MG_State::GLState::ITextureObject* ResolveCompleteColorAttachmentTexture(

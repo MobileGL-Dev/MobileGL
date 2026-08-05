@@ -5921,6 +5921,83 @@ void main() {
         QueueClearBufferPayload(buffer, drawbuffer, payload);
     }
 
+    Bool VulkanRenderer::ClearDepthSliceWithRenderPass(VkCommandBuffer commandBuffer,
+                                                       MG_State::GLState::ITextureObject& texture, Uint32 mipLevel,
+                                                       Uint32 depthSlice, const VkClearValue& clearValue) {
+        auto* resource = m_textureManager->SyncTextureAndGetDescriptor(texture);
+        if (resource == nullptr || resource->image == VK_NULL_HANDLE) return false;
+        if (m_frameContext.GetCurrentFrameIndex() >= m_deferredDepthMipmapCleanup.size()) return false;
+
+        // A 2D view over one z slice. Returns VK_NULL_HANDLE when the image is not
+        // 2D-array-compatible, which is the whole reason this can fail.
+        const VkImageView sliceView = m_textureManager->GetOrCreateAttachmentViewAtMipLevel(
+            texture, mipLevel, depthSlice, 1, VK_IMAGE_VIEW_TYPE_2D);
+        if (sliceView == VK_NULL_HANDLE) return false;
+
+        VkAttachmentDescription colorAttachment{};
+        colorAttachment.format = resource->format;
+        colorAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
+        colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        colorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        colorAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        colorAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        colorAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        // Hand the slice back in the layout the caller already tracks for the whole image, so its
+        // closing barrier stays truthful and resource->layout is never touched from in here.
+        colorAttachment.finalLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+
+        VkAttachmentReference colorRef{};
+        colorRef.attachment = 0;
+        colorRef.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+
+        VkSubpassDescription subpass{};
+        subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+        subpass.colorAttachmentCount = 1;
+        subpass.pColorAttachments = &colorRef;
+
+        VkRenderPassCreateInfo renderPassInfo{VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO};
+        renderPassInfo.attachmentCount = 1;
+        renderPassInfo.pAttachments = &colorAttachment;
+        renderPassInfo.subpassCount = 1;
+        renderPassInfo.pSubpasses = &subpass;
+
+        VkRenderPass renderPass = VK_NULL_HANDLE;
+        if (vkCreateRenderPass(m_device, &renderPassInfo, nullptr, &renderPass) != VK_SUCCESS) return false;
+
+        const Uint32 levelWidth = std::max(resource->extent.width >> mipLevel, 1u);
+        const Uint32 levelHeight = std::max(resource->extent.height >> mipLevel, 1u);
+
+        VkFramebufferCreateInfo framebufferInfo{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
+        framebufferInfo.renderPass = renderPass;
+        framebufferInfo.attachmentCount = 1;
+        framebufferInfo.pAttachments = &sliceView;
+        framebufferInfo.width = levelWidth;
+        framebufferInfo.height = levelHeight;
+        framebufferInfo.layers = 1;
+
+        VkFramebuffer framebuffer = VK_NULL_HANDLE;
+        if (vkCreateFramebuffer(m_device, &framebufferInfo, nullptr, &framebuffer) != VK_SUCCESS) {
+            vkDestroyRenderPass(m_device, renderPass, nullptr);
+            return false;
+        }
+
+        VkRenderPassBeginInfo beginInfo{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
+        beginInfo.renderPass = renderPass;
+        beginInfo.framebuffer = framebuffer;
+        beginInfo.renderArea.extent = {levelWidth, levelHeight};
+        beginInfo.clearValueCount = 1;
+        beginInfo.pClearValues = &clearValue;
+        // The load op is the whole operation: begin and end with nothing in between.
+        vkCmdBeginRenderPass(commandBuffer, &beginInfo, VK_SUBPASS_CONTENTS_INLINE);
+        vkCmdEndRenderPass(commandBuffer);
+
+        // The image view is owned and memoised by the texture resource; only these two are throwaway.
+        auto& deferredCleanup = m_deferredDepthMipmapCleanup[m_frameContext.GetCurrentFrameIndex()];
+        deferredCleanup.renderPasses.push_back(renderPass);
+        deferredCleanup.framebuffers.push_back(framebuffer);
+        return true;
+    }
+
     Bool VulkanRenderer::MaterializePendingClearForTexture(VkCommandBuffer commandBuffer,
                                                            MG_State::GLState::ITextureObject& texture) {
         Vector<PendingClearEntry> pendingClears;
@@ -5957,16 +6034,79 @@ void main() {
             MOBILEGL_ASSERT(pendingClear.key.mipLevel < resource->mipLevels,
                             "MaterializePendingClearForTexture: textureId=%d pending clear mip=%u out of range %u",
                             texture.GetExternalIndex(), pendingClear.key.mipLevel, resource->mipLevels);
-            MOBILEGL_ASSERT(pendingClear.key.baseArrayLayer + pendingClear.key.layerCount <= resource->arrayLayers,
-                            "MaterializePendingClearForTexture: textureId=%d pending clear layer span [%u, %u) exceeds arrayLayers=%u",
+            // FIXME: a layered clear of a GL_TEXTURE_3D texture still reads back wrong.
+            // KHR-GL44/45/46.geometry_shader.layered_framebuffer.clear_call_support fails on
+            // DirectVulkan: it attaches a 4-deep 3D texture with glFramebufferTexture (layered),
+            // clears with glClearBufferiv, then reads each slice back through
+            // glFramebufferTextureLayer and gets zeros. Those cases exist only in the GL44+ lists,
+            // above the 4.0 this backend reports, so they are outside the current conformance
+            // claim - but the feature (layered attachment, GL 3.2) is not, so an application can
+            // reach this.
+            //
+            // Already ruled out by bisecting with temporary bypasses, so do not re-test these:
+            //   - the per-slice render-pass clear below (disabling it changes nothing)
+            //   - the per-target gate in FramebufferTextureLayer_State (it already permits
+            //     Texture3D here; bypassing it changes nothing)
+            //   - VK_IMAGE_CREATE_2D_ARRAY_COMPATIBLE_BIT on the 3D image (not requesting it
+            //     changes nothing)
+            // What IS fixed here is the subresource range below: a layered GL clear queues
+            // layerCount = depth, which is illegal for a VK_IMAGE_TYPE_3D image, and the old code
+            // passed it straight through - running the case standalone against the previous build
+            // trips MOBILEGL_ASSERT(baseArrayLayer + layerCount <= arrayLayers) as 0 + 4 <= 1.
+            //
+            // Note when picking this up: the case does not reproduce standalone the way it behaves
+            // in a batch run (batch passed before this change, standalone asserted), so it depends
+            // on state left by earlier cases. Reproduce it inside a chunk, not on its own.
+            //
+            // A 3D image keeps its GL layers on the z axis (arrayLayers == 1), so the pending
+            // clear's "layer" is a slice index bounded by the mip level's depth.
+            const Bool clearAddressesDepthSlices = resource->viewType == VK_IMAGE_VIEW_TYPE_3D;
+            const Uint32 clearableLayers = clearAddressesDepthSlices
+                                               ? std::max(resource->depth >> pendingClear.key.mipLevel, 1u)
+                                               : resource->arrayLayers;
+            MOBILEGL_ASSERT(pendingClear.key.baseArrayLayer + pendingClear.key.layerCount <= clearableLayers,
+                            "MaterializePendingClearForTexture: textureId=%d pending clear layer span [%u, %u) exceeds %u",
                             texture.GetExternalIndex(), pendingClear.key.baseArrayLayer,
-                            pendingClear.key.baseArrayLayer + pendingClear.key.layerCount, resource->arrayLayers);
+                            pendingClear.key.baseArrayLayer + pendingClear.key.layerCount, clearableLayers);
+            // Whether this clear names a strict SUBSET of the level. A layered attachment
+            // (glFramebufferTexture) queues layerCount = the whole depth, a single-slice one
+            // (glFramebufferTextureLayer) queues 1 - so the key already distinguishes them, and it is
+            // the clear's span that decides, not the image's slice count. Reading the latter sent a
+            // layered clear of a 3D texture down the per-slice path, where it cleared slice zero and
+            // left the rest stale (geometry_shader.layered_framebuffer.clear_call_support).
+            const Bool clearsWholeLevel =
+                pendingClear.key.baseArrayLayer == 0 && pendingClear.key.layerCount >= clearableLayers;
+            if (clearAddressesDepthSlices && clearableLayers > 1 && !clearsWholeLevel) {
+                // vkCmdClearColorImage cannot clear a subset of a 3D image's slices:
+                // VUID-vkCmdClearColorImage-baseArrayLayer-01472 pins baseArrayLayer to 0 and
+                // layerCount to 1 for VK_IMAGE_TYPE_3D, i.e. the whole mip level. A render pass whose
+                // only content is its LOAD_OP_CLEAR does address exactly one slice, because its
+                // attachment is a 2D view over that slice.
+                auto clearPayload3D = pendingClear.payload;
+                PreCompensateSrgbClearColor(clearPayload3D, resource->format);
+                VkClearValue sliceClearValue{};
+                sliceClearValue.color = MakeVkClearColorValue(clearPayload3D, ColorFormatLacksAlpha(&texture));
+                if (!ClearDepthSliceWithRenderPass(commandBuffer, texture, pendingClear.key.mipLevel,
+                                                   pendingClear.key.baseArrayLayer, sliceClearValue)) {
+                    // The device or the format refused VK_IMAGE_CREATE_2D_ARRAY_COMPATIBLE_BIT, so
+                    // there is no way to name this slice. Leaving it uncleared is wrong pixels;
+                    // asserting would abort a process that glFramebufferTextureLayer can reach at will.
+                    MGLOG_W("MaterializePendingClearForTexture: textureId=%d slice %u could not be cleared "
+                            "(no 2D-array-compatible view)",
+                            texture.GetExternalIndex(), pendingClear.key.baseArrayLayer);
+                }
+                continue;
+            }
 
             VkImageSubresourceRange subresourceRange{};
             subresourceRange.baseMipLevel = pendingClear.key.mipLevel;
             subresourceRange.levelCount = 1;
-            subresourceRange.baseArrayLayer = pendingClear.key.baseArrayLayer;
-            subresourceRange.layerCount = pendingClear.key.layerCount;
+            // VUID-vkCmdClearColorImage-baseArrayLayer-01472: for a VK_IMAGE_TYPE_3D image the range
+            // must name baseArrayLayer 0 and layerCount 1, which Vulkan reads as "the whole mip
+            // level" - the z extent is not an array dimension. A layered GL clear queues
+            // layerCount = depth, which is the right GL answer and an illegal Vulkan one.
+            subresourceRange.baseArrayLayer = clearAddressesDepthSlices ? 0u : pendingClear.key.baseArrayLayer;
+            subresourceRange.layerCount = clearAddressesDepthSlices ? 1u : pendingClear.key.layerCount;
 
             auto clearPayload = pendingClear.payload;
             if ((resource->aspect & VK_IMAGE_ASPECT_COLOR_BIT) != 0) {
@@ -9993,6 +10133,10 @@ void main() {
         // it vkCreateShaderModule is invalid usage (VUID-VkShaderModuleCreateInfo-pCode-08740),
         // which is why SupportsFloat64VertexAttributes gates the entry point on the same feature.
         deviceFeatures.shaderFloat64 = supportedDeviceFeatures.shaderFloat64;
+        // Required before a VK_IMAGE_VIEW_TYPE_CUBE_ARRAY view may be created
+        // (VUID-VkImageViewCreateInfo-viewType-01004). Without it a cube map array texture cannot
+        // get its sampled or full view, so SyncTextureResource fails and the texture stays unbacked.
+        deviceFeatures.imageCubeArray = supportedDeviceFeatures.imageCubeArray;
         // Required for desktop GL image load/store semantics. iterationRP writes storage
         // images from vertex and fragment stages and uses formats outside Vulkan's small
         // mandatory storage-image set.

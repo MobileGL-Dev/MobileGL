@@ -1419,6 +1419,36 @@ namespace MobileGL::MG_Util::SelfTest {
         } else {
             builder.Warn("dualSrcBlend", "unsupported; GL_SRC1_* dual-source blend factors hard-fail at draw");
         }
+        {
+            VkImageFormatProperties sliceProbe{};
+            const Bool sliceCapable =
+                vkGetPhysicalDeviceImageFormatProperties(
+                    physicalDevice, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_TYPE_3D, VK_IMAGE_TILING_OPTIMAL,
+                    VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
+                        VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+                    VK_IMAGE_CREATE_2D_ARRAY_COMPATIBLE_BIT, &sliceProbe) == VK_SUCCESS;
+            if (sliceCapable) {
+                builder.Pass("2D-array-compatible 3D images",
+                             "supported for the common colour attachment formats (one z slice of a "
+                             "GL_TEXTURE_3D texture can be attached to a framebuffer and cleared and read "
+                             "back on its own; a format that refuses the flag is detected at image "
+                             "creation and declines per-slice attachment)");
+            } else {
+                builder.Warn("2D-array-compatible 3D images",
+                             "VK_IMAGE_CREATE_2D_ARRAY_COMPATIBLE_BIT unavailable for colour attachments; "
+                             "glFramebufferTextureLayer on a GL_TEXTURE_3D texture is declined for every "
+                             "slice past the first");
+            }
+        }
+        if (features.imageCubeArray == VK_TRUE) {
+            builder.Pass("imageCubeArray",
+                         "GL_TEXTURE_CUBE_MAP_ARRAY textures get a Vulkan image and can be sampled and "
+                         "attached to a framebuffer per layer");
+        } else {
+            builder.Warn("imageCubeArray",
+                         "unsupported; a GL_TEXTURE_CUBE_MAP_ARRAY texture gets no image at all, so sampling "
+                         "one reads nothing and glFramebufferTextureLayer on one is declined");
+        }
         if (features.shaderFloat64 == VK_TRUE) {
             builder.Pass("shaderFloat64",
                          "GLSL double/dvec/dmat and 64-bit vertex attributes (glVertexAttribLFormat) supported");

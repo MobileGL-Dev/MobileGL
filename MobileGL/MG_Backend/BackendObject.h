@@ -358,7 +358,28 @@ namespace MobileGL {
             // glFramebufferTextureLayer, so it does; DirectVulkan maps a GL layer onto a Vulkan
             // array layer with no notion of a 3D depth slice, so it does not yet. Defaults to false
             // so a backend that never sets it gets the conservative answer.
-            Bool SupportsPerLayerFramebufferAttachment = false;
+            // Which layered texture targets this backend can attach ONE layer of to a framebuffer
+            // and then really clear, render and read back that layer. Bit (1u << TextureTarget) is
+            // set for each supported target. Deliberately per target rather than one flag: the three
+            // ways a GL layer maps onto Vulkan are independent capabilities. A 2D or 2D multisample
+            // array layer IS a VkImage array layer and needs nothing extra; a 3D texture's layer is
+            // a z slice, which needs a 2D-array-compatible image and a per-slice clear that
+            // vkCmdClearColorImage cannot express; a cube map array needs an image shape and the
+            // imageCubeArray feature before it can be attached at any layer at all. Defaults to 0 so
+            // a backend that never sets it gets the conservative answer.
+            Uint32 PerLayerFramebufferAttachmentTargets = 0;
+
+            static constexpr Uint32 PerLayerFramebufferAttachmentBit(TextureTarget target) {
+                return (static_cast<Int>(target) >= 0 &&
+                        static_cast<Int>(target) < static_cast<Int>(TextureTarget::TextureTargetCount))
+                           ? (1u << static_cast<Uint32>(target))
+                           : 0u;
+            }
+
+            Bool SupportsPerLayerFramebufferAttachment(TextureTarget target) const {
+                const Uint32 bit = PerLayerFramebufferAttachmentBit(target);
+                return bit != 0 && (PerLayerFramebufferAttachmentTargets & bit) != 0;
+            }
             // Whether glVertexAttribLFormat / glVertexArrayAttribLFormat can be honoured, i.e.
             // whether a 64-bit vertex attribute can actually reach a shader unconverted. Detected,
             // never assumed: DirectVulkan needs VkPhysicalDeviceFeatures::shaderFloat64 (the

@@ -487,6 +487,10 @@ private:
     // Formats whose mutable-image probe failed on this device; their images are created
     // without MUTABLE_FORMAT_BIT so repeat syncs neither re-probe nor flag-mismatch.
     std::unordered_set<VkFormat> m_mutableFormatUnsupported;
+    // Formats whose 3D images refused VK_IMAGE_CREATE_2D_ARRAY_COMPATIBLE_BIT. Per format+usage,
+    // exactly like the mutable-format verdict above, so it is answered at image creation and
+    // remembered rather than probed once globally.
+    std::unordered_set<VkFormat> m_2dArrayCompatibleUnsupported;
     std::unordered_map<TextureIdentity, WeakPtr<MG_State::GLState::ITextureObject>, TextureIdentityHash> m_aliveObjects;
     std::unordered_map<TextureIdentity, TextureResource, TextureIdentityHash> m_textureResources;
     // Textures that have been bound to a GL image unit (see MarkStorageImageTexture).

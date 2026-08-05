@@ -199,6 +199,29 @@ namespace MobileGL::MG_Util::BackendLoader {
         vkGetPhysicalDeviceFeatures(physicalDevice, &supportedFeatures);
         caps.SupportsWideLines = supportedFeatures.wideLines == VK_TRUE;
         caps.SupportsShaderFloat64 = supportedFeatures.shaderFloat64 == VK_TRUE;
+        caps.SupportsImageCubeArray = supportedFeatures.imageCubeArray == VK_TRUE;
+        {
+            // Probe the formats a colour render target actually uses. A driver that refuses the flag
+            // for one of them refuses per-slice attachment for that format only, which
+            // VkTextureManager detects and records at image creation; this field just says whether
+            // the capability is worth offering at all.
+            static constexpr VkFormat k3DSliceProbeFormats[] = {VK_FORMAT_R8G8B8A8_UNORM,
+                                                                VK_FORMAT_R8G8B8A8_SRGB};
+            Bool all2DArrayCompatible = true;
+            for (const VkFormat probeFormat : k3DSliceProbeFormats) {
+                VkImageFormatProperties probeProperties{};
+                const VkResult probeResult = vkGetPhysicalDeviceImageFormatProperties(
+                    physicalDevice, probeFormat, VK_IMAGE_TYPE_3D, VK_IMAGE_TILING_OPTIMAL,
+                    VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
+                        VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+                    VK_IMAGE_CREATE_2D_ARRAY_COMPATIBLE_BIT, &probeProperties);
+                if (probeResult != VK_SUCCESS) {
+                    all2DArrayCompatible = false;
+                    break;
+                }
+            }
+            caps.Supports2DArrayCompatible3DImages = all2DArrayCompatible;
+        }
         caps.SupportsVertexPipelineStoresAndAtomics =
             supportedFeatures.vertexPipelineStoresAndAtomics == VK_TRUE;
         caps.SupportsFragmentStoresAndAtomics = supportedFeatures.fragmentStoresAndAtomics == VK_TRUE;
@@ -290,6 +313,8 @@ namespace MobileGL::MG_Util::BackendLoader {
         FillFragmentInterpolationLimits(caps, properties.limits);
         caps.SupportsWideLines = false;
         caps.SupportsShaderFloat64 = false;
+        caps.SupportsImageCubeArray = false;
+        caps.Supports2DArrayCompatible3DImages = false;
         // This helper only receives properties, not VkPhysicalDeviceFeatures. Leave optional
         // stage writes disabled rather than inferring them from descriptor limits alone.
         caps.SupportsVertexPipelineStoresAndAtomics = false;
