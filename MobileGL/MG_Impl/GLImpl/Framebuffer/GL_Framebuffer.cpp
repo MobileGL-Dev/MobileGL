@@ -2199,6 +2199,56 @@ namespace MobileGL::MG_Impl::GLImpl {
         ReadPixels_Backend(x, y, width, height, format, type, pixels);
     }
 
+    // Bytes glReadPixels would write for this rectangle under the current GL_PACK_* state
+    // (GL 4.6 core 18.2.8): rows are padded to GL_PACK_ALIGNMENT and laid out GL_PACK_ROW_LENGTH
+    // wide, and the skip parameters offset the first texel. The last row is not padded - nothing
+    // follows it to align - which is what makes a tightly-sized destination legal.
+    static SizeT ComputePackedReadSizeInBytes(GLsizei width, GLsizei height, GLenum format, GLenum type) {
+        const SizeT bytesPerPixel =
+            MG_Util::GetInputBytesPerPixel(MG_Util::ConvertGLEnumToTextureInputFormat(format),
+                                           MG_Util::ConvertGLEnumToTexturePixelDataType(type));
+        if (bytesPerPixel == 0 || width <= 0 || height <= 0) return 0;
+
+        const auto packParam = [](PixelStoreParam param) {
+            return static_cast<SizeT>(std::max(0, MG_State::pGLContext->GetPixelStoreParam(param)));
+        };
+        const SizeT rowLengthInPixels =
+            packParam(PixelStoreParam::PackRowLength) != 0
+                ? packParam(PixelStoreParam::PackRowLength)
+                : static_cast<SizeT>(width);
+        const SizeT alignment = std::max<SizeT>(1, packParam(PixelStoreParam::PackAlignment));
+
+        const SizeT unalignedRowBytes = rowLengthInPixels * bytesPerPixel;
+        const SizeT paddedRowBytes = ((unalignedRowBytes + alignment - 1) / alignment) * alignment;
+        const SizeT skipBytes = packParam(PixelStoreParam::PackSkipRows) * paddedRowBytes +
+                                packParam(PixelStoreParam::PackSkipPixels) * bytesPerPixel;
+
+        return skipBytes + paddedRowBytes * (static_cast<SizeT>(height) - 1) +
+               static_cast<SizeT>(width) * bytesPerPixel;
+    }
+
+    // glReadnPixels is glReadPixels with a bound on how much it may write (GL 4.6 core 18.2.8,
+    // originally GL_ARB_robustness). It is identical in every other respect, so it validates and
+    // reads through exactly the same path once the destination is known to be big enough.
+    void ReadnPixels(GLint x, GLint y, GLsizei width, GLsizei height, GLenum format, GLenum type, GLsizei bufSize,
+                     void* data) {
+        if (bufSize < 0) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidValue,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__, "bufSize must be non-negative."));
+            return;
+        }
+        if (!ReadPixels_State(x, y, width, height, format, type, data)) return;
+        if (ComputePackedReadSizeInBytes(width, height, format, type) > static_cast<SizeT>(bufSize)) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidOperation,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
+                                             "the data required for this read does not fit in bufSize."));
+            return;
+        }
+        ReadPixels_Backend(x, y, width, height, format, type, data);
+    }
+
     void ClearBufferfi(GLenum buffer, GLint drawbuffer, GLfloat depth, GLint stencil) {
         if (!ValidateClearBufferfi_State(buffer, drawbuffer)) return;
         ClearBufferfi_Backend(buffer, drawbuffer, depth, stencil);
