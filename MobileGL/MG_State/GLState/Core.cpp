@@ -842,6 +842,64 @@ namespace MobileGL::MG_State {
             const auto it = m_transformFeedbackObjects.find(index);
             return it != m_transformFeedbackObjects.end() && it->second.hasCompletedSpan;
         }
+
+        void GLContext::CreateTransformFeedbackObject(Uint index) {
+            // glCreateTransformFeedbacks has no bind step to infer existence from, so the name it
+            // hands out is already the name of an object (GL 4.6 core 13.2.1).
+            m_transformFeedbackObjects[index] = {};
+            m_transformFeedbackObjects[index].everBound = true;
+        }
+
+        Bool GLContext::IsNamedTransformFeedbackActive(Uint index) const {
+            if (index == m_boundTransformFeedback) return m_transformFeedbackActive;
+            const auto it = m_transformFeedbackObjects.find(index);
+            return it != m_transformFeedbackObjects.end() && it->second.active;
+        }
+
+        Bool GLContext::IsNamedTransformFeedbackPaused(Uint index) const {
+            if (index == m_boundTransformFeedback) return m_transformFeedbackPaused;
+            const auto it = m_transformFeedbackObjects.find(index);
+            return it != m_transformFeedbackObjects.end() && it->second.paused;
+        }
+
+        NamedTransformFeedbackBinding GLContext::GetNamedTransformFeedbackBinding(Uint index, Uint bufferIndex) const {
+            NamedTransformFeedbackBinding result;
+            if (bufferIndex >= MAX_TRANSFORM_FEEDBACK_BUFFERS) return result;
+            // The bound object's capture bindings live in the context's own binding points, not in
+            // the saved copy - that one is only written when the object is swapped out.
+            if (index == m_boundTransformFeedback) {
+                const auto& point = m_bufferState.GetBindingPoint(BufferTarget::TransformFeedback, bufferIndex);
+                result.Buffer = point.GetBoundObject();
+                result.Range = point.GetRange();
+                result.HasExplicitRange = point.HasExplicitRange();
+                return result;
+            }
+            const auto it = m_transformFeedbackObjects.find(index);
+            if (it == m_transformFeedbackObjects.end()) return result;
+            const auto& saved = it->second.bindings[bufferIndex];
+            result.Buffer = saved.buffer;
+            result.Range = saved.range;
+            result.HasExplicitRange = saved.hasExplicitRange;
+            return result;
+        }
+
+        void GLContext::SetNamedTransformFeedbackBinding(Uint index, Uint bufferIndex,
+                                                         const SharedPtr<BufferObject>& buffer, Range1D range,
+                                                         Bool hasExplicitRange) {
+            if (bufferIndex >= MAX_TRANSFORM_FEEDBACK_BUFFERS) return;
+            if (index == m_boundTransformFeedback) {
+                auto& point = m_bufferState.GetBindingPoint(BufferTarget::TransformFeedback, bufferIndex);
+                point.Bind(buffer);
+                if (buffer && hasExplicitRange) {
+                    point.SetRange(range, true);
+                } else {
+                    point.ClearRange();
+                }
+                return;
+            }
+            auto& object = m_transformFeedbackObjects[index];
+            object.bindings[bufferIndex] = {buffer, range, hasExplicitRange};
+        }
     } // namespace GLState
 
     // Leak-at-exit storage; see GlobalObjects.cpp.

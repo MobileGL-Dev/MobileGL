@@ -16,7 +16,13 @@ namespace MobileGL::MG_Impl::GLImpl {
     void PauseTransformFeedback(void);
     void ResumeTransformFeedback(void);
     void GenTransformFeedbacks(GLsizei n, GLuint* ids);
+    void CreateTransformFeedbacks(GLsizei n, GLuint* ids);
     void DeleteTransformFeedbacks(GLsizei n, const GLuint* ids);
+    void TransformFeedbackBufferBase(GLuint xfb, GLuint index, GLuint buffer);
+    void TransformFeedbackBufferRange(GLuint xfb, GLuint index, GLuint buffer, GLintptr offset, GLsizeiptr size);
+    void GetTransformFeedbackiv(GLuint xfb, GLenum pname, GLint* param);
+    void GetTransformFeedbacki_v(GLuint xfb, GLenum pname, GLuint index, GLint* param);
+    void GetTransformFeedbacki64_v(GLuint xfb, GLenum pname, GLuint index, GLint64* param);
     void BindTransformFeedback(GLenum target, GLuint id);
     GLboolean IsTransformFeedback(GLuint id);
     void DrawTransformFeedback(GLenum mode, GLuint id);

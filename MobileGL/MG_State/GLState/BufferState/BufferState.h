@@ -31,6 +31,9 @@ namespace MobileGL::MG_State::GLState {
         BindingSlot<BufferObject>& GetBindingSlot(BufferTarget target);
         // For glBindBufferBase / glBindBufferRange
         BindingSlotRange1D<BufferObject>& GetBindingPoint(BufferTarget target, Uint index);
+        const BindingSlotRange1D<BufferObject>& GetBindingPoint(BufferTarget target, Uint index) const {
+            return const_cast<BufferState*>(this)->GetBindingPoint(target, index);
+        }
         constexpr SizeT GetBindingPointCount(const BufferTarget target) const {
             auto it = std::find(BufferBindPointTargets.begin(), BufferBindPointTargets.end(), target);
             auto index = std::distance(BufferBindPointTargets.begin(), it);

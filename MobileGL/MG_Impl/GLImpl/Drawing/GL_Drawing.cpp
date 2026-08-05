@@ -877,6 +877,172 @@ namespace MobileGL::MG_Impl::GLImpl {
         Memcpy(ids, names.data(), static_cast<SizeT>(n) * sizeof(GLuint));
     }
 
+    void CreateTransformFeedbacks(GLsizei n, GLuint* ids) {
+        if (n < 0) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidValue,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__, "n must be non-negative."));
+            return;
+        }
+        if (n == 0 || ids == nullptr) return;
+        Vector<Uint> names;
+        MG_State::pGLContext->GenTransformFeedbackNames(static_cast<Uint>(n), names);
+        // Unlike glGenTransformFeedbacks, the names are objects immediately: there is no bind step
+        // to create them from (GL 4.6 core 13.2.1).
+        for (const Uint name : names) {
+            MG_State::pGLContext->CreateTransformFeedbackObject(name);
+        }
+        Memcpy(ids, names.data(), static_cast<SizeT>(n) * sizeof(GLuint));
+    }
+
+    namespace {
+        // Shared front half of the by-name transform feedback entry points: the object has to exist
+        // (INVALID_OPERATION otherwise) before anything else about the call is looked at.
+        Bool ValidateNamedTransformFeedback(GLuint xfb, const char* functionName) {
+            if (!MG_State::pGLContext->IsTransformFeedbackObject(xfb)) {
+                MG_State::pGLContext->RecordError(
+                    ErrorCode::InvalidOperation,
+                    MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", functionName,
+                                                 std::to_string(xfb) + " is not a transform feedback object."));
+                return false;
+            }
+            return true;
+        }
+
+        Bool ValidateTransformFeedbackBufferIndex(GLuint index, const char* functionName) {
+            if (index >= MG_State::GLState::GLContext::MAX_TRANSFORM_FEEDBACK_BUFFERS) {
+                MG_State::pGLContext->RecordError(
+                    ErrorCode::InvalidValue,
+                    MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", functionName,
+                                                 "index exceeds GL_MAX_TRANSFORM_FEEDBACK_BUFFERS."));
+                return false;
+            }
+            return true;
+        }
+
+        // A capture binding may not be changed while the object is capturing (GL 4.6 core 13.2.2).
+        Bool ValidateNamedTransformFeedbackNotActive(GLuint xfb, const char* functionName) {
+            if (MG_State::pGLContext->IsNamedTransformFeedbackActive(xfb)) {
+                MG_State::pGLContext->RecordError(
+                    ErrorCode::InvalidOperation,
+                    MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", functionName,
+                                                 "The transform feedback object is capturing."));
+                return false;
+            }
+            return true;
+        }
+
+        SharedPtr<MG_State::GLState::BufferObject> ResolveTransformFeedbackBuffer(GLuint buffer,
+                                                                                 const char* functionName) {
+            if (buffer == 0) return nullptr;
+            if (!MG_State::pGLContext->ValidateBufferName(buffer)) {
+                MG_State::pGLContext->RecordError(
+                    ErrorCode::InvalidOperation,
+                    MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", functionName,
+                                                 std::to_string(buffer) + " is not a buffer object."));
+                return nullptr;
+            }
+            return MG_State::pGLContext->GetBufferObject(buffer);
+        }
+    } // namespace
+
+    void TransformFeedbackBufferBase(GLuint xfb, GLuint index, GLuint buffer) {
+        if (!ValidateNamedTransformFeedback(xfb, __func__)) return;
+        if (!ValidateTransformFeedbackBufferIndex(index, __func__)) return;
+        if (!ValidateNamedTransformFeedbackNotActive(xfb, __func__)) return;
+        if (buffer != 0 && !MG_State::pGLContext->ValidateBufferName(buffer)) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidOperation,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
+                                             std::to_string(buffer) + " is not a buffer object."));
+            return;
+        }
+        MG_State::pGLContext->SetNamedTransformFeedbackBinding(xfb, index,
+                                                               ResolveTransformFeedbackBuffer(buffer, __func__), {},
+                                                               false);
+    }
+
+    void TransformFeedbackBufferRange(GLuint xfb, GLuint index, GLuint buffer, GLintptr offset, GLsizeiptr size) {
+        if (!ValidateNamedTransformFeedback(xfb, __func__)) return;
+        if (!ValidateTransformFeedbackBufferIndex(index, __func__)) return;
+        if (!ValidateNamedTransformFeedbackNotActive(xfb, __func__)) return;
+        if (offset < 0 || size <= 0 || (offset % 4) != 0 || (size % 4) != 0) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidValue,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
+                                             "offset and size must be non-negative multiples of 4."));
+            return;
+        }
+        if (buffer != 0 && !MG_State::pGLContext->ValidateBufferName(buffer)) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidOperation,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
+                                             std::to_string(buffer) + " is not a buffer object."));
+            return;
+        }
+        auto bufferObject = ResolveTransformFeedbackBuffer(buffer, __func__);
+        const Range1D range{static_cast<SizeT>(offset), static_cast<SizeT>(offset) + static_cast<SizeT>(size)};
+        MG_State::pGLContext->SetNamedTransformFeedbackBinding(xfb, index, bufferObject, range,
+                                                               bufferObject != nullptr);
+    }
+
+    void GetTransformFeedbackiv(GLuint xfb, GLenum pname, GLint* param) {
+        if (!ValidateNamedTransformFeedback(xfb, __func__)) return;
+        if (!param) return;
+        switch (pname) {
+        case GL_TRANSFORM_FEEDBACK_ACTIVE:
+            *param = MG_State::pGLContext->IsNamedTransformFeedbackActive(xfb) ? GL_TRUE : GL_FALSE;
+            return;
+        case GL_TRANSFORM_FEEDBACK_PAUSED:
+            *param = MG_State::pGLContext->IsNamedTransformFeedbackPaused(xfb) ? GL_TRUE : GL_FALSE;
+            return;
+        default:
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidEnum,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
+                                             "pname must be GL_TRANSFORM_FEEDBACK_ACTIVE or _PAUSED."));
+            return;
+        }
+    }
+
+    void GetTransformFeedbacki_v(GLuint xfb, GLenum pname, GLuint index, GLint* param) {
+        if (!ValidateNamedTransformFeedback(xfb, __func__)) return;
+        if (pname != GL_TRANSFORM_FEEDBACK_BUFFER_BINDING) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidEnum,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
+                                             "pname must be GL_TRANSFORM_FEEDBACK_BUFFER_BINDING."));
+            return;
+        }
+        if (!ValidateTransformFeedbackBufferIndex(index, __func__)) return;
+        if (!param) return;
+        const auto binding = MG_State::pGLContext->GetNamedTransformFeedbackBinding(xfb, index);
+        *param = binding.Buffer ? static_cast<GLint>(binding.Buffer->GetExternalIndex()) : 0;
+    }
+
+    void GetTransformFeedbacki64_v(GLuint xfb, GLenum pname, GLuint index, GLint64* param) {
+        if (!ValidateNamedTransformFeedback(xfb, __func__)) return;
+        if (pname != GL_TRANSFORM_FEEDBACK_BUFFER_START && pname != GL_TRANSFORM_FEEDBACK_BUFFER_SIZE) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidEnum,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
+                                             "pname must be GL_TRANSFORM_FEEDBACK_BUFFER_START or _SIZE."));
+            return;
+        }
+        if (!ValidateTransformFeedbackBufferIndex(index, __func__)) return;
+        if (!param) return;
+        const auto binding = MG_State::pGLContext->GetNamedTransformFeedbackBinding(xfb, index);
+        // glTransformFeedbackBufferBase leaves both at zero; only the range form sets them
+        // (GL 4.6 core table 23.48).
+        if (!binding.Buffer || !binding.HasExplicitRange) {
+            *param = 0;
+            return;
+        }
+        *param = (pname == GL_TRANSFORM_FEEDBACK_BUFFER_START)
+                     ? static_cast<GLint64>(binding.Range.start)
+                     : static_cast<GLint64>(binding.Range.end - binding.Range.start);
+    }
+
     void DeleteTransformFeedbacks(GLsizei n, const GLuint* ids) {
         if (n < 0) {
             MG_State::pGLContext->RecordError(

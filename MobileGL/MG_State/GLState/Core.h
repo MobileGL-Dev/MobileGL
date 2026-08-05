@@ -45,6 +45,14 @@ namespace MobileGL {
             // translates the result into its own API call.
             VertexAttribTypeInfo ClassifyVertexAttribType(GLenum glType);
 
+            // One indexed capture binding of a transform feedback object, as the by-name queries
+            // report it. An empty Buffer means the binding point is unbound.
+            struct NamedTransformFeedbackBinding {
+                SharedPtr<BufferObject> Buffer;
+                Range1D Range{};
+                Bool HasExplicitRange = false;
+            };
+
             class GLContext {
             public:
                 GLContext() = default;
@@ -298,6 +306,17 @@ namespace MobileGL {
                 // on an object that has not is INVALID_OPERATION, which a zero vertex count
                 // cannot express: an empty completed span is legal and draws nothing.
                 Bool HasTransformFeedbackCompletedSpan(Uint index) const;
+
+                // The by-name (direct state access) view. A named object that happens to be the
+                // bound one is answered from the live copy, since that is where its state actually
+                // is until a bind swaps it out.
+                void CreateTransformFeedbackObject(Uint index);
+                Bool IsNamedTransformFeedbackActive(Uint index) const;
+                Bool IsNamedTransformFeedbackPaused(Uint index) const;
+                NamedTransformFeedbackBinding GetNamedTransformFeedbackBinding(Uint index, Uint bufferIndex) const;
+                void SetNamedTransformFeedbackBinding(Uint index, Uint bufferIndex,
+                                                      const SharedPtr<BufferObject>& buffer, Range1D range,
+                                                      Bool hasExplicitRange);
 
                 // Framebuffer
                 void GenFramebufferNames(Uint number, Vector<Uint>& framebuffers);
