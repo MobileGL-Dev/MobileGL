@@ -6329,17 +6329,20 @@ void main() {
 
             if (srcX1 < srcX0 || srcY1 < srcY0 || dstX1 < dstX0 || dstY1 < dstY0) {
                 MGLOG_E("BlitFramebuffer skipped: depth blits with flipped rectangles are not supported yet");
-                return;
+                continue;
             }
 
             const Int srcWidth = srcX1 - srcX0;
             const Int srcHeight = srcY1 - srcY0;
             const Int dstWidth = dstX1 - dstX0;
             const Int dstHeight = dstY1 - dstY0;
-            if (srcWidth <= 0 || srcHeight <= 0 || srcWidth != dstWidth || srcHeight != dstHeight) {
-                MGLOG_E("BlitFramebuffer skipped: depth blits currently require matching source and destination extents");
-                return;
+            if (srcWidth <= 0 || srcHeight <= 0 || dstWidth <= 0 || dstHeight <= 0) {
+                MGLOG_E("BlitFramebuffer skipped: degenerate depth blit rectangle");
+                continue;
             }
+            // A scaling depth blit is legal GL and vkCmdBlitImage scales natively; only a same-size
+            // pair can take the cheaper vkCmdCopyImage.
+            const Bool depthBlitScales = srcWidth != dstWidth || srcHeight != dstHeight;
 
             if (!readIsDefaultFbo) {
                 const auto sourceAttachmentType = ResolveFramebufferCopyAttachmentType(*readFbo, true, srcBinding.aspectMask);
@@ -6384,7 +6387,7 @@ void main() {
                 : *srcBinding.trackedLayout;
             if (srcOriginalLayout == VK_IMAGE_LAYOUT_UNDEFINED) {
                 MGLOG_E("BlitFramebuffer skipped: depth source image layout is undefined");
-                return;
+                continue;
             }
 
             const VkImageLayout dstOriginalLayout = drawIsDefaultFbo
@@ -6401,7 +6404,7 @@ void main() {
             if (srcBinding.format != dstBinding.format) {
                 if (readIsDefaultFbo || drawIsDefaultFbo) {
                     MGLOG_E("BlitFramebuffer skipped: cross-format depth/stencil blit with the default framebuffer");
-                    return;
+                    continue;
                 }
                 if (!BlitDepthAcrossFormats(frame, srcBinding.image, srcBinding.format, srcBinding.trackedLayout,
                                             srcBinding.mipLevel, srcBinding.baseArrayLayer, dstBinding.image,
@@ -6409,7 +6412,7 @@ void main() {
                                             dstBinding.baseArrayLayer, srcX0, srcY0, dstX0, dstY0, srcX1 - srcX0,
                                             srcY1 - srcY0, srcOriginalLayout, dstRestoreLayout,
                                             depthStencilAspect == VK_IMAGE_ASPECT_STENCIL_BIT)) {
-                    return;
+                    continue;
                 }
                 continue;
             }
@@ -6456,23 +6459,45 @@ void main() {
                 MOBILEGL_ASSERT(ok, "%s: failed to transition depth destination image", __func__);
             }
 
-            VkImageCopy copyRegion{};
-            copyRegion.srcSubresource.aspectMask = srcBinding.aspectMask;
-            copyRegion.srcSubresource.mipLevel = srcBinding.mipLevel;
-            copyRegion.srcSubresource.baseArrayLayer = srcBinding.baseArrayLayer;
-            copyRegion.srcSubresource.layerCount = srcBinding.layerCount;
-            copyRegion.srcOffset = {srcX0, srcY0, 0};
-            copyRegion.dstSubresource.aspectMask = dstBinding.aspectMask;
-            copyRegion.dstSubresource.mipLevel = dstBinding.mipLevel;
-            copyRegion.dstSubresource.baseArrayLayer = dstBinding.baseArrayLayer;
-            copyRegion.dstSubresource.layerCount = dstBinding.layerCount;
-            copyRegion.dstOffset = {dstX0, dstY0, 0};
-            copyRegion.extent = {static_cast<Uint32>(srcWidth), static_cast<Uint32>(srcHeight), 1};
+            if (depthBlitScales) {
+                // vkCmdCopyImage cannot resize; NEAREST is the only filter Vulkan allows for a
+                // depth/stencil blit anyway, and the GL front end already rejects the others.
+                VkImageBlit blitRegion{};
+                blitRegion.srcSubresource.aspectMask = srcBinding.aspectMask;
+                blitRegion.srcSubresource.mipLevel = srcBinding.mipLevel;
+                blitRegion.srcSubresource.baseArrayLayer = srcBinding.baseArrayLayer;
+                blitRegion.srcSubresource.layerCount = srcBinding.layerCount;
+                blitRegion.srcOffsets[0] = {srcX0, srcY0, 0};
+                blitRegion.srcOffsets[1] = {srcX1, srcY1, 1};
+                blitRegion.dstSubresource.aspectMask = dstBinding.aspectMask;
+                blitRegion.dstSubresource.mipLevel = dstBinding.mipLevel;
+                blitRegion.dstSubresource.baseArrayLayer = dstBinding.baseArrayLayer;
+                blitRegion.dstSubresource.layerCount = dstBinding.layerCount;
+                blitRegion.dstOffsets[0] = {dstX0, dstY0, 0};
+                blitRegion.dstOffsets[1] = {dstX1, dstY1, 1};
+                vkCmdBlitImage(frame.commandBuffer,
+                               srcBinding.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                               dstBinding.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                               1, &blitRegion, VK_FILTER_NEAREST);
+            } else {
+                VkImageCopy copyRegion{};
+                copyRegion.srcSubresource.aspectMask = srcBinding.aspectMask;
+                copyRegion.srcSubresource.mipLevel = srcBinding.mipLevel;
+                copyRegion.srcSubresource.baseArrayLayer = srcBinding.baseArrayLayer;
+                copyRegion.srcSubresource.layerCount = srcBinding.layerCount;
+                copyRegion.srcOffset = {srcX0, srcY0, 0};
+                copyRegion.dstSubresource.aspectMask = dstBinding.aspectMask;
+                copyRegion.dstSubresource.mipLevel = dstBinding.mipLevel;
+                copyRegion.dstSubresource.baseArrayLayer = dstBinding.baseArrayLayer;
+                copyRegion.dstSubresource.layerCount = dstBinding.layerCount;
+                copyRegion.dstOffset = {dstX0, dstY0, 0};
+                copyRegion.extent = {static_cast<Uint32>(srcWidth), static_cast<Uint32>(srcHeight), 1};
 
-            vkCmdCopyImage(frame.commandBuffer,
-                           srcBinding.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                           dstBinding.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                           1, &copyRegion);
+                vkCmdCopyImage(frame.commandBuffer,
+                               srcBinding.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                               dstBinding.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                               1, &copyRegion);
+            }
 
             VkPipelineStageFlags srcRestoreStageMask = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
             VkAccessFlags srcRestoreAccessMask = 0;
@@ -7931,7 +7956,10 @@ void main() {
         // broken invariant. Declining leaves the mip chain unwritten; asserting took the process
         // down with it.
         if (textureTarget != TextureTarget::Texture2D && textureTarget != TextureTarget::Texture2DArray &&
-            textureTarget != TextureTarget::Texture3D && textureTarget != TextureTarget::TextureCubeMap) {
+            textureTarget != TextureTarget::Texture3D && textureTarget != TextureTarget::TextureCubeMap &&
+            // A 1D texture needs nothing special: its storage extent is {width, 1, 1}, so the blit
+            // loop below already emits the y and z offsets of 0 and 1 that a 1D image requires.
+            textureTarget != TextureTarget::Texture1D) {
             MGLOG_W("GenerateMipmap: unsupported target %s", MG_Util::ConvertTextureTargetToString(textureTarget).c_str());
             return;
         }
@@ -9273,10 +9301,17 @@ void main() {
         if (record.harvested) {
             return true;
         }
-        if (!m_timerQueryManager || !IsFrameSerialComplete(record.frameSerial)) {
+        if (!m_timerQueryManager) {
             return false;
         }
-        return m_timerQueryManager->TryHarvest(record);
+        // Ask the pool first. It polls with VK_QUERY_RESULT_WITH_AVAILABILITY_BIT and is the
+        // authority on whether the timestamp has landed; the frame serial is not, because it only
+        // advances at Present and neither completion notifier will mark the CURRENT serial done - so
+        // a timestamp written and fence-waited inside one GL frame could never be read back in it.
+        if (m_timerQueryManager->TryHarvest(record)) {
+            return true;
+        }
+        return IsFrameSerialComplete(record.frameSerial) && m_timerQueryManager->TryHarvest(record);
     }
 
     Bool VulkanRenderer::WaitForTimerQueryResult(VkTimerQueryManager::TimestampRecord& record) {
