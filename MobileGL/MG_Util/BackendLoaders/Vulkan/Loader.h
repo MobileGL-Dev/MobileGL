@@ -54,6 +54,8 @@ namespace MobileGL {
             Int MaxComputeWorkGroupInvocations = 128;
             Int MaxShaderStorageBufferBindings = 8;
             Int MaxTextureBufferSize = 65536;
+            // GL_TEXTURE_BUFFER_OFFSET_ALIGNMENT; 1 means the offset is unconstrained.
+            Int TextureBufferOffsetAlignment = 1;
             Int MaxUniformBufferBindings = 24;
             Int MaxUniformBlockSize = 16384;
             Int MaxImageUnits = 8;

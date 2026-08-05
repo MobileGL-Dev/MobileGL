@@ -2232,7 +2232,24 @@ namespace MobileGL::MG_Backend::DirectGLES {
                             "ID: %u, buffer ID: %u, buffer size: %zu, format: %s",
                             m_backendTextureId, backendId, buffer->GetSize(),
                             MG_Util::ConvertGLEnumToString(glInternalFormat).c_str());
-                    g_GLESFuncs.glTexBuffer(GL_TEXTURE_BUFFER, glInternalFormat, backendId);
+                    // A texture that names a window of the buffer needs the range form; the
+                    // whole-buffer forms report offset 0 and the buffer's current size, which
+                    // glTexBuffer expresses more directly (and works where the range entry point
+                    // is absent).
+                    const SizeT rangeOffset = textureBufferObject->GetBufferRangeOffset();
+                    const SizeT rangeSize = textureBufferObject->GetBufferRangeSizeInBytes();
+                    if (rangeOffset == 0 && rangeSize == buffer->GetSize()) {
+                        g_GLESFuncs.glTexBuffer(GL_TEXTURE_BUFFER, glInternalFormat, backendId);
+                    } else if (g_GLESFuncs.glTexBufferRange != nullptr) {
+                        g_GLESFuncs.glTexBufferRange(GL_TEXTURE_BUFFER, glInternalFormat, backendId,
+                                                     static_cast<GLintptr>(rangeOffset),
+                                                     static_cast<GLsizeiptr>(rangeSize));
+                    } else {
+                        MGLOG_E("Texture buffer %u names a sub-range but the driver has no "
+                                "glTexBufferRange; binding the whole buffer instead",
+                                stateTextureObject->GetExternalIndex());
+                        g_GLESFuncs.glTexBuffer(GL_TEXTURE_BUFFER, glInternalFormat, backendId);
+                    }
                     DebugImpl::ErrorLopper::Loop(
                         [file = __FILE__, line = __LINE__, func = __func__, glInternalFormat, backendId](GLenum err) {
                             MGLOG_D("%s(%s:%d) glTexBuffer(format=%s, buffer=%u) ES error: %s",

@@ -1669,7 +1669,7 @@ namespace MobileGL::MG_Impl::GLImpl {
             *params = static_cast<GLint>(MG_State::pGLContext->GetHint(pname));
             return;
         case GL_TEXTURE_BUFFER_OFFSET_ALIGNMENT:
-            *params = 0; // texture-buffer range entrypoints are stubbed
+            *params = MG_Backend::pActiveBackendObject->GetDynamicParameters().TextureBufferOffsetAlignment;
             return;
         case GL_TIMESTAMP: {
             Int64 timestamp = 0;

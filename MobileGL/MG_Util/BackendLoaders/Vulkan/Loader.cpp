@@ -177,6 +177,8 @@ namespace MobileGL::MG_Util::BackendLoader {
         caps.MaxComputeWorkGroupInvocations = static_cast<Int>(p.limits.maxComputeWorkGroupInvocations);
         caps.MaxShaderStorageBufferBindings = static_cast<Int>(p.limits.maxDescriptorSetStorageBuffers);
         caps.MaxTextureBufferSize = static_cast<Int>(p.limits.maxTexelBufferElements);
+        caps.TextureBufferOffsetAlignment =
+            static_cast<Int>(std::max<VkDeviceSize>(1, p.limits.minTexelBufferOffsetAlignment));
         caps.MaxUniformBufferBindings = static_cast<Int>(p.limits.maxDescriptorSetUniformBuffers);
         caps.MaxUniformBlockSize = static_cast<Int>(p.limits.maxUniformBufferRange);
         caps.MaxImageUnits = static_cast<Int>(p.limits.maxPerStageDescriptorStorageImages);
@@ -268,6 +270,8 @@ namespace MobileGL::MG_Util::BackendLoader {
         caps.MaxComputeWorkGroupInvocations = static_cast<Int>(properties.limits.maxComputeWorkGroupInvocations);
         caps.MaxShaderStorageBufferBindings = static_cast<Int>(properties.limits.maxDescriptorSetStorageBuffers);
         caps.MaxTextureBufferSize = static_cast<Int>(properties.limits.maxTexelBufferElements);
+        caps.TextureBufferOffsetAlignment =
+            static_cast<Int>(std::max<VkDeviceSize>(1, properties.limits.minTexelBufferOffsetAlignment));
         caps.MaxUniformBufferBindings = static_cast<Int>(properties.limits.maxDescriptorSetUniformBuffers);
         caps.MaxUniformBlockSize = static_cast<Int>(properties.limits.maxUniformBufferRange);
         caps.MaxImageUnits = static_cast<Int>(properties.limits.maxPerStageDescriptorStorageImages);

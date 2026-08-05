@@ -1056,6 +1056,10 @@ namespace MobileGL::MG_Util::BackendLoader {
         caps.MaxComputeWorkGroupInvocations = maxComputeWorkGroupInvocations;
         caps.MaxShaderStorageBufferBindings = maxShaderStorageBufferBindings;
         caps.MaxTextureBufferSize = maxTextureBufferSize;
+        GLint textureBufferOffsetAlignment = 1;
+        glGetIntegerv(GL_TEXTURE_BUFFER_OFFSET_ALIGNMENT, &textureBufferOffsetAlignment);
+        while (glGetError() != GL_NO_ERROR) {}
+        caps.TextureBufferOffsetAlignment = std::max(1, textureBufferOffsetAlignment);
         caps.MaxUniformBufferBindings = maxUniformBufferBindings;
         caps.MaxUniformBlockSize = maxUniformBlockSize;
         caps.MaxImageUnits = maxImageUnits;

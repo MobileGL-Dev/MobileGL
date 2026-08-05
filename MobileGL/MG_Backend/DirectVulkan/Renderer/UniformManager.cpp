@@ -600,7 +600,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
         const VkDeviceSize texelSize =
             static_cast<VkDeviceSize>(MG_Util::GetSizedInternalFormatSizeInBytes(internalFormat));
-        VkDeviceSize viewRange = slice.size;
+        // glTextureBufferRange addresses a window of the buffer, not all of it; the whole-buffer
+        // forms report the buffer's current size here, so both go through the same clamp.
+        const VkDeviceSize rangeOffset = static_cast<VkDeviceSize>(textureBuffer->GetBufferRangeOffset());
+        const VkDeviceSize rangeSize = static_cast<VkDeviceSize>(textureBuffer->GetBufferRangeSizeInBytes());
+        VkDeviceSize viewRange = std::min(rangeSize, slice.size > rangeOffset ? slice.size - rangeOffset : 0);
         if (texelSize > 0) {
             viewRange = (viewRange / texelSize) * texelSize;
         }
@@ -613,7 +617,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         viewInfo.sType = VK_STRUCTURE_TYPE_BUFFER_VIEW_CREATE_INFO;
         viewInfo.buffer = slice.buffer;
         viewInfo.format = vkFormat;
-        viewInfo.offset = slice.offset;
+        viewInfo.offset = slice.offset + rangeOffset;
         viewInfo.range = viewRange;
 
         VkBufferView bufferView = VK_NULL_HANDLE;

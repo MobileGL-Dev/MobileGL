@@ -21,10 +21,31 @@ namespace MobileGL {
                 BindingSlot<BufferObject>& GetBufferBindingSlot(
                     TextureUploadTarget target = TextureUploadTarget::TextureBuffer);
 
+                // The window of the attached buffer the texture addresses. glTexBuffer attaches
+                // the whole buffer, which is expressed here as an offset of 0 and a size of
+                // kWholeBuffer so a later respecify of the buffer keeps being followed - a stored
+                // size would freeze the texture at the size the buffer happened to have.
+                static constexpr SizeT kWholeBuffer = ~static_cast<SizeT>(0);
+                void SetBufferRange(SizeT offset, SizeT size) {
+                    m_bufferRangeOffset = offset;
+                    m_bufferRangeSize = size;
+                }
+                SizeT GetBufferRangeOffset() const { return m_bufferRangeOffset; }
+                // Resolved against the buffer's current size, so kWholeBuffer tracks it.
+                SizeT GetBufferRangeSizeInBytes() const {
+                    const auto& buffer = m_bufferBindingSlot.GetBoundObject();
+                    const SizeT bufferSize = buffer != nullptr ? buffer->GetSize() : 0;
+                    if (m_bufferRangeSize == kWholeBuffer) return bufferSize;
+                    const SizeT available = bufferSize > m_bufferRangeOffset ? bufferSize - m_bufferRangeOffset : 0;
+                    return std::min(m_bufferRangeSize, available);
+                }
+
             protected:
                 Uint GetIndexOfTextureUploadTarget(TextureUploadTarget target) const override;
 
                 BindingSlot<BufferObject> m_bufferBindingSlot = BindingSlot<BufferObject>(BufferTarget::Texture);
+                SizeT m_bufferRangeOffset = 0;
+                SizeT m_bufferRangeSize = kWholeBuffer;
                 const Vector<TextureUploadTarget> m_uploadTargets{TextureUploadTarget::TextureBuffer};
             };
         } // namespace GLState

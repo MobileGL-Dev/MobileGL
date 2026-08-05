@@ -2035,6 +2035,65 @@ namespace MobileGL::MG_Impl::GLImpl {
         MaybeAutoGenerateMipmap(target, textureObject, isProxy, level);
     }
 
+    // The work glTexBuffer[Range] and glTextureBuffer[Range] all share once the texture has been
+    // resolved - by binding for the target forms, by name for the DSA ones. `size` is
+    // kWholeBuffer for the non-Range entry points, which attach the buffer as it grows rather
+    // than freezing the size it happens to have now.
+    static void AttachBufferToTexture(const SharedPtr<MG_State::GLState::ITextureObject>& textureObject,
+                                      GLenum internalformat, GLuint buffer, GLintptr offset, SizeT size,
+                                      const char* caller) {
+        using MG_State::GLState::TextureObjectBuffer;
+        TextureInternalFormat textureInternalFormat = MG_Util::ConvertGLEnumToTextureInternalFormat(internalformat);
+        if (!TextureImpl::ValidateTextureInternalFormat(textureInternalFormat)) return;
+
+        auto& bufferObject = MG_State::pGLContext->GetBufferObject(buffer);
+        if (buffer != 0 && !bufferObject) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidOperation,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller,
+                                             "`buffer` is not zero and is not the name of an existing buffer object."));
+            return;
+        }
+        if (!TextureImpl::ValidateTextureObject(textureObject)) return;
+        if (textureObject->GetStorageType() != TextureStorageType::Buffer) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidEnum,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller,
+                                             "The effective target of `texture` is not `GL_TEXTURE_BUFFER`."));
+            return;
+        }
+        if (size != TextureObjectBuffer::kWholeBuffer) {
+            // GL 4.6 core 8.9: offset must be non-negative and aligned to
+            // GL_TEXTURE_BUFFER_OFFSET_ALIGNMENT, and size must be positive.
+            if (offset < 0) {
+                MG_State::pGLContext->RecordError(
+                    ErrorCode::InvalidValue,
+                    MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller, "offset must be non-negative."));
+                return;
+            }
+            if (size == 0) {
+                MG_State::pGLContext->RecordError(
+                    ErrorCode::InvalidValue,
+                    MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller, "size must be greater than zero."));
+                return;
+            }
+            const Int alignment = std::max(
+                1, MG_Backend::pActiveBackendObject->GetDynamicParameters().TextureBufferOffsetAlignment);
+            if (offset % alignment != 0) {
+                MG_State::pGLContext->RecordError(
+                    ErrorCode::InvalidValue,
+                    MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller,
+                                                 "offset is not a multiple of GL_TEXTURE_BUFFER_OFFSET_ALIGNMENT."));
+                return;
+            }
+        }
+
+        auto* texBufferObject = static_cast<TextureObjectBuffer*>(textureObject.get());
+        texBufferObject->GetBufferBindingSlot().Bind(bufferObject);
+        texBufferObject->SetBufferRange(static_cast<SizeT>(offset < 0 ? 0 : offset), size);
+        texBufferObject->SetInternalFormat(textureInternalFormat);
+    }
+
     void TexBuffer_State(GLenum target, GLenum internalformat, GLuint buffer) {
         // ======================= Converting ================================
         TextureTarget textureTarget = MG_Util::ConvertGLEnumToTextureTarget(target);
@@ -2081,6 +2140,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         auto& bufferSlot = texBufferObject->GetBufferBindingSlot();
         bufferSlot.Bind(bufferObject);
 
+        texBufferObject->SetBufferRange(0, MG_State::GLState::TextureObjectBuffer::kWholeBuffer);
         texBufferObject->SetInternalFormat(textureInternalFormat);
     }
 
@@ -4086,6 +4146,33 @@ namespace MobileGL::MG_Impl::GLImpl {
 
     void TexBuffer(GLenum target, GLenum internalformat, GLuint buffer) {
         TexBuffer_State(target, internalformat, buffer);
+    }
+
+    // The buffer texture bound to `target` on the active unit - what the non-DSA range form
+    // operates on. Kept separate from TexBuffer_State because that one resolves the target
+    // itself and attaches the whole buffer.
+    static const SharedPtr<MG_State::GLState::ITextureObject>& GetBoundBufferTexture(GLenum target,
+                                                                                     const char* caller) {
+        TextureUploadTarget uploadTarget = MG_Util::ConvertGLEnumToTextureUploadTarget(target);
+        if (!TextureImpl::ValidateTextureUploadTarget(uploadTarget)) return nullTextureObject;
+        (void)caller;
+        auto& activeUnit = MG_State::pGLContext->GetTextureUnitObject(MG_State::pGLContext->GetActiveTextureUnit());
+        return activeUnit.GetBindingSlot(MG_Util::ConvertGLEnumToTextureTarget(target)).GetBoundObject();
+    }
+
+    void TexBufferRange(GLenum target, GLenum internalformat, GLuint buffer, GLintptr offset, GLsizeiptr size) {
+        AttachBufferToTexture(GetBoundBufferTexture(target, __func__), internalformat, buffer, offset,
+                              static_cast<SizeT>(size < 0 ? 0 : size), __func__);
+    }
+
+    void TextureBuffer(GLuint texture, GLenum internalformat, GLuint buffer) {
+        AttachBufferToTexture(GetTextureObjectByName(texture, __func__), internalformat, buffer, 0,
+                              MG_State::GLState::TextureObjectBuffer::kWholeBuffer, __func__);
+    }
+
+    void TextureBufferRange(GLuint texture, GLenum internalformat, GLuint buffer, GLintptr offset, GLsizeiptr size) {
+        AttachBufferToTexture(GetTextureObjectByName(texture, __func__), internalformat, buffer, offset,
+                              static_cast<SizeT>(size < 0 ? 0 : size), __func__);
     }
 
     GLboolean IsTexture(GLuint texture) {

@@ -1112,6 +1112,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         m_dynamicParameters.MaxComputeWorkGroupInvocations = m_GLESCapabilities.MaxComputeWorkGroupInvocations;
         m_dynamicParameters.MaxShaderStorageBufferBindings = m_GLESCapabilities.MaxShaderStorageBufferBindings;
         m_dynamicParameters.MaxTextureBufferSize = m_GLESCapabilities.MaxTextureBufferSize;
+        m_dynamicParameters.TextureBufferOffsetAlignment = m_GLESCapabilities.TextureBufferOffsetAlignment;
         m_dynamicParameters.MaxUniformBufferBindings = m_GLESCapabilities.MaxUniformBufferBindings;
         m_dynamicParameters.MaxUniformBlockSize = m_GLESCapabilities.MaxUniformBlockSize;
         const Int maxSupportedTextureUnits =
