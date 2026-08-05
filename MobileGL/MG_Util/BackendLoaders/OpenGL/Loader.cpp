@@ -1056,9 +1056,17 @@ namespace MobileGL::MG_Util::BackendLoader {
         caps.MaxComputeWorkGroupInvocations = maxComputeWorkGroupInvocations;
         caps.MaxShaderStorageBufferBindings = maxShaderStorageBufferBindings;
         caps.MaxTextureBufferSize = maxTextureBufferSize;
+        // Through glesFuncs, like every other capability query here: a bare glGetIntegerv resolves
+        // to MobileGL's own exported entry point, which answers this pname from the very
+        // capability table being filled in - so the driver's real alignment never arrived and the
+        // backend reported an unconstrained offset it cannot honour.
         GLint textureBufferOffsetAlignment = 1;
-        glGetIntegerv(GL_TEXTURE_BUFFER_OFFSET_ALIGNMENT, &textureBufferOffsetAlignment);
-        while (glGetError() != GL_NO_ERROR) {}
+        glesFuncs.glGetIntegerv(GL_TEXTURE_BUFFER_OFFSET_ALIGNMENT, &textureBufferOffsetAlignment);
+        // Core in ES 3.2 and in EXT_texture_buffer; an older context rejects the pname and leaves
+        // the default in place.
+        if (glesFuncs.glGetError) {
+            while (glesFuncs.glGetError() != GL_NO_ERROR) {}
+        }
         caps.TextureBufferOffsetAlignment = std::max(1, textureBufferOffsetAlignment);
         caps.MaxUniformBufferBindings = maxUniformBufferBindings;
         caps.MaxUniformBlockSize = maxUniformBlockSize;
