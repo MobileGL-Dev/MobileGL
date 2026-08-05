@@ -1109,6 +1109,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
             clampStageImageUniforms(m_GLESCapabilities.MaxComputeImageUniforms);
         m_dynamicParameters.SupportsDistinctDepthStencilAttachments =
             ProbeDistinctDepthStencilAttachments(DirectGLES::g_GLESFuncs);
+        // SyncAttachmentObject routes a layered upload target to glFramebufferTextureLayer with the
+        // attachment's layer passed through, so this backend really does render to the layer it was
+        // given - provided the driver resolved the entry point at all.
+        m_dynamicParameters.SupportsPerLayerFramebufferAttachment =
+            DirectGLES::g_GLESFuncs.glFramebufferTextureLayer != nullptr;
         m_dynamicParameters.MaxDrawBuffers = m_GLESCapabilities.MaxDrawBuffers;
         m_dynamicParameters.MaxColorAttachments = m_GLESCapabilities.MaxColorAttachments;
         m_dynamicParameters.MaxClipDistances = m_GLESCapabilities.MaxClipDistances;

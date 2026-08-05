@@ -353,6 +353,12 @@ namespace MobileGL {
             // real ES drivers behind DirectGLES both do. Defaults to true so a backend
             // that never sets it keeps the permissive behaviour.
             Bool SupportsDistinctDepthStencilAttachments = true;
+            // Whether attaching a single layer of a 3D or array texture to a framebuffer actually
+            // renders to that layer. DirectGLES hands the layer straight to
+            // glFramebufferTextureLayer, so it does; DirectVulkan maps a GL layer onto a Vulkan
+            // array layer with no notion of a 3D depth slice, so it does not yet. Defaults to false
+            // so a backend that never sets it gets the conservative answer.
+            Bool SupportsPerLayerFramebufferAttachment = false;
             SizeT MaxShaderStorageBlockSize = 128 * 1024 * 1024;
             Uint32 SubgroupSize = 0;
             Uint32 SubgroupSupportedStages = 0;

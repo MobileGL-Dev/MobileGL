@@ -1398,21 +1398,20 @@ namespace MobileGL::MG_Impl::GLImpl {
             return;
         }
 
-        // Everything above is the spec's error set and is answered for every target and every
-        // layer. Actually attaching a layer other than the first is a different matter: no backend
-        // resolves a GL layer onto its image yet. The Vulkan renderer treats the layer as an array
-        // slice - so a 3D texture's z-slice lands outside its single-array-layer image - and the
-        // array texture objects are still the one-image stubs in TextureObjectStubs.h, whose image
-        // has one layer whatever GL thinks. Letting the attachment through only moves the failure
-        // downstream into a clear whose layer span is outside the image; declining keeps it a
-        // reported error. Layer zero is the plain first-slice attachment the by-target
-        // glFramebufferTextureLayer already backs, so it goes through.
-        // A cube map array has no Vulkan image shape at all (TryResolveTextureShapeInfo), so it
-        // cannot be an attachment on that backend whatever the layer is.
-        if (layer != 0 || textureObject->GetTarget() == TextureTarget::TextureCubeMapArray) {
+        // Everything above is the spec's error set and is answered for every target and every layer
+        // on every backend. Whether the attachment can actually be honoured is a backend question:
+        // DirectGLES hands the layer to glFramebufferTextureLayer and renders to it, while
+        // DirectVulkan maps a GL layer onto a Vulkan array layer with no notion of a 3D depth slice,
+        // so a slice lands outside the image and the renderer asserts on the clear. Letting it
+        // through there would only move the failure downstream, so it is declined instead - layer
+        // zero always works, being the plain first-slice attachment.
+        const Bool backsLayeredAttachment = limits.SupportsPerLayerFramebufferAttachment;
+        // A cube map array additionally has no image shape at all in VkTextureManager, so on that
+        // backend it cannot be an attachment whatever the layer is.
+        const Bool isCubeMapArray = textureObject->GetTarget() == TextureTarget::TextureCubeMapArray;
+        if ((layer != 0 && !backsLayeredAttachment) || (isCubeMapArray && !backsLayeredAttachment)) {
             RecordUnsupportedFramebufferTextureAttachmentError(
-                __func__, "Attaching a layer other than the first, or any layer of a cube map array, is not "
-                          "represented by the current framebuffer attachment model.");
+                __func__, "This backend does not resolve a framebuffer attachment's layer onto its image.");
             return;
         }
 
