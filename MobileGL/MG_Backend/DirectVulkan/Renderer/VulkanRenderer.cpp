@@ -3292,6 +3292,47 @@ void main() {
         return true;
     }
 
+    namespace {
+        // Copies index data, replacing every occurrence of the application's arbitrary restart
+        // index with the fixed all-ones value of the index type - the only one Vulkan restarts
+        // on. An index that already equals the fixed value would then be indistinguishable from
+        // a restart, so it is nudged to the next-lowest value: it can only be a real index (the
+        // application's restart index is a different number), and the vertex it selects is
+        // outside any well-defined draw anyway, whereas leaving it alone would tear the
+        // primitive in two.
+        void RewriteRestartIndices(const void* source, SizeT sizeBytes, VkIndexType indexType,
+                                   Uint32 applicationRestartIndex, Vector<Uint8>& output) {
+            output.resize(sizeBytes);
+            if (sizeBytes == 0 || source == nullptr) {
+                return;
+            }
+            Memcpy(output.data(), source, sizeBytes);
+            const auto rewrite = [&](auto* indices, auto fixedMax) {
+                const SizeT count = sizeBytes / sizeof(*indices);
+                for (SizeT i = 0; i < count; ++i) {
+                    if (indices[i] == static_cast<decltype(fixedMax)>(applicationRestartIndex)) {
+                        indices[i] = fixedMax;
+                    } else if (indices[i] == fixedMax) {
+                        indices[i] = fixedMax - 1;
+                    }
+                }
+            };
+            switch (indexType) {
+            case VK_INDEX_TYPE_UINT8:
+                rewrite(reinterpret_cast<Uint8*>(output.data()), static_cast<Uint8>(0xFFu));
+                break;
+            case VK_INDEX_TYPE_UINT16:
+                rewrite(reinterpret_cast<Uint16*>(output.data()), static_cast<Uint16>(0xFFFFu));
+                break;
+            case VK_INDEX_TYPE_UINT32:
+                rewrite(reinterpret_cast<Uint32*>(output.data()), static_cast<Uint32>(0xFFFFFFFFu));
+                break;
+            default:
+                break;
+            }
+        }
+    } // namespace
+
     Bool VulkanRenderer::UploadAndBindIndexBuffer(FrameContext::FrameData& frame,
                                                   const MG_State::GLState::VertexArrayObject& vao,
                                                   const IndexBufferView* pIndexBufferView) {
@@ -3315,8 +3356,10 @@ void main() {
 
         // GL_PRIMITIVE_RESTART uses an arbitrary restart index (glPrimitiveRestartIndex), but Vulkan
         // only restarts on the fixed all-ones value of the index type. GL_PRIMITIVE_RESTART_FIXED_INDEX
-        // already matches that, so only the arbitrary form needs checking; hard-fail at this draw with
-        // the reason if the index is not the fixed value (a fallback would silently drop restarts).
+        // already matches that, so only the arbitrary form needs handling: rewrite the indices into a
+        // transient copy where the application's restart index becomes the fixed one.
+        Uint32 substituteRestartIndex = 0;
+        Bool substituteRestart = false;
         if (MG_State::pGLContext->IsCapabilityEnabled(CapabilityInput::PrimitiveRestart) &&
             !MG_State::pGLContext->IsCapabilityEnabled(CapabilityInput::PrimitiveRestartFixedIndex)) {
             const Uint32 restartIndex = MG_State::pGLContext->GetPrimitiveRestartIndex();
@@ -3327,15 +3370,8 @@ void main() {
             case VK_INDEX_TYPE_UINT32: fixedMax = 0xFFFFFFFFu; break;
             default: break;
             }
-            if (restartIndex != fixedMax) {
-                THROW_EXCEPTION("GL_PRIMITIVE_RESTART with an arbitrary restart index (" +
-                                std::to_string(restartIndex) +
-                                ") is not supported by the Vulkan backend, which only restarts on the fixed index "
-                                "value (" +
-                                std::to_string(fixedMax) +
-                                ") for this index type; use GL_PRIMITIVE_RESTART_FIXED_INDEX, or set "
-                                "glPrimitiveRestartIndex to that value.");
-            }
+            substituteRestart = restartIndex != fixedMax;
+            substituteRestartIndex = restartIndex;
         }
 
         const auto* indexBuffer =
@@ -3349,9 +3385,16 @@ void main() {
                 MGLOG_E("DrawElements skipped: no element array buffer bound and no client index data");
                 return false;
             }
+            Vector<Uint8> rewrittenIndices;
+            const void* uploadSource = clientIndices;
+            if (substituteRestart) {
+                RewriteRestartIndices(clientIndices, pIndexBufferView->indexByteSize, vkIndexType,
+                                      substituteRestartIndex, rewrittenIndices);
+                uploadSource = rewrittenIndices.data();
+            }
             BufferSlice slice{};
             if (!m_bufferManager.UploadTransient(BufferKind::Index, m_frameContext.GetCurrentFrameIndex(),
-                                                 clientIndices, pIndexBufferView->indexByteSize, 4, slice)) {
+                                                 uploadSource, pIndexBufferView->indexByteSize, 4, slice)) {
                 MGLOG_E("DrawElements skipped: failed to upload client index data");
                 return false;
             }
@@ -3373,7 +3416,20 @@ void main() {
         BufferSlice slice{};
         auto indexBufferShared = MG_State::pGLContext->GetBufferObject(indexBuffer->GetExternalIndex());
         MOBILEGL_ASSERT(indexBufferShared != nullptr, "UploadAndBindIndexBuffer failed to resolve shared EBO");
-        if (ShouldUseTransientVertexIndexBuffer(*indexBufferShared)) {
+        if (substituteRestart) {
+            // The whole buffer is rewritten, not just this draw's range, so that every element
+            // index keeps its position: an indirect draw's firstIndex lives in GPU memory and
+            // cannot be adjusted from here.
+            indexBufferShared->SyncGpuWrites();
+            Vector<Uint8> rewrittenIndices;
+            RewriteRestartIndices(indexBufferShared->MappedData(), indexBufferShared->GetSize(), vkIndexType,
+                                  substituteRestartIndex, rewrittenIndices);
+            if (!m_bufferManager.UploadTransient(BufferKind::Index, m_frameContext.GetCurrentFrameIndex(),
+                                                 rewrittenIndices.data(), rewrittenIndices.size(), 4, slice)) {
+                MGLOG_E("DrawElements skipped: failed to upload restart-substituted index data");
+                return false;
+            }
+        } else if (ShouldUseTransientVertexIndexBuffer(*indexBufferShared)) {
             MOBILEGL_ASSERT(indexBufferShared->GetSize() != 0, "DrawElements requires non-empty EBO data");
             if (!m_bufferManager.AcquireStreamedSlice(BufferKind::Index, indexBufferShared, slice)) {
                 MOBILEGL_ASSERT(false, "DrawElements skipped: failed to prepare transient index buffer");
