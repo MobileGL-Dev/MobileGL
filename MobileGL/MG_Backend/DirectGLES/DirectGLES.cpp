@@ -1663,8 +1663,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 if (backendSamplerIt != SamplerImpl::g_backendSamplerObjects.end()) {
                     backendSamplerIt->second->Bind(unit);
                 }
-
             } else {
+                // Symmetric with the bind above: a sampler object left on the unit by an earlier
+                // draw keeps being applied, and on a multisample texture - which takes no sampler
+                // object at all - the draw is rejected outright.
+                SamplerImpl::UnbindSampler(unit);
             }
         }
     }
@@ -1844,6 +1847,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                 backendObj = MakeShared<SamplerImpl::BackendSamplerObject>();
                             }
                             backendObj->SyncToBackend(samplerObject);
+                            // Syncing the object's parameters is not the same as putting it on the
+                            // unit: without this the driver kept sampling with the texture's own
+                            // parameters and every sampler object was inert.
+                            backendObj->Bind(unit);
                         } else {
                             SamplerImpl::UnbindSampler(unit);
                         }
