@@ -5345,10 +5345,58 @@ namespace MobileGL::MG_Backend::DirectGLES {
             const Bool applyPackImageParams = backendAttachTarget == GL_TEXTURE_3D ||
                                               backendAttachTarget == GL_TEXTURE_2D_ARRAY ||
                                               backendAttachTarget == GL_TEXTURE_CUBE_MAP_ARRAY;
-            // 3D/array images read back every slice, but the FBO path can only read one layer:
-            // multi-slice reads are served from the CPU shadow (slice-major, tight layout).
             const GLsizei sliceCount = std::max(size.z(), 1);
             const Bool multiSlice = size.z() > 1;
+            // A multi-slice read used to go to the CPU shadow outright, on the grounds that the
+            // scratch FBO can only expose one layer at a time. But the shadow only holds what was
+            // uploaded, so every slice that was rendered to came back stale - which is exactly what
+            // a layered framebuffer produces, and what textures_storage_multisample_3d_* checks.
+            // Attach the layers one at a time instead and read each off the GPU, keeping the shadow
+            // for the formats the FBO cannot represent at all.
+            if (multiSlice && tempFBOComplete &&
+                (backendAttachTarget == GL_TEXTURE_3D || backendAttachTarget == GL_TEXTURE_2D_ARRAY)) {
+                // Each slice is packed as its own 2D image, so the per-slice call must not apply
+                // GL_PACK_SKIP_IMAGES / GL_PACK_IMAGE_HEIGHT itself - this walks the destination
+                // over them, using the same layout StoreWideRowsToClient computes.
+                const auto packParams = MG_State::pGLContext->GetPixelStoreParameters(false);
+                const SizeT dstPixelBytes = GetReadbackDstPixelSize(conversionMapping, type);
+                const SizeT rowPixels =
+                    static_cast<SizeT>(packParams.RowLength > 0 ? packParams.RowLength : size.x());
+                const SizeT alignment =
+                    packParams.Alignment > 0 ? static_cast<SizeT>(packParams.Alignment) : SizeT{1};
+                const SizeT dstRowStride = (rowPixels * dstPixelBytes + alignment - 1) / alignment * alignment;
+                const SizeT imageRows = applyPackImageParams && packParams.ImageHeight > 0
+                    ? static_cast<SizeT>(packParams.ImageHeight)
+                    : static_cast<SizeT>(size.y());
+                const SizeT dstImageStride = imageRows * dstRowStride;
+                const SizeT skipImages =
+                    applyPackImageParams ? static_cast<SizeT>(std::max(packParams.SkipImages, 0)) : SizeT{0};
+
+                Bool allSlicesRead = true;
+                for (GLsizei slice = 0; slice < sliceCount; ++slice) {
+                    ScratchFBOImpl::EnsureColorAttachmentLayer(tempFB, GL_READ_FRAMEBUFFER, backendTexId, level,
+                                                               slice);
+                    if (g_GLESFuncs.glCheckFramebufferStatus(GL_READ_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+                        allSlicesRead = false;
+                        break;
+                    }
+                    const SizeT sliceOffset = (skipImages + static_cast<SizeT>(slice)) * dstImageStride;
+                    void* sliceDst = static_cast<Uint8*>(pixels) + sliceOffset;
+                    if (!ReadPixelsViaFormatConversion(0, 0, size.x(), size.y(), format, type, sliceDst,
+                                                       /*honorPackImageParams=*/false,
+                                                       /*applyFixedPointReadClamp=*/false)) {
+                        allSlicesRead = false;
+                        break;
+                    }
+                }
+                // Leave the scratch FBO on layer 0 so the single-slice paths below see what they
+                // set up.
+                ScratchFBOImpl::EnsureColorAttachmentLayer(tempFB, GL_READ_FRAMEBUFFER, backendTexId, level, 0);
+                if (allSlicesRead) {
+                    MGLOG_D("GetTexImage: finished %d slices via per-layer readback", sliceCount);
+                    return;
+                }
+            }
             if (multiSlice &&
                 GetTexImageViaShadowConversion(textureMipmapObject,
                                                MG_Util::ConvertGLEnumToTextureUploadTarget(target), level, size.x(),
