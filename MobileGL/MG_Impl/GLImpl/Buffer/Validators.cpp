@@ -112,14 +112,10 @@ namespace MobileGL::MG_Impl::GLImpl::BufferImpl {
     }
 
     Bool ValidateBufferMappingAccess(Flags<BufferMappingAccessBit> accessBits) {
-        if (accessBits == BufferMappingAccessBit::Null) {
-            MG_State::pGLContext->RecordError(ErrorCode::InvalidEnum,
-                                              MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl/BufferImpl",
-                                                                           "ValidateBufferMappingAccess",
-                                                                           "Access bits cannot be null."));
-            return false;
-        }
-
+        // An empty mask is a legal value for a bitfield - it just fails the rule that a mapping
+        // must ask for read or write access, which is INVALID_OPERATION and belongs to the callers
+        // (both of them check it immediately after this). Rejecting it here as INVALID_ENUM
+        // reported the wrong error and hid theirs.
         const auto validBits = BufferMappingAccessBit::Read | BufferMappingAccessBit::Write |
                                BufferMappingAccessBit::InvalidateRange | BufferMappingAccessBit::InvalidateBuffer |
                                BufferMappingAccessBit::FlushExplicit | BufferMappingAccessBit::Unsynchronized |
