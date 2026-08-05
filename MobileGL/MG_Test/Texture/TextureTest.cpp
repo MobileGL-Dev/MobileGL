@@ -15,6 +15,7 @@
 #include <Config.h>
 #include <MG_Backend/BackendObjects.h>
 #include <MG_Backend/DirectGLES/Managers.h>
+#include <MG_Impl/GLImpl/Framebuffer/GL_Framebuffer.h>
 #include <MG_Impl/GLImpl/Getter/GL_Getter.h>
 #include <MG_Impl/GLImpl/RenderState/GL_RenderState.h>
 #include <MG_Impl/GLImpl/Sampler/GL_Sampler.h>
@@ -295,6 +296,18 @@ TEST_F(TextureTest, CopyTextureSubImage2DUsesNamedObjectAndRestoresBinding) {
     MG_Impl::GLImpl::CreateTextures(GL_TEXTURE_2D, 1, &namedTexture);
     MG_Impl::GLImpl::CreateTextures(GL_TEXTURE_2D, 1, &boundTexture);
     MG_Impl::GLImpl::BindTextureUnit(0, boundTexture);
+
+    // The copy is only allowed to reach the backend when the destination region fits the level and
+    // the read framebuffer can supply pixels, so the call has to be set up as a legal one.
+    MG_Impl::GLImpl::TextureStorage2D(namedTexture, 3, GL_RGBA8, 16, 16);
+
+    GLuint readFramebuffer = 0;
+    GLuint readTexture = 0;
+    MG_Impl::GLImpl::CreateFramebuffers(1, &readFramebuffer);
+    MG_Impl::GLImpl::CreateTextures(GL_TEXTURE_2D, 1, &readTexture);
+    MG_Impl::GLImpl::TextureStorage2D(readTexture, 1, GL_RGBA8, 16, 16);
+    MG_Impl::GLImpl::NamedFramebufferTexture(readFramebuffer, GL_COLOR_ATTACHMENT0, readTexture, 0);
+    MG_Impl::GLImpl::BindFramebuffer(GL_READ_FRAMEBUFFER, readFramebuffer);
 
     const auto boundBefore = MG_State::pGLContext->GetTextureUnitObject(0)
                                  .GetBindingSlot(TextureTarget::Texture2D)

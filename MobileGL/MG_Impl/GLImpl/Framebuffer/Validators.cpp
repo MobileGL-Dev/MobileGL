@@ -118,4 +118,48 @@ namespace MobileGL::MG_Impl::GLImpl::FramebufferImpl {
                                          std::format("Renderbuffer name {} is not valid.", index)));
         return false;
     }
+
+    Bool ValidateReadFramebufferForCopy(const char* caller) {
+        auto& framebufferObject =
+            MG_State::pGLContext->GetFramebufferBindingSlot(FramebufferTarget::Read).GetBoundObject();
+        if (!framebufferObject || !framebufferObject->CheckCompleteness()) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidFramebufferOperation,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl/FramebufferImpl", caller,
+                                             "Read framebuffer is not framebuffer complete."));
+            return false;
+        }
+
+        const FramebufferAttachmentType readBuffer = framebufferObject->GetReadBuffer();
+        if (readBuffer == FramebufferAttachmentType::None ||
+            !framebufferObject->GetAttachment(readBuffer).IsValid()) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidOperation,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl/FramebufferImpl", caller,
+                                             "Read buffer names no attachment of the read framebuffer."));
+            return false;
+        }
+
+        // SAMPLE_BUFFERS is one whenever the read buffer resolves to multisample storage. A
+        // multisample texture says so by its target - its sample count can legally be one - while a
+        // renderbuffer says so by having been given a non-zero sample count.
+        const auto& readAttachment = framebufferObject->GetAttachment(readBuffer);
+        Bool isMultisampled = false;
+        if (readAttachment.IsRenderbuffer() && readAttachment.GetRenderbuffer()) {
+            isMultisampled = readAttachment.GetRenderbuffer()->GetSamples() > 0;
+        } else if (readAttachment.IsTexture() && readAttachment.GetTexture()) {
+            const auto target = readAttachment.GetTexture()->GetTarget();
+            isMultisampled = target == TextureTarget::Texture2DMultisample ||
+                             target == TextureTarget::Texture2DMultisampleArray;
+        }
+        if (isMultisampled) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidOperation,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl/FramebufferImpl", caller,
+                                             "Cannot copy from a multisampled read framebuffer."));
+            return false;
+        }
+
+        return true;
+    }
 } // namespace MobileGL::MG_Impl::GLImpl::FramebufferImpl

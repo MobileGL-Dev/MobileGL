@@ -20,4 +20,9 @@ namespace MobileGL::MG_Impl::GLImpl::FramebufferImpl {
     Bool ValidateColorAttachmentInRange(FramebufferAttachmentType attachment, const char* caller);
     Bool ValidateRenderbufferTarget(RenderbufferTarget target);
     Bool ValidateRenderbufferName(Uint index, Bool allowZero = true);
+    // The read-framebuffer preconditions the CopyTexSubImage family shares (GL 4.6 core 8.6): the
+    // read framebuffer must be complete, its read buffer must name a real attachment, and it must
+    // not be multisampled. Incompleteness is INVALID_FRAMEBUFFER_OPERATION, the other two are
+    // INVALID_OPERATION.
+    Bool ValidateReadFramebufferForCopy(const char* caller);
 } // namespace MobileGL::MG_Impl::GLImpl::FramebufferImpl

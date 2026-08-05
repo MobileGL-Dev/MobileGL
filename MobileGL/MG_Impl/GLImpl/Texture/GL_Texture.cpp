@@ -25,6 +25,7 @@
 #include <MG_Util/Converters/GLToMG/TextureEnumConverter.h>
 #include <MG_Util/Converters/MGToGL/TextureEnumConverter.h>
 #include <MG_Util/Converters/MGToStr/TextureEnumConverter.h>
+#include <MG_Impl/GLImpl/Framebuffer/Validators.h>
 #include <MG_Impl/GLImpl/Getter/GL_Getter.h>
 #include <MG_State/GLState/TextureState/TextureObjectBuffer.h>
 
@@ -3020,6 +3021,26 @@ namespace MobileGL::MG_Impl::GLImpl {
         // TODO: implement
     }
 
+    // What the three CopyTextureSubImage forms check in common (GL 4.6 core 8.6), once the caller
+    // has rejected an effective target its own form does not accept: the destination region has to
+    // lie inside the level, and the read framebuffer has to be able to supply pixels at all.
+    Bool ValidateCopyTextureSubImage(const SharedPtr<MG_State::GLState::ITextureObject>& textureObject, GLint level,
+                                     GLint xoffset, GLint yoffset, GLint zoffset, GLsizei width, GLsizei height,
+                                     GLsizei depth, const char* caller) {
+        if (!TextureImpl::ValidateTextureLevelNumber(level)) return false;
+        if (width < 0 || height < 0 || depth < 0) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidValue,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller, "Copy dimensions must be non-negative."));
+            return false;
+        }
+        if (!TextureImpl::ValidateTextureSubImageOffsets(textureObject, xoffset, width, yoffset, height, zoffset,
+                                                         depth)) {
+            return false;
+        }
+        return FramebufferImpl::ValidateReadFramebufferForCopy(caller);
+    }
+
     void CopyTexSubImage2D_Backend(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLint x, GLint y,
                                    GLsizei width, GLsizei height) {
         MG_Backend::gBackendFunctionsTable.GL.CopyTexSubImage2D(target, level, xoffset, yoffset, x, y, width, height);
@@ -4706,8 +4727,53 @@ namespace MobileGL::MG_Impl::GLImpl {
                                              "rectangle texture."));
             return;
         }
+        if (!ValidateCopyTextureSubImage(textureObject, level, xoffset, yoffset, 0, width, height, 1, __func__)) {
+            return;
+        }
         WithTemporarilyBoundNamedTexture(textureObject, [&](GLenum glTarget) {
             CopyTexSubImage2D_Backend(glTarget, level, xoffset, yoffset, x, y, width, height);
+        });
+    }
+
+    void CopyTextureSubImage1D(GLuint texture, GLint level, GLint xoffset, GLint x, GLint y, GLsizei width) {
+        auto textureObject = GetTextureObjectByName(texture, __func__);
+        if (!textureObject) return;
+        if (textureObject->GetTarget() != TextureTarget::Texture1D) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidOperation,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
+                                             "CopyTextureSubImage1D requires a 1D texture."));
+            return;
+        }
+        if (!ValidateCopyTextureSubImage(textureObject, level, xoffset, 0, 0, width, 1, 1, __func__)) return;
+        // NOTE: the copy itself is still missing - CopyTexSubImage1D_State is a no-op and no backend
+        // exposes a 1D blit - so a valid call reaches the destination unchanged. Only the error
+        // reporting above is complete.
+        CopyTexSubImage1D_State(GL_TEXTURE_1D, level, xoffset, x, y, width);
+    }
+
+    void CopyTextureSubImage3D(GLuint texture, GLint level, GLint xoffset, GLint yoffset, GLint zoffset, GLint x,
+                               GLint y, GLsizei width, GLsizei height) {
+        auto textureObject = GetTextureObjectByName(texture, __func__);
+        if (!textureObject) return;
+        // GL 4.6 core 8.6: the 3D form takes the layered targets, a cube map included - the face
+        // is selected by zoffset.
+        const auto target = textureObject->GetTarget();
+        if (target != TextureTarget::Texture3D && target != TextureTarget::Texture2DArray &&
+            target != TextureTarget::TextureCubeMap && target != TextureTarget::TextureCubeMapArray) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidOperation,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
+                                             "CopyTextureSubImage3D requires a 3D, 2D-array, cube map, or "
+                                             "cube map array texture."));
+            return;
+        }
+        if (!ValidateCopyTextureSubImage(textureObject, level, xoffset, yoffset, zoffset, width, height, 1, __func__)) {
+            return;
+        }
+        // NOTE: as with the 1D form, CopyTexSubImage3D_State does not perform the copy yet.
+        WithTemporarilyBoundNamedTexture(textureObject, [&](GLenum glTarget) {
+            CopyTexSubImage3D_State(glTarget, level, xoffset, yoffset, zoffset, x, y, width, height);
         });
     }
 
