@@ -1097,7 +1097,7 @@ DECLARE_GL_FUNCTION_STUB_HEAD(void, GetVertexArrayIndexediv, GLuint vaobj, GLuin
 DECLARE_GL_FUNCTION_STUB_HEAD(void, GetVertexArrayIndexed64iv, GLuint vaobj, GLuint index, GLenum pname, GLint64* param) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, GetVertexArrayIndexed64iv, vaobj, index, pname, param)
 DECLARE_GL_FUNCTION_HEAD(void, CreateSamplers, GLsizei n, GLuint* samplers) DECLARE_GL_FUNCTION_END_NO_RETURN(void, CreateSamplers, n, samplers)
 DECLARE_GL_FUNCTION_STUB_HEAD(void, CreateProgramPipelines, GLsizei n, GLuint* pipelines) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, CreateProgramPipelines, n, pipelines)
-DECLARE_GL_FUNCTION_STUB_HEAD(void, CreateQueries, GLenum target, GLsizei n, GLuint* ids) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, CreateQueries, target, n, ids)
+DECLARE_GL_FUNCTION_HEAD(void, CreateQueries, GLenum target, GLsizei n, GLuint* ids) DECLARE_GL_FUNCTION_END_NO_RETURN(void, CreateQueries, target, n, ids)
 DECLARE_GL_FUNCTION_STUB_HEAD(void, GetQueryBufferObjecti64v, GLuint id, GLuint buffer, GLenum pname, GLintptr offset) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, GetQueryBufferObjecti64v, id, buffer, pname, offset)
 DECLARE_GL_FUNCTION_STUB_HEAD(void, GetQueryBufferObjectiv, GLuint id, GLuint buffer, GLenum pname, GLintptr offset) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, GetQueryBufferObjectiv, id, buffer, pname, offset)
 DECLARE_GL_FUNCTION_STUB_HEAD(void, GetQueryBufferObjectui64v, GLuint id, GLuint buffer, GLenum pname, GLintptr offset) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, GetQueryBufferObjectui64v, id, buffer, pname, offset)

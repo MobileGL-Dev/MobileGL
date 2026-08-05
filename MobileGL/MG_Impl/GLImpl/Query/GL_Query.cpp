@@ -23,6 +23,9 @@ namespace MobileGL::MG_Impl::GLImpl {
         struct QueryObject {
             GLuint id = 0;
             GLenum target = 0; // 0 = gen'd but never used with BeginQuery/QueryCounter
+            // glCreateQueries makes the object outright; glGenQueries only reserves the name,
+            // and the object appears when the name is first used (GL 4.6 core 4.2.1).
+            Bool created = false;
             MG_Backend::BackendQueryHandle backendHandle = nullptr;
             Bool active = false;
             Bool ended = false;
@@ -177,6 +180,41 @@ namespace MobileGL::MG_Impl::GLImpl {
         }
     }
 
+    // glCreateQueries differs from glGenQueries in creating the objects outright, with their
+    // target already fixed and the rest of their state at the defaults (GL 4.6 core 4.2.1).
+    void CreateQueries(GLenum target, GLsizei n, GLuint* ids) {
+        switch (target) {
+        case GL_SAMPLES_PASSED:
+        case GL_ANY_SAMPLES_PASSED:
+        case GL_ANY_SAMPLES_PASSED_CONSERVATIVE:
+        case GL_TIME_ELAPSED:
+        case GL_TIMESTAMP:
+        case GL_PRIMITIVES_GENERATED:
+        case GL_TRANSFORM_FEEDBACK_PRIMITIVES_WRITTEN:
+            break;
+        default:
+            RecordQueryError(ErrorCode::InvalidEnum, __FUNCTION__, "Query target is not accepted.");
+            return;
+        }
+        if (n < 0) {
+            RecordQueryError(ErrorCode::InvalidValue, __FUNCTION__, "n cannot be negative.");
+            return;
+        }
+        if (!ids) {
+            return;
+        }
+        const std::lock_guard<std::mutex> lock(g_queryObjectsMutex);
+        for (GLsizei i = 0; i < n; ++i) {
+            const GLuint id = g_nextQueryId++;
+            auto* queryObject = new QueryObject;
+            queryObject->id = id;
+            queryObject->target = target;
+            queryObject->created = true;
+            g_liveQueryObjects[id] = queryObject;
+            ids[i] = id;
+        }
+    }
+
     void DeleteQueries(GLsizei n, const GLuint* ids) {
         if (n < 0) {
             RecordQueryError(ErrorCode::InvalidValue, __FUNCTION__, "n cannot be negative.");
@@ -228,9 +266,11 @@ namespace MobileGL::MG_Impl::GLImpl {
             return GL_FALSE;
         }
         const std::lock_guard<std::mutex> lock(g_queryObjectsMutex);
-        // Gen'd ids count as query objects here: the registry creates live
-        // objects at GenQueries time.
-        return FindQueryObjectLocked(id) != nullptr ? GL_TRUE : GL_FALSE;
+        // A name from glGenQueries is not yet a query object: it becomes one when it is first
+        // used with BeginQuery/QueryCounter (which is what a non-zero target records), or
+        // immediately if it came from glCreateQueries.
+        const auto* queryObject = FindQueryObjectLocked(id);
+        return (queryObject != nullptr && (queryObject->created || queryObject->target != 0)) ? GL_TRUE : GL_FALSE;
     }
 
     void BeginQuery(GLenum target, GLuint id) {

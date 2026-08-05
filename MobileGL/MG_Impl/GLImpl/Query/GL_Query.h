@@ -11,6 +11,7 @@
 
 namespace MobileGL::MG_Impl::GLImpl {
     void GenQueries(GLsizei n, GLuint* ids);
+    void CreateQueries(GLenum target, GLsizei n, GLuint* ids);
     void DeleteQueries(GLsizei n, const GLuint* ids);
     GLboolean IsQuery(GLuint id);
     void BeginQuery(GLenum target, GLuint id);
