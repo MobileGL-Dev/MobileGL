@@ -62,6 +62,34 @@ namespace MobileGL::MG_Impl::GLImpl {
                                               MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", function, message));
         }
 
+        // The by-buffer query getters write the result into a buffer object instead of client
+        // memory. Everything about the query itself - the name, whether it is still active, the
+        // parameter - is checked by GetQueryObjectValue; what is left is the destination, so this
+        // resolves the buffer and confirms the write lands inside it (GL 4.6 core 4.2.1).
+        Bool ResolveQueryResultDestination(GLuint buffer, GLintptr offset, SizeT writeSize, const char* function,
+                                           SharedPtr<MG_State::GLState::BufferObject>& outBuffer) {
+            if (offset < 0) {
+                RecordQueryError(ErrorCode::InvalidValue, function, "Offset cannot be negative.");
+                return false;
+            }
+            if (!MG_State::pGLContext->ValidateBufferObject(buffer)) {
+                RecordQueryError(ErrorCode::InvalidOperation, function, "Buffer object does not exist.");
+                return false;
+            }
+            auto bufferObject = MG_State::pGLContext->GetBufferObject(buffer);
+            if (!bufferObject) {
+                RecordQueryError(ErrorCode::InvalidOperation, function, "Buffer object does not exist.");
+                return false;
+            }
+            if (static_cast<SizeT>(offset) + writeSize > bufferObject->GetSize()) {
+                RecordQueryError(ErrorCode::InvalidOperation, function,
+                                 "The query result does not fit in the buffer object at this offset.");
+                return false;
+            }
+            outBuffer = bufferObject;
+            return true;
+        }
+
         // Callers must hold g_queryObjectsMutex.
         QueryObject* FindQueryObjectLocked(GLuint id) {
             const auto it = g_liveQueryObjects.find(id);
@@ -159,6 +187,18 @@ namespace MobileGL::MG_Impl::GLImpl {
                 RecordQueryError(ErrorCode::InvalidEnum, function, "Unsupported query object parameter.");
                 return false;
             }
+        }
+
+        template <typename T>
+        void GetQueryBufferObject(GLuint id, GLuint buffer, GLenum pname, GLintptr offset, const char* function) {
+            SharedPtr<MG_State::GLState::BufferObject> bufferObject;
+            if (!ResolveQueryResultDestination(buffer, offset, sizeof(T), function, bufferObject)) return;
+
+            Uint64 value = 0;
+            if (!GetQueryObjectValue(id, pname, function, value)) return;
+
+            const T narrowed = static_cast<T>(value);
+            bufferObject->UploadSubData({const_cast<T*>(&narrowed), sizeof(T)}, static_cast<SizeT>(offset));
         }
     } // namespace
 
@@ -473,6 +513,22 @@ namespace MobileGL::MG_Impl::GLImpl {
             RecordQueryError(ErrorCode::InvalidEnum, __FUNCTION__, "Unsupported query parameter.");
             return;
         }
+    }
+
+    void GetQueryBufferObjectiv(GLuint id, GLuint buffer, GLenum pname, GLintptr offset) {
+        GetQueryBufferObject<GLint>(id, buffer, pname, offset, __FUNCTION__);
+    }
+
+    void GetQueryBufferObjectuiv(GLuint id, GLuint buffer, GLenum pname, GLintptr offset) {
+        GetQueryBufferObject<GLuint>(id, buffer, pname, offset, __FUNCTION__);
+    }
+
+    void GetQueryBufferObjecti64v(GLuint id, GLuint buffer, GLenum pname, GLintptr offset) {
+        GetQueryBufferObject<GLint64>(id, buffer, pname, offset, __FUNCTION__);
+    }
+
+    void GetQueryBufferObjectui64v(GLuint id, GLuint buffer, GLenum pname, GLintptr offset) {
+        GetQueryBufferObject<GLuint64>(id, buffer, pname, offset, __FUNCTION__);
     }
 
     void GetQueryObjectiv(GLuint id, GLenum pname, GLint* params) {

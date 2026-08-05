@@ -24,5 +24,9 @@ namespace MobileGL::MG_Impl::GLImpl {
     void GetQueryObjectuiv(GLuint id, GLenum pname, GLuint* params);
     void GetQueryObjecti64v(GLuint id, GLenum pname, GLint64* params);
     void GetQueryObjectui64v(GLuint id, GLenum pname, GLuint64* params);
+    void GetQueryBufferObjectiv(GLuint id, GLuint buffer, GLenum pname, GLintptr offset);
+    void GetQueryBufferObjectuiv(GLuint id, GLuint buffer, GLenum pname, GLintptr offset);
+    void GetQueryBufferObjecti64v(GLuint id, GLuint buffer, GLenum pname, GLintptr offset);
+    void GetQueryBufferObjectui64v(GLuint id, GLuint buffer, GLenum pname, GLintptr offset);
     void QueryCounter(GLuint id, GLenum target);
 } // namespace MobileGL::MG_Impl::GLImpl
