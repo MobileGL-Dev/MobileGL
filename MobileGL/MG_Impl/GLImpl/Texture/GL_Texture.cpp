@@ -911,6 +911,16 @@ namespace MobileGL::MG_Impl::GLImpl {
         case GL_GENERATE_MIPMAP:
             g_autoGenerateMipmapByTextureId[textureObject->GetExternalIndex()] = (param != GL_FALSE);
             break;
+        case GL_DEPTH_STENCIL_TEXTURE_MODE:
+            if (param != GL_DEPTH_COMPONENT && param != GL_STENCIL_INDEX) {
+                MG_State::pGLContext->RecordError(
+                    ErrorCode::InvalidEnum,
+                    MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller,
+                                                 "Invalid GL_DEPTH_STENCIL_TEXTURE_MODE value."));
+                return;
+            }
+            textureObject->SetDepthStencilTextureMode(static_cast<GLenum>(param));
+            break;
         default:
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidEnum,
@@ -985,7 +995,9 @@ namespace MobileGL::MG_Impl::GLImpl {
                     ErrorCode::InvalidEnum,
                     MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller,
                                                  "Invalid GL_DEPTH_STENCIL_TEXTURE_MODE value."));
+                return;
             }
+            textureObject->SetDepthStencilTextureMode(static_cast<GLenum>(param));
             break;
         default:
             MG_State::pGLContext->RecordError(
@@ -1048,11 +1060,44 @@ namespace MobileGL::MG_Impl::GLImpl {
         case GL_TEXTURE_MAX_ANISOTROPY_EXT:
             *params = static_cast<GLint>(textureObject->GetSamplerObject()->GetMaxAnisotropy());
             break;
+        case GL_DEPTH_STENCIL_TEXTURE_MODE:
+            *params = static_cast<GLint>(textureObject->GetDepthStencilTextureMode());
+            break;
+        case GL_TEXTURE_LOD_BIAS:
+            *params = static_cast<GLint>(textureObject->GetSamplerObject()->GetLodBias());
+            break;
+        case GL_TEXTURE_SWIZZLE_R:
+        case GL_TEXTURE_SWIZZLE_G:
+        case GL_TEXTURE_SWIZZLE_B:
+        case GL_TEXTURE_SWIZZLE_A: {
+            const auto component = static_cast<SizeT>(pname - GL_TEXTURE_SWIZZLE_R);
+            *params = static_cast<GLint>(
+                MG_Util::ConvertTextureSwizzleParamToGLEnum(textureObject->GetAllSwizzleParams()[component]));
+            break;
+        }
+        case GL_TEXTURE_TARGET:
+            *params = static_cast<GLint>(MG_Util::ConvertTextureTargetToGLEnum(textureObject->GetTarget()));
+            break;
+        case GL_IMAGE_FORMAT_COMPATIBILITY_TYPE:
+            *params = GL_IMAGE_FORMAT_COMPATIBILITY_BY_SIZE;
+            break;
+        // Texture views are not implemented; a texture that is not a view reports the defaults
+        // GL 4.6 core table 23.17 gives (0 layers/levels of offset, and its own extent).
+        case GL_TEXTURE_VIEW_MIN_LEVEL:
+        case GL_TEXTURE_VIEW_MIN_LAYER:
+            *params = 0;
+            break;
+        case GL_TEXTURE_VIEW_NUM_LEVELS:
+        case GL_TEXTURE_VIEW_NUM_LAYERS:
+            *params = 0;
+            break;
         default:
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidEnum,
-                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller,
-                                             "pname is not a valid texture parameter."));
+                MakeUnique<GenericErrorInfo>(
+                    "MG_Impl/GLImpl", caller,
+                    std::format("pname {} is not a valid texture parameter.",
+                                MG_Util::ConvertGLEnumToString(pname))));
             return;
         }
     }
@@ -2441,6 +2486,16 @@ namespace MobileGL::MG_Impl::GLImpl {
                 *params = GL_IMAGE_FORMAT_COMPATIBILITY_BY_SIZE;
             }
             break;
+        case GL_DEPTH_STENCIL_TEXTURE_MODE:
+            if (params) {
+                *params = static_cast<GLint>(textureObject->GetDepthStencilTextureMode());
+            }
+            break;
+        case GL_TEXTURE_LOD_BIAS:
+            if (params) {
+                *params = static_cast<GLint>(textureObject->GetSamplerObject()->GetLodBias());
+            }
+            break;
         default:
             MG_State::pGLContext->RecordError(ErrorCode::InvalidEnum,
                                               MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", "GetTexParameteriv_State",
@@ -2585,6 +2640,16 @@ namespace MobileGL::MG_Impl::GLImpl {
         case GL_TEXTURE_MAX_ANISOTROPY_EXT:
             if (params) {
                 *params = textureObject->GetSamplerObject()->GetMaxAnisotropy();
+            }
+            break;
+        case GL_DEPTH_STENCIL_TEXTURE_MODE:
+            if (params) {
+                *params = static_cast<GLfloat>(textureObject->GetDepthStencilTextureMode());
+            }
+            break;
+        case GL_TEXTURE_LOD_BIAS:
+            if (params) {
+                *params = static_cast<GLfloat>(textureObject->GetSamplerObject()->GetLodBias());
             }
             break;
         default:

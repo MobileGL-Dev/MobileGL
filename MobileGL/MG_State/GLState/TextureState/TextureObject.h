@@ -60,6 +60,10 @@ namespace MobileGL::MG_State::GLState {
         virtual Bool HasFixedSampleLocations() const = 0;
         virtual void SetFixedSampleLocations(Bool fixedSampleLocations) = 0;
         virtual Uint64 GetLifetimeId() const = 0;
+        // Which aspect of a packed depth/stencil texture a sampler reads (GL 4.6 core 8.10).
+        // DEPTH_COMPONENT until set, and meaningless for every other format.
+        virtual GLenum GetDepthStencilTextureMode() const = 0;
+        virtual void SetDepthStencilTextureMode(GLenum mode) = 0;
 
     protected:
         virtual Uint GetIndexOfTextureUploadTarget(TextureUploadTarget target) const = 0;
@@ -104,6 +108,8 @@ namespace MobileGL::MG_State::GLState {
         Bool HasFixedSampleLocations() const override;
         void SetFixedSampleLocations(Bool fixedSampleLocations) override;
         Uint64 GetLifetimeId() const override;
+        GLenum GetDepthStencilTextureMode() const override { return m_depthStencilTextureMode; }
+        void SetDepthStencilTextureMode(GLenum mode) override { m_depthStencilTextureMode = mode; }
 
     protected:
         static Uint64 AllocateLifetimeId();
@@ -124,6 +130,7 @@ namespace MobileGL::MG_State::GLState {
         // Starts at 1 so a freshly-created backend resource (snapshot 0) never spuriously
         // matches before its first sync. Bumped only on dirty=true in MarkStorageDirty.
         Uint64 m_contentVersion = 1;
+        GLenum m_depthStencilTextureMode = GL_DEPTH_COMPONENT;
         Int m_samples = 0;
         Bool m_fixedSampleLocations = true;
     };
