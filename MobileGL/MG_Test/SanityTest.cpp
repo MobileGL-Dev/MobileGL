@@ -197,15 +197,15 @@ TEST(DirectGLESSanity, AdvertisesDepthTextureForGlmarkShadowScenes) {
     EXPECT_NE(std::find(extensions.begin(), extensions.end(), MobileGL::E_GL_ARB_depth_texture), extensions.end());
 }
 
-// The advertised target went back to 3.3 (see "restore target GL version to 3.3"); Voxy only ever
-// needed the extensions, which stay advertised, so assert what the backend really reports.
+// Voxy only ever needed the extensions, which stay advertised whatever the version is; the version
+// assertion just pins what the backend really reports, now that V_OpenGL40 is in the list.
 TEST(DirectGLESSanity, AdvertisesVoxyRequiredRenderingExtensions) {
     MobileGL::MG_Backend::DirectGLES::BackendObject_DirectGLES backend;
     const auto& rendererInfo = backend.GetRendererInfo().RendererGLInfo;
     const auto& extensions = rendererInfo.Extensions;
 
-    EXPECT_EQ(rendererInfo.TargetGLVersion.Major, 3);
-    EXPECT_EQ(rendererInfo.TargetGLVersion.Minor, 3);
+    EXPECT_EQ(rendererInfo.TargetGLVersion.Major, 4);
+    EXPECT_EQ(rendererInfo.TargetGLVersion.Minor, 0);
     EXPECT_EQ(rendererInfo.TargetGLVersion.Patch, 0);
 
     EXPECT_NE(std::find(extensions.begin(), extensions.end(), MobileGL::E_GL_ARB_compute_shader),
@@ -412,14 +412,15 @@ TEST(DirectVulkanSanity, RenderPassExtentUsesSwapchainSizeOnlyForDefaultFramebuf
               MobileGL::IntVec2(512, 512));
 }
 
-// See the DirectGLES twin above: the target version is 3.3 again, the extensions are what matter.
+// See the DirectGLES twin above: the target version follows the advertised list, the extensions are
+// what matter.
 TEST(DirectVulkanSanity, AdvertisesVoxyRequiredRenderingExtensions) {
     MobileGL::MG_Backend::DirectVulkan::BackendObject_DirectVulkan backend;
     const auto& rendererInfo = backend.GetRendererInfo().RendererGLInfo;
     const auto& extensions = rendererInfo.Extensions;
 
-    EXPECT_EQ(rendererInfo.TargetGLVersion.Major, 3);
-    EXPECT_EQ(rendererInfo.TargetGLVersion.Minor, 3);
+    EXPECT_EQ(rendererInfo.TargetGLVersion.Major, 4);
+    EXPECT_EQ(rendererInfo.TargetGLVersion.Minor, 0);
     EXPECT_EQ(rendererInfo.TargetGLVersion.Patch, 0);
 
     EXPECT_NE(std::find(extensions.begin(), extensions.end(), MobileGL::E_GL_ARB_compute_shader),
