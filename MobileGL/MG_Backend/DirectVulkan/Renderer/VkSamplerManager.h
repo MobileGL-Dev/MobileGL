@@ -69,8 +69,6 @@ private:
     static VkSamplerMipmapMode ToVkMipmapMode(SamplerMipmapMode mode);
     static VkSamplerAddressMode ToVkAddressMode(SamplerWrapMode mode);
     static VkCompareOp ToVkCompareOp(SamplerCompareFunc func);
-    static SamplerCompareFunc ResolveCompareFunc(const MG_State::GLState::SamplerObject& sampler,
-                                                 const MG_State::GLState::ITextureObject& texture);
     static VkBorderColor ResolveVkBorderColor(const MG_State::GLState::SamplerObject& sampler,
                                               const MG_State::GLState::ITextureObject& texture);
     // The anisotropy Vulkan will actually apply: 1.0 (i.e. disabled) unless the feature is on and

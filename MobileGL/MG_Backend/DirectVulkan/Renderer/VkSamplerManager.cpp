@@ -164,7 +164,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         XXHASH_VERIFY(XXH64_update(m_hashState, &maxAnisotropy, sizeof(maxAnisotropy)));
         const auto compareMode = sampler.GetCompareMode();
         XXHASH_VERIFY(XXH64_update(m_hashState, &compareMode, sizeof(compareMode)));
-        const auto compareFunc = ResolveCompareFunc(sampler, texture);
+        const auto compareFunc = sampler.GetSamplerCompareFunc();
         XXHASH_VERIFY(XXH64_update(m_hashState, &compareFunc, sizeof(compareFunc)));
         const auto borderColor = ResolveVkBorderColor(sampler, texture);
         XXHASH_VERIFY(XXH64_update(m_hashState, &borderColor, sizeof(borderColor)));
@@ -207,7 +207,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         samplerInfo.anisotropyEnable = maxAnisotropy > 1.0f ? VK_TRUE : VK_FALSE;
         samplerInfo.maxAnisotropy = maxAnisotropy;
         samplerInfo.compareEnable = sampler.GetCompareMode() == SamplerCompareMode::CompareToTexture ? VK_TRUE : VK_FALSE;
-        samplerInfo.compareOp = ToVkCompareOp(ResolveCompareFunc(sampler, texture));
+        samplerInfo.compareOp = ToVkCompareOp(sampler.GetSamplerCompareFunc());
         // Must match BuildSamplerKey's resolution exactly.
         samplerInfo.maxLod = ResolveSingleLevelMaxLod(sampler, singleLevelView);
         samplerInfo.minLod = ResolveEffectiveMinLod(sampler, samplerInfo.maxLod);
@@ -279,17 +279,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         default:
             return VK_COMPARE_OP_ALWAYS;
         }
-    }
-
-    SamplerCompareFunc VkSamplerManager::ResolveCompareFunc(const MG_State::GLState::SamplerObject& sampler,
-                                                            const MG_State::GLState::ITextureObject& texture) {
-        const auto compareFunc = sampler.GetSamplerCompareFunc();
-        if (sampler.GetCompareMode() == SamplerCompareMode::CompareToTexture &&
-            IsDepthTextureFormat(texture.GetFormat()) && compareFunc == SamplerCompareFunc::Always) {
-            return SamplerCompareFunc::LessEqual;
-        }
-
-        return compareFunc;
     }
 
     VkBorderColor VkSamplerManager::ResolveVkBorderColor(const MG_State::GLState::SamplerObject& sampler,

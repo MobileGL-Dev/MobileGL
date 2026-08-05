@@ -32,8 +32,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
         void ClearGLErrors(const MG_External::GLESFunctionsTable& gl) {
             if (!gl.glGetError) return;
-            while (gl.glGetError() != GL_NO_ERROR) {
-            }
+            while (gl.glGetError() != GL_NO_ERROR) {}
         }
 
         Bool CheckNoGLError(const MG_External::GLESFunctionsTable& gl) {
@@ -77,8 +76,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         }
 
         Bool IsGLESProbeMultisampleTarget(TextureTarget target) {
-            return target == TextureTarget::Texture2DMultisample ||
-                   target == TextureTarget::Texture2DMultisampleArray;
+            return target == TextureTarget::Texture2DMultisample || target == TextureTarget::Texture2DMultisampleArray;
         }
 
         GLenum GetFramebufferAttachment(TextureInternalFormat format) {
@@ -115,8 +113,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
             GLenum normalizedInternalFormat = glFormat;
             GLenum imageFormat = GL_RGBA;
             GLenum imageType = GL_UNSIGNED_BYTE;
-            MG_Util::TextureFormatProcessor::NormalizePixelFormat(
-                glFormat, PixelFormatNormalizeOptionBit::None, &normalizedInternalFormat, &imageFormat, &imageType);
+            MG_Util::TextureFormatProcessor::NormalizePixelFormat(glFormat, PixelFormatNormalizeOptionBit::None,
+                                                                  &normalizedInternalFormat, &imageFormat, &imageType);
             return imageFormat != GL_RED_INTEGER && imageFormat != GL_RG_INTEGER && imageFormat != GL_RGB_INTEGER &&
                    imageFormat != GL_RGBA_INTEGER && !MG_Util::IsDepthFormatInternalFormat(format) &&
                    !MG_Util::IsStencilFormatInternalFormat(format);
@@ -154,9 +152,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
         GLESProbeFormatInfo BuildNativeProbeFormatInfo(GLenum requestedInternalFormat) {
             GLESProbeFormatInfo info;
             info.InternalFormat = requestedInternalFormat;
-            MG_Util::TextureFormatProcessor::NormalizePixelFormat(
-                requestedInternalFormat, PixelFormatNormalizeOptionBit::None, nullptr, &info.ImageFormat,
-                &info.ImageType);
+            MG_Util::TextureFormatProcessor::NormalizePixelFormat(requestedInternalFormat,
+                                                                  PixelFormatNormalizeOptionBit::None, nullptr,
+                                                                  &info.ImageFormat, &info.ImageType);
             return info;
         }
 
@@ -233,20 +231,16 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return MG_Util::ConvertGLEnumToString(internalFormat);
         }
 
-        void LogGLESFormatCaveat(TextureInternalFormat logicalFormat,
-                                 SizeT targetIndex,
+        void LogGLESFormatCaveat(TextureInternalFormat logicalFormat, SizeT targetIndex,
                                  const GLESProbeFormatInfo& fallbackInfo) {
             MGLOG_D("Caveat: %s %s not fully supported. Reason: %s. Fallback: %s",
                     GetFormatCapabilityTargetName(targetIndex).c_str(),
-                    MG_Util::ConvertTextureInternalFormatToString(logicalFormat).c_str(),
-                    fallbackInfo.Reason.c_str(),
+                    MG_Util::ConvertTextureInternalFormatToString(logicalFormat).c_str(), fallbackInfo.Reason.c_str(),
                     ConvertFallbackInternalFormatToString(fallbackInfo.InternalFormat).c_str());
         }
 
-        Bool BuildFallbackProbeFormatInfo(GLenum requestedInternalFormat,
-                                          Flags<PixelFormatNormalizeOptionBit> options,
-                                          Bool forced,
-                                          GLESProbeFormatInfo& outInfo) {
+        Bool BuildFallbackProbeFormatInfo(GLenum requestedInternalFormat, Flags<PixelFormatNormalizeOptionBit> options,
+                                          Bool forced, GLESProbeFormatInfo& outInfo) {
             const Flags<PixelFormatNormalizeOptionBit> applicableOptions =
                 MG_Util::TextureFormatProcessor::GetApplicablePixelFormatNormalizeOptions(requestedInternalFormat,
                                                                                           options);
@@ -261,8 +255,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return outInfo.InternalFormat != GL_UNKNOWN_MGL;
         }
 
-        FormatCapabilityFlags BuildTextureCapsFromProbe(TextureInternalFormat logicalFormat,
-                                                        TextureTarget target,
+        FormatCapabilityFlags BuildTextureCapsFromProbe(TextureInternalFormat logicalFormat, TextureTarget target,
                                                         Bool renderable) {
             FormatCapabilityFlags caps = GetTextureFeatureCaps(logicalFormat, target);
             if (renderable) {
@@ -276,16 +269,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return caps;
         }
 
-        void AddFullFormatCaps(FormatCapabilityCache& cache,
-                               SizeT targetIndex,
-                               SizeT formatIndex,
+        void AddFullFormatCaps(FormatCapabilityCache& cache, SizeT targetIndex, SizeT formatIndex,
                                FormatCapabilityFlags caps) {
             cache.FullCaps[targetIndex][formatIndex] |= caps;
         }
 
-        Bool AddCaveatFormatCaps(FormatCapabilityCache& cache,
-                                 SizeT targetIndex,
-                                 SizeT formatIndex,
+        Bool AddCaveatFormatCaps(FormatCapabilityCache& cache, SizeT targetIndex, SizeT formatIndex,
                                  FormatCapabilityFlags caps) {
             Bool added = false;
             for (FormatCapability capability : kReportedFormatCapabilities) {
@@ -299,8 +288,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         }
 
         Int GetGLESFormatMaxSamples(const MG_External::GLESCapabilities& capabilities,
-                                    TextureInternalFormat logicalFormat,
-                                    GLenum imageFormat) {
+                                    TextureInternalFormat logicalFormat, GLenum imageFormat) {
             const Bool isDepth = MG_Util::IsDepthFormatInternalFormat(logicalFormat);
             const Bool isStencil = MG_Util::IsStencilFormatInternalFormat(logicalFormat);
             const Bool isInteger = imageFormat == GL_RED_INTEGER || imageFormat == GL_RG_INTEGER ||
@@ -314,10 +302,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return capabilities.MaxColorTextureSamples;
         }
 
-        Bool ProbeFramebufferCompletenessForTexture(const MG_External::GLESFunctionsTable& gl,
-                                                   TextureTarget target,
-                                                   GLuint texture,
-                                                   TextureInternalFormat format) {
+        Bool ProbeFramebufferCompletenessForTexture(const MG_External::GLESFunctionsTable& gl, TextureTarget target,
+                                                    GLuint texture, TextureInternalFormat format) {
             GLuint framebuffer = 0;
             GLint prevFramebuffer = 0;
             if (!gl.glGenFramebuffers || !gl.glBindFramebuffer || !gl.glCheckFramebufferStatus ||
@@ -399,9 +385,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return supported;
         }
 
-        Bool ProbeFramebufferCompletenessForRenderbuffer(const MG_External::GLESFunctionsTable& gl,
-                                                        GLuint renderbuffer,
-                                                        TextureInternalFormat format) {
+        Bool ProbeFramebufferCompletenessForRenderbuffer(const MG_External::GLESFunctionsTable& gl, GLuint renderbuffer,
+                                                         TextureInternalFormat format) {
             GLuint framebuffer = 0;
             GLint prevFramebuffer = 0;
             if (!gl.glGenFramebuffers || !gl.glBindFramebuffer || !gl.glFramebufferRenderbuffer ||
@@ -468,16 +453,16 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     }
                     break;
                 case TextureTarget::Texture3D:
-                    gl.glTexImage3D(glTarget, 0, static_cast<GLint>(internalFormat), 2, 2, 2, 0, imageFormat,
-                                    imageType, nullptr);
+                    gl.glTexImage3D(glTarget, 0, static_cast<GLint>(internalFormat), 2, 2, 2, 0, imageFormat, imageType,
+                                    nullptr);
                     break;
                 case TextureTarget::Texture2DArray:
-                    gl.glTexImage3D(glTarget, 0, static_cast<GLint>(internalFormat), 2, 2, 1, 0, imageFormat,
-                                    imageType, nullptr);
+                    gl.glTexImage3D(glTarget, 0, static_cast<GLint>(internalFormat), 2, 2, 1, 0, imageFormat, imageType,
+                                    nullptr);
                     break;
                 case TextureTarget::TextureCubeMapArray:
-                    gl.glTexImage3D(glTarget, 0, static_cast<GLint>(internalFormat), 2, 2, 6, 0, imageFormat,
-                                    imageType, nullptr);
+                    gl.glTexImage3D(glTarget, 0, static_cast<GLint>(internalFormat), 2, 2, 6, 0, imageFormat, imageType,
+                                    nullptr);
                     break;
                 default:
                     break;
@@ -498,11 +483,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return created;
         }
 
-        Bool ProbeRenderbuffer(const MG_External::GLESFunctionsTable& gl,
-                               GLenum internalFormat,
-                               TextureInternalFormat logicalFormat,
-                               Bool multisample,
-                               Int samples) {
+        Bool ProbeRenderbuffer(const MG_External::GLESFunctionsTable& gl, GLenum internalFormat,
+                               TextureInternalFormat logicalFormat, Bool multisample, Int samples) {
             if (!gl.glGenRenderbuffers || !gl.glBindRenderbuffer || !gl.glDeleteRenderbuffers) {
                 return false;
             }
@@ -524,17 +506,16 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 gl.glRenderbufferStorage(GL_RENDERBUFFER, internalFormat, 1, 1);
             }
             const Bool created = CheckNoGLError(gl);
-            const Bool complete = created && ProbeFramebufferCompletenessForRenderbuffer(gl, renderbuffer, logicalFormat);
+            const Bool complete =
+                created && ProbeFramebufferCompletenessForRenderbuffer(gl, renderbuffer, logicalFormat);
             gl.glBindRenderbuffer(GL_RENDERBUFFER, static_cast<GLuint>(prevRenderbuffer));
             gl.glDeleteRenderbuffers(1, &renderbuffer);
             ClearGLErrors(gl);
             return complete;
         }
 
-        Vector<Int> ProbeRenderbufferSampleCounts(const MG_External::GLESFunctionsTable& gl,
-                                                  GLenum internalFormat,
-                                                  TextureInternalFormat logicalFormat,
-                                                  Int maxSamples) {
+        Vector<Int> ProbeRenderbufferSampleCounts(const MG_External::GLESFunctionsTable& gl, GLenum internalFormat,
+                                                  TextureInternalFormat logicalFormat, Int maxSamples) {
             Vector<Int> sampleCounts;
             for (Int samples = std::max(maxSamples, 1); samples > 1; samples >>= 1) {
                 if (ProbeRenderbuffer(gl, internalFormat, logicalFormat, true, samples)) {
@@ -589,8 +570,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                         hasForcedFallback = BuildFallbackProbeFormatInfo(
                             requestedInternalFormat, forcedOptions | targetOptions, true, fallbackInfo);
                         if (!hasForcedFallback) {
-                            BuildFallbackProbeFormatInfo(requestedInternalFormat, driverOptions | targetOptions,
-                                                         false, fallbackInfo);
+                            BuildFallbackProbeFormatInfo(requestedInternalFormat, driverOptions | targetOptions, false,
+                                                         fallbackInfo);
                         }
                     }
 
@@ -623,9 +604,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
                             ProbeTexture(gl, probeTarget, fallbackInfo.InternalFormat, fallbackInfo.ImageFormat,
                                          fallbackInfo.ImageType, logicalFormat, &fallbackRenderable);
                         if (fallbackCreated) {
-                            if (AddCaveatFormatCaps(cache, targetIndex, formatIndex,
-                                                    BuildTextureCapsFromProbe(logicalFormat, target,
-                                                                              fallbackRenderable))) {
+                            if (AddCaveatFormatCaps(
+                                    cache, targetIndex, formatIndex,
+                                    BuildTextureCapsFromProbe(logicalFormat, target, fallbackRenderable))) {
                                 LogGLESFormatCaveat(logicalFormat, targetIndex, fallbackInfo);
                             }
                             if (IsGLESProbeMultisampleTarget(target)) {
@@ -676,7 +657,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 .ExtraVendor = Nullopt,              // Extra vendor
                 .RendererGLInfo =
                     {
-                        .TargetGLVersion = {3, 3, 0},   // GL target version
+                        .TargetGLVersion = {4, 0, 0},   // GL target version
                         .TargetGLSLVersion = {4, 6, 0}, // Target Shading Language Version
                         // Baseline advertisement (no timer queries / anisotropy yet); reconciled
                         // once the ES capabilities exist, see UpdateAdvertisedCapabilityExtensions.
@@ -707,8 +688,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
     } // namespace
 
     void PopulateFormatCapabilities(const MG_External::GLESFunctionsTable& gl,
-                                    const MG_External::GLESCapabilities& capabilities,
-                                    FormatCapabilityCache& cache) {
+                                    const MG_External::GLESCapabilities& capabilities, FormatCapabilityCache& cache) {
         PopulateFormatCapabilitiesImpl(gl, capabilities, cache);
     }
 
@@ -772,10 +752,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return false;
         }
 
-        if ((handle.Backend != WindowBackend::Android &&
-             handle.Backend != WindowBackend::X11 &&
-             handle.Backend != WindowBackend::MetalLayer &&
-             handle.Backend != WindowBackend::Win32) ||
+        if ((handle.Backend != WindowBackend::Android && handle.Backend != WindowBackend::X11 &&
+             handle.Backend != WindowBackend::MetalLayer && handle.Backend != WindowBackend::Win32) ||
             !handle.Handle) {
             MGLOG_E("DirectGLES backend only supports Android, X11, CAMetalLayer, and Win32 native windows");
             return false;
@@ -894,27 +872,24 @@ namespace MobileGL::MG_Backend::DirectGLES {
     }
 
     Vector<GLExtension> BuildAdvertisedExtensions(Bool timerQueriesSupported, Bool anisotropicFilteringSupported) {
-        Vector<GLExtension> extensions = {V_OpenGL30, V_OpenGL31, V_OpenGL32,
-                                          V_OpenGL33, E_GL_ARB_draw_buffers_blend, E_GL_ARB_compute_shader,
-                                          E_GL_ARB_shader_storage_buffer_object, E_GL_ARB_shader_image_load_store,
-                                          E_GL_ARB_program_interface_query, E_GL_ARB_framebuffer_object,
-                                          E_GL_EXT_framebuffer_object, E_GL_ARB_depth_texture, E_GL_ARB_buffer_storage,
-                                          E_GL_ARB_texture_storage, E_GL_ARB_texture_storage_multisample,
-                                          E_GL_ARB_clear_texture, E_GL_ARB_direct_state_access,
-                                          E_GL_ARB_multi_draw_indirect, E_GL_ARB_indirect_parameters,
-                                          E_GL_ARB_shader_draw_parameters, E_GL_ARB_gpu_shader5, E_GL_ARB_multi_bind,
-                                          E_GL_ARB_shading_language_420pack, E_GL_ARB_vertex_attrib_binding,
-                                          // Both are core from GL 3.2/3.3 on and implemented here for
-                                          // every advertised version, but an app targeting 3.0/3.1
-                                          // only reaches them through the extension string - the CTS
-                                          // picks a whole different shader for draw_buffers without
-                                          // explicit_attrib_location. DirectVulkan advertises both.
-                                          E_GL_ARB_explicit_attrib_location, E_GL_ARB_texture_multisample,
-                                          E_GL_ARB_shader_image_size,
-                                          // Advertised with GL_NUM_PROGRAM_BINARY_FORMATS = 0, which the
-                                          // extension explicitly permits. It is also the only thing that
-                                          // exposes glProgramParameteri before GL 4.1.
-                                          E_GL_ARB_get_program_binary};
+        Vector<GLExtension> extensions = {
+            V_OpenGL30, V_OpenGL31, V_OpenGL32, V_OpenGL33, E_GL_ARB_draw_buffers_blend, E_GL_ARB_compute_shader,
+            E_GL_ARB_shader_storage_buffer_object, E_GL_ARB_shader_image_load_store, E_GL_ARB_program_interface_query,
+            E_GL_ARB_framebuffer_object, E_GL_EXT_framebuffer_object, E_GL_ARB_depth_texture, E_GL_ARB_buffer_storage,
+            E_GL_ARB_texture_storage, E_GL_ARB_texture_storage_multisample, E_GL_ARB_clear_texture,
+            E_GL_ARB_direct_state_access, E_GL_ARB_multi_draw_indirect, E_GL_ARB_indirect_parameters,
+            E_GL_ARB_shader_draw_parameters, E_GL_ARB_gpu_shader5, E_GL_ARB_multi_bind,
+            E_GL_ARB_shading_language_420pack, E_GL_ARB_vertex_attrib_binding,
+            // Both are core from GL 3.2/3.3 on and implemented here for
+            // every advertised version, but an app targeting 3.0/3.1
+            // only reaches them through the extension string - the CTS
+            // picks a whole different shader for draw_buffers without
+            // explicit_attrib_location. DirectVulkan advertises both.
+            E_GL_ARB_explicit_attrib_location, E_GL_ARB_texture_multisample, E_GL_ARB_shader_image_size,
+            // Advertised with GL_NUM_PROGRAM_BINARY_FORMATS = 0, which the
+            // extension explicitly permits. It is also the only thing that
+            // exposes glProgramParameteri before GL 4.1.
+            E_GL_ARB_get_program_binary};
         // Only advertised when the device driver actually has usable timer queries
         // (GL_EXT_disjoint_timer_query plus its entry points) and the
         // MOBILEGL_DISABLE_TIMERQUERY escape hatch is off.
@@ -1052,8 +1027,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         return m_dynamicParameters;
     }
 
-    void BackendObject_DirectGLES::ApplyGLESCapabilitiesForTesting(
-        const MG_External::GLESCapabilities& capabilities) {
+    void BackendObject_DirectGLES::ApplyGLESCapabilitiesForTesting(const MG_External::GLESCapabilities& capabilities) {
         m_GLESCapabilities = capabilities;
         UpdateDynamicBackendParameters();
     }
@@ -1117,8 +1091,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         m_dynamicParameters.TextureBufferOffsetAlignment = m_GLESCapabilities.TextureBufferOffsetAlignment;
         m_dynamicParameters.MaxUniformBufferBindings = m_GLESCapabilities.MaxUniformBufferBindings;
         m_dynamicParameters.MaxUniformBlockSize = m_GLESCapabilities.MaxUniformBlockSize;
-        const Int maxSupportedTextureUnits =
-            static_cast<Int>(MG_State::GLState::TextureState::MAX_TEXTURE_IMAGE_UNITS);
+        const Int maxSupportedTextureUnits = static_cast<Int>(MG_State::GLState::TextureState::MAX_TEXTURE_IMAGE_UNITS);
         m_dynamicParameters.MaxImageUnits =
             std::max(std::min(m_GLESCapabilities.MaxImageUnits, maxSupportedTextureUnits), 0);
         m_dynamicParameters.MaxCombinedImageUniforms = std::max(m_GLESCapabilities.MaxCombinedImageUniforms, 0);
@@ -1126,8 +1099,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return std::min({std::max(stageLimit, 0), m_dynamicParameters.MaxImageUnits,
                              m_dynamicParameters.MaxCombinedImageUniforms});
         };
-        m_dynamicParameters.MaxVertexImageUniforms =
-            clampStageImageUniforms(m_GLESCapabilities.MaxVertexImageUniforms);
+        m_dynamicParameters.MaxVertexImageUniforms = clampStageImageUniforms(m_GLESCapabilities.MaxVertexImageUniforms);
         m_dynamicParameters.MaxGeometryImageUniforms =
             clampStageImageUniforms(m_GLESCapabilities.MaxGeometryImageUniforms);
         m_dynamicParameters.MaxFragmentImageUniforms =
@@ -1157,8 +1129,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             const Float requiredMaxOffset =
                 0.5f - std::ldexp(1.0f, -m_GLESCapabilities.FragmentInterpolationOffsetBits);
             if (m_GLESCapabilities.MaxFragmentInterpolationOffset >= requiredMaxOffset) {
-                m_dynamicParameters.MaxFragmentInterpolationOffset =
-                    m_GLESCapabilities.MaxFragmentInterpolationOffset;
+                m_dynamicParameters.MaxFragmentInterpolationOffset = m_GLESCapabilities.MaxFragmentInterpolationOffset;
                 m_dynamicParameters.FragmentInterpolationOffsetBits =
                     m_GLESCapabilities.FragmentInterpolationOffsetBits;
             }
@@ -1167,9 +1138,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
             m_GLESCapabilities.AliasedLineWidthRangeMax > 1.0f || m_GLESCapabilities.SmoothLineWidthRangeMax > 1.0f;
 
         const auto containsAny = [](const String& haystack, std::initializer_list<const char*> needles) {
-            return std::any_of(needles.begin(), needles.end(), [&](const char* needle) {
-                return haystack.find(needle) != String::npos;
-            });
+            return std::any_of(needles.begin(), needles.end(),
+                               [&](const char* needle) { return haystack.find(needle) != String::npos; });
         };
         const String vendorAndRenderer =
             m_GLESCapabilities.GLESVendorString + " " + m_GLESCapabilities.GLESRendererString;

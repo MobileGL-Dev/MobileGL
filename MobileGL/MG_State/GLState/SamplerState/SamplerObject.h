@@ -66,7 +66,9 @@ namespace MobileGL {
         Float maxLod = 1000.0f;
         Float lodBias = 0.0f;
         Float maxAnisotropy = 1.0f;
-        SamplerCompareFunc compareFunc = SamplerCompareFunc::Always;
+        // GL 4.6 core table 23.18 / GLES 3.2 table 21.16: TEXTURE_COMPARE_FUNC starts at LEQUAL,
+        // for both sampler objects and the sampler state a texture object carries.
+        SamplerCompareFunc compareFunc = SamplerCompareFunc::LessEqual;
         SamplerCompareMode compareMode = SamplerCompareMode::None;
     };
 
