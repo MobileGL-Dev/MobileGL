@@ -16,6 +16,7 @@
 #include "MG_State/GLState/FramebufferState/FramebufferObject.h"
 
 #include <Includes.h>
+#include <unordered_map>
 #include <vk_mem_alloc.h>
 
 namespace MobileGL::MG_Backend::DirectVulkan {
@@ -314,7 +315,27 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             Uint64 deferredAtFrame = 0;
         };
 
-        UnorderedMap<MG_State::GLState::RenderbufferObject*, RenderbufferResource> m_renderbufferResources;
+        // Node-based std::unordered_map, deliberately not FastSTL's open-addressing UnorderedMap:
+        // callers cache a RenderbufferResource* - or a bare &resource->layout - and then make further
+        // calls that touch this map. BlitFramebuffer is the one that bit: it resolves the source and
+        // destination colour bindings (ResolveColorBlitBinding caches &rbResource->layout), then
+        // materializes the source's pending clear, which looks that same resource up again. FastSTL's
+        // operator[] runs its load-factor check before find_key and reallocates the whole bucket array
+        // when occupancy crosses it, so even a plain lookup relocates every element; erase only
+        // tombstones and never decrements the occupancy, so the doubling keeps firing. After a
+        // relocation the cached pointer names freed storage still holding the pre-clear
+        // VK_IMAGE_LAYOUT_UNDEFINED, and BlitFramebuffer bails out at "source image layout is
+        // undefined", silently dropping the blit - renderbuffers_storage_multisample read back zero
+        // instead of the clear colour on exactly the iterations that grew the table.
+        //
+        // Reordering the materialize ahead of the resolves - the fix ReadPixels got - does not cover
+        // this: the destination resolve still runs after the source pointer is taken. The depth blit,
+        // GetOrCreateRenderPass's depthRenderbufferResource and ReadDepthStencilPixels cache the same
+        // kind of pointer, so the invariant belongs in the container rather than in a per-call-site
+        // ordering rule. m_textureResources is node-based for the same reason. This buys stability
+        // across rehash and insert only - erase still invalidates the erased element, which is safe
+        // here because a renderbuffer that is an FBO attachment is held alive by that attachment.
+        std::unordered_map<MG_State::GLState::RenderbufferObject*, RenderbufferResource> m_renderbufferResources;
         UnorderedMap<MG_State::GLState::RenderbufferObject*, PendingRenderbufferClear> m_pendingRenderbufferClears;
         Vector<DeferredRenderbufferRelease> m_deferredRenderbufferReleases;
         // Supported sample counts per attachment format, so per-draw resource lookups
