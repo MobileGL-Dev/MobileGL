@@ -1044,6 +1044,83 @@ namespace MobileGL::MG_Impl::GLImpl {
         VertexArrayVertexBuffer_State(vaobj, bindingindex, buffer, offset, stride);
     }
 
+    // glGetVertexArrayiv reports exactly one thing (GL 4.6 core table 23.4): which buffer the
+    // named vertex array takes its indices from. Everything else about a vertex array is
+    // per-attribute and belongs to the indexed queries below.
+    void GetVertexArrayiv(GLuint vaobj, GLenum pname, GLint* param) {
+        auto vao = GetNamedVertexArrayObject_State(vaobj, __func__);
+        if (!vao || !param) return;
+        if (pname != GL_ELEMENT_ARRAY_BUFFER_BINDING) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidEnum,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
+                                             "pname must be GL_ELEMENT_ARRAY_BUFFER_BINDING."));
+            return;
+        }
+        const auto& indexBuffer = vao->GetIndexBufferBindingSlot().GetBoundObject();
+        *param = indexBuffer ? static_cast<GLint>(indexBuffer->GetExternalIndex()) : 0;
+    }
+
+    void GetVertexArrayIndexediv(GLuint vaobj, GLuint index, GLenum pname, GLint* param) {
+        auto vao = GetNamedVertexArrayObject_State(vaobj, __func__);
+        if (!vao || !param) return;
+        if (!VertexArrayImpl::ValidateVertexAttributeIndex(index)) return;
+        const auto& attr = vao->GetAttribute(index);
+        switch (pname) {
+        case GL_VERTEX_ATTRIB_ARRAY_ENABLED:
+            *param = attr.Enabled ? GL_TRUE : GL_FALSE;
+            return;
+        case GL_VERTEX_ATTRIB_ARRAY_SIZE:
+            *param = static_cast<GLint>(attr.Size);
+            return;
+        case GL_VERTEX_ATTRIB_ARRAY_STRIDE:
+            *param = static_cast<GLint>(attr.Stride);
+            return;
+        case GL_VERTEX_ATTRIB_ARRAY_TYPE:
+            *param = static_cast<GLint>(MG_Util::ConvertDataTypeToGLEnum(attr.Type));
+            return;
+        case GL_VERTEX_ATTRIB_ARRAY_NORMALIZED:
+            *param = attr.Normalized ? GL_TRUE : GL_FALSE;
+            return;
+        case GL_VERTEX_ATTRIB_ARRAY_INTEGER:
+            *param = attr.IsInteger ? GL_TRUE : GL_FALSE;
+            return;
+        case GL_VERTEX_ATTRIB_ARRAY_LONG:
+            // 64-bit attributes are not supported, so no attribute is ever a long one.
+            *param = GL_FALSE;
+            return;
+        case GL_VERTEX_ATTRIB_ARRAY_DIVISOR:
+            *param = static_cast<GLint>(attr.Divisor);
+            return;
+        case GL_VERTEX_ATTRIB_RELATIVE_OFFSET:
+            *param = static_cast<GLint>(vao->GetAttributeRelativeOffset(index));
+            return;
+        default:
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidEnum,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
+                                             "pname is not an accepted indexed vertex array query."));
+            return;
+        }
+    }
+
+    // Only GL_VERTEX_BINDING_OFFSET needs 64 bits. Its `index` names a vertex buffer binding
+    // point directly (GL 4.6 core 10.3.1), not an attribute - unlike every pname the 32-bit
+    // indexed query above accepts, which is why this one does not go through an attribute's
+    // binding index.
+    void GetVertexArrayIndexed64iv(GLuint vaobj, GLuint index, GLenum pname, GLint64* param) {
+        auto vao = GetNamedVertexArrayObject_State(vaobj, __func__);
+        if (!vao || !param) return;
+        if (!VertexArrayImpl::ValidateVertexAttributeIndex(index)) return;
+        if (pname != GL_VERTEX_BINDING_OFFSET) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidEnum,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__, "pname must be GL_VERTEX_BINDING_OFFSET."));
+            return;
+        }
+        *param = static_cast<GLint64>(vao->GetBindingPoint(index).Offset);
+    }
+
     void VertexArrayAttribFormat(GLuint vaobj, GLuint attribindex, GLint size, GLenum type, GLboolean normalized,
                                  GLuint relativeoffset) {
         VertexArrayAttribFormat_State(vaobj, attribindex, size, type, normalized, relativeoffset);

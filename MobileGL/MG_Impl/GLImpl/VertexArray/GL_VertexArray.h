@@ -92,6 +92,9 @@ namespace MobileGL::MG_Impl::GLImpl {
     void EnableVertexArrayAttrib(GLuint vaobj, GLuint index);
     void VertexArrayElementBuffer(GLuint vaobj, GLuint buffer);
     void VertexArrayVertexBuffer(GLuint vaobj, GLuint bindingindex, GLuint buffer, GLintptr offset, GLsizei stride);
+    void GetVertexArrayiv(GLuint vaobj, GLenum pname, GLint* param);
+    void GetVertexArrayIndexediv(GLuint vaobj, GLuint index, GLenum pname, GLint* param);
+    void GetVertexArrayIndexed64iv(GLuint vaobj, GLuint index, GLenum pname, GLint64* param);
     void VertexArrayAttribFormat(GLuint vaobj, GLuint attribindex, GLint size, GLenum type, GLboolean normalized,
                                  GLuint relativeoffset);
     void VertexArrayAttribIFormat(GLuint vaobj, GLuint attribindex, GLint size, GLenum type, GLuint relativeoffset);

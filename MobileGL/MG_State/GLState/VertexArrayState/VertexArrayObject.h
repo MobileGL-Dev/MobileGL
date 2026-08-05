@@ -84,6 +84,21 @@ namespace MobileGL {
                 void SetAttributeFormatSeparate(Uint attribIndex, int size, DataType type, Bool normalized,
                                                 Bool isInteger, Uint relativeOffset);
 
+                // The binding-point view the attributes were resolved from. Kept queryable
+                // because glGetVertexArrayIndexed[64]iv reports it verbatim, and the resolved
+                // flat attribute cannot always be inverted back into it.
+                Uint GetAttributeRelativeOffset(Uint attribIndex) const {
+                    return attribIndex < m_attributeRelativeOffset.size() ? m_attributeRelativeOffset[attribIndex] : 0;
+                }
+                Uint GetAttributeBindingIndex(Uint attribIndex) const {
+                    return attribIndex < m_attributeBindingIndex.size() ? m_attributeBindingIndex[attribIndex]
+                                                                       : attribIndex;
+                }
+                const VertexBufferBindingPoint& GetBindingPoint(Uint bindingIndex) const {
+                    static const VertexBufferBindingPoint kEmpty{};
+                    return bindingIndex < m_bindingPoints.size() ? m_bindingPoints[bindingIndex] : kEmpty;
+                }
+
                 const VertexAttributeVersion& GetAttributeVersion(Uint index) const;
                 const Array<VertexAttributeVersion, MAX_VERTEX_ATTRIBS>& GetAllAttributeVersions() const;
 
