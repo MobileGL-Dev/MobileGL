@@ -76,14 +76,15 @@ mustpass list, lavapipe / Mesa 25.2.8, `--deqp-surface-type=fbo`.
 
 | backend | conformance | strict Pass | Fail | InternalError | Crash |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| DirectGLES | **66.85%** | 59.30% | 115 | 8 | 0 |
-| DirectVulkan | **72.51%** | 72.24% | 91 | 8 | 3 |
+| DirectGLES | **74.66%** | 67.12% | 86 | 8 | 0 |
+| DirectVulkan | **73.05%** | 72.78% | 89 | 8 | 3 |
 
-The bulk of what remains is two groups that need features rather than fixes:
-`textures_storage_multisample_*` (60 cases) needs sampleable multisample
-textures, and `textures_buffer_*` (30) needs buffer textures to survive a
-`texelFetch`. `program_pipelines_*` needs ARB_separate_shader_objects, which is
-stubbed throughout.
+`textures_storage_multisample_*` is 54 of what remains on either backend and
+needs a feature rather than a fix: a multisample texture has to be attachable to
+a framebuffer and then sampleable through `sampler2DMS`, and the array half of
+the group additionally needs layered attachments, which the framebuffer
+attachment model does not represent yet. `program_pipelines_*` needs
+ARB_separate_shader_objects, which is stubbed throughout.
 
 ## Android KHR-GL33 workflow
 
