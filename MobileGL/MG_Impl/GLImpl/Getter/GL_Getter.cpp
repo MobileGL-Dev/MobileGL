@@ -1432,7 +1432,7 @@ namespace MobileGL::MG_Impl::GLImpl {
             *params = 0; // program-binary entrypoints are stubbed
             return;
         case GL_PROGRAM_PIPELINE_BINDING:
-            *params = 0; // program-pipeline entrypoints are stubbed
+            *params = static_cast<GLint>(MG_State::pGLContext->GetBoundProgramPipelineName());
             return;
         case GL_PROGRAM_POINT_SIZE:
             *params = MG_State::pGLContext->IsCapabilityEnabled(CapabilityInput::ProgramPointSize) ? GL_TRUE : GL_FALSE;

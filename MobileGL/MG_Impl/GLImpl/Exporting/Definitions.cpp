@@ -15,6 +15,7 @@
 #include "../Texture/GL_Texture.h"
 #include "../Drawing/GL_Drawing.h"
 #include "../Program/GL_Program.h"
+#include "../Program/GL_ProgramPipeline.h"
 #include "../RenderState/GL_RenderState.h"
 #include "../Framebuffer/GL_Framebuffer.h"
 #include "../VertexArray/GL_VertexArray.h"
@@ -317,14 +318,14 @@ DECLARE_GL_FUNCTION_HEAD(GLuint, GetProgramResourceIndex, GLuint program, GLenum
 DECLARE_GL_FUNCTION_HEAD(void, GetProgramResourceName, GLuint program, GLenum programInterface, GLuint index, GLsizei bufSize, GLsizei* length, GLchar* name) DECLARE_GL_FUNCTION_END_NO_RETURN(void, GetProgramResourceName, program, programInterface, index, bufSize, length, name)
 DECLARE_GL_FUNCTION_HEAD(void, GetProgramResourceiv, GLuint program, GLenum programInterface, GLuint index, GLsizei propCount, const GLenum* props, GLsizei bufSize, GLsizei* length, GLint* params) DECLARE_GL_FUNCTION_END_NO_RETURN(void, GetProgramResourceiv, program, programInterface, index, propCount, props, bufSize, length, params)
 DECLARE_GL_FUNCTION_HEAD(GLint, GetProgramResourceLocation, GLuint program, GLenum programInterface, const GLchar* name) DECLARE_GL_FUNCTION_END(GLint, GetProgramResourceLocation, program, programInterface, name)
-DECLARE_GL_FUNCTION_STUB_HEAD(void, UseProgramStages, GLuint pipeline, GLbitfield stages, GLuint program) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, UseProgramStages, pipeline, stages, program)
-DECLARE_GL_FUNCTION_STUB_HEAD(void, ActiveShaderProgram, GLuint pipeline, GLuint program) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, ActiveShaderProgram, pipeline, program)
+DECLARE_GL_FUNCTION_HEAD(void, UseProgramStages, GLuint pipeline, GLbitfield stages, GLuint program) DECLARE_GL_FUNCTION_END_NO_RETURN(void, UseProgramStages, pipeline, stages, program)
+DECLARE_GL_FUNCTION_HEAD(void, ActiveShaderProgram, GLuint pipeline, GLuint program) DECLARE_GL_FUNCTION_END_NO_RETURN(void, ActiveShaderProgram, pipeline, program)
 DECLARE_GL_FUNCTION_STUB_HEAD(GLuint, CreateShaderProgramv, GLenum type, GLsizei count, const GLchar* const* strings) DECLARE_GL_FUNCTION_STUB_END(GLuint, CreateShaderProgramv, type, count, strings)
-DECLARE_GL_FUNCTION_STUB_HEAD(void, BindProgramPipeline, GLuint pipeline) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, BindProgramPipeline, pipeline)
-DECLARE_GL_FUNCTION_STUB_HEAD(void, DeleteProgramPipelines, GLsizei n, const GLuint* pipelines) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, DeleteProgramPipelines, n, pipelines)
-DECLARE_GL_FUNCTION_STUB_HEAD(void, GenProgramPipelines, GLsizei n, GLuint* pipelines) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, GenProgramPipelines, n, pipelines)
-DECLARE_GL_FUNCTION_STUB_HEAD(GLboolean, IsProgramPipeline, GLuint pipeline) DECLARE_GL_FUNCTION_STUB_END(GLboolean, IsProgramPipeline, pipeline)
-DECLARE_GL_FUNCTION_STUB_HEAD(void, GetProgramPipelineiv, GLuint pipeline, GLenum pname, GLint* params) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, GetProgramPipelineiv, pipeline, pname, params)
+DECLARE_GL_FUNCTION_HEAD(void, BindProgramPipeline, GLuint pipeline) DECLARE_GL_FUNCTION_END_NO_RETURN(void, BindProgramPipeline, pipeline)
+DECLARE_GL_FUNCTION_HEAD(void, DeleteProgramPipelines, GLsizei n, const GLuint* pipelines) DECLARE_GL_FUNCTION_END_NO_RETURN(void, DeleteProgramPipelines, n, pipelines)
+DECLARE_GL_FUNCTION_HEAD(void, GenProgramPipelines, GLsizei n, GLuint* pipelines) DECLARE_GL_FUNCTION_END_NO_RETURN(void, GenProgramPipelines, n, pipelines)
+DECLARE_GL_FUNCTION_HEAD(GLboolean, IsProgramPipeline, GLuint pipeline) DECLARE_GL_FUNCTION_END(GLboolean, IsProgramPipeline, pipeline)
+DECLARE_GL_FUNCTION_HEAD(void, GetProgramPipelineiv, GLuint pipeline, GLenum pname, GLint* params) DECLARE_GL_FUNCTION_END_NO_RETURN(void, GetProgramPipelineiv, pipeline, pname, params)
 DECLARE_GL_FUNCTION_HEAD(void, ProgramUniform1i, GLuint program, GLint location, GLint v0) DECLARE_GL_FUNCTION_END_NO_RETURN(void, ProgramUniform1i, program, location, v0)
 DECLARE_GL_FUNCTION_HEAD(void, ProgramUniform2i, GLuint program, GLint location, GLint v0, GLint v1) DECLARE_GL_FUNCTION_END_NO_RETURN(void, ProgramUniform2i, program, location, v0, v1)
 DECLARE_GL_FUNCTION_HEAD(void, ProgramUniform3i, GLuint program, GLint location, GLint v0, GLint v1, GLint v2) DECLARE_GL_FUNCTION_END_NO_RETURN(void, ProgramUniform3i, program, location, v0, v1, v2)
@@ -358,8 +359,8 @@ DECLARE_GL_FUNCTION_HEAD(void, ProgramUniformMatrix2x4fv, GLuint program, GLint 
 DECLARE_GL_FUNCTION_HEAD(void, ProgramUniformMatrix4x2fv, GLuint program, GLint location, GLsizei count, GLboolean transpose, const GLfloat* value) DECLARE_GL_FUNCTION_END_NO_RETURN(void, ProgramUniformMatrix4x2fv, program, location, count, transpose, value)
 DECLARE_GL_FUNCTION_HEAD(void, ProgramUniformMatrix3x4fv, GLuint program, GLint location, GLsizei count, GLboolean transpose, const GLfloat* value) DECLARE_GL_FUNCTION_END_NO_RETURN(void, ProgramUniformMatrix3x4fv, program, location, count, transpose, value)
 DECLARE_GL_FUNCTION_HEAD(void, ProgramUniformMatrix4x3fv, GLuint program, GLint location, GLsizei count, GLboolean transpose, const GLfloat* value) DECLARE_GL_FUNCTION_END_NO_RETURN(void, ProgramUniformMatrix4x3fv, program, location, count, transpose, value)
-DECLARE_GL_FUNCTION_STUB_HEAD(void, ValidateProgramPipeline, GLuint pipeline) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, ValidateProgramPipeline, pipeline)
-DECLARE_GL_FUNCTION_STUB_HEAD(void, GetProgramPipelineInfoLog, GLuint pipeline, GLsizei bufSize, GLsizei* length, GLchar* infoLog) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, GetProgramPipelineInfoLog, pipeline, bufSize, length, infoLog)
+DECLARE_GL_FUNCTION_HEAD(void, ValidateProgramPipeline, GLuint pipeline) DECLARE_GL_FUNCTION_END_NO_RETURN(void, ValidateProgramPipeline, pipeline)
+DECLARE_GL_FUNCTION_HEAD(void, GetProgramPipelineInfoLog, GLuint pipeline, GLsizei bufSize, GLsizei* length, GLchar* infoLog) DECLARE_GL_FUNCTION_END_NO_RETURN(void, GetProgramPipelineInfoLog, pipeline, bufSize, length, infoLog)
 DECLARE_GL_FUNCTION_HEAD(void, BindImageTexture, GLuint unit, GLuint texture, GLint level, GLboolean layered, GLint layer, GLenum access, GLenum format) DECLARE_GL_FUNCTION_END_NO_RETURN(void, BindImageTexture, unit, texture, level, layered, layer, access, format)
 DECLARE_GL_FUNCTION_HEAD(void, GetBooleani_v, GLenum target, GLuint index, GLboolean* data) DECLARE_GL_FUNCTION_END_NO_RETURN(void, GetBooleani_v, target, index, data)
 DECLARE_GL_FUNCTION_HEAD(void, MemoryBarrier, GLbitfield barriers) DECLARE_GL_FUNCTION_END_NO_RETURN(void, MemoryBarrier, barriers)
@@ -1096,7 +1097,7 @@ DECLARE_GL_FUNCTION_HEAD(void, GetVertexArrayiv, GLuint vaobj, GLenum pname, GLi
 DECLARE_GL_FUNCTION_HEAD(void, GetVertexArrayIndexediv, GLuint vaobj, GLuint index, GLenum pname, GLint* param) DECLARE_GL_FUNCTION_END_NO_RETURN(void, GetVertexArrayIndexediv, vaobj, index, pname, param)
 DECLARE_GL_FUNCTION_HEAD(void, GetVertexArrayIndexed64iv, GLuint vaobj, GLuint index, GLenum pname, GLint64* param) DECLARE_GL_FUNCTION_END_NO_RETURN(void, GetVertexArrayIndexed64iv, vaobj, index, pname, param)
 DECLARE_GL_FUNCTION_HEAD(void, CreateSamplers, GLsizei n, GLuint* samplers) DECLARE_GL_FUNCTION_END_NO_RETURN(void, CreateSamplers, n, samplers)
-DECLARE_GL_FUNCTION_STUB_HEAD(void, CreateProgramPipelines, GLsizei n, GLuint* pipelines) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, CreateProgramPipelines, n, pipelines)
+DECLARE_GL_FUNCTION_HEAD(void, CreateProgramPipelines, GLsizei n, GLuint* pipelines) DECLARE_GL_FUNCTION_END_NO_RETURN(void, CreateProgramPipelines, n, pipelines)
 DECLARE_GL_FUNCTION_HEAD(void, CreateQueries, GLenum target, GLsizei n, GLuint* ids) DECLARE_GL_FUNCTION_END_NO_RETURN(void, CreateQueries, target, n, ids)
 DECLARE_GL_FUNCTION_HEAD(void, GetQueryBufferObjecti64v, GLuint id, GLuint buffer, GLenum pname, GLintptr offset) DECLARE_GL_FUNCTION_END_NO_RETURN(void, GetQueryBufferObjecti64v, id, buffer, pname, offset)
 DECLARE_GL_FUNCTION_HEAD(void, GetQueryBufferObjectiv, GLuint id, GLuint buffer, GLenum pname, GLintptr offset) DECLARE_GL_FUNCTION_END_NO_RETURN(void, GetQueryBufferObjectiv, id, buffer, pname, offset)

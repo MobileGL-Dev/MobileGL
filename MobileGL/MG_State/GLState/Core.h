@@ -14,6 +14,7 @@
 #include "MG_State/GLState/RenderbufferState/RenderbufferState.h"
 #include "RenderState/RenderState.h"
 #include "ProgramState/ProgramState.h"
+#include "ProgramState/ProgramPipelineObject.h"
 #include "SamplerState/SamplerState.h"
 #include "TextureState/TextureState.h"
 #include "FramebufferState/FramebufferState.h"
@@ -136,6 +137,19 @@ namespace MobileGL {
                 const SharedPtr<ShaderObject>& GetShaderObject(Uint index);
                 void UseProgram(Uint program);
                 const SharedPtr<ProgramObject>& GetCurrentProgram();
+
+                // Program pipeline (GL_ARB_separate_shader_objects, GL 4.6 core 7.4). Like queries
+                // and transform feedbacks, glGenProgramPipelines only RESERVES a name - the object
+                // appears on first bind - while glCreateProgramPipelines makes it immediately.
+                void GenProgramPipelineNames(Uint number, Vector<Uint>& pipelines);
+                void CreateProgramPipelineObject(Uint index);
+                Bool ValidateProgramPipelineName(Uint index) const;
+                Bool IsProgramPipelineObject(Uint index) const;
+                void BindProgramPipelineObject(Uint index);
+                void MarkProgramPipelineForDeletion(Uint index);
+                const SharedPtr<ProgramPipelineObject>& GetProgramPipelineObject(Uint index) const;
+                Uint GetBoundProgramPipelineName() const { return m_boundProgramPipeline; }
+                const SharedPtr<ProgramPipelineObject>& GetBoundProgramPipeline() const;
 
                 // RenderState
                 Uint GetRenderStateParametersVersion() const;
@@ -390,6 +404,11 @@ namespace MobileGL {
                 UnorderedMap<Uint, TransformFeedbackObjectState> m_transformFeedbackObjects;
                 IndexGenerator<Uint> m_transformFeedbackNames;
                 Uint m_boundTransformFeedback = 0;
+                // Map membership IS object existence here: a pipeline has no stateful default
+                // object 0, so no everBound flag is needed.
+                UnorderedMap<Uint, SharedPtr<ProgramPipelineObject>> m_programPipelines;
+                IndexGenerator<Uint> m_programPipelineNames;
+                Uint m_boundProgramPipeline = 0;
                 TextureState m_textureState;
                 ProgramState m_programState;
                 RenderState m_renderState;

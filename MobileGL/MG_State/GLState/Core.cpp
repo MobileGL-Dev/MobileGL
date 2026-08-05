@@ -802,6 +802,53 @@ namespace MobileGL::MG_State {
                 m_transformFeedbackObjects[id] = {};
             }
         }
+        // Program pipeline
+        void GLContext::GenProgramPipelineNames(Uint number, Vector<Uint>& pipelines) {
+            pipelines.resize(number);
+            // Names only: glIsProgramPipeline must answer GL_FALSE until one is bound or created.
+            m_programPipelineNames.Generate(number, pipelines.data());
+        }
+
+        void GLContext::CreateProgramPipelineObject(Uint index) {
+            m_programPipelines[index] = MakeShared<ProgramPipelineObject>(index);
+        }
+
+        Bool GLContext::ValidateProgramPipelineName(Uint index) const {
+            return index == 0 || m_programPipelineNames.IsValid(index);
+        }
+
+        Bool GLContext::IsProgramPipelineObject(Uint index) const {
+            if (index == 0 || !m_programPipelineNames.IsValid(index)) return false;
+            return m_programPipelines.find(index) != m_programPipelines.end();
+        }
+
+        void GLContext::BindProgramPipelineObject(Uint index) {
+            if (index != 0 && m_programPipelines.find(index) == m_programPipelines.end()) {
+                // First bind is what turns a reserved name into an object.
+                m_programPipelines[index] = MakeShared<ProgramPipelineObject>(index);
+            }
+            m_boundProgramPipeline = index;
+        }
+
+        void GLContext::MarkProgramPipelineForDeletion(Uint index) {
+            if (index == 0 || !m_programPipelineNames.IsValid(index)) return;
+            if (index == m_boundProgramPipeline) {
+                m_boundProgramPipeline = 0;
+            }
+            m_programPipelines.erase(index);
+            m_programPipelineNames.Delete(index);
+        }
+
+        const SharedPtr<ProgramPipelineObject>& GLContext::GetProgramPipelineObject(Uint index) const {
+            static const SharedPtr<ProgramPipelineObject> kNone;
+            const auto it = m_programPipelines.find(index);
+            return it == m_programPipelines.end() ? kNone : it->second;
+        }
+
+        const SharedPtr<ProgramPipelineObject>& GLContext::GetBoundProgramPipeline() const {
+            return GetProgramPipelineObject(m_boundProgramPipeline);
+        }
+
 
         Bool GLContext::ValidateTransformFeedbackName(Uint index) const {
             return index == 0 || m_transformFeedbackNames.IsValid(index);
