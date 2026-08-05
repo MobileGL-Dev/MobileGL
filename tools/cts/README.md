@@ -9,7 +9,8 @@ This directory contains three supported paths:
   `skills/wgl-gl-cts-on-mobilegl/SKILL.md`.
 - Desktop Linux x64 / MobileGL EGL: `scripts/run_cts_local.py` against the
   `mobilegl-desktop` VK-GL-CTS target, documented in "Desktop Linux workflow"
-  below. This is the path that needs no device and no GPU.
+  below and in `skills/linux-gl-cts-on-mobilegl/SKILL.md`. This is the path that
+  needs no device and no GPU.
 
 Windows prerequisites are Git, Python 3.9+, CMake, Visual Studio 2022's Desktop
 C++ workload, and a Vulkan SDK visible to CMake. DirectVulkan also needs a

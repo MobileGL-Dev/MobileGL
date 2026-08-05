@@ -1,0 +1,4 @@
+interface:
+  display_name: "OpenGL CTS on MobileGL (desktop Linux)"
+  short_description: "Run VK-GL-CTS glcts against MobileGL headlessly and report Espryt and Magma separately"
+  default_prompt: "Use $linux-gl-cts-on-mobilegl to run the selected OpenGL CTS group against MobileGL on this Linux host and report the conformance rate for DirectGLES (Espryt) and DirectVulkan (Magma) separately."
