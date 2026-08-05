@@ -123,8 +123,13 @@ namespace MobileGL::MG_Impl::GLImpl {
         }
 
         // Shared GetQueryObject* implementation. Returns false when an error
-        // was recorded and no value should be written back.
-        Bool GetQueryObjectValue(GLuint id, GLenum pname, const char* function, Uint64& outValue) {
+        // was recorded and no value should be written back. `outValueProduced`, when given,
+        // additionally distinguishes "succeeded with a value" from "succeeded but the result is not
+        // ready" - the GL_QUERY_RESULT_NO_WAIT case, where GL_ARB_query_buffer_object says the
+        // destination is left alone rather than written with a placeholder.
+        Bool GetQueryObjectValue(GLuint id, GLenum pname, const char* function, Uint64& outValue,
+                                 Bool* outValueProduced = nullptr) {
+            if (outValueProduced) *outValueProduced = true;
             const std::lock_guard<std::mutex> lock(g_queryObjectsMutex);
             auto* queryObject = FindQueryObjectLocked(id);
             if (!queryObject) {
@@ -137,6 +142,41 @@ namespace MobileGL::MG_Impl::GLImpl {
             }
 
             switch (pname) {
+            case GL_QUERY_TARGET:
+                // The target a query was begun with (or created with, for glCreateQueries) - state
+                // the object has carried all along, GL 4.6 core table 23.35.
+                outValue = queryObject->target;
+                return true;
+            case GL_QUERY_RESULT_NO_WAIT: {
+                if (queryObject->resultCached) {
+                    outValue = queryObject->cachedResult;
+                    return true;
+                }
+                Uint64 result = 0;
+                const auto getQueryResult64 = MG_Backend::gBackendFunctionsTable.GL.GetQueryResult64;
+                if (queryObject->backendHandle && getQueryResult64 &&
+                    !getQueryResult64(queryObject->backendHandle, /*wait=*/false, &result)) {
+                    // Not ready. The whole point of the no-wait form is that the caller's
+                    // destination keeps whatever it already held.
+                    if (outValueProduced) *outValueProduced = false;
+                    outValue = 0;
+                    return true;
+                }
+                if (queryObject->target == GL_ANY_SAMPLES_PASSED ||
+                    queryObject->target == GL_ANY_SAMPLES_PASSED_CONSERVATIVE) {
+                    result = result != 0 ? 1 : 0;
+                }
+                if (queryObject->backendHandle) {
+                    if (const auto deleteBackendQuery = MG_Backend::gBackendFunctionsTable.GL.DeleteBackendQuery) {
+                        deleteBackendQuery(queryObject->backendHandle);
+                    }
+                    queryObject->backendHandle = nullptr;
+                }
+                queryObject->cachedResult = result;
+                queryObject->resultCached = true;
+                outValue = result;
+                return true;
+            }
             case GL_QUERY_RESULT_AVAILABLE: {
                 if (queryObject->resultCached || !queryObject->backendHandle) {
                     outValue = 1;
@@ -195,7 +235,10 @@ namespace MobileGL::MG_Impl::GLImpl {
             if (!ResolveQueryResultDestination(buffer, offset, sizeof(T), function, bufferObject)) return;
 
             Uint64 value = 0;
-            if (!GetQueryObjectValue(id, pname, function, value)) return;
+            Bool valueProduced = false;
+            if (!GetQueryObjectValue(id, pname, function, value, &valueProduced)) return;
+            // GL_QUERY_RESULT_NO_WAIT on a result that has not landed writes nothing at all.
+            if (!valueProduced) return;
 
             const T narrowed = static_cast<T>(value);
             bufferObject->UploadSubData({const_cast<T*>(&narrowed), sizeof(T)}, static_cast<SizeT>(offset));
@@ -533,7 +576,8 @@ namespace MobileGL::MG_Impl::GLImpl {
 
     void GetQueryObjectiv(GLuint id, GLenum pname, GLint* params) {
         Uint64 value = 0;
-        if (!GetQueryObjectValue(id, pname, __FUNCTION__, value) || !params) {
+        Bool valueProduced = false;
+        if (!GetQueryObjectValue(id, pname, __FUNCTION__, value, &valueProduced) || !valueProduced || !params) {
             return;
         }
         constexpr Uint64 kMaxInt = static_cast<Uint64>(INT_MAX);
@@ -542,7 +586,8 @@ namespace MobileGL::MG_Impl::GLImpl {
 
     void GetQueryObjectuiv(GLuint id, GLenum pname, GLuint* params) {
         Uint64 value = 0;
-        if (!GetQueryObjectValue(id, pname, __FUNCTION__, value) || !params) {
+        Bool valueProduced = false;
+        if (!GetQueryObjectValue(id, pname, __FUNCTION__, value, &valueProduced) || !valueProduced || !params) {
             return;
         }
         *params = static_cast<GLuint>(value & 0xFFFFFFFFull);
@@ -550,7 +595,8 @@ namespace MobileGL::MG_Impl::GLImpl {
 
     void GetQueryObjecti64v(GLuint id, GLenum pname, GLint64* params) {
         Uint64 value = 0;
-        if (!GetQueryObjectValue(id, pname, __FUNCTION__, value) || !params) {
+        Bool valueProduced = false;
+        if (!GetQueryObjectValue(id, pname, __FUNCTION__, value, &valueProduced) || !valueProduced || !params) {
             return;
         }
         *params = static_cast<GLint64>(value);
@@ -558,7 +604,8 @@ namespace MobileGL::MG_Impl::GLImpl {
 
     void GetQueryObjectui64v(GLuint id, GLenum pname, GLuint64* params) {
         Uint64 value = 0;
-        if (!GetQueryObjectValue(id, pname, __FUNCTION__, value) || !params) {
+        Bool valueProduced = false;
+        if (!GetQueryObjectValue(id, pname, __FUNCTION__, value, &valueProduced) || !valueProduced || !params) {
             return;
         }
         *params = static_cast<GLuint64>(value);
