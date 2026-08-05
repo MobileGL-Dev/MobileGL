@@ -201,6 +201,11 @@ fetch_file_from_mirror() {
   return 1
 }
 
+# Files no mirror could serve, even after retrying every mirror. Only these fall
+# back to Git LFS, so a mirror that served the rest of the case still spares
+# GitHub the bandwidth for those files.
+mirror_failures=()
+
 fetch_from_mirror() {
   mkdir -p "${fixture_dir}"
   for file in "${files[@]}"; do
@@ -219,17 +224,19 @@ fetch_from_mirror() {
       echo "Mirror did not serve ${name}; trying the next mirror" >&2
     done
     if [ "${fetched}" -ne 1 ]; then
-      return 1
+      mirror_failures+=("${file}")
     fi
   done
+  [ "${#mirror_failures[@]}" -eq 0 ]
 }
 
 if fetch_from_mirror; then
   echo "Fetched trace fixture files for ${case_name} from mirror: ${include}"
 else
-  echo "All mirrors failed for ${case_name}; falling back to Git LFS: ${include}"
+  fallback_include="$(IFS=,; echo "${mirror_failures[*]}")"
+  echo "All mirrors failed for ${#mirror_failures[@]} of ${#files[@]} file(s) of ${case_name}; falling back to Git LFS: ${fallback_include}"
   git lfs install --local
-  git lfs pull --include="${include}" --exclude=""
+  git lfs pull --include="${fallback_include}" --exclude=""
 fi
 
 for file in "${files[@]}"; do
