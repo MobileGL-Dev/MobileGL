@@ -2072,7 +2072,7 @@ namespace MobileGL::MG_Impl::GLImpl {
     // than freezing the size it happens to have now.
     // The sized internal formats a buffer texture accepts (GL 4.6 core table 8.16). This is a much
     // shorter list than the renderable or texturable formats, so it cannot be inferred from either.
-    static Bool IsBufferTextureInternalFormat(GLenum internalformat) {
+    Bool IsBufferTextureInternalFormat(GLenum internalformat) {
         switch (internalformat) {
         case GL_R8:
         case GL_R16:

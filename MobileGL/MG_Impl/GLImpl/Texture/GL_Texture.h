@@ -11,6 +11,10 @@
 
 namespace MobileGL::MG_Impl::GLImpl {
     /* @INSERTION_POINT:FUNCTION_DECLARATION@ */
+    // The sized internal formats a buffer texture accepts (GL 4.6 core table 8.16). The buffer
+    // clears take the same list, so it is shared rather than written out twice.
+    Bool IsBufferTextureInternalFormat(GLenum internalformat);
+
     void ClearTexImage(GLuint texture, GLint level, GLenum format, GLenum type, const void* data);
     void ClearTexSubImage(GLuint texture, GLint level, GLint xoffset, GLint yoffset, GLint zoffset, GLsizei width,
                           GLsizei height, GLsizei depth, GLenum format, GLenum type, const void* data);

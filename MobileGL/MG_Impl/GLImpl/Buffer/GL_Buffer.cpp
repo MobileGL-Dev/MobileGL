@@ -8,6 +8,9 @@
 
 #include "GL_Buffer.h"
 #include "Validators.h"
+#include "../Texture/GL_Texture.h"
+#include <MG_Util/Converters/GLToMG/TextureEnumConverter.h>
+#include <MG_Util/Metrics/TextureMetrics.h>
 #include <Config.h>
 #include <MG_State/GLState/Core.h>
 #include <MG_State/GLState/ErrorState/Error.h>
@@ -92,25 +95,64 @@ namespace MobileGL::MG_Impl::GLImpl {
 
         SharedPtr<MG_State::GLState::BufferObject> GetNamedBufferObject(GLuint buffer, BufferOp op);
 
+        // The size of one cleared element, which is what offset and size must be multiples of
+        // (GL 4.6 core 6.3). `internalformat` is restricted to the buffer-texture format table, and
+        // `format`/`type` describe the client-side pattern, so both are validated here and the
+        // caller only has to know how wide an element is.
         SizeT GetClearPatternSize(GLenum internalformat, GLenum format, GLenum type, BufferOp op) {
-            if (format != GL_RED_INTEGER) {
+            if (!IsBufferTextureInternalFormat(internalformat)) {
                 MG_State::pGLContext->RecordError(
                     ErrorCode::InvalidEnum,
-                    MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", GetBufferOpName(op),
-                                                 "Only GL_RED_INTEGER buffer clears are currently supported."));
+                    MakeUnique<GenericErrorInfo>(
+                        "MG_Impl/GLImpl", GetBufferOpName(op),
+                        std::format("internalformat 0x{:X} is not one of the sized formats a buffer clear accepts.",
+                                    internalformat)));
                 return 0;
             }
 
-            if (internalformat == GL_R8UI && type == GL_UNSIGNED_BYTE) return sizeof(GLubyte);
-            if (internalformat == GL_R32UI && type == GL_UNSIGNED_INT) return sizeof(GLuint);
+            // Unlike internalformat, a bad format or type here is INVALID_VALUE rather than
+            // INVALID_ENUM (GL 4.6 core 6.3) - the odd one out among the enum arguments.
+            const TextureInputFormat inputFormat = MG_Util::ConvertGLEnumToTextureInputFormat(format);
+            if (inputFormat == TextureInputFormat::Unknown) {
+                MG_State::pGLContext->RecordError(
+                    ErrorCode::InvalidValue,
+                    MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", GetBufferOpName(op),
+                                                 std::format("format 0x{:X} is not a pixel format.", format)));
+                return 0;
+            }
 
-            MG_State::pGLContext->RecordError(
-                ErrorCode::InvalidEnum,
-                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", GetBufferOpName(op),
-                                             std::format("Unsupported clear format tuple: internalformat=0x{:X}, "
-                                                         "format=0x{:X}, type=0x{:X}",
-                                                         internalformat, format, type)));
-            return 0;
+            const TexturePixelDataType pixelType = MG_Util::ConvertGLEnumToTexturePixelDataType(type);
+            if (pixelType == TexturePixelDataType::Unknown) {
+                MG_State::pGLContext->RecordError(
+                    ErrorCode::InvalidValue,
+                    MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", GetBufferOpName(op),
+                                                 std::format("type 0x{:X} is not a pixel type.", type)));
+                return 0;
+            }
+
+            const TextureInternalFormat internal =
+                MG_Util::ConvertGLEnumToTextureInternalFormat(internalformat);
+            const SizeT elementSize = MG_Util::GetSizedInternalFormatSizeInBytes(internal);
+            if (elementSize == 0) {
+                MG_State::pGLContext->RecordError(
+                    ErrorCode::InvalidEnum,
+                    MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", GetBufferOpName(op),
+                                                 std::format("internalformat 0x{:X} has no known element size.",
+                                                             internalformat)));
+                return 0;
+            }
+
+            // The pattern is replicated verbatim, which is only the whole story while the client
+            // layout already matches the internal format - the case every entry point in practice
+            // uses, and the only one the conversion machinery here can express. Say so rather than
+            // quietly writing a differently-sized pattern.
+            const SizeT sourceSize = MG_Util::GetInputBytesPerPixel(inputFormat, pixelType);
+            if (sourceSize != elementSize) {
+                MGLOG_W("%s: clear pattern is %zu bytes but internalformat 0x%X stores %zu; "
+                        "converting between them is not implemented",
+                        GetBufferOpName(op), sourceSize, internalformat, elementSize);
+            }
+            return elementSize;
         }
 
         Bool ValidateBufferClearRange(const SharedPtr<MG_State::GLState::BufferObject>& bufferObject, GLintptr offset,
