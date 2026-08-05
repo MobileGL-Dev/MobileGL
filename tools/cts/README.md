@@ -77,15 +77,17 @@ mustpass list, lavapipe / Mesa 25.2.8, `--deqp-surface-type=fbo`.
 
 | backend | conformance | strict Pass | Fail | InternalError | Crash |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| DirectGLES | **74.93%** | 67.39% | 85 | 8 | 0 |
-| DirectVulkan | **73.32%** | 73.05% | 88 | 8 | 3 |
+| DirectGLES | **82.48%** | 74.93% | 57 | 8 | 0 |
+| DirectVulkan | **73.58%** | 73.32% | 87 | 8 | 3 |
 
-`textures_storage_multisample_*` is 54 of what remains on either backend and
-needs a feature rather than a fix: a multisample texture has to be attachable to
-a framebuffer and then sampleable through `sampler2DMS`, and the array half of
-the group additionally needs layered attachments, which the framebuffer
-attachment model does not represent yet. `program_pipelines_*` needs
-ARB_separate_shader_objects, which is stubbed throughout.
+`textures_storage_multisample_*` is most of what remains, and the two backends
+are there for different reasons. Espryt passes the whole `2d` half and fails only
+the `3d` one, which attaches a multisample **array** texture with
+`glFramebufferTextureLayer` - layered attachments are not something the
+framebuffer attachment model represents yet. Magma fails both halves: it cannot
+sample a multisample texture at all, so the second pass reads back nothing.
+`program_pipelines_*` needs ARB_separate_shader_objects, which is stubbed
+throughout.
 
 ## Android KHR-GL33 workflow
 
