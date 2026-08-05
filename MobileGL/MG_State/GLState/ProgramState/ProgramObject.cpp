@@ -195,27 +195,42 @@ namespace MobileGL::MG_State::GLState {
             static constexpr GLenum kIntTypes[5] = {0, GL_INT, GL_INT_VEC2, GL_INT_VEC3, GL_INT_VEC4};
             static constexpr GLenum kUintTypes[5] = {0, GL_UNSIGNED_INT, GL_UNSIGNED_INT_VEC2, GL_UNSIGNED_INT_VEC3,
                                                      GL_UNSIGNED_INT_VEC4};
+            static constexpr GLenum kDoubleTypes[5] = {0, GL_DOUBLE, GL_DOUBLE_VEC2, GL_DOUBLE_VEC3,
+                                                      GL_DOUBLE_VEC4};
             if (type.isMatrix()) {
-                if (basic != glslang::EbtFloat) return false;
+                if (basic != glslang::EbtFloat && basic != glslang::EbtDouble) return false;
                 static constexpr GLenum kMatTypes[5][5] = {
                     {}, {},
                     {0, 0, GL_FLOAT_MAT2, GL_FLOAT_MAT2x3, GL_FLOAT_MAT2x4},
                     {0, 0, GL_FLOAT_MAT3x2, GL_FLOAT_MAT3, GL_FLOAT_MAT3x4},
                     {0, 0, GL_FLOAT_MAT4x2, GL_FLOAT_MAT4x3, GL_FLOAT_MAT4},
                 };
+                static constexpr GLenum kDoubleMatTypes[5][5] = {
+                    {}, {},
+                    {0, 0, GL_DOUBLE_MAT2, GL_DOUBLE_MAT2x3, GL_DOUBLE_MAT2x4},
+                    {0, 0, GL_DOUBLE_MAT3x2, GL_DOUBLE_MAT3, GL_DOUBLE_MAT3x4},
+                    {0, 0, GL_DOUBLE_MAT4x2, GL_DOUBLE_MAT4x3, GL_DOUBLE_MAT4},
+                };
                 if (columns < 2 || columns > 4 || components < 2 || components > 4) return false;
-                outType = kMatTypes[columns][components];
+                outType = basic == glslang::EbtDouble ? kDoubleMatTypes[columns][components]
+                                                      : kMatTypes[columns][components];
             } else if (components >= 1 && components <= 4) {
                 switch (basic) {
                 case glslang::EbtFloat: outType = kFloatTypes[components]; break;
                 case glslang::EbtInt: outType = kIntTypes[components]; break;
                 case glslang::EbtUint: outType = kUintTypes[components]; break;
+                // A double-typed varying is capturable like any other; rejecting it here reported
+                // the varying as "not an output of the vertex stage", which it plainly was.
+                case glslang::EbtDouble: outType = kDoubleTypes[components]; break;
                 default: return false;
                 }
             } else {
                 return false;
             }
-            outBytesPerElement = static_cast<Uint32>(columns * components) * 4u;
+            // GL 4.6 core 11.1.2.1: a double component occupies eight basic machine units, and
+            // counts as two components against the transform feedback limits.
+            const Uint32 bytesPerComponent = basic == glslang::EbtDouble ? 8u : 4u;
+            outBytesPerElement = static_cast<Uint32>(columns * components) * bytesPerComponent;
             return true;
         }
     } // namespace
