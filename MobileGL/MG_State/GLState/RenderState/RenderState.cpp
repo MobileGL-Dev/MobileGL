@@ -37,6 +37,10 @@ namespace MobileGL {
                 return m_version;
             }
 
+            Uint RenderState::GetPipelineStateVersion() const {
+                return m_pipelineStateVersion;
+            }
+
             const RenderStateParameters& RenderState::GetAllParameters() const {
                 return m_parameters;
             }
@@ -122,7 +126,7 @@ namespace MobileGL {
                 if (m_parameters.PolygonModeFront == front && m_parameters.PolygonModeBack == back) return;
                 m_parameters.PolygonModeFront = front;
                 m_parameters.PolygonModeBack = back;
-                ++m_version;
+                BumpVersions();
             }
 
             GLenum RenderState::GetPolygonModeFront() const {
@@ -158,7 +162,7 @@ namespace MobileGL {
                 if (m_parameters.PatchVertices == vertices) return;
 
                 m_parameters.PatchVertices = vertices;
-                ++m_version;
+                BumpVersions();
             }
 
             Uint RenderState::GetPatchVertices() const {
@@ -187,7 +191,7 @@ namespace MobileGL {
     case CapabilityInput::capability:                                                                                  \
         if (m_parameters.capability##Enabled == (flag)) break;                                                         \
         m_parameters.capability##Enabled = (flag);                                                                     \
-        ++m_version;                                                                                                   \
+        BumpVersions();                                                                                                   \
         break;
 
                 switch (cap) {
@@ -220,7 +224,7 @@ namespace MobileGL {
                         blendState.Enabled = enabled;
                         stateChanged = true;
                     }
-                    if (stateChanged) ++m_version;
+                    if (stateChanged) BumpVersions();
                     break;
                 }
                 default: // not supported currently
@@ -276,7 +280,7 @@ namespace MobileGL {
                 if (m_parameters.BlendStates[index].Enabled == enabled) return;
 
                 m_parameters.BlendStates[index].Enabled = enabled;
-                ++m_version;
+                BumpVersions();
             }
 
             Bool RenderState::IsCapabilityEnabledIndexed(CapabilityInput cap, Uint index) const {
@@ -308,7 +312,7 @@ namespace MobileGL {
                     stateChanged = true;
                 }
                 if (!stateChanged) return;
-                ++m_version;
+                BumpVersions();
             }
 
             void RenderState::GetBlendFunc(BlendFactor& srcRGB, BlendFactor& dstRGB, BlendFactor& srcAlpha,
@@ -334,7 +338,7 @@ namespace MobileGL {
                 blendState.DstFactorRGB = dstRGB;
                 blendState.SrcFactorAlpha = srcAlpha;
                 blendState.DstFactorAlpha = dstAlpha;
-                ++m_version;
+                BumpVersions();
             }
 
             void RenderState::GetBlendFuncIndexed(Uint index, BlendFactor& srcRGB, BlendFactor& dstRGB,
@@ -360,7 +364,7 @@ namespace MobileGL {
                     stateChanged = true;
                 }
                 if (!stateChanged) return;
-                ++m_version;
+                BumpVersions();
             }
 
             void RenderState::GetBlendEquation(BlendEquation& color, BlendEquation& alpha) const {
@@ -379,7 +383,7 @@ namespace MobileGL {
                 }
                 blendState.ColorEquation = color;
                 blendState.AlphaEquation = alpha;
-                ++m_version;
+                BumpVersions();
             }
 
             void RenderState::GetBlendEquationIndexed(Uint index, BlendEquation& color, BlendEquation& alpha) const {
@@ -395,7 +399,7 @@ namespace MobileGL {
                 if (m_parameters.LogicOp == logicOp) return;
 
                 m_parameters.LogicOp = logicOp;
-                ++m_version;
+                BumpVersions();
             }
 
             LogicOperation RenderState::GetLogicOp() const {
@@ -407,7 +411,7 @@ namespace MobileGL {
                 if (m_parameters.DepthFunc == func) return;
 
                 m_parameters.DepthFunc = func;
-                ++m_version;
+                BumpVersions();
             }
 
             DepthTestFunc RenderState::GetDepthFunc() const {
@@ -418,7 +422,7 @@ namespace MobileGL {
                 if (m_parameters.DepthMask == flag) return;
 
                 m_parameters.DepthMask = flag;
-                ++m_version;
+                BumpVersions();
             }
 
             Bool RenderState::GetDepthMask() const {
@@ -429,10 +433,15 @@ namespace MobileGL {
                 StencilFaceState& state = m_parameters.StencilStates[GetStencilFaceIndex(face)];
                 if (state.Func == func && state.Ref == ref && state.ValueMask == mask) return;
 
+                // Only Func is baked into the pipeline; Ref and ValueMask are dynamic state
+                // (VK_DYNAMIC_STATE_STENCIL_REFERENCE / _COMPARE_MASK), so glStencilFunc changing
+                // only the reference must not evict a cached pipeline.
+                const Bool pipelineRelevantChange = state.Func != func;
                 state.Func = func;
                 state.Ref = ref;
                 state.ValueMask = mask;
                 ++m_version;
+                if (pipelineRelevantChange) ++m_pipelineStateVersion;
             }
 
             void RenderState::SetStencilMask(StencilFace face, Uint32 mask) {
@@ -454,7 +463,7 @@ namespace MobileGL {
                 state.FailOp = fail;
                 state.PassDepthFailOp = depthFail;
                 state.PassDepthPassOp = depthPass;
-                ++m_version;
+                BumpVersions();
             }
 
             const StencilFaceState& RenderState::GetStencilState(StencilFace face) const {
@@ -471,7 +480,7 @@ namespace MobileGL {
                         changed = true;
                     }
                 }
-                if (changed) ++m_version;
+                if (changed) BumpVersions();
             }
 
             BoolVec4 RenderState::GetColorMask() const {
@@ -482,7 +491,7 @@ namespace MobileGL {
             void RenderState::SetColorMaskIndexed(Uint index, BoolVec4 mask) {
                 if (m_parameters.ColorMasks[index] == mask) return;
                 m_parameters.ColorMasks[index] = mask;
-                ++m_version;
+                BumpVersions();
             }
 
             BoolVec4 RenderState::GetColorMaskIndexed(Uint index) const {
@@ -550,7 +559,7 @@ namespace MobileGL {
 
                 m_parameters.SampleCoverageValue = value;
                 m_parameters.SampleCoverageInvert = invert;
-                ++m_version;
+                BumpVersions();
             }
 
             Float RenderState::GetSampleCoverageValue() const {
@@ -565,7 +574,7 @@ namespace MobileGL {
                 if (m_parameters.SampleMaskValue == mask) return;
 
                 m_parameters.SampleMaskValue = mask;
-                ++m_version;
+                BumpVersions();
             }
 
             Uint32 RenderState::GetSampleMaskValue() const {
@@ -639,7 +648,7 @@ namespace MobileGL {
                 if (m_parameters.CullFaceModeSetting == mode) return;
 
                 m_parameters.CullFaceModeSetting = mode;
-                ++m_version;
+                BumpVersions();
             }
 
             CullFaceMode RenderState::GetCullFaceMode() const {
@@ -650,7 +659,7 @@ namespace MobileGL {
                 if (m_parameters.FrontFaceModeSetting == mode) return;
 
                 m_parameters.FrontFaceModeSetting = mode;
-                ++m_version;
+                BumpVersions();
             }
 
             FrontFaceMode RenderState::GetFrontFaceMode() const {
@@ -661,7 +670,7 @@ namespace MobileGL {
                 if (m_parameters.ProvokingVertexModeSetting == mode) return;
 
                 m_parameters.ProvokingVertexModeSetting = mode;
-                ++m_version;
+                BumpVersions();
             }
 
             ProvokingVertexMode RenderState::GetProvokingVertexMode() const {

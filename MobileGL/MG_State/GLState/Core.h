@@ -159,6 +159,8 @@ namespace MobileGL {
 
                 // RenderState
                 Uint GetRenderStateParametersVersion() const;
+                // Only the pipeline-relevant subset - see RenderState::m_pipelineStateVersion.
+                Uint GetPipelineStateVersion() const;
                 const RenderStateParameters& GetRenderStateParameters() const;
                 void SetViewport(IntVec4 viewport); // x, y, width, height
                 const IntVec4& GetViewport() const; // x, y, width, height

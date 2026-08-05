@@ -393,6 +393,10 @@ namespace MobileGL::MG_State {
         }
 
         // RenderState
+        Uint GLContext::GetPipelineStateVersion() const {
+            return m_renderState.GetPipelineStateVersion();
+        }
+
         Uint GLContext::GetRenderStateParametersVersion() const {
             return m_renderState.GetVersion();
         }

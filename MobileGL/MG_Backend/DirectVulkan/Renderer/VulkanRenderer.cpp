@@ -3037,17 +3037,6 @@ void main() {
         vkBuffers.assign(bindingCount, VK_NULL_HANDLE);
         vkOffsets.assign(bindingCount, 0);
 
-        auto findBufferByKey = [&](SizeT bufferKey) -> const SharedPtr<MG_State::GLState::BufferObject>* {
-            const auto& attrs = vao.GetAllAttributes();
-            for (Uint32 location = 0; location < MG_State::GLState::VertexArrayObject::MAX_VERTEX_ATTRIBS; ++location) {
-                const auto& attr = attrs[location];
-                if (attr.Buffer && reinterpret_cast<SizeT>(attr.Buffer.get()) == bufferKey) {
-                    return &attr.Buffer;
-                }
-            }
-            return nullptr;
-        };
-
         auto uploadConvertedStream = [&](VertexInputStateFactory::VertexStreamConversion conversion,
                                          const MG_State::GLState::VertexAttribute& attribute,
                                          const Uint8* sourceData, SizeT sourceStride,
@@ -3150,14 +3139,14 @@ void main() {
                 continue;
             }
 
-            const SizeT bufferKey = vertexInputState.bindingBufferKeys[binding];
-            // The VAO attribute already holds the buffer's SharedPtr; use it by reference directly
-            // instead of re-resolving it from the GL context by external index (a map lookup +
-            // atomic refcount every binding every draw).
-            const SharedPtr<MG_State::GLState::BufferObject>* sourceBufferSharedPtr = findBufferByKey(bufferKey);
-            MOBILEGL_ASSERT(sourceBufferSharedPtr != nullptr && *sourceBufferSharedPtr != nullptr,
+            // VertexInputStateFactory fills bindingBufferKeys[b] and bindingAttributeLocations[b]
+            // from the SAME loop iteration, one binding per enabled attribute with no merging, so
+            // this attribute's Buffer IS the SharedPtr by construction - no need to search the VAO's
+            // 32 slots for it. The client-memory branch above has already returned, so the location
+            // is in range here.
+            const auto& sourceBufferShared = vao.GetAttribute(bindingLocation).Buffer;
+            MOBILEGL_ASSERT(sourceBufferShared != nullptr,
                             "UploadAndBindVertexStreams failed to resolve source buffer");
-            const auto& sourceBufferShared = *sourceBufferSharedPtr;
             BufferSlice slice{};
             const SizeT sourceSize = sourceBufferShared->GetSize();
             const SizeT baseOffset =
@@ -3401,8 +3390,12 @@ void main() {
             substituteRestartIndex = restartIndex;
         }
 
-        const auto* indexBuffer =
-            pIndexBufferView->forceClientMemory ? nullptr : vao.GetIndexBufferBindingSlot().GetBoundObject().get();
+        // Bound by reference so the SharedPtr below is the one already in hand rather than a fresh
+        // GL-name map lookup plus an atomic refcount pair on every indexed draw - the vertex path
+        // above documents the same cost.
+        const SharedPtr<MG_State::GLState::BufferObject>& indexBufferShared =
+            vao.GetIndexBufferBindingSlot().GetBoundObject();
+        const auto* indexBuffer = pIndexBufferView->forceClientMemory ? nullptr : indexBufferShared.get();
         if (indexBuffer == nullptr) {
             // No element-array buffer: the view's byte offset is a raw client pointer
             // (desktop drivers accept client-memory indices and the GL CTS relies on
@@ -3441,7 +3434,6 @@ void main() {
                         "DrawElements index range out of bounds");
 
         BufferSlice slice{};
-        auto indexBufferShared = MG_State::pGLContext->GetBufferObject(indexBuffer->GetExternalIndex());
         MOBILEGL_ASSERT(indexBufferShared != nullptr, "UploadAndBindIndexBuffer failed to resolve shared EBO");
         if (substituteRestart) {
             // The whole buffer is rewritten, not just this draw's range, so that every element
@@ -4068,7 +4060,10 @@ void main() {
         auto& vis = m_vertexInputStateFactory->GetOrCreateVertexInputState(vao);
         const Uint64 vertexLayoutHash = vis.layoutHash;
         const Uint64 renderPassHash = renderPassEntry.hash;
-        const Uint renderStateVersion = MG_State::pGLContext->GetRenderStateParametersVersion();
+        // The pipeline-relevant subset only: glViewport / glScissor / glBlendColor / glStencilMask
+        // and friends are dynamic state or not pipeline state at all, and keying the memo on the
+        // all-state counter made any of them evict a perfectly good VkPipeline.
+        const Uint renderStateVersion = MG_State::pGLContext->GetPipelineStateVersion();
         for (Uint32 i = 0; i < m_pipelineMemoCount; ++i) {
             const PipelineMemoEntry& entry = m_pipelineMemo[i];
             if (entry.pipeline != VK_NULL_HANDLE && entry.mode == mode &&
@@ -4708,7 +4703,7 @@ void main() {
             drawFbo->GetObjectVersion() != snap.fboVersion) {
             return false;
         }
-        if (MG_State::pGLContext->GetRenderStateParametersVersion() != snap.renderStateVersion ||
+        if (MG_State::pGLContext->GetPipelineStateVersion() != snap.renderStateVersion ||
             MG_State::pGLContext->GetTextureBindGeneration() != snap.bindGeneration) {
             return false;
         }
@@ -5172,7 +5167,7 @@ void main() {
                 snap.drawFbo = drawFbo.get();
                 snap.fboVersion = drawFbo->GetObjectVersion();
                 snap.drawFboIsDefault = drawFbo->IsDefaultFramebuffer();
-                snap.renderStateVersion = MG_State::pGLContext->GetRenderStateParametersVersion();
+                snap.renderStateVersion = MG_State::pGLContext->GetPipelineStateVersion();
                 snap.bindGeneration = MG_State::pGLContext->GetTextureBindGeneration();
                 snap.baseTransformFlags = GetShaderTransformFlags(m_swapchainObject.GetPreTransform()).GetRaw();
                 snap.resolvedTransformFlags = transformFlags.GetRaw();
