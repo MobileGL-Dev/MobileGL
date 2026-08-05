@@ -154,6 +154,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         Vector<Vector<VkBufferObject>> m_deferredBufferReleases;
         Vector<Vector<SharedPtr<VkBufferResource>>> m_deferredResourceReleases;
         Vector<WeakPtr<VkBufferResource>> m_liveResources;
+    // Size m_liveResources had just after the last sweep; the next sweep waits for it to double.
+    SizeT m_liveResourcesLastPruned = 0;
         Uint32 m_currentFrameIndex = 0;
         Uint64 m_frameSerial = 1;
         Uint64 m_completedSerialFloor = 0;

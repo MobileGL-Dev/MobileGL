@@ -8285,15 +8285,23 @@ void main() {
             resource->aspect, baseMipLevel, 1);
         MOBILEGL_ASSERT(srcReady, "%s: failed to transition base mip level to transfer source", __func__);
 
-        for (Uint32 level = baseMipLevel + 1; level < generateMipLevelCount; ++level) {
-            VkImageLayout dstMipLayout = originalLayout;
-            Bool dstReady = VkTextureManager::TransitionImageLayout(
-                frame.commandBuffer, resource->image, dstMipLayout, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+        // Every generated level starts from originalLayout and ends up TRANSFER_DST_OPTIMAL, and
+        // the loop below only ever moves a level OUT of that layout after it has been written - so
+        // the whole range can be prepared in one barrier instead of one per level. That turns a
+        // 12-level chain's 3(N-1)+1 barrier commands into 2(N-1)+2. Each level is still
+        // individually transitioned to TRANSFER_SRC before it is read, so the write-then-read
+        // dependency between consecutive levels is unchanged.
+        if (generateMipLevelCount > baseMipLevel + 1) {
+            VkImageLayout dstRangeLayout = originalLayout;
+            const Bool dstRangeReady = VkTextureManager::TransitionImageLayout(
+                frame.commandBuffer, resource->image, dstRangeLayout, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                 originalSrcStageMask, VK_PIPELINE_STAGE_TRANSFER_BIT,
                 originalSrcAccessMask, VK_ACCESS_TRANSFER_WRITE_BIT,
-                resource->aspect, level, 1);
-            MOBILEGL_ASSERT(dstReady, "%s: failed to transition mip level %u to transfer destination", __func__, level);
+                resource->aspect, baseMipLevel + 1, generateMipLevelCount - (baseMipLevel + 1));
+            MOBILEGL_ASSERT(dstRangeReady, "%s: failed to transition mip levels to transfer destination", __func__);
+        }
 
+        for (Uint32 level = baseMipLevel + 1; level < generateMipLevelCount; ++level) {
             const IntVec3 srcTexelSize = ComputeMipTexelSize(storageBaseTexelSize, level - 1);
             const IntVec3 dstTexelSize = ComputeMipTexelSize(storageBaseTexelSize, level);
 
@@ -9085,10 +9093,26 @@ void main() {
         if (m_device == VK_NULL_HANDLE || m_graphicsQueue == VK_NULL_HANDLE) {
             return true;
         }
-        // The serial was submitted but has not been observed complete. Frame
-        // fences are only waited on when their slot is reused, so the simplest
-        // safe wait is to drain the graphics queue; this over-waits (bounded
-        // by the in-flight frame count) but never deadlocks.
+        // Every submission is recorded with the frame serial it was made under, so the wait can be
+        // narrowed to the first submission at or past the requested serial instead of draining the
+        // whole queue. OnSubmitsCompletedUpTo calls NotifyFrameSerialComplete for every record it
+        // retires, so the completed-serial floor still advances correctly after one fence wait.
+        for (const auto& record : m_inFlightSubmits) {
+            if (record.frameSerial < serial || record.fence == VK_NULL_HANDLE) {
+                continue;
+            }
+            if (vkWaitForFences(m_device, 1, &record.fence, VK_TRUE, UINT64_MAX) != VK_SUCCESS) {
+                break; // fall through to the drain below
+            }
+            OnSubmitsCompletedUpTo(record.submitIndex);
+            // Deliberately no NotifyDeviceIdle() here: that claims every submission has retired,
+            // which is only true after a real queue drain. Work past this record may still run.
+            TryDrainFrameTransients();
+            return true;
+        }
+
+        // No usable record - fall back to draining the graphics queue. This over-waits (bounded by
+        // the in-flight frame count) but never deadlocks.
         const VkResult result = vkQueueWaitIdle(m_graphicsQueue);
         if (result != VK_SUCCESS) {
             MGLOG_E("WaitForFrameSerial: vkQueueWaitIdle returned %d", result);

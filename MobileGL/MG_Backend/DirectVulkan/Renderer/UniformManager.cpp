@@ -1008,7 +1008,17 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             return false;
         }
 
-        const Uint64 descriptorCount64 = static_cast<Uint64>(maxSets) * static_cast<Uint64>(m_maxBindings);
+        // Sized from what a real program declares, not from the 256-binding cap. A GL program's
+        // single descriptor set holds the bindings shader reflection found - typically 2 to 8 - so
+        // scaling by m_maxBindings declared 5 x 64 x 256 = 81,920 descriptors per pool and 245,760
+        // across the three frames in flight, which drivers that reserve backing store proportional
+        // to the declared count pay for at init. An outlier program is absorbed by the existing
+        // VK_ERROR_OUT_OF_POOL_MEMORY -> GrowFrameDescriptorPool path: pool sizes are aggregate
+        // budgets rather than per-set limits, and vkAllocateDescriptorSets is spec-required to
+        // report that error rather than fail hard.
+        static constexpr Uint32 kEstimatedBindingsPerSet = 8;
+        const Uint64 descriptorCount64 =
+            static_cast<Uint64>(maxSets) * static_cast<Uint64>(std::min(m_maxBindings, kEstimatedBindingsPerSet));
         if (descriptorCount64 > static_cast<Uint64>(std::numeric_limits<Uint32>::max())) {
             MGLOG_E("UniformDescriptorBinder::CreateDescriptorPool failed: descriptorCount overflow");
             return false;
@@ -1187,13 +1197,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         texelBufferViews.reserve(m_maxBindings);
         dynamicOffsets.reserve(programObj.dynamicBindings.size() + uboArrayExtra);
 
-        const Uint32 bindingCount =
-            std::min<Uint32>(m_maxBindings, static_cast<Uint32>(programObj.bindingKinds.size()));
-        for (Uint32 binding = 0; binding < bindingCount; ++binding) {
-            const auto kind = programObj.bindingKinds[binding];
-            if (kind == ProgramFactory::DescriptorBindingKind::None) {
-                continue;
+        // Iterate only the bindings this program declares. The old walk covered all 256 slots of
+        // bindingKinds on every draw to find the 1-8 a real program uses.
+        for (const Uint32 binding : programObj.activeBindings) {
+            if (binding >= m_maxBindings) {
+                break; // ascending, so nothing past the cap can follow
             }
+            const auto kind = programObj.bindingKinds[binding];
 
             VkWriteDescriptorSet write{};
             write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;

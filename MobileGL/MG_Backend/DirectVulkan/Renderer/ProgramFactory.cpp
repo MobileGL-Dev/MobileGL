@@ -2348,6 +2348,16 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         pipelineLayoutInfo.pSetLayouts = &entry.descriptorSetLayout;
         VK_VERIFY(vkCreatePipelineLayout(m_device, &pipelineLayoutInfo, nullptr, &entry.pipelineLayout),
                   "ProgramFactory::ReflectLayout, vkCreatePipelineLayout");
+
+        // Built here rather than where bindingKinds is sized: at that point the vector is only
+        // zero-initialised and the kinds are assigned further down, so a list built there would be
+        // empty. Ascending by construction because the index walks upward.
+        entry.activeBindings.clear();
+        for (Uint32 binding = 0; binding < static_cast<Uint32>(entry.bindingKinds.size()); ++binding) {
+            if (entry.bindingKinds[binding] != DescriptorBindingKind::None) {
+                entry.activeBindings.push_back(binding);
+            }
+        }
     }
 
     const ProgramFactory::VkProgramObject& ProgramFactory::GetOrCreateProgram(

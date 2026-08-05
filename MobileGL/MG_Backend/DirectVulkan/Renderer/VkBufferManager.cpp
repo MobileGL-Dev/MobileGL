@@ -242,8 +242,15 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     }
 
     void VkBufferManager::TrackLiveResource(const SharedPtr<VkBufferResource>& resource) {
-        if (m_liveResources.size() >= kLiveResourcePruneThreshold) {
+        // Sweep on a doubling watermark rather than on every insert past the threshold. The old
+        // form walked the whole vector for each new buffer once the list passed 256, and when the
+        // buffers are all live the walk removes nothing and the list grows by one - so creating N
+        // live buffers cost ~N^2/2 expired() checks. Reclamation semantics are unchanged: the sweep
+        // still removes exactly the expired entries, just less often and with the same bound on how
+        // much dead weight can accumulate (at most as many entries as were live at the last sweep).
+        if (m_liveResources.size() >= std::max<SizeT>(kLiveResourcePruneThreshold, 2 * m_liveResourcesLastPruned)) {
             std::erase_if(m_liveResources, [](const WeakPtr<VkBufferResource>& weak) { return weak.expired(); });
+            m_liveResourcesLastPruned = m_liveResources.size();
         }
         m_liveResources.push_back(resource);
     }

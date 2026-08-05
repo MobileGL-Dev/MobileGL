@@ -67,6 +67,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             VkDescriptorSetLayout descriptorSetLayout = VK_NULL_HANDLE;
             VkPipelineLayout pipelineLayout = VK_NULL_HANDLE;
             Vector<DescriptorBindingKind> bindingKinds;
+            // The bindings this program actually declares, ascending. bindingKinds is sized to the
+            // 256-binding cap while a real GL program uses 1-8, so the per-draw descriptor walk was
+            // scanning 256 slots to find a handful. MUST stay ascending: Vulkan consumes
+            // pDynamicOffsets in binding order and the writer pushes them in iteration order, so an
+            // unordered list would silently mis-pair dynamic offsets with their uniform blocks.
+            Vector<Uint32> activeBindings;
             Vector<Uint32> dynamicBindings;
             Vector<Int> uniformBlockIndexByBinding;
             // Descriptor count per binding (1 except for UBO instance arrays, which occupy one
@@ -114,6 +120,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 descriptorSetLayout = other.descriptorSetLayout;
                 pipelineLayout = other.pipelineLayout;
                 bindingKinds = std::move(other.bindingKinds);
+                activeBindings = std::move(other.activeBindings);
                 dynamicBindings = std::move(other.dynamicBindings);
                 uniformBlockIndexByBinding = std::move(other.uniformBlockIndexByBinding);
                 bindingDescriptorCounts = std::move(other.bindingDescriptorCounts);
@@ -162,6 +169,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 descriptorSetLayout = other.descriptorSetLayout;
                 pipelineLayout = other.pipelineLayout;
                 bindingKinds = std::move(other.bindingKinds);
+                activeBindings = std::move(other.activeBindings);
                 dynamicBindings = std::move(other.dynamicBindings);
                 uniformBlockIndexByBinding = std::move(other.uniformBlockIndexByBinding);
                 bindingDescriptorCounts = std::move(other.bindingDescriptorCounts);
