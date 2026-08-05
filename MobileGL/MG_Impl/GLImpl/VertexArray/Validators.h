@@ -15,6 +15,20 @@ namespace MobileGL::MG_Impl::GLImpl::VertexArrayImpl {
     // capacity). Falls back to the capacity when no backend is active (unit tests).
     Uint GetMaxVertexAttribs();
 
+    // GL_MAX_VERTEX_ATTRIB_BINDINGS. The default attribute -> binding mapping is the identity, so a
+    // binding point that cannot also be an attribute index would resolve into an attribute the
+    // backend has to reject on every draw; real drivers report the two limits equal as well.
+    Uint GetMaxVertexAttribBindings();
+
+    // GL_MAX_VERTEX_ATTRIB_RELATIVE_OFFSET. The relative offset is folded into the resolved
+    // attribute offset in the frontend and never reaches a backend limit, so this is the value the
+    // spec requires an implementation to support at minimum (GL 4.6 core table 23.63).
+    Uint GetMaxVertexAttribRelativeOffset();
+
+    // GL_MAX_VERTEX_ATTRIB_STRIDE. Like the relative offset above, the stride never reaches a
+    // backend limit of its own, so this is the spec minimum (GL 4.6 core table 23.63).
+    Uint GetMaxVertexAttribStride();
+
     Bool ValidateVertexArrayName(Uint index);
     Bool ValidateVertexArrayObject(Uint index);
     Bool ValidateVertexAttributeIndex(Uint index);
@@ -22,6 +36,13 @@ namespace MobileGL::MG_Impl::GLImpl::VertexArrayImpl {
     // Full glVertexAttribPointer / glVertexAttribIPointer format validation, including the packed
     // 2_10_10_10 types and GL_BGRA size. sizeRaw is the untranslated GL size (possibly GL_BGRA);
     // integerPath selects the glVertexAttribIPointer rules.
-    Bool ValidateVertexAttribFormat(Uint index, GLint sizeRaw, DataType type, Bool normalized, Int stride,
-                                    Bool integerPath);
+    Bool ValidateVertexAttribFormat(Uint index, GLint sizeRaw, GLenum glType, DataType type, Bool normalized,
+                                    Int stride, Bool integerPath);
+    // glVertexAttribLFormat / glVertexArrayAttribLFormat: the only accepted type is GL_DOUBLE and
+    // the size range is 1-4 (GL_BGRA is a float-path size). Separate from the function above
+    // because the long path shares none of its type or size rules.
+    Bool ValidateVertexAttribLFormat(Uint index, GLint size, GLenum type);
+    // Shared by every *Format entry point: INVALID_VALUE once relativeoffset leaves the range the
+    // implementation advertises.
+    Bool ValidateVertexAttribRelativeOffset(Uint relativeOffset);
 } // namespace MobileGL::MG_Impl::GLImpl::VertexArrayImpl

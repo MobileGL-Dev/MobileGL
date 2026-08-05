@@ -23,6 +23,18 @@ namespace MobileGL::MG_Impl::GLImpl::VertexArrayImpl {
         return std::min(static_cast<Uint>(backendLimit), capacity);
     }
 
+    Uint GetMaxVertexAttribBindings() {
+        return GetMaxVertexAttribs();
+    }
+
+    Uint GetMaxVertexAttribRelativeOffset() {
+        return 2047;
+    }
+
+    Uint GetMaxVertexAttribStride() {
+        return 2048;
+    }
+
     Bool ValidateVertexArrayName(Uint index) {
         Bool isValid = MG_State::pGLContext->ValidateVertexArrayName(index);
         if (!isValid) {
@@ -90,9 +102,31 @@ namespace MobileGL::MG_Impl::GLImpl::VertexArrayImpl {
         return true;
     }
 
-    Bool ValidateVertexAttribFormat(Uint index, GLint sizeRaw, DataType type, Bool normalized, Int stride,
-                                    Bool integerPath) {
+    Bool ValidateVertexAttribFormat(Uint index, GLint sizeRaw, GLenum glType, DataType type, Bool normalized,
+                                    Int stride, Bool integerPath) {
         constexpr const char* fn = "ValidateVertexAttribFormat";
+        // GL_UNSIGNED_INT_10F_11F_11F_REV is a three-component float-path-only packing that has no
+        // DataType of its own, so it has to be recognised by name before the conversion below turns
+        // it into Unknown and reports the wrong error (GL 4.6 core 10.3.2).
+        if (glType == GL_UNSIGNED_INT_10F_11F_11F_REV) {
+            if (integerPath) {
+                MG_State::pGLContext->RecordError(
+                    ErrorCode::InvalidEnum,
+                    MakeUnique<GenericErrorInfo>(
+                        "MG_Impl/GLImpl", fn,
+                        std::format("GL_UNSIGNED_INT_10F_11F_11F_REV is not an integer-path type (attribute {}).",
+                                    index)));
+                return false;
+            }
+            if (sizeRaw != 3) {
+                MG_State::pGLContext->RecordError(
+                    ErrorCode::InvalidOperation,
+                    MakeUnique<GenericErrorInfo>(
+                        "MG_Impl/GLImpl", fn,
+                        std::format("GL_UNSIGNED_INT_10F_11F_11F_REV requires size 3 (attribute {}).", index)));
+                return false;
+            }
+        }
         if (type == DataType::Unknown) {
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidEnum,
@@ -166,6 +200,42 @@ namespace MobileGL::MG_Impl::GLImpl::VertexArrayImpl {
                 ErrorCode::InvalidValue,
                 MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", fn,
                                              std::format("Negative stride {} for attribute {}.", stride, index)));
+            return false;
+        }
+        return true;
+    }
+
+    Bool ValidateVertexAttribLFormat(Uint index, GLint size, GLenum type) {
+        constexpr const char* fn = "ValidateVertexAttribLFormat";
+        if (size < 1 || size > 4) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidValue,
+                MakeUnique<GenericErrorInfo>(
+                    "MG_Impl/GLImpl", fn,
+                    std::format("Invalid size {} for attribute {}. Must be 1-4.", size, index)));
+            return false;
+        }
+        // GL 4.6 core 10.3.2: the long form takes GL_DOUBLE and nothing else.
+        if (type != GL_DOUBLE) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidEnum,
+                MakeUnique<GenericErrorInfo>(
+                    "MG_Impl/GLImpl", fn,
+                    std::format("Type 0x{:X} is not GL_DOUBLE (attribute {}).", type, index)));
+            return false;
+        }
+        return true;
+    }
+
+    Bool ValidateVertexAttribRelativeOffset(Uint relativeOffset) {
+        const Uint limit = GetMaxVertexAttribRelativeOffset();
+        if (relativeOffset > limit) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidValue,
+                MakeUnique<GenericErrorInfo>(
+                    "MG_Impl/GLImpl", "ValidateVertexAttribRelativeOffset",
+                    std::format("relativeoffset {} exceeds GL_MAX_VERTEX_ATTRIB_RELATIVE_OFFSET ({}).", relativeOffset,
+                                limit)));
             return false;
         }
         return true;

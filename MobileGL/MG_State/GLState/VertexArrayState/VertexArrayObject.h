@@ -64,6 +64,12 @@ namespace MobileGL {
 
                 void BindAttributeBuffer(Uint index, const SharedPtr<BufferObject>& buffer);
 
+                // Record what the pointer-style API implies for the binding-point view: attribute
+                // `index` bound to binding point `index` with relative offset 0, and that binding
+                // point carrying the buffer, the pointer offset and the effective stride.
+                void MirrorPointerIntoBinding(Uint index, const SharedPtr<BufferObject>& buffer, SizeT offset,
+                                              int effectiveStride);
+
                 BindingSlot<BufferObject>& GetIndexBufferBindingSlot();
                 const BindingSlot<BufferObject>& GetIndexBufferBindingSlot() const;
 
@@ -82,7 +88,7 @@ namespace MobileGL {
                 void SetBindingDivisor(Uint bindingIndex, Uint divisor);
                 void SetAttributeBinding(Uint attribIndex, Uint bindingIndex);
                 void SetAttributeFormatSeparate(Uint attribIndex, int size, DataType type, Bool normalized,
-                                                Bool isInteger, Uint relativeOffset);
+                                                Bool isInteger, Uint relativeOffset, Bool isBgra = false);
 
                 // The binding-point view the attributes were resolved from. Kept queryable
                 // because glGetVertexArrayIndexed[64]iv reports it verbatim, and the resolved

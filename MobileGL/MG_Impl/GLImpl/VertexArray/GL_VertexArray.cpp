@@ -105,12 +105,24 @@ namespace MobileGL::MG_Impl::GLImpl {
             return pname == GL_CURRENT_VERTEX_ATTRIB;
         }
 
+        // The stride a pointer-style call gives its binding point: the argument when it is non-zero,
+        // otherwise the tightly packed element size (GL 4.6 core 10.3.2). A packed 2_10_10_10 or
+        // 10F_11F_11F attribute is one 32-bit word regardless of its component count.
+        static int EffectiveVertexStride(GLsizei stride, GLint size, GLenum type) {
+            if (stride != 0) return static_cast<int>(stride);
+            switch (type) {
+            case GL_INT_2_10_10_10_REV:
+            case GL_UNSIGNED_INT_2_10_10_10_REV:
+            case GL_UNSIGNED_INT_10F_11F_11F_REV:
+                return 4;
+            default:
+                break;
+            }
+            return static_cast<int>(size * MG_Util::GetGLTypeSize(type));
+        }
+
         static bool ValidateVertexBindingIndex(GLuint bindingindex, const char* funcName) {
-            // Bound by the same dynamic limit as attribute indices: the default attribute -> binding
-            // mapping is the identity, so a binding point the backend cannot address as an attribute
-            // would resolve into an attribute the backend must then reject on every draw. Real drivers
-            // likewise report MAX_VERTEX_ATTRIB_BINDINGS == MAX_VERTEX_ATTRIBS.
-            if (bindingindex >= VertexArrayImpl::GetMaxVertexAttribs()) {
+            if (bindingindex >= VertexArrayImpl::GetMaxVertexAttribBindings()) {
                 MG_State::pGLContext->RecordError(
                     ErrorCode::InvalidValue,
                     MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", funcName,
@@ -155,6 +167,17 @@ namespace MobileGL::MG_Impl::GLImpl {
 
     SharedPtr<MG_State::GLState::VertexArrayObject> GetNamedVertexArrayObject_State(GLuint vaobj,
                                                                                    const char* caller) {
+        // Name zero is not a vertex array object in a core profile: it names the default vertex
+        // array, which the by-name (direct state access) entry points never accept. MobileGL keeps a
+        // real object at index 0 for the compatibility paths, so the generic name validation below
+        // would otherwise let it through (GL 4.6 core 10.3.1).
+        if (vaobj == 0) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidOperation,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller,
+                                             "Vertex array name 0 is not a vertex array object."));
+            return nullptr;
+        }
         if (!VertexArrayImpl::ValidateVertexArrayName(vaobj)) return nullptr;
         if (!VertexArrayImpl::ValidateVertexArrayObject(vaobj)) return nullptr;
         return MG_State::pGLContext->GetVertexArrayObject(vaobj);
@@ -210,7 +233,7 @@ namespace MobileGL::MG_Impl::GLImpl {
 
         DataType dataType = MG_Util::ConvertGLEnumToDataType(type);
         // Integer path: never normalized, never BGRA/packed (the validator rejects those).
-        if (!VertexArrayImpl::ValidateVertexAttribFormat(index, size, dataType, false, stride, true)) return;
+        if (!VertexArrayImpl::ValidateVertexAttribFormat(index, size, type, dataType, false, stride, true)) return;
 
         auto& vao = MG_State::pGLContext->GetBoundVertexArray();
         if (!vao) {
@@ -227,6 +250,7 @@ namespace MobileGL::MG_Impl::GLImpl {
 
         vao->SetAttributeFormat(index, size, dataType, false, stride, offset, true, false);
         vao->BindAttributeBuffer(index, vbo);
+        vao->MirrorPointerIntoBinding(index, vbo, offset, EffectiveVertexStride(stride, size, type));
     }
 
     void VertexAttribPointer_State(GLuint index, GLint size, GLenum type, GLboolean normalized, GLsizei stride,
@@ -234,7 +258,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         if (!VertexArrayImpl::ValidateVertexAttributeIndex(index)) return;
 
         DataType dataType = MG_Util::ConvertGLEnumToDataType(type);
-        if (!VertexArrayImpl::ValidateVertexAttribFormat(index, size, dataType, normalized == GL_TRUE, stride, false))
+        if (!VertexArrayImpl::ValidateVertexAttribFormat(index, size, type, dataType, normalized == GL_TRUE, stride, false))
             return;
 
         auto& vao = MG_State::pGLContext->GetBoundVertexArray();
@@ -256,6 +280,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         const int effectiveSize = isBgra ? 4 : size;
         vao->SetAttributeFormat(index, effectiveSize, dataType, normalized, stride, offset, false, isBgra);
         vao->BindAttributeBuffer(index, vbo);
+        vao->MirrorPointerIntoBinding(index, vbo, offset, EffectiveVertexStride(stride, effectiveSize, type));
     }
 
     void BindVertexArray_State(GLuint array) {
@@ -359,6 +384,13 @@ namespace MobileGL::MG_Impl::GLImpl {
                 MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller, "offset and stride must be non-negative."));
             return;
         }
+        if (static_cast<Uint>(stride) > VertexArrayImpl::GetMaxVertexAttribStride()) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidValue,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller,
+                                             "stride exceeds GL_MAX_VERTEX_ATTRIB_STRIDE."));
+            return;
+        }
         auto bufferObject = GetVertexArrayBufferObject_State(buffer, caller);
         if (buffer != 0 && !bufferObject) return;
 
@@ -389,12 +421,36 @@ namespace MobileGL::MG_Impl::GLImpl {
     static void VertexAttribFormatSeparate_State(const SharedPtr<MG_State::GLState::VertexArrayObject>& vao,
                                                  GLuint attribindex, GLint size, GLenum type, GLboolean normalized,
                                                  GLuint relativeoffset, Bool isInteger, const char* caller) {
+        static_cast<void>(caller);
         if (!VertexArrayImpl::ValidateVertexAttributeIndex(attribindex)) return;
 
         DataType dataType = MG_Util::ConvertGLEnumToDataType(type);
-        if (!VertexArrayImpl::ValidateVertexAttribPointerParams(attribindex, size, dataType, 0)) return;
+        // The separate-format entry points take the same size/type rules as the pointer ones,
+        // GL_BGRA included, so they need the full format validation rather than the pointer-only
+        // subset - that one reports GL_BGRA as an out-of-range size.
+        if (!VertexArrayImpl::ValidateVertexAttribFormat(attribindex, size, type, dataType, normalized == GL_TRUE, 0,
+                                                         isInteger))
+            return;
+        if (!VertexArrayImpl::ValidateVertexAttribRelativeOffset(relativeoffset)) return;
 
-        vao->SetAttributeFormatSeparate(attribindex, size, dataType, normalized, isInteger, relativeoffset);
+        const Bool isBgra = (size == static_cast<GLint>(GL_BGRA));
+        vao->SetAttributeFormatSeparate(attribindex, isBgra ? 4 : size, dataType, normalized, isInteger,
+                                        relativeoffset, isBgra);
+    }
+
+    // The long (64-bit) attribute format. MobileGL has no 64-bit vertex attributes, so nothing is
+    // recorded; what the entry point owes the application is the parameter validation, which is
+    // observable through glGetError regardless of whether the format could be used in a draw.
+    static void VertexAttribLFormatSeparate_State(GLuint attribindex, GLint size, GLenum type,
+                                                  GLuint relativeoffset) {
+        if (!VertexArrayImpl::ValidateVertexAttributeIndex(attribindex)) return;
+        if (!VertexArrayImpl::ValidateVertexAttribLFormat(attribindex, size, type)) return;
+        if (!VertexArrayImpl::ValidateVertexAttribRelativeOffset(relativeoffset)) return;
+
+        MG_State::pGLContext->RecordError(
+            ErrorCode::InvalidOperation,
+            MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", "VertexAttribLFormat",
+                                         "64-bit vertex attributes are not supported."));
     }
 
     void VertexArrayAttribFormat_State(GLuint vaobj, GLuint attribindex, GLint size, GLenum type,
@@ -1175,6 +1231,18 @@ namespace MobileGL::MG_Impl::GLImpl {
         if (!vao) return;
         VertexAttribFormatSeparate_State(vao, attribindex, size, type, GL_FALSE, relativeoffset, true,
                                          "VertexAttribIFormat");
+    }
+
+    void VertexAttribLFormat(GLuint attribindex, GLint size, GLenum type, GLuint relativeoffset) {
+        auto vao = GetBoundVertexArrayOrError("VertexAttribLFormat");
+        if (!vao) return;
+        VertexAttribLFormatSeparate_State(attribindex, size, type, relativeoffset);
+    }
+
+    void VertexArrayAttribLFormat(GLuint vaobj, GLuint attribindex, GLint size, GLenum type, GLuint relativeoffset) {
+        auto vao = GetNamedVertexArrayObject_State(vaobj, "VertexArrayAttribLFormat");
+        if (!vao) return;
+        VertexAttribLFormatSeparate_State(attribindex, size, type, relativeoffset);
     }
 
     void VertexAttribBinding(GLuint attribindex, GLuint bindingindex) {

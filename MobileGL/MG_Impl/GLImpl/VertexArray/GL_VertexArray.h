@@ -98,6 +98,7 @@ namespace MobileGL::MG_Impl::GLImpl {
     void VertexArrayAttribFormat(GLuint vaobj, GLuint attribindex, GLint size, GLenum type, GLboolean normalized,
                                  GLuint relativeoffset);
     void VertexArrayAttribIFormat(GLuint vaobj, GLuint attribindex, GLint size, GLenum type, GLuint relativeoffset);
+    void VertexArrayAttribLFormat(GLuint vaobj, GLuint attribindex, GLint size, GLenum type, GLuint relativeoffset);
     void VertexArrayAttribBinding(GLuint vaobj, GLuint attribindex, GLuint bindingindex);
     void VertexArrayBindingDivisor(GLuint vaobj, GLuint bindingindex, GLuint divisor);
     void VertexArrayVertexBuffers(GLuint vaobj, GLuint first, GLsizei count, const GLuint* buffers,
@@ -107,6 +108,7 @@ namespace MobileGL::MG_Impl::GLImpl {
                            const GLsizei* strides);
     void VertexAttribFormat(GLuint attribindex, GLint size, GLenum type, GLboolean normalized, GLuint relativeoffset);
     void VertexAttribIFormat(GLuint attribindex, GLint size, GLenum type, GLuint relativeoffset);
+    void VertexAttribLFormat(GLuint attribindex, GLint size, GLenum type, GLuint relativeoffset);
     void VertexAttribBinding(GLuint attribindex, GLuint bindingindex);
     void VertexBindingDivisor(GLuint bindingindex, GLuint divisor);
     void VertexAttribDivisor(GLuint index, GLuint divisor);

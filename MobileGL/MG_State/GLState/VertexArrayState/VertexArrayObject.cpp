@@ -77,6 +77,26 @@ namespace MobileGL::MG_State::GLState {
         BumpAttributeFormatVersion(index);
     }
 
+    void VertexArrayObject::MirrorPointerIntoBinding(Uint index, const SharedPtr<BufferObject>& buffer, SizeT offset,
+                                                     int effectiveStride) {
+        if (index >= MAX_VERTEX_ATTRIBS || index >= MAX_VERTEX_ATTRIB_BINDINGS) return;
+
+        // glVertexAttribPointer is defined in terms of the binding model (GL 4.6 core 10.3.2): it
+        // also sets binding point `index` to the buffer, the pointer as the offset, and the
+        // *effective* stride, and points the attribute at that binding point with relative offset 0.
+        // The flat attribute view keeps the raw stride, because VERTEX_ATTRIB_ARRAY_STRIDE reports
+        // that argument verbatim, so the binding point is recorded alongside the resolved attribute
+        // rather than being resolved into it.
+        m_attributeBindingIndex[index] = index;
+        m_attributeRelativeOffset[index] = 0;
+
+        auto& binding = m_bindingPoints[index];
+        binding.Buffer = buffer;
+        binding.Offset = offset;
+        binding.Stride = effectiveStride;
+        binding.Divisor = m_attributes[index].Divisor;
+    }
+
     void VertexArrayObject::BindAttributeBuffer(Uint index, const SharedPtr<BufferObject>& buffer) {
         if (index >= MAX_VERTEX_ATTRIBS) return;
 
@@ -111,6 +131,11 @@ namespace MobileGL::MG_State::GLState {
 
     void VertexArrayObject::SetAttributeDivisor(Uint index, Uint divisor) {
         if (index >= MAX_VERTEX_ATTRIBS) return;
+        // glVertexAttribDivisor is VertexBindingDivisor on the attribute's own binding point
+        // (GL 4.6 core 10.3.2), so the binding-point view has to follow the resolved attribute.
+        if (index < MAX_VERTEX_ATTRIB_BINDINGS && m_attributeBindingIndex[index] == index) {
+            m_bindingPoints[index].Divisor = divisor;
+        }
         if (m_attributes[index].Divisor == divisor) return;
         m_attributes[index].Divisor = divisor;
         BumpAttributeFormatVersion(index);
@@ -187,18 +212,18 @@ namespace MobileGL::MG_State::GLState {
     }
 
     void VertexArrayObject::SetAttributeFormatSeparate(Uint attribIndex, int size, DataType type, Bool normalized,
-                                                       Bool isInteger, Uint relativeOffset) {
+                                                       Bool isInteger, Uint relativeOffset, Bool isBgra) {
         if (attribIndex >= MAX_VERTEX_ATTRIBS) return;
         if (size < 1 || size > 4) return;
 
         auto& attr = m_attributes[attribIndex];
         if (attr.Size != size || attr.Type != type || attr.Normalized != normalized || attr.IsInteger != isInteger ||
-            attr.IsBgra || m_attributeRelativeOffset[attribIndex] != relativeOffset) {
+            attr.IsBgra != isBgra || m_attributeRelativeOffset[attribIndex] != relativeOffset) {
             attr.Size = size;
             attr.Type = type;
             attr.Normalized = normalized;
             attr.IsInteger = isInteger;
-            attr.IsBgra = false; // the binding-format path (glVertexAttribFormat) does not carry BGRA
+            attr.IsBgra = isBgra;
             m_attributeRelativeOffset[attribIndex] = relativeOffset;
             BumpAttributeFormatVersion(attribIndex);
         }

@@ -671,6 +671,40 @@ namespace MobileGL::MG_Impl::GLImpl {
         }
 
         switch (target) {
+        // The vertex buffer binding points of the vertex array object that is bound. Indexed by
+        // binding point, not by attribute (GL 4.6 core 10.3.1).
+        case GL_VERTEX_BINDING_BUFFER:
+        case GL_VERTEX_BINDING_DIVISOR:
+        case GL_VERTEX_BINDING_OFFSET:
+        case GL_VERTEX_BINDING_STRIDE: {
+            if (index >= VertexArrayImpl::GetMaxVertexAttribBindings()) {
+                MG_State::pGLContext->RecordError(
+                    ErrorCode::InvalidValue,
+                    MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
+                                                 "Vertex buffer binding index is out of range."));
+                return;
+            }
+            const auto& vao = MG_State::pGLContext->GetBoundVertexArray();
+            if (!vao) {
+                *data = 0;
+                return;
+            }
+            const auto& binding = vao->GetBindingPoint(index);
+            switch (target) {
+            case GL_VERTEX_BINDING_BUFFER:
+                *data = binding.Buffer ? static_cast<GLint>(binding.Buffer->GetExternalIndex()) : 0;
+                return;
+            case GL_VERTEX_BINDING_DIVISOR:
+                *data = static_cast<GLint>(binding.Divisor);
+                return;
+            case GL_VERTEX_BINDING_OFFSET:
+                *data = static_cast<GLint>(binding.Offset);
+                return;
+            default:
+                *data = static_cast<GLint>(binding.Stride);
+                return;
+            }
+        }
         case GL_IMAGE_BINDING_NAME:
         case GL_IMAGE_BINDING_LEVEL:
         case GL_IMAGE_BINDING_LAYERED:
@@ -1738,20 +1772,22 @@ namespace MobileGL::MG_Impl::GLImpl {
             *params = vao ? static_cast<GLint>(vao->GetExternalIndex()) : 0;
             return;
         }
+        // The vertex buffer binding points are per-binding-index state, so the non-indexed getter
+        // has nothing to answer with (GL 4.6 core table 23.4).
+        case GL_VERTEX_BINDING_BUFFER:
         case GL_VERTEX_BINDING_DIVISOR:
-            *params = 0; // vertex-binding entrypoints are stubbed
-            return;
         case GL_VERTEX_BINDING_OFFSET:
-            *params = 0; // vertex-binding entrypoints are stubbed
-            return;
         case GL_VERTEX_BINDING_STRIDE:
-            *params = 0; // vertex-binding entrypoints are stubbed
+            RecordIndexedOnlyGetterError(__func__, pname);
             return;
         case GL_MAX_VERTEX_ATTRIB_RELATIVE_OFFSET:
-            *params = 0; // vertex-binding entrypoints are stubbed
+            *params = static_cast<GLint>(VertexArrayImpl::GetMaxVertexAttribRelativeOffset());
             return;
         case GL_MAX_VERTEX_ATTRIB_BINDINGS:
-            *params = 0; // vertex-binding entrypoints are stubbed
+            *params = static_cast<GLint>(VertexArrayImpl::GetMaxVertexAttribBindings());
+            return;
+        case GL_MAX_VERTEX_ATTRIB_STRIDE:
+            *params = static_cast<GLint>(VertexArrayImpl::GetMaxVertexAttribStride());
             return;
         case GL_VIEWPORT: {
             const auto& vp = MG_State::pGLContext->GetViewport();
