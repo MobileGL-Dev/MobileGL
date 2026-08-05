@@ -1025,7 +1025,7 @@ DECLARE_GL_FUNCTION_HEAD(void, FlushMappedNamedBufferRange, GLuint buffer, GLint
 DECLARE_GL_FUNCTION_HEAD(void, GetNamedBufferParameteriv, GLuint buffer, GLenum pname, GLint* params) DECLARE_GL_FUNCTION_END_NO_RETURN(void, GetNamedBufferParameteriv, buffer, pname, params)
 DECLARE_GL_FUNCTION_HEAD(void, GetNamedBufferParameteri64v, GLuint buffer, GLenum pname, GLint64* params) DECLARE_GL_FUNCTION_END_NO_RETURN(void, GetNamedBufferParameteri64v, buffer, pname, params)
 DECLARE_GL_FUNCTION_HEAD(void, GetNamedBufferPointerv, GLuint buffer, GLenum pname, void** params) DECLARE_GL_FUNCTION_END_NO_RETURN(void, GetNamedBufferPointerv, buffer, pname, params)
-DECLARE_GL_FUNCTION_STUB_HEAD(void, GetNamedBufferSubData, GLuint buffer, GLintptr offset, GLsizeiptr size, void* data) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, GetNamedBufferSubData, buffer, offset, size, data)
+DECLARE_GL_FUNCTION_HEAD(void, GetNamedBufferSubData, GLuint buffer, GLintptr offset, GLsizeiptr size, void* data) DECLARE_GL_FUNCTION_END_NO_RETURN(void, GetNamedBufferSubData, buffer, offset, size, data)
 DECLARE_GL_FUNCTION_HEAD(void, CreateFramebuffers, GLsizei n, GLuint* framebuffers) DECLARE_GL_FUNCTION_END_NO_RETURN(void, CreateFramebuffers, n, framebuffers)
 DECLARE_GL_FUNCTION_HEAD(void, NamedFramebufferRenderbuffer, GLuint framebuffer, GLenum attachment, GLenum renderbuffertarget, GLuint renderbuffer) DECLARE_GL_FUNCTION_END_NO_RETURN(void, NamedFramebufferRenderbuffer, framebuffer, attachment, renderbuffertarget, renderbuffer)
 DECLARE_GL_FUNCTION_STUB_HEAD(void, NamedFramebufferParameteri, GLuint framebuffer, GLenum pname, GLint param) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, NamedFramebufferParameteri, framebuffer, pname, param)

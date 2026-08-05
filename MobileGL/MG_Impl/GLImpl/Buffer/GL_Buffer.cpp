@@ -38,6 +38,7 @@ namespace MobileGL::MG_Impl::GLImpl {
             GetNamedBufferParameteriv,
             GetNamedBufferParameteri64v,
             GetNamedBufferPointerv,
+            GetNamedBufferSubData,
         };
 
         const char* GetBufferOpName(BufferOp op) {
@@ -76,6 +77,8 @@ namespace MobileGL::MG_Impl::GLImpl {
                 return "UnmapNamedBuffer";
             case BufferOp::FlushMappedNamedBufferRange:
                 return "FlushMappedNamedBufferRange";
+            case BufferOp::GetNamedBufferSubData:
+                return "GetNamedBufferSubData";
             case BufferOp::GetNamedBufferParameteriv:
                 return "GetNamedBufferParameteriv";
             case BufferOp::GetNamedBufferParameteri64v:
@@ -891,6 +894,44 @@ namespace MobileGL::MG_Impl::GLImpl {
         bufferObject->DownloadSubData(data, static_cast<SizeT>(offset), static_cast<SizeT>(size));
     }
 
+    void GetNamedBufferSubData_State(GLuint buffer, GLintptr offset, GLsizeiptr size, void* data) {
+        if (!data) {
+            // Match GetBufferSubData_State: a null pointer is a caller bug, not a GL-specified error.
+            return;
+        }
+
+        if (size < 0 || offset < 0) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidValue,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", "GetNamedBufferSubData_State",
+                                             "Offset and size must be non-negative."));
+            return;
+        }
+
+        auto bufferObject = GetNamedBufferObject(buffer, BufferOp::GetNamedBufferSubData);
+        if (!bufferObject) return;
+
+        if (static_cast<SizeT>(offset) + static_cast<SizeT>(size) > bufferObject->GetSize()) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidValue,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", "GetNamedBufferSubData_State",
+                                             "Offset and size exceed buffer size."));
+            return;
+        }
+
+        if (bufferObject->IsMapped() &&
+            !(bufferObject->GetMappingAccess() & BufferMappingAccessBit::Persistent)) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidOperation,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", "GetNamedBufferSubData_State",
+                                             "Cannot read from a buffer object mapped without GL_MAP_PERSISTENT_BIT."));
+            return;
+        }
+
+        bufferObject->SyncGpuWrites();
+        bufferObject->DownloadSubData(data, static_cast<SizeT>(offset), static_cast<SizeT>(size));
+    }
+
     void BufferData_State(GLenum target, GLsizeiptr size, const void* data, GLenum usage) {
         MGLOG_D("%s: %s, size = %d, data = %p, usage = %s", __func__, MG_Util::ConvertGLEnumToString(target).c_str(),
                 size, data, MG_Util::ConvertGLEnumToString(usage).c_str());
@@ -1551,6 +1592,10 @@ namespace MobileGL::MG_Impl::GLImpl {
 
     void BufferSubData(GLenum target, GLintptr offset, GLsizeiptr size, const void* data) {
         BufferSubData_State(target, offset, size, data);
+    }
+
+    void GetNamedBufferSubData(GLuint buffer, GLintptr offset, GLsizeiptr size, void* data) {
+        GetNamedBufferSubData_State(buffer, offset, size, data);
     }
 
     void GetBufferSubData(GLenum target, GLintptr offset, GLsizeiptr size, void* data) {

@@ -41,6 +41,7 @@ namespace MobileGL::MG_Impl::GLImpl {
                            GLsizeiptr size);
     void BufferSubData(GLenum target, GLintptr offset, GLsizeiptr size, const void* data);
     void GetBufferSubData(GLenum target, GLintptr offset, GLsizeiptr size, void* data);
+    void GetNamedBufferSubData(GLuint buffer, GLintptr offset, GLsizeiptr size, void* data);
     void BufferData(GLenum target, GLsizeiptr size, const void* data, GLenum usage);
     void BindBuffer(GLenum target, GLuint buffer);
     void GenBuffers(GLsizei n, GLuint* buffers);
