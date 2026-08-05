@@ -3315,6 +3315,136 @@ namespace MobileGL::MG_Impl::GLImpl {
     }
 
     // Add to GL_Texture.cpp
+    // The half of the GetTexImage/GetTextureImage error set (GL 4.6 core 8.11) that depends on the
+    // resolved texture object rather than on how it was named. Shared because the by-name entry
+    // point does not route through GetTexImage_State and so used to enforce none of it.
+    Bool ValidateTextureImageQuery(const SharedPtr<MG_State::GLState::ITextureObject>& textureObject, GLint level,
+                                   TextureInputFormat textureInputFormat, TexturePixelDataType texturePixelDataType,
+                                   GLsizei bufSize, const void* pixels, const char* caller) {
+        if (!TextureImpl::ValidateTextureObject(textureObject)) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidOperation,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller, "No valid texture bound to target"));
+            return false;
+        }
+
+        // A multisample texture has per-sample data with no single image to return, and a buffer
+        // texture's data lives in the buffer object - neither target is in the accepted list.
+        const auto target = textureObject->GetTarget();
+        if (target == TextureTarget::Texture2DMultisample || target == TextureTarget::Texture2DMultisampleArray ||
+            target == TextureTarget::TextureBuffer) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidOperation,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller,
+                                             "Texture target has no image to read back."));
+            return false;
+        }
+
+        // Level range. The by-target path would reach these again inside
+        // CopyTextureImageToClientOrPBO_State, but the by-name path on a backend that answers
+        // GetTextureImage itself never gets there.
+        if (!TextureImpl::ValidateTextureLevelNumber(level)) return false;
+        if (target == TextureTarget::TextureRectangle && level != 0) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidValue,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller,
+                                             "Level must be zero for rectangle textures"));
+            return false;
+        }
+
+        // For a cube map this is exactly cube completeness: IsComplete() wants all six faces.
+        if (!textureObject->IsComplete()) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidOperation,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller, "Texture is incomplete"));
+            return false;
+        }
+
+        // Check PBO state
+        const auto& pixelPackBufferObject =
+            MG_State::pGLContext->GetBufferBindingSlot(BufferTarget::PixelPack).GetBoundObject();
+
+        if (pixelPackBufferObject) {
+            // Check if PBO is mapped
+            if (pixelPackBufferObject->IsMapped()) {
+                MG_State::pGLContext->RecordError(
+                    ErrorCode::InvalidOperation,
+                    MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller, "Pixel pack buffer is currently mapped"));
+                return false;
+            }
+
+            // Check alignment
+            const SizeT typeSize = MG_Util::GetTexturePixelDataTypeSize(texturePixelDataType);
+            if (typeSize != 0 && reinterpret_cast<uintptr_t>(pixels) % typeSize != 0) {
+                MG_State::pGLContext->RecordError(
+                    ErrorCode::InvalidOperation,
+                    MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller,
+                                                 "Pixel data not aligned for pixel pack buffer"));
+                return false;
+            }
+        }
+
+        // Shared format/type/internal-format matrix (packed-type pairing, depth-vs-color mismatch,
+        // integer-ness). Also rejects STENCIL_INDEX readback, which needs GL_ARB_texture_stencil8
+        // (not advertised by MobileGL).
+        if (!TextureImpl::ValidateTextureInternalFormatCompatibleWithInput(
+                textureInputFormat, textureObject->GetFormat(), texturePixelDataType)) {
+            return false;
+        }
+
+        // GetTexImage-specific: DEPTH_STENCIL readback needs a depth-stencil texture (a depth-only
+        // texture has no stencil data to return).
+        if (textureInputFormat == TextureInputFormat::DepthStencil &&
+            textureObject->GetFormat() != TextureInternalFormat::DepthStencil &&
+            textureObject->GetFormat() != TextureInternalFormat::Depth24Stencil8 &&
+            textureObject->GetFormat() != TextureInternalFormat::Depth32FStencil8) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidOperation,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller,
+                                             "DEPTH_STENCIL readback requires a depth-stencil texture"));
+            return false;
+        }
+
+        // The destination has to be big enough. This has to happen here rather than after the read
+        // has been packed: any of the reasons the read can bail out early - an unmapped level, a
+        // pack step that declines the format - would otherwise swallow the error entirely.
+        if (textureObject->GetStorageType() == TextureStorageType::Mipmap) {
+            const auto* textureMipmapObject =
+                static_cast<const MG_State::GLState::TextureObjectMipmap*>(textureObject.get());
+            const auto& uploadTargets = textureObject->GetUploadTargets();
+            if (!uploadTargets.empty() && static_cast<Uint>(level) < textureMipmapObject->GetMipmapLevelCount()) {
+                // Tightly packed, and summed over every face because a cube map query returns all
+                // six. Pack pixel-store state only ever grows this, so a request rejected here
+                // could not have fit under any packing.
+                const auto texelSize = textureMipmapObject->GetMipmapTexelSize(uploadTargets[0], level);
+                const SizeT required = MG_Util::CalculateInputTextureImageSize(textureInputFormat,
+                                                                               texturePixelDataType, texelSize) *
+                                       uploadTargets.size();
+
+                if (bufSize >= 0 && static_cast<SizeT>(bufSize) < required) {
+                    MG_State::pGLContext->RecordError(
+                        ErrorCode::InvalidOperation,
+                        MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller, "Destination buffer is too small."));
+                    return false;
+                }
+
+                if (pixelPackBufferObject) {
+                    const SizeT bufferSize = pixelPackBufferObject->GetSize();
+                    const SizeT offset = reinterpret_cast<SizeT>(pixels);
+                    if (offset > bufferSize || required > bufferSize - offset) {
+                        MG_State::pGLContext->RecordError(
+                            ErrorCode::InvalidOperation,
+                            MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller,
+                                                         "Packing would write past the end of the pixel pack buffer."));
+                        return false;
+                    }
+                }
+            }
+        }
+
+        return true;
+    }
+
     Bool GetTexImage_State(GLenum target, GLint level, GLenum format, GLenum type, GLvoid* pixels) {
         // ======================= Converting ================================
         TextureUploadTarget textureUploadTarget = MG_Util::ConvertGLEnumToTextureUploadTarget(target);
@@ -3363,67 +3493,9 @@ namespace MobileGL::MG_Impl::GLImpl {
             isProxy ? TextureImpl::pProxyTextureManager->GetProxyTextureObject(textureUploadTarget)
                     : bindingSlot.GetBoundObject();
 
-        if (!TextureImpl::ValidateTextureObject(textureObject)) {
-            MG_State::pGLContext->RecordError(ErrorCode::InvalidOperation,
-                                              MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", "GetTexImage_State",
-                                                                           "No valid texture bound to target"));
-            return false;
-        }
-
-        // Check texture completeness
-        if (!textureObject->IsComplete()) {
-            MG_State::pGLContext->RecordError(
-                ErrorCode::InvalidOperation,
-                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", "GetTexImage_State", "Texture is incomplete"));
-            return false;
-        }
-
-        // Check PBO state
-        const auto& pixelPackBufferObject =
-            MG_State::pGLContext->GetBufferBindingSlot(BufferTarget::PixelPack).GetBoundObject();
-
-        if (pixelPackBufferObject) {
-            // Check if PBO is mapped
-            if (pixelPackBufferObject->IsMapped()) {
-                MG_State::pGLContext->RecordError(
-                    ErrorCode::InvalidOperation, MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", "GetTexImage_State",
-                                                                              "Pixel pack buffer is currently mapped"));
-                return false;
-            }
-
-            // Check alignment
-            const SizeT typeSize = MG_Util::GetTexturePixelDataTypeSize(texturePixelDataType);
-            if (reinterpret_cast<uintptr_t>(pixels) % typeSize != 0) {
-                MG_State::pGLContext->RecordError(
-                    ErrorCode::InvalidOperation,
-                    MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", "GetTexImage_State",
-                                                 "Pixel data not aligned for pixel pack buffer"));
-                return false;
-            }
-        }
-
-        // Shared format/type/internal-format matrix (packed-type pairing, depth-vs-color mismatch,
-        // integer-ness). Also rejects STENCIL_INDEX readback, which needs GL_ARB_texture_stencil8
-        // (not advertised by MobileGL).
-        if (!TextureImpl::ValidateTextureInternalFormatCompatibleWithInput(
-                textureInputFormat, textureObject->GetFormat(), texturePixelDataType)) {
-            return false;
-        }
-
-        // GetTexImage-specific: DEPTH_STENCIL readback needs a depth-stencil texture (a depth-only
-        // texture has no stencil data to return).
-        if (textureInputFormat == TextureInputFormat::DepthStencil &&
-            textureObject->GetFormat() != TextureInternalFormat::DepthStencil &&
-            textureObject->GetFormat() != TextureInternalFormat::Depth24Stencil8 &&
-            textureObject->GetFormat() != TextureInternalFormat::Depth32FStencil8) {
-            MG_State::pGLContext->RecordError(
-                ErrorCode::InvalidOperation,
-                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", "GetTexImage_State",
-                                             "DEPTH_STENCIL readback requires a depth-stencil texture"));
-            return false;
-        }
-
-        return true;
+        // glGetTexImage has no bufSize argument: -1 stands for "no client-side limit".
+        return ValidateTextureImageQuery(textureObject, level, textureInputFormat, texturePixelDataType, -1, pixels,
+                                         "GetTexImage_State");
     }
 
     void CopyTextureImageToClientOrPBO_State(const SharedPtr<MG_State::GLState::ITextureObject>& textureObject,
@@ -4029,6 +4101,11 @@ namespace MobileGL::MG_Impl::GLImpl {
     void GetTextureImage(GLuint texture, GLint level, GLenum format, GLenum type, GLsizei bufSize, void* pixels) {
         auto textureObject = GetTextureObjectByName(texture, __func__);
         if (!textureObject) return;
+        if (!ValidateTextureImageQuery(textureObject, level, MG_Util::ConvertGLEnumToTextureInputFormat(format),
+                                       MG_Util::ConvertGLEnumToTexturePixelDataType(type), bufSize, pixels,
+                                       __func__)) {
+            return;
+        }
         const auto uploadTarget = GetPrimaryUploadTarget(textureObject);
         if (MG_Backend::pActiveBackendObject != nullptr &&
             MG_Backend::pActiveBackendObject->GetBackendType() == BackendType::DirectVulkan &&
@@ -4039,6 +4116,22 @@ namespace MobileGL::MG_Impl::GLImpl {
         }
         CopyTextureImageToClientOrPBO_State(textureObject, uploadTarget, level, format, type, bufSize, pixels,
                                             __func__);
+    }
+
+    void GetCompressedTextureImage(GLuint texture, GLint level, GLsizei bufSize, void* pixels) {
+        auto textureObject = GetTextureObjectByName(texture, __func__);
+        if (!textureObject) return;
+        // Level first: GL 4.6 core 8.11 wants INVALID_VALUE for an out-of-range level even when the
+        // texture would also fail the compressed check below.
+        if (!TextureImpl::ValidateTextureLevelNumber(level)) return;
+
+        // No texture MobileGL holds is compressed (see IsCompressedTextureFormat), so this is the
+        // only outcome today. Reporting success while writing nothing would hand the caller stale
+        // memory with GL_NO_ERROR - the same reasoning as GetCompressedTexImage_State.
+        MG_State::pGLContext->RecordError(
+            ErrorCode::InvalidOperation,
+            MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
+                                         "Texture level is not stored in a compressed format."));
     }
 
     void GetTextureSubImage(GLuint texture, GLint level, GLint xoffset, GLint yoffset, GLint zoffset, GLsizei width,

@@ -226,6 +226,9 @@ namespace MobileGL::MG_Impl::GLImpl::TextureImpl {
             case TextureInternalFormat::Depth24Stencil8:
             case TextureInternalFormat::Depth32FStencil8:
             case TextureInternalFormat::DepthStencil:
+            // Stencil-only is not a colour format either: a colour client format read against a
+            // STENCIL_INDEX8 texture has to be the same INVALID_OPERATION as against a depth one.
+            case TextureInternalFormat::StencilIndex8:
                 return true;
             default:
                 return false;

@@ -46,6 +46,7 @@ namespace MobileGL::MG_Impl::GLImpl {
     void GenerateTextureMipmap(GLuint texture);
     void BindTextureUnit(GLuint unit, GLuint texture);
     void GetTextureImage(GLuint texture, GLint level, GLenum format, GLenum type, GLsizei bufSize, void* pixels);
+    void GetCompressedTextureImage(GLuint texture, GLint level, GLsizei bufSize, void* pixels);
     void TexBufferRange(GLenum target, GLenum internalformat, GLuint buffer, GLintptr offset, GLsizeiptr size);
     void TextureBuffer(GLuint texture, GLenum internalformat, GLuint buffer);
     void TextureBufferRange(GLuint texture, GLenum internalformat, GLuint buffer, GLintptr offset, GLsizeiptr size);

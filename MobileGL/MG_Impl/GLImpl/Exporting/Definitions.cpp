@@ -1074,7 +1074,7 @@ DECLARE_GL_FUNCTION_HEAD(void, TextureParameteriv, GLuint texture, GLenum pname,
 DECLARE_GL_FUNCTION_HEAD(void, GenerateTextureMipmap, GLuint texture) DECLARE_GL_FUNCTION_END_NO_RETURN(void, GenerateTextureMipmap, texture)
 DECLARE_GL_FUNCTION_HEAD(void, BindTextureUnit, GLuint unit, GLuint texture) DECLARE_GL_FUNCTION_END_NO_RETURN(void, BindTextureUnit, unit, texture)
 DECLARE_GL_FUNCTION_HEAD(void, GetTextureImage, GLuint texture, GLint level, GLenum format, GLenum type, GLsizei bufSize, void* pixels) DECLARE_GL_FUNCTION_END_NO_RETURN(void, GetTextureImage, texture, level, format, type, bufSize, pixels)
-DECLARE_GL_FUNCTION_STUB_HEAD(void, GetCompressedTextureImage, GLuint texture, GLint level, GLsizei bufSize, void* pixels) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, GetCompressedTextureImage, texture, level, bufSize, pixels)
+DECLARE_GL_FUNCTION_HEAD(void, GetCompressedTextureImage, GLuint texture, GLint level, GLsizei bufSize, void* pixels) DECLARE_GL_FUNCTION_END_NO_RETURN(void, GetCompressedTextureImage, texture, level, bufSize, pixels)
 DECLARE_GL_FUNCTION_HEAD(void, GetTextureLevelParameterfv, GLuint texture, GLint level, GLenum pname, GLfloat* params) DECLARE_GL_FUNCTION_END_NO_RETURN(void, GetTextureLevelParameterfv, texture, level, pname, params)
 DECLARE_GL_FUNCTION_HEAD(void, GetTextureLevelParameteriv, GLuint texture, GLint level, GLenum pname, GLint* params) DECLARE_GL_FUNCTION_END_NO_RETURN(void, GetTextureLevelParameteriv, texture, level, pname, params)
 DECLARE_GL_FUNCTION_HEAD(void, GetTextureParameterfv, GLuint texture, GLenum pname, GLfloat* params) DECLARE_GL_FUNCTION_END_NO_RETURN(void, GetTextureParameterfv, texture, pname, params)
