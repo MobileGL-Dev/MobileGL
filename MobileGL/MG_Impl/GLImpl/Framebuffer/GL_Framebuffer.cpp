@@ -258,6 +258,86 @@ namespace MobileGL::MG_Impl::GLImpl {
             }
         }
 
+        // GL 4.6 core 9.2.3: which attachment names an attachment query accepts depends on whether
+        // it is looking at the default framebuffer or at a framebuffer object, and a name outside
+        // its list is INVALID_ENUM - not the INVALID_OPERATION that a well-formed but unattachable
+        // name gets. On success the default framebuffer's names are rewritten to the attachment
+        // point that backs them.
+        Bool ResolveAttachmentQueryName(Bool isDefaultFramebuffer, GLenum& attachment, const char* caller) {
+            const auto reject = [&]() {
+                MG_State::pGLContext->RecordError(
+                    ErrorCode::InvalidEnum,
+                    MakeUnique<GenericErrorInfo>(
+                        "MG_Impl/GLImpl", caller,
+                        std::format("Attachment {} is not queryable on this framebuffer.",
+                                    MG_Util::ConvertGLEnumToString(attachment))));
+                return false;
+            };
+
+            if (isDefaultFramebuffer) {
+                switch (attachment) {
+                case GL_FRONT:
+                case GL_FRONT_LEFT:
+                case GL_FRONT_RIGHT:
+                case GL_BACK:
+                case GL_BACK_LEFT:
+                case GL_BACK_RIGHT:
+                    attachment = GL_COLOR_ATTACHMENT0;
+                    return true;
+                case GL_DEPTH:
+                    attachment = GL_DEPTH_ATTACHMENT;
+                    return true;
+                case GL_STENCIL:
+                    attachment = GL_STENCIL_ATTACHMENT;
+                    return true;
+                default:
+                    return reject();
+                }
+            }
+
+            switch (attachment) {
+            case GL_DEPTH_ATTACHMENT:
+            case GL_STENCIL_ATTACHMENT:
+            case GL_DEPTH_STENCIL_ATTACHMENT:
+                return true;
+            default:
+                break;
+            }
+            // Every COLOR_ATTACHMENTi token is a name; one past MAX_COLOR_ATTACHMENTS is a
+            // well-formed name that this framebuffer has no point for, which is INVALID_OPERATION
+            // and is left to the attachment-point lookup below.
+            if (attachment >= GL_COLOR_ATTACHMENT0 && attachment <= GL_COLOR_ATTACHMENT31) return true;
+            return reject();
+        }
+
+        // The TEXTURE_* parameters only exist while the attached object is a texture (GL 4.6 core
+        // 9.2.3); asking for one of them about a renderbuffer is INVALID_ENUM. An empty attachment
+        // point is a different rule and is deliberately passed through here.
+        Bool ValidateAttachmentQueryPname(const MG_State::GLState::FramebufferAttachmentObject* attachmentObject,
+                                          GLenum pname, const char* caller) {
+            switch (pname) {
+            case GL_FRAMEBUFFER_ATTACHMENT_TEXTURE_LEVEL:
+            case GL_FRAMEBUFFER_ATTACHMENT_TEXTURE_CUBE_MAP_FACE:
+            case GL_FRAMEBUFFER_ATTACHMENT_TEXTURE_LAYER:
+            case GL_FRAMEBUFFER_ATTACHMENT_LAYERED:
+                break;
+            default:
+                return true;
+            }
+
+            const Bool nothingAttached =
+                attachmentObject == nullptr || attachmentObject->IsEmpty() || !attachmentObject->IsValid();
+            if (nothingAttached || attachmentObject->IsTexture()) return true;
+
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidEnum,
+                MakeUnique<GenericErrorInfo>(
+                    "MG_Impl/GLImpl", caller,
+                    std::format("pname {} is only defined for a texture attachment.",
+                                MG_Util::ConvertGLEnumToString(pname))));
+            return false;
+        }
+
         // Handles the format-derived pnames shared by GetFramebufferAttachmentParameteriv
         // and its DSA variant. Returns true when pname was one of them.
         Bool TryAnswerAttachmentFormatQuery(const MG_State::GLState::FramebufferAttachmentObject* attachmentObject,
@@ -623,33 +703,6 @@ namespace MobileGL::MG_Impl::GLImpl {
         FramebufferTarget framebufferTarget = MG_Util::ConvertGLEnumToFramebufferTarget(target);
         if (!FramebufferImpl::ValidateFramebufferTarget(framebufferTarget)) return;
 
-        // Default-framebuffer attachment names (GL_DEPTH, GL_STENCIL, GL_FRONT/GL_BACK
-        // variants) alias onto the equivalent attachment points.
-        switch (attachment) {
-        case GL_DEPTH:
-            attachment = GL_DEPTH_ATTACHMENT;
-            break;
-        case GL_STENCIL:
-            attachment = GL_STENCIL_ATTACHMENT;
-            break;
-        case GL_FRONT:
-        case GL_FRONT_LEFT:
-        case GL_FRONT_RIGHT:
-        case GL_BACK:
-        case GL_BACK_LEFT:
-        case GL_BACK_RIGHT:
-            attachment = GL_COLOR_ATTACHMENT0;
-            break;
-        default:
-            break;
-        }
-
-        const Bool depthStencilAlias = attachment == GL_DEPTH_STENCIL_ATTACHMENT;
-        FramebufferAttachmentType attachmentType = depthStencilAlias
-            ? FramebufferAttachmentType::Depth
-            : MG_Util::ConvertGLEnumToFramebufferAttachmentType(attachment);
-        if (!FramebufferImpl::ValidateFramebufferAttachmentType(attachmentType)) return;
-
         auto& bindingSlot = MG_State::pGLContext->GetFramebufferBindingSlot(framebufferTarget);
         auto& framebufferObject = bindingSlot.GetBoundObject();
         if (!framebufferObject) {
@@ -659,6 +712,17 @@ namespace MobileGL::MG_Impl::GLImpl {
                                              "Framebuffer target is bound to no framebuffer object."));
             return;
         }
+
+        if (!ResolveAttachmentQueryName(framebufferObject->IsDefaultFramebuffer(), attachment,
+                                        "GetFramebufferAttachmentParameteriv_State")) {
+            return;
+        }
+
+        const Bool depthStencilAlias = attachment == GL_DEPTH_STENCIL_ATTACHMENT;
+        FramebufferAttachmentType attachmentType = depthStencilAlias
+            ? FramebufferAttachmentType::Depth
+            : MG_Util::ConvertGLEnumToFramebufferAttachmentType(attachment);
+        if (!FramebufferImpl::ValidateFramebufferAttachmentType(attachmentType)) return;
 
         Bool depthStencilMismatch = false;
         const auto* attachmentObject = [&]() -> const MG_State::GLState::FramebufferAttachmentObject* {
@@ -693,6 +757,8 @@ namespace MobileGL::MG_Impl::GLImpl {
                                              "attachment images."));
             return;
         }
+
+        if (!ValidateAttachmentQueryPname(attachmentObject, pname, "GetFramebufferAttachmentParameteriv_State")) return;
 
         switch (pname) {
         case GL_FRAMEBUFFER_ATTACHMENT_OBJECT_TYPE:
@@ -1119,6 +1185,7 @@ namespace MobileGL::MG_Impl::GLImpl {
 
         FramebufferAttachmentType attachmentType = MG_Util::ConvertGLEnumToFramebufferAttachmentType(attachment);
         if (!FramebufferImpl::ValidateFramebufferAttachmentType(attachmentType)) return;
+        if (!FramebufferImpl::ValidateColorAttachmentInRange(attachmentType, "NamedFramebufferTexture_State")) return;
         if (!TextureImpl::ValidateTextureName(texture, true)) return;
 
         if (texture == 0) {
@@ -1132,6 +1199,13 @@ namespace MobileGL::MG_Impl::GLImpl {
                 ErrorCode::InvalidOperation,
                 MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", "NamedFramebufferTexture_State",
                                              std::format("Texture object {} is not valid.", texture)));
+            return;
+        }
+        if (level < 0) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidValue,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", "NamedFramebufferTexture_State",
+                                             "Texture level must be non-negative."));
             return;
         }
 
@@ -1234,14 +1308,98 @@ namespace MobileGL::MG_Impl::GLImpl {
 
     void NamedFramebufferTextureLayer_State(GLuint framebuffer, GLenum attachment, GLuint texture, GLint level,
                                             GLint layer) {
-        static_cast<void>(framebuffer);
-        static_cast<void>(attachment);
-        static_cast<void>(texture);
-        static_cast<void>(level);
-        static_cast<void>(layer);
-        RecordUnsupportedFramebufferTextureAttachmentError(
-            __func__,
-            "Layered framebuffer texture attachments are not represented by the current framebuffer attachment model.");
+        if (attachment == GL_DEPTH_STENCIL_ATTACHMENT) {
+            NamedFramebufferTextureLayer_State(framebuffer, GL_DEPTH_ATTACHMENT, texture, level, layer);
+            NamedFramebufferTextureLayer_State(framebuffer, GL_STENCIL_ATTACHMENT, texture, level, layer);
+            return;
+        }
+
+        auto framebufferObject = GetNamedFramebufferObject_State(framebuffer, __func__);
+        if (!framebufferObject) return;
+
+        const FramebufferAttachmentType attachmentType = MG_Util::ConvertGLEnumToFramebufferAttachmentType(attachment);
+        if (!FramebufferImpl::ValidateFramebufferAttachmentType(attachmentType)) return;
+        if (!FramebufferImpl::ValidateColorAttachmentInRange(attachmentType, __func__)) return;
+
+        if (texture == 0) {
+            framebufferObject->Detach(attachmentType);
+            return;
+        }
+
+        // Unlike NamedFramebufferTexture, this entry point answers INVALID_OPERATION - not
+        // INVALID_VALUE - for a name that is not a texture, so the name check below is the object
+        // lookup rather than TextureImpl::ValidateTextureName.
+        auto& textureObject = MG_State::pGLContext->GetTextureObject(texture);
+        if (!textureObject) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidOperation,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
+                                             std::format("Texture object {} is not valid.", texture)));
+            return;
+        }
+        if (level < 0) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidValue,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__, "Texture level must be non-negative."));
+            return;
+        }
+        if (layer < 0) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidValue,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__, "Layer must be non-negative."));
+            return;
+        }
+
+        // GL 4.6 core 9.2.8: only the layered targets have layers to select, and the largest layer
+        // each one admits comes from a different implementation limit.
+        const auto& limits = MG_Backend::pActiveBackendObject
+            ? MG_Backend::pActiveBackendObject->GetDynamicParameters()
+            : MG_Backend::DynamicBackendParameters{};
+        TextureUploadTarget textureUploadTarget = TextureUploadTarget::Unknown;
+        Int layerLimit = 0;
+        switch (textureObject->GetTarget()) {
+        case TextureTarget::Texture3D:
+            textureUploadTarget = TextureUploadTarget::Texture3D;
+            layerLimit = limits.Max3DTextureSize;
+            break;
+        case TextureTarget::Texture1DArray:
+            textureUploadTarget = TextureUploadTarget::Texture1DArray;
+            layerLimit = limits.MaxArrayTextureLayers;
+            break;
+        case TextureTarget::Texture2DArray:
+            textureUploadTarget = TextureUploadTarget::Texture2DArray;
+            layerLimit = limits.MaxArrayTextureLayers;
+            break;
+        case TextureTarget::Texture2DMultisampleArray:
+            textureUploadTarget = TextureUploadTarget::Texture2DMultisampleArray;
+            layerLimit = limits.MaxArrayTextureLayers;
+            break;
+        case TextureTarget::TextureCubeMapArray:
+            textureUploadTarget = TextureUploadTarget::CubeMapArray;
+            // A cube map array is an array texture whose layers happen to be cube faces, so its
+            // layer index is bounded by GL_MAX_ARRAY_TEXTURE_LAYERS like any other array's.
+            layerLimit = limits.MaxArrayTextureLayers;
+            break;
+        default:
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidOperation,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
+                                             "NamedFramebufferTextureLayer requires a 3D, array, 2D multisample "
+                                             "array, or cube map array texture."));
+            return;
+        }
+
+        if (layer >= layerLimit) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidValue,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
+                                             std::format("Layer {} is beyond the limit ({}) for this texture target.",
+                                                         layer, layerLimit)));
+            return;
+        }
+
+        framebufferObject->AttachTexture(attachmentType, textureObject, textureUploadTarget, level, layer,
+                                         /*layered=*/false);
     }
 
     void FramebufferRenderbuffer_State(GLenum target, GLenum attachment, GLenum renderbuffertarget,
@@ -1345,13 +1503,30 @@ namespace MobileGL::MG_Impl::GLImpl {
         static int existenceMap[(SizeT)FramebufferAttachmentType::FramebufferAttachmentTypeCount] = {-1};
         std::fill(existenceMap, existenceMap + (SizeT)FramebufferAttachmentType::FramebufferAttachmentTypeCount, -1);
 
+        // GL 4.6 core 17.4.1: BACK names both back buffers at once, so DrawBuffers only takes it as
+        // the whole list. DrawBuffer, which names one buffer, is exempt.
+        if (!allowDefaultFBOAliases && n != 1) {
+            for (GLsizei i = 0; i < n; ++i) {
+                if (bufs[i] != GL_BACK) continue;
+                MG_State::pGLContext->RecordError(
+                    ErrorCode::InvalidOperation,
+                    MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
+                                                 "GL_BACK may only appear in bufs when n is one."));
+                return;
+            }
+        }
+
         for (GLsizei i = 0; i < n; ++i) {
-            if (isDefaultFBO && !allowDefaultFBOAliases && (bufs[i] == GL_FRONT || bufs[i] == GL_BACK)) {
+            // FRONT, LEFT, RIGHT and FRONT_AND_BACK each stand for more than one buffer, so
+            // DrawBuffers rejects them outright - on a framebuffer object as well as on the default
+            // framebuffer. LEFT, RIGHT and FRONT_AND_BACK are not attachment names at all and fall
+            // out of the conversion below; only FRONT needs saying here.
+            if (!allowDefaultFBOAliases && bufs[i] == GL_FRONT) {
                 MG_State::pGLContext->RecordError(
                     ErrorCode::InvalidEnum,
                     MakeUnique<GenericErrorInfo>(
                         "MG_Impl/GLImpl", __func__,
-                        std::format("glDrawBuffers cannot use default framebuffer alias {}.",
+                        std::format("glDrawBuffers cannot use the multi-buffer name {}.",
                                     MG_Util::ConvertGLEnumToString(bufs[i]))));
                 return;
             }
@@ -1368,10 +1543,13 @@ namespace MobileGL::MG_Impl::GLImpl {
                 return;
             }
 
+            // A name that is well formed but belongs to the other kind of framebuffer is
+            // INVALID_OPERATION, not INVALID_ENUM: the enum is accepted, this framebuffer just has
+            // no such buffer.
             if (isDefaultFBO && attType != FramebufferAttachmentType::None &&
                 (attType < FramebufferAttachmentType::FrontLeft || attType > FramebufferAttachmentType::BackRight)) {
                 MG_State::pGLContext->RecordError(
-                    ErrorCode::InvalidEnum,
+                    ErrorCode::InvalidOperation,
                     MakeUnique<GenericErrorInfo>(
                         "MG_Impl/GLImpl", __func__,
                         std::format("FBO is default FBO, but bufs[{}] = {} is not `GL_NONE` or one of the default "
@@ -1383,7 +1561,7 @@ namespace MobileGL::MG_Impl::GLImpl {
             if (!isDefaultFBO && attType != FramebufferAttachmentType::None &&
                 (attType < FramebufferAttachmentType::Color0 || attType > FramebufferAttachmentType::Color31)) {
                 MG_State::pGLContext->RecordError(
-                    ErrorCode::InvalidEnum,
+                    ErrorCode::InvalidOperation,
                     MakeUnique<GenericErrorInfo>(
                         "MG_Impl/GLImpl", __func__,
                         std::format("FBO is not default FBO, but bufs[{}] = {} is anything other than `GL_NONE` or "
@@ -1405,16 +1583,7 @@ namespace MobileGL::MG_Impl::GLImpl {
 
             existenceMap[(SizeT)attType] = i;
 
-            if ((SizeT)attType >
-                (SizeT)FramebufferAttachmentType::Color0 + MG_State::GLState::FramebufferObject::MAX_DRAW_BUFFERS) {
-                MG_State::pGLContext->RecordError(
-                    ErrorCode::InvalidOperation,
-                    MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
-                                                 std::format("bufs[{}] == {} indicates a color buffer that does "
-                                                             "not exist in the current GL context.",
-                                                             i, MG_Util::ConvertGLEnumToString(bufs[i]))));
-                return;
-            }
+            if (!FramebufferImpl::ValidateColorAttachmentInRange(attType, __func__)) return;
             // ------------------------- Check validity end ----------------------------------
             fbo->SetDrawBuffer(i, attType);
         }
@@ -1442,91 +1611,95 @@ namespace MobileGL::MG_Impl::GLImpl {
         }
     }
 
-    void ReadBuffer_State(GLenum mode) {
-        auto attType = MG_Util::ConvertGLEnumToFramebufferAttachmentType(mode);
+    void ReadBufferForFramebuffer_State(const SharedPtr<MG_State::GLState::FramebufferObject>& fbo, Bool isDefaultFBO,
+                                        GLenum src, const char* caller) {
+        auto attType = MG_Util::ConvertGLEnumToFramebufferAttachmentType(src);
 
         // ------------------- Check validity begin ------------------------
         if (attType == FramebufferAttachmentType::Unknown) {
+            // LEFT, RIGHT and FRONT_AND_BACK are table 17.4 names - accepted enums - that stand for
+            // more than one buffer, so ReadBuffer cannot select them. That makes them
+            // INVALID_OPERATION rather than the INVALID_ENUM a name outside the table gets.
+            const Bool isMultiBufferName = src == GL_LEFT || src == GL_RIGHT || src == GL_FRONT_AND_BACK;
             MG_State::pGLContext->RecordError(
-                ErrorCode::InvalidEnum,
+                isMultiBufferName ? ErrorCode::InvalidOperation : ErrorCode::InvalidEnum,
                 MakeUnique<GenericErrorInfo>(
-                    "MG_Impl/GLImpl", __func__,
-                    std::format("`mode` = {} is not an accepted value.", MG_Util::ConvertGLEnumToString(mode))));
+                    "MG_Impl/GLImpl", caller,
+                    std::format("`src` = {} does not name a single readable colour buffer.",
+                                MG_Util::ConvertGLEnumToString(src))));
             return;
         }
 
-        // Get bound framebuffer
-        auto& bindingSlot = MG_State::pGLContext->GetFramebufferBindingSlot(FramebufferTarget::Read);
-        auto& fbo = bindingSlot.GetBoundObject();
         if (!fbo) {
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidOperation,
-                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__, "No framebuffer bound to read target."));
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller, "No framebuffer bound to read target."));
             return;
         }
-        const Bool isDefaultFBO = (fbo == FramebufferImpl::pDefaultFramebufferInfo->defaultFBO);
+
+        // Naming a buffer the other kind of framebuffer has is INVALID_OPERATION rather than
+        // INVALID_ENUM (GL 4.6 core 17.4.1) - the name is accepted, this framebuffer just has no
+        // such colour buffer.
         if (isDefaultFBO && attType != FramebufferAttachmentType::None &&
             (attType < FramebufferAttachmentType::FrontLeft || attType > FramebufferAttachmentType::BackRight)) {
             MG_State::pGLContext->RecordError(
-                ErrorCode::InvalidEnum,
+                ErrorCode::InvalidOperation,
                 MakeUnique<GenericErrorInfo>(
-                    "MG_Impl/GLImpl", __func__,
-                    std::format("Default framebuffer read buffer {} is not valid.", MG_Util::ConvertGLEnumToString(mode))));
+                    "MG_Impl/GLImpl", caller,
+                    std::format("Default framebuffer read buffer {} is not valid.", MG_Util::ConvertGLEnumToString(src))));
             return;
         }
         if (!isDefaultFBO && attType != FramebufferAttachmentType::None &&
             (attType < FramebufferAttachmentType::Color0 || attType > FramebufferAttachmentType::Color31)) {
             MG_State::pGLContext->RecordError(
-                ErrorCode::InvalidEnum,
-                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
-                                             std::format("Framebuffer object read buffer {} is not valid.",
-                                                         MG_Util::ConvertGLEnumToString(mode))));
-            return;
-        }
-        if (!isDefaultFBO &&
-            static_cast<SizeT>(attType) >
-                static_cast<SizeT>(FramebufferAttachmentType::Color0) +
-                    MG_State::GLState::FramebufferObject::MAX_DRAW_BUFFERS) {
-            MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidOperation,
-                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
-                                             std::format("Read buffer {} indicates a color buffer that does not exist "
-                                                         "in the current GL context.",
-                                                         MG_Util::ConvertGLEnumToString(mode))));
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller,
+                                             std::format("Framebuffer object read buffer {} is not valid.",
+                                                         MG_Util::ConvertGLEnumToString(src))));
             return;
         }
+        if (!isDefaultFBO && !FramebufferImpl::ValidateColorAttachmentInRange(attType, caller)) return;
         fbo->SetReadBuffer(attType);
     }
 
+    void ReadBuffer_State(GLenum mode) {
+        auto& bindingSlot = MG_State::pGLContext->GetFramebufferBindingSlot(FramebufferTarget::Read);
+        auto& fbo = bindingSlot.GetBoundObject();
+        const Bool isDefaultFBO = (fbo == FramebufferImpl::pDefaultFramebufferInfo->defaultFBO);
+        ReadBufferForFramebuffer_State(fbo, isDefaultFBO, mode, __func__);
+    }
+
     void NamedFramebufferDrawBuffers_State(GLuint framebuffer, GLsizei n, const GLenum* bufs) {
-        auto framebufferObject = GetNamedFramebufferObject_State(framebuffer, "NamedFramebufferDrawBuffers_State");
+        // Zero names the default framebuffer, whose accepted buffer names are a different set - so
+        // it cannot go through the framebuffer-object lookup, which rejects the name outright.
+        auto framebufferObject = framebuffer == 0
+            ? FramebufferImpl::pDefaultFramebufferInfo->defaultFBO
+            : GetNamedFramebufferObject_State(framebuffer, "NamedFramebufferDrawBuffers_State");
         if (!framebufferObject) return;
-        DrawBuffersForFramebuffer_State(framebufferObject, false, n, bufs, false);
+        DrawBuffersForFramebuffer_State(framebufferObject, framebuffer == 0, n, bufs, false);
     }
 
     void NamedFramebufferDrawBuffer_State(GLuint framebuffer, GLenum buf) {
+        auto framebufferObject = framebuffer == 0
+            ? FramebufferImpl::pDefaultFramebufferInfo->defaultFBO
+            : GetNamedFramebufferObject_State(framebuffer, "NamedFramebufferDrawBuffer_State");
+        if (!framebufferObject) return;
+
         if (buf == GL_NONE) {
-            NamedFramebufferDrawBuffers_State(framebuffer, 0, nullptr);
+            DrawBuffersForFramebuffer_State(framebufferObject, framebuffer == 0, 0, nullptr, true);
         } else {
-            GLenum bufs[] = {buf};
-            NamedFramebufferDrawBuffers_State(framebuffer, 1, bufs);
+            const GLenum bufs[] = {buf};
+            DrawBuffersForFramebuffer_State(framebufferObject, framebuffer == 0, 1, bufs, true);
         }
     }
 
     void NamedFramebufferReadBuffer_State(GLuint framebuffer, GLenum src) {
-        auto framebufferObject = GetNamedFramebufferObject_State(framebuffer, "NamedFramebufferReadBuffer_State");
+        auto framebufferObject = framebuffer == 0
+            ? FramebufferImpl::pDefaultFramebufferInfo->defaultFBO
+            : GetNamedFramebufferObject_State(framebuffer, "NamedFramebufferReadBuffer_State");
         if (!framebufferObject) return;
-
-        auto attType = MG_Util::ConvertGLEnumToFramebufferAttachmentType(src);
-        if (attType == FramebufferAttachmentType::Unknown) {
-            MG_State::pGLContext->RecordError(
-                ErrorCode::InvalidEnum,
-                MakeUnique<GenericErrorInfo>(
-                    "MG_Impl/GLImpl", "NamedFramebufferReadBuffer_State",
-                    std::format("`src` = {} is not an accepted value.", MG_Util::ConvertGLEnumToString(src))));
-            return;
-        }
-        framebufferObject->SetReadBuffer(attType);
+        ReadBufferForFramebuffer_State(framebufferObject, framebuffer == 0, src,
+                                       "NamedFramebufferReadBuffer_State");
     }
 
     SharedPtr<MG_State::GLState::FramebufferObject> GetFramebufferObjectForNamedClear(GLuint framebuffer,
@@ -1919,6 +2092,8 @@ namespace MobileGL::MG_Impl::GLImpl {
         GLint* params, const char* caller) {
         if (params == nullptr) return;
 
+        if (!ResolveAttachmentQueryName(framebufferObject->IsDefaultFramebuffer(), attachment, caller)) return;
+
         const Bool depthStencilAlias = attachment == GL_DEPTH_STENCIL_ATTACHMENT;
         FramebufferAttachmentType attachmentType = depthStencilAlias
             ? FramebufferAttachmentType::Depth
@@ -1958,6 +2133,8 @@ namespace MobileGL::MG_Impl::GLImpl {
                                              "attachment images."));
             return;
         }
+
+        if (!ValidateAttachmentQueryPname(attachmentObject, pname, caller)) return;
 
         switch (pname) {
         case GL_FRAMEBUFFER_ATTACHMENT_OBJECT_TYPE:
@@ -2019,8 +2196,11 @@ namespace MobileGL::MG_Impl::GLImpl {
 
     void GetNamedFramebufferAttachmentParameteriv_State(GLuint framebuffer, GLenum attachment, GLenum pname,
                                                        GLint* params) {
-        auto framebufferObject =
-            GetNamedFramebufferObject_State(framebuffer, "GetNamedFramebufferAttachmentParameteriv_State");
+        // Zero names the default framebuffer here rather than being rejected: the DSA queries take
+        // it in place of a binding (GL 4.6 core 9.2.3).
+        auto framebufferObject = framebuffer == 0
+            ? FramebufferImpl::pDefaultFramebufferInfo->defaultFBO
+            : GetNamedFramebufferObject_State(framebuffer, "GetNamedFramebufferAttachmentParameteriv_State");
         if (!framebufferObject) return;
         GetFramebufferAttachmentParameteriv_Object(framebufferObject, attachment, pname, params,
                                                   "GetNamedFramebufferAttachmentParameteriv_State");
