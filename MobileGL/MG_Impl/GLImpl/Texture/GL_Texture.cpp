@@ -4309,6 +4309,24 @@ namespace MobileGL::MG_Impl::GLImpl {
         bindImageTexture(unit, texture, level, layered, layer, access, format);
     }
 
+    // GL 4.6 core 8.14.4: a cube map that is not cube complete has no consistent set of faces to
+    // filter down, so generating its mipmaps is INVALID_OPERATION. Without this the incomplete
+    // texture reached the backend, where DirectVulkan asserts on it and takes the process down.
+    Bool ValidateGenerateMipmapTexture(const SharedPtr<MG_State::GLState::ITextureObject>& textureObject,
+                                       const char* caller) {
+        if (!textureObject) return false;
+        const auto target = textureObject->GetTarget();
+        if ((target == TextureTarget::TextureCubeMap || target == TextureTarget::TextureCubeMapArray) &&
+            !textureObject->IsComplete()) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidOperation,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller,
+                                             "Mipmap generation requires a cube complete cube map texture."));
+            return false;
+        }
+        return true;
+    }
+
     void GenerateMipmap(GLenum target) {
         const auto textureTarget = MG_Util::ConvertGLEnumToTextureTarget(target);
         if (!TextureImpl::ValidateTextureTarget(textureTarget)) {
@@ -4322,6 +4340,7 @@ namespace MobileGL::MG_Impl::GLImpl {
                 MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__, "GenerateMipmap requires a bound texture."));
             return;
         }
+        if (!ValidateGenerateMipmapTexture(textureObject, __func__)) return;
 
         auto* mipmapTexture = dynamic_cast<MG_State::GLState::TextureObjectMipmap*>(textureObject.get());
         MOBILEGL_ASSERT(mipmapTexture != nullptr, "GenerateMipmap requires mipmap texture storage.");
@@ -4331,15 +4350,11 @@ namespace MobileGL::MG_Impl::GLImpl {
 
     void GenerateTextureMipmap(GLuint texture) {
         auto textureObject = GetTextureObjectByName(texture, __func__);
-        if (textureObject) {
-            auto* mipmapTexture = dynamic_cast<MG_State::GLState::TextureObjectMipmap*>(textureObject.get());
-            MOBILEGL_ASSERT(mipmapTexture != nullptr, "GenerateTextureMipmap requires mipmap texture storage.");
-        }
+        if (!ValidateGenerateMipmapTexture(textureObject, __func__)) return;
+        auto* mipmapTexture = dynamic_cast<MG_State::GLState::TextureObjectMipmap*>(textureObject.get());
+        MOBILEGL_ASSERT(mipmapTexture != nullptr, "GenerateTextureMipmap requires mipmap texture storage.");
         WithTemporarilyBoundNamedTexture(textureObject, [&](GLenum target) {
-            if (textureObject) {
-                auto* mipmapTexture = dynamic_cast<MG_State::GLState::TextureObjectMipmap*>(textureObject.get());
-                EnsureGeneratedMipmapStorageAllocated(*mipmapTexture);
-            }
+            EnsureGeneratedMipmapStorageAllocated(*mipmapTexture);
             GenerateMipmap_Backend(target);
         });
     }

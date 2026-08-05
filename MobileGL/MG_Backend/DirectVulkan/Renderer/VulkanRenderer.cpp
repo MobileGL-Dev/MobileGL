@@ -7883,9 +7883,15 @@ void main() {
 
     void VulkanRenderer::GenerateMipmap(GLenum target) {
         const auto textureTarget = MG_Util::ConvertGLEnumToTextureTarget(target);
-        MOBILEGL_ASSERT(textureTarget == TextureTarget::Texture2D || textureTarget == TextureTarget::Texture2DArray ||
-                            textureTarget == TextureTarget::Texture3D || textureTarget == TextureTarget::TextureCubeMap,
-                        "GenerateMipmap currently only supports GL_TEXTURE_2D, GL_TEXTURE_2D_ARRAY, GL_TEXTURE_3D, and GL_TEXTURE_CUBE_MAP.");
+        // The other mipmappable targets - 1D, 1D array, cube map array - are legal GL and the front
+        // end lets them through, so reaching one here is a coverage gap in this backend, not a
+        // broken invariant. Declining leaves the mip chain unwritten; asserting took the process
+        // down with it.
+        if (textureTarget != TextureTarget::Texture2D && textureTarget != TextureTarget::Texture2DArray &&
+            textureTarget != TextureTarget::Texture3D && textureTarget != TextureTarget::TextureCubeMap) {
+            MGLOG_W("GenerateMipmap: unsupported target %s", MG_Util::ConvertTextureTargetToString(textureTarget).c_str());
+            return;
+        }
 
         auto& textureUnit = MG_State::pGLContext->GetTextureUnitObject(MG_State::pGLContext->GetActiveTextureUnit());
         auto texture = textureUnit.GetBindingSlot(textureTarget).GetBoundObject();
