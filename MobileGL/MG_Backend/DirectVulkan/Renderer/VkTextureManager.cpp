@@ -1497,15 +1497,17 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             : (mipLevels > 1 ? std::max(mipLevels, ComputeFullMipLevelCount(texelSize)) : 1u);
         TextureShapeInfo shapeInfo{};
         const Bool supportedShape = TryResolveTextureShapeInfo(texture, uploadTarget, texelSize, shapeInfo);
-        MOBILEGL_ASSERT(supportedShape,
-                        "SyncTextureResource: unsupported uploadTarget=%s textureTarget=%s textureId=%d size=(%d,%d,%d) "
-                        "mipLevels=%u vkViewType=%d",
-                        MG_Util::ConvertTextureUploadTargetToString(uploadTarget).c_str(),
-                        MG_Util::ConvertTextureTargetToString(texture.GetTarget()).c_str(),
-                        texture.GetExternalIndex(), texelSize.x(), texelSize.y(), texelSize.z(), mipLevels,
-                        static_cast<Int>(MG_Util::ConvertTextureUploadTargetToVkEnum(uploadTarget)));
         if (!supportedShape) {
-            MGLOG_D("%s: not Texture2D, unsupported", __func__);
+            // A gap in this backend's coverage, not a broken invariant: the GL front end accepts
+            // targets this manager has no Vulkan image shape for yet (cube map arrays above all).
+            // Declining the sync leaves the texture unbacked - wrong, but recoverable - where an
+            // assertion would take the whole process down instead.
+            MGLOG_W("SyncTextureResource: unsupported uploadTarget=%s textureTarget=%s textureId=%d size=(%d,%d,%d) "
+                    "mipLevels=%u vkViewType=%d",
+                    MG_Util::ConvertTextureUploadTargetToString(uploadTarget).c_str(),
+                    MG_Util::ConvertTextureTargetToString(texture.GetTarget()).c_str(), texture.GetExternalIndex(),
+                    texelSize.x(), texelSize.y(), texelSize.z(), mipLevels,
+                    static_cast<Int>(MG_Util::ConvertTextureUploadTargetToVkEnum(uploadTarget)));
             return false;
         }
         VkSampleCountFlagBits resolvedSampleCount = VK_SAMPLE_COUNT_1_BIT;
