@@ -8,8 +8,12 @@
 
 #include "VkClearManager.h"
 
+#include "MG_State/GLState/Core.h"
 #include "MG_Util/Converters/MGToStr/FramebufferEnumConverter.h"
 #include "MG_Util/Converters/MGToStr/TextureEnumConverter.h"
+
+#include <algorithm>
+#include <cmath>
 
 namespace MobileGL::MG_Backend::DirectVulkan {
     static Bool IsCubeMapFaceUploadTarget(TextureUploadTarget target) {
@@ -40,6 +44,23 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             break;
         }
         return clearValue;
+    }
+
+    void PreCompensateSrgbClearColor(ClearAttachmentPayload& payload, VkFormat destinationFormat) {
+        if (payload.colorEncoding != ClearColorEncoding::Float) return;
+        // With GL_FRAMEBUFFER_SRGB enabled GL performs the encoding itself, so the driver doing it
+        // is exactly right and there is nothing to undo.
+        if (MG_State::pGLContext->IsCapabilityEnabled(MobileGL::CapabilityInput::FramebufferSrgb)) return;
+        if (ResolveSrgbAttachmentWriteFormat(destinationFormat, false) == destinationFormat) return;
+
+        // sRGB -> linear (GL 4.6 core 8.24), applied to the colour channels only: alpha is stored
+        // linearly in an sRGB format and must pass through untouched.
+        const auto toLinear = [](Float encoded) {
+            const Float value = std::clamp(encoded, 0.0f, 1.0f);
+            return value <= 0.04045f ? value / 12.92f : std::pow((value + 0.055f) / 1.055f, 2.4f);
+        };
+        payload.color = FloatVec4(toLinear(payload.color.x()), toLinear(payload.color.y()),
+                                  toLinear(payload.color.z()), payload.color.w());
     }
 
     void ForceOpaqueClearAlpha(ClearAttachmentPayload& payload) {

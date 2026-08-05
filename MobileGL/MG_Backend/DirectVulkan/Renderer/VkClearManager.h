@@ -50,6 +50,15 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     // the destination is known.
     void ForceOpaqueClearAlpha(ClearAttachmentPayload& payload);
 
+    // vkCmdClearColorImage names the image, so the driver applies the destination format's transfer
+    // function to whatever value it is handed. Every other write path in this backend goes through
+    // the UNORM twin view while GL_FRAMEBUFFER_SRGB is off (ResolveSrgbAttachmentWriteFormat) and
+    // therefore stores the raw value GL asked for. Rewrites `payload` to the linear colour whose
+    // encoding is that raw value, so a direct image clear of an sRGB destination agrees with them.
+    // A no-op for every other format, for integer clear encodings, and when GL is doing the
+    // encoding itself.
+    void PreCompensateSrgbClearColor(ClearAttachmentPayload& payload, VkFormat destinationFormat);
+
     struct PendingClearKey {
         MG_State::GLState::ITextureObject* texture = nullptr;
         Uint64 textureLifetimeId = 0;

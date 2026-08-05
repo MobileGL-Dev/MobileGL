@@ -5914,9 +5914,10 @@ void main() {
             subresourceRange.baseArrayLayer = pendingClear.key.baseArrayLayer;
             subresourceRange.layerCount = pendingClear.key.layerCount;
 
-            const auto& clearPayload = pendingClear.payload;
+            auto clearPayload = pendingClear.payload;
             if ((resource->aspect & VK_IMAGE_ASPECT_COLOR_BIT) != 0) {
                 subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+                PreCompensateSrgbClearColor(clearPayload, resource->format);
                 const VkClearColorValue clearValue =
                     MakeVkClearColorValue(clearPayload, ColorFormatLacksAlpha(&texture));
                 vkCmdClearColorImage(commandBuffer, resource->image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
@@ -6000,6 +6001,7 @@ void main() {
         VkImageLayout steadyLayout;
         if ((resource->aspect & VK_IMAGE_ASPECT_COLOR_BIT) != 0) {
             subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+            PreCompensateSrgbClearColor(clearPayload, resource->format);
             // RGB renderbuffers are backed by an RGBA image; the missing alpha reads as 1.
             const VkClearColorValue clearValue = MakeVkClearColorValue(
                 clearPayload,
@@ -7632,13 +7634,16 @@ void main() {
         switch (type) {
         case GL_FLOAT:
         case GL_UNSIGNED_INT:
+        case GL_INT:
         case GL_UNSIGNED_INT_24_8:
             dstPixelBytes = 4;
             break;
         case GL_UNSIGNED_SHORT:
+        case GL_SHORT:
             dstPixelBytes = 2;
             break;
         case GL_UNSIGNED_BYTE:
+        case GL_BYTE:
             dstPixelBytes = 1;
             break;
         case GL_FLOAT_32_UNSIGNED_INT_24_8_REV:
@@ -7649,29 +7654,40 @@ void main() {
             return;
         }
 
+        // GL 4.6 core 18.2.8: a GL_STENCIL_INDEX read reports the index itself, unconverted, in
+        // whatever width the client asked for. Only the packed types mix depth in. Deciding this
+        // once - rather than per type, where GL_FLOAT and GL_UNSIGNED_SHORT used to emit a depth
+        // value that is meaningless for a stencil-only image - is what makes the CTS's
+        // (GL_STENCIL_INDEX, GL_INT) read return 7 instead of nothing.
+        const Bool stencilOnly = format == GL_STENCIL_INDEX;
+
         Vector<Uint8> packed(pixelCount * dstPixelBytes);
         for (SizeT i = 0; i < pixelCount; ++i) {
             Uint8* dst = packed.data() + i * dstPixelBytes;
             switch (type) {
             case GL_FLOAT: {
-                const Float value = depthValueAt(i);
+                const Float value = stencilOnly ? static_cast<Float>(stencilSrc[i]) : depthValueAt(i);
                 Memcpy(dst, &value, sizeof(value));
                 break;
             }
-            case GL_UNSIGNED_SHORT: {
-                const Uint16 value =
-                    static_cast<Uint16>(std::lround(static_cast<double>(depthValueAt(i)) * 65535.0));
+            case GL_UNSIGNED_SHORT:
+            case GL_SHORT: {
+                const Uint16 value = stencilOnly
+                    ? static_cast<Uint16>(stencilSrc[i])
+                    : static_cast<Uint16>(std::lround(static_cast<double>(depthValueAt(i)) * 65535.0));
                 Memcpy(dst, &value, sizeof(value));
                 break;
             }
-            case GL_UNSIGNED_INT: {
-                const Uint32 value = format == GL_STENCIL_INDEX
+            case GL_UNSIGNED_INT:
+            case GL_INT: {
+                const Uint32 value = stencilOnly
                     ? stencilSrc[i]
                     : static_cast<Uint32>(static_cast<double>(depthValueAt(i)) * 4294967295.0);
                 Memcpy(dst, &value, sizeof(value));
                 break;
             }
-            case GL_UNSIGNED_BYTE: {
+            case GL_UNSIGNED_BYTE:
+            case GL_BYTE: {
                 dst[0] = stencilSrc[i];
                 break;
             }

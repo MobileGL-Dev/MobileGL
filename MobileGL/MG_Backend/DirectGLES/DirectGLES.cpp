@@ -4566,14 +4566,27 @@ namespace MobileGL::MG_Backend::DirectGLES {
         Vector<Uint32> packed(outStencil.size(), 0);
         ClearGLErrors();
         g_GLESFuncs.glReadPixels(x, y, width, height, GL_DEPTH_STENCIL, GL_UNSIGNED_INT_24_8, packed.data());
+        if (g_GLESFuncs.glGetError() == GL_NO_ERROR) {
+            for (SizeT i = 0; i < outStencil.size(); ++i) {
+                outStencil[i] = static_cast<Uint8>(packed[i] & 0xFFu);
+            }
+            return true;
+        }
+
+        // A DEPTH32F_STENCIL8 attachment rejects the 24_8 type: its packed layout is a float depth
+        // followed by a padded stencil byte, eight bytes per pixel with the index at offset 4.
+        Vector<Uint8> packed32f(outStencil.size() * 8u, 0);
+        ClearGLErrors();
+        g_GLESFuncs.glReadPixels(x, y, width, height, GL_DEPTH_STENCIL, GL_FLOAT_32_UNSIGNED_INT_24_8_REV,
+                                 packed32f.data());
         const GLenum packedError = g_GLESFuncs.glGetError();
         if (packedError != GL_NO_ERROR) {
-            MGLOG_E("ReadPixels: neither GL_STENCIL_INDEX nor GL_DEPTH_STENCIL readback is available: %s",
+            MGLOG_E("ReadPixels: no stencil readback path is available: %s",
                     MG_Util::ConvertGLEnumToString(packedError).c_str());
             return false;
         }
         for (SizeT i = 0; i < outStencil.size(); ++i) {
-            outStencil[i] = static_cast<Uint8>(packed[i] & 0xFFu);
+            outStencil[i] = packed32f[i * 8u + 4u];
         }
         return true;
     }
@@ -4583,11 +4596,20 @@ namespace MobileGL::MG_Backend::DirectGLES {
     // values themselves are always 8 bits.
     static Bool ReadPixelsStencilViaNative(GLint x, GLint y, GLsizei width, GLsizei height, GLenum type,
                                            void* pixels) {
+        // GL 4.6 core 18.2.8: a stencil index is written unconverted into whichever integer width
+        // the client asked for, and converted to a float value for GL_FLOAT. The signed widths are
+        // as legal as the unsigned ones - the CTS reads stencil with GL_INT - and rejecting them
+        // here used to let the call fall through to a native ES read the driver refuses, after
+        // which nothing was written at all and the caller kept its zeros.
         SizeT dstPixelBytes = 0;
         switch (type) {
-        case GL_UNSIGNED_BYTE: dstPixelBytes = sizeof(Uint8); break;
-        case GL_UNSIGNED_SHORT: dstPixelBytes = sizeof(Uint16); break;
-        case GL_UNSIGNED_INT: dstPixelBytes = sizeof(Uint32); break;
+        case GL_UNSIGNED_BYTE:
+        case GL_BYTE: dstPixelBytes = sizeof(Uint8); break;
+        case GL_UNSIGNED_SHORT:
+        case GL_SHORT: dstPixelBytes = sizeof(Uint16); break;
+        case GL_UNSIGNED_INT:
+        case GL_INT: dstPixelBytes = sizeof(Uint32); break;
+        case GL_FLOAT: dstPixelBytes = sizeof(GLfloat); break;
         default: return false;
         }
         if (width <= 0 || height <= 0) {
@@ -4621,10 +4643,15 @@ namespace MobileGL::MG_Backend::DirectGLES {
             for (GLsizei col = 0; col < width; ++col) {
                 switch (type) {
                 case GL_UNSIGNED_BYTE:
+                case GL_BYTE:
                     rowBuf[static_cast<SizeT>(col)] = srcRow[col];
                     break;
                 case GL_UNSIGNED_SHORT:
+                case GL_SHORT:
                     reinterpret_cast<Uint16*>(rowBuf.data())[col] = srcRow[col];
+                    break;
+                case GL_FLOAT:
+                    reinterpret_cast<GLfloat*>(rowBuf.data())[col] = static_cast<GLfloat>(srcRow[col]);
                     break;
                 default:
                     reinterpret_cast<Uint32*>(rowBuf.data())[col] = srcRow[col];
