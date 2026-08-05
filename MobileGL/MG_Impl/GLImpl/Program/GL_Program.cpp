@@ -701,6 +701,9 @@ namespace MobileGL::MG_Impl::GLImpl {
         case GL_PROGRAM_BINARY_RETRIEVABLE_HINT:
             *params = programObject->GetBinaryRetrievableHint() ? GL_TRUE : GL_FALSE;
             break;
+        case GL_PROGRAM_SEPARABLE:
+            *params = programObject->GetSeparable() ? GL_TRUE : GL_FALSE;
+            break;
 
         case GL_GEOMETRY_VERTICES_OUT:
         case GL_GEOMETRY_INPUT_TYPE:
@@ -1094,7 +1097,7 @@ namespace MobileGL::MG_Impl::GLImpl {
     void Uniformv_State(GLint location, GLsizei count, T* value) {
         if (location == -1) return;
 
-        auto& programObject = MG_State::pGLContext->GetCurrentProgram();
+        auto& programObject = MG_State::pGLContext->GetProgramForUniform();
         if (programObject == nullptr) {
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidOperation,
@@ -1286,7 +1289,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         // If transpose is GL_TRUE, we need to transpose the matrix data
         if (location == -1) return;
 
-        auto& programObject = MG_State::pGLContext->GetCurrentProgram();
+        auto& programObject = MG_State::pGLContext->GetProgramForUniform();
         if (programObject == nullptr) {
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidOperation,
@@ -1321,7 +1324,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         // If transpose is GL_TRUE, we need to transpose the matrix data
         if (location == -1) return;
 
-        auto& programObject = MG_State::pGLContext->GetCurrentProgram();
+        auto& programObject = MG_State::pGLContext->GetProgramForUniform();
         if (programObject == nullptr) {
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidOperation,
@@ -1361,7 +1364,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         // If transpose is GL_TRUE, we need to transpose the matrix data
         if (location == -1) return;
 
-        auto& programObject = MG_State::pGLContext->GetCurrentProgram();
+        auto& programObject = MG_State::pGLContext->GetProgramForUniform();
         if (programObject == nullptr) {
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidOperation,
@@ -1394,7 +1397,7 @@ namespace MobileGL::MG_Impl::GLImpl {
     void UniformMatrixNonSquarefv_State(const char* caller, GLint location, GLsizei count) {
         if (location == -1) return;
 
-        auto& programObject = MG_State::pGLContext->GetCurrentProgram();
+        auto& programObject = MG_State::pGLContext->GetProgramForUniform();
         if (programObject == nullptr) {
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidOperation,
@@ -2055,7 +2058,7 @@ namespace MobileGL::MG_Impl::GLImpl {
     }
     void UniformMatrix2dv(GLint location, GLsizei count, GLboolean transpose, const GLdouble* value) {
         if (location == -1) return;
-        auto& programObject = MG_State::pGLContext->GetCurrentProgram();
+        auto& programObject = MG_State::pGLContext->GetProgramForUniform();
         if (programObject == nullptr) {
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidOperation,
@@ -2081,7 +2084,7 @@ namespace MobileGL::MG_Impl::GLImpl {
     }
     void UniformMatrix3dv(GLint location, GLsizei count, GLboolean transpose, const GLdouble* value) {
         if (location == -1) return;
-        auto& programObject = MG_State::pGLContext->GetCurrentProgram();
+        auto& programObject = MG_State::pGLContext->GetProgramForUniform();
         if (programObject == nullptr) {
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidOperation,
@@ -2107,7 +2110,7 @@ namespace MobileGL::MG_Impl::GLImpl {
     }
     void UniformMatrix4dv(GLint location, GLsizei count, GLboolean transpose, const GLdouble* value) {
         if (location == -1) return;
-        auto& programObject = MG_State::pGLContext->GetCurrentProgram();
+        auto& programObject = MG_State::pGLContext->GetProgramForUniform();
         if (programObject == nullptr) {
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidOperation,
@@ -2133,7 +2136,7 @@ namespace MobileGL::MG_Impl::GLImpl {
     }
     void UniformMatrix2x3dv(GLint location, GLsizei count, GLboolean transpose, const GLdouble* value) {
         if (location == -1) return;
-        auto& programObject = MG_State::pGLContext->GetCurrentProgram();
+        auto& programObject = MG_State::pGLContext->GetProgramForUniform();
         if (programObject == nullptr) {
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidOperation,
@@ -2159,7 +2162,7 @@ namespace MobileGL::MG_Impl::GLImpl {
     }
     void UniformMatrix2x4dv(GLint location, GLsizei count, GLboolean transpose, const GLdouble* value) {
         if (location == -1) return;
-        auto& programObject = MG_State::pGLContext->GetCurrentProgram();
+        auto& programObject = MG_State::pGLContext->GetProgramForUniform();
         if (programObject == nullptr) {
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidOperation,
@@ -2185,7 +2188,7 @@ namespace MobileGL::MG_Impl::GLImpl {
     }
     void UniformMatrix3x2dv(GLint location, GLsizei count, GLboolean transpose, const GLdouble* value) {
         if (location == -1) return;
-        auto& programObject = MG_State::pGLContext->GetCurrentProgram();
+        auto& programObject = MG_State::pGLContext->GetProgramForUniform();
         if (programObject == nullptr) {
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidOperation,
@@ -2211,7 +2214,7 @@ namespace MobileGL::MG_Impl::GLImpl {
     }
     void UniformMatrix3x4dv(GLint location, GLsizei count, GLboolean transpose, const GLdouble* value) {
         if (location == -1) return;
-        auto& programObject = MG_State::pGLContext->GetCurrentProgram();
+        auto& programObject = MG_State::pGLContext->GetProgramForUniform();
         if (programObject == nullptr) {
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidOperation,
@@ -2237,7 +2240,7 @@ namespace MobileGL::MG_Impl::GLImpl {
     }
     void UniformMatrix4x2dv(GLint location, GLsizei count, GLboolean transpose, const GLdouble* value) {
         if (location == -1) return;
-        auto& programObject = MG_State::pGLContext->GetCurrentProgram();
+        auto& programObject = MG_State::pGLContext->GetProgramForUniform();
         if (programObject == nullptr) {
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidOperation,
@@ -2263,7 +2266,7 @@ namespace MobileGL::MG_Impl::GLImpl {
     }
     void UniformMatrix4x3dv(GLint location, GLsizei count, GLboolean transpose, const GLdouble* value) {
         if (location == -1) return;
-        auto& programObject = MG_State::pGLContext->GetCurrentProgram();
+        auto& programObject = MG_State::pGLContext->GetProgramForUniform();
         if (programObject == nullptr) {
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidOperation,
@@ -2746,7 +2749,7 @@ namespace MobileGL::MG_Impl::GLImpl {
     void ProgramParameteri(GLuint program, GLenum pname, GLint value) {
         auto& programObject = TryToGetProgramObject(program);
         if (!programObject) return;
-        if (pname != GL_PROGRAM_BINARY_RETRIEVABLE_HINT) {
+        if (pname != GL_PROGRAM_BINARY_RETRIEVABLE_HINT && pname != GL_PROGRAM_SEPARABLE) {
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidEnum,
                 MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__, "pname is not an accepted value."));
@@ -2758,7 +2761,46 @@ namespace MobileGL::MG_Impl::GLImpl {
                 MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__, "value must be GL_TRUE or GL_FALSE."));
             return;
         }
+        if (pname == GL_PROGRAM_SEPARABLE) {
+            programObject->SetSeparable(value == GL_TRUE);
+            return;
+        }
         programObject->SetBinaryRetrievableHint(value == GL_TRUE);
+    }
+
+    // GL 4.6 core 7.3: glCreateShaderProgramv is defined as the exact sequence below, so it
+    // is written as that sequence rather than as a private shortcut - every error it can
+    // raise is one of theirs, raised at the point they would raise it.
+    GLuint CreateShaderProgramv(GLenum type, GLsizei count, const GLchar* const* strings) {
+        const GLuint shader = CreateShader_State(type);
+        if (shader == 0) return 0;
+
+        ShaderSource_State(shader, count, strings, nullptr);
+        CompileShader_State(shader);
+
+        const GLuint program = CreateProgram_State();
+        if (program != 0) {
+            const auto& shaderObject = MG_State::pGLContext->GetShaderObject(shader);
+            const auto& programObject = MG_State::pGLContext->GetProgramObject(program);
+            // The program is separable whether or not the shader compiled: a failed
+            // compile leaves an unlinked but otherwise well-formed separable program.
+            if (programObject) programObject->SetSeparable(true);
+            if (shaderObject && programObject && shaderObject->GetCompileStatus()) {
+                AttachShader_State(program, shader);
+                // Not LinkProgram_State: that injects a default fragment shader into a
+                // program that has none, which is exactly wrong for a separable
+                // vertex-stage program - the pipeline supplies the real one.
+                programObject->Link(false);
+                // glDetachShader defers the removal to the next link, so the program keeps
+                // the shader object it was built from while no longer reporting it attached.
+                DetachShader_State(program, shader);
+            }
+            if (shaderObject && programObject && !shaderObject->GetInfoLog().empty()) {
+                programObject->AppendInfoLog(shaderObject->GetInfoLog());
+            }
+        }
+        DeleteShader_State(shader);
+        return program;
     }
 
     void GetProgramBinary(GLuint program, GLsizei bufSize, GLsizei* length, GLenum* binaryFormat, void* binary) {

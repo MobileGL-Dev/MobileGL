@@ -137,6 +137,12 @@ namespace MobileGL {
                 const SharedPtr<ShaderObject>& GetShaderObject(Uint index);
                 void UseProgram(Uint program);
                 const SharedPtr<ProgramObject>& GetCurrentProgram();
+                // What a draw or dispatch actually executes: the program in use, or - when
+                // there is none - the bound pipeline's stages composited into one program.
+                const SharedPtr<ProgramObject>& GetProgramForDraw();
+                // What glUniform* addresses: the program in use, or the bound pipeline's
+                // active program (GL 4.6 core 7.6.1).
+                const SharedPtr<ProgramObject>& GetProgramForUniform();
 
                 // Program pipeline (GL_ARB_separate_shader_objects, GL 4.6 core 7.4). Like queries
                 // and transform feedbacks, glGenProgramPipelines only RESERVES a name - the object

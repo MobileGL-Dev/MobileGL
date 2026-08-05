@@ -174,6 +174,7 @@ namespace MobileGL::MG_Impl::GLImpl {
     void GetUniformdv(GLuint program, GLint location, GLdouble* params);
     void ValidateProgram(GLuint program);
     void ProgramParameteri(GLuint program, GLenum pname, GLint value);
+    GLuint CreateShaderProgramv(GLenum type, GLsizei count, const GLchar* const* strings);
     void GetProgramBinary(GLuint program, GLsizei bufSize, GLsizei* length, GLenum* binaryFormat, void* binary);
     void ProgramBinary(GLuint program, GLenum binaryFormat, const void* binary, GLsizei length);
     void TransformFeedbackVaryings(GLuint program, GLsizei count, const GLchar* const* varyings, GLenum bufferMode);

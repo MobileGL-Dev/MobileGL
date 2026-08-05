@@ -45,6 +45,13 @@ namespace MobileGL::MG_State::GLState {
         Vector<SharedPtr<ShaderObject>>& GetAttachedShaders();
         const Vector<SharedPtr<ShaderObject>>& GetAttachedShaders() const;
         const String& GetInfoLog() const { return m_infoLog; }
+        // glCreateShaderProgramv folds the shader's compile log into the program's log, which
+        // is the only place a caller can read it from once the shader name is gone.
+        void AppendInfoLog(const String& text) {
+            if (text.empty()) return;
+            if (!m_infoLog.empty() && m_infoLog.back() != '\n') m_infoLog += '\n';
+            m_infoLog += text;
+        }
         Int GetUniformMaxLength() const { return m_uniformNameMaxLength; }
         Uint GetUniformCount() const { return m_activeUniformCount; }
         Uint GetMaxUniformLocation() const { return m_maxUniformLocation; }
@@ -382,6 +389,11 @@ namespace MobileGL::MG_State::GLState {
         // ARB_get_program_binary requires of it.
         Bool GetBinaryRetrievableHint() const { return m_binaryRetrievableHint; }
         void SetBinaryRetrievableHint(Bool hint) { m_binaryRetrievableHint = hint; }
+        // GL_PROGRAM_SEPARABLE (GL_ARB_separate_shader_objects): the program may supply a
+        // subset of the stages of a program pipeline. Only takes effect on the next link,
+        // which is why it is plain state here rather than something Link() consults.
+        Bool GetSeparable() const { return m_separable; }
+        void SetSeparable(Bool separable) { m_separable = separable; }
         // glProgramBinary always fails here (there is no format it could accept) and the
         // spec then requires the program's LINK_STATUS to read FALSE.
         void MarkLinkFailedByProgramBinary() {
@@ -605,6 +617,7 @@ namespace MobileGL::MG_State::GLState {
         Bool m_deleteStatus = false;
         Bool m_linkStatus = false;
         Bool m_binaryRetrievableHint = false;
+        Bool m_separable = false;
         Bool m_validateStatus = true;
         Uint32 m_backendStateVersion = 0;
 

@@ -15,7 +15,7 @@
 
 namespace MobileGL::MG_Impl::GLImpl {
     static Bool ValidateCurrentProgramForExecution(const char* functionName) {
-        const auto& currentProgram = MG_State::pGLContext->GetCurrentProgram();
+        const auto& currentProgram = MG_State::pGLContext->GetProgramForDraw();
         if (!currentProgram) {
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidOperation,
@@ -37,7 +37,7 @@ namespace MobileGL::MG_Impl::GLImpl {
     static Bool ValidateCurrentProgramForCompute(const char* functionName) {
         if (!ValidateCurrentProgramForExecution(functionName)) return false;
 
-        const auto& currentProgram = MG_State::pGLContext->GetCurrentProgram();
+        const auto& currentProgram = MG_State::pGLContext->GetProgramForDraw();
         if (currentProgram->GetShaderIndexByStage(ShaderStage::Compute) < 0) {
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidOperation,
@@ -173,7 +173,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         // input primitive (GL 4.6 core 11.3.1); anything else is INVALID_OPERATION. GL_PATCHES
         // is the tessellation pipeline's input and reaches the geometry stage already
         // converted, so it is not constrained here.
-        const auto& currentProgram = MG_State::pGLContext->GetCurrentProgram();
+        const auto& currentProgram = MG_State::pGLContext->GetProgramForDraw();
         const GLenum gsInput = currentProgram ? currentProgram->GetGeometryInputType() : GL_NONE;
         if (gsInput != GL_NONE && mode != GL_PATCHES) {
             Bool compatible = false;
@@ -707,7 +707,7 @@ namespace MobileGL::MG_Impl::GLImpl {
                 MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__, "Transform feedback is already active."));
             return;
         }
-        const auto& program = MG_State::pGLContext->GetCurrentProgram();
+        const auto& program = MG_State::pGLContext->GetProgramForDraw();
         if (!program || !program->GetLinkStatus() || program->GetTransformFeedbackVaryingCount() == 0) {
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidOperation,

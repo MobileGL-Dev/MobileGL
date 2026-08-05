@@ -320,7 +320,7 @@ DECLARE_GL_FUNCTION_HEAD(void, GetProgramResourceiv, GLuint program, GLenum prog
 DECLARE_GL_FUNCTION_HEAD(GLint, GetProgramResourceLocation, GLuint program, GLenum programInterface, const GLchar* name) DECLARE_GL_FUNCTION_END(GLint, GetProgramResourceLocation, program, programInterface, name)
 DECLARE_GL_FUNCTION_HEAD(void, UseProgramStages, GLuint pipeline, GLbitfield stages, GLuint program) DECLARE_GL_FUNCTION_END_NO_RETURN(void, UseProgramStages, pipeline, stages, program)
 DECLARE_GL_FUNCTION_HEAD(void, ActiveShaderProgram, GLuint pipeline, GLuint program) DECLARE_GL_FUNCTION_END_NO_RETURN(void, ActiveShaderProgram, pipeline, program)
-DECLARE_GL_FUNCTION_STUB_HEAD(GLuint, CreateShaderProgramv, GLenum type, GLsizei count, const GLchar* const* strings) DECLARE_GL_FUNCTION_STUB_END(GLuint, CreateShaderProgramv, type, count, strings)
+DECLARE_GL_FUNCTION_HEAD(GLuint, CreateShaderProgramv, GLenum type, GLsizei count, const GLchar* const* strings) DECLARE_GL_FUNCTION_END(GLuint, CreateShaderProgramv, type, count, strings)
 DECLARE_GL_FUNCTION_HEAD(void, BindProgramPipeline, GLuint pipeline) DECLARE_GL_FUNCTION_END_NO_RETURN(void, BindProgramPipeline, pipeline)
 DECLARE_GL_FUNCTION_HEAD(void, DeleteProgramPipelines, GLsizei n, const GLuint* pipelines) DECLARE_GL_FUNCTION_END_NO_RETURN(void, DeleteProgramPipelines, n, pipelines)
 DECLARE_GL_FUNCTION_HEAD(void, GenProgramPipelines, GLsizei n, GLuint* pipelines) DECLARE_GL_FUNCTION_END_NO_RETURN(void, GenProgramPipelines, n, pipelines)

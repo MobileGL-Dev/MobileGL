@@ -4666,7 +4666,7 @@ void main() {
             snap.imageIndex != m_imageIndexAcquired) {
             return false;
         }
-        const auto& program = *MG_State::pGLContext->GetCurrentProgram();
+        const auto& program = *MG_State::pGLContext->GetProgramForDraw();
         if (program.GetLifetimeId() != snap.programLifetimeId ||
             program.GetBackendStateVersion() != snap.programVersion) {
             return false;
@@ -4792,7 +4792,7 @@ void main() {
             return false;
         }
         const auto& vao = *MG_State::pGLContext->GetBoundVertexArray();
-        const auto& program = *MG_State::pGLContext->GetCurrentProgram();
+        const auto& program = *MG_State::pGLContext->GetProgramForDraw();
         ProgramFactory::CompileOptionFlags transformFlags = GetShaderTransformFlags(m_swapchainObject.GetPreTransform());
         // Captured draws take the xfb-decorated program variant.
         if (m_transformFeedbackFeatureEnabled && MG_State::pGLContext->IsTransformFeedbackActive() &&
@@ -5176,7 +5176,7 @@ void main() {
     void VulkanRenderer::DispatchCompute(GLuint numGroupsX, GLuint numGroupsY, GLuint numGroupsZ) {
         m_textureManager->CollectGarbage();
         auto& frame = m_frameContext.GetCurrent();
-        const auto& program = *MG_State::pGLContext->GetCurrentProgram();
+        const auto& program = *MG_State::pGLContext->GetProgramForDraw();
         ProgramFactory::CompileOptionFlags transformFlags = 0;
         const auto& programObj = m_programFactory->GetOrCreateProgram(program, transformFlags);
 
@@ -5216,7 +5216,7 @@ void main() {
     void VulkanRenderer::DispatchComputeIndirect(GLintptr indirect) {
         m_textureManager->CollectGarbage();
         auto& frame = m_frameContext.GetCurrent();
-        const auto& program = *MG_State::pGLContext->GetCurrentProgram();
+        const auto& program = *MG_State::pGLContext->GetProgramForDraw();
         ProgramFactory::CompileOptionFlags transformFlags = 0;
         const auto& programObj = m_programFactory->GetOrCreateProgram(program, transformFlags);
 

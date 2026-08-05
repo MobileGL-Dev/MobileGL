@@ -753,7 +753,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 #ifdef TRACY_ENABLE
             ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
-            const auto& program = MG_State::pGLContext->GetCurrentProgram();
+            const auto& program = MG_State::pGLContext->GetProgramForDraw();
             if (!program) return;
 
             const auto& vao = MG_State::pGLContext->GetBoundVertexArray();
@@ -1377,7 +1377,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             g_backendProgramObjects.CollectGarbageIfNeeded();
             SamplerImpl::g_backendSamplerObjects.CollectGarbageIfNeeded();
 
-            auto& currentProgram = MG_State::pGLContext->GetCurrentProgram();
+            auto& currentProgram = MG_State::pGLContext->GetProgramForDraw();
             if (!currentProgram || !currentProgram->GetLinkStatus()) {
                 g_GLESFuncs.glUseProgram(0);
                 g_lastUsedBackendProgramId = 0;
@@ -1546,7 +1546,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // Frontend target the current program samples at a given unit; resolves an
         // aliased native binding when two real textures compete for it (see below).
         // Only consulted on a conflict, so the ordinary unit costs nothing.
-        const auto& currentProgram = MG_State::pGLContext->GetCurrentProgram();
+        const auto& currentProgram = MG_State::pGLContext->GetProgramForDraw();
         const auto sampledTargetForUnit = [&currentProgram](Int unit) {
             if (!currentProgram || !currentProgram->GetLinkStatus()) {
                 return TextureTarget::Unknown;
@@ -1679,7 +1679,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
     // this as much as draws do — e.g. Flywheel's cull shader reads the
     // _FlwFrameUniforms block and the _flw_depthPyramid sampler.
     static void BindCurrentProgramWithResources() {
-        const auto& currentProgram = MG_State::pGLContext->GetCurrentProgram();
+        const auto& currentProgram = MG_State::pGLContext->GetProgramForDraw();
         if (currentProgram && currentProgram->GetLinkStatus()) {
 #ifdef TRACY_ENABLE
             ZoneScopedNC("BindCurrentProgram", TRACY_ZONECOLOR_BACKEND);
@@ -1865,7 +1865,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
     }
 
     static SharedPtr<PrgramImpl::BackendProgramObjectImpl> GetCurrentBackendProgram() {
-        const auto& currentProgram = MG_State::pGLContext->GetCurrentProgram();
+        const auto& currentProgram = MG_State::pGLContext->GetProgramForDraw();
         if (!currentProgram || !currentProgram->GetLinkStatus()) {
             return nullptr;
         }
@@ -2012,7 +2012,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         TextureImpl::SyncImageTextureBindings();
         PrgramImpl::SyncCurrentProgram();
 
-        const auto& currentProgram = MG_State::pGLContext->GetCurrentProgram();
+        const auto& currentProgram = MG_State::pGLContext->GetProgramForDraw();
         if (!currentProgram || !currentProgram->GetLinkStatus()) {
             g_GLESFuncs.glUseProgram(0);
             PrgramImpl::g_lastUsedBackendProgramId = 0;

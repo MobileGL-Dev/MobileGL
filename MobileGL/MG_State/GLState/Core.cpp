@@ -343,6 +343,55 @@ namespace MobileGL::MG_State {
             return m_programState.GetCurrentProgram();
         }
 
+        const SharedPtr<ProgramObject>& GLContext::GetProgramForDraw() {
+            static const SharedPtr<ProgramObject> nullProgram = nullptr;
+            const auto& currentProgram = m_programState.GetCurrentProgram();
+            if (currentProgram) return currentProgram;
+            if (m_boundProgramPipeline == 0) return nullProgram;
+            const auto& pipeline = GetBoundProgramPipeline();
+            if (!pipeline) return nullProgram;
+
+            const auto signature = pipeline->ComputeDrawProgramSignature();
+            if (const auto& cached = pipeline->GetCachedDrawProgram(signature)) return cached;
+
+            // Everything downstream of here - the backends, the uniform plumbing, the draw
+            // validation - is written against a single linked program, so the pipeline is
+            // flattened into one. Each stage contributes only the shaders that serve it, so a
+            // program bound to two stages is not pulled in twice and a program bound to a
+            // stage it does not implement contributes nothing.
+            // Deliberately not a named program: it is reachable only through the pipeline, it
+            // must not answer glIsProgram, and it must not consume a name the application
+            // could otherwise be handed. Backend registries key on the object, not the name.
+            auto composite = MakeShared<ProgramObject>(0u);
+
+            Bool anyStage = false;
+            for (SizeT stage = 0; stage < static_cast<SizeT>(ShaderStage::ShaderStageCount); ++stage) {
+                const auto& stageProgram = pipeline->GetStageProgram(static_cast<ShaderStage>(stage));
+                if (!stageProgram) continue;
+                for (const auto& shader : stageProgram->GetAttachedShaders()) {
+                    if (!shader || static_cast<SizeT>(shader->GetShaderStage()) != stage) continue;
+                    composite->AttachShader(shader);
+                    anyStage = true;
+                }
+            }
+            if (!anyStage) return nullProgram;
+            // A pipeline with no fragment stage still rasterises, so the default fragment
+            // shader is wanted here even though the separable stage programs never get one.
+            composite->Link(true);
+            pipeline->SetCachedDrawProgram(signature, Move(composite));
+            return pipeline->GetCachedDrawProgram(signature);
+        }
+
+        const SharedPtr<ProgramObject>& GLContext::GetProgramForUniform() {
+            const auto& currentProgram = m_programState.GetCurrentProgram();
+            if (currentProgram) return currentProgram;
+            static const SharedPtr<ProgramObject> nullProgram = nullptr;
+            if (m_boundProgramPipeline == 0) return nullProgram;
+            const auto& pipeline = GetBoundProgramPipeline();
+            if (!pipeline) return nullProgram;
+            return pipeline->GetActiveProgram();
+        }
+
         // RenderState
         Uint GLContext::GetRenderStateParametersVersion() const {
             return m_renderState.GetVersion();
