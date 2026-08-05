@@ -625,8 +625,11 @@ namespace MobileGL::MG_Impl::GLImpl {
         const Int maxSamples = GetMaxRenderbufferSamples_State();
         if (samples > maxSamples) {
             // TODO: Use per-internalformat renderbuffer sample limits once glGetInternalformativ is backed.
+            // GL 4.6 core 9.2.4 makes asking for more samples than the format supports
+            // INVALID_OPERATION, not INVALID_VALUE - the count is well formed, this format just
+            // cannot deliver it. Only a negative count is INVALID_VALUE.
             MG_State::pGLContext->RecordError(
-                ErrorCode::InvalidValue,
+                ErrorCode::InvalidOperation,
                 MakeUnique<GenericErrorInfo>(
                     "MG_Impl/GLImpl", caller,
                     std::format("Sample count {} exceeds GL_MAX_SAMPLES ({}).", samples, maxSamples)));
