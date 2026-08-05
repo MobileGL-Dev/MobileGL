@@ -3736,15 +3736,22 @@ namespace MobileGL::MG_Impl::GLImpl {
             textureInternalFormat, MG_Util::ConvertGLEnumToTexturePixelDataType(realType));
 
         textureObject->SetInternalFormat(textureInternalFormat);
-        for (GLsizei level = 0; level < levels; ++level) {
-            const GLsizei levelWidth = std::max<GLsizei>(1, width >> level);
-            const GLsizei levelHeight = std::max<GLsizei>(1, height >> level);
-            const SizeT byteSize = static_cast<SizeT>(levelWidth) * static_cast<SizeT>(levelHeight) * bytesPerPixel;
-            textureMipmapObject->AllocateStorage(textureUploadTarget, level, {{levelWidth, levelHeight, 1}, byteSize});
-            textureMipmapObject->MarkStorageDirty(textureUploadTarget, level, false);
+        // A cube map has six upload targets and glTexStorage2D allocates all of them at once (GL 4.6
+        // core 8.19). Allocating only the primary one left the object cube-incomplete, so every
+        // framebuffer it was attached to reported GL_FRAMEBUFFER_INCOMPLETE_ATTACHMENT. Every other
+        // 2D target has exactly one upload target, so this loop is a no-op change for them.
+        for (const auto uploadTarget : textureObject->GetUploadTargets()) {
+            for (GLsizei level = 0; level < levels; ++level) {
+                const GLsizei levelWidth = std::max<GLsizei>(1, width >> level);
+                const GLsizei levelHeight = std::max<GLsizei>(1, height >> level);
+                const SizeT byteSize =
+                    static_cast<SizeT>(levelWidth) * static_cast<SizeT>(levelHeight) * bytesPerPixel;
+                textureMipmapObject->AllocateStorage(uploadTarget, level, {{levelWidth, levelHeight, 1}, byteSize});
+                textureMipmapObject->MarkStorageDirty(uploadTarget, level, false);
+            }
+            // See TextureStorage1D.
+            textureMipmapObject->TruncateMipmapLevels(uploadTarget, static_cast<Uint>(levels));
         }
-        // See TextureStorage1D.
-        textureMipmapObject->TruncateMipmapLevels(textureUploadTarget, static_cast<Uint>(levels));
         textureObject->SetImmutableLevels(static_cast<Uint>(levels));
     }
 
@@ -3875,9 +3882,19 @@ namespace MobileGL::MG_Impl::GLImpl {
 
     void TexStorage1D(GLenum target, GLsizei levels, GLenum internalformat, GLsizei width) {
         const auto textureTarget = MG_Util::ConvertGLEnumToTextureTarget(target);
-        const auto textureUploadTarget = MG_Util::ConvertGLEnumToTextureUploadTarget(target);
         if (!TextureImpl::ValidateTextureTarget(textureTarget)) return;
-        if (!TextureImpl::ValidateTextureUploadTarget(textureUploadTarget)) return;
+        // Not ValidateTextureUploadTarget: GL_TEXTURE_CUBE_MAP is a legal glTexStorage2D target but
+        // has no single upload target - it allocates all six faces - so validating one would reject
+        // it. The accepted set for this entry point is the dimension's storage targets, and the
+        // by-name form below does the per-face work.
+        if (!IsTextureStorageTargetForDimension(textureTarget, 1)) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidEnum,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
+                                             std::format("Target {} does not take 1D immutable storage.",
+                                                         MG_Util::ConvertGLEnumToString(target))));
+            return;
+        }
 
         auto& activeUnit = MG_State::pGLContext->GetTextureUnitObject(MG_State::pGLContext->GetActiveTextureUnit());
         auto& bindingSlot = activeUnit.GetBindingSlot(textureTarget);
@@ -3890,9 +3907,19 @@ namespace MobileGL::MG_Impl::GLImpl {
 
     void TexStorage2D(GLenum target, GLsizei levels, GLenum internalformat, GLsizei width, GLsizei height) {
         const auto textureTarget = MG_Util::ConvertGLEnumToTextureTarget(target);
-        const auto textureUploadTarget = MG_Util::ConvertGLEnumToTextureUploadTarget(target);
         if (!TextureImpl::ValidateTextureTarget(textureTarget)) return;
-        if (!TextureImpl::ValidateTextureUploadTarget(textureUploadTarget)) return;
+        // Not ValidateTextureUploadTarget: GL_TEXTURE_CUBE_MAP is a legal glTexStorage2D target but
+        // has no single upload target - it allocates all six faces - so validating one would reject
+        // it. The accepted set for this entry point is the dimension's storage targets, and the
+        // by-name form below does the per-face work.
+        if (!IsTextureStorageTargetForDimension(textureTarget, 2)) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidEnum,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
+                                             std::format("Target {} does not take 2D immutable storage.",
+                                                         MG_Util::ConvertGLEnumToString(target))));
+            return;
+        }
 
         auto& activeUnit = MG_State::pGLContext->GetTextureUnitObject(MG_State::pGLContext->GetActiveTextureUnit());
         auto& bindingSlot = activeUnit.GetBindingSlot(textureTarget);
@@ -3906,9 +3933,19 @@ namespace MobileGL::MG_Impl::GLImpl {
     void TexStorage3D(GLenum target, GLsizei levels, GLenum internalformat, GLsizei width, GLsizei height,
                       GLsizei depth) {
         const auto textureTarget = MG_Util::ConvertGLEnumToTextureTarget(target);
-        const auto textureUploadTarget = MG_Util::ConvertGLEnumToTextureUploadTarget(target);
         if (!TextureImpl::ValidateTextureTarget(textureTarget)) return;
-        if (!TextureImpl::ValidateTextureUploadTarget(textureUploadTarget)) return;
+        // Not ValidateTextureUploadTarget: GL_TEXTURE_CUBE_MAP is a legal glTexStorage2D target but
+        // has no single upload target - it allocates all six faces - so validating one would reject
+        // it. The accepted set for this entry point is the dimension's storage targets, and the
+        // by-name form below does the per-face work.
+        if (!IsTextureStorageTargetForDimension(textureTarget, 3)) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidEnum,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
+                                             std::format("Target {} does not take 3D immutable storage.",
+                                                         MG_Util::ConvertGLEnumToString(target))));
+            return;
+        }
 
         auto& activeUnit = MG_State::pGLContext->GetTextureUnitObject(MG_State::pGLContext->GetActiveTextureUnit());
         auto& bindingSlot = activeUnit.GetBindingSlot(textureTarget);

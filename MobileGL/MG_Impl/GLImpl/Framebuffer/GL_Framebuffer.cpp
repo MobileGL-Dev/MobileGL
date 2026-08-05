@@ -435,12 +435,36 @@ namespace MobileGL::MG_Impl::GLImpl {
             case TextureTarget::Texture2DMultisample:
                 outUploadTarget = TextureUploadTarget::Texture2DMultisample;
                 return true;
+            // Everything below attaches as a LAYERED attachment (GL 4.6 core 9.2.8): glFramebufferTexture
+            // on one of these binds the whole texture, not one image, and the upload target named here is
+            // only the representative the attachment model records - the first face for a cube map, the
+            // whole array otherwise. DirectGLES routes a layered attachment to glFramebufferTexture, which
+            // is exactly this.
             case TextureTarget::Texture2DArray:
                 outUploadTarget = TextureUploadTarget::Texture2DArray;
                 outLayered = true;
                 return true;
+            case TextureTarget::Texture1DArray:
+                outUploadTarget = TextureUploadTarget::Texture1DArray;
+                outLayered = true;
+                return true;
+            case TextureTarget::Texture2DMultisampleArray:
+                outUploadTarget = TextureUploadTarget::Texture2DMultisampleArray;
+                outLayered = true;
+                return true;
+            case TextureTarget::Texture3D:
+                outUploadTarget = TextureUploadTarget::Texture3D;
+                outLayered = true;
+                return true;
+            case TextureTarget::TextureCubeMap:
+                outUploadTarget = TextureUploadTarget::CubeMapPositiveX;
+                outLayered = true;
+                return true;
+            case TextureTarget::TextureCubeMapArray:
+                outUploadTarget = TextureUploadTarget::CubeMapArray;
+                outLayered = true;
+                return true;
             default:
-                // TODO: Extend layered framebuffer attachment support to 3D, cube, 1D array, and multisample array textures.
                 outUploadTarget = TextureUploadTarget::Unknown;
                 return false;
             }
