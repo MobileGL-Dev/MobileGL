@@ -1448,6 +1448,56 @@ namespace MobileGL::MG_Util::SelfTest {
                          "unavailable; shaders using gl_DrawID/gl_BaseInstance will not work");
         }
 
+        Bool provokingVertexLast = false;
+        Bool transformFeedbackPreservesProvokingVertex = false;
+        Bool provokingVertexModePerPipeline = false;
+        Bool transformFeedbackPreservesTriangleFanProvokingVertex = false;
+        if (vkGetPhysicalDeviceFeatures2Fn != nullptr &&
+            HasVkExtension(deviceExtensions, VK_EXT_PROVOKING_VERTEX_EXTENSION_NAME)) {
+            VkPhysicalDeviceProvokingVertexFeaturesEXT provokingVertexFeatures{};
+            provokingVertexFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROVOKING_VERTEX_FEATURES_EXT;
+            VkPhysicalDeviceFeatures2 features2{};
+            features2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+            features2.pNext = &provokingVertexFeatures;
+            vkGetPhysicalDeviceFeatures2Fn(physicalDevice, &features2);
+            provokingVertexLast = provokingVertexFeatures.provokingVertexLast == VK_TRUE;
+            transformFeedbackPreservesProvokingVertex =
+                provokingVertexFeatures.transformFeedbackPreservesProvokingVertex == VK_TRUE;
+            if (vkGetPhysicalDeviceProperties2Fn != nullptr) {
+                VkPhysicalDeviceProvokingVertexPropertiesEXT provokingVertexProperties{};
+                provokingVertexProperties.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROVOKING_VERTEX_PROPERTIES_EXT;
+                VkPhysicalDeviceProperties2 properties2{};
+                properties2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
+                properties2.pNext = &provokingVertexProperties;
+                vkGetPhysicalDeviceProperties2Fn(physicalDevice, &properties2);
+                provokingVertexModePerPipeline =
+                    provokingVertexProperties.provokingVertexModePerPipeline == VK_TRUE;
+                transformFeedbackPreservesTriangleFanProvokingVertex =
+                    provokingVertexProperties.transformFeedbackPreservesTriangleFanProvokingVertex == VK_TRUE;
+            }
+        }
+        if (provokingVertexLast) {
+            builder.Pass("provokingVertexLast",
+                         "supported; flat varyings take GL's last vertex and transform feedback records "
+                         "strip/fan triangles in GL's vertex order");
+        } else {
+            builder.Warn("provokingVertexLast",
+                         "unsupported; flat-shaded varyings take a primitive's first vertex instead of GL's "
+                         "last, and transform feedback records TRIANGLE_STRIP/TRIANGLE_FAN triangles rotated "
+                         "(e.g. 0,1,2 / 1,3,2 instead of 0,1,2 / 2,1,3)");
+        }
+        if (provokingVertexLast && !transformFeedbackPreservesProvokingVertex) {
+            builder.Warn("transformFeedbackPreservesProvokingVertex",
+                         "unsupported; the captured vertex order for strips/fans is not guaranteed by the "
+                         "spec even though the flat-shading convention is correct");
+        }
+        if (provokingVertexLast && transformFeedbackPreservesProvokingVertex &&
+            !transformFeedbackPreservesTriangleFanProvokingVertex && !provokingVertexModePerPipeline) {
+            builder.Warn("transformFeedbackPreservesTriangleFanProvokingVertex",
+                         "unsupported and per-pipeline modes unavailable; the transform-feedback "
+                         "provoking-vertex guarantee is left off so GL_TRIANGLE_FAN pipelines stay legal");
+        }
+
         Bool primitiveTopologyListRestart = false;
         if (vkGetPhysicalDeviceFeatures2Fn != nullptr &&
             HasVkExtension(deviceExtensions, VK_EXT_PRIMITIVE_TOPOLOGY_LIST_RESTART_EXTENSION_NAME)) {

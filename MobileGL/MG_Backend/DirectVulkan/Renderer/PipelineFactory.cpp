@@ -209,6 +209,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         XXHASH_VERIFY(XXH64_update(m_hashState, &payload.polygonMode, sizeof(payload.polygonMode)));
         XXHASH_VERIFY(XXH64_update(m_hashState, &payload.cullMode, sizeof(payload.cullMode)));
         XXHASH_VERIFY(XXH64_update(m_hashState, &payload.frontFace, sizeof(payload.frontFace)));
+        XXHASH_VERIFY(
+            XXH64_update(m_hashState, &payload.provokingVertexMode, sizeof(payload.provokingVertexMode)));
         XXHASH_VERIFY(XXH64_update(m_hashState, &payload.depthTestEnable, sizeof(payload.depthTestEnable)));
         XXHASH_VERIFY(XXH64_update(m_hashState, &payload.depthWriteEnable, sizeof(payload.depthWriteEnable)));
         XXHASH_VERIFY(XXH64_update(m_hashState, &payload.depthBiasEnable, sizeof(payload.depthBiasEnable)));
@@ -397,6 +399,17 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         raster.depthBiasEnable = payload.depthBiasEnable ? VK_TRUE : VK_FALSE;
         raster.rasterizerDiscardEnable = payload.rasterizerDiscardEnable ? VK_TRUE : VK_FALSE;
         raster.lineWidth = 1.0f;
+        // Only chain the struct when the mode is not Vulkan's implicit default: a device without
+        // VK_EXT_provoking_vertex enabled must never see this pNext entry, and the renderer's
+        // selector already collapses to FIRST in exactly that case - so a device without the
+        // extension produces a byte-identical VkGraphicsPipelineCreateInfo to before.
+        VkPipelineRasterizationProvokingVertexStateCreateInfoEXT provokingVertexState{
+            VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_PROVOKING_VERTEX_STATE_CREATE_INFO_EXT};
+        if (payload.provokingVertexMode != VK_PROVOKING_VERTEX_MODE_FIRST_VERTEX_EXT) {
+            provokingVertexState.provokingVertexMode = payload.provokingVertexMode;
+            provokingVertexState.pNext = raster.pNext;
+            raster.pNext = &provokingVertexState;
+        }
 
         VkPipelineMultisampleStateCreateInfo ms{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
         ms.rasterizationSamples = payload.rasterizationSamples;

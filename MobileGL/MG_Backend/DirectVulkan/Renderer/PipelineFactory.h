@@ -35,6 +35,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             VkPolygonMode polygonMode = VK_POLYGON_MODE_FILL;
             VkCullModeFlags cullMode = VK_CULL_MODE_BACK_BIT;
             VkFrontFace frontFace = VK_FRONT_FACE_CLOCKWISE;
+            // GL's provoking vertex, baked into the pipeline (VK_EXT_provoking_vertex). It selects
+            // which vertex a flat varying takes AND the vertex order transform feedback records for
+            // strips/fans, so it is part of the pipeline's identity, not dynamic state. Defaults to
+            // Vulkan's own convention, which is what a device without the extension gets.
+            VkProvokingVertexModeEXT provokingVertexMode = VK_PROVOKING_VERTEX_MODE_FIRST_VERTEX_EXT;
             Bool depthTestEnable = false;
             Bool depthWriteEnable = false;
             Bool depthBiasEnable = false;

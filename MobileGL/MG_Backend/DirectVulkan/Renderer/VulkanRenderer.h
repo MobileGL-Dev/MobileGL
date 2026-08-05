@@ -498,6 +498,30 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
         // VK_EXT_transform_feedback (GL transform feedback capture)
         Bool m_transformFeedbackFeatureEnabled = false;
+        // VK_EXT_provoking_vertex. Vulkan's built-in convention is "provoking vertex first"; GL's
+        // default is LAST_VERTEX_CONVENTION, and GL derives BOTH flat shading and the transform
+        // feedback vertex order from it. provokingVertexLast alone fixes flat shading and the
+        // input-assembler capture order and has no dependency on transform feedback; only
+        // transformFeedbackPreservesProvokingVertex does.
+        Bool m_provokingVertexLastEnabled = false;
+        // transformFeedbackPreservesProvokingVertex was actually enabled at device creation. Kept
+        // separate because it is the only thing that arms
+        // VUID-VkGraphicsPipelineCreateInfo-topology-04884, the rule that forbids a TRIANGLE_FAN
+        // pipeline from asking for LAST on a device that cannot preserve a fan's provoking vertex.
+        Bool m_provokingVertexXfbPreserveEnabled = false;
+        // provokingVertexModePerPipeline: when VK_FALSE every pipeline in one render pass instance
+        // must agree on the mode, so glProvokingVertex(GL_FIRST_VERTEX_CONVENTION) cannot be honoured
+        // per draw and every pipeline takes GL's default (LAST) instead.
+        Bool m_provokingVertexModePerPipeline = false;
+        // transformFeedbackPreservesTriangleFanProvokingVertex.
+        Bool m_provokingVertexFanPreserved = false;
+        // Per-pipeline provoking-vertex mode. capturesXfbFromGeometryStage must be a LINK-TIME
+        // property of the program, never the dynamic "is transform feedback active" flag: the
+        // 8-entry m_pipelineMemo and the SetupDrawSnapshot fast path key on programObj.hash and
+        // GetRenderStateParametersVersion(), neither of which moves when glBeginTransformFeedback is
+        // called, so a dynamic input here would hand back a stale VkPipeline.
+        VkProvokingVertexModeEXT SelectProvokingVertexMode(VkPrimitiveTopology topology,
+                                                          Bool capturesXfbFromGeometryStage) const;
         // VK_EXT_vertex_attribute_divisor: without it every non-zero glVertexAttribDivisor
         // behaves as 1, because that is all Vulkan's instance input rate can express.
         Bool m_vertexAttributeDivisorEnabled = false;

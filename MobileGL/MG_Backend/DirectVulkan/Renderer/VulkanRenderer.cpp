@@ -3694,6 +3694,13 @@ void main() {
             .topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
             .cullMode = VK_CULL_MODE_NONE,
             .frontFace = VK_FRONT_FACE_CLOCKWISE,
+            // Functionally irrelevant to the blit (no flat varying, no capture), but on a device with
+            // provokingVertexModePerPipeline == VK_FALSE a blit pipeline left on FIRST inside a render
+            // pass whose draw pipelines are LAST is an illegal mix. Note this does NOT cover
+            // GenerateDepthMipmapWithShader, which builds its pipeline directly and keeps Vulkan's
+            // FIRST - legal only because it creates and begins its own render pass. Anything that ever
+            // records that pipeline inside an outer render pass must route through this selector too.
+            .provokingVertexMode = SelectProvokingVertexMode(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST, false),
             .depthTestEnable = false,
             .depthWriteEnable = false,
             .depthCompareOp = VK_COMPARE_OP_ALWAYS,
@@ -4024,6 +4031,16 @@ void main() {
         return true;
     }
 
+    // A program that runs a geometry shader AND captures transform feedback. Both halves are
+    // link-time properties, so this is safe to fold into a pipeline keyed on the program hash.
+    static Bool ProgramCapturesXfbFromGeometryStage(const MG_State::GLState::ProgramObject& program) {
+        if (program.GetTransformFeedbackVaryingCount() == 0) return false;
+        for (const auto& shader : program.GetAttachedShaders()) {
+            if (shader && shader->GetShaderStage() == ShaderStage::Geometry) return true;
+        }
+        return false;
+    }
+
     VkPipeline VulkanRenderer::GetOrCreatePipeline(
             GLenum mode,
             const MG_State::GLState::ProgramObject& program,
@@ -4242,6 +4259,16 @@ void main() {
                 ? MG_Util::ConvertCullFaceModeToVkEnum(MG_State::pGLContext->GetCullFaceMode(), invertClockwise)
                 : VK_CULL_MODE_NONE,
             .frontFace = VK_FRONT_FACE_CLOCKWISE,
+            // Read the geometry stage off the program's own shader list rather than
+            // programObj.rasterizationProducerStage: that field is filled by the clip-fixup analysis,
+            // which does not run for every program, so it reads Unknown for exactly the
+            // geometry-plus-capture programs this guard exists to catch. Both inputs are link-time
+            // facts folded into programObj.hash, which is what the pipeline memo and the
+            // SetupDrawSnapshot fast path key on - so no memo can hand back a pipeline built for the
+            // other mode. IsTransformFeedbackActive() would be a live bug here: neither memo key
+            // moves on glBeginTransformFeedback.
+            .provokingVertexMode = SelectProvokingVertexMode(
+                vkTopology, ProgramCapturesXfbFromGeometryStage(program)),
             .depthTestEnable = depthTestEnabled,
             .depthWriteEnable = depthTestEnabled && MG_State::pGLContext->GetDepthMask(),
             .depthBiasEnable = polygonOffsetFillEnabled,
@@ -9279,6 +9306,41 @@ void main() {
         }
     }
 
+    VkProvokingVertexModeEXT VulkanRenderer::SelectProvokingVertexMode(VkPrimitiveTopology topology,
+                                                                       Bool capturesXfbFromGeometryStage) const {
+        if (!m_provokingVertexLastEnabled) {
+            return VK_PROVOKING_VERTEX_MODE_FIRST_VERTEX_EXT;
+        }
+        // Measured, and identical on lavapipe and on the NVIDIA Vulkan driver: a geometry shader's
+        // emitted triangle strip is already recorded in GL's provoking-last vertex order, so asking
+        // for LAST rotates it a second time. The input-assembler path has the opposite problem, and
+        // the mode is a single pipeline bit, so the two cannot be satisfied at once: a program that
+        // both runs a geometry shader and captures transform feedback keeps Vulkan's own convention,
+        // and pays for it with a GL-wrong flat vertex in that one case. Deliberately a link-time
+        // program property, not IsTransformFeedbackActive() - see the memo note in the header.
+        if (capturesXfbFromGeometryStage) {
+            return VK_PROVOKING_VERTEX_MODE_FIRST_VERTEX_EXT;
+        }
+        // VUID-VkGraphicsPipelineCreateInfo-topology-04884 only bites when
+        // transformFeedbackPreservesProvokingVertex is enabled; when it is not, a fan may take LAST.
+        if (m_provokingVertexXfbPreserveEnabled && topology == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_FAN &&
+            !m_provokingVertexFanPreserved) {
+            return VK_PROVOKING_VERTEX_MODE_FIRST_VERTEX_EXT;
+        }
+        // Only provokingVertexModePerPipeline lets modes differ inside one render pass instance;
+        // elsewhere every pipeline takes GL's default so the render pass stays self-consistent, and
+        // glProvokingVertex(GL_FIRST_VERTEX_CONVENTION) goes unhonoured. Honouring it there would
+        // mean ending the render pass on every glProvokingVertex change; not worth it until a target
+        // device actually lacks the property.
+        if (!m_provokingVertexModePerPipeline) {
+            return VK_PROVOKING_VERTEX_MODE_LAST_VERTEX_EXT;
+        }
+        return (MG_State::pGLContext != nullptr &&
+                MG_State::pGLContext->GetProvokingVertexMode() == ProvokingVertexMode::FirstVertex)
+                   ? VK_PROVOKING_VERTEX_MODE_FIRST_VERTEX_EXT
+                   : VK_PROVOKING_VERTEX_MODE_LAST_VERTEX_EXT;
+    }
+
     Bool VulkanRenderer::IsTimerQuerySupported() const {
         return m_timerQuerySupported && m_timerQueryManager != nullptr;
     }
@@ -10111,6 +10173,79 @@ void main() {
                 MGLOG_I("Enabled optional device extension: %s", VK_EXT_TRANSFORM_FEEDBACK_EXTENSION_NAME);
             }
         }
+        // VK_EXT_provoking_vertex. Two independent features live behind one extension:
+        //   provokingVertexLast                       -> flat varyings, gl_Layer/gl_ViewportIndex and
+        //                                                the input-assembler capture order.
+        //   transformFeedbackPreservesProvokingVertex -> spec-level guarantee for the capture order;
+        //                                                only legal when the transformFeedback
+        //                                                feature is also enabled, which is why this
+        //                                                block sits after the one above.
+        // They are enabled independently on purpose: gating the first on the second would leave flat
+        // shading GL-wrong on any device without VK_EXT_transform_feedback, for no legality reason.
+        m_provokingVertexLastEnabled = false;
+        m_provokingVertexXfbPreserveEnabled = false;
+        m_provokingVertexModePerPipeline = false;
+        m_provokingVertexFanPreserved = false;
+        VkPhysicalDeviceProvokingVertexFeaturesEXT provokingVertexFeatures{};
+        provokingVertexFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROVOKING_VERTEX_FEATURES_EXT;
+        if (IsExtensionSupported(availableExtensions, VK_EXT_PROVOKING_VERTEX_EXTENSION_NAME) &&
+            getPhysicalDeviceFeatures2 != nullptr) {
+            VkPhysicalDeviceFeatures2 featureQuery{};
+            featureQuery.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+            featureQuery.pNext = &provokingVertexFeatures;
+            getPhysicalDeviceFeatures2(m_physicalDevice.handle, &featureQuery);
+
+            VkPhysicalDeviceProvokingVertexPropertiesEXT provokingVertexProperties{};
+            provokingVertexProperties.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROVOKING_VERTEX_PROPERTIES_EXT;
+            auto getPhysicalDeviceProperties2 = reinterpret_cast<PFN_vkGetPhysicalDeviceProperties2>(
+                vkGetInstanceProcAddr(m_instance, "vkGetPhysicalDeviceProperties2"));
+            if (getPhysicalDeviceProperties2 == nullptr) {
+                getPhysicalDeviceProperties2 = reinterpret_cast<PFN_vkGetPhysicalDeviceProperties2>(
+                    vkGetInstanceProcAddr(m_instance, "vkGetPhysicalDeviceProperties2KHR"));
+            }
+            if (getPhysicalDeviceProperties2 != nullptr) {
+                VkPhysicalDeviceProperties2 propertyQuery{};
+                propertyQuery.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
+                propertyQuery.pNext = &provokingVertexProperties;
+                getPhysicalDeviceProperties2(m_physicalDevice.handle, &propertyQuery);
+            }
+            m_provokingVertexModePerPipeline = provokingVertexProperties.provokingVertexModePerPipeline == VK_TRUE;
+            m_provokingVertexFanPreserved =
+                provokingVertexProperties.transformFeedbackPreservesTriangleFanProvokingVertex == VK_TRUE;
+
+            if (provokingVertexFeatures.provokingVertexLast == VK_TRUE) {
+                // transformFeedbackPreservesProvokingVertex is deliberately NOT requested. Measured:
+                // asking for it regresses transform_feedback.geometry on GL33 through GL45. A
+                // geometry shader emits its triangles already in GL's vertex order, and the pipeline
+                // that captures them runs on FIRST (see SelectProvokingVertexMode); without the
+                // guarantee the driver leaves that stream alone, but with it the capture is forced to
+                // follow the pipeline's FIRST convention and comes back rotated. The guarantee buys
+                // nothing here either - the input-assembler capture order that
+                // direct_state_access.queries_functional needs comes from provokingVertexLast alone,
+                // which was confirmed by measurement. Leaving it off also keeps VU 04884 disarmed, so
+                // a TRIANGLE_FAN pipeline may take LAST on any device.
+                const Bool wantXfbPreserve = false;
+
+                if (!IsExtensionAlreadyEnabled(enabledDeviceExtensions, VK_EXT_PROVOKING_VERTEX_EXTENSION_NAME)) {
+                    enabledDeviceExtensions.push_back(VK_EXT_PROVOKING_VERTEX_EXTENSION_NAME);
+                }
+                provokingVertexFeatures.provokingVertexLast = VK_TRUE;
+                provokingVertexFeatures.transformFeedbackPreservesProvokingVertex =
+                    wantXfbPreserve ? VK_TRUE : VK_FALSE;
+                provokingVertexFeatures.pNext = const_cast<void*>(deviceCreateInfo.pNext);
+                deviceCreateInfo.pNext = &provokingVertexFeatures;
+                m_provokingVertexLastEnabled = true;
+                m_provokingVertexXfbPreserveEnabled = wantXfbPreserve;
+                MGLOG_I("Enabled optional device extension: %s (transformFeedbackPreservesProvokingVertex=%s)",
+                        VK_EXT_PROVOKING_VERTEX_EXTENSION_NAME, wantXfbPreserve ? "true" : "false");
+            }
+        }
+        if (!m_provokingVertexLastEnabled) {
+            MGLOG_W("VK_EXT_provoking_vertex is unavailable; flat-shaded varyings take a primitive's first "
+                    "vertex instead of GL's last, and transform feedback records TRIANGLE_STRIP/TRIANGLE_FAN "
+                    "triangles rotated (0,1,2 / 1,3,2 instead of 0,1,2 / 2,1,3)");
+        }
+
         if (!m_transformFeedbackFeatureEnabled) {
             MGLOG_W("VK_EXT_transform_feedback is unavailable; transform feedback capture will not work");
         }
