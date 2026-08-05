@@ -1159,6 +1159,50 @@ namespace MobileGL::MG_Impl::GLImpl {
         GenerateMipmap_Backend(target);
     }
 
+    // GL 4.6 core 8.5: sourcing an upload from a bound PIXEL_UNPACK_BUFFER adds three
+    // INVALID_OPERATION conditions that do not exist for client memory. `pixels` is a byte offset
+    // into that buffer, not a pointer. Returns true when no unpack buffer is bound, so every caller
+    // can run it unconditionally.
+    Bool ValidatePixelUnpackBufferSource(const void* pixels, TextureInputFormat inputFormat,
+                                         TexturePixelDataType dataType, IntVec3 dimension, const char* caller) {
+        const auto& unpackBuffer =
+            MG_State::pGLContext->GetBufferBindingSlot(BufferTarget::PixelUnpack).GetBoundObject();
+        if (!unpackBuffer) return true;
+
+        // Persistent mappings remain legal transfer sources, as on the pack side in ReadPixels.
+        if (unpackBuffer->IsMapped() && !(unpackBuffer->GetMappingAccess() & BufferMappingAccessBit::Persistent)) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidOperation,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller, "Pixel unpack buffer is currently mapped."));
+            return false;
+        }
+
+        const SizeT offset = reinterpret_cast<SizeT>(pixels);
+        const SizeT typeSize = MG_Util::GetTexturePixelDataTypeSize(dataType);
+        if (typeSize != 0 && (offset % typeSize) != 0) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidOperation,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller,
+                                             "Pixel unpack buffer offset must be a multiple of the size of a datum "
+                                             "of the given type."));
+            return false;
+        }
+
+        // The tightly packed span is the smallest the unpack can read, so a request that overruns
+        // even this one certainly overruns the store; pixel store parameters only ever widen it.
+        const SizeT bufferSize = unpackBuffer->GetSize();
+        const SizeT required = MG_Util::CalculateInputTextureImageSize(inputFormat, dataType, dimension);
+        if (offset > bufferSize || required > bufferSize - offset) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidOperation,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller,
+                                             "Unpacking would read past the end of the pixel unpack buffer."));
+            return false;
+        }
+
+        return true;
+    }
+
     void TexSubImage3D_State(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLint zoffset, GLsizei width,
                              GLsizei height, GLsizei depth, GLenum format, GLenum type, const void* pixels) {
         TextureUploadTarget textureUploadTarget = MG_Util::ConvertGLEnumToTextureUploadTarget(target);
@@ -1183,6 +1227,9 @@ namespace MobileGL::MG_Impl::GLImpl {
             return;
         if (!TextureImpl::ValidateTextureInternalFormatCompatibleWithInput(textureInputFormat, textureObject->GetFormat(),
                                                                            texturePixelDataType))
+            return;
+        if (!ValidatePixelUnpackBufferSource(pixels, textureInputFormat, texturePixelDataType, {width, height, depth},
+                                             __func__))
             return;
 
         MOBILEGL_ASSERT(nullptr != static_cast<MG_State::GLState::TextureObjectMipmap*>(textureObject.get()),
@@ -1276,13 +1323,9 @@ namespace MobileGL::MG_Impl::GLImpl {
         if (!TextureImpl::ValidateTextureSizeRange(width, height, 1)) return;
         if (!TextureImpl::ValidateTextureLevelWithUploadTarget(textureUploadTarget, level)) return;
 
-        // TODO: GL_INVALID_OPERATION is generated if a non-zero buffer object name is bound to the
-        // GL_PIXEL_UNPACK_BUFFER target and the buffer object's data store is currently mapped.
-        // GL_INVALID_OPERATION is generated if a non-zero buffer object name is bound to the
-        // GL_PIXEL_UNPACK_BUFFER target and the data would be unpacked from the buffer object such that the
-        // memory reads required would exceed the data store size. GL_INVALID_OPERATION is generated if a
-        // non-zero buffer object name is bound to the GL_PIXEL_UNPACK_BUFFER target and data is not evenly
-        // divisible into the number of bytes needed to store in memory a datum indicated by type.
+        if (!ValidatePixelUnpackBufferSource(pixels, textureInputFormat, texturePixelDataType, {width, height, 1},
+                                             __func__))
+            return;
 
         // ======================= Processing ================================
         auto& activeUnit = MG_State::pGLContext->GetTextureUnitObject(MG_State::pGLContext->GetActiveTextureUnit());
@@ -1400,6 +1443,8 @@ namespace MobileGL::MG_Impl::GLImpl {
         if (!TextureImpl::ValidateTextureSubImageOffsets(textureObject, xoffset, width)) return;
         if (!TextureImpl::ValidateTextureInternalFormatCompatibleWithInput(textureInputFormat, textureObject->GetFormat(),
                                                                            texturePixelDataType))
+            return;
+        if (!ValidatePixelUnpackBufferSource(pixels, textureInputFormat, texturePixelDataType, {width, 1, 1}, __func__))
             return;
 
         MOBILEGL_ASSERT(nullptr != static_cast<MG_State::GLState::TextureObjectMipmap*>(textureObject.get()),
@@ -3857,6 +3902,11 @@ namespace MobileGL::MG_Impl::GLImpl {
             return;
         }
         if (!TextureImpl::ValidateTextureSubImageOffsets(textureObject, xoffset, width, yoffset, height)) return;
+        // This entry point does not go through TexSubImage2D_State, so it needs the unpack-buffer
+        // rules of its own.
+        if (!ValidatePixelUnpackBufferSource(pixels, textureInputFormat, texturePixelDataType, {width, height, 1},
+                                             __func__))
+            return;
 
         const void* originalPixels = pixels;
         const auto& pixelUnpackBufferObject =
