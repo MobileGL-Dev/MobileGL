@@ -1235,10 +1235,20 @@ void main() {
 
         static Uint32 ResolveAttachmentBaseArrayLayer(const MG_State::GLState::FramebufferAttachmentObject& attachment) {
             const TextureUploadTarget uploadTarget = attachment.GetTextureUploadTarget();
-            if (!IsCubeMapFaceUploadTarget(uploadTarget)) {
-                return 0;
+            if (IsCubeMapFaceUploadTarget(uploadTarget)) {
+                return static_cast<Uint32>(uploadTarget) - static_cast<Uint32>(TextureUploadTarget::CubeMapPositiveX);
             }
-            return static_cast<Uint32>(uploadTarget) - static_cast<Uint32>(TextureUploadTarget::CubeMapPositiveX);
+            // Every other layered attachment names its layer directly. Returning 0 regardless made
+            // every blit, copy and ReadPixels against such an attachment read layer zero.
+            return static_cast<Uint32>(std::max(attachment.GetTextureLayer(), 0));
+        }
+
+        // A 3D image has arrayLayers == 1: its "layer" is a z slice, which has to travel as an
+        // image offset rather than a base array layer (VkBufferImageCopy requires baseArrayLayer 0
+        // for VK_IMAGE_TYPE_3D).
+        static Bool AttachmentIsDepthSlice(const MG_State::GLState::FramebufferAttachmentObject& attachment) {
+            return attachment.IsTexture() && attachment.GetTexture() &&
+                   attachment.GetTexture()->GetTarget() == TextureTarget::Texture3D;
         }
 
         enum class BlitSurfaceTransform : Uint32 {
@@ -1259,6 +1269,8 @@ void main() {
             Uint32 mipLevelCount = 1;
             Uint32 baseArrayLayer = 0;
             Uint32 layerCount = 1;
+            // z slice for a VK_IMAGE_TYPE_3D source; array attachments use baseArrayLayer instead.
+            Uint32 depthOffset = 0;
             const char* label = nullptr;
         };
 
@@ -1490,7 +1502,12 @@ void main() {
             outBinding.extent = {attachmentExtent.x(), attachmentExtent.y()};
             outBinding.mipLevel = static_cast<Uint32>(std::max(attachment.GetTextureLevel(), 0));
             outBinding.mipLevelCount = resource->mipLevels;
-            outBinding.baseArrayLayer = ResolveAttachmentBaseArrayLayer(attachment);
+            if (AttachmentIsDepthSlice(attachment)) {
+                outBinding.depthOffset = static_cast<Uint32>(std::max(attachment.GetTextureLayer(), 0));
+                outBinding.baseArrayLayer = 0;
+            } else {
+                outBinding.baseArrayLayer = ResolveAttachmentBaseArrayLayer(attachment);
+            }
             outBinding.layerCount = 1;
             return true;
         }
@@ -1601,7 +1618,12 @@ void main() {
             outBinding.extent = {attachmentExtent.x(), attachmentExtent.y()};
             outBinding.mipLevel = static_cast<Uint32>(std::max(attachment.GetTextureLevel(), 0));
             outBinding.mipLevelCount = resource->mipLevels;
-            outBinding.baseArrayLayer = ResolveAttachmentBaseArrayLayer(attachment);
+            if (AttachmentIsDepthSlice(attachment)) {
+                outBinding.depthOffset = static_cast<Uint32>(std::max(attachment.GetTextureLayer(), 0));
+                outBinding.baseArrayLayer = 0;
+            } else {
+                outBinding.baseArrayLayer = ResolveAttachmentBaseArrayLayer(attachment);
+            }
             outBinding.layerCount = 1;
             return true;
         }
@@ -1745,7 +1767,12 @@ void main() {
             outBinding.extent = {attachmentExtent.x(), attachmentExtent.y()};
             outBinding.mipLevel = static_cast<Uint32>(std::max(attachment.GetTextureLevel(), 0));
             outBinding.mipLevelCount = 1;
-            outBinding.baseArrayLayer = ResolveAttachmentBaseArrayLayer(attachment);
+            if (AttachmentIsDepthSlice(attachment)) {
+                outBinding.depthOffset = static_cast<Uint32>(std::max(attachment.GetTextureLayer(), 0));
+                outBinding.baseArrayLayer = 0;
+            } else {
+                outBinding.baseArrayLayer = ResolveAttachmentBaseArrayLayer(attachment);
+            }
             outBinding.layerCount = 1;
             return true;
         }
@@ -7176,7 +7203,7 @@ void main() {
         copyRegion.imageSubresource.mipLevel = srcBinding.mipLevel;
         copyRegion.imageSubresource.baseArrayLayer = srcBinding.baseArrayLayer;
         copyRegion.imageSubresource.layerCount = 1;
-        copyRegion.imageOffset = {x, y, 0};
+        copyRegion.imageOffset = {x, y, static_cast<Int32>(srcBinding.depthOffset)};
         copyRegion.imageExtent = {static_cast<Uint32>(width), static_cast<Uint32>(height), 1};
         vkCmdCopyImageToBuffer(frame.commandBuffer, srcBinding.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                                readback.GetHandle(), 1, &copyRegion);
