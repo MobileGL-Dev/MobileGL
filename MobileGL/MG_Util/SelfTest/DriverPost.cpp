@@ -298,6 +298,17 @@ namespace MobileGL::MG_Util::SelfTest {
                              "not supported; no impact: the native indirect path deliberately does not "
                              "rely on it (shader-side emulation handles baseInstance semantics)");
             }
+            if (caps.SupportsTextureBorderClamp) {
+                builder.Pass("Texture border clamp",
+                             "supported (GL_TEXTURE_BORDER_COLOR reaches the driver, so "
+                             "GL_CLAMP_TO_BORDER samples the colour the application set)");
+            } else {
+                builder.Warn("Texture border clamp",
+                             "not supported (pre-ES 3.2 without GL_EXT/OES_texture_border_clamp); "
+                             "GL_TEXTURE_BORDER_COLOR is not synced to the driver at all, so anything "
+                             "sampling outside a GL_CLAMP_TO_BORDER texture reads the driver's default "
+                             "border instead of the requested colour");
+            }
             if (glesFuncs.glPatchParameteri != nullptr) {
                 builder.Pass("Tessellation patch parameters",
                              "glPatchParameteri present (GL_PATCH_VERTICES reaches the driver)");

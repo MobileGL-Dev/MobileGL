@@ -2479,7 +2479,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 });
             }
 
-            if (!isMultisampleTarget && m_cacheBorderColor != stateTextureObject->GetBorderColor()) {
+            // GL_TEXTURE_BORDER_COLOR needs ES 3.2 or EXT/OES_texture_border_clamp; on a driver
+            // without it every such call is INVALID_ENUM, so the parameter is simply not synced.
+            if (!isMultisampleTarget && g_GLESCapabilities.SupportsTextureBorderClamp &&
+                m_cacheBorderColor != stateTextureObject->GetBorderColor()) {
                 const auto& borderColor = stateTextureObject->GetBorderColor();
                 GLfloat borderColorArray[4] = {borderColor.x(), borderColor.y(), borderColor.z(), borderColor.w()};
                 g_GLESFuncs.glTexParameterfv(target, GL_TEXTURE_BORDER_COLOR, borderColorArray);
@@ -3754,6 +3757,16 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                                     samplerParams.maxAnisotropy);
                 }
                 m_cacheSamplerParameters.maxAnisotropy = samplerParams.maxAnisotropy;
+            }
+            if (m_cacheSamplerParameters.borderColor != samplerParams.borderColor) {
+                // Same gate as the texture-side border colour above.
+                if (g_GLESCapabilities.SupportsTextureBorderClamp && g_GLESFuncs.glSamplerParameterfv) {
+                    const GLfloat borderColorArray[4] = {
+                        samplerParams.borderColor.x(), samplerParams.borderColor.y(),
+                        samplerParams.borderColor.z(), samplerParams.borderColor.w()};
+                    g_GLESFuncs.glSamplerParameterfv(m_backendSamplerId, GL_TEXTURE_BORDER_COLOR, borderColorArray);
+                }
+                m_cacheSamplerParameters.borderColor = samplerParams.borderColor;
             }
 #undef SYNC_SAMPLER_PARAM_IF_CHANGED
             m_isInitialized = true;

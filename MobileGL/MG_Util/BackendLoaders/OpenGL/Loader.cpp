@@ -833,6 +833,10 @@ namespace MobileGL::MG_Util::BackendLoader {
                 if (std::strcmp(extension, "GL_EXT_texture_filter_anisotropic") == 0) {
                     caps.SupportsTextureFilterAnisotropy = true;
                 }
+                if (std::strcmp(extension, "GL_EXT_texture_border_clamp") == 0 ||
+                    std::strcmp(extension, "GL_OES_texture_border_clamp") == 0) {
+                    caps.SupportsTextureBorderClamp = true;
+                }
                 if (std::strcmp(extension, "GL_EXT_base_instance") == 0) {
                     caps.SupportsBaseInstance = true;
                 }
@@ -1014,6 +1018,10 @@ namespace MobileGL::MG_Util::BackendLoader {
         }
         // Only legal to query once the extension has been seen in the loop above, hence not batched
         // with the unconditional probes: on a driver without it this raises GL_INVALID_ENUM.
+        // Core from ES 3.2 on, whatever the extension string says.
+        if (caps.GLESVersion.Major > 3 || (caps.GLESVersion.Major == 3 && caps.GLESVersion.Minor >= 2)) {
+            caps.SupportsTextureBorderClamp = true;
+        }
         if (caps.SupportsTextureFilterAnisotropy) {
             GLfloat maxTextureMaxAnisotropy = 1.0f;
             glesFuncs.glGetFloatv(GL_MAX_TEXTURE_MAX_ANISOTROPY_EXT, &maxTextureMaxAnisotropy);

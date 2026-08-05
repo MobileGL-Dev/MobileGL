@@ -8,6 +8,7 @@
 
 #pragma once
 #include <Includes.h>
+#include <MG_Util/Math/VectorTypes.h>
 
 namespace MobileGL {
     enum class SamplerFilterMode {
@@ -70,6 +71,14 @@ namespace MobileGL {
         // for both sampler objects and the sampler state a texture object carries.
         SamplerCompareFunc compareFunc = SamplerCompareFunc::LessEqual;
         SamplerCompareMode compareMode = SamplerCompareMode::None;
+        // TEXTURE_BORDER_COLOR is sampler state (GL 4.6 core table 23.18), so it belongs here and
+        // not on the texture - a texture object reaches it through the sampler object it owns. The
+        // three representations are the float, integer and unsigned-integer forms glSamplerParameterfv,
+        // glSamplerParameterIiv and glSamplerParameterIuiv set; whichever is written last defines
+        // the colour and the other two follow it, so a getter always has an answer.
+        FloatVec4 borderColor = {0.0f, 0.0f, 0.0f, 0.0f};
+        IntVec4 borderColorI = {0, 0, 0, 0};
+        UintVec4 borderColorUI = {0, 0, 0, 0};
     };
 
     namespace MG_State {
@@ -89,6 +98,9 @@ namespace MobileGL {
                 void SetMaxAnisotropy(Float maxAnisotropy);
                 void SetSamplerCompareFunc(SamplerCompareFunc func);
                 void SetCompareMode(SamplerCompareMode mode);
+                void SetBorderColor(const FloatVec4& color);
+                void SetBorderColorI(const IntVec4& color);
+                void SetBorderColorUI(const UintVec4& color);
 
                 SamplerWrapMode GetWrapS() const;
                 SamplerWrapMode GetWrapT() const;
@@ -102,6 +114,9 @@ namespace MobileGL {
                 Float GetMaxAnisotropy() const;
                 SamplerCompareMode GetCompareMode() const;
                 SamplerCompareFunc GetSamplerCompareFunc() const;
+                const FloatVec4& GetBorderColor() const;
+                const IntVec4& GetBorderColorI() const;
+                const UintVec4& GetBorderColorUI() const;
                 Uint GetExternalIndex() const;
                 Uint16 GetVersion() const;
                 // Globally-unique, never-reused id for this sampler object's lifetime. Lets a

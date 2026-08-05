@@ -139,6 +139,61 @@ namespace MobileGL {
                 return m_samplerParameters.maxAnisotropy;
             }
 
+            // The three border-colour representations are kept in step so a getter of any form has
+            // an answer whichever form was written. Integer <-> float uses the plain value, matching
+            // what glTexParameterIiv/Iuiv mean: those forms are for integer texture formats, whose
+            // border components are the raw integers rather than a normalized fraction.
+            void SamplerObject::SetBorderColor(const FloatVec4& color) {
+                if (color == m_samplerParameters.borderColor) return;
+
+                m_samplerParameters.borderColor = color;
+                m_samplerParameters.borderColorI =
+                    IntVec4(static_cast<Int32>(color.x()), static_cast<Int32>(color.y()),
+                            static_cast<Int32>(color.z()), static_cast<Int32>(color.w()));
+                m_samplerParameters.borderColorUI =
+                    UintVec4(static_cast<Uint32>(color.x()), static_cast<Uint32>(color.y()),
+                             static_cast<Uint32>(color.z()), static_cast<Uint32>(color.w()));
+                ++m_version;
+            }
+
+            void SamplerObject::SetBorderColorI(const IntVec4& color) {
+                if (color == m_samplerParameters.borderColorI) return;
+
+                m_samplerParameters.borderColorI = color;
+                m_samplerParameters.borderColorUI =
+                    UintVec4(static_cast<Uint32>(color.x()), static_cast<Uint32>(color.y()),
+                             static_cast<Uint32>(color.z()), static_cast<Uint32>(color.w()));
+                m_samplerParameters.borderColor =
+                    FloatVec4(static_cast<Float>(color.x()), static_cast<Float>(color.y()),
+                              static_cast<Float>(color.z()), static_cast<Float>(color.w()));
+                ++m_version;
+            }
+
+            void SamplerObject::SetBorderColorUI(const UintVec4& color) {
+                if (color == m_samplerParameters.borderColorUI) return;
+
+                m_samplerParameters.borderColorUI = color;
+                m_samplerParameters.borderColorI =
+                    IntVec4(static_cast<Int32>(color.x()), static_cast<Int32>(color.y()),
+                            static_cast<Int32>(color.z()), static_cast<Int32>(color.w()));
+                m_samplerParameters.borderColor =
+                    FloatVec4(static_cast<Float>(color.x()), static_cast<Float>(color.y()),
+                              static_cast<Float>(color.z()), static_cast<Float>(color.w()));
+                ++m_version;
+            }
+
+            const FloatVec4& SamplerObject::GetBorderColor() const {
+                return m_samplerParameters.borderColor;
+            }
+
+            const IntVec4& SamplerObject::GetBorderColorI() const {
+                return m_samplerParameters.borderColorI;
+            }
+
+            const UintVec4& SamplerObject::GetBorderColorUI() const {
+                return m_samplerParameters.borderColorUI;
+            }
+
             SamplerCompareMode SamplerObject::GetCompareMode() const {
                 return m_samplerParameters.compareMode;
             }

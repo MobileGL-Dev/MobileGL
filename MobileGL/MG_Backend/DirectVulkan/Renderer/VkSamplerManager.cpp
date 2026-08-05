@@ -287,7 +287,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             return VK_BORDER_COLOR_FLOAT_TRANSPARENT_BLACK;
         }
 
-        const auto& borderColor = texture.GetBorderColor();
+        // Border colour is sampler state: a bound sampler object supplies its own, and a texture
+        // with none reaches the very same value through the sampler object it owns.
+        const auto& borderColor = sampler.GetBorderColor();
         const Bool isDepthTexture = IsDepthTextureFormat(texture.GetFormat());
 
         if (isDepthTexture) {

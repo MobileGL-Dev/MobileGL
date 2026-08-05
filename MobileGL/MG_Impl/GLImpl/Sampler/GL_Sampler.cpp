@@ -28,6 +28,11 @@ namespace MobileGL::MG_Impl::GLImpl {
             case GL_TEXTURE_MAX_LOD:
             case GL_TEXTURE_LOD_BIAS:
                 return true;
+            // Four components, and GL puts no range on them - a border colour outside [0,1] is
+            // clamped when a fixed-point format is sampled, not rejected here. The scalar readers
+            // below would look at one component and invent an error.
+            case GL_TEXTURE_BORDER_COLOR:
+                return true;
             case GL_TEXTURE_MAX_ANISOTROPY_EXT:
                 if (ReadSamplerScalar(param, isFloat, isUnsignedInteger) >= 1.0f) return true;
                 MG_State::pGLContext->RecordError(
@@ -99,6 +104,20 @@ namespace MobileGL::MG_Impl::GLImpl {
         case GL_TEXTURE_COMPARE_FUNC:
             samplerObj->SetSamplerCompareFunc(MG_Util::ConvertGLEnumToSamplerCompareFunc(*(const GLint*)param));
             break;
+        case GL_TEXTURE_BORDER_COLOR:
+            // The only four-component sampler parameter: the caller's form decides which
+            // representation is authoritative, and SamplerObject keeps the other two in step.
+            if (isFloat) {
+                const auto* values = (const GLfloat*)param;
+                samplerObj->SetBorderColor(FloatVec4(values[0], values[1], values[2], values[3]));
+            } else if (isUnsignedInteger) {
+                const auto* values = (const GLuint*)param;
+                samplerObj->SetBorderColorUI(UintVec4(values[0], values[1], values[2], values[3]));
+            } else {
+                const auto* values = (const GLint*)param;
+                samplerObj->SetBorderColorI(IntVec4(values[0], values[1], values[2], values[3]));
+            }
+            break;
         default:
             MG_State::pGLContext->RecordError(ErrorCode::InvalidEnum,
                                               MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", "SetSamplerParam_State",
@@ -162,6 +181,31 @@ namespace MobileGL::MG_Impl::GLImpl {
         case GL_TEXTURE_COMPARE_FUNC:
             *(GLuint*)params = MG_Util::ConvertSamplerCompareFuncToGLEnum(samplerObj->GetSamplerCompareFunc());
             break;
+        case GL_TEXTURE_BORDER_COLOR: {
+            if (isFloat) {
+                const auto& color = samplerObj->GetBorderColor();
+                auto* out = (GLfloat*)params;
+                out[0] = color.x();
+                out[1] = color.y();
+                out[2] = color.z();
+                out[3] = color.w();
+            } else if (isUnsignedInteger) {
+                const auto& color = samplerObj->GetBorderColorUI();
+                auto* out = (GLuint*)params;
+                out[0] = color.x();
+                out[1] = color.y();
+                out[2] = color.z();
+                out[3] = color.w();
+            } else {
+                const auto& color = samplerObj->GetBorderColorI();
+                auto* out = (GLint*)params;
+                out[0] = color.x();
+                out[1] = color.y();
+                out[2] = color.z();
+                out[3] = color.w();
+            }
+            break;
+        }
         default:
             MG_State::pGLContext->RecordError(ErrorCode::InvalidEnum,
                                               MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", "GetSamplerParam_State",

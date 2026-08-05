@@ -88,48 +88,40 @@ namespace MobileGL {
                 return m_externalIndex;
             }
 
+            // TEXTURE_BORDER_COLOR is sampler state, so it lives on the SamplerObject this texture
+            // owns rather than being duplicated here - a sampler object bound over the texture then
+            // supplies its own, exactly as GL says it should. The texture params version still moves
+            // on a write, because the DirectGLES texture sync memoises on it.
             const FloatVec4& TextureObjectBase::GetBorderColor() const {
-                return m_borderColor;
+                return m_sampler->GetBorderColor();
             }
 
             void TextureObjectBase::SetBorderColor(const FloatVec4& color) {
-                if (color == m_borderColor) return;
+                if (color == m_sampler->GetBorderColor()) return;
 
-                m_borderColor = color;
-                m_borderColorI = IntVec4(static_cast<Int32>(color.x()), static_cast<Int32>(color.y()),
-                                         static_cast<Int32>(color.z()), static_cast<Int32>(color.w()));
-                m_borderColorUI = UintVec4(static_cast<Uint32>(color.x()), static_cast<Uint32>(color.y()),
-                                           static_cast<Uint32>(color.z()), static_cast<Uint32>(color.w()));
+                m_sampler->SetBorderColor(color);
                 ++m_textureParamsVersion;
             }
 
             const IntVec4& TextureObjectBase::GetBorderColorI() const {
-                return m_borderColorI;
+                return m_sampler->GetBorderColorI();
             }
 
             void TextureObjectBase::SetBorderColorI(const IntVec4& color) {
-                if (color == m_borderColorI) return;
+                if (color == m_sampler->GetBorderColorI()) return;
 
-                m_borderColorI = color;
-                m_borderColorUI = UintVec4(static_cast<Uint32>(color.x()), static_cast<Uint32>(color.y()),
-                                           static_cast<Uint32>(color.z()), static_cast<Uint32>(color.w()));
-                m_borderColor = FloatVec4(static_cast<Float>(color.x()), static_cast<Float>(color.y()),
-                                          static_cast<Float>(color.z()), static_cast<Float>(color.w()));
+                m_sampler->SetBorderColorI(color);
                 ++m_textureParamsVersion;
             }
 
             const UintVec4& TextureObjectBase::GetBorderColorUI() const {
-                return m_borderColorUI;
+                return m_sampler->GetBorderColorUI();
             }
 
             void TextureObjectBase::SetBorderColorUI(const UintVec4& color) {
-                if (color == m_borderColorUI) return;
+                if (color == m_sampler->GetBorderColorUI()) return;
 
-                m_borderColorUI = color;
-                m_borderColorI = IntVec4(static_cast<Int32>(color.x()), static_cast<Int32>(color.y()),
-                                         static_cast<Int32>(color.z()), static_cast<Int32>(color.w()));
-                m_borderColor = FloatVec4(static_cast<Float>(color.x()), static_cast<Float>(color.y()),
-                                          static_cast<Float>(color.z()), static_cast<Float>(color.w()));
+                m_sampler->SetBorderColorUI(color);
                 ++m_textureParamsVersion;
             }
 

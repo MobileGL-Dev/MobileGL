@@ -119,9 +119,6 @@ namespace MobileGL::MG_State::GLState {
         const TextureTarget m_target = TextureTarget::Unknown;
         TextureInternalFormat m_internalFormat = TextureInternalFormat::Unknown;
         SharedPtr<SamplerObject> m_sampler = nullptr;
-        FloatVec4 m_borderColor = {0.0f, 0.0f, 0.0f, 0.0f};
-        IntVec4 m_borderColorI = {0, 0, 0, 0};
-        UintVec4 m_borderColorUI = {0, 0, 0, 0};
         Vec4<TextureSwizzleParam> m_swizzleParams = {TextureSwizzleParam::Red, TextureSwizzleParam::Green,
                                                      TextureSwizzleParam::Blue, TextureSwizzleParam::Alpha};
         UintVec2 m_levelRange = {0, 1000};
