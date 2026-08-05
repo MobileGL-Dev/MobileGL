@@ -301,6 +301,27 @@ namespace MobileGL {
                 return m_textureStorage.IsDirty(GetIndexOfTextureUploadTarget(uploadTarget), mipmapLevel);
             }
 
+            void TextureObjectWithOneMipmap::SetMipmapCompressedImage(TextureUploadTarget uploadTarget, Uint mipmapLevel,
+                                                              GLenum internalFormat, const void* data, SizeT size) {
+                m_textureStorage.SetCompressedImage(GetIndexOfTextureUploadTarget(uploadTarget), mipmapLevel,
+                                                    internalFormat, data, size);
+            }
+
+            GLenum TextureObjectWithOneMipmap::GetMipmapCompressedFormat(TextureUploadTarget uploadTarget,
+                                                                  Uint mipmapLevel) const {
+                return m_textureStorage.GetCompressedFormat(GetIndexOfTextureUploadTarget(uploadTarget), mipmapLevel);
+            }
+
+            SizeT TextureObjectWithOneMipmap::GetMipmapCompressedByteSize(TextureUploadTarget uploadTarget,
+                                                                    Uint mipmapLevel) const {
+                return m_textureStorage.GetCompressedByteSize(GetIndexOfTextureUploadTarget(uploadTarget), mipmapLevel);
+            }
+
+            const void* TextureObjectWithOneMipmap::MapMipmapCompressedImage(TextureUploadTarget uploadTarget,
+                                                                       Uint mipmapLevel) const {
+                return m_textureStorage.MapCompressedData(GetIndexOfTextureUploadTarget(uploadTarget), mipmapLevel);
+            }
+
             IntVec3 TextureObjectWithOneMipmap::GetBaseSize() const {
                 if (m_textureStorage.GetLevelCount() == 0) {
                     return {0, 0, 0};

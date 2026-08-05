@@ -216,8 +216,23 @@ namespace MobileGL::MG_Impl::GLImpl {
         // compressed format up front, so no texture image MobileGL holds can be compressed. Written
         // as a predicate rather than a literal false so both level-parameter getters stay in step
         // once compressed formats do land.
-        Bool IsCompressedTextureFormat(TextureInternalFormat) {
-            return false;
+        // GL 4.6 core 8.11 asks "is *this level* stored compressed", not "is the texture's internal
+        // format a compressed one", and here the two genuinely differ: a compressed internalformat
+        // handed to glTexImage2D resolves to the uncompressed storage that backs it (see
+        // ConvertGLEnumToTextureInternalFormat), so the texture's format enum can never answer yes.
+        // The only levels stored compressed are the ones glCompressedTexImage* shadowed verbatim,
+        // which is exactly what the per-level compressed format records.
+        //
+        // No level-count guard on purpose: TextureObject2DCube::GetMipmapLevelCount() reports face
+        // zero's chain only, so a count check would answer GL_NONE for a compressed image on any
+        // other face - precisely the per-face independence the storage layer provides. MipmapStorage's
+        // own getters already bounds-check per target and return GL_NONE for an unallocated level.
+        GLenum GetCompressedLevelFormat(const SharedPtr<MG_State::GLState::ITextureObject>& textureObject,
+                                        TextureUploadTarget uploadTarget, GLint level) {
+            if (!textureObject || level < 0) return GL_NONE;
+            const auto* textureMipmapObject = MG_State::GLState::AsMipmapTexture(textureObject.get());
+            if (!textureMipmapObject) return GL_NONE;
+            return textureMipmapObject->GetMipmapCompressedFormat(uploadTarget, static_cast<Uint>(level));
         }
 
         GLint GetTextureLevelComponentParameter(TextureInternalFormat textureInternalFormat, GLenum pname) {
@@ -538,10 +553,12 @@ namespace MobileGL::MG_Impl::GLImpl {
             texture->TruncateMipmapLevels(uploadTarget, 1);
         }
 
-        // Compressed texture upload is not implemented yet. GL_NUM_COMPRESSED_TEXTURE_FORMATS
-        // reports 0, so every compressed internalformat is by definition unsupported and
-        // GL_INVALID_ENUM is the specified error - unlike THROW_UNIMPL_EXCEPTION, which unwinds
-        // a C++ exception through the C GL ABI and takes the process down.
+        // The compressed internalformat is not one this stack can store (see
+        // MG_Util::GetCompressedFormatInfo for the accepted set: the RGTC/BPTC/ETC2-EAC formats core
+        // GL requires). GL_INVALID_ENUM is the specified error for an unsupported compressed format -
+        // unlike THROW_UNIMPL_EXCEPTION, which unwinds a C++ exception through the C GL ABI and takes
+        // the process down. Still the only outcome for the 1D/3D and sub-image entry points, which
+        // have no compressed upload path yet.
         void RecordUnsupportedCompressedFormat(const char* caller) {
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidEnum,
@@ -2877,7 +2894,14 @@ namespace MobileGL::MG_Impl::GLImpl {
             break;
         case GL_TEXTURE_INTERNAL_FORMAT:
             if (params) {
-                *params = (GLint)MG_Util::ConvertTextureInternalFormatToGLEnum(textureObject->GetFormat());
+                // A level stored compressed must report the token it was given, not the
+                // uncompressed format backing it (GL 4.6 core 8.11). Only glCompressedTexImage* sets
+                // that tag, so every level created by glTexImage*D - including one given a compressed
+                // internalformat - still answers with its resolved storage format.
+                const GLenum compressedFormat = GetCompressedLevelFormat(textureObject, textureUploadTarget, level);
+                *params = (compressedFormat != GL_NONE)
+                              ? (GLint)compressedFormat
+                              : (GLint)MG_Util::ConvertTextureInternalFormatToGLEnum(textureObject->GetFormat());
             }
             break;
         case GL_TEXTURE_SAMPLES:
@@ -2907,14 +2931,16 @@ namespace MobileGL::MG_Impl::GLImpl {
             break;
         case GL_TEXTURE_COMPRESSED:
             if (params) {
-                *params = IsCompressedTextureFormat(textureObject->GetFormat()) ? GL_TRUE : GL_FALSE;
+                *params =
+                    (GetCompressedLevelFormat(textureObject, textureUploadTarget, level) != GL_NONE) ? GL_TRUE
+                                                                                                     : GL_FALSE;
             }
             break;
-        case GL_TEXTURE_COMPRESSED_IMAGE_SIZE:
+        case GL_TEXTURE_COMPRESSED_IMAGE_SIZE: {
             // GL 4.6 core 8.11: there is no compressed size to report for an image whose internal
             // format is uncompressed, nor for a proxy target, and the query is INVALID_OPERATION
             // rather than a zero.
-            if (isProxy || !IsCompressedTextureFormat(textureObject->GetFormat())) {
+            if (isProxy || GetCompressedLevelFormat(textureObject, textureUploadTarget, level) == GL_NONE) {
                 MG_State::pGLContext->RecordError(
                     ErrorCode::InvalidOperation,
                     MakeUnique<GenericErrorInfo>(
@@ -2923,9 +2949,12 @@ namespace MobileGL::MG_Impl::GLImpl {
                 return;
             }
             if (params) {
-                *params = 0;
+                const auto* textureMipmapObject = MG_State::GLState::AsMipmapTexture(textureObject.get());
+                *params = static_cast<GLint>(
+                    textureMipmapObject->GetMipmapCompressedByteSize(textureUploadTarget, static_cast<Uint>(level)));
             }
             break;
+        }
         default:
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidEnum, MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", "GetTexLevelParameteriv_State",
@@ -3000,7 +3029,14 @@ namespace MobileGL::MG_Impl::GLImpl {
             break;
         case GL_TEXTURE_INTERNAL_FORMAT:
             if (params) {
-                *params = (GLfloat)MG_Util::ConvertTextureInternalFormatToGLEnum(textureObject->GetFormat());
+                // A level stored compressed must report the token it was given, not the
+                // uncompressed format backing it (GL 4.6 core 8.11). Only glCompressedTexImage* sets
+                // that tag, so every level created by glTexImage*D - including one given a compressed
+                // internalformat - still answers with its resolved storage format.
+                const GLenum compressedFormat = GetCompressedLevelFormat(textureObject, textureUploadTarget, level);
+                *params = (GLfloat)((compressedFormat != GL_NONE)
+                                        ? compressedFormat
+                                        : MG_Util::ConvertTextureInternalFormatToGLEnum(textureObject->GetFormat()));
             }
             break;
         case GL_TEXTURE_SAMPLES:
@@ -3030,13 +3066,14 @@ namespace MobileGL::MG_Impl::GLImpl {
             break;
         case GL_TEXTURE_COMPRESSED:
             if (params) {
-                *params = IsCompressedTextureFormat(textureObject->GetFormat()) ? 1.0f : 0.0f;
+                *params =
+                    (GetCompressedLevelFormat(textureObject, textureUploadTarget, level) != GL_NONE) ? 1.0f : 0.0f;
             }
             break;
-        case GL_TEXTURE_COMPRESSED_IMAGE_SIZE:
+        case GL_TEXTURE_COMPRESSED_IMAGE_SIZE: {
             // See GetTexLevelParameteriv_State: uncompressed images and proxy targets have no
             // compressed size to report, so GL 4.6 core 8.11 makes the query an error.
-            if (isProxy || !IsCompressedTextureFormat(textureObject->GetFormat())) {
+            if (isProxy || GetCompressedLevelFormat(textureObject, textureUploadTarget, level) == GL_NONE) {
                 MG_State::pGLContext->RecordError(
                     ErrorCode::InvalidOperation,
                     MakeUnique<GenericErrorInfo>(
@@ -3045,9 +3082,12 @@ namespace MobileGL::MG_Impl::GLImpl {
                 return;
             }
             if (params) {
-                *params = 0.0f;
+                const auto* textureMipmapObject = MG_State::GLState::AsMipmapTexture(textureObject.get());
+                *params = static_cast<GLfloat>(
+                    textureMipmapObject->GetMipmapCompressedByteSize(textureUploadTarget, static_cast<Uint>(level)));
             }
             break;
+        }
         default:
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidEnum, MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", "GetTexLevelParameterfv_State",
@@ -3056,14 +3096,72 @@ namespace MobileGL::MG_Impl::GLImpl {
         }
     }
 
+    // The half glGetCompressedTexImage and glGetCompressedTextureImage share, factored out for the
+    // same reason ValidateTextureImageQuery was: the by-name entry point must not drift away from
+    // the by-target one's rules. bufSize < 0 means "no destination-size argument" - the by-target
+    // form has none (GL 4.6 core 8.11 has the caller size it from GL_TEXTURE_COMPRESSED_IMAGE_SIZE),
+    // so only the DSA form passes a real bound.
+    void CopyCompressedTextureImageToClientOrPBO(const SharedPtr<MG_State::GLState::ITextureObject>& textureObject,
+                                                 TextureUploadTarget uploadTarget, GLint level, GLsizei bufSize,
+                                                 void* pixels, const char* caller) {
+        if (GetCompressedLevelFormat(textureObject, uploadTarget, level) == GL_NONE) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidOperation,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller,
+                                             "Texture level is not stored in a compressed format."));
+            return;
+        }
+
+        const auto* textureMipmapObject = MG_State::GLState::AsMipmapTexture(textureObject.get());
+        const SizeT imageSize =
+            textureMipmapObject->GetMipmapCompressedByteSize(uploadTarget, static_cast<Uint>(level));
+        const void* src = textureMipmapObject->MapMipmapCompressedImage(uploadTarget, static_cast<Uint>(level));
+        if (!src || imageSize == 0) return;
+
+        if (bufSize >= 0 && static_cast<SizeT>(bufSize) < imageSize) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidOperation,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller, "Destination buffer is too small."));
+            return;
+        }
+
+        const auto& pixelPackBufferObject =
+            MG_State::pGLContext->GetBufferBindingSlot(BufferTarget::PixelPack).GetBoundObject();
+        if (pixelPackBufferObject) {
+            if (pixelPackBufferObject->IsMapped()) {
+                MG_State::pGLContext->RecordError(
+                    ErrorCode::InvalidOperation,
+                    MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller, "Pixel pack buffer is currently mapped."));
+                return;
+            }
+            const SizeT offset = reinterpret_cast<SizeT>(pixels);
+            const SizeT bufferSize = pixelPackBufferObject->GetSize();
+            if (offset > bufferSize || imageSize > bufferSize - offset) {
+                MG_State::pGLContext->RecordError(
+                    ErrorCode::InvalidOperation,
+                    MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller,
+                                                 "Packing would write past the end of the pixel pack buffer."));
+                return;
+            }
+            pixelPackBufferObject->UploadSubData({const_cast<void*>(src), imageSize}, offset);
+            return;
+        }
+
+        // No pixel-store packing here on purpose: GL 4.6 core 8.11 says the pixel storage modes are
+        // ignored for a compressed image, which is also the only way the round trip stays byte-exact.
+        if (pixels) Memcpy(pixels, src, imageSize);
+    }
+
     void GetCompressedTexImage_State(GLenum target, GLint level, void* img) {
-        // TODO: implement compressed readback. Reporting success while writing nothing hands
-        // the caller stale memory with GL_NO_ERROR; no texture can be compressed yet, and GL
-        // specifies GL_INVALID_OPERATION when the bound level is not compressed.
-        MG_State::pGLContext->RecordError(
-            ErrorCode::InvalidOperation,
-            MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
-                                         "Texture level is not stored in a compressed format."));
+        const auto textureUploadTarget = MG_Util::ConvertGLEnumToTextureUploadTarget(target);
+        const auto textureTarget = MG_Util::ConvertGLEnumToTextureTarget(target);
+        // ValidateTextureUploadTarget records InvalidEnum itself; wrapping it in a second RecordError
+        // would report one failure twice.
+        if (!TextureImpl::ValidateTextureUploadTarget(textureUploadTarget)) return;
+        if (!TextureImpl::ValidateTextureLevelNumber(level)) return;
+        auto& textureObject = GetTextureObjectByTarget(textureUploadTarget, textureTarget);
+        if (!TextureImpl::ValidateTextureObject(textureObject)) return;
+        CopyCompressedTextureImageToClientOrPBO(textureObject, textureUploadTarget, level, -1, img, __func__);
     }
 
     void GenTextures_State(GLsizei n, GLuint* textures) {
@@ -3314,16 +3412,102 @@ namespace MobileGL::MG_Impl::GLImpl {
 
     void CompressedTexImage2D_State(GLenum target, GLint level, GLenum internalformat, GLsizei width, GLsizei height,
                                     GLint border, GLsizei imageSize, const void* data) {
+        // ======================= Converting ================================
         const auto textureUploadTarget = MG_Util::ConvertGLEnumToTextureUploadTarget(target);
         const auto textureTarget = MG_Util::ConvertGLEnumToTextureTarget(target);
-        auto& textureObject = GetTextureObjectByTarget(textureUploadTarget, textureTarget);
+        // Zero block width doubles as "internalformat is not a specific compressed format", which is
+        // the INVALID_ENUM case - one lookup answers both questions.
+        const auto compressedInfo = MG_Util::GetCompressedFormatInfo(internalformat);
+
+        // ===================== Error Checking ==============================
+        if (!TextureImpl::ValidateTextureUploadTarget(textureUploadTarget)) return;
+        if (!TextureImpl::ValidateTextureLevelNumber(level)) return;
+        if (!TextureImpl::ValidateTextureSizeWithTextureUploadTarget(textureUploadTarget, width, height)) return;
+        if (!TextureImpl::ValidateTextureSizeRange(width, height, 1)) return;
+        if (!TextureImpl::ValidateTextureBorderNumber(border)) return;
+        if (!TextureImpl::ValidateTextureLevelWithUploadTarget(textureUploadTarget, level)) return;
+        if (compressedInfo.blockWidth == 0) {
+            RecordUnsupportedCompressedFormat(__func__);
+            return;
+        }
+        // GL 4.6 core 8.7: imageSize must be exactly the size the format and dimensions imply,
+        // otherwise INVALID_VALUE. This is also the guard that keeps the copy below in bounds.
+        const SizeT expectedImageSize =
+            MG_Util::CalculateCompressedTextureImageSize(compressedInfo, {width, height, 1});
+        if (imageSize < 0 || static_cast<SizeT>(imageSize) != expectedImageSize) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidValue,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
+                                             "imageSize does not match the compressed image size."));
+            return;
+        }
+
+        // Object resolution copied from TexImage2D_State rather than routed through
+        // GetTextureObjectByTarget: GL 4.6 core 8.7 lets a proxy target reach glCompressedTexImage2D,
+        // and only CreateOrReplaceProxyTextureObject gives the proxy a fresh object to answer the
+        // level queries from.
+        auto& activeUnit = MG_State::pGLContext->GetTextureUnitObject(MG_State::pGLContext->GetActiveTextureUnit());
+        auto& bindingSlot = activeUnit.GetBindingSlot(textureTarget);
+        const Bool isProxy = TextureImpl::IsProxyTextureTarget(textureUploadTarget);
+        auto& textureObject =
+            isProxy ? TextureImpl::pProxyTextureManager->CreateOrReplaceProxyTextureObject(textureUploadTarget)
+                    : bindingSlot.GetBoundObject();
+        if (!TextureImpl::ValidateTextureObject(textureObject)) return;
         if (!ValidateTextureMutable(textureObject, __func__)) return;
 
-        // TODO: implement compressed upload. Until then report the spec error for an
-        // unsupported compressed format rather than throwing - a C++ exception unwinding
-        // through the C GL ABI is a hard crash for the caller, while GL_INVALID_ENUM is
-        // exactly what GL_NUM_COMPRESSED_TEXTURE_FORMATS == 0 promises.
-        RecordUnsupportedCompressedFormat(__func__);
+        // ======================= Processing ================================
+        // Texel storage stays uncompressed, exactly the deviation the RGTC/BPTC/ETC2 arms of
+        // ConvertGLEnumToTextureInternalFormat already document: neither backend has a BC/ETC codec
+        // and TextureInternalFormat has no compressed enumerator, so the shadow keeps the "one
+        // format, N bytes per texel" layout the backend upload sizing, glGenerateMipmap's
+        // bytes-per-texel division and the pixel-store packer all rely on. The image therefore
+        // samples as zeros. The application's bytes are kept beside it so glGetCompressedTexImage can
+        // return the image *as stored*, which GL 4.6 core 8.11 requires and which no re-encode could
+        // satisfy byte for byte.
+        const TextureInternalFormat textureInternalFormat =
+            MG_Util::ConvertGLEnumToTextureInternalFormat(internalformat);
+        textureObject->SetInternalFormat(textureInternalFormat);
+
+        // A proxy records the format and nothing else - it must never take storage, and it must never
+        // be tagged compressed, or GL_TEXTURE_COMPRESSED_IMAGE_SIZE on a proxy would stop being
+        // INVALID_OPERATION.
+        if (isProxy) return;
+
+        const SizeT internalBpp =
+            MG_Util::GetInternalBytesPerPixel(textureInternalFormat, TexturePixelDataType::UnsignedByte);
+        const SizeT internalBytes = static_cast<SizeT>(width) * static_cast<SizeT>(height) * internalBpp;
+
+        auto* textureMipmapObject = static_cast<MG_State::GLState::TextureObjectMipmap*>(textureObject.get());
+        DiscardMipmapChainOnBaseRespecification(textureMipmapObject, textureUploadTarget, level);
+        // AllocateStorage clears any compressed image the level used to hold, so this must run before
+        // SetMipmapCompressedImage re-arms it.
+        textureMipmapObject->AllocateStorage(textureUploadTarget, level, {{width, height, 1}, internalBytes});
+
+        const void* compressedBytes = data;
+        const auto& pixelUnpackBufferObject =
+            MG_State::pGLContext->GetBufferBindingSlot(BufferTarget::PixelUnpack).GetBoundObject();
+        if (pixelUnpackBufferObject) {
+            if (pixelUnpackBufferObject->IsMapped()) {
+                MG_State::pGLContext->RecordError(
+                    ErrorCode::InvalidOperation,
+                    MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
+                                                 "Pixel unpack buffer is currently mapped."));
+                return;
+            }
+            const SizeT offset = reinterpret_cast<SizeT>(data);
+            const SizeT bufferSize = pixelUnpackBufferObject->GetSize();
+            if (offset > bufferSize || expectedImageSize > bufferSize - offset) {
+                MG_State::pGLContext->RecordError(
+                    ErrorCode::InvalidOperation,
+                    MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
+                                                 "Unpacking would read past the end of the pixel unpack buffer."));
+                return;
+            }
+            compressedBytes = reinterpret_cast<const char*>(pixelUnpackBufferObject->MappedData()) + offset;
+        }
+        textureMipmapObject->SetMipmapCompressedImage(textureUploadTarget, level, internalformat, compressedBytes,
+                                                      expectedImageSize);
+        textureMipmapObject->MarkStorageDirty(textureUploadTarget, level, true);
     }
 
     void CompressedTexImage1D_State(GLenum target, GLint level, GLenum internalformat, GLsizei width, GLint border,
@@ -4273,13 +4457,11 @@ namespace MobileGL::MG_Impl::GLImpl {
         // texture would also fail the compressed check below.
         if (!TextureImpl::ValidateTextureLevelNumber(level)) return;
 
-        // No texture MobileGL holds is compressed (see IsCompressedTextureFormat), so this is the
-        // only outcome today. Reporting success while writing nothing would hand the caller stale
-        // memory with GL_NO_ERROR - the same reasoning as GetCompressedTexImage_State.
-        MG_State::pGLContext->RecordError(
-            ErrorCode::InvalidOperation,
-            MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
-                                         "Texture level is not stored in a compressed format."));
+        // Unlike glGetTextureImage this never asks a backend: the compressed image only ever exists
+        // in the CPU shadow (no backend was handed the compressed bytes at all), so the shadow is
+        // authoritative rather than potentially stale.
+        CopyCompressedTextureImageToClientOrPBO(textureObject, GetPrimaryUploadTarget(textureObject), level, bufSize,
+                                                pixels, __func__);
     }
 
     void GetTextureSubImage(GLuint texture, GLint level, GLint xoffset, GLint yoffset, GLint zoffset, GLsizei width,

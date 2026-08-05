@@ -55,6 +55,27 @@ namespace MobileGL {
                 return m_textureStorage.IsDirty(GetIndexOfTextureUploadTarget(uploadTarget), mipmapLevel);
             }
 
+            void TextureObject2DCube::SetMipmapCompressedImage(TextureUploadTarget uploadTarget, Uint mipmapLevel,
+                                                              GLenum internalFormat, const void* data, SizeT size) {
+                m_textureStorage.SetCompressedImage(GetIndexOfTextureUploadTarget(uploadTarget), mipmapLevel,
+                                                    internalFormat, data, size);
+            }
+
+            GLenum TextureObject2DCube::GetMipmapCompressedFormat(TextureUploadTarget uploadTarget,
+                                                                  Uint mipmapLevel) const {
+                return m_textureStorage.GetCompressedFormat(GetIndexOfTextureUploadTarget(uploadTarget), mipmapLevel);
+            }
+
+            SizeT TextureObject2DCube::GetMipmapCompressedByteSize(TextureUploadTarget uploadTarget,
+                                                                    Uint mipmapLevel) const {
+                return m_textureStorage.GetCompressedByteSize(GetIndexOfTextureUploadTarget(uploadTarget), mipmapLevel);
+            }
+
+            const void* TextureObject2DCube::MapMipmapCompressedImage(TextureUploadTarget uploadTarget,
+                                                                       Uint mipmapLevel) const {
+                return m_textureStorage.MapCompressedData(GetIndexOfTextureUploadTarget(uploadTarget), mipmapLevel);
+            }
+
             Uint TextureObject2DCube::GetIndexOfTextureUploadTarget(TextureUploadTarget target) const {
                 MOBILEGL_ASSERT(TextureUploadTarget::CubeMapPositiveX <= target &&
                                     target <= TextureUploadTarget::CubeMapNegativeZ,

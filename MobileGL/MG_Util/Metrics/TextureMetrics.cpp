@@ -525,5 +525,50 @@ namespace MobileGL {
             return s;
         }
 
+        CompressedFormatInfo GetCompressedFormatInfo(GLenum internalFormat) {
+            // Every format here is 4x4-blocked; only the bytes per block differ (8 for the one- and
+            // two-channel RGTC/EAC and the 1-bit-alpha ETC2 forms, 16 for BPTC and the full-alpha
+            // ETC2/EAC and two-channel EAC forms). The generic compressed formats (GL_COMPRESSED_RGBA
+            // and friends) are deliberately absent: GL lets the implementation pick, MobileGL picks
+            // uncompressed, and glCompressedTexImage* must reject them because there is no defined
+            // block layout to hand it. The accepted set is exactly the set
+            // ConvertGLEnumToTextureInternalFormat can back with uncompressed storage, so this call
+            // can never accept a format whose texel shadow cannot be allocated.
+            switch (internalFormat) {
+            case GL_COMPRESSED_RED_RGTC1:
+            case GL_COMPRESSED_SIGNED_RED_RGTC1:
+            case GL_COMPRESSED_RGB8_ETC2:
+            case GL_COMPRESSED_SRGB8_ETC2:
+            case GL_COMPRESSED_RGB8_PUNCHTHROUGH_ALPHA1_ETC2:
+            case GL_COMPRESSED_SRGB8_PUNCHTHROUGH_ALPHA1_ETC2:
+            case GL_COMPRESSED_R11_EAC:
+            case GL_COMPRESSED_SIGNED_R11_EAC:
+                return {4, 4, 8};
+            case GL_COMPRESSED_RG_RGTC2:
+            case GL_COMPRESSED_SIGNED_RG_RGTC2:
+            case GL_COMPRESSED_RGBA_BPTC_UNORM:
+            case GL_COMPRESSED_SRGB_ALPHA_BPTC_UNORM:
+            case GL_COMPRESSED_RGB_BPTC_SIGNED_FLOAT:
+            case GL_COMPRESSED_RGB_BPTC_UNSIGNED_FLOAT:
+            case GL_COMPRESSED_RGBA8_ETC2_EAC:
+            case GL_COMPRESSED_SRGB8_ALPHA8_ETC2_EAC:
+            case GL_COMPRESSED_RG11_EAC:
+            case GL_COMPRESSED_SIGNED_RG11_EAC:
+                return {4, 4, 16};
+            default:
+                return {};
+            }
+        }
+
+        SizeT CalculateCompressedTextureImageSize(const CompressedFormatInfo& info, IntVec3 size) {
+            if (info.blockWidth == 0 || info.blockHeight == 0) return 0;
+            const SizeT width = static_cast<SizeT>(std::max<Int>(size.x(), 0));
+            const SizeT height = static_cast<SizeT>(std::max<Int>(size.y(), 0));
+            const SizeT depth = static_cast<SizeT>(std::max<Int>(size.z(), 1));
+            const SizeT blocksX = (width + info.blockWidth - 1) / info.blockWidth;
+            const SizeT blocksY = (height + info.blockHeight - 1) / info.blockHeight;
+            return blocksX * blocksY * depth * info.blockByteSize;
+        }
+
     } // namespace MG_Util
 } // namespace MobileGL

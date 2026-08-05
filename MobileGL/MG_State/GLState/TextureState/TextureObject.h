@@ -150,6 +150,18 @@ namespace MobileGL::MG_State::GLState {
         virtual void* MapMipmapData(TextureUploadTarget uploadTarget, Uint mipmapLevel) = 0;
         virtual void MarkStorageDirty(TextureUploadTarget uploadTarget, Uint mipmapLevel, Bool dirty = true) = 0;
         virtual Bool IsStorageDirty(TextureUploadTarget uploadTarget, Uint mipmapLevel) const = 0;
+
+        // The compressed image a glCompressedTexImage* call shadowed for this level, kept verbatim
+        // next to the texel data rather than instead of it - see MipmapStorage. The texel shadow
+        // stays uncompressed and correctly sized, so nothing in the backend upload path has to know
+        // these exist; only glGetCompressedTexImage, glGetCompressedTextureImage and the
+        // GL_TEXTURE_COMPRESSED* level queries read them.
+        virtual void SetMipmapCompressedImage(TextureUploadTarget uploadTarget, Uint mipmapLevel,
+                                              GLenum internalFormat, const void* data, SizeT size) = 0;
+        // GL_NONE when this level is not stored compressed.
+        virtual GLenum GetMipmapCompressedFormat(TextureUploadTarget uploadTarget, Uint mipmapLevel) const = 0;
+        virtual SizeT GetMipmapCompressedByteSize(TextureUploadTarget uploadTarget, Uint mipmapLevel) const = 0;
+        virtual const void* MapMipmapCompressedImage(TextureUploadTarget uploadTarget, Uint mipmapLevel) const = 0;
     };
 
     // Cheap replacement for dynamic_cast on the hot path: TextureObjectMipmap is the
@@ -206,6 +218,11 @@ namespace MobileGL::MG_State::GLState {
         void* MapMipmapData(TextureUploadTarget uploadTarget, Uint mipmapLevel) override;
         void MarkStorageDirty(TextureUploadTarget uploadTarget, Uint mipmapLevel, Bool dirty) override;
         bool IsStorageDirty(TextureUploadTarget uploadTarget, Uint mipmapLevel) const override;
+        void SetMipmapCompressedImage(TextureUploadTarget uploadTarget, Uint mipmapLevel, GLenum internalFormat,
+                                      const void* data, SizeT size) override;
+        GLenum GetMipmapCompressedFormat(TextureUploadTarget uploadTarget, Uint mipmapLevel) const override;
+        SizeT GetMipmapCompressedByteSize(TextureUploadTarget uploadTarget, Uint mipmapLevel) const override;
+        const void* MapMipmapCompressedImage(TextureUploadTarget uploadTarget, Uint mipmapLevel) const override;
 
         IntVec3 GetBaseSize() const override;
         Bool IsComplete() const override;

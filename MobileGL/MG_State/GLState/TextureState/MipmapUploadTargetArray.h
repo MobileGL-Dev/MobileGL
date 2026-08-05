@@ -74,6 +74,27 @@ namespace MobileGL {
                     return m_storage[targetIndex].IsDirty(level);
                 }
 
+                void SetCompressedImage(Uint targetIndex, Uint level, GLenum internalFormat, const void* data,
+                                        SizeT size) {
+                    MOBILEGL_ASSERT(targetIndex < TargetCount, "SetCompressedImage: target invalid");
+                    m_storage[targetIndex].SetCompressedImage(level, internalFormat, data, size);
+                }
+
+                GLenum GetCompressedFormat(Uint targetIndex, Uint level) const {
+                    MOBILEGL_ASSERT(targetIndex < TargetCount, "GetCompressedFormat: target invalid");
+                    return m_storage[targetIndex].GetCompressedFormat(level);
+                }
+
+                SizeT GetCompressedByteSize(Uint targetIndex, Uint level) const {
+                    MOBILEGL_ASSERT(targetIndex < TargetCount, "GetCompressedByteSize: target invalid");
+                    return m_storage[targetIndex].GetCompressedByteSize(level);
+                }
+
+                const void* MapCompressedData(Uint targetIndex, Uint level) const {
+                    MOBILEGL_ASSERT(targetIndex < TargetCount, "MapCompressedData: target invalid");
+                    return m_storage[targetIndex].MapCompressedData(level);
+                }
+
             protected:
                 Array<MipmapStorage, TargetCount> m_storage;
             };

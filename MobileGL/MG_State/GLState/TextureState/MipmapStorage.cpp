@@ -27,11 +27,52 @@ namespace MobileGL {
                     m_texelSizes.reserve(std::bit_ceil(requiredLevelCount));
                     m_texelSizes.resize(requiredLevelCount);
                     m_isDirty.resize(requiredLevelCount, false);
+                    m_compressedData.resize(requiredLevelCount);
+                    m_compressedFormats.resize(requiredLevelCount, GL_NONE);
                 }
 
                 m_texelSizes[level] = input.texelSize;
                 auto& data = m_data[level];
                 data.resize(input.byteSize, 0);
+
+                // Respecifying a level drops whatever compressed image it used to hold. Without this,
+                // a glTexImage2D or glTexStorage2D over a level a previous glCompressedTexImage2D had
+                // shadowed would leave GL_TEXTURE_COMPRESSED answering true and glGetCompressedTexImage
+                // handing back the stale blob. Every allocation path funnels through here, so clearing
+                // once covers all of them; the compressed path re-arms the tag immediately afterwards
+                // via SetCompressedImage.
+                m_compressedFormats[level] = GL_NONE;
+                m_compressedData[level].clear();
+                m_compressedData[level].shrink_to_fit();
+            }
+
+            void MipmapStorage::SetCompressedImage(Uint level, GLenum internalFormat, const void* data, SizeT size) {
+                MOBILEGL_ASSERT(level < m_compressedData.size(), "SetCompressedImage: level out of range");
+
+                m_compressedFormats[level] = internalFormat;
+                auto& blob = m_compressedData[level];
+                // Zero-filled when data is null: glCompressedTexImage* with a null pointer defines the
+                // level's size and format but leaves its contents undefined, and zeros are the one
+                // reproducible answer a later glGetCompressedTexImage can give.
+                blob.assign(size, 0);
+                if (data != nullptr && size > 0) {
+                    Memcpy(blob.data(), data, size);
+                }
+            }
+
+            GLenum MipmapStorage::GetCompressedFormat(Uint level) const {
+                if (level >= m_compressedFormats.size()) return GL_NONE;
+                return m_compressedFormats[level];
+            }
+
+            SizeT MipmapStorage::GetCompressedByteSize(Uint level) const {
+                if (level >= m_compressedData.size()) return 0;
+                return m_compressedData[level].size();
+            }
+
+            const void* MipmapStorage::MapCompressedData(Uint level) const {
+                if (level >= m_compressedData.size()) return nullptr;
+                return m_compressedData[level].data();
             }
 
             void MipmapStorage::TruncateToLevelCount(SizeT levelCount) {
@@ -40,6 +81,8 @@ namespace MobileGL {
                 m_data.resize(levelCount);
                 m_texelSizes.resize(levelCount);
                 m_isDirty.resize(levelCount);
+                m_compressedData.resize(levelCount);
+                m_compressedFormats.resize(levelCount);
             }
 
             void MipmapStorage::UpdateSubData(Uint level, DataPtr input) {
