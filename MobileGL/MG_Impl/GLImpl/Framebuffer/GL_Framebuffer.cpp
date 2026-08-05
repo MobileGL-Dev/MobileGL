@@ -1691,6 +1691,11 @@ namespace MobileGL::MG_Impl::GLImpl {
             const GLenum attachment = attachments[at];
             if (isDefaultFramebuffer) {
                 switch (attachment) {
+                // The by-name forms name the default framebuffer's buffers the way
+                // glClearNamedFramebuffer does, with COLOR standing for the colour buffer, while
+                // the target forms use the individual FRONT_LEFT/BACK_RIGHT tokens. Both spellings
+                // reach here, so both are accepted (GL 4.6 core 17.4.4).
+                case GL_COLOR:
                 case GL_FRONT_LEFT:
                 case GL_FRONT_RIGHT:
                 case GL_BACK_LEFT:
