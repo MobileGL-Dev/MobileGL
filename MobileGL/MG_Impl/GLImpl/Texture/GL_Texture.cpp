@@ -2039,11 +2039,63 @@ namespace MobileGL::MG_Impl::GLImpl {
     // resolved - by binding for the target forms, by name for the DSA ones. `size` is
     // kWholeBuffer for the non-Range entry points, which attach the buffer as it grows rather
     // than freezing the size it happens to have now.
+    // The sized internal formats a buffer texture accepts (GL 4.6 core table 8.16). This is a much
+    // shorter list than the renderable or texturable formats, so it cannot be inferred from either.
+    static Bool IsBufferTextureInternalFormat(GLenum internalformat) {
+        switch (internalformat) {
+        case GL_R8:
+        case GL_R16:
+        case GL_R16F:
+        case GL_R32F:
+        case GL_R8I:
+        case GL_R16I:
+        case GL_R32I:
+        case GL_R8UI:
+        case GL_R16UI:
+        case GL_R32UI:
+        case GL_RG8:
+        case GL_RG16:
+        case GL_RG16F:
+        case GL_RG32F:
+        case GL_RG8I:
+        case GL_RG16I:
+        case GL_RG32I:
+        case GL_RG8UI:
+        case GL_RG16UI:
+        case GL_RG32UI:
+        case GL_RGB32F:
+        case GL_RGB32I:
+        case GL_RGB32UI:
+        case GL_RGBA8:
+        case GL_RGBA16:
+        case GL_RGBA16F:
+        case GL_RGBA32F:
+        case GL_RGBA8I:
+        case GL_RGBA16I:
+        case GL_RGBA32I:
+        case GL_RGBA8UI:
+        case GL_RGBA16UI:
+        case GL_RGBA32UI:
+            return true;
+        default:
+            return false;
+        }
+    }
+
     static void AttachBufferToTexture(const SharedPtr<MG_State::GLState::ITextureObject>& textureObject,
                                       GLenum internalformat, GLuint buffer, GLintptr offset, SizeT size,
                                       const char* caller) {
         using MG_State::GLState::TextureObjectBuffer;
         TextureInternalFormat textureInternalFormat = MG_Util::ConvertGLEnumToTextureInternalFormat(internalformat);
+        if (!IsBufferTextureInternalFormat(internalformat)) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidEnum,
+                MakeUnique<GenericErrorInfo>(
+                    "MG_Impl/GLImpl", caller,
+                    std::format("internalformat 0x{:X} is not one of the sized formats a buffer texture accepts.",
+                                internalformat)));
+            return;
+        }
         if (!TextureImpl::ValidateTextureInternalFormat(textureInternalFormat)) return;
 
         auto& bufferObject = MG_State::pGLContext->GetBufferObject(buffer);
@@ -2056,8 +2108,10 @@ namespace MobileGL::MG_Impl::GLImpl {
         }
         if (!TextureImpl::ValidateTextureObject(textureObject)) return;
         if (textureObject->GetStorageType() != TextureStorageType::Buffer) {
+            // A texture whose target is something else is a wrong object, not a wrong token
+            // (GL 4.6 core 8.9).
             MG_State::pGLContext->RecordError(
-                ErrorCode::InvalidEnum,
+                ErrorCode::InvalidOperation,
                 MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller,
                                              "The effective target of `texture` is not `GL_TEXTURE_BUFFER`."));
             return;
@@ -2084,6 +2138,15 @@ namespace MobileGL::MG_Impl::GLImpl {
                     ErrorCode::InvalidValue,
                     MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller,
                                                  "offset is not a multiple of GL_TEXTURE_BUFFER_OFFSET_ALIGNMENT."));
+                return;
+            }
+            // The range has to lie inside the buffer that is being attached. Detaching (buffer
+            // zero) carries no range to check.
+            if (bufferObject && static_cast<SizeT>(offset) + size > bufferObject->GetSize()) {
+                MG_State::pGLContext->RecordError(
+                    ErrorCode::InvalidValue,
+                    MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller,
+                                                 "offset + size is greater than the buffer object's GL_BUFFER_SIZE."));
                 return;
             }
         }
