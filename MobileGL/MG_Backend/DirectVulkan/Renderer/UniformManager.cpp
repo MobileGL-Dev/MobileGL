@@ -277,9 +277,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         if (texture == nullptr) {
             fallbackHolder = GetFallbackTexture(preferredTarget);
             texture = fallbackHolder.get();
-            MOBILEGL_ASSERT(texture != nullptr,
-                            "ResolveSamplerDescriptor: no fallback texture available for binding=%u location=%d unit=%d target=%d",
-                            binding, location, unit, static_cast<Int>(preferredTarget));
+            if (texture == nullptr) {
+                MGLOG_E("ResolveSamplerDescriptor: no fallback texture available for binding=%u ('%s') "
+                        "location=%d unit=%d target=%d",
+                        binding, programObj.samplerNameByBinding[binding].c_str(), location, unit,
+                        static_cast<Int>(preferredTarget));
+                return false;
+            }
             MGLOG_W(
                 "ResolveSamplerDescriptor: using fallback texture for unbound sampler binding=%u ('%s') location=%d unit=%d target=%d",
                 binding, programObj.samplerNameByBinding[binding].c_str(), location, unit,
@@ -772,9 +776,16 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     }
 
     SharedPtr<MG_State::GLState::ITextureObject> UniformManager::GetFallbackTexture(TextureTarget target) const {
-        MOBILEGL_ASSERT(target == TextureTarget::Texture2D || target == TextureTarget::TextureRectangle,
-                        "UniformManager::GetFallbackTexture: unsupported fallback target=%d",
-                        static_cast<Int>(target));
+        // The fallback is a single-sampled 2D image, so it can only stand in for a sampler that
+        // would accept one. A multisample sampler in particular cannot: its descriptor demands a
+        // multisample view, and handing it this one is invalid Vulkan, not a degraded picture.
+        // Report that there is no fallback and let the caller decline the draw - aborting the
+        // process over an unbound sampler is never the right answer.
+        if (target != TextureTarget::Texture2D && target != TextureTarget::TextureRectangle) {
+            MGLOG_E("UniformManager::GetFallbackTexture: no fallback exists for target=%d",
+                    static_cast<Int>(target));
+            return nullptr;
+        }
 
         if (m_fallbackTexture2D == nullptr) {
             auto fallbackTexture = MakeShared<MG_State::GLState::TextureObject2D>(kFallbackTexture2DExternalIndex);
