@@ -725,6 +725,96 @@ namespace MobileGL::MG_Impl::GLImpl {
             textureObject->MarkStorageDirty(uploadTarget, static_cast<Uint>(level), true);
             return true;
         }
+        // GL 4.6 core 8.6: CopyTexSubImage* is not affected by pixel-store state or by a bound
+        // pack buffer, but the backend readback this borrows honours both. Neutralise them for the
+        // duration of the read and put them back afterwards.
+        class ScopedNeutralPackState {
+        public:
+            ScopedNeutralPackState() {
+                for (SizeT i = 0; i < kParams.size(); ++i) {
+                    m_saved[i] = MG_State::pGLContext->GetPixelStoreParam(kParams[i]);
+                    MG_State::pGLContext->SetPixelStoreParam(kParams[i], i == 0 ? 1 : 0);
+                }
+                auto& slot = MG_State::pGLContext->GetBufferBindingSlot(BufferTarget::PixelPack);
+                m_savedPackBuffer = slot.GetBoundObject();
+                slot.Bind(nullptr);
+            }
+            ~ScopedNeutralPackState() {
+                for (SizeT i = 0; i < kParams.size(); ++i) {
+                    MG_State::pGLContext->SetPixelStoreParam(kParams[i], m_saved[i]);
+                }
+                MG_State::pGLContext->GetBufferBindingSlot(BufferTarget::PixelPack).Bind(m_savedPackBuffer);
+            }
+
+        private:
+            // PackAlignment must be first: it is the one that resets to 1 rather than 0.
+            static constexpr Array<PixelStoreParam, 8> kParams{
+                PixelStoreParam::PackAlignment,  PixelStoreParam::PackRowLength,
+                PixelStoreParam::PackImageHeight, PixelStoreParam::PackSkipRows,
+                PixelStoreParam::PackSkipPixels, PixelStoreParam::PackSkipImages,
+                PixelStoreParam::PackSwapBytes,  PixelStoreParam::PackLSBFirst};
+            Array<Int, 8> m_saved{};
+            SharedPtr<MG_State::GLState::BufferObject> m_savedPackBuffer;
+        };
+
+        // The copy half of glCopyTexSubImage*: read the region out of the read framebuffer and write
+        // it into the destination level's CPU storage. Done in the frontend because that storage is
+        // where a texture's contents actually live - the backends sync from it - so this needs no
+        // 1D or 3D blit, which neither backend has.
+        Bool CopyReadFramebufferIntoMipmapRegion(const SharedPtr<MG_State::GLState::ITextureObject>& textureObject,
+                                                 TextureUploadTarget uploadTarget, GLint level, GLint xoffset,
+                                                 GLint yoffset, GLint zoffset, GLint x, GLint y, GLsizei width,
+                                                 GLsizei height, const char* caller) {
+            if (width <= 0 || height <= 0) return true;
+            auto* mipmapTexture = MG_State::GLState::AsMipmapTexture(textureObject.get());
+            if (!mipmapTexture) return false;
+
+            const auto texelSize = mipmapTexture->GetMipmapTexelSize(uploadTarget, static_cast<Uint>(level));
+            const SizeT texelCount = static_cast<SizeT>(texelSize.x()) * static_cast<SizeT>(texelSize.y()) *
+                                     static_cast<SizeT>(texelSize.z());
+            const SizeT byteSize = mipmapTexture->GetMipmapByteSize(uploadTarget, static_cast<Uint>(level));
+            if (texelCount == 0 || byteSize == 0 || byteSize % texelCount != 0) return false;
+            const SizeT bytesPerTexel = byteSize / texelCount;
+
+            // Read in the destination's own canonical client layout, so the bytes land in storage
+            // without a second conversion.
+            const GLenum glInternalFormat = MG_Util::ConvertTextureInternalFormatToGLEnum(textureObject->GetFormat());
+            GLenum realInternalFormat = glInternalFormat;
+            GLenum format = GL_RGBA;
+            GLenum type = GL_UNSIGNED_BYTE;
+            MG_Util::TextureFormatProcessor::NormalizePixelFormat(glInternalFormat, PixelFormatNormalizeOptionBit::None,
+                                                                  &realInternalFormat, &format, &type);
+            const SizeT readBytesPerTexel =
+                MG_Util::GetInputBytesPerPixel(MG_Util::ConvertGLEnumToTextureInputFormat(format),
+                                               MG_Util::ConvertGLEnumToTexturePixelDataType(type));
+            if (readBytesPerTexel != bytesPerTexel) {
+                MGLOG_I("%s: cannot copy into a %zu-byte texel from a %zu-byte readback layout", caller,
+                        bytesPerTexel, readBytesPerTexel);
+                return false;
+            }
+
+            Vector<Uint8> scratch(static_cast<SizeT>(width) * static_cast<SizeT>(height) * bytesPerTexel);
+            {
+                ScopedNeutralPackState neutralPack;
+                MG_Backend::gBackendFunctionsTable.GL.ReadPixels(x, y, width, height, format, type, scratch.data());
+            }
+
+            auto* destination =
+                static_cast<Uint8*>(mipmapTexture->MapMipmapData(uploadTarget, static_cast<Uint>(level)));
+            if (!destination) return false;
+
+            const SizeT fullRowBytes = static_cast<SizeT>(texelSize.x()) * bytesPerTexel;
+            const SizeT fullSliceBytes = static_cast<SizeT>(texelSize.y()) * fullRowBytes;
+            const SizeT copyRowBytes = static_cast<SizeT>(width) * bytesPerTexel;
+            for (GLsizei row = 0; row < height; ++row) {
+                Uint8* dst = destination + static_cast<SizeT>(zoffset) * fullSliceBytes +
+                             static_cast<SizeT>(yoffset + row) * fullRowBytes +
+                             static_cast<SizeT>(xoffset) * bytesPerTexel;
+                Memcpy(dst, scratch.data() + static_cast<SizeT>(row) * copyRowBytes, copyRowBytes);
+            }
+            mipmapTexture->MarkStorageDirty(uploadTarget, static_cast<Uint>(level), true);
+            return true;
+        }
     } // namespace
 
     void ClearTexImage(GLuint texture, GLint level, GLenum format, GLenum type, const void* data) {
@@ -4798,10 +4888,8 @@ namespace MobileGL::MG_Impl::GLImpl {
             return;
         }
         if (!ValidateCopyTextureSubImage(textureObject, level, xoffset, 0, 0, width, 1, 1, __func__)) return;
-        // NOTE: the copy itself is still missing - CopyTexSubImage1D_State is a no-op and no backend
-        // exposes a 1D blit - so a valid call reaches the destination unchanged. Only the error
-        // reporting above is complete.
-        CopyTexSubImage1D_State(GL_TEXTURE_1D, level, xoffset, x, y, width);
+        CopyReadFramebufferIntoMipmapRegion(textureObject, GetPrimaryUploadTarget(textureObject), level, xoffset,
+                                            /*yoffset=*/0, /*zoffset=*/0, x, y, width, /*height=*/1, __func__);
     }
 
     void CopyTextureSubImage3D(GLuint texture, GLint level, GLint xoffset, GLint yoffset, GLint zoffset, GLint x,
@@ -4823,10 +4911,17 @@ namespace MobileGL::MG_Impl::GLImpl {
         if (!ValidateCopyTextureSubImage(textureObject, level, xoffset, yoffset, zoffset, width, height, 1, __func__)) {
             return;
         }
-        // NOTE: as with the 1D form, CopyTexSubImage3D_State does not perform the copy yet.
-        WithTemporarilyBoundNamedTexture(textureObject, [&](GLenum glTarget) {
-            CopyTexSubImage3D_State(glTarget, level, xoffset, yoffset, zoffset, x, y, width, height);
-        });
+        // A cube map addresses its faces as separate upload targets, so zoffset selects the target
+        // rather than a slice within one; every other layered target keeps zoffset as the slice.
+        TextureUploadTarget uploadTarget = GetPrimaryUploadTarget(textureObject);
+        GLint sliceOffset = zoffset;
+        if (target == TextureTarget::TextureCubeMap) {
+            uploadTarget = static_cast<TextureUploadTarget>(
+                static_cast<SizeT>(TextureUploadTarget::CubeMapPositiveX) + static_cast<SizeT>(zoffset));
+            sliceOffset = 0;
+        }
+        CopyReadFramebufferIntoMipmapRegion(textureObject, uploadTarget, level, xoffset, yoffset, sliceOffset, x, y,
+                                            width, height, __func__);
     }
 
     void CopyTexSubImage1D(GLenum target, GLint level, GLint xoffset, GLint x, GLint y, GLsizei width) {

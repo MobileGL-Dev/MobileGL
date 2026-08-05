@@ -288,6 +288,35 @@ namespace MobileGL {
                 return TextureInternalFormat::SRGB8;
             case GL_COMPRESSED_SRGB_ALPHA:
                 return TextureInternalFormat::SRGB8Alpha8;
+            // BPTC and ETC2/EAC follow the same deviation as RGTC above, for the same reason: they
+            // are specific formats core GL requires (BPTC from 4.2, ETC2/EAC from 4.3) that this
+            // stack has no compressor for. INVALID_ENUM was never a legal answer for them, and
+            // uncompressed storage is the same trade the RGTC formats already take.
+            case GL_COMPRESSED_RGBA_BPTC_UNORM:
+                return TextureInternalFormat::RGBA8;
+            case GL_COMPRESSED_SRGB_ALPHA_BPTC_UNORM:
+                return TextureInternalFormat::SRGB8Alpha8;
+            case GL_COMPRESSED_RGB_BPTC_SIGNED_FLOAT:
+            case GL_COMPRESSED_RGB_BPTC_UNSIGNED_FLOAT:
+                return TextureInternalFormat::RGB16F;
+            case GL_COMPRESSED_RGB8_ETC2:
+                return TextureInternalFormat::RGB8;
+            case GL_COMPRESSED_SRGB8_ETC2:
+                return TextureInternalFormat::SRGB8;
+            case GL_COMPRESSED_RGB8_PUNCHTHROUGH_ALPHA1_ETC2:
+            case GL_COMPRESSED_RGBA8_ETC2_EAC:
+                return TextureInternalFormat::RGBA8;
+            case GL_COMPRESSED_SRGB8_PUNCHTHROUGH_ALPHA1_ETC2:
+            case GL_COMPRESSED_SRGB8_ALPHA8_ETC2_EAC:
+                return TextureInternalFormat::SRGB8Alpha8;
+            case GL_COMPRESSED_R11_EAC:
+                return TextureInternalFormat::R8;
+            case GL_COMPRESSED_SIGNED_R11_EAC:
+                return TextureInternalFormat::R8Snorm;
+            case GL_COMPRESSED_RG11_EAC:
+                return TextureInternalFormat::RG8;
+            case GL_COMPRESSED_SIGNED_RG11_EAC:
+                return TextureInternalFormat::RG8Snorm;
             case GL_ALPHA:
             case GL_RED:
                 return TextureInternalFormat::Red;
