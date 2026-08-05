@@ -1518,6 +1518,16 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                     MG_Util::ConvertTextureUploadTargetToString(uploadTarget).c_str());
             return false;
         }
+        // glTexStorage*Multisample(samples = 1) is legal GL, but a one-sample image cannot back a
+        // sampler2DMS: VUID-RuntimeSpirv-samples-08726 forbids an OpTypeImage with MS = 1 from
+        // reading an image created with VK_SAMPLE_COUNT_1_BIT, and the fetch returns undefined data
+        // rather than an error. GL only promises "at least the requested number of samples", so
+        // giving a multisample texture two is both legal and the only way to keep the shader's view
+        // of it honest. GL_TEXTURE_SAMPLES still reports what the application asked for - that is
+        // read off the texture object, not off the image.
+        if (isMultisampleTexture && resolvedSampleCount == VK_SAMPLE_COUNT_1_BIT) {
+            resolvedSampleCount = VK_SAMPLE_COUNT_2_BIT;
+        }
 
         const VkImageAspectFlags aspect = GetAspectMaskForFormat(format);
         VkFormatProperties formatProperties{};
@@ -1593,7 +1603,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                     }
                 }
                 if (rounded == 0) {
-                    for (Uint32 bit = static_cast<Uint32>(resolvedSampleCount) >> 1; bit != 0; bit >>= 1) {
+                    // Never land on one sample: that is the VUID-RuntimeSpirv-samples-08726
+                    // violation the floor above exists to avoid, and it would come back silently
+                    // for any format whose only supported count is 1.
+                    for (Uint32 bit = static_cast<Uint32>(resolvedSampleCount) >> 1;
+                         bit > static_cast<Uint32>(VK_SAMPLE_COUNT_1_BIT); bit >>= 1) {
                         if ((supported & bit) != 0) {
                             rounded = bit;
                             break;
