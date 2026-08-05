@@ -144,16 +144,45 @@ TEST_F(QueryTest, GenQueriesReturnsDistinctNonzeroIdsAndTracksLiveness) {
     EXPECT_NE(ids[0], ids[2]);
     EXPECT_NE(ids[1], ids[2]);
 
+    // GenQueries only reserves names: "they acquire query state only when they are first used by
+    // calling BeginQuery" (GL 4.6 core 4.2.1), and IsQuery answers for objects, not for reserved
+    // names. So all three read as FALSE here even though the names are taken.
     EXPECT_EQ(MG_Impl::GLImpl::IsQuery(0), GL_FALSE);
+    EXPECT_EQ(MG_Impl::GLImpl::IsQuery(ids[0]), GL_FALSE);
+    EXPECT_EQ(MG_Impl::GLImpl::IsQuery(ids[1]), GL_FALSE);
+    EXPECT_EQ(MG_Impl::GLImpl::IsQuery(ids[2]), GL_FALSE);
+
+    // First use is what creates the object.
+    MG_Impl::GLImpl::BeginQuery(GL_TIME_ELAPSED, ids[0]);
+    MG_Impl::GLImpl::EndQuery(GL_TIME_ELAPSED);
     EXPECT_EQ(MG_Impl::GLImpl::IsQuery(ids[0]), GL_TRUE);
-    EXPECT_EQ(MG_Impl::GLImpl::IsQuery(ids[1]), GL_TRUE);
-    EXPECT_EQ(MG_Impl::GLImpl::IsQuery(ids[2]), GL_TRUE);
+    EXPECT_EQ(MG_Impl::GLImpl::IsQuery(ids[1]), GL_FALSE);
 
     MG_Impl::GLImpl::DeleteQueries(3, ids);
     EXPECT_EQ(MG_Impl::GLImpl::IsQuery(ids[0]), GL_FALSE);
     EXPECT_EQ(MG_Impl::GLImpl::IsQuery(ids[1]), GL_FALSE);
     EXPECT_EQ(MG_Impl::GLImpl::IsQuery(ids[2]), GL_FALSE);
 
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+}
+
+// The direct state access counterpart: glCreateQueries creates the object outright, so unlike a
+// glGenQueries name it is a query before anything is ever recorded into it.
+TEST_F(QueryTest, CreateQueriesYieldsQueryObjectsImmediately) {
+    GLuint ids[2] = {0, 0};
+    MG_Impl::GLImpl::CreateQueries(GL_TIME_ELAPSED, 2, ids);
+
+    EXPECT_NE(ids[0], 0u);
+    EXPECT_NE(ids[1], 0u);
+    EXPECT_NE(ids[0], ids[1]);
+
+    EXPECT_EQ(MG_Impl::GLImpl::IsQuery(ids[0]), GL_TRUE);
+    EXPECT_EQ(MG_Impl::GLImpl::IsQuery(ids[1]), GL_TRUE);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    MG_Impl::GLImpl::DeleteQueries(2, ids);
+    EXPECT_EQ(MG_Impl::GLImpl::IsQuery(ids[0]), GL_FALSE);
+    EXPECT_EQ(MG_Impl::GLImpl::IsQuery(ids[1]), GL_FALSE);
     EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
 }
 

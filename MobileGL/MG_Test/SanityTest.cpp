@@ -244,6 +244,19 @@ TEST(DirectGLESSanity, BindingZeroClearsPreviousNativeTextureBinding) {
     ASSERT_NE(frontendTextureObject, nullptr);
     ASSERT_EQ(frontendTextureObject->GetExternalIndex(), frontendTexture);
 
+    // A texture with no image is incomplete, and an incomplete texture samples as (0, 0, 0, 1) -
+    // which DirectGLES expresses by leaving the native target unbound (see "sample a
+    // mipmap-incomplete texture as black"). This test is about the bind-0 clear, so the texture
+    // has to be complete enough to get bound in the first place: a format plus a level 0. At 1x1
+    // that single level is the whole mip chain, so it stays complete under any filter. The state
+    // is set directly rather than through glTexImage2D because the mock GLES table below wires
+    // only the binding entry points, not the upload path.
+    frontendTextureObject->SetInternalFormat(TextureInternalFormat::RGBA8);
+    MG_State::GLState::AsMipmapTexture(frontendTextureObject.get())
+        ->AllocateStorage(TextureUploadTarget::Texture2D, 0, {{1, 1, 1}, 4});
+    ASSERT_FALSE(MG_State::GLState::SamplesAsIncompleteTexture(
+        frontendTextureObject.get(), frontendTextureObject->GetSamplerObject().get()));
+
     auto& backendTexture = DirectGLES::TextureImpl::g_backendTextureObjects.GetOrCreate(frontendTextureObject);
     backendTexture = MakeShared<DirectGLES::TextureImpl::BackendTextureObject>();
     const GLuint backendTextureId = backendTexture->GetBackendTextureId();
