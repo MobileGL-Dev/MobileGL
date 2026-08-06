@@ -648,6 +648,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         Uint32 m_pipelineStateHashColorCount = 0;
         Uint64 m_pipelineStateHash = 0;
         Bool m_pipelineStateHashValid = false;
+        // GetShaderTransformFlags(preTransform) memo: a pure function of the swapchain
+        // pre-transform, re-evaluated only when that value changes (surface rotation).
+        // No other invalidation input exists.
+        VkSurfaceTransformFlagBitsKHR m_baseTransformFlagsPreTransform =
+            VK_SURFACE_TRANSFORM_FLAG_BITS_MAX_ENUM_KHR;
+        Uint32 m_baseTransformFlagsCache = 0;
+        Uint32 GetBaseTransformFlagsRaw();
         // Drops every memoized pipeline handle. Required at command-buffer
         // boundaries and whenever any pipeline may have been destroyed. Also drops
         // the cached pipeline-state hash: the same boundaries can retire the GL
@@ -851,6 +858,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // streams re-upload from a range that depends on the draw's own vertex/index
         // range, and synthetic bindings carry glVertexAttrib* values that are not part
         // of any key here; a layout using any of them is never stored.
+        // Field order is hit-path cache locality, hot to cold: the per-draw validate
+        // reads the scalars and the EBO memo head, then only the first bindingCount
+        // elements of vkBuffers/vkOffsets; the per-binding revalidation arrays at the
+        // tail are touched once per frame at most.
         struct ResolvedVertexBindings {
             // Must equal DynamicStateShadow::kMaxShadowedVertexBindings (static_assert in
             // the .cpp): past that width the bind shadow cannot skip a redundant bind
@@ -883,47 +894,79 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             // Such a buffer can mutate its shadow with no API call, so it has to be
             // re-pushed per draw and the one-compare path above cannot apply.
             Bool anyBufferMapped = true;
-            // Per binding: the VAO attribute location its buffer comes from, that buffer,
-            // and the buffer's VkBufferManager slice epoch when the slice was resolved.
-            Uint8 attributeLocations[kMaxBindings] = {};
-            const MG_State::GLState::BufferObject* buffers[kMaxBindings] = {};
-            Uint64 sliceEpochs[kMaxBindings] = {};
-            VkBuffer vkBuffers[kMaxBindings] = {};
-            VkDeviceSize vkOffsets[kMaxBindings] = {};
 
             // Resident element-buffer slice memo (skips the per-draw AcquireResidentSlice
             // for the VAO's EBO, which cold-chases 500+ distinct resources in a
             // chunk-cycling frame). Self-validating exactly like the bindings above: a hit
-            // requires the LIVE bound EBO pointer to equal indexBuffer AND that buffer's
-            // resource to still carry indexSliceEpoch (epochs are minted from a
-            // process-lifetime counter, so a recycled address can never revalidate).
-            // Restart-substituted and streamed EBOs are never stored. indexFrameSerial
-            // tracks the last frame the resource's GPU-use serial was stamped through this
-            // memo; 0 means no index memo. Independent of the vertex half: both are
-            // (pointer, epoch)-validated, so neither can serve stale state for the other.
+            // requires the LIVE bound EBO pointer to equal indexBuffer AND either an
+            // unmoved manager-wide slice-epoch counter (nothing anywhere changed slices
+            // or gained a host map, the same one-compare rescue the vertex half uses) or
+            // that buffer's resource still carrying indexSliceEpoch (epochs are minted
+            // from a process-lifetime counter, so a recycled address can never
+            // revalidate). Restart-substituted and streamed EBOs are never stored.
+            // indexFrameSerial tracks the last frame the resource's GPU-use serial was
+            // stamped through this memo; 0 means no index memo. Independent of the
+            // vertex half: both are (pointer, epoch)-validated, so neither can serve
+            // stale state for the other.
             const MG_State::GLState::BufferObject* indexBuffer = nullptr;
             Uint64 indexSliceEpoch = 0;
+            // GetSliceEpochCounter() when the resource's epoch was last verified; only
+            // meaningful while indexFrameSerial matches the current frame serial.
+            Uint64 indexSliceEpochCounter = 0;
             VkBuffer indexVkBuffer = VK_NULL_HANDLE;
             VkDeviceSize indexSliceOffset = 0;
             Uint64 indexFrameSerial = 0;
+
+            // Bound per draw (first bindingCount elements).
+            VkBuffer vkBuffers[kMaxBindings] = {};
+            VkDeviceSize vkOffsets[kMaxBindings] = {};
+            // Per binding: the VAO attribute location its buffer comes from, that buffer,
+            // and the buffer's VkBufferManager slice epoch when the slice was resolved.
+            // Only read by the per-frame revalidation and the something-moved fallback.
+            Uint8 attributeLocations[kMaxBindings] = {};
+            const MG_State::GLState::BufferObject* buffers[kMaxBindings] = {};
+            Uint64 sliceEpochs[kMaxBindings] = {};
         };
-        // Keyed on the VAO address purely as a lookup hint - an entry is only ever
-        // compared against, never dereferenced through, so a recycled address cannot
-        // produce a wrong bind: every input the resolve depends on is re-read from live
-        // state and compared before the entry is used.
-        UnorderedMap<const MG_State::GLState::VertexArrayObject*, ResolvedVertexBindings>
-            m_resolvedVertexBindings;
-        // Frame serial the map was last aged on; entries are frame-scoped, so this only
-        // drives the size sweep below.
-        Uint64 m_resolvedVertexBindingsFrameSerial = 0;
-        // Entries of deleted VAOs are never hit again but still occupy the map; drop the
-        // lot at a frame boundary once they could outweigh a large frame's working set.
-        static constexpr SizeT kMaxResolvedVertexBindings = 4096;
+        // One direct-mapped slot of the per-VAO draw-memo table below. The key is a
+        // lookup hint only - a slot is never dereferenced through vaoKey; every fact it
+        // carries is validated against live state before use:
+        //  - layoutHash/layoutAuxMasks are valid only while contentHash equals the LIVE
+        //    VAO's own hash memo (which the VAO's config version guards), so a config
+        //    change, a buffer rebind, or a recycled VAO address with a different
+        //    configuration all miss. A recycled address with a byte-identical
+        //    configuration AND identical bound buffers reproduces the content hash, and
+        //    then the facts are correct by construction (they are a pure function of it).
+        //  - bindings revalidates per draw exactly as before (frame serial, content
+        //    hash, per-binding live buffer pointers and slice epochs).
+        struct alignas(64) VaoDrawMemo {
+            const MG_State::GLState::VertexArrayObject* vaoKey = nullptr;
+            // The VAO content hash (VertexInputStateFactory::GetOrComputeHash) the two
+            // layout facts below were derived from; 0 while nothing valid is stored.
+            Uint64 contentHash = 0;
+            Bool layoutFactsValid = false;
+            // The resolved layout identity + packed (unsupported, location) masks -
+            // the exact values GetBackendAuxMemo used to serve, moved here so the
+            // per-draw probe stays inside this table's one hot line instead of
+            // touching a second cold line of every cycled VAO object.
+            Uint64 layoutHash = 0;
+            Uint64 layoutAuxMasks = 0;
+            ResolvedVertexBindings bindings;
+        };
+        // Fixed-size, allocated on first use, never rehashed or swept: entries are
+        // recycled in place on slot collisions (two-slot probe, older frame serial
+        // evicted), and stale entries self-invalidate through the compares above. A
+        // fixed table also makes every VaoDrawMemo/ResolvedVertexBindings pointer
+        // stable for the duration of a draw, which the EBO memo handoff
+        // (m_currentDrawResolvedEntry) relies on.
+        static constexpr Uint32 kVaoDrawMemoSlotCount = 2048; // power of two
+        Vector<VaoDrawMemo> m_vaoDrawMemoTable;
+        // Finds the slot holding `vao`, or recycles the older of its two candidate
+        // slots into an empty memo keyed on `vao`. Never returns null.
+        VaoDrawMemo* LookupVaoDrawMemo(const MG_State::GLState::VertexArrayObject* vao);
         // The current draw's memo entry, set by UploadAndBindVertexBuffers and consumed
         // by the same draw's UploadAndBindIndexBuffer (the EBO memo lives in the same
-        // entry). Valid ONLY within that window: the map is open-addressing, so the next
-        // insert (i.e. the next draw's resolve of a new VAO) can move it. Null when the
-        // draw's layout is not memoisable.
+        // entry). Valid ONLY within that window: the next draw's lookup can recycle the
+        // slot. Null when the draw's layout is not memoisable.
         ResolvedVertexBindings* m_currentDrawResolvedEntry = nullptr;
 
         void CreateInstance();

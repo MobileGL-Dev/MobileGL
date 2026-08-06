@@ -16,6 +16,7 @@
 #include "MG_Util/Metrics/TextureMetrics.h"
 #include "MG_Util/Miscellany/IndexGenerator.h"
 #include <atomic>
+#include <bit>
 #include <cstring>
 #include <spirv_reflect.h>
 
@@ -1450,6 +1451,18 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         payload.mode = mode;
         payload.indexBufferView.indexType = type;
 
+        // Loop-invariant: the index type is fixed for the whole multi-draw, so resolve
+        // its byte size once instead of twice per sub-draw (a cross-TU switch that
+        // showed up in per-frame profiles of sodium-style 132x32 multi-draws). Index
+        // sizes are 1/2/4, so the per-sub-draw offset division below reduces to a
+        // shift - the hardware divide was the hottest instruction of this loop.
+        const SizeT indexSize = MG_Util::GetGLTypeSize(type);
+        if (indexSize == 0) {
+            MGLOG_E("MultiDrawElementsBaseVertex skipped: unsupported index type 0x%x", type);
+            return;
+        }
+        const Uint32 indexSizeShift = static_cast<Uint32>(std::countr_zero(indexSize));
+
         // TODO: allocate draw cmd buf elsewhere
         static Vector<DrawIndexedCmdParam> params;
         params.clear();
@@ -1464,14 +1477,14 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
             payload.indexBufferView.indexByteOffset = 0;
             payload.indexBufferView.indexByteSize =
-                    std::max(reinterpret_cast<SizeT>(indices[i]) + count[i] * MG_Util::GetGLTypeSize(type),
+                    std::max(reinterpret_cast<SizeT>(indices[i]) + count[i] * indexSize,
                              payload.indexBufferView.indexByteSize);
 
             auto& param = params[i];
 
             param.indexCount = count[i];
             param.instanceCount = 1;
-            param.firstIndex = reinterpret_cast<SizeT>(indices[i]) / MG_Util::GetGLTypeSize(type);
+            param.firstIndex = reinterpret_cast<SizeT>(indices[i]) >> indexSizeShift;
             param.vertexOffset = basevertex[i];
             param.firstInstance = 0;
         }

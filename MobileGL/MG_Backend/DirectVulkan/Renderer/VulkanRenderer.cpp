@@ -3157,6 +3157,41 @@ void main() {
         return true;
     }
 
+    VulkanRenderer::VaoDrawMemo* VulkanRenderer::LookupVaoDrawMemo(
+        const MG_State::GLState::VertexArrayObject* vao) {
+        if (m_vaoDrawMemoTable.empty()) {
+            m_vaoDrawMemoTable.resize(kVaoDrawMemoSlotCount);
+        }
+        // Multiplicative mix of the (16-byte-aligned) address; take high bits, they
+        // carry the most entropy of a multiply.
+        const Uint64 mixed = static_cast<Uint64>(reinterpret_cast<SizeT>(vao) >> 4) * 0x9E3779B97F4A7C15ull;
+        const Uint32 index = static_cast<Uint32>(mixed >> 32) & (kVaoDrawMemoSlotCount - 1);
+        VaoDrawMemo& first = m_vaoDrawMemoTable[index];
+        if (first.vaoKey == vao) {
+            return &first;
+        }
+        VaoDrawMemo& second = m_vaoDrawMemoTable[index ^ 1u];
+        if (second.vaoKey == vao) {
+            return &second;
+        }
+        // Miss: recycle a slot. Prefer an empty one; otherwise evict the entry whose
+        // bindings memo is older (its VAO is the one drawn less recently).
+        VaoDrawMemo* victim = &first;
+        if (first.vaoKey != nullptr &&
+            (second.vaoKey == nullptr || second.bindings.frameSerial < first.bindings.frameSerial)) {
+            victim = &second;
+        }
+        victim->vaoKey = vao;
+        victim->contentHash = 0;
+        victim->layoutFactsValid = false;
+        // Unmatchable until a resolve completes (same rule as before: a bailed-out
+        // resolve must never leave stale contents matchable).
+        victim->bindings.frameSerial = 0;
+        victim->bindings.indexFrameSerial = 0;
+        victim->bindings.indexBuffer = nullptr;
+        return victim;
+    }
+
     Bool VulkanRenderer::UploadAndBindVertexBuffers(
         VkCommandBuffer commandBuffer, const MG_State::GLState::VertexArrayObject& vao,
         const ProgramFactory::VkProgramObject& programObj, const DrawCmdParam& drawParams,
@@ -3188,34 +3223,46 @@ void main() {
         const Uint32 activeAttribMask = programObj.activeVertexInputLocationMask;
 
         const Uint64 frameSerial = m_bufferManager.GetFrameSerial();
-        if (frameSerial != m_resolvedVertexBindingsFrameSerial) {
-            m_resolvedVertexBindingsFrameSerial = frameSerial;
-            if (m_resolvedVertexBindings.size() > kMaxResolvedVertexBindings) {
-                m_resolvedVertexBindings.clear();
-            }
-        }
         // Probe the memo BEFORE resolving the vertex-input entry: a hit needs nothing
         // from it (the VAO's own hash memo pins layout and buffers - see
         // TryBindResolvedVertexBindings), and skipping the resolve also skips its
-        // per-draw cold chase into the factory's heap entry.
+        // per-draw cold chase into the factory's heap entry. The direct-mapped slot
+        // lookup replaces the old pointer-keyed hash-map find, whose metadata and
+        // key-storage probing was the dominant per-draw cost of a VAO-cycling frame.
         m_currentDrawResolvedEntry = nullptr;
+        VaoDrawMemo* slot = nullptr;
         ResolvedVertexBindings* memo = nullptr;
         Uint64 vaoContentHash = 0;
         const Bool vaoHashKnown = vao.GetBackendHashMemo(vaoContentHash);
         if (vaoHashKnown) {
-            if (auto found = m_resolvedVertexBindings.find(&vao); found != m_resolvedVertexBindings.end()) {
-                memo = &found->second;
-                if (TryBindResolvedVertexBindings(commandBuffer, vao, *memo, vaoContentHash,
-                                                  activeAttribMask, frameSerial)) {
-                    m_currentDrawResolvedEntry = memo;
-                    return true;
-                }
-                // Whatever it described is stale; a resolve that bails out below must not
-                // leave the old contents matchable either.
-                memo->frameSerial = 0;
+            slot = LookupVaoDrawMemo(&vao);
+            memo = &slot->bindings;
+            if (TryBindResolvedVertexBindings(commandBuffer, vao, *memo, vaoContentHash,
+                                              activeAttribMask, frameSerial)) {
+                m_currentDrawResolvedEntry = memo;
+                return true;
             }
+            // Whatever it described is stale; a resolve that bails out below must not
+            // leave the old contents matchable either.
+            memo->frameSerial = 0;
         }
         auto& vertexInputState = m_vertexInputStateFactory->GetOrCreateVertexInputState(vao);
+        if (slot == nullptr) {
+            // First sight since a config change: the factory resolve just stamped the
+            // VAO's hash memo, so the slot can be claimed (and the facts below stored)
+            // for every later draw of this configuration.
+            slot = LookupVaoDrawMemo(&vao);
+            memo = &slot->bindings;
+            memo->frameSerial = 0;
+        }
+        // Refresh the layout facts served to TrySetupDrawFastPath. Pure values derived
+        // from the content hash, so this is correct even for layouts whose BINDINGS are
+        // not memoisable (client arrays, conversions).
+        slot->contentHash = vertexInputState.hash;
+        slot->layoutHash = vertexInputState.layoutHash;
+        slot->layoutAuxMasks = VertexInputStateFactory::PackVertexInputAuxMasks(
+            vertexInputState.unsupportedAttribMask, vertexInputState.attributeLocationMask);
+        slot->layoutFactsValid = true;
         const Uint32 vertexInputAttribMask = vertexInputState.attributeLocationMask;
         const Uint32 missingAttribMask = activeAttribMask & ~vertexInputAttribMask;
 
@@ -3444,10 +3491,8 @@ void main() {
             // indexes the raw array, so such a binding is not memoisable.
             memoisable = memoisable && bindingLocation < MG_State::GLState::VertexArrayObject::MAX_VERTEX_ATTRIBS;
             if (memoisable) {
-                if (memo == nullptr) {
-                    memo = &m_resolvedVertexBindings[&vao];
-                    memo->frameSerial = 0;
-                }
+                // memo is always non-null here: the slot was claimed (and its serial
+                // zeroed) before the resolve started.
                 memo->attributeLocations[binding] = static_cast<Uint8>(bindingLocation);
                 memo->buffers[binding] = sourceBufferShared.get();
                 // Read after the acquire: it is the acquire that creates the resource
@@ -3587,9 +3632,11 @@ void main() {
         // transient copy where the application's restart index becomes the fixed one.
         Uint32 substituteRestartIndex = 0;
         Bool substituteRestart = false;
-        if (MG_State::pGLContext->IsCapabilityEnabled(CapabilityInput::PrimitiveRestart) &&
-            !MG_State::pGLContext->IsCapabilityEnabled(CapabilityInput::PrimitiveRestartFixedIndex)) {
-            const Uint32 restartIndex = MG_State::pGLContext->GetPrimitiveRestartIndex();
+        // One bulk parameters fetch instead of up to three accessor calls per indexed
+        // draw; all three inputs are pure reads of these fields.
+        const RenderStateParameters& rsp = MG_State::pGLContext->GetRenderStateParameters();
+        if (rsp.PrimitiveRestartEnabled && !rsp.PrimitiveRestartFixedIndexEnabled) {
+            const Uint32 restartIndex = rsp.PrimitiveRestartIndex;
             Uint32 fixedMax = 0;
             switch (vkIndexType) {
             case VK_INDEX_TYPE_UINT8: fixedMax = 0xFFu; break;
@@ -3652,15 +3699,29 @@ void main() {
         ResolvedVertexBindings* indexMemo = m_currentDrawResolvedEntry;
         if (indexMemo != nullptr && !substituteRestart && indexMemo->indexFrameSerial != 0 &&
             indexMemo->indexBuffer == indexBuffer) {
-            auto* resource = static_cast<VkBufferResource*>(
-                indexBufferShared->GetBackendResource().get());
-            if (resource != nullptr && resource->sliceEpoch == indexMemo->indexSliceEpoch) {
-                const Uint64 frameSerial = m_bufferManager.GetFrameSerial();
-                if (indexMemo->indexFrameSerial != frameSerial) {
-                    // Same busy-tracking stamp the skipped acquire would have made.
+            // One-compare rescue first (mirrors TryBindResolvedVertexBindings): the
+            // use-serial was stamped this frame and the manager-wide slice-epoch
+            // counter has not moved, so no buffer anywhere - this EBO included -
+            // changed its slice or gained a host map since the epoch was verified.
+            // Skips the per-draw GetBackendResource chase into a cold resource object.
+            Bool sliceStillValid = false;
+            const Uint64 frameSerial = m_bufferManager.GetFrameSerial();
+            if (indexMemo->indexFrameSerial == frameSerial &&
+                indexMemo->indexSliceEpochCounter == m_bufferManager.GetSliceEpochCounter()) {
+                sliceStillValid = true;
+            } else {
+                auto* resource = static_cast<VkBufferResource*>(
+                    indexBufferShared->GetBackendResource().get());
+                if (resource != nullptr && resource->sliceEpoch == indexMemo->indexSliceEpoch) {
+                    sliceStillValid = true;
+                    // Same busy-tracking stamp the skipped acquire would have made,
+                    // then re-arm the one-compare path for the rest of the frame.
                     resource->lastUseSerial = frameSerial;
                     indexMemo->indexFrameSerial = frameSerial;
+                    indexMemo->indexSliceEpochCounter = m_bufferManager.GetSliceEpochCounter();
                 }
+            }
+            if (sliceStillValid) {
                 const VkDeviceSize memoBindOffset = indexMemo->indexSliceOffset +
                     static_cast<VkDeviceSize>(pIndexBufferView->indexByteOffset);
                 auto& shadow = g_dynamicStateShadow;
@@ -3710,6 +3771,9 @@ void main() {
             if (resource != nullptr) {
                 indexMemo->indexBuffer = indexBuffer;
                 indexMemo->indexSliceEpoch = resource->sliceEpoch;
+                // Read after the acquire for the same reason as the epoch: the acquire
+                // may have bumped the manager-wide counter minting this very epoch.
+                indexMemo->indexSliceEpochCounter = m_bufferManager.GetSliceEpochCounter();
                 indexMemo->indexVkBuffer = slice.buffer;
                 indexMemo->indexSliceOffset = slice.offset;
                 indexMemo->indexFrameSerial = m_bufferManager.GetFrameSerial();
@@ -4302,50 +4366,53 @@ void main() {
     // FBO-derived payload inputs (attachment presence/formats/draw-buffer gating) are
     // pinned by the render-pass hash key, exactly as the version-keyed memo relied on.
     Uint64 VulkanRenderer::ComputePipelineStateHash(Uint32 colorAttachmentCount) const {
-        auto& ctx = *MG_State::pGLContext;
+        // One bulk fetch instead of ~17 per-field accessor calls into MG_State: every
+        // input below is a plain field of RenderStateParameters, and each accessor this
+        // replaces (IsCapabilityEnabled / Get*) is a verified pure read of that same
+        // field (RenderState.cpp), so the hashed values are bit-identical. This runs on
+        // every draw whose pipeline-state version moved (a per-draw GL_BLEND toggle),
+        // where the accessor-call overhead dominated the hash itself.
+        const RenderStateParameters& p = MG_State::pGLContext->GetRenderStateParameters();
         Uint64 capabilityBits = 0;
-        capabilityBits |= ctx.IsCapabilityEnabled(CapabilityInput::CullFace) ? 1ull << 0 : 0;
-        capabilityBits |= ctx.IsCapabilityEnabled(CapabilityInput::DepthTest) ? 1ull << 1 : 0;
-        capabilityBits |= ctx.IsCapabilityEnabled(CapabilityInput::PolygonOffsetFill) ? 1ull << 2 : 0;
-        capabilityBits |= ctx.IsCapabilityEnabled(CapabilityInput::RasterizerDiscard) ? 1ull << 3 : 0;
-        capabilityBits |= ctx.IsCapabilityEnabled(CapabilityInput::ColorLogicOp) ? 1ull << 4 : 0;
-        capabilityBits |= ctx.IsCapabilityEnabled(CapabilityInput::StencilTest) ? 1ull << 5 : 0;
-        capabilityBits |= ctx.IsCapabilityEnabled(CapabilityInput::PrimitiveRestart) ? 1ull << 6 : 0;
-        capabilityBits |= ctx.IsCapabilityEnabled(CapabilityInput::PrimitiveRestartFixedIndex) ? 1ull << 7 : 0;
-        capabilityBits |= ctx.GetDepthMask() ? 1ull << 8 : 0;
+        capabilityBits |= p.CullFaceEnabled ? 1ull << 0 : 0;
+        capabilityBits |= p.DepthTestEnabled ? 1ull << 1 : 0;
+        capabilityBits |= p.PolygonOffsetFillEnabled ? 1ull << 2 : 0;
+        capabilityBits |= p.RasterizerDiscardEnabled ? 1ull << 3 : 0;
+        capabilityBits |= p.ColorLogicOpEnabled ? 1ull << 4 : 0;
+        capabilityBits |= p.StencilTestEnabled ? 1ull << 5 : 0;
+        capabilityBits |= p.PrimitiveRestartEnabled ? 1ull << 6 : 0;
+        capabilityBits |= p.PrimitiveRestartFixedIndexEnabled ? 1ull << 7 : 0;
+        capabilityBits |= p.DepthMask ? 1ull << 8 : 0;
         Uint64 hash = CombinePipelineStateWord(0x243F6A8885A308D3ull, capabilityBits);
-        hash = CombinePipelineStateWord(hash, static_cast<Uint64>(ctx.GetPatchVertices()));
-        hash = CombinePipelineStateWord(hash, static_cast<Uint64>(ctx.GetPolygonModeFront()));
-        hash = CombinePipelineStateWord(hash, static_cast<Uint64>(ctx.GetCullFaceMode()));
-        hash = CombinePipelineStateWord(hash, static_cast<Uint64>(ctx.GetDepthFunc()));
-        hash = CombinePipelineStateWord(hash, static_cast<Uint64>(ctx.GetLogicOp()));
-        for (const StencilFace face : {StencilFace::Front, StencilFace::Back}) {
-            const StencilFaceState& stencil = ctx.GetStencilState(face);
+        hash = CombinePipelineStateWord(hash, static_cast<Uint64>(p.PatchVertices));
+        hash = CombinePipelineStateWord(hash, static_cast<Uint64>(p.PolygonModeFront));
+        hash = CombinePipelineStateWord(hash, static_cast<Uint64>(p.CullFaceModeSetting));
+        hash = CombinePipelineStateWord(hash, static_cast<Uint64>(p.DepthFunc));
+        hash = CombinePipelineStateWord(hash, static_cast<Uint64>(p.LogicOp));
+        // StencilStates[0] is Front, [1] is Back (RenderState::GetStencilFaceIndex) -
+        // the same order the two GetStencilState(face) calls used to hash in.
+        for (const StencilFaceState& stencil : p.StencilStates) {
             hash = CombinePipelineStateWord(hash,
                 static_cast<Uint64>(stencil.FailOp) |
                 (static_cast<Uint64>(stencil.PassDepthPassOp) << 16) |
                 (static_cast<Uint64>(stencil.PassDepthFailOp) << 32) |
                 (static_cast<Uint64>(stencil.Func) << 48));
         }
+        MOBILEGL_ASSERT(colorAttachmentCount <= p.BlendStates.size(),
+                        "ComputePipelineStateHash: colorAttachmentCount %u exceeds MAX_DRAW_BUFFERS",
+                        colorAttachmentCount);
         for (Uint32 i = 0; i < colorAttachmentCount; ++i) {
-            BlendFactor srcRGB = BlendFactor::One;
-            BlendFactor dstRGB = BlendFactor::Zero;
-            BlendFactor srcAlpha = BlendFactor::One;
-            BlendFactor dstAlpha = BlendFactor::Zero;
-            BlendEquation colorEquation = BlendEquation::Add;
-            BlendEquation alphaEquation = BlendEquation::Add;
-            ctx.GetBlendFuncIndexed(i, srcRGB, dstRGB, srcAlpha, dstAlpha);
-            ctx.GetBlendEquationIndexed(i, colorEquation, alphaEquation);
-            const BoolVec4 mask = ctx.GetColorMaskIndexed(m_independentBlendFeatureEnabled ? i : 0);
-            Uint64 attachmentWord = ctx.IsCapabilityEnabledIndexed(CapabilityInput::Blend, i) ? 1ull : 0;
+            const PerBufferBlendState& blend = p.BlendStates[i];
+            const BoolVec4 mask = p.ColorMasks[m_independentBlendFeatureEnabled ? i : 0];
+            Uint64 attachmentWord = blend.Enabled ? 1ull : 0;
             attachmentWord |= (mask.r() ? 1ull << 1 : 0) | (mask.g() ? 1ull << 2 : 0) |
                               (mask.b() ? 1ull << 3 : 0) | (mask.a() ? 1ull << 4 : 0);
-            attachmentWord |= static_cast<Uint64>(srcRGB) << 8;
-            attachmentWord |= static_cast<Uint64>(dstRGB) << 16;
-            attachmentWord |= static_cast<Uint64>(srcAlpha) << 24;
-            attachmentWord |= static_cast<Uint64>(dstAlpha) << 32;
-            attachmentWord |= static_cast<Uint64>(colorEquation) << 40;
-            attachmentWord |= static_cast<Uint64>(alphaEquation) << 48;
+            attachmentWord |= static_cast<Uint64>(blend.SrcFactorRGB) << 8;
+            attachmentWord |= static_cast<Uint64>(blend.DstFactorRGB) << 16;
+            attachmentWord |= static_cast<Uint64>(blend.SrcFactorAlpha) << 24;
+            attachmentWord |= static_cast<Uint64>(blend.DstFactorAlpha) << 32;
+            attachmentWord |= static_cast<Uint64>(blend.ColorEquation) << 40;
+            attachmentWord |= static_cast<Uint64>(blend.AlphaEquation) << 48;
             hash = CombinePipelineStateWord(hash, attachmentWord);
         }
         return hash;
@@ -5045,6 +5112,18 @@ void main() {
         shadow.dynamicTailIsDefaultFbo = isDefaultFbo;
     }
 
+    Uint32 VulkanRenderer::GetBaseTransformFlagsRaw() {
+        // GetShaderTransformFlags is a pure function of the pre-transform, which only
+        // changes on surface rotation - memoised so the per-draw path pays one field
+        // compare instead of the call + switch.
+        const VkSurfaceTransformFlagBitsKHR preTransform = m_swapchainObject.GetPreTransform();
+        if (preTransform != m_baseTransformFlagsPreTransform) {
+            m_baseTransformFlagsCache = GetShaderTransformFlags(preTransform).GetRaw();
+            m_baseTransformFlagsPreTransform = preTransform;
+        }
+        return m_baseTransformFlagsCache;
+    }
+
     Bool VulkanRenderer::TrySetupDrawFastPath(FrameContext::FrameData& frame, GLenum mode,
                                               Flags<DrawSetupAspect> aspects, const DrawCmdParam& drawParams,
                                               const IndexBufferView* pIndexBufferView) {
@@ -5095,15 +5174,15 @@ void main() {
         if (renderStateMoved) {
             // Only the pipeline depends on the moved state - except the render-pass
             // flavor input (depth/stencil participation); a flip of that must take
-            // the full path's pass selection.
-            const Bool drawUsesDepthStencil =
-                MG_State::pGLContext->IsCapabilityEnabled(CapabilityInput::DepthTest) ||
-                MG_State::pGLContext->IsCapabilityEnabled(CapabilityInput::StencilTest);
+            // the full path's pass selection. One bulk parameters fetch instead of
+            // two capability-accessor calls; both are pure reads of the same fields.
+            const RenderStateParameters& rsp = MG_State::pGLContext->GetRenderStateParameters();
+            const Bool drawUsesDepthStencil = rsp.DepthTestEnabled || rsp.StencilTestEnabled;
             if (drawUsesDepthStencil != snap.drawUsesDepthStencil) {
                 return false;
             }
         }
-        if (GetShaderTransformFlags(m_swapchainObject.GetPreTransform()).GetRaw() != snap.baseTransformFlags) {
+        if (GetBaseTransformFlagsRaw() != snap.baseTransformFlags) {
             return false;
         }
         if (m_textureManager->GetResourceEraseEpoch() != snap.textureEraseEpoch ||
@@ -5138,14 +5217,40 @@ void main() {
         Uint64 vaoLayoutHash = snap.vaoLayoutHash;
         Bool vaoLayoutMoved = false;
         if (vaoMoved) {
+            // Read the layout facts through the flat per-VAO memo table, keyed by the
+            // VAO's content-hash memo. The hash memo shares the cache line this compare
+            // chain already loaded (the config version), and the table slot is compact
+            // and hot - unlike the VAO's aux-memo words, which start a second cold line
+            // of every object in a VAO-cycling frame. The facts are pure functions of
+            // the content hash, so a slot whose contentHash equals the live memoised
+            // hash serves them for ANY VAO object, recycled addresses included.
             Uint64 auxMasks = 0;
-            if (!vao.GetBackendAuxMemo(vaoLayoutHash, auxMasks)) {
-                // First sight of this VAO configuration: resolve (which stamps the aux
-                // memo for every later draw) and read the same facts from the entry.
+            Bool factsKnown = false;
+            Uint64 contentHash = 0;
+            if (vao.GetBackendHashMemo(contentHash)) {
+                const VaoDrawMemo* vaoMemo = LookupVaoDrawMemo(&vao);
+                if (vaoMemo->layoutFactsValid && vaoMemo->contentHash == contentHash) {
+                    vaoLayoutHash = vaoMemo->layoutHash;
+                    auxMasks = vaoMemo->layoutAuxMasks;
+                    factsKnown = true;
+                }
+            }
+            if (!factsKnown) {
+                // First sight of this VAO configuration: resolve (which stamps the
+                // VAO's hash memo) and read the same facts from the entry, then stamp
+                // the table slot for every later draw.
                 const auto& vertexInputState = m_vertexInputStateFactory->GetOrCreateVertexInputState(vao);
                 vaoLayoutHash = vertexInputState.layoutHash;
                 auxMasks = VertexInputStateFactory::PackVertexInputAuxMasks(
                     vertexInputState.unsupportedAttribMask, vertexInputState.attributeLocationMask);
+                Uint64 stampedHash = 0;
+                if (vao.GetBackendHashMemo(stampedHash)) {
+                    VaoDrawMemo* vaoMemo = LookupVaoDrawMemo(&vao);
+                    vaoMemo->contentHash = stampedHash;
+                    vaoMemo->layoutHash = vaoLayoutHash;
+                    vaoMemo->layoutAuxMasks = auxMasks;
+                    vaoMemo->layoutFactsValid = true;
+                }
             }
             vaoLayoutMoved = vaoLayoutHash != snap.vaoLayoutHash;
             if (vaoLayoutMoved) {
@@ -5208,7 +5313,7 @@ void main() {
             if (sampledTexture == nullptr) {
                 continue;
             }
-            const auto* resource = sampledResources[i];
+            auto* resource = sampledResources[i];
             if (resource == nullptr || !IsValidSampledImageLayout(resource->layout)) {
                 return false;
             }
@@ -5218,6 +5323,11 @@ void main() {
             }
             contentSum += sampledTexture->GetContentVersion();
             paramsSum += sampledTexture->GetTextureParamsVersion();
+            // Folded into this walk (was a second loop): the stamp is a plain recency
+            // store. Stamping ahead of the sum compare below is benign - a declined
+            // draw re-runs the full path, which stamps the same resources, and an
+            // over-stamp only delays garbage collection by one generation.
+            m_textureManager->StampResourceRecordingUse(*resource);
         }
         if (contentSum != snap.sampledContentSum || paramsSum != snap.sampledParamsSum) {
             return false;
@@ -5226,11 +5336,6 @@ void main() {
         if (samplingResolutionGeneration != snap.samplingResolutionGeneration) {
             snap.samplingResolutionGeneration = samplingResolutionGeneration;
             samplerDescriptorsUnchanged = false;
-        }
-        for (SizeT i = 0; i < sampledTextures.size(); ++i) {
-            if (sampledTextures[i] != nullptr && sampledResources[i] != nullptr) {
-                m_textureManager->StampResourceRecordingUse(*sampledResources[i]);
-            }
         }
 
         // Everything the full path would re-resolve is provably unchanged - or, for
@@ -5343,7 +5448,8 @@ void main() {
         }
         const auto& vao = *MG_State::pGLContext->GetBoundVertexArray();
         const auto& program = *MG_State::pGLContext->GetProgramForDraw();
-        ProgramFactory::CompileOptionFlags transformFlags = GetShaderTransformFlags(m_swapchainObject.GetPreTransform());
+        ProgramFactory::CompileOptionFlags transformFlags =
+            ProgramFactory::CompileOptionFlags(GetBaseTransformFlagsRaw());
         // Captured draws take the xfb-decorated program variant.
         if (m_transformFeedbackFeatureEnabled && MG_State::pGLContext->IsTransformFeedbackActive() &&
             program.GetTransformFeedbackVaryingCount() > 0) {
@@ -5682,7 +5788,7 @@ void main() {
                 snap.drawFboIsDefault = drawFbo->IsDefaultFramebuffer();
                 snap.renderStateVersion = MG_State::pGLContext->GetPipelineStateVersion();
                 snap.bindGeneration = MG_State::pGLContext->GetTextureBindGeneration();
-                snap.baseTransformFlags = GetShaderTransformFlags(m_swapchainObject.GetPreTransform()).GetRaw();
+                snap.baseTransformFlags = GetBaseTransformFlagsRaw();
                 snap.resolvedTransformFlags = transformFlags.GetRaw();
                 snap.renderPassHash = nowActiveRenderPass->hash;
                 snap.imageIndex = m_imageIndexAcquired;
