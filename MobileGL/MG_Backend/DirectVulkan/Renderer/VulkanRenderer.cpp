@@ -4916,10 +4916,15 @@ void main() {
             program.GetBackendStateVersion() != snap.programVersion) {
             return false;
         }
+        // A changed VAO does NOT decline: the VAO only feeds the pipeline's vertex
+        // input state (re-resolved below through the layout-keyed memo, so N VAOs
+        // sharing one attribute layout share one pipeline) and the vertex/index
+        // buffer binds (re-run every draw anyway). Declining here would send every
+        // draw of a VAO-cycling stream (Minecraft chunk rendering) through the full
+        // path, re-resolving descriptors and texture layouts nothing invalidated.
         const auto& vao = *MG_State::pGLContext->GetBoundVertexArray();
-        if (static_cast<const void*>(&vao) != snap.vao || vao.GetConfigVersion() != snap.vaoConfigVersion) {
-            return false;
-        }
+        const Bool vaoMoved =
+            static_cast<const void*>(&vao) != snap.vao || vao.GetConfigVersion() != snap.vaoConfigVersion;
         const auto& drawFbo =
             MG_State::pGLContext->GetFramebufferBindingSlot(FramebufferTarget::Draw).GetBoundObject();
         if (static_cast<const void*>(drawFbo.get()) != snap.drawFbo ||
@@ -4956,6 +4961,30 @@ void main() {
         }
         const auto& programObj = m_programFactory->GetOrCreateProgram(
             program, ProgramFactory::CompileOptionFlags(snap.resolvedTransformFlags));
+        if (vaoMoved) {
+            // Vertex-input pre-flight for the changed VAO, mirroring the full path:
+            // a bad attribute must never be baked into a cached VkPipeline, and the
+            // current-value synthesis in UploadAndBindVertexBuffers must never see
+            // an unsupported generic-attribute type. Declining routes the draw
+            // through the full path's loud failure reporting.
+            const auto& vertexInputState = m_vertexInputStateFactory->GetOrCreateVertexInputState(vao);
+            const Uint32 activeAttribMask = programObj.activeVertexInputLocationMask;
+            if ((vertexInputState.unsupportedAttribMask & activeAttribMask) != 0) {
+                return false;
+            }
+            const Uint32 missingAttribMask = activeAttribMask & ~vertexInputState.attributeLocationMask;
+            if (missingAttribMask != 0) {
+                for (Uint32 location = 0; location < kMaxVertexAttribs; ++location) {
+                    if ((missingAttribMask & (1u << location)) == 0) {
+                        continue;
+                    }
+                    if (MG_State::GLState::ClassifyVertexAttribType(programObj.vertexInputTypes[location])
+                            .baseType == MG_State::GLState::VertexAttribBaseType::Unsupported) {
+                        return false;
+                    }
+                }
+            }
+        }
         if (bindsMoved &&
             !m_uniformManager->SampledBindingsUnchanged(program, programObj, m_sampledBindingRecordsScratch)) {
             return false;
@@ -5014,31 +5043,61 @@ void main() {
         }
 
         // Everything the full path would re-resolve is provably unchanged - or, for
-        // a moved pipeline-state version, reduces to re-resolving just the pipeline
-        // through the value-keyed memo against the still-active render pass. Run
-        // only the per-draw tail.
+        // a moved pipeline-state version or a changed VAO, reduces to re-resolving
+        // just the pipeline through the value-keyed memo against the still-active
+        // render pass. Run only the per-draw tail.
         VkPipeline pipeline = snap.pipeline;
-        if (renderStateMoved) {
-            // Same lookup the full path would do; every input (FBO + version, image
-            // index, depth/stencil participation, image epochs, no pending clears)
-            // was verified unchanged above, so this is a pure cache hit on the same
-            // entry the snapshot's pipeline was built against.
-            const RenderPassEntry& renderPassEntry = m_renderPassManager->GetOrCreateRenderPass(
-                *drawFbo, m_imageIndexAcquired, snap.drawUsesDepthStencil);
-            if (!activeRenderPass->CompatibleWith(renderPassEntry)) {
-                return false;
+        if (renderStateMoved || vaoMoved) {
+            pipeline = VK_NULL_HANDLE;
+            if (!renderStateMoved && m_pipelineStateHashValid &&
+                m_pipelineStateHashVersion == renderStateVersion) {
+                // VAO-only movement: the render pass is provably the snapshot's (hash
+                // match above) and the pipeline-state hash is cached for this
+                // untouched state version, so probe the value-keyed pipeline memo
+                // directly - no render-pass-entry re-fetch (whose pending-clear
+                // probes cost more than the whole probe below). A miss, or a cached
+                // hash computed against another pass's attachment count (the hash
+                // folds it in, so such a mismatch can only produce a miss, never a
+                // false hit), falls through to the full lookup.
+                const auto& vis = m_vertexInputStateFactory->GetOrCreateVertexInputState(vao);
+                const auto memoTransformFlags =
+                    ProgramFactory::CompileOptionFlags(snap.resolvedTransformFlags);
+                for (Uint32 i = 0; i < m_pipelineMemoCount; ++i) {
+                    const PipelineMemoEntry& entry = m_pipelineMemo[i];
+                    if (entry.pipeline != VK_NULL_HANDLE && entry.mode == mode &&
+                        entry.programHash == programObj.hash && entry.vertexInputHash == vis.layoutHash &&
+                        entry.renderPassHash == snap.renderPassHash &&
+                        entry.pipelineStateHash == m_pipelineStateHash &&
+                        entry.transformFlags == memoTransformFlags) {
+                        pipeline = entry.pipeline;
+                        break;
+                    }
+                }
             }
-            pipeline = GetOrCreatePipeline(mode, program, programObj,
-                                           ProgramFactory::CompileOptionFlags(snap.resolvedTransformFlags),
-                                           vao, renderPassEntry);
             if (pipeline == VK_NULL_HANDLE) {
-                return false;
+                // Same lookup the full path would do; every input (FBO + version, image
+                // index, depth/stencil participation, image epochs, no pending clears)
+                // was verified unchanged above, so this is a pure cache hit on the same
+                // entry the snapshot's pipeline was built against.
+                const RenderPassEntry& renderPassEntry = m_renderPassManager->GetOrCreateRenderPass(
+                    *drawFbo, m_imageIndexAcquired, snap.drawUsesDepthStencil);
+                if (!activeRenderPass->CompatibleWith(renderPassEntry)) {
+                    return false;
+                }
+                pipeline = GetOrCreatePipeline(mode, program, programObj,
+                                               ProgramFactory::CompileOptionFlags(snap.resolvedTransformFlags),
+                                               vao, renderPassEntry);
+                if (pipeline == VK_NULL_HANDLE) {
+                    return false;
+                }
             }
         }
         // Every decline is behind us: the snapshot again describes the current
         // counters, so the next draw's compare is two integer loads.
         snap.renderStateVersion = renderStateVersion;
         snap.bindGeneration = bindGeneration;
+        snap.vao = static_cast<const void*>(&vao);
+        snap.vaoConfigVersion = vao.GetConfigVersion();
         snap.pipeline = pipeline;
         if (!g_dynamicStateShadow.graphicsPipelineValid ||
             g_dynamicStateShadow.graphicsPipeline != pipeline) {

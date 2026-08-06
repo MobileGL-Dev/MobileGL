@@ -186,6 +186,21 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         Bool ResolveUniformBufferPayload(const MG_State::GLState::ProgramObject& program,
                                          const ProgramFactory::VkProgramObject& programObj, Uint32 binding,
                                          Uint32 arrayElement, UboBindResult& out) const;
+        // Shared resolution of one dynamic-UBO binding element into the
+        // (buffer, range, dynamicOffset) triple the descriptor consumes: direct
+        // bind, global-slice reuse, or transient upload. Used by the full walk
+        // and by the dynamic-offset-only rebind (see FastRebindMemo).
+        Bool ResolveDynamicUboDescriptor(const MG_State::GLState::ProgramObject& program,
+                                         const ProgramFactory::VkProgramObject& programObj, Uint32 binding,
+                                         Uint32 arrayElement, Uint32 frameIndex, VkBuffer& outBuffer,
+                                         VkDeviceSize& outRange, Uint32& outDynamicOffset);
+        // The vkCmdBindDescriptorSets tail shared by the full walk and the
+        // dynamic-offset-only rebind: skips the driver call when this exact
+        // binding is already live on the command buffer (see the bind-dedup
+        // shadow below), otherwise binds and refreshes the shadow.
+        void BindDescriptorSetDeduped(VkCommandBuffer commandBuffer, VkPipelineBindPoint bindPoint,
+                                      VkPipelineLayout pipelineLayout, VkDescriptorSet descriptorSet,
+                                      const Vector<Uint32>& dynamicOffsets);
         Bool CreateDescriptorPool(Uint32 maxSets, VkDescriptorPool& outPool) const;
         Bool GrowFrameDescriptorPool(FrameResources& frame, Uint32 frameIndex);
         VkResult AllocateDescriptorSetsFromActivePool(
@@ -232,6 +247,37 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         static constexpr Uint32 kDescriptorReuseMemoSize = 4;
         DescriptorReuseEntry m_descriptorReuseMemo[kDescriptorReuseMemoSize];
         Uint32 m_descriptorReuseMemoNext = 0;
+
+        // Dynamic-offset-only rebind (see BindProgramUniformBuffers): records the
+        // descriptor set selected by the last cacheable full walk of a program
+        // whose active bindings are exactly one dynamic UBO (single descriptor)
+        // plus combined-image samplers. When the next call proves every sampler
+        // descriptor input unchanged (samplerDescriptorsUnchangedHint) and the
+        // UBO re-resolves to the SAME VkBuffer+range - only the dynamic offset
+        // moved, the per-draw glUniform case - the walk collapses to: resolve one
+        // offset, rebind the recorded set with new pDynamicOffsets (Vulkan allows
+        // rebinding the same set with different dynamic offsets).
+        // Invalidation inventory: BeginFrame clears it (the frame's sets are
+        // recycled) and the frameIndex field guards cross-frame confusion on top;
+        // OnDescriptorSetLayoutDestroyed clears it (the set may be freed); a
+        // sampler-override walk clears it (mirrors m_descriptorReuseMemo); a
+        // program relink bumps the backend state version and thus programObj.hash
+        // so the key misses; the program lifetime id is never reused, so a
+        // deleted-and-recreated program misses; a texture/sampler/binding change
+        // drops the hint upstream; an arena wrap or growth resolves a different
+        // VkBuffer and misses. AcquireDescriptorSet's per-frame cursor only
+        // advances, so the recorded set is never re-written within its frame.
+        struct FastRebindMemo {
+            Bool valid = false;
+            Uint32 frameIndex = 0;
+            Uint64 programLifetimeId = 0;
+            ProgramFactory::HashType programHash = 0;
+            Uint32 uboBinding = 0;
+            VkBuffer uboBuffer = VK_NULL_HANDLE;
+            VkDeviceSize uboRange = 0;
+            VkDescriptorSet set = VK_NULL_HANDLE;
+        };
+        FastRebindMemo m_fastRebindMemo;
 
         // vkCmdBindDescriptorSets dedup: consecutive draws with a static uniform
         // block resolve to the same set AND the same dynamic offsets, so the
