@@ -260,6 +260,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
             Array<Uint, MG_State::GLState::VertexArrayObject::MAX_VERTEX_ATTRIBS> m_clientAttributeBufferIds;
             Bool m_isInitialized = false;
             Uint16 m_syncedIndexBufferVersion = 0;
+            // Aggregate gate over the per-attribute walk below: the frontend bumps its config
+            // version on every per-attribute version bump (the three Bump*Version functions are
+            // its only writers), so an unchanged config version proves every per-attribute
+            // compare in SyncToBackend would come up clean. The index-buffer slot has its own
+            // version and is NOT covered. The Bool (not a sentinel value) marks "never synced".
+            Bool m_hasSyncedConfigVersion = false;
+            Uint32 m_syncedConfigVersion = 0;
             Array<MG_State::GLState::VertexAttributeVersion, MG_State::GLState::VertexArrayObject::MAX_VERTEX_ATTRIBS>
                 m_syncedAttributeVersions;
         };
@@ -388,6 +395,21 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // clean probe compares this before rebuilding shape info and scanning
             // per-level dirty flags; 0 never matches a real version (they start at 1).
             Uint64 m_syncedContentVersion = 0;
+            // First-level clean gate for SyncMipmapsToBackend, checked before even the
+            // IsComplete()/shape-probe walk. Valid only as a trio with the content and
+            // texture-params versions: the context's sampling-resolution generation moves on
+            // EVERY texture-shape mutation (BumpShapeVersion is the only writer of shape and
+            // unconditionally bumps it), the content version on every CPU pixel mutation, and
+            // the params version covers SetSamples/SetFixedSampleLocations, which bump neither
+            // of the other two but feed the shape probe. The context id pins the generation to
+            // the context that produced it - generations restart at 0 with a new context, and a
+            // texture is owned by exactly one context (share groups are not implemented), so a
+            // mutation can never happen under a context this key does not name. 0 = never
+            // stamped (real context ids start at 1). Backend-side invalidation rides on
+            // m_isInitialized: RequireImageBindableStorage and RecreateBackendTexture clear it.
+            Uint64 m_syncedShapeContextId = 0;
+            Uint64 m_syncedShapeGeneration = 0;
+            Uint16 m_syncedShapeParamsVersion = 0;
             SamplerParameters m_cacheSamplerParameters;
             UintVec2 m_cacheLodRange = {0, 1000};
             FloatVec4 m_cacheBorderColor = {0.0f, 0.0f, 0.0f, 0.0f};

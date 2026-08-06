@@ -1348,11 +1348,24 @@ namespace MobileGL::MG_Backend::DirectGLES {
             MGLOG_D("Syncing VAO with backend ID %u to backend for state ID %u", m_backendVAOId,
                     stateVAOObject->GetExternalIndex());
 
+            // One compare instead of MAX_VERTEX_ATTRIBS x 3 per draw: the config version
+            // aggregates every per-attribute version bump (see the member comment), and the
+            // index-buffer slot version covers the only other thing this function reads. When
+            // both are clean there is nothing to emit, and the VAO is not even bound here -
+            // PrepareForDraw's BindCurrentVAO establishes the draw binding regardless.
+            const Uint32 currentConfigVersion = stateVAOObject->GetConfigVersion();
+            const Uint16 currentIndexBufferVersion = stateVAOObject->GetIndexBufferBindingSlot().GetVersion();
+            const Bool attributesDirty = !m_hasSyncedConfigVersion || m_syncedConfigVersion != currentConfigVersion;
+            const Bool indexBufferDirty = currentIndexBufferVersion != m_syncedIndexBufferVersion;
+            if (!attributesDirty && !indexBufferDirty) {
+                return;
+            }
+
             Bind();
 
             const auto& allAttributeVersions = stateVAOObject->GetAllAttributeVersions();
             const auto& allAttributes = stateVAOObject->GetAllAttributes();
-            for (Uint attribIndex = 0; attribIndex < allAttributes.size(); ++attribIndex) {
+            for (Uint attribIndex = 0; attribIndex < allAttributes.size() && attributesDirty; ++attribIndex) {
                 const auto& attrib = allAttributes[attribIndex];
                 Bool needsSyncSwitch = allAttributeVersions[attribIndex].SwitchVersion !=
                                        m_syncedAttributeVersions[attribIndex].SwitchVersion;
@@ -1407,8 +1420,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 }
             }
 
-            Uint16 currentIndexBufferVersion = stateVAOObject->GetIndexBufferBindingSlot().GetVersion();
-            if (currentIndexBufferVersion != m_syncedIndexBufferVersion) {
+            if (indexBufferDirty) {
                 const auto& indexBufferBinding = stateVAOObject->GetIndexBufferBindingSlot().GetBoundObject();
                 Bool indexBufferSynced = false;
                 if (indexBufferBinding) {
@@ -1429,7 +1441,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 }
             }
 
-            m_syncedAttributeVersions = allAttributeVersions;
+            if (attributesDirty) {
+                m_syncedAttributeVersions = allAttributeVersions;
+                m_syncedConfigVersion = currentConfigVersion;
+                m_hasSyncedConfigVersion = true;
+            }
         }
 
         void BackendVertexArrayObject::SyncClientSideAttributesForDrawArrays(
@@ -1826,6 +1842,23 @@ namespace MobileGL::MG_Backend::DirectGLES {
             ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
 
+            // First-level clean gate (see the member comment): three version compares and no
+            // virtual shape walk. Every mutation the slower probe below would catch bumps one of
+            // the keys - shape via the context's sampling-resolution generation (coarse: any
+            // texture's shape churn re-opens every gate, which only costs a fall-through to the
+            // probe), CPU pixels via the content version, samples/fixed-locations via the params
+            // version - and backend-side storage resets clear m_isInitialized. Restricted to
+            // Mipmap storage like the probe fast path: a buffer texture's backing store can move
+            // without any of these keys noticing.
+            if (m_isInitialized && m_syncedShapeContextId != 0 && MG_State::pGLContext &&
+                m_syncedShapeContextId == MG_State::pGLContext->GetTextureContextId() &&
+                m_syncedShapeGeneration == MG_State::pGLContext->GetSamplingResolutionGeneration() &&
+                m_syncedContentVersion == stateTextureObject->GetContentVersion() &&
+                m_syncedShapeParamsVersion == stateTextureObject->GetTextureParamsVersion() &&
+                stateTextureObject->GetStorageType() == TextureStorageType::Mipmap) {
+                return;
+            }
+
             MGLOG_D("Syncing texture mipmaps with backend ID %u to backend for state ID %u", m_backendTextureId,
                     stateTextureObject->GetExternalIndex());
 
@@ -1879,6 +1912,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 if (probe == m_prevTextureInfo) {
                     MGLOG_D("Texture ID %u already fully synced, skipping scratch bind + upload.",
                             m_backendTextureId);
+                    // The probe just proved "fully synced" from the real state, so the cheap
+                    // gate may be (re)stamped here: the coarse generation only ever goes stale
+                    // from OTHER textures' churn, and this draw re-validated this one.
+                    if (MG_State::pGLContext) {
+                        m_syncedShapeContextId = MG_State::pGLContext->GetTextureContextId();
+                        m_syncedShapeGeneration = MG_State::pGLContext->GetSamplingResolutionGeneration();
+                        m_syncedShapeParamsVersion = stateTextureObject->GetTextureParamsVersion();
+                    }
                     return;
                 }
             }
@@ -2412,6 +2453,16 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // upload); stamp the version so per-draw re-syncs short-circuit until
             // the next CPU-side mutation.
             m_syncedContentVersion = stateTextureObject->GetContentVersion();
+            // Same instant, so the cheap gate's keys describe exactly this synced state.
+            // Only Mipmap storage may arm it - the gate refuses other storage types anyway,
+            // but a stale trio must not linger on an object that later switches type.
+            if (MG_State::pGLContext && stateTextureObject->GetStorageType() == TextureStorageType::Mipmap) {
+                m_syncedShapeContextId = MG_State::pGLContext->GetTextureContextId();
+                m_syncedShapeGeneration = MG_State::pGLContext->GetSamplingResolutionGeneration();
+                m_syncedShapeParamsVersion = stateTextureObject->GetTextureParamsVersion();
+            } else {
+                m_syncedShapeContextId = 0;
+            }
         }
 
         void BackendTextureObject::SyncBuiltinSamplerToBackend(

@@ -858,6 +858,16 @@ namespace MobileGL::MG_Backend::DirectGLES {
         static Int g_unitTextureSyncListMaxUnit = -1;
         static Uint g_unitTextureSyncListContextGeneration = 0;
 
+        // Sibling memo for the draw FBO's texture attachments (see the use site in
+        // SyncNeccessaryTextures for the key derivation and the borrow rules, which are the
+        // unit list's). A null FBO pointer means "not stamped".
+        static Vector<UnitTextureSyncEntry> g_fboTextureSyncList;
+        static MG_State::GLState::FramebufferObject* g_fboTextureSyncListFbo = nullptr;
+        static Uint16 g_fboTextureSyncListSlotVersion = 0;
+        static Uint16 g_fboTextureSyncListObjectVersion = 0;
+        static Uint64 g_fboTextureSyncListContextId = 0;
+        static Uint g_fboTextureSyncListContextGeneration = 0;
+
         void SyncNeccessaryTextures() {
 #ifdef TRACY_ENABLE
             ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
@@ -904,16 +914,55 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 g_unitTextureSyncListValid = true;
             }
 
-            const auto& currentFBO =
-                MG_State::pGLContext->GetFramebufferBindingSlot(FramebufferTarget::Draw).GetBoundObject();
+            // Texture attachments of the draw FBO, memoised like the unit list above: WHICH
+            // textures hang off the FBO only changes with a rebind (slot version), an
+            // attachment/draw-buffer edit (object version - the documented invariant
+            // SyncCurrentFBO's memo already leans on), a different FBO landing on a recycled
+            // heap address (pointer + slot version together, the StampSyncedFBO trio), another
+            // frontend context (context id) or a rebuilt ES context (backend generation). WHAT
+            // each texture then needs is still decided per draw by the version gates inside the
+            // three sync calls. Entry lifetime mirrors the unit list: the attachment holds the
+            // texture's SharedPtr at a stable address while the FBO is unchanged, and the
+            // registry keeps a backend object alive until its frontend texture expires, which an
+            // attached texture cannot. A renderbuffer-only FBO - the common Minecraft frame -
+            // reduces to the key compare and an empty loop.
+            const auto& drawSlot = MG_State::pGLContext->GetFramebufferBindingSlot(FramebufferTarget::Draw);
+            const auto& currentFBO = drawSlot.GetBoundObject();
             if (currentFBO) {
-                for (const auto& attachment : currentFBO->GetAllAttachmentObjects()) {
-                    if (!attachment.IsTexture()) continue;
-                    auto& textureObject = attachment.GetTexture();
-                    if (textureObject) {
-                        SyncTextureObjectToBackend(textureObject);
+                const Uint16 fboSlotVersion = drawSlot.GetVersion();
+                const Uint16 fboObjectVersion = currentFBO->GetObjectVersion();
+                const Bool fboListValid =
+                    g_fboTextureSyncListFbo == currentFBO.get() &&
+                    g_fboTextureSyncListSlotVersion == fboSlotVersion &&
+                    g_fboTextureSyncListObjectVersion == fboObjectVersion &&
+                    g_fboTextureSyncListContextId == MG_State::pGLContext->GetTextureContextId() &&
+                    g_fboTextureSyncListContextGeneration == g_textureContextGeneration;
+                if (fboListValid) {
+                    for (const auto& entry : g_fboTextureSyncList) {
+                        entry.backend->SyncTextureParamsToBackend(*entry.slot);
+                        entry.backend->SyncBuiltinSamplerToBackend(*entry.slot);
+                        entry.backend->SyncMipmapsToBackend(*entry.slot);
                     }
+                } else {
+                    g_fboTextureSyncListFbo = nullptr;
+                    g_fboTextureSyncList.clear();
+                    for (const auto& attachment : currentFBO->GetAllAttachmentObjects()) {
+                        if (!attachment.IsTexture()) continue;
+                        auto& textureObject = attachment.GetTexture();
+                        if (textureObject) {
+                            g_fboTextureSyncList.push_back(
+                                {&textureObject, SyncTextureObjectToBackend(textureObject).get()});
+                        }
+                    }
+                    g_fboTextureSyncListFbo = currentFBO.get();
+                    g_fboTextureSyncListSlotVersion = fboSlotVersion;
+                    g_fboTextureSyncListObjectVersion = fboObjectVersion;
+                    g_fboTextureSyncListContextId = MG_State::pGLContext->GetTextureContextId();
+                    g_fboTextureSyncListContextGeneration = g_textureContextGeneration;
                 }
+            } else {
+                g_fboTextureSyncListFbo = nullptr;
+                g_fboTextureSyncList.clear();
             }
         }
 
@@ -1060,6 +1109,33 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
             const auto& parameters = MG_State::pGLContext->GetRenderStateParameters();
 
+            // The frontend has ONE version for the whole parameter block, so a per-draw blend
+            // toggle used to re-diff all ~40 pieces of state field by field on every draw
+            // (Blaze3D brackets every batch with glEnable/glDisable(GL_BLEND), making this the
+            // hottest thing mc_state_toggle did). Split the struct into three contiguous byte
+            // spans - the head (viewport/point/line/polygon-offset scalars), the blend array,
+            // and everything after it - and let one memcmp per span decide whether its blocks
+            // run at all. memcmp can false-DIFFER on padding bytes (harmless: the field-wise
+            // block runs and finds nothing) but can never false-match, and after the first full
+            // sync the tail memcpy below makes the shadow byte-identical, padding included, so
+            // in the steady state a span memcmp is exact. Blocks whose inputs are NOT in the
+            // parameter struct (the surface-size viewport fallback, the sRGB context
+            // capability) stay outside the gates.
+            static_assert(std::is_trivially_copyable_v<RenderStateParameters>,
+                          "span memcmp/memcpy below treats the parameter block as raw bytes");
+            constexpr SizeT kBlendSpanBegin = offsetof(RenderStateParameters, BlendStates);
+            constexpr SizeT kBlendSpanEnd = offsetof(RenderStateParameters, LogicOp);
+            const auto* currentBytes = reinterpret_cast<const unsigned char*>(&parameters);
+            const auto* syncedBytes = reinterpret_cast<const unsigned char*>(&g_syncedRenderStateParameters);
+            const Bool headSpanDirty =
+                !g_hasSyncedRenderState || std::memcmp(currentBytes, syncedBytes, kBlendSpanBegin) != 0;
+            const Bool blendSpanDirty =
+                !g_hasSyncedRenderState || std::memcmp(currentBytes + kBlendSpanBegin, syncedBytes + kBlendSpanBegin,
+                                                       kBlendSpanEnd - kBlendSpanBegin) != 0;
+            const Bool tailSpanDirty =
+                !g_hasSyncedRenderState || std::memcmp(currentBytes + kBlendSpanEnd, syncedBytes + kBlendSpanEnd,
+                                                       sizeof(RenderStateParameters) - kBlendSpanEnd) != 0;
+
             IntVec4 backendViewport = parameters.Viewport;
             if (backendViewport.z() <= 0 || backendViewport.w() <= 0) {
                 Int surfaceWidth = 0;
@@ -1074,6 +1150,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 g_syncedBackendViewport = backendViewport;
             }
 
+            // All 12 capability bools live after LogicOp in the struct, i.e. in the tail span.
+            if (tailSpanDirty) {
 #define SYNC_CAPABILITY(cap_mg, cap_gl)                                                                                \
     if (parameters.cap_mg##Enabled != g_syncedRenderStateParameters.cap_mg##Enabled) {                                 \
         if (parameters.cap_mg##Enabled) {                                                                              \
@@ -1082,20 +1160,21 @@ namespace MobileGL::MG_Backend::DirectGLES {
             g_GLESFuncs.glDisable(cap_gl);                                                                             \
         }                                                                                                              \
     }
-            SYNC_CAPABILITY(DepthTest, GL_DEPTH_TEST);
-            SYNC_CAPABILITY(ColorLogicOp, GL_COLOR_LOGIC_OP);
-            SYNC_CAPABILITY(Dither, GL_DITHER);
-            SYNC_CAPABILITY(Multisample, GL_MULTISAMPLE);
-            SYNC_CAPABILITY(SampleAlphaToCoverage, GL_SAMPLE_ALPHA_TO_COVERAGE);
-            SYNC_CAPABILITY(SampleCoverage, GL_SAMPLE_COVERAGE);
-            SYNC_CAPABILITY(SampleMask, GL_SAMPLE_MASK);
-            SYNC_CAPABILITY(PolygonOffsetFill, GL_POLYGON_OFFSET_FILL);
-            SYNC_CAPABILITY(RasterizerDiscard, GL_RASTERIZER_DISCARD);
-            SYNC_CAPABILITY(ScissorTest, GL_SCISSOR_TEST);
-            SYNC_CAPABILITY(StencilTest, GL_STENCIL_TEST);
-            SYNC_CAPABILITY(CullFace, GL_CULL_FACE);
+                SYNC_CAPABILITY(DepthTest, GL_DEPTH_TEST);
+                SYNC_CAPABILITY(ColorLogicOp, GL_COLOR_LOGIC_OP);
+                SYNC_CAPABILITY(Dither, GL_DITHER);
+                SYNC_CAPABILITY(Multisample, GL_MULTISAMPLE);
+                SYNC_CAPABILITY(SampleAlphaToCoverage, GL_SAMPLE_ALPHA_TO_COVERAGE);
+                SYNC_CAPABILITY(SampleCoverage, GL_SAMPLE_COVERAGE);
+                SYNC_CAPABILITY(SampleMask, GL_SAMPLE_MASK);
+                SYNC_CAPABILITY(PolygonOffsetFill, GL_POLYGON_OFFSET_FILL);
+                SYNC_CAPABILITY(RasterizerDiscard, GL_RASTERIZER_DISCARD);
+                SYNC_CAPABILITY(ScissorTest, GL_SCISSOR_TEST);
+                SYNC_CAPABILITY(StencilTest, GL_STENCIL_TEST);
+                SYNC_CAPABILITY(CullFace, GL_CULL_FACE);
 
 #undef SYNC_CAPABILITY
+            }
 
             { // sRGB framebuffer writes. GLES core always encodes a write into an sRGB attachment,
               // while GL_FRAMEBUFFER_SRGB is disabled by default in desktop GL and the frontend
@@ -1110,8 +1189,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 }
             }
 
-            { // Primitive restart. GLES core has only GL_PRIMITIVE_RESTART_FIXED_INDEX (fixed all-ones
-              // value); both the fixed cap and the (fixed-valued) arbitrary GL_PRIMITIVE_RESTART map to
+            if (tailSpanDirty) { // Primitive restart. GLES core has only GL_PRIMITIVE_RESTART_FIXED_INDEX (fixed
+              // all-ones value); both the fixed cap and the (fixed-valued) arbitrary GL_PRIMITIVE_RESTART map to
               // it. An arbitrary non-fixed restart index is rejected at draw time (see DrawElements).
                 const Bool restart = parameters.PrimitiveRestartFixedIndexEnabled || parameters.PrimitiveRestartEnabled;
                 const Bool syncedRestart = g_syncedRenderStateParameters.PrimitiveRestartFixedIndexEnabled ||
@@ -1124,7 +1203,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
             const auto& ToGLBoolean = [](Bool b) -> GLboolean { return b ? GL_TRUE : GL_FALSE; };
 
-            { // Blend State
+            if (blendSpanDirty) { // Blend State
                 using FBO = MG_State::GLState::FramebufferObject;
                 const auto& targetStates = parameters.BlendStates;
                 auto& syncedStates = g_syncedRenderStateParameters.BlendStates;
@@ -1288,7 +1367,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 }
             }
 
-            { // Depth state
+            if (tailSpanDirty) { // Depth state
                 if (parameters.DepthFunc != g_syncedRenderStateParameters.DepthFunc) {
                     g_GLESFuncs.glDepthFunc(MG_Util::ConvertDepthTestFuncToGLEnum(parameters.DepthFunc));
                 }
@@ -1300,7 +1379,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 }
             }
 
-            { // Stencil state
+            if (tailSpanDirty) { // Stencil state
                 for (SizeT faceIndex = 0; faceIndex < parameters.StencilStates.size(); ++faceIndex) {
                     const StencilFaceState& current = parameters.StencilStates[faceIndex];
                     const StencilFaceState& synced = g_syncedRenderStateParameters.StencilStates[faceIndex];
@@ -1325,7 +1404,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 }
             }
 
-            { // Color mask. Uniform masks use the non-indexed glColorMask (works everywhere); divergent
+            if (tailSpanDirty) { // Color mask. Uniform masks use the non-indexed glColorMask (works everywhere); divergent
               // per-draw-buffer masks use the indexed glColorMaski when draw_buffers_indexed is
               // available, otherwise fall back to broadcasting draw buffer 0. Mirrors the blend block.
                 using FBO = MG_State::GLState::FramebufferObject;
@@ -1359,7 +1438,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 }
             }
 
-            { // Polygon mode. GLES core has no glPolygonMode; use NV/ANGLE_polygon_mode when present.
+            if (tailSpanDirty) { // Polygon mode. GLES core has no glPolygonMode; use NV/ANGLE_polygon_mode when present.
               // Without the extension the mode stays FILL and non-FILL requests are dropped.
                 if (parameters.PolygonModeFront != g_syncedRenderStateParameters.PolygonModeFront &&
                     g_GLESCapabilities.SupportsPolygonMode) {
@@ -1369,7 +1448,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 }
             }
 
-            { // Clear values
+            if (tailSpanDirty) { // Clear values
                 if (parameters.ClearColor != g_syncedRenderStateParameters.ClearColor) {
                     const FloatVec4& clearCol = parameters.ClearColor;
                     g_GLESFuncs.glClearColor(clearCol.x(), clearCol.y(), clearCol.z(), clearCol.w());
@@ -1386,7 +1465,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 }
             }
 
-            { // Cull face mode
+            if (tailSpanDirty) { // Cull face mode
                 if (parameters.CullFaceModeSetting != g_syncedRenderStateParameters.CullFaceModeSetting) {
                     const CullFaceMode& cfm = parameters.CullFaceModeSetting;
                     g_GLESFuncs.glCullFace(MG_Util::ConvertCullFaceModeToGLEnum(cfm));
@@ -1397,39 +1476,39 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 }
             }
 
-            { // Scissor box
+            if (tailSpanDirty) { // Scissor box
                 if (parameters.ScissorBox != g_syncedRenderStateParameters.ScissorBox) {
                     const IntVec4& scissorBox = parameters.ScissorBox;
                     g_GLESFuncs.glScissor(scissorBox.x(), scissorBox.y(), scissorBox.z(), scissorBox.w());
                 }
             }
 
-            { // Logic op
+            if (tailSpanDirty) { // Logic op (first field of the tail span)
                 if (parameters.LogicOp != g_syncedRenderStateParameters.LogicOp) {
                     g_GLESFuncs.glLogicOp(MG_Util::ConvertLogicOperationToGLEnum(parameters.LogicOp));
                 }
             }
 
-            { // Polygon offset
+            if (headSpanDirty) { // Polygon offset (head-span scalars, like line width / point size below)
                 if (parameters.PolygonOffsetFactor != g_syncedRenderStateParameters.PolygonOffsetFactor ||
                     parameters.PolygonOffsetUnits != g_syncedRenderStateParameters.PolygonOffsetUnits) {
                     g_GLESFuncs.glPolygonOffset(parameters.PolygonOffsetFactor, parameters.PolygonOffsetUnits);
                 }
             }
 
-            { // Line width
+            if (headSpanDirty) { // Line width
                 if (parameters.LineWidth != g_syncedRenderStateParameters.LineWidth) {
                     g_GLESFuncs.glLineWidth(parameters.LineWidth);
                 }
             }
 
-            { // Point size
+            if (headSpanDirty) { // Point size
                 if (parameters.PointSize != g_syncedRenderStateParameters.PointSize) {
                     g_GLESFuncs.glPointSize(parameters.PointSize);
                 }
             }
 
-            { // Sample coverage
+            if (tailSpanDirty) { // Sample coverage
                 if (parameters.SampleCoverageValue != g_syncedRenderStateParameters.SampleCoverageValue ||
                     parameters.SampleCoverageInvert != g_syncedRenderStateParameters.SampleCoverageInvert) {
                     g_GLESFuncs.glSampleCoverage(parameters.SampleCoverageValue,
@@ -1437,14 +1516,29 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 }
             }
 
-            { // Sample mask
+            if (tailSpanDirty) { // Sample mask
                 if (g_GLESFuncs.glSampleMaski && parameters.SampleMaskValue != g_syncedRenderStateParameters.SampleMaskValue) {
                     g_GLESFuncs.glSampleMaski(0, parameters.SampleMaskValue);
                 }
             }
 
             g_syncedRenderStateVersion = currentRenderStateVersion;
-            g_syncedRenderStateParameters = parameters;
+            // Byte copy, not member copy: it also clones the frontend struct's padding bytes,
+            // which is what lets the span memcmps above answer "unchanged" exactly instead of
+            // tripping on indeterminate padding every draw. Only the dirty spans need copying -
+            // a clean span's bytes are already identical by the very memcmp that skipped it.
+            auto* syncedBytesMut = reinterpret_cast<unsigned char*>(&g_syncedRenderStateParameters);
+            if (headSpanDirty) {
+                std::memcpy(syncedBytesMut, currentBytes, kBlendSpanBegin);
+            }
+            if (blendSpanDirty) {
+                std::memcpy(syncedBytesMut + kBlendSpanBegin, currentBytes + kBlendSpanBegin,
+                            kBlendSpanEnd - kBlendSpanBegin);
+            }
+            if (tailSpanDirty) {
+                std::memcpy(syncedBytesMut + kBlendSpanEnd, currentBytes + kBlendSpanEnd,
+                            sizeof(RenderStateParameters) - kBlendSpanEnd);
+            }
             g_hasSyncedRenderState = true;
         }
     } // namespace RenderStateImpl
