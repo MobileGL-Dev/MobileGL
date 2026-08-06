@@ -55,6 +55,13 @@ namespace MobileGL::MG_State::GLState {
         // Backends compare it against a per-resource snapshot to skip re-syncing unchanged
         // textures across draws (e.g. the block atlas bound across a whole terrain batch).
         virtual Uint64 GetContentVersion() const = 0;
+        // Answers IsMipmapCompleteForFilter() from a memo. Sampling completeness is a
+        // property of the texture's SHAPE - level sizes, level count, level range,
+        // internal format - and never of its texel content, but every draw asks about
+        // every bound texture, which made recomputing it one of the hottest things both
+        // backends did (the walk plus its GetTexelSize calls measured ~8% of the render
+        // thread). Shape mutations invalidate the memo; uploads do not.
+        virtual Bool IsMipmapCompleteForFilterCached(Bool mipmapped) const = 0;
         virtual Int GetSamples() const = 0;
         virtual void SetSamples(Int samples) = 0;
         virtual Bool HasFixedSampleLocations() const = 0;
@@ -99,6 +106,7 @@ namespace MobileGL::MG_State::GLState {
         void SetImmutableLevels(Uint levels) override;
         Uint16 GetTextureParamsVersion() const override;
         Uint64 GetContentVersion() const override;
+        Bool IsMipmapCompleteForFilterCached(Bool mipmapped) const override;
         // Bumps the content version without touching per-level storage-dirty flags. Used when the
         // set of defined mip levels grows via GPU-side mip generation (glGenerateMipmap): the level
         // set changed (so a cached sampled view's level range is stale) but no CPU data is dirty.
@@ -124,6 +132,14 @@ namespace MobileGL::MG_State::GLState {
         UintVec2 m_levelRange = {0, 1000};
         Uint m_immutableLevels = 0;
         Uint16 m_textureParamsVersion = 0;
+        // Bumped by every mutation the completeness answer depends on - internal
+        // format, level range, and the stored level set - and by nothing else, so a
+        // texel upload leaves the memo below valid.
+        Uint64 m_shapeVersion = 1;
+        // [0] = the non-mipmapped answer, [1] = the mipmapped one. Mutable because
+        // completeness is a query; a zero version means "never computed".
+        mutable Uint64 m_completeMemoShapeVersion[2] = {0, 0};
+        mutable Bool m_completeMemoValue[2] = {false, false};
         // Starts at 1 so a freshly-created backend resource (snapshot 0) never spuriously
         // matches before its first sync. Bumped only on dirty=true in MarkStorageDirty.
         Uint64 m_contentVersion = 1;

@@ -28,10 +28,12 @@ namespace MobileGL {
 
             void TextureObject2DCube::AllocateStorage(TextureUploadTarget uploadTarget, Uint mipmapLevel,
                                                       MipmapInput input) {
+                ++m_shapeVersion;
                 m_textureStorage.AllocateLevel(GetIndexOfTextureUploadTarget(uploadTarget), mipmapLevel, input);
             }
 
             void TextureObject2DCube::TruncateMipmapLevels(TextureUploadTarget uploadTarget, Uint levelCount) {
+                ++m_shapeVersion;
                 m_textureStorage.TruncateToLevelCount(GetIndexOfTextureUploadTarget(uploadTarget), levelCount);
             }
 

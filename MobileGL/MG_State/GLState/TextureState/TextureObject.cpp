@@ -16,6 +16,10 @@ namespace MobileGL {
         namespace GLState {
             static std::atomic<Uint64> s_nextTextureLifetimeId = 1;
 
+            // Defined further down next to the other sampling-completeness rules; the
+            // memo in TextureObjectBase is its only caller.
+            static Bool ComputeMipmapCompleteForFilter(const ITextureObject* texture, Bool mipmapped);
+
             // TextureObjectBase implementations
             Uint64 TextureObjectBase::AllocateLifetimeId() {
                 return s_nextTextureLifetimeId.fetch_add(1, std::memory_order_relaxed);
@@ -81,6 +85,7 @@ namespace MobileGL {
                 }
 
                 m_internalFormat = format;
+                ++m_shapeVersion;
                 ++m_textureParamsVersion;
             }
 
@@ -192,6 +197,7 @@ namespace MobileGL {
                     m_levelRange.y() = m_levelRange.x();
                 }
                 ++m_textureParamsVersion;
+                ++m_shapeVersion;
             }
 
             void TextureObjectBase::SetMaxLevel(Uint maxLevel) {
@@ -202,6 +208,7 @@ namespace MobileGL {
 
                 m_levelRange.y() = maxLevel;
                 ++m_textureParamsVersion;
+                ++m_shapeVersion;
             }
 
             Bool TextureObjectBase::IsImmutable() const {
@@ -229,6 +236,17 @@ namespace MobileGL {
 
             Uint64 TextureObjectBase::GetContentVersion() const {
                 return m_contentVersion;
+            }
+
+            Bool TextureObjectBase::IsMipmapCompleteForFilterCached(Bool mipmapped) const {
+                const int slot = mipmapped ? 1 : 0;
+                if (m_completeMemoShapeVersion[slot] == m_shapeVersion) {
+                    return m_completeMemoValue[slot];
+                }
+                const Bool value = ComputeMipmapCompleteForFilter(this, mipmapped);
+                m_completeMemoShapeVersion[slot] = m_shapeVersion;
+                m_completeMemoValue[slot] = value;
+                return value;
             }
 
             void TextureObjectBase::BumpContentVersion() {
@@ -273,10 +291,12 @@ namespace MobileGL {
 
             void TextureObjectWithOneMipmap::AllocateStorage(TextureUploadTarget uploadTarget, Uint mipmapLevel,
                                                              MipmapInput input) {
+                ++m_shapeVersion;
                 m_textureStorage.AllocateLevel(GetIndexOfTextureUploadTarget(uploadTarget), mipmapLevel, input);
             }
 
             void TextureObjectWithOneMipmap::TruncateMipmapLevels(TextureUploadTarget uploadTarget, Uint levelCount) {
+                ++m_shapeVersion;
                 m_textureStorage.TruncateToLevelCount(GetIndexOfTextureUploadTarget(uploadTarget), levelCount);
             }
 
@@ -373,13 +393,18 @@ namespace MobileGL {
 
             // TODO: add other texture types as needed
 
+        Bool IsMipmapCompleteForFilter(const ITextureObject* texture, Bool mipmapped) {
+            if (texture == nullptr) return true;
+            return texture->IsMipmapCompleteForFilterCached(mipmapped);
+        }
+
         Bool SamplesAsIncompleteTexture(const ITextureObject* texture, const SamplerObject* effectiveSampler) {
             const Bool mipmapped =
                 effectiveSampler != nullptr && effectiveSampler->GetMipmapMode() != SamplerMipmapMode::None;
             return !IsMipmapCompleteForFilter(texture, mipmapped);
         }
 
-        Bool IsMipmapCompleteForFilter(const ITextureObject* texture, Bool mipmapped) {
+        static Bool ComputeMipmapCompleteForFilter(const ITextureObject* texture, Bool mipmapped) {
             if (texture == nullptr) return true;
             if (!texture->IsComplete()) return false;
             if (!mipmapped) return true;
