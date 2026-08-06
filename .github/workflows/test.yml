@@ -177,9 +177,13 @@ jobs:
         uses: lukka/get-cmake@v4.3.3
 
       - name: Install runtime dependencies
+        # libegl-mesa0 is the EGL vendor library itself: DriverBench brings up a
+        # real GL context, and libegl1 is only glvnd's dispatch. It normally
+        # arrives as a Recommends of libegl1, which is too quiet a dependency for
+        # the one job that needs a working driver.
         run: |
           sudo apt-get update
-          sudo apt-get install -y libvulkan1 libegl1 libgles2 libgl1-mesa-dri mesa-vulkan-drivers
+          sudo apt-get install -y libvulkan1 libegl1 libegl-mesa0 libgles2 libgl1-mesa-dri mesa-vulkan-drivers
 
       - name: Download Linux runtime
         uses: actions/download-artifact@v8
