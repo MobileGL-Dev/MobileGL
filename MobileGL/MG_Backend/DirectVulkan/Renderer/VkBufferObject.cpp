@@ -176,16 +176,4 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         return true;
     }
 
-    BufferSlice VkBufferObject::GetSlice(VkDeviceSize offset, VkDeviceSize size) const {
-        MOBILEGL_ASSERT(offset <= m_size, "VkBufferObject::GetSlice offset out of range");
-        const VkDeviceSize resolvedSize = (size == VK_WHOLE_SIZE) ? (m_size - offset) : size;
-        MOBILEGL_ASSERT(offset + resolvedSize <= m_size, "VkBufferObject::GetSlice range out of bounds");
-
-        BufferSlice slice{};
-        slice.buffer = m_buffer;
-        slice.offset = offset;
-        slice.size = resolvedSize;
-        slice.mapped = (m_mappedData != nullptr) ? static_cast<Uint8*>(m_mappedData) + offset : nullptr;
-        return slice;
-    }
 } // namespace MobileGL::MG_Backend::DirectVulkan

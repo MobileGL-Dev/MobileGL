@@ -105,8 +105,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             // position-invariance quirk (see PipelineFactory::ShouldSuppressDepthWrite).
             Bool fragmentReplacesDepth = false;
             // Frame-boundary counter value of the last GetOrCreateProgram hit; drives
-            // cache eviction (see OnFrameBoundary).
-            Uint64 lastUsedFrame = 0;
+            // cache eviction (see OnFrameBoundary). Mutable: the draw snapshot's memoised
+            // entry pointer re-stamps use through a const reference (StampProgramUse).
+            mutable Uint64 lastUsedFrame = 0;
 
             static inline VkDevice s_device = VK_NULL_HANDLE;
 
@@ -262,6 +263,16 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         const VkProgramObject& GetOrCreateProgram(
             const MG_State::GLState::ProgramObject& program, CompileOptionFlags flags);
 
+        // Bumped whenever m_cache's STRUCTURE changes (any insert or erase): the cache is
+        // an open-addressing map holding entries by value, so both moves existing entries.
+        // A caller that memoised a VkProgramObject* may keep dereferencing it only while
+        // this is unchanged; on a bump it must re-run GetOrCreateProgram.
+        Uint64 GetCacheStructureEpoch() const { return m_cacheStructureEpoch; }
+        // A memoised entry pointer bypasses GetOrCreateProgram, whose per-lookup stamp is
+        // what keeps an in-use entry out of OnFrameBoundary's idle sweep - so such a
+        // caller must re-stamp the entry itself, at least once per frame boundary.
+        void StampProgramUse(const VkProgramObject& entry) const { entry.lastUsedFrame = m_frameCounter; }
+
         // Observer may be null (no notifications). Not owned.
         void SetEvictionObserver(IEvictionObserver* observer) { m_evictionObserver = observer; }
         // Frame boundary hook: ages the program cache and evicts long-unused entries
@@ -312,6 +323,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         mutable ProgramLookupCache m_lastLookup;
         // Monotonic frame-boundary counter (bumped in OnFrameBoundary) for cache aging.
         Uint64 m_frameCounter = 0;
+        // See GetCacheStructureEpoch(). Starts at 1 so a zero-initialized memo can never match.
+        Uint64 m_cacheStructureEpoch = 1;
         IEvictionObserver* m_evictionObserver = nullptr;
         static inline XXH64_state_t* m_hashState = XXH64_createState();
     };

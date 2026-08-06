@@ -71,6 +71,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         ~VertexInputStateFactory() = default;
         VertexInputStateFactory(const VertexInputStateFactory&) = delete;
 
+        // The VAO aux-memo payload GetOrCreateVertexInputState(vao) stamps: aux0 is the
+        // entry's layoutHash, aux1 packs (unsupportedAttribMask << 32) | attributeLocationMask.
+        // Readers that find the aux memo valid can use these without resolving the entry.
+        static Uint64 PackVertexInputAuxMasks(Uint32 unsupportedAttribMask, Uint32 attributeLocationMask) {
+            return (static_cast<Uint64>(unsupportedAttribMask) << 32) | attributeLocationMask;
+        }
+
         HashType ComputeHash(const MG_State::GLState::VertexArrayObject& vao) const;
         // Memoized ComputeHash: reuses the VAO's cached hash while its config version
         // is unchanged. Use this on per-draw paths.

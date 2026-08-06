@@ -264,6 +264,21 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         Uint32 stencilBackWriteMask = 0;
         Uint32 stencilFrontReference = 0;
         Uint32 stencilBackReference = 0;
+        // Gate over the whole per-draw dynamic-state tail (viewport, scissor, blend
+        // constants, depth bias, line width, stencil) - see ApplyDynamicDrawStateTail.
+        // Every GL input of that tail lives in RenderState's value-shadowed parameters:
+        // each setter early-outs on an equal value and bumps the parameters version
+        // otherwise, and capability toggles (scissor test) bump it too. So an unchanged
+        // version + unchanged pass geometry means re-running the tail could only
+        // re-derive the exact values already applied on this command buffer. The
+        // remaining input, the swapchain pre-transform, cannot change mid-recording
+        // (a swapchain recreate retires the command buffer, and recording begin resets
+        // this whole shadow).
+        Bool dynamicTailValid = false;
+        Uint dynamicTailParamsVersion = 0;
+        Int dynamicTailExtentX = 0;
+        Int dynamicTailExtentY = 0;
+        Bool dynamicTailIsDefaultFbo = false;
     };
     static DynamicStateShadow g_dynamicStateShadow;
 
@@ -3047,55 +3062,98 @@ void main() {
 
     Bool VulkanRenderer::TryBindResolvedVertexBindings(
         VkCommandBuffer commandBuffer, const MG_State::GLState::VertexArrayObject& vao,
-        const ResolvedVertexBindings& entry,
-        const VertexInputStateFactory::BackendVertexInputState& vertexInputState, Uint32 activeAttribMask,
-        Uint32 bindingCount, Uint64 frameSerial) {
-        // Frame-scoped: a streamed binding's slice moves to a new arena block every
-        // frame by design, and the frame's first resolve is also what stamps every
-        // bound buffer's GPU-use serial, which the buffer manager's busy tracking (and
-        // therefore glBufferSubData's choice between a host write and a staged copy)
-        // depends on.
-        if (entry.frameSerial != frameSerial || entry.vertexInputState != &vertexInputState ||
-            entry.vertexInputHash != vertexInputState.hash || entry.activeAttribMask != activeAttribMask ||
-            entry.bindingCount != bindingCount) {
+        ResolvedVertexBindings& entry, Uint64 vaoContentHash, Uint32 activeAttribMask,
+        Uint64 frameSerial) {
+        // Layout + buffer identity in two loads from data the caller already has: the
+        // VAO's content hash mixes every enabled attribute's format AND its bound
+        // buffer's address (any change bumps the config version, invalidating the hash
+        // memo the caller read), and the program's active-location mask fixes the
+        // synthetic-binding set. Together they pin bindings.size(), every base offset
+        // and which buffer each binding reads, so the hit path never has to resolve the
+        // vertex-input factory entry at all - that chase was the dominant cost of a
+        // VAO-cycling frame's memo hit.
+        if (entry.frameSerial == 0 || entry.vertexInputHash != vaoContentHash ||
+            entry.activeAttribMask != activeAttribMask) {
             return false;
         }
 
-        // The layout identity above already fixes which buffer each binding reads: the
-        // factory entry is reached through the VAO's config-version-gated memo and its
-        // hash mixes the bound buffers' addresses, so rebinding a buffer resolves to a
-        // different entry. What is left to establish is that those buffers still hand
-        // back the slices recorded here, and that none of them is a host map whose
-        // shadow needs pushing down. An unmoved manager-wide epoch counter says both.
-        if (!entry.anyBufferMapped && entry.sliceEpochCounter == m_bufferManager.GetSliceEpochCounter()) {
-            ShadowedBindVertexBuffers(commandBuffer, entry.vkBuffers, entry.vkOffsets, bindingCount);
+        if (entry.frameSerial == frameSerial) {
+            // What is left to establish is that the buffers still hand back the slices
+            // recorded here, and that none of them is a host map whose shadow needs
+            // pushing down. An unmoved manager-wide epoch counter says both.
+            if (!entry.anyBufferMapped && entry.sliceEpochCounter == m_bufferManager.GetSliceEpochCounter()) {
+                ShadowedBindVertexBuffers(commandBuffer, entry.vkBuffers, entry.vkOffsets, entry.bindingCount);
+                return true;
+            }
+
+            // Something moved somewhere; ask the buffers themselves.
+            const auto& attributes = vao.GetAllAttributes();
+            const MG_State::GLState::BufferObject* synced = nullptr;
+            for (Uint32 binding = 0; binding < entry.bindingCount; ++binding) {
+                auto* bufferObject = attributes[entry.attributeLocations[binding]].Buffer.get();
+                if (bufferObject != entry.buffers[binding]) {
+                    return false;
+                }
+                // What the resolving path does before every acquire: a persistent map the
+                // backend could not adopt into coherent GPU storage mutates its shadow with
+                // no API call, so the write range has to be pushed down here too. It is a
+                // no-op for every buffer that is not such a map; when it is not, it dispatches
+                // a SubData that retires the epoch below, and this draw resolves in full.
+                if (bufferObject != synced) {
+                    bufferObject->SyncPersistentMappedRange();
+                    synced = bufferObject;
+                }
+                const auto* resource =
+                    static_cast<const VkBufferResource*>(bufferObject->GetBackendResource().get());
+                if (resource == nullptr || resource->sliceEpoch != entry.sliceEpochs[binding]) {
+                    return false;
+                }
+            }
+
+            ShadowedBindVertexBuffers(commandBuffer, entry.vkBuffers, entry.vkOffsets, entry.bindingCount);
             return true;
         }
 
-        // Something moved somewhere; ask the buffers themselves.
+        // Cross-frame revalidation. Only all-resident, unmapped layouts qualify:
+        // - a streamed binding's slice moves to a new arena block every frame BY DESIGN,
+        //   but every such move funnels through BumpSliceEpoch, so the per-binding epoch
+        //   compares below catch it (as they do a respecify, a sub-data update, a
+        //   resident<->streamed promotion and a buffer becoming persistently mapped);
+        // - a mapped buffer mutates its shadow with no API call and must re-run the
+        //   Sync/acquire path every frame, so it is excluded outright;
+        // - epochs are minted from a process-lifetime counter, so a deleted buffer (or
+        //   resource) recycled at the same address can never reproduce a recorded epoch.
+        if (entry.anyBufferMapped) {
+            return false;
+        }
         const auto& attributes = vao.GetAllAttributes();
-        const MG_State::GLState::BufferObject* synced = nullptr;
-        for (Uint32 binding = 0; binding < bindingCount; ++binding) {
+        VkBufferResource* resources[ResolvedVertexBindings::kMaxBindings] = {};
+        for (Uint32 binding = 0; binding < entry.bindingCount; ++binding) {
+            // Compare against the LIVE pointer before any dereference: entry.buffers may
+            // dangle if the app deleted a buffer since (the VAO unbind that deletion
+            // performs bumps the config version, so the hash compare above already
+            // declined - this is defense in depth for the aliased-address case).
             auto* bufferObject = attributes[entry.attributeLocations[binding]].Buffer.get();
             if (bufferObject != entry.buffers[binding]) {
                 return false;
             }
-            // What the resolving path does before every acquire: a persistent map the
-            // backend could not adopt into coherent GPU storage mutates its shadow with
-            // no API call, so the write range has to be pushed down here too. It is a
-            // no-op for every buffer that is not such a map; when it is not, it dispatches
-            // a SubData that retires the epoch below, and this draw resolves in full.
-            if (bufferObject != synced) {
-                bufferObject->SyncPersistentMappedRange();
-                synced = bufferObject;
-            }
-            const auto* resource = static_cast<const VkBufferResource*>(bufferObject->GetBackendResource().get());
+            auto* resource = static_cast<VkBufferResource*>(bufferObject->GetBackendResource().get());
             if (resource == nullptr || resource->sliceEpoch != entry.sliceEpochs[binding]) {
                 return false;
             }
+            resources[binding] = resource;
         }
-
-        ShadowedBindVertexBuffers(commandBuffer, entry.vkBuffers, entry.vkOffsets, bindingCount);
+        // Every binding still resolves to the recorded slice. The per-frame resolve this
+        // replaces had one side effect the busy tracking depends on (glBufferSubData's
+        // host-write-vs-staged-copy choice): stamping each resource's GPU-use serial.
+        // Do exactly that, then re-arm the entry so the rest of the frame's draws take
+        // the one-compare path above.
+        for (Uint32 binding = 0; binding < entry.bindingCount; ++binding) {
+            resources[binding]->lastUseSerial = frameSerial;
+        }
+        entry.frameSerial = frameSerial;
+        entry.sliceEpochCounter = m_bufferManager.GetSliceEpochCounter();
+        ShadowedBindVertexBuffers(commandBuffer, entry.vkBuffers, entry.vkOffsets, entry.bindingCount);
         return true;
     }
 
@@ -3127,14 +3185,7 @@ void main() {
             }
             return drawElementBound;
         };
-        // programObj is resolved once in SetupDraw and passed in; re-resolving it here would repeat
-        // the GetCurrentProgram + GetOrCreateProgram hash lookup every draw.
-        auto& vertexInputState = m_vertexInputStateFactory->GetOrCreateVertexInputState(vao);
         const Uint32 activeAttribMask = programObj.activeVertexInputLocationMask;
-        const Uint32 vertexInputAttribMask = vertexInputState.attributeLocationMask;
-        const Uint32 missingAttribMask = activeAttribMask & ~vertexInputAttribMask;
-
-        const auto bindingCount = vertexInputState.bindings.size() + static_cast<SizeT>(std::popcount(missingAttribMask));
 
         const Uint64 frameSerial = m_bufferManager.GetFrameSerial();
         if (frameSerial != m_resolvedVertexBindingsFrameSerial) {
@@ -3143,17 +3194,32 @@ void main() {
                 m_resolvedVertexBindings.clear();
             }
         }
+        // Probe the memo BEFORE resolving the vertex-input entry: a hit needs nothing
+        // from it (the VAO's own hash memo pins layout and buffers - see
+        // TryBindResolvedVertexBindings), and skipping the resolve also skips its
+        // per-draw cold chase into the factory's heap entry.
+        m_currentDrawResolvedEntry = nullptr;
         ResolvedVertexBindings* memo = nullptr;
-        if (auto found = m_resolvedVertexBindings.find(&vao); found != m_resolvedVertexBindings.end()) {
-            memo = &found->second;
-            if (TryBindResolvedVertexBindings(commandBuffer, vao, *memo, vertexInputState, activeAttribMask,
-                                              static_cast<Uint32>(bindingCount), frameSerial)) {
-                return true;
+        Uint64 vaoContentHash = 0;
+        const Bool vaoHashKnown = vao.GetBackendHashMemo(vaoContentHash);
+        if (vaoHashKnown) {
+            if (auto found = m_resolvedVertexBindings.find(&vao); found != m_resolvedVertexBindings.end()) {
+                memo = &found->second;
+                if (TryBindResolvedVertexBindings(commandBuffer, vao, *memo, vaoContentHash,
+                                                  activeAttribMask, frameSerial)) {
+                    m_currentDrawResolvedEntry = memo;
+                    return true;
+                }
+                // Whatever it described is stale; a resolve that bails out below must not
+                // leave the old contents matchable either.
+                memo->frameSerial = 0;
             }
-            // Whatever it described is stale; a resolve that bails out below must not
-            // leave the old contents matchable either.
-            memo->frameSerial = 0;
         }
+        auto& vertexInputState = m_vertexInputStateFactory->GetOrCreateVertexInputState(vao);
+        const Uint32 vertexInputAttribMask = vertexInputState.attributeLocationMask;
+        const Uint32 missingAttribMask = activeAttribMask & ~vertexInputAttribMask;
+
+        const auto bindingCount = vertexInputState.bindings.size() + static_cast<SizeT>(std::popcount(missingAttribMask));
         // Anything the memo cannot key on (see ResolvedVertexBindings) clears this as
         // the resolve below discovers it.
         Bool memoisable = missingAttribMask == 0 && bindingCount > 0 &&
@@ -3433,7 +3499,8 @@ void main() {
             if (memoisable && memo != nullptr) {
                 std::copy_n(vkBuffers.data(), count, memo->vkBuffers);
                 std::copy_n(vkOffsets.data(), count, memo->vkOffsets);
-                memo->vertexInputState = &vertexInputState;
+                // The factory keys entries on the VAO content hash, so this is the same
+                // value the hit path reads back from the VAO's own hash memo.
                 memo->vertexInputHash = vertexInputState.hash;
                 memo->activeAttribMask = activeAttribMask;
                 memo->bindingCount = count;
@@ -3443,6 +3510,9 @@ void main() {
                 // Published last: the entry is only matchable once every field above is
                 // the one this completed resolve produced.
                 memo->frameSerial = frameSerial;
+                // The same draw's UploadAndBindIndexBuffer may extend this entry with the
+                // EBO slice memo; the pointer dies at the map's next insert (next draw).
+                m_currentDrawResolvedEntry = memo;
             }
             ShadowedBindVertexBuffers(commandBuffer, vkBuffers.data(), vkOffsets.data(), count);
         }
@@ -3574,6 +3644,39 @@ void main() {
         MOBILEGL_ASSERT(pIndexBufferView->indexByteOffset + indexDataSizeBytes <= indexBuffer->GetSize(),
                         "DrawElements index range out of bounds");
 
+        // EBO slice memo (see ResolvedVertexBindings): skips the per-draw
+        // AcquireResidentSlice when the live bound EBO and its resource epoch still
+        // match what the recording draw resolved. Restart substitution re-uploads per
+        // draw and never stores a memo, so a hit requires it off. The index TYPE is not
+        // memo state: it flows from the draw's view into the shadowed bind below.
+        ResolvedVertexBindings* indexMemo = m_currentDrawResolvedEntry;
+        if (indexMemo != nullptr && !substituteRestart && indexMemo->indexFrameSerial != 0 &&
+            indexMemo->indexBuffer == indexBuffer) {
+            auto* resource = static_cast<VkBufferResource*>(
+                indexBufferShared->GetBackendResource().get());
+            if (resource != nullptr && resource->sliceEpoch == indexMemo->indexSliceEpoch) {
+                const Uint64 frameSerial = m_bufferManager.GetFrameSerial();
+                if (indexMemo->indexFrameSerial != frameSerial) {
+                    // Same busy-tracking stamp the skipped acquire would have made.
+                    resource->lastUseSerial = frameSerial;
+                    indexMemo->indexFrameSerial = frameSerial;
+                }
+                const VkDeviceSize memoBindOffset = indexMemo->indexSliceOffset +
+                    static_cast<VkDeviceSize>(pIndexBufferView->indexByteOffset);
+                auto& shadow = g_dynamicStateShadow;
+                if (!shadow.indexBindValid || shadow.indexBuffer != indexMemo->indexVkBuffer ||
+                    shadow.indexOffset != memoBindOffset || shadow.indexType != vkIndexType) {
+                    vkCmdBindIndexBuffer(frame.commandBuffer, indexMemo->indexVkBuffer, memoBindOffset,
+                                         vkIndexType);
+                    shadow.indexBindValid = true;
+                    shadow.indexBuffer = indexMemo->indexVkBuffer;
+                    shadow.indexOffset = memoBindOffset;
+                    shadow.indexType = vkIndexType;
+                }
+                return true;
+            }
+        }
+
         BufferSlice slice{};
         MOBILEGL_ASSERT(indexBufferShared != nullptr, "UploadAndBindIndexBuffer failed to resolve shared EBO");
         if (substituteRestart) {
@@ -3598,6 +3701,19 @@ void main() {
         } else if (!m_bufferManager.AcquireResidentSlice(BufferKind::Index, indexBufferShared, slice)) {
             MGLOG_E("DrawElements skipped: failed to sync resident index buffer");
             return false;
+        } else if (indexMemo != nullptr && !substituteRestart) {
+            // Resident acquire succeeded: record the slice for the next draw of this VAO.
+            // Read the epoch AFTER the acquire - it is the acquire that mints the epoch
+            // this slice belongs to.
+            const auto* resource = static_cast<const VkBufferResource*>(
+                indexBufferShared->GetBackendResource().get());
+            if (resource != nullptr) {
+                indexMemo->indexBuffer = indexBuffer;
+                indexMemo->indexSliceEpoch = resource->sliceEpoch;
+                indexMemo->indexVkBuffer = slice.buffer;
+                indexMemo->indexSliceOffset = slice.offset;
+                indexMemo->indexFrameSerial = m_bufferManager.GetFrameSerial();
+            }
         }
         const VkDeviceSize indexBindOffset =
             slice.offset + static_cast<VkDeviceSize>(pIndexBufferView->indexByteOffset);
@@ -4893,6 +5009,42 @@ void main() {
     }
 
 
+    void VulkanRenderer::ApplyDynamicDrawStateTail(FrameContext::FrameData& frame, const IntVec2& extent,
+                                                   Bool isDefaultFbo) {
+        auto& shadow = g_dynamicStateShadow;
+        // One compare for the whole tail: see the gate's declaration in
+        // DynamicStateShadow for why (version, extent, default-FBO flag) pins every
+        // input the six Apply* below read.
+        const Uint paramsVersion = MG_State::pGLContext->GetRenderStateParametersVersion();
+        if (shadow.dynamicTailValid && shadow.dynamicTailParamsVersion == paramsVersion &&
+            shadow.dynamicTailExtentX == extent.x() && shadow.dynamicTailExtentY == extent.y() &&
+            shadow.dynamicTailIsDefaultFbo == isDefaultFbo) {
+            return;
+        }
+        ApplyGLViewportState(frame.commandBuffer, extent, m_swapchainObject.GetPreTransform(), isDefaultFbo);
+        ApplyBlendConstants(frame.commandBuffer);
+        ApplyPolygonOffsetState(frame.commandBuffer);
+        ApplyLineWidthState(frame.commandBuffer);
+        ApplyStencilState(frame.commandBuffer);
+        const Bool scissorEnabled = MG_State::pGLContext->IsCapabilityEnabled(CapabilityInput::ScissorTest);
+        VkRect2D scissor{};
+        if (scissorEnabled) {
+            const auto& scissorBox = MG_State::pGLContext->GetScissorBox();
+            scissor = isDefaultFbo
+                ? MakeDefaultFramebufferScissorRect(scissorBox, extent, m_swapchainObject.GetPreTransform())
+                : MakeClampedScissorRect(scissorBox, extent);
+        } else {
+            scissor.offset = {0, 0};
+            scissor.extent = { (Uint)extent.x(), (Uint)extent.y() };
+        }
+        ShadowedSetScissor(frame.commandBuffer, scissor);
+        shadow.dynamicTailValid = true;
+        shadow.dynamicTailParamsVersion = paramsVersion;
+        shadow.dynamicTailExtentX = extent.x();
+        shadow.dynamicTailExtentY = extent.y();
+        shadow.dynamicTailIsDefaultFbo = isDefaultFbo;
+    }
+
     Bool VulkanRenderer::TrySetupDrawFastPath(FrameContext::FrameData& frame, GLenum mode,
                                               Flags<DrawSetupAspect> aspects, const DrawCmdParam& drawParams,
                                               const IndexBufferView* pIndexBufferView) {
@@ -4959,28 +5111,67 @@ void main() {
             m_renderPassManager->GetRenderbufferImageEpoch() != snap.renderbufferImageEpoch) {
             return false;
         }
-        const auto& programObj = m_programFactory->GetOrCreateProgram(
-            program, ProgramFactory::CompileOptionFlags(snap.resolvedTransformFlags));
+        // Program entry: (lifetimeId, backend-state version, resolved flags) were proven
+        // equal above, and those pin the factory hash - so the snapshot's memoised entry
+        // pointer IS this draw's entry while the factory's open-addressing cache has not
+        // moved entries (structure epoch). Bypassing GetOrCreateProgram skips its use
+        // stamp, so re-stamp here or the idle sweep could evict a live entry.
+        const ProgramFactory::VkProgramObject* programObjPtr = snap.programObj;
+        if (programObjPtr != nullptr &&
+            snap.programFactoryEpoch == m_programFactory->GetCacheStructureEpoch()) {
+            m_programFactory->StampProgramUse(*programObjPtr);
+        } else {
+            programObjPtr = &m_programFactory->GetOrCreateProgram(
+                program, ProgramFactory::CompileOptionFlags(snap.resolvedTransformFlags));
+            snap.programObj = programObjPtr;
+            snap.programFactoryEpoch = m_programFactory->GetCacheStructureEpoch();
+        }
+        const auto& programObj = *programObjPtr;
+
+        // The pipeline and the vertex-input pre-flight depend on the VAO only through
+        // its resolved LAYOUT (layoutHash folds the attribute formats, bindings and the
+        // unsupported mask; the masks below are functions of the same configuration),
+        // never its identity. A VAO-cycling stream (Minecraft chunk rendering) swaps
+        // hundreds of VAOs sharing one layout per frame: answer "same layout?" from the
+        // VAO's aux memo - it sits next to the config-version word this compare chain
+        // already loaded - instead of chasing the vertex-input factory's cold heap entry.
+        Uint64 vaoLayoutHash = snap.vaoLayoutHash;
+        Bool vaoLayoutMoved = false;
         if (vaoMoved) {
-            // Vertex-input pre-flight for the changed VAO, mirroring the full path:
-            // a bad attribute must never be baked into a cached VkPipeline, and the
-            // current-value synthesis in UploadAndBindVertexBuffers must never see
-            // an unsupported generic-attribute type. Declining routes the draw
-            // through the full path's loud failure reporting.
-            const auto& vertexInputState = m_vertexInputStateFactory->GetOrCreateVertexInputState(vao);
-            const Uint32 activeAttribMask = programObj.activeVertexInputLocationMask;
-            if ((vertexInputState.unsupportedAttribMask & activeAttribMask) != 0) {
-                return false;
+            Uint64 auxMasks = 0;
+            if (!vao.GetBackendAuxMemo(vaoLayoutHash, auxMasks)) {
+                // First sight of this VAO configuration: resolve (which stamps the aux
+                // memo for every later draw) and read the same facts from the entry.
+                const auto& vertexInputState = m_vertexInputStateFactory->GetOrCreateVertexInputState(vao);
+                vaoLayoutHash = vertexInputState.layoutHash;
+                auxMasks = VertexInputStateFactory::PackVertexInputAuxMasks(
+                    vertexInputState.unsupportedAttribMask, vertexInputState.attributeLocationMask);
             }
-            const Uint32 missingAttribMask = activeAttribMask & ~vertexInputState.attributeLocationMask;
-            if (missingAttribMask != 0) {
-                for (Uint32 location = 0; location < kMaxVertexAttribs; ++location) {
-                    if ((missingAttribMask & (1u << location)) == 0) {
-                        continue;
-                    }
-                    if (MG_State::GLState::ClassifyVertexAttribType(programObj.vertexInputTypes[location])
-                            .baseType == MG_State::GLState::VertexAttribBaseType::Unsupported) {
-                        return false;
+            vaoLayoutMoved = vaoLayoutHash != snap.vaoLayoutHash;
+            if (vaoLayoutMoved) {
+                // Vertex-input pre-flight for the changed layout, mirroring the full
+                // path: a bad attribute must never be baked into a cached VkPipeline,
+                // and the current-value synthesis in UploadAndBindVertexBuffers must
+                // never see an unsupported generic-attribute type. Declining routes the
+                // draw through the full path's loud failure reporting. An UNMOVED layout
+                // needs no pre-flight: the snapshotting draw passed it with identical
+                // inputs (same program; masks pinned by the layout hash).
+                const Uint32 unsupportedAttribMask = static_cast<Uint32>(auxMasks >> 32);
+                const Uint32 attributeLocationMask = static_cast<Uint32>(auxMasks);
+                const Uint32 activeAttribMask = programObj.activeVertexInputLocationMask;
+                if ((unsupportedAttribMask & activeAttribMask) != 0) {
+                    return false;
+                }
+                const Uint32 missingAttribMask = activeAttribMask & ~attributeLocationMask;
+                if (missingAttribMask != 0) {
+                    for (Uint32 location = 0; location < kMaxVertexAttribs; ++location) {
+                        if ((missingAttribMask & (1u << location)) == 0) {
+                            continue;
+                        }
+                        if (MG_State::GLState::ClassifyVertexAttribType(programObj.vertexInputTypes[location])
+                                .baseType == MG_State::GLState::VertexAttribBaseType::Unsupported) {
+                            return false;
+                        }
                     }
                 }
             }
@@ -5043,35 +5234,41 @@ void main() {
         }
 
         // Everything the full path would re-resolve is provably unchanged - or, for
-        // a moved pipeline-state version or a changed VAO, reduces to re-resolving
-        // just the pipeline through the value-keyed memo against the still-active
-        // render pass. Run only the per-draw tail.
+        // a moved pipeline-state version or a changed vertex-input LAYOUT, reduces to
+        // re-resolving just the pipeline through the value-keyed memo against the
+        // still-active render pass. A changed VAO with the SAME layout keeps the
+        // snapshot's pipeline outright (the layout is the pipeline's only VAO input).
+        // Run only the per-draw tail.
         VkPipeline pipeline = snap.pipeline;
-        if (renderStateMoved || vaoMoved) {
+        if (renderStateMoved || vaoLayoutMoved) {
             pipeline = VK_NULL_HANDLE;
-            if (!renderStateMoved && m_pipelineStateHashValid &&
-                m_pipelineStateHashVersion == renderStateVersion) {
-                // VAO-only movement: the render pass is provably the snapshot's (hash
-                // match above) and the pipeline-state hash is cached for this
-                // untouched state version, so probe the value-keyed pipeline memo
-                // directly - no render-pass-entry re-fetch (whose pending-clear
-                // probes cost more than the whole probe below). A miss, or a cached
-                // hash computed against another pass's attachment count (the hash
-                // folds it in, so such a mismatch can only produce a miss, never a
-                // false hit), falls through to the full lookup.
-                const auto& vis = m_vertexInputStateFactory->GetOrCreateVertexInputState(vao);
-                const auto memoTransformFlags =
-                    ProgramFactory::CompileOptionFlags(snap.resolvedTransformFlags);
-                for (Uint32 i = 0; i < m_pipelineMemoCount; ++i) {
-                    const PipelineMemoEntry& entry = m_pipelineMemo[i];
-                    if (entry.pipeline != VK_NULL_HANDLE && entry.mode == mode &&
-                        entry.programHash == programObj.hash && entry.vertexInputHash == vis.layoutHash &&
-                        entry.renderPassHash == snap.renderPassHash &&
-                        entry.pipelineStateHash == m_pipelineStateHash &&
-                        entry.transformFlags == memoTransformFlags) {
-                        pipeline = entry.pipeline;
-                        break;
-                    }
+            // The render pass is provably the snapshot's (hash match above), so probe
+            // the value-keyed pipeline memo directly - no render-pass-entry re-fetch
+            // (whose pending-clear probes cost more than the whole probe below). For a
+            // moved state version, first refresh the pipeline-state VALUE hash exactly
+            // as GetOrCreatePipeline would (same inputs: the snapshot pins the pass, so
+            // its color attachment count is the right hash input); the value hash is
+            // what lets a per-draw GL_BLEND toggle alternate between two memo entries
+            // instead of missing forever on a monotonic version. A miss falls through
+            // to the full lookup.
+            if (!m_pipelineStateHashValid || m_pipelineStateHashVersion != renderStateVersion ||
+                m_pipelineStateHashColorCount != snap.renderPassColorCount) {
+                m_pipelineStateHash = ComputePipelineStateHash(snap.renderPassColorCount);
+                m_pipelineStateHashVersion = renderStateVersion;
+                m_pipelineStateHashColorCount = snap.renderPassColorCount;
+                m_pipelineStateHashValid = true;
+            }
+            const auto memoTransformFlags =
+                ProgramFactory::CompileOptionFlags(snap.resolvedTransformFlags);
+            for (Uint32 i = 0; i < m_pipelineMemoCount; ++i) {
+                const PipelineMemoEntry& entry = m_pipelineMemo[i];
+                if (entry.pipeline != VK_NULL_HANDLE && entry.mode == mode &&
+                    entry.programHash == programObj.hash && entry.vertexInputHash == vaoLayoutHash &&
+                    entry.renderPassHash == snap.renderPassHash &&
+                    entry.pipelineStateHash == m_pipelineStateHash &&
+                    entry.transformFlags == memoTransformFlags) {
+                    pipeline = entry.pipeline;
+                    break;
                 }
             }
             if (pipeline == VK_NULL_HANDLE) {
@@ -5098,6 +5295,7 @@ void main() {
         snap.bindGeneration = bindGeneration;
         snap.vao = static_cast<const void*>(&vao);
         snap.vaoConfigVersion = vao.GetConfigVersion();
+        snap.vaoLayoutHash = vaoLayoutHash;
         snap.pipeline = pipeline;
         if (!g_dynamicStateShadow.graphicsPipelineValid ||
             g_dynamicStateShadow.graphicsPipeline != pipeline) {
@@ -5118,25 +5316,7 @@ void main() {
             const Bool idxUploadOk = UploadAndBindIndexBuffer(frame, vao, pIndexBufferView);
             MOBILEGL_ASSERT(idxUploadOk, "SetupDraw fast path: failed to upload index buffer");
         }
-        ApplyGLViewportState(frame.commandBuffer, snap.renderPassExtent, m_swapchainObject.GetPreTransform(),
-                             snap.drawFboIsDefault);
-        ApplyBlendConstants(frame.commandBuffer);
-        ApplyPolygonOffsetState(frame.commandBuffer);
-        ApplyLineWidthState(frame.commandBuffer);
-        ApplyStencilState(frame.commandBuffer);
-        const Bool scissorEnabled = MG_State::pGLContext->IsCapabilityEnabled(CapabilityInput::ScissorTest);
-        VkRect2D scissor{};
-        if (scissorEnabled) {
-            const auto& scissorBox = MG_State::pGLContext->GetScissorBox();
-            scissor = snap.drawFboIsDefault
-                ? MakeDefaultFramebufferScissorRect(scissorBox, snap.renderPassExtent,
-                                                    m_swapchainObject.GetPreTransform())
-                : MakeClampedScissorRect(scissorBox, snap.renderPassExtent);
-        } else {
-            scissor.offset = {0, 0};
-            scissor.extent = { (Uint)snap.renderPassExtent.x(), (Uint)snap.renderPassExtent.y() };
-        }
-        ShadowedSetScissor(frame.commandBuffer, scissor);
+        ApplyDynamicDrawStateTail(frame, snap.renderPassExtent, snap.drawFboIsDefault);
         return true;
     }
 
@@ -5215,6 +5395,10 @@ void main() {
             }
         }
         const auto& programObj = m_programFactory->GetOrCreateProgram(program, transformFlags);
+        // For the snapshot's memoised entry pointer: if anything below inserts into the
+        // program cache (blit/aux program compiles), the epoch moves and the snapshot
+        // stores no pointer for this draw - the fast path then re-looks-up once.
+        const Uint64 programFactoryEpochAtResolve = m_programFactory->GetCacheStructureEpoch();
 
         // Begin command recording if not yet
         if (!frame.isCommandRecording) {
@@ -5478,26 +5662,7 @@ void main() {
             MOBILEGL_ASSERT(idxUploadOk, "SetupDraw skipped: failed to upload index buffer");
         }
 
-        ApplyGLViewportState(frame.commandBuffer, renderPassEntry->extent,
-                             m_swapchainObject.GetPreTransform(), drawFbo->IsDefaultFramebuffer());
-        ApplyBlendConstants(frame.commandBuffer);
-        ApplyPolygonOffsetState(frame.commandBuffer);
-        ApplyLineWidthState(frame.commandBuffer);
-        ApplyStencilState(frame.commandBuffer);
-
-        Bool scissorEnabled = MG_State::pGLContext->IsCapabilityEnabled(CapabilityInput::ScissorTest);
-        VkRect2D scissor{};
-        if (scissorEnabled) {
-            const auto& scissorBox = MG_State::pGLContext->GetScissorBox();
-            scissor = drawFbo->IsDefaultFramebuffer()
-                ? MakeDefaultFramebufferScissorRect(scissorBox, renderPassEntry->extent,
-                                                    m_swapchainObject.GetPreTransform())
-                : MakeClampedScissorRect(scissorBox, renderPassEntry->extent);
-        } else {
-            scissor.offset = {0, 0};
-            scissor.extent = { (Uint)renderPassEntry->extent.x(), (Uint)renderPassEntry->extent.y() };
-        }
-        ShadowedSetScissor(frame.commandBuffer, scissor);
+        ApplyDynamicDrawStateTail(frame, renderPassEntry->extent, drawFbo->IsDefaultFramebuffer());
 
         // Snapshot the fully resolved configuration for the consecutive-draw
         // fast path (see TrySetupDrawFastPath).
@@ -5526,7 +5691,21 @@ void main() {
                 snap.renderbufferImageEpoch = m_renderPassManager->GetRenderbufferImageEpoch();
                 snap.drawUsesDepthStencil = drawUsesDepthStencil;
                 snap.renderPassExtent = renderPassEntry->extent;
+                snap.renderPassColorCount = renderPassEntry->colorAttachmentCount;
                 snap.pipeline = pipeline;
+                // The layout identity the fast path's aux-memo compare answers against.
+                // A memo hit here, not a rebuild: the pre-flight above resolved this
+                // VAO's entry already, so this re-reads the VAO's stamped state memo.
+                snap.vaoLayoutHash = m_vertexInputStateFactory->GetOrCreateVertexInputState(vao).layoutHash;
+                // Entry pointer memo: only when nothing since the resolve restructured
+                // the factory cache (see programFactoryEpochAtResolve above).
+                if (m_programFactory->GetCacheStructureEpoch() == programFactoryEpochAtResolve) {
+                    snap.programObj = &programObj;
+                    snap.programFactoryEpoch = programFactoryEpochAtResolve;
+                } else {
+                    snap.programObj = nullptr;
+                    snap.programFactoryEpoch = 0;
+                }
                 snap.samplingResolutionGeneration = MG_State::pGLContext->GetSamplingResolutionGeneration();
                 Uint64 snapContentSum = 0;
                 Uint64 snapParamsSum = 0;

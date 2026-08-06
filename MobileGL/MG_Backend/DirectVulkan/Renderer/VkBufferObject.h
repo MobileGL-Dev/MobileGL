@@ -48,7 +48,20 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
         VkBuffer GetHandle() const { return m_buffer; }
         VkDeviceSize GetSize() const { return m_size; }
-        BufferSlice GetSlice(VkDeviceSize offset = 0, VkDeviceSize size = VK_WHOLE_SIZE) const;
+        // Inline: runs on the per-draw acquire path (a resident buffer bind is a
+        // GetSlice per binding), where an out-of-line call was measurable.
+        BufferSlice GetSlice(VkDeviceSize offset = 0, VkDeviceSize size = VK_WHOLE_SIZE) const {
+            MOBILEGL_ASSERT(offset <= m_size, "VkBufferObject::GetSlice offset out of range");
+            const VkDeviceSize resolvedSize = (size == VK_WHOLE_SIZE) ? (m_size - offset) : size;
+            MOBILEGL_ASSERT(offset + resolvedSize <= m_size, "VkBufferObject::GetSlice range out of bounds");
+
+            BufferSlice slice{};
+            slice.buffer = m_buffer;
+            slice.offset = offset;
+            slice.size = resolvedSize;
+            slice.mapped = (m_mappedData != nullptr) ? static_cast<Uint8*>(m_mappedData) + offset : nullptr;
+            return slice;
+        }
         void* GetMappedData() const { return m_mappedData; }
         Bool IsMapped() const { return m_mappedData != nullptr; }
         Bool IsValid() const { return m_allocator != nullptr && m_buffer != VK_NULL_HANDLE && m_allocation != nullptr; }

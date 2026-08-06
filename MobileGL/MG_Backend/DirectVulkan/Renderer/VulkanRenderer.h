@@ -738,7 +738,26 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             // flips it must fall back to the full path's pass selection.
             Bool drawUsesDepthStencil = false;
             IntVec2 renderPassExtent = {0, 0};
+            // colorAttachmentCount of the snapshotting draw's render pass: the
+            // pipeline-state hash input, so the fast path can refresh that hash and
+            // probe the pipeline memo after a state change without re-fetching the
+            // render-pass entry (the pass itself is pinned by renderPassHash above).
+            Uint32 renderPassColorCount = 0;
             VkPipeline pipeline = VK_NULL_HANDLE;
+            // layoutHash of the snapshotting draw's vertex-input state. The pipeline and
+            // the vertex-input pre-flight depend on the VAO only through this (plus the
+            // program, pinned separately), so a changed VAO whose aux memo carries the
+            // same layoutHash re-uses the snapshot's pipeline and pre-flight verdict
+            // outright - the VAO-cycling case Minecraft chunk rendering hits every draw.
+            Uint64 vaoLayoutHash = 0;
+            // Memoised ProgramFactory entry of the snapshotting draw, valid while
+            // (programLifetimeId, programVersion, resolvedTransformFlags) match - all
+            // checked above - AND the factory's cache structure epoch is unchanged (the
+            // cache is open-addressing and holds entries by value, so any insert/erase
+            // moves them). The fast path must re-stamp use through StampProgramUse when
+            // it bypasses GetOrCreateProgram, or the idle sweep could evict a live entry.
+            const ProgramFactory::VkProgramObject* programObj = nullptr;
+            Uint64 programFactoryEpoch = 0;
         };
         SetupDrawSnapshot m_setupDrawSnapshot;
 
@@ -838,13 +857,19 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             // either, so a wider layout resolves per draw. Minecraft-shaped layouts use four.
             static constexpr Uint32 kMaxBindings = 8;
 
+            // Frame serial of the last completed resolve OR cross-frame revalidation.
             // Zero until a resolve completes, and reset to zero before one starts, so a
             // resolve that bails out midway cannot leave a half-filled entry matchable.
+            // Unlike the original frame-scoped memo, an entry whose buffers are all
+            // resident and unmapped is revalidated across frames (per-binding slice
+            // epoch compares) instead of re-resolved - see TryBindResolvedVertexBindings.
             Uint64 frameSerial = 0;
-            // Identity of the resolved Vulkan layout: fixes bindings.size(), each
-            // binding's base offset, which bindings are client/converted, and (through
-            // the hash, which mixes the bound buffers' addresses) the VAO configuration.
-            const VertexInputStateFactory::BackendVertexInputState* vertexInputState = nullptr;
+            // Identity of the resolved Vulkan layout: the VAO's content hash
+            // (VertexInputStateFactory::GetOrComputeHash - the same value the factory
+            // keys its entries on) fixes bindings.size(), each binding's base offset,
+            // which bindings are client/converted, and (through the mixed-in buffer
+            // addresses) which buffer each binding reads. Compared against the VAO's
+            // own hash memo on the hit path, so a hit never touches the factory entry.
             VertexInputStateFactory::HashType vertexInputHash = 0;
             // The program's vertex input layout: decides the synthetic-binding set and
             // hence the total binding count.
@@ -865,6 +890,22 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             Uint64 sliceEpochs[kMaxBindings] = {};
             VkBuffer vkBuffers[kMaxBindings] = {};
             VkDeviceSize vkOffsets[kMaxBindings] = {};
+
+            // Resident element-buffer slice memo (skips the per-draw AcquireResidentSlice
+            // for the VAO's EBO, which cold-chases 500+ distinct resources in a
+            // chunk-cycling frame). Self-validating exactly like the bindings above: a hit
+            // requires the LIVE bound EBO pointer to equal indexBuffer AND that buffer's
+            // resource to still carry indexSliceEpoch (epochs are minted from a
+            // process-lifetime counter, so a recycled address can never revalidate).
+            // Restart-substituted and streamed EBOs are never stored. indexFrameSerial
+            // tracks the last frame the resource's GPU-use serial was stamped through this
+            // memo; 0 means no index memo. Independent of the vertex half: both are
+            // (pointer, epoch)-validated, so neither can serve stale state for the other.
+            const MG_State::GLState::BufferObject* indexBuffer = nullptr;
+            Uint64 indexSliceEpoch = 0;
+            VkBuffer indexVkBuffer = VK_NULL_HANDLE;
+            VkDeviceSize indexSliceOffset = 0;
+            Uint64 indexFrameSerial = 0;
         };
         // Keyed on the VAO address purely as a lookup hint - an entry is only ever
         // compared against, never dereferenced through, so a recycled address cannot
@@ -878,6 +919,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // Entries of deleted VAOs are never hit again but still occupy the map; drop the
         // lot at a frame boundary once they could outweigh a large frame's working set.
         static constexpr SizeT kMaxResolvedVertexBindings = 4096;
+        // The current draw's memo entry, set by UploadAndBindVertexBuffers and consumed
+        // by the same draw's UploadAndBindIndexBuffer (the EBO memo lives in the same
+        // entry). Valid ONLY within that window: the map is open-addressing, so the next
+        // insert (i.e. the next draw's resolve of a new VAO) can move it. Null when the
+        // draw's layout is not memoisable.
+        ResolvedVertexBindings* m_currentDrawResolvedEntry = nullptr;
 
         void CreateInstance();
         VkResult SetupDebugMessenger();
@@ -909,17 +956,25 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             const MG_State::GLState::ProgramObject& program,
             const ProgramFactory::VkProgramObject& programObj);
 
+        // The per-draw dynamic-state tail (viewport, scissor, blend constants, depth
+        // bias, line width, stencil), gated behind one render-state-parameters-version
+        // compare per command buffer - see the gate fields in DynamicStateShadow.
+        void ApplyDynamicDrawStateTail(FrameContext::FrameData& frame, const IntVec2& extent, Bool isDefaultFbo);
+
         Bool UploadAndBindVertexBuffers(VkCommandBuffer commandBuffer, const MG_State::GLState::VertexArrayObject& vao,
                                         const ProgramFactory::VkProgramObject& programObj,
                                         const DrawCmdParam& drawParams,
                                         const IndexBufferView* pIndexBufferView);
         // Binds `entry`'s memoised buffers when every input it was resolved from is
         // still live and unchanged, else returns false and leaves nothing bound.
+        // vaoContentHash is the VAO's memoised content hash (GetBackendHashMemo), which
+        // pins the layout AND the bound buffers without resolving the factory entry.
+        // Non-const entry: a cross-frame revalidation refreshes its serial/epoch stamps.
         Bool TryBindResolvedVertexBindings(VkCommandBuffer commandBuffer,
                                            const MG_State::GLState::VertexArrayObject& vao,
-                                           const ResolvedVertexBindings& entry,
-                                           const VertexInputStateFactory::BackendVertexInputState& vertexInputState,
-                                           Uint32 activeAttribMask, Uint32 bindingCount, Uint64 frameSerial);
+                                           ResolvedVertexBindings& entry,
+                                           Uint64 vaoContentHash,
+                                           Uint32 activeAttribMask, Uint64 frameSerial);
         Bool UploadAndBindIndexBuffer(FrameContext::FrameData& frame,
                                      const MG_State::GLState::VertexArrayObject& vao,
                                       const IndexBufferView* pIndexBufferView = nullptr);

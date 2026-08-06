@@ -2379,6 +2379,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             return it->second;
         }
 
+        // Structural change: the insert below can move every entry of this
+        // open-addressing map, so all memoised entry pointers die here.
+        ++m_cacheStructureEpoch;
         auto& entry = m_cache[hash];
         entry.hash = hash;
         entry.lastUsedFrame = m_frameCounter;
@@ -2580,6 +2583,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 // erase runs ~VkProgramObject (modules/layouts destroyed); notify after
                 // so an observer never observes a half-destroyed entry through a lookup.
                 // Observers only need the handle values to purge their keyed caches.
+                ++m_cacheStructureEpoch; // erase moves/kills entries: memoised pointers die
                 it = m_cache.erase(it);
                 if (m_evictionObserver != nullptr) {
                     m_evictionObserver->OnProgramEvicted(hash, descriptorSetLayout);

@@ -71,6 +71,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
         const BackendVertexInputState& entry = GetOrCreateVertexInputState(vao, GetOrComputeHash(vao));
         vao.SetBackendStateMemo(&entry, m_evictionEpoch);
+        // Also mirror the layout identity and the two per-draw masks into the VAO's aux
+        // memo (pure VALUES derived from the VAO configuration, so config-version
+        // guarding alone is sound). The draw fast path reads them from the VAO object it
+        // already touched instead of chasing into this entry - see PackVertexInputAuxMemo.
+        vao.SetBackendAuxMemo(entry.layoutHash,
+                              PackVertexInputAuxMasks(entry.unsupportedAttribMask, entry.attributeLocationMask));
         return entry;
     }
 

@@ -907,10 +907,15 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     Bool UniformManager::SampledBindingsUnchanged(const MG_State::GLState::ProgramObject& program,
                                                   const ProgramFactory::VkProgramObject& programObj,
                                                   const Vector<SampledBindingRecord>& previousRecords) const {
-        const Uint32 bindingCount =
-            std::min<Uint32>(m_maxBindings, static_cast<Uint32>(programObj.bindingKinds.size()));
         SizeT recordIndex = 0;
-        for (Uint32 binding = 0; binding < bindingCount; ++binding) {
+        // Iterate only the bindings this program declares (ascending), exactly like
+        // BindProgramUniformBuffers: this runs per draw whenever the texture bind
+        // generation moved, and walking all m_maxBindings slots to find the 1-8 real
+        // ones dominated it.
+        for (const Uint32 binding : programObj.activeBindings) {
+            if (binding >= m_maxBindings) {
+                break; // ascending, so nothing past the cap can follow
+            }
             if (programObj.bindingKinds[binding] != ProgramFactory::DescriptorBindingKind::CombinedImageSampler) {
                 continue;
             }
