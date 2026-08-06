@@ -42,3 +42,4 @@ set_tests_properties(SanityBench PROPERTIES LABELS benchmark)
 
 add_subdirectory(Program)
 add_subdirectory(Buffer)
+add_subdirectory(Driver)
