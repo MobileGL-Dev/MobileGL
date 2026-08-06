@@ -57,6 +57,17 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // never orphaned or recreated. Draw-time acquire binds it directly, no re-upload.
         Bool persistentMapped = false;
 
+        // Bumped from a manager-wide counter every time anything that decides which
+        // BufferSlice an Acquire*Slice call hands back changes: storage created or
+        // released, a full re-upload becoming due, a promotion/demotion between
+        // resident and streamed storage, or a new per-frame arena slice. Callers that
+        // memoise a resolved slice compare this to prove the memo still describes the
+        // buffer. The counter is manager-wide (never per-resource) so a freshly
+        // created resource - including one that replaces a destroyed resource at the
+        // same address - can never reproduce a value some memo already holds. 0 means
+        // "no slice has ever been handed out", which no memo can match.
+        Uint64 sliceEpoch = 0;
+
         // Cached transient (streaming) slice for the current frame.
         BufferSlice transientSlice{};
         Uint64 transientFrameSerial = 0;
@@ -132,6 +143,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         void OnResourceDestroyed(SharedPtr<MG_State::GLState::BackendBufferResource>&& resource);
 
         Uint64 GetFrameSerial() const { return m_frameSerial; }
+        // Highest value handed to any VkBufferResource::sliceEpoch. Unchanged since a
+        // memo was taken means no buffer this manager owns changed which slice it hands
+        // back, and none was persistently mapped, in between - so a memo of resolved
+        // slices needs no per-buffer re-check. See AcquirePersistentMap for the mapping half.
+        Uint64 GetSliceEpochCounter() const { return m_sliceEpochCounter; }
         // Highest frame serial whose GPU work is known complete; serials at or
         // below it may be considered signaled. Drives IsResourceBusy and the
         // backend GL fence objects.
@@ -158,6 +174,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         void DestroyAllDeferredReleases();
         void TrackLiveResource(const SharedPtr<VkBufferResource>& resource);
         void ReleaseAllLiveResources();
+        // See VkBufferResource::sliceEpoch.
+        void BumpSliceEpoch(VkBufferResource& resource) { resource.sliceEpoch = ++m_sliceEpochCounter; }
 
         VkBufferManagerInitInfo m_initInfo{};
         BufferArena m_transientUploadArena;
@@ -170,5 +188,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         Uint32 m_currentFrameIndex = 0;
         Uint64 m_frameSerial = 1;
         Uint64 m_completedSerialFloor = 0;
+        // Never reset (not even by Shutdown): a value handed to a resource must stay
+        // unique for the process, or a memo taken before a re-initialize could match
+        // a different resource's state after it.
+        Uint64 m_sliceEpochCounter = 0;
     };
 } // namespace MobileGL::MG_Backend::DirectVulkan

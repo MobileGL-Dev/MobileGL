@@ -258,6 +258,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     void VkBufferManager::ReleaseAllLiveResources() {
         for (auto& weak : m_liveResources) {
             if (auto resource = weak.lock()) {
+                BumpSliceEpoch(*resource);
                 resource->buffer.Destroy();
                 resource->storageSize = 0;
                 resource->usageFlags = 0;
@@ -272,6 +273,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
     Bool VkBufferManager::CreateResidentStorage(VkBufferResource& resource, VkDeviceSize size,
                                                 VkBufferUsageFlags usage, VkMemoryPropertyFlags requiredFlags) {
+        // The only place a resident VkBuffer handle is minted, so every resident slice
+        // change funnels through here (callers release the old handle first).
+        BumpSliceEpoch(resource);
         // Staged range copies write resident storage with vkCmdCopyBuffer.
         usage |= VK_BUFFER_USAGE_TRANSFER_DST_BIT;
         const Bool created = resource.buffer.Create({
@@ -358,6 +362,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         if (!resource) {
             return; // lazy: AcquireResidentSlice performs a full upload on creation
         }
+        // A respecify can change the size, the usage hint (so the resident/streamed
+        // route), and the contents at once; retire every memo before deciding what to
+        // do about the storage.
+        BumpSliceEpoch(*resource);
         // Any cached streaming slice refers to the previous contents.
         resource->transientFrameSerial = 0;
         if (!resource->buffer.IsValid()) {
@@ -390,6 +398,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         if (!resource) {
             return;
         }
+        // Drops the streaming memo below and may end in a storage swap or a deferred
+        // full re-upload, so no memoised slice survives this.
+        BumpSliceEpoch(*resource);
         resource->transientFrameSerial = 0;
         if (!resource->buffer.IsValid() || resource->pendingFullUpload) {
             return;
@@ -422,6 +433,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         if (!resource) {
             return;
         }
+        BumpSliceEpoch(*resource);
         resource->transientFrameSerial = 0;
         if (!resource->buffer.IsValid() || resource->pendingFullUpload) {
             return;
@@ -480,6 +492,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             bufferObject.SetBackendResource(resource);
             TrackLiveResource(resource);
         }
+
+        // Bumped for the request, not just for the storage it may create. This is the
+        // one call the frontend makes when a buffer becomes persistently mapped for
+        // writing (BufferObject::AcquireMemoryRange), and a map the backend declines
+        // keeps mutating its shadow with no further API call - so it is what lets
+        // GetSliceEpochCounter stand for "no buffer needs a persistent-map range push".
+        BumpSliceEpoch(*resource);
 
         // Idempotent: an already-backed buffer returns the same mapped base.
         if (resource->persistentMapped && resource->buffer.IsValid() && resource->storageSize == size) {
@@ -608,8 +627,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         } else if (resource->transientChangeSerial == changeSerial && resource->transientSize == size &&
                    resource->transientFrameSerial != 0) {
             if (++resource->unchangedStreak >= kStreamedPromotionStreak) {
+                // Promotion moves the buffer off the arena and onto resident storage.
                 resource->promotedResident = true;
                 resource->promotedChangeSerial = changeSerial;
+                BumpSliceEpoch(*resource);
                 if (AcquireResidentSlice(kind, bufferObject, outSlice)) {
                     return true;
                 }
@@ -619,6 +640,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             resource->unchangedStreak = 0;
         }
 
+        // A fresh arena allocation: a different slice than the last call handed back,
+        // and (below) the point where a promoted buffer's resident storage is released.
+        // The stable-promotion exit above returns before this, so a buffer the app has
+        // stopped touching keeps one slice for as long as it keeps its resident storage.
+        BumpSliceEpoch(*resource);
         if (!m_transientUploadArena.Upload(m_currentFrameIndex, bufferObject->MappedData(), size, 16,
                                            outSlice)) {
             return false;

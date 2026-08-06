@@ -271,6 +271,35 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         g_dynamicStateShadow = {};
     }
 
+    // vkCmdBindVertexBuffers, skipped when this command buffer already holds these
+    // buffers and offsets at binding 0.
+    static void ShadowedBindVertexBuffers(VkCommandBuffer commandBuffer, const VkBuffer* buffers,
+                                          const VkDeviceSize* offsets, Uint32 count) {
+        auto& shadow = g_dynamicStateShadow;
+        Bool identical = shadow.vertexBindValid && shadow.vertexBindingCount == count &&
+                         count <= DynamicStateShadow::kMaxShadowedVertexBindings;
+        if (identical) {
+            for (Uint32 i = 0; i < count; ++i) {
+                if (shadow.vertexBuffers[i] != buffers[i] || shadow.vertexOffsets[i] != offsets[i]) {
+                    identical = false;
+                    break;
+                }
+            }
+        }
+        if (identical) {
+            return;
+        }
+        vkCmdBindVertexBuffers(commandBuffer, 0, count, buffers, offsets);
+        if (count <= DynamicStateShadow::kMaxShadowedVertexBindings) {
+            shadow.vertexBindValid = true;
+            shadow.vertexBindingCount = count;
+            std::copy_n(buffers, count, shadow.vertexBuffers);
+            std::copy_n(offsets, count, shadow.vertexOffsets);
+        } else {
+            shadow.vertexBindValid = false;
+        }
+    }
+
     static void ShadowedSetScissor(VkCommandBuffer commandBuffer, const VkRect2D& scissor) {
         auto& shadow = g_dynamicStateShadow;
         if (shadow.scissorValid && shadow.scissor.offset.x == scissor.offset.x &&
@@ -3015,10 +3044,66 @@ void main() {
         return true;
     }
 
+    Bool VulkanRenderer::TryBindResolvedVertexBindings(
+        VkCommandBuffer commandBuffer, const MG_State::GLState::VertexArrayObject& vao,
+        const ResolvedVertexBindings& entry,
+        const VertexInputStateFactory::BackendVertexInputState& vertexInputState, Uint32 activeAttribMask,
+        Uint32 bindingCount, Uint64 frameSerial) {
+        // Frame-scoped: a streamed binding's slice moves to a new arena block every
+        // frame by design, and the frame's first resolve is also what stamps every
+        // bound buffer's GPU-use serial, which the buffer manager's busy tracking (and
+        // therefore glBufferSubData's choice between a host write and a staged copy)
+        // depends on.
+        if (entry.frameSerial != frameSerial || entry.vertexInputState != &vertexInputState ||
+            entry.vertexInputHash != vertexInputState.hash || entry.activeAttribMask != activeAttribMask ||
+            entry.bindingCount != bindingCount) {
+            return false;
+        }
+
+        // The layout identity above already fixes which buffer each binding reads: the
+        // factory entry is reached through the VAO's config-version-gated memo and its
+        // hash mixes the bound buffers' addresses, so rebinding a buffer resolves to a
+        // different entry. What is left to establish is that those buffers still hand
+        // back the slices recorded here, and that none of them is a host map whose
+        // shadow needs pushing down. An unmoved manager-wide epoch counter says both.
+        if (!entry.anyBufferMapped && entry.sliceEpochCounter == m_bufferManager.GetSliceEpochCounter()) {
+            ShadowedBindVertexBuffers(commandBuffer, entry.vkBuffers, entry.vkOffsets, bindingCount);
+            return true;
+        }
+
+        // Something moved somewhere; ask the buffers themselves.
+        const auto& attributes = vao.GetAllAttributes();
+        const MG_State::GLState::BufferObject* synced = nullptr;
+        for (Uint32 binding = 0; binding < bindingCount; ++binding) {
+            auto* bufferObject = attributes[entry.attributeLocations[binding]].Buffer.get();
+            if (bufferObject != entry.buffers[binding]) {
+                return false;
+            }
+            // What the resolving path does before every acquire: a persistent map the
+            // backend could not adopt into coherent GPU storage mutates its shadow with
+            // no API call, so the write range has to be pushed down here too. It is a
+            // no-op for every buffer that is not such a map; when it is not, it dispatches
+            // a SubData that retires the epoch below, and this draw resolves in full.
+            if (bufferObject != synced) {
+                bufferObject->SyncPersistentMappedRange();
+                synced = bufferObject;
+            }
+            const auto* resource = static_cast<const VkBufferResource*>(bufferObject->GetBackendResource().get());
+            if (resource == nullptr || resource->sliceEpoch != entry.sliceEpochs[binding]) {
+                return false;
+            }
+        }
+
+        ShadowedBindVertexBuffers(commandBuffer, entry.vkBuffers, entry.vkOffsets, bindingCount);
+        return true;
+    }
+
     Bool VulkanRenderer::UploadAndBindVertexBuffers(
         VkCommandBuffer commandBuffer, const MG_State::GLState::VertexArrayObject& vao,
         const ProgramFactory::VkProgramObject& programObj, const DrawCmdParam& drawParams,
         const IndexBufferView* pIndexBufferView) {
+        static_assert(ResolvedVertexBindings::kMaxBindings == DynamicStateShadow::kMaxShadowedVertexBindings,
+                      "the resolved-binding memo is sized to what the bind shadow can compare");
         const Bool indexedDraw = pIndexBufferView != nullptr;
         // Exclusive upper bound on the vertex-stream elements this draw can fetch through
         // vertex-rate bindings, or 0 when unbounded (indirect/multi draws). Computed lazily
@@ -3049,6 +3134,30 @@ void main() {
         const Uint32 missingAttribMask = activeAttribMask & ~vertexInputAttribMask;
 
         const auto bindingCount = vertexInputState.bindings.size() + static_cast<SizeT>(std::popcount(missingAttribMask));
+
+        const Uint64 frameSerial = m_bufferManager.GetFrameSerial();
+        if (frameSerial != m_resolvedVertexBindingsFrameSerial) {
+            m_resolvedVertexBindingsFrameSerial = frameSerial;
+            if (m_resolvedVertexBindings.size() > kMaxResolvedVertexBindings) {
+                m_resolvedVertexBindings.clear();
+            }
+        }
+        ResolvedVertexBindings* memo = nullptr;
+        if (auto found = m_resolvedVertexBindings.find(&vao); found != m_resolvedVertexBindings.end()) {
+            memo = &found->second;
+            if (TryBindResolvedVertexBindings(commandBuffer, vao, *memo, vertexInputState, activeAttribMask,
+                                              static_cast<Uint32>(bindingCount), frameSerial)) {
+                return true;
+            }
+            // Whatever it described is stale; a resolve that bails out below must not
+            // leave the old contents matchable either.
+            memo->frameSerial = 0;
+        }
+        // Anything the memo cannot key on (see ResolvedVertexBindings) clears this as
+        // the resolve below discovers it.
+        Bool memoisable = missingAttribMask == 0 && bindingCount > 0 &&
+                          bindingCount <= ResolvedVertexBindings::kMaxBindings;
+        Bool anyBufferMapped = false;
 
         auto& vkBuffers = m_vertexBuffersScratch;
         auto& vkOffsets = m_vertexOffsetsScratch;
@@ -3101,6 +3210,7 @@ void main() {
                                         ? vertexInputState.bindingConversions[binding]
                                         : VertexInputStateFactory::VertexStreamConversion::None;
             if (usesClientMemory) {
+                memoisable = false;
                 const Uint32 location = bindingLocation;
                 MOBILEGL_ASSERT(location < MG_State::GLState::VertexArrayObject::MAX_VERTEX_ATTRIBS,
                                 "UploadAndBindVertexStreams failed to resolve client attribute location");
@@ -3174,6 +3284,7 @@ void main() {
                             binding, baseOffset, sourceSize);
 
             if (conversion != VertexInputStateFactory::VertexStreamConversion::None) {
+                memoisable = false;
                 MOBILEGL_ASSERT(bindingLocation < MG_State::GLState::VertexArrayObject::MAX_VERTEX_ATTRIBS,
                                 "UploadAndBindVertexStreams failed to resolve converted attribute location");
                 const auto& attr = vao.GetAttribute(bindingLocation);
@@ -3261,6 +3372,24 @@ void main() {
             }
             vkBuffers[binding] = slice.buffer;
             vkOffsets[binding] = slice.offset + static_cast<VkDeviceSize>(baseOffset);
+            // bindingAttributeLocations carries MAX_VERTEX_ATTRIBS as its "no location"
+            // sentinel; GetAttribute() folds that to an empty attribute but the memo
+            // indexes the raw array, so such a binding is not memoisable.
+            memoisable = memoisable && bindingLocation < MG_State::GLState::VertexArrayObject::MAX_VERTEX_ATTRIBS;
+            if (memoisable) {
+                if (memo == nullptr) {
+                    memo = &m_resolvedVertexBindings[&vao];
+                    memo->frameSerial = 0;
+                }
+                memo->attributeLocations[binding] = static_cast<Uint8>(bindingLocation);
+                memo->buffers[binding] = sourceBufferShared.get();
+                // Read after the acquire: it is the acquire that creates the resource
+                // and mints the epoch this slice belongs to.
+                const auto* resource =
+                    static_cast<const VkBufferResource*>(sourceBufferShared->GetBackendResource().get());
+                memo->sliceEpochs[binding] = resource != nullptr ? resource->sliceEpoch : 0;
+                anyBufferMapped = anyBufferMapped || sourceBufferShared->IsMapped();
+            }
         }
 
         SizeT syntheticBinding = vertexInputState.bindings.size();
@@ -3299,29 +3428,22 @@ void main() {
         }
 
         if (bindingCount > 0) {
-            auto& shadow = g_dynamicStateShadow;
             const Uint32 count = static_cast<Uint32>(bindingCount);
-            Bool identical = shadow.vertexBindValid && shadow.vertexBindingCount == count &&
-                             count <= DynamicStateShadow::kMaxShadowedVertexBindings;
-            if (identical) {
-                for (Uint32 i = 0; i < count; ++i) {
-                    if (shadow.vertexBuffers[i] != vkBuffers[i] || shadow.vertexOffsets[i] != vkOffsets[i]) {
-                        identical = false;
-                        break;
-                    }
-                }
+            if (memoisable && memo != nullptr) {
+                std::copy_n(vkBuffers.data(), count, memo->vkBuffers);
+                std::copy_n(vkOffsets.data(), count, memo->vkOffsets);
+                memo->vertexInputState = &vertexInputState;
+                memo->vertexInputHash = vertexInputState.hash;
+                memo->activeAttribMask = activeAttribMask;
+                memo->bindingCount = count;
+                memo->anyBufferMapped = anyBufferMapped;
+                // Read after every acquire above, so it covers the epochs they minted.
+                memo->sliceEpochCounter = m_bufferManager.GetSliceEpochCounter();
+                // Published last: the entry is only matchable once every field above is
+                // the one this completed resolve produced.
+                memo->frameSerial = frameSerial;
             }
-            if (!identical) {
-                vkCmdBindVertexBuffers(commandBuffer, 0, count, vkBuffers.data(), vkOffsets.data());
-                if (count <= DynamicStateShadow::kMaxShadowedVertexBindings) {
-                    shadow.vertexBindValid = true;
-                    shadow.vertexBindingCount = count;
-                    std::copy_n(vkBuffers.data(), count, shadow.vertexBuffers);
-                    std::copy_n(vkOffsets.data(), count, shadow.vertexOffsets);
-                } else {
-                    shadow.vertexBindValid = false;
-                }
-            }
+            ShadowedBindVertexBuffers(commandBuffer, vkBuffers.data(), vkOffsets.data(), count);
         }
         return true;
     }

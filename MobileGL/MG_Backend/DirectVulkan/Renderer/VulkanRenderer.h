@@ -779,6 +779,63 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         UnorderedMap<ConvertedVertexStreamKey, ConvertedVertexStream, ConvertedVertexStreamKeyHash>
             m_convertedVertexStreams;
 
+        // One VAO's resolved vkCmdBindVertexBuffers arguments, reusable by a later draw
+        // that would resolve them to the same thing. Consecutive draws in a chunk-renderer
+        // frame keep the program and the vertex layout and only swap the VAO, so a
+        // per-VAO memo turns the second and later draws through each VAO into a validate
+        // plus (usually skipped) rebind.
+        //
+        // Only whole-buffer bindings are memoised. Client-memory and format-converted
+        // streams re-upload from a range that depends on the draw's own vertex/index
+        // range, and synthetic bindings carry glVertexAttrib* values that are not part
+        // of any key here; a layout using any of them is never stored.
+        struct ResolvedVertexBindings {
+            // Must equal DynamicStateShadow::kMaxShadowedVertexBindings (static_assert in
+            // the .cpp): past that width the bind shadow cannot skip a redundant bind
+            // either, so a wider layout resolves per draw. Minecraft-shaped layouts use four.
+            static constexpr Uint32 kMaxBindings = 8;
+
+            // Zero until a resolve completes, and reset to zero before one starts, so a
+            // resolve that bails out midway cannot leave a half-filled entry matchable.
+            Uint64 frameSerial = 0;
+            // Identity of the resolved Vulkan layout: fixes bindings.size(), each
+            // binding's base offset, which bindings are client/converted, and (through
+            // the hash, which mixes the bound buffers' addresses) the VAO configuration.
+            const VertexInputStateFactory::BackendVertexInputState* vertexInputState = nullptr;
+            VertexInputStateFactory::HashType vertexInputHash = 0;
+            // The program's vertex input layout: decides the synthetic-binding set and
+            // hence the total binding count.
+            Uint32 activeAttribMask = 0;
+            Uint32 bindingCount = 0;
+            // VkBufferManager::GetSliceEpochCounter() at resolve time. Still equal means
+            // no buffer anywhere changed its slice or was persistently mapped since, which
+            // settles every per-binding question below in one compare.
+            Uint64 sliceEpochCounter = 0;
+            // Any bound buffer already carrying a host map when the slice was resolved.
+            // Such a buffer can mutate its shadow with no API call, so it has to be
+            // re-pushed per draw and the one-compare path above cannot apply.
+            Bool anyBufferMapped = true;
+            // Per binding: the VAO attribute location its buffer comes from, that buffer,
+            // and the buffer's VkBufferManager slice epoch when the slice was resolved.
+            Uint8 attributeLocations[kMaxBindings] = {};
+            const MG_State::GLState::BufferObject* buffers[kMaxBindings] = {};
+            Uint64 sliceEpochs[kMaxBindings] = {};
+            VkBuffer vkBuffers[kMaxBindings] = {};
+            VkDeviceSize vkOffsets[kMaxBindings] = {};
+        };
+        // Keyed on the VAO address purely as a lookup hint - an entry is only ever
+        // compared against, never dereferenced through, so a recycled address cannot
+        // produce a wrong bind: every input the resolve depends on is re-read from live
+        // state and compared before the entry is used.
+        UnorderedMap<const MG_State::GLState::VertexArrayObject*, ResolvedVertexBindings>
+            m_resolvedVertexBindings;
+        // Frame serial the map was last aged on; entries are frame-scoped, so this only
+        // drives the size sweep below.
+        Uint64 m_resolvedVertexBindingsFrameSerial = 0;
+        // Entries of deleted VAOs are never hit again but still occupy the map; drop the
+        // lot at a frame boundary once they could outweigh a large frame's working set.
+        static constexpr SizeT kMaxResolvedVertexBindings = 4096;
+
         void CreateInstance();
         VkResult SetupDebugMessenger();
         VkResult DestroyDebugMessenger();
@@ -813,6 +870,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                         const ProgramFactory::VkProgramObject& programObj,
                                         const DrawCmdParam& drawParams,
                                         const IndexBufferView* pIndexBufferView);
+        // Binds `entry`'s memoised buffers when every input it was resolved from is
+        // still live and unchanged, else returns false and leaves nothing bound.
+        Bool TryBindResolvedVertexBindings(VkCommandBuffer commandBuffer,
+                                           const MG_State::GLState::VertexArrayObject& vao,
+                                           const ResolvedVertexBindings& entry,
+                                           const VertexInputStateFactory::BackendVertexInputState& vertexInputState,
+                                           Uint32 activeAttribMask, Uint32 bindingCount, Uint64 frameSerial);
         Bool UploadAndBindIndexBuffer(FrameContext::FrameData& frame,
                                      const MG_State::GLState::VertexArrayObject& vao,
                                       const IndexBufferView* pIndexBufferView = nullptr);
