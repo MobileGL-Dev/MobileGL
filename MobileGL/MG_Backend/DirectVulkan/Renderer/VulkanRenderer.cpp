@@ -2710,7 +2710,8 @@ void main() {
         succeeded = m_textureManager->Initialize(
             {m_device, m_physicalDevice.handle, m_allocator, m_commandPool, m_graphicsQueue,
              m_frameContext.GetFrameCount(), m_imageFormatListExtensionEnabled,
-             m_sampledReadStageMask});
+             m_sampledReadStageMask,
+             static_cast<Uint32>(m_physicalDevice.queueFamilies.graphicsFamily)});
         MOBILEGL_ASSERT(succeeded, "VkTextureManager initialization failed.");
         m_clearManager = MakeUnique<VkClearManager>();
         MOBILEGL_ASSERT(m_clearManager != nullptr, "VkClearManager creation failed.");
@@ -9445,6 +9446,12 @@ void main() {
     }
 
     Bool VulkanRenderer::SubmitPendingCommandBuffer(FrameContext::FrameData& frame, VkFence fence, Bool pooledFence) {
+        // Batched texture uploads must reach the queue before the frame's
+        // commands: the recording being submitted may sample images whose
+        // texels only exist in the texture manager's open upload batch.
+        if (m_textureManager) {
+            m_textureManager->FlushPendingUploads();
+        }
         VkPipelineStageFlags waitDstStageMask = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
         VkSemaphore waitSemaphore = frame.imageAvailableSemaphore;
         VkSubmitInfo submitInfo{VK_STRUCTURE_TYPE_SUBMIT_INFO};
@@ -9488,6 +9495,11 @@ void main() {
         RefreshCompletedSubmits();
         auto& frame = m_frameContext.GetCurrent();
         if (!frame.isCommandRecording && !frame.hasCommandBufferRecorded) {
+            // GL flush semantics still demand batched texture uploads start
+            // executing in finite time even when no draw was recorded.
+            if (m_textureManager) {
+                m_textureManager->FlushPendingUploads();
+            }
             return false;
         }
         // Acquire the fence while recording is still open: failing here must
@@ -9787,6 +9799,12 @@ void main() {
 
         // 1) Submit current frame work (the pre-pass stream, when recorded,
         //    rides the same submission strictly ahead of the frame commands).
+        //    Batched texture uploads go first: the frame's commands may sample
+        //    images whose texels only exist in the open upload batch, and
+        //    flushing here also bounds upload latency to one frame.
+        if (m_textureManager) {
+            m_textureManager->FlushPendingUploads();
+        }
         auto submitPacket = m_frameContext.GetSubmitInfo(shouldSubmitCommandBuffer, m_imageIndexAcquired);
         VK_VERIFY(vkQueueSubmit(m_graphicsQueue, 1, &submitPacket.submitInfo, frame.imageInFlightFence));
         RegisterSubmit(frame.imageInFlightFence, /*pooledFence=*/false);

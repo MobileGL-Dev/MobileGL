@@ -15,6 +15,7 @@
 #include "MG_Util/Converters/MGToVk/TextureEnumConverter.h"
 
 #include <Config.h>
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -620,12 +621,34 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         TextureResource::s_device = m_device;
         TextureResource::s_allocator = m_allocator;
 
+        // Own pool for the recycled upload-batch command buffers. Parking a
+        // dozen reset-but-alive command buffers in the renderer's shared pool
+        // interleaves their retained chunks with the frame command buffers
+        // allocated/freed there every frame; isolating them keeps both pools'
+        // internal allocators dense.
+        VkCommandPoolCreateInfo uploadPoolInfo{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
+        uploadPoolInfo.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT |
+                               VK_COMMAND_POOL_CREATE_TRANSIENT_BIT;
+        uploadPoolInfo.queueFamilyIndex = initInfo.graphicsQueueFamilyIndex;
+        VK_VERIFY(vkCreateCommandPool(m_device, &uploadPoolInfo, nullptr, &m_uploadCommandPool),
+                  "vkCreateCommandPool(texture upload batch)");
+
         return true;
     }
 
     void VkTextureManager::Shutdown() {
         if (m_device != VK_NULL_HANDLE) {
+            // A still-open (never-submitted) batch is discarded, not submitted:
+            // the renderer has already drained the device and the data has no
+            // observer. Submitted batches are waited and recycled, then the
+            // pools they recycled into are destroyed.
+            DiscardPendingUploadBatch();
             ReclaimCompletedUploads(/*waitAll=*/true);
+            DestroyUploadPools();
+            if (m_uploadCommandPool != VK_NULL_HANDLE) {
+                vkDestroyCommandPool(m_device, m_uploadCommandPool, nullptr);
+                m_uploadCommandPool = VK_NULL_HANDLE;
+            }
         }
         DestroyDeferredReleases();
         ++m_resourceEraseEpoch;  // every memoized resource pointer dies with the map
@@ -1859,6 +1882,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         resource.syncedTextureParamsVersion = 0;
 
         if (preservedResource) {
+            // The preserve copy reads the OLD image on its own immediately-
+            // submitted-and-waited command buffer; a batched upload into that
+            // image still sitting in the open batch must reach the queue first
+            // or the copy carries pre-upload texels forward.
+            FlushPendingUploads();
             const Bool preserved = PreserveTextureContentsOnRecreate(
                 m_device, m_commandPool, m_graphicsQueue, *preservedResource, resource);
             MOBILEGL_ASSERT(preserved,
@@ -1869,6 +1897,16 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     }
 
     void VkTextureManager::DeferResourceRelease(TextureResource&& resource) {
+        // The deferred-release queues are drained under fence/queue-idle proofs
+        // that only cover SUBMITTED work; a recorded-but-unsubmitted upload
+        // batch referencing this image would escape them. Push the batch onto
+        // the queue first so every later proof covers it. Rare (only recreate/
+        // erase of an image uploaded this very frame), so the flush is cheap.
+        if (m_uploadBatchOpen && resource.image != VK_NULL_HANDLE &&
+            std::find(m_uploadBatchImages.begin(), m_uploadBatchImages.end(), resource.image) !=
+                m_uploadBatchImages.end()) {
+            FlushPendingUploads();
+        }
         if (resource.image == VK_NULL_HANDLE && resource.fullView == VK_NULL_HANDLE &&
             resource.sampledView == VK_NULL_HANDLE &&
             resource.perMipViews.empty() && resource.perMipSampledViews.empty() &&
@@ -1919,12 +1957,209 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             } else if (vkGetFenceStatus(m_device, entry.fence) != VK_SUCCESS) {
                 break;
             }
-            vkDestroyFence(m_device, entry.fence, nullptr);
-            vkFreeCommandBuffers(m_device, m_commandPool, 1, &entry.commandBuffer);
-            vmaDestroyBuffer(m_allocator, entry.stagingBuffer, entry.stagingAllocation);
+            // Recycle, don't destroy: the fence resets into the fence pool,
+            // the command buffer resets into the CB pool (m_uploadCommandPool
+            // carries RESET_COMMAND_BUFFER_BIT), and the staging blocks
+            // return to the block pool for the next batch to bump-allocate.
+            // This is where the mc_tex_stream win comes from: the per-upload
+            // fence create/destroy + command-buffer alloc/free ioctl traffic
+            // was the measured 41%-in-kernel cost, not the submit itself.
+            if (vkResetFences(m_device, 1, &entry.fence) == VK_SUCCESS) {
+                m_freeUploadFences.push_back(entry.fence);
+            } else {
+                vkDestroyFence(m_device, entry.fence, nullptr);
+            }
+            if (vkResetCommandBuffer(entry.commandBuffer, 0) == VK_SUCCESS) {
+                m_freeUploadCommandBuffers.push_back(entry.commandBuffer);
+            } else {
+                vkFreeCommandBuffers(m_device, m_uploadCommandPool, 1, &entry.commandBuffer);
+            }
+            for (auto& block : entry.stagingBlocks) {
+                RecycleUploadStagingBlock(Move(block));
+            }
+            entry.stagingBlocks.clear();
         }
         m_pendingUploadReclaims.erase(m_pendingUploadReclaims.begin(),
                                       m_pendingUploadReclaims.begin() + static_cast<std::ptrdiff_t>(completed));
+    }
+
+    void VkTextureManager::RecycleUploadStagingBlock(UploadStagingBlock&& block) {
+        if (block.buffer == VK_NULL_HANDLE) {
+            return;
+        }
+        // Bound the idle pool: a one-off giant upload (initial atlas define)
+        // must not pin its staging memory forever.
+        constexpr VkDeviceSize kMaxFreeUploadStagingBytes = 32u * 1024u * 1024u;
+        if (m_allocator == nullptr || m_freeUploadStagingBytes + block.capacity > kMaxFreeUploadStagingBytes) {
+            vmaDestroyBuffer(m_allocator, block.buffer, block.allocation);
+            return;
+        }
+        block.cursor = 0;
+        m_freeUploadStagingBytes += block.capacity;
+        m_freeUploadStagingBlocks.push_back(Move(block));
+    }
+
+    VkCommandBuffer VkTextureManager::EnsureUploadBatchOpen() {
+        if (m_uploadBatchOpen) {
+            return m_uploadBatchCommandBuffer;
+        }
+        if (!m_freeUploadCommandBuffers.empty()) {
+            m_uploadBatchCommandBuffer = m_freeUploadCommandBuffers.back();
+            m_freeUploadCommandBuffers.pop_back();
+        } else {
+            VkCommandBufferAllocateInfo allocInfo{};
+            allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+            allocInfo.commandPool = m_uploadCommandPool;
+            allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+            allocInfo.commandBufferCount = 1;
+            VK_VERIFY(vkAllocateCommandBuffers(m_device, &allocInfo, &m_uploadBatchCommandBuffer),
+                      "vkAllocateCommandBuffers(texture upload batch)");
+        }
+        VkCommandBufferBeginInfo beginInfo{};
+        beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+        beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+        VK_VERIFY(vkBeginCommandBuffer(m_uploadBatchCommandBuffer, &beginInfo),
+                  "vkBeginCommandBuffer(texture upload batch)");
+        m_uploadBatchOpen = true;
+        return m_uploadBatchCommandBuffer;
+    }
+
+    Uint8* VkTextureManager::AcquireUploadStagingSpace(VkDeviceSize size, VkBuffer& outBuffer,
+                                                       VkDeviceSize& outBaseOffset) {
+        // 16 covers every uncompressed texel size in use (1..16 bytes) and the
+        // bufferOffset multiple-of-4 rule; per-item offsets inside the span
+        // keep the pre-batching tight packing.
+        constexpr VkDeviceSize kUploadStagingAlignment = 16;
+        constexpr VkDeviceSize kUploadStagingBlockSize = 1u * 1024u * 1024u;
+        UploadStagingBlock* current = m_uploadBatchBlocks.empty() ? nullptr : &m_uploadBatchBlocks.back();
+        VkDeviceSize alignedCursor = 0;
+        if (current != nullptr) {
+            alignedCursor = (current->cursor + (kUploadStagingAlignment - 1)) & ~(kUploadStagingAlignment - 1);
+            if (alignedCursor + size > current->capacity) {
+                current = nullptr;
+            }
+        }
+        if (current == nullptr) {
+            UploadStagingBlock block;
+            for (SizeT i = 0; i < m_freeUploadStagingBlocks.size(); ++i) {
+                if (m_freeUploadStagingBlocks[i].capacity >= size) {
+                    block = Move(m_freeUploadStagingBlocks[i]);
+                    m_freeUploadStagingBytes -= block.capacity;
+                    m_freeUploadStagingBlocks.erase(m_freeUploadStagingBlocks.begin() +
+                                                    static_cast<std::ptrdiff_t>(i));
+                    break;
+                }
+            }
+            if (block.buffer == VK_NULL_HANDLE) {
+                VkBufferCreateInfo bufferInfo{};
+                bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+                bufferInfo.size = std::max(kUploadStagingBlockSize, size);
+                bufferInfo.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+                bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+                VmaAllocationCreateInfo stagingAllocationInfo{};
+                stagingAllocationInfo.usage = VMA_MEMORY_USAGE_AUTO_PREFER_HOST;
+                stagingAllocationInfo.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
+                                              VMA_ALLOCATION_CREATE_MAPPED_BIT;
+                stagingAllocationInfo.requiredFlags =
+                    VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+                VmaAllocationInfo allocationResult{};
+                VK_VERIFY(vmaCreateBuffer(m_allocator, &bufferInfo, &stagingAllocationInfo, &block.buffer,
+                                          &block.allocation, &allocationResult),
+                          "vmaCreateBuffer(texture upload staging block)");
+                block.mapped = static_cast<Uint8*>(allocationResult.pMappedData);
+                block.capacity = bufferInfo.size;
+                MOBILEGL_ASSERT(block.mapped != nullptr,
+                                "AcquireUploadStagingSpace: staging block is not persistently mapped");
+            }
+            block.cursor = 0;
+            m_uploadBatchBlocks.push_back(Move(block));
+            current = &m_uploadBatchBlocks.back();
+            alignedCursor = 0;
+        }
+        outBuffer = current->buffer;
+        outBaseOffset = alignedCursor;
+        current->cursor = alignedCursor + size;
+        return current->mapped + alignedCursor;
+    }
+
+    void VkTextureManager::FlushPendingUploads() {
+        if (!m_uploadBatchOpen) {
+            return;
+        }
+        VK_VERIFY(vkEndCommandBuffer(m_uploadBatchCommandBuffer), "vkEndCommandBuffer(texture upload batch)");
+
+        VkFence uploadFence = VK_NULL_HANDLE;
+        if (!m_freeUploadFences.empty()) {
+            uploadFence = m_freeUploadFences.back();
+            m_freeUploadFences.pop_back();
+        } else {
+            VkFenceCreateInfo fenceInfo{};
+            fenceInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+            VK_VERIFY(vkCreateFence(m_device, &fenceInfo, nullptr, &uploadFence), "vkCreateFence(texture upload)");
+        }
+
+        VkSubmitInfo submitInfo{};
+        submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+        submitInfo.commandBufferCount = 1;
+        submitInfo.pCommandBuffers = &m_uploadBatchCommandBuffer;
+        VK_VERIFY(vkQueueSubmit(m_graphicsQueue, 1, &submitInfo, uploadFence), "vkQueueSubmit(texture upload batch)");
+
+        PendingUploadReclaim reclaim;
+        reclaim.fence = uploadFence;
+        reclaim.commandBuffer = m_uploadBatchCommandBuffer;
+        reclaim.stagingBlocks = Move(m_uploadBatchBlocks);
+        m_pendingUploadReclaims.push_back(Move(reclaim));
+        m_uploadBatchCommandBuffer = VK_NULL_HANDLE;
+        m_uploadBatchOpen = false;
+        m_uploadBatchBlocks.clear();
+        m_uploadBatchImages.clear();
+        m_uploadBatchStagingBytes = 0;
+
+        ReclaimCompletedUploads();
+        // Backstop for pathological upload storms: bound in-flight staging
+        // memory by blocking on the oldest batch only once the list is deep.
+        constexpr SizeT kMaxPendingTextureUploads = 16;
+        if (m_pendingUploadReclaims.size() > kMaxPendingTextureUploads) {
+            VK_VERIFY(vkWaitForFences(m_device, 1, &m_pendingUploadReclaims.front().fence, VK_TRUE, UINT64_MAX),
+                      "vkWaitForFences(texture upload backstop)");
+            ReclaimCompletedUploads();
+        }
+    }
+
+    void VkTextureManager::DiscardPendingUploadBatch() {
+        if (!m_uploadBatchOpen) {
+            return;
+        }
+        // The batch was never submitted, so the command buffer is in the
+        // recording state, not pending - freeing it is legal.
+        vkFreeCommandBuffers(m_device, m_uploadCommandPool, 1, &m_uploadBatchCommandBuffer);
+        m_uploadBatchCommandBuffer = VK_NULL_HANDLE;
+        m_uploadBatchOpen = false;
+        for (auto& block : m_uploadBatchBlocks) {
+            RecycleUploadStagingBlock(Move(block));
+        }
+        m_uploadBatchBlocks.clear();
+        m_uploadBatchImages.clear();
+        m_uploadBatchStagingBytes = 0;
+    }
+
+    void VkTextureManager::DestroyUploadPools() {
+        for (auto& block : m_freeUploadStagingBlocks) {
+            if (block.buffer != VK_NULL_HANDLE) {
+                vmaDestroyBuffer(m_allocator, block.buffer, block.allocation);
+            }
+        }
+        m_freeUploadStagingBlocks.clear();
+        m_freeUploadStagingBytes = 0;
+        if (!m_freeUploadCommandBuffers.empty()) {
+            vkFreeCommandBuffers(m_device, m_uploadCommandPool, static_cast<Uint32>(m_freeUploadCommandBuffers.size()),
+                                 m_freeUploadCommandBuffers.data());
+            m_freeUploadCommandBuffers.clear();
+        }
+        for (const VkFence fence : m_freeUploadFences) {
+            vkDestroyFence(m_device, fence, nullptr);
+        }
+        m_freeUploadFences.clear();
     }
 
     void VkTextureManager::DestroyDeferredReleases() {
@@ -2271,25 +2506,30 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             }
         }
 
+        // Rare mid-frame hazard, kept at parity with the old per-upload
+        // submits: this image already has an upload recorded in the OPEN batch
+        // and has since been referenced by the frame's open recording (drawn).
+        // Appending here would merge both uploads into the same pre-frame
+        // submission the old code split into two; flush first so the second
+        // upload lands in its own later submission, exactly like before.
+        if (m_uploadBatchOpen && WasTouchedThisRecording(outResource) &&
+            std::find(m_uploadBatchImages.begin(), m_uploadBatchImages.end(), outResource.image) !=
+                m_uploadBatchImages.end()) {
+            FlushPendingUploads();
+        }
+        // Bound the staging bytes a single batch can pin before its fence can
+        // reclaim them.
+        constexpr VkDeviceSize kMaxBatchStagingBytes = 64u * 1024u * 1024u;
+        if (m_uploadBatchOpen && m_uploadBatchStagingBytes + stagingSize > kMaxBatchStagingBytes) {
+            FlushPendingUploads();
+        }
+
+        VkCommandBuffer commandBuffer = EnsureUploadBatchOpen();
         VkBuffer stagingBuffer = VK_NULL_HANDLE;
-        VmaAllocation stagingAllocation = nullptr;
-
-        VkBufferCreateInfo bufferInfo{};
-        bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-        bufferInfo.size = stagingSize;
-        bufferInfo.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
-        bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-        VmaAllocationCreateInfo stagingAllocationInfo{};
-        stagingAllocationInfo.usage = VMA_MEMORY_USAGE_AUTO_PREFER_HOST;
-        stagingAllocationInfo.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT;
-        stagingAllocationInfo.requiredFlags = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
-        VK_VERIFY(vmaCreateBuffer(m_allocator, &bufferInfo, &stagingAllocationInfo, &stagingBuffer, &stagingAllocation, nullptr),
-                  "vmaCreateBuffer(staging texture)");
-
-        void* mapped = nullptr;
-        VK_VERIFY(vmaMapMemory(m_allocator, stagingAllocation, &mapped), "vmaMapMemory(staging texture)");
+        VkDeviceSize stagingBase = 0;
+        Uint8* mapped = AcquireUploadStagingSpace(stagingSize, stagingBuffer, stagingBase);
         for (const auto& item : uploadItems) {
-            Uint8* dst = static_cast<Uint8*>(mapped) + item.offset;
+            Uint8* dst = mapped + item.offset;
             if (!item.subRegion) {
                 std::memcpy(dst, item.source, item.uploadByteSize);
                 continue;
@@ -2311,21 +2551,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 }
             }
         }
-        vmaUnmapMemory(m_allocator, stagingAllocation);
-
-        VkCommandBufferAllocateInfo allocInfo{};
-        allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-        allocInfo.commandPool = m_commandPool;
-        allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-        allocInfo.commandBufferCount = 1;
-
-        VkCommandBuffer commandBuffer = VK_NULL_HANDLE;
-        VK_VERIFY(vkAllocateCommandBuffers(m_device, &allocInfo, &commandBuffer), "vkAllocateCommandBuffers(texture)");
-
-        VkCommandBufferBeginInfo beginInfo{};
-        beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-        beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-        VK_VERIFY(vkBeginCommandBuffer(commandBuffer, &beginInfo), "vkBeginCommandBuffer(texture)");
 
         const VkImageAspectFlags aspectMask = GetAspectMaskForFormat(outResource.format);
         VkPipelineStageFlags uploadSrcStageMask = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
@@ -2350,7 +2575,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         for (const auto& item : uploadItems) {
             const Uint32 depthOrLayers = item.texelSize.z() > 0 ? static_cast<Uint32>(item.texelSize.z()) : 1u;
             VkBufferImageCopy copy{};
-            copy.bufferOffset = item.offset;
+            copy.bufferOffset = stagingBase + item.offset;
             copy.bufferRowLength = 0;
             copy.bufferImageHeight = 0;
             copy.imageSubresource.aspectMask = aspectMask;
@@ -2383,7 +2608,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 depthCopy.imageSubresource.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
                 VkBufferImageCopy stencilCopy = copy;
                 stencilCopy.imageSubresource.aspectMask = VK_IMAGE_ASPECT_STENCIL_BIT;
-                stencilCopy.bufferOffset = item.offset + static_cast<VkDeviceSize>(texelCount) * 4;
+                stencilCopy.bufferOffset = stagingBase + item.offset + static_cast<VkDeviceSize>(texelCount) * 4;
                 const VkBufferImageCopy copies[2] = {depthCopy, stencilCopy};
                 vkCmdCopyBufferToImage(commandBuffer, stagingBuffer, outResource.image,
                                        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 2, copies);
@@ -2406,36 +2631,27 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         MOBILEGL_ASSERT(ok, "TransitionImageLayout to sampled read-only layout failed");
         outResource.layout = finalLayout;
 
-        VK_VERIFY(vkEndCommandBuffer(commandBuffer), "vkEndCommandBuffer(texture)");
-
-        VkSubmitInfo submitInfo{};
-        submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-        submitInfo.commandBufferCount = 1;
-        submitInfo.pCommandBuffers = &commandBuffer;
-
-        VkFenceCreateInfo fenceInfo{};
-        fenceInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
-        VkFence uploadFence = VK_NULL_HANDLE;
-        VK_VERIFY(vkCreateFence(m_device, &fenceInfo, nullptr, &uploadFence), "vkCreateFence(texture upload)");
-
-        VK_VERIFY(vkQueueSubmit(m_graphicsQueue, 1, &submitInfo, uploadFence), "vkQueueSubmit(texture)");
-        // Do NOT wait the fence here: this submit sits behind the previous
-        // frame's rendering on the queue, so a synchronous wait stalls the CPU
-        // until the GPU drains - a per-frame vkQueueWaitIdle for any workload
-        // with animated textures. Ordering against the current frame's draws is
-        // already guaranteed (its command buffer is submitted later, at
-        // present), so only the transient objects need to survive execution;
-        // park them until the fence signals.
-        m_pendingUploadReclaims.push_back({uploadFence, commandBuffer, stagingBuffer, stagingAllocation});
-        ReclaimCompletedUploads();
-        // Backstop for pathological upload storms: bound in-flight staging
-        // memory by blocking on the oldest upload only once the list is deep.
-        constexpr SizeT kMaxPendingTextureUploads = 16;
-        if (m_pendingUploadReclaims.size() > kMaxPendingTextureUploads) {
-            VK_VERIFY(vkWaitForFences(m_device, 1, &m_pendingUploadReclaims.front().fence, VK_TRUE, UINT64_MAX),
-                      "vkWaitForFences(texture upload backstop)");
-            ReclaimCompletedUploads();
+        // Ordering argument (replaces the old immediate per-texture submit):
+        // this upload is RECORDED into the shared batch command buffer, which
+        // FlushPendingUploads submits - with one vkQueueSubmit and one pooled
+        // fence for the whole batch - strictly BEFORE any other submission on
+        // the same queue whose commands could consume the image: the renderer
+        // flushes at every frame-command-buffer submit (mid-frame flush,
+        // readback, Present), and the texture manager flushes before the
+        // preserve-on-recreate copy and before deferring an image the batch
+        // references. The frame command buffer therefore still lands behind
+        // the uploads on the queue, so a texture uploaded and then immediately
+        // sampled in the same frame sees its data exactly as it did when each
+        // upload was its own submit. No fence is waited here, for the same
+        // reason as before: the batch queues behind the previous frame's
+        // rendering, and a synchronous wait would drain the GPU; the staging
+        // blocks/command buffer are parked on the reclaim list at flush time
+        // and recycled once the batch fence signals.
+        if (std::find(m_uploadBatchImages.begin(), m_uploadBatchImages.end(), outResource.image) ==
+            m_uploadBatchImages.end()) {
+            m_uploadBatchImages.push_back(outResource.image);
         }
+        m_uploadBatchStagingBytes += stagingSize;
 
         if (!ok) {
             MGLOG_D("%s: texture upload cmd failed", __func__);
@@ -2445,6 +2661,17 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             mipmapTexture.MarkStorageDirty(item.target, item.level, false);
         }
         outResource.layout = finalLayout;
+        // Large batches flush right away instead of riding until the frame
+        // submit: a big copy amortizes its own vkQueueSubmit, submitting it
+        // early lets the GPU overlap the copy with the rest of the frame's
+        // CPU recording (measurably faster than a frame-tail burst), and the
+        // frame-tail burst pattern was observed to leave the GPU in a
+        // latency state that taxes whatever runs next. Small uploads keep
+        // accumulating, so a lightmap+sprite frame still costs one submit.
+        constexpr VkDeviceSize kEagerUploadFlushBytes = 128u * 1024u;
+        if (m_uploadBatchStagingBytes >= kEagerUploadFlushBytes) {
+            FlushPendingUploads();
+        }
         return true;
     }
 

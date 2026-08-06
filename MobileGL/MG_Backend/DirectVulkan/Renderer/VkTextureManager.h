@@ -65,6 +65,11 @@ public:
         VkPipelineStageFlags sampledReadStageMask = VK_PIPELINE_STAGE_VERTEX_SHADER_BIT |
                                                     VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
                                                     VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
+        // Family of `graphicsQueue`; the manager creates its own command pool
+        // on it for the recycled upload-batch command buffers, so their parked
+        // allocations never sit in (and fragment) the renderer's shared pool
+        // that frame command buffers churn through every frame.
+        Uint32 graphicsQueueFamilyIndex = 0;
     };
 
     struct TextureResource {
@@ -308,6 +313,14 @@ public:
     Bool Initialize(const InitInfo& initInfo);
     void Shutdown();
     void BeginFrame(Uint32 frameIndex);
+    // Submits the accumulated texture-upload batch (one command buffer, one
+    // vkQueueSubmit, one pooled fence) if any uploads are pending. MUST run
+    // before any other vkQueueSubmit on the shared graphics queue whose
+    // commands may consume an image the batch writes - the frame command
+    // buffer submit (mid-frame flush, readback, Present) and the
+    // preserve-on-recreate copy are the existing callers. No-op when the
+    // batch is empty.
+    void FlushPendingUploads();
     // Drains every frame slot's deferred image/view releases. Only valid when
     // the caller has proven every queue submission complete; used by the
     // present-less frame-boundary drain.
@@ -453,6 +466,9 @@ private:
     VkPhysicalDevice m_physicalDevice = VK_NULL_HANDLE;
     VmaAllocator m_allocator = nullptr;
     VkCommandPool m_commandPool = VK_NULL_HANDLE;
+    // Dedicated pool for the recycled upload-batch command buffers (see
+    // InitInfo::graphicsQueueFamilyIndex).
+    VkCommandPool m_uploadCommandPool = VK_NULL_HANDLE;
     VkQueue m_graphicsQueue = VK_NULL_HANDLE;
     Bool m_imageFormatListSupported = false;
     Uint32 m_currentFrameIndex = 0;
@@ -506,15 +522,58 @@ private:
     std::unordered_map<VkFormat, VkSampleCountFlags> m_multisampleCountsByFormat;
     Vector<Vector<TextureResource>> m_deferredReleases;
     Vector<Vector<VkImageView>> m_deferredViewReleases;
+
+    // --- Batched upload machinery ---
+    // Uploads within a frame are recorded into ONE shared command buffer and
+    // submitted with ONE vkQueueSubmit at FlushPendingUploads (the renderer
+    // flushes before every frame-command-buffer submit). Staging memory comes
+    // from a pool of persistently-mapped, reusable blocks instead of a
+    // vmaCreateBuffer per upload.
+    struct UploadStagingBlock {
+        VkBuffer buffer = VK_NULL_HANDLE;
+        VmaAllocation allocation = nullptr;
+        Uint8* mapped = nullptr; // persistently mapped for the block's lifetime
+        VkDeviceSize capacity = 0;
+        VkDeviceSize cursor = 0; // bump cursor while the block backs the open batch
+    };
+    // Opens the batch command buffer lazily (allocates/reuses + begins recording).
+    VkCommandBuffer EnsureUploadBatchOpen();
+    // Bump-allocates `size` staging bytes for the open batch, growing onto a
+    // new/pooled block when the current one cannot fit. Returns the write
+    // pointer; outBuffer/outBaseOffset locate the space for copy commands.
+    Uint8* AcquireUploadStagingSpace(VkDeviceSize size, VkBuffer& outBuffer, VkDeviceSize& outBaseOffset);
+    void RecycleUploadStagingBlock(UploadStagingBlock&& block);
+    // Drops a recorded-but-unsubmitted batch on the floor. Shutdown only: the
+    // device is being torn down, so the lost texel data is unobservable.
+    void DiscardPendingUploadBatch();
+    void DestroyUploadPools();
+
+    Vector<UploadStagingBlock> m_freeUploadStagingBlocks;
+    VkDeviceSize m_freeUploadStagingBytes = 0;
+    Vector<VkCommandBuffer> m_freeUploadCommandBuffers;
+    Vector<VkFence> m_freeUploadFences;
+    Bool m_uploadBatchOpen = false;
+    VkCommandBuffer m_uploadBatchCommandBuffer = VK_NULL_HANDLE;
+    // Blocks whose staging bytes the open batch's copies reference (last =
+    // the block the bump cursor is currently allocating from).
+    Vector<UploadStagingBlock> m_uploadBatchBlocks;
+    // Images the open batch writes; consulted for the rare re-upload-after-
+    // draw flush and by DeferResourceRelease (an unsubmitted command buffer
+    // referencing a deferred-released image would escape every fence-based
+    // destruction proof, so the batch is flushed before the image is parked).
+    Vector<VkImage> m_uploadBatchImages;
+    VkDeviceSize m_uploadBatchStagingBytes = 0;
+
     // Texture uploads are submitted out-of-band but NOT waited on (waiting
     // behind the queue serialized the CPU against the previous frame's GPU
-    // work every time an animated atlas re-uploaded). Their transient objects
-    // are parked here and reclaimed once the upload fence signals.
+    // work every time an animated atlas re-uploaded). Each flushed batch's
+    // transients are parked here and RECYCLED (fence reset to the fence pool,
+    // command buffer reset to the CB pool, staging blocks back to the block
+    // pool) once the batch fence signals.
     struct PendingUploadReclaim {
         VkFence fence = VK_NULL_HANDLE;
         VkCommandBuffer commandBuffer = VK_NULL_HANDLE;
-        VkBuffer stagingBuffer = VK_NULL_HANDLE;
-        VmaAllocation stagingAllocation = nullptr;
+        Vector<UploadStagingBlock> stagingBlocks;
     };
     Vector<PendingUploadReclaim> m_pendingUploadReclaims;
 };
