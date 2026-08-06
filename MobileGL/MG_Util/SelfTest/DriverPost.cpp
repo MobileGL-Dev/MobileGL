@@ -1218,6 +1218,22 @@ namespace MobileGL::MG_Util::SelfTest {
             }
         }
 
+        // Windowless (EGL pbuffer) contexts want a headless surface. Almost no mobile
+        // ICD provides one - Mali r32p1 does not - so its absence is not fatal: the
+        // renderer hands the WSI an AImageReader window instead. Reported because the
+        // fallback costs a buffer queue the headless path does not need, and because
+        // this used to abort the process instead.
+        if (HasVkExtension(instanceExtensions, VK_EXT_HEADLESS_SURFACE_EXTENSION_NAME)) {
+            builder.Pass("Headless surface",
+                         format("{} present; windowless contexts get a real headless surface",
+                                VK_EXT_HEADLESS_SURFACE_EXTENSION_NAME));
+        } else {
+            builder.Warn("Headless surface",
+                         format("{} absent; a windowless (pbuffer) context falls back to an AImageReader "
+                                "ANativeWindow, which needs libmediandk.so and an extra buffer queue",
+                                VK_EXT_HEADLESS_SURFACE_EXTENSION_NAME));
+        }
+
         // The probe never creates a surface, so the instance is created without extensions.
         VkApplicationInfo appInfo{};
         appInfo.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;

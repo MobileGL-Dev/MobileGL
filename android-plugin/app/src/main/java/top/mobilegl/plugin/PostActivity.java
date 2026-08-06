@@ -1,16 +1,25 @@
 package top.mobilegl.plugin;
 
 import android.app.Activity;
+import android.content.BroadcastReceiver;
+import android.content.Context;
+import android.content.Intent;
+import android.content.IntentFilter;
 import android.graphics.Typeface;
+import android.os.Build;
 import android.os.Bundle;
 import android.util.Log;
 import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.View;
+import android.widget.Button;
 import android.widget.HorizontalScrollView;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
+
+import java.util.HashMap;
+import java.util.Map;
 
 import org.json.JSONArray;
 import org.json.JSONException;
@@ -61,6 +70,16 @@ public final class PostActivity extends Activity {
     private LinearLayout contentLayout;
     private TextView statusView;
 
+    /**
+     * Per-backend bench UI state. Unlike the POST itself (single-flight, latched),
+     * a bench may be re-run freely: every tap starts a fresh {@link BenchService}
+     * process, so the only state to manage here is the button and the results
+     * container the reply renders into.
+     */
+    private final Map<String, Button> benchButtons = new HashMap<>();
+    private final Map<String, LinearLayout> benchResultContainers = new HashMap<>();
+    private BroadcastReceiver benchReceiver;
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -108,7 +127,98 @@ public final class PostActivity extends Activity {
                 deliveryTarget = new WeakReference<>(null);
             }
         }
+        if (benchReceiver != null) {
+            unregisterReceiver(benchReceiver);
+            benchReceiver = null;
+        }
         super.onDestroy();
+    }
+
+    /** Registered lazily on the first Run Bench tap; delivers results to the UI thread. */
+    private void ensureBenchReceiver() {
+        if (benchReceiver != null) {
+            return;
+        }
+        benchReceiver = new BroadcastReceiver() {
+            @Override
+            public void onReceive(Context context, Intent intent) {
+                String backend = intent.getStringExtra(BenchService.EXTRA_BACKEND);
+                String json = intent.getStringExtra(BenchService.EXTRA_RESULT_JSON);
+                if (backend != null && json != null) {
+                    renderBenchResult(backend, json);
+                }
+            }
+        };
+        IntentFilter filter = new IntentFilter(BenchService.ACTION_RESULT);
+        if (Build.VERSION.SDK_INT >= 33) {
+            registerReceiver(benchReceiver, filter, Context.RECEIVER_NOT_EXPORTED);
+        } else {
+            registerReceiver(benchReceiver, filter);
+        }
+    }
+
+    /** Kicks one bench run for a backend in its own service process. */
+    private void startBench(String backendType) {
+        ensureBenchReceiver();
+        Button button = benchButtons.get(backendType);
+        if (button != null) {
+            button.setEnabled(false);
+            button.setText("Bench running... (can take a minute)");
+        }
+        LinearLayout container = benchResultContainers.get(backendType);
+        if (container != null) {
+            container.removeAllViews();
+        }
+        Intent intent = new Intent(this, BenchService.class);
+        intent.putExtra(BenchService.EXTRA_BACKEND, backendType);
+        intent.putExtra(BenchService.EXTRA_FRAMES, 120);
+        intent.putExtra(BenchService.EXTRA_WARMUP, 30);
+        startService(intent);
+    }
+
+    private void renderBenchResult(String backendType, String json) {
+        Button button = benchButtons.get(backendType);
+        if (button != null) {
+            button.setEnabled(true);
+            button.setText("Run Bench");
+        }
+        LinearLayout container = benchResultContainers.get(backendType);
+        if (container == null) {
+            return;
+        }
+        container.removeAllViews();
+        try {
+            JSONObject root = new JSONObject(json);
+            String error = root.optString("error", "");
+            if (!error.isEmpty()) {
+                container.addView(makeText("Bench failed: " + error, 12, COLOR_FAIL, false));
+                return;
+            }
+            container.addView(makeText(root.optString("renderer", ""), 11, COLOR_INFO, false));
+            String header = String.format(Locale.ROOT, "%-22s %10s %10s %9s",
+                    "case", "ns/op", "frame ms", "fps");
+            container.addView(makeText(header, 11, COLOR_DETAIL, true));
+            JSONArray cases = root.optJSONArray("cases");
+            if (cases == null) {
+                return;
+            }
+            for (int i = 0; i < cases.length(); ++i) {
+                JSONObject row = cases.optJSONObject(i);
+                if (row == null) {
+                    continue;
+                }
+                String line = String.format(Locale.ROOT, "%-22s %10.1f %10.3f %9.1f",
+                        row.optString("case", "?"),
+                        row.optDouble("nsPerOp", 0),
+                        row.optDouble("medianFrameMs", 0),
+                        row.optDouble("fps", 0));
+                TextView view = makeText(line, 11,
+                        row.optInt("glError", 0) != 0 ? COLOR_WARN : COLOR_TEXT, false);
+                container.addView(view);
+            }
+        } catch (JSONException error) {
+            container.addView(makeText("Bench result unparsable: " + error, 12, COLOR_FAIL, false));
+        }
     }
 
     /**
@@ -253,6 +363,8 @@ public final class PostActivity extends Activity {
             addText(renderer, 12, COLOR_INFO, false, dp(2));
         }
 
+        addBenchControls(name);
+
         JSONArray checks = backend.optJSONArray("checks");
         if (checks != null) {
             LinearLayout table = new LinearLayout(this);
@@ -274,6 +386,54 @@ public final class PostActivity extends Activity {
         }
 
         renderFormatCapabilities(backend.optJSONObject("formatCapabilities"));
+    }
+
+    /** The MOBILEGL_BACKEND_TYPE value a POST section name stands for, or null. */
+    private static String backendTypeForSection(String sectionName) {
+        switch (sectionName.toLowerCase(Locale.ROOT)) {
+            case "gles":
+            case "directgles":
+                return "DirectGLES";
+            case "vulkan":
+            case "directvulkan":
+                return "DirectVulkan";
+            default:
+                return null;
+        }
+    }
+
+    /**
+     * One Run Bench button plus the container its results render into. The bench
+     * runs the Minecraft-shaped MG_Benchmark cases through the full MobileGL stack
+     * on this backend, in a throwaway service process (see BenchService).
+     */
+    private void addBenchControls(String sectionName) {
+        final String backendType = backendTypeForSection(sectionName);
+        if (backendType == null) {
+            return;
+        }
+        Button button = new Button(this);
+        button.setText("Run Bench");
+        button.setAllCaps(false);
+        button.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
+        button.setOnClickListener(v -> startBench(backendType));
+        LinearLayout.LayoutParams buttonParams = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+        );
+        buttonParams.topMargin = dp(6);
+        contentLayout.addView(button, buttonParams);
+        benchButtons.put(backendType, button);
+
+        LinearLayout results = new LinearLayout(this);
+        results.setOrientation(LinearLayout.VERTICAL);
+        LinearLayout.LayoutParams resultParams = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+        );
+        resultParams.topMargin = dp(4);
+        contentLayout.addView(results, resultParams);
+        benchResultContainers.put(backendType, results);
     }
 
     /**

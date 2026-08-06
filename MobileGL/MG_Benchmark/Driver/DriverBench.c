@@ -53,11 +53,16 @@ typedef unsigned int EGLenum;
 #define EGL_RENDERABLE_TYPE 0x3040
 #define EGL_OPENGL_BIT 0x0008
 #define EGL_RED_SIZE 0x3024
+#define EGL_GREEN_SIZE 0x3023
+#define EGL_BLUE_SIZE 0x3022
 #define EGL_DEPTH_SIZE 0x3025
 #define EGL_WIDTH 0x3057
 #define EGL_HEIGHT 0x3056
 #define EGL_NONE 0x3038
 #define EGL_OPENGL_API 0x30A2
+#define EGL_OPENGL_ES_API 0x30A0
+#define EGL_OPENGL_ES3_BIT 0x0040
+#define EGL_CONTEXT_CLIENT_VERSION 0x3098
 #define EGL_CONTEXT_MAJOR_VERSION 0x3098
 #define EGL_CONTEXT_MINOR_VERSION 0x30FB
 #define EGL_CONTEXT_OPENGL_PROFILE_MASK 0x30FD
@@ -96,6 +101,8 @@ typedef unsigned int EGLenum;
 #define GL_COLOR_ATTACHMENT0 0x8CE0
 #define GL_DEPTH_ATTACHMENT 0x8D00
 #define GL_FRAMEBUFFER_COMPLETE 0x8CD5
+#define GL_SYNC_GPU_COMMANDS_COMPLETE 0x9117
+#define GL_SYNC_FLUSH_COMMANDS_BIT 0x00000001
 #define GL_UNIFORM_BUFFER 0x8A11
 #define GL_UNIFORM_BUFFER_OFFSET_ALIGNMENT 0x8A34
 #define GL_DYNAMIC_DRAW 0x88E8
@@ -183,6 +190,9 @@ GLF(void, glBindRenderbuffer, (GLenum, GLuint))
 GLF(void, glRenderbufferStorage, (GLenum, GLenum, GLsizei, GLsizei))
 GLF(void, glFramebufferRenderbuffer, (GLenum, GLenum, GLenum, GLuint))
 GLF(GLenum, glCheckFramebufferStatus, (GLenum))
+GLF(void*, glFenceSync, (GLenum, unsigned))
+GLF(GLenum, glClientWaitSync, (void*, unsigned, unsigned long long))
+GLF(void, glDeleteSync, (void*))
 
 static uint64_t now_ns(void) {
     struct timespec ts;
@@ -195,236 +205,69 @@ static int cmp_u64(const void* a, const void* b) {
     return x < y ? -1 : x > y;
 }
 
-/* ---- shared scene resources (Minecraft-shaped) ---- */
-#define MAX_SECTIONS 512
-static GLuint g_progChunk, g_progEntity;
-static GLint g_uOffsetChunk, g_uMvpChunk, g_uMvpEntity;
-static GLuint g_vao[MAX_SECTIONS], g_vbo[MAX_SECTIONS];
-static GLuint g_sharedIbo;
-static GLuint g_texAtlas, g_texLight, g_texEntity;
-static int g_quadsPerSection = 128; /* 128 quads = 512 verts, 768 indices */
-static unsigned char* g_scratch;
-/* Uniform ring + sampler for the 26.2-shaped cases (see the case block below). */
-static GLuint g_uboRing;
-static GLint g_uboAlign = 256;
-static size_t g_uboSlot = 256;
-static GLuint g_sampler;
-static float g_mvp[16] = {0.002f, 0, 0, 0, 0, 0.002f, 0, 0, 0, 0, -0.001f, 0, -1.f, -1.f, 0.f, 1.f};
 
-/* Minecraft chunk vertex: pos 3f, color 4ub, uv 2f, packed light 2s -> 32 B */
-#define VERT_STRIDE 32
-static void fill_section_vertices(unsigned char* dst, int quads, unsigned seed) {
-    for (int q = 0; q < quads * 4; ++q) {
-        float* f = (float*)(dst + q * VERT_STRIDE);
-        unsigned r = seed = seed * 1664525u + 1013904223u;
-        f[0] = (float)(q & 31) * 8.0f + (float)(r & 7);
-        f[1] = (float)((q >> 5) & 31) * 8.0f;
-        f[2] = (float)(q % 7) * 0.1f;
-        dst[q * VERT_STRIDE + 12] = (unsigned char)r;
-        dst[q * VERT_STRIDE + 13] = (unsigned char)(r >> 8);
-        dst[q * VERT_STRIDE + 14] = (unsigned char)(r >> 16);
-        dst[q * VERT_STRIDE + 15] = 255;
-        f[4] = (float)(r & 1023) / 1024.0f;
-        f[5] = (float)((r >> 10) & 511) / 512.0f;
-        ((short*)(dst + q * VERT_STRIDE + 24))[0] = 15 << 4;
-        ((short*)(dst + q * VERT_STRIDE + 24))[1] = 15 << 4;
+/* Scene, cases and the case table live next door so the Android plugin's
+ * in-process benchmark runs byte-identical bodies. */
+static void bench_gl_failed(const char* what, const char* detail) {
+    fprintf(stderr, "FAIL: %s %s\n", what, detail ? detail : "");
+    exit(1);
+}
+
+/* GLES has glDrawElementsBaseVertex (3.2 core) but no multi-draw form of it, so
+ * against a native mobile driver the multi-draw case issues the same sub-draws
+ * one at a time - which is what the extension folds up, and what an application
+ * without it would have to write. Desktop GL and MobileGL take the real call. */
+static void bench_multi_draw_elements_base_vertex(GLenum mode, const GLsizei* counts, GLenum type,
+                                                  const void* const* offsets, GLsizei drawCount,
+                                                  const GLint* baseVertices) {
+    if (glMultiDrawElementsBaseVertex) {
+        glMultiDrawElementsBaseVertex(mode, counts, type, offsets, drawCount, baseVertices);
+        return;
+    }
+    for (GLsizei i = 0; i < drawCount; ++i) {
+        glDrawElementsBaseVertex(mode, counts[i], type, offsets[i], baseVertices[i]);
     }
 }
 
-static GLuint make_shader(GLenum kind, const char* src) {
-    GLuint sh = glCreateShader(kind);
-    glShaderSource(sh, 1, &src, NULL);
-    glCompileShader(sh);
-    GLint ok = 0;
-    glGetShaderiv(sh, GL_COMPILE_STATUS, &ok);
-    if (!ok) {
-        char log[1024];
-        glGetShaderInfoLog(sh, sizeof log, NULL, log);
-        fprintf(stderr, "FAIL: shader compile: %s\n", log);
-        exit(1);
-    }
-    return sh;
-}
+#include "DriverBenchCases.inc"
 
-static GLuint make_program(const char* vs_src, const char* fs_src) {
-    GLuint prog = glCreateProgram();
-    glAttachShader(prog, make_shader(GL_VERTEX_SHADER, vs_src));
-    glAttachShader(prog, make_shader(GL_FRAGMENT_SHADER, fs_src));
-    glBindAttribLocation(prog, 0, "aPos");
-    glBindAttribLocation(prog, 1, "aColor");
-    glBindAttribLocation(prog, 2, "aUv");
-    glBindAttribLocation(prog, 3, "aLight");
-    glLinkProgram(prog);
-    GLint ok = 0;
-    glGetProgramiv(prog, GL_LINK_STATUS, &ok);
-    if (!ok) {
-        fprintf(stderr, "FAIL: program link\n");
-        exit(1);
-    }
-    return prog;
-}
-
-static const char* kChunkVs =
-    "#version 150 core\n"
-    "in vec3 aPos; in vec4 aColor; in vec2 aUv; in vec2 aLight;\n"
-    "uniform mat4 uMvp; uniform vec3 uOffset;\n"
-    "out vec4 vColor; out vec2 vUv; out vec2 vLight;\n"
-    "void main(){ gl_Position = uMvp * vec4(aPos + uOffset, 1.0);\n"
-    "  vColor = aColor; vUv = aUv; vLight = aLight * (1.0/256.0); }\n";
-static const char* kChunkFs =
-    "#version 150 core\n"
-    "in vec4 vColor; in vec2 vUv; in vec2 vLight; out vec4 o;\n"
-    "uniform sampler2D uAtlas; uniform sampler2D uLight;\n"
-    "void main(){ o = texture(uAtlas, vUv) * vColor * texture(uLight, vLight); }\n";
-static const char* kEntityVs =
-    "#version 150 core\n"
-    "in vec3 aPos; in vec4 aColor; in vec2 aUv; in vec2 aLight;\n"
-    "uniform mat4 uMvp; uniform mat4 uModel;\n"
-    "out vec4 vColor; out vec2 vUv;\n"
-    "void main(){ gl_Position = uMvp * uModel * vec4(aPos, 1.0); vColor = aColor; vUv = aUv; }\n";
-static const char* kEntityFs =
-    "#version 150 core\n"
-    "in vec4 vColor; in vec2 vUv; out vec4 o; uniform sampler2D uTex;\n"
-    "void main(){ o = texture(uTex, vUv) * vColor; }\n";
-
-static void setup_vao(GLuint vao, GLuint vbo, GLuint ibo) {
-    glBindVertexArray(vao);
-    glBindBuffer(GL_ARRAY_BUFFER, vbo);
-    glEnableVertexAttribArray(0);
-    glEnableVertexAttribArray(1);
-    glEnableVertexAttribArray(2);
-    glEnableVertexAttribArray(3);
-    glVertexAttribPointer(0, 3, GL_FLOAT, 0, VERT_STRIDE, (void*)0);
-    glVertexAttribPointer(1, 4, GL_UNSIGNED_BYTE, 1, VERT_STRIDE, (void*)12);
-    glVertexAttribPointer(2, 2, GL_FLOAT, 0, VERT_STRIDE, (void*)16);
-    glVertexAttribPointer(3, 2, GL_SHORT, 0, VERT_STRIDE, (void*)24);
-    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ibo);
-}
-
-static void build_resources(void) {
-    /* offscreen render target: 1280x720 RBO FBO, like CTS fbo surface mode */
-    GLuint fbo, rboColor, rboDepth;
-    glGenFramebuffers(1, &fbo);
-    glBindFramebuffer(GL_FRAMEBUFFER, fbo);
-    glGenRenderbuffers(1, &rboColor);
-    glBindRenderbuffer(GL_RENDERBUFFER, rboColor);
-    glRenderbufferStorage(GL_RENDERBUFFER, GL_RGBA8, 1280, 720);
-    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, rboColor);
-    glGenRenderbuffers(1, &rboDepth);
-    glBindRenderbuffer(GL_RENDERBUFFER, rboDepth);
-    glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, 1280, 720);
-    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, rboDepth);
-    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
-        fprintf(stderr, "FAIL: FBO incomplete\n");
-        exit(1);
-    }
-
-    g_progChunk = make_program(kChunkVs, kChunkFs);
-    g_progEntity = make_program(kEntityVs, kEntityFs);
-    glUseProgram(g_progChunk);
-    g_uMvpChunk = glGetUniformLocation(g_progChunk, "uMvp");
-    g_uOffsetChunk = glGetUniformLocation(g_progChunk, "uOffset");
-    glUniform1i(glGetUniformLocation(g_progChunk, "uAtlas"), 0);
-    glUniform1i(glGetUniformLocation(g_progChunk, "uLight"), 2);
-    glUniformMatrix4fv(g_uMvpChunk, 1, 0, g_mvp);
-    glUseProgram(g_progEntity);
-    g_uMvpEntity = glGetUniformLocation(g_progEntity, "uMvp");
-    glUniform1i(glGetUniformLocation(g_progEntity, "uTex"), 0);
-    glUniformMatrix4fv(g_uMvpEntity, 1, 0, g_mvp);
-    glUseProgram(g_progChunk);
-
-    /* shared quad index buffer, like Blaze3D's RenderSystem shared sequences */
-    int maxQuads = 4096;
-    unsigned* idx = malloc((size_t)maxQuads * 6 * 4);
-    for (int q = 0; q < maxQuads; ++q) {
-        unsigned base = q * 4;
-        unsigned* p = idx + q * 6;
-        p[0] = base; p[1] = base + 1; p[2] = base + 2;
-        p[3] = base + 2; p[4] = base + 3; p[5] = base;
-    }
-    glGenBuffers(1, &g_sharedIbo);
-    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, g_sharedIbo);
-    glBufferData(GL_ELEMENT_ARRAY_BUFFER, maxQuads * 6 * 4, idx, GL_STATIC_DRAW);
-    free(idx);
-
-    g_scratch = malloc(4 * 1024 * 1024);
-    memset(g_scratch, 0x5a, 4 * 1024 * 1024);
-
-    glGenVertexArrays(MAX_SECTIONS, g_vao);
-    glGenBuffers(MAX_SECTIONS, g_vbo);
-    int bytes = g_quadsPerSection * 4 * VERT_STRIDE;
-    for (int i = 0; i < MAX_SECTIONS; ++i) {
-        fill_section_vertices(g_scratch, g_quadsPerSection, i * 7919u + 1);
-        glBindBuffer(GL_ARRAY_BUFFER, g_vbo[i]);
-        glBufferData(GL_ARRAY_BUFFER, bytes, g_scratch, GL_STATIC_DRAW);
-        setup_vao(g_vao[i], g_vbo[i], g_sharedIbo);
-    }
-
-    glGenTextures(1, &g_texAtlas);
-    glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, g_texAtlas);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 1024, 512, 0, GL_RGBA, GL_UNSIGNED_BYTE, g_scratch);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST_MIPMAP_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-    glGenerateMipmap(GL_TEXTURE_2D);
-
-    glGenTextures(1, &g_texLight);
-    glActiveTexture(GL_TEXTURE0 + 2);
-    glBindTexture(GL_TEXTURE_2D, g_texLight);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 16, 16, 0, GL_RGBA, GL_UNSIGNED_BYTE, g_scratch);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-
-    glGenTextures(1, &g_texEntity);
-    glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, g_texEntity);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 64, 64, 0, GL_RGBA, GL_UNSIGNED_BYTE, g_scratch);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-    glBindTexture(GL_TEXTURE_2D, g_texAtlas);
-
-    // Uniform ring the 26.2-style case sub-ranges into, sized like a real
-    // frame's worth of per-draw uniform slots.
-    GLint align = 256;
-    glGetIntegerv(GL_UNIFORM_BUFFER_OFFSET_ALIGNMENT, &align);
-    g_uboAlign = align > 0 ? align : 256;
-    g_uboSlot = (size_t)g_uboAlign;
-    glGenBuffers(1, &g_uboRing);
-    glBindBuffer(GL_UNIFORM_BUFFER, g_uboRing);
-    glBufferData(GL_UNIFORM_BUFFER, 4 * 1024 * 1024, g_scratch, GL_DYNAMIC_DRAW);
-    glBindBuffer(GL_UNIFORM_BUFFER, 0);
-
-    glGenSamplers(1, &g_sampler);
-    glSamplerParameteri(g_sampler, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-    glSamplerParameteri(g_sampler, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-
-    glEnable(GL_DEPTH_TEST);
-    glClearColor(0.3f, 0.5f, 0.9f, 1.0f);
-    glViewport(0, 0, 1280, 720);
-    if (glGetError() != GL_NO_ERROR) {
-        fprintf(stderr, "FAIL: GL error during resource setup\n");
-        exit(1);
-    }
-}
-
-/* ---- bench driver: glFinish-paced frames on the offscreen FBO ---- */
+/* ---- bench driver: fence-paced frames on the offscreen FBO ----------------
+ * Frames are closed with a real fence wait, not glFinish: MobileGL implements
+ * glFinish and glFlush as no-ops (MG_Impl/GLImpl/Exporting/Definitions.cpp),
+ * so a glFinish-paced loop would time only the CPU-side submit on a MobileGL
+ * backend while timing submit-plus-GPU on the native driver - the two numbers
+ * would not describe the same work. A sync object is honoured by every stack
+ * measured here.
+ */
 typedef void (*case_fn)(int frame, long a, long b);
 static int g_warmup = 30, g_frames = 120;
+
+static void end_frame_wait(void) {
+    if (glFenceSync && glClientWaitSync && glDeleteSync) {
+        void* sync = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
+        if (sync) {
+            glClientWaitSync(sync, GL_SYNC_FLUSH_COMMANDS_BIT, 1000000000ull);
+            glDeleteSync(sync);
+            return;
+        }
+    }
+    glFinish();
+}
 
 static void run_case(const char* name, case_fn body, long a, long b, long opsPerFrame) {
     static uint64_t samples[4096];
     if (g_frames > 4096) g_frames = 4096;
-    glFinish();
+    end_frame_wait();
     for (int i = 0; i < g_warmup; ++i) {
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
         body(i, a, b);
-        glFinish();
+        end_frame_wait();
     }
     for (int i = 0; i < g_frames; ++i) {
         uint64_t t0 = now_ns();
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
         body(i, a, b);
-        glFinish();
+        end_frame_wait();
         samples[i] = now_ns() - t0;
     }
     qsort(samples, g_frames, sizeof(uint64_t), cmp_u64);
@@ -438,247 +281,6 @@ static void run_case(const char* name, case_fn body, long a, long b, long opsPer
 }
 
 /* a = draws per frame */
-static void case_draw_tiny(int frame, long a, long b) {
-    (void)frame; (void)b;
-    glBindVertexArray(g_vao[0]);
-    for (long i = 0; i < a; ++i) glDrawElements(GL_TRIANGLES, g_quadsPerSection * 6, GL_UNSIGNED_INT, 0);
-}
-
-static void case_draw_uniform(int frame, long a, long b) {
-    (void)frame; (void)b;
-    glBindVertexArray(g_vao[0]);
-    for (long i = 0; i < a; ++i) {
-        glUniform3f(g_uOffsetChunk, (float)(i & 15), (float)((i >> 4) & 15), 0.0f);
-        glDrawElements(GL_TRIANGLES, g_quadsPerSection * 6, GL_UNSIGNED_INT, 0);
-    }
-}
-
-static void case_draw_multi_vao(int frame, long a, long b) {
-    (void)frame; (void)b;
-    for (long i = 0; i < a; ++i) {
-        glBindVertexArray(g_vao[i % MAX_SECTIONS]);
-        glUniform3f(g_uOffsetChunk, (float)(i & 15), (float)((i >> 4) & 15), 0.0f);
-        glDrawElements(GL_TRIANGLES, g_quadsPerSection * 6, GL_UNSIGNED_INT, 0);
-    }
-}
-
-static void case_tex_pingpong(int frame, long a, long b) {
-    (void)frame; (void)b;
-    glBindVertexArray(g_vao[0]);
-    for (long i = 0; i < a; ++i) {
-        glBindTexture(GL_TEXTURE_2D, (i & 1) ? g_texEntity : g_texAtlas);
-        glDrawElements(GL_TRIANGLES, g_quadsPerSection * 6, GL_UNSIGNED_INT, 0);
-    }
-    glBindTexture(GL_TEXTURE_2D, g_texAtlas);
-}
-
-static void case_program_pingpong(int frame, long a, long b) {
-    (void)frame; (void)b;
-    glBindVertexArray(g_vao[0]);
-    for (long i = 0; i < a; ++i) {
-        if (i & 1) {
-            glUseProgram(g_progEntity);
-            glUniformMatrix4fv(g_uMvpEntity, 1, 0, g_mvp);
-        } else {
-            glUseProgram(g_progChunk);
-            glUniform3f(g_uOffsetChunk, (float)(i & 15), 0.0f, 0.0f);
-        }
-        glDrawElements(GL_TRIANGLES, g_quadsPerSection * 6, GL_UNSIGNED_INT, 0);
-    }
-    glUseProgram(g_progChunk);
-}
-
-/* a = uploads per frame, b = bytes per upload (0 => section size) */
-static void case_chunk_upload(int frame, long a, long b) {
-    if (b <= 0) b = g_quadsPerSection * 4 * VERT_STRIDE;
-    if (b > 4 * 1024 * 1024) b = 4 * 1024 * 1024;
-    for (long i = 0; i < a; ++i) {
-        int slot = (int)(((long)frame * a + i) % MAX_SECTIONS);
-        glBindBuffer(GL_ARRAY_BUFFER, g_vbo[slot]);
-        glBufferData(GL_ARRAY_BUFFER, b, NULL, GL_STATIC_DRAW); /* orphan */
-        glBufferSubData(GL_ARRAY_BUFFER, 0, b, g_scratch);
-        glBindVertexArray(g_vao[slot]);
-        glDrawElements(GL_TRIANGLES, g_quadsPerSection * 6, GL_UNSIGNED_INT, 0);
-    }
-}
-
-/* a = sprite updates per frame */
-static void case_atlas_sprite(int frame, long a, long b) {
-    (void)b;
-    glBindVertexArray(g_vao[0]);
-    glBindTexture(GL_TEXTURE_2D, g_texAtlas);
-    for (long i = 0; i < a; ++i) {
-        int x = (int)((frame * 13 + i * 17) % (1024 - 16));
-        int y = (int)((frame * 7 + i * 29) % (512 - 16));
-        glTexSubImage2D(GL_TEXTURE_2D, 0, x, y, 16, 16, GL_RGBA, GL_UNSIGNED_BYTE, g_scratch);
-    }
-    glDrawElements(GL_TRIANGLES, g_quadsPerSection * 6, GL_UNSIGNED_INT, 0);
-}
-
-/* a = lightmap updates (+draw) per frame */
-static void case_lightmap(int frame, long a, long b) {
-    (void)frame; (void)b;
-    glBindVertexArray(g_vao[0]);
-    for (long i = 0; i < a; ++i) {
-        glActiveTexture(GL_TEXTURE0 + 2);
-        glBindTexture(GL_TEXTURE_2D, g_texLight);
-        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 16, 16, GL_RGBA, GL_UNSIGNED_BYTE, g_scratch);
-        glActiveTexture(GL_TEXTURE0);
-        glDrawElements(GL_TRIANGLES, g_quadsPerSection * 6, GL_UNSIGNED_INT, 0);
-    }
-}
-
-/* Composite: a = total draws, b = uploads per frame. Mix modeled on trace
- * analysis: chunk draws with per-draw offset uniform across sections, 10%
- * entity-style program flips, per-frame lightmap + sprite updates, b chunk
- * re-uploads. */
-static long g_mixSprites = 8;
-static void case_scene_mix(int frame, long a, long b) {
-    glActiveTexture(GL_TEXTURE0 + 2);
-    glBindTexture(GL_TEXTURE_2D, g_texLight);
-    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 16, 16, GL_RGBA, GL_UNSIGNED_BYTE, g_scratch);
-    glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, g_texAtlas);
-    for (long i = 0; i < g_mixSprites; ++i) {
-        int x = (int)((frame * 13 + i * 17) % (1024 - 16));
-        int y = (int)((frame * 7 + i * 29) % (512 - 16));
-        glTexSubImage2D(GL_TEXTURE_2D, 0, x, y, 16, 16, GL_RGBA, GL_UNSIGNED_BYTE, g_scratch);
-    }
-    for (long i = 0; i < b; ++i) {
-        int slot = (int)(((long)frame * b + i) % MAX_SECTIONS);
-        long bytes = g_quadsPerSection * 4 * VERT_STRIDE;
-        glBindBuffer(GL_ARRAY_BUFFER, g_vbo[slot]);
-        glBufferData(GL_ARRAY_BUFFER, bytes, NULL, GL_STATIC_DRAW);
-        glBufferSubData(GL_ARRAY_BUFFER, 0, bytes, g_scratch);
-    }
-    long entityEvery = 10;
-    for (long i = 0; i < a; ++i) {
-        if (i % entityEvery == entityEvery - 1) {
-            glUseProgram(g_progEntity);
-            glUniformMatrix4fv(g_uMvpEntity, 1, 0, g_mvp);
-            glBindTexture(GL_TEXTURE_2D, g_texEntity);
-            glBindVertexArray(g_vao[i % MAX_SECTIONS]);
-            glDrawElements(GL_TRIANGLES, g_quadsPerSection * 6, GL_UNSIGNED_INT, 0);
-            glUseProgram(g_progChunk);
-            glBindTexture(GL_TEXTURE_2D, g_texAtlas);
-        } else {
-            glBindVertexArray(g_vao[i % MAX_SECTIONS]);
-            glUniform3f(g_uOffsetChunk, (float)(i & 15), (float)((i >> 4) & 15), 0.0f);
-            glDrawElements(GL_TRIANGLES, g_quadsPerSection * 6, GL_UNSIGNED_INT, 0);
-        }
-    }
-}
-
-/* ---- Trace-derived cases -------------------------------------------------
- * Per-frame call mixes measured from the three captured Minecraft traces
- * (render distance 32, 1280x720, hovering in-world). Each case reproduces one
- * renderer's dominant per-draw sequence at its measured rate, so the number a
- * backend posts here is directly comparable to what that game version asks of
- * the driver every frame.
- *
- *   vanilla 1.21.1 : 5495 glDrawElements, 5490 glBindVertexArray,
- *                    5487 glUniform3fv, 95 glTexSubImage2D (+382 glPixelStorei,
- *                    247 glTexParameteri), 23 glBufferData per frame
- *   fabric+sodium  : 132 glMultiDrawElementsBaseVertex, 279 glBindVertexArray,
- *                    132 glUniform3f, 32 glBufferData per frame
- *   26.2 snapshot  : 3401 glDrawElementsBaseVertex, each preceded by
- *                    glBindBufferRange + glBindBuffer (3639/3412 per frame)
- */
-/* vanilla: bind VAO, push the chunk offset, draw. a = draws per frame. */
-static void case_mc_vanilla_draw(int frame, long a, long b) {
-    (void)frame; (void)b;
-    float offset[3];
-    for (long i = 0; i < a; ++i) {
-        glBindVertexArray(g_vao[i % MAX_SECTIONS]);
-        offset[0] = (float)(i & 15);
-        offset[1] = (float)((i >> 4) & 15);
-        offset[2] = 0.0f;
-        glUniform3fv(g_uOffsetChunk, 1, offset);
-        glDrawElements(GL_TRIANGLES, g_quadsPerSection * 6, GL_UNSIGNED_INT, 0);
-    }
-}
-
-/* sodium: one multi-draw covers many chunk sections out of a shared buffer.
- * a = multi-draws per frame, b = sub-draws inside each. */
-static void case_mc_sodium_multidraw(int frame, long a, long b) {
-    (void)frame;
-    enum { kMaxSub = 64 };
-    if (b <= 0 || b > kMaxSub) b = 32;
-    GLsizei counts[kMaxSub];
-    const void* offsets[kMaxSub];
-    GLint baseVertices[kMaxSub];
-    for (long s = 0; s < b; ++s) {
-        counts[s] = (GLsizei)(g_quadsPerSection * 6 / b);
-        offsets[s] = (const void*)(uintptr_t)(s * (g_quadsPerSection * 6 / b) * 4);
-        baseVertices[s] = 0;
-    }
-    for (long i = 0; i < a; ++i) {
-        glBindVertexArray(g_vao[i % MAX_SECTIONS]);
-        glBindVertexArray(g_vao[i % MAX_SECTIONS]); /* sodium rebinds ~2x per draw */
-        glUniform3f(g_uOffsetChunk, (float)(i & 15), (float)((i >> 4) & 15), 0.0f);
-        glMultiDrawElementsBaseVertex(GL_TRIANGLES, counts, GL_UNSIGNED_INT, offsets,
-                                      (GLsizei)b, baseVertices);
-    }
-}
-
-/* 26.2: every draw rebinds a fresh uniform-buffer range out of a ring.
- * a = draws per frame. */
-static void case_mc_ubo_range(int frame, long a, long b) {
-    (void)b;
-    const size_t slots = (4u * 1024u * 1024u) / g_uboSlot;
-    for (long i = 0; i < a; ++i) {
-        const size_t slot = (size_t)(((long)frame * a + i) % (long)slots);
-        glBindBufferRange(GL_UNIFORM_BUFFER, 0, g_uboRing, (GLintptr)(slot * g_uboSlot),
-                          (GLsizeiptr)g_uboSlot);
-        glBindBuffer(GL_UNIFORM_BUFFER, g_uboRing);
-        glDrawElementsBaseVertex(GL_TRIANGLES, g_quadsPerSection * 6, GL_UNSIGNED_INT, 0, 0);
-    }
-}
-
-/* vanilla's animated-sprite path: every upload is wrapped in the pixel-store
- * and filter state Blaze3D re-sets around it. a = uploads per frame. */
-static void case_mc_tex_stream(int frame, long a, long b) {
-    (void)b;
-    glBindVertexArray(g_vao[0]);
-    glBindTexture(GL_TEXTURE_2D, g_texAtlas);
-    for (long i = 0; i < a; ++i) {
-        glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
-        glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
-        glPixelStorei(GL_UNPACK_SKIP_ROWS, 0);
-        glPixelStorei(GL_UNPACK_SKIP_PIXELS, 0);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-        int x = (int)((frame * 13 + i * 17) % (1024 - 16));
-        int y = (int)((frame * 7 + i * 29) % (512 - 16));
-        glTexSubImage2D(GL_TEXTURE_2D, 0, x, y, 16, 16, GL_RGBA, GL_UNSIGNED_BYTE, g_scratch);
-    }
-    glDrawElements(GL_TRIANGLES, g_quadsPerSection * 6, GL_UNSIGNED_INT, 0);
-}
-
-/* Blaze3D re-resolves uniform locations by name every frame. a = lookups. */
-static void case_mc_uniform_lookup(int frame, long a, long b) {
-    (void)frame; (void)b;
-    static const char* names[4] = {"uMvp", "uOffset", "uAtlas", "uLight"};
-    volatile GLint sink = 0;
-    for (long i = 0; i < a; ++i) sink += glGetUniformLocation(g_progChunk, names[i & 3]);
-    (void)sink;
-    glBindVertexArray(g_vao[0]);
-    glDrawElements(GL_TRIANGLES, g_quadsPerSection * 6, GL_UNSIGNED_INT, 0);
-}
-
-/* 26.2 rebinds a sampler object per texture unit switch. a = switches. */
-static void case_mc_sampler_churn(int frame, long a, long b) {
-    (void)frame; (void)b;
-    glBindVertexArray(g_vao[0]);
-    for (long i = 0; i < a; ++i) {
-        glActiveTexture(GL_TEXTURE0 + (GLenum)(i & 3));
-        glBindTexture(GL_TEXTURE_2D, (i & 1) ? g_texEntity : g_texAtlas);
-        glBindSampler((GLuint)(i & 3), g_sampler);
-        glDrawElements(GL_TRIANGLES, g_quadsPerSection * 6, GL_UNSIGNED_INT, 0);
-    }
-    glActiveTexture(GL_TEXTURE0);
-}
-
 /* ---- EGL bootstrap: one provider library, pbuffer, desktop-GL context ---- */
 static int boot_egl(void) {
     const char* libpath = getenv("DRIVERBENCH_EGL_LIB");
@@ -711,29 +313,50 @@ static int boot_egl(void) {
     }
     fprintf(stderr, "EGL %d.%d via %s\n", maj, min, libpath);
 
-    ((EGLBoolean(*)(EGLenum))p_eglBindAPI)(EGL_OPENGL_API);
-
-    const EGLint cfgAttribs[] = {EGL_SURFACE_TYPE, EGL_PBUFFER_BIT, EGL_RED_SIZE, 8,
-                                 EGL_DEPTH_SIZE, 24, EGL_RENDERABLE_TYPE, EGL_OPENGL_BIT, EGL_NONE};
-    const EGLint cfgAttribsRelaxed[] = {EGL_SURFACE_TYPE, EGL_PBUFFER_BIT, EGL_RED_SIZE, 8, EGL_NONE};
-    EGLConfig cfg = NULL;
-    EGLint ncfg = 0;
+    // Desktop GL first (that is what MobileGL exposes and what the cases are
+    // written against), GLES 3 second so the same binary can measure a device's
+    // native driver as the baseline. The .inc picks ESSL shader sources when the
+    // context turns out to be ES.
     EGLBoolean (*chooseConfig)(EGLDisplay, const EGLint*, EGLConfig*, EGLint, EGLint*) =
         (EGLBoolean(*)(EGLDisplay, const EGLint*, EGLConfig*, EGLint, EGLint*))p_eglChooseConfig;
-    if (!chooseConfig(dpy, cfgAttribs, &cfg, 1, &ncfg) || ncfg < 1) {
-        if (!chooseConfig(dpy, cfgAttribsRelaxed, &cfg, 1, &ncfg) || ncfg < 1) {
-            fprintf(stderr, "FAIL: eglChooseConfig\n");
-            return 1;
-        }
-    }
-
-    const EGLint ctxAttribs[] = {EGL_CONTEXT_MAJOR_VERSION, 3, EGL_CONTEXT_MINOR_VERSION, 2,
-                                 EGL_CONTEXT_OPENGL_PROFILE_MASK, EGL_CONTEXT_OPENGL_CORE_PROFILE_BIT,
-                                 EGL_NONE};
     EGLContext (*createContext)(EGLDisplay, EGLConfig, EGLContext, const EGLint*) =
         (EGLContext(*)(EGLDisplay, EGLConfig, EGLContext, const EGLint*))p_eglCreateContext;
-    EGLContext ctx = createContext(dpy, cfg, EGL_NO_CONTEXT, ctxAttribs);
-    if (ctx == EGL_NO_CONTEXT) ctx = createContext(dpy, cfg, EGL_NO_CONTEXT, NULL);
+    EGLBoolean (*bindApi)(EGLenum) = (EGLBoolean(*)(EGLenum))p_eglBindAPI;
+
+    EGLConfig cfg = NULL;
+    EGLint ncfg = 0;
+    EGLContext ctx = EGL_NO_CONTEXT;
+
+    if (bindApi(EGL_OPENGL_API)) {
+        const EGLint cfgAttribs[] = {EGL_SURFACE_TYPE, EGL_PBUFFER_BIT, EGL_RED_SIZE, 8,
+                                     EGL_DEPTH_SIZE, 24, EGL_RENDERABLE_TYPE, EGL_OPENGL_BIT, EGL_NONE};
+        if (chooseConfig(dpy, cfgAttribs, &cfg, 1, &ncfg) && ncfg >= 1) {
+            const EGLint ctxAttribs[] = {EGL_CONTEXT_MAJOR_VERSION, 3, EGL_CONTEXT_MINOR_VERSION, 2,
+                                         EGL_CONTEXT_OPENGL_PROFILE_MASK,
+                                         EGL_CONTEXT_OPENGL_CORE_PROFILE_BIT, EGL_NONE};
+            ctx = createContext(dpy, cfg, EGL_NO_CONTEXT, ctxAttribs);
+            if (ctx == EGL_NO_CONTEXT) ctx = createContext(dpy, cfg, EGL_NO_CONTEXT, NULL);
+        }
+    }
+    if (ctx == EGL_NO_CONTEXT) {
+        if (!bindApi(EGL_OPENGL_ES_API)) {
+            fprintf(stderr, "FAIL: neither OpenGL nor OpenGL ES is bindable on this provider\n");
+            return 1;
+        }
+        const EGLint esCfgAttribs[] = {EGL_SURFACE_TYPE, EGL_PBUFFER_BIT, EGL_RED_SIZE, 8,
+                                       EGL_GREEN_SIZE, 8, EGL_BLUE_SIZE, 8, EGL_DEPTH_SIZE, 24,
+                                       EGL_RENDERABLE_TYPE, EGL_OPENGL_ES3_BIT, EGL_NONE};
+        ncfg = 0;
+        if (!chooseConfig(dpy, esCfgAttribs, &cfg, 1, &ncfg) || ncfg < 1) {
+            const EGLint relaxed[] = {EGL_SURFACE_TYPE, EGL_PBUFFER_BIT, EGL_RED_SIZE, 8, EGL_NONE};
+            if (!chooseConfig(dpy, relaxed, &cfg, 1, &ncfg) || ncfg < 1) {
+                fprintf(stderr, "FAIL: eglChooseConfig\n");
+                return 1;
+            }
+        }
+        const EGLint esCtxAttribs[] = {EGL_CONTEXT_CLIENT_VERSION, 3, EGL_NONE};
+        ctx = createContext(dpy, cfg, EGL_NO_CONTEXT, esCtxAttribs);
+    }
     if (ctx == EGL_NO_CONTEXT) {
         fprintf(stderr, "FAIL: eglCreateContext (0x%x)\n", ((EGLint(*)(void))p_eglGetError)());
         return 1;
@@ -775,23 +398,30 @@ static int boot_egl(void) {
     RESOLVE(glGetUniformLocation); RESOLVE(glUniform1i); RESOLVE(glUniform3f);
     RESOLVE(glUniformMatrix4fv); RESOLVE(glDrawElements); RESOLVE(glBindAttribLocation);
     RESOLVE(glUniform3fv); RESOLVE(glDrawArrays); RESOLVE(glDrawElementsBaseVertex);
-    RESOLVE(glMultiDrawElementsBaseVertex); RESOLVE(glBindBufferRange); RESOLVE(glBindBufferBase);
+    RESOLVE(glBindBufferRange); RESOLVE(glBindBufferBase);
     RESOLVE(glGetUniformBlockIndex); RESOLVE(glUniformBlockBinding);
     RESOLVE(glGenSamplers); RESOLVE(glBindSampler); RESOLVE(glSamplerParameteri);
     RESOLVE(glGenFramebuffers); RESOLVE(glBindFramebuffer); RESOLVE(glGenRenderbuffers);
     RESOLVE(glBindRenderbuffer); RESOLVE(glRenderbufferStorage); RESOLVE(glFramebufferRenderbuffer);
     RESOLVE(glCheckFramebufferStatus);
+    // Optional: end_frame_wait() falls back to glFinish when a stack has no
+    // sync objects, so resolve without failing the run.
+    *(void**)&glFenceSync = g_eglGetProcAddress("glFenceSync");
+    if (!glFenceSync) *(void**)&glFenceSync = dlsym(g_provider, "glFenceSync");
+    *(void**)&glClientWaitSync = g_eglGetProcAddress("glClientWaitSync");
+    if (!glClientWaitSync) *(void**)&glClientWaitSync = dlsym(g_provider, "glClientWaitSync");
+    *(void**)&glDeleteSync = g_eglGetProcAddress("glDeleteSync");
+    if (!glDeleteSync) *(void**)&glDeleteSync = dlsym(g_provider, "glDeleteSync");
+    // Desktop-only: GLES 3.2 has DrawElementsBaseVertex but no multi-draw form,
+    // so bench_multi_draw_elements_base_vertex() emulates it when this is null.
+    *(void**)&glMultiDrawElementsBaseVertex = g_eglGetProcAddress("glMultiDrawElementsBaseVertex");
+    if (!glMultiDrawElementsBaseVertex)
+        *(void**)&glMultiDrawElementsBaseVertex = dlsym(g_provider, "glMultiDrawElementsBaseVertex");
 
     fprintf(stderr, "renderer: %s\n", glGetString(GL_RENDERER));
     fprintf(stderr, "version:  %s\n", glGetString(GL_VERSION));
     return 0;
 }
-
-typedef struct {
-    const char* name;
-    case_fn fn;
-    long a, b, opsPerFrame;
-} BenchCase;
 
 int main(int argc, char** argv) {
     long draws = 2048;
@@ -802,36 +432,23 @@ int main(int argc, char** argv) {
     if (boot_egl()) return 1;
     build_resources();
 
-    // Rates are the measured per-frame call counts of each trace, so one
-    // bench frame costs what one real frame of that game version costs.
-    BenchCase cases[] = {
-        {"mc_vanilla_draw", case_mc_vanilla_draw, 5495, 0, 5495},
-        {"mc_sodium_multidraw", case_mc_sodium_multidraw, 132, 32, 132},
-        {"mc_ubo_range", case_mc_ubo_range, 3401, 0, 3401},
-        {"mc_tex_stream", case_mc_tex_stream, 95, 0, 95},
-        {"mc_uniform_lookup", case_mc_uniform_lookup, 41, 0, 41},
-        {"mc_sampler_churn", case_mc_sampler_churn, 306, 0, 306},
-        {"draw_tiny", case_draw_tiny, draws, 0, draws},
-        {"draw_uniform", case_draw_uniform, draws, 0, draws},
-        {"draw_multi_vao", case_draw_multi_vao, draws, 0, draws},
-        {"tex_pingpong", case_tex_pingpong, draws / 2, 0, draws / 2},
-        {"program_pingpong", case_program_pingpong, draws / 4, 0, draws / 4},
-        {"chunk_upload", case_chunk_upload, 24, 0, 24},
-        {"atlas_sprite", case_atlas_sprite, 32, 0, 32},
-        {"lightmap", case_lightmap, 4, 0, 4},
-        {"scene_mix", case_scene_mix, draws, 12, draws},
-    };
-    int ncases = (int)(sizeof cases / sizeof cases[0]);
-
     printf("case,frames,ops_per_frame,median_frame_ms,ns_per_op,fps\n");
-    for (int i = 0; i < ncases; ++i) {
+    for (int i = 0; i < kBenchCaseCount; ++i) {
+        const BenchCaseDesc* c = &kBenchCases[i];
         if (argc > 1) {
             int wanted = 0;
             for (int j = 1; j < argc; ++j)
-                if (strcmp(argv[j], cases[i].name) == 0) wanted = 1;
+                if (strcmp(argv[j], c->name) == 0) wanted = 1;
             if (!wanted) continue;
         }
-        run_case(cases[i].name, cases[i].fn, cases[i].a, cases[i].b, cases[i].opsPerFrame);
+        // The generic cases scale with DRIVERBENCH_DRAWS; the mc_* rates are
+        // measured and must not move, or the numbers stop being comparable.
+        long a = c->a, ops = c->opsPerFrame;
+        if (strncmp(c->name, "mc_", 3) != 0 && a > 100) {
+            a = draws * a / 2048;
+            ops = c->opsPerFrame * draws / 2048;
+        }
+        run_case(c->name, c->fn, a, c->b, ops);
     }
     return 0;
 }

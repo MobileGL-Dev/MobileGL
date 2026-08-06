@@ -33,6 +33,13 @@ fun Project.mobileGlAbiFilters(): List<String> {
 fun Project.mobileGlCmakeCompilerLauncher(): String =
     (findProperty("mobilegl.cmakeCompilerLauncher") ?: System.getenv("MOBILEGL_CMAKE_COMPILER_LAUNCHER") ?: "").toString().trim()
 
+// Optional application-id suffix, so a development build can sit next to an
+// already-installed plugin instead of having to replace it - a differently
+// signed APK cannot upgrade one in place, and uninstalling costs the user their
+// plugin settings and the launcher's binding to it.
+fun Project.mobileGlApplicationIdSuffix(): String =
+    (findProperty("mobilegl.applicationIdSuffix") ?: "").toString().trim()
+
 fun Project.runGit(vararg arguments: String): String? = runCatching {
     ProcessBuilder("git", *arguments)
         .directory(rootDir)
@@ -102,6 +109,7 @@ android {
 
     defaultConfig {
         applicationId = "top.mobilegl.plugin"
+        mobileGlApplicationIdSuffix().takeIf { it.isNotEmpty() }?.let { applicationIdSuffix = it }
         minSdk = 26
         targetSdk = 34
         versionCode = mobileGlVersionMajor * 1_000_000 + mobileGlVersionMinor * 10_000 + mobileGlMonthlyRevision

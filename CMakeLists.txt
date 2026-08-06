@@ -304,6 +304,7 @@ endif()
 if (ANDROID)
     list(APPEND SOURCE_FILES
         MobileGL/MG_Util/SelfTest/DriverPostJni.cpp
+        MobileGL/MG_Util/SelfTest/DriverBenchJni.cpp
     )
 endif()
 

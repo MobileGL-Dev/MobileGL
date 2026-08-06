@@ -22,6 +22,15 @@
             android:exported="true"
             android:theme="@style/Theme.MobileGLPlugin.NoDisplay" />
 
+        <!-- One benchmark run per process: the backend is latched at MobileGL
+             init and Espryt teardown kills the process-default EGL display, so
+             the bench must never share a process with the POST UI. The service
+             exits after each run. -->
+        <service
+            android:name=".BenchService"
+            android:exported="false"
+            android:process=":bench" />
+
         <meta-data
             android:name="fclPlugin_V2"
             android:resource="@string/config" />

@@ -2920,6 +2920,21 @@ void main() {
         }
 #endif
 
+#if defined(VK_USE_PLATFORM_ANDROID_KHR)
+        // The AImageReader owns the ANativeWindow the pbuffer fallback handed to the
+        // WSI, so it outlives the surface and is released only here.
+        if (m_fallbackImageReader != nullptr && m_platformLibrary != nullptr) {
+            using AImageReaderDeleteFn = void (*)(void*);
+            auto* imageReaderDelete =
+                reinterpret_cast<AImageReaderDeleteFn>(dlsym(m_platformLibrary, "AImageReader_delete"));
+            if (imageReaderDelete) {
+                imageReaderDelete(m_fallbackImageReader);
+            }
+            m_fallbackImageReader = nullptr;
+            m_window = 0;
+            dlclose(m_platformLibrary);
+            m_platformLibrary = nullptr;
+        }
         if (m_debugMessenger != VK_NULL_HANDLE) {
             DestroyDebugMessenger();
             m_debugMessenger = VK_NULL_HANDLE;
@@ -9809,6 +9824,20 @@ void main() {
         if (!m_window) {
 #ifdef VK_USE_PLATFORM_METAL_EXT
             exts.push_back(VK_EXT_METAL_SURFACE_EXTENSION_NAME);
+#elif defined VK_USE_PLATFORM_ANDROID_KHR
+            m_headlessSurfaceSupported = IsExtensionSupported(m_extensions, VK_EXT_HEADLESS_SURFACE_EXTENSION_NAME);
+            if (m_headlessSurfaceSupported) {
+                exts.push_back(VK_EXT_HEADLESS_SURFACE_EXTENSION_NAME);
+            } else {
+                // No mobile ICD seen so far implements VK_EXT_headless_surface
+                // (Mali r32p1 does not), and this used to abort the process the
+                // moment an application asked for a pbuffer context. CreateSurface()
+                // gives the WSI an AImageReader window instead, so request the
+                // Android surface extension for it.
+                MGLOG_I("%s not available; falling back to an AImageReader %s surface for the pbuffer context.",
+                        VK_EXT_HEADLESS_SURFACE_EXTENSION_NAME, VK_KHR_ANDROID_SURFACE_EXTENSION_NAME);
+                exts.push_back(VK_KHR_ANDROID_SURFACE_EXTENSION_NAME);
+            }
 #elif defined VK_USE_PLATFORM_XLIB_KHR
             m_headlessSurfaceSupported = IsExtensionSupported(m_extensions, VK_EXT_HEADLESS_SURFACE_EXTENSION_NAME);
             if (m_headlessSurfaceSupported) {
@@ -10646,6 +10675,54 @@ void main() {
             m_window = reinterpret_cast<NativeWindowType>(
                 CreateInternalMetalLayer(m_config.SurfaceWidth, m_config.SurfaceHeight, &m_platformDisplay));
             m_platformLibrary = reinterpret_cast<void*>(m_window);
+#elif defined VK_USE_PLATFORM_ANDROID_KHR
+            if (m_headlessSurfaceSupported) {
+                auto* createHeadlessSurface = reinterpret_cast<PFN_vkCreateHeadlessSurfaceEXT>(
+                    vkGetInstanceProcAddr(m_instance, "vkCreateHeadlessSurfaceEXT"));
+                MOBILEGL_ASSERT(createHeadlessSurface != nullptr,
+                                "VK_EXT_headless_surface is not available for DirectVulkan pbuffer surface");
+                VkHeadlessSurfaceCreateInfoEXT sci{VK_STRUCTURE_TYPE_HEADLESS_SURFACE_CREATE_INFO_EXT};
+                VK_VERIFY(createHeadlessSurface(m_instance, &sci, nullptr, &m_surface),
+                          "vkCreateHeadlessSurfaceEXT failed");
+                return;
+            }
+            // Windowless context on a driver without VK_EXT_headless_surface: give
+            // the WSI an AImageReader's ANativeWindow. It is a real, valid producer
+            // surface that is attached to no display and whose images this code never
+            // acquires, which is exactly the "drawable nobody sees" the Xlib fallback
+            // below builds out of an unmapped window. libmediandk is dlopen'd rather
+            // than linked so a device without it degrades to the old error instead of
+            // failing to load the library at all.
+            {
+                void* mediaLib = dlopen("libmediandk.so", RTLD_NOW | RTLD_LOCAL);
+                MOBILEGL_ASSERT(mediaLib != nullptr,
+                                "VK_EXT_headless_surface is unavailable and libmediandk.so could not be loaded "
+                                "for the pbuffer surface fallback");
+                using AImageReaderNewFn = int (*)(int32_t, int32_t, int32_t, int32_t, void**);
+                using AImageReaderGetWindowFn = int (*)(void*, void**);
+                auto* imageReaderNew = reinterpret_cast<AImageReaderNewFn>(dlsym(mediaLib, "AImageReader_new"));
+                auto* imageReaderGetWindow =
+                    reinterpret_cast<AImageReaderGetWindowFn>(dlsym(mediaLib, "AImageReader_getWindow"));
+                MOBILEGL_ASSERT(imageReaderNew != nullptr && imageReaderGetWindow != nullptr,
+                                "libmediandk.so is missing AImageReader_new/AImageReader_getWindow");
+
+                constexpr int32_t kAndroidFormatRgba8888 = 0x1; // AIMAGE_FORMAT_RGBA_8888
+                const int32_t width = static_cast<int32_t>(std::max<Uint32>(m_config.SurfaceWidth, 1));
+                const int32_t height = static_cast<int32_t>(std::max<Uint32>(m_config.SurfaceHeight, 1));
+                void* reader = nullptr;
+                // maxImages must cover the swapchain's images; the reader never
+                // acquires any, so this only sizes its buffer queue.
+                const int status = imageReaderNew(width, height, kAndroidFormatRgba8888, 8, &reader);
+                MOBILEGL_ASSERT(status == 0 && reader != nullptr,
+                                "AImageReader_new failed (%d) for the pbuffer surface fallback", status);
+                void* nativeWindow = nullptr;
+                const int windowStatus = imageReaderGetWindow(reader, &nativeWindow);
+                MOBILEGL_ASSERT(windowStatus == 0 && nativeWindow != nullptr,
+                                "AImageReader_getWindow failed (%d) for the pbuffer surface fallback", windowStatus);
+                m_fallbackImageReader = reader;
+                m_platformLibrary = mediaLib;
+                m_window = reinterpret_cast<NativeWindowType>(nativeWindow);
+            }
 #elif defined VK_USE_PLATFORM_XLIB_KHR
             if (m_headlessSurfaceSupported) {
                 auto* createHeadlessSurface =

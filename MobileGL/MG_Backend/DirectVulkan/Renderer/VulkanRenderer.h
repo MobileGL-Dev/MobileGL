@@ -444,6 +444,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // above (rather than being handed one by the caller), so Shutdown() knows it
         // owns that window and must destroy it.
         Bool m_ownsFallbackXlibWindow = false;
+        // Android has the same shortfall: no Mali/Adreno driver seen so far exposes
+        // VK_EXT_headless_surface, so a windowless (EGL pbuffer) context gets an
+        // AImageReader's ANativeWindow to hand the WSI instead. Nothing is ever
+        // displayed - the reader's images are simply never acquired. Owned here, so
+        // Shutdown() deletes it.
+        void* m_fallbackImageReader = nullptr;
         VulkanRendererConfig m_config;
         Bool m_swapchainResizeRequested = false;
         // Presentation is suspended while the window is zero-area (minimized): the
