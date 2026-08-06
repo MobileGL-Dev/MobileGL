@@ -28,6 +28,7 @@
 #include <MG_Util/Texture/PixelStoreProcessor.h>
 #include <Config.h>
 #include <atomic>
+#include <bit>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -50,6 +51,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
     static Bool QueryCurrentSurfaceSize(Int& outWidth, Int& outHeight);
     static SharedPtr<MG_State::GLState::SamplerObject> g_rawDepthFetchSamplerState;
     static SharedPtr<SamplerImpl::BackendSamplerObject> g_rawDepthFetchSamplerBackend;
+
+    // Two objects are the same binding iff they share a control block. Raw addresses lie
+    // (a freed object's heap slot is reused), but a held weak_ptr pins the control block,
+    // so no later object can ever owner-equal a snapshot of its predecessor.
+    template <typename T>
+    static Bool OwnerEquals(const WeakPtr<T>& snapshot, const SharedPtr<T>& current) {
+        return !snapshot.owner_before(current) && !current.owner_before(snapshot);
+    }
 
     static Bool IsDualSourceBlendFactor(BlendFactor v) {
         switch (v) {
@@ -780,11 +789,35 @@ namespace MobileGL::MG_Backend::DirectGLES {
             const Uint32 activeAttribMask = program->GetActiveAttributeLocationMask();
             if (activeAttribMask == 0) return;
 
-            constexpr Uint32 maxVertexAttribs =
-                static_cast<Uint32>(MG_State::GLState::VertexArrayObject::MAX_VERTEX_ATTRIBS);
-            for (Uint32 location = 0; location < maxVertexAttribs; ++location) {
-                if ((activeAttribMask & (1u << location)) == 0) continue;
-                if (vao->GetAttribute(location).Enabled) continue;
+            // Which of the program's attributes lack an enabled array cannot change without
+            // the VAO's config version moving (Enable/DisableAttribute bump it), the VAO
+            // changing, or the program's active mask changing, so the per-draw Enabled probes
+            // reduce to three compares. The rebuild visits only the ACTIVE locations - a VAO
+            // switch per draw (vanilla cycles section VAOs) pays the same probes the unmemoed
+            // walk did, not a full 32-slot scan. Owner-equality, not the raw pointer: a freed
+            // VAO's heap slot can be reused, and the held weak_ptr pins the control block so
+            // a successor can never alias it.
+            static WeakPtr<MG_State::GLState::VertexArrayObject> s_pendingMaskVao;
+            static Uint32 s_pendingMaskConfigVersion = 0;
+            static Uint32 s_pendingMaskActiveMask = 0;
+            static Uint32 s_pendingMask = 0;
+            const Uint32 configVersion = vao->GetConfigVersion();
+            if (configVersion != s_pendingMaskConfigVersion || activeAttribMask != s_pendingMaskActiveMask ||
+                !OwnerEquals(s_pendingMaskVao, vao)) {
+                Uint32 pending = 0;
+                for (Uint32 remaining = activeAttribMask; remaining != 0; remaining &= remaining - 1) {
+                    const Uint32 location = static_cast<Uint32>(std::countr_zero(remaining));
+                    if (!vao->GetAttribute(location).Enabled) pending |= (1u << location);
+                }
+                s_pendingMaskVao = vao;
+                s_pendingMaskConfigVersion = configVersion;
+                s_pendingMaskActiveMask = activeAttribMask;
+                s_pendingMask = pending;
+            }
+            if (s_pendingMask == 0) return;
+
+            for (Uint32 remaining = s_pendingMask; remaining != 0; remaining &= remaining - 1) {
+                const Uint32 location = static_cast<Uint32>(std::countr_zero(remaining));
 
                 const auto& currentValue = MG_State::pGLContext->GetCurrentVertexAttribute(location);
                 const auto typeInfo = MG_State::GLState::ClassifyVertexAttribType(program->GetAttribType(location));
@@ -831,10 +864,92 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return backendObj;
         }
 
+        // Identity snapshot of what one texture unit has bound: the object in every binding
+        // slot plus the unit's sampler object. This - not the context's texture bind
+        // generation - is what the per-draw texture memos key on: the generation also bumps
+        // on REDUNDANT re-binds (glBindSampler of the sampler the unit already carries, which
+        // 26.2 issues around every texture-unit switch), so a generation-keyed memo re-derives
+        // everything on draws that changed nothing. The snapshot compares the bindings
+        // themselves, so only a real change can invalidate it. What it deliberately does NOT
+        // cover, and its users must key on separately:
+        //   * membership/completeness flips with no binding moving - a default texture's image
+        //     appearing or vanishing, any texture shape or sampler parameter change - all bump
+        //     the sampling-resolution generation (BumpShapeVersion / SamplerObject::BumpVersion
+        //     are their only writers and bump it unconditionally);
+        //   * everything unit bindings say nothing about: the touched-unit high-water mark,
+        //     the frontend context identity, the backend ES context generation, and (for the
+        //     resolution memo) the program keys that arbitrate aliased targets.
+        struct UnitBindingsSnapshot {
+            Array<WeakPtr<MG_State::GLState::ITextureObject>, (SizeT)TextureTarget::TextureTargetCount>
+                slotObjects{};
+            WeakPtr<MG_State::GLState::SamplerObject> samplerObject{};
+        };
+
+        static void CaptureUnitBindings(Int maxTouchedUnit, Vector<UnitBindingsSnapshot>& out) {
+            out.resize(static_cast<SizeT>(maxTouchedUnit + 1));
+            for (Int unit = 0; unit <= maxTouchedUnit; ++unit) {
+                auto& textureUnit = MG_State::pGLContext->GetTextureUnitObject(unit);
+                auto& snapshot = out[static_cast<SizeT>(unit)];
+                const auto& slots = textureUnit.GetAllBindingSlots();
+                for (SizeT i = 0; i < slots.size(); ++i) {
+                    snapshot.slotObjects[i] = slots[i].GetBoundObject();
+                }
+                snapshot.samplerObject = textureUnit.GetSamplerObject();
+            }
+        }
+
+        static Bool UnitBindingsUnchanged(Int maxTouchedUnit, const Vector<UnitBindingsSnapshot>& snapshots) {
+            if (snapshots.size() != static_cast<SizeT>(maxTouchedUnit + 1)) return false;
+            for (Int unit = 0; unit <= maxTouchedUnit; ++unit) {
+                auto& textureUnit = MG_State::pGLContext->GetTextureUnitObject(unit);
+                const auto& snapshot = snapshots[static_cast<SizeT>(unit)];
+                const auto& slots = textureUnit.GetAllBindingSlots();
+                for (SizeT i = 0; i < slots.size(); ++i) {
+                    if (!OwnerEquals(snapshot.slotObjects[i], slots[i].GetBoundObject())) return false;
+                }
+                if (!OwnerEquals(snapshot.samplerObject, textureUnit.GetSamplerObject())) return false;
+            }
+            return true;
+        }
+
+        static Vector<UnitBindingsSnapshot> g_observedUnitBindings;
+        static Uint64 g_observedUnitBindingsContextId = 0;
+        static Uint64 g_observedUnitBindingsGeneration = 0;
+        static Int g_observedUnitBindingsMaxUnit = -1;
+        static Uint64 g_unitBindingsEpoch = 0;
+
+        // Epoch of the touched units' bindings: moves exactly when WHAT is bound changes,
+        // never on a redundant re-bind. Memos snapshot the returned value instead of holding
+        // their own UnitBindingsSnapshot, so the owner-compare walk runs at most once per
+        // draw no matter how many memos key on it. The observation triple gates the walk:
+        // while (context id, bind generation, high-water mark) are unchanged nothing can
+        // have moved, because every path that changes a binding bumps the generation. A
+        // given epoch value names one observed (context, high-water mark, bindings) state -
+        // a context switch, a high-water-mark move or a bindings change each recapture and
+        // bump - so epoch equality alone proves the bindings a consumer resolved against
+        // are the bindings on the units now.
+        static Uint64 CurrentUnitBindingsEpoch(Int maxTouchedUnit) {
+            const Uint64 contextId = MG_State::pGLContext->GetTextureContextId();
+            const Uint64 bindGeneration = MG_State::pGLContext->GetTextureBindGeneration();
+            if (g_observedUnitBindingsContextId == contextId && g_observedUnitBindingsMaxUnit == maxTouchedUnit &&
+                g_observedUnitBindingsGeneration == bindGeneration) {
+                return g_unitBindingsEpoch;
+            }
+            if (g_observedUnitBindingsContextId != contextId || g_observedUnitBindingsMaxUnit != maxTouchedUnit ||
+                !UnitBindingsUnchanged(maxTouchedUnit, g_observedUnitBindings)) {
+                CaptureUnitBindings(maxTouchedUnit, g_observedUnitBindings);
+                ++g_unitBindingsEpoch;
+            }
+            g_observedUnitBindingsContextId = contextId;
+            g_observedUnitBindingsMaxUnit = maxTouchedUnit;
+            g_observedUnitBindingsGeneration = bindGeneration;
+            return g_unitBindingsEpoch;
+        }
+
         // Work list behind SyncNeccessaryTextures' per-draw unit walk. WHICH textures the
         // touched units hold is a pure function of the unit bindings, so the GLContext identity
         // (a never-reused id, not the heap address a recreated context can land on again), the
-        // texture bind generation and the touched-unit high-water mark are a complete key -
+        // unit-bindings snapshot and the touched-unit high-water mark are a complete key -
         // WHAT each entry then has to do is still decided per draw by the version compares
         // inside the sync calls, which is why texture content, shape and parameter changes need
         // no key here.
@@ -854,9 +969,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
         static Vector<UnitTextureSyncEntry> g_unitTextureSyncList;
         static Bool g_unitTextureSyncListValid = false;
         static Uint64 g_unitTextureSyncListContextId = 0;
-        static Uint64 g_unitTextureSyncListBindGeneration = 0;
         static Int g_unitTextureSyncListMaxUnit = -1;
         static Uint g_unitTextureSyncListContextGeneration = 0;
+        static Uint64 g_unitTextureSyncListEpoch = 0;
+        static Uint64 g_unitTextureSyncListSamplingGeneration = 0;
 
         // Sibling memo for the draw FBO's texture attachments (see the use site in
         // SyncNeccessaryTextures for the key derivation and the borrow rules, which are the
@@ -881,12 +997,19 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
             // Units past the frontend's high-water mark have provably-empty slots.
             const Int maxTouchedUnit = MG_State::pGLContext->GetMaxTouchedTextureUnit();
-            const Uint64 bindGeneration = MG_State::pGLContext->GetTextureBindGeneration();
+            const Uint64 samplingGeneration = MG_State::pGLContext->GetSamplingResolutionGeneration();
+            const Uint64 unitBindingsEpoch = CurrentUnitBindingsEpoch(maxTouchedUnit);
+            // The epoch survives redundant re-binds; the sampling-resolution generation
+            // covers the one membership input the epoch cannot see - a default texture's
+            // image appearing or vanishing flips IsUndefinedDefaultTexture with no binding
+            // moving. Its cost is a spare rebuild whenever any texture shape or sampler
+            // parameter actually changes, which real frames do at load time, not per draw.
             if (g_unitTextureSyncListValid &&
                 g_unitTextureSyncListContextId == MG_State::pGLContext->GetTextureContextId() &&
-                g_unitTextureSyncListBindGeneration == bindGeneration &&
                 g_unitTextureSyncListMaxUnit == maxTouchedUnit &&
-                g_unitTextureSyncListContextGeneration == g_textureContextGeneration) {
+                g_unitTextureSyncListContextGeneration == g_textureContextGeneration &&
+                g_unitTextureSyncListEpoch == unitBindingsEpoch &&
+                g_unitTextureSyncListSamplingGeneration == samplingGeneration) {
                 for (const auto& entry : g_unitTextureSyncList) {
                     entry.backend->SyncTextureParamsToBackend(*entry.slot);
                     entry.backend->SyncBuiltinSamplerToBackend(*entry.slot);
@@ -908,9 +1031,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     }
                 }
                 g_unitTextureSyncListContextId = MG_State::pGLContext->GetTextureContextId();
-                g_unitTextureSyncListBindGeneration = bindGeneration;
                 g_unitTextureSyncListMaxUnit = maxTouchedUnit;
                 g_unitTextureSyncListContextGeneration = g_textureContextGeneration;
+                g_unitTextureSyncListEpoch = unitBindingsEpoch;
+                g_unitTextureSyncListSamplingGeneration = samplingGeneration;
                 g_unitTextureSyncListValid = true;
             }
 
@@ -1831,6 +1955,38 @@ namespace MobileGL::MG_Backend::DirectGLES {
         return fullyResolved;
     }
 
+    // Per-unit memo of the sampler-registry lookup, NOT of the resulting unit binding
+    // (BackendSamplerObject::Bind already dedups against g_boundSamplersCache). The registry
+    // pairs a live frontend sampler with one backend object for the frontend's whole
+    // lifetime: GetOrCreate replaces a pairing only when the frontend expired, entries are
+    // erased only when the frontend expired, and a unit's sampler cannot expire while the
+    // unit holds it - so owner-equality of the unit's current sampler against the snapshot
+    // proves the cached pointer is exactly what Find would return. A miss result is never
+    // cached: the backend object may not exist yet when the unit pass runs (the program
+    // pass creates it later in the same draw), and a cached miss would keep skipping the
+    // bind after it appears.
+    struct UnitSamplerLookupMemo {
+        WeakPtr<MG_State::GLState::SamplerObject> frontend{};
+        SamplerImpl::BackendSamplerObject* backend = nullptr;
+    };
+    static Array<UnitSamplerLookupMemo, MG_State::GLState::TextureState::MAX_TEXTURE_IMAGE_UNITS>
+        g_unitSamplerLookupMemos;
+
+    static SamplerImpl::BackendSamplerObject* ResolveUnitSamplerBackend(
+        Int unit, const SharedPtr<MG_State::GLState::SamplerObject>& samplerObject) {
+        auto& memo = g_unitSamplerLookupMemos[static_cast<SizeT>(unit)];
+        if (memo.backend && OwnerEquals(memo.frontend, samplerObject)) {
+            return memo.backend;
+        }
+        auto* backendSamplerSlot = SamplerImpl::g_backendSamplerObjects.Find(samplerObject.get());
+        if (backendSamplerSlot && *backendSamplerSlot) {
+            memo.frontend = samplerObject;
+            memo.backend = backendSamplerSlot->get();
+            return memo.backend;
+        }
+        return nullptr;
+    }
+
     // Puts each touched unit's frontend sampler object on the backend unit. Deliberately
     // NOT part of the memo below: BindCurrentProgramWithResources rewrites the sampler of
     // every unit its program samples right after this runs (raw-depth-fetch substitution,
@@ -1841,9 +1997,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
         for (Int unit = 0; unit <= maxTouchedUnit; ++unit) {
             const auto& samplerObject = MG_State::pGLContext->GetTextureUnitObject(unit).GetSamplerObject();
             if (samplerObject) {
-                auto* backendSamplerSlot = SamplerImpl::g_backendSamplerObjects.Find(samplerObject.get());
-                if (backendSamplerSlot && *backendSamplerSlot) {
-                    (*backendSamplerSlot)->Bind(unit);
+                if (auto* backendSampler = ResolveUnitSamplerBackend(unit, samplerObject)) {
+                    backendSampler->Bind(unit);
                 }
             } else {
                 // Symmetric with the bind above: a sampler object left on the unit by an earlier
@@ -1862,10 +2017,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
     // ResolveAndBindUnitTextures is a pure function of:
     //   * the GLContext identity - a never-reused id, since the counters below restart at 0 in
     //     a new context and a recreated one can land on the old heap address;
-    //   * its texture bind generation - glBindTexture, glBindTextureUnit, glBindTextures,
-    //     glBindSampler, the delete-unbind in MarkTextureObjectForDeletion, the sampler swap in
-    //     TextureUnit::SetSamplerObject (which is how glDeleteSamplers unbinds), and a default
-    //     texture gaining or losing an image all bump it;
+    //   * the per-unit bindings - which texture object every slot holds and which sampler
+    //     object each unit carries, keyed as TextureImpl::CurrentUnitBindingsEpoch rather
+    //     than as the texture bind generation: the generation also bumps on redundant
+    //     re-binds (26.2 re-binds the unit's own sampler around every texture-unit switch),
+    //     which would force a full re-resolution per draw for an answer that cannot have
+    //     moved. The one input the old generation key covered that the epoch does not - a
+    //     default texture gaining or losing an image with no bind moving - bumps the
+    //     sampling-resolution generation below (SetInternalFormat -> BumpShapeVersion);
     //   * the touched-unit high-water mark (units above it have provably-empty slots);
     //   * the program that arbitrates two real textures aliased onto one native target -
     //     identity, plus the lifetime id because a freed program can be replaced at the same
@@ -1890,7 +2049,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         Bool valid = false;
         Uint64 glContextId = 0;
         Int maxTouchedUnit = -1;
-        Uint64 bindGeneration = 0;
+        Uint64 unitBindingsEpoch = 0;
         Uint64 samplingResolutionGeneration = 0;
         const void* program = nullptr;
         Uint64 programLifetimeId = 0;
@@ -1919,9 +2078,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
         auto& memo = g_resolvedTextureBindingMemo;
         const SizeT shadowBytes =
             static_cast<SizeT>(maxTouchedUnit + 1) * sizeof(TextureImpl::g_boundTexturesCache[0]);
+        const Uint64 unitBindingsEpoch = TextureImpl::CurrentUnitBindingsEpoch(maxTouchedUnit);
         const Bool keysMatch = memo.valid && memo.glContextId == MG_State::pGLContext->GetTextureContextId() &&
                                memo.maxTouchedUnit == maxTouchedUnit &&
-                               memo.bindGeneration == MG_State::pGLContext->GetTextureBindGeneration() &&
+                               memo.unitBindingsEpoch == unitBindingsEpoch &&
                                memo.samplingResolutionGeneration ==
                                    MG_State::pGLContext->GetSamplingResolutionGeneration() &&
                                memo.program == static_cast<const void*>(currentProgram.get()) &&
@@ -1938,7 +2098,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             if (ResolveAndBindUnitTextures(currentProgram, maxTouchedUnit)) {
                 memo.glContextId = MG_State::pGLContext->GetTextureContextId();
                 memo.maxTouchedUnit = maxTouchedUnit;
-                memo.bindGeneration = MG_State::pGLContext->GetTextureBindGeneration();
+                memo.unitBindingsEpoch = unitBindingsEpoch;
                 memo.samplingResolutionGeneration = MG_State::pGLContext->GetSamplingResolutionGeneration();
                 memo.program = currentProgram.get();
                 memo.programLifetimeId = currentProgram ? currentProgram->GetLifetimeId() : 0;
@@ -2119,19 +2279,19 @@ namespace MobileGL::MG_Backend::DirectGLES {
                             GetRawDepthFetchSampler()->Bind(unit);
                             MGLOG_D("Using raw depth fetch sampler on unit %d.", unit);
                         } else if (samplerObject) {
-                            auto* backendSamplerSlot =
-                                SamplerImpl::g_backendSamplerObjects.Find(samplerObject.get());
-                            auto& backendObj = backendSamplerSlot
-                                                   ? *backendSamplerSlot
-                                                   : SamplerImpl::g_backendSamplerObjects.GetOrCreate(samplerObject);
-                            if (!backendObj) {
-                                backendObj = MakeShared<SamplerImpl::BackendSamplerObject>();
+                            auto* backendSampler = ResolveUnitSamplerBackend(unit, samplerObject);
+                            if (!backendSampler) {
+                                auto& backendObj = SamplerImpl::g_backendSamplerObjects.GetOrCreate(samplerObject);
+                                if (!backendObj) {
+                                    backendObj = MakeShared<SamplerImpl::BackendSamplerObject>();
+                                }
+                                backendSampler = backendObj.get();
                             }
-                            backendObj->SyncToBackend(samplerObject);
+                            backendSampler->SyncToBackend(samplerObject);
                             // Syncing the object's parameters is not the same as putting it on the
                             // unit: without this the driver kept sampling with the texture's own
                             // parameters and every sampler object was inert.
-                            backendObj->Bind(unit);
+                            backendSampler->Bind(unit);
                         } else {
                             SamplerImpl::UnbindSampler(unit);
                         }
