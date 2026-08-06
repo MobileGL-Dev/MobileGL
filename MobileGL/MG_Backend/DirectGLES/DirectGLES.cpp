@@ -414,14 +414,30 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // memoed frontend pointer via the attribute SharedPtrs), the walk reduces to
             // an IsBufferDrawClean probe per distinct buffer; only dirty entries take
             // EnsureBufferResource, re-fetched through their attribute index.
+            // Pre-pass epoch read (acquire), stamped into the memo only after a pass in
+            // which EVERY probe came up clean: while the stamp still equals the current
+            // epoch, no path that can dirty any buffer has run (see the mutation-site
+            // enumeration at CurrentBufferMutationEpoch's declaration in Managers.h),
+            // so the probes themselves are skipped. A mid-pass bump lands after this
+            // read, makes the stamp stale, and re-runs the probes next draw.
+            const Uint64 bufferEpoch = CurrentBufferMutationEpoch();
             auto* memo = vaoTwin ? &vaoTwin->GetResolvedDrawBuffersMemo() : nullptr;
             const Uint32 configVersion = currentVAOObject->GetConfigVersion();
             if (memo && memo->valid && memo->configVersion == configVersion) {
-                for (Uint i = 0; i < memo->count; ++i) {
-                    auto& entry = memo->entries[i];
-                    if (IsBufferDrawClean(entry.frontend, entry.resource)) continue;
-                    // Same object the entry was built from: config version unchanged.
-                    entry.resource = EnsureBufferResource(currentVAOObject->GetAttribute(entry.attribIndex).Buffer);
+                if (memo->vboCleanEpoch != bufferEpoch) {
+                    Bool allClean = true;
+                    for (Uint i = 0; i < memo->count; ++i) {
+                        auto& entry = memo->entries[i];
+                        if (IsBufferDrawClean(entry.frontend, entry.resource)) continue;
+                        allClean = false;
+                        // Same object the entry was built from: config version unchanged.
+                        entry.resource =
+                            EnsureBufferResource(currentVAOObject->GetAttribute(entry.attribIndex).Buffer);
+                    }
+                    // Entries EnsureBufferResource repaired are not re-probed here; the
+                    // next pass's clean probes stamp them (one extra pass, never a skip
+                    // of work).
+                    memo->vboCleanEpoch = allClean ? bufferEpoch : 0;
                 }
             } else {
                 // Full walk, once per distinct buffer (an interleaved Minecraft-shaped VAO
@@ -461,6 +477,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     memo->count = syncedBufferCount;
                     memo->configVersion = configVersion;
                     memo->valid = true;
+                    // Rebuilt via EnsureBufferResource, not probed clean: the next
+                    // probe pass stamps the epoch.
+                    memo->vboCleanEpoch = 0;
                 }
             }
 
@@ -470,12 +489,22 @@ namespace MobileGL::MG_Backend::DirectGLES {
             if (includeIBO) {
                 const auto& possibleIBO = currentVAOObject->GetIndexBufferBindingSlot().GetBoundObject();
                 if (possibleIBO) {
-                    if (!memo || memo->iboFrontend != possibleIBO.get() ||
-                        !IsBufferDrawClean(memo->iboFrontend, memo->iboResource)) {
+                    // The epoch stamp alone is NOT enough here: the index slot can
+                    // rebind another buffer with no epoch (and no config-version) move,
+                    // so the identity compare always runs; only the clean PROBE is
+                    // elided while the stamp holds.
+                    if (memo && memo->iboFrontend == possibleIBO.get() && memo->iboCleanEpoch == bufferEpoch) {
+                        // probed fully clean at this epoch; nothing can have dirtied it
+                    } else if (memo && memo->iboFrontend == possibleIBO.get() &&
+                               IsBufferDrawClean(memo->iboFrontend, memo->iboResource)) {
+                        memo->iboCleanEpoch = bufferEpoch;
+                    } else {
                         auto* resource = EnsureBufferResource(possibleIBO);
                         if (memo) {
                             memo->iboFrontend = possibleIBO.get();
                             memo->iboResource = resource;
+                            // Repaired, not probed clean: stamp on the next clean probe.
+                            memo->iboCleanEpoch = 0;
                         }
                     }
                 }
@@ -611,6 +640,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
                             continue;
                         }
                         target.buffer->WritebackFromBackend({mapped, size}, target.start);
+                        // WritebackFromBackend bumps the frontend change serial with no
+                        // backend op, leaving the buffer draw-dirty behind the epoch's
+                        // back; re-open the draw-clean memos.
+                        BufferImpl::BumpBufferMutationEpoch();
                         g_GLESFuncs.glUnmapBuffer(BufferImpl::TempBufferTarget);
                     }
                 }
@@ -697,6 +730,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     }
 
                     target.buffer->WritebackFromBackend({staged.data(), rangeBytes}, target.start);
+                    // Serial bumped with no backend op (see ReadbackCapturedRanges).
+                    BufferImpl::BumpBufferMutationEpoch();
                     if (g_GLESFuncs.glBufferSubData != nullptr) {
                         BufferImpl::BindBufferId(BufferImpl::TempBufferTarget, target.backendId);
                         g_GLESFuncs.glBufferSubData(BufferImpl::TempBufferTarget,
@@ -900,11 +935,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // the shader its own current values, which MobileGL never writes -- i.e. always (0,0,0,1).
         // SyncToBackend has already issued glDisableVertexAttribArray for these locations, so the ES
         // current value is what the shader will actually read.
-        void SyncCurrentVertexAttributeValues(BackendVertexArrayObject* vaoTwin) {
+        void SyncCurrentVertexAttributeValues(BackendVertexArrayObject* vaoTwin,
+                                              const SharedPtr<MG_State::GLState::ProgramObject>& program) {
 #ifdef TRACY_ENABLE
             ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
-            const auto& program = MG_State::pGLContext->GetProgramForDraw();
             if (!program) return;
 
             const auto& vao = MG_State::pGLContext->GetBoundVertexArray();
@@ -1103,7 +1138,31 @@ namespace MobileGL::MG_Backend::DirectGLES {
         static Uint64 g_fboTextureSyncListContextId = 0;
         static Uint g_fboTextureSyncListContextGeneration = 0;
 
-        void SyncNeccessaryTextures() {
+        // The frontend texture-state keys the per-draw texture stages
+        // (SyncNeccessaryTextures, then BindCurrentTextures) both consume. Captured
+        // ONCE per draw/dispatch preparation and passed to both: nothing between the
+        // two stages can move any of these - only frontend GL entry points mutate
+        // them, and none run inside a backend preparation (the FBO/program syncs in
+        // between only read frontend state). The no-arg wrappers keep capturing at
+        // the call for every non-draw call site (Clear, readbacks).
+        struct DrawTextureSyncKeys {
+            Uint64 contextId = 0;
+            Uint64 samplingGeneration = 0;
+            Uint64 unitBindingsEpoch = 0;
+            Int maxTouchedUnit = -1;
+        };
+
+        DrawTextureSyncKeys CaptureDrawTextureSyncKeys() {
+            DrawTextureSyncKeys keys;
+            keys.contextId = MG_State::pGLContext->GetTextureContextId();
+            // Units past the frontend's high-water mark have provably-empty slots.
+            keys.maxTouchedUnit = MG_State::pGLContext->GetMaxTouchedTextureUnit();
+            keys.samplingGeneration = MG_State::pGLContext->GetSamplingResolutionGeneration();
+            keys.unitBindingsEpoch = CurrentUnitBindingsEpoch(keys.maxTouchedUnit);
+            return keys;
+        }
+
+        void SyncNeccessaryTextures(const DrawTextureSyncKeys& keys) {
 #ifdef TRACY_ENABLE
             ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
@@ -1114,22 +1173,27 @@ namespace MobileGL::MG_Backend::DirectGLES {
             //   2. textures used in current FBO
             //   3. textures bound to image units (TODO)
 
-            // Units past the frontend's high-water mark have provably-empty slots.
-            const Int maxTouchedUnit = MG_State::pGLContext->GetMaxTouchedTextureUnit();
-            const Uint64 samplingGeneration = MG_State::pGLContext->GetSamplingResolutionGeneration();
-            const Uint64 unitBindingsEpoch = CurrentUnitBindingsEpoch(maxTouchedUnit);
+            const Int maxTouchedUnit = keys.maxTouchedUnit;
+            const Uint64 samplingGeneration = keys.samplingGeneration;
+            const Uint64 unitBindingsEpoch = keys.unitBindingsEpoch;
             // The epoch survives redundant re-binds; the sampling-resolution generation
             // covers the one membership input the epoch cannot see - a default texture's
             // image appearing or vanishing flips IsUndefinedDefaultTexture with no binding
             // moving. Its cost is a spare rebuild whenever any texture shape or sampler
             // parameter actually changes, which real frames do at load time, not per draw.
             if (g_unitTextureSyncListValid &&
-                g_unitTextureSyncListContextId == MG_State::pGLContext->GetTextureContextId() &&
+                g_unitTextureSyncListContextId == keys.contextId &&
                 g_unitTextureSyncListMaxUnit == maxTouchedUnit &&
                 g_unitTextureSyncListContextGeneration == g_textureContextGeneration &&
                 g_unitTextureSyncListEpoch == unitBindingsEpoch &&
                 g_unitTextureSyncListSamplingGeneration == samplingGeneration) {
                 for (const auto& entry : g_unitTextureSyncList) {
+                    // Aggregate gate == the conjunction of the three callees' own
+                    // early-outs (see IsDrawSyncClean); skipping on true is
+                    // behavior-identical, false falls through to the calls.
+                    if (entry.backend->IsDrawSyncClean(entry.slot->get(), keys.contextId, samplingGeneration)) {
+                        continue;
+                    }
                     entry.backend->SyncTextureParamsToBackend(*entry.slot);
                     entry.backend->SyncBuiltinSamplerToBackend(*entry.slot);
                     entry.backend->SyncMipmapsToBackend(*entry.slot);
@@ -1149,7 +1213,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                         }
                     }
                 }
-                g_unitTextureSyncListContextId = MG_State::pGLContext->GetTextureContextId();
+                g_unitTextureSyncListContextId = keys.contextId;
                 g_unitTextureSyncListMaxUnit = maxTouchedUnit;
                 g_unitTextureSyncListContextGeneration = g_textureContextGeneration;
                 g_unitTextureSyncListEpoch = unitBindingsEpoch;
@@ -1178,10 +1242,15 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     g_fboTextureSyncListFbo == currentFBO.get() &&
                     g_fboTextureSyncListSlotVersion == fboSlotVersion &&
                     g_fboTextureSyncListObjectVersion == fboObjectVersion &&
-                    g_fboTextureSyncListContextId == MG_State::pGLContext->GetTextureContextId() &&
+                    g_fboTextureSyncListContextId == keys.contextId &&
                     g_fboTextureSyncListContextGeneration == g_textureContextGeneration;
                 if (fboListValid) {
                     for (const auto& entry : g_fboTextureSyncList) {
+                        // Same aggregate gate as the unit list above.
+                        if (entry.backend->IsDrawSyncClean(entry.slot->get(), keys.contextId,
+                                                           samplingGeneration)) {
+                            continue;
+                        }
                         entry.backend->SyncTextureParamsToBackend(*entry.slot);
                         entry.backend->SyncBuiltinSamplerToBackend(*entry.slot);
                         entry.backend->SyncMipmapsToBackend(*entry.slot);
@@ -1200,7 +1269,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     g_fboTextureSyncListFbo = currentFBO.get();
                     g_fboTextureSyncListSlotVersion = fboSlotVersion;
                     g_fboTextureSyncListObjectVersion = fboObjectVersion;
-                    g_fboTextureSyncListContextId = MG_State::pGLContext->GetTextureContextId();
+                    g_fboTextureSyncListContextId = keys.contextId;
                     g_fboTextureSyncListContextGeneration = g_textureContextGeneration;
                 }
             } else {
@@ -1208,6 +1277,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 g_fboTextureSyncList.clear();
             }
         }
+
+        void SyncNeccessaryTextures() { SyncNeccessaryTextures(CaptureDrawTextureSyncKeys()); }
 
         static Bool SupportsLayeredImageBinding(TextureTarget target) {
             return target == TextureTarget::Texture3D || target == TextureTarget::TextureCubeMap ||
@@ -1798,7 +1869,20 @@ namespace MobileGL::MG_Backend::DirectGLES {
         static const MG_State::GLState::ProgramObject* g_currentDrawFrontendProgram = nullptr;
         static BackendProgramObjectImpl* g_currentDrawBackendProgram = nullptr;
 
-        void SyncCurrentProgram() {
+        // Memo of the per-draw enabled-draw-buffers walk feeding g_fragColorBroadcastCount:
+        // the answer is a pure function of WHICH FBO is bound and its draw-buffer edits, so
+        // it is keyed exactly like SyncCurrentFBO's synced trio - object pointer (identity),
+        // slot version (a recycled heap address cannot re-match: every real rebind bumps
+        // it), and object version (every attachment/draw-buffer/read-buffer edit bumps it,
+        // the same documented invariant the FBO sync memo already leans on). A null FBO
+        // keys on (nullptr, slot version, 0).
+        static const MG_State::GLState::FramebufferObject* g_broadcastMemoFbo = nullptr;
+        static Uint16 g_broadcastMemoSlotVersion = 0;
+        static Uint16 g_broadcastMemoObjectVersion = 0;
+        static Bool g_broadcastMemoValid = false;
+        static Uint g_broadcastMemoCount = 1;
+
+        void SyncCurrentProgram(const SharedPtr<MG_State::GLState::ProgramObject>& currentProgram) {
 #ifdef TRACY_ENABLE
             ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
@@ -1808,7 +1892,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
             g_currentDrawFrontendProgram = nullptr;
             g_currentDrawBackendProgram = nullptr;
 
-            auto& currentProgram = MG_State::pGLContext->GetProgramForDraw();
             if (!currentProgram || !currentProgram->GetLinkStatus()) {
                 g_GLESFuncs.glUseProgram(0);
                 g_lastUsedBackendProgramId = 0;
@@ -1818,17 +1901,28 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // only runs later in PrepareForDraw: a program compiled against a stale count
             // would not be relinked until the draw after the one that needed it.
             {
-                Uint enabledDrawBuffers = 0;
-                if (const auto& drawFBO =
-                        MG_State::pGLContext->GetFramebufferBindingSlot(FramebufferTarget::Draw).GetBoundObject()) {
-                    const auto& drawBuffers = drawFBO->GetDrawBuffers();
-                    for (Uint i = 0; i < MG_State::GLState::FramebufferObject::MAX_DRAW_BUFFERS; ++i) {
-                        if (drawBuffers[i] != FramebufferAttachmentType::None) {
-                            enabledDrawBuffers = i + 1;
+                const auto& drawSlot = MG_State::pGLContext->GetFramebufferBindingSlot(FramebufferTarget::Draw);
+                const auto& drawFBO = drawSlot.GetBoundObject();
+                const Uint16 slotVersion = drawSlot.GetVersion();
+                const Uint16 objectVersion = drawFBO ? drawFBO->GetObjectVersion() : 0;
+                if (!g_broadcastMemoValid || g_broadcastMemoFbo != drawFBO.get() ||
+                    g_broadcastMemoSlotVersion != slotVersion || g_broadcastMemoObjectVersion != objectVersion) {
+                    Uint enabledDrawBuffers = 0;
+                    if (drawFBO) {
+                        const auto& drawBuffers = drawFBO->GetDrawBuffers();
+                        for (Uint i = 0; i < MG_State::GLState::FramebufferObject::MAX_DRAW_BUFFERS; ++i) {
+                            if (drawBuffers[i] != FramebufferAttachmentType::None) {
+                                enabledDrawBuffers = i + 1;
+                            }
                         }
                     }
+                    g_broadcastMemoFbo = drawFBO.get();
+                    g_broadcastMemoSlotVersion = slotVersion;
+                    g_broadcastMemoObjectVersion = objectVersion;
+                    g_broadcastMemoCount = std::max<Uint>(enabledDrawBuffers, 1);
+                    g_broadcastMemoValid = true;
                 }
-                g_fragColorBroadcastCount = std::max<Uint>(enabledDrawBuffers, 1);
+                g_fragColorBroadcastCount = g_broadcastMemoCount;
             }
 
             BackendProgramObjectImpl* twin = g_programTwinLookupMemo.Lookup(currentProgram);
@@ -1927,7 +2021,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
         FramebufferImpl::g_fboSyncedObjects[(SizeT)target] = fbo.get();
     }
 
-    static void BindCurrentProgramWithResources();
+    static void BindCurrentProgramWithResources(
+        const SharedPtr<MG_State::GLState::ProgramObject>& currentProgram);
+    static void BindCurrentTextures(const TextureImpl::DrawTextureSyncKeys& keys,
+                                    const SharedPtr<MG_State::GLState::ProgramObject>& currentProgram);
 
     void PrepareForDraw(DrawSyncBit syncBit) {
 #ifdef TRACY_ENABLE
@@ -1940,13 +2037,20 @@ namespace MobileGL::MG_Backend::DirectGLES {
         const auto& currentVAO = MG_State::pGLContext->GetBoundVertexArray();
         VertexArrayImpl::BackendVertexArrayObject* vaoTwin =
             currentVAO ? VertexArrayImpl::ResolveVaoTwin(currentVAO) : nullptr;
+        // One program resolve and one texture-key capture serve the whole draw, for
+        // the same reason the twin resolve does: only frontend GL entry points move
+        // either, and none can run inside this preparation. GetProgramForDraw is a
+        // cross-TU call with a guarded static inside - repeating it per stage showed
+        // up in draw-loop profiles.
+        const auto& currentProgram = MG_State::pGLContext->GetProgramForDraw();
+        const TextureImpl::DrawTextureSyncKeys textureKeys = TextureImpl::CaptureDrawTextureSyncKeys();
 
         BufferImpl::SyncNeccessaryBuffers(currentVAO, vaoTwin, syncBit & DrawSyncBit::IndexBuffer,
                                           syncBit & DrawSyncBit::IndirectBuffer);
         VertexArrayImpl::SyncCurrentVAO(currentVAO, vaoTwin);
-        TextureImpl::SyncNeccessaryTextures();
+        TextureImpl::SyncNeccessaryTextures(textureKeys);
         FramebufferImpl::SyncCurrentFBO();
-        PrgramImpl::SyncCurrentProgram();
+        PrgramImpl::SyncCurrentProgram(currentProgram);
         RenderStateImpl::SyncRenderState();
 
         BindCurrentFBO(FramebufferTarget::Draw);
@@ -1962,10 +2066,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
         }
 
-        VertexArrayImpl::SyncCurrentVertexAttributeValues(vaoTwin);
+        VertexArrayImpl::SyncCurrentVertexAttributeValues(vaoTwin, currentProgram);
 
-        BindCurrentTextures();
-        BindCurrentProgramWithResources();
+        BindCurrentTextures(textureKeys, currentProgram);
+        BindCurrentProgramWithResources(currentProgram);
 
         // Last: opening the capture span needs the program current and the capture
         // buffers bound, and ES rejects most binding changes once it is open.
@@ -2210,23 +2314,22 @@ namespace MobileGL::MG_Backend::DirectGLES {
     // sample whatever texture the last sync left behind (e.g. Flywheel's depth
     // pyramid downsample reading a stale unit-0 binding instead of the depth
     // attachment).
-    void BindCurrentTextures() {
+    static void BindCurrentTextures(const TextureImpl::DrawTextureSyncKeys& keys,
+                                    const SharedPtr<MG_State::GLState::ProgramObject>& currentProgram) {
 #ifdef TRACY_ENABLE
         ZoneScopedNC("BindCurrentTextures", TRACY_ZONECOLOR_BACKEND);
 #endif
-        const auto& currentProgram = MG_State::pGLContext->GetProgramForDraw();
         // Units past the frontend's high-water mark have provably-empty slots.
-        const Int maxTouchedUnit = MG_State::pGLContext->GetMaxTouchedTextureUnit();
+        const Int maxTouchedUnit = keys.maxTouchedUnit;
 
         auto& memo = g_resolvedTextureBindingMemo;
         const SizeT shadowBytes =
             static_cast<SizeT>(maxTouchedUnit + 1) * sizeof(TextureImpl::g_boundTexturesCache[0]);
-        const Uint64 unitBindingsEpoch = TextureImpl::CurrentUnitBindingsEpoch(maxTouchedUnit);
-        const Bool keysMatch = memo.valid && memo.glContextId == MG_State::pGLContext->GetTextureContextId() &&
+        const Uint64 unitBindingsEpoch = keys.unitBindingsEpoch;
+        const Bool keysMatch = memo.valid && memo.glContextId == keys.contextId &&
                                memo.maxTouchedUnit == maxTouchedUnit &&
                                memo.unitBindingsEpoch == unitBindingsEpoch &&
-                               memo.samplingResolutionGeneration ==
-                                   MG_State::pGLContext->GetSamplingResolutionGeneration() &&
+                               memo.samplingResolutionGeneration == keys.samplingGeneration &&
                                memo.program == static_cast<const void*>(currentProgram.get()) &&
                                memo.programLifetimeId == (currentProgram ? currentProgram->GetLifetimeId() : 0) &&
                                memo.programBackendStateVersion ==
@@ -2239,10 +2342,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                       shadowBytes) != 0) {
             memo.valid = false;
             if (ResolveAndBindUnitTextures(currentProgram, maxTouchedUnit)) {
-                memo.glContextId = MG_State::pGLContext->GetTextureContextId();
+                memo.glContextId = keys.contextId;
                 memo.maxTouchedUnit = maxTouchedUnit;
                 memo.unitBindingsEpoch = unitBindingsEpoch;
-                memo.samplingResolutionGeneration = MG_State::pGLContext->GetSamplingResolutionGeneration();
+                memo.samplingResolutionGeneration = keys.samplingGeneration;
                 memo.program = currentProgram.get();
                 memo.programLifetimeId = currentProgram ? currentProgram->GetLifetimeId() : 0;
                 memo.programBackendStateVersion = currentProgram ? currentProgram->GetBackendStateVersion() : 0;
@@ -2256,14 +2359,18 @@ namespace MobileGL::MG_Backend::DirectGLES {
         BindCurrentUnitSamplers(maxTouchedUnit);
     }
 
+    void BindCurrentTextures() {
+        BindCurrentTextures(TextureImpl::CaptureDrawTextureSyncKeys(), MG_State::pGLContext->GetProgramForDraw());
+    }
+
     // Binds the current program's backend object and re-establishes its per-program
     // resources: global UBO contents, uniform-block bindings, and sampler uniform
     // units (layout(binding=N) qualifiers are stripped from transpiled ESSL, so the
     // association must be rebuilt through the API). Compute dispatches depend on
     // this as much as draws do — e.g. Flywheel's cull shader reads the
     // _FlwFrameUniforms block and the _flw_depthPyramid sampler.
-    static void BindCurrentProgramWithResources() {
-        const auto& currentProgram = MG_State::pGLContext->GetProgramForDraw();
+    static void BindCurrentProgramWithResources(
+        const SharedPtr<MG_State::GLState::ProgramObject>& currentProgram) {
         if (currentProgram && currentProgram->GetLinkStatus()) {
 #ifdef TRACY_ENABLE
             ZoneScopedNC("BindCurrentProgram", TRACY_ZONECOLOR_BACKEND);
@@ -2349,6 +2456,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     // bindings are re-established (they follow frontend binding points).
                     const auto& blockBackendIndices = backendProgram.GetUniformBlockBackendIndices();
                     const auto uboCount = static_cast<Int>(blockBackendIndices.size());
+                    // Pre-loop epoch read; the per-resource drawCleanEpoch stamps below
+                    // follow the same stamp-the-pre-read-value rule as the VAO memo
+                    // (Managers.h documents the contract and the mutation-site list).
+                    const Uint64 bufferEpoch =
+                        uboCount > 0 ? BufferImpl::CurrentBufferMutationEpoch() : 0;
                     Uint lastUBOBinding = 0; // binding 0 is reserved for the global UBO
                     for (Int i = 0; i < uboCount; ++i) {
                         ++lastUBOBinding;
@@ -2363,7 +2475,18 @@ namespace MobileGL::MG_Backend::DirectGLES {
                         auto range = point.GetRange();
 
                         if (bufferObj) {
-                            auto* backendResource = BufferImpl::EnsureBufferResource(bufferObj);
+                            // Clean-probe (or epoch-stamped) fast path before the full
+                            // EnsureBufferResource: an unchanged static UBO needs no
+                            // storage work, only its binding re-established below.
+                            auto* backendResource = BufferImpl::GetBufferResource(bufferObj.get());
+                            if (!backendResource || backendResource->drawCleanEpoch != bufferEpoch) {
+                                if (backendResource &&
+                                    BufferImpl::IsBufferDrawClean(bufferObj.get(), backendResource)) {
+                                    backendResource->drawCleanEpoch = bufferEpoch;
+                                } else {
+                                    backendResource = BufferImpl::EnsureBufferResource(bufferObj);
+                                }
+                            }
                             if (backendResource && backendResource->id != 0) {
                                 // glBindBufferBase/Range set the generic GL_UNIFORM_BUFFER binding
                                 // as a side effect, so no separate BindBufferId is needed here.
@@ -2607,12 +2730,16 @@ namespace MobileGL::MG_Backend::DirectGLES {
 #ifdef TRACY_ENABLE
         ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
-        BufferImpl::SyncComputeBuffers(includeDispatchIndirectBuffer);
-        TextureImpl::SyncNeccessaryTextures();
-        TextureImpl::SyncImageTextureBindings();
-        PrgramImpl::SyncCurrentProgram();
-
+        // Single per-dispatch program resolve and texture-key capture, as in
+        // PrepareForDraw (nothing below can move either).
         const auto& currentProgram = MG_State::pGLContext->GetProgramForDraw();
+        const TextureImpl::DrawTextureSyncKeys textureKeys = TextureImpl::CaptureDrawTextureSyncKeys();
+
+        BufferImpl::SyncComputeBuffers(includeDispatchIndirectBuffer);
+        TextureImpl::SyncNeccessaryTextures(textureKeys);
+        TextureImpl::SyncImageTextureBindings();
+        PrgramImpl::SyncCurrentProgram(currentProgram);
+
         if (!currentProgram || !currentProgram->GetLinkStatus()) {
             g_GLESFuncs.glUseProgram(0);
             PrgramImpl::g_lastUsedBackendProgramId = 0;
@@ -2622,11 +2749,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // Compute shaders sample textures through the same unit bindings as draws
         // (e.g. Flywheel's depth-pyramid downsample reads the depth attachment on
         // unit 0), so re-establish unit bindings after the content syncs above.
-        BindCurrentTextures();
+        BindCurrentTextures(textureKeys, currentProgram);
         // Compute programs need the same per-program resource sync as draws:
         // uniform-block bindings and sampler units only exist through the API
         // because layout(binding) is stripped from the transpiled ESSL.
-        BindCurrentProgramWithResources();
+        BindCurrentProgramWithResources(currentProgram);
     }
 
     GLuint GetBackendProgramId(GLuint program) {
@@ -5163,6 +5290,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
                        static_cast<SizeT>(width) * sizeof(Float));
             }
         }
+        if (pixelPackBufferObject) {
+            // WritebackFromBackend bumps change serials with no backend op; re-open
+            // the buffer draw-clean memos (once for the whole row loop).
+            BufferImpl::BumpBufferMutationEpoch();
+        }
         return true;
     }
 
@@ -5283,6 +5415,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
             } else if (pixels != nullptr) {
                 Memcpy(static_cast<Uint8*>(pixels) + rowOffset, rowBuf.data(), rowBytes);
             }
+        }
+        if (pixelPackBufferObject) {
+            // Serial bumps with no backend op; re-open the buffer draw-clean memos.
+            BufferImpl::BumpBufferMutationEpoch();
         }
         return true;
     }
@@ -5798,6 +5934,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 MGLOG_D("ReadPixels: Copying data from PBO to client memory");
                 SizeT size = pixelPackBufferObject->GetSize();
                 pixelPackBufferObject->WritebackFromBackend({pboMappedPtr, size}, 0);
+                // Serial bumped with no backend op; re-open the buffer draw-clean memos.
+                BufferImpl::BumpBufferMutationEpoch();
                 MGLOG_D("ReadPixels: Unmapping PBO");
                 g_GLESFuncs.glUnmapBuffer(GL_PIXEL_PACK_BUFFER);
             } else {
@@ -6089,6 +6227,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 MGLOG_D("ReadPixels: Copying data from PBO to client memory");
                 SizeT size = pixelPackBufferObject->GetSize();
                 pixelPackBufferObject->WritebackFromBackend({pboMappedPtr, size}, 0);
+                // Serial bumped with no backend op; re-open the buffer draw-clean memos.
+                BufferImpl::BumpBufferMutationEpoch();
                 MGLOG_D("ReadPixels: Unmapping PBO");
                 g_GLESFuncs.glUnmapBuffer(GL_PIXEL_PACK_BUFFER);
             } else {
@@ -6476,6 +6616,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
         };
     }
 
+    // Defined next to the stamp globals below; every owner-id writer must reset the
+    // EGL verification stamp BEFORE publishing the new owner.
+    void InvalidateEglVerifiedStamp();
+
     Bool MakeCurrent() {
         if (!g_EGLFuncs.eglMakeCurrent || g_Display == EGL_NO_DISPLAY || g_Surface == EGL_NO_SURFACE ||
             g_Context == EGL_NO_CONTEXT) {
@@ -6487,6 +6631,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             MGLOG_E("DirectGLES::MakeCurrent failed: native eglMakeCurrent returned error 0x%04x", error);
             return false;
         }
+        InvalidateEglVerifiedStamp();
         g_backendContextOwnerThread.store(std::this_thread::get_id(), std::memory_order_release);
         // The ops table may have been unregistered when a previous ES context was
         // destroyed (e.g. a probe context); re-register now that GL is usable.
@@ -6506,6 +6651,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
     Bool ReleaseCurrent() {
         if (!g_EGLFuncs.eglMakeCurrent || g_Display == EGL_NO_DISPLAY) {
+            InvalidateEglVerifiedStamp();
             g_backendContextOwnerThread.store(std::thread::id{}, std::memory_order_release);
             return true;
         }
@@ -6517,18 +6663,35 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // Clearing the global owner works from ANY thread (a release request can
         // legally arrive on a thread other than the current owner); erring towards
         // "not current" only defers buffer ops, which is always safe.
+        InvalidateEglVerifiedStamp();
         g_backendContextOwnerThread.store(std::thread::id{}, std::memory_order_release);
         return true;
     }
 
     namespace {
-        // EGL ground-truth verification stamp, per thread. glvnd's
-        // eglGetCurrentContext performs fork detection with a real getpid()
-        // syscall on every call, and this predicate sits 2-3 deep in every
-        // draw - measured at 16% of the render thread on a live workload.
-        thread_local Uint64 t_eglVerifiedFrameSerial = ~0ull;
-        thread_local Uint t_eglVerifiedContextGeneration = 0;
+        // EGL ground-truth verification stamp. glvnd's eglGetCurrentContext performs
+        // fork detection with a real getpid() syscall on every call, and this
+        // predicate sits 2-3 deep in every draw - measured at 16% of the render
+        // thread on a live workload. NOT thread_local although the stamp is
+        // per-owner-thread state: a shared-library thread_local costs a
+        // __tls_get_addr call per access, which itself showed at 1.5% of the draw
+        // loop. Plain globals are equivalent because only the thread that passes the
+        // owner-identity check below can ever stamp or trust them, only one thread
+        // can be the owner at a time, and the ONLY writers of the owner id -
+        // MakeCurrent/ReleaseCurrent - reset the stamps before publishing a new
+        // owner, so a stamp can never leak across an ownership change. Atomics
+        // (relaxed) because the resets may come from a non-owner thread; the
+        // owner-id release/acquire pairing orders them.
+        std::atomic<Uint64> g_eglVerifiedFrameSerial{~0ull};
+        std::atomic<Uint> g_eglVerifiedContextGeneration{0};
     } // namespace
+
+    void InvalidateEglVerifiedStamp() {
+        // ~0 frame serial matches no real frame, so the next owner-thread call
+        // re-verifies against EGL itself.
+        g_eglVerifiedFrameSerial.store(~0ull, std::memory_order_relaxed);
+        g_eglVerifiedContextGeneration.store(0, std::memory_order_relaxed);
+    }
 
     Bool IsBackendContextCurrentOnThisThread() {
         if (g_Context == EGL_NO_CONTEXT) {
@@ -6540,20 +6703,20 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // Belt and braces: EGL itself is the ground truth. A migration that bypassed
         // MakeCurrent()/ReleaseCurrent() must not leave a stale ownership claim
         // standing, or GL calls would silently no-op while shadow bookkeeping (bind
-        // cache, synced serials) still advances. Re-verify once per (thread, frame,
-        // context generation) rather than per call: an external migration is caught
-        // at the next frame boundary instead of the next call, which recovers the
+        // cache, synced serials) still advances. Re-verify once per (frame, context
+        // generation) rather than per call: an external migration is caught at the
+        // next frame boundary instead of the next call, which recovers the
         // bookkeeping just the same, without paying a syscall on every draw.
         const Uint64 frameSerial = g_currentFrameSerial.load(std::memory_order_relaxed);
-        if (t_eglVerifiedFrameSerial == frameSerial &&
-            t_eglVerifiedContextGeneration == g_syncContextGeneration) {
+        if (g_eglVerifiedFrameSerial.load(std::memory_order_relaxed) == frameSerial &&
+            g_eglVerifiedContextGeneration.load(std::memory_order_relaxed) == g_syncContextGeneration) {
             return true;
         }
         if (g_EGLFuncs.eglGetCurrentContext && g_EGLFuncs.eglGetCurrentContext() != g_Context) {
             return false;
         }
-        t_eglVerifiedFrameSerial = frameSerial;
-        t_eglVerifiedContextGeneration = g_syncContextGeneration;
+        g_eglVerifiedFrameSerial.store(frameSerial, std::memory_order_relaxed);
+        g_eglVerifiedContextGeneration.store(g_syncContextGeneration, std::memory_order_relaxed);
         return true;
     }
 

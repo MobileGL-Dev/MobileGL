@@ -281,6 +281,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // an older generation hold ids from a dead context.
             Uint g_bufferContextGeneration = 1;
 
+            // Buffer-mutation epoch backing store (contract, mutation-site list and
+            // memory-ordering rules: Managers.h at the accessor declarations).
+            // Starts at 1 so the memo stamps' 0 means "never stamped". Atomic:
+            // frontend buffer ops may run on non-draw threads while the draw thread
+            // reads; the release-bump-AFTER-mutation / acquire-read-BEFORE-probes
+            // pairing makes a stamp taken against stale state impossible to consume.
+            std::atomic<Uint64> g_bufferMutationEpoch{1};
+
             // Defined next to the indexed-binding shadow below; forward-declared so
             // every glDeleteBuffers site in this namespace can scrub stale shadow
             // entries (GL resets a deleted buffer's bindings - indexed and pixel
@@ -693,24 +701,71 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 g_hasDeferredBufferReleases.store(true, std::memory_order_release);
             }
 
+            // Epoch-tracking wrappers: every op bumps the buffer-mutation epoch AFTER
+            // its impl returns (release; see Managers.h for why the order matters),
+            // covering every mutation branch inside - including the early returns
+            // that only queued pendingRanges or flagged pendingRespecify. Bumping on
+            // an op that turned out to be a no-op merely re-runs the probes once.
+            void Ops_RespecifyTracked(BufferObject& bufferObject) {
+                Ops_Respecify(bufferObject);
+                BumpBufferMutationEpoch();
+            }
+            void Ops_SubDataTracked(BufferObject& bufferObject, SizeT offset, SizeT size) {
+                Ops_SubData(bufferObject, offset, size);
+                BumpBufferMutationEpoch();
+            }
+            void Ops_FlushMappedRangeTracked(BufferObject& bufferObject, Range1D range,
+                                             Flags<BufferMappingAccessBit> appAccess) {
+                Ops_FlushMappedRange(bufferObject, range, appAccess);
+                BumpBufferMutationEpoch();
+            }
+            void Ops_OnDestroyTracked(SharedPtr<BackendBufferResource>&& resource) {
+                Ops_OnDestroy(std::move(resource));
+                BumpBufferMutationEpoch();
+            }
+            void* Ops_AcquirePersistentMapTracked(BufferObject& bufferObject) {
+                void* result = Ops_AcquirePersistentMap(bufferObject);
+                // Bump even on decline: the frontend still enters a persistent map the
+                // per-draw probes must start seeing (IsMapped-driven range pushes).
+                BumpBufferMutationEpoch();
+                return result;
+            }
+            void Ops_ReadbackFromGpuTracked(BufferObject& bufferObject) {
+                Ops_ReadbackFromGpu(bufferObject);
+                BumpBufferMutationEpoch();
+            }
+
             const BufferBackendOps g_glesBufferBackendOps = {
-                .Respecify = Ops_Respecify,
-                .SubData = Ops_SubData,
-                .FlushMappedRange = Ops_FlushMappedRange,
-                .OnDestroy = Ops_OnDestroy,
-                .AcquirePersistentMap = Ops_AcquirePersistentMap,
-                .ReadbackFromGpu = Ops_ReadbackFromGpu,
+                .Respecify = Ops_RespecifyTracked,
+                .SubData = Ops_SubDataTracked,
+                .FlushMappedRange = Ops_FlushMappedRangeTracked,
+                .OnDestroy = Ops_OnDestroyTracked,
+                .AcquirePersistentMap = Ops_AcquirePersistentMapTracked,
+                .ReadbackFromGpu = Ops_ReadbackFromGpuTracked,
             };
         } // namespace
 
+        Uint64 CurrentBufferMutationEpoch() {
+            return g_bufferMutationEpoch.load(std::memory_order_acquire);
+        }
+
+        void BumpBufferMutationEpoch() {
+            g_bufferMutationEpoch.fetch_add(1, std::memory_order_release);
+        }
+
         void RegisterBufferBackendOps() {
             MG_State::GLState::SetBufferBackendOps(&g_glesBufferBackendOps);
+            // Frontend writes issued while ops were unregistered advanced change
+            // serials with no per-op bump; re-open every draw-clean memo.
+            BumpBufferMutationEpoch();
         }
 
         void UnregisterBufferBackendOps() {
             if (MG_State::GLState::GetBufferBackendOps() == &g_glesBufferBackendOps) {
                 MG_State::GLState::SetBufferBackendOps(nullptr);
             }
+            // From here on frontend writes bypass the tracked ops entirely.
+            BumpBufferMutationEpoch();
             InvalidateArrayBufferBindingCache();
             // Pooled ids belong to the dying context too; drop them without glDeleteBuffers.
             ClearBufferPool();
@@ -721,8 +776,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
         }
 
         void OnBackendContextDestroyed() {
-            UnregisterBufferBackendOps();
+            UnregisterBufferBackendOps(); // also bumps the buffer-mutation epoch
             ++g_bufferContextGeneration;
+            // The generation moved AFTER the unregister bump above; re-open the
+            // memos again so no stamp can predate the generation change.
+            BumpBufferMutationEpoch();
             InvalidateArrayBufferBindingCache();
             InvalidateIndexedBufferBindingCache();
             InvalidatePixelBufferBindingCaches();

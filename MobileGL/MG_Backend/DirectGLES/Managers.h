@@ -120,6 +120,43 @@ namespace MobileGL::MG_Backend::DirectGLES {
     namespace BufferImpl {
         const GLenum TempBufferTarget = GL_ARRAY_BUFFER;
 
+        // --- Buffer-mutation epoch -------------------------------------------------
+        // Manager-wide monotonic counter: it moves whenever ANY buffer resource may
+        // have gone from draw-clean to dirty. Draw-path memos read it once per pass
+        // (CurrentBufferMutationEpoch, acquire), re-run their IsBufferDrawClean
+        // probes only when it moved, and stamp the PRE-pass value after a pass in
+        // which every probe came up clean - so a concurrent bump lands strictly
+        // after the stamped value and forces a re-probe on the next pass no matter
+        // how the probe interleaved with the mutation. Conservative-correct: a bump
+        // never skips work, it only re-runs the probes once.
+        //
+        // Every clean->dirty transition path bumps it (BumpBufferMutationEpoch,
+        // release, AFTER the mutation lands so an acquire reader that still sees
+        // the old epoch cannot have missed the mutation):
+        //   * the frontend BufferBackendOps table - Respecify, SubData,
+        //     FlushMappedRange, AcquirePersistentMap, ReadbackFromGpu, OnDestroy -
+        //     which every frontend change-serial bump and every pending-range
+        //     queueing reaches while ops are registered (upload, orphan/respecify,
+        //     map flush/unmap writeback, persistent-map adoption, delete/pooling);
+        //   * backend-initiated shadow writebacks that bump the frontend change
+        //     serial without an op: transform-feedback capture readback
+        //     (XfbImpl::ReadbackCapturedRanges and the scatter path) and every
+        //     pack-PBO WritebackFromBackend site (glReadPixels/glGetTexImage);
+        //   * RegisterBufferBackendOps/UnregisterBufferBackendOps - while ops are
+        //     unregistered, frontend writes advance serials silently, so both edges
+        //     of that window re-open every memo;
+        //   * OnBackendContextDestroyed - the buffer context generation moved, so
+        //     every previously clean resource is invalid.
+        // NOT bumped (cleanliness provably unchanged): MarkGpuWritten (the backend
+        // copy is authoritative; IsBufferDrawClean does not consult it),
+        // NotifyContentWrite on a GPU-resident buffer (persistent-mapped resources
+        // are clean by construction), and EnsureBufferResource itself (it only
+        // repairs toward clean). A non-persistent map (draws on it are GL errors
+        // the frontend rejects) sets IsMapped without an op; persistent maps reach
+        // AcquirePersistentMap or (FLUSH_EXPLICIT) publish only via FlushMappedRange.
+        Uint64 CurrentBufferMutationEpoch();
+        void BumpBufferMutationEpoch();
+
         // The DirectGLES storage behind one frontend buffer. Owned (refcounted) by
         // the frontend BufferObject; immediate BufferBackendOps keep it current, so
         // draw-time "sync" reduces to ensuring the storage exists.
@@ -145,6 +182,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
             Bool pendingRespecify = false;
             VecRange1D pendingRanges;
             std::mutex pendingMutex;
+            // Buffer-mutation epoch (see CurrentBufferMutationEpoch) at which this
+            // resource last probed IsBufferDrawClean == true, 0 = never (epochs start
+            // at 1). Written only on the draw thread; per-draw resource consumers
+            // (the UBO binding walk) skip the probe while their pre-pass epoch read
+            // matches, exactly like the per-VAO memo stamps.
+            Uint64 drawCleanEpoch = 0;
             // Zero-copy coherent persistent map (EXT_buffer_storage): the GL store is
             // immutable, persistently+coherently mapped, and persistentPtr is what the app
             // (and the frontend PipeResource) write into directly. While set, draw-time
@@ -290,6 +333,15 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 Array<Entry, MG_State::GLState::VertexArrayObject::MAX_VERTEX_ATTRIBS> entries;
                 MG_State::GLState::BufferObject* iboFrontend = nullptr;
                 BufferImpl::GLESBufferResource* iboResource = nullptr;
+                // Buffer-mutation epoch (BufferImpl::CurrentBufferMutationEpoch) at which
+                // the LAST probe pass found every entry / the IBO clean; 0 = not stamped
+                // (epochs start at 1). While a stamp matches the pre-pass epoch read, the
+                // probes are skipped outright: any path that can dirty ANY buffer bumps
+                // the epoch (the exhaustive site list lives at the epoch declaration).
+                // The IBO stamp is only trusted together with the bound-object identity
+                // compare - the VAO's index slot can rebind with no epoch or config move.
+                Uint64 vboCleanEpoch = 0;
+                Uint64 iboCleanEpoch = 0;
             };
             ResolvedDrawBuffers& GetResolvedDrawBuffersMemo() { return m_resolvedDrawBuffers; }
 
@@ -433,6 +485,38 @@ namespace MobileGL::MG_Backend::DirectGLES {
             void RequireImageBindableStorage();
             void Bind(GLenum target, Uint unit = TempTextureUnit);
             Uint GetBackendTextureId() const;
+
+            // Aggregate first-level clean gate for the per-draw trio
+            // SyncTextureParamsToBackend + SyncBuiltinSamplerToBackend +
+            // SyncMipmapsToBackend: EXACTLY the conjunction of their own early-outs
+            // (params version == synced params version; builtin-sampler version ==
+            // synced sampler version; and SyncMipmapsToBackend's cheap gate - stamped
+            // trio + content version + Mipmap storage). True means each of the three
+            // would provably return without work, so the caller may skip the calls;
+            // false only falls through to the three calls, whose own gates re-decide
+            // individually - this gate must never be MORE permissive than they are.
+            // `contextId`/`samplingGeneration` are the frontend context's current
+            // values, hoisted by the caller so a per-draw list walk reads them once
+            // instead of per texture. `t` must be the live frontend texture.
+            Bool IsDrawSyncClean(const MG_State::GLState::ITextureObject* t, Uint64 contextId,
+                                 Uint64 samplingGeneration) const {
+                if (!m_isInitialized || m_syncedShapeContextId == 0 || m_syncedShapeContextId != contextId ||
+                    m_syncedShapeGeneration != samplingGeneration) {
+                    return false;
+                }
+                const Uint16 paramsVersion = t->GetTextureParamsVersion();
+                if (m_syncedShapeParamsVersion != paramsVersion || m_syncedTextureParamsVersion != paramsVersion) {
+                    return false;
+                }
+                if (m_syncedContentVersion == 0 || m_syncedContentVersion != t->GetContentVersion()) {
+                    return false;
+                }
+                const auto& samplerObject = t->GetSamplerObject();
+                if (!samplerObject || m_syncedSamplerVersion != samplerObject->GetVersion()) {
+                    return false;
+                }
+                return t->GetStorageType() == TextureStorageType::Mipmap;
+            }
 
         private:
             void RecreateBackendTexture();

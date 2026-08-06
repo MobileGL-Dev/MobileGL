@@ -1107,6 +1107,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 }
             }
         }
+            if (pixelPackBufferObject) {
+                // WritebackFromBackend bumps change serials with no backend op; re-open
+                // the buffer draw-clean memos (once for the whole row loop).
+                BufferImpl::BumpBufferMutationEpoch();
+            }
             return true;
         }
     } // namespace ReadbackImpl
