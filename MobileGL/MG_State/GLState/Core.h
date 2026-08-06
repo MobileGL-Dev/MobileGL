@@ -120,6 +120,18 @@ namespace MobileGL {
                 // per-draw sampled-texture set.
                 Uint64 GetTextureBindGeneration() const { return m_textureState.GetTextureBindGeneration(); }
                 void BumpTextureBindGeneration() { m_textureState.BumpTextureBindGeneration(); }
+                // Monotonic counter bumped whenever a texture's shape or a sampler object's
+                // parameters change, i.e. whenever a bound texture's mipmap-completeness (and so
+                // whether a backend binds it at all) can have flipped without any bind moving;
+                // see TextureState::GetSamplingResolutionGeneration.
+                Uint64 GetSamplingResolutionGeneration() const {
+                    return m_textureState.GetSamplingResolutionGeneration();
+                }
+                void BumpSamplingResolutionGeneration() { m_textureState.BumpSamplingResolutionGeneration(); }
+                // Never-reused id of this context, for backend memos keyed on the two counters
+                // above: both restart at 0 in a new context, and a recreated context can land on
+                // the old heap address. See TextureState::GetContextId.
+                Uint64 GetTextureContextId() const { return m_textureState.GetContextId(); }
                 Bool ValidateTextureName(Uint index) const;
                 Bool ValidateTextureObject(Uint index) const;
                 Int GetActiveTextureUnit() const;

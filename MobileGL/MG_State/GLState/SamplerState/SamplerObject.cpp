@@ -8,6 +8,8 @@
 
 #include "SamplerObject.h"
 
+#include <MG_State/GLState/Core.h>
+
 #include <atomic>
 
 namespace MobileGL {
@@ -22,81 +24,91 @@ namespace MobileGL {
             SamplerObject::SamplerObject(Uint externalIndex)
                 : m_externalIndex(externalIndex), m_lifetimeId(AllocateLifetimeId()) {}
 
+            void SamplerObject::BumpVersion() {
+                ++m_version;
+                // Every setter early-outs on an unchanged value, so this only runs on a real
+                // parameter change. The generation is bumped for ALL parameters, not just filter
+                // ones that feed mipmap-completeness: a backend memo of the resolved per-unit
+                // bindings must never miss an invalidation, and over-invalidating on a wrap-mode
+                // write costs one re-resolve.
+                if (pGLContext) pGLContext->BumpSamplingResolutionGeneration();
+            }
+
             void SamplerObject::SetWrapS(SamplerWrapMode mode) {
                 if (mode == m_samplerParameters.wrapS) return;
 
                 m_samplerParameters.wrapS = mode;
-                ++m_version;
+                BumpVersion();
             }
 
             void SamplerObject::SetWrapT(SamplerWrapMode mode) {
                 if (mode == m_samplerParameters.wrapT) return;
 
                 m_samplerParameters.wrapT = mode;
-                ++m_version;
+                BumpVersion();
             }
 
             void SamplerObject::SetWrapR(SamplerWrapMode mode) {
                 if (mode == m_samplerParameters.wrapR) return;
 
                 m_samplerParameters.wrapR = mode;
-                ++m_version;
+                BumpVersion();
             }
 
             void SamplerObject::SetMinFilter(SamplerFilterMode mode) {
                 if (mode == m_samplerParameters.minFilter) return;
 
                 m_samplerParameters.minFilter = mode;
-                ++m_version;
+                BumpVersion();
             }
 
             void SamplerObject::SetMagFilter(SamplerFilterMode mode) {
                 if (mode == m_samplerParameters.magFilter) return;
 
                 m_samplerParameters.magFilter = mode;
-                ++m_version;
+                BumpVersion();
             }
 
             void SamplerObject::SetMipmapMode(SamplerMipmapMode mode) {
                 if (mode == m_samplerParameters.mipmapMode) return;
 
                 m_samplerParameters.mipmapMode = mode;
-                ++m_version;
+                BumpVersion();
             }
 
             void SamplerObject::SetLodRange(Float minLod, Float maxLod) {
                 if (minLod == m_samplerParameters.minLod && maxLod == m_samplerParameters.maxLod) return;
                 m_samplerParameters.minLod = minLod;
                 m_samplerParameters.maxLod = maxLod;
-                ++m_version;
+                BumpVersion();
             }
 
             void SamplerObject::SetLodBias(Float bias) {
                 if (bias == m_samplerParameters.lodBias) return;
 
                 m_samplerParameters.lodBias = bias;
-                ++m_version;
+                BumpVersion();
             }
 
             void SamplerObject::SetMaxAnisotropy(Float maxAnisotropy) {
                 if (maxAnisotropy == m_samplerParameters.maxAnisotropy) return;
 
                 m_samplerParameters.maxAnisotropy = maxAnisotropy;
-                ++m_version;
+                BumpVersion();
             }
 
             void SamplerObject::SetSamplerCompareFunc(SamplerCompareFunc func) {
                 if (func == m_samplerParameters.compareFunc) return;
 
                 m_samplerParameters.compareFunc = func;
-                ++m_version;
+                BumpVersion();
             }
 
             void SamplerObject::SetCompareMode(SamplerCompareMode mode) {
                 if (mode == m_samplerParameters.compareMode) return;
 
                 m_samplerParameters.compareMode = mode;
-                ++m_version;
+                BumpVersion();
             }
 
             SamplerWrapMode SamplerObject::GetWrapS() const {
@@ -153,7 +165,7 @@ namespace MobileGL {
                 m_samplerParameters.borderColorUI =
                     UintVec4(static_cast<Uint32>(color.x()), static_cast<Uint32>(color.y()),
                              static_cast<Uint32>(color.z()), static_cast<Uint32>(color.w()));
-                ++m_version;
+                BumpVersion();
             }
 
             void SamplerObject::SetBorderColorI(const IntVec4& color) {
@@ -166,7 +178,7 @@ namespace MobileGL {
                 m_samplerParameters.borderColor =
                     FloatVec4(static_cast<Float>(color.x()), static_cast<Float>(color.y()),
                               static_cast<Float>(color.z()), static_cast<Float>(color.w()));
-                ++m_version;
+                BumpVersion();
             }
 
             void SamplerObject::SetBorderColorUI(const UintVec4& color) {
@@ -179,7 +191,7 @@ namespace MobileGL {
                 m_samplerParameters.borderColor =
                     FloatVec4(static_cast<Float>(color.x()), static_cast<Float>(color.y()),
                               static_cast<Float>(color.z()), static_cast<Float>(color.w()));
-                ++m_version;
+                BumpVersion();
             }
 
             const FloatVec4& SamplerObject::GetBorderColor() const {

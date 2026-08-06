@@ -8,6 +8,8 @@
 
 #include "TextureUnit.h"
 
+#include <MG_State/GLState/Core.h>
+
 namespace MobileGL::MG_State::GLState {
     TextureUnit::TextureUnit() : m_sampler(nullptr) {
         for (int i = 0; i < (int)TextureTarget::TextureTargetCount; ++i) {
@@ -24,7 +26,17 @@ namespace MobileGL::MG_State::GLState {
     }
 
     void TextureUnit::SetSamplerObject(const SharedPtr<SamplerObject>& sampler) {
+        if (m_sampler == sampler) return;
+
         m_sampler = sampler;
+        // Which sampler object a unit carries is part of "what is bound at this unit": it
+        // overrides the texture's own sampler state, so it selects the filter that decides a
+        // bound texture's mipmap-completeness. glBindSampler already bumps the generation
+        // through NoteUnitTouched, but glDeleteSamplers unbinds the deleted object from every
+        // unit straight through here (GLContext::MarkSamplerObjectForDeletion) and would
+        // otherwise leave a backend memo of the resolved per-unit bindings replaying the
+        // deleted sampler.
+        if (pGLContext) pGLContext->BumpTextureBindGeneration();
     }
 
     const SharedPtr<SamplerObject>& TextureUnit::GetSamplerObject() const {

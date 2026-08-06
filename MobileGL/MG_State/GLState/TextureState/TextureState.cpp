@@ -7,6 +7,8 @@
 // End of Source File Header
 
 #include "TextureState.h"
+
+#include <atomic>
 #include "Defines.h"
 #include "TextureEnum.h"
 #include "TextureObject.h"
@@ -18,6 +20,12 @@
 #include "TextureObjectStubs.h"
 
 namespace MobileGL::MG_State::GLState {
+    static std::atomic<Uint64> s_nextTextureStateContextId = 1;
+
+    Uint64 TextureState::AllocateContextId() {
+        return s_nextTextureStateContextId.fetch_add(1, std::memory_order_relaxed);
+    }
+
     static SharedPtr<ITextureObject> MakeTextureObjectForTarget(Uint index, TextureTarget target) {
         switch (target) {
         case TextureTarget::Texture1D:
@@ -50,7 +58,7 @@ namespace MobileGL::MG_State::GLState {
         }
     }
 
-    TextureState::TextureState() : m_indexGenerator(1024, 1) {
+    TextureState::TextureState() : m_contextId(AllocateContextId()), m_indexGenerator(1024, 1) {
         // GL 3.3 core 3.8: each target owns one default texture object (name 0) per context,
         // shared across all texture units, and it is the initial binding of every unit/target
         // slot. It is created outside m_textureObjects so name-based paths (glIsTexture,

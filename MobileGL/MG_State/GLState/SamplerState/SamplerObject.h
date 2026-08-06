@@ -128,6 +128,12 @@ namespace MobileGL {
 
             private:
                 static Uint64 AllocateLifetimeId();
+                // The ONLY way m_version may move. Besides marking this object's parameters
+                // dirty for the backends it bumps the context-wide sampling-resolution
+                // generation: MIN_FILTER decides whether a lookup reads the mip chain, which
+                // decides whether a bound texture is mipmap-complete, which decides whether a
+                // backend binds it on its unit at all.
+                void BumpVersion();
 
                 const Uint m_externalIndex;
                 const Uint64 m_lifetimeId;

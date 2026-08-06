@@ -84,8 +84,33 @@ namespace MobileGL::MG_State::GLState {
         Uint64 GetTextureBindGeneration() const { return m_textureBindGeneration; }
         void BumpTextureBindGeneration() { ++m_textureBindGeneration; }
 
+        // Sibling of the bind generation for everything that changes WHICH native texture a
+        // backend ends up putting on a unit WITHOUT any binding moving. Two families feed it:
+        // a texture's SHAPE (internal format, stored level set, level range - all that
+        // mipmap-completeness is computed from) and any sampler object's parameters (MIN_FILTER
+        // decides whether the mip chain is read at all, and an incomplete-for-the-filter texture
+        // is deliberately left unbound so it samples as (0,0,0,1)). Deliberately coarse - ANY
+        // texture, ANY sampler - so that no mutation can slip past a per-unit binding memo; the
+        // setters that feed it all early-out when the value is unchanged, so the redundant
+        // glTexParameteri calls applications issue every frame do not churn it. Kept separate
+        // from the bind generation because the sampled texture SET is unaffected by these, and
+        // the Vulkan backend's set memo keys on that one.
+        Uint64 GetSamplingResolutionGeneration() const { return m_samplingResolutionGeneration; }
+        void BumpSamplingResolutionGeneration() { ++m_samplingResolutionGeneration; }
+
+        // Globally-unique, never-reused id of THIS texture state, i.e. of the context that owns
+        // it. Both generations above restart at 0 with a new context, so a backend memo keyed on
+        // them alone would accept a destroyed-and-recreated context whose counters happen to line
+        // up - and the heap address is no help, since a context freed and remade lands on it
+        // again (the unit tests do exactly that between cases).
+        Uint64 GetContextId() const { return m_contextId; }
+
     private:
+        static Uint64 AllocateContextId();
+
+        const Uint64 m_contextId;
         Uint64 m_textureBindGeneration = 0;
+        Uint64 m_samplingResolutionGeneration = 0;
         Int m_maxTouchedUnit = -1;
         Int m_activeTextureUnit = 0;
         Array<TextureUnit, MAX_TEXTURE_IMAGE_UNITS> m_textureUnits;

@@ -813,6 +813,33 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return backendObj;
         }
 
+        // Work list behind SyncNeccessaryTextures' per-draw unit walk. WHICH textures the
+        // touched units hold is a pure function of the unit bindings, so the GLContext identity
+        // (a never-reused id, not the heap address a recreated context can land on again), the
+        // texture bind generation and the touched-unit high-water mark are a complete key -
+        // WHAT each entry then has to do is still decided per draw by the version compares
+        // inside the sync calls, which is why texture content, shape and parameter changes need
+        // no key here.
+        //
+        // Entries borrow, they never own. `slot` points at the binding slot's shared_ptr, whose
+        // address is fixed for the context's lifetime (TextureState holds the unit array by
+        // value) and whose VALUE cannot change without bumping the bind generation. `backend` is
+        // the registry's object for the texture in that slot; the registry only erases an entry
+        // once the frontend texture has expired, and a frontend texture cannot expire while a
+        // slot the key covers still holds a reference to it. Holding either side by shared_ptr
+        // instead would keep dead frontend textures alive and defeat the registry's
+        // weak-reference GC.
+        struct UnitTextureSyncEntry {
+            const SharedPtr<MG_State::GLState::ITextureObject>* slot = nullptr;
+            BackendTextureObject* backend = nullptr;
+        };
+        static Vector<UnitTextureSyncEntry> g_unitTextureSyncList;
+        static Bool g_unitTextureSyncListValid = false;
+        static Uint64 g_unitTextureSyncListContextId = 0;
+        static Uint64 g_unitTextureSyncListBindGeneration = 0;
+        static Int g_unitTextureSyncListMaxUnit = -1;
+        static Uint g_unitTextureSyncListContextGeneration = 0;
+
         void SyncNeccessaryTextures() {
 #ifdef TRACY_ENABLE
             ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
@@ -826,16 +853,37 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
             // Units past the frontend's high-water mark have provably-empty slots.
             const Int maxTouchedUnit = MG_State::pGLContext->GetMaxTouchedTextureUnit();
-            for (Int index = 0; index <= maxTouchedUnit; ++index) {
-                auto& unit = MG_State::pGLContext->GetTextureUnitObject(index);
-                for (const auto& bindingSlot : unit.GetAllBindingSlots()) {
-                    auto& textureObject = bindingSlot.GetBoundObject();
-                    // An image-less default texture (name 0) is the slot's initial / "unbound"
-                    // state; it has nothing to sync, so skip it as cheaply as the old null slot.
-                    if (textureObject && !MG_State::GLState::IsUndefinedDefaultTexture(textureObject.get())) {
-                        SyncTextureObjectToBackend(textureObject);
+            const Uint64 bindGeneration = MG_State::pGLContext->GetTextureBindGeneration();
+            if (g_unitTextureSyncListValid &&
+                g_unitTextureSyncListContextId == MG_State::pGLContext->GetTextureContextId() &&
+                g_unitTextureSyncListBindGeneration == bindGeneration &&
+                g_unitTextureSyncListMaxUnit == maxTouchedUnit &&
+                g_unitTextureSyncListContextGeneration == g_textureContextGeneration) {
+                for (const auto& entry : g_unitTextureSyncList) {
+                    entry.backend->SyncTextureParamsToBackend(*entry.slot);
+                    entry.backend->SyncBuiltinSamplerToBackend(*entry.slot);
+                    entry.backend->SyncMipmapsToBackend(*entry.slot);
+                }
+            } else {
+                g_unitTextureSyncListValid = false;
+                g_unitTextureSyncList.clear();
+                for (Int index = 0; index <= maxTouchedUnit; ++index) {
+                    auto& unit = MG_State::pGLContext->GetTextureUnitObject(index);
+                    for (const auto& bindingSlot : unit.GetAllBindingSlots()) {
+                        auto& textureObject = bindingSlot.GetBoundObject();
+                        // An image-less default texture (name 0) is the slot's initial / "unbound"
+                        // state; it has nothing to sync, so skip it as cheaply as the old null slot.
+                        if (textureObject && !MG_State::GLState::IsUndefinedDefaultTexture(textureObject.get())) {
+                            g_unitTextureSyncList.push_back(
+                                {&textureObject, SyncTextureObjectToBackend(textureObject).get()});
+                        }
                     }
                 }
+                g_unitTextureSyncListContextId = MG_State::pGLContext->GetTextureContextId();
+                g_unitTextureSyncListBindGeneration = bindGeneration;
+                g_unitTextureSyncListMaxUnit = maxTouchedUnit;
+                g_unitTextureSyncListContextGeneration = g_textureContextGeneration;
+                g_unitTextureSyncListValid = true;
             }
 
             const auto& currentFBO =
@@ -1532,21 +1580,19 @@ namespace MobileGL::MG_Backend::DirectGLES {
         XfbImpl::StartPendingTransformFeedback();
     }
 
-    // Rebinds every frontend texture unit's textures (and sampler objects) on the
-    // backend context. Needed before draws AND compute dispatches: content syncs
-    // (SyncTextureObjectToBackend) bind scratch textures on the active unit as a
-    // side effect, so unit bindings must be re-established afterwards or shaders
-    // sample whatever texture the last sync left behind (e.g. Flywheel's depth
-    // pyramid downsample reading a stale unit-0 binding instead of the depth
-    // attachment).
-    void BindCurrentTextures() {
+    // Resolves every frontend texture unit's textures onto the backend context. Returns
+    // false when the resolution could not be completed from the state it read - a bound
+    // texture that has no backend object yet is skipped, and a later draw would bind it
+    // without any of the memo keys below moving - so the caller must not memoise it.
+    static Bool ResolveAndBindUnitTextures(const SharedPtr<MG_State::GLState::ProgramObject>& currentProgram,
+                                           Int maxTouchedUnit) {
 #ifdef TRACY_ENABLE
-        ZoneScopedNC("BindCurrentTextures", TRACY_ZONECOLOR_BACKEND);
+        ZoneScopedNC("ResolveAndBindUnitTextures", TRACY_ZONECOLOR_BACKEND);
 #endif
+        Bool fullyResolved = true;
         // Frontend target the current program samples at a given unit; resolves an
         // aliased native binding when two real textures compete for it (see below).
         // Only consulted on a conflict, so the ordinary unit costs nothing.
-        const auto& currentProgram = MG_State::pGLContext->GetProgramForDraw();
         const auto sampledTargetForUnit = [&currentProgram](Int unit) {
             if (!currentProgram || !currentProgram->GetLinkStatus()) {
                 return TextureTarget::Unknown;
@@ -1562,8 +1608,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return TextureTarget::Unknown;
         };
 
-        // Units past the frontend's high-water mark have provably-empty slots.
-        const Int maxTouchedUnit = MG_State::pGLContext->GetMaxTouchedTextureUnit();
         for (Int unit = 0; unit <= maxTouchedUnit; ++unit) {
             auto& textureUnit = MG_State::pGLContext->GetTextureUnitObject(unit);
             Array<Bool, (SizeT)TextureTarget::TextureTargetCount> boundBackendTargets{};
@@ -1628,7 +1672,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
                     // Bind texture object
                     const auto& backendTextureIt = TextureImpl::g_backendTextureObjects.find(textureObject.get());
-                    if (backendTextureIt == TextureImpl::g_backendTextureObjects.end()) continue;
+                    if (backendTextureIt == TextureImpl::g_backendTextureObjects.end()) {
+                        fullyResolved = false;
+                        continue;
+                    }
 
                     backendTextureIt->second->Bind(targetGL, unit);
                     boundBackendTargets[backendTargetIndex] = true;
@@ -1655,9 +1702,19 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     TextureImpl::UnbindTexture(unit, targetGL);
                 }
             }
+        }
+        return fullyResolved;
+    }
 
-            // Bind sampler object if necessary
-            const auto& samplerObject = textureUnit.GetSamplerObject();
+    // Puts each touched unit's frontend sampler object on the backend unit. Deliberately
+    // NOT part of the memo below: BindCurrentProgramWithResources rewrites the sampler of
+    // every unit its program samples right after this runs (raw-depth-fetch substitution,
+    // per-program sampler objects), so the sampler shadow this leaves behind is not what
+    // the next call would find - a memo keyed on it could never hit. The step is a pointer
+    // compare per unit in the common case, far below the resolution cost the memo removes.
+    static void BindCurrentUnitSamplers(Int maxTouchedUnit) {
+        for (Int unit = 0; unit <= maxTouchedUnit; ++unit) {
+            const auto& samplerObject = MG_State::pGLContext->GetTextureUnitObject(unit).GetSamplerObject();
             if (samplerObject) {
                 const auto& backendSamplerIt = SamplerImpl::g_backendSamplerObjects.find(samplerObject.get());
                 if (backendSamplerIt != SamplerImpl::g_backendSamplerObjects.end()) {
@@ -1670,6 +1727,105 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 SamplerImpl::UnbindSampler(unit);
             }
         }
+    }
+
+    // Memo of the resolved per-unit TEXTURE bindings, so a steady-state draw loop stops
+    // re-deriving an answer nothing has invalidated (a Minecraft frame issues thousands of
+    // draws that touch none of the inputs below, and the resolution walks every binding slot
+    // of every touched unit three times).
+    //
+    // ResolveAndBindUnitTextures is a pure function of:
+    //   * the GLContext identity - a never-reused id, since the counters below restart at 0 in
+    //     a new context and a recreated one can land on the old heap address;
+    //   * its texture bind generation - glBindTexture, glBindTextureUnit, glBindTextures,
+    //     glBindSampler, the delete-unbind in MarkTextureObjectForDeletion, the sampler swap in
+    //     TextureUnit::SetSamplerObject (which is how glDeleteSamplers unbinds), and a default
+    //     texture gaining or losing an image all bump it;
+    //   * the touched-unit high-water mark (units above it have provably-empty slots);
+    //   * the program that arbitrates two real textures aliased onto one native target -
+    //     identity, plus the lifetime id because a freed program can be replaced at the same
+    //     address, plus the backend-state version which moves on every relink and on every
+    //     sampler-uniform unit assignment, plus the link status;
+    //   * the sampling-resolution generation - any texture shape change or any sampler
+    //     parameter change, i.e. everything mipmap-completeness is computed from, and
+    //     completeness is what decides whether a texture is bound at all;
+    //   * the ES context generation, because the backend texture ids and the driver's own
+    //     binding state die with the context.
+    //
+    // A matching key only says the ANSWER is unchanged; replaying it as "do nothing" also
+    // requires the bindings it established to still be on the driver. Rather than enumerate
+    // every writer, the memo keeps the binding shadow it left and compares it: that shadow is
+    // already the authority every redundant-bind filter in this backend trusts, and every path
+    // that puts a texture on a unit behind this function's back maintains it - the upload
+    // path's scratch bind on the temp unit (BackendTextureObject::Bind out of
+    // SyncMipmapsToBackend), CopyTexSubImage2D and GenerateMipmap binding on the active unit,
+    // the glBindTextures fast path, and the self-scrub a BackendTextureObject performs when it
+    // is destroyed or respecified.
+    struct ResolvedTextureBindingMemo {
+        Bool valid = false;
+        Uint64 glContextId = 0;
+        Int maxTouchedUnit = -1;
+        Uint64 bindGeneration = 0;
+        Uint64 samplingResolutionGeneration = 0;
+        const void* program = nullptr;
+        Uint64 programLifetimeId = 0;
+        Uint32 programBackendStateVersion = 0;
+        Bool programLinked = false;
+        Uint contextGeneration = 0;
+        decltype(TextureImpl::g_boundTexturesCache) boundTextures{};
+    };
+    static ResolvedTextureBindingMemo g_resolvedTextureBindingMemo;
+
+    // Rebinds every frontend texture unit's textures (and sampler objects) on the
+    // backend context. Needed before draws AND compute dispatches: content syncs
+    // (SyncTextureObjectToBackend) bind scratch textures on the active unit as a
+    // side effect, so unit bindings must be re-established afterwards or shaders
+    // sample whatever texture the last sync left behind (e.g. Flywheel's depth
+    // pyramid downsample reading a stale unit-0 binding instead of the depth
+    // attachment).
+    void BindCurrentTextures() {
+#ifdef TRACY_ENABLE
+        ZoneScopedNC("BindCurrentTextures", TRACY_ZONECOLOR_BACKEND);
+#endif
+        const auto& currentProgram = MG_State::pGLContext->GetProgramForDraw();
+        // Units past the frontend's high-water mark have provably-empty slots.
+        const Int maxTouchedUnit = MG_State::pGLContext->GetMaxTouchedTextureUnit();
+
+        auto& memo = g_resolvedTextureBindingMemo;
+        const SizeT shadowBytes =
+            static_cast<SizeT>(maxTouchedUnit + 1) * sizeof(TextureImpl::g_boundTexturesCache[0]);
+        const Bool keysMatch = memo.valid && memo.glContextId == MG_State::pGLContext->GetTextureContextId() &&
+                               memo.maxTouchedUnit == maxTouchedUnit &&
+                               memo.bindGeneration == MG_State::pGLContext->GetTextureBindGeneration() &&
+                               memo.samplingResolutionGeneration ==
+                                   MG_State::pGLContext->GetSamplingResolutionGeneration() &&
+                               memo.program == static_cast<const void*>(currentProgram.get()) &&
+                               memo.programLifetimeId == (currentProgram ? currentProgram->GetLifetimeId() : 0) &&
+                               memo.programBackendStateVersion ==
+                                   (currentProgram ? currentProgram->GetBackendStateVersion() : 0) &&
+                               memo.programLinked == (currentProgram && currentProgram->GetLinkStatus()) &&
+                               memo.contextGeneration == TextureImpl::g_textureContextGeneration;
+        // Short-circuited: the shadow compare is only meaningful once the key (and with it the
+        // snapshotted row count) matches.
+        if (!keysMatch || std::memcmp(memo.boundTextures.data(), TextureImpl::g_boundTexturesCache.data(),
+                                      shadowBytes) != 0) {
+            memo.valid = false;
+            if (ResolveAndBindUnitTextures(currentProgram, maxTouchedUnit)) {
+                memo.glContextId = MG_State::pGLContext->GetTextureContextId();
+                memo.maxTouchedUnit = maxTouchedUnit;
+                memo.bindGeneration = MG_State::pGLContext->GetTextureBindGeneration();
+                memo.samplingResolutionGeneration = MG_State::pGLContext->GetSamplingResolutionGeneration();
+                memo.program = currentProgram.get();
+                memo.programLifetimeId = currentProgram ? currentProgram->GetLifetimeId() : 0;
+                memo.programBackendStateVersion = currentProgram ? currentProgram->GetBackendStateVersion() : 0;
+                memo.programLinked = currentProgram && currentProgram->GetLinkStatus();
+                memo.contextGeneration = TextureImpl::g_textureContextGeneration;
+                std::memcpy(memo.boundTextures.data(), TextureImpl::g_boundTexturesCache.data(), shadowBytes);
+                memo.valid = true;
+            }
+        }
+
+        BindCurrentUnitSamplers(maxTouchedUnit);
     }
 
     // Binds the current program's backend object and re-establishes its per-program

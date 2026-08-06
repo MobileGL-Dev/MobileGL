@@ -121,6 +121,12 @@ namespace MobileGL::MG_State::GLState {
 
     protected:
         static Uint64 AllocateLifetimeId();
+        // The ONLY way m_shapeVersion may move. Besides invalidating this object's own
+        // completeness memo it bumps the context-wide sampling-resolution generation, which is
+        // what a backend memo of the resolved per-unit bindings watches: completeness decides
+        // whether a bound texture reaches its native target at all, and a shape change is
+        // otherwise invisible to such a memo (no bind moved).
+        void BumpShapeVersion();
 
         const Uint m_externalIndex;
         const Uint64 m_lifetimeId;

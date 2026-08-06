@@ -25,6 +25,18 @@ namespace MobileGL {
                 return s_nextTextureLifetimeId.fetch_add(1, std::memory_order_relaxed);
             }
 
+            void TextureObjectBase::BumpShapeVersion() {
+                ++m_shapeVersion;
+                // Shape is what mipmap-completeness is computed from, and completeness decides
+                // whether a backend binds this texture on its unit at all. Nothing else tells a
+                // backend memo of the resolved per-unit bindings that the answer moved - no bind
+                // changed and the texel content may be untouched. Proxy textures (used only to
+                // answer PROXY queries) are never bound, so their shape churn costs a memo
+                // invalidation for nothing; that is accepted rather than filtered, because a
+                // missed bump renders wrong pixels while a spare bump only costs one re-resolve.
+                if (pGLContext) pGLContext->BumpSamplingResolutionGeneration();
+            }
+
             TextureObjectBase::TextureObjectBase(TextureTarget target, Uint externalIndex)
                 : m_externalIndex(externalIndex), m_lifetimeId(AllocateLifetimeId()), m_target(target) {
                 m_sampler = MakeShared<SamplerObject>(0);
@@ -85,7 +97,7 @@ namespace MobileGL {
                 }
 
                 m_internalFormat = format;
-                ++m_shapeVersion;
+                BumpShapeVersion();
                 ++m_textureParamsVersion;
             }
 
@@ -197,7 +209,7 @@ namespace MobileGL {
                     m_levelRange.y() = m_levelRange.x();
                 }
                 ++m_textureParamsVersion;
-                ++m_shapeVersion;
+                BumpShapeVersion();
             }
 
             void TextureObjectBase::SetMaxLevel(Uint maxLevel) {
@@ -208,7 +220,7 @@ namespace MobileGL {
 
                 m_levelRange.y() = maxLevel;
                 ++m_textureParamsVersion;
-                ++m_shapeVersion;
+                BumpShapeVersion();
             }
 
             Bool TextureObjectBase::IsImmutable() const {
@@ -291,12 +303,12 @@ namespace MobileGL {
 
             void TextureObjectWithOneMipmap::AllocateStorage(TextureUploadTarget uploadTarget, Uint mipmapLevel,
                                                              MipmapInput input) {
-                ++m_shapeVersion;
+                BumpShapeVersion();
                 m_textureStorage.AllocateLevel(GetIndexOfTextureUploadTarget(uploadTarget), mipmapLevel, input);
             }
 
             void TextureObjectWithOneMipmap::TruncateMipmapLevels(TextureUploadTarget uploadTarget, Uint levelCount) {
-                ++m_shapeVersion;
+                BumpShapeVersion();
                 m_textureStorage.TruncateToLevelCount(GetIndexOfTextureUploadTarget(uploadTarget), levelCount);
             }
 
