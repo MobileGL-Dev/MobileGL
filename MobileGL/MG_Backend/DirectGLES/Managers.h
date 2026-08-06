@@ -27,39 +27,54 @@ namespace MobileGL::MG_Backend::DirectGLES {
         using StatePtr = SharedPtr<StateObject>;
         using StateWeakPtr = std::weak_ptr<StateObject>;
         using BackendPtr = SharedPtr<BackendObject>;
-        using BackendMap = UnorderedMap<StateObject*, BackendPtr>;
-        using StateRefMap = UnorderedMap<StateObject*, StateWeakPtr>;
+
+        // The backend twin and the weak reference that decides whether the raw key still
+        // names the state object the twin was built for. Both live in one entry: a
+        // separate liveness map answered nothing the backend probe had not already found
+        // and cost a second hash lookup on every Find, which the draw path runs ~10 times.
+        struct Entry {
+            BackendPtr backend;
+            StateWeakPtr stateRef;
+        };
+        using BackendMap = UnorderedMap<StateObject*, Entry>;
         using iterator = typename BackendMap::iterator;
         using const_iterator = typename BackendMap::const_iterator;
 
         BackendPtr& GetOrCreate(const StatePtr& stateObj) {
             MOBILEGL_ASSERT(stateObj != nullptr, "State object must not be null");
 
-            auto* key = stateObj.get();
-            auto trackedStateIt = m_stateRefs.find(key);
-            if (trackedStateIt != m_stateRefs.end() && trackedStateIt->second.expired()) {
-                EraseByKey(key);
+            auto& entry = m_entries[stateObj.get()];
+            if (entry.stateRef.expired()) {
+                // The previous owner of this address is gone and the allocator handed it
+                // to a new object: its twin describes ids the new state object never made.
+                entry.backend.reset();
             }
-            m_stateRefs[key] = stateObj;
-            return m_backendObjects[key];
+            entry.stateRef = stateObj;
+            return entry.backend;
         }
 
-        iterator find(StateObject* stateObj) {
-            if (!IsAlive(stateObj)) {
-                EraseByKey(stateObj);
-                return m_backendObjects.end();
+        // Null when no live state object owns this key. The result points into the map, so
+        // it stays valid only until the next GetOrCreate/Find/CollectGarbage on this registry.
+        BackendPtr* Find(StateObject* stateObj) {
+            const auto entryIt = m_entries.find(stateObj);
+            if (entryIt == m_entries.end()) {
+                return nullptr;
             }
-            return m_backendObjects.find(stateObj);
+            if (entryIt->second.stateRef.expired()) {
+                m_entries.erase(entryIt);
+                return nullptr;
+            }
+            return &entryIt->second.backend;
         }
 
-        const_iterator find(StateObject* stateObj) const {
-            return const_cast<StateBackendObjectRegistry*>(this)->find(stateObj);
+        const BackendPtr* Find(StateObject* stateObj) const {
+            return const_cast<StateBackendObjectRegistry*>(this)->Find(stateObj);
         }
 
-        iterator begin() { return m_backendObjects.begin(); }
-        const_iterator begin() const { return m_backendObjects.begin(); }
-        iterator end() { return m_backendObjects.end(); }
-        const_iterator end() const { return m_backendObjects.end(); }
+        iterator begin() { return m_entries.begin(); }
+        const_iterator begin() const { return m_entries.begin(); }
+        iterator end() { return m_entries.end(); }
+        const_iterator end() const { return m_entries.end(); }
 
         void CollectGarbageIfNeeded() {
             ++m_gcTick;
@@ -73,19 +88,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
         void CollectGarbageNow() { CollectGarbage(); }
 
     private:
-        bool IsAlive(StateObject* stateObj) const {
-            const auto trackedStateIt = m_stateRefs.find(stateObj);
-            if (trackedStateIt == m_stateRefs.end()) {
-                return false;
-            }
-            return !trackedStateIt->second.expired();
-        }
-
-        void EraseByKey(StateObject* stateObj) {
-            m_stateRefs.erase(stateObj);
-            m_backendObjects.erase(stateObj);
-        }
-
         void CollectGarbage() {
             if (m_isCollecting) {
                 return;
@@ -94,16 +96,15 @@ namespace MobileGL::MG_Backend::DirectGLES {
             m_isCollecting = true;
 
             Vector<StateObject*> staleKeys;
-            staleKeys.reserve(m_stateRefs.size());
-            for (const auto& [stateKey, stateWeakRef] : m_stateRefs) {
-                if (stateWeakRef.expired()) {
+            staleKeys.reserve(m_entries.size());
+            for (const auto& [stateKey, entry] : m_entries) {
+                if (entry.stateRef.expired()) {
                     staleKeys.push_back(stateKey);
                 }
             }
 
             for (auto* stateKey : staleKeys) {
-                m_stateRefs.erase(stateKey);
-                m_backendObjects.erase(stateKey);
+                m_entries.erase(stateKey);
             }
 
             m_isCollecting = false;
@@ -111,8 +112,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
     private:
         static constexpr Uint32 kGCInterval = 1024;
-        StateRefMap m_stateRefs;
-        BackendMap m_backendObjects;
+        BackendMap m_entries;
         Uint32 m_gcTick = 0;
         Bool m_isCollecting = false;
     };
@@ -484,11 +484,20 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // has to apply the clamp itself.
         Bool IsFixedPointFallbackReadAttachment();
 
-        extern Array<Uint16, SizeT(FramebufferTarget::FramebufferTargetCount)> g_fboBindVersions;
+        // What SyncCurrentFBO last pushed for each target, as a (binding, object, revision)
+        // triple; it re-syncs unless all three still match. Stamped by SyncCurrentFBO and
+        // ForceBindCurrentFBO, cleared by InvalidateFramebufferBindingCache. The three are
+        // only meaningful together - see SyncCurrentFBO.
+        //
+        // The binding slot's own version, which changes whenever a different object is bound
+        // to this target. Distinguishes a rebind from an in-place edit, and keeps the raw
+        // pointer below from matching an address the allocator recycled for a new FBO.
+        extern Array<Uint16, SizeT(FramebufferTarget::FramebufferTargetCount)> g_fboSyncedSlotVersions;
         // Tracks the bound FBO's object version (bumped on any attachment/drawbuffer change)
         // per target: re-attaching textures or changing draw buffers on an already-bound FBO
         // must re-sync it even when the binding-slot version has not moved.
         extern Array<Uint16, SizeT(FramebufferTarget::FramebufferTargetCount)> g_fboSyncedObjectVersions;
+        // Which object was synced. Raw and never dereferenced: only compared for identity.
         extern Array<MG_State::GLState::FramebufferObject*, SizeT(FramebufferTarget::FramebufferTargetCount)>
             g_fboSyncedObjects;
 

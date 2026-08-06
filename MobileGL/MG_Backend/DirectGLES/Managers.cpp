@@ -2740,6 +2740,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
         void InvalidateFramebufferBindingCache() {
             g_driverFBOBindings = {0, 0};
             g_driverFBOBindingKnown = {false, false};
+            // The per-target "already synced" memo describes work pushed into the ES context
+            // that is being left or replaced. Both callers (MakeCurrent, DestroyEGLContext)
+            // mean the context may have been reset under us, so claim nothing is synced:
+            // a null object never matches a real binding, so SyncCurrentFBO re-pushes.
+            g_fboSyncedSlotVersions = {0};
+            g_fboSyncedObjectVersions = {0};
+            g_fboSyncedObjects = {};
         }
 
         void BackendFramebufferObject::InvalidateSyncedState() {
@@ -2768,15 +2775,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
             if (attachmentObject.IsTexture()) {
                 const auto& textureObject = attachmentObject.GetTexture();
                 SharedPtr<TextureImpl::BackendTextureObject> backendTextureObject;
-                const auto& backendTextureIt = TextureImpl::g_backendTextureObjects.find(textureObject.get());
-                if (backendTextureIt == TextureImpl::g_backendTextureObjects.end()) {
-                    auto& backendTextureSlot = TextureImpl::g_backendTextureObjects.GetOrCreate(textureObject);
-                    if (!backendTextureSlot) {
-                        backendTextureSlot = MakeShared<TextureImpl::BackendTextureObject>();
-                    }
-                    backendTextureObject = backendTextureSlot;
+                if (auto* backendTextureSlot = TextureImpl::g_backendTextureObjects.Find(textureObject.get())) {
+                    backendTextureObject = *backendTextureSlot;
                 } else {
-                    backendTextureObject = backendTextureIt->second;
+                    auto& newTextureSlot = TextureImpl::g_backendTextureObjects.GetOrCreate(textureObject);
+                    if (!newTextureSlot) {
+                        newTextureSlot = MakeShared<TextureImpl::BackendTextureObject>();
+                    }
+                    backendTextureObject = newTextureSlot;
                 }
                 if (!backendTextureObject) {
                     MGLOG_E("%s: No backend texture found for FBO attachment, cannot bind texture.", __func__);
@@ -2818,18 +2824,17 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 }
             } else if (attachmentObject.IsRenderbuffer()) {
                 const auto& renderbufferObject = attachmentObject.GetRenderbuffer();
-                const auto& backendRenderbufferIt =
-                    RenderbufferImpl::g_backendRenderbufferObjects.find(renderbufferObject.get());
                 SharedPtr<RenderbufferImpl::BackendRenderbufferObject> backendRenderbufferObject;
-                if (backendRenderbufferIt == RenderbufferImpl::g_backendRenderbufferObjects.end()) {
-                    auto& backendRenderbufferSlot =
-                        RenderbufferImpl::g_backendRenderbufferObjects.GetOrCreate(renderbufferObject);
-                    if (!backendRenderbufferSlot) {
-                        backendRenderbufferSlot = MakeShared<RenderbufferImpl::BackendRenderbufferObject>();
-                    }
-                    backendRenderbufferObject = backendRenderbufferSlot;
+                if (auto* backendRenderbufferSlot =
+                        RenderbufferImpl::g_backendRenderbufferObjects.Find(renderbufferObject.get())) {
+                    backendRenderbufferObject = *backendRenderbufferSlot;
                 } else {
-                    backendRenderbufferObject = backendRenderbufferIt->second;
+                    auto& newRenderbufferSlot =
+                        RenderbufferImpl::g_backendRenderbufferObjects.GetOrCreate(renderbufferObject);
+                    if (!newRenderbufferSlot) {
+                        newRenderbufferSlot = MakeShared<RenderbufferImpl::BackendRenderbufferObject>();
+                    }
+                    backendRenderbufferObject = newRenderbufferSlot;
                 }
 
                 backendRenderbufferObject->SyncToBackend(renderbufferObject);
@@ -3189,10 +3194,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     // Verify that the backend object's name and parameters match the frontend attachment state
                     if (attachmentObject.IsTexture()) {
                         const auto& textureObject = attachmentObject.GetTexture();
-                        auto backendTextureIt = TextureImpl::g_backendTextureObjects.find(textureObject.get());
-                        MOBILEGL_ASSERT(backendTextureIt != TextureImpl::g_backendTextureObjects.end(),
+                        auto* backendTextureSlot = TextureImpl::g_backendTextureObjects.Find(textureObject.get());
+                        MOBILEGL_ASSERT(backendTextureSlot != nullptr && *backendTextureSlot != nullptr,
                                         "No backend texture found while framebuffer reports texture attachment.");
-                        GLuint backendTexId = backendTextureIt->second->GetBackendTextureId();
+                        GLuint backendTexId = (*backendTextureSlot)->GetBackendTextureId();
                         MOBILEGL_ASSERT(static_cast<GLint>(backendTexId) == objectName,
                                         "Attachment texture name mismatch between GLES (%d) and backend texture object "
                                         "(%d), frontend texture object ID=%d.",
@@ -3205,12 +3210,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                         "Attachment texture level mismatch between GLES and state object.");
                     } else if (attachmentObject.IsRenderbuffer()) {
                         const auto& renderbufferObject = attachmentObject.GetRenderbuffer();
-                        auto backendRboIt =
-                            RenderbufferImpl::g_backendRenderbufferObjects.find(renderbufferObject.get());
+                        auto* backendRboSlot =
+                            RenderbufferImpl::g_backendRenderbufferObjects.Find(renderbufferObject.get());
                         MOBILEGL_ASSERT(
-                            backendRboIt != RenderbufferImpl::g_backendRenderbufferObjects.end(),
+                            backendRboSlot != nullptr && *backendRboSlot != nullptr,
                             "No backend renderbuffer found while framebuffer reports renderbuffer attachment.");
-                        GLuint backendRboId = backendRboIt->second->GetBackendRenderbufferId();
+                        GLuint backendRboId = (*backendRboSlot)->GetBackendRenderbufferId();
                         MOBILEGL_ASSERT(static_cast<GLint>(backendRboId) == objectName,
                                         "Attachment renderbuffer name mismatch between GLES and state object.");
                     }
@@ -3236,7 +3241,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
         StateBackendObjectRegistry<MG_State::GLState::FramebufferObject, BackendFramebufferObject>
             g_backendFramebufferObjects;
-        Array<Uint16, SizeT(FramebufferTarget::FramebufferTargetCount)> g_fboBindVersions = {0};
+        Array<Uint16, SizeT(FramebufferTarget::FramebufferTargetCount)> g_fboSyncedSlotVersions = {0};
         // Tracks the bound FBO's object version (bumped on any attachment/drawbuffer change)
         // per target: re-attaching textures or changing draw buffers on an already-bound FBO
         // must re-sync it even when the binding-slot version has not moved.

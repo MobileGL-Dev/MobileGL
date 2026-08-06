@@ -343,13 +343,31 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 return;
             }
 
-            // VBO
+            // VBO. Once per distinct buffer, not once per enabled attribute: an interleaved
+            // Minecraft-shaped VAO feeds all of its attributes out of one VBO, so the
+            // per-attribute loop re-ran the whole resource check (context generation, pending
+            // ranges, change serial) 4-8 times over the same object. Repeats were pure
+            // overhead - nothing between two calls can change what the second one would do.
+            const MG_State::GLState::BufferObject*
+                syncedBuffers[MG_State::GLState::VertexArrayObject::MAX_VERTEX_ATTRIBS];
+            Uint syncedBufferCount = 0;
             for (const auto& attrib : currentVAOObject->GetAllAttributes()) {
                 if (!attrib.Enabled) continue;
-                auto& bufferObject = attrib.Buffer;
-                if (bufferObject) {
-                    CreateAndSyncBufferObject(bufferObject);
+                const auto& bufferObject = attrib.Buffer;
+                if (!bufferObject) continue;
+
+                const auto* bufferKey = bufferObject.get();
+                Bool alreadySynced = false;
+                for (Uint i = 0; i < syncedBufferCount; ++i) {
+                    if (syncedBuffers[i] == bufferKey) {
+                        alreadySynced = true;
+                        break;
+                    }
                 }
+                if (alreadySynced) continue;
+
+                syncedBuffers[syncedBufferCount++] = bufferKey;
+                CreateAndSyncBufferObject(bufferObject);
             }
 
             // IBO
@@ -734,10 +752,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 return;
             }
 
-            const auto& backendVAOIt = g_backendVertexArrayObjects.find(currentVAOObject.get());
-            Bool exist = (backendVAOIt != g_backendVertexArrayObjects.end());
-            auto& backendObj = exist ? backendVAOIt->second : g_backendVertexArrayObjects.GetOrCreate(currentVAOObject);
-            if (!exist) {
+            auto* backendVAOSlot = g_backendVertexArrayObjects.Find(currentVAOObject.get());
+            auto& backendObj =
+                backendVAOSlot ? *backendVAOSlot : g_backendVertexArrayObjects.GetOrCreate(currentVAOObject);
+            if (!backendObj) {
                 backendObj = MakeShared<VertexArrayImpl::BackendVertexArrayObject>();
             }
             backendObj->SyncToBackend(currentVAOObject);
@@ -797,10 +815,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
 #ifdef TRACY_ENABLE
             ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
-            const auto& backendTextureIt = g_backendTextureObjects.find(textureObject.get());
-            Bool exist = (backendTextureIt != g_backendTextureObjects.end());
-            auto& backendObj = exist ? backendTextureIt->second : g_backendTextureObjects.GetOrCreate(textureObject);
-            if (!exist) {
+            auto* backendTextureSlot = g_backendTextureObjects.Find(textureObject.get());
+            auto& backendObj = backendTextureSlot ? *backendTextureSlot
+                                                  : g_backendTextureObjects.GetOrCreate(textureObject);
+            if (!backendObj) {
                 backendObj = MakeShared<BackendTextureObject>();
             }
             if (imageBindableStorageRequired) {
@@ -937,6 +955,16 @@ namespace MobileGL::MG_Backend::DirectGLES {
     } // namespace TextureImpl
 
     namespace FramebufferImpl {
+        // Record that `target` now reflects this exact (binding, object, revision) triple.
+        // Every one of the three has to move together: stamping a subset leaves an early-out
+        // that either never fires or fires on state it never actually pushed.
+        static void StampSyncedFBO(FramebufferTarget target, Uint16 slotVersion, Uint16 objectVersion,
+                                   MG_State::GLState::FramebufferObject* fbo) {
+            g_fboSyncedSlotVersions[SizeT(target)] = slotVersion;
+            g_fboSyncedObjectVersions[SizeT(target)] = objectVersion;
+            g_fboSyncedObjects[SizeT(target)] = fbo;
+        }
+
         void SyncCurrentFBO() {
 #ifdef TRACY_ENABLE
             ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
@@ -953,17 +981,22 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 auto& slot = MG_State::pGLContext->GetFramebufferBindingSlot(target);
                 auto& currentFBO = slot.GetBoundObject();
 
-                // The slot version only tracks rebinds; attachment/drawbuffer edits on an
-                // already-bound FBO bump its object version and must re-sync it too (e.g.
-                // Minecraft 26.x reuses one FBO for depth-blit destinations with draw
-                // buffers NONE and for color clears with draw buffer 0 — dropping the
-                // glDrawBuffers change turns every offscreen clear into a no-op).
+                // The three memos together say "this target is already synced": which object is
+                // bound (pointer), that it is still the same binding and not a recycled address
+                // (slot version, bumped by every real rebind), and that the object has not been
+                // edited since (object version, bumped by every attachment/draw-buffer/read-buffer
+                // change). All three are stamped by every path below that leaves the target synced
+                // - including the ones that decide there is nothing to do. Leaving the slot version
+                // to ForceBindCurrentFBO alone made it a permanent mismatch for any app that never
+                // hits a blit or a DSA clear, so this early-out never fired and a Minecraft-shaped
+                // frame re-ran the whole attachment walk on all 5495 draws.
                 const Uint16 slotVersion = slot.GetVersion();
                 const Uint16 objectVersion = currentFBO ? currentFBO->GetObjectVersion() : 0;
                 auto* currentPtr = currentFBO.get();
-                if (slotVersion == g_fboBindVersions[SizeT(target)] &&
+                if (slotVersion == g_fboSyncedSlotVersions[SizeT(target)] &&
                     objectVersion == g_fboSyncedObjectVersions[SizeT(target)] &&
                     currentPtr == g_fboSyncedObjects[SizeT(target)]) {
+                    lastUpdatedFBO = currentPtr;
                     continue;
                 }
 
@@ -974,6 +1007,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
                 if (currentFBO == MG_Impl::GLImpl::FramebufferImpl::pDefaultFramebufferInfo->defaultFBO) {
                     // Default FBO, nothing to sync
+                    StampSyncedFBO(target, slotVersion, objectVersion, currentPtr);
                     continue;
                 }
 
@@ -986,26 +1020,24 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     // GL_FRAMEBUFFER — without this every glReadBuffer is a no-op and all reads hit
                     // COLOR_ATTACHMENT0).
                     if (target == FramebufferTarget::Read) {
-                        const auto& syncedFBOIt = g_backendFramebufferObjects.find(currentFBO.get());
-                        if (syncedFBOIt != g_backendFramebufferObjects.end() && syncedFBOIt->second) {
-                            syncedFBOIt->second->SyncReadBufferToBackend(currentFBO);
+                        auto* syncedFBOSlot = g_backendFramebufferObjects.Find(currentFBO.get());
+                        if (syncedFBOSlot && *syncedFBOSlot) {
+                            (*syncedFBOSlot)->SyncReadBufferToBackend(currentFBO);
                         }
                     }
-                    g_fboSyncedObjectVersions[SizeT(target)] = objectVersion;
-                    g_fboSyncedObjects[SizeT(target)] = currentPtr;
+                    StampSyncedFBO(target, slotVersion, objectVersion, currentPtr);
                     continue;
                 }
 
-                const auto& backendFBOIt = g_backendFramebufferObjects.find(currentFBO.get());
-                Bool exist = (backendFBOIt != g_backendFramebufferObjects.end());
-                auto& backendObj = exist ? backendFBOIt->second : g_backendFramebufferObjects.GetOrCreate(currentFBO);
-                if (!exist) {
+                auto* backendFBOSlot = g_backendFramebufferObjects.Find(currentFBO.get());
+                auto& backendObj =
+                    backendFBOSlot ? *backendFBOSlot : g_backendFramebufferObjects.GetOrCreate(currentFBO);
+                if (!backendObj) {
                     backendObj = MakeShared<BackendFramebufferObject>();
                 }
                 backendObj->SyncToBackend(currentFBO, target);
 
-                g_fboSyncedObjectVersions[SizeT(target)] = objectVersion;
-                g_fboSyncedObjects[SizeT(target)] = currentPtr;
+                StampSyncedFBO(target, slotVersion, objectVersion, currentPtr);
                 lastUpdatedFBO = currentFBO.get();
             }
         }
@@ -1448,10 +1480,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 g_fragColorBroadcastCount = std::max<Uint>(enabledDrawBuffers, 1);
             }
 
-            const auto& backendProgramIt = g_backendProgramObjects.find(currentProgram.get());
-            Bool exist = (backendProgramIt != g_backendProgramObjects.end());
-            auto& backendObj = exist ? backendProgramIt->second : g_backendProgramObjects.GetOrCreate(currentProgram);
-            if (!exist) {
+            auto* backendProgramSlot = g_backendProgramObjects.Find(currentProgram.get());
+            auto& backendObj =
+                backendProgramSlot ? *backendProgramSlot : g_backendProgramObjects.GetOrCreate(currentProgram);
+            if (!backendObj) {
                 backendObj = MakeShared<BackendProgramObjectImpl>();
                 backendObj->SyncToBackend(currentProgram);
             } else {
@@ -1486,9 +1518,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // which is where the cost actually is. What is left here is one registry lookup.
         const auto& currentFBO = slot.GetBoundObject();
         if (currentFBO && currentFBO != MG_Impl::GLImpl::FramebufferImpl::pDefaultFramebufferInfo->defaultFBO) {
-            const auto& backendFBOIt = FramebufferImpl::g_backendFramebufferObjects.find(currentFBO.get());
-            if (backendFBOIt != FramebufferImpl::g_backendFramebufferObjects.end()) {
-                backendFBOIt->second->Bind(target);
+            auto* backendFBOSlot = FramebufferImpl::g_backendFramebufferObjects.Find(currentFBO.get());
+            if (backendFBOSlot && *backendFBOSlot) {
+                (*backendFBOSlot)->Bind(target);
             } else {
                 MGLOG_E("No backend FBO found (maybe not synced) for current %s FBO, cannot bind FBO.",
                         (target == FramebufferTarget::Read ? "READ" : "DRAW"));
@@ -1514,10 +1546,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
         }
 
         auto& registry = FramebufferImpl::g_backendFramebufferObjects;
-        const auto& backendFBOIt = registry.find(framebuffer.get());
-        const Bool exists = backendFBOIt != registry.end();
-        auto& backendObj = exists ? backendFBOIt->second : registry.GetOrCreate(framebuffer);
-        if (!exists) {
+        auto* backendFBOSlot = registry.Find(framebuffer.get());
+        auto& backendObj = backendFBOSlot ? *backendFBOSlot : registry.GetOrCreate(framebuffer);
+        if (!backendObj) {
             backendObj = MakeShared<FramebufferImpl::BackendFramebufferObject>();
         }
         if (forceSync) {
@@ -1535,7 +1566,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         auto& slot = MG_State::pGLContext->GetFramebufferBindingSlot(target);
         const auto& fbo = slot.GetBoundObject();
         SyncAndBindFramebufferObject(fbo, target);
-        FramebufferImpl::g_fboBindVersions[(SizeT)target] = slot.GetVersion();
+        FramebufferImpl::g_fboSyncedSlotVersions[(SizeT)target] = slot.GetVersion();
         FramebufferImpl::g_fboSyncedObjectVersions[(SizeT)target] = fbo ? fbo->GetObjectVersion() : 0;
         FramebufferImpl::g_fboSyncedObjects[(SizeT)target] = fbo.get();
     }
@@ -1561,9 +1592,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
 #endif
             const auto& currentVAO = MG_State::pGLContext->GetBoundVertexArray();
             if (currentVAO) {
-                const auto& backendVAOIt = VertexArrayImpl::g_backendVertexArrayObjects.find(currentVAO.get());
-                if (backendVAOIt != VertexArrayImpl::g_backendVertexArrayObjects.end()) {
-                    backendVAOIt->second->Bind();
+                auto* backendVAOSlot = VertexArrayImpl::g_backendVertexArrayObjects.Find(currentVAO.get());
+                if (backendVAOSlot && *backendVAOSlot) {
+                    (*backendVAOSlot)->Bind();
                 }
             } else {
                 VertexArrayImpl::BindBackendVAOId(0);
@@ -1671,13 +1702,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     }
 
                     // Bind texture object
-                    const auto& backendTextureIt = TextureImpl::g_backendTextureObjects.find(textureObject.get());
-                    if (backendTextureIt == TextureImpl::g_backendTextureObjects.end()) {
+                    auto* backendTextureSlot = TextureImpl::g_backendTextureObjects.Find(textureObject.get());
+                    if (!backendTextureSlot || !*backendTextureSlot) {
                         fullyResolved = false;
                         continue;
                     }
 
-                    backendTextureIt->second->Bind(targetGL, unit);
+                    (*backendTextureSlot)->Bind(targetGL, unit);
                     boundBackendTargets[backendTargetIndex] = true;
                     claimedByFrontendTarget[backendTargetIndex] = target;
                 }
@@ -1716,9 +1747,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
         for (Int unit = 0; unit <= maxTouchedUnit; ++unit) {
             const auto& samplerObject = MG_State::pGLContext->GetTextureUnitObject(unit).GetSamplerObject();
             if (samplerObject) {
-                const auto& backendSamplerIt = SamplerImpl::g_backendSamplerObjects.find(samplerObject.get());
-                if (backendSamplerIt != SamplerImpl::g_backendSamplerObjects.end()) {
-                    backendSamplerIt->second->Bind(unit);
+                auto* backendSamplerSlot = SamplerImpl::g_backendSamplerObjects.Find(samplerObject.get());
+                if (backendSamplerSlot && *backendSamplerSlot) {
+                    (*backendSamplerSlot)->Bind(unit);
                 }
             } else {
                 // Symmetric with the bind above: a sampler object left on the unit by an earlier
@@ -1840,9 +1871,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
 #ifdef TRACY_ENABLE
             ZoneScopedNC("BindCurrentProgram", TRACY_ZONECOLOR_BACKEND);
 #endif
-            const auto& backendProgramIt = PrgramImpl::g_backendProgramObjects.find(currentProgram.get());
-            if (backendProgramIt != PrgramImpl::g_backendProgramObjects.end()) {
-                auto& backendProgram = *backendProgramIt->second;
+            auto* backendProgramSlot = PrgramImpl::g_backendProgramObjects.Find(currentProgram.get());
+            if (backendProgramSlot && *backendProgramSlot) {
+                auto& backendProgram = **backendProgramSlot;
                 backendProgram.Use();
 
                 // Global UBO: block index and binding-point assignment are cached at
@@ -1994,12 +2025,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
                             GetRawDepthFetchSampler()->Bind(unit);
                             MGLOG_D("Using raw depth fetch sampler on unit %d.", unit);
                         } else if (samplerObject) {
-                            const auto& backendSamplerIt =
-                                SamplerImpl::g_backendSamplerObjects.find(samplerObject.get());
-                            Bool exist = (backendSamplerIt != SamplerImpl::g_backendSamplerObjects.end());
-                            auto& backendObj = exist ? backendSamplerIt->second
-                                                     : SamplerImpl::g_backendSamplerObjects.GetOrCreate(samplerObject);
-                            if (!exist) {
+                            auto* backendSamplerSlot =
+                                SamplerImpl::g_backendSamplerObjects.Find(samplerObject.get());
+                            auto& backendObj = backendSamplerSlot
+                                                   ? *backendSamplerSlot
+                                                   : SamplerImpl::g_backendSamplerObjects.GetOrCreate(samplerObject);
+                            if (!backendObj) {
                                 backendObj = MakeShared<SamplerImpl::BackendSamplerObject>();
                             }
                             backendObj->SyncToBackend(samplerObject);
@@ -2025,9 +2056,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
         if (!currentProgram || !currentProgram->GetLinkStatus()) {
             return nullptr;
         }
-        const auto& backendProgramIt = PrgramImpl::g_backendProgramObjects.find(currentProgram.get());
-        if (backendProgramIt != PrgramImpl::g_backendProgramObjects.end()) {
-            return backendProgramIt->second;
+        if (auto* backendProgramSlot = PrgramImpl::g_backendProgramObjects.Find(currentProgram.get())) {
+            return *backendProgramSlot;
         }
         return nullptr;
     }
@@ -2197,11 +2227,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return 0;
         }
 
-        const auto& backendProgramIt = PrgramImpl::g_backendProgramObjects.find(programObject.get());
-        Bool exist = (backendProgramIt != PrgramImpl::g_backendProgramObjects.end());
+        auto* backendProgramSlot = PrgramImpl::g_backendProgramObjects.Find(programObject.get());
         auto& backendObj =
-            exist ? backendProgramIt->second : PrgramImpl::g_backendProgramObjects.GetOrCreate(programObject);
-        if (!exist) {
+            backendProgramSlot ? *backendProgramSlot : PrgramImpl::g_backendProgramObjects.GetOrCreate(programObject);
+        if (!backendObj) {
             backendObj = MakeShared<PrgramImpl::BackendProgramObjectImpl>();
         }
         if (!backendObj->GetBackendProgramId()) {
@@ -2361,9 +2390,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
         PrepareForDraw(syncBit);
         const auto& currentVAO = MG_State::pGLContext->GetBoundVertexArray();
         if (currentVAO) {
-            const auto& backendVAOIt = VertexArrayImpl::g_backendVertexArrayObjects.find(currentVAO.get());
-            if (backendVAOIt != VertexArrayImpl::g_backendVertexArrayObjects.end()) {
-                backendVAOIt->second->SyncClientSideAttributesForDrawArrays(currentVAO, first, count);
+            auto* backendVAOSlot = VertexArrayImpl::g_backendVertexArrayObjects.Find(currentVAO.get());
+            if (backendVAOSlot && *backendVAOSlot) {
+                (*backendVAOSlot)->SyncClientSideAttributesForDrawArrays(currentVAO, first, count);
             }
         }
         g_GLESFuncs.glDrawArrays(mode, first, count);
@@ -2390,9 +2419,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
         for (GLsizei i = 0; i < drawcount; ++i) {
             // Client-side arrays are uploaded per sub-draw range, like the single DrawArrays path.
             if (currentVAO) {
-                const auto& backendVAOIt = VertexArrayImpl::g_backendVertexArrayObjects.find(currentVAO.get());
-                if (backendVAOIt != VertexArrayImpl::g_backendVertexArrayObjects.end()) {
-                    backendVAOIt->second->SyncClientSideAttributesForDrawArrays(currentVAO, first[i], count[i]);
+                auto* backendVAOSlot = VertexArrayImpl::g_backendVertexArrayObjects.Find(currentVAO.get());
+                if (backendVAOSlot && *backendVAOSlot) {
+                    (*backendVAOSlot)->SyncClientSideAttributesForDrawArrays(currentVAO, first[i], count[i]);
                 }
             }
             g_GLESFuncs.glDrawArrays(mode, first[i], count[i]);
@@ -3401,11 +3430,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
                         MG_Util::ConvertTextureTargetToString(textureTarget).c_str());
             }
 
-            const auto& backendTextureIt = TextureImpl::g_backendTextureObjects.find(textureObject.get());
-            Bool exist = (backendTextureIt != TextureImpl::g_backendTextureObjects.end());
-            auto& backendObj =
-                exist ? backendTextureIt->second : TextureImpl::g_backendTextureObjects.GetOrCreate(textureObject);
-            if (!exist) {
+            auto* backendTextureSlot = TextureImpl::g_backendTextureObjects.Find(textureObject.get());
+            auto& backendObj = backendTextureSlot
+                                   ? *backendTextureSlot
+                                   : TextureImpl::g_backendTextureObjects.GetOrCreate(textureObject);
+            if (!backendObj) {
                 backendObj = MakeShared<TextureImpl::BackendTextureObject>();
             }
             backendObj->Bind(TextureImpl::ConvertTextureTargetToBackendGLEnum(textureTarget), unit);
@@ -3682,17 +3711,20 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 return;
             }
 
-            const auto backendTextureIt = TextureImpl::g_backendTextureObjects.find(texture.get());
-            if (backendTextureIt == TextureImpl::g_backendTextureObjects.end() || !backendTextureIt->second) {
+            auto* backendTextureSlot = TextureImpl::g_backendTextureObjects.Find(texture.get());
+            if (!backendTextureSlot || !*backendTextureSlot) {
                 return;
             }
-            const GLuint backendTextureId = backendTextureIt->second->GetBackendTextureId();
+            const GLuint backendTextureId = (*backendTextureSlot)->GetBackendTextureId();
 
             for (auto it = FramebufferImpl::g_backendFramebufferObjects.begin();
                  it != FramebufferImpl::g_backendFramebufferObjects.end(); ++it) {
                 auto* stateFBO = it->first;
-                const auto& backendFBO = it->second;
-                if (stateFBO == nullptr || !backendFBO || stateFBO->IsDefaultFramebuffer()) {
+                const auto& backendFBO = it->second.backend;
+                // An entry whose state object died is only waiting for the next collection;
+                // the key is a dangling address, so it must not be dereferenced here.
+                if (stateFBO == nullptr || !backendFBO || it->second.stateRef.expired() ||
+                    stateFBO->IsDefaultFramebuffer()) {
                     continue;
                 }
 
@@ -3977,13 +4009,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
         const auto& textureObject = MG_State::pGLContext->GetTextureUnitObject((Int)activeTextureUnit)
                                         .GetBindingSlot(MG_Util::ConvertGLEnumToTextureTarget(target))
                                         .GetBoundObject();
-        const auto& backendTextureIt = TextureImpl::g_backendTextureObjects.find(textureObject.get());
-        if (backendTextureIt == TextureImpl::g_backendTextureObjects.end()) {
+        auto* backendTextureSlot = TextureImpl::g_backendTextureObjects.Find(textureObject.get());
+        if (!backendTextureSlot || !*backendTextureSlot) {
             MGLOG_E("CopyTexSubImage2D: No backend texture found for texture %u.",
                     textureObject ? textureObject->GetExternalIndex() : 0);
             return;
         }
-        backendTextureIt->second->Bind(target, activeTextureUnit);
+        (*backendTextureSlot)->Bind(target, activeTextureUnit);
 
         auto mgInternalFormat = textureObject->GetFormat();
         GLenum format = GL_DEPTH_COMPONENT;
@@ -4019,7 +4051,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 MGLOG_D("ES error (%s:%d): %s", file, line, MG_Util::ConvertGLEnumToString(err).c_str());
             });
 
-            auto currentTex = (GLint)backendTextureIt->second->GetBackendTextureId();
+            auto currentTex = (GLint)(*backendTextureSlot)->GetBackendTextureId();
             DebugImpl::ErrorLopper::Loop([file = __FILE__, line = __LINE__](auto err) {
                 MGLOG_D("ES error (%s:%d): %s", file, line, MG_Util::ConvertGLEnumToString(err).c_str());
             });
@@ -4072,13 +4104,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
         const auto& textureObject = MG_State::pGLContext->GetTextureUnitObject(activeTextureUnit)
                                         .GetBindingSlot(MG_Util::ConvertGLEnumToTextureTarget(target))
                                         .GetBoundObject();
-        const auto& backendTextureIt = TextureImpl::g_backendTextureObjects.find(textureObject.get());
-        if (backendTextureIt == TextureImpl::g_backendTextureObjects.end()) {
+        auto* backendTextureSlot = TextureImpl::g_backendTextureObjects.Find(textureObject.get());
+        if (!backendTextureSlot || !*backendTextureSlot) {
             MGLOG_E("CopyTexSubImage2D: No backend texture found for texture %u.",
                     textureObject ? textureObject->GetExternalIndex() : 0);
             return;
         }
-        backendTextureIt->second->Bind(target, activeTextureUnit);
+        (*backendTextureSlot)->Bind(target, activeTextureUnit);
 
         DebugImpl::ErrorLopper::Loop([file = __FILE__, line = __LINE__](auto err) {
             MGLOG_D("ES error (%s:%d): %s", file, line, MG_Util::ConvertGLEnumToString(err).c_str());
@@ -4100,7 +4132,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             });
         } else {
             MGLOG_D("%s: Backend depth", __func__);
-            auto currentTex = backendTextureIt->second->GetBackendTextureId();
+            auto currentTex = (*backendTextureSlot)->GetBackendTextureId();
             DebugImpl::ErrorLopper::Loop([file = __FILE__, line = __LINE__](auto err) {
                 MGLOG_D("ES error (%s:%d): %s", file, line, MG_Util::ConvertGLEnumToString(err).c_str());
             });
@@ -5416,15 +5448,15 @@ namespace MobileGL::MG_Backend::DirectGLES {
         MGLOG_D("GetTexImage: bound texture object = %p (name=%u)", textureObject.get(),
                 textureObject ? textureObject->GetExternalIndex() : 0);
 
-        const auto& backendTextureIt = TextureImpl::g_backendTextureObjects.find(textureObject.get());
+        auto* backendTextureSlot = TextureImpl::g_backendTextureObjects.Find(textureObject.get());
 
-        if (backendTextureIt == TextureImpl::g_backendTextureObjects.end()) {
+        if (!backendTextureSlot || !*backendTextureSlot) {
             MGLOG_E("GetTexImage: No backend texture found for texture %u.",
                     textureObject ? textureObject->GetExternalIndex() : 0);
             return;
         }
 
-        GLuint backendTexId = backendTextureIt->second->GetBackendTextureId();
+        GLuint backendTexId = (*backendTextureSlot)->GetBackendTextureId();
         MGLOG_D("GetTexImage: backend texture id = %u", backendTexId);
 
         // Force pending rendering to complete before reading the texture back through the temp READ FBO.
