@@ -753,6 +753,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
         void InvalidatePackStateCache();
     } // namespace PixelStoreImpl
 
+    namespace SamplerImpl {
+        class BackendSamplerObject; // for PrgramImpl's sampler-pass memo rows below
+    }
+
     // Image uniforms take their unit from the layout(binding=N) qualifier baked into
     // the transpiled ESSL; unlike samplers they must not (and in ES cannot) be
     // assigned through glUniform1i.
@@ -799,6 +803,43 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 Float lastAssignedLodBias = 0.0f;
             };
 
+            // Memo of the whole per-draw sampler-uniform pass (glUniform1i unit
+            // assignments, lod-bias uniform, raw-depth-fetch substitution and the
+            // per-unit sampler-object binds) in BindCurrentProgramWithResources.
+            // The pass is a pure function of the keys below, and its only driver-side
+            // effect is the sampler binding of each sampled unit, so replaying it as
+            // "do nothing" additionally requires those bindings to still be on the
+            // driver - the per-entry row compare against g_boundSamplersCache (the
+            // shadow every sampler bind in this backend already routes through).
+            //
+            // Invalidation enumeration:
+            //  * sampler-uniform unit assignment (glUniform1i) and uniform-block
+            //    binding edits -> frontend backendStateVersion;
+            //  * any texture/sampler bind moving on any unit (incl. the high-water
+            //    mark moving) -> unitBindingsEpoch;
+            //  * any sampler parameter (incl. lod bias, compare mode) or texture
+            //    shape/format change -> samplingGeneration;
+            //  * another frontend context -> contextId (never-reused id);
+            //  * ES context recreation -> textureContextGeneration;
+            //  * relink / backend program rebuild -> SyncToBackend resets `valid`
+            //    (it rebuilds m_samplerUniformBindings, whose lastAssignedUnit /
+            //    lastAssignedLodBias dedup state this memo leans on);
+            //  * any other writer moving a sampled unit's sampler binding
+            //    (BindCurrentUnitSamplers on a unit-sampler change, scratch binds)
+            //    -> the row snapshot compare.
+            struct SamplerPassMemo {
+                static constexpr SizeT kMaxEntries = 16;
+                Bool valid = false;
+                Uint8 count = 0;
+                Uint64 contextId = 0;
+                Uint64 unitBindingsEpoch = 0;
+                Uint64 samplingGeneration = 0;
+                Uint32 backendStateVersion = 0;
+                Uint textureContextGeneration = 0;
+                Array<Uint8, kMaxEntries> units{};
+                Array<SamplerImpl::BackendSamplerObject*, kMaxEntries> rows{};
+            };
+
             BackendProgramObjectImpl();
             ~BackendProgramObjectImpl();
             void SyncToBackend(const SharedPtr<MG_State::GLState::ProgramObject>& stateProgramObject);
@@ -827,6 +868,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // reflected size when the transpiled block pads differently).
             Int GetGlobalUboBackendBlockSize() const { return m_globalUboBackendBlockSize; }
             BufferImpl::UboRingAllocation& GetGlobalUboRingAllocation() { return m_globalUboRingAllocation; }
+            SamplerPassMemo& GetSamplerPassMemo() { return m_samplerPassMemo; }
             // Frontend link version this backend program (and its resource caches) was
             // built from; a mismatch means every link-derived cache here is stale.
             Uint32 GetSyncedLinkVersion() const { return m_syncedLinkVersion; }
@@ -855,6 +897,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             Uint32 m_lastUploadedGlobalUboVersion = ~0u;
             BufferImpl::UboRingAllocation m_globalUboRingAllocation;
             Uint32 m_syncedLinkVersion = ~0u;
+            SamplerPassMemo m_samplerPassMemo;
         };
 
         extern Uint32 g_snormFallbackClampOutputMask;

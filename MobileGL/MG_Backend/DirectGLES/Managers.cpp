@@ -1170,13 +1170,50 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return !g_uboRing.creationFailed;
         }
 
-        Bool UboRingAllocate(SizeT size, SizeT& outOffset) {
-            if (size == 0 || !UboRingAvailable()) return false;
-            // Division-based rounding: the spec doesn't promise a power-of-two
+        namespace {
+            // Division-based rounding fallback: the spec doesn't promise a power-of-two
             // alignment. Slot offsets stay multiples of the alignment because every
             // slot size is, and wrap padding restarts at ring offset 0.
-            const SizeT alignedSize =
-                (size + g_uboRing.alignment - 1) / g_uboRing.alignment * g_uboRing.alignment;
+            inline SizeT UboRingAlignUp(SizeT size, SizeT alignment) {
+                if ((alignment & (alignment - 1)) == 0) {
+                    return (size + alignment - 1) & ~(alignment - 1);
+                }
+                return (size + alignment - 1) / alignment * alignment;
+            }
+            Bool UboRingAllocateSlow(SizeT size, SizeT& outOffset);
+        } // namespace
+
+        Bool UboRingAllocate(SizeT size, SizeT& outOffset) {
+            if (size == 0) return false;
+            // Fast path: a live ring under the current context with room before both
+            // the wrap boundary and the in-flight tail. Touches no GL and probes no
+            // frame marks - the sole caller sits behind UboRingAvailable() in the
+            // draw preparation, so the context checks have already run this draw.
+            // `tail` may be stale here (marks are only retired on Present and on the
+            // slow path); staleness is conservative - the in-flight span reads too
+            // large, the check fails, and the slow path retires marks and re-tries.
+            auto& ring = g_uboRing;
+            if (ring.id != 0 && ring.contextGeneration == g_bufferContextGeneration) {
+                const SizeT alignedSize = UboRingAlignUp(size, ring.alignment);
+                // Ring sizes are kUboRingInitialBytes (a power of two) doubled some
+                // number of times, so the offset modulo reduces to a mask.
+                static_assert((kUboRingInitialBytes & (kUboRingInitialBytes - 1)) == 0,
+                              "ring offset mask below requires power-of-two ring sizes");
+                const SizeT offset = static_cast<SizeT>(ring.head & (ring.size - 1));
+                if (offset + alignedSize <= ring.size &&
+                    ring.head + alignedSize - ring.tail <= ring.size) {
+                    ring.head += alignedSize;
+                    outOffset = offset;
+                    return true;
+                }
+            }
+            return UboRingAllocateSlow(size, outOffset);
+        }
+
+        namespace {
+        Bool UboRingAllocateSlow(SizeT size, SizeT& outOffset) {
+            if (!UboRingAvailable()) return false;
+            const SizeT alignedSize = UboRingAlignUp(size, g_uboRing.alignment);
             if (g_uboRing.id == 0 && !CreateUboRingStorage(alignedSize)) {
                 return false;
             }
@@ -1253,6 +1290,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             outOffset = offset;
             return true;
         }
+        } // namespace
 
         void* UboRingMappedPtr() { return g_uboRing.mappedPtr; }
         Uint UboRingBufferId() { return g_uboRing.id; }
@@ -3721,6 +3759,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
             MGLOG_D("Syncing program to backend. State program ID: %u, Backend ID: %u",
                     stateProgramObject->GetExternalIndex(), m_backendProgramId);
+            // Every link-derived cache below (incl. m_samplerUniformBindings and its
+            // lastAssignedUnit/lastAssignedLodBias program-state mirrors) is rebuilt;
+            // the sampler-pass memo keyed on them must not survive.
+            m_samplerPassMemo.valid = false;
             m_backendProgramUsable = true;
             m_snormFallbackClampOutputMask = g_snormFallbackClampOutputMask;
             m_unormFallbackClampOutputMask = g_unormFallbackClampOutputMask;
