@@ -60,6 +60,66 @@ namespace MobileGL::MG_Backend::DirectGLES {
         return !snapshot.owner_before(current) && !current.owner_before(snapshot);
     }
 
+    // Owner-keyed direct-mapped memo over a StateBackendObjectRegistry, for the object
+    // kinds the draw path re-Finds every draw (VAO, program). A hit replaces the
+    // registry's hash-map Find with one array index plus an owner-equality compare.
+    //
+    // Why the raw twin pointer is safe to hand back: the twin is owned by the registry
+    // entry's SharedPtr, and a LIVE state object's entry is never erased nor has its
+    // twin replaced once set — Find and CollectGarbage erase only expired entries,
+    // GetOrCreate resets the twin only when the previous owner at that address expired,
+    // and the sync paths create a twin only when the slot is null. Owner-equality of
+    // the weak snapshot with the live frontend therefore proves the memoed pointer is
+    // still that frontend's registered twin. A recycled heap address fails the
+    // owner-equality (the weak snapshot pins the predecessor's control block), and a
+    // slot collision merely falls back to the registry Find. Nothing here needs an
+    // explicit invalidation hook: registry entries survive ES-context loss (twins
+    // re-sync via their own generation gates), matching the Find they replace.
+    template <typename StateObject, typename BackendObject, SizeT kIndexBits>
+    class TwinLookupMemo {
+    public:
+        BackendObject* Lookup(const SharedPtr<StateObject>& stateObj) const {
+            const Slot& slot = m_slots[IndexFor(stateObj.get())];
+            if (slot.key == stateObj.get() && slot.twin != nullptr && OwnerEquals(slot.owner, stateObj)) {
+                return slot.twin;
+            }
+            return nullptr;
+        }
+
+        void Store(const SharedPtr<StateObject>& stateObj, BackendObject* twin) {
+            Slot& slot = m_slots[IndexFor(stateObj.get())];
+            slot.key = stateObj.get();
+            slot.owner = stateObj;
+            slot.twin = twin;
+        }
+
+    private:
+        struct Slot {
+            StateObject* key = nullptr;
+            WeakPtr<StateObject> owner;
+            BackendObject* twin = nullptr;
+        };
+
+        static SizeT IndexFor(const StateObject* ptr) {
+            // Fibonacci hashing: heap addresses share alignment zeros and arena locality;
+            // the multiply spreads them before the top bits pick the slot.
+            const Uint64 h = reinterpret_cast<std::uintptr_t>(ptr) * 0x9E3779B97F4A7C15ull;
+            return static_cast<SizeT>(h >> (64u - kIndexBits));
+        }
+
+        Array<Slot, (SizeT(1) << kIndexBits)> m_slots;
+    };
+
+    // 4096 slots (128 KiB, sparse-touched): Minecraft-shaped workloads cycle hundreds
+    // of section VAOs per frame (the driver bench cycles 512), and a colliding pair
+    // ping-pongs back onto the hash Find every frame — at 512 keys the expected
+    // collided fraction is ~12% here vs ~22% at 2048. Programs are far fewer; 256
+    // slots is plenty.
+    static TwinLookupMemo<MG_State::GLState::VertexArrayObject, VertexArrayImpl::BackendVertexArrayObject, 12>
+        g_vaoTwinLookupMemo;
+    static TwinLookupMemo<MG_State::GLState::ProgramObject, PrgramImpl::BackendProgramObjectImpl, 8>
+        g_programTwinLookupMemo;
+
     static Bool IsDualSourceBlendFactor(BlendFactor v) {
         switch (v) {
         case BlendFactor::Src1Color:
@@ -263,12 +323,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
     // TODO: deletion for deleted objects
 
     namespace BufferImpl {
-        void CreateAndSyncBufferObject(const SharedPtr<MG_State::GLState::BufferObject>& bufferObject) {
-            // Immediate BufferBackendOps keep existing storage current; this only
-            // needs to materialize the resource (and replay pending ops).
-            EnsureBufferResource(bufferObject);
-        }
-
         void SyncBufferBindingPoints(BufferTarget target, GLenum glTarget) {
 #ifdef TRACY_ENABLE
             ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
@@ -336,7 +390,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
             BindBufferId(glTarget, backendResource->id);
         }
 
-        void SyncNeccessaryBuffers(Bool includeIBO = false, Bool includeIndirectBuffer = false) {
+        void SyncNeccessaryBuffers(const SharedPtr<MG_State::GLState::VertexArrayObject>& currentVAOObject,
+                                   VertexArrayImpl::BackendVertexArrayObject* vaoTwin, Bool includeIBO = false,
+                                   Bool includeIndirectBuffer = false) {
 #ifdef TRACY_ENABLE
             ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
@@ -346,44 +402,82 @@ namespace MobileGL::MG_Backend::DirectGLES {
             //   1.VBO 2.IBO (if needed) 3.UBO 4.IndirectBuffer (if needed)
             // PBO is not needed since it should be handled in frontend
 
-            const auto& currentVAOObject = MG_State::pGLContext->GetBoundVertexArray();
             if (!currentVAOObject) {
                 MGLOG_E("No VAO is currently bound, cannot sync necessary buffers.");
                 return;
             }
 
-            // VBO. Once per distinct buffer, not once per enabled attribute: an interleaved
-            // Minecraft-shaped VAO feeds all of its attributes out of one VBO, so the
-            // per-attribute loop re-ran the whole resource check (context generation, pending
-            // ranges, change serial) 4-8 times over the same object. Repeats were pure
-            // overhead - nothing between two calls can change what the second one would do.
-            const MG_State::GLState::BufferObject*
-                syncedBuffers[MG_State::GLState::VertexArrayObject::MAX_VERTEX_ATTRIBS];
-            Uint syncedBufferCount = 0;
-            for (const auto& attrib : currentVAOObject->GetAllAttributes()) {
-                if (!attrib.Enabled) continue;
-                const auto& bufferObject = attrib.Buffer;
-                if (!bufferObject) continue;
-
-                const auto* bufferKey = bufferObject.get();
-                Bool alreadySynced = false;
-                for (Uint i = 0; i < syncedBufferCount; ++i) {
-                    if (syncedBuffers[i] == bufferKey) {
-                        alreadySynced = true;
-                        break;
-                    }
+            // VBO. The distinct-buffer set is memoed on the VAO's backend twin: cycling
+            // hundreds of section VAOs re-walked 32 cold VertexAttribute slots per draw
+            // only to rediscover the same one or two static buffers. While the config
+            // version holds (every attach/enable/disable bumps it, and it pins each
+            // memoed frontend pointer via the attribute SharedPtrs), the walk reduces to
+            // an IsBufferDrawClean probe per distinct buffer; only dirty entries take
+            // EnsureBufferResource, re-fetched through their attribute index.
+            auto* memo = vaoTwin ? &vaoTwin->GetResolvedDrawBuffersMemo() : nullptr;
+            const Uint32 configVersion = currentVAOObject->GetConfigVersion();
+            if (memo && memo->valid && memo->configVersion == configVersion) {
+                for (Uint i = 0; i < memo->count; ++i) {
+                    auto& entry = memo->entries[i];
+                    if (IsBufferDrawClean(entry.frontend, entry.resource)) continue;
+                    // Same object the entry was built from: config version unchanged.
+                    entry.resource = EnsureBufferResource(currentVAOObject->GetAttribute(entry.attribIndex).Buffer);
                 }
-                if (alreadySynced) continue;
+            } else {
+                // Full walk, once per distinct buffer (an interleaved Minecraft-shaped VAO
+                // feeds all attributes out of one VBO), rebuilding the memo as it goes.
+                // The twin can only be absent on the error path that has no VAO twin at
+                // all; the dedupe scratch keeps this branch correct even then.
+                MG_State::GLState::BufferObject*
+                    syncedBuffers[MG_State::GLState::VertexArrayObject::MAX_VERTEX_ATTRIBS];
+                Uint syncedBufferCount = 0;
+                const auto& allAttributes = currentVAOObject->GetAllAttributes();
+                for (Uint attribIndex = 0; attribIndex < allAttributes.size(); ++attribIndex) {
+                    const auto& attrib = allAttributes[attribIndex];
+                    if (!attrib.Enabled) continue;
+                    const auto& bufferObject = attrib.Buffer;
+                    if (!bufferObject) continue;
 
-                syncedBuffers[syncedBufferCount++] = bufferKey;
-                CreateAndSyncBufferObject(bufferObject);
+                    auto* const bufferKey = bufferObject.get();
+                    Bool alreadySynced = false;
+                    for (Uint i = 0; i < syncedBufferCount; ++i) {
+                        if (syncedBuffers[i] == bufferKey) {
+                            alreadySynced = true;
+                            break;
+                        }
+                    }
+                    if (alreadySynced) continue;
+
+                    auto* resource = EnsureBufferResource(bufferObject);
+                    if (memo) {
+                        auto& entry = memo->entries[syncedBufferCount];
+                        entry.frontend = bufferKey;
+                        entry.attribIndex = static_cast<Uint8>(attribIndex);
+                        entry.resource = resource;
+                    }
+                    syncedBuffers[syncedBufferCount++] = bufferKey;
+                }
+                if (memo) {
+                    memo->count = syncedBufferCount;
+                    memo->configVersion = configVersion;
+                    memo->valid = true;
+                }
             }
 
-            // IBO
+            // IBO, memoed by bound-object identity (its slot version is not covered by
+            // the config version). A stale identity hit is impossible in effect: the
+            // clean probe re-validates the resource against the LIVE bound object.
             if (includeIBO) {
-                auto& possibleIBO = currentVAOObject->GetIndexBufferBindingSlot().GetBoundObject();
+                const auto& possibleIBO = currentVAOObject->GetIndexBufferBindingSlot().GetBoundObject();
                 if (possibleIBO) {
-                    CreateAndSyncBufferObject(possibleIBO);
+                    if (!memo || memo->iboFrontend != possibleIBO.get() ||
+                        !IsBufferDrawClean(memo->iboFrontend, memo->iboResource)) {
+                        auto* resource = EnsureBufferResource(possibleIBO);
+                        if (memo) {
+                            memo->iboFrontend = possibleIBO.get();
+                            memo->iboResource = resource;
+                        }
+                    }
                 }
             }
 
@@ -473,9 +567,20 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
             UnorderedMap<GLuint, XfbObjectState> g_xfbObjects;
             GLuint g_currentXfbName = 0;
+            // Cached address of g_xfbObjects[g_currentXfbName]: PrepareForDraw consults
+            // CurrentXfb on EVERY draw (StartPendingTransformFeedback) and the map
+            // lookup was pure per-draw overhead for the overwhelmingly common no-capture
+            // case. FastSTL's open addressing keeps values in the bucket array, so ANY
+            // insert can rehash and move them (and erase/clear can too): every site that
+            // mutates the map or rebinds the current name resets this to null instead of
+            // reasoning about stability, and CurrentXfb re-resolves lazily.
+            XfbObjectState* g_currentXfbState = nullptr;
 
             XfbObjectState& CurrentXfb() {
-                return g_xfbObjects[g_currentXfbName];
+                if (g_currentXfbState == nullptr) {
+                    g_currentXfbState = &g_xfbObjects[g_currentXfbName];
+                }
+                return *g_currentXfbState;
             }
 
             Bool AreTransformFeedbackObjectsSupported() {
@@ -711,6 +816,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         }
 
         void BindTransformFeedback(GLuint name) {
+            g_currentXfbState = nullptr; // name changes; operator[] below may also rehash
             if (!AreTransformFeedbackObjectsSupported()) {
                 // Without driver objects there is only the default span; keep the frontend
                 // name so the bookkeeping below stays consistent.
@@ -731,6 +837,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             if (it->second.esId != 0 && g_GLESFuncs.glDeleteTransformFeedbacks != nullptr) {
                 g_GLESFuncs.glDeleteTransformFeedbacks(1, &it->second.esId);
             }
+            g_currentXfbState = nullptr; // erase can move values (open addressing)
             g_xfbObjects.erase(it);
             // The frontend reverts to the default object when the bound one is deleted.
             if (g_currentXfbName == name) {
@@ -741,6 +848,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // The ES context went away (or is being torn down): the spans, their buffer ids, the
         // driver objects and the frontend objects they pinned all belonged to it.
         void OnBackendContextDestroyed() {
+            g_currentXfbState = nullptr;
             g_xfbObjects.clear();
             g_currentXfbName = 0;
             g_scatterBufferId = 0;
@@ -749,25 +857,41 @@ namespace MobileGL::MG_Backend::DirectGLES {
     } // namespace XfbImpl
 
     namespace VertexArrayImpl {
-        void SyncCurrentVAO() {
+        // Resolve-or-create the VAO's backend twin, once per draw: PrepareForDraw passes
+        // the result to the buffer sync (resolved-buffers memo host), the VAO sync and
+        // the draw-time bind, which each used to run their own registry Find. The raw
+        // pointer stays valid for the whole draw: the frontend VAO is pinned by the
+        // context binding, and a live object's registry entry is never erased nor its
+        // twin replaced (see TwinLookupMemo's contract).
+        BackendVertexArrayObject* ResolveVaoTwin(const SharedPtr<MG_State::GLState::VertexArrayObject>& vao) {
+#ifdef TRACY_ENABLE
+            ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
+#endif
+            if (auto* twin = g_vaoTwinLookupMemo.Lookup(vao)) {
+                return twin;
+            }
+            auto* backendVAOSlot = g_backendVertexArrayObjects.Find(vao.get());
+            auto& backendObj = backendVAOSlot ? *backendVAOSlot : g_backendVertexArrayObjects.GetOrCreate(vao);
+            if (!backendObj) {
+                backendObj = MakeShared<BackendVertexArrayObject>();
+            }
+            g_vaoTwinLookupMemo.Store(vao, backendObj.get());
+            return backendObj.get();
+        }
+
+        void SyncCurrentVAO(const SharedPtr<MG_State::GLState::VertexArrayObject>& currentVAOObject,
+                            BackendVertexArrayObject* vaoTwin) {
 #ifdef TRACY_ENABLE
             ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
             g_backendVertexArrayObjects.CollectGarbageIfNeeded();
 
-            auto& currentVAOObject = MG_State::pGLContext->GetBoundVertexArray();
-            if (!currentVAOObject) {
+            if (!currentVAOObject || !vaoTwin) {
                 MGLOG_E("No VAO is currently bound, cannot sync current VAO.");
                 return;
             }
 
-            auto* backendVAOSlot = g_backendVertexArrayObjects.Find(currentVAOObject.get());
-            auto& backendObj =
-                backendVAOSlot ? *backendVAOSlot : g_backendVertexArrayObjects.GetOrCreate(currentVAOObject);
-            if (!backendObj) {
-                backendObj = MakeShared<VertexArrayImpl::BackendVertexArrayObject>();
-            }
-            backendObj->SyncToBackend(currentVAOObject);
+            vaoTwin->SyncToBackend(currentVAOObject);
         }
 
         // GL: a shader input whose generic attribute array is DISABLED reads that attribute's *current
@@ -776,7 +900,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // the shader its own current values, which MobileGL never writes -- i.e. always (0,0,0,1).
         // SyncToBackend has already issued glDisableVertexAttribArray for these locations, so the ES
         // current value is what the shader will actually read.
-        void SyncCurrentVertexAttributeValues() {
+        void SyncCurrentVertexAttributeValues(BackendVertexArrayObject* vaoTwin) {
 #ifdef TRACY_ENABLE
             ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
@@ -784,39 +908,34 @@ namespace MobileGL::MG_Backend::DirectGLES {
             if (!program) return;
 
             const auto& vao = MG_State::pGLContext->GetBoundVertexArray();
-            if (!vao) return;
+            if (!vao || !vaoTwin) return;
 
             const Uint32 activeAttribMask = program->GetActiveAttributeLocationMask();
             if (activeAttribMask == 0) return;
 
             // Which of the program's attributes lack an enabled array cannot change without
-            // the VAO's config version moving (Enable/DisableAttribute bump it), the VAO
-            // changing, or the program's active mask changing, so the per-draw Enabled probes
-            // reduce to three compares. The rebuild visits only the ACTIVE locations - a VAO
-            // switch per draw (vanilla cycles section VAOs) pays the same probes the unmemoed
-            // walk did, not a full 32-slot scan. Owner-equality, not the raw pointer: a freed
-            // VAO's heap slot can be reused, and the held weak_ptr pins the control block so
-            // a successor can never alias it.
-            static WeakPtr<MG_State::GLState::VertexArrayObject> s_pendingMaskVao;
-            static Uint32 s_pendingMaskConfigVersion = 0;
-            static Uint32 s_pendingMaskActiveMask = 0;
-            static Uint32 s_pendingMask = 0;
+            // the VAO's config version moving (Enable/DisableAttribute bump it) or the
+            // program's active mask changing, so the per-draw Enabled probes reduce to two
+            // compares. The memo lives on the twin (1:1 with the VAO, no identity key
+            // needed): a function-static single entry missed on every draw once the app
+            // cycled section VAOs, re-reading the cold attribute slots each time; here a
+            // cycle re-hits every VAO's own entry. The rebuild visits only ACTIVE locations.
+            auto& memo = vaoTwin->GetPendingAttribValueMaskMemo();
             const Uint32 configVersion = vao->GetConfigVersion();
-            if (configVersion != s_pendingMaskConfigVersion || activeAttribMask != s_pendingMaskActiveMask ||
-                !OwnerEquals(s_pendingMaskVao, vao)) {
+            if (!memo.valid || configVersion != memo.configVersion || activeAttribMask != memo.activeMask) {
                 Uint32 pending = 0;
                 for (Uint32 remaining = activeAttribMask; remaining != 0; remaining &= remaining - 1) {
                     const Uint32 location = static_cast<Uint32>(std::countr_zero(remaining));
                     if (!vao->GetAttribute(location).Enabled) pending |= (1u << location);
                 }
-                s_pendingMaskVao = vao;
-                s_pendingMaskConfigVersion = configVersion;
-                s_pendingMaskActiveMask = activeAttribMask;
-                s_pendingMask = pending;
+                memo.configVersion = configVersion;
+                memo.activeMask = activeAttribMask;
+                memo.pendingMask = pending;
+                memo.valid = true;
             }
-            if (s_pendingMask == 0) return;
+            if (memo.pendingMask == 0) return;
 
-            for (Uint32 remaining = s_pendingMask; remaining != 0; remaining &= remaining - 1) {
+            for (Uint32 remaining = memo.pendingMask; remaining != 0; remaining &= remaining - 1) {
                 const Uint32 location = static_cast<Uint32>(std::countr_zero(remaining));
 
                 const auto& currentValue = MG_State::pGLContext->GetCurrentVertexAttribute(location);
@@ -1668,12 +1787,26 @@ namespace MobileGL::MG_Backend::DirectGLES {
     } // namespace RenderStateImpl
 
     namespace PrgramImpl {
+        // The twin SyncCurrentProgram resolved for the draw/dispatch being prepared,
+        // consumed by BindCurrentProgramWithResources and the post-draw draw-parameter
+        // updates in the same GL entry point — they all used to repeat the registry
+        // Find. Valid only while the keyed frontend program is the current draw
+        // program: every consumer compares the raw key against GetProgramForDraw()
+        // before trusting the twin, and SyncCurrentProgram rewrites the pair at the
+        // top of every PrepareForDraw/PrepareForCompute, so a recycled address can
+        // never be consumed (the stale pair is overwritten before any consumer runs).
+        static const MG_State::GLState::ProgramObject* g_currentDrawFrontendProgram = nullptr;
+        static BackendProgramObjectImpl* g_currentDrawBackendProgram = nullptr;
+
         void SyncCurrentProgram() {
 #ifdef TRACY_ENABLE
             ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
             g_backendProgramObjects.CollectGarbageIfNeeded();
             SamplerImpl::g_backendSamplerObjects.CollectGarbageIfNeeded();
+
+            g_currentDrawFrontendProgram = nullptr;
+            g_currentDrawBackendProgram = nullptr;
 
             auto& currentProgram = MG_State::pGLContext->GetProgramForDraw();
             if (!currentProgram || !currentProgram->GetLinkStatus()) {
@@ -1698,24 +1831,29 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 g_fragColorBroadcastCount = std::max<Uint>(enabledDrawBuffers, 1);
             }
 
-            auto* backendProgramSlot = g_backendProgramObjects.Find(currentProgram.get());
-            auto& backendObj =
-                backendProgramSlot ? *backendProgramSlot : g_backendProgramObjects.GetOrCreate(currentProgram);
-            if (!backendObj) {
-                backendObj = MakeShared<BackendProgramObjectImpl>();
-                backendObj->SyncToBackend(currentProgram);
-            } else {
-                // A link-version mismatch means the program was relinked: the backend
-                // shaders and every cache built by CacheResourceLocations (block
-                // indices, sampler locations, UBO upload gate) are stale.
-                if (!backendObj->GetBackendProgramId() ||
-                    backendObj->GetSyncedLinkVersion() != currentProgram->GetLinkVersion() ||
-                    backendObj->GetSnormFallbackClampOutputMask() != g_snormFallbackClampOutputMask ||
-                    backendObj->GetUnormFallbackClampOutputMask() != g_unormFallbackClampOutputMask ||
-                    backendObj->GetFragColorBroadcastCount() != g_fragColorBroadcastCount) {
-                    backendObj->SyncToBackend(currentProgram);
+            BackendProgramObjectImpl* twin = g_programTwinLookupMemo.Lookup(currentProgram);
+            if (!twin) {
+                auto* backendProgramSlot = g_backendProgramObjects.Find(currentProgram.get());
+                auto& backendObj =
+                    backendProgramSlot ? *backendProgramSlot : g_backendProgramObjects.GetOrCreate(currentProgram);
+                if (!backendObj) {
+                    backendObj = MakeShared<BackendProgramObjectImpl>();
                 }
+                g_programTwinLookupMemo.Store(currentProgram, backendObj.get());
+                twin = backendObj.get();
             }
+            // A link-version mismatch means the program was relinked: the backend
+            // shaders and every cache built by CacheResourceLocations (block
+            // indices, sampler locations, UBO upload gate) are stale.
+            if (!twin->GetBackendProgramId() ||
+                twin->GetSyncedLinkVersion() != currentProgram->GetLinkVersion() ||
+                twin->GetSnormFallbackClampOutputMask() != g_snormFallbackClampOutputMask ||
+                twin->GetUnormFallbackClampOutputMask() != g_unormFallbackClampOutputMask ||
+                twin->GetFragColorBroadcastCount() != g_fragColorBroadcastCount) {
+                twin->SyncToBackend(currentProgram);
+            }
+            g_currentDrawFrontendProgram = currentProgram.get();
+            g_currentDrawBackendProgram = twin;
         }
     } // namespace PrgramImpl
 
@@ -1795,8 +1933,17 @@ namespace MobileGL::MG_Backend::DirectGLES {
 #ifdef TRACY_ENABLE
         ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
-        BufferImpl::SyncNeccessaryBuffers(syncBit & DrawSyncBit::IndexBuffer, syncBit & DrawSyncBit::IndirectBuffer);
-        VertexArrayImpl::SyncCurrentVAO();
+        // One twin resolve serves the whole draw: the buffer sync (which hosts the
+        // resolved-buffers memo on the twin), the VAO sync and the draw-time bind
+        // below. Nothing in between can invalidate it — the bound VAO is pinned by
+        // the context, and no step here erases or replaces a live VAO's twin.
+        const auto& currentVAO = MG_State::pGLContext->GetBoundVertexArray();
+        VertexArrayImpl::BackendVertexArrayObject* vaoTwin =
+            currentVAO ? VertexArrayImpl::ResolveVaoTwin(currentVAO) : nullptr;
+
+        BufferImpl::SyncNeccessaryBuffers(currentVAO, vaoTwin, syncBit & DrawSyncBit::IndexBuffer,
+                                          syncBit & DrawSyncBit::IndirectBuffer);
+        VertexArrayImpl::SyncCurrentVAO(currentVAO, vaoTwin);
         TextureImpl::SyncNeccessaryTextures();
         FramebufferImpl::SyncCurrentFBO();
         PrgramImpl::SyncCurrentProgram();
@@ -1808,18 +1955,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
 #ifdef TRACY_ENABLE
             ZoneScopedNC("BindCurrentVAO", TRACY_ZONECOLOR_BACKEND);
 #endif
-            const auto& currentVAO = MG_State::pGLContext->GetBoundVertexArray();
-            if (currentVAO) {
-                auto* backendVAOSlot = VertexArrayImpl::g_backendVertexArrayObjects.Find(currentVAO.get());
-                if (backendVAOSlot && *backendVAOSlot) {
-                    (*backendVAOSlot)->Bind();
-                }
+            if (vaoTwin) {
+                vaoTwin->Bind();
             } else {
                 VertexArrayImpl::BindBackendVAOId(0);
             }
         }
 
-        VertexArrayImpl::SyncCurrentVertexAttributeValues();
+        VertexArrayImpl::SyncCurrentVertexAttributeValues(vaoTwin);
 
         BindCurrentTextures();
         BindCurrentProgramWithResources();
@@ -2125,9 +2268,20 @@ namespace MobileGL::MG_Backend::DirectGLES {
 #ifdef TRACY_ENABLE
             ZoneScopedNC("BindCurrentProgram", TRACY_ZONECOLOR_BACKEND);
 #endif
-            auto* backendProgramSlot = PrgramImpl::g_backendProgramObjects.Find(currentProgram.get());
-            if (backendProgramSlot && *backendProgramSlot) {
-                auto& backendProgram = **backendProgramSlot;
+            // The twin SyncCurrentProgram just resolved for this draw; the registry
+            // Find only runs if the stash somehow does not match (defensive fallback).
+            PrgramImpl::BackendProgramObjectImpl* twin =
+                PrgramImpl::g_currentDrawFrontendProgram == currentProgram.get()
+                    ? PrgramImpl::g_currentDrawBackendProgram
+                    : nullptr;
+            if (!twin) {
+                auto* backendProgramSlot = PrgramImpl::g_backendProgramObjects.Find(currentProgram.get());
+                if (backendProgramSlot) {
+                    twin = backendProgramSlot->get();
+                }
+            }
+            if (twin) {
+                auto& backendProgram = *twin;
                 backendProgram.Use();
 
                 // Global UBO: block index and binding-point assignment are cached at
@@ -2305,13 +2459,19 @@ namespace MobileGL::MG_Backend::DirectGLES {
         }
     }
 
-    static SharedPtr<PrgramImpl::BackendProgramObjectImpl> GetCurrentBackendProgram() {
+    // Raw pointer: only ever used inside one GL entry point after PrepareForDraw/
+    // PrepareForCompute, where the current program (and therefore its registry twin)
+    // is pinned for the duration. Prefers the per-draw stash those preparations wrote.
+    static PrgramImpl::BackendProgramObjectImpl* GetCurrentBackendProgram() {
         const auto& currentProgram = MG_State::pGLContext->GetProgramForDraw();
         if (!currentProgram || !currentProgram->GetLinkStatus()) {
             return nullptr;
         }
+        if (PrgramImpl::g_currentDrawFrontendProgram == currentProgram.get()) {
+            return PrgramImpl::g_currentDrawBackendProgram;
+        }
         if (auto* backendProgramSlot = PrgramImpl::g_backendProgramObjects.Find(currentProgram.get())) {
-            return *backendProgramSlot;
+            return backendProgramSlot->get();
         }
         return nullptr;
     }

@@ -170,6 +170,17 @@ namespace MobileGL::MG_Backend::DirectGLES {
         GLESBufferResource* EnsureBufferResource(const SharedPtr<MG_State::GLState::BufferObject>& bufferObject);
         // Existing resource or nullptr; performs no GL calls.
         GLESBufferResource* GetBufferResource(MG_State::GLState::BufferObject* bufferObject);
+        // True when EnsureBufferResource(frontend) would provably fall straight through
+        // every branch and do no work — i.e. `resource` is still the frontend's own
+        // resource, its id belongs to the live ES context, and either it is the
+        // zero-copy coherent persistent store (draw-time sync is a no-op by design) or
+        // the storage is initialized at the right size with no pending ops and a synced
+        // change serial while the buffer is not mapped (an active map may owe a
+        // per-draw persistent-range push, so it always takes the full path).
+        // `frontend` must be non-null and alive; the caller guarantees that by holding
+        // (or shadowing something that holds) a SharedPtr to it. Enables the per-VAO
+        // resolved-buffers memo to skip EnsureBufferResource on clean static buffers.
+        Bool IsBufferDrawClean(const MG_State::GLState::BufferObject* frontend, const GLESBufferResource* resource);
 
         // Deletes GL buffers whose owning frontend objects died (possibly on a
         // thread without a current ES context). Called from draw-time sync.
@@ -255,7 +266,50 @@ namespace MobileGL::MG_Backend::DirectGLES {
             Uint GetBackendVertexArrayId() const { return m_backendVAOId; }
             void Bind() const;
 
+            // Draw-path memo of SyncNeccessaryBuffers' attribute walk for this VAO: the
+            // distinct enabled-attribute buffers (deduped) and the index buffer, resolved
+            // to their backend resources once. Valid while the VAO's config version is
+            // unchanged — every attach/enable/disable/format mutation bumps it (the same
+            // invariant SyncToBackend's gate already leans on), and the VAO's attribute
+            // SharedPtrs pin each memoed frontend buffer for exactly that long, so the raw
+            // pointers cannot dangle on a hit. Per-buffer cleanliness is NOT memoed here:
+            // each hit re-checks IsBufferDrawClean (resource identity, context generation,
+            // pending ops, change serial) and falls back to EnsureBufferResource for just
+            // the dirty entries via their attribute index. The IBO entry is keyed on the
+            // slot's bound-object identity instead (its slot version is a wrapping Uint16
+            // and is not covered by the config version).
+            struct ResolvedDrawBuffers {
+                struct Entry {
+                    MG_State::GLState::BufferObject* frontend = nullptr;
+                    BufferImpl::GLESBufferResource* resource = nullptr;
+                    Uint8 attribIndex = 0;
+                };
+                Bool valid = false;
+                Uint32 configVersion = 0;
+                Uint count = 0;
+                Array<Entry, MG_State::GLState::VertexArrayObject::MAX_VERTEX_ATTRIBS> entries;
+                MG_State::GLState::BufferObject* iboFrontend = nullptr;
+                BufferImpl::GLESBufferResource* iboResource = nullptr;
+            };
+            ResolvedDrawBuffers& GetResolvedDrawBuffersMemo() { return m_resolvedDrawBuffers; }
+
+            // Memo for SyncCurrentVertexAttributeValues: which of a program's ACTIVE
+            // attribute locations lack an enabled array in this VAO (those read the
+            // context's current generic value instead of a buffer). Keyed on the VAO
+            // config version (enable/disable bumps it) and the program's active-location
+            // mask. Hosted per twin — the former function-static single entry missed on
+            // every draw once the app cycled VAOs, re-reading the cold attribute slots.
+            struct PendingAttribValueMask {
+                Bool valid = false;
+                Uint32 configVersion = 0;
+                Uint32 activeMask = 0;
+                Uint32 pendingMask = 0;
+            };
+            PendingAttribValueMask& GetPendingAttribValueMaskMemo() { return m_pendingAttribValueMask; }
+
         private:
+            ResolvedDrawBuffers m_resolvedDrawBuffers;
+            PendingAttribValueMask m_pendingAttribValueMask;
             Uint m_backendVAOId = 0;
             Array<Uint, MG_State::GLState::VertexArrayObject::MAX_VERTEX_ATTRIBS> m_clientAttributeBufferIds;
             Bool m_isInitialized = false;

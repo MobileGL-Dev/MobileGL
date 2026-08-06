@@ -768,6 +768,25 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return static_cast<GLESBufferResource*>(bufferObject->GetBackendResource().get());
         }
 
+        Bool IsBufferDrawClean(const MG_State::GLState::BufferObject* frontend, const GLESBufferResource* resource) {
+            // Identity first: a respecify path can hand the frontend a NEW resource; the
+            // memoed pointer is then stale (and only kept alive by the caller's shadow).
+            if (!resource || resource != frontend->GetBackendResource().get()) return false;
+            if (resource->contextGeneration != g_bufferContextGeneration) return false;
+            if (resource->id == 0) return false;
+            // Zero-copy coherent persistent store: EnsureBufferResource's own early-out —
+            // the app writes straight into the mapped GPU storage, nothing to sync.
+            if (resource->persistentMapped) return resource->persistentPtr != nullptr;
+            // A live non-zero-copy map may owe a per-draw SyncPersistentMappedRange push
+            // (persistent maps mutate the shadow without bumping the change serial).
+            if (frontend->IsMapped()) return false;
+            if (resource->pendingRespecify || !resource->storageInitialized) return false;
+            // Same unlocked emptiness probe EnsureBufferResource's replay branch uses.
+            if (!resource->pendingRanges.empty()) return false;
+            if (resource->storageSize != frontend->GetSize()) return false;
+            return resource->syncedChangeSerial.load(std::memory_order_acquire) == frontend->GetChangeSerial();
+        }
+
         GLESBufferResource* EnsureBufferResource(const SharedPtr<MG_State::GLState::BufferObject>& bufferObject) {
 #ifdef TRACY_ENABLE
             ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
