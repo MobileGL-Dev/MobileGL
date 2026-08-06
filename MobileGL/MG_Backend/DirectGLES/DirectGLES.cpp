@@ -5678,19 +5678,44 @@ namespace MobileGL::MG_Backend::DirectGLES {
         configs.resize(static_cast<SizeT>(numConfigs));
 
         if (surfaceBit == EGL_WINDOW_BIT) {
+            // X11 drivers can reserve every alpha-8 config for 32-bit ARGB
+            // visuals (NVIDIA), so a default-visual (depth 24) window only
+            // matches an alpha-0 config; keep those as a second candidate tier
+            // for the visual match or eglCreateWindowSurface hits BAD_CONFIG.
+            Vector<EGLConfig> alphaFreeConfigs;
+            const EGLint alphaFreeAttribs[] = {EGL_SURFACE_TYPE, surfaceBit, EGL_RENDERABLE_TYPE,
+                                               EGL_OPENGL_ES3_BIT,
+                                               EGL_RED_SIZE,     8,          EGL_GREEN_SIZE,
+                                               8,
+                                               EGL_BLUE_SIZE,    8,          EGL_DEPTH_SIZE,
+                                               24,
+                                               EGL_STENCIL_SIZE, 8,          EGL_NONE};
+            EGLint numAlphaFree = 0;
+            if (g_EGLFuncs.eglChooseConfig(g_Display, alphaFreeAttribs, nullptr, 0, &numAlphaFree) &&
+                numAlphaFree > 0) {
+                alphaFreeConfigs.resize(static_cast<SizeT>(numAlphaFree));
+                if (!g_EGLFuncs.eglChooseConfig(g_Display, alphaFreeAttribs, alphaFreeConfigs.data(),
+                                                numAlphaFree, &numAlphaFree)) {
+                    numAlphaFree = 0;
+                }
+                alphaFreeConfigs.resize(static_cast<SizeT>(numAlphaFree));
+            }
+
             const EGLint windowVisualId = QueryX11WindowVisualId(window);
             const EGLint visualIds[] = {windowVisualId, QueryDefaultX11VisualId()};
             for (const auto visualId : visualIds) {
                 if (visualId == 0) {
                     continue;
                 }
-                for (const auto config : configs) {
-                    EGLint nativeVisualId = 0;
-                    if (ConfigSupports(config, surfaceBit) &&
-                        GetConfigAttrib(config, EGL_NATIVE_VISUAL_ID, nativeVisualId) &&
-                        nativeVisualId == visualId) {
-                        outConfig = config;
-                        return true;
+                for (const auto* candidates : {&configs, &alphaFreeConfigs}) {
+                    for (const auto config : *candidates) {
+                        EGLint nativeVisualId = 0;
+                        if (ConfigSupports(config, surfaceBit) &&
+                            GetConfigAttrib(config, EGL_NATIVE_VISUAL_ID, nativeVisualId) &&
+                            nativeVisualId == visualId) {
+                            outConfig = config;
+                            return true;
+                        }
                     }
                 }
             }
