@@ -41,6 +41,7 @@ namespace MobileGL::MG_State::GLState {
     void BufferObject::NotifySubData(SizeT offset, SizeT size) {
         ++m_changeSerial;
         if (size == 0) return;
+        m_hasDefinedContent = true;
         if (g_bufferBackendOps && g_bufferBackendOps->SubData) {
             g_bufferBackendOps->SubData(*this, offset, size);
         }
@@ -49,12 +50,14 @@ namespace MobileGL::MG_State::GLState {
     void BufferObject::NotifyFlushMappedRange(Range1D range, Flags<BufferMappingAccessBit> appAccess) {
         ++m_changeSerial;
         if (range.start >= range.end) return;
+        m_hasDefinedContent = true;
         if (g_bufferBackendOps && g_bufferBackendOps->FlushMappedRange) {
             g_bufferBackendOps->FlushMappedRange(*this, range, appAccess);
         }
     }
 
     void BufferObject::NotifyContentWrite(SizeT offset, SizeT size) {
+        m_hasDefinedContent = true;
         if (m_resource.IsGpuResident()) {
             // The write already landed in coherent GPU memory; the backend has no separate
             // copy to sync. Only bump the serial so cached transient slices invalidate.
@@ -71,6 +74,9 @@ namespace MobileGL::MG_State::GLState {
         if (data && size > 0) {
             Memcpy(m_resource.Bytes(), data, size);
         }
+        // A NULL-data respecify (the orphaning idiom) leaves the store undefined;
+        // record that so backends skip uploading the stale shadow bytes.
+        m_hasDefinedContent = (data != nullptr) || size == 0;
         m_isImmutableStorage = false;
         m_storageFlags = 0;
         NotifyRespecify();
@@ -89,6 +95,7 @@ namespace MobileGL::MG_State::GLState {
         } else if (size > 0) {
             Memset(m_resource.Bytes(), 0, size);
         }
+        m_hasDefinedContent = true;
         m_isImmutableStorage = true;
         m_storageFlags = storageFlags;
         NotifyRespecify();
@@ -175,6 +182,7 @@ namespace MobileGL::MG_State::GLState {
     }
 
     void BufferObject::MarkGpuWritten() {
+        m_hasDefinedContent = true;
         m_gpuWritePending = true;
     }
 
@@ -330,6 +338,10 @@ namespace MobileGL::MG_State::GLState {
 
     Uint64 BufferObject::GetChangeSerial() const {
         return m_changeSerial;
+    }
+
+    Bool BufferObject::HasDefinedContent() const {
+        return m_hasDefinedContent;
     }
 
     const SharedPtr<BackendBufferResource>& BufferObject::GetBackendResource() const {

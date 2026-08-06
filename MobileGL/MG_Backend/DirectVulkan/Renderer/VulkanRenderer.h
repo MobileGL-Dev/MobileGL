@@ -491,6 +491,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // needs no feature). Both cached at device creation and drive a hard-fail-at-draw when absent.
         Bool m_dualSrcBlendFeatureEnabled = false;
         Bool m_primitiveTopologyListRestartFeatureEnabled = false;
+        // Union of shader stages sampled-read barriers may name; built at device creation
+        // because geometry/tessellation stage bits are invalid in a barrier when their
+        // feature is off (VUID-vkCmdPipelineBarrier-srcStageMask-04090/-04091), and
+        // ALL_GRAPHICS would also serialize against non-shader stages.
+        VkPipelineStageFlags m_sampledReadStageMask = VK_PIPELINE_STAGE_VERTEX_SHADER_BIT |
+                                                      VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
+                                                      VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
         // Cached at device creation from the graphics queue family properties
         // and device limits; drives timer-query support.
         Uint32 m_timestampValidBits = 0;

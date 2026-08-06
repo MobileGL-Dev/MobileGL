@@ -62,6 +62,17 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         Uint64 transientFrameSerial = 0;
         Uint64 transientChangeSerial = 0;
         VkDeviceSize transientSize = 0;
+
+        // Streaming re-copies the whole store into the per-frame arena on every
+        // frame, which is right for genuinely per-frame data but pure waste for a
+        // Dynamic-hinted buffer the app stopped touching. After the content
+        // survives kStreamedPromotionStreak frame boundaries unchanged it is
+        // promoted to resident storage (one final upload, then zero per-frame
+        // cost); the first content change demotes it back to streaming, and the
+        // streaming path's existing downgrade releases the resident store.
+        Uint32 unchangedStreak = 0;
+        Bool promotedResident = false;
+        Uint64 promotedChangeSerial = 0;
     };
 
     // Supplies a command buffer that is recording and outside any render pass,

@@ -188,6 +188,11 @@ namespace MobileGL {
             // Monotonic counter bumped on every shadow mutation; backends use it to
             // validate cached transient slices.
             Uint64 GetChangeSerial() const;
+            // False after a NULL-data (re)specification until the first content
+            // write: the app's orphaning idiom (glBufferData with nullptr) leaves
+            // the store undefined, so backends may (re)allocate GPU storage without
+            // uploading the stale CPU shadow.
+            Bool HasDefinedContent() const;
 
             const SharedPtr<BackendBufferResource>& GetBackendResource() const;
             void SetBackendResource(SharedPtr<BackendBufferResource> resource);
@@ -213,6 +218,8 @@ namespace MobileGL {
             Bool m_isImmutableStorage = false;
             GLbitfield m_storageFlags = 0;
             Uint64 m_changeSerial = 0;
+            // See HasDefinedContent().
+            Bool m_hasDefinedContent = true;
             // Set by MarkGpuWritten, cleared by SyncGpuWrites once the shadow is refreshed.
             Bool m_gpuWritePending = false;
             Range1D m_mappedRange;

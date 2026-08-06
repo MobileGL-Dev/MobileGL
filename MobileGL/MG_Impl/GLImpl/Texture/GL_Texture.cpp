@@ -1406,7 +1406,8 @@ namespace MobileGL::MG_Impl::GLImpl {
         }
 
         free(processedPixels);
-        textureMipmapObject->MarkStorageDirty(textureUploadTarget, level, true);
+        textureMipmapObject->MarkStorageDirtyRegion(textureUploadTarget, level, {xoffset, yoffset, zoffset},
+                                                    {width, height, depth});
         MaybeAutoGenerateMipmap(target, textureObject, false, level);
     }
 
@@ -1525,7 +1526,8 @@ namespace MobileGL::MG_Impl::GLImpl {
         free(processedPixels);
 
         MGLOG_D("%s: mark mip %d as dirty", __func__, level);
-        textureMipmapObject->MarkStorageDirty(textureUploadTarget, level, true);
+        textureMipmapObject->MarkStorageDirtyRegion(textureUploadTarget, level, {xoffset, yoffset, 0},
+                                                    {width, height, 1});
         MaybeAutoGenerateMipmap(target, textureObject, false, level);
     }
 
@@ -1591,7 +1593,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         }
 
         free(processedPixels);
-        textureMipmapObject->MarkStorageDirty(textureUploadTarget, level, true);
+        textureMipmapObject->MarkStorageDirtyRegion(textureUploadTarget, level, {xoffset, 0, 0}, {width, 1, 1});
         MaybeAutoGenerateMipmap(target, textureObject, false, level);
     }
 
@@ -3536,8 +3538,8 @@ namespace MobileGL::MG_Impl::GLImpl {
         if (texture == 0) {
             auto& currentUnit = MG_State::pGLContext->GetTextureUnitObject(activeUnit);
             auto& bindingSlot = currentUnit.GetBindingSlot(textureTarget);
-            bindingSlot.Bind(MG_State::pGLContext->GetDefaultTextureObject(textureTarget));
-            MG_State::pGLContext->NoteTextureUnitTouched(activeUnit);
+            const Bool changed = bindingSlot.Bind(MG_State::pGLContext->GetDefaultTextureObject(textureTarget));
+            MG_State::pGLContext->NoteTextureUnitTouched(activeUnit, changed);
             return;
         }
 
@@ -3571,8 +3573,8 @@ namespace MobileGL::MG_Impl::GLImpl {
         // ======================= Processing ================================
         auto& currentUnit = MG_State::pGLContext->GetTextureUnitObject(MG_State::pGLContext->GetActiveTextureUnit());
         auto& bindingSlot = currentUnit.GetBindingSlot(textureTarget);
-        bindingSlot.Bind(textureObject);
-        MG_State::pGLContext->NoteTextureUnitTouched(MG_State::pGLContext->GetActiveTextureUnit());
+        const Bool changed = bindingSlot.Bind(textureObject);
+        MG_State::pGLContext->NoteTextureUnitTouched(MG_State::pGLContext->GetActiveTextureUnit(), changed);
     }
 
     void ActiveTexture_State(GLenum texture) {
@@ -4410,13 +4412,14 @@ namespace MobileGL::MG_Impl::GLImpl {
         }
 
         auto& textureUnit = MG_State::pGLContext->GetTextureUnitObject(static_cast<Int>(unit));
-        MG_State::pGLContext->NoteTextureUnitTouched(static_cast<Int>(unit));
         if (texture == 0) {
             // GL 4.5 8.1: texture zero unbinds every target of the unit, i.e. rebinds each
             // target's default texture object (the unit's initial state).
+            Bool changed = false;
             for (auto& slot : textureUnit.GetAllBindingSlots()) {
-                slot.Bind(MG_State::pGLContext->GetDefaultTextureObject(slot.GetTarget()));
+                if (slot.Bind(MG_State::pGLContext->GetDefaultTextureObject(slot.GetTarget()))) changed = true;
             }
+            MG_State::pGLContext->NoteTextureUnitTouched(static_cast<Int>(unit), changed);
             return;
         }
 
@@ -4427,7 +4430,8 @@ namespace MobileGL::MG_Impl::GLImpl {
                 MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__, "Texture object does not exist."));
             return;
         }
-        textureUnit.GetBindingSlot(textureObject->GetTarget()).Bind(textureObject);
+        const Bool changed = textureUnit.GetBindingSlot(textureObject->GetTarget()).Bind(textureObject);
+        MG_State::pGLContext->NoteTextureUnitTouched(static_cast<Int>(unit), changed);
     }
 
     void GetTextureImage(GLuint texture, GLint level, GLenum format, GLenum type, GLsizei bufSize, void* pixels) {

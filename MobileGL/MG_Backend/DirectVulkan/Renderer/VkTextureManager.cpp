@@ -25,9 +25,14 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     // Compute shaders may legally sample framebuffer-attached textures (the GL feedback-loop rule
     // only covers rendering commands; e.g. Flywheel's Hi-Z depth pyramid downsample samples the
     // depth attachment of the bound draw framebuffer), so sampled-read barriers must cover the
-    // compute stage in addition to the graphics stages.
-    static constexpr VkPipelineStageFlags kSampledReadStages =
-        VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
+    // compute stage in addition to the graphics stages. Set at Initialize from the renderer's
+    // device-feature-derived mask: geometry/tessellation stage bits are invalid in a barrier when
+    // their feature is off (VUID-vkCmdPipelineBarrier-srcStageMask-04090/-04091), and ALL_GRAPHICS
+    // would also serialize against non-shader stages. The default only matters before a device
+    // exists, when nothing records barriers.
+    static VkPipelineStageFlags s_sampledReadStages =
+        VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
+        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
 
     static Uint32 ComputeFullMipLevelCount(const IntVec3& baseTexelSize) {
         Int maxDimension = std::max<Int>(baseTexelSize.x(),
@@ -193,7 +198,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         case VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_STENCIL_ATTACHMENT_OPTIMAL:
         case VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_STENCIL_READ_ONLY_OPTIMAL:
         case VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL:
-            outSrcStageMask = kSampledReadStages;
+            outSrcStageMask = s_sampledReadStages;
             outSrcAccessMask = VK_ACCESS_SHADER_READ_BIT;
             return;
         case VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL:
@@ -241,7 +246,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         case VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_STENCIL_ATTACHMENT_OPTIMAL:
         case VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_STENCIL_READ_ONLY_OPTIMAL:
         case VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL:
-            outDstStageMask = kSampledReadStages;
+            outDstStageMask = s_sampledReadStages;
             outDstAccessMask = VK_ACCESS_SHADER_READ_BIT;
             return;
         case VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL:
@@ -599,6 +604,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         m_commandPool = initInfo.commandPool;
         m_graphicsQueue = initInfo.graphicsQueue;
         m_imageFormatListSupported = initInfo.imageFormatListSupported;
+        s_sampledReadStages = initInfo.sampledReadStageMask;
         m_currentFrameIndex = 0;
         m_deferredReleases.clear();
         m_deferredReleases.resize(initInfo.frameCount);
@@ -1226,7 +1232,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
 
         const Bool ok = TransitionImageLayout(commandBuffer, resource->image, resource->layout, targetLayout, srcStageMask,
-                                              kSampledReadStages, srcAccessMask,
+                                              s_sampledReadStages, srcAccessMask,
                                               VK_ACCESS_SHADER_READ_BIT, resource->aspect, 0, resource->mipLevels,
                                               resource->arrayLayers);
         MOBILEGL_ASSERT(ok, "TransitionTextureForSampling: transition failed for textureId=%d", texture.GetExternalIndex());
@@ -2055,6 +2061,15 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             const void* source = nullptr;
             Vector<Uint8> expandedData;
             VkDeviceSize offset = 0;
+            // Sub-region upload (a small sprite in a big atlas): only the dirty box
+            // is staged and copied. texelSize keeps the LEVEL extent - the staging
+            // row copy needs it for the shadow's stride. Plain color formats only;
+            // the RGB-expand and depth(+stencil) conversion passes rewrite whole
+            // levels and stay full-size.
+            Bool subRegion = false;
+            IntVec3 regionLo = {0, 0, 0};
+            IntVec3 regionSize = {0, 0, 0};
+            SizeT texelBytes = 0;
         };
 
         Vector<UploadItem> uploadItems;
@@ -2101,6 +2116,25 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 uploadItem.source = source;
                 uploadItem.offset = stagingSize;
                 uploadItem.uploadByteSize = byteSize;
+                if (!formatInfo.expandRgbToRgba &&
+                    GetAspectMaskForFormat(outResource.format) == VK_IMAGE_ASPECT_COLOR_BIT) {
+                    const auto region = mipmapTexture.GetStorageDirtyRegion(target, level);
+                    const SizeT texelCount = static_cast<SizeT>(texelSize.x()) *
+                                             static_cast<SizeT>(texelSize.y()) *
+                                             static_cast<SizeT>(std::max(texelSize.z(), 1));
+                    if (!region.Empty() && !region.CoversWholeLevel(texelSize) && texelCount > 0 &&
+                        byteSize % texelCount == 0) {
+                        uploadItem.subRegion = true;
+                        uploadItem.regionLo = region.lo;
+                        uploadItem.regionSize = {region.hi.x() - region.lo.x(), region.hi.y() - region.lo.y(),
+                                                 region.hi.z() - region.lo.z()};
+                        uploadItem.texelBytes = byteSize / texelCount;
+                        uploadItem.uploadByteSize = static_cast<SizeT>(uploadItem.regionSize.x()) *
+                                                    static_cast<SizeT>(uploadItem.regionSize.y()) *
+                                                    static_cast<SizeT>(uploadItem.regionSize.z()) *
+                                                    uploadItem.texelBytes;
+                    }
+                }
                 if (formatInfo.expandRgbToRgba) {
                     const Bool expanded = ExpandRgbSourceToRgba(source, byteSize, texelSize, formatInfo,
                                                                 uploadItem.expandedData);
@@ -2255,7 +2289,27 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         void* mapped = nullptr;
         VK_VERIFY(vmaMapMemory(m_allocator, stagingAllocation, &mapped), "vmaMapMemory(staging texture)");
         for (const auto& item : uploadItems) {
-            std::memcpy(static_cast<Uint8*>(mapped) + item.offset, item.source, item.uploadByteSize);
+            Uint8* dst = static_cast<Uint8*>(mapped) + item.offset;
+            if (!item.subRegion) {
+                std::memcpy(dst, item.source, item.uploadByteSize);
+                continue;
+            }
+            // Tight-pack the dirty box: the shadow keeps whole-level rows, the
+            // staging slice holds only the region (bufferRowLength stays 0).
+            const SizeT levelRowBytes = static_cast<SizeT>(item.texelSize.x()) * item.texelBytes;
+            const SizeT levelSliceBytes = static_cast<SizeT>(item.texelSize.y()) * levelRowBytes;
+            const SizeT regionRowBytes = static_cast<SizeT>(item.regionSize.x()) * item.texelBytes;
+            const Uint8* src = static_cast<const Uint8*>(item.source);
+            for (Int z = 0; z < item.regionSize.z(); ++z) {
+                for (Int y = 0; y < item.regionSize.y(); ++y) {
+                    const Uint8* srcRow = src +
+                                          static_cast<SizeT>(item.regionLo.z() + z) * levelSliceBytes +
+                                          static_cast<SizeT>(item.regionLo.y() + y) * levelRowBytes +
+                                          static_cast<SizeT>(item.regionLo.x()) * item.texelBytes;
+                    std::memcpy(dst + (static_cast<SizeT>(z) * item.regionSize.y() + y) * regionRowBytes,
+                                srcRow, regionRowBytes);
+                }
+            }
         }
         vmaUnmapMemory(m_allocator, stagingAllocation);
 
@@ -2306,6 +2360,21 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             copy.imageOffset = {0, 0, 0};
             copy.imageExtent = {static_cast<Uint32>(item.texelSize.x()), static_cast<Uint32>(item.texelSize.y()),
                                 depthSelectsArrayLayer ? 1u : depthOrLayers};
+            if (item.subRegion) {
+                const Uint32 regionDepth = static_cast<Uint32>(std::max(item.regionSize.z(), 1));
+                copy.imageOffset = {item.regionLo.x(), item.regionLo.y(),
+                                    depthSelectsArrayLayer ? 0 : item.regionLo.z()};
+                copy.imageExtent = {static_cast<Uint32>(item.regionSize.x()),
+                                    static_cast<Uint32>(item.regionSize.y()),
+                                    depthSelectsArrayLayer ? 1u : regionDepth};
+                if (depthSelectsArrayLayer) {
+                    // The GL "depth" axis addresses array layers here, so a partial
+                    // z-range narrows the layer span rather than the extent.
+                    copy.imageSubresource.baseArrayLayer =
+                        item.baseArrayLayer + static_cast<Uint32>(item.regionLo.z());
+                    copy.imageSubresource.layerCount = regionDepth;
+                }
+            }
             if (isCombinedDepthStencil) {
                 const SizeT texelCount = static_cast<SizeT>(item.texelSize.x()) *
                                          static_cast<SizeT>(item.texelSize.y()) *
@@ -2330,7 +2399,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                    uploadLayout,
                                    finalLayout,
                                    VK_PIPELINE_STAGE_TRANSFER_BIT,
-                                   kSampledReadStages,
+                                   s_sampledReadStages,
                                    VK_ACCESS_TRANSFER_WRITE_BIT,
                                    VK_ACCESS_SHADER_READ_BIT,
                                    aspectMask, 0, outResource.mipLevels, outResource.arrayLayers);

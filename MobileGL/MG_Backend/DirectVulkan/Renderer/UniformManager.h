@@ -179,14 +179,22 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         Vector<VkBufferView> m_texelBufferViewsScratch;
         Vector<Uint32> m_dynamicOffsetsScratch;
 
-        // Descriptor-set reuse across consecutive draws (see BindProgramUniformBuffers).
-        // When a draw's resolved descriptor content is byte-identical to the previous
-        // draw's, reuse the same VkDescriptorSet and skip AcquireDescriptorSet +
-        // vkUpdateDescriptorSets - only the bind-time dynamic offsets differ. Reset each
-        // frame in BeginFrame because the frame's descriptor sets are recycled there.
-        VkDescriptorSet m_lastBoundDescriptorSet = VK_NULL_HANDLE;
-        Uint64 m_lastDescriptorSignature = 0;
-        Bool m_hasLastDescriptor = false;
+        // Descriptor-set reuse across recent draws (see BindProgramUniformBuffers).
+        // When a draw's resolved descriptor content is byte-identical to one memoized
+        // earlier, reuse that VkDescriptorSet and skip AcquireDescriptorSet +
+        // vkUpdateDescriptorSets - only the bind-time dynamic offsets differ. Four
+        // entries with round-robin replacement rather than one: draws alternating
+        // between two programs (MC's chunk<->entity ping-pong) would thrash a single
+        // slot into a full re-allocate+write every draw. Reset each frame in BeginFrame
+        // because the frame's descriptor sets are recycled there.
+        struct DescriptorReuseEntry {
+            Uint64 signature = 0;
+            VkDescriptorSet set = VK_NULL_HANDLE;
+            Bool valid = false;
+        };
+        static constexpr Uint32 kDescriptorReuseMemoSize = 4;
+        DescriptorReuseEntry m_descriptorReuseMemo[kDescriptorReuseMemoSize];
+        Uint32 m_descriptorReuseMemoNext = 0;
 
         // vkCmdBindDescriptorSets dedup: consecutive draws with a static uniform
         // block resolve to the same set AND the same dynamic offsets, so the

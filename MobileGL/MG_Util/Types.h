@@ -156,11 +156,14 @@ namespace MobileGL {
 
         BindingSlot() : m_target((TargetEnum)0) {}
         explicit BindingSlot(TargetEnum target) : m_target(target) {}
-        void Bind(SharedPtr<ObjectType> object) {
-            if (m_boundObject == object) return;
+        // Reports whether the binding actually changed, so callers can keep change-driven
+        // bookkeeping (e.g. the texture bind generation) quiet on redundant re-binds.
+        Bool Bind(SharedPtr<ObjectType> object) {
+            if (m_boundObject == object) return false;
 
             m_boundObject = Move(object);
             ++m_version;
+            return true;
         }
         SharedPtr<ObjectType> const& GetBoundObject() const noexcept { return m_boundObject; }
         TargetEnum GetTarget() const { return m_target; }

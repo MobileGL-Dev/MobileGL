@@ -353,7 +353,7 @@ namespace MobileGL::MG_Impl::GLImpl::TextureImpl {
         return true;
     }
 
-    Bool ValidateTextureObject(SharedPtr<MG_State::GLState::ITextureObject> textureObject) {
+    Bool ValidateTextureObject(const SharedPtr<MG_State::GLState::ITextureObject>& textureObject) {
         if (!textureObject) {
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidOperation,
@@ -376,7 +376,7 @@ namespace MobileGL::MG_Impl::GLImpl::TextureImpl {
         return true;
     }
 
-    Bool ValidateTextureTargetUniformity(SharedPtr<MG_State::GLState::ITextureObject> textureObject,
+    Bool ValidateTextureTargetUniformity(const SharedPtr<MG_State::GLState::ITextureObject>& textureObject,
                                          TextureTarget target) {
         if (!textureObject) return true; // should be created later
         TextureTarget prevTarget = textureObject->GetTarget();
@@ -390,7 +390,7 @@ namespace MobileGL::MG_Impl::GLImpl::TextureImpl {
         return true;
     }
 
-    Bool ValidateTextureSubImageOffsets(SharedPtr<MG_State::GLState::ITextureObject> textureObject, Int xoffset,
+    Bool ValidateTextureSubImageOffsets(const SharedPtr<MG_State::GLState::ITextureObject>& textureObject, Int xoffset,
                                         Int width, Int yoffset, Int height, Int zoffset, Int depth) {
         auto baseSize = textureObject->GetBaseSize();
         if (xoffset < 0 || (xoffset + width) > baseSize.x()) {

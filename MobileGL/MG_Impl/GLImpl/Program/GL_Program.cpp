@@ -1073,6 +1073,14 @@ namespace MobileGL::MG_Impl::GLImpl {
             }
             MGLOG_D("%s: program = %d, location = %d, byteOffset = %d", __func__, programObject.GetExternalIndex(),
                     location, offset + byteOffsetInsideUniform);
+            // Apps re-set identical uniform values constantly (Minecraft re-uploads the same
+            // matrices and sampler indices every frame), and any content-version move makes both
+            // backends re-upload the whole UBO on the next draw. Every glUniform entry point
+            // funnels its final bytes through here - after any transpose/stride conversion, with
+            // the exact destination range known - and the scratch is zero-filled at link (matching
+            // the GL zero defaults), so a bytes-equal write can be dropped without moving the
+            // version.
+            if (std::memcmp(pUBO + offset + byteOffsetInsideUniform, value, writeSize) == 0) return;
             Memcpy(pUBO + offset + byteOffsetInsideUniform, value, writeSize);
             programObject.MarkUBOContentDirty();
         } else {

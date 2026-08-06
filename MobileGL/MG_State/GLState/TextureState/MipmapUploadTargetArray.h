@@ -74,6 +74,16 @@ namespace MobileGL {
                     return m_storage[targetIndex].IsDirty(level);
                 }
 
+                void MarkDirtyRegion(Uint targetIndex, Uint level, IntVec3 offset, IntVec3 size) {
+                    MOBILEGL_ASSERT(targetIndex < TargetCount, "MarkDirtyRegion: target invalid");
+                    m_storage[targetIndex].MarkDirtyRegion(level, offset, size);
+                }
+
+                MipmapDirtyRegion GetDirtyRegion(Uint targetIndex, Uint level) const {
+                    MOBILEGL_ASSERT(targetIndex < TargetCount, "GetDirtyRegion: target invalid");
+                    return m_storage[targetIndex].GetDirtyRegion(level);
+                }
+
                 void SetCompressedImage(Uint targetIndex, Uint level, GLenum internalFormat, const void* data,
                                         SizeT size) {
                     MOBILEGL_ASSERT(targetIndex < TargetCount, "SetCompressedImage: target invalid");

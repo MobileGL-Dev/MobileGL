@@ -1518,7 +1518,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     backendVAOIt->second->Bind();
                 }
             } else {
-                g_GLESFuncs.glBindVertexArray(0);
+                VertexArrayImpl::BindBackendVAOId(0);
             }
         }
 
@@ -3001,7 +3001,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         const Float uvTransform[4] = {mirrorX ? -uvScaleX : uvScaleX, mirrorY ? -uvScaleY : uvScaleY,
                                       mirrorX ? uvScaleX : 0.0f, mirrorY ? uvScaleY : 0.0f};
 
-        g_GLESFuncs.glBindVertexArray(s_vertexArray);
+        VertexArrayImpl::BindBackendVAOId(s_vertexArray);
         g_GLESFuncs.glActiveTexture(GL_TEXTURE0);
         g_GLESFuncs.glBindTexture(GL_TEXTURE_2D, s_texture);
         g_GLESFuncs.glViewport(dstLeft, dstBottom, dstWidth, dstHeight);
@@ -3060,7 +3060,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         g_GLESFuncs.glUseProgram(static_cast<GLuint>(previousProgram));
         g_GLESFuncs.glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(previousTexture));
         g_GLESFuncs.glActiveTexture(static_cast<GLenum>(previousActiveTexture));
-        g_GLESFuncs.glBindVertexArray(static_cast<GLuint>(previousVertexArray));
+        VertexArrayImpl::BindBackendVAOId(static_cast<GLuint>(previousVertexArray));
         g_GLESFuncs.glViewport(previousViewport[0], previousViewport[1], previousViewport[2], previousViewport[3]);
         g_GLESFuncs.glScissor(previousScissorBox[0], previousScissorBox[1], previousScissorBox[2],
                               previousScissorBox[3]);
@@ -5919,6 +5919,15 @@ namespace MobileGL::MG_Backend::DirectGLES {
         return true;
     }
 
+    namespace {
+        // EGL ground-truth verification stamp, per thread. glvnd's
+        // eglGetCurrentContext performs fork detection with a real getpid()
+        // syscall on every call, and this predicate sits 2-3 deep in every
+        // draw - measured at 16% of the render thread on a live workload.
+        thread_local Uint64 t_eglVerifiedFrameSerial = ~0ull;
+        thread_local Uint t_eglVerifiedContextGeneration = 0;
+    } // namespace
+
     Bool IsBackendContextCurrentOnThisThread() {
         if (g_Context == EGL_NO_CONTEXT) {
             return false;
@@ -5929,10 +5938,20 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // Belt and braces: EGL itself is the ground truth. A migration that bypassed
         // MakeCurrent()/ReleaseCurrent() must not leave a stale ownership claim
         // standing, or GL calls would silently no-op while shadow bookkeeping (bind
-        // cache, synced serials) still advances.
+        // cache, synced serials) still advances. Re-verify once per (thread, frame,
+        // context generation) rather than per call: an external migration is caught
+        // at the next frame boundary instead of the next call, which recovers the
+        // bookkeeping just the same, without paying a syscall on every draw.
+        const Uint64 frameSerial = g_currentFrameSerial.load(std::memory_order_relaxed);
+        if (t_eglVerifiedFrameSerial == frameSerial &&
+            t_eglVerifiedContextGeneration == g_syncContextGeneration) {
+            return true;
+        }
         if (g_EGLFuncs.eglGetCurrentContext && g_EGLFuncs.eglGetCurrentContext() != g_Context) {
             return false;
         }
+        t_eglVerifiedFrameSerial = frameSerial;
+        t_eglVerifiedContextGeneration = g_syncContextGeneration;
         return true;
     }
 
@@ -6227,6 +6246,33 @@ namespace MobileGL::MG_Backend::DirectGLES {
     Uint64 CurrentFrameSerial() { return g_currentFrameSerial.load(std::memory_order_relaxed); }
     Uint64 CompletedFrameSerial() { return g_completedFrameSerial.load(std::memory_order_relaxed); }
 
+    Bool WaitForFrameSerialCompleted(Uint64 serial, Uint64 timeoutNs) {
+        if (CompletedFrameSerial() >= serial) return true;
+        if (!IsBackendContextCurrentOnThisThread() || !g_GLESFuncs.glClientWaitSync) return false;
+        // Fences signal in submission order, so the live fence with the SMALLEST
+        // serial at or past the target is the earliest event that proves the
+        // target frame retired. A recycled slot (GPU more than ring-depth frames
+        // behind) leaves no usable fence; report failure and let the caller pick
+        // its own fallback rather than draining the whole queue here.
+        FrameFence* best = nullptr;
+        for (FrameFence& slot : g_frameFenceRing) {
+            if (!slot.sync || slot.contextGeneration != g_syncContextGeneration) continue;
+            if (slot.serial < serial) continue;
+            if (!best || slot.serial < best->serial) best = &slot;
+        }
+        if (!best) return false;
+        const GLenum status =
+            g_GLESFuncs.glClientWaitSync(best->sync, GL_SYNC_FLUSH_COMMANDS_BIT, timeoutNs);
+        if (status != GL_ALREADY_SIGNALED && status != GL_CONDITION_SATISFIED) return false;
+        Uint64 completed = g_completedFrameSerial.load(std::memory_order_relaxed);
+        if (best->serial > completed) {
+            g_completedFrameSerial.store(best->serial, std::memory_order_relaxed);
+        }
+        if (g_GLESFuncs.glDeleteSync) g_GLESFuncs.glDeleteSync(best->sync);
+        best->sync = nullptr;
+        return true;
+    }
+
     void Present() {
         // Insert one fence per frame BEFORE the swap (eglSwapBuffers' implicit flush
         // makes it reachable), then non-blocking-poll prior frames' fences AFTER to
@@ -6272,6 +6318,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         XfbImpl::OnBackendContextDestroyed();
         ScratchFBOImpl::OnBackendContextDestroyed();
         FramebufferImpl::InvalidateFramebufferBindingCache();
+        VertexArrayImpl::InvalidateVAOBindingCache();
         PixelStoreImpl::InvalidatePackStateCache();
         // Texture ids belong to the dying context; wrappers destroyed later must
         // not glDeleteTextures a recycled name in a successor context.

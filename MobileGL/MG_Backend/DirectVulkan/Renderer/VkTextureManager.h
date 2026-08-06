@@ -59,6 +59,12 @@ public:
         // VK_KHR_image_format_list is enabled: MUTABLE_FORMAT images can name the exact set of
         // formats they will be viewed as, which is what lets a tiler keep them compressed.
         Bool imageFormatListSupported = false;
+        // Union of shader stages sampled-read barriers may name on this device; the renderer
+        // builds it from the enabled features because geometry/tessellation stage bits are
+        // invalid in a barrier when their feature is off.
+        VkPipelineStageFlags sampledReadStageMask = VK_PIPELINE_STAGE_VERTEX_SHADER_BIT |
+                                                    VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
+                                                    VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
     };
 
     struct TextureResource {

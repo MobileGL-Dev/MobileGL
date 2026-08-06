@@ -27,11 +27,23 @@ namespace MobileGL {
                     m_texelSizes.reserve(std::bit_ceil(requiredLevelCount));
                     m_texelSizes.resize(requiredLevelCount);
                     m_isDirty.resize(requiredLevelCount, false);
+                    m_dirtyRegions.resize(requiredLevelCount);
                     m_compressedData.resize(requiredLevelCount);
                     m_compressedFormats.resize(requiredLevelCount, GL_NONE);
                 }
 
                 m_texelSizes[level] = input.texelSize;
+                // A respecified level invalidates any pending sub-region: its extents were
+                // measured against the old size. If the level is still flagged dirty the
+                // pending upload widens to the whole (new) level.
+                if (level < m_dirtyRegions.size()) {
+                    m_dirtyRegions[level] =
+                        m_isDirty[level]
+                            ? MipmapDirtyRegion{IntVec3{0, 0, 0},
+                                                IntVec3{input.texelSize.x(), input.texelSize.y(),
+                                                        std::max(input.texelSize.z(), 1)}}
+                            : MipmapDirtyRegion{};
+                }
                 auto& data = m_data[level];
                 data.resize(input.byteSize, 0);
 
@@ -81,6 +93,7 @@ namespace MobileGL {
                 m_data.resize(levelCount);
                 m_texelSizes.resize(levelCount);
                 m_isDirty.resize(levelCount);
+                m_dirtyRegions.resize(levelCount);
                 m_compressedData.resize(levelCount);
                 m_compressedFormats.resize(levelCount);
             }
@@ -95,7 +108,7 @@ namespace MobileGL {
                     const Uint8* src = static_cast<const Uint8*>(input.data);
                     // Clamp so a size mismatch can never write past the allocation.
                     Memcpy(levelData.data(), src, std::min(input.size, levelData.size()));
-                    m_isDirty[level] = true;
+                    MarkDirty(level, true); // whole-level write: dirty region covers everything
                 }
             }
 
@@ -120,11 +133,50 @@ namespace MobileGL {
             void MipmapStorage::MarkDirty(Uint level, bool dirty) {
                 MOBILEGL_ASSERT(level < m_isDirty.size(), "MarkDirty: level out of range");
                 m_isDirty[level] = dirty;
+                if (level < m_dirtyRegions.size()) {
+                    if (dirty) {
+                        const IntVec3 size = level < m_texelSizes.size() ? m_texelSizes[level] : IntVec3{0, 0, 0};
+                        m_dirtyRegions[level] = {IntVec3{0, 0, 0},
+                                                 IntVec3{size.x(), size.y(), std::max(size.z(), 1)}};
+                    } else {
+                        m_dirtyRegions[level] = {};
+                    }
+                }
             }
 
             bool MipmapStorage::IsDirty(Uint level) const {
                 MOBILEGL_ASSERT(level < m_isDirty.size(), "IsDirty: level out of range");
                 return m_isDirty[level];
+            }
+
+            void MipmapStorage::MarkDirtyRegion(Uint level, IntVec3 offset, IntVec3 size) {
+                MOBILEGL_ASSERT(level < m_isDirty.size(), "MarkDirtyRegion: level out of range");
+                const IntVec3 levelSize = level < m_texelSizes.size() ? m_texelSizes[level] : IntVec3{0, 0, 0};
+                MipmapDirtyRegion incoming;
+                incoming.lo = {std::max(offset.x(), 0), std::max(offset.y(), 0), std::max(offset.z(), 0)};
+                incoming.hi = {std::min(offset.x() + size.x(), levelSize.x()),
+                               std::min(offset.y() + size.y(), levelSize.y()),
+                               std::min(offset.z() + std::max(size.z(), 1), std::max(levelSize.z(), 1))};
+                if (incoming.Empty()) return;
+                if (level < m_dirtyRegions.size()) {
+                    MipmapDirtyRegion& region = m_dirtyRegions[level];
+                    if (m_isDirty[level] && !region.Empty()) {
+                        region.lo = {std::min(region.lo.x(), incoming.lo.x()),
+                                     std::min(region.lo.y(), incoming.lo.y()),
+                                     std::min(region.lo.z(), incoming.lo.z())};
+                        region.hi = {std::max(region.hi.x(), incoming.hi.x()),
+                                     std::max(region.hi.y(), incoming.hi.y()),
+                                     std::max(region.hi.z(), incoming.hi.z())};
+                    } else {
+                        region = incoming;
+                    }
+                }
+                m_isDirty[level] = true;
+            }
+
+            MipmapDirtyRegion MipmapStorage::GetDirtyRegion(Uint level) const {
+                if (level >= m_dirtyRegions.size()) return {};
+                return m_dirtyRegions[level];
             }
         } // namespace GLState
     } // namespace MG_State

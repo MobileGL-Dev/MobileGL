@@ -202,9 +202,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         for (auto& cacheEntryPair : frame.descriptorSetCacheByLayout) {
             cacheEntryPair.second.cursor = 0;
         }
-        // The frame's descriptor sets are recycled above, so last frame's reuse target
-        // is gone: start the per-draw descriptor-reuse cache fresh this frame.
-        m_hasLastDescriptor = false;
+        // The frame's descriptor sets are recycled above, so last frame's reuse targets
+        // are gone: start the per-draw descriptor-reuse cache fresh this frame.
+        for (auto& entry : m_descriptorReuseMemo) {
+            entry.valid = false;
+        }
         m_lastBindValid = false;
         // Re-fingerprint the bound sampler set fresh this frame so any GL object address
         // reuse cannot outlive a single frame (see SamplerResolveMemo).
@@ -241,8 +243,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
         if (purgedSets > 0) {
             // The per-draw reuse memo folds the layout handle into its signature; drop
-            // it so a recycled handle value cannot revive a purged set mid-frame.
-            m_hasLastDescriptor = false;
+            // every entry so a recycled handle value cannot revive a purged set mid-frame.
+            for (auto& entry : m_descriptorReuseMemo) {
+                entry.valid = false;
+            }
             MGLOG_D("UniformDescriptorBinder: freed %zu descriptor sets for destroyed layout", purgedSets);
         }
     }
@@ -1358,13 +1362,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             }
         }
 
-        // Reuse the previous draw's descriptor set when the resolved content is
+        // Reuse a recent draw's descriptor set when the resolved content is
         // byte-identical (only the bind-time dynamic offsets differ). The signature
         // covers the descriptor-set layout + every write's binding/type/count + the
         // pointed-to buffer/image/texel-buffer infos (all value-initialized, so no
         // padding noise). Correctness: bindings are re-resolved every draw, so the
         // signature always reflects the current state and reuse happens only on an
-        // exact match; the reused set is never re-acquired within a frame (the acquire
+        // exact match; a reused set is never re-acquired within a frame (the acquire
         // cursor only advances), so its written contents survive; the layout is part of
         // the signature so reuse never crosses programs. Sampler overrides (blits)
         // bypass and invalidate the cache.
@@ -1396,8 +1400,17 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             mixWords(texelBufferViews.data(), texelBufferViews.size() * sizeof(VkBufferView));
         }
 
-        if (cacheable && m_hasLastDescriptor && signature == m_lastDescriptorSignature) {
-            descriptorSet = m_lastBoundDescriptorSet;
+        VkDescriptorSet reusedSet = VK_NULL_HANDLE;
+        if (cacheable) {
+            for (const auto& entry : m_descriptorReuseMemo) {
+                if (entry.valid && entry.signature == signature) {
+                    reusedSet = entry.set;
+                    break;
+                }
+            }
+        }
+        if (reusedSet != VK_NULL_HANDLE) {
+            descriptorSet = reusedSet;
         } else {
             VkResult allocResult = AcquireDescriptorSet(frameIndex, programObj, descriptorSet);
             if (allocResult != VK_SUCCESS || descriptorSet == VK_NULL_HANDLE) {
@@ -1411,9 +1424,15 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             if (!writes.empty()) {
                 vkUpdateDescriptorSets(m_device, static_cast<Uint32>(writes.size()), writes.data(), 0, nullptr);
             }
-            m_lastBoundDescriptorSet = descriptorSet;
-            m_lastDescriptorSignature = signature;
-            m_hasLastDescriptor = cacheable;
+            if (cacheable) {
+                m_descriptorReuseMemo[m_descriptorReuseMemoNext] =
+                    DescriptorReuseEntry{signature, descriptorSet, true};
+                m_descriptorReuseMemoNext = (m_descriptorReuseMemoNext + 1) % kDescriptorReuseMemoSize;
+            } else {
+                for (auto& entry : m_descriptorReuseMemo) {
+                    entry.valid = false;
+                }
+            }
         }
 
         // Skip the driver call when this exact binding is already live on the

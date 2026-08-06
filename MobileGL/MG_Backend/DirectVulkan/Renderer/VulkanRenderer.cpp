@@ -2680,7 +2680,8 @@ void main() {
         MOBILEGL_ASSERT(m_textureManager != nullptr, "VkTextureManager creation failed.");
         succeeded = m_textureManager->Initialize(
             {m_device, m_physicalDevice.handle, m_allocator, m_commandPool, m_graphicsQueue,
-             m_frameContext.GetFrameCount(), m_imageFormatListExtensionEnabled});
+             m_frameContext.GetFrameCount(), m_imageFormatListExtensionEnabled,
+             m_sampledReadStageMask});
         MOBILEGL_ASSERT(succeeded, "VkTextureManager initialization failed.");
         m_clearManager = MakeUnique<VkClearManager>();
         MOBILEGL_ASSERT(m_clearManager != nullptr, "VkClearManager creation failed.");
@@ -2935,6 +2936,8 @@ void main() {
             dlclose(m_platformLibrary);
             m_platformLibrary = nullptr;
         }
+#endif
+
         if (m_debugMessenger != VK_NULL_HANDLE) {
             DestroyDebugMessenger();
             m_debugMessenger = VK_NULL_HANDLE;
@@ -10163,6 +10166,19 @@ void main() {
                                                 : supportedDeviceFeatures.robustBufferAccess;
         deviceFeatures.geometryShader = supportedDeviceFeatures.geometryShader;
         deviceFeatures.tessellationShader = supportedDeviceFeatures.tessellationShader;
+        // Sampled-read barriers may only name the shader stages whose device feature is
+        // actually enabled (VUID-vkCmdPipelineBarrier-srcStageMask-04090/-04091), so the
+        // mask is assembled here, next to the feature decision, and handed to consumers.
+        m_sampledReadStageMask = VK_PIPELINE_STAGE_VERTEX_SHADER_BIT |
+                                 VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
+                                 VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
+        if (deviceFeatures.geometryShader == VK_TRUE) {
+            m_sampledReadStageMask |= VK_PIPELINE_STAGE_GEOMETRY_SHADER_BIT;
+        }
+        if (deviceFeatures.tessellationShader == VK_TRUE) {
+            m_sampledReadStageMask |= VK_PIPELINE_STAGE_TESSELLATION_CONTROL_SHADER_BIT |
+                                      VK_PIPELINE_STAGE_TESSELLATION_EVALUATION_SHADER_BIT;
+        }
         deviceFeatures.independentBlend = supportedDeviceFeatures.independentBlend;
         m_independentBlendFeatureEnabled = deviceFeatures.independentBlend == VK_TRUE;
         deviceFeatures.fillModeNonSolid = supportedDeviceFeatures.fillModeNonSolid;

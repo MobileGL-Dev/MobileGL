@@ -160,6 +160,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
     // A buffer retired during frame N is safe to recycle once CompletedFrameSerial() >= N.
     Uint64 CurrentFrameSerial();
     Uint64 CompletedFrameSerial();
+    // Block (up to timeoutNs) until the given frame serial provably retired on the
+    // GPU, using the per-frame fence ring. False when no usable fence covers the
+    // serial (fence-less context, foreign thread, or the slot was recycled);
+    // completion state is untouched in that case.
+    Bool WaitForFrameSerialCompleted(Uint64 serial, Uint64 timeoutNs);
     // Applies (or defers until the window surface exists) the app-requested
     // eglSwapInterval on the native EGL surface.
     void SetSwapInterval(Int interval);

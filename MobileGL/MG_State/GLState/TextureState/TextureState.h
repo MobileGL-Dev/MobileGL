@@ -67,7 +67,7 @@ namespace MobileGL::MG_State::GLState {
         // High-water mark of texture units ever touched by a texture or sampler bind.
         // Units above it have provably-empty binding slots, so per-draw backend scans
         // can stop there instead of walking all MAX_TEXTURE_IMAGE_UNITS units.
-        void NoteUnitTouched(Int unit) {
+        void NoteUnitTouched(Int unit, Bool bindingChanged = true) {
             if (unit > m_maxTouchedUnit && unit < MAX_TEXTURE_IMAGE_UNITS) m_maxTouchedUnit = unit;
             // Every texture/sampler bind entry point (glBindTexture / glBindTextureUnit /
             // glBindTextures / glBindSampler) routes through here, so bumping the generation here
@@ -75,7 +75,10 @@ namespace MobileGL::MG_State::GLState {
             // which texture is bound at which unit. A backend that has cached the per-draw
             // sampled-texture set can compare this against a snapshot to skip re-resolving it when
             // no bind changed (the block atlas + lightmap stay bound across a whole terrain batch).
-            ++m_textureBindGeneration;
+            // Re-binding the object a slot already holds changes nothing that the generation
+            // guards; such callers pass bindingChanged=false so only the high-water mark advances
+            // and the backend fast path survives the redundant re-binds apps issue every frame.
+            if (bindingChanged) ++m_textureBindGeneration;
         }
         Int GetMaxTouchedUnit() const { return m_maxTouchedUnit; }
         Uint64 GetTextureBindGeneration() const { return m_textureBindGeneration; }

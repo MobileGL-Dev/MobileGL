@@ -7,6 +7,8 @@
 // End of Source File Header
 
 #pragma once
+#include <algorithm>
+
 #include "TextureEnum.h"
 #include "MG_Util/Types.h"
 #include "MG_Util/Math/VectorTypes.h"
@@ -15,6 +17,22 @@
 namespace MobileGL {
     namespace MG_State {
         namespace GLState {
+            // Texel-space bounding box of the shadow bytes a backend has not uploaded
+            // yet, [lo, hi) per axis. Cleared (all zero) while the level is clean. A
+            // box, not a range list: repeated sub-image writes union into one region,
+            // which stays exact for the per-frame "small sub-rect of a big atlas"
+            // pattern this exists for, and degrades to the old full-level upload as
+            // the union grows.
+            struct MipmapDirtyRegion {
+                IntVec3 lo{0, 0, 0};
+                IntVec3 hi{0, 0, 0};
+                Bool Empty() const { return hi.x() <= lo.x() || hi.y() <= lo.y() || hi.z() <= lo.z(); }
+                Bool CoversWholeLevel(const IntVec3& levelSize) const {
+                    return lo.x() <= 0 && lo.y() <= 0 && lo.z() <= 0 && hi.x() >= levelSize.x() &&
+                           hi.y() >= levelSize.y() && hi.z() >= std::max(levelSize.z(), 1);
+                }
+            };
+
             class MipmapStorage {
             public:
                 SizeT GetLevelCount() const;
@@ -29,6 +47,12 @@ namespace MobileGL {
                 SizeT GetByteSize(Uint level) const;
                 void MarkDirty(Uint level, bool dirty);
                 bool IsDirty(Uint level) const;
+                // Union a sub-image write's box into the level's pending region and set the
+                // dirty flag. MarkDirty keeps its meaning: true covers the whole level,
+                // false clears the region along with the flag.
+                void MarkDirtyRegion(Uint level, IntVec3 offset, IntVec3 size);
+                // Meaningful only while IsDirty(level).
+                MipmapDirtyRegion GetDirtyRegion(Uint level) const;
 
                 // The bytes an application handed to glCompressedTexImage*, kept verbatim beside the
                 // (uncompressed) texel shadow rather than in place of it. GL 4.6 core 8.11 requires
@@ -49,6 +73,7 @@ namespace MobileGL {
                 Vector<IntVec3> m_texelSizes;
                 Vector<Vector<Uint8>> m_data;
                 Vector<bool> m_isDirty;
+                Vector<MipmapDirtyRegion> m_dirtyRegions;
                 Vector<Vector<Uint8>> m_compressedData;
                 Vector<GLenum> m_compressedFormats;
             };

@@ -150,6 +150,20 @@ namespace MobileGL::MG_State::GLState {
         virtual void* MapMipmapData(TextureUploadTarget uploadTarget, Uint mipmapLevel) = 0;
         virtual void MarkStorageDirty(TextureUploadTarget uploadTarget, Uint mipmapLevel, Bool dirty = true) = 0;
         virtual Bool IsStorageDirty(TextureUploadTarget uploadTarget, Uint mipmapLevel) const = 0;
+        // Sub-image variant of MarkStorageDirty(..., true): backends may then upload
+        // only the accumulated region instead of the whole level. The base fallback
+        // keeps whole-level semantics for storage classes that do not track regions.
+        virtual void MarkStorageDirtyRegion(TextureUploadTarget uploadTarget, Uint mipmapLevel, IntVec3 offset,
+                                            IntVec3 size) {
+            (void)offset;
+            (void)size;
+            MarkStorageDirty(uploadTarget, mipmapLevel, true);
+        }
+        // Meaningful only while IsStorageDirty(uploadTarget, mipmapLevel).
+        virtual MipmapDirtyRegion GetStorageDirtyRegion(TextureUploadTarget uploadTarget, Uint mipmapLevel) const {
+            const IntVec3 size = GetMipmapTexelSize(uploadTarget, mipmapLevel);
+            return {IntVec3{0, 0, 0}, IntVec3{size.x(), size.y(), std::max(size.z(), 1)}};
+        }
 
         // The compressed image a glCompressedTexImage* call shadowed for this level, kept verbatim
         // next to the texel data rather than instead of it - see MipmapStorage. The texel shadow
@@ -218,6 +232,9 @@ namespace MobileGL::MG_State::GLState {
         void* MapMipmapData(TextureUploadTarget uploadTarget, Uint mipmapLevel) override;
         void MarkStorageDirty(TextureUploadTarget uploadTarget, Uint mipmapLevel, Bool dirty) override;
         bool IsStorageDirty(TextureUploadTarget uploadTarget, Uint mipmapLevel) const override;
+        void MarkStorageDirtyRegion(TextureUploadTarget uploadTarget, Uint mipmapLevel, IntVec3 offset,
+                                    IntVec3 size) override;
+        MipmapDirtyRegion GetStorageDirtyRegion(TextureUploadTarget uploadTarget, Uint mipmapLevel) const override;
         void SetMipmapCompressedImage(TextureUploadTarget uploadTarget, Uint mipmapLevel, GLenum internalFormat,
                                       const void* data, SizeT size) override;
         GLenum GetMipmapCompressedFormat(TextureUploadTarget uploadTarget, Uint mipmapLevel) const override;

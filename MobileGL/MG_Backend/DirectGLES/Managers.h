@@ -266,6 +266,15 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
         extern StateBackendObjectRegistry<MG_State::GLState::VertexArrayObject, BackendVertexArrayObject>
             g_backendVertexArrayObjects;
+
+        // Shadowed glBindVertexArray: every backend VAO bind goes through here so a
+        // draw's second bind of the same VAO (SyncToBackend, then PrepareForDraw's
+        // re-bind) reaches the driver once. Invalidate whenever the ES context is
+        // replaced - ids restart and the resting binding is 0 again.
+        void BindBackendVAOId(Uint id);
+        void InvalidateVAOBindingCache();
+        // ES resets the binding to 0 when the currently bound VAO is deleted.
+        void NoteVAOIdDeleted(Uint id);
     } // namespace VertexArrayImpl
 
     namespace TextureImpl {
@@ -375,6 +384,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
             Bool m_imageBindableStorageRequired = false;
             Bool m_backendStorageImmutable = false;
             StateTextureBasicInfo m_prevTextureInfo;
+            // Frontend content version at the last completed mipmap sync. The per-draw
+            // clean probe compares this before rebuilding shape info and scanning
+            // per-level dirty flags; 0 never matches a real version (they start at 1).
+            Uint64 m_syncedContentVersion = 0;
             SamplerParameters m_cacheSamplerParameters;
             UintVec2 m_cacheLodRange = {0, 1000};
             FloatVec4 m_cacheBorderColor = {0.0f, 0.0f, 0.0f, 0.0f};

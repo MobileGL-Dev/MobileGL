@@ -34,7 +34,11 @@ namespace MobileGL::MG_State::GLState {
     }
 
     void VertexArrayState::Bind(Uint index) {
-        m_boundVertexArray = GetVertexArrayObject(index);
+        const auto& vertexArray = GetVertexArrayObject(index);
+        // Re-binding the already-current VAO is a per-batch habit of Blaze3D-style renderers;
+        // skip the shared_ptr store (two atomic refcount ops) when nothing changes.
+        if (vertexArray == m_boundVertexArray) return;
+        m_boundVertexArray = vertexArray;
     }
 
     const SharedPtr<VertexArrayObject>& VertexArrayState::CreateVertexArrayObject(Uint index) {

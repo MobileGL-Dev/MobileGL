@@ -292,6 +292,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // sync point with a current ES context.
             Vector<SharedPtr<BackendBufferResource>> g_deferredBufferReleases;
             std::mutex g_deferredBufferReleasesMutex;
+            // Cheap emptiness probe so the per-draw drain can skip the mutex and
+            // context check when nothing was enqueued (the overwhelmingly common
+            // case). Written only under the mutex; read lock-free.
+            std::atomic<Bool> g_hasDeferredBufferReleases{false};
 
             // --- Buffer-storage pool (Mesa-style BO recycle) -------------------------
             // Recycle idle GL buffer ids of an EXACT byte size instead of glDeleteBuffers
@@ -457,8 +461,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 const SizeT size = bufferObject.GetSize();
                 const GLenum usage = MG_Util::ConvertBufferUsageToGLEnum(bufferObject.GetUsage());
                 BindBufferId(TempBufferTarget, resource.id);
-                g_GLESFuncs.glBufferData(TempBufferTarget, (GLsizeiptr)size,
-                                         size > 0 ? bufferObject.MappedData() : nullptr, usage);
+                // An orphaning respecify (glBufferData with NULL, content never
+                // written since) stays a pure NULL reallocation: the driver renames
+                // the store without a stall and nothing is transferred. Uploading
+                // the stale shadow here turned Minecraft-style orphaning into a
+                // full-size synchronized upload.
+                const void* initialData =
+                    (size > 0 && bufferObject.HasDefinedContent()) ? bufferObject.MappedData() : nullptr;
+                g_GLESFuncs.glBufferData(TempBufferTarget, (GLsizeiptr)size, initialData, usage);
                 resource.storageSize = size;
                 resource.storageInitialized = true;
                 resource.pendingRespecify = false;
@@ -680,6 +690,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 }
                 const std::lock_guard<std::mutex> lock(g_deferredBufferReleasesMutex);
                 g_deferredBufferReleases.push_back(std::move(resource));
+                g_hasDeferredBufferReleases.store(true, std::memory_order_release);
             }
 
             const BufferBackendOps g_glesBufferBackendOps = {
@@ -706,6 +717,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             const std::lock_guard<std::mutex> lock(g_deferredBufferReleasesMutex);
             // The ES context owning these ids is going away; just drop the handles.
             g_deferredBufferReleases.clear();
+            g_hasDeferredBufferReleases.store(false, std::memory_order_release);
         }
 
         void OnBackendContextDestroyed() {
@@ -720,11 +732,15 @@ namespace MobileGL::MG_Backend::DirectGLES {
         }
 
         void ProcessDeferredBufferReleases() {
+            // Runs on every draw; skip the context check, mutex and vector churn
+            // outright when nothing was enqueued since the last drain.
+            if (!g_hasDeferredBufferReleases.load(std::memory_order_acquire)) return;
             if (!CanTouchGLNow()) return;
             Vector<SharedPtr<BackendBufferResource>> releases;
             {
                 const std::lock_guard<std::mutex> lock(g_deferredBufferReleasesMutex);
                 releases.swap(g_deferredBufferReleases);
+                g_hasDeferredBufferReleases.store(false, std::memory_order_release);
             }
             for (auto& resource : releases) {
                 auto* glesResource = static_cast<GLESBufferResource*>(resource.get());
@@ -1115,8 +1131,32 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 } else if (g_uboRing.creationFailed) {
                     return false; // store lost; callers fall back to glBufferSubData
                 } else {
-                    // At the size cap (>kUboRingMaxBytes of uniforms in flight — not a
-                    // real workload): drain the GPU once rather than corrupt live slots.
+                    // At the size cap (>kUboRingMaxBytes of uniforms in flight). First
+                    // try to free room by waiting for the OLDEST in-flight frames to
+                    // retire - a bounded wait that ends as soon as enough tail space
+                    // exists, instead of draining the entire queue.
+                    constexpr Uint64 kFrameWaitNs = 50ull * 1000 * 1000; // 50ms per frame
+                    while (!g_uboRingFrameMarks.empty() &&
+                           g_uboRing.head + alignedSize - g_uboRing.tail > g_uboRing.size) {
+                        const auto& oldest = g_uboRingFrameMarks.front();
+                        if (!DirectGLES::WaitForFrameSerialCompleted(oldest.frameSerial, kFrameWaitNs)) {
+                            break;
+                        }
+                        if (oldest.headAtPresent > g_uboRing.tail) g_uboRing.tail = oldest.headAtPresent;
+                        g_uboRingFrameMarks.erase(g_uboRingFrameMarks.begin());
+                    }
+                    if (g_uboRing.head + alignedSize - g_uboRing.tail <= g_uboRing.size) {
+                        offset = static_cast<SizeT>(g_uboRing.head % g_uboRing.size);
+                        if (offset + alignedSize > g_uboRing.size) {
+                            g_uboRing.head += g_uboRing.size - offset;
+                            offset = 0;
+                        }
+                        g_uboRing.head += alignedSize;
+                        outOffset = offset;
+                        return true;
+                    }
+                    // No usable fence covers the oldest frames: drain once rather than
+                    // corrupt live slots.
                     if (g_GLESFuncs.glFinish) g_GLESFuncs.glFinish();
                     g_uboRing.tail = g_uboRing.head;
                     g_uboRingFrameMarks.clear();
@@ -1234,6 +1274,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
         BackendVertexArrayObject::~BackendVertexArrayObject() {
             if (m_backendVAOId != 0) {
+                NoteVAOIdDeleted(m_backendVAOId);
                 g_GLESFuncs.glDeleteVertexArrays(1, &m_backendVAOId);
                 m_backendVAOId = 0;
             }
@@ -1246,11 +1287,35 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
         }
 
+        namespace {
+            Uint g_boundBackendVAOId = 0;
+            Bool g_boundBackendVAOKnown = false;
+        } // namespace
+
+        void BindBackendVAOId(Uint id) {
+            if (g_boundBackendVAOKnown && g_boundBackendVAOId == id) {
+                return;
+            }
+            g_GLESFuncs.glBindVertexArray(id);
+            g_boundBackendVAOId = id;
+            g_boundBackendVAOKnown = true;
+        }
+
+        void InvalidateVAOBindingCache() {
+            g_boundBackendVAOKnown = false;
+        }
+
+        void NoteVAOIdDeleted(Uint id) {
+            if (g_boundBackendVAOKnown && g_boundBackendVAOId == id) {
+                g_boundBackendVAOId = 0; // glDeleteVertexArrays reverts a bound VAO to 0
+            }
+        }
+
         void BackendVertexArrayObject::Bind() const {
 #ifdef TRACY_ENABLE
             ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
-            g_GLESFuncs.glBindVertexArray(m_backendVAOId);
+            BindBackendVAOId(m_backendVAOId);
         }
 
         inline Bool BindAttributeBuffer(const MG_State::GLState::VertexAttribute& attrib) {
@@ -1792,7 +1857,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // textures thrash, forcing a real glBindTexture per texture per draw. When
             // nothing needs uploading, skip the bind + upload machinery entirely;
             // BindCurrentTextures() re-establishes the real sampling bindings regardless.
-            if (m_isInitialized && stateTextureObject->GetStorageType() == TextureStorageType::Mipmap) {
+            // The content-version stamp short-circuits before any shape probing: it
+            // bumps on every CPU-side pixel mutation, so an unchanged stamp plus an
+            // unchanged shape means no level can be dirty. Shape stays a separate
+            // compare because a NULL-data glTexImage changes it without touching the
+            // content version.
+            if (m_isInitialized && stateTextureObject->GetStorageType() == TextureStorageType::Mipmap &&
+                m_syncedContentVersion != 0 &&
+                m_syncedContentVersion == stateTextureObject->GetContentVersion()) {
                 auto* mipmapObject =
                     static_cast<MG_State::GLState::TextureObjectMipmap*>(stateTextureObject.get());
                 const auto probeBaseSize = stateTextureObject->GetBaseSize();
@@ -1804,25 +1876,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                                0,
                                                stateTextureObject->GetSamples(),
                                                stateTextureObject->HasFixedSampleLocations()};
-                // Equal info => needsRegeneration is false, and canAppendMipmaps is
-                // false too (it requires strictly more mip levels than the last sync).
-                // So the only remaining work would be re-uploading dirty levels.
                 if (probe == m_prevTextureInfo) {
-                    Bool anyDirty = false;
-                    for (const auto& uploadTarget : mipmapObject->GetUploadTargets()) {
-                        for (SizeT level = 0; level < probe.mipmapLevels; ++level) {
-                            if (mipmapObject->IsStorageDirty(uploadTarget, level)) {
-                                anyDirty = true;
-                                break;
-                            }
-                        }
-                        if (anyDirty) break;
-                    }
-                    if (!anyDirty) {
-                        MGLOG_D("Texture ID %u already fully synced, skipping scratch bind + upload.",
-                                m_backendTextureId);
-                        return;
-                    }
+                    MGLOG_D("Texture ID %u already fully synced, skipping scratch bind + upload.",
+                            m_backendTextureId);
+                    return;
                 }
             }
 
@@ -2199,24 +2256,75 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                                                  uploadData, byteSize, &glType, packedUploadData);
                             const IntVec3 uploadSize =
                                 GetBackendUploadSize(stateTextureObject->GetTarget(), texelSize);
+                            // Sub-rect upload: when only a region of the level changed (a
+                            // 16x16 sprite in a 1024x512 atlas, the per-frame lightmap) and
+                            // the shadow bytes go to the driver unconverted, upload just that
+                            // region with UNPACK_ROW_LENGTH striding into the level shadow.
+                            // Conversion fallbacks rewrite the whole level into a fresh
+                            // buffer, so they stay on the full-level path, as do targets
+                            // whose backend upload size differs from the shadow's texel size.
+                            const auto dirtyRegion = textureMipmapObject->GetStorageDirtyRegion(uploadTarget, level);
+                            const SizeT texelCount = static_cast<SizeT>(texelSize.x()) *
+                                                     static_cast<SizeT>(texelSize.y()) *
+                                                     static_cast<SizeT>(std::max(texelSize.z(), 1));
+                            const Bool subRectEligible =
+                                uploadData == mipData && !dirtyRegion.Empty() &&
+                                !dirtyRegion.CoversWholeLevel(texelSize) && texelCount > 0 &&
+                                byteSize % texelCount == 0 && uploadSize.x() == texelSize.x() &&
+                                uploadSize.y() == texelSize.y() &&
+                                std::max(uploadSize.z(), 1) == std::max(texelSize.z(), 1);
+                            const SizeT bpp = subRectEligible ? byteSize / texelCount : 0;
+                            const IntVec3 regionSize = {dirtyRegion.hi.x() - dirtyRegion.lo.x(),
+                                                        dirtyRegion.hi.y() - dirtyRegion.lo.y(),
+                                                        dirtyRegion.hi.z() - dirtyRegion.lo.z()};
+                            const SizeT levelRowBytes = static_cast<SizeT>(texelSize.x()) * bpp;
+                            const SizeT levelSliceBytes = static_cast<SizeT>(texelSize.y()) * levelRowBytes;
+                            const Uint8* regionPtr =
+                                static_cast<const Uint8*>(uploadData) +
+                                static_cast<SizeT>(dirtyRegion.lo.z()) * levelSliceBytes +
+                                static_cast<SizeT>(dirtyRegion.lo.y()) * levelRowBytes +
+                                static_cast<SizeT>(dirtyRegion.lo.x()) * bpp;
                             switch (MapToBackendTextureTarget(stateTextureObject->GetTarget())) {
                             case TextureTarget::Texture2D:
                             case TextureTarget::TextureCubeMap:
-                                g_GLESFuncs.glTexSubImage2D(glUploadTarget, static_cast<GLint>(level), 0, 0,
-                                                            static_cast<GLsizei>(uploadSize.x()),
-                                                            static_cast<GLsizei>(uploadSize.y()), glFormat, glType,
-                                                            uploadData);
+                                if (subRectEligible) {
+                                    g_GLESFuncs.glPixelStorei(GL_UNPACK_ROW_LENGTH, texelSize.x());
+                                    g_GLESFuncs.glTexSubImage2D(
+                                        glUploadTarget, static_cast<GLint>(level), dirtyRegion.lo.x(),
+                                        dirtyRegion.lo.y(), static_cast<GLsizei>(regionSize.x()),
+                                        static_cast<GLsizei>(regionSize.y()), glFormat, glType, regionPtr);
+                                    // The surrounding ScopedDefaultUnpackState shadow says 0.
+                                    g_GLESFuncs.glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+                                } else {
+                                    g_GLESFuncs.glTexSubImage2D(glUploadTarget, static_cast<GLint>(level), 0, 0,
+                                                                static_cast<GLsizei>(uploadSize.x()),
+                                                                static_cast<GLsizei>(uploadSize.y()), glFormat,
+                                                                glType, uploadData);
+                                }
                                 break;
                             case TextureTarget::Texture3D:
                             case TextureTarget::Texture2DArray:
                             // ES 3.2 has GL_TEXTURE_CUBE_MAP_ARRAY natively and it stores exactly
                             // like a 2D array whose depth is 6 * the cube count.
                             case TextureTarget::TextureCubeMapArray:
-                                g_GLESFuncs.glTexSubImage3D(glUploadTarget, static_cast<GLint>(level), 0, 0, 0,
-                                                            static_cast<GLsizei>(uploadSize.x()),
-                                                            static_cast<GLsizei>(uploadSize.y()),
-                                                            static_cast<GLsizei>(uploadSize.z()), glFormat, glType,
-                                                            uploadData);
+                                if (subRectEligible) {
+                                    g_GLESFuncs.glPixelStorei(GL_UNPACK_ROW_LENGTH, texelSize.x());
+                                    g_GLESFuncs.glPixelStorei(GL_UNPACK_IMAGE_HEIGHT, texelSize.y());
+                                    g_GLESFuncs.glTexSubImage3D(
+                                        glUploadTarget, static_cast<GLint>(level), dirtyRegion.lo.x(),
+                                        dirtyRegion.lo.y(), dirtyRegion.lo.z(),
+                                        static_cast<GLsizei>(regionSize.x()),
+                                        static_cast<GLsizei>(regionSize.y()),
+                                        static_cast<GLsizei>(regionSize.z()), glFormat, glType, regionPtr);
+                                    g_GLESFuncs.glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+                                    g_GLESFuncs.glPixelStorei(GL_UNPACK_IMAGE_HEIGHT, 0);
+                                } else {
+                                    g_GLESFuncs.glTexSubImage3D(glUploadTarget, static_cast<GLint>(level), 0, 0, 0,
+                                                                static_cast<GLsizei>(uploadSize.x()),
+                                                                static_cast<GLsizei>(uploadSize.y()),
+                                                                static_cast<GLsizei>(uploadSize.z()), glFormat,
+                                                                glType, uploadData);
+                                }
                                 break;
                             default:
                                 MGLOG_E("Unhandled texture target %s",
@@ -2300,6 +2408,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
             });
 
             m_prevTextureInfo = currentTextureInfo;
+            // Everything dirty at entry is uploaded (or provably has no bytes to
+            // upload); stamp the version so per-draw re-syncs short-circuit until
+            // the next CPU-side mutation.
+            m_syncedContentVersion = stateTextureObject->GetContentVersion();
         }
 
         void BackendTextureObject::SyncBuiltinSamplerToBackend(

@@ -591,6 +591,34 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             return true;
         }
 
+        // Idle-content promotion: see the field comments in VkBufferResource. The
+        // streak counts frame BOUNDARIES survived unchanged (the same-frame memo
+        // above swallows repeat draws), so a promotion needs the content stable
+        // for kStreamedPromotionStreak whole frames - one no-op frame does not
+        // trigger the resident round-trip, whose creation upload is itself a
+        // staged copy worth avoiding for content that is about to change again.
+        constexpr Uint32 kStreamedPromotionStreak = 2;
+        if (resource->promotedResident) {
+            if (resource->promotedChangeSerial == changeSerial &&
+                static_cast<VkDeviceSize>(bufferObject->GetSize()) == size) {
+                return AcquireResidentSlice(kind, bufferObject, outSlice);
+            }
+            resource->promotedResident = false;
+            resource->unchangedStreak = 0;
+        } else if (resource->transientChangeSerial == changeSerial && resource->transientSize == size &&
+                   resource->transientFrameSerial != 0) {
+            if (++resource->unchangedStreak >= kStreamedPromotionStreak) {
+                resource->promotedResident = true;
+                resource->promotedChangeSerial = changeSerial;
+                if (AcquireResidentSlice(kind, bufferObject, outSlice)) {
+                    return true;
+                }
+                resource->promotedResident = false; // resident creation failed: stream as before
+            }
+        } else {
+            resource->unchangedStreak = 0;
+        }
+
         if (!m_transientUploadArena.Upload(m_currentFrameIndex, bufferObject->MappedData(), size, 16,
                                            outSlice)) {
             return false;
