@@ -149,6 +149,25 @@ namespace MobileGL {
                     m_backendStateMemoVersion = m_configVersion;
                 }
 
+                // Backend-owned aux memo: two opaque VALUE words (no pointee, so unlike the
+                // state memo above they need no eviction-epoch guard), valid while the config
+                // version matches. They live next to m_configVersion, which every per-draw
+                // path already loads, so a backend can re-read small derived facts about this
+                // VAO's configuration (e.g. a layout hash and attribute masks) without
+                // chasing into its own cache's heap entry - that chase is a guaranteed cache
+                // miss when an app cycles hundreds of VAOs per frame.
+                Bool GetBackendAuxMemo(Uint64& outAux0, Uint64& outAux1) const {
+                    if (m_backendAuxMemoVersion != m_configVersion) return false;
+                    outAux0 = m_backendAuxMemo0;
+                    outAux1 = m_backendAuxMemo1;
+                    return true;
+                }
+                void SetBackendAuxMemo(Uint64 aux0, Uint64 aux1) const {
+                    m_backendAuxMemo0 = aux0;
+                    m_backendAuxMemo1 = aux1;
+                    m_backendAuxMemoVersion = m_configVersion;
+                }
+
             private:
                 void BumpAttributeFormatVersion(Uint index);
                 void BumpAttributeBufferVersion(Uint index);
@@ -185,6 +204,9 @@ namespace MobileGL {
                 mutable const void* m_backendStateMemo = nullptr;
                 mutable Uint64 m_backendStateMemoEpoch = 0;
                 mutable Uint32 m_backendStateMemoVersion = ~0u;
+                mutable Uint64 m_backendAuxMemo0 = 0;
+                mutable Uint64 m_backendAuxMemo1 = 0;
+                mutable Uint32 m_backendAuxMemoVersion = ~0u;
             };
         } // namespace GLState
     } // namespace MG_State
