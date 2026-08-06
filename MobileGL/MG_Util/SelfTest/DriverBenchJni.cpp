@@ -41,6 +41,7 @@
 #include <MG_Impl/GLImpl/Getter/GL_Getter.h>
 #include <MG_Impl/GLImpl/Program/GL_Program.h>
 #include <MG_Impl/GLImpl/RenderState/GL_RenderState.h>
+// Disable/BlendFuncSeparate live in GL_RenderState.h; DrawBuffers in GL_Framebuffer.h - both already included.
 #include <MG_Impl/GLImpl/Sampler/GL_Sampler.h>
 #include <MG_Impl/GLImpl/Sync/GL_Sync.h>
 #include <MG_Impl/GLImpl/Texture/GL_Texture.h>
@@ -75,6 +76,9 @@
 #define glDrawElements MobileGL::MG_Impl::GLImpl::DrawElements
 #define glDrawElementsBaseVertex MobileGL::MG_Impl::GLImpl::DrawElementsBaseVertex
 #define glEnable MobileGL::MG_Impl::GLImpl::Enable
+#define glDisable MobileGL::MG_Impl::GLImpl::Disable
+#define glBlendFuncSeparate MobileGL::MG_Impl::GLImpl::BlendFuncSeparate
+#define glDrawBuffers MobileGL::MG_Impl::GLImpl::DrawBuffers
 #define glEnableVertexAttribArray MobileGL::MG_Impl::GLImpl::EnableVertexAttribArray
 #define glFenceSync MobileGL::MG_Impl::GLImpl::FenceSync
 #define glFramebufferRenderbuffer MobileGL::MG_Impl::GLImpl::FramebufferRenderbuffer

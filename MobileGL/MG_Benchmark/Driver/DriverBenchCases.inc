@@ -34,6 +34,9 @@ static GLuint g_uboRing;
 static GLint g_uboAlign = 256;
 static size_t g_uboSlot = 256;
 static GLuint g_sampler;
+/* Two small offscreen targets for the 26.2-style render-pass churn case. */
+static GLuint g_passFbo[2];
+static GLuint g_passColor[2];
 static float g_mvp[16] = {0.002f, 0, 0, 0, 0, 0.002f, 0, 0, 0, 0, -0.001f, 0, -1.f, -1.f, 0.f, 1.f};
 
 /* Minecraft chunk vertex: pos 3f, color 4ub, uv 2f, packed light 2s -> 32 B */
@@ -162,10 +165,13 @@ static void setup_vao(GLuint vao, GLuint vbo, GLuint ibo) {
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ibo);
 }
 
+static GLuint g_mainFbo;
+
 static void build_resources(void) {
     /* offscreen render target: 1280x720 RBO FBO, like CTS fbo surface mode */
     GLuint fbo, rboColor, rboDepth;
     glGenFramebuffers(1, &fbo);
+    g_mainFbo = fbo;
     glBindFramebuffer(GL_FRAMEBUFFER, fbo);
     glGenRenderbuffers(1, &rboColor);
     glBindRenderbuffer(GL_RENDERBUFFER, rboColor);
@@ -256,6 +262,21 @@ static void build_resources(void) {
     glBindBuffer(GL_UNIFORM_BUFFER, g_uboRing);
     glBufferData(GL_UNIFORM_BUFFER, 4 * 1024 * 1024, g_scratch, GL_DYNAMIC_DRAW);
     glBindBuffer(GL_UNIFORM_BUFFER, 0);
+
+    for (int i = 0; i < 2; ++i) {
+        glGenFramebuffers(1, &g_passFbo[i]);
+        glBindFramebuffer(GL_FRAMEBUFFER, g_passFbo[i]);
+        glGenRenderbuffers(1, &g_passColor[i]);
+        glBindRenderbuffer(GL_RENDERBUFFER, g_passColor[i]);
+        glRenderbufferStorage(GL_RENDERBUFFER, GL_RGBA8, 256, 256);
+        glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, g_passColor[i]);
+        if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+            bench_gl_failed("pass FBO incomplete", "");
+            return;
+        }
+    }
+    /* back to the main offscreen target the harness set up */
+    glBindFramebuffer(GL_FRAMEBUFFER, g_mainFbo);
 
     glGenSamplers(1, &g_sampler);
     glSamplerParameteri(g_sampler, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
@@ -516,6 +537,72 @@ static void case_mc_sampler_churn(int frame, long a, long b) {
 }
 
 
+/* 26.2 switches render targets constantly: 132 glBindFramebuffer and 198
+ * glDrawBuffers per frame. Pass switching is where a Vulkan backend pays for
+ * render-pass breaks, so this case is the one to watch on Magma. a = passes. */
+static void case_mc_pass_switch(int frame, long a, long b) {
+    (void)frame; (void)b;
+    static const GLenum kColor0[1] = {GL_COLOR_ATTACHMENT0};
+    glBindVertexArray(g_vao[0]);
+    for (long i = 0; i < a; ++i) {
+        glBindFramebuffer(GL_FRAMEBUFFER, g_passFbo[i & 1]);
+        glDrawBuffers(1, kColor0);
+        glViewport(0, 0, 256, 256);
+        glDrawElements(GL_TRIANGLES, g_quadsPerSection * 6, GL_UNSIGNED_INT, 0);
+        glDrawElements(GL_TRIANGLES, g_quadsPerSection * 6, GL_UNSIGNED_INT, 0);
+    }
+    glBindFramebuffer(GL_FRAMEBUFFER, g_mainFbo);
+    glViewport(0, 0, 1280, 720);
+}
+
+/* Blaze3D toggles blend around batches: 46 glEnable/glDisable pairs and 28
+ * glBlendFuncSeparate per vanilla frame. a = toggle pairs. */
+static void case_mc_state_toggle(int frame, long a, long b) {
+    (void)frame; (void)b;
+    glBindVertexArray(g_vao[0]);
+    for (long i = 0; i < a; ++i) {
+        glEnable(GL_BLEND);
+        glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ZERO);
+        glDrawElements(GL_TRIANGLES, g_quadsPerSection * 6, GL_UNSIGNED_INT, 0);
+        glDisable(GL_BLEND);
+        glDrawElements(GL_TRIANGLES, g_quadsPerSection * 6, GL_UNSIGNED_INT, 0);
+    }
+}
+
+/* 26.2 re-sets texture parameters relentlessly - 612 glTexParameteri per frame,
+ * almost always to the value already in place. Measures redundant-param
+ * filtering. a = parameter writes. */
+static void case_mc_tex_param(int frame, long a, long b) {
+    (void)frame; (void)b;
+    glBindVertexArray(g_vao[0]);
+    glBindTexture(GL_TEXTURE_2D, g_texAtlas);
+    for (long i = 0; i < a; i += 4) {
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST_MIPMAP_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    }
+    glDrawElements(GL_TRIANGLES, g_quadsPerSection * 6, GL_UNSIGNED_INT, 0);
+}
+
+/* Sodium switches programs mid-frame far more than vanilla: 62 glUseProgram and
+ * 60 mat4 uploads per frame. a = program switches. */
+static void case_mc_use_program(int frame, long a, long b) {
+    (void)frame; (void)b;
+    glBindVertexArray(g_vao[0]);
+    for (long i = 0; i < a; ++i) {
+        if (i & 1) {
+            glUseProgram(g_progEntity);
+            glUniformMatrix4fv(g_uMvpEntity, 1, 0, g_mvp);
+        } else {
+            glUseProgram(g_progChunk);
+            glUniformMatrix4fv(g_uMvpChunk, 1, 0, g_mvp);
+        }
+        glDrawElements(GL_TRIANGLES, g_quadsPerSection * 6, GL_UNSIGNED_INT, 0);
+    }
+    glUseProgram(g_progChunk);
+}
+
 /* ---- the case table both harnesses iterate --------------------------------
  * a/b are the case's own knobs; opsPerFrame is what one bench frame is
  * normalised by, so ns_per_op compares across renderers. The mc_* rates are
@@ -536,6 +623,10 @@ static const BenchCaseDesc kBenchCases[] = {
     {"mc_tex_stream", case_mc_tex_stream, 95, 0, 95},
     {"mc_uniform_lookup", case_mc_uniform_lookup, 41, 0, 41},
     {"mc_sampler_churn", case_mc_sampler_churn, 306, 0, 306},
+    {"mc_pass_switch", case_mc_pass_switch, 132, 0, 132},
+    {"mc_state_toggle", case_mc_state_toggle, 46, 0, 46},
+    {"mc_tex_param", case_mc_tex_param, 612, 0, 612},
+    {"mc_use_program", case_mc_use_program, 62, 0, 62},
     {"draw_tiny", case_draw_tiny, 2048, 0, 2048},
     {"draw_uniform", case_draw_uniform, 2048, 0, 2048},
     {"draw_multi_vao", case_draw_multi_vao, 2048, 0, 2048},

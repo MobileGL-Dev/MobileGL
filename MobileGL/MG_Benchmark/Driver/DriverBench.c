@@ -12,8 +12,10 @@
  * libEGL.so.1 for the native driver, or a libMobileGL.so path for either
  * MobileGL backend selected with MOBILEGL_BACKEND_TYPE), creates a desktop-GL
  * context on a small pbuffer, renders into its own FBO and paces frames with
- * glFinish. No window system is required beyond what the provider itself
- * needs - see run_driver_bench.sh.
+ * glFinish. No window system is required: the default display is tried first
+ * so a desktop run reaches the real driver, and a headless box (CI, a build
+ * server) falls back to EGL_MESA_platform_surfaceless - see
+ * run_driver_bench.sh.
  *
  * Every case models one hot pattern from captured Minecraft traces:
  *   draw_tiny        back-to-back glDrawElements, shared state (chunk batch)
@@ -67,6 +69,7 @@ typedef unsigned int EGLenum;
 #define EGL_CONTEXT_MINOR_VERSION 0x30FB
 #define EGL_CONTEXT_OPENGL_PROFILE_MASK 0x30FD
 #define EGL_CONTEXT_OPENGL_CORE_PROFILE_BIT 0x00000001
+#define EGL_PLATFORM_SURFACELESS_MESA 0x31DD
 
 /* ---- GL constants ---- */
 #define GL_COLOR_BUFFER_BIT 0x00004000
@@ -89,6 +92,11 @@ typedef unsigned int EGLenum;
 #define GL_NEAREST 0x2600
 #define GL_NEAREST_MIPMAP_LINEAR 0x2702
 #define GL_DEPTH_TEST 0x0B71
+#define GL_BLEND 0x0BE2
+#define GL_SRC_ALPHA 0x0302
+#define GL_ONE_MINUS_SRC_ALPHA 0x0303
+#define GL_ONE 1
+#define GL_ZERO 0
 #define GL_VERTEX_SHADER 0x8B31
 #define GL_FRAGMENT_SHADER 0x8B30
 #define GL_COMPILE_STATUS 0x8B81
@@ -133,6 +141,9 @@ static void* g_provider;
 GLF(void, glClear, (unsigned))
 GLF(void, glClearColor, (float, float, float, float))
 GLF(void, glEnable, (GLenum))
+GLF(void, glDisable, (GLenum))
+GLF(void, glBlendFuncSeparate, (GLenum, GLenum, GLenum, GLenum))
+GLF(void, glDrawBuffers, (GLsizei, const GLenum*))
 GLF(void, glViewport, (GLint, GLint, GLsizei, GLsizei))
 GLF(const unsigned char*, glGetString, (GLenum))
 GLF(GLenum, glGetError, (void))
@@ -280,7 +291,21 @@ static void run_case(const char* name, case_fn body, long a, long b, long opsPer
     if (glGetError() != GL_NO_ERROR) fprintf(stderr, "WARN: GL error after %s\n", name);
 }
 
-/* a = draws per frame */
+/* A display that needs no window system. eglGetPlatformDisplay is EGL 1.5
+ * core and eglGetPlatformDisplayEXT is the EGL_EXT_platform_base spelling
+ * older loaders ship; both are client entry points, so they resolve before
+ * any display exists. Only the attribute-list types differ between the two
+ * and this passes none, so one cast covers both. */
+static EGLDisplay surfaceless_display(void) {
+    void* fn = dlsym(g_provider, "eglGetPlatformDisplay");
+    if (!fn) fn = g_eglGetProcAddress("eglGetPlatformDisplay");
+    if (!fn) fn = dlsym(g_provider, "eglGetPlatformDisplayEXT");
+    if (!fn) fn = g_eglGetProcAddress("eglGetPlatformDisplayEXT");
+    if (!fn) return NULL;
+    return ((EGLDisplay(*)(EGLenum, void*, const void*))fn)(EGL_PLATFORM_SURFACELESS_MESA,
+                                                            EGL_DEFAULT_DISPLAY, NULL);
+}
+
 /* ---- EGL bootstrap: one provider library, pbuffer, desktop-GL context ---- */
 static int boot_egl(void) {
     const char* libpath = getenv("DRIVERBENCH_EGL_LIB");
@@ -304,14 +329,30 @@ static int boot_egl(void) {
     ESYM(eglGetError)
     g_eglGetProcAddress = (void* (*)(const char*))p_eglGetProcAddress;
 
-    EGLDisplay dpy = ((EGLDisplay(*)(void*))p_eglGetDisplay)(EGL_DEFAULT_DISPLAY);
-    if (!dpy) { fprintf(stderr, "FAIL: eglGetDisplay\n"); return 1; }
+    EGLint (*getError)(void) = (EGLint(*)(void))p_eglGetError;
+    EGLBoolean (*initialize)(EGLDisplay, EGLint*, EGLint*) =
+        (EGLBoolean(*)(EGLDisplay, EGLint*, EGLint*))p_eglInitialize;
+
+    /* The default display first: it is the one a windowed app would get, and
+     * on a desktop it is the one that reaches the real GPU - which is the
+     * driver this bench exists to measure. It does need a window system,
+     * though; Mesa's default platform is X11, so with no $DISPLAY (CI, a
+     * build server, ssh without forwarding) eglInitialize fails. Fall back to
+     * EGL_MESA_platform_surfaceless rather than give up: every case draws into
+     * the FBO built by build_resources(), so no window is needed for any of
+     * the work being timed. */
     EGLint maj = 0, min = 0;
-    if (!((EGLBoolean(*)(EGLDisplay, EGLint*, EGLint*))p_eglInitialize)(dpy, &maj, &min)) {
-        fprintf(stderr, "FAIL: eglInitialize (0x%x)\n", ((EGLint(*)(void))p_eglGetError)());
-        return 1;
+    const char* how = "default display";
+    EGLDisplay dpy = ((EGLDisplay(*)(void*))p_eglGetDisplay)(EGL_DEFAULT_DISPLAY);
+    if (!dpy || !initialize(dpy, &maj, &min)) {
+        dpy = surfaceless_display();
+        how = "surfaceless display";
+        if (!dpy || !initialize(dpy, &maj, &min)) {
+            fprintf(stderr, "FAIL: eglInitialize (0x%x)\n", getError());
+            return 1;
+        }
     }
-    fprintf(stderr, "EGL %d.%d via %s\n", maj, min, libpath);
+    fprintf(stderr, "EGL %d.%d via %s (%s)\n", maj, min, libpath, how);
 
     // Desktop GL first (that is what MobileGL exposes and what the cases are
     // written against), GLES 3 second so the same binary can measure a device's
@@ -348,7 +389,10 @@ static int boot_egl(void) {
                                        EGL_RENDERABLE_TYPE, EGL_OPENGL_ES3_BIT, EGL_NONE};
         ncfg = 0;
         if (!chooseConfig(dpy, esCfgAttribs, &cfg, 1, &ncfg) || ncfg < 1) {
-            const EGLint relaxed[] = {EGL_SURFACE_TYPE, EGL_PBUFFER_BIT, EGL_RED_SIZE, 8, EGL_NONE};
+            // EGL_SURFACE_TYPE 0 matches any config: a stack that offers no
+            // pbuffer at all is still usable through the surfaceless context
+            // path below.
+            const EGLint relaxed[] = {EGL_SURFACE_TYPE, 0, EGL_RED_SIZE, 8, EGL_NONE};
             if (!chooseConfig(dpy, relaxed, &cfg, 1, &ncfg) || ncfg < 1) {
                 fprintf(stderr, "FAIL: eglChooseConfig\n");
                 return 1;
@@ -358,20 +402,22 @@ static int boot_egl(void) {
         ctx = createContext(dpy, cfg, EGL_NO_CONTEXT, esCtxAttribs);
     }
     if (ctx == EGL_NO_CONTEXT) {
-        fprintf(stderr, "FAIL: eglCreateContext (0x%x)\n", ((EGLint(*)(void))p_eglGetError)());
+        fprintf(stderr, "FAIL: eglCreateContext (0x%x)\n", getError());
         return 1;
     }
 
+    /* The pbuffer only exists to have something to make current - nothing is
+     * ever drawn to it. Where there is no pbuffer config, EGL_NO_SURFACE is
+     * exactly what EGL_KHR_surfaceless_context takes, so the same call covers
+     * both. */
     const EGLint pbAttribs[] = {EGL_WIDTH, 64, EGL_HEIGHT, 64, EGL_NONE};
     EGLSurface surf = ((EGLSurface(*)(EGLDisplay, EGLConfig, const EGLint*))p_eglCreatePbufferSurface)(
         dpy, cfg, pbAttribs);
-    if (surf == EGL_NO_SURFACE) {
-        fprintf(stderr, "FAIL: eglCreatePbufferSurface (0x%x)\n", ((EGLint(*)(void))p_eglGetError)());
-        return 1;
-    }
+    if (surf == EGL_NO_SURFACE)
+        fprintf(stderr, "no pbuffer (0x%x), using a surfaceless context\n", getError());
     if (!((EGLBoolean(*)(EGLDisplay, EGLSurface, EGLSurface, EGLContext))p_eglMakeCurrent)(dpy, surf,
                                                                                           surf, ctx)) {
-        fprintf(stderr, "FAIL: eglMakeCurrent (0x%x)\n", ((EGLint(*)(void))p_eglGetError)());
+        fprintf(stderr, "FAIL: eglMakeCurrent (0x%x)\n", getError());
         return 1;
     }
 
@@ -385,6 +431,7 @@ static int boot_egl(void) {
         if (!name) { fprintf(stderr, "FAIL: resolve %s\n", #name); return 1; }     \
     } while (0)
     RESOLVE(glClear); RESOLVE(glClearColor); RESOLVE(glEnable); RESOLVE(glViewport);
+    RESOLVE(glDisable); RESOLVE(glBlendFuncSeparate); RESOLVE(glDrawBuffers);
     RESOLVE(glGetString); RESOLVE(glGetError); RESOLVE(glFinish); RESOLVE(glFlush);
     RESOLVE(glGenBuffers); RESOLVE(glBindBuffer); RESOLVE(glBufferData); RESOLVE(glBufferSubData);
     RESOLVE(glGenVertexArrays); RESOLVE(glBindVertexArray); RESOLVE(glEnableVertexAttribArray);
