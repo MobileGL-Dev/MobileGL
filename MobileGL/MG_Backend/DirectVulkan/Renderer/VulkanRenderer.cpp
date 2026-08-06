@@ -4164,6 +4164,77 @@ void main() {
         return true;
     }
 
+    // Boost-style hash combine. The inputs are tiny enum ordinals and bit masks, so
+    // full avalanche is unnecessary; the combine only has to keep distinct state
+    // vectors apart under the memo's otherwise-exact key.
+    static inline Uint64 CombinePipelineStateWord(Uint64 hash, Uint64 word) {
+        return hash ^ (word + 0x9E3779B97F4A7C15ull + (hash << 6) + (hash >> 2));
+    }
+
+    // Value hash over every fixed-function GL state the pipeline payload reads that
+    // the memo key's other fields (mode, program hash, vertex-input hash, render-pass
+    // hash, transform flags) do not already pin down. Enumerated against the payload
+    // build in GetOrCreatePipeline - any new GL-state read there must be added here:
+    //   - capability bits: CullFace, DepthTest, PolygonOffsetFill (mode gating rides
+    //     the memo's mode key), RasterizerDiscard, ColorLogicOp, StencilTest,
+    //     PrimitiveRestart(+FixedIndex), plus the depth write mask
+    //   - patch vertices, polygon mode, cull face mode, depth func, logic op
+    //   - front/back stencil ops + compare funcs (ref/mask are dynamic state)
+    //   - per draw buffer up to the render pass's colour span: indexed blend enable,
+    //     blend factors/equations, indexed colour write mask (broadcast from index 0
+    //     when the device lacks independentBlend - the same read the payload does)
+    // FBO-derived payload inputs (attachment presence/formats/draw-buffer gating) are
+    // pinned by the render-pass hash key, exactly as the version-keyed memo relied on.
+    Uint64 VulkanRenderer::ComputePipelineStateHash(Uint32 colorAttachmentCount) const {
+        auto& ctx = *MG_State::pGLContext;
+        Uint64 capabilityBits = 0;
+        capabilityBits |= ctx.IsCapabilityEnabled(CapabilityInput::CullFace) ? 1ull << 0 : 0;
+        capabilityBits |= ctx.IsCapabilityEnabled(CapabilityInput::DepthTest) ? 1ull << 1 : 0;
+        capabilityBits |= ctx.IsCapabilityEnabled(CapabilityInput::PolygonOffsetFill) ? 1ull << 2 : 0;
+        capabilityBits |= ctx.IsCapabilityEnabled(CapabilityInput::RasterizerDiscard) ? 1ull << 3 : 0;
+        capabilityBits |= ctx.IsCapabilityEnabled(CapabilityInput::ColorLogicOp) ? 1ull << 4 : 0;
+        capabilityBits |= ctx.IsCapabilityEnabled(CapabilityInput::StencilTest) ? 1ull << 5 : 0;
+        capabilityBits |= ctx.IsCapabilityEnabled(CapabilityInput::PrimitiveRestart) ? 1ull << 6 : 0;
+        capabilityBits |= ctx.IsCapabilityEnabled(CapabilityInput::PrimitiveRestartFixedIndex) ? 1ull << 7 : 0;
+        capabilityBits |= ctx.GetDepthMask() ? 1ull << 8 : 0;
+        Uint64 hash = CombinePipelineStateWord(0x243F6A8885A308D3ull, capabilityBits);
+        hash = CombinePipelineStateWord(hash, static_cast<Uint64>(ctx.GetPatchVertices()));
+        hash = CombinePipelineStateWord(hash, static_cast<Uint64>(ctx.GetPolygonModeFront()));
+        hash = CombinePipelineStateWord(hash, static_cast<Uint64>(ctx.GetCullFaceMode()));
+        hash = CombinePipelineStateWord(hash, static_cast<Uint64>(ctx.GetDepthFunc()));
+        hash = CombinePipelineStateWord(hash, static_cast<Uint64>(ctx.GetLogicOp()));
+        for (const StencilFace face : {StencilFace::Front, StencilFace::Back}) {
+            const StencilFaceState& stencil = ctx.GetStencilState(face);
+            hash = CombinePipelineStateWord(hash,
+                static_cast<Uint64>(stencil.FailOp) |
+                (static_cast<Uint64>(stencil.PassDepthPassOp) << 16) |
+                (static_cast<Uint64>(stencil.PassDepthFailOp) << 32) |
+                (static_cast<Uint64>(stencil.Func) << 48));
+        }
+        for (Uint32 i = 0; i < colorAttachmentCount; ++i) {
+            BlendFactor srcRGB = BlendFactor::One;
+            BlendFactor dstRGB = BlendFactor::Zero;
+            BlendFactor srcAlpha = BlendFactor::One;
+            BlendFactor dstAlpha = BlendFactor::Zero;
+            BlendEquation colorEquation = BlendEquation::Add;
+            BlendEquation alphaEquation = BlendEquation::Add;
+            ctx.GetBlendFuncIndexed(i, srcRGB, dstRGB, srcAlpha, dstAlpha);
+            ctx.GetBlendEquationIndexed(i, colorEquation, alphaEquation);
+            const BoolVec4 mask = ctx.GetColorMaskIndexed(m_independentBlendFeatureEnabled ? i : 0);
+            Uint64 attachmentWord = ctx.IsCapabilityEnabledIndexed(CapabilityInput::Blend, i) ? 1ull : 0;
+            attachmentWord |= (mask.r() ? 1ull << 1 : 0) | (mask.g() ? 1ull << 2 : 0) |
+                              (mask.b() ? 1ull << 3 : 0) | (mask.a() ? 1ull << 4 : 0);
+            attachmentWord |= static_cast<Uint64>(srcRGB) << 8;
+            attachmentWord |= static_cast<Uint64>(dstRGB) << 16;
+            attachmentWord |= static_cast<Uint64>(srcAlpha) << 24;
+            attachmentWord |= static_cast<Uint64>(dstAlpha) << 32;
+            attachmentWord |= static_cast<Uint64>(colorEquation) << 40;
+            attachmentWord |= static_cast<Uint64>(alphaEquation) << 48;
+            hash = CombinePipelineStateWord(hash, attachmentWord);
+        }
+        return hash;
+    }
+
     // A program that runs a geometry shader AND captures transform feedback. Both halves are
     // link-time properties, so this is safe to fold into a pipeline keyed on the program hash.
     static Bool ProgramCapturesXfbFromGeometryStage(const MG_State::GLState::ProgramObject& program) {
@@ -4192,7 +4263,7 @@ void main() {
         // PipelineCreatePayload field: draw mode (topology + polygon-fill depth-bias gate), program
         // content hash (folds program identity + link version + transform flags + shader stages),
         // vertex-input hash (VAO layout), render-pass hash (render targets + the draw-buffer/format
-        // driven blend & write-mask gating), and the render-state version (all fixed-function state).
+        // driven blend & write-mask gating), and the pipeline-state value hash (all fixed-function state).
         // Reset per-frame and on pipeline destruction so a memoized handle can never dangle.
         // The identity hash mixes buffer heap addresses (per-chunk VBOs mint a new
         // one per buffer); the memo and the pipeline payload key on the resolved
@@ -4203,14 +4274,25 @@ void main() {
         const Uint64 renderPassHash = renderPassEntry.hash;
         // The pipeline-relevant subset only: glViewport / glScissor / glBlendColor / glStencilMask
         // and friends are dynamic state or not pipeline state at all, and keying the memo on the
-        // all-state counter made any of them evict a perfectly good VkPipeline.
+        // all-state counter made any of them evict a perfectly good VkPipeline. The memo compares
+        // the VALUE hash of that subset, never the version itself: the version is monotonic, so
+        // per-draw state flips (GL_BLEND toggles) would otherwise miss entries the memo holds.
+        // The version only guards recomputing the hash - unchanged version, unchanged bytes.
         const Uint renderStateVersion = MG_State::pGLContext->GetPipelineStateVersion();
+        if (!m_pipelineStateHashValid || m_pipelineStateHashVersion != renderStateVersion ||
+            m_pipelineStateHashColorCount != renderPassEntry.colorAttachmentCount) {
+            m_pipelineStateHash = ComputePipelineStateHash(renderPassEntry.colorAttachmentCount);
+            m_pipelineStateHashVersion = renderStateVersion;
+            m_pipelineStateHashColorCount = renderPassEntry.colorAttachmentCount;
+            m_pipelineStateHashValid = true;
+        }
+        const Uint64 pipelineStateHash = m_pipelineStateHash;
         for (Uint32 i = 0; i < m_pipelineMemoCount; ++i) {
             const PipelineMemoEntry& entry = m_pipelineMemo[i];
             if (entry.pipeline != VK_NULL_HANDLE && entry.mode == mode &&
                 entry.programHash == programObj.hash && entry.vertexInputHash == vertexLayoutHash &&
                 entry.renderPassHash == renderPassHash &&
-                entry.renderStateVersion == renderStateVersion &&
+                entry.pipelineStateHash == pipelineStateHash &&
                 entry.transformFlags == transformFlags) {
                 return entry.pipeline;
             }
@@ -4704,7 +4786,7 @@ void main() {
             entry.programHash = programObj.hash;
             entry.vertexInputHash = vertexLayoutHash;
             entry.renderPassHash = renderPassHash;
-            entry.renderStateVersion = renderStateVersion;
+            entry.pipelineStateHash = pipelineStateHash;
             entry.transformFlags = transformFlags;
             entry.pipeline = pipeline;
             m_pipelineMemoNext = (m_pipelineMemoNext + 1) % kPipelineMemoSize;
@@ -4814,7 +4896,7 @@ void main() {
     Bool VulkanRenderer::TrySetupDrawFastPath(FrameContext::FrameData& frame, GLenum mode,
                                               Flags<DrawSetupAspect> aspects, const DrawCmdParam& drawParams,
                                               const IndexBufferView* pIndexBufferView) {
-        const SetupDrawSnapshot& snap = m_setupDrawSnapshot;
+        SetupDrawSnapshot& snap = m_setupDrawSnapshot;
         if (!snap.valid || !frame.isCommandRecording) {
             return false;
         }
@@ -4844,9 +4926,25 @@ void main() {
             drawFbo->GetObjectVersion() != snap.fboVersion) {
             return false;
         }
-        if (MG_State::pGLContext->GetPipelineStateVersion() != snap.renderStateVersion ||
-            MG_State::pGLContext->GetTextureBindGeneration() != snap.bindGeneration) {
-            return false;
+        // The two monotonic counters get a shadow-compare rescue instead of an
+        // unconditional decline: both bump on state writes whose VALUE often lands
+        // back on what the snapshot already describes (a GL_BLEND toggle between
+        // two draws, a redundant glBindSampler), and declining here sends every
+        // such draw through the full SetupDraw.
+        const Uint renderStateVersion = MG_State::pGLContext->GetPipelineStateVersion();
+        const Uint64 bindGeneration = MG_State::pGLContext->GetTextureBindGeneration();
+        const Bool renderStateMoved = renderStateVersion != snap.renderStateVersion;
+        const Bool bindsMoved = bindGeneration != snap.bindGeneration;
+        if (renderStateMoved) {
+            // Only the pipeline depends on the moved state - except the render-pass
+            // flavor input (depth/stencil participation); a flip of that must take
+            // the full path's pass selection.
+            const Bool drawUsesDepthStencil =
+                MG_State::pGLContext->IsCapabilityEnabled(CapabilityInput::DepthTest) ||
+                MG_State::pGLContext->IsCapabilityEnabled(CapabilityInput::StencilTest);
+            if (drawUsesDepthStencil != snap.drawUsesDepthStencil) {
+                return false;
+            }
         }
         if (GetShaderTransformFlags(m_swapchainObject.GetPreTransform()).GetRaw() != snap.baseTransformFlags) {
             return false;
@@ -4854,6 +4952,12 @@ void main() {
         if (m_textureManager->GetResourceEraseEpoch() != snap.textureEraseEpoch ||
             m_textureManager->GetTextureImageEpoch() != snap.textureImageEpoch ||
             m_renderPassManager->GetRenderbufferImageEpoch() != snap.renderbufferImageEpoch) {
+            return false;
+        }
+        const auto& programObj = m_programFactory->GetOrCreateProgram(
+            program, ProgramFactory::CompileOptionFlags(snap.resolvedTransformFlags));
+        if (bindsMoved &&
+            !m_uniformManager->SampledBindingsUnchanged(program, programObj, m_sampledBindingRecordsScratch)) {
             return false;
         }
 
@@ -4869,6 +4973,16 @@ void main() {
         }
         Uint64 contentSum = 0;
         Uint64 paramsSum = 0;
+        // The descriptor-reuse hint (see BindProgramUniformBuffers) additionally needs
+        // every sampled resource still in the exact layout the cached descriptors hold.
+        // A layout that moved to a different-but-sampleable one only clears the hint
+        // (this draw re-resolves and re-caches) - the fast path itself stays valid.
+        // bindsMoved does not clear the hint: reaching this point with a moved bind
+        // generation means SampledBindingsUnchanged proved the per-binding (texture,
+        // sampler) pairs identical, and the sums/generation checks below cover every
+        // remaining descriptor input.
+        const Bool layoutSnapshotUsable = m_sampledLayoutSnapshots.size() == sampledTextures.size();
+        Bool samplerDescriptorsUnchanged = layoutSnapshotUsable;
         for (SizeT i = 0; i < sampledTextures.size(); ++i) {
             const auto* sampledTexture = sampledTextures[i];
             if (sampledTexture == nullptr) {
@@ -4878,11 +4992,20 @@ void main() {
             if (resource == nullptr || !IsValidSampledImageLayout(resource->layout)) {
                 return false;
             }
+            if (layoutSnapshotUsable && m_sampledLayoutSnapshots[i] != resource->layout) {
+                m_sampledLayoutSnapshots[i] = resource->layout;
+                samplerDescriptorsUnchanged = false;
+            }
             contentSum += sampledTexture->GetContentVersion();
             paramsSum += sampledTexture->GetTextureParamsVersion();
         }
         if (contentSum != snap.sampledContentSum || paramsSum != snap.sampledParamsSum) {
             return false;
+        }
+        const Uint64 samplingResolutionGeneration = MG_State::pGLContext->GetSamplingResolutionGeneration();
+        if (samplingResolutionGeneration != snap.samplingResolutionGeneration) {
+            snap.samplingResolutionGeneration = samplingResolutionGeneration;
+            samplerDescriptorsUnchanged = false;
         }
         for (SizeT i = 0; i < sampledTextures.size(); ++i) {
             if (sampledTextures[i] != nullptr && sampledResources[i] != nullptr) {
@@ -4890,18 +5013,43 @@ void main() {
             }
         }
 
-        // Everything the full path would re-resolve is provably unchanged; run
+        // Everything the full path would re-resolve is provably unchanged - or, for
+        // a moved pipeline-state version, reduces to re-resolving just the pipeline
+        // through the value-keyed memo against the still-active render pass. Run
         // only the per-draw tail.
-        if (!g_dynamicStateShadow.graphicsPipelineValid ||
-            g_dynamicStateShadow.graphicsPipeline != snap.pipeline) {
-            vkCmdBindPipeline(frame.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, snap.pipeline);
-            g_dynamicStateShadow.graphicsPipelineValid = true;
-            g_dynamicStateShadow.graphicsPipeline = snap.pipeline;
+        VkPipeline pipeline = snap.pipeline;
+        if (renderStateMoved) {
+            // Same lookup the full path would do; every input (FBO + version, image
+            // index, depth/stencil participation, image epochs, no pending clears)
+            // was verified unchanged above, so this is a pure cache hit on the same
+            // entry the snapshot's pipeline was built against.
+            const RenderPassEntry& renderPassEntry = m_renderPassManager->GetOrCreateRenderPass(
+                *drawFbo, m_imageIndexAcquired, snap.drawUsesDepthStencil);
+            if (!activeRenderPass->CompatibleWith(renderPassEntry)) {
+                return false;
+            }
+            pipeline = GetOrCreatePipeline(mode, program, programObj,
+                                           ProgramFactory::CompileOptionFlags(snap.resolvedTransformFlags),
+                                           vao, renderPassEntry);
+            if (pipeline == VK_NULL_HANDLE) {
+                return false;
+            }
         }
-        const auto& programObj = m_programFactory->GetOrCreateProgram(
-            program, ProgramFactory::CompileOptionFlags(snap.resolvedTransformFlags));
+        // Every decline is behind us: the snapshot again describes the current
+        // counters, so the next draw's compare is two integer loads.
+        snap.renderStateVersion = renderStateVersion;
+        snap.bindGeneration = bindGeneration;
+        snap.pipeline = pipeline;
+        if (!g_dynamicStateShadow.graphicsPipelineValid ||
+            g_dynamicStateShadow.graphicsPipeline != pipeline) {
+            vkCmdBindPipeline(frame.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+            g_dynamicStateShadow.graphicsPipelineValid = true;
+            g_dynamicStateShadow.graphicsPipeline = pipeline;
+        }
         if (!m_uniformManager->BindProgramUniformBuffers(frame.commandBuffer, program, programObj,
-                                                         m_frameContext.GetCurrentFrameIndex())) {
+                                                         m_frameContext.GetCurrentFrameIndex(),
+                                                         VK_PIPELINE_BIND_POINT_GRAPHICS, nullptr,
+                                                         samplerDescriptorsUnchanged)) {
             return false;
         }
         if (!UploadAndBindVertexBuffers(frame.commandBuffer, vao, programObj, drawParams, pIndexBufferView)) {
@@ -5043,8 +5191,8 @@ void main() {
                 m_lastSampledSetTransformFlags == transformFlags &&
                 m_lastSampledSetBindGeneration == bindGeneration;
             if (!sampledSetUnchanged) {
-                const Bool hasSampledTextures =
-                    m_uniformManager->CollectSampledTextures(program, programObj, sampledTextures);
+                const Bool hasSampledTextures = m_uniformManager->CollectSampledTextures(
+                    program, programObj, sampledTextures, &m_sampledBindingRecordsScratch);
                 MOBILEGL_ASSERT(hasSampledTextures, "%s: CollectSampledTextures failed", __func__);
                 m_lastSampledSetValid = true;
                 m_lastSampledSetProgramLifetimeId = programLifetimeId;
@@ -5317,14 +5465,25 @@ void main() {
                 snap.textureEraseEpoch = m_textureManager->GetResourceEraseEpoch();
                 snap.textureImageEpoch = m_textureManager->GetTextureImageEpoch();
                 snap.renderbufferImageEpoch = m_renderPassManager->GetRenderbufferImageEpoch();
+                snap.drawUsesDepthStencil = drawUsesDepthStencil;
                 snap.renderPassExtent = renderPassEntry->extent;
                 snap.pipeline = pipeline;
+                snap.samplingResolutionGeneration = MG_State::pGLContext->GetSamplingResolutionGeneration();
                 Uint64 snapContentSum = 0;
                 Uint64 snapParamsSum = 0;
-                for (const auto* sampledTexture : sampledTextures) {
-                    if (sampledTexture != nullptr) {
-                        snapContentSum += sampledTexture->GetContentVersion();
-                        snapParamsSum += sampledTexture->GetTextureParamsVersion();
+                // Record each resource's layout VALUE for the descriptor-reuse hint;
+                // transitions above updated the resources in place, so this reads the
+                // layouts the descriptors just resolved against.
+                m_sampledLayoutSnapshots.assign(sampledTextures.size(), VK_IMAGE_LAYOUT_UNDEFINED);
+                for (SizeT i = 0; i < sampledTextures.size(); ++i) {
+                    const auto* sampledTexture = sampledTextures[i];
+                    if (sampledTexture == nullptr) {
+                        continue;
+                    }
+                    snapContentSum += sampledTexture->GetContentVersion();
+                    snapParamsSum += sampledTexture->GetTextureParamsVersion();
+                    if (sampledResources[i] != nullptr) {
+                        m_sampledLayoutSnapshots[i] = sampledResources[i]->layout;
                     }
                 }
                 snap.sampledContentSum = snapContentSum;

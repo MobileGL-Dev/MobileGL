@@ -212,6 +212,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // reuse cannot outlive a single frame (see SamplerResolveMemo).
         for (auto& memo : m_samplerResolveMemo) {
             memo.valid = false;
+            memo.infoValid = false;
         }
     }
 
@@ -254,9 +255,19 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     Bool UniformManager::ResolveSamplerDescriptor(VkCommandBuffer commandBuffer,
                                                             const MG_State::GLState::ProgramObject& program,
                                                             const ProgramFactory::VkProgramObject& programObj,
-                                                            Uint32 binding, VkDescriptorImageInfo& outImageInfo) const {
+                                                            Uint32 binding, VkDescriptorImageInfo& outImageInfo,
+                                                            Bool trustUnchangedHint) const {
         MOBILEGL_ASSERT(m_textureManager != nullptr, "ResolveSamplerDescriptor: texture manager is null");
         MOBILEGL_ASSERT(m_samplerManager != nullptr, "ResolveSamplerDescriptor: sampler manager is null");
+        // The caller proved every input of this binding's resolution unchanged since the
+        // last full resolve (which also filled the cache), so the whole chain below -
+        // texture/sampler resolution, completeness probe, sync, layout handling, sampler
+        // and view lookups - would recompute the identical descriptor.
+        if (trustUnchangedHint && binding < m_samplerResolveMemo.size() &&
+            m_samplerResolveMemo[binding].infoValid) {
+            outImageInfo = m_samplerResolveMemo[binding].info;
+            return true;
+        }
         MOBILEGL_ASSERT(binding < programObj.samplerNameByBinding.size(),
                         "ResolveSamplerDescriptor: sampler binding %u name lookup out of range", binding);
         // Raw-pointer resolve to skip the SharedPtr atomic refcount churn: the bound texture stays
@@ -430,7 +441,14 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             .imageView = sampledImageView,
             .imageLayout = resource->layout,
         };
-        return outImageInfo.sampler != VK_NULL_HANDLE;
+        if (outImageInfo.sampler == VK_NULL_HANDLE) {
+            return false;
+        }
+        if (binding < m_samplerResolveMemo.size()) {
+            m_samplerResolveMemo[binding].info = outImageInfo;
+            m_samplerResolveMemo[binding].infoValid = true;
+        }
+        return true;
     }
 
     Bool UniformManager::ResolveSamplerDescriptorOverride(
@@ -808,10 +826,55 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         return m_fallbackTexture2D;
     }
 
+    Bool UniformManager::ResolveSampledBinding(const MG_State::GLState::ProgramObject& program,
+                                               const ProgramFactory::VkProgramObject& programObj,
+                                               Uint32 binding,
+                                               MG_State::GLState::ITextureObject*& outTexture,
+                                               const MG_State::GLState::SamplerObject*& outSampler) const {
+        // Open-coded ResolveSamplerTextureRaw so the unit is resolved once for both the
+        // texture and the sampler override - this runs per binding per full-path draw,
+        // and program-alternating draw streams take the full path on every draw.
+        MOBILEGL_ASSERT(MG_State::pGLContext != nullptr, "ResolveSampledBinding: GL context is null");
+        MOBILEGL_ASSERT(binding < programObj.samplerUniformLocationByBinding.size(),
+                        "ResolveSampledBinding: sampler location binding %u out of range", binding);
+        MOBILEGL_ASSERT(binding < programObj.samplerTextureTargetByBinding.size(),
+                        "ResolveSampledBinding: sampler target binding %u out of range", binding);
+        const Int location = programObj.samplerUniformLocationByBinding[binding];
+        const Int unit = ResolveSamplerUnitIndex(program, location, binding);
+        auto& textureUnit = MG_State::pGLContext->GetTextureUnitObject(unit);
+        const TextureTarget preferredTarget = programObj.samplerTextureTargetByBinding[binding];
+        MG_State::GLState::ITextureObject* texture =
+            textureUnit.GetBindingSlot(preferredTarget).GetBoundObject().get();
+        // Undefined default texture (name 0, no image) resolves as "unbound", exactly
+        // like ResolveSamplerTextureRaw reports it.
+        if (MG_State::GLState::IsUndefinedDefaultTexture(texture)) {
+            texture = nullptr;
+        }
+        if (texture == nullptr) {
+            // ResolveSamplerDescriptor will substitute the fallback texture for this binding;
+            // include it in the sampled set so the pre-render-pass sync/transition pass covers
+            // its first use instead of leaving that work to happen inside an active pass.
+            if (preferredTarget != TextureTarget::Texture2D &&
+                preferredTarget != TextureTarget::TextureRectangle) {
+                return false;
+            }
+            texture = GetFallbackTexture(preferredTarget).get();
+        }
+        const auto& samplerOverride = textureUnit.GetSamplerObject();
+        outTexture = texture;
+        outSampler = samplerOverride ? samplerOverride.get()
+                                     : (texture != nullptr ? texture->GetSamplerObject().get() : nullptr);
+        return true;
+    }
+
     Bool UniformManager::CollectSampledTextures(const MG_State::GLState::ProgramObject& program,
                                                           const ProgramFactory::VkProgramObject& programObj,
-                                                          Vector<MG_State::GLState::ITextureObject*>& outTextures) {
+                                                          Vector<MG_State::GLState::ITextureObject*>& outTextures,
+                                                          Vector<SampledBindingRecord>* outBindingRecords) {
         outTextures.clear();
+        if (outBindingRecords != nullptr) {
+            outBindingRecords->clear();
+        }
 
         const Uint32 bindingCount =
             std::min<Uint32>(m_maxBindings, static_cast<Uint32>(programObj.bindingKinds.size()));
@@ -820,17 +883,14 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 continue;
             }
 
-            MG_State::GLState::ITextureObject* texture = ResolveSamplerTextureRaw(program, programObj, binding);
-            if (!texture) {
-                // ResolveSamplerDescriptor will substitute the fallback texture for this binding;
-                // include it in the sampled set so the pre-render-pass sync/transition pass covers
-                // its first use instead of leaving that work to happen inside an active pass.
-                const TextureTarget preferredTarget = programObj.samplerTextureTargetByBinding[binding];
-                if (preferredTarget != TextureTarget::Texture2D &&
-                    preferredTarget != TextureTarget::TextureRectangle) {
-                    continue;
-                }
-                texture = GetFallbackTexture(preferredTarget).get();
+            MG_State::GLState::ITextureObject* texture = nullptr;
+            const MG_State::GLState::SamplerObject* sampler = nullptr;
+            if (!ResolveSampledBinding(program, programObj, binding, texture, sampler)) {
+                continue;
+            }
+            if (outBindingRecords != nullptr) {
+                outBindingRecords->push_back({texture != nullptr ? texture->GetLifetimeId() : 0,
+                                              sampler != nullptr ? sampler->GetLifetimeId() : 0});
             }
 
             auto found = std::find(outTextures.begin(), outTextures.end(), texture);
@@ -839,6 +899,33 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             }
         }
         return true;
+    }
+
+    Bool UniformManager::SampledBindingsUnchanged(const MG_State::GLState::ProgramObject& program,
+                                                  const ProgramFactory::VkProgramObject& programObj,
+                                                  const Vector<SampledBindingRecord>& previousRecords) const {
+        const Uint32 bindingCount =
+            std::min<Uint32>(m_maxBindings, static_cast<Uint32>(programObj.bindingKinds.size()));
+        SizeT recordIndex = 0;
+        for (Uint32 binding = 0; binding < bindingCount; ++binding) {
+            if (programObj.bindingKinds[binding] != ProgramFactory::DescriptorBindingKind::CombinedImageSampler) {
+                continue;
+            }
+            MG_State::GLState::ITextureObject* texture = nullptr;
+            const MG_State::GLState::SamplerObject* sampler = nullptr;
+            if (!ResolveSampledBinding(program, programObj, binding, texture, sampler)) {
+                continue;
+            }
+            if (recordIndex >= previousRecords.size()) {
+                return false;
+            }
+            const SampledBindingRecord& record = previousRecords[recordIndex++];
+            if (record.textureLifetimeId != (texture != nullptr ? texture->GetLifetimeId() : 0) ||
+                record.samplerLifetimeId != (sampler != nullptr ? sampler->GetLifetimeId() : 0)) {
+                return false;
+            }
+        }
+        return recordIndex == previousRecords.size();
     }
 
     Bool UniformManager::CollectStorageImageTextures(
@@ -1160,7 +1247,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                                              const ProgramFactory::VkProgramObject& programObj,
                                                              Uint32 frameIndex,
                                                              VkPipelineBindPoint bindPoint,
-                                                             const SamplerBindingOverride* samplerBindingOverride) {
+                                                             const SamplerBindingOverride* samplerBindingOverride,
+                                                             Bool samplerDescriptorsUnchangedHint) {
         auto& frame = m_frames[frameIndex];
         if (frame.descriptorPools.empty()) {
             MGLOG_E("UniformDescriptorBinder::BindProgramUniformBuffers failed: frame descriptor pools are invalid");
@@ -1341,7 +1429,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                     samplerBindingOverride->sampler != nullptr) {
                     hasImage = ResolveSamplerDescriptorOverride(*samplerBindingOverride, imageInfo);
                 } else {
-                    hasImage = ResolveSamplerDescriptor(commandBuffer, program, programObj, binding, imageInfo);
+                    hasImage = ResolveSamplerDescriptor(commandBuffer, program, programObj, binding, imageInfo,
+                                                        samplerDescriptorsUnchangedHint);
                 }
                 if (!hasImage) {
                     MGLOG_E(

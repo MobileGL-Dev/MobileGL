@@ -531,7 +531,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // Per-pipeline provoking-vertex mode. capturesXfbFromGeometryStage must be a LINK-TIME
         // property of the program, never the dynamic "is transform feedback active" flag: the
         // 8-entry m_pipelineMemo and the SetupDrawSnapshot fast path key on programObj.hash and
-        // GetRenderStateParametersVersion(), neither of which moves when glBeginTransformFeedback is
+        // the pipeline-state value hash, neither of which moves when glBeginTransformFeedback is
         // called, so a dynamic input here would hand back a stale VkPipeline.
         VkProvokingVertexModeEXT SelectProvokingVertexMode(VkPrimitiveTopology topology,
                                                           Bool capturesXfbFromGeometryStage) const;
@@ -623,7 +623,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             Uint64 programHash = 0;
             Uint64 vertexInputHash = 0;
             Uint64 renderPassHash = 0;
-            Uint renderStateVersion = 0;
+            // VALUE hash of the pipeline-relevant fixed-function state (see
+            // ComputePipelineStateHash), not the monotonic pipeline-state version:
+            // the version never repeats, so a per-draw GL_BLEND toggle would miss
+            // all entries forever even though the state alternates between two
+            // values the memo already holds.
+            Uint64 pipelineStateHash = 0;
             ProgramFactory::CompileOptionFlags transformFlags = {};
             VkPipeline pipeline = VK_NULL_HANDLE;
         };
@@ -631,11 +636,26 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         PipelineMemoEntry m_pipelineMemo[kPipelineMemoSize];
         Uint32 m_pipelineMemoCount = 0;
         Uint32 m_pipelineMemoNext = 0;
+        // Hash of every fixed-function GL state the pipeline payload reads that the
+        // memo key's other fields (mode / program / vertex input / render pass /
+        // transform flags) do not already pin down. Equal hash under an equal rest
+        // of key => byte-identical PipelineCreatePayload. Cached per pipeline-state
+        // version: the version is monotonic and bumps on every pipeline-state
+        // change, so an unchanged (version, colorAttachmentCount) proves the state
+        // bytes are unchanged and the hash can be reused without re-reading them.
+        Uint64 ComputePipelineStateHash(Uint32 colorAttachmentCount) const;
+        Uint m_pipelineStateHashVersion = 0;
+        Uint32 m_pipelineStateHashColorCount = 0;
+        Uint64 m_pipelineStateHash = 0;
+        Bool m_pipelineStateHashValid = false;
         // Drops every memoized pipeline handle. Required at command-buffer
-        // boundaries and whenever any pipeline may have been destroyed.
+        // boundaries and whenever any pipeline may have been destroyed. Also drops
+        // the cached pipeline-state hash: the same boundaries can retire the GL
+        // context whose monotonic version the cache is keyed on.
         void InvalidatePipelineMemo() {
             m_pipelineMemoCount = 0;
             m_pipelineMemoNext = 0;
+            m_pipelineStateHashValid = false;
         }
         UnorderedMap<ProgramFactory::HashType, VkPipeline> m_computePipelines;
         UniquePtr<ProgramFactory> m_programFactory;
@@ -707,6 +727,16 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             Uint64 renderbufferImageEpoch = 0;
             Uint64 sampledContentSum = 0;
             Uint64 sampledParamsSum = 0;
+            // Guards the sampler-descriptor reuse hint: bumped by any sampler-object
+            // parameter or texture shape change (see GetSamplingResolutionGeneration),
+            // none of which the sums above cover.
+            Uint64 samplingResolutionGeneration = 0;
+            // Render-pass flavor input (DepthTest || StencilTest at snapshot time).
+            // A pipeline-state change that leaves this equal cannot change which
+            // render pass GetOrCreateRenderPass would pick, so the fast path may
+            // re-resolve just the pipeline against the active pass; a change that
+            // flips it must fall back to the full path's pass selection.
+            Bool drawUsesDepthStencil = false;
             IntVec2 renderPassExtent = {0, 0};
             VkPipeline pipeline = VK_NULL_HANDLE;
         };
@@ -715,11 +745,24 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // Per-draw scratch buffers (clear keeps capacity) — these paths run for every
         // draw call and must not allocate.
         Vector<MG_State::GLState::ITextureObject*> m_sampledTexturesScratch;
+        // Per-binding (texture, effective sampler) lifetime-id records from the same
+        // CollectSampledTextures walk that filled m_sampledTexturesScratch. The fast
+        // path shadow-compares against them (SampledBindingsUnchanged) when the
+        // texture bind generation moved, so a redundant glBindSampler/glBindTexture
+        // storm that resolves to the same bindings keeps the fast path.
+        Vector<UniformManager::SampledBindingRecord> m_sampledBindingRecordsScratch;
         // Parallel to m_sampledTexturesScratch, refilled by every SetupDraw's
         // first sampled-texture loop: the resolved backend resources, so the
         // post-transition loop can skip re-resolving textures whose layout is
         // already sampleable.
         Vector<VkTextureManager::TextureResource*> m_sampledResourcesScratch;
+        // Layout VALUE of each sampled resource when the snapshot (and so the cached
+        // sampler descriptors) was built, parallel to m_sampledResourcesScratch. The
+        // fast path's validity check only proves the layout is still sampleable; the
+        // descriptor-reuse hint additionally needs it to be the SAME sampleable
+        // layout (a mid-frame compute dispatch can move a sampled texture from
+        // READ_ONLY_OPTIMAL to GENERAL, both valid, different descriptor).
+        Vector<VkImageLayout> m_sampledLayoutSnapshots;
         Vector<MG_State::GLState::ITextureObject*> m_storageImageTexturesScratch;
         Vector<VkBuffer> m_vertexBuffersScratch;
         Vector<VkDeviceSize> m_vertexOffsetsScratch;

@@ -53,18 +53,42 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // caches - a live layout's entry must never be purged (its sets would be
         // unreachable pool slots), so there is deliberately no age-based sweep here.
         void OnDescriptorSetLayoutDestroyed(VkDescriptorSetLayout descriptorSetLayout);
+        // One record per visited CombinedImageSampler binding (post fallback substitution,
+        // in binding order): the resolved texture and effective sampler, as never-reused
+        // lifetime ids so a freed-and-reallocated object at the same heap address can only
+        // MISS a comparison, never false-hit it (same ABA rule as SamplerResolveMemo).
+        struct SampledBindingRecord {
+            Uint64 textureLifetimeId = 0;
+            Uint64 samplerLifetimeId = 0;
+        };
         Bool CollectSampledTextures(const MG_State::GLState::ProgramObject& program,
                                     const ProgramFactory::VkProgramObject& programObj,
-                                    Vector<MG_State::GLState::ITextureObject*>& outTextures);
+                                    Vector<MG_State::GLState::ITextureObject*>& outTextures,
+                                    Vector<SampledBindingRecord>* outBindingRecords = nullptr);
+        // Shadow-compare for the SetupDraw fast path: re-runs the CollectSampledTextures
+        // walk and reports whether every visited binding still resolves to the recorded
+        // (texture, effective sampler) pair. A texture bind generation bump alone (e.g. a
+        // redundant glBindSampler, which always bumps it) does not prove the sampled set
+        // moved; this walk does, without rebuilding the set or falling off the fast path.
+        Bool SampledBindingsUnchanged(const MG_State::GLState::ProgramObject& program,
+                                      const ProgramFactory::VkProgramObject& programObj,
+                                      const Vector<SampledBindingRecord>& previousRecords) const;
         Bool CollectStorageImageTextures(const MG_State::GLState::ProgramObject& program,
                                          const ProgramFactory::VkProgramObject& programObj,
                                          Vector<MG_State::GLState::ITextureObject*>& outTextures) const;
+        // samplerDescriptorsUnchangedHint: the caller (SetupDraw fast path) proved that
+        // every input of every combined-image-sampler resolution is unchanged since the
+        // previous draw's resolve - same (texture, sampler) per binding, texture params
+        // sum, sampling-resolution generation (sampler params + texture shape), image
+        // epochs AND per-resource layout values - so the per-binding cached
+        // VkDescriptorImageInfo may be reused without re-running the resolve chain.
         Bool BindProgramUniformBuffers(VkCommandBuffer commandBuffer,
                                        const MG_State::GLState::ProgramObject& program,
                                        const ProgramFactory::VkProgramObject& programObj,
                                        Uint32 frameIndex,
                                        VkPipelineBindPoint bindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS,
-                                       const SamplerBindingOverride* samplerBindingOverride = nullptr);
+                                       const SamplerBindingOverride* samplerBindingOverride = nullptr,
+                                       Bool samplerDescriptorsUnchangedHint = false);
 
         // Pure format-policy helper kept public for host regression tests. Formatted storage
         // images use their shader qualifier; transformed float images use glBindImageTexture's
@@ -114,6 +138,15 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         static Bool ResolveSamplerTexture(const MG_State::GLState::ProgramObject& program,
                                    const ProgramFactory::VkProgramObject& programObj, Uint32 binding,
                                    SharedPtr<MG_State::GLState::ITextureObject>& outTexture);
+        // Shared per-binding resolution for CollectSampledTextures and
+        // SampledBindingsUnchanged, so membership and comparison can never diverge:
+        // texture after the fallback substitution (may still be null when no fallback
+        // exists), effective sampler = unit override else the texture's own sampler.
+        // False = the binding is skipped (unbound with a non-2D fallback target).
+        Bool ResolveSampledBinding(const MG_State::GLState::ProgramObject& program,
+                                   const ProgramFactory::VkProgramObject& programObj, Uint32 binding,
+                                   MG_State::GLState::ITextureObject*& outTexture,
+                                   const MG_State::GLState::SamplerObject*& outSampler) const;
         // Raw-pointer variant for the per-draw sampled-texture walk (CollectSampledTextures):
         // the bound texture stays alive through the draw via GL binding state, so callers that
         // only need the pointer skip the SharedPtr copy's atomic refcount churn.
@@ -121,9 +154,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             const MG_State::GLState::ProgramObject& program,
             const ProgramFactory::VkProgramObject& programObj, Uint32 binding);
         SharedPtr<MG_State::GLState::ITextureObject> GetFallbackTexture(TextureTarget target) const;
+        // trustUnchangedHint: reuse this binding's cached VkDescriptorImageInfo outright
+        // (see BindProgramUniformBuffers' samplerDescriptorsUnchangedHint for the proof
+        // obligations the caller carries).
         Bool ResolveSamplerDescriptor(VkCommandBuffer commandBuffer, const MG_State::GLState::ProgramObject& program,
                                       const ProgramFactory::VkProgramObject& programObj, Uint32 binding,
-                                      VkDescriptorImageInfo& outImageInfo) const;
+                                      VkDescriptorImageInfo& outImageInfo,
+                                      Bool trustUnchangedHint = false) const;
         Bool ResolveSamplerDescriptorOverride(const SamplerBindingOverride& samplerBindingOverride,
                                               VkDescriptorImageInfo& outImageInfo) const;
         Bool ResolveTexelBufferDescriptor(const MG_State::GLState::ProgramObject& program,
@@ -253,6 +290,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             SamplerNumericDomain viewFormatDomain = SamplerNumericDomain::Unknown;
             VkFormat viewFormat = VK_FORMAT_UNDEFINED;
             Bool viewFormatValid = false;
+            // Whole resolved descriptor from this binding's last full resolve. Reused
+            // ONLY under ResolveSamplerDescriptor's trustUnchangedHint, whose caller
+            // proves every resolve input unchanged; cleared with the per-frame reset
+            // (the cached VkSampler outlives a frame only via a fresh resolve, which
+            // also re-stamps it against VkSamplerManager's frame-boundary sweep).
+            VkDescriptorImageInfo info{};
+            Bool infoValid = false;
         };
         mutable Vector<SamplerResolveMemo> m_samplerResolveMemo;
     };
