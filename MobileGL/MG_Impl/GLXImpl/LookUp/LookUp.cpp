@@ -8,11 +8,27 @@
 
 #include "LookUp.h"
 
-namespace MG_Impl::GLXImpl {
-    // TODO: implement complete GLX functionality
+#if defined(__linux__) && !defined(__ANDROID__)
+#include "../GLXImpl.h"
+#endif
 
+namespace MG_Impl::GLXImpl {
     void* GetProcAddress(const char* name) {
+        if (!name) {
+            return nullptr;
+        }
         MGLOG_D("glXGetProcAddress(\"%s\")", name);
+#if defined(__linux__) && !defined(__ANDROID__)
+        if (name[0] == 'g' && name[1] == 'l' && name[2] == 'X') {
+            // glX entry points resolve from the GLX layer's own table; GL/EGL
+            // names fall through to the shared resolver below.
+            void* proc = MobileGL::MG_Impl::GLXImpl::GetGLXEntryPoint(name);
+            if (!proc) {
+                MGLOG_D("glXGetProcAddress: unknown glX entry point %s", name);
+            }
+            return proc;
+        }
+#endif
         void* proc = MobileGL::MG_Impl::GetProcAddress(name);
         if (!proc) {
             MGLOG_W("Failed to get function: %s", (const char*)name);

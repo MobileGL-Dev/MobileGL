@@ -206,6 +206,7 @@ set(SOURCE_FILES
     MobileGL/MG_Util/Texture/TextureFormatProcessor.cpp
 
     MobileGL/MG_Impl/GLXImpl/Exporting/Definitions.cpp
+    MobileGL/MG_Impl/GLXImpl/GLXImpl.cpp
     MobileGL/MG_Impl/GLXImpl/LookUp/LookUp.cpp
 
     MobileGL/MG_Impl/EGLImpl/Exporting/Definitions.cpp
