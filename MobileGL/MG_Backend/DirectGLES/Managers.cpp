@@ -28,6 +28,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cstdlib>
+#include <mutex>
 #include <cstring>
 #include <regex>
 
@@ -112,6 +113,17 @@ namespace MobileGL::MG_Backend::DirectGLES {
         }
         source.insert(lineEnd + 1, declaration + "\n");
         return source;
+    }
+
+        namespace {
+        Bool g_processTeardown = false;
+        std::once_flag g_teardownSentinelOnce;
+    } // namespace
+
+    Bool InProcessTeardown() { return g_processTeardown; }
+    void EnsureProcessTeardownSentinel() {
+        std::call_once(g_teardownSentinelOnce,
+                       [] { std::atexit(+[] { g_processTeardown = true; }); });
     }
 
     String EmulateBaseInstanceInVertexShader(String source, GLenum shaderType) {
@@ -1388,6 +1400,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
         }
 
         BackendVertexArrayObject::~BackendVertexArrayObject() {
+            if (InProcessTeardown()) {
+                return; // see InProcessTeardown(): the driver may be unloaded already
+            }
             if (m_backendVAOId != 0) {
                 NoteVAOIdDeleted(m_backendVAOId);
                 g_GLESFuncs.glDeleteVertexArrays(1, &m_backendVAOId);
@@ -1641,6 +1656,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
         }
 
         BackendTextureObject::~BackendTextureObject() {
+            if (InProcessTeardown()) {
+                return; // see InProcessTeardown(): the driver may be unloaded already
+            }
             if (m_backendTextureId == 0) {
                 return;
             }
@@ -3780,6 +3798,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
 #ifdef TRACY_ENABLE
             ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
+            if (InProcessTeardown()) {
+                return; // see InProcessTeardown(): the driver may be unloaded already
+            }
             if (m_backendProgramId != 0) {
                 MGLOG_D("Deleting backend program object with ID: %u", m_backendProgramId);
                 g_GLESFuncs.glDeleteProgram(m_backendProgramId);

@@ -21,9 +21,25 @@ namespace MobileGL::MG_Backend::DirectGLES {
     String EmulateBaseInstanceInVertexShader(String source, GLenum shaderType);
     String PromoteDrawParameterGlobalsToUniforms(String source, GLenum shaderType);
 
+    // True once the process has entered exit(): past that point the EGL library and
+    // the driver may already be unloaded, so a backend twin's destructor must not
+    // call into g_GLESFuncs (the observed crash is a jump through an unmapped driver
+    // pointer from __run_exit_handlers) nor touch statics in other TUs (cross-TU
+    // destruction order is unspecified). Deliberate leak: the process is exiting and
+    // the driver reclaims GPU objects. The flag is set by a std::atexit handler that
+    // EnsureProcessTeardownSentinel() registers lazily on first registry use - by
+    // then every static everywhere has finished constructing, so this handler is
+    // guaranteed to run BEFORE any static destructor (atexit is LIFO). A destructor
+    // hook on the registry itself was tried first and is WRONG: tests and cache
+    // resets destroy temporary registry instances mid-run, which would latch the
+    // flag while the process is very much alive.
+    Bool InProcessTeardown();
+    void EnsureProcessTeardownSentinel();
+
     template <typename StateObject, typename BackendObject>
     class StateBackendObjectRegistry {
     public:
+
         using StatePtr = SharedPtr<StateObject>;
         using StateWeakPtr = std::weak_ptr<StateObject>;
         using BackendPtr = SharedPtr<BackendObject>;
@@ -43,6 +59,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
         BackendPtr& GetOrCreate(const StatePtr& stateObj) {
             MOBILEGL_ASSERT(stateObj != nullptr, "State object must not be null");
 
+            // Twin creation is the moment a driver-owned id starts needing a guarded
+            // destructor; cold path, so the once-guard costs nothing per draw.
+            EnsureProcessTeardownSentinel();
             auto& entry = m_entries[stateObj.get()];
             if (entry.stateRef.expired()) {
                 // The previous owner of this address is gone and the allocator handed it
