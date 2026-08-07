@@ -2440,10 +2440,45 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                 static_cast<SizeT>(dirtyRegion.lo.z()) * levelSliceBytes +
                                 static_cast<SizeT>(dirtyRegion.lo.y()) * levelRowBytes +
                                 static_cast<SizeT>(dirtyRegion.lo.x()) * bpp;
+                            // Scatter refinement behind the union box: ~100 sprite
+                            // writes into an atlas leave a box that spans nearly the
+                            // whole level while the touched texels are a few percent of
+                            // it. The storage's bounded rect list recovers the true
+                            // footprint; each rect is uploaded with the same
+                            // ROW_LENGTH striding into the level shadow as the box
+                            // path. The storage only hands the list out when its
+                            // summed area is materially smaller than the box (0
+                            // otherwise), so the extra calls always move fewer bytes.
+                            MG_State::GLState::MipmapDirtyRegion
+                                dirtyRects[MG_State::GLState::MipmapStorage::kMaxDirtyRects];
+                            SizeT dirtyRectCount = 0;
+                            if (subRectEligible) {
+                                dirtyRectCount = textureMipmapObject->GetStorageDirtyRects(
+                                    uploadTarget, level, dirtyRects,
+                                    MG_State::GLState::MipmapStorage::kMaxDirtyRects);
+                            }
+                            const auto rectShadowPtr = [&](const MG_State::GLState::MipmapDirtyRegion& rect) {
+                                return static_cast<const Uint8*>(uploadData) +
+                                       static_cast<SizeT>(rect.lo.z()) * levelSliceBytes +
+                                       static_cast<SizeT>(rect.lo.y()) * levelRowBytes +
+                                       static_cast<SizeT>(rect.lo.x()) * bpp;
+                            };
                             switch (MapToBackendTextureTarget(stateTextureObject->GetTarget())) {
                             case TextureTarget::Texture2D:
                             case TextureTarget::TextureCubeMap:
-                                if (subRectEligible) {
+                                if (subRectEligible && dirtyRectCount >= 2) {
+                                    g_GLESFuncs.glPixelStorei(GL_UNPACK_ROW_LENGTH, texelSize.x());
+                                    for (SizeT r = 0; r < dirtyRectCount; ++r) {
+                                        const auto& rect = dirtyRects[r];
+                                        g_GLESFuncs.glTexSubImage2D(
+                                            glUploadTarget, static_cast<GLint>(level), rect.lo.x(),
+                                            rect.lo.y(), static_cast<GLsizei>(rect.hi.x() - rect.lo.x()),
+                                            static_cast<GLsizei>(rect.hi.y() - rect.lo.y()), glFormat,
+                                            glType, rectShadowPtr(rect));
+                                    }
+                                    // The surrounding ScopedDefaultUnpackState shadow says 0.
+                                    g_GLESFuncs.glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+                                } else if (subRectEligible) {
                                     g_GLESFuncs.glPixelStorei(GL_UNPACK_ROW_LENGTH, texelSize.x());
                                     g_GLESFuncs.glTexSubImage2D(
                                         glUploadTarget, static_cast<GLint>(level), dirtyRegion.lo.x(),
@@ -2463,7 +2498,22 @@ namespace MobileGL::MG_Backend::DirectGLES {
                             // ES 3.2 has GL_TEXTURE_CUBE_MAP_ARRAY natively and it stores exactly
                             // like a 2D array whose depth is 6 * the cube count.
                             case TextureTarget::TextureCubeMapArray:
-                                if (subRectEligible) {
+                                if (subRectEligible && dirtyRectCount >= 2) {
+                                    g_GLESFuncs.glPixelStorei(GL_UNPACK_ROW_LENGTH, texelSize.x());
+                                    g_GLESFuncs.glPixelStorei(GL_UNPACK_IMAGE_HEIGHT, texelSize.y());
+                                    for (SizeT r = 0; r < dirtyRectCount; ++r) {
+                                        const auto& rect = dirtyRects[r];
+                                        g_GLESFuncs.glTexSubImage3D(
+                                            glUploadTarget, static_cast<GLint>(level), rect.lo.x(),
+                                            rect.lo.y(), rect.lo.z(),
+                                            static_cast<GLsizei>(rect.hi.x() - rect.lo.x()),
+                                            static_cast<GLsizei>(rect.hi.y() - rect.lo.y()),
+                                            static_cast<GLsizei>(rect.hi.z() - rect.lo.z()), glFormat,
+                                            glType, rectShadowPtr(rect));
+                                    }
+                                    g_GLESFuncs.glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+                                    g_GLESFuncs.glPixelStorei(GL_UNPACK_IMAGE_HEIGHT, 0);
+                                } else if (subRectEligible) {
                                     g_GLESFuncs.glPixelStorei(GL_UNPACK_ROW_LENGTH, texelSize.x());
                                     g_GLESFuncs.glPixelStorei(GL_UNPACK_IMAGE_HEIGHT, texelSize.y());
                                     g_GLESFuncs.glTexSubImage3D(
