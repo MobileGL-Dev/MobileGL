@@ -36,6 +36,53 @@ namespace MobileGL::MG_Backend::DirectGLES {
     Bool InProcessTeardown();
     void EnsureProcessTeardownSentinel();
 
+    // Which optional pieces of state a draw needs synchronized before it is issued.
+    // Index/indirect buffer syncs and the instancing-related work are skipped for
+    // draws that provably cannot read them.
+    enum class DrawSyncBit : Uint32 {
+        None = 0,
+        IndexBuffer = 1 << 0,
+        IndirectBuffer = 1 << 1,
+        Instancing = 1 << 2
+    };
+    // Deliberately the shared Flags<> rather than hand-written operators for this enum:
+    // a namespace-local operator| here would hide MobileGL::operator|(Bit, Bit) from
+    // every other scoped-enum flag set used inside this namespace.
+    using DrawSyncFlags = Flags<DrawSyncBit>;
+
+    // The GL-defined indirect command layouts, byte-identical to what the driver reads
+    // out of a GL_DRAW_INDIRECT_BUFFER. Also the staging layout the multi-draw emulation
+    // synthesizes commands into.
+    struct DrawElementsIndirectCommand {
+        Uint32 count = 0;
+        Uint32 instanceCount = 0;
+        Uint32 firstIndex = 0;
+        Int32 baseVertex = 0;
+        Uint32 baseInstance = 0;
+    };
+
+    struct DrawArraysIndirectCommand {
+        Uint32 count = 0;
+        Uint32 instanceCount = 0;
+        Uint32 first = 0;
+        Uint32 baseInstance = 0;
+    };
+
+    // Brings the whole draw-relevant frontend state onto the native ES context and binds
+    // the program; every GL draw entry point calls it exactly once before issuing draws.
+    void PrepareForDraw(DrawSyncFlags syncBits);
+    // GLES core supports only GL_PRIMITIVE_RESTART_FIXED_INDEX. Throws when the app enabled
+    // the arbitrary GL_PRIMITIVE_RESTART with a non-fixed index for this index type.
+    void CheckPrimitiveRestartSupported(GLenum indexType);
+    // Feed the current program's gl_BaseInstance / gl_DrawID emulation uniforms. Both are
+    // no-ops when the program does not read the corresponding builtin.
+    void SetCurrentBaseInstance(Uint32 baseInstance);
+    void SetCurrentDrawID(Uint32 drawId);
+    // True when the current program actually reads gl_DrawID, i.e. when a batched
+    // (single driver call) multi-draw tier would have to feed it one value for the whole
+    // batch and would therefore be wrong.
+    Bool CurrentProgramReadsDrawID();
+
     template <typename StateObject, typename BackendObject>
     class StateBackendObjectRegistry {
     public:
@@ -866,6 +913,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
             void SetBaseInstance(Uint32 baseInstance) const;
             void SetBaseInstanceWordIndex(Int32 wordIndex) const;
             void SetDrawID(Uint32 drawId) const;
+            // True when the transpiled program kept a gl_DrawID uniform, i.e. SetDrawID
+            // actually reaches a shader read rather than being discarded.
+            Bool ReadsDrawID() const { return m_drawIdUniformLocation >= 0; }
             Int GetIndirectParamsBinding() const { return m_indirectParamsBinding; }
             Uint GetBackendProgramId() const { return m_backendProgramId; }
             // False when the last SyncToBackend could not produce a usable program (a

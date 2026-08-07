@@ -11,6 +11,7 @@
 #include "MG_Util/Types.h"
 #include "Utils.h"
 #include "Managers.h"
+#include "MultiDraw.h"
 #include <MG_Util/Converters/GLToMG/TextureEnumConverter.h>
 #include <MG_Util/Classifiers/TextureEnumClassifier.h>
 #include <MG_Util/Metrics/TextureMetrics.h>
@@ -161,37 +162,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return false;
         }
     }
-
-    enum class DrawSyncBit : Uint32 {
-        None = 0,
-        IndexBuffer = 1 << 0,
-        IndirectBuffer = 1 << 1,
-        Instancing = 1 << 2
-    };
-
-    inline DrawSyncBit operator|(DrawSyncBit a, DrawSyncBit b) {
-        return static_cast<DrawSyncBit>(static_cast<uint32_t>(a) | static_cast<uint32_t>(b));
-    }
-
-    inline DrawSyncBit& operator|=(DrawSyncBit& a, DrawSyncBit b) {
-        a = a | b;
-        return a;
-    }
-
-    struct DrawElementsIndirectCommand {
-        Uint32 count = 0;
-        Uint32 instanceCount = 0;
-        Uint32 firstIndex = 0;
-        Int32 baseVertex = 0;
-        Uint32 baseInstance = 0;
-    };
-
-    struct DrawArraysIndirectCommand {
-        Uint32 count = 0;
-        Uint32 instanceCount = 0;
-        Uint32 first = 0;
-        Uint32 baseInstance = 0;
-    };
 
     SamplerImpl::BackendSamplerObject* GetRawDepthFetchSampler() {
         if (!g_rawDepthFetchSamplerState) {
@@ -785,6 +755,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return g_GLESFuncs.glBeginTransformFeedback != nullptr &&
                    g_GLESFuncs.glEndTransformFeedback != nullptr &&
                    g_GLESFuncs.glTransformFeedbackVaryings != nullptr;
+        }
+
+        Bool IsCaptureSpanOpen() {
+            const auto& xfb = CurrentXfb();
+            return (xfb.pending || xfb.started) && !xfb.paused;
         }
 
         void BeginTransformFeedback(GLenum primitiveMode) {
@@ -2071,7 +2046,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
     static void BindCurrentTextures(const TextureImpl::DrawTextureSyncKeys& keys,
                                     const SharedPtr<MG_State::GLState::ProgramObject>& currentProgram);
 
-    void PrepareForDraw(DrawSyncBit syncBit) {
+    void PrepareForDraw(DrawSyncFlags syncBit) {
 #ifdef TRACY_ENABLE
         ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
@@ -2774,6 +2749,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
         }
     }
 
+    Bool CurrentProgramReadsDrawID() {
+        const auto program = GetCurrentBackendProgram();
+        return program != nullptr && program->ReadsDrawID();
+    }
+
     static Bool SupportsNativeIndirectDraws() {
         const auto& version = g_GLESCapabilities.GLESVersion;
         const Bool esVersionOk = version.Major > 3 || (version.Major == 3 && version.Minor >= 1);
@@ -3080,7 +3060,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 #if MOBILEGL_LOG_ACTIVE_LEVEL <= MOBILEGL_LOG_LEVEL_DEBUG && MOBILEGL_ENABLE_SCOPE_MARKER
         DebugImpl::OpenGLScopeMarker marker(__func__);
 #endif
-        DrawSyncBit syncBit = DrawSyncBit::IndexBuffer;
+        DrawSyncFlags syncBit = DrawSyncBit::IndexBuffer;
         PrepareForDraw(syncBit);
         CheckPrimitiveRestartSupported(type);
         g_GLESFuncs.glDrawElements(mode, count, type, indices);
@@ -3090,7 +3070,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 #if MOBILEGL_LOG_ACTIVE_LEVEL <= MOBILEGL_LOG_LEVEL_DEBUG && MOBILEGL_ENABLE_SCOPE_MARKER
         DebugImpl::OpenGLScopeMarker marker(__func__);
 #endif
-        DrawSyncBit syncBit = DrawSyncBit::None;
+        DrawSyncFlags syncBit = DrawSyncBit::None;
         PrepareForDraw(syncBit);
         const auto& currentVAO = MG_State::pGLContext->GetBoundVertexArray();
         if (currentVAO) {
@@ -3106,7 +3086,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 #if MOBILEGL_LOG_ACTIVE_LEVEL <= MOBILEGL_LOG_LEVEL_DEBUG && MOBILEGL_ENABLE_SCOPE_MARKER
         DebugImpl::OpenGLScopeMarker marker(__func__);
 #endif
-        DrawSyncBit syncBit = DrawSyncBit::IndexBuffer;
+        DrawSyncFlags syncBit = DrawSyncBit::IndexBuffer;
         PrepareForDraw(syncBit);
         CheckPrimitiveRestartSupported(type);
         g_GLESFuncs.glDrawElementsBaseVertex(mode, count, type, indices, basevertex);
@@ -3116,7 +3096,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 #if MOBILEGL_LOG_ACTIVE_LEVEL <= MOBILEGL_LOG_LEVEL_DEBUG && MOBILEGL_ENABLE_SCOPE_MARKER
         DebugImpl::OpenGLScopeMarker marker(__func__);
 #endif
-        DrawSyncBit syncBit = DrawSyncBit::None;
+        DrawSyncFlags syncBit = DrawSyncBit::None;
         PrepareForDraw(syncBit);
 
         const auto& currentVAO = MG_State::pGLContext->GetBoundVertexArray();
@@ -3132,18 +3112,16 @@ namespace MobileGL::MG_Backend::DirectGLES {
         }
     }
 
+    // Both glMultiDrawElements entry points are emulated - ES has neither in core - by the
+    // tier ladder in MultiDraw.cpp, which owns the draw preparation too (its compute tier
+    // has to dispatch before the draw state is established). The only difference between
+    // them is whether the batch carries per-sub-draw base vertices.
     void MultiDrawElements(GLenum mode, const GLsizei* count, GLenum type, const GLvoid* const* indices,
                            GLsizei drawcount) {
 #if MOBILEGL_LOG_ACTIVE_LEVEL <= MOBILEGL_LOG_LEVEL_DEBUG && MOBILEGL_ENABLE_SCOPE_MARKER
         DebugImpl::OpenGLScopeMarker marker(__func__);
 #endif
-        DrawSyncBit syncBit = DrawSyncBit::IndexBuffer;
-        PrepareForDraw(syncBit);
-        CheckPrimitiveRestartSupported(type);
-
-        for (GLsizei i = 0; i < drawcount; ++i) {
-            g_GLESFuncs.glDrawElements(mode, count[i], type, indices[i]);
-        }
+        MultiDrawImpl::DrawElementsBatch(mode, count, type, indices, drawcount, nullptr);
     }
 
     void MultiDrawElementsBaseVertex(GLenum mode, const GLsizei* count, GLenum type, const GLvoid* const* indices,
@@ -3151,20 +3129,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 #if MOBILEGL_LOG_ACTIVE_LEVEL <= MOBILEGL_LOG_LEVEL_DEBUG && MOBILEGL_ENABLE_SCOPE_MARKER
         DebugImpl::OpenGLScopeMarker marker(__func__);
 #endif
-        DrawSyncBit syncBit = DrawSyncBit::IndexBuffer;
-        PrepareForDraw(syncBit);
-        CheckPrimitiveRestartSupported(type);
-
-        // Gate on the capability flag, never on the entry-point pointer: eglGetProcAddress
-        // returns a non-NULL stub for glMultiDrawElementsBaseVertexEXT on drivers without the
-        // extension interaction (NVIDIA ES), and that stub silently drops every draw.
-        if (g_GLESCapabilities.SupportsMultiDrawElementsBaseVertex) {
-            g_GLESFuncs.glMultiDrawElementsBaseVertexEXT(mode, count, type, indices, drawcount, basevertex);
-            return;
-        }
-        for (GLsizei i = 0; i < drawcount; ++i) {
-            g_GLESFuncs.glDrawElementsBaseVertex(mode, count[i], type, indices[i], basevertex[i]);
-        }
+        MultiDrawImpl::DrawElementsBatch(mode, count, type, indices, drawcount, basevertex);
     }
 
     void MultiDrawElementsIndirect(GLenum mode, GLenum type, const void* indirect, GLsizei drawcount, GLsizei stride) {
@@ -3183,7 +3148,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return;
         }
 
-        DrawSyncBit syncBit = DrawSyncBit::IndexBuffer | DrawSyncBit::IndirectBuffer | DrawSyncBit::Instancing;
+        DrawSyncFlags syncBit = DrawSyncBit::IndexBuffer | DrawSyncBit::IndirectBuffer | DrawSyncBit::Instancing;
         PrepareForDraw(syncBit);
 
         const SizeT indexSize = MG_Util::GetGLTypeSize(type);
@@ -3223,7 +3188,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return;
         }
 
-        DrawSyncBit syncBit = DrawSyncBit::IndexBuffer | DrawSyncBit::IndirectBuffer | DrawSyncBit::Instancing;
+        DrawSyncFlags syncBit = DrawSyncBit::IndexBuffer | DrawSyncBit::IndirectBuffer | DrawSyncBit::Instancing;
         PrepareForDraw(syncBit);
 
         const SizeT indexSize = MG_Util::GetGLTypeSize(type);
@@ -3282,7 +3247,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return;
         }
 
-        DrawSyncBit syncBit = DrawSyncBit::IndirectBuffer | DrawSyncBit::Instancing;
+        DrawSyncFlags syncBit = DrawSyncBit::IndirectBuffer | DrawSyncBit::Instancing;
         PrepareForDraw(syncBit);
 
         const auto* commandBytes = ResolveIndirectCommandBytes(
@@ -3301,20 +3266,20 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
     void DrawRangeElementsBaseVertex(GLenum mode, GLuint start, GLuint end, GLsizei count, GLenum type,
                                      const void* indices, GLint basevertex) {
-        DrawSyncBit syncBit = DrawSyncBit::IndexBuffer;
+        DrawSyncFlags syncBit = DrawSyncBit::IndexBuffer;
         PrepareForDraw(syncBit);
         g_GLESFuncs.glDrawRangeElementsBaseVertex(mode, start, end, count, type, indices, basevertex);
     }
 
     void DrawRangeElements(GLenum mode, GLuint start, GLuint end, GLsizei count, GLenum type, const void* indices) {
-        DrawSyncBit syncBit = DrawSyncBit::IndexBuffer;
+        DrawSyncFlags syncBit = DrawSyncBit::IndexBuffer;
         PrepareForDraw(syncBit);
         g_GLESFuncs.glDrawRangeElements(mode, start, end, count, type, indices);
     }
 
     void DrawElementsInstancedBaseVertexBaseInstance(GLenum mode, GLsizei count, GLenum type, const void* indices,
                                                      GLsizei instancecount, GLint basevertex, GLuint baseinstance) {
-        DrawSyncBit syncBit = DrawSyncBit::IndexBuffer | DrawSyncBit::Instancing;
+        DrawSyncFlags syncBit = DrawSyncBit::IndexBuffer | DrawSyncBit::Instancing;
         PrepareForDraw(syncBit);
         SetCurrentBaseInstance(baseinstance);
         g_GLESFuncs.glDrawElementsInstancedBaseVertex(mode, count, type, indices, instancecount, basevertex);
@@ -3323,14 +3288,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
     void DrawElementsInstancedBaseVertex(GLenum mode, GLsizei count, GLenum type, const void* indices,
                                          GLsizei instancecount, GLint basevertex) {
-        DrawSyncBit syncBit = DrawSyncBit::IndexBuffer | DrawSyncBit::Instancing;
+        DrawSyncFlags syncBit = DrawSyncBit::IndexBuffer | DrawSyncBit::Instancing;
         PrepareForDraw(syncBit);
         g_GLESFuncs.glDrawElementsInstancedBaseVertex(mode, count, type, indices, instancecount, basevertex);
     }
 
     void DrawElementsInstancedBaseInstance(GLenum mode, GLsizei count, GLenum type, const void* indices,
                                            GLsizei instancecount, GLuint baseinstance) {
-        DrawSyncBit syncBit = DrawSyncBit::IndexBuffer | DrawSyncBit::Instancing;
+        DrawSyncFlags syncBit = DrawSyncBit::IndexBuffer | DrawSyncBit::Instancing;
         PrepareForDraw(syncBit);
         SetCurrentBaseInstance(baseinstance);
         g_GLESFuncs.glDrawElementsInstanced(mode, count, type, indices, instancecount);
@@ -3338,13 +3303,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
     }
 
     void DrawElementsInstanced(GLenum mode, GLsizei count, GLenum type, const void* indices, GLsizei instancecount) {
-        DrawSyncBit syncBit = DrawSyncBit::IndexBuffer | DrawSyncBit::Instancing;
+        DrawSyncFlags syncBit = DrawSyncBit::IndexBuffer | DrawSyncBit::Instancing;
         PrepareForDraw(syncBit);
         g_GLESFuncs.glDrawElementsInstanced(mode, count, type, indices, instancecount);
     }
 
     void DrawElementsIndirect(GLenum mode, GLenum type, const void* indirect) {
-        DrawSyncBit syncBit = DrawSyncBit::IndexBuffer | DrawSyncBit::IndirectBuffer | DrawSyncBit::Instancing;
+        DrawSyncFlags syncBit = DrawSyncBit::IndexBuffer | DrawSyncBit::IndirectBuffer | DrawSyncBit::Instancing;
         PrepareForDraw(syncBit);
 
         const SizeT indexSize = MG_Util::GetGLTypeSize(type);
@@ -3368,7 +3333,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
     void DrawArraysInstancedBaseInstance(GLenum mode, GLint first, GLsizei count, GLsizei instancecount,
                                          GLuint baseinstance) {
-        DrawSyncBit syncBit = DrawSyncBit::Instancing;
+        DrawSyncFlags syncBit = DrawSyncBit::Instancing;
         PrepareForDraw(syncBit);
         SetCurrentBaseInstance(baseinstance);
         g_GLESFuncs.glDrawArraysInstanced(mode, first, count, instancecount);
@@ -3376,13 +3341,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
     }
 
     void DrawArraysInstanced(GLenum mode, GLint first, GLsizei count, GLsizei instancecount) {
-        DrawSyncBit syncBit = DrawSyncBit::Instancing;
+        DrawSyncFlags syncBit = DrawSyncBit::Instancing;
         PrepareForDraw(syncBit);
         g_GLESFuncs.glDrawArraysInstanced(mode, first, count, instancecount);
     }
 
     void DrawArraysIndirect(GLenum mode, const void* indirect) {
-        DrawSyncBit syncBit = DrawSyncBit::IndirectBuffer | DrawSyncBit::Instancing;
+        DrawSyncFlags syncBit = DrawSyncBit::IndirectBuffer | DrawSyncBit::Instancing;
         PrepareForDraw(syncBit);
 
         const auto* commandBytes =
@@ -7251,6 +7216,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
     void DestroyEGLContext() {
         BufferImpl::OnBackendContextDestroyed();
         XfbImpl::OnBackendContextDestroyed();
+        MultiDrawImpl::OnBackendContextDestroyed();
         ScratchFBOImpl::OnBackendContextDestroyed();
         FramebufferImpl::InvalidateFramebufferBindingCache();
         VertexArrayImpl::InvalidateVAOBindingCache();

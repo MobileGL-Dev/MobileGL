@@ -22,7 +22,9 @@ if (ANDROID)
     set(MOBILEGL_BUILD_BENCHMARK  OFF CACHE BOOL "Build MobileGL benchmarks" FORCE)
 endif()
 
-if (NOT CMAKE_BUILD_TYPE STREQUAL "Debug" OR MOBILEGL_FORCE_RELEASE_OPT)
+option(MOBILEGL_ENABLE_LTO "Build with ThinLTO/IPO" OFF)
+
+if ((NOT CMAKE_BUILD_TYPE STREQUAL "Debug" OR MOBILEGL_FORCE_RELEASE_OPT) AND MOBILEGL_ENABLE_LTO)
     # Check if ThinLTO or LTO is suppported
     include(CheckIPOSupported)
     include(CheckCCompilerFlag)
@@ -248,6 +250,7 @@ set(SOURCE_FILES
     MobileGL/MG_Backend/DirectGLES/BackendObject_DirectGLES.cpp
     MobileGL/MG_Backend/DirectGLES/Utils.cpp
     MobileGL/MG_Backend/DirectGLES/Managers.cpp
+    MobileGL/MG_Backend/DirectGLES/MultiDraw.cpp
 
     MobileGL/MG_Backend/DirectVulkan/DirectVulkan.cpp
     MobileGL/MG_Backend/DirectVulkan/BackendObject_DirectVulkan.cpp

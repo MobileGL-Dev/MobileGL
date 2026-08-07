@@ -182,6 +182,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
     namespace XfbImpl {
         Bool AreTransformFeedbacksSupported();
+        // True while a capture span is open on the current transform feedback object
+        // (frontend Begin seen and not paused), whether or not the deferred driver-side
+        // Begin has been issued yet. Draw paths that would restructure the primitive
+        // stream, or that need to dispatch compute mid-draw, decline while it is set.
+        Bool IsCaptureSpanOpen();
         void BeginTransformFeedback(GLenum primitiveMode);
         void EndTransformFeedback();
         void PauseTransformFeedback();
