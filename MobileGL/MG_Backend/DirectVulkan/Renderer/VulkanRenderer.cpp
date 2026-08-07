@@ -3114,47 +3114,16 @@ void main() {
             return true;
         }
 
-        // Cross-frame revalidation. Only all-resident, unmapped layouts qualify:
-        // - a streamed binding's slice moves to a new arena block every frame BY DESIGN,
-        //   but every such move funnels through BumpSliceEpoch, so the per-binding epoch
-        //   compares below catch it (as they do a respecify, a sub-data update, a
-        //   resident<->streamed promotion and a buffer becoming persistently mapped);
-        // - a mapped buffer mutates its shadow with no API call and must re-run the
-        //   Sync/acquire path every frame, so it is excluded outright;
-        // - epochs are minted from a process-lifetime counter, so a deleted buffer (or
-        //   resource) recycled at the same address can never reproduce a recorded epoch.
-        if (entry.anyBufferMapped) {
-            return false;
-        }
-        const auto& attributes = vao.GetAllAttributes();
-        VkBufferResource* resources[ResolvedVertexBindings::kMaxBindings] = {};
-        for (Uint32 binding = 0; binding < entry.bindingCount; ++binding) {
-            // Compare against the LIVE pointer before any dereference: entry.buffers may
-            // dangle if the app deleted a buffer since (the VAO unbind that deletion
-            // performs bumps the config version, so the hash compare above already
-            // declined - this is defense in depth for the aliased-address case).
-            auto* bufferObject = attributes[entry.attributeLocations[binding]].Buffer.get();
-            if (bufferObject != entry.buffers[binding]) {
-                return false;
-            }
-            auto* resource = static_cast<VkBufferResource*>(bufferObject->GetBackendResource().get());
-            if (resource == nullptr || resource->sliceEpoch != entry.sliceEpochs[binding]) {
-                return false;
-            }
-            resources[binding] = resource;
-        }
-        // Every binding still resolves to the recorded slice. The per-frame resolve this
-        // replaces had one side effect the busy tracking depends on (glBufferSubData's
-        // host-write-vs-staged-copy choice): stamping each resource's GPU-use serial.
-        // Do exactly that, then re-arm the entry so the rest of the frame's draws take
-        // the one-compare path above.
-        for (Uint32 binding = 0; binding < entry.bindingCount; ++binding) {
-            resources[binding]->lastUseSerial = frameSerial;
-        }
-        entry.frameSerial = frameSerial;
-        entry.sliceEpochCounter = m_bufferManager.GetSliceEpochCounter();
-        ShadowedBindVertexBuffers(commandBuffer, entry.vkBuffers, entry.vkOffsets, entry.bindingCount);
-        return true;
+        // NO cross-frame trust: a memo recorded in an earlier frame declines here and
+        // the draw re-resolves through the full acquire path. The epoch-compare
+        // revalidation that used to sit here shipped visible corruption (journeymap /
+        // common-mods retraces, vertex anomalies on Adreno): the acquire path is the
+        // frame's content-sync point, and skipping it across frames trusted the
+        // BumpSliceEpoch inventory to cover every way a buffer's GPU copy can go stale.
+        // At least one path escapes it. Until that inventory is proven complete the
+        // hot layout memo above (same-frame) keeps the factory-chase win, and the
+        // first draw of each (VAO, frame) pays one full resolve.
+        return false;
     }
 
     VulkanRenderer::VaoDrawMemo* VulkanRenderer::LookupVaoDrawMemo(
@@ -3709,18 +3678,10 @@ void main() {
             if (indexMemo->indexFrameSerial == frameSerial &&
                 indexMemo->indexSliceEpochCounter == m_bufferManager.GetSliceEpochCounter()) {
                 sliceStillValid = true;
-            } else {
-                auto* resource = static_cast<VkBufferResource*>(
-                    indexBufferShared->GetBackendResource().get());
-                if (resource != nullptr && resource->sliceEpoch == indexMemo->indexSliceEpoch) {
-                    sliceStillValid = true;
-                    // Same busy-tracking stamp the skipped acquire would have made,
-                    // then re-arm the one-compare path for the rest of the frame.
-                    resource->lastUseSerial = frameSerial;
-                    indexMemo->indexFrameSerial = frameSerial;
-                    indexMemo->indexSliceEpochCounter = m_bufferManager.GetSliceEpochCounter();
-                }
             }
+            // NO cross-frame trust for the EBO either (same corruption class as the
+            // vertex half, see TryBindResolvedVertexBindings): a memo from an earlier
+            // frame declines and the draw re-runs the acquire, which is the sync point.
             if (sliceStillValid) {
                 const VkDeviceSize memoBindOffset = indexMemo->indexSliceOffset +
                     static_cast<VkDeviceSize>(pIndexBufferView->indexByteOffset);
@@ -5113,13 +5074,21 @@ void main() {
     }
 
     Uint32 VulkanRenderer::GetBaseTransformFlagsRaw() {
-        // GetShaderTransformFlags is a pure function of the pre-transform, which only
-        // changes on surface rotation - memoised so the per-draw path pays one field
-        // compare instead of the call + switch.
+        // GetShaderTransformFlags is a function of the pre-transform AND of whether
+        // the bound draw framebuffer is the default one (the Y-flip/rotation bits
+        // apply only when presenting). Memo keyed on both; keying on the
+        // pre-transform alone served an FBO pass's unflipped flags to the following
+        // default-framebuffer pass and flipped the whole frame.
         const VkSurfaceTransformFlagBitsKHR preTransform = m_swapchainObject.GetPreTransform();
-        if (preTransform != m_baseTransformFlagsPreTransform) {
+        const auto& currentDrawFBO =
+            MG_State::pGLContext->GetFramebufferBindingSlot(FramebufferTarget::Draw).GetBoundObject();
+        const Bool isDefaultFbo = currentDrawFBO != nullptr && currentDrawFBO->IsDefaultFramebuffer();
+        if (!m_baseTransformFlagsKeyValid || preTransform != m_baseTransformFlagsPreTransform ||
+            isDefaultFbo != m_baseTransformFlagsIsDefaultFbo) {
             m_baseTransformFlagsCache = GetShaderTransformFlags(preTransform).GetRaw();
             m_baseTransformFlagsPreTransform = preTransform;
+            m_baseTransformFlagsIsDefaultFbo = isDefaultFbo;
+            m_baseTransformFlagsKeyValid = true;
         }
         return m_baseTransformFlagsCache;
     }

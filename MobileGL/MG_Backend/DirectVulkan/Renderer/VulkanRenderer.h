@@ -648,11 +648,16 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         Uint32 m_pipelineStateHashColorCount = 0;
         Uint64 m_pipelineStateHash = 0;
         Bool m_pipelineStateHashValid = false;
-        // GetShaderTransformFlags(preTransform) memo: a pure function of the swapchain
-        // pre-transform, re-evaluated only when that value changes (surface rotation).
-        // No other invalidation input exists.
+        // GetShaderTransformFlags memo. NOT pure in the pre-transform alone: the
+        // function also reads whether the bound DRAW framebuffer is the default one
+        // (only the default framebuffer gets the Y-flip and rotation bits - an FBO
+        // pass renders unflipped). Keyed on BOTH inputs; missing the FBO bit shipped
+        // an upside-down default-framebuffer pass after any render-to-texture
+        // (minecraft-1.17-main-menu retrace, whole frame flipped).
         VkSurfaceTransformFlagBitsKHR m_baseTransformFlagsPreTransform =
             VK_SURFACE_TRANSFORM_FLAG_BITS_MAX_ENUM_KHR;
+        Bool m_baseTransformFlagsIsDefaultFbo = false;
+        Bool m_baseTransformFlagsKeyValid = false;
         Uint32 m_baseTransformFlagsCache = 0;
         Uint32 GetBaseTransformFlagsRaw();
         // Drops every memoized pipeline handle. Required at command-buffer
