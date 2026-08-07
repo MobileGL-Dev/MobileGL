@@ -598,3 +598,61 @@ TEST(TextureAnisotropyCapabilities, ExtensionPresenceIsDetectedExactly) {
     ASSERT_TRUE(MobileGL::MG_Util::BackendLoader::FillInGLESCapabilities(presentCaps, funcs));
     EXPECT_TRUE(presentCaps.SupportsTextureFilterAnisotropy);
 }
+
+// eglGetProcAddress may return a non-NULL stub for an entry point the context does not
+// implement (NVIDIA's ES driver does exactly that for glMultiDrawElementsBaseVertexEXT and
+// the stub silently drops draws), so a resolved pointer must NEVER flip these flags on its
+// own: the extension string is the authority, and the pointer only confirms callability.
+TEST(MultiDrawCapabilities, PointerAloneNeverCountsAsSupport) {
+    ResetFakeDriver();
+    g_fake.maxVertexSsboBlocks = 0;
+    auto funcs = MakeFakeGLESFunctions();
+    // Simulate the stub hazard: every pointer resolved, no extension advertised.
+    funcs.glMultiDrawArraysIndirectEXT = [](GLenum, const void*, GLsizei, GLsizei) {};
+    funcs.glMultiDrawElementsIndirectEXT = [](GLenum, GLenum, const void*, GLsizei, GLsizei) {};
+    funcs.glMultiDrawElementsBaseVertexEXT = [](GLenum, const GLsizei*, GLenum, const void* const*,
+                                                GLsizei, const GLint*) {};
+
+    MobileGL::MG_External::GLESCapabilities stubCaps;
+    ASSERT_TRUE(MobileGL::MG_Util::BackendLoader::FillInGLESCapabilities(stubCaps, funcs));
+    EXPECT_FALSE(stubCaps.SupportsMultiDrawIndirect);
+    EXPECT_FALSE(stubCaps.SupportsMultiDrawElementsBaseVertex);
+
+    // The real NVIDIA shape: both draw_elements_base_vertex extensions advertised but
+    // GL_EXT_multi_draw_arrays missing, so glMultiDrawElementsBaseVertexEXT (added only by
+    // their interaction with GL_EXT_multi_draw_arrays) is still a stub.
+    ResetFakeDriver();
+    g_fake.maxVertexSsboBlocks = 0;
+    g_fake.extensions.emplace_back("GL_EXT_draw_elements_base_vertex");
+    g_fake.extensions.emplace_back("GL_OES_draw_elements_base_vertex");
+    MobileGL::MG_External::GLESCapabilities nvidiaShapedCaps;
+    ASSERT_TRUE(MobileGL::MG_Util::BackendLoader::FillInGLESCapabilities(nvidiaShapedCaps, funcs));
+    EXPECT_FALSE(nvidiaShapedCaps.SupportsMultiDrawElementsBaseVertex);
+
+    // Fully supported: extensions advertised and pointers resolved.
+    ResetFakeDriver();
+    g_fake.maxVertexSsboBlocks = 0;
+    g_fake.extensions.emplace_back("GL_EXT_multi_draw_indirect");
+    g_fake.extensions.emplace_back("GL_OES_draw_elements_base_vertex");
+    g_fake.extensions.emplace_back("GL_EXT_multi_draw_arrays");
+    MobileGL::MG_External::GLESCapabilities supportedCaps;
+    ASSERT_TRUE(MobileGL::MG_Util::BackendLoader::FillInGLESCapabilities(supportedCaps, funcs));
+    EXPECT_TRUE(supportedCaps.SupportsMultiDrawIndirect);
+    EXPECT_TRUE(supportedCaps.SupportsMultiDrawElementsBaseVertex);
+}
+
+TEST(MultiDrawCapabilities, ExtensionWithoutResolvedPointerIsNotSupport) {
+    // Extensions advertised but the loader could not resolve the entry points (default fake
+    // table leaves them null): the flags must stay false so no caller dereferences null.
+    ResetFakeDriver();
+    g_fake.maxVertexSsboBlocks = 0;
+    g_fake.extensions.emplace_back("GL_EXT_multi_draw_indirect");
+    g_fake.extensions.emplace_back("GL_EXT_draw_elements_base_vertex");
+    g_fake.extensions.emplace_back("GL_EXT_multi_draw_arrays");
+    const auto funcs = MakeFakeGLESFunctions();
+
+    MobileGL::MG_External::GLESCapabilities caps;
+    ASSERT_TRUE(MobileGL::MG_Util::BackendLoader::FillInGLESCapabilities(caps, funcs));
+    EXPECT_FALSE(caps.SupportsMultiDrawIndirect);
+    EXPECT_FALSE(caps.SupportsMultiDrawElementsBaseVertex);
+}

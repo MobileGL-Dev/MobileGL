@@ -298,6 +298,31 @@ namespace MobileGL::MG_Util::SelfTest {
                              "not supported; no impact: the native indirect path deliberately does not "
                              "rely on it (shader-side emulation handles baseInstance semantics)");
             }
+            // Both multi-draw rows gate on the capability flags, not the entry-point pointers:
+            // eglGetProcAddress may hand back a non-NULL stub for these on drivers without the
+            // extension (NVIDIA ES does, and its glMultiDrawElementsBaseVertexEXT stub silently
+            // drops every draw), so the pointers prove nothing. Absence is INFO in both cases
+            // because MobileGL falls back to an equivalent per-draw loop.
+            if (caps.SupportsMultiDrawIndirect) {
+                builder.Pass("Multi-draw indirect",
+                             "glMultiDrawArrays/ElementsIndirectEXT available via GL_EXT_multi_draw_indirect");
+            } else {
+                builder.Info("Multi-draw indirect",
+                             "GL_EXT_multi_draw_indirect not supported; no impact today: multi-draw "
+                             "indirect is decomposed into per-command indirect draws regardless");
+            }
+            if (caps.SupportsMultiDrawElementsBaseVertex) {
+                builder.Pass("Multi-draw base vertex",
+                             "glMultiDrawElementsBaseVertexEXT available (EXT/OES_draw_elements_base_vertex "
+                             "with GL_EXT_multi_draw_arrays); glMultiDrawElementsBaseVertex batches into one "
+                             "driver call");
+            } else {
+                builder.Info("Multi-draw base vertex",
+                             "glMultiDrawElementsBaseVertexEXT not supported (needs EXT/OES_"
+                             "draw_elements_base_vertex plus GL_EXT_multi_draw_arrays); "
+                             "glMultiDrawElementsBaseVertex falls back to a per-draw loop with "
+                             "identical output");
+            }
             if (caps.SupportsTextureBorderClamp) {
                 builder.Pass("Texture border clamp",
                              "supported (GL_TEXTURE_BORDER_COLOR reaches the driver, so "

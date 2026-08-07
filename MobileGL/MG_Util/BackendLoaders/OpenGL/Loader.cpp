@@ -524,9 +524,15 @@ namespace MobileGL::MG_Util::BackendLoader {
             INIT_GLES_FUNC_OPTIONAL(glPolygonModeANGLE)
             INIT_GLES_FUNC_OPTIONAL(glColorMaskiEXT)
             INIT_GLES_FUNC_OPTIONAL(glColorMaskiOES)
-            INIT_GLES_FUNC(glMultiDrawArraysIndirectEXT)
-            INIT_GLES_FUNC(glMultiDrawElementsIndirectEXT)
-            INIT_GLES_FUNC(glMultiDrawElementsBaseVertexEXT)
+            // Extension-only multi-draw entry points. eglGetProcAddress may legally return a
+            // non-NULL stub for these on drivers that do not implement them (NVIDIA's ES driver
+            // returns one for glMultiDrawElementsBaseVertexEXT that silently drops every draw),
+            // so pointer presence proves nothing: callers must gate on the extension-derived
+            // SupportsMultiDrawIndirect / SupportsMultiDrawElementsBaseVertex capability flags,
+            // never on these pointers alone.
+            INIT_GLES_FUNC_OPTIONAL(glMultiDrawArraysIndirectEXT)
+            INIT_GLES_FUNC_OPTIONAL(glMultiDrawElementsIndirectEXT)
+            INIT_GLES_FUNC_OPTIONAL(glMultiDrawElementsBaseVertexEXT)
         }
     }
 
@@ -814,6 +820,11 @@ namespace MobileGL::MG_Util::BackendLoader {
         GLint extCount = 0;
         glesFuncs.glGetIntegerv(GL_NUM_EXTENSIONS, &extCount);
         MGLOG_I("Detected %d OpenGL ES extensions:", extCount);
+        // Combined below: glMultiDrawElementsBaseVertexEXT exists only where EXT/OES
+        // draw_elements_base_vertex interacts with GL_EXT_multi_draw_arrays.
+        Bool hasMultiDrawIndirectExtension = false;
+        Bool hasDrawElementsBaseVertexExtension = false;
+        Bool hasMultiDrawArraysExtension = false;
         for (GLint i = 0; i < extCount; ++i) {
             const char* extension = (const char*)glesFuncs.glGetStringi(GL_EXTENSIONS, i);
             if (extension) {
@@ -856,8 +867,27 @@ namespace MobileGL::MG_Util::BackendLoader {
                 if (std::strcmp(extension, "GL_OES_shader_multisample_interpolation") == 0) {
                     caps.SupportsShaderMultisampleInterpolation = true;
                 }
+                if (std::strcmp(extension, "GL_EXT_multi_draw_indirect") == 0) {
+                    hasMultiDrawIndirectExtension = true;
+                }
+                if (std::strcmp(extension, "GL_EXT_draw_elements_base_vertex") == 0 ||
+                    std::strcmp(extension, "GL_OES_draw_elements_base_vertex") == 0) {
+                    hasDrawElementsBaseVertexExtension = true;
+                }
+                if (std::strcmp(extension, "GL_EXT_multi_draw_arrays") == 0) {
+                    hasMultiDrawArraysExtension = true;
+                }
             }
         }
+        // The pointer check on top of the extension check makes each flag sufficient on its own
+        // at a call site; the extension check on top of the pointer keeps a stub returned by
+        // eglGetProcAddress (see AcquireGLESFunctions) from ever counting as support.
+        caps.SupportsMultiDrawIndirect = hasMultiDrawIndirectExtension &&
+                                         glesFuncs.glMultiDrawArraysIndirectEXT != nullptr &&
+                                         glesFuncs.glMultiDrawElementsIndirectEXT != nullptr;
+        caps.SupportsMultiDrawElementsBaseVertex = hasDrawElementsBaseVertexExtension &&
+                                                   hasMultiDrawArraysExtension &&
+                                                   glesFuncs.glMultiDrawElementsBaseVertexEXT != nullptr;
         caps.SupportsShaderMultisampleInterpolation =
             caps.SupportsShaderMultisampleInterpolation || caps.GLESVersion.Major > 3 ||
             (caps.GLESVersion.Major == 3 && caps.GLESVersion.Minor >= 2);
@@ -873,6 +903,10 @@ namespace MobileGL::MG_Util::BackendLoader {
         MGLOG_I("    indexed glColorMaski: %s", caps.SupportsIndexedColorMask ? "yes" : "no");
         MGLOG_I("    dual-source blend (EXT_blend_func_extended): %s",
                 caps.SupportsDualSourceBlend ? "yes" : "no");
+        MGLOG_I("    multi-draw indirect (EXT_multi_draw_indirect): %s",
+                caps.SupportsMultiDrawIndirect ? "yes" : "no");
+        MGLOG_I("    multi-draw base vertex (EXT/OES_draw_elements_base_vertex + EXT_multi_draw_arrays): %s",
+                caps.SupportsMultiDrawElementsBaseVertex ? "yes" : "no");
 
         MGLOG_I("OpenGL ES capabilities:");
         glesFuncs.glGetIntegerv(GL_UNIFORM_BUFFER_OFFSET_ALIGNMENT, &caps.UniformBufferOffsetAlignment);

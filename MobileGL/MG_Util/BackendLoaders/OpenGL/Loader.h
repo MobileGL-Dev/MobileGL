@@ -1071,6 +1071,19 @@ namespace MobileGL {
             // GLES 3.2 core or GL_OES_shader_multisample_interpolation exposes
             // interpolateAtOffset and the three fragment-offset limit queries.
             Bool SupportsShaderMultisampleInterpolation = false;
+            // GL_EXT_multi_draw_indirect is present AND glMultiDrawArraysIndirectEXT /
+            // glMultiDrawElementsIndirectEXT both resolved. Multi-draw is not core in any ES
+            // version, and eglGetProcAddress may return a live-looking stub on drivers without
+            // the extension, so the pointers alone must never be used as the support signal.
+            Bool SupportsMultiDrawIndirect = false;
+            // glMultiDrawElementsBaseVertexEXT is callable. Per the Khronos registry the entry
+            // point is added by GL_EXT/OES_draw_elements_base_vertex ONLY in interaction with
+            // GL_EXT_multi_draw_arrays; NVIDIA's ES driver advertises both base_vertex
+            // extensions but not GL_EXT_multi_draw_arrays, and its eglGetProcAddress still
+            // hands back a non-NULL stub that silently drops every draw. Hence this flag
+            // requires (EXT or OES draw_elements_base_vertex) AND GL_EXT_multi_draw_arrays
+            // AND a resolved pointer; callers must gate on it, never on the pointer.
+            Bool SupportsMultiDrawElementsBaseVertex = false;
             // GL_RENDERER contains "ANGLE".
             Bool IsAngleRenderer = false;
             // GL_RENDERER contains both "ANGLE" and "llvmpipe".
