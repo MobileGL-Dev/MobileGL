@@ -4,6 +4,11 @@ project("MobileGL")
 
 option(MOBILEGL_BUILD_TEST        "Build MobileGL tests"                             ON )
 option(MOBILEGL_BUILD_BENCHMARK   "Build MobileGL benchmarks"                        ON )
+# Headless end-to-end GPU scenarios (MobileGL/MG_IntegrationTest). They need a
+# real GPU/ICD to do anything, so they are off by default for CI; every scenario
+# skips cleanly where there is none. Registered under the `integration-gpu`
+# ctest label so a run can select or exclude them.
+option(MOBILEGL_BUILD_INTEGRATION_TEST "Build MobileGL headless GPU integration tests" OFF)
 option(MOBILEGL_FORCE_RELEASE_OPT "Enable Release optimization flags in Debug build" ON )
 option(MOBILEGL_ENABLE_TRACY      "Enable tracy for profiling"                       OFF)
 option(MOBILEGL_BUILD_TRACE_REPLAY "Build desktop apitrace replay runner"            OFF)
@@ -536,6 +541,12 @@ if (NOT ANDROID)
 
     if (MOBILEGL_BUILD_TEST)
         add_subdirectory(MobileGL/MG_Test)
+    endif()
+
+    # After MG_Test so googletest is already available when the unit tests are
+    # built; the module fetches its own copy when they are not.
+    if (MOBILEGL_BUILD_INTEGRATION_TEST)
+        add_subdirectory(MobileGL/MG_IntegrationTest)
     endif()
 
     if (MOBILEGL_BUILD_BENCHMARK)
