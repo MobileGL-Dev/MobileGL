@@ -29,6 +29,16 @@ namespace MobileGL::MG_Config {
         ForceOff,
     };
 
+    // Preferred DirectVulkan dispatch tier for the glMultiDraw* families. A preference,
+    // never a demand: the renderer clamps it to what the device supports at device
+    // creation, falling down the chain ext -> indirect -> unroll with one log line.
+    enum class MultiDrawMode : Uint8 {
+        Auto = 0, // unset: best supported tier
+        Ext,      // VK_EXT_multi_draw: one vkCmdDrawMultiEXT / vkCmdDrawMultiIndexedEXT
+        Indirect, // multiDrawIndirect feature: one vkCmdDraw*Indirect over a transient command array
+        Unroll,   // one vkCmdDraw* per sub-draw
+    };
+
     // Feature toggles parsed once from environment variables in MG_ConfigLoader::Init()
     // (ConfigLoader.cpp), before the accepted-env map is destroyed. All Bool fields share
     // one truthy rule: the variable is set, non-empty, not "0", and not "false"
@@ -91,6 +101,10 @@ namespace MobileGL::MG_Config {
         // feature off. It is enabled by default to match GL's defined out-of-range fetch
         // behavior; this escape hatch exists to measure or dodge its GPU cost on a device.
         Bool DisableRobustBufferAccess = false;
+        // MOBILEGL_MAGMA_MULTIDRAW_MODE: preferred DirectVulkan multi-draw dispatch tier
+        // ("ext" | "indirect" | "unroll", see MultiDrawMode). Clamped to device support;
+        // unset picks the best supported tier.
+        MultiDrawMode MagmaMultiDrawMode = MultiDrawMode::Auto;
     };
     extern FeaturesTable Features;
 } // namespace MobileGL::MG_Config

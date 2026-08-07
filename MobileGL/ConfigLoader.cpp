@@ -97,6 +97,25 @@ namespace MobileGL::MG_ConfigLoader {
                                          : MG_Config::QuirkOverride::ForceOff;
     }
 
+    // Multi-draw mode is a named-value preference: unset keeps Auto (best supported tier),
+    // a recognized name selects that tier as the ceiling, anything else warns and keeps Auto.
+    inline MG_Config::MultiDrawMode QueryEnvMultiDrawMode(const String& key) {
+        auto it = acceptedEnvVariablesMap->find(key);
+        if (it == acceptedEnvVariablesMap->end()) {
+            return MG_Config::MultiDrawMode::Auto;
+        }
+        String lowered = it->second;
+        std::transform(lowered.begin(), lowered.end(), lowered.begin(),
+                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        if (lowered == "ext") return MG_Config::MultiDrawMode::Ext;
+        if (lowered == "indirect") return MG_Config::MultiDrawMode::Indirect;
+        if (lowered == "unroll") return MG_Config::MultiDrawMode::Unroll;
+        if (lowered.empty() || lowered == "auto") return MG_Config::MultiDrawMode::Auto;
+        MGLOG_W("Config: Ignoring invalid env variable %s='%s'; expected ext|indirect|unroll|auto, using auto",
+                key.c_str(), it->second.c_str());
+        return MG_Config::MultiDrawMode::Auto;
+    }
+
     inline Uint32 QueryEnvUint32(const String& key, Uint32 defaultValue, Uint32 minValue, Uint32 maxValue) {
         auto it = acceptedEnvVariablesMap->find(key);
         if (it == acceptedEnvVariablesMap->end()) {
@@ -138,6 +157,7 @@ namespace MobileGL::MG_ConfigLoader {
         features.MagmaDisableBlendedDepthWriteQuirk =
             QueryEnvQuirkOverride("MOBILEGL_MAGMA_DISABLE_BLENDED_DEPTH_WRITE");
         features.DisableRobustBufferAccess = QueryEnvFlag("MOBILEGL_DISABLE_ROBUST_BUFFER_ACCESS");
+        features.MagmaMultiDrawMode = QueryEnvMultiDrawMode("MOBILEGL_MAGMA_MULTIDRAW_MODE");
     }
 
     inline void InitBackendType() {

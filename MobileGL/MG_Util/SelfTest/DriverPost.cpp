@@ -1426,14 +1426,51 @@ namespace MobileGL::MG_Util::SelfTest {
         if (features.multiDrawIndirect == VK_TRUE) {
             builder.Pass("multiDrawIndirect", "indirect multi-draw batches run as single native commands");
         } else {
-            builder.Warn("multiDrawIndirect",
-                         "unsupported; indirect multi-draw batches fall back to one draw per command");
+            builder.Info("multiDrawIndirect",
+                         "unsupported; multi-draw batches fall back to one draw per command (tier "
+                         "\"indirect\" of the multi-draw dispatch is unavailable)");
         }
         if (features.drawIndirectFirstInstance == VK_TRUE) {
             builder.Pass("drawIndirectFirstInstance", "indirect commands may carry a non-zero firstInstance");
         } else {
             builder.Warn("drawIndirectFirstInstance",
                          "unsupported; indirect commands with a non-zero baseInstance cannot run natively");
+        }
+        // Multi-draw dispatch tiers (ext -> indirect -> unroll). INFO on the missing
+        // pieces: every tier has a fallback, nothing is lost, only batched into more
+        // commands. The renderer resolves the same chain at device creation, clamped
+        // by MOBILEGL_MAGMA_MULTIDRAW_MODE.
+        {
+            Bool multiDrawExtUsable = false;
+            if (HasVkExtension(deviceExtensions, VK_EXT_MULTI_DRAW_EXTENSION_NAME) &&
+                vkGetPhysicalDeviceFeatures2Fn != nullptr) {
+                VkPhysicalDeviceMultiDrawFeaturesEXT multiDrawFeatures{};
+                multiDrawFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MULTI_DRAW_FEATURES_EXT;
+                VkPhysicalDeviceFeatures2 features2{};
+                features2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+                features2.pNext = &multiDrawFeatures;
+                vkGetPhysicalDeviceFeatures2Fn(physicalDevice, &features2);
+                multiDrawExtUsable = multiDrawFeatures.multiDraw == VK_TRUE;
+            }
+            if (multiDrawExtUsable) {
+                builder.Pass("VK_EXT_multi_draw",
+                             "supported; a glMultiDraw* batch runs as one vkCmdDrawMulti(Indexed)EXT");
+            } else {
+                builder.Info("VK_EXT_multi_draw",
+                             "unsupported; glMultiDraw* batches use the indirect or unrolled tier");
+            }
+            const char* resolvedTier = multiDrawExtUsable                    ? "ext"
+                                       : features.multiDrawIndirect == VK_TRUE ? "indirect"
+                                                                               : "unroll";
+            String tierDetail = format("default tier \"{}\" (chain: ext -> indirect -> unroll)", resolvedTier);
+            const MG_Config::MultiDrawMode multiDrawMode = MG_Config::Features.MagmaMultiDrawMode;
+            if (multiDrawMode != MG_Config::MultiDrawMode::Auto) {
+                tierDetail += format("; MOBILEGL_MAGMA_MULTIDRAW_MODE={} caps it (clamped to device support)",
+                                     multiDrawMode == MG_Config::MultiDrawMode::Ext        ? "ext"
+                                     : multiDrawMode == MG_Config::MultiDrawMode::Indirect ? "indirect"
+                                                                                           : "unroll");
+            }
+            builder.Info("Multi-draw dispatch tier", tierDetail);
         }
         if (features.vertexPipelineStoresAndAtomics == VK_TRUE) {
             builder.Pass("vertexPipelineStoresAndAtomics",
