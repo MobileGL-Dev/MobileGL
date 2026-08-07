@@ -11,6 +11,7 @@
 #include <Config.h>
 #include <MGGitHash.h>
 #include <MG_Backend/DirectGLES/BackendObject_DirectGLES.h>
+#include <MG_Backend/DirectGLES/MultiDraw.h>
 #include <MG_Backend/DirectVulkan/BackendObject_DirectVulkan.h>
 // Only for the compile-time MAX_VERTEX_ATTRIBS constant asserted below. The POST still executes no
 // MG_State code: it runs standalone, before MG_State::Init().
@@ -319,9 +320,46 @@ namespace MobileGL::MG_Util::SelfTest {
             } else {
                 builder.Info("Multi-draw base vertex",
                              "glMultiDrawElementsBaseVertexEXT not supported (needs EXT/OES_"
-                             "draw_elements_base_vertex plus GL_EXT_multi_draw_arrays); "
-                             "glMultiDrawElementsBaseVertex falls back to a per-draw loop with "
-                             "identical output");
+                             "draw_elements_base_vertex plus GL_EXT_multi_draw_arrays); the batch "
+                             "takes the next emulation tier instead, with identical output - see "
+                             "\"Multi-draw elements tier\" below for the one that will run");
+            }
+            // glMultiDrawElements(BaseVertex) has no ES counterpart at all, so DirectGLES
+            // emulates it; these rows say which emulation the driver leaves available and
+            // which one will run. The two capabilities each tier leans on come first.
+            if (caps.SupportsDrawElementsBaseVertex) {
+                builder.Pass("Draw elements base vertex",
+                             "glDrawElementsBaseVertex available (ES 3.2 core or EXT/OES_draw_elements_base_"
+                             "vertex); a multi-draw batch can replay its sub-draws with their own base "
+                             "vertices");
+            } else {
+                builder.Warn("Draw elements base vertex",
+                             "glDrawElementsBaseVertex not supported (pre-ES 3.2 without EXT/OES_draw_"
+                             "elements_base_vertex); every base-vertex draw has to be emulated by rewriting "
+                             "the index stream on the CPU, which costs an upload per batch");
+            }
+            if (caps.SupportsComputeShader) {
+                builder.Pass("Compute shaders",
+                             "available (ES 3.1 core); the opt-in \"compute\" multi-draw tier can flatten a "
+                             "whole batch into one draw");
+            } else {
+                builder.Info("Compute shaders",
+                             "not available (pre-ES 3.1); no impact on the default multi-draw tiers, which "
+                             "never use compute");
+            }
+            {
+                // The same resolution the backend runs, over the capabilities probed here.
+                // Like the Magma tier row, the preference comes from MG_Config::Features,
+                // which is only populated once MobileGL::Initialize() has parsed the
+                // environment - a POST executed standalone before that reports the
+                // unclamped choice, so the row names the variable rather than implying it
+                // was consulted.
+                using MG_Backend::DirectGLES::MultiDrawImpl::ResolveTier;
+                String resolution;
+                ResolveTier(caps, glesFuncs, MG_Config::Features.EsprytMultiDrawMode, &resolution);
+                builder.Info("Multi-draw elements tier",
+                             "glMultiDrawElements(BaseVertex) emulation: " + resolution +
+                                 "; override with MOBILEGL_ESPRYT_MULTIDRAW_MODE");
             }
             if (caps.SupportsTextureBorderClamp) {
                 builder.Pass("Texture border clamp",
