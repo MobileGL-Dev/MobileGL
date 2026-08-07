@@ -39,6 +39,23 @@ namespace MobileGL::MG_Config {
         Unroll,   // one vkCmdDraw* per sub-draw
     };
 
+    // Preferred DirectGLES emulation tier for glMultiDrawElements(BaseVertex). GLES has no
+    // such entry point in core, so every tier below is an emulation; they differ only in
+    // which driver capability they lean on and how many driver calls a batch costs. Like
+    // the Magma knob this is a preference, clamped at resolution time to what the ES
+    // driver actually supports, with one log line when it falls back.
+    enum class GLESMultiDrawMode : Uint8 {
+        Auto = 0,      // unset: best supported tier
+        Ext,           // one glMultiDrawElementsBaseVertexEXT
+        MultiIndirect, // one glMultiDrawElementsIndirectEXT over a scratch command buffer
+        Indirect,      // one glDrawElementsIndirect per sub-draw over that same buffer
+        BaseVertex,    // one glDrawElementsBaseVertex per sub-draw
+        DrawElements,  // baseVertex folded into a scratch index buffer on the CPU, then plain
+                       // glDrawElements per sub-draw (for drivers with no base-vertex draw at all)
+        Compute,       // a compute shader flattens every sub-draw into one rebased index buffer,
+                       // drawn by a single glDrawElements
+    };
+
     // Feature toggles parsed once from environment variables in MG_ConfigLoader::Init()
     // (ConfigLoader.cpp), before the accepted-env map is destroyed. All Bool fields share
     // one truthy rule: the variable is set, non-empty, not "0", and not "false"
@@ -105,6 +122,11 @@ namespace MobileGL::MG_Config {
         // ("ext" | "indirect" | "unroll", see MultiDrawMode). Clamped to device support;
         // unset picks the best supported tier.
         MultiDrawMode MagmaMultiDrawMode = MultiDrawMode::Auto;
+        // MOBILEGL_ESPRYT_MULTIDRAW_MODE: preferred DirectGLES glMultiDrawElements emulation
+        // tier ("ext" | "multiindirect" | "indirect" | "basevertex" | "drawelements" |
+        // "compute", see GLESMultiDrawMode). Clamped to driver support; unset picks the best
+        // supported tier, which never includes "compute" - see the note on its resolution.
+        GLESMultiDrawMode EsprytMultiDrawMode = GLESMultiDrawMode::Auto;
     };
     extern FeaturesTable Features;
 } // namespace MobileGL::MG_Config

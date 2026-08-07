@@ -1084,6 +1084,15 @@ namespace MobileGL {
             // requires (EXT or OES draw_elements_base_vertex) AND GL_EXT_multi_draw_arrays
             // AND a resolved pointer; callers must gate on it, never on the pointer.
             Bool SupportsMultiDrawElementsBaseVertex = false;
+            // glDrawElementsBaseVertex is callable: ES 3.2 core, or EXT/OES_draw_elements_base_vertex
+            // before that, with the pointer resolved. This is the weaker sibling of the flag above -
+            // it does NOT need GL_EXT_multi_draw_arrays, only the single-draw entry point - and it
+            // decides whether a multi-draw batch can carry per-sub-draw base vertices at all or has
+            // to fold them into rewritten indices.
+            Bool SupportsDrawElementsBaseVertex = false;
+            // Compute shaders are usable: ES 3.1 core (there is no pre-3.1 extension in ES), with
+            // the dispatch and barrier entry points resolved.
+            Bool SupportsComputeShader = false;
             // GL_RENDERER contains "ANGLE".
             Bool IsAngleRenderer = false;
             // GL_RENDERER contains both "ANGLE" and "llvmpipe".

@@ -888,6 +888,18 @@ namespace MobileGL::MG_Util::BackendLoader {
         caps.SupportsMultiDrawElementsBaseVertex = hasDrawElementsBaseVertexExtension &&
                                                    hasMultiDrawArraysExtension &&
                                                    glesFuncs.glMultiDrawElementsBaseVertexEXT != nullptr;
+        // Core from ES 3.2 on, so an extension string is not required there; below 3.2 the
+        // extension is, and the pointer still has to have resolved either way.
+        const Bool esAtLeast32 = caps.GLESVersion.Major > 3 ||
+                                 (caps.GLESVersion.Major == 3 && caps.GLESVersion.Minor >= 2);
+        const Bool esAtLeast31 = caps.GLESVersion.Major > 3 ||
+                                 (caps.GLESVersion.Major == 3 && caps.GLESVersion.Minor >= 1);
+        caps.SupportsDrawElementsBaseVertex = (esAtLeast32 || hasDrawElementsBaseVertexExtension) &&
+                                              glesFuncs.glDrawElementsBaseVertex != nullptr;
+        caps.SupportsComputeShader = esAtLeast31 && glesFuncs.glDispatchCompute != nullptr &&
+                                     glesFuncs.glMemoryBarrier != nullptr &&
+                                     glesFuncs.glCreateShader != nullptr &&
+                                     glesFuncs.glCreateProgram != nullptr;
         caps.SupportsShaderMultisampleInterpolation =
             caps.SupportsShaderMultisampleInterpolation || caps.GLESVersion.Major > 3 ||
             (caps.GLESVersion.Major == 3 && caps.GLESVersion.Minor >= 2);
@@ -907,6 +919,9 @@ namespace MobileGL::MG_Util::BackendLoader {
                 caps.SupportsMultiDrawIndirect ? "yes" : "no");
         MGLOG_I("    multi-draw base vertex (EXT/OES_draw_elements_base_vertex + EXT_multi_draw_arrays): %s",
                 caps.SupportsMultiDrawElementsBaseVertex ? "yes" : "no");
+        MGLOG_I("    draw elements base vertex (ES 3.2 core or EXT/OES_draw_elements_base_vertex): %s",
+                caps.SupportsDrawElementsBaseVertex ? "yes" : "no");
+        MGLOG_I("    compute shaders (ES 3.1 core): %s", caps.SupportsComputeShader ? "yes" : "no");
 
         MGLOG_I("OpenGL ES capabilities:");
         glesFuncs.glGetIntegerv(GL_UNIFORM_BUFFER_OFFSET_ALIGNMENT, &caps.UniformBufferOffsetAlignment);
