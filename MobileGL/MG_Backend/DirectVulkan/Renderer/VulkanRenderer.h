@@ -765,8 +765,36 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             // it bypasses GetOrCreateProgram, or the idle sweep could evict a live entry.
             const ProgramFactory::VkProgramObject* programObj = nullptr;
             Uint64 programFactoryEpoch = 0;
+            // Per-entry copies of the snapshotting draw's sampled set (the scratch
+            // vectors below hold only the LAST full-path draw's set, which with more
+            // than one snapshot entry is not necessarily this entry's program).
+            // sampledTextures/sampledResources carry the same epoch-guarded pointer
+            // lifetime rules as the scratch originals: textureEraseEpoch (checked
+            // every probe) declines the entry before any erased resource pointer
+            // could be dereferenced. sampledLayouts is the layout VALUE each
+            // resource held when this entry's descriptors were built (the
+            // descriptor-reuse hint needs the SAME layout, not just a sampleable
+            // one), and sampledBindingRecords feeds SampledBindingsUnchanged when
+            // the bind generation moved.
+            Vector<MG_State::GLState::ITextureObject*> sampledTextures;
+            Vector<VkTextureManager::TextureResource*> sampledResources;
+            Vector<VkImageLayout> sampledLayouts;
+            Vector<UniformManager::SampledBindingRecord> sampledBindingRecords;
         };
-        SetupDrawSnapshot m_setupDrawSnapshot;
+        // Program-keyed snapshot entries: program ping-pong (Sodium switches programs
+        // mid-frame every few draws) would otherwise evict the single snapshot on
+        // every switch and send every draw through the full path. Entries are found
+        // by programLifetimeId (MRU-first probe); every other guard stays per-probe,
+        // so a stale entry declines itself exactly like the old single snapshot did.
+        static constexpr Uint32 kSetupDrawSnapshotCount = 4;
+        SetupDrawSnapshot m_setupDrawSnapshots[kSetupDrawSnapshotCount];
+        Uint32 m_setupDrawSnapshotMru = 0;    // last entry that hit or was filled
+        Uint32 m_setupDrawSnapshotVictim = 0; // round-robin fill cursor when all entries are live
+        void InvalidateSetupDrawSnapshots() {
+            for (auto& snapshot : m_setupDrawSnapshots) {
+                snapshot.valid = false;
+            }
+        }
 
         // Per-draw scratch buffers (clear keeps capacity) — these paths run for every
         // draw call and must not allocate.
@@ -782,13 +810,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // post-transition loop can skip re-resolving textures whose layout is
         // already sampleable.
         Vector<VkTextureManager::TextureResource*> m_sampledResourcesScratch;
-        // Layout VALUE of each sampled resource when the snapshot (and so the cached
-        // sampler descriptors) was built, parallel to m_sampledResourcesScratch. The
-        // fast path's validity check only proves the layout is still sampleable; the
-        // descriptor-reuse hint additionally needs it to be the SAME sampleable
-        // layout (a mid-frame compute dispatch can move a sampled texture from
-        // READ_ONLY_OPTIMAL to GENERAL, both valid, different descriptor).
-        Vector<VkImageLayout> m_sampledLayoutSnapshots;
         Vector<MG_State::GLState::ITextureObject*> m_storageImageTexturesScratch;
         Vector<VkBuffer> m_vertexBuffersScratch;
         Vector<VkDeviceSize> m_vertexOffsetsScratch;

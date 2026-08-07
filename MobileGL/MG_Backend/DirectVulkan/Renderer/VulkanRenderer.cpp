@@ -5127,10 +5127,34 @@ void main() {
     Bool VulkanRenderer::TrySetupDrawFastPath(FrameContext::FrameData& frame, GLenum mode,
                                               Flags<DrawSetupAspect> aspects, const DrawCmdParam& drawParams,
                                               const IndexBufferView* pIndexBufferView) {
-        SetupDrawSnapshot& snap = m_setupDrawSnapshot;
-        if (!snap.valid || !frame.isCommandRecording) {
+        if (!frame.isCommandRecording) {
             return false;
         }
+        // Entry select: by the draw program's lifetime id, MRU first (the id pins
+        // the entry; every other fact is re-guarded below, so probing a stale
+        // entry can only decline, never serve stale state).
+        const auto& program = *MG_State::pGLContext->GetProgramForDraw();
+        const Uint64 programLifetimeId = program.GetLifetimeId();
+        SetupDrawSnapshot* snapPtr = nullptr;
+        {
+            SetupDrawSnapshot& mru = m_setupDrawSnapshots[m_setupDrawSnapshotMru];
+            if (mru.valid && mru.programLifetimeId == programLifetimeId) {
+                snapPtr = &mru;
+            } else {
+                for (Uint32 i = 0; i < kSetupDrawSnapshotCount; ++i) {
+                    SetupDrawSnapshot& candidate = m_setupDrawSnapshots[i];
+                    if (candidate.valid && candidate.programLifetimeId == programLifetimeId) {
+                        snapPtr = &candidate;
+                        m_setupDrawSnapshotMru = i;
+                        break;
+                    }
+                }
+            }
+        }
+        if (snapPtr == nullptr) {
+            return false;
+        }
+        SetupDrawSnapshot& snap = *snapPtr;
         if (snap.aspects != aspects.GetRaw() || snap.mode != mode) {
             return false;
         }
@@ -5142,9 +5166,7 @@ void main() {
             snap.imageIndex != m_imageIndexAcquired) {
             return false;
         }
-        const auto& program = *MG_State::pGLContext->GetProgramForDraw();
-        if (program.GetLifetimeId() != snap.programLifetimeId ||
-            program.GetBackendStateVersion() != snap.programVersion) {
+        if (program.GetBackendStateVersion() != snap.programVersion) {
             return false;
         }
         // A changed VAO does NOT decline: the VAO only feeds the pipeline's vertex
@@ -5282,7 +5304,7 @@ void main() {
             }
         }
         if (bindsMoved &&
-            !m_uniformManager->SampledBindingsUnchanged(program, programObj, m_sampledBindingRecordsScratch)) {
+            !m_uniformManager->SampledBindingsUnchanged(program, programObj, snap.sampledBindingRecords)) {
             return false;
         }
 
@@ -5291,8 +5313,11 @@ void main() {
         // sampleable, then stamp recording use exactly as the full path would.
         // A feedback case (sampled texture written by the active pass) fails the
         // layout check and falls back to the full path's end-pass handling.
-        const auto& sampledTextures = m_sampledTexturesScratch;
-        const auto& sampledResources = m_sampledResourcesScratch;
+        // The ENTRY's copies, not the scratch vectors: with more than one entry
+        // the scratch holds only the last full-path draw's set, which may belong
+        // to a different program.
+        const auto& sampledTextures = snap.sampledTextures;
+        const auto& sampledResources = snap.sampledResources;
         if (sampledResources.size() != sampledTextures.size()) {
             return false;
         }
@@ -5306,7 +5331,7 @@ void main() {
         // generation means SampledBindingsUnchanged proved the per-binding (texture,
         // sampler) pairs identical, and the sums/generation checks below cover every
         // remaining descriptor input.
-        const Bool layoutSnapshotUsable = m_sampledLayoutSnapshots.size() == sampledTextures.size();
+        const Bool layoutSnapshotUsable = snap.sampledLayouts.size() == sampledTextures.size();
         Bool samplerDescriptorsUnchanged = layoutSnapshotUsable;
         for (SizeT i = 0; i < sampledTextures.size(); ++i) {
             const auto* sampledTexture = sampledTextures[i];
@@ -5317,8 +5342,8 @@ void main() {
             if (resource == nullptr || !IsValidSampledImageLayout(resource->layout)) {
                 return false;
             }
-            if (layoutSnapshotUsable && m_sampledLayoutSnapshots[i] != resource->layout) {
-                m_sampledLayoutSnapshots[i] = resource->layout;
+            if (layoutSnapshotUsable && snap.sampledLayouts[i] != resource->layout) {
+                snap.sampledLayouts[i] = resource->layout;
                 samplerDescriptorsUnchanged = false;
             }
             contentSum += sampledTexture->GetContentVersion();
@@ -5437,17 +5462,51 @@ void main() {
         if (TrySetupDrawFastPath(frame, mode, aspects, drawParams, pIndexBufferView)) {
             return true;
         }
-        // The fast path declined: whatever it saw may be stale. The full path
-        // below re-resolves everything and refreshes the snapshot on success.
-        m_setupDrawSnapshot.valid = false;
         const auto& drawFbo =
                 MG_State::pGLContext->GetFramebufferBindingSlot(FramebufferTarget::Draw).GetBoundObject();
         if (drawFbo != nullptr && IsUnsupportedFramebufferForDirectVulkan(*drawFbo)) {
+            // Nothing was mutated: other entries' per-probe guards (FBO identity +
+            // version among them) stay authoritative, so none need invalidating.
             RecordUnsupportedFramebufferError(__func__);
             return false;
         }
         const auto& vao = *MG_State::pGLContext->GetBoundVertexArray();
         const auto& program = *MG_State::pGLContext->GetProgramForDraw();
+        // The fast path declined (or had no entry for this program): whatever THIS
+        // program's entry saw may be stale, and the full path below mutates state as
+        // it goes, so the entry must not stay matchable if that path fails mid-way.
+        // Select it now - the program's own entry when one exists, else an invalid
+        // slot, else a round-robin victim - and invalidate it until the successful
+        // refill at the end. Other programs' entries keep their validity: every fact
+        // they carry is re-guarded per probe (live pass hash, epochs, versions,
+        // sums), so a full path run in between can only make them decline.
+        SetupDrawSnapshot* fillSnap = nullptr;
+        {
+            Uint32 fillIndex = kSetupDrawSnapshotCount;
+            const Uint64 fillProgramLifetimeId = program.GetLifetimeId();
+            for (Uint32 i = 0; i < kSetupDrawSnapshotCount; ++i) {
+                if (m_setupDrawSnapshots[i].valid &&
+                    m_setupDrawSnapshots[i].programLifetimeId == fillProgramLifetimeId) {
+                    fillIndex = i;
+                    break;
+                }
+            }
+            if (fillIndex == kSetupDrawSnapshotCount) {
+                for (Uint32 i = 0; i < kSetupDrawSnapshotCount; ++i) {
+                    if (!m_setupDrawSnapshots[i].valid) {
+                        fillIndex = i;
+                        break;
+                    }
+                }
+            }
+            if (fillIndex == kSetupDrawSnapshotCount) {
+                fillIndex = m_setupDrawSnapshotVictim;
+                m_setupDrawSnapshotVictim = (m_setupDrawSnapshotVictim + 1) % kSetupDrawSnapshotCount;
+            }
+            fillSnap = &m_setupDrawSnapshots[fillIndex];
+            fillSnap->valid = false;
+            m_setupDrawSnapshotMru = fillIndex;
+        }
         ProgramFactory::CompileOptionFlags transformFlags =
             ProgramFactory::CompileOptionFlags(GetBaseTransformFlagsRaw());
         // Captured draws take the xfb-decorated program variant.
@@ -5773,7 +5832,7 @@ void main() {
         // Snapshot the fully resolved configuration for the consecutive-draw
         // fast path (see TrySetupDrawFastPath).
         {
-            auto& snap = m_setupDrawSnapshot;
+            auto& snap = *fillSnap;
             const auto* nowActiveRenderPass = VkRenderPassManager::GetActiveRenderPass();
             if (nowActiveRenderPass != nullptr && !programObj.hasStorageImages) {
                 snap.valid = true;
@@ -5815,10 +5874,15 @@ void main() {
                 snap.samplingResolutionGeneration = MG_State::pGLContext->GetSamplingResolutionGeneration();
                 Uint64 snapContentSum = 0;
                 Uint64 snapParamsSum = 0;
+                // Per-entry copies of this draw's sampled set (the scratch vectors
+                // will be overwritten by the next full-path draw of ANY program).
                 // Record each resource's layout VALUE for the descriptor-reuse hint;
                 // transitions above updated the resources in place, so this reads the
                 // layouts the descriptors just resolved against.
-                m_sampledLayoutSnapshots.assign(sampledTextures.size(), VK_IMAGE_LAYOUT_UNDEFINED);
+                snap.sampledTextures = sampledTextures;
+                snap.sampledResources = sampledResources;
+                snap.sampledBindingRecords = m_sampledBindingRecordsScratch;
+                snap.sampledLayouts.assign(sampledTextures.size(), VK_IMAGE_LAYOUT_UNDEFINED);
                 for (SizeT i = 0; i < sampledTextures.size(); ++i) {
                     const auto* sampledTexture = sampledTextures[i];
                     if (sampledTexture == nullptr) {
@@ -5827,7 +5891,7 @@ void main() {
                     snapContentSum += sampledTexture->GetContentVersion();
                     snapParamsSum += sampledTexture->GetTextureParamsVersion();
                     if (sampledResources[i] != nullptr) {
-                        m_sampledLayoutSnapshots[i] = sampledResources[i]->layout;
+                        snap.sampledLayouts[i] = sampledResources[i]->layout;
                     }
                 }
                 snap.sampledContentSum = snapContentSum;
@@ -9439,13 +9503,75 @@ void main() {
 
         VkCommandBuffer& commandBuffer = frame.commandBuffer;
 
-        for (Uint32 idraw = 0; idraw < payload.drawCount; ++idraw) {
-            vkCmdDrawIndexed(commandBuffer,
-                             payload.pParams[idraw].indexCount,
-                             payload.pParams[idraw].instanceCount,
-                             payload.pParams[idraw].firstIndex,
-                             payload.pParams[idraw].vertexOffset,
-                             payload.pParams[idraw].firstInstance);
+        // Collapse contiguous sub-draw runs into one vkCmdDrawIndexed. Per-sub-draw
+        // command emission in the driver dominates a Sodium-shaped multi-draw
+        // (steady-state profile: >60% of the case inside the Vulkan driver's
+        // vkCmdDrawIndexed encoding for 132x32 sub-draws/frame), and a chunk
+        // renderer's sub-draws are runs of adjacent index ranges over one buffer.
+        // Two draws are one iff they concatenate to an identical index stream:
+        //  - a LIST topology (points/lines/triangles). Strips/fans/loops would
+        //    weld primitives across the seam.
+        //  - the accumulated count ends on a primitive boundary, otherwise GL
+        //    discards the dangling indices at the sub-draw's end but the merged
+        //    stream would assemble them with the next sub-draw's indices.
+        //  - primitive restart is off: with restart on, a sentinel mid-stream
+        //    resets assembly, so a partial primitive before the seam would
+        //    otherwise be discarded per sub-draw (same dangling-index argument).
+        //  - identical baseVertex/instancing and firstIndex adjacency, so the
+        //    merged range fetches exactly the two sub-draws' indices in order.
+        Uint32 mergeGranularity = 0;
+        switch (payload.mode) {
+            case GL_POINTS:    mergeGranularity = 1; break;
+            case GL_LINES:     mergeGranularity = 2; break;
+            case GL_TRIANGLES: mergeGranularity = 3; break;
+            default: break;
+        }
+        if (mergeGranularity != 0) {
+            const RenderStateParameters& rsp = MG_State::pGLContext->GetRenderStateParameters();
+            if (rsp.PrimitiveRestartEnabled || rsp.PrimitiveRestartFixedIndexEnabled) {
+                mergeGranularity = 0;
+            }
+        }
+        if (mergeGranularity == 0) {
+            for (Uint32 idraw = 0; idraw < payload.drawCount; ++idraw) {
+                vkCmdDrawIndexed(commandBuffer,
+                                 payload.pParams[idraw].indexCount,
+                                 payload.pParams[idraw].instanceCount,
+                                 payload.pParams[idraw].firstIndex,
+                                 payload.pParams[idraw].vertexOffset,
+                                 payload.pParams[idraw].firstInstance);
+            }
+            return;
+        }
+        Uint32 idraw = 0;
+        while (idraw < payload.drawCount) {
+            const DrawIndexedCmdParam& head = payload.pParams[idraw];
+            ++idraw;
+            if (head.indexCount == 0) {
+                continue; // draws nothing, contributes nothing to a run
+            }
+            Uint32 mergedIndexCount = head.indexCount;
+            if (head.instanceCount == 1) {
+                while (idraw < payload.drawCount) {
+                    const DrawIndexedCmdParam& next = payload.pParams[idraw];
+                    if (next.indexCount == 0) {
+                        ++idraw;
+                        continue;
+                    }
+                    if (mergedIndexCount % mergeGranularity != 0 ||
+                        next.instanceCount != 1 ||
+                        next.vertexOffset != head.vertexOffset ||
+                        next.firstInstance != head.firstInstance ||
+                        next.firstIndex != head.firstIndex + mergedIndexCount ||
+                        mergedIndexCount + next.indexCount < mergedIndexCount) {
+                        break;
+                    }
+                    mergedIndexCount += next.indexCount;
+                    ++idraw;
+                }
+            }
+            vkCmdDrawIndexed(commandBuffer, mergedIndexCount, head.instanceCount, head.firstIndex,
+                             head.vertexOffset, head.firstInstance);
         }
     }
 
@@ -10105,7 +10231,7 @@ void main() {
     void VulkanRenderer::OnFrameCommandRecordingBegan(VkCommandBuffer commandBuffer) {
         // Dynamic state does not survive a command-buffer boundary.
         ResetDynamicStateShadow();
-        m_setupDrawSnapshot.valid = false;
+        InvalidateSetupDrawSnapshots();
         if (m_uniformManager) {
             m_uniformManager->OnCommandBufferBoundary();
         }
@@ -10271,7 +10397,7 @@ void main() {
             // A recreated pipeline could reuse a freed handle value and alias
             // the bind-dedup shadow; force the next draw to re-bind.
             g_dynamicStateShadow.graphicsPipelineValid = false;
-            m_setupDrawSnapshot.valid = false;
+            InvalidateSetupDrawSnapshots();
         }
         m_vertexInputStateFactory->OnFrameBoundary();
         m_samplerManager->OnFrameBoundary();
@@ -11653,7 +11779,7 @@ void main() {
         }
         InvalidatePipelineMemo(); // pipelines freed -> the memoized handle would dangle
         g_dynamicStateShadow.graphicsPipelineValid = false;
-        m_setupDrawSnapshot.valid = false;
+        InvalidateSetupDrawSnapshots();
         DestroyComputePipelines();
         if (m_frameContext.GetFrameCount() > 0) {
             m_frameContext.GetCurrent().isCommandRecording = false;
