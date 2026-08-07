@@ -31,6 +31,8 @@ namespace MobileGL {
                                             IntVec3 size) override;
                 MipmapDirtyRegion GetStorageDirtyRegion(TextureUploadTarget uploadTarget,
                                                         Uint mipmapLevel) const override;
+                SizeT GetStorageDirtyRects(TextureUploadTarget uploadTarget, Uint mipmapLevel,
+                                           MipmapDirtyRegion* outRects, SizeT maxRects) const override;
                 void SetMipmapCompressedImage(TextureUploadTarget uploadTarget, Uint mipmapLevel,
                                               GLenum internalFormat, const void* data, SizeT size) override;
                 GLenum GetMipmapCompressedFormat(TextureUploadTarget uploadTarget, Uint mipmapLevel) const override;

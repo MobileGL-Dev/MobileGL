@@ -31,6 +31,11 @@ namespace MobileGL {
                     return lo.x() <= 0 && lo.y() <= 0 && lo.z() <= 0 && hi.x() >= levelSize.x() &&
                            hi.y() >= levelSize.y() && hi.z() >= std::max(levelSize.z(), 1);
                 }
+                SizeT TexelCount() const {
+                    if (Empty()) return 0;
+                    return static_cast<SizeT>(hi.x() - lo.x()) * static_cast<SizeT>(hi.y() - lo.y()) *
+                           static_cast<SizeT>(hi.z() - lo.z());
+                }
             };
 
             class MipmapStorage {
@@ -54,6 +59,28 @@ namespace MobileGL {
                 // Meaningful only while IsDirty(level).
                 MipmapDirtyRegion GetDirtyRegion(Uint level) const;
 
+                // Behind the union box, the level keeps up to kMaxDirtyRects pairwise
+                // disjoint rects recording WHERE the writes actually landed. A frame of
+                // ~100 scattered sprite updates in a big atlas has a union box that
+                // covers nearly the whole level while the touched texels are ~5% of it;
+                // the union box stays the source of truth (every write funnels through
+                // MarkDirty/MarkDirtyRegion into BOTH representations), backends OPT IN
+                // to the list purely as an upload-size refinement. 96 slots because the
+                // pattern this exists for is Minecraft's ~100 sprites/frame: a 16-slot
+                // list forced into far-apart merges was measured at >90% of the union
+                // box's area on exactly that pattern, i.e. worthless. Inserts merge any
+                // touching/overlapping rect (cascading, so the list stays disjoint);
+                // when full, the incoming rect folds into the neighbour whose box grows
+                // least and the list degrades gracefully toward the union box.
+                static constexpr SizeT kMaxDirtyRects = 96;
+                // Copies the level's dirty rects into outRects and returns how many were
+                // written. 0 means "upload the union box instead" and covers every
+                // reason at once: tracking unavailable, a single rect (identical to the
+                // union box by construction), more rects than maxRects, or a summed
+                // area so close to the union box's that one big upload beats many small
+                // ones (fewer driver calls wins when the bytes are nearly equal).
+                SizeT GetDirtyRects(Uint level, MipmapDirtyRegion* outRects, SizeT maxRects) const;
+
                 // The bytes an application handed to glCompressedTexImage*, kept verbatim beside the
                 // (uncompressed) texel shadow rather than in place of it. GL 4.6 core 8.11 requires
                 // glGetCompressedTexImage to return the image *as stored*, and no backend here has a
@@ -70,10 +97,22 @@ namespace MobileGL {
                 const void* MapCompressedData(Uint level) const;
 
             protected:
+                // Insert one clamped, non-empty write box, keeping the list disjoint
+                // and bounded (see kMaxDirtyRects).
+                void InsertDirtyRect(Uint level, MipmapDirtyRegion incoming);
+
                 Vector<IntVec3> m_texelSizes;
                 Vector<Vector<Uint8>> m_data;
                 Vector<bool> m_isDirty;
                 Vector<MipmapDirtyRegion> m_dirtyRegions;
+                // Per level, the disjoint rect list behind m_dirtyRegions' union box.
+                // An EMPTY list is the common resting state and always means "the union
+                // box is the whole story" - clean levels, whole-level dirties and
+                // respecifies all just clear it, so plain full-level uploads never pay
+                // a heap allocation; the first scattered MarkDirtyRegion on an
+                // already-dirty level seeds the list from the union box accumulated so
+                // far and refines from there.
+                Vector<Vector<MipmapDirtyRegion>> m_dirtyRects;
                 Vector<Vector<Uint8>> m_compressedData;
                 Vector<GLenum> m_compressedFormats;
             };

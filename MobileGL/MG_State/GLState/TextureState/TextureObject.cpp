@@ -345,6 +345,13 @@ namespace MobileGL {
                 return m_textureStorage.GetDirtyRegion(GetIndexOfTextureUploadTarget(uploadTarget), mipmapLevel);
             }
 
+            SizeT TextureObjectWithOneMipmap::GetStorageDirtyRects(TextureUploadTarget uploadTarget, Uint mipmapLevel,
+                                                                   MipmapDirtyRegion* outRects,
+                                                                   SizeT maxRects) const {
+                return m_textureStorage.GetDirtyRects(GetIndexOfTextureUploadTarget(uploadTarget), mipmapLevel,
+                                                      outRects, maxRects);
+            }
+
             void TextureObjectWithOneMipmap::SetMipmapCompressedImage(TextureUploadTarget uploadTarget, Uint mipmapLevel,
                                                               GLenum internalFormat, const void* data, SizeT size) {
                 m_textureStorage.SetCompressedImage(GetIndexOfTextureUploadTarget(uploadTarget), mipmapLevel,

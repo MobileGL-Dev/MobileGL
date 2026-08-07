@@ -186,6 +186,20 @@ namespace MobileGL::MG_State::GLState {
             const IntVec3 size = GetMipmapTexelSize(uploadTarget, mipmapLevel);
             return {IntVec3{0, 0, 0}, IntVec3{size.x(), size.y(), std::max(size.z(), 1)}};
         }
+        // Scatter detail behind GetStorageDirtyRegion: up to maxRects disjoint rects
+        // that together cover every dirty texel, so ~100 sprite writes in a big atlas
+        // need not be uploaded as one atlas-sized box. Returns how many rects were
+        // written to outRects; 0 means "no list, upload the union box" and is always a
+        // safe answer - this base fallback keeps whole-level semantics for storage
+        // classes that do not track rects, and backends OPT IN by calling this.
+        virtual SizeT GetStorageDirtyRects(TextureUploadTarget uploadTarget, Uint mipmapLevel,
+                                           MipmapDirtyRegion* outRects, SizeT maxRects) const {
+            (void)uploadTarget;
+            (void)mipmapLevel;
+            (void)outRects;
+            (void)maxRects;
+            return 0;
+        }
 
         // The compressed image a glCompressedTexImage* call shadowed for this level, kept verbatim
         // next to the texel data rather than instead of it - see MipmapStorage. The texel shadow
@@ -257,6 +271,8 @@ namespace MobileGL::MG_State::GLState {
         void MarkStorageDirtyRegion(TextureUploadTarget uploadTarget, Uint mipmapLevel, IntVec3 offset,
                                     IntVec3 size) override;
         MipmapDirtyRegion GetStorageDirtyRegion(TextureUploadTarget uploadTarget, Uint mipmapLevel) const override;
+        SizeT GetStorageDirtyRects(TextureUploadTarget uploadTarget, Uint mipmapLevel, MipmapDirtyRegion* outRects,
+                                   SizeT maxRects) const override;
         void SetMipmapCompressedImage(TextureUploadTarget uploadTarget, Uint mipmapLevel, GLenum internalFormat,
                                       const void* data, SizeT size) override;
         GLenum GetMipmapCompressedFormat(TextureUploadTarget uploadTarget, Uint mipmapLevel) const override;
