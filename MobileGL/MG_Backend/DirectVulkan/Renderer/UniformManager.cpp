@@ -116,6 +116,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         m_frameCount = frameCount;
         m_maxBindings = maxBindings;
         m_samplerResolveMemo.assign(m_maxBindings, SamplerResolveMemo{});
+        // Every entry is freshly constructed (all-invalid), so nothing needs sweeping until
+        // a resolve writes one.
+        m_samplerResolveMemoHighWater = 0;
         m_setsPerFrame = setsPerFrame;
         m_peakDescriptorSetsObserved = 0;
         m_textureManager = textureManager;
@@ -174,6 +177,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         m_minDynamicOffsetAlignment = 1;
         m_frameCount = 0;
         m_maxBindings = 0;
+        m_samplerResolveMemo.clear();
+        m_samplerResolveMemoHighWater = 0;
         m_setsPerFrame = 0;
         m_peakDescriptorSetsObserved = 0;
         m_textureManager = nullptr;
@@ -210,10 +215,15 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         m_fastRebindMemo.valid = false;
         m_lastBindValid = false;
         // Re-fingerprint the bound sampler set fresh this frame so any GL object address
-        // reuse cannot outlive a single frame (see SamplerResolveMemo).
-        for (auto& memo : m_samplerResolveMemo) {
-            memo.valid = false;
-            memo.infoValid = false;
+        // reuse cannot outlive a single frame (see SamplerResolveMemo). Only the entries a
+        // resolve has actually written can be valid, so the high-water mark bounds the
+        // sweep - the vector itself is sized to the device's binding cap (256 here), which
+        // is ~30x more entries than any program declares.
+        const Uint32 touchedBindings =
+            std::min<Uint32>(m_samplerResolveMemoHighWater, static_cast<Uint32>(m_samplerResolveMemo.size()));
+        for (Uint32 binding = 0; binding < touchedBindings; ++binding) {
+            m_samplerResolveMemo[binding].valid = false;
+            m_samplerResolveMemo[binding].infoValid = false;
         }
     }
 
@@ -379,6 +389,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 viewFormatMemo->viewFormatDomain = numericDomain;
                 viewFormatMemo->viewFormat = sampledViewFormat;
                 viewFormatMemo->viewFormatValid = true;
+                NoteSamplerResolveMemoTouched(binding);
             }
         }
         if (sampledViewFormat == VK_FORMAT_UNDEFINED) {
@@ -434,6 +445,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 memo.viewLevelCount = viewLevelCount;
                 memo.sampler = resolvedSampler;
                 memo.valid = true;
+                NoteSamplerResolveMemoTouched(binding);
             }
         } else {
             resolvedSampler = m_samplerManager->GetOrCreateSampler(*samplerToUse, *texture, forceNearestFiltering,
@@ -450,6 +462,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         if (binding < m_samplerResolveMemo.size()) {
             m_samplerResolveMemo[binding].info = outImageInfo;
             m_samplerResolveMemo[binding].infoValid = true;
+            NoteSamplerResolveMemoTouched(binding);
         }
         return true;
     }

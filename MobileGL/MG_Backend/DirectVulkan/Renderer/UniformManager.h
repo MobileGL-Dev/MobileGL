@@ -345,5 +345,19 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             Bool infoValid = false;
         };
         mutable Vector<SamplerResolveMemo> m_samplerResolveMemo;
+        // Exclusive upper bound on the entries of m_samplerResolveMemo that any resolve
+        // has ever written. The vector is sized to the DEVICE binding cap (256 on desktop
+        // NVIDIA), but a program declares 1-8 bindings, so the per-frame reset below was
+        // memsetting ~22 KB of never-touched entries every frame - a measurable slice of
+        // the per-frame fixed cost on draw-light frames. Every site that can turn any of
+        // an entry's *Valid flags on raises this mark first, so entries at or above it are
+        // provably still in their constructed (all-invalid) state and clearing them is a
+        // no-op. Never lowered except by Initialize/Shutdown, which rebuild the vector.
+        mutable Uint32 m_samplerResolveMemoHighWater = 0;
+        void NoteSamplerResolveMemoTouched(Uint32 binding) const {
+            if (binding >= m_samplerResolveMemoHighWater) {
+                m_samplerResolveMemoHighWater = binding + 1;
+            }
+        }
     };
 } // namespace MobileGL::MG_Backend::DirectVulkan

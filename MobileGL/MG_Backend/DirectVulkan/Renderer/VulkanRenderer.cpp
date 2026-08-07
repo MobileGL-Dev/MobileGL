@@ -273,12 +273,76 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // re-derive the exact values already applied on this command buffer. The
         // remaining input, the swapchain pre-transform, cannot change mid-recording
         // (a swapchain recreate retires the command buffer, and recording begin resets
-        // this whole shadow).
+        // this whole shadow); the value key below pins it anyway.
         Bool dynamicTailValid = false;
         Uint dynamicTailParamsVersion = 0;
         Int dynamicTailExtentX = 0;
         Int dynamicTailExtentY = 0;
         Bool dynamicTailIsDefaultFbo = false;
+        // VALUE key over the tail's inputs, as a second-level gate behind the version.
+        // The parameters version is ONE counter for all of RenderState, so anything that
+        // is not tail input - a GL_BLEND toggle, a glBlendFuncSeparate, a glColorMask -
+        // moves it and forced a full tail re-run. Blaze3D toggles blend around every
+        // batch, so that was a per-draw re-derivation of six dynamic states that could
+        // not have changed. Equal key => the six Apply* below would each re-derive the
+        // value their shadow already holds and emit nothing, so the tail is skippable.
+        //
+        // Complete input inventory of ApplyDynamicDrawStateTail, one line per reader
+        // (each accessor it replaces is a verified plain field read of the same
+        // RenderStateParameters field - RenderState.cpp):
+        //   ApplyGLViewportState    : Viewport, DepthRange, + extent/isDefaultFbo/preTransform
+        //   ApplyBlendConstants     : BlendColor
+        //   ApplyPolygonOffsetState : PolygonOffsetUnits, PolygonOffsetFactor
+        //   ApplyLineWidthState     : LineWidth (see the caveat below)
+        //   ApplyStencilState       : StencilStates[0..1].{ValueMask, WriteMask, Ref}
+        //   scissor rect            : ScissorTestEnabled, ScissorBox,
+        //                             + extent/isDefaultFbo/preTransform
+        // Caveat, unchanged from the version-only gate: ApplyLineWidthState also clamps
+        // to the ACTIVE BACKEND OBJECT's aliased line-width range. Those are device
+        // limits queried once at backend init and constant for the renderer's lifetime,
+        // so they are not part of the key (the version gate never covered them either).
+        struct DynamicTailKey {
+            Int viewport[4] = {0, 0, 0, 0};
+            Float depthRange[2] = {0.0f, 0.0f};
+            Float blendColor[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+            Float polygonOffsetFactor = 0.0f;
+            Float polygonOffsetUnits = 0.0f;
+            Float lineWidth = 0.0f;
+            Uint32 stencilValueMask[2] = {0, 0};
+            Uint32 stencilWriteMask[2] = {0, 0};
+            Int stencilRef[2] = {0, 0};
+            Int scissorBox[4] = {0, 0, 0, 0};
+            Int extentX = 0;
+            Int extentY = 0;
+            Uint32 preTransform = 0;
+            Bool scissorEnabled = false;
+            Bool isDefaultFbo = false;
+
+            Bool operator==(const DynamicTailKey& other) const {
+                // NaN in any float input makes this false, which only costs a redundant
+                // tail run - never a skipped one.
+                for (Uint32 i = 0; i < 4; ++i) {
+                    if (viewport[i] != other.viewport[i] || blendColor[i] != other.blendColor[i] ||
+                        scissorBox[i] != other.scissorBox[i]) {
+                        return false;
+                    }
+                }
+                for (Uint32 i = 0; i < 2; ++i) {
+                    if (depthRange[i] != other.depthRange[i] ||
+                        stencilValueMask[i] != other.stencilValueMask[i] ||
+                        stencilWriteMask[i] != other.stencilWriteMask[i] ||
+                        stencilRef[i] != other.stencilRef[i]) {
+                        return false;
+                    }
+                }
+                return polygonOffsetFactor == other.polygonOffsetFactor &&
+                       polygonOffsetUnits == other.polygonOffsetUnits && lineWidth == other.lineWidth &&
+                       extentX == other.extentX && extentY == other.extentY &&
+                       preTransform == other.preTransform && scissorEnabled == other.scissorEnabled &&
+                       isDefaultFbo == other.isDefaultFbo;
+            }
+        };
+        DynamicTailKey dynamicTailKey{};
     };
     static DynamicStateShadow g_dynamicStateShadow;
 
@@ -5049,18 +5113,61 @@ void main() {
             shadow.dynamicTailIsDefaultFbo == isDefaultFbo) {
             return;
         }
-        ApplyGLViewportState(frame.commandBuffer, extent, m_swapchainObject.GetPreTransform(), isDefaultFbo);
+        const VkSurfaceTransformFlagBitsKHR preTransform = m_swapchainObject.GetPreTransform();
+        // Second-level VALUE gate: the version moved, but RenderState's version counts
+        // every parameter, most of which this tail never reads. Build the key over
+        // exactly the tail's inputs (inventory in DynamicTailKey) out of one bulk
+        // parameters fetch and compare; an equal key means every Apply* below would
+        // re-derive the value its shadow already holds.
+        DynamicStateShadow::DynamicTailKey key;
+        {
+            const RenderStateParameters& p = MG_State::pGLContext->GetRenderStateParameters();
+            key.viewport[0] = p.Viewport.x();
+            key.viewport[1] = p.Viewport.y();
+            key.viewport[2] = p.Viewport.z();
+            key.viewport[3] = p.Viewport.w();
+            key.depthRange[0] = p.DepthRange.x();
+            key.depthRange[1] = p.DepthRange.y();
+            key.blendColor[0] = p.BlendColor.x();
+            key.blendColor[1] = p.BlendColor.y();
+            key.blendColor[2] = p.BlendColor.z();
+            key.blendColor[3] = p.BlendColor.w();
+            key.polygonOffsetFactor = p.PolygonOffsetFactor;
+            key.polygonOffsetUnits = p.PolygonOffsetUnits;
+            key.lineWidth = p.LineWidth;
+            // StencilStates[0] is Front, [1] is Back (RenderState::GetStencilFaceIndex),
+            // the same order ApplyStencilState reads them in.
+            for (Uint32 face = 0; face < 2; ++face) {
+                key.stencilValueMask[face] = p.StencilStates[face].ValueMask;
+                key.stencilWriteMask[face] = p.StencilStates[face].WriteMask;
+                key.stencilRef[face] = p.StencilStates[face].Ref;
+            }
+            key.scissorEnabled = p.ScissorTestEnabled;
+            key.scissorBox[0] = p.ScissorBox.x();
+            key.scissorBox[1] = p.ScissorBox.y();
+            key.scissorBox[2] = p.ScissorBox.z();
+            key.scissorBox[3] = p.ScissorBox.w();
+            key.extentX = extent.x();
+            key.extentY = extent.y();
+            key.preTransform = static_cast<Uint32>(preTransform);
+            key.isDefaultFbo = isDefaultFbo;
+        }
+        if (shadow.dynamicTailValid && shadow.dynamicTailKey == key) {
+            // Re-arm the cheap version gate so an unchanged-parameters run of draws after
+            // this one costs the four-integer compare again.
+            shadow.dynamicTailParamsVersion = paramsVersion;
+            return;
+        }
+        ApplyGLViewportState(frame.commandBuffer, extent, preTransform, isDefaultFbo);
         ApplyBlendConstants(frame.commandBuffer);
         ApplyPolygonOffsetState(frame.commandBuffer);
         ApplyLineWidthState(frame.commandBuffer);
         ApplyStencilState(frame.commandBuffer);
-        const Bool scissorEnabled = MG_State::pGLContext->IsCapabilityEnabled(CapabilityInput::ScissorTest);
         VkRect2D scissor{};
-        if (scissorEnabled) {
-            const auto& scissorBox = MG_State::pGLContext->GetScissorBox();
-            scissor = isDefaultFbo
-                ? MakeDefaultFramebufferScissorRect(scissorBox, extent, m_swapchainObject.GetPreTransform())
-                : MakeClampedScissorRect(scissorBox, extent);
+        if (key.scissorEnabled) {
+            const IntVec4 scissorBox(key.scissorBox[0], key.scissorBox[1], key.scissorBox[2], key.scissorBox[3]);
+            scissor = isDefaultFbo ? MakeDefaultFramebufferScissorRect(scissorBox, extent, preTransform)
+                                   : MakeClampedScissorRect(scissorBox, extent);
         } else {
             scissor.offset = {0, 0};
             scissor.extent = { (Uint)extent.x(), (Uint)extent.y() };
@@ -5071,18 +5178,28 @@ void main() {
         shadow.dynamicTailExtentX = extent.x();
         shadow.dynamicTailExtentY = extent.y();
         shadow.dynamicTailIsDefaultFbo = isDefaultFbo;
+        shadow.dynamicTailKey = key;
     }
 
-    Uint32 VulkanRenderer::GetBaseTransformFlagsRaw() {
+    Uint32 VulkanRenderer::GetBaseTransformFlagsRaw(Bool isDefaultFbo) {
         // GetShaderTransformFlags is a function of the pre-transform AND of whether
         // the bound draw framebuffer is the default one (the Y-flip/rotation bits
         // apply only when presenting). Memo keyed on both; keying on the
         // pre-transform alone served an FBO pass's unflipped flags to the following
         // default-framebuffer pass and flipped the whole frame.
+        // isDefaultFbo is supplied by the caller: every draw-path caller has already
+        // resolved the bound draw framebuffer (and its default-ness) for its own
+        // guards, and re-walking the binding slot + the virtual IsDefaultFramebuffer
+        // per draw showed up in the profile. Callers MUST pass the value derived from
+        // the SAME draw-framebuffer binding the draw uses - see the assert below.
+        MOBILEGL_ASSERT(
+            [&] {
+                const auto& fbo =
+                    MG_State::pGLContext->GetFramebufferBindingSlot(FramebufferTarget::Draw).GetBoundObject();
+                return isDefaultFbo == (fbo != nullptr && fbo->IsDefaultFramebuffer());
+            }(),
+            "GetBaseTransformFlagsRaw: isDefaultFbo does not match the bound draw framebuffer");
         const VkSurfaceTransformFlagBitsKHR preTransform = m_swapchainObject.GetPreTransform();
-        const auto& currentDrawFBO =
-            MG_State::pGLContext->GetFramebufferBindingSlot(FramebufferTarget::Draw).GetBoundObject();
-        const Bool isDefaultFbo = currentDrawFBO != nullptr && currentDrawFBO->IsDefaultFramebuffer();
         if (!m_baseTransformFlagsKeyValid || preTransform != m_baseTransformFlagsPreTransform ||
             isDefaultFbo != m_baseTransformFlagsIsDefaultFbo) {
             m_baseTransformFlagsCache = GetShaderTransformFlags(preTransform).GetRaw();
@@ -5173,7 +5290,10 @@ void main() {
                 return false;
             }
         }
-        if (GetBaseTransformFlagsRaw() != snap.baseTransformFlags) {
+        // The FBO identity+version compare above proved this draw's framebuffer is the
+        // snapshotting draw's, so its default-ness is the snapshot's too - no second walk
+        // of the binding slot and no virtual IsDefaultFramebuffer call.
+        if (GetBaseTransformFlagsRaw(snap.drawFboIsDefault) != snap.baseTransformFlags) {
             return false;
         }
         if (m_textureManager->GetResourceEraseEpoch() != snap.textureEraseEpoch ||
@@ -5476,8 +5596,9 @@ void main() {
             fillSnap->valid = false;
             m_setupDrawSnapshotMru = fillIndex;
         }
+        const Bool drawFboIsDefault = drawFbo != nullptr && drawFbo->IsDefaultFramebuffer();
         ProgramFactory::CompileOptionFlags transformFlags =
-            ProgramFactory::CompileOptionFlags(GetBaseTransformFlagsRaw());
+            ProgramFactory::CompileOptionFlags(GetBaseTransformFlagsRaw(drawFboIsDefault));
         // Captured draws take the xfb-decorated program variant.
         if (m_transformFeedbackFeatureEnabled && MG_State::pGLContext->IsTransformFeedbackActive() &&
             program.GetTransformFeedbackVaryingCount() > 0) {
@@ -5813,10 +5934,10 @@ void main() {
                 snap.vaoConfigVersion = vao.GetConfigVersion();
                 snap.drawFbo = drawFbo.get();
                 snap.fboVersion = drawFbo->GetObjectVersion();
-                snap.drawFboIsDefault = drawFbo->IsDefaultFramebuffer();
+                snap.drawFboIsDefault = drawFboIsDefault;
                 snap.renderStateVersion = MG_State::pGLContext->GetPipelineStateVersion();
                 snap.bindGeneration = MG_State::pGLContext->GetTextureBindGeneration();
-                snap.baseTransformFlags = GetBaseTransformFlagsRaw();
+                snap.baseTransformFlags = GetBaseTransformFlagsRaw(drawFboIsDefault);
                 snap.resolvedTransformFlags = transformFlags.GetRaw();
                 snap.renderPassHash = nowActiveRenderPass->hash;
                 snap.imageIndex = m_imageIndexAcquired;

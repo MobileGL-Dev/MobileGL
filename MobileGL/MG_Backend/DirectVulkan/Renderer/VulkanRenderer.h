@@ -659,7 +659,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         Bool m_baseTransformFlagsIsDefaultFbo = false;
         Bool m_baseTransformFlagsKeyValid = false;
         Uint32 m_baseTransformFlagsCache = 0;
-        Uint32 GetBaseTransformFlagsRaw();
+        // isDefaultFbo must be the default-ness of the CURRENTLY bound draw framebuffer;
+        // every caller already has it in hand from its own guards.
+        Uint32 GetBaseTransformFlagsRaw(Bool isDefaultFbo);
         // Drops every memoized pipeline handle. Required at command-buffer
         // boundaries and whenever any pipeline may have been destroyed. Also drops
         // the cached pipeline-state hash: the same boundaries can retire the GL
