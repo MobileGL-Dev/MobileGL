@@ -327,6 +327,16 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         Bool RecreateSwapchain();
 
     private:
+        // Tiered emission for an already-set-up multi-draw batch (state bound, index
+        // buffer bound for the indexed form). Tier 1: VK_EXT_multi_draw. Tier 2: one
+        // vkCmdDraw(Indexed)Indirect over a transient command array. Tier 3: unrolled
+        // vkCmdDraw(Indexed) loop. Tier eligibility is per-batch (uniform instance
+        // state for tier 1, firstInstance/feature legality for tier 2); every tier
+        // consumes the same param span, so contiguous-run merging done by the caller
+        // benefits all of them.
+        void EmitMultiDrawIndexed(VkCommandBuffer commandBuffer, const DrawIndexedCmdParam* pParams, Uint32 drawCount);
+        void EmitMultiDraw(VkCommandBuffer commandBuffer, const DrawCmdParam* pParams, Uint32 drawCount);
+
         struct BlitUniformData {
             float srcRect[4] = {0.f, 0.f, 1.f, 1.f};
             float dstRect[4] = {0.f, 0.f, 1.f, 1.f};
@@ -477,6 +487,24 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         Bool m_indexTypeUint8ExtensionEnabled = false;
         Bool m_logicOpFeatureEnabled = false;
         Bool m_multiDrawIndirectFeatureEnabled = false;
+        // drawIndirectFirstInstance gates indirect commands whose firstInstance != 0;
+        // cached at device creation because the tier-2 multi-draw path (a transient
+        // VkDrawIndexedIndirectCommand array) is illegal for such a sub-draw without it.
+        Bool m_drawIndirectFirstInstanceFeatureEnabled = false;
+        // VK_EXT_multi_draw: native batched submission for the CPU-side glMultiDraw*
+        // families (tier 1 of the multi-draw dispatch).
+        Bool m_multiDrawExtensionEnabled = false;
+        Uint32 m_maxMultiDrawCount = 0;
+        // Multi-draw dispatch tiers, resolved once at device creation from device support
+        // clamped by MOBILEGL_MAGMA_MULTIDRAW_MODE (a preference, never a demand):
+        //   tier 1 (ext):      one vkCmdDrawMulti(Indexed)EXT           - m_multiDrawAllowExt
+        //   tier 2 (indirect): one vkCmdDraw(Indexed)Indirect batch     - m_multiDrawAllowIndirect
+        //   tier 3 (unroll):   one vkCmdDraw(Indexed) per sub-draw      - always available
+        // m_multiDrawForceUnrollIndirect additionally forces the GPU-parameter
+        // glMultiDraw*Indirect paths onto their per-command loop (mode=unroll only).
+        Bool m_multiDrawAllowExt = false;
+        Bool m_multiDrawAllowIndirect = false;
+        Bool m_multiDrawForceUnrollIndirect = false;
         Bool m_samplerAnisotropyFeatureEnabled = false;
         Bool m_shaderDrawParametersExtensionEnabled = false;
         Bool m_shaderDrawParametersFeatureEnabled = false;
@@ -508,6 +536,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                                                  VkDeviceSize countBufferOffset, Uint32 maxDrawCount,
                                                                  Uint32 stride);
         static inline PFNDrawIndexedIndirectCountFunc s_vkCmdDrawIndexedIndirectCount = nullptr;
+        // VK_EXT_multi_draw entry points, loaded at device creation when the extension
+        // (and its multiDraw feature) is enabled; null otherwise.
+        static inline PFN_vkCmdDrawMultiEXT s_vkCmdDrawMultiEXT = nullptr;
+        static inline PFN_vkCmdDrawMultiIndexedEXT s_vkCmdDrawMultiIndexedEXT = nullptr;
 
         // VK_EXT_transform_feedback (GL transform feedback capture)
         Bool m_transformFeedbackFeatureEnabled = false;

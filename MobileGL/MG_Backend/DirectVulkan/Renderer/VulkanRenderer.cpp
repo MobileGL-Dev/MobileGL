@@ -2988,6 +2988,8 @@ void main() {
             m_device = VK_NULL_HANDLE;
         }
         s_vkCmdDrawIndexedIndirectCount = nullptr;
+        s_vkCmdDrawMultiEXT = nullptr;
+        s_vkCmdDrawMultiIndexedEXT = nullptr;
 
         if (m_instance != VK_NULL_HANDLE && m_surface != VK_NULL_HANDLE) {
             vkDestroySurfaceKHR(m_instance, m_surface, nullptr);
@@ -9562,14 +9564,191 @@ void main() {
 
         MOBILEGL_ASSERT(frame.isCommandRecording, "%s: frame recording was not started", __func__);
 
-        VkCommandBuffer& commandBuffer = frame.commandBuffer;
+        EmitMultiDraw(frame.commandBuffer, payload.pParams, payload.drawCount);
+    }
 
-        for (Uint32 idraw = 0; idraw < payload.drawCount; ++idraw) {
-            vkCmdDraw(commandBuffer,
-                      payload.pParams[idraw].vertexCount,
-                      payload.pParams[idraw].instanceCount,
-                      payload.pParams[idraw].firstVertex,
-                      payload.pParams[idraw].firstInstance);
+    // The tier-2 indirect batch uploads the param arrays as-is: the leading members of the
+    // renderer's draw-parameter structs are exactly Vulkan's indirect command layouts, and
+    // vkCmdDraw(Indexed)Indirect accepts any 4-aligned stride >= the command size, so the
+    // trailing CPU-side metadata rides along unread instead of forcing a repack.
+    static_assert(sizeof(DrawIndexedCmdParam) == sizeof(VkDrawIndexedIndirectCommand) &&
+                      offsetof(DrawIndexedCmdParam, indexCount) == offsetof(VkDrawIndexedIndirectCommand, indexCount) &&
+                      offsetof(DrawIndexedCmdParam, instanceCount) ==
+                          offsetof(VkDrawIndexedIndirectCommand, instanceCount) &&
+                      offsetof(DrawIndexedCmdParam, firstIndex) == offsetof(VkDrawIndexedIndirectCommand, firstIndex) &&
+                      offsetof(DrawIndexedCmdParam, vertexOffset) ==
+                          offsetof(VkDrawIndexedIndirectCommand, vertexOffset) &&
+                      offsetof(DrawIndexedCmdParam, firstInstance) ==
+                          offsetof(VkDrawIndexedIndirectCommand, firstInstance),
+                  "DrawIndexedCmdParam must alias VkDrawIndexedIndirectCommand for the tier-2 multi-draw upload");
+    static_assert(sizeof(DrawCmdParam) % 4 == 0 && sizeof(DrawCmdParam) >= sizeof(VkDrawIndirectCommand) &&
+                      offsetof(DrawCmdParam, vertexCount) == offsetof(VkDrawIndirectCommand, vertexCount) &&
+                      offsetof(DrawCmdParam, instanceCount) == offsetof(VkDrawIndirectCommand, instanceCount) &&
+                      offsetof(DrawCmdParam, firstVertex) == offsetof(VkDrawIndirectCommand, firstVertex) &&
+                      offsetof(DrawCmdParam, firstInstance) == offsetof(VkDrawIndirectCommand, firstInstance),
+                  "DrawCmdParam must lead with VkDrawIndirectCommand for the tier-2 multi-draw upload");
+
+    void VulkanRenderer::EmitMultiDraw(VkCommandBuffer commandBuffer, const DrawCmdParam* pParams, Uint32 drawCount) {
+        if (drawCount == 0) {
+            return;
+        }
+        if (drawCount == 1) {
+            vkCmdDraw(commandBuffer, pParams[0].vertexCount, pParams[0].instanceCount, pParams[0].firstVertex,
+                      pParams[0].firstInstance);
+            return;
+        }
+
+        // Tier 1: VK_EXT_multi_draw. vkCmdDrawMultiEXT shares one instanceCount/firstInstance
+        // across the whole batch, so the batch must be uniform in both (GL's glMultiDrawArrays
+        // always is: 1/0).
+        if (m_multiDrawAllowExt) {
+            Bool uniformInstances = true;
+            for (Uint32 idraw = 1; idraw < drawCount; ++idraw) {
+                if (pParams[idraw].instanceCount != pParams[0].instanceCount ||
+                    pParams[idraw].firstInstance != pParams[0].firstInstance) {
+                    uniformInstances = false;
+                    break;
+                }
+            }
+            if (uniformInstances) {
+                static Vector<VkMultiDrawInfoEXT> infos;
+                infos.resize(drawCount);
+                for (Uint32 idraw = 0; idraw < drawCount; ++idraw) {
+                    infos[idraw].firstVertex = pParams[idraw].firstVertex;
+                    infos[idraw].vertexCount = pParams[idraw].vertexCount;
+                }
+                for (Uint32 base = 0; base < drawCount; base += m_maxMultiDrawCount) {
+                    const Uint32 chunk = std::min(drawCount - base, m_maxMultiDrawCount);
+                    s_vkCmdDrawMultiEXT(commandBuffer, chunk, infos.data() + base, pParams[0].instanceCount,
+                                        pParams[0].firstInstance, sizeof(VkMultiDrawInfoEXT));
+                }
+                return;
+            }
+        }
+
+        // Tier 2: multiDrawIndirect - one vkCmdDrawIndirect over a transient command array.
+        // A sub-draw with firstInstance != 0 is illegal in an indirect command without the
+        // drawIndirectFirstInstance feature; such a batch falls to the unrolled tier.
+        if (m_multiDrawAllowIndirect) {
+            Bool firstInstanceLegal = m_drawIndirectFirstInstanceFeatureEnabled;
+            if (!firstInstanceLegal) {
+                firstInstanceLegal = true;
+                for (Uint32 idraw = 0; idraw < drawCount; ++idraw) {
+                    if (pParams[idraw].firstInstance != 0) {
+                        firstInstanceLegal = false;
+                        break;
+                    }
+                }
+            }
+            const Uint32 maxIndirectCount = m_physicalDevice.properties.limits.maxDrawIndirectCount;
+            if (firstInstanceLegal && maxIndirectCount > 0) {
+                BufferSlice commandSlice{};
+                if (m_bufferManager.UploadTransient(BufferKind::Indirect, m_frameContext.GetCurrentFrameIndex(),
+                                                    pParams,
+                                                    static_cast<VkDeviceSize>(drawCount) * sizeof(DrawCmdParam),
+                                                    sizeof(Uint32), commandSlice)) {
+                    for (Uint32 base = 0; base < drawCount; base += maxIndirectCount) {
+                        const Uint32 chunk = std::min(drawCount - base, maxIndirectCount);
+                        vkCmdDrawIndirect(commandBuffer, commandSlice.buffer,
+                                          commandSlice.offset +
+                                              static_cast<VkDeviceSize>(base) * sizeof(DrawCmdParam),
+                                          chunk, sizeof(DrawCmdParam));
+                    }
+                    return;
+                }
+                // Transient arena refused the upload: fall through to the unrolled tier.
+            }
+        }
+
+        // Tier 3: unrolled loop, byte-identical fallback (and the only tier where a SPIR-V
+        // DrawIndex consumer sees 0 for every sub-draw instead of the sub-draw index).
+        for (Uint32 idraw = 0; idraw < drawCount; ++idraw) {
+            vkCmdDraw(commandBuffer, pParams[idraw].vertexCount, pParams[idraw].instanceCount,
+                      pParams[idraw].firstVertex, pParams[idraw].firstInstance);
+        }
+    }
+
+    void VulkanRenderer::EmitMultiDrawIndexed(VkCommandBuffer commandBuffer, const DrawIndexedCmdParam* pParams,
+                                              Uint32 drawCount) {
+        if (drawCount == 0) {
+            return;
+        }
+        if (drawCount == 1) {
+            vkCmdDrawIndexed(commandBuffer, pParams[0].indexCount, pParams[0].instanceCount, pParams[0].firstIndex,
+                             pParams[0].vertexOffset, pParams[0].firstInstance);
+            return;
+        }
+
+        // Tier 1: VK_EXT_multi_draw. VkMultiDrawIndexedInfoEXT carries per-draw
+        // firstIndex/indexCount/vertexOffset (pVertexOffset = nullptr keeps the per-draw
+        // offsets), but instanceCount/firstInstance are batch-wide, so the batch must be
+        // uniform in both (GL's glMultiDrawElements* always is: 1/0).
+        if (m_multiDrawAllowExt) {
+            Bool uniformInstances = true;
+            for (Uint32 idraw = 1; idraw < drawCount; ++idraw) {
+                if (pParams[idraw].instanceCount != pParams[0].instanceCount ||
+                    pParams[idraw].firstInstance != pParams[0].firstInstance) {
+                    uniformInstances = false;
+                    break;
+                }
+            }
+            if (uniformInstances) {
+                static Vector<VkMultiDrawIndexedInfoEXT> infos;
+                infos.resize(drawCount);
+                for (Uint32 idraw = 0; idraw < drawCount; ++idraw) {
+                    infos[idraw].firstIndex = pParams[idraw].firstIndex;
+                    infos[idraw].indexCount = pParams[idraw].indexCount;
+                    infos[idraw].vertexOffset = pParams[idraw].vertexOffset;
+                }
+                for (Uint32 base = 0; base < drawCount; base += m_maxMultiDrawCount) {
+                    const Uint32 chunk = std::min(drawCount - base, m_maxMultiDrawCount);
+                    s_vkCmdDrawMultiIndexedEXT(commandBuffer, chunk, infos.data() + base,
+                                               pParams[0].instanceCount,
+                                               static_cast<Uint32>(pParams[0].firstInstance),
+                                               sizeof(VkMultiDrawIndexedInfoEXT), nullptr);
+                }
+                return;
+            }
+        }
+
+        // Tier 2: multiDrawIndirect - one vkCmdDrawIndexedIndirect over a transient command
+        // array (DrawIndexedCmdParam aliases VkDrawIndexedIndirectCommand, see static_assert).
+        if (m_multiDrawAllowIndirect) {
+            Bool firstInstanceLegal = m_drawIndirectFirstInstanceFeatureEnabled;
+            if (!firstInstanceLegal) {
+                firstInstanceLegal = true;
+                for (Uint32 idraw = 0; idraw < drawCount; ++idraw) {
+                    if (pParams[idraw].firstInstance != 0) {
+                        firstInstanceLegal = false;
+                        break;
+                    }
+                }
+            }
+            const Uint32 maxIndirectCount = m_physicalDevice.properties.limits.maxDrawIndirectCount;
+            if (firstInstanceLegal && maxIndirectCount > 0) {
+                BufferSlice commandSlice{};
+                if (m_bufferManager.UploadTransient(BufferKind::Indirect, m_frameContext.GetCurrentFrameIndex(),
+                                                    pParams,
+                                                    static_cast<VkDeviceSize>(drawCount) *
+                                                        sizeof(DrawIndexedCmdParam),
+                                                    sizeof(Uint32), commandSlice)) {
+                    for (Uint32 base = 0; base < drawCount; base += maxIndirectCount) {
+                        const Uint32 chunk = std::min(drawCount - base, maxIndirectCount);
+                        vkCmdDrawIndexedIndirect(commandBuffer, commandSlice.buffer,
+                                                 commandSlice.offset +
+                                                     static_cast<VkDeviceSize>(base) * sizeof(DrawIndexedCmdParam),
+                                                 chunk, sizeof(DrawIndexedCmdParam));
+                    }
+                    return;
+                }
+            }
+        }
+
+        // Tier 3: unrolled loop, byte-identical fallback (and the only tier where a SPIR-V
+        // DrawIndex consumer sees 0 for every sub-draw instead of the sub-draw index).
+        for (Uint32 idraw = 0; idraw < drawCount; ++idraw) {
+            vkCmdDrawIndexed(commandBuffer, pParams[idraw].indexCount, pParams[idraw].instanceCount,
+                             pParams[idraw].firstIndex, pParams[idraw].vertexOffset, pParams[idraw].firstInstance);
         }
     }
 
@@ -9591,9 +9770,9 @@ void main() {
 
         MOBILEGL_ASSERT(frame.isCommandRecording, "%s: frame recording was not started", __func__);
 
-        VkCommandBuffer& commandBuffer = frame.commandBuffer;
-
-        // Collapse contiguous sub-draw runs into one vkCmdDrawIndexed. Per-sub-draw
+        // Collapse contiguous sub-draw runs BEFORE tier dispatch: merging shrinks the
+        // param span every tier consumes (fewer VkMultiDrawIndexedInfoEXT entries, a
+        // smaller transient command array, fewer unrolled vkCmdDrawIndexed). Per-sub-draw
         // command emission in the driver dominates a Sodium-shaped multi-draw
         // (steady-state profile: >60% of the case inside the Vulkan driver's
         // vkCmdDrawIndexed encoding for 132x32 sub-draws/frame), and a chunk
@@ -9622,47 +9801,45 @@ void main() {
                 mergeGranularity = 0;
             }
         }
-        if (mergeGranularity == 0) {
-            for (Uint32 idraw = 0; idraw < payload.drawCount; ++idraw) {
-                vkCmdDrawIndexed(commandBuffer,
-                                 payload.pParams[idraw].indexCount,
-                                 payload.pParams[idraw].instanceCount,
-                                 payload.pParams[idraw].firstIndex,
-                                 payload.pParams[idraw].vertexOffset,
-                                 payload.pParams[idraw].firstInstance);
-            }
-            return;
-        }
-        Uint32 idraw = 0;
-        while (idraw < payload.drawCount) {
-            const DrawIndexedCmdParam& head = payload.pParams[idraw];
-            ++idraw;
-            if (head.indexCount == 0) {
-                continue; // draws nothing, contributes nothing to a run
-            }
-            Uint32 mergedIndexCount = head.indexCount;
-            if (head.instanceCount == 1) {
-                while (idraw < payload.drawCount) {
-                    const DrawIndexedCmdParam& next = payload.pParams[idraw];
-                    if (next.indexCount == 0) {
-                        ++idraw;
-                        continue;
-                    }
-                    if (mergedIndexCount % mergeGranularity != 0 ||
-                        next.instanceCount != 1 ||
-                        next.vertexOffset != head.vertexOffset ||
-                        next.firstInstance != head.firstInstance ||
-                        next.firstIndex != head.firstIndex + mergedIndexCount ||
-                        mergedIndexCount + next.indexCount < mergedIndexCount) {
-                        break;
-                    }
-                    mergedIndexCount += next.indexCount;
-                    ++idraw;
+        const DrawIndexedCmdParam* pParams = payload.pParams;
+        Uint32 drawCount = payload.drawCount;
+        static Vector<DrawIndexedCmdParam> mergedParams;
+        if (mergeGranularity != 0) {
+            mergedParams.clear();
+            mergedParams.reserve(drawCount);
+            Uint32 idraw = 0;
+            while (idraw < drawCount) {
+                DrawIndexedCmdParam head = pParams[idraw];
+                ++idraw;
+                if (head.indexCount == 0) {
+                    continue; // draws nothing, contributes nothing to a run
                 }
+                if (head.instanceCount == 1) {
+                    while (idraw < drawCount) {
+                        const DrawIndexedCmdParam& next = pParams[idraw];
+                        if (next.indexCount == 0) {
+                            ++idraw;
+                            continue;
+                        }
+                        if (head.indexCount % mergeGranularity != 0 ||
+                            next.instanceCount != 1 ||
+                            next.vertexOffset != head.vertexOffset ||
+                            next.firstInstance != head.firstInstance ||
+                            next.firstIndex != head.firstIndex + head.indexCount ||
+                            head.indexCount + next.indexCount < head.indexCount) {
+                            break;
+                        }
+                        head.indexCount += next.indexCount;
+                        ++idraw;
+                    }
+                }
+                mergedParams.push_back(head);
             }
-            vkCmdDrawIndexed(commandBuffer, mergedIndexCount, head.instanceCount, head.firstIndex,
-                             head.vertexOffset, head.firstInstance);
+            pParams = mergedParams.data();
+            drawCount = static_cast<Uint32>(mergedParams.size());
         }
+
+        EmitMultiDrawIndexed(frame.commandBuffer, pParams, drawCount);
     }
 
     // Byte size of the command structures GL defines for the indirect draws (GL 4.6 core
@@ -9838,7 +10015,8 @@ void main() {
 
         MOBILEGL_ASSERT(frame.isCommandRecording, "%s: frame recording was not started", __func__);
         MGLOG_D("DirectVulkan: glMultiDrawElementsIndirect(drawcount=%d stride=%d)", drawcount, stride);
-        if (drawcount == 1 || (m_multiDrawIndirectFeatureEnabled && stride % 4 == 0)) {
+        if (drawcount == 1 ||
+            (!m_multiDrawForceUnrollIndirect && m_multiDrawIndirectFeatureEnabled && stride % 4 == 0)) {
             vkCmdDrawIndexedIndirect(frame.commandBuffer,
                                      drawSlice.buffer,
                                      drawSlice.offset + static_cast<VkDeviceSize>(commandOffset),
@@ -9901,7 +10079,8 @@ void main() {
 
         MOBILEGL_ASSERT(frame.isCommandRecording, "%s: frame recording was not started", __func__);
         MGLOG_D("DirectVulkan: glMultiDrawArraysIndirect(drawcount=%d stride=%d)", drawcount, stride);
-        if (drawcount == 1 || (m_multiDrawIndirectFeatureEnabled && stride % 4 == 0)) {
+        if (drawcount == 1 ||
+            (!m_multiDrawForceUnrollIndirect && m_multiDrawIndirectFeatureEnabled && stride % 4 == 0)) {
             vkCmdDrawIndirect(frame.commandBuffer,
                               drawSlice.buffer,
                               drawSlice.offset + static_cast<VkDeviceSize>(commandOffset),
@@ -11087,6 +11266,7 @@ void main() {
                     supportedDeviceFeatures.shaderStorageImageWriteWithoutFormat);
         }
         deviceFeatures.drawIndirectFirstInstance = supportedDeviceFeatures.drawIndirectFirstInstance;
+        m_drawIndirectFirstInstanceFeatureEnabled = deviceFeatures.drawIndirectFirstInstance == VK_TRUE;
         deviceFeatures.multiDrawIndirect = supportedDeviceFeatures.multiDrawIndirect;
         m_multiDrawIndirectFeatureEnabled = deviceFeatures.multiDrawIndirect == VK_TRUE;
         m_logicOpFeatureEnabled = deviceFeatures.logicOp == VK_TRUE;
@@ -11368,6 +11548,56 @@ void main() {
             }
         }
 
+        // VK_EXT_multi_draw: tier 1 of the multi-draw dispatch - one vkCmdDrawMulti(Indexed)EXT
+        // for a whole glMultiDraw* batch (VkMultiDrawIndexedInfoEXT carries per-draw
+        // firstIndex/indexCount/vertexOffset, so glMultiDrawElementsBaseVertex fits natively).
+        // Requested only when both the extension and its multiDraw feature are present;
+        // absent it, the dispatch falls to the multiDrawIndirect tier or the unrolled loop.
+        m_multiDrawExtensionEnabled = false;
+        m_maxMultiDrawCount = 0;
+        VkPhysicalDeviceMultiDrawFeaturesEXT multiDrawFeatures{};
+        multiDrawFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MULTI_DRAW_FEATURES_EXT;
+        if (IsExtensionSupported(availableExtensions, VK_EXT_MULTI_DRAW_EXTENSION_NAME) &&
+            getPhysicalDeviceFeatures2 != nullptr) {
+            VkPhysicalDeviceFeatures2 featureQuery{};
+            featureQuery.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+            featureQuery.pNext = &multiDrawFeatures;
+            getPhysicalDeviceFeatures2(m_physicalDevice.handle, &featureQuery);
+            if (multiDrawFeatures.multiDraw == VK_TRUE) {
+                if (!IsExtensionAlreadyEnabled(enabledDeviceExtensions, VK_EXT_MULTI_DRAW_EXTENSION_NAME)) {
+                    enabledDeviceExtensions.push_back(VK_EXT_MULTI_DRAW_EXTENSION_NAME);
+                }
+                multiDrawFeatures.pNext = const_cast<void*>(deviceCreateInfo.pNext);
+                deviceCreateInfo.pNext = &multiDrawFeatures;
+                m_multiDrawExtensionEnabled = true;
+
+                VkPhysicalDeviceMultiDrawPropertiesEXT multiDrawProperties{};
+                multiDrawProperties.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MULTI_DRAW_PROPERTIES_EXT;
+                auto getPhysicalDeviceProperties2 = reinterpret_cast<PFN_vkGetPhysicalDeviceProperties2>(
+                    vkGetInstanceProcAddr(m_instance, "vkGetPhysicalDeviceProperties2"));
+                if (getPhysicalDeviceProperties2 == nullptr) {
+                    getPhysicalDeviceProperties2 = reinterpret_cast<PFN_vkGetPhysicalDeviceProperties2>(
+                        vkGetInstanceProcAddr(m_instance, "vkGetPhysicalDeviceProperties2KHR"));
+                }
+                if (getPhysicalDeviceProperties2 != nullptr) {
+                    VkPhysicalDeviceProperties2 propertyQuery{};
+                    propertyQuery.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
+                    propertyQuery.pNext = &multiDrawProperties;
+                    getPhysicalDeviceProperties2(m_physicalDevice.handle, &propertyQuery);
+                }
+                // Spec minimum is 1024; a driver reporting 0 through a failed query must not
+                // zero out every batch, so fall back to the spec minimum.
+                m_maxMultiDrawCount = multiDrawProperties.maxMultiDrawCount != 0
+                                          ? multiDrawProperties.maxMultiDrawCount
+                                          : 1024;
+                MGLOG_I("Enabled optional device extension: %s (maxMultiDrawCount=%u)",
+                        VK_EXT_MULTI_DRAW_EXTENSION_NAME, m_maxMultiDrawCount);
+            } else {
+                MGLOG_I("VK_EXT_multi_draw is advertised but its multiDraw feature is unavailable; "
+                        "multi-draw batches use the indirect or unrolled tier");
+            }
+        }
+
         deviceCreateInfo.enabledExtensionCount = static_cast<Uint32>(enabledDeviceExtensions.size());
         deviceCreateInfo.ppEnabledExtensionNames = enabledDeviceExtensions.data();
         MGLOG_I("Device feature support: robustBufferAccess=%s geometryShader=%s independentBlend=%s logicOp=%s shaderClipDistance=%s "
@@ -11422,6 +11652,51 @@ void main() {
         if (m_drawIndirectCountExtensionEnabled && s_vkCmdDrawIndexedIndirectCount == nullptr) {
             MGLOG_W("VK_KHR_draw_indirect_count enabled but vkCmdDrawIndexedIndirectCount entry point is missing, will continue as if VK_KHR_draw_indirect_count is not supported!");
             m_drawIndirectCountExtensionEnabled = false;
+        }
+
+        s_vkCmdDrawMultiEXT = nullptr;
+        s_vkCmdDrawMultiIndexedEXT = nullptr;
+        if (m_multiDrawExtensionEnabled) {
+            s_vkCmdDrawMultiEXT =
+                reinterpret_cast<PFN_vkCmdDrawMultiEXT>(vkGetDeviceProcAddr(m_device, "vkCmdDrawMultiEXT"));
+            s_vkCmdDrawMultiIndexedEXT = reinterpret_cast<PFN_vkCmdDrawMultiIndexedEXT>(
+                vkGetDeviceProcAddr(m_device, "vkCmdDrawMultiIndexedEXT"));
+            if (s_vkCmdDrawMultiEXT == nullptr || s_vkCmdDrawMultiIndexedEXT == nullptr) {
+                MGLOG_W("VK_EXT_multi_draw enabled but its entry points are missing, will continue as if "
+                        "VK_EXT_multi_draw is not supported!");
+                s_vkCmdDrawMultiEXT = nullptr;
+                s_vkCmdDrawMultiIndexedEXT = nullptr;
+                m_multiDrawExtensionEnabled = false;
+            }
+        }
+
+        // Resolve the multi-draw dispatch tiers once: device support clamped by the
+        // MOBILEGL_MAGMA_MULTIDRAW_MODE preference. Requesting an unavailable tier is
+        // never an error - the dispatch falls down the chain ext -> indirect -> unroll.
+        {
+            using MG_Config::MultiDrawMode;
+            const MultiDrawMode mode = MG_Config::Features.MagmaMultiDrawMode;
+            m_multiDrawAllowExt =
+                m_multiDrawExtensionEnabled && (mode == MultiDrawMode::Auto || mode == MultiDrawMode::Ext);
+            m_multiDrawAllowIndirect = m_multiDrawIndirectFeatureEnabled && mode != MultiDrawMode::Unroll;
+            m_multiDrawForceUnrollIndirect = mode == MultiDrawMode::Unroll;
+            if (mode == MultiDrawMode::Ext && !m_multiDrawExtensionEnabled) {
+                MGLOG_I("MOBILEGL_MAGMA_MULTIDRAW_MODE=ext requested but VK_EXT_multi_draw is unavailable; "
+                        "falling back to the %s tier",
+                        m_multiDrawAllowIndirect ? "indirect" : "unroll");
+            }
+            if (mode == MultiDrawMode::Indirect && !m_multiDrawIndirectFeatureEnabled) {
+                MGLOG_I("MOBILEGL_MAGMA_MULTIDRAW_MODE=indirect requested but the multiDrawIndirect device "
+                        "feature is unavailable; falling back to the unroll tier");
+            }
+            MGLOG_I("Multi-draw dispatch tier: %s (VK_EXT_multi_draw=%s, multiDrawIndirect=%s, mode=%s)",
+                    m_multiDrawAllowExt ? "ext" : (m_multiDrawAllowIndirect ? "indirect" : "unroll"),
+                    m_multiDrawExtensionEnabled ? "true" : "false",
+                    m_multiDrawIndirectFeatureEnabled ? "true" : "false",
+                    mode == MultiDrawMode::Auto       ? "auto"
+                    : mode == MultiDrawMode::Ext      ? "ext"
+                    : mode == MultiDrawMode::Indirect ? "indirect"
+                                                      : "unroll");
         }
 
         if (m_transformFeedbackFeatureEnabled) {

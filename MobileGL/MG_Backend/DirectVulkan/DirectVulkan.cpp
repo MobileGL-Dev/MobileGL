@@ -1393,31 +1393,66 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         pVulkanRenderer->MultiDrawArrays(payload);
     }
 
+    // Shared body of glMultiDrawElements (basevertex == nullptr) and
+    // glMultiDrawElementsBaseVertex: identical calls except for the per-draw
+    // vertex offset, which VkMultiDrawIndexedInfoEXT / VkDrawIndexedIndirectCommand /
+    // vkCmdDrawIndexed all carry natively.
+    static void MultiDrawElementsImpl(GLenum mode, const GLsizei* count, GLenum type, const GLvoid* const* indices,
+                                      GLsizei drawcount, const GLint* basevertex) {
+        if (drawcount <= 0) {
+            return;
+        }
+        MultiDrawIndexedCmd payload{};
+        payload.mode = mode;
+        payload.indexBufferView.indexType = type;
+
+        // Loop-invariant: the index type is fixed for the whole multi-draw, so resolve
+        // its byte size once instead of twice per sub-draw (a cross-TU switch that
+        // showed up in per-frame profiles of sodium-style 132x32 multi-draws). Index
+        // sizes are 1/2/4, so the per-sub-draw offset division below reduces to a
+        // shift - the hardware divide was the hottest instruction of this loop.
+        const SizeT indexSize = MG_Util::GetGLTypeSize(type);
+        if (indexSize == 0) {
+            MGLOG_E("MultiDrawElements skipped: unsupported index type 0x%x", type);
+            return;
+        }
+        const Uint32 indexSizeShift = static_cast<Uint32>(std::countr_zero(indexSize));
+
+        // TODO: allocate draw cmd buf elsewhere
+        static Vector<DrawIndexedCmdParam> params;
+        params.clear();
+        params.resize(drawcount);
+
+        for (GLsizei i = 0; i < drawcount; ++i) {
+            if (count[i] == 0) {
+                continue;
+            }
+
+            // TODO: this index view needs a redesign, now there's a lotta redundant uploads
+
+            payload.indexBufferView.indexByteOffset = 0;
+            payload.indexBufferView.indexByteSize =
+                    std::max(reinterpret_cast<SizeT>(indices[i]) + count[i] * indexSize,
+                             payload.indexBufferView.indexByteSize);
+
+            auto& param = params[i];
+
+            param.indexCount = count[i];
+            param.instanceCount = 1;
+            param.firstIndex = reinterpret_cast<SizeT>(indices[i]) >> indexSizeShift;
+            param.vertexOffset = basevertex != nullptr ? basevertex[i] : 0;
+            param.firstInstance = 0;
+        }
+        payload.drawCount = drawcount;
+        payload.pParams = params.data();
+        pVulkanRenderer->MultiDrawElements(payload);
+    }
+
     void MultiDrawElements(GLenum mode, const GLsizei* count, GLenum type, const GLvoid* const* indices,
                            GLsizei drawcount) {
         MOBILEGL_ASSERT(pVulkanRenderer, "DirectVulkan::MultiDrawElements called with null VulkanRenderer");
         MOBILEGL_ASSERT(MG_State::pGLContext, "DirectVulkan::MultiDrawElements called with null GL context");
-
-        // Vector<DrawElementCmd> cmds;
-        // cmds.reserve(static_cast<SizeT>(drawcount));
-        // for (GLsizei i = 0; i < drawcount; ++i) {
-        //     if (count[i] == 0) {
-        //         continue;
-        //     }
-        //
-        //     DrawElementCmd payload{};
-        //     payload.mode = mode;
-        //     payload.firstVertex = 0;
-        //     payload.indexCount = count[i];
-        //     payload.indexType = type;
-        //     payload.indexByteOffset = reinterpret_cast<SizeT>(indices[i]);
-        //     cmds.push_back(payload);
-        // }
-        //
-        // if (cmds.empty()) {
-        //     return;
-        // }
-        // pVulkanRenderer->MultiDrawElements(cmds);
+        MultiDrawElementsImpl(mode, count, type, indices, drawcount, nullptr);
     }
 
     void DrawElementsBaseVertex(GLenum mode, GLsizei count, GLenum type, const GLvoid* indices, GLint basevertex) {
@@ -1445,52 +1480,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
     void MultiDrawElementsBaseVertex(GLenum mode, const GLsizei* count, GLenum type, const GLvoid* const* indices,
                                      GLsizei drawcount, const GLint* basevertex) {
-        MOBILEGL_ASSERT(pVulkanRenderer, "DirectVulkan::MultiDrawElements called with null VulkanRenderer");
-        MOBILEGL_ASSERT(MG_State::pGLContext, "DirectVulkan::MultiDrawElements called with null GL context");
-        MultiDrawIndexedCmd payload{};
-        payload.mode = mode;
-        payload.indexBufferView.indexType = type;
-
-        // Loop-invariant: the index type is fixed for the whole multi-draw, so resolve
-        // its byte size once instead of twice per sub-draw (a cross-TU switch that
-        // showed up in per-frame profiles of sodium-style 132x32 multi-draws). Index
-        // sizes are 1/2/4, so the per-sub-draw offset division below reduces to a
-        // shift - the hardware divide was the hottest instruction of this loop.
-        const SizeT indexSize = MG_Util::GetGLTypeSize(type);
-        if (indexSize == 0) {
-            MGLOG_E("MultiDrawElementsBaseVertex skipped: unsupported index type 0x%x", type);
-            return;
-        }
-        const Uint32 indexSizeShift = static_cast<Uint32>(std::countr_zero(indexSize));
-
-        // TODO: allocate draw cmd buf elsewhere
-        static Vector<DrawIndexedCmdParam> params;
-        params.clear();
-        params.resize(drawcount);
-
-        for (GLsizei i = 0; i < drawcount; ++i) {
-            if (count[i] == 0) {
-                continue;
-            }
-
-            // TODO: this index view needs a redesign, now there's a lotta redundant uploads
-
-            payload.indexBufferView.indexByteOffset = 0;
-            payload.indexBufferView.indexByteSize =
-                    std::max(reinterpret_cast<SizeT>(indices[i]) + count[i] * indexSize,
-                             payload.indexBufferView.indexByteSize);
-
-            auto& param = params[i];
-
-            param.indexCount = count[i];
-            param.instanceCount = 1;
-            param.firstIndex = reinterpret_cast<SizeT>(indices[i]) >> indexSizeShift;
-            param.vertexOffset = basevertex[i];
-            param.firstInstance = 0;
-        }
-        payload.drawCount = drawcount;
-        payload.pParams = params.data();
-        pVulkanRenderer->MultiDrawElements(payload);
+        MOBILEGL_ASSERT(pVulkanRenderer, "DirectVulkan::MultiDrawElementsBaseVertex called with null VulkanRenderer");
+        MOBILEGL_ASSERT(MG_State::pGLContext, "DirectVulkan::MultiDrawElementsBaseVertex called with null GL context");
+        MultiDrawElementsImpl(mode, count, type, indices, drawcount, basevertex);
     }
 
     void BlitFramebuffer(GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1, GLint dstX0, GLint dstY0, GLint dstX1,
