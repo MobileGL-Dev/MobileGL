@@ -3155,6 +3155,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
         PrepareForDraw(syncBit);
         CheckPrimitiveRestartSupported(type);
 
+        // Gate on the capability flag, never on the entry-point pointer: eglGetProcAddress
+        // returns a non-NULL stub for glMultiDrawElementsBaseVertexEXT on drivers without the
+        // extension interaction (NVIDIA ES), and that stub silently drops every draw.
+        if (g_GLESCapabilities.SupportsMultiDrawElementsBaseVertex) {
+            g_GLESFuncs.glMultiDrawElementsBaseVertexEXT(mode, count, type, indices, drawcount, basevertex);
+            return;
+        }
         for (GLsizei i = 0; i < drawcount; ++i) {
             g_GLESFuncs.glDrawElementsBaseVertex(mode, count[i], type, indices[i], basevertex[i]);
         }
