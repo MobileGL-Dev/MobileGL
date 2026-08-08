@@ -18,6 +18,7 @@
 #include <MG_Util/Converters/MGToGL/TextureEnumConverter.h>
 #include <MG_Util/Converters/MGToStr/TextureEnumConverter.h>
 #include <MG_Util/Texture/TextureFormatProcessor.h>
+#include <MG_Util/Async/ShaderCompilePool.h>
 #include <Config.h>
 #include <algorithm>
 #include <cmath>
@@ -891,6 +892,22 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // extension explicitly permits. It is also the only thing that
             // exposes glProgramParameteri before GL 4.1.
             E_GL_ARB_get_program_binary};
+        // GL_KHR_parallel_shader_compile is MobileGL's own capability, not the host ES
+        // driver's: the compiler threads are MobileGL's, and glCompileShader/glLinkProgram
+        // are serviced entirely inside the frontend. Whether the device driver advertises
+        // the string is irrelevant here (the POST reports it separately, for the day the
+        // driver-side link is what gets parallelised).
+        //
+        // Gated on the async flag deliberately, and this is the whole reason the gate
+        // exists. Advertising the string is the one part of asynchronous compilation that a
+        // recorded trace can never cover: Iris and Sodium change their SUBMISSION SCHEDULE
+        // the moment they see it - they enqueue whole pipeline batches and poll
+        // GL_COMPLETION_STATUS_KHR instead of compiling one program at a time - so
+        // MOBILEGL_ASYNC_SHADER_COMPILE=0 has to withdraw the application-visible behaviour
+        // change as well as the threading, or the kill switch would only be half a switch.
+        if (MG_Util::Async::AsyncShaderCompileEnabled()) {
+            extensions.push_back(E_GL_KHR_parallel_shader_compile);
+        }
         // Only advertised when the device driver actually has usable timer queries
         // (GL_EXT_disjoint_timer_query plus its entry points) and the
         // MOBILEGL_DISABLE_TIMERQUERY escape hatch is off.
