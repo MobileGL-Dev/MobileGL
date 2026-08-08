@@ -142,28 +142,33 @@ namespace {
 namespace MobileGL::MG_State::GLState {
     void ShaderObject::SetShaderSource(const String& source) {
         m_source = source;
-        m_shader.reset();
-        m_compileStatus = false;
-        m_infoLog.clear();
+        InvalidateCompiledState();
     }
 
     void ShaderObject::SetShaderSource(String&& source) {
         m_source = Move(source);
+        InvalidateCompiledState();
+    }
+
+    void ShaderObject::InvalidateCompiledState() {
         m_shader.reset();
+        m_preprocessedSource.clear();
+        m_explicitUniformLocations.clear();
+        m_explicitOpaqueBindings.clear();
+        m_shaderConsumedByLink = false;
         m_compileStatus = false;
         m_infoLog.clear();
     }
 
     void ShaderObject::Compile() {
         using namespace MG_Util::ShaderTranspiler;
+        InvalidateCompiledState();
         String compileSource = m_source;
         MG_Util::ShaderTranspiler::PreprocessShaderSource(m_stage, compileSource);
 
         if (m_stage == ShaderStage::Compute) {
             const std::optional<String> localSizeError = ValidateComputeLocalSizeLimits(compileSource);
             if (localSizeError) {
-                m_compileStatus = false;
-                m_shader.reset();
                 m_infoLog = *localSizeError;
                 return;
             }
@@ -172,32 +177,62 @@ namespace MobileGL::MG_State::GLState {
         const std::optional<String> reservedError =
             MG_Util::ShaderTranspiler::FindReservedIdentifierViolation(compileSource);
         if (reservedError) {
-            m_compileStatus = false;
-            m_shader.reset();
             m_infoLog = *reservedError;
             return;
         }
 
-        // Compile for OpenGL here, so that we can do validation and link
-        // like a real OpenGL driver at linking stage
-        // Will compile for other backends later.
+        // Single parse, in the link-compatible configuration (Vulkan-client env with
+        // relaxed rules): the TShader stored here is what glLinkProgram links and what
+        // the backends' SPIR-V is generated from - there is no second, GL-client parse
+        // anymore. The GL frontend semantics the relaxed parse cannot provide are
+        // restored on top: explicit default-block uniform locations through the lexical
+        // side-channel below, dead-uniform/global-UBO filtering in
+        // ProgramObject::DoReflection.
+        m_explicitUniformLocations = ExtractExplicitUniformLocations(compileSource);
+        m_explicitOpaqueBindings = ExtractExplicitOpaqueBindings(compileSource);
         ShaderAttrib attrib{.shaderType = MG_Util::ConvertShaderStageToGLEnum(m_stage),
                             .sourceStr = compileSource,
-                            .flags = ShaderCompileBits::CompileForOpenGL};
+                            .flags = 0};
 
         auto result = ShaderCompiler::CompileShader(attrib);
         if (result) {
             m_compileStatus = true;
             m_shader = result.value();
+            m_preprocessedSource = Move(compileSource);
             m_infoLog.clear();
         } else {
-            m_compileStatus = false;
-            m_shader.reset();
+            m_explicitUniformLocations.clear();
+            m_explicitOpaqueBindings.clear();
             m_infoLog = result.error().log;
             MGLOG_D("ShaderObject::Compile: Shader %d compilation failed.\nSource:\n%s\nInfoLog:\n%s\nSetting "
                     "m_compileStatus = false as a result.",
                     m_externalIndex, compileSource.c_str(), m_infoLog.c_str());
         }
+    }
+
+    SharedPtr<glslang::TShader> ShaderObject::TakeShaderForLink(String& outReparseLog) {
+        if (m_shader && !m_shaderConsumedByLink) {
+            m_shaderConsumedByLink = true;
+            return m_shader;
+        }
+
+        // The stored parse already fed a link, whose mapIO mutated its intermediate.
+        // Re-parse the preprocessed source through the identical configuration; this
+        // costs one glslang parse, which is exactly what GenerateBinary used to spend
+        // here on EVERY link rather than only on reuse.
+        using namespace MG_Util::ShaderTranspiler;
+        ShaderAttrib attrib{.shaderType = MG_Util::ConvertShaderStageToGLEnum(m_stage),
+                            .sourceStr = m_preprocessedSource,
+                            .flags = 0};
+        auto result = ShaderCompiler::CompileShader(attrib);
+        if (!result) {
+            // Should be unreachable: the same source parsed successfully at Compile().
+            outReparseLog = result.error().log;
+            MGLOG_E("ShaderObject::TakeShaderForLink: re-parse of shader %d failed:\n%s", m_externalIndex,
+                    outReparseLog.c_str());
+            return nullptr;
+        }
+        return result.value();
     }
 
     void ShaderObject::MarkAsDeleted() {

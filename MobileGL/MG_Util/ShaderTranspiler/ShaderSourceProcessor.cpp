@@ -10,6 +10,8 @@
 
 #include <algorithm>
 #include <cctype>
+#include <climits>
+#include <cstdlib>
 #include <initializer_list>
 #include <utility>
 #include <Config.h>
@@ -1439,6 +1441,283 @@ namespace MobileGL {
                     ++i;
                 }
                 return std::nullopt;
+            }
+
+            namespace {
+                bool IsNonLayoutQualifierKeyword(const String& text) {
+                    static const char* kQualifiers[] = {
+                        "highp",    "mediump",  "lowp",     "precise",  "const",    "flat",
+                        "noperspective", "smooth", "centroid", "sample", "patch",   "invariant",
+                        "coherent", "volatile", "restrict", "readonly", "writeonly", "subroutine",
+                    };
+                    for (const char* qualifier : kQualifiers) {
+                        if (text == qualifier) return true;
+                    }
+                    return false;
+                }
+
+                bool IsDecimalIntegerToken(const String& text) {
+                    if (text.empty()) return false;
+                    return std::all_of(text.begin(), text.end(),
+                                       [](char ch) { return ch >= '0' && ch <= '9'; });
+                }
+
+                // Parses one brace-free depth-0 statement [begin, end) and records its
+                // declarators when it is a uniform declaration carrying an integral
+                // layout(location = N). Multi-declarator statements assign consecutive
+                // locations, each declarator advancing by its array element count
+                // (ARB_explicit_uniform_location rules). Anything the narrow grammar does
+                // not recognize is skipped, never guessed at.
+                void RecordUniformDeclarationLocations(const Vector<CodeToken>& tokens, SizeT begin, SizeT end,
+                                                       MobileGL::UnorderedMap<String, MobileGL::Int>& locations) {
+                    using MobileGL::Int;
+                    long long location = -1;
+                    bool sawUniform = false;
+                    SizeT declaratorBegin = end;
+
+                    for (SizeT k = begin; k < end;) {
+                        const String& text = tokens[k].text;
+                        if (text == "layout" && k + 1 < end && tokens[k + 1].text == "(") {
+                            SizeT j = k + 2;
+                            Int parenDepth = 1;
+                            while (j < end && parenDepth > 0) {
+                                const String& layoutToken = tokens[j].text;
+                                if (layoutToken == "(") {
+                                    ++parenDepth;
+                                } else if (layoutToken == ")") {
+                                    --parenDepth;
+                                } else if (parenDepth == 1 && layoutToken == "location" && j + 2 < end &&
+                                           tokens[j + 1].text == "=" && IsDecimalIntegerToken(tokens[j + 2].text)) {
+                                    location = std::min(std::strtoll(tokens[j + 2].text.c_str(), nullptr, 10),
+                                                        static_cast<long long>(INT_MAX / 2));
+                                    j += 2;
+                                }
+                                ++j;
+                            }
+                            k = j;
+                            continue;
+                        }
+                        if (text == "uniform") {
+                            sawUniform = true;
+                            ++k;
+                            continue;
+                        }
+                        if (sawUniform && location >= 0 && IsIdentifierToken(tokens[k]) &&
+                            !IsNonLayoutQualifierKeyword(text)) {
+                            declaratorBegin = k + 1; // 'text' is the type; declarators follow
+                            break;
+                        }
+                        ++k;
+                    }
+
+                    if (!sawUniform || location < 0 || declaratorBegin >= end) return;
+
+                    long long nextLocation = location;
+                    for (SizeT k = declaratorBegin; k < end;) {
+                        if (!IsIdentifierToken(tokens[k])) return; // malformed; record nothing further
+                        const String& name = tokens[k].text;
+                        ++k;
+                        long long span = 1;
+                        while (k < end && tokens[k].text == "[") {
+                            ++k;
+                            long long dimension = 1;
+                            if (k < end && IsDecimalIntegerToken(tokens[k].text)) {
+                                dimension = std::strtoll(tokens[k].text.c_str(), nullptr, 10);
+                                ++k;
+                            }
+                            if (k >= end || tokens[k].text != "]") return; // sized by expression; bail out
+                            ++k;
+                            span *= std::max(1ll, std::min(dimension, static_cast<long long>(INT_MAX / 2)));
+                        }
+                        // Keep the first sighting: a duplicate can only come from alternative
+                        // preprocessor branches declaring the same name.
+                        locations.emplace(name, static_cast<Int>(std::min(
+                                                    nextLocation, static_cast<long long>(INT_MAX / 2))));
+                        nextLocation += span;
+                        if (k >= end) break;
+                        if (tokens[k].text == "=") { // skip an initializer up to the declarator comma
+                            Int nestingDepth = 0;
+                            ++k;
+                            while (k < end) {
+                                const String& initializerToken = tokens[k].text;
+                                if (initializerToken == "(" || initializerToken == "[") {
+                                    ++nestingDepth;
+                                } else if (initializerToken == ")" || initializerToken == "]") {
+                                    --nestingDepth;
+                                } else if (initializerToken == "," && nestingDepth == 0) {
+                                    break;
+                                }
+                                ++k;
+                            }
+                        }
+                        if (k >= end) break;
+                        if (tokens[k].text != ",") return;
+                        ++k;
+                    }
+                }
+                // Parses one brace-free depth-0 statement [begin, end) and records its
+                // declarators when it is a sampler/image uniform declaration carrying an
+                // integral layout(binding = N). Such a binding is a GL texture/image unit,
+                // which the Vulkan-client relaxed parse strips before mapIO can observe it
+                // (it is not a valid descriptor binding there), so it is extracted lexically
+                // and restored as the uniform's initial unit. Every declarator in the
+                // statement shares the qualifier's binding, matching what the GL-client
+                // mapIO used to capture from the shared type qualifier. Anything the narrow
+                // grammar does not recognize is skipped, never guessed at.
+                void RecordOpaqueDeclarationBindings(const Vector<CodeToken>& tokens, SizeT begin, SizeT end,
+                                                     MobileGL::UnorderedMap<String, MobileGL::Uint>& bindings) {
+                    using MobileGL::Int;
+                    long long binding = -1;
+                    bool sawUniform = false;
+                    SizeT declaratorBegin = end;
+
+                    for (SizeT k = begin; k < end;) {
+                        const String& text = tokens[k].text;
+                        if (text == "layout" && k + 1 < end && tokens[k + 1].text == "(") {
+                            SizeT j = k + 2;
+                            Int parenDepth = 1;
+                            while (j < end && parenDepth > 0) {
+                                const String& layoutToken = tokens[j].text;
+                                if (layoutToken == "(") {
+                                    ++parenDepth;
+                                } else if (layoutToken == ")") {
+                                    --parenDepth;
+                                } else if (parenDepth == 1 && layoutToken == "binding" && j + 2 < end &&
+                                           tokens[j + 1].text == "=" && IsDecimalIntegerToken(tokens[j + 2].text)) {
+                                    binding = std::min(std::strtoll(tokens[j + 2].text.c_str(), nullptr, 10),
+                                                       static_cast<long long>(INT_MAX / 2));
+                                    j += 2;
+                                }
+                                ++j;
+                            }
+                            k = j;
+                            continue;
+                        }
+                        if (text == "uniform") {
+                            sawUniform = true;
+                            ++k;
+                            continue;
+                        }
+                        if (sawUniform && binding >= 0 && IsIdentifierToken(tokens[k]) &&
+                            !IsNonLayoutQualifierKeyword(text)) {
+                            // 'text' is the type. Only sampler/image opaques carry unit
+                            // bindings; on anything else (e.g. atomic_uint, whose binding
+                            // is a counter-buffer index) record nothing.
+                            if (text.find("sampler") == String::npos && text.find("image") == String::npos) return;
+                            declaratorBegin = k + 1;
+                            break;
+                        }
+                        ++k;
+                    }
+
+                    if (!sawUniform || binding < 0 || declaratorBegin >= end) return;
+
+                    for (SizeT k = declaratorBegin; k < end;) {
+                        if (!IsIdentifierToken(tokens[k])) return; // malformed; record nothing further
+                        const String& name = tokens[k].text;
+                        ++k;
+                        while (k < end && tokens[k].text == "[") {
+                            ++k;
+                            if (k < end && IsDecimalIntegerToken(tokens[k].text)) ++k;
+                            if (k >= end || tokens[k].text != "]") return; // sized by expression; bail out
+                            ++k;
+                        }
+                        bindings[name] = static_cast<MobileGL::Uint>(binding);
+                        if (k >= end) break;
+                        if (tokens[k].text != ",") return; // opaque declarators cannot take initializers
+                        ++k;
+                    }
+                }
+            } // namespace
+
+            UnorderedMap<String, Uint> ExtractExplicitOpaqueBindings(const String& source) {
+                UnorderedMap<String, Uint> bindings;
+                // Fast path: without the qualifier keyword there is nothing to extract.
+                if (source.find("binding") == String::npos) return bindings;
+
+                const Vector<CodeToken> tokens = TokenizeCode(source);
+                const SizeT count = tokens.size();
+                Int braceDepth = 0;
+                SizeT pos = 0;
+                while (pos < count) {
+                    const String& text = tokens[pos].text;
+                    if (text == "{") {
+                        ++braceDepth;
+                        ++pos;
+                        continue;
+                    }
+                    if (text == "}") {
+                        if (braceDepth > 0) --braceDepth;
+                        ++pos;
+                        continue;
+                    }
+                    if (braceDepth != 0 || text == ";") {
+                        ++pos;
+                        continue;
+                    }
+
+                    // A depth-0 statement runs to its ';'. One that opens a brace instead is
+                    // a function definition or an interface/uniform block: a block's binding
+                    // is a buffer binding point, not a texture unit, so skip both alike.
+                    SizeT statementEnd = pos;
+                    while (statementEnd < count && tokens[statementEnd].text != ";" &&
+                           tokens[statementEnd].text != "{") {
+                        ++statementEnd;
+                    }
+                    if (statementEnd >= count || tokens[statementEnd].text == "{") {
+                        pos = statementEnd;
+                        continue;
+                    }
+
+                    RecordOpaqueDeclarationBindings(tokens, pos, statementEnd, bindings);
+                    pos = statementEnd + 1;
+                }
+                return bindings;
+            }
+
+            UnorderedMap<String, Int> ExtractExplicitUniformLocations(const String& source) {
+                UnorderedMap<String, Int> locations;
+                // Fast path: without the qualifier keyword there is nothing to extract.
+                if (source.find("location") == String::npos) return locations;
+
+                const Vector<CodeToken> tokens = TokenizeCode(source);
+                const SizeT count = tokens.size();
+                Int braceDepth = 0;
+                SizeT pos = 0;
+                while (pos < count) {
+                    const String& text = tokens[pos].text;
+                    if (text == "{") {
+                        ++braceDepth;
+                        ++pos;
+                        continue;
+                    }
+                    if (text == "}") {
+                        if (braceDepth > 0) --braceDepth;
+                        ++pos;
+                        continue;
+                    }
+                    if (braceDepth != 0 || text == ";") {
+                        ++pos;
+                        continue;
+                    }
+
+                    // A depth-0 statement runs to its ';'. One that opens a brace instead is a
+                    // function definition or an interface/uniform block: neither can declare a
+                    // default-block uniform location, so hand the '{' back to the depth tracker.
+                    SizeT statementEnd = pos;
+                    while (statementEnd < count && tokens[statementEnd].text != ";" &&
+                           tokens[statementEnd].text != "{") {
+                        ++statementEnd;
+                    }
+                    if (statementEnd >= count || tokens[statementEnd].text == "{") {
+                        pos = statementEnd;
+                        continue;
+                    }
+
+                    RecordUniformDeclarationLocations(tokens, pos, statementEnd, locations);
+                    pos = statementEnd + 1;
+                }
+                return locations;
             }
 
         } // namespace ShaderTranspiler

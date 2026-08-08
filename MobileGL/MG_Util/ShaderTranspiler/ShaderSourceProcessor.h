@@ -45,6 +45,28 @@ namespace MobileGL {
             // "row_major" outside a layout(...) list, the image*Shadow family). Returns the
             // compile-error text for the first violation, or nullopt for a clean source.
             std::optional<String> FindReservedIdentifierViolation(const String& source);
+
+            // Explicit layout(location = N) qualifiers on default-block uniform declarations,
+            // keyed by declared name (no "[0]" suffix). Multi-declarator statements assign
+            // consecutive locations, advancing by the array element count.
+            //
+            // Exists because the single link-compatible parse runs under relaxed Vulkan rules,
+            // where glslang's vkRelaxedRemapUniformVariable moves plain uniforms into
+            // MGL_GLOBAL_UBO and DISCARDS their location qualifiers ("ignoring layout qualifier
+            // for uniform location"); opaque uniforms keep theirs. This lexical side-channel
+            // restores the discarded locations to the GL location assigner
+            // (ProgramObject::DoReflection). It scans preprocessor-visible text, so a
+            // declaration inside an inactive #if branch is still recorded - harmless unless a
+            // pack declares the same uniform with different explicit locations in alternative
+            // branches (none observed; explicit uniform locations have zero incidence in the
+            // shader-pack corpus, this is an ARB_explicit_uniform_location conformance surface).
+            UnorderedMap<String, Int> ExtractExplicitUniformLocations(const String& source);
+
+            // Explicit layout(binding = N) on sampler/image uniforms, i.e. their initial
+            // texture/image units. The Vulkan-client relaxed parse strips these before
+            // mapIO can capture them, so they are recovered lexically (same narrow
+            // grammar discipline as ExtractExplicitUniformLocations).
+            UnorderedMap<String, Uint> ExtractExplicitOpaqueBindings(const String& source);
         } // namespace ShaderTranspiler
     } // namespace MG_Util
 } // namespace MobileGL

@@ -155,6 +155,11 @@ namespace MobileGL::MG_State::GLState {
         m_program.reset();
         m_generatedSpirv.clear();
         m_uniformLocations.clear();
+        m_glUniformIndexToTProgram.clear();
+        m_tProgramUniformIndexToGl.clear();
+        m_glBlockIndexToTProgram.clear();
+        m_tProgramBlockIndexToGl.clear();
+        m_linkedExplicitUniformLocations.clear();
         m_uniformIndexInTProgram.clear();
         m_uniformSamplerOrImageUnitIndex.clear();
         m_explicitOpaqueUniformBindings.clear();
@@ -564,11 +569,43 @@ namespace MobileGL::MG_State::GLState {
                 MGLOG_E("ProgramObject %u: Link failed - %s", m_externalIndex, m_infoLog.c_str());
                 return;
             }
-            shaders[i] = m_shaders[i]->GetCompiledShader();
+            String reparseLog;
+            shaders[i] = m_shaders[i]->TakeShaderForLink(reparseLog);
+            if (!shaders[i]) {
+                // Only reachable when the consume-once re-parse of an already-compiled
+                // source fails, which no valid state transition produces.
+                m_infoLog = std::format("Internal error: re-parsing an attached {} for linking failed:\n{}",
+                                        MG_Util::ConvertGLEnumToString(shaderTypes[i]), reparseLog);
+                MGLOG_E("ProgramObject %u: Link failed - %s", m_externalIndex, m_infoLog.c_str());
+                return;
+            }
             MGLOG_D("ProgramObject %u: shader[%zu] compiled shader ptr %p, src len %zu", m_externalIndex, i,
                     shaders[i].get(), m_shaders[i]->GetShaderSource().length());
             MGLOG_D("ProgramObject %u: shader[%zu] source:\n%s", m_externalIndex, i,
                     m_shaders[i]->GetShaderSource().c_str());
+        }
+
+        // Merge the shaders' lexically extracted explicit uniform locations. The same
+        // uniform declared in several stages must agree on its location (config-A glslang
+        // enforced this at mapIO; the relaxed parse no longer sees the qualifiers).
+        for (const auto& shader : m_shaders) {
+            for (const auto& [name, location] : shader->GetExplicitUniformLocations()) {
+                const auto [it, inserted] = m_linkedExplicitUniformLocations.emplace(name, location);
+                if (!inserted && it->second != location) {
+                    m_infoLog = std::format(
+                        "Uniform '{}' is declared with conflicting explicit locations ({} and {}) "
+                        "across stages.",
+                        name, it->second, location);
+                    MGLOG_E("ProgramObject %u: Link failed - %s", m_externalIndex, m_infoLog.c_str());
+                    return;
+                }
+            }
+            // Sampler/image layout(binding = N) initial units, likewise invisible to the
+            // relaxed parse. Stage order matches the old per-stage mapIO capture, so a
+            // name declared in several stages keeps the last stage's binding as before.
+            for (const auto& [name, binding] : shader->GetExplicitOpaqueBindings()) {
+                m_explicitOpaqueUniformBindings[name] = binding;
+            }
         }
 
         MG_Util::ShaderTranspiler::ProgramAttrib attrib{.shaders = Move(shaders),
@@ -606,8 +643,27 @@ namespace MobileGL::MG_State::GLState {
             }
         }
 
+        // SPIR-V must be generated BEFORE buildReflection touches m_program:
+        // reflection's live-variable analysis mutates the intermediates in ways that
+        // change subsequent GlslangToSpv output (observed: catastrophic uniform
+        // misbinding on DirectVulkan for UBO-heavy content). The old two-link pipeline
+        // never ran buildReflection on the SPIR-V-producing program; this order keeps
+        // that property with the single link. The glUniform*-to-scratch routing
+        // tables, in contrast, are sized and keyed by reflection results, so they are
+        // built strictly AFTER DoReflection. (Everything else on the reflection
+        // surface - locations, sampler units, block bindings/sizes - was measured
+        // identical in either order.)
+        MGLOG_D("ProgramObject %u: Starting SPIR-V generation", m_externalIndex);
+        GenerateSpirv();
+
         MGLOG_D("ProgramObject %u: Starting reflection", m_externalIndex);
-        DoReflection();
+        if (!DoReflection()) {
+            MGLOG_E("ProgramObject %u: Link failed during reflection: %s", m_externalIndex, m_infoLog.c_str());
+            return;
+        }
+
+        MGLOG_D("ProgramObject %u: Building global-UBO routing tables", m_externalIndex);
+        BuildGlobalUboRouting();
         MGLOG_D("ProgramObject %u: Reflection done (linkStatus=%d)", m_externalIndex, (int)m_linkStatus);
         if (!ValidateFragmentOutputLocations()) {
             return;
@@ -618,9 +674,6 @@ namespace MobileGL::MG_State::GLState {
                     m_infoLog.c_str());
             return;
         }
-
-        MGLOG_D("ProgramObject %u: Starting binary generation", m_externalIndex);
-        GenerateBinary();
         MGLOG_D("ProgramObject %u: Binary generation finished (generatedSpirv size=%zu)", m_externalIndex,
                 m_generatedSpirv.size());
     }
@@ -642,12 +695,12 @@ namespace MobileGL::MG_State::GLState {
         return m_shaders;
     }
 
-    void ProgramObject::DoReflection() {
+    Bool ProgramObject::DoReflection() {
         if (!m_program) {
             MGLOG_E("ProgramObject %u: DoReflection called but m_program is null", m_externalIndex);
             m_linkStatus = false;
             m_infoLog = "DoReflection failed: no program.";
-            return;
+            return false;
         }
 
         MGLOG_D("ProgramObject %u: DoReflection - building reflection", m_externalIndex);
@@ -666,26 +719,124 @@ namespace MobileGL::MG_State::GLState {
             m_linkStatus = false;
             m_infoLog = "Build reflection failed.";
             MGLOG_E("ProgramObject %u: DoReflection - buildReflection() returned false", m_externalIndex);
-            return;
+            return false;
+        }
+
+        // ---------- GL-facing index spaces (relaxed-parse cleanup) ----------
+        // Blocks first: global-UBO membership drives the uniform filter below. The
+        // synthesized MGL_GLOBAL_UBO is a transpiler artifact - its members are GL
+        // default-block uniforms and the block itself must stay invisible to GL (it
+        // did not exist in the GL-client parse this replaces).
+        const Int tProgramBlockCount = m_program->getNumUniformBlocks();
+        m_tProgramBlockIndexToGl.assign(tProgramBlockCount, -1);
+        m_glBlockIndexToTProgram.clear();
+        for (Int i = 0; i < tProgramBlockCount; i++) {
+            const auto& ubo = m_program->getUniformBlock(i);
+            if (std::strstr(ubo.name.c_str(), MG_Util::ShaderTranspiler::GLOBAL_UBO_NAME) != nullptr) {
+                continue;
+            }
+            m_tProgramBlockIndexToGl[i] = static_cast<Int>(m_glBlockIndexToTProgram.size());
+            m_glBlockIndexToTProgram.push_back(i);
         }
 
         // ------------ Uniforms (GL Plain) ----------------
-        // Allocate uniform locations
-        m_activeUniformCount = m_program->getNumUniformVariables();
+        // The relaxed parse sweeps every DECLARED default-block uniform into
+        // MGL_GLOBAL_UBO whether or not any stage reads it. GL requires a
+        // declared-but-unreferenced default-block uniform to be inactive (absent from
+        // glGetActiveUniform, glGetUniformLocation == -1): filter global-UBO members no
+        // stage references. Named-block members keep GL's every-declared-member-is-active
+        // semantics, exactly as before.
+        const Int tProgramUniformCount = m_program->getNumUniformVariables();
+        m_tProgramUniformIndexToGl.assign(tProgramUniformCount, -1);
+        m_glUniformIndexToTProgram.clear();
+        const auto isGlobalUboMember = [this](const glslang::TObjectReflection& uniform) {
+            return uniform.index >= 0 && uniform.index < static_cast<Int>(m_tProgramBlockIndexToGl.size()) &&
+                   m_tProgramBlockIndexToGl[uniform.index] < 0;
+        };
+        for (Int i = 0; i < tProgramUniformCount; i++) {
+            const auto& uniform = m_program->getUniform(i);
+            if (isGlobalUboMember(uniform) && uniform.stages == 0) {
+                MGLOG_D("ProgramObject %u: Reflection - dead default-block uniform '%s' filtered from the GL "
+                        "surface",
+                        m_externalIndex, uniform.name.c_str());
+                continue;
+            }
+            m_tProgramUniformIndexToGl[i] = static_cast<Int>(m_glUniformIndexToTProgram.size());
+            m_glUniformIndexToTProgram.push_back(i);
+        }
+        m_activeUniformCount = static_cast<Uint>(m_glUniformIndexToTProgram.size());
+        MGLOG_D("ProgramObject %u: Reflection - active uniform count = %d (of %d reflected)", m_externalIndex,
+                m_activeUniformCount, tProgramUniformCount);
+
+        // Effective explicit location per TProgram uniform, from two sources:
+        //  - the lexical side-channel for default-block uniforms - the relaxed parse
+        //    dropped their layout(location = N) qualifiers when collecting them into
+        //    MGL_GLOBAL_UBO, so reflection cannot provide them ("source-explicit");
+        //  - glslang's layoutLocation() for opaque uniforms, where the qualifier
+        //    survives the relaxed parse (and mapIO auto-assigns the rest).
+        constexpr Uint kNoLocation = glslang::TQualifier::layoutLocationEnd;
+        Vector<Uint> effectiveLocation(tProgramUniformCount, kNoLocation);
+        Vector<Bool> locationIsSourceExplicit(tProgramUniformCount, false);
+        UnorderedMap<String, Uint> structExplicitCursor; // declared root -> next member location
+        const auto findExplicitLocation = [this](const String& reflectedName) -> const Int* {
+            auto it = m_linkedExplicitUniformLocations.find(reflectedName);
+            if (it == m_linkedExplicitUniformLocations.end() && reflectedName.length() > 3 &&
+                reflectedName.compare(reflectedName.length() - 3, 3, "[0]") == 0) {
+                it = m_linkedExplicitUniformLocations.find(reflectedName.substr(0, reflectedName.length() - 3));
+            }
+            return it != m_linkedExplicitUniformLocations.end() ? &it->second : nullptr;
+        };
+        for (const Int i : m_glUniformIndexToTProgram) {
+            const auto& uniform = m_program->getUniform(i);
+            const glslang::TType* type = uniform.getType();
+            const Bool inNamedBlock = uniform.index >= 0 && !isGlobalUboMember(uniform);
+            if (inNamedBlock) continue; // block members never take glUniform locations
+
+            if (const Int* explicitLocation = findExplicitLocation(uniform.name)) {
+                effectiveLocation[i] = static_cast<Uint>(*explicitLocation);
+                locationIsSourceExplicit[i] = true;
+            } else if (!m_linkedExplicitUniformLocations.empty() &&
+                       uniform.name.find('.') != String::npos) {
+                // A struct uniform's explicit location spreads consecutively over its
+                // flattened members ("s.a", "s[1].b", ...) in reflection order.
+                const SizeT cut = uniform.name.find_first_of(".[");
+                const auto rootIt = m_linkedExplicitUniformLocations.find(uniform.name.substr(0, cut));
+                if (rootIt != m_linkedExplicitUniformLocations.end()) {
+                    auto [cursor, inserted] =
+                        structExplicitCursor.emplace(rootIt->first, static_cast<Uint>(rootIt->second));
+                    (void)inserted;
+                    effectiveLocation[i] = cursor->second;
+                    locationIsSourceExplicit[i] = true;
+                    cursor->second += static_cast<Uint>(GetUniformLocationSpan(uniform));
+                }
+            }
+            if (effectiveLocation[i] == kNoLocation && type != nullptr && type->isOpaque()) {
+                effectiveLocation[i] = uniform.layoutLocation();
+            }
+            if (locationIsSourceExplicit[i] &&
+                effectiveLocation[i] + static_cast<Uint>(GetUniformLocationSpan(uniform)) > kNoLocation) {
+                // Config A rejected out-of-range explicit locations at parse; keep them
+                // from growing the location table unboundedly.
+                m_infoLog = std::format("Uniform '{}' explicit location {} is out of range.", uniform.name,
+                                        effectiveLocation[i]);
+                ResetLinkArtifacts();
+                return false;
+            }
+        }
+
         Int requiredUniformLocations = 0;
-        MGLOG_D("ProgramObject %u: Reflection - active uniform count = %d", m_externalIndex, m_activeUniformCount);
-        for (int i = 0; i < m_activeUniformCount; i++) {
+        for (const Int i : m_glUniformIndexToTProgram) {
             auto& uniform = m_program->getUniform(i);
-            auto location = uniform.layoutLocation();
+            const Uint location = effectiveLocation[i];
             const Int locationSpan = GetUniformLocationSpan(uniform);
             requiredUniformLocations += locationSpan;
-            if (location != glslang::TQualifier::layoutLocationEnd) {
+            if (location != kNoLocation) {
                 m_maxUniformLocation = std::max(m_maxUniformLocation, location + locationSpan - 1);
             }
             m_uniformNameMaxLength = std::max(m_uniformNameMaxLength, (Int)uniform.name.length());
             m_uniformLocations[uniform.name] = location;
-            MGLOG_D("ProgramObject %u: Reflection - uniform[%d] name='%s' layoutLocation=%d", m_externalIndex, i,
-                    uniform.name.c_str(), location);
+            MGLOG_D("ProgramObject %u: Reflection - uniform[%d] name='%s' effectiveLocation=%d", m_externalIndex,
+                    i, uniform.name.c_str(), location);
         }
 
         MGLOG_D("ProgramObject %u: Reflection - computed m_maxUniformLocation=%u m_uniformNameMaxLength=%d",
@@ -706,21 +857,62 @@ namespace MobileGL::MG_State::GLState {
 
         Vector<int> unallocatedUniformIndex;
 
-        // Populate vector with already allocated location
-        for (int i = 0; i < m_activeUniformCount; i++) {
+        // Pass 1: source-explicit locations. These are API contract
+        // (ARB_explicit_uniform_location), and an overlap between distinct uniforms is a
+        // link error - config A's mapIO rejected it ("Uniform location overlaps across
+        // stages"); the relaxed parse dropped the qualifiers, so it is enforced here.
+        for (const Int i : m_glUniformIndexToTProgram) {
             auto& uniform = m_program->getUniform(i);
-            auto location = uniform.layoutLocation();
-            if (m_uniformLocations[uniform.name] == glslang::TQualifier::layoutLocationEnd) {
+            if (!locationIsSourceExplicit[i] || effectiveLocation[i] == kNoLocation) continue;
+            const Uint location = effectiveLocation[i];
+            const Int locationSpan = GetUniformLocationSpan(uniform);
+            for (Int element = 0; element < locationSpan; ++element) {
+                const Int existing = m_uniformIndexInTProgram[location + element];
+                if (existing != glslang::TQualifier::layoutLocationEnd && existing != i) {
+                    m_infoLog =
+                        std::format("Uniform location overlap: '{}' and '{}' both occupy location {}.",
+                                    m_program->getUniform(existing).name, uniform.name, location + element);
+                    ResetLinkArtifacts();
+                    return false;
+                }
+                m_uniformIndexInTProgram[location + element] = i;
+            }
+            MGLOG_D("ProgramObject %u: Reflection - assigned explicit-location uniform '%s' to locations "
+                    "%u..%u (indexInTProgram=%d)",
+                    m_externalIndex, uniform.name.c_str(), location, location + locationSpan - 1, i);
+        }
+
+        // Pass 2: glslang-assigned locations (opaque uniforms under the relaxed parse).
+        // Implementation-chosen, so on a collision with an explicit location the uniform
+        // is demoted to the first-fit pass below instead of failing the link.
+        for (const Int i : m_glUniformIndexToTProgram) {
+            auto& uniform = m_program->getUniform(i);
+            if (locationIsSourceExplicit[i]) continue;
+            const Uint location = effectiveLocation[i];
+            if (location == kNoLocation) {
                 unallocatedUniformIndex.emplace_back(i);
                 MGLOG_D("ProgramObject %u: Reflection - uniform '%s' is unallocated, will assign later",
                         m_externalIndex, uniform.name.c_str());
                 continue; // will allocate unallocated uniforms later
             }
             const Int locationSpan = GetUniformLocationSpan(uniform);
+            Bool spanIsFree = location + locationSpan - 1 <= m_maxUniformLocation;
+            for (Int element = 0; spanIsFree && element < locationSpan; ++element) {
+                spanIsFree =
+                    m_uniformIndexInTProgram[location + element] == glslang::TQualifier::layoutLocationEnd;
+            }
+            if (!spanIsFree) {
+                m_uniformLocations[uniform.name] = kNoLocation;
+                unallocatedUniformIndex.emplace_back(i);
+                MGLOG_D("ProgramObject %u: Reflection - uniform '%s' auto location %u collides with an "
+                        "explicit location, demoting to first-fit",
+                        m_externalIndex, uniform.name.c_str(), location);
+                continue;
+            }
             for (Int element = 0; element < locationSpan; ++element) {
                 m_uniformIndexInTProgram[location + element] = i;
             }
-            MGLOG_D("ProgramObject %u: Reflection - assigned uniform '%s' to locations %d..%d "
+            MGLOG_D("ProgramObject %u: Reflection - assigned uniform '%s' to locations %u..%u "
                     "(indexInTProgram=%d)",
                     m_externalIndex, uniform.name.c_str(), location, location + locationSpan - 1, i);
         }
@@ -772,7 +964,7 @@ namespace MobileGL::MG_State::GLState {
             }
         }
 
-        for (int i = 0; i < m_activeUniformCount; i++) {
+        for (const Int i : m_glUniformIndexToTProgram) {
             auto& uniform = m_program->getUniform(i);
             const auto locationIt = m_uniformLocations.find(uniform.name);
             if (locationIt == m_uniformLocations.end()) {
@@ -842,7 +1034,10 @@ namespace MobileGL::MG_State::GLState {
         for (int i = 0; i < inCount; ++i) {
             auto& inVar = m_program->getPipeInput(i);
             Int location = (Int)inVar.layoutLocation();
-            m_attribInNameMaxLength = std::max(m_attribInNameMaxLength, (Int)inVar.name.length());
+            // Builtins reflect under their SPIR-V names here; GL_ACTIVE_ATTRIBUTE_MAX_LENGTH
+            // must measure the GL spelling glGetActiveAttrib will report.
+            m_attribInNameMaxLength =
+                std::max(m_attribInNameMaxLength, (Int)NormalizeBuiltinPipeInputName(inVar.name).length());
 
             if (location >= 0 && location < (int)m_attribs.size()) {
                 const Int locationSpan = GetVertexInputLocationSpan(inVar.glDefineType);
@@ -868,11 +1063,12 @@ namespace MobileGL::MG_State::GLState {
         }
 
         // ---------- UBO ----------
-        Int uboCount = m_program->getNumUniformBlocks();
+        // GL-visible blocks only (MGL_GLOBAL_UBO was filtered out above).
+        const Int uboCount = GetActiveUniformBlocksCount();
         MGLOG_D("ProgramObject %u: Reflection - uniform block count (UBO) = %d", m_externalIndex, uboCount);
         m_uniformBlockBinding.resize(uboCount, -1);
-        for (int i = 0; i < uboCount; i++) {
-            auto& ubo = m_program->getUniformBlock(i);
+        for (Int i = 0; i < uboCount; i++) {
+            auto& ubo = m_program->getUniformBlock(m_glBlockIndexToTProgram[i]);
             m_uniformBlockNameMaxLength = std::max(m_uniformBlockNameMaxLength, (Int)ubo.name.length());
             m_uniformBlockIndexByName[ubo.name] = i;
             // if there's binding defined in shader as layout(binding = ...),
@@ -881,82 +1077,56 @@ namespace MobileGL::MG_State::GLState {
             MGLOG_D("ProgramObject %u: Reflection - UBO[%d] name='%s' size=%u binding=%d", m_externalIndex, i,
                     ubo.name.c_str(), ubo.size, ubo.getBinding());
         }
+        return true;
     }
 
-    void ProgramObject::GenerateBinary() {
+    void ProgramObject::GenerateSpirv() {
         /* As we passed first stage compilation/linking,
          * we'll assume all the operations here should
          * pass. We may be able to employ some optimizations
          * here without the burden of error reporting.
          */
         using namespace MG_Util::ShaderTranspiler;
-        MGLOG_D("ProgramObject %u: GenerateBinary - start", m_externalIndex);
-        Vector<SharedPtr<glslang::TShader>> shaders(m_shaders.size());
+        MGLOG_D("ProgramObject %u: GenerateSpirv - start", m_externalIndex);
+
+        // The shaders were parsed once, in the link-compatible (relaxed Vulkan-rules)
+        // configuration, and m_program linked those parses - so m_program IS the
+        // program the backends consume. Generate SPIR-V straight from its
+        // intermediates; the full re-parse + re-link that used to live here (one
+        // glslang pass per shader per link) is gone.
         Vector<GLenum> shaderTypes(m_shaders.size());
-
-        // 1. Compile shaders
         for (SizeT i = 0; i < m_shaders.size(); i++) {
-            auto shaderStage = m_shaders[i]->GetShaderStage();
-            auto shaderType = MG_Util::ConvertShaderStageToGLEnum(shaderStage);
-            String compileSource = m_shaders[i]->GetShaderSource();
-            PreprocessShaderSource(shaderStage, compileSource);
-            shaderTypes[i] = shaderType;
-            ShaderAttrib attrib{.shaderType = shaderType,
-                                .sourceStr = compileSource,
-                                .flags = 0}; // Will need patched glslang to work
-            MGLOG_D("ProgramObject %u: GenerateBinary - compiling shader[%zu] type %u", m_externalIndex, i, shaderType);
-            auto res = ShaderCompiler::CompileShader(attrib);
-            if (!res) {
-                MGLOG_E("ProgramObject %u: GenerateBinary - CompileShader failed for shader[%zu], aborting "
-                        "binary generation",
-                        m_externalIndex, i);
-                MGLOG_E("ProgramObject %u: GenerateBinary - CompileShader return code %d, log:\n%s", m_externalIndex,
-                        res.error().errc, res.error().log.c_str());
-                MGLOG_E("ProgramObject %u: GenerateBinary - last compiled shader src: \n%s", m_externalIndex,
-                        compileSource.c_str());
-            }
-            MOBILEGL_ASSERT(res, "CompileShader failed during binary generation");
-            shaders[i] = res.value();
-            MGLOG_D("ProgramObject %u: GenerateBinary - compiled shader[%zu] -> TShader ptr %p", m_externalIndex, i,
-                    shaders[i].get());
+            shaderTypes[i] = MG_Util::ConvertShaderStageToGLEnum(m_shaders[i]->GetShaderStage());
         }
-
-        // 2. Do actual linking
-        ProgramAttrib attrib{.shaders = Move(shaders),
-                             .explicitVertexInLocations = m_explicitAttribLocations,
-                             .explicitFragmentOutLocations = m_explicitFragDataLocation,
-                             .explicitFragmentOutIndices = m_explicitFragDataIndex,
-                             .explicitOpaqueUniformBindings = &m_explicitOpaqueUniformBindings};
-        MGLOG_D("ProgramObject %u: GenerateBinary - linking program for binary", m_externalIndex);
-        auto programResult = ShaderCompiler::LinkProgram(attrib);
-        if (!programResult) {
-            MGLOG_E("ProgramObject %u: GenerateBinary - LinkProgram failed during binary generation", m_externalIndex);
-        }
-        MOBILEGL_ASSERT(programResult, "LinkProgram failed during binary generation");
-        auto& program = programResult.value();
-        MGLOG_D("ProgramObject %u: GenerateBinary - got linked program object", m_externalIndex);
 
         ProgramBinaryAttrib binaryAttrib{
             .shaderTypes = shaderTypes,
-            .program = *program,
+            .program = *m_program,
         };
-        MGLOG_D("ProgramObject %u: GenerateBinary - requesting SPIR-V binary from program", m_externalIndex);
+        MGLOG_D("ProgramObject %u: GenerateSpirv - requesting SPIR-V binary from program", m_externalIndex);
         auto binaryResult = ShaderCompiler::GetSpirvBinaryFromProgram(binaryAttrib);
         if (!binaryResult) {
-            MGLOG_E("ProgramObject %u: GenerateBinary - GetSpirvBinaryFromProgram failed", m_externalIndex);
+            MGLOG_E("ProgramObject %u: GenerateSpirv - GetSpirvBinaryFromProgram failed", m_externalIndex);
         }
         MOBILEGL_ASSERT(binaryResult, "GetSpirvBinaryFromProgram failed");
         m_generatedSpirv = Move(binaryResult.value());
-        MGLOG_D("ProgramObject %u: GenerateBinary - generated %zu SPIR-V modules", m_externalIndex,
+        MGLOG_D("ProgramObject %u: GenerateSpirv - generated %zu SPIR-V modules", m_externalIndex,
                 m_generatedSpirv.size());
 
-        // 3. Linked SPIR-V generated, sanitize and optimize it
+        // Linked SPIR-V generated, sanitize and optimize it
         for (auto& spv : m_generatedSpirv) {
             auto success = ShaderCompiler::SanitizeAndOptimizeBinary(spv, spv);
             MOBILEGL_ASSERT(success, "SanitizeBinary failed");
         }
+    }
 
-        // 4. Do reflection (find global UBO etc.)
+    void ProgramObject::BuildGlobalUboRouting() {
+        using namespace MG_Util::ShaderTranspiler;
+        Vector<GLenum> shaderTypes(m_shaders.size());
+        for (SizeT i = 0; i < m_shaders.size(); i++) {
+            shaderTypes[i] = MG_Util::ConvertShaderStageToGLEnum(m_shaders[i]->GetShaderStage());
+        }
+
         m_uniformSizesInBytes.clear();
         m_uniformOffsets.clear();
         m_globalUboScratch.clear();
@@ -969,13 +1139,13 @@ namespace MobileGL::MG_State::GLState {
             auto& spv = m_generatedSpirv[i];
 
             auto shaderType = shaderTypes[i];
-            MGLOG_D("ProgramObject %u: GenerateBinary - parsing SPIR-V meta data for module %zu "
+            MGLOG_D("ProgramObject %u: BuildGlobalUboRouting - parsing SPIR-V meta data for module %zu "
                     "(shaderType=%u, wordCount=%zu)",
                     m_externalIndex, i, shaderType, spv.size());
             SpvcSession session(spv, SessionUsageBit::Reflection);
             auto result = session.ParseMetaData();
             if (result < 0) {
-                MGLOG_D("ProgramObject %u: GenerateBinary - SpvcSession::ParseMetaData failed for module %zu, "
+                MGLOG_D("ProgramObject %u: BuildGlobalUboRouting - SpvcSession::ParseMetaData failed for module %zu, "
                         "err = %d%s",
                         m_externalIndex, i, result,
                         (result == SPVC_ERROR_INVALID_SPIRV ? ". Probably no global UBO?" : ""));
@@ -983,7 +1153,7 @@ namespace MobileGL::MG_State::GLState {
             } else {
                 auto& meta = session.GetMetadata();
                 auto size = meta.globalUboSize;
-                MGLOG_D("ProgramObject %u: GenerateBinary - SPIR-V meta: uboSize=%zu plainUniformCount=%zu "
+                MGLOG_D("ProgramObject %u: BuildGlobalUboRouting - SPIR-V meta: uboSize=%zu plainUniformCount=%zu "
                         "plainUniformOffsets=%zu",
                         m_externalIndex, meta.globalUboSize, meta.plainUniformMemberSizesInBytes.size(),
                         meta.plainUniformOffsetsInUBO.size());
@@ -1002,7 +1172,7 @@ namespace MobileGL::MG_State::GLState {
                         locationIt = m_uniformLocations.find(name + "[0]");
                     }
                     if (locationIt == m_uniformLocations.end()) {
-                        MGLOG_D("ProgramObject %u: GenerateBinary - uniform '%s' offset=%u but not found in "
+                        MGLOG_D("ProgramObject %u: BuildGlobalUboRouting - uniform '%s' offset=%u but not found in "
                                 "m_uniformLocations",
                                 m_externalIndex, name.c_str(), offset);
                         continue;
@@ -1013,7 +1183,7 @@ namespace MobileGL::MG_State::GLState {
                     }
 
                     const Int uniformIndex = m_uniformIndexInTProgram[baseLocation];
-                    const GLint arraySize = GetActiveUniformArraySize(uniformIndex);
+                    const GLint arraySize = GetUniformArraySizeByTIndex(uniformIndex);
                     SizeT memberSize = 0;
                     const auto sizeIt = meta.plainUniformMemberSizesInBytes.find(name);
                     if (sizeIt != meta.plainUniformMemberSizesInBytes.end()) {
@@ -1037,12 +1207,12 @@ namespace MobileGL::MG_State::GLState {
                         const SizeT consumed = static_cast<SizeT>(element) * arrayStride;
                         m_uniformSizesInBytes[location] = memberSize > consumed ? memberSize - consumed : 0;
                     }
-                    MGLOG_D("ProgramObject %u: GenerateBinary - uniform '%s' offset=%u stride=%u size=%zu assigned "
+                    MGLOG_D("ProgramObject %u: BuildGlobalUboRouting - uniform '%s' offset=%u stride=%u size=%zu assigned "
                             "to locations %u..%u",
                             m_externalIndex, name.c_str(), offset, arrayStride, memberSize, baseLocation,
                             baseLocation + static_cast<Uint>(elementCount) - 1);
                 }
-                MGLOG_D("ProgramObject %u: GenerateBinary - finished parsing module %zu metadata",
+                MGLOG_D("ProgramObject %u: BuildGlobalUboRouting - finished parsing module %zu metadata",
                         m_externalIndex, i);
             }
         }
@@ -1079,7 +1249,7 @@ namespace MobileGL::MG_State::GLState {
             m_globalUboScratch.resize(slotOffset + slotSize, 0);
             m_uniformOffsets[location] = static_cast<Uint>(slotOffset);
             m_uniformSizesInBytes[location] = slotSize;
-            MGLOG_D("ProgramObject %u: GenerateBinary - uniform '%s' location %u has no UBO backing in the "
+            MGLOG_D("ProgramObject %u: BuildGlobalUboRouting - uniform '%s' location %u has no UBO backing in the "
                     "generated SPIR-V (optimized out?); allocated %zu fallback bytes at scratch offset %zu",
                     m_externalIndex, uniform.name.c_str(), location, slotSize, slotOffset);
         }

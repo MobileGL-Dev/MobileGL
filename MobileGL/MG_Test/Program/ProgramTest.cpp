@@ -2365,3 +2365,258 @@ void main() { o_color = vec4(1.0); }
     EXPECT_EQ(IsShader(fs), GL_FALSE);
     EXPECT_EQ(GetError(), GL_NO_ERROR);
 }
+
+// ---- P0a single-parse regression tests ----
+// glCompileShader now performs the one link-compatible (relaxed Vulkan-rules) parse;
+// these pin the GL frontend semantics that parse cannot provide by itself.
+
+namespace {
+    GLuint CompileShaderChecked(GLenum type, const char* source) {
+        char infoLog[1024] = "";
+        GLuint shader = CreateShader(type);
+        ShaderSource(shader, 1, &source, nullptr);
+        CompileShader(shader);
+        GLint status = GL_FALSE;
+        GetShaderiv(shader, GL_COMPILE_STATUS, &status);
+        GetShaderInfoLog(shader, sizeof(infoLog), nullptr, infoLog);
+        EXPECT_EQ(status, GL_TRUE) << infoLog;
+        return shader;
+    }
+
+    GLuint LinkVsFs(GLuint vs, GLuint fs, GLint expectedLinkStatus) {
+        char infoLog[2048] = "";
+        GLuint program = CreateProgram();
+        AttachShader(program, vs);
+        AttachShader(program, fs);
+        LinkProgram(program);
+        GLint linkStatus = GL_FALSE;
+        GetProgramiv(program, GL_LINK_STATUS, &linkStatus);
+        GetProgramInfoLog(program, sizeof(infoLog), nullptr, infoLog);
+        EXPECT_EQ(linkStatus, expectedLinkStatus) << infoLog;
+        return program;
+    }
+} // namespace
+
+// The relaxed parse sweeps every DECLARED default-block uniform into MGL_GLOBAL_UBO,
+// including ones no stage reads. GL requires those to be inactive: absent from the
+// glGetActiveUniform enumeration and -1 from glGetUniformLocation. The synthesized
+// MGL_GLOBAL_UBO itself must not surface as a GL uniform block either.
+TEST_F(ProgramTest, DeclaredButUnreadUniformIsInactiveAndGlobalUboStaysHidden) {
+    const char* vsSource = R"(#version 330 core
+uniform mat4 uUsedMat;
+uniform vec4 uDeadVec;
+void main() { gl_Position = uUsedMat * vec4(1.0); }
+)";
+    const char* fsSource = R"(#version 330 core
+uniform vec4 uUsedColor;
+uniform float uDeadFloat;
+out vec4 fragColor;
+void main() { fragColor = uUsedColor; }
+)";
+    GLuint vs = CompileShaderChecked(GL_VERTEX_SHADER, vsSource);
+    GLuint fs = CompileShaderChecked(GL_FRAGMENT_SHADER, fsSource);
+    GLuint program = LinkVsFs(vs, fs, GL_TRUE);
+
+    GLint activeUniforms = 0;
+    GetProgramiv(program, GL_ACTIVE_UNIFORMS, &activeUniforms);
+    EXPECT_EQ(activeUniforms, 2);
+
+    EXPECT_NE(GetUniformLocation(program, "uUsedMat"), -1);
+    EXPECT_NE(GetUniformLocation(program, "uUsedColor"), -1);
+    EXPECT_EQ(GetUniformLocation(program, "uDeadVec"), -1);
+    EXPECT_EQ(GetUniformLocation(program, "uDeadFloat"), -1);
+    EXPECT_EQ(UniformIndexByName(program, "uDeadVec"), GL_INVALID_INDEX);
+
+    char nameBuf[64] = "";
+    for (GLint i = 0; i < activeUniforms; ++i) {
+        GLsizei nameLen = 0;
+        GLint size = 0;
+        GLenum type = 0;
+        GetActiveUniform(program, static_cast<GLuint>(i), sizeof(nameBuf), &nameLen, &size, &type, nameBuf);
+        EXPECT_TRUE(std::strcmp(nameBuf, "uDeadVec") != 0 && std::strcmp(nameBuf, "uDeadFloat") != 0)
+            << nameBuf;
+    }
+
+    // No named blocks are declared, so GL must see zero uniform blocks - the global
+    // UBO the transpiler materializes is an implementation artifact.
+    GLint activeBlocks = 0;
+    GetProgramiv(program, GL_ACTIVE_UNIFORM_BLOCKS, &activeBlocks);
+    EXPECT_EQ(activeBlocks, 0);
+    EXPECT_EQ(GetUniformBlockIndex(program, "MGL_GLOBAL_UBO"), GL_INVALID_INDEX);
+
+    // Default-block uniforms report block index -1 and offset -1 even though the
+    // relaxed parse physically placed them in the global UBO.
+    const GLuint usedMat = UniformIndexByName(program, "uUsedMat");
+    ASSERT_NE(usedMat, GL_INVALID_INDEX);
+    EXPECT_EQ(QueryUniformiv(program, usedMat, GL_UNIFORM_BLOCK_INDEX), -1);
+    EXPECT_EQ(QueryUniformiv(program, usedMat, GL_UNIFORM_OFFSET), -1);
+    EXPECT_EQ(QueryUniformiv(program, usedMat, GL_UNIFORM_ARRAY_STRIDE), -1);
+    EXPECT_EQ(QueryUniformiv(program, usedMat, GL_UNIFORM_MATRIX_STRIDE), -1);
+    EXPECT_EQ(QueryUniformiv(program, usedMat, GL_UNIFORM_IS_ROW_MAJOR), 0);
+    EXPECT_EQ(GetError(), GL_NO_ERROR);
+}
+
+// Distinct uniforms whose explicit locations overlap across stages must fail the
+// link (ARB_explicit_uniform_location). The GL-client parse used to reject this at
+// glslang mapIO; the relaxed parse drops the qualifiers, so the location assigner
+// enforces it - this is the experiment's synthetic divergence case.
+TEST_F(ProgramTest, ExplicitUniformLocationOverlapAcrossStagesFailsLink) {
+    const char* vsSource = R"(#version 460 core
+layout(location = 3) uniform vec4 uVec[4];
+void main() { gl_Position = uVec[0] + uVec[3]; }
+)";
+    const char* fsSource = R"(#version 460 core
+layout(location = 5) uniform float uF;
+out vec4 fragColor;
+void main() { fragColor = vec4(uF); }
+)";
+    GLuint vs = CompileShaderChecked(GL_VERTEX_SHADER, vsSource);
+    GLuint fs = CompileShaderChecked(GL_FRAGMENT_SHADER, fsSource);
+    GLuint program = LinkVsFs(vs, fs, GL_FALSE);
+
+    char infoLog[1024] = "";
+    GLsizei logLength = 0;
+    GetProgramInfoLog(program, sizeof(infoLog), &logLength, infoLog);
+    EXPECT_GT(logLength, 0);
+}
+
+// The same uniform declared with different explicit locations in two stages is a
+// link error as well.
+TEST_F(ProgramTest, ConflictingExplicitUniformLocationsOnSameUniformFailLink) {
+    const char* vsSource = R"(#version 460 core
+layout(location = 2) uniform vec4 uShared;
+void main() { gl_Position = uShared; }
+)";
+    const char* fsSource = R"(#version 460 core
+layout(location = 4) uniform vec4 uShared;
+out vec4 fragColor;
+void main() { fragColor = uShared; }
+)";
+    GLuint vs = CompileShaderChecked(GL_VERTEX_SHADER, vsSource);
+    GLuint fs = CompileShaderChecked(GL_FRAGMENT_SHADER, fsSource);
+    (void)LinkVsFs(vs, fs, GL_FALSE);
+}
+
+// Same-location explicit declarations of the SAME uniform in both stages stay
+// linkable, and both explicit locations (opaque and non-opaque) are honored.
+TEST_F(ProgramTest, ExplicitUniformLocationsHonoredForPlainAndOpaqueUniforms) {
+    const char* vsSource = R"(#version 460 core
+layout(location = 11) uniform mat4 uMvp;
+void main() { gl_Position = uMvp * vec4(1.0); }
+)";
+    const char* fsSource = R"(#version 460 core
+layout(location = 7) uniform sampler2D uTex;
+layout(location = 11) uniform mat4 uMvp;
+out vec4 fragColor;
+void main() { fragColor = texture(uTex, uMvp[0].xy); }
+)";
+    GLuint vs = CompileShaderChecked(GL_VERTEX_SHADER, vsSource);
+    GLuint fs = CompileShaderChecked(GL_FRAGMENT_SHADER, fsSource);
+    GLuint program = LinkVsFs(vs, fs, GL_TRUE);
+
+    EXPECT_EQ(GetUniformLocation(program, "uMvp"), 11);
+    EXPECT_EQ(GetUniformLocation(program, "uTex"), 7);
+    EXPECT_EQ(GetError(), GL_NO_ERROR);
+}
+
+// A glslang-auto-assigned opaque location may collide with a source-explicit plain
+// uniform location under the relaxed parse (glslang no longer sees the plain
+// uniform's qualifier). The assigner must relocate the auto one, not fail the link.
+TEST_F(ProgramTest, AutoOpaqueLocationCollidingWithExplicitPlainLocationRelocates) {
+    const char* vsSource = R"(#version 460 core
+layout(location = 0) uniform mat4 uM;
+void main() { gl_Position = uM * vec4(1.0); }
+)";
+    const char* fsSource = R"(#version 460 core
+uniform sampler2D uTex;
+out vec4 fragColor;
+void main() { fragColor = texture(uTex, vec2(0.5)); }
+)";
+    GLuint vs = CompileShaderChecked(GL_VERTEX_SHADER, vsSource);
+    GLuint fs = CompileShaderChecked(GL_FRAGMENT_SHADER, fsSource);
+    GLuint program = LinkVsFs(vs, fs, GL_TRUE);
+
+    const GLint mLoc = GetUniformLocation(program, "uM");
+    const GLint texLoc = GetUniformLocation(program, "uTex");
+    EXPECT_EQ(mLoc, 0);
+    ASSERT_NE(texLoc, -1);
+    EXPECT_NE(texLoc, mLoc);
+    EXPECT_EQ(GetError(), GL_NO_ERROR);
+}
+
+// Relinking a program and linking the same compiled shaders into a second program
+// both re-consume the stored single parse (glslang mapIO mutates a linked TShader,
+// so reuse goes through the consume-once re-parse path). Reflection must be intact
+// every time, without any glCompileShader in between.
+TEST_F(ProgramTest, RelinkAndSecondProgramReuseCompiledShaders) {
+    const char* vsSource = R"(#version 330 core
+uniform mat4 uMvp;
+in vec3 aPos;
+void main() { gl_Position = uMvp * vec4(aPos, 1.0); }
+)";
+    const char* fsSource = R"(#version 330 core
+uniform sampler2D uTex;
+uniform vec4 uTint;
+out vec4 fragColor;
+void main() { fragColor = texture(uTex, vec2(0.5)) * uTint; }
+)";
+    GLuint vs = CompileShaderChecked(GL_VERTEX_SHADER, vsSource);
+    GLuint fs = CompileShaderChecked(GL_FRAGMENT_SHADER, fsSource);
+
+    GLuint program1 = LinkVsFs(vs, fs, GL_TRUE);
+    GLint activeUniforms1 = 0;
+    GetProgramiv(program1, GL_ACTIVE_UNIFORMS, &activeUniforms1);
+    EXPECT_EQ(activeUniforms1, 3);
+    EXPECT_NE(GetUniformLocation(program1, "uMvp"), -1);
+
+    // Relink: consumes the re-parse path.
+    LinkProgram(program1);
+    GLint relinkStatus = GL_FALSE;
+    char infoLog[1024] = "";
+    GetProgramiv(program1, GL_LINK_STATUS, &relinkStatus);
+    GetProgramInfoLog(program1, sizeof(infoLog), nullptr, infoLog);
+    ASSERT_EQ(relinkStatus, GL_TRUE) << infoLog;
+    GLint activeUniformsRelink = 0;
+    GetProgramiv(program1, GL_ACTIVE_UNIFORMS, &activeUniformsRelink);
+    EXPECT_EQ(activeUniformsRelink, 3);
+    EXPECT_NE(GetUniformLocation(program1, "uTint"), -1);
+
+    // Same shaders into a fresh program.
+    GLuint program2 = LinkVsFs(vs, fs, GL_TRUE);
+    GLint activeUniforms2 = 0;
+    GetProgramiv(program2, GL_ACTIVE_UNIFORMS, &activeUniforms2);
+    EXPECT_EQ(activeUniforms2, 3);
+    EXPECT_NE(GetUniformLocation(program2, "uTex"), -1);
+    EXPECT_EQ(GetError(), GL_NO_ERROR);
+}
+
+// Programs and shaders share one GL name space (GL 3.3 core 2.11). A name must
+// never be handed out as both, and a shader name passed where a program is
+// expected is INVALID_OPERATION (KHR-GL30.get_uniform_tests.get_uniform relies
+// on this; a name-collided linked program used to swallow the error).
+TEST_F(ProgramTest, ProgramAndShaderNamesShareOneNameSpace) {
+    GLuint program = CreateProgram();
+    GLuint vs = CreateShader(GL_VERTEX_SHADER);
+    GLuint fs = CreateShader(GL_FRAGMENT_SHADER);
+    EXPECT_NE(program, vs);
+    EXPECT_NE(program, fs);
+    EXPECT_NE(vs, fs);
+    EXPECT_EQ(IsProgram(vs), GL_FALSE);
+    EXPECT_EQ(IsShader(program), GL_FALSE);
+
+    GLfloat floatValue = 0.0f;
+    GetUniformfv(vs, 0, &floatValue);
+    EXPECT_EQ(GetError(), static_cast<GLenum>(GL_INVALID_OPERATION));
+    GLint intValue = 0;
+    GetUniformiv(fs, 0, &intValue);
+    EXPECT_EQ(GetError(), static_cast<GLenum>(GL_INVALID_OPERATION));
+
+    // A never-allocated name is INVALID_VALUE, distinguishing the two cases.
+    GetUniformfv(program + vs + fs + 100, 0, &floatValue);
+    EXPECT_EQ(GetError(), static_cast<GLenum>(GL_INVALID_VALUE));
+
+    DeleteShader(vs);
+    DeleteShader(fs);
+    DeleteProgram(program);
+    EXPECT_EQ(GetError(), GL_NO_ERROR);
+}
