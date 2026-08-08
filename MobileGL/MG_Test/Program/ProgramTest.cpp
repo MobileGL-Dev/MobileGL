@@ -2620,3 +2620,217 @@ TEST_F(ProgramTest, ProgramAndShaderNamesShareOneNameSpace) {
     DeleteProgram(program);
     EXPECT_EQ(GetError(), GL_NO_ERROR);
 }
+
+// ---- builtin-shadowing OpName pass (P0c) ----
+// Desktop GLSL lets a pack redefine builtins; ESSL 3.x forbids it, so the rename
+// now happens as a SPIR-V OpName pass in SanitizeAndOptimizeBinary instead of the
+// old whole-source string scan. These pin the pass end-to-end: real sources through
+// glCompileShader/glLinkProgram, generated SPIR-V transpiled to the ESSL the Espryt
+// driver would see.
+
+namespace {
+    Vector<MobileGL::String> TranspileProgramSpirvToEssl(GLuint program) {
+        Vector<MobileGL::String> esslModules;
+        auto programObj = MG_State::pGLContext->GetProgramObject(program);
+        for (auto& spirvCode : programObj->GetGeneratedSpirv()) {
+            MG_Util::ShaderTranspiler::SpvcSession spvcSession(
+                spirvCode, MG_Util::ShaderTranspiler::SessionUsageBit::Transpile);
+            spvc_compiler_options options;
+            spvcSession.CreateOptions(&options);
+            spvc_compiler_options_set_uint(options, SPVC_COMPILER_OPTION_GLSL_VERSION, 320);
+            spvc_compiler_options_set_bool(options, SPVC_COMPILER_OPTION_GLSL_ES, SPVC_TRUE);
+            spvc_compiler_options_set_bool(options, SPVC_COMPILER_OPTION_GLSL_VULKAN_SEMANTICS, SPVC_FALSE);
+            spvcSession.SetOptions(options);
+            const char* result = nullptr;
+            spvcSession.Compile(&result);
+            EXPECT_NE(result, nullptr) << spvcSession.GetLastErrorString();
+            esslModules.push_back(result ? result : "");
+        }
+        return esslModules;
+    }
+} // namespace
+
+// The two blind spots of the old string scan, eliminated by construction: a
+// MULTILINE definition (bliss-shaped "float fma\n(...)"), and names outside the
+// old 5-entry list: sinh, as a NEW overload no builtin signature matches, so it
+// parses fine and the SPIR-V OpName backstop does the rename. (An EXACT-signature
+// sinh redefinition is parse-rejected by glslang - on HEAD too - and is therefore
+// deliberately NOT lexically rescued; see kLexicalPreemptRenameNames.)
+// min3/max3 keep their historical coverage.
+TEST_F(ProgramTest, BuiltinShadowingFunctionsRenamedInEsslOutput) {
+    const char* vsSource = R"(#version 330 core
+void main() { gl_Position = vec4(0.0, 0.0, 0.0, 1.0); }
+)";
+    const char* fsSource = R"(#version 330 core
+out vec4 fragColor;
+
+float fma
+    (float a, float b, float c) { return a * b + c; }
+float sinh(float x, float y) { return x * y; }
+float round(float x) { return floor(x + 0.5); }
+float min3(float a, float b, float c) { return min(min(a, b), c); }
+
+void main() {
+    fragColor = vec4(fma(0.1, 0.2, 0.3), sinh(0.4, 2.0), round(1.25), min3(0.1, 0.2, 0.3));
+}
+)";
+    GLuint vs = CompileShaderChecked(GL_VERTEX_SHADER, vsSource);
+    GLuint fs = CompileShaderChecked(GL_FRAGMENT_SHADER, fsSource);
+    GLuint program = LinkVsFs(vs, fs, GL_TRUE);
+
+    for (const auto& essl : TranspileProgramSpirvToEssl(program)) {
+        if (essl.find("fragColor") == String::npos) continue; // fragment module only
+        EXPECT_NE(essl.find("mg_fma("), String::npos) << essl;
+        EXPECT_NE(essl.find("mg_sinh("), String::npos) << essl;
+        EXPECT_NE(essl.find("mg_round("), String::npos) << essl;
+        EXPECT_NE(essl.find("mg_min3("), String::npos) << essl;
+        EXPECT_EQ(essl.find("float fma("), String::npos) << essl;
+        EXPECT_EQ(essl.find("float sinh("), String::npos) << essl;
+        EXPECT_EQ(essl.find("float round("), String::npos) << essl;
+    }
+    EXPECT_EQ(GetError(), GL_NO_ERROR);
+}
+
+// Pure builtin USAGE (plus a commented-out definition) must stay untouched: builtin
+// calls never resolve to a user function id in SPIR-V, so no mg_ name may appear.
+TEST_F(ProgramTest, BuiltinUsageWithoutShadowingDefinitionKeepsBuiltinCalls) {
+    const char* vsSource = R"(#version 330 core
+void main() { gl_Position = vec4(0.0, 0.0, 0.0, 1.0); }
+)";
+    // 400, not 330: the builtin fma() really is called here, and it is only core from GLSL 4.00
+    // (at 330 it needs GL_ARB_gpu_shader5). The shadowing case above can stay at 330 precisely
+    // because the rename means no call to the builtin survives.
+    const char* fsSource = R"(#version 400 core
+// float round(float x) { return floor(x + 0.5); }
+out vec4 fragColor;
+void main() {
+    fragColor = vec4(round(1.25), fma(0.1, 0.2, 0.3), tanh(0.5), 1.0);
+}
+)";
+    GLuint vs = CompileShaderChecked(GL_VERTEX_SHADER, vsSource);
+    GLuint fs = CompileShaderChecked(GL_FRAGMENT_SHADER, fsSource);
+    GLuint program = LinkVsFs(vs, fs, GL_TRUE);
+
+    for (const auto& essl : TranspileProgramSpirvToEssl(program)) {
+        EXPECT_EQ(essl.find("mg_"), String::npos) << essl;
+    }
+    EXPECT_EQ(GetError(), GL_NO_ERROR);
+}
+
+// ---- the three shapes the lexical pre-empt pass must NOT touch (P0c) ----
+// The source-level rename runs only for the handful of names glslang's relaxed
+// parse rejects outright; everything else waits for the OpName pass, which cannot
+// over-fire. These pin the three ways a lexical scan gets it wrong. All of them
+// would fail as "no matching overloaded function found" - an over-detection is
+// unrecoverable because the source never reaches SPIR-V.
+
+namespace {
+    // "pow(" as a real builtin call, i.e. not the tail of "mg_pow(".
+    bool ContainsUnprefixedCall(const MobileGL::String& essl, const MobileGL::String& name) {
+        const MobileGL::String needle = name + "(";
+        for (SizeT pos = essl.find(needle); pos != String::npos; pos = essl.find(needle, pos + 1)) {
+            const char before = pos == 0 ? ' ' : essl[pos - 1];
+            const bool isIdentifierChar =
+                std::isalnum(static_cast<unsigned char>(before)) != 0 || before == '_';
+            if (!isIdentifierChar) return true;
+        }
+        return false;
+    }
+} // namespace
+
+// B1: preprocessor-asymmetric braces desync a raw brace-depth counter (each arm of
+// the #ifdef closes the function), and "return" is lexically an identifier - so
+// "return clamp(...)" reads as a top-level definition "<type> <builtin> (". A
+// shader that shadows nothing must survive intact.
+TEST_F(ProgramTest, StatementKeywordCallInPreprocessorAsymmetricBracesIsNotAShadowingDefinition) {
+    const char* vsSource = R"(#version 330 core
+void main() { gl_Position = vec4(0.0, 0.0, 0.0, 1.0); }
+)";
+    const char* fsSource = R"(#version 330 core
+uniform vec3 uP;
+out vec4 fragColor;
+
+float getShadow(vec3 v) {
+#ifdef SHADOW_OFF
+    return 1.0;
+}
+#else
+    return round(dot(v, v));
+}
+#endif
+
+void main() { fragColor = vec4(getShadow(uP) * clamp(uP.x, 0.0, 1.0)); }
+)";
+    GLuint vs = CompileShaderChecked(GL_VERTEX_SHADER, vsSource);
+    GLuint fs = CompileShaderChecked(GL_FRAGMENT_SHADER, fsSource);
+    GLuint program = LinkVsFs(vs, fs, GL_TRUE);
+
+    for (const auto& essl : TranspileProgramSpirvToEssl(program)) {
+        if (essl.find("fragColor") == String::npos) continue; // fragment module only
+        EXPECT_EQ(essl.find("mg_"), String::npos) << essl;
+        // SPIRV-Cross lowers GLSL.std.450 FClamp to its NaN-correct min/max/isnan form, so the
+        // surviving evidence of the builtin call is that pair, not the spelling "clamp(". The
+        // stronger guard is above it: a renamed mg_clamp would not have compiled at all.
+        EXPECT_TRUE(ContainsUnprefixedCall(essl, "min")) << essl;
+        EXPECT_TRUE(ContainsUnprefixedCall(essl, "max")) << essl;
+    }
+    EXPECT_EQ(GetError(), GL_NO_ERROR);
+}
+
+// B2: the scan is preprocessor-blind, so a definition in a DEAD #if branch would
+// poison every live call to the real builtin. #version 120 normalizes to 330, so
+// __VERSION__ is 330 and the compat shim is dropped by glslang - the definition
+// never exists, and nothing may be renamed.
+TEST_F(ProgramTest, ShadowingDefinitionInDeadPreprocessorBranchLeavesLiveBuiltinCalls) {
+    const char* vsSource = R"(#version 120
+#if __VERSION__ < 140
+mat4 inverse(mat4 m) { return m; }
+#endif
+uniform mat4 uM;
+uniform vec4 uV;
+void main() { gl_Position = inverse(uM) * uV; }
+)";
+    const char* fsSource = R"(#version 330 core
+out vec4 fragColor;
+void main() { fragColor = vec4(1.0); }
+)";
+    GLuint vs = CompileShaderChecked(GL_VERTEX_SHADER, vsSource);
+    GLuint fs = CompileShaderChecked(GL_FRAGMENT_SHADER, fsSource);
+    GLuint program = LinkVsFs(vs, fs, GL_TRUE);
+
+    for (const auto& essl : TranspileProgramSpirvToEssl(program)) {
+        if (essl.find("gl_Position") == String::npos) continue; // vertex module only
+        EXPECT_EQ(essl.find("mg_"), String::npos) << essl;
+        EXPECT_TRUE(ContainsUnprefixedCall(essl, "inverse")) << essl;
+    }
+    EXPECT_EQ(GetError(), GL_NO_ERROR);
+}
+
+// B3: the idiomatic reason to shadow a builtin is to ADD an overload and delegate
+// to the real one. A blanket call-site rewrite would turn the body's builtin call
+// into mg_pow(vec3, vec3), which has no overload. The OpName backstop renames the
+// user function id only, so the delegation still resolves to GLSL.std.450 Pow.
+TEST_F(ProgramTest, OverloadDelegatingToShadowedBuiltinKeepsItsBuiltinCall) {
+    const char* vsSource = R"(#version 330 core
+void main() { gl_Position = vec4(0.0, 0.0, 0.0, 1.0); }
+)";
+    const char* fsSource = R"(#version 330 core
+uniform vec3 uBase;
+out vec4 fragColor;
+
+vec3 pow(vec3 v, float e) { return pow(v, vec3(e)); }
+
+void main() { fragColor = vec4(pow(uBase, 2.2), 1.0); }
+)";
+    GLuint vs = CompileShaderChecked(GL_VERTEX_SHADER, vsSource);
+    GLuint fs = CompileShaderChecked(GL_FRAGMENT_SHADER, fsSource);
+    GLuint program = LinkVsFs(vs, fs, GL_TRUE);
+
+    for (const auto& essl : TranspileProgramSpirvToEssl(program)) {
+        if (essl.find("fragColor") == String::npos) continue; // fragment module only
+        EXPECT_NE(essl.find("mg_pow("), String::npos) << essl;
+        EXPECT_TRUE(ContainsUnprefixedCall(essl, "pow")) << essl;
+    }
+    EXPECT_EQ(GetError(), GL_NO_ERROR);
+}
+

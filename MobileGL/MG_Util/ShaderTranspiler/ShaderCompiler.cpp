@@ -15,6 +15,7 @@
 #include "SpirvPasses/EliminateFloatEqualsZeroPass.h"
 #include "SpirvPasses/FlattenInterfaceStructPass.h"
 #include "SpirvPasses/RenameSamplerFunctionParameterPass.h"
+#include "SpirvPasses/RenameBuiltinShadowingFunctionsPass.h"
 #include "SpirvPasses/DecomposeWorkgroupVec3Pass.h"
 #include "SpirvPasses/DecoratePositionInvariantPass.h"
 #include "SpirvPasses/LowerDrawParametersPass.h"
@@ -310,6 +311,8 @@ namespace MobileGL {
                 optimizer.RegisterPass(CreateRemoveUnusedInterfaceVariablesPass());
                 optimizer.RegisterPass(FlattenInterfaceStructPass::CreateFlattenInterfaceStructPass());
                 optimizer.RegisterPass(RenameSamplerFunctionParameterPass::CreateRenameSamplerFunctionParameterPass());
+                optimizer.RegisterPass(
+                    RenameBuiltinShadowingFunctionsPass::CreateRenameBuiltinShadowingFunctionsPass());
                 optimizer.RegisterPass(EliminateFloatEqualsZeroPass::CreateEliminateFloatEqualsZeroPass());
                 optimizer.RegisterPass(DecomposeWorkgroupVec3Pass::CreateDecomposeWorkgroupVec3Pass());
 

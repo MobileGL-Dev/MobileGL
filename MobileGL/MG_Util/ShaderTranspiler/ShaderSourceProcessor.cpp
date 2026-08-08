@@ -17,6 +17,8 @@
 #include <Config.h>
 #include <MG_Backend/BackendObjects.h>
 
+#include "EsslBuiltinFunctionNames.h"
+
 namespace {
     using MobileGL::SizeT;
     using MobileGL::String;
@@ -755,7 +757,23 @@ namespace {
         source.insert(0, replacement);
     }
 
-    bool HasSingleLineFunctionDefinition(const MobileGL::String& source, const MobileGL::String& functionName) {
+    // Start of the physical line containing `offset`, never scanning before `lowerBound`.
+    SizeT FindPhysicalLineStart(const MobileGL::String& source, SizeT offset, SizeT lowerBound) {
+        if (offset == 0) {
+            return lowerBound;
+        }
+        const SizeT newline = source.rfind('\n', offset - 1);
+        if (newline == MobileGL::String::npos || newline + 1 < lowerBound) {
+            return lowerBound;
+        }
+        return newline + 1;
+    }
+
+    // Half-open [begin, end) byte ranges of the preprocessor directive lines, in source order.
+    // A directive is one logical line: a trailing backslash splices the next physical line into it.
+    Vector<std::pair<SizeT, SizeT>> FindDirectiveLineRanges(const MobileGL::String& source) {
+        Vector<std::pair<SizeT, SizeT>> ranges;
+
         SizeT lineStart = 0;
         while (lineStart < source.size()) {
             SizeT lineEnd = source.find('\n', lineStart);
@@ -763,71 +781,177 @@ namespace {
                 lineEnd = source.size();
             }
 
-            SizeT functionPos = source.find(functionName, lineStart);
-            while (functionPos != MobileGL::String::npos && functionPos < lineEnd) {
-                const bool hasLeftBoundary = functionPos == 0 || !IsIdentifierChar(source[functionPos - 1]);
-                const SizeT functionEnd = functionPos + functionName.size();
-                const bool hasRightBoundary = functionEnd >= source.size() || !IsIdentifierChar(source[functionEnd]);
-                if (hasLeftBoundary && hasRightBoundary) {
-                    SizeT probe = functionEnd;
-                    while (probe < lineEnd && std::isspace(static_cast<unsigned char>(source[probe]))) {
-                        probe++;
-                    }
-                    if (probe < lineEnd && source[probe] == '(') {
-                        const SizeT closingParen = source.find(')', probe);
-                        if (closingParen != MobileGL::String::npos && closingParen < lineEnd) {
-                            probe = closingParen + 1;
-                            while (probe < lineEnd && std::isspace(static_cast<unsigned char>(source[probe]))) {
-                                probe++;
-                            }
-                            if (probe < lineEnd && source[probe] == '{') {
-                                return true;
-                            }
-                        }
-                    }
-                }
-
-                functionPos = source.find(functionName, functionPos + functionName.size());
-            }
-
-            lineStart = lineEnd + 1;
-        }
-
-        return false;
-    }
-
-    void RenameFunctionInvocations(MobileGL::String& source, const MobileGL::String& from, const MobileGL::String& to) {
-        SizeT pos = 0;
-        while ((pos = source.find(from, pos)) != MobileGL::String::npos) {
-            const bool hasLeftBoundary = pos == 0 || !IsIdentifierChar(source[pos - 1]);
-            const SizeT end = pos + from.size();
-            const bool hasRightBoundary = end >= source.size() || !IsIdentifierChar(source[end]);
-
-            SizeT probe = end;
-            while (probe < source.size() && std::isspace(static_cast<unsigned char>(source[probe]))) {
+            SizeT probe = lineStart;
+            while (probe < lineEnd && std::isspace(static_cast<unsigned char>(source[probe]))) {
                 probe++;
             }
-
-            if (hasLeftBoundary && hasRightBoundary && probe < source.size() && source[probe] == '(') {
-                source.replace(pos, from.size(), to);
-                pos += to.size();
+            if (probe >= lineEnd || source[probe] != '#') {
+                lineStart = lineEnd + 1;
                 continue;
             }
 
-            pos = end;
+            SizeT directiveEnd = lineEnd;
+            while (directiveEnd < source.size()) {
+                // directiveEnd sits on a '\n'; a backslash immediately before it (modulo the \r of
+                // a CRLF file and trailing blanks) splices the following physical line in.
+                // The scan must not leave the physical line that directiveEnd terminates: a
+                // whitespace-only spliced line would otherwise let the back-scan reach the
+                // backslash of the PREVIOUS line and swallow one extra real line of code.
+                const SizeT physicalLineStart = FindPhysicalLineStart(source, directiveEnd, lineStart);
+                SizeT back = directiveEnd;
+                while (back > physicalLineStart && std::isspace(static_cast<unsigned char>(source[back - 1]))) {
+                    back--;
+                }
+                if (back == physicalLineStart || source[back - 1] != '\\') {
+                    break;
+                }
+                SizeT splicedEnd = source.find('\n', directiveEnd + 1);
+                if (splicedEnd == MobileGL::String::npos) {
+                    splicedEnd = source.size();
+                }
+                directiveEnd = splicedEnd;
+            }
+
+            ranges.push_back({lineStart, directiveEnd});
+            lineStart = directiveEnd + 1;
         }
+
+        return ranges;
     }
 
-    void RenameBuiltinShadowingFunction(MobileGL::String& source, const char* from, const char* to) {
-        const MobileGL::String fromName = from;
-        // Decide from a comment-free view. A commented-out definition is not a definition, and
-        // acting on one renames every genuine call to the builtin to a name nothing defines - which
-        // then fails to resolve. Line comments survive BlankBlockComments, so this matters.
-        if (!HasSingleLineFunctionDefinition(MaskCommentsAndQuotedText(source), fromName)) {
+    bool IsInDirectiveLine(const Vector<std::pair<SizeT, SizeT>>& ranges, SizeT offset) {
+        // Ranges are disjoint and sorted, so the only candidate is the last one starting at or
+        // before the offset.
+        const auto next = std::upper_bound(ranges.begin(), ranges.end(), offset,
+                                           [](SizeT value, const std::pair<SizeT, SizeT>& range) {
+                                               return value < range.first;
+                                           });
+        return next != ranges.begin() && offset < std::prev(next)->second;
+    }
+
+    // No GLSL type name is a statement keyword, so "<keyword> <builtin> (" is never a definition -
+    // it is `return clamp(...)`, `else round(...)`, `do fma(...)`, a `case` label expression. The
+    // if/for/while/switch entries cannot precede a call in valid GLSL either (a '(' always follows
+    // them directly), and are listed defensively. Sorted for std::binary_search.
+    constexpr std::string_view kStatementKeywordsBeforeCall[] = {
+        "case", "do", "else", "for", "if", "return", "switch", "while",
+    };
+
+    bool IsStatementKeywordToken(const CodeToken& token) {
+        return std::binary_search(std::begin(kStatementKeywordsBeforeCall),
+                                  std::end(kStatementKeywordsBeforeCall), std::string_view(token.text));
+    }
+
+    // A brace counter over raw tokens is preprocessor-blind: it counts the braces of BOTH arms of
+    // an #ifdef, so the classic "early return inside one arm, closing brace in each arm" idiom
+    // desyncs it. A desynced depth turns statements into apparent top-level definitions, and an
+    // over-detection is unrecoverable (the source never reaches the SPIR-V backstop). A file whose
+    // braces do not net to zero, or whose running depth ever dips below zero, is therefore not
+    // trustworthy for depth-based detection at all.
+    bool HasBalancedBraces(const Vector<CodeToken>& tokens) {
+        SizeT depth = 0;
+        for (const CodeToken& token : tokens) {
+            if (token.text.size() != 1) continue;
+            if (token.text[0] == '{') {
+                depth++;
+            } else if (token.text[0] == '}') {
+                if (depth == 0) return false;
+                depth--;
+            }
+        }
+        return depth == 0;
+    }
+
+    // Some shader packs define their own helpers under builtin GLSL names - round(), fma(),
+    // min3(), tanh(). Desktop GLSL allows that shadowing; ESSL 3.x forbids the redefinition, so
+    // every such helper is renamed to mg_<name> together with all of its call sites.
+    //
+    // Scope is deliberately NARROW: only kLexicalPreemptRenameNames, the handful of names whose
+    // shadowing definitions glslang's relaxed parse rejects outright ("overloaded functions must
+    // have the same parameter precision qualifiers"), or which need an extension the declared
+    // #version does not enable (fma() at #version 330 wants GL_ARB_gpu_shader5). Those shaders
+    // never produce SPIR-V, so only a source-level rename can save them. Everything else is left
+    // to the SPIR-V OpName pass in SanitizeAndOptimizeBinary, which is safe by construction -
+    // see EsslBuiltinFunctionNames.h for the full failure-layer split. A lexical scan is
+    // preprocessor-blind and overload-blind, so widening this table trades a rescue nobody needs
+    // for an unrecoverable over-detection risk on every shader that merely calls the builtin.
+    //
+    // Cost: ONE tokenize for the whole job, and nothing further at all in the overwhelmingly
+    // common no-shadowing case. The path this replaces probed the entire source once per
+    // candidate name, which measured ~68% of a Complementary-scale pack's compile time.
+    void RenameBuiltinShadowingFunctions(MobileGL::String& source) {
+        const Vector<CodeToken> tokens = TokenizeCode(source);
+        if (tokens.size() < 3) {
+            return;
+        }
+        // Desynced depth -> skip the lexical half entirely and let the backstop handle whatever
+        // this file shadows. Missing a definition is recoverable; inventing one is not.
+        if (!HasBalancedBraces(tokens)) {
+            return;
+        }
+        const Vector<std::pair<SizeT, SizeT>> directiveRanges = FindDirectiveLineRanges(source);
+
+        // Pass A - collect the shadowed names. A definition or prototype at brace depth 0 reads
+        // as "<type-identifier> <builtin-name> (", which is what separates it from a call in a
+        // global initializer ("const float PI = radians(180.0);", where the previous token is '=').
+        // Token positions ignore layout, so a definition split across lines is found the same way.
+        Vector<MobileGL::String> shadowedNames;
+        SizeT braceDepth = 0;
+        for (SizeT i = 0; i + 1 < tokens.size(); i++) {
+            const CodeToken& token = tokens[i];
+            if (token.text.size() == 1) {
+                if (token.text[0] == '{') {
+                    braceDepth++;
+                    continue;
+                }
+                if (token.text[0] == '}') {
+                    if (braceDepth > 0) braceDepth--;
+                    continue;
+                }
+            }
+            if (braceDepth != 0 || i == 0 || tokens[i + 1].text != "(" || !IsIdentifierToken(tokens[i - 1])) {
+                continue;
+            }
+            // IsIdentifierToken is purely lexical, so "return"/"else"/"do"/"case" pass it. None of
+            // them is a return type, so "return round(x)" is a CALL, not a definition.
+            // A directive tail ('#endif' tokenizes to '#' + 'endif') is not a return type;
+            // without this, a balanced-but-desynced file could see it as one.
+            if (IsInDirectiveLine(directiveRanges, tokens[i - 1].begin)) {
+                continue;
+            }
+            if (IsStatementKeywordToken(tokens[i - 1])) {
+                continue;
+            }
+            // "#define FOO fma(x, y, z)" defines FOO, not fma.
+            if (!MobileGL::MG_Util::ShaderTranspiler::IsLexicalPreemptRenameName(token.text) ||
+                IsInDirectiveLine(directiveRanges, token.begin)) {
+                continue;
+            }
+            if (std::find(shadowedNames.begin(), shadowedNames.end(), token.text) == shadowedNames.end()) {
+                shadowedNames.push_back(token.text);
+            }
+        }
+
+        if (shadowedNames.empty()) {
             return;
         }
 
-        RenameFunctionInvocations(source, fromName, to);
+        // Pass B - rename the definition, its prototypes and every call. Only a name followed by
+        // '(' is the function; the same spelling as a variable must keep its own identity.
+        // Directive lines DO participate: a macro body calling the renamed helper has to follow it.
+        Vector<SizeT> insertOffsets;
+        for (SizeT i = 0; i + 1 < tokens.size(); i++) {
+            if (tokens[i + 1].text != "(") {
+                continue;
+            }
+            if (std::find(shadowedNames.begin(), shadowedNames.end(), tokens[i].text) != shadowedNames.end()) {
+                insertOffsets.push_back(tokens[i].begin);
+            }
+        }
+        // Back to front, so each recorded offset is still valid when it is used.
+        for (auto offset = insertOffsets.rbegin(); offset != insertOffsets.rend(); ++offset) {
+            source.insert(*offset, "mg_");
+        }
     }
 
     void ReplaceIdentifier(MobileGL::String& source, const MobileGL::String& from, const MobileGL::String& to) {
@@ -1300,13 +1424,8 @@ namespace MobileGL {
                 FilterUnsupportedGpuShaderInt64(source);
                 CoerceUniformBlockPackingToStd140(source);
 
-                // Some shader packs define helpers with built-in GLSL names such as round(), tanh(), or fma().
-                // These may pass OpenGL-style validation but fail when recompiled for Vulkan/SPIR-V generation.
-                RenameBuiltinShadowingFunction(source, "round", "mg_round");
-                RenameBuiltinShadowingFunction(source, "tanh", "mg_tanh");
-                RenameBuiltinShadowingFunction(source, "fma", "mg_fma");
-                RenameBuiltinShadowingFunction(source, "min3", "mg_min3");
-                RenameBuiltinShadowingFunction(source, "max3", "mg_max3");
+                RenameBuiltinShadowingFunctions(source);
+
                 ModernizeLegacyGLSL(stage, source);
                 InjectDepthRangeBuiltinShim(stage, source);
 
