@@ -23,6 +23,7 @@
 #include <MG_Util/Converters/MGToGL/RenderStateEnumConverter.h>
 #include <MG_State/GLState/FramebufferState/FramebufferObject.h>
 #include <MG_Util/Texture/TextureFormatProcessor.h>
+#include <MG_Util/Async/ShaderCompilePool.h>
 #include <MG_Backend/BackendObjects.h>
 
 namespace MobileGL::MG_Impl::GLImpl {
@@ -1069,6 +1070,20 @@ namespace MobileGL::MG_Impl::GLImpl {
             *params = obj ? static_cast<GLint>(obj->GetExternalIndex()) : 0;
             return;
         }
+        case GL_MAX_SHADER_COMPILER_THREADS_KHR:
+            // GL_KHR_parallel_shader_compile (GL_MAX_SHADER_COMPILER_THREADS_ARB is the same
+            // 0x91B0). The number of threads MobileGL's compile pool would actually use, so
+            // an application sizing its own submission batches gets a real answer.
+            //
+            // Zero when asynchronous compilation is off, which is the honest reply and the
+            // one the extension defines for an implementation with no compiler threads: the
+            // extension string is withdrawn in that configuration too, so a conforming
+            // application never reaches this query, and one that asks anyway is told there
+            // are none rather than being handed a thread count nothing will use.
+            *params = MG_Util::Async::AsyncShaderCompileEnabled()
+                          ? static_cast<GLint>(MG_Util::Async::ShaderCompilePool::Get().GetThreadCount())
+                          : 0;
+            return;
         case GL_MAX_DEBUG_GROUP_STACK_DEPTH:
             *params = 0; // debug-group entrypoints are stubbed
             return;

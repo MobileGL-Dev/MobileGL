@@ -357,6 +357,10 @@ namespace MobileGL::MG_State {
             return m_programState.GetShaderObject(index);
         }
 
+        void GLContext::JoinAllPendingShaderWork() {
+            m_programState.JoinAllPendingWork();
+        }
+
         void GLContext::UseProgram(Uint program) {
             return m_programState.UseProgram(program);
         }

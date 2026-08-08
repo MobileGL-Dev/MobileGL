@@ -115,7 +115,11 @@ namespace MobileGL::MG_State::GLState {
         // path must be byte-identical to the synchronous implementation, and a cache-less
         // object is an internal shader that compiles and reads its status in the same
         // breath (see the constructor comment) - a job would only add a round trip.
-        if (!m_preprocessCache || !MG_Util::Async::AsyncShaderCompileEnabled()) {
+        // AsyncShaderCompileActive(), not ...Enabled(): a glMaxShaderCompilerThreadsKHR(0)
+        // has to put compilation back on this thread even though the extension is still
+        // advertised, and that is exactly what makes the GL_COMPLETION_STATUS_KHR the
+        // extension mandates after a zero count (immediately GL_TRUE) fall out for free.
+        if (!m_preprocessCache || !MG_Util::Async::AsyncShaderCompileActive()) {
             m_compiled->RunInline();
             // Inline means the node is already terminal, so this join only replays
             // diagnostics; it is here so the synchronous and asynchronous paths publish

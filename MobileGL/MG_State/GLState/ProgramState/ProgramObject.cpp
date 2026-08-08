@@ -292,10 +292,11 @@ namespace MobileGL::MG_State::GLState {
 
         m_pendingLink = task;
 
-        // Flag off: byte-identical to the synchronous implementation. RunInline() executes
-        // the same body on this thread and the join below publishes through the same code, so
-        // the two modes differ only in WHICH thread ran RunBody().
-        if (!MG_Util::Async::AsyncShaderCompileEnabled()) {
+        // Flag off - or glMaxShaderCompilerThreadsKHR(0), see AsyncShaderCompileActive():
+        // byte-identical to the synchronous implementation. RunInline() executes the same
+        // body on this thread and the join below publishes through the same code, so the two
+        // modes differ only in WHICH thread ran RunBody().
+        if (!MG_Util::Async::AsyncShaderCompileActive()) {
             task->RunInline();
             EnsureLinkJoined();
             return;

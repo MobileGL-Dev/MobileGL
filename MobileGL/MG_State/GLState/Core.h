@@ -153,6 +153,9 @@ namespace MobileGL {
                 Bool ValidateShaderName(Uint index) const;
                 const SharedPtr<ProgramObject>& GetProgramObject(Uint index);
                 const SharedPtr<ShaderObject>& GetShaderObject(Uint index);
+                // Settles every compile and link this context still owns; see
+                // ProgramState::JoinAllPendingWork. Called by glMaxShaderCompilerThreadsKHR(0).
+                void JoinAllPendingShaderWork();
                 void UseProgram(Uint program);
                 const SharedPtr<ProgramObject>& GetCurrentProgram();
                 // What a draw or dispatch actually executes: the program in use, or - when

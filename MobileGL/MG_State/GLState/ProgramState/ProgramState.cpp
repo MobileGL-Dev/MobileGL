@@ -99,6 +99,31 @@ namespace MobileGL::MG_State::GLState {
         return m_shaderObjects[shader];
     }
 
+    void ProgramState::JoinAllPendingWork() {
+        // Programs first: a link joins the compiles it depends on, so the shader pass that
+        // follows finds most of them already settled. The reverse order would be correct but
+        // would wait on each compile twice - once here, once inside the link's own prologue.
+        //
+        // A copy of each slot rather than a reference into the vector, and an index rather
+        // than an iterator: publishing a link replays deferred diagnostics, which reach
+        // pGLContext->RecordError. That does not touch these tables today, but it is a sink
+        // that can grow, and a reallocation underneath this loop would be a use-after-free
+        // that only shows up on the one GL call that walks the whole table. The copy costs a
+        // refcount bump on a path a mode switch takes at most once.
+        for (SizeT i = 0; i < m_programObjects.size(); ++i) {
+            const SharedPtr<ProgramObject> program = m_programObjects[i];
+            if (program) program->JoinLink();
+        }
+        for (SizeT i = 0; i < m_shaderObjects.size(); ++i) {
+            const SharedPtr<ShaderObject> shader = m_shaderObjects[i];
+            if (shader) shader->JoinCompile();
+        }
+        // The currently-used program is reachable through m_programObjects unless
+        // glDeleteProgram already freed its slot while it stayed current. Nothing else holds
+        // a GL-visible name for it, but a draw would still join it, so settle it here too.
+        if (m_currentProgram) m_currentProgram->JoinLink();
+    }
+
     void ProgramState::MarkShaderObjectForDeletion(Uint shader) {
         if (!CheckIndexAvail(shader, m_shaderObjects)) return;
         auto& shaderObject = m_shaderObjects[shader];

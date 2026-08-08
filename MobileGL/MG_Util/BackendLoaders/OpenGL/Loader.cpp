@@ -858,6 +858,9 @@ namespace MobileGL::MG_Util::BackendLoader {
                 if (std::strcmp(extension, "GL_EXT_disjoint_timer_query") == 0) {
                     caps.SupportsDisjointTimerQuery = true;
                 }
+                if (std::strcmp(extension, "GL_KHR_parallel_shader_compile") == 0) {
+                    caps.SupportsParallelShaderCompile = true;
+                }
                 if (std::strcmp(extension, "GL_EXT_blend_func_extended") == 0) {
                     caps.SupportsDualSourceBlend = true;
                 }
@@ -1220,6 +1223,8 @@ namespace MobileGL::MG_Util::BackendLoader {
             caps.IsAngleLlvmpipeRenderer && MG_Config::Features.AvoidSamplerMipmapMinFilter;
         MGLOG_I("    GL_EXT_disjoint_timer_query supported: %s",
                 caps.SupportsDisjointTimerQuery ? "true" : "false");
+        MGLOG_I("    GL_KHR_parallel_shader_compile supported: %s",
+                caps.SupportsParallelShaderCompile ? "true" : "false");
         MGLOG_I("    ANGLE renderer: %s", caps.IsAngleRenderer ? "true" : "false");
         MGLOG_I("    ANGLE llvmpipe renderer: %s", caps.IsAngleLlvmpipeRenderer ? "true" : "false");
         MGLOG_I("    Avoid sampler mipmap min filter: %s",

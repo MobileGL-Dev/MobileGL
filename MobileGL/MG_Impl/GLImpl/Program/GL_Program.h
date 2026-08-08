@@ -42,6 +42,10 @@ namespace MobileGL::MG_Impl::GLImpl {
     GLboolean IsProgram(GLuint program);
     GLboolean IsShader(GLuint shader);
     void LinkProgram(GLuint program);
+    // GL_KHR_parallel_shader_compile / GL_ARB_parallel_shader_compile. Both names are the
+    // same entry point; see MaxShaderCompilerThreadsKHR_State for the semantics of count.
+    void MaxShaderCompilerThreadsKHR(GLuint count);
+    void MaxShaderCompilerThreadsARB(GLuint count);
     void ShaderSource(GLuint shader, GLsizei count, const GLchar* const* string, const GLint* length);
     void UseProgram(GLuint program);
     void Uniform1f(GLint location, GLfloat v0);

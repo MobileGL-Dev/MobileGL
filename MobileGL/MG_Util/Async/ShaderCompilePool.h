@@ -27,10 +27,36 @@ namespace MobileGL::MG_Util::Async {
     inline constexpr Bool kAsyncShaderCompileDefault = false;
 
     // MOBILEGL_ASYNC_SHADER_COMPILE forces the answer either way; unset keeps the built-in
-    // default above. Falsy is a complete kill switch: it reverts the threading *and* (from
-    // the extension stage on) withdraws GL_KHR_parallel_shader_compile, so the application
-    // behaviour change goes with it.
+    // default above. Falsy is a complete kill switch: it reverts the threading *and*
+    // withdraws GL_KHR_parallel_shader_compile, so the application behaviour change goes
+    // with it.
+    //
+    // This is the pure CONFIGURATION answer, and it is deliberately not affected by
+    // glMaxShaderCompilerThreadsKHR: it is what decides whether the extension is advertised
+    // at all, and an application that switched threading off through the extension has not
+    // made the extension go away. Code deciding whether to enqueue asks
+    // AsyncShaderCompileActive() instead.
     Bool AsyncShaderCompileEnabled();
+
+    // ---- GL_KHR_parallel_shader_compile: glMaxShaderCompilerThreadsKHR(count) ----
+    // The extension defines count == 0 as "no compiler threads": compilation must happen on
+    // the application's thread. That is a mode switch, not a concurrency budget of one, so it
+    // is a latch of its own rather than SetMaxConcurrency(1) - a budget of one would still
+    // move the work off-thread and still report GL_COMPLETION_STATUS_KHR = GL_FALSE, both of
+    // which the extension forbids after a zero count.
+    //
+    // The latch is process-wide, matching the pool it suspends. It is released by the next
+    // nonzero glMaxShaderCompilerThreadsKHR/ARB, which is the only thing that releases it:
+    // no implicit re-arm on eglInitialize, on a context switch or at any join, because an
+    // application that asked for serial compilation gets to keep it until it asks otherwise.
+    void SetAsyncShaderCompileSuspended(Bool suspended);
+    Bool IsAsyncShaderCompileSuspended();
+
+    // What every enqueue site branches on: the configuration flag AND the absence of a
+    // glMaxShaderCompilerThreadsKHR(0). False makes glCompileShader/glLinkProgram run their
+    // bodies inline, exactly as the flag-off path does, which is what makes a subsequent
+    // GL_COMPLETION_STATUS_KHR read immediately GL_TRUE.
+    Bool AsyncShaderCompileActive();
 
     // min(4, big cores), where a big core is one whose cpufreq ceiling is within 15% of the
     // machine maximum; the whole CPU count where that sysfs tree is absent. Clamped to [1, 4]

@@ -107,6 +107,25 @@ namespace MobileGL::MG_Util::Async {
         return kAsyncShaderCompileDefault;
     }
 
+    namespace {
+        // Written only by glMaxShaderCompilerThreadsKHR/ARB, i.e. only on the GL thread, but
+        // read by every enqueue decision, so it is atomic rather than plain: a worker never
+        // reads it, but a second GL thread in another context shares this process-wide pool.
+        std::atomic<Bool> g_asyncSuspendedByApplication{false};
+    } // namespace
+
+    void SetAsyncShaderCompileSuspended(const Bool suspended) {
+        g_asyncSuspendedByApplication.store(suspended, std::memory_order_release);
+    }
+
+    Bool IsAsyncShaderCompileSuspended() {
+        return g_asyncSuspendedByApplication.load(std::memory_order_acquire);
+    }
+
+    Bool AsyncShaderCompileActive() {
+        return AsyncShaderCompileEnabled() && !IsAsyncShaderCompileSuspended();
+    }
+
     Uint DetectShaderCompileThreadCount() {
         if (const Uint32 configured = MG_Config::Features.AsyncShaderCompileThreads; configured > 0) {
             // An explicit request is honoured as given - it is the escape hatch for measuring

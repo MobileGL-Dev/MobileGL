@@ -17,6 +17,7 @@
 // MG_State code: it runs standalone, before MG_State::Init().
 #include <MG_State/GLState/VertexArrayState/VertexArrayObject.h>
 #include <MG_Util/Converters/MGToStr/GLExtensionConverter.h>
+#include <MG_Util/Async/ShaderCompilePool.h>
 #include <chrono>
 #include <thread>
 
@@ -122,6 +123,37 @@ namespace MobileGL::MG_Util::SelfTest {
             return result;
         }
 
+        // ---- Asynchronous shader compilation ------------------------------------
+        // MobileGL's OWN capability row, appended for both backends: nothing about it comes
+        // from the device driver, so it is the same fact on Espryt and on Magma. The POST
+        // rule ("every new capability gets a row") applies to frontend capabilities too -
+        // and this one especially, because it is the capability that changes what
+        // applications DO, not just what they can do: with the extension advertised, Iris
+        // and Sodium batch their pipeline compiles and poll GL_COMPLETION_STATUS_KHR.
+        //
+        // PASS when it is on (the intended configuration once the default flips), INFO when
+        // it is off - "off" is a supported configuration, not a degradation, so it must not
+        // colour the verdict. Either way the row names MOBILEGL_ASYNC_SHADER_COMPILE, so a
+        // user reading a POST page can tell which side of the switch they are on and how to
+        // change it.
+        void AppendAsyncShaderCompileRow(ReportBuilder& builder) {
+            constexpr const char* rowName = "Asynchronous shader compilation";
+            if (!MG_Util::Async::AsyncShaderCompileEnabled()) {
+                builder.Info(rowName,
+                             "off; glCompileShader and glLinkProgram run on the calling thread and "
+                             "GL_KHR_parallel_shader_compile is not advertised (set environment variable "
+                             "MOBILEGL_ASYNC_SHADER_COMPILE=1 to enable it)");
+                return;
+            }
+            const Uint threads = MG_Util::Async::DetectShaderCompileThreadCount();
+            builder.Pass(rowName,
+                         format("on with {} compiler thread{}; GL_KHR_parallel_shader_compile is advertised "
+                                "and GL_MAX_SHADER_COMPILER_THREADS_KHR = {} (set environment variable "
+                                "MOBILEGL_ASYNC_SHADER_COMPILE=0 to disable it, or "
+                                "MOBILEGL_ASYNC_SHADER_COMPILE_THREADS=n to change the count)",
+                                threads, threads == 1 ? "" : "s", threads));
+        }
+
         // Appends the four "MobileGL reported ..." rows for one backend section.
         // GL_VENDOR and GL_VERSION only depend on the backend's static identity, so
         // they are always concrete; GL_RENDERER and GL_EXTENSIONS need data from the
@@ -130,6 +162,9 @@ namespace MobileGL::MG_Util::SelfTest {
                                         const Optional<String>& backendApiVersionString,
                                         const Optional<String>& advertisedExtensions) {
             static const String Unavailable = "unavailable (backend probe failed)";
+            // Frontend capability, not a probe result, so it is appended on every path -
+            // including one where the device probe failed outright.
+            AppendAsyncShaderCompileRow(builder);
             builder.MobileGLReported("MobileGL reported GL_VENDOR", BuildReportedGLVendor(identity));
             builder.MobileGLReported("MobileGL reported GL_VERSION", BuildReportedGLVersion(identity));
             builder.MobileGLReported("MobileGL reported GL_RENDERER",
@@ -415,6 +450,18 @@ namespace MobileGL::MG_Util::SelfTest {
                 builder.Warn("GL_EXT_texture_norm16",
                              "not supported; 16-bit normalized texture formats need emulation");
             }
+
+            // INFO, never WARN: this is the HOST driver's ability to compile its own ESSL on
+            // its own threads, and MobileGL's asynchronous compilation does not depend on it
+            // in the slightest - the pool parallelises GLSL -> SPIR-V -> ESSL translation,
+            // which is where a shaderpack load actually spends its time, and it does that on
+            // a driver that has never heard of the extension. The row exists so that the day
+            // the driver-side half is overlapped too, the POST already says which devices can.
+            builder.Info("Driver GL_KHR_parallel_shader_compile",
+                         caps.SupportsParallelShaderCompile
+                             ? "supported; the device driver can also compile the translated ESSL off-thread"
+                             : "not supported; the device driver compiles the translated ESSL on the calling "
+                               "thread (MobileGL's own compile pool is unaffected)");
 
             builder.Info("Indirect gl_InstanceID semantics",
                          caps.IndirectDrawInstanceIdIncludesBaseInstance

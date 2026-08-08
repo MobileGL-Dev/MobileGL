@@ -16,6 +16,7 @@
 #include <MG_Util/Converters/GLToMG/ProgramEnumConverter.h>
 #include <MG_Util/Converters/MGToGL/ProgramEnumConverter.h>
 #include <MG_Util/Converters/SPIRVCrossToGL/SpvcTypeConverter.h>
+#include <MG_Util/Async/ShaderCompilePool.h>
 #include <MG_Backend/BackendObjects.h>
 
 namespace MobileGL::MG_Impl::GLImpl {
@@ -353,6 +354,54 @@ namespace MobileGL::MG_Impl::GLImpl {
         auto& shaderObject = TryToGetShaderObject(shader);
         if (!shaderObject) return;
         shaderObject->Compile();
+    }
+
+    // glMaxShaderCompilerThreadsKHR / glMaxShaderCompilerThreadsARB - one implementation,
+    // because GL_KHR_parallel_shader_compile and GL_ARB_parallel_shader_compile define the
+    // same entry point with the same semantics and GetProcAddress.cpp maps both spellings.
+    //
+    // The three cases the extension defines, and what each means here:
+    //
+    //   count == 0            "no compiler threads": compilation must happen on the
+    //                         application's thread. Everything already in flight is joined
+    //                         first, so that after this call returns NOTHING is outstanding
+    //                         and every GL_COMPLETION_STATUS_KHR reads GL_TRUE - which is
+    //                         the observable the extension actually specifies. The pool
+    //                         keeps its worker threads (this is not teardown); what changes
+    //                         is that AsyncShaderCompileActive() now says no, so
+    //                         glCompileShader/glLinkProgram run their bodies inline.
+    //   count == 0xFFFFFFFF   "implementation maximum": the pool's full thread count.
+    //   otherwise             a concurrency budget, clamped to the thread count - asking for
+    //                         more threads than exist cannot conjure any.
+    //
+    // A nonzero count is also what LIFTS a previous zero: the suspension lasts exactly until
+    // the application asks for threads again, and nothing else re-arms it (no implicit
+    // restore at eglInitialize, at a context switch or at a join). An application that turned
+    // compiler threads off keeps them off until it says otherwise.
+    //
+    // Legal - and a no-op beyond bookkeeping - while MOBILEGL_ASYNC_SHADER_COMPILE is off:
+    // compilation is already inline, and the call must not fail just because MobileGL had
+    // nothing to suspend.
+    void MaxShaderCompilerThreadsKHR_State(GLuint count) {
+        namespace Async = MG_Util::Async;
+        if (count == 0) {
+            MGLOG_D("%s: count = 0; joining all pending shader work and compiling inline", __func__);
+            Async::SetAsyncShaderCompileSuspended(true);
+            // Suspend BEFORE joining, not after. The post-condition this call owes the
+            // application is "nothing is in flight when I return", and only this order
+            // guarantees it: with the latch already set, anything the join itself causes to
+            // be compiled runs inline and is therefore already settled when the join ends.
+            // Joining first would leave a window in which a fresh enqueue is still legal.
+            if (MG_State::pGLContext) MG_State::pGLContext->JoinAllPendingShaderWork();
+            return;
+        }
+
+        Async::ShaderCompilePool& pool = Async::ShaderCompilePool::Get();
+        const Uint threadCount = pool.GetThreadCount();
+        const Uint requested = count == 0xFFFFFFFFu ? threadCount : std::min<Uint>(count, threadCount);
+        pool.SetMaxConcurrency(requested);
+        Async::SetAsyncShaderCompileSuspended(false);
+        MGLOG_D("%s: count = %u; concurrency = %u of %u threads", __func__, count, requested, threadCount);
     }
 
     GLuint CreateProgram_State() {
@@ -693,6 +742,19 @@ namespace MobileGL::MG_Impl::GLImpl {
             break;
         }
 
+        // GL_KHR_parallel_shader_compile. THIS CASE MUST NOT JOIN - it is the one program
+        // query whose entire purpose is to answer without waiting, and routing it through
+        // any of ProgramObject's Artifacts() accessors (the join gate, invariant I5) would
+        // block the caller and make the extension a lie: an application polling it would
+        // serialize itself on the very link it is trying to overlap. IsLinkComplete() is the
+        // node-direct reader that exists for exactly this.
+        //
+        // No link at all reads GL_TRUE, which is what the extension requires: the query
+        // means "is anything still outstanding", not "has this program ever been linked".
+        case GL_COMPLETION_STATUS_KHR:
+            *params = programObject->IsLinkComplete() ? GL_TRUE : GL_FALSE;
+            break;
+
         case GL_PROGRAM_BINARY_LENGTH:
             // No program binary format is exposed, so a program never has a retrievable
             // binary and its length is zero (ARB_get_program_binary).
@@ -745,6 +807,13 @@ namespace MobileGL::MG_Impl::GLImpl {
             break;
         case GL_SHADER_SOURCE_LENGTH:
             *params = shaderObject->GetShaderSource().empty() ? 0 : (GLint)shaderObject->GetShaderSource().length() + 1;
+            break;
+        // GL_KHR_parallel_shader_compile. THIS CASE MUST NOT JOIN - see the identical case in
+        // GetProgramiv_State. GL_COMPILE_STATUS two cases up deliberately DOES join (it has
+        // to: it reports the outcome); this one reports whether there is an outcome yet, and
+        // reading it through Compiled() would defeat the whole extension.
+        case GL_COMPLETION_STATUS_KHR:
+            *params = shaderObject->IsCompileComplete() ? GL_TRUE : GL_FALSE;
             break;
         default:
             MG_State::pGLContext->RecordError(
@@ -1832,6 +1901,16 @@ namespace MobileGL::MG_Impl::GLImpl {
     void CompileShader(GLuint shader) {
         CompileShader_State(shader);
     }
+
+    void MaxShaderCompilerThreadsKHR(GLuint count) {
+        MaxShaderCompilerThreadsKHR_State(count);
+    }
+
+    // GL_ARB_parallel_shader_compile's spelling of the same entry point.
+    void MaxShaderCompilerThreadsARB(GLuint count) {
+        MaxShaderCompilerThreadsKHR_State(count);
+    }
+
     GLuint CreateProgram(void) {
         return CreateProgram_State();
     }

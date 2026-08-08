@@ -1053,6 +1053,16 @@ namespace MobileGL {
             Bool SupportsBaseInstance = false;
             // GL_EXT_disjoint_timer_query is present in the extension string.
             Bool SupportsDisjointTimerQuery = false;
+            // GL_KHR_parallel_shader_compile is present in the HOST driver's extension string,
+            // i.e. the device driver can compile its own (ESSL) shaders on its own threads.
+            //
+            // Purely informational today, and NOT what gates MobileGL's advertisement of the
+            // same extension: MobileGL's parallelism is its own compile pool turning GLSL into
+            // SPIR-V, which is where the shaderpack time goes, and it works on a driver that
+            // has never heard of the extension. This flag becomes load-bearing only if the
+            // driver-side glCompileShader of the translated ESSL is parallelised too, at which
+            // point it decides whether that half can overlap.
+            Bool SupportsParallelShaderCompile = false;
             // glPolygonModeNV/ANGLE loaded (GL_NV_polygon_mode / GL_ANGLE_polygon_mode). GLES core
             // has no glPolygonMode, so without this the mode stays FILL.
             Bool SupportsPolygonMode = false;

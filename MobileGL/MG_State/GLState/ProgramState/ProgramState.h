@@ -34,6 +34,19 @@ namespace MobileGL::MG_State::GLState {
 
         const SharedPtr<ProgramObject>& GetCurrentProgram() const { return m_currentProgram; }
 
+        // Joins every outstanding compile and link this context still owns, publishing each
+        // one's artifacts through the ordinary gates. The single caller is
+        // glMaxShaderCompilerThreadsKHR(0): GL_KHR_parallel_shader_compile requires a zero
+        // count to leave nothing in flight, so that every subsequent
+        // GL_COMPLETION_STATUS_KHR reads GL_TRUE.
+        //
+        // NOT a teardown path and NOT ShaderCompilePool::StopAndDrain(): the pool keeps its
+        // threads and stays usable, because a later nonzero count has to bring asynchronous
+        // compilation straight back. Nodes belonging to objects this context has already
+        // dropped are not joined - nothing can observe them, and waiting on them would make
+        // a GL call's cost depend on garbage.
+        void JoinAllPendingWork();
+
         // P0b layer 2. Exposed for tests and diagnostics; the GL frontend never touches it
         // directly - shader objects reach it through the pointer they are handed at
         // CreateShader().
