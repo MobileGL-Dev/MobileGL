@@ -14,9 +14,22 @@
 #include <MG_Util/ShaderTranspiler/SpvcSession.h>
 
 namespace MobileGL::MG_State::GLState {
+    // The link job. Only ever held by SharedPtr here, so a forward declaration is enough -
+    // ProgramLinkTask.h includes THIS header (it outputs a LinkArtifacts), so including it
+    // back would be circular. The destructor is therefore out of line.
+    class ProgramLinkTask;
+
     class ProgramObject {
     public:
         ProgramObject(Uint externalIndex) : m_externalIndex(externalIndex), m_lifetimeId(AllocateLifetimeId()) {}
+        // Cancel-not-join, exactly like ~ShaderObject: the link job owns its inputs, so an
+        // in-flight link whose program just went away is safe to abandon where it stands.
+        // Nothing can observe its result any more - this object was the only route to it.
+        // Out of line because ProgramLinkTask is incomplete here.
+        ~ProgramObject();
+        ProgramObject(const ProgramObject&) = delete;
+        ProgramObject& operator=(const ProgramObject&) = delete;
+
         bool ShaderIsAttached(const SharedPtr<ShaderObject>& shader);
         // GL-visible attachment: in the attach list and not pending detach (glDetachShader
         // defers the actual removal to the next link).
@@ -151,14 +164,7 @@ namespace MobileGL::MG_State::GLState {
                                                                      : -1;
         }
 
-        Bool IsValidUniformLocation(Int location) const {
-            if (location < 0 || location > static_cast<Int>(Artifacts().maxUniformLocation)) return false;
-            if (static_cast<SizeT>(location) >= Artifacts().uniformIndexInTProgram.size()) return false;
-            const Int uniformIndexInProgram = Artifacts().uniformIndexInTProgram[location];
-            return uniformIndexInProgram != glslang::TQualifier::layoutLocationEnd &&
-                   uniformIndexInProgram >= 0 &&
-                   uniformIndexInProgram < static_cast<Int>(Artifacts().tProgramUniformIndexToGl.size());
-        }
+        Bool IsValidUniformLocation(Int location) const { return IsValidUniformLocation(Artifacts(), location); }
 
         GLenum GetUniformType(Uint location) const {
             auto& uniform = Artifacts().program->getUniform(Artifacts().uniformIndexInTProgram[location]);
@@ -176,12 +182,7 @@ namespace MobileGL::MG_State::GLState {
         // for both. GL 3.3 core uniforms are always sized. Takes a TProgram uniform index (the space
         // the artifacts' uniformIndexInTProgram stores).
         GLint GetUniformArraySizeByTIndex(Int tIndex) const {
-            const auto& uniform = Artifacts().program->getUniform(tIndex);
-            const glslang::TType* type = uniform.getType();
-            if (type != nullptr && type->isSizedArray()) {
-                return type->getOuterArraySize();
-            }
-            return uniform.size < 1 ? 1 : uniform.size;
+            return GetUniformArraySizeByTIndex(Artifacts(), tIndex);
         }
 
         GLint GetActiveUniformArraySize(Uint index) const {
@@ -371,7 +372,7 @@ namespace MobileGL::MG_State::GLState {
         // can skip re-uploading an unchanged UBO on every draw. ~0u is reserved as the
         // backends' "never uploaded" sentinel, so skip over it on wrap.
         Uint32 GetUBOContentVersion() const { return m_uboContentVersion; }
-        void MarkUBOContentDirty() {
+        void MarkUBOContentDirty() const {
             if (++m_uboContentVersion == ~0u) m_uboContentVersion = 0;
         }
         Uint32 GetBackendStateVersion() const { return m_backendStateVersion; }
@@ -439,8 +440,13 @@ namespace MobileGL::MG_State::GLState {
         // glProgramBinary always fails here (there is no format it could accept) and the
         // spec then requires the program's LINK_STATUS to read FALSE.
         void MarkLinkFailedByProgramBinary() {
+            // Before anything reads m_artifacts: a pending link would otherwise publish its
+            // (possibly successful) result over the failure this call is required to install
+            // - and Artifacts() below would be the thing that let it. Cancel-not-join: GL
+            // gives glProgramBinary no reason to wait for a link it is about to invalidate.
+            CancelLink();
             BumpLinkObservableVersions();
-            ResetLinkArtifacts();
+            ResetLinkArtifacts(Artifacts());
             Artifacts().infoLog = "No program binary format is supported.";
         }
         Bool GetValidateStatus() const { return m_validateStatus; }
@@ -633,11 +639,67 @@ namespace MobileGL::MG_State::GLState {
             Uint32 xfbPackedStride = 0;
         };
 
-        // Blocks until a pending link (P1 stage 4 onwards) has published its artifacts.
-        // Public because a few call sites have to join without reading anything - see the
-        // explicit-join list in the P1 design. Today there is never a pending link, so this
-        // is a no-op; it is wired up when glLinkProgram starts enqueueing.
+        // ---- artifacts-only helpers, shared with ProgramLinkTask ----
+        // Static and taking the block explicitly, because from stage 4 the link BODY needs
+        // them while its artifacts still live on the job node, not on any ProgramObject. The
+        // member overloads above are the same functions read through the join gate.
+
+        // Clears every field one link produces, EXCEPT infoLog, linkedFragDataLocation/Index
+        // and the geometry strip-capture pair. That exception is load-bearing: the callers
+        // that survive (glProgramBinary's mandated failure, and the link body's own mid-link
+        // aborts) write infoLog immediately AFTER calling here. Link()'s prologue does not
+        // use this at all - it assigns a whole default-constructed LinkArtifacts, where the
+        // ordering is explicit and nothing is exempt.
+        static void ResetLinkArtifacts(LinkArtifacts& artifacts);
+
+        static Bool IsValidUniformLocation(const LinkArtifacts& artifacts, Int location) {
+            if (location < 0 || location > static_cast<Int>(artifacts.maxUniformLocation)) return false;
+            if (static_cast<SizeT>(location) >= artifacts.uniformIndexInTProgram.size()) return false;
+            const Int uniformIndexInProgram = artifacts.uniformIndexInTProgram[location];
+            return uniformIndexInProgram != glslang::TQualifier::layoutLocationEnd &&
+                   uniformIndexInProgram >= 0 &&
+                   uniformIndexInProgram < static_cast<Int>(artifacts.tProgramUniformIndexToGl.size());
+        }
+
+        // Number of active array elements (GL_UNIFORM_SIZE / GL_ARRAY_SIZE); 1 for a non-array.
+        // glslang's TObjectReflection.size only carries the element count for a NON-block array; for
+        // a block array member it reports 1, so take the count from the TType, which is authoritative
+        // for both. GL 3.3 core uniforms are always sized. Takes a TProgram uniform index (the space
+        // the artifacts' uniformIndexInTProgram stores).
+        static GLint GetUniformArraySizeByTIndex(const LinkArtifacts& artifacts, Int tIndex) {
+            const auto& uniform = artifacts.program->getUniform(tIndex);
+            const glslang::TType* type = uniform.getType();
+            if (type != nullptr && type->isSizedArray()) {
+                return type->getOuterArraySize();
+            }
+            return uniform.size < 1 ? 1 : uniform.size;
+        }
+
+        // Blocks until a pending link has published its artifacts. Public because a few call
+        // sites have to join without reading anything - see the explicit-join list (J1-J8) in
+        // the P1 design. GL thread only.
         void JoinLink() const { EnsureLinkJoined(); }
+
+        // Drops a link that is still in flight, without waiting for it. Called at the points
+        // where the pending link's result stops being the answer to "what did this program
+        // link to": a re-link supersedes it, glProgramBinary must force LINK_STATUS false,
+        // and a destroyed program has no observers left.
+        //
+        // Deliberately NOT called by the "takes effect at the next link" setters
+        // (glBindAttribLocation, glBindFragDataLocation(Indexed), glTransformFeedbackVaryings,
+        // glProgramParameteri) NOR by glAttachShader/glDetachShader. Every one of those is
+        // defined by GL to leave the CURRENT link result alone, and the pending link already
+        // snapshotted its own inputs at enqueue, so it is computing exactly the answer GL
+        // requires. Cancelling on any of them would make
+        //   glLinkProgram(p); <setter>; glGetProgramiv(p, GL_LINK_STATUS)
+        // report FALSE for a link that succeeded - and for the attach/detach pair it would
+        // additionally break glCreateShaderProgramv, which detaches immediately after linking.
+        void CancelLink();
+
+        // MUST NOT JOIN - this is what GL_COMPLETION_STATUS_KHR reads when the extension
+        // surface lands. "No job at all" counts as complete: there is nothing outstanding to
+        // wait for.
+        Bool IsLinkComplete() const { return m_pendingLink == nullptr || IsPendingLinkTerminal(); }
 
         void SetTransformFeedbackVaryings(Vector<String>&& names, GLenum bufferMode) {
             m_requestedXfbVaryings = Move(names);
@@ -685,19 +747,22 @@ namespace MobileGL::MG_State::GLState {
     private:
         // ---- The one and only join gate for link output (P1 invariant I5) ----
         // Blocks until a pending link has finished and its LinkArtifacts have been
-        // published into m_artifacts. Today no link is ever pending - glLinkProgram still
-        // runs the whole body inline - so this is an unconditional no-op, and the whole
-        // Artifacts() indirection compiles away. It exists NOW so that the ~120 readers of
-        // link output are already routed through it when stage 4 makes it block: the edit
-        // that turns links asynchronous then touches this function and nothing else.
+        // published into m_artifacts. It exists so that the ~120 readers of link output are
+        // routed through it by the compiler rather than by review: m_artifacts is private
+        // and Artifacts() is the only spelling that reaches it.
         //
-        // Defined inline (not in ProgramObject.cpp) on purpose: this is called from every
-        // Artifacts() read - ~1200 call sites project-wide - and the project never builds
-        // with LTO (MOBILEGL_ENABLE_LTO=OFF), so an out-of-line empty body would leave a
-        // real cross-TU call at every one of them instead of folding away. Stage 4's
-        // version, which actually blocks, moves the wait itself out-of-line behind a
-        // `m_pendingLink` check that stays inline here.
-        void EnsureLinkJoined() const {}
+        // The fast path - no pending link - is one predictable branch and stays inline: it
+        // runs on every Artifacts() read (~1200 call sites project-wide) and the project
+        // never builds with LTO (MOBILEGL_ENABLE_LTO=OFF), so an out-of-line body would be a
+        // real cross-TU call at every one of them. The blocking half is out of line.
+        void EnsureLinkJoined() const {
+            if (m_pendingLink) JoinPendingLink();
+        }
+        void JoinPendingLink() const;
+        // ProgramLinkTask is incomplete here, so IsLinkComplete()'s non-joining peek at the
+        // node's state goes through this out-of-line helper.
+        Bool IsPendingLinkTerminal() const;
+
         LinkArtifacts& Artifacts() {
             EnsureLinkJoined();
             return m_artifacts;
@@ -707,28 +772,10 @@ namespace MobileGL::MG_State::GLState {
             return m_artifacts;
         }
 
-        void ResetLinkArtifacts();
-        // GL-thread-only companion to ResetLinkArtifacts (see its definition).
-        void BumpLinkObservableVersions();
-        // Builds the GL-facing reflection surface from the linked TProgram. Returns false
-        // (with the artifacts' infoLog set and link artifacts reset) when reflection itself fails or an
-        // explicit-uniform-location conflict makes the link invalid.
-        Bool DoReflection(const MG_Util::ShaderTranspiler::CompileEnv& env);
-        // Resolves the requested transform feedback varyings against the linked
-        // vertex stage; fails the link (GL semantics) on unknown or duplicate
-        // names or exceeded capture limits.
-        Bool ResolveTransformFeedbackVaryings();
-        void ResolveGsTriangleStripCapture(const glslang::TIntermediate* captureIntermediate);
-        // The former GenerateBinary, split around DoReflection's data dependencies:
-        // SPIR-V must be generated BEFORE buildReflection touches the linked TProgram (its
-        // live-variable analysis mutates the intermediates enough to change
-        // GlslangToSpv output), while the glUniform*-to-global-UBO routing tables are
-        // sized and keyed by reflection results (maxUniformLocation, uniformLocations)
-        // and so must run AFTER it.
-        void GenerateSpirv();
-        void BuildGlobalUboRouting();
+        // GL-thread-only companion to ResetLinkArtifacts (see its definition). Const because
+        // the publish half of the join calls it; see the mutable counters below.
+        void BumpLinkObservableVersions() const;
         void AddDefaultFragmentShaderIfMissing();
-        Bool ValidateFragmentOutputLocations();
 
         static Uint64 AllocateLifetimeId();
 
@@ -762,7 +809,10 @@ namespace MobileGL::MG_State::GLState {
         Bool m_binaryRetrievableHint = false;
         Bool m_separable = false;
         Bool m_validateStatus = true;
-        Uint32 m_backendStateVersion = 0;
+        // Mutable, like m_artifacts and for the same reason: publishing a pending link is a
+        // READ-side operation (the first gated getter is what pulls the result in), and the
+        // publish has to bump these. Still GL-thread-only - a worker never touches them.
+        mutable Uint32 m_backendStateVersion = 0;
 
         // Backend-owned content-hash memo (see GetBackendHashMemo): valid only while
         // m_backendStateVersion matches. Several slots, not one: a backend may resolve the same
@@ -778,12 +828,20 @@ namespace MobileGL::MG_State::GLState {
         mutable Array<BackendHashMemoSlot, kBackendHashMemoSlotCount> m_backendHashMemoSlots{};
         mutable SizeT m_backendHashMemoNextSlot = 0;
         mutable Uint32 m_backendHashMemoVersion = ~0u;
-        Uint32 m_uboContentVersion = 0;
-        Uint32 m_linkVersion = 0;
+        mutable Uint32 m_uboContentVersion = 0;
+        mutable Uint32 m_linkVersion = 0;
 
         // ---- Link OUTPUT ----
         // Written by the link and by the post-link setters GL allows (glUniform1i's sampler
         // unit, glUniformBlockBinding). Reachable only through Artifacts(); see LinkArtifacts.
-        LinkArtifacts m_artifacts;
+        //
+        // Mutable because publishing is a READ-side operation: a const getter has to be able
+        // to settle an outstanding link before answering it.
+        mutable LinkArtifacts m_artifacts;
+
+        // The link job, from enqueue until the first observable read pulls its result. Null
+        // means m_artifacts is already the answer - which is the state every reader outside
+        // the pending window sees, and the whole reason the gate above is one branch.
+        mutable SharedPtr<ProgramLinkTask> m_pendingLink;
     };
 } // namespace MobileGL::MG_State::GLState

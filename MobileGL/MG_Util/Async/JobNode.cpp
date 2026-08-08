@@ -16,6 +16,30 @@ namespace MobileGL::MG_Util::Async {
         Bool IsTerminalState(const JobState state) {
             return state == JobState::Complete || state == JobState::Cancelled;
         }
+
+        // Job BODIES have been contained since stage 1 (JobNode::Run); continuations were
+        // not, and stage 4 introduces the first real ones. A continuation runs on whichever
+        // thread drove the node terminal - for a compile that finished on a worker, that is
+        // inside an Asio handler, where an escaping exception means thread_pool::run()
+        // rethrows and the process terminates. It would also skip every continuation after
+        // it in the list, stranding unrelated dependents.
+        //
+        // Containing it here is a backstop, not the contract: a continuation cannot be
+        // repaired from the outside (the dispatcher has no idea what the callback was for),
+        // so the registrar still owns "this cannot fail". See JobNode::OnTerminal.
+        void RunContinuation(const std::function<void()>& continuation) {
+            if (!continuation) return;
+            try {
+                continuation();
+            } catch (const std::exception& e) {
+                MGLOG_E("JobNode: a terminal continuation threw (%s); it has been contained, but whatever it "
+                        "was going to do did not happen",
+                        e.what());
+            } catch (...) {
+                MGLOG_E("JobNode: a terminal continuation threw a non-std exception; it has been contained, "
+                        "but whatever it was going to do did not happen");
+            }
+        }
     } // namespace
 
     Bool JobNode::IsTerminal() const { return IsTerminalState(m_state.load(std::memory_order_acquire)); }
@@ -47,9 +71,10 @@ namespace MobileGL::MG_Util::Async {
         m_cv.notify_all();
         // Run continuations OUTSIDE the lock: a continuation is free to call back into this
         // node (IsComplete, State) and, in the link-dependency case, to post the dependent
-        // job to the pool from whichever thread drove this node terminal.
+        // job to the pool from whichever thread drove this node terminal. Individually
+        // contained, so one broken dependent cannot strand the rest of the list.
         for (auto& continuation : continuations) {
-            if (continuation) continuation();
+            RunContinuation(continuation);
         }
         return true;
     }
@@ -122,7 +147,10 @@ namespace MobileGL::MG_Util::Async {
                 return;
             }
         }
-        fn();
+        // Already terminal: the caller's thread runs it, through the same guard the deferred
+        // path uses. OnTerminal is reached from Link()'s GL-thread prologue as well as from a
+        // worker, and glLinkProgram is not a place an exception may escape from either.
+        RunContinuation(fn);
     }
 
     void ApplyDeferredDiagnostics(JobNode& node) {

@@ -185,24 +185,16 @@ namespace {
         return result;
     }
 
-    // glslang has no "detach this thread" API in the vendored revision (there is no
-    // InitThread/DetachThread pair any more; thread attachment is implicit through
-    // thread_local state, and glslang::InitializeProcess() is process-wide, refcounted and
-    // mutex-guarded, so it needs no per-worker counterpart).
-    //
-    // What DOES need undoing is the thread pool allocator: TShader::parse sets the calling
-    // thread's TLS allocator to the shader's own pool and never restores it. Left pointing
-    // there, the next allocation this worker makes - in an unrelated job, or in glslang code
-    // reached from a different object - would come out of a pool the GL thread may already
-    // have deleted with the TShader. SetThreadPoolAllocator(nullptr) reverts the thread to
-    // its own thread_local default and is the documented idiom. A scope guard, so it also
-    // runs when a body throws.
-    struct GlslangThreadAllocatorGuard {
-        ~GlslangThreadAllocatorGuard() { glslang::SetThreadPoolAllocator(nullptr); }
-    };
 } // namespace
 
 namespace MobileGL::MG_State::GLState {
+    // glslang has no "detach this thread" API in the vendored revision (there is no
+    // InitThread/DetachThread pair any more; thread attachment is implicit through
+    // thread_local state, and glslang::InitializeProcess() is process-wide, refcounted and
+    // mutex-guarded, so it needs no per-worker counterpart). The pool allocator is the part
+    // that needs undoing; see the declaration in ShaderCompileTask.h.
+    GlslangThreadAllocatorGuard::~GlslangThreadAllocatorGuard() { glslang::SetThreadPoolAllocator(nullptr); }
+
     // Pure CPU work only. Everything this reads is either an input the node owns or a
     // process-wide constant; everything it writes is `artifacts`. Do not add a GL/EGL call,
     // a pActiveBackendObject read, or a pGLContext->RecordError() here - the first two are
@@ -299,5 +291,48 @@ namespace MobileGL::MG_State::GLState {
                 cache->Insert(stage, sourceHash, *source, compileEnv.fingerprint, Move(fresh));
             }
         }
+    }
+
+    SharedPtr<glslang::TShader> ShaderCompileTask::ClaimParsedShader(String& outReparseLog) const {
+        MOBILEGL_ASSERT(IsComplete(),
+                        "ShaderCompileTask::ClaimParsedShader() on a job that has not completed; its artifacts "
+                        "are still being written");
+
+        if (artifacts.shader) {
+            // The whole race, in one instruction. Acquire-release because the winner is about
+            // to hand the TShader to glslang's linker on a possibly different thread from the
+            // one that parsed it - the node's terminal transition already published the
+            // parse, and this orders the two claimants against each other.
+            Bool expected = false;
+            if (m_parseClaimed.compare_exchange_strong(expected, true, std::memory_order_acq_rel,
+                                                       std::memory_order_acquire)) {
+                return artifacts.shader;
+            }
+        }
+
+        // Either another link already consumed the stored parse (and mapIO mutated its
+        // intermediate), or there never was one. Re-parse the preprocessed source through the
+        // identical configuration; that costs one glslang parse, which is what GenerateBinary
+        // used to spend here on EVERY link rather than only on reuse.
+        //
+        // The guard is not optional on this path: from stage 4 this runs on a pool worker,
+        // and TShader::parse would leave that worker's TLS allocator pointing at a pool the
+        // GL thread is about to free. (ProgramLinkTask::RunBody holds one too; they nest
+        // harmlessly - both just reset the thread to its own default.)
+        const GlslangThreadAllocatorGuard glslangGuard;
+        using namespace MG_Util::ShaderTranspiler;
+        ShaderAttrib attrib{.shaderType = MG_Util::ConvertShaderStageToGLEnum(stage),
+                            .sourceStr = artifacts.preprocessedSource,
+                            .flags = 0,
+                            // Re-parse against the SAME environment the original parse used,
+                            // not against whatever the backend reports now.
+                            .env = artifacts.env.get()};
+        auto result = ShaderCompiler::CompileShader(attrib);
+        if (!result) {
+            // Should be unreachable: the same source parsed successfully at Compile().
+            outReparseLog = result.error().log;
+            return nullptr;
+        }
+        return result.value();
     }
 } // namespace MobileGL::MG_State::GLState

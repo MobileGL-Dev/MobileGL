@@ -51,14 +51,17 @@ namespace MobileGL {
             void CancelCompile();
             void MarkAsDeleted();
 
-            // Hands out a link-consumable TShader. glslang's mapIO mutates the TShader's
-            // aliased intermediate, so the parse stored by Compile() may feed exactly one
-            // link; every later link (relink, or the same shader attached to a second
-            // program) gets a fresh parse of the stored preprocessed source through the
-            // byte-identical CompileShader path (including the legacy-460 retry). Only
-            // callable while GetCompileStatus() is true. Returns null only if that
-            // re-parse fails - outReparseLog then carries its diagnostics.
-            SharedPtr<glslang::TShader> TakeShaderForLink(String& outReparseLog);
+            // The compile job node itself, for ProgramObject::Link()'s input snapshot.
+            // DELIBERATELY DOES NOT JOIN, and that is the entire point of stage 4: the link
+            // takes the node as a dependency and is posted only once the node is terminal,
+            // so glLinkProgram never blocks on glCompileShader. Null means this object has
+            // never been compiled (or its last compile was abandoned), which the link reads
+            // as COMPILE_STATUS false - the same verdict the joining path produces.
+            //
+            // The caller must MarkLinkReferenced() whatever it keeps: from here on the node's
+            // result has an observer this object knows nothing about (see the marker's
+            // comment in ShaderCompileTask.h).
+            const SharedPtr<ShaderCompileTask>& CompiledNodeForLink() const { return m_compiled; }
 
             Uint GetExternalIndex() const { return m_externalIndex; }
             ShaderStage GetShaderStage() const { return m_stage; }

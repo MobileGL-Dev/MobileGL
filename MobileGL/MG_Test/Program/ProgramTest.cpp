@@ -2934,7 +2934,7 @@ TEST_F(ProgramTest, RecompileWithIdenticalSourceKeepsCompiledStateAndStillLinks)
     EXPECT_TRUE(ShaderHasMemoizedCompile(vs));
 
     // A first link consumes the stored TShader; the redundant recompile below must not
-    // disturb the preprocessed source that TakeShaderForLink re-parses from.
+    // disturb the preprocessed source that ClaimParsedShader re-parses from.
     GLuint firstProgram = LinkVsFs(vs, fs, GL_TRUE);
     EXPECT_GE(GetUniformLocation(firstProgram, "uColor"), 0);
 
@@ -2959,7 +2959,7 @@ TEST_F(ProgramTest, RecompileWithIdenticalSourceKeepsCompiledStateAndStillLinks)
     EXPECT_EQ(String(sourceBuffer.data(), static_cast<size_t>(written)), String(kP0bVs));
 
     // A second program built from the same, redundantly recompiled shaders links and
-    // reflects - i.e. TakeShaderForLink's re-parse path survived the no-op.
+    // reflects - i.e. ClaimParsedShader's re-parse path survived the no-op.
     GLuint secondProgram = LinkVsFs(vs, fs, GL_TRUE);
     EXPECT_GE(GetUniformLocation(secondProgram, "uColor"), 0);
     EXPECT_GE(GetUniformLocation(secondProgram, "uModel"), 0);

@@ -368,10 +368,34 @@ namespace MobileGL::MG_State {
         const SharedPtr<ProgramObject>& GLContext::GetProgramForDraw() {
             static const SharedPtr<ProgramObject> nullProgram = nullptr;
             const auto& currentProgram = m_programState.GetCurrentProgram();
-            if (currentProgram) return currentProgram;
+            if (currentProgram) {
+                // P1 join site J1, plain glUseProgram half. The backends read a program's
+                // lifetimeId / backendStateVersion / UBO content version to decide whether
+                // their per-program caches are still valid, and none of those pass through
+                // ProgramObject's join gate - so a draw could sample a version, join later
+                // inside the same draw when it finally touched an artifact, and cache under a
+                // version the publish had already superseded. Settling here means every
+                // version a backend reads during a draw describes the program it is drawing.
+                // One null check in steady state.
+                currentProgram->JoinLink();
+                return currentProgram;
+            }
             if (m_boundProgramPipeline == 0) return nullProgram;
             const auto& pipeline = GetBoundProgramPipeline();
             if (!pipeline) return nullProgram;
+
+            // P1 join site J1. ComputeDrawProgramSignature() keys the composite cache on each
+            // stage program's lifetimeId and backendStateVersion - NON-artifact fields, so
+            // they do not pass through ProgramObject's join gate and a pending link would
+            // stay pending right through the signature. Since the version is bumped both at
+            // enqueue and at publish, the signature computed inside a pending window is one
+            // that will never be produced again: every draw would miss the cache and rebuild
+            // (and relink) the composite. Join first, so the signature describes settled
+            // programs. In steady state this is a null check per stage.
+            for (SizeT stage = 0; stage < static_cast<SizeT>(ShaderStage::ShaderStageCount); ++stage) {
+                const auto& stageProgram = pipeline->GetStageProgram(static_cast<ShaderStage>(stage));
+                if (stageProgram) stageProgram->JoinLink();
+            }
 
             const auto signature = pipeline->ComputeDrawProgramSignature();
             if (const auto& cached = pipeline->GetCachedDrawProgram(signature)) return cached;
@@ -400,6 +424,10 @@ namespace MobileGL::MG_State {
             // A pipeline with no fragment stage still rasterises, so the default fragment
             // shader is wanted here even though the separable stage programs never get one.
             composite->Link(true);
+            // P1 join site J2. The draw that asked for this program is the very next thing to
+            // happen, so enqueueing the composite's link buys nothing and only moves the wait
+            // to whichever backend accessor happens to touch its artifacts first.
+            composite->JoinLink();
             pipeline->SetCachedDrawProgram(signature, Move(composite));
             return pipeline->GetCachedDrawProgram(signature);
         }

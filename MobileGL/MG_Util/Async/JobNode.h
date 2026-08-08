@@ -52,7 +52,12 @@ namespace MobileGL::MG_Util::Async {
     //   Running -> Cancelled (cancelled mid-run, or RunBody() threw)
     // Complete and Cancelled are terminal and the node is immutable afterwards, so every
     // reader that observed IsTerminal() may read the outputs without further synchronization.
-    class JobNode {
+    //
+    // enable_shared_from_this because a dependency edge outlives its registrar: a node that
+    // posts itself from another node's continuation (ProgramLinkTask::OnDepSettled) has to
+    // hand the pool a strong reference from inside itself. Every JobNode is therefore created
+    // through MakeShared - a stack-allocated one may not use SubmitAfter-style chaining.
+    class JobNode : public std::enable_shared_from_this<JobNode> {
     public:
         JobNode() = default;
         virtual ~JobNode() = default;
@@ -88,6 +93,16 @@ namespace MobileGL::MG_Util::Async {
         // `fn` runs on the calling thread before OnTerminal returns. Exactly-once in both
         // directions: the callback is either handed to the finishing thread or run inline,
         // never both.
+        //
+        // A continuation must not throw. It is dispatched from whichever thread drove this
+        // node terminal, which on the pool side is an Asio handler - an exception escaping
+        // one propagates out of thread_pool::run() and terminates the process. The dispatcher
+        // contains a throw anyway (see RunContinuation) so that one broken continuation
+        // cannot strand the others, but the continuation itself is where the guarantee
+        // belongs: whoever registers one owns the "and it cannot fail" argument, because the
+        // dispatcher can only log, never repair. ProgramLinkTask::OnDepSettled is the worked
+        // example - it catches internally and cancels itself, because a link that is never
+        // posted is a joiner blocked forever.
         void OnTerminal(std::function<void()> fn);
 
         // Runs the body on the calling thread. The synchronous path (async disabled,

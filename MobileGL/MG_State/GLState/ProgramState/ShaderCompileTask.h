@@ -13,6 +13,23 @@
 #include <MG_State/GLState/ProgramState/ShaderPreprocessCache.h>
 
 namespace MobileGL::MG_State::GLState {
+    // glslang has no "detach this thread" API in the vendored revision, but TShader::parse
+    // leaves the calling thread's TLS pool allocator pointing at the shader's own pool and
+    // never restores it. Left there, the next allocation this thread makes - in an unrelated
+    // job, or in glslang code reached from a different object - would come out of a pool the
+    // GL thread may already have deleted with the TShader. SetThreadPoolAllocator(nullptr)
+    // reverts the thread to its own thread_local default and is the documented idiom.
+    //
+    // A scope guard, so it also runs when a body throws. Declared here rather than kept
+    // file-local because stage 4 gave it a second user: ProgramLinkTask's body parses (the
+    // claim-CAS loser's re-parse), links and emits SPIR-V, all on a pool thread.
+    struct GlslangThreadAllocatorGuard {
+        GlslangThreadAllocatorGuard() = default;
+        ~GlslangThreadAllocatorGuard();
+        GlslangThreadAllocatorGuard(const GlslangThreadAllocatorGuard&) = delete;
+        GlslangThreadAllocatorGuard& operator=(const GlslangThreadAllocatorGuard&) = delete;
+    };
+
     // Everything one glCompileShader PRODUCES, in one block.
     //
     // This is exactly the set a single run of the compile pipeline writes, which is what
@@ -21,21 +38,16 @@ namespace MobileGL::MG_State::GLState {
     // it in, and the GL thread reads it through ShaderObject's join gate.
     struct ShaderCompileArtifacts {
         // The CompileEnv snapshot this compile ran against. Held so the consume-once
-        // re-parse in TakeShaderForLink() reproduces the original parse exactly, instead of
+        // re-parse in ClaimParsedShader() reproduces the original parse exactly, instead of
         // re-reading whatever the backend says now.
         SharedPtr<const MG_Util::ShaderTranspiler::CompileEnv> env;
         SharedPtr<glslang::TShader> shader;
         // The source the parse actually consumed (after PreprocessShaderSource), kept for
-        // TakeShaderForLink's re-parse so a later link never depends on the preprocessor
+        // ClaimParsedShader's re-parse so a later link never depends on the preprocessor
         // being deterministic across backend-state changes.
         String preprocessedSource;
         UnorderedMap<String, Int> explicitUniformLocations;
         UnorderedMap<String, Uint> explicitOpaqueBindings;
-        // GL-thread-owned, and the one field here a worker never touches: TakeShaderForLink
-        // flips it after the join. Stage 4 replaces it with an atomic claim on this node,
-        // because two ProgramLinkTasks for two programs sharing this shader can then race
-        // for the parse on two workers.
-        Bool shaderConsumedByLink = false;
         String infoLog;
         Bool compileStatus = false;
     };
@@ -75,9 +87,50 @@ namespace MobileGL::MG_State::GLState {
         // ---- output: valid iff IsComplete(), immutable afterwards ----
         ShaderCompileArtifacts artifacts;
 
+        // Hands out a link-consumable TShader, exactly once for the stored parse.
+        //
+        // glslang's mapIO mutates the TShader's aliased intermediate, so the parse this node
+        // produced may feed exactly ONE link; every later link (a relink, or the same shader
+        // attached to a second program) needs a fresh parse. The claim is a CAS on this
+        // shared node rather than a flag on the ShaderObject because from stage 4 the two
+        // callers can be two ProgramLinkTasks running on two workers: two programs sharing
+        // one shader, linked back to back. Copying the parse out and tracking consumed-ness
+        // per program would let both of them decide they were the first, run mapIO over the
+        // same intermediate twice, and ship silently corrupt SPIR-V.
+        //
+        // The CAS loser re-parses artifacts.preprocessedSource against THIS node's own
+        // CompileEnv (not against whatever the backend reports now), through the identical
+        // CompileShader path - so winner and loser produce byte-identical SPIR-V. Callable
+        // only once IsComplete() and compileStatus are true. Returns null only if that
+        // re-parse fails, and outReparseLog then carries its diagnostics.
+        //
+        // Const because the claim is the node's own synchronization, not a mutation of its
+        // published artifacts: a claim that is taken and then abandoned (its link was
+        // cancelled) costs one extra re-parse later and nothing else.
+        SharedPtr<glslang::TShader> ClaimParsedShader(String& outReparseLog) const;
+
+        // Sticky marker for "a ProgramLinkTask has this node in its input snapshot".
+        //
+        // It exists to keep a cancel from eating a result someone still needs. A pending link
+        // holds its dependencies by SharedPtr, so the NODE always outlives the ShaderObject -
+        // but Cancel() is not about lifetime, it discards the result. The reachable sequence
+        // is the ordinary one: compile, attach, glLinkProgram (enqueued), glDetachShader,
+        // glDeleteShader. The detach makes the shader GL-invisible, so the delete frees its
+        // name, and ReleaseShaderNameIfOrphaned would cancel a compile the enqueued link is
+        // waiting on - turning a link that must report GL_TRUE into GL_FALSE. Set on the GL
+        // thread in Link()'s prologue, read on the GL thread by ShaderObject::CancelCompile.
+        //
+        // Never cleared: the worst case is one stale node compiling to completion for nobody,
+        // which is exactly what the pre-stage-3 implementation always did.
+        void MarkLinkReferenced() { m_linkReferenced.store(true, std::memory_order_release); }
+        Bool IsLinkReferenced() const { return m_linkReferenced.load(std::memory_order_acquire); }
+
     private:
         void RunBody() override;
         // The real body; RunBody wraps it so a throw becomes a GL-visible compile failure.
         void RunCompilePipeline();
+
+        mutable std::atomic<Bool> m_parseClaimed{false};
+        std::atomic<Bool> m_linkReferenced{false};
     };
 } // namespace MobileGL::MG_State::GLState

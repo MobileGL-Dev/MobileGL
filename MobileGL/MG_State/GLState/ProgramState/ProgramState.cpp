@@ -39,6 +39,14 @@ namespace MobileGL::MG_State::GLState {
 
     void ProgramState::DestroyProgramSlot(const Uint program) {
         auto& programObject = m_programObjects[program];
+        // P1 join site J4/J5 (glDeleteProgram, and the deferred destroy UseProgram performs
+        // when a deletion-flagged program stops being current). The program's name is about
+        // to go, so nothing can observe its link any more: cancel-not-join, so a delete never
+        // blocks the GL thread on a worker. Explicit rather than left to ~ProgramObject,
+        // because the reset below only destroys the object if this table held the last
+        // reference - a program still bound as current, or still referenced by a pipeline,
+        // outlives it, and its link should stop the moment the name does.
+        programObject->CancelLink();
         // Snapshot the attachments: deleting the program is a detach point for shaders
         // that were flagged with glDeleteShader while still attached.
         const Vector<SharedPtr<ShaderObject>> attachedShaders = programObject->GetAttachedShaders();

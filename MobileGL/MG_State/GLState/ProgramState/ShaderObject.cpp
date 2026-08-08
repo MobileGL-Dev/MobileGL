@@ -77,7 +77,14 @@ namespace MobileGL::MG_State::GLState {
         // Cooperative and non-blocking. A node that no worker has picked up settles
         // immediately; one that is running is flagged and settles when its body returns,
         // writing only into itself the whole time.
-        m_compiled->Cancel();
+        //
+        // Unless a pending LINK is waiting on it. Cancelling is about discarding a result
+        // nothing can observe any more, and this object is no longer the only route to this
+        // one: an enqueued ProgramLinkTask holds the node as a dependency, and a cancel would
+        // turn its link into GL_FALSE. Reached by the ordinary link-then-detach-then-delete
+        // shader teardown - see ShaderCompileTask::MarkLinkReferenced. Dropping our own
+        // reference is still right; the link keeps the node alive and finishes it.
+        if (!m_compiled->IsLinkReferenced()) m_compiled->Cancel();
         m_compiled.reset();
     }
 
@@ -91,7 +98,7 @@ namespace MobileGL::MG_State::GLState {
         // The failure case is covered too: the info log stays queryable because nothing is
         // cleared. And if the stored TShader already fed a link, the no-op leaves
         // preprocessedSource and both side-channel maps intact, which is precisely what
-        // TakeShaderForLink's on-demand re-parse needs - a real recompile would have handed
+        // ClaimParsedShader's on-demand re-parse needs - a real recompile would have handed
         // the next link a fresh parse, the no-op hands it a fresh re-parse of the identical
         // source instead. Same result, one parse either way.
         if (HasMemoizedCompile()) return;
@@ -117,43 +124,6 @@ namespace MobileGL::MG_State::GLState {
             return;
         }
         MG_Util::Async::ShaderCompilePool::Get().Post(m_compiled);
-    }
-
-    SharedPtr<glslang::TShader> ShaderObject::TakeShaderForLink(String& outReparseLog) {
-        EnsureCompileJoined();
-        // Unreachable through the GL frontend: callers gate on GetCompileStatus().
-        if (!m_compiled) return nullptr;
-
-        // Mutating the node's artifacts from here is legal precisely because the node is
-        // terminal by now: no worker will ever touch it again, and this thread is the GL
-        // thread. Stage 4, where two link JOBS can reach the same node concurrently,
-        // replaces this flag with an atomic claim on the node.
-        ShaderCompileArtifacts& compiled = m_compiled->artifacts;
-        if (compiled.shader && !compiled.shaderConsumedByLink) {
-            compiled.shaderConsumedByLink = true;
-            return compiled.shader;
-        }
-
-        // The stored parse already fed a link, whose mapIO mutated its intermediate.
-        // Re-parse the preprocessed source through the identical configuration; this
-        // costs one glslang parse, which is exactly what GenerateBinary used to spend
-        // here on EVERY link rather than only on reuse.
-        using namespace MG_Util::ShaderTranspiler;
-        ShaderAttrib attrib{.shaderType = MG_Util::ConvertShaderStageToGLEnum(m_stage),
-                            .sourceStr = compiled.preprocessedSource,
-                            .flags = 0,
-                            // Re-parse against the SAME environment the original parse used,
-                            // not against whatever the backend reports now.
-                            .env = compiled.env.get()};
-        auto result = ShaderCompiler::CompileShader(attrib);
-        if (!result) {
-            // Should be unreachable: the same source parsed successfully at Compile().
-            outReparseLog = result.error().log;
-            MGLOG_E("ShaderObject::TakeShaderForLink: re-parse of shader %d failed:\n%s", m_externalIndex,
-                    outReparseLog.c_str());
-            return nullptr;
-        }
-        return result.value();
     }
 
     void ShaderObject::MarkAsDeleted() {

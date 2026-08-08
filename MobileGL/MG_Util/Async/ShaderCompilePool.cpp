@@ -136,7 +136,15 @@ namespace MobileGL::MG_Util::Async {
         // out by a concurrent StopAndDrain between the decision and the dispatch: asio::post
         // only enqueues, it never runs the handler on the calling thread, so it cannot
         // re-enter this mutex.
-        void DispatchLocked() {
+        //
+        // A node asio::post fails to hand off is appended to `toCancel` instead of being
+        // Cancel()'d here: Cancel() runs the node's OnTerminal continuations inline (stage 4
+        // added ProgramLinkTask::OnDepSettled as a real one), and a continuation is free to
+        // call ShaderCompilePool::Post() again. Every caller of DispatchLocked holds `mutex`
+        // (a plain, non-recursive std::mutex) - Cancel()'ing in here would let that
+        // re-entrant Post() deadlock on the very lock this frame already owns. The caller
+        // drains `toCancel` after releasing the lock.
+        void DispatchLocked(Vector<SharedPtr<JobNode>>& toCancel) {
             while (!queue.empty() && inFlight < maxConcurrency && !stopped.load(std::memory_order_acquire)) {
                 // Copy rather than move into the handler: if asio::post throws (it allocates)
                 // the local SharedPtr is still valid, so the node can be settled instead of
@@ -150,7 +158,7 @@ namespace MobileGL::MG_Util::Async {
                     asio::post(*pool, [this, node]() mutable { RunOnWorker(Move(node)); });
                 } catch (...) {
                     --inFlight;
-                    node->Cancel();
+                    toCancel.push_back(Move(node));
                 }
             }
         }
@@ -159,14 +167,23 @@ namespace MobileGL::MG_Util::Async {
             tl_isPoolThread = true;
             // A node that was already handed to Asio when StopAndDrain ran still arrives
             // here; cancelling it first turns the dispatch into a state transition instead of
-            // a full compile, so the drain's join() returns promptly.
+            // a full compile, so the drain's join() returns promptly. This Cancel() runs
+            // before `mutex` is ever taken in this frame, so it is not subject to the
+            // re-entrancy hazard DispatchLocked's comment describes.
             if (stopped.load(std::memory_order_acquire)) node->Cancel();
             node->Run();
             node.reset();
 
-            const std::lock_guard<std::mutex> lock(mutex);
-            --inFlight;
-            DispatchLocked();
+            Vector<SharedPtr<JobNode>> toCancel;
+            {
+                const std::lock_guard<std::mutex> lock(mutex);
+                --inFlight;
+                DispatchLocked(toCancel);
+            }
+            // Outside the lock: see DispatchLocked's comment.
+            for (const auto& n : toCancel) {
+                if (n) n->Cancel();
+            }
         }
     };
 
@@ -199,10 +216,17 @@ namespace MobileGL::MG_Util::Async {
     }
 
     void ShaderCompilePool::SetMaxConcurrency(const Uint n) {
-        const std::lock_guard<std::mutex> lock(m_impl->mutex);
-        m_impl->maxConcurrency = std::clamp(n, 1u, m_impl->threadCount);
-        // Raising the budget releases whatever the old one was holding back.
-        if (m_impl->pool) m_impl->DispatchLocked();
+        Vector<SharedPtr<JobNode>> toCancel;
+        {
+            const std::lock_guard<std::mutex> lock(m_impl->mutex);
+            m_impl->maxConcurrency = std::clamp(n, 1u, m_impl->threadCount);
+            // Raising the budget releases whatever the old one was holding back.
+            if (m_impl->pool) m_impl->DispatchLocked(toCancel);
+        }
+        // Outside the lock: see DispatchLocked's comment.
+        for (const auto& n2 : toCancel) {
+            if (n2) n2->Cancel();
+        }
     }
 
     void ShaderCompilePool::Post(SharedPtr<JobNode> node) {
@@ -220,13 +244,15 @@ namespace MobileGL::MG_Util::Async {
         // exception-safe and SharedPtr's move constructor is noexcept, so a throwing
         // push_back never consumed it; and DispatchLocked contains its own asio::post
         // failures rather than propagating them (see above). Keep it that way.
+        Bool enqueued = false;
+        Vector<SharedPtr<JobNode>> toCancel;
         try {
             const std::lock_guard<std::mutex> lock(m_impl->mutex);
             if (!m_impl->stopped.load(std::memory_order_acquire) && !InProcessTeardown()) {
                 if (!m_impl->pool) m_impl->pool = MakeUnique<asio::thread_pool>(m_impl->threadCount);
                 m_impl->queue.push_back(Move(node));
-                m_impl->DispatchLocked();
-                return;
+                m_impl->DispatchLocked(toCancel);
+                enqueued = true;
             }
         } catch (...) {
             MGLOG_E("ShaderCompilePool::Post: enqueue failed; cancelling the job so its joiner "
@@ -234,6 +260,12 @@ namespace MobileGL::MG_Util::Async {
             if (node) node->Cancel();
             return;
         }
+        // Outside the lock: see DispatchLocked's comment - a Cancel() here may run a
+        // continuation (e.g. ProgramLinkTask::OnDepSettled) that calls back into Post().
+        for (const auto& n : toCancel) {
+            if (n) n->Cancel();
+        }
+        if (enqueued) return;
 
         // A stopped pool is a synchronous pool, not a black hole: the node still runs, just
         // on the caller's thread. Everything downstream already handles "terminal by the time
