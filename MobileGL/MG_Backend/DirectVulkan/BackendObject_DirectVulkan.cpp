@@ -16,6 +16,7 @@
 #include "MG_Util/Converters/MGToStr/TextureEnumConverter.h"
 #include "MG_Util/Converters/MGToVk/TextureEnumConverter.h"
 #include "MG_Util/Texture/TextureFormatProcessor.h"
+#include "MG_Util/Async/ShaderCompilePool.h"
 
 #include <Config.h>
 #include <cmath>
@@ -522,6 +523,21 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             E_GL_ARB_get_program_binary};
         if (shaderSubgroupSupported && !MG_Config::Features.DisableSubgroup) {
             extensions.push_back(E_GL_KHR_shader_subgroup);
+        }
+        // GL_KHR_parallel_shader_compile is MobileGL's own capability, not the Vulkan
+        // device's: the compiler threads belong to MobileGL's shader pool and
+        // glCompileShader/glLinkProgram are serviced entirely inside the frontend, so there
+        // is no device feature to condition this on.
+        //
+        // Gated on the async flag deliberately, and this is the whole reason the gate
+        // exists. Advertising the string is the one part of asynchronous compilation that a
+        // recorded trace can never cover: Iris and Sodium change their SUBMISSION SCHEDULE
+        // the moment they see it - they enqueue whole pipeline batches and poll
+        // GL_COMPLETION_STATUS_KHR instead of compiling one program at a time - so
+        // MOBILEGL_ASYNC_SHADER_COMPILE=0 has to withdraw the application-visible behaviour
+        // change as well as the threading, or the kill switch would only be half a switch.
+        if (MG_Util::Async::AsyncShaderCompileEnabled()) {
+            extensions.push_back(E_GL_KHR_parallel_shader_compile);
         }
         // GL_ARB_timer_query gates MC's F3 GPU% (LWJGL checks the extension string);
         // only advertised when the device actually supports timestamp queries and the

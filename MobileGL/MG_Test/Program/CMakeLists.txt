@@ -60,6 +60,22 @@ target_link_libraries(
         ${LINK_LIBRARIES}
 )
 
+add_executable(
+        ParallelShaderCompileTest
+        ParallelShaderCompileTest.cpp
+)
+
+target_include_directories(ParallelShaderCompileTest PRIVATE
+        ${MGL_ROOT}/include
+        ${MGL_ROOT}/MobileGL
+)
+
+target_link_libraries(
+        ParallelShaderCompileTest PRIVATE
+        GTest::gtest_main
+        ${LINK_LIBRARIES}
+)
+
 # Its own binary on purpose: this one calls MobileGL::Destroy(), and ShaderCompilePool's
 # stop is a one-way latch for the whole process - every case declared after it in the same
 # binary would silently run its compiles and links inline.
@@ -97,4 +113,6 @@ gtest_discover_tests(ProgramTest DISCOVERY_TIMEOUT 30 PROPERTIES LABELS unit)
 # compile pool so there is something in flight to race against.
 gtest_discover_tests(AsyncCompileTest DISCOVERY_TIMEOUT 60 PROPERTIES LABELS unit TIMEOUT 300)
 gtest_discover_tests(AsyncLinkTest DISCOVERY_TIMEOUT 60 PROPERTIES LABELS unit TIMEOUT 300)
+# Same reason: the GL_COMPLETION_STATUS_KHR cases saturate a one-worker pool on purpose.
+gtest_discover_tests(ParallelShaderCompileTest DISCOVERY_TIMEOUT 60 PROPERTIES LABELS unit TIMEOUT 300)
 gtest_discover_tests(AsyncTeardownTest DISCOVERY_TIMEOUT 60 PROPERTIES LABELS unit TIMEOUT 300)

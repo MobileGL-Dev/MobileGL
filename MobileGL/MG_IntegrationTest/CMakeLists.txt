@@ -50,6 +50,7 @@ add_executable(MobileGLIntegrationTest
     Scenarios/CrossFrameBufferScenario.cpp
     Scenarios/ResidentIndexScenario.cpp
     Scenarios/MultiDrawScenario.cpp
+    Scenarios/AsyncCompileScenario.cpp
 )
 
 target_include_directories(MobileGLIntegrationTest PRIVATE
