@@ -8,39 +8,47 @@
 
 #pragma once
 #include <Includes.h>
-#include <MG_Util/ShaderTranspiler/CompileEnv.h>
+#include <MG_State/GLState/ProgramState/ShaderStage.h>
+#include <MG_State/GLState/ProgramState/ShaderCompileTask.h>
 
 namespace MobileGL {
-    enum class ShaderStage {
-        Vertex,
-        TessControl,
-        TessEval,
-        Geometry,
-        Fragment,
-        Compute,
-        ShaderStageCount,
-        Unknown = -1
-    };
-
     namespace MG_State::GLState {
-        // P0b layer 2. Declared, not included: the cache keys on ShaderStage, so including
-        // its header here would be circular.
-        class ShaderPreprocessCache;
-
+        // The GL-visible shader name. It owns the source text and one compile job node; the
+        // job node owns everything a compile produces.
+        //
+        // Every member below is GL-thread-owned, and every read of worker-produced state
+        // goes through Compiled(), which joins first. That is invariant I5 of the P1 design:
+        // because Compiled() is the SOLE accessor of the node's artifacts, the compiler
+        // enumerates every reader for us and none can be forgotten.
         class ShaderObject {
         public:
-            // `preprocessCache` is the owning context's cross-object memo (P0b layer 2);
-            // null is fully supported and simply means "no sharing" - that is what the
-            // context-less internal shader objects (the default FS, the blit pipeline) use.
-            // Shared ownership rather than a raw pointer: once compiles run on a worker the
-            // job outlives neither the object nor the context deterministically, and the
-            // cache has to stay alive for whoever is still reading it.
+            // `preprocessCache` is the owning context's cross-object memo (P0b layer 2).
+            // Null is fully supported and means two things at once: "no sharing", and
+            // "compile inline, never on a worker". Those coincide exactly - the only
+            // cache-less shader objects are the internal ones (ProgramObject's default
+            // fragment shader, the DirectVulkan blit and depth-mipmap shaders) and every one
+            // of them compiles and reads its status in the same breath, so a job would only
+            // add a round trip. Shared ownership rather than a raw pointer: a compile job
+            // outlives neither the object nor the context deterministically, and the cache
+            // has to stay alive for whoever is still reading it.
             ShaderObject(const ShaderStage stage, Uint externalIndex,
                          SharedPtr<ShaderPreprocessCache> preprocessCache = nullptr)
                 : m_stage(stage), m_externalIndex(externalIndex), m_preprocessCache(Move(preprocessCache)) {}
+            // Cancel-not-join: the node owns its inputs, so an in-flight compile whose
+            // object just went away is safe to abandon where it stands. Nothing can observe
+            // its result any more - this object was the only route to it.
+            ~ShaderObject() { CancelCompile(); }
+
+            ShaderObject(const ShaderObject&) = delete;
+            ShaderObject& operator=(const ShaderObject&) = delete;
+
             void SetShaderSource(const String& source);
             void SetShaderSource(String&& source);
             void Compile();
+            // Drops a compile that is still in flight, without waiting for it. Called at the
+            // points where the object's compiled state stops being observable: a real source
+            // change, and the release of an orphaned shader name.
+            void CancelCompile();
             void MarkAsDeleted();
 
             // Hands out a link-consumable TShader. glslang's mapIO mutates the TShader's
@@ -54,10 +62,14 @@ namespace MobileGL {
 
             Uint GetExternalIndex() const { return m_externalIndex; }
             ShaderStage GetShaderStage() const { return m_stage; }
-            const String& GetShaderSource() const { return m_source; }
+            // No join: the source is GL-thread-owned, and a worker only ever reads the
+            // immutable snapshot it was handed at enqueue.
+            const String& GetShaderSource() const { return *m_source; }
+            // The snapshot itself, for whoever needs to hand it to a job.
+            const SharedPtr<const String>& GetShaderSourcePtr() const { return m_source; }
+
             const SharedPtr<glslang::TShader>& GetCompiledShader() const { return Compiled().shader; }
             const String& GetInfoLog() const { return Compiled().infoLog; }
-            const UnorderedMap<String, Uint>& GetUniformLocations() const { return Compiled().uniforms; }
             // Explicit layout(location = N) qualifiers on this shader's default-block
             // uniforms, captured lexically at Compile() because the relaxed parse drops
             // them from reflection (see ExtractExplicitUniformLocations).
@@ -73,96 +85,98 @@ namespace MobileGL {
             Bool GetCompileStatus() const { return Compiled().compileStatus; }
             Bool GetDeleteStatus() const { return m_deleteStatus; }
 
-            // Blocks until a pending compile (P1 stage 3 onwards) has published its
-            // artifacts. Public for the few sites that must join without reading anything.
-            // A no-op today - nothing is ever pending.
+            // Blocks until a pending compile has published its artifacts. Public for the
+            // sites that must join without reading anything - ProgramObject::Link's
+            // prologue, which needs every attached shader settled before it runs.
             void JoinCompile() const { EnsureCompileJoined(); }
 
-            // True while this object holds the outcome (success OR failure) of a previous
-            // Compile() of exactly the source it currently holds - i.e. while the P0b
-            // layer-1 memo is armed and a glCompileShader would be a no-op. Diagnostics
-            // and tests only; nothing in the GL frontend branches on it.
+            // True while this object holds the outcome (success OR failure) of a Compile()
+            // of exactly the source it currently holds - i.e. while the P0b layer-1 memo is
+            // armed and a glCompileShader would be a no-op. Diagnostics and tests only;
+            // nothing in the GL frontend branches on it.
             //
-            // Deliberately does NOT join: the memo bookkeeping below is GL-thread-owned and
-            // says nothing about whether a worker has finished, which is exactly the
-            // property GL_COMPLETION_STATUS_KHR needs when stage 3 lands.
-            Bool HasMemoizedCompile() const { return m_hasCompiledState; }
+            // Tri-state, and deliberately NOT joining: an in-flight compile of the current
+            // source counts as memoized (a second glCompileShader must not enqueue a
+            // duplicate job), but asking that question must never block.
+            // A node that settled as Cancelled (the job body threw, or the enqueue failed)
+            // carries no result, so it must NOT satisfy the memo: otherwise a second
+            // glCompileShader on the same source enqueues nothing and the eventual join
+            // reports GL_FALSE forever. The synchronous path retries in exactly this case.
+            Bool HasMemoizedCompile() const {
+                return m_compiled != nullptr && m_compiled->source == m_source && !m_compiled->IsCancelled();
+            }
+
+            // MUST NOT JOIN - this is what GL_COMPLETION_STATUS_KHR will read when the
+            // extension surface lands. "No job at all" counts as complete: there is nothing
+            // outstanding to wait for.
+            Bool IsCompileComplete() const { return m_compiled == nullptr || m_compiled->IsTerminal(); }
 
         private:
-            // ---- P1: everything a compile PRODUCES, in one block ----
-            //
-            // Same rule as ProgramObject::LinkArtifacts: this is exactly what
-            // InvalidateCompiledState() clears, i.e. exactly what one run of Compile()
-            // writes. Stage 3 lifts this struct wholesale into ShaderCompileTask, where a
-            // worker fills it in and the GL thread reads it through the same gate.
-            struct CompileArtifacts {
-                // The CompileEnv snapshot this compile ran against. Held so the
-                // consume-once re-parse in TakeShaderForLink() reproduces the original
-                // parse exactly, instead of re-reading whatever the backend says now.
-                SharedPtr<const MG_Util::ShaderTranspiler::CompileEnv> env;
-                SharedPtr<glslang::TShader> shader;
-                // The source Compile() actually parsed (after PreprocessShaderSource), kept
-                // for TakeShaderForLink's re-parse so a later link never depends on the
-                // preprocessor being deterministic across backend-state changes.
-                String preprocessedSource;
-                UnorderedMap<String, Uint> uniforms;
-                UnorderedMap<String, Int> explicitUniformLocations;
-                UnorderedMap<String, Uint> explicitOpaqueBindings;
-                Bool shaderConsumedByLink = false;
-                String infoLog;
-                Bool compileStatus = false;
-            };
-
             // ---- The one and only join gate for compile output (P1 invariant I5) ----
-            // Blocks until a pending compile has published into m_compiled. Today nothing
-            // is ever pending - glCompileShader still runs the whole body inline - so this
-            // is an unconditional no-op. It exists NOW so that every reader of compile
-            // output is already routed through it when stage 3 makes it block.
+            // The fast path - no job, or a job whose result this object has already pulled -
+            // is two predictable branches and stays inline: it runs on every Compiled() read
+            // and the project never builds with LTO, so an out-of-line body would be a real
+            // cross-TU call at each of those sites. The blocking half is out of line.
             //
-            // Defined inline (not in ShaderObject.cpp): called from every Compiled() read,
-            // and the project never builds with LTO, so an out-of-line empty body would be
-            // a real cross-TU call at each of those call sites instead of folding away.
-            void EnsureCompileJoined() const {}
-            CompileArtifacts& Compiled() {
-                EnsureCompileJoined();
-                return m_compiled;
+            // The gate keys on "has this object pulled the job's result yet", NOT on "is the
+            // job terminal". Those differ in the case that matters: a worker can finish a
+            // compile before the GL thread ever looks at it, and the pull is where deferred
+            // diagnostics get replayed and an abandoned node gets dropped. Keying on
+            // terminality would silently skip both.
+            void EnsureCompileJoined() const {
+                if (m_compiled && !m_compileJoined) JoinPendingCompile();
             }
-            const CompileArtifacts& Compiled() const {
+            void JoinPendingCompile() const;
+
+            // The artifacts of a compile that ran to completion. A node that was abandoned
+            // (cancelled at teardown, or whose body threw) never publishes: JoinPendingCompile
+            // drops it, so anything reachable here is either Complete or absent, and "absent"
+            // reads as the never-compiled defaults - COMPILE_STATUS false, empty info log,
+            // which is exactly what GL requires before the first glCompileShader.
+            static const ShaderCompileArtifacts& EmptyArtifacts() {
+                static const ShaderCompileArtifacts empty;
+                return empty;
+            }
+            const ShaderCompileArtifacts& Compiled() const {
                 EnsureCompileJoined();
-                return m_compiled;
+                return m_compiled ? m_compiled->artifacts : EmptyArtifacts();
             }
 
             void InvalidateCompiledState();
             // ---- P0b layer 1: per-object no-op recompile ----
-            // True iff `candidate` is byte-identical to the source that produced the
-            // compiled state this object is currently holding. The stored hash and length
-            // are only a fast reject; the answer is always confirmed against the full
-            // stored text, so no behaviour rides on a 64-bit hash.
+            // True iff `candidate` is byte-identical to the source that produced (or is
+            // producing) the compiled state this object currently holds.
             Bool SourceMatchesCompiledState(const String& candidate) const;
-            // Arms the layer-1 memo for the source that Compile() just processed.
-            void RememberCompiledSource(Uint64 sourceHash);
 
             // ---- GL-thread-owned state: never produced by a compile, so it never joins ----
-            const Uint m_externalIndex = 0;
             const ShaderStage m_stage;
-            // glShaderSource text. A worker only ever reads the snapshot handed to it, so
-            // GL_SHADER_SOURCE_LENGTH and glGetShaderSource never join.
-            String m_source;
+            const Uint m_externalIndex = 0;
+            // The pre-glShaderSource state, shared by every untouched object rather than
+            // allocated per glCreateShader.
+            static const SharedPtr<const String>& EmptySource() {
+                static const SharedPtr<const String> empty = MakeShared<const String>();
+                return empty;
+            }
+            // glShaderSource text, as an immutable snapshot. Never null. A job holds its own
+            // SharedPtr to the exact string it was given, so replacing the source under a
+            // running compile cannot race its storage - and the layer-1 memo collapses to a
+            // pointer comparison against the job's snapshot, because the setter only swaps
+            // the pointer when the text genuinely differs.
+            SharedPtr<const String> m_source = EmptySource();
 
-            // P0b layer 2: the owning context's cross-object memo, or null.
+            // P0b layer 2: the owning context's cross-object memo, or null. Internally
+            // locked, because several workers hit it at once.
             const SharedPtr<ShaderPreprocessCache> m_preprocessCache;
-            // P0b layer 1. m_hasCompiledState is the invariant "m_source is byte-identical
-            // to the source that produced the compile artifacts"; it is armed at the end of
-            // every Compile() and disarmed by InvalidateCompiledState(). Stage 3 replaces
-            // all three with a pointer compare against the in-flight job's source snapshot.
-            Bool m_hasCompiledState = false;
-            Uint64 m_compiledSourceHash = 0;
-            SizeT m_compiledSourceLength = 0;
 
             Bool m_deleteStatus = false;
 
-            // ---- Compile OUTPUT ---- reachable only through Compiled().
-            CompileArtifacts m_compiled;
+            // ---- Compile OUTPUT ---- pending OR completed; reachable only through Compiled().
+            // Mutable because the join is a read-side operation: a const getter has to be
+            // able to settle an outstanding job before answering.
+            mutable SharedPtr<ShaderCompileTask> m_compiled;
+            // Exactly-once latch for the pull above. Armed with every new job node, set by
+            // the one join that consumes it.
+            mutable Bool m_compileJoined = false;
         };
     } // namespace MG_State::GLState
 } // namespace MobileGL

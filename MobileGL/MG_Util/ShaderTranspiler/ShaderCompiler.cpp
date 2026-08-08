@@ -249,6 +249,56 @@ namespace MobileGL {
                 return retryResult;
             }
 
+            // Namespace-level rather than a function-local static, because it has to be
+            // CLEARABLE: what PrewarmBuiltins latches is not a property of this process, it is
+            // a property of the built-in symbol tables glslang currently holds, and
+            // glslang::FinalizeProcess() deletes those. A function-local latch survived the
+            // teardown that invalidated it, so an Initialize -> Destroy -> Initialize cycle
+            // came back up with the tables gone and the prewarm skipped - which is exactly the
+            // serialized-first-parse stall this function exists to prevent, only now
+            // unfixable for the rest of the process. Reset it from DestroyImpl.
+            namespace {
+                Bool g_builtinsPrewarmed = false;
+            } // namespace
+
+            void ShaderCompiler::ResetPrewarmLatch() { g_builtinsPrewarmed = false; }
+
+            void ShaderCompiler::PrewarmBuiltins() {
+                if (g_builtinsPrewarmed) return;
+                g_builtinsPrewarmed = true;
+
+                // One vertex and one fragment shader is enough: the built-in table is cached
+                // per (version, spvVersion, profile, source), not per stage language, and
+                // both configurations CompileShader can reach - the declared-460 path and
+                // the retargeted-legacy path - resolve to the same combination here because
+                // ParseShaderSource always passes 460/ECoreProfile as the default. Parsing
+                // both anyway costs microseconds and keeps this honest if that ever changes.
+                static constexpr const char* kPrewarmVertexSource =
+                    "#version 460\nvoid main() { gl_Position = vec4(0.0); }\n";
+                static constexpr const char* kPrewarmFragmentSource =
+                    "#version 460\nlayout(location = 0) out vec4 c;\nvoid main() { c = vec4(0.0); }\n";
+                static constexpr const char* kPrewarmLegacyVertexSource =
+                    "#version 330 core\nvoid main() { gl_Position = vec4(0.0); }\n";
+
+                const CompileEnv& env = *GetDefaultCompileEnv();
+                for (const auto& [type, source] :
+                     {std::pair{GL_VERTEX_SHADER, kPrewarmVertexSource},
+                      std::pair{GL_FRAGMENT_SHADER, kPrewarmFragmentSource},
+                      std::pair{GL_VERTEX_SHADER, kPrewarmLegacyVertexSource}}) {
+                    ShaderAttrib attrib{.shaderType = static_cast<GLenum>(type),
+                                        .sourceStr = source,
+                                        .flags = 0,
+                                        .env = &env};
+                    // The result is deliberately discarded: the value is the symbol table
+                    // glslang cached as a side effect. A failure here is not fatal - it just
+                    // means the first real compile pays for the table, exactly as before.
+                    (void)CompileShader(attrib);
+                }
+                // The parses above left this thread's glslang allocator pointing at the last
+                // TShader's pool, and that TShader is about to be destroyed with it.
+                glslang::SetThreadPoolAllocator(nullptr);
+            }
+
             Result<SharedPtr<glslang::TProgram>> ShaderCompiler::LinkProgram(const ProgramAttrib& attrib) {
                 SharedPtr<glslang::TProgram> program = MakeShared<glslang::TProgram>();
                 for (auto& s : attrib.shaders) {

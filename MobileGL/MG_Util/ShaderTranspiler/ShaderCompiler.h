@@ -77,6 +77,30 @@ namespace MobileGL {
                 static bool UseUnformattedFloatStorageImagesForVulkan(
                     const Vector<Uint32>& inputBinary, Vector<uint32_t>& outputBinary);
                 static Result<String> DecompileShader(SpvcSession& session);
+
+                // Parses one trivial shader in each configuration the production path can
+                // reach, on the calling thread, so the built-in symbol tables those
+                // configurations need are already cached before any worker asks for one.
+                //
+                // Why it matters: glslang builds a built-in TSymbolTable per distinct
+                // (version, spvVersion, profile, source) combination, and does it under a
+                // process-wide lock held for the whole build. Without this, the first
+                // parallel compiles of a shaderpack load all pile up behind that lock and
+                // show no speedup at all - which is easy to misread as asynchronous
+                // compilation not working. Call once, from the GL thread, right after
+                // glslang::InitializeProcess(). Idempotent and cheap on repeat.
+                //
+                // Only worth its cost when compiles can actually run in parallel, so the GL
+                // frontend calls it only when asynchronous compilation is enabled: a
+                // synchronous build would pay for three throwaway parses at every
+                // eglInitialize to prewarm tables the first real compile builds anyway.
+                static void PrewarmBuiltins();
+                // Clears the "already prewarmed" latch. MUST be called wherever
+                // glslang::FinalizeProcess() is, and for the same reason: finalizing deletes
+                // the cached built-in tables the latch is asserting the existence of. Without
+                // it, the second eglInitialize of a process comes back up unwarmed and with
+                // no way left to warm it.
+                static void ResetPrewarmLatch();
             };
         } // namespace ShaderTranspiler
     } // namespace MG_Util

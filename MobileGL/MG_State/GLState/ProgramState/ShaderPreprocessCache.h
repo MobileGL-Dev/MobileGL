@@ -10,7 +10,9 @@
 #include <Includes.h>
 #include <list>
 #include <mutex>
-#include <MG_State/GLState/ProgramState/ShaderObject.h>
+// Deliberately NOT ShaderObject.h: ShaderCompileTask.h needs this header, and ShaderObject.h
+// needs ShaderCompileTask.h. Only ShaderStage was ever used from there.
+#include <MG_State/GLState/ProgramState/ShaderStage.h>
 
 namespace MobileGL::MG_State::GLState {
     // Where the shared, source-only half of ShaderObject::Compile() stopped. The two

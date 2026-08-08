@@ -572,6 +572,20 @@ namespace MobileGL::MG_State::GLState {
         // below is a pure function of the snapshot taken here, which is what lets stage 4
         // lift it into a ProgramLinkTask. `env` is the first piece of that snapshot: the
         // link's only window onto the backend.
+
+        // P1 stage 3: linking is still synchronous, so every attached shader's compile has
+        // to be settled before the body below touches a single one of its artifacts. One
+        // loop up front rather than leaning on the per-accessor gate, deliberately: it lets
+        // all the outstanding compiles finish concurrently and blocks once at the end,
+        // instead of serializing them one join at a time down the loop below.
+        //
+        // Placed AFTER the prologue, not before it, so it joins exactly the shader set this
+        // link will read. Shaders removed by the detach pass above are not joined - the link
+        // never reads them, their objects are still alive, and whoever queries one next
+        // joins it then.
+        for (const auto& shader : m_shaders) {
+            shader->JoinCompile();
+        }
         const SharedPtr<const MG_Util::ShaderTranspiler::CompileEnv> envPtr =
             MG_Util::ShaderTranspiler::GetCurrentCompileEnv();
         const MG_Util::ShaderTranspiler::CompileEnv& env = *envPtr;

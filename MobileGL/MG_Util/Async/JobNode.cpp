@@ -9,6 +9,8 @@
 #include "JobNode.h"
 #include "ShaderCompilePool.h"
 
+#include <MG_State/GLState/Core.h>
+
 namespace MobileGL::MG_Util::Async {
     namespace {
         Bool IsTerminalState(const JobState state) {
@@ -121,5 +123,36 @@ namespace MobileGL::MG_Util::Async {
             }
         }
         fn();
+    }
+
+    void ApplyDeferredDiagnostics(JobNode& node) {
+        MOBILEGL_ASSERT(!ShaderCompilePool::IsPoolThread(),
+                        "ApplyDeferredDiagnostics() called from a pool thread; deferred diagnostics exist precisely "
+                        "so that a worker never touches the GL error state");
+        MOBILEGL_ASSERT(node.IsTerminal(),
+                        "ApplyDeferredDiagnostics() called on a job that has not settled; its diagnostics are still "
+                        "being written");
+
+        if (!node.diagnostics.logLines.empty()) {
+            Vector<String> lines;
+            lines.swap(node.diagnostics.logLines);
+            for (const String& line : lines) {
+                MGLOG_W("%s", line.c_str());
+            }
+        }
+
+        if (node.diagnostics.errors.empty()) return;
+        Vector<DeferredError> errors;
+        errors.swap(node.diagnostics.errors);
+        // Ascending sequence == job-enqueue order == the order a serial implementation would
+        // have recorded them in, which is what decides WHICH payload the application sees:
+        // MobileGL implements GL's sticky-flag semantics, so a repeat of an already-pending
+        // code is discarded and only the first occurrence of each code survives.
+        std::sort(errors.begin(), errors.end(),
+                  [](const DeferredError& a, const DeferredError& b) { return a.sequence < b.sequence; });
+        if (!MG_State::pGLContext) return;
+        for (DeferredError& error : errors) {
+            MG_State::pGLContext->RecordError(error.code, Move(error.info));
+        }
     }
 } // namespace MobileGL::MG_Util::Async

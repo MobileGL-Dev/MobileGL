@@ -113,4 +113,15 @@ namespace MobileGL::MG_Util::Async {
         std::atomic<Bool> m_cancelled{false};
         Vector<std::function<void()>> m_continuations;
     };
+
+    // Replays a settled node's worker-side diagnostics on the calling thread: log lines
+    // first, in the order the body produced them, then any deferred GL error in ascending
+    // `sequence`. GL thread only - it is the join that calls this, which is exactly the
+    // point at which a deferred error becomes indistinguishable from one a serial
+    // implementation would have raised inside glCompileShader/glLinkProgram (an application
+    // cannot observe a pending job's effects by any other route).
+    //
+    // Drains what it replays, so calling it twice on one node is a no-op the second time.
+    // Must be called with the node terminal.
+    void ApplyDeferredDiagnostics(JobNode& node);
 } // namespace MobileGL::MG_Util::Async

@@ -1,0 +1,303 @@
+// MobileGL - MobileGL/MG_State/GLState/ProgramState/ShaderCompileTask.cpp
+// Copyright (c) 2025-2026 MobileGL-Dev
+// Licensed under the GNU Lesser General Public License v3.0:
+//   https://www.gnu.org/licenses/gpl-3.0.txt
+//   https://www.gnu.org/licenses/lgpl-3.0.txt
+// SPDX-License-Identifier: LGPL-3.0-only
+// End of Source File Header
+
+#include "ShaderCompileTask.h"
+
+#include <MG_Util/Converters/MGToGL/ProgramEnumConverter.h>
+#include <MG_Util/ShaderTranspiler/ShaderCompiler.h>
+#include <MG_Util/ShaderTranspiler/ShaderSourceProcessor.h>
+#include <MG_Util/ShaderTranspiler/Types.h>
+
+#include <glslang/Include/PoolAlloc.h>
+
+#include <charconv>
+
+namespace {
+    struct ComputeLocalSize {
+        MobileGL::Uint x = 1;
+        MobileGL::Uint y = 1;
+        MobileGL::Uint z = 1;
+        bool declared = false;
+    };
+
+    static MobileGL::String StripGlslComments(const MobileGL::String& source) {
+        MobileGL::String result;
+        result.reserve(source.length());
+
+        bool inLineComment = false;
+        bool inBlockComment = false;
+        for (MobileGL::SizeT i = 0; i < source.length(); ++i) {
+            if (inLineComment) {
+                if (source[i] == '\n') {
+                    inLineComment = false;
+                    result.push_back(source[i]);
+                } else {
+                    result.push_back(' ');
+                }
+                continue;
+            }
+
+            if (inBlockComment) {
+                if (source[i] == '*' && i + 1 < source.length() && source[i + 1] == '/') {
+                    inBlockComment = false;
+                    result.append("  ");
+                    ++i;
+                } else {
+                    result.push_back(source[i] == '\n' ? '\n' : ' ');
+                }
+                continue;
+            }
+
+            if (source[i] == '/' && i + 1 < source.length()) {
+                if (source[i + 1] == '/') {
+                    inLineComment = true;
+                    result.append("  ");
+                    ++i;
+                    continue;
+                }
+                if (source[i + 1] == '*') {
+                    inBlockComment = true;
+                    result.append("  ");
+                    ++i;
+                    continue;
+                }
+            }
+
+            result.push_back(source[i]);
+        }
+
+        return result;
+    }
+
+    // Hoisted out of ParseComputeLocalSize: constructing a std::regex costs far more than
+    // running it over a small source, and it was being rebuilt on every compute compile. A
+    // const regex carries no mutable state, so sharing one instance across workers is safe.
+    static const std::regex kComputeLocalSizePattern(R"(local_size_([xyz])\s*=\s*([0-9]+))");
+
+    static ComputeLocalSize ParseComputeLocalSize(const MobileGL::String& source) {
+        ComputeLocalSize localSize;
+        const MobileGL::String uncommentedSource = StripGlslComments(source);
+
+        for (std::sregex_iterator it(uncommentedSource.begin(), uncommentedSource.end(), kComputeLocalSizePattern),
+             end;
+             it != end; ++it) {
+            const char axis = (*it)[1].str()[0];
+            // The [0-9]+ capture is unbounded, so `local_size_x = 99999999999999999999999`
+            // is a legal match. std::stoull would throw std::out_of_range on it and let the
+            // exception escape glCompileShader; std::from_chars reports the overflow instead.
+            // An overflowing literal saturates to UINT_MAX, which the device-limit check
+            // below rejects anyway - the same verdict a non-overflowing huge value gets.
+            const MobileGL::String digits = (*it)[2].str();
+            unsigned long long value = 0;
+            const std::from_chars_result parsed =
+                std::from_chars(digits.data(), digits.data() + digits.size(), value);
+            const MobileGL::Uint clampedValue = (parsed.ec != std::errc() || value > UINT_MAX)
+                                                    ? UINT_MAX
+                                                    : static_cast<MobileGL::Uint>(value);
+
+            // TODO: Replace this literal layout scanner with parser/AST-backed validation so expressions and
+            // specialization-id layouts are handled consistently with glslang.
+            localSize.declared = true;
+            if (axis == 'x') {
+                localSize.x = clampedValue;
+            } else if (axis == 'y') {
+                localSize.y = clampedValue;
+            } else {
+                localSize.z = clampedValue;
+            }
+        }
+
+        return localSize;
+    }
+
+    // The device limits come from the CompileEnv snapshot, never from a live driver query.
+    // GL_MAX_COMPUTE_WORK_GROUP_SIZE is a real GLES call on the DirectGLES backend: issued
+    // off the context thread it would silently no-op and turn a legal local_size_z into
+    // COMPILE_STATUS=FALSE. CaptureCompileEnv() issues it once, on the GL thread.
+    static std::optional<MobileGL::String> ValidateComputeLocalSizeLimits(
+        const MobileGL::String& source, const MobileGL::MG_Util::ShaderTranspiler::CompileEnv& env) {
+        const ComputeLocalSize localSize = ParseComputeLocalSize(source);
+        if (!localSize.declared) return std::nullopt;
+
+        if (localSize.x > env.maxComputeWorkGroupSize[0] || localSize.y > env.maxComputeWorkGroupSize[1] ||
+            localSize.z > env.maxComputeWorkGroupSize[2]) {
+            return "Compute shader local_size exceeds GL_MAX_COMPUTE_WORK_GROUP_SIZE.";
+        }
+
+        const unsigned long long invocations = static_cast<unsigned long long>(localSize.x) * localSize.y * localSize.z;
+        if (invocations > env.maxComputeWorkGroupInvocations) {
+            return "Compute shader local_size product exceeds GL_MAX_COMPUTE_WORK_GROUP_INVOCATIONS.";
+        }
+
+        return std::nullopt;
+    }
+
+    // The half of a compile that depends on nothing but the source text, the stage and the
+    // environment snapshot: preprocessing, the two lexical rejections, and the two lexical
+    // side-channel extractions. Split out so P0b layer 2 can memoize exactly this and
+    // nothing else - the glslang parse stays per-object because its TShader is consume-once.
+    // Deliberately free of any per-object state so the memo is sound.
+    //
+    // The compute local-size verdict reads `env` rather than the live backend, and
+    // env.fingerprint is part of the P0b cache key, so a memo can never be returned against
+    // limits other than the ones it was computed against.
+    static MobileGL::MG_State::GLState::ShaderPreprocessResult RunSourceOnlyPipeline(
+        const MobileGL::ShaderStage stage, const MobileGL::String& source,
+        const MobileGL::MG_Util::ShaderTranspiler::CompileEnv& env) {
+        using namespace MobileGL;
+        using namespace MobileGL::MG_Util::ShaderTranspiler;
+        using MobileGL::MG_State::GLState::ShaderPreprocessOutcome;
+
+        MobileGL::MG_State::GLState::ShaderPreprocessResult result;
+        result.preprocessedSource = source;
+        PreprocessShaderSource(stage, result.preprocessedSource, env);
+
+        if (stage == ShaderStage::Compute) {
+            if (const std::optional<String> localSizeError =
+                    ValidateComputeLocalSizeLimits(result.preprocessedSource, env)) {
+                result.outcome = ShaderPreprocessOutcome::ComputeLocalSizeRejected;
+                result.infoLog = *localSizeError;
+                return result;
+            }
+        }
+
+        if (const std::optional<String> reservedError = FindReservedIdentifierViolation(result.preprocessedSource)) {
+            result.outcome = ShaderPreprocessOutcome::ReservedIdentifierRejected;
+            result.infoLog = *reservedError;
+            return result;
+        }
+
+        // The parse this feeds runs in the link-compatible configuration (Vulkan-client
+        // env with relaxed rules): the TShader it produces is what glLinkProgram links and
+        // what the backends' SPIR-V is generated from - there is no second, GL-client
+        // parse. The GL frontend semantics the relaxed parse cannot provide are restored
+        // on top: explicit default-block uniform locations through the lexical
+        // side-channels below, dead-uniform/global-UBO filtering in
+        // ProgramObject::DoReflection.
+        result.explicitUniformLocations = ExtractExplicitUniformLocations(result.preprocessedSource);
+        result.explicitOpaqueBindings = ExtractExplicitOpaqueBindings(result.preprocessedSource);
+        result.outcome = ShaderPreprocessOutcome::Preprocessed;
+        return result;
+    }
+
+    // glslang has no "detach this thread" API in the vendored revision (there is no
+    // InitThread/DetachThread pair any more; thread attachment is implicit through
+    // thread_local state, and glslang::InitializeProcess() is process-wide, refcounted and
+    // mutex-guarded, so it needs no per-worker counterpart).
+    //
+    // What DOES need undoing is the thread pool allocator: TShader::parse sets the calling
+    // thread's TLS allocator to the shader's own pool and never restores it. Left pointing
+    // there, the next allocation this worker makes - in an unrelated job, or in glslang code
+    // reached from a different object - would come out of a pool the GL thread may already
+    // have deleted with the TShader. SetThreadPoolAllocator(nullptr) reverts the thread to
+    // its own thread_local default and is the documented idiom. A scope guard, so it also
+    // runs when a body throws.
+    struct GlslangThreadAllocatorGuard {
+        ~GlslangThreadAllocatorGuard() { glslang::SetThreadPoolAllocator(nullptr); }
+    };
+} // namespace
+
+namespace MobileGL::MG_State::GLState {
+    // Pure CPU work only. Everything this reads is either an input the node owns or a
+    // process-wide constant; everything it writes is `artifacts`. Do not add a GL/EGL call,
+    // a pActiveBackendObject read, or a pGLContext->RecordError() here - the first two are
+    // what CompileEnv exists to replace, and the third is why the design's section 6
+    // deferral mechanism (and JobNode's debug assert on it) exists.
+    void ShaderCompileTask::RunBody() {
+        // Own the failure rather than letting JobNode's backstop settle the node as
+        // Cancelled: an abandoned node publishes nothing, so the shader would report
+        // COMPILE_STATUS false with an EMPTY info log. GL models a failed compile as
+        // status + log, so turn a throw into exactly that - a completed job whose result
+        // is "this shader did not compile", with a log the application can read.
+        // (JobNode still catches: it is the last resort for anything below.)
+        try {
+            RunCompilePipeline();
+        } catch (const std::exception& e) {
+            artifacts = {};
+            artifacts.env = env;
+            artifacts.compileStatus = false;
+            artifacts.infoLog = std::format("Error: shader compilation failed: {}", e.what());
+        } catch (...) {
+            artifacts = {};
+            artifacts.env = env;
+            artifacts.compileStatus = false;
+            artifacts.infoLog = "Error: shader compilation failed: unknown exception";
+        }
+    }
+
+    void ShaderCompileTask::RunCompilePipeline() {
+        using namespace MG_Util::ShaderTranspiler;
+        const GlslangThreadAllocatorGuard glslangGuard;
+
+        const CompileEnv& compileEnv = *env;
+        artifacts.env = env;
+
+        // P0b layer 2: another shader object in this context may already have run the
+        // source-only half over byte-identical text under the same environment.
+        ShaderPreprocessResultPtr cached =
+            cache ? cache->Find(stage, sourceHash, *source, compileEnv.fingerprint) : nullptr;
+        SharedPtr<ShaderPreprocessResult> fresh;
+        if (!cached) fresh = MakeShared<ShaderPreprocessResult>(RunSourceOnlyPipeline(stage, *source, compileEnv));
+        const ShaderPreprocessResult& shared = cached ? *cached : *fresh;
+        const Bool shouldPopulateCache = !cached && cache != nullptr;
+
+        if (!shared.Preprocessed()) {
+            // Rejected lexically, or a glslang failure this context has already seen for
+            // this exact source (ParseFailed) - either way the parse can be skipped.
+            artifacts.infoLog = shared.infoLog;
+            if (shouldPopulateCache) {
+                cache->Insert(stage, sourceHash, *source, compileEnv.fingerprint, Move(fresh));
+            }
+            return;
+        }
+
+        ShaderAttrib attrib{.shaderType = MG_Util::ConvertShaderStageToGLEnum(stage),
+                            .sourceStr = shared.preprocessedSource,
+                            .flags = 0,
+                            .env = &compileEnv};
+
+        auto result = ShaderCompiler::CompileShader(attrib);
+        if (result) {
+            artifacts.compileStatus = true;
+            artifacts.shader = result.value();
+            // Copy, not move: `shared` may alias a cache entry that has to outlive us, and
+            // `fresh` is about to be handed to the cache.
+            artifacts.preprocessedSource = shared.preprocessedSource;
+            artifacts.explicitUniformLocations = shared.explicitUniformLocations;
+            artifacts.explicitOpaqueBindings = shared.explicitOpaqueBindings;
+            artifacts.infoLog.clear();
+            if (shouldPopulateCache) {
+                cache->Insert(stage, sourceHash, *source, compileEnv.fingerprint, Move(fresh));
+            }
+        } else {
+            artifacts.infoLog = result.error().log;
+            // Deferred, not logged here, for two reasons. MGLOG from a pool thread interleaves
+            // mid-line with the GL thread's own output and lands out of order relative to the
+            // glCompileShader that caused it; diagnostics.logLines is replayed by the join, on
+            // the GL thread, exactly where a serial implementation would have printed it.
+            // And a one-line summary rather than the old full source dump: a shaderpack stage
+            // is ~100KB, so the dump was the single largest thing this driver ever wrote to
+            // the log, for every failing shader. The info log is what names the offending
+            // line; the source is recoverable from the application.
+            const SizeT firstLineEnd = artifacts.infoLog.find('\n');
+            diagnostics.logLines.push_back(std::format(
+                "ShaderCompileTask: shader {} (stage {}) failed to compile; compileStatus = false. "
+                "Preprocessed source: {} bytes. First log line: {}",
+                externalIndex, static_cast<Int>(stage), shared.preprocessedSource.length(),
+                artifacts.infoLog.substr(0, firstLineEnd == String::npos ? artifacts.infoLog.length()
+                                                                        : firstLineEnd)));
+            if (shouldPopulateCache) {
+                fresh->outcome = ShaderPreprocessOutcome::ParseFailed;
+                fresh->infoLog = artifacts.infoLog;
+                fresh->explicitUniformLocations.clear();
+                fresh->explicitOpaqueBindings.clear();
+                cache->Insert(stage, sourceHash, *source, compileEnv.fingerprint, Move(fresh));
+            }
+        }
+    }
+} // namespace MobileGL::MG_State::GLState

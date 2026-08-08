@@ -16,6 +16,7 @@
 #include <MG_Impl/GLImpl/Framebuffer/GL_Framebuffer.h>
 #include <MG_Impl/GLImpl/Sync/GL_Sync.h>
 #include <MG_Util/Async/ShaderCompilePool.h>
+#include <MG_Util/ShaderTranspiler/ShaderCompiler.h>
 
 #include <atomic>
 #include <mutex>
@@ -61,6 +62,10 @@ namespace MobileGL {
             // still reference levels adopted from those tables. Finalizing first left live
             // glslang objects pointing at freed memory for the rest of the teardown.
             glslang::FinalizeProcess();
+            // Immediately after, and never apart from it: FinalizeProcess just deleted the
+            // built-in symbol tables the prewarm latch stands for, so leaving it set would
+            // make the next Initialize() skip a prewarm it genuinely needs.
+            MG_Util::ShaderTranspiler::ShaderCompiler::ResetPrewarmLatch();
             MG_Backend::gBackendFunctionsTable = {};
             g_isInitialized = false;
             if (logLifecycle) {
@@ -88,6 +93,19 @@ namespace MobileGL {
         MG_Impl::Init();
         MGLOG_D("MG_Impl initialized");
         glslang::InitializeProcess();
+        // On the GL thread, before any worker can exist. glslang builds its built-in symbol
+        // tables lazily under a process-wide lock held for the whole build, so without this
+        // the first concurrent compiles of a shaderpack all serialize behind the very first
+        // parse and asynchronous compilation looks like it is doing nothing.
+        //
+        // Gated on the flag, because the problem it solves only exists when there are
+        // workers: with compilation synchronous, nothing ever contends for that lock and the
+        // three throwaway parses buy nothing - they just add to every eglInitialize. Read the
+        // flag here rather than inside PrewarmBuiltins so ShaderCompiler keeps no dependency
+        // on the async subsystem (ProgramUtilTest compiles that file without it).
+        if (MG_Util::Async::AsyncShaderCompileEnabled()) {
+            MG_Util::ShaderTranspiler::ShaderCompiler::PrewarmBuiltins();
+        }
         MGLOG_D("glslang initialized");
         g_isInitialized = true;
         MGLOG_I("MobileGL initialized");

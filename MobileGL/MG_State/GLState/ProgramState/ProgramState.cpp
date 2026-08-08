@@ -120,6 +120,11 @@ namespace MobileGL::MG_State::GLState {
         auto& shaderObject = m_shaderObjects[shader];
         if (shaderObject == nullptr || !shaderObject->GetDeleteStatus()) return;
         if (ShaderHasGLVisibleAttachment(shaderObject)) return;
+        // The name is about to go: nothing can observe this shader's compile any more, so a
+        // job still in flight for it is pure waste. Cancel-not-join - the job owns its
+        // inputs, so dropping the object out from under it is safe and the GL thread never
+        // blocks on a delete.
+        shaderObject->CancelCompile();
         shaderObject.reset();
         m_programShaderNameGenerator.Delete(shader);
     }

@@ -135,12 +135,25 @@ TEST(ShaderCompilePoolLifecycle, DetectedThreadCountIsPositive) {
     EXPECT_GE(DetectShaderCompileThreadCount(), 1u);
 }
 
-TEST(ShaderCompilePoolLifecycle, AsyncIsOffByDefaultInThisStage) {
-    // Stage 1 ships the machinery wired to nothing. If this ever fails without the default
-    // constant having been deliberately flipped, something enabled async by accident.
-    EXPECT_EQ(MG_Config::Features.AsyncShaderCompile, MG_Config::QuirkOverride::Auto);
+TEST(ShaderCompilePoolLifecycle, AsyncIsOffByDefaultAndTheOverrideDecidesEitherWay) {
+    // The shipped default is still off, and an unset MOBILEGL_ASYNC_SHADER_COMPILE resolves
+    // to it. If the first expectation ever fails without the constant having been
+    // deliberately flipped, something enabled async by accident.
+    //
+    // Driven through Features rather than read from it: from stage 3 on, the whole suite is
+    // also run with MOBILEGL_ASYNC_SHADER_COMPILE=1 exported, so a test that simply asserted
+    // "the resolved answer is false" would either fail there or - worse - silently pass in a
+    // binary that never loaded the config and prove nothing at all.
     EXPECT_FALSE(kAsyncShaderCompileDefault);
+
+    const MG_Config::QuirkOverride saved = MG_Config::Features.AsyncShaderCompile;
+    MG_Config::Features.AsyncShaderCompile = MG_Config::QuirkOverride::Auto;
+    EXPECT_EQ(AsyncShaderCompileEnabled(), kAsyncShaderCompileDefault);
+    MG_Config::Features.AsyncShaderCompile = MG_Config::QuirkOverride::ForceOn;
+    EXPECT_TRUE(AsyncShaderCompileEnabled());
+    MG_Config::Features.AsyncShaderCompile = MG_Config::QuirkOverride::ForceOff;
     EXPECT_FALSE(AsyncShaderCompileEnabled());
+    MG_Config::Features.AsyncShaderCompile = saved;
 }
 
 // ---------------------------------------------------------------------------------------

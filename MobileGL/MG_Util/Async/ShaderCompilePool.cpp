@@ -36,11 +36,29 @@ namespace MobileGL::MG_Util::Async {
         // first pool use, so it is guaranteed to run before any static destructor.
         Bool g_processTeardown = false;
         std::once_flag g_teardownSentinelOnce;
+        // The process-wide pool from Get(), for the atexit handler to stop. Never the
+        // stack-allocated pools a test builds - those join themselves in their destructor.
+        std::atomic<ShaderCompilePool*> g_processPool{nullptr};
 
         Bool InProcessTeardown() { return g_processTeardown; }
 
         void EnsureProcessTeardownSentinel() {
-            std::call_once(g_teardownSentinelOnce, [] { std::atexit(+[] { g_processTeardown = true; }); });
+            std::call_once(g_teardownSentinelOnce, [] {
+                std::atexit(+[] {
+                    g_processTeardown = true;
+                    // Latching the flag is not enough: a worker that is ALREADY inside
+                    // glslang has to be out of it before static destruction reaches
+                    // glslang's process globals, the SPIRV-Tools tables, or anything else a
+                    // job body touches. This is the same wait Init.cpp's DestroyImpl does -
+                    // it just also has to happen for a process that exits without ever
+                    // calling eglTerminate, which is the norm for a test binary and legal
+                    // for an application. Registered here, during main, so it runs before
+                    // the destructors of statics constructed at load time.
+                    if (ShaderCompilePool* pool = g_processPool.load(std::memory_order_acquire)) {
+                        pool->StopAndDrain();
+                    }
+                });
+            });
         }
 
         Uint64 ReadCpuMaxFrequencyKHz(const Uint cpu) {
@@ -120,10 +138,20 @@ namespace MobileGL::MG_Util::Async {
         // re-enter this mutex.
         void DispatchLocked() {
             while (!queue.empty() && inFlight < maxConcurrency && !stopped.load(std::memory_order_acquire)) {
-                SharedPtr<JobNode> node = Move(queue.front());
+                // Copy rather than move into the handler: if asio::post throws (it allocates)
+                // the local SharedPtr is still valid, so the node can be settled instead of
+                // being stranded Pending in a queue nothing will dispatch from again - a
+                // joiner would block on it forever. Reclaiming the slot matters just as much:
+                // a leaked `inFlight` shrinks the pool's concurrency budget permanently.
+                SharedPtr<JobNode> node = queue.front();
                 queue.pop_front();
                 ++inFlight;
-                asio::post(*pool, [this, node = Move(node)]() mutable { RunOnWorker(Move(node)); });
+                try {
+                    asio::post(*pool, [this, node]() mutable { RunOnWorker(Move(node)); });
+                } catch (...) {
+                    --inFlight;
+                    node->Cancel();
+                }
             }
         }
 
@@ -147,10 +175,17 @@ namespace MobileGL::MG_Util::Async {
     ShaderCompilePool::~ShaderCompilePool() { StopAndDrain(); }
 
     ShaderCompilePool& ShaderCompilePool::Get() {
-        // Leak-at-exit, like the other MobileGL singletons: a process that exits without
-        // eglTerminate hands the threads to the OS rather than joining them from a static
-        // destructor, where the rest of the library may already be gone.
-        static ShaderCompilePool* pool = new ShaderCompilePool(DetectShaderCompileThreadCount());
+        // Leak-at-exit, like the other MobileGL singletons: the object itself is never
+        // destroyed, so no static destructor can race a late entry point for it. Its THREADS
+        // are a different matter and are stopped explicitly - by Init.cpp's DestroyImpl on
+        // the normal path, and by the atexit sentinel below for a process that exits without
+        // ever calling eglTerminate.
+        static ShaderCompilePool* pool = [] {
+            auto* created = new ShaderCompilePool(DetectShaderCompileThreadCount());
+            g_processPool.store(created, std::memory_order_release);
+            EnsureProcessTeardownSentinel();
+            return created;
+        }();
         return *pool;
     }
 
@@ -174,7 +209,18 @@ namespace MobileGL::MG_Util::Async {
         if (!node) return;
         EnsureProcessTeardownSentinel();
 
-        {
+        // Enqueueing can throw: the thread_pool construction and asio::post both allocate,
+        // and under memory pressure a throw here would escape glCompileShader leaving the
+        // node Pending with nothing left to dispatch it - the first observable read would
+        // then block the GL thread forever. Settle the node instead: a cancelled node is a
+        // state every joiner already handles.
+        //
+        // `node` is still valid in the catch for every throw this try can produce. The
+        // thread_pool construction runs before the move; deque::push_back is strongly
+        // exception-safe and SharedPtr's move constructor is noexcept, so a throwing
+        // push_back never consumed it; and DispatchLocked contains its own asio::post
+        // failures rather than propagating them (see above). Keep it that way.
+        try {
             const std::lock_guard<std::mutex> lock(m_impl->mutex);
             if (!m_impl->stopped.load(std::memory_order_acquire) && !InProcessTeardown()) {
                 if (!m_impl->pool) m_impl->pool = MakeUnique<asio::thread_pool>(m_impl->threadCount);
@@ -182,12 +228,27 @@ namespace MobileGL::MG_Util::Async {
                 m_impl->DispatchLocked();
                 return;
             }
+        } catch (...) {
+            MGLOG_E("ShaderCompilePool::Post: enqueue failed; cancelling the job so its joiner "
+                    "cannot block forever");
+            if (node) node->Cancel();
+            return;
         }
 
         // A stopped pool is a synchronous pool, not a black hole: the node still runs, just
         // on the caller's thread. Everything downstream already handles "terminal by the time
         // Post returns", because that is exactly what the inline path looks like. Run it
         // outside the lock - a body, or a continuation it releases, is free to Post again.
+        //
+        // Say so once. StopAndDrain is a one-way latch (see its tail), so from the first
+        // eglTerminate onwards EVERY compile in this process silently runs on the GL thread;
+        // without this line the only symptom is that asynchronous compilation stopped helping,
+        // with nothing in the log to point at. Once, not per node: a pack load posts hundreds.
+        static std::atomic<Bool> warnedStopped{false};
+        if (!warnedStopped.exchange(true, std::memory_order_relaxed)) {
+            MGLOG_W("ShaderCompilePool::Post: the pool is stopped (eglTerminate, or process exit); shader "
+                    "compilation runs inline on the calling thread until MobileGL is re-initialized");
+        }
         node->RunInline();
     }
 

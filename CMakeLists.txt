@@ -294,6 +294,7 @@ set(SOURCE_FILES
     MobileGL/MG_State/GLState/TextureState/TextureUnit.cpp
     MobileGL/MG_State/GLState/TextureState/TextureState.cpp
     MobileGL/MG_State/GLState/ProgramState/ProgramObject.cpp
+    MobileGL/MG_State/GLState/ProgramState/ShaderCompileTask.cpp
     MobileGL/MG_State/GLState/ProgramState/ShaderObject.cpp
     MobileGL/MG_State/GLState/ProgramState/ShaderPreprocessCache.cpp
     MobileGL/MG_State/GLState/ProgramState/ProgramState.cpp
