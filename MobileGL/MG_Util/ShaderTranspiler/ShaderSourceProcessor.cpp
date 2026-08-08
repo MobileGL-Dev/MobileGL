@@ -32,6 +32,20 @@ namespace {
         return (ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') || ch == '_';
     }
 
+    // Return a copy of `source` with every comment and string-literal interior blanked to spaces.
+    //
+    // The passes that follow answer lexical questions ("is this identifier real code?", "where does
+    // the #version line end?"), so comment and literal text has to stop being visible to them - but
+    // it must not be *deleted*: replacing the bytes with spaces keeps every offset 1:1 with the
+    // original, so an edit collected against the mask applies verbatim to the source, and keeping
+    // newlines means glslang's diagnostics still point at the line the application wrote.
+    //
+    // It also has to be lexically stateful. A banner line such as
+    //
+    //     //*** lighting pass ***
+    //
+    // contains "/*" one byte in, and a naive search for that opener treats the rest of the file as
+    // an unterminated comment.
     MobileGL::String MaskCommentsAndQuotedText(const MobileGL::String& source) {
         enum class Region { Code, SingleLineComment, MultiLineComment, QuotedText };
 
@@ -85,9 +99,17 @@ namespace {
                 continue;
             }
 
-            if (ch != '\n' && ch != '\r') {
-                masked[pos] = ' ';
+            // GLSL has no multi-line string literals, so a quote that reaches end of line was never
+            // a literal to begin with - most likely an apostrophe in a #error or #pragma message.
+            // Ending the region here keeps one stray apostrophe from swallowing the rest of the file
+            // for every consumer of this mask: the tokenizer, the #version inspection, and the
+            // explicit-location / opaque-binding extractors all go blind past that point otherwise.
+            if (ch == '\n' || ch == '\r') {
+                region = Region::Code;
+                continue;
             }
+
+            masked[pos] = ' ';
             if (escaped) {
                 escaped = false;
             } else if (ch == '\\') {
@@ -98,77 +120,6 @@ namespace {
         }
 
         return masked;
-    }
-
-    // Blank out block comments in place, leaving line comments and every other byte where it is.
-    //
-    // The passes that follow scan the source as raw text, so block comments have to stop being
-    // visible to them - but they must not be *deleted*: replacing the bytes with spaces keeps every
-    // later offset valid and keeps newlines, so glslang's diagnostics still point at the line the
-    // application wrote. It also has to be lexically aware. A banner line such as
-    //
-    //     //*** lighting pass ***
-    //
-    // contains "/*" one byte in, and a naive search for that opener treats the rest of the file as
-    // an unterminated comment.
-    void BlankBlockComments(MobileGL::String& source) {
-        enum class Region { Code, SingleLineComment, MultiLineComment, QuotedText };
-
-        Region region = Region::Code;
-        char quote = '\0';
-        bool escaped = false;
-
-        for (SizeT pos = 0; pos < source.size(); pos++) {
-            const char ch = source[pos];
-            const char next = pos + 1 < source.size() ? source[pos + 1] : '\0';
-
-            if (region == Region::Code) {
-                if (ch == '/' && next == '/') {
-                    pos++;
-                    region = Region::SingleLineComment;
-                } else if (ch == '/' && next == '*') {
-                    source[pos] = ' ';
-                    source[pos + 1] = ' ';
-                    pos++;
-                    region = Region::MultiLineComment;
-                } else if (ch == '"' || ch == '\'') {
-                    quote = ch;
-                    escaped = false;
-                    region = Region::QuotedText;
-                }
-                continue;
-            }
-
-            if (region == Region::SingleLineComment) {
-                if (ch == '\n' || ch == '\r') region = Region::Code;
-                continue;
-            }
-
-            if (region == Region::MultiLineComment) {
-                if (ch == '*' && next == '/') {
-                    source[pos] = ' ';
-                    source[pos + 1] = ' ';
-                    pos++;
-                    region = Region::Code;
-                } else if (ch != '\n' && ch != '\r') {
-                    source[pos] = ' ';
-                }
-                continue;
-            }
-
-            // GLSL has no multi-line string literals, so a quote that reaches end of line was never
-            // a literal to begin with - most likely an apostrophe in a #error or #pragma message.
-            // Ending the region here keeps one stray apostrophe from swallowing the rest of the file.
-            if (ch == '\n' || ch == '\r') {
-                region = Region::Code;
-            } else if (escaped) {
-                escaped = false;
-            } else if (ch == '\\') {
-                escaped = true;
-            } else if (ch == quote) {
-                region = Region::Code;
-            }
-        }
     }
 
     struct CodeToken {
@@ -729,7 +680,17 @@ namespace {
                                        : "#version 460 core\n";
     }
 
-    void NormalizeVersionDirective(MobileGL::String& source, const ShaderLanguageInfo& info) {
+    // Rewrites the #version directive and returns the offset just past it in the rewritten source -
+    // the anchor every later injection inserts at.
+    //
+    // The offset is returned rather than rediscovered because this function is the only place that
+    // knows it for free; recovering it costs a whole-source mask plus a line scan
+    // (FindAfterVersionDirective -> InspectShaderLanguage). Each branch below leaves the bytes
+    // ahead of the directive untouched apart from the BOM erase, and each replacement text is
+    // exactly one newline-terminated line, so the arithmetic is exact in all three cases.
+    SizeT NormalizeVersionDirective(MobileGL::String& source, const ShaderLanguageInfo& info) {
+        const SizeT bomBytes = info.hasUtf8Bom ? 3 : 0;
+
         // A malformed #version (329, 331, bad profile, float/trailing tokens) is left exactly as the
         // application wrote it so glslang rejects it - rewriting it to "#version 330 core" would
         // silently legalize the CTS directive.version_* rejection cases. Still drop a leading BOM so
@@ -738,7 +699,8 @@ namespace {
             if (info.hasUtf8Bom) {
                 source.erase(0, 3);
             }
-            return;
+            // The directive keeps its text and only slides left by the erased BOM.
+            return info.versionDirectiveEnd - bomBytes;
         }
 
         const MobileGL::String replacement = GetNormalizedVersionDirective(info);
@@ -748,13 +710,16 @@ namespace {
             if (info.hasUtf8Bom) {
                 source.erase(0, 3);
             }
-            return;
+            // Only whitespace can precede the directive on its own line, so the replacement occupies
+            // the whole rest of that line and ends it.
+            return info.versionDirectiveStart - bomBytes + replacement.size();
         }
 
         if (info.hasUtf8Bom) {
             source.erase(0, 3);
         }
         source.insert(0, replacement);
+        return replacement.size();
     }
 
     // Start of the physical line containing `offset`, never scanning before `lowerBound`.
@@ -969,65 +934,64 @@ namespace {
         }
     }
 
-    void RemoveDefineForIdentifier(MobileGL::String& source, const MobileGL::String& identifier) {
-        SizeT lineStart = 0;
-        while (lineStart < source.size()) {
-            SizeT lineEnd = source.find('\n', lineStart);
-            const bool hasLineBreak = lineEnd != MobileGL::String::npos;
-            if (!hasLineBreak) {
-                lineEnd = source.size();
-            }
-
-            SizeT probe = lineStart;
-            while (probe < lineEnd && std::isspace(static_cast<unsigned char>(source[probe]))) {
-                probe++;
-            }
-            if (probe < lineEnd && source[probe] == '#') {
-                probe++;
-                while (probe < lineEnd && std::isspace(static_cast<unsigned char>(source[probe]))) {
-                    probe++;
-                }
-
-                constexpr const char* defineToken = "define";
-                constexpr SizeT defineLen = 6;
-                const bool hasDefine = probe + defineLen <= lineEnd &&
-                                       source.compare(probe, defineLen, defineToken) == 0 &&
-                                       (probe + defineLen == lineEnd ||
-                                        !IsIdentifierChar(source[probe + defineLen]));
-                if (hasDefine) {
-                    probe += defineLen;
-                    while (probe < lineEnd && std::isspace(static_cast<unsigned char>(source[probe]))) {
-                        probe++;
-                    }
-
-                    const bool hasIdentifier = probe + identifier.size() <= lineEnd &&
-                                               source.compare(probe, identifier.size(), identifier) == 0 &&
-                                               (probe + identifier.size() == lineEnd ||
-                                                !IsIdentifierChar(source[probe + identifier.size()]));
-                    if (hasIdentifier) {
-                        source.erase(lineStart, lineEnd - lineStart + (hasLineBreak ? 1 : 0));
-                        continue;
-                    }
-                }
-            }
-
-            lineStart = lineEnd + (hasLineBreak ? 1 : 0);
-        }
-    }
-
     SizeT FindAfterVersionDirective(const MobileGL::String& source) {
         const ShaderLanguageInfo info = InspectShaderLanguage(source);
         return info.HasVersionDirective() ? info.versionDirectiveEnd : 0;
     }
+
+    // Holds the offset just past the #version directive - the anchor every injected declaration is
+    // inserted at - across the passes of one PreprocessShaderSource call.
+    //
+    // Four consumers want that one number, and each used to buy it with its own
+    // FindAfterVersionDirective, i.e. its own whole-source mask plus line scan. Taking it once and
+    // handing it down turns up to five InspectShaderLanguage sweeps per compile into one.
+    //
+    // It stays EXACT rather than merely cached. The memo is handed out only while the bytes ahead
+    // of the anchor are byte-for-byte what they were when it was taken, and that is precisely the
+    // condition under which a fresh FindAfterVersionDirective returns the same answer: the whole
+    // version line, and every line the scan looks at before reaching it, lies inside that prefix,
+    // so an unchanged prefix means the same directive is still found ending at the same offset.
+    // The guard is load-bearing, not decoration - passes really do rewrite ahead of the anchor.
+    // NormalizeLineDirectives deletes #line directives that precede the version line, and
+    // ModernizeLegacyGLSL's ReplaceIdentifier is raw text and so rewrites inside a leading comment
+    // banner. When the guard trips the offset is simply recomputed, which is the pre-memo behavior.
+    //
+    // The one-argument constructor is that pre-memo behavior in full, for any caller that has a
+    // source but no anchor to hand.
+    class AfterVersionAnchor {
+    public:
+        explicit AfterVersionAnchor(const MobileGL::String& source) { Recompute(source); }
+        AfterVersionAnchor(const MobileGL::String& source, SizeT offset) { Adopt(source, offset); }
+
+        SizeT Get(const MobileGL::String& source) {
+            if (source.size() < m_offset || source.compare(0, m_offset, m_prefix) != 0) {
+                Recompute(source);
+            }
+            return m_offset;
+        }
+
+    private:
+        void Recompute(const MobileGL::String& source) { Adopt(source, FindAfterVersionDirective(source)); }
+
+        void Adopt(const MobileGL::String& source, SizeT offset) {
+            m_offset = offset;
+            m_prefix.assign(source, 0, offset);
+        }
+
+        SizeT m_offset = 0;
+        MobileGL::String m_prefix;
+    };
 
     // GLSL's #line takes integer expressions only, but plenty of shader-pack preprocessors emit the
     // C form with a quoted filename. Deleting every #line outright made those harmless - at the cost
     // of __LINE__ reporting the position in MobileGL's rewritten text rather than the one the pack
     // author wrote, and of every later diagnostic pointing at the wrong line. Dropping just the
     // quoted operand keeps the directive doing its job and still hands glslang something it accepts.
-    void NormalizeLineDirectives(MobileGL::String& source) {
+    //
+    // `versionEnd` is the after-version anchor for the current `source` (AfterVersionAnchor::Get);
+    // this pass only reads the source ahead of its own rewrites, so the plain offset is enough.
+    void NormalizeLineDirectives(MobileGL::String& source, SizeT versionEnd) {
         const MobileGL::String masked = MaskCommentsAndQuotedText(source);
-        const SizeT versionEnd = FindAfterVersionDirective(source);
         MobileGL::String result;
         result.reserve(source.size());
 
@@ -1244,7 +1208,12 @@ namespace {
         }
     }
 
-    void ModernizeLegacyGLSL(MobileGL::ShaderStage stage, MobileGL::String& source) {
+    // `afterVersion` tracks the anchor the two injections below insert at. It is passed as the
+    // tracker rather than a bare offset because this pass rewrites identifiers first, and those
+    // rewrites are raw text: a leading comment banner mentioning `varying` or `texture2D` moves the
+    // anchor, and the tracker notices.
+    void ModernizeLegacyGLSL(MobileGL::ShaderStage stage, MobileGL::String& source,
+                             AfterVersionAnchor& afterVersion) {
         // Precision qualifiers (highp/mediump/lowp and default-precision statements) are legal and
         // ignored in the normalized desktop core profiles, so glslang handles them natively.
 
@@ -1265,16 +1234,17 @@ namespace {
             const bool usesFragData = source.find("gl_FragData") != MobileGL::String::npos;
             if (usesFragColor) {
                 ReplaceIdentifier(source, "gl_FragColor", "mg_FragColor");
-                source.insert(FindAfterVersionDirective(source), "out vec4 mg_FragColor;\n");
+                source.insert(afterVersion.Get(source), "out vec4 mg_FragColor;\n");
             }
             if (usesFragData) {
                 ReplaceIdentifier(source, "gl_FragData", "mg_FragData");
-                source.insert(FindAfterVersionDirective(source), "layout(location = 0) out vec4 mg_FragData[8];\n");
+                source.insert(afterVersion.Get(source), "layout(location = 0) out vec4 mg_FragData[8];\n");
             }
         }
     }
 
-    void InjectDepthRangeBuiltinShim(MobileGL::ShaderStage stage, MobileGL::String& source) {
+    void InjectDepthRangeBuiltinShim(MobileGL::ShaderStage stage, MobileGL::String& source,
+                                     AfterVersionAnchor& afterVersion) {
         if (stage != MobileGL::ShaderStage::Fragment) return;
         if (source.find("gl_DepthRange") == MobileGL::String::npos) return;
         if (source.find("mg_DepthRangeParameters") != MobileGL::String::npos) return;
@@ -1283,7 +1253,7 @@ namespace {
             "struct mg_DepthRangeParameters { float near; float far; float diff; };\n"
             "const mg_DepthRangeParameters mg_DepthRange = mg_DepthRangeParameters(0.0, 1.0, 1.0);\n"
             "#define gl_DepthRange mg_DepthRange\n";
-        source.insert(FindAfterVersionDirective(source), shim);
+        source.insert(afterVersion.Get(source), shim);
     }
 } // namespace
 
@@ -1399,10 +1369,14 @@ namespace MobileGL {
             } // namespace
 
             void PreprocessShaderSource(ShaderStage stage, String& source) {
-                // Normalize while the inspector's source span still refers to the untouched input. Later passes
-                // remove comments and directives, so any subsequent insertion re-inspects the current source.
+                // Normalize while the inspector's source span still refers to the untouched input.
                 const ShaderLanguageInfo originalLanguage = InspectShaderLanguage(source);
-                NormalizeVersionDirective(source, originalLanguage);
+
+                // Four passes below inject just past the #version directive, and each of them used
+                // to locate that anchor for itself - a whole-source mask plus line scan apiece, up
+                // to five per compile for one offset. NormalizeVersionDirective hands back the
+                // anchor it just created and the tracker keeps it honest from there.
+                AfterVersionAnchor afterVersion(source, NormalizeVersionDirective(source, originalLanguage));
 
                 // Comments are left intact for glslang's own preprocessor: a block comment is a single
                 // preprocessing token that collapses to one space even across newlines and inside a
@@ -1411,7 +1385,7 @@ namespace MobileGL {
                 // preprocessor multiline_comment_define / redefine_object / function_redefinition).
                 // Every MobileGL pass that must ignore comment/string text already masks them locally
                 // via MaskCommentsAndQuotedText/TokenizeCode, so the source we hand glslang keeps them.
-                NormalizeLineDirectives(source);
+                NormalizeLineDirectives(source, afterVersion.Get(source));
 
                 // noperspective is intentionally NOT touched here. It is core in desktop GLSL (1.30+)
                 // and maps to the core SPIR-V NoPerspective decoration, which DirectVulkan renders
@@ -1426,8 +1400,8 @@ namespace MobileGL {
 
                 RenameBuiltinShadowingFunctions(source);
 
-                ModernizeLegacyGLSL(stage, source);
-                InjectDepthRangeBuiltinShim(stage, source);
+                ModernizeLegacyGLSL(stage, source, afterVersion);
+                InjectDepthRangeBuiltinShim(stage, source, afterVersion);
 
                 ApplyShaderSourceQuirks(stage, source);
             }

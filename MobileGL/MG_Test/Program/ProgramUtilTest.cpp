@@ -2221,3 +2221,157 @@ void main() {
     EXPECT_NE(source.find("mg_min3(0.1, 0.2, 0.3)"), String::npos) << source;
     EXPECT_EQ(source.find("float min3("), String::npos) << source;
 }
+
+// GLSL has no multi-line string or character literal, so a lone apostrophe never opens one - it is
+// an English contraction, in a comment or in a diagnostic directive. MaskCommentsAndQuotedText used
+// to disagree: it entered its quoted-text region on the apostrophe and, having no end-of-line rule,
+// stayed there to the end of the file, blanking everything after it for every consumer of the mask
+// (the tokenizer, the #version inspection, the explicit-location and opaque-binding extractors).
+//
+// Apostrophes inside comments were never affected - the comment region claims them first - but that
+// is exactly the property the fix must not break, so pin it.
+TEST_F(ProgramUtilTest, PreprocessKeepsApostrophesInsideCommentsHarmless) {
+    using namespace MG_Util::ShaderTranspiler;
+
+    String source = R"(#version 460 core
+// don't do this: the sampler isn't bound before the first frame
+/* and here's a block comment whose apostrophes shouldn't matter either */
+uniform sampler2D tex;
+in vec2 uv;
+out vec4 fragColor;
+
+void main() {
+    fragColor = texture(tex, uv);
+}
+)";
+    PreprocessShaderSource(ShaderStage::Fragment, source);
+
+    EXPECT_NE(source.find("void main()"), String::npos) << "shader body was blanked:\n" << source;
+    EXPECT_NE(source.find("fragColor = texture(tex, uv);"), String::npos) << source;
+
+    ShaderAttrib attrib{.shaderType = GL_FRAGMENT_SHADER, .sourceStr = source};
+    auto res = ShaderCompiler::CompileShader(attrib);
+    if (!res) {
+        FAIL() << "errc: " << res.error().errc << "\nlog: " << res.error().log << "\nsource:\n" << source;
+    }
+}
+
+// The case the old masker actually broke: an apostrophe in real (non-comment) text. Everything after
+// it looked like string interior, so ExtractExplicitUniformLocations tokenized a blank source and
+// handed the GL location assigner an empty map - the uniform silently lost its explicit location.
+TEST_F(ProgramUtilTest, PreprocessApostropheInDirectiveKeepsLaterCodeVisibleToExtractors) {
+    using namespace MG_Util::ShaderTranspiler;
+
+    String source = R"(#version 460 core
+#pragma MG_NOTE(this pack can't run without explicit locations)
+layout(location = 7) uniform vec4 tint;
+in vec2 uv;
+out vec4 fragColor;
+
+void main() {
+    fragColor = tint * uv.x;
+}
+)";
+    PreprocessShaderSource(ShaderStage::Fragment, source);
+
+    const UnorderedMap<String, Int> locations = ExtractExplicitUniformLocations(source);
+    ASSERT_EQ(locations.count("tint"), 1u) << "extractor went blind past the apostrophe:\n" << source;
+    EXPECT_EQ(locations.at("tint"), 7);
+
+    ShaderAttrib attrib{.shaderType = GL_FRAGMENT_SHADER, .sourceStr = source};
+    auto res = ShaderCompiler::CompileShader(attrib);
+    if (!res) {
+        FAIL() << "errc: " << res.error().errc << "\nlog: " << res.error().log << "\nsource:\n" << source;
+    }
+}
+
+// PreprocessShaderSource used to rediscover "where does the #version directive end?" once per
+// injection - up to five whole-source masks and line scans per compile for one offset. It now takes
+// the anchor once, from the pass that creates it, and tracks it.
+//
+// These three sources drive every consumer of that anchor: NormalizeLineDirectives (both the
+// keep branch and the drop-ahead-of-#version branch), ModernizeLegacyGLSL's gl_FragColor
+// injection, and InjectDepthRangeBuiltinShim's. The expected texts are the byte-exact output of
+// the pre-memo implementation, captured from it - the change is pure memoization and is allowed to
+// move no byte at all.
+//
+// Case B and case C are the two ways the anchor moves out from under the memo, and are why it is
+// tracked rather than simply cached: B deletes a #line that precedes the version directive, and C
+// has ModernizeLegacyGLSL's raw ReplaceIdentifier rewrite "varying"/"texture2D" inside a comment
+// banner ahead of it, pulling the anchor six bytes left. An offset cached blindly would put the
+// injected declaration six bytes inside the version line.
+TEST_F(ProgramUtilTest, PreprocessLegacyFragmentShaderOutputIsByteStableAcrossTheVersionAnchor) {
+    using namespace MG_Util::ShaderTranspiler;
+
+    const char* kLegacyBody = R"(#line 30
+varying vec2 uv;
+uniform sampler2D tex;
+
+void main() {
+    float d = gl_DepthRange.diff;
+    gl_FragColor = texture2D(tex, uv) * d;
+}
+)";
+    const char* kExpectedBody =
+        "#version 330 core /*mobilegl-normalized-legacy*/\n"
+        "struct mg_DepthRangeParameters { float near; float far; float diff; };\n"
+        "const mg_DepthRangeParameters mg_DepthRange = mg_DepthRangeParameters(0.0, 1.0, 1.0);\n"
+        "#define gl_DepthRange mg_DepthRange\n"
+        "out vec4 mg_FragColor;\n"
+        "#line 30\n"
+        "in vec2 uv;\n"
+        "uniform sampler2D tex;\n"
+        "\n"
+        "void main() {\n"
+        "    float d = gl_DepthRange.diff;\n"
+        "    mg_FragColor = texture(tex, uv) * d;\n"
+        "}\n";
+
+    {
+        SCOPED_TRACE("A: version directive at offset 0");
+        String source = String("#version 120\n") + kLegacyBody;
+        PreprocessShaderSource(ShaderStage::Fragment, source);
+        EXPECT_EQ(source, String(kExpectedBody));
+
+        ShaderAttrib attrib{.shaderType = GL_FRAGMENT_SHADER, .sourceStr = source};
+        auto res = ShaderCompiler::CompileShader(attrib);
+        if (!res) {
+            FAIL() << "errc: " << res.error().errc << "\nlog: " << res.error().log << "\nsource:\n" << source;
+        }
+    }
+
+    {
+        SCOPED_TRACE("B: a #line ahead of the version directive is dropped, shortening the prefix");
+        String source = String("// pack preamble\n#line 1 \"world.fsh\"\n#version 120\n") + kLegacyBody;
+        PreprocessShaderSource(ShaderStage::Fragment, source);
+        // The dropped directive leaves its newline behind, so line numbering is untouched.
+        EXPECT_EQ(source, String("// pack preamble\n\n") + kExpectedBody);
+    }
+
+    {
+        SCOPED_TRACE("C: a comment banner ahead of the version directive is itself rewritten");
+        String source = R"(/* legacy varying / texture2D helpers */
+#version 120
+varying vec2 uv;
+uniform sampler2D tex;
+void main() {
+    gl_FragColor = texture2D(tex, uv);
+}
+)";
+        PreprocessShaderSource(ShaderStage::Fragment, source);
+        EXPECT_EQ(source, String("/* legacy in / texture helpers */\n"
+                                 "#version 330 core /*mobilegl-normalized-legacy*/\n"
+                                 "out vec4 mg_FragColor;\n"
+                                 "in vec2 uv;\n"
+                                 "uniform sampler2D tex;\n"
+                                 "void main() {\n"
+                                 "    mg_FragColor = texture(tex, uv);\n"
+                                 "}\n"));
+
+        ShaderAttrib attrib{.shaderType = GL_FRAGMENT_SHADER, .sourceStr = source};
+        auto res = ShaderCompiler::CompileShader(attrib);
+        if (!res) {
+            FAIL() << "errc: " << res.error().errc << "\nlog: " << res.error().log << "\nsource:\n" << source;
+        }
+    }
+}
