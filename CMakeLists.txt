@@ -154,6 +154,9 @@ set(SOURCE_FILES
 
     MobileGL/MG_Util/Debug/Log.cpp
 
+    MobileGL/MG_Util/Async/JobNode.cpp
+    MobileGL/MG_Util/Async/ShaderCompilePool.cpp
+
     MobileGL/MG_Util/Math/VectorTypes.cpp
     MobileGL/MG_Util/Metrics/TextureMetrics.cpp
 
@@ -325,6 +328,11 @@ if (WIN32)
     )
 endif()
 
+# The shader-compile pool runs standalone Asio on real threads. This host's glibc (>= 2.34)
+# merged pthread into libc, so it links without asking, but the NDK and musl are not
+# guaranteed to be as forgiving - ask for it explicitly rather than rely on the accident.
+find_package(Threads REQUIRED)
+
 set(MOBILEGL_LINK_LIBRARIES
         glslang::glslang
         spirv-cross-c
@@ -334,12 +342,17 @@ set(MOBILEGL_LINK_LIBRARIES
         GPUOpen::VulkanMemoryAllocator
         Vulkan::UtilityHeaders
         spirv-reflect-static
+        Threads::Threads
 )
 
 set(MOBILEGL_COMPILE_DEF
         -DVMA_STATIC_VULKAN_FUNCTIONS=0
         -DVMA_DYNAMIC_VULKAN_FUNCTIONS=1
         -DVMA_VULKAN_VERSION=1001000
+        # Header-only Asio, no Boost, no deprecated interfaces. Set on the definition list
+        # rather than per-target so the shared library and the _s static target agree.
+        -DASIO_STANDALONE
+        -DASIO_NO_DEPRECATED
 )
 
 message(STATUS "MOBILEGL_COMPILE_DEF=${MOBILEGL_COMPILE_DEF}")
@@ -351,6 +364,10 @@ set(MOBILEGL_INCLUDE_DIR
         ${spirv-tools_SOURCE_DIR}/include
         ${spirv-tools_BINARY_DIR}
         ${SPIRV-Headers_SOURCE_DIR}/include
+        # Header-only submodule: no add_subdirectory, no link target. Only
+        # MG_Util/Async/ShaderCompilePool.cpp includes it, and it stays behind that file's
+        # pimpl so no consumer target needs this path.
+        ${CMAKE_SOURCE_DIR}/3rdparty/asio/asio/include
 )
 
 add_library(${CMAKE_PROJECT_NAME} SHARED

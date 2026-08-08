@@ -15,6 +15,7 @@
 #include <MG_Impl/GLImpl/Texture/ProxyTexture.h>
 #include <MG_Impl/GLImpl/Framebuffer/GL_Framebuffer.h>
 #include <MG_Impl/GLImpl/Sync/GL_Sync.h>
+#include <MG_Util/Async/ShaderCompilePool.h>
 
 #include <atomic>
 #include <mutex>
@@ -37,6 +38,12 @@ namespace MobileGL {
             if (logLifecycle) {
                 MGLOG_I("MobileGL closing...");
             }
+            // First, before anything else is torn down. In-flight compile/link jobs own
+            // their own inputs and are safe against everything below EXCEPT glslang's
+            // process globals and the TShader/TProgram objects hanging off pGLContext,
+            // both of which this function is about to destroy. This is the one
+            // cancellation path in the whole design that waits.
+            MG_Util::Async::ShaderCompilePool::Get().StopAndDrain();
             // GL syncs die with their contexts, and every context is gone by the
             // time full teardown runs: drain the live-sync registry while the
             // backend function table can still release the backend handles (and

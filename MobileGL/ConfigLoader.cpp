@@ -181,6 +181,8 @@ namespace MobileGL::MG_ConfigLoader {
         features.DisableRobustBufferAccess = QueryEnvFlag("MOBILEGL_DISABLE_ROBUST_BUFFER_ACCESS");
         features.MagmaMultiDrawMode = QueryEnvMultiDrawMode("MOBILEGL_MAGMA_MULTIDRAW_MODE");
         features.EsprytMultiDrawMode = QueryEnvGLESMultiDrawMode("MOBILEGL_ESPRYT_MULTIDRAW_MODE");
+        features.AsyncShaderCompile = QueryEnvQuirkOverride("MOBILEGL_ASYNC_SHADER_COMPILE");
+        features.AsyncShaderCompileThreads = QueryEnvUint32("MOBILEGL_ASYNC_SHADER_COMPILE_THREADS", 0, 0, 64);
     }
 
     inline void InitBackendType() {

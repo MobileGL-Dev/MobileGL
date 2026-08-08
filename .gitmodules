@@ -31,3 +31,6 @@
 [submodule "3rdparty/apitrace"]
 	path = 3rdparty/apitrace
 	url = https://github.com/MobileGL-Dev/apitrace.git
+[submodule "3rdparty/asio"]
+	path = 3rdparty/asio
+	url = https://github.com/chriskohlhoff/asio.git

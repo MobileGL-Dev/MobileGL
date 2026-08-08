@@ -127,6 +127,15 @@ namespace MobileGL::MG_Config {
         // "compute", see GLESMultiDrawMode). Clamped to driver support; unset picks the best
         // supported tier, which never includes "compute" - see the note on its resolution.
         GLESMultiDrawMode EsprytMultiDrawMode = GLESMultiDrawMode::Auto;
+        // MOBILEGL_ASYNC_SHADER_COMPILE: overrides asynchronous shader compilation. Unset
+        // keeps the built-in default (MG_Util::Async::kAsyncShaderCompileDefault); falsy
+        // forces every glCompileShader/glLinkProgram to run synchronously on the calling
+        // thread AND withdraws GL_KHR_parallel_shader_compile, so the single switch reverts
+        // both the threading and the application-visible behaviour change.
+        QuirkOverride AsyncShaderCompile = QuirkOverride::Auto;
+        // MOBILEGL_ASYNC_SHADER_COMPILE_THREADS: shader-compile worker count. 0 (unset) means
+        // auto, which is min(4, big cores); an explicit value is honoured as given.
+        Uint32 AsyncShaderCompileThreads = 0;
     };
     extern FeaturesTable Features;
 } // namespace MobileGL::MG_Config
