@@ -9,6 +9,7 @@
 #pragma once
 #include <Includes.h>
 #include <list>
+#include <mutex>
 #include <MG_State/GLState/ProgramState/ShaderObject.h>
 
 namespace MobileGL::MG_State::GLState {
@@ -42,6 +43,11 @@ namespace MobileGL::MG_State::GLState {
         Bool Preprocessed() const { return outcome == ShaderPreprocessOutcome::Preprocessed; }
     };
 
+    // Cache hits hand out shared ownership, not a raw pointer into the entry list. That is
+    // what makes the cache safe once compiles run concurrently: a reader keeps its payload
+    // alive across any eviction, and a 107 KB preprocessedSource is never copied on a hit.
+    using ShaderPreprocessResultPtr = SharedPtr<const ShaderPreprocessResult>;
+
     // P0b layer 2: a per-context, bounded memo of the source-only half of shader
     // compilation, keyed by (stage, xxhash64(source), source length).
     //
@@ -71,14 +77,22 @@ namespace MobileGL::MG_State::GLState {
         static constexpr SizeT kMaxEntries = 128;
         static constexpr SizeT kMaxStoredSourceBytes = 8u * 1024u * 1024u;
 
-        // Returns the memoized result for this exact source, or null on a miss. The
-        // returned pointer stays valid until the next Insert()/Clear() on this cache.
-        const ShaderPreprocessResult* Find(ShaderStage stage, Uint64 sourceHash, const String& source) const;
+        // Returns the memoized result for this exact source under this exact compile
+        // environment, or null on a miss. The returned SharedPtr owns its payload, so it
+        // stays valid for as long as the caller holds it - across Insert(), Clear(), and
+        // across the destruction of the cache itself.
+        //
+        // envFingerprint joins the key because the source-only pipeline's compute
+        // local-size verdict is computed against CompileEnv's device limits: a memo must
+        // never outlive the environment it was computed against (memo-hazard rule).
+        ShaderPreprocessResultPtr Find(ShaderStage stage, Uint64 sourceHash, const String& source,
+                                       Uint64 envFingerprint) const;
 
         // Memoizes `result` for this source. A source whose own storage cost already
         // exceeds the byte budget is simply not cached (caching it would evict everything
         // else and then itself).
-        void Insert(ShaderStage stage, Uint64 sourceHash, const String& source, ShaderPreprocessResult result);
+        void Insert(ShaderStage stage, Uint64 sourceHash, const String& source, Uint64 envFingerprint,
+                    ShaderPreprocessResultPtr result);
 
         void Clear();
 
@@ -86,17 +100,25 @@ namespace MobileGL::MG_State::GLState {
             return static_cast<Uint64>(XXH64(source.data(), source.length(), 0));
         }
 
-        SizeT GetEntryCount() const { return m_entries.size(); }
-        SizeT GetStoredSourceBytes() const { return m_storedSourceBytes; }
+        SizeT GetEntryCount() const {
+            const std::lock_guard<std::mutex> lock(m_mutex);
+            return m_entries.size();
+        }
+        SizeT GetStoredSourceBytes() const {
+            const std::lock_guard<std::mutex> lock(m_mutex);
+            return m_storedSourceBytes;
+        }
 
     private:
         struct Key {
             ShaderStage stage = ShaderStage::Unknown;
             Uint64 sourceHash = 0;
             SizeT sourceLength = 0;
+            Uint64 envFingerprint = 0;
 
             Bool operator==(const Key& other) const {
-                return stage == other.stage && sourceHash == other.sourceHash && sourceLength == other.sourceLength;
+                return stage == other.stage && sourceHash == other.sourceHash &&
+                       sourceLength == other.sourceLength && envFingerprint == other.envFingerprint;
             }
         };
 
@@ -107,6 +129,7 @@ namespace MobileGL::MG_State::GLState {
                 Uint64 mixed = key.sourceHash;
                 mixed ^= static_cast<Uint64>(key.sourceLength) + 0x9e3779b97f4a7c15ull + (mixed << 6) + (mixed >> 2);
                 mixed ^= static_cast<Uint64>(static_cast<Int>(key.stage)) * 0xff51afd7ed558ccdull;
+                mixed ^= key.envFingerprint + 0x9e3779b97f4a7c15ull + (mixed << 6) + (mixed >> 2);
                 return static_cast<SizeT>(mixed);
             }
         };
@@ -116,7 +139,7 @@ namespace MobileGL::MG_State::GLState {
             // The full original (pre-preprocess) source, kept so a hit can be confirmed by
             // comparison instead of trusting the hash.
             String originalSource;
-            ShaderPreprocessResult result;
+            ShaderPreprocessResultPtr result;
         };
 
         using EntryList = std::list<Entry>;
@@ -125,14 +148,16 @@ namespace MobileGL::MG_State::GLState {
             return source.length() + result.preprocessedSource.length();
         }
 
-        void EraseEntry(EntryList::iterator it);
-        void EvictUntilWithinBudget();
+        void EvictUntilWithinBudgetLocked();
 
-        // P1: needs a mutex when compiles go async. Everything here is reached from
-        // glCompileShader on the single GL thread that owns the context, so today the
-        // cache is deliberately lock-free; the moment shader compilation moves onto a
-        // worker pool, Find/Insert/Clear all become critical sections (and Find's returned
-        // pointer stops being safe to hold across an Insert).
+        void EraseEntryLocked(EntryList::iterator it);
+
+        // P1: every public entry point takes this. The lock alone would NOT have been
+        // enough - the old Find() handed back a raw pointer into an entry that a
+        // concurrent Insert()'s FIFO eviction could erase while the caller was still
+        // reading it. Shared ownership of the payload is what closes that hole; the mutex
+        // only protects the containers below.
+        mutable std::mutex m_mutex;
         EntryList m_entries;                                 // front = oldest (FIFO victim)
         UnorderedMap<Key, EntryList::iterator, KeyHasher> m_index;
         SizeT m_storedSourceBytes = 0;

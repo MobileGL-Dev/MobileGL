@@ -9,9 +9,14 @@
 #include "ShaderPreprocessCache.h"
 
 namespace MobileGL::MG_State::GLState {
-    const ShaderPreprocessResult* ShaderPreprocessCache::Find(const ShaderStage stage, const Uint64 sourceHash,
-                                                              const String& source) const {
-        const Key key{.stage = stage, .sourceHash = sourceHash, .sourceLength = source.length()};
+    ShaderPreprocessResultPtr ShaderPreprocessCache::Find(const ShaderStage stage, const Uint64 sourceHash,
+                                                         const String& source, const Uint64 envFingerprint) const {
+        const Key key{.stage = stage,
+                      .sourceHash = sourceHash,
+                      .sourceLength = source.length(),
+                      .envFingerprint = envFingerprint};
+
+        const std::lock_guard<std::mutex> lock(m_mutex);
         const auto it = m_index.find(key);
         if (it == m_index.end()) return nullptr;
 
@@ -20,52 +25,62 @@ namespace MobileGL::MG_State::GLState {
         const Entry& entry = *it->second;
         if (entry.originalSource != source) return nullptr;
 
-        return &entry.result;
+        // A copy of the SharedPtr, taken under the lock: the payload now outlives any
+        // eviction the caller races with.
+        return entry.result;
     }
 
     void ShaderPreprocessCache::Insert(const ShaderStage stage, const Uint64 sourceHash, const String& source,
-                                       ShaderPreprocessResult result) {
-        const SizeT entryBytes = EntryBytes(source, result);
+                                       const Uint64 envFingerprint, ShaderPreprocessResultPtr result) {
+        if (!result) return;
+
+        const SizeT entryBytes = EntryBytes(source, *result);
         // A single source bigger than the whole budget would evict every other entry and
         // then itself; refuse it instead of thrashing the cache empty.
         if (entryBytes > kMaxStoredSourceBytes) return;
 
-        const Key key{.stage = stage, .sourceHash = sourceHash, .sourceLength = source.length()};
+        const Key key{.stage = stage,
+                      .sourceHash = sourceHash,
+                      .sourceLength = source.length(),
+                      .envFingerprint = envFingerprint};
+
+        const std::lock_guard<std::mutex> lock(m_mutex);
         if (const auto existing = m_index.find(key); existing != m_index.end()) {
             // Either a re-insert of the same source (harmless) or a genuine hash collision
             // with a different source. Both are resolved by letting the newcomer win: one
             // entry per key keeps the index a plain map, and a collision is astronomically
             // rare enough that the loser simply misses.
-            EraseEntry(existing->second);
+            EraseEntryLocked(existing->second);
         }
 
         m_entries.push_back(Entry{.key = key, .originalSource = source, .result = Move(result)});
         m_index[key] = std::prev(m_entries.end());
         m_storedSourceBytes += entryBytes;
 
-        EvictUntilWithinBudget();
+        EvictUntilWithinBudgetLocked();
     }
 
     void ShaderPreprocessCache::Clear() {
+        const std::lock_guard<std::mutex> lock(m_mutex);
         m_entries.clear();
         m_index.clear();
         m_storedSourceBytes = 0;
     }
 
-    void ShaderPreprocessCache::EraseEntry(const EntryList::iterator it) {
-        const SizeT bytes = EntryBytes(it->originalSource, it->result);
+    void ShaderPreprocessCache::EraseEntryLocked(const EntryList::iterator it) {
+        const SizeT bytes = EntryBytes(it->originalSource, *it->result);
         m_storedSourceBytes = bytes > m_storedSourceBytes ? 0 : m_storedSourceBytes - bytes;
         m_index.erase(it->key);
         m_entries.erase(it);
     }
 
-    void ShaderPreprocessCache::EvictUntilWithinBudget() {
+    void ShaderPreprocessCache::EvictUntilWithinBudgetLocked() {
         // FIFO: the oldest insertion goes first. Insert() already refuses entries larger
         // than the byte budget, so this loop always terminates with at least the entry
         // that was just added still resident.
         while (!m_entries.empty() &&
                (m_entries.size() > kMaxEntries || m_storedSourceBytes > kMaxStoredSourceBytes)) {
-            EraseEntry(m_entries.begin());
+            EraseEntryLocked(m_entries.begin());
         }
     }
 } // namespace MobileGL::MG_State::GLState

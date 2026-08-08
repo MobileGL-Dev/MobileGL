@@ -12,8 +12,8 @@
 #include <MG_Util/ShaderTranspiler/ShaderCompiler.h>
 #include <MG_Util/Converters/MGToGL/ProgramEnumConverter.h>
 #include <MG_Util/ShaderTranspiler/ShaderSourceProcessor.h>
+#include <MG_Util/ShaderTranspiler/CompileEnv.h>
 #include <MG_Util/ShaderTranspiler/glslang/UniformTraverser.h>
-#include <MG_Backend/BackendObjects.h>
 
 #include <charconv>
 
@@ -115,41 +115,22 @@ namespace {
         return localSize;
     }
 
-    static MobileGL::Uint GetComputeWorkGroupSizeLimit(MobileGL::Uint index) {
-        constexpr MobileGL::Uint kFrontendMinComputeWorkGroupSizes[] = {1024, 1024, 64};
-        MobileGL::Int backendValue = 0;
-        if (MobileGL::MG_Backend::gBackendFunctionsTable.GL.GetIntegeri_v) {
-            MobileGL::MG_Backend::gBackendFunctionsTable.GL.GetIntegeri_v(GL_MAX_COMPUTE_WORK_GROUP_SIZE, index,
-                                                                          &backendValue);
-        }
-
-        // TODO: Share these exposed compute limit helpers with GL_Getter.cpp instead of duplicating the frontend minima.
-        return std::max(static_cast<MobileGL::Uint>(std::max(backendValue, 0)),
-                        kFrontendMinComputeWorkGroupSizes[index]);
-    }
-
-    static unsigned long long GetComputeWorkGroupInvocationLimit() {
-        constexpr unsigned long long kFrontendMaxComputeWorkGroupInvocations = 1024;
-        if (!MobileGL::MG_Backend::pActiveBackendObject) return kFrontendMaxComputeWorkGroupInvocations;
-
-        return std::max(static_cast<unsigned long long>(std::max(
-                            MobileGL::MG_Backend::pActiveBackendObject->GetDynamicParameters()
-                                .MaxComputeWorkGroupInvocations,
-                            0)),
-                        kFrontendMaxComputeWorkGroupInvocations);
-    }
-
-    static std::optional<MobileGL::String> ValidateComputeLocalSizeLimits(const MobileGL::String& source) {
+    // The device limits come from the CompileEnv snapshot, never from a live driver query.
+    // GL_MAX_COMPUTE_WORK_GROUP_SIZE is a real GLES call on the DirectGLES backend: issued
+    // off the context thread it would silently no-op and turn a legal local_size_z into
+    // COMPILE_STATUS=FALSE. CaptureCompileEnv() issues it once, on the GL thread.
+    static std::optional<MobileGL::String> ValidateComputeLocalSizeLimits(
+        const MobileGL::String& source, const MobileGL::MG_Util::ShaderTranspiler::CompileEnv& env) {
         const ComputeLocalSize localSize = ParseComputeLocalSize(source);
         if (!localSize.declared) return std::nullopt;
 
-        if (localSize.x > GetComputeWorkGroupSizeLimit(0) || localSize.y > GetComputeWorkGroupSizeLimit(1) ||
-            localSize.z > GetComputeWorkGroupSizeLimit(2)) {
+        if (localSize.x > env.maxComputeWorkGroupSize[0] || localSize.y > env.maxComputeWorkGroupSize[1] ||
+            localSize.z > env.maxComputeWorkGroupSize[2]) {
             return "Compute shader local_size exceeds GL_MAX_COMPUTE_WORK_GROUP_SIZE.";
         }
 
         const unsigned long long invocations = static_cast<unsigned long long>(localSize.x) * localSize.y * localSize.z;
-        if (invocations > GetComputeWorkGroupInvocationLimit()) {
+        if (invocations > env.maxComputeWorkGroupInvocations) {
             return "Compute shader local_size product exceeds GL_MAX_COMPUTE_WORK_GROUP_INVOCATIONS.";
         }
 
@@ -162,23 +143,23 @@ namespace {
     // nothing else - the glslang parse stays per-object because its TShader is
     // consume-once. Deliberately free of any per-object state so the memo is sound.
     //
-    // Caveat, documented rather than defended against: the compute local-size verdict also
-    // reads the active backend's GL_MAX_COMPUTE_WORK_GROUP_* limits. Those are fixed for
-    // the lifetime of a context, and the cache is per-context, so the memo cannot outlive
-    // the limits it was computed against.
+    // The former caveat is gone: the compute local-size verdict reads `env` rather than the
+    // live backend, and env.fingerprint is part of the P0b cache key, so a memo can never be
+    // returned against limits other than the ones it was computed against.
     static MobileGL::MG_State::GLState::ShaderPreprocessResult RunSourceOnlyPipeline(
-        const MobileGL::ShaderStage stage, const MobileGL::String& source) {
+        const MobileGL::ShaderStage stage, const MobileGL::String& source,
+        const MobileGL::MG_Util::ShaderTranspiler::CompileEnv& env) {
         using namespace MobileGL;
         using namespace MobileGL::MG_Util::ShaderTranspiler;
         using MobileGL::MG_State::GLState::ShaderPreprocessOutcome;
 
         MobileGL::MG_State::GLState::ShaderPreprocessResult result;
         result.preprocessedSource = source;
-        PreprocessShaderSource(stage, result.preprocessedSource);
+        PreprocessShaderSource(stage, result.preprocessedSource, env);
 
         if (stage == ShaderStage::Compute) {
             if (const std::optional<String> localSizeError =
-                    ValidateComputeLocalSizeLimits(result.preprocessedSource)) {
+                    ValidateComputeLocalSizeLimits(result.preprocessedSource, env)) {
                 result.outcome = ShaderPreprocessOutcome::ComputeLocalSizeRejected;
                 result.infoLog = *localSizeError;
                 return result;
@@ -240,14 +221,14 @@ namespace MobileGL::MG_State::GLState {
         m_compiledSourceLength = m_source.length();
     }
 
+    // EnsureCompileJoined() is defined inline in ShaderObject.h (see the comment there for
+    // why: no LTO, and it is called from every Compiled() read).
+
     void ShaderObject::InvalidateCompiledState() {
-        m_shader.reset();
-        m_preprocessedSource.clear();
-        m_explicitUniformLocations.clear();
-        m_explicitOpaqueBindings.clear();
-        m_shaderConsumedByLink = false;
-        m_compileStatus = false;
-        m_infoLog.clear();
+        // The compile artifacts are exactly what one Compile() writes, so discarding them
+        // wholesale IS the invalidation. (Kept as an explicit reset rather than a
+        // default-construct so the intent survives a future field addition.)
+        Compiled() = CompileArtifacts{};
         m_hasCompiledState = false;
         m_compiledSourceHash = 0;
         m_compiledSourceLength = 0;
@@ -260,8 +241,8 @@ namespace MobileGL::MG_State::GLState {
         // the exact source it still holds, so a recompile is a no-op. This covers the
         // failure case too - the info log stays queryable because nothing is cleared.
         //
-        // m_shaderConsumedByLink interaction: if the stored TShader already fed a link,
-        // the no-op leaves m_preprocessedSource and both side-channel maps intact, which
+        // shaderConsumedByLink interaction: if the stored TShader already fed a link,
+        // the no-op leaves preprocessedSource and both side-channel maps intact, which
         // is precisely what TakeShaderForLink's on-demand re-parse needs. A real recompile
         // would have handed the next link a fresh parse; the no-op hands it a fresh
         // re-parse of the identical source instead. Same result, one parse either way.
@@ -271,59 +252,72 @@ namespace MobileGL::MG_State::GLState {
 
         const Uint64 sourceHash = ShaderPreprocessCache::HashSource(m_source);
 
+        // The compile-environment snapshot, taken here on the GL thread. Everything below
+        // reads the device through it and never through pActiveBackendObject, which is what
+        // makes the whole body movable onto a worker in stage 3.
+        CompileArtifacts& compiled = Compiled();
+        compiled.env = MG_Util::ShaderTranspiler::GetCurrentCompileEnv();
+        const MG_Util::ShaderTranspiler::CompileEnv& env = *compiled.env;
+
         // P0b layer 2: another shader object in this context may already have run the
-        // source-only half over byte-identical text.
-        const ShaderPreprocessResult* cached =
-            m_preprocessCache != nullptr ? m_preprocessCache->Find(m_stage, sourceHash, m_source) : nullptr;
-        ShaderPreprocessResult fresh;
-        if (cached == nullptr) fresh = RunSourceOnlyPipeline(m_stage, m_source);
-        const ShaderPreprocessResult& shared = cached != nullptr ? *cached : fresh;
-        const Bool shouldPopulateCache = cached == nullptr && m_preprocessCache != nullptr;
+        // source-only half over byte-identical text under the same environment.
+        ShaderPreprocessResultPtr cached =
+            m_preprocessCache ? m_preprocessCache->Find(m_stage, sourceHash, m_source, env.fingerprint) : nullptr;
+        SharedPtr<ShaderPreprocessResult> fresh;
+        if (!cached) fresh = MakeShared<ShaderPreprocessResult>(RunSourceOnlyPipeline(m_stage, m_source, env));
+        const ShaderPreprocessResult& shared = cached ? *cached : *fresh;
+        const Bool shouldPopulateCache = !cached && m_preprocessCache != nullptr;
 
         if (!shared.Preprocessed()) {
             // Rejected lexically, or a glslang failure this context has already seen for
             // this exact source (ParseFailed) - either way the parse can be skipped.
-            m_infoLog = shared.infoLog;
-            if (shouldPopulateCache) m_preprocessCache->Insert(m_stage, sourceHash, m_source, Move(fresh));
+            compiled.infoLog = shared.infoLog;
+            if (shouldPopulateCache) {
+                m_preprocessCache->Insert(m_stage, sourceHash, m_source, env.fingerprint, Move(fresh));
+            }
             RememberCompiledSource(sourceHash);
             return;
         }
 
         ShaderAttrib attrib{.shaderType = MG_Util::ConvertShaderStageToGLEnum(m_stage),
                             .sourceStr = shared.preprocessedSource,
-                            .flags = 0};
+                            .flags = 0,
+                            .env = &env};
 
         auto result = ShaderCompiler::CompileShader(attrib);
         if (result) {
-            m_compileStatus = true;
-            m_shader = result.value();
+            compiled.compileStatus = true;
+            compiled.shader = result.value();
             // Copy, not move: `shared` may alias a cache entry that has to outlive us, and
             // `fresh` is about to be handed to the cache.
-            m_preprocessedSource = shared.preprocessedSource;
-            m_explicitUniformLocations = shared.explicitUniformLocations;
-            m_explicitOpaqueBindings = shared.explicitOpaqueBindings;
-            m_infoLog.clear();
-            if (shouldPopulateCache) m_preprocessCache->Insert(m_stage, sourceHash, m_source, Move(fresh));
-        } else {
-            m_infoLog = result.error().log;
-            MGLOG_D("ShaderObject::Compile: Shader %d compilation failed.\nSource:\n%s\nInfoLog:\n%s\nSetting "
-                    "m_compileStatus = false as a result.",
-                    m_externalIndex, shared.preprocessedSource.c_str(), m_infoLog.c_str());
+            compiled.preprocessedSource = shared.preprocessedSource;
+            compiled.explicitUniformLocations = shared.explicitUniformLocations;
+            compiled.explicitOpaqueBindings = shared.explicitOpaqueBindings;
+            compiled.infoLog.clear();
             if (shouldPopulateCache) {
-                fresh.outcome = ShaderPreprocessOutcome::ParseFailed;
-                fresh.infoLog = m_infoLog;
-                fresh.explicitUniformLocations.clear();
-                fresh.explicitOpaqueBindings.clear();
-                m_preprocessCache->Insert(m_stage, sourceHash, m_source, Move(fresh));
+                m_preprocessCache->Insert(m_stage, sourceHash, m_source, env.fingerprint, Move(fresh));
+            }
+        } else {
+            compiled.infoLog = result.error().log;
+            MGLOG_D("ShaderObject::Compile: Shader %d compilation failed.\nSource:\n%s\nInfoLog:\n%s\nSetting "
+                    "compileStatus = false as a result.",
+                    m_externalIndex, shared.preprocessedSource.c_str(), compiled.infoLog.c_str());
+            if (shouldPopulateCache) {
+                fresh->outcome = ShaderPreprocessOutcome::ParseFailed;
+                fresh->infoLog = compiled.infoLog;
+                fresh->explicitUniformLocations.clear();
+                fresh->explicitOpaqueBindings.clear();
+                m_preprocessCache->Insert(m_stage, sourceHash, m_source, env.fingerprint, Move(fresh));
             }
         }
         RememberCompiledSource(sourceHash);
     }
 
     SharedPtr<glslang::TShader> ShaderObject::TakeShaderForLink(String& outReparseLog) {
-        if (m_shader && !m_shaderConsumedByLink) {
-            m_shaderConsumedByLink = true;
-            return m_shader;
+        CompileArtifacts& compiled = Compiled();
+        if (compiled.shader && !compiled.shaderConsumedByLink) {
+            compiled.shaderConsumedByLink = true;
+            return compiled.shader;
         }
 
         // The stored parse already fed a link, whose mapIO mutated its intermediate.
@@ -332,8 +326,11 @@ namespace MobileGL::MG_State::GLState {
         // here on EVERY link rather than only on reuse.
         using namespace MG_Util::ShaderTranspiler;
         ShaderAttrib attrib{.shaderType = MG_Util::ConvertShaderStageToGLEnum(m_stage),
-                            .sourceStr = m_preprocessedSource,
-                            .flags = 0};
+                            .sourceStr = compiled.preprocessedSource,
+                            .flags = 0,
+                            // Re-parse against the SAME environment the original parse used,
+                            // not against whatever the backend reports now.
+                            .env = compiled.env.get()};
         auto result = ShaderCompiler::CompileShader(attrib);
         if (!result) {
             // Should be unreachable: the same source parsed successfully at Compile().

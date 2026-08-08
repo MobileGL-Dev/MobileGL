@@ -79,7 +79,7 @@ namespace MobileGL::MG_State::GLState {
         Uint shaderId = 0;
         m_programShaderNameGenerator.Generate(1, &shaderId);
         EnsureIndexAvail(shaderId, m_shaderObjects);
-        auto shaderObject = MakeShared<ShaderObject>(stage, shaderId, &m_shaderPreprocessCache);
+        auto shaderObject = MakeShared<ShaderObject>(stage, shaderId, m_shaderPreprocessCache);
         if (shaderObject == nullptr) return 0;
         m_shaderObjects[shaderId] = shaderObject;
         return shaderId;

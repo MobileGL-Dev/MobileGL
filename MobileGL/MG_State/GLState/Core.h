@@ -21,6 +21,10 @@
 #include "VertexArrayState/VertexArrayState.h"
 #include "RenderbufferState/RenderbufferState.h"
 
+namespace MobileGL::MG_Util::ShaderTranspiler {
+    struct CompileEnv;
+}
+
 namespace MobileGL {
     namespace MG_State {
         void Init();
@@ -380,6 +384,15 @@ namespace MobileGL {
                 Bool ValidateRenderbufferName(Uint index) const;
                 Bool ValidateRenderbufferObject(Uint index) const;
 
+                // P1: the shader compile/link pipeline's snapshot of everything it reads from
+                // outside its own (stage, source) inputs. Captured lazily here because it
+                // cannot be captured in MG_State::Init() - that runs BEFORE MG_Backend::Init(),
+                // so there is no backend to query yet. Re-captured whenever the active backend
+                // object changes, which also rolls the fingerprint and therefore invalidates
+                // every P0b preprocess memo keyed against the old one.
+                // GL thread only.
+                const SharedPtr<const MG_Util::ShaderTranspiler::CompileEnv>& GetCompileEnv();
+
             private:
                 // State Components
                 ErrorState m_errorState;
@@ -437,6 +450,11 @@ namespace MobileGL {
                 FramebufferState m_framebufferState;
                 SamplerState m_samplerState;
                 RenderbufferState m_renderbufferState;
+
+                mutable SharedPtr<const MG_Util::ShaderTranspiler::CompileEnv> m_compileEnv;
+                // Identity of the backend object m_compileEnv was captured against; a plain
+                // pointer compare, never dereferenced.
+                const void* m_compileEnvBackend = nullptr;
             };
         } // namespace GLState
 

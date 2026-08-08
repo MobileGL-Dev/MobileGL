@@ -9,6 +9,8 @@
 #include "Core.h"
 #include "MG_State/GLState/RenderbufferState/RenderbufferObject.h"
 #include "MG_State/EGLState/Core.h"
+#include <MG_Backend/BackendObjects.h>
+#include <MG_Util/ShaderTranspiler/CompileEnv.h>
 #include <Config.h>
 
 namespace MobileGL::MG_State {
@@ -24,6 +26,18 @@ namespace MobileGL::MG_State {
     }
 
     namespace GLState {
+        const SharedPtr<const MG_Util::ShaderTranspiler::CompileEnv>& GLContext::GetCompileEnv() {
+            const void* backend = static_cast<const void*>(MG_Backend::pActiveBackendObject.get());
+            if (!m_compileEnv || m_compileEnvBackend != backend) {
+                // First use, or the backend was swapped underneath us. Re-capturing rolls the
+                // fingerprint, so every P0b preprocess memo computed against the old backend's
+                // limits becomes structurally unreachable instead of silently reusable.
+                m_compileEnv = MG_Util::ShaderTranspiler::CaptureCompileEnv();
+                m_compileEnvBackend = backend;
+            }
+            return m_compileEnv;
+        }
+
         // Error
         void GLContext::RecordError(ErrorCode code, UniquePtr<ErrorInfo> info) {
             m_errorState.RecordError(code, Move(info));

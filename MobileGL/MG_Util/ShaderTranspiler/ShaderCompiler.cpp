@@ -37,7 +37,10 @@
 namespace MobileGL {
     namespace MG_Util {
         namespace ShaderTranspiler {
-            TBuiltInResource BuildTBuiltInResource() {
+            // `env` is the compile-time backend snapshot; null means "resolve from the live
+            // backend", which is what the standalone/test entry points do. The pipeline always
+            // passes one, so a worker never reaches pActiveBackendObject through here.
+            TBuiltInResource BuildTBuiltInResource(const CompileEnv* env) {
                 TBuiltInResource Resources{};
                 Resources.maxLights = 32;
                 Resources.maxClipPlanes = 6;
@@ -139,7 +142,8 @@ namespace MobileGL {
                 const MG_Backend::DynamicBackendParameters fallbackParameters{};
                 const auto& activeBackend = MG_Backend::pActiveBackendObject;
                 const auto& dynamicParameters =
-                    activeBackend ? activeBackend->GetDynamicParameters() : fallbackParameters;
+                    env ? env->params
+                        : (activeBackend ? activeBackend->GetDynamicParameters() : fallbackParameters);
                 Resources.maxImageUnits = dynamicParameters.MaxImageUnits;
                 Resources.maxCombinedImageUnitsAndFragmentOutputs =
                     dynamicParameters.MaxImageUnits + dynamicParameters.MaxDrawBuffers;
@@ -167,7 +171,8 @@ namespace MobileGL {
             // copies that could drift apart.
             static Result<SharedPtr<glslang::TShader>> ParseShaderSource(EShLanguage lang, GLenum shaderType,
                                                                          const String& source,
-                                                                         Flags<ShaderCompileBits> flags) {
+                                                                         Flags<ShaderCompileBits> flags,
+                                                                         const CompileEnv* env) {
                 SharedPtr<glslang::TShader> res;
                 auto& tshader = res;
                 tshader = MakeShared<glslang::TShader>(lang);
@@ -194,7 +199,7 @@ namespace MobileGL {
                 tshader->setAutoMapLocations(true);
                 tshader->setAutoMapBindings(true);
                 tshader->setGlobalUniformBlockName(GLOBAL_UBO_NAME);
-                auto resources = BuildTBuiltInResource();
+                auto resources = BuildTBuiltInResource(env);
                 if (!tshader->parse(&resources, 460, ECoreProfile,
                                     /*forceDefaultVersionAndProfile: */ false,
                                     /*forwardCompatible: */ true, EShMsgDefault)) {
@@ -220,7 +225,7 @@ namespace MobileGL {
                 }
 
                 const String source(attrib.sourceStr);
-                auto result = ParseShaderSource(lang, shaderType, source, attrib.flags);
+                auto result = ParseShaderSource(lang, shaderType, source, attrib.flags, attrib.env);
                 if (result) return result;
 
                 // Legacy desktop sources are normalized to "#version 330 core" (with a marker on the
@@ -236,7 +241,7 @@ namespace MobileGL {
                     return result;
                 }
 
-                auto retryResult = ParseShaderSource(lang, shaderType, retrySource, attrib.flags);
+                auto retryResult = ParseShaderSource(lang, shaderType, retrySource, attrib.flags, attrib.env);
                 if (!retryResult) return result;
 
                 MGLOG_D("CompileShader: %s only parsed after retargeting its legacy #version to 460",

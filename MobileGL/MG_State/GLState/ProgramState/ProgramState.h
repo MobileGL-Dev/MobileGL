@@ -37,7 +37,7 @@ namespace MobileGL::MG_State::GLState {
         // P0b layer 2. Exposed for tests and diagnostics; the GL frontend never touches it
         // directly - shader objects reach it through the pointer they are handed at
         // CreateShader().
-        ShaderPreprocessCache& GetShaderPreprocessCache() { return m_shaderPreprocessCache; }
+        ShaderPreprocessCache& GetShaderPreprocessCache() { return *m_shaderPreprocessCache; }
 
     private:
         Bool ShaderHasGLVisibleAttachment(const SharedPtr<ShaderObject>& shaderObject) const;
@@ -64,10 +64,11 @@ namespace MobileGL::MG_State::GLState {
         // object kinds keeps the names disjoint; the object tables stay separate.
         IndexGenerator<Uint> m_programShaderNameGenerator;
 
-        // P0b layer 2: every shader object created here is handed a pointer to this cache.
-        // Declared FIRST on purpose - members are destroyed in reverse declaration order,
-        // so the cache outlives every shader object holding a pointer to it.
-        ShaderPreprocessCache m_shaderPreprocessCache;
+        // P0b layer 2: every shader object created here is handed shared ownership of this
+        // cache, so its lifetime no longer depends on member destruction order (P1: an
+        // in-flight compile job may outlive the context). The FIRST-member declaration is
+        // kept anyway - it costs nothing and documents the intent.
+        SharedPtr<ShaderPreprocessCache> m_shaderPreprocessCache = MakeShared<ShaderPreprocessCache>();
 
         Vector<SharedPtr<ProgramObject>> m_programObjects;
         Vector<SharedPtr<ShaderObject>> m_shaderObjects;

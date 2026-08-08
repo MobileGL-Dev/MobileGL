@@ -8,6 +8,7 @@
 
 #pragma once
 #include <Includes.h>
+#include <MG_Util/ShaderTranspiler/CompileEnv.h>
 
 namespace MobileGL {
     namespace MG_Util {
@@ -25,6 +26,11 @@ namespace MobileGL {
                 GLenum shaderType;
                 StringView sourceStr;
                 Flags<ShaderCompileBits> flags;
+                // The compile-time backend snapshot the glslang resource limits come from.
+                // Null means "read them off the live backend object" - only legal on the GL
+                // thread, and only used by the standalone/test entry points. Non-owning: the
+                // env outlives the attrib (it is a per-context SharedPtr).
+                const CompileEnv* env = nullptr;
             };
 
             struct ProgramAttrib {

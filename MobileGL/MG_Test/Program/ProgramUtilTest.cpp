@@ -21,6 +21,7 @@
 #include <MG_Util/ShaderTranspiler/Types.h>
 #include <MG_Util/ShaderTranspiler/glslang/UniformTraverser.h>
 #include <MG_State/GLState/ProgramState/ShaderPreprocessCache.h>
+#include <MG_Util/ShaderTranspiler/CompileEnv.h>
 #include <spirv-tools/libspirv.hpp>
 #include <spirv-tools/optimizer.hpp>
 
@@ -2378,6 +2379,78 @@ void main() {
 }
 
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// P1: CompileEnv - the compile pipeline's snapshot of everything outside
+// (stage, source). These pin the two properties the rest of P1 rides on: the
+// compute limits really are carried in the snapshot (an off-thread
+// GL_MAX_COMPUTE_WORK_GROUP_SIZE query would silently return 0 and reject a
+// legal local_size), and the fingerprint really does move when they do.
+// ---------------------------------------------------------------------------
+TEST_F(ProgramUtilTest, CompileEnvCarriesComputeLimitsAndFrontendMinima) {
+    using MobileGL::MG_Util::ShaderTranspiler::CaptureCompileEnv;
+
+    const auto env = CaptureCompileEnv();
+    ASSERT_NE(env, nullptr);
+    // With no backend the snapshot is the frontend minimum, never zero - the value an
+    // off-thread GetIntegeri_v would have left behind.
+    EXPECT_GE(env->maxComputeWorkGroupSize[0], 1024u);
+    EXPECT_GE(env->maxComputeWorkGroupSize[1], 1024u);
+    EXPECT_GE(env->maxComputeWorkGroupSize[2], 64u);
+    EXPECT_GE(env->maxComputeWorkGroupInvocations, 1024u);
+    EXPECT_NE(env->fingerprint, 0u);
+}
+
+TEST_F(ProgramUtilTest, CompileEnvFingerprintTracksEveryInput) {
+    using MobileGL::MG_Util::ShaderTranspiler::CompileEnv;
+    using MobileGL::MG_Util::ShaderTranspiler::ComputeCompileEnvFingerprint;
+
+    CompileEnv base;
+    const Uint64 baseline = ComputeCompileEnvFingerprint(base);
+    EXPECT_EQ(ComputeCompileEnvFingerprint(base), baseline) << "fingerprint must be deterministic";
+
+    // A device that allows a bigger workgroup than the frontend minimum is a DIFFERENT
+    // compile environment: a memo taken under the smaller limit must not be reusable.
+    CompileEnv biggerZ = base;
+    biggerZ.maxComputeWorkGroupSize[2] = 256;
+    EXPECT_NE(ComputeCompileEnvFingerprint(biggerZ), baseline);
+
+    CompileEnv moreInvocations = base;
+    moreInvocations.maxComputeWorkGroupInvocations = 2048;
+    EXPECT_NE(ComputeCompileEnvFingerprint(moreInvocations), baseline);
+
+    CompileEnv otherBackend = base;
+    otherBackend.backend = MobileGL::BackendType::DirectVulkan;
+    EXPECT_NE(ComputeCompileEnvFingerprint(otherBackend), baseline);
+
+    CompileEnv otherLimits = base;
+    otherLimits.params.MaxVertexAttribs = 31;
+    EXPECT_NE(ComputeCompileEnvFingerprint(otherLimits), baseline);
+
+    CompileEnv otherExtensions = base;
+    otherExtensions.advertisedExtensions.push_back(MobileGL::E_GL_ARB_gpu_shader_int64);
+    EXPECT_NE(ComputeCompileEnvFingerprint(otherExtensions), baseline);
+
+    CompileEnv otherQuirk = base;
+    otherQuirk.subgroupPrefixScanQuirk = MobileGL::MG_Config::QuirkOverride::ForceOn;
+    EXPECT_NE(ComputeCompileEnvFingerprint(otherQuirk), baseline);
+}
+
+// The no-backend fallback must stay exactly what the pipeline used to do inline:
+// everything counts as advertised, because there is nothing to gate against.
+TEST_F(ProgramUtilTest, CompileEnvWithoutBackendAdvertisesEverything) {
+    using MobileGL::MG_Util::ShaderTranspiler::CompileEnv;
+
+    CompileEnv env;
+    EXPECT_FALSE(env.HasBackend());
+    EXPECT_TRUE(env.IsExtensionAdvertised(MobileGL::E_GL_ARB_gpu_shader_int64));
+
+    env.backend = MobileGL::BackendType::DirectGLES;
+    EXPECT_TRUE(env.HasBackend());
+    EXPECT_FALSE(env.IsExtensionAdvertised(MobileGL::E_GL_ARB_gpu_shader_int64));
+    env.advertisedExtensions.push_back(MobileGL::E_GL_ARB_gpu_shader_int64);
+    EXPECT_TRUE(env.IsExtensionAdvertised(MobileGL::E_GL_ARB_gpu_shader_int64));
+}
+
 // P0b layer 2: ShaderPreprocessCache, tested directly. The GL-level behaviour it
 // enables is covered end to end in ProgramTest; these pin the container itself,
 // where the interesting cases (hash collisions, both eviction budgets) are hard
@@ -2387,13 +2460,19 @@ namespace {
     using MobileGL::MG_State::GLState::ShaderPreprocessCache;
     using MobileGL::MG_State::GLState::ShaderPreprocessOutcome;
     using MobileGL::MG_State::GLState::ShaderPreprocessResult;
+    using MobileGL::MG_State::GLState::ShaderPreprocessResultPtr;
 
-    ShaderPreprocessResult MakeResult(const String& preprocessed) {
-        ShaderPreprocessResult result;
-        result.outcome = ShaderPreprocessOutcome::Preprocessed;
-        result.preprocessedSource = preprocessed;
-        result.explicitUniformLocations["uMarker"] = 7;
-        result.explicitOpaqueBindings["sMarker"] = 3;
+    // The env fingerprint every test below keys against, unless it is specifically
+    // exercising the fingerprint itself.
+    constexpr MobileGL::Uint64 kEnvA = 0x1111'2222'3333'4444ull;
+    constexpr MobileGL::Uint64 kEnvB = 0x5555'6666'7777'8888ull;
+
+    ShaderPreprocessResultPtr MakeResult(const String& preprocessed) {
+        auto result = MakeShared<ShaderPreprocessResult>();
+        result->outcome = ShaderPreprocessOutcome::Preprocessed;
+        result->preprocessedSource = preprocessed;
+        result->explicitUniformLocations["uMarker"] = 7;
+        result->explicitOpaqueBindings["sMarker"] = 3;
         return result;
     }
 } // namespace
@@ -2403,10 +2482,10 @@ TEST_F(ProgramUtilTest, ShaderPreprocessCacheRoundTripsAndSeparatesStages) {
     const String source = "// a shader\nvoid main() {}\n";
     const Uint64 hash = ShaderPreprocessCache::HashSource(source);
 
-    EXPECT_EQ(cache.Find(ShaderStage::Vertex, hash, source), nullptr);
+    EXPECT_EQ(cache.Find(ShaderStage::Vertex, hash, source, kEnvA), nullptr);
 
-    cache.Insert(ShaderStage::Vertex, hash, source, MakeResult("vertex-preprocessed"));
-    const ShaderPreprocessResult* hit = cache.Find(ShaderStage::Vertex, hash, source);
+    cache.Insert(ShaderStage::Vertex, hash, source, kEnvA, MakeResult("vertex-preprocessed"));
+    const ShaderPreprocessResultPtr hit = cache.Find(ShaderStage::Vertex, hash, source, kEnvA);
     ASSERT_NE(hit, nullptr);
     EXPECT_TRUE(hit->Preprocessed());
     EXPECT_EQ(hit->preprocessedSource, "vertex-preprocessed");
@@ -2419,12 +2498,12 @@ TEST_F(ProgramUtilTest, ShaderPreprocessCacheRoundTripsAndSeparatesStages) {
 
     // Byte-identical source, different stage: a different key, so still a miss. Two
     // stages sharing one entry would hand a fragment shader a vertex preprocess.
-    EXPECT_EQ(cache.Find(ShaderStage::Fragment, hash, source), nullptr);
-    cache.Insert(ShaderStage::Fragment, hash, source, MakeResult("fragment-preprocessed"));
-    const ShaderPreprocessResult* fragmentHit = cache.Find(ShaderStage::Fragment, hash, source);
+    EXPECT_EQ(cache.Find(ShaderStage::Fragment, hash, source, kEnvA), nullptr);
+    cache.Insert(ShaderStage::Fragment, hash, source, kEnvA, MakeResult("fragment-preprocessed"));
+    const ShaderPreprocessResultPtr fragmentHit = cache.Find(ShaderStage::Fragment, hash, source, kEnvA);
     ASSERT_NE(fragmentHit, nullptr);
     EXPECT_EQ(fragmentHit->preprocessedSource, "fragment-preprocessed");
-    EXPECT_EQ(cache.Find(ShaderStage::Vertex, hash, source)->preprocessedSource, "vertex-preprocessed");
+    EXPECT_EQ(cache.Find(ShaderStage::Vertex, hash, source, kEnvA)->preprocessedSource, "vertex-preprocessed");
     EXPECT_EQ(cache.GetEntryCount(), 2u);
 }
 
@@ -2433,27 +2512,27 @@ TEST_F(ProgramUtilTest, ShaderPreprocessCacheMemoizesRejectionVerdictsDistinctly
     const String reservedSource = "int packed;\n";
     const String localSizeSource = "layout(local_size_x = 99999) in;\n";
 
-    ShaderPreprocessResult reserved;
-    reserved.outcome = ShaderPreprocessOutcome::ReservedIdentifierRejected;
-    reserved.infoLog = "reserved identifier";
-    ShaderPreprocessResult localSize;
-    localSize.outcome = ShaderPreprocessOutcome::ComputeLocalSizeRejected;
-    localSize.infoLog = "local_size too big";
+    auto reserved = MakeShared<ShaderPreprocessResult>();
+    reserved->outcome = ShaderPreprocessOutcome::ReservedIdentifierRejected;
+    reserved->infoLog = "reserved identifier";
+    auto localSize = MakeShared<ShaderPreprocessResult>();
+    localSize->outcome = ShaderPreprocessOutcome::ComputeLocalSizeRejected;
+    localSize->infoLog = "local_size too big";
 
-    cache.Insert(ShaderStage::Vertex, ShaderPreprocessCache::HashSource(reservedSource), reservedSource,
-                 std::move(reserved));
-    cache.Insert(ShaderStage::Compute, ShaderPreprocessCache::HashSource(localSizeSource), localSizeSource,
-                 std::move(localSize));
+    cache.Insert(ShaderStage::Vertex, ShaderPreprocessCache::HashSource(reservedSource), reservedSource, kEnvA,
+                 Move(reserved));
+    cache.Insert(ShaderStage::Compute, ShaderPreprocessCache::HashSource(localSizeSource), localSizeSource, kEnvA,
+                 Move(localSize));
 
-    const ShaderPreprocessResult* reservedHit =
-        cache.Find(ShaderStage::Vertex, ShaderPreprocessCache::HashSource(reservedSource), reservedSource);
+    const ShaderPreprocessResultPtr reservedHit =
+        cache.Find(ShaderStage::Vertex, ShaderPreprocessCache::HashSource(reservedSource), reservedSource, kEnvA);
     ASSERT_NE(reservedHit, nullptr);
     EXPECT_FALSE(reservedHit->Preprocessed());
     EXPECT_EQ(reservedHit->outcome, ShaderPreprocessOutcome::ReservedIdentifierRejected);
     EXPECT_EQ(reservedHit->infoLog, "reserved identifier");
 
-    const ShaderPreprocessResult* localSizeHit =
-        cache.Find(ShaderStage::Compute, ShaderPreprocessCache::HashSource(localSizeSource), localSizeSource);
+    const ShaderPreprocessResultPtr localSizeHit =
+        cache.Find(ShaderStage::Compute, ShaderPreprocessCache::HashSource(localSizeSource), localSizeSource, kEnvA);
     ASSERT_NE(localSizeHit, nullptr);
     EXPECT_EQ(localSizeHit->outcome, ShaderPreprocessOutcome::ComputeLocalSizeRejected);
     EXPECT_EQ(localSizeHit->infoLog, "local_size too big");
@@ -2470,19 +2549,55 @@ TEST_F(ProgramUtilTest, ShaderPreprocessCacheRejectsForgedHashCollision) {
     ASSERT_NE(real, impostor);
     const Uint64 forgedHash = 0xdeadbeefcafef00dull;
 
-    cache.Insert(ShaderStage::Vertex, forgedHash, real, MakeResult("real-preprocessed"));
+    cache.Insert(ShaderStage::Vertex, forgedHash, real, kEnvA, MakeResult("real-preprocessed"));
 
-    ASSERT_NE(cache.Find(ShaderStage::Vertex, forgedHash, real), nullptr);
-    EXPECT_EQ(cache.Find(ShaderStage::Vertex, forgedHash, impostor), nullptr);
+    ASSERT_NE(cache.Find(ShaderStage::Vertex, forgedHash, real, kEnvA), nullptr);
+    EXPECT_EQ(cache.Find(ShaderStage::Vertex, forgedHash, impostor, kEnvA), nullptr);
 
     // The colliding newcomer wins the slot rather than being silently dropped, so it
     // is the previous occupant that degrades to a miss - never a wrong hit.
-    cache.Insert(ShaderStage::Vertex, forgedHash, impostor, MakeResult("impostor-preprocessed"));
-    const ShaderPreprocessResult* impostorHit = cache.Find(ShaderStage::Vertex, forgedHash, impostor);
+    cache.Insert(ShaderStage::Vertex, forgedHash, impostor, kEnvA, MakeResult("impostor-preprocessed"));
+    const ShaderPreprocessResultPtr impostorHit = cache.Find(ShaderStage::Vertex, forgedHash, impostor, kEnvA);
     ASSERT_NE(impostorHit, nullptr);
     EXPECT_EQ(impostorHit->preprocessedSource, "impostor-preprocessed");
-    EXPECT_EQ(cache.Find(ShaderStage::Vertex, forgedHash, real), nullptr);
+    EXPECT_EQ(cache.Find(ShaderStage::Vertex, forgedHash, real, kEnvA), nullptr);
     EXPECT_EQ(cache.GetEntryCount(), 1u);
+}
+
+// P1: the compile environment joins the key. A memo computed against one backend's
+// GL_MAX_COMPUTE_WORK_GROUP_* limits must never be handed back after the environment
+// changed (backend swap), which is exactly what CompileEnv::fingerprint keys on.
+TEST_F(ProgramUtilTest, ShaderPreprocessCacheMissesOnChangedEnvFingerprint) {
+    ShaderPreprocessCache cache;
+    const String source = "layout(local_size_x = 512) in;\nvoid main() {}\n";
+    const Uint64 hash = ShaderPreprocessCache::HashSource(source);
+
+    cache.Insert(ShaderStage::Compute, hash, source, kEnvA, MakeResult("env-a-preprocessed"));
+    ASSERT_NE(cache.Find(ShaderStage::Compute, hash, source, kEnvA), nullptr);
+    EXPECT_EQ(cache.Find(ShaderStage::Compute, hash, source, kEnvB), nullptr);
+
+    // Both environments can coexist; neither can see the other's verdict.
+    cache.Insert(ShaderStage::Compute, hash, source, kEnvB, MakeResult("env-b-preprocessed"));
+    EXPECT_EQ(cache.Find(ShaderStage::Compute, hash, source, kEnvA)->preprocessedSource, "env-a-preprocessed");
+    EXPECT_EQ(cache.Find(ShaderStage::Compute, hash, source, kEnvB)->preprocessedSource, "env-b-preprocessed");
+    EXPECT_EQ(cache.GetEntryCount(), 2u);
+}
+
+// A hit hands out shared ownership, so the payload survives the eviction of its entry.
+// Under the old raw-pointer API this read was a use-after-free the moment two compiles
+// ran concurrently.
+TEST_F(ProgramUtilTest, ShaderPreprocessCacheHitOutlivesEviction) {
+    ShaderPreprocessCache cache;
+    const String source = "void main() { int keep = 1; }\n";
+    const Uint64 hash = ShaderPreprocessCache::HashSource(source);
+    cache.Insert(ShaderStage::Vertex, hash, source, kEnvA, MakeResult("survivor"));
+
+    const ShaderPreprocessResultPtr held = cache.Find(ShaderStage::Vertex, hash, source, kEnvA);
+    ASSERT_NE(held, nullptr);
+
+    cache.Clear();
+    EXPECT_EQ(cache.Find(ShaderStage::Vertex, hash, source, kEnvA), nullptr);
+    EXPECT_EQ(held->preprocessedSource, "survivor");
 }
 
 TEST_F(ProgramUtilTest, ShaderPreprocessCacheEvictsFifoOnEntryCap) {
@@ -2491,7 +2606,7 @@ TEST_F(ProgramUtilTest, ShaderPreprocessCacheEvictsFifoOnEntryCap) {
     const SizeT overflow = ShaderPreprocessCache::kMaxEntries + 8;
     for (SizeT i = 0; i < overflow; ++i) {
         sources.push_back("void main() { int a = " + ToString(i) + "; }\n");
-        cache.Insert(ShaderStage::Vertex, ShaderPreprocessCache::HashSource(sources.back()), sources.back(),
+        cache.Insert(ShaderStage::Vertex, ShaderPreprocessCache::HashSource(sources.back()), sources.back(), kEnvA,
                      MakeResult("pp" + ToString(i)));
         EXPECT_LE(cache.GetEntryCount(), ShaderPreprocessCache::kMaxEntries);
     }
@@ -2499,8 +2614,8 @@ TEST_F(ProgramUtilTest, ShaderPreprocessCacheEvictsFifoOnEntryCap) {
 
     // FIFO: the first `overflow - kMaxEntries` insertions are gone, the rest resident.
     for (SizeT i = 0; i < overflow; ++i) {
-        const ShaderPreprocessResult* hit =
-            cache.Find(ShaderStage::Vertex, ShaderPreprocessCache::HashSource(sources[i]), sources[i]);
+        const ShaderPreprocessResultPtr hit =
+            cache.Find(ShaderStage::Vertex, ShaderPreprocessCache::HashSource(sources[i]), sources[i], kEnvA);
         if (i < overflow - ShaderPreprocessCache::kMaxEntries) {
             EXPECT_EQ(hit, nullptr) << "entry " << i << " should have been evicted";
         } else {
@@ -2521,7 +2636,7 @@ TEST_F(ProgramUtilTest, ShaderPreprocessCacheHonorsByteBudget) {
     const SizeT chunk = ShaderPreprocessCache::kMaxStoredSourceBytes / 8;
     for (SizeT i = 0; i < 24; ++i) {
         String source(chunk, static_cast<char>('a' + (i % 26)));
-        cache.Insert(ShaderStage::Vertex, ShaderPreprocessCache::HashSource(source), source, MakeResult(""));
+        cache.Insert(ShaderStage::Vertex, ShaderPreprocessCache::HashSource(source), source, kEnvA, MakeResult(""));
         EXPECT_LE(cache.GetStoredSourceBytes(), ShaderPreprocessCache::kMaxStoredSourceBytes);
         EXPECT_LT(cache.GetEntryCount(), ShaderPreprocessCache::kMaxEntries);
     }
@@ -2530,7 +2645,7 @@ TEST_F(ProgramUtilTest, ShaderPreprocessCacheHonorsByteBudget) {
     // would evict every other entry and then immediately itself.
     const SizeT before = cache.GetEntryCount();
     const String oversized(ShaderPreprocessCache::kMaxStoredSourceBytes + 1, 'z');
-    cache.Insert(ShaderStage::Vertex, ShaderPreprocessCache::HashSource(oversized), oversized, MakeResult(""));
+    cache.Insert(ShaderStage::Vertex, ShaderPreprocessCache::HashSource(oversized), oversized, kEnvA, MakeResult(""));
     EXPECT_EQ(cache.GetEntryCount(), before);
-    EXPECT_EQ(cache.Find(ShaderStage::Vertex, ShaderPreprocessCache::HashSource(oversized), oversized), nullptr);
+    EXPECT_EQ(cache.Find(ShaderStage::Vertex, ShaderPreprocessCache::HashSource(oversized), oversized, kEnvA), nullptr);
 }

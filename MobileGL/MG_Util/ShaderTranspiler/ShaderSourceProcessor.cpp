@@ -16,6 +16,7 @@
 #include <utility>
 #include <Config.h>
 #include <MG_Backend/BackendObjects.h>
+#include <MG_Util/ShaderTranspiler/CompileEnv.h>
 
 #include "EsslBuiltinFunctionNames.h"
 
@@ -1036,15 +1037,6 @@ namespace {
         source = std::move(result);
     }
 
-    bool IsExtensionAdvertised(MobileGL::GLExtension extension) {
-        const auto& activeBackendObject = MobileGL::MG_Backend::pActiveBackendObject;
-        if (!activeBackendObject) {
-            return true;
-        }
-
-        const auto& extensions = activeBackendObject->GetRendererInfo().RendererGLInfo.Extensions;
-        return std::find(extensions.begin(), extensions.end(), extension) != extensions.end();
-    }
 
     MobileGL::String TrimDirectiveToken(const MobileGL::String& token) {
         SizeT start = 0;
@@ -1059,8 +1051,9 @@ namespace {
         return token.substr(start, end - start);
     }
 
-    void FilterUnsupportedGpuShaderInt64(MobileGL::String& source) {
-        if (IsExtensionAdvertised(MobileGL::E_GL_ARB_gpu_shader_int64)) {
+    void FilterUnsupportedGpuShaderInt64(const MobileGL::MG_Util::ShaderTranspiler::CompileEnv& env,
+                                         MobileGL::String& source) {
+        if (env.IsExtensionAdvertised(MobileGL::E_GL_ARB_gpu_shader_int64)) {
             return;
         }
 
@@ -1314,7 +1307,9 @@ namespace MobileGL {
                 // instead of open-coding them in PreprocessShaderSource.
                 struct ShaderSourceQuirk {
                     const char* name;
-                    MG_Config::QuirkOverride (*GetOverride)();
+                    // Reads the override out of the captured env, never out of the live
+                    // MG_Config table: a worker must see the same config the GL thread saw.
+                    MG_Config::QuirkOverride (*GetOverride)(const CompileEnv&);
                     Bool (*DeviceApplies)(const ShaderSourceQuirkContext&);
                     Bool (*Apply)(const ShaderSourceQuirkContext&, String&);
                 };
@@ -1323,7 +1318,7 @@ namespace MobileGL {
                     {
                         // MOBILEGL_QUIRK_SUBGROUP_PREFIX_SCAN
                         "subgroup-prefix-scan-rewrite",
-                        [] { return MG_Config::Features.SubgroupPrefixScanQuirk; },
+                        [](const CompileEnv& env) { return env.subgroupPrefixScanQuirk; },
                         [](const ShaderSourceQuirkContext& ctx) {
                             // Qualcomm's Vulkan driver miscompiles the recognized float
                             // InclusiveScan pattern for native subgroups wider than the
@@ -1339,20 +1334,21 @@ namespace MobileGL {
                     },
                 };
 
-                void ApplyShaderSourceQuirks(ShaderStage stage, String& source) {
-                    const auto& activeBackend = MG_Backend::pActiveBackendObject;
-                    if (!activeBackend) {
+                void ApplyShaderSourceQuirks(const CompileEnv& env, ShaderStage stage, String& source) {
+                    // No backend at capture time means no device to match a quirk against,
+                    // and (as before) no quirk can fire - not even a forced one, because
+                    // every Apply reads device parameters that do not exist yet.
+                    if (!env.HasBackend()) {
                         return;
                     }
-                    const auto& dynamicParameters = activeBackend->GetDynamicParameters();
                     const ShaderSourceQuirkContext quirkContext{
                         stage,
-                        activeBackend->GetBackendType(),
-                        dynamicParameters.GpuVendor,
-                        dynamicParameters.SubgroupSize,
+                        env.backend,
+                        env.params.GpuVendor,
+                        env.params.SubgroupSize,
                     };
                     for (const ShaderSourceQuirk& quirk : kShaderSourceQuirks) {
-                        const MG_Config::QuirkOverride quirkOverride = quirk.GetOverride();
+                        const MG_Config::QuirkOverride quirkOverride = quirk.GetOverride(env);
                         if (quirkOverride == MG_Config::QuirkOverride::ForceOff) {
                             continue;
                         }
@@ -1369,6 +1365,10 @@ namespace MobileGL {
             } // namespace
 
             void PreprocessShaderSource(ShaderStage stage, String& source) {
+                PreprocessShaderSource(stage, source, *GetCurrentCompileEnv());
+            }
+
+            void PreprocessShaderSource(ShaderStage stage, String& source, const CompileEnv& env) {
                 // Normalize while the inspector's source span still refers to the untouched input.
                 const ShaderLanguageInfo originalLanguage = InspectShaderLanguage(source);
 
@@ -1395,7 +1395,7 @@ namespace MobileGL {
                 // identifier that merely contained the word. The GLES fallback for devices without
                 // the extension lives in the backend, where device capabilities are known.
 
-                FilterUnsupportedGpuShaderInt64(source);
+                FilterUnsupportedGpuShaderInt64(env, source);
                 CoerceUniformBlockPackingToStd140(source);
 
                 RenameBuiltinShadowingFunctions(source);
@@ -1403,7 +1403,7 @@ namespace MobileGL {
                 ModernizeLegacyGLSL(stage, source, afterVersion);
                 InjectDepthRangeBuiltinShim(stage, source, afterVersion);
 
-                ApplyShaderSourceQuirks(stage, source);
+                ApplyShaderSourceQuirks(env, stage, source);
             }
 
             Bool RetargetLegacyVersionDirectiveTo460(String& source) {

@@ -9,6 +9,7 @@
 #pragma once
 #include <Includes.h>
 #include <MG_State/GLState/ProgramState/ShaderObject.h>
+#include <MG_Util/ShaderTranspiler/CompileEnv.h>
 
 namespace MobileGL {
     enum class ShaderProfile {
@@ -19,6 +20,14 @@ namespace MobileGL {
 
     namespace MG_Util {
         namespace ShaderTranspiler {
+            // The whole source-rewriting pipeline. `env` is the compile-time snapshot of
+            // everything outside (stage, source) this reads - advertised extensions and the
+            // device-quirk inputs - so the transformation is a pure function of its three
+            // arguments and can run on a worker thread.
+            void PreprocessShaderSource(ShaderStage stage, String& source, const CompileEnv& env);
+            // Convenience overload that resolves the current context's env itself. GL thread
+            // only, and deliberately not used by the compile pipeline: it exists for the unit
+            // tests and diagnostics that drive the preprocessor standalone.
             void PreprocessShaderSource(ShaderStage stage, String& source);
 
             // Some desktop-captured compute shaders build a workgroup-wide linear prefix scan
