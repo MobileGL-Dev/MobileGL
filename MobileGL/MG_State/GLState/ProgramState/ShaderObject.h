@@ -22,10 +22,18 @@ namespace MobileGL {
     };
 
     namespace MG_State::GLState {
+        // P0b layer 2. Declared, not included: the cache keys on ShaderStage, so including
+        // its header here would be circular.
+        class ShaderPreprocessCache;
+
         class ShaderObject {
         public:
-            ShaderObject(const ShaderStage stage, Uint externalIndex)
-                : m_stage(stage), m_externalIndex(externalIndex) {}
+            // `preprocessCache` is the owning context's cross-object memo (P0b layer 2);
+            // null is fully supported and simply means "no sharing" - that is what the
+            // context-less internal shader objects (the default FS, the blit pipeline) use.
+            ShaderObject(const ShaderStage stage, Uint externalIndex,
+                         ShaderPreprocessCache* preprocessCache = nullptr)
+                : m_stage(stage), m_externalIndex(externalIndex), m_preprocessCache(preprocessCache) {}
             void SetShaderSource(const String& source);
             void SetShaderSource(String&& source);
             void Compile();
@@ -59,8 +67,22 @@ namespace MobileGL {
             Bool GetCompileStatus() const { return m_compileStatus; }
             Bool GetDeleteStatus() const { return m_deleteStatus; }
 
+            // True while this object holds the outcome (success OR failure) of a previous
+            // Compile() of exactly the source it currently holds - i.e. while the P0b
+            // layer-1 memo is armed and a glCompileShader would be a no-op. Diagnostics
+            // and tests only; nothing in the GL frontend branches on it.
+            Bool HasMemoizedCompile() const { return m_hasCompiledState; }
+
         private:
             void InvalidateCompiledState();
+            // ---- P0b layer 1: per-object no-op recompile ----
+            // True iff `candidate` is byte-identical to the source that produced the
+            // compiled state this object is currently holding. The stored hash and length
+            // are only a fast reject; the answer is always confirmed against the full
+            // stored text, so no behaviour rides on a 64-bit hash.
+            Bool SourceMatchesCompiledState(const String& candidate) const;
+            // Arms the layer-1 memo for the source that Compile() just processed.
+            void RememberCompiledSource(Uint64 sourceHash);
 
             const Uint m_externalIndex = 0;
             const ShaderStage m_stage;
@@ -74,6 +96,15 @@ namespace MobileGL {
             UnorderedMap<String, Int> m_explicitUniformLocations;
             UnorderedMap<String, Uint> m_explicitOpaqueBindings;
             Bool m_shaderConsumedByLink = false;
+
+            // P0b layer 2: the owning context's cross-object memo, or null. Not owned.
+            ShaderPreprocessCache* const m_preprocessCache = nullptr;
+            // P0b layer 1. m_hasCompiledState is the invariant "m_source is byte-identical
+            // to the source that produced m_compileStatus/m_infoLog/m_shader"; it is armed
+            // at the end of every Compile() and disarmed by InvalidateCompiledState().
+            Bool m_hasCompiledState = false;
+            Uint64 m_compiledSourceHash = 0;
+            SizeT m_compiledSourceLength = 0;
 
             String m_infoLog;
             Bool m_deleteStatus = false;

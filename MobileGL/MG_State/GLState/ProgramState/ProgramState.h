@@ -10,6 +10,7 @@
 #include <Includes.h>
 #include <MG_Util/Miscellany/IndexGenerator.h>
 #include "ProgramObject.h"
+#include "ShaderPreprocessCache.h"
 
 namespace MobileGL::MG_State::GLState {
     class ProgramState {
@@ -32,6 +33,11 @@ namespace MobileGL::MG_State::GLState {
         Bool ValidateShaderObject(Uint shader) const;
 
         const SharedPtr<ProgramObject>& GetCurrentProgram() const { return m_currentProgram; }
+
+        // P0b layer 2. Exposed for tests and diagnostics; the GL frontend never touches it
+        // directly - shader objects reach it through the pointer they are handed at
+        // CreateShader().
+        ShaderPreprocessCache& GetShaderPreprocessCache() { return m_shaderPreprocessCache; }
 
     private:
         Bool ShaderHasGLVisibleAttachment(const SharedPtr<ShaderObject>& shaderObject) const;
@@ -57,6 +63,12 @@ namespace MobileGL::MG_State::GLState {
         // rejected with INVALID_OPERATION, and vice versa). One generator for both
         // object kinds keeps the names disjoint; the object tables stay separate.
         IndexGenerator<Uint> m_programShaderNameGenerator;
+
+        // P0b layer 2: every shader object created here is handed a pointer to this cache.
+        // Declared FIRST on purpose - members are destroyed in reverse declaration order,
+        // so the cache outlives every shader object holding a pointer to it.
+        ShaderPreprocessCache m_shaderPreprocessCache;
+
         Vector<SharedPtr<ProgramObject>> m_programObjects;
         Vector<SharedPtr<ShaderObject>> m_shaderObjects;
 

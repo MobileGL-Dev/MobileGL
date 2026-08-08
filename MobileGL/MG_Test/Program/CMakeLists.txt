@@ -9,6 +9,7 @@ add_executable(
         ${MGL_ROOT}/MobileGL/MG_Util/ShaderTranspiler/ShaderCompiler.cpp
         ${MGL_ROOT}/MobileGL/MG_Util/ShaderTranspiler/SpvcSession.cpp
         ${MGL_ROOT}/MobileGL/MG_Util/ShaderTranspiler/glslang/UniformTraverser.cpp
+        ${MGL_ROOT}/MobileGL/MG_State/GLState/ProgramState/ShaderPreprocessCache.cpp
 )
 
 target_include_directories(ProgramUtilTest PRIVATE

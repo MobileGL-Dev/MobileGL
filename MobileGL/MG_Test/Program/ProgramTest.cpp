@@ -19,6 +19,7 @@
 #include "MG_Impl/GLImpl/Getter/GL_Getter.h"
 #include "MG_Impl/GLImpl/Program/GL_Program.h"
 #include "MG_State/GLState/Core.h"
+#include "MG_State/GLState/ProgramState/ShaderPreprocessCache.h"
 #include "MG_Util/ShaderTranspiler/ShaderCompiler.h"
 
 using namespace MobileGL;
@@ -2834,3 +2835,224 @@ void main() { fragColor = vec4(pow(uBase, 2.2), 1.0); }
     EXPECT_EQ(GetError(), GL_NO_ERROR);
 }
 
+
+// ---------------------------------------------------------------------------
+// P0b: source-hash dedupe for shader recompiles.
+//   Layer 1 - the same shader object re-sourced with byte-identical text keeps its
+//             compiled state, and glCompileShader on it is a no-op.
+//   Layer 2 - two DIFFERENT shader objects holding byte-identical text share the
+//             source-only half of the pipeline (preprocess + lexical checks +
+//             side-channel extraction) through the context's ShaderPreprocessCache,
+//             while each still gets its own glslang parse.
+// ---------------------------------------------------------------------------
+namespace {
+    const char* kP0bVs = R"(#version 330 core
+uniform mat4 uModel;
+uniform vec4 uTint;
+void main() { gl_Position = uModel * uTint; }
+)";
+    const char* kP0bFs = R"(#version 330 core
+uniform vec4 uColor;
+out vec4 fragColor;
+void main() { fragColor = uColor; }
+)";
+    // Same stage, different declared uniform: makes "did it actually recompile?"
+    // observable through reflection rather than through internal state.
+    const char* kP0bAltFs = R"(#version 330 core
+uniform vec4 uOtherColor;
+out vec4 fragColor;
+void main() { fragColor = uOtherColor; }
+)";
+    const char* kP0bBrokenFs = R"(#version 330 core
+out vec4 fragColor;
+void main() { fragColor = notADeclaredThing; }
+)";
+
+    GLuint MakeShaderWithSource(GLenum type, const char* source) {
+        GLuint shader = CreateShader(type);
+        ShaderSource(shader, 1, &source, nullptr);
+        return shader;
+    }
+
+    GLint QueryCompileStatus(GLuint shader) {
+        GLint status = GL_FALSE;
+        GetShaderiv(shader, GL_COMPILE_STATUS, &status);
+        return status;
+    }
+
+    String QueryShaderInfoLog(GLuint shader) {
+        GLint length = 0;
+        GetShaderiv(shader, GL_INFO_LOG_LENGTH, &length);
+        if (length <= 0) return String();
+        std::vector<GLchar> buffer(static_cast<size_t>(length));
+        GLsizei written = 0;
+        GetShaderInfoLog(shader, length, &written, buffer.data());
+        return String(buffer.data(), static_cast<size_t>(written));
+    }
+
+    Bool ShaderHasMemoizedCompile(GLuint shader) {
+        const auto& shaderObject = MG_State::pGLContext->GetShaderObject(shader);
+        EXPECT_NE(shaderObject, nullptr);
+        return shaderObject != nullptr && shaderObject->HasMemoizedCompile();
+    }
+} // namespace
+
+// Layer 1, success path: re-sourcing with identical text and recompiling must leave
+// COMPILE_STATUS, the info log and every downstream consumer exactly as they were -
+// including a program that links the shader AFTER the redundant recompile.
+TEST_F(ProgramTest, RecompileWithIdenticalSourceKeepsCompiledStateAndStillLinks) {
+    GLuint vs = MakeShaderWithSource(GL_VERTEX_SHADER, kP0bVs);
+    GLuint fs = MakeShaderWithSource(GL_FRAGMENT_SHADER, kP0bFs);
+    CompileShader(vs);
+    CompileShader(fs);
+    ASSERT_EQ(QueryCompileStatus(vs), GL_TRUE) << QueryShaderInfoLog(vs);
+    ASSERT_EQ(QueryCompileStatus(fs), GL_TRUE) << QueryShaderInfoLog(fs);
+    const String vsLogBefore = QueryShaderInfoLog(vs);
+    EXPECT_TRUE(ShaderHasMemoizedCompile(vs));
+
+    // A first link consumes the stored TShader; the redundant recompile below must not
+    // disturb the preprocessed source that TakeShaderForLink re-parses from.
+    GLuint firstProgram = LinkVsFs(vs, fs, GL_TRUE);
+    EXPECT_GE(GetUniformLocation(firstProgram, "uColor"), 0);
+
+    // glShaderSource with byte-identical text, then glCompileShader: both no-ops.
+    ShaderSource(vs, 1, &kP0bVs, nullptr);
+    EXPECT_TRUE(ShaderHasMemoizedCompile(vs)) << "identical re-source must not invalidate the compiled state";
+    CompileShader(vs);
+    ShaderSource(fs, 1, &kP0bFs, nullptr);
+    CompileShader(fs);
+
+    EXPECT_EQ(QueryCompileStatus(vs), GL_TRUE);
+    EXPECT_EQ(QueryCompileStatus(fs), GL_TRUE);
+    EXPECT_EQ(QueryShaderInfoLog(vs), vsLogBefore);
+
+    // The original source text is still what glGetShaderSource reports.
+    GLint sourceLength = 0;
+    GetShaderiv(vs, GL_SHADER_SOURCE_LENGTH, &sourceLength);
+    ASSERT_GT(sourceLength, 1);
+    std::vector<GLchar> sourceBuffer(static_cast<size_t>(sourceLength));
+    GLsizei written = 0;
+    GetShaderSource(vs, sourceLength, &written, sourceBuffer.data());
+    EXPECT_EQ(String(sourceBuffer.data(), static_cast<size_t>(written)), String(kP0bVs));
+
+    // A second program built from the same, redundantly recompiled shaders links and
+    // reflects - i.e. TakeShaderForLink's re-parse path survived the no-op.
+    GLuint secondProgram = LinkVsFs(vs, fs, GL_TRUE);
+    EXPECT_GE(GetUniformLocation(secondProgram, "uColor"), 0);
+    EXPECT_GE(GetUniformLocation(secondProgram, "uModel"), 0);
+    EXPECT_EQ(GetError(), GL_NO_ERROR);
+}
+
+// Layer 1 must not swallow a REAL source change: different text invalidates, and the
+// change is visible in what the next link reflects.
+TEST_F(ProgramTest, DifferentSourceAfterCompileInvalidatesCompiledState) {
+    GLuint vs = CompileShaderChecked(GL_VERTEX_SHADER, kP0bVs);
+    GLuint fs = MakeShaderWithSource(GL_FRAGMENT_SHADER, kP0bFs);
+    CompileShader(fs);
+    ASSERT_EQ(QueryCompileStatus(fs), GL_TRUE) << QueryShaderInfoLog(fs);
+    GLuint firstProgram = LinkVsFs(vs, fs, GL_TRUE);
+    EXPECT_GE(GetUniformLocation(firstProgram, "uColor"), 0);
+    EXPECT_EQ(GetUniformLocation(firstProgram, "uOtherColor"), -1);
+
+    // New text -> compiled state gone, and glCompileShader is mandatory again.
+    ShaderSource(fs, 1, &kP0bAltFs, nullptr);
+    EXPECT_FALSE(ShaderHasMemoizedCompile(fs));
+    EXPECT_EQ(QueryCompileStatus(fs), GL_FALSE);
+
+    CompileShader(fs);
+    ASSERT_EQ(QueryCompileStatus(fs), GL_TRUE) << QueryShaderInfoLog(fs);
+    GLuint secondProgram = LinkVsFs(vs, fs, GL_TRUE);
+    EXPECT_GE(GetUniformLocation(secondProgram, "uOtherColor"), 0);
+    EXPECT_EQ(GetUniformLocation(secondProgram, "uColor"), -1);
+    EXPECT_EQ(GetError(), GL_NO_ERROR);
+}
+
+// Layer 2: byte-identical source in two distinct shader objects. Both must compile,
+// and each must own an independent TShader - if the parse were shared, the second
+// link would be handed an intermediate that the first link's mapIO already mutated.
+TEST_F(ProgramTest, TwoShaderObjectsWithIdenticalSourceLinkIndependently) {
+    GLuint vsA = CompileShaderChecked(GL_VERTEX_SHADER, kP0bVs);
+    GLuint fsA = CompileShaderChecked(GL_FRAGMENT_SHADER, kP0bFs);
+    GLuint vsB = CompileShaderChecked(GL_VERTEX_SHADER, kP0bVs);
+    GLuint fsB = CompileShaderChecked(GL_FRAGMENT_SHADER, kP0bFs);
+    ASSERT_NE(vsA, vsB);
+    ASSERT_NE(fsA, fsB);
+
+    const auto& objectA = MG_State::pGLContext->GetShaderObject(vsA);
+    const auto& objectB = MG_State::pGLContext->GetShaderObject(vsB);
+    ASSERT_NE(objectA, nullptr);
+    ASSERT_NE(objectB, nullptr);
+    EXPECT_EQ(objectA->GetShaderSource(), objectB->GetShaderSource());
+    // Independent parses despite the shared preprocess.
+    EXPECT_NE(objectA->GetCompiledShader(), objectB->GetCompiledShader());
+    EXPECT_NE(objectA->GetCompiledShader(), nullptr);
+    EXPECT_NE(objectB->GetCompiledShader(), nullptr);
+
+    GLuint programA = LinkVsFs(vsA, fsA, GL_TRUE);
+    GLuint programB = LinkVsFs(vsB, fsB, GL_TRUE);
+    for (GLuint program : {programA, programB}) {
+        EXPECT_GE(GetUniformLocation(program, "uColor"), 0);
+        EXPECT_GE(GetUniformLocation(program, "uModel"), 0);
+    }
+    EXPECT_EQ(GetError(), GL_NO_ERROR);
+}
+
+// Failure memoization: a compile that failed stays failed, with the SAME log, when
+// recompiled against the same source; a real fix to the source still takes effect.
+// The second object pins the cached-ParseFailed path (layer 2), which skips the parse
+// entirely and must reproduce the identical verdict.
+TEST_F(ProgramTest, FailedCompileIsMemoizedAndStillRecoversOnGoodSource) {
+    GLuint fs = MakeShaderWithSource(GL_FRAGMENT_SHADER, kP0bBrokenFs);
+    CompileShader(fs);
+    ASSERT_EQ(QueryCompileStatus(fs), GL_FALSE);
+    const String failureLog = QueryShaderInfoLog(fs);
+    EXPECT_FALSE(failureLog.empty());
+
+    // Layer 1: identical re-source + recompile keeps the failure AND the log queryable.
+    ShaderSource(fs, 1, &kP0bBrokenFs, nullptr);
+    CompileShader(fs);
+    EXPECT_EQ(QueryCompileStatus(fs), GL_FALSE);
+    EXPECT_EQ(QueryShaderInfoLog(fs), failureLog);
+
+    // Layer 2: a second object with the same broken source reports the same failure.
+    GLuint otherFs = MakeShaderWithSource(GL_FRAGMENT_SHADER, kP0bBrokenFs);
+    CompileShader(otherFs);
+    EXPECT_EQ(QueryCompileStatus(otherFs), GL_FALSE);
+    EXPECT_EQ(QueryShaderInfoLog(otherFs), failureLog);
+
+    // A genuine fix still compiles and links.
+    ShaderSource(fs, 1, &kP0bFs, nullptr);
+    CompileShader(fs);
+    ASSERT_EQ(QueryCompileStatus(fs), GL_TRUE) << QueryShaderInfoLog(fs);
+    EXPECT_TRUE(QueryShaderInfoLog(fs).empty());
+    GLuint vs = CompileShaderChecked(GL_VERTEX_SHADER, kP0bVs);
+    GLuint program = LinkVsFs(vs, fs, GL_TRUE);
+    EXPECT_GE(GetUniformLocation(program, "uColor"), 0);
+}
+
+// Layer 2 under eviction: push more distinct sources through the context than the
+// cache can hold, then confirm nothing broke and a fresh duplicate pair still works.
+TEST_F(ProgramTest, PreprocessCacheOverflowKeepsCompilingCorrectly) {
+    const SizeT overflow = MG_State::GLState::ShaderPreprocessCache::kMaxEntries + 8;
+    for (SizeT i = 0; i < overflow; ++i) {
+        const String source = "#version 330 core\nuniform vec4 uColor" + ToString(i) +
+                              ";\nout vec4 fragColor;\nvoid main() { fragColor = uColor" + ToString(i) + "; }\n";
+        const char* sourcePtr = source.c_str();
+        GLuint shader = MakeShaderWithSource(GL_FRAGMENT_SHADER, sourcePtr);
+        CompileShader(shader);
+        ASSERT_EQ(QueryCompileStatus(shader), GL_TRUE) << QueryShaderInfoLog(shader) << "\n" << source;
+        DeleteShader(shader);
+    }
+
+    // Everything inserted above has long since been evicted; a brand-new duplicate
+    // pair must still take the layer-2 path and produce two working programs.
+    GLuint vsA = CompileShaderChecked(GL_VERTEX_SHADER, kP0bVs);
+    GLuint fsA = CompileShaderChecked(GL_FRAGMENT_SHADER, kP0bFs);
+    GLuint vsB = CompileShaderChecked(GL_VERTEX_SHADER, kP0bVs);
+    GLuint fsB = CompileShaderChecked(GL_FRAGMENT_SHADER, kP0bFs);
+    GLuint programA = LinkVsFs(vsA, fsA, GL_TRUE);
+    GLuint programB = LinkVsFs(vsB, fsB, GL_TRUE);
+    EXPECT_GE(GetUniformLocation(programA, "uColor"), 0);
+    EXPECT_GE(GetUniformLocation(programB, "uColor"), 0);
+    EXPECT_EQ(GetError(), GL_NO_ERROR);
+}
