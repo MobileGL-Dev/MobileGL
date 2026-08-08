@@ -15,6 +15,8 @@
 #include <MG_Util/ShaderTranspiler/glslang/UniformTraverser.h>
 #include <MG_Backend/BackendObjects.h>
 
+#include <charconv>
+
 namespace {
     struct ComputeLocalSize {
         MobileGL::Uint x = 1;
@@ -72,16 +74,31 @@ namespace {
         return result;
     }
 
+    // Hoisted out of ParseComputeLocalSize: constructing a std::regex costs far more than
+    // running it over a small source, and it was being rebuilt on every compute compile. A
+    // const regex carries no mutable state, so sharing one instance is safe.
+    static const std::regex kComputeLocalSizePattern(R"(local_size_([xyz])\s*=\s*([0-9]+))");
+
     static ComputeLocalSize ParseComputeLocalSize(const MobileGL::String& source) {
         ComputeLocalSize localSize;
         const MobileGL::String uncommentedSource = StripGlslComments(source);
-        const std::regex localSizePattern(R"(local_size_([xyz])\s*=\s*([0-9]+))");
 
-        for (std::sregex_iterator it(uncommentedSource.begin(), uncommentedSource.end(), localSizePattern), end;
+        for (std::sregex_iterator it(uncommentedSource.begin(), uncommentedSource.end(), kComputeLocalSizePattern),
+             end;
              it != end; ++it) {
             const char axis = (*it)[1].str()[0];
-            const auto value = static_cast<unsigned long long>(std::stoull((*it)[2].str()));
-            const MobileGL::Uint clampedValue = value > UINT_MAX ? UINT_MAX : static_cast<MobileGL::Uint>(value);
+            // The [0-9]+ capture is unbounded, so `local_size_x = 99999999999999999999999`
+            // is a legal match. std::stoull would throw std::out_of_range on it and let the
+            // exception escape glCompileShader; std::from_chars reports the overflow instead.
+            // An overflowing literal saturates to UINT_MAX, which the device-limit check
+            // below rejects anyway - the same verdict a non-overflowing huge value gets.
+            const MobileGL::String digits = (*it)[2].str();
+            unsigned long long value = 0;
+            const std::from_chars_result parsed =
+                std::from_chars(digits.data(), digits.data() + digits.size(), value);
+            const MobileGL::Uint clampedValue = (parsed.ec != std::errc() || value > UINT_MAX)
+                                                    ? UINT_MAX
+                                                    : static_cast<MobileGL::Uint>(value);
 
             // TODO: Replace this literal layout scanner with parser/AST-backed validation so expressions and
             // specialization-id layouts are handled consistently with glslang.

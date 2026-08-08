@@ -138,6 +138,9 @@ namespace MobileGL {
                 std::swap(this->resources, that.resources);
                 std::swap(this->reflectModule, that.reflectModule);
                 std::swap(this->reflectModuleValid, that.reflectModuleValid);
+                // ParseMetaData() fills `metadata`, and GetMetadata() is read through the
+                // moved-to session: leaving it behind silently returns an empty reflection.
+                std::swap(this->metadata, that.metadata);
             }
 
             SpvcSession& SpvcSession::operator=(SpvcSession&& that) {
@@ -149,6 +152,7 @@ namespace MobileGL {
                 std::swap(this->resources, that.resources);
                 std::swap(this->reflectModule, that.reflectModule);
                 std::swap(this->reflectModuleValid, that.reflectModuleValid);
+                std::swap(this->metadata, that.metadata);
                 return *this;
             }
 

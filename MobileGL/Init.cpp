@@ -37,7 +37,6 @@ namespace MobileGL {
             if (logLifecycle) {
                 MGLOG_I("MobileGL closing...");
             }
-            glslang::FinalizeProcess();
             // GL syncs die with their contexts, and every context is gone by the
             // time full teardown runs: drain the live-sync registry while the
             // backend function table can still release the backend handles (and
@@ -49,6 +48,12 @@ namespace MobileGL {
             MG_State::pEGLContext.reset();
             MG_Impl::GLImpl::TextureImpl::pProxyTextureManager.reset();
             MG_Impl::GLImpl::FramebufferImpl::pDefaultFramebufferInfo.reset();
+            // Must run AFTER pGLContext.reset(). FinalizeProcess -> ShFinalize deletes
+            // glslang's process-wide pool allocator and every cached built-in symbol table,
+            // while the TShader/TProgram objects owned by the shader and program objects
+            // still reference levels adopted from those tables. Finalizing first left live
+            // glslang objects pointing at freed memory for the rest of the teardown.
+            glslang::FinalizeProcess();
             MG_Backend::gBackendFunctionsTable = {};
             g_isInitialized = false;
             if (logLifecycle) {

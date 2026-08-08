@@ -347,6 +347,29 @@ void main() {
     EXPECT_EQ(GetError(), GL_NO_ERROR);
 }
 
+TEST_F(ProgramTest, OutOfRangeComputeLocalSizeLiteralFailsCompileInsteadOfThrowing) {
+    // The layout scanner's digit capture is unbounded, so a literal wider than 64 bits is a
+    // legal match. It must saturate and be rejected through COMPILE_STATUS; if the integer
+    // conversion throws instead, the exception escapes glCompileShader entirely.
+    char infoLog[1024] = "";
+    const char* csSrc = R"(#version 460 core
+layout(local_size_x = 99999999999999999999999) in;
+void main() {
+}
+)";
+
+    GLuint cs = CreateShader(GL_COMPUTE_SHADER);
+    ShaderSource(cs, 1, &csSrc, nullptr);
+    CompileShader(cs);
+
+    GLint csStatus = GL_TRUE;
+    GetShaderiv(cs, GL_COMPILE_STATUS, &csStatus);
+    EXPECT_EQ(csStatus, GL_FALSE);
+    GetShaderInfoLog(cs, sizeof(infoLog), nullptr, infoLog);
+    EXPECT_NE(String(infoLog).find("GL_MAX_COMPUTE_WORK_GROUP_SIZE"), String::npos) << infoLog;
+    EXPECT_EQ(GetError(), GL_NO_ERROR);
+}
+
 TEST_F(ProgramTest, DirectVulkanStorageBlockUsesShaderLayoutBinding) {
     char infoLog[1024] = "";
     const char* csSrc = R"(#version 460 core

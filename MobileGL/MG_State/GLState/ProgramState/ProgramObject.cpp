@@ -579,10 +579,11 @@ namespace MobileGL::MG_State::GLState {
                 MGLOG_E("ProgramObject %u: Link failed - %s", m_externalIndex, m_infoLog.c_str());
                 return;
             }
+            // Deliberately no full-source dump here: a shaderpack stage runs to ~100 KB, and
+            // one MGLOG line per shader per link is unreadable even single-threaded. Use the
+            // transpiler dump paths when a specific source is actually needed.
             MGLOG_D("ProgramObject %u: shader[%zu] compiled shader ptr %p, src len %zu", m_externalIndex, i,
                     shaders[i].get(), m_shaders[i]->GetShaderSource().length());
-            MGLOG_D("ProgramObject %u: shader[%zu] source:\n%s", m_externalIndex, i,
-                    m_shaders[i]->GetShaderSource().c_str());
         }
 
         // Merge the shaders' lexically extracted explicit uniform locations. The same
