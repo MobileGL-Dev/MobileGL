@@ -52,10 +52,12 @@ namespace MobileGL::MG_State::GLState {
             vec.resize(idx + 1);
         }
 
-        IndexGenerator<Uint> m_programIndexGenerator;
+        // Programs and shaders share one GL name space (GL 3.3 core 2.11: a shader
+        // name passed where a program is expected must be recognized as a shader and
+        // rejected with INVALID_OPERATION, and vice versa). One generator for both
+        // object kinds keeps the names disjoint; the object tables stay separate.
+        IndexGenerator<Uint> m_programShaderNameGenerator;
         Vector<SharedPtr<ProgramObject>> m_programObjects;
-
-        IndexGenerator<Uint> m_shaderIndexGenerator;
         Vector<SharedPtr<ShaderObject>> m_shaderObjects;
 
         SharedPtr<ProgramObject> m_currentProgram;

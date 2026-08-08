@@ -11,7 +11,7 @@
 namespace MobileGL::MG_State::GLState {
     Uint ProgramState::CreateProgram() {
         Uint programId = 0;
-        m_programIndexGenerator.Generate(1, &programId);
+        m_programShaderNameGenerator.Generate(1, &programId);
         EnsureIndexAvail(programId, m_programObjects);
         auto programObject = MakeShared<ProgramObject>(programId);
         if (programObject == nullptr) return 0;
@@ -43,7 +43,7 @@ namespace MobileGL::MG_State::GLState {
         // that were flagged with glDeleteShader while still attached.
         const Vector<SharedPtr<ShaderObject>> attachedShaders = programObject->GetAttachedShaders();
         programObject.reset();
-        m_programIndexGenerator.Delete(program);
+        m_programShaderNameGenerator.Delete(program);
         for (const auto& shader : attachedShaders) {
             const Uint shaderName = shader->GetExternalIndex();
             if (CheckIndexAvail(shaderName, m_shaderObjects) && m_shaderObjects[shaderName] == shader) {
@@ -77,7 +77,7 @@ namespace MobileGL::MG_State::GLState {
 
     Uint ProgramState::CreateShader(ShaderStage stage) {
         Uint shaderId = 0;
-        m_shaderIndexGenerator.Generate(1, &shaderId);
+        m_programShaderNameGenerator.Generate(1, &shaderId);
         EnsureIndexAvail(shaderId, m_shaderObjects);
         auto shaderObject = MakeShared<ShaderObject>(stage, shaderId);
         if (shaderObject == nullptr) return 0;
@@ -121,7 +121,7 @@ namespace MobileGL::MG_State::GLState {
         if (shaderObject == nullptr || !shaderObject->GetDeleteStatus()) return;
         if (ShaderHasGLVisibleAttachment(shaderObject)) return;
         shaderObject.reset();
-        m_shaderIndexGenerator.Delete(shader);
+        m_programShaderNameGenerator.Delete(shader);
     }
 
     Bool ProgramState::ValidateShaderObject(Uint shader) const {
