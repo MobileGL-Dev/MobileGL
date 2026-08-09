@@ -63,6 +63,12 @@ The bundled fixtures cover:
 - minecraft-1.21.4-fabric-iris-bsl-in-world: captured from Minecraft 1.21.4 Fabric with Sodium, Iris, and BSL
   Shaders after entering a singleplayer world.
   ![Minecraft 1.21.4 Fabric Iris BSL in-world golden](fixtures/minecraft-1.21.4-fabric-iris-bsl-in-world.0000110725.png)
+- minecraft-1.21.4-fabric-iris-bsl-esc-menu-854: captured on an Android device (Mali-G77, FCL MobileGL capture) from
+  Minecraft 1.21.4 Fabric with Sodium, Iris, and BSL Shaders, at the pause menu over a BSL-blurred world. The frame
+  pins glyph rendering: every menu label, the menu title and the tutorial toast must be present. Regressions in the
+  DirectGLES per-draw texture memo have made the whole text path disappear here while sprites kept rendering, so a
+  failure that leaves the buttons but empties them is the signature to look for in the diff.
+  ![Minecraft 1.21.4 Fabric Iris BSL ESC menu 854x480 golden](fixtures/minecraft-1.21.4-fabric-iris-bsl-esc-menu-854.0001303534.png)
 - minecraft-1.21.4-fabric-iris-makeup-ultrafast-in-world: captured from Minecraft 1.21.4 Fabric with Sodium, Iris, and
   MakeUP UltraFast after entering a singleplayer world.
   ![Minecraft 1.21.4 Fabric Iris MakeUP UltraFast in-world golden](fixtures/minecraft-1.21.4-fabric-iris-makeup-ultrafast-in-world.0000095322.png)

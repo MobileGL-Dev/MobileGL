@@ -289,6 +289,12 @@
       "golden": "minecraft-1.21.4-fabric-iris-iterationrp-in-world.0000202020.png",
       "target_call": 202020,
       "timeout_seconds": 1800
+    },
+    {
+      "name": "minecraft-1.21.4-fabric-iris-bsl-esc-menu-854",
+      "trace_archive": "minecraft-1.21.4-fabric-iris-bsl-esc-menu-854.tgz",
+      "golden": "minecraft-1.21.4-fabric-iris-bsl-esc-menu-854.0001303534.png",
+      "target_call": 1303534
     }
   ]
 }
