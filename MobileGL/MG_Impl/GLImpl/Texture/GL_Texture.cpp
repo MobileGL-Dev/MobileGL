@@ -86,17 +86,65 @@ namespace MobileGL::MG_Impl::GLImpl {
             return false;
         }
 
+        // DSA emulation: the by-name entry points are implemented by putting the named texture
+        // on the active unit's slot for their target, running the classic bound-texture code,
+        // then putting the previous binding back.
+        //
+        // Both of those binds are REAL changes to "which texture is bound at this unit" for as
+        // long as `fn` runs, so both have to move the texture bind generation. Backends memoise
+        // per-unit work keyed on that generation and BORROW the binding slot (they hold a
+        // pointer to the slot's shared_ptr, not a copy); a slot swap the generation never saw
+        // let such a memo replay texture A's backend twin against texture B now sitting in the
+        // slot - which re-specified A's backend storage with B's shape and silently destroyed
+        // A's GPU-rendered contents (Minecraft's lightmap, blanked by a by-name upload to an
+        // Iris shadow map, which then discarded every glyph).
+        //
+        // The generation is bumped directly rather than through NoteTextureUnitTouched because
+        // the touched-unit HIGH-WATER MARK must NOT move: glActiveTexture does not advance it,
+        // so a DSA-only app would otherwise have every later draw walk up to the highest unit it
+        // ever aimed a by-name call at. Not advancing it is also sufficient - a unit above the
+        // mark is outside every memo's coverage and outside the epoch walk, so nothing can
+        // observe the transient swap there; at or below it, the bump is exactly what makes the
+        // epoch re-derive. Bumping only on a real change keeps the very common redundant case (a
+        // by-name call on the texture already bound to the active unit) free.
+        //
+        // The restore is a scope guard because `fn` can throw (the unsupported-state paths use
+        // THROW_EXCEPTION): leaking the temporary binding would leave the wrong texture bound to
+        // a live unit for the rest of the context's life.
         template <typename Fn>
         void WithTemporarilyBoundNamedTexture(const SharedPtr<MG_State::GLState::ITextureObject>& textureObject,
                                              Fn&& fn) {
             if (!textureObject) return;
 
-            auto& activeUnit = MG_State::pGLContext->GetTextureUnitObject(MG_State::pGLContext->GetActiveTextureUnit());
+            const Int activeUnitIndex = MG_State::pGLContext->GetActiveTextureUnit();
+            auto& activeUnit = MG_State::pGLContext->GetTextureUnitObject(activeUnitIndex);
             auto& bindingSlot = activeUnit.GetBindingSlot(textureObject->GetTarget());
             const auto previousBinding = bindingSlot.GetBoundObject();
-            bindingSlot.Bind(textureObject);
+
+            using SlotType = std::remove_reference_t<decltype(bindingSlot)>;
+            class ScopedSlotRestore {
+            public:
+                ScopedSlotRestore(SlotType& slot, SharedPtr<MG_State::GLState::ITextureObject> previous)
+                    : m_slot(slot), m_previous(Move(previous)) {}
+                ~ScopedSlotRestore() {
+                    if (m_slot.Bind(m_previous)) {
+                        MG_State::pGLContext->BumpTextureBindGeneration();
+                    }
+                }
+                ScopedSlotRestore(const ScopedSlotRestore&) = delete;
+                ScopedSlotRestore& operator=(const ScopedSlotRestore&) = delete;
+
+            private:
+                SlotType& m_slot;
+                SharedPtr<MG_State::GLState::ITextureObject> m_previous;
+            };
+
+            if (bindingSlot.Bind(textureObject)) {
+                MG_State::pGLContext->BumpTextureBindGeneration();
+            }
+            ScopedSlotRestore restore(bindingSlot, previousBinding);
+
             fn(MG_Util::ConvertTextureTargetToGLEnum(textureObject->GetTarget()));
-            bindingSlot.Bind(previousBinding);
         }
 
         SizeT ComputeTextureStorageByteSize(TextureInternalFormat textureInternalFormat, GLsizei width, GLsizei height,

@@ -630,6 +630,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
         SharedPtr<BackendTextureObject>& SyncTextureObjectToBackend(
             const SharedPtr<MG_State::GLState::ITextureObject>& textureObject,
             Bool imageBindableStorageRequired = false);
+        // Brings every texture the next draw reads - the touched units' bindings and the draw
+        // FBO's texture attachments - onto the backend, through the two borrowed-pair memos
+        // documented at their definitions. Declared here so tests can drive those memos directly.
+        void SyncNeccessaryTextures();
         extern Array<Array<BackendTextureObject*, (SizeT)TextureTarget::TextureTargetCount>,
                      MG_State::GLState::TextureState::MAX_TEXTURE_IMAGE_UNITS>
             g_boundTexturesCache;

@@ -1898,3 +1898,132 @@ TEST(FastSTLSanity, ErasingTheOnlyElementReturnsEnd) {
     EXPECT_EQ(next, map.end());
     EXPECT_TRUE(map.empty());
 }
+
+namespace {
+    // Records what the per-unit texture sync actually pushed at the driver: which backend
+    // texture id was current when each glTexImage2D landed, and the shape it was given.
+    struct TexSpecCall {
+        GLuint texture;
+        GLsizei width;
+        GLsizei height;
+    };
+    MobileGL::Vector<TexSpecCall>* g_texSpecCalls = nullptr;
+    GLuint g_texSpecBoundTexture = 0;
+
+    void TS_BindTexture(GLenum, GLuint texture) { g_texSpecBoundTexture = texture; }
+    void TS_ActiveTexture(GLenum) {}
+    void TS_TexParameteri(GLenum, GLenum, GLint) {}
+    void TS_TexParameterf(GLenum, GLenum, GLfloat) {}
+    void TS_TexParameterfv(GLenum, GLenum, const GLfloat*) {}
+    void TS_PixelStorei(GLenum, GLint) {}
+    void TS_BindBuffer(GLenum, GLuint) {}
+    void TS_TexImage2D(GLenum, GLint level, GLint, GLsizei width, GLsizei height, GLint, GLenum, GLenum,
+                       const void*) {
+        if (g_texSpecCalls && level == 0) {
+            g_texSpecCalls->push_back({g_texSpecBoundTexture, width, height});
+        }
+    }
+
+    // Clears the recording hook even when a gtest assertion unwinds the test body.
+    struct ScopedTexSpecRecording {
+        explicit ScopedTexSpecRecording(MobileGL::Vector<TexSpecCall>& sink) {
+            g_texSpecCalls = &sink;
+            g_texSpecBoundTexture = 0;
+        }
+        ~ScopedTexSpecRecording() { g_texSpecCalls = nullptr; }
+        ScopedTexSpecRecording(const ScopedTexSpecRecording&) = delete;
+        ScopedTexSpecRecording& operator=(const ScopedTexSpecRecording&) = delete;
+    };
+
+    // Gives `name` a complete single-level 2D image of the requested size without going through
+    // the frontend upload path (the mock table below wires only the state-pushing entry points).
+    MobileGL::SharedPtr<MobileGL::MG_State::GLState::ITextureObject> MakeComplete2DTexture(GLuint name,
+                                                                                           MobileGL::Int size) {
+        using namespace MobileGL;
+        MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, name);
+        auto object = MG_State::pGLContext->GetTextureUnitObject(0)
+                          .GetBindingSlot(TextureTarget::Texture2D)
+                          .GetBoundObject();
+        object->SetInternalFormat(TextureInternalFormat::RGBA8);
+        MG_State::GLState::AsMipmapTexture(object.get())
+            ->AllocateStorage(TextureUploadTarget::Texture2D, 0, {{size, size, 1}, 4});
+        return object;
+    }
+} // namespace
+
+// The per-unit texture sync memo BORROWS the binding slot: an entry holds a pointer to the
+// slot's shared_ptr plus the backend twin of whatever was in it when the entry was built. Its
+// keys (context id, bind-generation epoch, high-water mark, sampling generation) are the primary
+// guard, but they are all derived state - so the memo also has to survive a slot swap that never
+// reached them.
+//
+// It did not. The DSA by-name emulation swapped a slot silently, every key still matched, and
+// the replay drove texture A's backend twin from texture B's frontend object: A's backend
+// storage was re-specified with B's shape, destroying anything A only ever had on the GPU. On
+// Espryt + Iris/BSL that blanked Minecraft's 16x16 lightmap the moment a 2048x2048 shadow map
+// was uploaded through a by-name call, and since the text shader multiplies by the lightmap,
+// `if (color.a < 0.1) discard` then threw away every glyph in the process - HUD, menus and the
+// vanilla title screen alike.
+TEST(DirectGLESTextureSync, UnitMemoRefusesToDriveATwinFromAnotherTexture) {
+    using namespace MobileGL;
+    ScopedDirectGLESTextureBindings scoped; // fresh GLContext + registry + binding caches
+    Vector<TexSpecCall> specs;
+    ScopedTexSpecRecording recording(specs);
+
+    auto functions = MG_Backend::DirectGLES::g_GLESFuncs;
+    functions.glBindTexture = TS_BindTexture;
+    functions.glActiveTexture = TS_ActiveTexture;
+    functions.glTexImage2D = TS_TexImage2D;
+    functions.glTexParameteri = TS_TexParameteri;
+    functions.glTexParameterf = TS_TexParameterf;
+    functions.glTexParameterfv = TS_TexParameterfv;
+    functions.glPixelStorei = TS_PixelStorei;
+    functions.glBindBuffer = TS_BindBuffer;
+    MG_Backend::DirectGLES::SetGLESFuncsTable(functions);
+
+    GLuint names[2] = {};
+    MG_Impl::GLImpl::GenTextures(2, names);
+    // `foreign` stands in for the shadow map, `resident` for the lightmap. Both are fully
+    // specified BEFORE the first sync so that nothing between the two syncs can move the
+    // sampling-resolution generation and invalidate the memo for an unrelated reason.
+    const auto foreign = MakeComplete2DTexture(names[1], 32);
+    const auto resident = MakeComplete2DTexture(names[0], 16);
+    ASSERT_NE(foreign, nullptr);
+    ASSERT_NE(resident, nullptr);
+
+    // First sync: builds the memo with unit 0 -> `resident`, and gives `resident`'s twin its
+    // 16x16 backend storage.
+    MG_Backend::DirectGLES::TextureImpl::SyncNeccessaryTextures();
+    auto* residentSlot = MG_Backend::DirectGLES::TextureImpl::g_backendTextureObjects.Find(resident.get());
+    ASSERT_NE(residentSlot, nullptr);
+    ASSERT_NE(*residentSlot, nullptr);
+    const GLuint residentBackendId = (*residentSlot)->GetBackendTextureId();
+    ASSERT_NE(residentBackendId, 0u);
+    ASSERT_FALSE(specs.empty());
+    EXPECT_EQ(specs.back().texture, residentBackendId);
+    EXPECT_EQ(specs.back().width, 16);
+
+    // The hazard, reproduced at the state level: put `foreign` on the slot the memo borrows
+    // WITHOUT telling the binding accounting, exactly as the by-name emulation used to.
+    MG_State::pGLContext->GetTextureUnitObject(0).GetBindingSlot(TextureTarget::Texture2D).Bind(foreign);
+
+    const SizeT specsBeforeReplay = specs.size();
+    MG_Backend::DirectGLES::TextureImpl::SyncNeccessaryTextures();
+
+    // `foreign` must have been synced through its OWN twin...
+    auto* foreignSlot = MG_Backend::DirectGLES::TextureImpl::g_backendTextureObjects.Find(foreign.get());
+    ASSERT_NE(foreignSlot, nullptr);
+    ASSERT_NE(*foreignSlot, nullptr);
+    const GLuint foreignBackendId = (*foreignSlot)->GetBackendTextureId();
+    EXPECT_NE(foreignBackendId, residentBackendId);
+
+    // ...and above all, nothing may have re-specified the RESIDENT texture's backend storage.
+    // That single call is what destroyed the lightmap.
+    for (SizeT i = specsBeforeReplay; i < specs.size(); ++i) {
+        EXPECT_NE(specs[i].texture, residentBackendId)
+            << "the stale memo entry re-specified the resident texture's backend storage with "
+            << specs[i].width << "x" << specs[i].height;
+    }
+
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, 0);
+}

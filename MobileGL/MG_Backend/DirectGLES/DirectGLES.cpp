@@ -1127,10 +1127,29 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // slot the key covers still holds a reference to it. Holding either side by shared_ptr
         // instead would keep dead frontend textures alive and defeat the registry's
         // weak-reference GC.
+        //
+        // `texture` records WHICH frontend object `backend` was paired with when the entry was
+        // built, and PairingsIntact re-checks it before any replay. The keys above are the
+        // primary guard, but they are all derived state: a slot swap that never reaches the
+        // bind generation (the DSA by-name emulation used to swap a slot silently) would leave
+        // every key matching while the borrowed slot pointed at a different texture, and the
+        // replay would then drive texture A's backend twin from texture B's frontend state -
+        // re-specifying A's backend storage with B's shape and destroying A's contents. A raw
+        // pointer compare per entry is far cheaper than the walk it guards, and a stale pairing
+        // costs only a list rebuild, so this stays as the structural net under the keys.
         struct UnitTextureSyncEntry {
             const SharedPtr<MG_State::GLState::ITextureObject>* slot = nullptr;
+            MG_State::GLState::ITextureObject* texture = nullptr;
             BackendTextureObject* backend = nullptr;
         };
+        // True while every entry's borrowed slot still holds the texture the entry was paired
+        // with. Callers put it LAST in the key conjunction so it only runs on a key hit.
+        static Bool PairingsIntact(const Vector<UnitTextureSyncEntry>& list) {
+            for (const auto& entry : list) {
+                if (entry.slot->get() != entry.texture) return false;
+            }
+            return true;
+        }
         static Vector<UnitTextureSyncEntry> g_unitTextureSyncList;
         static Bool g_unitTextureSyncListValid = false;
         static Uint64 g_unitTextureSyncListContextId = 0;
@@ -1197,7 +1216,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 g_unitTextureSyncListMaxUnit == maxTouchedUnit &&
                 g_unitTextureSyncListContextGeneration == g_textureContextGeneration &&
                 g_unitTextureSyncListEpoch == unitBindingsEpoch &&
-                g_unitTextureSyncListSamplingGeneration == samplingGeneration) {
+                g_unitTextureSyncListSamplingGeneration == samplingGeneration &&
+                PairingsIntact(g_unitTextureSyncList)) {
                 for (const auto& entry : g_unitTextureSyncList) {
                     // Aggregate gate == the conjunction of the three callees' own
                     // early-outs (see IsDrawSyncClean); skipping on true is
@@ -1219,8 +1239,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                         // An image-less default texture (name 0) is the slot's initial / "unbound"
                         // state; it has nothing to sync, so skip it as cheaply as the old null slot.
                         if (textureObject && !MG_State::GLState::IsUndefinedDefaultTexture(textureObject.get())) {
-                            g_unitTextureSyncList.push_back(
-                                {&textureObject, SyncTextureObjectToBackend(textureObject).get()});
+                            g_unitTextureSyncList.push_back({&textureObject, textureObject.get(),
+                                                             SyncTextureObjectToBackend(textureObject).get()});
                         }
                     }
                 }
@@ -1254,7 +1274,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     g_fboTextureSyncListSlotVersion == fboSlotVersion &&
                     g_fboTextureSyncListObjectVersion == fboObjectVersion &&
                     g_fboTextureSyncListContextId == keys.contextId &&
-                    g_fboTextureSyncListContextGeneration == g_textureContextGeneration;
+                    g_fboTextureSyncListContextGeneration == g_textureContextGeneration &&
+                    PairingsIntact(g_fboTextureSyncList);
                 if (fboListValid) {
                     for (const auto& entry : g_fboTextureSyncList) {
                         // Same aggregate gate as the unit list above.
@@ -1273,8 +1294,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                         if (!attachment.IsTexture()) continue;
                         auto& textureObject = attachment.GetTexture();
                         if (textureObject) {
-                            g_fboTextureSyncList.push_back(
-                                {&textureObject, SyncTextureObjectToBackend(textureObject).get()});
+                            g_fboTextureSyncList.push_back({&textureObject, textureObject.get(),
+                                                            SyncTextureObjectToBackend(textureObject).get()});
                         }
                     }
                     g_fboTextureSyncListFbo = currentFBO.get();

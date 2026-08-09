@@ -2835,3 +2835,53 @@ TEST_F(TextureTest, BindSamplerRejectsUnitsBeyondMaxCombinedTextureImageUnits) {
     MG_Impl::GLImpl::DeleteSamplers(1, &sampler);
     DrainPendingGlErrors();
 }
+
+// The DSA by-name entry points are emulated by temporarily binding the named texture onto the
+// active unit's slot for its target, running the classic bound-texture code, then putting the
+// previous binding back. For as long as the emulated call runs, that swap is a REAL change to
+// which texture is bound at that unit, so both transitions have to move the texture bind
+// generation.
+//
+// They used to move nothing. Backends memoise per-unit work keyed on the bind generation and
+// BORROW the binding slot (they hold a pointer to the slot's shared_ptr, not a copy), so a memo
+// built while texture A sat in the slot stayed "valid" while B was temporarily in it - and the
+// backend then drove A's backend twin from B's frontend state, re-specifying A's backend storage
+// with B's shape. Any content A only ever had on the GPU was gone. That is what blanked
+// Minecraft's lightmap when Iris uploaded to a BSL shadow map: the text shader multiplies by the
+// lightmap, so `if (color.a < 0.1) discard` then threw away every glyph in the process.
+TEST_F(TextureTest, NamedTextureCallKeepsUnitBindingAccountingCoherent) {
+    GLuint names[2] = {};
+    MG_Impl::GLImpl::GenTextures(2, names);
+    const GLuint boundName = names[0];
+    const GLuint namedName = names[1];
+
+    MG_Impl::GLImpl::ActiveTexture(GL_TEXTURE0);
+    // Instantiate both as 2D objects, then leave `boundName` on the unit.
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, namedName);
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, boundName);
+    ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    auto& slot = MG_State::pGLContext->GetTextureUnitObject(0).GetBindingSlot(TextureTarget::Texture2D);
+    const auto boundObject = slot.GetBoundObject();
+    ASSERT_NE(boundObject, nullptr);
+    ASSERT_EQ(boundObject->GetExternalIndex(), boundName);
+
+    // TextureParameteriv is one of the by-name calls that is emulated by binding: it reaches
+    // WithTemporarilyBoundNamedTexture, unlike the scalar TextureParameteri, which edits the
+    // object directly and never touches a unit.
+    const Uint64 base = MG_State::pGLContext->GetTextureBindGeneration();
+    const GLint maxLevel = 0;
+    MG_Impl::GLImpl::TextureParameteriv(namedName, GL_TEXTURE_MAX_LEVEL, &maxLevel);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    // The emulation put `namedName` on the unit and took it off again. A generation-keyed memo
+    // must be able to see that the slot it borrows was not stable across the call.
+    EXPECT_GT(MG_State::pGLContext->GetTextureBindGeneration(), base)
+        << "a by-name texture call swapped a live unit binding without moving the bind generation";
+    // ...and the application-visible binding is exactly what it was before the call.
+    EXPECT_EQ(slot.GetBoundObject(), boundObject);
+
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, 0);
+    MG_Impl::GLImpl::DeleteTextures(2, names);
+    DrainPendingGlErrors();
+}
