@@ -232,6 +232,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                     StorageBlockResource block{};
                     block.name = blockName;
                     block.binding = binding->binding;
+                    // glShaderStorageBlockBinding survives every rebuild of this cache: the
+                    // authoritative record of a rebound block lives on the program (it is what
+                    // GL_BUFFER_BINDING reports), and only the shader's declared binding is
+                    // recoverable from the SPIR-V. Without this, any unrelated state-version
+                    // bump would silently revert the block to its declared binding.
+                    const Int rebound = program.GetShaderStorageBlockBindingOverride(blockName);
+                    if (rebound >= 0) block.binding = static_cast<Uint32>(rebound);
                     block.dataSize = static_cast<GLint>(binding->block.size);
                     const GLuint blockIndex = static_cast<GLuint>(cache.storageBlocks.size());
                     AddBufferVariablesRecursive(binding->block, blockName, blockIndex, cache.bufferVariables,
@@ -256,18 +263,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             return programObject.get();
         }
 
-        void CopyResourceName(const String& source, GLsizei bufSize, GLsizei* length, GLchar* name) {
-            const GLsizei writtenLength = static_cast<GLsizei>(source.size());
-            if (length) {
-                *length = writtenLength;
-            }
-            if (name && bufSize > 0) {
-                const GLsizei copyLength = std::min<GLsizei>(bufSize - 1, writtenLength);
-                std::memcpy(name, source.data(), static_cast<SizeT>(copyLength));
-                name[copyLength] = '\0';
-            }
-        }
-
         const Uint8* ResolveIndirectCommandBytes(const void* indirect, SizeT requiredBytes, const char* label) {
             auto drawBuffer = MG_State::pGLContext->GetBufferBindingSlot(BufferTarget::DrawIndirect).GetBoundObject();
             if (drawBuffer) {
@@ -288,100 +283,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             return reinterpret_cast<const Uint8*>(indirect);
         }
 
-        Vector<GLuint> GetUniformBlockActiveVariables(const MG_State::GLState::ProgramObject& program,
-                                                      GLuint blockIndex) {
-            Vector<GLuint> activeVariables;
-            const Uint uniformCount = program.GetUniformCount();
-            activeVariables.reserve(uniformCount);
-            for (Uint uniformIndex = 0; uniformIndex < uniformCount; ++uniformIndex) {
-                if (program.GetActiveUniformBlockIndex(uniformIndex) == static_cast<Int>(blockIndex)) {
-                    activeVariables.push_back(uniformIndex);
-                }
-            }
-            return activeVariables;
-        }
-
-        GLuint FindProgramInputIndex(const MG_State::GLState::ProgramObject& program, const String& name) {
-            const Int activeCount = program.GetActiveAttributesCount();
-            for (Int index = 0; index < activeCount; ++index) {
-                if (program.GetActiveAttribName(index) == name) {
-                    return static_cast<GLuint>(index);
-                }
-            }
-            return GL_INVALID_INDEX;
-        }
-
-        GLuint FindProgramOutputIndex(const MG_State::GLState::ProgramObject& program, const String& name) {
-            const Int activeCount = program.GetActiveFragmentOutputCount();
-            for (Int index = 0; index < activeCount; ++index) {
-                if (program.GetActiveFragmentOutputName(index) == name) {
-                    return static_cast<GLuint>(index);
-                }
-            }
-            return GL_INVALID_INDEX;
-        }
-
-        GLint GetProgramOutputLocation(const MG_State::GLState::ProgramObject& program, const String& name) {
-            const Int activeCount = program.GetActiveFragmentOutputCount();
-            for (Int index = 0; index < activeCount; ++index) {
-                if (program.GetActiveFragmentOutputName(index) == name) {
-                    return program.GetFragmentOutputLocation(index);
-                }
-            }
-            return -1;
-        }
-
-        GLint GetProgramResourceActiveCount(const MG_State::GLState::ProgramObject& program, GLenum programInterface,
-                                            const ProgramResourceCache& cache) {
-            switch (programInterface) {
-            case GL_SHADER_STORAGE_BLOCK:
-                return static_cast<GLint>(cache.storageBlocks.size());
-            case GL_BUFFER_VARIABLE:
-                return static_cast<GLint>(cache.bufferVariables.size());
-            case GL_UNIFORM_BLOCK:
-                return program.GetActiveUniformBlocksCount();
-            case GL_UNIFORM:
-                return static_cast<GLint>(program.GetUniformCount());
-            case GL_PROGRAM_INPUT:
-                return program.GetActiveAttributesCount();
-            case GL_PROGRAM_OUTPUT:
-                return program.GetActiveFragmentOutputCount();
-            default:
-                return 0;
-            }
-        }
-
-        GLint GetProgramResourceMaxNameLength(const MG_State::GLState::ProgramObject& program, GLenum programInterface,
-                                              const ProgramResourceCache& cache) {
-            switch (programInterface) {
-            case GL_SHADER_STORAGE_BLOCK: {
-                SizeT maxLength = 0;
-                for (const auto& block : cache.storageBlocks) maxLength = std::max(maxLength, block.name.size() + 1);
-                return static_cast<GLint>(maxLength);
-            }
-            case GL_BUFFER_VARIABLE: {
-                SizeT maxLength = 0;
-                for (const auto& var : cache.bufferVariables) maxLength = std::max(maxLength, var.name.size() + 1);
-                return static_cast<GLint>(maxLength);
-            }
-            case GL_UNIFORM_BLOCK:
-                return program.GetActiveUniformBlocksMaxNameLength() + 1;
-            case GL_UNIFORM:
-                return program.GetUniformMaxLength() + 1;
-            case GL_PROGRAM_INPUT:
-                return program.GetActiveAttributesMaxLength() + 1;
-            case GL_PROGRAM_OUTPUT: {
-                SizeT maxLength = 0;
-                const Int activeCount = program.GetActiveFragmentOutputCount();
-                for (Int index = 0; index < activeCount; ++index) {
-                    maxLength = std::max(maxLength, program.GetActiveFragmentOutputName(index).size() + 1);
-                }
-                return static_cast<GLint>(maxLength);
-            }
-            default:
-                return 0;
-            }
-        }
     } // namespace
 
     void ClearProgramResourceCaches() {
@@ -395,11 +296,21 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
     GLuint GetShaderStorageBlockIndex(const MG_State::GLState::ProgramObject& program, const String& name) {
         auto& cache = GetProgramResourceCache(program);
-        const auto it = std::find_if(cache.storageBlocks.begin(), cache.storageBlocks.end(),
-            [&](const StorageBlockResource& block) { return block.name == name; });
-        return it == cache.storageBlocks.end()
-            ? GL_INVALID_INDEX
-            : static_cast<GLuint>(std::distance(cache.storageBlocks.begin(), it));
+        auto find = [&cache](const String& key) {
+            return std::find_if(cache.storageBlocks.begin(), cache.storageBlocks.end(),
+                [&](const StorageBlockResource& block) { return block.name == key; });
+        };
+        auto it = find(name);
+        if (it == cache.storageBlocks.end()) {
+            // Cache names are normalized (NormalizeDescriptorName drops the array suffix), so
+            // an arrayed block that GL enumerates per element - "B[0]", "B[1]" - is one entry
+            // here, spelled "B". Retry against the bare name before giving up.
+            const auto bracket = name.rfind('[');
+            if (bracket == String::npos || name.empty() || name.back() != ']') return GL_INVALID_INDEX;
+            it = find(name.substr(0, bracket));
+            if (it == cache.storageBlocks.end()) return GL_INVALID_INDEX;
+        }
+        return static_cast<GLuint>(std::distance(cache.storageBlocks.begin(), it));
     }
 
     GLuint GetShaderStorageBlockBinding(const MG_State::GLState::ProgramObject& program, GLuint blockIndex) {
@@ -874,357 +785,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
     }
 
-    void GetProgramInterfaceiv(GLuint program, GLenum programInterface, GLenum pname, GLint* params) {
-        if (!params) return;
+    void ShaderStorageBlockBinding(GLuint program, const GLchar* storageBlockName, GLuint storageBlockBinding) {
         auto* programObject = TryGetDirectVulkanProgram(program);
-        if (!programObject) return;
-        auto& cache = GetProgramResourceCache(*programObject);
-        switch (pname) {
-        case GL_ACTIVE_RESOURCES:
-            *params = GetProgramResourceActiveCount(*programObject, programInterface, cache);
-            return;
-        case GL_MAX_NAME_LENGTH:
-            *params = GetProgramResourceMaxNameLength(*programObject, programInterface, cache);
-            return;
-        case GL_MAX_NUM_ACTIVE_VARIABLES:
-            if (programInterface == GL_SHADER_STORAGE_BLOCK) {
-                SizeT maxCount = 0;
-                for (const auto& block : cache.storageBlocks) {
-                    maxCount = std::max(maxCount, block.activeVariables.size());
-                }
-                *params = static_cast<GLint>(maxCount);
-            } else if (programInterface == GL_UNIFORM_BLOCK) {
-                GLint maxCount = 0;
-                const Int activeBlocks = programObject->GetActiveUniformBlocksCount();
-                for (Int index = 0; index < activeBlocks; ++index) {
-                    maxCount = std::max(maxCount, programObject->GetUniformBlockActiveUniformCount(index));
-                }
-                *params = maxCount;
-            } else {
-                *params = 0;
-            }
-            return;
-        default:
-            *params = 0;
-            return;
-        }
-    }
-
-    GLuint GetProgramResourceIndex(GLuint program, GLenum programInterface, const GLchar* name) {
-        if (!name) return GL_INVALID_INDEX;
-        auto* programObject = TryGetDirectVulkanProgram(program);
-        if (!programObject) return GL_INVALID_INDEX;
-        auto& cache = GetProgramResourceCache(*programObject);
-        const String resourceName = name;
-        if (programInterface == GL_SHADER_STORAGE_BLOCK) {
-            return GetShaderStorageBlockIndex(*programObject, name);
-        }
-        if (programInterface == GL_BUFFER_VARIABLE) {
-            const auto it = std::find_if(cache.bufferVariables.begin(), cache.bufferVariables.end(),
-                [&](const BufferVariableResource& var) { return var.name == resourceName; });
-            return it == cache.bufferVariables.end()
-                ? GL_INVALID_INDEX
-                : static_cast<GLuint>(std::distance(cache.bufferVariables.begin(), it));
-        }
-        if (programInterface == GL_UNIFORM_BLOCK) {
-            return programObject->GetUniformBlockIndex(name);
-        }
-        if (programInterface == GL_UNIFORM) {
-            const Int activeUniformIndex = programObject->GetActiveUniformIndex(resourceName);
-            return activeUniformIndex >= 0 ? static_cast<GLuint>(activeUniformIndex) : GL_INVALID_INDEX;
-        }
-        if (programInterface == GL_PROGRAM_INPUT) {
-            return FindProgramInputIndex(*programObject, resourceName);
-        }
-        if (programInterface == GL_PROGRAM_OUTPUT) {
-            return FindProgramOutputIndex(*programObject, resourceName);
-        }
-        return GL_INVALID_INDEX;
-    }
-
-    void GetProgramResourceName(GLuint program, GLenum programInterface, GLuint index, GLsizei bufSize,
-                                GLsizei* length, GLchar* name) {
-        auto* programObject = TryGetDirectVulkanProgram(program);
-        if (!programObject) return;
-        auto& cache = GetProgramResourceCache(*programObject);
-        if (programInterface == GL_SHADER_STORAGE_BLOCK && index < cache.storageBlocks.size()) {
-            CopyResourceName(cache.storageBlocks[index].name, bufSize, length, name);
-            return;
-        }
-        if (programInterface == GL_BUFFER_VARIABLE && index < cache.bufferVariables.size()) {
-            CopyResourceName(cache.bufferVariables[index].name, bufSize, length, name);
-            return;
-        }
-        if (programInterface == GL_UNIFORM_BLOCK && programObject->IsActiveUniformBlock(index)) {
-            CopyResourceName(programObject->GetUniformBlockName(index), bufSize, length, name);
-            return;
-        }
-        if (programInterface == GL_UNIFORM && index < programObject->GetUniformCount()) {
-            CopyResourceName(programObject->GetActiveUniformName(index), bufSize, length, name);
-            return;
-        }
-        if (programInterface == GL_PROGRAM_INPUT && index < static_cast<GLuint>(programObject->GetActiveAttributesCount())) {
-            CopyResourceName(programObject->GetActiveAttribName(index), bufSize, length, name);
-            return;
-        }
-        if (programInterface == GL_PROGRAM_OUTPUT &&
-            index < static_cast<GLuint>(programObject->GetActiveFragmentOutputCount())) {
-            CopyResourceName(programObject->GetActiveFragmentOutputName(index), bufSize, length, name);
-            return;
-        }
-        if (length) *length = 0;
-        if (name && bufSize > 0) name[0] = '\0';
-    }
-
-    void GetProgramResourceiv(GLuint program, GLenum programInterface, GLuint index, GLsizei propCount,
-                              const GLenum* props, GLsizei bufSize, GLsizei* length, GLint* params) {
-        auto* programObject = TryGetDirectVulkanProgram(program);
-        if (!programObject || !props || !params || bufSize <= 0) return;
-        auto& cache = GetProgramResourceCache(*programObject);
-        GLsizei written = 0;
-        auto writeValue = [&](GLint value) {
-            if (written < bufSize) {
-                params[written++] = value;
-            }
-        };
-
-        for (GLsizei propIndex = 0; propIndex < propCount; ++propIndex) {
-            const GLenum prop = props[propIndex];
-            if (programInterface == GL_SHADER_STORAGE_BLOCK && index < cache.storageBlocks.size()) {
-                const auto& block = cache.storageBlocks[index];
-                switch (prop) {
-                case GL_NAME_LENGTH:
-                    writeValue(static_cast<GLint>(block.name.size() + 1));
-                    break;
-                case GL_BUFFER_BINDING:
-                    writeValue(static_cast<GLint>(block.binding));
-                    break;
-                case GL_BUFFER_DATA_SIZE:
-                    writeValue(block.dataSize);
-                    break;
-                case GL_NUM_ACTIVE_VARIABLES:
-                    writeValue(static_cast<GLint>(block.activeVariables.size()));
-                    break;
-                case GL_ACTIVE_VARIABLES:
-                    for (const auto variable : block.activeVariables) writeValue(static_cast<GLint>(variable));
-                    break;
-                default:
-                    writeValue(0);
-                    break;
-                }
-            } else if (programInterface == GL_BUFFER_VARIABLE && index < cache.bufferVariables.size()) {
-                const auto& var = cache.bufferVariables[index];
-                switch (prop) {
-                case GL_NAME_LENGTH:
-                    writeValue(static_cast<GLint>(var.name.size() + 1));
-                    break;
-                case GL_TYPE:
-                    writeValue(GL_FLOAT);
-                    break;
-                case GL_ARRAY_SIZE:
-                    writeValue(1);
-                    break;
-                case GL_OFFSET:
-                    writeValue(var.offset);
-                    break;
-                case GL_BLOCK_INDEX:
-                    writeValue(static_cast<GLint>(var.blockIndex));
-                    break;
-                case GL_ARRAY_STRIDE:
-                case GL_MATRIX_STRIDE:
-                case GL_TOP_LEVEL_ARRAY_SIZE:
-                case GL_TOP_LEVEL_ARRAY_STRIDE:
-                case GL_IS_ROW_MAJOR:
-                    writeValue(0);
-                    break;
-                default:
-                    writeValue(0);
-                    break;
-                }
-            } else if (programInterface == GL_UNIFORM_BLOCK &&
-                       programObject->IsActiveUniformBlock(index)) {
-                const auto activeVariables = GetUniformBlockActiveVariables(*programObject, index);
-                switch (prop) {
-                case GL_NAME_LENGTH:
-                    writeValue(static_cast<GLint>(programObject->GetUniformBlockName(index).size() + 1));
-                    break;
-                case GL_BUFFER_BINDING:
-                    writeValue(static_cast<GLint>(programObject->GetUniformBlockBinding(index)));
-                    break;
-                case GL_BUFFER_DATA_SIZE:
-                    writeValue(static_cast<GLint>(programObject->GetUBOSizeAt(index)));
-                    break;
-                case GL_NUM_ACTIVE_VARIABLES:
-                    writeValue(static_cast<GLint>(activeVariables.size()));
-                    break;
-                case GL_ACTIVE_VARIABLES:
-                    for (const GLuint variableIndex : activeVariables) {
-                        writeValue(static_cast<GLint>(variableIndex));
-                    }
-                    break;
-                case GL_REFERENCED_BY_VERTEX_SHADER:
-                    writeValue(programObject->IsUniformBlockReferencedByStage(index, EShLangVertex) ? GL_TRUE
-                                                                                                     : GL_FALSE);
-                    break;
-                case GL_REFERENCED_BY_FRAGMENT_SHADER:
-                    writeValue(programObject->IsUniformBlockReferencedByStage(index, EShLangFragment) ? GL_TRUE
-                                                                                                       : GL_FALSE);
-                    break;
-                case GL_REFERENCED_BY_COMPUTE_SHADER:
-                    writeValue(programObject->IsUniformBlockReferencedByStage(index, EShLangCompute) ? GL_TRUE
-                                                                                                      : GL_FALSE);
-                    break;
-                case GL_REFERENCED_BY_GEOMETRY_SHADER:
-                case GL_REFERENCED_BY_TESS_CONTROL_SHADER:
-                case GL_REFERENCED_BY_TESS_EVALUATION_SHADER:
-                    writeValue(GL_FALSE);
-                    break;
-                default:
-                    writeValue(0);
-                    break;
-                }
-            } else if (programInterface == GL_UNIFORM && index < programObject->GetUniformCount()) {
-                const auto& uniformName = programObject->GetActiveUniformName(index);
-                const GLint location = programObject->GetUniformLocation(uniformName);
-                switch (prop) {
-                case GL_NAME_LENGTH:
-                    writeValue(static_cast<GLint>(uniformName.size() + 1));
-                    break;
-                case GL_TYPE:
-                    writeValue(static_cast<GLint>(programObject->GetActiveUniformType(index)));
-                    break;
-                case GL_ARRAY_SIZE:
-                    writeValue(programObject->GetActiveUniformArraySize(index));
-                    break;
-                case GL_BLOCK_INDEX:
-                    writeValue(programObject->GetActiveUniformBlockIndex(index));
-                    break;
-                case GL_LOCATION:
-                    writeValue(location);
-                    break;
-                case GL_OFFSET:
-                    writeValue(location >= 0 && programObject->IsValidUniformLocation(location)
-                                   ? static_cast<GLint>(programObject->GetUniformOffset(location))
-                                   : 0);
-                    break;
-                case GL_ARRAY_STRIDE:
-                case GL_MATRIX_STRIDE:
-                case GL_IS_ROW_MAJOR:
-                case GL_TOP_LEVEL_ARRAY_SIZE:
-                case GL_TOP_LEVEL_ARRAY_STRIDE:
-                case GL_REFERENCED_BY_VERTEX_SHADER:
-                case GL_REFERENCED_BY_FRAGMENT_SHADER:
-                case GL_REFERENCED_BY_COMPUTE_SHADER:
-                case GL_REFERENCED_BY_GEOMETRY_SHADER:
-                case GL_REFERENCED_BY_TESS_CONTROL_SHADER:
-                case GL_REFERENCED_BY_TESS_EVALUATION_SHADER:
-                    writeValue(0);
-                    break;
-                default:
-                    writeValue(0);
-                    break;
-                }
-            } else if (programInterface == GL_PROGRAM_INPUT &&
-                       index < static_cast<GLuint>(programObject->GetActiveAttributesCount())) {
-                const auto& resourceName = programObject->GetActiveAttribName(index);
-                switch (prop) {
-                case GL_NAME_LENGTH:
-                    writeValue(static_cast<GLint>(resourceName.size() + 1));
-                    break;
-                case GL_TYPE:
-                    writeValue(static_cast<GLint>(programObject->GetActiveAttribType(index)));
-                    break;
-                case GL_ARRAY_SIZE:
-                    writeValue(programObject->GetActiveAttribArraySize(index));
-                    break;
-                case GL_LOCATION:
-                    writeValue(programObject->GetAttributeLocation(resourceName));
-                    break;
-                case GL_REFERENCED_BY_VERTEX_SHADER:
-                    writeValue(GL_TRUE);
-                    break;
-                case GL_REFERENCED_BY_FRAGMENT_SHADER:
-                case GL_REFERENCED_BY_COMPUTE_SHADER:
-                case GL_REFERENCED_BY_GEOMETRY_SHADER:
-                case GL_REFERENCED_BY_TESS_CONTROL_SHADER:
-                case GL_REFERENCED_BY_TESS_EVALUATION_SHADER:
-                case GL_IS_PER_PATCH:
-                case GL_LOCATION_INDEX:
-                    writeValue(0);
-                    break;
-                default:
-                    writeValue(0);
-                    break;
-                }
-            } else if (programInterface == GL_PROGRAM_OUTPUT &&
-                       index < static_cast<GLuint>(programObject->GetActiveFragmentOutputCount())) {
-                const auto& resourceName = programObject->GetActiveFragmentOutputName(index);
-                switch (prop) {
-                case GL_NAME_LENGTH:
-                    writeValue(static_cast<GLint>(resourceName.size() + 1));
-                    break;
-                case GL_TYPE:
-                    writeValue(static_cast<GLint>(programObject->GetFragmentOutputType(index)));
-                    break;
-                case GL_ARRAY_SIZE:
-                    writeValue(programObject->GetActiveFragmentOutputArraySize(index));
-                    break;
-                case GL_LOCATION:
-                    writeValue(programObject->GetFragmentOutputLocation(index));
-                    break;
-                case GL_LOCATION_INDEX:
-                    writeValue(0);
-                    break;
-                case GL_REFERENCED_BY_FRAGMENT_SHADER:
-                    writeValue(GL_TRUE);
-                    break;
-                case GL_REFERENCED_BY_VERTEX_SHADER:
-                case GL_REFERENCED_BY_COMPUTE_SHADER:
-                case GL_REFERENCED_BY_GEOMETRY_SHADER:
-                case GL_REFERENCED_BY_TESS_CONTROL_SHADER:
-                case GL_REFERENCED_BY_TESS_EVALUATION_SHADER:
-                case GL_IS_PER_PATCH:
-                    writeValue(0);
-                    break;
-                default:
-                    writeValue(0);
-                    break;
-                }
-            } else {
-                writeValue(0);
-            }
-        }
-        if (length) *length = written;
-    }
-
-    GLint GetProgramResourceLocation(GLuint program, GLenum programInterface, const GLchar* name) {
-        auto* programObject = TryGetDirectVulkanProgram(program);
-        if (!programObject || !name) return -1;
-        if (programInterface == GL_UNIFORM) {
-            return programObject->GetUniformLocation(name);
-        }
-        if (programInterface == GL_PROGRAM_INPUT) {
-            return programObject->GetAttributeLocation(name);
-        }
-        if (programInterface == GL_PROGRAM_OUTPUT) {
-            return GetProgramOutputLocation(*programObject, name);
-        }
-        return -1;
-    }
-
-    GLint GetProgramResourceLocationIndex(GLuint program, GLenum programInterface, const GLchar* name) {
-        auto* programObject = TryGetDirectVulkanProgram(program);
-        if (!programObject || !name) return -1;
-        if (programInterface == GL_PROGRAM_OUTPUT) {
-            return GetProgramOutputLocation(*programObject, name) >= 0 ? 0 : -1;
-        }
-        return -1;
-    }
-
-    void ShaderStorageBlockBinding(GLuint program, GLuint storageBlockIndex, GLuint storageBlockBinding) {
-        auto* programObject = TryGetDirectVulkanProgram(program);
-        if (!programObject) return;
-        auto& cache = GetProgramResourceCache(*programObject);
+        if (!programObject || storageBlockName == nullptr) return;
         const Int maxBindings = pActiveBackendObject
             ? pActiveBackendObject->GetDynamicParameters().MaxShaderStorageBufferBindings
             : 0;
@@ -1234,13 +797,14 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 MakeUnique<GenericErrorInfo>("DirectVulkan", __func__, "Shader storage binding is out of range."));
             return;
         }
-        if (storageBlockIndex >= cache.storageBlocks.size()) {
-            MG_State::pGLContext->RecordError(
-                ErrorCode::InvalidValue,
-                MakeUnique<GenericErrorInfo>("DirectVulkan", __func__, "Shader storage block index is not active."));
-            return;
-        }
-        cache.storageBlocks[storageBlockIndex].binding = storageBlockBinding;
+        // The frontend already validated that the name denotes an active block, and has
+        // already recorded the new binding on the program - which is what reseeds this cache
+        // whenever it is rebuilt. Writing the entry here as well keeps an ALREADY-BUILT cache
+        // (the common case: the very next draw reads it) from having to be thrown away.
+        auto& cache = GetProgramResourceCache(*programObject);
+        const GLuint blockIndex = GetShaderStorageBlockIndex(*programObject, storageBlockName);
+        if (blockIndex == GL_INVALID_INDEX) return;
+        cache.storageBlocks[blockIndex].binding = storageBlockBinding;
     }
     void ReadPixels(GLint x, GLint y, GLsizei width, GLsizei height, GLenum format, GLenum type, void* pixels) {
         MOBILEGL_ASSERT(pVulkanRenderer, "DirectVulkan::ReadPixels called with null VulkanRenderer");

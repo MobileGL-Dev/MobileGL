@@ -92,15 +92,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
     void GetIntegeri_v(GLenum target, GLuint index, GLint* data);
     void GetInteger64i_v(GLenum target, GLuint index, GLint64* data);
     void GetProgramiv(GLuint program, GLenum pname, GLint* params);
-    void GetProgramInterfaceiv(GLuint program, GLenum programInterface, GLenum pname, GLint* params);
-    GLuint GetProgramResourceIndex(GLuint program, GLenum programInterface, const GLchar* name);
-    void GetProgramResourceName(GLuint program, GLenum programInterface, GLuint index, GLsizei bufSize, GLsizei* length,
-                                GLchar* name);
-    void GetProgramResourceiv(GLuint program, GLenum programInterface, GLuint index, GLsizei propCount,
-                              const GLenum* props, GLsizei bufSize, GLsizei* length, GLint* params);
-    GLint GetProgramResourceLocation(GLuint program, GLenum programInterface, const GLchar* name);
-    GLint GetProgramResourceLocationIndex(GLuint program, GLenum programInterface, const GLchar* name);
-    void ShaderStorageBlockBinding(GLuint program, GLuint storageBlockIndex, GLuint storageBlockBinding);
+    void ShaderStorageBlockBinding(GLuint program, const GLchar* storageBlockName, GLuint storageBlockBinding);
     Bool InitWindowSurface(NativeWindowType window);
     Bool InitPbufferSurface(EGLint width, EGLint height);
     Bool MakeCurrent();

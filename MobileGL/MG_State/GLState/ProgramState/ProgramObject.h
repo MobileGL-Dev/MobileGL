@@ -82,6 +82,14 @@ namespace MobileGL::MG_State::GLState {
                 return -1;
             }
             if (name.length() < 4) return -1;
+            // An array of arrays is keyed by its full "[0]"-terminated spelling
+            // ("a[2][1][0]"), so a query that already ends in a subscript may still be the
+            // NAME of an array rather than an element of one. Try that first; only then
+            // treat the trailing subscript as an element index.
+            {
+                const auto arrayOfArraysIt = Artifacts().uniformLocations.find(name + "[0]");
+                if (arrayOfArraysIt != Artifacts().uniformLocations.end()) return (Int)arrayOfArraysIt->second;
+            }
             const SizeT bracket = name.rfind('[');
             // Require at least one digit between the brackets.
             if (bracket == String::npos || bracket + 1 >= name.length() - 1) return -1;
@@ -129,6 +137,14 @@ namespace MobileGL::MG_State::GLState {
         Int GlUniformIndexFromTProgram(Int tIndex) const {
             if (tIndex < 0 || tIndex >= static_cast<Int>(Artifacts().tProgramUniformIndexToGl.size())) return -1;
             return Artifacts().tProgramUniformIndexToGl[tIndex];
+        }
+        // GL uniform-block index -> glslang TProgram block index (the inverse of
+        // GlBlockIndexFromTProgram). The interface-query layer needs it to reach block
+        // properties glslang exposes but no typed getter here does.
+        Int TProgramBlockIndex(Uint glBlockIndex) const {
+            return glBlockIndex < Artifacts().glBlockIndexToTProgram.size()
+                ? Artifacts().glBlockIndexToTProgram[glBlockIndex]
+                : -1;
         }
         Int GlBlockIndexFromTProgram(Int tBlockIndex) const {
             if (tBlockIndex < 0 || tBlockIndex >= static_cast<Int>(Artifacts().tProgramBlockIndexToGl.size())) return -1;
@@ -529,8 +545,41 @@ namespace MobileGL::MG_State::GLState {
 
         Uint GetUniformBlockBinding(Uint index) const { return Artifacts().uniformBlockBinding[index]; }
 
+        // Set by glShaderStorageBlockBinding, keyed by the block's GL name rather than by any
+        // index. A shader storage block has THREE index spaces - the frontend interface-query
+        // enumeration, DirectVulkan's SPIR-V descriptor order and DirectGLES's real-driver
+        // order - and the name is the only coordinate all three agree on. Absent from the map
+        // means "never rebound", and the shader's declared binding still stands.
+        void SetShaderStorageBlockBinding(const String& blockName, Uint binding) {
+            Artifacts().shaderStorageBlockBinding[blockName] = static_cast<Int>(binding);
+        }
+        // -1 when the block has never been rebound. `blockName` is the interface-query
+        // spelling; an arrayed block's elements ("B[0]", "B[1]") are separate GL resources
+        // with separate bindings, so they are separate keys.
+        Int GetShaderStorageBlockBindingOverride(const String& blockName) const {
+            const auto it = Artifacts().shaderStorageBlockBinding.find(blockName);
+            if (it != Artifacts().shaderStorageBlockBinding.end()) return it->second;
+            // A backend that collapses an arrayed block down to one resource knows it only by
+            // the bare block name; answer that with element zero's binding.
+            const auto zeroth = Artifacts().shaderStorageBlockBinding.find(blockName + "[0]");
+            return zeroth != Artifacts().shaderStorageBlockBinding.end() ? zeroth->second : -1;
+        }
+        // Every rebinding recorded so far, for a backend that has to REPLAY them onto a
+        // driver program it just (re)built. Empty for the overwhelming majority of programs -
+        // check .empty() before doing any per-block work.
+        const UnorderedMap<String, Int>& GetShaderStorageBlockBindingOverrides() const {
+            return Artifacts().shaderStorageBlockBinding;
+        }
+
         Vector<Vector<unsigned>>& GetGeneratedSpirv() { return Artifacts().generatedSpirv; }
         const Vector<Vector<unsigned>>& GetGeneratedSpirv() const { return Artifacts().generatedSpirv; }
+
+        // The linked glslang reflection itself, for the ONE consumer that needs resource
+        // lists no typed getter above exposes: the GL program-interface query layer
+        // (MG_Impl/GLImpl/Program/ProgramInterface.cpp), which has to enumerate buffer
+        // blocks, buffer variables, atomic counters and per-stage reference masks. Null
+        // until a link has succeeded. Read through the join gate like everything else.
+        const glslang::TProgram* GetReflection() const { return Artifacts().program.get(); }
 
         Int GetShaderIndexByStage(ShaderStage stage) const {
             auto it = std::find_if(m_shaders.begin(), m_shaders.end(), [stage](const SharedPtr<ShaderObject>& shader) {
@@ -611,6 +660,9 @@ namespace MobileGL::MG_State::GLState {
             // These may change after-link (because GL spec decided to have `glUniformBlockBinding`)
             UnorderedMap<String, Uint> uniformBlockIndexByName;
             Vector<Int> uniformBlockBinding;
+            // glShaderStorageBlockBinding overrides, keyed by GL block name. See
+            // SetShaderStorageBlockBinding for why this one is by name and not by index.
+            UnorderedMap<String, Int> shaderStorageBlockBinding;
 
             // Need to be reflected after linking of SPIR-V binary
             Vector<Uint> uniformOffsets;
@@ -629,6 +681,12 @@ namespace MobileGL::MG_State::GLState {
             // Transform feedback: the linked snapshot (the request lives outside, on the
             // GL-thread-owned side).
             Vector<XfbVarying> xfbVaryings;
+            // The glTransformFeedbackVaryings request list exactly as this link consumed it,
+            // INCLUDING the gl_NextBuffer / gl_SkipComponentsN pseudo-varyings that
+            // xfbVaryings deliberately drops (they steer the capture layout and must never
+            // reach a backend's varying list). GL_TRANSFORM_FEEDBACK_VARYING enumerates the
+            // full request, pseudo-varyings and all, so the interface query needs its own copy.
+            Vector<String> xfbInterfaceNames;
             Vector<Uint32> xfbStrides;
             Vector<Uint32> gsStripTriangles;
             Bool gsStripCaptureFixup = false;
@@ -711,6 +769,9 @@ namespace MobileGL::MG_State::GLState {
             return index < Artifacts().xfbVaryings.size() ? &Artifacts().xfbVaryings[index] : nullptr;
         }
         const Vector<XfbVarying>& GetTransformFeedbackVaryings() const { return Artifacts().xfbVaryings; }
+        // The GL_TRANSFORM_FEEDBACK_VARYING resource list: every name the last successful
+        // link was asked to capture, in request order, pseudo-varyings included.
+        const Vector<String>& GetTransformFeedbackInterfaceNames() const { return Artifacts().xfbInterfaceNames; }
         // Stride of one captured vertex in the given capture buffer slot.
         Uint32 GetTransformFeedbackStride(Uint32 bufferIndex) const {
             return bufferIndex < Artifacts().xfbStrides.size() ? Artifacts().xfbStrides[bufferIndex] : 0;

@@ -1057,6 +1057,10 @@ namespace MobileGL::MG_State::GLState {
 
     Bool ProgramLinkTask::ResolveTransformFeedbackVaryings() {
         artifacts.xfbVaryings.clear();
+        // The GL_TRANSFORM_FEEDBACK_VARYING interface enumerates the request verbatim -
+        // pseudo-varyings included - while xfbVaryings below keeps only what is actually
+        // captured. Snapshot it before the loop consumes gl_NextBuffer/gl_SkipComponentsN.
+        artifacts.xfbInterfaceNames = in.requestedXfbVaryings;
         artifacts.xfbStrides.clear();
         artifacts.xfbBufferMode = in.requestedXfbBufferMode;
         artifacts.xfbVaryingNameMaxLength = 0;
@@ -1127,15 +1131,45 @@ namespace MobileGL::MG_State::GLState {
                 bytesPerElement = 4;
                 resolved = true;
             } else if (linkerObjects != nullptr) {
+                // GL lets a capture name a single element of an output array ("b[0]"), which
+                // captures one element of the element type - not the whole array. Strip a
+                // trailing strict-decimal subscript and look the base declaration up.
+                String declaredName = name;
+                Bool singleElement = false;
+                Uint element = 0;
+                if (name.size() > 3 && name.back() == ']') {
+                    const SizeT bracket = name.rfind('[');
+                    if (bracket != String::npos && bracket + 1 < name.size() - 1) {
+                        Bool digitsOnly = true;
+                        for (SizeT c = bracket + 1; c + 1 < name.size(); ++c) {
+                            if (name[c] < '0' || name[c] > '9') {
+                                digitsOnly = false;
+                                break;
+                            }
+                            element = element * 10 + static_cast<Uint>(name[c] - '0');
+                        }
+                        if (digitsOnly) {
+                            declaredName = name.substr(0, bracket);
+                            singleElement = true;
+                        }
+                    }
+                }
                 for (const auto* node : linkerObjects->getSequence()) {
                     const glslang::TIntermSymbol* symbol = node->getAsSymbolNode();
                     if (symbol == nullptr || symbol->getType().getQualifier().storage != glslang::EvqVaryingOut) {
                         continue;
                     }
-                    if (symbol->getName() != name.c_str()) {
+                    if (symbol->getName() != declaredName.c_str()) {
                         continue;
                     }
                     resolved = ResolveXfbSymbolType(symbol->getType(), varying.type, varying.size, bytesPerElement);
+                    if (resolved && singleElement) {
+                        if (static_cast<Int>(element) >= varying.size) {
+                            resolved = false;
+                            break;
+                        }
+                        varying.size = 1;
+                    }
                     break;
                 }
             }

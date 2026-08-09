@@ -617,12 +617,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             funcsTable.GL.GetIntegeri_v = GetIntegeri_v;
             funcsTable.GL.GetInteger64i_v = GetInteger64i_v;
             funcsTable.GL.GetProgramiv = GetProgramiv;
-            funcsTable.GL.GetProgramInterfaceiv = GetProgramInterfaceiv;
-            funcsTable.GL.GetProgramResourceIndex = GetProgramResourceIndex;
-            funcsTable.GL.GetProgramResourceName = GetProgramResourceName;
-            funcsTable.GL.GetProgramResourceiv = GetProgramResourceiv;
-            funcsTable.GL.GetProgramResourceLocation = GetProgramResourceLocation;
-            funcsTable.GL.GetProgramResourceLocationIndex = GetProgramResourceLocationIndex;
             funcsTable.GL.ShaderStorageBlockBinding = ShaderStorageBlockBinding;
             funcsTable.GL.FenceSync = FenceSync;
             funcsTable.GL.ClientWaitSync = ClientWaitSync;

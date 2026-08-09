@@ -116,6 +116,7 @@ namespace MobileGL::MG_State::GLState {
         artifacts.explicitOpaqueUniformBindings.clear();
         artifacts.uniformBlockIndexByName.clear();
         artifacts.uniformBlockBinding.clear();
+        artifacts.shaderStorageBlockBinding.clear();
         artifacts.uniformOffsets.clear();
         artifacts.uniformSizesInBytes.clear();
         artifacts.globalUboScratch.clear();
@@ -127,6 +128,7 @@ namespace MobileGL::MG_State::GLState {
         artifacts.attribInNameMaxLength = 0;
         artifacts.uniformBlockNameMaxLength = 0;
         artifacts.xfbVaryings.clear();
+        artifacts.xfbInterfaceNames.clear();
         artifacts.xfbStrides.clear();
         artifacts.xfbBufferMode = GL_INTERLEAVED_ATTRIBS;
         artifacts.xfbVaryingNameMaxLength = 0;

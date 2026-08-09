@@ -1422,15 +1422,38 @@ namespace MobileGL::MG_Backend::DirectGLES {
         static Bool g_hasSyncedRenderState = false;
         static RenderStateParameters g_syncedRenderStateParameters;
         static IntVec4 g_syncedBackendViewport = IntVec4(-1, -1, -1, -1);
+        // The RESOLVED scissor rectangle last pushed (see the scissor block in SyncRenderState);
+        // an impossible value so the first sync always pushes.
+        static IntVec4 g_syncedBackendScissorBox = IntVec4(-1, -1, -1, -1);
         // GLES starts with sRGB framebuffer encoding on, so the first sync always has to push the
         // frontend's (desktop-GL default) disabled state down.
         static Bool g_syncedSrgbFramebufferWrites = true;
+        // Set when the shadow below stops describing the real ES context. The ES context
+        // OUTLIVES every MobileGL context, so a MobileGL context switch leaves it holding the
+        // previous context's enable state while the frontend's parameter block AND its
+        // version counter both restart from defaults. Every "differs from what I last pushed"
+        // test in SyncRenderState would then agree that nothing needs pushing, and the
+        // leftover state silently applies to the new context - the class of bug the CTS
+        // caught as GL_FRAMEBUFFER_SRGB surviving from vertex_attrib_binding into
+        // direct_state_access.renderbuffers_storage. One unconditional push settles the whole
+        // block rather than the one cap that happened to be noticed.
+        static Bool g_forceFullRenderStateResync = true;
+        void InvalidateSyncedRenderState() {
+            g_forceFullRenderStateResync = true;
+            g_hasSyncedRenderState = false;
+            g_syncedBackendViewport = IntVec4(-1, -1, -1, -1);
+            g_syncedBackendScissorBox = IntVec4(-1, -1, -1, -1);
+        }
         void SyncRenderState() {
 #ifdef TRACY_ENABLE
             ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
             Uint16 currentRenderStateVersion = MG_State::pGLContext->GetRenderStateParametersVersion();
-            if (g_hasSyncedRenderState && currentRenderStateVersion == g_syncedRenderStateVersion) return;
+            const Bool forceFullPush = g_forceFullRenderStateResync;
+            g_forceFullRenderStateResync = false;
+            if (!forceFullPush && g_hasSyncedRenderState && currentRenderStateVersion == g_syncedRenderStateVersion) {
+                return;
+            }
 
             const auto& parameters = MG_State::pGLContext->GetRenderStateParameters();
 
@@ -1478,7 +1501,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // All 12 capability bools live after LogicOp in the struct, i.e. in the tail span.
             if (tailSpanDirty) {
 #define SYNC_CAPABILITY(cap_mg, cap_gl)                                                                                \
-    if (parameters.cap_mg##Enabled != g_syncedRenderStateParameters.cap_mg##Enabled) {                                 \
+    if (forceFullPush || parameters.cap_mg##Enabled != g_syncedRenderStateParameters.cap_mg##Enabled) {                                 \
         if (parameters.cap_mg##Enabled) {                                                                              \
             g_GLESFuncs.glEnable(cap_gl);                                                                              \
         } else {                                                                                                       \
@@ -1507,7 +1530,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
               // into an sRGB colour buffer comes back encoded once too often (the shader's own
               // decode on the next fetch then leaves the value one conversion short).
                 const Bool srgbWrites = MG_State::pGLContext->IsCapabilityEnabled(CapabilityInput::FramebufferSrgb);
-                if (g_GLESCapabilities.SupportsSrgbWriteControl && srgbWrites != g_syncedSrgbFramebufferWrites) {
+                if (g_GLESCapabilities.SupportsSrgbWriteControl &&
+                    (forceFullPush || srgbWrites != g_syncedSrgbFramebufferWrites)) {
                     srgbWrites ? g_GLESFuncs.glEnable(GL_FRAMEBUFFER_SRGB)
                                : g_GLESFuncs.glDisable(GL_FRAMEBUFFER_SRGB);
                     g_syncedSrgbFramebufferWrites = srgbWrites;
@@ -1520,7 +1544,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 const Bool restart = parameters.PrimitiveRestartFixedIndexEnabled || parameters.PrimitiveRestartEnabled;
                 const Bool syncedRestart = g_syncedRenderStateParameters.PrimitiveRestartFixedIndexEnabled ||
                                            g_syncedRenderStateParameters.PrimitiveRestartEnabled;
-                if (restart != syncedRestart) {
+                if (forceFullPush || restart != syncedRestart) {
                     restart ? g_GLESFuncs.glEnable(GL_PRIMITIVE_RESTART_FIXED_INDEX)
                             : g_GLESFuncs.glDisable(GL_PRIMITIVE_RESTART_FIXED_INDEX);
                 }
@@ -1556,7 +1580,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
                 Bool allEnabled = true;
                 Bool allDisabled = true;
-                Bool anyCapDirty = false;
+                Bool anyCapDirty = forceFullPush;
 
                 for (Uint i = 0; i < FBO::MAX_DRAW_BUFFERS; ++i) {
                     Bool enabled = targetStates[i].Enabled;
@@ -1581,7 +1605,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                             s.Enabled = false;
                     } else {
                         for (Uint i = 0; i < FBO::MAX_DRAW_BUFFERS; ++i) {
-                            if (targetStates[i].Enabled != syncedStates[i].Enabled) {
+                            if (forceFullPush || targetStates[i].Enabled != syncedStates[i].Enabled) {
                                 syncedStates[i].Enabled = targetStates[i].Enabled;
                                 syncedStates[i].Enabled ? g_GLESFuncs.glEnablei(GL_BLEND, i)
                                                         : g_GLESFuncs.glDisablei(GL_BLEND, i);
@@ -1591,7 +1615,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 }
 
                 Bool allFuncsSame = true;
-                Bool anyFuncDirty = false;
+                Bool anyFuncDirty = forceFullPush;
                 const auto& first = targetStates[0];
 
                 for (Uint i = 0; i < FBO::MAX_DRAW_BUFFERS; ++i) {
@@ -1630,8 +1654,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
                             const auto& cur = targetStates[i];
                             auto& syn = syncedStates[i];
 
-                            if (cur.SrcFactorRGB != syn.SrcFactorRGB || cur.DstFactorRGB != syn.DstFactorRGB ||
-                                cur.SrcFactorAlpha != syn.SrcFactorAlpha || cur.DstFactorAlpha != syn.DstFactorAlpha) {
+                            if (forceFullPush || cur.SrcFactorRGB != syn.SrcFactorRGB ||
+                                cur.DstFactorRGB != syn.DstFactorRGB ||
+                                cur.SrcFactorAlpha != syn.SrcFactorAlpha ||
+                                cur.DstFactorAlpha != syn.DstFactorAlpha) {
                                 syn.SrcFactorRGB = cur.SrcFactorRGB;
                                 syn.DstFactorRGB = cur.DstFactorRGB;
                                 syn.SrcFactorAlpha = cur.SrcFactorAlpha;
@@ -1648,7 +1674,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 }
 
                 Bool allEquationsSame = true;
-                Bool anyEquationDirty = false;
+                Bool anyEquationDirty = forceFullPush;
 
                 for (Uint i = 0; i < FBO::MAX_DRAW_BUFFERS; ++i) {
                     const auto& cur = targetStates[i];
@@ -1679,7 +1705,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                             const auto& cur = targetStates[i];
                             auto& syn = syncedStates[i];
 
-                            if (cur.ColorEquation != syn.ColorEquation || cur.AlphaEquation != syn.AlphaEquation) {
+                            if (forceFullPush || cur.ColorEquation != syn.ColorEquation ||
+                                cur.AlphaEquation != syn.AlphaEquation) {
                                 syn.ColorEquation = cur.ColorEquation;
                                 syn.AlphaEquation = cur.AlphaEquation;
 
@@ -1693,13 +1720,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
 
             if (tailSpanDirty) { // Depth state
-                if (parameters.DepthFunc != g_syncedRenderStateParameters.DepthFunc) {
+                if (forceFullPush || parameters.DepthFunc != g_syncedRenderStateParameters.DepthFunc) {
                     g_GLESFuncs.glDepthFunc(MG_Util::ConvertDepthTestFuncToGLEnum(parameters.DepthFunc));
                 }
-                if (parameters.DepthMask != g_syncedRenderStateParameters.DepthMask) {
+                if (forceFullPush || parameters.DepthMask != g_syncedRenderStateParameters.DepthMask) {
                     g_GLESFuncs.glDepthMask(parameters.DepthMask ? GL_TRUE : GL_FALSE);
                 }
-                if (parameters.DepthRange != g_syncedRenderStateParameters.DepthRange) {
+                if (forceFullPush || parameters.DepthRange != g_syncedRenderStateParameters.DepthRange) {
                     g_GLESFuncs.glDepthRangef(parameters.DepthRange.x(), parameters.DepthRange.y());
                 }
             }
@@ -1710,16 +1737,17 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     const StencilFaceState& synced = g_syncedRenderStateParameters.StencilStates[faceIndex];
                     const GLenum glFace = faceIndex == 0 ? GL_FRONT : GL_BACK;
 
-                    if (current.Func != synced.Func || current.Ref != synced.Ref ||
+                    if (forceFullPush || current.Func != synced.Func || current.Ref != synced.Ref ||
                         current.ValueMask != synced.ValueMask) {
                         g_GLESFuncs.glStencilFuncSeparate(
                             glFace, MG_Util::ConvertDepthTestFuncToGLEnum(current.Func), current.Ref,
                             current.ValueMask);
                     }
-                    if (current.WriteMask != synced.WriteMask) {
+                    if (forceFullPush || current.WriteMask != synced.WriteMask) {
                         g_GLESFuncs.glStencilMaskSeparate(glFace, current.WriteMask);
                     }
-                    if (current.FailOp != synced.FailOp || current.PassDepthFailOp != synced.PassDepthFailOp ||
+                    if (forceFullPush || current.FailOp != synced.FailOp ||
+                        current.PassDepthFailOp != synced.PassDepthFailOp ||
                         current.PassDepthPassOp != synced.PassDepthPassOp) {
                         g_GLESFuncs.glStencilOpSeparate(
                             glFace, MG_Util::ConvertStencilOperationToGLEnum(current.FailOp),
@@ -1736,7 +1764,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 const auto& targetMasks = parameters.ColorMasks;
                 const auto& syncedMasks = g_syncedRenderStateParameters.ColorMasks;
 
-                Bool anyDirty = false;
+                Bool anyDirty = forceFullPush;
                 Bool allSame = true;
                 for (Uint i = 0; i < FBO::MAX_DRAW_BUFFERS; ++i) {
                     if (targetMasks[i] != syncedMasks[i]) anyDirty = true;
@@ -1753,7 +1781,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                                   : g_GLESFuncs.glColorMaskiEXT ? g_GLESFuncs.glColorMaskiEXT
                                                                                 : g_GLESFuncs.glColorMaskiOES;
                         for (Uint i = 0; i < FBO::MAX_DRAW_BUFFERS; ++i) {
-                            if (targetMasks[i] != syncedMasks[i]) {
+                            if (forceFullPush || targetMasks[i] != syncedMasks[i]) {
                                 const BoolVec4& m = targetMasks[i];
                                 colorMaskiFn(i, ToGLBoolean(m.x()), ToGLBoolean(m.y()), ToGLBoolean(m.z()),
                                              ToGLBoolean(m.w()));
@@ -1765,7 +1793,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
             if (tailSpanDirty) { // Polygon mode. GLES core has no glPolygonMode; use NV/ANGLE_polygon_mode when present.
               // Without the extension the mode stays FILL and non-FILL requests are dropped.
-                if (parameters.PolygonModeFront != g_syncedRenderStateParameters.PolygonModeFront &&
+                if ((forceFullPush || parameters.PolygonModeFront != g_syncedRenderStateParameters.PolygonModeFront) &&
                     g_GLESCapabilities.SupportsPolygonMode) {
                     const auto polygonModeFn =
                         g_GLESFuncs.glPolygonModeNV ? g_GLESFuncs.glPolygonModeNV : g_GLESFuncs.glPolygonModeANGLE;
@@ -1774,67 +1802,97 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
 
             if (tailSpanDirty) { // Clear values
-                if (parameters.ClearColor != g_syncedRenderStateParameters.ClearColor) {
+                if (forceFullPush || parameters.ClearColor != g_syncedRenderStateParameters.ClearColor) {
                     const FloatVec4& clearCol = parameters.ClearColor;
                     g_GLESFuncs.glClearColor(clearCol.x(), clearCol.y(), clearCol.z(), clearCol.w());
                 }
-                if (parameters.ClearDepth != g_syncedRenderStateParameters.ClearDepth) {
+                if (forceFullPush || parameters.ClearDepth != g_syncedRenderStateParameters.ClearDepth) {
                     g_GLESFuncs.glClearDepthf(parameters.ClearDepth);
                 }
-                if (parameters.ClearStencil != g_syncedRenderStateParameters.ClearStencil) {
+                if (forceFullPush || parameters.ClearStencil != g_syncedRenderStateParameters.ClearStencil) {
                     g_GLESFuncs.glClearStencil(static_cast<GLint>(parameters.ClearStencil));
                 }
-                if (parameters.BlendColor != g_syncedRenderStateParameters.BlendColor) {
+                if (forceFullPush || parameters.BlendColor != g_syncedRenderStateParameters.BlendColor) {
                     const FloatVec4& blendColor = parameters.BlendColor;
                     g_GLESFuncs.glBlendColor(blendColor.x(), blendColor.y(), blendColor.z(), blendColor.w());
                 }
             }
 
             if (tailSpanDirty) { // Cull face mode
-                if (parameters.CullFaceModeSetting != g_syncedRenderStateParameters.CullFaceModeSetting) {
+                if (forceFullPush || parameters.CullFaceModeSetting != g_syncedRenderStateParameters.CullFaceModeSetting) {
                     const CullFaceMode& cfm = parameters.CullFaceModeSetting;
                     g_GLESFuncs.glCullFace(MG_Util::ConvertCullFaceModeToGLEnum(cfm));
                 }
-                if (parameters.FrontFaceModeSetting != g_syncedRenderStateParameters.FrontFaceModeSetting) {
+                if (forceFullPush || parameters.FrontFaceModeSetting != g_syncedRenderStateParameters.FrontFaceModeSetting) {
                     const FrontFaceMode& ffm = parameters.FrontFaceModeSetting;
                     g_GLESFuncs.glFrontFace(MG_Util::ConvertFrontFaceModeToGLEnum(ffm));
                 }
             }
 
-            if (tailSpanDirty) { // Scissor box
-                if (parameters.ScissorBox != g_syncedRenderStateParameters.ScissorBox) {
-                    const IntVec4& scissorBox = parameters.ScissorBox;
-                    g_GLESFuncs.glScissor(scissorBox.x(), scissorBox.y(), scissorBox.z(), scissorBox.w());
+            if (tailSpanDirty) { // Scissor box. Resolved and shadowed like the viewport above, and
+              // for the same reason: what has to reach the driver is NOT simply the parameter
+              // field. (0,0,0,0) is where RenderStateParameters::ScissorBox starts and the only
+              // thing that ever writes it is glScissor, so that value means "the application has
+              // never called glScissor" - it is not a GL scissor box. GL's initial box is the
+              // whole window, which the frontend has no way to spell before a surface exists.
+              // The pre-resync code got away with pushing the field verbatim only by accident:
+              // the shadow held the same default, the field never compared unequal, and the ES
+              // context kept its own correct default. Under the forced full push that accident
+              // is gone, glScissor(0,0,0,0) shrinks the scissor to an EMPTY rectangle, and
+              // everything drawn with GL_SCISSOR_TEST enabled before the app's first glScissor
+              // is clipped away - Minecraft 26.2 keeps only its unscissored sky and hand and
+              // loses the terrain and the whole GUI.
+                IntVec4 backendScissorBox = parameters.ScissorBox;
+                if (backendScissorBox.z() <= 0 || backendScissorBox.w() <= 0) {
+                    Int surfaceWidth = 0;
+                    Int surfaceHeight = 0;
+                    if (QueryCurrentSurfaceSize(surfaceWidth, surfaceHeight)) {
+                        backendScissorBox = IntVec4(0, 0, surfaceWidth, surfaceHeight);
+                    }
+                }
+                // Compared against what was actually PUSHED, not against the parameter field, so
+                // the resolved value and the diff can never disagree.
+                if (backendScissorBox != g_syncedBackendScissorBox) {
+                    g_GLESFuncs.glScissor(backendScissorBox.x(), backendScissorBox.y(), backendScissorBox.z(),
+                                          backendScissorBox.w());
+                    g_syncedBackendScissorBox = backendScissorBox;
                 }
             }
 
             if (tailSpanDirty) { // Logic op (first field of the tail span)
-                if (parameters.LogicOp != g_syncedRenderStateParameters.LogicOp) {
+              // glLogicOp is GLES 1.x / EXT only - eglGetProcAddress returns null for it on a
+              // plain ES 3.x driver. Before the forced resync it was reached only when an app
+              // actually set a logic op; now every MakeCurrent would call it, so the null check
+              // is mandatory rather than defensive.
+                if (g_GLESFuncs.glLogicOp &&
+                    (forceFullPush || parameters.LogicOp != g_syncedRenderStateParameters.LogicOp)) {
                     g_GLESFuncs.glLogicOp(MG_Util::ConvertLogicOperationToGLEnum(parameters.LogicOp));
                 }
             }
 
             if (headSpanDirty) { // Polygon offset (head-span scalars, like line width / point size below)
-                if (parameters.PolygonOffsetFactor != g_syncedRenderStateParameters.PolygonOffsetFactor ||
+                if (forceFullPush || parameters.PolygonOffsetFactor != g_syncedRenderStateParameters.PolygonOffsetFactor ||
                     parameters.PolygonOffsetUnits != g_syncedRenderStateParameters.PolygonOffsetUnits) {
                     g_GLESFuncs.glPolygonOffset(parameters.PolygonOffsetFactor, parameters.PolygonOffsetUnits);
                 }
             }
 
             if (headSpanDirty) { // Line width
-                if (parameters.LineWidth != g_syncedRenderStateParameters.LineWidth) {
+                if (forceFullPush || parameters.LineWidth != g_syncedRenderStateParameters.LineWidth) {
                     g_GLESFuncs.glLineWidth(parameters.LineWidth);
                 }
             }
 
-            if (headSpanDirty) { // Point size
-                if (parameters.PointSize != g_syncedRenderStateParameters.PointSize) {
+            if (headSpanDirty) { // Point size (GLES 1.x only - ES 2+ sets it from gl_PointSize,
+              // so the entry point is absent on most drivers; see the glLogicOp note above)
+                if (g_GLESFuncs.glPointSize &&
+                    (forceFullPush || parameters.PointSize != g_syncedRenderStateParameters.PointSize)) {
                     g_GLESFuncs.glPointSize(parameters.PointSize);
                 }
             }
 
             if (tailSpanDirty) { // Sample coverage
-                if (parameters.SampleCoverageValue != g_syncedRenderStateParameters.SampleCoverageValue ||
+                if (forceFullPush || parameters.SampleCoverageValue != g_syncedRenderStateParameters.SampleCoverageValue ||
                     parameters.SampleCoverageInvert != g_syncedRenderStateParameters.SampleCoverageInvert) {
                     g_GLESFuncs.glSampleCoverage(parameters.SampleCoverageValue,
                                                 ToGLBoolean(parameters.SampleCoverageInvert));
@@ -1842,7 +1900,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
 
             if (tailSpanDirty) { // Sample mask
-                if (g_GLESFuncs.glSampleMaski && parameters.SampleMaskValue != g_syncedRenderStateParameters.SampleMaskValue) {
+                if (g_GLESFuncs.glSampleMaski &&
+                    (forceFullPush || parameters.SampleMaskValue != g_syncedRenderStateParameters.SampleMaskValue)) {
                     g_GLESFuncs.glSampleMaski(0, parameters.SampleMaskValue);
                 }
             }
@@ -5189,50 +5248,41 @@ namespace MobileGL::MG_Backend::DirectGLES {
         g_GLESFuncs.glGetProgramiv(backendProgramId, pname, params);
     }
 
-    void GetProgramInterfaceiv(GLuint program, GLenum programInterface, GLenum pname, GLint* params) {
-        GLuint backendProgramId = GetBackendProgramId(program);
-        if (!backendProgramId) return;
-        g_GLESFuncs.glGetProgramInterfaceiv(backendProgramId, programInterface, pname, params);
-    }
+    // NOTE the shape here, and do not "simplify" it back to GetBackendProgramId(): this entry
+    // point must never be the thing that BUILDS a backend program.
+    //
+    // The frontend has already recorded the rebinding on the program object
+    // (SetShaderStorageBlockBinding) - that record is what GL_BUFFER_BINDING reports and what
+    // BackendProgramObjectImpl::SyncToBackend replays onto every driver program it builds. So
+    // the only work left here is an optimisation: push the change straight onto a driver
+    // program that is ALREADY built and already current with this link, so the next draw does
+    // not have to be preceded by a rebuild.
+    //
+    // Calling GetBackendProgramId() instead would sync-on-demand from a non-draw entry point,
+    // i.e. transpile and compile the whole program while the draw-path globals that the ESSL
+    // is generated against (PrgramImpl::g_fragColorBroadcastCount, the snorm/unorm clamp
+    // masks - established by SyncCurrentProgram) still hold another program's values. That
+    // bakes a program against the wrong state, and under CPU load it was also observed to
+    // fail the driver compile outright. Deferring is spec-fine: a binding only has to take
+    // effect by the block's next use.
+    void ShaderStorageBlockBinding(GLuint program, const GLchar* storageBlockName, GLuint storageBlockBinding) {
+        if (!storageBlockName) return;
+        if (!MG_State::pGLContext->ValidateProgramName(program)) return;
+        auto& programObject = MG_State::pGLContext->GetProgramObject(program);
+        if (!programObject) return;
 
-    GLuint GetProgramResourceIndex(GLuint program, GLenum programInterface, const GLchar* name) {
-        GLuint backendProgramId = GetBackendProgramId(program);
-        if (!backendProgramId) return GL_INVALID_INDEX;
-        return g_GLESFuncs.glGetProgramResourceIndex(backendProgramId, programInterface, name);
-    }
-
-    void GetProgramResourceName(GLuint program, GLenum programInterface, GLuint index, GLsizei bufSize, GLsizei* length,
-                                GLchar* name) {
-        GLuint backendProgramId = GetBackendProgramId(program);
-        if (!backendProgramId) return;
-        g_GLESFuncs.glGetProgramResourceName(backendProgramId, programInterface, index, bufSize, length, name);
-    }
-
-    void GetProgramResourceiv(GLuint program, GLenum programInterface, GLuint index, GLsizei propCount,
-                              const GLenum* props, GLsizei bufSize, GLsizei* length, GLint* params) {
-        GLuint backendProgramId = GetBackendProgramId(program);
-        if (!backendProgramId) return;
-        g_GLESFuncs.glGetProgramResourceiv(backendProgramId, programInterface, index, propCount, props, bufSize, length,
-                                           params);
-    }
-
-    GLint GetProgramResourceLocation(GLuint program, GLenum programInterface, const GLchar* name) {
-        GLuint backendProgramId = GetBackendProgramId(program);
-        if (!backendProgramId) return -1;
-        return g_GLESFuncs.glGetProgramResourceLocation(backendProgramId, programInterface, name);
-    }
-
-    GLint GetProgramResourceLocationIndex(GLuint program, GLenum programInterface, const GLchar* name) {
-        (void)program;
-        (void)programInterface;
-        (void)name;
-        return -1;
-    }
-
-    void ShaderStorageBlockBinding(GLuint program, GLuint storageBlockIndex, GLuint storageBlockBinding) {
-        GLuint backendProgramId = GetBackendProgramId(program);
-        if (!backendProgramId) return;
-        g_GLESFuncs.glShaderStorageBlockBinding(backendProgramId, storageBlockIndex, storageBlockBinding);
+        auto* backendProgramSlot = PrgramImpl::g_backendProgramObjects.Find(programObject.get());
+        if (!backendProgramSlot || !*backendProgramSlot) return;
+        auto& backendObj = *backendProgramSlot;
+        // Not merely "a program id exists": a backend object whose synced link version has
+        // fallen behind is about to be rebuilt anyway, and its current driver interface is
+        // the PREVIOUS link's - applying to it could land the binding on an unrelated block.
+        if (!backendObj->GetBackendProgramId() ||
+            backendObj->GetSyncedLinkVersion() != programObject->GetLinkVersion()) {
+            return; // SyncToBackend's reseed will carry it
+        }
+        PrgramImpl::ApplyShaderStorageBlockBinding(backendObj->GetBackendProgramId(), storageBlockName,
+                                                   storageBlockBinding);
     }
 
     void ClearBufferfi(GLenum buffer, GLint drawbuffer, GLfloat depth, GLint stencil) {
@@ -6778,6 +6828,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
         BufferImpl::InvalidatePixelBufferBindingCaches();
         FramebufferImpl::InvalidateFramebufferBindingCache();
         PixelStoreImpl::InvalidatePackStateCache();
+        // The render-state shadow belongs in this list for the same reason as the ones above:
+        // it describes the real ES context, which outlives the MobileGL context that is
+        // becoming current. See InvalidateSyncedRenderState.
+        RenderStateImpl::InvalidateSyncedRenderState();
         // eglSwapInterval requires a current context; a request made while none was
         // current (and dropped by the driver) is retried here.
         ApplyRequestedSwapInterval();

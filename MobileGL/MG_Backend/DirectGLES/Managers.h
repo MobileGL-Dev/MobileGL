@@ -981,6 +981,22 @@ namespace MobileGL::MG_Backend::DirectGLES {
         extern Uint g_lastUsedBackendProgramId;
         extern StateBackendObjectRegistry<MG_State::GLState::ProgramObject, BackendProgramObjectImpl>
             g_backendProgramObjects;
+
+        // Points one shader storage block of an ALREADY-LINKED backend program at
+        // `binding`. `blockName` is the frontend interface-query spelling; the real
+        // driver's own index for it is looked up here, because the transpiled ESSL's
+        // block order is not the frontend's. Returns false when the block does not exist
+        // on the backend program (eliminated as unused, or the driver lacks the entry
+        // points), which is not an error - GL_BUFFER_BINDING is served from the frontend
+        // record either way.
+        Bool ApplyShaderStorageBlockBinding(Uint backendProgramId, const String& blockName, Uint binding);
+        // Replays every glShaderStorageBlockBinding recorded on the program onto a backend
+        // program that was just built. The frontend record is authoritative (only the
+        // shader's DECLARED binding survives in the SPIR-V), so without this replay any
+        // rebuild would silently revert rebound blocks. Mirrors DirectVulkan's
+        // reseed-on-rebuild in BuildProgramResourceCache.
+        void ReseedShaderStorageBlockBindings(Uint backendProgramId,
+                                              const MG_State::GLState::ProgramObject& stateProgramObject);
     } // namespace PrgramImpl
 
     namespace SamplerImpl {

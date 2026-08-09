@@ -181,15 +181,18 @@ namespace MobileGL {
             void (*GetIntegeri_v)(GLenum target, GLuint index, GLint* data);
             void (*GetInteger64i_v)(GLenum target, GLuint index, GLint64* data);
             void (*GetProgramiv)(GLuint program, GLenum pname, GLint* params);
-            void (*GetProgramInterfaceiv)(GLuint program, GLenum programInterface, GLenum pname, GLint* params);
-            GLuint (*GetProgramResourceIndex)(GLuint program, GLenum programInterface, const GLchar* name);
-            void (*GetProgramResourceName)(GLuint program, GLenum programInterface, GLuint index, GLsizei bufSize,
-                                           GLsizei* length, GLchar* name);
-            void (*GetProgramResourceiv)(GLuint program, GLenum programInterface, GLuint index, GLsizei propCount,
-                                         const GLenum* props, GLsizei bufSize, GLsizei* length, GLint* params);
-            GLint (*GetProgramResourceLocation)(GLuint program, GLenum programInterface, const GLchar* name);
-            GLint (*GetProgramResourceLocationIndex)(GLuint program, GLenum programInterface, const GLchar* name);
-            void (*ShaderStorageBlockBinding)(GLuint program, GLuint storageBlockIndex, GLuint storageBlockBinding);
+            // The GL program interface (glGetProgramInterfaceiv / glGetProgramResource*) is NOT
+            // a backend query: it describes the program the application wrote, in the
+            // application's namespace, which neither backend program is in. It is answered
+            // entirely by MG_Impl/GLImpl/Program/ProgramInterface from the frontend reflection.
+            // Takes the block's GL NAME, not glShaderStorageBlockBinding's index. The index
+            // the application passes is the frontend interface-query enumeration's, and no
+            // backend shares that index space: DirectVulkan enumerates SPIR-V descriptor
+            // bindings and DirectGLES asks a real driver about SPIRV-Cross-generated ESSL.
+            // The name is the one coordinate all three agree on, so the frontend resolves the
+            // index against its own enumeration and each backend maps the name to its own.
+            void (*ShaderStorageBlockBinding)(GLuint program, const GLchar* storageBlockName,
+                                              GLuint storageBlockBinding);
             // GL fence sync objects. All entries are optional (may be null); the
             // frontend then falls back to always-signaled sync semantics.
             // FenceSync may itself return null when the backend cannot create a

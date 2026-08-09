@@ -97,15 +97,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     void GetIntegeri_v(GLenum target, GLuint index, GLint* data);
     void GetInteger64i_v(GLenum target, GLuint index, GLint64* data);
     void GetProgramiv(GLuint program, GLenum pname, GLint* params);
-    void GetProgramInterfaceiv(GLuint program, GLenum programInterface, GLenum pname, GLint* params);
-    GLuint GetProgramResourceIndex(GLuint program, GLenum programInterface, const GLchar* name);
-    void GetProgramResourceName(GLuint program, GLenum programInterface, GLuint index, GLsizei bufSize,
-                                GLsizei* length, GLchar* name);
-    void GetProgramResourceiv(GLuint program, GLenum programInterface, GLuint index, GLsizei propCount,
-                              const GLenum* props, GLsizei bufSize, GLsizei* length, GLint* params);
-    GLint GetProgramResourceLocation(GLuint program, GLenum programInterface, const GLchar* name);
-    GLint GetProgramResourceLocationIndex(GLuint program, GLenum programInterface, const GLchar* name);
-    void ShaderStorageBlockBinding(GLuint program, GLuint storageBlockIndex, GLuint storageBlockBinding);
+    void ShaderStorageBlockBinding(GLuint program, const GLchar* storageBlockName, GLuint storageBlockBinding);
     void ReadPixels(GLint x, GLint y, GLsizei width, GLsizei height, GLenum format, GLenum type, void* pixels);
     void GetTexImage(GLenum target, GLint level, GLenum format, GLenum type, GLvoid* pixels);
     void GetTextureImage(const SharedPtr<MG_State::GLState::ITextureObject>& texture, TextureUploadTarget uploadTarget,

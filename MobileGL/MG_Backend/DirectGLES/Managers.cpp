@@ -3812,6 +3812,34 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
         }
 
+        Bool ApplyShaderStorageBlockBinding(Uint backendProgramId, const String& blockName, Uint binding) {
+            if (backendProgramId == 0 || blockName.empty()) return false;
+            if (!g_GLESFuncs.glGetProgramResourceIndex || !g_GLESFuncs.glShaderStorageBlockBinding) return false;
+            GLuint driverIndex =
+                g_GLESFuncs.glGetProgramResourceIndex(backendProgramId, GL_SHADER_STORAGE_BLOCK, blockName.c_str());
+            if (driverIndex == GL_INVALID_INDEX) {
+                // An arrayed block is enumerated per element by GL but declared once; the
+                // generated ESSL carries the bare block name.
+                const auto bracket = blockName.rfind('[');
+                if (bracket == String::npos || blockName.back() != ']') return false;
+                driverIndex = g_GLESFuncs.glGetProgramResourceIndex(backendProgramId, GL_SHADER_STORAGE_BLOCK,
+                                                                    blockName.substr(0, bracket).c_str());
+                if (driverIndex == GL_INVALID_INDEX) return false;
+            }
+            g_GLESFuncs.glShaderStorageBlockBinding(backendProgramId, driverIndex, binding);
+            return true;
+        }
+
+        void ReseedShaderStorageBlockBindings(Uint backendProgramId,
+                                              const MG_State::GLState::ProgramObject& stateProgramObject) {
+            const auto& overrides = stateProgramObject.GetShaderStorageBlockBindingOverrides();
+            if (overrides.empty()) return; // the overwhelming majority of programs
+            for (const auto& [blockName, binding] : overrides) {
+                if (binding < 0) continue;
+                ApplyShaderStorageBlockBinding(backendProgramId, blockName, static_cast<Uint>(binding));
+            }
+        }
+
         void BackendProgramObjectImpl::SyncToBackend(
             const SharedPtr<MG_State::GLState::ProgramObject>& stateProgramObject) {
 #ifdef TRACY_ENABLE
@@ -3846,9 +3874,16 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
             if (attachedCount > 0) {
                 Vector<GLuint> attachedShaders(attachedCount);
-                GLsizei actualCount;
+                // Every GL out-param in this function is pre-initialized and every count is
+                // re-clamped after the query. A driver that returns without writing the
+                // out-param (no current context, a lost context, a stubbed entry point) would
+                // otherwise leak an uninitialized stack value straight into a container size
+                // or a loop bound - which is exactly how this path used to throw
+                // length_error out of a Vector fill-ctor.
+                GLsizei actualCount = 0;
                 g_GLESFuncs.glGetAttachedShaders(m_backendProgramId, attachedCount, &actualCount,
                                                  attachedShaders.data());
+                actualCount = std::clamp<GLsizei>(actualCount, 0, static_cast<GLsizei>(attachedShaders.size()));
                 MGLOG_D("Detaching %d existing shaders from program %u", actualCount, m_backendProgramId);
 
                 for (GLsizei i = 0; i < actualCount; ++i) {
@@ -3986,13 +4021,21 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 g_GLESFuncs.glShaderSource(backendShaderId, 1, &sourceCStr, nullptr);
                 g_GLESFuncs.glCompileShader(backendShaderId);
 
-                GLint compileStatus;
+                // GL_FALSE, not GL_TRUE: an unwritten out-param must read as "compile failed"
+                // and take the diagnostic path, never as a silent success that attaches an
+                // uncompiled shader.
+                GLint compileStatus = GL_FALSE;
                 g_GLESFuncs.glGetShaderiv(backendShaderId, GL_COMPILE_STATUS, &compileStatus);
                 if (compileStatus == GL_FALSE) {
-                    GLint logLength;
+                    GLint logLength = 0;
                     g_GLESFuncs.glGetShaderiv(backendShaderId, GL_INFO_LOG_LENGTH, &logLength);
-                    Vector<GLchar> log(logLength);
+                    if (logLength < 0) logLength = 0;
+                    // +1 and zero-filled: GL_INFO_LOG_LENGTH already counts the terminator,
+                    // but a driver that reports 0 (or fails the query) must still leave
+                    // log.data() a readable empty C string for the %s below.
+                    Vector<GLchar> log(static_cast<SizeT>(logLength) + 1, '\0');
                     g_GLESFuncs.glGetShaderInfoLog(backendShaderId, logLength, nullptr, log.data());
+                    log.back() = '\0';
                     MGLOG_E("Shader compilation failed for backend ID %u: %s", backendShaderId, log.data());
                     m_backendProgramUsable = false;
                     continue;
@@ -4028,14 +4071,16 @@ namespace MobileGL::MG_Backend::DirectGLES {
             MGLOG_D("Linking program %u", m_backendProgramId);
             g_GLESFuncs.glLinkProgram(m_backendProgramId);
 
-            GLint linkStatus;
+            GLint linkStatus = GL_FALSE;
             g_GLESFuncs.glGetProgramiv(m_backendProgramId, GL_LINK_STATUS, &linkStatus);
             m_backendProgramUsable = m_backendProgramUsable && linkStatus == GL_TRUE;
             if (linkStatus != GL_TRUE) {
-                GLint logLength;
+                GLint logLength = 0;
                 g_GLESFuncs.glGetProgramiv(m_backendProgramId, GL_INFO_LOG_LENGTH, &logLength);
-                Vector<GLchar> log(logLength);
+                if (logLength < 0) logLength = 0;
+                Vector<GLchar> log(static_cast<SizeT>(logLength) + 1, '\0');
                 g_GLESFuncs.glGetProgramInfoLog(m_backendProgramId, logLength, nullptr, log.data());
+                log.back() = '\0';
                 MGLOG_E("Program %u linking failed for %u: %s", stateProgramObject->GetExternalIndex(),
                         m_backendProgramId, log.data());
             } else {
@@ -4068,6 +4113,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
 
             CacheResourceLocations(stateProgramObject);
+            // AFTER the link, because glShaderStorageBlockBinding needs the driver's linked
+            // interface. This is the only place Espryt applies a rebinding: the frontend
+            // record is authoritative and the glShaderStorageBlockBinding entry point itself
+            // deliberately never forces a program build (see DirectGLES.cpp), so a rebinding
+            // requested while no backend program existed yet arrives here instead.
+            ReseedShaderStorageBlockBindings(m_backendProgramId, *stateProgramObject);
             m_syncedLinkVersion = stateProgramObject->GetLinkVersion();
 
             m_isInitialized = true;
