@@ -210,7 +210,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 reasons.push_back("GL_DEPTH_COMPONENT32 native probe failed on OpenGL ES");
             }
             if (options & PixelFormatNormalizeOptionBit::NoThreeChannelRenderTarget) {
-                reasons.push_back("no three-channel multisample storage format on OpenGL ES");
+                reasons.push_back("no colour-renderable three-channel format on OpenGL ES");
             }
             if (options & PixelFormatNormalizeOptionBit::NoSnorm16RenderTarget) {
                 reasons.push_back("EXT_render_snorm not supported");
@@ -553,26 +553,60 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
                 for (SizeT targetIndex = 0; targetIndex < kFormatCapabilityTextureTargetCount; ++targetIndex) {
                     const auto target = static_cast<TextureTarget>(targetIndex);
-                    // A multisample texture can only ever be rendered into, so its storage format
-                    // has to stay colour-renderable; the ordinary fallback for a three-channel
-                    // format is a three-channel one, which ES accepts as a texture but rejects as
-                    // multisample storage. Recompute the fallback per target so those formats get
-                    // widened here and nowhere else.
-                    Flags<PixelFormatNormalizeOptionBit> targetOptions;
-                    if (IsGLESProbeMultisampleTarget(target)) {
-                        targetOptions |= PixelFormatNormalizeOptionBit::NoThreeChannelRenderTarget;
-                        if (!capabilities.SupportsRenderSnorm || !capabilities.SupportsNorm16Texture) {
-                            targetOptions |= PixelFormatNormalizeOptionBit::NoSnorm16RenderTarget;
-                        }
-                    }
+                    // Colour-attachable targets need a colour-renderable fallback; the ordinary
+                    // fallback for a three-channel format is another three-channel one, which ES
+                    // accepts as a texture but never as an attachment. Recompute the fallback per
+                    // target so those formats get widened where the target demands it.
+                    const Flags<PixelFormatNormalizeOptionBit> renderTargetOptions =
+                        TextureImpl::GetRenderTargetNormalizeOptions(capabilities, targetIndex);
+                    // Multisample storage has no three-channel form on ES at all, so its widening
+                    // is unconditional and skips the native probe (which cannot succeed). Every
+                    // other target keeps the widening on the DRIVER branch, behind the native
+                    // probe: `shouldProbeFallback = !nativeCreated || !nativeRenderable` below is
+                    // what makes the substitution conditional on the driver actually refusing, so
+                    // a driver that does render to a three-channel image keeps allocating it byte
+                    // for byte. That is a per-format runtime answer, NOT a desktop-vs-device
+                    // split: llvmpipe renders to GL_RGB16F but refuses GL_RGB8_SNORM, GL_SRGB8,
+                    // GL_RGB32F and the RGB integer formats, so the CI driver widens those eight
+                    // too. Re-run the retrace fixtures and the glcts suites on any change here.
+                    const Bool widenUnconditionally = IsGLESProbeMultisampleTarget(target);
                     GLESProbeFormatInfo fallbackInfo = outerFallbackInfo;
                     Bool hasForcedFallback = outerHasForcedFallback;
-                    if (targetOptions) {
-                        hasForcedFallback = BuildFallbackProbeFormatInfo(
-                            requestedInternalFormat, forcedOptions | targetOptions, true, fallbackInfo);
-                        if (!hasForcedFallback) {
-                            BuildFallbackProbeFormatInfo(requestedInternalFormat, driverOptions | targetOptions, false,
+                    if (renderTargetOptions) {
+                        // Folded into the forced options only when a forced fallback already
+                        // applies, so the render-target bits never *create* one: ANGLE's forced
+                        // GL_RGB8_SNORM -> GL_RGB16F is still three-channel and still needs
+                        // widening, but a non-ANGLE driver must not lose its native probe.
+                        const Flags<PixelFormatNormalizeOptionBit> forcedProbeOptions =
+                            (outerHasForcedFallback || widenUnconditionally) ? forcedOptions | renderTargetOptions
+                                                                             : forcedOptions;
+                        hasForcedFallback =
+                            BuildFallbackProbeFormatInfo(requestedInternalFormat, forcedProbeOptions, true,
                                                          fallbackInfo);
+                        if (!hasForcedFallback) {
+                            BuildFallbackProbeFormatInfo(requestedInternalFormat,
+                                                         driverOptions | renderTargetOptions, false, fallbackInfo);
+                        }
+                        // HONEST STATUS OF THE FORCED PATH. A forced fallback is only ever built
+                        // for ANGLE (GetForcedPixelFormatNormalizeOptions returns nothing for any
+                        // other renderer), and it SKIPS the native probe entirely - the widened
+                        // format is asserted rather than measured on this device. That assertion
+                        // is validated on exactly one configuration, the android-angle retrace
+                        // golden; it is NOT covered by the headless llvmpipe suites, which take
+                        // the driver branch below and prove nothing about ANGLE's answers. So log
+                        // the choice at INFO rather than the usual MGLOG_D caveat: on any other
+                        // ANGLE device the device report is the only evidence there is of which
+                        // storage format the image really got. Once per format on the ordinary 2D
+                        // target - repeating it for all ten targets would bury the report.
+                        if (hasForcedFallback && target == TextureTarget::Texture2D &&
+                            (MG_Util::TextureFormatProcessor::GetApplicablePixelFormatNormalizeOptions(
+                                 requestedInternalFormat, renderTargetOptions) &
+                             PixelFormatNormalizeOptionBit::NoThreeChannelRenderTarget)) {
+                            MGLOG_I("Three-channel widening (FORCED path, no native probe): %s stored as %s. "
+                                    "Reason: %s. Device-validated on the android-angle golden only.",
+                                    MG_Util::ConvertTextureInternalFormatToString(logicalFormat).c_str(),
+                                    ConvertFallbackInternalFormatToString(fallbackInfo.InternalFormat).c_str(),
+                                    fallbackInfo.Reason.c_str());
                         }
                     }
 
@@ -618,8 +652,26 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 }
 
                 const SizeT renderbufferTargetIndex = GetRenderbufferFormatCapabilityTargetIndex();
-                Bool shouldProbeFallbackRenderbuffer = outerHasForcedFallback;
-                if (!outerHasForcedFallback) {
+                // A renderbuffer exists only to be attached, so it needs the same three-channel
+                // widening the colour-attachable texture targets get - and on the same terms: the
+                // native storage is probed first, so a driver that renders to it keeps it.
+                const Flags<PixelFormatNormalizeOptionBit> renderbufferOptions =
+                    TextureImpl::GetRenderTargetNormalizeOptions(capabilities, renderbufferTargetIndex);
+                GLESProbeFormatInfo renderbufferFallbackInfo = outerFallbackInfo;
+                Bool renderbufferHasForcedFallback = outerHasForcedFallback;
+                if (renderbufferOptions) {
+                    const Flags<PixelFormatNormalizeOptionBit> forcedProbeOptions =
+                        outerHasForcedFallback ? forcedOptions | renderbufferOptions : forcedOptions;
+                    renderbufferHasForcedFallback = BuildFallbackProbeFormatInfo(
+                        requestedInternalFormat, forcedProbeOptions, true, renderbufferFallbackInfo);
+                    if (!renderbufferHasForcedFallback) {
+                        BuildFallbackProbeFormatInfo(requestedInternalFormat, driverOptions | renderbufferOptions,
+                                                     false, renderbufferFallbackInfo);
+                    }
+                }
+
+                Bool shouldProbeFallbackRenderbuffer = renderbufferHasForcedFallback;
+                if (!renderbufferHasForcedFallback) {
                     const Bool nativeRenderbufferComplete =
                         ProbeRenderbuffer(gl, nativeInfo.InternalFormat, logicalFormat, false, 1);
                     if (nativeRenderbufferComplete) {
@@ -633,16 +685,16 @@ namespace MobileGL::MG_Backend::DirectGLES {
                         shouldProbeFallbackRenderbuffer = true;
                     }
                 }
-                if (shouldProbeFallbackRenderbuffer && outerFallbackInfo.InternalFormat != GL_UNKNOWN_MGL &&
-                    ProbeRenderbuffer(gl, outerFallbackInfo.InternalFormat, logicalFormat, false, 1)) {
+                if (shouldProbeFallbackRenderbuffer && renderbufferFallbackInfo.InternalFormat != GL_UNKNOWN_MGL &&
+                    ProbeRenderbuffer(gl, renderbufferFallbackInfo.InternalFormat, logicalFormat, false, 1)) {
                     if (AddCaveatFormatCaps(cache, renderbufferTargetIndex, formatIndex,
                                             GetRenderbufferFeatureCaps(logicalFormat))) {
-                        LogGLESFormatCaveat(logicalFormat, renderbufferTargetIndex, outerFallbackInfo);
+                        LogGLESFormatCaveat(logicalFormat, renderbufferTargetIndex, renderbufferFallbackInfo);
                     }
                     const Int maxSamples =
-                        GetGLESFormatMaxSamples(capabilities, logicalFormat, outerFallbackInfo.ImageFormat);
-                    cache.SampleCounts[renderbufferTargetIndex][formatIndex] =
-                        ProbeRenderbufferSampleCounts(gl, outerFallbackInfo.InternalFormat, logicalFormat, maxSamples);
+                        GetGLESFormatMaxSamples(capabilities, logicalFormat, renderbufferFallbackInfo.ImageFormat);
+                    cache.SampleCounts[renderbufferTargetIndex][formatIndex] = ProbeRenderbufferSampleCounts(
+                        gl, renderbufferFallbackInfo.InternalFormat, logicalFormat, maxSamples);
                 }
             }
         }

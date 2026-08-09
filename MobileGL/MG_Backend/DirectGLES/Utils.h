@@ -9,6 +9,8 @@
 #pragma once
 #include <Includes.h>
 #include <MG_State/GLState/Core.h>
+#include <MG_Util/BackendLoaders/OpenGL/Loader.h>
+#include <MG_Util/Texture/TextureFormatProcessor.h>
 
 namespace MobileGL::MG_Backend::DirectGLES {
     namespace DebugImpl {
@@ -34,6 +36,16 @@ namespace MobileGL::MG_Backend::DirectGLES {
     } // namespace VertexArrayImpl
 
     namespace TextureImpl {
+        // Whether images on this format-capability target can back a colour attachment, and so
+        // need a colour-renderable storage format even when the frontend asked for a
+        // three-channel one ES never renders to. Shared by the capability probe (which passes the
+        // capabilities it has just queried, before the globals are published) and by the
+        // allocation path (which reads the active backend's), so the format the cache was probed
+        // with is always the format the image is created with.
+        Bool TargetRequiresRenderableFormat(SizeT targetIndex);
+        Flags<PixelFormatNormalizeOptionBit> GetRenderTargetNormalizeOptions(
+            const MG_External::GLESCapabilities& capabilities, SizeT targetIndex);
+
         void GenerateTextureFormatInfo(TextureInternalFormat internalFormat, GLenum* outInternalFormat,
                                        GLenum* outFormat, GLenum* outType,
                                        TextureTarget target = TextureTarget::Unknown);
@@ -41,10 +53,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                             GLenum* outFormat, GLenum* outType);
         Bool ShouldUseCaveatTextureFormat(TextureInternalFormat internalFormat, TextureTarget target);
 
-        // True when the format the texture is actually created with has an alpha channel the
-        // frontend format does not (the three-channel multisample widening). GL reads such a
-        // channel back as 1.0, so any swizzle source of ALPHA has to be answered with ONE.
+        // True when the format the image is actually created with has an alpha channel the
+        // frontend format does not (the three-channel colour-renderable widening). GL reads such
+        // a channel back as 1.0, so any swizzle source of ALPHA has to be answered with ONE and
+        // any readback of the image has to overwrite the alpha the draw happened to leave there.
         Bool BackendTextureFormatAddsAlpha(TextureInternalFormat internalFormat, TextureTarget target);
+        Bool BackendRenderbufferFormatAddsAlpha(TextureInternalFormat internalFormat);
         Bool ShouldUseCaveatRenderbufferFormat(TextureInternalFormat internalFormat);
     } // namespace TextureImpl
 

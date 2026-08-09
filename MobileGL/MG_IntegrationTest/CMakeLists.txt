@@ -52,6 +52,7 @@ add_executable(MobileGLIntegrationTest
     Scenarios/MultiDrawScenario.cpp
     Scenarios/AsyncCompileScenario.cpp
     Scenarios/XfbAfterClipDistanceScenario.cpp
+    Scenarios/ThreeChannelAttachmentScenario.cpp
 )
 
 target_include_directories(MobileGLIntegrationTest PRIVATE

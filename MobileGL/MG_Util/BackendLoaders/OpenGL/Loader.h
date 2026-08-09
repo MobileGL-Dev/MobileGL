@@ -1034,6 +1034,16 @@ namespace MobileGL {
             // GL_EXT_render_snorm is present, so the signed-normalized formats are colour-renderable
             // (and usable as multisample texture storage) rather than texture-only.
             Bool SupportsRenderSnorm = false;
+            // GL_EXT_color_buffer_float is present, so GL_RGBA16F / GL_RGBA32F / GL_R11F_G11F_B10F
+            // (and the R/RG float formats) are colour-renderable. ES 3.x core makes them
+            // texture-only, and every Iris shaderpack renders into at least R11F_G11F_B10F, so
+            // without this no shaderpack can work at all.
+            Bool SupportsColorBufferFloat = false;
+            // GL_EXT_color_buffer_half_float is present: the half-float subset of the above, for
+            // drivers that ship only the smaller extension. Note it does NOT rescue GL_RGB16F -
+            // the extension nominally lists it but disclaims it under ES 3.x, and real drivers
+            // reject it, which is why three-channel float attachments are widened instead.
+            Bool SupportsColorBufferHalfFloat = false;
             // GL_EXT_sRGB_write_control is present, so GL_FRAMEBUFFER_SRGB can be turned off.
             // GLES has no such switch in core: writes into an sRGB attachment are ALWAYS encoded,
             // while desktop GL leaves GL_FRAMEBUFFER_SRGB disabled by default and writes raw.

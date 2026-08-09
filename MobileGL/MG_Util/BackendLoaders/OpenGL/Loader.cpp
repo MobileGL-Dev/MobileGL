@@ -838,6 +838,12 @@ namespace MobileGL::MG_Util::BackendLoader {
                 if (std::strcmp(extension, "GL_EXT_render_snorm") == 0) {
                     caps.SupportsRenderSnorm = true;
                 }
+                if (std::strcmp(extension, "GL_EXT_color_buffer_float") == 0) {
+                    caps.SupportsColorBufferFloat = true;
+                }
+                if (std::strcmp(extension, "GL_EXT_color_buffer_half_float") == 0) {
+                    caps.SupportsColorBufferHalfFloat = true;
+                }
                 if (std::strcmp(extension, "GL_EXT_sRGB_write_control") == 0) {
                     caps.SupportsSrgbWriteControl = true;
                 }

@@ -515,6 +515,25 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return target == TextureTarget::Texture3D || target == TextureTarget::TextureCubeMap;
         }
 
+        // Components per texel the frontend format's client data carries, for the three-channel
+        // formats that can be widened to a four-channel colour-renderable target; 0 for everything
+        // else. See PrepareChannelWidenedUpload.
+        Uint GetWidenableClientComponentCount(TextureInternalFormat format);
+
+        // True when a widenable format's components are integer rather than normalized, which is
+        // what decides the synthetic alpha's value: GL_RGB8I and GL_RGB8_SNORM are both uploaded
+        // as GL_BYTE, but their 1.0 is 1 and 0x7F respectively.
+        Bool IsIntegerWidenableFormat(TextureInternalFormat format);
+
+        // Repacks three-component client data as four components with an alpha of 1.0 in
+        // `uploadType`, for a format the backend widened to keep a colour attachment renderable.
+        // Returns `data` untouched when no widening applies. Pure CPU and context-free so a unit
+        // test can exercise the exact packing the driver is handed; `widenedData` is the caller's
+        // scratch buffer and has to outlive the returned pointer.
+        const void* PrepareChannelWidenedUpload(Uint componentCount, const IntVec3& texelSize, const void* data,
+                                                SizeT byteSize, GLenum uploadType, Vector<Uint8>& widenedData,
+                                                Bool integerData = false);
+
         struct StateTextureBasicInfo { // Used for tracking texture state changes
             TextureInternalFormat internalFormat = TextureInternalFormat::Unknown;
             SizeT width = 0;
@@ -713,6 +732,67 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // GL_FIXED_ONLY); the substituted float storage would not, so the readback path
         // has to apply the clamp itself.
         Bool IsFixedPointFallbackReadAttachment();
+
+        // True when the read buffer names a three-channel attachment the backend actually stores
+        // in a four-channel format (the colour-renderable widening). A format without alpha reads
+        // back as 1.0, so the readback path has to overwrite the alpha the draw left behind -
+        // unconditionally, since this is the format's own semantics rather than the
+        // GL_CLAMP_READ_COLOR rule the clamp above implements.
+        Bool IsAlphaWidenedFallbackReadAttachment();
+
+        // True when this attachment's storage carries an alpha channel its frontend format does
+        // not (the three-channel colour-renderable widening).
+        Bool IsAlphaWidenedColorAttachment(const MG_State::GLState::FramebufferAttachmentObject& attachmentObject);
+
+        // Bit i set = DRAW BUFFER i of `fbo` resolves to a colour attachment the backend widened
+        // from three channels to four. Indexed by draw-buffer slot, not by attachment point,
+        // because that is what glColorMaski / glClearBufferfv address.
+        Uint32 ComputeAlphaWidenedDrawBufferMask(const MG_State::GLState::FramebufferObject& fbo);
+
+        // The same mask for whatever is currently bound to GL_DRAW_FRAMEBUFFER, recomputed by
+        // SyncCurrentFBO (BackendFramebufferObject::SyncToBackend for the DRAW target, and reset
+        // to 0 on the default framebuffer). Read by the draw/clear state sync, so it is only
+        // trustworthy after SyncCurrentFBO has run in the same entry point.
+        //
+        // WHY IT EXISTS (the dst-alpha discipline). A widened attachment has a real alpha channel
+        // the application's format does not, and GL says a missing channel reads as 1.0. Readback
+        // can paper over that (ForceWideReadAlphaToOne), but GL_DST_ALPHA /
+        // GL_ONE_MINUS_DST_ALPHA blending and glBlitFramebuffer read the STORED alpha inside the
+        // driver where no interception is possible. So the stored alpha is kept at 1.0 instead:
+        // a clear touching a widened buffer writes alpha 1.0, and every draw into it has its
+        // alpha write mask forced off, so nothing can ever move it again. The application's own
+        // colour mask is untouched - glGet(GL_COLOR_WRITEMASK) still reports what it set.
+        extern Uint32 g_alphaWidenedDrawBufferMask;
+
+        // Bit i set = DRAW BUFFER i of the framebuffer bound as DRAW resolves to a colour
+        // attachment with an INTEGER format. Recomputed beside the mask above and for its sake:
+        // glClearBufferfv on an integer colour buffer is GL_INVALID_OPERATION, so the
+        // per-draw-buffer clear route the widening needs has to stand down when one is present.
+        // (glClear on an integer colour buffer is left undefined by ES in the first place, and
+        // an application that wants a defined answer has to call glClearBufferuiv/iv - which does
+        // carry the widened alpha substitution.)
+        extern Uint32 g_integerColorDrawBufferMask;
+
+        // The colour a clear has to hand the driver for one draw buffer: the application's value,
+        // except that a widened attachment's alpha is replaced by the 1.0 its three-channel
+        // format implies. `one` is 1.0 encoded in the clear call's own component type - the
+        // integer clears carry the integer 1, the float clear carries 1.0f.
+        //
+        // Returns `value` itself when nothing is substituted, so the ordinary path allocates and
+        // copies nothing; `scratch` is the caller's buffer and has to outlive the returned
+        // pointer. Free of GL state on purpose, so the substitution can be unit-tested exactly as
+        // the driver sees it.
+        template <typename T>
+        const T* SubstituteWidenedClearAlpha(const T* value, Bool widened, T one, T (&scratch)[4]) {
+            if (!widened || value == nullptr) {
+                return value;
+            }
+            scratch[0] = value[0];
+            scratch[1] = value[1];
+            scratch[2] = value[2];
+            scratch[3] = one;
+            return scratch;
+        }
 
         // What SyncCurrentFBO last pushed for each target, as a (binding, object, revision)
         // triple; it re-syncs unless all three still match. Stamped by SyncCurrentFBO and

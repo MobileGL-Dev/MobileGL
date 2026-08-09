@@ -15,6 +15,7 @@
 #include <Config.h>
 #include <MG_Backend/BackendObjects.h>
 #include <MG_Backend/DirectGLES/Managers.h>
+#include <MG_Backend/DirectGLES/Utils.h>
 #include <MG_Impl/GLImpl/Framebuffer/GL_Framebuffer.h>
 #include <MG_Impl/GLImpl/Getter/GL_Getter.h>
 #include <MG_Impl/GLImpl/RenderState/GL_RenderState.h>
@@ -27,6 +28,7 @@
 #include <MG_Util/Converters/GLToMG/TextureEnumConverter.h>
 #include <MG_Util/Converters/MGToGL/TextureEnumConverter.h>
 #include <MG_Util/Converters/MGToMG/TextureEnumConverter.h>
+#include <MG_Util/Converters/MGToStr/TextureEnumConverter.h>
 #include <MG_Util/Math/SmallFloat.h>
 #include <MG_Util/Texture/PixelStoreProcessor.h>
 #include <MG_Util/Texture/TextureFormatProcessor.h>
@@ -2884,4 +2886,293 @@ TEST_F(TextureTest, NamedTextureCallKeepsUnitBindingAccountingCoherent) {
     MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, 0);
     MG_Impl::GLImpl::DeleteTextures(2, names);
     DrainPendingGlErrors();
+}
+
+// ---- Three-channel colour-renderable widening (Complementary Reimagined / Iris) ----------------
+//
+// No real OpenGL ES driver renders to a three-channel image, so a colour attachment the
+// application asked for as GL_RGB8_SNORM or GL_RGB16F has to be stored in the four-channel
+// sibling. The bit that says so used to be reachable for multisample storage only, which is why
+// an ordinary GL_TEXTURE_2D attachment in one of those formats had no fallback at all and the
+// frontend could only answer GL_FRAMEBUFFER_UNSUPPORTED.
+
+TEST_F(TextureTest, ColorAttachableTargetsRequestTheThreeChannelWidening) {
+    using MobileGL::MG_Backend::DirectGLES::TextureImpl::GetRenderTargetNormalizeOptions;
+    using MobileGL::MG_Backend::DirectGLES::TextureImpl::TargetRequiresRenderableFormat;
+
+    MG_External::GLESCapabilities capabilities{};
+    capabilities.SupportsRenderSnorm = true;
+    capabilities.SupportsNorm16Texture = true;
+
+    // Every image that can be a colour attachment, not just the multisample pair: an ordinary 2D
+    // texture is what Iris attaches, and it used to be excluded.
+    for (const TextureTarget target : {TextureTarget::Texture2D, TextureTarget::Texture3D,
+                                       TextureTarget::TextureCubeMap, TextureTarget::Texture2DArray,
+                                       TextureTarget::TextureCubeMapArray, TextureTarget::Texture2DMultisample,
+                                       TextureTarget::Texture2DMultisampleArray, TextureTarget::Texture1D,
+                                       TextureTarget::Texture1DArray, TextureTarget::TextureRectangle}) {
+        const SizeT targetIndex = MobileGL::MG_Backend::GetFormatCapabilityTargetIndex(target);
+        EXPECT_TRUE(TargetRequiresRenderableFormat(targetIndex))
+            << "target " << MG_Util::ConvertTextureTargetToString(target);
+        EXPECT_TRUE(GetRenderTargetNormalizeOptions(capabilities, targetIndex) &
+                    PixelFormatNormalizeOptionBit::NoThreeChannelRenderTarget)
+            << "target " << MG_Util::ConvertTextureTargetToString(target);
+    }
+    // A renderbuffer exists only to be attached.
+    EXPECT_TRUE(TargetRequiresRenderableFormat(MobileGL::MG_Backend::GetRenderbufferFormatCapabilityTargetIndex()));
+
+    // A buffer texture is the one image that can never be an attachment; its storage belongs to
+    // the buffer object, so widening it would misdescribe the application's data.
+    const SizeT bufferIndex = MobileGL::MG_Backend::GetFormatCapabilityTargetIndex(TextureTarget::TextureBuffer);
+    EXPECT_FALSE(TargetRequiresRenderableFormat(bufferIndex));
+    EXPECT_FALSE(GetRenderTargetNormalizeOptions(capabilities, bufferIndex));
+
+    // Without EXT_render_snorm a 16-bit SNORM render target cannot keep its encoding either.
+    MG_External::GLESCapabilities noSnormCapabilities{};
+    const SizeT texture2DIndex = MobileGL::MG_Backend::GetFormatCapabilityTargetIndex(TextureTarget::Texture2D);
+    EXPECT_TRUE(GetRenderTargetNormalizeOptions(noSnormCapabilities, texture2DIndex) &
+                PixelFormatNormalizeOptionBit::NoSnorm16RenderTarget);
+    EXPECT_FALSE(GetRenderTargetNormalizeOptions(capabilities, texture2DIndex) &
+                 PixelFormatNormalizeOptionBit::NoSnorm16RenderTarget);
+}
+
+TEST_F(TextureTest, ThreeChannelRenderTargetOptionAppliesToEveryDeniedThreeChannelFormat) {
+    using MG_Util::TextureFormatProcessor::GetApplicablePixelFormatNormalizeOptions;
+    const Flags<PixelFormatNormalizeOptionBit> requested =
+        PixelFormatNormalizeOptionBit::NoThreeChannelRenderTarget;
+
+    // GL_RGB16F in particular matched no case at all, so no option could ever apply to it and it
+    // fell through NormalizePixelFormat's default passthrough unchanged.
+    for (const GLenum internalFormat : {GL_RGB8_SNORM, GL_RGB16_SNORM, GL_RGB16, GL_RGB10, GL_RGB12, GL_RGB16F,
+                                        GL_RGB32F, GL_SRGB8, GL_RGB8I, GL_RGB8UI, GL_RGB16I, GL_RGB16UI, GL_RGB32I,
+                                        GL_RGB32UI}) {
+        EXPECT_TRUE(GetApplicablePixelFormatNormalizeOptions(internalFormat, requested) &
+                    PixelFormatNormalizeOptionBit::NoThreeChannelRenderTarget)
+            << "internalformat 0x" << std::hex << internalFormat;
+    }
+
+    // Four-channel and shared-exponent formats are not widened: RGBA8_SNORM has its own always-on
+    // fallback, and GL_RGB9_E5 has no four-channel sibling that would not need the shared exponent
+    // unpacked on every transfer (nothing renders to it on desktop GL either).
+    for (const GLenum internalFormat : {GL_RGBA8_SNORM, GL_RGBA16F, GL_RGBA8, GL_RGB8, GL_RGB9_E5}) {
+        EXPECT_FALSE(GetApplicablePixelFormatNormalizeOptions(internalFormat, requested) &
+                     PixelFormatNormalizeOptionBit::NoThreeChannelRenderTarget)
+            << "internalformat 0x" << std::hex << internalFormat;
+    }
+}
+
+TEST_F(TextureTest, ThreeChannelWideningRetargetsInternalFormatAndTransferPairTogether) {
+    using MG_Util::TextureFormatProcessor::NormalizePixelFormat;
+    struct Case {
+        GLenum requested;
+        Flags<PixelFormatNormalizeOptionBit> options;
+        GLenum internalFormat;
+        GLenum format;
+        GLenum type;
+    };
+    const Flags<PixelFormatNormalizeOptionBit> widen = PixelFormatNormalizeOptionBit::NoThreeChannelRenderTarget;
+    const Flags<PixelFormatNormalizeOptionBit> widenNoSnorm16 =
+        PixelFormatNormalizeOptionBit::NoThreeChannelRenderTarget |
+        PixelFormatNormalizeOptionBit::NoSnorm16RenderTarget;
+
+    const Case cases[] = {
+        // Complementary's colortex1 and colortex2. The transfer pair used to stay three-channel
+        // and keep the *source* component type, emitting (GL_RGBA16F, GL_RGB, GL_BYTE) - which ES
+        // rejects for glTexImage2D outright, and which only went unnoticed because the bit was
+        // reachable for multisample storage alone (glTexStorage*Multisample takes no pair).
+        {GL_RGB8_SNORM, widen, GL_RGBA16F, GL_RGBA, GL_FLOAT},
+        {GL_RGB16F, widen, GL_RGBA16F, GL_RGBA, GL_HALF_FLOAT},
+        {GL_RGB32F, widen, GL_RGBA32F, GL_RGBA, GL_FLOAT},
+        // 16-bit SNORM keeps its encoding where EXT_render_snorm can render to it; a half float's
+        // 11-bit mantissa cannot represent a 16-bit SNORM channel exactly.
+        {GL_RGB16_SNORM, widen, GL_RGBA16_SNORM, GL_RGBA, GL_SHORT},
+        {GL_RGB16_SNORM, widenNoSnorm16, GL_RGBA16F, GL_RGBA, GL_FLOAT},
+        // 16-bit UNORM and the legacy 10/12-bit formats stored as RGB16.
+        {GL_RGB16, widen, GL_RGBA32F, GL_RGBA, GL_FLOAT},
+        {GL_RGB10, widen, GL_RGBA32F, GL_RGBA, GL_FLOAT},
+        {GL_RGB12, widen, GL_RGBA32F, GL_RGBA, GL_FLOAT},
+        // sRGB and the integer formats: the base format has to move to the four-channel one of the
+        // right class, GL_RGBA_INTEGER included.
+        {GL_SRGB8, widen, GL_SRGB8_ALPHA8, GL_RGBA, GL_UNSIGNED_BYTE},
+        {GL_RGB8I, widen, GL_RGBA8I, GL_RGBA_INTEGER, GL_BYTE},
+        {GL_RGB8UI, widen, GL_RGBA8UI, GL_RGBA_INTEGER, GL_UNSIGNED_BYTE},
+        {GL_RGB16I, widen, GL_RGBA16I, GL_RGBA_INTEGER, GL_SHORT},
+        {GL_RGB16UI, widen, GL_RGBA16UI, GL_RGBA_INTEGER, GL_UNSIGNED_SHORT},
+        {GL_RGB32I, widen, GL_RGBA32I, GL_RGBA_INTEGER, GL_INT},
+        {GL_RGB32UI, widen, GL_RGBA32UI, GL_RGBA_INTEGER, GL_UNSIGNED_INT},
+        // The widening outranks the other fallbacks, which all pick a three-channel storage the
+        // driver still refuses to render to (GL_RGB8_SNORM -> GL_RGB16F, GL_RGB16 -> GL_RGB32F).
+        {GL_RGB8_SNORM, widen | PixelFormatNormalizeOptionBit::NoSnorm8, GL_RGBA16F, GL_RGBA, GL_FLOAT},
+        {GL_RGB16, widen | PixelFormatNormalizeOptionBit::NoNorm16, GL_RGBA32F, GL_RGBA, GL_FLOAT},
+        // Control: without the bit nothing moves. The bit is only ever set for a target whose
+        // native probe failed, so this is the shape every driver that does render to the
+        // three-channel form keeps - per format, not per platform (llvmpipe renders to GL_RGB16F
+        // but not to GL_RGB8_SNORM, GL_SRGB8, GL_RGB32F or the RGB integer formats).
+        {GL_RGB8_SNORM, PixelFormatNormalizeOptionBit::None, GL_RGB8_SNORM, GL_RGB, GL_BYTE},
+        {GL_RGB16F, PixelFormatNormalizeOptionBit::None, GL_RGB16F, GL_RGB, GL_HALF_FLOAT},
+        {GL_RGB32F, PixelFormatNormalizeOptionBit::None, GL_RGB32F, GL_RGB, GL_FLOAT},
+        {GL_SRGB8, PixelFormatNormalizeOptionBit::None, GL_SRGB8, GL_RGB, GL_UNSIGNED_BYTE},
+        // Not widened even under the bit: no four-channel shared-exponent sibling exists.
+        {GL_RGB9_E5, widen, GL_RGB9_E5, GL_RGB, GL_UNSIGNED_INT_5_9_9_9_REV},
+        // Four-channel formats are unaffected by the bit; RGBA8_SNORM keeps its own fallback.
+        {GL_RGBA8_SNORM, widen, GL_RGBA8_SNORM, GL_RGBA, GL_BYTE},
+        {GL_RGBA8_SNORM, widen | PixelFormatNormalizeOptionBit::NoRGBA8Snorm, GL_RGBA16F, GL_RGBA, GL_FLOAT},
+    };
+
+    for (const auto& testCase : cases) {
+        GLenum internalFormat = 0;
+        GLenum format = 0;
+        GLenum type = 0;
+        NormalizePixelFormat(testCase.requested, testCase.options, &internalFormat, &format, &type);
+        EXPECT_EQ(internalFormat, testCase.internalFormat) << "requested 0x" << std::hex << testCase.requested;
+        EXPECT_EQ(format, testCase.format) << "requested 0x" << std::hex << testCase.requested;
+        EXPECT_EQ(type, testCase.type) << "requested 0x" << std::hex << testCase.requested;
+    }
+}
+
+TEST_F(TextureTest, WidenedRenderTargetUploadExpandsThreeChannelDataWithOpaqueAlpha) {
+    using MobileGL::MG_Backend::DirectGLES::TextureImpl::GetWidenableClientComponentCount;
+    using MobileGL::MG_Backend::DirectGLES::TextureImpl::PrepareChannelWidenedUpload;
+
+    // Only the three-channel formats that can be widened report a source component count; the
+    // repack is what keeps the driver from walking three texels' worth of data per four-texel row.
+    for (const TextureInternalFormat format :
+         {TextureInternalFormat::RGB8Snorm, TextureInternalFormat::RGB16F, TextureInternalFormat::RGB32F,
+          TextureInternalFormat::RGB16Snorm, TextureInternalFormat::RGB16, TextureInternalFormat::SRGB8,
+          TextureInternalFormat::RGB8UI, TextureInternalFormat::RGB32I}) {
+        EXPECT_EQ(GetWidenableClientComponentCount(format), 3u)
+            << MG_Util::ConvertTextureInternalFormatToString(format);
+    }
+    EXPECT_EQ(GetWidenableClientComponentCount(TextureInternalFormat::RGBA8), 0u);
+    EXPECT_EQ(GetWidenableClientComponentCount(TextureInternalFormat::RGBA8Snorm), 0u);
+    EXPECT_EQ(GetWidenableClientComponentCount(TextureInternalFormat::RGB9E5), 0u);
+
+    const IntVec3 texelSize(2, 1, 1);
+
+    // GL_RGB8_SNORM -> GL_RGBA16F: PrepareNormFloatFallbackUpload has already turned the Int8
+    // shadow into floats, so what arrives here is three floats per texel.
+    {
+        const Float source[] = {0.25f, -0.5f, 0.75f, -1.0f, 0.0f, 1.0f};
+        Vector<Uint8> widened;
+        const auto* result = static_cast<const Float*>(PrepareChannelWidenedUpload(
+            3, texelSize, source, sizeof(source), GL_FLOAT, widened));
+        ASSERT_NE(result, static_cast<const void*>(source));
+        ASSERT_EQ(widened.size(), 8 * sizeof(Float));
+        const Float expected[] = {0.25f, -0.5f, 0.75f, 1.0f, -1.0f, 0.0f, 1.0f, 1.0f};
+        for (SizeT i = 0; i < 8; ++i) {
+            EXPECT_FLOAT_EQ(result[i], expected[i]) << "component " << i;
+        }
+    }
+
+    // GL_RGB16F -> GL_RGBA16F uploads halves untouched, so the synthetic alpha is the half
+    // encoding of 1.0 rather than a saturated field.
+    {
+        const Uint16 source[] = {0x0001, 0x0002, 0x0003, 0x0004, 0x0005, 0x0006};
+        Vector<Uint8> widened;
+        const auto* result = static_cast<const Uint16*>(PrepareChannelWidenedUpload(
+            3, texelSize, source, sizeof(source), GL_HALF_FLOAT, widened));
+        ASSERT_NE(result, static_cast<const void*>(source));
+        const Uint16 expected[] = {0x0001, 0x0002, 0x0003, 0x3C00, 0x0004, 0x0005, 0x0006, 0x3C00};
+        for (SizeT i = 0; i < 8; ++i) {
+            EXPECT_EQ(result[i], expected[i]) << "component " << i;
+        }
+    }
+
+    // GL_SRGB8 -> GL_SRGB8_ALPHA8: fixed-point one is the saturated field.
+    {
+        const Uint8 source[] = {1, 2, 3, 4, 5, 6};
+        Vector<Uint8> widened;
+        const auto* result = static_cast<const Uint8*>(PrepareChannelWidenedUpload(
+            3, texelSize, source, sizeof(source), GL_UNSIGNED_BYTE, widened));
+        const Uint8 expected[] = {1, 2, 3, 0xFF, 4, 5, 6, 0xFF};
+        ASSERT_NE(result, static_cast<const void*>(source));
+        EXPECT_EQ(std::memcmp(result, expected, sizeof(expected)), 0);
+    }
+
+    // GL_RGB16_SNORM -> GL_RGBA16_SNORM keeps GL_SHORT, whose 1.0 is the positive maximum.
+    {
+        const Int16 source[] = {-1, 2, -3, 4, -5, 6};
+        Vector<Uint8> widened;
+        const auto* result = static_cast<const Int16*>(PrepareChannelWidenedUpload(
+            3, texelSize, source, sizeof(source), GL_SHORT, widened));
+        const Int16 expected[] = {-1, 2, -3, 0x7FFF, 4, -5, 6, 0x7FFF};
+        ASSERT_NE(result, static_cast<const void*>(source));
+        EXPECT_EQ(std::memcmp(result, expected, sizeof(expected)), 0);
+    }
+
+    // An integer format's added channel carries the integer one, not a saturated field.
+    {
+        const Uint32 source[] = {10, 20, 30, 40, 50, 60};
+        Vector<Uint8> widened;
+        const auto* result = static_cast<const Uint32*>(PrepareChannelWidenedUpload(
+            3, texelSize, source, sizeof(source), GL_UNSIGNED_INT, widened, /*integerData=*/true));
+        const Uint32 expected[] = {10, 20, 30, 1, 40, 50, 60, 1};
+        ASSERT_NE(result, static_cast<const void*>(source));
+        EXPECT_EQ(std::memcmp(result, expected, sizeof(expected)), 0);
+    }
+
+    // GL_RGB8I -> GL_RGBA8I uploads as GL_BYTE, the very type GL_RGB8_SNORM uses, so the type
+    // alone cannot decide the added channel's value: the integer format's one is 1, the
+    // signed-normalized format's is 0x7F. Getting this wrong is invisible through sampling and
+    // glGetTexImage (both answer the alpha with the format's implied one) but escapes through a
+    // blit or glCopyTexSubImage out of the widened attachment.
+    {
+        const Int8 source[] = {-1, 2, -3, 4, -5, 6};
+        Vector<Uint8> widened;
+        const auto* asInteger = static_cast<const Int8*>(PrepareChannelWidenedUpload(
+            3, texelSize, source, sizeof(source), GL_BYTE, widened, /*integerData=*/true));
+        const Int8 expectedInteger[] = {-1, 2, -3, 1, 4, -5, 6, 1};
+        ASSERT_NE(asInteger, static_cast<const void*>(source));
+        EXPECT_EQ(std::memcmp(asInteger, expectedInteger, sizeof(expectedInteger)), 0);
+
+        Vector<Uint8> widenedNorm;
+        const auto* asNormalized = static_cast<const Int8*>(PrepareChannelWidenedUpload(
+            3, texelSize, source, sizeof(source), GL_BYTE, widenedNorm, /*integerData=*/false));
+        const Int8 expectedNormalized[] = {-1, 2, -3, 0x7F, 4, -5, 6, 0x7F};
+        EXPECT_EQ(std::memcmp(asNormalized, expectedNormalized, sizeof(expectedNormalized)), 0);
+    }
+
+    // Which class a widenable format belongs to.
+    for (const TextureInternalFormat format :
+         {TextureInternalFormat::RGB8I, TextureInternalFormat::RGB8UI, TextureInternalFormat::RGB16I,
+          TextureInternalFormat::RGB16UI, TextureInternalFormat::RGB32I, TextureInternalFormat::RGB32UI}) {
+        EXPECT_TRUE(MobileGL::MG_Backend::DirectGLES::TextureImpl::IsIntegerWidenableFormat(format))
+            << MG_Util::ConvertTextureInternalFormatToString(format);
+    }
+    for (const TextureInternalFormat format :
+         {TextureInternalFormat::RGB8Snorm, TextureInternalFormat::RGB16Snorm, TextureInternalFormat::RGB16,
+          TextureInternalFormat::RGB16F, TextureInternalFormat::RGB32F, TextureInternalFormat::SRGB8}) {
+        EXPECT_FALSE(MobileGL::MG_Backend::DirectGLES::TextureImpl::IsIntegerWidenableFormat(format))
+            << MG_Util::ConvertTextureInternalFormatToString(format);
+    }
+
+    // The destination is sized from the level, never from the source. The driver reads a full
+    // width*height*4 components for the transfer it was handed, so a short source must still
+    // leave a full buffer behind - sizing it from the source would hand the driver a buffer it
+    // runs off the end of.
+    {
+        const Float shortSource[] = {0.5f, 0.25f, 0.125f};
+        Vector<Uint8> widened;
+        const auto* result = static_cast<const Float*>(PrepareChannelWidenedUpload(
+            3, IntVec3(2, 2, 1), shortSource, sizeof(shortSource), GL_FLOAT, widened));
+        ASSERT_NE(result, static_cast<const void*>(shortSource));
+        ASSERT_EQ(widened.size(), 4 * 4 * sizeof(Float));
+        const Float expected[] = {0.5f, 0.25f, 0.125f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f,
+                                  0.0f, 0.0f,  0.0f,   1.0f, 0.0f, 0.0f, 0.0f, 1.0f};
+        for (SizeT i = 0; i < 16; ++i) {
+            EXPECT_FLOAT_EQ(result[i], expected[i]) << "component " << i;
+        }
+    }
+
+    // No widening in effect (or nothing to convert): the caller's pointer comes straight back, so
+    // the sub-rect upload fast path still recognises an unconverted level.
+    {
+        const Float source[] = {1.0f, 2.0f, 3.0f, 4.0f};
+        Vector<Uint8> widened;
+        EXPECT_EQ(PrepareChannelWidenedUpload(4, texelSize, source, sizeof(source), GL_FLOAT, widened),
+                  static_cast<const void*>(source));
+        EXPECT_EQ(PrepareChannelWidenedUpload(0, texelSize, source, sizeof(source), GL_FLOAT, widened),
+                  static_cast<const void*>(source));
+        EXPECT_EQ(PrepareChannelWidenedUpload(3, texelSize, nullptr, 0, GL_FLOAT, widened), nullptr);
+    }
 }

@@ -13,10 +13,13 @@
 #include "Includes.h"
 #include "Init.h"
 #include <MG_Backend/BackendObjects.h>
+#include <MG_Backend/DirectGLES/DirectGLES.h>
+#include <MG_Backend/DirectGLES/Managers.h>
 #include <MG_Backend/DirectGLES/Utils.h>
 #include <MG_Impl/GLImpl/Buffer/GL_Buffer.h>
 #include <MG_Impl/GLImpl/Framebuffer/GL_Framebuffer.h>
 #include <MG_Impl/GLImpl/Getter/GL_Getter.h>
+#include <MG_Impl/GLImpl/RenderState/GL_RenderState.h>
 #include <MG_Impl/GLImpl/Texture/GL_Texture.h>
 #include <MG_State/GLState/Core.h>
 
@@ -857,4 +860,395 @@ TEST_F(FramebufferTest, NonRenderableColorFormatsReportUnsupportedFramebuffer) {
     Uint8 pixelStorage[4 * 4 * 4] = {};
     MG_Impl::GLImpl::ReadPixels(0, 0, 4, 4, GL_RGBA, GL_UNSIGNED_BYTE, pixelStorage);
     EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_INVALID_FRAMEBUFFER_OPERATION);
+}
+
+// ---- Three-channel colour attachments: the Complementary Reimagined / Iris load failure --------
+//
+// Complementary declares colortex1 = RGB8_SNORM and colortex2 = RGB16F. No real OpenGL ES driver
+// renders to a three-channel image (EXT_render_snorm covers R/RG/RGBA only; EXT_color_buffer_float
+// excludes RGB16F), so the DirectGLES probe records those formats as creatable-but-not-renderable
+// and the frontend answered every framebuffer built from them GL_FRAMEBUFFER_UNSUPPORTED - which
+// Iris turns into a hard "Draw buffers [0, 1] Status: 36061" load failure. The backend now records
+// the four-channel substitution it will actually allocate as a caveat capability, and the frontend
+// has to accept that as renderable.
+namespace {
+    class ThreeChannelAttachmentBackend final : public MG_Backend::BackendObject {
+    public:
+        // `substituted` stands in for a driver where the four-channel widening probe succeeded, i.e.
+        // for what PopulateFormatCapabilitiesImpl records on Mali. false is the pre-fix state: the
+        // native form is creatable, nothing is renderable, and no fallback was ever built.
+        explicit ThreeChannelAttachmentBackend(Bool substituted) {
+            auto& cache = MutableFormatCapabilities();
+            const auto texture2DIndex = MG_Backend::GetFormatCapabilityTargetIndex(TextureTarget::Texture2D);
+
+            // IsColorInternalFormatRenderable only trusts the cache once it looks populated, which
+            // it decides from RGBA8 being creatable somewhere. Without this the static deny-list
+            // answers instead and the caveat below would never be consulted.
+            const auto rgba8Index = static_cast<SizeT>(TextureInternalFormat::RGBA8);
+            cache.FullCaps[texture2DIndex][rgba8Index] |= MG_Backend::FormatCapability::Creatable;
+            cache.FullCaps[texture2DIndex][rgba8Index] |= MG_Backend::FormatCapability::FramebufferRenderable;
+            cache.FullCaps[texture2DIndex][rgba8Index] |= MG_Backend::FormatCapability::ColorAttachment;
+
+            for (const TextureInternalFormat format :
+                 {TextureInternalFormat::RGB8Snorm, TextureInternalFormat::RGB16F}) {
+                const auto formatIndex = static_cast<SizeT>(format);
+                // Creatable and samplable as an ordinary texture, but the driver's
+                // glCheckFramebufferStatus said no - exactly Mali r32p1's answer.
+                cache.FullCaps[texture2DIndex][formatIndex] |= MG_Backend::FormatCapability::Creatable;
+                cache.FullCaps[texture2DIndex][formatIndex] |= MG_Backend::FormatCapability::Sampled;
+                if (substituted) {
+                    cache.CaveatCaps[texture2DIndex][formatIndex] |=
+                        MG_Backend::FormatCapability::FramebufferRenderable;
+                    cache.CaveatCaps[texture2DIndex][formatIndex] |= MG_Backend::FormatCapability::ColorAttachment;
+                }
+            }
+        }
+
+        void Initialize() override {}
+        Bool InitCapabilities() override { return true; }
+        Bool InitWindowSurface() override { return true; }
+        const RendererInfo& GetRendererInfo() const override {
+            static RendererInfo info = {};
+            return info;
+        }
+        String GetBackendAPIVersionString() const override { return {}; }
+        const MG_Backend::GlobalBackendFunctionsTable& GetBackendFunctions() const override {
+            static MG_Backend::GlobalBackendFunctionsTable table = {};
+            return table;
+        }
+        const MG_Backend::DynamicBackendParameters& GetDynamicParameters() const override {
+            static MG_Backend::DynamicBackendParameters params = {};
+            return params;
+        }
+        BackendType GetBackendType() const override { return BackendType::Unknown; }
+    };
+
+    class ScopedBackendOverride {
+    public:
+        explicit ScopedBackendOverride(UniquePtr<MG_Backend::BackendObject> backend):
+            m_previous(Move(MG_Backend::pActiveBackendObject)) {
+            MG_Backend::pActiveBackendObject = Move(backend);
+        }
+
+        ~ScopedBackendOverride() { MG_Backend::pActiveBackendObject = Move(m_previous); }
+
+    private:
+        UniquePtr<MG_Backend::BackendObject> m_previous;
+    };
+
+    GLenum CheckSingleColorAttachmentStatus(GLenum internalFormat) {
+        GLuint framebuffer = 0;
+        GLuint texture = 0;
+        MG_Impl::GLImpl::CreateFramebuffers(1, &framebuffer);
+        MG_Impl::GLImpl::CreateTextures(GL_TEXTURE_2D, 1, &texture);
+        MG_Impl::GLImpl::TextureStorage2D(texture, 1, internalFormat, 4, 4);
+        MG_Impl::GLImpl::NamedFramebufferTexture(framebuffer, GL_COLOR_ATTACHMENT0, texture, 0);
+        return MG_Impl::GLImpl::CheckNamedFramebufferStatus(framebuffer, GL_DRAW_FRAMEBUFFER);
+    }
+} // namespace
+
+TEST_F(FramebufferTest, ThreeChannelColorAttachmentsAreUnsupportedWithoutTheWidenedSubstitution) {
+    // The pre-fix behaviour, pinned so a regression is a red test rather than a shaderpack that
+    // silently stops loading: no caveat capability, so nothing makes these renderable.
+    ScopedBackendOverride backend(MakeUnique<ThreeChannelAttachmentBackend>(/*substituted=*/false));
+
+    EXPECT_EQ(CheckSingleColorAttachmentStatus(GL_RGB8_SNORM), static_cast<GLenum>(GL_FRAMEBUFFER_UNSUPPORTED));
+    EXPECT_EQ(CheckSingleColorAttachmentStatus(GL_RGB16F), static_cast<GLenum>(GL_FRAMEBUFFER_UNSUPPORTED));
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+}
+
+TEST_F(FramebufferTest, ThreeChannelColorAttachmentsAreCompleteThroughTheWidenedSubstitution) {
+    ScopedBackendOverride backend(MakeUnique<ThreeChannelAttachmentBackend>(/*substituted=*/true));
+
+    // Complementary's colortex1 (RGB8_SNORM) and colortex2 (RGB16F): both must come out COMPLETE,
+    // because the backend stores them as GL_RGBA16F. Shipping only the first would move the
+    // failure one composite pass down instead of fixing it.
+    EXPECT_EQ(CheckSingleColorAttachmentStatus(GL_RGB8_SNORM), static_cast<GLenum>(GL_FRAMEBUFFER_COMPLETE));
+    EXPECT_EQ(CheckSingleColorAttachmentStatus(GL_RGB16F), static_cast<GLenum>(GL_FRAMEBUFFER_COMPLETE));
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+}
+
+TEST_F(FramebufferTest, TwoAttachmentCompositeFramebufferMatchesIrisComplementaryPass) {
+    // The exact framebuffer Iris failed on: Complementary's `composite` pass draws to colortex7
+    // (RGBA16F, natively renderable) and colortex1 (RGB8_SNORM, only renderable widened). Iris
+    // logs it as "Draw buffers [0, 1]" - a two-attachment FBO, not colortex 0 and 1.
+    ScopedBackendOverride backend(MakeUnique<ThreeChannelAttachmentBackend>(/*substituted=*/true));
+
+    GLuint framebuffer = 0;
+    GLuint colortex7 = 0;
+    GLuint colortex1 = 0;
+    MG_Impl::GLImpl::CreateFramebuffers(1, &framebuffer);
+    MG_Impl::GLImpl::CreateTextures(GL_TEXTURE_2D, 1, &colortex7);
+    MG_Impl::GLImpl::CreateTextures(GL_TEXTURE_2D, 1, &colortex1);
+    MG_Impl::GLImpl::TextureStorage2D(colortex7, 1, GL_RGBA8, 4, 4);
+    MG_Impl::GLImpl::TextureStorage2D(colortex1, 1, GL_RGB8_SNORM, 4, 4);
+    MG_Impl::GLImpl::NamedFramebufferTexture(framebuffer, GL_COLOR_ATTACHMENT0, colortex7, 0);
+    MG_Impl::GLImpl::NamedFramebufferTexture(framebuffer, GL_COLOR_ATTACHMENT1, colortex1, 0);
+
+    EXPECT_EQ(MG_Impl::GLImpl::CheckNamedFramebufferStatus(framebuffer, GL_DRAW_FRAMEBUFFER),
+              static_cast<GLenum>(GL_FRAMEBUFFER_COMPLETE));
+
+    // Both entry points answer from the same helpers, and CheckFramebufferStatus is what Iris
+    // actually calls; they are near-verbatim duplicates, so assert they agree.
+    MG_Impl::GLImpl::BindFramebuffer(GL_DRAW_FRAMEBUFFER, framebuffer);
+    EXPECT_EQ(MG_Impl::GLImpl::CheckFramebufferStatus(GL_DRAW_FRAMEBUFFER),
+              static_cast<GLenum>(GL_FRAMEBUFFER_COMPLETE));
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+}
+
+// ---- Widened attachments: the stored-alpha discipline -----------------------------------------
+//
+// A widened attachment has a real alpha channel the application's three-channel format does not,
+// and GL says a channel a format lacks reads back as 1.0. glReadPixels and glGetTexImage can be
+// made to say that (ForceWideReadAlphaToOne), but GL_DST_ALPHA / GL_ONE_MINUS_DST_ALPHA blending
+// and glBlitFramebuffer read the STORED alpha inside the driver, where nothing can intercept it.
+// So the stored alpha is held at 1.0 instead: a clear writes 1.0 into it, and every draw has that
+// buffer's alpha write mask forced off so nothing can move it again.
+//
+// These cases pin the two halves of that pairing at the seam where they are visible - what the ES
+// driver is actually handed - and pin the invariant that the application's own colour mask is
+// never touched.
+namespace {
+    struct RecordedColorMask {
+        Bool seen = false;
+        GLboolean r = GL_FALSE, g = GL_FALSE, b = GL_FALSE, a = GL_FALSE;
+    };
+
+    constexpr Uint kRecordedDrawBuffers = 8;
+    RecordedColorMask g_driverIndexedColorMasks[kRecordedDrawBuffers];
+    RecordedColorMask g_driverUniformColorMask;
+
+    void ResetRecordedColorMasks() {
+        for (auto& recorded : g_driverIndexedColorMasks) recorded = {};
+        g_driverUniformColorMask = {};
+    }
+
+    void StubColorMask(GLboolean r, GLboolean g, GLboolean b, GLboolean a) {
+        g_driverUniformColorMask = {true, r, g, b, a};
+        // The non-indexed call sets every draw buffer, so record it as such: a later assertion
+        // about draw buffer 1 must not read a stale indexed record the uniform push overwrote.
+        for (auto& recorded : g_driverIndexedColorMasks) recorded = {true, r, g, b, a};
+    }
+
+    void StubColorMaski(GLuint index, GLboolean r, GLboolean g, GLboolean b, GLboolean a) {
+        if (index < kRecordedDrawBuffers) g_driverIndexedColorMasks[index] = {true, r, g, b, a};
+    }
+
+    void StubViewport(GLint, GLint, GLsizei, GLsizei) {}
+    void StubScissor(GLint, GLint, GLsizei, GLsizei) {}
+    void StubEnable(GLenum) {}
+    void StubDisable(GLenum) {}
+    void StubEnablei(GLenum, GLuint) {}
+    void StubDisablei(GLenum, GLuint) {}
+    void StubBlendFuncSeparate(GLenum, GLenum, GLenum, GLenum) {}
+    void StubBlendFuncSeparatei(GLuint, GLenum, GLenum, GLenum, GLenum) {}
+    void StubBlendEquationSeparate(GLenum, GLenum) {}
+    void StubBlendEquationSeparatei(GLuint, GLenum, GLenum) {}
+    void StubBlendColor(GLfloat, GLfloat, GLfloat, GLfloat) {}
+    void StubDepthFunc(GLenum) {}
+    void StubDepthMask(GLboolean) {}
+    void StubDepthRangef(GLfloat, GLfloat) {}
+    void StubStencilFuncSeparate(GLenum, GLenum, GLint, GLuint) {}
+    void StubStencilMaskSeparate(GLenum, GLuint) {}
+    void StubStencilOpSeparate(GLenum, GLenum, GLenum, GLenum) {}
+    void StubClearColor(GLfloat, GLfloat, GLfloat, GLfloat) {}
+    void StubClearDepthf(GLfloat) {}
+    void StubClearStencil(GLint) {}
+    void StubCullFace(GLenum) {}
+    void StubFrontFace(GLenum) {}
+    void StubPolygonOffset(GLfloat, GLfloat) {}
+    void StubLineWidth(GLfloat) {}
+    void StubSampleCoverage(GLfloat, GLboolean) {}
+
+    // Replaces the ES function table with no-ops that record only what these cases assert on.
+    // The table is ZEROED first on purpose: SyncRenderState is long, and a call it makes that
+    // this fixture did not anticipate must crash here rather than silently reach a stale pointer
+    // into a driver that this process never made current.
+    class ScopedRenderStateDriverStubs {
+    public:
+        ScopedRenderStateDriverStubs():
+            m_funcs(MG_Backend::DirectGLES::g_GLESFuncs), m_caps(MG_Backend::DirectGLES::g_GLESCapabilities) {
+            auto& gl = MG_Backend::DirectGLES::g_GLESFuncs;
+            gl = MG_External::GLESFunctionsTable{};
+            gl.glViewport = StubViewport;
+            gl.glScissor = StubScissor;
+            gl.glEnable = StubEnable;
+            gl.glDisable = StubDisable;
+            gl.glEnablei = StubEnablei;
+            gl.glDisablei = StubDisablei;
+            gl.glBlendFuncSeparate = StubBlendFuncSeparate;
+            gl.glBlendFuncSeparatei = StubBlendFuncSeparatei;
+            gl.glBlendEquationSeparate = StubBlendEquationSeparate;
+            gl.glBlendEquationSeparatei = StubBlendEquationSeparatei;
+            gl.glBlendColor = StubBlendColor;
+            gl.glDepthFunc = StubDepthFunc;
+            gl.glDepthMask = StubDepthMask;
+            gl.glDepthRangef = StubDepthRangef;
+            gl.glStencilFuncSeparate = StubStencilFuncSeparate;
+            gl.glStencilMaskSeparate = StubStencilMaskSeparate;
+            gl.glStencilOpSeparate = StubStencilOpSeparate;
+            gl.glClearColor = StubClearColor;
+            gl.glClearDepthf = StubClearDepthf;
+            gl.glClearStencil = StubClearStencil;
+            gl.glCullFace = StubCullFace;
+            gl.glFrontFace = StubFrontFace;
+            gl.glPolygonOffset = StubPolygonOffset;
+            gl.glLineWidth = StubLineWidth;
+            gl.glSampleCoverage = StubSampleCoverage;
+            gl.glColorMask = StubColorMask;
+            gl.glColorMaski = StubColorMaski;
+
+            auto& caps = MG_Backend::DirectGLES::g_GLESCapabilities;
+            caps.SupportsIndexedColorMask = true;
+            caps.SupportsSrgbWriteControl = false;
+            caps.SupportsPolygonMode = false;
+            caps.SupportsDualSourceBlend = true;
+
+            ResetRecordedColorMasks();
+            // The viewport and scissor blocks fall back to querying the surface size when the
+            // frontend's rectangle is degenerate, and there is no surface in this process.
+            MG_Impl::GLImpl::Viewport(0, 0, 4, 4);
+            MG_Impl::GLImpl::Scissor(0, 0, 4, 4);
+            MG_Backend::DirectGLES::RenderStateImpl::InvalidateSyncedRenderState();
+        }
+
+        ~ScopedRenderStateDriverStubs() {
+            MG_Backend::DirectGLES::FramebufferImpl::g_alphaWidenedDrawBufferMask = 0;
+            MG_Backend::DirectGLES::g_GLESFuncs = m_funcs;
+            MG_Backend::DirectGLES::g_GLESCapabilities = m_caps;
+            // The shadow now describes pushes that went to the stubs, not to any driver.
+            MG_Backend::DirectGLES::RenderStateImpl::InvalidateSyncedRenderState();
+            MG_Impl::GLImpl::ColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+        }
+
+    private:
+        MG_External::GLESFunctionsTable m_funcs;
+        MG_External::GLESCapabilities m_caps;
+    };
+} // namespace
+
+TEST_F(FramebufferTest, WidenedDrawBufferIsIdentifiedPerDrawBufferSlotNotPerAttachmentPoint) {
+    ScopedBackendOverride backend(MakeUnique<ThreeChannelAttachmentBackend>(/*substituted=*/true));
+
+    // Complementary's `composite` framebuffer again: draw buffer 0 is a natively renderable
+    // RGBA8, draw buffer 1 is the widened RGB8_SNORM. Only the second may be doctored.
+    GLuint framebuffer = 0;
+    GLuint colortex7 = 0;
+    GLuint colortex1 = 0;
+    MG_Impl::GLImpl::CreateFramebuffers(1, &framebuffer);
+    MG_Impl::GLImpl::CreateTextures(GL_TEXTURE_2D, 1, &colortex7);
+    MG_Impl::GLImpl::CreateTextures(GL_TEXTURE_2D, 1, &colortex1);
+    MG_Impl::GLImpl::TextureStorage2D(colortex7, 1, GL_RGBA8, 4, 4);
+    MG_Impl::GLImpl::TextureStorage2D(colortex1, 1, GL_RGB8_SNORM, 4, 4);
+    MG_Impl::GLImpl::NamedFramebufferTexture(framebuffer, GL_COLOR_ATTACHMENT0, colortex7, 0);
+    MG_Impl::GLImpl::NamedFramebufferTexture(framebuffer, GL_COLOR_ATTACHMENT1, colortex1, 0);
+
+    auto& framebufferObject = MG_State::pGLContext->GetFramebufferObject(framebuffer);
+    ASSERT_NE(framebufferObject, nullptr);
+    framebufferObject->SetDrawBuffer(0, FramebufferAttachmentType::Color0);
+    framebufferObject->SetDrawBuffer(1, FramebufferAttachmentType::Color1);
+
+    EXPECT_EQ(MG_Backend::DirectGLES::FramebufferImpl::ComputeAlphaWidenedDrawBufferMask(*framebufferObject),
+              1u << 1);
+
+    // Swapping the draw-buffer array moves the bit with the SLOT, not with the attachment point:
+    // glColorMaski and glClearBufferfv both address slots.
+    framebufferObject->SetDrawBuffer(0, FramebufferAttachmentType::Color1);
+    framebufferObject->SetDrawBuffer(1, FramebufferAttachmentType::Color0);
+    EXPECT_EQ(MG_Backend::DirectGLES::FramebufferImpl::ComputeAlphaWidenedDrawBufferMask(*framebufferObject),
+              1u << 0);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+}
+
+TEST_F(FramebufferTest, DrawIntoAWidenedDrawBufferReachesTheDriverWithAlphaWritesMaskedOff) {
+    ScopedRenderStateDriverStubs driver;
+    MG_Backend::DirectGLES::FramebufferImpl::g_alphaWidenedDrawBufferMask = 1u << 1;
+
+    // What the application asked for: write every channel of every draw buffer.
+    MG_Impl::GLImpl::ColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+    MG_Backend::DirectGLES::RenderStateImpl::SyncRenderState(/*forColorClear=*/false);
+
+    // What the driver was told. Draw buffer 0 is untouched; draw buffer 1 loses alpha.
+    ASSERT_TRUE(g_driverIndexedColorMasks[0].seen);
+    EXPECT_EQ(g_driverIndexedColorMasks[0].r, GL_TRUE);
+    EXPECT_EQ(g_driverIndexedColorMasks[0].g, GL_TRUE);
+    EXPECT_EQ(g_driverIndexedColorMasks[0].b, GL_TRUE);
+    EXPECT_EQ(g_driverIndexedColorMasks[0].a, GL_TRUE);
+    ASSERT_TRUE(g_driverIndexedColorMasks[1].seen);
+    EXPECT_EQ(g_driverIndexedColorMasks[1].r, GL_TRUE);
+    EXPECT_EQ(g_driverIndexedColorMasks[1].g, GL_TRUE);
+    EXPECT_EQ(g_driverIndexedColorMasks[1].b, GL_TRUE);
+    EXPECT_EQ(g_driverIndexedColorMasks[1].a, GL_FALSE) << "a widened draw buffer must not take alpha writes";
+
+    // And what the application sees back. The doctoring lives entirely on the push; the frontend
+    // state it is derived from is never written, so glGet still answers with the app's value.
+    GLboolean appMask[4] = {GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE};
+    MG_Impl::GLImpl::GetBooleanv(GL_COLOR_WRITEMASK, appMask);
+    EXPECT_EQ(appMask[0], GL_TRUE);
+    EXPECT_EQ(appMask[1], GL_TRUE);
+    EXPECT_EQ(appMask[2], GL_TRUE);
+    EXPECT_EQ(appMask[3], GL_TRUE) << "glGet(GL_COLOR_WRITEMASK) must report the application's mask";
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+}
+
+TEST_F(FramebufferTest, ClearIntoAWidenedDrawBufferKeepsAlphaWritableAndSubstitutesOne) {
+    ScopedRenderStateDriverStubs driver;
+    MG_Backend::DirectGLES::FramebufferImpl::g_alphaWidenedDrawBufferMask = 1u << 1;
+    MG_Impl::GLImpl::ColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+
+    // A draw first, so the mask really is doctored when the clear arrives...
+    MG_Backend::DirectGLES::RenderStateImpl::SyncRenderState(/*forColorClear=*/false);
+    ASSERT_EQ(g_driverIndexedColorMasks[1].a, GL_FALSE);
+
+    // ...and now the clear, with NOTHING changed in the frontend parameter block. The frontend's
+    // render-state version has not moved, so only the purpose-aware memo can force this push -
+    // without it the clear would inherit the draw's alpha-off mask and never write the 1.0.
+    ResetRecordedColorMasks();
+    MG_Backend::DirectGLES::RenderStateImpl::SyncRenderState(/*forColorClear=*/true);
+    ASSERT_TRUE(g_driverIndexedColorMasks[1].seen) << "the clear must re-push the colour mask";
+    EXPECT_EQ(g_driverIndexedColorMasks[1].a, GL_TRUE) << "a clear is what puts the 1.0 in the stored alpha";
+
+    // The value that clear writes: the application's RGB, alpha replaced by the 1.0 the
+    // three-channel format implies, and only on the widened buffer.
+    const GLfloat appColor[4] = {0.25f, 0.5f, 0.75f, 0.0f};
+    GLfloat scratch[4] = {};
+    const GLfloat* widened =
+        MG_Backend::DirectGLES::FramebufferImpl::SubstituteWidenedClearAlpha(appColor, true, 1.0f, scratch);
+    EXPECT_EQ(widened[0], 0.25f);
+    EXPECT_EQ(widened[1], 0.5f);
+    EXPECT_EQ(widened[2], 0.75f);
+    EXPECT_EQ(widened[3], 1.0f);
+
+    const GLfloat* untouched =
+        MG_Backend::DirectGLES::FramebufferImpl::SubstituteWidenedClearAlpha(appColor, false, 1.0f, scratch);
+    EXPECT_EQ(untouched, appColor) << "a native attachment's clear must not even be copied";
+
+    // An integer widened format (GL_RGB8UI -> GL_RGBA8UI) carries the INTEGER one, not a
+    // saturated field: glClearBufferuiv takes the value verbatim.
+    const GLuint appIntegerColor[4] = {7u, 8u, 9u, 0u};
+    GLuint integerScratch[4] = {};
+    const GLuint* widenedInteger = MG_Backend::DirectGLES::FramebufferImpl::SubstituteWidenedClearAlpha(
+        appIntegerColor, true, GLuint(1), integerScratch);
+    EXPECT_EQ(widenedInteger[3], 1u);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+}
+
+TEST_F(FramebufferTest, ApplicationAlphaMaskOffIsStillHonouredOnANativeDrawBuffer) {
+    // The doctoring only ever REMOVES alpha writes on a widened buffer; it must never add them
+    // back on a buffer the application masked itself, and must never touch a native one.
+    ScopedRenderStateDriverStubs driver;
+    MG_Backend::DirectGLES::FramebufferImpl::g_alphaWidenedDrawBufferMask = 1u << 1;
+
+    MG_Impl::GLImpl::ColorMaski(0, GL_TRUE, GL_TRUE, GL_TRUE, GL_FALSE);
+    MG_Impl::GLImpl::ColorMaski(1, GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+    MG_Impl::GLImpl::ColorMaski(2, GL_FALSE, GL_TRUE, GL_FALSE, GL_TRUE);
+    MG_Backend::DirectGLES::RenderStateImpl::SyncRenderState(/*forColorClear=*/false);
+
+    EXPECT_EQ(g_driverIndexedColorMasks[0].a, GL_FALSE) << "the application's own alpha mask survives";
+    EXPECT_EQ(g_driverIndexedColorMasks[1].a, GL_FALSE) << "the widened buffer loses alpha";
+    EXPECT_EQ(g_driverIndexedColorMasks[2].r, GL_FALSE);
+    EXPECT_EQ(g_driverIndexedColorMasks[2].g, GL_TRUE);
+    EXPECT_EQ(g_driverIndexedColorMasks[2].b, GL_FALSE);
+    EXPECT_EQ(g_driverIndexedColorMasks[2].a, GL_TRUE) << "a native buffer keeps its alpha writes";
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
 }

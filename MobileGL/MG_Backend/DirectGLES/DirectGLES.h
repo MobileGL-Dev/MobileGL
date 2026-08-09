@@ -188,6 +188,26 @@ namespace MobileGL::MG_Backend::DirectGLES {
         void OnBackendContextDestroyed();
     } // namespace XfbImpl
 
+    namespace RenderStateImpl {
+        // Pushes the frontend's render-state block to the ES driver, diffed against what was
+        // last pushed.
+        //
+        // `forColorClear` names the CALLER, and the only thing it changes is the colour write
+        // mask handed to the driver. A draw into a colour attachment the backend widened from
+        // three channels to four gets that buffer's alpha channel masked OFF, so nothing can
+        // move the stored alpha away from the 1.0 the application's three-channel format
+        // implies (see FramebufferImpl::g_alphaWidenedDrawBufferMask). A CLEAR is how that 1.0
+        // gets there in the first place, so it must be allowed to write alpha - hence the flag
+        // rather than an unconditional doctoring. It is part of the sync memo, so a clear
+        // followed by a draw re-pushes the mask instead of early-outing on an unchanged
+        // frontend version.
+        //
+        // The application's own colour mask is never modified: glGet(GL_COLOR_WRITEMASK)
+        // answers from the frontend state, which this function only reads.
+        void SyncRenderState(Bool forColorClear = false);
+        void InvalidateSyncedRenderState();
+    } // namespace RenderStateImpl
+
     extern MG_External::EGLFunctionsTable g_EGLFuncs;
     extern MG_External::GLESFunctionsTable g_GLESFuncs;
     extern MG_External::GLESCapabilities g_GLESCapabilities;

@@ -61,29 +61,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 requestedInternalFormat, GetDriverPixelFormatNormalizeOptions() | extraOptions);
         }
 
-        // Multisample textures can only ever be rendered into, never uploaded to, so a fallback
-        // format for them has to stay colour-renderable - a three-channel float fallback is a legal
-        // ES texture format but not a legal multisample storage format. Widening to four channels
-        // is safe here precisely because there is no transfer path that would have to expand
-        // three-channel client data, and the alpha the draw writes for a three-channel source is
-        // already the 1.0 the frontend format implies.
-        Bool TargetRequiresRenderableFormat(SizeT targetIndex) {
-            return targetIndex == static_cast<SizeT>(TextureTarget::Texture2DMultisample) ||
-                   targetIndex == static_cast<SizeT>(TextureTarget::Texture2DMultisampleArray);
-        }
-
-        Flags<PixelFormatNormalizeOptionBit> GetRenderTargetNormalizeOptions(SizeT targetIndex) {
-            Flags<PixelFormatNormalizeOptionBit> options;
-            if (!TargetRequiresRenderableFormat(targetIndex)) {
-                return options;
-            }
-            options |= PixelFormatNormalizeOptionBit::NoThreeChannelRenderTarget;
-            if (!g_GLESCapabilities.SupportsRenderSnorm || !g_GLESCapabilities.SupportsNorm16Texture) {
-                options |= PixelFormatNormalizeOptionBit::NoSnorm16RenderTarget;
-            }
-            return options;
-        }
-
         Bool HasCachedFormatCapability(TextureInternalFormat internalFormat,
                                        SizeT targetIndex,
                                        Bool caveat,
@@ -141,14 +118,61 @@ namespace MobileGL::MG_Backend::DirectGLES {
             const GLenum requestedInternalFormat = MG_Util::ConvertTextureInternalFormatToGLEnum(internalFormat);
             Flags<PixelFormatNormalizeOptionBit> options;
             if (!pActiveBackendObject || ShouldUseCaveatFormat(internalFormat, targetIndex)) {
-                options = GetRuntimeFallbackNormalizeOptions(requestedInternalFormat,
-                                                             GetRenderTargetNormalizeOptions(targetIndex));
+                options = GetRuntimeFallbackNormalizeOptions(
+                    requestedInternalFormat,
+                    TextureImpl::GetRenderTargetNormalizeOptions(g_GLESCapabilities, targetIndex));
             }
             NormalizePixelFormat(requestedInternalFormat, options, outInternalFormat, outFormat, outType);
         }
     } // namespace
 
     namespace TextureImpl {
+        // Every image that can back a colour attachment needs a colour-renderable storage format,
+        // and ES has no renderable three-channel format at all: a three-channel float fallback is
+        // a legal ES texture but neither legal multisample storage nor a legal attachment, so
+        // GL_RGB8_SNORM / GL_RGB16F / ... have to be widened to four channels for any of them.
+        // This used to cover the multisample pair alone, on the grounds that only those can never
+        // be uploaded to; the transfer paths now expand three-channel client data themselves
+        // (Managers.cpp PrepareFallbackUpload) and hide the added alpha again on sample and
+        // readback, so the same substitution is available everywhere.
+        //
+        // The widening only ever *happens* where the driver refuses the native form (see
+        // PopulateFormatCapabilitiesImpl: outside multisample storage it rides the driver branch,
+        // behind the native probe), so a driver that does render to a three-channel image keeps
+        // allocating it byte for byte.
+        //
+        // Do NOT read that as "nothing changes off-device". Measured on Mesa 26.1.6 llvmpipe
+        // (the headless CI driver), an ES 3.2 GL_TEXTURE_2D colour attachment is COMPLETE for
+        // GL_RGB8 and GL_RGB16F but INCOMPLETE_ATTACHMENT for GL_RGB8_SNORM, GL_SRGB8 and every
+        // RGB integer format, and UNSUPPORTED for GL_RGB32F. Those eight formats therefore DO
+        // take the widened path on llvmpipe, which is where the retrace fixtures and the glcts
+        // green suites run - the substitution is driver-conditional, not desktop-exempt.
+        //
+        // A buffer texture is the one image that can never be an attachment; its storage is the
+        // buffer object's, and widening it would misdescribe the application's data.
+        Bool TargetRequiresRenderableFormat(SizeT targetIndex) {
+            if (targetIndex >= kFormatCapabilityTargetCount) {
+                return false;
+            }
+            if (targetIndex == kFormatCapabilityRenderbufferTargetIndex) {
+                return true;
+            }
+            return static_cast<TextureTarget>(targetIndex) != TextureTarget::TextureBuffer;
+        }
+
+        Flags<PixelFormatNormalizeOptionBit> GetRenderTargetNormalizeOptions(
+            const MG_External::GLESCapabilities& capabilities, SizeT targetIndex) {
+            Flags<PixelFormatNormalizeOptionBit> options;
+            if (!TargetRequiresRenderableFormat(targetIndex)) {
+                return options;
+            }
+            options |= PixelFormatNormalizeOptionBit::NoThreeChannelRenderTarget;
+            if (!capabilities.SupportsRenderSnorm || !capabilities.SupportsNorm16Texture) {
+                options |= PixelFormatNormalizeOptionBit::NoSnorm16RenderTarget;
+            }
+            return options;
+        }
+
         void GenerateTextureFormatInfo(TextureInternalFormat internalFormat, GLenum* outInternalFormat,
                                        GLenum* outFormat, GLenum* outType, TextureTarget target) {
 #ifdef TRACY_ENABLE
@@ -178,20 +202,29 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return ShouldUseCaveatFormat(internalFormat, GetRenderbufferFormatCapabilityTargetIndex());
         }
 
+        namespace {
+            Bool BackendFormatAddsAlpha(TextureInternalFormat internalFormat, SizeT targetIndex) {
+                if (!TargetRequiresRenderableFormat(targetIndex)) {
+                    return false;
+                }
+                if (pActiveBackendObject && !ShouldUseCaveatFormat(internalFormat, targetIndex)) {
+                    return false;
+                }
+                const GLenum requestedInternalFormat = MG_Util::ConvertTextureInternalFormatToGLEnum(internalFormat);
+                const Flags<PixelFormatNormalizeOptionBit> options = GetRuntimeFallbackNormalizeOptions(
+                    requestedInternalFormat, GetRenderTargetNormalizeOptions(g_GLESCapabilities, targetIndex));
+                return static_cast<Bool>(options & PixelFormatNormalizeOptionBit::NoThreeChannelRenderTarget);
+            }
+        } // namespace
+
         Bool BackendTextureFormatAddsAlpha(TextureInternalFormat internalFormat, TextureTarget target) {
             const SizeT targetIndex =
                 target == TextureTarget::Unknown ? kFormatCapabilityTargetCount : GetFormatCapabilityTargetIndex(target);
-            if (!TargetRequiresRenderableFormat(targetIndex)) {
-                return false;
-            }
-            if (pActiveBackendObject && !ShouldUseCaveatFormat(internalFormat, targetIndex)) {
-                return false;
-            }
-            const GLenum requestedInternalFormat = MG_Util::ConvertTextureInternalFormatToGLEnum(internalFormat);
-            const Flags<PixelFormatNormalizeOptionBit> options =
-                GetRuntimeFallbackNormalizeOptions(requestedInternalFormat,
-                                                   GetRenderTargetNormalizeOptions(targetIndex));
-            return static_cast<Bool>(options & PixelFormatNormalizeOptionBit::NoThreeChannelRenderTarget);
+            return BackendFormatAddsAlpha(internalFormat, targetIndex);
+        }
+
+        Bool BackendRenderbufferFormatAddsAlpha(TextureInternalFormat internalFormat) {
+            return BackendFormatAddsAlpha(internalFormat, GetRenderbufferFormatCapabilityTargetIndex());
         }
     } // namespace TextureImpl
     namespace PrgramImpl {

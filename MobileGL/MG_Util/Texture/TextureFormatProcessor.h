@@ -20,9 +20,14 @@ namespace MobileGL {
         NoRGB16Snorm = 1 << 6,
         // The target must be colour-renderable and ES has no renderable three-channel
         // form of the requested format, so it has to be widened to the four-channel one.
-        // Only meaningful for multisample textures: those can never be uploaded to, only
-        // rendered into, so the extra alpha comes from the draw (1.0 for an RGB source)
-        // and no transfer path has to expand three-channel client data.
+        // Set for any colour-attachable target whose native three-channel form the driver
+        // refused to render to (multisample storage always, since ES has no three-channel
+        // multisample format at all; every other target only after its native probe failed).
+        // The widening is visible to every transfer path, so it also retargets the (format,
+        // type) pair NormalizePixelFormat reports: the upload has to describe four
+        // components in the widened storage's component type, the backend has to expand
+        // three-channel client data with an alpha of 1.0, and sampling/readback has to hide
+        // the added alpha again (BackendTextureFormatAddsAlpha).
         NoThreeChannelRenderTarget = 1 << 7,
         // Pairs with the bit above: the widened four-channel format has to stay renderable AND
         // keep 16-bit signed-normalized precision, which needs both EXT_texture_norm16 and

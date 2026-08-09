@@ -16,7 +16,12 @@
 // Only for the compile-time MAX_VERTEX_ATTRIBS constant asserted below. The POST still executes no
 // MG_State code: it runs standalone, before MG_State::Init().
 #include <MG_State/GLState/VertexArrayState/VertexArrayObject.h>
+#include <MG_Backend/DirectGLES/Utils.h>
+#include <MG_Util/Converters/GLToStr/GLEnumConverter.h>
+#include <MG_Util/Converters/MGToGL/TextureEnumConverter.h>
 #include <MG_Util/Converters/MGToStr/GLExtensionConverter.h>
+#include <MG_Util/Converters/MGToStr/TextureEnumConverter.h>
+#include <MG_Util/Texture/TextureFormatProcessor.h>
 #include <MG_Util/Async/ShaderCompilePool.h>
 #include <chrono>
 #include <thread>
@@ -450,6 +455,35 @@ namespace MobileGL::MG_Util::SelfTest {
                 builder.Warn("GL_EXT_texture_norm16",
                              "not supported; 16-bit normalized texture formats need emulation");
             }
+            if (caps.SupportsRenderSnorm) {
+                builder.Pass("GL_EXT_render_snorm",
+                             "supported (signed-normalized formats are colour-renderable, so an "
+                             "SNORM render target keeps its own encoding instead of a float substitute)");
+            } else {
+                builder.Warn("GL_EXT_render_snorm",
+                             "not supported; signed-normalized formats are texture-only, so every SNORM "
+                             "render target is stored as a float (GL_RGBA8_SNORM/GL_RGB8_SNORM -> "
+                             "GL_RGBA16F) and its fragment outputs are clamped to [-1,1] in software");
+            }
+            // FAIL, not WARN: ES 3.x core makes every float format texture-only, and every Iris
+            // shaderpack renders into at least GL_R11F_G11F_B10F (Complementary's colortex0, BSL's
+            // colortex0). Without this extension there is no substitute format left - a half float
+            // is not renderable either - so shaderpacks cannot work at all on such a driver.
+            if (caps.SupportsColorBufferFloat) {
+                builder.Pass("GL_EXT_color_buffer_float",
+                             "supported (GL_R11F_G11F_B10F / GL_RGBA16F / GL_RGBA32F are "
+                             "colour-renderable, which is what every shaderpack renders into)");
+            } else if (caps.SupportsColorBufferHalfFloat) {
+                builder.Warn("GL_EXT_color_buffer_float",
+                             "not supported, but GL_EXT_color_buffer_half_float is; 16-bit float render "
+                             "targets work, 32-bit float ones (GL_RGBA32F, and the GL_RGBA16 fallback "
+                             "that lands on it) do not");
+            } else {
+                builder.Fail("GL_EXT_color_buffer_float",
+                             "not supported, and neither is GL_EXT_color_buffer_half_float; no floating-point "
+                             "format is colour-renderable on this driver, so no shaderpack can create its "
+                             "render targets (Iris reports GL_FRAMEBUFFER_UNSUPPORTED and refuses to load)");
+            }
 
             // INFO, never WARN: this is the HOST driver's ability to compile its own ESSL on
             // its own threads, and MobileGL's asynchronous compilation does not depend on it
@@ -783,6 +817,117 @@ namespace MobileGL::MG_Util::SelfTest {
             }
         }
 
+        // No real ES driver renders to a three-channel image, but desktop GL applications ask for
+        // one constantly - Complementary Reimagined's colortex1 is GL_RGB8_SNORM and its colortex2
+        // is GL_RGB16F, and Iris refuses to load when a framebuffer built from them is not
+        // COMPLETE. DirectGLES substitutes the four-channel sibling, and this row names the
+        // outcome per format so the failure mode is a five-second read instead of an
+        // investigation. Answered from the capability cache that was just probed on this very
+        // driver, so it costs no extra GL work.
+        void ReportThreeChannelColorAttachments(ReportBuilder& builder, const MG_External::GLESCapabilities& caps,
+                                                const MG_Backend::FormatCapabilityCache& cache) {
+            // GL_RGB8 is the control: it is ES-core renderable, and it is exactly why BSL loads on
+            // the same driver where Complementary does not. The rest are one representative of
+            // each widening class - signed-normalized, half float, 32-bit float, sRGB, integer -
+            // so the row says which CLASS of shaderpack target a device cannot serve rather than
+            // just "three-channel formats".
+            constexpr TextureInternalFormat kProbedFormats[] = {
+                TextureInternalFormat::RGB8,   TextureInternalFormat::RGB8Snorm, TextureInternalFormat::RGB16F,
+                TextureInternalFormat::RGB32F, TextureInternalFormat::SRGB8,     TextureInternalFormat::RGB8UI};
+            const SizeT targetIndex = MG_Backend::GetFormatCapabilityTargetIndex(TextureTarget::Texture2D);
+            const Flags<PixelFormatNormalizeOptionBit> renderTargetOptions =
+                MG_Backend::DirectGLES::TextureImpl::GetRenderTargetNormalizeOptions(caps, targetIndex);
+
+            String nativeList;
+            String widenedList;
+            String unusableList;
+            // GL_RGB8 is colour-renderable in ES 3.0 CORE. A driver that answers no to it is
+            // broken (or the probe itself is), and that is the ONLY three-channel verdict that
+            // deserves a FAIL on its own - see the verdict block below.
+            Bool controlFormatBroken = false;
+            const auto append = [](String& list, const String& entry) {
+                if (!list.empty()) list += ", ";
+                list += entry;
+            };
+
+            for (const TextureInternalFormat probedFormat : kProbedFormats) {
+                const SizeT formatIndex = static_cast<SizeT>(probedFormat);
+                const String name = MG_Util::ConvertTextureInternalFormatToString(probedFormat);
+                if (MG_Backend::HasFormatCapability(cache.FullCaps[targetIndex][formatIndex],
+                                                    MG_Backend::FormatCapability::FramebufferRenderable)) {
+                    append(nativeList, name);
+                    continue;
+                }
+                if (probedFormat == TextureInternalFormat::RGB8) {
+                    controlFormatBroken = true;
+                }
+                if (MG_Backend::HasFormatCapability(cache.CaveatCaps[targetIndex][formatIndex],
+                                                    MG_Backend::FormatCapability::FramebufferRenderable)) {
+                    GLenum widenedInternalFormat = GL_UNKNOWN_MGL;
+                    MG_Util::TextureFormatProcessor::NormalizePixelFormat(
+                        MG_Util::ConvertTextureInternalFormatToGLEnum(probedFormat), renderTargetOptions,
+                        &widenedInternalFormat, nullptr, nullptr);
+                    append(widenedList, name + " -> " + MG_Util::ConvertGLEnumToString(widenedInternalFormat));
+                    continue;
+                }
+                append(unusableList, name);
+            }
+
+            String detail;
+            if (!nativeList.empty()) detail += "renderable natively: " + nativeList;
+            if (!widenedList.empty()) {
+                if (!detail.empty()) detail += "; ";
+                detail += "widened to stay renderable: " + widenedList;
+            }
+            if (!unusableList.empty()) {
+                if (!detail.empty()) detail += "; ";
+                detail += "NOT renderable and not substitutable: " + unusableList;
+            }
+
+            // The verdict deliberately does NOT track "every probed format came out usable".
+            //
+            // GL_RGB32F widens to GL_RGBA32F, and GL_RGBA32F is colour-renderable only under
+            // GL_EXT_color_buffer_float. A perfectly healthy half-float-only driver (the common
+            // mobile shape: EXT_color_buffer_half_float and nothing more) therefore reports
+            // GL_RGB32F as unusable while every format a shaderpack actually renders into works.
+            // FAILing that device would make the POST's hardest verdict fire on a configuration
+            // MobileGL runs fine on, which is exactly how a report stops being read.
+            //
+            // So FAIL is reserved for the two answers that really are broken:
+            //   * the ES-core control (GL_RGB8) is not renderable - the probe or the driver is
+            //     wrong about something much more basic than three-channel widening; and
+            //   * a widenable format has no usable fallback ON A DRIVER THAT ADVERTISES
+            //     GL_EXT_color_buffer_float - the extension promises the widened float targets
+            //     are renderable, so a gap here is a real, unexplained refusal.
+            // Everything else is a WARN carrying the exact per-format status, which is what the
+            // row is for. The "no float render targets at all" case is already a FAIL of its own
+            // on the GL_EXT_color_buffer_float row above; repeating it here would only double-count.
+            if (controlFormatBroken) {
+                builder.Fail("Three-channel colour attachments",
+                             detail + " - GL_RGB8 is colour-renderable in OpenGL ES 3.0 core, so a driver "
+                                      "that refuses it cannot render to ANY three-channel attachment and the "
+                                      "capability probe itself is suspect");
+            } else if (!unusableList.empty() && caps.SupportsColorBufferFloat) {
+                builder.Fail("Three-channel colour attachments",
+                             detail + " - GL_EXT_color_buffer_float is supported, so the widened "
+                                      "four-channel float targets are required to be renderable; a framebuffer "
+                                      "using one of the formats above still reports GL_FRAMEBUFFER_UNSUPPORTED, "
+                                      "which Iris turns into a hard load failure");
+            } else if (!unusableList.empty()) {
+                builder.Warn("Three-channel colour attachments",
+                             detail + " - without GL_EXT_color_buffer_float the 32-bit float widening has no "
+                                      "renderable target left, so a shaderpack asking for one of the formats "
+                                      "above gets GL_FRAMEBUFFER_UNSUPPORTED; the half-float and fixed-point "
+                                      "ones above still work");
+            } else if (!widenedList.empty()) {
+                builder.Warn("Three-channel colour attachments",
+                             detail + " - the substitution costs the extra alpha channel's memory and is "
+                                      "hidden from the application by an ALPHA->ONE swizzle");
+            } else {
+                builder.Pass("Three-channel colour attachments", detail);
+            }
+        }
+
         // Everything the "MobileGL reported ..." rows need from the GLES device probe.
         struct GlesProbeSummary {
             Bool capsValid = false;
@@ -913,6 +1058,7 @@ namespace MobileGL::MG_Util::SelfTest {
             builder.report.formatCapabilities.emplace();
             MG_Backend::DirectGLES::PopulateFormatCapabilities(
                 glesFuncs, caps, builder.report.formatCapabilities.value());
+            ReportThreeChannelColorAttachments(builder, caps, builder.report.formatCapabilities.value());
         } while (false);
     }
 

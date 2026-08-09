@@ -1869,6 +1869,154 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
         }
 
+        // Components per texel the frontend format's client data carries. Only the three-channel
+        // formats that can be widened to a four-channel render target need an answer (see
+        // PrepareChannelWidenedUpload); everything else keeps its own layout and reports 0.
+        Uint GetWidenableClientComponentCount(TextureInternalFormat format) {
+            switch (format) {
+            case TextureInternalFormat::RGB8Snorm:
+            case TextureInternalFormat::RGB16Snorm:
+            case TextureInternalFormat::RGB16:
+            case TextureInternalFormat::RGB10: // stored as RGB16 (UNorm16 shadow)
+            case TextureInternalFormat::RGB12: // stored as RGB16 (UNorm16 shadow)
+            case TextureInternalFormat::RGB16F:
+            case TextureInternalFormat::RGB32F:
+            case TextureInternalFormat::SRGB8:
+            case TextureInternalFormat::RGB8I:
+            case TextureInternalFormat::RGB8UI:
+            case TextureInternalFormat::RGB16I:
+            case TextureInternalFormat::RGB16UI:
+            case TextureInternalFormat::RGB32I:
+            case TextureInternalFormat::RGB32UI:
+                return 3;
+            default:
+                return 0;
+            }
+        }
+
+        // True when the widened format's client data is integer rather than normalized. The two
+        // classes share every narrow component type - GL_RGB8I and GL_RGB8_SNORM are both uploaded
+        // as GL_BYTE - but their "1.0" differs: an integer channel's one is the integer 1, a
+        // normalized channel's is the saturated field. The type alone cannot tell them apart, so
+        // the source format has to.
+        Bool IsIntegerWidenableFormat(TextureInternalFormat format) {
+            switch (format) {
+            case TextureInternalFormat::RGB8I:
+            case TextureInternalFormat::RGB8UI:
+            case TextureInternalFormat::RGB16I:
+            case TextureInternalFormat::RGB16UI:
+            case TextureInternalFormat::RGB32I:
+            case TextureInternalFormat::RGB32UI:
+                return true;
+            default:
+                return false;
+            }
+        }
+
+        // The bit pattern of 1.0 in an upload component type: what a format without alpha reads
+        // back as, and therefore what the synthetic fourth channel of a widened render target has
+        // to hold. Integer components carry the integer one, not a saturated field - and since
+        // GL_BYTE/GL_SHORT/GL_UNSIGNED_BYTE/GL_UNSIGNED_SHORT serve both classes, `integerData`
+        // is what decides, not the type.
+        static Bool GetUploadComponentOneBits(GLenum uploadType, Bool integerData, Uint8* outOneBits,
+                                              SizeT* outComponentSize) {
+            switch (uploadType) {
+            case GL_BYTE: {
+                const Int8 one = integerData ? Int8(1) : Int8(0x7F);
+                Memcpy(outOneBits, &one, sizeof(one));
+                *outComponentSize = sizeof(one);
+                return true;
+            }
+            case GL_UNSIGNED_BYTE: {
+                const Uint8 one = integerData ? Uint8(1) : Uint8(0xFF);
+                Memcpy(outOneBits, &one, sizeof(one));
+                *outComponentSize = sizeof(one);
+                return true;
+            }
+            case GL_SHORT: {
+                const Int16 one = integerData ? Int16(1) : Int16(0x7FFF);
+                Memcpy(outOneBits, &one, sizeof(one));
+                *outComponentSize = sizeof(one);
+                return true;
+            }
+            case GL_UNSIGNED_SHORT: {
+                const Uint16 one = integerData ? Uint16(1) : Uint16(0xFFFF);
+                Memcpy(outOneBits, &one, sizeof(one));
+                *outComponentSize = sizeof(one);
+                return true;
+            }
+            case GL_HALF_FLOAT: {
+                const Uint16 one = 0x3C00; // half 1.0
+                Memcpy(outOneBits, &one, sizeof(one));
+                *outComponentSize = sizeof(one);
+                return true;
+            }
+            case GL_FLOAT: {
+                const Float one = 1.0f;
+                Memcpy(outOneBits, &one, sizeof(one));
+                *outComponentSize = sizeof(one);
+                return true;
+            }
+            case GL_INT: {
+                const Int32 one = 1;
+                Memcpy(outOneBits, &one, sizeof(one));
+                *outComponentSize = sizeof(one);
+                return true;
+            }
+            case GL_UNSIGNED_INT: {
+                const Uint32 one = 1;
+                Memcpy(outOneBits, &one, sizeof(one));
+                *outComponentSize = sizeof(one);
+                return true;
+            }
+            default:
+                return false;
+            }
+        }
+
+        // A three-channel format widened to four to keep a colour attachment renderable (see
+        // NormalizePixelFormat) is described to the driver as a four-component transfer, so the
+        // three-component client data has to be repacked with an alpha of 1.0 - otherwise the
+        // driver walks three texels' worth of data per four-texel row and the image shears.
+        // `componentCount` is the SOURCE component count and `byteSize` the source's size, so this
+        // runs after any type conversion (which keeps the component count) has already happened.
+        const void* PrepareChannelWidenedUpload(Uint componentCount, const IntVec3& texelSize,
+                                                const void* data, SizeT byteSize, GLenum uploadType,
+                                                Vector<Uint8>& widenedData, Bool integerData) {
+            Uint8 oneBits[8] = {};
+            SizeT componentSize = 0;
+            if (componentCount != 3 || data == nullptr || byteSize == 0 ||
+                !GetUploadComponentOneBits(uploadType, integerData, oneBits, &componentSize)) {
+                return data;
+            }
+
+            const SizeT srcTexelBytes = componentSize * componentCount;
+            // Sized from the level, never from the source: the driver reads a full
+            // width*height*depth*4 components for the transfer it was handed, so a source that
+            // somehow holds fewer texels must still leave a full destination behind (its tail
+            // reads as transparent black with the format's implied opaque alpha) rather than a
+            // short buffer the driver would run off the end of.
+            const SizeT texelCount = static_cast<SizeT>(std::max(texelSize.x(), 0)) *
+                                     static_cast<SizeT>(std::max(texelSize.y(), 0)) *
+                                     static_cast<SizeT>(std::max(texelSize.z(), 1));
+            if (texelCount == 0) {
+                return data;
+            }
+            const SizeT copyTexelCount = std::min(texelCount, byteSize / srcTexelBytes);
+
+            widenedData.assign(texelCount * componentSize * 4, 0);
+            const auto* src = static_cast<const Uint8*>(data);
+            Uint8* dst = widenedData.data();
+            for (SizeT i = 0; i < texelCount; ++i, dst += componentSize * 4) {
+                if (i < copyTexelCount) {
+                    Memcpy(dst, src, srcTexelBytes);
+                    src += srcTexelBytes;
+                }
+                Memcpy(dst + srcTexelBytes, oneBits, componentSize);
+            }
+            return widenedData.data();
+        }
+
         static const void* PrepareNormFloatFallbackUpload(TextureInternalFormat format,
                                                           const IntVec3& texelSize,
                                                           const void* data,
@@ -1912,6 +2060,39 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 }
             }
             return convertedData.data();
+        }
+
+        // The two shadow -> upload conversions a fallback storage format can need, in order:
+        // the component type first (SNORM/UNORM shadows into the float the fallback stores), then
+        // the component count (three-channel client data into a four-channel widened render
+        // target). They compose: GL_RGB8_SNORM on a driver with no renderable three-channel
+        // format becomes GL_RGBA16F, so its Int8x3 shadow is converted to Float x3 and then
+        // repacked as Float x4 with alpha 1.0.
+        //
+        // Both scratch buffers belong to the caller so they outlive the returned pointer; the
+        // return value is `data` itself whenever neither conversion applies, which is what the
+        // sub-rect upload fast path tests for.
+        static const void* PrepareFallbackUpload(TextureInternalFormat format, TextureTarget target,
+                                                 const IntVec3& texelSize, const void* data, SizeT byteSize,
+                                                 GLenum uploadType, Vector<Float>& convertedData,
+                                                 Vector<Uint8>& widenedData) {
+            const void* uploadData =
+                PrepareNormFloatFallbackUpload(format, texelSize, data, byteSize, uploadType, convertedData);
+            // The component-count switch first: it rules out every format that cannot be widened
+            // (which is nearly all of them, including GL_RGBA8) without touching the capability
+            // cache, so an ordinary atlas upload does not pay for a per-level cache lookup.
+            const Uint componentCount = GetWidenableClientComponentCount(format);
+            if (componentCount == 0 || !TextureImpl::BackendTextureFormatAddsAlpha(format, target)) {
+                return uploadData;
+            }
+            // The type conversion above rewrites the level into `convertedData` at four bytes per
+            // component while keeping the component count, so the widening's source size is that
+            // buffer's, not the shadow's.
+            const SizeT uploadByteSize = (!convertedData.empty() && uploadData == convertedData.data())
+                                             ? convertedData.size() * sizeof(Float)
+                                             : byteSize;
+            return PrepareChannelWidenedUpload(componentCount, texelSize, uploadData, uploadByteSize, uploadType,
+                                               widenedData, IsIntegerWidenableFormat(format));
         }
 
         // RGB565/RGB5_A1 shadow data is stored as 8-bit unorm; uploading it as GL_UNSIGNED_BYTE
@@ -2121,9 +2302,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                               ? textureMipmapObject->MapMipmapData(uploadTarget, level)
                                               : nullptr;
                             Vector<Float> convertedUploadData;
-                            const void* uploadData = PrepareNormFloatFallbackUpload(
-                                textureMipmapObject->GetFormat(), levelTexelSize, pData, levelByteSize, glType,
-                                convertedUploadData);
+                            Vector<Uint8> widenedUploadData;
+                            const void* uploadData = PrepareFallbackUpload(
+                                textureMipmapObject->GetFormat(), targetInternal, levelTexelSize, pData,
+                                levelByteSize, glType, convertedUploadData, widenedUploadData);
                             Vector<Uint8> packedUploadData;
                             uploadData = PreparePackedNormUpload(textureMipmapObject->GetFormat(), levelTexelSize,
                                                                  uploadData, levelByteSize, &glType, packedUploadData);
@@ -2253,9 +2435,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                     auto glUploadTarget = ConvertTextureUploadTargetToBackendGLEnum(uploadTarget);
                                     auto* pData = textureMipmapObject->MapMipmapData(uploadTarget, level);
                                     Vector<Float> convertedUploadData;
-                                    const void* uploadData = PrepareNormFloatFallbackUpload(
-                                        textureMipmapObject->GetFormat(), levelTexelSize, pData, levelByteSize, glType,
-                                        convertedUploadData);
+                                    Vector<Uint8> widenedUploadData;
+                                    const void* uploadData = PrepareFallbackUpload(
+                                        textureMipmapObject->GetFormat(), targetInternal, levelTexelSize, pData,
+                                        levelByteSize, glType, convertedUploadData, widenedUploadData);
                                     Vector<Uint8> packedUploadData;
                                     uploadData =
                                         PreparePackedNormUpload(textureMipmapObject->GetFormat(), levelTexelSize,
@@ -2312,9 +2495,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                                   ? textureMipmapObject->MapMipmapData(uploadTarget, level)
                                                   : nullptr;
                                 Vector<Float> convertedUploadData;
-                                const void* uploadData = PrepareNormFloatFallbackUpload(
-                                    textureMipmapObject->GetFormat(), levelTexelSize, pData, levelByteSize, glType,
-                                    convertedUploadData);
+                                Vector<Uint8> widenedUploadData;
+                                const void* uploadData = PrepareFallbackUpload(
+                                    textureMipmapObject->GetFormat(), targetInternal, levelTexelSize, pData,
+                                    levelByteSize, glType, convertedUploadData, widenedUploadData);
                                 Vector<Uint8> packedUploadData;
                                 uploadData =
                                     PreparePackedNormUpload(textureMipmapObject->GetFormat(), levelTexelSize,
@@ -2422,9 +2606,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
                             auto texelSize = textureMipmapObject->GetMipmapTexelSize(uploadTarget, level);
                             const void* mipData = textureMipmapObject->MapMipmapData(uploadTarget, level);
                             Vector<Float> convertedUploadData;
-                            const void* uploadData = PrepareNormFloatFallbackUpload(
-                                textureMipmapObject->GetFormat(), texelSize, mipData, byteSize, glType,
-                                convertedUploadData);
+                            Vector<Uint8> widenedUploadData;
+                            const void* uploadData = PrepareFallbackUpload(
+                                textureMipmapObject->GetFormat(), targetInternal, texelSize, mipData, byteSize,
+                                glType, convertedUploadData, widenedUploadData);
                             Vector<Uint8> packedUploadData;
                             uploadData = PreparePackedNormUpload(textureMipmapObject->GetFormat(), texelSize,
                                                                  uploadData, byteSize, &glType, packedUploadData);
@@ -2827,7 +3012,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 MGLOG_D("%s(%s:%d) ES error %s", func, file, line, MG_Util::ConvertGLEnumToString(err).c_str());
             });
 
-            // A three-channel format widened to four for a multisample target (see
+            // A three-channel format widened to four to keep the image colour-renderable (see
             // NormalizePixelFormat) gains an alpha channel the frontend format does not have, and
             // whatever the draw that filled it wrote there is not what GL would report: a format
             // without alpha reads back as 1.0. Answer the ALPHA swizzle source with ONE so the
@@ -3139,6 +3324,113 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return false;
         }
 
+        // The colour attachment glReadPixels/glGetTexImage would read from, or nullptr when the
+        // read buffer names no colour attachment at all.
+        static const MG_State::GLState::FramebufferAttachmentObject* GetReadColorAttachment() {
+            const auto& readFBO =
+                MG_State::pGLContext->GetFramebufferBindingSlot(FramebufferTarget::Read).GetBoundObject();
+            if (!readFBO) {
+                return nullptr;
+            }
+            const auto readBuffer = readFBO->GetReadBuffer();
+            if (readBuffer < FramebufferAttachmentType::Color0 || readBuffer > FramebufferAttachmentType::Color31) {
+                return nullptr;
+            }
+            return &readFBO->GetAttachment(readBuffer);
+        }
+
+        Bool IsAlphaWidenedColorAttachment(
+            const MG_State::GLState::FramebufferAttachmentObject& attachmentObject) {
+            if (attachmentObject.IsTexture()) {
+                const auto& textureObject = attachmentObject.GetTexture();
+                return textureObject && TextureImpl::BackendTextureFormatAddsAlpha(textureObject->GetFormat(),
+                                                                                   textureObject->GetTarget());
+            }
+            if (attachmentObject.IsRenderbuffer()) {
+                const auto& renderbufferObject = attachmentObject.GetRenderbuffer();
+                return renderbufferObject &&
+                       TextureImpl::BackendRenderbufferFormatAddsAlpha(renderbufferObject->GetInternalFormat());
+            }
+            return false;
+        }
+
+        Uint32 g_alphaWidenedDrawBufferMask = 0;
+        Uint32 g_integerColorDrawBufferMask = 0;
+
+        static Bool IsIntegerColorFormat(TextureInternalFormat format) {
+            switch (format) {
+            case TextureInternalFormat::R8I:
+            case TextureInternalFormat::R8UI:
+            case TextureInternalFormat::R16I:
+            case TextureInternalFormat::R16UI:
+            case TextureInternalFormat::R32I:
+            case TextureInternalFormat::R32UI:
+            case TextureInternalFormat::RG8I:
+            case TextureInternalFormat::RG8UI:
+            case TextureInternalFormat::RG16I:
+            case TextureInternalFormat::RG16UI:
+            case TextureInternalFormat::RG32I:
+            case TextureInternalFormat::RG32UI:
+            case TextureInternalFormat::RGB8I:
+            case TextureInternalFormat::RGB8UI:
+            case TextureInternalFormat::RGB16I:
+            case TextureInternalFormat::RGB16UI:
+            case TextureInternalFormat::RGB32I:
+            case TextureInternalFormat::RGB32UI:
+            case TextureInternalFormat::RGBA8I:
+            case TextureInternalFormat::RGBA8UI:
+            case TextureInternalFormat::RGBA16I:
+            case TextureInternalFormat::RGBA16UI:
+            case TextureInternalFormat::RGBA32I:
+            case TextureInternalFormat::RGBA32UI:
+            case TextureInternalFormat::RGB10A2UI:
+                return true;
+            default:
+                return false;
+            }
+        }
+
+        static Bool IsIntegerColorAttachment(
+            const MG_State::GLState::FramebufferAttachmentObject& attachmentObject) {
+            if (attachmentObject.IsTexture()) {
+                const auto& textureObject = attachmentObject.GetTexture();
+                return textureObject && IsIntegerColorFormat(textureObject->GetFormat());
+            }
+            if (attachmentObject.IsRenderbuffer()) {
+                const auto& renderbufferObject = attachmentObject.GetRenderbuffer();
+                return renderbufferObject && IsIntegerColorFormat(renderbufferObject->GetInternalFormat());
+            }
+            return false;
+        }
+
+        Uint32 ComputeAlphaWidenedDrawBufferMask(const MG_State::GLState::FramebufferObject& fbo) {
+            using FBO = MG_State::GLState::FramebufferObject;
+            const auto& drawBuffers = fbo.GetDrawBuffers();
+            Uint32 mask = 0;
+            for (Uint i = 0; i < FBO::MAX_DRAW_BUFFERS && i < 32; ++i) {
+                const auto frontendBuf = drawBuffers[i];
+                if (frontendBuf < FramebufferAttachmentType::Color0 ||
+                    frontendBuf > FramebufferAttachmentType::Color31) {
+                    continue;
+                }
+                if (IsAlphaWidenedColorAttachment(fbo.GetAttachment(frontendBuf))) {
+                    mask |= (1u << i);
+                }
+            }
+            return mask;
+        }
+
+        // The read attachment's storage carries an alpha channel its frontend format does not
+        // (the three-channel colour-renderable widening). GL answers such a read with 1.0, but
+        // the storage holds whatever the draw wrote there, so the readback has to overwrite it.
+        Bool IsAlphaWidenedFallbackReadAttachment() {
+            const auto* attachmentObject = GetReadColorAttachment();
+            if (attachmentObject == nullptr) {
+                return false;
+            }
+            return IsAlphaWidenedColorAttachment(*attachmentObject);
+        }
+
         Bool IsFixedPointFallbackReadAttachment() {
             const auto& readFBO =
                 MG_State::pGLContext->GetFramebufferBindingSlot(FramebufferTarget::Read).GetBoundObject();
@@ -3344,6 +3636,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
             if (asTarget == FramebufferTarget::Draw) {
                 Uint32 snormClampOutputMask = 0;
                 Uint32 unormClampOutputMask = 0;
+                Uint32 alphaWidenedMask = 0;
+                Uint32 integerColorMask = 0;
                 for (Uint i = 0; i < FramebufferObject::MAX_DRAW_BUFFERS && i < 32; ++i) {
                     const auto frontendBuf = stateDrawBuffers[i];
                     if (frontendBuf < FramebufferAttachmentType::Color0 ||
@@ -3356,9 +3650,21 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     } else if (IsUnormFallbackAttachment(attachmentObject)) {
                         unormClampOutputMask |= (1u << i);
                     }
+                    // Independent of the two above: a widened attachment can be SNORM
+                    // (GL_RGB8_SNORM -> GL_RGBA16F, which also clamps) or not (GL_SRGB8 ->
+                    // GL_SRGB8_ALPHA8, which does not), so it gets its own bit rather than an
+                    // `else if` branch of theirs.
+                    if (IsAlphaWidenedColorAttachment(attachmentObject)) {
+                        alphaWidenedMask |= (1u << i);
+                    }
+                    if (IsIntegerColorAttachment(attachmentObject)) {
+                        integerColorMask |= (1u << i);
+                    }
                 }
                 PrgramImpl::g_snormFallbackClampOutputMask = snormClampOutputMask;
                 PrgramImpl::g_unormFallbackClampOutputMask = unormClampOutputMask;
+                g_alphaWidenedDrawBufferMask = alphaWidenedMask;
+                g_integerColorDrawBufferMask = integerColorMask;
             }
 
             // 2. Remap read buffer. glReadBuffer writes the READ-bound FBO's state, so

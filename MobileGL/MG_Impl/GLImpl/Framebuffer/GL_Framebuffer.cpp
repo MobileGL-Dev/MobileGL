@@ -106,9 +106,11 @@ namespace MobileGL::MG_Impl::GLImpl {
         // `capabilityTargetIndex` is the row of the cache the attachment actually lives in;
         // kFormatCapabilityTargetCount asks about the format in general. Asking per target matters
         // because a capability recorded for one of them says nothing about the others: DirectGLES
-        // widens three-channel formats to four channels to keep them renderable as *multisample*
-        // storage, and a format that survives only through that substitution is still texture-only
-        // on every ordinary target.
+        // decides each target's substitution against that target's own probe, and a buffer texture
+        // never gets one at all. This is also where the three-channel widening becomes visible to
+        // the application - a GL_RGB8_SNORM colour attachment on a driver with no renderable
+        // three-channel format answers COMPLETE because the backend stores it as GL_RGBA16F and
+        // recorded FramebufferRenderable in CaveatCaps.
         Bool IsColorInternalFormatRenderable(TextureInternalFormat format, SizeT capabilityTargetIndex) {
             const SizeT formatIndex = static_cast<SizeT>(format);
             if (MG_Backend::pActiveBackendObject && formatIndex < MG_Backend::kFormatCapabilityFormatCount) {

@@ -58,11 +58,98 @@ namespace MobileGL::MG_Util::TextureFormatProcessor {
         case GL_R8_SNORM:
             applicableOptions |= options & PixelFormatNormalizeOptionBit::NoSnorm8;
             break;
+        // The rest of the three-channel formats no real ES driver renders to. They have no
+        // other fallback: none of the driver/forced option bits names them, so before the
+        // render-target widening existed for ordinary targets an FBO attachment in one of
+        // them could only ever be answered GL_FRAMEBUFFER_UNSUPPORTED (Complementary
+        // Reimagined's colortex2 = RGB16F).
+        //
+        // GL_RGB9_E5 is deliberately absent: its four-channel sibling would have to be a
+        // half float, which means unpacking the shared exponent on every transfer, and
+        // nothing renders to a shared-exponent format on desktop GL either.
+        case GL_RGB16F:
+        case GL_RGB32F:
+        case GL_SRGB8:
+        case GL_RGB8I:
+        case GL_RGB8UI:
+        case GL_RGB16I:
+        case GL_RGB16UI:
+        case GL_RGB32I:
+        case GL_RGB32UI:
+            applicableOptions |= options & PixelFormatNormalizeOptionBit::NoThreeChannelRenderTarget;
+            break;
         default:
             break;
         }
         return applicableOptions;
     }
+
+    namespace {
+        // The four-channel sibling a three-channel format is widened to when the target has to
+        // stay colour-renderable, together with the transfer pair that describes client data for
+        // it. Kept in one place because all three of NormalizePixelFormat's switches have to agree:
+        // reporting the widened storage but the original three-channel base format emitted
+        // inconsistent triples such as (GL_RGBA16F, GL_RGB, GL_BYTE), which is
+        // GL_INVALID_OPERATION for glTexImage2D on ES. That only ever went unnoticed because the
+        // bit was reachable for multisample storage alone, and glTexStorage*Multisample takes no
+        // transfer pair at all.
+        struct ThreeChannelWidening {
+            GLenum InternalFormat = GL_UNKNOWN_MGL;
+            GLenum Format = GL_UNKNOWN_MGL;
+            GLenum Type = GL_UNKNOWN_MGL;
+
+            explicit operator Bool() const { return InternalFormat != GL_UNKNOWN_MGL; }
+        };
+
+        ThreeChannelWidening GetThreeChannelRenderTargetWidening(GLenum internalFormat,
+                                                                 Flags<PixelFormatNormalizeOptionBit> options) {
+            if (!(options & PixelFormatNormalizeOptionBit::NoThreeChannelRenderTarget)) {
+                return {};
+            }
+            switch (internalFormat) {
+            // Signed-normalized: matches what the always-on NoRGBA8Snorm fallback already does to
+            // GL_RGBA8_SNORM, so the two SNORM8 formats land on the same storage.
+            case GL_RGB8_SNORM:
+                return {GL_RGBA16F, GL_RGBA, GL_FLOAT};
+            case GL_RGB16_SNORM:
+                // A half float loses the low bits of a 16-bit SNORM channel, so keep the
+                // signed-normalized encoding whenever the driver can render to it.
+                return (options & PixelFormatNormalizeOptionBit::NoSnorm16RenderTarget)
+                           ? ThreeChannelWidening{GL_RGBA16F, GL_RGBA, GL_FLOAT}
+                           : ThreeChannelWidening{GL_RGBA16_SNORM, GL_RGBA, GL_SHORT};
+            // Unsigned-normalized 16-bit (and the legacy 10/12-bit formats stored as RGB16):
+            // GL_RGB32F is a legal ES texture format but is not colour-renderable either.
+            case GL_RGB16:
+            case GL_RGB10:
+            case GL_RGB12:
+                return {GL_RGBA32F, GL_RGBA, GL_FLOAT};
+            // Floating point.
+            case GL_RGB16F:
+                return {GL_RGBA16F, GL_RGBA, GL_HALF_FLOAT};
+            case GL_RGB32F:
+                return {GL_RGBA32F, GL_RGBA, GL_FLOAT};
+            // sRGB: GL_SRGB8_ALPHA8 keeps the sRGB encoding of the colour channels and stores
+            // the added alpha linearly, which is exactly the three-channel format's semantics.
+            case GL_SRGB8:
+                return {GL_SRGB8_ALPHA8, GL_RGBA, GL_UNSIGNED_BYTE};
+            // Integer.
+            case GL_RGB8I:
+                return {GL_RGBA8I, GL_RGBA_INTEGER, GL_BYTE};
+            case GL_RGB8UI:
+                return {GL_RGBA8UI, GL_RGBA_INTEGER, GL_UNSIGNED_BYTE};
+            case GL_RGB16I:
+                return {GL_RGBA16I, GL_RGBA_INTEGER, GL_SHORT};
+            case GL_RGB16UI:
+                return {GL_RGBA16UI, GL_RGBA_INTEGER, GL_UNSIGNED_SHORT};
+            case GL_RGB32I:
+                return {GL_RGBA32I, GL_RGBA_INTEGER, GL_INT};
+            case GL_RGB32UI:
+                return {GL_RGBA32UI, GL_RGBA_INTEGER, GL_UNSIGNED_INT};
+            default:
+                return {};
+            }
+        }
+    } // namespace
 
     void NormalizePixelFormat(GLenum internalFormat, Flags<PixelFormatNormalizeOptionBit> options,
                               GLenum* outInternalFormat, GLenum* outFormat, GLenum* outType) {
@@ -95,13 +182,6 @@ namespace MobileGL::MG_Util::TextureFormatProcessor {
                 *outInternalFormat = internalFormat;
                 break;
             case GL_RGB16:
-                if (options & PixelFormatNormalizeOptionBit::NoThreeChannelRenderTarget) {
-                    // GL_RGB32F is a legal ES texture format but is not colour-renderable, so
-                    // glTexStorage2DMultisample rejects it and the attachment ends up with no
-                    // storage at all.
-                    *outInternalFormat = GL_RGBA32F;
-                    break;
-                }
                 if ((options & PixelFormatNormalizeOptionBit::NoNorm16) ||
                     (options & PixelFormatNormalizeOptionBit::NoRgb16)) {
                     *outInternalFormat = GL_RGB32F;
@@ -132,14 +212,6 @@ namespace MobileGL::MG_Util::TextureFormatProcessor {
                 *outInternalFormat = internalFormat;
                 break;
             case GL_RGB16_SNORM:
-                if (options & PixelFormatNormalizeOptionBit::NoThreeChannelRenderTarget) {
-                    // A half float loses the low bits of a 16-bit SNORM channel, so keep the
-                    // signed-normalized encoding whenever the driver can render to it.
-                    *outInternalFormat = (options & PixelFormatNormalizeOptionBit::NoSnorm16RenderTarget)
-                                             ? GL_RGBA16F
-                                             : GL_RGBA16_SNORM;
-                    break;
-                }
                 if ((options & PixelFormatNormalizeOptionBit::NoNorm16) ||
                     (options & PixelFormatNormalizeOptionBit::NoRGB16Snorm) ||
                     (options & PixelFormatNormalizeOptionBit::NoSnorm16)) {
@@ -173,10 +245,6 @@ namespace MobileGL::MG_Util::TextureFormatProcessor {
                 *outInternalFormat = internalFormat;
                 break;
             case GL_RGB8_SNORM:
-                if (options & PixelFormatNormalizeOptionBit::NoThreeChannelRenderTarget) {
-                    *outInternalFormat = GL_RGBA16F;
-                    break;
-                }
                 if (options & PixelFormatNormalizeOptionBit::NoSnorm8) {
                     *outInternalFormat = GL_RGB16F;
                     break;
@@ -614,6 +682,19 @@ namespace MobileGL::MG_Util::TextureFormatProcessor {
                 *outType = GL_UNSIGNED_BYTE;
                 break;
             }
+        }
+
+        // Applied last, over whatever the three switches above chose: widening a three-channel
+        // format to keep a colour attachment renderable outranks every other fallback, because
+        // the others all pick a three-channel storage the driver still refuses to render to
+        // (GL_RGB8_SNORM -> GL_RGB16F under NoSnorm8, GL_RGB16 -> GL_RGB32F under NoNorm16).
+        // All three outputs move together: reporting the widened storage while leaving the
+        // three-channel base format and its component type in place produced triples like
+        // (GL_RGBA16F, GL_RGB, GL_BYTE), which ES rejects for glTexImage2D outright.
+        if (const ThreeChannelWidening widening = GetThreeChannelRenderTargetWidening(internalFormat, options)) {
+            if (outInternalFormat) *outInternalFormat = widening.InternalFormat;
+            if (outFormat) *outFormat = widening.Format;
+            if (outType) *outType = widening.Type;
         }
     }
 } // namespace MobileGL::MG_Util::TextureFormatProcessor

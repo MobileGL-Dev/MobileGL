@@ -1401,7 +1401,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 }
 
                 if (currentFBO == MG_Impl::GLImpl::FramebufferImpl::pDefaultFramebufferInfo->defaultFBO) {
-                    // Default FBO, nothing to sync
+                    // Default FBO, nothing to sync - except the widened-attachment mask, which is
+                    // only ever WRITTEN by SyncToBackend and would otherwise still describe the
+                    // user FBO that was draw-bound before. The window surface is a real RGBA
+                    // buffer, so nothing here is ever widened.
+                    if (target == FramebufferTarget::Draw) {
+                        g_alphaWidenedDrawBufferMask = 0;
+                        g_integerColorDrawBufferMask = 0;
+                    }
                     StampSyncedFBO(target, slotVersion, objectVersion, currentPtr);
                     continue;
                 }
@@ -1459,20 +1466,35 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // direct_state_access.renderbuffers_storage. One unconditional push settles the whole
         // block rather than the one cap that happened to be noticed.
         static Bool g_forceFullRenderStateResync = true;
+        // Which draw buffers' alpha channel the colour mask last pushed to the driver had forced
+        // OFF - i.e. the value of `appliedWidenMask` in the last SyncRenderState that reached the
+        // colour-mask block. NOT derivable from the frontend parameter block: it depends on the
+        // bound DRAW framebuffer's attachment formats and on whether the caller is a draw or a
+        // clear, neither of which bumps the frontend render-state version. Without it a
+        // clear-then-draw pair on an unchanged parameter block early-outs and the draw inherits
+        // the clear's undoctored mask.
+        static Uint32 g_syncedColorMaskAlphaWidenMask = 0;
         void InvalidateSyncedRenderState() {
             g_forceFullRenderStateResync = true;
             g_hasSyncedRenderState = false;
             g_syncedBackendViewport = IntVec4(-1, -1, -1, -1);
             g_syncedBackendScissorBox = IntVec4(-1, -1, -1, -1);
         }
-        void SyncRenderState() {
+        void SyncRenderState(Bool forColorClear) {
 #ifdef TRACY_ENABLE
             ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
             Uint16 currentRenderStateVersion = MG_State::pGLContext->GetRenderStateParametersVersion();
             const Bool forceFullPush = g_forceFullRenderStateResync;
             g_forceFullRenderStateResync = false;
-            if (!forceFullPush && g_hasSyncedRenderState && currentRenderStateVersion == g_syncedRenderStateVersion) {
+            // The alpha discipline for widened colour attachments (see the header comment on
+            // SyncRenderState): a DRAW must not be able to move the stored alpha off 1.0, a CLEAR
+            // is what puts it there. So the draw path masks alpha off on every widened draw
+            // buffer and the clear path masks nothing.
+            const Uint32 appliedWidenMask = forColorClear ? 0u : FramebufferImpl::g_alphaWidenedDrawBufferMask;
+            const Bool colorMaskWidenDirty = appliedWidenMask != g_syncedColorMaskAlphaWidenMask;
+            if (!forceFullPush && !colorMaskWidenDirty && g_hasSyncedRenderState &&
+                currentRenderStateVersion == g_syncedRenderStateVersion) {
                 return;
             }
 
@@ -1778,23 +1800,42 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 }
             }
 
-            if (tailSpanDirty) { // Color mask. Uniform masks use the non-indexed glColorMask (works everywhere); divergent
-              // per-draw-buffer masks use the indexed glColorMaski when draw_buffers_indexed is
-              // available, otherwise fall back to broadcasting draw buffer 0. Mirrors the blend block.
+            if (tailSpanDirty || colorMaskWidenDirty) { // Color mask. Uniform masks use the non-indexed glColorMask
+              // (works everywhere); divergent per-draw-buffer masks use the indexed glColorMaski when
+              // draw_buffers_indexed is available, otherwise fall back to broadcasting draw buffer 0.
+              // Mirrors the blend block.
                 using FBO = MG_State::GLState::FramebufferObject;
                 const auto& targetMasks = parameters.ColorMasks;
                 const auto& syncedMasks = g_syncedRenderStateParameters.ColorMasks;
 
-                Bool anyDirty = forceFullPush;
+                // What the DRIVER is told for draw buffer i. Identical to the application's mask
+                // except on a widened attachment during a draw, where alpha is forced off; the
+                // frontend's own array is never written, so glGet(GL_COLOR_WRITEMASK) keeps
+                // answering with the application's value.
+                const auto driverMask = [&](Uint i) -> BoolVec4 {
+                    BoolVec4 m = targetMasks[i];
+                    if (i < 32 && (appliedWidenMask & (1u << i)) != 0) {
+                        m.w() = false;
+                    }
+                    return m;
+                };
+
+                Bool anyDirty = forceFullPush || colorMaskWidenDirty;
                 Bool allSame = true;
+                const BoolVec4 driverMask0 = driverMask(0);
                 for (Uint i = 0; i < FBO::MAX_DRAW_BUFFERS; ++i) {
                     if (targetMasks[i] != syncedMasks[i]) anyDirty = true;
-                    if (i > 0 && targetMasks[i] != targetMasks[0]) allSame = false;
+                    if (i > 0 && driverMask(i) != driverMask0) allSame = false;
                 }
 
                 if (anyDirty) {
                     if (allSame || !g_GLESCapabilities.SupportsIndexedColorMask) {
-                        const BoolVec4& m = targetMasks[0];
+                        // Without draw_buffers_indexed there is only one mask for the whole
+                        // framebuffer, so a widened draw buffer 0 costs every other buffer its
+                        // alpha writes. ES 3.2 makes glColorMaski core and ES 3.1 has it as
+                        // EXT/OES; the only devices that reach this line are ES 3.0-class, where
+                        // MRT with a mixed widened/native colour attachment set is already rare.
+                        const BoolVec4& m = driverMask0;
                         g_GLESFuncs.glColorMask(ToGLBoolean(m.x()), ToGLBoolean(m.y()), ToGLBoolean(m.z()),
                                                 ToGLBoolean(m.w()));
                     } else {
@@ -1802,14 +1843,18 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                                   : g_GLESFuncs.glColorMaskiEXT ? g_GLESFuncs.glColorMaskiEXT
                                                                                 : g_GLESFuncs.glColorMaskiOES;
                         for (Uint i = 0; i < FBO::MAX_DRAW_BUFFERS; ++i) {
-                            if (forceFullPush || targetMasks[i] != syncedMasks[i]) {
-                                const BoolVec4& m = targetMasks[i];
+                            // colorMaskWidenDirty forces every slot: the previous push may have
+                            // been the non-indexed glColorMask above (which set all of them), and
+                            // the per-slot diff below only knows about the application's array.
+                            if (forceFullPush || colorMaskWidenDirty || targetMasks[i] != syncedMasks[i]) {
+                                const BoolVec4 m = driverMask(i);
                                 colorMaskiFn(i, ToGLBoolean(m.x()), ToGLBoolean(m.y()), ToGLBoolean(m.z()),
                                              ToGLBoolean(m.w()));
                             }
                         }
                     }
                 }
+                g_syncedColorMaskAlphaWidenMask = appliedWidenMask;
             }
 
             if (tailSpanDirty) { // Polygon mode. GLES core has no glPolygonMode; use NV/ANGLE_polygon_mode when present.
@@ -2089,6 +2134,15 @@ namespace MobileGL::MG_Backend::DirectGLES {
         ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
         if (!framebuffer || framebuffer == MG_Impl::GLImpl::FramebufferImpl::pDefaultFramebufferInfo->defaultFBO) {
+            // Same reset as SyncCurrentFBO's default-framebuffer branch: SyncToBackend is the
+            // only writer of the widened-attachment mask, so a path that skips it has to say so
+            // explicitly. It matters here because the DSA clears and glBlitFramebuffer briefly
+            // sync a DIFFERENT framebuffer as DRAW and then restore the application's through
+            // ForceBindCurrentFBO - which lands right here when that one is the default.
+            if (target == FramebufferTarget::Draw) {
+                FramebufferImpl::g_alphaWidenedDrawBufferMask = 0;
+                FramebufferImpl::g_integerColorDrawBufferMask = 0;
+            }
             FramebufferImpl::BindFramebufferId(
                 target == FramebufferTarget::Draw ? GL_DRAW_FRAMEBUFFER : GL_READ_FRAMEBUFFER, 0);
             return;
@@ -3009,7 +3063,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
 #endif
         TextureImpl::SyncNeccessaryTextures();
         FramebufferImpl::SyncCurrentFBO();
-        RenderStateImpl::SyncRenderState();
+        // A colour clear is exactly the operation that is allowed to write a widened
+        // attachment's alpha - it is what puts the 1.0 there that every later draw is masked
+        // away from. SyncCurrentFBO ran first, so g_alphaWidenedDrawBufferMask already describes
+        // the framebuffer this clear will land on.
+        RenderStateImpl::SyncRenderState(/*forColorClear=*/(mask & GL_COLOR_BUFFER_BIT) != 0);
 
         BindCurrentFBO(FramebufferTarget::Draw);
 
@@ -3047,10 +3105,26 @@ namespace MobileGL::MG_Backend::DirectGLES {
             const FloatVec4& cc = MG_State::pGLContext->GetRenderStateParameters().ClearColor;
             const Bool outOfRange = cc.x() < 0.f || cc.x() > 1.f || cc.y() < 0.f || cc.y() > 1.f || cc.z() < 0.f ||
                                     cc.z() > 1.f || cc.w() < 0.f || cc.w() > 1.f;
+            // A widened attachment's stored alpha has to end up 1.0, and glClear applies ONE
+            // clear colour to every draw buffer - so a framebuffer that mixes a widened
+            // attachment with a native one cannot be served by doctoring glClearColor. Take the
+            // same per-draw-buffer glClearBufferfv route the out-of-range case already uses and
+            // substitute the alpha only where it belongs. Scissor and the colour write mask apply
+            // to glClearBufferfv exactly as they do to glClear, so a scissored clear stays
+            // scissored and an application that masked alpha off still gets its way (the storage
+            // then keeps the 1.0 an earlier clear left, which is the same answer).
+            //
+            // glClearBufferfv on an INTEGER colour buffer is GL_INVALID_OPERATION, so a
+            // framebuffer with one of those as a draw buffer keeps plain glClear - which ES
+            // leaves undefined for integer colour buffers anyway, and which an application that
+            // wants a defined answer must replace with glClearBufferuiv/iv (those DO substitute
+            // the widened alpha). The out-of-range trigger is left exactly as it was.
+            const Uint32 widenedDrawBuffers = FramebufferImpl::g_alphaWidenedDrawBufferMask;
+            const Bool widenedColorClear =
+                widenedDrawBuffers != 0 && FramebufferImpl::g_integerColorDrawBufferMask == 0;
             GLint clearDrawFbo = 0;
             g_GLESFuncs.glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &clearDrawFbo);
-            if (outOfRange && clearDrawFbo != 0) {
-                const GLfloat value[4] = {cc.x(), cc.y(), cc.z(), cc.w()};
+            if ((outOfRange || widenedColorClear) && clearDrawFbo != 0) {
                 GLint maxDrawBuffers = 0;
                 GLint clearedCount = 0;
                 GLint firstDb = -1;
@@ -3060,6 +3134,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     g_GLESFuncs.glGetIntegerv(GL_DRAW_BUFFER0 + static_cast<GLenum>(i), &db);
                     if (i == 0) firstDb = db;
                     if (db != GL_NONE) {
+                        const Bool widened = i < 32 && (widenedDrawBuffers & (1u << i)) != 0;
+                        const GLfloat value[4] = {cc.x(), cc.y(), cc.z(), widened ? 1.0f : cc.w()};
                         g_GLESFuncs.glClearBufferfv(GL_COLOR, i, value);
                         ++clearedCount;
                     }
@@ -5316,37 +5392,82 @@ namespace MobileGL::MG_Backend::DirectGLES {
         g_GLESFuncs.glClearBufferfi(buffer, drawbuffer, depth, stencil);
     }
 
+    namespace {
+        using FramebufferImpl::SubstituteWidenedClearAlpha;
+
+        // A colour attachment the backend widened from three channels to four has to end up
+        // holding alpha 1.0 - the value GL reports for a channel the application's format does
+        // not have - so an explicit per-buffer clear of it writes 1.0 rather than whatever the
+        // application passed (SubstituteWidenedClearAlpha, in Managers.h). Draws can never move
+        // it again: their alpha write mask is forced off, see SyncRenderState. That pairing is
+        // what makes GL_DST_ALPHA blending, glReadPixels and glBlitFramebuffer all see the right
+        // value without any of them being intercepted.
+
+        // Whether draw buffer `drawbuffer` of the framebuffer currently bound as DRAW is such an
+        // attachment. Answered from the mask SyncCurrentFBO just recomputed, so it costs nothing.
+        Bool IsWidenedBoundDrawBuffer(GLenum buffer, GLint drawbuffer) {
+            return buffer == GL_COLOR && drawbuffer >= 0 && drawbuffer < 32 &&
+                   (FramebufferImpl::g_alphaWidenedDrawBufferMask & (1u << drawbuffer)) != 0;
+        }
+
+        // The same question for an explicitly named framebuffer (the DSA clears), which is NOT
+        // the one g_alphaWidenedDrawBufferMask describes at the point these run.
+        Bool IsWidenedNamedDrawBuffer(const SharedPtr<MG_State::GLState::FramebufferObject>& framebuffer,
+                                      GLenum buffer, GLint drawbuffer) {
+            using FBO = MG_State::GLState::FramebufferObject;
+            if (buffer != GL_COLOR || !framebuffer || drawbuffer < 0 ||
+                drawbuffer >= static_cast<GLint>(FBO::MAX_DRAW_BUFFERS)) {
+                return false;
+            }
+            const auto frontendBuf = framebuffer->GetDrawBuffers()[static_cast<SizeT>(drawbuffer)];
+            if (frontendBuf < FramebufferAttachmentType::Color0 ||
+                frontendBuf > FramebufferAttachmentType::Color31) {
+                return false;
+            }
+            return FramebufferImpl::IsAlphaWidenedColorAttachment(framebuffer->GetAttachment(frontendBuf));
+        }
+    } // namespace
+
     void ClearBufferfv(GLenum buffer, GLint drawbuffer, const GLfloat* value) {
         TextureImpl::SyncNeccessaryTextures();
         FramebufferImpl::SyncCurrentFBO();
-        RenderStateImpl::SyncRenderState();
+        RenderStateImpl::SyncRenderState(/*forColorClear=*/buffer == GL_COLOR);
 
         BindCurrentFBO(FramebufferTarget::Draw);
 
-        g_GLESFuncs.glClearBufferfv(buffer, drawbuffer, value);
+        GLfloat widenedValue[4] = {};
+        g_GLESFuncs.glClearBufferfv(
+            buffer, drawbuffer,
+            SubstituteWidenedClearAlpha(value, IsWidenedBoundDrawBuffer(buffer, drawbuffer), 1.0f, widenedValue));
     }
 
     void ClearBufferiv(GLenum buffer, GLint drawbuffer, const GLint* value) {
         TextureImpl::SyncNeccessaryTextures();
         FramebufferImpl::SyncCurrentFBO();
-        RenderStateImpl::SyncRenderState();
+        RenderStateImpl::SyncRenderState(/*forColorClear=*/buffer == GL_COLOR);
 
         // SyncCurrentFBO early-outs for the default framebuffer, so without this
         // bind a user-FBO -> default-FBO switch would leave the clear landing on
         // the stale driver DRAW binding (the fi/fv/uiv siblings all bind too).
         BindCurrentFBO(FramebufferTarget::Draw);
 
-        g_GLESFuncs.glClearBufferiv(buffer, drawbuffer, value);
+        GLint widenedValue[4] = {};
+        g_GLESFuncs.glClearBufferiv(
+            buffer, drawbuffer,
+            SubstituteWidenedClearAlpha(value, IsWidenedBoundDrawBuffer(buffer, drawbuffer), GLint(1), widenedValue));
     }
 
     void ClearBufferuiv(GLenum buffer, GLint drawbuffer, const GLuint* value) {
         TextureImpl::SyncNeccessaryTextures();
         FramebufferImpl::SyncCurrentFBO();
-        RenderStateImpl::SyncRenderState();
+        RenderStateImpl::SyncRenderState(/*forColorClear=*/buffer == GL_COLOR);
 
         BindCurrentFBO(FramebufferTarget::Draw);
 
-        g_GLESFuncs.glClearBufferuiv(buffer, drawbuffer, value);
+        GLuint widenedValue[4] = {};
+        g_GLESFuncs.glClearBufferuiv(
+            buffer, drawbuffer,
+            SubstituteWidenedClearAlpha(value, IsWidenedBoundDrawBuffer(buffer, drawbuffer), GLuint(1), widenedValue));
     }
 
     void ClearNamedFramebufferfv(const SharedPtr<MG_State::GLState::FramebufferObject>& framebuffer,
@@ -5355,9 +5476,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
         DebugImpl::OpenGLScopeMarker marker(__func__);
 #endif
         TextureImpl::SyncNeccessaryTextures();
-        RenderStateImpl::SyncRenderState();
+        RenderStateImpl::SyncRenderState(/*forColorClear=*/buffer == GL_COLOR);
 
         SyncAndBindFramebufferObject(framebuffer, FramebufferTarget::Draw, true);
+        GLfloat widenedValue[4] = {};
+        value = SubstituteWidenedClearAlpha(value, IsWidenedNamedDrawBuffer(framebuffer, buffer, drawbuffer), 1.0f,
+                                            widenedValue);
         g_GLESFuncs.glClearBufferfv(buffer, drawbuffer, value);
         DebugImpl::ErrorLopper::Loop([file = __FILE__, line = __LINE__](auto err) {
             MGLOG_D("ES error (%s:%d): %s", file, line, MG_Util::ConvertGLEnumToString(err).c_str());
@@ -5389,9 +5513,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
         DebugImpl::OpenGLScopeMarker marker(__func__);
 #endif
         TextureImpl::SyncNeccessaryTextures();
-        RenderStateImpl::SyncRenderState();
+        RenderStateImpl::SyncRenderState(/*forColorClear=*/buffer == GL_COLOR);
 
         SyncAndBindFramebufferObject(framebuffer, FramebufferTarget::Draw, true);
+        GLint widenedValue[4] = {};
+        value = SubstituteWidenedClearAlpha(value, IsWidenedNamedDrawBuffer(framebuffer, buffer, drawbuffer),
+                                            GLint(1), widenedValue);
         g_GLESFuncs.glClearBufferiv(buffer, drawbuffer, value);
         DebugImpl::ErrorLopper::Loop([file = __FILE__, line = __LINE__](auto err) {
             MGLOG_D("ES error (%s:%d): %s", file, line, MG_Util::ConvertGLEnumToString(err).c_str());
@@ -5406,9 +5533,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
         DebugImpl::OpenGLScopeMarker marker(__func__);
 #endif
         TextureImpl::SyncNeccessaryTextures();
-        RenderStateImpl::SyncRenderState();
+        RenderStateImpl::SyncRenderState(/*forColorClear=*/buffer == GL_COLOR);
 
         SyncAndBindFramebufferObject(framebuffer, FramebufferTarget::Draw, true);
+        GLuint widenedValue[4] = {};
+        value = SubstituteWidenedClearAlpha(value, IsWidenedNamedDrawBuffer(framebuffer, buffer, drawbuffer),
+                                            GLuint(1), widenedValue);
         g_GLESFuncs.glClearBufferuiv(buffer, drawbuffer, value);
         DebugImpl::ErrorLopper::Loop([file = __FILE__, line = __LINE__](auto err) {
             MGLOG_D("ES error (%s:%d): %s", file, line, MG_Util::ConvertGLEnumToString(err).c_str());
@@ -5681,16 +5811,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
                format == GL_RGBA_INTEGER;
     }
 
-    // Expands a tightly-packed narrow read (1-3 channels per texel) into the 4-channel wide RGBA
-    // layout ConvertWideReadbackRow expects. Missing G/B read zero; missing A reads one, encoded in
-    // the source component type.
-    static void ExpandNarrowWideRead(Vector<Uint8>& data, SizeT pixelCount, Int srcChannels, GLenum componentType) {
-        const SizeT componentSize = GetReadbackComponentSize(componentType);
-        if (componentSize == 0 || srcChannels <= 0 || srcChannels >= 4) {
-            return;
-        }
-        Uint8 zeroBits[4] = {0, 0, 0, 0};
-        Uint8 oneBits[4] = {0, 0, 0, 0};
+    // The bit pattern of 1.0 in a wide-read component type: what GL reports for a channel the
+    // attachment's format does not have.
+    static void FillWideReadOneBits(GLenum componentType, Uint8* oneBits) {
         switch (componentType) {
         case GL_UNSIGNED_BYTE:
             oneBits[0] = 0xFF;
@@ -5727,6 +5850,35 @@ namespace MobileGL::MG_Backend::DirectGLES {
         default:
             break;
         }
+    }
+
+    // Overwrites the alpha of a 4-channel wide read with the format's implied 1.0. Used for an
+    // attachment the backend widened from three channels to keep it colour-renderable: the storage
+    // has a real alpha channel holding whatever the draw wrote, but the format the application
+    // asked for has none, and GL reads a missing channel back as one.
+    static void ForceWideReadAlphaToOne(Vector<Uint8>& data, SizeT pixelCount, GLenum componentType) {
+        const SizeT componentSize = GetReadbackComponentSize(componentType);
+        if (componentSize == 0 || data.size() < pixelCount * 4 * componentSize) {
+            return;
+        }
+        Uint8 oneBits[4] = {0, 0, 0, 0};
+        FillWideReadOneBits(componentType, oneBits);
+        for (SizeT i = 0; i < pixelCount; ++i) {
+            Memcpy(data.data() + (i * 4 + 3) * componentSize, oneBits, componentSize);
+        }
+    }
+
+    // Expands a tightly-packed narrow read (1-3 channels per texel) into the 4-channel wide RGBA
+    // layout ConvertWideReadbackRow expects. Missing G/B read zero; missing A reads one, encoded in
+    // the source component type.
+    static void ExpandNarrowWideRead(Vector<Uint8>& data, SizeT pixelCount, Int srcChannels, GLenum componentType) {
+        const SizeT componentSize = GetReadbackComponentSize(componentType);
+        if (componentSize == 0 || srcChannels <= 0 || srcChannels >= 4) {
+            return;
+        }
+        Uint8 zeroBits[4] = {0, 0, 0, 0};
+        Uint8 oneBits[4] = {0, 0, 0, 0};
+        FillWideReadOneBits(componentType, oneBits);
 
         Vector<Uint8> expanded(pixelCount * 4 * componentSize);
         for (SizeT i = 0; i < pixelCount; ++i) {
@@ -5771,9 +5923,16 @@ namespace MobileGL::MG_Backend::DirectGLES {
     // Reads the current READ framebuffer as wide RGBA(_INTEGER) and repacks the pixels into the client's
     // (format, type) layout. Returns false when the combination is not convertible (the caller keeps its
     // "not implemented" skip); returns true when the request was handled, even if it degraded to a logged no-op.
+    // `forceOpaqueAlpha`: the source image is a three-channel format the backend widened to four to
+    // keep it colour-renderable, so its alpha channel holds whatever the draw wrote and has to be
+    // answered with the 1.0 the application's format implies. Passed in rather than derived here:
+    // glReadPixels reads the bound READ framebuffer, but glGetTexImage reads a texture through a
+    // scratch framebuffer, so the frontend's READ binding describes a different image entirely -
+    // consulting it there would both miss real widenings and corrupt readbacks of ordinary
+    // textures taken while some unrelated widened attachment happened to be bound.
     static Bool ReadPixelsViaFormatConversion(GLint x, GLint y, GLsizei width, GLsizei height, GLenum format,
-                                              GLenum type, void* pixels, Bool honorPackImageParams = false,
-                                              Bool applyFixedPointReadClamp = true) {
+                                              GLenum type, void* pixels, Bool honorPackImageParams,
+                                              Bool applyFixedPointReadClamp, Bool forceOpaqueAlpha) {
         ReadbackChannelMapping mapping{};
         if (!GetReadbackChannelMapping(format, mapping)) {
             return false;
@@ -5898,6 +6057,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
         }
         if (readChannels < 4) {
             ExpandNarrowWideRead(wide, static_cast<SizeT>(width) * static_cast<SizeT>(height), readChannels, wideType);
+        }
+
+        // Undo the three-channel widening (see the parameter's comment). Deliberately not gated on
+        // applyFixedPointReadClamp: that flag implements GL_CLAMP_READ_COLOR, which glGetTexImage
+        // is exempt from, whereas "a format without alpha reads as 1.0" is the format's own
+        // semantics and applies to every read.
+        if (forceOpaqueAlpha) {
+            ForceWideReadAlphaToOne(wide, static_cast<SizeT>(width) * static_cast<SizeT>(height), wideType);
         }
 
         // GL clamps a read from a fixed-point colour buffer to [0,1] (GL_CLAMP_READ_COLOR
@@ -6058,11 +6225,19 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // the driver accepts for the current attachment. GL_PACK_SWAP_BYTES has no ES equivalent, so
         // it always takes the conversion path (which swaps on the CPU).
         const Bool packSwapBytes = MG_State::pGLContext->GetPixelStoreParameters(false).SwapBytes;
-        const Bool nativeFastPair = !packSwapBytes &&
+        // The read buffer is what glReadPixels reads, so the frontend's READ binding is exactly
+        // the right thing to ask here.
+        const Bool forceOpaqueAlpha = FramebufferImpl::IsAlphaWidenedFallbackReadAttachment();
+        // An attachment widened from three channels to stay colour-renderable also has to leave
+        // the fast pair: only the conversion path knows to answer its alpha with the 1.0 the
+        // application's format implies instead of whatever the draw wrote into the added channel.
+        const Bool nativeFastPair = !packSwapBytes && !forceOpaqueAlpha &&
                                     ((format == GL_RGBA && type == GL_UNSIGNED_BYTE) ||
                                      (format == GL_RGBA_INTEGER && (type == GL_UNSIGNED_INT || type == GL_INT)));
         if (convertible && !nativeFastPair) {
-            if (ReadPixelsViaFormatConversion(x, y, width, height, format, type, pixels)) {
+            if (ReadPixelsViaFormatConversion(x, y, width, height, format, type, pixels,
+                                              /*honorPackImageParams=*/false, /*applyFixedPointReadClamp=*/true,
+                                              forceOpaqueAlpha)) {
                 MGLOG_D("ReadPixels: finished via client-format conversion");
                 return;
             }
@@ -6121,7 +6296,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
             MGLOG_D("ReadPixels: native read of %s/%s failed (%s), retrying via client-format conversion",
                     MG_Util::ConvertGLEnumToString(format).c_str(), MG_Util::ConvertGLEnumToString(type).c_str(),
                     MG_Util::ConvertGLEnumToString(nativeReadError).c_str());
-            if (ReadPixelsViaFormatConversion(x, y, width, height, format, type, pixels)) {
+            if (ReadPixelsViaFormatConversion(x, y, width, height, format, type, pixels,
+                                              /*honorPackImageParams=*/false, /*applyFixedPointReadClamp=*/true,
+                                              forceOpaqueAlpha)) {
                 MGLOG_D("ReadPixels: finished via client-format conversion after native failure");
                 return;
             }
@@ -6302,6 +6479,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // for normalized attachments), while the conversion path reads a wide format that is always
         // accepted and repacks on the CPU.
         if (convertible) {
+            // The image being read is this texture, not whatever the application left bound to
+            // GL_READ_FRAMEBUFFER, so the widening question has to be asked of the texture.
+            const Bool forceOpaqueAlpha =
+                TextureImpl::BackendTextureFormatAddsAlpha(textureObject->GetFormat(), textureObject->GetTarget());
             // GL_PACK_IMAGE_HEIGHT/GL_PACK_SKIP_IMAGES only apply to 3D/array image
             // readbacks (cube-map arrays address as arrays); 2D targets must ignore
             // them (GL 3.3 section 6.1.4).
@@ -6347,7 +6528,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     void* sliceDst = static_cast<Uint8*>(pixels) + sliceOffset;
                     if (!ReadPixelsViaFormatConversion(0, 0, size.x(), size.y(), format, type, sliceDst,
                                                        /*honorPackImageParams=*/false,
-                                                       /*applyFixedPointReadClamp=*/false)) {
+                                                       /*applyFixedPointReadClamp=*/false, forceOpaqueAlpha)) {
                         allSlicesRead = false;
                         break;
                     }
@@ -6369,7 +6550,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
             if (tempFBOComplete && ReadPixelsViaFormatConversion(0, 0, size.x(), size.y(), format, type, pixels,
                                                                  applyPackImageParams,
-                                                                 /*applyFixedPointReadClamp=*/false)) {
+                                                                 /*applyFixedPointReadClamp=*/false,
+                                                                 forceOpaqueAlpha)) {
                 MGLOG_D("GetTexImage: finished via client-format conversion");
                 return;
             }
