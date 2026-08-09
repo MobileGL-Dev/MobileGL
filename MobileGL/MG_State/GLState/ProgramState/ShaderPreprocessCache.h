@@ -13,6 +13,7 @@
 // Deliberately NOT ShaderObject.h: ShaderCompileTask.h needs this header, and ShaderObject.h
 // needs ShaderCompileTask.h. Only ShaderStage was ever used from there.
 #include <MG_State/GLState/ProgramState/ShaderStage.h>
+#include <MG_State/GLState/ProgramState/ShaderSourceKey.h>
 
 namespace MobileGL::MG_State::GLState {
     // Where the shared, source-only half of ShaderObject::Compile() stopped. The two
@@ -112,29 +113,10 @@ namespace MobileGL::MG_State::GLState {
         }
 
     private:
-        struct Key {
-            ShaderStage stage = ShaderStage::Unknown;
-            Uint64 sourceHash = 0;
-            SizeT sourceLength = 0;
-            Uint64 envFingerprint = 0;
-
-            Bool operator==(const Key& other) const {
-                return stage == other.stage && sourceHash == other.sourceHash &&
-                       sourceLength == other.sourceLength && envFingerprint == other.envFingerprint;
-            }
-        };
-
-        struct KeyHasher {
-            SizeT operator()(const Key& key) const {
-                // The source hash already spreads well; fold the two discriminators in so
-                // that same-hash-different-stage/length keys land in different buckets.
-                Uint64 mixed = key.sourceHash;
-                mixed ^= static_cast<Uint64>(key.sourceLength) + 0x9e3779b97f4a7c15ull + (mixed << 6) + (mixed >> 2);
-                mixed ^= static_cast<Uint64>(static_cast<Int>(key.stage)) * 0xff51afd7ed558ccdull;
-                mixed ^= key.envFingerprint + 0x9e3779b97f4a7c15ull + (mixed << 6) + (mixed >> 2);
-                return static_cast<SizeT>(mixed);
-            }
-        };
+        // Shared with ShaderCompileAdoptionMap so the two per-context memos cannot key
+        // themselves on different notions of "the same compile" - see ShaderSourceKey.h.
+        using Key = ShaderSourceKey;
+        using KeyHasher = ShaderSourceKeyHasher;
 
         struct Entry {
             Key key;

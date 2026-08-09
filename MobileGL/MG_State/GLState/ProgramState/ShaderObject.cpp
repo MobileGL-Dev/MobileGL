@@ -26,16 +26,18 @@ namespace MobileGL::MG_State::GLState {
         // reason: it is computing the right answer for text this object still holds.
         if (SourceMatchesCompiledState(source)) return;
         // The text genuinely changed, so whatever a running job is computing is now about
-        // an old source. Drop it where it stands - it owns its own copy of that old string,
-        // so swapping the pointer below cannot race its storage.
-        CancelCompile();
+        // an old source. Give up our claim on it - it owns its own copy of that old string,
+        // so swapping the pointer below cannot race its storage. Note "our claim", not "the
+        // job": another shader object may have adopted the same node and still be waiting for
+        // exactly this answer, which is what ReleaseCompileNode's count discipline protects.
+        ReleaseCompileNode();
         m_source = MakeShared<const String>(source);
         InvalidateCompiledState();
     }
 
     void ShaderObject::SetShaderSource(String&& source) {
         if (SourceMatchesCompiledState(source)) return;
-        CancelCompile();
+        ReleaseCompileNode();
         m_source = MakeShared<const String>(Move(source));
         InvalidateCompiledState();
     }
@@ -59,33 +61,75 @@ namespace MobileGL::MG_State::GLState {
         // Errors and worker-side log lines are raised HERE, on the GL thread, at the first
         // join of the job that produced them - which for a single shader is trivially the
         // order a serial implementation would have produced them in.
+        //
+        // ApplyDeferredDiagnostics DRAINS, so a node shared by several shader objects
+        // (stage 6) replays its worker-side log line exactly once, at whichever object joins
+        // first. That is the honest report - one compile ran - and it is log text only: the
+        // GL-observable half of a failure, COMPILE_STATUS and the info log, lives in
+        // `artifacts` and every sharer reads the identical copy of it.
         MG_Util::Async::ApplyDeferredDiagnostics(*m_compiled);
         // A node that settled as Cancelled published nothing. Dropping it here is what keeps
         // the object's state machine to two reachable cases - "no job" and "a job that
         // completed" - so every reader below can treat a live node as authoritative.
-        if (!m_compiled->IsComplete()) m_compiled.reset();
+        //
+        // Through DropCompileNode, not a bare reset: this object is letting the node go, so
+        // its adopter slot has to go with it. A node shared with another object stays alive
+        // and gets dropped once more when that object joins - once per holder, never twice
+        // for the same one, because DropCompileNode is null-guarded.
+        if (!m_compiled->IsComplete()) DropCompileNode();
+    }
+
+    void ShaderObject::AdoptCompileNode(SharedPtr<ShaderCompileTask> node) const {
+        // Never overwrite a hold without giving its slot back first.
+        DropCompileNode();
+        m_compiled = Move(node);
+        m_compiled->AddAdopter();
+        // Re-arm the join gate: whether this node was just created or just adopted from
+        // another object, THIS object has not pulled its result yet. (An adopted node may
+        // already be terminal - the join then only replays what is left of its diagnostics.)
+        m_compileJoined = false;
+    }
+
+    void ShaderObject::DropCompileNode() const {
+        if (!m_compiled) return;
+        m_compiled->ReleaseAdopter();
+        m_compiled.reset();
     }
 
     void ShaderObject::InvalidateCompiledState() {
         // The job node holds exactly what one Compile() produces, so discarding it IS the
         // invalidation - and it re-arms nothing, so the next Compile() genuinely recompiles.
-        m_compiled.reset();
+        DropCompileNode();
     }
 
-    void ShaderObject::CancelCompile() {
-        if (!m_compiled || m_compiled->IsTerminal()) return;
-        // Cooperative and non-blocking. A node that no worker has picked up settles
-        // immediately; one that is running is flagged and settles when its body returns,
-        // writing only into itself the whole time.
+    void ShaderObject::ReleaseCompileNode() {
+        if (!m_compiled) return;
+        // Already terminal: there is nothing left to stop, so this is not a release at all -
+        // the node and this object's claim on it both stay. That early return is older than
+        // stage 6 and it is load-bearing: ProgramState::ReleaseShaderNameIfOrphaned calls
+        // this on a shader whose name is going away but whose object a ProgramObject may
+        // still hold, and dropping a COMPLETED compile there would turn that program's link
+        // into GL_FALSE.
+        if (m_compiled->IsTerminal()) return;
+        // Two independent claimants have to be checked before a cancel, and this object is
+        // authorized to cancel only if BOTH say the result has become unobservable.
         //
-        // Unless a pending LINK is waiting on it. Cancelling is about discarding a result
-        // nothing can observe any more, and this object is no longer the only route to this
-        // one: an enqueued ProgramLinkTask holds the node as a dependency, and a cancel would
-        // turn its link into GL_FALSE. Reached by the ordinary link-then-detach-then-delete
-        // shader teardown - see ShaderCompileTask::MarkLinkReferenced. Dropping our own
-        // reference is still right; the link keeps the node alive and finishes it.
-        if (!m_compiled->IsLinkReferenced()) m_compiled->Cancel();
-        m_compiled.reset();
+        // 1. Other shader objects. From stage 6 a node can be SHARED by several GL shader
+        //    names that were handed byte-identical source; cancelling here would turn a
+        //    compile they must still see as GL_TRUE into GL_FALSE. Only the releaser that
+        //    takes the count to zero - i.e. the last holder - may cancel. See
+        //    ShaderCompileTask::AddAdopter for why a plain Int is sound here and for the
+        //    exactness argument under the worker race.
+        // 2. A pending LINK. An enqueued ProgramLinkTask holds the node in its input snapshot
+        //    and a cancel would turn its link into GL_FALSE; reached by the ordinary
+        //    link-then-detach-then-delete shader teardown. See MarkLinkReferenced. Never
+        //    cleared, so this is a one-way pin.
+        //
+        // The cancel itself is cooperative and non-blocking, exactly as before: a node no
+        // worker has picked up settles immediately, a running one is flagged and settles when
+        // its body returns, writing only into itself the whole time.
+        if (m_compiled->AdopterCount() == 1 && !m_compiled->IsLinkReferenced()) m_compiled->Cancel();
+        DropCompileNode();
     }
 
     void ShaderObject::Compile() {
@@ -103,14 +147,6 @@ namespace MobileGL::MG_State::GLState {
         // source instead. Same result, one parse either way.
         if (HasMemoizedCompile()) return;
 
-        // The compile-environment snapshot is taken HERE, on the GL thread, and handed to
-        // the job. Everything the pipeline needs to know about the device comes through it,
-        // never through pActiveBackendObject - that is what makes the body movable.
-        m_compiled = MakeShared<ShaderCompileTask>(m_stage, m_source, ShaderPreprocessCache::HashSource(*m_source),
-                                                   MG_Util::ShaderTranspiler::GetCurrentCompileEnv(),
-                                                   m_preprocessCache, m_externalIndex);
-        m_compileJoined = false;
-
         // Two reasons to stay on this thread, one rule. Without the async flag the whole
         // path must be byte-identical to the synchronous implementation, and a cache-less
         // object is an internal shader that compiles and reads its status in the same
@@ -119,7 +155,48 @@ namespace MobileGL::MG_State::GLState {
         // has to put compilation back on this thread even though the extension is still
         // advertised, and that is exactly what makes the GL_COMPLETION_STATUS_KHR the
         // extension mandates after a zero count (immediately GL_TRUE) fall out for free.
-        if (!m_preprocessCache || !MG_Util::Async::AsyncShaderCompileActive()) {
+        //
+        // Hoisted above the node construction because stage 6 keys off it too: this same
+        // answer decides whether the adoption map is consulted at all, so a
+        // glMaxShaderCompilerThreadsKHR(0) and a flag-off build both bypass sharing exactly
+        // as they bypass the pool, and their behaviour stays byte-identical to pre-stage-6.
+        const Bool runOnPool = m_preprocessCache && MG_Util::Async::AsyncShaderCompileActive();
+
+        // The compile-environment snapshot is taken HERE, on the GL thread, and handed to
+        // the job. Everything the pipeline needs to know about the device comes through it,
+        // never through pActiveBackendObject - that is what makes the body movable.
+        const SharedPtr<const MG_Util::ShaderTranspiler::CompileEnv> env =
+            MG_Util::ShaderTranspiler::GetCurrentCompileEnv();
+        const Uint64 sourceHash = ShaderPreprocessCache::HashSource(*m_source);
+
+        // ---- P1 stage 6: adopt an equivalent compile instead of enqueueing a duplicate ----
+        // ~21% of all glCompileShader calls in the shaderpack corpus are a DIFFERENT shader
+        // object handed byte-identical source. P0b's memo only pays off once one of them has
+        // finished; under async they are all enqueued in the same burst, so without this each
+        // one runs the whole pipeline on its own worker. The map hands back the node the
+        // first of them created - in flight or already complete - and this object simply
+        // holds it too.
+        if (runOnPool && m_adoptionMap) {
+            if (SharedPtr<ShaderCompileTask> shared =
+                    m_adoptionMap->FindAdoptable(m_stage, sourceHash, *m_source, env->fingerprint)) {
+                // Take the node's own source snapshot as ours. FindAdoptable just compared
+                // the two strings in full, so this changes nothing observable - but it is not
+                // optional: the layer-1 memo (HasMemoizedCompile) is a POINTER comparison
+                // against the node's snapshot, so leaving our own equal-but-distinct copy in
+                // place would make the very next glCompileShader on this object decide it had
+                // no memo and enqueue the duplicate this whole stage exists to avoid - and
+                // would make an identical glShaderSource re-source cancel a shared compile.
+                // It also collapses N copies of a ~100 KB shaderpack stage into one.
+                m_source = shared->source;
+                AdoptCompileNode(Move(shared));
+                return;
+            }
+        }
+
+        AdoptCompileNode(MakeShared<ShaderCompileTask>(m_stage, m_source, sourceHash, env, m_preprocessCache,
+                                                       m_externalIndex));
+
+        if (!runOnPool) {
             m_compiled->RunInline();
             // Inline means the node is already terminal, so this join only replays
             // diagnostics; it is here so the synchronous and asynchronous paths publish
@@ -127,6 +204,10 @@ namespace MobileGL::MG_State::GLState {
             EnsureCompileJoined();
             return;
         }
+        // Registered BEFORE the post, so the very next glCompileShader in this burst can
+        // adopt it however fast a worker picks it up. Registration is an index entry only -
+        // the map holds a WeakPtr and never keeps a node alive.
+        if (m_adoptionMap) m_adoptionMap->Register(m_compiled);
         MG_Util::Async::ShaderCompilePool::Get().Post(m_compiled);
     }
 

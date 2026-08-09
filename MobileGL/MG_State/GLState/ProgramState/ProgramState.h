@@ -10,6 +10,7 @@
 #include <Includes.h>
 #include <MG_Util/Miscellany/IndexGenerator.h>
 #include "ProgramObject.h"
+#include "ShaderCompileAdoptionMap.h"
 #include "ShaderPreprocessCache.h"
 
 namespace MobileGL::MG_State::GLState {
@@ -52,6 +53,11 @@ namespace MobileGL::MG_State::GLState {
         // CreateShader().
         ShaderPreprocessCache& GetShaderPreprocessCache() { return *m_shaderPreprocessCache; }
 
+        // P1 stage 6, same deal: exposed for tests and diagnostics only. Its adoption counter
+        // is the one number that says how many glCompileShader calls this context turned into
+        // no work at all; nothing in the GL frontend branches on it.
+        ShaderCompileAdoptionMap& GetShaderCompileAdoptionMap() { return *m_shaderCompileAdoptionMap; }
+
     private:
         Bool ShaderHasGLVisibleAttachment(const SharedPtr<ShaderObject>& shaderObject) const;
         // Frees the name slot and releases orphaned attached shaders; the immediate half
@@ -82,6 +88,11 @@ namespace MobileGL::MG_State::GLState {
         // in-flight compile job may outlive the context). The FIRST-member declaration is
         // kept anyway - it costs nothing and documents the intent.
         SharedPtr<ShaderPreprocessCache> m_shaderPreprocessCache = MakeShared<ShaderPreprocessCache>();
+        // P1 stage 6: the GL-thread-only index of adoptable compile nodes. Shared ownership
+        // for the same reason as the cache above - a ShaderObject held by a ProgramObject can
+        // outlive these tables, and its destructor releases a node - though unlike the cache
+        // no worker ever sees this one, which is why it carries no lock.
+        SharedPtr<ShaderCompileAdoptionMap> m_shaderCompileAdoptionMap = MakeShared<ShaderCompileAdoptionMap>();
 
         Vector<SharedPtr<ProgramObject>> m_programObjects;
         Vector<SharedPtr<ShaderObject>> m_shaderObjects;

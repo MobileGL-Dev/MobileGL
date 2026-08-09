@@ -61,6 +61,22 @@ target_link_libraries(
 )
 
 add_executable(
+        ShaderCompileAdoptionTest
+        ShaderCompileAdoptionTest.cpp
+)
+
+target_include_directories(ShaderCompileAdoptionTest PRIVATE
+        ${MGL_ROOT}/include
+        ${MGL_ROOT}/MobileGL
+)
+
+target_link_libraries(
+        ShaderCompileAdoptionTest PRIVATE
+        GTest::gtest_main
+        ${LINK_LIBRARIES}
+)
+
+add_executable(
         ParallelShaderCompileTest
         ParallelShaderCompileTest.cpp
 )
@@ -113,6 +129,9 @@ gtest_discover_tests(ProgramTest DISCOVERY_TIMEOUT 30 PROPERTIES LABELS unit)
 # compile pool so there is something in flight to race against.
 gtest_discover_tests(AsyncCompileTest DISCOVERY_TIMEOUT 60 PROPERTIES LABELS unit TIMEOUT 300)
 gtest_discover_tests(AsyncLinkTest DISCOVERY_TIMEOUT 60 PROPERTIES LABELS unit TIMEOUT 300)
+# Same reason: the stage-6 cases keep a backlog in flight so a release really can race a
+# worker, and the 48-object stress links every one of them.
+gtest_discover_tests(ShaderCompileAdoptionTest DISCOVERY_TIMEOUT 60 PROPERTIES LABELS unit TIMEOUT 300)
 # Same reason: the GL_COMPLETION_STATUS_KHR cases saturate a one-worker pool on purpose.
 gtest_discover_tests(ParallelShaderCompileTest DISCOVERY_TIMEOUT 60 PROPERTIES LABELS unit TIMEOUT 300)
 gtest_discover_tests(AsyncTeardownTest DISCOVERY_TIMEOUT 60 PROPERTIES LABELS unit TIMEOUT 300)

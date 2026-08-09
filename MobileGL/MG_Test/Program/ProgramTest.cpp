@@ -20,6 +20,7 @@
 #include "MG_Impl/GLImpl/Program/GL_Program.h"
 #include "MG_State/GLState/Core.h"
 #include "MG_State/GLState/ProgramState/ShaderPreprocessCache.h"
+#include "MG_Util/Async/ShaderCompilePool.h"
 #include "MG_Util/ShaderTranspiler/ShaderCompiler.h"
 
 using namespace MobileGL;
@@ -3006,8 +3007,19 @@ TEST_F(ProgramTest, TwoShaderObjectsWithIdenticalSourceLinkIndependently) {
     ASSERT_NE(objectA, nullptr);
     ASSERT_NE(objectB, nullptr);
     EXPECT_EQ(objectA->GetShaderSource(), objectB->GetShaderSource());
-    // Independent parses despite the shared preprocess.
-    EXPECT_NE(objectA->GetCompiledShader(), objectB->GetCompiledShader());
+    // P0b's layer 2 shares the PREPROCESS and never the parse: glslang's TShader is
+    // consume-once, so a memo hit still has to parse for itself.
+    //
+    // P1 stage 6 shares something stronger when it is active - the whole compile JOB, and
+    // therefore the single parse that job produced - and that sharing is made safe by
+    // ShaderCompileTask::ClaimParsedShader's CAS instead, exactly as it already was for one
+    // shader object attached to two programs. ShaderCompileAdoptionTest is where that is
+    // pinned down (it links both objects and compares the generated SPIR-V). So the
+    // one-parse-per-object assertion belongs to the non-adopting path; the two independent
+    // LINKS below are what both modes have to agree on, and they are the point of this case.
+    if (!MG_Util::Async::AsyncShaderCompileActive()) {
+        EXPECT_NE(objectA->GetCompiledShader(), objectB->GetCompiledShader());
+    }
     EXPECT_NE(objectA->GetCompiledShader(), nullptr);
     EXPECT_NE(objectB->GetCompiledShader(), nullptr);
 

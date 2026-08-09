@@ -87,7 +87,8 @@ namespace MobileGL::MG_State::GLState {
         Uint shaderId = 0;
         m_programShaderNameGenerator.Generate(1, &shaderId);
         EnsureIndexAvail(shaderId, m_shaderObjects);
-        auto shaderObject = MakeShared<ShaderObject>(stage, shaderId, m_shaderPreprocessCache);
+        auto shaderObject =
+            MakeShared<ShaderObject>(stage, shaderId, m_shaderPreprocessCache, m_shaderCompileAdoptionMap);
         if (shaderObject == nullptr) return 0;
         m_shaderObjects[shaderId] = shaderObject;
         return shaderId;
@@ -153,11 +154,13 @@ namespace MobileGL::MG_State::GLState {
         auto& shaderObject = m_shaderObjects[shader];
         if (shaderObject == nullptr || !shaderObject->GetDeleteStatus()) return;
         if (ShaderHasGLVisibleAttachment(shaderObject)) return;
-        // The name is about to go: nothing can observe this shader's compile any more, so a
-        // job still in flight for it is pure waste. Cancel-not-join - the job owns its
-        // inputs, so dropping the object out from under it is safe and the GL thread never
-        // blocks on a delete.
-        shaderObject->CancelCompile();
+        // The name is about to go, so nothing can observe this shader's compile through THIS
+        // object any more and a job still in flight for it is pure waste - unless another
+        // shader object adopted the same node (stage 6) or a pending link pinned it, which is
+        // exactly what ReleaseCompileNode weighs before it cancels anything. Cancel-not-join
+        // either way: the job owns its inputs, so dropping the object out from under it is
+        // safe and the GL thread never blocks on a delete.
+        shaderObject->ReleaseCompileNode();
         shaderObject.reset();
         m_programShaderNameGenerator.Delete(shader);
     }

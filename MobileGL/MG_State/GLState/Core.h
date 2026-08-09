@@ -156,6 +156,11 @@ namespace MobileGL {
                 // Settles every compile and link this context still owns; see
                 // ProgramState::JoinAllPendingWork. Called by glMaxShaderCompilerThreadsKHR(0).
                 void JoinAllPendingShaderWork();
+                // P1 stage 6: the per-context index of adoptable compile nodes, for its
+                // adoption counter. Diagnostics and tests only - no GL entry point reads it.
+                ShaderCompileAdoptionMap& GetShaderCompileAdoptionMap() {
+                    return m_programState.GetShaderCompileAdoptionMap();
+                }
                 void UseProgram(Uint program);
                 const SharedPtr<ProgramObject>& GetCurrentProgram();
                 // What a draw or dispatch actually executes: the program in use, or - when

@@ -118,12 +118,60 @@ namespace MobileGL::MG_State::GLState {
         // glDeleteShader. The detach makes the shader GL-invisible, so the delete frees its
         // name, and ReleaseShaderNameIfOrphaned would cancel a compile the enqueued link is
         // waiting on - turning a link that must report GL_TRUE into GL_FALSE. Set on the GL
-        // thread in Link()'s prologue, read on the GL thread by ShaderObject::CancelCompile.
+        // thread in Link()'s prologue, read on the GL thread by
+        // ShaderObject::ReleaseCompileNode - which from stage 6 weighs it together with the
+        // adopter count below, because a node can now have both kinds of observer at once.
         //
         // Never cleared: the worst case is one stale node compiling to completion for nobody,
         // which is exactly what the pre-stage-3 implementation always did.
         void MarkLinkReferenced() { m_linkReferenced.store(true, std::memory_order_release); }
         Bool IsLinkReferenced() const { return m_linkReferenced.load(std::memory_order_acquire); }
+
+        // ---- P1 stage 6: the adopter count ----
+        // How many live ShaderObjects currently hold this node in their m_compiled.
+        //
+        // It exists because stage 6 lets a node be SHARED: before it, a node had exactly one
+        // shader object, so "this object stopped caring" and "nothing can observe this
+        // result" were the same statement and ShaderObject::CancelCompile could cancel
+        // unconditionally. Once two GL shader names hold one node, that cancel would kill the
+        // other one's pending compile - a compile that must still report GL_TRUE. So a cancel
+        // is now authorized by TWO conditions, both checked by the releaser:
+        //   * this release brings the count to zero (no shader object is left), AND
+        //   * IsLinkReferenced() is false (no enqueued link took the node into its snapshot).
+        // The second is the stage-4 pin, unchanged; the first is what stage 6 adds.
+        //
+        // ---- Why a plain Int and not an atomic ----
+        // Every mutation is made from ShaderObject, and every ShaderObject mutation site is a
+        // GL entry point on the application's context thread: glCompileShader (adopt/create),
+        // glShaderSource with different text, glDeleteShader's orphan sweep, and
+        // ~ShaderObject. All of them are the SAME thread, so the count is never concurrently
+        // mutated and an atomic would only buy an unneeded lock prefix on the hottest compile
+        // path. Workers cannot touch it by construction: a job body's entire contract (see
+        // this class's header comment) is that it reads only the node's inputs and writes only
+        // `artifacts`, and a plain Int here makes that contract grep-checkable in a way an
+        // atomic would quietly hide.
+        //
+        // The CANCEL that the count authorizes still races the worker, and deliberately so -
+        // that is the settled cancel-not-join semantics from stage 3: JobNode::Cancel is
+        // cooperative and non-blocking, a node already running settles as Cancelled when its
+        // body returns, and a node that has already gone terminal ignores the request.
+        // Nothing about that changes here.
+        //
+        // Exactness under that race: ShaderObject::ReleaseCompileNode returns EARLY, without
+        // decrementing and without dropping its reference, when the node is already terminal
+        // (there is nothing left to stop). Terminality is sticky, so if a releaser observes a
+        // node as NON-terminal then no holder has ever taken that early return on it, and the
+        // count it reads is exactly the number of holders. If the worker finishes in the
+        // window between that observation and the Cancel(), the Cancel is a no-op on a
+        // terminal node - and the count was zero, so there was no other holder to harm.
+        void AddAdopter() { ++m_adopters; }
+        void ReleaseAdopter() {
+            MOBILEGL_ASSERT(m_adopters > 0,
+                            "ShaderCompileTask adopter count underflow; a ShaderObject released a node it did not "
+                            "hold (every release must pair with exactly one AddAdopter)");
+            --m_adopters;
+        }
+        Int AdopterCount() const { return m_adopters; }
 
     private:
         void RunBody() override;
@@ -132,5 +180,7 @@ namespace MobileGL::MG_State::GLState {
 
         mutable std::atomic<Bool> m_parseClaimed{false};
         std::atomic<Bool> m_linkReferenced{false};
+        // GL-thread-owned; see AddAdopter above for why this is not an atomic.
+        Int m_adopters = 0;
     };
 } // namespace MobileGL::MG_State::GLState

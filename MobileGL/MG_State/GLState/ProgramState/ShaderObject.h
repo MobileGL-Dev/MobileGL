@@ -10,6 +10,7 @@
 #include <Includes.h>
 #include <MG_State/GLState/ProgramState/ShaderStage.h>
 #include <MG_State/GLState/ProgramState/ShaderCompileTask.h>
+#include <MG_State/GLState/ProgramState/ShaderCompileAdoptionMap.h>
 
 namespace MobileGL {
     namespace MG_State::GLState {
@@ -31,13 +32,32 @@ namespace MobileGL {
             // add a round trip. Shared ownership rather than a raw pointer: a compile job
             // outlives neither the object nor the context deterministically, and the cache
             // has to stay alive for whoever is still reading it.
+            //
+            // `adoptionMap` is the same context's stage-6 index of adoptable compile nodes.
+            // It is non-null exactly when `preprocessCache` is (ProgramState hands both out
+            // together, and nobody else hands out either), which is what makes "no cache"
+            // keep meaning "compile inline, share nothing": an internal shader object has
+            // neither, so it neither adopts nor registers and its path is byte-identical to
+            // the pre-stage-6 one. GL-thread-only, so unlike the cache it carries no lock -
+            // shared ownership only because a ShaderObject may outlive the context's tables.
             ShaderObject(const ShaderStage stage, Uint externalIndex,
-                         SharedPtr<ShaderPreprocessCache> preprocessCache = nullptr)
-                : m_stage(stage), m_externalIndex(externalIndex), m_preprocessCache(Move(preprocessCache)) {}
+                         SharedPtr<ShaderPreprocessCache> preprocessCache = nullptr,
+                         SharedPtr<ShaderCompileAdoptionMap> adoptionMap = nullptr)
+                : m_stage(stage), m_externalIndex(externalIndex), m_preprocessCache(Move(preprocessCache)),
+                  m_adoptionMap(Move(adoptionMap)) {}
             // Cancel-not-join: the node owns its inputs, so an in-flight compile whose
             // object just went away is safe to abandon where it stands. Nothing can observe
-            // its result any more - this object was the only route to it.
-            ~ShaderObject() { CancelCompile(); }
+            // its result any more - unless another shader object adopted the same node, or a
+            // link pinned it, which is precisely what ReleaseCompileNode() checks.
+            ~ShaderObject() {
+                ReleaseCompileNode();
+                // ReleaseCompileNode KEEPS a node that has already gone terminal - there is
+                // nothing left to stop, so it is not a release at all. This object is going
+                // away regardless, so hand the adopter slot back here. That is what keeps
+                // ShaderCompileTask::AdopterCount() exactly "how many live ShaderObjects hold
+                // this node" instead of merely an upper bound.
+                DropCompileNode();
+            }
 
             ShaderObject(const ShaderObject&) = delete;
             ShaderObject& operator=(const ShaderObject&) = delete;
@@ -45,10 +65,17 @@ namespace MobileGL {
             void SetShaderSource(const String& source);
             void SetShaderSource(String&& source);
             void Compile();
-            // Drops a compile that is still in flight, without waiting for it. Called at the
-            // points where the object's compiled state stops being observable: a real source
-            // change, and the release of an orphaned shader name.
-            void CancelCompile();
+            // Gives up this object's claim on its compile node, cancelling the node only if
+            // this object was its LAST claimant. Called at the points where the object's
+            // compiled state stops being observable through THIS name: a real source change,
+            // and the release of an orphaned shader name.
+            //
+            // Named for what it does rather than for what it used to do: before stage 6 a
+            // node had exactly one shader object, so giving up the claim and cancelling the
+            // compile were the same act and this was CancelCompile(). They are not the same
+            // act any more - see ShaderCompileTask::AddAdopter for the count discipline and
+            // its single-threadedness argument. Never waits, in either case.
+            void ReleaseCompileNode();
             void MarkAsDeleted();
 
             // The compile job node itself, for ProgramObject::Link()'s input snapshot.
@@ -146,6 +173,16 @@ namespace MobileGL {
             }
 
             void InvalidateCompiledState();
+
+            // ---- the ONLY two writers of m_compiled (P1 stage 6) ----
+            // Every adopter-count mutation lives in these two, which is what makes "exactly
+            // one AddAdopter per hold, exactly one ReleaseAdopter per hold" auditable rather
+            // than something review has to re-derive at each call site. DropCompileNode is
+            // null-guarded, so calling it on an object that already let go is a no-op and a
+            // double release is unrepresentable.
+            void AdoptCompileNode(SharedPtr<ShaderCompileTask> node) const;
+            void DropCompileNode() const;
+
             // ---- P0b layer 1: per-object no-op recompile ----
             // True iff `candidate` is byte-identical to the source that produced (or is
             // producing) the compiled state this object currently holds.
@@ -165,17 +202,31 @@ namespace MobileGL {
             // running compile cannot race its storage - and the layer-1 memo collapses to a
             // pointer comparison against the job's snapshot, because the setter only swaps
             // the pointer when the text genuinely differs.
+            //
+            // Not necessarily unique to this object from stage 6 on: adopting a node also
+            // takes that node's source snapshot (see Compile()), so N shader objects sharing
+            // one compile share one copy of the text. The string is immutable and shared-
+            // owned, so that is invisible to every reader.
             SharedPtr<const String> m_source = EmptySource();
 
             // P0b layer 2: the owning context's cross-object memo, or null. Internally
             // locked, because several workers hit it at once.
             const SharedPtr<ShaderPreprocessCache> m_preprocessCache;
+            // P1 stage 6: the owning context's index of adoptable compile nodes, or null.
+            // Touched only from Compile(), i.e. only on the GL thread, so it carries no lock.
+            const SharedPtr<ShaderCompileAdoptionMap> m_adoptionMap;
 
             Bool m_deleteStatus = false;
 
             // ---- Compile OUTPUT ---- pending OR completed; reachable only through Compiled().
             // Mutable because the join is a read-side operation: a const getter has to be
             // able to settle an outstanding job before answering.
+            //
+            // SHARED from stage 6 on: several shader objects holding byte-identical source
+            // under the same CompileEnv point at one node. Every read below still goes
+            // through the same join gate, and a second joiner finds the node already
+            // terminal, so nothing about the read path changes - only the release path does
+            // (ReleaseCompileNode).
             mutable SharedPtr<ShaderCompileTask> m_compiled;
             // Exactly-once latch for the pull above. Armed with every new job node, set by
             // the one join that consumes it.
