@@ -2672,3 +2672,166 @@ TEST_F(TextureTest, DecodeShadowDataToWideRGBACoversComponentAndPackedLayouts) {
         EXPECT_EQ(rgba[3], 2u);
     }
 }
+
+// GL 4.6 core table 23.18: GL_TEXTURE_COMPARE_FUNC takes the whole eight-function depth-compare
+// range. The validator used to start it at GL_LEQUAL, which sits in the middle of the contiguous
+// GL_NEVER..GL_ALWAYS block, so NEVER/LESS/EQUAL were rejected while GREATER/NOTEQUAL/GEQUAL only
+// got through because they happen to be numerically above LEQUAL.
+TEST_F(TextureTest, SamplerCompareFuncAcceptsTheWholeNeverToAlwaysRange) {
+    GLuint sampler = 0;
+    MG_Impl::GLImpl::GenSamplers(1, &sampler);
+    ASSERT_NE(sampler, 0u);
+
+    const GLenum compareFuncs[] = {GL_NEVER,   GL_LESS,     GL_EQUAL,  GL_LEQUAL,
+                                   GL_GREATER, GL_NOTEQUAL, GL_GEQUAL, GL_ALWAYS};
+    for (GLenum func : compareFuncs) {
+        MG_Impl::GLImpl::SamplerParameteri(sampler, GL_TEXTURE_COMPARE_FUNC, static_cast<GLint>(func));
+        EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR) << "compare func " << func << " was rejected";
+        GLint readBack = 0;
+        MG_Impl::GLImpl::GetSamplerParameteriv(sampler, GL_TEXTURE_COMPARE_FUNC, &readBack);
+        EXPECT_EQ(static_cast<GLenum>(readBack), func);
+        EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+    }
+
+    // Just outside the block on both sides is still INVALID_ENUM.
+    MG_Impl::GLImpl::SamplerParameteri(sampler, GL_TEXTURE_COMPARE_FUNC, GL_NEVER - 1);
+    ExpectSingleGlError(GL_INVALID_ENUM);
+    MG_Impl::GLImpl::SamplerParameteri(sampler, GL_TEXTURE_COMPARE_FUNC, GL_ALWAYS + 1);
+    ExpectSingleGlError(GL_INVALID_ENUM);
+
+    MG_Impl::GLImpl::DeleteSamplers(1, &sampler);
+}
+
+// GL 4.6 core table 23.19: GL_TEXTURE_BINDING_* and GL_SAMPLER_BINDING are per-texture-unit, so
+// glGetIntegeri_v must answer for unit `index` - not fall through to the backend, which knows
+// nothing about the frontend's binding state.
+TEST_F(TextureTest, GetIntegeriVReportsPerUnitTextureAndSamplerBindings) {
+    GLuint textures[2] = {0, 0};
+    MG_Impl::GLImpl::GenTextures(2, textures);
+    ASSERT_NE(textures[0], 0u);
+    ASSERT_NE(textures[1], 0u);
+
+    MG_Impl::GLImpl::ActiveTexture(GL_TEXTURE0);
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, textures[0]);
+    MG_Impl::GLImpl::ActiveTexture(GL_TEXTURE3);
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, textures[1]);
+    ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    GLint binding = -1;
+    MG_Impl::GLImpl::GetIntegeri_v(GL_TEXTURE_BINDING_2D, 0, &binding);
+    EXPECT_EQ(static_cast<GLuint>(binding), textures[0]);
+    MG_Impl::GLImpl::GetIntegeri_v(GL_TEXTURE_BINDING_2D, 3, &binding);
+    EXPECT_EQ(static_cast<GLuint>(binding), textures[1]);
+    // An unbound unit reports 0, and a target nothing was bound to reports 0 as well.
+    MG_Impl::GLImpl::GetIntegeri_v(GL_TEXTURE_BINDING_2D, 2, &binding);
+    EXPECT_EQ(binding, 0);
+    MG_Impl::GLImpl::GetIntegeri_v(GL_TEXTURE_BINDING_3D, 0, &binding);
+    EXPECT_EQ(binding, 0);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    // The non-indexed query keeps reporting the ACTIVE unit, which is still unit 3.
+    GLint activeUnitBinding = -1;
+    MG_Impl::GLImpl::GetIntegerv(GL_TEXTURE_BINDING_2D, &activeUnitBinding);
+    EXPECT_EQ(static_cast<GLuint>(activeUnitBinding), textures[1]);
+
+    GLuint sampler = 0;
+    MG_Impl::GLImpl::GenSamplers(1, &sampler);
+    ASSERT_NE(sampler, 0u);
+    MG_Impl::GLImpl::BindSampler(2, sampler);
+    ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+    MG_Impl::GLImpl::GetIntegeri_v(GL_SAMPLER_BINDING, 2, &binding);
+    EXPECT_EQ(static_cast<GLuint>(binding), sampler);
+    MG_Impl::GLImpl::GetIntegeri_v(GL_SAMPLER_BINDING, 1, &binding);
+    EXPECT_EQ(binding, 0);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    // Out of range is INVALID_VALUE, not a backend passthrough.
+    GLint maxUnits = 0;
+    MG_Impl::GLImpl::GetIntegerv(GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS, &maxUnits);
+    ASSERT_GT(maxUnits, 0);
+    MG_Impl::GLImpl::GetIntegeri_v(GL_TEXTURE_BINDING_2D, static_cast<GLuint>(maxUnits) + 1024u, &binding);
+    ExpectSingleGlError(GL_INVALID_VALUE);
+
+    MG_Impl::GLImpl::BindSampler(2, 0);
+    MG_Impl::GLImpl::DeleteSamplers(1, &sampler);
+    MG_Impl::GLImpl::ActiveTexture(GL_TEXTURE0);
+    MG_Impl::GLImpl::DeleteTextures(2, textures);
+    DrainPendingGlErrors();
+}
+
+// glGetFloati_v / glGetDoublei_v were no-op stubs: they left the caller's buffer holding whatever
+// was on the stack. They are converters over the integer indexed query.
+TEST_F(TextureTest, GetFloatiVAndGetDoubleiVConvertTheIndexedIntegerQuery) {
+    GLuint texture = 0;
+    MG_Impl::GLImpl::GenTextures(1, &texture);
+    ASSERT_NE(texture, 0u);
+    MG_Impl::GLImpl::ActiveTexture(GL_TEXTURE1);
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, texture);
+    ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    GLfloat asFloat = -1.0f;
+    MG_Impl::GLImpl::GetFloati_v(GL_TEXTURE_BINDING_2D, 1, &asFloat);
+    EXPECT_FLOAT_EQ(asFloat, static_cast<GLfloat>(texture));
+
+    GLdouble asDouble = -1.0;
+    MG_Impl::GLImpl::GetDoublei_v(GL_TEXTURE_BINDING_2D, 1, &asDouble);
+    EXPECT_DOUBLE_EQ(asDouble, static_cast<GLdouble>(texture));
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    MG_Impl::GLImpl::ActiveTexture(GL_TEXTURE0);
+    MG_Impl::GLImpl::DeleteTextures(1, &texture);
+    DrainPendingGlErrors();
+}
+
+// GL 3.3 core 3.8.2: the unit glBindSampler accepts is bounded by
+// GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS. The gate read the frontend's MAX_TEXTURE_IMAGE_UNITS
+// instead - the capacity of the unit array, 192 - so every unit the backend does not have was
+// accepted, and the single-bind path disagreed with the multi-bind twin about where the units end.
+// The backend is stood in so the two limits are distinguishable no matter what the real one
+// advertises.
+TEST_F(TextureTest, BindSamplerRejectsUnitsBeyondMaxCombinedTextureImageUnits) {
+    GLuint sampler = 0;
+    MG_Impl::GLImpl::GenSamplers(1, &sampler);
+    ASSERT_NE(sampler, 0u);
+
+    constexpr GLint kCombinedUnits = 24;
+    static_assert(kCombinedUnits < MG_State::GLState::TextureState::MAX_TEXTURE_IMAGE_UNITS,
+                  "the stand-in limit has to be below the unit array capacity to tell the two apart");
+    auto backend = MakeUnique<FormatCapabilityBackend>();
+    FormatCapabilityBackend::MutableDynamicParameters().MaxCombinedTextureImageUnits = kCombinedUnits;
+    ScopedBackendOverride backendOverride(Move(backend));
+
+    GLint reportedUnits = 0;
+    MG_Impl::GLImpl::GetIntegerv(GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS, &reportedUnits);
+    ASSERT_EQ(reportedUnits, kCombinedUnits);
+
+    // The last unit that exists still binds.
+    const GLuint lastUnit = static_cast<GLuint>(kCombinedUnits - 1);
+    MG_Impl::GLImpl::BindSampler(lastUnit, sampler);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+    EXPECT_NE(MG_State::pGLContext->GetTextureUnitObject(static_cast<Int>(lastUnit)).GetSamplerObject(), nullptr);
+
+    // One past it does not - this is the unit the old gate accepted.
+    MG_Impl::GLImpl::BindSampler(static_cast<GLuint>(kCombinedUnits), sampler);
+    ExpectSingleGlError(GL_INVALID_VALUE);
+    EXPECT_EQ(MG_State::pGLContext->GetTextureUnitObject(kCombinedUnits).GetSamplerObject(), nullptr);
+
+    // Past the unit array as well is the same error, not an out-of-bounds index.
+    MG_Impl::GLImpl::BindSampler(
+        static_cast<GLuint>(MG_State::GLState::TextureState::MAX_TEXTURE_IMAGE_UNITS) + 4u, sampler);
+    ExpectSingleGlError(GL_INVALID_VALUE);
+
+    // Both gates now read the same limit: a multi-bind that ends exactly at it binds, and one that
+    // runs a single unit past it is the multi-bind's INVALID_OPERATION, reported up front - not the
+    // single-bind INVALID_VALUE from somewhere inside the loop.
+    const GLuint samplers[2] = {sampler, sampler};
+    MG_Impl::GLImpl::BindSamplers(static_cast<GLuint>(kCombinedUnits - 2), 2, samplers);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+    MG_Impl::GLImpl::BindSamplers(lastUnit, 2, samplers);
+    ExpectSingleGlError(GL_INVALID_OPERATION);
+
+    MG_Impl::GLImpl::BindSampler(lastUnit, 0);
+    MG_Impl::GLImpl::BindSampler(static_cast<GLuint>(kCombinedUnits - 2), 0);
+    MG_Impl::GLImpl::DeleteSamplers(1, &sampler);
+    DrainPendingGlErrors();
+}

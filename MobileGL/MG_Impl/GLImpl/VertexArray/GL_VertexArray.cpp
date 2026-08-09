@@ -106,6 +106,21 @@ namespace MobileGL::MG_Impl::GLImpl {
             return pname == GL_CURRENT_VERTEX_ATTRIB;
         }
 
+        // The two ARB_vertex_attrib_binding per-attribute queries. They do not live on the
+        // resolved VertexAttribute (which is the flat, already-combined view) but on the VAO's
+        // binding-point mapping, so they need the object, not the attribute.
+        static bool TryGetVertexAttribBindingQuery(GLuint index, GLenum pname, GLint& out) {
+            if (pname != GL_VERTEX_ATTRIB_BINDING && pname != GL_VERTEX_ATTRIB_RELATIVE_OFFSET) return false;
+            const auto& vao = MG_State::pGLContext->GetBoundVertexArray();
+            if (!vao) {
+                out = 0;
+                return true;
+            }
+            out = pname == GL_VERTEX_ATTRIB_BINDING ? static_cast<GLint>(vao->GetAttributeBindingIndex(index))
+                                                    : static_cast<GLint>(vao->GetAttributeRelativeOffset(index));
+            return true;
+        }
+
         // The stride a pointer-style call gives its binding point: the argument when it is non-zero,
         // otherwise the tightly packed element size (GL 4.6 core 10.3.2). A packed 2_10_10_10 or
         // 10F_11F_11F attribute is one 32-bit word regardless of its component count.
@@ -179,6 +194,11 @@ namespace MobileGL::MG_Impl::GLImpl {
             case GL_VERTEX_ATTRIB_ARRAY_LONG:
             case GL_VERTEX_ATTRIB_ARRAY_DIVISOR:
             case GL_VERTEX_ATTRIB_ARRAY_POINTER:
+            // ARB_vertex_attrib_binding (core since GL 4.3). The binding-point view is real
+            // state on the VAO (GetAttributeBindingIndex / GetAttributeRelativeOffset), so
+            // both of its per-attribute queries are answerable.
+            case GL_VERTEX_ATTRIB_BINDING:
+            case GL_VERTEX_ATTRIB_RELATIVE_OFFSET:
                 return true;
             default:
                 MG_State::pGLContext->RecordError(
@@ -944,6 +964,13 @@ namespace MobileGL::MG_Impl::GLImpl {
         case GL_VERTEX_ATTRIB_ARRAY_DIVISOR:
             params[0] = static_cast<GLfloat>(attr->Divisor);
             return;
+        case GL_VERTEX_ATTRIB_BINDING:
+        case GL_VERTEX_ATTRIB_RELATIVE_OFFSET: {
+            GLint value = 0;
+            TryGetVertexAttribBindingQuery(index, pname, value);
+            params[0] = static_cast<GLfloat>(value);
+            return;
+        }
         default:
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidEnum,
@@ -1007,6 +1034,13 @@ namespace MobileGL::MG_Impl::GLImpl {
         case GL_VERTEX_ATTRIB_ARRAY_DIVISOR:
             params[0] = static_cast<GLdouble>(attr->Divisor);
             return;
+        case GL_VERTEX_ATTRIB_BINDING:
+        case GL_VERTEX_ATTRIB_RELATIVE_OFFSET: {
+            GLint value = 0;
+            TryGetVertexAttribBindingQuery(index, pname, value);
+            params[0] = static_cast<GLdouble>(value);
+            return;
+        }
         default:
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidEnum,
@@ -1065,6 +1099,10 @@ namespace MobileGL::MG_Impl::GLImpl {
             return;
         case GL_VERTEX_ATTRIB_ARRAY_DIVISOR:
             params[0] = static_cast<GLint>(attr->Divisor);
+            return;
+        case GL_VERTEX_ATTRIB_BINDING:
+        case GL_VERTEX_ATTRIB_RELATIVE_OFFSET:
+            TryGetVertexAttribBindingQuery(index, pname, params[0]);
             return;
         default:
             MG_State::pGLContext->RecordError(
@@ -1203,6 +1241,9 @@ namespace MobileGL::MG_Impl::GLImpl {
             return;
         case GL_VERTEX_ATTRIB_RELATIVE_OFFSET:
             *param = static_cast<GLint>(vao->GetAttributeRelativeOffset(index));
+            return;
+        case GL_VERTEX_ATTRIB_BINDING:
+            *param = static_cast<GLint>(vao->GetAttributeBindingIndex(index));
             return;
         default:
             MG_State::pGLContext->RecordError(

@@ -19,6 +19,8 @@ namespace MobileGL::MG_Impl::GLImpl {
     void GetIntegerv(GLenum pname, GLint* params);
     void GetInteger64v(GLenum pname, GLint64* params);
     void GetIntegeri_v(GLenum target, GLuint index, GLint* data);
+    void GetFloati_v(GLenum target, GLuint index, GLfloat* data);
+    void GetDoublei_v(GLenum target, GLuint index, GLdouble* data);
     void GetInteger64i_v(GLenum target, GLuint index, GLint64* data);
     GLenum GetError();
     GLenum GetGraphicsResetStatus();

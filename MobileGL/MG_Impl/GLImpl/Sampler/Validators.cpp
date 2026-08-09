@@ -75,7 +75,11 @@ namespace MobileGL::MG_Impl::GLImpl::SamplerImpl {
             break;
 
         case GL_TEXTURE_COMPARE_FUNC:
-            if (param < GL_LEQUAL || param > GL_ALWAYS) {
+            // The eight depth-compare functions are contiguous from GL_NEVER (0x0200) to
+            // GL_ALWAYS (0x0207); GL_LEQUAL sits in the middle of that block, so starting
+            // the range there rejected NEVER/LESS/EQUAL and let GREATER/NOTEQUAL/GEQUAL
+            // through only by accident of them being above LEQUAL.
+            if (param < GL_NEVER || param > GL_ALWAYS) {
                 MG_State::pGLContext->RecordError(ErrorCode::InvalidEnum,
                                                   MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", "ValidateSamplerParam",
                                                                                "Invalid compare function parameter"));

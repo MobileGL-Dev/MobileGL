@@ -474,6 +474,21 @@ namespace MobileGL::MG_Impl::GLImpl {
             return;
         }
         if (!ValidateCurrentProgramForCompute(__func__)) return;
+        // GL 4.6 core 19: each num_groups_* must be within GL_MAX_COMPUTE_WORK_GROUP_COUNT
+        // for its dimension. GetIntegeri_v already floors that at the spec minimum.
+        const GLuint numGroups[3] = {numGroupsX, numGroupsY, numGroupsZ};
+        for (GLuint dimension = 0; dimension < 3; ++dimension) {
+            GLint maxGroups = 0;
+            GetIntegeri_v(GL_MAX_COMPUTE_WORK_GROUP_COUNT, dimension, &maxGroups);
+            if (numGroups[dimension] > static_cast<GLuint>(std::max(maxGroups, 0))) {
+                MG_State::pGLContext->RecordError(
+                    ErrorCode::InvalidValue,
+                    MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
+                                                 "num_groups exceeds GL_MAX_COMPUTE_WORK_GROUP_COUNT for dimension " +
+                                                     std::to_string(dimension) + "."));
+                return;
+            }
+        }
         dispatchCompute(numGroupsX, numGroupsY, numGroupsZ);
     }
 
@@ -487,6 +502,24 @@ namespace MobileGL::MG_Impl::GLImpl {
             return;
         }
         if (!ValidateCurrentProgramForCompute(__func__)) return;
+        // GL 4.6 core 19: `indirect` is a byte offset into GL_DISPATCH_INDIRECT_BUFFER -
+        // negative or misaligned is INVALID_VALUE, nothing bound is INVALID_OPERATION.
+        if (indirect < 0 || (indirect % 4) != 0) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidValue,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
+                                             "indirect must be non-negative and a multiple of 4."));
+            return;
+        }
+        const auto& indirectBuffer =
+            MG_State::pGLContext->GetBufferBindingSlot(BufferTarget::DispatchIndirect).GetBoundObject();
+        if (!indirectBuffer) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidOperation,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
+                                             "No buffer is bound to GL_DISPATCH_INDIRECT_BUFFER."));
+            return;
+        }
         dispatchComputeIndirect(indirect);
     }
 

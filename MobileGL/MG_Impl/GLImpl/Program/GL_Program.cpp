@@ -409,14 +409,19 @@ namespace MobileGL::MG_Impl::GLImpl {
     }
 
     GLuint CreateShader_State(GLenum type) {
-        auto shaderId = MG_State::pGLContext->CreateShader(MG_Util::ConvertGLEnumToShaderStage(type));
-        if (shaderId == 0) {
+        // GL 4.6 core 7.1: shaderType is an enum, so an unrecognised one is INVALID_ENUM (it
+        // used to be documented as INVALID_VALUE). The check has to happen HERE: the state
+        // layer hands out a name for ShaderStage::Unknown just as happily as for a real
+        // stage, so the old "shaderId == 0 means bad type" test could never fire and an
+        // unknown shaderType silently produced a usable shader name and no error at all.
+        const ShaderStage stage = MG_Util::ConvertGLEnumToShaderStage(type);
+        if (stage == ShaderStage::Unknown) {
             MG_State::pGLContext->RecordError(
-                ErrorCode::InvalidValue,
+                ErrorCode::InvalidEnum,
                 MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__, "`shaderType` is not an accepted value."));
             return 0;
         }
-        return shaderId;
+        return MG_State::pGLContext->CreateShader(stage);
     }
 
     void DeleteProgram_State(GLuint program) {
@@ -855,6 +860,31 @@ namespace MobileGL::MG_Impl::GLImpl {
         return loc;
     }
 
+    // A float matrix lives in the global UBO under std140 rules - one 16-byte-aligned column
+    // vector per column - while the value glGetUniform* must return is tightly packed
+    // columns * rows floats. Only mat4 is the same either way; every other shape needs the
+    // padding undone, and the readback has to undo exactly what UniformMatrixfv_Object put
+    // there. Returns false when `ttype` is not a float matrix (nothing to unpack).
+    Bool TryGatherFloatMatrixColumns(const glslang::TType* ttype, const char* pBase, void* params) {
+        if (ttype == nullptr || !ttype->isMatrix() || ttype->getBasicType() == glslang::EbtDouble) return false;
+        const Int columns = ttype->getMatrixCols();
+        const Int rows = ttype->getMatrixRows();
+        for (Int column = 0; column < columns; ++column) {
+            Memcpy(static_cast<char*>(params) + static_cast<SizeT>(column) * rows * sizeof(GLfloat),
+                   pBase + static_cast<SizeT>(column) * 4 * sizeof(GLfloat), rows * sizeof(GLfloat));
+        }
+        return true;
+    }
+
+    // Bytes a uniform actually occupies in the global UBO. It is the tight GL type size for
+    // everything except a float matrix, whose padded columns make it wider.
+    SizeT UniformStorageSpanInBytes(const glslang::TType* ttype, SizeT tightSize) {
+        if (ttype != nullptr && ttype->isMatrix() && ttype->getBasicType() != glslang::EbtDouble) {
+            return static_cast<SizeT>(ttype->getMatrixCols()) * 4 * sizeof(GLfloat);
+        }
+        return tightSize;
+    }
+
     void GetUniform_State(GLuint program, GLint location, void* params) {
         auto& programObject = TryToGetProgramObject(program);
         if (!programObject) return;
@@ -885,23 +915,16 @@ namespace MobileGL::MG_Impl::GLImpl {
             auto size = programObject->GetUniformSizesInBytes(location);
             char* pUBO = (char*)programObject->MapUBO();
             auto* ttype = programObject->GetUniformTType(location);
+            const SizeT span = UniformStorageSpanInBytes(ttype, size);
             if (pUBO == nullptr || offset == MG_State::GLState::ProgramObject::kInvalidUniformOffset ||
-                offset + size > programObject->GetUBOSize()) {
+                offset + span > programObject->GetUBOSize()) {
                 MGLOG_E("%s: uniform at program %u location %d has no backing storage; returning nothing", __func__,
                         program, location);
                 return;
             }
 
-            if (!ttype->isMatrix() || ttype->getMatrixCols() != 3)
+            if (!TryGatherFloatMatrixColumns(ttype, pUBO + offset, params)) {
                 Memcpy(params, pUBO + offset, size);
-            else {
-                // TODO: we only deal with mat3 yet, deal with other types later
-                // assuming float here, which may not be the case
-                auto* pBase = pUBO + offset;
-                for (int i = 0; i < ttype->getMatrixRows(); i++) {
-                    Memcpy((char*)params + ttype->getMatrixCols() * sizeof(float) * i, pBase + 4 * sizeof(float) * i,
-                           ttype->getMatrixCols() * sizeof(float));
-                }
             }
         }
         // TODO: handle 1i variant as texture unit
@@ -940,23 +963,16 @@ namespace MobileGL::MG_Impl::GLImpl {
         auto size = programObject->GetUniformSizesInBytes(location);
         char* pUBO = static_cast<char*>(programObject->MapUBO());
         auto* ttype = programObject->GetUniformTType(location);
+        const SizeT span = UniformStorageSpanInBytes(ttype, size);
         if (pUBO == nullptr || offset == MG_State::GLState::ProgramObject::kInvalidUniformOffset ||
-            offset + size > programObject->GetUBOSize()) {
+            offset + span > programObject->GetUBOSize()) {
             MGLOG_E("%s: uniform at program %u location %d has no backing storage; returning nothing", __func__,
                     program, location);
             return;
         }
 
         if constexpr (std::is_same_v<T, GLfloat>) {
-            if (ttype->getBasicType() != glslang::EbtDouble && ttype->isMatrix() &&
-                ttype->getMatrixCols() == 3) {
-                auto* pBase = pUBO + offset;
-                for (int i = 0; i < ttype->getMatrixRows(); i++) {
-                    Memcpy(reinterpret_cast<char*>(params) + ttype->getMatrixCols() * sizeof(GLfloat) * i,
-                           pBase + 4 * sizeof(GLfloat) * i, ttype->getMatrixCols() * sizeof(GLfloat));
-                }
-                return;
-            }
+            if (TryGatherFloatMatrixColumns(ttype, pUBO + offset, params)) return;
         }
 
         // A double-precision uniform is the one case where the stored component type can
@@ -1257,6 +1273,52 @@ namespace MobileGL::MG_Impl::GLImpl {
         }
     }
 
+    // glUniformMatrix*fv / glProgramUniformMatrix*fv, every shape (square and non-square).
+    // A float matrix sits in the global UBO under std140 rules: each of its `columns`
+    // column vectors starts on its own 16-byte boundary no matter how many rows it has, so
+    // the only shape that may be written as one contiguous block is mat4. Writing a matNxM
+    // as N*M packed floats puts every column after the first at the wrong byte offset.
+    template <typename Program>
+    void UniformMatrixfv_Object(Program& programObject, const char* caller, GLint location, GLsizei count,
+                                GLboolean transpose, const GLfloat* value, Int columns, Int rows,
+                                const String& ownerDescription) {
+        // std140: a column vector of a float matrix is padded out to a vec4.
+        constexpr SizeT kColumnStride = 4 * sizeof(GLfloat);
+        const SizeT componentCount = static_cast<SizeT>(columns) * static_cast<SizeT>(rows);
+        GLfloat column[4] = {};
+        for (GLint matrix = 0; matrix < count; ++matrix) {
+            if (matrix > 0 && !programObject.UniformLocationsAliasSameUniform(location, location + matrix)) {
+                // GL 3.3 2.11.4: values for elements beyond the end of the uniform array
+                // are ignored. Never step onto a neighboring uniform's location.
+                break;
+            }
+            if (!programObject.IsValidUniformLocation(location + matrix)) {
+                RecordInvalidUniformLocationError(caller, location + matrix, ownerDescription);
+                return;
+            }
+            if (programObject.IsUniformOpaqueAtLocation(location + matrix)) {
+                MG_State::pGLContext->RecordError(
+                    ErrorCode::InvalidOperation,
+                    MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller,
+                                                 "Opaque uniforms cannot be set with matrix Uniform calls."));
+                return;
+            }
+            if (value == nullptr) return;
+            const GLfloat* source = value + static_cast<SizeT>(matrix) * componentCount;
+            for (Int c = 0; c < columns; ++c) {
+                for (Int r = 0; r < rows; ++r) {
+                    column[r] = transpose == GL_TRUE ? source[r * columns + c] : source[c * rows + r];
+                }
+                const SizeT byteOffset = static_cast<SizeT>(c) * kColumnStride;
+                switch (rows) {
+                case 2: Uniform_State<2>(programObject, location + matrix, column, byteOffset); break;
+                case 3: Uniform_State<3>(programObject, location + matrix, column, byteOffset); break;
+                default: Uniform_State<4>(programObject, location + matrix, column, byteOffset); break;
+                }
+            }
+        }
+    }
+
     // Helper function to transpose a 2x2 matrix
     void TransposeMatrix2x2(const GLfloat* input, GLfloat* output) {
         // Input matrix is in column-major order (OpenGL default)
@@ -1362,8 +1424,8 @@ namespace MobileGL::MG_Impl::GLImpl {
     }
 
     void UniformMatrix2fv_State(GLint location, GLsizei count, GLboolean transpose, const GLfloat* value) {
-        // For 2x2 matrices, we have 4 elements per matrix
-        // If transpose is GL_TRUE, we need to transpose the matrix data
+        // A mat2 is NOT four contiguous floats in the global UBO: std140 pads each column
+        // vector out to 16 bytes, so column 1 starts at byte 16, not byte 8.
         if (location == -1) return;
 
         auto& programObject = MG_State::pGLContext->GetProgramForUniform();
@@ -1374,26 +1436,8 @@ namespace MobileGL::MG_Impl::GLImpl {
             return;
         }
 
-        // For matrix uniforms, we handle each matrix individually
-        for (GLint i = 0; i < count; i++) {
-            if (i > 0 && !programObject->UniformLocationsAliasSameUniform(location, location + i)) {
-                // Values for elements beyond the end of the uniform array are ignored.
-                break;
-            }
-            if (!programObject->IsValidUniformLocation(location + i)) {
-                RecordInvalidUniformLocationError(__func__, location + i, "the current program object");
-                return;
-            }
-            if (transpose == GL_TRUE) {
-                // Transpose the matrix before uploading
-                GLfloat transposedMatrix[4];
-                TransposeMatrix2x2(value + i * 4, transposedMatrix);
-                Uniform_State<4>(*programObject, location + i, transposedMatrix);
-            } else {
-                // No transpose needed, directly copy the matrix data
-                Uniform_State<4>(*programObject, location + i, value + i * 4);
-            }
-        }
+        UniformMatrixfv_Object(*programObject, __func__, location, count, transpose, value, 2, 2,
+                               "the current program object");
     }
 
     void UniformMatrix3fv_State(GLint location, GLsizei count, GLboolean transpose, const GLfloat* value) {
@@ -1471,7 +1515,8 @@ namespace MobileGL::MG_Impl::GLImpl {
         }
     }
 
-    void UniformMatrixNonSquarefv_State(const char* caller, GLint location, GLsizei count) {
+    void UniformMatrixNonSquarefv_State(const char* caller, GLint location, GLsizei count, GLboolean transpose,
+                                        const GLfloat* value, Int columns, Int rows) {
         if (location == -1) return;
 
         auto& programObject = MG_State::pGLContext->GetProgramForUniform();
@@ -1482,21 +1527,8 @@ namespace MobileGL::MG_Impl::GLImpl {
             return;
         }
 
-        for (GLint i = 0; i < count; i++) {
-            if (!programObject->IsValidUniformLocation(location + i)) {
-                RecordInvalidUniformLocationError(caller, location + i, "the current program object");
-                return;
-            }
-            if (programObject->IsUniformOpaqueAtLocation(location + i)) {
-                MG_State::pGLContext->RecordError(
-                    ErrorCode::InvalidOperation,
-                    MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller,
-                                                 "Opaque uniforms cannot be set with matrix Uniform calls."));
-                return;
-            }
-        }
-
-        // TODO: Implement non-square matrix uniform uploads for non-opaque uniforms.
+        UniformMatrixfv_Object(*programObject, caller, location, count, transpose, value, columns, rows,
+                               "the current program object");
     }
 
     void ProgramUniformMatrix2fv_State(GLuint program, GLint location, GLsizei count, GLboolean transpose,
@@ -1514,23 +1546,8 @@ namespace MobileGL::MG_Impl::GLImpl {
             return;
         }
 
-        for (GLint i = 0; i < count; i++) {
-            if (i > 0 && !programObject->UniformLocationsAliasSameUniform(location, location + i)) {
-                // Values for elements beyond the end of the uniform array are ignored.
-                break;
-            }
-            if (!programObject->IsValidUniformLocation(location + i)) {
-                RecordInvalidUniformLocationError(__func__, location + i, "program " + std::to_string(program));
-                return;
-            }
-            if (transpose == GL_TRUE) {
-                GLfloat transposedMatrix[4];
-                TransposeMatrix2x2(value + i * 4, transposedMatrix);
-                Uniform_State<4>(*programObject, location + i, transposedMatrix);
-            } else {
-                Uniform_State<4>(*programObject, location + i, value + i * 4);
-            }
-        }
+        UniformMatrixfv_Object(*programObject, __func__, location, count, transpose, value, 2, 2,
+                               "program " + std::to_string(program));
     }
 
     void ProgramUniformMatrix3fv_State(GLuint program, GLint location, GLsizei count, GLboolean transpose,
@@ -1605,7 +1622,8 @@ namespace MobileGL::MG_Impl::GLImpl {
         }
     }
 
-    void ProgramUniformMatrixNonSquarefv_State(const char* caller, GLuint program, GLint location, GLsizei count) {
+    void ProgramUniformMatrixNonSquarefv_State(const char* caller, GLuint program, GLint location, GLsizei count,
+                                               GLboolean transpose, const GLfloat* value, Int columns, Int rows) {
         if (location == -1) return;
 
         auto& programObject = TryToGetProgramObject(program);
@@ -1619,21 +1637,8 @@ namespace MobileGL::MG_Impl::GLImpl {
             return;
         }
 
-        for (GLint i = 0; i < count; i++) {
-            if (!programObject->IsValidUniformLocation(location + i)) {
-                RecordInvalidUniformLocationError(caller, location + i, "program " + std::to_string(program));
-                return;
-            }
-            if (programObject->IsUniformOpaqueAtLocation(location + i)) {
-                MG_State::pGLContext->RecordError(
-                    ErrorCode::InvalidOperation,
-                    MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller,
-                                                 "Opaque uniforms cannot be set with matrix Uniform calls."));
-                return;
-            }
-        }
-
-        // TODO: Implement non-square matrix uniform uploads for non-opaque uniforms.
+        UniformMatrixfv_Object(*programObject, caller, location, count, transpose, value, columns, rows,
+                               "program " + std::to_string(program));
     }
 
     GLuint GetUniformBlockIndex_State(GLuint program, const GLchar* uniformBlockName) {
@@ -2442,27 +2447,27 @@ namespace MobileGL::MG_Impl::GLImpl {
     }
 
     void UniformMatrix2x3fv(GLint location, GLsizei count, GLboolean transpose, const GLfloat* value) {
-        UniformMatrixNonSquarefv_State(__func__, location, count);
+        UniformMatrixNonSquarefv_State(__func__, location, count, transpose, value, 2, 3);
     }
 
     void UniformMatrix3x2fv(GLint location, GLsizei count, GLboolean transpose, const GLfloat* value) {
-        UniformMatrixNonSquarefv_State(__func__, location, count);
+        UniformMatrixNonSquarefv_State(__func__, location, count, transpose, value, 3, 2);
     }
 
     void UniformMatrix2x4fv(GLint location, GLsizei count, GLboolean transpose, const GLfloat* value) {
-        UniformMatrixNonSquarefv_State(__func__, location, count);
+        UniformMatrixNonSquarefv_State(__func__, location, count, transpose, value, 2, 4);
     }
 
     void UniformMatrix4x2fv(GLint location, GLsizei count, GLboolean transpose, const GLfloat* value) {
-        UniformMatrixNonSquarefv_State(__func__, location, count);
+        UniformMatrixNonSquarefv_State(__func__, location, count, transpose, value, 4, 2);
     }
 
     void UniformMatrix3x4fv(GLint location, GLsizei count, GLboolean transpose, const GLfloat* value) {
-        UniformMatrixNonSquarefv_State(__func__, location, count);
+        UniformMatrixNonSquarefv_State(__func__, location, count, transpose, value, 3, 4);
     }
 
     void UniformMatrix4x3fv(GLint location, GLsizei count, GLboolean transpose, const GLfloat* value) {
-        UniformMatrixNonSquarefv_State(__func__, location, count);
+        UniformMatrixNonSquarefv_State(__func__, location, count, transpose, value, 4, 3);
     }
 
     void ProgramUniform1f(GLuint program, GLint location, GLfloat v0) {
@@ -2587,32 +2592,32 @@ namespace MobileGL::MG_Impl::GLImpl {
 
     void ProgramUniformMatrix2x3fv(GLuint program, GLint location, GLsizei count, GLboolean transpose,
                                    const GLfloat* value) {
-        ProgramUniformMatrixNonSquarefv_State(__func__, program, location, count);
+        ProgramUniformMatrixNonSquarefv_State(__func__, program, location, count, transpose, value, 2, 3);
     }
 
     void ProgramUniformMatrix3x2fv(GLuint program, GLint location, GLsizei count, GLboolean transpose,
                                    const GLfloat* value) {
-        ProgramUniformMatrixNonSquarefv_State(__func__, program, location, count);
+        ProgramUniformMatrixNonSquarefv_State(__func__, program, location, count, transpose, value, 3, 2);
     }
 
     void ProgramUniformMatrix2x4fv(GLuint program, GLint location, GLsizei count, GLboolean transpose,
                                    const GLfloat* value) {
-        ProgramUniformMatrixNonSquarefv_State(__func__, program, location, count);
+        ProgramUniformMatrixNonSquarefv_State(__func__, program, location, count, transpose, value, 2, 4);
     }
 
     void ProgramUniformMatrix4x2fv(GLuint program, GLint location, GLsizei count, GLboolean transpose,
                                    const GLfloat* value) {
-        ProgramUniformMatrixNonSquarefv_State(__func__, program, location, count);
+        ProgramUniformMatrixNonSquarefv_State(__func__, program, location, count, transpose, value, 4, 2);
     }
 
     void ProgramUniformMatrix3x4fv(GLuint program, GLint location, GLsizei count, GLboolean transpose,
                                    const GLfloat* value) {
-        ProgramUniformMatrixNonSquarefv_State(__func__, program, location, count);
+        ProgramUniformMatrixNonSquarefv_State(__func__, program, location, count, transpose, value, 3, 4);
     }
 
     void ProgramUniformMatrix4x3fv(GLuint program, GLint location, GLsizei count, GLboolean transpose,
                                    const GLfloat* value) {
-        ProgramUniformMatrixNonSquarefv_State(__func__, program, location, count);
+        ProgramUniformMatrixNonSquarefv_State(__func__, program, location, count, transpose, value, 4, 3);
     }
 
     GLuint GetUniformBlockIndex(GLuint program, const GLchar* uniformBlockName) {
@@ -2859,6 +2864,16 @@ namespace MobileGL::MG_Impl::GLImpl {
     // is written as that sequence rather than as a private shortcut - every error it can
     // raise is one of theirs, raised at the point they would raise it.
     GLuint CreateShaderProgramv(GLenum type, GLsizei count, const GLchar* const* strings) {
+        // GL 4.6 core 7.3: a negative count is INVALID_VALUE and is checked before anything
+        // is created, so a bad count never leaks a shader name. An unrecognised type is
+        // INVALID_ENUM, which CreateShader_State raises below.
+        if (count < 0) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidValue,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__, "count must be non-negative."));
+            return 0;
+        }
+
         const GLuint shader = CreateShader_State(type);
         if (shader == 0) return 0;
 

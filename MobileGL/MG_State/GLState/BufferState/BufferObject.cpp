@@ -206,8 +206,11 @@ namespace MobileGL::MG_State::GLState {
     }
 
     void BufferObject::UploadSubData(DataPtr data, SizeT atOffset) {
-        MOBILEGL_ASSERT(!m_isMapped || (m_mappingAccess & BufferMappingAccessBit::Persistent),
-                        "Cannot upload sub data while buffer is non-persistently mapped.");
+        // GL 4.6 core 6.5 forbids only the OVERLAPPING write: a glBufferSubData that stays
+        // clear of a non-persistent mapping is legal, and the frontend lets it through.
+        MOBILEGL_ASSERT(!m_isMapped || (m_mappingAccess & BufferMappingAccessBit::Persistent) ||
+                            atOffset >= m_mappedRange.end || atOffset + data.size <= m_mappedRange.start,
+                        "Cannot upload sub data overlapping a non-persistent mapping.");
         MOBILEGL_ASSERT(atOffset + data.size <= m_size,
                         "UploadSubData out of bounds: atOffset (%zu) + data.size (%zu) > m_size (%zu)", atOffset,
                         data.size, m_size);

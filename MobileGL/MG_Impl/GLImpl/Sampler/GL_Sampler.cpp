@@ -8,6 +8,7 @@
 
 #include "GL_Sampler.h"
 #include "Validators.h"
+#include "../Getter/GL_Getter.h"
 #include <MG_State/GLState/Core.h>
 #include <MG_Util/Converters/GLToMG/TextureEnumConverter.h>
 #include <MG_Util/Converters/MGToGL/TextureEnumConverter.h>
@@ -268,9 +269,20 @@ namespace MobileGL::MG_Impl::GLImpl {
         }
     }
 
+    // The number of texture units a sampler may be bound to. GL 3.3 core 3.8.2 names
+    // GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS, which is what the backend advertises; the frontend's
+    // MAX_TEXTURE_IMAGE_UNITS is only the capacity of the unit array, so it is a clamp on the
+    // answer and never the answer itself - gating on it alone accepts every unit up to 192 no
+    // matter what the driver reports.
+    static GLint GetSamplerBindableTextureUnitCount() {
+        GLint maxTextureUnits = 0;
+        GetIntegerv(GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS, &maxTextureUnits);
+        return std::min<GLint>(std::max(maxTextureUnits, 0), MG_State::GLState::TextureState::MAX_TEXTURE_IMAGE_UNITS);
+    }
+
     void BindSampler_State(GLuint unit, GLuint sampler) {
         MGLOG_D("BindSampler_State: unit = %u, sampler = %u", unit, sampler);
-        if (unit >= MG_State::GLState::TextureState::MAX_TEXTURE_IMAGE_UNITS) {
+        if (static_cast<Uint64>(unit) >= static_cast<Uint64>(GetSamplerBindableTextureUnitCount())) {
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidValue,
                 MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", "BindSampler", "texture unit out of range"));
@@ -307,6 +319,20 @@ namespace MobileGL::MG_Impl::GLImpl {
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidValue,
                 MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", "BindSamplers", "count must be non-negative"));
+            return;
+        }
+        // ARB_multi_bind: the whole [first, first + count) range is checked up front and a
+        // range that runs past the last texture unit is INVALID_OPERATION - not the
+        // INVALID_VALUE the single-bind BindSampler_State reports per element, and nothing is
+        // bound when it fails. Both gates read the same limit (see
+        // GetSamplerBindableTextureUnitCount), so an out-of-range multi-bind can no longer slip
+        // past this check and be caught one element at a time with the wrong error class.
+        const GLint maxTextureUnits = GetSamplerBindableTextureUnitCount();
+        if (static_cast<Uint64>(first) + static_cast<Uint64>(count) > static_cast<Uint64>(maxTextureUnits)) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidOperation,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", "BindSamplers",
+                                             "first + count exceeds the number of texture units."));
             return;
         }
 

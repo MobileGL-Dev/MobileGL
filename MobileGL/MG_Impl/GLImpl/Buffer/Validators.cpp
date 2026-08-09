@@ -53,18 +53,46 @@ namespace MobileGL::MG_Impl::GLImpl::BufferImpl {
         return true;
     }
 
+    namespace {
+        // The GL-visible number of indexed binding points for `target`.
+        SizeT GetBufferBindingPointLimit(BufferTarget target) {
+            SizeT pointCount = MG_State::pGLContext->GetBufferBindingPointCount(target);
+            if (target == BufferTarget::ShaderStorage && MG_Backend::pActiveBackendObject) {
+                const Int backendCount =
+                    MG_Backend::pActiveBackendObject->GetDynamicParameters().MaxShaderStorageBufferBindings;
+                pointCount = std::min(pointCount, static_cast<SizeT>(std::max(backendCount, 0)));
+            }
+            if (target == BufferTarget::TransformFeedback) {
+                // GL_MAX_TRANSFORM_FEEDBACK_SEPARATE_ATTRIBS bounds the indexed capture
+                // binding points in GL 3.3 (no ARB_transform_feedback3).
+                pointCount = std::min<SizeT>(pointCount, 4);
+            }
+            return pointCount;
+        }
+    } // namespace
+
+    Bool ValidateBufferBindingPointRange(BufferTarget target, Uint first, GLsizei count, const char* funcName) {
+        if (count < 0) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidValue, MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl/BufferImpl", funcName,
+                                                                      "count must be non-negative."));
+            return false;
+        }
+        const SizeT pointCount = GetBufferBindingPointLimit(target);
+        if (static_cast<Uint64>(first) + static_cast<Uint64>(count) > static_cast<Uint64>(pointCount)) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidOperation,
+                MakeUnique<GenericErrorInfo>(
+                    "MG_Impl/GLImpl/BufferImpl", funcName,
+                    std::format("first + count ({} + {}) exceeds the {} indexed binding points of target {}.", first,
+                                count, pointCount, MG_Util::ConvertBufferTargetToString(target))));
+            return false;
+        }
+        return true;
+    }
+
     Bool ValidateBufferBindingPointIndex(BufferTarget target, Uint index) {
-        SizeT pointCount = MG_State::pGLContext->GetBufferBindingPointCount(target);
-        if (target == BufferTarget::ShaderStorage && MG_Backend::pActiveBackendObject) {
-            const Int backendCount =
-                MG_Backend::pActiveBackendObject->GetDynamicParameters().MaxShaderStorageBufferBindings;
-            pointCount = std::min(pointCount, static_cast<SizeT>(std::max(backendCount, 0)));
-        }
-        if (target == BufferTarget::TransformFeedback) {
-            // GL_MAX_TRANSFORM_FEEDBACK_SEPARATE_ATTRIBS bounds the indexed capture
-            // binding points in GL 3.3 (no ARB_transform_feedback3).
-            pointCount = std::min<SizeT>(pointCount, 4);
-        }
+        const SizeT pointCount = GetBufferBindingPointLimit(target);
 
         if (index < pointCount) {
             return true;

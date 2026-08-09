@@ -1290,3 +1290,77 @@ TEST_F(GeneralVertexArrayTest, ArrayFormat_IntegerPathRejectsPackedAndBgra) {
     EXPECT_FALSE(a0.IsBgra);
 }
 
+
+// The integer path takes exactly the eight signed/unsigned integer types (GL 4.6 core 10.3.2).
+// The old check was a blacklist of Unknown + the packed types, so GL_FLOAT / GL_HALF_FLOAT /
+// GL_DOUBLE / GL_FIXED all converted to a valid DataType and were silently recorded as integer
+// attributes.
+TEST_F(GeneralVertexArrayTest, ArrayFormat_IntegerPathRejectsFloatTypes) {
+    CreateVAO();
+    CreateVBO(GL_ARRAY_BUFFER, 64);
+
+    // Establish a known-good integer format first, so a rejected call is visible as "unchanged".
+    VertexAttribIPointer(0, 4, GL_INT, 0, nullptr);
+    ASSERT_EQ(GetError(), GL_NO_ERROR);
+
+    const GLenum floatTypes[] = {GL_FLOAT, GL_HALF_FLOAT, GL_DOUBLE, GL_FIXED};
+    for (GLenum type : floatTypes) {
+        VertexAttribIPointer(0, 4, type, 0, nullptr);
+        EXPECT_EQ(GetError(), GL_INVALID_ENUM) << "type " << type << " was accepted on the integer path";
+        const auto& attribute = MG_State::pGLContext->GetBoundVertexArray()->GetAttribute(0);
+        EXPECT_EQ(attribute.Type, DataType::Int32) << "a rejected format must not take effect";
+        EXPECT_TRUE(attribute.IsInteger);
+    }
+
+    // The float path still accepts them.
+    VertexAttribPointer(0, 4, GL_FLOAT, GL_FALSE, 0, nullptr);
+    EXPECT_EQ(GetError(), GL_NO_ERROR);
+    EXPECT_EQ(MG_State::pGLContext->GetBoundVertexArray()->GetAttribute(0).Type, DataType::Float32);
+}
+
+// ARB_vertex_attrib_binding's two per-attribute queries. They were missing from
+// ValidateVertexAttribPname (so glGetVertexAttribiv answered INVALID_ENUM) and from
+// glGetVertexArrayIndexediv's switch (GL_VERTEX_ATTRIB_BINDING only).
+TEST_F(GeneralVertexArrayTest, ArrayFormat_BindingAndRelativeOffsetAreQueryable) {
+    const GLuint vao = CreateVAO();
+    CreateVBO(GL_ARRAY_BUFFER, 256);
+
+    VertexAttribFormat(2, 3, GL_FLOAT, GL_FALSE, 12);
+    VertexAttribBinding(2, 5);
+    ASSERT_EQ(GetError(), GL_NO_ERROR);
+
+    GLint binding = -1;
+    GetVertexAttribiv(2, GL_VERTEX_ATTRIB_BINDING, &binding);
+    EXPECT_EQ(binding, 5);
+    EXPECT_EQ(GetError(), GL_NO_ERROR);
+
+    GLint relativeOffset = -1;
+    GetVertexAttribiv(2, GL_VERTEX_ATTRIB_RELATIVE_OFFSET, &relativeOffset);
+    EXPECT_EQ(relativeOffset, 12);
+    EXPECT_EQ(GetError(), GL_NO_ERROR);
+
+    // The float and double views convert the same value.
+    GLfloat bindingAsFloat = -1.0f;
+    GetVertexAttribfv(2, GL_VERTEX_ATTRIB_BINDING, &bindingAsFloat);
+    EXPECT_FLOAT_EQ(bindingAsFloat, 5.0f);
+    GLdouble offsetAsDouble = -1.0;
+    GetVertexAttribdv(2, GL_VERTEX_ATTRIB_RELATIVE_OFFSET, &offsetAsDouble);
+    EXPECT_DOUBLE_EQ(offsetAsDouble, 12.0);
+    EXPECT_EQ(GetError(), GL_NO_ERROR);
+
+    // The by-name (DSA) indexed query answers both as well.
+    GLint namedBinding = -1;
+    GetVertexArrayIndexediv(vao, 2, GL_VERTEX_ATTRIB_BINDING, &namedBinding);
+    EXPECT_EQ(namedBinding, 5);
+    GLint namedRelativeOffset = -1;
+    GetVertexArrayIndexediv(vao, 2, GL_VERTEX_ATTRIB_RELATIVE_OFFSET, &namedRelativeOffset);
+    EXPECT_EQ(namedRelativeOffset, 12);
+    EXPECT_EQ(GetError(), GL_NO_ERROR);
+
+    // An attribute nobody re-bound keeps the default attribute-i -> binding-i mapping.
+    GetVertexAttribiv(1, GL_VERTEX_ATTRIB_BINDING, &binding);
+    EXPECT_EQ(binding, 1);
+    GetVertexAttribiv(1, GL_VERTEX_ATTRIB_RELATIVE_OFFSET, &relativeOffset);
+    EXPECT_EQ(relativeOffset, 0);
+    EXPECT_EQ(GetError(), GL_NO_ERROR);
+}

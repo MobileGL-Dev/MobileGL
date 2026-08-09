@@ -51,6 +51,14 @@ namespace MobileGL::MG_Impl::GLImpl {
         constexpr GLint kFrontendMaxTessControlAtomicCounters = 0;
         constexpr GLint kFrontendMaxTessEvaluationAtomicCounters = 0;
         constexpr GLint kFrontendMaxVertexAtomicCounters = 0;
+        // One atomic counter is a uint, and a buffer never has to hold more counters than the
+        // combined limit the frontend advertises. GL 4.6 table 23.63 floors this at 32 bytes.
+        constexpr GLint kFrontendMaxAtomicCounterBufferSize =
+            kFrontendMaxCombinedAtomicCounters * static_cast<GLint>(sizeof(GLuint));
+        // KHR_debug minima (GL 4.6 table 23.66); the debug entry points are stubs, but the
+        // limits they advertise still have to be legal.
+        constexpr GLint kFrontendMaxDebugGroupStackDepth = 64;
+        constexpr GLint kFrontendMaxDebugLoggedMessages = 1;
         constexpr GLint kFrontendMaxVertexUniformComponents = 4096;
         constexpr GLint kFrontendMaxVertexUniformVectors = 128;
         constexpr GLint kFrontendMaxVertexUniformBlocks = 14;
@@ -262,6 +270,60 @@ namespace MobileGL::MG_Impl::GLImpl {
             }
 
             return true;
+        }
+
+        // GL_TEXTURE_BINDING_* is per-texture-unit state: glGetIntegerv answers for the
+        // active unit, glGetIntegeri_v answers for unit `index`. Both need the same
+        // pname -> target decode, so it lives here instead of being spelled out twice.
+        bool TryDecodeTextureUnitBindingPname(GLenum pname, TextureTarget& outTarget) {
+            switch (pname) {
+            case GL_TEXTURE_BINDING_1D: outTarget = TextureTarget::Texture1D; return true;
+            case GL_TEXTURE_BINDING_1D_ARRAY: outTarget = TextureTarget::Texture1DArray; return true;
+            case GL_TEXTURE_BINDING_2D: outTarget = TextureTarget::Texture2D; return true;
+            case GL_TEXTURE_BINDING_2D_ARRAY: outTarget = TextureTarget::Texture2DArray; return true;
+            case GL_TEXTURE_BINDING_2D_MULTISAMPLE: outTarget = TextureTarget::Texture2DMultisample; return true;
+            case GL_TEXTURE_BINDING_2D_MULTISAMPLE_ARRAY:
+                outTarget = TextureTarget::Texture2DMultisampleArray;
+                return true;
+            case GL_TEXTURE_BINDING_3D: outTarget = TextureTarget::Texture3D; return true;
+            case GL_TEXTURE_BINDING_BUFFER: outTarget = TextureTarget::TextureBuffer; return true;
+            case GL_TEXTURE_BINDING_CUBE_MAP: outTarget = TextureTarget::TextureCubeMap; return true;
+            case GL_TEXTURE_BINDING_CUBE_MAP_ARRAY: outTarget = TextureTarget::TextureCubeMapArray; return true;
+            case GL_TEXTURE_BINDING_RECTANGLE: outTarget = TextureTarget::TextureRectangle; return true;
+            default: return false;
+            }
+        }
+
+        GLint QueryTextureBindingOnUnit(Int unit, TextureTarget target) {
+            auto& textureUnit = MG_State::pGLContext->GetTextureUnitObject(unit);
+            const auto& obj = textureUnit.GetBindingSlot(target).GetBoundObject();
+            return obj ? static_cast<GLint>(obj->GetExternalIndex()) : 0;
+        }
+
+        GLint QuerySamplerBindingOnUnit(Int unit) {
+            const auto& textureUnit = MG_State::pGLContext->GetTextureUnitObject(unit);
+            const auto& sampler = textureUnit.GetSamplerObject();
+            return sampler ? static_cast<GLint>(sampler->GetExternalIndex()) : 0;
+        }
+
+        // The ARB_viewport_array indexed rectangles. MobileGL keeps exactly one viewport, one
+        // scissor box and one depth range, so every in-range index answers with that single
+        // value - but it has to come from the frontend state the non-indexed getters read.
+        // The generic path at the bottom of GetIntegeri_v is a raw backend passthrough that
+        // has no case for these, so routing them through it returned zeros.
+        Bool IsIndexedViewportQuery(GLenum target) {
+            return target == GL_VIEWPORT || target == GL_SCISSOR_BOX || target == GL_DEPTH_RANGE;
+        }
+
+        // ARB_viewport_array: `index` selects a viewport and MAX_VIEWPORTS bounds it.
+        Bool ValidateViewportQueryIndex(GLuint index, const char* caller) {
+            GLint maxViewports = 0;
+            GetIntegerv(GL_MAX_VIEWPORTS, &maxViewports);
+            if (index < static_cast<GLuint>(std::max(maxViewports, 1))) return true;
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidValue,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller, "Viewport index is out of range."));
+            return false;
         }
 
         void CopyIntsToBooleans(const GLint* src, SizeT count, GLboolean* dst) {
@@ -671,7 +733,37 @@ namespace MobileGL::MG_Impl::GLImpl {
             }
         }
 
+        // Per-texture-unit bindings: GL 4.6 core table 23.19 makes every GL_TEXTURE_BINDING_*
+        // and GL_SAMPLER_BINDING indexed by texture unit. Without this they fell through to
+        // the raw backend passthrough at the bottom, which knows nothing about the
+        // frontend's binding state.
+        if (TextureTarget textureBindingTarget = TextureTarget::Unknown;
+            TryDecodeTextureUnitBindingPname(target, textureBindingTarget) || target == GL_SAMPLER_BINDING) {
+            GLint maxUnits = 0;
+            GetIntegerv(GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS, &maxUnits);
+            maxUnits = std::min<GLint>(maxUnits, MG_State::GLState::TextureState::MAX_TEXTURE_IMAGE_UNITS);
+            if (index >= static_cast<GLuint>(std::max(maxUnits, 0))) {
+                *data = 0;
+                MG_State::pGLContext->RecordError(
+                    ErrorCode::InvalidValue,
+                    MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__, "Texture unit index is out of range."));
+                return;
+            }
+            *data = target == GL_SAMPLER_BINDING
+                ? QuerySamplerBindingOnUnit(static_cast<Int>(index))
+                : QueryTextureBindingOnUnit(static_cast<Int>(index), textureBindingTarget);
+            return;
+        }
+
         switch (target) {
+        // ARB_viewport_array queries the indexed rectangles through glGetIntegeri_v as well
+        // (gl4cMultiBindTests and the viewport_array group both do). The frontend keeps one
+        // viewport and one scissor box, so every in-range index reports that one.
+        case GL_VIEWPORT:
+        case GL_SCISSOR_BOX:
+            if (!ValidateViewportQueryIndex(index, __func__)) return;
+            GetIntegerv(target, data);
+            return;
         // The vertex buffer binding points of the vertex array object that is bound. Indexed by
         // binding point, not by attribute (GL 4.6 core 10.3.1).
         case GL_VERTEX_BINDING_BUFFER:
@@ -781,6 +873,46 @@ namespace MobileGL::MG_Impl::GLImpl {
             return;
         }
         getIntegeri(target, index, data);
+    }
+
+    // GL_ARB_viewport_array's typed indexed getters. They were no-op stubs, which left the
+    // caller's output buffer holding whatever was on the stack. The multi-component indexed
+    // rectangles are answered from the frontend's own viewport/scissor/depth-range state, via
+    // the non-indexed getter of the matching type - GL_DEPTH_RANGE is float state, so putting
+    // it through the integer query would round it to 0/1. Everything else MobileGL answers
+    // indexed is scalar integer-domain state, where converting the integer query is exact.
+    void GetFloati_v(GLenum target, GLuint index, GLfloat* data) {
+        if (!data) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidValue,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__, "data pointer cannot be null"));
+            return;
+        }
+        if (IsIndexedViewportQuery(target)) {
+            if (!ValidateViewportQueryIndex(index, __func__)) return;
+            GetFloatv(target, data);
+            return;
+        }
+        GLint ints[4] = {};
+        GetIntegeri_v(target, index, ints);
+        data[0] = static_cast<GLfloat>(ints[0]);
+    }
+
+    void GetDoublei_v(GLenum target, GLuint index, GLdouble* data) {
+        if (!data) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidValue,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__, "data pointer cannot be null"));
+            return;
+        }
+        if (IsIndexedViewportQuery(target)) {
+            if (!ValidateViewportQueryIndex(index, __func__)) return;
+            GetDoublev(target, data);
+            return;
+        }
+        GLint ints[4] = {};
+        GetIntegeri_v(target, index, ints);
+        data[0] = static_cast<GLdouble>(ints[0]);
     }
 
     void GetInteger64i_v(GLenum target, GLuint index, GLint64* data) {
@@ -959,6 +1091,13 @@ namespace MobileGL::MG_Impl::GLImpl {
             return;
         }
 
+        // Per-texture-unit bindings: the non-indexed query reports the active unit.
+        if (TextureTarget textureBindingTarget = TextureTarget::Unknown;
+            TryDecodeTextureUnitBindingPname(pname, textureBindingTarget)) {
+            *params = QueryTextureBindingOnUnit(MG_State::pGLContext->GetActiveTextureUnit(), textureBindingTarget);
+            return;
+        }
+
         switch (pname) {
         case GL_ACTIVE_TEXTURE:
             *params = MG_State::pGLContext->GetActiveTextureUnit() + GL_TEXTURE0;
@@ -1085,10 +1224,16 @@ namespace MobileGL::MG_Impl::GLImpl {
                           : 0;
             return;
         case GL_MAX_DEBUG_GROUP_STACK_DEPTH:
-            *params = 0; // debug-group entrypoints are stubbed
+            // KHR_debug floors this at 64 even when the group entry points are stubs: the
+            // limit describes how deep glPushDebugGroup may nest, and 0 is not a legal answer.
+            *params = kFrontendMaxDebugGroupStackDepth;
             return;
         case GL_MAX_DEBUG_MESSAGE_LENGTH:
             *params = 1024; // debug-message entrypoints are stubbed, but KHR_debug requires a valid limit
+            return;
+        case GL_MAX_DEBUG_LOGGED_MESSAGES:
+            // Size of the message log ring; KHR_debug requires at least 1.
+            *params = kFrontendMaxDebugLoggedMessages;
             return;
         case GL_DEBUG_GROUP_STACK_DEPTH:
             *params = 0; // debug-group entrypoints are stubbed
@@ -1531,13 +1676,9 @@ namespace MobileGL::MG_Impl::GLImpl {
         case GL_SAMPLE_MASK_VALUE:
             *params = static_cast<GLint>(MG_State::pGLContext->GetSampleMaskValue());
             return;
-        case GL_SAMPLER_BINDING: {
-            Int unit = MG_State::pGLContext->GetActiveTextureUnit();
-            const auto& tu = MG_State::pGLContext->GetTextureUnitObject(unit);
-            const auto& sampler = tu.GetSamplerObject();
-            *params = sampler ? static_cast<GLint>(sampler->GetExternalIndex()) : 0;
+        case GL_SAMPLER_BINDING:
+            *params = QuerySamplerBindingOnUnit(MG_State::pGLContext->GetActiveTextureUnit());
             return;
-        }
         case GL_SAMPLES:
             *params = ResolveDrawFramebufferSampleCount();
             return;
@@ -1633,87 +1774,6 @@ namespace MobileGL::MG_Impl::GLImpl {
         case GL_STEREO:
             *params = 0; // stereo surfaces are not exposed
             return;
-        case GL_TEXTURE_BINDING_1D: {
-            Int unit = MG_State::pGLContext->GetActiveTextureUnit();
-            auto& tu = MG_State::pGLContext->GetTextureUnitObject(unit);
-            const auto& slot = tu.GetBindingSlot(TextureTarget::Texture1D);
-            const auto& obj = slot.GetBoundObject();
-            *params = obj ? static_cast<GLint>(obj->GetExternalIndex()) : 0;
-            return;
-        }
-        case GL_TEXTURE_BINDING_1D_ARRAY: {
-            Int unit = MG_State::pGLContext->GetActiveTextureUnit();
-            auto& tu = MG_State::pGLContext->GetTextureUnitObject(unit);
-            const auto& slot = tu.GetBindingSlot(TextureTarget::Texture1DArray);
-            const auto& obj = slot.GetBoundObject();
-            *params = obj ? static_cast<GLint>(obj->GetExternalIndex()) : 0;
-            return;
-        }
-        case GL_TEXTURE_BINDING_2D: {
-            Int unit = MG_State::pGLContext->GetActiveTextureUnit();
-            auto& tu = MG_State::pGLContext->GetTextureUnitObject(unit);
-            const auto& slot = tu.GetBindingSlot(TextureTarget::Texture2D);
-            const auto& obj = slot.GetBoundObject();
-            *params = obj ? static_cast<GLint>(obj->GetExternalIndex()) : 0;
-            MGLOG_D("Get GL_TEXTURE_BINDING_2D: %d", *params);
-            return;
-        }
-        case GL_TEXTURE_BINDING_2D_ARRAY: {
-            Int unit = MG_State::pGLContext->GetActiveTextureUnit();
-            auto& tu = MG_State::pGLContext->GetTextureUnitObject(unit);
-            const auto& slot = tu.GetBindingSlot(TextureTarget::Texture2DArray);
-            const auto& obj = slot.GetBoundObject();
-            *params = obj ? static_cast<GLint>(obj->GetExternalIndex()) : 0;
-            return;
-        }
-        case GL_TEXTURE_BINDING_2D_MULTISAMPLE: {
-            Int unit = MG_State::pGLContext->GetActiveTextureUnit();
-            auto& tu = MG_State::pGLContext->GetTextureUnitObject(unit);
-            const auto& slot = tu.GetBindingSlot(TextureTarget::Texture2DMultisample);
-            const auto& obj = slot.GetBoundObject();
-            *params = obj ? static_cast<GLint>(obj->GetExternalIndex()) : 0;
-            return;
-        }
-        case GL_TEXTURE_BINDING_2D_MULTISAMPLE_ARRAY: {
-            Int unit = MG_State::pGLContext->GetActiveTextureUnit();
-            auto& tu = MG_State::pGLContext->GetTextureUnitObject(unit);
-            const auto& slot = tu.GetBindingSlot(TextureTarget::Texture2DMultisampleArray);
-            const auto& obj = slot.GetBoundObject();
-            *params = obj ? static_cast<GLint>(obj->GetExternalIndex()) : 0;
-            return;
-        }
-        case GL_TEXTURE_BINDING_3D: {
-            Int unit = MG_State::pGLContext->GetActiveTextureUnit();
-            auto& tu = MG_State::pGLContext->GetTextureUnitObject(unit);
-            const auto& slot = tu.GetBindingSlot(TextureTarget::Texture3D);
-            const auto& obj = slot.GetBoundObject();
-            *params = obj ? static_cast<GLint>(obj->GetExternalIndex()) : 0;
-            return;
-        }
-        case GL_TEXTURE_BINDING_BUFFER: {
-            Int unit = MG_State::pGLContext->GetActiveTextureUnit();
-            auto& tu = MG_State::pGLContext->GetTextureUnitObject(unit);
-            const auto& slot = tu.GetBindingSlot(TextureTarget::TextureBuffer);
-            const auto& obj = slot.GetBoundObject();
-            *params = obj ? static_cast<GLint>(obj->GetExternalIndex()) : 0;
-            return;
-        }
-        case GL_TEXTURE_BINDING_CUBE_MAP: {
-            Int unit = MG_State::pGLContext->GetActiveTextureUnit();
-            auto& tu = MG_State::pGLContext->GetTextureUnitObject(unit);
-            const auto& slot = tu.GetBindingSlot(TextureTarget::TextureCubeMap);
-            const auto& obj = slot.GetBoundObject();
-            *params = obj ? static_cast<GLint>(obj->GetExternalIndex()) : 0;
-            return;
-        }
-        case GL_TEXTURE_BINDING_RECTANGLE: {
-            Int unit = MG_State::pGLContext->GetActiveTextureUnit();
-            auto& tu = MG_State::pGLContext->GetTextureUnitObject(unit);
-            const auto& slot = tu.GetBindingSlot(TextureTarget::TextureRectangle);
-            const auto& obj = slot.GetBoundObject();
-            *params = obj ? static_cast<GLint>(obj->GetExternalIndex()) : 0;
-            return;
-        }
         case GL_TEXTURE_COMPRESSION_HINT:
             *params = static_cast<GLint>(MG_State::pGLContext->GetHint(pname));
             return;
@@ -1985,6 +2045,18 @@ namespace MobileGL::MG_Impl::GLImpl {
             break;
         case GL_MAX_SHADER_STORAGE_BUFFER_BINDINGS:
             *params = static_cast<GLint>(GetIndexedBufferQueryPointCount(BufferTarget::ShaderStorage));
+            break;
+        case GL_MAX_SHADER_STORAGE_BLOCK_SIZE:
+            // 64-bit state (see GetInteger64v); the 32-bit query saturates, per the GL
+            // state-query conversion rules.
+            *params = static_cast<GLint>(std::min<Uint64>(dynamicParameters.MaxShaderStorageBlockSize,
+                                                          static_cast<Uint64>(INT32_MAX)));
+            break;
+        case GL_MAX_ATOMIC_COUNTER_BUFFER_BINDINGS:
+            *params = static_cast<GLint>(GetIndexedBufferQueryPointCount(BufferTarget::AtomicCounter));
+            break;
+        case GL_MAX_ATOMIC_COUNTER_BUFFER_SIZE:
+            *params = kFrontendMaxAtomicCounterBufferSize;
             break;
         case GL_MAX_TEXTURE_BUFFER_SIZE:
             *params = dynamicParameters.MaxTextureBufferSize;

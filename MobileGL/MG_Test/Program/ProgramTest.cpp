@@ -3091,3 +3091,148 @@ TEST_F(ProgramTest, PreprocessCacheOverflowKeepsCompilingCorrectly) {
     EXPECT_GE(GetUniformLocation(programB, "uColor"), 0);
     EXPECT_EQ(GetError(), GL_NO_ERROR);
 }
+
+// glUniformMatrix{2x3,2x4,3x2,3x4,4x2,4x3}fv and their twelve glProgramUniformMatrix* twins were
+// validate-only no-ops: they never took the value pointer at all. They upload column-at-a-time at
+// the std140 16-byte column stride, honouring `transpose`, and glGetUniformfv undoes that padding.
+TEST_F(ProgramTest, NonSquareMatrixUniformsRoundTripThroughTheGlobalUbo) {
+    const char* vsSource = R"(#version 430 core
+uniform mat2x3 uM2x3;
+uniform mat3x2 uM3x2;
+uniform mat4x3 uM4x3;
+uniform mat2 uM2;
+void main() {
+    vec3 a = uM2x3 * vec2(1.0);
+    vec2 b = uM3x2 * vec3(1.0);
+    vec3 c = uM4x3 * vec4(1.0);
+    vec2 d = uM2 * vec2(1.0);
+    gl_Position = vec4(a.xy + b + c.xy + d, 0.0, 1.0);
+}
+)";
+    const char* fsSource = R"(#version 430 core
+out vec4 fragColor;
+void main() { fragColor = vec4(1.0); }
+)";
+    GLuint vs = CompileShaderChecked(GL_VERTEX_SHADER, vsSource);
+    GLuint fs = CompileShaderChecked(GL_FRAGMENT_SHADER, fsSource);
+    GLuint program = LinkVsFs(vs, fs, GL_TRUE);
+    UseProgram(program);
+    ASSERT_EQ(GetError(), GL_NO_ERROR);
+
+    // matCxR is C columns of R rows, column-major: value[c * R + r].
+    const GLfloat m2x3[6] = {1, 2, 3, 4, 5, 6};
+    const GLfloat m3x2[6] = {1, 2, 3, 4, 5, 6};
+    const GLfloat m4x3[12] = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12};
+
+    const GLint loc2x3 = GetUniformLocation(program, "uM2x3");
+    const GLint loc3x2 = GetUniformLocation(program, "uM3x2");
+    const GLint loc4x3 = GetUniformLocation(program, "uM4x3");
+    ASSERT_GE(loc2x3, 0);
+    ASSERT_GE(loc3x2, 0);
+    ASSERT_GE(loc4x3, 0);
+
+    UniformMatrix2x3fv(loc2x3, 1, GL_FALSE, m2x3);
+    UniformMatrix3x2fv(loc3x2, 1, GL_FALSE, m3x2);
+    UniformMatrix4x3fv(loc4x3, 1, GL_FALSE, m4x3);
+    ASSERT_EQ(GetError(), GL_NO_ERROR);
+
+    GLfloat readBack[12] = {};
+    GetUniformfv(program, loc2x3, readBack);
+    EXPECT_EQ(std::memcmp(readBack, m2x3, sizeof(m2x3)), 0);
+    std::memset(readBack, 0, sizeof(readBack));
+    GetUniformfv(program, loc3x2, readBack);
+    EXPECT_EQ(std::memcmp(readBack, m3x2, sizeof(m3x2)), 0);
+    std::memset(readBack, 0, sizeof(readBack));
+    GetUniformfv(program, loc4x3, readBack);
+    EXPECT_EQ(std::memcmp(readBack, m4x3, sizeof(m4x3)), 0);
+    EXPECT_EQ(GetError(), GL_NO_ERROR);
+
+    // transpose = GL_TRUE means the source is row-major: a mat3x2 (3 columns, 2 rows) is then
+    // given as 2 rows of 3, so {1,2,3, 4,5,6} is the column-major {1,4, 2,5, 3,6}.
+    UniformMatrix3x2fv(loc3x2, 1, GL_TRUE, m3x2);
+    const GLfloat expectedTransposed3x2[6] = {1, 4, 2, 5, 3, 6};
+    std::memset(readBack, 0, sizeof(readBack));
+    GetUniformfv(program, loc3x2, readBack);
+    EXPECT_EQ(std::memcmp(readBack, expectedTransposed3x2, sizeof(expectedTransposed3x2)), 0);
+    EXPECT_EQ(GetError(), GL_NO_ERROR);
+
+    // The glProgramUniform* twin writes the same bytes without the program being current.
+    UseProgram(0);
+    const GLfloat other2x3[6] = {9, 8, 7, 6, 5, 4};
+    ProgramUniformMatrix2x3fv(program, loc2x3, 1, GL_FALSE, other2x3);
+    std::memset(readBack, 0, sizeof(readBack));
+    GetUniformfv(program, loc2x3, readBack);
+    EXPECT_EQ(std::memcmp(readBack, other2x3, sizeof(other2x3)), 0);
+    EXPECT_EQ(GetError(), GL_NO_ERROR);
+}
+
+// A mat2 is not four contiguous floats in the global UBO: std140 pads each column vector out to
+// 16 bytes, so column 1 starts at byte 16. Writing it packed put column 1 on top of column 0's
+// padding, where the shader never reads it.
+TEST_F(ProgramTest, Mat2UniformUsesTheStd140ColumnStride) {
+    const char* vsSource = R"(#version 430 core
+uniform mat2 uM2;
+void main() { gl_Position = vec4(uM2 * vec2(1.0), 0.0, 1.0); }
+)";
+    const char* fsSource = R"(#version 430 core
+out vec4 fragColor;
+void main() { fragColor = vec4(1.0); }
+)";
+    GLuint vs = CompileShaderChecked(GL_VERTEX_SHADER, vsSource);
+    GLuint fs = CompileShaderChecked(GL_FRAGMENT_SHADER, fsSource);
+    GLuint program = LinkVsFs(vs, fs, GL_TRUE);
+    UseProgram(program);
+    const GLint loc = GetUniformLocation(program, "uM2");
+    ASSERT_GE(loc, 0);
+
+    const GLfloat m2[4] = {1, 2, 3, 4};
+    UniformMatrix2fv(loc, 1, GL_FALSE, m2);
+    ASSERT_EQ(GetError(), GL_NO_ERROR);
+
+    // The GL-visible value is tightly packed...
+    GLfloat readBack[4] = {};
+    GetUniformfv(program, loc, readBack);
+    EXPECT_EQ(std::memcmp(readBack, m2, sizeof(m2)), 0);
+
+    // ...while the bytes in the UBO put column 1 at offset 16, not 8.
+    const auto& programObject = MG_State::pGLContext->GetProgramObject(program);
+    ASSERT_NE(programObject, nullptr);
+    const auto* ubo = static_cast<const char*>(programObject->MapUBO());
+    ASSERT_NE(ubo, nullptr);
+    const Uint offset = programObject->GetUniformOffset(static_cast<Uint>(loc));
+    ASSERT_NE(offset, MG_State::GLState::ProgramObject::kInvalidUniformOffset);
+    GLfloat column0[2] = {};
+    GLfloat column1[2] = {};
+    std::memcpy(column0, ubo + offset, sizeof(column0));
+    std::memcpy(column1, ubo + offset + 16, sizeof(column1));
+    EXPECT_FLOAT_EQ(column0[0], 1.0f);
+    EXPECT_FLOAT_EQ(column0[1], 2.0f);
+    EXPECT_FLOAT_EQ(column1[0], 3.0f);
+    EXPECT_FLOAT_EQ(column1[1], 4.0f);
+    EXPECT_EQ(GetError(), GL_NO_ERROR);
+}
+
+// GL 4.6 core 7.1: shaderType is an enum, so an unrecognised one is INVALID_ENUM - it used to be
+// reported as INVALID_VALUE. glCreateShaderProgramv adds a count < 0 gate ahead of everything.
+TEST_F(ProgramTest, CreateShaderAndCreateShaderProgramvReportTheRightErrorClasses) {
+    while (GetError() != GL_NO_ERROR) {
+    }
+
+    EXPECT_EQ(CreateShader(GL_FLOAT), 0u);
+    EXPECT_EQ(GetError(), GL_INVALID_ENUM);
+    EXPECT_EQ(GetError(), GL_NO_ERROR) << "the call recorded more than one error";
+
+    const char* source = "#version 330 core\nvoid main() { gl_Position = vec4(1.0); }\n";
+    EXPECT_EQ(CreateShaderProgramv(GL_FLOAT, 1, &source), 0u);
+    EXPECT_EQ(GetError(), GL_INVALID_ENUM);
+    EXPECT_EQ(GetError(), GL_NO_ERROR) << "the call recorded more than one error";
+
+    EXPECT_EQ(CreateShaderProgramv(GL_VERTEX_SHADER, -1, &source), 0u);
+    EXPECT_EQ(GetError(), GL_INVALID_VALUE);
+    EXPECT_EQ(GetError(), GL_NO_ERROR) << "the call recorded more than one error";
+
+    // A well-formed call still works.
+    const GLuint program = CreateShaderProgramv(GL_VERTEX_SHADER, 1, &source);
+    EXPECT_NE(program, 0u);
+    EXPECT_EQ(GetError(), GL_NO_ERROR);
+}

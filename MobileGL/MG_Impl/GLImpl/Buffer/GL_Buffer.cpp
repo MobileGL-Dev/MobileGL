@@ -9,6 +9,7 @@
 #include "GL_Buffer.h"
 #include "Validators.h"
 #include "../Texture/GL_Texture.h"
+#include "../Getter/GL_Getter.h"
 #include <MG_Util/Converters/GLToMG/TextureEnumConverter.h>
 #include <MG_Util/Metrics/TextureMetrics.h>
 #include <Config.h>
@@ -861,6 +862,10 @@ namespace MobileGL::MG_Impl::GLImpl {
 
         Range1D mappedRange = bufferObject->GetMappedRange();
         auto mappingAccess = bufferObject->GetMappingAccess();
+        // GL 4.6 6.5: the error is on OVERLAP with the mapped range, i.e. a half-open
+        // intersection test. There used to be a second test below this one asking only
+        // `offset + size >= mappedRange.start`, which rejects every write that starts
+        // before a mapped tail as well - it made a legal disjoint glBufferSubData fail.
         if (bufferObject->IsMapped() && !(mappingAccess & BufferMappingAccessBit::Persistent) &&
             (offset < mappedRange.end) && (offset + size > mappedRange.start)) {
             MG_State::pGLContext->RecordError(
@@ -869,18 +874,6 @@ namespace MobileGL::MG_Impl::GLImpl {
                     "MG_Impl/GLImpl", "BufferSubData_State",
                     "Cannot modify a non-persistently mapped buffer object."));
             return;
-        }
-
-        if (bufferObject->IsMapped() && !(mappingAccess & BufferMappingAccessBit::Persistent)) {
-            Range1D mappedRange = bufferObject->GetMappedRange();
-            if (offset + size >= mappedRange.start) {
-                MG_State::pGLContext->RecordError(
-                    ErrorCode::InvalidOperation,
-                    MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", "BufferSubData_State",
-                                                 "Cannot modify a mapped buffer object unless it was "
-                                                 "mapped with GL_MAP_PERSISTENT_BIT."));
-                return;
-            }
         }
 
         bufferObject->UploadSubData({(void*)data, (SizeT)size}, offset);
@@ -1013,6 +1006,11 @@ namespace MobileGL::MG_Impl::GLImpl {
     }
 
     void BufferStorage_State(GLenum target, GLsizeiptr size, const void* data, GLbitfield flags) {
+        // Error precedence: "no buffer is bound to target" outranks a bad size or bad
+        // flags, so the binding has to be resolved before either is validated.
+        auto bufferObject = GetBoundBufferObject(target, BufferOp::BufferStorage);
+        if (!bufferObject) return;
+
         if (size <= 0) {
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidValue,
@@ -1021,8 +1019,6 @@ namespace MobileGL::MG_Impl::GLImpl {
         }
         if (!ValidateStorageFlags(flags, BufferOp::BufferStorage)) return;
 
-        auto bufferObject = GetBoundBufferObject(target, BufferOp::BufferStorage);
-        if (!bufferObject) return;
         if (bufferObject->IsImmutableStorage()) {
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidOperation,
@@ -1057,6 +1053,10 @@ namespace MobileGL::MG_Impl::GLImpl {
     }
 
     void NamedBufferStorage_State(GLuint buffer, GLsizeiptr size, const void* data, GLbitfield flags) {
+        // Same precedence as BufferStorage_State: the buffer-name error comes first.
+        auto bufferObject = GetNamedBufferObject(buffer, BufferOp::NamedBufferStorage);
+        if (!bufferObject) return;
+
         if (size <= 0) {
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidValue,
@@ -1065,8 +1065,6 @@ namespace MobileGL::MG_Impl::GLImpl {
         }
         if (!ValidateStorageFlags(flags, BufferOp::NamedBufferStorage)) return;
 
-        auto bufferObject = GetNamedBufferObject(buffer, BufferOp::NamedBufferStorage);
-        if (!bufferObject) return;
         if (bufferObject->IsImmutableStorage()) {
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidOperation,
@@ -1486,12 +1484,71 @@ namespace MobileGL::MG_Impl::GLImpl {
         GetBufferBindingSlot(bufferTarget).Bind(bufferObject);
     }
 
+    // GL 4.6 core 6.1.1: the constraints glBindBufferRange puts on the (offset, size) pair.
+    // Every one of them is INVALID_VALUE, and all of them are checked before a single piece
+    // of state is written - a rejected bind must leave the binding point exactly as it was.
+    // They apply only to a non-zero buffer: buffer 0 detaches the binding point and ignores
+    // offset and size, which is also how glBindBuffersRange spells "reset this element"
+    // (a NULL buffers array, or a zero entry inside one).
+    static Bool ValidateBufferRangeOffsetAndSize(GLenum target, GLintptr offset, GLsizeiptr size,
+                                                 const char* funcName) {
+        if (size <= 0) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidValue,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", funcName,
+                                             std::format("size ({}) must be greater than zero.", size)));
+            return false;
+        }
+        if (offset < 0) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidValue,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", funcName,
+                                             std::format("offset ({}) must not be negative.", offset)));
+            return false;
+        }
+        // GL_UNIFORM_BUFFER and GL_SHADER_STORAGE_BUFFER each constrain the offset to their own
+        // implementation-defined alignment, which glGetIntegerv already answers.
+        GLenum alignmentQuery = GL_NONE;
+        if (target == GL_SHADER_STORAGE_BUFFER) {
+            alignmentQuery = GL_SHADER_STORAGE_BUFFER_OFFSET_ALIGNMENT;
+        } else if (target == GL_UNIFORM_BUFFER) {
+            alignmentQuery = GL_UNIFORM_BUFFER_OFFSET_ALIGNMENT;
+        }
+        if (alignmentQuery != GL_NONE) {
+            GLint alignment = 0;
+            GetIntegerv(alignmentQuery, &alignment);
+            if (alignment > 0 && (offset % static_cast<GLintptr>(alignment)) != 0) {
+                MG_State::pGLContext->RecordError(
+                    ErrorCode::InvalidValue,
+                    MakeUnique<GenericErrorInfo>(
+                        "MG_Impl/GLImpl", funcName,
+                        std::format("offset ({}) must be a multiple of {} ({}).", offset,
+                                    MG_Util::ConvertGLEnumToString(alignmentQuery), alignment)));
+                return false;
+            }
+        }
+        // A transform feedback capture binding is addressed in 32-bit components, so BOTH the
+        // offset and the size must be multiples of 4.
+        if (target == GL_TRANSFORM_FEEDBACK_BUFFER && ((offset % 4) != 0 || (size % 4) != 0)) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidValue,
+                MakeUnique<GenericErrorInfo>(
+                    "MG_Impl/GLImpl", funcName,
+                    std::format("offset ({}) and size ({}) must both be multiples of 4 for "
+                                "GL_TRANSFORM_FEEDBACK_BUFFER.",
+                                offset, size)));
+            return false;
+        }
+        return true;
+    }
+
     void BindBufferRange_State(GLenum target, GLuint index, GLuint buffer, GLintptr offset, GLsizeiptr size) {
         MGLOG_D("%s: target = %s, index = %u, buffer = %u, offset = %d, size = %d", __func__,
                 MG_Util::ConvertGLEnumToString(target).c_str(), index, buffer, offset, size);
         BufferTarget bufferTarget = MG_Util::ConvertGLEnumToBufferTarget(target);
         if (!BufferImpl::ValidateBufferBindingPointTarget(bufferTarget)) return;
         if (!BufferImpl::ValidateBufferBindingPointIndex(bufferTarget, index)) return;
+        if (buffer != 0 && !ValidateBufferRangeOffsetAndSize(target, offset, size, __func__)) return;
         if (bufferTarget == BufferTarget::TransformFeedback && MG_State::pGLContext->IsTransformFeedbackActive()) {
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidOperation,
@@ -1665,15 +1722,32 @@ namespace MobileGL::MG_Impl::GLImpl {
     }
 
     // ARB_multi_bind: defined by the spec as equivalent to a loop over the single-bind entry
-    // points (with buffer 0 resetting the binding point).
+    // points (with buffer 0 resetting the binding point) - but only AFTER an up-front check
+    // of the whole [first, first + count) range. Looping straight into the single-bind entry
+    // points reports the single-bind INVALID_VALUE for an out-of-range index instead of the
+    // multi-bind INVALID_OPERATION, and binds the in-range prefix before failing.
+    static Bool ValidateMultiBindBufferRange(GLenum target, GLuint first, GLsizei count, const char* funcName) {
+        BufferTarget bufferTarget = MG_Util::ConvertGLEnumToBufferTarget(target);
+        if (!BufferImpl::ValidateBufferBindingPointTarget(bufferTarget)) return false;
+        return BufferImpl::ValidateBufferBindingPointRange(bufferTarget, first, count, funcName);
+    }
+
     void BindBuffersBase(GLenum target, GLuint first, GLsizei count, const GLuint* buffers) {
+        if (!ValidateMultiBindBufferRange(target, first, count, __func__)) return;
         for (GLsizei i = 0; i < count; ++i) {
             BindBufferBase_State(target, first + i, buffers ? buffers[i] : 0);
         }
     }
 
+    // The (offset, size) constraints are the one part of glBindBuffersRange that stays
+    // per-element: ARB_multi_bind checks them separately for each binding point, leaves that
+    // point unchanged on failure, and still applies the remaining elements - which is exactly
+    // what looping into BindBufferRange_State does. Only the [first, first + count) range is
+    // an up-front, all-or-nothing check. Elements that name buffer 0 (or a NULL buffers array)
+    // reset the binding point through BindBufferBase_State and carry no offset/size to check.
     void BindBuffersRange(GLenum target, GLuint first, GLsizei count, const GLuint* buffers, const GLintptr* offsets,
                           const GLsizeiptr* sizes) {
+        if (!ValidateMultiBindBufferRange(target, first, count, __func__)) return;
         for (GLsizei i = 0; i < count; ++i) {
             if (!buffers || buffers[i] == 0) {
                 BindBufferBase_State(target, first + i, 0);

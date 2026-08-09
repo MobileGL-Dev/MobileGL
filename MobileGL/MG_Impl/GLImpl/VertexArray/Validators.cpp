@@ -147,6 +147,30 @@ namespace MobileGL::MG_Impl::GLImpl::VertexArrayImpl {
             return false;
         }
 
+        // The integer path takes exactly the six signed/unsigned integer types (GL 4.6
+        // core 10.3.2): BYTE, UNSIGNED_BYTE, SHORT, UNSIGNED_SHORT, INT, UNSIGNED_INT.
+        // A blacklist could not express that: GL_FLOAT, GL_HALF_FLOAT,
+        // GL_DOUBLE and GL_FIXED all convert to a perfectly valid DataType, so they slipped
+        // through and were recorded as integer attributes.
+        if (integerPath) {
+            switch (type) {
+            case DataType::Int8:
+            case DataType::Uint8:
+            case DataType::Int16:
+            case DataType::Uint16:
+            case DataType::Int32:
+            case DataType::Uint32:
+                break;
+            default:
+                MG_State::pGLContext->RecordError(
+                    ErrorCode::InvalidEnum,
+                    MakeUnique<GenericErrorInfo>(
+                        "MG_Impl/GLImpl", fn,
+                        std::format("Type is not an integer vertex attribute type (attribute {}).", index)));
+                return false;
+            }
+        }
+
         if (sizeRaw == static_cast<GLint>(GL_BGRA)) {
             // GL_BGRA is a float-path-only size: it needs GL_UNSIGNED_BYTE or a 2_10_10_10 type and
             // normalized == GL_TRUE. On the integer path it is simply an out-of-range size.

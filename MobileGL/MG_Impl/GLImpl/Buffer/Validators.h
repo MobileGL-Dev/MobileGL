@@ -17,4 +17,8 @@ namespace MobileGL::MG_Impl::GLImpl::BufferImpl {
     Bool ValidateBufferMappingAccess(Flags<BufferMappingAccessBit> accessBits);
     Bool ValidateBufferBindingPointTarget(BufferTarget target);
     Bool ValidateBufferBindingPointIndex(BufferTarget target, Uint index);
+    // ARB_multi_bind: glBindBuffersBase/Range validate the whole [first, first + count) range
+    // up front and report INVALID_OPERATION, where a single out-of-range index would be
+    // INVALID_VALUE. Naively looping the single-bind entry points reports the wrong class.
+    Bool ValidateBufferBindingPointRange(BufferTarget target, Uint first, GLsizei count, const char* funcName);
 } // namespace MobileGL::MG_Impl::GLImpl::BufferImpl

@@ -455,16 +455,24 @@ TEST_F(BufferTest, BindBufferBaseZeroUnbindsBindingPoint) {
 }
 
 TEST_F(BufferTest, BindBufferRangeZeroUnbindsBindingPoint) {
+    // GL_SHADER_STORAGE_BUFFER offsets must be a multiple of
+    // GL_SHADER_STORAGE_BUFFER_OFFSET_ALIGNMENT, so the offset cannot be a literal.
+    GLint ssboAlignment = 0;
+    MobileGL::MG_Impl::GLImpl::GetIntegerv(GL_SHADER_STORAGE_BUFFER_OFFSET_ALIGNMENT, &ssboAlignment);
+    ASSERT_GT(ssboAlignment, 0);
+    const GLintptr offset = ssboAlignment;
+    const GLsizeiptr size = 8;
+
     GLuint buffer = 0;
     MobileGL::MG_Impl::GLImpl::GenBuffers(1, &buffer);
     MobileGL::MG_Impl::GLImpl::BindBuffer(GL_SHADER_STORAGE_BUFFER, buffer);
-    MobileGL::MG_Impl::GLImpl::BufferData(GL_SHADER_STORAGE_BUFFER, 16, nullptr, GL_DYNAMIC_DRAW);
+    MobileGL::MG_Impl::GLImpl::BufferData(GL_SHADER_STORAGE_BUFFER, offset + size, nullptr, GL_DYNAMIC_DRAW);
 
-    MobileGL::MG_Impl::GLImpl::BindBufferRange(GL_SHADER_STORAGE_BUFFER, 3, buffer, 4, 8);
+    MobileGL::MG_Impl::GLImpl::BindBufferRange(GL_SHADER_STORAGE_BUFFER, 3, buffer, offset, size);
     auto& point = MobileGL::MG_State::pGLContext->GetBufferBindingPoint(BufferTarget::ShaderStorage, 3);
     ASSERT_NE(point.GetBoundObject(), nullptr);
-    EXPECT_EQ(point.GetRange().start, 4);
-    EXPECT_EQ(point.GetRange().end, 12);
+    EXPECT_EQ(point.GetRange().start, static_cast<SizeT>(offset));
+    EXPECT_EQ(point.GetRange().end, static_cast<SizeT>(offset + size));
 
     MobileGL::MG_Impl::GLImpl::BindBufferRange(GL_SHADER_STORAGE_BUFFER, 3, 0, 0, 0);
     EXPECT_EQ(point.GetBoundObject(), nullptr);
@@ -538,6 +546,305 @@ TEST_F(BufferTest, ClearNamedBufferSubDataRepeatsPattern) {
     Memcpy(actual.data(), bufferObject->AcquireMemory(false, true, false), actual.size() * sizeof(Uint32));
     EXPECT_EQ(actual, (Vector<Uint32>{0, pattern, pattern, pattern, 0}));
     EXPECT_EQ(MobileGL::MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+}
+
+
+// GL 4.6 core 6.5: glBufferSubData fails only when the written range OVERLAPS the mapped range.
+// A second, wrong test used to sit next to the correct one and reject any write whose end reached
+// the start of the mapping - which killed every legal disjoint update in front of a mapped tail.
+TEST_F(BufferTest, BufferSubDataRejectsOnlyRangesOverlappingTheMapping) {
+    GLuint buffer = 0;
+    MobileGL::MG_Impl::GLImpl::GenBuffers(1, &buffer);
+    MobileGL::MG_Impl::GLImpl::BindBuffer(GL_ARRAY_BUFFER, buffer);
+    MobileGL::MG_Impl::GLImpl::BufferData(GL_ARRAY_BUFFER, 64, nullptr, GL_DYNAMIC_DRAW);
+    ASSERT_EQ(MobileGL::MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    void* mapped = MobileGL::MG_Impl::GLImpl::MapBufferRange(GL_ARRAY_BUFFER, 32, 32, GL_MAP_WRITE_BIT);
+    ASSERT_NE(mapped, nullptr);
+    ASSERT_EQ(MobileGL::MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    // Entirely before the mapping: legal, and the bytes must land.
+    const Uint32 payload[4] = {1u, 2u, 3u, 4u};
+    MobileGL::MG_Impl::GLImpl::BufferSubData(GL_ARRAY_BUFFER, 0, sizeof(payload), payload);
+    EXPECT_EQ(MobileGL::MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    // Touching the first mapped byte: overlap, so INVALID_OPERATION.
+    MobileGL::MG_Impl::GLImpl::BufferSubData(GL_ARRAY_BUFFER, 16, 32, payload);
+    ExpectSingleGlError(GL_INVALID_OPERATION);
+
+    EXPECT_TRUE(MobileGL::MG_Impl::GLImpl::UnmapBuffer(GL_ARRAY_BUFFER));
+
+    Vector<Uint32> actual(4, 0);
+    auto bufferObject = MobileGL::MG_State::pGLContext->GetBufferObject(buffer);
+    ASSERT_NE(bufferObject, nullptr);
+    Memcpy(actual.data(), bufferObject->AcquireMemory(false, true, false), sizeof(payload));
+    EXPECT_EQ(actual, (Vector<Uint32>{1u, 2u, 3u, 4u}));
+
+    MobileGL::MG_Impl::GLImpl::BindBuffer(GL_ARRAY_BUFFER, 0);
+    MobileGL::MG_Impl::GLImpl::DeleteBuffers(1, &buffer);
+    DrainPendingGlErrors();
+}
+
+// GL 4.6 core 6.2: "no buffer bound to target" outranks a bad size or bad flags, so the binding has
+// to be resolved before either is validated. It used to be checked last, which turned every
+// unbound-target call into INVALID_VALUE.
+TEST_F(BufferTest, BufferStorageReportsTheUnboundTargetBeforeSizeAndFlags) {
+    MobileGL::MG_Impl::GLImpl::BindBuffer(GL_ARRAY_BUFFER, 0);
+    DrainPendingGlErrors();
+
+    // Both a zero size and a nonsense flag set are present; the unbound target still wins.
+    MobileGL::MG_Impl::GLImpl::BufferStorage(GL_ARRAY_BUFFER, 0, nullptr, GL_MAP_PERSISTENT_BIT);
+    ExpectSingleGlError(GL_INVALID_OPERATION);
+
+    // With a buffer bound, the size check is reachable again.
+    GLuint buffer = 0;
+    MobileGL::MG_Impl::GLImpl::GenBuffers(1, &buffer);
+    MobileGL::MG_Impl::GLImpl::BindBuffer(GL_ARRAY_BUFFER, buffer);
+    MobileGL::MG_Impl::GLImpl::BufferStorage(GL_ARRAY_BUFFER, 0, nullptr, GL_MAP_READ_BIT);
+    ExpectSingleGlError(GL_INVALID_VALUE);
+
+    MobileGL::MG_Impl::GLImpl::BindBuffer(GL_ARRAY_BUFFER, 0);
+    MobileGL::MG_Impl::GLImpl::DeleteBuffers(1, &buffer);
+    DrainPendingGlErrors();
+}
+
+// GL 4.6 core 6.1.1: glBindBufferRange on GL_SHADER_STORAGE_BUFFER must reject an offset that is
+// not a multiple of GL_SHADER_STORAGE_BUFFER_OFFSET_ALIGNMENT.
+TEST_F(BufferTest, BindBufferRangeRejectsMisalignedShaderStorageOffset) {
+    GLint ssboAlignment = 0;
+    MobileGL::MG_Impl::GLImpl::GetIntegerv(GL_SHADER_STORAGE_BUFFER_OFFSET_ALIGNMENT, &ssboAlignment);
+    ASSERT_GT(ssboAlignment, 1) << "a 1-byte alignment cannot express a misaligned offset";
+
+    GLuint buffer = 0;
+    MobileGL::MG_Impl::GLImpl::GenBuffers(1, &buffer);
+    MobileGL::MG_Impl::GLImpl::BindBuffer(GL_SHADER_STORAGE_BUFFER, buffer);
+    MobileGL::MG_Impl::GLImpl::BufferData(GL_SHADER_STORAGE_BUFFER, ssboAlignment * 4, nullptr, GL_DYNAMIC_DRAW);
+    ASSERT_EQ(MobileGL::MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    MobileGL::MG_Impl::GLImpl::BindBufferRange(GL_SHADER_STORAGE_BUFFER, 1, buffer, 1, ssboAlignment);
+    ExpectSingleGlError(GL_INVALID_VALUE);
+    auto& point = MobileGL::MG_State::pGLContext->GetBufferBindingPoint(BufferTarget::ShaderStorage, 1);
+    EXPECT_EQ(point.GetBoundObject(), nullptr) << "a rejected bind must not take effect";
+
+    // The uniform target has its own alignment and must not inherit the SSBO rule's rejection.
+    MobileGL::MG_Impl::GLImpl::BindBufferRange(GL_SHADER_STORAGE_BUFFER, 1, buffer, ssboAlignment, ssboAlignment);
+    EXPECT_EQ(MobileGL::MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+    EXPECT_NE(point.GetBoundObject(), nullptr);
+
+    MobileGL::MG_Impl::GLImpl::BindBufferRange(GL_SHADER_STORAGE_BUFFER, 1, 0, 0, 0);
+    MobileGL::MG_Impl::GLImpl::BindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
+    MobileGL::MG_Impl::GLImpl::DeleteBuffers(1, &buffer);
+    DrainPendingGlErrors();
+}
+
+// ARB_multi_bind: the [first, first + count) range is checked up front and reports
+// INVALID_OPERATION - not the per-element INVALID_VALUE a naive loop over glBindBufferBase would
+// produce, and nothing may be bound when it fails.
+TEST_F(BufferTest, BindBuffersBaseChecksTheWholeRangeBeforeBindingAnything) {
+    GLint maxBindings = 0;
+    MobileGL::MG_Impl::GLImpl::GetIntegerv(GL_MAX_SHADER_STORAGE_BUFFER_BINDINGS, &maxBindings);
+    ASSERT_GT(maxBindings, 1);
+
+    GLuint buffer = 0;
+    MobileGL::MG_Impl::GLImpl::GenBuffers(1, &buffer);
+    MobileGL::MG_Impl::GLImpl::BindBuffer(GL_SHADER_STORAGE_BUFFER, buffer);
+    MobileGL::MG_Impl::GLImpl::BufferData(GL_SHADER_STORAGE_BUFFER, 16, nullptr, GL_DYNAMIC_DRAW);
+    ASSERT_EQ(MobileGL::MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    // first is in range but first + count is not: one error, of the multi-bind class.
+    const GLuint first = static_cast<GLuint>(maxBindings - 1);
+    const GLuint buffers[2] = {buffer, buffer};
+    MobileGL::MG_Impl::GLImpl::BindBuffersBase(GL_SHADER_STORAGE_BUFFER, first, 2, buffers);
+    ExpectSingleGlError(GL_INVALID_OPERATION);
+    auto& point = MobileGL::MG_State::pGLContext->GetBufferBindingPoint(BufferTarget::ShaderStorage, first);
+    EXPECT_EQ(point.GetBoundObject(), nullptr) << "the in-range prefix must not be bound either";
+
+    MobileGL::MG_Impl::GLImpl::BindBuffersRange(GL_SHADER_STORAGE_BUFFER, first, 2, buffers, nullptr, nullptr);
+    ExpectSingleGlError(GL_INVALID_OPERATION);
+
+    // A range that fits binds normally.
+    MobileGL::MG_Impl::GLImpl::BindBuffersBase(GL_SHADER_STORAGE_BUFFER, first, 1, buffers);
+    EXPECT_EQ(MobileGL::MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+    ASSERT_NE(point.GetBoundObject(), nullptr);
+    EXPECT_EQ(point.GetBoundObject()->GetExternalIndex(), buffer);
+
+    MobileGL::MG_Impl::GLImpl::BindBufferBase(GL_SHADER_STORAGE_BUFFER, first, 0);
+    MobileGL::MG_Impl::GLImpl::BindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
+    MobileGL::MG_Impl::GLImpl::DeleteBuffers(1, &buffer);
+    DrainPendingGlErrors();
+}
+
+// These limits were reachable only through glGetInteger64v (SSBO block size) or not at all (the
+// atomic-counter pair), so glGetIntegerv answered them with INVALID_ENUM out of its default arm.
+TEST_F(BufferTest, GetIntegervAnswersSsboAndAtomicCounterLimits) {
+    GLint ssboBlockSize = 0;
+    MobileGL::MG_Impl::GLImpl::GetIntegerv(GL_MAX_SHADER_STORAGE_BLOCK_SIZE, &ssboBlockSize);
+    EXPECT_GT(ssboBlockSize, 0);
+    EXPECT_EQ(MobileGL::MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    // The 32-bit query saturates rather than truncating what glGetInteger64v reports.
+    GLint64 ssboBlockSize64 = 0;
+    MobileGL::MG_Impl::GLImpl::GetInteger64v(GL_MAX_SHADER_STORAGE_BLOCK_SIZE, &ssboBlockSize64);
+    EXPECT_EQ(static_cast<GLint64>(ssboBlockSize), std::min<GLint64>(ssboBlockSize64, INT32_MAX));
+
+    GLint atomicBindings = 0;
+    MobileGL::MG_Impl::GLImpl::GetIntegerv(GL_MAX_ATOMIC_COUNTER_BUFFER_BINDINGS, &atomicBindings);
+    EXPECT_GE(atomicBindings, 1);
+    EXPECT_EQ(MobileGL::MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    GLint atomicBufferSize = 0;
+    MobileGL::MG_Impl::GLImpl::GetIntegerv(GL_MAX_ATOMIC_COUNTER_BUFFER_SIZE, &atomicBufferSize);
+    EXPECT_GE(atomicBufferSize, 32); // GL 4.6 table 23.63 minimum
+    EXPECT_EQ(MobileGL::MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    // KHR_debug requires these to be legal even while the debug entry points are stubs.
+    GLint debugGroupDepth = 0;
+    MobileGL::MG_Impl::GLImpl::GetIntegerv(GL_MAX_DEBUG_GROUP_STACK_DEPTH, &debugGroupDepth);
+    EXPECT_GE(debugGroupDepth, 64);
+    GLint debugLoggedMessages = 0;
+    MobileGL::MG_Impl::GLImpl::GetIntegerv(GL_MAX_DEBUG_LOGGED_MESSAGES, &debugLoggedMessages);
+    EXPECT_GE(debugLoggedMessages, 1);
+    EXPECT_EQ(MobileGL::MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+}
+
+// GL 4.6 core 6.1.1: glBindBufferRange validates the (offset, size) pair before it writes any
+// state. Nothing validated either one, so a negative offset reached Range1D(offset, offset + size)
+// - which has no ordering check of its own - and a zero or negative size installed an empty or
+// backwards range on the binding point.
+TEST_F(BufferTest, BindBufferRangeRejectsNegativeOffsetAndNonPositiveSize) {
+    GLint ssboAlignment = 0;
+    MobileGL::MG_Impl::GLImpl::GetIntegerv(GL_SHADER_STORAGE_BUFFER_OFFSET_ALIGNMENT, &ssboAlignment);
+    ASSERT_GT(ssboAlignment, 0);
+
+    GLuint buffer = 0;
+    MobileGL::MG_Impl::GLImpl::GenBuffers(1, &buffer);
+    MobileGL::MG_Impl::GLImpl::BindBuffer(GL_SHADER_STORAGE_BUFFER, buffer);
+    MobileGL::MG_Impl::GLImpl::BufferData(GL_SHADER_STORAGE_BUFFER, ssboAlignment * 4, nullptr, GL_DYNAMIC_DRAW);
+    ASSERT_EQ(MobileGL::MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    auto& point = MobileGL::MG_State::pGLContext->GetBufferBindingPoint(BufferTarget::ShaderStorage, 2);
+
+    // A negative offset is INVALID_VALUE - including one that is a multiple of the alignment, which
+    // the modulo gate alone waves through (-alignment % alignment == 0).
+    MobileGL::MG_Impl::GLImpl::BindBufferRange(GL_SHADER_STORAGE_BUFFER, 2, buffer, -ssboAlignment, ssboAlignment);
+    ExpectSingleGlError(GL_INVALID_VALUE);
+    EXPECT_EQ(point.GetBoundObject(), nullptr) << "a rejected bind must not take effect";
+
+    // size must be strictly positive.
+    MobileGL::MG_Impl::GLImpl::BindBufferRange(GL_SHADER_STORAGE_BUFFER, 2, buffer, 0, 0);
+    ExpectSingleGlError(GL_INVALID_VALUE);
+    MobileGL::MG_Impl::GLImpl::BindBufferRange(GL_SHADER_STORAGE_BUFFER, 2, buffer, 0, -4);
+    ExpectSingleGlError(GL_INVALID_VALUE);
+    EXPECT_EQ(point.GetBoundObject(), nullptr);
+
+    // The well-formed bind still goes through.
+    MobileGL::MG_Impl::GLImpl::BindBufferRange(GL_SHADER_STORAGE_BUFFER, 2, buffer, ssboAlignment, ssboAlignment);
+    EXPECT_EQ(MobileGL::MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+    ASSERT_NE(point.GetBoundObject(), nullptr);
+    EXPECT_EQ(point.GetRange().start, static_cast<SizeT>(ssboAlignment));
+    EXPECT_EQ(point.GetRange().end, static_cast<SizeT>(ssboAlignment * 2));
+
+    // Buffer 0 detaches with offset and size ignored: the one case the size rule must not fire on,
+    // and the shape glBindBuffersRange uses to reset an element.
+    MobileGL::MG_Impl::GLImpl::BindBufferRange(GL_SHADER_STORAGE_BUFFER, 2, 0, 0, 0);
+    EXPECT_EQ(MobileGL::MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+    EXPECT_EQ(point.GetBoundObject(), nullptr);
+
+    MobileGL::MG_Impl::GLImpl::BindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
+    MobileGL::MG_Impl::GLImpl::DeleteBuffers(1, &buffer);
+    DrainPendingGlErrors();
+}
+
+// GL 4.6 core 6.1.1 gives GL_UNIFORM_BUFFER its own offset alignment
+// (GL_UNIFORM_BUFFER_OFFSET_ALIGNMENT) and requires BOTH offset and size to be multiples of 4 on
+// GL_TRANSFORM_FEEDBACK_BUFFER. Only the shader-storage half of the rule was implemented, so a
+// misaligned uniform range bound happily.
+TEST_F(BufferTest, BindBufferRangeEnforcesUniformAndTransformFeedbackAlignment) {
+    GLint uboAlignment = 0;
+    MobileGL::MG_Impl::GLImpl::GetIntegerv(GL_UNIFORM_BUFFER_OFFSET_ALIGNMENT, &uboAlignment);
+    ASSERT_GT(uboAlignment, 1) << "a 1-byte alignment cannot express a misaligned offset";
+
+    GLuint buffer = 0;
+    MobileGL::MG_Impl::GLImpl::GenBuffers(1, &buffer);
+    MobileGL::MG_Impl::GLImpl::BindBuffer(GL_UNIFORM_BUFFER, buffer);
+    MobileGL::MG_Impl::GLImpl::BufferData(GL_UNIFORM_BUFFER, uboAlignment * 4, nullptr, GL_DYNAMIC_DRAW);
+    ASSERT_EQ(MobileGL::MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    auto& uniformPoint = MobileGL::MG_State::pGLContext->GetBufferBindingPoint(BufferTarget::Uniform, 1);
+    MobileGL::MG_Impl::GLImpl::BindBufferRange(GL_UNIFORM_BUFFER, 1, buffer, 1, uboAlignment);
+    ExpectSingleGlError(GL_INVALID_VALUE);
+    EXPECT_EQ(uniformPoint.GetBoundObject(), nullptr) << "a misaligned uniform range must not bind";
+
+    MobileGL::MG_Impl::GLImpl::BindBufferRange(GL_UNIFORM_BUFFER, 1, buffer, uboAlignment, uboAlignment);
+    EXPECT_EQ(MobileGL::MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+    EXPECT_NE(uniformPoint.GetBoundObject(), nullptr);
+    MobileGL::MG_Impl::GLImpl::BindBufferRange(GL_UNIFORM_BUFFER, 1, 0, 0, 0);
+    EXPECT_EQ(uniformPoint.GetBoundObject(), nullptr);
+
+    // Transform feedback captures 32-bit components: offset and size are both constrained, and the
+    // size half has no analogue on any other target.
+    auto& feedbackPoint =
+        MobileGL::MG_State::pGLContext->GetBufferBindingPoint(BufferTarget::TransformFeedback, 0);
+    MobileGL::MG_Impl::GLImpl::BindBufferRange(GL_TRANSFORM_FEEDBACK_BUFFER, 0, buffer, 2, 4);
+    ExpectSingleGlError(GL_INVALID_VALUE);
+    EXPECT_EQ(feedbackPoint.GetBoundObject(), nullptr);
+    MobileGL::MG_Impl::GLImpl::BindBufferRange(GL_TRANSFORM_FEEDBACK_BUFFER, 0, buffer, 4, 2);
+    ExpectSingleGlError(GL_INVALID_VALUE);
+    EXPECT_EQ(feedbackPoint.GetBoundObject(), nullptr);
+
+    MobileGL::MG_Impl::GLImpl::BindBufferRange(GL_TRANSFORM_FEEDBACK_BUFFER, 0, buffer, 4, 4);
+    EXPECT_EQ(MobileGL::MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+    EXPECT_NE(feedbackPoint.GetBoundObject(), nullptr);
+
+    MobileGL::MG_Impl::GLImpl::BindBufferRange(GL_TRANSFORM_FEEDBACK_BUFFER, 0, 0, 0, 0);
+    MobileGL::MG_Impl::GLImpl::BindBuffer(GL_UNIFORM_BUFFER, 0);
+    MobileGL::MG_Impl::GLImpl::DeleteBuffers(1, &buffer);
+    DrainPendingGlErrors();
+}
+
+// ARB_multi_bind checks offsets and sizes separately for each binding point: the offending element
+// is left unchanged and reports INVALID_VALUE while every other element still binds. Only the
+// [first, first + count) range is the up-front, all-or-nothing check - so glBindBuffersRange gets
+// the new gates by looping over the single-bind entry point, and must keep going after one fails.
+TEST_F(BufferTest, BindBuffersRangeAppliesTheOffsetAndSizeGatesPerElement) {
+    GLint ssboAlignment = 0;
+    MobileGL::MG_Impl::GLImpl::GetIntegerv(GL_SHADER_STORAGE_BUFFER_OFFSET_ALIGNMENT, &ssboAlignment);
+    ASSERT_GT(ssboAlignment, 1) << "a 1-byte alignment cannot express a misaligned offset";
+
+    GLuint buffer = 0;
+    MobileGL::MG_Impl::GLImpl::GenBuffers(1, &buffer);
+    MobileGL::MG_Impl::GLImpl::BindBuffer(GL_SHADER_STORAGE_BUFFER, buffer);
+    MobileGL::MG_Impl::GLImpl::BufferData(GL_SHADER_STORAGE_BUFFER, ssboAlignment * 8, nullptr, GL_DYNAMIC_DRAW);
+    ASSERT_EQ(MobileGL::MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    auto& firstPoint = MobileGL::MG_State::pGLContext->GetBufferBindingPoint(BufferTarget::ShaderStorage, 0);
+    auto& secondPoint = MobileGL::MG_State::pGLContext->GetBufferBindingPoint(BufferTarget::ShaderStorage, 1);
+    const GLuint buffers[2] = {buffer, buffer};
+
+    // Element 0 is misaligned; element 1 is well formed and must still be bound.
+    const GLintptr misalignedOffsets[2] = {1, ssboAlignment};
+    const GLsizeiptr sizes[2] = {ssboAlignment, ssboAlignment};
+    MobileGL::MG_Impl::GLImpl::BindBuffersRange(GL_SHADER_STORAGE_BUFFER, 0, 2, buffers, misalignedOffsets, sizes);
+    ExpectSingleGlError(GL_INVALID_VALUE);
+    EXPECT_EQ(firstPoint.GetBoundObject(), nullptr) << "the rejected element must not bind";
+    ASSERT_NE(secondPoint.GetBoundObject(), nullptr) << "a per-element error must not abort the rest of the range";
+    EXPECT_EQ(secondPoint.GetRange().start, static_cast<SizeT>(ssboAlignment));
+
+    MobileGL::MG_Impl::GLImpl::BindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, 0);
+    ASSERT_EQ(MobileGL::MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    // Same for a non-positive size, on the other element this time.
+    const GLintptr offsets[2] = {0, ssboAlignment};
+    const GLsizeiptr badSizes[2] = {ssboAlignment, 0};
+    MobileGL::MG_Impl::GLImpl::BindBuffersRange(GL_SHADER_STORAGE_BUFFER, 0, 2, buffers, offsets, badSizes);
+    ExpectSingleGlError(GL_INVALID_VALUE);
+    EXPECT_NE(firstPoint.GetBoundObject(), nullptr);
+    EXPECT_EQ(secondPoint.GetBoundObject(), nullptr);
+
+    MobileGL::MG_Impl::GLImpl::BindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, 0);
+    MobileGL::MG_Impl::GLImpl::BindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
+    MobileGL::MG_Impl::GLImpl::DeleteBuffers(1, &buffer);
+    DrainPendingGlErrors();
 }
 
 using namespace MobileGL::MG_Impl::GLImpl;
