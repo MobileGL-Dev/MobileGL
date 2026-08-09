@@ -11,11 +11,12 @@
 #include <MG_Util/Types.h>
 #include <MG_Util/Async/JobNode.h>
 
-// This header deliberately includes NO Asio header: asio::thread_pool lives behind the pimpl
-// in ShaderCompilePool.cpp. Asio stays a private implementation detail of one translation
-// unit, so no consumer target (MG_Test, MG_IntegrationTest, MG_Benchmark - each with its own
-// target_include_directories) needs the Asio include path, and no consumer pays its compile
-// time. Do not add one here.
+// This header deliberately includes NO Asio and NO libfork header: both execution engines
+// live behind the pimpl in ShaderCompilePool.cpp. They stay private implementation details of
+// one translation unit, so no consumer target (MG_Test, MG_IntegrationTest, MG_Benchmark -
+// each with its own target_include_directories) needs either include path, and no consumer
+// pays their compile time. libfork in particular is a C++20-coroutine header set whose
+// instantiation cost nothing outside the pool has any reason to carry. Do not add one here.
 
 namespace MobileGL::MG_Util::Async {
     // Stage 7: on by default. The gate behind the flip (2026-08-09, headless Mesa, both
@@ -66,6 +67,31 @@ namespace MobileGL::MG_Util::Async {
     // MOBILEGL_ASYNC_SHADER_COMPILE_THREADS overrides it outright.
     Uint DetectShaderCompileThreadCount();
 
+    // ---- MOBILEGL_ASYNC_POOL: which engine drives the worker threads ----------------------
+    // The engine is ONLY the execution engine. The job queue, the concurrency budget and its
+    // clamping, the suspension latch, cancel request-vs-outcome, the stopped-is-synchronous
+    // fallback and the drain are all engine-independent - they live in ShaderCompilePool::Impl
+    // and are shared verbatim by both engines, which is what lets the whole async suite run
+    // unchanged against either one. An engine answers exactly one question: how does a job
+    // that the budget has already cleared reach a worker thread?
+    enum class AsyncPoolEngine : Uint8 {
+        Asio,    // asio::thread_pool: one shared queue behind Asio's scheduler lock
+        Libfork, // lf::lazy_pool: per-worker work-stealing deques, workers sleep when idle
+    };
+
+    // "asio" / "libfork" - the spelling the environment variable accepts and the log prints.
+    const char* AsyncPoolEngineName(AsyncPoolEngine engine);
+
+    // Parses one MOBILEGL_ASYNC_POOL value. Case-insensitive; empty, "auto" and anything
+    // unrecognized resolve to Asio, and an unrecognized value warns (a misspelt engine name
+    // would otherwise be indistinguishable from the default, and the whole point of the
+    // variable is to know which engine ran).
+    AsyncPoolEngine ParseAsyncPoolEngine(const String& value);
+
+    // The process's engine, resolved from MOBILEGL_ASYNC_POOL on first call and cached. Every
+    // pool constructed afterwards reports the same answer, so a process never mixes engines.
+    AsyncPoolEngine DetectAsyncPoolEngine();
+
     class ShaderCompilePool {
     public:
         explicit ShaderCompilePool(Uint threadCount);
@@ -96,6 +122,11 @@ namespace MobileGL::MG_Util::Async {
 
         Uint GetThreadCount() const;
         Uint GetMaxConcurrency() const;
+
+        // The engine this pool was built with, latched at construction from
+        // DetectAsyncPoolEngine(). Reported rather than re-resolved so that a pool cannot
+        // change engines under its own workers.
+        AsyncPoolEngine GetEngine() const;
 
         // Bounded concurrency doubles as the memory bound, and is how
         // glMaxShaderCompilerThreadsKHR(n) is honoured: a 300-program pack load cannot put

@@ -151,12 +151,20 @@ namespace MobileGL::MG_Util::SelfTest {
                 return;
             }
             const Uint threads = MG_Util::Async::DetectShaderCompileThreadCount();
+            // The execution engine is named here too. It changes no observable GL behaviour -
+            // both engines run the same job queue under the same budget - but when a scaling
+            // or stall report comes back from a device, "which engine was this?" is the first
+            // question, and a POST page is the one artefact that always accompanies it.
+            const char* const engineName =
+                MG_Util::Async::AsyncPoolEngineName(MG_Util::Async::DetectAsyncPoolEngine());
             builder.Pass(rowName,
-                         format("on with {} compiler thread{}; GL_KHR_parallel_shader_compile is advertised "
+                         format("on with {} compiler thread{} on the {} execution engine; "
+                                "GL_KHR_parallel_shader_compile is advertised "
                                 "and GL_MAX_SHADER_COMPILER_THREADS_KHR = {} (set environment variable "
-                                "MOBILEGL_ASYNC_SHADER_COMPILE=0 to disable it, or "
-                                "MOBILEGL_ASYNC_SHADER_COMPILE_THREADS=n to change the count)",
-                                threads, threads == 1 ? "" : "s", threads));
+                                "MOBILEGL_ASYNC_SHADER_COMPILE=0 to disable it, "
+                                "MOBILEGL_ASYNC_SHADER_COMPILE_THREADS=n to change the count, or "
+                                "MOBILEGL_ASYNC_POOL=asio|libfork to change the engine)",
+                                threads, threads == 1 ? "" : "s", engineName, threads));
         }
 
         // Appends the four "MobileGL reported ..." rows for one backend section.

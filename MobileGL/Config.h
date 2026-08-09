@@ -66,6 +66,12 @@ namespace MobileGL::MG_Config {
     //   - DISPLAY: X11 session variable, not MobileGL configuration.
     //   - MOBILEGL_LOG_FILE_PATH: log-file init runs before MG_ConfigLoader::Init
     //     (see MG_Util/Debug/Log.cpp).
+    //   - MOBILEGL_ASYNC_POOL: a ShaderCompilePool is constructed by binaries that never call
+    //     MobileGL::Initialize() and so never run MG_ConfigLoader::Init - MG_Test's
+    //     JobNodeTest builds pools directly, and it is the suite that runs the whole async
+    //     matrix against both execution engines. Mirroring it here would resolve to the
+    //     default in exactly the tests that exist to tell the engines apart (see
+    //     MG_Util/Async/ShaderCompilePool.cpp, DetectAsyncPoolEngine).
     struct FeaturesTable {
         // MOBILEGL_DISABLE_TIMERQUERY: do not advertise or use GPU timer queries.
         Bool DisableTimerQuery = false;

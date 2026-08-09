@@ -373,6 +373,13 @@ set(MOBILEGL_INCLUDE_DIR
         # MG_Util/Async/ShaderCompilePool.cpp includes it, and it stays behind that file's
         # pimpl so no consumer target needs this path.
         ${CMAKE_SOURCE_DIR}/3rdparty/asio/asio/include
+        # The second shader-compile execution engine (MOBILEGL_ASYNC_POOL=libfork), on the
+        # same terms as Asio above: header-only, no add_subdirectory (its CMakeLists only
+        # declares an INTERFACE target plus install/test scaffolding we do not want), no link
+        # target, and reachable from exactly one translation unit. libfork's own
+        # target_compile_features asks for cxx_std_23, which this project already sets
+        # globally, so its C++20 coroutines need no per-source standard override.
+        ${CMAKE_SOURCE_DIR}/3rdparty/libfork/include
 )
 
 add_library(${CMAKE_PROJECT_NAME} SHARED
