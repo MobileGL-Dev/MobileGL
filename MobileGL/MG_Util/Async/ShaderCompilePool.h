@@ -18,13 +18,14 @@
 // time. Do not add one here.
 
 namespace MobileGL::MG_Util::Async {
-    // Stage 1 ships the whole machinery switched off: the pool is constructible and tested,
-    // but nothing in the GL pipeline posts to it. The flip to true happens only after the
-    // real-client soak in the final stage, because the riskiest part of asynchronous
-    // compilation is not the joins - it is that Iris and Sodium change their submission
-    // schedule the moment GL_KHR_parallel_shader_compile is advertised, and a recorded trace
-    // can never cover that path.
-    inline constexpr Bool kAsyncShaderCompileDefault = false;
+    // Stage 7: on by default. The gate behind the flip (2026-08-09, headless Mesa, both
+    // backends): GL30-40 mustpass + KHR-GL46.parallel_shader_compile at async=1 with the
+    // extension advertised - 58,344 case-runs, 8 failures, and every one of the 8 also
+    // fails standalone at async=0 and under the pre-P1 library, i.e. zero async-attributable
+    // deltas. The risk this comment used to name - Iris and Sodium changing their submission
+    // schedule the moment GL_KHR_parallel_shader_compile is advertised - remains the one
+    // thing a recorded trace cannot cover, which is why the kill switch below stays.
+    inline constexpr Bool kAsyncShaderCompileDefault = true;
 
     // MOBILEGL_ASYNC_SHADER_COMPILE forces the answer either way; unset keeps the built-in
     // default above. Falsy is a complete kill switch: it reverts the threading *and*

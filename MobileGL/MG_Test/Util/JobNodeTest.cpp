@@ -135,16 +135,18 @@ TEST(ShaderCompilePoolLifecycle, DetectedThreadCountIsPositive) {
     EXPECT_GE(DetectShaderCompileThreadCount(), 1u);
 }
 
-TEST(ShaderCompilePoolLifecycle, AsyncIsOffByDefaultAndTheOverrideDecidesEitherWay) {
-    // The shipped default is still off, and an unset MOBILEGL_ASYNC_SHADER_COMPILE resolves
-    // to it. If the first expectation ever fails without the constant having been
-    // deliberately flipped, something enabled async by accident.
+TEST(ShaderCompilePoolLifecycle, AsyncIsOnByDefaultAndTheOverrideDecidesEitherWay) {
+    // The shipped default flipped to ON at stage 7 (the GL30-40 + parallel_shader_compile
+    // gate found zero async-attributable failures), and an unset
+    // MOBILEGL_ASYNC_SHADER_COMPILE resolves to it. If the first expectation ever fails
+    // without the constant having been deliberately flipped back, something disabled async
+    // by accident - the kill switch below is the supported way off.
     //
-    // Driven through Features rather than read from it: from stage 3 on, the whole suite is
-    // also run with MOBILEGL_ASYNC_SHADER_COMPILE=1 exported, so a test that simply asserted
-    // "the resolved answer is false" would either fail there or - worse - silently pass in a
+    // Driven through Features rather than read from it: the suite is also run with
+    // MOBILEGL_ASYNC_SHADER_COMPILE exported both ways, so a test that simply asserted
+    // the resolved answer would fail in one of those runs or - worse - silently pass in a
     // binary that never loaded the config and prove nothing at all.
-    EXPECT_FALSE(kAsyncShaderCompileDefault);
+    EXPECT_TRUE(kAsyncShaderCompileDefault);
 
     const MG_Config::QuirkOverride saved = MG_Config::Features.AsyncShaderCompile;
     MG_Config::Features.AsyncShaderCompile = MG_Config::QuirkOverride::Auto;
