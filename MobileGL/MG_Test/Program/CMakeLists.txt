@@ -92,6 +92,25 @@ target_link_libraries(
         ${LINK_LIBRARIES}
 )
 
+# Its own binary so the "fresh process" isolation level in it is really available
+# through --gtest_filter, and so its 60 A->B link pairs cannot perturb another
+# suite's per-context caches.
+add_executable(
+        XfbFrontendOrderInvarianceTest
+        XfbFrontendOrderInvarianceTest.cpp
+)
+
+target_include_directories(XfbFrontendOrderInvarianceTest PRIVATE
+        ${MGL_ROOT}/include
+        ${MGL_ROOT}/MobileGL
+)
+
+target_link_libraries(
+        XfbFrontendOrderInvarianceTest PRIVATE
+        GTest::gtest_main
+        ${LINK_LIBRARIES}
+)
+
 # Its own binary on purpose: this one calls MobileGL::Destroy(), and ShaderCompilePool's
 # stop is a one-way latch for the whole process - every case declared after it in the same
 # binary would silently run its compiles and links inline.
@@ -135,3 +154,5 @@ gtest_discover_tests(ShaderCompileAdoptionTest DISCOVERY_TIMEOUT 60 PROPERTIES L
 # Same reason: the GL_COMPLETION_STATUS_KHR cases saturate a one-worker pool on purpose.
 gtest_discover_tests(ParallelShaderCompileTest DISCOVERY_TIMEOUT 60 PROPERTIES LABELS unit TIMEOUT 300)
 gtest_discover_tests(AsyncTeardownTest DISCOVERY_TIMEOUT 60 PROPERTIES LABELS unit TIMEOUT 300)
+# Same reason again: several cases leave A links outstanding while B compiles and links.
+gtest_discover_tests(XfbFrontendOrderInvarianceTest DISCOVERY_TIMEOUT 60 PROPERTIES LABELS unit TIMEOUT 300)

@@ -51,6 +51,7 @@ add_executable(MobileGLIntegrationTest
     Scenarios/ResidentIndexScenario.cpp
     Scenarios/MultiDrawScenario.cpp
     Scenarios/AsyncCompileScenario.cpp
+    Scenarios/XfbAfterClipDistanceScenario.cpp
 )
 
 target_include_directories(MobileGLIntegrationTest PRIVATE
@@ -217,6 +218,8 @@ mgl_itest_join_environment(MGL_ITEST_GLES_ENVIRONMENT
     "MOBILEGL_BACKEND_TYPE=DirectGLES" ${MGL_ITEST_COMMON_ENV})
 mgl_itest_join_environment(MGL_ITEST_VULKAN_ENVIRONMENT
     "MOBILEGL_BACKEND_TYPE=DirectVulkan" ${MGL_ITEST_VULKAN_ENV})
+mgl_itest_join_environment(MGL_ITEST_VULKAN_ASYNC_ENVIRONMENT
+    "MOBILEGL_BACKEND_TYPE=DirectVulkan" "MOBILEGL_ASYNC_SHADER_COMPILE=1" ${MGL_ITEST_VULKAN_ENV})
 
 # TIMEOUT on every entry: a GPU test that wedges must fail the run, not hang it.
 set(MGL_ITEST_TIMEOUT 120)
@@ -242,4 +245,25 @@ gtest_discover_tests(MobileGLIntegrationTest
         LABELS integration-gpu
         TIMEOUT ${MGL_ITEST_TIMEOUT}
         ENVIRONMENT "${MGL_ITEST_VULKAN_ENVIRONMENT}"
+)
+
+# A third registration, of ONE scenario, with asynchronous shader compilation
+# pinned on. Not a second code path in the renderer: a second ALLOCATION pattern.
+# The async pipeline's job objects change which of the freed blocks the capture
+# phase is handed, and that is what decides whether the destroyed-VAO address is
+# reached at all - on the ablated (pre-fix) tree async=1 reproduced 3 runs out of
+# 3 where the ambient default reproduced 2 of 3. Pinning it here means the
+# high-signal configuration runs whatever the shipped default becomes, instead of
+# the suite quietly weakening the day that default flips. It must be process-wide
+# (the ENVIRONMENT property), not an in-process scope: the compile pool and its
+# threads are stood up at initialization, and their allocations are half the
+# point. DirectVulkan only - the memo this pins is DirectVulkan's.
+gtest_discover_tests(MobileGLIntegrationTest
+    TEST_PREFIX "DirectVulkan.AsyncCompile."
+    TEST_FILTER "XfbAfterClipDistanceScenario.*"
+    DISCOVERY_TIMEOUT 30
+    PROPERTIES
+        LABELS integration-gpu
+        TIMEOUT ${MGL_ITEST_TIMEOUT}
+        ENVIRONMENT "${MGL_ITEST_VULKAN_ASYNC_ENVIRONMENT}"
 )

@@ -66,6 +66,9 @@ gtest_discover_tests(SanityTest DISCOVERY_TIMEOUT 30 PROPERTIES LABELS unit)
 
 add_subdirectory(BackendLoader)
 add_subdirectory(Buffer)
+# The heap-address-is-not-an-identity invariant the backends' per-object memos
+# rest on. No GL context, no driver: it only needs the allocator.
+add_subdirectory(State)
 add_subdirectory(EGLState)
 add_subdirectory(Framebuffer)
 add_subdirectory(Texture)

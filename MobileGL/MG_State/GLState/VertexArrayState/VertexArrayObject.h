@@ -84,6 +84,18 @@ namespace MobileGL {
 
                 Uint GetExternalIndex() const;
 
+                // Globally-unique, never-reused id for THIS object's lifetime - the same
+                // contract as ProgramObject::GetLifetimeId(), and needed for the same
+                // reason. Neither the GL name (freed to a LIFO list and handed straight
+                // back by the next glGenVertexArrays) nor the heap address (freed to the
+                // allocator and handed straight back by the next allocation of this size)
+                // can tell a deleted-and-recreated VAO from the original, so a backend
+                // memo keyed on either one silently inherits the dead object's contents.
+                // That is not hypothetical: it is what let a transform-feedback capture
+                // fetch a destroyed VAO's vertex buffer slice (see the VaoDrawMemo key in
+                // DirectVulkan's VulkanRenderer).
+                Uint64 GetLifetimeId() const { return m_lifetimeId; }
+
                 void SetAttributeDivisor(Uint index, Uint divisor);
                 Uint GetAttributeDivisor(Uint index) const;
 
@@ -185,7 +197,10 @@ namespace MobileGL {
                     return mapping;
                 }
 
+                static Uint64 AllocateLifetimeId();
+
                 const Uint m_externalIndex = 0;
+                const Uint64 m_lifetimeId = AllocateLifetimeId();
                 Array<VertexAttribute, MAX_VERTEX_ATTRIBS> m_attributes;
                 Array<VertexAttributeVersion, MAX_VERTEX_ATTRIBS> m_attributeVersions;
                 BindingSlot<BufferObject> m_indexBufferBindingSlot;

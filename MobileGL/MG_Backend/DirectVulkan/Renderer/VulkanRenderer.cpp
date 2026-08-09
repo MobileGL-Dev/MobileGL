@@ -3201,12 +3201,17 @@ void main() {
         // carry the most entropy of a multiply.
         const Uint64 mixed = static_cast<Uint64>(reinterpret_cast<SizeT>(vao) >> 4) * 0x9E3779B97F4A7C15ull;
         const Uint32 index = static_cast<Uint32>(mixed >> 32) & (kVaoDrawMemoSlotCount - 1);
+        // The address still picks the slot (it is what the caller has in hand), but it is
+        // the lifetime id that decides whether the slot is THIS object's: an address on
+        // its own is recycled, and a slot matched on a recycled address hands the new VAO
+        // the dead one's resolved bindings.
+        const Uint64 lifetimeId = vao->GetLifetimeId();
         VaoDrawMemo& first = m_vaoDrawMemoTable[index];
-        if (first.vaoKey == vao) {
+        if (first.vaoKey == vao && first.vaoLifetimeId == lifetimeId) {
             return &first;
         }
         VaoDrawMemo& second = m_vaoDrawMemoTable[index ^ 1u];
-        if (second.vaoKey == vao) {
+        if (second.vaoKey == vao && second.vaoLifetimeId == lifetimeId) {
             return &second;
         }
         // Miss: recycle a slot. Prefer an empty one; otherwise evict the entry whose
@@ -3217,6 +3222,7 @@ void main() {
             victim = &second;
         }
         victim->vaoKey = vao;
+        victim->vaoLifetimeId = lifetimeId;
         victim->contentHash = 0;
         victim->layoutFactsValid = false;
         // Unmatchable until a resolve completes (same rule as before: a bailed-out
@@ -4475,9 +4481,10 @@ void main() {
         // vertex-input hash (VAO layout), render-pass hash (render targets + the draw-buffer/format
         // driven blend & write-mask gating), and the pipeline-state value hash (all fixed-function state).
         // Reset per-frame and on pipeline destruction so a memoized handle can never dangle.
-        // The identity hash mixes buffer heap addresses (per-chunk VBOs mint a new
-        // one per buffer); the memo and the pipeline payload key on the resolved
-        // LAYOUT hash instead, so draws over identical layouts share one pipeline.
+        // The identity hash mixes each bound buffer's never-reused lifetime id
+        // (per-chunk VBOs mint a new one per buffer); the memo and the pipeline
+        // payload key on the resolved LAYOUT hash instead, so draws over identical
+        // layouts share one pipeline.
         // The one-arg fetch rides the VAO's state-pointer memo (no hash, no map).
         auto& vis = m_vertexInputStateFactory->GetOrCreateVertexInputState(vao);
         const Uint64 vertexLayoutHash = vis.layoutHash;
@@ -5265,7 +5272,8 @@ void main() {
         // path, re-resolving descriptors and texture layouts nothing invalidated.
         const auto& vao = *MG_State::pGLContext->GetBoundVertexArray();
         const Bool vaoMoved =
-            static_cast<const void*>(&vao) != snap.vao || vao.GetConfigVersion() != snap.vaoConfigVersion;
+            static_cast<const void*>(&vao) != snap.vao || vao.GetLifetimeId() != snap.vaoLifetimeId ||
+            vao.GetConfigVersion() != snap.vaoConfigVersion;
         const auto& drawFbo =
             MG_State::pGLContext->GetFramebufferBindingSlot(FramebufferTarget::Draw).GetBoundObject();
         if (static_cast<const void*>(drawFbo.get()) != snap.drawFbo ||
@@ -5334,9 +5342,11 @@ void main() {
             // VAO's content-hash memo. The hash memo shares the cache line this compare
             // chain already loaded (the config version), and the table slot is compact
             // and hot - unlike the VAO's aux-memo words, which start a second cold line
-            // of every object in a VAO-cycling frame. The facts are pure functions of
-            // the content hash, so a slot whose contentHash equals the live memoised
-            // hash serves them for ANY VAO object, recycled addresses included.
+            // of every object in a VAO-cycling frame. The slot only ever answers for
+            // THIS object: LookupVaoDrawMemo matches (address, lifetime id), so a slot
+            // a destroyed VAO left behind at a recycled address misses and the facts
+            // are re-resolved. The contentHash compare is the second gate on top of
+            // that identity check, catching a reconfiguration of the same live object.
             Uint64 auxMasks = 0;
             Bool factsKnown = false;
             Uint64 contentHash = 0;
@@ -5515,6 +5525,7 @@ void main() {
         snap.renderStateVersion = renderStateVersion;
         snap.bindGeneration = bindGeneration;
         snap.vao = static_cast<const void*>(&vao);
+        snap.vaoLifetimeId = vao.GetLifetimeId();
         snap.vaoConfigVersion = vao.GetConfigVersion();
         snap.vaoLayoutHash = vaoLayoutHash;
         snap.pipeline = pipeline;
@@ -5933,6 +5944,7 @@ void main() {
                 snap.programLifetimeId = program.GetLifetimeId();
                 snap.programVersion = program.GetBackendStateVersion();
                 snap.vao = &vao;
+                snap.vaoLifetimeId = vao.GetLifetimeId();
                 snap.vaoConfigVersion = vao.GetConfigVersion();
                 snap.drawFbo = drawFbo.get();
                 snap.fboVersion = drawFbo->GetObjectVersion();

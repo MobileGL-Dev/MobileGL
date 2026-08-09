@@ -33,14 +33,18 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             XXHASH_VERIFY(XXH64_update(m_hashState, &attr.IsBgra, sizeof(attr.IsBgra)));
             XXHASH_VERIFY(XXH64_update(m_hashState, &attr.Divisor, sizeof(attr.Divisor)));
 
-            // The buffer's heap address is an identity component of the key: a freed
-            // buffer's reused address can alias an old cache entry, but only under a
-            // byte-identical attribute layout - and the entry payload is a pure function
-            // of the hashed inputs, with the draw path re-resolving bindingBufferKeys
-            // against the live VAO attribute pointers, so an aliased hit returns exactly
-            // what a rebuild would. Address drift only grows the map; the OnFrameBoundary
-            // aging sweep bounds that.
-            const SizeT bufferKey = reinterpret_cast<SizeT>(attr.Buffer.get());
+            // The bound buffer's IDENTITY is a component of the key, and it has to be the
+            // buffer's never-reused lifetime id - NOT its heap address, which this used to
+            // hash. An address is recycled by the allocator, so a deleted-and-recreated
+            // buffer reproduces it; combined with a byte-identical attribute layout that
+            // reproduces the WHOLE content hash, and the hash is what
+            // TryBindResolvedVertexBindings accepts as proof that a memoised binding still
+            // reads the buffer it was resolved from. It did not: a destroyed buffer's GPU
+            // slice was bound for its successor's draw, which is how a transform-feedback
+            // capture came back holding a dead VAO's vertex data (0,0,0,1 - the previous
+            // test's positions) instead of its own.
+            // Zero for client memory (no buffer), which is a distinct identity of its own.
+            const Uint64 bufferKey = attr.Buffer ? attr.Buffer->GetLifetimeId() : 0;
             XXHASH_VERIFY(XXH64_update(m_hashState, &bufferKey, sizeof(bufferKey)));
         }
 

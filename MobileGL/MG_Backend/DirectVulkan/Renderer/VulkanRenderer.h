@@ -758,6 +758,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             Uint64 programLifetimeId = 0;
             Uint32 programVersion = 0;
             const void* vao = nullptr;
+            // Same rule as VaoDrawMemo::vaoLifetimeId: (address, config version) is not an
+            // identity, because a recycled address can arrive carrying a config version
+            // the dead VAO also had (two mutations to configure one attribute is the
+            // common shape), and "the VAO did not move" would then skip the layout
+            // re-resolve for a different VAO.
+            Uint64 vaoLifetimeId = 0;
             Uint32 vaoConfigVersion = 0;
             const void* drawFbo = nullptr;
             Uint16 fboVersion = 0;
@@ -987,19 +993,30 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             const MG_State::GLState::BufferObject* buffers[kMaxBindings] = {};
             Uint64 sliceEpochs[kMaxBindings] = {};
         };
-        // One direct-mapped slot of the per-VAO draw-memo table below. The key is a
-        // lookup hint only - a slot is never dereferenced through vaoKey; every fact it
-        // carries is validated against live state before use:
+        // One direct-mapped slot of the per-VAO draw-memo table below. A slot belongs to
+        // the object whose (vaoKey, vaoLifetimeId) pair it carries: the address alone
+        // only picks the slot, and the never-reused lifetime id is what proves the slot
+        // is THIS VAO's, so the successor allocated onto a destroyed VAO's address
+        // always misses. That identity check is load-bearing and the content-hash
+        // validations below do NOT stand in for it - a recycled address under a
+        // byte-identical configuration reproduces the content hash exactly, which is
+        // how a destroyed VAO's resolved bindings were once handed to its successor's
+        // draw. The slot is still never dereferenced through vaoKey, and every fact it
+        // carries is still validated against live state before use:
         //  - layoutHash/layoutAuxMasks are valid only while contentHash equals the LIVE
         //    VAO's own hash memo (which the VAO's config version guards), so a config
-        //    change, a buffer rebind, or a recycled VAO address with a different
-        //    configuration all miss. A recycled address with a byte-identical
-        //    configuration AND identical bound buffers reproduces the content hash, and
-        //    then the facts are correct by construction (they are a pure function of it).
+        //    change or a buffer rebind misses even for the same object.
         //  - bindings revalidates per draw exactly as before (frame serial, content
         //    hash, per-binding live buffer pointers and slice epochs).
         struct alignas(64) VaoDrawMemo {
             const MG_State::GLState::VertexArrayObject* vaoKey = nullptr;
+            // The VAO's never-reused lifetime id, checked alongside vaoKey. The pointer
+            // ALONE is not an identity: a deleted VAO's heap address is handed straight
+            // back by the next glGenVertexArrays-shaped allocation, and the successor then
+            // matched this slot and inherited the dead object's memos. Both stated
+            // defences failed with it, because both reduce to the content hash and the
+            // content hash's buffer-identity component was itself a recycled heap address.
+            Uint64 vaoLifetimeId = 0;
             // The VAO content hash (VertexInputStateFactory::GetOrComputeHash) the two
             // layout facts below were derived from; 0 while nothing valid is stored.
             Uint64 contentHash = 0;

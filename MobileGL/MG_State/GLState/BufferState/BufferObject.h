@@ -185,6 +185,13 @@ namespace MobileGL {
             Flags<BufferMappingAccessBit> GetMappingAccess() const;
             GLbitfield GetStorageFlags() const;
             Uint GetExternalIndex() const;
+            // Globally-unique, never-reused id for THIS object's lifetime - same contract
+            // and same motivation as ProgramObject::GetLifetimeId() and
+            // VertexArrayObject::GetLifetimeId(). A backend that folds a buffer's IDENTITY
+            // into a cache key must use this, never the GL name (LIFO-recycled by
+            // glGenBuffers) and never the heap address (recycled by the allocator): both
+            // let a deleted-and-recreated buffer answer to a dead one's cache entry.
+            Uint64 GetLifetimeId() const { return m_lifetimeId; }
             // Monotonic counter bumped on every shadow mutation; backends use it to
             // validate cached transient slices.
             Uint64 GetChangeSerial() const;
@@ -207,7 +214,10 @@ namespace MobileGL {
             // SubData transfer to sync the backend's separate GPU copy.
             void NotifyContentWrite(SizeT offset, SizeT size);
 
+            static Uint64 AllocateLifetimeId();
+
             const Uint m_externalIndex = 0;
+            const Uint64 m_lifetimeId = AllocateLifetimeId();
             SizeT m_size = 0;
             BufferUsage m_usage = BufferUsage::StaticDraw;
             // Owns the buffer's bytes (CPU shadow or backend persistent GPU map) and

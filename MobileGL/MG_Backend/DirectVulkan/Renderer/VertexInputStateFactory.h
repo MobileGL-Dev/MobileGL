@@ -28,11 +28,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         struct BackendVertexInputState {
             HashType hash = 0;
             // Hash of the resolved Vulkan vertex layout only (bindings, attributes,
-            // unsupported mask) - NO buffer identities. `hash` mixes buffer heap
-            // addresses so per-chunk VBOs mint a fresh identity per buffer; keying
-            // pipelines on that minted one VkPipeline per chunk section for an
-            // identical layout, defeating pipeline reuse and the per-draw memo.
-            // Pipelines depend only on the layout, so they key on this instead.
+            // unsupported mask) - NO buffer identities. `hash` mixes each bound
+            // buffer's never-reused LIFETIME ID, so per-chunk VBOs mint a fresh
+            // identity per buffer; keying pipelines on that minted one VkPipeline per
+            // chunk section for an identical layout, defeating pipeline reuse and the
+            // per-draw memo. Pipelines depend only on the layout, so they key on this
+            // instead.
             HashType layoutHash = 0;
             // Frame boundary of the last cache hit; entries idle past the
             // OnFrameBoundary retirement age are evicted (CPU heap only).
@@ -86,8 +87,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             const MG_State::GLState::VertexArrayObject& vao, HashType hash);
         const BackendVertexInputState& GetOrCreateVertexInputState(const MG_State::GLState::VertexArrayObject& vao);
         // Frame boundary hook: ages the cache and evicts entries not hit for many
-        // frames. The key mixes buffer heap addresses, so buffer/VAO churn keeps
-        // minting fresh keys; without eviction the map grows for the whole session.
+        // frames. The key mixes each bound buffer's never-reused lifetime id, so
+        // buffer/VAO churn keeps minting fresh keys - and does so by construction,
+        // not by luck: a recreated buffer can no longer land back on its dead
+        // predecessor's key. Without eviction the map grows for the whole session.
         // Entries hold no Vulkan handles (pipeline creation copies the descriptions)
         // and the draw path's entry reference never spans a frame boundary, so
         // eviction here needs no GPU-idle proof. Self-gated: one counter bump and

@@ -8,7 +8,18 @@
 
 #include "VertexArrayObject.h"
 
+#include <atomic>
+
 namespace MobileGL::MG_State::GLState {
+    // Starts at 1 so a zero-initialized memo slot can never carry a live object's id.
+    // Atomic because VAOs are GL-thread-only today but the counter costs nothing to
+    // make safe, and a duplicate id would resurrect exactly the bug it exists to kill.
+    static std::atomic<Uint64> s_nextVertexArrayLifetimeId{1};
+
+    Uint64 VertexArrayObject::AllocateLifetimeId() {
+        return s_nextVertexArrayLifetimeId.fetch_add(1, std::memory_order_relaxed);
+    }
+
     VertexArrayObject::VertexArrayObject(Uint externIndex) : m_externalIndex(externIndex) {
         for (int index = 0; index < MAX_VERTEX_ATTRIBS; ++index) {
             auto& attr = m_attributes[index];

@@ -8,9 +8,17 @@
 
 #include "BufferObject.h"
 
+#include <atomic>
+
 namespace MobileGL::MG_State::GLState {
     namespace {
         const BufferBackendOps* g_bufferBackendOps = nullptr;
+        // Starts at 1 so a zero-initialized cache slot can never carry a live buffer's id.
+        std::atomic<Uint64> g_nextBufferLifetimeId{1};
+    }
+
+    Uint64 BufferObject::AllocateLifetimeId() {
+        return g_nextBufferLifetimeId.fetch_add(1, std::memory_order_relaxed);
     }
 
     void SetBufferBackendOps(const BufferBackendOps* ops) {
