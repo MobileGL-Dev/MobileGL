@@ -2028,7 +2028,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
             g_currentDrawFrontendProgram = nullptr;
             g_currentDrawBackendProgram = nullptr;
 
-            if (!currentProgram || !currentProgram->GetLinkStatus()) {
+            // ... || !GetSpirvStatus(): see BackendProgramObjectImpl::SyncToBackend - a
+            // program whose SPIR-V never arrived is linked but not drawable.
+            if (!currentProgram || !currentProgram->GetLinkStatus() || !currentProgram->GetSpirvStatus()) {
                 g_GLESFuncs.glUseProgram(0);
                 g_lastUsedBackendProgramId = 0;
                 return;
@@ -2589,7 +2591,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
     static void BindCurrentProgramWithResources(
         const SharedPtr<MG_State::GLState::ProgramObject>& currentProgram,
         const TextureImpl::DrawTextureSyncKeys& keys) {
-        if (currentProgram && currentProgram->GetLinkStatus()) {
+        if (currentProgram && currentProgram->GetLinkStatus() && currentProgram->GetSpirvStatus()) {
 #ifdef TRACY_ENABLE
             ZoneScopedNC("BindCurrentProgram", TRACY_ZONECOLOR_BACKEND);
 #endif
@@ -2859,7 +2861,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
     // is pinned for the duration. Prefers the per-draw stash those preparations wrote.
     static PrgramImpl::BackendProgramObjectImpl* GetCurrentBackendProgram() {
         const auto& currentProgram = MG_State::pGLContext->GetProgramForDraw();
-        if (!currentProgram || !currentProgram->GetLinkStatus()) {
+        if (!currentProgram || !currentProgram->GetLinkStatus() || !currentProgram->GetSpirvStatus()) {
             return nullptr;
         }
         if (PrgramImpl::g_currentDrawFrontendProgram == currentProgram.get()) {
@@ -3017,7 +3019,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         TextureImpl::SyncImageTextureBindings();
         PrgramImpl::SyncCurrentProgram(currentProgram);
 
-        if (!currentProgram || !currentProgram->GetLinkStatus()) {
+        if (!currentProgram || !currentProgram->GetLinkStatus() || !currentProgram->GetSpirvStatus()) {
             g_GLESFuncs.glUseProgram(0);
             PrgramImpl::g_lastUsedBackendProgramId = 0;
             return;

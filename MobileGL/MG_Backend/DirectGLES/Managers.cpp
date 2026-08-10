@@ -4156,8 +4156,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 return;
             }
 
-            if (!stateProgramObject->GetLinkStatus()) {
-                MGLOG_E("Program object is not linked, skipping backend sync. State program ID: %u",
+            // GetSpirvStatus() as well as GetLinkStatus(): a program whose phase-B job was
+            // cancelled (teardown) or whose optimizer run failed is fully linked and fully
+            // queryable, but has no SPIR-V to build a driver program out of. GL cannot retract
+            // a LINK_STATUS it already reported true, so "linked but not drawable" is the
+            // answer, and this is where the ES backend expresses it.
+            if (!stateProgramObject->GetLinkStatus() || !stateProgramObject->GetSpirvStatus()) {
+                MGLOG_E("Program object is not linked or has no generated SPIR-V, skipping backend sync. State "
+                        "program ID: %u",
                         stateProgramObject->GetExternalIndex());
                 return;
             }

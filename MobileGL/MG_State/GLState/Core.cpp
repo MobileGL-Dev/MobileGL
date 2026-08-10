@@ -380,8 +380,14 @@ namespace MobileGL::MG_State {
                 // inside the same draw when it finally touched an artifact, and cache under a
                 // version the publish had already superseded. Settling here means every
                 // version a backend reads during a draw describes the program it is drawing.
-                // One null check in steady state.
-                currentProgram->JoinLink();
+                // Two null checks in steady state.
+                //
+                // BOTH phases, and that is not optional: the phase-B publish bumps those same
+                // versions, so joining only phase A here would leave exactly the hazard this
+                // site exists to close - a backend samples a version, then trips the phase-B
+                // gate through GetGeneratedSpirv() deeper inside the same draw, and memoizes
+                // under a version the publish has already superseded.
+                currentProgram->JoinLinkAndSpirv();
                 return currentProgram;
             }
             if (m_boundProgramPipeline == 0) return nullProgram;
@@ -398,7 +404,7 @@ namespace MobileGL::MG_State {
             // programs. In steady state this is a null check per stage.
             for (SizeT stage = 0; stage < static_cast<SizeT>(ShaderStage::ShaderStageCount); ++stage) {
                 const auto& stageProgram = pipeline->GetStageProgram(static_cast<ShaderStage>(stage));
-                if (stageProgram) stageProgram->JoinLink();
+                if (stageProgram) stageProgram->JoinLinkAndSpirv();
             }
 
             const auto signature = pipeline->ComputeDrawProgramSignature();
@@ -430,8 +436,9 @@ namespace MobileGL::MG_State {
             composite->Link(true);
             // P1 join site J2. The draw that asked for this program is the very next thing to
             // happen, so enqueueing the composite's link buys nothing and only moves the wait
-            // to whichever backend accessor happens to touch its artifacts first.
-            composite->JoinLink();
+            // to whichever backend accessor happens to touch its artifacts first. Both phases,
+            // for the same reason: the backend is about to read its SPIR-V.
+            composite->JoinLinkAndSpirv();
             pipeline->SetCachedDrawProgram(signature, Move(composite));
             return pipeline->GetCachedDrawProgram(signature);
         }

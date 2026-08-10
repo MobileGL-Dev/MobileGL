@@ -111,9 +111,13 @@ namespace MobileGL::MG_State::GLState {
         // that can grow, and a reallocation underneath this loop would be a use-after-free
         // that only shows up on the one GL call that walks the whole table. The copy costs a
         // refcount bump on a path a mode switch takes at most once.
+        // BOTH phases per program. This is the glMaxShaderCompilerThreadsKHR(0) path, whose
+        // contract is that nothing is outstanding when it returns - a program left with its
+        // SPIR-V job in flight would make the very next GL_COMPLETION_STATUS_KHR read GL_FALSE
+        // in a mode the extension says cannot have anything pending.
         for (SizeT i = 0; i < m_programObjects.size(); ++i) {
             const SharedPtr<ProgramObject> program = m_programObjects[i];
-            if (program) program->JoinLink();
+            if (program) program->JoinLinkAndSpirv();
         }
         for (SizeT i = 0; i < m_shaderObjects.size(); ++i) {
             const SharedPtr<ShaderObject> shader = m_shaderObjects[i];
@@ -122,7 +126,7 @@ namespace MobileGL::MG_State::GLState {
         // The currently-used program is reachable through m_programObjects unless
         // glDeleteProgram already freed its slot while it stayed current. Nothing else holds
         // a GL-visible name for it, but a draw would still join it, so settle it here too.
-        if (m_currentProgram) m_currentProgram->JoinLink();
+        if (m_currentProgram) m_currentProgram->JoinLinkAndSpirv();
     }
 
     void ProgramState::MarkShaderObjectForDeletion(Uint shader) {
