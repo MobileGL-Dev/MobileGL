@@ -37,6 +37,19 @@
 #define MOBILEGL_WGL_API MOBILEGL_API
 
 // ====================== MobileGL configurations ======================= //
+// The numeric log levels live here, not only in Log.h: MOBILEGL_ASSERT below compares
+// MOBILEGL_LOG_ACTIVE_LEVEL against MOBILEGL_LOG_LEVEL_DEBUG, and in a translation unit
+// that includes Defines.h without Log.h both tokens would silently evaluate to 0 in the
+// preprocessor conditional - enabling the assert in exactly the INFO-level builds it is
+// documented to be compiled out of. Log.h redefines them identically, which is legal.
+#ifndef MOBILEGL_LOG_LEVEL_DEBUG
+#define MOBILEGL_LOG_LEVEL_DEBUG 0
+#define MOBILEGL_LOG_LEVEL_WARN 1
+#define MOBILEGL_LOG_LEVEL_ERROR 2
+#define MOBILEGL_LOG_LEVEL_INFO 3
+#define MOBILEGL_LOG_LEVEL_FATAL 4
+#endif
+
 #ifndef MOBILEGL_LOG_ACTIVE_LEVEL
 #define MOBILEGL_LOG_ACTIVE_LEVEL MOBILEGL_LOG_LEVEL_INFO
 #endif
