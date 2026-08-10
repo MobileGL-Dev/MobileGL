@@ -36,13 +36,9 @@ namespace MobileGL::MG_State::GLState {
     //
     // Every one of the eight ways a link can fail lives here, so once this node has published
     // through EnsureLinkJoined() the program's LINK_STATUS, info log and entire query surface
-    // are FINAL and truthful. spirv-opt and the global-UBO routing tables moved to
-    // ProgramSpirvTask, which chains behind this node and is joined by only five getters (see
-    // ProgramObject::EnsureSpirvJoined).
-    //
-    // GlslangToSpv itself does NOT move: it has to run before buildReflection, and the reason
-    // is a device-confirmed correctness constraint rather than a preference. Read the ordering
-    // note in RunBody before touching the sequence.
+    // are FINAL and truthful. SPIR-V generation, spirv-opt and the global-UBO routing tables
+    // moved to ProgramSpirvTask, which chains behind this node and is joined by only five
+    // getters (see ProgramObject::EnsureSpirvJoined).
     //
     // Same ownership rule as ShaderCompileTask: the body reads nothing but `in` (all of it
     // owned or immutable) and writes nothing but `artifacts`. No GL call, no
@@ -89,17 +85,24 @@ namespace MobileGL::MG_State::GLState {
         // and this node's JobState, and nothing else on it. Reading `artifacts` or
         // `diagnostics` from phase B would race the publish.
         struct SpirvHandoff {
-            // The RAW GlslangToSpv output, one module per attached stage. Phase A generates it
-            // (it has to - see the ordering note in RunBody) and hands over the words; phase B
-            // optimizes them in place and reflects the result.
+            // MANDATORY, and the reason this struct exists at all: TProgram::addShader stores
+            // a RAW TShader*, and for the one-shader-per-stage case getIntermediate() returns
+            // the TShader's own intermediate rather than a copy. These used to die when
+            // RunBody() returned, which was safe only because nothing called getIntermediate()
+            // afterwards. GlslangToSpv does exactly that, so phase B has to own them.
             //
-            // Deliberately the module WORDS and not the parsed ASTs. An earlier cut passed the
-            // Vector<SharedPtr<glslang::TShader>> instead, because TProgram::addShader stores
-            // raw TShader* and borrows their intermediates - which meant the glslang arenas
-            // (megabytes per shaderpack program) had to stay alive across the whole phase-B
-            // backlog. Generating in phase A means they die with the link body exactly as they
-            // always did, and phase B holds nothing but words.
-            Vector<Vector<unsigned>> rawSpirv;
+            // MEMORY NOTE: this is the one thing the split makes live LONGER than it used to -
+            // a glslang arena per stage, megabytes for a shaderpack, now alive from the end of
+            // phase A until phase B runs instead of dying with the link body, so a deep
+            // phase-B backlog holds one arena per queued program. Phase B clears this vector
+            // as soon as GlslangToSpv returns, but read that call site's comment before
+            // relying on it: for the COMMON case (a shader linked into exactly one program)
+            // the compile node co-owns the same TShader and phase A pins that node, so the
+            // clear frees nothing and only the re-parsed CAS-loser shaders are actually
+            // released. If peak RSS ever becomes the binding constraint on a pack load, THIS
+            // is the field to attack - by bounding the backlog, by releasing the compile
+            // node's own reference at claim time, or by moving GlslangToSpv back into phase A.
+            Vector<SharedPtr<glslang::TShader>> shaders;
             // GL enum per entry of `in.shaders`, in the same order (GetSpirvBinaryFromProgram
             // walks it to pick the intermediates).
             Vector<GLenum> shaderTypes;
@@ -142,8 +145,6 @@ namespace MobileGL::MG_State::GLState {
         Bool ValidateFragmentOutputLocations();
         Bool ResolveTransformFeedbackVaryings();
         void ResolveGsTriangleStripCapture(const glslang::TIntermediate* captureIntermediate);
-        // Raw GlslangToSpv, into spirvHandoff.rawSpirv. Must run before DoReflection.
-        void GenerateSpirv();
 
         // Worker-side MGLOG replacement: appended to diagnostics.logLines and replayed by the
         // join, on the GL thread, where a serial implementation would have printed it.
