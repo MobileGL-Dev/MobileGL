@@ -117,9 +117,24 @@ void main() { fragColor = thisIdentifierWasNeverDeclared; }
     }
 
     // The non-joining view of the program, i.e. what GL_COMPLETION_STATUS_KHR will report.
+    // BOTH phases: a program whose SPIR-V job is still in flight is not finished, even though
+    // its whole GL query surface already answers.
     Bool LinkIsSettled(const GLuint program) {
         const auto& object = MG_State::pGLContext->GetProgramObject(program);
         return object == nullptr || object->IsLinkComplete();
+    }
+
+    // Phase A alone: the half that decides LINK_STATUS, the info log, and every reflection
+    // query. This is what a read of LINK_STATUS is required to settle.
+    Bool PhaseALinkIsSettled(const GLuint program) {
+        const auto& object = MG_State::pGLContext->GetProgramObject(program);
+        return object == nullptr || object->IsPhaseALinkComplete();
+    }
+
+    // Phase B alone: SPIR-V + the uniform shadow's layout.
+    Bool SpirvIsSettled(const GLuint program) {
+        const auto& object = MG_State::pGLContext->GetProgramObject(program);
+        return object == nullptr || object->IsSpirvComplete();
     }
 
     // Enqueues `count` distinct heavy compiles without reading anything back, so the pool is
@@ -516,9 +531,61 @@ TEST_F(AsyncLinkTest, LinkProgramReturnsBeforeTheWorkIsDone) {
 
     for (const GLuint program : programs) {
         EXPECT_EQ(QueryLinkStatus(program), GL_TRUE) << QueryProgramInfoLog(program);
-        EXPECT_TRUE(LinkIsSettled(program)) << "reading LINK_STATUS must have joined";
+        // PHASE A only. Reading LINK_STATUS settles the half that decides it, and no more -
+        // the SPIR-V job may well still be running, which is the entire point of the split.
+        EXPECT_TRUE(PhaseALinkIsSettled(program)) << "reading LINK_STATUS must have joined phase A";
     }
     EXPECT_EQ(GetError(), GL_NO_ERROR);
+}
+
+// The other half of the previous case, and the property the two-phase split exists for:
+// LINK_STATUS is answerable without the SPIR-V, so a run of LINK_STATUS reads over a
+// backlog must leave SPIR-V jobs outstanding rather than draining them one by one.
+TEST_F(AsyncLinkTest, ReadingLinkStatusDoesNotSettleTheSpirvJob) {
+    const AsyncModeScope async(true);
+    MG_Util::Async::ShaderCompilePool::Get().SetMaxConcurrency(1);
+    constexpr int kPrograms = 24;
+
+    const GLuint vs = MakeShader(GL_VERTEX_SHADER, kVs);
+    Vector<GLuint> programs;
+    Vector<String> sources;
+    for (int i = 0; i < kPrograms; ++i) {
+        sources.push_back(MakeBulkySource(7900 + i));
+        const char* text = sources.back().c_str();
+        const GLuint fs = CreateShader(GL_FRAGMENT_SHADER);
+        ShaderSource(fs, 1, &text, nullptr);
+        CompileShader(fs);
+        const GLuint program = CreateProgram();
+        AttachShader(program, vs);
+        AttachShader(program, fs);
+        LinkProgram(program);
+        programs.push_back(program);
+    }
+
+    int spirvOutstanding = 0;
+    for (int i = 0; i < kPrograms; ++i) {
+        const GLuint program = programs[static_cast<SizeT>(i)];
+        EXPECT_EQ(QueryLinkStatus(program), GL_TRUE) << QueryProgramInfoLog(program);
+        EXPECT_TRUE(PhaseALinkIsSettled(program)) << "reading LINK_STATUS must have joined phase A";
+        // Reflection has to answer here too, out of phase A and with no further join.
+        const String uniformName = "uSeed" + std::to_string(7900 + i);
+        EXPECT_GE(GetUniformLocation(program, uniformName.c_str()), 0) << uniformName;
+        if (!SpirvIsSettled(program)) ++spirvOutstanding;
+    }
+    EXPECT_GT(spirvOutstanding, 0) << "the whole GL query surface was answered and yet every SPIR-V job had "
+                                      "already been drained - the reads are joining phase B";
+
+    // And the SPIR-V gate really is a gate: touching it settles the job.
+    for (const GLuint program : programs) {
+        const auto& object = MG_State::pGLContext->GetProgramObject(program);
+        ASSERT_NE(object, nullptr);
+        EXPECT_GT(object->GetGeneratedSpirv().size(), 0u);
+        EXPECT_TRUE(SpirvIsSettled(program));
+        EXPECT_TRUE(LinkIsSettled(program));
+    }
+    EXPECT_EQ(GetError(), GL_NO_ERROR);
+    MG_Util::Async::ShaderCompilePool::Get().SetMaxConcurrency(
+        MG_Util::Async::ShaderCompilePool::Get().GetThreadCount());
 }
 
 // With the flag off, a link is finished by the time glLinkProgram returns. This is the guard

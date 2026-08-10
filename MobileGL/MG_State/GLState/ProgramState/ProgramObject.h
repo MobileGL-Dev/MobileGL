@@ -18,6 +18,9 @@ namespace MobileGL::MG_State::GLState {
     // ProgramLinkTask.h includes THIS header (it outputs a LinkArtifacts), so including it
     // back would be circular. The destructor is therefore out of line.
     class ProgramLinkTask;
+    // Phase B of the same link: SPIR-V generation, spirv-opt and the global-UBO routing
+    // tables. Chained behind the ProgramLinkTask, forward-declared for the same reason.
+    class ProgramSpirvTask;
 
     class ProgramObject {
     public:
@@ -303,7 +306,8 @@ namespace MobileGL::MG_State::GLState {
         // Sentinel for a uniform location without global-UBO backing storage (should not
         // survive linking: GenerateBinary falls back to tail-allocated scratch storage).
         static constexpr Uint kInvalidUniformOffset = ~0u;
-        Uint GetUniformOffset(Uint location) const { return Artifacts().uniformOffsets[location]; }
+        // PHASE B (joins the SPIR-V job; see EnsureSpirvJoined).
+        Uint GetUniformOffset(Uint location) const { return Spirv().uniformOffsets[location]; }
         Uint GetUniformSizesInBytes(Uint location) const { return MG_Util::GetGLTypeSize(GetUniformType(location)); }
 
         Int GetAttributeLocation(const String& name) {
@@ -381,9 +385,11 @@ namespace MobileGL::MG_State::GLState {
         const String& GetActiveAttribName(Uint index) const {
             return NormalizeBuiltinPipeInputName(Artifacts().program->getPipeInput(static_cast<Int>(index)).name);
         }
-        void* MapUBO() { return Artifacts().globalUboScratch.data(); }
-        const void* GetUBOData() const { return Artifacts().globalUboScratch.data(); }
-        Uint GetUBOSize() const { return static_cast<Uint>(Artifacts().globalUboScratch.size()); }
+        // PHASE B, all three (see EnsureSpirvJoined): the shadow buffer's layout is decided
+        // by the OPTIMIZED SPIR-V, so it does not exist until the SPIR-V job has settled.
+        void* MapUBO() { return Spirv().globalUboScratch.data(); }
+        const void* GetUBOData() const { return Spirv().globalUboScratch.data(); }
+        Uint GetUBOSize() const { return static_cast<Uint>(Spirv().globalUboScratch.size()); }
         // Content version of the CPU-side global-UBO shadow: writers bump it so backends
         // can skip re-uploading an unchanged UBO on every draw. ~0u is reserved as the
         // backends' "never uploaded" sentinel, so skip over it on wrap.
@@ -463,6 +469,11 @@ namespace MobileGL::MG_State::GLState {
             CancelLink();
             BumpLinkObservableVersions();
             ResetLinkArtifacts(Artifacts());
+            // ResetLinkArtifacts is a LinkArtifacts-only operation (the link body calls it on
+            // its own block, where no phase-B output exists yet), so the phase-B half is
+            // cleared here. CancelLink() above already dropped the pending SPIR-V job, so
+            // this cannot be racing a publish.
+            m_spirv = {};
             Artifacts().infoLog = "No program binary format is supported.";
         }
         Bool GetValidateStatus() const { return m_validateStatus; }
@@ -571,8 +582,15 @@ namespace MobileGL::MG_State::GLState {
             return Artifacts().shaderStorageBlockBinding;
         }
 
-        Vector<Vector<unsigned>>& GetGeneratedSpirv() { return Artifacts().generatedSpirv; }
-        const Vector<Vector<unsigned>>& GetGeneratedSpirv() const { return Artifacts().generatedSpirv; }
+        // PHASE B (see EnsureSpirvJoined). Empty for a program whose SPIR-V job was
+        // cancelled; GetSpirvStatus() below is how a backend tells that apart from a program
+        // that never linked.
+        Vector<Vector<unsigned>>& GetGeneratedSpirv() { return Spirv().generatedSpirv; }
+        const Vector<Vector<unsigned>>& GetGeneratedSpirv() const { return Spirv().generatedSpirv; }
+        // Whether phase B produced usable SPIR-V. Joins, like the four getters above: a
+        // backend asks this exactly where it used to ask GetLinkStatus(), i.e. right before
+        // it builds or draws with the program.
+        Bool GetSpirvStatus() const { return Spirv().spirvStatus; }
 
         // The linked glslang reflection itself, for the ONE consumer that needs resource
         // lists no typed getter above exposes: the GL program-interface query layer
@@ -620,7 +638,6 @@ namespace MobileGL::MG_State::GLState {
         // without going through the gate.
         struct LinkArtifacts {
             SharedPtr<glslang::TProgram> program;
-            Vector<Vector<unsigned>> generatedSpirv;
 
             // Attributes (Vertex in)
             Vector<String> attribs;
@@ -664,11 +681,6 @@ namespace MobileGL::MG_State::GLState {
             // SetShaderStorageBlockBinding for why this one is by name and not by index.
             UnorderedMap<String, Int> shaderStorageBlockBinding;
 
-            // Need to be reflected after linking of SPIR-V binary
-            Vector<Uint> uniformOffsets;
-            Vector<Uint> uniformSizesInBytes;
-            Vector<Uint8> globalUboScratch;
-
             Uint activeUniformCount = 0;
             Uint maxUniformLocation = 0;
             Int uniformNameMaxLength = 0;
@@ -695,6 +707,35 @@ namespace MobileGL::MG_State::GLState {
             Int xfbVaryingNameMaxLength = 0;
             Bool xfbNeedsScatteredCapture = false;
             Uint32 xfbPackedStride = 0;
+        };
+
+        // ---- everything phase B of a link produces, in one movable block ----
+        //
+        // The membership rule is the same mechanical one LinkArtifacts uses: this is exactly
+        // what ProgramSpirvTask writes, which is what makes moving it THE publish. It is
+        // deliberately NOT part of LinkArtifacts, and that separation is what routes the five
+        // readers of SPIR-V-derived data through their own join gate by compiler rather than
+        // by review - m_spirv is private and Spirv() is the only spelling that reaches it.
+        //
+        // Why these three and nothing else: `generatedSpirv` has no GL-thread reader at all
+        // (every consumer is a backend draw/prepare path), and `uniformOffsets` +
+        // `globalUboScratch` are the ONLY things glUniform*/glGetUniform* need that are
+        // derived from the OPTIMIZED SPIR-V rather than from glslang reflection - spirv-opt
+        // runs in place and can delete a uniform, or the whole global UBO, so the offsets
+        // cannot be lifted out of glslang's reflection instead.
+        struct SpirvArtifacts {
+            Vector<Vector<unsigned>> generatedSpirv;
+            // Byte offset of each uniform location inside globalUboScratch, or
+            // kInvalidUniformOffset. Sized maxUniformLocation + 1 by the routing pass.
+            Vector<Uint> uniformOffsets;
+            Vector<Uint8> globalUboScratch;
+            // False for a program whose SPIR-V was never produced (phase B cancelled at
+            // teardown or by a relink) or whose optimizer run failed. GL has no way to
+            // retract a LINK_STATUS it already reported true, so such a program stays
+            // "linked" and every reflection answer it has given stays correct - it is simply
+            // not drawable, which the backends already express through their link-status
+            // gates.
+            Bool spirvStatus = false;
         };
 
         // ---- artifacts-only helpers, shared with ProgramLinkTask ----
@@ -736,9 +777,20 @@ namespace MobileGL::MG_State::GLState {
         // Blocks until a pending link has published its artifacts. Public because a few call
         // sites have to join without reading anything - see the explicit-join list (J1-J8) in
         // the P1 design. GL thread only.
+        //
+        // PHASE A ONLY. After this returns, LINK_STATUS and the whole GL query surface are
+        // final and truthful, but the SPIR-V and the uniform shadow may still be in flight.
         void JoinLink() const { EnsureLinkJoined(); }
 
-        // Drops a link that is still in flight, without waiting for it. Called at the points
+        // Both phases. The draw path uses this, and must: the backends sample lifetimeId /
+        // backendStateVersion / the UBO content version OUTSIDE the gate, so a draw that
+        // joined only phase A would sample a version, join phase B later inside the same draw
+        // (through GetGeneratedSpirv), and memoize under a version the phase-B publish had
+        // already superseded - the exact lost-invalidation hazard J1 exists to prevent.
+        void JoinLinkAndSpirv() const { EnsureSpirvJoined(); }
+
+        // Drops BOTH phases of a link that is still in flight, without waiting for either.
+        // Called at the points
         // where the pending link's result stops being the answer to "what did this program
         // link to": a re-link supersedes it, glProgramBinary must force LINK_STATUS false,
         // and a destroyed program has no observers left.
@@ -757,7 +809,15 @@ namespace MobileGL::MG_State::GLState {
         // MUST NOT JOIN - this is what GL_COMPLETION_STATUS_KHR reads when the extension
         // surface lands. "No job at all" counts as complete: there is nothing outstanding to
         // wait for.
-        Bool IsLinkComplete() const { return m_pendingLink == nullptr || IsPendingLinkTerminal(); }
+        //
+        // BOTH phases, deliberately: an application that polls GL_COMPLETION_STATUS_KHR and
+        // then draws must not be told "done" while the SPIR-V is still being generated, or
+        // the draw it was cleared for is the thing that blocks.
+        Bool IsLinkComplete() const { return IsPhaseALinkComplete() && IsSpirvComplete(); }
+        // Phase A alone, for the callers that only care about the query surface (and for the
+        // tests that pin the two phases apart).
+        Bool IsPhaseALinkComplete() const { return m_pendingLink == nullptr || IsPendingLinkTerminal(); }
+        Bool IsSpirvComplete() const { return m_pendingSpirv == nullptr || IsPendingSpirvTerminal(); }
 
         void SetTransformFeedbackVaryings(Vector<String>&& names, GLenum bufferMode) {
             m_requestedXfbVaryings = Move(names);
@@ -824,6 +884,21 @@ namespace MobileGL::MG_State::GLState {
         // node's state goes through this out-of-line helper.
         Bool IsPendingLinkTerminal() const;
 
+        // ---- the second join gate: phase-B (SPIR-V) output only ----
+        // Phase A FIRST, always. Two reasons: the phase-B publish replays the uniform writes
+        // that were buffered during its window, and those need the phase-A reflection to
+        // validate against; and a caller that reaches a phase-B getter without having settled
+        // phase A would otherwise leave the link half-published.
+        //
+        // Same inline/out-of-line split as the phase-A gate, for the same reason: the five
+        // getters behind this one include the per-draw uniform upload path.
+        void EnsureSpirvJoined() const {
+            if (m_pendingLink) JoinPendingLink();
+            if (m_pendingSpirv) JoinPendingSpirv();
+        }
+        void JoinPendingSpirv() const;
+        Bool IsPendingSpirvTerminal() const;
+
         LinkArtifacts& Artifacts() {
             EnsureLinkJoined();
             return m_artifacts;
@@ -831,6 +906,14 @@ namespace MobileGL::MG_State::GLState {
         const LinkArtifacts& Artifacts() const {
             EnsureLinkJoined();
             return m_artifacts;
+        }
+        SpirvArtifacts& Spirv() {
+            EnsureSpirvJoined();
+            return m_spirv;
+        }
+        const SpirvArtifacts& Spirv() const {
+            EnsureSpirvJoined();
+            return m_spirv;
         }
 
         // GL-thread-only companion to ResetLinkArtifacts (see its definition). Const because
@@ -899,10 +982,17 @@ namespace MobileGL::MG_State::GLState {
         // Mutable because publishing is a READ-side operation: a const getter has to be able
         // to settle an outstanding link before answering it.
         mutable LinkArtifacts m_artifacts;
+        // Phase-B output. Same mutability argument as m_artifacts, reached only through
+        // Spirv().
+        mutable SpirvArtifacts m_spirv;
 
         // The link job, from enqueue until the first observable read pulls its result. Null
         // means m_artifacts is already the answer - which is the state every reader outside
         // the pending window sees, and the whole reason the gate above is one branch.
         mutable SharedPtr<ProgramLinkTask> m_pendingLink;
+        // The SPIR-V job, chained behind m_pendingLink. Null means m_spirv is already the
+        // answer. A program can be in the window where m_pendingLink is already null (phase A
+        // published, the query surface is live) while this is still set.
+        mutable SharedPtr<ProgramSpirvTask> m_pendingSpirv;
     };
 } // namespace MobileGL::MG_State::GLState

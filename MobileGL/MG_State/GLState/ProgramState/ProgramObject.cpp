@@ -8,6 +8,7 @@
 
 #include "ProgramObject.h"
 #include "ProgramLinkTask.h"
+#include "ProgramSpirvTask.h"
 #include <atomic>
 #include <MG_Util/Async/ShaderCompilePool.h>
 #include <MG_Util/Converters/GLToStr/GLEnumConverter.h>
@@ -68,12 +69,50 @@ namespace MobileGL::MG_State::GLState {
 
     Bool ProgramObject::IsPendingLinkTerminal() const { return m_pendingLink->IsTerminal(); }
 
+    Bool ProgramObject::IsPendingSpirvTerminal() const { return m_pendingSpirv->IsTerminal(); }
+
+    void ProgramObject::JoinPendingSpirv() const {
+        MOBILEGL_ASSERT(!MG_Util::Async::ShaderCompilePool::IsPoolThread(),
+                        "ProgramObject::EnsureSpirvJoined() reached from a pool thread; a job body must never read "
+                        "GL-thread-owned objects");
+
+        // Move the node out FIRST, for the same reason JoinPendingLink does: everything below
+        // runs GL-thread-only code that reads program state, and with m_pendingSpirv still set
+        // that would re-enter this function.
+        const SharedPtr<ProgramSpirvTask> pending = Move(m_pendingSpirv);
+        m_pendingSpirv.reset();
+
+        pending->Wait();
+        if (pending->IsComplete()) {
+            m_spirv = Move(pending->artifacts);
+        }
+        // A node that settled as Cancelled published nothing, so m_spirv stays empty with
+        // spirvStatus false: linked, queryable, not drawable. Nothing to repair.
+
+        // The THIRD version bump of this link (enqueue, phase-A publish, phase-B publish), and
+        // it is mandatory for exactly the reason the phase-A one is (see JoinPendingLink): a
+        // backend memo taken during the A->B window - when the program was already answering
+        // as linked but had no SPIR-V and no uniform shadow - must not survive the arrival of
+        // either. The memos at risk are keyed on (lifetimeId, backendStateVersion).
+        BumpLinkObservableVersions();
+
+        MG_Util::Async::ApplyDeferredDiagnostics(*pending);
+    }
+
     void ProgramObject::CancelLink() {
+        // Phase B first: it is chained behind phase A, so cancelling A would otherwise run A's
+        // continuation and post a node this call is about to abandon anyway. Cancelling it up
+        // front makes that continuation a no-op.
+        //
+        // Cooperative and non-blocking, both of them. A node that no worker has picked up
+        // settles immediately; one that is running is flagged and settles when its body
+        // returns, writing only into itself the whole time. Either way nothing waits, and each
+        // node keeps its own inputs alive for as long as it needs them.
+        if (m_pendingSpirv) {
+            m_pendingSpirv->Cancel();
+            m_pendingSpirv.reset();
+        }
         if (!m_pendingLink) return;
-        // Cooperative and non-blocking. A node that no worker has picked up settles
-        // immediately; one that is running is flagged and settles when its body returns,
-        // writing only into itself the whole time. Either way nothing waits, and the node
-        // keeps its own inputs alive for as long as it needs them.
         m_pendingLink->Cancel();
         m_pendingLink.reset();
     }
@@ -103,8 +142,12 @@ namespace MobileGL::MG_State::GLState {
         // function has ever cleared, and its callers depend on that (they write infoLog
         // immediately AFTER calling here). Link()'s prologue does not use this - it assigns a
         // whole default-constructed block, where the ordering is explicit.
+        // Phase-B output (generatedSpirv / uniformOffsets / globalUboScratch) is NOT cleared
+        // here and is not in LinkArtifacts at all: the link body calls this on its own block,
+        // where no phase-B output exists yet. The two GL-thread callers that also have to
+        // discard phase-B output say so themselves (MarkLinkFailedByProgramBinary clears
+        // m_spirv; Link()'s prologue assigns a fresh one).
         artifacts.program.reset();
-        artifacts.generatedSpirv.clear();
         artifacts.uniformLocations.clear();
         artifacts.glUniformIndexToTProgram.clear();
         artifacts.tProgramUniformIndexToGl.clear();
@@ -117,9 +160,6 @@ namespace MobileGL::MG_State::GLState {
         artifacts.uniformBlockIndexByName.clear();
         artifacts.uniformBlockBinding.clear();
         artifacts.shaderStorageBlockBinding.clear();
-        artifacts.uniformOffsets.clear();
-        artifacts.uniformSizesInBytes.clear();
-        artifacts.globalUboScratch.clear();
         artifacts.attribs.clear();
         artifacts.attribTypes.clear();
         artifacts.activeUniformCount = 0;
@@ -238,6 +278,7 @@ namespace MobileGL::MG_State::GLState {
         // is what every gated reader sees, so it has to be the complete "not linked" state -
         // including the fields ResetLinkArtifacts deliberately preserves for its own callers.
         m_artifacts = {};
+        m_spirv = {};
 
         // ---- GL-thread-owned mutations ----
         // Remove detached shaders first
@@ -292,17 +333,33 @@ namespace MobileGL::MG_State::GLState {
             task->in.shaders.push_back({shader->GetShaderStage(), shader->GetShaderSourcePtr(), node});
         }
 
+        // Phase B of the same link: SPIR-V generation, spirv-opt and the global-UBO routing
+        // tables. Created here, alongside phase A, so that from this instant the program has
+        // BOTH pending nodes and every cancel site (this prologue, ~ProgramObject,
+        // glProgramBinary's failure) drops both through the one CancelLink().
+        auto spirvTask = MakeShared<ProgramSpirvTask>();
         m_pendingLink = task;
+        m_pendingSpirv = spirvTask;
 
         // Flag off - or glMaxShaderCompilerThreadsKHR(0), see AsyncShaderCompileActive():
         // byte-identical to the synchronous implementation. RunInline() executes the same
-        // body on this thread and the join below publishes through the same code, so the two
-        // modes differ only in WHICH thread ran RunBody().
+        // bodies on this thread, in the same order, and the join below publishes through the
+        // same code, so the two modes differ only in WHICH thread ran them.
+        //
+        // Deliberately NOT expressed as SubmitAfter here: its continuation posts to the pool,
+        // and in this mode the pool is merely unused rather than stopped - the work would
+        // silently move off-thread in the one mode whose whole contract is that it does not.
         if (!MG_Util::Async::AsyncShaderCompileActive()) {
             task->RunInline();
-            EnsureLinkJoined();
+            spirvTask->RunInlineAfter(task);
+            EnsureSpirvJoined();
             return;
         }
+        // The chain edge FIRST, while phase A is still Pending, so registering it is a plain
+        // list append rather than an inline continuation on this thread. If SubmitAfter below
+        // then fails to post phase A it cancels it, and that cancel fires this edge, which
+        // cancels phase B - nothing is left stranded either way.
+        spirvTask->SubmitAfter(task);
         task->SubmitAfter(deps);
     }
 

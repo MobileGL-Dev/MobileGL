@@ -239,7 +239,15 @@ TEST_F(ParallelShaderCompileTest, ProgramCompletionStatusReportsFalseWithoutJoin
 
     for (const GLuint program : programs) {
         EXPECT_EQ(QueryLinkStatus(program), GL_TRUE);
-        EXPECT_EQ(QueryProgramCompletion(program), GL_TRUE) << "GL_LINK_STATUS must have joined";
+        // GL_COMPLETION_STATUS_KHR spans BOTH phases of a link, so reading GL_LINK_STATUS -
+        // which is answered out of phase A - is no longer enough to turn it GL_TRUE. That is
+        // deliberate: an application that polls completion and then draws must not be told
+        // "done" while the SPIR-V is still being generated, or the draw it was cleared for is
+        // the thing that blocks. Settling both phases is what makes the query true.
+        const auto& object = MG_State::pGLContext->GetProgramObject(program);
+        ASSERT_NE(object, nullptr);
+        object->JoinLinkAndSpirv();
+        EXPECT_EQ(QueryProgramCompletion(program), GL_TRUE) << "a full join must have settled both phases";
     }
     EXPECT_EQ(GetError(), GL_NO_ERROR);
 }

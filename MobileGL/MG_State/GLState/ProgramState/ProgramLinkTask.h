@@ -29,10 +29,16 @@ namespace MobileGL::MG_State::GLState {
         SharedPtr<const ShaderCompileTask> compiled;
     };
 
-    // The unit of asynchronous linking: one glLinkProgram's worth of pure CPU work - glslang
-    // link + mapIO, SPIR-V generation and optimization, the GL-facing reflection surface, the
-    // global-UBO routing tables, fragment-output validation and transform-feedback
-    // resolution - with every input it needs snapshotted at enqueue.
+    // PHASE A of one glLinkProgram: the half that decides what GL can be asked about the
+    // program - glslang link + mapIO, the GL-facing reflection surface, fragment-output
+    // validation and transform-feedback resolution - with every input it needs snapshotted at
+    // enqueue.
+    //
+    // Every one of the eight ways a link can fail lives here, so once this node has published
+    // through EnsureLinkJoined() the program's LINK_STATUS, info log and entire query surface
+    // are FINAL and truthful. SPIR-V generation, spirv-opt and the global-UBO routing tables
+    // moved to ProgramSpirvTask, which chains behind this node and is joined by only five
+    // getters (see ProgramObject::EnsureSpirvJoined).
     //
     // Same ownership rule as ShaderCompileTask: the body reads nothing but `in` (all of it
     // owned or immutable) and writes nothing but `artifacts`. No GL call, no
@@ -70,6 +76,37 @@ namespace MobileGL::MG_State::GLState {
         // Moved (never copied) into the ProgramObject by EnsureLinkJoined().
         ProgramObject::LinkArtifacts artifacts;
 
+        // ---- output: everything ProgramSpirvTask needs to run without this node's
+        //      artifacts, filled at the tail of a successful RunBody() ----
+        //
+        // THIS IS NOT `artifacts` AND MUST NOT BE MERGED INTO IT. The GL thread MOVES
+        // `artifacts` out of this node at the join, and phase B runs on a worker afterwards -
+        // so phase B may read `spirvHandoff` and `in` (neither is ever touched by the join)
+        // and this node's JobState, and nothing else on it. Reading `artifacts` or
+        // `diagnostics` from phase B would race the publish.
+        struct SpirvHandoff {
+            // MANDATORY, and the reason this struct exists at all: TProgram::addShader stores
+            // a RAW TShader*, and for the one-shader-per-stage case getIntermediate() returns
+            // the TShader's own intermediate rather than a copy. These used to die when
+            // RunBody() returned, which was safe only because nothing called getIntermediate()
+            // afterwards. GlslangToSpv does exactly that, so phase B has to own them.
+            Vector<SharedPtr<glslang::TShader>> shaders;
+            // GL enum per entry of `in.shaders`, in the same order (GetSpirvBinaryFromProgram
+            // walks it to pick the intermediates).
+            Vector<GLenum> shaderTypes;
+            // The reflection slice BuildGlobalUboRouting consumes: {program, uniformLocations,
+            // uniformIndexInTProgram, tProgramUniformIndexToGl, maxUniformLocation}. Carried
+            // as a LinkArtifacts with only those five fields set, so the routing pass can keep
+            // calling ProgramObject::IsValidUniformLocation / GetUniformArraySizeByTIndex
+            // unchanged. The SharedPtr copy of `program` is also what keeps the TProgram alive
+            // for phase B after the join has moved `artifacts` away.
+            ProgramObject::LinkArtifacts reflection;
+
+            // The one flag phase B tests before doing anything: false means this link never
+            // reached the tail of RunBody (it failed, or was cancelled mid-body).
+            Bool ready = false;
+        } spirvHandoff;
+
         // Posts this job once every compile in `deps` is terminal - and not one moment
         // earlier, so the body never waits on anything (invariant I4: no job body may block
         // on another job, or the pool could deadlock with all its workers waiting on each
@@ -96,8 +133,6 @@ namespace MobileGL::MG_State::GLState {
         Bool ValidateFragmentOutputLocations();
         Bool ResolveTransformFeedbackVaryings();
         void ResolveGsTriangleStripCapture(const glslang::TIntermediate* captureIntermediate);
-        void GenerateSpirv();
-        void BuildGlobalUboRouting();
 
         // Worker-side MGLOG replacement: appended to diagnostics.logLines and replayed by the
         // join, on the GL thread, where a serial implementation would have printed it.

@@ -428,18 +428,28 @@ namespace MobileGL::MG_State::GLState {
         }
 
         // ---- past this point the link cannot fail any more ----
-        MGLOG_D("ProgramObject %u: Starting SPIR-V generation", in.externalIndex);
-        GenerateSpirv();
-
-        MGLOG_D("ProgramObject %u: Building global-UBO routing tables", in.externalIndex);
-        {
-            // TEMP-STAGE-PROBE: "spvc-routing" - the SPIRV-Cross session per SPIR-V module.
-            const MG_Util::Debug::TempStageProbeScope tempStageProbeSpvcRouting(
-                MG_Util::Debug::kTempStageProbeSpvcRouting);
-            BuildGlobalUboRouting();
+        // Everything left is SPIR-V work, and it belongs to phase B. Hand it what it needs
+        // and stop: from the join's point of view this program is now fully linked.
+        //
+        // The TShaders move rather than copy - `attrib` borrowed them into the TProgram as
+        // raw pointers and this node is now their owner of record, for as long as phase B
+        // (which holds this node) needs the intermediates hanging off them.
+        spirvHandoff.shaders = Move(attrib.shaders);
+        spirvHandoff.shaderTypes.resize(in.shaders.size());
+        for (SizeT i = 0; i < in.shaders.size(); i++) {
+            spirvHandoff.shaderTypes[i] = MG_Util::ConvertShaderStageToGLEnum(in.shaders[i].stage);
         }
-        MGLOG_D("ProgramObject %u: Binary generation finished (generatedSpirv size=%zu)", in.externalIndex,
-                artifacts.generatedSpirv.size());
+        // Copied, not referenced: `artifacts` is MOVED out of this node by the join, and
+        // phase B runs after that. Measured at ~20 us per program, which is noise against the
+        // ~450 ms phase B spends on the same program.
+        spirvHandoff.reflection.program = artifacts.program;
+        spirvHandoff.reflection.uniformLocations = artifacts.uniformLocations;
+        spirvHandoff.reflection.uniformIndexInTProgram = artifacts.uniformIndexInTProgram;
+        spirvHandoff.reflection.tProgramUniformIndexToGl = artifacts.tProgramUniformIndexToGl;
+        spirvHandoff.reflection.maxUniformLocation = artifacts.maxUniformLocation;
+        spirvHandoff.ready = true;
+        MGLOG_D("ProgramObject %u: phase A done, %zu module(s) handed to the SPIR-V job", in.externalIndex,
+                spirvHandoff.shaderTypes.size());
     }
 
     Bool ProgramLinkTask::ConsumeShaders(Vector<SharedPtr<glslang::TShader>>& outShaders) {
@@ -886,206 +896,6 @@ namespace MobileGL::MG_State::GLState {
                     ubo.name.c_str(), ubo.size, ubo.getBinding());
         }
         return true;
-    }
-
-    void ProgramLinkTask::GenerateSpirv() {
-        /* As we passed first stage compilation/linking,
-         * we'll assume all the operations here should
-         * pass. We may be able to employ some optimizations
-         * here without the burden of error reporting.
-         */
-        using namespace MG_Util::ShaderTranspiler;
-        MGLOG_D("ProgramObject %u: GenerateSpirv - start", in.externalIndex);
-
-        // The shaders were parsed once, in the link-compatible (relaxed Vulkan-rules)
-        // configuration, and artifacts.program linked those parses - so artifacts.program IS
-        // the program the backends consume. Generate SPIR-V straight from its
-        // intermediates; the full re-parse + re-link that used to live here (one
-        // glslang pass per shader per link) is gone.
-        Vector<GLenum> shaderTypes(in.shaders.size());
-        for (SizeT i = 0; i < in.shaders.size(); i++) {
-            shaderTypes[i] = MG_Util::ConvertShaderStageToGLEnum(in.shaders[i].stage);
-        }
-
-        ProgramBinaryAttrib binaryAttrib{
-            .shaderTypes = shaderTypes,
-            .program = *artifacts.program,
-        };
-        MGLOG_D("ProgramObject %u: GenerateSpirv - requesting SPIR-V binary from program", in.externalIndex);
-        // TEMP-STAGE-PROBE: "spirv-gen" - GlslangToSpv for every stage of this program.
-        auto binaryResult = [&] {
-            const MG_Util::Debug::TempStageProbeScope tempStageProbeSpirvGen(
-                MG_Util::Debug::kTempStageProbeSpirvGen);
-            return ShaderCompiler::GetSpirvBinaryFromProgram(binaryAttrib);
-        }();
-        if (!binaryResult) {
-            DeferLog(std::format("ProgramObject {}: GenerateSpirv - GetSpirvBinaryFromProgram failed",
-                                 in.externalIndex));
-        }
-        MOBILEGL_ASSERT(binaryResult, "GetSpirvBinaryFromProgram failed");
-        artifacts.generatedSpirv = Move(binaryResult.value());
-        MGLOG_D("ProgramObject %u: GenerateSpirv - generated %zu SPIR-V modules", in.externalIndex,
-                artifacts.generatedSpirv.size());
-
-        // Linked SPIR-V generated, sanitize and optimize it
-        {
-            // TEMP-STAGE-PROBE: "spirv-null" - the same Optimizer::Run with ZERO passes,
-            // on the pre-optimize binary: pure BuildModule + serialize + IRContext
-            // teardown. Its device/desktop share ratio against "spirv-opt" is the
-            // allocator-pathology discriminator. Costs one extra plumbing round per
-            // module; diagnostic build only.
-            const MG_Util::Debug::TempStageProbeScope tempStageProbeSpirvNull(
-                MG_Util::Debug::kTempStageProbeSpirvNull);
-            for (auto& spv : artifacts.generatedSpirv) {
-                Vector<uint32_t> nullOut;
-                (void)ShaderCompiler::TempProbeNullOptimizeBinary(spv, nullOut);
-            }
-        }
-        {
-            // TEMP-STAGE-PROBE: "spirv-opt" - the spirv-tools optimizer run over every module.
-            const MG_Util::Debug::TempStageProbeScope tempStageProbeSpirvOpt(
-                MG_Util::Debug::kTempStageProbeSpirvOpt);
-            for (auto& spv : artifacts.generatedSpirv) {
-                auto success = ShaderCompiler::SanitizeAndOptimizeBinary(spv, spv);
-                MOBILEGL_ASSERT(success, "SanitizeBinary failed");
-            }
-        }
-    }
-
-    void ProgramLinkTask::BuildGlobalUboRouting() {
-        using namespace MG_Util::ShaderTranspiler;
-        Vector<GLenum> shaderTypes(in.shaders.size());
-        for (SizeT i = 0; i < in.shaders.size(); i++) {
-            shaderTypes[i] = MG_Util::ConvertShaderStageToGLEnum(in.shaders[i].stage);
-        }
-
-        artifacts.uniformSizesInBytes.clear();
-        artifacts.uniformOffsets.clear();
-        artifacts.globalUboScratch.clear();
-        // kInvalidUniformOffset marks locations that end up without global-UBO backing
-        // (e.g. the optimizer eliminated every use of the uniform); the fallback pass
-        // below gives those locations tail storage so glUniform* always has a target.
-        artifacts.uniformOffsets.resize(artifacts.maxUniformLocation + 1, ProgramObject::kInvalidUniformOffset);
-        artifacts.uniformSizesInBytes.resize(artifacts.maxUniformLocation + 1, 0);
-        for (SizeT i = 0; i < artifacts.generatedSpirv.size(); i++) {
-            auto& spv = artifacts.generatedSpirv[i];
-
-            auto shaderType = shaderTypes[i];
-            MGLOG_D("ProgramObject %u: BuildGlobalUboRouting - parsing SPIR-V meta data for module %zu "
-                    "(shaderType=%u, wordCount=%zu)",
-                    in.externalIndex, i, shaderType, spv.size());
-            SpvcSession session(spv, SessionUsageBit::Reflection);
-            auto result = session.ParseMetaData();
-            if (result < 0) {
-                MGLOG_D("ProgramObject %u: BuildGlobalUboRouting - SpvcSession::ParseMetaData failed for module %zu, "
-                        "err = %d%s",
-                        in.externalIndex, i, result,
-                        (result == SPVC_ERROR_INVALID_SPIRV ? ". Probably no global UBO?" : ""));
-                continue;
-            } else {
-                auto& meta = session.GetMetadata();
-                auto size = meta.globalUboSize;
-                MGLOG_D("ProgramObject %u: BuildGlobalUboRouting - SPIR-V meta: uboSize=%zu plainUniformCount=%zu "
-                        "plainUniformOffsets=%zu",
-                        in.externalIndex, meta.globalUboSize, meta.plainUniformMemberSizesInBytes.size(),
-                        meta.plainUniformOffsetsInUBO.size());
-                if (size == 0) {
-                    continue;
-                }
-                if (artifacts.globalUboScratch.size() < size) {
-                    artifacts.globalUboScratch.resize(size);
-                }
-                for (const auto& [name, offset] : meta.plainUniformOffsetsInUBO) {
-                    // SPIRV-Reflect leaf names never carry a "[0]" suffix; frontend
-                    // reflection keys arrays as "arr[0]" (GL naming), so retry with the
-                    // suffix before declaring the uniform unbacked.
-                    auto locationIt = artifacts.uniformLocations.find(name);
-                    if (locationIt == artifacts.uniformLocations.end()) {
-                        locationIt = artifacts.uniformLocations.find(name + "[0]");
-                    }
-                    if (locationIt == artifacts.uniformLocations.end()) {
-                        MGLOG_D("ProgramObject %u: BuildGlobalUboRouting - uniform '%s' offset=%u but not found in "
-                                "uniformLocations",
-                                in.externalIndex, name.c_str(), offset);
-                        continue;
-                    }
-                    const Uint baseLocation = locationIt->second;
-                    if (!ProgramObject::IsValidUniformLocation(artifacts, static_cast<Int>(baseLocation))) {
-                        continue;
-                    }
-
-                    const Int uniformIndex = artifacts.uniformIndexInTProgram[baseLocation];
-                    const GLint arraySize = ProgramObject::GetUniformArraySizeByTIndex(artifacts, uniformIndex);
-                    SizeT memberSize = 0;
-                    const auto sizeIt = meta.plainUniformMemberSizesInBytes.find(name);
-                    if (sizeIt != meta.plainUniformMemberSizesInBytes.end()) {
-                        memberSize = sizeIt->second;
-                    }
-                    Uint arrayStride = 0;
-                    const auto strideIt = meta.plainUniformArrayStridesInUBO.find(name);
-                    if (strideIt != meta.plainUniformArrayStridesInUBO.end()) {
-                        arrayStride = strideIt->second;
-                    }
-
-                    // Array uniforms span one location per element (see DoReflection);
-                    // give each element its real byte offset inside the UBO.
-                    const GLint elementCount = (arraySize > 1 && arrayStride == 0) ? 1 : std::max(arraySize, 1);
-                    for (GLint element = 0; element < elementCount; ++element) {
-                        const Uint location = baseLocation + static_cast<Uint>(element);
-                        if (location > artifacts.maxUniformLocation ||
-                            artifacts.uniformIndexInTProgram[location] != uniformIndex) {
-                            break;
-                        }
-                        artifacts.uniformOffsets[location] = offset + static_cast<Uint>(element) * arrayStride;
-                        const SizeT consumed = static_cast<SizeT>(element) * arrayStride;
-                        artifacts.uniformSizesInBytes[location] = memberSize > consumed ? memberSize - consumed : 0;
-                    }
-                    MGLOG_D("ProgramObject %u: BuildGlobalUboRouting - uniform '%s' offset=%u stride=%u size=%zu assigned "
-                            "to locations %u..%u",
-                            in.externalIndex, name.c_str(), offset, arrayStride, memberSize, baseLocation,
-                            baseLocation + static_cast<Uint>(elementCount) - 1);
-                }
-                MGLOG_D("ProgramObject %u: BuildGlobalUboRouting - finished parsing module %zu metadata",
-                        in.externalIndex, i);
-            }
-        }
-
-        // Fallback pass: a linked program's active non-opaque uniforms must accept
-        // glUniform*/glGetUniform* even when the optimized SPIR-V no longer contains
-        // them (AggressiveDCE can remove a dead loop together with the only loads of a
-        // uniform -- or the entire global UBO, leaving the scratch unallocated). Hand
-        // such locations CPU-side storage at the (16-byte aligned) tail of the shadow
-        // buffer; backends bind at least the SPIR-V-declared UBO range, and the GPU
-        // never reads these bytes, so this only keeps the GL-visible state coherent.
-        for (Uint location = 0; location <= artifacts.maxUniformLocation; ++location) {
-            if (artifacts.uniformOffsets[location] != ProgramObject::kInvalidUniformOffset) continue;
-            if (!ProgramObject::IsValidUniformLocation(artifacts, static_cast<Int>(location))) continue;
-            const auto& uniform = artifacts.program->getUniform(artifacts.uniformIndexInTProgram[location]);
-            const glslang::TType* type = uniform.getType();
-            if (type != nullptr && type->isOpaque()) continue;
-            if (uniform.index >= 0 && uniform.index < artifacts.program->getNumUniformBlocks() &&
-                std::strstr(artifacts.program->getUniformBlock(uniform.index).name.c_str(),
-                            MG_Util::ShaderTranspiler::GLOBAL_UBO_NAME) == nullptr) {
-                // Member of a named uniform block: not settable through glUniform*, so it
-                // needs no global-UBO shadow storage.
-                continue;
-            }
-
-            // std140-style slot: the matrix upload paths write column vectors at
-            // 16-byte strides, so a matrix slot must cover cols * 16 bytes.
-            SizeT slotSize = MG_Util::GetGLTypeSize(uniform.glDefineType);
-            if (type != nullptr && type->isMatrix()) {
-                slotSize = static_cast<SizeT>(type->getMatrixCols()) * 16u;
-            }
-            slotSize = (slotSize + 15u) & ~static_cast<SizeT>(15u);
-            const SizeT slotOffset = (artifacts.globalUboScratch.size() + 15u) & ~static_cast<SizeT>(15u);
-            artifacts.globalUboScratch.resize(slotOffset + slotSize, 0);
-            artifacts.uniformOffsets[location] = static_cast<Uint>(slotOffset);
-            artifacts.uniformSizesInBytes[location] = slotSize;
-            MGLOG_D("ProgramObject %u: BuildGlobalUboRouting - uniform '%s' location %u has no UBO backing in the "
-                    "generated SPIR-V (optimized out?); allocated %zu fallback bytes at scratch offset %zu",
-                    in.externalIndex, uniform.name.c_str(), location, slotSize, slotOffset);
-        }
     }
 
     Bool ProgramLinkTask::ValidateFragmentOutputLocations() {

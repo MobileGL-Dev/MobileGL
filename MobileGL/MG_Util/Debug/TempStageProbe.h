@@ -37,6 +37,7 @@ namespace MobileGL::MG_Util::Debug {
         kTempStageProbeSpvcRouting,
         kTempStageProbeCompileTaskTotal,
         kTempStageProbeLinkTaskTotal,
+        kTempStageProbeSpirvTaskTotal,
         kTempStageProbeStageCount
     };
 
@@ -52,6 +53,7 @@ namespace MobileGL::MG_Util::Debug {
         "spvc-routing",
         "compiletask-total[superset]",
         "linktask-total[superset]",
+        "spirvtask-total[superset]",
     };
 
     inline std::atomic<unsigned long long> tempStageProbeMicros[kTempStageProbeStageCount] = {};
