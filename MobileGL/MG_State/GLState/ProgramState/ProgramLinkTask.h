@@ -93,11 +93,15 @@ namespace MobileGL::MG_State::GLState {
             //
             // MEMORY NOTE: this is the one thing the split makes live LONGER than it used to -
             // a glslang arena per stage, megabytes for a shaderpack, now alive from the end of
-            // phase A until phase B has generated its SPIR-V instead of dying with the link
-            // body. Phase B clears this vector as soon as GlslangToSpv returns, but a deep
-            // phase-B backlog still holds one arena per queued program. If peak RSS ever
-            // becomes the binding constraint on a pack load, THIS is the field to attack (by
-            // bounding the backlog, or by moving GlslangToSpv back into phase A).
+            // phase A until phase B runs instead of dying with the link body, so a deep
+            // phase-B backlog holds one arena per queued program. Phase B clears this vector
+            // as soon as GlslangToSpv returns, but read that call site's comment before
+            // relying on it: for the COMMON case (a shader linked into exactly one program)
+            // the compile node co-owns the same TShader and phase A pins that node, so the
+            // clear frees nothing and only the re-parsed CAS-loser shaders are actually
+            // released. If peak RSS ever becomes the binding constraint on a pack load, THIS
+            // is the field to attack - by bounding the backlog, by releasing the compile
+            // node's own reference at claim time, or by moving GlslangToSpv back into phase A.
             Vector<SharedPtr<glslang::TShader>> shaders;
             // GL enum per entry of `in.shaders`, in the same order (GetSpirvBinaryFromProgram
             // walks it to pick the intermediates).

@@ -109,11 +109,32 @@ namespace MobileGL::MG_State::GLState {
 
         MGLOG_D("ProgramObject %u: Starting SPIR-V generation", externalIndex);
         GenerateSpirv(handoff, externalIndex);
-        // GlslangToSpv was the only consumer of the parsed ASTs, and they are by far the
-        // largest thing this node keeps alive (one glslang arena per stage, megabytes for a
-        // shaderpack). Everything after this point works on the SPIR-V and on the TProgram's
-        // own self-contained reflection pool, so drop them here rather than at the end of the
-        // body - spirv-opt plus routing is ~87% of this node's runtime.
+        // GlslangToSpv was the only consumer of the parsed ASTs; everything after this point
+        // works on the SPIR-V and on the TProgram's own self-contained reflection pool. Drop
+        // them here rather than at the end of the body, which is ~87% of this node's runtime
+        // earlier (spirv-opt plus routing).
+        //
+        // WHAT THIS ACTUALLY FREES, precisely - it is LESS than "the glslang arenas", and the
+        // difference matters for the peak-RSS story:
+        //   * CAS-LOSER shaders (the re-parse in ShaderCompileTask::ClaimParsedShader, i.e.
+        //     the 2nd..Nth link of a shared shader): freed here in full. The handoff is their
+        //     ONLY owner.
+        //   * CAS-WINNER shaders (the common case - one shader object linked into one
+        //     program, which is every program of an Iris pack load): NOT freed here. The
+        //     winner branch returns a COPY of ShaderCompileTask::artifacts.shader
+        //     (ShaderCompileTask.cpp:320) and the node never releases its own reference, while
+        //     phase A holds that node through in.shaders[i].compiled for its whole life - and
+        //     phase A lives until PhaseAReleaser fires at the end of this body. So the
+        //     refcount goes 2 -> 1 here and the arena dies where it would have died anyway.
+        //
+        // Making it free the winner's arena too means releasing whatever pins the TShader
+        // inside the compile node, and neither obvious route is safe as a drive-by: moving out
+        // of artifacts.shader at claim time races ShaderObject::GetCompiledShader() on the GL
+        // thread and breaks JobNode's "a terminal node is immutable" invariant, and dropping
+        // phase A's in.shaders[i].compiled reference only helps when nothing else holds the
+        // node (the adoption map is a WeakPtr index, so it would also change which nodes stay
+        // adoptable). Both belong in a change that can be reviewed against the consume-once
+        // and adoption semantics on their own terms.
         handoff.shaders.clear();
 
         MGLOG_D("ProgramObject %u: Building global-UBO routing tables", externalIndex);
