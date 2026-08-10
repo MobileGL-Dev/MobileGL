@@ -13,7 +13,6 @@
 #include <MG_Util/Converters/GLToStr/GLEnumConverter.h>
 #include <MG_Util/Converters/MGToGL/ProgramEnumConverter.h>
 #include <MG_Util/Converters/SPIRVCrossToGL/SpvcTypeConverter.h>
-#include <MG_Util/Debug/TempStageProbe.h> // TEMP-STAGE-PROBE
 #include <MG_Util/ShaderTranspiler/ShaderCompiler.h>
 #include <MG_Util/ShaderTranspiler/ShaderSourceProcessor.h>
 #include <MG_Util/ShaderTranspiler/Types.h>
@@ -294,15 +293,6 @@ namespace MobileGL::MG_State::GLState {
         const GlslangThreadAllocatorGuard glslangGuard;
         using namespace MG_Util::ShaderTranspiler;
 
-        // TEMP-STAGE-PROBE: "linktask-total" (whole link body, superset of glslang-link /
-        // spirv-gen / spirv-opt / reflection / spvc-routing / the ConsumeShaders re-parse)
-        // plus the every-25-links running-total dump of every stage.
-        // Declared FIRST so it is destroyed LAST: the dump then already includes this link's
-        // own contribution to every stage, including "linktask-total".
-        const MG_Util::Debug::TempStageProbeLinkTick tempStageProbeLinkTick;
-        const MG_Util::Debug::TempStageProbeScope tempStageProbeLinkTask(
-            MG_Util::Debug::kTempStageProbeLinkTaskTotal);
-
         MOBILEGL_ASSERT(in.env != nullptr, "ProgramLinkTask: the CompileEnv snapshot is missing");
         const CompileEnv& env = *in.env;
 
@@ -342,12 +332,7 @@ namespace MobileGL::MG_State::GLState {
                              .explicitOpaqueUniformBindings = &artifacts.explicitOpaqueUniformBindings};
 
         MGLOG_D("ProgramObject %u: Calling ShaderCompiler::LinkProgram", in.externalIndex);
-        // TEMP-STAGE-PROBE: "glslang-link" - TProgram::link + mapIO.
-        auto result = [&] {
-            const MG_Util::Debug::TempStageProbeScope tempStageProbeGlslangLink(
-                MG_Util::Debug::kTempStageProbeGlslangLink);
-            return ShaderCompiler::LinkProgram(attrib);
-        }();
+        auto result = ShaderCompiler::LinkProgram(attrib);
         if (result) {
             artifacts.linkStatus = true;
             artifacts.program = result.value();
@@ -416,13 +401,7 @@ namespace MobileGL::MG_State::GLState {
         // AND read the OPTIMIZED SPIR-V, so BuildGlobalUboRouting still runs strictly after
         // both DoReflection and GenerateSpirv.
         MGLOG_D("ProgramObject %u: Starting reflection", in.externalIndex);
-        // TEMP-STAGE-PROBE: "reflection" - buildReflection + the GL location assignment.
-        const bool tempStageProbeReflectionOk = [&] {
-            const MG_Util::Debug::TempStageProbeScope tempStageProbeReflection(
-                MG_Util::Debug::kTempStageProbeReflection);
-            return static_cast<bool>(DoReflection(env));
-        }();
-        if (!tempStageProbeReflectionOk) {
+        if (!DoReflection(env)) {
             DeferLog(std::format("ProgramObject {}: Link failed during reflection: {}", in.externalIndex,
                                  artifacts.infoLog));
             return;

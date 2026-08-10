@@ -22,10 +22,6 @@ namespace MobileGL {
                 static Result<Vector<Vector<unsigned>>> GetSpirvBinaryFromProgram(const ProgramBinaryAttrib& attrib);
                 static bool SanitizeAndOptimizeBinary(const Vector<Uint32>& inputBinary,
                                                       Vector<uint32_t>& outputBinary);
-                // TEMP-STAGE-PROBE: SanitizeAndOptimizeBinary with zero passes - pure IR
-                // plumbing, for the allocator-pathology discriminator. Remove with the probes.
-                static bool TempProbeNullOptimizeBinary(const Vector<Uint32>& inputBinary,
-                                                        Vector<uint32_t>& outputBinary);
                 // Demotes DrawIndex/BaseInstance/BaseVertex builtins to plain Private globals
                 // (mg_DrawID/mg_BaseInstance/mg_BaseVertex) so SPIRV-Cross can emit ESSL.
                 // Only for backends without native draw-parameter support (DirectGLES).

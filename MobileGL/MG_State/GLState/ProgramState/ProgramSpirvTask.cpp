@@ -10,7 +10,6 @@
 
 #include <MG_State/GLState/ProgramState/ShaderCompileTask.h> // GlslangThreadAllocatorGuard
 #include <MG_Util/Async/ShaderCompilePool.h>
-#include <MG_Util/Debug/TempStageProbe.h> // TEMP-STAGE-PROBE
 #include <MG_Util/ShaderTranspiler/ShaderCompiler.h>
 #include <MG_Util/ShaderTranspiler/SpvcSession.h>
 #include <MG_Util/ShaderTranspiler/Types.h>
@@ -102,11 +101,6 @@ namespace MobileGL::MG_State::GLState {
             return;
         }
 
-        // TEMP-STAGE-PROBE: "spirvtask-total" (whole phase-B body, superset of spirv-gen /
-        // spirv-null / spirv-opt / spvc-routing).
-        const MG_Util::Debug::TempStageProbeScope tempStageProbeSpirvTask(
-            MG_Util::Debug::kTempStageProbeSpirvTaskTotal);
-
         MGLOG_D("ProgramObject %u: Starting SPIR-V generation", externalIndex);
         GenerateSpirv(handoff, externalIndex);
         // GlslangToSpv was the only consumer of the parsed ASTs; everything after this point
@@ -138,12 +132,7 @@ namespace MobileGL::MG_State::GLState {
         handoff.shaders.clear();
 
         MGLOG_D("ProgramObject %u: Building global-UBO routing tables", externalIndex);
-        {
-            // TEMP-STAGE-PROBE: "spvc-routing" - the SPIRV-Cross session per SPIR-V module.
-            const MG_Util::Debug::TempStageProbeScope tempStageProbeSpvcRouting(
-                MG_Util::Debug::kTempStageProbeSpvcRouting);
-            BuildGlobalUboRouting(handoff, externalIndex);
-        }
+        BuildGlobalUboRouting(handoff, externalIndex);
         MGLOG_D("ProgramObject %u: Binary generation finished (generatedSpirv size=%zu)", externalIndex,
                 artifacts.generatedSpirv.size());
     }
@@ -166,12 +155,7 @@ namespace MobileGL::MG_State::GLState {
             .program = *handoff.reflection.program,
         };
         MGLOG_D("ProgramObject %u: GenerateSpirv - requesting SPIR-V binary from program", externalIndex);
-        // TEMP-STAGE-PROBE: "spirv-gen" - GlslangToSpv for every stage of this program.
-        auto binaryResult = [&] {
-            const MG_Util::Debug::TempStageProbeScope tempStageProbeSpirvGen(
-                MG_Util::Debug::kTempStageProbeSpirvGen);
-            return ShaderCompiler::GetSpirvBinaryFromProgram(binaryAttrib);
-        }();
+        auto binaryResult = ShaderCompiler::GetSpirvBinaryFromProgram(binaryAttrib);
         if (!binaryResult) {
             DeferLog(std::format("ProgramObject {}: GenerateSpirv - GetSpirvBinaryFromProgram failed", externalIndex));
             MOBILEGL_ASSERT(binaryResult, "GetSpirvBinaryFromProgram failed");
@@ -182,24 +166,8 @@ namespace MobileGL::MG_State::GLState {
                 artifacts.generatedSpirv.size());
 
         // Linked SPIR-V generated, sanitize and optimize it
-        {
-            // TEMP-STAGE-PROBE: "spirv-null" - the same Optimizer::Run with ZERO passes,
-            // on the pre-optimize binary: pure BuildModule + serialize + IRContext
-            // teardown. Its device/desktop share ratio against "spirv-opt" is the
-            // allocator-pathology discriminator. Costs one extra plumbing round per
-            // module; diagnostic build only.
-            const MG_Util::Debug::TempStageProbeScope tempStageProbeSpirvNull(
-                MG_Util::Debug::kTempStageProbeSpirvNull);
-            for (auto& spv : artifacts.generatedSpirv) {
-                Vector<uint32_t> nullOut;
-                (void)ShaderCompiler::TempProbeNullOptimizeBinary(spv, nullOut);
-            }
-        }
         Bool allOptimized = true;
         {
-            // TEMP-STAGE-PROBE: "spirv-opt" - the spirv-tools optimizer run over every module.
-            const MG_Util::Debug::TempStageProbeScope tempStageProbeSpirvOpt(
-                MG_Util::Debug::kTempStageProbeSpirvOpt);
             for (auto& spv : artifacts.generatedSpirv) {
                 auto success = ShaderCompiler::SanitizeAndOptimizeBinary(spv, spv);
                 if (!success) {
