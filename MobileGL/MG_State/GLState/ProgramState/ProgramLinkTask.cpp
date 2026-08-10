@@ -910,6 +910,19 @@ namespace MobileGL::MG_State::GLState {
 
         // Linked SPIR-V generated, sanitize and optimize it
         {
+            // TEMP-STAGE-PROBE: "spirv-null" - the same Optimizer::Run with ZERO passes,
+            // on the pre-optimize binary: pure BuildModule + serialize + IRContext
+            // teardown. Its device/desktop share ratio against "spirv-opt" is the
+            // allocator-pathology discriminator. Costs one extra plumbing round per
+            // module; diagnostic build only.
+            const MG_Util::Debug::TempStageProbeScope tempStageProbeSpirvNull(
+                MG_Util::Debug::kTempStageProbeSpirvNull);
+            for (auto& spv : artifacts.generatedSpirv) {
+                Vector<uint32_t> nullOut;
+                (void)ShaderCompiler::TempProbeNullOptimizeBinary(spv, nullOut);
+            }
+        }
+        {
             // TEMP-STAGE-PROBE: "spirv-opt" - the spirv-tools optimizer run over every module.
             const MG_Util::Debug::TempStageProbeScope tempStageProbeSpirvOpt(
                 MG_Util::Debug::kTempStageProbeSpirvOpt);

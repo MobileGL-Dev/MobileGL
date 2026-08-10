@@ -385,6 +385,19 @@ namespace MobileGL {
                 return optimizer.Run(inputBinary.data(), inputBinary.size(), &outputBinary, options);
             }
 
+            // TEMP-STAGE-PROBE tempStageProbeNullOptimize: SanitizeAndOptimizeBinary minus
+            // every pass - measures the pure IR plumbing (BuildModule + serialize +
+            // IRContext teardown) so a device run can separate allocator-bound plumbing
+            // from transformation work. Remove with the probes.
+            bool ShaderCompiler::TempProbeNullOptimizeBinary(const Vector<Uint32>& inputBinary,
+                                                             Vector<uint32_t>& outputBinary) {
+                using namespace spvtools;
+                OptimizerOptions options;
+                options.set_run_validator(false);
+                Optimizer optimizer(SPV_ENV_VULKAN_1_1);
+                return optimizer.Run(inputBinary.data(), inputBinary.size(), &outputBinary, options);
+            }
+
             bool ShaderCompiler::LowerDrawParametersForEssl(const Vector<Uint32>& inputBinary,
                                                             Vector<uint32_t>& outputBinary) {
                 using namespace spvtools;
