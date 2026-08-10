@@ -105,8 +105,46 @@ namespace MobileGL {
     }
 
     int TMglGlslIoResolver::resolveInOutLocation(EShLanguage stage, glslang::TVarEntryInfo& ent) {
-        if (!ent.live && stage == EShLangVertex && ent.symbol->getType().getQualifier().isPipeInput()) {
-            return ent.newLocation = -1;
+        // NO dead-vertex-input early-out here, deliberately - the skip belongs in
+        // reserverStorageSlot() and ONLY there.
+        //
+        // Skipping RESERVATION is the GL semantic: only active inputs get generic attribute
+        // locations, so a dead declaration must not consume a slot an active input should
+        // have. Skipping RESOLUTION as well used to look like the same statement, but it is a
+        // different one: it leaves the variable with no layoutLocation, and glslang still
+        // EMITS it - a declared input is in the shader's linker objects and therefore in the
+        // entry point's interface. The result is an OpVariable of storage class Input with no
+        // Location decoration, which SPIR-V forbids
+        // (VUID-StandaloneSpirv-Location-04916). lavapipe tolerates it; Adreno rejects the
+        // whole pipeline with VK_ERROR_UNKNOWN, which is how this shipped undetected - every
+        // desktop gate, retrace corpus included, is blind to it.
+        //
+        // Found 2026-08-11 on an Adreno 830: the Iris weather program (mc_midTexCoord among
+        // seven attributes, only some of them glBindAttribLocation-bound) died at the first
+        // rainy-world draw, 100% reproducible, programHash 0x4a7e9a37fb49caa1.
+        //
+        // They cannot simply be handed to the base resolver either. Auto-assignment for inputs
+        // WITHOUT an explicit binding happens entirely in the resolve pass, in sort order, so a
+        // dead declaration reaching the free-slot search first would take location 0 and push
+        // the active input up - which is precisely the GL violation the reservation skip
+        // exists to prevent (ProgramTest.InactiveExplicitVertexBindingsDoNotReserveLocations
+        // pins it: Iris injects Position/UV0 into packs that actually read vaPosition).
+        //
+        // So dead inputs get their locations from the TOP of the attribute range downward,
+        // while the base resolver hands active ones out from 0 upward. Both properties hold at
+        // once: every emitted input carries a Location, and no active input is displaced. The
+        // two allocators can only meet if live + dead exceed the attribute limit, which is an
+        // over-subscribed program GL would reject anyway; if that happens we leave the
+        // variable to the base resolver rather than hand out a colliding location.
+        const glslang::TType& type = ent.symbol->getType();
+        if (!ent.live && stage == EShLangVertex && type.getQualifier().isPipeInput() &&
+            !type.getQualifier().hasLocation() && !type.isBuiltIn()) {
+            const int size = std::max(1, glslang::TIntermediate::computeTypeLocationSize(type, stage));
+            if (m_nextInactiveVertexInLocation - (size - 1) >= 0) {
+                m_nextInactiveVertexInLocation -= (size - 1);
+                ent.symbol->getWritableType().getQualifier().layoutLocation = m_nextInactiveVertexInLocation;
+                --m_nextInactiveVertexInLocation;
+            }
         }
         return TDefaultGlslIoResolver::resolveInOutLocation(stage, ent);
     }

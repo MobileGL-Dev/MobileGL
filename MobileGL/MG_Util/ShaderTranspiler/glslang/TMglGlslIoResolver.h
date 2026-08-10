@@ -51,5 +51,13 @@ namespace MobileGL {
         std::map<glslang::TString, int> m_plainUniformLocationSizeByName;
         std::map<glslang::TString, int> m_plainUniformLocationByName;
         bool m_plainUniformLocationsAssigned = false;
+        // Descending allocator for INACTIVE vertex inputs (see resolveInOutLocation): they
+        // still have to carry a Location because glslang emits them, but they must not take a
+        // slot an active input would get. 15, not 31: the location survives into the ESSL
+        // SPIRV-Cross emits for DirectGLES, and GL/ES only guarantee GL_MAX_VERTEX_ATTRIBS
+        // >= 16 - a location of 31 makes the generated shader fail to compile on a real ES
+        // driver (caught by the super-duper-vanilla and chocapic retrace fixtures).
+        static constexpr int kInactiveVertexInLocationTop = 15;
+        int m_nextInactiveVertexInLocation = kInactiveVertexInLocationTop;
     };
 } // namespace MobileGL

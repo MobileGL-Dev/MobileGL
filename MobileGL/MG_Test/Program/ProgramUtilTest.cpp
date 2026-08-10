@@ -9,8 +9,11 @@
 #include <gtest/gtest.h>
 
 #include <cstring>
+#include <map>
+#include <set>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include "Includes.h"
 #include "Init.h"
@@ -2648,4 +2651,111 @@ TEST_F(ProgramUtilTest, ShaderPreprocessCacheHonorsByteBudget) {
     cache.Insert(ShaderStage::Vertex, ShaderPreprocessCache::HashSource(oversized), oversized, kEnvA, MakeResult(""));
     EXPECT_EQ(cache.GetEntryCount(), before);
     EXPECT_EQ(cache.Find(ShaderStage::Vertex, ShaderPreprocessCache::HashSource(oversized), oversized, kEnvA), nullptr);
+}
+
+// Every vertex input that reaches SPIR-V must carry a Location decoration - including the
+// declarations glslang's io-mapper considers INACTIVE.
+//
+// The shape is Iris's: seven attributes, only some of them bound through
+// glBindAttribLocation (ProgramAttrib::explicitVertexInLocations), and at least one neither
+// bound nor referenced. GL says only active inputs get generic attribute locations, so the
+// resolver deliberately does not RESERVE a slot for a dead one - but it must still RESOLVE a
+// location for it, because glslang emits an OpVariable for every declared global (the entry
+// point's interface comes from the linker objects) and SPIR-V requires every non-built-in
+// Input to be decorated (VUID-StandaloneSpirv-Location-04916).
+//
+// This test drives the FRONTEND rather than the GL entry points on purpose: it checks the RAW
+// GlslangToSpv output, before SanitizeAndOptimizeBinary. A GL-level test cannot see the defect
+// for an unreferenced attribute, because AggressiveDCE deletes the offending variable on its
+// way to the backend - and yet the real victim (Iris' mc_midTexCoord, Adreno 830,
+// programHash 0x4a7e9a37fb49caa1) survived DCE and killed the pipeline with VK_ERROR_UNKNOWN.
+TEST_F(ProgramUtilTest, PartiallyBoundVertexInputsAllReceiveALocation) {
+    using namespace MG_Util::ShaderTranspiler;
+
+    const String vertexSource = R"(#version 460 core
+in vec3 a_Position;
+in vec4 a_Color;
+in vec2 a_TexCoord;
+in vec2 mc_midTexCoord;
+in vec4 mc_Entity;
+in vec3 iris_Normal;
+in vec4 a_Unreferenced;
+out vec4 v_Color;
+void main() {
+    v_Color = a_Color + vec4(a_TexCoord, 0.0, 0.0) + vec4(mc_midTexCoord, 0.0, 0.0) + mc_Entity
+            + vec4(iris_Normal, 0.0);
+    gl_Position = vec4(a_Position, 1.0);
+}
+)";
+
+    ShaderAttrib shaderAttrib{.shaderType = GL_VERTEX_SHADER, .sourceStr = vertexSource};
+    auto shaderResult = ShaderCompiler::CompileShader(shaderAttrib);
+    ASSERT_TRUE(shaderResult) << shaderResult.error().log;
+
+    // PARTIALLY bound, and deliberately not a dense 0..N run - exactly what Iris does.
+    // mc_midTexCoord and a_Unreferenced are left unbound (FastSTL's map has no
+    // initializer-list constructor, hence the explicit inserts).
+    UnorderedMap<String, Uint> explicitVertexIns;
+    explicitVertexIns["a_Position"] = 0;
+    explicitVertexIns["a_Color"] = 1;
+    explicitVertexIns["a_TexCoord"] = 2;
+    explicitVertexIns["iris_Normal"] = 10;
+    explicitVertexIns["mc_Entity"] = 11;
+    ProgramAttrib programAttrib{.shaders = {shaderResult.value()},
+                                .explicitVertexInLocations = explicitVertexIns};
+    auto programResult = ShaderCompiler::LinkProgram(programAttrib);
+    ASSERT_TRUE(programResult) << programResult.error().log;
+
+    ProgramBinaryAttrib binaryAttrib{.shaderTypes = {GL_VERTEX_SHADER}, .program = *programResult.value()};
+    auto binaryResult = ShaderCompiler::GetSpirvBinaryFromProgram(binaryAttrib);
+    ASSERT_TRUE(binaryResult) << binaryResult.error().log;
+    ASSERT_EQ(binaryResult->size(), 1u);
+    const auto& vertexBinary = binaryResult->front();
+
+    // The authoritative check - this is the same validator whose VUID the driver enforces.
+    spvtools::SpirvTools tools(SPV_ENV_VULKAN_1_1);
+    String validatorMessages;
+    tools.SetMessageConsumer([&validatorMessages](spv_message_level_t, const char*, const spv_position_t&,
+                                                  const char* message) {
+        if (message != nullptr) validatorMessages += String(message) + "\n";
+    });
+    EXPECT_TRUE(tools.Validate(vertexBinary))
+        << "the raw vertex module is not valid SPIR-V; Adreno rejects the whole pipeline for this "
+        << "while lavapipe tolerates it:\n"
+        << validatorMessages;
+
+    // ...and, independently of the validator, every non-built-in Input carries a UNIQUE location.
+    constexpr unsigned kOpDecorate = 71, kOpVariable = 59;
+    constexpr unsigned kDecorationBuiltIn = 11, kDecorationLocation = 30;
+    constexpr unsigned kStorageClassInput = 1;
+    std::map<unsigned, unsigned> locationById;
+    std::set<unsigned> builtInIds;
+    std::vector<unsigned> inputIds;
+    for (SizeT i = 5; i < vertexBinary.size();) { // 5-word header
+        const unsigned wordCount = vertexBinary[i] >> 16;
+        const unsigned opcode = vertexBinary[i] & 0xFFFFu;
+        ASSERT_GT(wordCount, 0u) << "malformed SPIR-V instruction stream";
+        if (i + wordCount > vertexBinary.size()) break;
+        if (opcode == kOpDecorate && wordCount >= 4 && vertexBinary[i + 2] == kDecorationLocation) {
+            locationById[vertexBinary[i + 1]] = vertexBinary[i + 3];
+        } else if (opcode == kOpDecorate && wordCount >= 3 && vertexBinary[i + 2] == kDecorationBuiltIn) {
+            builtInIds.insert(vertexBinary[i + 1]);
+        } else if (opcode == kOpVariable && wordCount >= 4 && vertexBinary[i + 3] == kStorageClassInput) {
+            inputIds.push_back(vertexBinary[i + 2]);
+        }
+        i += wordCount;
+    }
+
+    std::set<unsigned> usedLocations;
+    SizeT checked = 0;
+    for (const unsigned id : inputIds) {
+        if (builtInIds.count(id) != 0) continue;
+        const auto it = locationById.find(id);
+        ASSERT_NE(it, locationById.end())
+            << "vertex input id " << id << " reached SPIR-V with no Location decoration";
+        EXPECT_TRUE(usedLocations.insert(it->second).second)
+            << "two vertex inputs were assigned location " << it->second;
+        ++checked;
+    }
+    EXPECT_GE(checked, 7u) << "expected all seven declared inputs to be present in the raw module";
 }
