@@ -40,11 +40,13 @@ namespace MobileGL::MG_State::GLState {
     // through the CompileEnv snapshot and diagnostics are deferred to the join.
     //
     // ONE LINK IS ONE HANDLER. RunBody() runs start to finish inside a single pool handler
-    // and is the only place `artifacts` is written. Do not split it across handlers to
-    // "pipeline" the reflection half: the intermediates that GlslangToSpv and buildReflection
-    // share are mutated in a strict order (see the GenerateSpirv-before-DoReflection comment
-    // in Run()), and a second handler would let a cancel land between them and publish a
-    // program whose SPIR-V and reflection describe different things.
+    // and is the only place `artifacts` is written. Splitting it across handlers to
+    // "pipeline" the reflection half would let a cancel land between the halves and publish a
+    // program whose SPIR-V and reflection describe different things - so any such split has
+    // to be structural: the first half must publish a LINK_STATUS and a query surface that
+    // are already final, and a lost second half must degrade to "linked but not drawable",
+    // never to a half-published program. (The intermediates' ordering constraint that used to
+    // be quoted here is retested and no longer binding; see the ordering note in RunBody.)
     class ProgramLinkTask final : public MG_Util::Async::JobNode {
     public:
         // ---- inputs, snapshotted on the GL thread in ProgramObject::Link()'s prologue ----

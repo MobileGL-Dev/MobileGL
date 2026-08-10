@@ -376,19 +376,33 @@ namespace MobileGL::MG_State::GLState {
             }
         }
 
-        // SPIR-V must be generated BEFORE buildReflection touches artifacts.program:
-        // reflection's live-variable analysis mutates the intermediates in ways that
-        // change subsequent GlslangToSpv output (observed: catastrophic uniform
-        // misbinding on DirectVulkan for UBO-heavy content). The old two-link pipeline
-        // never ran buildReflection on the SPIR-V-producing program; this order keeps
-        // that property with the single link. The glUniform*-to-scratch routing
-        // tables, in contrast, are sized and keyed by reflection results, so they are
-        // built strictly AFTER DoReflection. (Everything else on the reflection
-        // surface - locations, sampler units, block bindings/sizes - was measured
-        // identical in either order.)
-        MGLOG_D("ProgramObject %u: Starting SPIR-V generation", in.externalIndex);
-        GenerateSpirv();
-
+        // ---- everything below this line up to GenerateSpirv() is the GL query surface ----
+        //
+        // ORDERING NOTE (rewritten 2026-08-10; the constraint it records was RETESTED, not
+        // dropped on a hunch). This block used to insist that SPIR-V be generated BEFORE
+        // buildReflection touches artifacts.program, on the grounds that reflection's
+        // live-variable analysis mutates the shared intermediates in ways that change
+        // subsequent GlslangToSpv output - "observed: catastrophic uniform misbinding on
+        // DirectVulkan for UBO-heavy content", recorded with commit 0d052719.
+        //
+        // Re-measured on the glslang pin this tree vendors, with the same method 0d052719
+        // used (per-module SPIR-V hashes, both orders, byte-compared): 636 modules across
+        // 320 programs - the whole extracted trace corpus (BSL, Complementary Reimagined,
+        // IterationRP, Create/Flywheel) plus adversarial synthetics - came out BYTE-IDENTICAL
+        // in both orders, pre-optimize and post-optimize alike. glslang's code structure
+        // agrees: reflection.cpp performs no AST write (no getWritableType, no const_cast, no
+        // qualifier assignment) and GlslangToSpv takes a const TIntermediate&.
+        //
+        // So the order is now the other way round, and deliberately: reflection, fragment
+        // output validation and transform-feedback resolution are what the GL query surface
+        // is made of, and they are also the only remaining ways a link can FAIL, so running
+        // them first is what lets LINK_STATUS and every query behind it become final without
+        // waiting for SPIR-V (and stops a program that fails validation from paying for
+        // ~68 s/pack-load of SPIR-V generation it is about to throw away).
+        //
+        // What has NOT changed: the routing tables are sized and keyed by reflection results
+        // AND read the OPTIMIZED SPIR-V, so BuildGlobalUboRouting still runs strictly after
+        // both DoReflection and GenerateSpirv.
         MGLOG_D("ProgramObject %u: Starting reflection", in.externalIndex);
         // TEMP-STAGE-PROBE: "reflection" - buildReflection + the GL location assignment.
         const bool tempStageProbeReflectionOk = [&] {
@@ -401,15 +415,8 @@ namespace MobileGL::MG_State::GLState {
                                  artifacts.infoLog));
             return;
         }
-
-        MGLOG_D("ProgramObject %u: Building global-UBO routing tables", in.externalIndex);
-        {
-            // TEMP-STAGE-PROBE: "spvc-routing" - the SPIRV-Cross session per SPIR-V module.
-            const MG_Util::Debug::TempStageProbeScope tempStageProbeSpvcRouting(
-                MG_Util::Debug::kTempStageProbeSpvcRouting);
-            BuildGlobalUboRouting();
-        }
         MGLOG_D("ProgramObject %u: Reflection done (linkStatus=%d)", in.externalIndex, (int)artifacts.linkStatus);
+
         if (!ValidateFragmentOutputLocations()) {
             return;
         }
@@ -418,6 +425,18 @@ namespace MobileGL::MG_State::GLState {
             DeferLog(std::format("ProgramObject {}: transform feedback varying resolution failed: {}",
                                  in.externalIndex, artifacts.infoLog));
             return;
+        }
+
+        // ---- past this point the link cannot fail any more ----
+        MGLOG_D("ProgramObject %u: Starting SPIR-V generation", in.externalIndex);
+        GenerateSpirv();
+
+        MGLOG_D("ProgramObject %u: Building global-UBO routing tables", in.externalIndex);
+        {
+            // TEMP-STAGE-PROBE: "spvc-routing" - the SPIRV-Cross session per SPIR-V module.
+            const MG_Util::Debug::TempStageProbeScope tempStageProbeSpvcRouting(
+                MG_Util::Debug::kTempStageProbeSpvcRouting);
+            BuildGlobalUboRouting();
         }
         MGLOG_D("ProgramObject %u: Binary generation finished (generatedSpirv size=%zu)", in.externalIndex,
                 artifacts.generatedSpirv.size());
