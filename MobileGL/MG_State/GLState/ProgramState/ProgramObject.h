@@ -307,7 +307,24 @@ namespace MobileGL::MG_State::GLState {
         // survive linking: GenerateBinary falls back to tail-allocated scratch storage).
         static constexpr Uint kInvalidUniformOffset = ~0u;
         // PHASE B (joins the SPIR-V job; see EnsureSpirvJoined).
-        Uint GetUniformOffset(Uint location) const { return Spirv().uniformOffsets[location]; }
+        //
+        // BOUNDS-CHECKED, and that is not defensive padding - it is the load-bearing half of
+        // the "linked but not drawable" contract. A phase B that settles CANCELLED rather than
+        // Complete (its body threw, the pool failed to enqueue it, or teardown cancelled it
+        // while phase A had already published) publishes nothing, so the shadow is a
+        // default-constructed SpirvArtifacts with an EMPTY uniformOffsets - while LINK_STATUS
+        // stays GL_TRUE, because GL gives no way to retract one, and IsValidUniformLocation()
+        // keeps answering true out of phase-A reflection. Every glUniform*/glGetUniform* call
+        // site reaches this getter BEFORE its own kInvalidUniformOffset / null-scratch guard,
+        // so an unchecked operator[] here would be a null dereference on the query surface
+        // this design promises stays answerable. Reporting kInvalidUniformOffset instead hands
+        // each of those sites exactly the value their existing guard already handles - the
+        // same value the routing pass itself uses for a uniform the optimizer deleted.
+        Uint GetUniformOffset(Uint location) const {
+            const SpirvArtifacts& spirv = Spirv();
+            return location < spirv.uniformOffsets.size() ? spirv.uniformOffsets[location]
+                                                          : kInvalidUniformOffset;
+        }
         Uint GetUniformSizesInBytes(Uint location) const { return MG_Util::GetGLTypeSize(GetUniformType(location)); }
 
         Int GetAttributeLocation(const String& name) {
@@ -386,7 +403,10 @@ namespace MobileGL::MG_State::GLState {
             return NormalizeBuiltinPipeInputName(Artifacts().program->getPipeInput(static_cast<Int>(index)).name);
         }
         // PHASE B, all three (see EnsureSpirvJoined): the shadow buffer's layout is decided
-        // by the OPTIMIZED SPIR-V, so it does not exist until the SPIR-V job has settled.
+        // by the OPTIMIZED SPIR-V, so it does not exist until the SPIR-V job has settled - and
+        // never exists at all for a program whose SPIR-V job settled cancelled. These three
+        // degrade to nullptr/nullptr/0 in that case, which is exactly the "no backing storage"
+        // shape every caller already tests for (see GetUniformOffset's note).
         void* MapUBO() { return Spirv().globalUboScratch.data(); }
         const void* GetUBOData() const { return Spirv().globalUboScratch.data(); }
         Uint GetUBOSize() const { return static_cast<Uint>(Spirv().globalUboScratch.size()); }

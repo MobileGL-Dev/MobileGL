@@ -4267,8 +4267,15 @@ void main() {
         auto writeUniform = [&](Int location, const void* data, SizeT size) {
             MOBILEGL_ASSERT(location >= 0, "GenerateDepthMipmapWithShader: invalid uniform location");
             const Uint offset = m_depthMipmapResources.program->GetUniformOffset(static_cast<Uint>(location));
-            MOBILEGL_ASSERT(offset + size <= m_depthMipmapResources.program->GetUBOSize(),
-                            "GenerateDepthMipmapWithShader: uniform write out of bounds");
+            // A RETURN, not only an assert: the assert compiles out in release, and a program
+            // whose SPIR-V job settled cancelled reports kInvalidUniformOffset (~0u) with a
+            // zero-sized shadow - which would make the memcpy below a wild write at
+            // depthProgramData + 4 GiB rather than a dropped uniform.
+            if (offset == MG_State::GLState::ProgramObject::kInvalidUniformOffset ||
+                offset + size > m_depthMipmapResources.program->GetUBOSize()) {
+                MOBILEGL_ASSERT(false, "GenerateDepthMipmapWithShader: uniform write out of bounds");
+                return;
+            }
             memcpy(depthProgramData + offset, data, size);
             m_depthMipmapResources.program->MarkUBOContentDirty();
         };
@@ -7161,8 +7168,13 @@ void main() {
         auto writeUniform = [&](Int location, const void* data, SizeT size) {
             MOBILEGL_ASSERT(location >= 0, "TryBlitToDefaultFramebufferWithShader: invalid uniform location");
             const Uint offset = m_blitResources.program->GetUniformOffset(static_cast<Uint>(location));
-            MOBILEGL_ASSERT(offset + size <= m_blitResources.program->GetUBOSize(),
-                            "TryBlitToDefaultFramebufferWithShader: uniform write out of bounds");
+            // A RETURN, not only an assert - see GenerateDepthMipmapWithShader's copy of this
+            // guard: kInvalidUniformOffset must not reach the memcpy in a release build.
+            if (offset == MG_State::GLState::ProgramObject::kInvalidUniformOffset ||
+                offset + size > m_blitResources.program->GetUBOSize()) {
+                MOBILEGL_ASSERT(false, "TryBlitToDefaultFramebufferWithShader: uniform write out of bounds");
+                return;
+            }
             memcpy(blitProgramData + offset, data, size);
         };
         writeUniform(m_blitResources.srcRectLocation, blitUniformData.srcRect, sizeof(blitUniformData.srcRect));
