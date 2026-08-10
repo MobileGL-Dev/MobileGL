@@ -10,6 +10,7 @@
 #include "ProgramLinkTask.h"
 #include "ProgramSpirvTask.h"
 #include <atomic>
+#include <cstring>
 #include <MG_Util/Async/ShaderCompilePool.h>
 #include <MG_Util/Converters/GLToStr/GLEnumConverter.h>
 #include <MG_Util/ShaderTranspiler/CompileEnv.h>
@@ -89,6 +90,10 @@ namespace MobileGL::MG_State::GLState {
         // A node that settled as Cancelled published nothing, so m_spirv stays empty with
         // spirvStatus false: linked, queryable, not drawable. Nothing to repair.
 
+        // Before the version bump, and before any caller can read the shadow: the writes the
+        // application made while the layout did not exist yet.
+        ReplayBufferedUniformWrites();
+
         // The THIRD version bump of this link (enqueue, phase-A publish, phase-B publish), and
         // it is mandatory for exactly the reason the phase-A one is (see JoinPendingLink): a
         // backend memo taken during the A->B window - when the program was already answering
@@ -97,6 +102,75 @@ namespace MobileGL::MG_State::GLState {
         BumpLinkObservableVersions();
 
         MG_Util::Async::ApplyDeferredDiagnostics(*pending);
+    }
+
+    Bool ProgramObject::BufferUniformWrite(const Uint location, const SizeT byteOffsetInUniform, const void* source,
+                                           const SizeT byteSize) {
+        if (source == nullptr || byteSize == 0) return true; // nothing to record, nothing to join for
+        if (m_pendingUniformBytes.size() + byteSize > kMaxBufferedUniformBytes) {
+            // Pressure valve: stop growing and let the caller take the join. Say so once per
+            // program, because the interesting fact is WHICH program did it.
+            MGLOG_D("ProgramObject %u: buffered uniform writes exceeded %zu bytes during the SPIR-V window; the "
+                    "write joins instead",
+                    m_externalIndex, kMaxBufferedUniformBytes);
+            return false;
+        }
+        const SizeT dataOffset = m_pendingUniformBytes.size();
+        m_pendingUniformBytes.resize(dataOffset + byteSize);
+        std::memcpy(m_pendingUniformBytes.data() + dataOffset, source, byteSize);
+        m_pendingUniformWrites.push_back(PendingUniformWrite{.location = location,
+                                                             .byteOffsetInUniform =
+                                                                 static_cast<Uint>(byteOffsetInUniform),
+                                                             .byteSize = static_cast<Uint>(byteSize),
+                                                             .dataOffset = static_cast<Uint>(dataOffset)});
+        return true;
+    }
+
+    void ProgramObject::ReplayBufferedUniformWrites() const {
+        if (m_pendingUniformWrites.empty()) {
+            m_pendingUniformBytes.clear();
+            return;
+        }
+
+        // Drain into locals first: MarkUBOContentDirty below is a plain counter bump, but a
+        // future reader of this function should not be able to observe a half-drained buffer.
+        Vector<PendingUniformWrite> writes;
+        Vector<Uint8> bytes;
+        writes.swap(m_pendingUniformWrites);
+        bytes.swap(m_pendingUniformBytes);
+
+        if (m_spirv.globalUboScratch.empty() || m_spirv.uniformOffsets.empty()) {
+            // Phase B produced nothing (cancelled at teardown, or a relink superseded it).
+            // The program is not drawable, so there is nowhere for these to land and nothing
+            // that could observe them.
+            MGLOG_D("ProgramObject %u: dropping %zu buffered uniform write(s); the SPIR-V job published no shadow",
+                    m_externalIndex, writes.size());
+            return;
+        }
+
+        Uint8* const scratch = m_spirv.globalUboScratch.data();
+        const SizeT uboSize = m_spirv.globalUboScratch.size();
+        for (const PendingUniformWrite& write : writes) {
+            if (write.location >= m_spirv.uniformOffsets.size()) continue;
+            const Uint offset = m_spirv.uniformOffsets[write.location];
+            if (offset == kInvalidUniformOffset ||
+                static_cast<SizeT>(offset) + write.byteOffsetInUniform + write.byteSize > uboSize) {
+                // Same verdict the live write path reaches for a uniform without backing
+                // storage: log and drop, rather than fault.
+                MGLOG_E("ProgramObject %u: buffered uniform write at location %u has no backing storage "
+                        "(offset=%u size=%u uboSize=%zu); dropping write",
+                        m_externalIndex, write.location, offset, write.byteSize, uboSize);
+                continue;
+            }
+            Uint8* const destination = scratch + offset + write.byteOffsetInUniform;
+            const Uint8* const sourceBytes = bytes.data() + write.dataOffset;
+            // The same bytes-equal dedupe the live path applies, per record and in order, so
+            // the "an identical write does not move the content version" property survives
+            // the detour byte for byte.
+            if (std::memcmp(destination, sourceBytes, write.byteSize) == 0) continue;
+            std::memcpy(destination, sourceBytes, write.byteSize);
+            MarkUBOContentDirty();
+        }
     }
 
     void ProgramObject::CancelLink() {
@@ -111,6 +185,12 @@ namespace MobileGL::MG_State::GLState {
         if (m_pendingSpirv) {
             m_pendingSpirv->Cancel();
             m_pendingSpirv.reset();
+            // Buffered writes belong to the link that is being abandoned. A relink resets
+            // every uniform to its initial value anyway (GL 4.6 core 7.6), and the other two
+            // callers are destruction and glProgramBinary's mandated failure, so there is
+            // nothing left that could want them.
+            m_pendingUniformWrites.clear();
+            m_pendingUniformBytes.clear();
         }
         if (!m_pendingLink) return;
         m_pendingLink->Cancel();

@@ -397,6 +397,25 @@ namespace MobileGL::MG_State::GLState {
         void MarkUBOContentDirty() const {
             if (++m_uboContentVersion == ~0u) m_uboContentVersion = 0;
         }
+        // ---- glUniform* inside the phase-A -> phase-B window ----
+        //
+        // True while the program is fully linked and fully queryable but its uniform shadow's
+        // LAYOUT (which the optimized SPIR-V decides) does not exist yet. A non-opaque
+        // glUniform* write in that window is RECORDED rather than joined, and replayed into
+        // the shadow at the phase-B publish - so a pack that sets its uniforms immediately
+        // after glLinkProgram never waits for SPIR-V.
+        //
+        // Nothing can observe the difference: the only route to those bytes is glGetUniform*
+        // (and a draw), and both of those go through the phase-B gate, which replays first.
+        // The OPAQUE branch of glUniform* is deliberately not buffered - a sampler unit is
+        // phase-A state (uniformSamplerOrImageUnitIndex), so glUniform1i(samplerLoc, unit)
+        // right after a link stays a zero-join operation, which is exactly what Iris does.
+        Bool IsSpirvPending() const { return m_pendingSpirv != nullptr; }
+        // Records one write. Returns false if it declined to buffer - the caller must then
+        // perform the write directly (which joins). Declining is the pressure valve for an
+        // application that writes megabytes of uniforms into a single pending window.
+        Bool BufferUniformWrite(Uint location, SizeT byteOffsetInUniform, const void* source, SizeT byteSize);
+
         Uint32 GetBackendStateVersion() const { return m_backendStateVersion; }
         // Bumped only by (re)linking — lets backends detect that every piece of
         // link-derived reflection (locations, block order, UBO layout) is stale.
@@ -899,6 +918,25 @@ namespace MobileGL::MG_State::GLState {
         void JoinPendingSpirv() const;
         Bool IsPendingSpirvTerminal() const;
 
+        // One buffered non-opaque glUniform* write. `dataOffset` indexes m_pendingUniformBytes,
+        // which is one append-only blob rather than a per-record allocation.
+        struct PendingUniformWrite {
+            Uint location = 0;
+            Uint byteOffsetInUniform = 0;
+            Uint byteSize = 0;
+            Uint dataOffset = 0;
+        };
+        // Replays the buffer into the freshly published shadow, in write order, and drains it.
+        // Each record re-does the bounds check and the bytes-equal dedupe the live write path
+        // performs, so "an identical write does not move the content version" survives the
+        // detour exactly - and a record that really does change bytes moves the version, which
+        // is what makes a backend re-upload the UBO it cached during the window.
+        void ReplayBufferedUniformWrites() const;
+        // Past this, BufferUniformWrite declines and the write joins instead. Sized so an
+        // ordinary pack load never reaches it (a pending window is one program's worth of
+        // uniforms) while a pathological writer cannot grow the heap without bound.
+        static constexpr SizeT kMaxBufferedUniformBytes = 4u << 20;
+
         LinkArtifacts& Artifacts() {
             EnsureLinkJoined();
             return m_artifacts;
@@ -994,5 +1032,10 @@ namespace MobileGL::MG_State::GLState {
         // answer. A program can be in the window where m_pendingLink is already null (phase A
         // published, the query surface is live) while this is still set.
         mutable SharedPtr<ProgramSpirvTask> m_pendingSpirv;
+        // glUniform* writes taken while m_pendingSpirv was set, in call order, plus their
+        // bytes. Drained by the phase-B publish and cleared by every cancel site (a relink's
+        // uniforms are not the previous link's uniforms).
+        mutable Vector<PendingUniformWrite> m_pendingUniformWrites;
+        mutable Vector<Uint8> m_pendingUniformBytes;
     };
 } // namespace MobileGL::MG_State::GLState

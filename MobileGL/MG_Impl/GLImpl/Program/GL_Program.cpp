@@ -1120,10 +1120,9 @@ namespace MobileGL::MG_Impl::GLImpl {
         if (!programObject.IsUniformOpaqueAtLocation(location)) {
             MGLOG_D("%s: program = %d, location = %d, maxLocation = %d", __func__, programObject.GetExternalIndex(),
                     location, programObject.GetMaxUniformLocation());
+            // Everything up to and including the clamp is phase-A data (the uniform's GL type
+            // decides its size), so it is answered without joining anything.
             const SizeT size = programObject.GetUniformSizesInBytes(location);
-            const Uint offset = programObject.GetUniformOffset(location);
-            char* pUBO = static_cast<char*>(programObject.MapUBO());
-            const SizeT uboSize = programObject.GetUBOSize();
             SizeT writeSize = ItemCount * sizeof(T);
             if (size < writeSize) {
                 // Metadata bug: degrade to a clamped copy instead of killing the process.
@@ -1132,6 +1131,18 @@ namespace MobileGL::MG_Impl::GLImpl {
                         __func__, programObject.GetExternalIndex(), location, ItemCount * sizeof(T), size);
                 writeSize = size;
             }
+            // The uniform shadow's LAYOUT is phase-B data, so a write that lands while the
+            // SPIR-V job is still running is recorded and replayed at its publish instead of
+            // joining it. This is the hot path for a shaderpack that sets its uniforms
+            // immediately after glLinkProgram. BufferUniformWrite declines (and we fall
+            // through, joining) only past its size budget.
+            if (programObject.IsSpirvPending() &&
+                programObject.BufferUniformWrite(location, byteOffsetInsideUniform, value, writeSize)) {
+                return;
+            }
+            const Uint offset = programObject.GetUniformOffset(location);
+            char* pUBO = static_cast<char*>(programObject.MapUBO());
+            const SizeT uboSize = programObject.GetUBOSize();
             if (pUBO == nullptr || offset == MG_State::GLState::ProgramObject::kInvalidUniformOffset ||
                 offset + byteOffsetInsideUniform + writeSize > uboSize) {
                 // Should not happen: linking gives every settable uniform backing
