@@ -74,16 +74,14 @@ namespace MobileGL::MG_State::GLState {
     // ProgramLinkTask::RunBody - no GL/EGL call, no pActiveBackendObject read, no
     // pGLContext->RecordError().
     void ProgramSpirvTask::RunBody() {
-        // glslang leaves this worker's TLS pool allocator pointing at the last arena it
-        // touched; reset it on the way out so an unrelated later job cannot allocate out of a
-        // pool that has since been freed. Declared FIRST so it is destroyed LAST - the phase-A
-        // release below drops the TShaders (and their pools) and must happen inside it.
+        // spirv-tools and SPIRV-Cross do not use glslang's pool allocator, but the guard is
+        // kept: it is cheap, and it keeps the "a body never leaves this thread's allocator
+        // pointing at someone else's arena" rule uniform across both task bodies.
         const GlslangThreadAllocatorGuard glslangGuard;
         using namespace MG_Util::ShaderTranspiler;
 
-        // Drop phase A - and with it the TShaders, the TProgram reference and phase A's whole
-        // input snapshot - the moment this body is done, rather than at some later join. For a
-        // pack load that is the difference between W glslang arenas alive and all of them.
+        // Drop phase A - the module words are moved out below, and phase A's input snapshot
+        // (its compile nodes, its sources) has no reader here - the moment this body is done.
         struct PhaseAReleaser {
             SharedPtr<ProgramLinkTask>& node;
             ~PhaseAReleaser() { node.reset(); }
@@ -107,35 +105,12 @@ namespace MobileGL::MG_State::GLState {
         const MG_Util::Debug::TempStageProbeScope tempStageProbeSpirvTask(
             MG_Util::Debug::kTempStageProbeSpirvTaskTotal);
 
-        MGLOG_D("ProgramObject %u: Starting SPIR-V generation", externalIndex);
-        GenerateSpirv(handoff, externalIndex);
-        // GlslangToSpv was the only consumer of the parsed ASTs; everything after this point
-        // works on the SPIR-V and on the TProgram's own self-contained reflection pool. Drop
-        // them here rather than at the end of the body, which is ~87% of this node's runtime
-        // earlier (spirv-opt plus routing).
-        //
-        // WHAT THIS ACTUALLY FREES, precisely - it is LESS than "the glslang arenas", and the
-        // difference matters for the peak-RSS story:
-        //   * CAS-LOSER shaders (the re-parse in ShaderCompileTask::ClaimParsedShader, i.e.
-        //     the 2nd..Nth link of a shared shader): freed here in full. The handoff is their
-        //     ONLY owner.
-        //   * CAS-WINNER shaders (the common case - one shader object linked into one
-        //     program, which is every program of an Iris pack load): NOT freed here. The
-        //     winner branch returns a COPY of ShaderCompileTask::artifacts.shader
-        //     (ShaderCompileTask.cpp:320) and the node never releases its own reference, while
-        //     phase A holds that node through in.shaders[i].compiled for its whole life - and
-        //     phase A lives until PhaseAReleaser fires at the end of this body. So the
-        //     refcount goes 2 -> 1 here and the arena dies where it would have died anyway.
-        //
-        // Making it free the winner's arena too means releasing whatever pins the TShader
-        // inside the compile node, and neither obvious route is safe as a drive-by: moving out
-        // of artifacts.shader at claim time races ShaderObject::GetCompiledShader() on the GL
-        // thread and breaks JobNode's "a terminal node is immutable" invariant, and dropping
-        // phase A's in.shaders[i].compiled reference only helps when nothing else holds the
-        // node (the adoption map is a WeakPtr index, so it would also change which nodes stay
-        // adoptable). Both belong in a change that can be reviewed against the consume-once
-        // and adoption semantics on their own terms.
-        handoff.shaders.clear();
+        // Phase A already produced these (it must - GlslangToSpv has to run ahead of
+        // buildReflection; see ProgramLinkTask::RunBody's ordering note). Take the words.
+        artifacts.generatedSpirv = Move(handoff.rawSpirv);
+        MGLOG_D("ProgramObject %u: optimizing %zu SPIR-V module(s)", externalIndex,
+                artifacts.generatedSpirv.size());
+        OptimizeSpirv(externalIndex);
 
         MGLOG_D("ProgramObject %u: Building global-UBO routing tables", externalIndex);
         {
@@ -148,38 +123,8 @@ namespace MobileGL::MG_State::GLState {
                 artifacts.generatedSpirv.size());
     }
 
-    void ProgramSpirvTask::GenerateSpirv(const ProgramLinkTask::SpirvHandoff& handoff, const Uint externalIndex) {
-        /* As we passed first stage compilation/linking,
-         * we'll assume all the operations here should
-         * pass. We may be able to employ some optimizations
-         * here without the burden of error reporting.
-         */
+    void ProgramSpirvTask::OptimizeSpirv(const Uint externalIndex) {
         using namespace MG_Util::ShaderTranspiler;
-        MGLOG_D("ProgramObject %u: GenerateSpirv - start", externalIndex);
-
-        // The shaders were parsed once, in the link-compatible (relaxed Vulkan-rules)
-        // configuration, and the handoff's program linked those parses - so it IS the program
-        // the backends consume. Generate SPIR-V straight from its intermediates, which the
-        // handoff's TShaders keep alive.
-        ProgramBinaryAttrib binaryAttrib{
-            .shaderTypes = handoff.shaderTypes,
-            .program = *handoff.reflection.program,
-        };
-        MGLOG_D("ProgramObject %u: GenerateSpirv - requesting SPIR-V binary from program", externalIndex);
-        // TEMP-STAGE-PROBE: "spirv-gen" - GlslangToSpv for every stage of this program.
-        auto binaryResult = [&] {
-            const MG_Util::Debug::TempStageProbeScope tempStageProbeSpirvGen(
-                MG_Util::Debug::kTempStageProbeSpirvGen);
-            return ShaderCompiler::GetSpirvBinaryFromProgram(binaryAttrib);
-        }();
-        if (!binaryResult) {
-            DeferLog(std::format("ProgramObject {}: GenerateSpirv - GetSpirvBinaryFromProgram failed", externalIndex));
-            MOBILEGL_ASSERT(binaryResult, "GetSpirvBinaryFromProgram failed");
-            return; // spirvStatus stays false: linked, but not drawable.
-        }
-        artifacts.generatedSpirv = Move(binaryResult.value());
-        MGLOG_D("ProgramObject %u: GenerateSpirv - generated %zu SPIR-V modules", externalIndex,
-                artifacts.generatedSpirv.size());
 
         // Linked SPIR-V generated, sanitize and optimize it
         {

@@ -376,33 +376,43 @@ namespace MobileGL::MG_State::GLState {
             }
         }
 
-        // ---- everything below this line up to GenerateSpirv() is the GL query surface ----
+        // ================== DO NOT REORDER WITHOUT A DEVICE GATE ==================
         //
-        // ORDERING NOTE (rewritten 2026-08-10; the constraint it records was RETESTED, not
-        // dropped on a hunch). This block used to insist that SPIR-V be generated BEFORE
-        // buildReflection touches artifacts.program, on the grounds that reflection's
-        // live-variable analysis mutates the shared intermediates in ways that change
-        // subsequent GlslangToSpv output - "observed: catastrophic uniform misbinding on
-        // DirectVulkan for UBO-heavy content", recorded with commit 0d052719.
+        // SPIR-V MUST be generated here - after link + mapIO, BEFORE buildReflection touches
+        // artifacts.program. buildReflection's live-variable analysis perturbs the shared
+        // intermediates in ways that change subsequent GlslangToSpv output. The full history,
+        // because this constraint has now been doubted once and cost a release cycle:
         //
-        // Re-measured on the glslang pin this tree vendors, with the same method 0d052719
-        // used (per-module SPIR-V hashes, both orders, byte-compared): 636 modules across
-        // 320 programs - the whole extracted trace corpus (BSL, Complementary Reimagined,
-        // IterationRP, Create/Flywheel) plus adversarial synthetics - came out BYTE-IDENTICAL
-        // in both orders, pre-optimize and post-optimize alike. glslang's code structure
-        // agrees: reflection.cpp performs no AST write (no getWritableType, no const_cast, no
-        // qualifier assignment) and GlslangToSpv takes a const TIntermediate&.
+        //  * 0d052719 recorded it originally - "observed: catastrophic uniform misbinding on
+        //    DirectVulkan for UBO-heavy content" - validated by per-module SPIR-V hashes over
+        //    a full DirectVulkan replay.
+        //  * 2026-08-10, it was re-measured with that same method and came back GREEN:
+        //    636 modules / 320 programs (BSL, Complementary Reimagined, IterationRP,
+        //    Create/Flywheel, plus adversarial synthetics) byte-identical in both orders, pre-
+        //    and post-optimize. On that evidence the order was inverted.
+        //  * 2026-08-11, the device said otherwise. Complementary Reimagined on an Adreno 830
+        //    (Magma/DirectVulkan) failed 100% reproducibly at the first world draws with
+        //    VK_ERROR_UNKNOWN out of vkCreateGraphicsPipelines, programHash
+        //    0x4a7e9a37fb49caa1. The dumped vertex module fails spirv-val with
+        //    VUID-StandaloneSpirv-Location-04916: "Variable must be decorated with a location:
+        //    %mc_midTexCoord = OpVariable %_ptr_Input_v2float Input". Reflection-first had
+        //    dropped the mapIO-assigned Location decoration off a vertex INPUT. Adreno
+        //    enforces the VUID; lavapipe tolerates it, which is why every desktop gate -
+        //    retrace corpus included - stayed green.
         //
-        // So the order is now the other way round, and deliberately: reflection, fragment
-        // output validation and transform-feedback resolution are what the GL query surface
-        // is made of, and they are also the only remaining ways a link can FAIL, so running
-        // them first is what lets LINK_STATUS and every query behind it become final without
-        // waiting for SPIR-V (and stops a program that fails validation from paying for
-        // ~68 s/pack-load of SPIR-V generation it is about to throw away).
+        // Why the 636-module A/B missed it: the corpus replayed captured shader SOURCES, so it
+        // never reproduced Iris's glBindAttribLocation-before-link flow. The victim decoration
+        // is assigned by the io-resolver those bindings drive (TMglGlslIoResolver), so the
+        // triggering shape was simply not in the sample. A byte-identity result is only as
+        // strong as the flows the corpus contains - it is not a proof about the linker.
         //
-        // What has NOT changed: the routing tables are sized and keyed by reflection results
-        // AND read the OPTIMIZED SPIR-V, so BuildGlobalUboRouting still runs strictly after
-        // both DoReflection and GenerateSpirv.
+        // The corollary for the two-phase split: only work that does NOT touch the
+        // intermediates may move off this critical path. spirv-opt and the global-UBO routing
+        // tables operate on the finished module words, so they live in ProgramSpirvTask;
+        // GlslangToSpv stays here, in front of reflection, where it has always belonged.
+        MGLOG_D("ProgramObject %u: Starting SPIR-V generation", in.externalIndex);
+        GenerateSpirv();
+
         MGLOG_D("ProgramObject %u: Starting reflection", in.externalIndex);
         // TEMP-STAGE-PROBE: "reflection" - buildReflection + the GL location assignment.
         const bool tempStageProbeReflectionOk = [&] {
@@ -428,20 +438,22 @@ namespace MobileGL::MG_State::GLState {
         }
 
         // ---- past this point the link cannot fail any more ----
-        // Everything left is SPIR-V work, and it belongs to phase B. Hand it what it needs
-        // and stop: from the join's point of view this program is now fully linked.
+        // What is left is spirv-opt and the routing tables, and neither touches a glslang
+        // intermediate - they work on the finished module words. Hand them over and stop:
+        // from the join's point of view this program is now fully linked.
         //
-        // The TShaders move rather than copy - `attrib` borrowed them into the TProgram as
-        // raw pointers and this node is now their owner of record, for as long as phase B
-        // (which holds this node) needs the intermediates hanging off them.
-        spirvHandoff.shaders = Move(attrib.shaders);
+        // Note what is NOT in the handoff any more: the TShaders. GlslangToSpv ran above, in
+        // this body, so the parsed ASTs die with `attrib` when this function returns, exactly
+        // as they did before the split. That erases both the borrowed-intermediate lifetime
+        // question and the peak-RSS arena backlog the earlier cut had to reason about.
+        // (spirvHandoff.rawSpirv was filled by GenerateSpirv() above.)
         spirvHandoff.shaderTypes.resize(in.shaders.size());
         for (SizeT i = 0; i < in.shaders.size(); i++) {
             spirvHandoff.shaderTypes[i] = MG_Util::ConvertShaderStageToGLEnum(in.shaders[i].stage);
         }
         // Copied, not referenced: `artifacts` is MOVED out of this node by the join, and
         // phase B runs after that. Measured at ~20 us per program, which is noise against the
-        // ~450 ms phase B spends on the same program.
+        // ~400 ms phase B spends on the same program.
         spirvHandoff.reflection.program = artifacts.program;
         spirvHandoff.reflection.uniformLocations = artifacts.uniformLocations;
         spirvHandoff.reflection.uniformIndexInTProgram = artifacts.uniformIndexInTProgram;
@@ -450,6 +462,48 @@ namespace MobileGL::MG_State::GLState {
         spirvHandoff.ready = true;
         MGLOG_D("ProgramObject %u: phase A done, %zu module(s) handed to the SPIR-V job", in.externalIndex,
                 spirvHandoff.shaderTypes.size());
+    }
+
+    // Raw GlslangToSpv only - one module per attached stage, unoptimized. Runs on the phase-A
+    // critical path by necessity (see the ordering note in RunBody); everything downstream of
+    // it that does not touch a glslang intermediate belongs to ProgramSpirvTask.
+    void ProgramLinkTask::GenerateSpirv() {
+        /* As we passed first stage compilation/linking,
+         * we'll assume all the operations here should
+         * pass. We may be able to employ some optimizations
+         * here without the burden of error reporting.
+         */
+        using namespace MG_Util::ShaderTranspiler;
+        MGLOG_D("ProgramObject %u: GenerateSpirv - start", in.externalIndex);
+
+        // The shaders were parsed once, in the link-compatible (relaxed Vulkan-rules)
+        // configuration, and artifacts.program linked those parses - so artifacts.program IS
+        // the program the backends consume. Generate SPIR-V straight from its intermediates.
+        Vector<GLenum> shaderTypes(in.shaders.size());
+        for (SizeT i = 0; i < in.shaders.size(); i++) {
+            shaderTypes[i] = MG_Util::ConvertShaderStageToGLEnum(in.shaders[i].stage);
+        }
+
+        ProgramBinaryAttrib binaryAttrib{
+            .shaderTypes = shaderTypes,
+            .program = *artifacts.program,
+        };
+        MGLOG_D("ProgramObject %u: GenerateSpirv - requesting SPIR-V binary from program", in.externalIndex);
+        // TEMP-STAGE-PROBE: "spirv-gen" - GlslangToSpv for every stage of this program.
+        auto binaryResult = [&] {
+            const MG_Util::Debug::TempStageProbeScope tempStageProbeSpirvGen(
+                MG_Util::Debug::kTempStageProbeSpirvGen);
+            return ShaderCompiler::GetSpirvBinaryFromProgram(binaryAttrib);
+        }();
+        if (!binaryResult) {
+            DeferLog(std::format("ProgramObject {}: GenerateSpirv - GetSpirvBinaryFromProgram failed",
+                                 in.externalIndex));
+        }
+        MOBILEGL_ASSERT(binaryResult, "GetSpirvBinaryFromProgram failed");
+        if (!binaryResult) return;
+        spirvHandoff.rawSpirv = Move(binaryResult.value());
+        MGLOG_D("ProgramObject %u: GenerateSpirv - generated %zu SPIR-V modules", in.externalIndex,
+                spirvHandoff.rawSpirv.size());
     }
 
     Bool ProgramLinkTask::ConsumeShaders(Vector<SharedPtr<glslang::TShader>>& outShaders) {

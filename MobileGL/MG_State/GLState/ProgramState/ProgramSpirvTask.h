@@ -12,8 +12,8 @@
 #include <MG_Util/Async/JobNode.h>
 
 namespace MobileGL::MG_State::GLState {
-    // PHASE B of one glLinkProgram: GlslangToSpv, spirv-opt, and the SPIRV-Cross pass that
-    // builds the glUniform*-to-scratch routing tables. Chained behind exactly one
+    // PHASE B of one glLinkProgram: spirv-opt and the SPIRV-Cross pass that builds the
+    // glUniform*-to-scratch routing tables. Chained behind exactly one
     // ProgramLinkTask and joined by exactly five ProgramObject getters (GetGeneratedSpirv,
     // GetUniformOffset, MapUBO, GetUBOData, GetUBOSize), so ~120 other getters and the whole
     // GL query surface stay on the phase-A gate and answer without waiting for any of this.
@@ -28,11 +28,14 @@ namespace MobileGL::MG_State::GLState {
     // synchronization - covers everything except the two members the join consumes.)
     //
     // ---- lifetime ----
-    // The handoff owns the Vector<SharedPtr<glslang::TShader>>, and that is mandatory rather
-    // than tidy: glslang::TProgram stores raw TShader* and, for the one-shader-per-stage case,
-    // BORROWS each stage's TIntermediate from its TShader. GlslangToSpv reads exactly those
-    // intermediates. Before the split the shaders died when ProgramLinkTask::RunBody returned,
-    // which was safe only because nothing called getIntermediate() afterwards.
+    // This node touches no glslang intermediate at all. GlslangToSpv runs in PHASE A, because
+    // it has to precede buildReflection (a device-confirmed constraint - see the ordering note
+    // in ProgramLinkTask::RunBody), so the handoff carries finished module WORDS and the parsed
+    // ASTs die with the link body exactly as they always did. The only glslang object reachable
+    // from here is the TProgram, held by SharedPtr for the reflection the routing pass reads -
+    // and that reflection is a deep clone in the TProgram's own pool (TObjectReflection's ctor
+    // does type(pType.clone()) with the allocator pointed at that pool), so it is independent
+    // of the TShaders' lifetime.
     //
     // ---- failure ----
     // A cancel (relink, teardown, program destruction) or an optimizer failure publishes
@@ -65,7 +68,7 @@ namespace MobileGL::MG_State::GLState {
     private:
         void RunBody() override;
 
-        void GenerateSpirv(const ProgramLinkTask::SpirvHandoff& handoff, Uint externalIndex);
+        void OptimizeSpirv(Uint externalIndex);
         void BuildGlobalUboRouting(const ProgramLinkTask::SpirvHandoff& handoff, Uint externalIndex);
 
         // Worker-side MGLOG replacement, replayed by the join on the GL thread. Same reason as
