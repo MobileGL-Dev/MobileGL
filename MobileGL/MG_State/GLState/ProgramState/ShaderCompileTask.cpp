@@ -9,6 +9,7 @@
 #include "ShaderCompileTask.h"
 
 #include <MG_Util/Converters/MGToGL/ProgramEnumConverter.h>
+#include <MG_Util/Debug/TempStageProbe.h> // TEMP-STAGE-PROBE
 #include <MG_Util/ShaderTranspiler/ShaderCompiler.h>
 #include <MG_Util/ShaderTranspiler/ShaderSourceProcessor.h>
 #include <MG_Util/ShaderTranspiler/Types.h>
@@ -155,7 +156,13 @@ namespace {
 
         MobileGL::MG_State::GLState::ShaderPreprocessResult result;
         result.preprocessedSource = source;
-        PreprocessShaderSource(stage, result.preprocessedSource, env);
+        {
+            // TEMP-STAGE-PROBE: "preprocess". Only reached on a ShaderPreprocessCache miss,
+            // so its call count is the miss count, not the glCompileShader count.
+            const MobileGL::MG_Util::Debug::TempStageProbeScope tempStageProbePreprocess(
+                MobileGL::MG_Util::Debug::kTempStageProbePreprocess);
+            PreprocessShaderSource(stage, result.preprocessedSource, env);
+        }
 
         if (stage == ShaderStage::Compute) {
             if (const std::optional<String> localSizeError =
@@ -207,6 +214,10 @@ namespace MobileGL::MG_State::GLState {
         // status + log, so turn a throw into exactly that - a completed job whose result
         // is "this shader did not compile", with a log the application can read.
         // (JobNode still catches: it is the last resort for anything below.)
+        // TEMP-STAGE-PROBE: "compiletask-total" - whole ShaderCompileTask body (superset of
+        // "preprocess" + "parse"); the difference is the task's own bookkeeping.
+        const MG_Util::Debug::TempStageProbeScope tempStageProbeCompileTask(
+            MG_Util::Debug::kTempStageProbeCompileTaskTotal);
         try {
             RunCompilePipeline();
         } catch (const std::exception& e) {
@@ -327,7 +338,14 @@ namespace MobileGL::MG_State::GLState {
                             // Re-parse against the SAME environment the original parse used,
                             // not against whatever the backend reports now.
                             .env = artifacts.env.get()};
-        auto result = ShaderCompiler::CompileShader(attrib);
+        // TEMP-STAGE-PROBE: "parse-reparse" - the link-time consume-once re-parse. This goes
+        // through ShaderCompiler::CompileShader, so it is ALSO counted in "parse"; it is
+        // recorded separately so the "parse" total can be split into first-parse vs re-parse.
+        auto result = [&] {
+            const MG_Util::Debug::TempStageProbeScope tempStageProbeReparse(
+                MG_Util::Debug::kTempStageProbeParseReparse);
+            return ShaderCompiler::CompileShader(attrib);
+        }();
         if (!result) {
             // Should be unreachable: the same source parsed successfully at Compile().
             outReparseLog = result.error().log;

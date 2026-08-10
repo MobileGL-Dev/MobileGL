@@ -32,6 +32,7 @@
 #include <MG_Backend/BackendObjects.h>
 #include <MG_Util/Converters/GLToStr/GLEnumConverter.h>
 #include <MG_Util/Converters/GLToGlslang/ProgramEnumConverter.h>
+#include <MG_Util/Debug/TempStageProbe.h> // TEMP-STAGE-PROBE
 #include <cstdlib>
 
 namespace MobileGL {
@@ -224,8 +225,18 @@ namespace MobileGL {
                     return std::unexpected(r);
                 }
 
+                // TEMP-STAGE-PROBE: "parse" - one glslang TShader::parse. Both the first
+                // attempt and the legacy-#version retry below go through here, and so does
+                // ProgramLinkTask's consume-once re-parse (separately counted there as
+                // "parse-reparse") and ShaderCompiler::PrewarmBuiltins' three warm-up parses.
+                const auto tempStageProbeParseShaderSource = [&](const String& tempStageProbeSource) {
+                    const MobileGL::MG_Util::Debug::TempStageProbeScope tempStageProbeParse(
+                        MobileGL::MG_Util::Debug::kTempStageProbeParse);
+                    return ParseShaderSource(lang, shaderType, tempStageProbeSource, attrib.flags, attrib.env);
+                };
+
                 const String source(attrib.sourceStr);
-                auto result = ParseShaderSource(lang, shaderType, source, attrib.flags, attrib.env);
+                auto result = tempStageProbeParseShaderSource(source);
                 if (result) return result;
 
                 // Legacy desktop sources are normalized to "#version 330 core" (with a marker on the
@@ -241,7 +252,7 @@ namespace MobileGL {
                     return result;
                 }
 
-                auto retryResult = ParseShaderSource(lang, shaderType, retrySource, attrib.flags, attrib.env);
+                auto retryResult = tempStageProbeParseShaderSource(retrySource); // TEMP-STAGE-PROBE
                 if (!retryResult) return result;
 
                 MGLOG_D("CompileShader: %s only parsed after retargeting its legacy #version to 460",
