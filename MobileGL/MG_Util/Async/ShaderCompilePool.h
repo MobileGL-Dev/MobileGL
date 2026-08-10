@@ -109,6 +109,13 @@ namespace MobileGL::MG_Util::Async {
         // but they share glslang's process globals, which teardown is about to free.
         void StopAndDrain();
 
+        // StopAndDrain() on the process-wide pool if one was ever created; never creates
+        // one. For extra atexit sentinels owned by other subsystems (the SPIR-V validation
+        // switch registers one after forcing spirv-tools' lazy function-local tables into
+        // existence, so the drain is sequenced before those tables' destructors - a worker
+        // mid-Validate would otherwise touch freed memory during process exit).
+        static void StopAndDrainProcessPoolAtExit();
+
         Uint GetThreadCount() const;
         Uint GetMaxConcurrency() const;
 

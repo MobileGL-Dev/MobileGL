@@ -2759,3 +2759,323 @@ void main() {
     }
     EXPECT_GE(checked, 7u) << "expected all seven declared inputs to be present in the raw module";
 }
+
+namespace {
+    // Storage-class census of module-scope OpVariables plus an OpFunctionCall count -
+    // everything the dead-interface-elimination tests need to see, nothing more.
+    struct SpirvVariableCensus {
+        SizeT inputCount = 0;
+        SizeT outputCount = 0;
+        SizeT privateCount = 0;
+        SizeT functionCallCount = 0;
+    };
+
+    SpirvVariableCensus TakeVariableCensus(const Vector<Uint32>& spirv) {
+        constexpr unsigned kOpVariable = 59, kOpFunctionCall = 57;
+        constexpr unsigned kStorageClassInput = 1, kStorageClassPrivate = 6, kStorageClassOutput = 3;
+        SpirvVariableCensus census;
+        for (SizeT i = 5; i < spirv.size();) { // 5-word header
+            const unsigned wordCount = spirv[i] >> 16;
+            const unsigned opcode = spirv[i] & 0xFFFFu;
+            if (wordCount == 0 || i + wordCount > spirv.size()) break;
+            if (opcode == kOpVariable && wordCount >= 4) {
+                switch (spirv[i + 3]) {
+                    case kStorageClassInput: ++census.inputCount; break;
+                    case kStorageClassOutput: ++census.outputCount; break;
+                    case kStorageClassPrivate: ++census.privateCount; break;
+                    default: break;
+                }
+            } else if (opcode == kOpFunctionCall) {
+                ++census.functionCallCount;
+            }
+            i += wordCount;
+        }
+        return census;
+    }
+
+    // The exact Iris shim shape that shipped an invalid module for a month: a declared
+    // vertex input whose only use is the initializer of a file-scope global nothing ever
+    // reads, in a shader whose main() still contains calls (which is what used to make
+    // ADCE keep the whole chain alive).
+    constexpr const char* kDeadPrivateChainVertexSource = R"(#version 460 core
+in vec3 a_Position;
+in vec2 mc_midTexCoord;
+out vec4 v_Color;
+vec4 iris_MidTex = vec4(mc_midTexCoord * (1.0 / 32768.0), 0.0, 1.0);
+vec4 helperTint();
+void main() {
+    v_Color = helperTint();
+    gl_Position = vec4(a_Position, 1.0);
+}
+vec4 helperTint() { return vec4(1.0); }
+)";
+
+    Vector<Uint32> CompileVertexToRawSpirv(const String& source) {
+        using namespace MG_Util::ShaderTranspiler;
+        ShaderAttrib shaderAttrib{.shaderType = GL_VERTEX_SHADER, .sourceStr = source};
+        auto shaderResult = ShaderCompiler::CompileShader(shaderAttrib);
+        if (!shaderResult) {
+            ADD_FAILURE() << shaderResult.error().log;
+            return {};
+        }
+        ProgramAttrib programAttrib{.shaders = {shaderResult.value()}};
+        auto programResult = ShaderCompiler::LinkProgram(programAttrib);
+        if (!programResult) {
+            ADD_FAILURE() << programResult.error().log;
+            return {};
+        }
+        ProgramBinaryAttrib binaryAttrib{.shaderTypes = {GL_VERTEX_SHADER},
+                                         .program = *programResult.value()};
+        auto binaryResult = ShaderCompiler::GetSpirvBinaryFromProgram(binaryAttrib);
+        if (!binaryResult || binaryResult->size() != 1u) {
+            ADD_FAILURE() << (binaryResult ? "unexpected module count"
+                                           : binaryResult.error().log);
+            return {};
+        }
+        return binaryResult->front();
+    }
+
+    struct SpirvValidationScope {
+        bool previous;
+        explicit SpirvValidationScope(bool enabled)
+            : previous(MG_Util::ShaderTranspiler::ShaderCompiler::SpirvValidationEnabled()) {
+            MG_Util::ShaderTranspiler::ShaderCompiler::SetSpirvValidationEnabled(enabled);
+        }
+        ~SpirvValidationScope() {
+            MG_Util::ShaderTranspiler::ShaderCompiler::SetSpirvValidationEnabled(previous);
+        }
+    };
+} // namespace
+
+TEST_F(ProgramUtilTest, DeadPrivateChainVertexInputIsEliminatedFromOptimizedBinary) {
+    using namespace MG_Util::ShaderTranspiler;
+
+    const Vector<Uint32> raw = CompileVertexToRawSpirv(kDeadPrivateChainVertexSource);
+    ASSERT_FALSE(raw.empty());
+
+    const SpirvVariableCensus before = TakeVariableCensus(raw);
+    // Preconditions that make this module exercise the ADCE conservatism gate: the dead
+    // input is present, its Private sink is present, and main() still contains a call.
+    // Four Inputs, not two: the frontend always emits gl_VertexIndex/gl_InstanceIndex
+    // built-ins alongside a_Position and mc_midTexCoord.
+    ASSERT_EQ(before.inputCount, 4u)
+        << "expected a_Position, mc_midTexCoord, gl_VertexIndex and gl_InstanceIndex in the raw module";
+    ASSERT_GE(before.privateCount, 1u);
+    ASSERT_GE(before.functionCallCount, 1u)
+        << "helperTint() was inlined by the frontend; this test no longer covers the "
+        << "entry-point-with-calls shape it exists for";
+
+    Vector<Uint32> optimized;
+    ASSERT_TRUE(ShaderCompiler::SanitizeAndOptimizeBinary(raw, optimized));
+
+    const SpirvVariableCensus after = TakeVariableCensus(optimized);
+    EXPECT_EQ(after.inputCount, 1u)
+        << "mc_midTexCoord feeds only a never-read Private global and must not reach the driver";
+
+    spvtools::SpirvTools tools(SPV_ENV_VULKAN_1_1);
+    String validatorMessages;
+    tools.SetMessageConsumer([&validatorMessages](spv_message_level_t, const char*,
+                                                  const spv_position_t&, const char* message) {
+        if (message != nullptr) validatorMessages += String(message) + "\n";
+    });
+    EXPECT_TRUE(tools.Validate(optimized)) << validatorMessages;
+}
+
+TEST_F(ProgramUtilTest, DeclaredButUnwrittenOutputSurvivesOptimization) {
+    using namespace MG_Util::ShaderTranspiler;
+
+    // Chocapic-class packs declare varyings some variants never write while the paired
+    // fragment shader still reads them. The OpVariable (and its Location) must survive the
+    // chain on both backends: Espryt's ESSL link would otherwise fail with "varying not
+    // declared in vertex shader", and Magma's stage-interface contract breaks the same way.
+    // ADCE guarantees this only while remove_outputs stays false - this test freezes that.
+    const Vector<Uint32> raw = CompileVertexToRawSpirv(R"(#version 460 core
+in vec3 a_Position;
+out vec4 v_Written;
+out vec4 v_NeverWritten;
+void main() {
+    v_Written = vec4(1.0);
+    gl_Position = vec4(a_Position, 1.0);
+}
+)");
+    ASSERT_FALSE(raw.empty());
+    // v_Written, v_NeverWritten, and the gl_PerVertex block are all Output-storage variables.
+    const SpirvVariableCensus before = TakeVariableCensus(raw);
+    ASSERT_GE(before.outputCount, 3u);
+
+    Vector<Uint32> optimized;
+    ASSERT_TRUE(ShaderCompiler::SanitizeAndOptimizeBinary(raw, optimized));
+    EXPECT_EQ(TakeVariableCensus(optimized).outputCount, before.outputCount)
+        << "a declared-but-unwritten output was deleted; a fragment stage reading it now "
+        << "fails to link (ES) or breaks the Vulkan stage interface";
+}
+
+TEST_F(ProgramUtilTest, ValidationLatchFlagsInvalidModuleWithoutChangingResults) {
+    using namespace MG_Util::ShaderTranspiler;
+
+    // Only LIVE inputs, so the chain cannot heal the module by deleting them: both
+    // survive to the output, undecorated, and the output is invalid SPIR-V.
+    Vector<Uint32> raw = CompileVertexToRawSpirv(R"(#version 460 core
+in vec3 a_Position;
+in vec4 a_Color;
+out vec4 v_Color;
+void main() {
+    v_Color = a_Color;
+    gl_Position = vec4(a_Position, 1.0);
+}
+)");
+    ASSERT_FALSE(raw.empty());
+
+    // Strip every Input Location decoration - the exact defect class the
+    // TMglGlslIoResolver used to ship ([VUID-StandaloneSpirv-Location-04916]).
+    constexpr unsigned kOpDecorate = 71, kOpVariable = 59;
+    constexpr unsigned kDecorationLocation = 30, kStorageClassInput = 1;
+    std::set<unsigned> inputIds;
+    for (SizeT i = 5; i < raw.size();) {
+        const unsigned wordCount = raw[i] >> 16;
+        const unsigned opcode = raw[i] & 0xFFFFu;
+        ASSERT_GT(wordCount, 0u);
+        if (i + wordCount > raw.size()) break;
+        if (opcode == kOpVariable && wordCount >= 4 && raw[i + 3] == kStorageClassInput) {
+            inputIds.insert(raw[i + 2]);
+        }
+        i += wordCount;
+    }
+    SizeT strippedCount = 0;
+    for (SizeT i = 5; i < raw.size();) {
+        const unsigned wordCount = raw[i] >> 16;
+        const unsigned opcode = raw[i] & 0xFFFFu;
+        if (wordCount == 0 || i + wordCount > raw.size()) break;
+        if (opcode == kOpDecorate && wordCount >= 4 && raw[i + 2] == kDecorationLocation &&
+            inputIds.count(raw[i + 1]) != 0) {
+            raw.erase(raw.begin() + static_cast<std::ptrdiff_t>(i),
+                      raw.begin() + static_cast<std::ptrdiff_t>(i + wordCount));
+            ++strippedCount;
+            continue; // do not advance: the next instruction moved into place
+        }
+        i += wordCount;
+    }
+    ASSERT_GE(strippedCount, 2u) << "expected to strip both live inputs' Location decorations";
+
+    Vector<Uint32> optimized;
+    {
+        // The armed lane: control flow is IDENTICAL to shipping (the wrapper still
+        // succeeds - fail-open call sites downstream must not see a different world),
+        // and the failure latch is the signal. This is the catch that took a device
+        // bisect to find when the validator was off everywhere.
+        SpirvValidationScope validationOn(true);
+        const Uint64 failuresBefore = ShaderCompiler::SpirvValidationFailureCount();
+        EXPECT_TRUE(ShaderCompiler::SanitizeAndOptimizeBinary(raw, optimized));
+        EXPECT_GT(ShaderCompiler::SpirvValidationFailureCount(), failuresBefore)
+            << "an invalid optimized module must bump the validation-failure latch";
+    }
+    {
+        // The shipping configuration: same result, no validation, latch untouched.
+        SpirvValidationScope validationOff(false);
+        const Uint64 failuresBefore = ShaderCompiler::SpirvValidationFailureCount();
+        EXPECT_TRUE(ShaderCompiler::SanitizeAndOptimizeBinary(raw, optimized));
+        EXPECT_EQ(ShaderCompiler::SpirvValidationFailureCount(), failuresBefore);
+    }
+}
+
+namespace {
+    // OpTypeImage: result id (+1), sampled type (+2), dim (+3). Dim::Rect == 4.
+    SizeT CountRectImageTypes(const Vector<Uint32>& spirv) {
+        constexpr unsigned kOpTypeImage = 25, kDimRect = 4;
+        SizeT count = 0;
+        for (SizeT i = 5; i < spirv.size();) {
+            const unsigned wordCount = spirv[i] >> 16;
+            const unsigned opcode = spirv[i] & 0xFFFFu;
+            if (wordCount == 0 || i + wordCount > spirv.size()) break;
+            if (opcode == kOpTypeImage && wordCount >= 4 && spirv[i + 3] == kDimRect) {
+                ++count;
+            }
+            i += wordCount;
+        }
+        return count;
+    }
+
+    // True when any OpDecorate Location targets a UniformConstant/Uniform-storage
+    // variable ([VUID-StandaloneSpirv-Location-06672]).
+    bool AnyLocationOnUniformStorage(const Vector<Uint32>& spirv) {
+        constexpr unsigned kOpDecorate = 71, kOpVariable = 59, kDecorationLocation = 30;
+        constexpr unsigned kStorageUniformConstant = 0, kStorageUniform = 2;
+        std::set<unsigned> locatedIds;
+        for (SizeT i = 5; i < spirv.size();) {
+            const unsigned wordCount = spirv[i] >> 16;
+            const unsigned opcode = spirv[i] & 0xFFFFu;
+            if (wordCount == 0 || i + wordCount > spirv.size()) break;
+            if (opcode == kOpDecorate && wordCount >= 4 && spirv[i + 2] == kDecorationLocation) {
+                locatedIds.insert(spirv[i + 1]);
+            }
+            i += wordCount;
+        }
+        for (SizeT i = 5; i < spirv.size();) {
+            const unsigned wordCount = spirv[i] >> 16;
+            const unsigned opcode = spirv[i] & 0xFFFFu;
+            if (wordCount == 0 || i + wordCount > spirv.size()) break;
+            if (opcode == kOpVariable && wordCount >= 4 &&
+                (spirv[i + 3] == kStorageUniformConstant || spirv[i + 3] == kStorageUniform) &&
+                locatedIds.count(spirv[i + 2]) != 0) {
+                return true;
+            }
+            i += wordCount;
+        }
+        return false;
+    }
+} // namespace
+
+TEST_F(ProgramUtilTest, RectangleSamplerModuleLeavesTheChainVulkanLegal) {
+    using namespace MG_Util::ShaderTranspiler;
+
+    // Dim::Rect is invalid under every Vulkan environment; the lowering used to run
+    // only in the backends, i.e. AFTER the chain whose output the validating lanes
+    // check. It now runs inside the chain, so the driver-bound bytes are rect-free.
+    const Vector<Uint32> raw = CompileVertexToRawSpirv(R"(#version 460 core
+in vec3 a_Position;
+uniform sampler2DRect uRect;
+out vec4 v_Color;
+void main() {
+    v_Color = texture(uRect, a_Position.xy);
+    gl_Position = vec4(a_Position, 1.0);
+}
+)");
+    ASSERT_FALSE(raw.empty());
+    ASSERT_GE(CountRectImageTypes(raw), 1u) << "glslang no longer emits Dim::Rect for sampler2DRect";
+
+    SpirvValidationScope validationOn(true);
+    const Uint64 failuresBefore = ShaderCompiler::SpirvValidationFailureCount();
+    Vector<Uint32> optimized;
+    ASSERT_TRUE(ShaderCompiler::SanitizeAndOptimizeBinary(raw, optimized));
+    EXPECT_EQ(CountRectImageTypes(optimized), 0u);
+    EXPECT_EQ(ShaderCompiler::SpirvValidationFailureCount(), failuresBefore)
+        << "a rectangle module must leave the chain valid, not latched as a failure";
+}
+
+TEST_F(ProgramUtilTest, ExplicitSamplerLocationIsStrippedFromTheOptimizedBinary) {
+    using namespace MG_Util::ShaderTranspiler;
+
+    // glslang's relaxed GL path keeps layout(location=N) on the UniformConstant
+    // variable, which Vulkan forbids; nothing downstream reads it (GL locations come
+    // from phase-A reflection, Vulkan bindings go by name).
+    const Vector<Uint32> raw = CompileVertexToRawSpirv(R"(#version 460 core
+in vec3 a_Position;
+layout(location = 5) uniform sampler2D uTex;
+out vec4 v_Color;
+void main() {
+    v_Color = texture(uTex, a_Position.xy);
+    gl_Position = vec4(a_Position, 1.0);
+}
+)");
+    ASSERT_FALSE(raw.empty());
+    ASSERT_TRUE(AnyLocationOnUniformStorage(raw))
+        << "glslang no longer keeps the explicit uniform location; the strip pass may be obsolete";
+
+    SpirvValidationScope validationOn(true);
+    const Uint64 failuresBefore = ShaderCompiler::SpirvValidationFailureCount();
+    Vector<Uint32> optimized;
+    ASSERT_TRUE(ShaderCompiler::SanitizeAndOptimizeBinary(raw, optimized));
+    EXPECT_FALSE(AnyLocationOnUniformStorage(optimized));
+    EXPECT_EQ(ShaderCompiler::SpirvValidationFailureCount(), failuresBefore)
+        << "the stripped module must validate clean";
+}

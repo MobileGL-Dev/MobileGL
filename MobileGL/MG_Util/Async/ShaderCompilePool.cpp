@@ -54,9 +54,7 @@ namespace MobileGL::MG_Util::Async {
                     // calling eglTerminate, which is the norm for a test binary and legal
                     // for an application. Registered here, during main, so it runs before
                     // the destructors of statics constructed at load time.
-                    if (ShaderCompilePool* pool = g_processPool.load(std::memory_order_acquire)) {
-                        pool->StopAndDrain();
-                    }
+                    ShaderCompilePool::StopAndDrainProcessPoolAtExit();
                 });
             });
         }
@@ -344,5 +342,11 @@ namespace MobileGL::MG_Util::Async {
         // path this exists to serve; if a future stage wants eglTerminate followed by a fresh
         // eglInitialize to get its worker threads back, the re-arm belongs in
         // MobileGL::Initialize(), next to glslang::InitializeProcess().
+    }
+
+    void ShaderCompilePool::StopAndDrainProcessPoolAtExit() {
+        if (ShaderCompilePool* pool = g_processPool.load(std::memory_order_acquire)) {
+            pool->StopAndDrain();
+        }
     }
 } // namespace MobileGL::MG_Util::Async

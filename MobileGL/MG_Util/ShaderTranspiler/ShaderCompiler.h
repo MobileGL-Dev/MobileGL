@@ -101,6 +101,27 @@ namespace MobileGL {
                 // it, the second eglInitialize of a process comes back up unwarmed and with
                 // no way left to warm it.
                 static void ResetPrewarmLatch();
+
+                // Test-environment SPIR-V validation. When enabled, every Optimizer wrapper
+                // in this file validates its OUTPUT binary - the bytes a driver can actually
+                // receive - and a failure logs the VUID (via MGLOG_I; see the consumer for
+                // why not MGLOG_E) and bumps the failure latch below WITHOUT changing the
+                // wrapper's return value: control flow must stay identical between the
+                // validating and shipping configurations, or fail-open call sites would make
+                // the two render differently. Resolved lazily from MOBILEGL_VALIDATE_SPIRV;
+                // defaults on for desktop/CI/WSL builds and off for device (__ANDROID__)
+                // builds. The setter wins over the environment and is safe to call from test
+                // fixtures at any time.
+                static bool SpirvValidationEnabled();
+                static void SetSpirvValidationEnabled(bool enabled);
+
+                // The test-lane enforcement signal: total validation failures observed this
+                // process. Tests snapshot it, run the operation under scrutiny, and assert
+                // on the delta. NoteSpirvValidationFailure is for validation done outside
+                // this file (ProgramFactory::ValidateTransformedSpirv); it returns the new
+                // total.
+                static Uint64 SpirvValidationFailureCount();
+                static Uint64 NoteSpirvValidationFailure();
             };
         } // namespace ShaderTranspiler
     } // namespace MG_Util

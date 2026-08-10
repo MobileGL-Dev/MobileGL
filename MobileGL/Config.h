@@ -66,6 +66,11 @@ namespace MobileGL::MG_Config {
     //   - DISPLAY: X11 session variable, not MobileGL configuration.
     //   - MOBILEGL_LOG_FILE_PATH: log-file init runs before MG_ConfigLoader::Init
     //     (see MG_Util/Debug/Log.cpp).
+    //   - MOBILEGL_VALIDATE_SPIRV: test suites like SpirvPassTest exercise
+    //     ShaderCompiler without ever running MobileGL::Initialize(), and every
+    //     Initialize() re-runs MG_ConfigLoader::Init, which would clobber a
+    //     programmatic override stored here (see ShaderCompiler.cpp,
+    //     SpirvValidationEnabled).
     struct FeaturesTable {
         // MOBILEGL_DISABLE_TIMERQUERY: do not advertise or use GPU timer queries.
         Bool DisableTimerQuery = false;

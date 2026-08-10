@@ -22,6 +22,8 @@
 #include "SpirvPasses/PackDoubleVertexInputsPass.h"
 #include "SpirvPasses/RebaseInstanceIndexPass.h"
 #include "SpirvPasses/NormalizeRectCoordinatesPass.h"
+#include "SpirvPasses/PrivateToEntryLocalPass.h"
+#include "SpirvPasses/StripUniformLocationsPass.h"
 #include "SpirvPasses/StripUboMemberRelaxedPrecisionPass.h"
 #include "SpirvPasses/StripNoPerspectivePass.h"
 #include "SpirvPasses/EmulateNoPerspectivePass.h"
@@ -30,9 +32,13 @@
 
 #include "ShaderSourceProcessor.h"
 #include <MG_Backend/BackendObjects.h>
+#include <MG_Util/Async/ShaderCompilePool.h>
 #include <MG_Util/Converters/GLToStr/GLEnumConverter.h>
 #include <MG_Util/Converters/GLToGlslang/ProgramEnumConverter.h>
+#include <atomic>
+#include <cctype>
 #include <cstdlib>
+#include <mutex>
 
 namespace MobileGL {
     namespace MG_Util {
@@ -354,16 +360,215 @@ namespace MobileGL {
                 return allSpirv;
             }
 
+            // -1 unresolved, 0 off, 1 on. Resolved once from MOBILEGL_VALIDATE_SPIRV on first
+            // use. A live getenv rather than an MG_Config::Features field, for the same reason
+            // Config.h already exempts MOBILEGL_LOG_FILE_PATH: suites like SpirvPassTest never
+            // run MobileGL::Initialize(), and every Initialize() re-runs MG_ConfigLoader::Init,
+            // which would clobber a programmatic override stored in the feature table.
+            static std::atomic<int> g_validateSpirv{-1};
+            // Total validation failures observed this process. This latch - not the wrappers'
+            // return values - is the test-lane signal: validation must never change what a
+            // wrapper returns, or the validating lanes would render differently from the
+            // shipping configuration (fail-open call sites would silently substitute an
+            // earlier-stage module).
+            static std::atomic<Uint64> g_spirvValidationFailures{0};
+
+            namespace {
+                // Test lanes (desktop/CI/WSL) validate by default; device builds do not -
+                // validation costs real time per module, and on device the driver is the
+                // final validator anyway. MOBILEGL_VALIDATE_SPIRV overrides in either
+                // direction, using the ConfigLoader truthy rule.
+                constexpr bool kValidateSpirvDefault =
+#if defined(__ANDROID__)
+                    false;
+#else
+                    true;
+#endif
+
+                bool IsTruthySpirvEnvValue(const char* value) {
+                    if (value == nullptr || value[0] == '\0') {
+                        return false;
+                    }
+                    String lowered(value);
+                    for (auto& c : lowered) {
+                        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+                    }
+                    return lowered != "0" && lowered != "false";
+                }
+
+                // spirv-tools' validator lazily constructs function-local static tables on
+                // its first run, which on this codebase happens on a ShaderCompilePool
+                // worker. Function-local statics are destroyed in reverse construction
+                // order, so those tables would die BEFORE the pool's own atexit sentinel
+                // (registered at first pool use) gets to drain the workers - and a worker
+                // mid-Validate would then read freed memory during process exit. Pin the
+                // order instead: force the tables into existence now, then register a
+                // second drain handler; being registered after the tables' destructors, it
+                // runs before them.
+                void PinValidatorTablesForProcessExit() {
+                    static std::once_flag pinnedOnce;
+                    std::call_once(pinnedOnce, [] {
+                        spvtools::SpirvTools tools(SPV_ENV_VULKAN_1_1);
+                        Vector<Uint32> warmup;
+                        // The module is shaped to reach BOTH lazily-constructed tables in
+                        // the vendored validate_id.cpp: a type-generating operand pins
+                        // InstructionCanHaveTypeOperand's allow-set, and the OpExtInst use
+                        // of the TYPELESS %glsl import is the one path into
+                        // InstructionRequiresTypeOperand's deny-set (its call site is
+                        // guarded on a referenced def with no result type). A straight-line
+                        // module without it leaves the deny-set to be built later on a pool
+                        // worker, re-creating the exit-order hazard for that one table.
+                        if (tools.Assemble("OpCapability Shader\n"
+                                           "%glsl = OpExtInstImport \"GLSL.std.450\"\n"
+                                           "OpMemoryModel Logical GLSL450\n"
+                                           "OpEntryPoint GLCompute %main \"main\"\n"
+                                           "OpExecutionMode %main LocalSize 1 1 1\n"
+                                           "%void = OpTypeVoid\n"
+                                           "%fn = OpTypeFunction %void\n"
+                                           "%float = OpTypeFloat 32\n"
+                                           "%c = OpConstant %float 1\n"
+                                           "%main = OpFunction %void None %fn\n"
+                                           "%entry = OpLabel\n"
+                                           "%abs = OpExtInst %float %glsl FAbs %c\n"
+                                           "OpReturn\n"
+                                           "OpFunctionEnd\n",
+                                           &warmup)) {
+                            tools.Validate(warmup);
+                        }
+                        std::atexit(+[] {
+                            // Flip validation off first: a validator table this warmup does
+                            // not know about (a future spirv-tools bump) would still be
+                            // destroyed before this handler, and workers must stop entering
+                            // Validate before the drain waits for them.
+                            g_validateSpirv.store(0, std::memory_order_release);
+                            Async::ShaderCompilePool::StopAndDrainProcessPoolAtExit();
+                        });
+                    });
+                }
+
+                spvtools::MessageConsumer MakeSpirvMessageConsumer(const char* site) {
+                    return [site](spv_message_level_t level, const char* /*source*/,
+                                  const spv_position_t& position, const char* message) {
+                        const char* text = message ? message : "";
+                        switch (level) {
+                            case SPV_MSG_FATAL:
+                            case SPV_MSG_INTERNAL_ERROR:
+                            case SPV_MSG_ERROR:
+                                // MGLOG_I, deliberately: at the INFO compile level of every
+                                // CI/WSL/retrace build, MGLOG_E and MGLOG_W are compiled out
+                                // (Log.h orders DEBUG < WARN < ERROR < INFO) and the VUID
+                                // would never reach a log.
+                                MGLOG_I("[spirv] %s: %s (word index %zu)", site, text, position.index);
+                                break;
+                            default:
+                                MGLOG_D("[spirv] %s: %s", site, text);
+                                break;
+                        }
+                    };
+                }
+
+                // Validation is decoupled from control flow on purpose: a failure logs and
+                // bumps the latch, and the caller proceeds exactly as the shipping (non-
+                // validating) configuration would. Tests assert on the latch delta.
+                void ValidateOrLatch(const char* site, const Vector<Uint32>& binary) {
+                    if (!ShaderCompiler::SpirvValidationEnabled()) {
+                        return;
+                    }
+                    spvtools::SpirvTools tools(SPV_ENV_VULKAN_1_1);
+                    tools.SetMessageConsumer(MakeSpirvMessageConsumer(site));
+                    if (!tools.Validate(binary)) {
+                        MGLOG_I("[spirv] %s: produced a module that fails validation (failure #%llu)",
+                                site,
+                                static_cast<unsigned long long>(
+                                    ShaderCompiler::NoteSpirvValidationFailure()));
+                    }
+                }
+
+                // Shared tail for every Optimizer wrapper in this file. The optimizer's own
+                // input validator stays off even in validating lanes, for two reasons: its
+                // failure is indistinguishable from a transform failure (Optimizer::Run
+                // returns false before BuildModule), and the FIRST wrapper's input is
+                // glslang output that is legitimately not Vulkan-clean yet. What gets
+                // validated is each wrapper's OUTPUT - the only bytes a driver can ever
+                // receive. The message consumer is installed unconditionally: without one,
+                // spirv-tools drops pass diagnostics on the floor.
+                bool RunOptimizerChecked(const char* site, spvtools::Optimizer& optimizer,
+                                         const Vector<Uint32>& inputBinary,
+                                         Vector<uint32_t>& outputBinary) {
+                    spvtools::OptimizerOptions options;
+                    options.set_run_validator(false);
+                    optimizer.SetMessageConsumer(MakeSpirvMessageConsumer(site));
+                    if (!optimizer.Run(inputBinary.data(), inputBinary.size(), &outputBinary, options)) {
+                        return false;
+                    }
+                    ValidateOrLatch(site, outputBinary);
+                    return true;
+                }
+            } // namespace
+
+            bool ShaderCompiler::SpirvValidationEnabled() {
+                int state = g_validateSpirv.load(std::memory_order_acquire);
+                if (state < 0) {
+                    const char* env = std::getenv("MOBILEGL_VALIDATE_SPIRV");
+                    const bool resolved = env != nullptr ? IsTruthySpirvEnvValue(env) : kValidateSpirvDefault;
+                    int expected = -1;
+                    g_validateSpirv.compare_exchange_strong(expected, resolved ? 1 : 0,
+                                                            std::memory_order_acq_rel);
+                    state = g_validateSpirv.load(std::memory_order_acquire);
+                    if (state == 1) {
+                        PinValidatorTablesForProcessExit();
+                    }
+                }
+                return state == 1;
+            }
+
+            void ShaderCompiler::SetSpirvValidationEnabled(bool enabled) {
+                g_validateSpirv.store(enabled ? 1 : 0, std::memory_order_release);
+                if (enabled) {
+                    PinValidatorTablesForProcessExit();
+                }
+            }
+
+            Uint64 ShaderCompiler::NoteSpirvValidationFailure() {
+                return g_spirvValidationFailures.fetch_add(1, std::memory_order_relaxed) + 1;
+            }
+
+            Uint64 ShaderCompiler::SpirvValidationFailureCount() {
+                return g_spirvValidationFailures.load(std::memory_order_relaxed);
+            }
+
             bool ShaderCompiler::SanitizeAndOptimizeBinary(const Vector<Uint32>& inputBinary,
                                                            Vector<uint32_t>& outputBinary) {
                 using namespace spvtools;
-                OptimizerOptions options;
-                options.set_run_validator(false);
-
                 Optimizer optimizer(SPV_ENV_VULKAN_1_1);
 
+                // ADCE refuses to treat a Private global as deletable while the entry point
+                // still contains any OpFunctionCall (IsLocalVar -> IsEntryPointWithNoCalls), so
+                // a dead vertex input feeding a never-read Private shim used to survive the
+                // whole chain (the Chocapic13 shadow.vsh mc_midTexCoord/iris_MidTex case).
+                // Rewriting entry-point-owned Private variables to Function storage first
+                // satisfies ADCE without inlining: over 521 real Iris modules the rewrite
+                // captured 17 of the 21 extra dead interface variables exhaustive inlining
+                // would, while shrinking the corpus 8% - inlining grew it 20% with a 5.3x
+                // worst-case module and no additional GPU-side benefit.
+                optimizer.RegisterPass(PrivateToEntryLocalPass::CreatePrivateToEntryLocalPass());
+                // Keep the one-arg overload: remove_outputs must stay false, forever. Output
+                // variables on the entry-point interface are ADCE's only unconditional live
+                // roots; XFB capture resolves varyings by OpName after this chain, and the
+                // VS-out/FS-in interface contract on both backends depends on declared outputs
+                // surviving even when never stored.
                 optimizer.RegisterPass(CreateAggressiveDCEPass(false));
+                // Complementary to ADCE, not redundant: ADCE can never delete or delist an
+                // Output (see above), so never-written outputs are trimmed from the
+                // OpEntryPoint operand list here.
                 optimizer.RegisterPass(CreateRemoveUnusedInterfaceVariablesPass());
+                // The two module-legality repairs, so the chain's output - the bytes every
+                // consumer downstream sees - is valid Vulkan SPIR-V. Rect lowering used to
+                // live only in the backends; a validating lane would flag every rectangle
+                // module long before the backend got the chance to fix it, and the backend
+                // calls remain as no-ops on the now rect-free modules.
+                optimizer.RegisterPass(NormalizeRectCoordinatesPass::CreateNormalizeRectCoordinatesPass());
+                optimizer.RegisterPass(StripUniformLocationsPass::CreateStripUniformLocationsPass());
                 optimizer.RegisterPass(FlattenInterfaceStructPass::CreateFlattenInterfaceStructPass());
                 optimizer.RegisterPass(RenameSamplerFunctionParameterPass::CreateRenameSamplerFunctionParameterPass());
                 optimizer.RegisterPass(
@@ -371,104 +576,88 @@ namespace MobileGL {
                 optimizer.RegisterPass(EliminateFloatEqualsZeroPass::CreateEliminateFloatEqualsZeroPass());
                 optimizer.RegisterPass(DecomposeWorkgroupVec3Pass::CreateDecomposeWorkgroupVec3Pass());
 
-                return optimizer.Run(inputBinary.data(), inputBinary.size(), &outputBinary, options);
+                return RunOptimizerChecked("SanitizeAndOptimizeBinary", optimizer, inputBinary,
+                                           outputBinary);
             }
 
             bool ShaderCompiler::LowerDrawParametersForEssl(const Vector<Uint32>& inputBinary,
                                                             Vector<uint32_t>& outputBinary) {
                 using namespace spvtools;
-                OptimizerOptions options;
-                options.set_run_validator(false);
-
                 Optimizer optimizer(SPV_ENV_VULKAN_1_1);
                 optimizer.RegisterPass(LowerDrawParametersPass::CreateLowerDrawParametersPass());
 
-                return optimizer.Run(inputBinary.data(), inputBinary.size(), &outputBinary, options);
+                return RunOptimizerChecked("LowerDrawParametersForEssl", optimizer, inputBinary,
+                                           outputBinary);
             }
 
             bool ShaderCompiler::PackDoubleVertexInputsForVulkan(const Vector<Uint32>& inputBinary,
                                                                  Vector<uint32_t>& outputBinary) {
                 using namespace spvtools;
-                OptimizerOptions options;
-                options.set_run_validator(false);
-
                 Optimizer optimizer(SPV_ENV_VULKAN_1_1);
                 optimizer.RegisterPass(PackDoubleVertexInputsPass::CreatePackDoubleVertexInputsPass());
 
-                return optimizer.Run(inputBinary.data(), inputBinary.size(), &outputBinary, options);
+                return RunOptimizerChecked("PackDoubleVertexInputsForVulkan", optimizer, inputBinary,
+                                           outputBinary);
             }
 
             bool ShaderCompiler::StripUboMemberRelaxedPrecisionForEssl(const Vector<Uint32>& inputBinary,
                                                                        Vector<uint32_t>& outputBinary) {
                 using namespace spvtools;
-                OptimizerOptions options;
-                options.set_run_validator(false);
-
                 Optimizer optimizer(SPV_ENV_VULKAN_1_1);
                 optimizer.RegisterPass(
                     StripUboMemberRelaxedPrecisionPass::CreateStripUboMemberRelaxedPrecisionPass());
 
-                return optimizer.Run(inputBinary.data(), inputBinary.size(), &outputBinary, options);
+                return RunOptimizerChecked("StripUboMemberRelaxedPrecisionForEssl", optimizer,
+                                           inputBinary, outputBinary);
             }
 
             bool ShaderCompiler::StripNoPerspectiveForEssl(const Vector<Uint32>& inputBinary,
                                                            Vector<uint32_t>& outputBinary) {
                 using namespace spvtools;
-                OptimizerOptions options;
-                options.set_run_validator(false);
-
                 Optimizer optimizer(SPV_ENV_VULKAN_1_1);
                 optimizer.RegisterPass(StripNoPerspectivePass::CreateStripNoPerspectivePass());
 
-                return optimizer.Run(inputBinary.data(), inputBinary.size(), &outputBinary, options);
+                return RunOptimizerChecked("StripNoPerspectiveForEssl", optimizer, inputBinary,
+                                           outputBinary);
             }
 
             bool ShaderCompiler::EmulateNoPerspectiveForEssl(const Vector<Uint32>& inputBinary,
                                                              Vector<uint32_t>& outputBinary) {
                 using namespace spvtools;
-                OptimizerOptions options;
-                options.set_run_validator(false);
-
                 Optimizer optimizer(SPV_ENV_VULKAN_1_1);
                 optimizer.RegisterPass(EmulateNoPerspectivePass::CreateEmulateNoPerspectivePass());
 
-                return optimizer.Run(inputBinary.data(), inputBinary.size(), &outputBinary, options);
+                return RunOptimizerChecked("EmulateNoPerspectiveForEssl", optimizer, inputBinary,
+                                           outputBinary);
             }
 
             bool ShaderCompiler::LowerRectImages(const Vector<Uint32>& inputBinary,
                                                  Vector<uint32_t>& outputBinary) {
                 using namespace spvtools;
-                OptimizerOptions options;
-                options.set_run_validator(false);
-
                 Optimizer optimizer(SPV_ENV_VULKAN_1_1);
                 optimizer.RegisterPass(NormalizeRectCoordinatesPass::CreateNormalizeRectCoordinatesPass());
 
-                return optimizer.Run(inputBinary.data(), inputBinary.size(), &outputBinary, options);
+                return RunOptimizerChecked("LowerRectImages", optimizer, inputBinary, outputBinary);
             }
 
             bool ShaderCompiler::RebaseInstanceIndexForVulkan(const Vector<Uint32>& inputBinary,
                                                               Vector<uint32_t>& outputBinary) {
                 using namespace spvtools;
-                OptimizerOptions options;
-                options.set_run_validator(false);
-
                 Optimizer optimizer(SPV_ENV_VULKAN_1_1);
                 optimizer.RegisterPass(RebaseInstanceIndexPass::CreateRebaseInstanceIndexPass());
 
-                return optimizer.Run(inputBinary.data(), inputBinary.size(), &outputBinary, options);
+                return RunOptimizerChecked("RebaseInstanceIndexForVulkan", optimizer, inputBinary,
+                                           outputBinary);
             }
 
             bool ShaderCompiler::DecoratePositionInvariantForVulkan(const Vector<Uint32>& inputBinary,
                                                                     Vector<uint32_t>& outputBinary) {
                 using namespace spvtools;
-                OptimizerOptions options;
-                options.set_run_validator(false);
-
                 Optimizer optimizer(SPV_ENV_VULKAN_1_1);
                 optimizer.RegisterPass(DecoratePositionInvariantPass::CreateDecoratePositionInvariantPass());
 
-                return optimizer.Run(inputBinary.data(), inputBinary.size(), &outputBinary, options);
+                return RunOptimizerChecked("DecoratePositionInvariantForVulkan", optimizer, inputBinary,
+                                           outputBinary);
             }
 
             bool ShaderCompiler::UseUnformattedFloatStorageImagesForVulkan(
@@ -598,6 +787,9 @@ namespace MobileGL {
                 }
                 outputBinary.insert(outputBinary.begin() + static_cast<std::ptrdiff_t>(capabilityInsertOffset),
                                     addedCapabilities.begin(), addedCapabilities.end());
+                // Hand-rolled word walk, so no Optimizer wrapper ever sees this rewrite;
+                // check the modified module explicitly in validating lanes.
+                ValidateOrLatch("UseUnformattedFloatStorageImagesForVulkan", outputBinary);
                 return true;
             }
 

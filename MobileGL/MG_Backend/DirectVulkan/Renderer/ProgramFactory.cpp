@@ -372,6 +372,20 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
             spv_diagnostic diagnostic = nullptr;
             const spv_result_t result = spvValidateWithOptions(context, options, &binary, &diagnostic);
+            if (result != SPV_SUCCESS) {
+                // MGLOG_I, not E: at the INFO compile level of the CI/test lanes that arm
+                // the validation switch, MGLOG_E is compiled out (Log.h orders
+                // DEBUG < WARN < ERROR < INFO) and the VUID would never reach a log. The
+                // latch is what a test harness asserts on.
+                MG_Util::ShaderTranspiler::ShaderCompiler::NoteSpirvValidationFailure();
+                MGLOG_I(
+                    "ProgramFactory::ValidateTransformedSpirv: validation failed for stage=%d program=%u result=%d index=%zu msg=%s",
+                    static_cast<Int>(shaderStage),
+                    programExternalIndex,
+                    static_cast<Int>(result),
+                    diagnostic != nullptr ? diagnostic->position.index : 0,
+                    diagnostic != nullptr && diagnostic->error != nullptr ? diagnostic->error : "<null>");
+            }
             MOBILEGL_ASSERT(
                 result == SPV_SUCCESS,
                 "ProgramFactory::ValidateTransformedSpirv: validation failed for stage=%d program=%u result=%d line=%zu column=%zu index=%zu msg=%s",
@@ -1263,8 +1277,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             }
             spvtools::Optimizer optimizer(SPV_ENV_VULKAN_1_3);
             spvtools::OptimizerOptions options;
-            // Matches the position-fix pass: this build of spirv-tools asserts rather than
-            // reporting, so validation stays off in the shipping path.
+            // Always off: the optimizer's input validator conflates "input invalid" with
+            // "transform failed", and this call site fails open. Validating lanes check the
+            // FINAL module via ValidateTransformedSpirv, which latches instead of rerouting
+            // control flow.
             options.set_run_validator(false);
             optimizer.SetMessageConsumer([](spv_message_level_t, const char*, const spv_position_t&,
                                             const char* message) {
@@ -1304,7 +1320,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
             spvtools::Optimizer optimizer(SPV_ENV_VULKAN_1_3);
             spvtools::OptimizerOptions options;
-            options.set_run_validator(false);
+            options.set_run_validator(false); // see TransformSpirvForExplicitLod0Sampling
             optimizer.SetMessageConsumer([](spv_message_level_t, const char*, const spv_position_t&,
                                             const char* message) {
                 MGLOG_E("Vulkan: xfb capture pass: %s", message != nullptr ? message : "");
@@ -1334,7 +1350,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
             spvtools::Optimizer optimizer(SPV_ENV_VULKAN_1_3);
             spvtools::OptimizerOptions options;
-            options.set_run_validator(false);
+            options.set_run_validator(false); // see TransformSpirvForExplicitLod0Sampling
+            optimizer.SetMessageConsumer([](spv_message_level_t, const char*, const spv_position_t&,
+                                            const char* message) {
+                MGLOG_E("Vulkan: position fix pass: %s", message != nullptr ? message : "");
+            });
             optimizer.RegisterPass(CreateGlToVulkanPositionFixPass(transformFlags));
 
             const Bool success = optimizer.Run(input.data(), input.size(), &output, options);
@@ -2525,6 +2545,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
 #if MOBILEGL_LOG_ACTIVE_LEVEL <= MOBILEGL_LOG_LEVEL_DEBUG
             ValidateTransformedSpirv(moduleSpv, shaders[i]->GetShaderStage(), program.GetExternalIndex());
+#else
+            // Final module the driver receives; also checked in the INFO-level CI/test
+            // lanes, where the DEBUG gate above is compiled out.
+            if (MG_Util::ShaderTranspiler::ShaderCompiler::SpirvValidationEnabled()) {
+                ValidateTransformedSpirv(moduleSpv, shaders[i]->GetShaderStage(), program.GetExternalIndex());
+            }
 #endif
 
             VkShaderModuleCreateInfo smci{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};

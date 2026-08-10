@@ -131,6 +131,11 @@ bool LoadMobileGL(const Request& request, std::string& error) {
     setenv("MOBILEGL_BACKEND_TYPE", request.backend.c_str(), 1);
     setenv("MOBILEGL_TRACE_LIBRARY", request.mobileGlLibrary.c_str(), 1);
     setenv("MOBILEGL_TRACE_SKIP_AUTODESTROY", "1", 1);
+    // Retrace is a test lane on every platform, including the Android AVD one where
+    // MobileGL's __ANDROID__ default would leave validation off. No overwrite: an outer
+    // MOBILEGL_VALIDATE_SPIRV=0 must keep working as the escape hatch, and retracing the
+    // exact shipping pipeline must stay possible.
+    setenv("MOBILEGL_VALIDATE_SPIRV", "1", 0);
     setenv("MOBILEGL_TRACE_SURFACE", request.usePbuffer ? "pbuffer" : "window", 1);
     if (request.backend == "DirectVulkan") {
         setenv("MOBILEGL_MAGMA_R11G11B10F_FALLBACK", "1", 1);
