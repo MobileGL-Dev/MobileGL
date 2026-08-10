@@ -90,7 +90,11 @@ namespace MobileGL::MG_State::GLState {
         } const phaseAReleaser{m_phaseA};
 
         if (!m_phaseA) return;
-        const ProgramLinkTask::SpirvHandoff& handoff = m_phaseA->spirvHandoff;
+        // Non-const: the TShaders are dropped below, the moment GlslangToSpv is finished with
+        // them. This is safe by ownership rather than by locking - phase A is terminal and
+        // therefore immutable to everyone else, the GL-thread join touches only `artifacts`
+        // and `diagnostics`, and this node is the sole reader of the handoff.
+        ProgramLinkTask::SpirvHandoff& handoff = m_phaseA->spirvHandoff;
         const Uint externalIndex = m_phaseA->in.externalIndex;
         if (!handoff.ready || !handoff.reflection.program) {
             // Phase A did not reach its tail (it failed the link, or was cancelled mid-body).
@@ -105,6 +109,12 @@ namespace MobileGL::MG_State::GLState {
 
         MGLOG_D("ProgramObject %u: Starting SPIR-V generation", externalIndex);
         GenerateSpirv(handoff, externalIndex);
+        // GlslangToSpv was the only consumer of the parsed ASTs, and they are by far the
+        // largest thing this node keeps alive (one glslang arena per stage, megabytes for a
+        // shaderpack). Everything after this point works on the SPIR-V and on the TProgram's
+        // own self-contained reflection pool, so drop them here rather than at the end of the
+        // body - spirv-opt plus routing is ~87% of this node's runtime.
+        handoff.shaders.clear();
 
         MGLOG_D("ProgramObject %u: Building global-UBO routing tables", externalIndex);
         {
