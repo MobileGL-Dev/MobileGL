@@ -341,6 +341,54 @@ TEST_F(ParallelShaderCompileTest, ZeroCompilerThreadsJoinsEverythingAndCompilesI
     EXPECT_EQ(GetError(), GL_NO_ERROR);
 }
 
+// The same obligation, but for LINKS that are already in flight when the zero count arrives -
+// and specifically for BOTH phases of one. A link is two chained jobs now (ProgramLinkTask,
+// then ProgramSpirvTask), and GL_COMPLETION_STATUS_KHR spans both, so
+// ProgramState::JoinAllPendingWork has to settle both or this query reads GL_FALSE in the one
+// mode the extension says cannot have anything pending. The case above creates its program
+// AFTER the zero count, so it links inline and cannot see this; here the programs are linked
+// against a saturated pool BEFORE it.
+TEST_F(ParallelShaderCompileTest, ZeroCompilerThreadsJoinsPendingLinksAndTheirSpirvJobs) {
+    const AsyncModeScope async(true);
+    const CompilerThreadScope threads;
+    MaxShaderCompilerThreadsKHR(1);
+
+    // A backlog first, so the links below cannot all drain before the zero count lands.
+    Vector<String> sources;
+    (void)EnqueueBacklog(24, 5000, sources);
+
+    Vector<GLuint> programs;
+    for (int i = 0; i < 8; ++i) {
+        sources.push_back(MakeBulkySource(5100 + i));
+        const char* text = sources.back().c_str();
+        const GLuint fs = CreateShader(GL_FRAGMENT_SHADER);
+        ShaderSource(fs, 1, &text, nullptr);
+        CompileShader(fs);
+        const GLuint vs = MakeShader(GL_VERTEX_SHADER, kVs);
+        CompileShader(vs); // this file's MakeShader only sources; it does not compile
+        const GLuint program = CreateProgram();
+        AttachShader(program, vs);
+        AttachShader(program, fs);
+        LinkProgram(program);
+        programs.push_back(program);
+    }
+
+    int outstanding = 0;
+    for (const GLuint program : programs) {
+        if (QueryProgramCompletion(program) == GL_FALSE) ++outstanding;
+    }
+
+    MaxShaderCompilerThreadsKHR(0);
+
+    for (const GLuint program : programs) {
+        EXPECT_EQ(QueryProgramCompletion(program), GL_TRUE)
+            << "glMaxShaderCompilerThreadsKHR(0) must leave neither link phase in flight";
+        EXPECT_EQ(QueryLinkStatus(program), GL_TRUE);
+    }
+    EXPECT_GT(outstanding, 0) << "every link had drained before the zero count; this case proved nothing";
+    EXPECT_EQ(GetError(), GL_NO_ERROR);
+}
+
 // ...and a later NONZERO count is what lifts it. Nothing else does: not a new context, not a
 // join, not eglInitialize. That is the documented contract, so it gets an assertion.
 TEST_F(ParallelShaderCompileTest, NonzeroCompilerThreadsRestoresAsynchronousCompilation) {
