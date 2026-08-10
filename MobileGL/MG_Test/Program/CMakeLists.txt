@@ -76,6 +76,24 @@ target_link_libraries(
         ${LINK_LIBRARIES}
 )
 
+# Its own binary, like the other async suites: its cases pin the compile pool down to one
+# worker so a phase-B job really is still queued while the GL query surface is being read.
+add_executable(
+        AsyncSpirvPhaseTest
+        AsyncSpirvPhaseTest.cpp
+)
+
+target_include_directories(AsyncSpirvPhaseTest PRIVATE
+        ${MGL_ROOT}/include
+        ${MGL_ROOT}/MobileGL
+)
+
+target_link_libraries(
+        AsyncSpirvPhaseTest PRIVATE
+        GTest::gtest_main
+        ${LINK_LIBRARIES}
+)
+
 add_executable(
         ShaderCompileAdoptionTest
         ShaderCompileAdoptionTest.cpp
@@ -181,6 +199,9 @@ gtest_discover_tests(ProgramInterfaceTest DISCOVERY_TIMEOUT 30 PROPERTIES LABELS
 # compile pool so there is something in flight to race against.
 gtest_discover_tests(AsyncCompileTest DISCOVERY_TIMEOUT 60 PROPERTIES LABELS unit TIMEOUT 300)
 gtest_discover_tests(AsyncLinkTest DISCOVERY_TIMEOUT 60 PROPERTIES LABELS unit TIMEOUT 300)
+# Same reason: every case here links a batch against a one-worker pool so that phase B is
+# genuinely outstanding while phase A is being interrogated.
+gtest_discover_tests(AsyncSpirvPhaseTest DISCOVERY_TIMEOUT 60 PROPERTIES LABELS unit TIMEOUT 300)
 # Same reason: the stage-6 cases keep a backlog in flight so a release really can race a
 # worker, and the 48-object stress links every one of them.
 gtest_discover_tests(ShaderCompileAdoptionTest DISCOVERY_TIMEOUT 60 PROPERTIES LABELS unit TIMEOUT 300)
