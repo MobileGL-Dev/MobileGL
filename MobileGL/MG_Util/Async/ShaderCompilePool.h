@@ -59,6 +59,21 @@ namespace MobileGL::MG_Util::Async {
     // GL_COMPLETION_STATUS_KHR read immediately GL_TRUE.
     Bool AsyncShaderCompileActive();
 
+    // MOBILEGL_ASYNC_OPTIMISTIC_SHADER_STATUS (see Config.h): opt-in, off by default, and a
+    // spec violation by design - GL_COMPILE_STATUS and the shader info log answer
+    // optimistically while the compile job is in flight instead of joining it. Do not flip
+    // this default without an enumerated CTS delta: the compile-error-reporting cases WILL
+    // regress under it, deliberately.
+    inline constexpr Bool kOptimisticShaderStatusDefault = false;
+
+    // The one question the three optimistic getter sites ask. ANDed with
+    // AsyncShaderCompileActive() so that async-off (env kill switch) and
+    // glMaxShaderCompilerThreadsKHR(0) both switch the quirk off structurally: in those
+    // modes every compile settles before its enqueue returns, so a non-terminal node - the
+    // only state the quirk changes - cannot exist, and keeping the AND means there is no
+    // new mode interaction to reason about.
+    Bool OptimisticShaderStatusActive();
+
     // min(4, big cores), where a big core is one whose cpufreq ceiling is within 15% of the
     // machine maximum; the whole CPU count where that sysfs tree is absent. Clamped to [1, 4]
     // because peak RSS scales as workers x largest glslang arena, and four

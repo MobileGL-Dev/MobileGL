@@ -116,8 +116,10 @@ namespace MobileGL {
             Bool GetDeleteStatus() const { return m_deleteStatus; }
 
             // Blocks until a pending compile has published its artifacts. Public for the
-            // sites that must join without reading anything - ProgramObject::Link's
-            // prologue, which needs every attached shader settled before it runs.
+            // sites that must join without reading anything - ProgramState::
+            // JoinAllPendingWork, the glMaxShaderCompilerThreadsKHR(0) path that settles
+            // every outstanding job. glLinkProgram deliberately does NOT come through
+            // here: its prologue takes the nodes unjoined via CompiledNodeForLink().
             void JoinCompile() const { EnsureCompileJoined(); }
 
             // True while this object holds the outcome (success OR failure) of a Compile()
@@ -140,6 +142,23 @@ namespace MobileGL {
             // extension surface lands. "No job at all" counts as complete: there is nothing
             // outstanding to wait for.
             Bool IsCompileComplete() const { return m_compiled == nullptr || m_compiled->IsTerminal(); }
+
+            // MOBILEGL_ASYNC_OPTIMISTIC_SHADER_STATUS's one-story-per-compile memory. The
+            // three optimistic getter sites in GL_Program ask THIS instead of a raw
+            // IsCompileComplete() peek, and the difference is the latch: without it, a job
+            // that settles between two adjacent queries hands the application a torn pair -
+            // an empty info log from the optimistic read, then the real GL_FALSE from the
+            // truthful one - and an application that aborts on that status never reaches
+            // the link join that quotes the real log. So the first optimistic answer
+            // latches: until the next AdoptCompileNode/DropCompileNode this object keeps
+            // answering optimistically even after the job settles, and a real failure
+            // surfaces exactly once, at the link. Returns whether the caller should answer
+            // optimistically; the caller has already checked the quirk is active.
+            Bool TakeOptimisticCompileAnswer() const {
+                if (!m_optimisticAnswerLatched && IsCompileComplete()) return false;
+                m_optimisticAnswerLatched = true;
+                return true;
+            }
 
         private:
             // ---- The one and only join gate for compile output (P1 invariant I5) ----
@@ -231,6 +250,10 @@ namespace MobileGL {
             // Exactly-once latch for the pull above. Armed with every new job node, set by
             // the one join that consumes it.
             mutable Bool m_compileJoined = false;
+            // TakeOptimisticCompileAnswer's memory: this object has answered a compile
+            // query optimistically for the current node. Cleared wherever the node
+            // changes hands (AdoptCompileNode) or goes away (DropCompileNode).
+            mutable Bool m_optimisticAnswerLatched = false;
         };
     } // namespace MG_State::GLState
 } // namespace MobileGL

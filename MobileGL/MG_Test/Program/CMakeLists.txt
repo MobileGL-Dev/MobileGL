@@ -49,6 +49,22 @@ add_executable(
         AsyncLinkTest.cpp
 )
 
+add_executable(
+        OptimisticStatusTest
+        OptimisticStatusTest.cpp
+)
+
+target_include_directories(OptimisticStatusTest PRIVATE
+        ${MGL_ROOT}/include
+        ${MGL_ROOT}/MobileGL
+)
+
+target_link_libraries(
+        OptimisticStatusTest PRIVATE
+        GTest::gtest_main
+        ${LINK_LIBRARIES}
+)
+
 target_include_directories(AsyncLinkTest PRIVATE
         ${MGL_ROOT}/include
         ${MGL_ROOT}/MobileGL
@@ -170,6 +186,9 @@ gtest_discover_tests(AsyncLinkTest DISCOVERY_TIMEOUT 60 PROPERTIES LABELS unit T
 gtest_discover_tests(ShaderCompileAdoptionTest DISCOVERY_TIMEOUT 60 PROPERTIES LABELS unit TIMEOUT 300)
 # Same reason: the GL_COMPLETION_STATUS_KHR cases saturate a one-worker pool on purpose.
 gtest_discover_tests(ParallelShaderCompileTest DISCOVERY_TIMEOUT 60 PROPERTIES LABELS unit TIMEOUT 300)
+# Same reason: the optimistic-window cases need a saturated one-worker pool to observe an
+# in-flight compile, and the two-phase replay links 48 programs across both flag states.
+gtest_discover_tests(OptimisticStatusTest DISCOVERY_TIMEOUT 60 PROPERTIES LABELS unit TIMEOUT 300)
 gtest_discover_tests(AsyncTeardownTest DISCOVERY_TIMEOUT 60 PROPERTIES LABELS unit TIMEOUT 300)
 # Same reason again: several cases leave A links outstanding while B compiles and links.
 gtest_discover_tests(XfbFrontendOrderInvarianceTest DISCOVERY_TIMEOUT 60 PROPERTIES LABELS unit TIMEOUT 300)

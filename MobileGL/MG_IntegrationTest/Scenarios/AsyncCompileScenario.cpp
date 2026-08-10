@@ -157,6 +157,22 @@ void main() {
             const QuirkOverride m_saved;
         };
 
+        // MOBILEGL_ASYNC_OPTIMISTIC_SHADER_STATUS, forced in-process for the same reason
+        // as AsyncModeScope: one ctest run asserts the quirk against the ambient default.
+        class OptimisticStatusScope {
+        public:
+            explicit OptimisticStatusScope(const QuirkOverride mode)
+                : m_saved(MobileGL::MG_Config::Features.AsyncOptimisticShaderStatus) {
+                MobileGL::MG_Config::Features.AsyncOptimisticShaderStatus = mode;
+            }
+            ~OptimisticStatusScope() { MobileGL::MG_Config::Features.AsyncOptimisticShaderStatus = m_saved; }
+            OptimisticStatusScope(const OptimisticStatusScope&) = delete;
+            OptimisticStatusScope& operator=(const OptimisticStatusScope&) = delete;
+
+        private:
+            const QuirkOverride m_saved;
+        };
+
         // glMaxShaderCompilerThreadsKHR writes process-wide state; a scenario that calls
         // it has to put the pool back or it changes how every scenario after it compiles.
         class CompilerThreadScope {
@@ -457,6 +473,82 @@ void main() {
             for (int i = 0; i < kPrograms; ++i) {
                 ASSERT_NE(programs[static_cast<std::size_t>(i)], 0u) << "program " << i;
                 const Image image = DrawFrameWith(programs[static_cast<std::size_t>(i)]);
+                EXPECT_EQ(image.QuadrantSignature(), "blue,green,red,white") << "program " << i;
+            }
+            for (const GLuint program : programs) glDeleteProgram(program);
+            EXPECT_EQ(FirstGLError(), GLenum(GL_NO_ERROR));
+        }
+
+        // The Iris two-phase shape end to end on a real driver, with the optimistic-status
+        // quirk on: phase 1 compiles each stage and reads its log then its status (both
+        // answered optimistically), links, detaches and deletes the shaders for every
+        // program with no program-level read anywhere; phase 2 then checks every link and
+        // draws every program. Deliberately NOT built on the harness CompileProgram(),
+        // whose status read would join and collapse the phase-1 overlap this exists to
+        // exercise. What the unit suite cannot see - worker-produced artifacts the backend
+        // then mis-renders - shows up here as a wrong quadrant signature.
+        TEST_F(AsyncCompileScenario, IrisShapedTwoPhaseBatchRendersCorrectly) {
+            if (!Ready()) return;
+            constexpr int kPrograms = 12;
+
+            // Distinct per program (so neither the source memo nor the adoption map turns
+            // a compile into a no-op) but a pure pass-through at runtime: the bulk sits in
+            // a branch a zero-initialised uniform never takes.
+            const auto fragmentSource = [](const int index) {
+                std::string source = "#version 330 core\nin vec3 vColor;\nout vec4 oColor;\n";
+                source += "uniform float uGate" + std::to_string(index) + ";\n";
+                source += "void main() {\n    oColor = vec4(vColor, 1.0);\n";
+                source += "    if (uGate" + std::to_string(index) + " > 1e30) {\n        float acc = 1.0;\n";
+                for (int i = 0; i < 60; ++i) {
+                    source += "        acc = acc * 1.0001 + sin(acc + " + std::to_string(i) + ".0);\n";
+                }
+                source += "        oColor = vec4(acc);\n    }\n}\n";
+                return source;
+            };
+
+            std::vector<GLuint> programs;
+            {
+                const AsyncModeScope async(true);
+                const OptimisticStatusScope quirk(QuirkOverride::ForceOn);
+                const CompilerThreadScope threads;
+                glMaxShaderCompilerThreadsKHR(1);
+
+                for (int i = 0; i < kPrograms; ++i) {
+                    m_sources.push_back(fragmentSource(i));
+                    const char* fsText = m_sources.back().c_str();
+
+                    const GLuint vs = glCreateShader(GL_VERTEX_SHADER);
+                    glShaderSource(vs, 1, &kVertexSource, nullptr);
+                    glCompileShader(vs);
+                    (void)ShaderInfoLog(vs);       // Iris's exact order: the log first...
+                    (void)ShaderCompileStatus(vs); // ...then the status; both optimistic.
+
+                    const GLuint fs = glCreateShader(GL_FRAGMENT_SHADER);
+                    glShaderSource(fs, 1, &fsText, nullptr);
+                    glCompileShader(fs);
+                    (void)ShaderInfoLog(fs);
+                    (void)ShaderCompileStatus(fs);
+
+                    const GLuint program = glCreateProgram();
+                    glAttachShader(program, vs);
+                    glAttachShader(program, fs);
+                    glBindAttribLocation(program, 0, "aPos");
+                    glBindAttribLocation(program, 1, "aColor");
+                    glLinkProgram(program);
+                    glDetachShader(program, vs);
+                    glDetachShader(program, fs);
+                    glDeleteShader(vs);
+                    glDeleteShader(fs);
+                    programs.push_back(program);
+                }
+            }
+
+            for (int i = 0; i < kPrograms; ++i) {
+                const GLuint program = programs[static_cast<std::size_t>(i)];
+                GLint linked = GL_FALSE;
+                glGetProgramiv(program, GL_LINK_STATUS, &linked);
+                ASSERT_EQ(linked, GL_TRUE) << "program " << i;
+                const Image image = DrawFrameWith(program);
                 EXPECT_EQ(image.QuadrantSignature(), "blue,green,red,white") << "program " << i;
             }
             for (const GLuint program : programs) glDeleteProgram(program);

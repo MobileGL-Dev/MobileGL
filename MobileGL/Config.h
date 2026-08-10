@@ -136,6 +136,19 @@ namespace MobileGL::MG_Config {
         // MOBILEGL_ASYNC_SHADER_COMPILE_THREADS: shader-compile worker count. 0 (unset) means
         // auto, which is min(4, big cores); an explicit value is honoured as given.
         Uint32 AsyncShaderCompileThreads = 0;
+        // MOBILEGL_ASYNC_OPTIMISTIC_SHADER_STATUS: while a compile job is still in flight,
+        // glGetShaderiv(GL_COMPILE_STATUS) answers GL_TRUE and the shader info log reads
+        // empty, WITHOUT joining the job (latched per compile - see
+        // ShaderObject::TakeOptimisticCompileAnswer). A deliberate, bounded spec violation:
+        // a real failure still fails the program link with the compile log quoted. It
+        // exists for applications that compile hundreds of shaders serially and read the
+        // status right after each glCompileShader - Iris's shader-pack load - where those
+        // per-shader joins are what serializes the batch on its main path (Iris's gbuffer
+        // phase issues no program-level query between programs; program-level LINK_STATUS
+        // and the program info log still join truthfully, so paths that check each link
+        // immediately stay serial by their own construction). Off by default; never
+        // advertise it.
+        QuirkOverride AsyncOptimisticShaderStatus = QuirkOverride::Auto;
     };
     extern FeaturesTable Features;
 } // namespace MobileGL::MG_Config

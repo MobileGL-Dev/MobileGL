@@ -126,6 +126,15 @@ namespace MobileGL::MG_Util::Async {
         return AsyncShaderCompileEnabled() && !IsAsyncShaderCompileSuspended();
     }
 
+    Bool OptimisticShaderStatusActive() {
+        switch (MG_Config::Features.AsyncOptimisticShaderStatus) {
+        case MG_Config::QuirkOverride::ForceOn: return AsyncShaderCompileActive();
+        case MG_Config::QuirkOverride::ForceOff: return false;
+        case MG_Config::QuirkOverride::Auto: break;
+        }
+        return kOptimisticShaderStatusDefault && AsyncShaderCompileActive();
+    }
+
     Uint DetectShaderCompileThreadCount() {
         if (const Uint32 configured = MG_Config::Features.AsyncShaderCompileThreads; configured > 0) {
             // An explicit request is honoured as given - it is the escape hatch for measuring

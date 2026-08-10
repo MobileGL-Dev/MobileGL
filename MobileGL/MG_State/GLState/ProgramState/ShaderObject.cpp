@@ -88,12 +88,19 @@ namespace MobileGL::MG_State::GLState {
         // another object, THIS object has not pulled its result yet. (An adopted node may
         // already be terminal - the join then only replays what is left of its diagnostics.)
         m_compileJoined = false;
+        // A new compile is a new story: whatever the optimistic getters promised about the
+        // previous node does not carry over.
+        m_optimisticAnswerLatched = false;
     }
 
     void ShaderObject::DropCompileNode() const {
         if (!m_compiled) return;
         m_compiled->ReleaseAdopter();
         m_compiled.reset();
+        // No node means IsCompileComplete() is trivially true and the truthful answers are
+        // "not compiled"; a stale latch would keep reporting a compile that no longer
+        // exists as GL_TRUE.
+        m_optimisticAnswerLatched = false;
     }
 
     void ShaderObject::InvalidateCompiledState() {

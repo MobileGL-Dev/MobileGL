@@ -408,6 +408,13 @@ namespace MobileGL::MG_State::GLState {
                     MG_Util::ConvertGLEnumToString(shaderType).c_str());
 
             if (!compiled.compileStatus) {
+                // The compile log LEADS the quoted source, and that order is load-bearing:
+                // under MOBILEGL_ASYNC_OPTIMISTIC_SHADER_STATUS this string is the
+                // application's ONLY compile diagnostic (the per-shader queries answered
+                // optimistically), and applications read it through a bounded buffer -
+                // Iris uses 32768 bytes - so the actionable text must come before the
+                // potentially-100KB source dump. The full source stays: the device log is
+                // where a failing pack gets debugged from.
                 artifacts.infoLog =
                     std::format("Linking a {} with compilation error, linking will now terminate. Shader error "
                                 "log:\n{}\nShader src:\n{}",

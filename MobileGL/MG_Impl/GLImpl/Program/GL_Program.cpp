@@ -744,6 +744,21 @@ namespace MobileGL::MG_Impl::GLImpl {
         CopyStr(bufSize, length, infoLog, log.c_str(), (GLsizei)log.length());
     }
 
+    // MOBILEGL_ASYNC_OPTIMISTIC_SHADER_STATUS: while the compile job is still in flight -
+    // and, via the latch below, for the rest of that node's life once any query was
+    // answered this way - GL_COMPILE_STATUS reads GL_TRUE and the info log reads empty,
+    // WITHOUT joining. The latch (TakeOptimisticCompileAnswer) is what makes the three
+    // sites tell ONE story: without it, a job settling between an application's info-log
+    // read and its status read would produce the torn pair "GL_FALSE with an empty log",
+    // and an application that aborts on that never reaches the link join that carries the
+    // real diagnostic. A failure hidden here still fails the program link, with the
+    // compile log quoted in the program info log (ProgramLinkTask::ConsumeShaders), which
+    // is where the serial compile-then-check applications this exists for do their error
+    // handling.
+    static Bool AnswerCompileOptimistically(const SharedPtr<MG_State::GLState::ShaderObject>& shaderObject) {
+        return MG_Util::Async::OptimisticShaderStatusActive() && shaderObject->TakeOptimisticCompileAnswer();
+    }
+
     void GetShaderiv_State(GLuint shader, GLenum pname, GLint* params) {
         auto& shaderObject = TryToGetShaderObject(shader);
         if (!shaderObject) return;
@@ -756,9 +771,20 @@ namespace MobileGL::MG_Impl::GLImpl {
             *params = shaderObject->GetDeleteStatus();
             break;
         case GL_COMPILE_STATUS:
+            if (AnswerCompileOptimistically(shaderObject)) {
+                *params = GL_TRUE;
+                break;
+            }
             *params = shaderObject->GetCompileStatus();
             break;
         case GL_INFO_LOG_LENGTH:
+            // Not cosmetic: LWJGL's one-argument glGetShaderInfoLog convenience overload
+            // sizes its buffer from this query, so a joining answer here would defeat the
+            // non-joining GetShaderInfoLog below.
+            if (AnswerCompileOptimistically(shaderObject)) {
+                *params = 0;
+                break;
+            }
             *params = shaderObject->GetInfoLog().empty() ? 0 : (GLint)shaderObject->GetInfoLog().length() + 1;
             break;
         case GL_SHADER_SOURCE_LENGTH:
@@ -783,6 +809,15 @@ namespace MobileGL::MG_Impl::GLImpl {
     void GetShaderInfoLog_State(GLuint shader, GLsizei bufSize, GLsizei* length, GLchar* infoLog) {
         auto& shaderObject = TryToGetShaderObject(shader);
         if (!shaderObject) return;
+
+        // See AnswerCompileOptimistically: an in-flight compile reads as an empty log. The
+        // cost is a lost compile WARNING (a successful compile whose log the application
+        // reads exactly once, now, and never after the join) - accepted as part of the
+        // opt-in.
+        if (AnswerCompileOptimistically(shaderObject)) {
+            CopyStr(bufSize, length, infoLog, "", 0);
+            return;
+        }
 
         const auto& log = shaderObject->GetInfoLog();
         CopyStr(bufSize, length, infoLog, log.c_str(), (GLsizei)log.length());
