@@ -539,9 +539,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             if (payload.stages) {
                 for (SizeT i = 0; i < payload.stages->size(); ++i) {
                     const auto& stage = (*payload.stages)[i];
-                    MGLOG_I("PipelineFactory::CreatePipeline stage[%zu]: stage=0x%x module=%p entry=%s "
+                    // VkShaderModule is a non-dispatchable handle: a pointer on 64-bit but a
+                    // plain uint64_t on 32-bit ABIs, where a cast to const void* is ill-formed
+                    // (broke the armeabi-v7a build). Print it as the 64-bit value it is.
+                    MGLOG_I("PipelineFactory::CreatePipeline stage[%zu]: stage=0x%x module=0x%llx entry=%s "
                             "specialization=%d",
-                            i, static_cast<Uint32>(stage.stage), static_cast<const void*>(stage.module),
+                            i, static_cast<Uint32>(stage.stage),
+                            static_cast<unsigned long long>(reinterpret_cast<Uint64>(stage.module)),
                             stage.pName ? stage.pName : "(null)", stage.pSpecializationInfo ? 1 : 0);
                 }
             }
