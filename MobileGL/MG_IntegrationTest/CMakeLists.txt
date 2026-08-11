@@ -61,6 +61,7 @@ add_executable(MobileGLIntegrationTest
     Scenarios/DepthStencilReadbackScenario.cpp
     Scenarios/SsboArrayLengthScenario.cpp
     Scenarios/SwizzleAccessRoutineScenario.cpp
+    Scenarios/ProgramPipelineScenario.cpp
 )
 
 target_include_directories(MobileGLIntegrationTest PRIVATE
