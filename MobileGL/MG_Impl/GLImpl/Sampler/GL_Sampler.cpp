@@ -336,27 +336,22 @@ namespace MobileGL::MG_Impl::GLImpl {
             return;
         }
 
-        // ...and the names are checked up front for the same reason, with the extra rule that
-        // ARB_multi_bind spells out separately: "samplers will not be created if they do not
-        // exist". The single-bind path instantiates a name glGenSamplers merely reserved; here
-        // a name that is not an existing sampler OBJECT is INVALID_OPERATION and nothing binds
-        // (KHR-GL44.multi_bind.errors_bind_samplers).
-        if (samplers != nullptr) {
-            for (GLsizei i = 0; i < count; ++i) {
-                if (samplers[i] == 0) continue;
-                if (MG_State::pGLContext->ValidateSamplerObject(samplers[i])) continue;
+        // ARB_multi_bind adds one rule the single-bind path does not have: "samplers will not be
+        // created if they do not exist", so a name that is not an existing sampler OBJECT is
+        // INVALID_OPERATION here (KHR-GL44.multi_bind.errors_bind_samplers). Per element, not
+        // all-or-nothing - the extension defines glBindSamplers as a loop, so a bad entry costs
+        // its own texture unit and leaves the rest of the range bound.
+        for (GLsizei i = 0; i < count; ++i) {
+            const GLuint sampler = samplers ? samplers[i] : 0;
+            if (sampler != 0 && !MG_State::pGLContext->ValidateSamplerObject(sampler)) {
                 MG_State::pGLContext->RecordError(
                     ErrorCode::InvalidOperation,
                     MakeUnique<GenericErrorInfo>(
                         "MG_Impl/GLImpl", "BindSamplers",
-                        std::format("samplers[{}] ({}) is not the name of an existing sampler object.", i,
-                                    samplers[i])));
-                return;
+                        std::format("samplers[{}] ({}) is not the name of an existing sampler object.", i, sampler)));
+                continue;
             }
-        }
-
-        for (GLsizei i = 0; i < count; ++i) {
-            BindSampler_State(first + i, samplers ? samplers[i] : 0);
+            BindSampler_State(first + i, sampler);
         }
     }
 

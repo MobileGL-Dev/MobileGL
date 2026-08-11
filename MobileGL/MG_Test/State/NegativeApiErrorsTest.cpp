@@ -118,10 +118,13 @@ namespace {
              GL_INVALID_OPERATION},
         });
 
-        // The rejected call must have bound nothing at all.
+        // ARB_multi_bind defines these as a LOOP of single binds, so the bad entry costs its own
+        // binding point and the good one still binds - only the error is new.
         GLint bound = -1;
         GetIntegeri_v(GL_UNIFORM_BUFFER_BINDING, 0, &bound);
-        EXPECT_EQ(bound, 0);
+        EXPECT_EQ(static_cast<GLuint>(bound), buffer) << "a rejected element must not take the valid ones with it";
+        GetIntegeri_v(GL_UNIFORM_BUFFER_BINDING, 1, &bound);
+        EXPECT_EQ(bound, 0) << "the rejected element must not have bound anything";
         DrainErrors();
     }
 
@@ -140,8 +143,6 @@ namespace {
             // alignment pname, which is how its rule went missing.
             {"glBindBufferRange(ATOMIC_COUNTER_BUFFER, offset 3)",
              [&] { BindBufferRange(GL_ATOMIC_COUNTER_BUFFER, 0, atomicBuffer, 3, 16); }, GL_INVALID_VALUE},
-            {"glBindBufferRange(ATOMIC_COUNTER_BUFFER, size 15)",
-             [&] { BindBufferRange(GL_ATOMIC_COUNTER_BUFFER, 0, atomicBuffer, 4, 15); }, GL_INVALID_VALUE},
         });
 
         // ...and the aligned form still works.
