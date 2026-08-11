@@ -7194,6 +7194,93 @@ void main() {
         return true;
     }
 
+    // A glClear on the DEFAULT framebuffer is parked as a pending clear and folded into the next
+    // render pass's loadOp. With no draw in between there is no render pass, so a readback that
+    // followed such a clear blitted the untouched swapchain image and returned the PREVIOUS
+    // frame's colour - which is exactly what the whole KHR-GL40.draw_indirect.negative-* family
+    // sees (clear, an erroring draw that never executes, glReadPixels expecting zeroes).
+    //
+    // Materializing it means clearing the acquired swapchain image itself, which is why this
+    // cannot reuse MaterializePendingClearForTexture: the default FBO's colour attachment is a
+    // placeholder ITextureObject, and syncing it would allocate and clear an unrelated image.
+    Bool VulkanRenderer::MaterializePendingClearForDefaultFramebuffer(VkCommandBuffer commandBuffer,
+                                                                      MG_State::GLState::FramebufferObject& fbo,
+                                                                      FramebufferAttachmentType attachmentType) {
+        if (!fbo.IsDefaultFramebuffer() || attachmentType == FramebufferAttachmentType::None) {
+            return true;
+        }
+        const auto& attachment = fbo.GetAttachment(attachmentType);
+        if (!attachment.IsTexture() || attachment.IsRenderbuffer()) {
+            return true;
+        }
+        ClearAttachmentPayload payload{};
+        if (!m_clearManager->GetPendingClear(attachment, payload)) {
+            return true;
+        }
+        if ((payload.mask & GL_COLOR_BUFFER_BIT) == 0) {
+            // Depth/stencil on the default framebuffer keeps the loadOp route; the readback
+            // path for it declines default framebuffers outright (ReadDepthStencilPixels).
+            return true;
+        }
+        MOBILEGL_ASSERT(VkRenderPassManager::GetActiveRenderPass() == nullptr ||
+                            commandBuffer != m_frameContext.GetCurrent().commandBuffer,
+                        "MaterializePendingClearForDefaultFramebuffer requires no active render pass");
+
+        const VkImage swapchainImage = m_swapchainObject.GetImage(m_imageIndexAcquired);
+        if (swapchainImage == VK_NULL_HANDLE) {
+            return false;
+        }
+        VkImageLayout currentLayout = m_swapchainObject.GetImageLayout(m_imageIndexAcquired);
+        VkPipelineStageFlags srcStageMask = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+        VkAccessFlags srcAccessMask = 0;
+        GetImageTransitionSourceState(currentLayout, srcStageMask, srcAccessMask);
+        VkImageLayout clearLayout = currentLayout;
+        if (!VkTextureManager::TransitionImageLayout(commandBuffer, swapchainImage, clearLayout,
+                                                     VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, srcStageMask,
+                                                     VK_PIPELINE_STAGE_TRANSFER_BIT, srcAccessMask,
+                                                     VK_ACCESS_TRANSFER_WRITE_BIT, VK_IMAGE_ASPECT_COLOR_BIT)) {
+            return false;
+        }
+
+        // The clear colour goes in verbatim, alpha included. Forcing opaque alpha here is what
+        // makes a glClear(0,0,0,0) read back as (0,0,0,1) - the default framebuffer's placeholder
+        // attachment can describe an alpha-less format while the swapchain image it stands for
+        // has a real alpha channel.
+        VkClearColorValue clearColor{};
+        clearColor.float32[0] = payload.color.x();
+        clearColor.float32[1] = payload.color.y();
+        clearColor.float32[2] = payload.color.z();
+        clearColor.float32[3] = payload.color.w();
+        VkImageSubresourceRange range{};
+        range.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        range.baseMipLevel = 0;
+        range.levelCount = 1;
+        range.baseArrayLayer = 0;
+        range.layerCount = 1;
+        vkCmdClearColorImage(commandBuffer, swapchainImage, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &clearColor, 1,
+                             &range);
+
+        VkImageLayout settledLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        VkPipelineStageFlags dstStageMask = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+        VkAccessFlags dstAccessMask = 0;
+        GetImageTransitionDestinationState(VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, dstStageMask, dstAccessMask);
+        if (!VkTextureManager::TransitionImageLayout(commandBuffer, swapchainImage, settledLayout,
+                                                     VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                                                     VK_PIPELINE_STAGE_TRANSFER_BIT, dstStageMask,
+                                                     VK_ACCESS_TRANSFER_WRITE_BIT, dstAccessMask,
+                                                     VK_IMAGE_ASPECT_COLOR_BIT)) {
+            return false;
+        }
+        m_swapchainObject.SetImageLayout(m_imageIndexAcquired, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+
+        // Popped, not left behind: the clear has executed, so letting the next render pass load
+        // it again as a loadOp would erase whatever is drawn between here and there.
+        m_clearManager->PopPendingClear(attachment);
+        MGLOG_D("MaterializePendingClearForDefaultFramebuffer: swapchain image %u pending clear materialized",
+                m_imageIndexAcquired);
+        return true;
+    }
+
     Bool VulkanRenderer::TryBlitToDefaultFramebufferWithShader(FrameContext::FrameData& frame,
                                                                MG_State::GLState::FramebufferObject& readFbo,
                                                                MG_State::GLState::FramebufferObject& drawFbo,
@@ -8294,7 +8381,18 @@ void main() {
         // rehash on that insertion, invalidating any RenderbufferResource*/TextureResource*
         // obtained beforehand - so ResolveColorBlitBinding's cached `trackedLayout` pointer
         // must be taken AFTER this, never before it.
-        if (!readIsDefaultFbo) {
+        //
+        // The default framebuffer needs this just as much, and used to be excluded: its clear is
+        // parked the same way, and with no draw between the clear and the readback no render
+        // pass ever runs to fold it in, so the readback returned the previous frame's image
+        // (KHR-GL40.draw_indirect.negative-*). It only takes a different materializer because the
+        // image to clear is the acquired swapchain image, not the attachment's placeholder
+        // texture.
+        if (readIsDefaultFbo) {
+            const Bool clearReady = MaterializePendingClearForDefaultFramebuffer(frame.commandBuffer, *readFbo,
+                                                                                 readFbo->GetReadBuffer());
+            MOBILEGL_ASSERT(clearReady, "ReadPixels: failed to materialize the default framebuffer's pending clear");
+        } else {
             const auto& sourceAttachment = readFbo->GetAttachment(readFbo->GetReadBuffer());
             auto sourceTexture = sourceAttachment.GetTexture();
             if (sourceTexture != nullptr) {

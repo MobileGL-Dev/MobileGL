@@ -38,6 +38,7 @@
 #include <MG_Impl/GLImpl/RenderState/GL_RenderState.h>
 #include <MG_Impl/GLImpl/Sampler/GL_Sampler.h>
 #include <MG_Impl/GLImpl/Texture/GL_Texture.h>
+#include <MG_Impl/GLImpl/VertexArray/GL_VertexArray.h>
 #include <MG_State/GLState/Core.h>
 
 using namespace MobileGL;

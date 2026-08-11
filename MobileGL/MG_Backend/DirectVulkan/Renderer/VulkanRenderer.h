@@ -1118,6 +1118,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         Bool MaterializePendingClearForRenderbuffer(
             VkCommandBuffer commandBuffer,
             const SharedPtr<MG_State::GLState::RenderbufferObject>& renderbuffer);
+        // The default framebuffer's twin of the two above. It cannot go through
+        // MaterializePendingClearForTexture: the default FBO's colour attachment is a
+        // placeholder texture object, and syncing THAT would clear a texture image nobody
+        // presents instead of the acquired swapchain image.
+        Bool MaterializePendingClearForDefaultFramebuffer(VkCommandBuffer commandBuffer,
+                                                          MG_State::GLState::FramebufferObject& fbo,
+                                                          FramebufferAttachmentType attachmentType);
         VkPipeline GetOrCreateBlitPipeline(const RenderPassEntry& renderPassEntry);
         Bool GenerateDepthMipmapWithShader(FrameContext::FrameData& frame,
                                            MG_State::GLState::ITextureObject& texture,
