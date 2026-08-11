@@ -26,8 +26,14 @@ namespace {
             const MGITest::HeadlessGL& gl = MGITest::HeadlessGL::Get();
             std::fprintf(stderr, "MobileGL integration scenarios: backend=%s\n", gl.BackendName().c_str());
             if (gl.Usable()) {
-                std::fprintf(stderr, "  renderer: %s\n  surface:  %dx%d pbuffer (headless)\n",
-                             gl.RendererString().c_str(), gl.Width(), gl.Height());
+                // EGL_PLATFORM is echoed because it is the invariant this harness
+                // rests on: the run is headless on every machine, so a run that
+                // silently bound to a workstation's window system is a different
+                // run from CI's and must be visible as one in the log.
+                const char* eglPlatform = std::getenv("EGL_PLATFORM");
+                std::fprintf(stderr, "  renderer: %s\n  surface:  %dx%d pbuffer (headless, EGL_PLATFORM=%s)\n",
+                             gl.RendererString().c_str(), gl.Width(), gl.Height(),
+                             eglPlatform != nullptr ? eglPlatform : "<unset>");
             } else if (MGITest::RequireGpu()) {
                 std::fprintf(stderr,
                              "  FAILING every scenario (MOBILEGL_ITEST_REQUIRE_GPU is set): %s\n",

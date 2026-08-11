@@ -74,6 +74,40 @@ namespace MGITest {
             std::string renderer;
         };
 
+        // The harness is headless BY CONSTRUCTION, on every machine: it must never
+        // reach a window system, not even where one happens to be running. This is
+        // not a CI accommodation - it is what keeps a developer's run and a CI run
+        // the same run. The lane was wired up green on a workstation and immediately
+        // died on the runner precisely because the workstation had a DISPLAY (WSLg)
+        // and took Mesa's x11 platform, while the runner has none; that divergence
+        // is the bug, and pinning the platform here is the fix for it.
+        //
+        // Mesa selects its EGL platform from EGL_PLATFORM at loader time, so this
+        // has to run before the first EGL call in the process (see EnsureHeadless
+        // callers). surfaceless is the platform with no window-system dependency at
+        // all; the surface this file then creates is still a pbuffer, which every
+        // platform supports and which the amendment to this rule requires as the
+        // fallback shape. DISPLAY/WAYLAND_DISPLAY are cleared as well so that a
+        // driver that consults them directly cannot reintroduce the dependency
+        // behind EGL's back. Desktop-only file: MG_IntegrationTest never builds
+        // for Android, so no device path is affected.
+        void EnsureHeadlessPlatform() {
+#if defined(__linux__) && !defined(__ANDROID__)
+            static bool done = false;
+            if (done) {
+                return;
+            }
+            done = true;
+            // An explicit EGL_PLATFORM from the operator still wins: pinning a
+            // platform is exactly how someone reproduces a platform-specific bug.
+            if (std::getenv("EGL_PLATFORM") == nullptr) {
+                setenv("EGL_PLATFORM", "surfaceless", 1);
+            }
+            unsetenv("DISPLAY");
+            unsetenv("WAYLAND_DISPLAY");
+#endif
+        }
+
         // THE bring-up, in one function so the pre-flight child and the parent run
         // literally the same sequence - a pre-flight that tests something narrower
         // than what the parent will do is exactly the kind of "predictive" check
@@ -82,6 +116,9 @@ namespace MGITest {
         // Returns 0 on success, or the 1-based index of the step that failed, and
         // fills outReason either way.
         int RunEglBringUp(EglBringUp& out, std::string& outReason) {
+            // Belt and braces: the pre-flight child and the parent both enter here,
+            // and neither may be the first to touch EGL without this having run.
+            EnsureHeadlessPlatform();
             EGLDisplay display = eglGetDisplay(EGL_DEFAULT_DISPLAY);
             if (display == EGL_NO_DISPLAY) {
                 outReason = WithEglError("eglGetDisplay(EGL_DEFAULT_DISPLAY) returned EGL_NO_DISPLAY");
@@ -199,11 +236,10 @@ namespace MGITest {
             }
             if (child == 0) {
                 close(channel[0]);
-                // The child is EXPECTED to die on a signal on an unusable
-                // platform; that is the measurement. Do not let each such
-                // measurement drop a core file next to the test binary.
-                const rlimit noCore{0, 0};
-                setrlimit(RLIMIT_CORE, &noCore);
+                // No core suppression here, deliberately: when the child dies on a
+                // signal, the core IS the diagnosis (an rlimit that used to sit here
+                // made a CI-only crash undebuggable). Machines that do not want
+                // cores control that with the usual ulimit/core_pattern knobs.
                 std::fprintf(stderr, "[itest] pre-flight child: attempting a full EGL bring-up\n");
                 EglBringUp local;
                 std::string reason;
@@ -284,9 +320,19 @@ namespace MGITest {
         }
     } // namespace
 
+    namespace {
+        bool EnvFlag(const char* name) {
+            const char* value = std::getenv(name);
+            return value != nullptr && value[0] != '\0' && std::strcmp(value, "0") != 0;
+        }
+    } // namespace
+
     bool RequireGpu() {
-        const char* value = std::getenv("MOBILEGL_ITEST_REQUIRE_GPU");
-        return value != nullptr && value[0] != '\0' && std::strcmp(value, "0") != 0;
+        return EnvFlag("MOBILEGL_ITEST_REQUIRE_GPU");
+    }
+
+    bool RequireHardwareGpu() {
+        return EnvFlag("MOBILEGL_ITEST_REQUIRE_HARDWARE_GPU");
     }
 
     std::ostream& operator<<(std::ostream& os, const Rgba8& c) {
@@ -390,6 +436,10 @@ namespace MGITest {
     }
 
     HeadlessGL::HeadlessGL() {
+        // Before anything else in this process can reach EGL, and in particular
+        // before the pre-flight forks - the child must measure the same platform
+        // the parent will use.
+        EnsureHeadlessPlatform();
         m_backendName = EnvOr("MOBILEGL_BACKEND_TYPE", "<unset>");
         m_usable = BringUp();
     }

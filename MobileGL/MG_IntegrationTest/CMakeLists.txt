@@ -169,25 +169,24 @@ endif()
 option(MOBILEGL_ITEST_REQUIRE_GPU
     "Fail (rather than skip) the integration scenarios when the headless harness is unusable" OFF)
 
-# DirectGLES asks the system EGL for a pbuffer config, and on Mesa the default
-# platform is not X11 unless it is said out loud (run_driver_bench.sh sets the
-# same variable). Wrong platform here is not a soft failure: eglCreatePbuffer
-# fails and every scenario skips.
-if (UNIX AND NOT APPLE AND NOT ANDROID)
-    set(MOBILEGL_ITEST_EGL_PLATFORM "x11" CACHE STRING
-        "EGL_PLATFORM for the integration tests (empty: leave the loader alone)")
-else()
-    set(MOBILEGL_ITEST_EGL_PLATFORM "" CACHE STRING
-        "EGL_PLATFORM for the integration tests (empty: leave the loader alone)")
-endif()
+# No EGL_PLATFORM knob here on purpose. The harness pins EGL_PLATFORM=surfaceless
+# itself before its first EGL call (HeadlessGL.cpp, EnsureHeadlessPlatform) so a
+# developer's machine and a CI runner take the SAME path whether or not a window
+# system happens to be running. This used to inject "x11", which is how the lane
+# came up green on a workstation with WSLg and died on a runner with no X server.
+#
+# A build-system knob would not just be redundant, it would be a trap: `set(...
+# CACHE ...)` does not rewrite an existing cache, so every build directory
+# configured before this change would keep injecting EGL_PLATFORM=x11 and go on
+# binding to a window system - silently, and only on the machines that have one.
+# Someone reproducing a platform-specific bug sets EGL_PLATFORM in their own
+# environment, which the harness still honours.
 
 set(MGL_ITEST_COMMON_ENV "")
 if (MOBILEGL_ITEST_EGL_VENDOR)
     list(APPEND MGL_ITEST_COMMON_ENV "__EGL_VENDOR_LIBRARY_FILENAMES=${MOBILEGL_ITEST_EGL_VENDOR}")
 endif()
-if (MOBILEGL_ITEST_EGL_PLATFORM)
-    list(APPEND MGL_ITEST_COMMON_ENV "EGL_PLATFORM=${MOBILEGL_ITEST_EGL_PLATFORM}")
-endif()
+unset(MOBILEGL_ITEST_EGL_PLATFORM CACHE) # see above: an old cache must not resurrect x11
 if (MOBILEGL_ITEST_REQUIRE_GPU)
     list(APPEND MGL_ITEST_COMMON_ENV "MOBILEGL_ITEST_REQUIRE_GPU=1")
 endif()

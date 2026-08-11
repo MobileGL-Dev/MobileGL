@@ -41,6 +41,15 @@ namespace MGITest {
     // a job that ran everything.
     bool RequireGpu();
 
+    // True when MOBILEGL_ITEST_REQUIRE_HARDWARE_GPU is set: additionally asserts
+    // that the context did NOT land on a software rasterizer. Deliberately a
+    // SEPARATE switch from RequireGpu - a GPU-less CI runner is a supported and
+    // intended configuration for these scenarios (they pin backend draw logic,
+    // which llvmpipe/lavapipe execute faithfully), so CI wants the falsifiability
+    // of REQUIRE_GPU without the hardware demand. Use this one only where a vendor
+    // pin silently degrading to software would invalidate the measurement.
+    bool RequireHardwareGpu();
+
     struct Rgba8 {
         std::uint8_t r = 0, g = 0, b = 0, a = 0;
 

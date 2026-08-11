@@ -45,12 +45,18 @@ namespace MGITest {
                 }
                 GTEST_SKIP() << "no usable GPU/display/ICD for backend " << gl.BackendName() << ": " << gl.SkipReason();
             }
-            if (RequireGpu() && LooksLikeSoftwareRasterizer(gl.RendererString())) {
-                // "Ran on llvmpipe" must not be able to pass as "ran on the GPU":
-                // a misconfigured vendor pin silently lands on the software
-                // rasterizer, and REQUIRE_GPU exists precisely to make that loud.
-                FAIL() << "MOBILEGL_ITEST_REQUIRE_GPU is set but the context landed on a software rasterizer: "
-                       << gl.RendererString();
+            if (RequireHardwareGpu() && LooksLikeSoftwareRasterizer(gl.RendererString())) {
+                // Only when hardware was asked for BY NAME. REQUIRE_GPU means "an
+                // unusable harness is a failure, not a silent skip" - it is the
+                // falsifiability switch, and CI is exactly where it belongs. But CI
+                // runners have no GPU, so folding "must not be llvmpipe" into the
+                // same switch made the CI lane unpassable by construction: the
+                // scenarios pin backend draw logic, which a software rasterizer
+                // executes just as faithfully. Landing on llvmpipe/lavapipe there is
+                // the intended configuration, not a misconfiguration. A vendor pin
+                // that must not silently degrade sets REQUIRE_HARDWARE_GPU.
+                FAIL() << "MOBILEGL_ITEST_REQUIRE_HARDWARE_GPU is set but the context landed on a software "
+                       << "rasterizer: " << gl.RendererString();
             }
             // A scenario starts from a clean slate but shares the context (and so
             // the renderer's memos) with every other scenario in this process -
