@@ -2779,6 +2779,14 @@ void main() {
             MG_State::pGLContext->GetFramebufferBindingSlot(FramebufferTarget::Draw).GetBoundObject();
         if (currentDrawFBO != nullptr && currentDrawFBO->IsDefaultFramebuffer()) {
             flags |= ProgramFactory::CompileOptionBit::PositionYFlip;
+            // gl_FragCoord follows the same rule the default-framebuffer RECTANGLES follow
+            // (GetDefaultFramebufferRectMapping): flipped for identity/180, left alone under a
+            // quarter turn, which this renderer converts nothing for. Keeping the two in step
+            // is the whole point - a fragment's window Y and the viewport that placed it must
+            // agree on which end of the image they count from.
+            if (!IsQuarterTurnPreTransform(preTransform)) {
+                flags |= ProgramFactory::CompileOptionBit::FragCoordYFlip;
+            }
             switch (preTransform) {
             case VK_SURFACE_TRANSFORM_ROTATE_90_BIT_KHR:
                 flags |= ProgramFactory::CompileOptionBit::SurfaceRotate90;
@@ -2933,6 +2941,9 @@ void main() {
                                                       m_shaderDrawParametersFeatureEnabled,
                                                       m_unformattedFloatStorageImagesEnabled);
         MOBILEGL_ASSERT(m_programFactory != nullptr, "ProgramFactory creation failed.");
+        // The swapchain already exists at this point (Initialize creates it first), so seed the
+        // height the factory could not be told about from CreateSwapchain.
+        m_programFactory->SetDefaultFramebufferHeight(m_swapchainObject.GetExtent().height);
         // Aging evictions (render passes and program entries) must purge the dependent
         // pipeline / compute-pipeline / descriptor-set caches in the same step; both
         // sweeps only run from the frame-boundary seams, long after initialization.
@@ -12021,6 +12032,12 @@ void main() {
                                  static_cast<Uint32>(m_physicalDevice.queueFamilies.graphicsFamily),
                                  static_cast<Uint32>(m_physicalDevice.queueFamilies.presentFamily),
                                  m_config.MaxFramesInFlight, desiredExtent);
+        // The FragCoordYFlip variants bake this height in; it is the only input to a shader
+        // module that lives outside the GL program, so the factory has to learn it here (and on
+        // every recreation, which is the only way it can change).
+        if (m_programFactory) {
+            m_programFactory->SetDefaultFramebufferHeight(m_swapchainObject.GetExtent().height);
+        }
     }
 
     void VulkanRenderer::CreateCommandPool() {

@@ -53,6 +53,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             // recorded while GL transform feedback is active, so plain draws keep the
             // undecorated variant.
             XfbCapture = 1 << 6,
+            // Rewrites the fragment stage's gl_FragCoord reads to GL's bottom-left window
+            // origin. Vulkan's gl_FragCoord.y IS the framebuffer row being written, and the
+            // default framebuffer's image is stored in display (top-left) order, so a shader
+            // that reads gl_FragCoord there sees `height - y_GL`. Set together with
+            // PositionYFlip (the two are the same fact about the same draws) except under a
+            // quarter turn, which this renderer does not convert rectangles for either.
+            FragCoordYFlip = 1 << 7,
         };
         using CompileOptionFlags = Flags<CompileOptionBit>;
         using HashType = Uint64;
@@ -267,6 +274,17 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         const VkProgramObject& GetOrCreateProgram(
             const MG_State::GLState::ProgramObject& program, CompileOptionFlags flags);
 
+        // The default framebuffer's current image height, baked as a literal into every
+        // FragCoordYFlip variant (there is no push-constant or specialization channel here, and
+        // adding one for a value that changes only on swapchain recreation would cost the draw
+        // path more than a recompile costs a resize). It is therefore part of those variants'
+        // identity: ComputeHash mixes it in when the bit is set, so a height change re-keys them
+        // and leaves every other program's hash untouched. Setting a NEW height also bumps the
+        // cache-structure epoch, because a caller holding a memoised VkProgramObject* would
+        // otherwise keep using a module compiled against the old height.
+        void SetDefaultFramebufferHeight(Uint32 height);
+        Uint32 GetDefaultFramebufferHeight() const { return m_defaultFramebufferHeight; }
+
         // Bumped whenever m_cache's STRUCTURE changes (any insert or erase): the cache is
         // an open-addressing map holding entries by value, so both moves existing entries.
         // A caller that memoised a VkProgramObject* may keep dereferencing it only while
@@ -324,6 +342,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // True only when the logical device enabled both
         // shaderStorageImageReadWithoutFormat and shaderStorageImageWriteWithoutFormat.
         Bool m_unformattedFloatStorageImagesEnabled = false;
+        // See SetDefaultFramebufferHeight. 0 means "not known yet"; the FragCoordYFlip bit is
+        // never set before the swapchain exists, so no variant can be compiled against it.
+        Uint32 m_defaultFramebufferHeight = 0;
         mutable ProgramLookupCache m_lastLookup;
         // Monotonic frame-boundary counter (bumped in OnFrameBoundary) for cache aging.
         Uint64 m_frameCounter = 0;
