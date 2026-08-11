@@ -14,6 +14,16 @@
 #include <Includes.h>
 
 namespace MobileGL::MG_Backend::DirectVulkan {
+    // Enough of a fingerprint to identify the exact module the driver rejected without keeping the
+    // SPIR-V alive for every program in the cache: a driver that answers VK_ERROR_UNKNOWN tells us
+    // nothing, so the log has to carry the shader's identity itself. Diagnostic only - never part
+    // of any pipeline or program hash.
+    struct ShaderStageSpirvDigest {
+        Uint32 stage = 0; // VkShaderStageFlagBits
+        Uint32 wordCount = 0;
+        Uint64 hash = 0;
+    };
+
     class PipelineFactory {
     public:
         using HashType = Uint64;
@@ -62,6 +72,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             Array<VkPipelineColorBlendAttachmentState, kMaxColorAttachments> colorBlendAttachments{};
             const Vector<VkPipelineShaderStageCreateInfo>* stages = nullptr;
             const VkPipelineVertexInputStateCreateInfo* vertexInputState = nullptr;
+            // Diagnostic only; may be null. Read solely from the pipeline-creation failure path.
+            const Vector<ShaderStageSpirvDigest>* stageSpirvDigests = nullptr;
         };
 
         explicit PipelineFactory(VkDevice device, const VulkanRendererConfig& config);

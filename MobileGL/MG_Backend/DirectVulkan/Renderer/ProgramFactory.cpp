@@ -2568,6 +2568,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
             entry.modules.push_back(module);
             entry.stages.push_back(stage);
+            entry.stageSpirvDigests.push_back(ShaderStageSpirvDigest{
+                static_cast<Uint32>(stage.stage), static_cast<Uint32>(moduleSpv.size()),
+                XXH64(moduleSpv.data(), moduleSpv.size() * sizeof(Uint), 0)});
         }
 
         // Reflect and create layout as part of the program object

@@ -4049,7 +4049,8 @@ void main() {
             .depthWriteEnable = false,
             .depthCompareOp = VK_COMPARE_OP_ALWAYS,
             .stages = &programObj.stages,
-            .vertexInputState = &kEmptyVertexInputState
+            .vertexInputState = &kEmptyVertexInputState,
+            .stageSpirvDigests = &programObj.stageSpirvDigests
         };
         static constexpr VkColorComponentFlags kColorWriteMask =
             VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
@@ -4727,7 +4728,8 @@ void main() {
             .backStencilCompareOp = MG_Util::ConvertDepthTestFuncToVkEnum(backStencil.Func),
             .fragmentReplacesDepth = programObj.fragmentReplacesDepth,
             .stages = &programObj.stages,
-            .vertexInputState = pipelineVertexInputState
+            .vertexInputState = pipelineVertexInputState,
+            .stageSpirvDigests = &programObj.stageSpirvDigests
         };
         if (!payload.stencilTestEnable) {
             payload.frontStencilFailOp = VK_STENCIL_OP_KEEP;
@@ -5911,6 +5913,17 @@ void main() {
         }
 
         auto pipeline = GetOrCreatePipeline(mode, program, programObj, transformFlags, vao, *renderPassEntry);
+        // GetOrCreatePipeline documents a VK_NULL_HANDLE return (empty stages, or a driver that
+        // rejected vkCreateGraphicsPipelines). Binding it dereferences null inside the driver -
+        // 9 of the 15 CTS process deaths were exactly this vkCmdBindPipeline. A draw that has no
+        // pipeline is a skipped draw, which is what every other failure below already does.
+        // MGLOG_I so the skip is visible in the INFO builds CTS runs against.
+        if (pipeline == VK_NULL_HANDLE) {
+            MGLOG_I("SetupDraw skipped: no graphics pipeline for program=%u (creation failed or the "
+                    "program has no shader stages)",
+                    program.GetExternalIndex());
+            return false;
+        }
         activeRenderPass = VkRenderPassManager::GetActiveRenderPass();
 
         // Begin render pass, and handle clear

@@ -9,6 +9,7 @@
 #pragma once
 
 #include "../VkIncludes.h"
+#include "PipelineFactory.h"
 #include "MG_State/GLState/ProgramState/ProgramObject.h"
 #include "MG_State/GLState/ProgramState/ShaderObject.h"
 #include "MG_State/GLState/TextureState/TextureEnum.h"
@@ -62,6 +63,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             HashType hash = 0;
             Vector<VkPipelineShaderStageCreateInfo> stages;
             Vector<VkShaderModule> modules;
+            // Parallel to stages; identifies the exact module bytes handed to the driver when a
+            // pipeline creation fails. Sixteen bytes per stage instead of keeping the SPIR-V.
+            Vector<ShaderStageSpirvDigest> stageSpirvDigests;
 
             // Layout data (previously in separate VkProgramLayout)
             VkDescriptorSetLayout descriptorSetLayout = VK_NULL_HANDLE;

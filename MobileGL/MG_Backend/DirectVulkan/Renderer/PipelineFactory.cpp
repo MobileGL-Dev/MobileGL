@@ -252,6 +252,19 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
 
         VkPipeline pipeline = CreatePipeline(payload);
+        // A failed creation must never be memoized. Caching VK_NULL_HANDLE served the null back for
+        // the rest of the process, so one transient driver rejection turned every later draw with
+        // the same state into a vkCmdBindPipeline(VK_NULL_HANDLE) - the SIGSEGV behind 9 of the 15
+        // CTS process deaths. Retrying costs one failed vkCreateGraphicsPipelines per draw, which
+        // is the correct price for a broken pipeline and is bounded by the draw itself being
+        // skipped.
+        if (pipeline == VK_NULL_HANDLE) {
+            MGLOG_I("PipelineFactory::GetOrCreatePipeline: creation failed for hash=0x%llx "
+                    "programHash=0x%llx; not caching the failure",
+                    static_cast<unsigned long long>(hash),
+                    static_cast<unsigned long long>(payload.programHash));
+            return VK_NULL_HANDLE;
+        }
         m_cache.emplace(hash, PipelineCacheEntry{pipeline, payload.programHash, payload.renderPass,
                                                  m_frameCounter});
         return pipeline;
@@ -507,6 +520,31 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             MGLOG_F("PipelineFactory::CreatePipeline vertex input: bindingCount=%u attributeCount=%u",
                     payload.vertexInputState->vertexBindingDescriptionCount,
                     payload.vertexInputState->vertexAttributeDescriptionCount);
+            // The driver's own answer is VK_ERROR_UNKNOWN, i.e. no information at all, so the only
+            // way to work out WHICH shader it choked on (the open sampler-array-in-struct
+            // investigation) is to name the modules. MGLOG_I, not _D/_E: this must survive in the
+            // INFO-level builds that CTS actually runs against.
+            if (payload.stageSpirvDigests) {
+                for (SizeT i = 0; i < payload.stageSpirvDigests->size(); ++i) {
+                    const auto& digest = (*payload.stageSpirvDigests)[i];
+                    MGLOG_I("PipelineFactory::CreatePipeline spirv[%zu]: stage=0x%x words=%u bytes=%zu "
+                            "hash=0x%llx",
+                            i, digest.stage, digest.wordCount,
+                            static_cast<SizeT>(digest.wordCount) * sizeof(Uint32),
+                            static_cast<unsigned long long>(digest.hash));
+                }
+            } else {
+                MGLOG_I("PipelineFactory::CreatePipeline: no SPIR-V digests attached to the payload");
+            }
+            if (payload.stages) {
+                for (SizeT i = 0; i < payload.stages->size(); ++i) {
+                    const auto& stage = (*payload.stages)[i];
+                    MGLOG_I("PipelineFactory::CreatePipeline stage[%zu]: stage=0x%x module=%p entry=%s "
+                            "specialization=%d",
+                            i, static_cast<Uint32>(stage.stage), static_cast<const void*>(stage.module),
+                            stage.pName ? stage.pName : "(null)", stage.pSpecializationInfo ? 1 : 0);
+                }
+            }
             for (Uint32 i = 0; i < payload.colorAttachmentCount; ++i) {
                 const auto& attachment = payload.colorBlendAttachments[i];
                 MGLOG_F("PipelineFactory::CreatePipeline colorAttachment[%u]: blend=%d colorWriteMask=0x%x srcColor=%d dstColor=%d colorOp=%d srcAlpha=%d dstAlpha=%d alphaOp=%d",
