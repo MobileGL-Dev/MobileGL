@@ -180,4 +180,87 @@ void main() { o_color = vec4(0.1, 0.2, 0.3, 1.0); }
         gl.EndFrame();
         glDeleteProgram(program);
     }
+
+    // The other half of the same rule, and the one the first version of this fix got wrong: a
+    // parked clear must be executed BEFORE whatever writes the framebuffer next, not whenever the
+    // readback happens to notice it. Minecraft clears the default framebuffer, renders the world
+    // into its own framebuffer and blits the result out; nothing in between opens a render pass on
+    // the default framebuffer, so the clear stays parked across the whole frame. Materializing it
+    // at readback time therefore ran it AFTER the blit and returned a blank frame - which is what
+    // took every DirectVulkan retrace to ssim 0.000005.
+    TEST_F(ClearThenReadPixelsScenario, ABlitIntoTheDefaultFramebufferSurvivesAnEarlierClear) {
+        if (!Ready()) return;
+        HeadlessGL& gl = Gl();
+        const int width = gl.Width();
+        const int height = gl.Height();
+
+        std::string error;
+        const unsigned int program = CompileProgram(kVS, kFS, &error);
+        ASSERT_NE(program, 0u) << error;
+
+        // Paint a source framebuffer, exactly as a game renders its world off-screen.
+        ColorFbo source = MakeColorFbo(width, height);
+        ASSERT_NE(source.fbo, 0u);
+        BindFbo(source);
+        glDisable(GL_SCISSOR_TEST);
+        glDisable(GL_DEPTH_TEST);
+        ClearTo(0.0f, 0.0f, 0.0f, 1.0f);
+        DrawFullViewportQuad(program);
+
+        // Clear the DEFAULT framebuffer, then blit the source over it. The clear is white so a
+        // frame that lost the blit is unmistakable, and the blit's colour is fshSimple's.
+        BindDefaultFramebuffer();
+        glViewport(0, 0, width, height);
+        ClearTo(1.0f, 1.0f, 1.0f, 1.0f);
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, source.fbo);
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+        glBlitFramebuffer(0, 0, width, height, 0, 0, width, height, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        EXPECT_EQ(FirstGLError(), 0u);
+
+        const Image blitted = ReadPixels(width, height);
+        EXPECT_EQ(FirstGLError(), 0u);
+        const Rgba8 centre = blitted.At(width / 2, height / 2);
+        EXPECT_NEAR(centre.r, 26, 2) << "the blit into the default framebuffer did not survive the clear that "
+                                        "preceded it; read back rgba(" << static_cast<int>(centre.r) << ", "
+                                     << static_cast<int>(centre.g) << ", " << static_cast<int>(centre.b) << ", "
+                                     << static_cast<int>(centre.a) << ")";
+        EXPECT_NEAR(centre.g, 51, 2);
+        EXPECT_NEAR(centre.b, 77, 2);
+
+        DestroyColorFbo(source);
+        gl.EndFrame();
+        glDeleteProgram(program);
+    }
+
+    // The same ordering claim for the path that DOES open a render pass. It passes today (the
+    // render pass folds the clear into its loadOp and pops it), and it is here so a future change
+    // to the pending-clear lifecycle cannot quietly reverse clear and draw.
+    TEST_F(ClearThenReadPixelsScenario, ADrawIntoTheDefaultFramebufferSurvivesAnEarlierClear) {
+        if (!Ready()) return;
+        HeadlessGL& gl = Gl();
+        const int width = gl.Width();
+        const int height = gl.Height();
+
+        std::string error;
+        const unsigned int program = CompileProgram(kVS, kFS, &error);
+        ASSERT_NE(program, 0u) << error;
+
+        BindDefaultFramebuffer();
+        glViewport(0, 0, width, height);
+        glDisable(GL_SCISSOR_TEST);
+        glDisable(GL_DEPTH_TEST);
+        ClearTo(1.0f, 1.0f, 1.0f, 1.0f);
+        DrawFullViewportQuad(program);
+        EXPECT_EQ(FirstGLError(), 0u);
+
+        const Image painted = ReadPixels(width, height);
+        const Rgba8 centre = painted.At(width / 2, height / 2);
+        EXPECT_NEAR(centre.r, 26, 2) << "the draw did not survive the clear that preceded it";
+        EXPECT_NEAR(centre.g, 51, 2);
+        EXPECT_NEAR(centre.b, 77, 2);
+
+        gl.EndFrame();
+        glDeleteProgram(program);
+    }
 } // namespace MGITest

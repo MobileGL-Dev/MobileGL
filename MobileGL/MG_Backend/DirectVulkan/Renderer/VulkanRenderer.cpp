@@ -7570,12 +7570,21 @@ void main() {
                 }
             }
 
-            if (!drawIsDefaultFbo) {
+            const auto destAttachmentType =
+                ResolveFramebufferCopyAttachmentType(*drawFbo, false, dstBinding.aspectMask);
+            if (drawIsDefaultFbo) {
+                // Same ordering rule for the default framebuffer's depth/stencil - see the
+                // colour twin below.
+                const Bool dstClearReady = MaterializePendingClearForDefaultFramebuffer(
+                    frame.commandBuffer, *drawFbo, destAttachmentType);
+                MOBILEGL_ASSERT(dstClearReady,
+                                "BlitFramebuffer: failed to materialize the default framebuffer's pending "
+                                "depth/stencil clear");
+            } else {
                 // A clear queued for the destination predates this blit in API order;
                 // execute it now, or its deferred materialization would later stomp the
                 // copied contents (MC 26.3 OIT clears cloud_depth, then blits the main
                 // depth into it - the stale loadOp=CLEAR erased the copy).
-                const auto destAttachmentType = ResolveFramebufferCopyAttachmentType(*drawFbo, false, dstBinding.aspectMask);
                 const auto& destAttachment = drawFbo->GetAttachment(destAttachmentType);
                 if (auto destTexture = destAttachment.GetTexture(); destTexture != nullptr) {
                     const Bool dstClearReady = MaterializePendingClearForTexture(frame.commandBuffer, *destTexture);
@@ -7780,7 +7789,19 @@ void main() {
             }
         }
 
-        if (!drawIsDefaultFbo) {
+        if (drawIsDefaultFbo) {
+            // The default framebuffer needs the same ordering, and needed it before anything
+            // consumed its parked clear: Minecraft clears the default framebuffer, renders the
+            // world into its own framebuffer and BLITS the result out, so nothing between the
+            // clear and the blit ever opens a render pass on the default framebuffer to fold the
+            // clear in as a loadOp. The clear therefore stayed pending across the whole frame,
+            // and the first path that did materialize it - the readback - executed it AFTER the
+            // blit and handed back a blank frame (every DirectVulkan retrace, ssim 0.000005).
+            const Bool dstClearReady = MaterializePendingClearForDefaultFramebuffer(
+                frame.commandBuffer, *drawFbo, drawFbo->GetDrawBuffers()[0]);
+            MOBILEGL_ASSERT(dstClearReady,
+                            "BlitFramebuffer: failed to materialize the default framebuffer's pending clear");
+        } else {
             // A clear queued for the destination predates this blit in API order; execute
             // it now, or its deferred materialization would later stomp the blitted color.
             const auto& destAttachment = drawFbo->GetAttachment(drawFbo->GetDrawBuffers()[0]);
