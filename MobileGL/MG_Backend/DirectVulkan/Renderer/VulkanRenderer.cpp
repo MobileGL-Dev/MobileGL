@@ -220,6 +220,47 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         return static_cast<Int>((static_cast<Int64>(value) * toExtent + fromExtent / 2) / fromExtent);
     }
 
+    // ---------------------------------------------------------------------------------------
+    // Default-framebuffer rectangles.
+    //
+    // GL's window origin is the BOTTOM-left. The default framebuffer's Vulkan image is stored in
+    // DISPLAY (top-left) orientation, and the difference is reconciled for VERTICES by negating
+    // gl_Position.y - but only for default-FBO draws (GetShaderTransformFlags ->
+    // CompileOptionBit::PositionYFlip, applied in ProgramFactory::InsertPositionFixup).
+    //
+    // Rectangles were never converted. The viewport, the scissor and the ReadPixels copy offset
+    // all used the GL bottom-origin Y verbatim as a Vulkan top-origin Y, which is correct only
+    // when y == H - y - h (full height, or vertically centred) - and full height is the only case
+    // any test ever exercised. In the conformance suite the errors CANCEL in placement (the draw
+    // lands in Vulkan rows [y, y+h) and the readback copies the same rows back) and compose into
+    // an exact vertical flip: 1,759 of Magma's 1,793 non-passing cases, 861 vertical flips and
+    // nothing else across all of gl33.
+    //
+    // The mapping below is derived from - and at full extent exactly reproduces - the pixel
+    // mapping RemapDefaultFboReadbackToGLOrientation has always used:
+    //     identity : image(x, H-1-y)      -> flip Y
+    //     180      : image(W-1-x, y)      -> mirror X (the rotation already flips the rows)
+    // Quarter turns swap the axes; nothing in this renderer models that (the readback declines to
+    // remap them and the viewport path only rescales), so they are left exactly as they were.
+    struct DefaultFramebufferRectMapping {
+        Bool flipY = false;
+        Bool mirrorX = false;
+    };
+
+    static DefaultFramebufferRectMapping GetDefaultFramebufferRectMapping(
+            VkSurfaceTransformFlagBitsKHR preTransform) {
+        if (preTransform == VK_SURFACE_TRANSFORM_ROTATE_180_BIT_KHR) return {false, true};
+        if (IsQuarterTurnPreTransform(preTransform)) return {false, false};
+        return {true, false};
+    }
+
+    // [origin, origin+size) counted from one end is [extent-origin-size, extent-origin) counted
+    // from the other. A full-extent rect is a fixed point, which is why this can be introduced
+    // without moving anything that works today.
+    static Int MapDefaultFramebufferRectAxis(Int origin, Int size, Int extent, Bool invert) {
+        return invert ? extent - origin - size : origin;
+    }
+
     // Redundant dynamic-state elimination for the per-draw hot path: within one
     // command-buffer recording, a vkCmdSet* whose values already match what the
     // command buffer holds is skipped. Valid because every PipelineFactory
@@ -417,6 +458,17 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             viewportHeight = ScaleFramebufferCoordinate(viewportHeight, logicalExtent.y(), framebufferExtent.y());
         }
 
+        // The GL viewport rect, expressed against the default framebuffer's stored orientation.
+        // A full-height viewport is unchanged by this, which is why every existing scenario keeps
+        // its exact behaviour.
+        if (isDefaultFramebuffer) {
+            const DefaultFramebufferRectMapping mapping = GetDefaultFramebufferRectMapping(preTransform);
+            viewportX = MapDefaultFramebufferRectAxis(viewportX, viewportWidth, framebufferExtent.x(),
+                                                      mapping.mirrorX);
+            viewportY = MapDefaultFramebufferRectAxis(viewportY, viewportHeight, framebufferExtent.y(),
+                                                      mapping.flipY);
+        }
+
         VkViewport viewport{};
         viewport.x = static_cast<float>(viewportX);
         viewport.y = static_cast<float>(viewportY);
@@ -518,11 +570,25 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         return scissor;
     }
 
+    // The clamped rect, re-expressed against the default framebuffer's stored orientation. Same
+    // conversion as the viewport - and it must be the same one, or the scissor would cut a band
+    // the draw never touched.
+    static VkRect2D MapScissorRectToDefaultFramebuffer(VkRect2D scissor, const IntVec2& framebufferExtent,
+                                                       VkSurfaceTransformFlagBitsKHR preTransform) {
+        const DefaultFramebufferRectMapping mapping = GetDefaultFramebufferRectMapping(preTransform);
+        scissor.offset.x = MapDefaultFramebufferRectAxis(scissor.offset.x, static_cast<Int>(scissor.extent.width),
+                                                         framebufferExtent.x(), mapping.mirrorX);
+        scissor.offset.y = MapDefaultFramebufferRectAxis(scissor.offset.y, static_cast<Int>(scissor.extent.height),
+                                                         framebufferExtent.y(), mapping.flipY);
+        return scissor;
+    }
+
     static VkRect2D MakeDefaultFramebufferScissorRect(const IntVec4& scissorBox,
                                                       const IntVec2& framebufferExtent,
                                                       VkSurfaceTransformFlagBitsKHR preTransform) {
         if (!IsQuarterTurnPreTransform(preTransform)) {
-            return MakeClampedScissorRect(scissorBox, framebufferExtent);
+            return MapScissorRectToDefaultFramebuffer(MakeClampedScissorRect(scissorBox, framebufferExtent),
+                                                      framebufferExtent, preTransform);
         }
 
         const IntVec2 logicalExtent = ResolveDefaultFramebufferLogicalExtent(preTransform, framebufferExtent);
@@ -542,7 +608,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             static_cast<Uint32>(std::max<Int>(0, rawX1 - rawX0)),
             static_cast<Uint32>(std::max<Int>(0, rawY1 - rawY0)),
         };
-        return scissor;
+        // A quarter turn maps to {false, false}, so this is a no-op today; it is here so the
+        // branch cannot drift away from the identity/180 one when quarter turns are modelled.
+        return MapScissorRectToDefaultFramebuffer(scissor, framebufferExtent, preTransform);
     }
 
     static void ApplyStencilState(VkCommandBuffer commandBuffer) {
@@ -1928,6 +1996,29 @@ void main() {
             }
         }
 
+        // The same conversion on the READ side, which never had one: a blit whose source is the
+        // default framebuffer used raw GL offsets against a display-oriented image, so it sampled
+        // the mirrored band and wrote it upside down. Mapping BOTH endpoints inverts the offset
+        // pair, and an inverted pair is exactly how VkImageBlit spells "flip this axis" - so the
+        // band and the row order are corrected in one step. A full-extent blit is unchanged in
+        // band and gains the row flip it always needed.
+        static void ApplyNativeBlitDefaultFramebufferSourceTransform(VkSurfaceTransformFlagBitsKHR preTransform,
+                                                                     const BlitImageBinding& srcBinding,
+                                                                     VkImageBlit& blitRegion) {
+            switch (preTransform) {
+                case VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR:
+                    blitRegion.srcOffsets[0].y = srcBinding.extent.y() - blitRegion.srcOffsets[0].y;
+                    blitRegion.srcOffsets[1].y = srcBinding.extent.y() - blitRegion.srcOffsets[1].y;
+                    break;
+                case VK_SURFACE_TRANSFORM_ROTATE_180_BIT_KHR:
+                    blitRegion.srcOffsets[0].x = srcBinding.extent.x() - blitRegion.srcOffsets[0].x;
+                    blitRegion.srcOffsets[1].x = srcBinding.extent.x() - blitRegion.srcOffsets[1].x;
+                    break;
+                default:
+                    break;
+            }
+        }
+
         static Bool DecodeReadbackPixel(const Uint8* source, VkFormat sourceFormat, Float* rgba) {
             switch (sourceFormat) {
                 case VK_FORMAT_R8G8B8A8_UNORM:
@@ -2033,42 +2124,42 @@ void main() {
             return static_cast<Uint8>(value * 255.0f + 0.5f);
         }
 
-        // Remap raw swapchain pixels (top-left origin, preTransform-rotated) into
-        // GL-oriented pixels (bottom-left origin) for the retrace snapshot path.
-        // Mirrors the removed GetPresentedDumpPixel mapping plus the Y-origin flip
-        // apitrace's flipped=true Image expects. Only identity/180 share the
-        // swapchain extent with the default framebuffer; 90/270 swap extents and
-        // are not handled here.
+        // Re-order the copied BLOCK - not the whole image - from the default framebuffer's stored
+        // orientation into GL's. The caller has already aimed the copy at the right place with
+        // MapDefaultFramebufferRectAxis, so what arrives here is exactly the requested
+        // rectWidth x rectHeight rect, and all that is left is the order of rows (identity) or of
+        // columns (180) WITHIN it.
+        //
+        // This used to iterate the full swapchain extent and index both sides with that stride,
+        // which is why its caller could only use it on an exact full-extent read - and why every
+        // partial glReadPixels of the default framebuffer came back in Vulkan row order. Only
+        // identity/180 share the swapchain extent with the default framebuffer; 90/270 swap
+        // extents and are still declined.
         static Bool RemapDefaultFboReadbackToGLOrientation(const Uint8* rawPixels,
-                                                            VkExtent2D rawExtent,
+                                                            Uint32 rectWidth,
+                                                            Uint32 rectHeight,
                                                             VkSurfaceTransformFlagBitsKHR preTransform,
                                                             SizeT texelSize,
                                                             Uint8* outPixels) {
             if (IsQuarterTurnPreTransform(preTransform)) {
                 return false;
             }
-            const Uint32 w = rawExtent.width;
-            const Uint32 h = rawExtent.height;
-            if (w == 0 || h == 0) {
+            if (rectWidth == 0 || rectHeight == 0 || texelSize == 0) {
                 return false;
             }
-            for (Uint32 outY = 0; outY < h; ++outY) {
-                const Uint32 displayY = h - 1 - outY; // GL bottom-origin -> display top-origin
-                for (Uint32 outX = 0; outX < w; ++outX) {
-                    const Uint32 displayX = outX;
-                    Uint32 rawX = displayX;
-                    Uint32 rawY = displayY;
-                    switch (preTransform) {
-                        case VK_SURFACE_TRANSFORM_ROTATE_180_BIT_KHR:
-                            rawX = w - 1 - displayX;
-                            rawY = h - 1 - displayY;
-                            break;
-                        default:
-                            break;
-                    }
-                    const Uint8* src = rawPixels + (static_cast<SizeT>(rawY) * w + rawX) * texelSize;
-                    Uint8* dst = outPixels + (static_cast<SizeT>(outY) * w + outX) * texelSize;
-                    Memcpy(dst, src, texelSize);
+            const DefaultFramebufferRectMapping mapping = GetDefaultFramebufferRectMapping(preTransform);
+            const SizeT rowBytes = static_cast<SizeT>(rectWidth) * texelSize;
+            for (Uint32 outY = 0; outY < rectHeight; ++outY) {
+                const Uint32 srcY = mapping.flipY ? (rectHeight - 1 - outY) : outY;
+                const Uint8* srcRow = rawPixels + static_cast<SizeT>(srcY) * rowBytes;
+                Uint8* dstRow = outPixels + static_cast<SizeT>(outY) * rowBytes;
+                if (!mapping.mirrorX) {
+                    Memcpy(dstRow, srcRow, rowBytes);
+                    continue;
+                }
+                for (Uint32 outX = 0; outX < rectWidth; ++outX) {
+                    Memcpy(dstRow + static_cast<SizeT>(outX) * texelSize,
+                           srcRow + static_cast<SizeT>(rectWidth - 1 - outX) * texelSize, texelSize);
                 }
             }
             return true;
@@ -7680,11 +7771,19 @@ void main() {
         blitRegion.dstSubresource.layerCount = dstBinding.layerCount;
         blitRegion.dstOffsets[0] = {dstX0, dstY0, 0};
         blitRegion.dstOffsets[1] = {dstX1, dstY1, 1};
+        if (readIsDefaultFbo) {
+            ApplyNativeBlitDefaultFramebufferSourceTransform(m_swapchainObject.GetPreTransform(), srcBinding,
+                                                             blitRegion);
+        }
         if (drawIsDefaultFbo) {
             ApplyNativeBlitDefaultFramebufferTransform(m_swapchainObject.GetPreTransform(), dstBinding, blitRegion);
         }
 
         if (srcBinding.sampleCount != VK_SAMPLE_COUNT_1_BIT && dstBinding.sampleCount == VK_SAMPLE_COUNT_1_BIT) {
+            // NOTE: vkCmdResolveImage cannot flip, and this region is still built from the raw GL
+            // offsets. A multisample-resolve blit whose source or destination is the default
+            // framebuffer therefore keeps the pre-fix behaviour; it needs a resolve-then-blit
+            // (or blit-then-resolve) split, which is its own change.
             // GL multisample resolve blits are 1:1 by spec; vkCmdBlitImage cannot read a
             // multisampled source.
             VkImageResolve resolveRegion{};
@@ -7888,6 +7987,19 @@ void main() {
         copyRegion.srcSubresource.mipLevel = srcBinding.mipLevel;
         copyRegion.srcSubresource.baseArrayLayer = srcBinding.baseArrayLayer;
         copyRegion.srcSubresource.layerCount = srcBinding.layerCount;
+        // KNOWN GAP, deliberately not half-fixed here: when the read framebuffer is the default
+        // one this samples GL rows [y, y+h) counted from the TOP of a display-oriented image, so
+        // it takes the mirrored band AND writes it into the (GL-oriented) destination texture
+        // upside down. Correcting only the offset would swap one wrong answer for another,
+        // because vkCmdCopyImage cannot reverse rows: this path has to become a vkCmdBlitImage
+        // with an inverted source Y pair, the way BlitFramebuffer above now does it. Tracked
+        // separately; the four sites behind the 1,759-case orientation defect are the viewport,
+        // the scissor, the ReadPixels copy offset and the readback remap.
+        if (readIsDefaultFbo) {
+            MGLOG_I("DirectVulkan::CopyTexSubImage2D: copying from the DEFAULT framebuffer still uses the raw GL "
+                    "Y origin (x=%d y=%d w=%d h=%d); the result is the mirrored band, stored flipped",
+                    x, y, width, height);
+        }
         copyRegion.srcOffset = {x, y, 0};
         copyRegion.dstSubresource.aspectMask = dstBinding.aspectMask;
         copyRegion.dstSubresource.mipLevel = dstBinding.mipLevel;
@@ -8248,7 +8360,21 @@ void main() {
         copyRegion.imageSubresource.mipLevel = srcBinding.mipLevel;
         copyRegion.imageSubresource.baseArrayLayer = srcBinding.baseArrayLayer;
         copyRegion.imageSubresource.layerCount = 1;
-        copyRegion.imageOffset = {x, y, static_cast<Int32>(srcBinding.depthOffset)};
+        // The GL rect, aimed at the default framebuffer's stored orientation. Using the GL y
+        // verbatim copied rows [y, y+h) counted from the TOP of the image, i.e. the wrong band for
+        // every read that was not full-height.
+        Int32 copyOffsetX = x;
+        Int32 copyOffsetY = y;
+        if (readIsDefaultFbo) {
+            const VkExtent2D defaultFboExtent = m_swapchainObject.GetExtent();
+            const DefaultFramebufferRectMapping mapping =
+                GetDefaultFramebufferRectMapping(m_swapchainObject.GetPreTransform());
+            copyOffsetX = MapDefaultFramebufferRectAxis(x, width, static_cast<Int>(defaultFboExtent.width),
+                                                        mapping.mirrorX);
+            copyOffsetY = MapDefaultFramebufferRectAxis(y, height, static_cast<Int>(defaultFboExtent.height),
+                                                        mapping.flipY);
+        }
+        copyRegion.imageOffset = {copyOffsetX, copyOffsetY, static_cast<Int32>(srcBinding.depthOffset)};
         copyRegion.imageExtent = {static_cast<Uint32>(width), static_cast<Uint32>(height), 1};
         vkCmdCopyImageToBuffer(frame.commandBuffer, srcBinding.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                                readback.GetHandle(), 1, &copyRegion);
@@ -8286,23 +8412,23 @@ void main() {
             return;
         }
         if (readIsDefaultFbo) {
-            const VkExtent2D swapchainExtent = m_swapchainObject.GetExtent();
             const VkSurfaceTransformFlagBitsKHR preTransform = m_swapchainObject.GetPreTransform();
-            if (static_cast<Uint32>(width) == swapchainExtent.width &&
-                static_cast<Uint32>(height) == swapchainExtent.height) {
-                Vector<Uint8> remapped(static_cast<SizeT>(width) * static_cast<SizeT>(height) * sourceTexelSize);
-                if (RemapDefaultFboReadbackToGLOrientation(mapped, swapchainExtent, preTransform,
-                                                           sourceTexelSize,
-                                                           remapped.data())) {
-                    PackReadbackToClientOrPbo(remapped.data(), srcFormat, width, height, 1, format, type, pixels,
-                                              /*applyPackImageParams=*/false, /*applyReadColorClamp=*/true);
-                    return;
-                }
+            // No full-extent gate any more: the remap works on the copied rect, and the copy was
+            // already aimed with the same mapping. The gate is exactly what made every partial
+            // read of the default framebuffer come back in Vulkan row order.
+            Vector<Uint8> remapped(static_cast<SizeT>(width) * static_cast<SizeT>(height) * sourceTexelSize);
+            if (RemapDefaultFboReadbackToGLOrientation(mapped, static_cast<Uint32>(width),
+                                                       static_cast<Uint32>(height), preTransform, sourceTexelSize,
+                                                       remapped.data())) {
+                PackReadbackToClientOrPbo(remapped.data(), srcFormat, width, height, 1, format, type, pixels,
+                                          /*applyPackImageParams=*/false, /*applyReadColorClamp=*/true);
+                return;
             }
-            MGLOG_W("DirectVulkan::ReadPixels: default-FBO remap skipped (w=%d h=%d swapchain=%ux%u preTransform=%d); "
-                    "falling back to raw readback",
-                    width, height, swapchainExtent.width, swapchainExtent.height,
-                    static_cast<Int>(preTransform));
+            // Only a quarter-turn pre-transform reaches this, and nothing in this renderer models
+            // one. MGLOG_I because the INFO builds are the ones that run conformance.
+            MGLOG_I("DirectVulkan::ReadPixels: default-FBO remap declined (w=%d h=%d preTransform=%d); falling back "
+                    "to raw readback",
+                    width, height, static_cast<Int>(preTransform));
         }
         PackReadbackToClientOrPbo(mapped, srcFormat, width, height, 1, format, type, pixels,
                                   /*applyPackImageParams=*/false, /*applyReadColorClamp=*/true);

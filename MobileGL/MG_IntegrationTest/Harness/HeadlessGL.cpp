@@ -601,9 +601,13 @@ namespace MGITest {
     }
 
     Image ReadPixels(int width, int height) {
+        return ReadPixelsRect(0, 0, width, height);
+    }
+
+    Image ReadPixelsRect(int x, int y, int width, int height) {
         Image image(width, height);
         glPixelStorei(GL_PACK_ALIGNMENT, 1);
-        glReadPixels(0, 0, width, height, GL_RGBA, GL_UNSIGNED_BYTE, image.Data());
+        glReadPixels(x, y, width, height, GL_RGBA, GL_UNSIGNED_BYTE, image.Data());
         return image;
     }
 

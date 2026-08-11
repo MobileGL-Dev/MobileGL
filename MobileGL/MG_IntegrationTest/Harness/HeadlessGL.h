@@ -184,10 +184,17 @@ namespace MGITest {
 
     void ClearTo(float r, float g, float b, float a);
 
-    // Reads back the whole currently bound READ framebuffer. width/height must
-    // be the target's full size - DirectVulkan's default-framebuffer readback
-    // only re-orients a full-extent read.
+    // Reads back the whole currently bound READ framebuffer.
     Image ReadPixels(int width, int height);
+
+    // A PARTIAL glReadPixels. Row 0 of the returned image is GL row `y` of the
+    // framebuffer, i.e. the bottom row of the requested rect - the same
+    // convention ReadPixels uses, just with an origin. This is the shape the
+    // conformance suite reads in (a random sub-rect of the default
+    // framebuffer), and the shape DirectVulkan's default-FBO readback used to
+    // hand back in Vulkan row order because its re-orientation only ran on an
+    // exact full-extent read.
+    Image ReadPixelsRect(int x, int y, int width, int height);
 
     // Drains any GL error queue and returns the first error, or 0.
     unsigned int FirstGLError();

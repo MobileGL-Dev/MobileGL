@@ -55,6 +55,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <cstring>
 #include <string>
 #include <vector>
 
@@ -100,6 +101,39 @@ void main() {
         // seam sits on a pixel boundary, so one pixel of margin is enough to make
         // "every single pixel" an achievable (and therefore useful) demand.
         constexpr int kQuadrantInset = 2;
+
+        // A deliberately asymmetric sub-rect of the 128x96 surface: neither centred nor
+        // full-extent in either axis, mirroring the conformance suite's randomised
+        // sub-viewport geometry (glcShaderRenderCase.cpp:735-741). Asymmetry is the whole
+        // point - y == H - y - h is exactly the case an unconverted Y origin gets right by
+        // accident, and it is the only case the shipped code ever exercised.
+        //   correct band  = GL rows [13, 55)
+        //   mirrored band = GL rows [41, 83)   (what H-y-h produces)
+        constexpr int kSubX = 17;
+        constexpr int kSubY = 13;
+        constexpr int kSubW = 60;
+        constexpr int kSubH = 42;
+
+        Image CropRect(const Image& source, int x0, int y0, int width, int height) {
+            Image out(width, height);
+            const std::size_t rowBytes = static_cast<std::size_t>(width) * 4;
+            for (int y = 0; y < height; ++y) {
+                const std::uint8_t* sourceRow =
+                    source.Data() + (static_cast<std::size_t>(y0 + y) * source.Width() + x0) * 4;
+                std::memcpy(out.Data() + static_cast<std::size_t>(y) * rowBytes, sourceRow, rowBytes);
+            }
+            return out;
+        }
+
+        Image VFlip(const Image& source) {
+            Image out(source.Width(), source.Height());
+            const std::size_t rowBytes = static_cast<std::size_t>(source.Width()) * 4;
+            for (int y = 0; y < source.Height(); ++y) {
+                std::memcpy(out.Data() + static_cast<std::size_t>(y) * rowBytes,
+                            source.Data() + static_cast<std::size_t>(source.Height() - 1 - y) * rowBytes, rowBytes);
+            }
+            return out;
+        }
 
         struct Vertex {
             float x, y;
@@ -375,6 +409,175 @@ void main() {
                 EXPECT_NE(square.QuadrantSignature(), kUprightSignature)
                     << symmetry.name << " is INDISTINGUISHABLE from an upright frame";
             }
+        }
+
+        // ------------------------------------------------------------------ sub-rect / M-1 ----
+        //
+        // Everything above reads the FULL extent of its target, which is the one case
+        // DirectVulkan's default-framebuffer readback ever re-oriented: the remap at
+        // VulkanRenderer.cpp:2042 had no rect parameters at all, so :8278 gated it on
+        // `width == swapchainExtent.width && height == swapchainExtent.height` and fell back to a
+        // raw copy otherwise. Meanwhile the viewport (:422), the scissor (:506-546) and the
+        // ReadPixels copy offset (:8238) all used the GL bottom-origin Y verbatim as a Vulkan
+        // top-origin Y.
+        //
+        // In the conformance suite those defects CANCEL in placement - the draw lands in Vulkan
+        // rows [y, y+h) and the readback copies the same rows back - and compose into an exact
+        // vertical flip of a correct image. That is 1,759 of Magma's 1,793 non-pass cases, and
+        // image forensics over all 861 gl33 failures found 861 vertical flips and nothing else.
+        // Taken apart, they are two independent user-visible bugs, so they are tested apart:
+        // SubViewportDraw pins placement with a full-extent read, SubRectReadback pins the
+        // readback rect after a full-viewport draw, and SubViewportSubRectRoundTrip is the CTS
+        // shape where the two cancel.
+
+        // Placement: a sub-viewport draw must land in GL rows [y0, y0+h), not mirrored about the
+        // surface centre. Read back full-extent, which is the path that already worked, so a
+        // failure here can only be the viewport's Y origin.
+        TEST_F(OrientationScenario, SubViewportDrawLandsWhereGLPutsIt) {
+            BindDefaultFramebuffer();
+            ClearTo(0.0f, 0.0f, 0.0f, 1.0f);
+            glViewport(kSubX, kSubY, kSubW, kSubH);
+            DrawQuadrants();
+            glViewport(0, 0, Gl().Width(), Gl().Height());
+
+            const Image whole = ReadPixels(Gl().Width(), Gl().Height());
+            EXPECT_EQ(FirstGLError(), GLenum(GL_NO_ERROR));
+
+            const Image placed = CropRect(whole, kSubX, kSubY, kSubW, kSubH);
+            EXPECT_EQ(placed.QuadrantSignature(), kUprightSignature)
+                << "the sub-viewport draw is not upright inside its own rect";
+            ExpectUprightQuadrants(placed, "sub-viewport draw, cropped out of a full-extent read");
+
+            // Nothing may have been painted outside the viewport. This is what catches the
+            // mirrored placement: the drawn band would sit at GL rows [41, 83) instead.
+            EXPECT_TRUE(RegionIsMostly(whole, 0, Gl().Width() - 1, 0, kSubY - 2, "black", 0.0,
+                                       "below the sub-viewport"));
+            EXPECT_TRUE(RegionIsMostly(whole, 0, Gl().Width() - 1, kSubY + kSubH + 1, Gl().Height() - 1, "black",
+                                       0.0, "above the sub-viewport"));
+        }
+
+        // Readback: a full-viewport draw read back through a sub-rect must return the requested
+        // band, in GL row order. Band and orientation are asserted separately so that fixing only
+        // one of the two cannot pass this case.
+        TEST_F(OrientationScenario, SubRectReadbackReturnsTheRequestedBandUpright) {
+            BindDefaultFramebuffer();
+            ClearTo(0.0f, 0.0f, 0.0f, 1.0f);
+            DrawQuadrants();
+
+            const Image whole = ReadPixels(Gl().Width(), Gl().Height());
+            ASSERT_EQ(whole.QuadrantSignature(), kUprightSignature)
+                << "the full-extent read is already wrong, so nothing below can be trusted";
+
+            const Image sub = ReadPixelsRect(kSubX, kSubY, kSubW, kSubH);
+            EXPECT_EQ(FirstGLError(), GLenum(GL_NO_ERROR));
+            ASSERT_EQ(sub.Width(), kSubW);
+            ASSERT_EQ(sub.Height(), kSubH);
+
+            const Image requestedBand = CropRect(whole, kSubX, kSubY, kSubW, kSubH);
+            const Image mirroredBand = CropRect(whole, kSubX, Gl().Height() - kSubY - kSubH, kSubW, kSubH);
+
+            // The geometry has to be able to see both mistakes; if a future surface size made the
+            // band symmetric these assertions would be vacuous, so say so loudly instead.
+            ASSERT_FALSE(requestedBand == VFlip(requestedBand))
+                << "the chosen sub-rect is vertically symmetric - it cannot detect a row flip";
+            ASSERT_FALSE(requestedBand == mirroredBand)
+                << "the chosen sub-rect equals its mirror band - it cannot detect a wrong band";
+
+            EXPECT_FALSE(sub == VFlip(requestedBand))
+                << "ORIENTATION: the requested band came back with its rows in Vulkan (top-first) order";
+            EXPECT_FALSE(sub == mirroredBand || sub == VFlip(mirroredBand))
+                << "BAND: the read returned GL rows [H-y-h, H-y) instead of [y, y+h)";
+            EXPECT_TRUE(sub == requestedBand)
+                << "the sub-rect readback differs from the same rect of the full-extent read in "
+                << sub.ByteDiffCount(requestedBand) << " bytes";
+        }
+
+        // The exact conformance-suite shape: an asymmetric sub-viewport draw read back through the
+        // very same sub-rect. The placement and readback errors cancel, leaving an image that is
+        // correct in every pixel VALUE and vertically flipped - which is precisely the 861-case
+        // signature. One assertion, and it pins all of them.
+        TEST_F(OrientationScenario, SubViewportSubRectRoundTripIsUpright) {
+            BindDefaultFramebuffer();
+            ClearTo(0.0f, 0.0f, 0.0f, 1.0f);
+            glViewport(kSubX, kSubY, kSubW, kSubH);
+            DrawQuadrants();
+            const Image sub = ReadPixelsRect(kSubX, kSubY, kSubW, kSubH);
+            glViewport(0, 0, Gl().Width(), Gl().Height());
+
+            EXPECT_EQ(FirstGLError(), GLenum(GL_NO_ERROR));
+            EXPECT_EQ(sub.QuadrantSignature(), kUprightSignature)
+                << "sub-viewport draw + same-rect readback came back flipped - this is the shape "
+                   "behind KHR-GL33/GL40.shaders.* (861 cases each)";
+            ExpectUprightQuadrants(sub, "sub-viewport draw read back through the same sub-rect");
+        }
+
+        // The same conversion, on the other rect consumer that reads the default framebuffer.
+        // glBlitFramebuffer already converted its DESTINATION rect when the draw framebuffer was
+        // the default one (ApplyNativeBlitDefaultFramebufferTransform), but never its SOURCE rect,
+        // so a blit OUT of the default framebuffer took the mirrored band and wrote it upside
+        // down. Blitting a sub-rect and comparing against the same sub-rect of a direct read pins
+        // both halves at once.
+        TEST_F(OrientationScenario, BlitOutOfTheDefaultFramebufferKeepsBandAndOrientation) {
+            BindDefaultFramebuffer();
+            ClearTo(0.0f, 0.0f, 0.0f, 1.0f);
+            DrawQuadrants();
+            const Image whole = ReadPixels(Gl().Width(), Gl().Height());
+            ASSERT_EQ(whole.QuadrantSignature(), kUprightSignature)
+                << "the full-extent read is already wrong, so nothing below can be trusted";
+
+            BindFbo(m_offscreen);
+            ClearTo(0.0f, 0.0f, 0.0f, 1.0f);
+            glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
+            glBindFramebuffer(GL_DRAW_FRAMEBUFFER, m_offscreen.fbo);
+            glBlitFramebuffer(kSubX, kSubY, kSubX + kSubW, kSubY + kSubH, kSubX, kSubY, kSubX + kSubW,
+                              kSubY + kSubH, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+            const unsigned int blitError = FirstGLError();
+            if (blitError != GL_NO_ERROR) {
+                GTEST_SKIP() << "this backend refused the default-framebuffer blit: "
+                             << GLErrorName(blitError);
+            }
+
+            glBindFramebuffer(GL_FRAMEBUFFER, m_offscreen.fbo);
+            const Image blitted = ReadPixels(m_offscreen.width, m_offscreen.height);
+            EXPECT_EQ(FirstGLError(), GLenum(GL_NO_ERROR));
+
+            const Image landed = CropRect(blitted, kSubX, kSubY, kSubW, kSubH);
+            const Image expected = CropRect(whole, kSubX, kSubY, kSubW, kSubH);
+            EXPECT_FALSE(landed == VFlip(expected))
+                << "ORIENTATION: the blitted band arrived upside down";
+            EXPECT_TRUE(landed == expected)
+                << "the blitted sub-rect differs from the same sub-rect of a direct read in "
+                << landed.ByteDiffCount(expected) << " bytes";
+        }
+
+        // Negative control. A non-default framebuffer is already self-consistent - no
+        // gl_Position.y negation, GL row 0 IS Vulkan row 0 - so none of the fixes above may touch
+        // it. If this ever starts failing, the default-FBO remap has leaked into the FBO path.
+        TEST_F(OrientationScenario, FboSubRectReadbackAndSubViewportAreUnaffected) {
+            BindFbo(m_offscreen);
+            ClearTo(0.0f, 0.0f, 0.0f, 1.0f);
+            DrawQuadrants();
+
+            const Image whole = ReadPixels(m_offscreen.width, m_offscreen.height);
+            const Image sub = ReadPixelsRect(kSubX, kSubY, kSubW, kSubH);
+            EXPECT_EQ(FirstGLError(), GLenum(GL_NO_ERROR));
+            EXPECT_TRUE(sub == CropRect(whole, kSubX, kSubY, kSubW, kSubH))
+                << "an FBO sub-rect readback differs from the same rect of its full-extent read in "
+                << sub.ByteDiffCount(CropRect(whole, kSubX, kSubY, kSubW, kSubH)) << " bytes";
+
+            BindFbo(m_offscreen);
+            ClearTo(0.0f, 0.0f, 0.0f, 1.0f);
+            glViewport(kSubX, kSubY, kSubW, kSubH);
+            DrawQuadrants();
+            glViewport(0, 0, m_offscreen.width, m_offscreen.height);
+            const Image placedWhole = ReadPixels(m_offscreen.width, m_offscreen.height);
+            EXPECT_EQ(FirstGLError(), GLenum(GL_NO_ERROR));
+            EXPECT_EQ(CropRect(placedWhole, kSubX, kSubY, kSubW, kSubH).QuadrantSignature(), kUprightSignature)
+                << "an FBO sub-viewport draw must land in GL rows [y0, y0+h) upright";
+            EXPECT_TRUE(RegionIsMostly(placedWhole, 0, m_offscreen.width - 1, 0, kSubY - 2, "black", 0.0,
+                                       "below an FBO sub-viewport"));
+            EXPECT_TRUE(RegionIsMostly(placedWhole, 0, m_offscreen.width - 1, kSubY + kSubH + 1,
+                                       m_offscreen.height - 1, "black", 0.0, "above an FBO sub-viewport"));
         }
 
     } // namespace
