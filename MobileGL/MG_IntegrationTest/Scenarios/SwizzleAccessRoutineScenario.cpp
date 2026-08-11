@@ -247,6 +247,49 @@ void main()
         Gl().EndFrame();
     }
 
+    // Program churn: the shape that made the conformance suite fail, reduced.
+    //
+    // The swizzle smoke test builds one program per swizzle combination - 1,296 per case - and
+    // DirectGLES created a driver shader object per attached shader without ever calling
+    // glDeleteShader. glDeleteShader only FLAGS a shader for deletion (the driver frees it once
+    // nothing has it attached), so without that call the program's own deletion could not free
+    // them either: eight cases left ~20,000 live driver shaders behind, the Adreno ES driver
+    // passed its ceiling, and it began mis-serving shaders - first the sampling variants with the
+    // most image operands (textureLod/texelFetch/*Offset), while plain texture/textureGrad still
+    // worked. On device this loop plus a value check is the whole defect.
+    //
+    // HONEST LIMIT OF THIS TEST: llvmpipe has no such ceiling, so this passes here whether or not
+    // the leak is present - it cannot fail on the CI lane. It is a standing guard for the SHAPE
+    // (build many programs, keep reading the right texel) and the place to raise the iteration
+    // count if a driver ceiling ever needs reproducing; the leak itself is pinned by device
+    // measurement (VmRSS flat at ~137 MB across the 32-case family, against 132 -> 154 MB and
+    // still climbing before the fix).
+    TEST_F(SwizzleAccessRoutineScenario, RepeatedProgramBuildsKeepFetchingTheSameTexel) {
+        if (!Ready() || IsSkipped()) return;
+        SetSwizzle(GL_RED, GL_GREEN, GL_BLUE, GL_ALPHA);
+        ASSERT_EQ(FirstGLError(), 0u);
+
+        // One routine from each side of the device's failure order, so a ceiling that takes the
+        // vulnerable one down first is still caught.
+        const AccessRoutine& plain = kRoutines[0];      // texture
+        const AccessRoutine& explicitLod = kRoutines[1]; // textureLod
+        constexpr int kIterations = 200;
+
+        for (int i = 0; i < kIterations; ++i) {
+            const AccessRoutine& routine = (i % 2 == 0) ? plain : explicitLod;
+            const int channel = i % 4;
+            const std::vector<std::uint32_t> texels = Render(routine, channel);
+            if (::testing::Test::HasFailure()) return; // a build failure repeats 200 times; say it once
+            ExpectAllTexels(routine, channel, kSourceTexel[channel], texels);
+            if (::testing::Test::HasFailure()) {
+                ADD_FAILURE() << "diverged at iteration " << i << " of " << kIterations;
+                return;
+            }
+        }
+        EXPECT_EQ(FirstGLError(), 0u) << "the churn loop left a GL error behind";
+        Gl().EndFrame();
+    }
+
     // GL_ONE and GL_ZERO, which the conformance table spells as the literal values 1 and 0 and
     // which the backend has to synthesise rather than fetch.
     TEST_F(SwizzleAccessRoutineScenario, EveryAccessRoutineSeesConstantSwizzleSources) {

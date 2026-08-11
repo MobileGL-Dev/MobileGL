@@ -4386,11 +4386,28 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     log.back() = '\0';
                     MGLOG_E("Shader compilation failed for backend ID %u: %s", backendShaderId, log.data());
                     m_backendProgramUsable = false;
+                    // Nothing will ever attach this one, so nothing else can free it.
+                    g_GLESFuncs.glDeleteShader(backendShaderId);
                     continue;
                 }
 
                 MGLOG_D("Attaching shader ID: %u to program %u", backendShaderId, m_backendProgramId);
                 g_GLESFuncs.glAttachShader(m_backendProgramId, backendShaderId);
+                // Hand the shader's lifetime to the program, immediately and unconditionally.
+                //
+                // glDeleteShader only FLAGS a shader; the driver frees it when it is attached to
+                // nothing. Flagging it here is what makes the program own it, so deleting the
+                // program (or the detach loop above, on a relink) is what actually frees it.
+                // Without this call every program build leaked its shader objects for the process
+                // lifetime, and a relink leaked them twice - the detach loop above dropped the
+                // program's reference to shaders nothing had flagged, so they became unreachable
+                // AND undeletable. The GL swizzle conformance test builds 1,296 programs per case,
+                // so a handful of cases left tens of thousands of live driver shaders behind and
+                // the driver started mis-serving them (KHR-GL33/GL40.texture_swizzle.smoke_*).
+                // Same class of defect as the missing framebuffer/renderbuffer/sampler destructors
+                // fixed in Wave 1, and the last of that family: this is the one backend GL object
+                // MobileGL creates without an owning wrapper to destroy it.
+                g_GLESFuncs.glDeleteShader(backendShaderId);
 
                 MGLOG_D("Processed shader source length: %zu", source.length());
             }
