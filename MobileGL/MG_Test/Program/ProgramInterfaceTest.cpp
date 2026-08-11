@@ -1100,4 +1100,70 @@ void main() { color = u + v; }
         EXPECT_EQ(viaActiveUniformBlockiv, 5);
         EXPECT_EQ(TakeError(), GL_NO_ERROR);
     }
+
+    // ------------------------------------------------------------- length on every path ----
+    // glGetProgramResourceiv's *length is the caller's only signal for how many entries params
+    // holds, and callers are entitled to leave it uninitialised: the CTS declares `GLsizei
+    // length;` next to a 1000-entry stack array and then loops `for (i = 0; i < length; ++i)`
+    // (gl4cProgramInterfaceQueryTests.cpp:2172). Leaving it untouched on an error path therefore
+    // does not "return nothing" - it hands the caller whatever was on its stack and makes it walk
+    // that far. KHR-GL43.program_interface_query.subroutines-vertex read 0x20202020 ("    ")
+    // entries and took the process down on BOTH backends. So: zero on every exit, real count on
+    // success. Poisoning with the exact CTS-observed value keeps the assertion honest.
+    TEST_F(ProgramInterfaceTest, GetProgramResourceivReportsLengthOnEveryExitPath) {
+        const GLuint p = MakeProgram(kSimpleVs, kSimpleFs);
+        BindAttribLocation(p, 0, "position");
+        BindFragDataLocation(p, 0, "color");
+        LinkProgram(p);
+        ExpectLinked(p);
+        ClearErrors();
+
+        constexpr GLsizei kPoison = 0x20202020;
+        constexpr GLsizei kBufSize = 16;
+        GLint params[kBufSize] = {};
+
+        const GLenum nameLengthProp = GL_NAME_LENGTH;
+        const GLenum compatibleSubroutinesProp = GL_COMPATIBLE_SUBROUTINES;
+        const GLenum notAProp = GL_TEXTURE_2D;
+
+        const auto lengthAfter = [&](GLuint program, GLenum iface, GLuint index, GLsizei propCount,
+                                     const GLenum* props, GLsizei bufSize, GLint* out) {
+            GLsizei length = kPoison;
+            GetProgramResourceiv(program, iface, index, propCount, props, bufSize, &length, out);
+            ClearErrors();
+            return length;
+        };
+
+        // The case that actually crashed: no subroutine reflection exists, so the query errors
+        // out - and the caller then trusts *length.
+        EXPECT_EQ(lengthAfter(p, GL_VERTEX_SUBROUTINE_UNIFORM, 0, 1, &compatibleSubroutinesProp, kBufSize, params), 0)
+            << "GL_VERTEX_SUBROUTINE_UNIFORM";
+        // Not a program name.
+        EXPECT_EQ(lengthAfter(p + 4242, GL_UNIFORM, 0, 1, &nameLengthProp, kBufSize, params), 0) << "bad program";
+        // Not an interface enum.
+        EXPECT_EQ(lengthAfter(p, GL_TEXTURE_2D, 0, 1, &nameLengthProp, kBufSize, params), 0) << "bad interface";
+        // propCount <= 0, bufSize < 0.
+        EXPECT_EQ(lengthAfter(p, GL_PROGRAM_OUTPUT, 0, 0, &nameLengthProp, kBufSize, params), 0) << "propCount 0";
+        EXPECT_EQ(lengthAfter(p, GL_PROGRAM_OUTPUT, 0, 1, &nameLengthProp, -1, params), 0) << "negative bufSize";
+        // props == nullptr.
+        EXPECT_EQ(lengthAfter(p, GL_PROGRAM_OUTPUT, 0, 1, nullptr, kBufSize, params), 0) << "null props";
+        // A prop this command does not know at all.
+        EXPECT_EQ(lengthAfter(p, GL_PROGRAM_OUTPUT, 0, 1, &notAProp, kBufSize, params), 0) << "unknown prop";
+        // A prop it knows but this interface does not carry.
+        EXPECT_EQ(lengthAfter(p, GL_PROGRAM_OUTPUT, 0, 1, &compatibleSubroutinesProp, kBufSize, params), 0)
+            << "prop/interface mismatch";
+        // Index past the end of a real interface.
+        EXPECT_EQ(lengthAfter(p, GL_PROGRAM_OUTPUT, 9999, 1, &nameLengthProp, kBufSize, params), 0) << "bad index";
+        // Nowhere to put the values.
+        EXPECT_EQ(lengthAfter(p, GL_PROGRAM_OUTPUT, 0, 1, &nameLengthProp, kBufSize, nullptr), 0) << "null params";
+
+        // ...and the success path still reports the count it actually wrote.
+        const GLuint outputIndex = GetProgramResourceIndex(p, GL_PROGRAM_OUTPUT, "color");
+        ASSERT_NE(outputIndex, GL_INVALID_INDEX);
+        GLsizei length = kPoison;
+        GetProgramResourceiv(p, GL_PROGRAM_OUTPUT, outputIndex, 1, &nameLengthProp, kBufSize, &length, params);
+        EXPECT_EQ(TakeError(), GL_NO_ERROR);
+        EXPECT_EQ(length, 1);
+        EXPECT_EQ(params[0], 6) << "GL_NAME_LENGTH counts the terminator";
+    }
 } // namespace

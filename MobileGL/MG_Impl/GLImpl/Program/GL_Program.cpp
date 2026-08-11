@@ -2704,6 +2704,15 @@ namespace MobileGL::MG_Impl::GLImpl {
 
     void GetProgramResourceiv(GLuint program, GLenum programInterface, GLuint index, GLsizei propCount,
                               const GLenum* props, GLsizei bufSize, GLsizei* length, GLint* params) {
+        // Every early-out below reports "nothing was written", and it has to say so before it can
+        // take one: callers legitimately leave *length uninitialised and then loop to it. The CTS
+        // does exactly that (gl4cProgramInterfaceQueryTests.cpp:2172 declares `GLsizei length;` and
+        // walks `for (i = 0; i < length; ++i)` over a 1000-entry stack array), so an untouched
+        // *length turned every error path here into a stack overrun inside the caller -
+        // KHR-GL43.program_interface_query.subroutines-vertex read 0x20202020 entries and died on
+        // both backends. The success path overwrites this with the real count.
+        if (length) *length = 0;
+
         auto& programObject = TryToGetProgramForInterfaceQuery(program, __func__);
         if (!programObject) return;
         if (!ProgramInterface::IsInterfaceEnum(programInterface)) {
