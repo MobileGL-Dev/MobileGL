@@ -10,9 +10,20 @@
 
 #include <Config.h>
 #include <cmath>
+#include <limits>
 
 namespace MobileGL::MG_Util::BackendLoader {
     namespace {
+        // A Vulkan limit is an unsigned 32-bit count; a GL limit is a signed Int. Drivers do report
+        // values with the top bit set (UINT32_MAX is the idiomatic "effectively unlimited"), and a
+        // plain static_cast turned those into small negatives - which every downstream std::min or
+        // ceiling comparison then accepted as "already small enough". Saturate instead, so a clamp
+        // above this can be trusted to be the only thing that lowers a limit.
+        Int SaturateToInt(Uint32 value) {
+            constexpr Uint32 kMaxInt = static_cast<Uint32>(std::numeric_limits<Int>::max());
+            return static_cast<Int>(std::min<Uint32>(value, kMaxInt));
+        }
+
         struct VulkanDynamicFunctions {
             PFN_vkGetPhysicalDeviceProperties vkGetPhysicalDeviceProperties = nullptr;
             PFN_vkGetPhysicalDeviceProperties2 vkGetPhysicalDeviceProperties2 = nullptr;
@@ -152,47 +163,47 @@ namespace MobileGL::MG_Util::BackendLoader {
         caps.PointSizeRangeMin = p.limits.pointSizeRange[0];
         caps.PointSizeRangeMax = p.limits.pointSizeRange[1];
         caps.PointSizeGranularity = p.limits.pointSizeGranularity;
-        caps.Max3DTextureSize = static_cast<Int>(p.limits.maxImageDimension3D);
-        caps.MaxArrayTextureLayers = static_cast<Int>(p.limits.maxImageArrayLayers);
-        caps.MaxCubeMapTextureSize = static_cast<Int>(p.limits.maxImageDimensionCube);
-        caps.MaxFramebufferWidth = static_cast<Int>(p.limits.maxFramebufferWidth);
-        caps.MaxFramebufferHeight = static_cast<Int>(p.limits.maxFramebufferHeight);
-        caps.MaxFramebufferLayers = static_cast<Int>(p.limits.maxFramebufferLayers);
+        caps.Max3DTextureSize = SaturateToInt(p.limits.maxImageDimension3D);
+        caps.MaxArrayTextureLayers = SaturateToInt(p.limits.maxImageArrayLayers);
+        caps.MaxCubeMapTextureSize = SaturateToInt(p.limits.maxImageDimensionCube);
+        caps.MaxFramebufferWidth = SaturateToInt(p.limits.maxFramebufferWidth);
+        caps.MaxFramebufferHeight = SaturateToInt(p.limits.maxFramebufferHeight);
+        caps.MaxFramebufferLayers = SaturateToInt(p.limits.maxFramebufferLayers);
         caps.MaxRenderbufferSize = ResolveMaxRenderbufferSize(p.limits);
-        caps.MaxTextureSize = static_cast<Int>(p.limits.maxImageDimension2D);
+        caps.MaxTextureSize = SaturateToInt(p.limits.maxImageDimension2D);
         caps.MaxColorTextureSamples = MaxSampleCountFromFlags(p.limits.sampledImageColorSampleCounts);
         caps.MaxDepthTextureSamples = MaxSampleCountFromFlags(p.limits.sampledImageDepthSampleCounts);
         caps.MaxFramebufferSamples = ResolveConservativeFramebufferSampleLimit(p.limits);
         caps.MaxIntegerSamples = MaxSampleCountFromFlags(p.limits.sampledImageIntegerSampleCounts);
         caps.MaxSamples = caps.MaxFramebufferSamples;
-        caps.MaxSampleMaskWords = static_cast<Int>(p.limits.maxSampleMaskWords);
-        caps.MaxTextureImageUnits = static_cast<Int>(p.limits.maxPerStageDescriptorSampledImages);
-        caps.MaxVertexTextureImageUnits = static_cast<Int>(p.limits.maxPerStageDescriptorSampledImages);
-        caps.MaxComputeTextureImageUnits = static_cast<Int>(p.limits.maxPerStageDescriptorSampledImages);
-        caps.MaxCombinedTextureImageUnits = static_cast<Int>(p.limits.maxDescriptorSetSampledImages);
-        caps.MaxVertexAttribs = static_cast<Int>(p.limits.maxVertexInputAttributes);
-        caps.MaxComputeShaderStorageBlocks = static_cast<Int>(p.limits.maxPerStageDescriptorStorageBuffers);
-        caps.MaxCombinedShaderStorageBlocks = static_cast<Int>(p.limits.maxDescriptorSetStorageBuffers);
-        caps.MaxComputeUniformBlocks = static_cast<Int>(p.limits.maxPerStageDescriptorUniformBuffers);
-        caps.MaxComputeWorkGroupInvocations = static_cast<Int>(p.limits.maxComputeWorkGroupInvocations);
-        caps.MaxShaderStorageBufferBindings = static_cast<Int>(p.limits.maxDescriptorSetStorageBuffers);
-        caps.MaxTextureBufferSize = static_cast<Int>(p.limits.maxTexelBufferElements);
+        caps.MaxSampleMaskWords = SaturateToInt(p.limits.maxSampleMaskWords);
+        caps.MaxTextureImageUnits = SaturateToInt(p.limits.maxPerStageDescriptorSampledImages);
+        caps.MaxVertexTextureImageUnits = SaturateToInt(p.limits.maxPerStageDescriptorSampledImages);
+        caps.MaxComputeTextureImageUnits = SaturateToInt(p.limits.maxPerStageDescriptorSampledImages);
+        caps.MaxCombinedTextureImageUnits = SaturateToInt(p.limits.maxDescriptorSetSampledImages);
+        caps.MaxVertexAttribs = SaturateToInt(p.limits.maxVertexInputAttributes);
+        caps.MaxComputeShaderStorageBlocks = SaturateToInt(p.limits.maxPerStageDescriptorStorageBuffers);
+        caps.MaxCombinedShaderStorageBlocks = SaturateToInt(p.limits.maxDescriptorSetStorageBuffers);
+        caps.MaxComputeUniformBlocks = SaturateToInt(p.limits.maxPerStageDescriptorUniformBuffers);
+        caps.MaxComputeWorkGroupInvocations = SaturateToInt(p.limits.maxComputeWorkGroupInvocations);
+        caps.MaxShaderStorageBufferBindings = SaturateToInt(p.limits.maxDescriptorSetStorageBuffers);
+        caps.MaxTextureBufferSize = SaturateToInt(p.limits.maxTexelBufferElements);
         caps.TextureBufferOffsetAlignment =
             static_cast<Int>(std::max<VkDeviceSize>(1, p.limits.minTexelBufferOffsetAlignment));
-        caps.MaxUniformBufferBindings = static_cast<Int>(p.limits.maxDescriptorSetUniformBuffers);
-        caps.MaxUniformBlockSize = static_cast<Int>(p.limits.maxUniformBufferRange);
-        caps.MaxImageUnits = static_cast<Int>(p.limits.maxPerStageDescriptorStorageImages);
-        caps.MaxCombinedImageUniforms = static_cast<Int>(p.limits.maxDescriptorSetStorageImages);
-        caps.MaxComputeImageUniforms = static_cast<Int>(p.limits.maxPerStageDescriptorStorageImages);
-        caps.MaxDrawBuffers = static_cast<Int>(p.limits.maxFragmentOutputAttachments);
-        caps.MaxColorAttachments = static_cast<Int>(p.limits.maxColorAttachments);
-        caps.MaxClipDistances = static_cast<Int>(p.limits.maxClipDistances);
-        caps.MaxViewports = static_cast<Int>(p.limits.maxViewports);
-        caps.MaxViewportWidth = static_cast<Int>(p.limits.maxViewportDimensions[0]);
-        caps.MaxViewportHeight = static_cast<Int>(p.limits.maxViewportDimensions[1]);
+        caps.MaxUniformBufferBindings = SaturateToInt(p.limits.maxDescriptorSetUniformBuffers);
+        caps.MaxUniformBlockSize = SaturateToInt(p.limits.maxUniformBufferRange);
+        caps.MaxImageUnits = SaturateToInt(p.limits.maxPerStageDescriptorStorageImages);
+        caps.MaxCombinedImageUniforms = SaturateToInt(p.limits.maxDescriptorSetStorageImages);
+        caps.MaxComputeImageUniforms = SaturateToInt(p.limits.maxPerStageDescriptorStorageImages);
+        caps.MaxDrawBuffers = SaturateToInt(p.limits.maxFragmentOutputAttachments);
+        caps.MaxColorAttachments = SaturateToInt(p.limits.maxColorAttachments);
+        caps.MaxClipDistances = SaturateToInt(p.limits.maxClipDistances);
+        caps.MaxViewports = SaturateToInt(p.limits.maxViewports);
+        caps.MaxViewportWidth = SaturateToInt(p.limits.maxViewportDimensions[0]);
+        caps.MaxViewportHeight = SaturateToInt(p.limits.maxViewportDimensions[1]);
         caps.ViewportBoundsRangeMin = p.limits.viewportBoundsRange[0];
         caps.ViewportBoundsRangeMax = p.limits.viewportBoundsRange[1];
-        caps.ViewportSubpixelBits = static_cast<Int>(p.limits.viewportSubPixelBits);
+        caps.ViewportSubpixelBits = SaturateToInt(p.limits.viewportSubPixelBits);
         FillFragmentInterpolationLimits(caps, p.limits);
 
         VkPhysicalDeviceFeatures supportedFeatures{};
@@ -269,47 +280,47 @@ namespace MobileGL::MG_Util::BackendLoader {
         caps.PointSizeRangeMin = properties.limits.pointSizeRange[0];
         caps.PointSizeRangeMax = properties.limits.pointSizeRange[1];
         caps.PointSizeGranularity = properties.limits.pointSizeGranularity;
-        caps.Max3DTextureSize = static_cast<Int>(properties.limits.maxImageDimension3D);
-        caps.MaxArrayTextureLayers = static_cast<Int>(properties.limits.maxImageArrayLayers);
-        caps.MaxCubeMapTextureSize = static_cast<Int>(properties.limits.maxImageDimensionCube);
-        caps.MaxFramebufferWidth = static_cast<Int>(properties.limits.maxFramebufferWidth);
-        caps.MaxFramebufferHeight = static_cast<Int>(properties.limits.maxFramebufferHeight);
-        caps.MaxFramebufferLayers = static_cast<Int>(properties.limits.maxFramebufferLayers);
+        caps.Max3DTextureSize = SaturateToInt(properties.limits.maxImageDimension3D);
+        caps.MaxArrayTextureLayers = SaturateToInt(properties.limits.maxImageArrayLayers);
+        caps.MaxCubeMapTextureSize = SaturateToInt(properties.limits.maxImageDimensionCube);
+        caps.MaxFramebufferWidth = SaturateToInt(properties.limits.maxFramebufferWidth);
+        caps.MaxFramebufferHeight = SaturateToInt(properties.limits.maxFramebufferHeight);
+        caps.MaxFramebufferLayers = SaturateToInt(properties.limits.maxFramebufferLayers);
         caps.MaxRenderbufferSize = ResolveMaxRenderbufferSize(properties.limits);
-        caps.MaxTextureSize = static_cast<Int>(properties.limits.maxImageDimension2D);
+        caps.MaxTextureSize = SaturateToInt(properties.limits.maxImageDimension2D);
         caps.MaxColorTextureSamples = MaxSampleCountFromFlags(properties.limits.sampledImageColorSampleCounts);
         caps.MaxDepthTextureSamples = MaxSampleCountFromFlags(properties.limits.sampledImageDepthSampleCounts);
         caps.MaxFramebufferSamples = ResolveConservativeFramebufferSampleLimit(properties.limits);
         caps.MaxIntegerSamples = MaxSampleCountFromFlags(properties.limits.sampledImageIntegerSampleCounts);
         caps.MaxSamples = caps.MaxFramebufferSamples;
-        caps.MaxSampleMaskWords = static_cast<Int>(properties.limits.maxSampleMaskWords);
-        caps.MaxTextureImageUnits = static_cast<Int>(properties.limits.maxPerStageDescriptorSampledImages);
-        caps.MaxVertexTextureImageUnits = static_cast<Int>(properties.limits.maxPerStageDescriptorSampledImages);
-        caps.MaxComputeTextureImageUnits = static_cast<Int>(properties.limits.maxPerStageDescriptorSampledImages);
-        caps.MaxCombinedTextureImageUnits = static_cast<Int>(properties.limits.maxDescriptorSetSampledImages);
-        caps.MaxVertexAttribs = static_cast<Int>(properties.limits.maxVertexInputAttributes);
-        caps.MaxComputeShaderStorageBlocks = static_cast<Int>(properties.limits.maxPerStageDescriptorStorageBuffers);
-        caps.MaxCombinedShaderStorageBlocks = static_cast<Int>(properties.limits.maxDescriptorSetStorageBuffers);
-        caps.MaxComputeUniformBlocks = static_cast<Int>(properties.limits.maxPerStageDescriptorUniformBuffers);
-        caps.MaxComputeWorkGroupInvocations = static_cast<Int>(properties.limits.maxComputeWorkGroupInvocations);
-        caps.MaxShaderStorageBufferBindings = static_cast<Int>(properties.limits.maxDescriptorSetStorageBuffers);
-        caps.MaxTextureBufferSize = static_cast<Int>(properties.limits.maxTexelBufferElements);
+        caps.MaxSampleMaskWords = SaturateToInt(properties.limits.maxSampleMaskWords);
+        caps.MaxTextureImageUnits = SaturateToInt(properties.limits.maxPerStageDescriptorSampledImages);
+        caps.MaxVertexTextureImageUnits = SaturateToInt(properties.limits.maxPerStageDescriptorSampledImages);
+        caps.MaxComputeTextureImageUnits = SaturateToInt(properties.limits.maxPerStageDescriptorSampledImages);
+        caps.MaxCombinedTextureImageUnits = SaturateToInt(properties.limits.maxDescriptorSetSampledImages);
+        caps.MaxVertexAttribs = SaturateToInt(properties.limits.maxVertexInputAttributes);
+        caps.MaxComputeShaderStorageBlocks = SaturateToInt(properties.limits.maxPerStageDescriptorStorageBuffers);
+        caps.MaxCombinedShaderStorageBlocks = SaturateToInt(properties.limits.maxDescriptorSetStorageBuffers);
+        caps.MaxComputeUniformBlocks = SaturateToInt(properties.limits.maxPerStageDescriptorUniformBuffers);
+        caps.MaxComputeWorkGroupInvocations = SaturateToInt(properties.limits.maxComputeWorkGroupInvocations);
+        caps.MaxShaderStorageBufferBindings = SaturateToInt(properties.limits.maxDescriptorSetStorageBuffers);
+        caps.MaxTextureBufferSize = SaturateToInt(properties.limits.maxTexelBufferElements);
         caps.TextureBufferOffsetAlignment =
             static_cast<Int>(std::max<VkDeviceSize>(1, properties.limits.minTexelBufferOffsetAlignment));
-        caps.MaxUniformBufferBindings = static_cast<Int>(properties.limits.maxDescriptorSetUniformBuffers);
-        caps.MaxUniformBlockSize = static_cast<Int>(properties.limits.maxUniformBufferRange);
-        caps.MaxImageUnits = static_cast<Int>(properties.limits.maxPerStageDescriptorStorageImages);
-        caps.MaxCombinedImageUniforms = static_cast<Int>(properties.limits.maxDescriptorSetStorageImages);
-        caps.MaxComputeImageUniforms = static_cast<Int>(properties.limits.maxPerStageDescriptorStorageImages);
-        caps.MaxDrawBuffers = static_cast<Int>(properties.limits.maxFragmentOutputAttachments);
-        caps.MaxColorAttachments = static_cast<Int>(properties.limits.maxColorAttachments);
-        caps.MaxClipDistances = static_cast<Int>(properties.limits.maxClipDistances);
-        caps.MaxViewports = static_cast<Int>(properties.limits.maxViewports);
-        caps.MaxViewportWidth = static_cast<Int>(properties.limits.maxViewportDimensions[0]);
-        caps.MaxViewportHeight = static_cast<Int>(properties.limits.maxViewportDimensions[1]);
+        caps.MaxUniformBufferBindings = SaturateToInt(properties.limits.maxDescriptorSetUniformBuffers);
+        caps.MaxUniformBlockSize = SaturateToInt(properties.limits.maxUniformBufferRange);
+        caps.MaxImageUnits = SaturateToInt(properties.limits.maxPerStageDescriptorStorageImages);
+        caps.MaxCombinedImageUniforms = SaturateToInt(properties.limits.maxDescriptorSetStorageImages);
+        caps.MaxComputeImageUniforms = SaturateToInt(properties.limits.maxPerStageDescriptorStorageImages);
+        caps.MaxDrawBuffers = SaturateToInt(properties.limits.maxFragmentOutputAttachments);
+        caps.MaxColorAttachments = SaturateToInt(properties.limits.maxColorAttachments);
+        caps.MaxClipDistances = SaturateToInt(properties.limits.maxClipDistances);
+        caps.MaxViewports = SaturateToInt(properties.limits.maxViewports);
+        caps.MaxViewportWidth = SaturateToInt(properties.limits.maxViewportDimensions[0]);
+        caps.MaxViewportHeight = SaturateToInt(properties.limits.maxViewportDimensions[1]);
         caps.ViewportBoundsRangeMin = properties.limits.viewportBoundsRange[0];
         caps.ViewportBoundsRangeMax = properties.limits.viewportBoundsRange[1];
-        caps.ViewportSubpixelBits = static_cast<Int>(properties.limits.viewportSubPixelBits);
+        caps.ViewportSubpixelBits = SaturateToInt(properties.limits.viewportSubPixelBits);
         FillFragmentInterpolationLimits(caps, properties.limits);
         caps.SupportsWideLines = false;
         caps.SupportsShaderFloat64 = false;

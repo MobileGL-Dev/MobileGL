@@ -768,14 +768,48 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // the Uint32 attribute masks the draw path passes around are both bounded by MAX_VERTEX_ATTRIBS.
         m_dynamicParameters.MaxVertexAttribs = std::min(
             m_vulkanCaps.MaxVertexAttribs, static_cast<Int>(MG_State::GLState::VertexArrayObject::MAX_VERTEX_ATTRIBS));
-        m_dynamicParameters.MaxComputeShaderStorageBlocks = m_vulkanCaps.MaxComputeShaderStorageBlocks;
-        m_dynamicParameters.MaxCombinedShaderStorageBlocks = m_vulkanCaps.MaxCombinedShaderStorageBlocks;
-        m_dynamicParameters.MaxComputeUniformBlocks = m_vulkanCaps.MaxComputeUniformBlocks;
+        // Vulkan descriptor limits are not GL limits, and a GL application reads an advertised
+        // limit as an amount it may actually USE. Adreno answers the per-stage/per-set descriptor
+        // queries at descriptor-indexing scale - the same driver whose
+        // GL_MAX_SHADER_STORAGE_BLOCK_SIZE is clamped from 2147483647 further down - so
+        // KHR-GL44.multi_bind.dispatch_bind_buffers_base read GL_MAX_COMPUTE_UNIFORM_BLOCKS,
+        // created that many buffers and spliced that many UBO declarations into a single compute
+        // shader: ~14 s of allocation, then death on std::bad_alloc. Its sibling
+        // dispatch_bind_buffers_range hard-codes 4 buffers and passes, which is the clean
+        // discriminator. Every ceiling below is far above what any desktop driver advertises for
+        // these (84-96 for the binding families) and far below a descriptor-indexing count, so it
+        // can only lower a limit that was never usable in the first place. The zero floor is not
+        // decoration: a driver reporting UINT32_MAX used to arrive here as -1.
+        const auto clampLimit = [](const char* name, Int reported, Int ceiling) {
+            const Int clamped = std::min(std::max(reported, 0), ceiling);
+            if (clamped != reported) {
+                MGLOG_I("DirectVulkan: clamped %s from %d to %d", name, reported, clamped);
+            }
+            return clamped;
+        };
+        // GL 4.6 required minimums, for the record: MAX_COMPUTE_UNIFORM_BLOCKS 12,
+        // MAX_COMPUTE/COMBINED_SHADER_STORAGE_BLOCKS 8, MAX_SHADER_STORAGE_BUFFER_BINDINGS 8,
+        // MAX_UNIFORM_BUFFER_BINDINGS 84, MAX_TEXTURE_BUFFER_SIZE 65536.
+        constexpr Int kMaxAdvertisedBufferBlocks = 256;
+        constexpr Int kMaxAdvertisedTextureBufferSize = 1 << 27; // texels; what desktop GL reports
+        m_dynamicParameters.MaxComputeShaderStorageBlocks =
+            clampLimit("GL_MAX_COMPUTE_SHADER_STORAGE_BLOCKS", m_vulkanCaps.MaxComputeShaderStorageBlocks,
+                       kMaxAdvertisedBufferBlocks);
+        m_dynamicParameters.MaxCombinedShaderStorageBlocks =
+            clampLimit("GL_MAX_COMBINED_SHADER_STORAGE_BLOCKS", m_vulkanCaps.MaxCombinedShaderStorageBlocks,
+                       kMaxAdvertisedBufferBlocks);
+        m_dynamicParameters.MaxComputeUniformBlocks =
+            clampLimit("GL_MAX_COMPUTE_UNIFORM_BLOCKS", m_vulkanCaps.MaxComputeUniformBlocks,
+                       kMaxAdvertisedBufferBlocks);
         m_dynamicParameters.MaxComputeWorkGroupInvocations = m_vulkanCaps.MaxComputeWorkGroupInvocations;
-        m_dynamicParameters.MaxShaderStorageBufferBindings = m_vulkanCaps.MaxShaderStorageBufferBindings;
-        m_dynamicParameters.MaxTextureBufferSize = m_vulkanCaps.MaxTextureBufferSize;
+        m_dynamicParameters.MaxShaderStorageBufferBindings =
+            clampLimit("GL_MAX_SHADER_STORAGE_BUFFER_BINDINGS", m_vulkanCaps.MaxShaderStorageBufferBindings,
+                       kMaxAdvertisedBufferBlocks);
+        m_dynamicParameters.MaxTextureBufferSize = clampLimit(
+            "GL_MAX_TEXTURE_BUFFER_SIZE", m_vulkanCaps.MaxTextureBufferSize, kMaxAdvertisedTextureBufferSize);
         m_dynamicParameters.TextureBufferOffsetAlignment = m_vulkanCaps.TextureBufferOffsetAlignment;
-        m_dynamicParameters.MaxUniformBufferBindings = m_vulkanCaps.MaxUniformBufferBindings;
+        m_dynamicParameters.MaxUniformBufferBindings = clampLimit(
+            "GL_MAX_UNIFORM_BUFFER_BINDINGS", m_vulkanCaps.MaxUniformBufferBindings, kMaxAdvertisedBufferBlocks);
         m_dynamicParameters.MaxUniformBlockSize = m_vulkanCaps.MaxUniformBlockSize;
         m_dynamicParameters.MaxImageUnits = std::max(std::min(m_vulkanCaps.MaxImageUnits, maxSupportedTextureUnits), 0);
         m_dynamicParameters.MaxCombinedImageUniforms = std::max(m_vulkanCaps.MaxCombinedImageUniforms, 0);

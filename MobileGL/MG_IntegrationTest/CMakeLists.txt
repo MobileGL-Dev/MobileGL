@@ -54,6 +54,7 @@ add_executable(MobileGLIntegrationTest
     Scenarios/XfbAfterClipDistanceScenario.cpp
     Scenarios/ThreeChannelAttachmentScenario.cpp
     Scenarios/PipelineFailureScenario.cpp
+    Scenarios/AdvertisedLimitsScenario.cpp
 )
 
 target_include_directories(MobileGLIntegrationTest PRIVATE
