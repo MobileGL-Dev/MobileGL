@@ -58,6 +58,7 @@ add_executable(MobileGLIntegrationTest
     Scenarios/PixelStoreSweepScenario.cpp
     Scenarios/FragCoordOriginScenario.cpp
     Scenarios/ClearThenReadPixelsScenario.cpp
+    Scenarios/DepthStencilReadbackScenario.cpp
 )
 
 target_include_directories(MobileGLIntegrationTest PRIVATE

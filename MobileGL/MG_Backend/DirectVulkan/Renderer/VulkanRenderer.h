@@ -211,10 +211,15 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                     GLsizei height, GLenum format, GLenum type, void* pixels);
         // Copy-and-repack core shared by depth-stencil ReadPixels and GetTexImage;
         // expects command recording to be active and any render pass already ended.
+        //
+        // `defaultFramebufferOrientation` is set only when the source is the swapchain's
+        // depth/stencil image, which this renderer stores display-side-up: the copy rect then
+        // has to be mapped out of GL's bottom-origin space and the copied rows re-oriented on
+        // the way back, exactly as the colour ReadPixels path does.
         void ReadDepthStencilImageToClient(VkImage image, VkFormat vkFormat, VkImageLayout* trackedLayout,
                                            VkImageAspectFlags imageAspect, Uint32 mipLevel, Uint32 baseArrayLayer,
                                            GLint x, GLint y, GLsizei width, GLsizei height, GLenum format, GLenum type,
-                                           void* pixels);
+                                           void* pixels, Bool defaultFramebufferOrientation = false);
         // Same-extent depth blit between images of different depth formats: host
         // round-trip with a per-texel re-encode (see BlitNamedFramebuffer).
         Bool BlitDepthAcrossFormats(FrameContext::FrameData& frame, VkImage srcImage, VkFormat srcFormat,
@@ -1125,6 +1130,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         Bool MaterializePendingClearForDefaultFramebuffer(VkCommandBuffer commandBuffer,
                                                           MG_State::GLState::FramebufferObject& fbo,
                                                           FramebufferAttachmentType attachmentType);
+        // Its depth/stencil half: a different image (the swapchain's depth/stencil twin), a
+        // different clear command and per-aspect masking.
+        Bool MaterializePendingDepthStencilClearForDefaultFramebuffer(
+            VkCommandBuffer commandBuffer, const MG_State::GLState::FramebufferAttachmentObject& attachment,
+            const ClearAttachmentPayload& payload);
         VkPipeline GetOrCreateBlitPipeline(const RenderPassEntry& renderPassEntry);
         Bool GenerateDepthMipmapWithShader(FrameContext::FrameData& frame,
                                            MG_State::GLState::ITextureObject& texture,

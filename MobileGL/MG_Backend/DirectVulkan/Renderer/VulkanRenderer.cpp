@@ -7194,6 +7194,96 @@ void main() {
         return true;
     }
 
+    // The aspects a depth/stencil format actually carries. VkTextureManager keeps its own copy of
+    // this private, and the swapchain's depth/stencil image has no TextureResource to ask.
+    static VkImageAspectFlags GetDepthStencilAspectMaskForFormat(VkFormat format) {
+        switch (format) {
+        case VK_FORMAT_D16_UNORM:
+        case VK_FORMAT_X8_D24_UNORM_PACK32:
+        case VK_FORMAT_D32_SFLOAT:
+            return VK_IMAGE_ASPECT_DEPTH_BIT;
+        case VK_FORMAT_D16_UNORM_S8_UINT:
+        case VK_FORMAT_D24_UNORM_S8_UINT:
+        case VK_FORMAT_D32_SFLOAT_S8_UINT:
+            return VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT;
+        case VK_FORMAT_S8_UINT:
+            return VK_IMAGE_ASPECT_STENCIL_BIT;
+        default:
+            return VK_IMAGE_ASPECT_NONE;
+        }
+    }
+
+    // The depth/stencil half of MaterializePendingClearForDefaultFramebuffer. Separate only
+    // because the image, the aspects and the clear value are all different from the colour one;
+    // the reason it exists is the same - a readback with no intervening draw has no render pass
+    // to fold the parked clear into.
+    Bool VulkanRenderer::MaterializePendingDepthStencilClearForDefaultFramebuffer(
+        VkCommandBuffer commandBuffer, const MG_State::GLState::FramebufferAttachmentObject& attachment,
+        const ClearAttachmentPayload& payload) {
+        const VkImage depthStencilImage = m_swapchainObject.GetDepthStencilImage(m_imageIndexAcquired);
+        if (depthStencilImage == VK_NULL_HANDLE) {
+            return false;
+        }
+        const VkImageAspectFlags imageAspects =
+            GetDepthStencilAspectMaskForFormat(m_swapchainObject.GetDepthStencilFormat());
+        VkImageAspectFlags clearAspects = 0;
+        if ((payload.mask & GL_DEPTH_BUFFER_BIT) != 0) clearAspects |= (imageAspects & VK_IMAGE_ASPECT_DEPTH_BIT);
+        if ((payload.mask & GL_STENCIL_BUFFER_BIT) != 0) clearAspects |= (imageAspects & VK_IMAGE_ASPECT_STENCIL_BIT);
+        if (clearAspects == 0) {
+            // Nothing this image can express; drop the pending clear rather than leave it to a
+            // later render pass that would load it against an aspect that does not exist.
+            m_clearManager->PopPendingClear(attachment);
+            return true;
+        }
+
+        VkImageLayout currentLayout = m_swapchainObject.GetDepthStencilImageLayout(m_imageIndexAcquired);
+        VkPipelineStageFlags srcStageMask = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+        VkAccessFlags srcAccessMask = 0;
+        GetImageTransitionSourceState(currentLayout, srcStageMask, srcAccessMask);
+        VkImageLayout clearLayout = currentLayout;
+        if (!VkTextureManager::TransitionImageLayout(commandBuffer, depthStencilImage, clearLayout,
+                                                     VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, srcStageMask,
+                                                     VK_PIPELINE_STAGE_TRANSFER_BIT, srcAccessMask,
+                                                     VK_ACCESS_TRANSFER_WRITE_BIT, imageAspects)) {
+            return false;
+        }
+
+        VkClearDepthStencilValue clearValue{};
+        clearValue.depth = payload.depth;
+        clearValue.stencil = payload.stencil;
+        VkImageSubresourceRange range{};
+        range.aspectMask = clearAspects;
+        range.baseMipLevel = 0;
+        range.levelCount = 1;
+        range.baseArrayLayer = 0;
+        range.layerCount = 1;
+        vkCmdClearDepthStencilImage(commandBuffer, depthStencilImage, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &clearValue,
+                                    1, &range);
+
+        VkImageLayout settledLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        VkPipelineStageFlags dstStageMask = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+        VkAccessFlags dstAccessMask = 0;
+        GetImageTransitionDestinationState(VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL, dstStageMask,
+                                           dstAccessMask);
+        if (!VkTextureManager::TransitionImageLayout(commandBuffer, depthStencilImage, settledLayout,
+                                                     VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+                                                     VK_PIPELINE_STAGE_TRANSFER_BIT, dstStageMask,
+                                                     VK_ACCESS_TRANSFER_WRITE_BIT, dstAccessMask, imageAspects)) {
+            return false;
+        }
+        m_swapchainObject.SetDepthStencilImageLayout(m_imageIndexAcquired,
+                                                     VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
+        // The image now holds real values, so the next render pass must LOAD them rather than
+        // treat the attachment as undefined and discard the clear that just executed.
+        m_swapchainObject.SetDepthStencilContentDefined(m_imageIndexAcquired, true);
+
+        m_clearManager->PopPendingClear(attachment);
+        MGLOG_D("MaterializePendingClearForDefaultFramebuffer: swapchain depth/stencil image %u pending clear "
+                "materialized (aspects=0x%x)",
+                m_imageIndexAcquired, static_cast<Uint32>(clearAspects));
+        return true;
+    }
+
     // A glClear on the DEFAULT framebuffer is parked as a pending clear and folded into the next
     // render pass's loadOp. With no draw in between there is no render pass, so a readback that
     // followed such a clear blitted the untouched swapchain image and returned the PREVIOUS
@@ -7217,14 +7307,13 @@ void main() {
         if (!m_clearManager->GetPendingClear(attachment, payload)) {
             return true;
         }
-        if ((payload.mask & GL_COLOR_BUFFER_BIT) == 0) {
-            // Depth/stencil on the default framebuffer keeps the loadOp route; the readback
-            // path for it declines default framebuffers outright (ReadDepthStencilPixels).
-            return true;
-        }
         MOBILEGL_ASSERT(VkRenderPassManager::GetActiveRenderPass() == nullptr ||
                             commandBuffer != m_frameContext.GetCurrent().commandBuffer,
                         "MaterializePendingClearForDefaultFramebuffer requires no active render pass");
+
+        if ((payload.mask & GL_COLOR_BUFFER_BIT) == 0) {
+            return MaterializePendingDepthStencilClearForDefaultFramebuffer(commandBuffer, attachment, payload);
+        }
 
         const VkImage swapchainImage = m_swapchainObject.GetImage(m_imageIndexAcquired);
         if (swapchainImage == VK_NULL_HANDLE) {
@@ -8750,10 +8839,6 @@ void main() {
     void VulkanRenderer::ReadDepthStencilPixels(MG_State::GLState::FramebufferObject& readFbo, GLint x, GLint y,
                                                 GLsizei width, GLsizei height, GLenum format, GLenum type,
                                                 void* pixels) {
-        if (readFbo.IsDefaultFramebuffer()) {
-            MGLOG_E("DirectVulkan::ReadDepthStencilPixels skipped: default framebuffer readback is unsupported");
-            return;
-        }
         if (width <= 0 || height <= 0) {
             return;
         }
@@ -8764,10 +8849,13 @@ void main() {
         // framebuffers lacking either, so resolving via the depth attachment is enough.
         const auto attachmentType = wantDepth ? MobileGL::FramebufferAttachmentType::Depth
                                               : MobileGL::FramebufferAttachmentType::Stencil;
-        const auto& attachment = readFbo.GetAttachment(attachmentType);
-        if (!attachment.IsValid() || attachment.IsEmpty()) {
-            MGLOG_E("DirectVulkan::ReadDepthStencilPixels skipped: no depth/stencil attachment image");
-            return;
+        const Bool readIsDefaultFbo = readFbo.IsDefaultFramebuffer();
+        if (!readIsDefaultFbo) {
+            const auto& attachment = readFbo.GetAttachment(attachmentType);
+            if (!attachment.IsValid() || attachment.IsEmpty()) {
+                MGLOG_E("DirectVulkan::ReadDepthStencilPixels skipped: no depth/stencil attachment image");
+                return;
+            }
         }
 
         auto& frame = m_frameContext.GetCurrent();
@@ -8778,6 +8866,47 @@ void main() {
             VkRenderPassManager::EndRenderPass(frame.commandBuffer);
         }
 
+        // The default framebuffer's depth/stencil lives in the swapchain, not in an
+        // attachment object: its placeholder ITextureObject describes the format but backs no
+        // image, so the branches below would have synced (and read back) an unrelated one.
+        // Declining outright is what made every glReadPixels(GL_DEPTH_COMPONENT/
+        // GL_STENCIL_INDEX) of the default framebuffer leave the caller's buffer untouched -
+        // the whole KHR-GL*.framebuffer_blit family checks exactly that before it blits.
+        if (readIsDefaultFbo) {
+            const VkImage swapchainDepthImage = m_swapchainObject.GetDepthStencilImage(m_imageIndexAcquired);
+            if (swapchainDepthImage == VK_NULL_HANDLE) {
+                MGLOG_E("DirectVulkan::ReadDepthStencilPixels skipped: the default framebuffer has no "
+                        "depth/stencil image");
+                return;
+            }
+            // Per aspect, because the default framebuffer carries a SEPARATE placeholder
+            // attachment for depth and for stencil (MG_Impl/Init.cpp) and each parks its own
+            // pending clear; materializing only one would read the other back un-cleared.
+            if (wantDepth) {
+                const Bool clearReady = MaterializePendingClearForDefaultFramebuffer(
+                    frame.commandBuffer, readFbo, MobileGL::FramebufferAttachmentType::Depth);
+                MOBILEGL_ASSERT(clearReady,
+                                "ReadDepthStencilPixels: failed to materialize the default framebuffer's pending "
+                                "depth clear");
+            }
+            if (wantStencil) {
+                const Bool clearReady = MaterializePendingClearForDefaultFramebuffer(
+                    frame.commandBuffer, readFbo, MobileGL::FramebufferAttachmentType::Stencil);
+                MOBILEGL_ASSERT(clearReady,
+                                "ReadDepthStencilPixels: failed to materialize the default framebuffer's pending "
+                                "stencil clear");
+            }
+            const VkFormat swapchainDepthFormat = m_swapchainObject.GetDepthStencilFormat();
+            VkImageLayout trackedLayout = m_swapchainObject.GetDepthStencilImageLayout(m_imageIndexAcquired);
+            ReadDepthStencilImageToClient(swapchainDepthImage, swapchainDepthFormat, &trackedLayout,
+                                          GetDepthStencilAspectMaskForFormat(swapchainDepthFormat), 0, 0, x, y,
+                                          width, height, format, type, pixels,
+                                          /*defaultFramebufferOrientation=*/true);
+            m_swapchainObject.SetDepthStencilImageLayout(m_imageIndexAcquired, trackedLayout);
+            return;
+        }
+
+        const auto& attachment = readFbo.GetAttachment(attachmentType);
         VkImage image = VK_NULL_HANDLE;
         VkFormat vkFormat = VK_FORMAT_UNDEFINED;
         VkImageLayout* trackedLayout = nullptr;
@@ -8828,7 +8957,8 @@ void main() {
     void VulkanRenderer::ReadDepthStencilImageToClient(VkImage image, VkFormat vkFormat, VkImageLayout* trackedLayout,
                                                        VkImageAspectFlags imageAspect, Uint32 mipLevel,
                                                        Uint32 baseArrayLayer, GLint x, GLint y, GLsizei width,
-                                                       GLsizei height, GLenum format, GLenum type, void* pixels) {
+                                                       GLsizei height, GLenum format, GLenum type, void* pixels,
+                                                       Bool defaultFramebufferOrientation) {
         const Bool wantDepth = format != GL_STENCIL_INDEX;
         const Bool wantStencil = format != GL_DEPTH_COMPONENT;
         auto& frame = m_frameContext.GetCurrent();
@@ -8893,6 +9023,21 @@ void main() {
             VK_PIPELINE_STAGE_TRANSFER_BIT, srcAccessMask, VK_ACCESS_TRANSFER_READ_BIT, imageAspect, mipLevel, 1);
         MOBILEGL_ASSERT(ok, "%s: failed to transition depth-stencil source image", __func__);
 
+        // The swapchain's depth/stencil image is stored display-side-up like its colour twin, so
+        // the GL rect has to be mapped into that space before the copy and the copied rows
+        // re-oriented afterwards - the same two halves the colour ReadPixels path applies.
+        Int32 copyOffsetX = x;
+        Int32 copyOffsetY = y;
+        if (defaultFramebufferOrientation) {
+            const VkExtent2D defaultFboExtent = m_swapchainObject.GetExtent();
+            const DefaultFramebufferRectMapping mapping =
+                GetDefaultFramebufferRectMapping(m_swapchainObject.GetPreTransform());
+            copyOffsetX = MapDefaultFramebufferRectAxis(x, width, static_cast<Int>(defaultFboExtent.width),
+                                                        mapping.mirrorX);
+            copyOffsetY = MapDefaultFramebufferRectAxis(y, height, static_cast<Int>(defaultFboExtent.height),
+                                                        mapping.flipY);
+        }
+
         VkBufferImageCopy regions[2]{};
         Uint32 regionCount = 0;
         if (wantDepth) {
@@ -8902,7 +9047,7 @@ void main() {
             region.imageSubresource.mipLevel = mipLevel;
             region.imageSubresource.baseArrayLayer = baseArrayLayer;
             region.imageSubresource.layerCount = 1;
-            region.imageOffset = {x, y, 0};
+            region.imageOffset = {copyOffsetX, copyOffsetY, 0};
             region.imageExtent = {static_cast<Uint32>(width), static_cast<Uint32>(height), 1};
         }
         if (wantStencil) {
@@ -8912,7 +9057,7 @@ void main() {
             region.imageSubresource.mipLevel = mipLevel;
             region.imageSubresource.baseArrayLayer = baseArrayLayer;
             region.imageSubresource.layerCount = 1;
-            region.imageOffset = {x, y, 0};
+            region.imageOffset = {copyOffsetX, copyOffsetY, 0};
             region.imageExtent = {static_cast<Uint32>(width), static_cast<Uint32>(height), 1};
         }
         vkCmdCopyImageToBuffer(frame.commandBuffer, image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, readback.GetHandle(),
@@ -8936,6 +9081,38 @@ void main() {
         }
         const Uint8* depthSrc = mapped;
         const Uint8* stencilSrc = mapped + stencilOffset;
+
+        // Re-orient the copied band per aspect, before any repacking reads it: the depth and
+        // stencil aspects were copied into their own tightly packed sub-buffers, so each is a
+        // plain width x height image of its own texel size.
+        Vector<Uint8> remappedDepth;
+        Vector<Uint8> remappedStencil;
+        if (defaultFramebufferOrientation) {
+            const VkSurfaceTransformFlagBitsKHR preTransform = m_swapchainObject.GetPreTransform();
+            Bool remapped = true;
+            if (wantDepth && depthCopyBytes > 0) {
+                remappedDepth.resize(pixelCount * depthCopyBytes);
+                remapped = RemapDefaultFboReadbackToGLOrientation(depthSrc, static_cast<Uint32>(width),
+                                                                  static_cast<Uint32>(height), preTransform,
+                                                                  depthCopyBytes, remappedDepth.data());
+            }
+            if (remapped && wantStencil) {
+                remappedStencil.resize(pixelCount);
+                remapped = RemapDefaultFboReadbackToGLOrientation(stencilSrc, static_cast<Uint32>(width),
+                                                                  static_cast<Uint32>(height), preTransform, 1,
+                                                                  remappedStencil.data());
+            }
+            if (remapped) {
+                if (!remappedDepth.empty()) depthSrc = remappedDepth.data();
+                if (!remappedStencil.empty()) stencilSrc = remappedStencil.data();
+            } else {
+                // Only a quarter-turn pre-transform reaches this, and nothing in this renderer
+                // models one. MGLOG_I because the INFO builds are the ones that run conformance.
+                MGLOG_I("DirectVulkan::ReadDepthStencilPixels: default-FBO remap declined (w=%d h=%d "
+                        "preTransform=%d); falling back to raw readback",
+                        width, height, static_cast<Int>(preTransform));
+            }
+        }
 
         const auto depthValueAt = [&](SizeT i) -> Float {
             switch (vkFormat) {
