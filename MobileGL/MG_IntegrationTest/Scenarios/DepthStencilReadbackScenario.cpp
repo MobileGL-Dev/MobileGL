@@ -179,6 +179,75 @@ namespace MGITest {
         gl.EndFrame();
     }
 
+    // A depth blit INTO the default framebuffer has to convert its rect out of GL's bottom-origin
+    // space, exactly as the colour blit does. The colour path had that conversion and the
+    // depth path did not, so a scissored depth blit landed in the mirrored band - which is the
+    // whole of KHR-GL*.framebuffer_blit.scissor_blit once the readback above works well enough to
+    // see it (before that the test died on the poison values and never reached the blit).
+    TEST_F(DepthStencilReadbackScenario, AScissoredDepthBlitIntoTheDefaultFramebufferLandsInTheScissorBox) {
+        if (!Ready()) return;
+        if (!BackendReadsDepthStencil()) {
+            GTEST_SKIP() << "backend " << Gl().BackendName() << " has no depth readback path";
+        }
+        HeadlessGL& gl = Gl();
+        const int width = gl.Width();
+        const int height = gl.Height();
+        ASSERT_GE(width, 8);
+        ASSERT_GE(height, 8);
+
+        // Source: a user framebuffer whose depth is uniformly 0.75.
+        GLuint fbo = 0, colorTex = 0, depthTex = 0;
+        glGenFramebuffers(1, &fbo);
+        glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+        glGenTextures(1, &colorTex);
+        glBindTexture(GL_TEXTURE_2D, colorTex);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, colorTex, 0);
+        glGenTextures(1, &depthTex);
+        glBindTexture(GL_TEXTURE_2D, depthTex);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH24_STENCIL8, width, height, 0, GL_DEPTH_STENCIL,
+                     GL_UNSIGNED_INT_24_8, nullptr);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_TEXTURE_2D, depthTex, 0);
+        ASSERT_EQ(glCheckFramebufferStatus(GL_FRAMEBUFFER), GLenum(GL_FRAMEBUFFER_COMPLETE));
+        glViewport(0, 0, width, height);
+        glDisable(GL_SCISSOR_TEST);
+        glDepthMask(GL_TRUE);
+        glClearDepth(0.75);
+        glClear(GL_DEPTH_BUFFER_BIT);
+
+        // Destination: the default framebuffer, depth 0 everywhere.
+        BindDefaultFramebuffer();
+        glViewport(0, 0, width, height);
+        glClearDepth(0.0);
+        glClear(GL_DEPTH_BUFFER_BIT);
+
+        // Blit the whole rect, but scissored to the BOTTOM-LEFT quadrant in GL coordinates.
+        glEnable(GL_SCISSOR_TEST);
+        glScissor(0, 0, width / 2, height / 2);
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, fbo);
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+        glBlitFramebuffer(0, 0, width, height, 0, 0, width, height, GL_DEPTH_BUFFER_BIT, GL_NEAREST);
+        glDisable(GL_SCISSOR_TEST);
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        EXPECT_EQ(FirstGLError(), 0u);
+
+        const float inside = ReadDepthAt(width / 4, height / 4);
+        const float above = ReadDepthAt(width / 4, height - 1 - height / 4);
+        EXPECT_EQ(FirstGLError(), 0u);
+        EXPECT_NEAR(inside, 0.75f, 1.0f / 4096.0f)
+            << "GL (" << (width / 4) << ", " << (height / 4) << ") is inside the scissor box and should hold the "
+            << "blitted 0.75, but read back " << inside;
+        EXPECT_NEAR(above, 0.0f, 1.0f / 4096.0f)
+            << "GL (" << (width / 4) << ", " << (height - 1 - height / 4)
+            << ") is ABOVE the scissor box and must still hold the cleared 0.0, but read back " << above
+            << " (0.75 there means the depth blit landed in the mirrored band)";
+
+        glDeleteTextures(1, &depthTex);
+        glDeleteTextures(1, &colorTex);
+        glDeleteFramebuffers(1, &fbo);
+        gl.EndFrame();
+    }
+
     // The control: the same read against a user framebuffer, which never went through the
     // declined path. It is what makes a failure above specific to the default framebuffer.
     TEST_F(DepthStencilReadbackScenario, UserFramebufferDepthClearIsVisibleToReadPixels) {

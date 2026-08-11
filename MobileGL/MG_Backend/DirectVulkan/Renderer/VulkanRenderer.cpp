@@ -7766,7 +7766,15 @@ void main() {
                 MOBILEGL_ASSERT(ok, "%s: failed to transition depth destination image", __func__);
             }
 
-            if (depthBlitScales) {
+            // The default framebuffer is stored display-side-up, so a rect aimed at it (or read
+            // from it) has to be converted out of GL's bottom-origin space - the same conversion
+            // the colour blit below applies. vkCmdCopyImage cannot express it (it has no second
+            // offset to invert), so a default-framebuffer side forces the vkCmdBlitImage form even
+            // at equal size. Without this a scissored depth blit into the default framebuffer
+            // wrote the MIRRORED band: KHR-GL*.framebuffer_blit.scissor_blit clips to the lower
+            // left quadrant, and the depth landed in the upper one.
+            const Bool depthBlitNeedsOrientation = readIsDefaultFbo || drawIsDefaultFbo;
+            if (depthBlitScales || depthBlitNeedsOrientation) {
                 // vkCmdCopyImage cannot resize; NEAREST is the only filter Vulkan allows for a
                 // depth/stencil blit anyway, and the GL front end already rejects the others.
                 VkImageBlit blitRegion{};
@@ -7782,6 +7790,14 @@ void main() {
                 blitRegion.dstSubresource.layerCount = dstBinding.layerCount;
                 blitRegion.dstOffsets[0] = {dstX0, dstY0, 0};
                 blitRegion.dstOffsets[1] = {dstX1, dstY1, 1};
+                if (readIsDefaultFbo) {
+                    ApplyNativeBlitDefaultFramebufferSourceTransform(m_swapchainObject.GetPreTransform(), srcBinding,
+                                                                     blitRegion);
+                }
+                if (drawIsDefaultFbo) {
+                    ApplyNativeBlitDefaultFramebufferTransform(m_swapchainObject.GetPreTransform(), dstBinding,
+                                                               blitRegion);
+                }
                 vkCmdBlitImage(frame.commandBuffer,
                                srcBinding.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                                dstBinding.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
