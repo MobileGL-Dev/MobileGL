@@ -672,6 +672,21 @@ namespace MobileGL::MG_State::GLState {
             // Offset within the gap-free record a backend that cannot express the GL
             // layout captures into; see NeedsScatteredTransformFeedbackCapture.
             Uint32 packedOffsetBytes = 0;
+
+            // GL 4.6 core 11.1.2.1 / 7.3.1.1: a member of an output interface block is
+            // captured under "<block name>.<member>". `name` keeps that GL spelling (it is
+            // what the interface queries and the ESSL backend's driver-side capture list
+            // need, since SPIRV-Cross re-emits the block under its own type name), while
+            // the three fields below carry what a SPIR-V backend needs instead: the
+            // decoration target is the block's *instance* variable and the member index
+            // inside it. blockMemberIndex < 0 means "not a block member".
+            String blockInstanceName;
+            String blockName;
+            Int blockMemberIndex = -1;
+            // Which element of an arrayed block member this capture names, -1 for "the
+            // member as a whole". SPIR-V cannot decorate a single array element, so a
+            // backend needs the element index to tell a full run from a partial one.
+            Int blockMemberElement = -1;
         };
 
         // ---- P1: everything a link PRODUCES, in one movable block ----

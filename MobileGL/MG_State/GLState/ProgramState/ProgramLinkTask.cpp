@@ -1030,21 +1030,80 @@ namespace MobileGL::MG_State::GLState {
                         }
                     }
                 }
+                // GL 4.6 core 11.1.2.1 (and the resource-name rule of 7.3.1.1): a member of
+                // an output interface block is named "<BLOCK name>.<member>" - the block's
+                // TYPE name, never the instance name, and that holds for an anonymous
+                // instance too. glslang's linker object for such a block is the *instance*
+                // symbol ("vs_out", or "anon@N" when there is none), so the head of the
+                // dotted path has to be matched against getType().getTypeName() instead of
+                // getName(). Without this every capture of a block member resolved to
+                // nothing and the link failed with "is not an output of the vertex stage".
+                String blockName;
+                String memberName;
+                if (const SizeT dot = declaredName.find('.'); dot != String::npos) {
+                    blockName = declaredName.substr(0, dot);
+                    memberName = declaredName.substr(dot + 1);
+                    // An array of block instances is spelled "<block>[i].<member>"; every
+                    // instance shares one member list, so the subscript only has to go.
+                    if (!blockName.empty() && blockName.back() == ']') {
+                        const SizeT bracket = blockName.rfind('[');
+                        if (bracket != String::npos) blockName.resize(bracket);
+                    }
+                }
+
                 for (const auto* node : linkerObjects->getSequence()) {
                     const glslang::TIntermSymbol* symbol = node->getAsSymbolNode();
                     if (symbol == nullptr || symbol->getType().getQualifier().storage != glslang::EvqVaryingOut) {
                         continue;
                     }
-                    if (symbol->getName() != declaredName.c_str()) {
-                        continue;
+                    const glslang::TType& symbolType = symbol->getType();
+                    const glslang::TType* capturedType = nullptr;
+                    if (memberName.empty()) {
+                        if (symbol->getName() != declaredName.c_str()) {
+                            continue;
+                        }
+                        capturedType = &symbolType;
+                    } else {
+                        if (symbolType.getBasicType() != glslang::EbtBlock) {
+                            continue;
+                        }
+                        // The spec spelling is the block name; the instance name is accepted
+                        // as a fallback so a request written the (common, non-conformant)
+                        // instance-qualified way resolves instead of failing the whole link.
+                        if (symbolType.getTypeName() != blockName.c_str() &&
+                            symbol->getName() != blockName.c_str()) {
+                            continue;
+                        }
+                        const glslang::TTypeList* members = symbolType.getStruct();
+                        if (members == nullptr) {
+                            continue;
+                        }
+                        for (SizeT m = 0; m < members->size(); ++m) {
+                            const glslang::TType* memberType = (*members)[m].type;
+                            if (memberType == nullptr || memberType->getFieldName() != memberName.c_str()) {
+                                continue;
+                            }
+                            capturedType = memberType;
+                            varying.blockMemberIndex = static_cast<Int>(m);
+                            break;
+                        }
+                        if (capturedType == nullptr) {
+                            // Right block, wrong member: no other linker object can match.
+                            break;
+                        }
+                        varying.blockName = symbolType.getTypeName().c_str();
+                        varying.blockInstanceName = symbol->getName().c_str();
                     }
-                    resolved = ResolveXfbSymbolType(symbol->getType(), varying.type, varying.size, bytesPerElement);
+                    resolved = ResolveXfbSymbolType(*capturedType, varying.type, varying.size, bytesPerElement);
                     if (resolved && singleElement) {
                         if (static_cast<Int>(element) >= varying.size) {
                             resolved = false;
                             break;
                         }
                         varying.size = 1;
+                        if (varying.blockMemberIndex >= 0) {
+                            varying.blockMemberElement = static_cast<Int>(element);
+                        }
                     }
                     break;
                 }

@@ -165,6 +165,22 @@ target_link_libraries(
 )
 
 add_executable(
+        XfbBlockVaryingTest
+        XfbBlockVaryingTest.cpp
+)
+
+target_include_directories(XfbBlockVaryingTest PRIVATE
+        ${MGL_ROOT}/include
+        ${MGL_ROOT}/MobileGL
+)
+
+target_link_libraries(
+        XfbBlockVaryingTest PRIVATE
+        GTest::gtest_main
+        ${LINK_LIBRARIES}
+)
+
+add_executable(
         ProgramInterfaceTest
         ProgramInterfaceTest.cpp
 )
@@ -195,6 +211,7 @@ include(GoogleTest)
 gtest_discover_tests(ProgramUtilTest DISCOVERY_TIMEOUT 30 PROPERTIES LABELS unit)
 gtest_discover_tests(ProgramTest DISCOVERY_TIMEOUT 30 PROPERTIES LABELS unit)
 gtest_discover_tests(ProgramInterfaceTest DISCOVERY_TIMEOUT 30 PROPERTIES LABELS unit)
+gtest_discover_tests(XfbBlockVaryingTest DISCOVERY_TIMEOUT 30 PROPERTIES LABELS unit)
 # Heavier than the rest of the unit suite by design: several cases deliberately saturate the
 # compile pool so there is something in flight to race against.
 gtest_discover_tests(AsyncCompileTest DISCOVERY_TIMEOUT 60 PROPERTIES LABELS unit TIMEOUT 300)

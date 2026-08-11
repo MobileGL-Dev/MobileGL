@@ -12,7 +12,10 @@
 #include "MG_Util/ShaderTranspiler/ShaderCompiler.h"
 #include "MG_Util/ShaderTranspiler/SpvcSession.h"
 #include "MG_Util/ShaderTranspiler/Types.h"
+#include <algorithm>
 #include <cstring>
+#include <map>
+#include <utility>
 #include <spirv-tools/libspirv.h>
 #include <spirv-tools/optimizer.hpp>
 #include <source/opt/build_module.h>
@@ -1131,6 +1134,15 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 std::string name;
                 Uint32 bufferIndex = 0;
                 Uint32 offsetBytes = 0;
+                // Set when the capture names a member of an output interface block
+                // ("Block.member"): the decoration target is then the block's struct TYPE,
+                // decorated per member, not the variable. `name` keeps the GL spelling and
+                // is useless for the id lookup, so the instance name is carried separately.
+                std::string blockInstanceName;
+                std::string blockName;
+                Int blockMemberIndex = -1;
+                Int blockMemberElement = -1; // array element of that member, -1 = the whole member
+                Uint32 byteSize = 0;
             };
             const char* name() const override { return "mobilegl-xfb-capture-decorate"; }
             XfbCaptureDecoratePass(Vector<CapturedVarying> varyings, Vector<Uint32> strides)
@@ -1162,6 +1174,33 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                     decorationManager->AddDecorationVal(targetId, static_cast<Uint32>(spv::Decoration::Offset),
                                                         offsetBytes);
                 };
+                // SPIR-V puts XfbBuffer/XfbStride/Offset on the struct MEMBER when the
+                // captured varying lives in an interface block (SPIR-V 1.6 §3.20 lists all
+                // three as member-decoratable); Offset in particular is illegal on the block
+                // variable once the type is decorated Block.
+                const auto decorateMemberForXfb = [&](Uint32 structTypeId, Uint32 memberIndex, Uint32 bufferIndex,
+                                                      Uint32 offsetBytes) {
+                    const Uint32 stride = bufferIndex < m_strides.size() ? m_strides[bufferIndex] : 0;
+                    decorationManager->AddMemberDecoration(structTypeId, memberIndex,
+                                                           static_cast<Uint32>(spv::Decoration::XfbBuffer),
+                                                           bufferIndex);
+                    decorationManager->AddMemberDecoration(structTypeId, memberIndex,
+                                                           static_cast<Uint32>(spv::Decoration::XfbStride), stride);
+                    decorationManager->AddMemberDecoration(structTypeId, memberIndex,
+                                                           static_cast<Uint32>(spv::Decoration::Offset), offsetBytes);
+                };
+
+                // A member array captured element by element ("Block.attrib[0]" .. "[15]")
+                // is one SPIR-V member, so its captures collapse into a single decoration
+                // placed at the first element's offset - the rest follow from the member's
+                // own layout. Collected first so the group is complete before it decorates.
+                struct MemberGroup {
+                    Uint32 bufferIndex = 0;
+                    Uint32 minOffset = 0;
+                    Uint32 elementBytes = 0;
+                    Vector<Uint32> offsets;
+                };
+                std::map<std::pair<Uint32, Uint32>, MemberGroup> memberGroups;
 
                 Bool modified = false;
                 Bool needsPositionMirror = false;
@@ -1174,12 +1213,66 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                         positionOffset = varying.offsetBytes;
                         continue;
                     }
+                    if (varying.blockMemberIndex >= 0) {
+                        // glslang names the block's instance variable and its struct type
+                        // separately; an anonymous instance leaves only the type named, so
+                        // both spellings are tried before giving up.
+                        Uint32 structTypeId = 0;
+                        if (const auto it = idsByName.find(varying.blockInstanceName); it != idsByName.end()) {
+                            structTypeId = BlockStructTypeOf(it->second);
+                        }
+                        if (structTypeId == 0) {
+                            if (const auto it = idsByName.find(varying.blockName); it != idsByName.end()) {
+                                const spvtools::opt::Instruction* def = context()->get_def_use_mgr()->GetDef(it->second);
+                                if (def != nullptr && def->opcode() == spv::Op::OpTypeStruct) {
+                                    structTypeId = it->second;
+                                } else if (def != nullptr && def->opcode() == spv::Op::OpVariable) {
+                                    structTypeId = BlockStructTypeOf(it->second);
+                                }
+                            }
+                        }
+                        if (structTypeId == 0) {
+                            MGLOG_E("XfbCaptureDecoratePass: no SPIR-V interface block '%s' (instance '%s') for "
+                                    "capture '%s'",
+                                    varying.blockName.c_str(), varying.blockInstanceName.c_str(),
+                                    varying.name.c_str());
+                            continue;
+                        }
+                        auto& group =
+                            memberGroups[{structTypeId, static_cast<Uint32>(varying.blockMemberIndex)}];
+                        if (group.offsets.empty() || varying.offsetBytes < group.minOffset) {
+                            group.minOffset = varying.offsetBytes;
+                        }
+                        group.bufferIndex = varying.bufferIndex;
+                        group.elementBytes = varying.byteSize;
+                        group.offsets.push_back(varying.offsetBytes);
+                        continue;
+                    }
                     const auto idIt = idsByName.find(varying.name);
                     if (idIt == idsByName.end()) {
                         MGLOG_E("XfbCaptureDecoratePass: no SPIR-V variable named '%s'", varying.name.c_str());
                         continue;
                     }
                     decorateForXfb(idIt->second, varying.bufferIndex, varying.offsetBytes);
+                    modified = true;
+                }
+
+                for (auto& [key, group] : memberGroups) {
+                    // The single Offset can only stand for the whole group when the group's
+                    // captures are a gap-free ascending run - that is what SPIR-V lays the
+                    // member's elements out as. Anything else still gets a best-effort
+                    // decoration, but say so, because the capture layout will not match GL.
+                    std::sort(group.offsets.begin(), group.offsets.end());
+                    for (SizeT i = 1; i < group.offsets.size(); ++i) {
+                        if (group.elementBytes == 0 ||
+                            group.offsets[i] != group.offsets[i - 1] + group.elementBytes) {
+                            MGLOG_I("XfbCaptureDecoratePass: block member %u of type %%%u is captured with a "
+                                    "non-contiguous element set; the capture layout will differ from GL's",
+                                    key.second, key.first);
+                            break;
+                        }
+                    }
+                    decorateMemberForXfb(key.first, key.second, group.bufferIndex, group.minOffset);
                     modified = true;
                 }
 
@@ -1204,6 +1297,27 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             }
 
         private:
+            // The struct type an interface-block variable points at, peeling an array of
+            // block instances on the way. 0 when the id is not a block variable at all.
+            Uint32 BlockStructTypeOf(Uint32 variableId) {
+                auto* defUse = context()->get_def_use_mgr();
+                const spvtools::opt::Instruction* variable = defUse->GetDef(variableId);
+                if (variable == nullptr || variable->opcode() != spv::Op::OpVariable) return 0;
+                const spvtools::opt::Instruction* pointer = defUse->GetDef(variable->type_id());
+                if (pointer == nullptr || pointer->opcode() != spv::Op::OpTypePointer) return 0;
+                Uint32 pointeeId = pointer->GetSingleWordInOperand(1);
+                for (const spvtools::opt::Instruction* pointee = defUse->GetDef(pointeeId); pointee != nullptr;
+                     pointee = defUse->GetDef(pointeeId)) {
+                    if (pointee->opcode() == spv::Op::OpTypeStruct) return pointeeId;
+                    if (pointee->opcode() != spv::Op::OpTypeArray &&
+                        pointee->opcode() != spv::Op::OpTypeRuntimeArray) {
+                        return 0;
+                    }
+                    pointeeId = pointee->GetSingleWordInOperand(0);
+                }
+                return 0;
+            }
+
             template <typename DecorateFn>
             Bool MirrorPositionForCapture(Uint32 entryFunctionId, spvtools::opt::Instruction& entryPoint,
                                           Uint32 bufferIndex, Uint32 offsetBytes, const DecorateFn& decorateForXfb) {
@@ -1522,7 +1636,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             Vector<XfbCaptureDecoratePass::CapturedVarying> varyings;
             varyings.reserve(program.GetTransformFeedbackVaryingCount());
             for (const auto& varying : program.GetTransformFeedbackVaryings()) {
-                varyings.push_back({varying.name, varying.bufferIndex, varying.offsetBytes});
+                varyings.push_back({varying.name, varying.bufferIndex, varying.offsetBytes,
+                                    varying.blockInstanceName, varying.blockName, varying.blockMemberIndex,
+                                    varying.blockMemberElement, varying.byteSize});
             }
             Vector<Uint32> strides;
             strides.reserve(program.GetTransformFeedbackBufferCount());
