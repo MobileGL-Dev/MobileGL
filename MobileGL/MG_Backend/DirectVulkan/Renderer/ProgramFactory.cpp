@@ -937,189 +937,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             ProgramFactory::CompileOptionFlags m_transformFlags;
         };
 
-        // gl_FragCoord back into GL's window space, for default-framebuffer draws only.
-        //
-        // Vulkan's gl_FragCoord.y is the framebuffer ROW being written - not a value the
-        // viewport rect can move independently of placement. The default framebuffer's image is
-        // stored display-side-up and the vertex stage compensates by negating gl_Position.y, so
-        // for every default-FBO draw the framebuffer row of a fragment is exactly
-        // `height - y_GL` (the viewport terms cancel: yf_VK = H - yf_GL for any viewport rect).
-        // A shader that reads gl_FragCoord therefore sees a flipped Y, and once the viewport
-        // rect started being converted to the stored orientation it also sees a Y that is
-        // OUTSIDE the range GL promises - a 32-pixel-tall viewport at GL y=0 reports 224..255 on
-        // a 256-tall surface. GL CTS shader_image_load_store writes imageStore(image,
-        // ivec2(gl_FragCoord.xy)) into an image exactly the size of that viewport, so every
-        // store fell outside the image and the test read back zeroes.
-        //
-        // The rewrite redirects every read of the builtin to a Private copy initialised once at
-        // entry, which is exact for all access forms (whole-vector loads, `.y` access chains,
-        // OpCopyMemory) and leaves the builtin itself - and its decorations - untouched.
-        class GlFragCoordYFlipPass final : public spvtools::opt::Pass {
-        public:
-            const char* name() const override { return "mobilegl-fragcoord-y-flip"; }
-            explicit GlFragCoordYFlipPass(Uint32 framebufferHeight) : m_framebufferHeight(framebufferHeight) {}
-
-            Status Process() override {
-                using namespace spvtools::opt;
-                if (m_framebufferHeight == 0) return Status::SuccessWithoutChange;
-
-                Instruction* entryPoint = nullptr;
-                for (auto& candidate : get_module()->entry_points()) {
-                    if (candidate.NumInOperands() >= 2 &&
-                        static_cast<spv::ExecutionModel>(candidate.GetSingleWordInOperand(0)) ==
-                            spv::ExecutionModel::Fragment) {
-                        entryPoint = &candidate;
-                        break;
-                    }
-                }
-                if (!entryPoint) return Status::SuccessWithoutChange;
-
-                const Uint32 builtinVarId = FindFragCoordVariable();
-                if (builtinVarId == 0) return Status::SuccessWithoutChange;
-
-                Instruction* builtinVar = context()->get_def_use_mgr()->GetDef(builtinVarId);
-                if (!builtinVar || builtinVar->opcode() != spv::Op::OpVariable) return Status::SuccessWithoutChange;
-
-                // The builtin is `Input vec4`; take the vector and component types from its own
-                // pointer type rather than assuming float32x4, so a module that spells it
-                // differently declines instead of miscompiling.
-                Instruction* inputPtrType = context()->get_def_use_mgr()->GetDef(builtinVar->type_id());
-                if (!inputPtrType || inputPtrType->opcode() != spv::Op::OpTypePointer) {
-                    return Status::SuccessWithoutChange;
-                }
-                const Uint32 vectorTypeId = inputPtrType->GetSingleWordInOperand(1);
-                Instruction* vectorType = context()->get_def_use_mgr()->GetDef(vectorTypeId);
-                if (!vectorType || vectorType->opcode() != spv::Op::OpTypeVector ||
-                    vectorType->GetSingleWordInOperand(1) != 4) {
-                    return Status::SuccessWithoutChange;
-                }
-                const Uint32 floatTypeId = vectorType->GetSingleWordInOperand(0);
-                auto* floatType = context()->get_type_mgr()->GetType(floatTypeId);
-                if (!floatType || !floatType->AsFloat() || floatType->AsFloat()->width() != 32) {
-                    return Status::SuccessWithoutChange;
-                }
-
-                const auto heightBits = std::bit_cast<Uint32>(static_cast<float>(m_framebufferHeight));
-                const auto* heightConst = context()->get_constant_mgr()->GetConstant(floatType, {heightBits});
-                auto* heightInst = context()->get_constant_mgr()->GetDefiningInstruction(heightConst);
-                if (!heightInst) return Status::SuccessWithoutChange;
-
-                auto* function = context()->GetFunction(entryPoint->GetSingleWordInOperand(1));
-                if (!function || function->begin() == function->end()) return Status::SuccessWithoutChange;
-
-                const Uint32 privatePtrTypeId =
-                    context()->get_type_mgr()->FindPointerToType(vectorTypeId, spv::StorageClass::Private);
-                if (privatePtrTypeId == 0) return Status::SuccessWithoutChange;
-
-                const Uint32 copyVarId = context()->TakeNextId();
-                if (copyVarId == 0) return Status::SuccessWithoutChange;
-                auto copyVar = std::make_unique<Instruction>(
-                    context(), spv::Op::OpVariable, privatePtrTypeId, copyVarId,
-                    std::initializer_list<Operand>{
-                        {SPV_OPERAND_TYPE_STORAGE_CLASS, {static_cast<Uint32>(spv::StorageClass::Private)}}});
-                context()->AddGlobalValue(std::move(copyVar));
-
-                // Redirect the reads BEFORE emitting the initialiser, so the initialiser's own
-                // load of the builtin is not rewritten into a load of the (still empty) copy.
-                if (!RedirectReads(builtinVarId, copyVarId)) return Status::SuccessWithoutChange;
-
-                auto& entryBlock = *function->begin();
-                auto insertPoint = entryBlock.begin();
-                while (insertPoint != entryBlock.end() && insertPoint->opcode() == spv::Op::OpVariable) {
-                    ++insertPoint;
-                }
-                if (insertPoint == entryBlock.end()) return Status::SuccessWithoutChange;
-
-                InstructionBuilder builder(context(), &*insertPoint,
-                                           IRContext::kAnalysisDefUse | IRContext::kAnalysisInstrToBlockMapping);
-                auto* raw = builder.AddLoad(vectorTypeId, builtinVarId);
-                if (!raw) return Status::SuccessWithoutChange;
-                auto* x = builder.AddCompositeExtract(floatTypeId, raw->result_id(), {0});
-                auto* y = builder.AddCompositeExtract(floatTypeId, raw->result_id(), {1});
-                auto* z = builder.AddCompositeExtract(floatTypeId, raw->result_id(), {2});
-                auto* w = builder.AddCompositeExtract(floatTypeId, raw->result_id(), {3});
-                if (!x || !y || !z || !w) return Status::SuccessWithoutChange;
-                auto* flippedY =
-                    builder.AddBinaryOp(floatTypeId, spv::Op::OpFSub, heightInst->result_id(), y->result_id());
-                if (!flippedY) return Status::SuccessWithoutChange;
-                auto* corrected = builder.AddCompositeConstruct(
-                    vectorTypeId, {x->result_id(), flippedY->result_id(), z->result_id(), w->result_id()});
-                if (!corrected) return Status::SuccessWithoutChange;
-                if (!builder.AddStore(copyVarId, corrected->result_id())) return Status::SuccessWithoutChange;
-
-                // SPIR-V 1.4 widened the entry-point interface to every global the entry point
-                // statically uses, Private included; earlier versions accept Input/Output only,
-                // so listing it there would be invalid.
-                if (get_module()->version() >= 0x00010400u) {
-                    entryPoint->AddOperand({SPV_OPERAND_TYPE_ID, {copyVarId}});
-                    context()->AnalyzeUses(entryPoint);
-                }
-
-                context()->InvalidateAnalysesExceptFor(spvtools::opt::IRContext::kAnalysisDefUse |
-                                                       spvtools::opt::IRContext::kAnalysisInstrToBlockMapping);
-                return Status::SuccessWithChange;
-            }
-
-        private:
-            Uint32 FindFragCoordVariable() const {
-                for (const auto& annotation : get_module()->annotations()) {
-                    if (annotation.opcode() != spv::Op::OpDecorate) continue;
-                    if (annotation.NumInOperands() < 3) continue;
-                    if (static_cast<spv::Decoration>(annotation.GetSingleWordInOperand(1)) !=
-                        spv::Decoration::BuiltIn) {
-                        continue;
-                    }
-                    if (static_cast<spv::BuiltIn>(annotation.GetSingleWordInOperand(2)) != spv::BuiltIn::FragCoord) {
-                        continue;
-                    }
-                    return annotation.GetSingleWordInOperand(0);
-                }
-                return 0;
-            }
-
-            // Every instruction that reads through the builtin's POINTER gets the copy instead.
-            // Decorations, names and the entry-point interface keep naming the builtin.
-            Bool RedirectReads(Uint32 builtinVarId, Uint32 copyVarId) {
-                using namespace spvtools::opt;
-                Bool ok = true;
-                Vector<Instruction*> users;
-                context()->get_def_use_mgr()->ForEachUser(builtinVarId, [&](Instruction* user) {
-                    switch (user->opcode()) {
-                    case spv::Op::OpLoad:
-                    case spv::Op::OpAccessChain:
-                    case spv::Op::OpInBoundsAccessChain:
-                    case spv::Op::OpPtrAccessChain:
-                    case spv::Op::OpInBoundsPtrAccessChain:
-                    case spv::Op::OpCopyMemory:
-                    case spv::Op::OpCopyMemorySized:
-                        users.push_back(user);
-                        break;
-                    case spv::Op::OpStore:
-                        // gl_FragCoord is read-only; a store through it means this is not the
-                        // module we think it is.
-                        ok = false;
-                        break;
-                    default:
-                        break;
-                    }
-                });
-                if (!ok) return false;
-                for (Instruction* user : users) {
-                    for (Uint32 i = 0; i < user->NumInOperands(); ++i) {
-                        auto& operand = user->GetInOperand(i);
-                        if (operand.type == SPV_OPERAND_TYPE_ID && !operand.words.empty() &&
-                            operand.words[0] == builtinVarId) {
-                            operand.words[0] = copyVarId;
-                        }
-                    }
-                    context()->AnalyzeUses(user);
-                }
-                return true;
-            }
-
-            Uint32 m_framebufferHeight = 0;
-        };
-
         // Decorates the module's captured varyings for VK_EXT_transform_feedback:
         // user outputs get XfbBuffer/XfbStride/Offset directly; a captured
         // gl_Position (a gl_PerVertex member) is mirrored into a dedicated output
@@ -1482,35 +1299,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         spvtools::Optimizer::PassToken CreateGlToVulkanPositionFixPass(
             ProgramFactory::CompileOptionFlags transformFlags) {
             return spvtools::Optimizer::PassToken(MakeUnique<GlToVulkanPositionFixPass>(transformFlags));
-        }
-
-        Bool TransformSpirvForFragCoordYFlip(const Vector<Uint>& input, Vector<Uint>& output,
-                                             Uint32 framebufferHeight) {
-            if (input.empty()) {
-                output.clear();
-                return true;
-            }
-            if (framebufferHeight == 0) {
-                output = input;
-                return true;
-            }
-
-            spvtools::Optimizer optimizer(SPV_ENV_VULKAN_1_3);
-            spvtools::OptimizerOptions options;
-            options.set_run_validator(false); // see TransformSpirvForExplicitLod0Sampling
-            optimizer.SetMessageConsumer([](spv_message_level_t, const char*, const spv_position_t&,
-                                            const char* message) {
-                MGLOG_E("Vulkan: fragcoord y-flip pass: %s", message != nullptr ? message : "");
-            });
-            optimizer.RegisterPass(
-                spvtools::Optimizer::PassToken(MakeUnique<GlFragCoordYFlipPass>(framebufferHeight)));
-
-            const Bool success = optimizer.Run(input.data(), input.size(), &output, options);
-            if (!success) {
-                MGLOG_E("Vulkan: failed to run the gl_FragCoord y-flip pass; keeping the original module");
-                output = input;
-            }
-            return success;
         }
 
         Bool TransformSpirvForXfbCapture(const Vector<Uint>& input, Vector<Uint>& output,
@@ -1984,12 +1772,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             XXHASH_VERIFY(XXH64_update(m_hashState, spv.data(), spv.size() * sizeof(Uint)));
         }
         XXHASH_VERIFY(XXH64_update(m_hashState, &flags, sizeof(CompileOptionFlags)));
-        // Only FragCoordYFlip variants bake the height in, so mixing it unconditionally would
-        // re-key every program in the cache on a resize for no reason.
-        if (flags & CompileOptionBit::FragCoordYFlip) {
-            XXHASH_VERIFY(XXH64_update(m_hashState, &m_defaultFramebufferHeight,
-                                        sizeof(m_defaultFramebufferHeight)));
-        }
 
         // Include UBO block bindings in hash so different binding configurations produce different entries
         const Uint32 blockCount = static_cast<Uint32>(program.GetActiveUniformBlocksCount());
@@ -2598,36 +2380,14 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
     }
 
-    void ProgramFactory::SetDefaultFramebufferHeight(Uint32 height) {
-        if (m_defaultFramebufferHeight == height) {
-            return;
-        }
-        m_defaultFramebufferHeight = height;
-        // Both memos key on (program, flags) alone, so neither can tell the two heights apart:
-        // drop the lookup memo, and bump the structure epoch so every caller holding a
-        // VkProgramObject* re-runs GetOrCreateProgram and lands on the new hash. The cached
-        // entries themselves stay - they are keyed by a hash that now includes the old height,
-        // so they can only be reached again if that height comes back, and the frame-boundary
-        // sweep retires them otherwise.
-        m_lastLookup = {};
-        ++m_cacheStructureEpoch;
-    }
-
     const ProgramFactory::VkProgramObject& ProgramFactory::GetOrCreateProgram(
         const MG_State::GLState::ProgramObject& program, CompileOptionFlags flags) {
         // Hashing the full SPIR-V of every stage is far too expensive to repeat per draw;
         // reuse the program's memoized hash while its backend state version is unchanged.
-        // The memo keys on the flags word, which ComputeHash is no longer a pure function of:
-        // a FragCoordYFlip variant also depends on the baked default-framebuffer height, so
-        // that height rides in the free high half of the key. Flags occupy the low bits, and a
-        // height cannot exceed the 16 bits a swapchain extent fits in.
-        const Uint memoKey = (flags & CompileOptionBit::FragCoordYFlip)
-                                 ? (flags.GetRaw() | (m_defaultFramebufferHeight << 16))
-                                 : flags.GetRaw();
         HashType hash = 0;
-        if (!program.GetBackendHashMemo(memoKey, hash)) {
+        if (!program.GetBackendHashMemo(flags.GetRaw(), hash)) {
             hash = ComputeHash(program, flags);
-            program.SetBackendHashMemo(memoKey, hash);
+            program.SetBackendHashMemo(flags.GetRaw(), hash);
         }
         auto it = m_cache.find(hash);
         if (it != m_cache.end()) {
@@ -2677,14 +2437,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 Vector<Uint> explicitLodSpirv;
                 if (TransformSpirvForExplicitLod0Sampling(moduleSpirvs[i], explicitLodSpirv)) {
                     moduleSpirvs[i] = Move(explicitLodSpirv);
-                }
-            }
-
-            if ((flags & ProgramFactory::CompileOptionBit::FragCoordYFlip) && shaders[i] &&
-                shaders[i]->GetShaderStage() == ShaderStage::Fragment) {
-                Vector<Uint> fragCoordSpirv;
-                if (TransformSpirvForFragCoordYFlip(moduleSpirvs[i], fragCoordSpirv, m_defaultFramebufferHeight)) {
-                    moduleSpirvs[i] = Move(fragCoordSpirv);
                 }
             }
 

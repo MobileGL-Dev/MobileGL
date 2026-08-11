@@ -56,7 +56,6 @@ add_executable(MobileGLIntegrationTest
     Scenarios/PipelineFailureScenario.cpp
     Scenarios/AdvertisedLimitsScenario.cpp
     Scenarios/PixelStoreSweepScenario.cpp
-    Scenarios/FragCoordOriginScenario.cpp
 )
 
 target_include_directories(MobileGLIntegrationTest PRIVATE
