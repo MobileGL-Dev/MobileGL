@@ -568,13 +568,26 @@ namespace MobileGL::MG_Util::BackendLoader {
 #if defined(MOBILEGL_IOS)
             eglLib = OpenLib({"libtinygl4angle.dylib"});
 #else
-            eglLib = OpenLib({"libEGL.so"});
+            // Versioned SONAME first. The unversioned "libEGL.so" is a development
+            // symlink: it ships in libegl-dev/mesa-libEGL-devel, NOT in the runtime
+            // package, so a machine that can run GL perfectly well may not have it -
+            // every stock Ubuntu/Debian runtime image, the GitHub Actions runners
+            // included. Asking only for the unversioned name there makes dlopen fail,
+            // which used to leave the whole EGL function table null and take the next
+            // call through a null pointer (SIGSEGV inside InitDisplayAndContext).
+            // Developer machines have both names, which is exactly why this only ever
+            // showed up in CI.
+            eglLib = OpenLib({"libEGL.so.1", "libEGL.so"});
 #endif
         }
 #endif // !_WIN32
 
         if (!eglLib) {
-            MGLOG_E("Failed to open EGL library");
+            // MGLOG_F, not MGLOG_E: at the INFO log level every shipping and CI build
+            // uses, MGLOG_E is compiled out (Log.h orders DEBUG < WARN < ERROR < INFO),
+            // so this diagnosis was invisible in precisely the builds that needed it.
+            MGLOG_F("Failed to open EGL library: none of libEGL.so.1 / libEGL.so could be "
+                    "dlopened; every EGL entry point will be null");
             return;
         }
 
@@ -595,7 +608,10 @@ namespace MobileGL::MG_Util::BackendLoader {
     do {                                                                                                               \
         funcs.name = (MG_External::EGL::name##_PTR)resolveEGLProc(#name);                                              \
         if (!funcs.name) {                                                                                             \
-            MGLOG_E("Failed to load EGL function: %s", #name);                                                         \
+            /* MGLOG_F for the same reason as the open failure above: a null entry     */                              \
+            /* point is a crash waiting for its first caller, and MGLOG_E is compiled  */                              \
+            /* out at the INFO level every shipping and CI build uses.                 */                              \
+            MGLOG_F("Failed to load EGL function: %s", #name);                                                         \
         }                                                                                                              \
     } while (0);
 
