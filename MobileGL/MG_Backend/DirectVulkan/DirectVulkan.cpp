@@ -966,6 +966,29 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         if (drawcount <= 0) {
             return;
         }
+
+        // With no element-array buffer bound, every indices[i] is a client pointer into a
+        // separate CPU allocation, not an offset into one shared buffer. The batched payload
+        // below cannot express that: it carries ONE index-buffer view for the whole batch and
+        // turns each pointer into a firstIndex relative to it. Replay the sub-draws through
+        // the single-draw entry point instead - it snapshots each client range into its own
+        // transient slice, which is exactly what the unrolled draws this must match do.
+        // (The batch used to be built this way; the shared-view rewrite that added
+        // MultiDrawIndexedCmd left the client-memory shape addressing a view whose byte
+        // offset is a hardcoded 0, so UploadAndBindIndexBuffer saw a null client pointer,
+        // declined the whole batch and painted nothing.)
+        const auto& vao = *MG_State::pGLContext->GetBoundVertexArray();
+        if (vao.GetIndexBufferBindingSlot().GetBoundObject() == nullptr) {
+            for (GLsizei i = 0; i < drawcount; ++i) {
+                if (count[i] <= 0) {
+                    continue;
+                }
+                DrawElementsBaseVertex(mode, count[i], type, indices[i],
+                                       basevertex != nullptr ? basevertex[i] : 0);
+            }
+            return;
+        }
+
         MultiDrawIndexedCmd payload{};
         payload.mode = mode;
         payload.indexBufferView.indexType = type;
