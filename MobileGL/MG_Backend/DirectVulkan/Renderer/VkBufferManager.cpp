@@ -161,11 +161,22 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     }
 
     void VkBufferManager::CollectAllDeferredReleases() {
+        // Per-resource releases only. Every one of them was deferred behind a BumpSliceEpoch,
+        // so no memo can still name the handle, and the caller has proved the GPU is idle.
+        //
+        // The transient arena's releases are deliberately NOT collected here. A buffer lands
+        // there when the arena outgrows it mid-frame (BufferArena::EnsureCapacity), and at
+        // that moment every slice already handed out from this frame's arena still names it -
+        // VkBufferResource::transientSlice above all, which AcquireStreamedSlice keeps
+        // serving for the whole frame serial on the strength of transientFrameSerial alone.
+        // Nothing bumps the slice epoch for those other resources, so freeing the buffer
+        // here left the streamed memo handing a destroyed VkBuffer to vkCmdBindIndexBuffer
+        // (llvmpipe then faulted inside the draw; the Create/Flywheel indirect retrace died
+        // exactly this way). Mid-frame drains do not advance m_frameSerial, so they must not
+        // free arena storage either: the arena's own ResetFrame/BeginFrame is the point where
+        // the slot's slices stop being reachable, and that is where these releases land.
         for (Uint32 frameIndex = 0; frameIndex < m_deferredBufferReleases.size(); ++frameIndex) {
             CollectDeferredReleases(frameIndex);
-        }
-        for (Uint32 frameIndex = 0; frameIndex < m_transientUploadArena.GetFrameCount(); ++frameIndex) {
-            m_transientUploadArena.CollectDeferredReleases(frameIndex);
         }
     }
 

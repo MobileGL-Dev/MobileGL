@@ -102,10 +102,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // Recreate all per-frame transient arenas
         Bool RecreateTransientArenas(Uint32 frameCount);
         void BeginFrame(Uint32 frameIndex);
-        // Drains every frame slot's deferred buffer/resource releases (and the
-        // transient arena's parked superseded blocks). Only valid when the
-        // caller has proven every queue submission complete; used by the
-        // present-less frame-boundary drain.
+        // Drains every frame slot's deferred buffer/resource releases. Only valid when
+        // the caller has proven every queue submission complete; used by the present-less
+        // frame-boundary drain. Deliberately does NOT touch the transient arena's parked
+        // superseded blocks: those are still named by this frame's slices (see the
+        // definition), and only a frame rewind retires them.
         void CollectAllDeferredReleases();
         // All previously submitted GPU work has completed (vkDeviceWaitIdle).
         void NotifyDeviceIdle();

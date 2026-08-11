@@ -111,6 +111,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
 
         if (buffer.IsValid()) {
+            // Outgrown, not dead: every BufferSlice handed out from this frame's arena so far
+            // still names it, and those slices stay in service until the frame slot is rewound
+            // (VkBufferResource::transientSlice, the converted-vertex-stream cache, the draw
+            // memos). The release therefore has to survive every mid-frame reclaim and land on
+            // the next ResetFrame of this slot - see VkBufferManager::CollectAllDeferredReleases.
             m_deferredReleases[frameIndex].push_back(std::move(buffer));
         }
 
