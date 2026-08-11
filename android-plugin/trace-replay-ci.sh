@@ -344,6 +344,22 @@ run_retrace() {
   copy_app_artifact "${app_dir}/output/retrace.log" "${result_dir}/retrace.log"
   copy_app_artifact "${app_dir}/output/mobilegl.log" "${result_dir}/mobilegl.log"
 
+  # A replay that wrote result.json but did not pass used to print nothing but
+  # the JSON, which for a non-zero statusCode says only "retrace failed with
+  # status N". The logs that say why are already on disk here, so echo their
+  # tails the same way the missing-result.json path does; the job log is the one
+  # place a failure stays readable after the result artifact expires.
+  if ! grep -q '"passed"[[:space:]]*:[[:space:]]*true' "${result_dir}/result.json"; then
+    if [ -s "${result_dir}/retrace.log" ]; then
+      echo "trace-replay-ci.sh: tail of retrace.log:" >&2
+      tail -200 "${result_dir}/retrace.log" >&2
+    fi
+    if [ -s "${result_dir}/mobilegl.log" ]; then
+      echo "trace-replay-ci.sh: tail of mobilegl.log:" >&2
+      tail -200 "${result_dir}/mobilegl.log" >&2
+    fi
+  fi
+
   "${PYTHON}" -c 'import json, sys; result = json.load(open(sys.argv[1], encoding="utf-8")); sys.exit(0 if result.get("passed") else f"trace replay failed: {result}")' "${result_dir}/result.json"
 }
 

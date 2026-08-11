@@ -531,22 +531,41 @@ jobs:
           )
 
           if ((${#failed_cases[@]})); then
-            echo "Retaining fixtures for failed retrace case(s):"
+            echo "Retaining fixtures and results for failed retrace case(s):"
             printf '  %s\n' "${!failed_cases[@]}"
           else
-            echo "All retrace jobs succeeded; no fixtures need to be retained."
+            echo "All retrace jobs succeeded; nothing needs to be retained."
           fi
 
           deleted=0
           retained=0
           while IFS=$'\t' read -r artifact_id artifact_name; do
+            keep=0
             if [[ "${artifact_name}" == MobileGL-trace-fixture-* ]]; then
               case_name="${artifact_name#MobileGL-trace-fixture-}"
               if [[ -v "failed_cases[${case_name}]" ]]; then
-                echo "Retaining ${artifact_name} (${artifact_id}) for failed retrace."
-                ((retained += 1))
-                continue
+                keep=1
               fi
+            elif [[ "${artifact_name}" == MobileGL-android-retrace-result-* ]]; then
+              # The result artifact carries mobilegl.log, retrace.log, logcat,
+              # the emulator log and the actual/diff images - the only record of
+              # why a retrace failed. Its name ends in -<backend>-<case>, so a
+              # suffix match on the case name keeps both backends' results for a
+              # case that failed on either of them, which is what a comparison
+              # needs. The match is anchored at the end, so a case name that is a
+              # prefix of a longer one does not retain the longer one's results.
+              for case_name in "${!failed_cases[@]}"; do
+                if [[ "${artifact_name}" == *-"${case_name}" ]]; then
+                  keep=1
+                  break
+                fi
+              done
+            fi
+
+            if ((keep)); then
+              echo "Retaining ${artifact_name} (${artifact_id}) for failed retrace."
+              ((retained += 1))
+              continue
             fi
 
             echo "Deleting ${artifact_name} (${artifact_id})"
