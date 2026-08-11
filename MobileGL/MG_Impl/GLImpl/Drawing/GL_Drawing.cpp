@@ -493,15 +493,12 @@ namespace MobileGL::MG_Impl::GLImpl {
     }
 
     void DispatchComputeIndirect(GLintptr indirect) {
-        auto dispatchComputeIndirect = MG_Backend::gBackendFunctionsTable.GL.DispatchComputeIndirect;
-        if (!dispatchComputeIndirect) {
-            MG_State::pGLContext->RecordError(
-                ErrorCode::InvalidOperation,
-                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
-                                             "Backend does not support indirect compute dispatch."));
-            return;
-        }
-        if (!ValidateCurrentProgramForCompute(__func__)) return;
+        // Argument and binding validation runs FIRST. Both are properties of the call and of GL
+        // state, so a context whose backend cannot dispatch at all must still report the
+        // argument error the spec names rather than masking every one of them with
+        // "unsupported" - which is what put GL_INVALID_OPERATION where
+        // KHR-GL43.compute_shader.api-indirect expects GL_INVALID_VALUE.
+        //
         // GL 4.6 core 19: `indirect` is a byte offset into GL_DISPATCH_INDIRECT_BUFFER -
         // negative or misaligned is INVALID_VALUE, nothing bound is INVALID_OPERATION.
         if (indirect < 0 || (indirect % 4) != 0) {
@@ -534,6 +531,15 @@ namespace MobileGL::MG_Impl::GLImpl {
                                 indirect, indirectBuffer->GetSize())));
             return;
         }
+        auto dispatchComputeIndirect = MG_Backend::gBackendFunctionsTable.GL.DispatchComputeIndirect;
+        if (!dispatchComputeIndirect) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidOperation,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
+                                             "Backend does not support indirect compute dispatch."));
+            return;
+        }
+        if (!ValidateCurrentProgramForCompute(__func__)) return;
         dispatchComputeIndirect(indirect);
     }
 
@@ -651,6 +657,12 @@ namespace MobileGL::MG_Impl::GLImpl {
 
     void MultiDrawElementsIndirectCount(GLenum mode, GLenum type, const void* indirect, GLintptr drawcount,
                                         GLsizei maxdrawcount, GLsizei stride) {
+        // Argument validation before the backend-availability check: see DispatchComputeIndirect.
+        // DrawElementsIndirectCommand: count, instanceCount, firstIndex, baseVertex, baseInstance.
+        if (!ValidateIndirectCountDraw(reinterpret_cast<GLintptr>(indirect), drawcount, maxdrawcount, stride,
+                                       5 * sizeof(Uint32), __func__)) {
+            return;
+        }
         auto multiDrawElementsIndirectCount = MG_Backend::gBackendFunctionsTable.GL.MultiDrawElementsIndirectCount;
         if (!multiDrawElementsIndirectCount) {
             MG_State::pGLContext->RecordError(
@@ -659,27 +671,23 @@ namespace MobileGL::MG_Impl::GLImpl {
                                              "Backend does not support indirect-parameter indexed draws."));
             return;
         }
-        // DrawElementsIndirectCommand: count, instanceCount, firstIndex, baseVertex, baseInstance.
-        if (!ValidateIndirectCountDraw(reinterpret_cast<GLintptr>(indirect), drawcount, maxdrawcount, stride,
-                                       5 * sizeof(Uint32), __func__)) {
-            return;
-        }
         MultiDrawElementsIndirectCount_Backend(mode, type, indirect, drawcount, maxdrawcount, stride);
     }
 
     void MultiDrawArraysIndirectCount(GLenum mode, const void* indirect, GLintptr drawcount,
                                       GLsizei maxdrawcount, GLsizei stride) {
+        // Argument validation before the backend-availability check: see DispatchComputeIndirect.
+        // DrawArraysIndirectCommand: count, instanceCount, first, baseInstance.
+        if (!ValidateIndirectCountDraw(reinterpret_cast<GLintptr>(indirect), drawcount, maxdrawcount, stride,
+                                       4 * sizeof(Uint32), __func__)) {
+            return;
+        }
         auto multiDrawArraysIndirectCount = MG_Backend::gBackendFunctionsTable.GL.MultiDrawArraysIndirectCount;
         if (!multiDrawArraysIndirectCount) {
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidOperation,
                 MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
                                              "Backend does not support indirect-parameter array draws."));
-            return;
-        }
-        // DrawArraysIndirectCommand: count, instanceCount, first, baseInstance.
-        if (!ValidateIndirectCountDraw(reinterpret_cast<GLintptr>(indirect), drawcount, maxdrawcount, stride,
-                                       4 * sizeof(Uint32), __func__)) {
             return;
         }
         MultiDrawArraysIndirectCount_Backend(mode, indirect, drawcount, maxdrawcount, stride);

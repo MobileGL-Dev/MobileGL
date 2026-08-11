@@ -95,12 +95,16 @@ namespace {
         ASSERT_NE(reservedOnly, 0u);
         ASSERT_EQ(IsBuffer(reservedOnly), GL_FALSE);
 
-        GLuint samplerReservedOnly = 0;
-        GenSamplers(1, &samplerReservedOnly);
+        // glGenSamplers, unlike glGenBuffers, creates the objects outright, so a sampler name is
+        // only "not an existing object" once it has been deleted.
+        GLuint deadSampler = 0;
+        GenSamplers(1, &deadSampler);
+        ASSERT_NE(deadSampler, 0u);
+        DeleteSamplers(1, &deadSampler);
         DrainErrors();
 
         const GLuint mixedBuffers[2] = {buffer, reservedOnly};
-        const GLuint samplers[1] = {samplerReservedOnly};
+        const GLuint samplers[1] = {deadSampler};
         const GLintptr offsets[2] = {0, 0};
         const GLsizeiptr sizes[2] = {256, 256};
 
@@ -110,7 +114,7 @@ namespace {
             {"glBindBuffersRange with a reserved-but-uncreated name",
              [&] { BindBuffersRange(GL_UNIFORM_BUFFER, 0, 2, mixedBuffers, offsets, sizes); },
              GL_INVALID_OPERATION},
-            {"glBindSamplers with a reserved-but-uncreated name", [&] { BindSamplers(0, 1, samplers); },
+            {"glBindSamplers with a deleted sampler name", [&] { BindSamplers(0, 1, samplers); },
              GL_INVALID_OPERATION},
         });
 
