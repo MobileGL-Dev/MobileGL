@@ -233,6 +233,75 @@ void main() { o_color = vec4(0.1, 0.2, 0.3, 1.0); }
         glDeleteProgram(program);
     }
 
+    // A MULTISAMPLE-RESOLVE blit into the default framebuffer has to change orientation like any
+    // other, but vkCmdResolveImage takes one offset per side and cannot invert an axis, so it used
+    // to land the mirrored band. The renderer now resolves into a single-sample scratch image and
+    // blits from there. The source is painted in two horizontal bands so the mirror is visible;
+    // a full-extent uniform blit is a fixed point of the flip and would prove nothing.
+    TEST_F(ClearThenReadPixelsScenario, AMultisampleResolveBlitIntoTheDefaultFramebufferKeepsItsOrientation) {
+        if (!Ready()) return;
+        HeadlessGL& gl = Gl();
+        const int width = gl.Width();
+        const int height = gl.Height();
+        ASSERT_GE(height, 8);
+
+        GLint maxSamples = 0;
+        glGetIntegerv(GL_MAX_SAMPLES, &maxSamples);
+        if (maxSamples < 2) {
+            GTEST_SKIP() << "GL_MAX_SAMPLES is " << maxSamples << "; this needs a multisample renderbuffer";
+        }
+
+        GLuint fbo = 0, rbo = 0;
+        glGenFramebuffers(1, &fbo);
+        glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+        glGenRenderbuffers(1, &rbo);
+        glBindRenderbuffer(GL_RENDERBUFFER, rbo);
+        glRenderbufferStorageMultisample(GL_RENDERBUFFER, 2, GL_RGBA8, width, height);
+        glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, rbo);
+        if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+            glDeleteRenderbuffers(1, &rbo);
+            glDeleteFramebuffers(1, &fbo);
+            glBindFramebuffer(GL_FRAMEBUFFER, 0);
+            GTEST_SKIP() << "no complete 2x multisample RGBA8 renderbuffer on this driver";
+        }
+        glViewport(0, 0, width, height);
+
+        // Bottom half red, top half blue - via scissored clears, so no shader is involved.
+        glEnable(GL_SCISSOR_TEST);
+        glScissor(0, 0, width, height / 2);
+        ClearTo(1.0f, 0.0f, 0.0f, 1.0f);
+        glScissor(0, height / 2, width, height - height / 2);
+        ClearTo(0.0f, 0.0f, 1.0f, 1.0f);
+        glDisable(GL_SCISSOR_TEST);
+
+        BindDefaultFramebuffer();
+        glViewport(0, 0, width, height);
+        ClearTo(0.0f, 0.0f, 0.0f, 1.0f);
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, fbo);
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+        glBlitFramebuffer(0, 0, width, height, 0, 0, width, height, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        EXPECT_EQ(FirstGLError(), 0u);
+
+        const Image resolved = ReadPixels(width, height);
+        EXPECT_EQ(FirstGLError(), 0u);
+        const Rgba8 bottom = resolved.At(width / 2, height / 4);
+        const Rgba8 top = resolved.At(width / 2, height - 1 - height / 4);
+        EXPECT_GT(bottom.r, 200) << "the bottom band should be red after the resolve, got rgba("
+                                 << static_cast<int>(bottom.r) << ", " << static_cast<int>(bottom.g) << ", "
+                                 << static_cast<int>(bottom.b) << ") - blue there means the resolve landed "
+                                 << "in the mirrored band";
+        EXPECT_LT(bottom.b, 60);
+        EXPECT_GT(top.b, 200) << "the top band should be blue after the resolve, got rgba("
+                              << static_cast<int>(top.r) << ", " << static_cast<int>(top.g) << ", "
+                              << static_cast<int>(top.b) << ")";
+        EXPECT_LT(top.r, 60);
+
+        glDeleteRenderbuffers(1, &rbo);
+        glDeleteFramebuffers(1, &fbo);
+        gl.EndFrame();
+    }
+
     // The same ordering claim for the path that DOES open a render pass. It passes today (the
     // render pass folds the clear into its loadOp and pops it), and it is here so a future change
     // to the pending-clear lifecycle cannot quietly reverse clear and draw.

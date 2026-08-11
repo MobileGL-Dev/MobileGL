@@ -368,6 +368,31 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             Uint32 samplerBinding = 0;
         };
 
+        // A single-sample staging image for multisample-resolve blits that also have to change
+        // orientation. vkCmdResolveImage cannot flip (it takes one offset per side, not the
+        // invertible pair vkCmdBlitImage takes), so a resolve into or out of the default
+        // framebuffer used to land the mirrored band. Resolving here first and then blitting from
+        // here separates the two operations, and each one then does only what it can express.
+        //
+        // Pooled rather than created per blit: the CTS runs hundreds of these back to back, and
+        // create-destroy per call would both cost allocations and, worse, need per-call deferred
+        // destruction to outlive the recording. It grows to the largest extent asked for and is
+        // reused; format changes recreate it.
+        struct MultisampleResolveScratchImage {
+            VkImage image = VK_NULL_HANDLE;
+            VmaAllocation allocation = VK_NULL_HANDLE;
+            VkFormat format = VK_FORMAT_UNDEFINED;
+            VkExtent2D extent = {0, 0};
+            VkImageLayout layout = VK_IMAGE_LAYOUT_UNDEFINED;
+        };
+        MultisampleResolveScratchImage m_msResolveScratch;
+        // Returns a scratch image at least `extent` in size with exactly `format`, transitioned to
+        // TRANSFER_DST and ready to be resolved into. Null image on failure (the caller then falls
+        // back to the direct resolve).
+        Bool AcquireMultisampleResolveScratchImage(VkCommandBuffer commandBuffer, VkFormat format,
+                                                   VkExtent2D extent);
+        void DestroyMultisampleResolveScratchImage();
+
         struct DeferredDepthMipmapCleanup {
             Vector<VkImageView> imageViews;
             Vector<VkFramebuffer> framebuffers;

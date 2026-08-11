@@ -3016,6 +3016,7 @@ void main() {
         DestroySubmitFencePool();
 
         DestroyDeferredDepthMipmapCleanup();
+        DestroyMultisampleResolveScratchImage();
         DestroyComputePipelines();
 
         // No sweep runs during teardown, but the observers point at this renderer
@@ -7194,6 +7195,68 @@ void main() {
         return true;
     }
 
+    void VulkanRenderer::DestroyMultisampleResolveScratchImage() {
+        if (m_msResolveScratch.image != VK_NULL_HANDLE) {
+            vmaDestroyImage(m_allocator, m_msResolveScratch.image, m_msResolveScratch.allocation);
+        }
+        m_msResolveScratch = {};
+    }
+
+    Bool VulkanRenderer::AcquireMultisampleResolveScratchImage(VkCommandBuffer commandBuffer, VkFormat format,
+                                                               VkExtent2D extent) {
+        if (extent.width == 0 || extent.height == 0 || format == VK_FORMAT_UNDEFINED) {
+            return false;
+        }
+        // Grow-only, and never shrink: these blits repeat at one or two sizes, so the steady state
+        // is one allocation for the whole process.
+        if (m_msResolveScratch.image == VK_NULL_HANDLE || m_msResolveScratch.format != format ||
+            m_msResolveScratch.extent.width < extent.width || m_msResolveScratch.extent.height < extent.height) {
+            const VkExtent2D grown = {std::max(extent.width, m_msResolveScratch.extent.width),
+                                      std::max(extent.height, m_msResolveScratch.extent.height)};
+            DestroyMultisampleResolveScratchImage();
+
+            VkImageCreateInfo imageInfo{};
+            imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+            imageInfo.imageType = VK_IMAGE_TYPE_2D;
+            imageInfo.format = format;
+            imageInfo.extent = {grown.width, grown.height, 1};
+            imageInfo.mipLevels = 1;
+            imageInfo.arrayLayers = 1;
+            imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+            imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+            imageInfo.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+            imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+            imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+
+            VmaAllocationCreateInfo allocationInfo{};
+            allocationInfo.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
+            allocationInfo.requiredFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
+            if (vmaCreateImage(m_allocator, &imageInfo, &allocationInfo, &m_msResolveScratch.image,
+                               &m_msResolveScratch.allocation, nullptr) != VK_SUCCESS) {
+                // Soft failure: the caller keeps the direct resolve, which is what shipped before.
+                MGLOG_E("AcquireMultisampleResolveScratchImage: vmaCreateImage failed (format=%d %ux%u)",
+                        static_cast<Int>(format), grown.width, grown.height);
+                m_msResolveScratch = {};
+                return false;
+            }
+            m_msResolveScratch.format = format;
+            m_msResolveScratch.extent = grown;
+            m_msResolveScratch.layout = VK_IMAGE_LAYOUT_UNDEFINED;
+        }
+
+        VkPipelineStageFlags srcStageMask = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+        VkAccessFlags srcAccessMask = 0;
+        GetImageTransitionSourceState(m_msResolveScratch.layout, srcStageMask, srcAccessMask);
+        if (!VkTextureManager::TransitionImageLayout(commandBuffer, m_msResolveScratch.image,
+                                                     m_msResolveScratch.layout,
+                                                     VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, srcStageMask,
+                                                     VK_PIPELINE_STAGE_TRANSFER_BIT, srcAccessMask,
+                                                     VK_ACCESS_TRANSFER_WRITE_BIT, VK_IMAGE_ASPECT_COLOR_BIT)) {
+            return false;
+        }
+        return true;
+    }
+
     // The aspects a depth/stencil format actually carries. VkTextureManager keeps its own copy of
     // this private, and the swapchain's depth/stencil image has no TextureResource to ask.
     static VkImageAspectFlags GetDepthStencilAspectMaskForFormat(VkFormat format) {
@@ -8004,23 +8067,78 @@ void main() {
         }
 
         if (srcBinding.sampleCount != VK_SAMPLE_COUNT_1_BIT && dstBinding.sampleCount == VK_SAMPLE_COUNT_1_BIT) {
-            // NOTE: vkCmdResolveImage cannot flip, and this region is still built from the raw GL
-            // offsets. A multisample-resolve blit whose source or destination is the default
-            // framebuffer therefore keeps the pre-fix behaviour; it needs a resolve-then-blit
-            // (or blit-then-resolve) split, which is its own change.
             // GL multisample resolve blits are 1:1 by spec; vkCmdBlitImage cannot read a
-            // multisampled source.
+            // multisampled source, so the samples have to come down through vkCmdResolveImage.
+            const Uint32 resolveWidth = static_cast<Uint32>(std::abs(srcX1 - srcX0));
+            const Uint32 resolveHeight = static_cast<Uint32>(std::abs(srcY1 - srcY0));
+
+            // vkCmdResolveImage takes ONE offset per side, so it cannot express the axis inversion
+            // that a default-framebuffer rect needs - it would land the mirrored band. When the
+            // transforms above actually moved the region, split the operation: resolve into a
+            // single-sample scratch image at raw offsets, then blit THAT into the destination with
+            // the (already transformed) region, which vkCmdBlitImage can invert.
+            const Bool regionWasTransformed =
+                (readIsDefaultFbo || drawIsDefaultFbo) &&
+                (blitRegion.srcOffsets[0].x != srcX0 || blitRegion.srcOffsets[0].y != srcY0 ||
+                 blitRegion.srcOffsets[1].x != srcX1 || blitRegion.srcOffsets[1].y != srcY1 ||
+                 blitRegion.dstOffsets[0].x != dstX0 || blitRegion.dstOffsets[0].y != dstY0 ||
+                 blitRegion.dstOffsets[1].x != dstX1 || blitRegion.dstOffsets[1].y != dstY1);
+            const Bool useScratchResolve =
+                regionWasTransformed && resolveWidth > 0 && resolveHeight > 0 &&
+                AcquireMultisampleResolveScratchImage(frame.commandBuffer, srcBinding.format,
+                                                      {resolveWidth, resolveHeight});
+
             VkImageResolve resolveRegion{};
             resolveRegion.srcSubresource = blitRegion.srcSubresource;
-            resolveRegion.srcOffset = {std::min(srcX0, srcX1), std::min(srcY0, srcY1), 0};
             resolveRegion.dstSubresource = blitRegion.dstSubresource;
-            resolveRegion.dstOffset = {std::min(dstX0, dstX1), std::min(dstY0, dstY1), 0};
-            resolveRegion.extent = {static_cast<Uint32>(std::abs(srcX1 - srcX0)),
-                                    static_cast<Uint32>(std::abs(srcY1 - srcY0)), 1};
-            vkCmdResolveImage(frame.commandBuffer,
-                              srcBinding.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                              dstBinding.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                              1, &resolveRegion);
+            resolveRegion.extent = {resolveWidth, resolveHeight, 1};
+            if (useScratchResolve) {
+                // The scratch copy is a plain single-layer colour image, and the resolve reads the
+                // SOURCE band the (possibly inverted) transformed region names - taking its min so
+                // an inverted pair still describes the same band.
+                resolveRegion.srcOffset = {std::min(blitRegion.srcOffsets[0].x, blitRegion.srcOffsets[1].x),
+                                           std::min(blitRegion.srcOffsets[0].y, blitRegion.srcOffsets[1].y), 0};
+                resolveRegion.dstSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+                resolveRegion.dstSubresource.mipLevel = 0;
+                resolveRegion.dstSubresource.baseArrayLayer = 0;
+                resolveRegion.dstSubresource.layerCount = 1;
+                resolveRegion.dstOffset = {0, 0, 0};
+                vkCmdResolveImage(frame.commandBuffer,
+                                  srcBinding.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                                  m_msResolveScratch.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                                  1, &resolveRegion);
+
+                VkImageLayout scratchLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+                const Bool scratchReady = VkTextureManager::TransitionImageLayout(
+                    frame.commandBuffer, m_msResolveScratch.image, scratchLayout,
+                    VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                    VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT,
+                    VK_IMAGE_ASPECT_COLOR_BIT);
+                MOBILEGL_ASSERT(scratchReady, "%s: failed to transition the resolve scratch image", __func__);
+                m_msResolveScratch.layout = scratchLayout;
+
+                // Second leg: the scratch image holds the resolved band at its own origin, so the
+                // source side of the region becomes the whole scratch rect and only the
+                // destination keeps the transform.
+                VkImageBlit scratchBlit = blitRegion;
+                scratchBlit.srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+                scratchBlit.srcSubresource.mipLevel = 0;
+                scratchBlit.srcSubresource.baseArrayLayer = 0;
+                scratchBlit.srcSubresource.layerCount = 1;
+                scratchBlit.srcOffsets[0] = {0, 0, 0};
+                scratchBlit.srcOffsets[1] = {static_cast<Int32>(resolveWidth), static_cast<Int32>(resolveHeight), 1};
+                vkCmdBlitImage(frame.commandBuffer,
+                               m_msResolveScratch.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                               dstBinding.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                               1, &scratchBlit, filter == GL_LINEAR ? VK_FILTER_LINEAR : VK_FILTER_NEAREST);
+            } else {
+                resolveRegion.srcOffset = {std::min(srcX0, srcX1), std::min(srcY0, srcY1), 0};
+                resolveRegion.dstOffset = {std::min(dstX0, dstX1), std::min(dstY0, dstY1), 0};
+                vkCmdResolveImage(frame.commandBuffer,
+                                  srcBinding.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                                  dstBinding.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                                  1, &resolveRegion);
+            }
         } else {
             vkCmdBlitImage(frame.commandBuffer,
                            srcBinding.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
