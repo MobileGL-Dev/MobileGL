@@ -1101,6 +1101,55 @@ void main() { color = u + v; }
         EXPECT_EQ(TakeError(), GL_NO_ERROR);
     }
 
+    // ---------------------------------------------------- queries on an unlinked program ----
+    // glGetProgramiv is legal on a program that has never linked - GL 4.6 sec. 7.3 says the
+    // queried state simply has its initial value - but the reflection-backed pnames read
+    // Artifacts().program, which is null until a link produces one. That dereference was a
+    // SIGSEGV inside glslang::TProgram::getNumPipeInputs, and KHR-GL30.api.coverage walks into it
+    // (it queries GL_ACTIVE_ATTRIBUTES right after a glGetAttribLocation that failed). It only
+    // became reachable once the glCopyTexImage2D throw ahead of it in the same case stopped
+    // killing the run first.
+    TEST_F(ProgramInterfaceTest, ReflectionQueriesOnAnUnlinkedProgramAnswerZero) {
+        const GLuint neverLinked = CreateProgram();
+        ASSERT_NE(neverLinked, 0u);
+        ClearErrors();
+
+        for (const GLenum pname : {GL_ACTIVE_ATTRIBUTES, GL_ACTIVE_ATTRIBUTE_MAX_LENGTH, GL_ACTIVE_UNIFORMS,
+                                   GL_ACTIVE_UNIFORM_MAX_LENGTH, GL_ACTIVE_UNIFORM_BLOCKS,
+                                   GL_ACTIVE_ATOMIC_COUNTER_BUFFERS}) {
+            GLint value = -1;
+            GetProgramiv(neverLinked, pname, &value);
+            ClearErrors();
+            EXPECT_GE(value, 0) << "pname 0x" << std::hex << pname << " left its output untouched";
+        }
+
+        // A program that was linked and FAILED is the shape api.coverage actually hits.
+        const GLuint brokenSource = MakeProgram("#version 430\nvoid main() { this is not glsl }\n", kSimpleFs);
+        LinkProgram(brokenSource);
+        ClearErrors();
+        GLint linked = GL_TRUE;
+        GetProgramiv(brokenSource, GL_LINK_STATUS, &linked);
+        ASSERT_EQ(linked, GL_FALSE) << "the shader was supposed to fail to compile";
+        ClearErrors();
+
+        GLint attributes = -1;
+        GetProgramiv(brokenSource, GL_ACTIVE_ATTRIBUTES, &attributes);
+        ClearErrors();
+        EXPECT_EQ(attributes, 0);
+
+        // GL_COMPUTE_WORK_GROUP_SIZE is GL_INVALID_OPERATION on a program that has not linked (GL
+        // 4.6 sec. 7.13), so it is allowed to leave the output alone - but it still reaches
+        // GetComputeLocalSize(), and it may not do so through a null reflection.
+        GLint localSize[3] = {-1, -1, -1};
+        GetProgramiv(brokenSource, GL_COMPUTE_WORK_GROUP_SIZE, localSize);
+        const GLenum computeError = TakeError();
+        ClearErrors();
+        EXPECT_TRUE(computeError == GL_INVALID_OPERATION || (localSize[0] == 0 && localSize[1] == 0 &&
+                                                             localSize[2] == 0))
+            << "either the query is refused, or it answers the initial value - never both untouched "
+               "and unreported";
+    }
+
     // ------------------------------------------------------------- length on every path ----
     // glGetProgramResourceiv's *length is the caller's only signal for how many entries params
     // holds, and callers are entitled to leave it uninitialised: the CTS declares `GLsizei

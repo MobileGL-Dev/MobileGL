@@ -516,12 +516,27 @@ namespace MobileGL::MG_State::GLState {
             Artifacts().infoLog = "No program binary format is supported.";
         }
         Bool GetValidateStatus() const { return m_validateStatus; }
-        Int GetActiveAtomicCounterCount() const { return Artifacts().program->getNumAtomicCounters(); }
-        Int GetActiveAttributesCount() const { return Artifacts().program->getNumPipeInputs(); }
+        // Artifacts().program is null until a link produces reflection, and glGetProgramiv is
+        // perfectly legal on a program that never linked (GL 4.6 sec. 7.3: the queried state is
+        // simply its initial value, zero). Dereferencing it there took the process down with a
+        // SIGSEGV inside glslang::TProgram::getNumPipeInputs - KHR-GL30.api.coverage does exactly
+        // this after a failed glGetAttribLocation, and reached it as soon as the CopyTexImage2D
+        // throw ahead of it stopped killing the run first.
+        Int GetActiveAtomicCounterCount() const {
+            const auto& program = Artifacts().program;
+            return program ? program->getNumAtomicCounters() : 0;
+        }
+        Int GetActiveAttributesCount() const {
+            const auto& program = Artifacts().program;
+            return program ? program->getNumPipeInputs() : 0;
+        }
         // GL-visible uniform blocks only: the synthesized MGL_GLOBAL_UBO the relaxed parse
         // materializes for default-block uniforms is filtered out by DoReflection.
         Int GetActiveUniformBlocksCount() const { return static_cast<Int>(Artifacts().glBlockIndexToTProgram.size()); }
-        GLuint GetComputeLocalSize(Uint dim) const { return Artifacts().program->getLocalSize(static_cast<Int>(dim)); }
+        GLuint GetComputeLocalSize(Uint dim) const {
+            const auto& program = Artifacts().program;
+            return program ? program->getLocalSize(static_cast<Int>(dim)) : 0;
+        }
         Int GetActiveAttributesMaxLength() const { return Artifacts().attribInNameMaxLength; }
         Int GetActiveUniformBlocksMaxNameLength() const { return Artifacts().uniformBlockNameMaxLength; }
         Uint GetUniformBlockIndex(const char* name) const {
