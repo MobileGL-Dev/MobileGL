@@ -3012,15 +3012,10 @@ void main() {
 
 #if defined(VK_USE_PLATFORM_XLIB_KHR)
         if (m_platformDisplay != nullptr) {
-            if (m_ownsFallbackXlibWindow && m_window != 0 && m_platformLibrary != nullptr) {
-                using XDestroyWindowFn = int (*)(Display*, Window);
-                auto* destroyWindow = reinterpret_cast<XDestroyWindowFn>(dlsym(m_platformLibrary, "XDestroyWindow"));
-                if (destroyWindow) {
-                    destroyWindow(static_cast<Display*>(m_platformDisplay), static_cast<Window>(m_window));
-                }
-                m_window = 0;
-                m_ownsFallbackXlibWindow = false;
-            }
+            // No fallback window to destroy any more: the display here is only ever
+            // one this renderer opened for a REAL window surface, and that window is
+            // the caller's to own. The hidden-window pbuffer fallback that used to be
+            // cleaned up here is gone (see CreateSurface).
             using XCloseDisplayFn = int (*)(Display*);
             auto* closeDisplay = reinterpret_cast<XCloseDisplayFn>(m_platformCloseDisplay);
             if (closeDisplay) {
@@ -10930,17 +10925,24 @@ void main() {
                 exts.push_back(VK_KHR_ANDROID_SURFACE_EXTENSION_NAME);
             }
 #elif defined VK_USE_PLATFORM_XLIB_KHR
+            // An offscreen surface has ZERO window-system dependence, by design and on
+            // every machine - including ones that do have a display. There used to be a
+            // fallback here that requested VK_KHR_xlib_surface and had CreateSurface()
+            // open a hidden, never-mapped X window; it is gone. A pbuffer that quietly
+            // needs an X server is a pbuffer that works on a workstation and dies on a
+            // headless runner, which is exactly what it did: with no DISPLAY, XOpenDisplay
+            // returned null and the next Xlib call segfaulted. If the loader genuinely has
+            // no VK_EXT_headless_surface, that is an honest bring-up failure and is
+            // reported as one below - never papered over with a window.
             m_headlessSurfaceSupported = IsExtensionSupported(m_extensions, VK_EXT_HEADLESS_SURFACE_EXTENSION_NAME);
-            if (m_headlessSurfaceSupported) {
-                exts.push_back(VK_EXT_HEADLESS_SURFACE_EXTENSION_NAME);
-            } else {
-                // Real ICDs (e.g. NVIDIA's proprietary Linux driver) may not implement
-                // VK_EXT_headless_surface at all. CreateSurface() falls back to a
-                // hidden Xlib window in that case, so request that extension instead.
-                MGLOG_I("%s not available; falling back to a hidden %s surface for the pbuffer context.",
-                        VK_EXT_HEADLESS_SURFACE_EXTENSION_NAME, VK_KHR_XLIB_SURFACE_EXTENSION_NAME);
-                exts.push_back(VK_KHR_XLIB_SURFACE_EXTENSION_NAME);
+            if (!m_headlessSurfaceSupported) {
+                MGLOG_F("%s is not available from this Vulkan loader, so an offscreen (pbuffer) DirectVulkan "
+                        "surface cannot be created. Refusing to substitute a window: offscreen surfaces must not "
+                        "depend on a window system. Install an ICD that implements it (lavapipe does).",
+                        VK_EXT_HEADLESS_SURFACE_EXTENSION_NAME);
+                throw RuntimeError("VK_EXT_headless_surface is unavailable for an offscreen DirectVulkan surface");
             }
+            exts.push_back(VK_EXT_HEADLESS_SURFACE_EXTENSION_NAME);
 #else
             exts.push_back(VK_EXT_HEADLESS_SURFACE_EXTENSION_NAME);
 #endif
@@ -11079,17 +11081,38 @@ void main() {
 
     void VulkanRenderer::PickPhysicalDevice() {
         Uint32 deviceCount = 0;
-        vkEnumeratePhysicalDevices(m_instance, &deviceCount, nullptr);
+        VK_VERIFY(vkEnumeratePhysicalDevices(m_instance, &deviceCount, nullptr));
         if (deviceCount == 0) {
-            MGLOG_E("No physical devices supporting Vulkan found.");
-        } else {
-            MGLOG_I("Found %d physical device(s).", deviceCount);
+            // A real, reachable configuration, not a broken invariant: an instance can be
+            // created from ICDs that load perfectly and then expose no device at all - a
+            // GPU-less machine with the vendor ICDs installed (RADV/ANV/NVK on a CI runner)
+            // is exactly that. It has to be a bring-up failure the caller can report.
+            //
+            // It used to be MGLOG_E + MOBILEGL_ASSERT, and BOTH are compiled out at the INFO
+            // log level every shipping and CI build uses (Log.h orders DEBUG < WARN < ERROR
+            // < INFO), so the count-zero case fell through in silence to `devices[0]` on an
+            // EMPTY vector below and segfaulted in vkGetPhysicalDeviceProperties.
+            MGLOG_F("No Vulkan physical devices found: the instance loaded ICDs but none of them exposes a "
+                    "device. Cannot bring up DirectVulkan. (A software ICD such as lavapipe provides one; "
+                    "pin it with VK_ICD_FILENAMES if the machine has no GPU.)");
+            throw RuntimeError("No Vulkan physical devices available for DirectVulkan");
         }
-
-        MOBILEGL_ASSERT(deviceCount > 0, "No physical devices found.");
+        MGLOG_I("Found %d physical device(s).", deviceCount);
 
         Vector<VkPhysicalDevice> devices(deviceCount);
-        vkEnumeratePhysicalDevices(m_instance, &deviceCount, devices.data());
+        // Same truncation hazard as the instance-extension enumeration: a VK_INCOMPLETE here
+        // leaves the tail of `devices` default-constructed (VK_NULL_HANDLE), and every one of
+        // those is a null handle waiting to be passed to the driver. Take only what was
+        // actually written.
+        const VkResult enumerateResult = vkEnumeratePhysicalDevices(m_instance, &deviceCount, devices.data());
+        if (enumerateResult != VK_SUCCESS && enumerateResult != VK_INCOMPLETE) {
+            VK_VERIFY(enumerateResult, "vkEnumeratePhysicalDevices failed");
+        }
+        devices.resize(deviceCount);
+        if (devices.empty()) {
+            MGLOG_F("vkEnumeratePhysicalDevices reported devices and then wrote none");
+            throw RuntimeError("No Vulkan physical devices available for DirectVulkan");
+        }
         for (Int i = 0; i < deviceCount; i++) {
             if (GetMoreCapablePhysicalDevice(devices[i], m_surface, m_physicalDevice, m_physicalDevice))
                 MGLOG_I("Picked physical device %d.", i);
@@ -11924,26 +11947,36 @@ void main() {
                 m_window = reinterpret_cast<NativeWindowType>(nativeWindow);
             }
 #elif defined VK_USE_PLATFORM_XLIB_KHR
-            if (m_headlessSurfaceSupported) {
-                auto* createHeadlessSurface =
-                    reinterpret_cast<PFN_vkCreateHeadlessSurfaceEXT>(
-                        vkGetInstanceProcAddr(m_instance, "vkCreateHeadlessSurfaceEXT"));
-                MOBILEGL_ASSERT(createHeadlessSurface != nullptr,
-                                "VK_EXT_headless_surface is not available for DirectVulkan pbuffer surface");
-                VkHeadlessSurfaceCreateInfoEXT sci{VK_STRUCTURE_TYPE_HEADLESS_SURFACE_CREATE_INFO_EXT};
-                VK_VERIFY(createHeadlessSurface(m_instance, &sci, nullptr, &m_surface),
-                          "vkCreateHeadlessSurfaceEXT failed");
-                return;
+            // No fall-through to Xlib: an offscreen surface never touches a window
+            // system. CreateInstance() has already refused the bring-up if the loader
+            // lacks the extension, so reaching here without it is a broken invariant
+            // rather than a platform limitation - report it and fail, do not continue.
+            auto* createHeadlessSurface =
+                reinterpret_cast<PFN_vkCreateHeadlessSurfaceEXT>(
+                    vkGetInstanceProcAddr(m_instance, "vkCreateHeadlessSurfaceEXT"));
+            if (!m_headlessSurfaceSupported || createHeadlessSurface == nullptr) {
+                MGLOG_F("vkCreateHeadlessSurfaceEXT is unavailable (%s reported as %s) while creating an "
+                        "offscreen DirectVulkan surface",
+                        VK_EXT_HEADLESS_SURFACE_EXTENSION_NAME,
+                        m_headlessSurfaceSupported ? "supported" : "unsupported");
+                throw RuntimeError("vkCreateHeadlessSurfaceEXT is unavailable for an offscreen DirectVulkan surface");
             }
-            // VK_EXT_headless_surface unavailable on this ICD: fall through to the
-            // Xlib branch below, which creates a hidden window since m_window is
-            // still null here.
+            VkHeadlessSurfaceCreateInfoEXT sci{VK_STRUCTURE_TYPE_HEADLESS_SURFACE_CREATE_INFO_EXT};
+            VK_VERIFY(createHeadlessSurface(m_instance, &sci, nullptr, &m_surface),
+                      "vkCreateHeadlessSurfaceEXT failed");
+            return;
 #else
             auto* createHeadlessSurface =
                 reinterpret_cast<PFN_vkCreateHeadlessSurfaceEXT>(
                     vkGetInstanceProcAddr(m_instance, "vkCreateHeadlessSurfaceEXT"));
-            MOBILEGL_ASSERT(createHeadlessSurface != nullptr,
-                            "VK_EXT_headless_surface is not available for DirectVulkan pbuffer surface");
+            if (createHeadlessSurface == nullptr) {
+                // Same class as the Xlib branch above: a null entry point behind
+                // MOBILEGL_ASSERT is a segv on the next line in every INFO-level build.
+                MGLOG_F("vkCreateHeadlessSurfaceEXT is unavailable while creating an offscreen DirectVulkan "
+                        "surface (%s missing from this loader)",
+                        VK_EXT_HEADLESS_SURFACE_EXTENSION_NAME);
+                throw RuntimeError("vkCreateHeadlessSurfaceEXT is unavailable for an offscreen DirectVulkan surface");
+            }
             VkHeadlessSurfaceCreateInfoEXT sci{VK_STRUCTURE_TYPE_HEADLESS_SURFACE_CREATE_INFO_EXT};
             VK_VERIFY(createHeadlessSurface(m_instance, &sci, nullptr, &m_surface),
                       "vkCreateHeadlessSurfaceEXT failed");
@@ -11972,58 +12005,51 @@ void main() {
         sci.pLayer = reinterpret_cast<const void*>(m_window);
         VK_VERIFY(vkCreateMetalSurfaceEXT(m_instance, &sci, nullptr, &m_surface), "vkCreateMetalSurfaceEXT failed");
 #elif defined VK_USE_PLATFORM_XLIB_KHR
-        // m_window may legitimately still be null here: the pbuffer/headless-fallback
-        // path below creates its own window when the caller didn't provide one.
+        // Reached only for a REAL on-screen window surface (a windowed desktop app,
+        // retrace in window mode). Presentation to a window legitimately needs a
+        // window system; offscreen requests returned above and never come here, so
+        // there is no longer any path that opens a display on a caller's behalf.
+        //
+        // Every failure below is a real error return, not MOBILEGL_ASSERT: that macro
+        // is compiled out at the INFO log level every shipping and CI build uses, so
+        // asserting here meant a null Display sailed straight into the next Xlib call
+        // and segfaulted - which is exactly how this presented in CI.
+        if (!m_window) {
+            MGLOG_F("CreateSurface: a window surface was requested with no native window");
+            throw RuntimeError("CreateSurface: no native window for the Vulkan Xlib surface");
+        }
 
         void* x11Lib = dlopen("libX11.so.6", RTLD_LOCAL | RTLD_NOW);
         if (!x11Lib) {
             x11Lib = dlopen("libX11.so", RTLD_LOCAL | RTLD_NOW);
         }
-        MOBILEGL_ASSERT(x11Lib != nullptr, "Failed to open libX11 while creating Vulkan Xlib surface");
+        if (x11Lib == nullptr) {
+            MGLOG_F("Failed to open libX11 (.so.6 and .so) while creating a Vulkan Xlib window surface: %s",
+                    dlerror());
+            throw RuntimeError("libX11 is unavailable for the Vulkan Xlib window surface");
+        }
         using XOpenDisplayFn = Display* (*)(const char*);
         using XCloseDisplayFn = int (*)(Display*);
         auto* xOpenDisplay = reinterpret_cast<XOpenDisplayFn>(dlsym(x11Lib, "XOpenDisplay"));
         auto* xCloseDisplay = reinterpret_cast<XCloseDisplayFn>(dlsym(x11Lib, "XCloseDisplay"));
-        MOBILEGL_ASSERT(xOpenDisplay != nullptr && xCloseDisplay != nullptr,
-                        "Failed to resolve XOpenDisplay/XCloseDisplay while creating Vulkan Xlib surface");
+        if (xOpenDisplay == nullptr || xCloseDisplay == nullptr) {
+            MGLOG_F("Failed to resolve XOpenDisplay/XCloseDisplay while creating a Vulkan Xlib window surface");
+            dlclose(x11Lib);
+            throw RuntimeError("libX11 is missing XOpenDisplay/XCloseDisplay");
+        }
 
-        auto* display = xOpenDisplay(std::getenv("DISPLAY"));
-        MOBILEGL_ASSERT(display != nullptr, "XOpenDisplay failed while creating Vulkan Xlib surface");
+        const char* displayName = std::getenv("DISPLAY");
+        auto* display = xOpenDisplay(displayName);
+        if (display == nullptr) {
+            MGLOG_F("XOpenDisplay(%s) failed while creating a Vulkan Xlib window surface; there is no usable X "
+                    "display for the requested window surface",
+                    displayName != nullptr ? displayName : "<DISPLAY unset>");
+            dlclose(x11Lib);
+            throw RuntimeError("XOpenDisplay failed for the Vulkan Xlib window surface");
+        }
         m_platformDisplay = display;
         m_platformLibrary = x11Lib;
         m_platformCloseDisplay = reinterpret_cast<void*>(xCloseDisplay);
-
-        if (!m_window) {
-            // Pbuffer/headless fallback: the ICD didn't implement
-            // VK_EXT_headless_surface (e.g. NVIDIA's proprietary Linux driver), so
-            // CreateInstance() requested VK_KHR_xlib_surface instead and left
-            // m_window null for us to fill in here. This window is never mapped -
-            // it exists only to give the WSI a valid drawable - so nothing is ever
-            // shown on screen; the swapchain image backs the GL default framebuffer
-            // exactly like the headless-surface path does.
-            using XDefaultRootWindowFn = Window (*)(Display*);
-            using XDefaultScreenFn = int (*)(Display*);
-            using XBlackPixelFn = unsigned long (*)(Display*, int);
-            using XCreateSimpleWindowFn = Window (*)(Display*, Window, int, int, unsigned int, unsigned int,
-                                                      unsigned int, unsigned long, unsigned long);
-            auto* xDefaultRootWindow = reinterpret_cast<XDefaultRootWindowFn>(dlsym(x11Lib, "XDefaultRootWindow"));
-            auto* xDefaultScreen = reinterpret_cast<XDefaultScreenFn>(dlsym(x11Lib, "XDefaultScreen"));
-            auto* xBlackPixel = reinterpret_cast<XBlackPixelFn>(dlsym(x11Lib, "XBlackPixel"));
-            auto* xCreateSimpleWindow =
-                reinterpret_cast<XCreateSimpleWindowFn>(dlsym(x11Lib, "XCreateSimpleWindow"));
-            MOBILEGL_ASSERT(xDefaultRootWindow && xDefaultScreen && xBlackPixel && xCreateSimpleWindow,
-                            "Failed to resolve XCreateSimpleWindow dependencies for the Xlib pbuffer fallback");
-
-            const int screen = xDefaultScreen(display);
-            const Uint32 width = std::max<Uint32>(m_config.SurfaceWidth, 1);
-            const Uint32 height = std::max<Uint32>(m_config.SurfaceHeight, 1);
-            const Window fallbackWindow = xCreateSimpleWindow(display, xDefaultRootWindow(display), 0, 0, width,
-                                                               height, 0, xBlackPixel(display, screen),
-                                                               xBlackPixel(display, screen));
-            MOBILEGL_ASSERT(fallbackWindow != 0, "XCreateSimpleWindow failed for the Xlib pbuffer fallback");
-            m_window = static_cast<NativeWindowType>(fallbackWindow);
-            m_ownsFallbackXlibWindow = true;
-        }
 
         VkXlibSurfaceCreateInfoKHR sci{VK_STRUCTURE_TYPE_XLIB_SURFACE_CREATE_INFO_KHR};
         sci.dpy = display;
@@ -12074,10 +12100,40 @@ void main() {
     }
 
     Vector<VkExtensionProperties> VulkanRenderer::EnumerateInstanceExtensions() {
-        Uint32 extensionCount = 0;
-        VK_VERIFY(vkEnumerateInstanceExtensionProperties(nullptr, &extensionCount, nullptr));
-        Vector<VkExtensionProperties> extensions(extensionCount);
-        vkEnumerateInstanceExtensionProperties(nullptr, &extensionCount, extensions.data());
+        // The two-call idiom has a race the spec explicitly allows for: the loader
+        // re-scans ICDs, so the property count can GROW between the sizing call and
+        // the fill call, and the fill then returns VK_INCOMPLETE having written only
+        // as many entries as the caller asked for. The result is a silently TRUNCATED
+        // extension list - and which extensions fall off the end is exactly as stable
+        // as the loader's scan order, i.e. not at all. That is how a headless CI
+        // runner could decide VK_EXT_headless_surface did not exist on one run and
+        // did on the next, sending the pbuffer path into the Xlib fallback with no
+        // X server to open. The sibling EnumerateDeviceExtensions below already
+        // checked its second call; this one dropped the result on the floor.
+        // Loop until a fill call agrees with its own sizing call.
+        Vector<VkExtensionProperties> extensions;
+        for (Uint32 attempt = 0; attempt < 8; ++attempt) {
+            Uint32 extensionCount = 0;
+            VK_VERIFY(vkEnumerateInstanceExtensionProperties(nullptr, &extensionCount, nullptr));
+            extensions.resize(extensionCount);
+            if (extensionCount == 0) {
+                return extensions;
+            }
+            const VkResult result =
+                vkEnumerateInstanceExtensionProperties(nullptr, &extensionCount, extensions.data());
+            if (result == VK_SUCCESS) {
+                extensions.resize(extensionCount);
+                return extensions;
+            }
+            if (result != VK_INCOMPLETE) {
+                VK_VERIFY(result, "vkEnumerateInstanceExtensionProperties failed");
+                return extensions;
+            }
+            MGLOG_I("vkEnumerateInstanceExtensionProperties returned VK_INCOMPLETE (the loader's list grew "
+                    "mid-enumeration); re-enumerating");
+        }
+        MGLOG_F("vkEnumerateInstanceExtensionProperties never settled; the instance extension list may be "
+                "truncated and surface-extension selection is about to be made on incomplete information");
         return extensions;
     }
 

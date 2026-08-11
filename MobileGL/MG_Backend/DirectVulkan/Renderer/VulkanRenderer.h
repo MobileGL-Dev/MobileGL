@@ -445,15 +445,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         void* m_platformDisplay = nullptr;
         void* m_platformLibrary = nullptr;
         void* m_platformCloseDisplay = nullptr;
-        // Some real ICDs (e.g. NVIDIA's proprietary Linux driver) don't implement
-        // VK_EXT_headless_surface at all. Detected once in CreateInstance() from the
-        // enumerated instance extensions; when false, CreateSurface() falls back to a
-        // hidden Xlib window instead of vkCreateHeadlessSurfaceEXT.
+        // Whether the loader exposes VK_EXT_headless_surface, detected once in
+        // CreateInstance() from the enumerated instance extensions. On desktop an
+        // offscreen surface REQUIRES it: false is a clean, loud bring-up failure, never
+        // a substituted window. (Android is the one exception and has its own path -
+        // no Mali/Adreno driver seen so far exposes the extension, so a windowless
+        // context is given an AImageReader ANativeWindow that is never displayed.)
         Bool m_headlessSurfaceSupported = true;
-        // Set when CreateSurface() had to create its own Xlib window for the fallback
-        // above (rather than being handed one by the caller), so Shutdown() knows it
-        // owns that window and must destroy it.
-        Bool m_ownsFallbackXlibWindow = false;
         // Android has the same shortfall: no Mali/Adreno driver seen so far exposes
         // VK_EXT_headless_surface, so a windowless (EGL pbuffer) context gets an
         // AImageReader's ANativeWindow to hand the WSI instead. Nothing is ever
