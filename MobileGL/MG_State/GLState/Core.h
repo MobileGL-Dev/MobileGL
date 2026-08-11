@@ -172,12 +172,16 @@ namespace MobileGL {
 
                 // Program pipeline (GL_ARB_separate_shader_objects, GL 4.6 core 7.4). Like queries
                 // and transform feedbacks, glGenProgramPipelines only RESERVES a name - the object
-                // appears on first bind - while glCreateProgramPipelines makes it immediately.
+                // appears on first USE (any of bind, UseProgramStages, ActiveShaderProgram,
+                // ValidateProgramPipeline) - while glCreateProgramPipelines makes it immediately.
                 void GenProgramPipelineNames(Uint number, Vector<Uint>& pipelines);
                 void CreateProgramPipelineObject(Uint index);
                 Bool ValidateProgramPipelineName(Uint index) const;
                 Bool IsProgramPipelineObject(Uint index) const;
                 void BindProgramPipelineObject(Uint index);
+                // Materializes a reserved name; returns null for 0 or a name that is not a live
+                // GenProgramPipelines name.
+                const SharedPtr<ProgramPipelineObject>& MaterializeProgramPipelineObject(Uint index);
                 void MarkProgramPipelineForDeletion(Uint index);
                 const SharedPtr<ProgramPipelineObject>& GetProgramPipelineObject(Uint index) const;
                 Uint GetBoundProgramPipelineName() const { return m_boundProgramPipeline; }

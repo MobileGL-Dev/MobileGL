@@ -937,11 +937,24 @@ namespace MobileGL::MG_State {
         }
 
         void GLContext::BindProgramPipelineObject(Uint index) {
-            if (index != 0 && m_programPipelines.find(index) == m_programPipelines.end()) {
-                // First bind is what turns a reserved name into an object.
-                m_programPipelines[index] = MakeShared<ProgramPipelineObject>(index);
+            if (index != 0) {
+                MaterializeProgramPipelineObject(index);
             }
             m_boundProgramPipeline = index;
+        }
+
+        // Binding is not the only thing that turns a reserved name into an object. GL 4.6 core
+        // 7.4 asks of UseProgramStages, ActiveShaderProgram and ValidateProgramPipeline only that
+        // the name came from GenProgramPipelines and has not been deleted - so a name that was
+        // reserved and never bound must take state from them, not be rejected. glIsProgramPipeline
+        // is the one place the distinction survives (it answers FALSE until the name is used),
+        // which is why IsProgramPipelineObject stays as it is.
+        const SharedPtr<ProgramPipelineObject>& GLContext::MaterializeProgramPipelineObject(Uint index) {
+            static const SharedPtr<ProgramPipelineObject> kNone;
+            if (index == 0 || !m_programPipelineNames.IsValid(index)) return kNone;
+            const auto it = m_programPipelines.find(index);
+            if (it != m_programPipelines.end()) return it->second;
+            return m_programPipelines[index] = MakeShared<ProgramPipelineObject>(index);
         }
 
         void GLContext::MarkProgramPipelineForDeletion(Uint index) {

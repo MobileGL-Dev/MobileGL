@@ -19,16 +19,26 @@ namespace MobileGL::MG_Impl::GLImpl {
                 code, MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", function, Move(message)));
         }
 
-        // A pipeline name only names an object once it has been bound or created; querying a
-        // reserved-but-unmaterialised name is INVALID_OPERATION (GL 4.6 core 7.4).
+        // GL 4.6 core 7.4 asks only that the name came from GenProgramPipelines and has not been
+        // deleted - so a name that was reserved and never bound is legal here, and the command
+        // MATERIALIZES it rather than rejecting it.
+        //
+        // Requiring a bound object instead is what broke every separable-program conformance case
+        // across three families: the CTS reserves a name, calls glUseProgramStages three times and
+        // only then binds, which is the order the spec's own example uses. Each of those calls
+        // failed with INVALID_OPERATION, so the stage programs were never recorded - the pipeline
+        // stayed empty, GetProgramForDraw flattened nothing and the draw painted nothing, and the
+        // rejected calls' error was left in the queue for the harness to find. One cause, both
+        // symptoms.
         const SharedPtr<MG_State::GLState::ProgramPipelineObject>* TryGetPipeline(GLuint pipeline,
                                                                                  const char* function) {
-            if (!MG_State::pGLContext->IsProgramPipelineObject(pipeline)) {
+            const auto& object = MG_State::pGLContext->MaterializeProgramPipelineObject(pipeline);
+            if (!object) {
                 RecordPipelineError(ErrorCode::InvalidOperation, function,
                                     std::format("Program pipeline {} does not exist.", pipeline));
                 return nullptr;
             }
-            return &MG_State::pGLContext->GetProgramPipelineObject(pipeline);
+            return &object;
         }
 
         Bool ValidatePipelineCount(GLsizei n, const char* function) {
