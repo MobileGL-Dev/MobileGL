@@ -4623,6 +4623,43 @@ void main() {
             }
         }
 
+        // Shape gate. Behind the memo probe deliberately: only a pipeline that was created
+        // successfully is ever memoized, so a program refused here can never be sitting in the
+        // memo, and the steady-state draw keeps paying nothing for the check.
+        //
+        // vkCreateGraphicsPipelines is not a validating entry point: a stage set that a
+        // conformant implementation would reject with VK_ERROR_* is, on Adreno 830, a SIGSEGV
+        // inside the driver - process death instead of a failed draw. The separable-program path
+        // is what made these shapes reachable at all (a monolithic glUseProgram program cannot
+        // hold a compute stage together with graphics ones, a pipeline object can), so the three
+        // it can produce are named and refused here. Same philosophy as the VK_NULL_HANDLE gate
+        // in SetupDraw: hostile input degrades to a broken draw, never to a dead process. GL
+        // leaves all three undefined for a draw, so nothing legal is being turned away.
+        // MGLOG_I because the INFO builds CTS runs against keep only I and F.
+        {
+            Bool hasVertexStage = false;
+            for (const auto& stage : programObj.stages) {
+                if (stage.module == VK_NULL_HANDLE) {
+                    MGLOG_I("GetOrCreatePipeline skipped: program=%u has a null shader module for stage 0x%x",
+                            program.GetExternalIndex(), static_cast<unsigned>(stage.stage));
+                    return VK_NULL_HANDLE;
+                }
+                if (stage.stage == VK_SHADER_STAGE_COMPUTE_BIT) {
+                    MGLOG_I("GetOrCreatePipeline skipped: program=%u carries a compute stage, which no graphics "
+                            "pipeline may contain",
+                            program.GetExternalIndex());
+                    return VK_NULL_HANDLE;
+                }
+                if (stage.stage == VK_SHADER_STAGE_VERTEX_BIT) {
+                    hasVertexStage = true;
+                }
+            }
+            if (!hasVertexStage) {
+                MGLOG_I("GetOrCreatePipeline skipped: program=%u has no vertex stage", program.GetExternalIndex());
+                return VK_NULL_HANDLE;
+            }
+        }
+
 #if MOBILEGL_LOG_ACTIVE_LEVEL <= MOBILEGL_LOG_LEVEL_DEBUG
         const auto& limits = m_physicalDevice.properties.limits;
         if (programObj.fragmentInputComponentCount != 0) {

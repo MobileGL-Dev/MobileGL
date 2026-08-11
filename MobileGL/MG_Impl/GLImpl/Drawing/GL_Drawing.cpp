@@ -670,6 +670,11 @@ namespace MobileGL::MG_Impl::GLImpl {
                                        5 * sizeof(Uint32), __func__)) {
             return;
         }
+        // The only two draw entry points that were missing this. Every backend draw path
+        // dereferences GetProgramForDraw() unconditionally, so "no current program" has to be
+        // stopped here or it is a null dereference rather than the INVALID_OPERATION the spec
+        // asks for - reachable through a bound pipeline that supplies no graphics stage.
+        if (!ValidateCurrentProgramForExecution(__func__)) return;
         auto multiDrawElementsIndirectCount = MG_Backend::gBackendFunctionsTable.GL.MultiDrawElementsIndirectCount;
         if (!multiDrawElementsIndirectCount) {
             MG_State::pGLContext->RecordError(
@@ -689,6 +694,8 @@ namespace MobileGL::MG_Impl::GLImpl {
                                        4 * sizeof(Uint32), __func__)) {
             return;
         }
+        // See MultiDrawElementsIndirectCount.
+        if (!ValidateCurrentProgramForExecution(__func__)) return;
         auto multiDrawArraysIndirectCount = MG_Backend::gBackendFunctionsTable.GL.MultiDrawArraysIndirectCount;
         if (!multiDrawArraysIndirectCount) {
             MG_State::pGLContext->RecordError(
