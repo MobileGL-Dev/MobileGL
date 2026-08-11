@@ -1,4 +1,4 @@
-name: Test
+﻿name: Test
 
 on:
   push:
@@ -83,6 +83,8 @@ jobs:
             -DMOBILEGL_LOG_ACTIVE_LEVEL=MOBILEGL_LOG_LEVEL_INFO \
             -DMOBILEGL_BUILD_TEST=ON \
             -DMOBILEGL_BUILD_BENCHMARK=ON \
+            -DMOBILEGL_BUILD_INTEGRATION_TEST=ON \
+            -DMOBILEGL_ITEST_VK_ICD=/usr/share/vulkan/icd.d/lvp_icd.json \
             -DMOBILEGL_BUILD_TRACE_REPLAY=OFF \
             -DBENCHMARK_DOWNLOAD_DEPENDENCIES=ON \
             -DBENCHMARK_ENABLE_TESTING=OFF \
@@ -110,6 +112,7 @@ jobs:
             "${BUILD_DIR}/CTestTestfile.cmake" \
             "${BUILD_DIR}/MobileGL/MG_Test" \
             "${BUILD_DIR}/MobileGL/MG_Benchmark" \
+            "${BUILD_DIR}/MobileGL/MG_IntegrationTest" \
             "${SHARED_LIBS[@]}"
 
       - name: Upload Linux runtime
@@ -159,11 +162,101 @@ jobs:
       - name: Test
         working-directory: build-linux
         run: |
+          ulimit -c unlimited
+          sudo sysctl -w kernel.core_pattern='/tmp/core.%e.%p'
           if [ "${{ secrets.ACTIONS_STEP_DEBUG }}" = "true" ]; then
             ctest -V -L unit --no-tests=error
           else
             ctest --output-on-failure -L unit --no-tests=error
           fi
+
+      - name: Upload core dumps
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: unit-core-dumps
+          path: /tmp/core.*
+          if-no-files-found: ignore
+
+  integration:
+    runs-on: ubuntu-latest
+    needs: build-linux
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v6
+
+      - name: Get CMake
+        uses: lukka/get-cmake@v4.3.3
+
+      - name: Install runtime dependencies
+        # Same set as the benchmark job, for the same reason: the scenarios bring
+        # up real headless EGL (llvmpipe) and Vulkan (lavapipe) contexts, and
+        # libegl-mesa0 - the EGL vendor library behind glvnd's libegl1 dispatch -
+        # only arrives as a Recommends.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libvulkan1 libegl1 libegl-mesa0 libgles2 libgl1-mesa-dri mesa-vulkan-drivers
+
+      - name: Download Linux runtime
+        uses: actions/download-artifact@v8
+        with:
+          name: mobilegl-linux-runtime
+          path: .
+
+      - name: Unpack Linux runtime
+        run: tar -xzf mobilegl-linux-runtime.tgz
+
+      - name: Normalize CTest command paths
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+
+          for path in Path('build-linux').rglob('CTestTestfile.cmake'):
+              text = path.read_text()
+              text = re.sub(r'"[^"]*/cmake-[^"]*/bin/cmake"', '"cmake"', text)
+              path.write_text(text)
+          PY
+
+      - name: Integration scenarios
+        working-directory: build-linux
+        # REQUIRE_GPU makes a driverless runner FAIL instead of skipping every
+        # scenario - an all-skip run is otherwise indistinguishable from a pass,
+        # which is how a five-month-old draw-dropping bug survived unseen until
+        # this lane existed.
+        #
+        # The lavapipe ICD pin lives in the build-linux configure
+        # (-DMOBILEGL_ITEST_VK_ICD), NOT here: the configure bakes it into each
+        # test's ctest ENVIRONMENT property, and a property entry OVERRIDES the
+        # job environment - a VK_ICD_FILENAMES exported here would be silently
+        # ignored while looking like it works. This lane runs on lavapipe
+        # deterministically, not on whichever of the eight Mesa ICDs a GPU-less
+        # runner enumerates first.
+        #
+        # Cores are armed so that any crash - the harness pre-flight child's
+        # included - leaves /tmp/core.*, which the failure-only step below ships
+        # as an artifact. Analyzing a downloaded core against the runtime
+        # artifact's binary in an ubuntu-24.04 userspace reproduces the exact
+        # crash stack without burning a CI round on an in-workflow debugger.
+        env:
+          MOBILEGL_ITEST_REQUIRE_GPU: "1"
+        run: |
+          ulimit -c unlimited
+          sudo sysctl -w kernel.core_pattern='/tmp/core.%e.%p'
+          if [ "${{ secrets.ACTIONS_STEP_DEBUG }}" = "true" ]; then
+            ctest -V -L integration-gpu --no-tests=error
+          else
+            ctest --output-on-failure -L integration-gpu --no-tests=error
+          fi
+
+      - name: Upload core dumps
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: integration-core-dumps
+          path: /tmp/core.*
+          if-no-files-found: ignore
 
   benchmark:
     runs-on: ubuntu-latest
@@ -208,7 +301,18 @@ jobs:
 
       - name: Benchmark
         working-directory: build-linux
-        run: ctest -V -C Release -L benchmark --no-tests=error
+        run: |
+          ulimit -c unlimited
+          sudo sysctl -w kernel.core_pattern='/tmp/core.%e.%p'
+          ctest -V -C Release -L benchmark --no-tests=error
+
+      - name: Upload core dumps
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: benchmark-core-dumps
+          path: /tmp/core.*
+          if-no-files-found: ignore
 
   build-retrace:
     runs-on: ubuntu-latest
@@ -456,6 +560,8 @@ jobs:
       - name: Retrace and validate
         working-directory: build-retrace/tools/trace_replay
         run: |
+          ulimit -c unlimited
+          sudo sysctl -w kernel.core_pattern='/tmp/core.%e.%p'
           if [ '${{ matrix.backend }}' = 'DirectVulkan' ]; then
             export MOBILEGL_MAGMA_R11G11B10F_FALLBACK=1
           fi
@@ -469,6 +575,14 @@ jobs:
             export MOBILEGL_MAGMA_DISABLE_BLENDED_DEPTH_WRITE=1
           fi
           ctest -V --no-tests=error -R '^MobileGLTraceReplay\.${{ matrix.case }}\.${{ matrix.backend }}$'
+
+      - name: Upload core dumps
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: retrace-core-dumps-${{ matrix.backend }}-${{ matrix.case }}
+          path: /tmp/core.*
+          if-no-files-found: ignore
 
       - name: Upload actual image
         if: always()
