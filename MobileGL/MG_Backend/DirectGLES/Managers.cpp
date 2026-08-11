@@ -2809,7 +2809,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 break;
             }
             default:
-                THROW_UNIMPL_EXCEPTION;
+                // TextureStorageType is {Mipmap, Buffer}, both handled above, so this is a
+                // backstop for a state object that grew a new storage kind. Skipping the upload
+                // renders wrong; throwing unwinds through the C GL ABI and kills the process.
+                MGLOG_I("DirectGLES texture sync: no upload path for storage type %d on texture %u; "
+                        "skipping this sync",
+                        static_cast<int>(stateTextureObject->GetStorageType()),
+                        stateTextureObject->GetExternalIndex());
+                break;
             }
 
             DebugImpl::ErrorLopper::Loop([file = __FILE__, line = __LINE__, func = __func__](GLenum err) {

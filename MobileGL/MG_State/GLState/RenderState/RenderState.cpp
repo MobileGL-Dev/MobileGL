@@ -7,6 +7,7 @@
 // End of Source File Header
 
 #include "RenderState.h"
+#include "MG_Util/Debug/Log.h"
 #include "MG_Util/Types.h"
 
 namespace MobileGL {
@@ -268,9 +269,14 @@ namespace MobileGL {
             }
 
             void RenderState::SetCapabilityIndexed(CapabilityInput cap, Uint index, Bool enabled) {
-                // Only for BlendState currently
+                // Only for BlendState currently. The GL entry points (glEnablei/glDisablei) already
+                // reject every non-GL_BLEND target with GL_INVALID_ENUM before reaching here, so this
+                // is a backstop - but it must stay a backstop: THROW_UNIMPL_EXCEPTION unwinds a C++
+                // exception through the C GL ABI and terminates the process.
                 if (cap != CapabilityInput::Blend) {
-                    THROW_UNIMPL_EXCEPTION;
+                    MGLOG_I("RenderState::SetCapabilityIndexed: indexed capability state exists only for "
+                            "GL_BLEND (cap=%d, index=%u); ignoring",
+                            static_cast<int>(cap), index);
                     return;
                 }
                 if (index >= MG_State::GLState::FramebufferObject::MAX_DRAW_BUFFERS) {
@@ -284,9 +290,13 @@ namespace MobileGL {
             }
 
             Bool RenderState::IsCapabilityEnabledIndexed(CapabilityInput cap, Uint index) const {
-                // Only for BlendState currently
+                // Only for BlendState currently - same backstop reasoning as SetCapabilityIndexed:
+                // glIsEnabledi has already answered GL_INVALID_ENUM/GL_FALSE for anything else, and a
+                // query must never be able to terminate the process.
                 if (cap != CapabilityInput::Blend) {
-                    THROW_UNIMPL_EXCEPTION;
+                    MGLOG_I("RenderState::IsCapabilityEnabledIndexed: indexed capability state exists only "
+                            "for GL_BLEND (cap=%d, index=%u); reporting disabled",
+                            static_cast<int>(cap), index);
                     return false;
                 }
                 if (index >= MG_State::GLState::FramebufferObject::MAX_DRAW_BUFFERS) {

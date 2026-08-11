@@ -3176,3 +3176,115 @@ TEST_F(TextureTest, WidenedRenderTargetUploadExpandsThreeChannelDataWithOpaqueAl
         EXPECT_EQ(PrepareChannelWidenedUpload(3, texelSize, nullptr, 0, GL_FLOAT, widened), nullptr);
     }
 }
+
+// ---------------------------------------------------------------------------------------------
+// A GL entry point may return an error, but it may never throw through the C GL ABI: unwinding a
+// C++ exception across it terminates the process. These cover the sites that used to do exactly
+// that (KHR-GL30.api.coverage died on the first of them on both backends).
+// ---------------------------------------------------------------------------------------------
+
+namespace {
+    struct CopyTexImage2DCall {
+        Bool Called = false;
+        GLenum Target = 0;
+        GLint Level = 0;
+        GLenum InternalFormat = 0;
+        GLsizei Width = 0;
+        GLsizei Height = 0;
+    };
+
+    CopyTexImage2DCall g_copyTexImage2DCall;
+
+    void RecordCopyTexImage2D(GLenum target, GLint level, GLenum internalformat, GLint, GLint, GLsizei width,
+                              GLsizei height, GLint) {
+        g_copyTexImage2DCall = {true, target, level, internalformat, width, height};
+    }
+
+    // A colour read framebuffer of the requested sized format, bound to GL_READ_FRAMEBUFFER, which
+    // is what glCopyTexImage2D takes its source base format from.
+    void BindReadFramebufferWithColorFormat(GLenum sizedInternalFormat) {
+        GLuint framebuffer = 0;
+        GLuint texture = 0;
+        MG_Impl::GLImpl::CreateFramebuffers(1, &framebuffer);
+        MG_Impl::GLImpl::CreateTextures(GL_TEXTURE_2D, 1, &texture);
+        MG_Impl::GLImpl::TextureStorage2D(texture, 1, sizedInternalFormat, 16, 16);
+        MG_Impl::GLImpl::NamedFramebufferTexture(framebuffer, GL_COLOR_ATTACHMENT0, texture, 0);
+        MG_Impl::GLImpl::BindFramebuffer(GL_READ_FRAMEBUFFER, framebuffer);
+    }
+
+    GLuint BindFreshMutableTexture2D() {
+        GLuint texture = 0;
+        MG_Impl::GLImpl::CreateTextures(GL_TEXTURE_2D, 1, &texture);
+        MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, texture);
+        return texture;
+    }
+} // namespace
+
+TEST_F(TextureTest, CopyTexImage2DAcceptsEveryComponentSubsetOfTheReadBuffer) {
+    const ScopedTextureBackendFunctionsOverride backendGuard;
+    MG_Backend::gBackendFunctionsTable.GL.CopyTexImage2D = RecordCopyTexImage2D;
+
+    BindReadFramebufferWithColorFormat(GL_RGBA8);
+    ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR) << "read framebuffer setup itself failed";
+
+    // GL 4.6 sec. 8.6: internalformat may name a SUBSET of the read buffer's components. This is
+    // exactly the list KHR-GL30.api.coverage walks against an rgba8888 colour buffer, and it is
+    // also what an ordinary GL app does with glCopyTexImage2D(GL_RGB) from an RGBA8 framebuffer.
+    for (const GLenum internalFormat : {GL_RED, GL_RG, GL_RGB, GL_RGBA}) {
+        BindFreshMutableTexture2D();
+        g_copyTexImage2DCall = {};
+
+        MG_Impl::GLImpl::CopyTexImage2D(GL_TEXTURE_2D, 0, internalFormat, 0, 0, 1, 1, 0);
+
+        EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR) << "internalformat " << internalFormat;
+        EXPECT_TRUE(g_copyTexImage2DCall.Called) << "internalformat " << internalFormat;
+        EXPECT_EQ(g_copyTexImage2DCall.InternalFormat, internalFormat);
+        EXPECT_EQ(g_copyTexImage2DCall.Width, 1);
+        EXPECT_EQ(g_copyTexImage2DCall.Height, 1);
+    }
+}
+
+TEST_F(TextureTest, CopyTexImage2DRejectsAFormatTheReadBufferCannotSupply) {
+    const ScopedTextureBackendFunctionsOverride backendGuard;
+    MG_Backend::gBackendFunctionsTable.GL.CopyTexImage2D = RecordCopyTexImage2D;
+
+    BindReadFramebufferWithColorFormat(GL_R8);
+    ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR) << "read framebuffer setup itself failed";
+
+    BindFreshMutableTexture2D();
+    g_copyTexImage2DCall = {};
+
+    // The subset rule still has a wrong side: GL_RGBA asks for components a GL_R8 read buffer does
+    // not have. That must be GL_INVALID_OPERATION and nothing else - not a throw, not silence.
+    MG_Impl::GLImpl::CopyTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 0, 0, 1, 1, 0);
+
+    ExpectSingleGlError(GL_INVALID_OPERATION);
+    EXPECT_FALSE(g_copyTexImage2DCall.Called) << "a rejected copy must not reach the backend";
+}
+
+TEST_F(TextureTest, CopyTexImage1DReportsUnsupportedInsteadOfTerminating) {
+    // 1D textures have no upload path in this stack; the entry point used to throw unconditionally.
+    MG_Impl::GLImpl::CopyTexImage1D(GL_TEXTURE_1D, 0, GL_RGBA, 0, 0, 1, 0);
+    ExpectSingleGlError(GL_INVALID_OPERATION);
+}
+
+TEST_F(TextureTest, GetTexLevelParameterOnBufferStorageReportsErrorInsteadOfTerminating) {
+    // TextureStorageType is {Mipmap, Buffer} and the level queries only answer out of a mipmap
+    // chain, so every glGetTexLevelParameter* on a GL_TEXTURE_BUFFER texture reached a
+    // THROW_UNIMPL_EXCEPTION default: label and killed the process.
+    GLuint texture = 0;
+    MG_Impl::GLImpl::CreateTextures(GL_TEXTURE_BUFFER, 1, &texture);
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_BUFFER, texture);
+    MG_Impl::GLImpl::TexBuffer(GL_TEXTURE_BUFFER, GL_R8, 0);
+    DrainPendingGlErrors();
+
+    for (const GLenum pname : {GL_TEXTURE_WIDTH, GL_TEXTURE_HEIGHT, GL_TEXTURE_DEPTH}) {
+        GLint intParam = 0x20202020;
+        MG_Impl::GLImpl::GetTexLevelParameteriv(GL_TEXTURE_BUFFER, 0, pname, &intParam);
+        ExpectSingleGlError(GL_INVALID_OPERATION);
+
+        GLfloat floatParam = 12345.0f;
+        MG_Impl::GLImpl::GetTexLevelParameterfv(GL_TEXTURE_BUFFER, 0, pname, &floatParam);
+        ExpectSingleGlError(GL_INVALID_OPERATION);
+    }
+}

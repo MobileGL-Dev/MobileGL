@@ -40,5 +40,9 @@ namespace MobileGL::MG_Impl::GLImpl::TextureImpl {
                                          TextureTarget target);
     Bool ValidateTextureSubImageOffsets(const SharedPtr<MG_State::GLState::ITextureObject>& textureObject, Int xoffset,
                                         Int width, Int yoffset = 0, Int height = 0, Int zoffset = 0, Int depth = 0);
+    // Exact base-format equality - what glCopyImageSubData's format compatibility needs.
     Bool ValidateBaseInternalFormatMatch(TextureInternalFormat format1, TextureInternalFormat format2);
+    // GL 4.6 SS 8.6 subset rule for glCopyTexImage*: the read buffer must supply every component
+    // the requested internalformat asks for, but may supply more.
+    Bool ValidateCopyTexImageBaseFormatSubset(TextureInternalFormat destFormat, TextureInternalFormat srcFormat);
 } // namespace MobileGL::MG_Impl::GLImpl::TextureImpl

@@ -613,6 +613,23 @@ namespace MobileGL::MG_Impl::GLImpl {
                 MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller,
                                              "Compressed texture formats are not supported."));
         }
+
+        // glGetTexLevelParameter{i,f}v answers WIDTH/HEIGHT/DEPTH out of the mipmap chain. The only
+        // other storage type the state layer knows is GL_TEXTURE_BUFFER (TextureStorageType is
+        // {Mipmap, Buffer}), whose level geometry this stack does not track yet. Report that instead
+        // of throwing: THROW_UNIMPL_EXCEPTION unwinds a C++ exception through the C GL ABI and takes
+        // the process down, which is never an acceptable answer to a query - see the same reasoning
+        // above for the compressed-format path.
+        void RecordUnsupportedLevelQueryStorage(const char* caller, GLenum pname) {
+            MGLOG_I("%s: glGetTexLevelParameter(pname=%s) is not implemented for texture-buffer "
+                    "storage; recording GL_INVALID_OPERATION instead of terminating",
+                    caller, MG_Util::ConvertGLEnumToString(pname).c_str());
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidOperation,
+                MakeUnique<GenericErrorInfo>(
+                    "MG_Impl/GLImpl", caller,
+                    "Level queries are not supported for texture-buffer storage."));
+        }
     } // namespace
 
     const SharedPtr<MG_State::GLState::ITextureObject>& GetTextureObjectByName(GLuint texture, const char* caller) {
@@ -2910,7 +2927,8 @@ namespace MobileGL::MG_Impl::GLImpl {
                     break;
                 }
                 default:
-                    THROW_UNIMPL_EXCEPTION;
+                    RecordUnsupportedLevelQueryStorage("GetTexLevelParameteriv_State", pname);
+                    break;
                 }
             }
             break;
@@ -2924,7 +2942,8 @@ namespace MobileGL::MG_Impl::GLImpl {
                     break;
                 }
                 default:
-                    THROW_UNIMPL_EXCEPTION;
+                    RecordUnsupportedLevelQueryStorage("GetTexLevelParameteriv_State", pname);
+                    break;
                 }
             }
             break;
@@ -2938,7 +2957,8 @@ namespace MobileGL::MG_Impl::GLImpl {
                     break;
                 }
                 default:
-                    THROW_UNIMPL_EXCEPTION;
+                    RecordUnsupportedLevelQueryStorage("GetTexLevelParameteriv_State", pname);
+                    break;
                 }
             }
             break;
@@ -3045,7 +3065,8 @@ namespace MobileGL::MG_Impl::GLImpl {
                     break;
                 }
                 default:
-                    THROW_UNIMPL_EXCEPTION;
+                    RecordUnsupportedLevelQueryStorage("GetTexLevelParameterfv_State", pname);
+                    break;
                 }
             }
             break;
@@ -3059,7 +3080,8 @@ namespace MobileGL::MG_Impl::GLImpl {
                     break;
                 }
                 default:
-                    THROW_UNIMPL_EXCEPTION;
+                    RecordUnsupportedLevelQueryStorage("GetTexLevelParameterfv_State", pname);
+                    break;
                 }
             }
             break;
@@ -3073,7 +3095,8 @@ namespace MobileGL::MG_Impl::GLImpl {
                     break;
                 }
                 default:
-                    THROW_UNIMPL_EXCEPTION;
+                    RecordUnsupportedLevelQueryStorage("GetTexLevelParameterfv_State", pname);
+                    break;
                 }
             }
             break;
@@ -3403,7 +3426,10 @@ namespace MobileGL::MG_Impl::GLImpl {
             GET_SRC_INTERNAL_FORMAT(readBufferType);
         }
 
-        if (!TextureImpl::ValidateBaseInternalFormatMatch(internalFormat, srcInternalFormat)) THROW_UNIMPL_EXCEPTION;
+        // The validator has already recorded GL_INVALID_OPERATION; just decline. Throwing
+        // here unwound a C++ exception through the C GL ABI and killed the process (see the
+        // same reasoning at :604-609).
+        if (!TextureImpl::ValidateCopyTexImageBaseFormatSubset(internalFormat, srcInternalFormat)) return false;
 
         GLenum outInternalFormat = MG_Util::ConvertTextureInternalFormatToGLEnum(srcInternalFormat);
         GLenum realInternalFormat = GL_RGBA8;
@@ -3426,8 +3452,13 @@ namespace MobileGL::MG_Impl::GLImpl {
 
     void CopyTexImage1D_State(GLenum target, GLint level, GLenum internalformat, GLint x, GLint y, GLsizei width,
                               GLint border) {
-        // TODO: implement
-        THROW_UNIMPL_EXCEPTION;
+        // 1D textures are not implemented by this backend set. Record the error the way every
+        // other unsupported entry point does - throwing unwinds through the C GL ABI and kills
+        // the process, which is never an acceptable answer to an unsupported call.
+        MG_State::pGLContext->RecordError(
+            ErrorCode::InvalidOperation,
+            MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", "CopyTexImage1D",
+                                         "1D textures are not supported by this implementation"));
     }
 
     void CompressedTexSubImage3D_State(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLint zoffset,

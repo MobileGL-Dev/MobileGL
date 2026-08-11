@@ -424,19 +424,81 @@ namespace MobileGL::MG_Impl::GLImpl::TextureImpl {
         return true;
     }
 
+    namespace {
+        // Component set of an UNSIZED base internal format, as the bitmask GL 4.6 SS 8.6
+        // reasons about. Colour components are independent bits so "subset" is a plain
+        // mask test; depth and stencil are their own components and never satisfy a
+        // colour request (or each other).
+        enum : Uint32 {
+            kComponentR = 1u << 0,
+            kComponentG = 1u << 1,
+            kComponentB = 1u << 2,
+            kComponentA = 1u << 3,
+            kComponentDepth = 1u << 4,
+            kComponentStencil = 1u << 5,
+        };
+
+        Uint32 BaseFormatComponents(TextureInternalFormat unsizedFormat) {
+            switch (unsizedFormat) {
+            case TextureInternalFormat::Red:
+                return kComponentR;
+            case TextureInternalFormat::RG:
+                return kComponentR | kComponentG;
+            case TextureInternalFormat::RGB:
+                return kComponentR | kComponentG | kComponentB;
+            case TextureInternalFormat::RGBA:
+                return kComponentR | kComponentG | kComponentB | kComponentA;
+            case TextureInternalFormat::DepthComponent:
+                return kComponentDepth;
+            case TextureInternalFormat::DepthStencil:
+                return kComponentDepth | kComponentStencil;
+            default:
+                return 0;
+            }
+        }
+    } // namespace
+
     Bool ValidateBaseInternalFormatMatch(TextureInternalFormat format1, TextureInternalFormat format2) {
-        auto unsizedFormat1 = MG_Util::ConvertInternalFormatToUnsized(format1);
-        auto unsizedFormat2 = MG_Util::ConvertInternalFormatToUnsized(format2);
+        const auto unsizedFormat1 = MG_Util::ConvertInternalFormatToUnsized(format1);
+        const auto unsizedFormat2 = MG_Util::ConvertInternalFormatToUnsized(format2);
         if (unsizedFormat1 != unsizedFormat2) {
+            // The 3-argument GenericErrorInfo constructor used to be spelled as a single
+            // std::format() call whose format string was the component name, so every
+            // diagnostic collapsed to the literal "MG_Impl/GLImpl". Format the message, then
+            // hand over component/function/message separately.
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidOperation,
                 MakeUnique<GenericErrorInfo>(
-                    std::format("MG_Impl/GLImpl", "ValidateBaseInternalFormatMatch",
-                                "The base internal format of the two formats do not match ({} vs. {})",
-                                MG_Util::ConvertTextureInternalFormatToString(unsizedFormat1).c_str(),
-                                MG_Util::ConvertTextureInternalFormatToString(unsizedFormat2).c_str())));
+                    "MG_Impl/GLImpl", "ValidateBaseInternalFormatMatch",
+                    std::format("The base internal format of the two formats do not match ({} vs. {})",
+                                MG_Util::ConvertTextureInternalFormatToString(unsizedFormat1),
+                                MG_Util::ConvertTextureInternalFormatToString(unsizedFormat2))));
             return false;
         }
         return true;
-    } // namespace TextureImpl
+    }
+
+    Bool ValidateCopyTexImageBaseFormatSubset(TextureInternalFormat destFormat, TextureInternalFormat srcFormat) {
+        const auto unsizedDest = MG_Util::ConvertInternalFormatToUnsized(destFormat);
+        const auto unsizedSrc = MG_Util::ConvertInternalFormatToUnsized(srcFormat);
+        // GL 4.6 SS 8.6: glCopyTexImage* may request a SUBSET of the read buffer's components,
+        // not an exact match - GL_RGB from an RGBA8 framebuffer is textbook legal and is what
+        // Minecraft and its mods do. glCopyTexImage2D used to run the exact-match predicate
+        // above and turn its rejection into an uncaught exception through the C GL ABI, so the
+        // app died rather than seeing a GL error.
+        const Uint32 destComponents = BaseFormatComponents(unsizedDest);
+        const Uint32 srcComponents = BaseFormatComponents(unsizedSrc);
+        if (destComponents == 0 || srcComponents == 0 || (destComponents & ~srcComponents) != 0) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidOperation,
+                MakeUnique<GenericErrorInfo>(
+                    "MG_Impl/GLImpl", "ValidateCopyTexImageBaseFormatSubset",
+                    std::format("the read buffer's base internal format {} does not provide every component of "
+                                "the requested internal format {}",
+                                MG_Util::ConvertTextureInternalFormatToString(unsizedSrc),
+                                MG_Util::ConvertTextureInternalFormatToString(unsizedDest))));
+            return false;
+        }
+        return true;
+    }
 } // namespace MobileGL::MG_Impl::GLImpl::TextureImpl
