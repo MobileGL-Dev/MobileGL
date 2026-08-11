@@ -59,6 +59,7 @@ add_executable(MobileGLIntegrationTest
     Scenarios/FragCoordOriginScenario.cpp
     Scenarios/ClearThenReadPixelsScenario.cpp
     Scenarios/DepthStencilReadbackScenario.cpp
+    Scenarios/SsboArrayLengthScenario.cpp
 )
 
 target_include_directories(MobileGLIntegrationTest PRIVATE
