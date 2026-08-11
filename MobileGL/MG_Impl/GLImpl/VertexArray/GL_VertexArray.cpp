@@ -179,6 +179,28 @@ namespace MobileGL::MG_Impl::GLImpl {
             return vao;
         }
 
+        // The ARB_vertex_attrib_binding entry points that take no vertex array name modify the
+        // *bound* vertex array, and in a core profile the default vertex array (name 0) is not
+        // one: every one of them is INVALID_OPERATION there (GL 4.6 core 10.3.1, and the tail of
+        // each KHR-GL4x.vertex_attrib_binding.negative-* case checks exactly this). MobileGL
+        // keeps a real object at name 0 for the compatibility paths, so GetBoundVertexArray
+        // never returns null and the rule has to be spelled out - behind the same gate the VAO-0
+        // draw rule already uses (MOBILEGL_RELAXED_SEMANTICS, plus "the context never asked for
+        // a core profile"), so applications that legitimately run relaxed keep working.
+        static SharedPtr<MG_State::GLState::VertexArrayObject> GetBoundVertexArrayForBindingApi(const char* funcName) {
+            auto vao = GetBoundVertexArrayOrError(funcName);
+            if (!vao) return nullptr;
+            if (vao->GetExternalIndex() == 0 && !MG_State::IsRelaxedSemanticsActive()) {
+                MG_State::pGLContext->RecordError(
+                    ErrorCode::InvalidOperation,
+                    MakeUnique<GenericErrorInfo>(
+                        "MG_Impl/GLImpl", funcName,
+                        "The default vertex array object cannot be modified in a core profile."));
+                return nullptr;
+            }
+            return vao;
+        }
+
         static bool ValidateVertexAttribPname(GLenum pname) {
             switch (pname) {
             case GL_VERTEX_ATTRIB_ARRAY_ENABLED:
@@ -944,7 +966,7 @@ namespace MobileGL::MG_Impl::GLImpl {
             params[0] = static_cast<GLfloat>(attr->Size);
             return;
         case GL_VERTEX_ATTRIB_ARRAY_STRIDE:
-            params[0] = static_cast<GLfloat>(attr->Stride);
+            params[0] = static_cast<GLfloat>(attr->LegacyStride);
             return;
         case GL_VERTEX_ATTRIB_ARRAY_TYPE:
             params[0] = static_cast<GLfloat>(MG_Util::ConvertDataTypeToGLEnum(attr->Type));
@@ -1014,7 +1036,7 @@ namespace MobileGL::MG_Impl::GLImpl {
             params[0] = static_cast<GLdouble>(attr->Size);
             return;
         case GL_VERTEX_ATTRIB_ARRAY_STRIDE:
-            params[0] = static_cast<GLdouble>(attr->Stride);
+            params[0] = static_cast<GLdouble>(attr->LegacyStride);
             return;
         case GL_VERTEX_ATTRIB_ARRAY_TYPE:
             params[0] = static_cast<GLdouble>(MG_Util::ConvertDataTypeToGLEnum(attr->Type));
@@ -1079,8 +1101,11 @@ namespace MobileGL::MG_Impl::GLImpl {
         case GL_VERTEX_ATTRIB_ARRAY_SIZE:
             params[0] = attr->Size;
             return;
+        // The legacy shadow, not the resolved draw stride: GL 4.6 core table 23.3 defines this
+        // as the last glVertexAttrib*Pointer argument, which glBindVertexBuffer must not
+        // overwrite even though it does overwrite what the backend actually reads.
         case GL_VERTEX_ATTRIB_ARRAY_STRIDE:
-            params[0] = attr->Stride;
+            params[0] = attr->LegacyStride;
             return;
         case GL_VERTEX_ATTRIB_ARRAY_TYPE:
             params[0] = static_cast<GLint>(MG_Util::ConvertDataTypeToGLEnum(attr->Type));
@@ -1138,7 +1163,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         }
 
         const auto& attr = vao->GetAttribute(index);
-        *pointer = reinterpret_cast<void*>(attr.Offset);
+        *pointer = reinterpret_cast<void*>(attr.LegacyPointer);
     }
 
     void GetVertexAttribIiv(GLuint index, GLenum pname, GLint* params) {
@@ -1222,7 +1247,7 @@ namespace MobileGL::MG_Impl::GLImpl {
             *param = static_cast<GLint>(attr.Size);
             return;
         case GL_VERTEX_ATTRIB_ARRAY_STRIDE:
-            *param = static_cast<GLint>(attr.Stride);
+            *param = static_cast<GLint>(attr.LegacyStride);
             return;
         case GL_VERTEX_ATTRIB_ARRAY_TYPE:
             *param = static_cast<GLint>(MG_Util::ConvertDataTypeToGLEnum(attr.Type));
@@ -1294,14 +1319,14 @@ namespace MobileGL::MG_Impl::GLImpl {
     }
 
     void BindVertexBuffer(GLuint bindingindex, GLuint buffer, GLintptr offset, GLsizei stride) {
-        auto vao = GetBoundVertexArrayOrError("BindVertexBuffer");
+        auto vao = GetBoundVertexArrayForBindingApi("BindVertexBuffer");
         if (!vao) return;
         VertexBufferBinding_State(vao, bindingindex, buffer, offset, stride, "BindVertexBuffer");
     }
 
     void BindVertexBuffers(GLuint first, GLsizei count, const GLuint* buffers, const GLintptr* offsets,
                            const GLsizei* strides) {
-        auto vao = GetBoundVertexArrayOrError("BindVertexBuffers");
+        auto vao = GetBoundVertexArrayForBindingApi("BindVertexBuffers");
         if (!vao) return;
         if (!ValidateVertexBindingRange(first, count, "BindVertexBuffers")) return;
         for (GLsizei i = 0; i < count; ++i) {
@@ -1315,21 +1340,21 @@ namespace MobileGL::MG_Impl::GLImpl {
     }
 
     void VertexAttribFormat(GLuint attribindex, GLint size, GLenum type, GLboolean normalized, GLuint relativeoffset) {
-        auto vao = GetBoundVertexArrayOrError("VertexAttribFormat");
+        auto vao = GetBoundVertexArrayForBindingApi("VertexAttribFormat");
         if (!vao) return;
         VertexAttribFormatSeparate_State(vao, attribindex, size, type, normalized, relativeoffset, false,
                                          "VertexAttribFormat");
     }
 
     void VertexAttribIFormat(GLuint attribindex, GLint size, GLenum type, GLuint relativeoffset) {
-        auto vao = GetBoundVertexArrayOrError("VertexAttribIFormat");
+        auto vao = GetBoundVertexArrayForBindingApi("VertexAttribIFormat");
         if (!vao) return;
         VertexAttribFormatSeparate_State(vao, attribindex, size, type, GL_FALSE, relativeoffset, true,
                                          "VertexAttribIFormat");
     }
 
     void VertexAttribLFormat(GLuint attribindex, GLint size, GLenum type, GLuint relativeoffset) {
-        auto vao = GetBoundVertexArrayOrError("VertexAttribLFormat");
+        auto vao = GetBoundVertexArrayForBindingApi("VertexAttribLFormat");
         if (!vao) return;
         VertexAttribLFormatSeparate_State(vao, attribindex, size, type, relativeoffset);
     }
@@ -1341,7 +1366,7 @@ namespace MobileGL::MG_Impl::GLImpl {
     }
 
     void VertexAttribBinding(GLuint attribindex, GLuint bindingindex) {
-        auto vao = GetBoundVertexArrayOrError("VertexAttribBinding");
+        auto vao = GetBoundVertexArrayForBindingApi("VertexAttribBinding");
         if (!vao) return;
         if (!VertexArrayImpl::ValidateVertexAttributeIndex(attribindex)) return;
         if (!ValidateVertexBindingIndex(bindingindex, "VertexAttribBinding")) return;
@@ -1349,7 +1374,7 @@ namespace MobileGL::MG_Impl::GLImpl {
     }
 
     void VertexBindingDivisor(GLuint bindingindex, GLuint divisor) {
-        auto vao = GetBoundVertexArrayOrError("VertexBindingDivisor");
+        auto vao = GetBoundVertexArrayForBindingApi("VertexBindingDivisor");
         if (!vao) return;
         if (!ValidateVertexBindingIndex(bindingindex, "VertexBindingDivisor")) return;
         vao->SetBindingDivisor(bindingindex, divisor);

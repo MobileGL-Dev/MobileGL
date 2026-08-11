@@ -32,6 +32,16 @@ namespace MobileGL {
                 Bool IsBgra = false;
                 Uint Divisor = 0;
                 SharedPtr<BufferObject> Buffer;
+
+                // GL 4.6 core table 23.3: VERTEX_ATTRIB_ARRAY_STRIDE and _POINTER are the
+                // arguments of the last glVertexAttrib*Pointer call on this attribute,
+                // reported verbatim, and NOTHING else writes them - not glVertexAttribFormat,
+                // not glBindVertexBuffer. Stride/Offset above are the *resolved* draw inputs
+                // and the binding model does overwrite those, so the two views have to be
+                // stored apart or the binding-model sequence reports a legacy state it never
+                // set (KHR-GL4x.vertex_attrib_binding.basic-state3).
+                int LegacyStride = 0;
+                SizeT LegacyPointer = 0;
             };
 
             // ARB_vertex_attrib_binding separate binding point. Attributes configured through the
@@ -40,7 +50,8 @@ namespace MobileGL {
             struct VertexBufferBindingPoint {
                 SharedPtr<BufferObject> Buffer;
                 SizeT Offset = 0;
-                int Stride = 0;
+                // GL 4.6 core table 23.4: the initial VERTEX_BINDING_STRIDE is 16, not 0.
+                int Stride = 16;
                 Uint Divisor = 0;
             };
 
@@ -185,6 +196,10 @@ namespace MobileGL {
                 void BumpAttributeBufferVersion(Uint index);
                 void BumpAttributeSwitchVersion(Uint index);
                 void ResolveAttributeFromBinding(Uint attribIndex);
+                // Re-resolve every attribute currently pointed at `bindingIndex`. `adopt` turns
+                // the ones that are not in the binding model yet into binding-model attributes
+                // first (what glBindVertexBuffer does, GL 4.3 rules for state mixing).
+                void ResolveAttributesForBinding(Uint bindingIndex, Bool adopt);
 
                 // The default mapping is attribute i -> binding point i. Keep it an iota over
                 // MAX_VERTEX_ATTRIBS rather than a literal list: a literal list silently leaves the
