@@ -33,6 +33,8 @@
 #include <regex>
 
 namespace MobileGL::MG_Backend::DirectGLES {
+    Uint g_backendContextGeneration = 1;
+
     constexpr Bool PREFER_MAP_BUFFER_RANGE_FOR_BUFFER_SYNC = false;
     constexpr const char* BASE_INSTANCE_UNIFORM_NAME = "mg_BaseInstance";
     constexpr const char* DRAW_ID_UNIFORM_NAME = "mg_DrawID";
@@ -1646,7 +1648,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
             g_GLESFuncs.glGenTextures(1, &m_backendTextureId);
-            m_contextGeneration = g_textureContextGeneration;
+            m_contextGeneration = g_backendContextGeneration;
             if (m_backendTextureId == 0) {
                 MGLOG_E("Failed to generate texture object.");
                 MGLOG_E("ES glGetError(): %s", MG_Util::ConvertGLEnumToString(g_GLESFuncs.glGetError()).c_str());
@@ -1673,7 +1675,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     }
                 }
             }
-            if (m_contextGeneration == g_textureContextGeneration && g_GLESFuncs.glDeleteTextures) {
+            if (m_contextGeneration == g_backendContextGeneration && g_GLESFuncs.glDeleteTextures) {
                 g_GLESFuncs.glDeleteTextures(1, &m_backendTextureId);
             }
             m_backendTextureId = 0;
@@ -1712,7 +1714,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         void BackendTextureObject::RecreateBackendTexture() {
             if (m_backendTextureId != 0) {
                 ScratchFBOImpl::NoteTextureIdDeleted(m_backendTextureId);
-                if (m_contextGeneration == g_textureContextGeneration) {
+                if (m_contextGeneration == g_backendContextGeneration) {
                     g_GLESFuncs.glDeleteTextures(1, &m_backendTextureId);
                 }
                 for (auto& unitCache : g_boundTexturesCache) {
@@ -1725,7 +1727,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
 
             g_GLESFuncs.glGenTextures(1, &m_backendTextureId);
-            m_contextGeneration = g_textureContextGeneration;
+            m_contextGeneration = g_backendContextGeneration;
             if (m_backendTextureId == 0) {
                 MGLOG_E("Failed to regenerate texture object.");
                 MGLOG_E("ES glGetError(): %s", MG_Util::ConvertGLEnumToString(g_GLESFuncs.glGetError()).c_str());
@@ -3081,7 +3083,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
         }
 
         Uint g_activeTextureUnit = 0;
-        Uint g_textureContextGeneration = 1;
         Array<Array<BackendTextureObject*, (SizeT)TextureTarget::TextureTargetCount>,
               MG_State::GLState::TextureState::MAX_TEXTURE_IMAGE_UNITS>
             g_boundTexturesCache;
@@ -3100,12 +3101,29 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 m_backendColorSlots[i] = GL_COLOR_ATTACHMENT0 + i;
             }
             g_GLESFuncs.glGenFramebuffers(1, &m_backendFBOId);
+            m_contextGeneration = g_backendContextGeneration;
             if (m_backendFBOId == 0) {
                 MGLOG_E("Failed to generate framebuffer object.");
                 MGLOG_E("ES glGetError(): %s", MG_Util::ConvertGLEnumToString(g_GLESFuncs.glGetError()).c_str());
             } else {
                 MGLOG_D("Generated framebuffer object with ID: %u.", m_backendFBOId);
             }
+        }
+
+        BackendFramebufferObject::~BackendFramebufferObject() {
+            if (InProcessTeardown()) {
+                return; // see InProcessTeardown(): the driver may be unloaded already
+            }
+            if (m_backendFBOId == 0) {
+                return;
+            }
+            // Scrub the binding shadow whether or not the id can still be deleted: a
+            // recycled name must never satisfy the shadow's dedup.
+            NoteFramebufferIdDeleted(m_backendFBOId);
+            if (m_contextGeneration == g_backendContextGeneration && g_GLESFuncs.glDeleteFramebuffers) {
+                g_GLESFuncs.glDeleteFramebuffers(1, &m_backendFBOId);
+            }
+            m_backendFBOId = 0;
         }
 
         void BackendFramebufferObject::Bind(FramebufferTarget target) const {
@@ -3161,6 +3179,17 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 g_driverFBOBindingKnown[idx] = true;
             }
             return g_driverFBOBindings[idx];
+        }
+
+        void NoteFramebufferIdDeleted(Uint id) {
+            if (id == 0) {
+                return;
+            }
+            for (SizeT idx = 0; idx < g_driverFBOBindings.size(); ++idx) {
+                if (g_driverFBOBindingKnown[idx] && g_driverFBOBindings[idx] == id) {
+                    g_driverFBOBindings[idx] = 0; // glDeleteFramebuffers reverts a bound FBO to 0
+                }
+            }
         }
 
         void InvalidateFramebufferBindingCache() {
@@ -4570,12 +4599,33 @@ namespace MobileGL::MG_Backend::DirectGLES {
             ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
             g_GLESFuncs.glGenSamplers(1, &m_backendSamplerId);
+            m_contextGeneration = g_backendContextGeneration;
             if (m_backendSamplerId == 0) {
                 MGLOG_E("Failed to generate sampler object.");
                 MGLOG_E("ES glGetError(): %s", MG_Util::ConvertGLEnumToString(g_GLESFuncs.glGetError()).c_str());
             } else {
                 MGLOG_D("Generated sampler object with ID: %u.", m_backendSamplerId);
             }
+        }
+
+        BackendSamplerObject::~BackendSamplerObject() {
+            if (InProcessTeardown()) {
+                return; // see InProcessTeardown(): the driver may be unloaded already
+            }
+            if (m_backendSamplerId == 0) {
+                return;
+            }
+            // Scrub the unit shadow whether or not the id can still be deleted - the next
+            // twin can land on this heap address and would otherwise false-skip its Bind.
+            for (auto& boundSampler : g_boundSamplersCache) {
+                if (boundSampler == this) {
+                    boundSampler = nullptr; // glDeleteSamplers unbinds from every unit
+                }
+            }
+            if (m_contextGeneration == g_backendContextGeneration && g_GLESFuncs.glDeleteSamplers) {
+                g_GLESFuncs.glDeleteSamplers(1, &m_backendSamplerId);
+            }
+            m_backendSamplerId = 0;
         }
 
         void BackendSamplerObject::SyncToBackend(
@@ -4693,10 +4743,26 @@ namespace MobileGL::MG_Backend::DirectGLES {
             ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
             g_GLESFuncs.glGenRenderbuffers(1, &m_backendRBOId);
+            m_contextGeneration = g_backendContextGeneration;
             if (m_backendRBOId == 0) {
                 MGLOG_E("Failed to generate renderbuffer object.");
                 MGLOG_E("ES glGetError(): %s", MG_Util::ConvertGLEnumToString(g_GLESFuncs.glGetError()).c_str());
             }
+        }
+
+        BackendRenderbufferObject::~BackendRenderbufferObject() {
+            if (InProcessTeardown()) {
+                return; // see InProcessTeardown(): the driver may be unloaded already
+            }
+            if (m_backendRBOId == 0) {
+                return;
+            }
+            // No driver-level renderbuffer-binding shadow exists (Bind() always issues the
+            // call), so there is nothing to scrub here - only the id to release.
+            if (m_contextGeneration == g_backendContextGeneration && g_GLESFuncs.glDeleteRenderbuffers) {
+                g_GLESFuncs.glDeleteRenderbuffers(1, &m_backendRBOId);
+            }
+            m_backendRBOId = 0;
         }
 
         void BackendRenderbufferObject::Bind() const {

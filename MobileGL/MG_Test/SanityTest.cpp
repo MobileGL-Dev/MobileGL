@@ -1822,10 +1822,167 @@ TEST(DirectGLESBackendTexture, DestructorDeletesIdAndScrubsBindingCache) {
     // A wrapper whose context died must NOT delete a foreign (recycled) name.
     {
         auto backendTexture = MobileGL::MakeShared<TextureImpl::BackendTextureObject>();
-        ++TextureImpl::g_textureContextGeneration;
+        ++g_backendContextGeneration;
         backendTexture.reset();
-        --TextureImpl::g_textureContextGeneration; // restore for later tests
+        --g_backendContextGeneration; // restore for later tests
         EXPECT_EQ(deleted.size(), 1u);
+    }
+}
+
+// ---- DirectGLES backend twins release their driver ids --------------------------------------
+// Framebuffers, renderbuffers and samplers had no destructor at all: every frontend object the
+// application deleted leaked its ES twin for the whole process lifetime. An application that
+// creates a framebuffer per readback (GL CTS packed_pixels.varied_rectangle makes ~3300 of them
+// per case) walked the driver into a gigabyte of dead framebuffers, and past that point every
+// readback through a freshly attached framebuffer came back with stale pixels.
+namespace {
+    struct TwinDeletionSinks {
+        MobileGL::Vector<GLuint> framebuffers;
+        MobileGL::Vector<GLuint> renderbuffers;
+        MobileGL::Vector<GLuint> samplers;
+    };
+
+    TwinDeletionSinks* g_twinDeletionSinks = nullptr;
+    GLuint g_nextTwinDriverId = 900;
+
+    void TW_GenFramebuffers(GLsizei count, GLuint* ids) {
+        for (GLsizei i = 0; i < count; ++i) ids[i] = g_nextTwinDriverId++;
+    }
+    void TW_DeleteFramebuffers(GLsizei count, const GLuint* ids) {
+        if (!g_twinDeletionSinks) return;
+        for (GLsizei i = 0; i < count; ++i) g_twinDeletionSinks->framebuffers.push_back(ids[i]);
+    }
+    void TW_GenRenderbuffers(GLsizei count, GLuint* ids) {
+        for (GLsizei i = 0; i < count; ++i) ids[i] = g_nextTwinDriverId++;
+    }
+    void TW_DeleteRenderbuffers(GLsizei count, const GLuint* ids) {
+        if (!g_twinDeletionSinks) return;
+        for (GLsizei i = 0; i < count; ++i) g_twinDeletionSinks->renderbuffers.push_back(ids[i]);
+    }
+    void TW_GenSamplers(GLsizei count, GLuint* ids) {
+        for (GLsizei i = 0; i < count; ++i) ids[i] = g_nextTwinDriverId++;
+    }
+    void TW_DeleteSamplers(GLsizei count, const GLuint* ids) {
+        if (!g_twinDeletionSinks) return;
+        for (GLsizei i = 0; i < count; ++i) g_twinDeletionSinks->samplers.push_back(ids[i]);
+    }
+    void TW_BindFramebuffer(GLenum target, GLuint framebuffer) {
+        SG_Log("BindFramebuffer:" + std::to_string(target) + ":" + std::to_string(framebuffer));
+    }
+    void TW_BindSampler(GLuint, GLuint) {}
+    void TW_BindRenderbuffer(GLenum, GLuint) {}
+
+    // Installs a table that can create and destroy all three twin kinds, and unwinds it (plus the
+    // recording pointer) even when an assertion aborts the test body.
+    struct ScopedBackendTwinMocks {
+        ScopedBackendTwinMocks(): previousFunctions(MobileGL::MG_Backend::DirectGLES::g_GLESFuncs) {
+            MobileGL::MG_Backend::DirectGLES::FramebufferImpl::InvalidateFramebufferBindingCache();
+            MobileGL::MG_External::GLESFunctionsTable functions{};
+            functions.glGenFramebuffers = TW_GenFramebuffers;
+            functions.glDeleteFramebuffers = TW_DeleteFramebuffers;
+            functions.glBindFramebuffer = TW_BindFramebuffer;
+            functions.glGenRenderbuffers = TW_GenRenderbuffers;
+            functions.glDeleteRenderbuffers = TW_DeleteRenderbuffers;
+            functions.glBindRenderbuffer = TW_BindRenderbuffer;
+            functions.glGenSamplers = TW_GenSamplers;
+            functions.glDeleteSamplers = TW_DeleteSamplers;
+            functions.glBindSampler = TW_BindSampler;
+            functions.glGetError = SG_NoError;
+            MobileGL::MG_Backend::DirectGLES::SetGLESFuncsTable(functions);
+            g_twinDeletionSinks = &sinks;
+            g_stateGuardLog = &log;
+        }
+
+        ~ScopedBackendTwinMocks() {
+            g_stateGuardLog = nullptr;
+            g_twinDeletionSinks = nullptr;
+            MobileGL::MG_Backend::DirectGLES::SetGLESFuncsTable(previousFunctions);
+            MobileGL::MG_Backend::DirectGLES::FramebufferImpl::InvalidateFramebufferBindingCache();
+        }
+
+        ScopedBackendTwinMocks(const ScopedBackendTwinMocks&) = delete;
+        ScopedBackendTwinMocks& operator=(const ScopedBackendTwinMocks&) = delete;
+
+        TwinDeletionSinks sinks;
+        StateGuardCallLog log;
+        MobileGL::MG_External::GLESFunctionsTable previousFunctions;
+    };
+} // namespace
+
+TEST(DirectGLESBackendFramebuffer, DestructorDeletesIdAndScrubsBindingShadow) {
+    using namespace MobileGL::MG_Backend::DirectGLES;
+    ScopedBackendTwinMocks mocks;
+
+    GLuint id = 0;
+    {
+        auto backendFBO = MobileGL::MakeShared<FramebufferImpl::BackendFramebufferObject>();
+        id = backendFBO->GetBackendFramebufferId();
+        ASSERT_NE(id, 0u);
+        backendFBO->Bind(MobileGL::FramebufferTarget::Draw);
+        ASSERT_EQ(FramebufferImpl::CurrentFramebufferBinding(MobileGL::FramebufferTarget::Draw), id);
+    }
+    ASSERT_EQ(mocks.sinks.framebuffers.size(), 1u);
+    EXPECT_EQ(mocks.sinks.framebuffers[0], id);
+    // ES reverts every target bound to a deleted framebuffer to 0. The shadow has to follow, or
+    // the next BindFramebufferId(0) is deduped away and the driver keeps the dead name bound.
+    EXPECT_EQ(FramebufferImpl::CurrentFramebufferBinding(MobileGL::FramebufferTarget::Draw), 0u);
+
+    // A twin whose context died must NOT delete a name a successor context may have recycled.
+    {
+        auto backendFBO = MobileGL::MakeShared<FramebufferImpl::BackendFramebufferObject>();
+        ++g_backendContextGeneration;
+        backendFBO.reset();
+        --g_backendContextGeneration; // restore for later tests
+        EXPECT_EQ(mocks.sinks.framebuffers.size(), 1u);
+    }
+}
+
+TEST(DirectGLESBackendRenderbuffer, DestructorDeletesId) {
+    using namespace MobileGL::MG_Backend::DirectGLES;
+    ScopedBackendTwinMocks mocks;
+
+    GLuint id = 0;
+    {
+        auto backendRBO = MobileGL::MakeShared<RenderbufferImpl::BackendRenderbufferObject>();
+        id = backendRBO->GetBackendRenderbufferId();
+        ASSERT_NE(id, 0u);
+    }
+    ASSERT_EQ(mocks.sinks.renderbuffers.size(), 1u);
+    EXPECT_EQ(mocks.sinks.renderbuffers[0], id);
+
+    {
+        auto backendRBO = MobileGL::MakeShared<RenderbufferImpl::BackendRenderbufferObject>();
+        ++g_backendContextGeneration;
+        backendRBO.reset();
+        --g_backendContextGeneration;
+        EXPECT_EQ(mocks.sinks.renderbuffers.size(), 1u);
+    }
+}
+
+TEST(DirectGLESBackendSampler, DestructorDeletesIdAndScrubsUnitCache) {
+    using namespace MobileGL::MG_Backend::DirectGLES;
+    ScopedBackendTwinMocks mocks;
+
+    GLuint id = 0;
+    {
+        auto backendSampler = MobileGL::MakeShared<SamplerImpl::BackendSamplerObject>();
+        id = backendSampler->GetBackendSamplerId();
+        ASSERT_NE(id, 0u);
+        backendSampler->Bind(3);
+        ASSERT_EQ(SamplerImpl::g_boundSamplersCache[3], backendSampler.get());
+    }
+    ASSERT_EQ(mocks.sinks.samplers.size(), 1u);
+    EXPECT_EQ(mocks.sinks.samplers[0], id);
+    // glDeleteSamplers unbinds from every unit, and the next twin can land on this heap
+    // address - a stale row would false-skip its Bind.
+    EXPECT_EQ(SamplerImpl::g_boundSamplersCache[3], nullptr);
+
+    {
+        auto backendSampler = MobileGL::MakeShared<SamplerImpl::BackendSamplerObject>();
+        ++g_backendContextGeneration;
+        backendSampler.reset();
+        --g_backendContextGeneration;
+        EXPECT_EQ(mocks.sinks.samplers.size(), 1u);
     }
 }
 

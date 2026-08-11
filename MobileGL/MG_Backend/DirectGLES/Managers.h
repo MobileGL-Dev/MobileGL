@@ -36,6 +36,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
     Bool InProcessTeardown();
     void EnsureProcessTeardownSentinel();
 
+    // Generation of the backend ES context that owns the driver ids currently handed
+    // out. Bumped exactly once per DestroyEGLContext. Every backend twin that owns a
+    // driver name (texture, framebuffer, renderbuffer, sampler) stamps this at
+    // construction and compares it in its destructor: a twin outliving its context
+    // must NOT glDelete* its id, because a successor context may already have recycled
+    // that name and the delete would take out a live object of the new context.
+    extern Uint g_backendContextGeneration;
+
     // Which optional pieces of state a draw needs synchronized before it is issued.
     // Index/indirect buffer syncs and the instancing-related work are skipped for
     // draws that provably cannot read them.
@@ -657,15 +665,20 @@ namespace MobileGL::MG_Backend::DirectGLES {
                      MG_State::GLState::TextureState::MAX_TEXTURE_IMAGE_UNITS>
             g_boundTexturesCache;
         extern Uint g_activeTextureUnit;
-        // Bumped when the backend ES context is destroyed; texture ids stamped with
-        // an older generation belong to a dead context and must not be deleted.
-        extern Uint g_textureContextGeneration;
     } // namespace TextureImpl
 
     namespace FramebufferImpl {
         class BackendFramebufferObject {
         public:
             BackendFramebufferObject();
+            // Deletes the driver framebuffer and scrubs the binding shadow. Without it every
+            // frontend glDeleteFramebuffers leaked one ES framebuffer for the process lifetime;
+            // an app that creates a framebuffer per readback (GL CTS packed_pixels does ~3300
+            // per case) walked the driver into hundreds of megabytes of dead framebuffers and
+            // out of the resources a later attachment needs.
+            ~BackendFramebufferObject();
+            BackendFramebufferObject(const BackendFramebufferObject&) = delete;
+            BackendFramebufferObject& operator=(const BackendFramebufferObject&) = delete;
             void SyncToBackend(const SharedPtr<MG_State::GLState::FramebufferObject>& stateFBOObject,
                                FramebufferTarget asTarget);
             // Apply only this FBO's read buffer (glReadBuffer) to the backend. Split out so it can
@@ -680,6 +693,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
         private:
             Uint m_backendFBOId = 0;
+            Uint m_contextGeneration = 0;
 
             /* this will save buffers in its original form,
                reversion, absence or not consecutive are all allowed, as long as GL spec allows it
@@ -821,6 +835,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
         void BindFramebufferId(GLenum fbTarget, Uint id);
         Uint CurrentFramebufferBinding(FramebufferTarget target);
         void InvalidateFramebufferBindingCache();
+        // A driver framebuffer id is about to be deleted: ES reverts every target that
+        // currently binds it to 0, so the binding shadow has to follow or the next
+        // BindFramebufferId(0) would be deduped away and leave the deleted name bound.
+        void NoteFramebufferIdDeleted(Uint id);
     } // namespace FramebufferImpl
 
     // Shared scratch framebuffers for the readback/copy/blit emulation paths, with a
@@ -1087,12 +1105,19 @@ namespace MobileGL::MG_Backend::DirectGLES {
         class BackendSamplerObject {
         public:
             BackendSamplerObject();
+            // Deletes the driver sampler and clears the units whose binding shadow still names
+            // this twin (a recycled heap address would otherwise false-skip a later Bind).
+            // Frontend glDeleteSamplers used to leak the backend id for the process lifetime.
+            ~BackendSamplerObject();
+            BackendSamplerObject(const BackendSamplerObject&) = delete;
+            BackendSamplerObject& operator=(const BackendSamplerObject&) = delete;
             void SyncToBackend(const SharedPtr<MG_State::GLState::SamplerObject>& stateSamplerObject);
             void Bind(Uint unit);
             Uint GetBackendSamplerId() const;
 
         private:
             Uint m_backendSamplerId = 0;
+            Uint m_contextGeneration = 0;
             Bool m_isInitialized = false;
             SamplerParameters m_cacheSamplerParameters;
             Uint16 m_syncedSamplerVersion = 0;
@@ -1110,12 +1135,18 @@ namespace MobileGL::MG_Backend::DirectGLES {
         class BackendRenderbufferObject {
         public:
             BackendRenderbufferObject();
+            // Deletes the driver renderbuffer; frontend glDeleteRenderbuffers used to leak it
+            // (with its whole image allocation) for the process lifetime.
+            ~BackendRenderbufferObject();
+            BackendRenderbufferObject(const BackendRenderbufferObject&) = delete;
+            BackendRenderbufferObject& operator=(const BackendRenderbufferObject&) = delete;
             void SyncToBackend(const SharedPtr<MG_State::GLState::RenderbufferObject>& stateRBOObject);
             Uint GetBackendRenderbufferId() const { return m_backendRBOId; }
             void Bind() const;
 
         private:
             Uint m_backendRBOId = 0;
+            Uint m_contextGeneration = 0;
             Bool m_isInitialized = false;
             TextureInternalFormat m_cacheInternalFormat = TextureInternalFormat::Unknown;
             Int m_cacheWidth = 0;
