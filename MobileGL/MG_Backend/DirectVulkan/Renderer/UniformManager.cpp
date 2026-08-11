@@ -677,7 +677,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
     Bool UniformManager::ResolveStorageBufferDescriptor(const MG_State::GLState::ProgramObject& program,
                                                         const ProgramFactory::VkProgramObject& programObj,
-                                                        Uint32 binding,
+                                                        Uint32 binding, Uint32 element,
                                                         VkDescriptorBufferInfo& outBufferInfo) const {
         outBufferInfo = {};
         MOBILEGL_ASSERT(m_bufferManager != nullptr, "ResolveStorageBufferDescriptor: buffer manager is null");
@@ -688,8 +688,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         const Int blockIndex = programObj.storageBlockIndexByBinding[binding];
         MOBILEGL_ASSERT(blockIndex >= 0, "ResolveStorageBufferDescriptor: no SSBO block mapped to binding %u",
                         binding);
+        // A block instance array declares one block whose elements take consecutive GL binding
+        // points from the declared one (GL 4.6 core 7.8), and the reflection collapses the whole
+        // array to that one block - so the element index IS the offset from its binding.
         const GLuint frontendBinding =
-            GetShaderStorageBlockBinding(program, static_cast<GLuint>(blockIndex));
+            GetShaderStorageBlockBinding(program, static_cast<GLuint>(blockIndex)) + element;
         const Uint32 bindingPointCount =
             static_cast<Uint32>(MG_State::pGLContext->GetBufferBindingPointCount(BufferTarget::ShaderStorage));
         MOBILEGL_ASSERT(frontendBinding < bindingPointCount,
@@ -1416,12 +1419,17 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         dynamicOffsets.clear();
         // Arrayed UBO bindings contribute extra buffer infos and dynamic offsets; reserve for
         // the worst case so the pBufferInfo pointers taken below never dangle on reallocation.
+        // Arrayed SSBO bindings contribute extra buffer infos too (but no dynamic offsets).
         Uint32 uboArrayExtra = 0;
         for (const auto& arrayEntry : programObj.arrayedUniformBlockIndicesByBinding) {
             uboArrayExtra += static_cast<Uint32>(arrayEntry.second.size()) - 1u;
         }
+        Uint32 ssboArrayExtra = 0;
+        for (const Uint16 count : programObj.bindingDescriptorCounts) {
+            if (count > 1) ssboArrayExtra += static_cast<Uint32>(count) - 1u;
+        }
         writes.reserve(m_maxBindings);
-        bufferInfos.reserve(m_maxBindings + uboArrayExtra);
+        bufferInfos.reserve(m_maxBindings + uboArrayExtra + ssboArrayExtra);
         imageInfos.reserve(m_maxBindings);
         texelBufferViews.reserve(m_maxBindings);
         dynamicOffsets.reserve(programObj.dynamicBindings.size() + uboArrayExtra);
@@ -1493,18 +1501,30 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 write.pTexelBufferView = &texelBufferViews.back();
                 writes.push_back(write);
             } else if (kind == ProgramFactory::DescriptorBindingKind::StorageBuffer) {
-                VkDescriptorBufferInfo bufferInfo{};
-                if (!ResolveStorageBufferDescriptor(program, programObj, binding, bufferInfo)) {
-                    MGLOG_E(
-                        "UniformDescriptorBinder::BindProgramUniformBuffers failed: storage buffer binding %u has no valid descriptor",
-                        binding);
-                    return false;
+                // One write per binding, but `descriptorCount` buffer infos: a GLSL block
+                // instance array occupies a single binding whose elements each come from their
+                // own GL binding point.
+                const Uint32 descriptorCount =
+                    binding < programObj.bindingDescriptorCounts.size()
+                        ? std::max<Uint32>(1, programObj.bindingDescriptorCounts[binding])
+                        : 1u;
+                const SizeT firstBufferInfoIndex = bufferInfos.size();
+                for (Uint32 element = 0; element < descriptorCount; ++element) {
+                    VkDescriptorBufferInfo bufferInfo{};
+                    if (!ResolveStorageBufferDescriptor(program, programObj, binding, element, bufferInfo)) {
+                        MGLOG_E(
+                            "UniformDescriptorBinder::BindProgramUniformBuffers failed: storage buffer binding %u "
+                            "element %u has no valid descriptor",
+                            binding, element);
+                        return false;
+                    }
+                    bufferInfos.push_back(bufferInfo);
                 }
 
-                bufferInfos.push_back(bufferInfo);
                 fastRebindKindsEligible = false;
                 write.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-                write.pBufferInfo = &bufferInfos.back();
+                write.descriptorCount = descriptorCount;
+                write.pBufferInfo = &bufferInfos[firstBufferInfoIndex];
                 writes.push_back(write);
             } else if (kind == ProgramFactory::DescriptorBindingKind::StorageImage) {
                 VkDescriptorImageInfo imageInfo{};

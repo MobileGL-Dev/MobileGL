@@ -166,9 +166,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         Bool ResolveTexelBufferDescriptor(const MG_State::GLState::ProgramObject& program,
                                           const ProgramFactory::VkProgramObject& programObj, Uint32 binding,
                                           Uint32 frameIndex, VkBufferView& outBufferView);
+        // `element` indexes a block INSTANCE array's descriptors; it is 0 for every ordinary
+        // block. Each element resolves through its own GL storage block, and so its own GL
+        // binding point, buffer and glBindBufferRange window.
         Bool ResolveStorageBufferDescriptor(const MG_State::GLState::ProgramObject& program,
                                             const ProgramFactory::VkProgramObject& programObj, Uint32 binding,
-                                            VkDescriptorBufferInfo& outBufferInfo) const;
+                                            Uint32 element, VkDescriptorBufferInfo& outBufferInfo) const;
         Bool ResolveStorageImageDescriptor(VkCommandBuffer commandBuffer,
                                            const MG_State::GLState::ProgramObject& program,
                                            const ProgramFactory::VkProgramObject& programObj, Uint32 binding,

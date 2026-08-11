@@ -2578,6 +2578,16 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                     }
                     entry.storageBlockNameByBinding[binding] = uniformName;
                     entry.storageBlockIndexByBinding[binding] = static_cast<Int>(blockIndex);
+
+                    // A block INSTANCE array is ONE Vulkan binding carrying `count`
+                    // descriptors, while GL assigns its elements consecutive binding points
+                    // starting at the declared one (GL 4.6 core 7.8). Recording only element 0 -
+                    // which is all this used to do - left the layout claiming descriptorCount 1,
+                    // so every element past the first read a descriptor nobody wrote and
+                    // `b[1].data.length()` answered from an unconstrained buffer instead of its
+                    // own bound range (KHR-GL43.shader_storage_buffer_object.-
+                    // advanced-unsizedArrayLength-*).
+                    entry.bindingDescriptorCounts[binding] = static_cast<Uint16>(std::max<Uint32>(1u, sampler->count));
                     continue;
                 }
 
