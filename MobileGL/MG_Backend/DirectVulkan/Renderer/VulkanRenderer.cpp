@@ -4582,7 +4582,6 @@ void main() {
             MGLOG_D("GetOrCreatePipeline skipped: program has no shader stages");
             return VK_NULL_HANDLE;
         }
-
         // Fast path: skip the full pipeline resolution when the pipeline state is unchanged from the
         // previous draw (the common intra-batch case). The key provably covers every
         // PipelineCreatePayload field: draw mode (topology + polygon-fill depth-bias gate), program
@@ -6144,7 +6143,9 @@ void main() {
     void VulkanRenderer::DispatchCompute(GLuint numGroupsX, GLuint numGroupsY, GLuint numGroupsZ) {
         m_textureManager->CollectGarbage();
         auto& frame = m_frameContext.GetCurrent();
-        const auto& program = *MG_State::pGLContext->GetProgramForDraw();
+        // The DISPATCH accessor: with a pipeline bound this is its compute stage program
+        // itself, never the graphics composite (which carries no compute stage at all).
+        const auto& program = *MG_State::pGLContext->GetProgramForDispatch();
         if (!program.GetLinkStatus() || !program.GetSpirvStatus()) {
             MGLOG_E("DispatchCompute skipped: program=%u has no optimized SPIR-V",
                     program.GetExternalIndex());
@@ -6189,7 +6190,8 @@ void main() {
     void VulkanRenderer::DispatchComputeIndirect(GLintptr indirect) {
         m_textureManager->CollectGarbage();
         auto& frame = m_frameContext.GetCurrent();
-        const auto& program = *MG_State::pGLContext->GetProgramForDraw();
+        // See DispatchCompute: the dispatch accessor, not the draw one.
+        const auto& program = *MG_State::pGLContext->GetProgramForDispatch();
         if (!program.GetLinkStatus() || !program.GetSpirvStatus()) {
             MGLOG_E("DispatchComputeIndirect skipped: program=%u has no optimized SPIR-V",
                     program.GetExternalIndex());

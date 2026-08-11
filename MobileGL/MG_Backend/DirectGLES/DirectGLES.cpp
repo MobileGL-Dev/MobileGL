@@ -3010,8 +3010,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
         ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
         // Single per-dispatch program resolve and texture-key capture, as in
-        // PrepareForDraw (nothing below can move either).
-        const auto& currentProgram = MG_State::pGLContext->GetProgramForDraw();
+        // PrepareForDraw (nothing below can move either). The DISPATCH accessor: with a
+        // pipeline bound this is its compute stage program, which is a whole program on its
+        // own - the graphics composite a draw builds carries no compute stage.
+        const auto& currentProgram = MG_State::pGLContext->GetProgramForDispatch();
         const TextureImpl::DrawTextureSyncKeys textureKeys = TextureImpl::CaptureDrawTextureSyncKeys();
 
         BufferImpl::SyncComputeBuffers(includeDispatchIndirectBuffer);

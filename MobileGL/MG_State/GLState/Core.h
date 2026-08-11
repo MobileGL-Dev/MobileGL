@@ -163,9 +163,15 @@ namespace MobileGL {
                 }
                 void UseProgram(Uint program);
                 const SharedPtr<ProgramObject>& GetCurrentProgram();
-                // What a draw or dispatch actually executes: the program in use, or - when
-                // there is none - the bound pipeline's stages composited into one program.
+                // What a DRAW executes: the program in use, or - when there is none - the bound
+                // pipeline's GRAPHICS stages composited into one program. A pipeline's compute
+                // stage is never part of that composite; ask GetProgramForDispatch for it.
                 const SharedPtr<ProgramObject>& GetProgramForDraw();
+                // What a DISPATCH executes: the program in use, or - when there is none - the
+                // bound pipeline's compute stage program itself. GL's compute stage is a whole
+                // program on its own (GL 4.6 core 7.4: it may not be linked with any other
+                // stage), so there is nothing to composite and no composite to cache.
+                const SharedPtr<ProgramObject>& GetProgramForDispatch();
                 // What glUniform* addresses: the program in use, or the bound pipeline's
                 // active program (GL 4.6 core 7.6.1).
                 const SharedPtr<ProgramObject>& GetProgramForUniform();

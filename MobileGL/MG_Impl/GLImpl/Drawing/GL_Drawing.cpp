@@ -14,8 +14,8 @@
 #include "../Getter/GL_Getter.h"
 
 namespace MobileGL::MG_Impl::GLImpl {
-    static Bool ValidateCurrentProgramForExecution(const char* functionName) {
-        const auto& currentProgram = MG_State::pGLContext->GetProgramForDraw();
+    static Bool ValidateProgramForExecution(const SharedPtr<MG_State::GLState::ProgramObject>& currentProgram,
+                                            const char* functionName) {
         if (!currentProgram) {
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidOperation,
@@ -34,10 +34,17 @@ namespace MobileGL::MG_Impl::GLImpl {
         return true;
     }
 
-    static Bool ValidateCurrentProgramForCompute(const char* functionName) {
-        if (!ValidateCurrentProgramForExecution(functionName)) return false;
+    static Bool ValidateCurrentProgramForExecution(const char* functionName) {
+        return ValidateProgramForExecution(MG_State::pGLContext->GetProgramForDraw(), functionName);
+    }
 
-        const auto& currentProgram = MG_State::pGLContext->GetProgramForDraw();
+    // A dispatch resolves its program through the DISPATCH accessor: with a pipeline bound
+    // that is the pipeline's compute stage program, not the graphics composite a draw would
+    // build - which no longer contains a compute stage to find at all.
+    static Bool ValidateCurrentProgramForCompute(const char* functionName) {
+        const auto& currentProgram = MG_State::pGLContext->GetProgramForDispatch();
+        if (!ValidateProgramForExecution(currentProgram, functionName)) return false;
+
         if (currentProgram->GetShaderIndexByStage(ShaderStage::Compute) < 0) {
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidOperation,

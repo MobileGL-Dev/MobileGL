@@ -176,17 +176,15 @@ void main() { gl_Position = i_position; }
         gl.EndFrame();
     }
 
-    // glActiveShaderProgram picks which stage program glUniform* addresses.
+    // glActiveShaderProgram picks which stage program glUniform* addresses - and the draw has to
+    // see what was written there.
     //
-    // DISABLED: a second, independent defect, left failing on purpose rather than deleted. The
-    // materialization fix above got the stages recorded and the pipeline drawing, but a uniform
-    // set through the active shader program does not reach the flattened composite: the draw
-    // paints u_color's default rather than the value written. GetProgramForUniform() returns the
-    // pipeline's active program, while GetProgramForDraw() builds a SEPARATE composite object out
-    // of the stage programs' shaders - so uniform values live on one object and the draw reads
-    // another. Enable this the moment the composite inherits (or aliases) its stage programs'
-    // uniform storage.
-    TEST_F(ProgramPipelineScenario, DISABLED_UniformsGoToTheActiveShaderProgram) {
+    // The second defect of the cluster, and the one the pixels expose most directly: uniform
+    // values live on the stage program (GetProgramForUniform returns the pipeline's active
+    // program) while the draw reads the composite GetProgramForDraw builds out of the stage
+    // programs' shaders. Two objects, two sets of uniform storage; before the composite was
+    // refreshed from its stage programs this painted u_color's zero default instead of green.
+    TEST_F(ProgramPipelineScenario, UniformsGoToTheActiveShaderProgram) {
         if (!Ready()) return;
 
         static const char* kUniformFS = R"(#version 430 core
@@ -236,14 +234,15 @@ void main() { o_color = u_color; }
     // The sso-compute-pipeline shape: compute and non-compute stages on ONE pipeline object, the
     // compute stage writing the buffer the vertex stage then reads.
     //
-    // DISABLED: the third defect in this cluster. Attaching a compute stage alongside graphics
-    // stages is now accepted, but the dispatch/draw pair still paints nothing and leaves an error
-    // behind - GetProgramForDraw flattens EVERY stage of the pipeline into one composite, so the
-    // compute stage and the graphics stages end up in a single program that can serve neither
-    // glDispatchCompute nor glDrawArrays correctly. GL keeps them separate: a pipeline's compute
-    // stage is dispatched on its own and never participates in a draw. Enable this when the
-    // flattening splits the compute stage out from the graphics ones.
-    TEST_F(ProgramPipelineScenario, DISABLED_ComputeAndGraphicsStagesShareOnePipeline) {
+    // The third defect of the cluster: the flattening used to pull EVERY stage into one
+    // composite, so a single program was asked to serve both glDispatchCompute and glDrawArrays.
+    // GL keeps them apart - a pipeline's compute stage is a whole program dispatched on its own
+    // and never participates in a draw - which is why the accessors are split (GetProgramForDraw
+    // composites the graphics stages, GetProgramForDispatch hands back the compute stage
+    // program). It is also the shape that killed the process on Adreno: the composite carried a
+    // compute module into vkCreateGraphicsPipelines, and that driver SIGSEGVs rather than
+    // returning an error.
+    TEST_F(ProgramPipelineScenario, ComputeAndGraphicsStagesShareOnePipeline) {
         if (!Ready()) return;
         HeadlessGL& gl = Gl();
         const int width = gl.Width();

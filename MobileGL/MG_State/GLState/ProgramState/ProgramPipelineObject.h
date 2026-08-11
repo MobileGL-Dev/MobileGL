@@ -40,23 +40,63 @@ namespace MobileGL {
 
                 Uint GetExternalIndex() const { return m_externalIndex; }
 
+                // The stages a DRAW is built from: every stage but compute. GL 4.6 core 7.4
+                // makes the compute stage exclusive - a program object containing a compute
+                // shader may contain no other stage, and a pipeline's compute stage is
+                // dispatched on its own and never participates in a draw. So the compute stage
+                // is not merely irrelevant to the composite below, it must never enter it: a
+                // compute module handed to vkCreateGraphicsPipelines is a driver crash rather
+                // than an error return (Adreno 830 SIGSEGVs inside it).
+                static constexpr SizeT kGraphicsStageCount = static_cast<SizeT>(ShaderStage::Compute);
+                static_assert(static_cast<SizeT>(ShaderStage::Compute) + 1 ==
+                                  static_cast<SizeT>(ShaderStage::ShaderStageCount),
+                              "ShaderStage must keep Compute last so the graphics stages are a prefix");
+
                 // A draw sees one program, but a pipeline holds one program per stage. The
-                // stages are composited into a single hidden program object, rebuilt whenever
-                // the stage set - or any stage program's own link - changes. The signature is
-                // what that "changes" means: a stage program's lifetime id pins the object and
-                // its backend state version pins the link generation.
-                using DrawProgramSignature =
-                    Array<Uint64, static_cast<SizeT>(ShaderStage::ShaderStageCount) * 2>;
+                // GRAPHICS stages are composited into a single hidden program object, rebuilt
+                // whenever the stage set - or any stage program's own link - changes. The
+                // signature is what that "changes" means: a stage program's lifetime id pins the
+                // object and its backend state version pins the link generation. It covers
+                // exactly the stages the composite is built from, so attaching or relinking a
+                // compute stage never invalidates a perfectly good graphics composite - and the
+                // compute stage, having no composite of its own, can never collide with it.
+                using DrawProgramSignature = Array<Uint64, kGraphicsStageCount * 2>;
 
                 DrawProgramSignature ComputeDrawProgramSignature() const {
                     DrawProgramSignature signature{};
-                    for (SizeT stage = 0; stage < static_cast<SizeT>(ShaderStage::ShaderStageCount); ++stage) {
+                    for (SizeT stage = 0; stage < kGraphicsStageCount; ++stage) {
                         const auto& program = m_stagePrograms[stage];
                         if (!program) continue;
                         signature[stage * 2] = program->GetLifetimeId();
                         signature[stage * 2 + 1] = program->GetBackendStateVersion();
                     }
                     return signature;
+                }
+
+                // Uniform values are written to the STAGE programs - glUniform* addresses the
+                // pipeline's active program (GL 4.6 core 7.6.1) and glProgramUniform* addresses
+                // a named one - while the draw reads the composite. Two different objects'
+                // storage, so the composite is refreshed from its stage programs before each
+                // draw that needs it. These are the per-stage versions "needs it" is measured
+                // against: the stage program's uniform-shadow content version in the low half
+                // and its backend state version (which the opaque/sampler-unit writes bump) in
+                // the high half. All zero after a rebuild, because a fresh composite starts at
+                // GL's zero defaults and so needs a full refresh.
+                using UniformMirrorVersions = Array<Uint64, kGraphicsStageCount>;
+
+                UniformMirrorVersions ComputeUniformMirrorVersions() const {
+                    UniformMirrorVersions versions{};
+                    for (SizeT stage = 0; stage < kGraphicsStageCount; ++stage) {
+                        const auto& program = m_stagePrograms[stage];
+                        if (!program) continue;
+                        versions[stage] = (static_cast<Uint64>(program->GetBackendStateVersion()) << 32) |
+                                          static_cast<Uint64>(program->GetUBOContentVersion());
+                    }
+                    return versions;
+                }
+                const UniformMirrorVersions& GetMirroredUniformVersions() const { return m_mirroredUniformVersions; }
+                void SetMirroredUniformVersions(const UniformMirrorVersions& versions) {
+                    m_mirroredUniformVersions = versions;
                 }
 
                 const SharedPtr<ProgramObject>& GetCachedDrawProgram(const DrawProgramSignature& signature) const {
@@ -67,6 +107,8 @@ namespace MobileGL {
                 void SetCachedDrawProgram(const DrawProgramSignature& signature, SharedPtr<ProgramObject> program) {
                     m_drawProgramSignature = signature;
                     m_drawProgram = Move(program);
+                    // A rebuilt composite holds none of its stage programs' uniform values yet.
+                    m_mirroredUniformVersions = {};
                 }
 
             private:
@@ -74,6 +116,7 @@ namespace MobileGL {
                 SharedPtr<ProgramObject> m_activeProgram;
                 SharedPtr<ProgramObject> m_drawProgram;
                 DrawProgramSignature m_drawProgramSignature{};
+                UniformMirrorVersions m_mirroredUniformVersions{};
                 String m_infoLog;
                 const Uint m_externalIndex = 0;
                 Bool m_validateStatus = false;

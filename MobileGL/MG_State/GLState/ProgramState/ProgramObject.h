@@ -326,6 +326,20 @@ namespace MobileGL::MG_State::GLState {
                                                           : kInvalidUniformOffset;
         }
         Uint GetUniformSizesInBytes(Uint location) const { return MG_Util::GetGLTypeSize(GetUniformType(location)); }
+        // Bytes a uniform actually occupies in the global UBO, which is not its GL type size:
+        // std140 pads each column of a float matrix out to a vec4, so a mat3 spans 48 bytes
+        // even though only 36 of them carry components. Anything reading or writing a whole
+        // uniform's storage - a bounds check, a copy between two programs' shadows - wants
+        // this rather than GetUniformSizesInBytes.
+        static SizeT UniformStorageSpanInBytes(const glslang::TType* type, SizeT tightSize) {
+            if (type != nullptr && type->isMatrix() && type->getBasicType() != glslang::EbtDouble) {
+                return static_cast<SizeT>(type->getMatrixCols()) * 4 * sizeof(Float);
+            }
+            return tightSize;
+        }
+        SizeT GetUniformStorageSpanInBytes(Uint location) const {
+            return UniformStorageSpanInBytes(GetUniformTType(location), GetUniformSizesInBytes(location));
+        }
 
         Int GetAttributeLocation(const String& name) {
             const auto it = std::find(Artifacts().attribs.begin(), Artifacts().attribs.end(), name);

@@ -863,12 +863,11 @@ namespace MobileGL::MG_Impl::GLImpl {
     }
 
     // Bytes a uniform actually occupies in the global UBO. It is the tight GL type size for
-    // everything except a float matrix, whose padded columns make it wider.
+    // everything except a float matrix, whose padded columns make it wider. The rule itself
+    // lives on ProgramObject, because the pipeline composite's uniform refresh needs the same
+    // one and two copies of a layout rule is one too many.
     SizeT UniformStorageSpanInBytes(const glslang::TType* ttype, SizeT tightSize) {
-        if (ttype != nullptr && ttype->isMatrix() && ttype->getBasicType() != glslang::EbtDouble) {
-            return static_cast<SizeT>(ttype->getMatrixCols()) * 4 * sizeof(GLfloat);
-        }
-        return tightSize;
+        return MG_State::GLState::ProgramObject::UniformStorageSpanInBytes(ttype, tightSize);
     }
 
     void GetUniform_State(GLuint program, GLint location, void* params) {
