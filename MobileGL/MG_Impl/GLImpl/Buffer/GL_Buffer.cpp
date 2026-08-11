@@ -1491,8 +1491,8 @@ namespace MobileGL::MG_Impl::GLImpl {
     // offset and size, which is also how glBindBuffersRange spells "reset this element"
     // (a NULL buffers array, or a zero entry inside one).
     static Bool ValidateBufferRangeOffsetAndSize(GLenum target, GLintptr offset, GLsizeiptr size,
-                                                 const char* funcName) {
-        if (size <= 0) {
+                                                 const char* funcName, Bool hasBuffer = true) {
+        if (hasBuffer && size <= 0) {
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidValue,
                 MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", funcName,
@@ -1528,15 +1528,18 @@ namespace MobileGL::MG_Impl::GLImpl {
             }
         }
         // A transform feedback capture binding is addressed in 32-bit components, so BOTH the
-        // offset and the size must be multiples of 4.
-        if (target == GL_TRANSFORM_FEEDBACK_BUFFER && ((offset % 4) != 0 || (size % 4) != 0)) {
+        // offset and the size must be multiples of 4. An atomic counter binding is addressed in
+        // 32-bit counters and constrains its offset the same way (GL 4.6 core 6.1.1) - that one
+        // has no queryable alignment pname, which is why it was missing here.
+        const Bool isFourByteAddressed =
+            target == GL_TRANSFORM_FEEDBACK_BUFFER || target == GL_ATOMIC_COUNTER_BUFFER;
+        if (isFourByteAddressed && ((offset % 4) != 0 || (hasBuffer && (size % 4) != 0))) {
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidValue,
                 MakeUnique<GenericErrorInfo>(
                     "MG_Impl/GLImpl", funcName,
-                    std::format("offset ({}) and size ({}) must both be multiples of 4 for "
-                                "GL_TRANSFORM_FEEDBACK_BUFFER.",
-                                offset, size)));
+                    std::format("offset ({}) and size ({}) must both be multiples of 4 for {}.", offset, size,
+                                MG_Util::ConvertGLEnumToString(target))));
             return false;
         }
         return true;
@@ -1548,7 +1551,12 @@ namespace MobileGL::MG_Impl::GLImpl {
         BufferTarget bufferTarget = MG_Util::ConvertGLEnumToBufferTarget(target);
         if (!BufferImpl::ValidateBufferBindingPointTarget(bufferTarget)) return;
         if (!BufferImpl::ValidateBufferBindingPointIndex(bufferTarget, index)) return;
-        if (buffer != 0 && !ValidateBufferRangeOffsetAndSize(target, offset, size, __func__)) return;
+        // The target's alignment rules are a property of the BINDING POINT, not of the buffer,
+        // so they apply even when buffer is zero - which is exactly how
+        // KHR-GL43.shader_storage_buffer_object.negative-api-bind probes the SSBO alignment
+        // (glBindBufferRange(SHADER_STORAGE_BUFFER, 0, 0, alignment - 1, 0)). Only the size
+        // rules need a buffer, since buffer 0 detaches the binding point and ignores size.
+        if (!ValidateBufferRangeOffsetAndSize(target, offset, size, __func__, /*hasBuffer: */ buffer != 0)) return;
         if (bufferTarget == BufferTarget::TransformFeedback && MG_State::pGLContext->IsTransformFeedbackActive()) {
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidOperation,
@@ -1732,8 +1740,29 @@ namespace MobileGL::MG_Impl::GLImpl {
         return BufferImpl::ValidateBufferBindingPointRange(bufferTarget, first, count, funcName);
     }
 
+    // ARB_multi_bind states the equivalence to a loop of single binds "except that ... buffers
+    // will not be created if they do not exist": glBindBuffer instantiates a name glGenBuffers
+    // merely reserved, glBindBuffers* must refuse it instead. That is INVALID_OPERATION, and it
+    // is an all-or-nothing check - one bad name leaves every binding point in the range alone
+    // (KHR-GL44.multi_bind.errors_bind_buffers).
+    static Bool ValidateMultiBindBufferNames(const GLuint* buffers, GLsizei count, const char* funcName) {
+        if (buffers == nullptr) return true;
+        for (GLsizei i = 0; i < count; ++i) {
+            if (buffers[i] == 0) continue;
+            if (MG_State::pGLContext->ValidateBufferObject(buffers[i])) continue;
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidOperation,
+                MakeUnique<GenericErrorInfo>(
+                    "MG_Impl/GLImpl", funcName,
+                    std::format("buffers[{}] ({}) is not the name of an existing buffer object.", i, buffers[i])));
+            return false;
+        }
+        return true;
+    }
+
     void BindBuffersBase(GLenum target, GLuint first, GLsizei count, const GLuint* buffers) {
         if (!ValidateMultiBindBufferRange(target, first, count, __func__)) return;
+        if (!ValidateMultiBindBufferNames(buffers, count, __func__)) return;
         for (GLsizei i = 0; i < count; ++i) {
             BindBufferBase_State(target, first + i, buffers ? buffers[i] : 0);
         }
@@ -1748,6 +1777,7 @@ namespace MobileGL::MG_Impl::GLImpl {
     void BindBuffersRange(GLenum target, GLuint first, GLsizei count, const GLuint* buffers, const GLintptr* offsets,
                           const GLsizeiptr* sizes) {
         if (!ValidateMultiBindBufferRange(target, first, count, __func__)) return;
+        if (!ValidateMultiBindBufferNames(buffers, count, __func__)) return;
         for (GLsizei i = 0; i < count; ++i) {
             if (!buffers || buffers[i] == 0) {
                 BindBufferBase_State(target, first + i, 0);

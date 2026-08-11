@@ -520,6 +520,20 @@ namespace MobileGL::MG_Impl::GLImpl {
                                              "No buffer is bound to GL_DISPATCH_INDIRECT_BUFFER."));
             return;
         }
+        // ...and the same INVALID_OPERATION covers "the command would source data beyond the end
+        // of the bound buffer object" (GL 4.6 core 19): the dispatch reads three uints starting
+        // at `indirect`.
+        constexpr SizeT kDispatchIndirectCommandSize = 3 * sizeof(Uint32);
+        if (static_cast<SizeT>(indirect) + kDispatchIndirectCommandSize > indirectBuffer->GetSize()) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidOperation,
+                MakeUnique<GenericErrorInfo>(
+                    "MG_Impl/GLImpl", __func__,
+                    std::format("indirect ({}) + 12 bytes runs past the end of the {}-byte buffer bound to "
+                                "GL_DISPATCH_INDIRECT_BUFFER.",
+                                indirect, indirectBuffer->GetSize())));
+            return;
+        }
         dispatchComputeIndirect(indirect);
     }
 
@@ -580,6 +594,61 @@ namespace MobileGL::MG_Impl::GLImpl {
         MultiDrawArraysIndirect_Backend(mode, indirect, drawcount, stride);
     }
 
+    // ARB_indirect_parameters / GL 4.6 core 10.4: `drawcount` is a byte offset into the buffer
+    // bound to PARAMETER_BUFFER and holds one uint draw count. Three errors have to be raised
+    // before the call reaches a backend, and none of them was
+    // (KHR-GL46.indirect_parameters_tests.MultiDraw{Arrays,Elements}IndirectCount):
+    //   * drawcount not a multiple of four                                  INVALID_VALUE
+    //   * nothing bound to PARAMETER_BUFFER, or the uint at `drawcount`
+    //     lies past its end                                                 INVALID_OPERATION
+    //   * maxdrawcount commands from `indirect` run past the end of the
+    //     buffer bound to DRAW_INDIRECT_BUFFER                              INVALID_OPERATION
+    static Bool ValidateIndirectCountDraw(GLintptr indirect, GLintptr drawcount, GLsizei maxdrawcount,
+                                          GLsizei stride, SizeT commandSize, const char* funcName) {
+        if (drawcount < 0 || (drawcount % 4) != 0) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidValue,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", funcName,
+                                             "drawcount must be non-negative and a multiple of four."));
+            return false;
+        }
+        const auto& parameterBuffer =
+            MG_State::pGLContext->GetBufferBindingSlot(BufferTarget::Parameter).GetBoundObject();
+        if (!parameterBuffer ||
+            static_cast<SizeT>(drawcount) + sizeof(Uint32) > parameterBuffer->GetSize()) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidOperation,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", funcName,
+                                             "No buffer is bound to GL_PARAMETER_BUFFER, or drawcount runs past "
+                                             "the end of the one that is."));
+            return false;
+        }
+        if (maxdrawcount < 0 || stride < 0 || indirect < 0) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidValue,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", funcName,
+                                             "indirect, maxdrawcount and stride must all be non-negative."));
+            return false;
+        }
+        const SizeT effectiveStride = stride != 0 ? static_cast<SizeT>(stride) : commandSize;
+        const auto& indirectBuffer =
+            MG_State::pGLContext->GetBufferBindingSlot(BufferTarget::DrawIndirect).GetBoundObject();
+        // A zero maxdrawcount sources nothing, so it cannot run past anything.
+        const SizeT requiredBytes =
+            maxdrawcount == 0 ? 0
+                              : static_cast<SizeT>(indirect) +
+                                    static_cast<SizeT>(maxdrawcount - 1) * effectiveStride + commandSize;
+        if (!indirectBuffer || requiredBytes > indirectBuffer->GetSize()) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidOperation,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", funcName,
+                                             "maxdrawcount commands would be sourced from beyond the end of the "
+                                             "buffer bound to GL_DRAW_INDIRECT_BUFFER."));
+            return false;
+        }
+        return true;
+    }
+
     void MultiDrawElementsIndirectCount(GLenum mode, GLenum type, const void* indirect, GLintptr drawcount,
                                         GLsizei maxdrawcount, GLsizei stride) {
         auto multiDrawElementsIndirectCount = MG_Backend::gBackendFunctionsTable.GL.MultiDrawElementsIndirectCount;
@@ -588,6 +657,11 @@ namespace MobileGL::MG_Impl::GLImpl {
                 ErrorCode::InvalidOperation,
                 MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
                                              "Backend does not support indirect-parameter indexed draws."));
+            return;
+        }
+        // DrawElementsIndirectCommand: count, instanceCount, firstIndex, baseVertex, baseInstance.
+        if (!ValidateIndirectCountDraw(reinterpret_cast<GLintptr>(indirect), drawcount, maxdrawcount, stride,
+                                       5 * sizeof(Uint32), __func__)) {
             return;
         }
         MultiDrawElementsIndirectCount_Backend(mode, type, indirect, drawcount, maxdrawcount, stride);
@@ -601,6 +675,11 @@ namespace MobileGL::MG_Impl::GLImpl {
                 ErrorCode::InvalidOperation,
                 MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
                                              "Backend does not support indirect-parameter array draws."));
+            return;
+        }
+        // DrawArraysIndirectCommand: count, instanceCount, first, baseInstance.
+        if (!ValidateIndirectCountDraw(reinterpret_cast<GLintptr>(indirect), drawcount, maxdrawcount, stride,
+                                       4 * sizeof(Uint32), __func__)) {
             return;
         }
         MultiDrawArraysIndirectCount_Backend(mode, indirect, drawcount, maxdrawcount, stride);

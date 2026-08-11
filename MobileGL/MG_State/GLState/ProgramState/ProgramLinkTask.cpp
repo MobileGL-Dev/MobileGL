@@ -446,6 +446,23 @@ namespace MobileGL::MG_State::GLState {
     Bool ProgramLinkTask::ConsumeShaders(Vector<SharedPtr<glslang::TShader>>& outShaders) {
         outShaders.assign(in.shaders.size(), nullptr);
 
+        // GL 4.6 core 7.3: a compute shader may only be linked with other compute shaders -
+        // the compute pipeline has no other stages to link against, so a program that mixes
+        // them must fail to link (KHR-GL43.compute_shader.api-program).
+        {
+            Bool hasCompute = false;
+            Bool hasNonCompute = false;
+            for (const LinkShaderInput& input : in.shaders) {
+                (input.stage == ShaderStage::Compute ? hasCompute : hasNonCompute) = true;
+            }
+            if (hasCompute && hasNonCompute) {
+                artifacts.infoLog =
+                    "A compute shader cannot be linked with shaders of any other stage.";
+                DeferLog(std::format("ProgramObject {}: Link failed - {}", in.externalIndex, artifacts.infoLog));
+                return false;
+            }
+        }
+
         for (SizeT i = 0; i < in.shaders.size(); i++) {
             const LinkShaderInput& input = in.shaders[i];
             const GLenum shaderType = MG_Util::ConvertShaderStageToGLEnum(input.stage);

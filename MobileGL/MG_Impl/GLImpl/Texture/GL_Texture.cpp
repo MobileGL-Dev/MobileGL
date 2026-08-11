@@ -4110,10 +4110,46 @@ namespace MobileGL::MG_Impl::GLImpl {
         textureObject->SetImmutableLevels(static_cast<Uint>(levels));
     }
 
+    // No block-compressed format is defined for a three-dimensional image, so glTexStorage3D on
+    // TEXTURE_3D must reject one - and with INVALID_OPERATION, not the INVALID_ENUM an unknown
+    // sized format gets (GL 4.6 core 8.19 / Khronos bug 11239, KHR-GLxx.texture_storage
+    // .compressed_data). Written against the enum ranges rather than a name list because the
+    // families are contiguous and MobileGL's own internal-format enum drops the ones it cannot
+    // carry, which would make this check silently narrower than the API surface.
+    static Bool IsCompressedGLInternalFormat(GLenum internalformat) {
+        switch (internalformat) {
+        case 0x8225: // GL_COMPRESSED_RED
+        case 0x8226: // GL_COMPRESSED_RG
+        case 0x84ED: // GL_COMPRESSED_RGB
+        case 0x84EE: // GL_COMPRESSED_RGBA
+        case 0x8C48: // GL_COMPRESSED_SRGB
+        case 0x8C49: // GL_COMPRESSED_SRGB_ALPHA
+            return true;
+        default:
+            break;
+        }
+        return (internalformat >= 0x83F0 && internalformat <= 0x83F3) || // S3TC / DXT
+               (internalformat >= 0x8DBB && internalformat <= 0x8DBE) || // RGTC
+               (internalformat >= 0x8E8C && internalformat <= 0x8E8F) || // BPTC
+               (internalformat >= 0x9270 && internalformat <= 0x9279) || // ETC2 / EAC
+               (internalformat >= 0x93B0 && internalformat <= 0x93BD) || // ASTC LDR
+               (internalformat >= 0x93D0 && internalformat <= 0x93DD);   // ASTC sRGB
+    }
+
     void TextureStorage3D(GLuint texture, GLsizei levels, GLenum internalformat, GLsizei width, GLsizei height,
                           GLsizei depth) {
         auto textureObject = GetTextureObjectByName(texture, __func__);
         if (!textureObject) return;
+        if (textureObject->GetTarget() == TextureTarget::Texture3D &&
+            IsCompressedGLInternalFormat(internalformat)) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidOperation,
+                MakeUnique<GenericErrorInfo>(
+                    "MG_Impl/GLImpl", __func__,
+                    std::format("{} is a compressed internal format and cannot back GL_TEXTURE_3D storage.",
+                                MG_Util::ConvertGLEnumToString(internalformat))));
+            return;
+        }
         TextureInternalFormat textureInternalFormat = MG_Util::ConvertGLEnumToTextureInternalFormat(internalformat);
         if (!ValidateTextureStorageInternalFormat(textureInternalFormat, __func__)) return;
         if (!ValidateTextureStorageShape(textureObject, 3, levels, width, height, depth, __func__)) return;

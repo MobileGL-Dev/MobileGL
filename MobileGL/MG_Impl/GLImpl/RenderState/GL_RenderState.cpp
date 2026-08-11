@@ -8,6 +8,7 @@
 
 #include "GL_RenderState.h"
 #include <cmath>
+#include <MG_Impl/GLImpl/Getter/GL_Getter.h>
 #include <MG_State/GLState/Core.h>
 #include <MG_Util/Converters/GLToStr/GLEnumConverter.h>
 #include <MG_Util/Converters/GLToMG/RenderStateEnumConverter.h>
@@ -380,7 +381,18 @@ namespace MobileGL::MG_Impl::GLImpl {
             return;
         }
 
-        *data = IsEnabledi_State(target, index);
+        // GL 4.6 core 22.1: glGetBooleani_v answers EVERY indexed state, not just the indexed
+        // capabilities - a non-boolean value simply reads back as "is it non-zero". Routing the
+        // non-capability enums to the pname table glGetIntegeri_v already owns is what makes
+        // that true; without it a query like glGetBooleani_v(GL_MAX_COMPUTE_WORK_GROUP_COUNT, 0)
+        // came back GL_INVALID_ENUM (KHR-GL43.compute_shader.max).
+        if (MG_Util::ConvertGLEnumToCapabilityInput(target) != CapabilityInput::Unknown) {
+            *data = IsEnabledi_State(target, index);
+            return;
+        }
+        GLint values[4] = {};
+        GetIntegeri_v(target, index, values);
+        *data = values[0] != 0 ? GL_TRUE : GL_FALSE;
     }
 
     GLboolean IsEnabled_State(GLenum cap) {

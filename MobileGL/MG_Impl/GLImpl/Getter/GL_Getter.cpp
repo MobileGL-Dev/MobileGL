@@ -961,15 +961,30 @@ namespace MobileGL::MG_Impl::GLImpl {
             }
         }
 
-        auto getInteger64i = MG_Backend::gBackendFunctionsTable.GL.GetInteger64i_v;
-        if (!getInteger64i) {
-            *data = 0;
-            MG_State::pGLContext->RecordError(
-                ErrorCode::InvalidOperation,
-                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__, "Backend does not support indexed integer queries."));
+        // The one indexed pname whose value genuinely needs 64 bits: a vertex buffer binding
+        // offset is an intptr, so taking the 32-bit route below would truncate it.
+        if (target == GL_VERTEX_BINDING_OFFSET) {
+            if (index >= VertexArrayImpl::GetMaxVertexAttribBindings()) {
+                MG_State::pGLContext->RecordError(
+                    ErrorCode::InvalidValue,
+                    MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
+                                                 "Vertex buffer binding index is out of range."));
+                return;
+            }
+            const auto& vao = MG_State::pGLContext->GetBoundVertexArray();
+            *data = vao ? static_cast<GLint64>(vao->GetBindingPoint(index).Offset) : 0;
             return;
         }
-        getInteger64i(target, index, data);
+
+        // Everything else is 32-bit indexed state that the glGetIntegeri_v pname table already
+        // owns, and GL 4.6 core 22.1 says every indexed query answers every indexed pname.
+        // Handing the leftovers straight to the backend instead made glGetInteger64i_v disagree
+        // with glGetIntegeri_v on the very same pname - GL_MAX_COMPUTE_WORK_GROUP_COUNT read
+        // back 0 while the 32-bit view said 65535 (KHR-GL43.compute_shader.max), because a
+        // frontend-only value simply is not in the driver's table.
+        GLint values[4] = {};
+        GetIntegeri_v(target, index, values);
+        *data = static_cast<GLint64>(values[0]);
     }
 
     void GetInteger64v(GLenum pname, GLint64* params) {
