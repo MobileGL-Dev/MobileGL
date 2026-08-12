@@ -1610,3 +1610,188 @@ TEST_F(GeneralBufferTest, General_CoherentAsFlush_PersistentMapAdoptsZeroCopyBac
     EXPECT_EQ(GetError(), GL_NO_ERROR);
     g_zeroCopyMock = nullptr;
 }
+
+// A buffer whose bytes the backend adopted into its own GPU memory - which is what
+// EnsureGpuResidentStorage does for a transform-feedback capture target or a shader
+// storage binding, so that MapBuffer/GetBufferSubData read real GPU results - and which
+// the application then REDEFINES.
+//
+// The store the adopted mapping describes is the one being thrown away. Keeping that
+// mapping across the redefinition is what let a transform feedback capture be written to
+// one buffer and read back out of another: the backend replaced the storage (a
+// respecification is the orphaning point) while the frontend went on resolving every read
+// through a mapping of the storage it had just released. Two capture spans into one
+// re-specified buffer came back empty from the second one onwards.
+//
+// So the mapping is handed back and the buffer returns to the CPU-shadow model until
+// something asks for residency again. These pin all three parts of that: the adoption
+// really is dropped, the new contents really do land where later reads resolve, and the
+// backend really is told to respecify - it must not skip the storage, or its copy would
+// keep the old bytes.
+TEST_F(BufferTest, RedefiningAnAdoptedBufferHandsTheMappingBack) {
+    ZeroCopyMockBackend mock;
+    g_zeroCopyMock = &mock;
+    ScopedBackendOps scopedOps(&kZeroCopyMockOps);
+
+    GLuint buffer = 0;
+    GenBuffers(1, &buffer);
+    BindBuffer(GL_ARRAY_BUFFER, buffer);
+    const GLint before[4] = {1, 2, 3, 4};
+    BufferData(GL_ARRAY_BUFFER, sizeof(before), before, GL_DYNAMIC_DRAW);
+    ASSERT_EQ(GetError(), GL_NO_ERROR);
+
+    auto bufferObject = MG_State::pGLContext->GetBufferObject(buffer);
+    ASSERT_NE(bufferObject, nullptr);
+    // The backend adopts the bytes, exactly as a capture target or an SSBO binding does.
+    ASSERT_TRUE(bufferObject->EnsureGpuResidentStorage());
+    ASSERT_TRUE(bufferObject->IsBackendPersistentMapped());
+    ASSERT_EQ(static_cast<const void*>(bufferObject->MappedData()),
+              static_cast<const void*>(mock.gpu.data()));
+    mock.respecifyCalls = 0;
+
+    const GLint after[4] = {10, 20, 30, 40};
+    BufferData(GL_ARRAY_BUFFER, sizeof(after), after, GL_DYNAMIC_DRAW);
+    ASSERT_EQ(GetError(), GL_NO_ERROR);
+
+    EXPECT_FALSE(bufferObject->IsBackendPersistentMapped());
+    EXPECT_NE(static_cast<const void*>(bufferObject->MappedData()),
+              static_cast<const void*>(mock.gpu.data()));
+    EXPECT_EQ(std::memcmp(bufferObject->MappedData(), after, sizeof(after)), 0);
+    // The backend has a separate copy again, so it must have been told to refresh it.
+    EXPECT_EQ(mock.respecifyCalls, 1);
+
+    g_zeroCopyMock = nullptr;
+}
+
+// The same redefinition at a LARGER size, which is the case nothing could paper over: the
+// adopted mapping is exactly as big as the old store, so writing the new contents through
+// it ran past the end of the backend allocation.
+TEST_F(BufferTest, RedefiningAnAdoptedBufferAtANewSizeStaysInBounds) {
+    ZeroCopyMockBackend mock;
+    g_zeroCopyMock = &mock;
+    ScopedBackendOps scopedOps(&kZeroCopyMockOps);
+
+    GLuint buffer = 0;
+    GenBuffers(1, &buffer);
+    BindBuffer(GL_ARRAY_BUFFER, buffer);
+    const GLint small[2] = {1, 2};
+    BufferData(GL_ARRAY_BUFFER, sizeof(small), small, GL_DYNAMIC_DRAW);
+    auto bufferObject = MG_State::pGLContext->GetBufferObject(buffer);
+    ASSERT_NE(bufferObject, nullptr);
+    ASSERT_TRUE(bufferObject->EnsureGpuResidentStorage());
+    ASSERT_EQ(mock.gpu.size(), sizeof(small));
+
+    const GLint large[8] = {1, 2, 3, 4, 5, 6, 7, 8};
+    BufferData(GL_ARRAY_BUFFER, sizeof(large), large, GL_DYNAMIC_DRAW);
+    ASSERT_EQ(GetError(), GL_NO_ERROR);
+
+    EXPECT_EQ(bufferObject->GetSize(), sizeof(large));
+    EXPECT_FALSE(bufferObject->IsBackendPersistentMapped());
+    EXPECT_EQ(std::memcmp(bufferObject->MappedData(), large, sizeof(large)), 0);
+    // The old, smaller GPU block was not written through: still the old size, still the
+    // old bytes.
+    EXPECT_EQ(mock.gpu.size(), sizeof(small));
+    EXPECT_EQ(std::memcmp(mock.gpu.data(), small, sizeof(small)), 0);
+
+    // And residency can be taken again, now over the new store.
+    ASSERT_TRUE(bufferObject->EnsureGpuResidentStorage());
+    EXPECT_TRUE(bufferObject->IsBackendPersistentMapped());
+    EXPECT_EQ(mock.gpu.size(), sizeof(large));
+    EXPECT_EQ(std::memcmp(bufferObject->MappedData(), large, sizeof(large)), 0);
+
+    g_zeroCopyMock = nullptr;
+}
+
+// glBufferStorage is the other way into a redefinition, and an adopted buffer can reach
+// it: the adoption came from a binding rather than from an application map, so the buffer
+// is still mutable and glBufferStorage is still legal on it.
+TEST_F(BufferTest, ImmutableStorageOnAnAdoptedBufferHandsTheMappingBackToo) {
+    ZeroCopyMockBackend mock;
+    g_zeroCopyMock = &mock;
+    ScopedBackendOps scopedOps(&kZeroCopyMockOps);
+
+    GLuint buffer = 0;
+    GenBuffers(1, &buffer);
+    BindBuffer(GL_ARRAY_BUFFER, buffer);
+    const GLint before[4] = {1, 2, 3, 4};
+    BufferData(GL_ARRAY_BUFFER, sizeof(before), before, GL_DYNAMIC_DRAW);
+    auto bufferObject = MG_State::pGLContext->GetBufferObject(buffer);
+    ASSERT_NE(bufferObject, nullptr);
+    ASSERT_TRUE(bufferObject->EnsureGpuResidentStorage());
+    ASSERT_TRUE(bufferObject->IsBackendPersistentMapped());
+
+    const GLint after[6] = {9, 8, 7, 6, 5, 4};
+    BufferStorage(GL_ARRAY_BUFFER, sizeof(after), after, GL_MAP_READ_BIT);
+    ASSERT_EQ(GetError(), GL_NO_ERROR);
+
+    EXPECT_TRUE(bufferObject->IsImmutableStorage());
+    EXPECT_FALSE(bufferObject->IsBackendPersistentMapped());
+    EXPECT_EQ(bufferObject->GetSize(), sizeof(after));
+    EXPECT_EQ(std::memcmp(bufferObject->MappedData(), after, sizeof(after)), 0);
+
+    g_zeroCopyMock = nullptr;
+}
+
+// A redefinition to nothing. The backend declines residency for an empty store, so this
+// is also the path where the mapping is given back and never retaken.
+TEST_F(BufferTest, RedefiningAnAdoptedBufferToZeroBytesLeavesItOnTheShadow) {
+    ZeroCopyMockBackend mock;
+    g_zeroCopyMock = &mock;
+    ScopedBackendOps scopedOps(&kZeroCopyMockOps);
+
+    GLuint buffer = 0;
+    GenBuffers(1, &buffer);
+    BindBuffer(GL_ARRAY_BUFFER, buffer);
+    const GLint before[4] = {1, 2, 3, 4};
+    BufferData(GL_ARRAY_BUFFER, sizeof(before), before, GL_DYNAMIC_DRAW);
+    auto bufferObject = MG_State::pGLContext->GetBufferObject(buffer);
+    ASSERT_NE(bufferObject, nullptr);
+    ASSERT_TRUE(bufferObject->EnsureGpuResidentStorage());
+    ASSERT_TRUE(bufferObject->IsBackendPersistentMapped());
+
+    BufferData(GL_ARRAY_BUFFER, 0, nullptr, GL_DYNAMIC_DRAW);
+    ASSERT_EQ(GetError(), GL_NO_ERROR);
+
+    EXPECT_EQ(bufferObject->GetSize(), 0u);
+    EXPECT_FALSE(bufferObject->IsBackendPersistentMapped());
+    EXPECT_FALSE(bufferObject->EnsureGpuResidentStorage()); // nothing to make resident
+
+    // ...and it comes back to life on the next non-empty store.
+    const GLint again[3] = {5, 6, 7};
+    BufferData(GL_ARRAY_BUFFER, sizeof(again), again, GL_DYNAMIC_DRAW);
+    ASSERT_EQ(GetError(), GL_NO_ERROR);
+    EXPECT_TRUE(bufferObject->EnsureGpuResidentStorage());
+    EXPECT_EQ(std::memcmp(bufferObject->MappedData(), again, sizeof(again)), 0);
+
+    g_zeroCopyMock = nullptr;
+}
+
+// The negative control for the four above: a backend that DECLINES to hand out a mapping
+// leaves the buffer shadow-backed throughout, so a redefinition is just a redefinition -
+// no adoption to give back, and the backend still gets its Respecify.
+TEST_F(BufferTest, RedefiningANonAdoptedBufferIsUnchanged) {
+    ZeroCopyMockBackend mock;
+    mock.provideMap = false;
+    g_zeroCopyMock = &mock;
+    ScopedBackendOps scopedOps(&kZeroCopyMockOps);
+
+    GLuint buffer = 0;
+    GenBuffers(1, &buffer);
+    BindBuffer(GL_ARRAY_BUFFER, buffer);
+    const GLint before[4] = {1, 2, 3, 4};
+    BufferData(GL_ARRAY_BUFFER, sizeof(before), before, GL_DYNAMIC_DRAW);
+    auto bufferObject = MG_State::pGLContext->GetBufferObject(buffer);
+    ASSERT_NE(bufferObject, nullptr);
+    EXPECT_FALSE(bufferObject->EnsureGpuResidentStorage());
+    EXPECT_FALSE(bufferObject->IsBackendPersistentMapped());
+    mock.respecifyCalls = 0;
+
+    const GLint after[4] = {10, 20, 30, 40};
+    BufferData(GL_ARRAY_BUFFER, sizeof(after), after, GL_DYNAMIC_DRAW);
+    ASSERT_EQ(GetError(), GL_NO_ERROR);
+    EXPECT_FALSE(bufferObject->IsBackendPersistentMapped());
+    EXPECT_EQ(std::memcmp(bufferObject->MappedData(), after, sizeof(after)), 0);
+    EXPECT_EQ(mock.respecifyCalls, 1);
+
+    g_zeroCopyMock = nullptr;
+}

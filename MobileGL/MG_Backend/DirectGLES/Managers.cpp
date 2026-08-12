@@ -358,8 +358,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // Require working fences: recycling is gated on the frame-completion
                 // watermark, which only advances if Present can insert/poll fences.
                 return g_GLESFuncs.glFenceSync != nullptr && g_GLESFuncs.glGetSynciv != nullptr &&
-                       r.id != 0 && !r.persistentMapped && r.contextGeneration == g_bufferContextGeneration &&
-                       r.storageInitialized && r.storageSize > 0 && r.storageSize <= kMaxPoolableBufferBytes;
+                       r.id != 0 && !r.persistentMapped && !r.immutableStorage &&
+                       r.contextGeneration == g_bufferContextGeneration && r.storageInitialized &&
+                       r.storageSize > 0 && r.storageSize <= kMaxPoolableBufferBytes;
             }
 
             // Retire a buffer id into the pool (owning thread; caller verified IsPoolable).
@@ -555,6 +556,17 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     resource = created.get();
                     bufferObject.SetBackendResource(std::move(created));
                 }
+                // Before the generation is stamped, not after: everything on the resource
+                // describes a context that is gone, and the idempotency check below would
+                // otherwise hand the caller the dead context's mapped pointer.
+                if (resource->contextGeneration != g_bufferContextGeneration) {
+                    resource->id = 0;
+                    resource->persistentMapped = false;
+                    resource->persistentPtr = nullptr;
+                    resource->immutableStorage = false;
+                    resource->storageInitialized = false;
+                    resource->storageSize = 0;
+                }
                 resource->contextGeneration = g_bufferContextGeneration;
 
                 if (resource->persistentMapped && resource->persistentPtr && resource->storageSize == size) {
@@ -564,9 +576,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // Need a fresh id: glBufferStorage fails on a buffer that already has
                 // immutable storage, and any prior mutable store is replaced anyway.
                 if (resource->id != 0) {
-                    ScrubBufferBindingShadowsForId(resource->id);
+                    NoteBufferIdDeleted(resource->id);
                     g_GLESFuncs.glDeleteBuffers(1, &resource->id);
                     resource->id = 0;
+                    resource->immutableStorage = false;
                 }
                 g_GLESFuncs.glGenBuffers(1, &resource->id);
                 if (resource->id == 0) return nullptr;
@@ -578,6 +591,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 g_GLESFuncs.glBufferStorageEXT(TempBufferTarget, static_cast<GLsizeiptr>(size), initial,
                                                GL_MAP_WRITE_BIT | kMapPersistentBit | kMapCoherentBit |
                                                    kDynamicStorageBit);
+                // Set as soon as the store exists, not once the map succeeds: the failure
+                // path below leaves this id holding immutable storage, and whoever touches
+                // it next has to know that glBufferData cannot redefine it.
+                resource->immutableStorage = true;
                 void* ptr = g_GLESFuncs.glMapBufferRange(TempBufferTarget, 0, static_cast<GLsizeiptr>(size),
                                                          GL_MAP_WRITE_BIT | kMapPersistentBit | kMapCoherentBit);
                 if (!ptr) {
@@ -603,7 +620,37 @@ namespace MobileGL::MG_Backend::DirectGLES {
             void Ops_Respecify(BufferObject& bufferObject) {
                 auto* resource = ResourceOf(bufferObject);
                 if (!resource) return; // lazy: EnsureBufferResource full-uploads on creation
-                if (resource->persistentMapped) return; // immutable persistent storage is never respecified
+                // The frontend hands an adopted mapping back before it redefines the store
+                // (BufferObject::RedefineStorage), so a resource that still carries the
+                // persistent state here describes the OLD store - and its storage is
+                // IMMUTABLE (glBufferStorageEXT), which the glBufferData below cannot
+                // respecify and which the driver would refuse in silence. Retire the id so
+                // EnsureBufferResource mints a mutable one, with a full upload from the
+                // shadow the frontend has just filled.
+                //
+                // Keyed on the STORAGE, not on persistentMapped: a glMapBufferRange that
+                // failed after its glBufferStorageEXT succeeded clears persistentMapped and
+                // still leaves an immutable store behind, and that one reached glBufferData.
+                if (resource->immutableStorage) {
+                    resource->persistentMapped = false;
+                    resource->persistentPtr = nullptr;
+                    if (resource->id != 0 && CanTouchGLNow() &&
+                        resource->contextGeneration == g_bufferContextGeneration) {
+                        NoteBufferIdDeleted(resource->id);
+                        g_GLESFuncs.glDeleteBuffers(1, &resource->id);
+                        resource->id = 0;
+                        resource->immutableStorage = false;
+                    }
+                    // Off the context thread the id cannot be deleted here, and dropping it
+                    // would leak an immutable, persistently mapped store. It stays put, and
+                    // stays flagged, until EnsureBufferResource retires it on the thread
+                    // that owns the context.
+                    resource->storageInitialized = false;
+                    resource->storageSize = 0;
+                    resource->pendingRespecify = true;
+                    resource->pendingRanges.clear();
+                    return;
+                }
                 if (!CanTouchGLNow() || resource->id == 0 ||
                     resource->contextGeneration != g_bufferContextGeneration) {
                     resource->pendingRespecify = true;
@@ -899,6 +946,21 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // frontend re-acquires a fresh one on its next map.
                 resource->persistentMapped = false;
                 resource->persistentPtr = nullptr;
+                resource->immutableStorage = false;
+            }
+
+            // An immutable store nothing maps any more: a respecification of a buffer that
+            // had been persistently mapped, which Ops_Respecify could not retire because it
+            // ran off the context thread. glBufferData cannot redefine it, so it is retired
+            // here, on the thread that can, and the id is re-minted below.
+            if (resource->immutableStorage && !resource->persistentMapped && resource->id != 0) {
+                NoteBufferIdDeleted(resource->id);
+                g_GLESFuncs.glDeleteBuffers(1, &resource->id);
+                resource->id = 0;
+                resource->immutableStorage = false;
+                resource->storageInitialized = false;
+                resource->storageSize = 0;
+                resource->pendingRespecify = true;
             }
 
             // Zero-copy coherent persistent buffer: the app writes straight into the

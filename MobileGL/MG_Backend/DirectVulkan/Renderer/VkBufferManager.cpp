@@ -379,6 +379,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         BumpSliceEpoch(*resource);
         // Any cached streaming slice refers to the previous contents.
         resource->transientFrameSerial = 0;
+        // Redefining the store hands any adopted mapping back to the CPU shadow
+        // (BufferObject::RedefineStorage), so a buffer that reaches here persistent-mapped
+        // is an ordinary resident one again: it needs the busy-tracking and conditional
+        // orphan below, and the next AcquirePersistentMap has to mint storage for the new
+        // store rather than hand back a mapping of the old one.
+        resource->persistentMapped = false;
         if (!resource->buffer.IsValid()) {
             return; // streaming-only resource: shadow + serial are enough
         }

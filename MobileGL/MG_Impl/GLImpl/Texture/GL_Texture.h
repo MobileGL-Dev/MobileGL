@@ -37,6 +37,8 @@ namespace MobileGL::MG_Impl::GLImpl {
                            GLenum format, GLenum type, const void* pixels);
     void TextureSubImage3D(GLuint texture, GLint level, GLint xoffset, GLint yoffset, GLint zoffset, GLsizei width,
                            GLsizei height, GLsizei depth, GLenum format, GLenum type, const void* pixels);
+    void CompressedTextureSubImage2D(GLuint texture, GLint level, GLint xoffset, GLint yoffset, GLsizei width,
+                                     GLsizei height, GLenum format, GLsizei imageSize, const void* data);
     void TextureParameterf(GLuint texture, GLenum pname, GLfloat param);
     void TextureParameterfv(GLuint texture, GLenum pname, const GLfloat* params);
     void TextureParameteri(GLuint texture, GLenum pname, GLint param);

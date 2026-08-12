@@ -70,6 +70,15 @@ namespace MobileGL::MG_State::GLState {
             m_shadow->shrink_to_fit();
         }
 
+        // Give the adoption back: the bytes resolve against the shadow again (which
+        // the caller must (re)size, it was released on adoption). Used when the store
+        // itself is redefined - the mapping describes exactly the store that is going
+        // away, so it may neither be written through nor kept. It is NOT a general
+        // "unmap": a persistent map the application holds outlives every unmap by
+        // definition, and the calls that could redefine such a buffer's store are
+        // errors the frontend refuses before reaching here.
+        void ReleasePersistentMap() { m_gpuMapped = nullptr; }
+
         // Backend GPU resource, owned here in both modes.
         const SharedPtr<BackendBufferResource>& Backend() const { return m_backend; }
         void SetBackend(SharedPtr<BackendBufferResource> backend) { m_backend = std::move(backend); }
