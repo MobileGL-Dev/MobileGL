@@ -707,6 +707,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
             GLenum m_cacheDepthStencilTextureMode = GL_DEPTH_COMPONENT;
             Uint16 m_syncedSamplerVersion = 0;
             Uint16 m_syncedTextureParamsVersion = 0;
+            // Set when the driver texture underneath was regenerated and has therefore lost every
+            // parameter already pushed onto it: the params-version early-out has to be overridden
+            // once, or an unchanged version would skip the re-push forever.
+            Bool m_forceTextureParamsResync = false;
         };
 
         void ActivateTextureUnit(Uint unit);
