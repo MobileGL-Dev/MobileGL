@@ -1964,6 +1964,20 @@ namespace MobileGL::MG_Backend::DirectGLES {
             m_isInitialized = false;
             m_backendStorageImmutable = false;
             m_prevTextureInfo = {};
+            // The new ES texture starts at the ES defaults, so every parameter this object had
+            // already pushed onto the old one is gone. The change-detection caches below would
+            // otherwise still claim those values are in force and SyncTextureParamsToBackend
+            // would skip the whole pass on the unchanged params version, leaving the driver
+            // texture at defaults for the rest of its life. Latent for swizzle, LOD range and
+            // border colour long before GL_DEPTH_STENCIL_TEXTURE_MODE joined them; the mode
+            // makes it visible because falling back to the default silently samples the wrong
+            // aspect rather than merely mis-filtering.
+            m_cacheLodRange = {0, 1000};
+            m_cacheBorderColor = {0.0f, 0.0f, 0.0f, 0.0f};
+            m_cacheSwizzleParams = {TextureSwizzleParam::Red, TextureSwizzleParam::Green, TextureSwizzleParam::Blue,
+                                    TextureSwizzleParam::Alpha};
+            m_cacheDepthStencilTextureMode = GL_DEPTH_COMPONENT;
+            m_forceTextureParamsResync = true;
         }
 
         // Sets the backend GL unpack state to MobileGL's upload default for the scope,
@@ -3216,11 +3230,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
 
             Uint16 currentTextureParamsVersion = stateTextureObject->GetTextureParamsVersion();
-            if (m_syncedTextureParamsVersion == currentTextureParamsVersion) {
+            if (m_syncedTextureParamsVersion == currentTextureParamsVersion && !m_forceTextureParamsResync) {
                 MGLOG_D("Texture parameters have not changed for texture ID: %u, skipping sync.", m_backendTextureId);
                 return;
             }
             m_syncedTextureParamsVersion = currentTextureParamsVersion;
+            m_forceTextureParamsResync = false;
 
             MGLOG_D("Syncing texture params with backend ID %u to backend for state ID %u", m_backendTextureId,
                     stateTextureObject->GetExternalIndex());
@@ -3314,6 +3329,29 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 DebugImpl::ErrorLopper::Loop([file = __FILE__, line = __LINE__, func = __func__](GLenum err) {
                     MGLOG_D("%s(%s:%d) ES error %s", func, file, line, MG_Util::ConvertGLEnumToString(err).c_str());
                 });
+            }
+
+            // GL_DEPTH_STENCIL_TEXTURE_MODE (GL_ARB_stencil_texturing / ES 3.1 core): which aspect
+            // of a packed depth/stencil image a sampler reads. Until this was forwarded the
+            // frontend kept the mode as a pure shadow - glGetTexParameter answered it, sampling
+            // ignored it - so a usampler2D bound to a D24S8 texture in STENCIL_INDEX mode read the
+            // depth aspect. Texture state rather than sampler state, so multisample targets take
+            // it too (ES 3.1 8.10 lists it among the three pnames they accept). It is only sent
+            // when it has moved, which for the overwhelming majority of textures is never.
+            const Bool supportsStencilTextureMode =
+                g_GLESCapabilities.GLESVersion.Major > 3 ||
+                (g_GLESCapabilities.GLESVersion.Major == 3 && g_GLESCapabilities.GLESVersion.Minor >= 1);
+            if (supportsStencilTextureMode) {
+                const GLenum depthStencilTextureMode = stateTextureObject->GetDepthStencilTextureMode();
+                if (m_cacheDepthStencilTextureMode != depthStencilTextureMode) {
+                    g_GLESFuncs.glTexParameteri(target, GL_DEPTH_STENCIL_TEXTURE_MODE,
+                                                static_cast<GLint>(depthStencilTextureMode));
+                    m_cacheDepthStencilTextureMode = depthStencilTextureMode;
+                    DebugImpl::ErrorLopper::Loop([file = __FILE__, line = __LINE__, func = __func__](GLenum err) {
+                        MGLOG_D("%s(%s:%d) ES error %s", func, file, line,
+                                MG_Util::ConvertGLEnumToString(err).c_str());
+                    });
+                }
             }
         }
 

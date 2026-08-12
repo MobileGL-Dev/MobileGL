@@ -323,6 +323,47 @@ namespace {
         static_cast<void>(parameterBuffer);
     }
 
+    // A transform feedback name has two different truths and glDrawTransformFeedback used to ask
+    // for the wrong one. glGenTransformFeedbacks only RESERVES a name; the first
+    // glBindTransformFeedback is what creates the object (GL 4.6 core 13.2.1), and
+    // glIsTransformFeedback reports exactly that distinction. glDrawTransformFeedback's
+    // "id is not the name of a transform feedback object" INVALID_VALUE has to agree with
+    // glIsTransformFeedback, or a caller that picks an unused name the way
+    // KHR-GL4x.transform_feedback.api_errors_test does - increment until glIsTransformFeedback
+    // says false - gets a name the draw then accepts, and the draw falls through to a different
+    // error entirely (INVALID_OPERATION, "glEndTransformFeedback has never been called").
+    //
+    // The draw path itself needs a backend and a linked program before it reaches the name, which
+    // this GPU-free suite has neither of, so what is pinned here is the predicate pair the fix
+    // turns on: the two must not collapse back into one.
+    TEST_F(NegativeApiErrorsTest, ReservedTransformFeedbackNameIsNotYetAnObject) {
+        GLuint name = 0;
+        GenTransformFeedbacks(1, &name);
+        ASSERT_NE(name, 0u);
+        DrainErrors();
+
+        // Reserved, so it is a legal argument to glBindTransformFeedback...
+        EXPECT_TRUE(MG_State::pGLContext->ValidateTransformFeedbackName(name));
+        // ...but not an object yet, which is what a draw must key off.
+        EXPECT_FALSE(MG_State::pGLContext->IsTransformFeedbackObject(name));
+        EXPECT_EQ(IsTransformFeedback(name), GL_FALSE);
+
+        BindTransformFeedback(GL_TRANSFORM_FEEDBACK, name);
+        EXPECT_EQ(GetError(), GL_NO_ERROR);
+
+        EXPECT_TRUE(MG_State::pGLContext->ValidateTransformFeedbackName(name));
+        EXPECT_TRUE(MG_State::pGLContext->IsTransformFeedbackObject(name));
+        EXPECT_EQ(IsTransformFeedback(name), GL_TRUE);
+
+        // The default object is never "an object" by this predicate and is always drawable, so
+        // the draw path has to special-case it rather than reuse the answer directly.
+        EXPECT_FALSE(MG_State::pGLContext->IsTransformFeedbackObject(0));
+        EXPECT_TRUE(MG_State::pGLContext->ValidateTransformFeedbackName(0));
+
+        BindTransformFeedback(GL_TRANSFORM_FEEDBACK, 0);
+        DrainErrors();
+    }
+
     TEST_F(NegativeApiErrorsTest, TexStorage3DRejectsCompressedFormatsOnTexture3D) {
         GLuint texture = 0;
         GenTextures(1, &texture);

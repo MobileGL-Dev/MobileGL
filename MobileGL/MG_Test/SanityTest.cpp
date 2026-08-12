@@ -198,6 +198,38 @@ TEST(DirectGLESSanity, AdvertisesDepthTextureForGlmarkShadowScenes) {
     EXPECT_NE(std::find(extensions.begin(), extensions.end(), MobileGL::E_GL_ARB_depth_texture), extensions.end());
 }
 
+// Two strings that name capabilities MobileGL has always had, and that were missing from the
+// advertised list for as long as it existed.
+//
+// GL_ARB_uniform_buffer_object is the one with teeth: applications gate the ENTRY POINTS on the
+// string rather than on the context version. KHR-GL4x.transform_feedback.draw_xfb_instanced_test
+// resolves glGetUniformBlockIndex / glUniformBlockBinding only inside `if (is_arb_ubo)`, then
+// calls them unconditionally because the context claims >= 4.2 - so a missing string turned into
+// a call through a null pointer and took the whole process down with SIGSEGV. Withdrawing it
+// again would restore that crash on both backends.
+//
+// GL_ARB_stencil_texturing is what makes DEPTH_STENCIL_TEXTURE_MODE = GL_STENCIL_INDEX reachable
+// at all before GL 4.3, which is the whole of KHR-GL3x.packed_depth_stencil.stencil_texturing.
+TEST(DirectGLESSanity, AdvertisesUniformBufferObjectAndStencilTexturing) {
+    MobileGL::MG_Backend::DirectGLES::BackendObject_DirectGLES backend;
+    const auto& extensions = backend.GetRendererInfo().RendererGLInfo.Extensions;
+
+    EXPECT_NE(std::find(extensions.begin(), extensions.end(), MobileGL::E_GL_ARB_uniform_buffer_object),
+              extensions.end());
+    EXPECT_NE(std::find(extensions.begin(), extensions.end(), MobileGL::E_GL_ARB_stencil_texturing),
+              extensions.end());
+}
+
+TEST(DirectVulkanSanity, AdvertisesUniformBufferObjectAndStencilTexturing) {
+    MobileGL::MG_Backend::DirectVulkan::BackendObject_DirectVulkan backend;
+    const auto& extensions = backend.GetRendererInfo().RendererGLInfo.Extensions;
+
+    EXPECT_NE(std::find(extensions.begin(), extensions.end(), MobileGL::E_GL_ARB_uniform_buffer_object),
+              extensions.end());
+    EXPECT_NE(std::find(extensions.begin(), extensions.end(), MobileGL::E_GL_ARB_stencil_texturing),
+              extensions.end());
+}
+
 // Voxy only ever needed the extensions, which stay advertised whatever the version is; the version
 // assertion just pins what the backend really reports, now that V_OpenGL40 is in the list.
 TEST(DirectGLESSanity, AdvertisesVoxyRequiredRenderingExtensions) {
@@ -433,6 +465,31 @@ TEST(DirectVulkanSanity, AdvertisesTextureStorageForDirectStateAccess) {
     EXPECT_NE(std::find(extensions.begin(), extensions.end(), MobileGL::E_GL_ARB_direct_state_access),
               extensions.end());
     EXPECT_NE(std::find(extensions.begin(), extensions.end(), MobileGL::E_GL_ARB_texture_storage), extensions.end());
+}
+
+// A sampled view of a combined depth/stencil image may name exactly one aspect, and
+// GL_DEPTH_STENCIL_TEXTURE_MODE picks which - the whole of GL_ARB_stencil_texturing on this
+// backend. Depth remains the answer for everything that does not ask for stencil, including
+// depth-only images asked for the stencil aspect they do not have.
+TEST(DirectVulkanSanity, SampledViewAspectFollowsDepthStencilTextureMode) {
+    using MobileGL::MG_Backend::DirectVulkan::VkTextureManager;
+    constexpr VkImageAspectFlags kPacked = VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT;
+
+    EXPECT_EQ(VkTextureManager::ResolveSampledImageViewAspectMask(kPacked, GL_DEPTH_COMPONENT),
+              static_cast<VkImageAspectFlags>(VK_IMAGE_ASPECT_DEPTH_BIT));
+    EXPECT_EQ(VkTextureManager::ResolveSampledImageViewAspectMask(kPacked, GL_STENCIL_INDEX),
+              static_cast<VkImageAspectFlags>(VK_IMAGE_ASPECT_STENCIL_BIT));
+    // The default argument is the pre-existing behaviour, for the call sites with no texture.
+    EXPECT_EQ(VkTextureManager::ResolveSampledImageViewAspectMask(kPacked),
+              static_cast<VkImageAspectFlags>(VK_IMAGE_ASPECT_DEPTH_BIT));
+
+    // Single-aspect images ignore the mode: there is only one aspect to name.
+    EXPECT_EQ(VkTextureManager::ResolveSampledImageViewAspectMask(VK_IMAGE_ASPECT_DEPTH_BIT, GL_STENCIL_INDEX),
+              static_cast<VkImageAspectFlags>(VK_IMAGE_ASPECT_DEPTH_BIT));
+    EXPECT_EQ(VkTextureManager::ResolveSampledImageViewAspectMask(VK_IMAGE_ASPECT_STENCIL_BIT, GL_DEPTH_COMPONENT),
+              static_cast<VkImageAspectFlags>(VK_IMAGE_ASPECT_STENCIL_BIT));
+    EXPECT_EQ(VkTextureManager::ResolveSampledImageViewAspectMask(VK_IMAGE_ASPECT_COLOR_BIT, GL_STENCIL_INDEX),
+              static_cast<VkImageAspectFlags>(VK_IMAGE_ASPECT_COLOR_BIT));
 }
 
 TEST(DirectVulkanSanity, RenderPassExtentUsesSwapchainSizeOnlyForDefaultFramebuffer) {

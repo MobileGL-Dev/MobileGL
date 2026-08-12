@@ -379,7 +379,11 @@ public:
     // true - a false positive merely ends the render pass, a false negative would skip a barrier.
     Bool NeedsStorageImagePreparation(MG_State::GLState::ITextureObject& texture) const;
 
-    static VkImageAspectFlags ResolveSampledImageViewAspectMask(VkImageAspectFlags imageAspect);
+    // `depthStencilTextureMode` is the texture's GL_DEPTH_STENCIL_TEXTURE_MODE; it only decides
+    // anything for an image that carries both aspects. Defaulted so the call sites that have no
+    // texture in hand keep the depth-aspect answer they have always given.
+    static VkImageAspectFlags ResolveSampledImageViewAspectMask(VkImageAspectFlags imageAspect,
+                                                                GLenum depthStencilTextureMode = GL_DEPTH_COMPONENT);
     static VkFormat ResolveSampledImageViewFormat(VkFormat imageFormat, SamplerNumericDomain numericDomain);
     static Bool AreSampledImageViewFormatsCompatible(VkFormat imageFormat, VkFormat viewFormat);
     static Bool AreStorageImageViewFormatsCompatible(VkFormat imageFormat, VkFormat viewFormat);
