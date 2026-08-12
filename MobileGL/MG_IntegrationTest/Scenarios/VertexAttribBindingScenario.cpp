@@ -139,16 +139,18 @@ void main() {
         // As CapturePoints, but through the baseInstance entry point, and on a capture buffer
         // of its own.
         //
-        // Kept separate from CapturePoints rather than defaulting a parameter, for two
-        // reasons. Every existing caller stays on the draw command that carries no
-        // baseInstance at all, so the negative control is a DIFFERENT command rather than
-        // the same one passed a zero. And baseInstance is the first thing here that needs
-        // several captures in ONE test, which the shared helper cannot currently do: a
-        // second capture into the same buffer object comes back empty on DirectVulkan
-        // (respecifying a buffer that is bound to a transform-feedback binding point does
-        // not reach that binding - reproduced with two plain CapturePoints calls, so it is
-        // neither about baseInstance nor about this helper). A fresh buffer per capture
-        // sidesteps it; without that, this scenario would be pinning that bug instead.
+        // Kept separate from CapturePoints rather than defaulting a parameter, so that every
+        // existing caller stays on the draw command that carries no baseInstance at all: the
+        // negative control is then a DIFFERENT command rather than the same one passed a zero.
+        //
+        // The buffer per capture is a leftover. baseInstance was the first thing here that
+        // needed several captures in ONE test, and at the time a second capture into the same
+        // buffer object came back empty on DirectVulkan - respecifying a buffer whose bytes the
+        // backend had handed the frontend a pointer into replaced the storage under that
+        // pointer, so the capture wrote one store and the readback read another. That is fixed
+        // and pinned by XfbCaptureBufferReuseScenario, which owns the shape now; a buffer per
+        // capture is simply the cheapest thing that still isolates these three draws from each
+        // other.
         std::vector<float> CaptureOwnBufferBaseInstance(GLuint program, int vertexCount, int instanceCount,
                                                         GLuint baseInstance, bool useBaseInstanceCommand) {
             const std::size_t floats = static_cast<std::size_t>(vertexCount) * instanceCount * 16;
