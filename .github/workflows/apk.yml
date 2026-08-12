@@ -411,6 +411,18 @@ jobs:
           run_retrace || retrace_status=$?
           if [ "${retrace_status}" -eq 75 ]; then
             echo "::warning::Android emulator infrastructure failed; restarting it and retrying this retrace once."
+            # Surface-lost is retried rather than failed, so it would otherwise
+            # be invisible. Report it per job - a healthy run prints nothing and
+            # a rate spike shows up as a row per affected case.
+            reason_file="android-retrace-result/infrastructure-failure-reason.txt"
+            surface_lost_retries=0
+            if [ -f "${reason_file}" ]; then
+              surface_lost_retries="$(grep -c 'angle-surface-lost' "${reason_file}" || true)"
+            fi
+            if [ "${surface_lost_retries}" -gt 0 ]; then
+              echo "surface-lost retries: ${surface_lost_retries} (${{ matrix.backend.name }}, ${{ matrix.case.name }})" \
+                >> "${GITHUB_STEP_SUMMARY}"
+            fi
             # The restart truncates EMULATOR_LOG, and the attempt that lost the
             # emulator is the one worth reading - the retry usually only shows
             # the wreckage. Keep the first attempt's log before it is clobbered.

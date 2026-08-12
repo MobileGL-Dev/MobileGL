@@ -186,15 +186,55 @@ collect_run_diagnostics() {
   adb_device_path exec-out run-as "${package_name}" cat "${app_dir}/output/mobilegl.log" > "${diagnostics_dir}/mobilegl.log" || true
 }
 
+# Records why a retrace was charged to the infrastructure rather than the code
+# under test, so the workflow can count the classes it retried.
+record_infrastructure_reason() {
+  printf '%s\n' "$1" >> "${result_root}/infrastructure-failure-reason.txt"
+}
+
+# True when the replay never got a usable window surface out of ANGLE. EGL
+# 0x300b is EGL_BAD_NATIVE_WINDOW and -1000000001 is VK_ERROR_SURFACE_LOST_KHR,
+# which ANGLE reports out of vkCreateAndroidSurfaceKHR when the Activity's
+# native window is not usable. Observed intermittently on cases that pass in
+# every other run, so it is an environment fault, not a property of a trace.
+is_angle_surface_lost() {
+  diagnostics_dir="$1"
+  retrace_log="${diagnostics_dir}/retrace.log"
+  mobilegl_log="${diagnostics_dir}/mobilegl.log"
+
+  if [ ! -s "${retrace_log}" ]; then
+    return 1
+  fi
+  if ! grep -Eq 'EGL surface creation failed: 0x300b|Vulkan error -1000000001|VK_ERROR_SURFACE_LOST_KHR' \
+       "${retrace_log}"; then
+    return 1
+  fi
+  # Co-signature, and the reason this cannot swallow a real regression: a lost
+  # surface at startup stops MobileGL at init, before it ever runs the capability
+  # probe. If the probe ran, the replay had a working context and lost it later -
+  # that is a genuine defect and must stay a failure.
+  if [ -s "${mobilegl_log}" ] && grep -q 'OpenGL ES capabilities:' "${mobilegl_log}"; then
+    return 1
+  fi
+  return 0
+}
+
 is_infrastructure_failure() {
   diagnostics_dir="$1"
   adb_state="$(cat "${diagnostics_dir}/adb-state.txt" 2>/dev/null || true)"
   if [ "${adb_state}" != "device" ]; then
     echo "trace-replay-ci.sh: Android device is unavailable (state: ${adb_state:-unknown})" >&2
+    record_infrastructure_reason "device-unavailable"
     return 0
   fi
   if grep -Eq 'Fatal signal [0-9]+.*[(]system_server[)]|F system_server[ :]' "${diagnostics_dir}/logcat.txt"; then
     echo "trace-replay-ci.sh: Android system_server crashed during retrace" >&2
+    record_infrastructure_reason "system-server-crash"
+    return 0
+  fi
+  if is_angle_surface_lost "${diagnostics_dir}"; then
+    echo "trace-replay-ci.sh: ANGLE could not create its window surface (EGL_BAD_NATIVE_WINDOW / VK_ERROR_SURFACE_LOST_KHR) before MobileGL finished init" >&2
+    record_infrastructure_reason "angle-surface-lost"
     return 0
   fi
   return 1
@@ -357,6 +397,14 @@ run_retrace() {
     if [ -s "${result_dir}/mobilegl.log" ]; then
       echo "trace-replay-ci.sh: tail of mobilegl.log:" >&2
       tail -200 "${result_dir}/mobilegl.log" >&2
+    fi
+    # A replay that writes result.json still reaches here on an environment
+    # fault: ANGLE failing to make a window surface reports statusCode 5 rather
+    # than dying, so it never hit the missing-result.json branch above and used
+    # to be charged to the trace.
+    if is_infrastructure_failure "${result_dir}"; then
+      echo "trace-replay-ci.sh: requesting one infrastructure retry" >&2
+      exit "${INFRASTRUCTURE_FAILURE_EXIT_CODE}"
     fi
   fi
 
