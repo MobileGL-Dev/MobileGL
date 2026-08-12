@@ -127,6 +127,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
     // Human-readable name of the buffer-texture tier for diagnostics and the driver POST:
     // "core (ES 3.2)", "GL_EXT_texture_buffer", "GL_OES_texture_buffer" or "unsupported".
     const char* GetBufferTextureTierName();
+    // glTexBuffer / glTexBufferRange through whichever spelling this driver's buffer-texture
+    // support actually ships: the unsuffixed names are ES 3.2 core, while an EXT/OES driver
+    // exports glTexBuffer{,Range}EXT / OES. Callers must have checked
+    // AreBufferTexturesSupported() first. CallTexBufferRange reports whether it could honour
+    // the range - no tier is required to expose the range form, and the whole-buffer form is
+    // the documented fallback.
+    void CallTexBuffer(GLenum target, GLenum internalFormat, GLuint buffer);
+    Bool CallTexBufferRange(GLenum target, GLenum internalFormat, GLuint buffer, GLintptr offset, GLsizeiptr size);
     // GL timer-query objects, backed by GL_EXT_disjoint_timer_query. The
     // creators return null (the frontend then falls back to an immediately
     // available zero result) when the calling thread does not own the ES

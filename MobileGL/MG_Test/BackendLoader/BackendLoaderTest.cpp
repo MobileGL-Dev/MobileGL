@@ -52,6 +52,19 @@ namespace {
         GLfloat maxTextureMaxAnisotropy = 16.0f;
         bool maxTextureMaxAnisotropyQueried = false;
 
+        // Buffer textures. GL_MAX_TEXTURE_BUFFER_SIZE is only a legal pname once they exist, so
+        // asking on a driver without them raises GL_INVALID_ENUM - the same shape as the
+        // anisotropy probe above. The three entry-point knobs are separate because the
+        // unsuffixed name is the ES 3.2 CORE spelling while an EXT/OES driver exports the
+        // suffixed one: a resolver that only looks for the core name declares every extension
+        // driver unsupported, which is exactly the bug these knobs exist to pin.
+        GLint maxTextureBufferSize = 131072;
+        bool maxTextureBufferSizeQueried = false;
+        bool textureBufferSizeQueryRaisesError = false;
+        bool hasCoreTexBufferEntryPoint = true;
+        bool hasExtTexBufferEntryPoint = false;
+        bool hasOesTexBufferEntryPoint = false;
+
         GLuint nextBufferId = 1;
         GLuint nextShaderId = 1;
         GLuint nextProgramId = 1;
@@ -119,6 +132,14 @@ namespace {
                     g_fake.pendingError = GL_INVALID_ENUM;
                 } else {
                     *data = g_fake.fragmentInterpolationOffsetBits;
+                }
+                break;
+            case GL_MAX_TEXTURE_BUFFER_SIZE:
+                g_fake.maxTextureBufferSizeQueried = true;
+                if (g_fake.textureBufferSizeQueryRaisesError) {
+                    g_fake.pendingError = GL_INVALID_ENUM;
+                } else {
+                    *data = g_fake.maxTextureBufferSize;
                 }
                 break;
             // FillInGLESCapabilities reads the context version before running the
@@ -332,6 +353,21 @@ namespace {
         funcs.glDisable = [](GLenum) {};
         funcs.glMemoryBarrier = [](GLbitfield) {};
 
+        // Buffer-texture entry points, each present only when its knob says so. A real loader
+        // resolves the suffixed names only on a driver whose support is that extension.
+        funcs.glTexBuffer = g_fake.hasCoreTexBufferEntryPoint
+                                ? static_cast<MobileGL::MG_External::GLES::glTexBuffer_PTR>(
+                                      [](GLenum, GLenum, GLuint) {})
+                                : nullptr;
+        funcs.glTexBufferEXT = g_fake.hasExtTexBufferEntryPoint
+                                   ? static_cast<MobileGL::MG_External::GLES::glTexBufferEXT_PTR>(
+                                         [](GLenum, GLenum, GLuint) {})
+                                   : nullptr;
+        funcs.glTexBufferOES = g_fake.hasOesTexBufferEntryPoint
+                                   ? static_cast<MobileGL::MG_External::GLES::glTexBufferOES_PTR>(
+                                         [](GLenum, GLenum, GLuint) {})
+                                   : nullptr;
+
         // The probe's vertex shader writes the gl_InstanceID it observed into the
         // result SSBO at binding 0. A conforming driver observes 0; a leaking one
         // observes the indirect command's baseInstance word (byte offset 12).
@@ -518,6 +554,150 @@ TEST(FragmentInterpolationCapabilities, QueriesOnlyWhenSupportedAndPreservesDriv
     EXPECT_FLOAT_EQ(supportedCaps.MaxFragmentInterpolationOffset, g_fake.maxFragmentInterpolationOffset);
     EXPECT_EQ(supportedCaps.FragmentInterpolationOffsetBits, g_fake.fragmentInterpolationOffsetBits);
     EXPECT_EQ(funcs.glGetError(), GL_NO_ERROR);
+}
+
+// Buffer textures are core in the OpenGL 3.1+ context MobileGL advertises but need ES 3.2 or
+// EXT/OES_texture_buffer on the host. The tier decides three things at once: whether glTexBuffer
+// may be called at all, which #extension directive the emitted ESSL must carry, and whether
+// GL_MAX_TEXTURE_BUFFER_SIZE is a driver answer or MobileGL's own floor.
+using TextureBufferTier = MobileGL::MG_External::GLESCapabilities::TextureBufferTier;
+
+TEST(BufferTextureCapabilities, Es32ResolvesToCoreAndTakesTheDriverLimit) {
+    ResetFakeDriver();
+    g_fake.maxVertexSsboBlocks = 0;
+    g_fake.glesMinorVersion = 2;
+    const auto funcs = MakeFakeGLESFunctions();
+
+    MobileGL::MG_External::GLESCapabilities caps;
+    ASSERT_TRUE(MobileGL::MG_Util::BackendLoader::FillInGLESCapabilities(caps, funcs));
+
+    EXPECT_EQ(caps.TextureBufferSupport, TextureBufferTier::CoreEs32);
+    EXPECT_TRUE(caps.MaxTextureBufferSizeIsDriverReported);
+    EXPECT_EQ(caps.MaxTextureBufferSize, g_fake.maxTextureBufferSize);
+    EXPECT_TRUE(g_fake.maxTextureBufferSizeQueried);
+}
+
+// The regression this pins: an ES 3.1 driver whose support is GL_EXT_texture_buffer exports
+// glTexBufferEXT and NOT the unsuffixed core name. A resolver that requires the core pointer
+// declares this driver unsupported and then refuses to compile shaders it could have run.
+TEST(BufferTextureCapabilities, Es31WithExtResolvesThroughTheSuffixedEntryPoint) {
+    ResetFakeDriver();
+    g_fake.maxVertexSsboBlocks = 0;
+    g_fake.extensions.emplace_back("GL_EXT_texture_buffer");
+    g_fake.hasCoreTexBufferEntryPoint = false;
+    g_fake.hasExtTexBufferEntryPoint = true;
+    const auto funcs = MakeFakeGLESFunctions();
+
+    MobileGL::MG_External::GLESCapabilities caps;
+    ASSERT_TRUE(MobileGL::MG_Util::BackendLoader::FillInGLESCapabilities(caps, funcs));
+
+    EXPECT_EQ(caps.TextureBufferSupport, TextureBufferTier::ExtensionEXT);
+    EXPECT_TRUE(caps.MaxTextureBufferSizeIsDriverReported);
+    EXPECT_EQ(caps.MaxTextureBufferSize, g_fake.maxTextureBufferSize);
+}
+
+TEST(BufferTextureCapabilities, Es31WithOesResolvesThroughTheSuffixedEntryPoint) {
+    ResetFakeDriver();
+    g_fake.maxVertexSsboBlocks = 0;
+    g_fake.extensions.emplace_back("GL_OES_texture_buffer");
+    g_fake.hasCoreTexBufferEntryPoint = false;
+    g_fake.hasOesTexBufferEntryPoint = true;
+    const auto funcs = MakeFakeGLESFunctions();
+
+    MobileGL::MG_External::GLESCapabilities caps;
+    ASSERT_TRUE(MobileGL::MG_Util::BackendLoader::FillInGLESCapabilities(caps, funcs));
+
+    // The tier, not just a boolean: it is what selects the OES spelling of the #extension
+    // directive SPIRV-Cross hardcodes as EXT.
+    EXPECT_EQ(caps.TextureBufferSupport, TextureBufferTier::ExtensionOES);
+    EXPECT_TRUE(caps.MaxTextureBufferSizeIsDriverReported);
+}
+
+// EXT wins over OES on a driver advertising both, because SPIRV-Cross emits the EXT spelling
+// natively and that tier needs no directive rewriting at all.
+TEST(BufferTextureCapabilities, ExtIsPreferredWhenBothExtensionsArePresent) {
+    ResetFakeDriver();
+    g_fake.maxVertexSsboBlocks = 0;
+    g_fake.extensions.emplace_back("GL_OES_texture_buffer");
+    g_fake.extensions.emplace_back("GL_EXT_texture_buffer");
+    g_fake.hasExtTexBufferEntryPoint = true;
+    g_fake.hasOesTexBufferEntryPoint = true;
+    const auto funcs = MakeFakeGLESFunctions();
+
+    MobileGL::MG_External::GLESCapabilities caps;
+    ASSERT_TRUE(MobileGL::MG_Util::BackendLoader::FillInGLESCapabilities(caps, funcs));
+
+    EXPECT_EQ(caps.TextureBufferSupport, TextureBufferTier::ExtensionEXT);
+}
+
+// The motivating driver (the emulator SDK's ANGLE: ES 3.1, neither extension). The pname is
+// never asked - it would raise GL_INVALID_ENUM - and the floor MobileGL keeps advertising is
+// flagged as not being a driver answer, because an OpenGL 4.x context may not report 0.
+TEST(BufferTextureCapabilities, Es31WithNeitherExtensionIsUnsupportedAndNeverQueriesTheLimit) {
+    ResetFakeDriver();
+    g_fake.maxVertexSsboBlocks = 0;
+    const auto funcs = MakeFakeGLESFunctions();
+
+    MobileGL::MG_External::GLESCapabilities caps;
+    ASSERT_TRUE(MobileGL::MG_Util::BackendLoader::FillInGLESCapabilities(caps, funcs));
+
+    EXPECT_EQ(caps.TextureBufferSupport, TextureBufferTier::None);
+    EXPECT_FALSE(caps.MaxTextureBufferSizeIsDriverReported);
+    EXPECT_FALSE(g_fake.maxTextureBufferSizeQueried);
+    EXPECT_EQ(caps.MaxTextureBufferSize, 65536) << "the OpenGL 3.1 spec floor, not the fake's limit";
+}
+
+// An extension string with no entry point behind it is not support. This is the ES analogue of
+// the multi-draw stub hazard: eglGetProcAddress may hand back live-looking pointers, so the
+// two signals are required together.
+TEST(BufferTextureCapabilities, AnExtensionStringWithoutAnEntryPointIsNotSupport) {
+    ResetFakeDriver();
+    g_fake.maxVertexSsboBlocks = 0;
+    g_fake.extensions.emplace_back("GL_EXT_texture_buffer");
+    g_fake.hasCoreTexBufferEntryPoint = false;
+    g_fake.hasExtTexBufferEntryPoint = false;
+    const auto funcs = MakeFakeGLESFunctions();
+
+    MobileGL::MG_External::GLESCapabilities caps;
+    ASSERT_TRUE(MobileGL::MG_Util::BackendLoader::FillInGLESCapabilities(caps, funcs));
+
+    EXPECT_EQ(caps.TextureBufferSupport, TextureBufferTier::None);
+    EXPECT_FALSE(caps.MaxTextureBufferSizeIsDriverReported);
+}
+
+// A driver that claims buffer textures and then refuses the query is a driver bug. The floor
+// stands in, and the flag says the number was not the driver's - the POST row and the
+// capability log both branch on exactly that.
+TEST(BufferTextureCapabilities, ARejectedLimitQueryIsDrainedAndMarkedAsNotDriverReported) {
+    ResetFakeDriver();
+    g_fake.maxVertexSsboBlocks = 0;
+    g_fake.glesMinorVersion = 2;
+    g_fake.textureBufferSizeQueryRaisesError = true;
+    const auto funcs = MakeFakeGLESFunctions();
+
+    MobileGL::MG_External::GLESCapabilities caps;
+    ASSERT_TRUE(MobileGL::MG_Util::BackendLoader::FillInGLESCapabilities(caps, funcs));
+
+    EXPECT_EQ(caps.TextureBufferSupport, TextureBufferTier::CoreEs32);
+    EXPECT_TRUE(g_fake.maxTextureBufferSizeQueried);
+    EXPECT_FALSE(caps.MaxTextureBufferSizeIsDriverReported);
+    EXPECT_EQ(caps.MaxTextureBufferSize, 65536);
+    EXPECT_EQ(funcs.glGetError(), GL_NO_ERROR) << "the failed query must not leave an error behind";
+}
+
+// A stale error from an earlier probe must not be mistaken for this query failing.
+TEST(BufferTextureCapabilities, AStaleErrorDoesNotDiscardTheDriverLimit) {
+    ResetFakeDriver();
+    g_fake.maxVertexSsboBlocks = 0;
+    g_fake.glesMinorVersion = 2;
+    g_fake.pendingError = GL_INVALID_OPERATION;
+    const auto funcs = MakeFakeGLESFunctions();
+
+    MobileGL::MG_External::GLESCapabilities caps;
+    ASSERT_TRUE(MobileGL::MG_Util::BackendLoader::FillInGLESCapabilities(caps, funcs));
+
+    EXPECT_TRUE(caps.MaxTextureBufferSizeIsDriverReported);
+    EXPECT_EQ(caps.MaxTextureBufferSize, g_fake.maxTextureBufferSize);
 }
 
 TEST(FragmentInterpolationCapabilities, QueryErrorIsDrainedAndFallsBackToCoreMinimums) {

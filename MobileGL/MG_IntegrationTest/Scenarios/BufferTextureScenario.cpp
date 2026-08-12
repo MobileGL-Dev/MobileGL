@@ -120,6 +120,10 @@ void main() { o_color = vec4(float(vFace) / 255.0, 0.0, 0.0, 1.0); }
         std::vector<signed char> texels(64, 0);
         texels[0] = kInitial;
 
+        // The harness shares one context across every scenario in the process, so an error left
+        // by an earlier one would surface below as "glTexBuffer was refused".
+        FirstGLError();
+
         GLuint buffer = 0;
         glGenBuffers(1, &buffer);
         glBindBuffer(GL_TEXTURE_BUFFER, buffer);

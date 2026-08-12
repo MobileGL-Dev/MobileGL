@@ -448,6 +448,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // advertise is a hard compile error - so on an OES-only driver the emitted shader
             // fails to compile for the sake of one token.
             //
+            // Line comments are excluded by the directive check below; a `#extension` line inside
+            // a /* */ block is not, and would be rewritten. That is harmless (it stays a comment)
+            // and is not worth a preprocessor-aware scan here.
+            //
             // Deliberately a directive rewrite and nothing more. The alternative - teaching the
             // SPIR-V to stop asking for the extension - is not available: the requirement is
             // synthesized by SPIRV-Cross from the image type itself, not carried in the module,
@@ -464,9 +468,17 @@ namespace MobileGL::MG_Backend::DirectGLES {
             static_assert(sizeof("GL_OES_texture_buffer") - 1 == kExtNameLength,
                           "the two spellings must be the same length for the in-place replace");
 
-            // Only rewrite the name where it is the subject of an #extension directive. The same
-            // token can legitimately appear in a comment SPIRV-Cross carried through, and a
-            // shader that merely mentions the string must not be edited.
+            // Only rewrite the name where it is the whole subject of an #extension directive.
+            // Two separate guards, both load-bearing:
+            //   * the directive check, so a line-comment mentioning the name is left alone;
+            //   * the identifier-boundary check, because GL_EXT_texture_buffer is a PREFIX of
+            //     GL_EXT_texture_buffer_object - a different, real extension that SPIRV-Cross
+            //     emits from the same `case DimBuffer:` on its legacy-desktop branch. Without
+            //     the boundary this pass would silently rewrite a request for that extension
+            //     into a request for a GL_OES_texture_buffer_object that does not exist.
+            const auto isIdentifierChar = [](char c) {
+                return std::isalnum(static_cast<unsigned char>(c)) != 0 || c == '_';
+            };
             SizeT searchFrom = 0;
             while (true) {
                 const SizeT hit = glslCode.find(kExtName, searchFrom);
@@ -474,6 +486,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     break;
                 }
                 searchFrom = hit + kExtNameLength;
+
+                // Identifier boundary on both sides, so the name is not a fragment of a longer one.
+                if (hit > 0 && isIdentifierChar(glslCode[hit - 1])) {
+                    continue;
+                }
+                if (hit + kExtNameLength < glslCode.size() && isIdentifierChar(glslCode[hit + kExtNameLength])) {
+                    continue;
+                }
 
                 // Walk back to the start of the line and require that it is an #extension
                 // directive, allowing whitespace between '#' and the keyword.

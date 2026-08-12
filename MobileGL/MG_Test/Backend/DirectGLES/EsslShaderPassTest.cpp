@@ -325,6 +325,33 @@ void main()
     EXPECT_EQ(RetargetTextureBufferExtension(source, Tier::ExtensionOES), source);
 }
 
+// The dangerous collision, and the one the directive check alone does NOT catch:
+// GL_EXT_texture_buffer is a strict prefix of GL_EXT_texture_buffer_object, a different and
+// real extension that SPIRV-Cross emits from the same Dim=Buffer branch on its legacy-desktop
+// path. Rewriting it would turn a valid request into one for a GL_OES_texture_buffer_object
+// that does not exist. Only an identifier-boundary check saves this, so it gets its own test
+// with the lookalike on a genuine #extension line.
+TEST(RetargetTextureBufferExtensionTest, ALongerExtensionSharingThePrefixIsNotRewritten) {
+    const String source = R"(#version 310 es
+#extension GL_EXT_texture_buffer_object : require
+precision highp float;
+void main() {}
+)";
+    EXPECT_EQ(RetargetTextureBufferExtension(source, Tier::ExtensionOES), source);
+
+    // And when both appear, exactly the exact-match one moves.
+    const String mixed = R"(#version 310 es
+#extension GL_EXT_texture_buffer_object : require
+#extension GL_EXT_texture_buffer : require
+precision highp float;
+void main() {}
+)";
+    const String out = RetargetTextureBufferExtension(mixed, Tier::ExtensionOES);
+    EXPECT_TRUE(Contains(out, "#extension GL_EXT_texture_buffer_object : require")) << out;
+    EXPECT_TRUE(Contains(out, "#extension GL_OES_texture_buffer : require")) << out;
+    EXPECT_EQ(CountOf(out, "GL_OES_texture_buffer_object"), 0u) << out;
+}
+
 // Whitespace between '#' and the keyword is legal in GLSL, and a shader carrying several
 // extension directives must have exactly the one retargeted.
 TEST(RetargetTextureBufferExtensionTest, SpacedDirectiveIsRewrittenAndNeighboursAreLeftAlone) {

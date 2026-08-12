@@ -2812,17 +2812,19 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     // is absent).
                     const SizeT rangeOffset = textureBufferObject->GetBufferRangeOffset();
                     const SizeT rangeSize = textureBufferObject->GetBufferRangeSizeInBytes();
+                    // Through CallTexBuffer/CallTexBufferRange rather than g_GLESFuncs directly:
+                    // the unsuffixed entry points are the ES 3.2 core spelling, and a driver
+                    // whose buffer textures come from EXT/OES_texture_buffer exports the
+                    // suffixed ones instead. The dispatchers pick whichever this tier ships.
                     if (rangeOffset == 0 && rangeSize == buffer->GetSize()) {
-                        g_GLESFuncs.glTexBuffer(GL_TEXTURE_BUFFER, glInternalFormat, backendId);
-                    } else if (g_GLESFuncs.glTexBufferRange != nullptr) {
-                        g_GLESFuncs.glTexBufferRange(GL_TEXTURE_BUFFER, glInternalFormat, backendId,
-                                                     static_cast<GLintptr>(rangeOffset),
-                                                     static_cast<GLsizeiptr>(rangeSize));
-                    } else {
-                        MGLOG_E("Texture buffer %u names a sub-range but the driver has no "
+                        CallTexBuffer(GL_TEXTURE_BUFFER, glInternalFormat, backendId);
+                    } else if (!CallTexBufferRange(GL_TEXTURE_BUFFER, glInternalFormat, backendId,
+                                                   static_cast<GLintptr>(rangeOffset),
+                                                   static_cast<GLsizeiptr>(rangeSize))) {
+                        MGLOG_I("Texture buffer %u names a sub-range but the driver has no "
                                 "glTexBufferRange; binding the whole buffer instead",
                                 stateTextureObject->GetExternalIndex());
-                        g_GLESFuncs.glTexBuffer(GL_TEXTURE_BUFFER, glInternalFormat, backendId);
+                        CallTexBuffer(GL_TEXTURE_BUFFER, glInternalFormat, backendId);
                     }
                     DebugImpl::ErrorLopper::Loop(
                         [file = __FILE__, line = __LINE__, func = __func__, glInternalFormat, backendId](GLenum err) {
@@ -4442,11 +4444,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
                 source = result;
 
-                // First in the chain because it is the only header-level rewrite: it edits
-                // #extension directives and never the body, so it is independent of every pass
-                // below and running it early keeps the directive block correct for
-                // ForceSupporterOutput, which scans for the last #extension line to decide where
-                // its precision statements go.
+                // Position in the chain is arbitrary: this is the only header-level rewrite, it
+                // edits #extension directives and never the body, and the replacement is the
+                // same length and stays an #extension line - so it commutes with every pass
+                // below, including ForceSupporterOutput's scan for the last directive. First,
+                // because a header concern reads better before the body ones.
                 source = RetargetTextureBufferExtension(std::move(source),
                                                         g_GLESCapabilities.TextureBufferSupport);
 

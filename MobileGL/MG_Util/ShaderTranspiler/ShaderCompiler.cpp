@@ -541,6 +541,12 @@ namespace MobileGL {
             }
 
             Bool ShaderCompiler::ModuleDeclaresBufferTextureSampler(const Vector<Uint32>& spirv) {
+                if (spirv.empty()) {
+                    // Early out rather than letting BuildModule reject it: an empty module is a
+                    // stage that produced no SPIR-V, which is not a capability verdict, and the
+                    // parse would push a spurious diagnostic through the message consumer first.
+                    return false;
+                }
                 // Callers gate this on the driver LACKING buffer textures, so the module build
                 // here only ever happens on a degraded driver that is about to fail the compile
                 // anyway - it is not on the healthy path.
@@ -556,10 +562,14 @@ namespace MobileGL {
                     if (type.opcode() != spv::Op::OpTypeImage) {
                         continue;
                     }
-                    // OpTypeImage operands: Sampled Type, Dim, Depth, Arrayed, MS, Sampled, Format.
-                    // Dim is operand 1; SpvDimBuffer is what samplerBuffer/isamplerBuffer/
-                    // usamplerBuffer all lower to, whatever their sampled type.
-                    if (static_cast<spv::Dim>(type.GetSingleWordInOperand(1)) == spv::Dim::Buffer) {
+                    // OpTypeImage in-operands: Sampled Type, Dim, Depth, Arrayed, MS, Sampled,
+                    // Format. Dim is operand 1; Dim::Buffer is what samplerBuffer/isamplerBuffer/
+                    // usamplerBuffer all lower to, whatever their sampled type - and equally what
+                    // the imageBuffer family lowers to, which is correct here because SPIRV-Cross
+                    // requires the same extension for those. The operand-count guard mirrors
+                    // NormalizeRectCoordinatesPass, which reads the same operand.
+                    if (type.NumInOperands() >= 2 &&
+                        static_cast<spv::Dim>(type.GetSingleWordInOperand(1)) == spv::Dim::Buffer) {
                         return true;
                     }
                 }

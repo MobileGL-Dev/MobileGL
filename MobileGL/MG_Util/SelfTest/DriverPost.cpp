@@ -422,45 +422,56 @@ namespace MobileGL::MG_Util::SelfTest {
                              "map array texture gets no driver storage at all, so sampling one reads nothing "
                              "and rendering to one does not reach the screen");
             }
-            // FAIL, not WARN: buffer textures are CORE in OpenGL 3.1 and MobileGL advertises a 4.x
-            // context, so an application may use one without asking - and nothing degrades
-            // gracefully when they are absent. The texture gets no driver storage (glTexBuffer does
-            // not exist), and, worse, every shader declaring a samplerBuffer fails to compile
-            // outright, because SPIRV-Cross emits `#extension GL_EXT_texture_buffer : require` for
-            // it below ESSL 320. The program then never links and every draw using it silently
-            // draws nothing - which is how Minecraft 26.3, whose cloud layer is built entirely from
-            // gl_VertexID plus texelFetch on a GL_R8I buffer texture, loses its clouds.
+            // WARN, not FAIL, and the choice is deliberate. The consequence is severe - buffer
+            // textures are CORE in OpenGL 3.1 and MobileGL advertises a 4.x context, so an
+            // application may use one without asking, and nothing degrades gracefully: the
+            // texture gets no driver storage, and every shader declaring a samplerBuffer fails
+            // to compile outright, because SPIRV-Cross emits `#extension GL_EXT_texture_buffer :
+            // require` for it below ESSL 320, so the program never links and every draw using it
+            // silently draws nothing. That is how Minecraft 26.3, whose cloud layer is built
+            // entirely from gl_VertexID plus texelFetch on a GL_R8I buffer texture, loses its
+            // clouds. But FAIL means "this backend cannot run on this driver", and that is not
+            // true: such a device runs everything that does not touch a buffer texture. It is
+            // also exactly the shape of the "Texture cube map array" row above, which loses its
+            // shaders to the same SPIRV-Cross `: require` mechanism and is a WARN - two adjacent
+            // rows with one consequence must not carry two severities.
             // The limit is stated on every tier because it is the one number an application can
             // read, and on the None tier it is knowingly a fiction (see below).
             {
                 using Tier = MG_External::GLESCapabilities::TextureBufferTier;
                 const Int advertisedLimit = caps.MaxTextureBufferSize;
+                // A supported tier that then refused GL_MAX_TEXTURE_BUFFER_SIZE is a driver bug;
+                // the row must not call MobileGL's floor "the driver's own answer" there.
+                const char* limitProvenance =
+                    caps.MaxTextureBufferSizeIsDriverReported
+                        ? "the driver's own answer"
+                        : "MobileGL's floor - this driver claims buffer textures but rejected the query";
                 switch (caps.TextureBufferSupport) {
                 case Tier::CoreEs32:
                     builder.Pass("Buffer textures",
-                                 format("core in ES 3.2; GL_MAX_TEXTURE_BUFFER_SIZE = {} is the "
-                                        "driver's own answer, and ESSL 320 needs no #extension "
-                                        "directive to declare a samplerBuffer",
-                                        advertisedLimit));
+                                 format("core in ES 3.2; GL_MAX_TEXTURE_BUFFER_SIZE = {} is {}, and "
+                                        "ESSL 320 needs no #extension directive to declare a "
+                                        "samplerBuffer",
+                                        advertisedLimit, limitProvenance));
                     break;
                 case Tier::ExtensionEXT:
                     builder.Pass("Buffer textures",
-                                 format("GL_EXT_texture_buffer; GL_MAX_TEXTURE_BUFFER_SIZE = {} is "
-                                        "the driver's own answer, and the directive SPIRV-Cross "
-                                        "emits (GL_EXT_texture_buffer) is the one this driver wants",
-                                        advertisedLimit));
+                                 format("GL_EXT_texture_buffer; GL_MAX_TEXTURE_BUFFER_SIZE = {} is {}, "
+                                        "and the directive SPIRV-Cross emits "
+                                        "(GL_EXT_texture_buffer) is the one this driver wants",
+                                        advertisedLimit, limitProvenance));
                     break;
                 case Tier::ExtensionOES:
                     builder.Pass("Buffer textures",
-                                 format("GL_OES_texture_buffer; GL_MAX_TEXTURE_BUFFER_SIZE = {} is "
-                                        "the driver's own answer. SPIRV-Cross hardcodes the EXT "
-                                        "spelling, so MobileGL retargets the emitted #extension "
-                                        "directive to the OES one this driver advertises",
-                                        advertisedLimit));
+                                 format("GL_OES_texture_buffer; GL_MAX_TEXTURE_BUFFER_SIZE = {} is {}. "
+                                        "SPIRV-Cross hardcodes the EXT spelling, so MobileGL "
+                                        "retargets the emitted #extension directive to the OES one "
+                                        "this driver advertises",
+                                        advertisedLimit, limitProvenance));
                     break;
                 case Tier::None:
                 default:
-                    builder.Fail("Buffer textures",
+                    builder.Warn("Buffer textures",
                                  format("not supported (pre-ES 3.2 without GL_EXT/OES_texture_buffer); "
                                         "glTexBuffer does not exist, so a buffer texture gets no storage, "
                                         "and any shader declaring a samplerBuffer fails to compile and "

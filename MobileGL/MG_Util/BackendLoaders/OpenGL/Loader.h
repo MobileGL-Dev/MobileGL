@@ -600,6 +600,16 @@ namespace MobileGL {
             GL_FUNC_TYPEDEF(void, glSamplerParameterIuiv, GLuint sampler, GLenum pname, const GLuint* param)
             GL_FUNC_TYPEDEF(void, glGetSamplerParameterIiv, GLuint sampler, GLenum pname, GLint* params)
             GL_FUNC_TYPEDEF(void, glGetSamplerParameterIuiv, GLuint sampler, GLenum pname, GLuint* params)
+            // The unsuffixed names are the ES 3.2 CORE entry points. A driver whose buffer-texture
+            // support comes from GL_EXT_texture_buffer or GL_OES_texture_buffer exports the
+            // suffixed spellings instead, and a strict eglGetProcAddress returns NULL for the core
+            // one there - so resolving only the core name makes both extension tiers look absent.
+            GL_FUNC_TYPEDEF(void, glTexBufferEXT, GLenum target, GLenum internalformat, GLuint buffer)
+            GL_FUNC_TYPEDEF(void, glTexBufferOES, GLenum target, GLenum internalformat, GLuint buffer)
+            GL_FUNC_TYPEDEF(void, glTexBufferRangeEXT, GLenum target, GLenum internalformat, GLuint buffer,
+                            GLintptr offset, GLsizeiptr size)
+            GL_FUNC_TYPEDEF(void, glTexBufferRangeOES, GLenum target, GLenum internalformat, GLuint buffer,
+                            GLintptr offset, GLsizeiptr size)
             GL_FUNC_TYPEDEF(void, glTexBuffer, GLenum target, GLenum internalformat, GLuint buffer)
             GL_FUNC_TYPEDEF(void, glTexBufferRange, GLenum target, GLenum internalformat, GLuint buffer,
                             GLintptr offset, GLsizeiptr size)
@@ -1002,6 +1012,10 @@ namespace MobileGL {
             GL_FUNC_DECL(glGetSamplerParameterIuiv)
             GL_FUNC_DECL(glTexBuffer)
             GL_FUNC_DECL(glTexBufferRange)
+            GL_FUNC_DECL(glTexBufferEXT)
+            GL_FUNC_DECL(glTexBufferOES)
+            GL_FUNC_DECL(glTexBufferRangeEXT)
+            GL_FUNC_DECL(glTexBufferRangeOES)
             GL_FUNC_DECL(glTexStorage3DMultisample)
             GL_FUNC_DECL(glMapBufferRange)
             GL_FUNC_DECL(glBufferStorageEXT)

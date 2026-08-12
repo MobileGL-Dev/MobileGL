@@ -511,6 +511,13 @@ namespace MobileGL::MG_Util::BackendLoader {
             INIT_GLES_FUNC(glGetSamplerParameterIuiv)
             INIT_GLES_FUNC(glTexBuffer)
             INIT_GLES_FUNC(glTexBufferRange)
+            // Optional: absent on an ES 3.2 core driver, and absent on ES 3.1 without the
+            // matching extension. The tier resolution below picks whichever spelling the
+            // driver's own support actually comes from.
+            INIT_GLES_FUNC_OPTIONAL(glTexBufferEXT)
+            INIT_GLES_FUNC_OPTIONAL(glTexBufferOES)
+            INIT_GLES_FUNC_OPTIONAL(glTexBufferRangeEXT)
+            INIT_GLES_FUNC_OPTIONAL(glTexBufferRangeOES)
             INIT_GLES_FUNC(glTexStorage3DMultisample)
             INIT_GLES_FUNC(glMapBufferRange)
             INIT_GLES_FUNC(glBufferStorageEXT)
@@ -1120,21 +1127,27 @@ namespace MobileGL::MG_Util::BackendLoader {
         // with both needs no directive retargeting. The entry point has to have resolved either
         // way - the extension string alone is not support (see the multi-draw note above).
         {
-            const Bool textureBufferIsCore =
-                caps.GLESVersion.Major > 3 || (caps.GLESVersion.Major == 3 && caps.GLESVersion.Minor >= 2);
             using Tier = MG_External::GLESCapabilities::TextureBufferTier;
-            if (glesFuncs.glTexBuffer == nullptr) {
-                caps.TextureBufferSupport = Tier::None;
-            } else if (textureBufferIsCore) {
+            // Each tier needs the entry point that tier's support actually ships. Gating all
+            // three on the unsuffixed name - the ES 3.2 CORE spelling - would make every
+            // EXT/OES driver look unsupported on a strict loader, and would make MobileGL call
+            // a core entry point the driver never exported on a permissive one. The suffixed
+            // name is preferred where the support is an extension, with the core name accepted
+            // as a fallback because drivers that expose both alias them.
+            const Bool hasCoreEntryPoint = glesFuncs.glTexBuffer != nullptr;
+            if (esAtLeast32 && hasCoreEntryPoint) {
                 caps.TextureBufferSupport = Tier::CoreEs32;
-            } else if (hasExtTextureBuffer) {
+            } else if (hasExtTextureBuffer && (glesFuncs.glTexBufferEXT != nullptr || hasCoreEntryPoint)) {
                 caps.TextureBufferSupport = Tier::ExtensionEXT;
-            } else if (hasOesTextureBuffer) {
+            } else if (hasOesTextureBuffer && (glesFuncs.glTexBufferOES != nullptr || hasCoreEntryPoint)) {
                 caps.TextureBufferSupport = Tier::ExtensionOES;
             } else {
                 caps.TextureBufferSupport = Tier::None;
             }
 
+            // Assigned unconditionally, like every other capability in this function, so a
+            // second fill on a reused struct cannot keep a stale true.
+            caps.MaxTextureBufferSizeIsDriverReported = false;
             if (caps.TextureBufferSupport != Tier::None) {
                 // Drain first: an error left by any earlier probe would otherwise read as this
                 // query having failed, and the value would be discarded as a non-answer.
@@ -1285,8 +1298,16 @@ namespace MobileGL::MG_Util::BackendLoader {
         MGLOG_I("    GL_MAX_COMPUTE_UNIFORM_BLOCKS: %d", caps.MaxComputeUniformBlocks);
         MGLOG_I("    GL_MAX_COMPUTE_WORK_GROUP_INVOCATIONS: %d", caps.MaxComputeWorkGroupInvocations);
         MGLOG_I("    GL_MAX_SHADER_STORAGE_BUFFER_BINDINGS: %d", caps.MaxShaderStorageBufferBindings);
+        // Three distinct states, and the suffix must not conflate them: a driver answer, a floor
+        // kept because there are no buffer textures to ask about, and a floor kept because the
+        // driver claimed buffer textures but then refused the query (which is a driver bug worth
+        // seeing spelled out rather than hidden behind the same wording as the honest case).
         MGLOG_I("    GL_MAX_TEXTURE_BUFFER_SIZE: %d%s", caps.MaxTextureBufferSize,
-                caps.MaxTextureBufferSizeIsDriverReported ? "" : " (MobileGL floor - the driver has no buffer textures to ask)");
+                caps.MaxTextureBufferSizeIsDriverReported
+                    ? ""
+                    : (caps.TextureBufferSupport == MG_External::GLESCapabilities::TextureBufferTier::None
+                           ? " (MobileGL floor - the driver has no buffer textures to ask)"
+                           : " (MobileGL floor - the driver claims buffer textures but rejected the query)"));
         MGLOG_I("    GL_MAX_UNIFORM_BUFFER_BINDINGS: %d", caps.MaxUniformBufferBindings);
         MGLOG_I("    GL_MAX_UNIFORM_BLOCK_SIZE: %d", caps.MaxUniformBlockSize);
         MGLOG_I("    GL_MAX_IMAGE_UNITS: %d", caps.MaxImageUnits);

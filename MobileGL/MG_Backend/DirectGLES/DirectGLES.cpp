@@ -7233,13 +7233,66 @@ namespace MobileGL::MG_Backend::DirectGLES {
                g_GLESFuncs.glGetQueryObjectui64vEXT;
     }
 
+    namespace {
+        // The entry point the resolved tier's support ships, or null when there is none.
+        MG_External::GLES::glTexBuffer_PTR ResolveTexBufferEntryPoint() {
+            using Tier = MG_External::GLESCapabilities::TextureBufferTier;
+            switch (g_GLESCapabilities.TextureBufferSupport) {
+            case Tier::ExtensionEXT:
+                return g_GLESFuncs.glTexBufferEXT ? g_GLESFuncs.glTexBufferEXT : g_GLESFuncs.glTexBuffer;
+            case Tier::ExtensionOES:
+                return g_GLESFuncs.glTexBufferOES ? g_GLESFuncs.glTexBufferOES : g_GLESFuncs.glTexBuffer;
+            case Tier::CoreEs32:
+                return g_GLESFuncs.glTexBuffer;
+            case Tier::None:
+            default:
+                return nullptr;
+            }
+        }
+
+        MG_External::GLES::glTexBufferRange_PTR ResolveTexBufferRangeEntryPoint() {
+            using Tier = MG_External::GLESCapabilities::TextureBufferTier;
+            switch (g_GLESCapabilities.TextureBufferSupport) {
+            case Tier::ExtensionEXT:
+                return g_GLESFuncs.glTexBufferRangeEXT ? g_GLESFuncs.glTexBufferRangeEXT
+                                                       : g_GLESFuncs.glTexBufferRange;
+            case Tier::ExtensionOES:
+                return g_GLESFuncs.glTexBufferRangeOES ? g_GLESFuncs.glTexBufferRangeOES
+                                                       : g_GLESFuncs.glTexBufferRange;
+            case Tier::CoreEs32:
+                return g_GLESFuncs.glTexBufferRange;
+            case Tier::None:
+            default:
+                return nullptr;
+            }
+        }
+    } // namespace
+
     Bool AreBufferTexturesSupported() {
-        // The tier already folds in the resolved-pointer requirement (see FillInGLESCapabilities),
-        // but the pointer is re-checked here because the tier is only meaningful once the
-        // capabilities have been filled in, and callers may run before that.
+        // Both halves matter. The tier is what the driver ADVERTISES, and it is only meaningful
+        // once the capabilities have been filled in; the resolved pointer is what MobileGL can
+        // actually call, through the spelling that tier's support ships. Gating on the
+        // unsuffixed name alone would call an entry point an EXT/OES driver never exported.
         return g_GLESCapabilities.TextureBufferSupport !=
                    MG_External::GLESCapabilities::TextureBufferTier::None &&
-               g_GLESFuncs.glTexBuffer != nullptr;
+               ResolveTexBufferEntryPoint() != nullptr;
+    }
+
+    void CallTexBuffer(GLenum target, GLenum internalFormat, GLuint buffer) {
+        MG_External::GLES::glTexBuffer_PTR entryPoint = ResolveTexBufferEntryPoint();
+        if (entryPoint == nullptr) {
+            return;
+        }
+        entryPoint(target, internalFormat, buffer);
+    }
+
+    Bool CallTexBufferRange(GLenum target, GLenum internalFormat, GLuint buffer, GLintptr offset, GLsizeiptr size) {
+        MG_External::GLES::glTexBufferRange_PTR entryPoint = ResolveTexBufferRangeEntryPoint();
+        if (entryPoint == nullptr) {
+            return false;
+        }
+        entryPoint(target, internalFormat, buffer, offset, size);
+        return true;
     }
 
     const char* GetBufferTextureTierName() {
