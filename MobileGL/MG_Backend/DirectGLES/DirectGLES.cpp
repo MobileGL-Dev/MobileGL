@@ -3860,6 +3860,171 @@ namespace MobileGL::MG_Backend::DirectGLES {
     }
 
     // ---------------------------------------------------------------------------------
+    // Shared guard for the emulation passes that have to DRAW to get their work done: the
+    // single-sample -> multisample blit replicate below, and the depth/stencil readback
+    // emulation further down. Both borrow the application's ES context for a full-screen
+    // pass, so everything they disturb is captured here and put back on the way out - the
+    // sync layer's shadow of the driver state has to stay true, and one leaked binding
+    // regresses every draw that follows.
+    //
+    // Three members of that set are not obvious:
+    //
+    //  - The borrowed texture unit. Both passes bind their scratch texture to
+    //    TextureImpl::TempTextureUnit, and the unit's binding is only restored correctly by
+    //    asking TextureImpl::g_boundTexturesCache what is supposed to be there: the raw
+    //    glBindTexture the passes issue never moves that cache, so restoring a *queried*
+    //    id leaves the driver and the cache disagreeing and the per-draw binding memo
+    //    false-skips the re-bind - the borrowed-slot failure mode that showed up as
+    //    process-wide glyph death under Iris. Reading GL_TEXTURE_BINDING_2D was doubly
+    //    wrong here because the replicate path may already have switched units and bound
+    //    its own scratch texture by the time it asked.
+    //
+    //  - The sampler object on that unit. It would override the scratch texture's own
+    //    filter and compare parameters. Unbinding through SamplerImpl::UnbindSampler moves
+    //    the sampler cache, which is exactly what re-opens BindCurrentUnitSamplers' memo,
+    //    so the application's sampler comes back on the next draw with no explicit restore.
+    //
+    //  - An active transform feedback capture. GL rejects a draw issued with a program
+    //    other than the one that began the capture, and would otherwise append the
+    //    emulation's vertices to the application's buffers.
+    class ScopedEmulationDrawState {
+    public:
+        ScopedEmulationDrawState() {
+            g_GLESFuncs.glGetIntegerv(GL_CURRENT_PROGRAM, &m_program);
+            g_GLESFuncs.glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &m_vertexArray);
+            g_GLESFuncs.glGetIntegerv(GL_VIEWPORT, m_viewport);
+            g_GLESFuncs.glGetIntegerv(GL_SCISSOR_BOX, m_scissorBox);
+            g_GLESFuncs.glGetBooleanv(GL_COLOR_WRITEMASK, m_colorMask);
+            g_GLESFuncs.glGetIntegerv(GL_DEPTH_FUNC, &m_depthFunc);
+            g_GLESFuncs.glGetBooleanv(GL_DEPTH_WRITEMASK, &m_depthMask);
+            g_GLESFuncs.glGetIntegerv(GL_STENCIL_FUNC, &m_stencilFunc[0]);
+            g_GLESFuncs.glGetIntegerv(GL_STENCIL_BACK_FUNC, &m_stencilFunc[1]);
+            g_GLESFuncs.glGetIntegerv(GL_STENCIL_REF, &m_stencilRef[0]);
+            g_GLESFuncs.glGetIntegerv(GL_STENCIL_BACK_REF, &m_stencilRef[1]);
+            g_GLESFuncs.glGetIntegerv(GL_STENCIL_VALUE_MASK, &m_stencilValueMask[0]);
+            g_GLESFuncs.glGetIntegerv(GL_STENCIL_BACK_VALUE_MASK, &m_stencilValueMask[1]);
+            g_GLESFuncs.glGetIntegerv(GL_STENCIL_WRITEMASK, &m_stencilWriteMask[0]);
+            g_GLESFuncs.glGetIntegerv(GL_STENCIL_BACK_WRITEMASK, &m_stencilWriteMask[1]);
+            g_GLESFuncs.glGetIntegerv(GL_STENCIL_FAIL, &m_stencilFail[0]);
+            g_GLESFuncs.glGetIntegerv(GL_STENCIL_BACK_FAIL, &m_stencilFail[1]);
+            g_GLESFuncs.glGetIntegerv(GL_STENCIL_PASS_DEPTH_FAIL, &m_stencilDepthFail[0]);
+            g_GLESFuncs.glGetIntegerv(GL_STENCIL_BACK_PASS_DEPTH_FAIL, &m_stencilDepthFail[1]);
+            g_GLESFuncs.glGetIntegerv(GL_STENCIL_PASS_DEPTH_PASS, &m_stencilPass[0]);
+            g_GLESFuncs.glGetIntegerv(GL_STENCIL_BACK_PASS_DEPTH_PASS, &m_stencilPass[1]);
+            for (CapabilityState& capability : m_capabilities) {
+                capability.enabled = g_GLESFuncs.glIsEnabled(capability.cap);
+            }
+            // GL_SAMPLE_MASK is ES 3.1; on an older driver the query above just raised
+            // GL_INVALID_ENUM and answered GL_FALSE, which is also the right thing to
+            // restore. Drop the flag so it is not misattributed to the emulation's own work.
+            DrainBlitErrors();
+
+            if (MG_State::pGLContext->IsTransformFeedbackActive() &&
+                !MG_State::pGLContext->IsTransformFeedbackPaused() && g_GLESFuncs.glPauseTransformFeedback) {
+                g_GLESFuncs.glPauseTransformFeedback();
+                m_pausedTransformFeedback = true;
+                DrainBlitErrors();
+            }
+
+            m_activeTextureUnit = TextureImpl::g_activeTextureUnit;
+            TextureImpl::ActivateTextureUnit(TextureImpl::TempTextureUnit);
+            SamplerImpl::UnbindSampler(TextureImpl::TempTextureUnit);
+
+            // The neutral baseline every emulation pass wants: nothing culled, nothing
+            // clipped, nothing tested, no coverage games, and colour writes open. Callers
+            // turn back on only what they need (the replicate pass wants the depth and
+            // stencil tests, and masks colour off because it writes neither).
+            for (const CapabilityState& capability : m_capabilities) {
+                g_GLESFuncs.glDisable(capability.cap);
+            }
+            g_GLESFuncs.glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+            g_GLESFuncs.glDepthMask(GL_FALSE);
+            DrainBlitErrors();
+        }
+
+        ~ScopedEmulationDrawState() {
+            g_GLESFuncs.glUseProgram(static_cast<GLuint>(m_program));
+            // Put back whatever the binding cache says lives on the borrowed unit, not what
+            // the driver happened to hold: see the class comment.
+            auto* cachedBound =
+                TextureImpl::g_boundTexturesCache[TextureImpl::TempTextureUnit]
+                                                 [static_cast<SizeT>(TextureTarget::Texture2D)];
+            g_GLESFuncs.glBindTexture(GL_TEXTURE_2D, cachedBound ? cachedBound->GetBackendTextureId() : 0);
+            TextureImpl::ActivateTextureUnit(m_activeTextureUnit);
+            VertexArrayImpl::BindBackendVAOId(static_cast<GLuint>(m_vertexArray));
+            g_GLESFuncs.glViewport(m_viewport[0], m_viewport[1], m_viewport[2], m_viewport[3]);
+            g_GLESFuncs.glScissor(m_scissorBox[0], m_scissorBox[1], m_scissorBox[2], m_scissorBox[3]);
+            g_GLESFuncs.glColorMask(m_colorMask[0], m_colorMask[1], m_colorMask[2], m_colorMask[3]);
+            g_GLESFuncs.glDepthFunc(static_cast<GLenum>(m_depthFunc));
+            g_GLESFuncs.glDepthMask(m_depthMask);
+            const GLenum faces[2] = {GL_FRONT, GL_BACK};
+            for (SizeT face = 0; face < 2; ++face) {
+                g_GLESFuncs.glStencilFuncSeparate(faces[face], static_cast<GLenum>(m_stencilFunc[face]),
+                                                  m_stencilRef[face],
+                                                  static_cast<GLuint>(m_stencilValueMask[face]));
+                g_GLESFuncs.glStencilOpSeparate(faces[face], static_cast<GLenum>(m_stencilFail[face]),
+                                                static_cast<GLenum>(m_stencilDepthFail[face]),
+                                                static_cast<GLenum>(m_stencilPass[face]));
+                g_GLESFuncs.glStencilMaskSeparate(faces[face], static_cast<GLuint>(m_stencilWriteMask[face]));
+            }
+            for (const CapabilityState& capability : m_capabilities) {
+                if (capability.enabled) {
+                    g_GLESFuncs.glEnable(capability.cap);
+                } else {
+                    g_GLESFuncs.glDisable(capability.cap);
+                }
+            }
+            // The per-draw-buffer colour masks are not covered by the non-indexed
+            // glColorMask above.
+            for (Uint index = 0; index < MG_State::GLState::FramebufferObject::MAX_DRAW_BUFFERS; ++index) {
+                const BoolVec4& colorMask = RenderStateImpl::g_syncedRenderStateParameters.ColorMasks[index];
+                if (g_GLESFuncs.glColorMaski) {
+                    g_GLESFuncs.glColorMaski(index, colorMask.x() ? GL_TRUE : GL_FALSE,
+                                             colorMask.y() ? GL_TRUE : GL_FALSE, colorMask.z() ? GL_TRUE : GL_FALSE,
+                                             colorMask.w() ? GL_TRUE : GL_FALSE);
+                }
+            }
+            if (m_pausedTransformFeedback && g_GLESFuncs.glResumeTransformFeedback) {
+                g_GLESFuncs.glResumeTransformFeedback();
+            }
+            DrainBlitErrors();
+        }
+
+        ScopedEmulationDrawState(const ScopedEmulationDrawState&) = delete;
+        ScopedEmulationDrawState& operator=(const ScopedEmulationDrawState&) = delete;
+
+    private:
+        struct CapabilityState {
+            GLenum cap;
+            GLboolean enabled;
+        };
+
+        GLint m_program = 0;
+        GLint m_vertexArray = 0;
+        GLint m_viewport[4] = {0, 0, 0, 0};
+        GLint m_scissorBox[4] = {0, 0, 0, 0};
+        GLboolean m_colorMask[4] = {GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE};
+        GLint m_depthFunc = GL_LESS;
+        GLboolean m_depthMask = GL_TRUE;
+        GLint m_stencilFunc[2] = {GL_ALWAYS, GL_ALWAYS};
+        GLint m_stencilRef[2] = {0, 0};
+        GLint m_stencilValueMask[2] = {~0, ~0};
+        GLint m_stencilWriteMask[2] = {~0, ~0};
+        GLint m_stencilFail[2] = {GL_KEEP, GL_KEEP};
+        GLint m_stencilDepthFail[2] = {GL_KEEP, GL_KEEP};
+        GLint m_stencilPass[2] = {GL_KEEP, GL_KEEP};
+        Uint m_activeTextureUnit = 0;
+        Bool m_pausedTransformFeedback = false;
+        CapabilityState m_capabilities[10] = {
+            {GL_SCISSOR_TEST, GL_FALSE},        {GL_DEPTH_TEST, GL_FALSE},
+            {GL_STENCIL_TEST, GL_FALSE},        {GL_CULL_FACE, GL_FALSE},
+            {GL_BLEND, GL_FALSE},               {GL_RASTERIZER_DISCARD, GL_FALSE},
+            {GL_POLYGON_OFFSET_FILL, GL_FALSE}, {GL_SAMPLE_ALPHA_TO_COVERAGE, GL_FALSE},
+            {GL_SAMPLE_COVERAGE, GL_FALSE},     {GL_SAMPLE_MASK, GL_FALSE},
+        };
+    };
+
+    // ---------------------------------------------------------------------------------
     // Single-sample -> multisample blit ("replicate")
     //
     // Desktop GL replicates the source sample into every destination sample when the read
@@ -3987,40 +4152,47 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return true;
         }
 
-        // Sized internal format of the read framebuffer's depth (or, failing that, stencil)
-        // attachment. The scratch copy has to use the very same one: ES rejects a
-        // depth/stencil blit between differing formats even when both sides are single-sampled.
+        // Sized internal format of ONE attachment point of the bound READ framebuffer, or 0
+        // when there is no object there to ask (the default framebuffer's buffers have no
+        // queryable format at all). The scratch copy has to use the very same one: ES rejects
+        // a depth/stencil blit between differing formats even when both sides are
+        // single-sampled.
+        static GLenum QueryAttachmentSizedFormat(GLenum attachment) {
+            GLint objectType = 0;
+            GLint objectName = 0;
+            g_GLESFuncs.glGetFramebufferAttachmentParameteriv(GL_READ_FRAMEBUFFER, attachment,
+                                                              GL_FRAMEBUFFER_ATTACHMENT_OBJECT_TYPE, &objectType);
+            g_GLESFuncs.glGetFramebufferAttachmentParameteriv(GL_READ_FRAMEBUFFER, attachment,
+                                                              GL_FRAMEBUFFER_ATTACHMENT_OBJECT_NAME, &objectName);
+            if (objectName == 0) {
+                return 0;
+            }
+            GLint internalFormat = 0;
+            if (objectType == GL_RENDERBUFFER) {
+                GLint previous = 0;
+                g_GLESFuncs.glGetIntegerv(GL_RENDERBUFFER_BINDING, &previous);
+                g_GLESFuncs.glBindRenderbuffer(GL_RENDERBUFFER, static_cast<GLuint>(objectName));
+                g_GLESFuncs.glGetRenderbufferParameteriv(GL_RENDERBUFFER, GL_RENDERBUFFER_INTERNAL_FORMAT,
+                                                         &internalFormat);
+                g_GLESFuncs.glBindRenderbuffer(GL_RENDERBUFFER, static_cast<GLuint>(previous));
+            } else if (objectType == GL_TEXTURE) {
+                GLint previous = 0;
+                g_GLESFuncs.glGetIntegerv(GL_TEXTURE_BINDING_2D, &previous);
+                g_GLESFuncs.glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(objectName));
+                g_GLESFuncs.glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_INTERNAL_FORMAT, &internalFormat);
+                g_GLESFuncs.glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(previous));
+            }
+            return static_cast<GLenum>(internalFormat);
+        }
+
+        // The read framebuffer's depth format, or - when it has no depth - its stencil one.
         static GLenum QueryReadDepthStencilFormat(GLenum* outAttachment) {
             const GLenum attachments[] = {GL_DEPTH_ATTACHMENT, GL_STENCIL_ATTACHMENT};
             for (const GLenum attachment : attachments) {
-                GLint objectType = 0;
-                GLint objectName = 0;
-                g_GLESFuncs.glGetFramebufferAttachmentParameteriv(GL_READ_FRAMEBUFFER, attachment,
-                                                                  GL_FRAMEBUFFER_ATTACHMENT_OBJECT_TYPE, &objectType);
-                g_GLESFuncs.glGetFramebufferAttachmentParameteriv(GL_READ_FRAMEBUFFER, attachment,
-                                                                  GL_FRAMEBUFFER_ATTACHMENT_OBJECT_NAME, &objectName);
-                if (objectName == 0) {
-                    continue;
-                }
-                GLint internalFormat = 0;
-                if (objectType == GL_RENDERBUFFER) {
-                    GLint previous = 0;
-                    g_GLESFuncs.glGetIntegerv(GL_RENDERBUFFER_BINDING, &previous);
-                    g_GLESFuncs.glBindRenderbuffer(GL_RENDERBUFFER, static_cast<GLuint>(objectName));
-                    g_GLESFuncs.glGetRenderbufferParameteriv(GL_RENDERBUFFER, GL_RENDERBUFFER_INTERNAL_FORMAT,
-                                                             &internalFormat);
-                    g_GLESFuncs.glBindRenderbuffer(GL_RENDERBUFFER, static_cast<GLuint>(previous));
-                } else if (objectType == GL_TEXTURE) {
-                    GLint previous = 0;
-                    g_GLESFuncs.glGetIntegerv(GL_TEXTURE_BINDING_2D, &previous);
-                    g_GLESFuncs.glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(objectName));
-                    g_GLESFuncs.glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_INTERNAL_FORMAT,
-                                                         &internalFormat);
-                    g_GLESFuncs.glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(previous));
-                }
+                const GLenum internalFormat = QueryAttachmentSizedFormat(attachment);
                 if (internalFormat != 0) {
                     if (outAttachment) *outAttachment = attachment;
-                    return static_cast<GLenum>(internalFormat);
+                    return internalFormat;
                 }
             }
             return 0;
@@ -4088,8 +4260,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
         GLint previousRead = 0;
         g_GLESFuncs.glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &previousDraw);
         g_GLESFuncs.glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &previousRead);
-        GLint previousActiveTexture = 0;
-        g_GLESFuncs.glGetIntegerv(GL_ACTIVE_TEXTURE, &previousActiveTexture);
+
+        // Everything below borrows the application's context - a texture unit for the
+        // scratch sampling and the whole rasterization pipeline for the replicate passes -
+        // so the guard is taken before the first of those, not just before the draws. It
+        // also puts the scissor test where the staging blit below needs it: a blit is
+        // scissored like a draw, and the application's box would otherwise clip the copy
+        // into the scratch texture.
+        ScopedEmulationDrawState emulationState;
 
         // Copy the source rectangle into a scratch texture of its own format: both sides of
         // that blit are single-sampled, which ES does allow.
@@ -4106,7 +4284,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             if (s_texture == 0) {
                 ok = false;
             } else {
-                g_GLESFuncs.glActiveTexture(GL_TEXTURE0);
+                // The guard already activated TempTextureUnit and cleared its sampler.
                 g_GLESFuncs.glBindTexture(GL_TEXTURE_2D, s_texture);
                 DrainBlitErrors();
                 g_GLESFuncs.glTexStorage2D(GL_TEXTURE_2D, 1, sourceFormat, s_textureWidth, s_textureHeight);
@@ -4138,65 +4316,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
         g_GLESFuncs.glBindFramebuffer(GL_READ_FRAMEBUFFER, static_cast<GLuint>(previousRead));
         FramebufferImpl::InvalidateFramebufferBindingCache();
         if (!ok) {
-            g_GLESFuncs.glActiveTexture(static_cast<GLenum>(previousActiveTexture));
             MGLOG_E("BlitFramebuffer: could not stage the source for the multisample replicate");
             return false;
-        }
-
-        // Everything below draws into the caller's multisample draw framebuffer, so the
-        // pipeline state it depends on is saved and put back byte for byte - the sync layer's
-        // shadow of the driver state has to stay true.
-        GLint previousProgram = 0;
-        GLint previousVertexArray = 0;
-        GLint previousTexture = 0;
-        GLint previousViewport[4] = {0, 0, 0, 0};
-        GLint previousScissorBox[4] = {0, 0, 0, 0};
-        GLboolean previousColorMask[4] = {GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE};
-        GLint previousDepthFunc = GL_LESS;
-        GLboolean previousDepthMask = GL_TRUE;
-        GLint previousStencilFunc[2] = {GL_ALWAYS, GL_ALWAYS};
-        GLint previousStencilRef[2] = {0, 0};
-        GLint previousStencilValueMask[2] = {~0, ~0};
-        GLint previousStencilWriteMask[2] = {~0, ~0};
-        GLint previousStencilFail[2] = {GL_KEEP, GL_KEEP};
-        GLint previousStencilDepthFail[2] = {GL_KEEP, GL_KEEP};
-        GLint previousStencilPass[2] = {GL_KEEP, GL_KEEP};
-        g_GLESFuncs.glGetIntegerv(GL_CURRENT_PROGRAM, &previousProgram);
-        g_GLESFuncs.glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &previousVertexArray);
-        g_GLESFuncs.glGetIntegerv(GL_TEXTURE_BINDING_2D, &previousTexture);
-        g_GLESFuncs.glGetIntegerv(GL_VIEWPORT, previousViewport);
-        g_GLESFuncs.glGetIntegerv(GL_SCISSOR_BOX, previousScissorBox);
-        g_GLESFuncs.glGetBooleanv(GL_COLOR_WRITEMASK, previousColorMask);
-        g_GLESFuncs.glGetIntegerv(GL_DEPTH_FUNC, &previousDepthFunc);
-        g_GLESFuncs.glGetBooleanv(GL_DEPTH_WRITEMASK, &previousDepthMask);
-        g_GLESFuncs.glGetIntegerv(GL_STENCIL_FUNC, &previousStencilFunc[0]);
-        g_GLESFuncs.glGetIntegerv(GL_STENCIL_BACK_FUNC, &previousStencilFunc[1]);
-        g_GLESFuncs.glGetIntegerv(GL_STENCIL_REF, &previousStencilRef[0]);
-        g_GLESFuncs.glGetIntegerv(GL_STENCIL_BACK_REF, &previousStencilRef[1]);
-        g_GLESFuncs.glGetIntegerv(GL_STENCIL_VALUE_MASK, &previousStencilValueMask[0]);
-        g_GLESFuncs.glGetIntegerv(GL_STENCIL_BACK_VALUE_MASK, &previousStencilValueMask[1]);
-        g_GLESFuncs.glGetIntegerv(GL_STENCIL_WRITEMASK, &previousStencilWriteMask[0]);
-        g_GLESFuncs.glGetIntegerv(GL_STENCIL_BACK_WRITEMASK, &previousStencilWriteMask[1]);
-        g_GLESFuncs.glGetIntegerv(GL_STENCIL_FAIL, &previousStencilFail[0]);
-        g_GLESFuncs.glGetIntegerv(GL_STENCIL_BACK_FAIL, &previousStencilFail[1]);
-        g_GLESFuncs.glGetIntegerv(GL_STENCIL_PASS_DEPTH_FAIL, &previousStencilDepthFail[0]);
-        g_GLESFuncs.glGetIntegerv(GL_STENCIL_BACK_PASS_DEPTH_FAIL, &previousStencilDepthFail[1]);
-        g_GLESFuncs.glGetIntegerv(GL_STENCIL_PASS_DEPTH_PASS, &previousStencilPass[0]);
-        g_GLESFuncs.glGetIntegerv(GL_STENCIL_BACK_PASS_DEPTH_PASS, &previousStencilPass[1]);
-
-        struct CapabilityState {
-            GLenum cap;
-            GLboolean enabled;
-        };
-        CapabilityState capabilities[] = {
-            {GL_SCISSOR_TEST, GL_FALSE},     {GL_DEPTH_TEST, GL_FALSE},
-            {GL_STENCIL_TEST, GL_FALSE},     {GL_CULL_FACE, GL_FALSE},
-            {GL_BLEND, GL_FALSE},            {GL_RASTERIZER_DISCARD, GL_FALSE},
-            {GL_POLYGON_OFFSET_FILL, GL_FALSE}, {GL_SAMPLE_ALPHA_TO_COVERAGE, GL_FALSE},
-            {GL_SAMPLE_COVERAGE, GL_FALSE},  {GL_SAMPLE_MASK, GL_FALSE},
-        };
-        for (CapabilityState& capability : capabilities) {
-            capability.enabled = g_GLESFuncs.glIsEnabled(capability.cap);
         }
 
         const GLint dstLeft = std::min(dstX0, dstX1);
@@ -4210,19 +4331,15 @@ namespace MobileGL::MG_Backend::DirectGLES {
         const Float uvTransform[4] = {mirrorX ? -uvScaleX : uvScaleX, mirrorY ? -uvScaleY : uvScaleY,
                                       mirrorX ? uvScaleX : 0.0f, mirrorY ? uvScaleY : 0.0f};
 
+        // The guard already left the pipeline neutral (nothing culled, tested, blended or
+        // coverage-masked) on the borrowed texture unit; what is left is this pass's own
+        // choices - the destination rectangle, and colour writes off because it writes only
+        // depth and stencil.
         VertexArrayImpl::BindBackendVAOId(s_vertexArray);
-        g_GLESFuncs.glActiveTexture(GL_TEXTURE0);
         g_GLESFuncs.glBindTexture(GL_TEXTURE_2D, s_texture);
         g_GLESFuncs.glViewport(dstLeft, dstBottom, dstWidth, dstHeight);
         g_GLESFuncs.glScissor(dstLeft, dstBottom, dstWidth, dstHeight);
         g_GLESFuncs.glEnable(GL_SCISSOR_TEST);
-        g_GLESFuncs.glDisable(GL_CULL_FACE);
-        g_GLESFuncs.glDisable(GL_BLEND);
-        g_GLESFuncs.glDisable(GL_RASTERIZER_DISCARD);
-        g_GLESFuncs.glDisable(GL_POLYGON_OFFSET_FILL);
-        g_GLESFuncs.glDisable(GL_SAMPLE_ALPHA_TO_COVERAGE);
-        g_GLESFuncs.glDisable(GL_SAMPLE_COVERAGE);
-        g_GLESFuncs.glDisable(GL_SAMPLE_MASK);
         g_GLESFuncs.glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
         DrainBlitErrors();
 
@@ -4266,44 +4383,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
         const Bool replicated = g_GLESFuncs.glGetError() == GL_NO_ERROR;
 
-        g_GLESFuncs.glUseProgram(static_cast<GLuint>(previousProgram));
-        g_GLESFuncs.glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(previousTexture));
-        g_GLESFuncs.glActiveTexture(static_cast<GLenum>(previousActiveTexture));
-        VertexArrayImpl::BindBackendVAOId(static_cast<GLuint>(previousVertexArray));
-        g_GLESFuncs.glViewport(previousViewport[0], previousViewport[1], previousViewport[2], previousViewport[3]);
-        g_GLESFuncs.glScissor(previousScissorBox[0], previousScissorBox[1], previousScissorBox[2],
-                              previousScissorBox[3]);
-        g_GLESFuncs.glColorMask(previousColorMask[0], previousColorMask[1], previousColorMask[2],
-                                previousColorMask[3]);
-        g_GLESFuncs.glDepthFunc(static_cast<GLenum>(previousDepthFunc));
-        g_GLESFuncs.glDepthMask(previousDepthMask);
-        const GLenum faces[2] = {GL_FRONT, GL_BACK};
-        for (SizeT face = 0; face < 2; ++face) {
-            g_GLESFuncs.glStencilFuncSeparate(faces[face], static_cast<GLenum>(previousStencilFunc[face]),
-                                              previousStencilRef[face],
-                                              static_cast<GLuint>(previousStencilValueMask[face]));
-            g_GLESFuncs.glStencilOpSeparate(faces[face], static_cast<GLenum>(previousStencilFail[face]),
-                                            static_cast<GLenum>(previousStencilDepthFail[face]),
-                                            static_cast<GLenum>(previousStencilPass[face]));
-            g_GLESFuncs.glStencilMaskSeparate(faces[face], static_cast<GLuint>(previousStencilWriteMask[face]));
-        }
-        for (const CapabilityState& capability : capabilities) {
-            if (capability.enabled) {
-                g_GLESFuncs.glEnable(capability.cap);
-            } else {
-                g_GLESFuncs.glDisable(capability.cap);
-            }
-        }
-        // The per-draw-buffer colour masks are not covered by the non-indexed glColorMask above.
-        for (Uint index = 0; index < MG_State::GLState::FramebufferObject::MAX_DRAW_BUFFERS; ++index) {
-            const BoolVec4& colorMask = RenderStateImpl::g_syncedRenderStateParameters.ColorMasks[index];
-            if (g_GLESFuncs.glColorMaski) {
-                g_GLESFuncs.glColorMaski(index, colorMask.x() ? GL_TRUE : GL_FALSE, colorMask.y() ? GL_TRUE : GL_FALSE,
-                                         colorMask.z() ? GL_TRUE : GL_FALSE, colorMask.w() ? GL_TRUE : GL_FALSE);
-            }
-        }
-        DrainBlitErrors();
-
+        // Everything the pass disturbed goes back through emulationState's destructor.
         if (!replicated) {
             MGLOG_E("BlitFramebuffer: multisample replicate fallback failed");
         }
@@ -5755,6 +5835,532 @@ namespace MobileGL::MG_Backend::DirectGLES {
         return (rowBytes + resolvedAlignment - 1) & ~(resolvedAlignment - 1);
     }
 
+    // Destination walk shared by the depth, stencil and packed depth-stencil readbacks.
+    // Each of those produces its rows tightly packed and has to land them in the caller's
+    // destination - client memory or the bound pixel-pack buffer - under the PACK
+    // pixel-store parameters. `fillRow` is handed the row index and a buffer of exactly one
+    // packed row to populate. Only real pixel rows are written, so PACK skip/row-length gap
+    // regions stay untouched.
+    template <typename FillRow>
+    static Bool StoreReadbackRowsToClient(GLsizei width, GLsizei height, SizeT dstPixelBytes, void* pixels,
+                                          const char* what, FillRow&& fillRow) {
+        const auto packParams = MG_State::pGLContext->GetPixelStoreParameters(false);
+        const SizeT rowPixels = static_cast<SizeT>(packParams.RowLength > 0 ? packParams.RowLength : width);
+        const SizeT dstRowStride = AlignPixelRow(rowPixels * dstPixelBytes, packParams.Alignment);
+        const SizeT dstOffset = static_cast<SizeT>(std::max(packParams.SkipRows, 0)) * dstRowStride +
+                                static_cast<SizeT>(std::max(packParams.SkipPixels, 0)) * dstPixelBytes;
+        const SizeT rowBytes = static_cast<SizeT>(width) * dstPixelBytes;
+        const SizeT packedSize = dstOffset + static_cast<SizeT>(height - 1) * dstRowStride + rowBytes;
+        const auto& pixelPackBufferObject =
+            MG_State::pGLContext->GetBufferBindingSlot(BufferTarget::PixelPack).GetBoundObject();
+        const SizeT pboOffset = reinterpret_cast<SizeT>(pixels);
+        if (pixelPackBufferObject && pboOffset + packedSize > pixelPackBufferObject->GetSize()) {
+            MGLOG_E("ReadPixels: %s readback PBO is too small", what);
+            return false;
+        }
+        Vector<Uint8> rowBuf(rowBytes);
+        for (GLsizei row = 0; row < height; ++row) {
+            fillRow(row, rowBuf.data());
+            const SizeT rowOffset = dstOffset + static_cast<SizeT>(row) * dstRowStride;
+            if (pixelPackBufferObject) {
+                pixelPackBufferObject->WritebackFromBackend({rowBuf.data(), rowBytes}, pboOffset + rowOffset);
+            } else if (pixels != nullptr) {
+                Memcpy(static_cast<Uint8*>(pixels) + rowOffset, rowBuf.data(), rowBytes);
+            }
+        }
+        if (pixelPackBufferObject) {
+            // WritebackFromBackend bumps change serials with no backend op; re-open the
+            // buffer draw-clean memos (once for the whole row loop).
+            BufferImpl::BumpBufferMutationEpoch();
+        }
+        return true;
+    }
+
+    // A normalized depth scaled into the full range of an unsigned integer of `maxValue`
+    // (GL 4.6 core table 18.2), without ever rounding past the top of that range.
+    static Uint32 NormalizedDepthToUnsigned(Float depth, Double maxValue) {
+        const Double clamped = std::min(std::max(static_cast<Double>(depth), 0.0), 1.0);
+        const Double scaled = clamped * maxValue + 0.5;
+        return static_cast<Uint32>(scaled >= maxValue ? maxValue : scaled);
+    }
+
+    // ---------------------------------------------------------------------------------
+    // Depth / stencil readback by shader sampling
+    //
+    // Desktop GL reads depth and stencil back through glReadPixels; ES has no such call at
+    // all. GL_DEPTH_COMPONENT, GL_STENCIL_INDEX and GL_DEPTH_STENCIL are simply not
+    // accepted formats there, and the optional extensions that add them (GL_NV_read_depth,
+    // GL_NV_read_stencil, GL_NV_read_depth_stencil) are absent on both the Adreno device
+    // and Mesa's ES. Every native attempt therefore failed with a GL error and wrote
+    // NOTHING, so the caller kept whatever its buffer already held - which is how the CTS
+    // reports "expected DEPTH[0.25] but got DEPTH[0.2]": 0.2 is the poison value the test
+    // itself put there.
+    //
+    // What ES *can* do is sample a depth texture, so the emulation goes the long way round:
+    //
+    //   1. Stage. glBlitFramebuffer the requested rectangle out of the bound READ
+    //      framebuffer into a scratch depth(-stencil) TEXTURE of the very same sized
+    //      internal format. One staging copy serves every source kind uniformly - a
+    //      texture attachment of any target/level/layer, a renderbuffer (not samplable at
+    //      all), the default framebuffer, and a multisample attachment (the blit resolves
+    //      it on the way). ES rejects a depth/stencil blit between differing formats, so
+    //      the scratch has to match the source exactly; see DescribeReadDepthStencilSource.
+    //   2. Convert. Draw a full-screen triangle that samples the staged texture into a
+    //      scratch R32UI colour target: depth as floatBitsToUint (bit-exact for every depth
+    //      format, and an integer colour target needs no float-renderable extension),
+    //      stencil through GL_DEPTH_STENCIL_TEXTURE_MODE = GL_STENCIL_INDEX.
+    //   3. Read. glReadPixels the colour target with GL_RGBA_INTEGER / GL_UNSIGNED_INT -
+    //      the pair ES guarantees for an unsigned-integer attachment - and hand the values
+    //      to the existing re-encoders, which already own the client-side (format, type)
+    //      layout and the PACK pixel-store parameters.
+    //
+    // Both scratch images hold the rectangle at their own origin and the pass runs with a
+    // matching viewport, so GL's bottom-up row order survives untouched: scratch row 0 is
+    // source row `y`, which is exactly the first row glReadPixels(x, y, ...) owes the
+    // caller. No flip anywhere.
+    namespace DepthStencilSamplingReadImpl {
+        static Uint s_contextGeneration = ~0u;
+        static GLuint s_colorFramebuffer = 0;
+        static GLuint s_colorTexture = 0;
+        static GLsizei s_colorWidth = 0;
+        static GLsizei s_colorHeight = 0;
+        static GLuint s_vertexArray = 0;
+        static GLuint s_depthProgram = 0;
+        static GLuint s_stencilProgram = 0;
+        static GLint s_depthUvTransform = -1;
+        static GLint s_stencilUvTransform = -1;
+        static Bool s_programsFailed = false;
+
+        // One staging slot per aspect. A framebuffer is allowed to carry its depth and its
+        // stencil in two DIFFERENT objects with two different formats - the framebuffer_blit
+        // cases pair a DEPTH_COMPONENT* attachment with a separate STENCIL_INDEX8 one - and
+        // the two aspects are staged independently for exactly that reason. A single shared
+        // slot would also throw its immutable storage away and re-create it on every
+        // alternation between the two.
+        struct StageSlot {
+            // A framebuffer of its own, not a shared one. GL_DEPTH_STENCIL_ATTACHMENT sets
+            // the depth AND the stencil point, so a packed scratch staged for one aspect
+            // would leave the other aspect's point pointing at it; the next stage of that
+            // other aspect attaches its own (differently formatted) texture to its own point
+            // and the framebuffer is then incomplete - which reads as "no candidate format
+            // worked" and writes nothing at all.
+            GLuint framebuffer = 0;
+            GLuint texture = 0;
+            GLenum format = 0;
+            GLsizei width = 0;
+            GLsizei height = 0;
+            // The default framebuffer has no queryable internal format, so the one that turns
+            // out to be blit-compatible is remembered: it cannot change for the life of the
+            // context, and re-probing it on every read would cost a failed blit each time.
+            GLenum defaultFramebufferFormat = 0;
+        };
+        static StageSlot s_slots[2]; // [0] depth, [1] stencil
+
+        // `precision highp int` is not decoration: ESSL 3.00 defaults integers to mediump in
+        // the fragment language, which is allowed to be 16 bits - it would saw the top half
+        // off every depth bit pattern and every stencil fetch.
+        static const char* const kDepthFetchFragmentSource =
+            "#version 300 es\n"
+            "precision highp float;\n"
+            "precision highp int;\n"
+            "precision highp sampler2D;\n"
+            "uniform sampler2D uSource;\n"
+            "in vec2 vUv;\n"
+            "layout(location = 0) out uvec4 oBits;\n"
+            "void main() {\n"
+            "    oBits = uvec4(floatBitsToUint(texture(uSource, vUv).r), 0u, 0u, 0u);\n"
+            "}\n";
+
+        static const char* const kStencilFetchFragmentSource =
+            "#version 300 es\n"
+            "precision highp float;\n"
+            "precision highp int;\n"
+            "precision highp usampler2D;\n"
+            "uniform usampler2D uSource;\n"
+            "in vec2 vUv;\n"
+            "layout(location = 0) out uvec4 oBits;\n"
+            "void main() {\n"
+            "    oBits = uvec4(texture(uSource, vUv).r, 0u, 0u, 0u);\n"
+            "}\n";
+
+        static Bool EnsureResources() {
+            if (s_contextGeneration != g_backendContextGeneration) {
+                // The ids belonged to a dead context; the context reclaimed them with it.
+                s_colorFramebuffer = 0;
+                s_colorTexture = 0;
+                s_colorWidth = 0;
+                s_colorHeight = 0;
+                s_vertexArray = 0;
+                s_depthProgram = 0;
+                s_stencilProgram = 0;
+                s_programsFailed = false;
+                s_slots[0] = StageSlot{};
+                s_slots[1] = StageSlot{};
+                s_contextGeneration = g_backendContextGeneration;
+            }
+            if (s_programsFailed) {
+                return false;
+            }
+            if (s_depthProgram == 0) {
+                // Same full-screen vertex shader (and its uUvTransform) as the replicate
+                // blit: a staging slot is sized to the largest rectangle seen so far, so the
+                // quad's [0,1] coordinates have to be scaled down to the part it occupies.
+                s_depthProgram = ReplicateBlitImpl::BuildProgram(kDepthFetchFragmentSource);
+                s_stencilProgram = ReplicateBlitImpl::BuildProgram(kStencilFetchFragmentSource);
+                if (s_depthProgram == 0 || s_stencilProgram == 0) {
+                    s_programsFailed = true;
+                    MGLOG_E("ReadPixels: could not build the depth/stencil readback programs");
+                    return false;
+                }
+                s_depthUvTransform = g_GLESFuncs.glGetUniformLocation(s_depthProgram, "uUvTransform");
+                s_stencilUvTransform = g_GLESFuncs.glGetUniformLocation(s_stencilProgram, "uUvTransform");
+            }
+            for (StageSlot& slot : s_slots) {
+                if (slot.framebuffer == 0) {
+                    g_GLESFuncs.glGenFramebuffers(1, &slot.framebuffer);
+                    if (slot.framebuffer == 0) return false;
+                }
+            }
+            if (s_colorFramebuffer == 0) {
+                g_GLESFuncs.glGenFramebuffers(1, &s_colorFramebuffer);
+                if (s_colorFramebuffer == 0) return false;
+            }
+            if (s_vertexArray == 0) {
+                g_GLESFuncs.glGenVertexArrays(1, &s_vertexArray);
+                if (s_vertexArray == 0) return false;
+            }
+            return true;
+        }
+
+        // Ordered guesses at the sized internal format backing one aspect. More than one
+        // entry only when the source's own format cannot be queried (the default
+        // framebuffer), in which case the reported channel sizes narrow it down and the
+        // staging blit picks the winner by being the only one that raises no GL error.
+        struct AspectCandidates {
+            GLenum formats[4] = {0, 0, 0, 0};
+            Uint count = 0;
+            void Push(GLenum format) {
+                for (Uint i = 0; i < count; ++i) {
+                    if (formats[i] == format) return;
+                }
+                if (count < 4) formats[count++] = format;
+            }
+        };
+
+        static GLenum AttachmentPointFor(Bool isDefault, Bool stencilAspect) {
+            // The default framebuffer names its buffers GL_DEPTH / GL_STENCIL; a user
+            // framebuffer names them GL_DEPTH_ATTACHMENT / GL_STENCIL_ATTACHMENT, and asking
+            // one for the other's spelling is GL_INVALID_ENUM.
+            if (isDefault) return stencilAspect ? GL_STENCIL : GL_DEPTH;
+            return stencilAspect ? GL_STENCIL_ATTACHMENT : GL_DEPTH_ATTACHMENT;
+        }
+
+        // Returns false when the bound READ framebuffer has no such aspect at all.
+        static Bool DescribeAspect(Bool stencilAspect, Bool* outIsDefault, AspectCandidates* out) {
+            GLint readFramebuffer = 0;
+            g_GLESFuncs.glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &readFramebuffer);
+            const Bool isDefault = readFramebuffer == 0;
+            if (outIsDefault) *outIsDefault = isDefault;
+            const GLenum point = AttachmentPointFor(isDefault, stencilAspect);
+
+            ClearGLErrors();
+            GLint objectType = GL_NONE;
+            g_GLESFuncs.glGetFramebufferAttachmentParameteriv(GL_READ_FRAMEBUFFER, point,
+                                                              GL_FRAMEBUFFER_ATTACHMENT_OBJECT_TYPE, &objectType);
+            ClearGLErrors();
+            if (objectType == GL_NONE) {
+                return false;
+            }
+
+            if (!isDefault) {
+                // A real object: ask it directly. That answer is certainly blit-compatible,
+                // so it is used on its own.
+                const GLenum exact = ReplicateBlitImpl::QueryAttachmentSizedFormat(point);
+                if (exact != 0) {
+                    out->Push(exact);
+                    return true;
+                }
+            } else if (s_slots[stencilAspect ? 1 : 0].defaultFramebufferFormat != 0) {
+                out->Push(s_slots[stencilAspect ? 1 : 0].defaultFramebufferFormat);
+            }
+
+            // Nothing to ask (or the query failed): rebuild plausible sized formats from the
+            // channel sizes the attachment points report. The OTHER aspect's size matters as
+            // much as this one's - a depth buffer that also carries stencil has to be staged
+            // into a packed scratch, because ES only blits depth between identical formats.
+            GLint depthBits = 0;
+            GLint stencilBits = 0;
+            GLint componentType = GL_UNSIGNED_NORMALIZED;
+            ClearGLErrors();
+            g_GLESFuncs.glGetFramebufferAttachmentParameteriv(GL_READ_FRAMEBUFFER,
+                                                              AttachmentPointFor(isDefault, false),
+                                                              GL_FRAMEBUFFER_ATTACHMENT_DEPTH_SIZE, &depthBits);
+            g_GLESFuncs.glGetFramebufferAttachmentParameteriv(GL_READ_FRAMEBUFFER,
+                                                              AttachmentPointFor(isDefault, true),
+                                                              GL_FRAMEBUFFER_ATTACHMENT_STENCIL_SIZE, &stencilBits);
+            g_GLESFuncs.glGetFramebufferAttachmentParameteriv(
+                GL_READ_FRAMEBUFFER, AttachmentPointFor(isDefault, false),
+                GL_FRAMEBUFFER_ATTACHMENT_COMPONENT_TYPE, &componentType);
+            ClearGLErrors();
+
+            const Bool floatDepth = componentType == GL_FLOAT;
+            const Bool packed = depthBits > 0 && stencilBits > 0;
+            if (stencilAspect) {
+                if (packed) {
+                    out->Push(floatDepth ? GL_DEPTH32F_STENCIL8 : GL_DEPTH24_STENCIL8);
+                    out->Push(floatDepth ? GL_DEPTH24_STENCIL8 : GL_DEPTH32F_STENCIL8);
+                }
+                out->Push(GL_STENCIL_INDEX8);
+                if (!packed) {
+                    out->Push(GL_DEPTH24_STENCIL8);
+                }
+            } else if (packed) {
+                out->Push(floatDepth ? GL_DEPTH32F_STENCIL8 : GL_DEPTH24_STENCIL8);
+                out->Push(floatDepth ? GL_DEPTH24_STENCIL8 : GL_DEPTH32F_STENCIL8);
+            } else if (floatDepth) {
+                out->Push(GL_DEPTH_COMPONENT32F);
+                out->Push(GL_DEPTH32F_STENCIL8);
+            } else if (depthBits > 0 && depthBits <= 16) {
+                out->Push(GL_DEPTH_COMPONENT16);
+                out->Push(GL_DEPTH_COMPONENT24);
+            } else {
+                out->Push(GL_DEPTH_COMPONENT24);
+                out->Push(GL_DEPTH24_STENCIL8);
+                out->Push(GL_DEPTH_COMPONENT32F);
+            }
+            return out->count != 0;
+        }
+
+        // Point a staging slot at `format`, growing it if the rectangle needs it, and leave
+        // it bound on the borrowed texture unit.
+        static Bool EnsureStageTexture(StageSlot& slot, GLenum format, GLsizei width, GLsizei height) {
+            if (slot.texture != 0 && slot.format == format && slot.width >= width && slot.height >= height) {
+                g_GLESFuncs.glBindTexture(GL_TEXTURE_2D, slot.texture);
+                return true;
+            }
+            if (slot.texture != 0) {
+                g_GLESFuncs.glDeleteTextures(1, &slot.texture); // immutable storage cannot be resized
+                ScratchFBOImpl::NoteTextureIdDeleted(slot.texture);
+                slot.texture = 0;
+            }
+            slot.format = 0;
+            slot.width = std::max(slot.width, width);
+            slot.height = std::max(slot.height, height);
+            g_GLESFuncs.glGenTextures(1, &slot.texture);
+            if (slot.texture == 0) return false;
+            g_GLESFuncs.glBindTexture(GL_TEXTURE_2D, slot.texture);
+            ClearGLErrors();
+            g_GLESFuncs.glTexStorage2D(GL_TEXTURE_2D, 1, format, slot.width, slot.height);
+            const Bool ok = g_GLESFuncs.glGetError() == GL_NO_ERROR;
+            g_GLESFuncs.glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+            g_GLESFuncs.glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+            g_GLESFuncs.glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+            g_GLESFuncs.glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+            // A depth texture left in compare mode samples to 0/1 instead of the stored value.
+            g_GLESFuncs.glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_COMPARE_MODE, GL_NONE);
+            ClearGLErrors();
+            slot.format = ok ? format : 0;
+            return ok;
+        }
+
+        static Bool EnsureColorTexture(GLsizei width, GLsizei height) {
+            if (s_colorTexture != 0 && s_colorWidth >= width && s_colorHeight >= height) {
+                return true;
+            }
+            if (s_colorTexture != 0) {
+                g_GLESFuncs.glDeleteTextures(1, &s_colorTexture);
+                ScratchFBOImpl::NoteTextureIdDeleted(s_colorTexture);
+                s_colorTexture = 0;
+            }
+            s_colorWidth = std::max(s_colorWidth, width);
+            s_colorHeight = std::max(s_colorHeight, height);
+            g_GLESFuncs.glGenTextures(1, &s_colorTexture);
+            if (s_colorTexture == 0) return false;
+            g_GLESFuncs.glBindTexture(GL_TEXTURE_2D, s_colorTexture);
+            ClearGLErrors();
+            // R32UI is colour-renderable in ES 3.0 core - no float-renderability extension
+            // needed - and carries a depth bit pattern or a stencil index without loss.
+            g_GLESFuncs.glTexStorage2D(GL_TEXTURE_2D, 1, GL_R32UI, s_colorWidth, s_colorHeight);
+            const Bool ok = g_GLESFuncs.glGetError() == GL_NO_ERROR;
+            g_GLESFuncs.glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+            g_GLESFuncs.glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+            ClearGLErrors();
+            if (!ok) {
+                s_colorWidth = 0;
+                s_colorHeight = 0;
+            }
+            return ok;
+        }
+
+        // Copy one aspect of the requested rectangle out of the bound READ framebuffer into
+        // its staging slot, trying each candidate format until one is blit-compatible.
+        // Requires the slot's own framebuffer bound as DRAW.
+        static Bool StageAspect(StageSlot& slot, const AspectCandidates& candidates, Bool stencilAspect, Bool isDefault,
+                                GLint x, GLint y, GLsizei width, GLsizei height) {
+            const GLbitfield aspectBit = stencilAspect ? GL_STENCIL_BUFFER_BIT : GL_DEPTH_BUFFER_BIT;
+            for (Uint candidate = 0; candidate < candidates.count; ++candidate) {
+                const GLenum format = candidates.formats[candidate];
+                const Bool formatHasAspect = stencilAspect ? ReplicateBlitImpl::FormatHasStencil(format)
+                                                           : ReplicateBlitImpl::FormatHasDepth(format);
+                if (!formatHasAspect) {
+                    continue;
+                }
+                if (!EnsureStageTexture(slot, format, width, height)) {
+                    continue;
+                }
+                g_GLESFuncs.glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER,
+                                                   ReplicateBlitImpl::ScratchAttachmentFor(format), GL_TEXTURE_2D,
+                                                   slot.texture, 0);
+                if (g_GLESFuncs.glCheckFramebufferStatus(GL_DRAW_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+                    continue;
+                }
+                ClearGLErrors();
+                // Only this aspect: a packed scratch standing in for a separate attachment
+                // has a second half with nothing to copy into it.
+                g_GLESFuncs.glBlitFramebuffer(x, y, x + width, y + height, 0, 0, width, height, aspectBit, GL_NEAREST);
+                if (g_GLESFuncs.glGetError() != GL_NO_ERROR) {
+                    continue;
+                }
+                if (isDefault) {
+                    slot.defaultFramebufferFormat = format;
+                }
+                return true;
+            }
+            return false;
+        }
+
+        // Runs one conversion pass over a staged slot and reads its colour target back.
+        // Requires the slot's texture bound on the borrowed unit and s_colorFramebuffer
+        // bound as DRAW.
+        static Bool ConvertAndRead(const StageSlot& slot, Bool stencilAspect, GLsizei width, GLsizei height,
+                                   Vector<Uint32>& outWords) {
+            if (ReplicateBlitImpl::FormatHasDepth(slot.format) && ReplicateBlitImpl::FormatHasStencil(slot.format)) {
+                g_GLESFuncs.glTexParameteri(GL_TEXTURE_2D, GL_DEPTH_STENCIL_TEXTURE_MODE,
+                                            stencilAspect ? GL_STENCIL_INDEX : GL_DEPTH_COMPONENT);
+            }
+            const Float uvScaleX = static_cast<Float>(width) / static_cast<Float>(slot.width);
+            const Float uvScaleY = static_cast<Float>(height) / static_cast<Float>(slot.height);
+            g_GLESFuncs.glUseProgram(stencilAspect ? s_stencilProgram : s_depthProgram);
+            g_GLESFuncs.glUniform4f(stencilAspect ? s_stencilUvTransform : s_depthUvTransform, uvScaleX, uvScaleY,
+                                    0.0f, 0.0f);
+            g_GLESFuncs.glViewport(0, 0, width, height);
+            ClearGLErrors();
+            g_GLESFuncs.glDrawArrays(GL_TRIANGLES, 0, 3);
+            if (g_GLESFuncs.glGetError() != GL_NO_ERROR) {
+                MGLOG_E("ReadPixels: the %s conversion pass failed", stencilAspect ? "stencil" : "depth");
+                return false;
+            }
+
+            // GL_RGBA_INTEGER / GL_UNSIGNED_INT is the pair ES guarantees for an unsigned
+            // integer attachment whatever its channel count, so four words come back per
+            // pixel and only the first carries anything.
+            outWords.assign(static_cast<SizeT>(width) * static_cast<SizeT>(height) * 4u, 0u);
+            ScopedFramebufferBinding readBinding(/*saveRead=*/true, /*saveDraw=*/false);
+            FramebufferImpl::BindFramebufferId(GL_READ_FRAMEBUFFER, s_colorFramebuffer);
+            ScopedPixelPackBuffer packBuffer(0);
+            ScopedPackState packState(PixelStoreImpl::PackState{4, 0, 0, 0});
+            ClearGLErrors();
+            g_GLESFuncs.glReadPixels(0, 0, width, height, GL_RGBA_INTEGER, GL_UNSIGNED_INT, outWords.data());
+            const GLenum readError = g_GLESFuncs.glGetError();
+            if (readError != GL_NO_ERROR) {
+                MGLOG_E("ReadPixels: could not read the %s conversion target back: %s",
+                        stencilAspect ? "stencil" : "depth", MG_Util::ConvertGLEnumToString(readError).c_str());
+                return false;
+            }
+            return true;
+        }
+
+        // Stage, convert and read one aspect. The caller owns the state guard and the DRAW
+        // framebuffer scope.
+        static Bool ReadAspect(Bool stencilAspect, GLint x, GLint y, GLsizei width, GLsizei height,
+                               Vector<Uint32>& outWords) {
+            Bool isDefault = false;
+            AspectCandidates candidates;
+            if (!DescribeAspect(stencilAspect, &isDefault, &candidates)) {
+                return false;
+            }
+            StageSlot& slot = s_slots[stencilAspect ? 1 : 0];
+
+            FramebufferImpl::BindFramebufferId(GL_DRAW_FRAMEBUFFER, slot.framebuffer);
+            if (!StageAspect(slot, candidates, stencilAspect, isDefault, x, y, width, height)) {
+                MGLOG_E("ReadPixels: no ES-compatible scratch format for the %s source",
+                        stencilAspect ? "stencil" : "depth");
+                return false;
+            }
+
+            if (!EnsureColorTexture(width, height)) {
+                MGLOG_E("ReadPixels: could not allocate the depth/stencil conversion target");
+                return false;
+            }
+            FramebufferImpl::BindFramebufferId(GL_DRAW_FRAMEBUFFER, s_colorFramebuffer);
+            g_GLESFuncs.glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
+                                               s_colorTexture, 0);
+            if (g_GLESFuncs.glCheckFramebufferStatus(GL_DRAW_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+                MGLOG_E("ReadPixels: the depth/stencil conversion target is not renderable");
+                return false;
+            }
+
+            // EnsureColorTexture may have taken the borrowed unit for its own storage call.
+            VertexArrayImpl::BindBackendVAOId(s_vertexArray);
+            g_GLESFuncs.glBindTexture(GL_TEXTURE_2D, slot.texture);
+            return ConvertAndRead(slot, stencilAspect, width, height, outWords);
+        }
+
+        // Fills whichever of the two outputs the caller asked for from the bound READ
+        // framebuffer. Returns false when the emulation could not service the request at
+        // all, leaving the caller to report the failure the way it always has.
+        static Bool Read(GLint x, GLint y, GLsizei width, GLsizei height, Vector<Float>* outDepth,
+                         Vector<Uint8>* outStencil) {
+            if (width <= 0 || height <= 0 || (outDepth == nullptr && outStencil == nullptr)) {
+                return false;
+            }
+            // Sampling the stencil half of a packed texture goes through
+            // GL_DEPTH_STENCIL_TEXTURE_MODE, which is ES 3.1 state; on an older driver the
+            // pname would just raise GL_INVALID_ENUM and the shader would read depth bits as
+            // stencil.
+            const Bool supportsStencilTextureMode =
+                g_GLESCapabilities.GLESVersion.Major > 3 ||
+                (g_GLESCapabilities.GLESVersion.Major == 3 && g_GLESCapabilities.GLESVersion.Minor >= 1);
+            if (outStencil != nullptr && !supportsStencilTextureMode) {
+                return false;
+            }
+            if (!EnsureResources()) {
+                return false;
+            }
+
+            // Taken before the first scratch texture bind: the guard owns the borrowed
+            // texture unit as well as the pipeline, and it is what puts the scissor test out
+            // of the way of the staging blit.
+            ScopedEmulationDrawState emulationState;
+            ScopedFramebufferBinding drawBinding(/*saveRead=*/false, /*saveDraw=*/true);
+
+            const SizeT pixelCount = static_cast<SizeT>(width) * static_cast<SizeT>(height);
+            Vector<Uint32> words;
+            if (outDepth != nullptr) {
+                if (!ReadAspect(/*stencilAspect=*/false, x, y, width, height, words)) {
+                    return false;
+                }
+                outDepth->assign(pixelCount, 0.0f);
+                for (SizeT i = 0; i < pixelCount; ++i) {
+                    const Uint32 bits = words[i * 4u];
+                    Float value = 0.0f;
+                    Memcpy(&value, &bits, sizeof(value));
+                    (*outDepth)[i] = value;
+                }
+            }
+            if (outStencil != nullptr) {
+                if (!ReadAspect(/*stencilAspect=*/true, x, y, width, height, words)) {
+                    return false;
+                }
+                outStencil->assign(pixelCount, 0);
+                for (SizeT i = 0; i < pixelCount; ++i) {
+                    (*outStencil)[i] = static_cast<Uint8>(words[i * 4u] & 0xFFu);
+                }
+            }
+            return true;
+        }
+    } // namespace DepthStencilSamplingReadImpl
+
     // One normalized depth value per pixel, tightly packed. Which native read a driver
     // accepts depends on the attached format: a fixed-point depth buffer takes
     // GL_UNSIGNED_INT, while a floating-point one (DEPTH_COMPONENT32F,
@@ -5764,76 +6370,89 @@ namespace MobileGL::MG_Backend::DirectGLES {
         outDepth.assign(static_cast<SizeT>(width) * static_cast<SizeT>(height), 0.0f);
         ScopedPixelPackBuffer packBuffer(0);
         ScopedPackState packState(PixelStoreImpl::PackState{1, 0, 0, 0});
-        Vector<Uint32> raw(outDepth.size());
-        // Drain first: a stale flag some earlier best-effort call left queued
-        // must not be misattributed to this read (it would silently drop the
-        // whole readback in production builds where ErrorLopper is compiled out).
-        ClearGLErrors();
-        g_GLESFuncs.glReadPixels(x, y, width, height, GL_DEPTH_COMPONENT, GL_UNSIGNED_INT, raw.data());
-        if (g_GLESFuncs.glGetError() == GL_NO_ERROR) {
-            for (SizeT i = 0; i < outDepth.size(); ++i) {
-                outDepth[i] = static_cast<Float>(static_cast<Double>(raw[i]) / 4294967295.0);
+        GLenum floatError = GL_INVALID_OPERATION;
+        if (!MG_Config::Features.EsprytForceDepthStencilReadbackEmulation) {
+            Vector<Uint32> raw(outDepth.size());
+            // Drain first: a stale flag some earlier best-effort call left queued
+            // must not be misattributed to this read (it would silently drop the
+            // whole readback in production builds where ErrorLopper is compiled out).
+            ClearGLErrors();
+            g_GLESFuncs.glReadPixels(x, y, width, height, GL_DEPTH_COMPONENT, GL_UNSIGNED_INT, raw.data());
+            if (g_GLESFuncs.glGetError() == GL_NO_ERROR) {
+                for (SizeT i = 0; i < outDepth.size(); ++i) {
+                    outDepth[i] = static_cast<Float>(static_cast<Double>(raw[i]) / 4294967295.0);
+                }
+                return true;
             }
+
+            ClearGLErrors();
+            g_GLESFuncs.glReadPixels(x, y, width, height, GL_DEPTH_COMPONENT, GL_FLOAT, outDepth.data());
+            floatError = g_GLESFuncs.glGetError();
+            if (floatError == GL_NO_ERROR) {
+                return true;
+            }
+        }
+
+        // Neither native spelling exists on this driver (which is the ordinary case: ES has
+        // no depth readback in core and GL_NV_read_depth is rare), so sample the attachment
+        // instead. The scoped pack state above is irrelevant to that path - it reads its own
+        // scratch colour target - but harmless, and leaving it in place keeps the restore in
+        // one place.
+        if (DepthStencilSamplingReadImpl::Read(x, y, width, height, &outDepth, /*outStencil=*/nullptr)) {
             return true;
         }
-
-        ClearGLErrors();
-        g_GLESFuncs.glReadPixels(x, y, width, height, GL_DEPTH_COMPONENT, GL_FLOAT, outDepth.data());
-        const GLenum floatError = g_GLESFuncs.glGetError();
-        if (floatError != GL_NO_ERROR) {
-            MGLOG_E("ReadPixels: neither GL_UNSIGNED_INT nor GL_FLOAT depth readback is available: %s",
-                    MG_Util::ConvertGLEnumToString(floatError).c_str());
-            return false;
-        }
-        return true;
+        MGLOG_E("ReadPixels: no depth readback path is available: native reads failed with %s and the "
+                "sampling emulation could not service the source",
+                MG_Util::ConvertGLEnumToString(floatError).c_str());
+        return false;
     }
 
-    static Bool ReadPixelsDepthFloatViaUnsignedInt(GLint x, GLint y, GLsizei width, GLsizei height, void* pixels) {
+    // GL_DEPTH_COMPONENT readback into the client's layout, honouring the PACK pixel-store
+    // parameters. GL 4.6 core 18.2.8: the normalized depth is written as-is for GL_FLOAT and
+    // scaled into the full range of whichever integer width the client asked for otherwise.
+    static Bool ReadPixelsDepthComponent(GLint x, GLint y, GLsizei width, GLsizei height, GLenum type,
+                                         void* pixels) {
+        SizeT dstPixelBytes = 0;
+        switch (type) {
+        case GL_UNSIGNED_BYTE: dstPixelBytes = sizeof(Uint8); break;
+        case GL_UNSIGNED_SHORT: dstPixelBytes = sizeof(Uint16); break;
+        case GL_UNSIGNED_INT: dstPixelBytes = sizeof(Uint32); break;
+        case GL_FLOAT: dstPixelBytes = sizeof(GLfloat); break;
+        default: return false;
+        }
         if (width <= 0 || height <= 0) {
             return true;
         }
 
-        Vector<Float> raw;
-        if (!ReadDepthValuesNative(x, y, width, height, raw)) {
-            return true;
+        Vector<Float> depth;
+        if (!ReadDepthValuesNative(x, y, width, height, depth)) {
+            return true; // already reported; nothing was written, as before
         }
 
-        const auto packParams = MG_State::pGLContext->GetPixelStoreParameters(false);
-        const SizeT rowPixels = static_cast<SizeT>(packParams.RowLength > 0 ? packParams.RowLength : width);
-        const SizeT dstPixelBytes = sizeof(Float);
-        const SizeT dstRowStride = AlignPixelRow(rowPixels * dstPixelBytes, packParams.Alignment);
-        const SizeT dstOffset = static_cast<SizeT>(std::max(packParams.SkipRows, 0)) * dstRowStride +
-                                static_cast<SizeT>(std::max(packParams.SkipPixels, 0)) * dstPixelBytes;
-        const SizeT packedSize = dstOffset + static_cast<SizeT>(height - 1) * dstRowStride +
-                                 static_cast<SizeT>(width) * dstPixelBytes;
-        // Only actual pixel rows are written so PACK skip/row-length gap regions stay untouched.
-        const auto& pixelPackBufferObject =
-            MG_State::pGLContext->GetBufferBindingSlot(BufferTarget::PixelPack).GetBoundObject();
-        const SizeT pboOffset = reinterpret_cast<SizeT>(pixels);
-        if (pixelPackBufferObject && pboOffset + packedSize > pixelPackBufferObject->GetSize()) {
-            MGLOG_E("ReadPixels: depth GL_FLOAT fallback PBO is too small");
-            return true;
-        }
-        Vector<Float> rowBuf(static_cast<SizeT>(width));
-        for (GLsizei row = 0; row < height; ++row) {
-            const Float* srcRow = raw.data() + static_cast<SizeT>(row) * static_cast<SizeT>(width);
-            for (GLsizei col = 0; col < width; ++col) {
-                rowBuf[col] = srcRow[col];
-            }
-            const SizeT rowOffset = dstOffset + static_cast<SizeT>(row) * dstRowStride;
-            if (pixelPackBufferObject) {
-                pixelPackBufferObject->WritebackFromBackend(
-                    {rowBuf.data(), static_cast<SizeT>(width) * sizeof(Float)}, pboOffset + rowOffset);
-            } else if (pixels != nullptr) {
-                Memcpy(static_cast<Uint8*>(pixels) + rowOffset, rowBuf.data(),
-                       static_cast<SizeT>(width) * sizeof(Float));
-            }
-        }
-        if (pixelPackBufferObject) {
-            // WritebackFromBackend bumps change serials with no backend op; re-open
-            // the buffer draw-clean memos (once for the whole row loop).
-            BufferImpl::BumpBufferMutationEpoch();
-        }
+        StoreReadbackRowsToClient(width, height, dstPixelBytes, pixels, "depth",
+                                  [&](GLsizei row, Uint8* dst) {
+                                      const Float* srcRow =
+                                          depth.data() + static_cast<SizeT>(row) * static_cast<SizeT>(width);
+                                      for (GLsizei col = 0; col < width; ++col) {
+                                          switch (type) {
+                                          case GL_UNSIGNED_BYTE:
+                                              dst[col] = static_cast<Uint8>(
+                                                  NormalizedDepthToUnsigned(srcRow[col], 255.0));
+                                              break;
+                                          case GL_UNSIGNED_SHORT:
+                                              reinterpret_cast<Uint16*>(dst)[col] = static_cast<Uint16>(
+                                                  NormalizedDepthToUnsigned(srcRow[col], 65535.0));
+                                              break;
+                                          case GL_UNSIGNED_INT:
+                                              reinterpret_cast<Uint32*>(dst)[col] =
+                                                  NormalizedDepthToUnsigned(srcRow[col], 4294967295.0);
+                                              break;
+                                          default:
+                                              reinterpret_cast<GLfloat*>(dst)[col] = srcRow[col];
+                                              break;
+                                          }
+                                      }
+                                  });
         return true;
     }
 
@@ -5846,39 +6465,50 @@ namespace MobileGL::MG_Backend::DirectGLES {
         outStencil.assign(static_cast<SizeT>(width) * static_cast<SizeT>(height), 0);
         ScopedPixelPackBuffer packBuffer(0);
         ScopedPackState packState(PixelStoreImpl::PackState{1, 0, 0, 0});
-        // Drain first: see ReadPixelsDepthFloatViaUnsignedInt.
-        ClearGLErrors();
-        g_GLESFuncs.glReadPixels(x, y, width, height, GL_STENCIL_INDEX, GL_UNSIGNED_BYTE, outStencil.data());
-        if (g_GLESFuncs.glGetError() == GL_NO_ERROR) {
-            return true;
-        }
-
-        Vector<Uint32> packed(outStencil.size(), 0);
-        ClearGLErrors();
-        g_GLESFuncs.glReadPixels(x, y, width, height, GL_DEPTH_STENCIL, GL_UNSIGNED_INT_24_8, packed.data());
-        if (g_GLESFuncs.glGetError() == GL_NO_ERROR) {
-            for (SizeT i = 0; i < outStencil.size(); ++i) {
-                outStencil[i] = static_cast<Uint8>(packed[i] & 0xFFu);
+        GLenum packedError = GL_INVALID_OPERATION;
+        if (!MG_Config::Features.EsprytForceDepthStencilReadbackEmulation) {
+            // Drain first: see ReadDepthValuesNative.
+            ClearGLErrors();
+            g_GLESFuncs.glReadPixels(x, y, width, height, GL_STENCIL_INDEX, GL_UNSIGNED_BYTE, outStencil.data());
+            if (g_GLESFuncs.glGetError() == GL_NO_ERROR) {
+                return true;
             }
-            return true;
+
+            Vector<Uint32> packed(outStencil.size(), 0);
+            ClearGLErrors();
+            g_GLESFuncs.glReadPixels(x, y, width, height, GL_DEPTH_STENCIL, GL_UNSIGNED_INT_24_8, packed.data());
+            if (g_GLESFuncs.glGetError() == GL_NO_ERROR) {
+                for (SizeT i = 0; i < outStencil.size(); ++i) {
+                    outStencil[i] = static_cast<Uint8>(packed[i] & 0xFFu);
+                }
+                return true;
+            }
+
+            // A DEPTH32F_STENCIL8 attachment rejects the 24_8 type: its packed layout is a
+            // float depth followed by a padded stencil byte, eight bytes per pixel with the
+            // index at offset 4.
+            Vector<Uint8> packed32f(outStencil.size() * 8u, 0);
+            ClearGLErrors();
+            g_GLESFuncs.glReadPixels(x, y, width, height, GL_DEPTH_STENCIL, GL_FLOAT_32_UNSIGNED_INT_24_8_REV,
+                                     packed32f.data());
+            packedError = g_GLESFuncs.glGetError();
+            if (packedError == GL_NO_ERROR) {
+                for (SizeT i = 0; i < outStencil.size(); ++i) {
+                    outStencil[i] = packed32f[i * 8u + 4u];
+                }
+                return true;
+            }
         }
 
-        // A DEPTH32F_STENCIL8 attachment rejects the 24_8 type: its packed layout is a float depth
-        // followed by a padded stencil byte, eight bytes per pixel with the index at offset 4.
-        Vector<Uint8> packed32f(outStencil.size() * 8u, 0);
-        ClearGLErrors();
-        g_GLESFuncs.glReadPixels(x, y, width, height, GL_DEPTH_STENCIL, GL_FLOAT_32_UNSIGNED_INT_24_8_REV,
-                                 packed32f.data());
-        const GLenum packedError = g_GLESFuncs.glGetError();
-        if (packedError != GL_NO_ERROR) {
-            MGLOG_E("ReadPixels: no stencil readback path is available: %s",
-                    MG_Util::ConvertGLEnumToString(packedError).c_str());
-            return false;
+        // No native spelling worked, which is the ordinary case on ES: sample the stencil
+        // half of the attachment instead.
+        if (DepthStencilSamplingReadImpl::Read(x, y, width, height, /*outDepth=*/nullptr, &outStencil)) {
+            return true;
         }
-        for (SizeT i = 0; i < outStencil.size(); ++i) {
-            outStencil[i] = packed32f[i * 8u + 4u];
-        }
-        return true;
+        MGLOG_E("ReadPixels: no stencil readback path is available: native reads failed with %s and the "
+                "sampling emulation could not service the source",
+                MG_Util::ConvertGLEnumToString(packedError).c_str());
+        return false;
     }
 
     // GL_STENCIL_INDEX readback into the client's integer layout, honouring the PACK
@@ -5911,54 +6541,75 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return true;
         }
 
-        const auto packParams = MG_State::pGLContext->GetPixelStoreParameters(false);
-        const SizeT rowPixels = static_cast<SizeT>(packParams.RowLength > 0 ? packParams.RowLength : width);
-        const SizeT dstRowStride = AlignPixelRow(rowPixels * dstPixelBytes, packParams.Alignment);
-        const SizeT dstOffset = static_cast<SizeT>(std::max(packParams.SkipRows, 0)) * dstRowStride +
-                                static_cast<SizeT>(std::max(packParams.SkipPixels, 0)) * dstPixelBytes;
-        const SizeT packedSize = dstOffset + static_cast<SizeT>(height - 1) * dstRowStride +
-                                 static_cast<SizeT>(width) * dstPixelBytes;
-        // Only actual pixel rows are written so PACK skip/row-length gap regions stay untouched.
-        const auto& pixelPackBufferObject =
-            MG_State::pGLContext->GetBufferBindingSlot(BufferTarget::PixelPack).GetBoundObject();
-        const SizeT pboOffset = reinterpret_cast<SizeT>(pixels);
-        if (pixelPackBufferObject && pboOffset + packedSize > pixelPackBufferObject->GetSize()) {
-            MGLOG_E("ReadPixels: stencil readback PBO is too small");
+        StoreReadbackRowsToClient(width, height, dstPixelBytes, pixels, "stencil",
+                                  [&](GLsizei row, Uint8* dst) {
+                                      const Uint8* srcRow =
+                                          raw.data() + static_cast<SizeT>(row) * static_cast<SizeT>(width);
+                                      for (GLsizei col = 0; col < width; ++col) {
+                                          switch (type) {
+                                          case GL_UNSIGNED_BYTE:
+                                          case GL_BYTE:
+                                              dst[static_cast<SizeT>(col)] = srcRow[col];
+                                              break;
+                                          case GL_UNSIGNED_SHORT:
+                                          case GL_SHORT:
+                                              reinterpret_cast<Uint16*>(dst)[col] = srcRow[col];
+                                              break;
+                                          case GL_FLOAT:
+                                              reinterpret_cast<GLfloat*>(dst)[col] = static_cast<GLfloat>(srcRow[col]);
+                                              break;
+                                          default:
+                                              reinterpret_cast<Uint32*>(dst)[col] = srcRow[col];
+                                              break;
+                                          }
+                                      }
+                                  });
+        return true;
+    }
+
+    // GL_DEPTH_STENCIL readback: the two aspects are fetched separately and woven into the
+    // packed layout the client asked for (GL 4.6 core table 8.6). This is what
+    // KHR-GL3x.packed_depth_stencil.verify_read_pixels / verify_get_tex_image /
+    // verify_copy_tex_image read their gradients with.
+    static Bool ReadPixelsDepthStencilPacked(GLint x, GLint y, GLsizei width, GLsizei height, GLenum type,
+                                             void* pixels) {
+        SizeT dstPixelBytes = 0;
+        switch (type) {
+        case GL_UNSIGNED_INT_24_8: dstPixelBytes = sizeof(Uint32); break;
+        case GL_FLOAT_32_UNSIGNED_INT_24_8_REV: dstPixelBytes = sizeof(Float) + sizeof(Uint32); break;
+        default: return false;
+        }
+        if (width <= 0 || height <= 0) {
             return true;
         }
-        const SizeT rowBytes = static_cast<SizeT>(width) * dstPixelBytes;
-        Vector<Uint8> rowBuf(rowBytes);
-        for (GLsizei row = 0; row < height; ++row) {
-            const Uint8* srcRow = raw.data() + static_cast<SizeT>(row) * static_cast<SizeT>(width);
-            for (GLsizei col = 0; col < width; ++col) {
-                switch (type) {
-                case GL_UNSIGNED_BYTE:
-                case GL_BYTE:
-                    rowBuf[static_cast<SizeT>(col)] = srcRow[col];
-                    break;
-                case GL_UNSIGNED_SHORT:
-                case GL_SHORT:
-                    reinterpret_cast<Uint16*>(rowBuf.data())[col] = srcRow[col];
-                    break;
-                case GL_FLOAT:
-                    reinterpret_cast<GLfloat*>(rowBuf.data())[col] = static_cast<GLfloat>(srcRow[col]);
-                    break;
-                default:
-                    reinterpret_cast<Uint32*>(rowBuf.data())[col] = srcRow[col];
-                    break;
+
+        Vector<Float> depth;
+        Vector<Uint8> stencil;
+        if (!ReadDepthValuesNative(x, y, width, height, depth)) {
+            return true;
+        }
+        if (!ReadStencilBytesNative(x, y, width, height, stencil)) {
+            return true;
+        }
+
+        StoreReadbackRowsToClient(
+            width, height, dstPixelBytes, pixels, "packed depth/stencil", [&](GLsizei row, Uint8* dst) {
+                const SizeT base = static_cast<SizeT>(row) * static_cast<SizeT>(width);
+                for (GLsizei col = 0; col < width; ++col) {
+                    const Uint32 stencilIndex = stencil[base + static_cast<SizeT>(col)];
+                    const Float depthValue = depth[base + static_cast<SizeT>(col)];
+                    if (type == GL_UNSIGNED_INT_24_8) {
+                        reinterpret_cast<Uint32*>(dst)[col] =
+                            (NormalizedDepthToUnsigned(depthValue, 16777215.0) << 8) | stencilIndex;
+                    } else {
+                        // Depth float first, then a word whose low octet is the index and
+                        // whose top 24 bits are unused.
+                        Uint8* pixel = dst + static_cast<SizeT>(col) * (sizeof(Float) + sizeof(Uint32));
+                        Memcpy(pixel, &depthValue, sizeof(depthValue));
+                        Memcpy(pixel + sizeof(Float), &stencilIndex, sizeof(stencilIndex));
+                    }
                 }
-            }
-            const SizeT rowOffset = dstOffset + static_cast<SizeT>(row) * dstRowStride;
-            if (pixelPackBufferObject) {
-                pixelPackBufferObject->WritebackFromBackend({rowBuf.data(), rowBytes}, pboOffset + rowOffset);
-            } else if (pixels != nullptr) {
-                Memcpy(static_cast<Uint8*>(pixels) + rowOffset, rowBuf.data(), rowBytes);
-            }
-        }
-        if (pixelPackBufferObject) {
-            // Serial bumps with no backend op; re-open the buffer draw-clean memos.
-            BufferImpl::BumpBufferMutationEpoch();
-        }
+            });
         return true;
     }
 
@@ -6386,6 +7037,25 @@ namespace MobileGL::MG_Backend::DirectGLES {
                type == GL_FLOAT_32_UNSIGNED_INT_24_8_REV;
     }
 
+    // The (format, type) pairs the depth/stencil helpers below can service. They are not
+    // covered by the colour tables above - GetReadbackChannelMapping has no entry for any
+    // depth or stencil format, so without this gate a read the helpers CAN serve (a
+    // GL_UNSIGNED_SHORT depth, a GL_SHORT stencil) is turned away before it reaches them.
+    static Bool IsSupportedDepthStencilReadPixelsPair(GLenum format, GLenum type) {
+        switch (format) {
+        case GL_DEPTH_COMPONENT:
+            return type == GL_UNSIGNED_BYTE || type == GL_UNSIGNED_SHORT || type == GL_UNSIGNED_INT ||
+                   type == GL_FLOAT;
+        case GL_STENCIL_INDEX:
+            return type == GL_UNSIGNED_BYTE || type == GL_BYTE || type == GL_UNSIGNED_SHORT || type == GL_SHORT ||
+                   type == GL_UNSIGNED_INT || type == GL_INT || type == GL_FLOAT;
+        case GL_DEPTH_STENCIL:
+            return type == GL_UNSIGNED_INT_24_8 || type == GL_FLOAT_32_UNSIGNED_INT_24_8_REV;
+        default:
+            return false;
+        }
+    }
+
     void ReadPixels(GLint x, GLint y, GLsizei width, GLsizei height, GLenum format, GLenum type, void* pixels) {
         MGLOG_D("ReadPixels: x=%d y=%d w=%d h=%d format=%s type=%s pixels=%p", x, y, width, height,
                 MG_Util::ConvertGLEnumToString(format).c_str(), MG_Util::ConvertGLEnumToString(type).c_str(), pixels);
@@ -6393,7 +7063,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // Combinations the ES driver has always handled directly keep the native path; other color layouts go
         // through the wide-format conversion path. Anything still uncovered degrades to a logged no-op instead
         // of killing the process; spec-invalid combinations are already rejected with GL errors at the state layer.
-        const Bool useNativeReadback = IsLegacyNativeReadPixelsFormat(format) && IsLegacyNativeReadPixelsType(type);
+        const Bool useNativeReadback = (IsLegacyNativeReadPixelsFormat(format) && IsLegacyNativeReadPixelsType(type)) ||
+                                       IsSupportedDepthStencilReadPixelsPair(format, type);
         ReadbackChannelMapping conversionMapping{};
         const Bool convertible = GetReadbackChannelMapping(format, conversionMapping) &&
                                  GetReadbackDstPixelSize(conversionMapping, type) != 0;
@@ -6448,16 +7119,20 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     MG_Util::ConvertGLEnumToString(format).c_str(), MG_Util::ConvertGLEnumToString(type).c_str());
             return;
         }
-        if (format == GL_DEPTH_COMPONENT && type == GL_FLOAT &&
-            ReadPixelsDepthFloatViaUnsignedInt(x, y, width, height, pixels)) {
-            MGLOG_D("ReadPixels: finished via depth GL_FLOAT fallback");
+        // Every depth and stencil read goes through the helpers, not just the widening ones:
+        // ES has no guaranteed readback for either aspect, so even a byte-for-byte case
+        // needs the fallback chain (the other native spelling, then the sampling emulation)
+        // on a driver without GL_NV_read_depth / GL_NV_read_stencil.
+        if (format == GL_DEPTH_COMPONENT && ReadPixelsDepthComponent(x, y, width, height, type, pixels)) {
+            MGLOG_D("ReadPixels: finished via depth readback helper");
             return;
         }
-        // Every stencil read goes through the helper, not just the widening ones: ES has no
-        // guaranteed GL_STENCIL_INDEX readback, so even the byte-for-byte case needs the
-        // combined GL_DEPTH_STENCIL fallback when the driver lacks GL_NV_read_stencil.
         if (format == GL_STENCIL_INDEX && ReadPixelsStencilViaNative(x, y, width, height, type, pixels)) {
             MGLOG_D("ReadPixels: finished via stencil readback helper");
+            return;
+        }
+        if (format == GL_DEPTH_STENCIL && ReadPixelsDepthStencilPacked(x, y, width, height, type, pixels)) {
+            MGLOG_D("ReadPixels: finished via packed depth/stencil readback helper");
             return;
         }
 
@@ -6542,8 +7217,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
         if (format == GL_RGBA_INTEGER) {
             return type == GL_INT || type == GL_UNSIGNED_INT || type == GL_UNSIGNED_INT_2_10_10_10_REV;
         }
-        if (format == GL_DEPTH_STENCIL) {
-            return type == GL_UNSIGNED_INT_24_8 || type == GL_FLOAT_32_UNSIGNED_INT_24_8_REV;
+        if (format == GL_DEPTH_STENCIL || format == GL_DEPTH_COMPONENT) {
+            return IsSupportedDepthStencilReadPixelsPair(format, type);
         }
         return false;
     }
@@ -6616,10 +7291,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // GL_DEPTH_STENCIL can't be attached as a color attachment (glCheckFramebufferStatus
         // would report it incomplete); it has its own combined depth+stencil attachment point.
         // glReadBuffer only selects among color attachments, so it does not apply here.
-        if (format == GL_DEPTH_STENCIL) {
+        if (format == GL_DEPTH_STENCIL || format == GL_DEPTH_COMPONENT) {
             ScratchFBOImpl::EnsureDepthAttachment2D(
                 tempFB, GL_READ_FRAMEBUFFER, backendTexId,
-                backendAttachTarget == GL_UNKNOWN_MGL ? target : backendAttachTarget, level, /*withStencil=*/true);
+                backendAttachTarget == GL_UNKNOWN_MGL ? target : backendAttachTarget, level,
+                /*withStencil=*/format == GL_DEPTH_STENCIL);
         } else if (backendAttachTarget == GL_TEXTURE_3D || backendAttachTarget == GL_TEXTURE_2D_ARRAY) {
             // ES cannot attach 3D/array textures through glFramebufferTexture2D; read layer 0. Reads
             // of deeper slices are served from the CPU shadow instead (see the shadow-first branch).
@@ -6629,7 +7305,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 tempFB, GL_READ_FRAMEBUFFER, backendTexId,
                 backendAttachTarget == GL_UNKNOWN_MGL ? target : backendAttachTarget, level);
         }
-        if (format != GL_DEPTH_STENCIL) {
+        if (format != GL_DEPTH_STENCIL && format != GL_DEPTH_COMPONENT) {
             MGLOG_D("GetTexImage: glReadBuffer(GL_COLOR_ATTACHMENT0)");
             ScratchFBOImpl::EnsureReadBuffer(tempFB, GL_COLOR_ATTACHMENT0);
         }
@@ -6774,6 +7450,20 @@ namespace MobileGL::MG_Backend::DirectGLES {
         }
         if (!tempFBOComplete) {
             MGLOG_E("GetTexImage: bound READ FBO is not complete");
+            return;
+        }
+
+        // The level is attached to the scratch READ framebuffer above, so the depth and
+        // stencil aspects are read with exactly the same helpers glReadPixels uses - native
+        // where the driver has it, shader sampling where it does not. ES accepts neither
+        // spelling natively, which is why glGetTexImage(GL_DEPTH_STENCIL) used to leave
+        // packed_depth_stencil.verify_get_tex_image reading its own zero-filled buffer.
+        if (format == GL_DEPTH_COMPONENT && ReadPixelsDepthComponent(0, 0, size.x(), size.y(), type, pixels)) {
+            MGLOG_D("GetTexImage: finished via depth readback helper");
+            return;
+        }
+        if (format == GL_DEPTH_STENCIL && ReadPixelsDepthStencilPacked(0, 0, size.x(), size.y(), type, pixels)) {
+            MGLOG_D("GetTexImage: finished via packed depth/stencil readback helper");
             return;
         }
 

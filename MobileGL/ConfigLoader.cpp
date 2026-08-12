@@ -176,6 +176,8 @@ namespace MobileGL::MG_ConfigLoader {
         features.CoherentAsFlush = QueryEnvFlag("MOBILEGL_COHERENT_AS_FLUSH");
         features.TraceSkipAutodestroy = QueryEnvFlag("MOBILEGL_TRACE_SKIP_AUTODESTROY");
         features.DisableUboRing = QueryEnvFlag("MOBILEGL_DISABLE_UBO_RING");
+        features.EsprytForceDepthStencilReadbackEmulation =
+            QueryEnvFlag("MOBILEGL_ESPRYT_FORCE_DS_READBACK_EMULATION");
         features.RelaxedSemantics = QueryEnvFlag("MOBILEGL_RELAXED_SEMANTICS");
         features.SubgroupPrefixScanQuirk = QueryEnvQuirkOverride("MOBILEGL_QUIRK_SUBGROUP_PREFIX_SCAN");
         features.MagmaDisableBlendedDepthWriteQuirk =

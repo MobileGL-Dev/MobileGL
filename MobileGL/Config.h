@@ -117,6 +117,13 @@ namespace MobileGL::MG_Config {
         // per-draw glBufferSubData path instead of the persistent-mapped ring allocator
         // (negative control / driver-bug escape hatch).
         Bool DisableUboRing = false;
+        // MOBILEGL_ESPRYT_FORCE_DS_READBACK_EMULATION: make DirectGLES skip the native ES
+        // depth/stencil reads and always go through the shader-sampling emulation. Core GL
+        // ES has no depth or stencil readback, but some drivers accept it anyway (Mesa does,
+        // Adreno does not), which means the emulation is dead code on exactly the stack the
+        // headless suite runs on. This forces it live so the scenarios and the CTS can
+        // exercise the path, and gives the device an A/B lever over the same choice.
+        Bool EsprytForceDepthStencilReadbackEmulation = false;
         // MOBILEGL_RELAXED_SEMANTICS: relax strict core-profile rules (e.g. VAO-0 draws,
         // texture-name reuse after delete) even on contexts that explicitly requested a core
         // profile. Without it, relaxed semantics still apply to every context that did not
