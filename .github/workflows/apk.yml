@@ -411,6 +411,12 @@ jobs:
           run_retrace || retrace_status=$?
           if [ "${retrace_status}" -eq 75 ]; then
             echo "::warning::Android emulator infrastructure failed; restarting it and retrying this retrace once."
+            # The restart truncates EMULATOR_LOG, and the attempt that lost the
+            # emulator is the one worth reading - the retry usually only shows
+            # the wreckage. Keep the first attempt's log before it is clobbered.
+            if [ -f "${EMULATOR_LOG}" ]; then
+              cp "${EMULATOR_LOG}" "${EMULATOR_LOG}.first-attempt" || true
+            fi
             sh android-plugin/run-avd-ci.sh stop \
               --avd-name "${AVD_NAME}" \
               --emulator-log "${EMULATOR_LOG}" \
@@ -450,6 +456,13 @@ jobs:
           if [ -f "${EMULATOR_LOG}" ]; then
             cp "${EMULATOR_LOG}" android-retrace-result/diagnostics/emulator.log
           fi
+          if [ -f "${EMULATOR_LOG}.first-attempt" ]; then
+            cp "${EMULATOR_LOG}.first-attempt" android-retrace-result/diagnostics/emulator-first-attempt.log
+          fi
+          # A vanished emulator looks identical whether the host OOM killer took
+          # qemu or the renderer faulted. These two say which.
+          free -h > android-retrace-result/diagnostics/host-memory.txt 2>&1 || true
+          sudo dmesg -T 2>/dev/null | tail -300 > android-retrace-result/diagnostics/host-dmesg.txt || true
 
       - name: Stop Emulator
         if: always()
