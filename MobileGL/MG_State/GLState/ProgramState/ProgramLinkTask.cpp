@@ -301,6 +301,29 @@ namespace MobileGL::MG_State::GLState {
         Vector<SharedPtr<glslang::TShader>> shaders;
         if (!ConsumeShaders(shaders)) return;
 
+        // Harvest the declared default-block uniform initializers before the TShaders are
+        // handed to the linker. They come from the parse itself (glslang folds the constant
+        // and hands it over instead of dropping it), not from a lexical scan, so an
+        // expression like vec3(10, 20, 30) or int[](1, 2, 3) is already evaluated.
+        //
+        // Stage order decides a tie. GLSL requires a uniform declared in several stages to be
+        // declared identically, initializer included, so a conflict is a malformed program;
+        // taking the first stage's value keeps a link that other implementations accept from
+        // failing here, and both stages agree in every well-formed one.
+        for (const auto& shader : shaders) {
+            const glslang::TIntermediate* intermediate = shader ? shader->getIntermediate() : nullptr;
+            if (intermediate == nullptr) continue;
+            for (const auto& initializer : intermediate->getUniformInitializers()) {
+                const auto known = std::find_if(artifacts.uniformInitialValues.begin(),
+                                                artifacts.uniformInitialValues.end(),
+                                                [&initializer](const auto& existing) {
+                                                    return existing.name == initializer.name;
+                                                });
+                if (known != artifacts.uniformInitialValues.end()) continue;
+                artifacts.uniformInitialValues.push_back(initializer);
+            }
+        }
+
         // Merge the shaders' lexically extracted explicit uniform locations. The same
         // uniform declared in several stages must agree on its location (config-A glslang
         // enforced this at mapIO; the relaxed parse no longer sees the qualifiers).

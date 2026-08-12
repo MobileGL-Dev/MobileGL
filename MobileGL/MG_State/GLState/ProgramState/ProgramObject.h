@@ -756,6 +756,13 @@ namespace MobileGL::MG_State::GLState {
             // layout(location = N) default-block uniform qualifiers (the relaxed parse drops
             // them from reflection; the DoReflection assigner restores them from here).
             UnorderedMap<String, Int> linkedExplicitUniformLocations;
+            // Per-link snapshot of the default-block uniform INITIALIZERS the attached shaders
+            // declared ("uniform int i = 1;"). Desktop GLSL says that value is what the uniform
+            // reads until the application overwrites it, and relinking restores it - but the
+            // relaxed parse turns those uniforms into members of MGL_GLOBAL_UBO, where SPIR-V
+            // cannot carry an initializer, so the value only survives as this side-channel.
+            // Applied into the uniform shadow at the phase-B publish (ApplyUniformInitialValues).
+            Vector<glslang::TIntermediate::TUniformInitializer> uniformInitialValues;
             UnorderedMap<String, Uint> uniformLocations;
             // Ordered by location,
             // aka. uniformIndexInTProgram[loc] == "uniform index of TProgram at location `loc`"
@@ -1010,6 +1017,10 @@ namespace MobileGL::MG_State::GLState {
         // detour exactly - and a record that really does change bytes moves the version, which
         // is what makes a backend re-upload the UBO it cached during the window.
         void ReplayBufferedUniformWrites() const;
+        // Seeds the freshly published uniform shadow with the declared initializers. Runs at
+        // the phase-B publish, BEFORE ReplayBufferedUniformWrites, so an application write
+        // made during the A->B window still wins - which is the GL ordering.
+        void ApplyUniformInitialValues() const;
         // Past this, BufferUniformWrite declines and the write joins instead. Sized so an
         // ordinary pack load never reaches it (a pending window is one program's worth of
         // uniforms) while a pathological writer cannot grow the heap without bound.

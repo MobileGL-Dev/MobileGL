@@ -611,6 +611,32 @@ public:
     void setGlobalUniformBinding(unsigned int binding) { globalUniformBlockBinding = binding; }
     unsigned int getGlobalUniformBinding() const { return globalUniformBlockBinding; }
 
+    // A default-block uniform's initializer, folded to constants at parse time.
+    //
+    // Desktop GLSL 1.20+ lets a default-block uniform carry an initializer, and that value is
+    // what the uniform reads until the application overwrites it with glUniform*. Vulkan-relaxed
+    // parsing sweeps such uniforms into a uniform BLOCK, and a block member cannot carry an
+    // initializer in SPIR-V - so the value has nowhere to live in the generated module and used
+    // to be dropped outright, leaving the uniform silently zero. The CLIENT is the only party
+    // that can still honor it, by writing the value into the block's backing storage once the
+    // program links, so the folded constants are handed out here instead of discarded.
+    //
+    // Scalars appear in the same flattened order glslang folds them in: array element by array
+    // element, and within a matrix, column by column. Exactly one of the two value vectors is
+    // populated, chosen by basicType.
+    struct TUniformInitializer {
+        std::string name;
+        TBasicType basicType = EbtVoid;
+        int vectorSize = 1;  // components per vector; 1 for a scalar
+        int matrixCols = 0;  // 0 when the type is not a matrix
+        int matrixRows = 0;
+        int arraySize = 1;   // outer array element count; 1 when not an array
+        std::vector<long long> intValues;
+        std::vector<double> floatValues;
+    };
+    void addUniformInitializer(TUniformInitializer&& init) { uniformInitializers.push_back(std::move(init)); }
+    const std::vector<TUniformInitializer>& getUniformInitializers() const { return uniformInitializers; }
+
     void setAtomicCounterBlockName(const char* name) { atomicCounterBlockName = std::string(name); }
     const char* getAtomicCounterBlockName() const { return atomicCounterBlockName.c_str(); }
     void setAtomicCounterBlockSet(unsigned int set) { atomicCounterBlockSet = set; }
@@ -1223,6 +1249,7 @@ protected:
 
     std::string globalUniformBlockName;
     std::string atomicCounterBlockName;
+    std::vector<TUniformInitializer> uniformInitializers;
     unsigned int globalUniformBlockSet;
     unsigned int globalUniformBlockBinding;
     unsigned int atomicCounterBlockSet;
