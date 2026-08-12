@@ -484,3 +484,53 @@ TEST_F(DemoteFloat64Test, RejectsGarbageInput) {
     Vector<Uint32> output;
     EXPECT_FALSE(ShaderCompiler::DemoteFloat64ToFloat32(notSpirv, output));
 }
+
+// EliminateFloatEqualsZeroPass turns a comparison against 0.0 into an epsilon test, a
+// workaround for drivers whose exact float compare misbehaves. Deciding WHICH constants are
+// zero used to read every float constant as though it were 32 bits wide, and on a 64-bit
+// constant that reads the LOW half of the mantissa - which is zero for 1.0lf, 2.0lf, 0.5lf and
+// every other round double a shader is likely to spell. Each of those was mistaken for 0.0, so
+// a comparison against 1.0lf became an epsilon test against ZERO, and came out true for a
+// uniform holding exactly 1.0. That is the whole of KHR-GL43.compute_shader.fp64-case2.
+//
+// Asserted on the optimized module rather than through a driver, because that is where the
+// rewrite happens and its fingerprint there is unambiguous: the epsilon form introduces a
+// GLSL.std.450 FAbs, and nothing else in these shaders would.
+namespace {
+    Bool RewritesToAnEpsilonTest(const String& source) {
+        const Vector<Uint32> input = CompileToSpirv(GL_COMPUTE_SHADER, source);
+        EXPECT_FALSE(input.empty());
+        if (input.empty()) return false;
+        Vector<Uint32> output;
+        EXPECT_TRUE(ShaderCompiler::SanitizeAndOptimizeBinary(input, output));
+        return Disassemble(output).find("FAbs") != String::npos;
+    }
+
+    String CompareAgainst(const String& type, const String& literal) {
+        return "#version 430 core\n"
+               "layout(local_size_x = 1) in;\n"
+               "buffer Result { int g_result; };\n"
+               "uniform " + type + " g_0;\n"
+               "void main() {\n"
+               "  g_result = 0;\n"
+               "  if (g_0 != " + literal + ") g_result = 1;\n"
+               "}\n";
+    }
+} // namespace
+
+TEST_F(DemoteFloat64Test, AComparisonAgainstANonZeroDoubleIsLeftAlone) {
+    EXPECT_FALSE(RewritesToAnEpsilonTest(CompareAgainst("double", "1.0LF")))
+        << "a double compared against 1.0lf was rewritten into an epsilon test against zero";
+}
+
+TEST_F(DemoteFloat64Test, AComparisonAgainstZeroIsStillRewritten) {
+    EXPECT_TRUE(RewritesToAnEpsilonTest(CompareAgainst("double", "0.0LF")))
+        << "the rewrite must still fire for a genuine comparison against zero";
+}
+
+TEST_F(DemoteFloat64Test, TheThirtyTwoBitBehaviourIsUnchanged) {
+    EXPECT_FALSE(RewritesToAnEpsilonTest(CompareAgainst("float", "1.0")))
+        << "a float compared against 1.0 must not be rewritten";
+    EXPECT_TRUE(RewritesToAnEpsilonTest(CompareAgainst("float", "0.0")))
+        << "the 32-bit behaviour this pass shipped with must be preserved exactly";
+}

@@ -16,6 +16,7 @@
 #include "source/opt/ir_context.h"
 #include "source/opt/module.h"
 #include "source/opt/type_manager.h"
+#include <cmath>
 #include <vector>
 
 namespace MobileGL {
@@ -70,12 +71,37 @@ namespace MobileGL {
 
                             uint32_t var_id = 0;
 
+                            // The constant's WIDTH decides which accessor may read it, and asking
+                            // the wrong one does not fail - it answers.
+                            //
+                            // GetFloat() bit-casts words()[0], which only means anything at 32
+                            // bits. On a 64-bit constant words()[0] is the LOW half of the
+                            // mantissa, and that half is zero for every round double a shader
+                            // actually spells: 1.0lf, 2.0lf, 0.5lf, 100.0lf. Each of those
+                            // therefore looked like 0.0 here, and `d != 1.0lf` was rewritten into
+                            // `abs(d) >= epsilon` - which is TRUE for d == 1.0. That is the whole
+                            // of KHR-GL43.compute_shader.fp64-case2: twelve uniforms compared
+                            // against vector and matrix constructors were untouched (a composite
+                            // is not a FloatConstant) and the one scalar comparison in the shader
+                            // came out inverted. GetFloat() asserts the width, but every shipping
+                            // build compiles with NDEBUG, so the assert never ran.
+                            //
+                            // Widths other than 32 and 64 are declined rather than guessed at:
+                            // GetDoubleValue() reads words()[1], which a 16-bit constant does not
+                            // have.
                             auto is_float_zero = [&](uint32_t id) -> bool {
                                 const analysis::Constant* c = const_mgr->FindDeclaredConstant(id);
-                                if (c && c->AsFloatConstant() && fabs(c->AsFloatConstant()->GetFloat()) <= K_EPSILON) {
-                                    return true;
+                                if (c == nullptr) return false;
+                                const analysis::FloatConstant* floatConstant = c->AsFloatConstant();
+                                if (floatConstant == nullptr) return false;
+                                const analysis::Float* floatType =
+                                    floatConstant->type() != nullptr ? floatConstant->type()->AsFloat() : nullptr;
+                                if (floatType == nullptr) return false;
+                                switch (floatType->width()) {
+                                case 32: return std::fabs(floatConstant->GetFloatValue()) <= K_EPSILON;
+                                case 64: return std::fabs(floatConstant->GetDoubleValue()) <= K_EPSILON;
+                                default: return false;
                                 }
-                                return false;
                             };
 
                             if (is_float_zero(op2_id)) {

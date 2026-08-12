@@ -99,6 +99,8 @@ void main() {
 
             void TearDown() override {
                 if (!Ready()) return;
+                if (m_shapeOutput != 0) glDeleteBuffers(1, &m_shapeOutput);
+                if (m_shapeProgram != 0) glDeleteProgram(m_shapeProgram);
                 if (m_output != 0) glDeleteBuffers(1, &m_output);
                 if (m_program != 0) glDeleteProgram(m_program);
             }
@@ -146,8 +148,146 @@ void main() {
 
             unsigned int m_program = 0;
             unsigned int m_output = 0;
+            unsigned int m_shapeProgram = 0;
+            unsigned int m_shapeOutput = 0;
             std::string m_buildLog;
         };
+
+        // Every double-typed uniform shape GLSL has, all thirteen of them, in one program - the
+        // shape of KHR-GL43.compute_shader.fp64-case2. The scalar and the square matrices are
+        // covered by the cases above; what only a set like this reaches is the NON-SQUARE
+        // matrices, whose column stride and total size both change when the demotion turns a
+        // 64-bit column into a 32-bit one, and whose members therefore move every uniform
+        // declared after them.
+        //
+        // The shader reports every component separately rather than one pass/fail flag, because
+        // "the readback is wrong" is not a diagnosis: a wrong column stride, a wrong member
+        // offset and a wrong narrowing all fail the same single comparison, and only the
+        // component map says which.
+        // No #version here on purpose: it is handed over as a separate source string, the way
+        // the CTS case hands it over.
+        constexpr const char* kAllDoubleShapesSource = R"(
+layout(local_size_x = 1) in;
+uniform double  g_0;
+uniform dvec2   g_1;
+uniform dvec3   g_2;
+uniform dvec4   g_3;
+uniform dmat2   g_4;
+uniform dmat2x3 g_5;
+uniform dmat2x4 g_6;
+uniform dmat3x2 g_7;
+uniform dmat3   g_8;
+uniform dmat3x4 g_9;
+uniform dmat4x2 g_10;
+uniform dmat4x3 g_11;
+uniform dmat4   g_12;
+layout(std430, binding = 0) buffer Output {
+    float g_out[];
+};
+void main() {
+    g_out[0] = float(g_0);
+    for (int i = 0; i < 2; ++i) g_out[1 + i] = float(g_1[i]);
+    for (int i = 0; i < 3; ++i) g_out[3 + i] = float(g_2[i]);
+    for (int i = 0; i < 4; ++i) g_out[6 + i] = float(g_3[i]);
+    for (int c = 0; c < 2; ++c) for (int r = 0; r < 2; ++r) g_out[10 + c * 2 + r] = float(g_4[c][r]);
+    for (int c = 0; c < 2; ++c) for (int r = 0; r < 3; ++r) g_out[14 + c * 3 + r] = float(g_5[c][r]);
+    for (int c = 0; c < 2; ++c) for (int r = 0; r < 4; ++r) g_out[20 + c * 4 + r] = float(g_6[c][r]);
+    for (int c = 0; c < 3; ++c) for (int r = 0; r < 2; ++r) g_out[28 + c * 2 + r] = float(g_7[c][r]);
+    for (int c = 0; c < 3; ++c) for (int r = 0; r < 3; ++r) g_out[34 + c * 3 + r] = float(g_8[c][r]);
+    for (int c = 0; c < 3; ++c) for (int r = 0; r < 4; ++r) g_out[43 + c * 4 + r] = float(g_9[c][r]);
+    for (int c = 0; c < 4; ++c) for (int r = 0; r < 2; ++r) g_out[55 + c * 2 + r] = float(g_10[c][r]);
+    for (int c = 0; c < 4; ++c) for (int r = 0; r < 3; ++r) g_out[63 + c * 3 + r] = float(g_11[c][r]);
+    for (int c = 0; c < 4; ++c) for (int r = 0; r < 4; ++r) g_out[75 + c * 4 + r] = float(g_12[c][r]);
+}
+)";
+
+        // The values the CTS case sets, spelled the way it spells them - column-major, and small
+        // enough that every one is exact in a float. Nothing here is a precision question; a
+        // component that comes back wrong came back from the wrong bytes.
+        constexpr double kG0 = 1.0;
+        constexpr double kG1[2] = {2.0, 3.0};
+        constexpr double kG2[3] = {4.0, 5.0, 6.0};
+        constexpr double kG3[4] = {7.0, 8.0, 9.0, 10.0};
+        constexpr double kG4[4] = {11.0, 12.0, 13.0, 14.0};
+        constexpr double kG5[6] = {15.0, 16.0, 17.0, 18.0, 19.0, 20.0};
+        constexpr double kG6[8] = {21.0, 22.0, 23.0, 24.0, 25.0, 26.0, 27.0, 28.0};
+        constexpr double kG7[6] = {29.0, 30.0, 31.0, 32.0, 33.0, 34.0};
+        constexpr double kG8[9] = {35.0, 36.0, 37.0, 38.0, 39.0, 40.0, 41.0, 42.0, 43.0};
+        constexpr double kG9[12] = {44.0, 45.0, 46.0, 47.0, 48.0, 49.0, 50.0, 51.0, 52.0, 53.0, 54.0, 55.0};
+        constexpr double kG10[8] = {56.0, 57.0, 58.0, 59.0, 60.0, 61.0, 62.0, 63.0};
+        constexpr double kG11[12] = {63.0, 64.0, 65.0, 66.0, 67.0, 68.0, 69.0, 70.0, 71.0, 27.0, 73.0, 74.0};
+        constexpr double kG12[16] = {75.0, 76.0, 77.0, 78.0, 79.0, 80.0, 81.0, 82.0,
+                                     83.0, 84.0, 85.0, 86.0, 87.0, 88.0, 89.0, 90.0};
+
+        struct DoubleShape {
+            const char* name;
+            int base;
+            int columns; // 1 for the scalar and the vectors
+            int rows;    // component count for the scalar and the vectors
+            const double* values;
+        };
+
+        constexpr DoubleShape kDoubleShapes[] = {
+            {"g_0 double", 0, 1, 1, &kG0},      {"g_1 dvec2", 1, 1, 2, kG1},
+            {"g_2 dvec3", 3, 1, 3, kG2},        {"g_3 dvec4", 6, 1, 4, kG3},
+            {"g_4 dmat2", 10, 2, 2, kG4},       {"g_5 dmat2x3", 14, 2, 3, kG5},
+            {"g_6 dmat2x4", 20, 2, 4, kG6},     {"g_7 dmat3x2", 28, 3, 2, kG7},
+            {"g_8 dmat3", 34, 3, 3, kG8},       {"g_9 dmat3x4", 43, 3, 4, kG9},
+            {"g_10 dmat4x2", 55, 4, 2, kG10},   {"g_11 dmat4x3", 63, 4, 3, kG11},
+            {"g_12 dmat4", 75, 4, 4, kG12},
+        };
+
+        constexpr int kAllShapeSlots = 91;
+
+        // The conformance case's own shader, kept verbatim down to the literal suffixes and the
+        // unnamed, unqualified storage block - except that each comparison sets its OWN bit
+        // instead of collapsing all thirteen into one flag. That single flag is the whole reason
+        // the case was unexplained for a wave: it says "something is wrong" and nothing else.
+        //
+        // Verbatim matters here. Reading the components out one at a time (the case above)
+        // passes; whatever fails does so through the shape the conformance case actually
+        // writes - whole-matrix comparison against a constructor, a storage block with no
+        // layout qualifier and no instance name, values reached with constant indices.
+        constexpr const char* kCtsShapedSource = R"(
+layout(local_size_x = 1) in;
+buffer Result {
+  int g_result;
+};
+uniform double g_0;
+uniform dvec2 g_1;
+uniform dvec3 g_2;
+uniform dvec4 g_3;
+uniform dmat2 g_4;
+uniform dmat2x3 g_5;
+uniform dmat2x4 g_6;
+uniform dmat3x2 g_7;
+uniform dmat3 g_8;
+uniform dmat3x4 g_9;
+uniform dmat4x2 g_10;
+uniform dmat4x3 g_11;
+uniform dmat4 g_12;
+
+void main() {
+  g_result = 0;
+
+  if (g_0 != 1.0LF) g_result |= 1;
+  if (g_1 != dvec2(2.0LF, 3.0LF)) g_result |= 2;
+  if (g_2 != dvec3(4.0LF, 5.0LF, 6.0LF)) g_result |= 4;
+  if (g_3 != dvec4(7.0LF, 8.0LF, 9.0LF, 10.0LF)) g_result |= 8;
+
+  if (g_4 != dmat2(11.0LF, 12.0LF, 13.0LF, 14.0LF)) g_result |= 16;
+  if (g_5 != dmat2x3(15.0LF, 16.0LF, 17.0LF, 18.0LF, 19.0LF, 20.0LF)) g_result |= 32;
+  if (g_6 != dmat2x4(21.0LF, 22.0LF, 23.0LF, 24.0LF, 25.0LF, 26.0LF, 27.0LF, 28.0LF)) g_result |= 64;
+
+  if (g_7 != dmat3x2(29.0LF, 30.0LF, 31.0LF, 32.0LF, 33.0LF, 34.0LF)) g_result |= 128;
+  if (g_8 != dmat3(35.0LF, 36.0LF, 37.0LF, 38.0LF, 39.0LF, 40.0LF, 41.0LF, 42.0LF, 43.0LF)) g_result |= 256;
+  if (g_9 != dmat3x4(44.0LF, 45.0LF, 46.0LF, 47.0LF, 48.0LF, 49.0LF, 50.0LF, 51.0LF, 52.0LF, 53.0LF, 54.0LF, 55.0LF)) g_result |= 512;
+
+  if (g_10 != dmat4x2(56.0, 57.0, 58.0, 59.0, 60.0, 61.0, 62.0, 63.0)) g_result |= 1024;
+  if (g_11 != dmat4x3(63.0, 64.0, 65.0, 66.0, 67.0, 68.0, 69.0, 70.0, 71.0, 27.0, 73, 74.0)) g_result |= 2048;
+  if (g_12 != dmat4(75.0, 76.0, 77.0, 78.0, 79.0, 80.0, 81.0, 82.0, 83.0, 84.0, 85.0, 86.0, 87.0, 88.0, 89.0, 90.0)) g_result |= 4096;
+}
+)";
 
         TEST_F(DoublePrecisionScenario, ADoubleUniformReachesTheShaderAtFloatPrecision) {
             if (!Ready()) return;
@@ -350,6 +490,190 @@ void main() {
             EXPECT_FLOAT_EQ(values[1], 4.0f) << "dvec3 initializer .x";
             EXPECT_FLOAT_EQ(values[2], 5.0f) << "dvec3 initializer .y";
             EXPECT_FLOAT_EQ(values[3], 6.0f) << "dvec3 initializer .z";
+            EXPECT_EQ(glGetError(), static_cast<GLenum>(GL_NO_ERROR));
+        }
+
+        TEST_F(DoublePrecisionScenario, EveryDoubleUniformShapeArrivesWhereTheShaderReadsIt) {
+            if (!Ready()) return;
+            // Built the way the CTS case builds it, because every step of that build has been a
+            // bug here at least once: the source arrives as TWO strings (the version directive
+            // and the body), the shader is attached before it has a source and deleted while
+            // still attached, and the program is linked twice.
+            m_shapeProgram = glCreateProgram();
+            ASSERT_NE(m_shapeProgram, 0u);
+            {
+                const GLuint shader = glCreateShader(GL_COMPUTE_SHADER);
+                glAttachShader(m_shapeProgram, shader);
+                glDeleteShader(shader);
+                const char* const sources[2] = {"#version 430 core\n", kAllDoubleShapesSource};
+                glShaderSource(shader, 2, sources, nullptr);
+                glCompileShader(shader);
+                GLint compiled = 0;
+                glGetShaderiv(shader, GL_COMPILE_STATUS, &compiled);
+                if (compiled == GL_FALSE) {
+                    char log[2048] = {};
+                    glGetShaderInfoLog(shader, sizeof(log) - 1, nullptr, log);
+                    FAIL() << "compute shader did not compile: " << log;
+                }
+            }
+            glLinkProgram(m_shapeProgram);
+            {
+                GLint linkedOnce = 0;
+                glGetProgramiv(m_shapeProgram, GL_LINK_STATUS, &linkedOnce);
+                if (linkedOnce == GL_FALSE) {
+                    char log[2048] = {};
+                    glGetProgramInfoLog(m_shapeProgram, sizeof(log) - 1, nullptr, log);
+                    FAIL() << "compute program did not link: " << log;
+                }
+            }
+
+            glGenBuffers(1, &m_shapeOutput);
+            glBindBuffer(GL_SHADER_STORAGE_BUFFER, m_shapeOutput);
+            const std::vector<float> zeroes(kAllShapeSlots, 0.0f);
+            glBufferData(GL_SHADER_STORAGE_BUFFER, kAllShapeSlots * sizeof(float), zeroes.data(), GL_DYNAMIC_DRAW);
+            glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, m_shapeOutput);
+            glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
+
+            const auto location = [&](const char* name) { return glGetUniformLocation(m_shapeProgram, name); };
+
+            // Pass one sets through glProgramUniform*, pass two through glUniform* after a
+            // re-link - the two entry-point families the CTS case exercises, and two different
+            // routes into the same uniform storage.
+            const auto setWithProgramUniform = [&]() {
+                glProgramUniform1d(m_shapeProgram, location("g_0"), kG0);
+                glProgramUniform2d(m_shapeProgram, location("g_1"), kG1[0], kG1[1]);
+                glProgramUniform3d(m_shapeProgram, location("g_2"), kG2[0], kG2[1], kG2[2]);
+                glProgramUniform4d(m_shapeProgram, location("g_3"), kG3[0], kG3[1], kG3[2], kG3[3]);
+                glProgramUniformMatrix2dv(m_shapeProgram, location("g_4"), 1, GL_FALSE, kG4);
+                glProgramUniformMatrix2x3dv(m_shapeProgram, location("g_5"), 1, GL_FALSE, kG5);
+                glProgramUniformMatrix2x4dv(m_shapeProgram, location("g_6"), 1, GL_FALSE, kG6);
+                glProgramUniformMatrix3x2dv(m_shapeProgram, location("g_7"), 1, GL_FALSE, kG7);
+                glProgramUniformMatrix3dv(m_shapeProgram, location("g_8"), 1, GL_FALSE, kG8);
+                glProgramUniformMatrix3x4dv(m_shapeProgram, location("g_9"), 1, GL_FALSE, kG9);
+                glProgramUniformMatrix4x2dv(m_shapeProgram, location("g_10"), 1, GL_FALSE, kG10);
+                glProgramUniformMatrix4x3dv(m_shapeProgram, location("g_11"), 1, GL_FALSE, kG11);
+                glProgramUniformMatrix4dv(m_shapeProgram, location("g_12"), 1, GL_FALSE, kG12);
+            };
+            // Deliberately does NOT re-issue glUseProgram: the CTS case leaves the program
+            // current across the re-link and writes into it from there, so this is the path
+            // where a re-link has to keep the current program's uniform storage addressable.
+            const auto setWithUniform = [&]() {
+                glUniform1d(location("g_0"), kG0);
+                glUniform2d(location("g_1"), kG1[0], kG1[1]);
+                glUniform3d(location("g_2"), kG2[0], kG2[1], kG2[2]);
+                glUniform4d(location("g_3"), kG3[0], kG3[1], kG3[2], kG3[3]);
+                glUniformMatrix2dv(location("g_4"), 1, GL_FALSE, kG4);
+                glUniformMatrix2x3dv(location("g_5"), 1, GL_FALSE, kG5);
+                glUniformMatrix2x4dv(location("g_6"), 1, GL_FALSE, kG6);
+                glUniformMatrix3x2dv(location("g_7"), 1, GL_FALSE, kG7);
+                glUniformMatrix3dv(location("g_8"), 1, GL_FALSE, kG8);
+                glUniformMatrix3x4dv(location("g_9"), 1, GL_FALSE, kG9);
+                glUniformMatrix4x2dv(location("g_10"), 1, GL_FALSE, kG10);
+                glUniformMatrix4x3dv(location("g_11"), 1, GL_FALSE, kG11);
+                glUniformMatrix4dv(location("g_12"), 1, GL_FALSE, kG12);
+            };
+
+            const auto dispatchAndRead = [&]() {
+                glUseProgram(m_shapeProgram);
+                glDispatchCompute(1, 1, 1);
+                glMemoryBarrier(GL_BUFFER_UPDATE_BARRIER_BIT);
+                std::vector<float> values(kAllShapeSlots, -1.0f);
+                glBindBuffer(GL_SHADER_STORAGE_BUFFER, m_shapeOutput);
+                glGetBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, kAllShapeSlots * sizeof(float), values.data());
+                glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
+                // The program stays current on purpose - see setWithUniform.
+                return values;
+            };
+
+            const auto expectEverything = [](const std::vector<float>& values, const char* pass) {
+                for (const DoubleShape& shape : kDoubleShapes) {
+                    for (int c = 0; c < shape.columns; ++c) {
+                        for (int r = 0; r < shape.rows; ++r) {
+                            const int component = c * shape.rows + r;
+                            EXPECT_FLOAT_EQ(values[shape.base + component],
+                                            static_cast<float>(shape.values[component]))
+                                << pass << ": " << shape.name << " column " << c << " row " << r;
+                        }
+                    }
+                }
+            };
+
+            setWithProgramUniform();
+            expectEverything(dispatchAndRead(), "glProgramUniform*");
+
+            // A re-link zeroes every uniform, so pass two proves its own writes rather than
+            // reading pass one's bytes back.
+            glLinkProgram(m_shapeProgram);
+            GLint linked = 0;
+            glGetProgramiv(m_shapeProgram, GL_LINK_STATUS, &linked);
+            ASSERT_EQ(linked, GL_TRUE);
+            glBindBuffer(GL_SHADER_STORAGE_BUFFER, m_shapeOutput);
+            glBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, kAllShapeSlots * sizeof(float), zeroes.data());
+            glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
+
+            setWithUniform();
+            expectEverything(dispatchAndRead(), "glUniform* after re-link");
+            EXPECT_EQ(glGetError(), static_cast<GLenum>(GL_NO_ERROR));
+        }
+
+        TEST_F(DoublePrecisionScenario, TheConformanceUniformShaderAgreesWithEveryValueItWasGiven) {
+            if (!Ready()) return;
+            m_shapeProgram = glCreateProgram();
+            ASSERT_NE(m_shapeProgram, 0u);
+            {
+                const GLuint shader = glCreateShader(GL_COMPUTE_SHADER);
+                glAttachShader(m_shapeProgram, shader);
+                glDeleteShader(shader);
+                const char* const sources[2] = {"#version 430 core\n", kCtsShapedSource};
+                glShaderSource(shader, 2, sources, nullptr);
+                glCompileShader(shader);
+                GLint compiled = 0;
+                glGetShaderiv(shader, GL_COMPILE_STATUS, &compiled);
+                if (compiled == GL_FALSE) {
+                    char log[2048] = {};
+                    glGetShaderInfoLog(shader, sizeof(log) - 1, nullptr, log);
+                    FAIL() << "compute shader did not compile: " << log;
+                }
+            }
+            glLinkProgram(m_shapeProgram);
+            GLint linked = 0;
+            glGetProgramiv(m_shapeProgram, GL_LINK_STATUS, &linked);
+            if (linked == GL_FALSE) {
+                char log[2048] = {};
+                glGetProgramInfoLog(m_shapeProgram, sizeof(log) - 1, nullptr, log);
+                FAIL() << "compute program did not link: " << log;
+            }
+
+            glGenBuffers(1, &m_shapeOutput);
+            const GLint seed = 123;
+            glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, m_shapeOutput);
+            glBufferData(GL_SHADER_STORAGE_BUFFER, sizeof(seed), &seed, GL_STATIC_DRAW);
+
+            const auto location = [&](const char* name) { return glGetUniformLocation(m_shapeProgram, name); };
+            glProgramUniform1d(m_shapeProgram, location("g_0"), kG0);
+            glProgramUniform2d(m_shapeProgram, location("g_1"), kG1[0], kG1[1]);
+            glProgramUniform3d(m_shapeProgram, location("g_2"), kG2[0], kG2[1], kG2[2]);
+            glProgramUniform4d(m_shapeProgram, location("g_3"), kG3[0], kG3[1], kG3[2], kG3[3]);
+            glProgramUniformMatrix2dv(m_shapeProgram, location("g_4"), 1, GL_FALSE, kG4);
+            glProgramUniformMatrix2x3dv(m_shapeProgram, location("g_5"), 1, GL_FALSE, kG5);
+            glProgramUniformMatrix2x4dv(m_shapeProgram, location("g_6"), 1, GL_FALSE, kG6);
+            glProgramUniformMatrix3x2dv(m_shapeProgram, location("g_7"), 1, GL_FALSE, kG7);
+            glProgramUniformMatrix3dv(m_shapeProgram, location("g_8"), 1, GL_FALSE, kG8);
+            glProgramUniformMatrix3x4dv(m_shapeProgram, location("g_9"), 1, GL_FALSE, kG9);
+            glProgramUniformMatrix4x2dv(m_shapeProgram, location("g_10"), 1, GL_FALSE, kG10);
+            glProgramUniformMatrix4x3dv(m_shapeProgram, location("g_11"), 1, GL_FALSE, kG11);
+            glProgramUniformMatrix4dv(m_shapeProgram, location("g_12"), 1, GL_FALSE, kG12);
+
+            glUseProgram(m_shapeProgram);
+            glDispatchCompute(1, 1, 1);
+            glMemoryBarrier(GL_BUFFER_UPDATE_BARRIER_BIT);
+
+            GLint disagreements = -1;
+            glGetBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, sizeof(disagreements), &disagreements);
+            for (int bit = 0; bit < 13; ++bit) {
+                EXPECT_EQ(disagreements & (1 << bit), 0)
+                    << kDoubleShapes[bit].name << " did not compare equal to the value it was given";
+            }
             EXPECT_EQ(glGetError(), static_cast<GLenum>(GL_NO_ERROR));
         }
 
