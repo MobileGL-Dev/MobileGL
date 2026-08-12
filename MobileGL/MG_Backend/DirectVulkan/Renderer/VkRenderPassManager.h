@@ -101,6 +101,36 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             std::swap(layers, that.layers);
             std::swap(lastUsedFrame, that.lastUsedFrame);
         }
+        // Move ASSIGNMENT, not just construction. The destructor below suppresses the
+        // implicit one, which left the type move-constructible but not move-assignable -
+        // and therefore not swappable, which std::swap(pair&, pair&) requires. That was
+        // invisible while UnorderedMap only ever move-CONSTRUCTED an element into a fresh
+        // slot. ska::flat_hash_map probes robin-hood: inserting swaps the entry being
+        // placed against the one already sitting in the slot whenever it has travelled
+        // further from its desired position, so the mapped type has to be swappable or the
+        // whole table fails to instantiate.
+        //
+        // Swap-based, exactly like the move constructor: our old handles land in `that`
+        // and are destroyed when it dies, so ownership stays with a single object and no
+        // VkRenderPass/VkFramebuffer is leaked or double-destroyed.
+        RenderPassEntry& operator=(RenderPassEntry&& that) noexcept {
+            if (this != &that) {
+                std::swap(hash, that.hash);
+                std::swap(renderPass, that.renderPass);
+                std::swap(framebuffer, that.framebuffer);
+                std::swap(compatibilityHash, that.compatibilityHash);
+                std::swap(pendingClearAttachments, that.pendingClearAttachments);
+                std::swap(trackedAttachmentLayouts, that.trackedAttachmentLayouts);
+                std::swap(attachmentCount, that.attachmentCount);
+                std::swap(colorAttachmentCount, that.colorAttachmentCount);
+                std::swap(hasDepthStencilAttachment, that.hasDepthStencilAttachment);
+                std::swap(sampleCount, that.sampleCount);
+                std::swap(extent, that.extent);
+                std::swap(layers, that.layers);
+                std::swap(lastUsedFrame, that.lastUsedFrame);
+            }
+            return *this;
+        }
         RenderPassEntry(
             Uint64 hash,
             VkRenderPass renderpass,

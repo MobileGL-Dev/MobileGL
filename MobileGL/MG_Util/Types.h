@@ -69,6 +69,12 @@ namespace MobileGL {
     // compiles and silently corrupts the table - the one sharp edge this map has
     // that a node-based one does not. Note the Allocator default matches that
     // value_type: pair<Key, T>, not pair<const Key, T>.
+    //
+    // T must be move-ASSIGNABLE, not merely move-constructible: robin-hood probing
+    // swaps the entry being inserted against the one already in the slot whenever it
+    // has travelled further from its desired position. A move-only RAII type that
+    // declares a destructor gets no implicit move assignment, so it needs an explicit
+    // one or the table will not instantiate (see RenderPassEntry).
     template <typename Key, typename T, class Hash = std::hash<Key>, class KeyEqual = std::equal_to<Key>,
               class Allocator = std::allocator<std::pair<Key, T>>>
     using UnorderedMap = ska::flat_hash_map<Key, T, Hash, KeyEqual, Allocator>;
