@@ -470,8 +470,40 @@ jobs:
       - name: Checkout repo
         uses: actions/checkout@v6
 
+      - name: Derive trace fixture cache key
+        id: fixture-key
+        run: bash .github/scripts/trace-fixture-cache.sh key '${{ matrix.case }}'
+
+      - name: Restore trace fixture cache
+        id: fixture-cache
+        if: steps.fixture-key.outputs.cacheable == 'true'
+        uses: actions/cache/restore@v5
+        with:
+          path: ${{ steps.fixture-key.outputs.paths }}
+          key: ${{ steps.fixture-key.outputs.key }}
+
+      - name: Verify restored trace fixture
+        id: fixture-verify
+        if: steps.fixture-cache.outputs.cache-hit == 'true'
+        run: |
+          if bash .github/scripts/trace-fixture-cache.sh verify '${{ matrix.case }}'; then
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::Cached fixture for ${{ matrix.case }} failed verification; falling back to the download path"
+            bash .github/scripts/trace-fixture-cache.sh reset '${{ matrix.case }}'
+          fi
+
       - name: Fetch trace fixture
+        if: steps.fixture-verify.outputs.ok != 'true'
         run: bash .github/scripts/fetch-trace-fixture-lfs.sh '${{ matrix.case }}'
+
+      - name: Save trace fixture cache
+        if: steps.fixture-key.outputs.cacheable == 'true' && steps.fixture-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: ${{ steps.fixture-key.outputs.paths }}
+          key: ${{ steps.fixture-key.outputs.key }}
 
       - name: Stage trace fixture
         run: |
