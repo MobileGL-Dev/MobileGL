@@ -9,6 +9,7 @@
 #include "GL_Sampler.h"
 #include "Validators.h"
 #include "../Getter/GL_Getter.h"
+#include "../Texture/GL_Texture.h"
 #include <MG_State/GLState/Core.h>
 #include <MG_Util/Converters/GLToMG/TextureEnumConverter.h>
 #include <MG_Util/Converters/MGToGL/TextureEnumConverter.h>
@@ -269,15 +270,13 @@ namespace MobileGL::MG_Impl::GLImpl {
         }
     }
 
-    // The number of texture units a sampler may be bound to. GL 3.3 core 3.8.2 names
-    // GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS, which is what the backend advertises; the frontend's
-    // MAX_TEXTURE_IMAGE_UNITS is only the capacity of the unit array, so it is a clamp on the
-    // answer and never the answer itself - gating on it alone accepts every unit up to 192 no
-    // matter what the driver reports.
+    // The number of texture units a sampler may be bound to is the same count a TEXTURE may be
+    // bound to - GL 3.3 core 3.8.2 names GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS for both - so it is
+    // computed once, in GetCombinedTextureImageUnitCount, and named here for the sampler-side
+    // readers below. Two copies of that arithmetic is how glBindSamplers and glBindTextures would
+    // come to disagree about which units exist.
     static GLint GetSamplerBindableTextureUnitCount() {
-        GLint maxTextureUnits = 0;
-        GetIntegerv(GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS, &maxTextureUnits);
-        return std::min<GLint>(std::max(maxTextureUnits, 0), MG_State::GLState::TextureState::MAX_TEXTURE_IMAGE_UNITS);
+        return GetCombinedTextureImageUnitCount();
     }
 
     void BindSampler_State(GLuint unit, GLuint sampler) {

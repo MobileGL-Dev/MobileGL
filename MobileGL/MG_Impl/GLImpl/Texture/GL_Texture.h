@@ -132,5 +132,11 @@ namespace MobileGL::MG_Impl::GLImpl {
     void CompressedTexImage1D(GLenum target, GLint level, GLenum internalformat, GLsizei width, GLint border,
                               GLsizei imageSize, const void* data);
     void BindTexture(GLenum target, GLuint texture);
+    void BindTextures(GLuint first, GLsizei count, const GLuint* textures);
+    void BindImageTextures(GLuint first, GLsizei count, const GLuint* textures);
     void ActiveTexture(GLenum texture);
+    // The number of texture image units a texture or a sampler may be bound to: what the backend
+    // advertises as GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS, clamped by the frontend's fixed unit-array
+    // capacity. Shared so the texture and sampler multi-bind range checks cannot drift apart.
+    GLint GetCombinedTextureImageUnitCount();
 } // namespace MobileGL::MG_Impl::GLImpl

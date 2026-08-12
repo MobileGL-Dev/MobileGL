@@ -128,6 +128,134 @@ namespace {
         DrainErrors();
     }
 
+    // KHR-GL44.multi_bind.errors_bind_textures / .errors_bind_image_textures / .errors_bind_samplers.
+    // Both entry points were silent no-op stubs, so every row here answered GL_NO_ERROR.
+    // errors_bind_samplers is in the list because that case checks the invalid-name rule by calling
+    // glBindTextures with a sampler-name array - a name from the wrong namespace is simply not an
+    // existing texture.
+    TEST_F(NegativeApiErrorsTest, MultiBindTexturesRejectsBadRangesAndNames) {
+        GLint maxUnits = 0;
+        GetIntegerv(GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS, &maxUnits);
+        ASSERT_GT(maxUnits, 0);
+        GLint maxImageUnits = 0;
+        GetIntegerv(GL_MAX_IMAGE_UNITS, &maxImageUnits);
+
+        GLuint texture = 0;
+        GenTextures(1, &texture);
+        BindTexture(GL_TEXTURE_2D, texture);
+        TexStorage2D(GL_TEXTURE_2D, 1, GL_RGBA8, 4, 4);
+
+        // Reserved by glGenTextures but never bound: not an object yet, so the multi-bind entry
+        // points must refuse it instead of creating it the way glBindTexture would.
+        GLuint reservedOnly = 0;
+        GenTextures(1, &reservedOnly);
+        ASSERT_NE(reservedOnly, 0u);
+        ASSERT_EQ(IsTexture(reservedOnly), GL_FALSE);
+        DrainErrors();
+
+        const GLuint good[1] = {texture};
+        const GLuint mixed[2] = {texture, reservedOnly};
+
+        std::vector<Row> rows = {
+            {"glBindTextures with negative count", [&] { BindTextures(0, -1, good); }, GL_INVALID_VALUE},
+            {"glBindTextures with first + count past the last unit",
+             [&] { BindTextures(static_cast<GLuint>(maxUnits), 1, good); }, GL_INVALID_OPERATION},
+            {"glBindTextures with a reserved-but-uncreated name", [&] { BindTextures(0, 2, mixed); },
+             GL_INVALID_OPERATION},
+            {"glBindImageTextures with negative count", [&] { BindImageTextures(0, -1, good); }, GL_INVALID_VALUE},
+        };
+        if (maxImageUnits > 0) {
+            rows.push_back({"glBindImageTextures with first + count past the last image unit",
+                            [&] { BindImageTextures(static_cast<GLuint>(maxImageUnits), 1, good); },
+                            GL_INVALID_OPERATION});
+            rows.push_back({"glBindImageTextures with a reserved-but-uncreated name",
+                            [&] { BindImageTextures(0, 2, mixed); }, GL_INVALID_OPERATION});
+        }
+        RunRows(rows);
+
+        // The loop semantics again: the good element at index 0 binds, the bad one does not.
+        GLint bound = -1;
+        GetIntegeri_v(GL_TEXTURE_BINDING_2D, 0, &bound);
+        EXPECT_EQ(static_cast<GLuint>(bound), texture) << "a rejected element must not take the valid ones with it";
+        GetIntegeri_v(GL_TEXTURE_BINDING_2D, 1, &bound);
+        EXPECT_EQ(bound, 0) << "the rejected element must not have bound anything";
+        DrainErrors();
+    }
+
+    // KHR-GL44.multi_bind.functional_bind_textures / .functional_bind_image_textures: the binding
+    // has to land on the texture's OWN target - glBindTextures takes no target parameter - and
+    // element zero has to unbind every target of its unit.
+    TEST_F(NegativeApiErrorsTest, MultiBindTexturesBindsToTheTexturesOwnTarget) {
+        GLuint textures[2] = {0, 0};
+        GenTextures(2, textures);
+        BindTexture(GL_TEXTURE_1D, textures[0]);
+        TexStorage1D(GL_TEXTURE_1D, 1, GL_RGBA8, 4);
+        BindTexture(GL_TEXTURE_3D, textures[1]);
+        TexStorage3D(GL_TEXTURE_3D, 1, GL_RGBA8, 4, 4, 4);
+        // Leave the active unit's slots clean so only the multi-bind result is under test.
+        BindTexture(GL_TEXTURE_1D, 0);
+        BindTexture(GL_TEXTURE_3D, 0);
+        DrainErrors();
+
+        BindTextures(0, 2, textures);
+        EXPECT_EQ(GetError(), GL_NO_ERROR);
+
+        GLint bound = -1;
+        GetIntegeri_v(GL_TEXTURE_BINDING_1D, 0, &bound);
+        EXPECT_EQ(static_cast<GLuint>(bound), textures[0]) << "a 1D texture must land on the unit's 1D slot";
+        GetIntegeri_v(GL_TEXTURE_BINDING_3D, 0, &bound);
+        EXPECT_EQ(bound, 0) << "no other target of the unit may be touched";
+        GetIntegeri_v(GL_TEXTURE_BINDING_3D, 1, &bound);
+        EXPECT_EQ(static_cast<GLuint>(bound), textures[1]) << "a 3D texture must land on the unit's 3D slot";
+
+        // A zero element - and a NULL array - unbind EVERY target of the unit, not just one.
+        const GLuint zeros[1] = {0};
+        BindTextures(0, 1, zeros);
+        GetIntegeri_v(GL_TEXTURE_BINDING_1D, 0, &bound);
+        EXPECT_EQ(bound, 0);
+        BindTextures(1, 1, nullptr);
+        GetIntegeri_v(GL_TEXTURE_BINDING_3D, 1, &bound);
+        EXPECT_EQ(bound, 0) << "a NULL <textures> unbinds the range";
+        EXPECT_EQ(GetError(), GL_NO_ERROR);
+
+        GLint maxImageUnits = 0;
+        GetIntegerv(GL_MAX_IMAGE_UNITS, &maxImageUnits);
+        if (maxImageUnits > 0) {
+            // ARB_multi_bind fixes every glBindImageTexture parameter but the unit and the name:
+            // level 0, layered, layer 0, READ_WRITE, and the texture's own internal format.
+            BindImageTextures(0, 1, &textures[1]);
+            EXPECT_EQ(GetError(), GL_NO_ERROR);
+            GetIntegeri_v(GL_IMAGE_BINDING_NAME, 0, &bound);
+            EXPECT_EQ(static_cast<GLuint>(bound), textures[1]);
+            GetIntegeri_v(GL_IMAGE_BINDING_LEVEL, 0, &bound);
+            EXPECT_EQ(bound, 0);
+            GetIntegeri_v(GL_IMAGE_BINDING_LAYERED, 0, &bound);
+            EXPECT_EQ(bound, GL_TRUE);
+            GetIntegeri_v(GL_IMAGE_BINDING_ACCESS, 0, &bound);
+            EXPECT_EQ(bound, GL_READ_WRITE);
+            GetIntegeri_v(GL_IMAGE_BINDING_FORMAT, 0, &bound);
+            EXPECT_EQ(bound, GL_RGBA8);
+
+            BindImageTextures(0, 1, nullptr);
+            GetIntegeri_v(GL_IMAGE_BINDING_NAME, 0, &bound);
+            EXPECT_EQ(bound, 0) << "a NULL <textures> resets the image unit";
+        }
+
+        // Through the EXPORTED entry points, not just the GLImpl functions: both of these were
+        // declared with the stub macro, so a working implementation that is never wired into
+        // Definitions.cpp still answers GL_NO_ERROR and binds nothing.
+        ::glBindTextures(0, 1, &textures[0]);
+        GetIntegeri_v(GL_TEXTURE_BINDING_1D, 0, &bound);
+        EXPECT_EQ(static_cast<GLuint>(bound), textures[0]) << "glBindTextures is still exported as a no-op stub";
+        if (maxImageUnits > 0) {
+            ::glBindImageTextures(0, 1, &textures[1]);
+            GetIntegeri_v(GL_IMAGE_BINDING_NAME, 0, &bound);
+            EXPECT_EQ(static_cast<GLuint>(bound), textures[1])
+                << "glBindImageTextures is still exported as a no-op stub";
+        }
+        DrainErrors();
+    }
+
     TEST_F(NegativeApiErrorsTest, BufferRangeOffsetAlignmentAppliesToTheBindingPoint) {
         GLint ssboAlignment = 0;
         GetIntegerv(GL_SHADER_STORAGE_BUFFER_OFFSET_ALIGNMENT, &ssboAlignment);

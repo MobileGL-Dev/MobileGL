@@ -4549,6 +4549,132 @@ namespace MobileGL::MG_Impl::GLImpl {
         MG_State::pGLContext->NoteTextureUnitTouched(static_cast<Int>(unit), changed);
     }
 
+    GLint GetCombinedTextureImageUnitCount() {
+        GLint maxTextureUnits = 0;
+        GetIntegerv(GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS, &maxTextureUnits);
+        return std::min<GLint>(std::max(maxTextureUnits, 0), MG_State::GLState::TextureState::MAX_TEXTURE_IMAGE_UNITS);
+    }
+
+    namespace {
+        // ARB_multi_bind checks the whole [first, first + count) range before binding anything and
+        // reports an overrun as INVALID_OPERATION - not the INVALID_VALUE the single-bind entry
+        // points report for an out-of-range unit, and not after binding the in-range prefix.
+        Bool ValidateMultiBindUnitRange(GLuint first, GLsizei count, GLint unitCount, const char* funcName) {
+            if (count < 0) {
+                MG_State::pGLContext->RecordError(
+                    ErrorCode::InvalidValue,
+                    MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", funcName, "count must be non-negative."));
+                return false;
+            }
+            if (static_cast<Uint64>(first) + static_cast<Uint64>(count) > static_cast<Uint64>(unitCount)) {
+                MG_State::pGLContext->RecordError(
+                    ErrorCode::InvalidOperation,
+                    MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", funcName,
+                                                 std::format("first + count ({} + {}) exceeds the {} available units.",
+                                                             first, count, unitCount)));
+                return false;
+            }
+            return true;
+        }
+
+        // ARB_multi_bind states the equivalence to a loop of single binds "except that <textures>
+        // will not be created if they do not exist": glBindTexture instantiates a name GenTextures
+        // merely reserved, the multi-bind entry points must refuse it. The error class is
+        // INVALID_OPERATION for both of them, where the scalar glBindImageTexture reports
+        // INVALID_VALUE - hence the check here rather than inside BindImageTexture.
+        //
+        // Deliberately PER ELEMENT: the extension defines these calls as a loop, so a bad entry
+        // costs its own unit and leaves the rest of the range bound.
+        SharedPtr<MG_State::GLState::ITextureObject> ResolveMultiBindTexture(GLuint texture, GLsizei index,
+                                                                            const char* funcName) {
+            SharedPtr<MG_State::GLState::ITextureObject> textureObject =
+                MG_State::pGLContext->GetTextureObject(texture);
+            if (!textureObject) {
+                MG_State::pGLContext->RecordError(
+                    ErrorCode::InvalidOperation,
+                    MakeUnique<GenericErrorInfo>(
+                        "MG_Impl/GLImpl", funcName,
+                        std::format("textures[{}] ({}) is not the name of an existing texture object.", index,
+                                    texture)));
+            }
+            return textureObject;
+        }
+
+        // ARB_multi_bind: an element naming texture zero unbinds EVERY target of its unit, i.e.
+        // rebinds each target's default texture object - the unit's initial state. Same rule
+        // glBindTextureUnit(unit, 0) follows.
+        void UnbindAllTargetsOnUnit(Int unit) {
+            auto& textureUnit = MG_State::pGLContext->GetTextureUnitObject(unit);
+            Bool changed = false;
+            for (auto& slot : textureUnit.GetAllBindingSlots()) {
+                if (slot.Bind(MG_State::pGLContext->GetDefaultTextureObject(slot.GetTarget()))) changed = true;
+            }
+            MG_State::pGLContext->NoteTextureUnitTouched(unit, changed);
+        }
+    } // namespace
+
+    // ARB_multi_bind: glBindTextures binds each texture to ITS OWN target on unit <first> + i, so
+    // there is no target parameter and no way to express it through glBindTexture - the per-unit,
+    // by-object form glBindTextureUnit uses is the one that matches. A NULL <textures> unbinds the
+    // whole range.
+    void BindTextures(GLuint first, GLsizei count, const GLuint* textures) {
+        if (!ValidateMultiBindUnitRange(first, count, GetCombinedTextureImageUnitCount(), __func__)) return;
+
+        for (GLsizei i = 0; i < count; ++i) {
+            const GLuint texture = textures ? textures[i] : 0;
+            const Int unit = static_cast<Int>(first) + i;
+            if (texture == 0) {
+                UnbindAllTargetsOnUnit(unit);
+                continue;
+            }
+            const SharedPtr<MG_State::GLState::ITextureObject> textureObject =
+                ResolveMultiBindTexture(texture, i, __func__);
+            if (!textureObject) continue;
+
+            auto& textureUnit = MG_State::pGLContext->GetTextureUnitObject(unit);
+            const Bool changed = textureUnit.GetBindingSlot(textureObject->GetTarget()).Bind(textureObject);
+            MG_State::pGLContext->NoteTextureUnitTouched(unit, changed);
+        }
+    }
+
+    // ARB_multi_bind: glBindImageTextures is a loop of glBindImageTexture with every parameter but
+    // the unit and the texture fixed by the spec - level 0, layered, layer 0, READ_WRITE, and the
+    // texture's own internal format. An element that names texture zero resets the unit.
+    void BindImageTextures(GLuint first, GLsizei count, const GLuint* textures) {
+        if (!ValidateMultiBindUnitRange(first, count, static_cast<GLint>(GetAdvertisedImageUnitCount()), __func__)) {
+            return;
+        }
+
+        for (GLsizei i = 0; i < count; ++i) {
+            const GLuint texture = textures ? textures[i] : 0;
+            const GLuint unit = first + static_cast<GLuint>(i);
+            if (texture == 0) {
+                BindImageTexture(unit, 0, 0, GL_FALSE, 0, GL_READ_ONLY, GL_R8);
+                continue;
+            }
+            const SharedPtr<MG_State::GLState::ITextureObject> textureObject =
+                ResolveMultiBindTexture(texture, i, __func__);
+            if (!textureObject) continue;
+
+            // "An INVALID_OPERATION error is generated if the internal format of any texture is not
+            // supported for image textures" - a texture that has never been given storage has no
+            // format at all and lands here too, rather than being reported as a bad enum by the
+            // scalar path.
+            const GLenum format = MG_Util::ConvertTextureInternalFormatToGLEnum(textureObject->GetFormat());
+            if (!IsValidImageTextureFormat(format)) {
+                MG_State::pGLContext->RecordError(
+                    ErrorCode::InvalidOperation,
+                    MakeUnique<GenericErrorInfo>(
+                        "MG_Impl/GLImpl", __func__,
+                        std::format("textures[{}] ({}) has an internal format that is not supported for image "
+                                    "textures.",
+                                    i, texture)));
+                continue;
+            }
+            BindImageTexture(unit, texture, 0, GL_TRUE, 0, GL_READ_WRITE, format);
+        }
+    }
+
     void GetTextureImage(GLuint texture, GLint level, GLenum format, GLenum type, GLsizei bufSize, void* pixels) {
         auto textureObject = GetTextureObjectByName(texture, __func__);
         if (!textureObject) return;
