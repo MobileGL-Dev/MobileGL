@@ -1,6 +1,8 @@
 #include "glws.hpp"
 #include "retrace.hpp"
 
+#include "apitrace_fbo_dump.hpp"
+
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
 #include <algorithm>
@@ -632,6 +634,9 @@ bool makeCurrentInternal(Drawable *drawable, Drawable *readable, Context *contex
     gCurrentDrawable = drawable;
     gCurrentContext = eglContext;
     PrintGlIdentityOnce();
+    // retrace::setUp() installs the GL dumper after glws::init(), so the earliest point at
+    // which the dump hook can wrap it is the first time a context becomes current.
+    mobilegl_trace_dump::InstallIfRequested();
     return true;
 }
 

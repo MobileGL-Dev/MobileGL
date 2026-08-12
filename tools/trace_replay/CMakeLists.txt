@@ -224,6 +224,7 @@ add_library(mobilegl_trace_glretrace_common STATIC
         "${APITRACE_ROOT}/retrace/metric_backend_opengl.cpp"
         "${APITRACE_ROOT}/retrace/metric_helper.cpp"
         "${APITRACE_ROOT}/retrace/metric_writer.cpp"
+        "${MOBILEGL_TRACE_ROOT}/apitrace_fbo_dump.cpp"
         "${MOBILEGL_TRACE_ROOT}/apitrace_glws_egl.cpp")
 if(APPLE)
     set(MOBILEGL_TRACE_APPLE_FRAMEWORKS

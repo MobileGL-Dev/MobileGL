@@ -159,6 +159,18 @@ bool LoadMobileGL(const Request& request, std::string& error) {
     } else {
         unsetenv("MOBILEGL_COHERENT_AS_FLUSH");
     }
+    if (request.fboAttachmentDumps.empty()) {
+        unsetenv("MOBILEGL_TRACE_DUMP_FBO_ATTACHMENTS");
+    } else {
+        std::string dumpPoints;
+        for (const std::string& dumpPoint : request.fboAttachmentDumps) {
+            if (!dumpPoints.empty()) {
+                dumpPoints += ';';
+            }
+            dumpPoints += dumpPoint;
+        }
+        setenv("MOBILEGL_TRACE_DUMP_FBO_ATTACHMENTS", dumpPoints.c_str(), 1);
+    }
 
     void* handle = dlopen(request.mobileGlLibrary.c_str(), RTLD_NOW | RTLD_GLOBAL);
     if (handle == nullptr) {
@@ -355,9 +367,23 @@ std::string SnapshotPathForCall(const Request& request) {
     return request.outputDir + "/actual." + call + ".png";
 }
 
+// The dump hook rides on apitrace's snapshot path, which only runs for calls in the -S
+// callset, so every dump point has to join the target call there.
+std::string SnapshotCallSet(const Request& request) {
+    std::string callSet = std::to_string(request.targetCall);
+    for (const std::string& dumpPoint : request.fboAttachmentDumps) {
+        const std::size_t separator = dumpPoint.find(':');
+        const std::string call = dumpPoint.substr(0, separator);
+        if (!call.empty() && call != std::to_string(request.targetCall)) {
+            callSet += "," + call;
+        }
+    }
+    return callSet;
+}
+
 int RunRetraceMain(const Request& request) {
     std::string prefix = request.outputDir + "/actual.";
-    std::string callSet = std::to_string(request.targetCall);
+    std::string callSet = SnapshotCallSet(request);
 
     std::string arg0 = "mobilegl-glretrace";
     std::string argBenchmark = "-b";

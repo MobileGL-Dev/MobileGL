@@ -28,7 +28,12 @@ void PrintUsage(const char *argv0) {
             << "  --crop-y N                Compare crop y\n"
             << "  --crop-width N            Compare crop width\n"
             << "  --crop-height N           Compare crop height\n"
-            << "  --coherent-as-flush       Set MOBILEGL_COHERENT_AS_FLUSH=1 for the replay\n";
+            << "  --coherent-as-flush       Set MOBILEGL_COHERENT_AS_FLUSH=1 for the replay\n"
+            << "  --dump-fbo-attachments CALL:DIR[:FBO,FBO,...]\n"
+            << "                            At CALL, write every colour attachment and the depth\n"
+            << "                            attachment of every live framebuffer object into DIR as\n"
+            << "                            fbo<N>-att<M>.png / fbo<N>-depth.png, plus a manifest.txt\n"
+            << "                            of formats and per-channel statistics. Repeatable.\n";
 }
 
 bool ReadValue(int argc, char **argv, int &index, std::string &out) {
@@ -116,6 +121,14 @@ bool ParseArgs(int argc, char **argv, mobilegl_trace::Request &request) {
             if (!ReadInt(argc, argv, i, request.cropHeight)) return false;
         } else if (arg == "--coherent-as-flush") {
             request.coherentAsFlush = true;
+        } else if (arg == "--dump-fbo-attachments") {
+            std::string dumpPoint;
+            if (!ReadValue(argc, argv, i, dumpPoint)) return false;
+            if (dumpPoint.find(':') == std::string::npos) {
+                std::cerr << "--dump-fbo-attachments expects CALL:DIR[:FBO,FBO,...]\n";
+                return false;
+            }
+            request.fboAttachmentDumps.push_back(dumpPoint);
         } else if (arg == "--help" || arg == "-h") {
             return false;
         } else {

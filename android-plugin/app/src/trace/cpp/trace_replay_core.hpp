@@ -24,6 +24,9 @@ struct Request {
     std::string backend;
     std::string mobileGlLibrary = "libMobileGL.so";
     std::string angleVariant;
+    // Framebuffer-attachment dump points, each `CALL:DIR[:FBO,FBO,...]`. Debug-only; the
+    // replay behaves exactly as before when this is empty.
+    std::vector<std::string> fboAttachmentDumps;
     int targetFrame = -1;
     long long targetCall = -1;
     int width = 0;
