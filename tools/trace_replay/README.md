@@ -354,22 +354,51 @@ Neither is an ANGLE mistranslation:
 - **A is a capability gap we do not guard.** Minecraft 26.3 builds clouds
   entirely from `gl_VertexID` plus `texelFetch` on a buffer texture
   (`glTexBuffer(GL_TEXTURE_BUFFER, GL_R8I, ...)`). Mesa GLES advertises
-  `GL_EXT_texture_buffer` and `GL_OES_texture_buffer`; this ANGLE advertises
-  neither (142 extensions against Mesa's 162), and MobileGL's reported
-  `GL_MAX_TEXTURE_BUFFER_SIZE` drops to the 65536 default because it cannot
-  query one. We emit the `require` line anyway.
+  `GL_EXT_texture_buffer` and `GL_OES_texture_buffer`; the ANGLE in the local
+  farm advertises neither (142 extensions against Mesa's 162), and MobileGL's
+  reported `GL_MAX_TEXTURE_BUFFER_SIZE` drops to the 65536 default because it
+  cannot query one. We emit the `require` line anyway.
 - **B is a GLSL ES rule we violate.** Fragment output arrays must be indexed
   with constant integral expressions; SPIRV-Cross hands us a loop-variable
   index and Mesa's compiler accepts it, ANGLE does not. Any strict ES driver
   rejects this shader, so it is not ANGLE-specific in principle - it is
   Mesa's leniency that hides it on the Linux lane.
 
+##### The local ANGLE is not the CI ANGLE - check before attributing
+
+This trap cost a full round of analysis, so check it first. The Linux farm
+recipe above uses the emulator SDK's ANGLE; the Android lane uses a *pinned*
+build downloaded by `apk.yml` (`MOBILEGL_TRACE_ANGLE_VARIANT`, default
+`ec889e6ea831`). They are far apart:
+
+| | local farm ANGLE | CI lane ANGLE |
+| --- | --- | --- |
+| `GL_RENDERER` | `ANGLE (Mesa, Vulkan 1.4.354 (llvmpipe ...), llvmpipe-26.1.4)` | `ANGLE (Mesa, Vulkan 1.3.0 (llvmpipe ...), Mesa-25.2.4)` |
+| extensions | 142 | 184 |
+| `GL_EXT_texture_buffer` / `GL_OES_texture_buffer` | absent | **present**, `GL_MAX_TEXTURE_BUFFER_SIZE 134217728` |
+| ES 3.2 core base vertex | no | yes |
+
+So **defect A cannot be what fails on CI** - it is an artefact of the older
+local ANGLE. The CI frame nevertheless loses clouds *and* water with the same
+signature (`ssim=0.968845` against the local farm's 0.970127, opaque geometry
+exact), and defect B is the remaining named cause: the coefficient writer is in
+the OIT phase shader that *both* the cloud and the translucent-terrain
+programs link against, so one rejected shader empties both layers.
+
+That last step is **not yet directly confirmed on CI**, because the retrace APK
+is built `-Pmobilegl.logLevel=MOBILEGL_LOG_LEVEL_INFO`, where `MGLOG_E` is
+compiled out - the CI `mobilegl.log` carries 294 INFO lines and zero ERROR
+lines, so the shader-compile diagnostics never reach the artifact. Confirming it
+means replaying on an emulator with a debug-level trace APK and the pinned ANGLE
+variant (`tools/trace_replay/run_android_retrace_local.py`), or promoting
+shader-compile failures to a log level that survives an INFO build.
+
 There is therefore **no honest harness accommodation**: no
 `--avoid-angle-llvmpipe-*` flag can conjure a missing extension or make an
 illegal shader legal, so the fixture stays red on the Android DirectGLES lane.
-Fixing it means fixing the emitters - emulating buffer textures where the ES
-driver has none, and rewriting non-constant fragment-output indexing into a
-switch over constant indices - which is shared backend work, not harness work.
+Fixing it means fixing the emitters - rewriting non-constant fragment-output
+indexing into a switch over constant indices, and guarding the buffer-texture
+`require` on driver support - which is shared backend work, not harness work.
 
 Two earlier candidates remain correctly ruled out and should not be re-walked:
 per-attachment blend equations are both recorded and applied correctly on ANGLE
@@ -400,8 +429,11 @@ rather than at the composite draw itself.
 
 #### Which attachment, and which draw
 
-`--dump-fbo-attachments` on both stacks pins it to a single draw. Comparing the
-manifests at three call boundaries, over all 30 live framebuffers:
+`--dump-fbo-attachments` on both stacks pins it to a single draw. These numbers
+are from the local farm, so the first divergence they show is defect A's cloud
+draw; on CI, where clouds compile, the chain instead breaks one pass later at
+the coefficient accumulation. Comparing the manifests at three call boundaries,
+over all 30 live framebuffers:
 
 | call | what has just run | verdict |
 | --- | --- | --- |
