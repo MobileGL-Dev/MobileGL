@@ -26,6 +26,7 @@
 #include "SpirvPasses/RebaseInstanceIndexPass.h"
 #include "SpirvPasses/ZeroBaseVertexPass.h"
 #include "SpirvPasses/NormalizeRectCoordinatesPass.h"
+#include "SpirvPasses/Lower1DArrayImagesPass.h"
 #include "SpirvPasses/PrivateToEntryLocalPass.h"
 #include "SpirvPasses/StripUniformLocationsPass.h"
 #include "SpirvPasses/StripUboMemberRelaxedPrecisionPass.h"
@@ -822,6 +823,34 @@ namespace MobileGL {
                 optimizer.RegisterPass(NormalizeRectCoordinatesPass::CreateNormalizeRectCoordinatesPass());
 
                 return RunOptimizerChecked("LowerRectImages", optimizer, inputBinary, outputBinary);
+            }
+
+            bool ShaderCompiler::Lower1DArrayImagesForEssl(const Vector<Uint32>& inputBinary,
+                                                            Vector<uint32_t>& outputBinary) {
+                using namespace spvtools;
+
+                // Declined rather than half-translated: after the rewrite the image is a 2D
+                // array, so a size query on it yields three components where the shader consumes
+                // two. Handing back a differently-shaped size silently is worse than leaving the
+                // module alone and letting the driver say what it does not like - and unlike the
+                // access path there is no correct answer to substitute, because the ES texture
+                // genuinely has a height the GL one does not.
+                //
+                // MGLOG_I, deliberately: MGLOG_E/W are compiled out at the INFO level every CI,
+                // retrace and release build uses, and this is exactly the diagnostic that has to
+                // survive to explain the shader the driver is about to reject.
+                if (Lower1DArrayImagesPass::BinaryQueriesA1DArrayStorageImageSize(inputBinary)) {
+                    MGLOG_I("[spirv] Lower1DArrayImagesForEssl: the module queries the size of a 1D-array "
+                            "storage image, which cannot be answered in the 2D-array shape ES stores it in; "
+                            "leaving the module alone, and a strict ES driver will reject it");
+                    outputBinary = inputBinary;
+                    return true;
+                }
+
+                Optimizer optimizer(SPV_ENV_VULKAN_1_1);
+                optimizer.RegisterPass(Lower1DArrayImagesPass::CreateLower1DArrayImagesPass());
+
+                return RunOptimizerChecked("Lower1DArrayImagesForEssl", optimizer, inputBinary, outputBinary);
             }
 
             bool ShaderCompiler::RebaseInstanceIndexForVulkan(const Vector<Uint32>& inputBinary,

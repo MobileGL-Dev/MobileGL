@@ -33,7 +33,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             CombinedImageSampler,
             UniformTexelBuffer,
             StorageBuffer,
-            StorageImage
+            StorageImage,
+            // GLSL `imageBuffer` - a buffer texture reached through an IMAGE unit rather than a
+            // texture unit. Vulkan spells it VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER, which is a
+            // VkBufferView like UniformTexelBuffer and not a VkImageView like StorageImage: it is
+            // the one image uniform whose descriptor is a buffer. Appended, never inserted -
+            // DescriptorKeyHash mixes the enumerator's value.
+            StorageTexelBuffer
         };
 
         enum class CompileOptionBit : Uint {
@@ -103,6 +109,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             Vector<Int> samplerUniformLocationByBinding;
             Vector<TextureTarget> samplerTextureTargetByBinding;
             Vector<SamplerNumericDomain> samplerNumericDomainByBinding;
+            // Shared by StorageImage and StorageTexelBuffer bindings: a binding is one kind or
+            // the other, never both, and both need exactly the same thing - the format the
+            // shader declared, so the per-draw resolve can tell a typed declaration from a
+            // formatless one. Kept as one pair rather than two so the move operations below
+            // cannot drift out of sync with a field that only one kind populates.
             Vector<VkFormat> storageImageFormatByBinding;
             Vector<Bool> storageImageUsesBindingFormatByBinding;
             Vector<String> storageBlockNameByBinding;

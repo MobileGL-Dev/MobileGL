@@ -175,6 +175,14 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         Bool ResolveTexelBufferDescriptor(const MG_State::GLState::ProgramObject& program,
                                           const ProgramFactory::VkProgramObject& programObj, Uint32 binding,
                                           Uint32 frameIndex, VkBufferView& outBufferView);
+        // GLSL `imageBuffer`: the same VkBufferView descriptor as the sampled texel buffer above,
+        // but resolved from an IMAGE unit (glBindImageTexture) rather than a texture unit, and
+        // made GPU-resident-writable because the shader may store to it. No `element` parameter:
+        // an imageBuffer ARRAY is refused at program creation, so a binding is always one
+        // descriptor (see the array gate in RemapDescriptorBindingsForVulkan).
+        Bool ResolveStorageTexelBufferDescriptor(const MG_State::GLState::ProgramObject& program,
+                                                 const ProgramFactory::VkProgramObject& programObj, Uint32 binding,
+                                                 Uint32 frameIndex, VkBufferView& outBufferView);
         // `element` indexes a block INSTANCE array's descriptors; it is 0 for every ordinary
         // block. Each element resolves through its own GL storage block, and so its own GL
         // binding point, buffer and glBindBufferRange window.

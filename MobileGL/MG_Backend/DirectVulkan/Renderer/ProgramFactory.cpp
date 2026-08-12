@@ -1721,6 +1721,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 return ProgramFactory::DescriptorBindingKind::CombinedImageSampler;
             case SPV_REFLECT_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER:
                 return ProgramFactory::DescriptorBindingKind::UniformTexelBuffer;
+            case SPV_REFLECT_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER:
+                return ProgramFactory::DescriptorBindingKind::StorageTexelBuffer;
             case SPV_REFLECT_DESCRIPTOR_TYPE_STORAGE_BUFFER:
                 return ProgramFactory::DescriptorBindingKind::StorageBuffer;
             case SPV_REFLECT_DESCRIPTOR_TYPE_STORAGE_IMAGE:
@@ -1750,6 +1752,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             }
             if (kind == ProgramFactory::DescriptorBindingKind::CombinedImageSampler ||
                 kind == ProgramFactory::DescriptorBindingKind::UniformTexelBuffer ||
+                kind == ProgramFactory::DescriptorBindingKind::StorageTexelBuffer ||
                 kind == ProgramFactory::DescriptorBindingKind::StorageImage) {
                 const auto arraySuffix = name.find("[0]");
                 if (arraySuffix != String::npos) {
@@ -1839,8 +1842,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                     // UniformManager::BindProgramUniformBuffers: UBO instance arrays
                     // (uniform Block {...} b[N];), storage-block instance arrays, image uniform
                     // arrays, and combined-image-sampler arrays (uniform sampler2D s[N];).
-                    // Anything else - a uniform TEXEL buffer array is the one remaining kind -
-                    // must fail program creation cleanly rather than continue with corrupt state.
+                    // Anything else - the two TEXEL buffer kinds are what remain, samplerBuffer[N]
+                    // and imageBuffer[N] - must fail program creation cleanly rather than continue
+                    // with corrupt state. Their per-draw path writes pTexelBufferView as the
+                    // address of a vector element sized for one descriptor per binding, so an
+                    // array would not merely be unresolved, it would dangle.
                     //
                     // Getting listed here is not cosmetic: a kind that is rejected leaves
                     // GetOrCreateProgram's MOBILEGL_ASSERT(remapOk) as the only complaint, and
@@ -2661,6 +2667,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 const auto descriptorKind = ReflectDescriptorTypeToBindingKind(sampler->descriptor_type);
                 if (descriptorKind != DescriptorBindingKind::CombinedImageSampler &&
                     descriptorKind != DescriptorBindingKind::UniformTexelBuffer &&
+                    descriptorKind != DescriptorBindingKind::StorageTexelBuffer &&
                     descriptorKind != DescriptorBindingKind::StorageImage &&
                     descriptorKind != DescriptorBindingKind::StorageBuffer) {
                     continue;
@@ -2790,6 +2797,29 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                     }
                 }
 
+                if (descriptorKind == DescriptorBindingKind::StorageTexelBuffer) {
+                    // Only the declared format is recorded, and only so the per-draw resolve can
+                    // prefer it over the one glBindImageTexture named. Everything the StorageImage
+                    // branch above does about ARRAYS is deliberately absent: an imageBuffer array
+                    // is refused outright by the array gate in RemapDescriptorBindingsForVulkan,
+                    // exactly as a samplerBuffer array is, so bindingDescriptorCounts stays at the
+                    // default 1 and the descriptor write below may take the address of a vector
+                    // element without reserving room for extra elements.
+                    const VkFormat reflectedFormat =
+                        ConvertSpirvImageFormatToVkFormat(sampler->image.image_format);
+                    VkFormat& existingFormat = entry.storageImageFormatByBinding[binding];
+                    MOBILEGL_ASSERT(existingFormat == VK_FORMAT_UNDEFINED ||
+                                        reflectedFormat == VK_FORMAT_UNDEFINED ||
+                                        existingFormat == reflectedFormat,
+                                    "ProgramFactory::ReflectLayout: storage texel buffer binding %u ('%s') "
+                                    "has conflicting reflected formats (%d vs %d)",
+                                    binding, uniformName.c_str(), static_cast<Int>(existingFormat),
+                                    static_cast<Int>(reflectedFormat));
+                    if (existingFormat == VK_FORMAT_UNDEFINED) {
+                        existingFormat = reflectedFormat;
+                    }
+                }
+
                 const TextureTarget target = UniformTypeToTextureTarget(uniformType);
                 MOBILEGL_ASSERT(target != TextureTarget::Unknown,
                                 "ProgramFactory::ReflectLayout: failed to resolve texture target for '%s'",
@@ -2867,6 +2897,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 entry.dynamicBindings.push_back(binding);
             } else if (kind == DescriptorBindingKind::UniformTexelBuffer) {
                 layoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER;
+            } else if (kind == DescriptorBindingKind::StorageTexelBuffer) {
+                layoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER;
             } else if (kind == DescriptorBindingKind::StorageBuffer) {
                 layoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
             } else if (kind == DescriptorBindingKind::StorageImage) {

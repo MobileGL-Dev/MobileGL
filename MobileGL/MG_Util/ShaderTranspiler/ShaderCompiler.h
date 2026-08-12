@@ -89,6 +89,14 @@ namespace MobileGL {
                 // size and rewrites the image type to 2D. See NormalizeRectCoordinatesPass for
                 // what it declines and why.
                 static bool LowerRectImages(const Vector<Uint32>& inputBinary, Vector<uint32_t>& outputBinary);
+                // GL_TEXTURE_1D_ARRAY storage images rewritten to the 2D-array shape the texture
+                // is actually stored in on ES, with the layer moved from the coordinate's second
+                // component to its third. DirectGLES transpile path only - Vulkan binds a real
+                // VK_IMAGE_VIEW_TYPE_1D_ARRAY and must see the module unchanged. Copies the input
+                // through untouched when the module declares no such image, which is every shader
+                // but a handful. See Lower1DArrayImagesPass for what it declines and why.
+                static bool Lower1DArrayImagesForEssl(const Vector<Uint32>& inputBinary,
+                                                      Vector<uint32_t>& outputBinary);
                 static bool RebaseInstanceIndexForVulkan(const Vector<Uint32>& inputBinary,
                                                          Vector<uint32_t>& outputBinary);
                 // Builds the non-indexed-draw variant of a vertex shader: every gl_BaseVertex
