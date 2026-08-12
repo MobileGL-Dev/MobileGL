@@ -43,6 +43,17 @@ namespace MobileGL {
                 // devices lacking GL_NV_shader_noperspective_interpolation. See EmulateNoPerspectivePass.
                 static bool EmulateNoPerspectiveForEssl(const Vector<Uint32>& inputBinary,
                                                         Vector<uint32_t>& outputBinary);
+                // Makes every index into a fragment-output array a constant integral
+                // expression, which is what GLSL ES requires and SPIR-V does not. Runs the
+                // stock folding chain first (loop unrolling folds the loop-derived indices
+                // real shaders use), and lowers whatever is left - a genuinely dynamic index -
+                // to a switch over the array's range. DirectGLES transpile path only: the
+                // original module is legal for Vulkan, and no other stage is constrained this
+                // way. Copies the input through untouched when no fragment output is indexed
+                // dynamically, which is every shader but a handful.
+                // See LegalizeFragmentOutputIndexPass.
+                static bool LegalizeFragmentOutputIndexingForEssl(const Vector<Uint32>& inputBinary,
+                                                                  Vector<uint32_t>& outputBinary);
                 // Rebases loads of the InstanceIndex builtin to (InstanceIndex - BaseInstance) so
                 // shaders see GL's zero-based gl_InstanceID. Vertex shaders only; DirectVulkan
                 // backend only (glslang's relaxed mode aliases gl_InstanceID to gl_InstanceIndex,
