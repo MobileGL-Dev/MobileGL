@@ -20,6 +20,77 @@ set(MOBILEGL_VULKAN_LIBRARY "" CACHE FILEPATH "Vulkan loader/MoltenVK library to
 if (ANDROID)
     set(MOBILEGL_BUILD_TEST       OFF CACHE BOOL "Build MobileGL tests"      FORCE)
     set(MOBILEGL_BUILD_BENCHMARK  OFF CACHE BOOL "Build MobileGL benchmarks" FORCE)
+
+    # ------- Android API level policy: exactly 26, decided here and only here -------
+    # MobileGL ships against API 26. That is a product constraint, so the build
+    # refuses to proceed at any other level rather than quietly producing a
+    # library with a different libc contract.
+    #
+    # This has to live at configure time because the level cannot be corrected
+    # from a source header. A `#define __ANDROID_API__ 26` in a common header
+    # only rewrites the macro for the bionic headers that happen to be included
+    # after it; any libc++ header pulled in earlier has already latched its
+    # feature macros at the real configure-time level. libc++ and bionic then
+    # disagree about which symbols exist - libc++ calls e.g.
+    # pthread_cond_clockwait while bionic, re-read at the lowered level, has
+    # hidden its declaration. MobileGL/Defines.h carried exactly that pin from
+    # the first commit until it was removed; this guard is what replaces it.
+    #
+    # Read the level back from the compiler target triple first. Its trailing
+    # number (aarch64-none-linux-android26) is precisely what clang turns into
+    # __ANDROID_API__, so it cannot disagree with the compile itself, and it is
+    # already past every NDK normalisation step - codename aliases, "latest",
+    # and per-ABI minimum pull-ups. ANDROID_PLATFORM_LEVEL is the fallback for
+    # generators/languages where the triple variable is not populated.
+    #
+    # Note CMAKE_SYSTEM_VERSION is deliberately NOT consulted: it holds the API
+    # level only under the NDK's newer toolchain path, and is a meaningless 1
+    # when ANDROID_USE_LEGACY_TOOLCHAIN_FILE is on (which is what AGP has been
+    # defaulting to). Reading it would fail every legacy-mode build.
+    set(MOBILEGL_ANDROID_API_LEVEL 26)
+
+    set(_mobilegl_android_api "")
+    foreach (_mobilegl_api_triple "${CMAKE_CXX_COMPILER_TARGET}"
+                                  "${CMAKE_C_COMPILER_TARGET}")
+        if (NOT _mobilegl_android_api AND
+            _mobilegl_api_triple MATCHES "-android([0-9]+)$")
+            set(_mobilegl_android_api "${CMAKE_MATCH_1}")
+        endif()
+    endforeach()
+
+    foreach (_mobilegl_api_var ANDROID_PLATFORM_LEVEL ANDROID_NATIVE_API_LEVEL
+                               ANDROID_PLATFORM)
+        if (NOT _mobilegl_android_api AND ${_mobilegl_api_var})
+            string(REGEX REPLACE "^android-" ""
+                   _mobilegl_android_api "${${_mobilegl_api_var}}")
+        endif()
+    endforeach()
+
+    if (NOT _mobilegl_android_api MATCHES "^[0-9]+$")
+        message(FATAL_ERROR
+            "MobileGL: could not determine the Android API level (got "
+            "\"${_mobilegl_android_api}\"). Configure with the NDK toolchain "
+            "file and -DANDROID_PLATFORM=android-${MOBILEGL_ANDROID_API_LEVEL}.")
+    elseif (NOT _mobilegl_android_api EQUAL MOBILEGL_ANDROID_API_LEVEL)
+        message(FATAL_ERROR
+            "MobileGL targets Android API ${MOBILEGL_ANDROID_API_LEVEL} exactly, "
+            "but this build resolved to API ${_mobilegl_android_api}.\n"
+            "Configure with -DANDROID_PLATFORM=android-${MOBILEGL_ANDROID_API_LEVEL} "
+            "(gradle builds get this from minSdk ${MOBILEGL_ANDROID_API_LEVEL}, so "
+            "check that minSdk instead of adding an override).\n"
+            "Raising the level is not a local build choice: it changes which libc "
+            "symbols the shipped library binds to, and the resulting .so would "
+            "fail to load on the API ${MOBILEGL_ANDROID_API_LEVEL} devices "
+            "MobileGL supports. If you genuinely need another level for a "
+            "standalone tool, build that tool as its own CMake project - do not "
+            "relax this check.")
+    endif()
+
+    message(STATUS "MobileGL: Android API level ${_mobilegl_android_api}")
+
+    unset(_mobilegl_android_api)
+    unset(_mobilegl_api_var)
+    unset(_mobilegl_api_triple)
 endif()
 
 option(MOBILEGL_ENABLE_LTO "Build with ThinLTO/IPO" OFF)

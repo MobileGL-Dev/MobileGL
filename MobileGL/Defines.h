@@ -9,10 +9,20 @@
 #pragma once
 
 // ============== Platform-specific definitions and macros ============== //
-#ifdef __ANDROID__
-#undef __ANDROID_API__
-#define __ANDROID_API__ 26 // force Android API level to 26 for compatibility
-#endif
+// No __ANDROID_API__ pin here on purpose. The effective API level is owned by
+// the build system (gradle minSdk 26 -> -DANDROID_PLATFORM=android-26, enforced
+// by the configure-time guard in CMakeLists.txt), not by a macro.
+//
+// History: this used to `#define __ANDROID_API__ 26` to *raise* the level back
+// when the build configured something lower, so that pthread_getname_np (which
+// bionic guards with __INTRODUCED_IN(26)) would be declared. Once a later
+// change added an `#undef` in front of it, the same line started *lowering* the
+// level whenever the build configured higher than 26 - and that is an
+// include-order split-brain, not a compatibility knob: a TU that includes any
+// libc++ header before Includes.h latches libc++'s feature macros at the
+// configure-time level, and only the bionic headers pulled in afterwards see
+// the lowered value. The two halves then disagree (e.g. libc++ believes
+// pthread_cond_clockwait exists while bionic has since hidden its declaration).
 
 #ifdef _WIN32
 #ifndef NOMINMAX
