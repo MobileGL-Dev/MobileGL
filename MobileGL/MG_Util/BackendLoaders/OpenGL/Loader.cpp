@@ -1176,12 +1176,20 @@ namespace MobileGL::MG_Util::BackendLoader {
             // program build, and as its own driver POST row - because GL offers no way to say
             // "buffer textures exist but cannot work".
             if (caps.TextureBufferSupport == Tier::None) {
-                MGLOG_I("    Buffer textures: UNSUPPORTED (ES %d.%d core needs 3.2, and neither "
-                        "GL_EXT_texture_buffer nor GL_OES_texture_buffer is present). Any shader "
-                        "sampling a samplerBuffer will fail to compile, and MobileGL keeps "
-                        "advertising GL_MAX_TEXTURE_BUFFER_SIZE = %d because a GL 4.x context may "
-                        "not report 0.",
-                        caps.GLESVersion.Major, caps.GLESVersion.Minor, maxTextureBufferSize);
+                // Two ways to land here, and they are worth telling apart: the ordinary one (too
+                // old, no extension) and the pathological one (the driver says it has them but
+                // no entry point resolved), which is a driver or loader fault, not a missing
+                // feature.
+                const Bool claimsSupport = esAtLeast32 || hasExtTextureBuffer || hasOesTextureBuffer;
+                MGLOG_I("    Buffer textures: UNSUPPORTED (%s). Any shader sampling a "
+                        "samplerBuffer will fail to compile, and MobileGL keeps advertising "
+                        "GL_MAX_TEXTURE_BUFFER_SIZE = %d because a GL 4.x context may not report 0.",
+                        claimsSupport
+                            ? "this driver advertises buffer textures but no glTexBuffer entry "
+                              "point resolved, so none of them can be called"
+                            : "ES core needs 3.2, and neither GL_EXT_texture_buffer nor "
+                              "GL_OES_texture_buffer is present",
+                        maxTextureBufferSize);
             }
         }
         if (caps.SupportsTextureFilterAnisotropy) {
