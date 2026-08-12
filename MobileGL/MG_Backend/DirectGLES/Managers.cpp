@@ -4346,6 +4346,22 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     effectiveSpirv = &rectLoweredSpirv;
                 }
 
+                // GLSL ES demands a constant integral expression to index a fragment output
+                // array; SPIR-V does not, so a shader that writes coeff[i] from a loop
+                // reaches SPIRV-Cross intact and comes out as ESSL a strict driver rejects
+                // outright ("array indexes for fragment outputs must be constant integral
+                // expressions"), linking no program and silently no-oping every draw that
+                // uses it. Mesa accepts it, ANGLE does not - which is the whole of the
+                // improved-transparency-minecraft-26.3 failure. Fold or lower the index here,
+                // on the ESSL path only: the same module is legal for DirectVulkan.
+                Vector<unsigned int> outputIndexSpirv;
+                if (glShaderType == GL_FRAGMENT_SHADER &&
+                    MG_Util::ShaderTranspiler::ShaderCompiler::LegalizeFragmentOutputIndexingForEssl(
+                        *effectiveSpirv, outputIndexSpirv) &&
+                    !outputIndexSpirv.empty()) {
+                    effectiveSpirv = &outputIndexSpirv;
+                }
+
                 MG_Util::ShaderTranspiler::SpvcSession spvcSession(*effectiveSpirv,
                     MG_Util::ShaderTranspiler::SessionUsageBit::Transpile);
 
@@ -4435,7 +4451,18 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     Vector<GLchar> log(static_cast<SizeT>(logLength) + 1, '\0');
                     g_GLESFuncs.glGetShaderInfoLog(backendShaderId, logLength, nullptr, log.data());
                     log.back() = '\0';
-                    MGLOG_E("Shader compilation failed for backend ID %u: %s", backendShaderId, log.data());
+                    // MGLOG_I, deliberately. Every CI, retrace and release build compiles at
+                    // MOBILEGL_LOG_LEVEL_INFO, where MGLOG_E and MGLOG_W expand to nothing
+                    // (Log.h orders DEBUG < WARN < ERROR < INFO), so this diagnostic used to
+                    // exist only in debug builds: the Android retrace artifact carried 294
+                    // INFO lines and zero ERROR lines while two generated shaders were being
+                    // rejected outright, and the lane could not say why it was rendering an
+                    // empty translucent layer. A shader the driver refuses is never noise.
+                    MGLOG_I("Shader compilation failed. State program ID: %u, stage: %s, backend shader ID: "
+                            "%u, driver log: %s",
+                            stateProgramObject->GetExternalIndex(),
+                            MG_Util::ConvertGLEnumToString(glShaderType).c_str(), backendShaderId,
+                            log.data());
                     m_backendProgramUsable = false;
                     // Nothing will ever attach this one, so nothing else can free it.
                     g_GLESFuncs.glDeleteShader(backendShaderId);
@@ -4497,8 +4524,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 Vector<GLchar> log(static_cast<SizeT>(logLength) + 1, '\0');
                 g_GLESFuncs.glGetProgramInfoLog(m_backendProgramId, logLength, nullptr, log.data());
                 log.back() = '\0';
-                MGLOG_E("Program %u linking failed for %u: %s", stateProgramObject->GetExternalIndex(),
-                        m_backendProgramId, log.data());
+                // MGLOG_I for the same reason as the compile failure above: a program that
+                // links nothing no-ops every draw that uses it, and that has to be readable
+                // in an INFO-level artifact.
+                MGLOG_I("Program linking failed. State program ID: %u, backend program ID: %u, driver log: %s",
+                        stateProgramObject->GetExternalIndex(), m_backendProgramId, log.data());
             } else {
                 MGLOG_D("Program linked successfully. ID: %u", m_backendProgramId);
             }
