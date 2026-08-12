@@ -743,6 +743,150 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         return true;
     }
 
+    // GLSL `imageBuffer`. The one image uniform whose Vulkan descriptor is a VkBufferView rather
+    // than a VkImageView, so it is half ResolveStorageImageDescriptor (the resource comes from an
+    // IMAGE unit, i.e. from glBindImageTexture, not from a texture unit) and half
+    // ResolveTexelBufferDescriptor (the descriptor is a buffer view over the GL buffer the
+    // texture is attached to).
+    //
+    // Before this existed the descriptor kind reflected as SPV_REFLECT_DESCRIPTOR_TYPE_STORAGE_-
+    // TEXEL_BUFFER and fell into ReflectDescriptorTypeToBindingKind's `default:`, whose only
+    // complaint is an assert that compiles out above DEBUG - so a release build declared no
+    // binding at all for a uniform the shader still read, and lavapipe segfaulted inside pipeline
+    // creation on the JIT worker thread. KHR-GL44.multi_bind.dispatch_bind_image_textures is the
+    // case that carries it.
+    Bool UniformManager::ResolveStorageTexelBufferDescriptor(const MG_State::GLState::ProgramObject& program,
+                                                             const ProgramFactory::VkProgramObject& programObj,
+                                                             Uint32 binding, Uint32 frameIndex,
+                                                             VkBufferView& outBufferView) {
+        outBufferView = VK_NULL_HANDLE;
+        MOBILEGL_ASSERT(m_bufferManager != nullptr, "ResolveStorageTexelBufferDescriptor: buffer manager is null");
+        MOBILEGL_ASSERT(MG_State::pGLContext != nullptr, "ResolveStorageTexelBufferDescriptor: GL context is null");
+        MOBILEGL_ASSERT(frameIndex < m_frames.size(),
+                        "ResolveStorageTexelBufferDescriptor: frame index out of range");
+        MOBILEGL_ASSERT(binding < programObj.samplerUniformLocationByBinding.size(),
+                        "ResolveStorageTexelBufferDescriptor: binding %u out of range", binding);
+
+        const Int location = programObj.samplerUniformLocationByBinding[binding];
+        if (location < 0) {
+            MGLOG_E("ResolveStorageTexelBufferDescriptor: binding %u ('%s') has no uniform location", binding,
+                    programObj.samplerNameByBinding[binding].c_str());
+            return false;
+        }
+        const Int imageUnit = program.GetUniformSamplerOrImageUnitIndex(static_cast<Uint>(location));
+        if (imageUnit < 0 || imageUnit >= MG_State::GLState::TextureState::MAX_TEXTURE_IMAGE_UNITS) {
+            MGLOG_E("ResolveStorageTexelBufferDescriptor: image unit %d out of range for binding %u", imageUnit,
+                    binding);
+            return false;
+        }
+
+        auto& imageBinding = MG_State::pGLContext->GetImageTextureBinding(imageUnit);
+        const auto& texture = imageBinding.Texture;
+        if (texture == nullptr) {
+            MGLOG_E("ResolveStorageTexelBufferDescriptor: image unit %d is unbound for binding %u", imageUnit,
+                    binding);
+            return false;
+        }
+        if (texture->GetStorageType() != TextureStorageType::Buffer ||
+            texture->GetTarget() != TextureTarget::TextureBuffer) {
+            MGLOG_E("ResolveStorageTexelBufferDescriptor: binding %u ('%s') expected a texture buffer on image "
+                    "unit %d, got textureId=%u target=%d storage=%d",
+                    binding, programObj.samplerNameByBinding[binding].c_str(), imageUnit,
+                    texture->GetExternalIndex(), static_cast<Int>(texture->GetTarget()),
+                    static_cast<Int>(texture->GetStorageType()));
+            return false;
+        }
+
+        auto* textureBuffer = static_cast<MG_State::GLState::TextureObjectBuffer*>(texture.get());
+        const auto& bufferObject = textureBuffer->GetBufferBindingSlot().GetBoundObject();
+        if (bufferObject == nullptr) {
+            MGLOG_E("ResolveStorageTexelBufferDescriptor: texture buffer on image unit %d has no GL buffer bound",
+                    imageUnit);
+            return false;
+        }
+
+        // Unlike the sampled texel buffer, the shader MAY write this one, and those writes land
+        // in GPU memory behind the frontend's CPU shadow - which is what MapBuffer and
+        // GetBufferSubData read. Same two calls, and for the same reason, as the storage-block
+        // path above - but only the residency is unconditional. Marking a GL_READ_ONLY binding
+        // GPU-written would make the next map or readback wait for a dispatch that could not have
+        // changed a byte of it.
+        bufferObject->EnsureGpuResidentStorage();
+        if (imageBinding.Access != GL_READ_ONLY) {
+            bufferObject->MarkGpuWritten();
+        }
+
+        BufferSlice slice{};
+        if (!m_bufferManager->AcquireResidentSlice(BufferKind::TextureBuffer, bufferObject, slice) ||
+            !slice.IsValid()) {
+            MGLOG_E("ResolveStorageTexelBufferDescriptor: failed to sync GL buffer %u for texture buffer %u",
+                    bufferObject->GetExternalIndex(), texture->GetExternalIndex());
+            return false;
+        }
+
+        // The format the SHADER declared wins over the one glBindImageTexture named, on the same
+        // policy as a storage image: a typed `layout(r32ui) uniform uimageBuffer` must be read as
+        // r32ui whatever the texture's own attachment format says. Falling back, in order:
+        // reflected format, then the bind format, then the texture's attached format.
+        MOBILEGL_ASSERT(binding < programObj.storageImageFormatByBinding.size(),
+                        "ResolveStorageTexelBufferDescriptor: binding %u has no reflected format slot", binding);
+        const auto internalFormat = textureBuffer->GetFormat();
+        const VkFormat resourceFormat = MG_Util::ConvertTextureInternalFormatToVkEnum(internalFormat);
+        const VkFormat reflectedFormat = programObj.storageImageFormatByBinding[binding];
+        VkFormat vkFormat = reflectedFormat;
+        if (vkFormat == VK_FORMAT_UNDEFINED && imageBinding.Format != 0) {
+            vkFormat = MG_Util::ConvertTextureInternalFormatToVkEnum(
+                MG_Util::ConvertGLEnumToTextureInternalFormat(imageBinding.Format));
+        }
+        if (vkFormat == VK_FORMAT_UNDEFINED) {
+            vkFormat = resourceFormat;
+        }
+        if (vkFormat == VK_FORMAT_UNDEFINED) {
+            MGLOG_E("ResolveStorageTexelBufferDescriptor: unsupported image buffer format (internal=%d bind=0x%x)",
+                    static_cast<Int>(internalFormat), imageBinding.Format);
+            return false;
+        }
+
+        // Sized from the TEXTURE's attached format even though the view may carry a different
+        // one. That is not a shortcut: GL requires the shader's format qualifier, the format
+        // passed to glBindImageTexture and the texture's own internal format to belong to the
+        // same format CLASS (GL 4.6 core, table 8.27), and every member of a class has the same
+        // texel size. So the three can disagree on interpretation and never on bytes - which is
+        // what the range below has to be a whole multiple of.
+        const VkDeviceSize texelSize =
+            static_cast<VkDeviceSize>(MG_Util::GetSizedInternalFormatSizeInBytes(internalFormat));
+        const VkDeviceSize rangeOffset = static_cast<VkDeviceSize>(textureBuffer->GetBufferRangeOffset());
+        const VkDeviceSize rangeSize = static_cast<VkDeviceSize>(textureBuffer->GetBufferRangeSizeInBytes());
+        VkDeviceSize viewRange = std::min(rangeSize, slice.size > rangeOffset ? slice.size - rangeOffset : 0);
+        if (texelSize > 0) {
+            viewRange = (viewRange / texelSize) * texelSize;
+        }
+        if (viewRange == 0) {
+            MGLOG_E("ResolveStorageTexelBufferDescriptor: texture buffer %u has empty view range",
+                    texture->GetExternalIndex());
+            return false;
+        }
+
+        VkBufferViewCreateInfo viewInfo{};
+        viewInfo.sType = VK_STRUCTURE_TYPE_BUFFER_VIEW_CREATE_INFO;
+        viewInfo.buffer = slice.buffer;
+        viewInfo.format = vkFormat;
+        viewInfo.offset = slice.offset + rangeOffset;
+        viewInfo.range = viewRange;
+
+        VkBufferView bufferView = VK_NULL_HANDLE;
+        const VkResult result = vkCreateBufferView(m_device, &viewInfo, nullptr, &bufferView);
+        if (result != VK_SUCCESS || bufferView == VK_NULL_HANDLE) {
+            MGLOG_E("ResolveStorageTexelBufferDescriptor: vkCreateBufferView failed result=%d format=%d range=%zu",
+                    result, static_cast<Int>(vkFormat), static_cast<SizeT>(viewRange));
+            return false;
+        }
+
+        m_frames[frameIndex].texelBufferViews.push_back(bufferView);
+        outBufferView = bufferView;
+        return true;
+    }
+
     Bool UniformManager::ResolveStorageBufferDescriptor(const MG_State::GLState::ProgramObject& program,
                                                         const ProgramFactory::VkProgramObject& programObj,
                                                         Uint32 binding, Uint32 element,
@@ -1267,7 +1411,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
 
         const Uint32 descriptorCount = static_cast<Uint32>(descriptorCount64);
-        VkDescriptorPoolSize poolSizes[5]{};
+        VkDescriptorPoolSize poolSizes[6]{};
         poolSizes[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
         poolSizes[0].descriptorCount = descriptorCount;
         poolSizes[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
@@ -1278,6 +1422,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         poolSizes[3].descriptorCount = descriptorCount;
         poolSizes[4].type = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
         poolSizes[4].descriptorCount = descriptorCount;
+        poolSizes[5].type = VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER;
+        poolSizes[5].descriptorCount = descriptorCount;
 
         VkDescriptorPoolCreateInfo poolInfo{};
         poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
@@ -1578,6 +1724,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // is reachable wherever m_maxBindings is small (it clamps to ~16 on Adreno and Mali),
         // which is exactly where a 7-element CTS sampler array does not fit the slack.
         imageInfos.reserve(m_maxBindings + arrayDescriptorExtra);
+        // Exact, and safe only because it is: BOTH texel kinds (samplerBuffer and imageBuffer)
+        // refuse descriptor arrays at program creation, so each contributes at most one view and
+        // the total cannot exceed the binding count. The branches below take the address of
+        // back(), so making a texel kind array-capable without also giving this the surplus
+        // imageInfos gets would dangle every pTexelBufferView already recorded in `writes`.
         texelBufferViews.reserve(m_maxBindings);
         dynamicOffsets.reserve(programObj.dynamicBindings.size() + uboArrayExtra);
 
@@ -1642,6 +1793,25 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 texelBufferViews.push_back(bufferView);
                 fastRebindKindsEligible = false;
                 write.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER;
+                write.pTexelBufferView = &texelBufferViews.back();
+                writes.push_back(write);
+            } else if (kind == ProgramFactory::DescriptorBindingKind::StorageTexelBuffer) {
+                // Shares texelBufferViews with the sampled kind above, and may do so safely for
+                // the same reason: neither kind can be an array, so each contributes exactly one
+                // element and the reserve of m_maxBindings cannot be outrun - which is what keeps
+                // the &back() below from dangling when a later binding pushes.
+                VkBufferView bufferView = VK_NULL_HANDLE;
+                if (!ResolveStorageTexelBufferDescriptor(program, programObj, binding, frameIndex, bufferView) ||
+                    bufferView == VK_NULL_HANDLE) {
+                    MGLOG_E("UniformDescriptorBinder::BindProgramUniformBuffers failed: image buffer binding %u "
+                            "has no valid descriptor",
+                            binding);
+                    return false;
+                }
+
+                texelBufferViews.push_back(bufferView);
+                fastRebindKindsEligible = false;
+                write.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER;
                 write.pTexelBufferView = &texelBufferViews.back();
                 writes.push_back(write);
             } else if (kind == ProgramFactory::DescriptorBindingKind::StorageBuffer) {

@@ -21,6 +21,7 @@
 #include <MG_Util/ShaderTranspiler/ShaderCompiler.h>
 #include <MG_Util/ShaderTranspiler/ShaderSourceProcessor.h>
 #include <MG_Util/ShaderTranspiler/SpirvPasses/LegalizeFragmentOutputIndexPass.h>
+#include <MG_Util/ShaderTranspiler/SpirvPasses/Lower1DArrayImagesPass.h>
 #include <MG_Util/ShaderTranspiler/SpirvPasses/RenameSamplerFunctionParameterPass.h>
 #include <MG_Util/ShaderTranspiler/Types.h>
 #include <MG_Util/ShaderTranspiler/glslang/UniformTraverser.h>
@@ -3480,4 +3481,211 @@ void main() { fragColor = vec4(texelFetch(Data, 3)); }
         << "ES 3.2 has buffer textures in core; requiring the extension there would be wrong:\n"
         << essl320;
 
+}
+
+namespace {
+    // OpTypeImage words: result id (+1), sampled type (+2), Dim (+3), Depth (+4), Arrayed (+5),
+    // MS (+6), Sampled (+7). Dim::Dim1D == 0, and Sampled == 2 is a storage image.
+    SizeT Count1DArrayStorageImageTypes(const Vector<Uint32>& spirv) {
+        constexpr unsigned kOpTypeImage = 25, kDim1D = 0;
+        SizeT count = 0;
+        for (SizeT i = 5; i < spirv.size();) {
+            const unsigned wordCount = spirv[i] >> 16;
+            const unsigned opcode = spirv[i] & 0xFFFFu;
+            if (wordCount == 0 || i + wordCount > spirv.size()) break;
+            if (opcode == kOpTypeImage && wordCount >= 8 && spirv[i + 3] == kDim1D && spirv[i + 5] == 1u &&
+                spirv[i + 7] == 2u) {
+                ++count;
+            }
+            i += wordCount;
+        }
+        return count;
+    }
+
+    const char* k1DArrayImageCompute = R"(#version 440 core
+layout (local_size_x = 1) in;
+layout (location = 0, r32ui) readonly uniform uimage1DArray i0;
+layout (std430, binding = 0) buffer SSB { uint sum; } ssb;
+void main() { ssb.sum = imageLoad(i0, ivec2(2, 3)).r; }
+)";
+} // namespace
+
+// The negative control, and the whole reason the pass exists: SPIRV-Cross's ES emulation of 1D
+// images does not ask whether the type is arrayed, so it wraps an already-two-component
+// coordinate in a two-component constructor. Pinning the upstream behaviour here means that if a
+// future SPIRV-Cross bump fixes it, this test fails and says so, rather than the pass quietly
+// becoming dead weight.
+TEST_F(ProgramUtilTest, SpirvCrossEmitsAMalformedCoordinateFor1DArrayImages) {
+    using namespace MG_Util::ShaderTranspiler;
+
+    const Vector<Uint32> spirv = BuildSpirvForStage(k1DArrayImageCompute, GL_COMPUTE_SHADER);
+    ASSERT_FALSE(spirv.empty());
+    ASSERT_EQ(Count1DArrayStorageImageTypes(spirv), 1u)
+        << "glslang no longer emits a Dim1D/Arrayed/Sampled=2 image for uimage1DArray";
+
+    const String essl = DecompileToEssl(spirv);
+    ASSERT_FALSE(essl.empty());
+    EXPECT_NE(essl.find("ivec2(ivec2("), String::npos)
+        << "SPIRV-Cross is expected to emit ivec2(ivec2(...), 0) here - three components in a "
+           "two-component constructor, which every ES driver rejects. If this no longer happens, "
+           "Lower1DArrayImagesForEssl may no longer be needed:\n"
+        << essl;
+}
+
+// The fix: the type becomes a 2D array and the coordinate becomes three components, so
+// SPIRV-Cross's 1D path never fires and the emitted ESSL is something a driver accepts.
+TEST_F(ProgramUtilTest, Lower1DArrayImagesRewritesTheTypeAndWidensTheCoordinate) {
+    using namespace MG_Util::ShaderTranspiler;
+
+    const Vector<Uint32> raw = BuildSpirvForStage(k1DArrayImageCompute, GL_COMPUTE_SHADER);
+    ASSERT_FALSE(raw.empty());
+
+    // Through the shared chain first, exactly as the DirectGLES transpile path does: the pass
+    // runs on sanitized bytes, and the explicit uniform LOCATION this fixture carries (the
+    // conformance case's own spelling) is illegal on UniformConstant storage until
+    // StripUniformLocationsPass has removed it. Validating raw glslang output would latch that
+    // pre-existing property against this pass.
+    Vector<Uint32> spirv;
+    ASSERT_TRUE(ShaderCompiler::SanitizeAndOptimizeBinary(raw, spirv));
+    ASSERT_EQ(Count1DArrayStorageImageTypes(spirv), 1u)
+        << "the shared chain must leave the 1D-array image for this pass to handle";
+
+    SpirvValidationScope validationOn(true);
+    const Uint64 failuresBefore = ShaderCompiler::SpirvValidationFailureCount();
+
+    Vector<Uint32> lowered;
+    ASSERT_TRUE(ShaderCompiler::Lower1DArrayImagesForEssl(spirv, lowered));
+    ASSERT_FALSE(lowered.empty());
+
+    EXPECT_EQ(Count1DArrayStorageImageTypes(lowered), 0u)
+        << "no 1D-array storage image type may survive the pass:\n"
+        << DisassembleSpirv(lowered);
+    EXPECT_EQ(ShaderCompiler::SpirvValidationFailureCount(), failuresBefore)
+        << "the lowered module must stay validator-clean";
+
+    const String essl = DecompileToEssl(lowered);
+    ASSERT_FALSE(essl.empty());
+    EXPECT_NE(essl.find("uimage2DArray"), String::npos)
+        << "the image must be declared as the 2D array the texture is stored as:\n" << essl;
+    EXPECT_EQ(essl.find("ivec2(ivec2("), String::npos)
+        << "the malformed constructor must be gone:\n" << essl;
+    // The ORDER is the whole point, and it is what a widening that merely appended the 0 would
+    // get wrong while still producing a three-component constructor that compiles. The fixture
+    // reads (u=2, layer=3), and the ES 2D array holds height 1 with the layers in depth
+    // (TextureImpl::GetBackendUploadSize), so the only correct spelling is (2, 0, 3).
+    EXPECT_NE(essl.find("ivec3(2, 0, 3)"), String::npos)
+        << "the layer must land in the third component and Y must be 0; ivec3(2, 3, 0) would read "
+           "row 3 of a one-row texture and layer 0 of every access:\n"
+        << essl;
+}
+
+// The shape that made the first cut of this pass emit INVALID SPIR-V, and the shape the
+// conformance case actually has: a 1D-array image and a real 2D-array image of the same sampled
+// type and format in one module. Rewriting the first one's Dim in place makes the two
+// OpTypeImage declarations structurally identical, and SPIR-V forbids duplicate non-aggregate
+// types - so the module the ESSL path hands on failed validation and quietly bumped the latch.
+// A single-image fixture cannot see any of that.
+TEST_F(ProgramUtilTest, Lower1DArrayImagesDeduplicatesAgainstAnExisting2DArrayImage) {
+    using namespace MG_Util::ShaderTranspiler;
+
+    const Vector<Uint32> raw = BuildSpirvForStage(R"(#version 440 core
+layout (local_size_x = 1) in;
+layout (location = 0, r32ui) readonly uniform uimage1DArray i0;
+layout (location = 1, r32ui) readonly uniform uimage2DArray i1;
+layout (std430, binding = 0) buffer SSB { uint sum; } ssb;
+void main() { ssb.sum = imageLoad(i0, ivec2(2, 3)).r + imageLoad(i1, ivec3(1, 1, 1)).r; }
+)",
+                                                  GL_COMPUTE_SHADER);
+    ASSERT_FALSE(raw.empty());
+
+    Vector<Uint32> spirv;
+    ASSERT_TRUE(ShaderCompiler::SanitizeAndOptimizeBinary(raw, spirv));
+    ASSERT_EQ(Count1DArrayStorageImageTypes(spirv), 1u);
+
+    SpirvValidationScope validationOn(true);
+    const Uint64 failuresBefore = ShaderCompiler::SpirvValidationFailureCount();
+
+    Vector<Uint32> lowered;
+    ASSERT_TRUE(ShaderCompiler::Lower1DArrayImagesForEssl(spirv, lowered));
+    ASSERT_FALSE(lowered.empty());
+
+    EXPECT_EQ(Count1DArrayStorageImageTypes(lowered), 0u) << DisassembleSpirv(lowered);
+    EXPECT_EQ(ShaderCompiler::SpirvValidationFailureCount(), failuresBefore)
+        << "the rewritten 1D-array image collided with the module's own 2D-array image and left a "
+           "duplicate type declaration behind:\n"
+        << DisassembleSpirv(lowered);
+
+    const String essl = DecompileToEssl(lowered);
+    ASSERT_FALSE(essl.empty());
+    EXPECT_NE(essl.find("ivec3(2, 0, 3)"), String::npos) << essl;
+}
+
+// Scope, half one: a NON-arrayed 1D storage image is emitted correctly by the very same
+// SPIRV-Cross code, so the pass must not touch it - replacing working emission with our own buys
+// nothing and risks everything.
+TEST_F(ProgramUtilTest, Lower1DArrayImagesLeavesNonArrayed1DImagesToSpirvCross) {
+    using namespace MG_Util::ShaderTranspiler;
+
+    const Vector<Uint32> spirv = BuildSpirvForStage(R"(#version 440 core
+layout (local_size_x = 1) in;
+layout (location = 0, r32ui) readonly uniform uimage1D i0;
+layout (std430, binding = 0) buffer SSB { uint sum; } ssb;
+void main() { ssb.sum = imageLoad(i0, 2).r; }
+)",
+                                                   GL_COMPUTE_SHADER);
+    ASSERT_FALSE(spirv.empty());
+
+    Vector<Uint32> lowered;
+    ASSERT_TRUE(ShaderCompiler::Lower1DArrayImagesForEssl(spirv, lowered));
+    EXPECT_EQ(lowered, spirv) << "a non-arrayed 1D storage image must pass through byte for byte";
+
+    const String essl = DecompileToEssl(lowered);
+    ASSERT_FALSE(essl.empty());
+    EXPECT_NE(essl.find("uimage2D "), String::npos)
+        << "SPIRV-Cross's own 1D-as-2D emulation must still be what handles this:\n" << essl;
+}
+
+// Scope, half two: a 1D-array SAMPLER reaches SPIRV-Cross's sampler path, which does check
+// `arrayed` and does move the layer into the third component. The pass is storage-image only.
+TEST_F(ProgramUtilTest, Lower1DArrayImagesLeavesSampledImagesAlone) {
+    using namespace MG_Util::ShaderTranspiler;
+
+    const Vector<Uint32> spirv = BuildSpirvForStage(R"(#version 440 core
+uniform sampler1DArray uTex;
+in vec2 vUv;
+out vec4 fragColor;
+void main() { fragColor = texture(uTex, vUv); }
+)",
+                                                   GL_FRAGMENT_SHADER);
+    ASSERT_FALSE(spirv.empty());
+
+    Vector<Uint32> lowered;
+    ASSERT_TRUE(ShaderCompiler::Lower1DArrayImagesForEssl(spirv, lowered));
+    EXPECT_EQ(lowered, spirv) << "a sampled 1D-array image must pass through byte for byte";
+}
+
+// The declined shape. After the rewrite the image is a 2D array, so a size query on it yields
+// three components where the shader consumes two, and there is no correct two-component answer to
+// substitute - the ES texture genuinely has a height the GL one does not. The module is handed
+// back untouched rather than half-translated.
+TEST_F(ProgramUtilTest, Lower1DArrayImagesDeclinesAModuleThatQueriesTheImageSize) {
+    using namespace MG_Util::ShaderTranspiler;
+
+    const Vector<Uint32> spirv = BuildSpirvForStage(R"(#version 440 core
+layout (local_size_x = 1) in;
+layout (location = 0, r32ui) readonly uniform uimage1DArray i0;
+layout (std430, binding = 0) buffer SSB { uint sum; } ssb;
+void main() { ssb.sum = uint(imageSize(i0).x) + imageLoad(i0, ivec2(0, 0)).r; }
+)",
+                                                   GL_COMPUTE_SHADER);
+    ASSERT_FALSE(spirv.empty());
+    const auto traits = Lower1DArrayImagesPass::InspectBinary(spirv);
+    ASSERT_TRUE(traits.declaresImage && traits.queriesImageSize)
+        << "the fixture must contain the shape the pass declines";
+
+    Vector<Uint32> lowered;
+    ASSERT_TRUE(ShaderCompiler::Lower1DArrayImagesForEssl(spirv, lowered));
+    EXPECT_EQ(lowered, spirv) << "a declined module must be handed back untouched, not partly rewritten";
+    EXPECT_EQ(Count1DArrayStorageImageTypes(lowered), 1u)
+        << "declining means the 1D-array type is still there for the driver to reject";
 }

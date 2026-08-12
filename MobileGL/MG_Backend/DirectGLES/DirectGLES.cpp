@@ -1313,10 +1313,17 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
         void SyncNeccessaryTextures() { SyncNeccessaryTextures(CaptureDrawTextureSyncKeys()); }
 
+        // Whether glBindImageTexture's `layered` means anything for this target - asked of the
+        // target the DRIVER will see, not the one the application named. A GL_TEXTURE_1D_ARRAY
+        // is stored as an ES 2D array (MapToBackendTextureTarget), and so is layerable; asking
+        // the state target instead answered "no" for it and pinned every 1D-array image binding
+        // to layer 0, whatever the application passed.
         static Bool SupportsLayeredImageBinding(TextureTarget target) {
-            return target == TextureTarget::Texture3D || target == TextureTarget::TextureCubeMap ||
-                   target == TextureTarget::Texture2DArray || target == TextureTarget::TextureCubeMapArray ||
-                   target == TextureTarget::Texture2DMultisampleArray;
+            const TextureTarget backendTarget = TextureImpl::MapToBackendTextureTarget(target);
+            return backendTarget == TextureTarget::Texture3D || backendTarget == TextureTarget::TextureCubeMap ||
+                   backendTarget == TextureTarget::Texture2DArray ||
+                   backendTarget == TextureTarget::TextureCubeMapArray ||
+                   backendTarget == TextureTarget::Texture2DMultisampleArray;
         }
 
         void SyncImageTextureBinding(Uint unit) {

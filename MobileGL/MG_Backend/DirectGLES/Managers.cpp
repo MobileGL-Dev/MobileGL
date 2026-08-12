@@ -4705,6 +4705,20 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     effectiveSpirv = &rectLoweredSpirv;
                 }
 
+                // ES has no 1D texture at all, so a 1D ARRAY is stored as a 2D array with height
+                // 1 (MapToBackendTextureTarget / GetBackendUploadSize). SPIRV-Cross emulates 1D
+                // as 2D for images without ever asking whether the type is arrayed, so a
+                // 1D-array image comes out as ivec2(ivec2(u, layer), 0) - three components in a
+                // two-component constructor, which every driver rejects, taking the whole
+                // program with it. The pass does the conversion properly - type to 2D array,
+                // coordinate to (u, 0, layer) - before SPIRV-Cross can apply its own.
+                Vector<unsigned int> arrayImageSpirv;
+                if (MG_Util::ShaderTranspiler::ShaderCompiler::Lower1DArrayImagesForEssl(*effectiveSpirv,
+                                                                                          arrayImageSpirv) &&
+                    !arrayImageSpirv.empty()) {
+                    effectiveSpirv = &arrayImageSpirv;
+                }
+
                 // GLSL ES demands a constant integral expression to index a fragment output
                 // array; SPIR-V does not, so a shader that writes coeff[i] from a loop
                 // reaches SPIRV-Cross intact and comes out as ESSL a strict driver rejects

@@ -26,6 +26,7 @@
 #include "SpirvPasses/RebaseInstanceIndexPass.h"
 #include "SpirvPasses/ZeroBaseVertexPass.h"
 #include "SpirvPasses/NormalizeRectCoordinatesPass.h"
+#include "SpirvPasses/Lower1DArrayImagesPass.h"
 #include "SpirvPasses/PrivateToEntryLocalPass.h"
 #include "SpirvPasses/StripUniformLocationsPass.h"
 #include "SpirvPasses/StripUboMemberRelaxedPrecisionPass.h"
@@ -822,6 +823,53 @@ namespace MobileGL {
                 optimizer.RegisterPass(NormalizeRectCoordinatesPass::CreateNormalizeRectCoordinatesPass());
 
                 return RunOptimizerChecked("LowerRectImages", optimizer, inputBinary, outputBinary);
+            }
+
+            bool ShaderCompiler::Lower1DArrayImagesForEssl(const Vector<Uint32>& inputBinary,
+                                                            Vector<uint32_t>& outputBinary) {
+                using namespace spvtools;
+
+                // Declined rather than half-translated: after the rewrite the image is a 2D
+                // array, so a size query on it yields three components where the shader consumes
+                // two. Handing back a differently-shaped size silently is worse than leaving the
+                // module alone and letting the driver say what it does not like - and unlike the
+                // access path there is no correct answer to substitute, because the ES texture
+                // genuinely has a height the GL one does not.
+                //
+                // MGLOG_I, deliberately: MGLOG_E/W are compiled out at the INFO level every CI,
+                // retrace and release build uses, and this is exactly the diagnostic that has to
+                // survive to explain the shader the driver is about to reject.
+                const auto traits = Lower1DArrayImagesPass::InspectBinary(inputBinary);
+                // The overwhelmingly common answer, and the reason the inspection exists: no
+                // 1D-array storage image, so the module is handed back byte for byte without an
+                // Optimizer ever being built. Every ESSL shader in the process passes through
+                // here, so the cost of the case with nothing to do is the cost of this pass.
+                if (!traits.declaresImage) {
+                    outputBinary = inputBinary;
+                    return true;
+                }
+                if (traits.queriesImageSize) {
+                    MGLOG_I("[spirv] Lower1DArrayImagesForEssl: the module queries the size of a 1D-array "
+                            "storage image, which cannot be answered in the 2D-array shape ES stores it in; "
+                            "leaving the module alone, and a strict ES driver will reject it");
+                    outputBinary = inputBinary;
+                    return true;
+                }
+
+                Optimizer optimizer(SPV_ENV_VULKAN_1_1);
+                optimizer.RegisterPass(Lower1DArrayImagesPass::CreateLower1DArrayImagesPass());
+                // Mandatory, not tidying. Rewriting a 1D-array image type to the 2D-array one
+                // makes it structurally IDENTICAL to any real 2D-array image of the same sampled
+                // type and format that the module already declared - and SPIR-V forbids duplicate
+                // non-aggregate type declarations, so the result fails validation. That collision
+                // is not exotic: it is the shape of this whole change's headline case, where one
+                // compute shader declares uimage1DArray and uimage2DArray side by side, both
+                // r32ui. The same applies one level up, to the OpTypePointer instructions that
+                // named the two types, and to the Image1D capability the rewrite turns into a
+                // second Shader. Deduplicating afterwards collapses all three at once.
+                optimizer.RegisterPass(CreateRemoveDuplicatesPass());
+
+                return RunOptimizerChecked("Lower1DArrayImagesForEssl", optimizer, inputBinary, outputBinary);
             }
 
             bool ShaderCompiler::RebaseInstanceIndexForVulkan(const Vector<Uint32>& inputBinary,

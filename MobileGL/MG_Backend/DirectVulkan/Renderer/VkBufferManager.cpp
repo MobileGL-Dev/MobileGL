@@ -23,7 +23,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT |
             VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
             VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_UNIFORM_TEXEL_BUFFER_BIT |
-            VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+            // "Every usage" has to mean every usage: a buffer texture reached through an IMAGE
+            // unit takes a VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER descriptor, and the write is
+            // invalid unless the buffer was created with this bit. Nothing asked for it until
+            // imageBuffer support existed, so the omission was invisible.
+            VK_BUFFER_USAGE_STORAGE_TEXEL_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
         // Appended to kPersistentBackedUsage when VK_EXT_transform_feedback is enabled
         // (see VkBufferManagerInitInfo::transformFeedbackUsageEnabled).
         constexpr VkBufferUsageFlags kTransformFeedbackUsage =
@@ -714,7 +718,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         case BufferKind::Uniform:
             return VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
         case BufferKind::TextureBuffer:
-            return VK_BUFFER_USAGE_UNIFORM_TEXEL_BUFFER_BIT;
+            // Both texel roles, for the same reason vertex/index carry both bits: one GL buffer
+            // texture can be read as a samplerBuffer and written as an imageBuffer, and which of
+            // the two it is only becomes known when a shader that uses it is bound - long after
+            // the resident buffer was created. A VkBufferView for a storage-texel descriptor is
+            // invalid unless the buffer was created with the storage bit, so a buffer that
+            // acquired only the uniform bit could never be given one.
+            return VK_BUFFER_USAGE_UNIFORM_TEXEL_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_TEXEL_BUFFER_BIT;
         case BufferKind::ShaderStorage:
             return VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT;
         case BufferKind::Indirect:
