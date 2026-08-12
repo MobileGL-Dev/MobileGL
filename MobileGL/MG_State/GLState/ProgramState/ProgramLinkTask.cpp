@@ -68,6 +68,8 @@ namespace {
         return type && type->getQualifier().builtIn != glslang::EbvNone;
     }
 
+    // Locations one ELEMENT of a vertex input occupies (GL 4.6 core 11.1.1): a matrix
+    // takes one per column, everything else this backend can feed takes one.
     static int GetVertexInputLocationSpan(GLenum glType) {
         switch (glType) {
         case GL_FLOAT_MAT2:
@@ -85,6 +87,26 @@ namespace {
         default:
             return 1;
         }
+    }
+
+    // How many elements an ARRAY vertex input has. glslang reflects such an input as ONE
+    // record spelled "name[0]" carrying the ELEMENT's glDefineType and the array length,
+    // so the type alone cannot say how many locations the declaration covers: GL 4.6 core
+    // 11.1.1 gives an array one location per element (times the element's own span), and
+    // `in vec4 a[16]` at location 0 therefore occupies 0..15, not 0. Missing that left
+    // every location above the base with no recorded name or type, which is what the
+    // backends read to decide whether an attribute is active at all.
+    static MobileGL::Int GetVertexInputArrayElements(const glslang::TObjectReflection& input) {
+        const glslang::TType* type = input.getType();
+        if (type == nullptr || !type->isArray()) return 1;
+        // An unsized input array has no span to compute; treat it as one element rather
+        // than guessing, so it can only ever under-claim locations.
+        if (!type->isSizedArray()) return 1;
+        return std::max(1, type->getCumulativeArraySize());
+    }
+
+    static MobileGL::Int GetVertexInputTotalLocationSpan(const glslang::TObjectReflection& input) {
+        return GetVertexInputLocationSpan(input.glDefineType) * GetVertexInputArrayElements(input);
     }
 
     static GLenum GetVertexInputLocationType(GLenum glType) {
@@ -878,7 +900,7 @@ namespace MobileGL::MG_State::GLState {
         for (int i = 0; i < inCount; ++i) {
             Int loc = (Int)artifacts.program->getPipeInput(i).layoutLocation();
             if (loc >= 0 && loc != glslang::TQualifier::layoutLocationEnd) {
-                const Int locationSpan = GetVertexInputLocationSpan(artifacts.program->getPipeInput(i).glDefineType);
+                const Int locationSpan = GetVertexInputTotalLocationSpan(artifacts.program->getPipeInput(i));
                 maxLoc = std::max(maxLoc, loc + locationSpan - 1);
             }
             MGLOG_D("ProgramObject %u: Reflection - pipe input[%d] name='%s' layoutLocation=%d glType=%u",
@@ -914,7 +936,7 @@ namespace MobileGL::MG_State::GLState {
                          (Int)ProgramObject::NormalizeBuiltinPipeInputName(inVar.name).length());
 
             if (location >= 0 && location < (int)artifacts.attribs.size()) {
-                const Int locationSpan = GetVertexInputLocationSpan(inVar.glDefineType);
+                const Int locationSpan = GetVertexInputTotalLocationSpan(inVar);
                 const GLenum locationType = GetVertexInputLocationType(inVar.glDefineType);
                 for (Int locationOffset = 0; locationOffset < locationSpan; ++locationOffset) {
                     const Int expandedLocation = location + locationOffset;
