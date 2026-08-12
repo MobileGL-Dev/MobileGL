@@ -16,6 +16,7 @@
 #include <MG_Backend/DirectGLES/Utils.h>
 
 using namespace MobileGL;
+using MobileGL::MG_Backend::DirectGLES::PrgramImpl::ForceFlatIntegerVaryings;
 using MobileGL::MG_Backend::DirectGLES::PrgramImpl::IMAGE_WRITE_ALIAS_PREFIX;
 using MobileGL::MG_Backend::DirectGLES::PrgramImpl::RemoveLayoutBinding;
 using MobileGL::MG_Backend::DirectGLES::PrgramImpl::SplitReadWriteImageUniforms;
@@ -366,4 +367,71 @@ void main() {}
     EXPECT_TRUE(Contains(out, "#extension GL_EXT_shader_io_blocks : require"))
         << "an unrelated extension must survive untouched:\n" << out;
     EXPECT_EQ(CountOf(out, "GL_OES_texture_buffer"), 1u);
+}
+
+// Interpolation is only ever consumed at a fragment input, but an ES linker still compares the
+// two sides of EVERY stage interface and rejects a program whose producer says `flat` and whose
+// consumer does not. SPIRV-Cross prints `flat` on a vertex output and a geometry input of
+// integer type and on nothing else, so a program with tessellation in the middle came out
+// mismatched at both ends of the tessellator - "output vs_tcs_result interpolation mismatch
+// with other stage" on Adreno, and a program that fails to link is a draw that paints nothing.
+TEST(ForceFlatIntegerVaryingsTest, TessellationStagesGetTheQualifierOnBothSides) {
+    const String tessControl = R"(#version 320 es
+layout(vertices = 1) out;
+layout(location = 0) in uint vs_tcs_result[];
+layout(location = 0) out uint tcs_tes_result[1];
+void main() { tcs_tes_result[gl_InvocationID] = vs_tcs_result[gl_InvocationID]; }
+)";
+    const String control = ForceFlatIntegerVaryings(tessControl, GL_TESS_CONTROL_SHADER);
+    EXPECT_TRUE(Contains(control, "layout(location = 0) flat in uint vs_tcs_result[];")) << control;
+    EXPECT_TRUE(Contains(control, "layout(location = 0) flat out uint tcs_tes_result[1];")) << control;
+
+    const String tessEval = R"(#version 320 es
+layout(isolines, point_mode) in;
+layout(location = 0) in uint tcs_tes_result[];
+layout(location = 0) out uint tes_gs_result;
+void main() { tes_gs_result = tcs_tes_result[0]; }
+)";
+    const String eval = ForceFlatIntegerVaryings(tessEval, GL_TESS_EVALUATION_SHADER);
+    EXPECT_TRUE(Contains(eval, "layout(location = 0) flat in uint tcs_tes_result[];")) << eval;
+    EXPECT_TRUE(Contains(eval, "layout(location = 0) flat out uint tes_gs_result;")) << eval;
+}
+
+// The two ends the tessellation stages have to meet: what a vertex shader and a geometry shader
+// already emitted before this pass learned about tessellation at all. Pinned here so the two
+// sides cannot drift apart again.
+TEST(ForceFlatIntegerVaryingsTest, TheStagesAroundTessellationAreUnchanged) {
+    const String vertex = R"(#version 320 es
+layout(location = 0) out uint vs_tcs_result;
+void main() { vs_tcs_result = 1u; }
+)";
+    EXPECT_TRUE(Contains(ForceFlatIntegerVaryings(vertex, GL_VERTEX_SHADER),
+                         "layout(location = 0) flat out uint vs_tcs_result;"));
+
+    const String geometry = R"(#version 320 es
+layout(points) in;
+layout(triangle_strip, max_vertices = 4) out;
+layout(location = 0) in uint tes_gs_result[1];
+layout(location = 0) out uint gs_fs_result;
+void main() { gs_fs_result = tes_gs_result[0]; EmitVertex(); }
+)";
+    const String gs = ForceFlatIntegerVaryings(geometry, GL_GEOMETRY_SHADER);
+    EXPECT_TRUE(Contains(gs, "layout(location = 0) flat in uint tes_gs_result[1];")) << gs;
+    EXPECT_TRUE(Contains(gs, "layout(location = 0) flat out uint gs_fs_result;")) << gs;
+}
+
+// Non-integer interfaces keep whatever interpolation they were given: adding `flat` to a float
+// varying would turn a smoothly interpolated value into a per-provoking-vertex constant, which
+// is a rendering change, not a linker one.
+TEST(ForceFlatIntegerVaryingsTest, FloatVaryingsAreNotTouched) {
+    const String tessEval = R"(#version 320 es
+layout(isolines, point_mode) in;
+layout(location = 1) in vec2 tcs_tes_coord[];
+layout(location = 1) out vec2 tes_gs_coord;
+void main() { tes_gs_coord = tcs_tes_coord[0]; }
+)";
+    const String out = ForceFlatIntegerVaryings(tessEval, GL_TESS_EVALUATION_SHADER);
+    EXPECT_TRUE(Contains(out, "layout(location = 1) in vec2 tcs_tes_coord[];")) << out;
+    EXPECT_TRUE(Contains(out, "layout(location = 1) out vec2 tes_gs_coord;")) << out;
+    EXPECT_EQ(CountOf(out, "flat"), 0u) << out;
 }

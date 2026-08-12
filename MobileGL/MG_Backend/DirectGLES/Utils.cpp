@@ -417,10 +417,27 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 result = std::regex_replace(result, pattern, "$1flat $2");
             };
 
+            // Every stage that has an integer interface at all, on BOTH sides. Interpolation is
+            // only ever consumed at a fragment input, so the qualifier is semantically inert on
+            // a tessellation or geometry interface - but an ES linker still compares the two
+            // sides of every interface and rejects a program whose producer says `flat` and
+            // whose consumer does not. Covering only the stages that "need" it left exactly two
+            // holes, and a program that used tessellation fell into both:
+            //   vertex `flat out uint` -> tess-control `in uint`   (producer flat, consumer not)
+            //   tess-eval `out uint`   -> geometry `flat in uint`  (consumer flat, producer not)
+            // Adreno answers "output ... interpolation mismatch with other stage" and the whole
+            // program fails to link, which is a draw that silently paints nothing.
+            //
+            // Adding rather than stripping, because a fragment input's `flat` is load-bearing
+            // (ESSL forbids an interpolated integer) and would have to be put back for the last
+            // stage before the fragment shader anyway - so "everything integer is flat" is the
+            // one rule that is consistent no matter which stages a program happens to have.
             switch (shaderType) {
             case GL_VERTEX_SHADER:
                 addFlatQualifier("out");
                 break;
+            case GL_TESS_CONTROL_SHADER:
+            case GL_TESS_EVALUATION_SHADER:
             case GL_GEOMETRY_SHADER:
                 addFlatQualifier("in");
                 addFlatQualifier("out");
