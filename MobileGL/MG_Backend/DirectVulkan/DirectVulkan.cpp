@@ -801,9 +801,18 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // already recorded the new binding on the program - which is what reseeds this cache
         // whenever it is rebuilt. Writing the entry here as well keeps an ALREADY-BUILT cache
         // (the common case: the very next draw reads it) from having to be thrown away.
-        auto& cache = GetProgramResourceCache(*programObject);
+        //
+        // Resolve the index BEFORE taking the reference, and bounds-check the way the
+        // sibling getter does. GetShaderStorageBlockIndex re-enters GetProgramResourceCache,
+        // which indexes g_programResourceCaches and can therefore insert - and that map is
+        // FastSTL's open-addressed unordered_map, whose rehash MOVES its buckets, so a
+        // reference taken before the call is left dangling. Binding a program's storage block
+        // while another program's entry was still absent from the cache was a reproducible
+        // segfault (ProgramPipelineScenario's two storage-block cases, in one process).
         const GLuint blockIndex = GetShaderStorageBlockIndex(*programObject, storageBlockName);
         if (blockIndex == GL_INVALID_INDEX) return;
+        auto& cache = GetProgramResourceCache(*programObject);
+        if (blockIndex >= cache.storageBlocks.size()) return;
         cache.storageBlocks[blockIndex].binding = storageBlockBinding;
     }
     void ReadPixels(GLint x, GLint y, GLsizei width, GLsizei height, GLenum format, GLenum type, void* pixels) {

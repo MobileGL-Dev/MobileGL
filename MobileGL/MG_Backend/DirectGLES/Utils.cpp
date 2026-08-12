@@ -21,6 +21,7 @@
 #include <MG_Util/Math/HalfFloat.h>
 #include <MG_Util/Math/SmallFloat.h>
 
+#include <algorithm>
 #include <cmath>
 #include <cctype>
 #include <cstring>
@@ -466,6 +467,352 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 }
                 result += '\n';
                 lineStart = lineEnd + 1;
+            }
+            return result;
+        }
+
+        namespace {
+            Bool IsImagePassIdentifierChar(char c) {
+                return std::isalnum(static_cast<unsigned char>(c)) || c == '_';
+            }
+
+            // Occurrences of `identifier` in `code` that are whole identifiers, i.e. not the
+            // tail or head of a longer one. "goku" must not find "goku_hd" or "my_goku".
+            SizeT CountIdentifierOccurrences(const String& code, const String& identifier) {
+                if (identifier.empty()) return 0;
+                SizeT count = 0;
+                for (SizeT pos = code.find(identifier); pos != String::npos;
+                     pos = code.find(identifier, pos + 1)) {
+                    if (pos > 0 && IsImagePassIdentifierChar(code[pos - 1])) continue;
+                    const SizeT after = pos + identifier.size();
+                    if (after < code.size() && IsImagePassIdentifierChar(code[after])) continue;
+                    ++count;
+                }
+                return count;
+            }
+
+            Bool ContainsIdentifier(const String& code, const String& identifier) {
+                return CountIdentifierOccurrences(code, identifier) > 0;
+            }
+
+            // The image format layout qualifiers ESSL accepts (GLSL ES 3.20 4.4.7 table 4.6 -
+            // the ES-legal subset of what SPIRV-Cross's format_to_glsl can print). The
+            // readonly/writeonly rule only applies to a declaration that carries one of them.
+            Bool IsImageFormatQualifier(const String& token) {
+                static constexpr StringView FORMATS[] = {
+                    "rgba32f",      "rgba16f",      "rg32f",       "rg16f",        "r11f_g11f_b10f",
+                    "r32f",         "r16f",         "rgba16",      "rgb10_a2",     "rgba8",
+                    "rg16",         "rg8",          "r16",         "r8",           "rgba16_snorm",
+                    "rgba8_snorm",  "rg16_snorm",   "rg8_snorm",   "r16_snorm",    "r8_snorm",
+                    "rgba32i",      "rgba16i",      "rgba8i",      "rg32i",        "rg16i",
+                    "rg8i",         "r32i",         "r16i",        "r8i",          "rgba32ui",
+                    "rgba16ui",     "rgb10_a2ui",   "rgba8ui",     "rg32ui",       "rg16ui",
+                    "rg8ui",        "r32ui",        "r16ui",       "r8ui",
+                };
+                for (const StringView format : FORMATS) {
+                    if (token == format) return true;
+                }
+                return false;
+            }
+
+            // "Except for image variables qualified with the format qualifiers r32f, r32i, and
+            // r32ui, image variables must specify either memory qualifier readonly or the
+            // memory qualifier writeonly." (GLSL ES 3.20 4.10)
+            Bool IsMemoryQualifierExemptImageFormat(const String& token) {
+                return token == "r32f" || token == "r32i" || token == "r32ui";
+            }
+
+            // Comma-separated contents of a layout(...) list, each entry trimmed.
+            Vector<String> SplitLayoutQualifierList(const String& layout) {
+                Vector<String> tokens;
+                SizeT start = 0;
+                while (start <= layout.size()) {
+                    SizeT comma = layout.find(',', start);
+                    const Bool last = comma == String::npos;
+                    String token = layout.substr(start, last ? String::npos : comma - start);
+                    const SizeT first = token.find_first_not_of(" \t\r\n");
+                    if (first == String::npos) {
+                        token.clear();
+                    } else {
+                        token = token.substr(first, token.find_last_not_of(" \t\r\n") - first + 1);
+                    }
+                    if (!token.empty()) tokens.push_back(Move(token));
+                    if (last) break;
+                    start = comma + 1;
+                }
+                return tokens;
+            }
+
+            // Trims both ends and collapses every internal whitespace run to one space, so a
+            // qualifier list or array suffix can be spliced back into a rebuilt declaration
+            // whatever the original spacing was.
+            String NormalizeDeclarationSpacing(const String& text) {
+                String out;
+                out.reserve(text.size());
+                Bool pendingSpace = false;
+                for (const char c : text) {
+                    if (std::isspace(static_cast<unsigned char>(c))) {
+                        pendingSpace = !out.empty();
+                        continue;
+                    }
+                    if (pendingSpace) out += ' ';
+                    pendingSpace = false;
+                    out += c;
+                }
+                return out;
+            }
+
+            // How an image builtin touches the image it is handed.
+            enum class ImageBuiltinAccess { None, Load, Store, Unknown };
+
+            ImageBuiltinAccess ClassifyImageBuiltin(const String& name) {
+                if (name == "imageStore") return ImageBuiltinAccess::Store;
+                if (name == "imageLoad") return ImageBuiltinAccess::Load;
+                // imageAtomic* both reads and writes, but ES only defines the atomics on
+                // r32i/r32ui/r32f images - exactly the formats the rule above exempts - so this
+                // pass has already skipped any declaration they can legally appear on. Load is
+                // enough to keep the classification total without ever being acted upon.
+                if (name.compare(0, 11, "imageAtomic") == 0) return ImageBuiltinAccess::Load;
+                if (name == "imageSize" || name == "imageSamples") return ImageBuiltinAccess::None;
+                // Some other identifier that starts with "image" and is being called: not a
+                // shape this pass can reason about, so it poisons the declaration instead of
+                // being guessed at.
+                return ImageBuiltinAccess::Unknown;
+            }
+
+            struct ImageUniformDecl {
+                String name;
+                String writeName;   // the writeonly half's name, when split
+                String layout;      // raw contents of layout(...)
+                String qualifiers;  // memory/precision qualifiers, normalized, no trailing space
+                String type;        // image2D, uimage2DArray, ...
+                String arraySuffix; // "" or "[7]"
+                SizeT declStart = 0;
+                SizeT declLength = 0;
+                SizeT referenceCount = 0; // uses this pass recognized and accounted for
+                Bool loaded = false;
+                Bool stored = false;
+                Bool unknownUse = false;
+                Bool split = false;
+            };
+
+            // A rebuilt declaration. Keeps SPIRV-Cross's own word order (`uniform readonly
+            // highp image2D`) so the image-rebinding regex in Managers.cpp still matches what
+            // comes out of here, whichever order the two passes end up running in.
+            String BuildImageDeclaration(const ImageUniformDecl& decl, const char* memoryQualifier,
+                                         const String& variableName) {
+                String out = "layout(" + decl.layout + ") uniform ";
+                out += memoryQualifier;
+                out += ' ';
+                if (!decl.qualifiers.empty()) {
+                    out += decl.qualifiers;
+                    out += ' ';
+                }
+                out += decl.type;
+                out += ' ';
+                out += variableName;
+                out += decl.arraySuffix;
+                out += ';';
+                return out;
+            }
+
+            // A name for the writeonly half that no identifier in the shader (and no other
+            // half already minted) can collide with.
+            String MakeImageWriteAliasName(const String& name, const String& source,
+                                           const Vector<String>& taken) {
+                String candidate = String(IMAGE_WRITE_ALIAS_PREFIX) + name;
+                // "__" anywhere in an identifier is reserved (GLSL ES 3.20 3.7), which a name
+                // that already starts with '_' would otherwise produce.
+                for (SizeT doubled = candidate.find("__"); doubled != String::npos;
+                     doubled = candidate.find("__", doubled)) {
+                    candidate.erase(doubled, 1);
+                }
+                auto isTaken = [&](const String& identifier) {
+                    if (ContainsIdentifier(source, identifier)) return true;
+                    for (const auto& other : taken) {
+                        if (other == identifier) return true;
+                    }
+                    return false;
+                };
+                while (isTaken(candidate)) candidate += 'X';
+                return candidate;
+            }
+
+            struct ImageSourceEdit {
+                SizeT start;
+                SizeT length;
+                String text;
+            };
+        } // namespace
+
+        String SplitReadWriteImageUniforms(const String& glslCode) {
+#ifdef TRACY_ENABLE
+            ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
+#endif
+            if (glslCode.find("image") == String::npos) {
+                return glslCode;
+            }
+
+            // layout(...) uniform <memory/precision qualifiers> <image type> <name>[array];
+            // The qualifier alternation is order-free even though SPIRV-Cross emits a fixed
+            // order (to_qualifiers_glsl: storage, then coherent/restrict/readonly/writeonly,
+            // then precision), and the array group is repeated so a hypothetical multi-
+            // dimensional image array survives the round trip intact.
+            static const std::regex imageDeclRegex(
+                R"(layout\s*\(([^)]*)\)\s*uniform\s+)"
+                R"(((?:(?:readonly|writeonly|coherent|volatile|restrict|highp|mediump|lowp)\s+)*))"
+                R"(([iu]?image[A-Za-z0-9_]*)\s+([A-Za-z_][A-Za-z0-9_]*)\s*((?:\[[^\]]*\]\s*)*);)");
+
+            Vector<ImageUniformDecl> decls;
+            for (std::sregex_iterator it(glslCode.begin(), glslCode.end(), imageDeclRegex), last; it != last; ++it) {
+                const std::smatch& match = *it;
+                const String qualifiers = match[2].str();
+                // Already legal: SPIRV-Cross decided one way, leave it alone.
+                if (ContainsIdentifier(qualifiers, "readonly") || ContainsIdentifier(qualifiers, "writeonly")) {
+                    continue;
+                }
+
+                Bool hasFormat = false;
+                Bool exemptFormat = false;
+                for (const String& token : SplitLayoutQualifierList(match[1].str())) {
+                    if (!IsImageFormatQualifier(token)) continue;
+                    hasFormat = true;
+                    exemptFormat = IsMemoryQualifierExemptImageFormat(token);
+                }
+                // No format qualifier at all is a different (and, in ES, unconditionally
+                // illegal) shape that GL_EXT_shader_image_load_formatted would be needed for;
+                // SPIRV-Cross refuses to emit it for an ES target, so nothing to do here.
+                if (!hasFormat || exemptFormat) continue;
+
+                ImageUniformDecl decl;
+                decl.layout = match[1].str();
+                decl.qualifiers = NormalizeDeclarationSpacing(qualifiers);
+                decl.type = match[3].str();
+                decl.name = match[4].str();
+                decl.arraySuffix = NormalizeDeclarationSpacing(match[5].str());
+                decl.declStart = static_cast<SizeT>(match.position(0));
+                decl.declLength = match[0].str().size();
+                decls.push_back(Move(decl));
+            }
+            if (decls.empty()) {
+                return glslCode;
+            }
+
+            auto findDecl = [&decls](const String& name) -> SizeT {
+                for (SizeT i = 0; i < decls.size(); ++i) {
+                    if (decls[i].name == name) return i;
+                }
+                return decls.size();
+            };
+
+            // Walk every `image*(` call and attribute its first argument to a declaration.
+            struct StoreSite {
+                SizeT declIndex;
+                SizeT start;
+                SizeT length;
+            };
+            Vector<StoreSite> storeSites;
+            for (SizeT pos = glslCode.find("image"); pos != String::npos; pos = glslCode.find("image", pos + 1)) {
+                if (pos > 0 && IsImagePassIdentifierChar(glslCode[pos - 1])) continue; // uimage2D, myimageFoo
+                SizeT tokenEnd = pos;
+                while (tokenEnd < glslCode.size() && IsImagePassIdentifierChar(glslCode[tokenEnd])) ++tokenEnd;
+                const String builtin = glslCode.substr(pos, tokenEnd - pos);
+
+                const SizeT openParen = glslCode.find_first_not_of(" \t\r\n", tokenEnd);
+                if (openParen == String::npos || glslCode[openParen] != '(') continue; // a type, not a call
+
+                const SizeT argStart = glslCode.find_first_not_of(" \t\r\n", openParen + 1);
+                if (argStart == String::npos) continue;
+                if (!std::isalpha(static_cast<unsigned char>(glslCode[argStart])) && glslCode[argStart] != '_') {
+                    continue; // an expression, not a bare variable - it names no image of ours
+                }
+                SizeT argEnd = argStart;
+                while (argEnd < glslCode.size() && IsImagePassIdentifierChar(glslCode[argEnd])) ++argEnd;
+
+                const SizeT declIndex = findDecl(glslCode.substr(argStart, argEnd - argStart));
+                if (declIndex == decls.size()) continue;
+                ImageUniformDecl& decl = decls[declIndex];
+                ++decl.referenceCount;
+
+                // The operand has to be the bare variable, optionally subscripted. Anything
+                // else (a member access, a call result) is a shape this pass cannot rewrite.
+                SizeT after = glslCode.find_first_not_of(" \t\r\n", argEnd);
+                if (after != String::npos && glslCode[after] == '[') {
+                    Int depth = 0;
+                    SizeT scan = after;
+                    for (; scan < glslCode.size(); ++scan) {
+                        if (glslCode[scan] == '[') ++depth;
+                        else if (glslCode[scan] == ']' && --depth == 0) break;
+                    }
+                    after = scan >= glslCode.size() ? String::npos
+                                                    : glslCode.find_first_not_of(" \t\r\n", scan + 1);
+                }
+                const char nextChar = after == String::npos ? '\0' : glslCode[after];
+                if (nextChar != ',' && nextChar != ')') {
+                    decl.unknownUse = true;
+                    continue;
+                }
+
+                switch (ClassifyImageBuiltin(builtin)) {
+                case ImageBuiltinAccess::Load:
+                    decl.loaded = true;
+                    break;
+                case ImageBuiltinAccess::Store:
+                    decl.stored = true;
+                    storeSites.push_back({declIndex, argStart, argEnd - argStart});
+                    break;
+                case ImageBuiltinAccess::None:
+                    break;
+                default:
+                    decl.unknownUse = true;
+                    break;
+                }
+            }
+
+            // Every mention of the name has to be one this pass saw, or the split would leave
+            // a store pointing at the readonly half. One occurrence is the declaration itself.
+            for (auto& decl : decls) {
+                if (CountIdentifierOccurrences(glslCode, decl.name) != decl.referenceCount + 1) {
+                    decl.unknownUse = true;
+                }
+            }
+
+            Vector<ImageSourceEdit> edits;
+            Vector<String> takenAliases;
+            for (auto& decl : decls) {
+                if (decl.unknownUse) continue; // leave it exactly as it was; no guessing
+                if (decl.loaded && decl.stored) {
+                    decl.writeName = MakeImageWriteAliasName(decl.name, glslCode, takenAliases);
+                    takenAliases.push_back(decl.writeName);
+                    decl.split = true;
+                    edits.push_back({decl.declStart, decl.declLength,
+                                     BuildImageDeclaration(decl, "readonly", decl.name) + "\n" +
+                                         BuildImageDeclaration(decl, "writeonly", decl.writeName)});
+                } else if (decl.stored) {
+                    edits.push_back({decl.declStart, decl.declLength,
+                                     BuildImageDeclaration(decl, "writeonly", decl.name)});
+                } else {
+                    // Loaded only, or only ever handed to imageSize (or unused): readonly is
+                    // the qualifier that keeps every one of those legal.
+                    edits.push_back({decl.declStart, decl.declLength,
+                                     BuildImageDeclaration(decl, "readonly", decl.name)});
+                }
+            }
+            for (const StoreSite& site : storeSites) {
+                const ImageUniformDecl& decl = decls[site.declIndex];
+                if (!decl.split) continue;
+                edits.push_back({site.start, site.length, decl.writeName});
+            }
+            if (edits.empty()) {
+                return glslCode;
+            }
+
+            // Back to front, so an earlier edit's offsets stay valid.
+            std::sort(edits.begin(), edits.end(),
+                      [](const ImageSourceEdit& a, const ImageSourceEdit& b) { return a.start > b.start; });
+            String result = glslCode;
+            for (const ImageSourceEdit& edit : edits) {
+                result.replace(edit.start, edit.length, edit.text);
             }
             return result;
         }

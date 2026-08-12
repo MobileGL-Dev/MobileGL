@@ -63,6 +63,7 @@ add_executable(MobileGLIntegrationTest
     Scenarios/UniformInitializerScenario.cpp
     Scenarios/SwizzleAccessRoutineScenario.cpp
     Scenarios/ProgramPipelineScenario.cpp
+    Scenarios/Glsl420DeclarationScenario.cpp
 )
 
 target_include_directories(MobileGLIntegrationTest PRIVATE
