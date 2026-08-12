@@ -925,6 +925,9 @@ namespace MobileGL::MG_Util::BackendLoader {
                 if (std::strcmp(extension, "GL_EXT_multi_draw_arrays") == 0) {
                     hasMultiDrawArraysExtension = true;
                 }
+                if (std::strcmp(extension, "GL_EXT_clip_cull_distance") == 0) {
+                    caps.SupportsClipDistance = true;
+                }
             }
         }
         // The pointer check on top of the extension check makes each flag sufficient on its own
@@ -978,6 +981,7 @@ namespace MobileGL::MG_Util::BackendLoader {
         MGLOG_I("    compute shaders (ES 3.1 core): %s", caps.SupportsComputeShader ? "yes" : "no");
         MGLOG_I("    base instance (EXT_base_instance; emulated by attribute offsets when absent): %s",
                 caps.SupportsBaseInstance ? "yes" : "no");
+        MGLOG_I("    clip distances (EXT_clip_cull_distance): %s", caps.SupportsClipDistance ? "yes" : "no");
 
         MGLOG_I("OpenGL ES capabilities:");
         glesFuncs.glGetIntegerv(GL_UNIFORM_BUFFER_OFFSET_ALIGNMENT, &caps.UniformBufferOffsetAlignment);

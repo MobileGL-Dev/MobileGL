@@ -303,6 +303,12 @@ namespace MobileGL {
         Bool StencilTestEnabled = false;
         Bool ProgramPointSizeEnabled = false;
         IntVec4 ScissorBox = IntVec4(0, 0, 0, 0); // x, y, width, height
+        // glEnable(GL_CLIP_DISTANCE0 + i) for i in [0, 8), one bit each. A bitmask rather than
+        // eight bools because every consumer wants the set, not an individual flag, and because
+        // the SYNC_CAPABILITY/SET_CAPABILITY macros key off a "<Name>Enabled" field name that
+        // eight numbered capabilities cannot share. Lives in the tail span (after LogicOp), so
+        // DirectGLES' span memcmp picks a change up like any other capability.
+        Uint32 ClipDistanceEnabledMask = 0;
     };
 
     namespace MG_State {

@@ -1163,6 +1163,13 @@ namespace MobileGL {
             // Compute shaders are usable: ES 3.1 core (there is no pre-3.1 extension in ES), with
             // the dispatch and barrier entry points resolved.
             Bool SupportsComputeShader = false;
+            // GL_EXT_clip_cull_distance is present: the driver accepts gl_ClipDistance in ESSL
+            // (which is what SPIRV-Cross emits, together with a `#extension ... : require`) AND
+            // the GL_CLIP_DISTANCE0_EXT..7_EXT enable tokens, whose values are the desktop ones.
+            // ES core has neither at any version, so without this a gl_ClipDistance shader cannot
+            // compile and the per-distance enables have nowhere to go - clipping silently never
+            // happens, which is exactly what KHR-GLxx.clip_distance.functional catches.
+            Bool SupportsClipDistance = false;
             // GL_RENDERER contains "ANGLE".
             Bool IsAngleRenderer = false;
             // GL_RENDERER contains both "ANGLE" and "llvmpipe".

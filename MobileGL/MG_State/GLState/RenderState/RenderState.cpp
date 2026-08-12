@@ -187,6 +187,14 @@ namespace MobileGL {
             }
 
             // -------------------- Capabilities --------------------
+            namespace {
+                // CapabilityInput lists ClipDistance0..7 contiguously (RenderState.h); the caller
+                // has already rejected anything outside that run, so the subtraction is in range.
+                Uint32 ClipDistanceBit(CapabilityInput cap) {
+                    return 1u << (static_cast<Uint>(cap) - static_cast<Uint>(CapabilityInput::ClipDistance0));
+                }
+            } // namespace
+
             void RenderState::SetCapability(CapabilityInput cap, Bool enabled) {
 #define SET_CAPABILITY(capability, flag)                                                                               \
     case CapabilityInput::capability:                                                                                  \
@@ -228,6 +236,27 @@ namespace MobileGL {
                     if (stateChanged) BumpVersions();
                     break;
                 }
+                case CapabilityInput::ClipDistance0:
+                case CapabilityInput::ClipDistance1:
+                case CapabilityInput::ClipDistance2:
+                case CapabilityInput::ClipDistance3:
+                case CapabilityInput::ClipDistance4:
+                case CapabilityInput::ClipDistance5:
+                case CapabilityInput::ClipDistance6:
+                case CapabilityInput::ClipDistance7: {
+                    const Uint32 bit = ClipDistanceBit(cap);
+                    const Uint32 updated =
+                        enabled ? (m_parameters.ClipDistanceEnabledMask | bit)
+                                : (m_parameters.ClipDistanceEnabledMask & ~bit);
+                    if (updated == m_parameters.ClipDistanceEnabledMask) break;
+                    m_parameters.ClipDistanceEnabledMask = updated;
+                    // Deliberately NOT BumpVersions(): no backend bakes a clip-distance enable
+                    // into a pipeline object (DirectGLES issues glEnable, DirectVulkan takes the
+                    // set from the shader's declared array), so bumping the pipeline version here
+                    // would evict cached pipelines for state they do not contain.
+                    ++m_version;
+                    break;
+                }
                 default: // not supported currently
                     break;
                 }
@@ -263,6 +292,15 @@ namespace MobileGL {
                     RETURN_CAPABILITY(ProgramPointSize);
                 case CapabilityInput::Blend:
                     return m_parameters.BlendStates[0].Enabled;
+                case CapabilityInput::ClipDistance0:
+                case CapabilityInput::ClipDistance1:
+                case CapabilityInput::ClipDistance2:
+                case CapabilityInput::ClipDistance3:
+                case CapabilityInput::ClipDistance4:
+                case CapabilityInput::ClipDistance5:
+                case CapabilityInput::ClipDistance6:
+                case CapabilityInput::ClipDistance7:
+                    return (m_parameters.ClipDistanceEnabledMask & ClipDistanceBit(cap)) != 0;
                 default:
                     return false;
                 }

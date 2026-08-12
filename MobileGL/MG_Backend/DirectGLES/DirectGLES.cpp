@@ -1568,6 +1568,28 @@ namespace MobileGL::MG_Backend::DirectGLES {
 #undef SYNC_CAPABILITY
             }
 
+            if (tailSpanDirty && g_GLESCapabilities.SupportsClipDistance) {
+                // gl_ClipDistance clipping is per-distance enable state in GL, and ES reaches it
+                // only through GL_EXT_clip_cull_distance. That extension reuses the desktop enum
+                // values for CLIP_DISTANCE0_EXT..7_EXT, but the token is absent from the ES
+                // headers this file compiles against, hence the local name. Without the
+                // extension there is nowhere to put the state and the shader could not have
+                // compiled either, so the whole block is gated rather than silently no-op'ing.
+                constexpr GLenum kClipDistance0 = 0x3000;
+                constexpr Uint kClipDistanceCount = 8;
+                const Uint32 mask = parameters.ClipDistanceEnabledMask;
+                const Uint32 syncedMask = g_syncedRenderStateParameters.ClipDistanceEnabledMask;
+                if (forceFullPush || mask != syncedMask) {
+                    const Uint32 changed = forceFullPush ? ~0u : (mask ^ syncedMask);
+                    for (Uint i = 0; i < kClipDistanceCount; ++i) {
+                        const Uint32 bit = 1u << i;
+                        if ((changed & bit) == 0) continue;
+                        const GLenum cap = static_cast<GLenum>(kClipDistance0 + i);
+                        (mask & bit) ? g_GLESFuncs.glEnable(cap) : g_GLESFuncs.glDisable(cap);
+                    }
+                }
+            }
+
             { // sRGB framebuffer writes. GLES core always encodes a write into an sRGB attachment,
               // while GL_FRAMEBUFFER_SRGB is disabled by default in desktop GL and the frontend
               // never turns it on, so the driver has to be told to write raw. Without this a render
@@ -3911,8 +3933,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
             g_GLESFuncs.glGetIntegerv(GL_STENCIL_BACK_PASS_DEPTH_FAIL, &m_stencilDepthFail[1]);
             g_GLESFuncs.glGetIntegerv(GL_STENCIL_PASS_DEPTH_PASS, &m_stencilPass[0]);
             g_GLESFuncs.glGetIntegerv(GL_STENCIL_BACK_PASS_DEPTH_PASS, &m_stencilPass[1]);
-            for (CapabilityState& capability : m_capabilities) {
-                capability.enabled = g_GLESFuncs.glIsEnabled(capability.cap);
+            if (g_GLESCapabilities.SupportsClipDistance) {
+                m_capabilityCount = kBaseCapabilityCount + kClipDistanceCapabilityCount;
+            }
+            for (Uint i = 0; i < m_capabilityCount; ++i) {
+                m_capabilities[i].enabled = g_GLESFuncs.glIsEnabled(m_capabilities[i].cap);
             }
             // GL_SAMPLE_MASK is ES 3.1; on an older driver the query above just raised
             // GL_INVALID_ENUM and answered GL_FALSE, which is also the right thing to
@@ -3934,8 +3959,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // clipped, nothing tested, no coverage games, and colour writes open. Callers
             // turn back on only what they need (the replicate pass wants the depth and
             // stencil tests, and masks colour off because it writes neither).
-            for (const CapabilityState& capability : m_capabilities) {
-                g_GLESFuncs.glDisable(capability.cap);
+            for (Uint i = 0; i < m_capabilityCount; ++i) {
+                g_GLESFuncs.glDisable(m_capabilities[i].cap);
             }
             g_GLESFuncs.glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
             g_GLESFuncs.glDepthMask(GL_FALSE);
@@ -3967,11 +3992,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                                 static_cast<GLenum>(m_stencilPass[face]));
                 g_GLESFuncs.glStencilMaskSeparate(faces[face], static_cast<GLuint>(m_stencilWriteMask[face]));
             }
-            for (const CapabilityState& capability : m_capabilities) {
-                if (capability.enabled) {
-                    g_GLESFuncs.glEnable(capability.cap);
+            for (Uint i = 0; i < m_capabilityCount; ++i) {
+                if (m_capabilities[i].enabled) {
+                    g_GLESFuncs.glEnable(m_capabilities[i].cap);
                 } else {
-                    g_GLESFuncs.glDisable(capability.cap);
+                    g_GLESFuncs.glDisable(m_capabilities[i].cap);
                 }
             }
             // The per-draw-buffer colour masks are not covered by the non-indexed
@@ -4015,12 +4040,24 @@ namespace MobileGL::MG_Backend::DirectGLES {
         GLint m_stencilPass[2] = {GL_KEEP, GL_KEEP};
         Uint m_activeTextureUnit = 0;
         Bool m_pausedTransformFeedback = false;
-        CapabilityState m_capabilities[10] = {
+        // The eight GL_CLIP_DISTANCE0_EXT..7_EXT entries are last so that a driver without
+        // GL_EXT_clip_cull_distance can be served by shortening the count instead of asking
+        // it about tokens it does not know. They belong here at all because an emulation pass
+        // draws its full-screen triangle with its OWN program, which writes no gl_ClipDistance:
+        // leaving the app's enables on would clip that triangle by undefined distances.
+        static constexpr Uint kBaseCapabilityCount = 10;
+        static constexpr Uint kClipDistanceCapabilityCount = 8;
+        Uint m_capabilityCount = kBaseCapabilityCount;
+        CapabilityState m_capabilities[kBaseCapabilityCount + kClipDistanceCapabilityCount] = {
             {GL_SCISSOR_TEST, GL_FALSE},        {GL_DEPTH_TEST, GL_FALSE},
             {GL_STENCIL_TEST, GL_FALSE},        {GL_CULL_FACE, GL_FALSE},
             {GL_BLEND, GL_FALSE},               {GL_RASTERIZER_DISCARD, GL_FALSE},
             {GL_POLYGON_OFFSET_FILL, GL_FALSE}, {GL_SAMPLE_ALPHA_TO_COVERAGE, GL_FALSE},
             {GL_SAMPLE_COVERAGE, GL_FALSE},     {GL_SAMPLE_MASK, GL_FALSE},
+            {0x3000, GL_FALSE},                 {0x3001, GL_FALSE},
+            {0x3002, GL_FALSE},                 {0x3003, GL_FALSE},
+            {0x3004, GL_FALSE},                 {0x3005, GL_FALSE},
+            {0x3006, GL_FALSE},                 {0x3007, GL_FALSE},
         };
     };
 
@@ -4038,6 +4075,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
     // exactly what the replicate rule asks for. Depth comes from gl_FragDepth; stencil has
     // no shader output on ES, so it is written one bit plane at a time with REPLACE and a
     // discard for the pixels whose source bit is clear.
+    // Defined further down with the other small GL helpers; the attachment-format probe below
+    // needs it to tell a rejected bind apart from a successful one.
+    static void ClearGLErrors();
+
     namespace ReplicateBlitImpl {
         static Uint s_contextGeneration = ~0u;
         static GLuint s_framebuffer = 0;
@@ -4157,6 +4198,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // queryable format at all). The scratch copy has to use the very same one: ES rejects
         // a depth/stencil blit between differing formats even when both sides are
         // single-sampled.
+        //
+        // The texture branch can only ask about a GL_TEXTURE_2D, and a name whose target is
+        // something else (an array or cube texture attached by glFramebufferTextureLayer /
+        // glFramebufferTexture) makes glBindTexture answer GL_INVALID_OPERATION and change
+        // nothing. Reading glGetTexLevelParameteriv after that failed bind does NOT return 0 -
+        // it truthfully describes whatever texture was already on GL_TEXTURE_2D, which on this
+        // path is the emulation's own staging scratch. That is a wrong answer that looks like a
+        // right one, so the bind has to be error-checked rather than trusted.
         static GLenum QueryAttachmentSizedFormat(GLenum attachment) {
             GLint objectType = 0;
             GLint objectName = 0;
@@ -4171,16 +4220,30 @@ namespace MobileGL::MG_Backend::DirectGLES {
             if (objectType == GL_RENDERBUFFER) {
                 GLint previous = 0;
                 g_GLESFuncs.glGetIntegerv(GL_RENDERBUFFER_BINDING, &previous);
+                ClearGLErrors();
                 g_GLESFuncs.glBindRenderbuffer(GL_RENDERBUFFER, static_cast<GLuint>(objectName));
-                g_GLESFuncs.glGetRenderbufferParameteriv(GL_RENDERBUFFER, GL_RENDERBUFFER_INTERNAL_FORMAT,
-                                                         &internalFormat);
+                const Bool bound = g_GLESFuncs.glGetError() == GL_NO_ERROR;
+                if (bound) {
+                    g_GLESFuncs.glGetRenderbufferParameteriv(GL_RENDERBUFFER, GL_RENDERBUFFER_INTERNAL_FORMAT,
+                                                             &internalFormat);
+                }
                 g_GLESFuncs.glBindRenderbuffer(GL_RENDERBUFFER, static_cast<GLuint>(previous));
+                ClearGLErrors();
             } else if (objectType == GL_TEXTURE) {
                 GLint previous = 0;
                 g_GLESFuncs.glGetIntegerv(GL_TEXTURE_BINDING_2D, &previous);
+                ClearGLErrors();
                 g_GLESFuncs.glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(objectName));
-                g_GLESFuncs.glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_INTERNAL_FORMAT, &internalFormat);
+                const Bool bound = g_GLESFuncs.glGetError() == GL_NO_ERROR;
+                if (bound) {
+                    g_GLESFuncs.glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_INTERNAL_FORMAT,
+                                                         &internalFormat);
+                    if (g_GLESFuncs.glGetError() != GL_NO_ERROR) {
+                        internalFormat = 0;
+                    }
+                }
                 g_GLESFuncs.glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(previous));
+                ClearGLErrors();
             }
             return static_cast<GLenum>(internalFormat);
         }
@@ -6068,30 +6131,15 @@ namespace MobileGL::MG_Backend::DirectGLES {
             g_GLESFuncs.glGetFramebufferAttachmentParameteriv(GL_READ_FRAMEBUFFER, point,
                                                               GL_FRAMEBUFFER_ATTACHMENT_OBJECT_TYPE, &objectType);
             ClearGLErrors();
-            if (objectType == GL_NONE) {
-                return false;
-            }
 
-            if (!isDefault) {
-                // A real object: ask it directly. That answer is certainly blit-compatible,
-                // so it is used on its own. The query binds the attachment as GL_TEXTURE_2D,
-                // which an array or cube attachment refuses - it answers 0, the size-derived
-                // guesses below take over, and the refusal must not be left on the error
-                // queue for the caller's next glGetError to pick up as its own.
-                const GLenum exact = ReplicateBlitImpl::QueryAttachmentSizedFormat(point);
-                ClearGLErrors();
-                if (exact != 0) {
-                    out->Push(exact);
-                    return true;
-                }
-            } else if (s_slots[stencilAspect ? 1 : 0].defaultFramebufferFormat != 0) {
-                out->Push(s_slots[stencilAspect ? 1 : 0].defaultFramebufferFormat);
-            }
-
-            // Nothing to ask (or the query failed): rebuild plausible sized formats from the
-            // channel sizes the attachment points report. The OTHER aspect's size matters as
-            // much as this one's - a depth buffer that also carries stencil has to be staged
-            // into a packed scratch, because ES only blits depth between identical formats.
+            // The channel sizes are read before the "is there anything here" decision, because
+            // they are the more trustworthy witness. Adreno answers GL_NONE for OBJECT_TYPE on
+            // an attachment made by glFramebufferTexture (a layered cube/array attachment) while
+            // still reporting its depth and stencil bits correctly, and taking OBJECT_TYPE at
+            // its word there makes the whole readback report "no such aspect" for a framebuffer
+            // that plainly has one. The OTHER aspect's size matters as much as this one's - a
+            // depth buffer that also carries stencil has to be staged into a packed scratch,
+            // because ES only blits depth between identical formats.
             GLint depthBits = 0;
             GLint stencilBits = 0;
             GLint componentType = GL_UNSIGNED_NORMALIZED;
@@ -6106,6 +6154,28 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 GL_READ_FRAMEBUFFER, AttachmentPointFor(isDefault, false),
                 GL_FRAMEBUFFER_ATTACHMENT_COMPONENT_TYPE, &componentType);
             ClearGLErrors();
+
+            const GLint aspectBits = stencilAspect ? stencilBits : depthBits;
+            if (objectType == GL_NONE && aspectBits <= 0) {
+                return false;
+            }
+
+            if (!isDefault) {
+                // A real object: ask it directly and try that first. It is only a preference,
+                // not a verdict - the probe binds the attachment as GL_TEXTURE_2D, and a name
+                // whose target is not GL_TEXTURE_2D can leave it describing the wrong texture
+                // (see QueryAttachmentSizedFormat). The size-derived guesses below therefore
+                // stay in the list behind it, so a wrong first answer costs one rejected blit
+                // instead of the whole readback. The probe's own refusal must not be left on
+                // the error queue for the caller's next glGetError to pick up as its own.
+                const GLenum exact = ReplicateBlitImpl::QueryAttachmentSizedFormat(point);
+                ClearGLErrors();
+                if (exact != 0) {
+                    out->Push(exact);
+                }
+            } else if (s_slots[stencilAspect ? 1 : 0].defaultFramebufferFormat != 0) {
+                out->Push(s_slots[stencilAspect ? 1 : 0].defaultFramebufferFormat);
+            }
 
             const Bool floatDepth = componentType == GL_FLOAT;
             const Bool packed = depthBits > 0 && stencilBits > 0;
@@ -6222,7 +6292,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // Only this aspect: a packed scratch standing in for a separate attachment
                 // has a second half with nothing to copy into it.
                 g_GLESFuncs.glBlitFramebuffer(x, y, x + width, y + height, 0, 0, width, height, aspectBit, GL_NEAREST);
-                if (g_GLESFuncs.glGetError() != GL_NO_ERROR) {
+                const GLenum blitErr = g_GLESFuncs.glGetError();
+                if (blitErr != GL_NO_ERROR) {
                     continue;
                 }
                 if (isDefault) {
@@ -7564,6 +7635,100 @@ namespace MobileGL::MG_Backend::DirectGLES {
         return true;
     }
 
+    // The frontend's default framebuffer is a placeholder FramebufferObject whose attachments
+    // carry a format and nothing else (MG_Impl/Init.cpp), and it is built before any surface
+    // exists - so it starts on a guess, GL_DEPTH32F_STENCIL8. Every attachment query about the
+    // default framebuffer is answered out of that guess, and being wrong is not cosmetic: GL
+    // blits depth/stencil only between IDENTICAL formats, so a caller that reads
+    // GL_FRAMEBUFFER_ATTACHMENT_DEPTH_SIZE, allocates the buffer it was told about and blits
+    // gets GL_INVALID_OPERATION and a silently dropped blit - colour bits included, because a
+    // rejected glBlitFramebuffer transfers nothing at all. DirectVulkan already publishes its
+    // real format when it creates the swapchain (SwapchainObject::Create); this is the
+    // DirectGLES half, and here the answer can simply be asked of the ES default framebuffer.
+    //
+    // Only the format is published. The placeholder's 512x512 extent is left alone: all three
+    // attachments share it, and FramebufferObject::CheckCompleteness requires them to agree, so
+    // resizing depth/stencil without colour would report the default framebuffer incomplete.
+    static void PublishDefaultFramebufferDepthStencilFormat() {
+        auto& defaultFBOInfo = MG_Impl::GLImpl::FramebufferImpl::pDefaultFramebufferInfo;
+        if (!defaultFBOInfo || !g_GLESFuncs.glGetFramebufferAttachmentParameteriv) return;
+
+        // GL_DEPTH / GL_STENCIL are the default framebuffer's spellings; a user framebuffer
+        // would need GL_DEPTH_ATTACHMENT / GL_STENCIL_ATTACHMENT and answers GL_INVALID_ENUM
+        // for these. Nothing else can be bound this early, but bind explicitly so the answer
+        // describes the default framebuffer even if this is ever called later.
+        GLint previousDrawFramebuffer = 0;
+        g_GLESFuncs.glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &previousDrawFramebuffer);
+        if (previousDrawFramebuffer != 0) {
+            g_GLESFuncs.glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+        }
+
+        ClearGLErrors();
+        GLint depthBits = 0;
+        GLint stencilBits = 0;
+        GLint depthComponentType = GL_UNSIGNED_NORMALIZED;
+        g_GLESFuncs.glGetFramebufferAttachmentParameteriv(GL_DRAW_FRAMEBUFFER, GL_DEPTH,
+                                                          GL_FRAMEBUFFER_ATTACHMENT_DEPTH_SIZE, &depthBits);
+        g_GLESFuncs.glGetFramebufferAttachmentParameteriv(GL_DRAW_FRAMEBUFFER, GL_STENCIL,
+                                                          GL_FRAMEBUFFER_ATTACHMENT_STENCIL_SIZE, &stencilBits);
+        g_GLESFuncs.glGetFramebufferAttachmentParameteriv(GL_DRAW_FRAMEBUFFER, GL_DEPTH,
+                                                          GL_FRAMEBUFFER_ATTACHMENT_COMPONENT_TYPE,
+                                                          &depthComponentType);
+        ClearGLErrors();
+
+        if (previousDrawFramebuffer != 0) {
+            g_GLESFuncs.glBindFramebuffer(GL_DRAW_FRAMEBUFFER, static_cast<GLuint>(previousDrawFramebuffer));
+        }
+        FramebufferImpl::InvalidateFramebufferBindingCache();
+
+        // A driver that refuses the query leaves both at 0. Fall back to what the EGL config
+        // was chosen with, which is what the surface actually has.
+        if (depthBits == 0 && stencilBits == 0 && g_EGLFuncs.eglGetConfigAttrib && g_Display != EGL_NO_DISPLAY &&
+            g_Config != nullptr) {
+            EGLint eglDepth = 0;
+            EGLint eglStencil = 0;
+            if (g_EGLFuncs.eglGetConfigAttrib(g_Display, g_Config, EGL_DEPTH_SIZE, &eglDepth)) {
+                depthBits = static_cast<GLint>(eglDepth);
+            }
+            if (g_EGLFuncs.eglGetConfigAttrib(g_Display, g_Config, EGL_STENCIL_SIZE, &eglStencil)) {
+                stencilBits = static_cast<GLint>(eglStencil);
+            }
+        }
+
+        if (depthBits <= 0 && stencilBits <= 0) {
+            MGLOG_D("DirectGLES: default framebuffer reports no depth or stencil; leaving the "
+                    "placeholder attachment formats untouched");
+            return;
+        }
+
+        const Bool floatDepth = depthComponentType == GL_FLOAT;
+        TextureInternalFormat depthFormat = TextureInternalFormat::Depth24Stencil8;
+        TextureInternalFormat stencilFormat = TextureInternalFormat::Depth24Stencil8;
+        if (depthBits > 0 && stencilBits > 0) {
+            // Packed: both frontend attachments name the same combined format, as DirectVulkan does.
+            depthFormat = (floatDepth || depthBits > 24) ? TextureInternalFormat::Depth32FStencil8
+                                                         : TextureInternalFormat::Depth24Stencil8;
+            stencilFormat = depthFormat;
+        } else if (depthBits > 0) {
+            depthFormat = floatDepth              ? TextureInternalFormat::DepthComponent32F
+                          : (depthBits <= 16)     ? TextureInternalFormat::DepthComponent16
+                                                  : TextureInternalFormat::DepthComponent24;
+            stencilFormat = depthFormat;
+        } else {
+            depthFormat = TextureInternalFormat::StencilIndex8;
+            stencilFormat = TextureInternalFormat::StencilIndex8;
+        }
+
+        auto* depthTexture = defaultFBOInfo->depthAttachment.get();
+        auto* stencilTexture = defaultFBOInfo->stencilAttachment.get();
+        if (depthTexture) depthTexture->SetInternalFormat(depthFormat);
+        if (stencilTexture) stencilTexture->SetInternalFormat(stencilFormat);
+        MGLOG_D("DirectGLES: default framebuffer depth=%d stencil=%d float=%d; published attachment "
+                "formats depth=%d stencil=%d",
+                depthBits, stencilBits, floatDepth ? 1 : 0, static_cast<int>(depthFormat),
+                static_cast<int>(stencilFormat));
+    }
+
 #if defined(__linux__) && !defined(__ANDROID__)
     static void* OpenX11Lib() {
         void* x11Lib = dlopen("libX11.so.6", RTLD_LOCAL | RTLD_NOW);
@@ -7821,6 +7986,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         if (!MakeCurrent()) return false;
 
         ApplyRequestedSwapInterval();
+        PublishDefaultFramebufferDepthStencilFormat();
 
         MGLOG_D("EGL context created successfully: display=%p, surface=%p, context=%p. window=%p", g_Display, g_Surface,
                 g_Context, window);
@@ -7836,6 +8002,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
         if (g_Surface == EGL_NO_SURFACE) return false;
 
         if (!MakeCurrent()) return false;
+
+        PublishDefaultFramebufferDepthStencilFormat();
 
         MGLOG_D("EGL pbuffer context created successfully: display=%p, surface=%p, context=%p. size=%dx%d", g_Display,
                 g_Surface, g_Context, width, height);

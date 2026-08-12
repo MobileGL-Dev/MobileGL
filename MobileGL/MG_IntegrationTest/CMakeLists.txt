@@ -61,6 +61,8 @@ add_executable(MobileGLIntegrationTest
     Scenarios/ClearThenReadPixelsScenario.cpp
     Scenarios/DepthStencilReadbackScenario.cpp
     Scenarios/DepthStencilReadbackMatrixScenario.cpp
+    Scenarios/DepthStencilReadbackAttachmentShapeScenario.cpp
+    Scenarios/ClipDistanceScenario.cpp
     Scenarios/SsboArrayLengthScenario.cpp
     Scenarios/DoublePrecisionScenario.cpp
     Scenarios/UniformInitializerScenario.cpp
