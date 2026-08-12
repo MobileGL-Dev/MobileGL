@@ -839,7 +839,16 @@ namespace MobileGL {
                 // MGLOG_I, deliberately: MGLOG_E/W are compiled out at the INFO level every CI,
                 // retrace and release build uses, and this is exactly the diagnostic that has to
                 // survive to explain the shader the driver is about to reject.
-                if (Lower1DArrayImagesPass::BinaryQueriesA1DArrayStorageImageSize(inputBinary)) {
+                const auto traits = Lower1DArrayImagesPass::InspectBinary(inputBinary);
+                // The overwhelmingly common answer, and the reason the inspection exists: no
+                // 1D-array storage image, so the module is handed back byte for byte without an
+                // Optimizer ever being built. Every ESSL shader in the process passes through
+                // here, so the cost of the case with nothing to do is the cost of this pass.
+                if (!traits.declaresImage) {
+                    outputBinary = inputBinary;
+                    return true;
+                }
+                if (traits.queriesImageSize) {
                     MGLOG_I("[spirv] Lower1DArrayImagesForEssl: the module queries the size of a 1D-array "
                             "storage image, which cannot be answered in the 2D-array shape ES stores it in; "
                             "leaving the module alone, and a strict ES driver will reject it");

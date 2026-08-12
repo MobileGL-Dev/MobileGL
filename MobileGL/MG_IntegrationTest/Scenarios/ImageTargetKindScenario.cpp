@@ -204,8 +204,8 @@ namespace MGITest {
 
             // Storage plus a full fill with `value`, in the spelling each target kind needs.
             // Returns 0 - having already reported - when the target could not be created.
-            GLuint MakeTexture(const TargetKind& kind, bool fill) {
-                const std::vector<GLuint> texels(static_cast<std::size_t>(kExtent) * kExtent * kExtent, kFilledValue);
+            GLuint MakeTexture(const TargetKind& kind, bool fill, GLuint value = kFilledValue) {
+                const std::vector<GLuint> texels(static_cast<std::size_t>(kExtent) * kExtent * kExtent, value);
 
                 if (kind.buffer) {
                     GLuint buffer = 0;
@@ -441,8 +441,14 @@ namespace MGITest {
     // needs several kinds in one program - a binding remap that only collides when two image
     // types share a descriptor set, a per-kind rewrite that is not idempotent across declarations
     // - and that class of defect is precisely what "each kind passes alone but the case still
-    // fails" would mean. Each unit is filled with its own INDEX rather than a constant, so the
-    // sum names how many units contributed and a single mis-bound unit does not cancel out.
+    // fails" would mean.
+    //
+    // Each unit is filled with its own DISTINCT value rather than a shared one, so a shortfall
+    // names WHICH kind is missing rather than merely how many are: with one shared value, "three
+    // kinds read zero" and "one kind read zero" differ only by a multiple, and any two kinds are
+    // interchangeable in the total. A sum still cannot see two kinds SWAPPING - addition is
+    // commutative, and the conformance case has exactly the same blind spot - but the single-kind
+    // cases above pin each kind to its own texture already, so a swap cannot hide there.
     TEST_F(ImageTargetKindScenario, AllKindsInOneProgram) {
         if (!Ready()) return;
         if (!ImagesAreUsable()) GTEST_SKIP() << "no compute image uniforms";
@@ -483,12 +489,15 @@ namespace MGITest {
         const GLuint program = MakeComputeProgram(source);
         if (program == 0) return;
 
-        // Each unit gets its own value, so the sum says how many units contributed.
+        // Powers of two, so the shortfall's bit pattern names exactly which kinds read zero -
+        // no other subset of the values can sum to the same total. Eleven kinds at most, so the
+        // largest is 1 << 10 and the sum cannot approach a uint's range.
         GLuint expected = 0;
         for (std::size_t i = 0; i < kinds.size(); ++i) {
-            const GLuint texture = MakeTexture(kinds[i], true);
+            const GLuint value = 1u << i;
+            const GLuint texture = MakeTexture(kinds[i], true, value);
             if (texture == 0) return;
-            expected += kFilledValue;
+            expected += value;
             glBindImageTexture(static_cast<GLuint>(i), texture, 0, GL_TRUE, 0, GL_READ_ONLY, GL_R32UI);
             ASSERT_EQ(FirstGLError(), 0u) << kinds[i].name << ": glBindImageTexture errored";
         }
@@ -504,10 +513,19 @@ namespace MGITest {
         glMemoryBarrier(GL_ALL_BARRIER_BITS);
         EXPECT_EQ(FirstGLError(), 0u) << "the dispatch leaked a GL error";
 
-        EXPECT_EQ(ReadResult(ssbo), expected)
+        const GLuint actual = ReadResult(ssbo);
+        std::string missing;
+        for (std::size_t i = 0; i < kinds.size(); ++i) {
+            if ((actual & (1u << i)) == 0u) {
+                if (!missing.empty()) missing += ", ";
+                missing += kinds[i].name;
+            }
+        }
+        EXPECT_EQ(actual, expected)
             << "the sum over " << kinds.size()
-            << " image target kinds is wrong; each kind contributes " << kFilledValue
-            << ", so the shortfall is a whole number of kinds that read zero";
+            << " image target kinds is wrong; each kind contributes its own bit, and these read "
+               "zero: "
+            << (missing.empty() ? "(none - so some kind read a value it was never given)" : missing);
         glUseProgram(0);
     }
 

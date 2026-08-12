@@ -843,8 +843,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             return false;
         }
 
-        // Sized against the VIEW's format, not the texture's attached one - they may differ by the
-        // paragraph above, and a range that is not a whole number of the view's texels is invalid.
+        // Sized from the TEXTURE's attached format even though the view may carry a different
+        // one. That is not a shortcut: GL requires the shader's format qualifier, the format
+        // passed to glBindImageTexture and the texture's own internal format to belong to the
+        // same format CLASS (GL 4.6 core, table 8.27), and every member of a class has the same
+        // texel size. So the three can disagree on interpretation and never on bytes - which is
+        // what the range below has to be a whole multiple of.
         const VkDeviceSize texelSize =
             static_cast<VkDeviceSize>(MG_Util::GetSizedInternalFormatSizeInBytes(internalFormat));
         const VkDeviceSize rangeOffset = static_cast<VkDeviceSize>(textureBuffer->GetBufferRangeOffset());
@@ -1716,6 +1720,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // is reachable wherever m_maxBindings is small (it clamps to ~16 on Adreno and Mali),
         // which is exactly where a 7-element CTS sampler array does not fit the slack.
         imageInfos.reserve(m_maxBindings + arrayDescriptorExtra);
+        // Exact, and safe only because it is: BOTH texel kinds (samplerBuffer and imageBuffer)
+        // refuse descriptor arrays at program creation, so each contributes at most one view and
+        // the total cannot exceed the binding count. The branches below take the address of
+        // back(), so making a texel kind array-capable without also giving this the surplus
+        // imageInfos gets would dangle every pTexelBufferView already recorded in `writes`.
         texelBufferViews.reserve(m_maxBindings);
         dynamicOffsets.reserve(programObj.dynamicBindings.size() + uboArrayExtra);
 

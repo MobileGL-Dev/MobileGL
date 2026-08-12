@@ -112,16 +112,30 @@ namespace MobileGL {
                 }
             } // namespace
 
-            bool Lower1DArrayImagesPass::BinaryQueriesA1DArrayStorageImageSize(const Vector<Uint32>& binary) {
+            Lower1DArrayImagesPass::ModuleTraits Lower1DArrayImagesPass::InspectBinary(const Vector<Uint32>& binary) {
+                ModuleTraits traits{};
                 if (binary.empty()) {
-                    return false;
+                    return traits;
                 }
                 std::unique_ptr<IRContext> context = spvtools::BuildModule(
                     SPV_ENV_VULKAN_1_1, [](spv_message_level_t, const char*, const spv_position_t&, const char*) {},
                     binary.data(), binary.size());
                 if (!context) {
-                    return false;
+                    return traits;
                 }
+
+                // The type table settles it for the cheap half, and it is the half almost every
+                // shader takes: no such type declared, nothing to inspect further.
+                for (const Instruction& type : context->module()->types_values()) {
+                    if (Is1DArrayStorageImageType(&type)) {
+                        traits.declaresImage = true;
+                        break;
+                    }
+                }
+                if (!traits.declaresImage) {
+                    return traits;
+                }
+
                 for (auto& function : *context->module()) {
                     for (auto& block : function) {
                         for (auto& instruction : block) {
@@ -130,12 +144,13 @@ namespace MobileGL {
                             }
                             if (Is1DArrayStorageImageType(
                                     ResolveImageType(context.get(), instruction.GetSingleWordInOperand(0)))) {
-                                return true;
+                                traits.queriesImageSize = true;
+                                return traits;
                             }
                         }
                     }
                 }
-                return false;
+                return traits;
             }
 
             spvtools::opt::Pass::Status Lower1DArrayImagesPass::Process() {

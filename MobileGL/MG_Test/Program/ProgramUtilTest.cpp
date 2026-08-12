@@ -3632,7 +3632,8 @@ void main() { ssb.sum = uint(imageSize(i0).x) + imageLoad(i0, ivec2(0, 0)).r; }
 )",
                                                    GL_COMPUTE_SHADER);
     ASSERT_FALSE(spirv.empty());
-    ASSERT_TRUE(Lower1DArrayImagesPass::BinaryQueriesA1DArrayStorageImageSize(spirv))
+    const auto traits = Lower1DArrayImagesPass::InspectBinary(spirv);
+    ASSERT_TRUE(traits.declaresImage && traits.queriesImageSize)
         << "the fixture must contain the shape the pass declines";
 
     Vector<Uint32> lowered;

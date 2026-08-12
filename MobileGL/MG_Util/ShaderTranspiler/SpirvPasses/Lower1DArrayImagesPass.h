@@ -65,11 +65,22 @@ namespace MobileGL {
                 const char* name() const override { return "mobilegl-lower-1d-array-images"; }
                 Status Process() override;
 
-                // True when the module declares a 1D-array storage image whose size is queried,
-                // which is the shape this pass refuses to translate. Checked by the caller before
-                // running, so a declined module is handed on untouched rather than partly
-                // rewritten.
-                static bool BinaryQueriesA1DArrayStorageImageSize(const Vector<Uint32>& binary);
+                // What one inspection of a binary tells the caller. Both answers come from a
+                // SINGLE parse on purpose: every ESSL shader in the process reaches this, and
+                // almost none of them declare a 1D-array storage image, so the common path has to
+                // cost one module parse and no optimizer run at all - not one parse to ask about
+                // size queries and a second inside an Optimizer that then early-outs.
+                struct ModuleTraits {
+                    // The module declares a 1D-array storage image, i.e. there is anything to do.
+                    bool declaresImage = false;
+                    // ...and queries its size, which is the shape this pass refuses to translate:
+                    // afterwards the image is a 2D array, so the query yields three components
+                    // where the shader consumes two, and there is no correct two-component answer
+                    // to substitute. The caller leaves such a module alone rather than half
+                    // rewriting it.
+                    bool queriesImageSize = false;
+                };
+                static ModuleTraits InspectBinary(const Vector<Uint32>& binary);
 
                 static spvtools::Optimizer::PassToken CreateLower1DArrayImagesPass();
             };
