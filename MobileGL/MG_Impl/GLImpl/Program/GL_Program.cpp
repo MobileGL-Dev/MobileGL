@@ -850,7 +850,12 @@ namespace MobileGL::MG_Impl::GLImpl {
     // vector per column - while the value glGetUniform* must return is tightly packed
     // columns * rows floats. Only mat4 is the same either way; every other shape needs the
     // padding undone, and the readback has to undo exactly what UniformMatrixfv_Object put
-    // there. Returns false when `ttype` is not a float matrix (nothing to unpack).
+    // there. Returns false when there is nothing here to unpack.
+    //
+    // A DOUBLE matrix is declined not because it is laid out differently - it is not, the
+    // demotion makes a dmat4 a mat4 in the shader and a mat4-shaped slot here - but because it
+    // is ROUTED differently: the caller's component-by-component EbtDouble branch has to widen
+    // each float back to the queried type, and it undoes the same padding itself.
     Bool TryGatherFloatMatrixColumns(const glslang::TType* ttype, const char* pBase, void* params) {
         if (ttype == nullptr || !ttype->isMatrix() || ttype->getBasicType() == glslang::EbtDouble) return false;
         const Int columns = ttype->getMatrixCols();

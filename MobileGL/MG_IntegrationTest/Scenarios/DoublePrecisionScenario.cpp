@@ -314,6 +314,45 @@ void main() {
             EXPECT_EQ(glGetError(), static_cast<GLenum>(GL_NO_ERROR));
         }
 
+        TEST_F(DoublePrecisionScenario, ADoubleUniformKeepsItsDeclaredInitializer) {
+            if (!Ready()) return;
+            // A declared initializer is seeded straight into the uniform shadow at link, and the
+            // seeding used to skip 64-bit floats outright ("no 32-bit shadow encoding") - which
+            // was true before the demotion and silently left every such uniform reading zero.
+            const char* source = R"(#version 430 core
+layout(local_size_x = 1) in;
+uniform double uSeeded = 2.5lf;
+uniform dvec3  uSeededVector = dvec3(4.0lf, 5.0lf, 6.0lf);
+layout(std430, binding = 0) buffer Output {
+    float g_out[];
+};
+void main() {
+    g_out[0] = float(uSeeded);
+    g_out[1] = float(uSeededVector.x);
+    g_out[2] = float(uSeededVector.y);
+    g_out[3] = float(uSeededVector.z);
+}
+)";
+            const GLuint program = CompileComputeProgram(source);
+            ASSERT_NE(program, 0u) << m_buildLog;
+
+            glUseProgram(program);
+            glDispatchCompute(1, 1, 1);
+            glMemoryBarrier(GL_BUFFER_UPDATE_BARRIER_BIT);
+            std::vector<float> values(4, -1.0f);
+            glBindBuffer(GL_SHADER_STORAGE_BUFFER, m_output);
+            glGetBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, 4 * sizeof(float), values.data());
+            glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
+            glUseProgram(0);
+            glDeleteProgram(program);
+
+            EXPECT_FLOAT_EQ(values[0], 2.5f) << "scalar double initializer";
+            EXPECT_FLOAT_EQ(values[1], 4.0f) << "dvec3 initializer .x";
+            EXPECT_FLOAT_EQ(values[2], 5.0f) << "dvec3 initializer .y";
+            EXPECT_FLOAT_EQ(values[3], 6.0f) << "dvec3 initializer .z";
+            EXPECT_EQ(glGetError(), static_cast<GLenum>(GL_NO_ERROR));
+        }
+
         TEST_F(DoublePrecisionScenario, TheFp64ExtensionIsNotAdvertised) {
             if (!Ready()) return;
             // The shader above compiled, linked and ran without the extension string, which is

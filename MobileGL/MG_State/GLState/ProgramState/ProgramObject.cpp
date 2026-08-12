@@ -165,10 +165,18 @@ namespace MobileGL::MG_State::GLState {
             const Int elements = init.arraySize;
             if (componentsPerElement <= 0 || elements <= 0) continue;
 
-            const Bool isFloat = init.basicType == glslang::EbtFloat || init.basicType == glslang::EbtFloat16;
+            // EbtDouble belongs with the floats now, not with the skipped types: every 64-bit
+            // float in a shader is narrowed to 32 bits before the module reaches a backend
+            // (ShaderTranspiler::DemoteFloat64Pass), so a `uniform double d = 1.5;` has exactly
+            // the 32-bit shadow encoding a `uniform float` does - and glslang already folded its
+            // value into floatValues, which is a vector<double> either way. Leaving it out meant
+            // the initializer was silently dropped and the uniform came up zero.
+            const Bool isFloat = init.basicType == glslang::EbtFloat ||
+                                 init.basicType == glslang::EbtFloat16 ||
+                                 init.basicType == glslang::EbtDouble;
             const Bool isInt = init.basicType == glslang::EbtInt || init.basicType == glslang::EbtUint ||
                                init.basicType == glslang::EbtBool;
-            // Anything else (fp64, 64-bit integers) has no 32-bit shadow encoding here, and a
+            // Anything else (64-bit integers) has no 32-bit shadow encoding here, and a
             // half-written uniform is worse than an untouched one.
             if (!isFloat && !isInt) continue;
             const SizeT provided = isFloat ? init.floatValues.size() : init.intValues.size();
