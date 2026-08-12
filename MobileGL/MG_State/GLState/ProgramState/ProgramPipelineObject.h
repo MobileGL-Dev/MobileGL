@@ -67,20 +67,30 @@ namespace MobileGL {
                 // GRAPHICS stages are composited into a single hidden program object, rebuilt
                 // whenever the stage set - or any stage program's own link - changes. The
                 // signature is what that "changes" means: a stage program's lifetime id pins the
-                // object and its backend state version pins the link generation.
+                // object and its LINK version pins the link generation. It covers exactly the
+                // stages the composite is built from, so attaching or relinking a compute stage
+                // never invalidates a perfectly good graphics composite - and the compute stage,
+                // having no composite of its own, can never collide with it.
                 //
-                // The backend state version is BLUNTER than that description: glUniform1i on a
-                // sampler and glUniformBlockBinding bump it too, so either one throws the
-                // composite away and relinks it on the next draw. That is correct but slow, and
-                // it is a shape the SSO conformance cases hit in a loop. Narrowing it to
-                // GetLinkVersion() means the composite must instead pick those two up the way it
-                // picks up uniform values (below) - the sampler half already works that way,
-                // the block-binding half does not yet, which is why this still keys on the
-                // blunter version.
-                // It covers
-                // exactly the stages the composite is built from, so attaching or relinking a
-                // compute stage never invalidates a perfectly good graphics composite - and the
-                // compute stage, having no composite of its own, can never collide with it.
+                // GetLinkVersion() and NOT GetBackendStateVersion(), which is what this used to
+                // key on. The backend state version moves on every glUniform1i to a sampler and
+                // every glUniformBlockBinding, so the "set a sampler unit, draw" loop that the
+                // SSO conformance cases run threw the composite away and REBUILT it on every
+                // single draw: a fresh ProgramObject, a full Link(true) settled synchronously
+                // (glslang + SPIR-V + spirv-opt), a full re-mirror, and a brand-new program
+                // identity that invalidated both backends' per-program registries and pipeline
+                // memos along the way. The composite's CONTENT depends on the link generations
+                // and nothing else, and m_linkVersion is bumped by exactly those
+                // (BumpLinkObservableVersions).
+                //
+                // The prerequisite that makes the narrowing legal: because the composite no
+                // longer rebuilds when per-program uniform STATE changes, every such change must
+                // reach it through the refresh below instead. Both do - sampler/image units via
+                // MirrorUniformValues, interface block bindings via MirrorBlockBindings - and
+                // the two setters that write them still bump the counters the REFRESH gate reads
+                // (see ComputeUniformMirrorVersions), which is a separate question from what
+                // this signature reads. They are the only two writers of m_backendStateVersion
+                // outside the link paths, so nothing else was ever riding on the rebuild.
                 using DrawProgramSignature = Array<Uint64, kGraphicsStageCount * 2>;
 
                 DrawProgramSignature ComputeDrawProgramSignature() const {
@@ -89,7 +99,7 @@ namespace MobileGL {
                         const auto& program = m_stagePrograms[stage];
                         if (!program) continue;
                         signature[stage * 2] = program->GetLifetimeId();
-                        signature[stage * 2 + 1] = program->GetBackendStateVersion();
+                        signature[stage * 2 + 1] = program->GetLinkVersion();
                     }
                     return signature;
                 }
@@ -102,6 +112,14 @@ namespace MobileGL {
                 // the per-stage versions "needs it" is measured against. All zero after a
                 // rebuild, because a fresh composite holds only what its shaders declared and
                 // so needs a full refresh.
+                //
+                // backendStateVersion belongs HERE even though ComputeDrawProgramSignature no
+                // longer reads it, and that is the whole point of the split: a sampler-unit or
+                // uniform-block-binding write must still trip the MIRROR (it is now the only
+                // route those values have to the composite) while deliberately NOT tripping the
+                // rebuild. uboContentVersion covers ordinary uniform writes, and
+                // blockBindingVersion covers the storage-block setter, which moves neither of
+                // the other two.
                 using UniformMirrorVersions = Array<Uint64, kGraphicsStageCount * 2>;
 
                 UniformMirrorVersions ComputeUniformMirrorVersions() const {

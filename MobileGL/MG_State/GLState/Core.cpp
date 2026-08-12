@@ -384,23 +384,49 @@ namespace MobileGL::MG_State {
         // Location-by-location so that arrays are carried across whole, and via the padded
         // storage span so a mat3's std140 column padding travels with it.
         //
-        // KNOWN LIMIT, inherent to flattening rather than to this copy: SSO gives each stage
-        // program its own storage for a uniform, so two stage programs may declare the same
-        // name and hold different values - but the composite is one link and has one slot for
-        // it. RefreshCompositeUniforms walks the stages in order, so the last graphics stage
-        // that declares the name wins, including when it is only holding the zero default and
-        // an earlier stage held a written value. Fixing it properly means mirroring only the
-        // uniforms a program has actually been written to, which wants a per-location dirty
-        // set on ProgramObject.
+        // WHICH uniforms: exactly the ones `source` has been WRITTEN to since its last link
+        // (ProgramObject's per-location dirty set), and that restriction is a correctness fix
+        // as much as it is the reason this is cheap.
+        //
+        // SSO gives each stage program its own storage for a uniform, so two stage programs
+        // may declare the same name and hold different values - but the composite is one link
+        // with one slot for it, and RefreshCompositeUniforms walks the stages in order. When
+        // every active uniform was copied unconditionally, the LAST graphics stage that merely
+        // DECLARED a name won, even while holding nothing but GL's zero default, and an
+        // earlier stage's written value was overwritten with zeros on the way to the draw. The
+        // shared-header idiom - the same `uniform mat4 u_mvp` declared in the VS and the FS,
+        // written through glActiveShaderProgram(pipe, vs) - rendered nothing because of it.
+        // Copying only written uniforms makes that case, which is the overwhelmingly common
+        // one, simply correct: an unwritten declaration has nothing to say and says nothing.
+        //
+        // WHEN BOTH STAGES WROTE THE SAME NAME there is no single right answer available -
+        // GL_ARB_separate_shader_objects gives the two values separate storage and the
+        // composite has one slot - so the rule is LAST WRITTEN-TO GRAPHICS STAGE WINS, in
+        // ShaderStage enum order (Vertex .. Fragment), decided by the stage walk in
+        // RefreshCompositeUniforms. It is deterministic, and it is strictly better than what
+        // it replaces: only a stage that actually holds an application-written value can now
+        // take the slot. True last-WRITE-wins would need a global write ordering the dirty set
+        // does not carry.
+        //
+        // An unwritten uniform is not left to chance either: the composite links the same
+        // shader objects the stages do, so its own link seeds it with the same declared
+        // initializers (ApplyUniformInitialValues), which is precisely the value GL says an
+        // unwritten uniform reads.
         static void MirrorUniformValues(ProgramObject& source, ProgramObject& destination) {
             if (!source.GetLinkStatus() || !destination.GetLinkStatus()) return;
+            // O(uniforms written), not O(uniforms declared). The two name lookups below are
+            // string hashes into both programs' location maps, and doing them for every active
+            // uniform of every stage on every gate trip was hundreds of them per draw on a
+            // large program. A stage nothing has been written to costs one empty() test.
+            const Vector<Uint>& writtenIndices = source.GetWrittenUniformIndices();
+            if (writtenIndices.empty()) return;
+
             const char* sourceUbo = static_cast<const char*>(source.GetUBOData());
             char* destinationUbo = static_cast<char*>(destination.MapUBO());
             const SizeT sourceUboSize = source.GetUBOSize();
             const SizeT destinationUboSize = destination.GetUBOSize();
 
-            const Uint uniformCount = source.GetUniformCount();
-            for (Uint index = 0; index < uniformCount; ++index) {
+            for (const Uint index : writtenIndices) {
                 const String& name = source.GetActiveUniformName(index);
                 if (name.empty()) continue;
                 const Int sourceBase = source.GetUniformLocation(name);
@@ -418,6 +444,10 @@ namespace MobileGL::MG_State {
                         !destination.IsValidUniformLocation(destinationLocation)) {
                         break;
                     }
+                    // Per ELEMENT, not per array: `arr[3] = x` must carry element 3 and leave
+                    // the elements another stage owns alone. `continue`, not `break` - the
+                    // written elements of an array need not be a prefix of it.
+                    if (!source.IsUniformWrittenAtLocation(static_cast<Uint>(sourceLocation))) continue;
                     // Stop at the end of EITHER side's array rather than walking onto the
                     // neighbouring uniform of whichever program has the shorter one.
                     if (!source.UniformLocationsAliasSameUniform(sourceBase, sourceLocation) ||
@@ -551,13 +581,13 @@ namespace MobileGL::MG_State {
             if (!pipeline) return nullProgram;
 
             // P1 join site J1. ComputeDrawProgramSignature() keys the composite cache on each
-            // stage program's lifetimeId and backendStateVersion - NON-artifact fields, so
-            // they do not pass through ProgramObject's join gate and a pending link would
-            // stay pending right through the signature. Since the version is bumped both at
-            // enqueue and at publish, the signature computed inside a pending window is one
-            // that will never be produced again: every draw would miss the cache and rebuild
-            // (and relink) the composite. Join first, so the signature describes settled
-            // programs. In steady state this is a null check per stage.
+            // stage program's lifetimeId and linkVersion - NON-artifact fields, so they do not
+            // pass through ProgramObject's join gate and a pending link would stay pending
+            // right through the signature. Since the version is bumped both at enqueue and at
+            // publish, the signature computed inside a pending window is one that will never
+            // be produced again: every draw would miss the cache and rebuild (and relink) the
+            // composite. Join first, so the signature describes settled programs. In steady
+            // state this is a null check per stage.
             for (SizeT stage = 0; stage < ProgramPipelineObject::kGraphicsStageCount; ++stage) {
                 const auto& stageProgram = pipeline->GetStageProgram(static_cast<ShaderStage>(stage));
                 if (stageProgram) stageProgram->JoinLinkAndSpirv();

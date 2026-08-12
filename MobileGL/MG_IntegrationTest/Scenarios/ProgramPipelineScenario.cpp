@@ -599,6 +599,241 @@ void main() { o_color = u_colour; }
         gl.EndFrame();
     }
 
+    // The shared-header idiom, drawn: BOTH stages declare `u_mvp` because they both include the
+    // same header, and only the VERTEX program is ever written to.
+    //
+    // The composite has one slot for `u_mvp`, and mirroring every active uniform of every stage
+    // in stage order meant the fragment program's untouched zero matrix landed last and won.
+    // The vertex stage then transformed every vertex by a zero matrix and the frame came out
+    // empty - from an application that had done nothing wrong, with no GL error anywhere to say
+    // so. Only uniforms a stage has actually been written to are mirrored now.
+    TEST_F(ProgramPipelineScenario, AUniformDeclaredInTwoStagesKeepsTheValueTheWrittenStageHolds) {
+        if (!Ready()) return;
+        HeadlessGL& gl = Gl();
+        const int width = gl.Width();
+        const int height = gl.Height();
+
+        // The same declaration in both stages, exactly as a shared header produces it. The
+        // fragment stage does not even USE it for its output - declaring it is enough.
+        static const char* kSharedMvpVS = R"(#version 430 core
+out gl_PerVertex { vec4 gl_Position; };
+uniform mat4 u_mvp;
+void main()
+{
+    vec4 corner = vec4(0.0, 0.0, 0.0, 1.0);
+    switch (gl_VertexID)
+    {
+      case 0: corner = vec4(-1.0, -1.0, 0.0, 1.0); break;
+      case 1: corner = vec4( 1.0, -1.0, 0.0, 1.0); break;
+      case 2: corner = vec4(-1.0,  1.0, 0.0, 1.0); break;
+      case 3: corner = vec4( 1.0,  1.0, 0.0, 1.0); break;
+    }
+    gl_Position = u_mvp * corner;
+}
+)";
+        static const char* kSharedMvpFS = R"(#version 430 core
+uniform mat4 u_mvp;
+out vec4 o_color;
+void main() { o_color = vec4(0.0, 1.0, 0.0, u_mvp[3][3]); }
+)";
+
+        const GLuint vs = MakeSeparable(GL_VERTEX_SHADER, kSharedMvpVS);
+        const GLuint fs = MakeSeparable(GL_FRAGMENT_SHADER, kSharedMvpFS);
+        if (vs == 0 || fs == 0) return;
+
+        const GLuint pipeline = MakePipeline();
+        glUseProgramStages(pipeline, GL_VERTEX_SHADER_BIT, vs);
+        glUseProgramStages(pipeline, GL_FRAGMENT_SHADER_BIT, fs);
+        glBindProgramPipeline(pipeline);
+
+        // Written through the VERTEX program only - which is the whole point. The fragment
+        // program's `u_mvp` is left at GL's zero default and must not win the composite's slot.
+        glActiveShaderProgram(pipeline, vs);
+        const GLint location = glGetUniformLocation(vs, "u_mvp");
+        ASSERT_NE(location, -1);
+        const GLfloat identity[16] = {1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f,
+                                      0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f};
+        glUniformMatrix4fv(location, 1, GL_FALSE, identity);
+        ASSERT_EQ(FirstGLError(), 0u) << "glUniformMatrix4fv through the active shader program errored";
+
+        GLuint vao = 0;
+        glGenVertexArrays(1, &vao);
+        glBindVertexArray(vao);
+        BindDefaultFramebuffer();
+        glViewport(0, 0, width, height);
+        glDisable(GL_SCISSOR_TEST);
+        glDisable(GL_DEPTH_TEST);
+        ClearTo(0.0f, 0.0f, 0.0f, 1.0f);
+        glUseProgram(0);
+        glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+
+        // A zero matrix collapses all four corners onto the origin and paints nothing at all, so
+        // "green over the whole viewport" IS the assertion that the written matrix was the one
+        // the draw used. (The fragment stage reads u_mvp too - into the alpha channel - purely
+        // so the optimizer cannot delete its declaration and make the case vacuous.)
+        const Image painted = ReadPixels(width, height);
+        EXPECT_TRUE(RegionIsMostly(painted, 2, width - 3, 2, height - 3, "green", 0.0,
+                                   "a pipeline whose u_mvp is declared in both stages and written in one"));
+        EXPECT_EQ(FirstGLError(), 0u) << "the shared-uniform pipeline draw leaked a GL error";
+
+        glBindVertexArray(0);
+        glDeleteVertexArrays(1, &vao);
+        gl.EndFrame();
+    }
+
+    // Rebinding a uniform block AFTER the pipeline has already drawn once.
+    //
+    // This is the shape the composite cache key change put weight on. The composite used to be
+    // thrown away and relinked whenever glUniformBlockBinding moved a stage program's backend
+    // state version, so the second draw here got a brand-new composite that happened to pick the
+    // new binding up on the way. Now the composite SURVIVES the rebinding, which means the only
+    // thing that can carry the new binding to the draw is the refresh path - so this case is
+    // what says that path is really doing the work.
+    TEST_F(ProgramPipelineScenario, RebindingAUniformBlockBetweenDrawsReachesTheNextDraw) {
+        if (!Ready()) return;
+        HeadlessGL& gl = Gl();
+        const int width = gl.Width();
+        const int height = gl.Height();
+
+        static const char* kUniformBlockFS = R"(#version 430 core
+layout(std140) uniform Colour { vec4 u_colour; };
+out vec4 o_color;
+void main() { o_color = u_colour; }
+)";
+        const GLuint vs = MakeSeparable(GL_VERTEX_SHADER, kSeparableVS);
+        const GLuint fs = MakeSeparable(GL_FRAGMENT_SHADER, kUniformBlockFS);
+        if (vs == 0 || fs == 0) return;
+
+        // Two buffers on two different binding points, holding two different colours.
+        const GLfloat red[4] = {1.0f, 0.0f, 0.0f, 1.0f};
+        const GLfloat green[4] = {0.0f, 1.0f, 0.0f, 1.0f};
+        constexpr GLuint kFirstBinding = 2;
+        constexpr GLuint kSecondBinding = 5;
+        GLuint buffers[2] = {0, 0};
+        glGenBuffers(2, buffers);
+        glBindBuffer(GL_UNIFORM_BUFFER, buffers[0]);
+        glBufferData(GL_UNIFORM_BUFFER, sizeof(red), red, GL_STATIC_DRAW);
+        glBindBufferBase(GL_UNIFORM_BUFFER, kFirstBinding, buffers[0]);
+        glBindBuffer(GL_UNIFORM_BUFFER, buffers[1]);
+        glBufferData(GL_UNIFORM_BUFFER, sizeof(green), green, GL_STATIC_DRAW);
+        glBindBufferBase(GL_UNIFORM_BUFFER, kSecondBinding, buffers[1]);
+        glBindBuffer(GL_UNIFORM_BUFFER, 0);
+
+        const GLuint blockIndex = glGetUniformBlockIndex(fs, "Colour");
+        ASSERT_NE(blockIndex, GL_INVALID_INDEX);
+        glUniformBlockBinding(fs, blockIndex, kFirstBinding);
+
+        const GLuint pipeline = MakePipeline();
+        glUseProgramStages(pipeline, GL_VERTEX_SHADER_BIT, vs);
+        glUseProgramStages(pipeline, GL_FRAGMENT_SHADER_BIT, fs);
+
+        GLuint vao = 0;
+        glGenVertexArrays(1, &vao);
+        glBindVertexArray(vao);
+        BindDefaultFramebuffer();
+        glViewport(0, 0, width, height);
+        glDisable(GL_SCISSOR_TEST);
+        glDisable(GL_DEPTH_TEST);
+        glUseProgram(0);
+        glBindProgramPipeline(pipeline);
+
+        // Draw one: the composite is built here, against binding 2.
+        ClearTo(0.0f, 0.0f, 0.0f, 1.0f);
+        glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+        const Image first = ReadPixels(width, height);
+        EXPECT_TRUE(RegionIsMostly(first, 2, width - 3, 2, height - 3, "red", 0.0,
+                                   "the first pipeline draw, with Colour on binding 2"));
+        ASSERT_EQ(FirstGLError(), 0u) << "the first uniform-block pipeline draw leaked a GL error";
+
+        // Move the block to the other binding point, with the composite already built and cached.
+        glUniformBlockBinding(fs, blockIndex, kSecondBinding);
+        ASSERT_EQ(FirstGLError(), 0u) << "rebinding a uniform block between draws errored";
+
+        // Draw two must read the OTHER buffer.
+        ClearTo(0.0f, 0.0f, 0.0f, 1.0f);
+        glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+        const Image second = ReadPixels(width, height);
+        EXPECT_TRUE(RegionIsMostly(second, 2, width - 3, 2, height - 3, "green", 0.0,
+                                   "the second pipeline draw, after Colour was rebound to binding 5"));
+        EXPECT_EQ(FirstGLError(), 0u) << "the rebound uniform-block pipeline draw leaked a GL error";
+
+        glBindVertexArray(0);
+        glDeleteVertexArrays(1, &vao);
+        glDeleteBuffers(2, buffers);
+        gl.EndFrame();
+    }
+
+    // The sampler-unit half of the same question, in a loop: set a unit, draw, repeat. This is
+    // the shape KHR-GL42.shader_image_load_store.advanced-sso-* and the compute_shader SSO cases
+    // run, and the one that used to relink the composite on every single iteration. The pixels
+    // pin what the loop must PRODUCE; the composite-identity assertion that pins what it must
+    // COST lives in the MG_Test unit suite, where the object itself is reachable.
+    TEST_F(ProgramPipelineScenario, ASamplerUnitRewrittenBetweenDrawsKeepsPaintingTheRightTexture) {
+        if (!Ready()) return;
+        HeadlessGL& gl = Gl();
+        const int width = gl.Width();
+        const int height = gl.Height();
+
+        static const char* kSamplerFS = R"(#version 430 core
+uniform sampler2D u_tex;
+out vec4 o_color;
+void main() { o_color = texture(u_tex, vec2(0.5)); }
+)";
+        const GLuint vs = MakeSeparable(GL_VERTEX_SHADER, kSeparableVS);
+        const GLuint fs = MakeSeparable(GL_FRAGMENT_SHADER, kSamplerFS);
+        if (vs == 0 || fs == 0) return;
+
+        // One texture per unit, each a different solid colour, so the pixels say which unit the
+        // draw actually sampled.
+        constexpr int kUnits = 4;
+        const GLubyte colours[kUnits][4] = {{255, 0, 0, 255}, {0, 255, 0, 255}, {0, 0, 255, 255}, {255, 255, 0, 255}};
+        const char* names[kUnits] = {"red", "green", "blue", "yellow"};
+        GLuint textures[kUnits] = {};
+        glGenTextures(kUnits, textures);
+        for (int unit = 0; unit < kUnits; ++unit) {
+            glActiveTexture(GL_TEXTURE0 + unit);
+            glBindTexture(GL_TEXTURE_2D, textures[unit]);
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, colours[unit]);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        }
+        glActiveTexture(GL_TEXTURE0);
+        ASSERT_EQ(FirstGLError(), 0u) << "texture setup left a GL error behind";
+
+        const GLuint pipeline = MakePipeline();
+        glUseProgramStages(pipeline, GL_VERTEX_SHADER_BIT, vs);
+        glUseProgramStages(pipeline, GL_FRAGMENT_SHADER_BIT, fs);
+        glBindProgramPipeline(pipeline);
+        glActiveShaderProgram(pipeline, fs);
+        const GLint sampler = glGetUniformLocation(fs, "u_tex");
+        ASSERT_NE(sampler, -1);
+
+        GLuint vao = 0;
+        glGenVertexArrays(1, &vao);
+        glBindVertexArray(vao);
+        BindDefaultFramebuffer();
+        glViewport(0, 0, width, height);
+        glDisable(GL_SCISSOR_TEST);
+        glDisable(GL_DEPTH_TEST);
+        glUseProgram(0);
+
+        for (int unit = 0; unit < kUnits; ++unit) {
+            glUniform1i(sampler, unit);
+            ClearTo(0.0f, 0.0f, 0.0f, 1.0f);
+            glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+            const Image painted = ReadPixels(width, height);
+            EXPECT_TRUE(RegionIsMostly(painted, 2, width - 3, 2, height - 3, names[unit], 0.0,
+                                       "a pipeline draw after its sampler was pointed at another unit"))
+                << "unit " << unit;
+            EXPECT_EQ(FirstGLError(), 0u) << "the sampler-rewrite pipeline draw leaked a GL error at unit " << unit;
+        }
+
+        glBindVertexArray(0);
+        glDeleteVertexArrays(1, &vao);
+        glDeleteTextures(kUnits, textures);
+        gl.EndFrame();
+    }
+
     // build-separable / build-monolithic reduce to this: a separable program and a monolithic one
     // must both be usable, and switching between pipeline and glUseProgram must leave no error.
     TEST_F(ProgramPipelineScenario, SwitchingBetweenAPipelineAndAMonolithicProgramLeavesNoError) {

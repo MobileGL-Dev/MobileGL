@@ -1119,6 +1119,17 @@ namespace MobileGL::MG_Impl::GLImpl {
         if (!programObject.IsUniformOpaqueAtLocation(location)) {
             MGLOG_D("%s: program = %d, location = %d, maxLocation = %d", __func__, programObject.GetExternalIndex(),
                     location, programObject.GetMaxUniformLocation());
+            // Record the write for the pipeline composite's uniform mirror, which copies only
+            // the locations a stage program has actually been written to (see
+            // ProgramObject::MarkUniformWrittenAtLocation). Here rather than further down
+            // because every exit below is still a write as far as GL is concerned: the
+            // buffered-write detour returns early, the bytes-equal dedupe returns early, and
+            // even the no-backing-storage bail is a uniform the application addressed. This is
+            // the funnel EVERY glUniform* and glProgramUniform* entry point reaches, once per
+            // LOCATION - so an array element write marks that element and nothing else. On a
+            // program that can never be a pipeline stage - the monolithic glUseProgram path,
+            // which is where the thousands of calls per frame are - this is one bool branch.
+            programObject.MarkUniformWrittenAtLocation(location);
             // Everything up to and including the clamp is phase-A data (the uniform's GL type
             // decides its size), so it is answered without joining anything.
             const SizeT size = programObject.GetUniformSizesInBytes(location);

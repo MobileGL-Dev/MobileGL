@@ -326,6 +326,11 @@ namespace MobileGL::MG_State::GLState {
         artifacts.linkedExplicitUniformLocations.clear();
         artifacts.uniformInitialValues.clear();
         artifacts.uniformIndexInTProgram.clear();
+        // GL resets every uniform to its initial value at link, so nothing is "written since
+        // link" any more - and the locations these bits index no longer mean anything either.
+        artifacts.writtenUniformLocationBits.clear();
+        artifacts.writtenUniformIndexBits.clear();
+        artifacts.writtenUniformIndices.clear();
         artifacts.uniformSamplerOrImageUnitIndex.clear();
         artifacts.explicitOpaqueUniformBindings.clear();
         artifacts.uniformBlockIndexByName.clear();
