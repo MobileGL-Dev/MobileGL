@@ -88,6 +88,20 @@ out gl_PerVertex { vec4 gl_Position; };
 void main() { gl_Position = i_position; }
 )";
 
+        // Two shader storage blocks with NO layout(binding) qualifier, so the only thing that
+        // can say where they live is glShaderStorageBlockBinding - which is per-PROGRAM state.
+        constexpr const char* kStorageBlockVS = R"(#version 430 core
+out gl_PerVertex { vec4 gl_Position; };
+layout(std430) buffer Output0 { uint value0; };
+layout(std430) buffer Output1 { uint value1; };
+void main()
+{
+    value0 = 11u;
+    value1 = 22u;
+    gl_Position = vec4(0.0, 0.0, 0.0, 1.0);
+}
+)";
+
         class ProgramPipelineScenario : public ScenarioTest {
         protected:
             void TearDown() override {
@@ -126,6 +140,20 @@ void main() { gl_Position = i_position; }
                 m_pipelines.push_back(pipeline);
                 return pipeline;
             }
+
+            // glShaderStorageBlockBinding is a GL 4.3 entry point with NO equivalent in ES: a
+            // storage block's binding there is fixed by its layout(binding=) qualifier at link
+            // and cannot be changed afterwards. So Espryt, which reaches the GPU through an ES
+            // driver, can only honour a rebinding by baking it into the ESSL it generates -
+            // and it does not yet (RemoveLayoutBinding in MG_Backend/DirectGLES/Utils.cpp
+            // deliberately PRESERVES the declared qualifier for `buffer` declarations, which
+            // is what the driver then goes by). Its best-effort API replay
+            // (ReseedShaderStorageBlockBindings) is a no-op wherever the driver lacks the
+            // entry point, which is every real ES driver.
+            //
+            // Scoped rather than disabled, because the defect is per-backend and the
+            // pipeline-side mechanism these cases exist for is fully exercised on Magma.
+            bool StorageBlockRebindingIsHonoured() const { return Gl().BackendName() == "DirectVulkan"; }
 
             std::vector<GLuint> m_programs;
             std::vector<GLuint> m_pipelines;
@@ -337,6 +365,249 @@ void main() { o_color = u_color; }
         EXPECT_TRUE(RegionIsMostly(painted, 2, width - 3, 2, height - 3, "green", 0.0,
                                    "a pipeline whose compute stage wrote the vertex positions"));
         EXPECT_EQ(FirstGLError(), 0u) << "the compute-then-draw pipeline leaked a GL error";
+
+        glBindVertexArray(0);
+        glDeleteVertexArrays(1, &vao);
+        glDeleteBuffers(1, &buffer);
+        gl.EndFrame();
+    }
+
+    // Interface-resource bindings are per-PROGRAM state, and the program a pipeline draw executes
+    // is the composite - not the stage program the application set them on.
+    //
+    // This is shader_storage_buffer_object.basic-noBindingLayout reduced: blocks declared without
+    // a layout(binding) qualifier, placed onto binding points purely by
+    // glShaderStorageBlockBinding against the stage program. The stage program records the
+    // rebinding (ProgramObject::SetShaderStorageBlockBinding, keyed by block name) and the
+    // composite is built from the stage program's SHADERS - which carry the declared bindings and
+    // know nothing of the rebinding. So the draw writes wherever the shader source said, the
+    // bound buffer ranges never see a byte, and no GL error is raised anywhere: the readback is
+    // the only thing that notices.
+    TEST_F(ProgramPipelineScenario, AStageProgramsStorageBlockBindingReachesThePipelineDraw) {
+        if (!Ready()) return;
+        HeadlessGL& gl = Gl();
+
+        GLint vertexStorageBlocks = 0;
+        glGetIntegerv(GL_MAX_VERTEX_SHADER_STORAGE_BLOCKS, &vertexStorageBlocks);
+        if (vertexStorageBlocks < 2) {
+            GTEST_SKIP() << "fewer than two vertex shader storage blocks available";
+        }
+        if (!StorageBlockRebindingIsHonoured()) {
+            GTEST_SKIP() << "backend cannot honour glShaderStorageBlockBinding at all; see the companion "
+                            "AStorageBlockRebindingHoldsWithoutAPipeline case";
+        }
+
+        const GLuint vs = MakeSeparable(GL_VERTEX_SHADER, kStorageBlockVS);
+        if (vs == 0) return;
+
+        // Rebound to binding points the shader source never mentions, so nothing but the
+        // rebinding can put the writes where this case looks for them.
+        constexpr GLuint kBinding0 = 1;
+        constexpr GLuint kBinding1 = 5;
+        const GLuint block0 = glGetProgramResourceIndex(vs, GL_SHADER_STORAGE_BLOCK, "Output0");
+        const GLuint block1 = glGetProgramResourceIndex(vs, GL_SHADER_STORAGE_BLOCK, "Output1");
+        ASSERT_NE(block0, GL_INVALID_INDEX);
+        ASSERT_NE(block1, GL_INVALID_INDEX);
+        glShaderStorageBlockBinding(vs, block0, kBinding0);
+        glShaderStorageBlockBinding(vs, block1, kBinding1);
+        ASSERT_EQ(FirstGLError(), 0u) << "glShaderStorageBlockBinding on a separable program errored";
+
+        GLint offsetAlignment = 256;
+        glGetIntegerv(GL_SHADER_STORAGE_BUFFER_OFFSET_ALIGNMENT, &offsetAlignment);
+        if (offsetAlignment <= 0) offsetAlignment = 256;
+        const GLsizeiptr secondOffset = offsetAlignment;
+
+        GLuint buffer = 0;
+        glGenBuffers(1, &buffer);
+        glBindBuffer(GL_SHADER_STORAGE_BUFFER, buffer);
+        const std::vector<GLuint> zeros(static_cast<std::size_t>(secondOffset) / sizeof(GLuint) + 4, 0u);
+        glBufferData(GL_SHADER_STORAGE_BUFFER, static_cast<GLsizeiptr>(zeros.size() * sizeof(GLuint)), zeros.data(),
+                     GL_DYNAMIC_DRAW);
+        glBindBufferRange(GL_SHADER_STORAGE_BUFFER, kBinding0, buffer, 0, sizeof(GLuint));
+        glBindBufferRange(GL_SHADER_STORAGE_BUFFER, kBinding1, buffer, secondOffset, sizeof(GLuint));
+        glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
+
+        const GLuint pipeline = MakePipeline();
+        glUseProgramStages(pipeline, GL_VERTEX_SHADER_BIT, vs);
+
+        GLuint vao = 0;
+        glGenVertexArrays(1, &vao);
+        glBindVertexArray(vao);
+        BindDefaultFramebuffer();
+        // The whole point is the buffer writes, so the rasterizer is not involved - which is
+        // also what keeps a vertex-only pipeline (no fragment stage) legal here.
+        glEnable(GL_RASTERIZER_DISCARD);
+        glUseProgram(0);
+        glBindProgramPipeline(pipeline);
+        glDrawArrays(GL_POINTS, 0, 1);
+        glDisable(GL_RASTERIZER_DISCARD);
+        EXPECT_EQ(FirstGLError(), 0u) << "the storage-block pipeline draw leaked a GL error";
+
+        glMemoryBarrier(GL_BUFFER_UPDATE_BARRIER_BIT | GL_SHADER_STORAGE_BARRIER_BIT);
+        glBindBuffer(GL_SHADER_STORAGE_BUFFER, buffer);
+        GLuint readback0 = 0;
+        GLuint readback1 = 0;
+        glGetBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, sizeof(readback0), &readback0);
+        glGetBufferSubData(GL_SHADER_STORAGE_BUFFER, secondOffset, sizeof(readback1), &readback1);
+        glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
+
+        EXPECT_EQ(readback0, 11u) << "Output0 did not reach the binding glShaderStorageBlockBinding gave it";
+        EXPECT_EQ(readback1, 22u) << "Output1 did not reach the binding glShaderStorageBlockBinding gave it";
+        EXPECT_EQ(FirstGLError(), 0u);
+
+        glBindVertexArray(0);
+        glDeleteVertexArrays(1, &vao);
+        glDeleteBuffers(1, &buffer);
+        gl.EndFrame();
+    }
+
+    // CONTROL for the case above, and the thing that says whether a storage-block failure is
+    // about pipelines at all: the same shader, the same rebinding, in an ordinary two-stage
+    // monolithic program run through glUseProgram. If this one fails too then the composite is
+    // innocent and the defect is in how the backend replays a rebinding.
+    //
+    // Two stages on purpose. Handing glUseProgram a vertex-ONLY program would confound the
+    // experiment - a program with no fragment stage is a thing some backends cannot build at
+    // all, so its failure would say nothing about block bindings.
+    TEST_F(ProgramPipelineScenario, AStorageBlockRebindingHoldsWithoutAPipeline) {
+        if (!Ready()) return;
+        HeadlessGL& gl = Gl();
+
+        GLint vertexStorageBlocks = 0;
+        glGetIntegerv(GL_MAX_VERTEX_SHADER_STORAGE_BLOCKS, &vertexStorageBlocks);
+        if (vertexStorageBlocks < 2) {
+            GTEST_SKIP() << "fewer than two vertex shader storage blocks available";
+        }
+        if (!StorageBlockRebindingIsHonoured()) {
+            GTEST_SKIP() << "backend honours a storage-block rebinding only through the declared "
+                            "layout(binding=) qualifier, which it does not yet rewrite";
+        }
+
+        static const char* kMonolithicVS = R"(#version 430 core
+layout(std430) buffer Output0 { uint value0; };
+layout(std430) buffer Output1 { uint value1; };
+void main()
+{
+    value0 = 11u;
+    value1 = 22u;
+    gl_Position = vec4(0.0, 0.0, 0.0, 1.0);
+}
+)";
+        static const char* kMonolithicFS = R"(#version 430 core
+out vec4 o_color;
+void main() { o_color = vec4(1.0); }
+)";
+        std::string compileError;
+        const GLuint vs = CompileProgram(kMonolithicVS, kMonolithicFS, &compileError);
+        ASSERT_NE(vs, 0u) << compileError;
+        m_programs.push_back(vs);
+
+        constexpr GLuint kBinding0 = 1;
+        constexpr GLuint kBinding1 = 5;
+        const GLuint block0 = glGetProgramResourceIndex(vs, GL_SHADER_STORAGE_BLOCK, "Output0");
+        const GLuint block1 = glGetProgramResourceIndex(vs, GL_SHADER_STORAGE_BLOCK, "Output1");
+        ASSERT_NE(block0, GL_INVALID_INDEX);
+        ASSERT_NE(block1, GL_INVALID_INDEX);
+        glShaderStorageBlockBinding(vs, block0, kBinding0);
+        glShaderStorageBlockBinding(vs, block1, kBinding1);
+        ASSERT_EQ(FirstGLError(), 0u);
+
+        GLint offsetAlignment = 256;
+        glGetIntegerv(GL_SHADER_STORAGE_BUFFER_OFFSET_ALIGNMENT, &offsetAlignment);
+        if (offsetAlignment <= 0) offsetAlignment = 256;
+        const GLsizeiptr secondOffset = offsetAlignment;
+
+        GLuint buffer = 0;
+        glGenBuffers(1, &buffer);
+        glBindBuffer(GL_SHADER_STORAGE_BUFFER, buffer);
+        const std::vector<GLuint> zeros(static_cast<std::size_t>(secondOffset) / sizeof(GLuint) + 4, 0u);
+        glBufferData(GL_SHADER_STORAGE_BUFFER, static_cast<GLsizeiptr>(zeros.size() * sizeof(GLuint)), zeros.data(),
+                     GL_DYNAMIC_DRAW);
+        glBindBufferRange(GL_SHADER_STORAGE_BUFFER, kBinding0, buffer, 0, sizeof(GLuint));
+        glBindBufferRange(GL_SHADER_STORAGE_BUFFER, kBinding1, buffer, secondOffset, sizeof(GLuint));
+        glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
+
+        GLuint vao = 0;
+        glGenVertexArrays(1, &vao);
+        glBindVertexArray(vao);
+        BindDefaultFramebuffer();
+        glEnable(GL_RASTERIZER_DISCARD);
+        // No pipeline anywhere: a separable program is still a perfectly good current program.
+        glBindProgramPipeline(0);
+        glUseProgram(vs);
+        glDrawArrays(GL_POINTS, 0, 1);
+        glDisable(GL_RASTERIZER_DISCARD);
+        EXPECT_EQ(FirstGLError(), 0u) << "the monolithic storage-block draw leaked a GL error";
+
+        glMemoryBarrier(GL_BUFFER_UPDATE_BARRIER_BIT | GL_SHADER_STORAGE_BARRIER_BIT);
+        glBindBuffer(GL_SHADER_STORAGE_BUFFER, buffer);
+        GLuint readback0 = 0;
+        GLuint readback1 = 0;
+        glGetBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, sizeof(readback0), &readback0);
+        glGetBufferSubData(GL_SHADER_STORAGE_BUFFER, secondOffset, sizeof(readback1), &readback1);
+        glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
+
+        EXPECT_EQ(readback0, 11u) << "Output0 missed its rebinding with no pipeline involved";
+        EXPECT_EQ(readback1, 22u) << "Output1 missed its rebinding with no pipeline involved";
+
+        glUseProgram(0);
+        glBindVertexArray(0);
+        glDeleteVertexArrays(1, &vao);
+        glDeleteBuffers(1, &buffer);
+        gl.EndFrame();
+    }
+
+    // The same defect through the other block flavour: glUniformBlockBinding is also per-program
+    // state, recorded on the stage program by GL block index, and also never reaches the
+    // composite the draw actually runs.
+    TEST_F(ProgramPipelineScenario, AStageProgramsUniformBlockBindingReachesThePipelineDraw) {
+        if (!Ready()) return;
+        HeadlessGL& gl = Gl();
+        const int width = gl.Width();
+        const int height = gl.Height();
+
+        static const char* kUniformBlockFS = R"(#version 430 core
+layout(std140) uniform Colour { vec4 u_colour; };
+out vec4 o_color;
+void main() { o_color = u_colour; }
+)";
+        const GLuint vs = MakeSeparable(GL_VERTEX_SHADER, kSeparableVS);
+        const GLuint fs = MakeSeparable(GL_FRAGMENT_SHADER, kUniformBlockFS);
+        if (vs == 0 || fs == 0) return;
+
+        constexpr GLuint kBinding = 3; // not the default 0 the declaration implies
+        const GLuint blockIndex = glGetUniformBlockIndex(fs, "Colour");
+        ASSERT_NE(blockIndex, GL_INVALID_INDEX);
+        glUniformBlockBinding(fs, blockIndex, kBinding);
+        ASSERT_EQ(FirstGLError(), 0u) << "glUniformBlockBinding on a separable program errored";
+
+        const GLfloat green[4] = {0.0f, 1.0f, 0.0f, 1.0f};
+        GLuint buffer = 0;
+        glGenBuffers(1, &buffer);
+        glBindBuffer(GL_UNIFORM_BUFFER, buffer);
+        glBufferData(GL_UNIFORM_BUFFER, sizeof(green), green, GL_STATIC_DRAW);
+        glBindBufferBase(GL_UNIFORM_BUFFER, kBinding, buffer);
+        glBindBuffer(GL_UNIFORM_BUFFER, 0);
+
+        const GLuint pipeline = MakePipeline();
+        glUseProgramStages(pipeline, GL_VERTEX_SHADER_BIT, vs);
+        glUseProgramStages(pipeline, GL_FRAGMENT_SHADER_BIT, fs);
+
+        GLuint vao = 0;
+        glGenVertexArrays(1, &vao);
+        glBindVertexArray(vao);
+        BindDefaultFramebuffer();
+        glViewport(0, 0, width, height);
+        glDisable(GL_DEPTH_TEST);
+        ClearTo(0.0f, 0.0f, 0.0f, 1.0f);
+        glUseProgram(0);
+        glBindProgramPipeline(pipeline);
+        glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+
+        const Image painted = ReadPixels(width, height);
+        EXPECT_TRUE(RegionIsMostly(painted, 2, width - 3, 2, height - 3, "green", 0.0,
+                                   "a pipeline whose fragment uniform block was rebound to binding 3"));
+        EXPECT_EQ(FirstGLError(), 0u) << "the uniform-block pipeline draw leaked a GL error";
 
         glBindVertexArray(0);
         glDeleteVertexArrays(1, &vao);

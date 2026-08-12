@@ -458,9 +458,46 @@ namespace MobileGL::MG_State {
             }
         }
 
-        // Brings the pipeline's composite up to date with the uniform values its stage programs
-        // now hold. Runs on every draw through a pipeline, so the common case is the version
-        // compare below and nothing else.
+        // The other half of "the composite is a different program object": interface BLOCK
+        // bindings. glUniformBlockBinding and glShaderStorageBlockBinding place a block on a
+        // binding point, and they do it per program - so a pipeline whose blocks were placed
+        // that way drew against the composite's own bindings, which come from the shader
+        // declarations alone. A block declared without any layout(binding) therefore sat on
+        // whatever the declaration implied while the application's buffers sat somewhere else,
+        // and nothing anywhere raised an error: the draw simply read or wrote the wrong place.
+        //
+        // Both sides seed these from the same shader declarations at link, so mirroring a block
+        // the application never rebound writes back the value the destination already holds and
+        // the setters' equality checks make it free.
+        static void MirrorBlockBindings(const ProgramObject& source, ProgramObject& destination) {
+            // Storage blocks are keyed by GL name on both sides - the one coordinate the
+            // frontend, SPIR-V and driver index spaces all agree on - so this is a direct
+            // replay. Empty for the overwhelming majority of programs.
+            for (const auto& [blockName, binding] : source.GetShaderStorageBlockBindingOverrides()) {
+                if (binding < 0) continue;
+                destination.SetShaderStorageBlockBinding(blockName, static_cast<Uint>(binding));
+            }
+
+            // Uniform blocks are keyed by index, and the two programs number them
+            // independently, so they are matched by name.
+            const Int sourceBlockCount = source.GetActiveUniformBlocksCount();
+            for (Int sourceIndex = 0; sourceIndex < sourceBlockCount; ++sourceIndex) {
+                const Int binding = static_cast<Int>(source.GetUniformBlockBinding(static_cast<Uint>(sourceIndex)));
+                // -1 is "no declared binding and never rebound" - there is nothing to carry,
+                // and forwarding it would land as binding 0xFFFFFFFF.
+                if (binding < 0) continue;
+                const String& blockName = source.GetUniformBlockName(static_cast<Uint>(sourceIndex));
+                if (blockName.empty()) continue;
+                const Uint destinationIndex = destination.GetUniformBlockIndex(blockName.c_str());
+                if (destinationIndex == 0xFFFFFFFFu) continue; // GL_INVALID_INDEX
+                destination.SetUniformBlockBinding(destinationIndex, static_cast<Uint>(binding));
+            }
+        }
+
+        // Brings the pipeline's composite up to date with the per-program state its stage
+        // programs hold and it does not: uniform values, and interface block bindings. Runs on
+        // every draw through a pipeline, so the common case is the version compare below and
+        // nothing else.
         static void RefreshCompositeUniforms(ProgramPipelineObject& pipeline, const SharedPtr<ProgramObject>& composite) {
             if (!composite) return;
             const auto versions = pipeline.ComputeUniformMirrorVersions();
@@ -483,6 +520,7 @@ namespace MobileGL::MG_State {
                 if (alreadyMirrored) continue;
                 mirrored[mirroredCount++] = stageProgram.get();
                 MirrorUniformValues(*stageProgram, *composite);
+                MirrorBlockBindings(*stageProgram, *composite);
             }
             pipeline.SetMirroredUniformVersions(versions);
         }

@@ -613,13 +613,23 @@ namespace MobileGL::MG_State::GLState {
             return (ubo.stages & stageMask) != 0;
         }
 
-        // Set by glUniformBlockBinding
+        // Bumped by both block-binding setters below. A program pipeline's flattened composite
+        // is a different program object from the stage programs the application rebinds blocks
+        // on, so it has to be told - and this is what tells it something is worth re-reading.
+        // Separate from m_backendStateVersion because the storage-block setter deliberately
+        // does not disturb that one (see SetShaderStorageBlockBinding).
+        Uint32 GetBlockBindingVersion() const { return m_blockBindingVersion; }
+
+        // Set by glUniformBlockBinding. The vector is seeded at link with each block's DECLARED
+        // binding (layout(binding=N), else -1), so an untouched program already reports what its
+        // shaders asked for.
         void SetUniformBlockBinding(Uint index, Uint binding) {
             if (index >= Artifacts().uniformBlockBinding.size() || Artifacts().uniformBlockBinding[index] == static_cast<Int>(binding)) {
                 return;
             }
             Artifacts().uniformBlockBinding[index] = static_cast<Int>(binding);
             ++m_backendStateVersion;
+            ++m_blockBindingVersion;
         }
 
         Uint GetUniformBlockBinding(Uint index) const { return Artifacts().uniformBlockBinding[index]; }
@@ -631,6 +641,10 @@ namespace MobileGL::MG_State::GLState {
         // means "never rebound", and the shader's declared binding still stands.
         void SetShaderStorageBlockBinding(const String& blockName, Uint binding) {
             Artifacts().shaderStorageBlockBinding[blockName] = static_cast<Int>(binding);
+            // Deliberately NOT m_backendStateVersion: Espryt's entry point never forces a
+            // program build off this, and bumping that version would start doing so. The
+            // dedicated counter carries the news to the pipeline composite instead.
+            ++m_blockBindingVersion;
         }
         // -1 when the block has never been rebound. `blockName` is the interface-query
         // spelling; an arrayed block's elements ("B[0]", "B[1]") are separate GL resources
@@ -1059,6 +1073,8 @@ namespace MobileGL::MG_State::GLState {
         // READ-side operation (the first gated getter is what pulls the result in), and the
         // publish has to bump these. Still GL-thread-only - a worker never touches them.
         mutable Uint32 m_backendStateVersion = 0;
+        // Interface-block binding generation; see GetBlockBindingVersion.
+        Uint32 m_blockBindingVersion = 0;
 
         // Backend-owned content-hash memo (see GetBackendHashMemo): valid only while
         // m_backendStateVersion matches. Several slots, not one: a backend may resolve the same

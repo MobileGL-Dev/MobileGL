@@ -94,24 +94,27 @@ namespace MobileGL {
                     return signature;
                 }
 
-                // Uniform values are written to the STAGE programs - glUniform* addresses the
-                // pipeline's active program (GL 4.6 core 7.6.1) and glProgramUniform* addresses
-                // a named one - while the draw reads the composite. Two different objects'
-                // storage, so the composite is refreshed from its stage programs before each
-                // draw that needs it. These are the per-stage versions "needs it" is measured
-                // against: the stage program's uniform-shadow content version in the low half
-                // and its backend state version (which the opaque/sampler-unit writes bump) in
-                // the high half. All zero after a rebuild, because a fresh composite starts at
-                // GL's zero defaults and so needs a full refresh.
-                using UniformMirrorVersions = Array<Uint64, kGraphicsStageCount>;
+                // Per-program state is written to the STAGE programs - glUniform* addresses the
+                // pipeline's active program (GL 4.6 core 7.6.1), glProgramUniform* addresses a
+                // named one, and the two block-binding calls address a named one - while the
+                // draw reads the composite. Two different objects' state, so the composite is
+                // refreshed from its stage programs before each draw that needs it. These are
+                // the per-stage versions "needs it" is measured against. All zero after a
+                // rebuild, because a fresh composite holds only what its shaders declared and
+                // so needs a full refresh.
+                using UniformMirrorVersions = Array<Uint64, kGraphicsStageCount * 2>;
 
                 UniformMirrorVersions ComputeUniformMirrorVersions() const {
                     UniformMirrorVersions versions{};
                     for (SizeT stage = 0; stage < kGraphicsStageCount; ++stage) {
                         const auto& program = m_stagePrograms[stage];
                         if (!program) continue;
-                        versions[stage] = (static_cast<Uint64>(program->GetBackendStateVersion()) << 32) |
-                                          static_cast<Uint64>(program->GetUBOContentVersion());
+                        versions[stage * 2] = (static_cast<Uint64>(program->GetBackendStateVersion()) << 32) |
+                                              static_cast<Uint64>(program->GetUBOContentVersion());
+                        // Its own slot rather than folded into the pair above: the storage-block
+                        // setter moves this and NOTHING else, so a rebinding would otherwise be
+                        // invisible to the refresh gate.
+                        versions[stage * 2 + 1] = program->GetBlockBindingVersion();
                     }
                     return versions;
                 }
