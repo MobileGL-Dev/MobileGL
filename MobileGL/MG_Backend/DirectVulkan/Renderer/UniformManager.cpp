@@ -745,7 +745,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     Bool UniformManager::ResolveStorageImageDescriptor(VkCommandBuffer commandBuffer,
                                                        const MG_State::GLState::ProgramObject& program,
                                                        const ProgramFactory::VkProgramObject& programObj,
-                                                       Uint32 binding,
+                                                       Uint32 binding, Uint32 element,
                                                        VkDescriptorImageInfo& outImageInfo) const {
         outImageInfo = {};
         MOBILEGL_ASSERT(m_textureManager != nullptr, "ResolveStorageImageDescriptor: texture manager is null");
@@ -753,9 +753,22 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         MOBILEGL_ASSERT(binding < programObj.samplerUniformLocationByBinding.size(),
                         "ResolveStorageImageDescriptor: binding %u out of range", binding);
 
-        const Int location = programObj.samplerUniformLocationByBinding[binding];
-        if (location < 0) {
+        const Int baseLocation = programObj.samplerUniformLocationByBinding[binding];
+        if (baseLocation < 0) {
             MGLOG_E("ResolveStorageImageDescriptor: storage image binding %u has no uniform location", binding);
+            return false;
+        }
+        // Per ELEMENT, and this is where an image array differs from a storage-block array: GL
+        // gives every element of `uniform image2D g_image[4]` its own glUniform1i-assigned image
+        // unit, and the four units need not be consecutive or even ordered (the conformance case
+        // uses 0, 2, 4, 6). DoReflection reserves one uniform location per array element, so the
+        // element's location is the base plus its index - checked against the array's real
+        // extent so a descriptorCount that outran the reflection cannot walk onto the next
+        // uniform.
+        const Int location = baseLocation + static_cast<Int>(element);
+        if (!program.UniformLocationsAliasSameUniform(baseLocation, location)) {
+            MGLOG_E("ResolveStorageImageDescriptor: binding %u element %u is past the end of its image array",
+                    binding, element);
             return false;
         }
         const Int imageUnit = program.GetUniformSamplerOrImageUnitIndex(static_cast<Uint>(location));
@@ -1527,17 +1540,33 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 write.pBufferInfo = &bufferInfos[firstBufferInfoIndex];
                 writes.push_back(write);
             } else if (kind == ProgramFactory::DescriptorBindingKind::StorageImage) {
-                VkDescriptorImageInfo imageInfo{};
-                if (!ResolveStorageImageDescriptor(commandBuffer, program, programObj, binding, imageInfo)) {
-                    MGLOG_E(
-                        "UniformDescriptorBinder::BindProgramUniformBuffers failed: storage image binding %u has no valid descriptor",
-                        binding);
-                    return false;
+                // One write per binding, but `descriptorCount` image infos: an ARRAY of image
+                // uniforms is a single binding whose elements each carry their own image unit.
+                // Writing only element 0 - which is all this used to do - left elements 1..N
+                // never written at all, and a shader that indexes them reads an undefined
+                // descriptor (lavapipe faults inside the shader; a real driver is free to do
+                // anything).
+                const Uint32 descriptorCount =
+                    binding < programObj.bindingDescriptorCounts.size()
+                        ? std::max<Uint32>(1, programObj.bindingDescriptorCounts[binding])
+                        : 1u;
+                const SizeT firstImageInfoIndex = imageInfos.size();
+                for (Uint32 element = 0; element < descriptorCount; ++element) {
+                    VkDescriptorImageInfo imageInfo{};
+                    if (!ResolveStorageImageDescriptor(commandBuffer, program, programObj, binding, element,
+                                                       imageInfo)) {
+                        MGLOG_E(
+                            "UniformDescriptorBinder::BindProgramUniformBuffers failed: storage image binding %u "
+                            "element %u has no valid descriptor",
+                            binding, element);
+                        return false;
+                    }
+                    imageInfos.push_back(imageInfo);
                 }
-                imageInfos.push_back(imageInfo);
                 fastRebindKindsEligible = false;
                 write.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-                write.pImageInfo = &imageInfos.back();
+                write.descriptorCount = descriptorCount;
+                write.pImageInfo = &imageInfos[firstImageInfoIndex];
                 writes.push_back(write);
             } else {
                 VkDescriptorImageInfo imageInfo{};

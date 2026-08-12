@@ -63,6 +63,8 @@ add_executable(MobileGLIntegrationTest
     Scenarios/UniformInitializerScenario.cpp
     Scenarios/SwizzleAccessRoutineScenario.cpp
     Scenarios/ProgramPipelineScenario.cpp
+    Scenarios/ImageLoadStoreSsoScenario.cpp
+    Scenarios/SsboDeclarationFormScenario.cpp
     Scenarios/Glsl420DeclarationScenario.cpp
 )
 

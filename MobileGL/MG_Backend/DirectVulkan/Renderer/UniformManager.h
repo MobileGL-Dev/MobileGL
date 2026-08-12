@@ -172,10 +172,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         Bool ResolveStorageBufferDescriptor(const MG_State::GLState::ProgramObject& program,
                                             const ProgramFactory::VkProgramObject& programObj, Uint32 binding,
                                             Uint32 element, VkDescriptorBufferInfo& outBufferInfo) const;
+        // `element` indexes an image ARRAY inside one binding; each element carries its own
+        // independently assigned GL image unit.
         Bool ResolveStorageImageDescriptor(VkCommandBuffer commandBuffer,
                                            const MG_State::GLState::ProgramObject& program,
                                            const ProgramFactory::VkProgramObject& programObj, Uint32 binding,
-                                           VkDescriptorImageInfo& outImageInfo) const;
+                                           Uint32 element, VkDescriptorImageInfo& outImageInfo) const;
         // Result of resolving a UBO binding: either a zero-copy direct bind to the app's resident
         // VkBuffer (the GLES backend's approach - no per-draw copy) or the CPU payload to upload.
         struct UboBindResult {

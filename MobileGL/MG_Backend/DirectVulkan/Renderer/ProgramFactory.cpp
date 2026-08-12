@@ -2600,6 +2600,18 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 const GLenum uniformType = program.GetUniformType(static_cast<Uint>(location));
 
                 if (descriptorKind == DescriptorBindingKind::StorageImage) {
+                    // An ARRAY of image uniforms is ONE binding carrying `count` descriptors,
+                    // and the layout has to say so. Leaving it at the default 1 declared
+                    // `uniform image2D g_image[4]` as a single-descriptor binding while the
+                    // shader indexed descriptors 1..3 of it - an out-of-bounds descriptor
+                    // access that lavapipe SIGSEGVs inside the JIT-ed shader thread rather than
+                    // reporting (KHR-GL42.shader_image_load_store.advanced-sso-simple). Unlike
+                    // a storage BLOCK array, whose elements take consecutive GL binding points
+                    // from the declared one, each element of an image array carries its own
+                    // independently assigned image unit - see ResolveStorageImageDescriptor.
+                    entry.bindingDescriptorCounts[binding] =
+                        static_cast<Uint16>(std::max<Uint32>(1u, sampler->count));
+
                     const VkFormat reflectedFormat =
                         ConvertSpirvImageFormatToVkFormat(sampler->image.image_format);
                     VkFormat& existingFormat = entry.storageImageFormatByBinding[binding];
