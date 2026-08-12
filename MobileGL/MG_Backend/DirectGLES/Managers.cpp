@@ -4182,6 +4182,31 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
         }
 
+        Uint64 ComputeShaderStorageBlockBindingSignature(
+            const MG_State::GLState::ProgramObject& stateProgramObject) {
+            const auto& overrides = stateProgramObject.GetShaderStorageBlockBindingOverrides();
+            if (overrides.empty()) return 0; // the overwhelming majority of programs
+            // Order-independent on purpose: the source is an UnorderedMap, so any signature that
+            // depended on iteration order would differ between two identical override sets and
+            // rebuild the program for nothing.
+            //
+            // Built from the VALUES, not from a change counter, so re-setting a block to the
+            // binding it already carries produces the same signature and forces no rebuild - an
+            // application that calls glShaderStorageBlockBinding every frame with unchanged
+            // arguments must not retranspile every frame.
+            Uint64 signature = 0;
+            for (const auto& [blockName, binding] : overrides) {
+                if (binding < 0) continue; // never rebound; the declared qualifier still stands
+                Uint64 entry = std::hash<String>{}(blockName);
+                // Mixed rather than merely summed with the name hash: name and binding must not
+                // be able to trade places between two entries and cancel out.
+                entry ^= (static_cast<Uint64>(static_cast<Uint32>(binding)) + 0x9e3779b97f4a7c15ull +
+                          (entry << 6) + (entry >> 2));
+                signature += entry; // commutative combine
+            }
+            return signature;
+        }
+
         void BackendProgramObjectImpl::SyncToBackend(
             const SharedPtr<MG_State::GLState::ProgramObject>& stateProgramObject) {
 #ifdef TRACY_ENABLE
@@ -4191,6 +4216,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 MGLOG_E("State program object is null, skipping backend sync.");
                 return;
             }
+            // Recorded before either early return below, so Use() can always name the GL
+            // program a no-op draw belongs to - including the "linked but not drawable" exit.
+            m_frontendProgramId = stateProgramObject->GetExternalIndex();
 
             // GetSpirvStatus() as well as GetLinkStatus(): a program whose phase-B job was
             // cancelled (teardown) or whose optimizer run failed is fully linked and fully
@@ -4214,6 +4242,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
             m_snormFallbackClampOutputMask = g_snormFallbackClampOutputMask;
             m_unormFallbackClampOutputMask = g_unormFallbackClampOutputMask;
             m_fragColorBroadcastCount = g_fragColorBroadcastCount;
+            // The generated ESSL bakes these in (see the SetShaderStorageBlockBinding call in the
+            // transpile loop below), so the set they were generated against is part of what makes
+            // this build current - the draw path compares the signature and rebuilds on a change.
+            const auto& storageBlockBindingOverrides = stateProgramObject->GetShaderStorageBlockBindingOverrides();
+            m_shaderStorageBlockBindingSignature = ComputeShaderStorageBlockBindingSignature(*stateProgramObject);
 
             // Detach all existing shaders
             GLint attachedCount = 0;
@@ -4326,6 +4359,15 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
                 spvcSession.SetOptions(options);
 
+                // ES fixes a storage block's binding at link from its layout(binding=) qualifier
+                // and has no glShaderStorageBlockBinding to move it afterwards, so a rebinding
+                // can only be honoured by printing it INTO the qualifier. Rewriting the Binding
+                // decoration before SPIRV-Cross emits is what does that; RemoveLayoutBinding
+                // then deliberately preserves the qualifier for `buffer` declarations.
+                if (!storageBlockBindingOverrides.empty()) { // empty for almost every program
+                    spvcSession.SetShaderStorageBlockBinding(storageBlockBindingOverrides);
+                }
+
                 const char* result = nullptr;
                 spvcSession.Compile(&result);
 
@@ -4342,6 +4384,15 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 source = result;
 
                 source = RebindImageUniformsToFrontendUnits(std::move(source), stateProgramObject);
+                // Wedged between those two on purpose:
+                //  * AFTER RebindImageUniformsToFrontendUnits, so the binding it copies onto
+                //    both halves of a split image is already the frontend texture unit (and so
+                //    that pass never has to reason about the alias it introduces);
+                //  * BEFORE RemoveLayoutBinding, whose keepBindingRegex recognises an image
+                //    declaration and preserves its binding - an image unit cannot be set from
+                //    the API in ES, so the qualifier is the only binding mechanism there is,
+                //    and both halves of the pair have to still be carrying theirs when it runs.
+                source = SplitReadWriteImageUniforms(source);
                 source = RemoveLayoutBinding(source);
                 source = ProcessOutColorLocations(source);
                 source = ForceFlatIntegerVaryings(source, glShaderType);
@@ -4478,17 +4529,36 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
 
             CacheResourceLocations(stateProgramObject);
-            // AFTER the link, because glShaderStorageBlockBinding needs the driver's linked
-            // interface. This is the only place Espryt applies a rebinding: the frontend
-            // record is authoritative and the glShaderStorageBlockBinding entry point itself
-            // deliberately never forces a program build (see DirectGLES.cpp), so a rebinding
-            // requested while no backend program existed yet arrives here instead.
+            // NOT the mechanism that makes a rebinding work - the transpiled qualifier above is.
+            // glShaderStorageBlockBinding is a GL 4.3 entry point that no real ES driver exposes,
+            // so this replay is a no-op almost everywhere; it stays because it is still correct
+            // (and cheaper than a rebuild) on a driver that does expose it, e.g. a desktop GL
+            // driver used as the ES backend. AFTER the link either way, because it needs the
+            // driver's linked interface.
             ReseedShaderStorageBlockBindings(m_backendProgramId, *stateProgramObject);
             m_syncedLinkVersion = stateProgramObject->GetLinkVersion();
 
             m_isInitialized = true;
             MGLOG_D("Program sync completed. backend ID %u", m_backendProgramId);
         }
+
+        namespace {
+            // The GL name of the array element that lives at `location`, given the reflection
+            // name reported for it. Reflection reports one name per UNIFORM ("goku[0]") but
+            // one location per ELEMENT, so a caller walking locations sees the same name
+            // repeatedly; this turns it back into "goku[k]". Anything that is not an array
+            // (or whose base location cannot be resolved) comes back unchanged, so the only
+            // behaviour that moves is the array case.
+            String SubscriptUniformNameForElement(const MG_State::GLState::ProgramObject& program, const String& name,
+                                                  Uint location) {
+                if (name.size() < 3 || name.compare(name.size() - 3, 3, "[0]") != 0) return name;
+                const Int base = program.GetUniformLocation(name);
+                if (base < 0 || static_cast<Uint>(base) > location) return name;
+                const Uint element = location - static_cast<Uint>(base);
+                if (element == 0) return name;
+                return name.substr(0, name.size() - 3) + "[" + std::to_string(element) + "]";
+            }
+        } // namespace
 
         // Resolves every name-based resource lookup once per link so the per-draw path
         // (BindCurrentProgramWithResources) never issues glGetUniformBlockIndex /
@@ -4552,7 +4622,17 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     // is an INVALID_OPERATION.
                     continue;
                 }
-                const Int backendLoc = g_GLESFuncs.glGetUniformLocation(m_backendProgramId, name.c_str());
+                // Reflection names an array uniform after its FIRST element ("goku[0]") at
+                // every location the array spans, so asking the driver for that one name
+                // once per location hands back the same backend location N times. The
+                // per-draw pass then issues N glUniform1i calls against it and only the
+                // last element's unit survives - "layout(binding = 1) uniform sampler2D
+                // goku[7]" ended up with goku[0] on unit 7 and goku[1..6] still on 0.
+                // Address each element by its own name instead; the frontend already
+                // reserves one location per element, so the element index is the distance
+                // from the array's base location.
+                const String elementName = SubscriptUniformNameForElement(*stateProgramObject, name, loc);
+                const Int backendLoc = g_GLESFuncs.glGetUniformLocation(m_backendProgramId, elementName.c_str());
                 if (backendLoc < 0) continue;
                 SamplerUniformBinding binding;
                 binding.frontendLocation = loc;
@@ -4561,8 +4641,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 binding.lastAssignedUnit = -1;
                 // Present only for the samplers EmulateTextureLodBias actually rewrote; the
                 // pass names it after the sampler, which SPIRV-Cross preserves verbatim.
-                binding.lodBiasLocation =
-                    g_GLESFuncs.glGetUniformLocation(m_backendProgramId, (String(LOD_BIAS_UNIFORM_PREFIX) + name).c_str());
+                binding.lodBiasLocation = g_GLESFuncs.glGetUniformLocation(
+                    m_backendProgramId, (String(LOD_BIAS_UNIFORM_PREFIX) + elementName).c_str());
                 binding.lastAssignedLodBias = 0.0f;
                 m_samplerUniformBindings.push_back(binding);
             }
@@ -4580,6 +4660,17 @@ namespace MobileGL::MG_Backend::DirectGLES {
             const Uint programToBind = m_backendProgramUsable ? m_backendProgramId : 0;
             if (g_lastUsedBackendProgramId == programToBind) {
                 return;
+            }
+            if (!m_backendProgramUsable) {
+                // MGLOG_I, not MGLOG_W: at MOBILEGL_LOG_LEVEL_INFO - the level the shipped
+                // fordebug builds compile at - only I and F survive, and this is precisely the
+                // line those builds need. Every draw made with this program renders nothing and
+                // raises no GL error, so without it the only symptom is a framebuffer that kept
+                // its clear colour. The early return above keeps it to at most one line per
+                // program state change, not one per draw.
+                MGLOG_I("Backend program for GL program %u is unusable (a shader failed to transpile, "
+                        "compile or link); binding program 0 - draws with it will render nothing",
+                        m_frontendProgramId);
             }
             MGLOG_D("Using program %u", programToBind);
             g_GLESFuncs.glUseProgram(programToBind);

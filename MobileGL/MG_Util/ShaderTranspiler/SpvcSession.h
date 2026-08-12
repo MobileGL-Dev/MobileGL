@@ -94,6 +94,17 @@ namespace MobileGL {
                 spvc_result SetOptions(spvc_compiler_options options);
                 Vector<InterfaceVariable> GetShaderInterface(spvc_resource_type resource_type) const;
                 spvc_result SetVertexAttribLocation(const UnorderedMap<String, Uint>& location);
+                // Rewrites the Binding decoration of shader storage blocks before emission, so
+                // the generated source carries the EFFECTIVE binding rather than the declared
+                // one. This exists for the ESSL backend: glShaderStorageBlockBinding is a GL 4.3
+                // entry point with no ES equivalent (ES fixes a storage block's binding at link
+                // from its layout(binding=) qualifier), so the only place a rebinding can be
+                // expressed there is the qualifier the transpiler prints.
+                //
+                // Keyed by the GL interface-query name of the BLOCK (the block/type name; an
+                // arrayed block's elements are separate GL resources spelled "B[0]", "B[1]").
+                // Entries with a negative value mean "never rebound" and are skipped.
+                spvc_result SetShaderStorageBlockBinding(const UnorderedMap<String, Int>& bindings);
                 spvc_result Compile(const char** result);
                 const SpvcMetadata& GetMetadata() const;
                 const char* GetLastErrorString() const;

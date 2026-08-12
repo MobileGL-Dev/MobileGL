@@ -131,6 +131,40 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // enables several draw buffers, so the ordinary single-target shader is untouched.
         String BroadcastLegacyFragColor(String glslCode, GLenum shaderType, Uint drawBufferCount);
         String RemoveLayoutBinding(const String& glslCode);
+        // Prefix of the writeonly half a read+write image uniform is split into (see
+        // SplitReadWriteImageUniforms); the suffix is the image's own name.
+        constexpr const char* IMAGE_WRITE_ALIAS_PREFIX = "mg_imageWrite_";
+        // ESSL refuses an image variable that carries a format qualifier other than r32f /
+        // r32i / r32ui unless it also carries `readonly` or `writeonly` (GLSL ES 3.10 4.9 /
+        // 3.20 4.10; glslang enforces it verbatim in ParseHelper.cpp's layoutObjectCheck).
+        // SPIRV-Cross emits NEITHER for an image the shader both reads and writes: it
+        // speculatively decorates every storage image NonWritable+NonReadable
+        // (fixup_image_load_store_access), then OpImageRead clears NonReadable and
+        // OpImageWrite clears NonWritable, and to_qualifiers_glsl only prints `readonly`
+        // from NonWritable and `writeonly` from NonReadable. Desktop GLSL is happy with the
+        // bare declaration, so the frontend raises no error and the illegal ESSL only shows
+        // up as a device compile failure - and then as a silently no-op draw.
+        //
+        // Restores a legal declaration:
+        //  * loaded only            -> add `readonly`
+        //  * stored only            -> add `writeonly`
+        //  * both                   -> emit TWO declarations on the same binding and of the
+        //                              same type, `readonly <name>` and `writeonly
+        //                              <IMAGE_WRITE_ALIAS_PREFIX><name>`, and point every
+        //                              imageStore at the second one. Several image variables
+        //                              may share an image unit as long as they have the same
+        //                              type and format, which is exactly what the pair is.
+        //
+        // Budget note: the split DOUBLES the image-uniform count of the stage it fires in, so
+        // a driver advertising a tight GL_MAX_{FRAGMENT,VERTEX,...}_IMAGE_UNIFORMS can turn a
+        // shader that used to compile into a link failure. ES only guarantees 4 fragment image
+        // uniforms, so a shader with more than half the limit in read+write images is the case
+        // to watch.
+        //
+        // Runs on the transpiled ESSL, so it must see the bindings the frontend units were
+        // already rewritten to and must run before those bindings are stripped - see the call
+        // site in Managers.cpp.
+        String SplitReadWriteImageUniforms(const String& glslCode);
         // Prefix of the per-sampler float uniform that carries GL_TEXTURE_LOD_BIAS into
         // the shader (see EmulateTextureLodBias); the suffix is the sampler's own name.
         constexpr const char* LOD_BIAS_UNIFORM_PREFIX = "mg_lodBias_";

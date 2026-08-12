@@ -289,6 +289,43 @@ namespace MobileGL {
                 SPVC_CHK_RETURN
             }
 
+            spvc_result SpvcSession::SetShaderStorageBlockBinding(const UnorderedMap<String, Int>& bindings) {
+                if (!(usage & SessionUsageBit::Transpile)) return SPVC_ERROR_INVALID_ARGUMENT;
+
+                SPVC_CHK_INIT
+                const spvc_reflected_resource* list = nullptr;
+                size_t count = 0;
+                SPVC_CHK_RESULT(spvc_resources_get_resource_list_for_type(
+                    resources, SPVC_RESOURCE_TYPE_STORAGE_BUFFER, &list, &count));
+                for (size_t i = 0; i < count; ++i) {
+                    auto& resource = list[i];
+                    // Two spellings, because neither one alone identifies the block the GL
+                    // interface query named. `resource.name` is the block's instance name when
+                    // the declaration has one; the block TYPE name (which is what the GL query
+                    // reports for a block) lives on base_type_id. An arrayed block collapses to
+                    // a single SPIR-V resource while GL enumerates it per element, so the bare
+                    // name is also tried with element zero's subscript - the same convention
+                    // ProgramObject::GetShaderStorageBlockBindingOverride documents.
+                    const char* blockTypeName = spvc_compiler_get_name(compiler, resource.base_type_id);
+                    const String candidates[] = {
+                        blockTypeName != nullptr ? String(blockTypeName) : String(),
+                        resource.name != nullptr ? String(resource.name) : String(),
+                    };
+                    for (const auto& candidate : candidates) {
+                        if (candidate.empty()) continue;
+                        auto it = bindings.find(candidate);
+                        if (it == bindings.end()) it = bindings.find(candidate + "[0]");
+                        if (it == bindings.end()) continue;
+                        // Negative is "never rebound" - the declared qualifier still stands.
+                        if (it->second < 0) break;
+                        spvc_compiler_set_decoration(compiler, resource.id, SpvDecorationBinding,
+                                                     static_cast<unsigned>(it->second));
+                        break;
+                    }
+                }
+                SPVC_CHK_RETURN
+            }
+
             spvc_result SpvcSession::Compile(const char** result) {
                 if (!(usage & SessionUsageBit::Transpile)) return SPVC_ERROR_INVALID_ARGUMENT;
                 SPVC_CHK_INIT

@@ -2077,11 +2077,21 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // A link-version mismatch means the program was relinked: the backend
             // shaders and every cache built by CacheResourceLocations (block
             // indices, sampler locations, UBO upload gate) are stale.
+            //
+            // The storage-block signature is the same shape of condition: ES cannot move a
+            // storage block's binding after link, so glShaderStorageBlockBinding is honoured by
+            // baking the effective binding into the generated ESSL - which makes a program built
+            // against a different override set stale. It is compared HERE rather than acted on in
+            // the entry point because that one must never trigger a build (see
+            // ShaderStorageBlockBinding below). The signature is over the values, so an
+            // application that re-sets the same bindings every frame rebuilds nothing.
             if (!twin->GetBackendProgramId() ||
                 twin->GetSyncedLinkVersion() != currentProgram->GetLinkVersion() ||
                 twin->GetSnormFallbackClampOutputMask() != g_snormFallbackClampOutputMask ||
                 twin->GetUnormFallbackClampOutputMask() != g_unormFallbackClampOutputMask ||
-                twin->GetFragColorBroadcastCount() != g_fragColorBroadcastCount) {
+                twin->GetFragColorBroadcastCount() != g_fragColorBroadcastCount ||
+                twin->GetShaderStorageBlockBindingSignature() !=
+                    ComputeShaderStorageBlockBindingSignature(*currentProgram)) {
                 twin->SyncToBackend(currentProgram);
             }
             g_currentDrawFrontendProgram = currentProgram.get();

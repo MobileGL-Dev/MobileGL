@@ -141,20 +141,6 @@ void main()
                 return pipeline;
             }
 
-            // glShaderStorageBlockBinding is a GL 4.3 entry point with NO equivalent in ES: a
-            // storage block's binding there is fixed by its layout(binding=) qualifier at link
-            // and cannot be changed afterwards. So Espryt, which reaches the GPU through an ES
-            // driver, can only honour a rebinding by baking it into the ESSL it generates -
-            // and it does not yet (RemoveLayoutBinding in MG_Backend/DirectGLES/Utils.cpp
-            // deliberately PRESERVES the declared qualifier for `buffer` declarations, which
-            // is what the driver then goes by). Its best-effort API replay
-            // (ReseedShaderStorageBlockBindings) is a no-op wherever the driver lacks the
-            // entry point, which is every real ES driver.
-            //
-            // Scoped rather than disabled, because the defect is per-backend and the
-            // pipeline-side mechanism these cases exist for is fully exercised on Magma.
-            bool StorageBlockRebindingIsHonoured() const { return Gl().BackendName() == "DirectVulkan"; }
-
             std::vector<GLuint> m_programs;
             std::vector<GLuint> m_pipelines;
         };
@@ -392,10 +378,6 @@ void main() { o_color = u_color; }
         if (vertexStorageBlocks < 2) {
             GTEST_SKIP() << "fewer than two vertex shader storage blocks available";
         }
-        if (!StorageBlockRebindingIsHonoured()) {
-            GTEST_SKIP() << "backend cannot honour glShaderStorageBlockBinding at all; see the companion "
-                            "AStorageBlockRebindingHoldsWithoutAPipeline case";
-        }
 
         const GLuint vs = MakeSeparable(GL_VERTEX_SHADER, kStorageBlockVS);
         if (vs == 0) return;
@@ -469,6 +451,12 @@ void main() { o_color = u_color; }
     // Two stages on purpose. Handing glUseProgram a vertex-ONLY program would confound the
     // experiment - a program with no fragment stage is a thing some backends cannot build at
     // all, so its failure would say nothing about block bindings.
+    //
+    // Runs on both backends. glShaderStorageBlockBinding is a GL 4.3 entry point with no ES
+    // equivalent - ES fixes a storage block's binding at link from its layout(binding=)
+    // qualifier - so Espryt honours a rebinding by writing the effective binding into the ESSL
+    // it generates (the Binding decoration is rewritten before SPIRV-Cross emits, and the draw
+    // path rebuilds a program whose override set has moved).
     TEST_F(ProgramPipelineScenario, AStorageBlockRebindingHoldsWithoutAPipeline) {
         if (!Ready()) return;
         HeadlessGL& gl = Gl();
@@ -477,10 +465,6 @@ void main() { o_color = u_color; }
         glGetIntegerv(GL_MAX_VERTEX_SHADER_STORAGE_BLOCKS, &vertexStorageBlocks);
         if (vertexStorageBlocks < 2) {
             GTEST_SKIP() << "fewer than two vertex shader storage blocks available";
-        }
-        if (!StorageBlockRebindingIsHonoured()) {
-            GTEST_SKIP() << "backend honours a storage-block rebinding only through the declared "
-                            "layout(binding=) qualifier, which it does not yet rewrite";
         }
 
         static const char* kMonolithicVS = R"(#version 430 core

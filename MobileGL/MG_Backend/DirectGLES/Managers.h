@@ -1028,6 +1028,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
             Uint32 GetSnormFallbackClampOutputMask() const { return m_snormFallbackClampOutputMask; }
             Uint32 GetUnormFallbackClampOutputMask() const { return m_unormFallbackClampOutputMask; }
             Uint GetFragColorBroadcastCount() const { return m_fragColorBroadcastCount; }
+            // Signature of the glShaderStorageBlockBinding override set the generated ESSL was
+            // transpiled against (ES can only express a storage-block binding as the declared
+            // qualifier, so the overrides are baked into the source). A mismatch means the
+            // program is stale exactly like the clamp masks above.
+            Uint64 GetShaderStorageBlockBindingSignature() const { return m_shaderStorageBlockBindingSignature; }
 
             Bool HasGlobalUboBlock() const { return m_globalUboBackendBlockIndex >= 0; }
             const Vector<Int>& GetUniformBlockBackendIndices() const { return m_uniformBlockBackendIndices; }
@@ -1048,6 +1053,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
             void CacheResourceLocations(const SharedPtr<MG_State::GLState::ProgramObject>& stateProgramObject);
 
             Uint m_backendProgramId = 0;
+            // GL name of the frontend program this was last synced from; diagnostics only, so
+            // an unusable backend program can be traced back to the glCreateProgram id the app
+            // knows it by.
+            Uint m_frontendProgramId = 0;
             Uint m_backendGlobalUBOId = 0;
             Int m_baseInstanceUniformLocation = -1;
             Int m_drawIdUniformLocation = -1;
@@ -1058,6 +1067,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // Draw buffers a legacy gl_FragColor write has to reach (see
             // PrgramImpl::BroadcastLegacyFragColor); 1 keeps the plain single-output shader.
             Uint m_fragColorBroadcastCount = 1;
+            // 0 is the signature of an empty override set, i.e. what almost every program has.
+            Uint64 m_shaderStorageBlockBindingSignature = 0;
             Bool m_isInitialized = false;
             Bool m_backendProgramUsable = false;
 
@@ -1091,14 +1102,26 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // on the backend program (eliminated as unused, or the driver lacks the entry
         // points), which is not an error - GL_BUFFER_BINDING is served from the frontend
         // record either way.
+        //
+        // NOT how a rebinding reaches the shader. glShaderStorageBlockBinding has no ES
+        // equivalent and is absent from every real ES driver, so this is a no-op there;
+        // SyncToBackend bakes the effective binding into the ESSL it generates instead
+        // (SpvcSession::SetShaderStorageBlockBinding). This is kept as the cheaper path on
+        // a driver that does happen to expose the entry point.
         Bool ApplyShaderStorageBlockBinding(Uint backendProgramId, const String& blockName, Uint binding);
         // Replays every glShaderStorageBlockBinding recorded on the program onto a backend
-        // program that was just built. The frontend record is authoritative (only the
-        // shader's DECLARED binding survives in the SPIR-V), so without this replay any
-        // rebuild would silently revert rebound blocks. Mirrors DirectVulkan's
-        // reseed-on-rebuild in BuildProgramResourceCache.
+        // program that was just built - best effort, on the same "only where the driver has
+        // the entry point" terms as ApplyShaderStorageBlockBinding above. Mirrors
+        // DirectVulkan's reseed-on-rebuild in BuildProgramResourceCache.
         void ReseedShaderStorageBlockBindings(Uint backendProgramId,
                                               const MG_State::GLState::ProgramObject& stateProgramObject);
+        // Order-independent digest of the program's glShaderStorageBlockBinding overrides.
+        // The generated ESSL carries them (ES has no way to move a storage block's binding
+        // after link), so a program built against a different set is stale and the draw path
+        // has to rebuild it. Computed from the values, so re-setting a block to the binding it
+        // already has costs nothing. 0 when nothing was ever rebound.
+        Uint64 ComputeShaderStorageBlockBindingSignature(
+            const MG_State::GLState::ProgramObject& stateProgramObject);
     } // namespace PrgramImpl
 
     namespace SamplerImpl {

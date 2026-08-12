@@ -41,6 +41,28 @@ namespace {
         return bracket == MobileGL::String::npos ? name : name.substr(0, bracket);
     }
 
+    // Element index of an arrayed interface-block instance: "GOKU[3]" -> 3, "GOKU" -> 0.
+    // Reflection spells arrayed instances exactly this way (glslang expands the instance
+    // array into one TObjectReflection per element), and the subscript it writes is a plain
+    // decimal, so a strict-decimal parse is both sufficient and the same rule GL 4.6
+    // 7.3.1.1 puts on the name a program-resource query may use.
+    static MobileGL::Int BlockArrayElement(const MobileGL::String& name) {
+        if (name.empty() || name.back() != ']') return 0;
+        const MobileGL::SizeT bracket = name.rfind('[');
+        if (bracket == MobileGL::String::npos) return 0;
+        const MobileGL::SizeT first = bracket + 1;
+        const MobileGL::SizeT last = name.length() - 1;
+        if (first >= last) return 0;
+        if (name[first] == '0' && last - first > 1) return 0; // no leading zeros
+        MobileGL::Int element = 0;
+        for (MobileGL::SizeT i = first; i < last; ++i) {
+            if (name[i] < '0' || name[i] > '9') return 0;
+            element = element * 10 + static_cast<MobileGL::Int>(name[i] - '0');
+            if (element > 0x0FFFFFFF) return 0;
+        }
+        return element;
+    }
+
     static bool IsBuiltInPipelineOutput(const glslang::TObjectReflection& output) {
         const auto* type = output.getType();
         return type && type->getQualifier().builtIn != glslang::EbvNone;
@@ -97,39 +119,6 @@ namespace {
         return std::max(1, uniform.size);
     }
 
-    static bool ComputeShaderDeclaresLocalSize(const MobileGL::String& source) {
-        bool inLineComment = false;
-        bool inBlockComment = false;
-        for (MobileGL::SizeT i = 0; i < source.length(); ++i) {
-            if (inLineComment) {
-                inLineComment = source[i] != '\n';
-                continue;
-            }
-            if (inBlockComment) {
-                if (source[i] == '*' && i + 1 < source.length() && source[i + 1] == '/') {
-                    inBlockComment = false;
-                    ++i;
-                }
-                continue;
-            }
-            if (source[i] == '/' && i + 1 < source.length()) {
-                if (source[i + 1] == '/') {
-                    inLineComment = true;
-                    ++i;
-                    continue;
-                }
-                if (source[i + 1] == '*') {
-                    inBlockComment = true;
-                    ++i;
-                    continue;
-                }
-            }
-            if (source.compare(i, 11, "local_size_") == 0) {
-                return true;
-            }
-        }
-        return false;
-    }
 } // namespace
 
 namespace MobileGL::MG_State::GLState {
@@ -370,6 +359,31 @@ namespace MobileGL::MG_State::GLState {
             return;
         }
 
+        // A compute program must have a fixed local group size, and GL states that as a
+        // property of the PROGRAM: "at least one" of its compute shaders declares it (GL 4.6
+        // core 7.13 / GLSL 4.30 4.4.1.4). MobileGL used to answer that question per SHADER,
+        // by scanning each source for the text "local_size_" - which rejected the perfectly
+        // legal shape KHR-GL42.compute_shader.build-monolithic submits, three compilation
+        // units of which only two carry the layout and the third holds nothing but a buffer
+        // block and a function. It also could not see a local size that arrived through a
+        // macro, and it happily accepted the substring inside an unrelated identifier.
+        //
+        // glslang already merged the units' modes at link (linkValidate.cpp mergeModes, which
+        // also diagnoses two units declaring CONTRADICTORY sizes), so the linked
+        // intermediate is the thing that knows - and asking it is both correct and free.
+        if (const glslang::TIntermediate* cs = artifacts.program->getIntermediate(EShLangCompute);
+            cs != nullptr && !cs->isLocalSizeSet()) {
+            artifacts.linkStatus = false;
+            // The gate this replaced ran before LinkProgram, so a program that failed it
+            // published no TProgram at all. Keep that invariant: everything downstream reads
+            // artifacts.program as "the linked program", and a rejected link should not leave
+            // one behind for a query surface to find.
+            artifacts.program.reset();
+            artifacts.infoLog = "Compute shader is missing a local_size layout declaration.";
+            DeferLog(std::format("ProgramObject {}: Link failed - {}", in.externalIndex, artifacts.infoLog));
+            return;
+        }
+
         // GL_GEOMETRY_INPUT_TYPE. A draw's primitive type has to be compatible with it
         // (GL 4.6 core 11.3.1), so it is resolved for every link, not only a capturing one.
         artifacts.gsInputPrimitive = GL_NONE;
@@ -510,13 +524,6 @@ namespace MobileGL::MG_State::GLState {
                                      in.externalIndex, i, artifacts.infoLog));
                 return false;
             }
-            if (input.stage == ShaderStage::Compute &&
-                !ComputeShaderDeclaresLocalSize(input.source ? *input.source : String())) {
-                artifacts.infoLog = "Compute shader is missing a local_size layout declaration.";
-                DeferLog(std::format("ProgramObject {}: Link failed - {}", in.externalIndex, artifacts.infoLog));
-                return false;
-            }
-
             String reparseLog;
             outShaders[i] = input.compiled->ClaimParsedShader(reparseLog);
             if (!outShaders[i]) {
@@ -921,8 +928,21 @@ namespace MobileGL::MG_State::GLState {
                 std::max(artifacts.uniformBlockNameMaxLength, (Int)ubo.name.length());
             artifacts.uniformBlockIndexByName[ubo.name] = i;
             // if there's binding defined in shader as layout(binding = ...),
-            // retrieve it here
-            artifacts.uniformBlockBinding[i] = ubo.getBinding();
+            // retrieve it here.
+            //
+            // An instance array takes CONSECUTIVE binding points: "layout(binding = 2)
+            // uniform GOKU {...} goku[14];" puts goku[0] on 2 and goku[13] on 15 (GL 4.6
+            // 7.6.2 / GLSL 4.20 4.4.5). glslang expands the array into one reflection
+            // record per element but hands every one of them the DECLARED binding, because
+            // they all share the block's TType - so the element offset has to be added
+            // here. Without it every element reported the base binding, and since both
+            // backends feed a block from GetUniformBlockBinding() at draw time
+            // (DirectGLES.cpp / UniformManager.cpp), all 14 elements also read the same
+            // buffer. This is the rule the storage-block path in ProgramInterface.cpp
+            // already applies, and whose comment there claims uniform blocks follow.
+            const Int declaredBinding = ubo.getBinding();
+            artifacts.uniformBlockBinding[i] =
+                declaredBinding < 0 ? declaredBinding : declaredBinding + BlockArrayElement(ubo.name);
             MGLOG_D("ProgramObject %u: Reflection - UBO[%d] name='%s' size=%u binding=%d", in.externalIndex, i,
                     ubo.name.c_str(), ubo.size, ubo.getBinding());
         }
