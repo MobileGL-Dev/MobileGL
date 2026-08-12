@@ -501,3 +501,29 @@ deliberately **not** covered by the surface-lost infrastructure clause: its
 `retrace.log` carries neither the `0x300b` nor the `-1000000001` marker, and its
 `mobilegl.log` does reach `OpenGL ES capabilities:`. Both guards exclude it, so
 the run is charged as a failure rather than retried away.
+
+#### Not the same root cause as improved-transparency, and it reproduces on the desktop
+
+Checked directly: the generated ESSL for this fixture contains **no fragment
+output arrays and no dynamic output indexing**. Across its 44 shader dumps there
+are zero `out ... [N]` declarations, zero `gl_FragData` references, and zero
+`mg_FragColor_` replicas - so `BroadcastLegacyFragColor` never even fires here.
+Every output is a plainly named location, e.g.
+
+```
+layout(location = 0) out highp vec4 gbufferData0;
+layout(location = 0) out float iris_FogFragCoord;
+layout(location = 2) out vec3 skyColorUp;
+```
+
+So the improved-transparency defect (non-constant index into a fragment-output
+array) is **not** what kills the emulator here, and the two need separate fixes.
+
+The crash does reproduce locally through the ANGLE recipe above, which is much
+cheaper than bisecting on an emulator. Running this fixture on both stacks:
+Mesa passes at SSIM 0.996301; ANGLE exits **139** (SIGSEGV) with no result.json,
+and the host kernel log shows the same fault as CI - several `llvmpipe-N`
+worker threads, `segfault at 8`, `error 4`, all at one instruction. It dies
+immediately after program 58 links, on a draw logged as
+`Using raw depth fetch sampler on unit 13`. Debug that repro under gdb before
+reaching for the 13-commit bisect.
