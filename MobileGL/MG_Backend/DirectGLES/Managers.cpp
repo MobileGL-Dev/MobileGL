@@ -610,10 +610,22 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     // where a respecification would put them.
                     if (bufferObject.IsBackendPersistentMapped()) return;
                     // Renewal declined (a zero-sized store, or the map could not be
-                    // retaken): the buffer is back on its CPU shadow and needs the
-                    // ordinary respecification below.
+                    // retaken): the buffer is back on its CPU shadow and needs an ordinary
+                    // store again. Not this id's, though - it carries IMMUTABLE storage
+                    // (glBufferStorageEXT), which glBufferData below would refuse. Drop it
+                    // and let the lazy EnsureBufferResource path mint a mutable one with a
+                    // full upload; nothing points into the old mapping any more, because
+                    // the frontend has just given the adoption back.
                     resource->persistentMapped = false;
                     resource->persistentPtr = nullptr;
+                    if (resource->id != 0 && CanTouchGLNow() &&
+                        resource->contextGeneration == g_bufferContextGeneration) {
+                        ScrubBufferBindingShadowsForId(resource->id);
+                        g_GLESFuncs.glDeleteBuffers(1, &resource->id);
+                    }
+                    resource->id = 0;
+                    resource->storageInitialized = false;
+                    resource->storageSize = 0;
                 }
                 if (!CanTouchGLNow() || resource->id == 0 ||
                     resource->contextGeneration != g_bufferContextGeneration) {
