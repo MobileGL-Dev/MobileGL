@@ -6074,8 +6074,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
             if (!isDefault) {
                 // A real object: ask it directly. That answer is certainly blit-compatible,
-                // so it is used on its own.
+                // so it is used on its own. The query binds the attachment as GL_TEXTURE_2D,
+                // which an array or cube attachment refuses - it answers 0, the size-derived
+                // guesses below take over, and the refusal must not be left on the error
+                // queue for the caller's next glGetError to pick up as its own.
                 const GLenum exact = ReplicateBlitImpl::QueryAttachmentSizedFormat(point);
+                ClearGLErrors();
                 if (exact != 0) {
                     out->Push(exact);
                     return true;
