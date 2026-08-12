@@ -141,7 +141,11 @@ namespace MobileGL::MG_State::GLState {
     // phase-B publish, so re-entering the join gate is not available, and the location space
     // reflection assigns (one location per array element) is all that is needed.
     void ProgramObject::ApplyUniformInitialValues() const {
-        const auto& initializers = m_artifacts.uniformInitialValues;
+        // Through the phase-A gate, not off m_artifacts directly: phase B can be joined by a
+        // caller that has not read anything phase A publishes yet, and reading the raw field
+        // there would find the PREVIOUS link's block (or an empty one) and drop every
+        // initializer without a trace. Artifacts() is a no-op once phase A is in.
+        const auto& initializers = Artifacts().uniformInitialValues;
         if (initializers.empty()) return;
         if (m_spirv.globalUboScratch.empty() || m_spirv.uniformOffsets.empty()) {
             // Phase B published no shadow (cancelled, or superseded by a relink). The program
