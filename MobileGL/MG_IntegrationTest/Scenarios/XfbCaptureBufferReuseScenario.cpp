@@ -27,6 +27,7 @@
 // rather than a parameter: it is the configuration that already worked, so it
 // has to keep working for the others to mean anything.
 
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -157,7 +158,11 @@ void main() {
                 for (std::size_t i = 0; i < kCaptureFloats; ++i) {
                     const float expected = value + static_cast<float>(i);
                     const float got = data[i];
-                    if (got - expected > 0.01f || expected - got > 0.01f) {
+                    // isfinite first: every ordered comparison against a NaN is false, so a
+                    // pair of one-sided range tests REPORTS SUCCESS for uninitialised
+                    // storage that happens to read as NaN - which is exactly the failure
+                    // these scenarios exist to catch.
+                    if (!std::isfinite(got) || std::fabs(got - expected) > 0.01f) {
                         return ::testing::AssertionFailure()
                                << "component " << i << " is " << got << ", expected " << expected
                                << (got == kPoison ? " (the capture never reached these bytes)" : "");
@@ -281,7 +286,12 @@ void main() {
             GLuint xfbBuffer = 0;
             glGenBuffers(1, &xfbBuffer);
             glBindBuffer(GL_TRANSFORM_FEEDBACK_BUFFER, xfbBuffer);
-            glBufferStorage(GL_TRANSFORM_FEEDBACK_BUFFER, kCaptureBytes, nullptr, GL_MAP_READ_BIT);
+            // Poisoned at creation - the storage is immutable, so this is the only chance to
+            // put a recognisable value there, and without it a span that captured nothing
+            // would be indistinguishable from one that captured the right thing whenever the
+            // untouched bytes happened to read back as the expected number.
+            const std::vector<float> poison(kCaptureFloats, kPoison);
+            glBufferStorage(GL_TRANSFORM_FEEDBACK_BUFFER, kCaptureBytes, poison.data(), GL_MAP_READ_BIT);
             ASSERT_EQ(glGetError(), GL_NO_ERROR) << "glBufferStorage on the capture buffer";
             glBindBufferBase(GL_TRANSFORM_FEEDBACK_BUFFER, 0, xfbBuffer);
 

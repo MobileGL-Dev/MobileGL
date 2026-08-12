@@ -1702,6 +1702,94 @@ TEST_F(TextureTest, CompressedTexSubImage2DReplacesTheStoredBlocks) {
     EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
 }
 
+// The Y axis of the placement, which the whole-image and single-column cases above cannot see: an
+// implementation that dropped the first-block-row term, or that divided yoffset by the block WIDTH,
+// passes every one of them. The region here starts at block row 1, so its two blocks belong at
+// bytes 16 and 24 and nowhere else.
+TEST_F(TextureTest, CompressedTexSubImage2DPlacesTheFirstBlockRow) {
+    const GLuint texture = MakeCompressedRgtc1Texture8x8();
+    Uint8 whole[kRgtc1Size8x8];
+    for (Int i = 0; i < kRgtc1Size8x8; ++i) whole[i] = static_cast<Uint8>(i + 1);
+    MG_Impl::GLImpl::CompressedTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 8, 8, GL_COMPRESSED_RED_RGTC1, kRgtc1Size8x8,
+                                             whole);
+    ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    // The bottom block row only: 8 texels wide, 4 high, starting at y = 4.
+    const Uint8 bottom[16] = {0xC0, 0xC1, 0xC2, 0xC3, 0xC4, 0xC5, 0xC6, 0xC7,
+                              0xD0, 0xD1, 0xD2, 0xD3, 0xD4, 0xD5, 0xD6, 0xD7};
+    MG_Impl::GLImpl::CompressedTexSubImage2D(GL_TEXTURE_2D, 0, 0, 4, 8, 4, GL_COMPRESSED_RED_RGTC1,
+                                             static_cast<GLsizei>(sizeof(bottom)), bottom);
+    ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    Uint8 expected[kRgtc1Size8x8];
+    std::memcpy(expected, whole, sizeof(expected));
+    std::memcpy(expected + 16, bottom, sizeof(bottom));
+
+    Uint8 stored[kRgtc1Size8x8] = {};
+    MG_Impl::GLImpl::GetCompressedTexImage(GL_TEXTURE_2D, 0, stored);
+    EXPECT_EQ(std::memcmp(stored, expected, sizeof(expected)), 0);
+
+    // And one block in the far corner, which needs both terms at once.
+    const Uint8 corner[8] = {0xE0, 0xE1, 0xE2, 0xE3, 0xE4, 0xE5, 0xE6, 0xE7};
+    MG_Impl::GLImpl::CompressedTexSubImage2D(GL_TEXTURE_2D, 0, 4, 4, 4, 4, GL_COMPRESSED_RED_RGTC1,
+                                             static_cast<GLsizei>(sizeof(corner)), corner);
+    ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+    std::memcpy(expected + 24, corner, sizeof(corner));
+    std::memset(stored, 0, sizeof(stored));
+    MG_Impl::GLImpl::GetCompressedTexImage(GL_TEXTURE_2D, 0, stored);
+    EXPECT_EQ(std::memcmp(stored, expected, sizeof(expected)), 0);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+    (void)texture;
+}
+
+// A level whose size is neither square nor a multiple of the block size, at a level above the
+// base, in a format with SIXTEEN bytes per block. Between them these pin the row stride (which a
+// square level cannot distinguish from the column count), the rounding-up of a partial edge block,
+// the run-to-the-edge exemption from the whole-blocks rule, and the block size actually coming from
+// the format rather than from a constant.
+TEST_F(TextureTest, CompressedTexSubImage2DHandlesPartialBlocksAndAMipLevel) {
+    GLuint texture = 0;
+    MG_Impl::GLImpl::GenTextures(1, &texture);
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, texture);
+    // 6x10 BPTC: 2 block columns x 3 block rows of 16 bytes = 96, one block row = 32.
+    constexpr GLsizei kBptcSize6x10 = 96;
+    MG_Impl::GLImpl::CompressedTexImage2D(GL_TEXTURE_2D, 1, GL_COMPRESSED_RGBA_BPTC_UNORM, 6, 10, 0, kBptcSize6x10,
+                                          nullptr);
+    ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    GLint imageSize = 0;
+    MG_Impl::GLImpl::GetTexLevelParameteriv(GL_TEXTURE_2D, 1, GL_TEXTURE_COMPRESSED_IMAGE_SIZE, &imageSize);
+    EXPECT_EQ(imageSize, kBptcSize6x10);
+
+    Uint8 whole[kBptcSize6x10];
+    for (Int i = 0; i < kBptcSize6x10; ++i) whole[i] = static_cast<Uint8>(i + 1);
+    MG_Impl::GLImpl::CompressedTexSubImage2D(GL_TEXTURE_2D, 1, 0, 0, 6, 10, GL_COMPRESSED_RGBA_BPTC_UNORM,
+                                             kBptcSize6x10, whole);
+    ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    // The right-hand column (2 texels wide - a partial block that runs to the edge) of the middle
+    // block row: one block, at byte 32 + 16.
+    Uint8 patch[16];
+    for (Int i = 0; i < 16; ++i) patch[i] = static_cast<Uint8>(0xF0 + i);
+    MG_Impl::GLImpl::CompressedTexSubImage2D(GL_TEXTURE_2D, 1, 4, 4, 2, 4, GL_COMPRESSED_RGBA_BPTC_UNORM,
+                                             static_cast<GLsizei>(sizeof(patch)), patch);
+    ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    Uint8 expected[kBptcSize6x10];
+    std::memcpy(expected, whole, sizeof(expected));
+    std::memcpy(expected + 48, patch, sizeof(patch));
+
+    Uint8 stored[kBptcSize6x10] = {};
+    MG_Impl::GLImpl::GetCompressedTexImage(GL_TEXTURE_2D, 1, stored);
+    EXPECT_EQ(std::memcmp(stored, expected, sizeof(expected)), 0);
+
+    // The partial edge block is only exempt from the whole-blocks rule AT the edge: the same
+    // 2-texel width one block to the left is not.
+    MG_Impl::GLImpl::CompressedTexSubImage2D(GL_TEXTURE_2D, 1, 0, 4, 2, 4, GL_COMPRESSED_RGBA_BPTC_UNORM,
+                                             static_cast<GLsizei>(sizeof(patch)), patch);
+    ExpectSingleGlError(GL_INVALID_OPERATION);
+}
+
 // The same call sourcing its blocks from a buffer bound to GL_PIXEL_UNPACK_BUFFER, where `data` is
 // an offset into that buffer rather than a client pointer - which is the form
 // KHR-GL44.buffer_storage.map_persistent_texture uses for every one of its operations.
@@ -1753,15 +1841,19 @@ TEST_F(TextureTest, CompressedUploadsAcceptAPersistentlyMappedUnpackBuffer) {
     GLuint texture = 0;
     MG_Impl::GLImpl::GenTextures(1, &texture);
     MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, texture);
-    MG_Impl::GLImpl::CompressedTexImage2D(GL_TEXTURE_2D, 0, GL_COMPRESSED_RED_RGTC1, 8, 8, 0, kRgtc1Size8x8, nullptr);
+    // The image call takes offset 0 and the sub-image call offset 128, so the readback can only
+    // match if the SUB-IMAGE call ran: were it refused (or a no-op), the level would still hold
+    // the image call's bytes.
+    MG_Impl::GLImpl::CompressedTexImage2D(GL_TEXTURE_2D, 0, GL_COMPRESSED_RED_RGTC1, 8, 8, 0, kRgtc1Size8x8,
+                                          reinterpret_cast<const void*>(static_cast<SizeT>(0)));
     EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR) << "glCompressedTexImage2D over a persistent map";
     MG_Impl::GLImpl::CompressedTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 8, 8, GL_COMPRESSED_RED_RGTC1, kRgtc1Size8x8,
-                                             reinterpret_cast<const void*>(static_cast<SizeT>(0)));
+                                             reinterpret_cast<const void*>(static_cast<SizeT>(128)));
     EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR) << "glCompressedTexSubImage2D over a persistent map";
 
     Uint8 stored[kRgtc1Size8x8] = {};
     MG_Impl::GLImpl::GetCompressedTexImage(GL_TEXTURE_2D, 0, stored);
-    EXPECT_EQ(std::memcmp(stored, source, sizeof(stored)), 0);
+    EXPECT_EQ(std::memcmp(stored, source + 128, sizeof(stored)), 0);
 
     MG_Impl::GLImpl::UnmapBuffer(GL_PIXEL_UNPACK_BUFFER);
 
@@ -3568,4 +3660,58 @@ TEST_F(TextureTest, GetTexLevelParameterOnBufferStorageReportsErrorInsteadOfTerm
         MG_Impl::GLImpl::GetTexLevelParameterfv(GL_TEXTURE_BUFFER, 0, pname, &floatParam);
         ExpectSingleGlError(GL_INVALID_OPERATION);
     }
+}
+
+// Immutable storage plus glCompressedTexSubImage2D is the modern way to upload a compressed
+// texture, so glTexStorage2D has to commit its levels to a specific compressed internalformat
+// exactly as glTexImage2D does. When it did not, the sub-image call found an uncompressed level
+// and refused it, and glTexImage2D and glTexStorage2D disagreed about the same token.
+TEST_F(TextureTest, TexStorage2DTagsEveryLevelForASpecificCompressedFormat) {
+    GLuint texture = 0;
+    MG_Impl::GLImpl::GenTextures(1, &texture);
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, texture);
+    MG_Impl::GLImpl::TexStorage2D(GL_TEXTURE_2D, 2, GL_COMPRESSED_RED_RGTC1, 8, 8);
+    ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    for (GLint level = 0; level < 2; ++level) {
+        GLint compressed = GL_FALSE;
+        MG_Impl::GLImpl::GetTexLevelParameteriv(GL_TEXTURE_2D, level, GL_TEXTURE_COMPRESSED, &compressed);
+        EXPECT_EQ(compressed, GL_TRUE) << "level " << level;
+        GLint internalFormat = 0;
+        MG_Impl::GLImpl::GetTexLevelParameteriv(GL_TEXTURE_2D, level, GL_TEXTURE_INTERNAL_FORMAT, &internalFormat);
+        EXPECT_EQ(internalFormat, static_cast<GLint>(GL_COMPRESSED_RED_RGTC1)) << "level " << level;
+        GLint imageSize = 0;
+        MG_Impl::GLImpl::GetTexLevelParameteriv(GL_TEXTURE_2D, level, GL_TEXTURE_COMPRESSED_IMAGE_SIZE, &imageSize);
+        // 8x8 -> 2x2 blocks -> 32 bytes; 4x4 -> 1 block -> 8 bytes.
+        EXPECT_EQ(imageSize, level == 0 ? 32 : 8) << "level " << level;
+    }
+    ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    // ...and the sub-image call the whole arrangement exists for now reaches both levels.
+    Uint8 blocks[kRgtc1Size8x8];
+    for (Int i = 0; i < kRgtc1Size8x8; ++i) blocks[i] = static_cast<Uint8>(0x40 + i);
+    MG_Impl::GLImpl::CompressedTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 8, 8, GL_COMPRESSED_RED_RGTC1, kRgtc1Size8x8,
+                                             blocks);
+    ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+    Uint8 stored[kRgtc1Size8x8] = {};
+    MG_Impl::GLImpl::GetCompressedTexImage(GL_TEXTURE_2D, 0, stored);
+    EXPECT_EQ(std::memcmp(stored, blocks, sizeof(stored)), 0);
+
+    MG_Impl::GLImpl::CompressedTexSubImage2D(GL_TEXTURE_2D, 1, 0, 0, 4, 4, GL_COMPRESSED_RED_RGTC1, 8, blocks);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+}
+
+// The negative control: a generic compressed token leaves glTexStorage2D's levels uncompressed,
+// because for those the implementation's choice IS the answer and MobileGL chooses uncompressed.
+TEST_F(TextureTest, TexStorage2DLeavesAGenericCompressedFormatUncompressed) {
+    GLuint texture = 0;
+    MG_Impl::GLImpl::GenTextures(1, &texture);
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, texture);
+    MG_Impl::GLImpl::TexStorage2D(GL_TEXTURE_2D, 1, GL_COMPRESSED_RED, 8, 8);
+    ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    GLint compressed = GL_TRUE;
+    MG_Impl::GLImpl::GetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_COMPRESSED, &compressed);
+    EXPECT_EQ(compressed, GL_FALSE);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
 }

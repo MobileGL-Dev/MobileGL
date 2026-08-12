@@ -76,33 +76,36 @@ namespace MobileGL::MG_State::GLState {
     }
 
     // A (re)definition of the store is about to write `size` bytes through Bytes().
-    // Sizing the shadow is all that takes for a shadow-backed buffer, but a buffer
-    // whose bytes were adopted into backend GPU memory needs the adoption renewed
-    // first: the mapping it holds describes exactly the OLD store. Writing the new
+    // Sizing the shadow is all that takes for a shadow-backed buffer. A buffer whose
+    // bytes were adopted into backend GPU memory has to give the adoption back first,
+    // because the mapping it holds describes exactly the OLD store: writing the new
     // contents through it runs past its end the moment the store grows, and a backend
-    // that replaces the storage for the new store (which is what an orphaning
-    // respecification asks for) would leave that mapping - and therefore every later
-    // read of this buffer - addressing storage nothing writes to any more.
+    // that replaces the storage for the new store - which is what an orphaning
+    // respecification asks for - would leave that mapping, and therefore every later
+    // read of this buffer, addressing storage nothing writes to any more. That was the
+    // transform feedback capture that wrote one buffer while the readback read another.
     //
-    // Renewing rather than simply dropping is what keeps the common case free: a
-    // redefinition at the same size gets the same mapping back without any storage
-    // being created, which is also what makes the backend's respecify a no-op (the
-    // new bytes are already in the storage it would otherwise upload to).
+    // Given back rather than renewed here, deliberately. Renewing in place would mean
+    // memcpying the new contents into storage that submitted-but-unretired draws may
+    // still be reading, which is precisely what the orphaning idiom exists to avoid;
+    // avoiding THAT would mean either stalling on a fence in the middle of a frame or
+    // teaching the persistent-map op to orphan, and the op must never orphan for the
+    // other kind of caller (an application-held GL_MAP_PERSISTENT_BIT mapping, whose
+    // pointer has to stay valid for the buffer's whole life). Handing the store back to
+    // the CPU shadow needs none of that: the backend's ordinary respecification path
+    // then does the busy-tracking and the conditional orphan it has always done, and the
+    // next binding that wants GPU residency takes a fresh mapping of the new store.
     void BufferObject::RedefineStorage(SizeT size) {
-        const Bool wasGpuResident = m_resource.IsGpuResident();
-        if (wasGpuResident) {
-            // A capture or a shader write may still be running against the very bytes
-            // that are about to be overwritten.
-            SyncGpuWrites();
+        if (m_resource.IsGpuResident()) {
             m_resource.ReleasePersistentMap();
+            // Whatever a shader or a capture wrote is in the store being replaced, so
+            // there is nothing left to reconcile - and leaving the flag set would make
+            // the next read of this buffer wait for GPU work on behalf of bytes the
+            // application has just thrown away.
+            m_gpuWritePending = false;
         }
         m_size = size;
         m_resource.ResizeShadow(size);
-        if (wasGpuResident) {
-            // Declining is allowed (a zero-sized store, a backend without the op): the
-            // buffer simply goes back to the CPU-shadow model it had before adoption.
-            EnsureGpuResidentStorage();
-        }
     }
 
     void BufferObject::Respecify(SizeT size, const void* data) {

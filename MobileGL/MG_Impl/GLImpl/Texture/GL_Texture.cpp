@@ -3639,6 +3639,20 @@ namespace MobileGL::MG_Impl::GLImpl {
             return;
         }
 
+        // Once per process: the call is about to succeed, and what it does is narrower than what
+        // an application has every right to expect from it. Before this existed the call answered
+        // GL_INVALID_ENUM, which was wrong but at least visible; a silent success that leaves the
+        // sampled texels untouched is the kind of thing that costs a day to find from the other
+        // end. MGLOG_I, not _W: warnings are compiled out at the level everything ships at.
+        static std::atomic<Bool> announcedNoCodec{false};
+        if (!announcedNoCodec.exchange(true)) {
+            MGLOG_I("%s: the compressed blocks are stored verbatim and returned by "
+                    "glGetCompressedTexImage, but there is no BC/ETC decoder here, so they do not "
+                    "reach the texels this level SAMPLES as. Upload through glTexSubImage2D for "
+                    "that.",
+                    __func__);
+        }
+
         // The level's compressed image is stored as one blob, so the rectangle is patched into
         // a copy of it and the whole thing handed back. Compressed sub-image uploads are not a
         // hot path, and this keeps the storage layer's compressed API to the two calls it has.
@@ -4278,6 +4292,13 @@ namespace MobileGL::MG_Impl::GLImpl {
         // core 8.19). Allocating only the primary one left the object cube-incomplete, so every
         // framebuffer it was attached to reported GL_FRAMEBUFFER_INCOMPLETE_ATTACHMENT. Every other
         // 2D target has exactly one upload target, so this loop is a no-op change for them.
+        // A specific compressed internalformat commits every level it allocates to that
+        // format, the same way glTexImage2D does - and here it matters twice over, because
+        // immutable storage plus glCompressedTexSubImage2D IS the modern way to upload a
+        // compressed texture: without the tag that sub-image call finds an uncompressed
+        // level and refuses it. Zero width means a generic (implementation's choice)
+        // format, which MobileGL answers with uncompressed storage, so it is not tagged.
+        const auto compressedInfo = MG_Util::GetCompressedFormatInfo(internalformat);
         for (const auto uploadTarget : textureObject->GetUploadTargets()) {
             for (GLsizei level = 0; level < levels; ++level) {
                 const GLsizei levelWidth = std::max<GLsizei>(1, width >> level);
@@ -4286,6 +4307,13 @@ namespace MobileGL::MG_Impl::GLImpl {
                     static_cast<SizeT>(levelWidth) * static_cast<SizeT>(levelHeight) * bytesPerPixel;
                 textureMipmapObject->AllocateStorage(uploadTarget, level, {{levelWidth, levelHeight, 1}, byteSize});
                 textureMipmapObject->MarkStorageDirty(uploadTarget, level, false);
+                if (compressedInfo.blockWidth != 0) {
+                    // After AllocateStorage, which clears the tag.
+                    textureMipmapObject->SetMipmapCompressedImage(
+                        uploadTarget, static_cast<Uint>(level), internalformat, nullptr,
+                        MG_Util::CalculateCompressedTextureImageSize(compressedInfo,
+                                                                     {levelWidth, levelHeight, 1}));
+                }
             }
             // See TextureStorage1D.
             textureMipmapObject->TruncateMipmapLevels(uploadTarget, static_cast<Uint>(levels));

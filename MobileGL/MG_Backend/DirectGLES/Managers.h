@@ -286,6 +286,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // context loss.
             Bool persistentMapped = false;
             void* persistentPtr = nullptr;
+            // The GL store behind `id` was created with glBufferStorageEXT and is
+            // therefore IMMUTABLE - glBufferData cannot respecify it and it must never be
+            // recycled through the size-keyed buffer pool. Tracked separately from
+            // persistentMapped because the two come apart: a glMapBufferRange that fails
+            // after its glBufferStorageEXT succeeded leaves immutable storage behind with
+            // no map, and a respecification then has to retire the id rather than hand it
+            // to glBufferData, which the driver would silently refuse.
+            Bool immutableStorage = false;
         };
 
         // Registered as the frontend's BufferBackendOps at backend init and on

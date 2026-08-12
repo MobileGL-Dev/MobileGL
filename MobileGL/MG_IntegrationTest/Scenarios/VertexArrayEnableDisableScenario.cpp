@@ -77,8 +77,12 @@ namespace MGITest {
                 declarations += "in int a_" + std::to_string(i) + ";\n";
                 copies += "  sum += a_" + std::to_string(i) + ";\n";
             }
-            const std::string vertexSource = "#version 450\n\n" + declarations + "out int sum;\n\nvoid main()\n{\n" +
-                                             copies + "}\n";
+            // `flat` where the CTS case has none: an integral shader output cannot be
+            // interpolated, so a driver is within its rights to reject the unqualified form
+            // even with no matching fragment input. The capture reads the same value either
+            // way, and the qualifier keeps this scenario portable off llvmpipe.
+            const std::string vertexSource = "#version 450\n\n" + declarations +
+                                             "flat out int sum;\n\nvoid main()\n{\n" + copies + "}\n";
             const std::string fragmentSource = R"(#version 450
 
 out vec4 color;
