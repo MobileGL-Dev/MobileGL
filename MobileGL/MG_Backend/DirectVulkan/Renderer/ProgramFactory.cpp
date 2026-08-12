@@ -2419,8 +2419,14 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     //
     // Asking the reflection whether baseLocation and baseLocation + count - 1 are slots of the
     // SAME uniform tests exactly that precondition, without this code having to model how
-    // glslang chooses to lay an array of arrays out - if a future glslang reserves all six, the
-    // check passes and the per-element paths are right for it too.
+    // glslang chooses to lay an array of arrays out.
+    //
+    // That is NOT on its own enough to start supporting the shape, though, and this check must
+    // not be relaxed alone: the binding-qualifier unit seeding in ProgramLinkTask looks an
+    // opaque uniform up by its name minus a trailing "[0]", so `goku[0][0]` misses the `goku`
+    // key and every element of an array of arrays seeds texture unit 0. Resolving those elements
+    // would then paint silently-wrong pixels with no diagnostic at all - strictly worse than
+    // declining. The decline goes away together with the seeding fix, not before it.
     static Uint32 DescriptorCountForOpaqueUniformArray(const MG_State::GLState::ProgramObject& program,
                                                        const String& uniformName, Uint32 binding, Int baseLocation,
                                                        Uint32 reflectedCount, Uint32 maxBindings,
@@ -2432,8 +2438,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         if (count > maxBindings) {
             // Nothing legal to declare: the count would not fit a VkDescriptorSetLayoutBinding
             // this device accepts, and it would narrow badly into the Uint16 that carries it
-            // (65536 becomes 0). The layout ends up inconsistent with the shader whatever we do,
-            // so declare what we can and refuse the draw.
+            // (65536 becomes 0). Unlike the extent case below, this one CANNOT keep the layout
+            // consistent with the shader, so refusing the draw does not fully protect it - the
+            // driver still JITs a shader indexing past the declared count. Declaring as many as
+            // the device allows keeps vkCreateDescriptorSetLayout succeeding and the program
+            // inert; a device whose binding cap is smaller than a shader's array is not a
+            // configuration MobileGL can serve at all. Needs a >maxBindings-element array to
+            // reach (256 on desktop, ~16 on mobile).
             MGLOG_I("ProgramFactory::ReflectLayout: %s array '%s' at binding %u has %u elements, past the %u "
                     "this device can describe - declining the program",
                     kindLabel, uniformName.c_str(), binding, count, maxBindings);
@@ -2669,7 +2680,23 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                     // `b[1].data.length()` answered from an unconstrained buffer instead of its
                     // own bound range (KHR-GL43.shader_storage_buffer_object.-
                     // advanced-unsizedArrayLength-*).
-                    entry.bindingDescriptorCounts[binding] = static_cast<Uint16>(std::max<Uint32>(1u, sampler->count));
+                    //
+                    // Bounds-checked like every other array kind. The EXTENT rule differs - a
+                    // block array's elements take consecutive GL binding points rather than
+                    // consecutive uniform locations, so DescriptorCountForOpaqueUniformArray's
+                    // location test does not apply here - but the size rule is identical: this
+                    // count goes straight into a VkDescriptorSetLayoutBinding and is narrowed to
+                    // a Uint16 on the way, where 65536 would silently become 0.
+                    const Uint32 storageArrayCount = std::max<Uint32>(1u, sampler->count);
+                    if (storageArrayCount > m_maxBindings) {
+                        MGLOG_I("ProgramFactory::ReflectLayout: storage block array '%s' at binding %u has %u "
+                                "elements, past the %u this device can describe - declining the program",
+                                uniformName.c_str(), binding, storageArrayCount, m_maxBindings);
+                        entry.declinedDescriptors = true;
+                        entry.bindingDescriptorCounts[binding] = static_cast<Uint16>(m_maxBindings);
+                        continue;
+                    }
+                    entry.bindingDescriptorCounts[binding] = static_cast<Uint16>(storageArrayCount);
                     continue;
                 }
 
@@ -3089,6 +3116,20 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         ReflectVertexInputs(shaders, moduleSpirvs, entry);
         ReflectFragmentOutputs(shaders, moduleSpirvs, entry);
         ReflectLayout(program, moduleSpirvs, entry);
+        // A failed remap means the modules kept glslang's per-stage auto-mapped binding numbers -
+        // no cross-stage unification, no set->0 normalisation - so the bindings this layout
+        // describes are not the bindings the shader reads. That has to stop the program from
+        // drawing, and until now nothing did: the MOBILEGL_ASSERT above compiles out of every
+        // build past DEBUG, and RemapDescriptorBindingsForVulkan's own refusal message said so at
+        // a level an INFO build also drops. Declining is the mechanism that already exists for
+        // "the layout and the shader disagree", so route it through that. Set AFTER ReflectLayout,
+        // which clears the flag.
+        if (!remapOk) {
+            MGLOG_I("ProgramFactory::GetOrCreateProgram: declining program %u - its descriptor bindings could not "
+                    "be remapped, so the layout does not describe what the shader reads",
+                    program.GetExternalIndex());
+            entry.declinedDescriptors = true;
+        }
 
         return entry;
     }

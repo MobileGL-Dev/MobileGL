@@ -311,23 +311,24 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
         MOBILEGL_ASSERT(binding < programObj.samplerNameByBinding.size(),
                         "ResolveSamplerDescriptor: sampler binding %u name lookup out of range", binding);
-        // Raw-pointer resolve to skip the SharedPtr atomic refcount churn: the bound texture stays
-        // alive through the draw via GL binding state. Only the fallback path needs a SharedPtr to
-        // keep the fallback texture alive for the rest of this call.
-        MG_State::GLState::ITextureObject* texture = ResolveSamplerTextureRaw(program, programObj, binding, element);
-
-        // Per ELEMENT: GLSL 4.20 gives every element of `uniform sampler2D goku[4]` its own
-        // texture unit (consecutive from the declared binding, but glUniform1i may scatter them
-        // afterwards), so the unit - and with it the bound texture, the unit's sampler override
-        // and the fallback decision - is the element's, not the binding's.
+        // Per ELEMENT, and resolved BEFORE anything is looked up through it: GLSL 4.20 gives every
+        // element of `uniform sampler2D goku[4]` its own texture unit (consecutive from the
+        // declared binding, but glUniform1i may scatter them afterwards), so the unit - and with
+        // it the bound texture, the unit's sampler override and the fallback decision - is the
+        // element's, not the binding's. An element past the array's reserved extent has no unit
+        // at all, and must not fall back to resolving unit 0's texture.
         const Int location =
             ResolveDescriptorElementLocation(program, programObj.samplerUniformLocationByBinding[binding], element);
         if (location < 0 && element > 0) {
-            MGLOG_I("ResolveSamplerDescriptor: binding %u element %u is past the end of its sampler array", binding,
+            MGLOG_D("ResolveSamplerDescriptor: binding %u element %u is past the end of its sampler array", binding,
                     element);
             return false;
         }
         const Int unit = ResolveSamplerUnitIndex(program, location, binding);
+        // Raw-pointer resolve to skip the SharedPtr atomic refcount churn: the bound texture stays
+        // alive through the draw via GL binding state. Only the fallback path needs a SharedPtr to
+        // keep the fallback texture alive for the rest of this call.
+        MG_State::GLState::ITextureObject* texture = ResolveSamplerTextureRaw(program, programObj, binding, element);
         auto& textureUnit = MG_State::pGLContext->GetTextureUnitObject(unit);
         const auto& samplerOverride = textureUnit.GetSamplerObject();
         const auto preferredTarget = programObj.samplerTextureTargetByBinding[binding];
@@ -500,9 +501,18 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // Only for a binding that carries a single descriptor - an array's elements would
         // publish each other's descriptors here, and the next hinted draw would hand element
         // N-1's texture to element 0.
-        if (descriptorMemoUsable && binding < m_samplerResolveMemo.size()) {
-            m_samplerResolveMemo[binding].info = outImageInfo;
-            m_samplerResolveMemo[binding].infoValid = true;
+        if (binding < m_samplerResolveMemo.size()) {
+            if (descriptorMemoUsable) {
+                m_samplerResolveMemo[binding].info = outImageInfo;
+                m_samplerResolveMemo[binding].infoValid = true;
+            } else {
+                // An arrayed binding publishes nothing here, and clears what a previous program
+                // published at this index. Not strictly required - the hint's proof obligations
+                // are program-scoped and the entry is reset every frame - but leaving another
+                // program's descriptor sitting in a slot this one never refreshes is the kind of
+                // thing the next reader has to re-derive is safe.
+                m_samplerResolveMemo[binding].infoValid = false;
+            }
             NoteSamplerResolveMemoTouched(binding);
         }
         return true;
@@ -557,6 +567,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             // different texture through its own unit.
             const Uint32 descriptorCount = BindingDescriptorCount(programObj, binding);
             for (Uint32 element = 0; element < descriptorCount; ++element) {
+                // The element's own location first, exactly as ResolveSamplerDescriptor resolves
+                // it - an element with no location would otherwise be judged on unit 0's texture.
+                const Int location = ResolveDescriptorElementLocation(
+                    program, programObj.samplerUniformLocationByBinding[binding], element);
+                if (location < 0 && element > 0) return false;
                 const auto* texture = ResolveSamplerTextureRaw(program, programObj, binding, element);
                 if (texture == nullptr) return false;
                 const auto& levelRange = texture->GetLevelRange();
@@ -565,9 +580,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 // An explicit-LOD sample is a single filtered tap, so it also gives up anisotropic
                 // filtering - which a single-level view can still have. Resolve the sampler exactly
                 // the way ResolveSamplerDescriptor does and bail if anisotropy would apply.
-                const Int location = ResolveDescriptorElementLocation(
-                    program, programObj.samplerUniformLocationByBinding[binding], element);
-                if (location < 0 && element > 0) return false;
                 const Int unit = ResolveSamplerUnitIndex(program, location, binding);
                 const auto& samplerOverride = MG_State::pGLContext->GetTextureUnitObject(unit).GetSamplerObject();
                 const auto* effectiveSampler =
@@ -1476,12 +1488,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                                              VkPipelineBindPoint bindPoint,
                                                              const SamplerBindingOverride* samplerBindingOverride,
                                                              Bool samplerDescriptorsUnchangedHint) {
-        // ReflectLayout could not describe one of this program's descriptors and dropped it from
-        // the layout, which leaves the layout disagreeing with the shader. Refusing here is what
-        // makes that a DECLINE rather than a fault: the draw setup skips the draw on a false
-        // return, so the shader never runs against a descriptor the layout does not declare -
-        // which on lavapipe is a segfault inside the JIT-ed shader, and on a hardware driver is
-        // whatever it chooses. ReflectLayout already said why, once, at MGLOG_I.
+        // This program has a descriptor MobileGL could not resolve (see
+        // VkProgramObject::declinedDescriptors). Refusing here is the whole of the decline: the
+        // binding is still declared in the layout, so the pipeline is consistent with the shader
+        // and creating it is safe - what must not happen is the draw, because the descriptor
+        // behind that binding can never be written. The draw setup skips the draw on a false
+        // return. ReflectLayout already said why, once, at MGLOG_I.
         if (programObj.declinedDescriptors) {
             MGLOG_D("UniformDescriptorBinder::BindProgramUniformBuffers: refusing a program whose descriptor layout "
                     "was declined at reflection");

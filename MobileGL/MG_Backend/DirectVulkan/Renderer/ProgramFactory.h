@@ -104,13 +104,18 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             // Set once during ReflectLayout so the per-draw path can skip the whole
             // storage-image preparation for the overwhelming majority of programs.
             Bool hasStorageImages = false;
-            // ReflectLayout found a descriptor it cannot describe and dropped it from the
-            // layout. That leaves a layout the shader disagrees with, so this program must
-            // never reach a draw: BindProgramUniformBuffers refuses outright, and the draw
-            // setup skips the draw exactly as it does for any other bind failure. Dropping the
-            // binding WITHOUT refusing the draw is what a shader reading an undeclared
-            // descriptor looks like, and lavapipe segfaults inside the JIT-ed shader on it.
-            // The reason was logged at MGLOG_I when the binding was declined.
+            // Something about this program's descriptors could not be resolved - an opaque
+            // uniform array whose elements have no addressable uniform locations (the
+            // multi-dimensional case), or a binding remap that failed outright. The binding
+            // STAYS DECLARED in the descriptor set layout; declining is done here, by refusing
+            // every draw, and BindProgramUniformBuffers returns false so the draw setup skips
+            // the draw exactly as it does for any other bind failure.
+            //
+            // Keeping the layout intact is the load-bearing half. Shrinking it instead - which
+            // is what the first cut of this did - leaves the shader reading a descriptor the
+            // layout never declared, and lavapipe segfaults on that inside PIPELINE CREATION,
+            // in a JIT worker thread, before any draw runs where a refusal could help. The
+            // reason was logged once at MGLOG_I when the descriptor was declined.
             Bool declinedDescriptors = false;
             Int globalUboBinding = -1;
             Uint32 activeVertexInputLocationMask = 0;
