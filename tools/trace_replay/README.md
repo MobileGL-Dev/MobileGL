@@ -324,3 +324,33 @@ draw-buffer slot restriction is already handled by
 means bisecting inside the frame to find which GLES construct ANGLE mistranslates;
 the accommodation, once known, belongs with the existing
 `--avoid-angle-llvmpipe-*` flags rather than in shared backend code.
+
+#### Where in the frame it goes wrong
+
+Snapshotting the same intra-frame call points on both stacks (`--target-call`,
+ten replays in parallel, logs to `/dev/null`) localises it. SSIM against the
+golden at each point:
+
+| target call | what runs there | Mesa | ANGLE | gap |
+| --- | --- | --- | --- | --- |
+| 2667445 | last opaque draw, into FBO 29 | 0.146477 | 0.000195 | - |
+| 2667488 | **OIT composite**: fullscreen triangle, program 50, into FBO 3 | 0.976448 | 0.945409 | 0.031 |
+| 2667543 | post draw, program 56 | 0.985380 | 0.954480 | 0.031 |
+| 2667595 | post draw, program 64 | 0.985685 | 0.954788 | 0.031 |
+| 2667619 | golden point | 1.000000 | 0.970127 | 0.030 |
+
+The gap opens at the composite and is then constant to four decimal places -
+every pass after 2667488 contributes the same increment on both drivers. So
+nothing downstream of the composite is implicated, and the GUI/post chain is
+fine. The two stacks already disagree at 2667445, before the composite runs,
+which points at the translucent accumulation targets the composite samples
+rather than at the composite draw itself.
+
+That is as far as this went. What is still unknown is **which** GLES construct
+in the accumulation chain ANGLE translates differently - naming it needs the
+intermediate FBO attachments dumped either side of 2667488 on both stacks,
+which the replay CLI cannot currently do (it snapshots one framebuffer, not all
+attachments). Until it is named there is nothing to put behind an
+`--avoid-angle-llvmpipe-*` flag and nothing precise enough to file upstream, so
+the fixture stays red on the Android DirectGLES lane rather than being papered
+over.
