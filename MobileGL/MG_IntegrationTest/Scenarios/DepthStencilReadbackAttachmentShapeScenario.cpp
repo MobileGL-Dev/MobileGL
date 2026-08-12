@@ -342,6 +342,14 @@ namespace MGITest {
         // depth/stencil claim below falsifiable instead of drowning it in an unrelated
         // harness limitation.
         if (int(color[1]) <= 192) {
+            // GTEST_SKIP() expands to a return, so the teardown below it would never run and this
+            // scenario would hand the next one a foreign framebuffer plus three leaked objects -
+            // and this is the path DirectVulkan takes on every headless run, not a rare one.
+            BindDefaultFramebuffer();
+            glDeleteFramebuffers(1, &fbo);
+            glDeleteRenderbuffers(1, &colorRbo);
+            glDeleteRenderbuffers(1, &depthRbo);
+            gl.EndFrame();
             GTEST_SKIP() << "backend " << gl.BackendName() << " on this surface transferred no colour either (green="
                          << int(color[1])
                          << "): it cannot blit out of the default framebuffer here, so the depth/stencil half proves "

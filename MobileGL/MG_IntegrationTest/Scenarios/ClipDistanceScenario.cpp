@@ -25,6 +25,22 @@
 // actual claim. The disabled case is the negative control - the identical shader with the
 // identical distances and the enable turned off must leave both sides painted, which is what
 // says the pixels below are being removed by clipping and not by something else.
+//
+// HONEST LIMIT OF THIS FILE IN CI. Of the four cases, only EnableIsObservableThroughIsEnabled is
+// falsifiable on the software rasterizers every automated lane runs on. llvmpipe and lavapipe
+// clip by EVERY declared gl_ClipDistance regardless of the enables, so
+// AnEnabledClipDistanceRemovesTheNegativeHalf goes green there against the broken tree as well,
+// and the two cases that need real per-distance semantics skip (see
+// DriverHonoursPerDistanceEnables). What actually pins the behaviour is Adreno, through
+// KHR-GLxx.clip_distance.functional - whose "without dynamic redeclaration" variants declare all
+// gl_MaxClipDistances slots and enable only the first N, i.e. exactly the subset semantics these
+// skipped cases assert. Read a green CI run here as "the state survives the frontend", not as
+// "clipping is correct"; the second claim is a device claim.
+//
+// Every case disables all eight distances on entry rather than assuming they start off:
+// XfbAfterClipDistanceScenario deliberately leaves one enabled for the rest of the process, and
+// forwarding the enables is what turned that leftover from inert bookkeeping into live driver
+// state.
 
 #include <string>
 #include <vector>
@@ -131,9 +147,16 @@ void main() { fragColor = vec4(0.0, 1.0, 0.0, 1.0); }
                 return px[0] > 192 && px[1] < 64;
             }
 
-            unsigned char PixelAt(int x, int y, unsigned char* out) const {
+            void PixelAt(int x, int y, unsigned char* out) const {
                 glReadPixels(x, y, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, out);
-                return out[0];
+            }
+
+            // Never assume the eight start disabled - see the header note about
+            // XfbAfterClipDistanceScenario leaving one on for the rest of the process.
+            static void DisableEveryClipDistance() {
+                for (int i = 0; i < 8; ++i) {
+                    glDisable(static_cast<GLenum>(GL_CLIP_DISTANCE0 + i));
+                }
             }
 
             // True when the driver under this backend actually implements PER-DISTANCE enable
@@ -183,7 +206,9 @@ void main() { fragColor = vec4(0.0, 1.0, 0.0, 1.0); }
         if (!Ready()) return;
         HeadlessGL& gl = Gl();
 
-        EXPECT_EQ(glIsEnabled(GL_CLIP_DISTANCE0), GL_FALSE) << "GL_CLIP_DISTANCE0 must start disabled";
+        DisableEveryClipDistance();
+        EXPECT_EQ(glIsEnabled(GL_CLIP_DISTANCE0), GL_FALSE)
+            << "glDisable(GL_CLIP_DISTANCE0) is not observable through glIsEnabled";
         glEnable(GL_CLIP_DISTANCE0);
         EXPECT_EQ(FirstGLError(), 0u);
         EXPECT_EQ(glIsEnabled(GL_CLIP_DISTANCE0), GL_TRUE)
@@ -222,6 +247,9 @@ void main() { fragColor = vec4(0.0, 1.0, 0.0, 1.0); }
         glDisable(GL_CULL_FACE);
         glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
 
+        // Distance 1 is positive by a single pixel at the sampled row, so a stray enable on it
+        // would put the "kept" probe right on the clip boundary.
+        DisableEveryClipDistance();
         glEnable(GL_CLIP_DISTANCE0);
         DrawClippedTriangle(program, vao);
         EXPECT_EQ(FirstGLError(), 0u);
@@ -268,8 +296,7 @@ void main() { fragColor = vec4(0.0, 1.0, 0.0, 1.0); }
         glDisable(GL_SCISSOR_TEST);
         glDisable(GL_DEPTH_TEST);
         glDisable(GL_CULL_FACE);
-        glDisable(GL_CLIP_DISTANCE0);
-        glDisable(GL_CLIP_DISTANCE1);
+        DisableEveryClipDistance();
 
         DrawClippedTriangle(program, vao);
         EXPECT_EQ(FirstGLError(), 0u);
@@ -281,18 +308,19 @@ void main() { fragColor = vec4(0.0, 1.0, 0.0, 1.0); }
         EXPECT_EQ(FirstGLError(), 0u);
 
         EXPECT_TRUE(IsGreen(right)) << "with every clip distance disabled the whole triangle must survive";
-        if (!IsGreen(left)) {
-            GTEST_SKIP() << "renderer " << gl.RendererString()
-                         << " clips by a DISABLED gl_ClipDistance - it does not implement per-distance enable state "
-                            "(see DriverHonoursPerDistanceEnables). Emulating GL's semantics there needs shader-side "
-                            "masking keyed on the enable mask, which is a separate feature";
-        }
+        const bool driverHonoursEnables = IsGreen(left);
 
         glUseProgram(0);
         glBindVertexArray(0);
         glDeleteProgram(program);
         glDeleteVertexArrays(1, &vao);
         gl.EndFrame();
+        if (!driverHonoursEnables) {
+            GTEST_SKIP() << "renderer " << gl.RendererString()
+                         << " clips by a DISABLED gl_ClipDistance - it does not implement per-distance enable state "
+                            "(see DriverHonoursPerDistanceEnables). Emulating GL's semantics there needs shader-side "
+                            "masking keyed on the enable mask, which is a separate feature";
+        }
     }
 
     // The eight enables are independent: enabling only distance 1 must clip by distance 1 and
@@ -322,12 +350,14 @@ void main() { fragColor = vec4(0.0, 1.0, 0.0, 1.0); }
             glBindVertexArray(0);
             glDeleteProgram(program);
             glDeleteVertexArrays(1, &vao);
+            DisableEveryClipDistance();
+            gl.EndFrame();
             GTEST_SKIP() << "renderer " << gl.RendererString()
                          << " clips by every declared gl_ClipDistance regardless of the enables, so per-distance "
                             "independence is not observable here";
         }
 
-        glDisable(GL_CLIP_DISTANCE0);
+        DisableEveryClipDistance();
         glEnable(GL_CLIP_DISTANCE1);
 
         DrawClippedTriangle(program, vao);

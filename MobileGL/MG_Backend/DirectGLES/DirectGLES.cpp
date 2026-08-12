@@ -6168,6 +6168,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // stay in the list behind it, so a wrong first answer costs one rejected blit
                 // instead of the whole readback. The probe's own refusal must not be left on
                 // the error queue for the caller's next glGetError to pick up as its own.
+                //
+                // The cost of keeping the fallbacks: a source whose OWN format cannot back a
+                // staging texture (GL_STENCIL_INDEX8 without EXT/OES_texture_stencil8, say) no
+                // longer fails cleanly - it retries with a packed format, and a driver lax
+                // enough to accept the resulting mismatched depth/stencil blit would hand back
+                // data indistinguishable from a correct read. ES conformance forbids that blit,
+                // so this trades a spec-guaranteed rejection for a driver-bug-only wrong answer;
+                // the shapes it rescues (array and cube attachments) are otherwise unreadable.
                 const GLenum exact = ReplicateBlitImpl::QueryAttachmentSizedFormat(point);
                 ClearGLErrors();
                 if (exact != 0) {
@@ -7696,6 +7704,16 @@ namespace MobileGL::MG_Backend::DirectGLES {
         }
 
         if (depthBits <= 0 && stencilBits <= 0) {
+            // Nothing usable came back from either witness. Returning here leaves whatever a
+            // PREVIOUS surface published in place, which would be stale - this function runs
+            // once per surface activation, not once per process. It is written this way anyway
+            // because the branch is unreachable for a surface MobileGL chose itself:
+            // InitDisplayAndContext asks eglChooseConfig for EGL_DEPTH_SIZE 24 and
+            // EGL_STENCIL_SIZE 8, and so does its alpha-free retry, so g_Config always has both
+            // and the EGL fallback above always answers. A caller that supplies its own
+            // depth-less config would keep the previous surface's description; publishing a
+            // guess instead would be a different lie, and the placeholder attachment model has
+            // no way to say "this buffer does not exist" short of detaching it.
             MGLOG_D("DirectGLES: default framebuffer reports no depth or stencil; leaving the "
                     "placeholder attachment formats untouched");
             return;
