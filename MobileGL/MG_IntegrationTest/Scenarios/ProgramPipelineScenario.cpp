@@ -133,6 +133,47 @@ void main() { gl_Position = i_position; }
 
     } // namespace
 
+    // The root cause of the cluster, stated as the two halves it actually has.
+    //
+    // Half one: glGenProgramPipelines only reserves a name, and every pipeline command used to
+    // demand a materialized object - so the spec's own call order (stages attached BEFORE the
+    // first bind, GL 4.6 core 7.4) was rejected with GL_INVALID_OPERATION and the stages were
+    // never recorded. Half two is the trap that fix walks into: the object now appears the
+    // moment anything needs somewhere to put state, so "the object exists" stops being the
+    // right answer for glIsProgramPipeline, which the spec ties to the first BIND. A pure
+    // query must not turn a reserved name into a program pipeline either.
+    TEST_F(ProgramPipelineScenario, AReservedNameTakesStateBeforeItIsAProgramPipeline) {
+        if (!Ready()) return;
+
+        const GLuint vs = MakeSeparable(GL_VERTEX_SHADER, kSeparableVS);
+        if (vs == 0) return;
+        const GLuint pipeline = MakePipeline();
+        ASSERT_NE(pipeline, 0u);
+        EXPECT_EQ(glIsProgramPipeline(pipeline), GL_FALSE) << "a merely reserved name is not a pipeline yet";
+
+        // A query answers out of default state - and leaves the name exactly as it found it.
+        GLint validateStatus = -1;
+        glGetProgramPipelineiv(pipeline, GL_VALIDATE_STATUS, &validateStatus);
+        EXPECT_EQ(FirstGLError(), 0u) << "querying a reserved pipeline name must not be an error";
+        EXPECT_EQ(validateStatus, 0) << "a pipeline that was never validated reports VALIDATE_STATUS 0";
+        EXPECT_EQ(glIsProgramPipeline(pipeline), GL_FALSE) << "a pure query must not create the object";
+
+        // ...and glUseProgramStages RECORDS the stage on the reserved name rather than
+        // rejecting it, which is the whole defect: without this the pipeline stayed empty.
+        glUseProgramStages(pipeline, GL_VERTEX_SHADER_BIT, vs);
+        EXPECT_EQ(FirstGLError(), 0u) << "glUseProgramStages before the first bind must be accepted";
+        GLint stageProgram = 0;
+        glGetProgramPipelineiv(pipeline, GL_VERTEX_SHADER, &stageProgram);
+        EXPECT_EQ(static_cast<GLuint>(stageProgram), vs) << "the stage program was not recorded";
+        EXPECT_EQ(glIsProgramPipeline(pipeline), GL_FALSE) << "taking state is still not being bound";
+
+        // The bind is what the spec ties glIsProgramPipeline to.
+        glBindProgramPipeline(pipeline);
+        EXPECT_EQ(glIsProgramPipeline(pipeline), GL_TRUE);
+        EXPECT_EQ(FirstGLError(), 0u);
+        glBindProgramPipeline(0);
+    }
+
     // The floor: a two-stage pipeline must paint. If this fails, nothing above it can pass, and
     // the eight shared conformance cases have exactly one cause.
     TEST_F(ProgramPipelineScenario, ATwoStagePipelinePaintsWhatItsStagesDescribe) {

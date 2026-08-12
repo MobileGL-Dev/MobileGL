@@ -674,6 +674,12 @@ namespace MobileGL::MG_Impl::GLImpl {
         // dereferences GetProgramForDraw() unconditionally, so "no current program" has to be
         // stopped here or it is a null dereference rather than the INVALID_OPERATION the spec
         // asks for - reachable through a bound pipeline that supplies no graphics stage.
+        //
+        // AFTER the argument checks, unlike the sibling draw entry points, and deliberately:
+        // the argument rules here are properties of the call rather than of GL state, and
+        // NegativeApiErrorsTest.IndirectParameterDrawsCheckBothBuffers pins the INVALID_VALUE
+        // they produce for a call made with no program bound. Same precedence decision, and
+        // the same reason, as DispatchComputeIndirect above.
         if (!ValidateCurrentProgramForExecution(__func__)) return;
         auto multiDrawElementsIndirectCount = MG_Backend::gBackendFunctionsTable.GL.MultiDrawElementsIndirectCount;
         if (!multiDrawElementsIndirectCount) {
@@ -694,7 +700,7 @@ namespace MobileGL::MG_Impl::GLImpl {
                                        4 * sizeof(Uint32), __func__)) {
             return;
         }
-        // See MultiDrawElementsIndirectCount.
+        // See MultiDrawElementsIndirectCount, including why this one goes last.
         if (!ValidateCurrentProgramForExecution(__func__)) return;
         auto multiDrawArraysIndirectCount = MG_Backend::gBackendFunctionsTable.GL.MultiDrawArraysIndirectCount;
         if (!multiDrawArraysIndirectCount) {

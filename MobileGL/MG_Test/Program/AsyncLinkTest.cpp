@@ -628,8 +628,8 @@ TEST_F(AsyncLinkTest, DrawThroughAPipelineWithAPendingStageProgramJoinsFirst) {
     GLuint pipeline = 0;
     GenProgramPipelines(1, &pipeline);
     ASSERT_NE(pipeline, 0u);
-    // Bind before UseProgramStages: glGenProgramPipelines only reserves the name, and the
-    // first bind is what turns it into an object glUseProgramStages can find.
+    // Bound first only because this test draws through the pipeline; glUseProgramStages no
+    // longer needs it (it materializes a reserved name itself, GL 4.6 core 7.4).
     BindProgramPipeline(pipeline);
     UseProgramStages(pipeline, GL_VERTEX_SHADER_BIT, vsProgram);
     ASSERT_EQ(GetError(), GL_NO_ERROR);

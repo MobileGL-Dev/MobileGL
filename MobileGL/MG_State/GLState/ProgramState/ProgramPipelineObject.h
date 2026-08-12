@@ -40,6 +40,17 @@ namespace MobileGL {
 
                 Uint GetExternalIndex() const { return m_externalIndex; }
 
+                // glIsProgramPipeline's answer, and NOT the same question as "does this object
+                // exist" (GL 4.6 core 7.4: a GenProgramPipelines name "acquires program pipeline
+                // state only when first bound"). The object is materialized by any of the
+                // commands that take state from a reserved name - including the pure queries
+                // glGetProgramPipelineiv and glGetProgramPipelineInfoLog, which have to answer
+                // out of default state without ever making the name report as an object. So
+                // existence is map membership and this is a separate latch, exactly as
+                // TransformFeedbackObject::everBound is.
+                Bool GetEverBound() const { return m_everBound; }
+                void MarkEverBound() { m_everBound = true; }
+
                 // The stages a DRAW is built from: every stage but compute. GL 4.6 core 7.4
                 // makes the compute stage exclusive - a program object containing a compute
                 // shader may contain no other stage, and a pipeline's compute stage is
@@ -56,7 +67,17 @@ namespace MobileGL {
                 // GRAPHICS stages are composited into a single hidden program object, rebuilt
                 // whenever the stage set - or any stage program's own link - changes. The
                 // signature is what that "changes" means: a stage program's lifetime id pins the
-                // object and its backend state version pins the link generation. It covers
+                // object and its backend state version pins the link generation.
+                //
+                // The backend state version is BLUNTER than that description: glUniform1i on a
+                // sampler and glUniformBlockBinding bump it too, so either one throws the
+                // composite away and relinks it on the next draw. That is correct but slow, and
+                // it is a shape the SSO conformance cases hit in a loop. Narrowing it to
+                // GetLinkVersion() means the composite must instead pick those two up the way it
+                // picks up uniform values (below) - the sampler half already works that way,
+                // the block-binding half does not yet, which is why this still keys on the
+                // blunter version.
+                // It covers
                 // exactly the stages the composite is built from, so attaching or relinking a
                 // compute stage never invalidates a perfectly good graphics composite - and the
                 // compute stage, having no composite of its own, can never collide with it.
@@ -120,6 +141,7 @@ namespace MobileGL {
                 String m_infoLog;
                 const Uint m_externalIndex = 0;
                 Bool m_validateStatus = false;
+                Bool m_everBound = false;
             };
         } // namespace GLState
     } // namespace MG_State

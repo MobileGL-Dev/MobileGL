@@ -383,6 +383,15 @@ namespace MobileGL::MG_State {
         //
         // Location-by-location so that arrays are carried across whole, and via the padded
         // storage span so a mat3's std140 column padding travels with it.
+        //
+        // KNOWN LIMIT, inherent to flattening rather than to this copy: SSO gives each stage
+        // program its own storage for a uniform, so two stage programs may declare the same
+        // name and hold different values - but the composite is one link and has one slot for
+        // it. RefreshCompositeUniforms walks the stages in order, so the last graphics stage
+        // that declares the name wins, including when it is only holding the zero default and
+        // an earlier stage held a written value. Fixing it properly means mirroring only the
+        // uniforms a program has actually been written to, which wants a per-location dirty
+        // set on ProgramObject.
         static void MirrorUniformValues(ProgramObject& source, ProgramObject& destination) {
             if (!source.GetLinkStatus() || !destination.GetLinkStatus()) return;
             const char* sourceUbo = static_cast<const char*>(source.GetUBOData());
@@ -1062,26 +1071,42 @@ namespace MobileGL::MG_State {
         // Program pipeline
         void GLContext::GenProgramPipelineNames(Uint number, Vector<Uint>& pipelines) {
             pipelines.resize(number);
-            // Names only: glIsProgramPipeline must answer GL_FALSE until one is bound or created.
+            // Names only. The OBJECT appears as soon as a command needs somewhere to put state
+            // (see MaterializeProgramPipelineObject), but glIsProgramPipeline still answers
+            // GL_FALSE until the name is bound or created - see IsProgramPipelineObject.
             m_programPipelineNames.Generate(number, pipelines.data());
         }
 
         void GLContext::CreateProgramPipelineObject(Uint index) {
-            m_programPipelines[index] = MakeShared<ProgramPipelineObject>(index);
+            const auto object = MakeShared<ProgramPipelineObject>(index);
+            // glCreateProgramPipelines makes the object outright, so it answers
+            // glIsProgramPipeline immediately - unlike a name that only got here through
+            // GenProgramPipelines plus a command that materialized it.
+            object->MarkEverBound();
+            m_programPipelines[index] = object;
         }
 
         Bool GLContext::ValidateProgramPipelineName(Uint index) const {
             return index == 0 || m_programPipelineNames.IsValid(index);
         }
 
+        // glIsProgramPipeline. Materialization is NOT the test: the object now appears as soon
+        // as any command takes state from a reserved name, and two of those commands are the
+        // pure queries glGetProgramPipelineiv / glGetProgramPipelineInfoLog - so keying this on
+        // map membership would let merely READING a gen'd name turn it into an object. GL 4.6
+        // core 7.4 gives the real rule: a GenProgramPipelines name acquires program pipeline
+        // state when it is first bound. Same shape as IsTransformFeedbackObject.
         Bool GLContext::IsProgramPipelineObject(Uint index) const {
             if (index == 0 || !m_programPipelineNames.IsValid(index)) return false;
-            return m_programPipelines.find(index) != m_programPipelines.end();
+            const auto it = m_programPipelines.find(index);
+            return it != m_programPipelines.end() && it->second && it->second->GetEverBound();
         }
 
         void GLContext::BindProgramPipelineObject(Uint index) {
             if (index != 0) {
-                MaterializeProgramPipelineObject(index);
+                if (const auto& object = MaterializeProgramPipelineObject(index)) {
+                    object->MarkEverBound();
+                }
             }
             m_boundProgramPipeline = index;
         }

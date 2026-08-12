@@ -457,8 +457,10 @@ namespace MobileGL {
                 UnorderedMap<Uint, TransformFeedbackObjectState> m_transformFeedbackObjects;
                 IndexGenerator<Uint> m_transformFeedbackNames;
                 Uint m_boundTransformFeedback = 0;
-                // Map membership IS object existence here: a pipeline has no stateful default
-                // object 0, so no everBound flag is needed.
+                // Map membership is object EXISTENCE, which is not the same as the answer
+                // glIsProgramPipeline gives: any command that needs somewhere to put state
+                // materializes a reserved name, so the object can exist well before it is
+                // bound. ProgramPipelineObject::everBound carries the Is* answer.
                 UnorderedMap<Uint, SharedPtr<ProgramPipelineObject>> m_programPipelines;
                 IndexGenerator<Uint> m_programPipelineNames;
                 Uint m_boundProgramPipeline = 0;
