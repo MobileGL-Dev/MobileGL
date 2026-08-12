@@ -1732,6 +1732,54 @@ TEST_F(TextureTest, CompressedTexSubImage2DUnpacksFromAPixelUnpackBuffer) {
     (void)texture;
 }
 
+// ARB_buffer_storage's whole point: a PERSISTENTLY mapped buffer stays usable while the map is
+// live, including as the source of a texture upload - which is what
+// KHR-GL44.buffer_storage.map_persistent_texture checks. An ordinary map still disqualifies it.
+// Both compressed entry points share one validator, so both are checked here.
+TEST_F(TextureTest, CompressedUploadsAcceptAPersistentlyMappedUnpackBuffer) {
+    Uint8 source[256];
+    for (Int i = 0; i < 256; ++i) source[i] = static_cast<Uint8>(255 - i);
+    GLuint buffer = 0;
+    MG_Impl::GLImpl::GenBuffers(1, &buffer);
+    MG_Impl::GLImpl::BindBuffer(GL_PIXEL_UNPACK_BUFFER, buffer);
+    MG_Impl::GLImpl::BufferStorage(GL_PIXEL_UNPACK_BUFFER, sizeof(source), source,
+                                   GL_MAP_PERSISTENT_BIT | GL_MAP_READ_BIT | GL_MAP_WRITE_BIT);
+    ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+    void* mapped = MG_Impl::GLImpl::MapBufferRange(GL_PIXEL_UNPACK_BUFFER, 0, sizeof(source),
+                                                   GL_MAP_PERSISTENT_BIT | GL_MAP_READ_BIT | GL_MAP_WRITE_BIT);
+    ASSERT_NE(mapped, nullptr);
+    ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    GLuint texture = 0;
+    MG_Impl::GLImpl::GenTextures(1, &texture);
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, texture);
+    MG_Impl::GLImpl::CompressedTexImage2D(GL_TEXTURE_2D, 0, GL_COMPRESSED_RED_RGTC1, 8, 8, 0, kRgtc1Size8x8, nullptr);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR) << "glCompressedTexImage2D over a persistent map";
+    MG_Impl::GLImpl::CompressedTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 8, 8, GL_COMPRESSED_RED_RGTC1, kRgtc1Size8x8,
+                                             reinterpret_cast<const void*>(static_cast<SizeT>(0)));
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR) << "glCompressedTexSubImage2D over a persistent map";
+
+    Uint8 stored[kRgtc1Size8x8] = {};
+    MG_Impl::GLImpl::GetCompressedTexImage(GL_TEXTURE_2D, 0, stored);
+    EXPECT_EQ(std::memcmp(stored, source, sizeof(stored)), 0);
+
+    MG_Impl::GLImpl::UnmapBuffer(GL_PIXEL_UNPACK_BUFFER);
+
+    // The negative control: an ORDINARY map is still an error, so the check above is not just
+    // "the mapped test was dropped".
+    GLuint plainBuffer = 0;
+    MG_Impl::GLImpl::GenBuffers(1, &plainBuffer);
+    MG_Impl::GLImpl::BindBuffer(GL_PIXEL_UNPACK_BUFFER, plainBuffer);
+    MG_Impl::GLImpl::BufferData(GL_PIXEL_UNPACK_BUFFER, sizeof(source), source, GL_STATIC_DRAW);
+    ASSERT_NE(MG_Impl::GLImpl::MapBuffer(GL_PIXEL_UNPACK_BUFFER, GL_READ_ONLY), nullptr);
+    ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+    MG_Impl::GLImpl::CompressedTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 8, 8, GL_COMPRESSED_RED_RGTC1, kRgtc1Size8x8,
+                                             reinterpret_cast<const void*>(static_cast<SizeT>(0)));
+    ExpectSingleGlError(GL_INVALID_OPERATION);
+    MG_Impl::GLImpl::UnmapBuffer(GL_PIXEL_UNPACK_BUFFER);
+    MG_Impl::GLImpl::BindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
+}
+
 // glCompressedTextureSubImage2D was an exported no-op that raised no error at all, so an
 // application could not tell the write had not happened. It must reach the NAMED texture and leave
 // the binding it borrowed exactly as it found it.

@@ -1376,6 +1376,47 @@ namespace MobileGL::MG_Impl::GLImpl {
         return true;
     }
 
+    // The same rules for the COMPRESSED entry points, whose payload size is the imageSize the
+    // caller passed rather than something derived from a (format, type) pair - and which have no
+    // datum size, so the alignment rule above does not apply to them. Shared by
+    // glCompressedTexImage2D and glCompressedTexSubImage2D so the two cannot drift; the point
+    // that is easy to get wrong and that KHR-GL44.buffer_storage.map_persistent_texture exists to
+    // check is the first one: a PERSISTENT mapping stays a legal transfer source.
+    Bool ValidateCompressedUnpackBufferSource(const void* data, SizeT imageSize, const char* caller) {
+        const auto& unpackBuffer =
+            MG_State::pGLContext->GetBufferBindingSlot(BufferTarget::PixelUnpack).GetBoundObject();
+        if (!unpackBuffer) return true;
+
+        if (unpackBuffer->IsMapped() && !(unpackBuffer->GetMappingAccess() & BufferMappingAccessBit::Persistent)) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidOperation,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller, "Pixel unpack buffer is currently mapped."));
+            return false;
+        }
+
+        const SizeT offset = reinterpret_cast<SizeT>(data);
+        const SizeT bufferSize = unpackBuffer->GetSize();
+        if (offset > bufferSize || imageSize > bufferSize - offset) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidOperation,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller,
+                                             "Unpacking would read past the end of the pixel unpack buffer."));
+            return false;
+        }
+        return true;
+    }
+
+    // Where a compressed upload reads its blocks from: `data` is an offset into the bound unpack
+    // buffer when there is one, and a client pointer otherwise. Only meaningful once
+    // ValidateCompressedUnpackBufferSource has passed. Null means there is nothing to read, which
+    // GL leaves undefined and which callers must not dereference.
+    const void* CompressedUnpackSource(const void* data) {
+        const auto& unpackBuffer =
+            MG_State::pGLContext->GetBufferBindingSlot(BufferTarget::PixelUnpack).GetBoundObject();
+        if (!unpackBuffer) return data;
+        return reinterpret_cast<const char*>(unpackBuffer->MappedData()) + reinterpret_cast<SizeT>(data);
+    }
+
     void TexSubImage3D_State(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLint zoffset, GLsizei width,
                              GLsizei height, GLsizei depth, GLenum format, GLenum type, const void* pixels) {
         TextureUploadTarget textureUploadTarget = MG_Util::ConvertGLEnumToTextureUploadTarget(target);
@@ -3587,28 +3628,8 @@ namespace MobileGL::MG_Impl::GLImpl {
         }
 
         // ======================= Processing ================================
-        const void* compressedBytes = data;
-        const auto& pixelUnpackBufferObject =
-            MG_State::pGLContext->GetBufferBindingSlot(BufferTarget::PixelUnpack).GetBoundObject();
-        if (pixelUnpackBufferObject) {
-            if (pixelUnpackBufferObject->IsMapped()) {
-                MG_State::pGLContext->RecordError(
-                    ErrorCode::InvalidOperation,
-                    MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
-                                                 "Pixel unpack buffer is currently mapped."));
-                return;
-            }
-            const SizeT offset = reinterpret_cast<SizeT>(data);
-            const SizeT bufferSize = pixelUnpackBufferObject->GetSize();
-            if (offset > bufferSize || expectedImageSize > bufferSize - offset) {
-                MG_State::pGLContext->RecordError(
-                    ErrorCode::InvalidOperation,
-                    MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
-                                                 "Unpacking would read past the end of the pixel unpack buffer."));
-                return;
-            }
-            compressedBytes = reinterpret_cast<const char*>(pixelUnpackBufferObject->MappedData()) + offset;
-        }
+        if (!ValidateCompressedUnpackBufferSource(data, expectedImageSize, __func__)) return;
+        const void* compressedBytes = CompressedUnpackSource(data);
         if (expectedImageSize == 0) return; // a zero-sized region is a legal no-op
         if (compressedBytes == nullptr) {
             // No unpack buffer and a null client pointer: there is nothing to read. GL leaves
@@ -3746,28 +3767,8 @@ namespace MobileGL::MG_Impl::GLImpl {
         // SetMipmapCompressedImage re-arms it.
         textureMipmapObject->AllocateStorage(textureUploadTarget, level, {{width, height, 1}, internalBytes});
 
-        const void* compressedBytes = data;
-        const auto& pixelUnpackBufferObject =
-            MG_State::pGLContext->GetBufferBindingSlot(BufferTarget::PixelUnpack).GetBoundObject();
-        if (pixelUnpackBufferObject) {
-            if (pixelUnpackBufferObject->IsMapped()) {
-                MG_State::pGLContext->RecordError(
-                    ErrorCode::InvalidOperation,
-                    MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
-                                                 "Pixel unpack buffer is currently mapped."));
-                return;
-            }
-            const SizeT offset = reinterpret_cast<SizeT>(data);
-            const SizeT bufferSize = pixelUnpackBufferObject->GetSize();
-            if (offset > bufferSize || expectedImageSize > bufferSize - offset) {
-                MG_State::pGLContext->RecordError(
-                    ErrorCode::InvalidOperation,
-                    MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
-                                                 "Unpacking would read past the end of the pixel unpack buffer."));
-                return;
-            }
-            compressedBytes = reinterpret_cast<const char*>(pixelUnpackBufferObject->MappedData()) + offset;
-        }
+        if (!ValidateCompressedUnpackBufferSource(data, expectedImageSize, __func__)) return;
+        const void* compressedBytes = CompressedUnpackSource(data);
         textureMipmapObject->SetMipmapCompressedImage(textureUploadTarget, level, internalformat, compressedBytes,
                                                       expectedImageSize);
         textureMipmapObject->MarkStorageDirty(textureUploadTarget, level, true);
