@@ -2085,8 +2085,17 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // the entry point because that one must never trigger a build (see
             // ShaderStorageBlockBinding below). The signature is over the values, so an
             // application that re-sets the same bindings every frame rebuilds nothing.
+            //
+            // The image-unit generation is a third of the same shape, and it used to be
+            // carried by accident: glUniform1i on an image uniform bumped the program's backend
+            // state version, which was in the program-pipeline composite's cache key, so a
+            // pipeline draw got a whole NEW composite object and therefore a fresh twin. Keying
+            // that cache on the link version instead (ProgramPipelineObject) removed the
+            // accident - and it never covered the monolithic glUseProgram path at all - so the
+            // dependency is stated here instead.
             if (!twin->GetBackendProgramId() ||
                 twin->GetSyncedLinkVersion() != currentProgram->GetLinkVersion() ||
+                twin->GetSyncedImageUnitVersion() != currentProgram->GetImageUnitVersion() ||
                 twin->GetSnormFallbackClampOutputMask() != g_snormFallbackClampOutputMask ||
                 twin->GetUnormFallbackClampOutputMask() != g_unormFallbackClampOutputMask ||
                 twin->GetFragColorBroadcastCount() != g_fragColorBroadcastCount ||

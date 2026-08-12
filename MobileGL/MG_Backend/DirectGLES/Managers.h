@@ -1048,6 +1048,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // Frontend link version this backend program (and its resource caches) was
             // built from; a mismatch means every link-derived cache here is stale.
             Uint32 GetSyncedLinkVersion() const { return m_syncedLinkVersion; }
+            // Image-uniform unit generation this backend program was GENERATED against.
+            // Separate from the link version because it is not link state: ES forbids
+            // glUniform1i on an image uniform, so RebindImageUniformsToFrontendUnits bakes the
+            // unit into the ESSL, and a program built before glUniform1i moved that unit is as
+            // stale as one built before a relink - while the sampler half, which really is
+            // re-issued per draw, needs nothing of the sort.
+            Uint32 GetSyncedImageUnitVersion() const { return m_syncedImageUnitVersion; }
 
         private:
             void CacheResourceLocations(const SharedPtr<MG_State::GLState::ProgramObject>& stateProgramObject);
@@ -1079,6 +1086,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             Uint32 m_lastUploadedGlobalUboVersion = ~0u;
             BufferImpl::UboRingAllocation m_globalUboRingAllocation;
             Uint32 m_syncedLinkVersion = ~0u;
+            Uint32 m_syncedImageUnitVersion = ~0u;
             SamplerPassMemo m_samplerPassMemo;
         };
 

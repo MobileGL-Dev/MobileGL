@@ -129,10 +129,15 @@ namespace MobileGL {
                         if (!program) continue;
                         versions[stage * 2] = (static_cast<Uint64>(program->GetBackendStateVersion()) << 32) |
                                               static_cast<Uint64>(program->GetUBOContentVersion());
-                        // Its own slot rather than folded into the pair above: the storage-block
-                        // setter moves this and NOTHING else, so a rebinding would otherwise be
-                        // invisible to the refresh gate.
-                        versions[stage * 2 + 1] = program->GetBlockBindingVersion();
+                        // Their own slot rather than folded into the pair above: the
+                        // storage-block setter moves the block-binding version and NOTHING
+                        // else, so a rebinding would otherwise be invisible to the refresh
+                        // gate - and the write-set version is the only counter that moves for
+                        // a write which ENLARGES the set without changing a byte (see
+                        // ProgramObject::GetUniformWriteSetVersion), which is what decides
+                        // which stage owns a shared name.
+                        versions[stage * 2 + 1] = (static_cast<Uint64>(program->GetBlockBindingVersion()) << 32) |
+                                                  static_cast<Uint64>(program->GetUniformWriteSetVersion());
                     }
                     return versions;
                 }

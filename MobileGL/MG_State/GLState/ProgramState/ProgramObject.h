@@ -369,6 +369,16 @@ namespace MobileGL::MG_State::GLState {
         // the value the application wrote for `f` in another stage.
         Bool TracksUniformWrites() const { return m_tracksUniformWrites; }
 
+        // Generation of the write SET itself, as distinct from the values in it. The refresh
+        // gate (ProgramPipelineObject::ComputeUniformMirrorVersions) is otherwise built out of
+        // counters that only move when BYTES move - and a write can enlarge the set without
+        // moving a byte, because both write funnels drop a value-identical write before
+        // bumping anything. glProgramUniform1f(fs, f, 0.0f) on an `f` that already reads 0.0
+        // is exactly that: it makes the FRAGMENT stage the last written-to stage for `f`, so
+        // the composite must be re-mirrored to hand it the slot, and nothing else in the gate
+        // would have noticed.
+        Uint32 GetUniformWriteSetVersion() const { return m_uniformWriteSetVersion; }
+
         // Records that `location` has been written since the last link. Cheap and idempotent;
         // a no-op on a program that can never be a pipeline stage.
         void MarkUniformWrittenAtLocation(Uint location) {
@@ -376,13 +386,23 @@ namespace MobileGL::MG_State::GLState {
             LinkArtifacts& artifacts = Artifacts();
             if (!IsValidUniformLocation(artifacts, static_cast<Int>(location))) return;
 
+            // Sized to cover this location AND the whole location space, so a program whose
+            // highest location is written first does not reallocate on every later write, and
+            // so the subscript below needs no second guard: the vector provably contains it.
             const SizeT locationWord = location / 64u;
             if (locationWord >= artifacts.writtenUniformLocationBits.size()) {
                 artifacts.writtenUniformLocationBits.resize(
-                    static_cast<SizeT>(artifacts.maxUniformLocation) / 64u + 1u, 0u);
-                if (locationWord >= artifacts.writtenUniformLocationBits.size()) return;
+                    std::max<SizeT>(locationWord + 1u, static_cast<SizeT>(artifacts.maxUniformLocation) / 64u + 1u),
+                    0u);
             }
-            artifacts.writtenUniformLocationBits[locationWord] |= Uint64{1} << (location % 64u);
+            const Uint64 locationBit = Uint64{1} << (location % 64u);
+            if ((artifacts.writtenUniformLocationBits[locationWord] & locationBit) == 0) {
+                artifacts.writtenUniformLocationBits[locationWord] |= locationBit;
+                // Only on the 0 -> 1 transition: a re-write of a location already in the set
+                // changes nothing the mirror would do differently, and moving the version for
+                // it would re-walk the set on every repeated glUniform* call.
+                ++m_uniformWriteSetVersion;
+            }
 
             // Add the owning GL active-uniform index to the compact list, once.
             const Int tIndex = artifacts.uniformIndexInTProgram[location];
@@ -394,8 +414,7 @@ namespace MobileGL::MG_State::GLState {
             const SizeT indexWord = static_cast<SizeT>(glIndex) / 64u;
             if (indexWord >= artifacts.writtenUniformIndexBits.size()) {
                 artifacts.writtenUniformIndexBits.resize(
-                    static_cast<SizeT>(artifacts.activeUniformCount) / 64u + 1u, 0u);
-                if (indexWord >= artifacts.writtenUniformIndexBits.size()) return;
+                    std::max<SizeT>(indexWord + 1u, static_cast<SizeT>(artifacts.activeUniformCount) / 64u + 1u), 0u);
             }
             const Uint64 indexBit = Uint64{1} << (static_cast<SizeT>(glIndex) % 64u);
             if ((artifacts.writtenUniformIndexBits[indexWord] & indexBit) != 0) return;
@@ -573,7 +592,23 @@ namespace MobileGL::MG_State::GLState {
             if (Artifacts().uniformSamplerOrImageUnitIndex[location] == unit) return;
             Artifacts().uniformSamplerOrImageUnitIndex[location] = unit;
             ++m_backendStateVersion;
+            // IMAGE units get their own generation, and it is not redundant with the one
+            // above. A sampler unit is re-issued to the driver per draw as a plain
+            // glUniform1i, so a backend can honour a change without rebuilding anything; an
+            // image unit cannot be, because ES forbids glUniform1i on image uniforms - Espryt
+            // has to BAKE it into the ESSL it generates (RebindImageUniformsToFrontendUnits),
+            // which means the change is only honoured by regenerating the program. That
+            // regeneration is gated on link-shaped versions, so without a counter that moves
+            // here the new unit would never reach the driver.
+            if (const glslang::TType* type = GetUniformTType(location); type != nullptr && type->isImage()) {
+                ++m_imageUnitVersion;
+            }
         }
+
+        // Generation of the image-uniform unit assignment; see SetUniformSamplerOrImageUnitIndex.
+        // A backend that compiles the unit into its program source compares this to decide
+        // whether what it built is still describing the right binding.
+        Uint32 GetImageUnitVersion() const { return m_imageUnitVersion; }
 
         Int GetUniformSamplerOrImageUnitIndex(Uint location) const {
             return Artifacts().uniformSamplerOrImageUnitIndex[location];
@@ -1197,6 +1232,11 @@ namespace MobileGL::MG_State::GLState {
         // it is a latch and not just m_separable. Outside LinkArtifacts on purpose: a relink
         // clears the write SET, but a program that was separable is still separable after it.
         Bool m_tracksUniformWrites = false;
+        // Generation counters that must NOT be reset by a link, for the same reason the memo
+        // versions above are not: a reader compares them for INEQUALITY, so a reset could make
+        // a stale cache compare equal to a fresh program. See their getters.
+        Uint32 m_uniformWriteSetVersion = 0;
+        Uint32 m_imageUnitVersion = 0;
         Bool m_validateStatus = true;
         // Mutable, like m_artifacts and for the same reason: publishing a pending link is a
         // READ-side operation (the first gated getter is what pulls the result in), and the

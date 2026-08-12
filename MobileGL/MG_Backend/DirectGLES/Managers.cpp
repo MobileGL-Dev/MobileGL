@@ -4537,6 +4537,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // driver's linked interface.
             ReseedShaderStorageBlockBindings(m_backendProgramId, *stateProgramObject);
             m_syncedLinkVersion = stateProgramObject->GetLinkVersion();
+            m_syncedImageUnitVersion = stateProgramObject->GetImageUnitVersion();
 
             m_isInitialized = true;
             MGLOG_D("Program sync completed. backend ID %u", m_backendProgramId);

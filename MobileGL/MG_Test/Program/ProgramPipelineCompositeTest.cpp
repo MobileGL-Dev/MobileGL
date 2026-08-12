@@ -208,6 +208,87 @@ TEST_F(ProgramPipelineCompositeTest, WhenBothStagesWereWrittenTheLastGraphicsSta
     DeleteProgramPipelines(1, &pipeline);
 }
 
+// The both-written tie again, through the case that has no BYTES to move: the fragment stage
+// writes the value it was already holding.
+//
+// The refresh gate is built out of counters that move when bytes move (the UBO content
+// version, the backend state version), and both write funnels drop a value-identical write
+// before bumping either. So this write enlarges the write SET - it makes the fragment stage
+// the last written-to stage for `u_shared`, which is what decides the slot - while moving
+// nothing else. Without a generation on the set itself the gate never trips and the draw keeps
+// the vertex stage's value.
+TEST_F(ProgramPipelineCompositeTest, AValueIdenticalWriteStillTakesTheSlotForItsStage) {
+    const GLuint vs = MakeSeparableProgram(GL_VERTEX_SHADER, kSharedUniformVs);
+    const GLuint fs = MakeSeparableProgram(GL_FRAGMENT_SHADER, kSharedUniformFs);
+
+    GLuint pipeline = 0;
+    GenProgramPipelines(1, &pipeline);
+    BindProgramPipeline(pipeline);
+    UseProgramStages(pipeline, GL_VERTEX_SHADER_BIT, vs);
+    UseProgramStages(pipeline, GL_FRAGMENT_SHADER_BIT, fs);
+
+    const float fromVs[4] = {5.0f, 5.0f, 5.0f, 5.0f};
+    ProgramUniform4fv(vs, GetUniformLocation(vs, "u_shared"), 1, fromVs);
+    ASSERT_EQ(ReadVec4(*DrawProgram(), "u_shared"), (std::vector<float>{5.0f, 5.0f, 5.0f, 5.0f}));
+
+    // The fragment program's u_shared already reads all-zero, so this write changes not one
+    // byte of its shadow - and must still hand it the composite's slot.
+    const float zeros[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+    ProgramUniform4fv(fs, GetUniformLocation(fs, "u_shared"), 1, zeros);
+    ASSERT_EQ(GetError(), GL_NO_ERROR);
+    EXPECT_EQ(ReadVec4(*DrawProgram(), "u_shared"), (std::vector<float>{0.0f, 0.0f, 0.0f, 0.0f}))
+        << "a write that moved no bytes never reached the refresh gate";
+
+    BindProgramPipeline(0);
+    DeleteProgramPipelines(1, &pipeline);
+}
+
+// glUseProgramStages here accepts a program that was never linked as separable (GL 4.6 core 7.4
+// says it should not, and MobileGL validates only LINK_STATUS). Such a program has recorded
+// none of its writes, because nothing ever armed its tracking latch - so the mirror has to fall
+// back to carrying everything rather than carrying nothing. Mirroring nothing would have been a
+// fresh regression on a shape that worked before the dirty set existed.
+TEST_F(ProgramPipelineCompositeTest, ANonSeparableStageProgramStillMirrorsItsUniforms) {
+    const char* vsSource = R"(#version 430 core
+uniform vec4 u_vsOnly;
+void main() { gl_Position = u_vsOnly; }
+)";
+    const GLuint shader = CreateShader(GL_VERTEX_SHADER);
+    ShaderSource(shader, 1, &vsSource, nullptr);
+    CompileShader(shader);
+    const GLuint vs = CreateProgram();
+    // Deliberately NO ProgramParameteri(GL_PROGRAM_SEPARABLE): this is the shape the latch
+    // cannot see coming.
+    AttachShader(vs, shader);
+    LinkProgram(vs);
+    GLint linked = GL_FALSE;
+    GetProgramiv(vs, GL_LINK_STATUS, &linked);
+    ASSERT_EQ(linked, GL_TRUE);
+
+    const GLuint fs = MakeSeparableProgram(GL_FRAGMENT_SHADER, kSharedUniformFs);
+
+    GLuint pipeline = 0;
+    GenProgramPipelines(1, &pipeline);
+    BindProgramPipeline(pipeline);
+    UseProgramStages(pipeline, GL_VERTEX_SHADER_BIT, vs);
+    UseProgramStages(pipeline, GL_FRAGMENT_SHADER_BIT, fs);
+    ASSERT_EQ(GetError(), GL_NO_ERROR);
+
+    const float written[4] = {3.0f, 1.0f, 4.0f, 1.0f};
+    ProgramUniform4fv(vs, GetUniformLocation(vs, "u_vsOnly"), 1, written);
+    ASSERT_EQ(GetError(), GL_NO_ERROR);
+
+    const auto composite = DrawProgram();
+    ASSERT_NE(composite, nullptr);
+    EXPECT_FALSE(MG_State::pGLContext->GetProgramObject(vs)->TracksUniformWrites())
+        << "this case is only meaningful while the stage program records nothing";
+    EXPECT_EQ(ReadVec4(*composite, "u_vsOnly"), (std::vector<float>{3.0f, 1.0f, 4.0f, 1.0f}))
+        << "a stage program with no write record must fall back to mirroring everything";
+
+    BindProgramPipeline(0);
+    DeleteProgramPipelines(1, &pipeline);
+}
+
 // glProgramUniform* addresses a program by NAME and needs neither a current program nor an
 // active shader program, so it is a write path that never touches the pipeline at all. It has
 // to record the write exactly like glUniform* does.

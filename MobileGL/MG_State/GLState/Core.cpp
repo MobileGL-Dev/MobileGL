@@ -414,19 +414,39 @@ namespace MobileGL::MG_State {
         // unwritten uniform reads.
         static void MirrorUniformValues(ProgramObject& source, ProgramObject& destination) {
             if (!source.GetLinkStatus() || !destination.GetLinkStatus()) return;
-            // O(uniforms written), not O(uniforms declared). The two name lookups below are
-            // string hashes into both programs' location maps, and doing them for every active
-            // uniform of every stage on every gate trip was hundreds of them per draw on a
-            // large program. A stage nothing has been written to costs one empty() test.
-            const Vector<Uint>& writtenIndices = source.GetWrittenUniformIndices();
-            if (writtenIndices.empty()) return;
 
+            // Settle both sides' phase B BEFORE taking a reference into `source`'s artifacts
+            // below: these four getters are the join gate, and a join runs the phase-B publish.
+            // Nothing that publish does marks a uniform today, but the loop holds a reference to
+            // a Vector that a mark would push_back to, and "the replay does not mark" is not a
+            // property a future reader of this line can see.
             const char* sourceUbo = static_cast<const char*>(source.GetUBOData());
             char* destinationUbo = static_cast<char*>(destination.MapUBO());
             const SizeT sourceUboSize = source.GetUBOSize();
             const SizeT destinationUboSize = destination.GetUBOSize();
 
-            for (const Uint index : writtenIndices) {
+            // O(uniforms written), not O(uniforms declared). The two name lookups below are
+            // string hashes into both programs' location maps, and doing them for every active
+            // uniform of every stage on every gate trip was hundreds of them per draw on a
+            // large program. A stage nothing has been written to costs one empty() test.
+            //
+            // FALLBACK, and it is load-bearing rather than defensive: a program only records
+            // its writes once something asks it to be separable (ProgramObject::SetSeparable
+            // arms the latch), but glUseProgramStages here validates only LINK_STATUS - it does
+            // not reject a program that was never linked as separable, which GL 4.6 core 7.4
+            // says it should. So a plain glCreateProgram/glLinkProgram program CAN be installed
+            // as a stage, and it will have recorded nothing at all. Mirroring "only what was
+            // written" would then mirror nothing and paint the composite's defaults - a fresh
+            // regression on a shape that worked. For such a program the old full walk is exactly
+            // right: it has no dirty set to be more precise with.
+            const Bool byWriteSet = source.TracksUniformWrites();
+            const Vector<Uint>& writtenIndices = source.GetWrittenUniformIndices();
+            const Uint uniformCount = source.GetUniformCount();
+            const SizeT indexCount = byWriteSet ? writtenIndices.size() : static_cast<SizeT>(uniformCount);
+            if (indexCount == 0) return;
+
+            for (SizeT slot = 0; slot < indexCount; ++slot) {
+                const Uint index = byWriteSet ? writtenIndices[slot] : static_cast<Uint>(slot);
                 const String& name = source.GetActiveUniformName(index);
                 if (name.empty()) continue;
                 const Int sourceBase = source.GetUniformLocation(name);
@@ -447,7 +467,9 @@ namespace MobileGL::MG_State {
                     // Per ELEMENT, not per array: `arr[3] = x` must carry element 3 and leave
                     // the elements another stage owns alone. `continue`, not `break` - the
                     // written elements of an array need not be a prefix of it.
-                    if (!source.IsUniformWrittenAtLocation(static_cast<Uint>(sourceLocation))) continue;
+                    if (byWriteSet && !source.IsUniformWrittenAtLocation(static_cast<Uint>(sourceLocation))) {
+                        continue;
+                    }
                     // Stop at the end of EITHER side's array rather than walking onto the
                     // neighbouring uniform of whichever program has the shorter one.
                     if (!source.UniformLocationsAliasSameUniform(sourceBase, sourceLocation) ||
