@@ -3547,7 +3547,12 @@ namespace MobileGL::MG_Impl::GLImpl {
         }
 
         const IntVec3 levelSize = textureMipmapObject->GetMipmapTexelSize(textureUploadTarget, static_cast<Uint>(level));
-        if (xoffset < 0 || yoffset < 0 || xoffset + width > levelSize.x() || yoffset + height > levelSize.y()) {
+        // Written as a subtraction rather than `xoffset + width > levelSize.x()`: both operands
+        // are application-supplied GLints, so the sum is free to overflow, and a signed overflow
+        // is undefined behaviour that a compiler may resolve by assuming the check passes.
+        // levelSize is our own and non-negative, and the offsets are known non-negative by the
+        // time the subtraction runs, so this form cannot wrap.
+        if (xoffset < 0 || yoffset < 0 || width > levelSize.x() - xoffset || height > levelSize.y() - yoffset) {
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidValue,
                 MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
