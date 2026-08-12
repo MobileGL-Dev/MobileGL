@@ -75,10 +75,39 @@ namespace MobileGL::MG_State::GLState {
         NotifySubData(offset, size);
     }
 
-    void BufferObject::Respecify(SizeT size, const void* data) {
-        ReleaseMemory();
+    // A (re)definition of the store is about to write `size` bytes through Bytes().
+    // Sizing the shadow is all that takes for a shadow-backed buffer, but a buffer
+    // whose bytes were adopted into backend GPU memory needs the adoption renewed
+    // first: the mapping it holds describes exactly the OLD store. Writing the new
+    // contents through it runs past its end the moment the store grows, and a backend
+    // that replaces the storage for the new store (which is what an orphaning
+    // respecification asks for) would leave that mapping - and therefore every later
+    // read of this buffer - addressing storage nothing writes to any more.
+    //
+    // Renewing rather than simply dropping is what keeps the common case free: a
+    // redefinition at the same size gets the same mapping back without any storage
+    // being created, which is also what makes the backend's respecify a no-op (the
+    // new bytes are already in the storage it would otherwise upload to).
+    void BufferObject::RedefineStorage(SizeT size) {
+        const Bool wasGpuResident = m_resource.IsGpuResident();
+        if (wasGpuResident) {
+            // A capture or a shader write may still be running against the very bytes
+            // that are about to be overwritten.
+            SyncGpuWrites();
+            m_resource.ReleasePersistentMap();
+        }
         m_size = size;
         m_resource.ResizeShadow(size);
+        if (wasGpuResident) {
+            // Declining is allowed (a zero-sized store, a backend without the op): the
+            // buffer simply goes back to the CPU-shadow model it had before adoption.
+            EnsureGpuResidentStorage();
+        }
+    }
+
+    void BufferObject::Respecify(SizeT size, const void* data) {
+        ReleaseMemory();
+        RedefineStorage(size);
         if (data && size > 0) {
             Memcpy(m_resource.Bytes(), data, size);
         }
@@ -96,8 +125,7 @@ namespace MobileGL::MG_State::GLState {
 
     void BufferObject::AllocateImmutableStorage(SizeT size, const void* data, GLbitfield storageFlags) {
         ReleaseMemory();
-        m_size = size;
-        m_resource.ResizeShadow(size);
+        RedefineStorage(size);
         if (data) {
             Memcpy(m_resource.Bytes(), data, size);
         } else if (size > 0) {

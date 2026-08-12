@@ -379,6 +379,23 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         BumpSliceEpoch(*resource);
         // Any cached streaming slice refers to the previous contents.
         resource->transientFrameSerial = 0;
+        if (resource->persistentMapped) {
+            if (bufferObject.IsBackendPersistentMapped()) {
+                // The frontend renewed its adoption of this storage for the redefined
+                // store before writing a byte of it (BufferObject::RedefineStorage), so
+                // the new contents are already HERE and there is no second copy to
+                // update. Swapping the storage is what must not happen: the mapping the
+                // frontend holds, and every read that resolves through it, would keep
+                // addressing the storage being released - which is how a transform
+                // feedback capture came to be written to one buffer and read back out
+                // of another.
+                return;
+            }
+            // The renewal did not happen (a zero-sized store, or the storage could not
+            // be created): the frontend is back on its CPU shadow, so this is an
+            // ordinary resident buffer again and the handling below applies.
+            resource->persistentMapped = false;
+        }
         if (!resource->buffer.IsValid()) {
             return; // streaming-only resource: shadow + serial are enough
         }

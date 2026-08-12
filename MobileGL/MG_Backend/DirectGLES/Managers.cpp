@@ -603,7 +603,18 @@ namespace MobileGL::MG_Backend::DirectGLES {
             void Ops_Respecify(BufferObject& bufferObject) {
                 auto* resource = ResourceOf(bufferObject);
                 if (!resource) return; // lazy: EnsureBufferResource full-uploads on creation
-                if (resource->persistentMapped) return; // immutable persistent storage is never respecified
+                if (resource->persistentMapped) {
+                    // The frontend writes straight into the storage mapped here, and it
+                    // renewed that mapping for the redefined store before writing to it
+                    // (BufferObject::RedefineStorage), so the new contents already are
+                    // where a respecification would put them.
+                    if (bufferObject.IsBackendPersistentMapped()) return;
+                    // Renewal declined (a zero-sized store, or the map could not be
+                    // retaken): the buffer is back on its CPU shadow and needs the
+                    // ordinary respecification below.
+                    resource->persistentMapped = false;
+                    resource->persistentPtr = nullptr;
+                }
                 if (!CanTouchGLNow() || resource->id == 0 ||
                     resource->contextGeneration != g_bufferContextGeneration) {
                     resource->pendingRespecify = true;

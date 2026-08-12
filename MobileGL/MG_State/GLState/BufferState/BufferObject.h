@@ -205,6 +205,9 @@ namespace MobileGL {
             void SetBackendResource(SharedPtr<BackendBufferResource> resource);
 
         private:
+            // Sizes the store for a (re)definition, renewing an adopted GPU-resident
+            // mapping across it. See the definition for why the renewal is not optional.
+            void RedefineStorage(SizeT size);
             void NotifyRespecify();
             void NotifySubData(SizeT offset, SizeT size);
             void NotifyFlushMappedRange(Range1D range, Flags<BufferMappingAccessBit> appAccess);
