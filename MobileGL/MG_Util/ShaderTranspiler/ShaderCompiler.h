@@ -100,6 +100,12 @@ namespace MobileGL {
                 // reinterpretation paths (for example, R32F storage accessed as r32ui).
                 static bool UseUnformattedFloatStorageImagesForVulkan(
                     const Vector<Uint32>& inputBinary, Vector<uint32_t>& outputBinary);
+                // Rewrites every 64-bit float in the module to a 32-bit one, preserving every
+                // block offset and stride exactly (see DemoteFloat64Pass). Already part of
+                // SanitizeAndOptimizeBinary, which is where production reaches it; exposed
+                // separately so a test can drive the demotion on its own.
+                static bool DemoteFloat64ToFloat32(const Vector<Uint32>& inputBinary,
+                                                   Vector<uint32_t>& outputBinary);
                 static Result<String> DecompileShader(SpvcSession& session);
 
                 // Parses one trivial shader in each configuration the production path can
@@ -159,6 +165,12 @@ namespace MobileGL {
                 // check exists so that failure can be reported as the missing capability it is,
                 // naming the shader, rather than as a driver info log nobody sees.
                 static Bool ModuleDeclaresBufferTextureSampler(const Vector<Uint32>& spirv);
+
+                // True when the module still declares a 64-bit float type. After
+                // SanitizeAndOptimizeBinary that can only mean DemoteFloat64Pass declined the
+                // module (see its header for the two operations that make it decline), which is
+                // what the backends report: no mobile driver can build such a module.
+                static Bool ModuleDeclaresFloat64(const Vector<Uint32>& spirv);
             };
         } // namespace ShaderTranspiler
     } // namespace MG_Util

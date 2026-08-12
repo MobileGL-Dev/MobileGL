@@ -18,6 +18,7 @@
 #include "SpirvPasses/RenameBuiltinShadowingFunctionsPass.h"
 #include "SpirvPasses/DecomposeWorkgroupVec3Pass.h"
 #include "SpirvPasses/DecoratePositionInvariantPass.h"
+#include "SpirvPasses/DemoteFloat64Pass.h"
 #include "SpirvPasses/LowerDrawParametersPass.h"
 #include "SpirvPasses/PackDoubleVertexInputsPass.h"
 #include "SpirvPasses/SplitArrayVertexInputsPass.h"
@@ -578,6 +579,37 @@ namespace MobileGL {
                 return false;
             }
 
+            Bool ShaderCompiler::ModuleDeclaresFloat64(const Vector<Uint32>& spirv) {
+                if (spirv.empty()) {
+                    // Same reasoning as ModuleDeclaresBufferTextureSampler: a stage that produced
+                    // no SPIR-V is not a verdict about 64-bit floats, and parsing it would push a
+                    // spurious diagnostic through the message consumer.
+                    return false;
+                }
+                std::unique_ptr<spvtools::opt::IRContext> context = spvtools::BuildModule(
+                    SPV_ENV_VULKAN_1_1, MakeSpirvMessageConsumer("ModuleDeclaresFloat64"), spirv.data(),
+                    spirv.size());
+                if (!context) {
+                    return false;
+                }
+                for (const spvtools::opt::Instruction& type : context->types_values()) {
+                    if (type.opcode() == spv::Op::OpTypeFloat && type.NumInOperands() >= 1 &&
+                        type.GetSingleWordInOperand(0) == 64) {
+                        return true;
+                    }
+                }
+                return false;
+            }
+
+            bool ShaderCompiler::DemoteFloat64ToFloat32(const Vector<Uint32>& inputBinary,
+                                                        Vector<uint32_t>& outputBinary) {
+                using namespace spvtools;
+                Optimizer optimizer(SPV_ENV_VULKAN_1_1);
+                optimizer.RegisterPass(DemoteFloat64Pass::CreateDemoteFloat64Pass());
+
+                return RunOptimizerChecked("DemoteFloat64ToFloat32", optimizer, inputBinary, outputBinary);
+            }
+
             bool ShaderCompiler::SanitizeAndOptimizeBinary(const Vector<Uint32>& inputBinary,
                                                            Vector<uint32_t>& outputBinary) {
                 using namespace spvtools;
@@ -616,6 +648,17 @@ namespace MobileGL {
                     RenameBuiltinShadowingFunctionsPass::CreateRenameBuiltinShadowingFunctionsPass());
                 optimizer.RegisterPass(EliminateFloatEqualsZeroPass::CreateEliminateFloatEqualsZeroPass());
                 optimizer.RegisterPass(DecomposeWorkgroupVec3Pass::CreateDecomposeWorkgroupVec3Pass());
+                // No mobile GPU has 64-bit floats: Adreno and Mali both report shaderFloat64 ==
+                // VK_FALSE, and ESSL has no fp64 type for SPIRV-Cross to emit. Demoting here - in
+                // the one chain every module goes through, on both backends, at link - is what
+                // makes `double` compile at all, and makes it behave the SAME everywhere, which
+                // matters because the GL frontend's uniform storage cannot be per-backend: the
+                // glUniform*d shadow narrows to float unconditionally to match this. Runs last so
+                // no earlier pass ever has to reason about a width it will not see in the output;
+                // in particular it runs before the backends' PackDoubleVertexInputsPass, whose
+                // OpBitcast this one would otherwise decline on. Costs one types_values() walk on
+                // the overwhelming majority of modules, which declare no 64-bit float at all.
+                optimizer.RegisterPass(DemoteFloat64Pass::CreateDemoteFloat64Pass());
 
                 return RunOptimizerChecked("SanitizeAndOptimizeBinary", optimizer, inputBinary,
                                            outputBinary);

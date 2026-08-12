@@ -3,6 +3,7 @@ cmake_minimum_required(VERSION 3.14)
 add_executable(
         SpirvPassTest
         SpirvPassTest.cpp
+        DemoteFloat64Test.cpp
 )
 
 target_include_directories(SpirvPassTest PRIVATE
