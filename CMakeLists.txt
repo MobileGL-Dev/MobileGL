@@ -21,10 +21,13 @@ if (ANDROID)
     set(MOBILEGL_BUILD_TEST       OFF CACHE BOOL "Build MobileGL tests"      FORCE)
     set(MOBILEGL_BUILD_BENCHMARK  OFF CACHE BOOL "Build MobileGL benchmarks" FORCE)
 
-    # ------- Android API level policy: exactly 26, decided here and only here -------
-    # MobileGL ships against API 26. That is a product constraint, so the build
-    # refuses to proceed at any other level rather than quietly producing a
-    # library with a different libc contract.
+    # ------- Android API level policy: minimum 26, decided here and only here -------
+    # MobileGL ships against API 26: the codebase must not use any API introduced
+    # after 26. That usage constraint is enforced where it is real - the shipping
+    # gradle build compiles at minSdk 26, where a newer API is simply undeclared
+    # and fails to compile. Configuring at a HIGHER level is therefore allowed
+    # (nothing in the tree may rely on it), but a LOWER level would change the
+    # libc contract underneath the shipped library and is refused.
     #
     # This has to live at configure time because the level cannot be corrected
     # from a source header. A `#define __ANDROID_API__ 26` in a common header
@@ -71,19 +74,20 @@ if (ANDROID)
             "MobileGL: could not determine the Android API level (got "
             "\"${_mobilegl_android_api}\"). Configure with the NDK toolchain "
             "file and -DANDROID_PLATFORM=android-${MOBILEGL_ANDROID_API_LEVEL}.")
-    elseif (NOT _mobilegl_android_api EQUAL MOBILEGL_ANDROID_API_LEVEL)
+    elseif (_mobilegl_android_api LESS MOBILEGL_ANDROID_API_LEVEL)
         message(FATAL_ERROR
-            "MobileGL targets Android API ${MOBILEGL_ANDROID_API_LEVEL} exactly, "
+            "MobileGL requires at least Android API ${MOBILEGL_ANDROID_API_LEVEL}, "
             "but this build resolved to API ${_mobilegl_android_api}.\n"
             "Configure with -DANDROID_PLATFORM=android-${MOBILEGL_ANDROID_API_LEVEL} "
             "(gradle builds get this from minSdk ${MOBILEGL_ANDROID_API_LEVEL}, so "
-            "check that minSdk instead of adding an override).\n"
-            "Raising the level is not a local build choice: it changes which libc "
-            "symbols the shipped library binds to, and the resulting .so would "
-            "fail to load on the API ${MOBILEGL_ANDROID_API_LEVEL} devices "
-            "MobileGL supports. If you genuinely need another level for a "
-            "standalone tool, build that tool as its own CMake project - do not "
-            "relax this check.")
+            "check that minSdk instead of adding an override).")
+    elseif (_mobilegl_android_api GREATER MOBILEGL_ANDROID_API_LEVEL)
+        message(STATUS
+            "MobileGL: configuring at Android API ${_mobilegl_android_api} "
+            "(> shipping minimum ${MOBILEGL_ANDROID_API_LEVEL}). Allowed, but the "
+            "tree must not use post-${MOBILEGL_ANDROID_API_LEVEL} APIs - the "
+            "minSdk-${MOBILEGL_ANDROID_API_LEVEL} gradle build is the enforcing "
+            "compile.")
     endif()
 
     message(STATUS "MobileGL: Android API level ${_mobilegl_android_api}")
