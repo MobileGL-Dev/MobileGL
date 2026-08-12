@@ -174,6 +174,30 @@ namespace MobileGL::MG_Impl::GLImpl {
             return frontendCount;
         }
 
+        // A per-stage or combined BLOCK count is an amount of indexed binding points an
+        // application will occupy, and GL 4.6 table 23.64 orders the two accordingly:
+        // MAX_UNIFORM_BUFFER_BINDINGS >= MAX_COMBINED_UNIFORM_BLOCKS >= every per-stage count,
+        // and the same for the shader-storage family. The two families are answered from
+        // unrelated places here - frontend constants, backend dynamic parameters, and a few
+        // hard-coded TODOs - so nothing kept them ordered, and a backend that reports Vulkan
+        // descriptor-indexing counts advertised 256 compute uniform blocks over 36 binding
+        // points. KHR-GL44.multi_bind.dispatch_bind_buffers_base reads the block count and binds
+        // that many buffers in ONE glBindBuffersBase, which is then INVALID_OPERATION before it
+        // binds anything. Clamping is the only direction available: the binding count is the
+        // capacity of the state layer's indexed-binding array, not a number we may inflate.
+        GLint ClampBlockCountToBindingPoints(GLint blockCount, BufferTarget bufferTarget) {
+            const GLint bindingPoints = static_cast<GLint>(GetIndexedBufferQueryPointCount(bufferTarget));
+            return std::min(std::max(blockCount, 0), bindingPoints);
+        }
+
+        GLint ClampUniformBlockCount(GLint blockCount) {
+            return ClampBlockCountToBindingPoints(blockCount, BufferTarget::Uniform);
+        }
+
+        GLint ClampStorageBlockCount(GLint blockCount) {
+            return ClampBlockCountToBindingPoints(blockCount, BufferTarget::ShaderStorage);
+        }
+
         bool TryDecodeDrawBufferQuery(GLenum pname, SizeT& drawBufferIndex) {
             if (pname == GL_DRAW_BUFFER) {
                 drawBufferIndex = 0;
@@ -1397,7 +1421,7 @@ namespace MobileGL::MG_Impl::GLImpl {
             *params = kFrontendMaxCombinedAtomicCounters;
             return;
         case GL_MAX_COMBINED_UNIFORM_BLOCKS:
-            *params = kFrontendMaxCombinedUniformBlocks;
+            *params = ClampUniformBlockCount(kFrontendMaxCombinedUniformBlocks);
             return;
         case GL_MAX_DUAL_SOURCE_DRAW_BUFFERS:
             *params = 1; // TODO
@@ -1412,7 +1436,7 @@ namespace MobileGL::MG_Impl::GLImpl {
             *params = kFrontendMaxFragmentAtomicCounters;
             return;
         case GL_MAX_FRAGMENT_SHADER_STORAGE_BLOCKS:
-            *params = 16; // TODO
+            *params = ClampStorageBlockCount(16); // TODO
             return;
         case GL_MAX_FRAGMENT_INPUT_COMPONENTS:
             *params = kFrontendMaxFragmentInputComponents;
@@ -1429,13 +1453,13 @@ namespace MobileGL::MG_Impl::GLImpl {
             *params = kFrontendMaxFragmentUniformVectors;
             return;
         case GL_MAX_FRAGMENT_UNIFORM_BLOCKS:
-            *params = kFrontendMaxFragmentUniformBlocks;
+            *params = ClampUniformBlockCount(kFrontendMaxFragmentUniformBlocks);
             return;
         case GL_MAX_GEOMETRY_ATOMIC_COUNTERS:
             *params = kFrontendMaxGeometryAtomicCounters;
             return;
         case GL_MAX_GEOMETRY_SHADER_STORAGE_BLOCKS:
-            *params = 16; // TODO
+            *params = ClampStorageBlockCount(16); // TODO
             return;
         case GL_MAX_GEOMETRY_INPUT_COMPONENTS:
             *params = kFrontendMaxGeometryInputComponents;
@@ -1458,7 +1482,7 @@ namespace MobileGL::MG_Impl::GLImpl {
             *params = kFrontendMaxGeometryTotalOutputComponents;
             return;
         case GL_MAX_GEOMETRY_UNIFORM_BLOCKS:
-            *params = kFrontendMaxGeometryUniformBlocks;
+            *params = ClampUniformBlockCount(kFrontendMaxGeometryUniformBlocks);
             return;
         case GL_MAX_GEOMETRY_UNIFORM_COMPONENTS:
             *params = kFrontendMaxGeometryUniformComponents;
@@ -1500,10 +1524,10 @@ namespace MobileGL::MG_Impl::GLImpl {
             *params = 0;
             return;
         case GL_MAX_TESS_CONTROL_SHADER_STORAGE_BLOCKS:
-            *params = 16; // TODO
+            *params = ClampStorageBlockCount(16); // TODO
             return;
         case GL_MAX_TESS_EVALUATION_SHADER_STORAGE_BLOCKS:
-            *params = 16; // TODO
+            *params = ClampStorageBlockCount(16); // TODO
             return;
         case GL_MAX_TEXTURE_LOD_BIAS:
             *params = 15; // TODO
@@ -1526,7 +1550,7 @@ namespace MobileGL::MG_Impl::GLImpl {
                           : MG_Backend::DynamicBackendParameters{}.MaxVertexImageUniforms;
             return;
         case GL_MAX_VERTEX_SHADER_STORAGE_BLOCKS:
-            *params = 16; // TODO
+            *params = ClampStorageBlockCount(16); // TODO
             return;
         case GL_MAX_VERTEX_UNIFORM_COMPONENTS:
             *params = kFrontendMaxVertexUniformComponents;
@@ -1538,7 +1562,7 @@ namespace MobileGL::MG_Impl::GLImpl {
             *params = kFrontendMaxVertexOutputComponents;
             return;
         case GL_MAX_VERTEX_UNIFORM_BLOCKS:
-            *params = kFrontendMaxVertexUniformBlocks;
+            *params = ClampUniformBlockCount(kFrontendMaxVertexUniformBlocks);
             return;
         case GL_NUM_COMPRESSED_TEXTURE_FORMATS:
             *params = 0; // compressed texture upload entrypoints are still unimplemented
@@ -1938,13 +1962,13 @@ namespace MobileGL::MG_Impl::GLImpl {
             *params = dynamicParameters.SubgroupQuadOperationsInAllStages ? GL_TRUE : GL_FALSE;
             break;
         case GL_MAX_COMPUTE_SHADER_STORAGE_BLOCKS:
-            *params = dynamicParameters.MaxComputeShaderStorageBlocks;
+            *params = ClampStorageBlockCount(dynamicParameters.MaxComputeShaderStorageBlocks);
             break;
         case GL_MAX_COMBINED_SHADER_STORAGE_BLOCKS:
-            *params = dynamicParameters.MaxCombinedShaderStorageBlocks;
+            *params = ClampStorageBlockCount(dynamicParameters.MaxCombinedShaderStorageBlocks);
             break;
         case GL_MAX_COMPUTE_UNIFORM_BLOCKS:
-            *params = dynamicParameters.MaxComputeUniformBlocks;
+            *params = ClampUniformBlockCount(dynamicParameters.MaxComputeUniformBlocks);
             break;
         case GL_MAX_COMPUTE_TEXTURE_IMAGE_UNITS:
             *params = dynamicParameters.MaxComputeTextureImageUnits;
@@ -2074,7 +2098,15 @@ namespace MobileGL::MG_Impl::GLImpl {
             *params = static_cast<GLint>(GetIndexedBufferQueryPointCount(BufferTarget::AtomicCounter));
             break;
         case GL_MAX_ATOMIC_COUNTER_BUFFER_SIZE:
-            *params = kFrontendMaxAtomicCounterBufferSize;
+            // The conformance suite splits this evenly across every advertised binding point and
+            // binds all of them in one glBindBuffersRange
+            // (KHR-GL44.multi_bind.functional_bind_buffers_range), so the pair has to divide:
+            // 32 bytes over 36 binding points is a zero-sized range, which BindBufferRange
+            // rejects with INVALID_VALUE before it binds anything. Floor the advertised size at
+            // one counter per binding point.
+            *params = std::max<GLint>(
+                kFrontendMaxAtomicCounterBufferSize,
+                static_cast<GLint>(GetIndexedBufferQueryPointCount(BufferTarget::AtomicCounter) * sizeof(GLuint)));
             break;
         case GL_MAX_TEXTURE_BUFFER_SIZE:
             *params = dynamicParameters.MaxTextureBufferSize;

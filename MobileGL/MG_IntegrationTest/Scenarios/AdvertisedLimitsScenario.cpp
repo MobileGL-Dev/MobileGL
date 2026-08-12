@@ -94,6 +94,89 @@ namespace MGITest {
             }
         }
 
+        // A per-stage block count is an amount of BINDING POINTS an application will use, so it
+        // can never exceed the number of binding points that exist. GL 4.6 Table 23.64 states the
+        // relation the other way round (MAX_UNIFORM_BUFFER_BINDINGS >= MAX_COMBINED_UNIFORM_BLOCKS
+        // >= every per-stage count), and DirectVulkan broke it by clamping the two families
+        // independently: a device reporting 256 compute uniform blocks and 84 uniform binding
+        // points passes both ceilings and still cannot serve
+        // KHR-GL44.multi_bind.dispatch_bind_buffers_base, which reads the block count and binds
+        // that many buffers in one glBindBuffersBase - INVALID_OPERATION before a single bind.
+        TEST_F(AdvertisedLimitsScenario, PerStageBlockCountsFitInTheirBindingPoints) {
+            struct Relation {
+                GLenum blocks;
+                const char* blocksName;
+                GLenum bindings;
+                const char* bindingsName;
+            };
+            const Relation relations[] = {
+                {GL_MAX_COMPUTE_UNIFORM_BLOCKS, "GL_MAX_COMPUTE_UNIFORM_BLOCKS", GL_MAX_UNIFORM_BUFFER_BINDINGS,
+                 "GL_MAX_UNIFORM_BUFFER_BINDINGS"},
+                {GL_MAX_VERTEX_UNIFORM_BLOCKS, "GL_MAX_VERTEX_UNIFORM_BLOCKS", GL_MAX_UNIFORM_BUFFER_BINDINGS,
+                 "GL_MAX_UNIFORM_BUFFER_BINDINGS"},
+                {GL_MAX_FRAGMENT_UNIFORM_BLOCKS, "GL_MAX_FRAGMENT_UNIFORM_BLOCKS", GL_MAX_UNIFORM_BUFFER_BINDINGS,
+                 "GL_MAX_UNIFORM_BUFFER_BINDINGS"},
+                {GL_MAX_COMBINED_UNIFORM_BLOCKS, "GL_MAX_COMBINED_UNIFORM_BLOCKS", GL_MAX_UNIFORM_BUFFER_BINDINGS,
+                 "GL_MAX_UNIFORM_BUFFER_BINDINGS"},
+                {GL_MAX_COMPUTE_SHADER_STORAGE_BLOCKS, "GL_MAX_COMPUTE_SHADER_STORAGE_BLOCKS",
+                 GL_MAX_SHADER_STORAGE_BUFFER_BINDINGS, "GL_MAX_SHADER_STORAGE_BUFFER_BINDINGS"},
+                {GL_MAX_COMBINED_SHADER_STORAGE_BLOCKS, "GL_MAX_COMBINED_SHADER_STORAGE_BLOCKS",
+                 GL_MAX_SHADER_STORAGE_BUFFER_BINDINGS, "GL_MAX_SHADER_STORAGE_BUFFER_BINDINGS"},
+            };
+            for (const Relation& relation : relations) {
+                GLint blocks = -1;
+                GLint bindings = -1;
+                glGetIntegerv(relation.blocks, &blocks);
+                glGetIntegerv(relation.bindings, &bindings);
+                ASSERT_EQ(FirstGLError(), GLenum(GL_NO_ERROR)) << relation.blocksName;
+                EXPECT_LE(blocks, bindings)
+                    << relation.blocksName << " = " << blocks << " exceeds " << relation.bindingsName << " = "
+                    << bindings << "; a shader may declare more blocks than there are binding points to bind them to";
+            }
+        }
+
+        // KHR-GL44.multi_bind.functional_bind_buffers_range sizes each of an indexed target's
+        // binding points at MAX_<target>_SIZE / MAX_<target>_BINDINGS and binds all of them in
+        // one glBindBuffersRange. That quotient has to be a legal BindBufferRange size, which
+        // makes the two limits of every indexed family a PAIR: advertise a size that does not
+        // survive division by the binding count and the call fails with INVALID_VALUE before any
+        // of it binds.
+        TEST_F(AdvertisedLimitsScenario, IndexedTargetSizeSurvivesDivisionByItsBindingCount) {
+            struct IndexedFamily {
+                GLenum maxSize;
+                const char* maxSizeName;
+                GLenum maxBindings;
+                const char* maxBindingsName;
+                GLint sizeGranularity; // BindBufferRange's size rule for the target
+            };
+            const IndexedFamily families[] = {
+                {GL_MAX_ATOMIC_COUNTER_BUFFER_SIZE, "GL_MAX_ATOMIC_COUNTER_BUFFER_SIZE",
+                 GL_MAX_ATOMIC_COUNTER_BUFFER_BINDINGS, "GL_MAX_ATOMIC_COUNTER_BUFFER_BINDINGS", 1},
+                {GL_MAX_TRANSFORM_FEEDBACK_INTERLEAVED_COMPONENTS, "GL_MAX_TRANSFORM_FEEDBACK_INTERLEAVED_COMPONENTS",
+                 GL_MAX_TRANSFORM_FEEDBACK_BUFFERS, "GL_MAX_TRANSFORM_FEEDBACK_BUFFERS", 4},
+                {GL_MAX_UNIFORM_BLOCK_SIZE, "GL_MAX_UNIFORM_BLOCK_SIZE", GL_MAX_UNIFORM_BUFFER_BINDINGS,
+                 "GL_MAX_UNIFORM_BUFFER_BINDINGS", 1},
+                {GL_MAX_SHADER_STORAGE_BLOCK_SIZE, "GL_MAX_SHADER_STORAGE_BLOCK_SIZE",
+                 GL_MAX_SHADER_STORAGE_BUFFER_BINDINGS, "GL_MAX_SHADER_STORAGE_BUFFER_BINDINGS", 1},
+            };
+            for (const IndexedFamily& family : families) {
+                GLint maxSize = -1;
+                GLint maxBindings = -1;
+                glGetIntegerv(family.maxSize, &maxSize);
+                glGetIntegerv(family.maxBindings, &maxBindings);
+                ASSERT_EQ(FirstGLError(), GLenum(GL_NO_ERROR)) << family.maxSizeName;
+                ASSERT_GT(maxBindings, 0) << family.maxBindingsName;
+                const GLint perBinding = maxSize / maxBindings;
+                EXPECT_GT(perBinding, 0)
+                    << family.maxSizeName << " (" << maxSize << ") / " << family.maxBindingsName << " ("
+                    << maxBindings << ") is zero, and BindBufferRange rejects a zero size";
+                EXPECT_EQ(perBinding % family.sizeGranularity, 0)
+                    << family.maxSizeName << " (" << maxSize << ") / " << family.maxBindingsName << " ("
+                    << maxBindings << ") = " << perBinding << " is not a multiple of the "
+                    << family.sizeGranularity << "-byte size granularity BindBufferRange requires for it";
+            }
+        }
+
         // The OOM case in isolation, because it is the one with a known CTS victim and the one a
         // future refactor is most likely to reintroduce by copying the Vulkan limit back.
         TEST_F(AdvertisedLimitsScenario, ComputeUniformBlocksIsAnAmountAnApplicationCouldActuallyAllocate) {
