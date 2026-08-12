@@ -466,3 +466,38 @@ and read the compile errors straight out of `mobilegl.log`:
 ```sh
 grep -aE 'Shader compilation failed|linking failed' out-angle/mobilegl.log
 ```
+
+### minecraft-1.21.4-fabric-iris-sundial-lite-in-world on the ANGLE lane
+
+This case takes the **emulator process down**, every run, on its first attempt.
+It is not a timeout (it dies ~74s into a 900s budget) and it is not host memory
+pressure. From the retained diagnostics of run 31552175083:
+
+- `host-dmesg.txt` contains no OOM, no `oom-kill`, no `Killed process`.
+- `host-memory.txt` reports 11Gi of 15Gi available and 44Ki of 8Gi swap used.
+- `host-dmesg.txt` contains exactly two faults, both at the same moment and the
+  same instruction:
+
+  ```
+  llvmpipe-1[3216]: segfault at 8 ip 00007f99296b276e error 4
+  llvmpipe-0[3215]: segfault at 8 ip 00007f99296b276e error 4
+  ```
+
+Those are host Mesa **llvmpipe** rasterizer worker threads - the emulator's own
+renderer, not SwiftShader - and their death takes the emulator with them
+(`kvm [2665]` before the fault, `kvm [3554]` after the restart, matching
+`pid_2665.ini` in `emulator-first-attempt.log`). The faulting instruction
+decodes as `mov 0x13c0(%rsp,%rax,8),%rax` followed by `cmpl $0x0,0x8(%rax)`:
+an **indexed load out of a stack pointer-table** that returned null, then a
+dereference of it. That is the shape an out-of-range array index produces in a
+JIT rasterizer.
+
+Do not raise the swap allocation to match `test.yml` - the OOM hypothesis is
+dead, and doing so would only hide the question.
+
+The retry leg is a separate, milder failure (`statusCode 5`, "failed to make
+current OpenGL context and drawable" after a complete capability probe) and is
+deliberately **not** covered by the surface-lost infrastructure clause: its
+`retrace.log` carries neither the `0x300b` nor the `-1000000001` marker, and its
+`mobilegl.log` does reach `OpenGL ES capabilities:`. Both guards exclude it, so
+the run is charged as a failure rather than retried away.
