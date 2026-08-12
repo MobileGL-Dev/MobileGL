@@ -153,8 +153,14 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 continue;
             }
 
-            const Uint32 sourceStride =
-                attr.Stride > 0 ? static_cast<Uint32>(attr.Stride) : static_cast<Uint32>(attribByteSize);
+            // Verbatim, zero included. The frontend already resolved a pointer call's
+            // "tightly packed" stride 0 into the element size (see VertexAttribute::Stride),
+            // so a zero here is the binding model's stride 0 - every vertex reads the same
+            // element - which is exactly what a zero VkVertexInputBindingDescription::stride
+            // means. Substituting the element size fetched a fresh element per vertex and ran
+            // off the end of the buffer (KHR-GL43.vertex_attrib_binding.basic-input-case7/8).
+            // Client-memory arrays cannot reach zero: they only exist on the pointer path.
+            const Uint32 sourceStride = static_cast<Uint32>(attr.Stride);
             const Bool packedAttribute = attr.Type == DataType::Int2101010Rev ||
                                          attr.Type == DataType::Uint2101010Rev;
             const SizeT requiredAlignment = packedAttribute ? attribByteSize : GetComponentSize(attr.Type);
@@ -175,10 +181,16 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             }
 
             Uint32 stride = sourceStride;
-            if (conversion == VertexStreamConversion::Repack) {
-                stride = static_cast<Uint32>(attribByteSize);
-            } else if (conversion == VertexStreamConversion::ScaledIntegerToFloat32) {
-                stride = static_cast<Uint32>(attr.Size * static_cast<Int>(sizeof(Float)));
+            // A converted stream is tightly packed, so its stride is the converted element
+            // size - unless the source stride is zero, which does not describe a packing at
+            // all but "never advance". That survives the conversion unchanged: the draw path
+            // converts exactly one element and every vertex reads it.
+            if (sourceStride != 0) {
+                if (conversion == VertexStreamConversion::Repack) {
+                    stride = static_cast<Uint32>(attribByteSize);
+                } else if (conversion == VertexStreamConversion::ScaledIntegerToFloat32) {
+                    stride = static_cast<Uint32>(attr.Size * static_cast<Int>(sizeof(Float)));
+                }
             }
             const VkVertexInputRate inputRate =
                 (attr.Divisor == 0) ? VK_VERTEX_INPUT_RATE_VERTEX : VK_VERTEX_INPUT_RATE_INSTANCE;

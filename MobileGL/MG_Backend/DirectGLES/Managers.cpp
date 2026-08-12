@@ -1481,6 +1481,50 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return true;
         }
 
+        // ES 3.1 core. Queried through the loader rather than the version, because the whole
+        // point of using it is to express something the pointer API cannot, and falling back
+        // silently on a driver that lacks it is better than crashing on a null entry point.
+        inline Bool HasVertexBindingApi() {
+            return g_GLESFuncs.glBindVertexBuffer != nullptr && g_GLESFuncs.glVertexAttribFormat != nullptr &&
+                   g_GLESFuncs.glVertexAttribIFormat != nullptr && g_GLESFuncs.glVertexAttribBinding != nullptr &&
+                   g_GLESFuncs.glVertexBindingDivisor != nullptr;
+        }
+
+        // Declares one attribute through the ES binding-point API, the only spelling that can
+        // carry a stride of zero. Returns false when the attribute has no usable buffer, in
+        // which case nothing was emitted.
+        inline Bool SyncZeroStrideAttribute(Uint attribIndex, const MG_State::GLState::VertexAttribute& attrib) {
+            const auto& bufferObject = attrib.Buffer;
+            if (!bufferObject) {
+                MGLOG_W("Zero-stride attribute %u has no bound buffer, skipping.", attribIndex);
+                return false;
+            }
+            auto* backendResource = BufferImpl::EnsureBufferResource(bufferObject);
+            if (!backendResource || backendResource->id == 0) {
+                MGLOG_E("No backend buffer for zero-stride attribute %u, cannot bind it.", attribIndex);
+                return false;
+            }
+
+            if (!attrib.IsInteger) {
+                const GLint glSize = attrib.IsBgra ? static_cast<GLint>(GL_BGRA) : attrib.Size;
+                g_GLESFuncs.glVertexAttribFormat(attribIndex, glSize,
+                                                 MG_Util::ConvertDataTypeToGLEnum(attrib.Type),
+                                                 attrib.Normalized ? GL_TRUE : GL_FALSE, 0);
+            } else {
+                g_GLESFuncs.glVertexAttribIFormat(attribIndex, attrib.Size,
+                                                  MG_Util::ConvertDataTypeToGLEnum(attrib.Type), 0);
+            }
+            g_GLESFuncs.glVertexAttribBinding(attribIndex, attribIndex);
+            // The resolved offset goes on the binding point, not into a relative offset: the
+            // relative offset is capped by GL_MAX_VERTEX_ATTRIB_RELATIVE_OFFSET (2047 at
+            // minimum) while a buffer offset is not, so anything else would break on a large
+            // one. BindBufferId is bypassed deliberately - glBindVertexBuffer binds into the
+            // VAO's binding point, not the GL_ARRAY_BUFFER target that cache tracks.
+            g_GLESFuncs.glBindVertexBuffer(attribIndex, backendResource->id,
+                                           static_cast<GLintptr>(attrib.Offset), 0);
+            return true;
+        }
+
         void BackendVertexArrayObject::SyncToBackend(
             const SharedPtr<MG_State::GLState::VertexArrayObject>& stateVAOObject) {
 #ifdef TRACY_ENABLE
@@ -1537,16 +1581,64 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // FormatVersion, not SwitchVersion, so the enable/disable block above will not run
                 // again and an already-enabled array would stay enabled with no pointer and no
                 // ARRAY_BUFFER binding - which ES 3.1+ makes an INVALID_OPERATION at draw.
-                if (attrib.IsLong) {
-                    MGLOG_E("DirectGLES: vertex attribute %u is a 64-bit (GL_DOUBLE) array, which this "
+                //
+                // IsLong is not the only way a 64-bit array gets here: glVertexAttribFormat
+                // with GL_DOUBLE asks for doubles in memory CONVERTED to float, so it is not
+                // long, is not declined by the frontend, and still has no ES vertex format.
+                // Leaving that one enabled did not merely raise INVALID_ENUM - the Adreno
+                // driver dereferenced null inside the next draw and took the process with it
+                // (SIGSEGV in libGLESv2_adreno, KHR-GL43.vertex_attrib_binding.basic-input-case4),
+                // because the array stayed enabled with no pointer the failed call could set.
+                // The type test therefore covers the storage, not the spelling.
+                if (attrib.IsLong || attrib.Type == DataType::Float64) {
+                    MGLOG_I("DirectGLES: vertex attribute %u is a 64-bit (GL_DOUBLE) array, which this "
                             "backend cannot feed - disabling the array",
                             attribIndex);
                     g_GLESFuncs.glDisableVertexAttribArray(attribIndex);
                     continue;
                 }
 
+                // A resolved stride of zero is the binding model's "never advance" (see
+                // VertexAttribute::Stride) and glVertexAttribPointer cannot say it - a zero
+                // stride argument there means "tightly packed" instead, i.e. exactly the
+                // opposite. ES 3.1's binding-point API can, so a zero-stride attribute takes
+                // that spelling: its own binding point (index == attribute index, the default
+                // mapping) carrying the buffer, the whole resolved offset and stride 0, with
+                // the format at relative offset 0. Everything the pointer call would have set
+                // for this attribute is set here too, so the two spellings stay interchangeable
+                // from one sync to the next.
+                if (attrib.Stride == 0 && HasVertexBindingApi()) {
+                    if (!SyncZeroStrideAttribute(attribIndex, attrib)) {
+                        continue;
+                    }
+                    if (needsSyncFormat) {
+                        g_GLESFuncs.glVertexBindingDivisor(attribIndex, attrib.Divisor);
+                    }
+                    continue;
+                }
+
                 if (!BindAttributeBuffer(attrib)) {
                     continue;
+                }
+
+                // GL_BGRA as a vertex SIZE is desktop-only; ES has no equivalent and rejects
+                // it. That rejection is not benign: it leaves the array ENABLED with no
+                // pointer, and the Adreno driver then dereferences null inside the next draw
+                // and kills the process rather than reporting an error (SIGSEGV in
+                // libGLESv2_adreno, KHR-GL43.vertex_attrib_binding.basic-input-case5). So the
+                // refusal has to be observed and the array disabled.
+                //
+                // Deliberately ONLY this format. Everything else MobileGL can reach here is ES
+                // core - the packed 2_10_10_10 pair included, whose size the frontend has
+                // already pinned to the 4 that ES requires - so nothing else can be refused,
+                // and the per-draw sync must not grow a glGetError round trip (a driver
+                // pipeline stall) for the formats real applications actually use. BGRA is also
+                // still ATTEMPTED rather than refused up front: some ES drivers do accept it,
+                // and the ones that do should keep working.
+                const Bool formatMayBeRefused = attrib.IsBgra;
+                if (formatMayBeRefused) {
+                    while (g_GLESFuncs.glGetError() != GL_NO_ERROR) {
+                    } // start from a clean slate so the check below is about THIS call
                 }
 
                 if (!attrib.IsInteger) {
@@ -1559,6 +1651,16 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     g_GLESFuncs.glVertexAttribIPointer(attribIndex, attrib.Size,
                                                        MG_Util::ConvertDataTypeToGLEnum(attrib.Type), attrib.Stride,
                                                        (const void*)attrib.Offset);
+                }
+
+                if (formatMayBeRefused && g_GLESFuncs.glGetError() != GL_NO_ERROR) {
+                    MGLOG_I("DirectGLES: the driver refused the vertex format of attribute %u "
+                            "(size=%d bgra=%d type=%s) - disabling the array so the draw cannot "
+                            "fetch through a pointer the driver never accepted",
+                            attribIndex, attrib.Size, attrib.IsBgra ? 1 : 0,
+                            MG_Util::ConvertGLEnumToString(MG_Util::ConvertDataTypeToGLEnum(attrib.Type)).c_str());
+                    g_GLESFuncs.glDisableVertexAttribArray(attribIndex);
+                    continue;
                 }
 
                 if (needsSyncFormat) {
@@ -1609,9 +1711,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     continue;
                 }
 
-                // Same reason as SyncToBackend: there is no ES vertex format for a 64-bit array, and
-                // this path only ever reaches glVertexAttribPointer/IPointer.
-                if (attrib.IsLong) {
+                // Same reason as SyncToBackend, including why the test is on the storage rather
+                // than on IsLong: there is no ES vertex format for a 64-bit array, and this path
+                // only ever reaches glVertexAttribPointer/IPointer.
+                if (attrib.IsLong || attrib.Type == DataType::Float64) {
                     g_GLESFuncs.glDisableVertexAttribArray(attribIndex);
                     continue;
                 }
@@ -4366,6 +4469,21 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     effectiveSpirv = &loweredSpirv;
                 }
 
+                // GLSL ES has no ARRAY vertex inputs, and SPIRV-Cross refuses the whole module
+                // rather than emulating them, so this has to happen before it sees the binary.
+                Vector<unsigned int> splitArrayInputSpirv;
+                if (glShaderType == GL_VERTEX_SHADER &&
+                    MG_Util::ShaderTranspiler::ShaderCompiler::SplitArrayVertexInputsForEssl(
+                        *effectiveSpirv, splitArrayInputSpirv) &&
+                    !splitArrayInputSpirv.empty() && splitArrayInputSpirv != *effectiveSpirv) {
+                    // Only when the pass ACTUALLY split something. The optimizer hands back a
+                    // re-serialised copy either way, and adopting that copy for every vertex
+                    // shader would put every one of them through a round trip they do not need
+                    // - which is not free: it cost the create-indirect retrace 0.15 SSIM the
+                    // first time this gate was missing.
+                    effectiveSpirv = &splitArrayInputSpirv;
+                }
+
                 // ESSL stage-matches uniform blocks by member precision, but SPIRV-Cross prints
                 // a RelaxedPrecision member as explicit "mediump" in the vertex stage and as
                 // UNQUALIFIED (mediump-by-default) in the fragment stage; after
@@ -4447,11 +4565,18 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 spvcSession.Compile(&result);
 
                 if (!result) {
-                    MG_Util::ShaderTranspiler::ResultInfo r;
-                    r.log += "Failed to compile the shader to GLSL: \n";
-                    r.log += spvcSession.GetLastErrorString();
-                    r.errc = -5;
-                    MGLOG_E("%s", r.log.c_str());
+                    // MGLOG_I, for the same reason as the compile- and link-failure diagnostics
+                    // below: every CI, retrace and release build compiles at
+                    // MOBILEGL_LOG_LEVEL_INFO, where MGLOG_E expands to nothing. A stage that
+                    // never reaches the driver leaves the program short of that stage, so the
+                    // link fails with an EMPTY driver info log - the least debuggable failure
+                    // MobileGL can produce, and what hid the whole
+                    // KHR-GL43.vertex_attrib_binding family behind "the draw captured zeros".
+                    MGLOG_I("Shader transpilation to ESSL failed. State program ID: %u, stage: %s, "
+                            "SPIRV-Cross error: %s",
+                            stateProgramObject->GetExternalIndex(),
+                            MG_Util::ConvertGLEnumToString(glShaderType).c_str(),
+                            spvcSession.GetLastErrorString());
                     m_backendProgramUsable = false;
                     continue;
                 }

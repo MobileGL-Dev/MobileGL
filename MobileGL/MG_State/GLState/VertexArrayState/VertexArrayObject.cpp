@@ -61,11 +61,15 @@ namespace MobileGL::MG_State::GLState {
     }
 
     void VertexArrayObject::SetAttributeFormat(Uint index, int size, DataType type, Bool normalized, int stride,
-                                               SizeT offset, Bool isInteger, Bool isBgra) {
+                                               SizeT offset, Bool isInteger, Bool isBgra, int effectiveStride) {
         if (index >= MAX_VERTEX_ATTRIBS) return;
         if (size < 1 || size > 4) {
             return;
         }
+
+        // See VertexAttribute::Stride: the resolved field carries the effective stride so that
+        // a zero in it can only ever mean the binding model's "do not advance".
+        const int resolvedStride = effectiveStride >= 0 ? effectiveStride : stride;
 
         // The classic pointer-style API takes back full ownership of the resolved fields.
         m_attributeUsesBindingModel[index] = false;
@@ -77,7 +81,7 @@ namespace MobileGL::MG_State::GLState {
         m_attributes[index].LegacyPointer = offset;
 
         if (m_attributes[index].Size == size && m_attributes[index].Type == type &&
-            m_attributes[index].Normalized == normalized && m_attributes[index].Stride == stride &&
+            m_attributes[index].Normalized == normalized && m_attributes[index].Stride == resolvedStride &&
             m_attributes[index].Offset == offset && m_attributes[index].IsInteger == isInteger &&
             m_attributes[index].IsBgra == isBgra && !m_attributes[index].IsLong) {
             return;
@@ -87,7 +91,7 @@ namespace MobileGL::MG_State::GLState {
         attr.Size = size;
         attr.Type = type;
         attr.Normalized = normalized;
-        attr.Stride = stride;
+        attr.Stride = resolvedStride;
         attr.Offset = offset;
         attr.IsInteger = isInteger;
         attr.IsBgra = isBgra;

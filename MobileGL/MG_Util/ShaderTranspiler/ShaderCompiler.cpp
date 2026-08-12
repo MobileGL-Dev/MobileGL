@@ -20,6 +20,7 @@
 #include "SpirvPasses/DecoratePositionInvariantPass.h"
 #include "SpirvPasses/LowerDrawParametersPass.h"
 #include "SpirvPasses/PackDoubleVertexInputsPass.h"
+#include "SpirvPasses/SplitArrayVertexInputsPass.h"
 #include "SpirvPasses/RebaseInstanceIndexPass.h"
 #include "SpirvPasses/ZeroBaseVertexPass.h"
 #include "SpirvPasses/NormalizeRectCoordinatesPass.h"
@@ -627,6 +628,16 @@ namespace MobileGL {
                 optimizer.RegisterPass(LowerDrawParametersPass::CreateLowerDrawParametersPass());
 
                 return RunOptimizerChecked("LowerDrawParametersForEssl", optimizer, inputBinary,
+                                           outputBinary);
+            }
+
+            bool ShaderCompiler::SplitArrayVertexInputsForEssl(const Vector<Uint32>& inputBinary,
+                                                               Vector<uint32_t>& outputBinary) {
+                using namespace spvtools;
+                Optimizer optimizer(SPV_ENV_VULKAN_1_1);
+                optimizer.RegisterPass(SplitArrayVertexInputsPass::CreateSplitArrayVertexInputsPass());
+
+                return RunOptimizerChecked("SplitArrayVertexInputsForEssl", optimizer, inputBinary,
                                            outputBinary);
             }
 

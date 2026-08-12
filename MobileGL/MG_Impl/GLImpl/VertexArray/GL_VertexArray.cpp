@@ -315,9 +315,10 @@ namespace MobileGL::MG_Impl::GLImpl {
 
         auto offset = reinterpret_cast<SizeT>(pointer);
 
-        vao->SetAttributeFormat(index, size, dataType, false, stride, offset, true, false);
+        const int effectiveStride = EffectiveVertexStride(stride, size, type);
+        vao->SetAttributeFormat(index, size, dataType, false, stride, offset, true, false, effectiveStride);
         vao->BindAttributeBuffer(index, vbo);
-        vao->MirrorPointerIntoBinding(index, vbo, offset, EffectiveVertexStride(stride, size, type));
+        vao->MirrorPointerIntoBinding(index, vbo, offset, effectiveStride);
     }
 
     void VertexAttribPointer_State(GLuint index, GLint size, GLenum type, GLboolean normalized, GLsizei stride,
@@ -345,9 +346,11 @@ namespace MobileGL::MG_Impl::GLImpl {
         // backend can pick the reversed VkFormat / pass GL_BGRA through to a GLES driver.
         const bool isBgra = (size == static_cast<GLint>(GL_BGRA));
         const int effectiveSize = isBgra ? 4 : size;
-        vao->SetAttributeFormat(index, effectiveSize, dataType, normalized, stride, offset, false, isBgra);
+        const int effectiveStride = EffectiveVertexStride(stride, effectiveSize, type);
+        vao->SetAttributeFormat(index, effectiveSize, dataType, normalized, stride, offset, false, isBgra,
+                                effectiveStride);
         vao->BindAttributeBuffer(index, vbo);
-        vao->MirrorPointerIntoBinding(index, vbo, offset, EffectiveVertexStride(stride, effectiveSize, type));
+        vao->MirrorPointerIntoBinding(index, vbo, offset, effectiveStride);
     }
 
     void BindVertexArray_State(GLuint array) {

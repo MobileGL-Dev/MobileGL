@@ -19,6 +19,14 @@ namespace MobileGL {
                 int Size = 4;
                 DataType Type = DataType::Float32;
                 Bool Normalized = false;
+                // The RESOLVED byte distance between consecutive elements, never the raw
+                // glVertexAttrib*Pointer argument: a pointer call's stride 0 means "tightly
+                // packed" and is resolved to the element size here, so a zero that survives
+                // into this field can only have come from the binding model, where a zero
+                // VERTEX_BINDING_STRIDE means the opposite - every vertex reads the SAME
+                // element and the fetch address never advances (GL 4.6 core 10.3.1). Backends
+                // consume this verbatim; collapsing 0 back into the element size is what made
+                // KHR-GL43.vertex_attrib_binding.basic-input-case7/8 read past the buffer.
                 int Stride = 0;
                 SizeT Offset = 0;
                 Bool IsInteger = false;
@@ -76,8 +84,12 @@ namespace MobileGL {
                 void DisableAttribute(Uint index);
                 Bool IsAttributeEnabled(Uint index) const;
 
+                // `stride` is the raw glVertexAttrib*Pointer argument, reported verbatim by
+                // GL_VERTEX_ATTRIB_ARRAY_STRIDE. `effectiveStride` is what the fetch actually
+                // advances by - the same value when the argument is non-zero, the tightly
+                // packed element size when it is zero. Pass -1 to say the two are the same.
                 void SetAttributeFormat(Uint index, int size, DataType type, Bool normalized, int stride, SizeT offset,
-                                        Bool isInteger, Bool isBgra = false);
+                                        Bool isInteger, Bool isBgra = false, int effectiveStride = -1);
 
                 void BindAttributeBuffer(Uint index, const SharedPtr<BufferObject>& buffer);
 

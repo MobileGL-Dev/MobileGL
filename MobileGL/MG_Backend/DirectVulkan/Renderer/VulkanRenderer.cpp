@@ -3546,9 +3546,11 @@ void main() {
                 const auto& attr = vao.GetAttribute(bindingLocation);
                 const SizeT elementSize =
                     VertexInputStateFactory::GetAttributeByteSize(attr.Type, attr.Size, attr.IsBgra);
-                const SizeT sourceStride =
-                    attr.Stride > 0 ? static_cast<SizeT>(attr.Stride) : elementSize;
-                if (sourceBufferShared->MappedData() == nullptr || elementSize == 0 || sourceStride == 0 ||
+                // Zero is a legal binding stride and means "never advance" (see
+                // VertexAttribute::Stride), so it is NOT folded into the element size here -
+                // it selects the single-element conversion below instead.
+                const SizeT sourceStride = static_cast<SizeT>(attr.Stride);
+                if (sourceBufferShared->MappedData() == nullptr || elementSize == 0 ||
                     baseOffset > sourceSize || elementSize > sourceSize - baseOffset) {
                     MGLOG_E("UploadAndBindVertexStreams skipped: invalid converted source binding=%zu "
                             "location=%u base=%zu size=%zu element=%zu stride=%zu",
@@ -3557,7 +3559,8 @@ void main() {
                 }
 
                 sourceBufferShared->SyncPersistentMappedRange();
-                const SizeT availableElementCount = 1 + (sourceSize - baseOffset - elementSize) / sourceStride;
+                const SizeT availableElementCount =
+                    sourceStride == 0 ? 1 : 1 + (sourceSize - baseOffset - elementSize) / sourceStride;
                 const Bool cacheable = !sourceBufferShared->IsBackendPersistentMapped();
                 // Convert only what this draw can fetch instead of the whole buffer tail.
                 // Instance-rate bindings index by instance, not the vertex range, so they
@@ -4737,6 +4740,7 @@ void main() {
             hasPatchedVertexAttributes = true;
         }
         VertexInputStateBuilder syntheticVertexInputBuilder;
+        VkPipelineVertexInputStateCreateInfo syntheticVertexInputState{};
         const VkPipelineVertexInputStateCreateInfo* pipelineVertexInputState = &vis.state;
         if (missingAttribMask != 0 || hasPatchedVertexAttributes) {
             for (const auto& binding : vis.bindings) {
@@ -4764,7 +4768,16 @@ void main() {
                 syntheticVertexInputBuilder.AddAttribute(location, syntheticBinding, format, 0);
                 ++syntheticBinding;
             }
-            pipelineVertexInputState = &syntheticVertexInputBuilder.Build();
+            syntheticVertexInputState = syntheticVertexInputBuilder.Build();
+            // Carry the divisor chain over. The synthetic rebuild copies bindings and
+            // attributes only, and it keeps every real binding's INDEX, so the divisor
+            // descriptions built for them stay valid - but dropping the pNext silently
+            // demoted every instanced binding to divisor 1. This path runs whenever the
+            // program declares an input the VAO does not feed (which is most capture
+            // shaders: KHR-GL43.vertex_attrib_binding declares 16 inputs and enables three),
+            // so the loss was near-total rather than a corner case.
+            syntheticVertexInputState.pNext = vis.state.pNext;
+            pipelineVertexInputState = &syntheticVertexInputState;
         }
         auto cullFaceEnabled = MG_State::pGLContext->IsCapabilityEnabled(CapabilityInput::CullFace);
         auto depthTestEnabled = MG_State::pGLContext->IsCapabilityEnabled(CapabilityInput::DepthTest);

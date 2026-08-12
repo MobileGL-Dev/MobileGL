@@ -69,6 +69,7 @@ add_executable(MobileGLIntegrationTest
     Scenarios/Glsl420DeclarationScenario.cpp
     Scenarios/FragmentOutputArrayIndexScenario.cpp
     Scenarios/BufferTextureScenario.cpp
+    Scenarios/VertexAttribBindingScenario.cpp
 )
 
 target_include_directories(MobileGLIntegrationTest PRIVATE

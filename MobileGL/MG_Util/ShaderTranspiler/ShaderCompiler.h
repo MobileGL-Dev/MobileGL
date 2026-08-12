@@ -27,6 +27,13 @@ namespace MobileGL {
                 // Only for backends without native draw-parameter support (DirectGLES).
                 static bool LowerDrawParametersForEssl(const Vector<Uint32>& inputBinary,
                                                        Vector<uint32_t>& outputBinary);
+                // Replaces an ARRAY vertex input with one input per element at consecutive
+                // locations, seeding a Private copy of the array so indexed reads still work.
+                // GLSL ES has no array vertex inputs and SPIRV-Cross refuses the whole module
+                // rather than emulating them, so without this the stage never reaches the
+                // driver. Only for the DirectGLES transpile path.
+                static bool SplitArrayVertexInputsForEssl(const Vector<Uint32>& inputBinary,
+                                                          Vector<uint32_t>& outputBinary);
                 // Drops RelaxedPrecision member decorations from uniform-block structs so
                 // SPIRV-Cross prints the same (highp) member precision in every stage; ES
                 // drivers reject cross-stage uniform blocks whose member precisions differ.
