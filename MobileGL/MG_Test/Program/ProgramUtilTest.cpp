@@ -2694,8 +2694,7 @@ void main() {
     ASSERT_TRUE(shaderResult) << shaderResult.error().log;
 
     // PARTIALLY bound, and deliberately not a dense 0..N run - exactly what Iris does.
-    // mc_midTexCoord and a_Unreferenced are left unbound (FastSTL's map has no
-    // initializer-list constructor, hence the explicit inserts).
+    // mc_midTexCoord and a_Unreferenced are left unbound.
     UnorderedMap<String, Uint> explicitVertexIns;
     explicitVertexIns["a_Position"] = 0;
     explicitVertexIns["a_Color"] = 1;

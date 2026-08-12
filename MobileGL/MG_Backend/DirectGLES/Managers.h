@@ -129,6 +129,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
         // Null when no live state object owns this key. The result points into the map, so
         // it stays valid only until the next GetOrCreate/Find/CollectGarbage on this registry.
+        // Take that literally, including for Find: the map is open-addressed and erases by
+        // shifting the rest of the probe cluster into the hole, so an erase relocates entries
+        // OTHER than the erased one - and Find erases, whenever it lands on a key whose state
+        // object has expired. Callers that need the twin across another registry call must copy
+        // the BackendPtr out (or keep only the pointee, which is heap-allocated and never moves).
         BackendPtr* Find(StateObject* stateObj) {
             const auto entryIt = m_entries.find(stateObj);
             if (entryIt == m_entries.end()) {

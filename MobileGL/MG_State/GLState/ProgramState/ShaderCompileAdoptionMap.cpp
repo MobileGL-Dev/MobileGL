@@ -70,9 +70,10 @@ namespace MobileGL::MG_State::GLState {
     void ShaderCompileAdoptionMap::SweepIfCrowded() {
         if (m_entries.size() < m_sweepThreshold) return;
 
-        // Collect first, erase after: FastSTL::unordered_map is open-addressed, so erasing
-        // through an iterator that the same loop is still advancing is not worth reasoning
-        // about on a path this cold.
+        // Collect first, erase after: the map is open-addressed and erases by shifting the
+        // rest of the probe cluster into the hole, so an erase moves entries other than the
+        // erased one. Copying the keys out sidesteps that entirely, and this path is cold
+        // enough that the extra vector is not worth reasoning about the alternative.
         Vector<ShaderSourceKey> dead;
         for (const auto& entry : m_entries) {
             const SharedPtr<ShaderCompileTask> node = entry.second.lock();

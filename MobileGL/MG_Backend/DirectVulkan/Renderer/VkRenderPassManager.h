@@ -315,26 +315,30 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             Uint64 deferredAtFrame = 0;
         };
 
-        // Node-based std::unordered_map, deliberately not FastSTL's open-addressing UnorderedMap:
+        // Node-based std::unordered_map, deliberately NOT the open-addressing UnorderedMap:
         // callers cache a RenderbufferResource* - or a bare &resource->layout - and then make further
         // calls that touch this map. BlitFramebuffer is the one that bit: it resolves the source and
         // destination colour bindings (ResolveColorBlitBinding caches &rbResource->layout), then
-        // materializes the source's pending clear, which looks that same resource up again. FastSTL's
-        // operator[] runs its load-factor check before find_key and reallocates the whole bucket array
-        // when occupancy crosses it, so even a plain lookup relocates every element; erase only
-        // tombstones and never decrements the occupancy, so the doubling keeps firing. After a
-        // relocation the cached pointer names freed storage still holding the pre-clear
-        // VK_IMAGE_LAYOUT_UNDEFINED, and BlitFramebuffer bails out at "source image layout is
-        // undefined", silently dropping the blit - renderbuffers_storage_multisample read back zero
-        // instead of the clear colour on exactly the iterations that grew the table.
+        // materializes the source's pending clear, which looks that same resource up again. Growing
+        // an open-addressed table relocates every element, so the cached pointer went on to name
+        // freed storage still holding the pre-clear VK_IMAGE_LAYOUT_UNDEFINED; BlitFramebuffer bailed
+        // out at "source image layout is undefined", silently dropping the blit -
+        // renderbuffers_storage_multisample read back zero instead of the clear colour on exactly the
+        // iterations that grew the table.
         //
         // Reordering the materialize ahead of the resolves - the fix ReadPixels got - does not cover
         // this: the destination resolve still runs after the source pointer is taken. The depth blit,
         // GetOrCreateRenderPass's depthRenderbufferResource and ReadDepthStencilPixels cache the same
         // kind of pointer, so the invariant belongs in the container rather than in a per-call-site
-        // ordering rule. m_textureResources is node-based for the same reason. This buys stability
-        // across rehash and insert only - erase still invalidates the erased element, which is safe
-        // here because a renderbuffer that is an FBO attachment is held alive by that attachment.
+        // ordering rule. m_textureResources is node-based for the same reason.
+        //
+        // The case for keeping this node-based got STRONGER with ska::flat_hash_map, so do not read
+        // the paragraph above as merely historical: ska erases by shifting the rest of the probe
+        // cluster backwards into the hole, so erasing one renderbuffer relocates OTHER renderbuffers'
+        // entries - a cached pointer can now be invalidated by a key it has nothing to do with, which
+        // no call-site ordering rule can defend against. (What did change: ska's operator[] returns on
+        // a hit before it runs its grow check, so a plain lookup of a PRESENT key no longer relocates.
+        // That narrows the insert hazard; it does not touch the erase one.)
         std::unordered_map<MG_State::GLState::RenderbufferObject*, RenderbufferResource> m_renderbufferResources;
         UnorderedMap<MG_State::GLState::RenderbufferObject*, PendingRenderbufferClear> m_pendingRenderbufferClears;
         Vector<DeferredRenderbufferRelease> m_deferredRenderbufferReleases;
