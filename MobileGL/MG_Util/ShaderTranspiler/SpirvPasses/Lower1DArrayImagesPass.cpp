@@ -171,13 +171,21 @@ namespace MobileGL {
                     return Status::SuccessWithoutChange;
                 }
 
-                spvtools::opt::analysis::Integer signedInt(32, true);
-                spvtools::opt::analysis::Vector int3(&signedInt, 3);
-                const uint32_t int3TypeId = typeMgr->GetTypeInstruction(&int3);
-                const uint32_t intTypeId = typeMgr->GetTypeInstruction(&signedInt);
-                const uint32_t zeroId = constantMgr->GetSIntConstId(0);
-                if (int3TypeId == 0 || intTypeId == 0 || zeroId == 0) {
-                    return Status::Failure;
+                // The same refusal the caller makes, restated here so the pass is safe wherever
+                // it is registered. Rewriting the type while leaving an OpImageQuerySize on it
+                // produces a query whose result type has one component too few - an invalid
+                // module - and there is no correct two-component size to substitute, because the
+                // ES texture genuinely has a height the GL one does not.
+                for (auto& function : *irContext->module()) {
+                    for (auto& block : function) {
+                        for (auto& instruction : block) {
+                            if (QueriesImageSize(instruction.opcode()) && instruction.NumInOperands() >= 1 &&
+                                Is1DArrayStorageImageType(
+                                    ResolveImageType(irContext, instruction.GetSingleWordInOperand(0)))) {
+                                return Status::SuccessWithoutChange;
+                            }
+                        }
+                    }
                 }
 
                 // (u, layer) -> (u, 0, layer). The height the ES 2D array carries is 1, so Y is
@@ -197,6 +205,35 @@ namespace MobileGL {
                             }
 
                             const uint32_t coordinateId = instruction.GetSingleWordInOperand(coordinateOperand);
+
+                            // Built from the COORDINATE's own component type rather than a
+                            // hardcoded signed int. GLSL only ever spells these ivec2, but SPIR-V
+                            // permits an unsigned coordinate, and extracting a uint component
+                            // into an int result is an invalid module rather than a wrong answer -
+                            // the kind of defect that reaches a driver as "compiles here, not
+                            // there".
+                            Instruction* coordinateDef = irContext->get_def_use_mgr()->GetDef(coordinateId);
+                            if (coordinateDef == nullptr) return Status::Failure;
+                            const auto* coordinateType = typeMgr->GetType(coordinateDef->type_id());
+                            const auto* coordinateVector = coordinateType != nullptr ? coordinateType->AsVector()
+                                                                                     : nullptr;
+                            if (coordinateVector == nullptr || coordinateVector->element_count() != 2) {
+                                return Status::Failure;
+                            }
+                            const auto* component = coordinateVector->element_type();
+                            const auto* componentInteger = component != nullptr ? component->AsInteger() : nullptr;
+                            if (componentInteger == nullptr) return Status::Failure;
+
+                            spvtools::opt::analysis::Vector widenedVector(component, 3);
+                            const uint32_t int3TypeId = typeMgr->GetTypeInstruction(&widenedVector);
+                            const uint32_t intTypeId = typeMgr->GetTypeInstruction(component);
+                            const uint32_t zeroId = componentInteger->IsSigned()
+                                                        ? constantMgr->GetSIntConstId(0)
+                                                        : constantMgr->GetUIntConstId(0);
+                            if (int3TypeId == 0 || intTypeId == 0 || zeroId == 0) {
+                                return Status::Failure;
+                            }
+
                             InstructionBuilder builder(
                                 irContext, &instruction,
                                 IRContext::kAnalysisDefUse | IRContext::kAnalysisInstrToBlockMapping);

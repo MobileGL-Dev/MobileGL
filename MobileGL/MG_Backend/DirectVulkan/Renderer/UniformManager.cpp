@@ -805,12 +805,16 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             return false;
         }
 
-        // Unlike the sampled texel buffer, the shader may WRITE this one, and those writes land in
-        // GPU memory behind the frontend's CPU shadow - which is what MapBuffer and
+        // Unlike the sampled texel buffer, the shader MAY write this one, and those writes land
+        // in GPU memory behind the frontend's CPU shadow - which is what MapBuffer and
         // GetBufferSubData read. Same two calls, and for the same reason, as the storage-block
-        // path above.
+        // path above - but only the residency is unconditional. Marking a GL_READ_ONLY binding
+        // GPU-written would make the next map or readback wait for a dispatch that could not have
+        // changed a byte of it.
         bufferObject->EnsureGpuResidentStorage();
-        bufferObject->MarkGpuWritten();
+        if (imageBinding.Access != GL_READ_ONLY) {
+            bufferObject->MarkGpuWritten();
+        }
 
         BufferSlice slice{};
         if (!m_bufferManager->AcquireResidentSlice(BufferKind::TextureBuffer, bufferObject, slice) ||

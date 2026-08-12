@@ -3569,8 +3569,55 @@ TEST_F(ProgramUtilTest, Lower1DArrayImagesRewritesTheTypeAndWidensTheCoordinate)
         << "the image must be declared as the 2D array the texture is stored as:\n" << essl;
     EXPECT_EQ(essl.find("ivec2(ivec2("), String::npos)
         << "the malformed constructor must be gone:\n" << essl;
-    EXPECT_NE(essl.find("ivec3("), String::npos)
-        << "the coordinate must have been widened to three components:\n" << essl;
+    // The ORDER is the whole point, and it is what a widening that merely appended the 0 would
+    // get wrong while still producing a three-component constructor that compiles. The fixture
+    // reads (u=2, layer=3), and the ES 2D array holds height 1 with the layers in depth
+    // (TextureImpl::GetBackendUploadSize), so the only correct spelling is (2, 0, 3).
+    EXPECT_NE(essl.find("ivec3(2, 0, 3)"), String::npos)
+        << "the layer must land in the third component and Y must be 0; ivec3(2, 3, 0) would read "
+           "row 3 of a one-row texture and layer 0 of every access:\n"
+        << essl;
+}
+
+// The shape that made the first cut of this pass emit INVALID SPIR-V, and the shape the
+// conformance case actually has: a 1D-array image and a real 2D-array image of the same sampled
+// type and format in one module. Rewriting the first one's Dim in place makes the two
+// OpTypeImage declarations structurally identical, and SPIR-V forbids duplicate non-aggregate
+// types - so the module the ESSL path hands on failed validation and quietly bumped the latch.
+// A single-image fixture cannot see any of that.
+TEST_F(ProgramUtilTest, Lower1DArrayImagesDeduplicatesAgainstAnExisting2DArrayImage) {
+    using namespace MG_Util::ShaderTranspiler;
+
+    const Vector<Uint32> raw = BuildSpirvForStage(R"(#version 440 core
+layout (local_size_x = 1) in;
+layout (location = 0, r32ui) readonly uniform uimage1DArray i0;
+layout (location = 1, r32ui) readonly uniform uimage2DArray i1;
+layout (std430, binding = 0) buffer SSB { uint sum; } ssb;
+void main() { ssb.sum = imageLoad(i0, ivec2(2, 3)).r + imageLoad(i1, ivec3(1, 1, 1)).r; }
+)",
+                                                  GL_COMPUTE_SHADER);
+    ASSERT_FALSE(raw.empty());
+
+    Vector<Uint32> spirv;
+    ASSERT_TRUE(ShaderCompiler::SanitizeAndOptimizeBinary(raw, spirv));
+    ASSERT_EQ(Count1DArrayStorageImageTypes(spirv), 1u);
+
+    SpirvValidationScope validationOn(true);
+    const Uint64 failuresBefore = ShaderCompiler::SpirvValidationFailureCount();
+
+    Vector<Uint32> lowered;
+    ASSERT_TRUE(ShaderCompiler::Lower1DArrayImagesForEssl(spirv, lowered));
+    ASSERT_FALSE(lowered.empty());
+
+    EXPECT_EQ(Count1DArrayStorageImageTypes(lowered), 0u) << DisassembleSpirv(lowered);
+    EXPECT_EQ(ShaderCompiler::SpirvValidationFailureCount(), failuresBefore)
+        << "the rewritten 1D-array image collided with the module's own 2D-array image and left a "
+           "duplicate type declaration behind:\n"
+        << DisassembleSpirv(lowered);
+
+    const String essl = DecompileToEssl(lowered);
+    ASSERT_FALSE(essl.empty());
+    EXPECT_NE(essl.find("ivec3(2, 0, 3)"), String::npos) << essl;
 }
 
 // Scope, half one: a NON-arrayed 1D storage image is emitted correctly by the very same

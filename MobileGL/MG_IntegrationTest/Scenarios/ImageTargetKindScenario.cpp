@@ -453,10 +453,15 @@ namespace MGITest {
         if (!Ready()) return;
         if (!ImagesAreUsable()) GTEST_SKIP() << "no compute image uniforms";
 
+        // The two kinds this whole scenario file exists for come FIRST, and that ordering is
+        // load-bearing rather than cosmetic. The list has to be truncated to the device's image
+        // unit count, and the guaranteed minimum is small - ES 3.1 promises only four compute
+        // image uniforms - so a list in the conformance case's own order would put imageBuffer
+        // at index five and drop it on exactly the devices most likely to get it wrong. A test
+        // that quietly stops covering its own subject is worse than one that fails.
         const bool multisample = MultisampleImagesAreUsable();
-        std::vector<TargetKind> kinds{kKind1D,   kKind1DArray,   kKind2D,        kKind2DArray,
-                                      kKind3D,   kKindBuffer,    kKindCube,      kKindCubeArray,
-                                      kKindRect};
+        std::vector<TargetKind> kinds{kKind1DArray, kKindBuffer, kKind2D,   kKind1D,      kKind2DArray,
+                                      kKind3D,      kKindCube,   kKindRect, kKindCubeArray};
         if (multisample) {
             kinds.push_back(kKind2DMS);
             kinds.push_back(kKind2DMSArray);
@@ -472,6 +477,19 @@ namespace MGITest {
             std::min<std::size_t>(kinds.size(), static_cast<std::size_t>(std::max(0, std::min(maxComputeImageUniforms,
                                                                                               maxImageUnits))));
         if (count == 0) GTEST_SKIP() << "no image units";
+        // Named, not silently dropped: `expected` is computed over whatever survives, so a
+        // truncated run is self-consistently green and would otherwise never say what it stopped
+        // covering.
+        if (count < kinds.size()) {
+            std::string dropped;
+            for (std::size_t i = count; i < kinds.size(); ++i) {
+                if (!dropped.empty()) dropped += ", ";
+                dropped += kinds[i].name;
+            }
+            RecordProperty("dropped_image_target_kinds", dropped);
+            GTEST_LOG_(INFO) << "only " << count << " image units, so these kinds are not covered by the "
+                             << "combined case: " << dropped;
+        }
         kinds.resize(count);
 
         std::string declarations;

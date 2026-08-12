@@ -60,6 +60,16 @@ namespace MobileGL {
             // the rewrite OpImageQuerySize yields three components where the shader consumes two,
             // and silently handing back a differently-shaped size is worse than refusing. The
             // caller logs it and leaves the module alone.
+            //
+            // KNOWN LIMITATION - the decline is per MODULE, and a program is several of them. A
+            // program whose vertex and fragment stages share a uimage1DArray uniform, where only
+            // one stage calls imageSize() on it, gets that stage declined and the other rewritten:
+            // the two then declare the same uniform with different types and the ES LINK fails on
+            // a type mismatch, rather than the single compile error a reader of the comment above
+            // would expect. Correlating the decision across a program's stages needs the decision
+            // to be made where the program is known, which is above this pass; it is left undone
+            // deliberately rather than papered over, because both outcomes are a refusal and the
+            // shape has never been observed outside a deliberately constructed shader.
             class Lower1DArrayImagesPass final : public spvtools::opt::Pass {
             public:
                 const char* name() const override { return "mobilegl-lower-1d-array-images"; }

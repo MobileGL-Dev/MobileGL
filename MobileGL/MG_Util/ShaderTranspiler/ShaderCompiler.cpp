@@ -858,6 +858,16 @@ namespace MobileGL {
 
                 Optimizer optimizer(SPV_ENV_VULKAN_1_1);
                 optimizer.RegisterPass(Lower1DArrayImagesPass::CreateLower1DArrayImagesPass());
+                // Mandatory, not tidying. Rewriting a 1D-array image type to the 2D-array one
+                // makes it structurally IDENTICAL to any real 2D-array image of the same sampled
+                // type and format that the module already declared - and SPIR-V forbids duplicate
+                // non-aggregate type declarations, so the result fails validation. That collision
+                // is not exotic: it is the shape of this whole change's headline case, where one
+                // compute shader declares uimage1DArray and uimage2DArray side by side, both
+                // r32ui. The same applies one level up, to the OpTypePointer instructions that
+                // named the two types, and to the Image1D capability the rewrite turns into a
+                // second Shader. Deduplicating afterwards collapses all three at once.
+                optimizer.RegisterPass(CreateRemoveDuplicatesPass());
 
                 return RunOptimizerChecked("Lower1DArrayImagesForEssl", optimizer, inputBinary, outputBinary);
             }
