@@ -344,6 +344,7 @@ jobs:
       - build-linux
       - test
       - benchmark
+      - integration
     permissions:
       actions: write
       contents: read
@@ -488,6 +489,7 @@ jobs:
     needs:
       - test
       - benchmark
+      - integration
     outputs:
       names: ${{ steps.trace-cases.outputs.names }}
     steps:
