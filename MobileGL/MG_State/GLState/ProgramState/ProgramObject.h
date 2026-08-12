@@ -326,14 +326,21 @@ namespace MobileGL::MG_State::GLState {
                                                           : kInvalidUniformOffset;
         }
         Uint GetUniformSizesInBytes(Uint location) const { return MG_Util::GetGLTypeSize(GetUniformType(location)); }
-        // Bytes a uniform actually occupies in the global UBO, which is not its GL type size:
-        // std140 pads each column of a float matrix out to a vec4, so a mat3 spans 48 bytes
-        // even though only 36 of them carry components. Anything reading or writing a whole
-        // uniform's storage - a bounds check, a copy between two programs' shadows - wants
-        // this rather than GetUniformSizesInBytes.
+        // Bytes a uniform actually occupies in the global UBO, which is not its GL type size,
+        // for two reasons. std140 pads each column of a matrix out to a vec4, so a mat3 spans
+        // 48 bytes even though only 36 of them carry components. And every 64-bit float in a
+        // shader is narrowed to 32 bits before the module reaches a backend
+        // (ShaderTranspiler::DemoteFloat64Pass) - the global UBO is laid out by reflecting that
+        // demoted module - so a `double` uniform occupies exactly what its float-typed twin
+        // would, half its GL type size, and a `dmat4` is padded like any other matrix. Anything
+        // reading or writing a whole uniform's storage - a bounds check, a copy between two
+        // programs' shadows - wants this rather than GetUniformSizesInBytes.
         static SizeT UniformStorageSpanInBytes(const glslang::TType* type, SizeT tightSize) {
-            if (type != nullptr && type->isMatrix() && type->getBasicType() != glslang::EbtDouble) {
+            if (type != nullptr && type->isMatrix()) {
                 return static_cast<SizeT>(type->getMatrixCols()) * 4 * sizeof(Float);
+            }
+            if (type != nullptr && type->getBasicType() == glslang::EbtDouble) {
+                return tightSize / 2;
             }
             return tightSize;
         }

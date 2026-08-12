@@ -167,6 +167,7 @@ namespace MobileGL::MG_ConfigLoader {
         QueryEnvVariable("MOBILEGL_TRACE_ANGLE_VARIANT", features.TraceAngleVariant, "");
 #endif
         features.DisableSubgroup = QueryEnvFlag("MOBILEGL_DISABLE_SUBGROUP");
+        features.AdvertiseFp64 = QueryEnvFlag("MOBILEGL_ADVERTISE_FP64");
         features.MagmaR11G11B10FFallback = QueryEnvFlag("MOBILEGL_MAGMA_R11G11B10F_FALLBACK");
         features.MagmaFramesInFlight = QueryEnvUint32("MOBILEGL_MAGMA_FRAMESINFLIGHT", 3, 1, 64);
         features.AvoidSamplerMipmapMinFilter =

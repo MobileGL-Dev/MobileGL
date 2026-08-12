@@ -46,6 +46,22 @@ namespace MobileGL::MG_Util::SelfTest {
             RankMobileGLReported = 5,
         };
 
+        // Both backends' fp64 rows end the same way, and the sentence they end with depends on
+        // a config flag rather than on anything either backend probes: the demotion is what
+        // makes doubles work, but GL_ARB_gpu_shader_fp64 promises the PRECISION the demotion
+        // cannot deliver, so the string is opt-in and the row has to say which way it went.
+        String AppendFp64AdvertisementNote(String detail) {
+            if (MG_Config::Features.AdvertiseFp64) {
+                return Move(detail) +
+                       ". GL_ARB_gpu_shader_fp64 IS advertised (MOBILEGL_ADVERTISE_FP64): an application "
+                       "that checks the string will believe it has 64-bit precision, and it does not";
+            }
+            return Move(detail) +
+                   ". GL_ARB_gpu_shader_fp64 is not advertised, because the precision it promises is the "
+                   "one thing the demotion cannot provide; set MOBILEGL_ADVERTISE_FP64=1 to advertise it "
+                   "anyway";
+        }
+
         struct ReportBuilder {
             BackendPostReport report;
             Bool fatalFailed = false;
@@ -484,14 +500,24 @@ namespace MobileGL::MG_Util::SelfTest {
                     break;
                 }
             }
-            // Reported rather than probed: this one cannot come out any other way. OpenGL ES has no
-            // double-precision vertex format and ESSL has no fp64 type, so there is no driver and no
-            // extension that could make it work - the row exists so the loss is named at startup
-            // instead of discovered as an unexplained GL_INVALID_OPERATION at draw setup.
+            // Both rows are reported rather than probed: neither can come out any other way.
+            // ESSL has no 64-bit float type at all, so no driver and no extension could change
+            // either answer, and the rows exist so the two halves of the loss are named at
+            // startup instead of discovered as a shader that will not compile or an
+            // unexplained GL_INVALID_OPERATION at draw setup.
+            builder.Pass("fp64", AppendFp64AdvertisementNote(
+                                     "demoted to fp32 - ESSL has no 64-bit float type, so every double / "
+                                     "dvec / dmat in a shader is narrowed to 32 bits before transpilation "
+                                     "(DemoteFloat64Pass). Such shaders COMPILE AND RUN, at single "
+                                     "precision; a block containing a double is re-laid-out for the "
+                                     "narrowed members, so an application that hard-codes std140 offsets "
+                                     "computed for doubles must query them instead"));
             builder.Warn("64-bit vertex attributes",
-                         "not supported on any GLES driver (ES has no GL_DOUBLE vertex format and ESSL has "
-                         "no fp64 type); glVertexAttribLFormat / glVertexArrayAttribLFormat report "
-                         "GL_INVALID_OPERATION - use the Vulkan backend if the application needs them");
+                         "not supported (ES has no GL_DOUBLE vertex format, and after the fp64 demotion "
+                         "above there is no 64-bit shader input left to feed either); "
+                         "glVertexAttribLFormat / glVertexArrayAttribLFormat report "
+                         "GL_INVALID_OPERATION - feed the attribute with glVertexAttribPointer(GL_FLOAT), "
+                         "which a demoted dvec input reads correctly");
             if (glesFuncs.glPatchParameteri != nullptr) {
                 builder.Pass("Tessellation patch parameters",
                              "glPatchParameteri present (GL_PATCH_VERTICES reaches the driver)");
@@ -1843,14 +1869,25 @@ namespace MobileGL::MG_Util::SelfTest {
                          "unsupported; a GL_TEXTURE_CUBE_MAP_ARRAY texture gets no image at all, so sampling "
                          "one reads nothing and glFramebufferTextureLayer on one is declined");
         }
-        if (features.shaderFloat64 == VK_TRUE) {
-            builder.Pass("shaderFloat64",
-                         "GLSL double/dvec/dmat and 64-bit vertex attributes (glVertexAttribLFormat) supported");
-        } else {
-            builder.Warn("shaderFloat64",
-                         "unsupported; any shader declaring a double fails to create a shader module, and "
-                         "glVertexAttribLFormat reports GL_INVALID_OPERATION instead of feeding the attribute");
-        }
+        // Reported whichever way the device answers, because MobileGL no longer follows the
+        // device here: every 64-bit float is narrowed to 32 bits before any module reaches this
+        // backend (DemoteFloat64Pass), so the Float64 capability is never declared and a device
+        // that HAS the feature gains nothing from it. The device's own answer is still worth
+        // printing - it is the reason the demotion is unconditional.
+        builder.Pass("fp64", AppendFp64AdvertisementNote(
+                                 format("demoted to fp32 (device shaderFloat64 = {}) - every double / dvec / "
+                                        "dmat in a shader is narrowed to 32 bits before pipeline creation, so "
+                                        "such shaders BUILD AND RUN at single precision on every device "
+                                        "instead of failing to create a shader module on the ones without the "
+                                        "feature. A block containing a double is re-laid-out for the narrowed "
+                                        "members, so an application that hard-codes std140 offsets computed "
+                                        "for doubles must query them instead",
+                                        features.shaderFloat64 == VK_TRUE ? "supported" : "unsupported")));
+        builder.Warn("64-bit vertex attributes",
+                     "not supported; there is no 64-bit shader input left to feed after the fp64 demotion "
+                     "above, and no VK_FORMAT_R64*_SFLOAT vertex fetch to feed it with on most devices "
+                     "anyway. glVertexAttribLFormat reports GL_INVALID_OPERATION - feed the attribute with "
+                     "glVertexAttribPointer(GL_FLOAT), which a demoted dvec input reads correctly");
 
         Bool shaderDrawParameters = false;
         if (vkGetPhysicalDeviceFeatures2Fn != nullptr && properties.apiVersion >= VK_API_VERSION_1_1) {

@@ -960,6 +960,15 @@ namespace MobileGL::MG_Backend::DirectGLES {
         if (MG_Util::Async::AsyncShaderCompileEnabled()) {
             extensions.push_back(E_GL_KHR_parallel_shader_compile);
         }
+        // GL_ARB_gpu_shader_fp64 is opt-in (MOBILEGL_ADVERTISE_FP64). Every `double` in a
+        // shader compiles and runs already - it is narrowed to 32 bits before the module
+        // reaches this backend - so an application that simply uses doubles needs nothing
+        // advertised. What the extension additionally promises is 64-bit PRECISION, which no
+        // mobile GPU has and the narrowing cannot fake, so advertising it by default would
+        // make an application that checks the string take a path MobileGL cannot honour.
+        if (MG_Config::Features.AdvertiseFp64) {
+            extensions.push_back(E_GL_ARB_gpu_shader_fp64);
+        }
         // Only advertised when the device driver actually has usable timer queries
         // (GL_EXT_disjoint_timer_query plus its entry points) and the
         // MOBILEGL_DISABLE_TIMERQUERY escape hatch is off.

@@ -850,7 +850,12 @@ namespace MobileGL::MG_Impl::GLImpl {
     // vector per column - while the value glGetUniform* must return is tightly packed
     // columns * rows floats. Only mat4 is the same either way; every other shape needs the
     // padding undone, and the readback has to undo exactly what UniformMatrixfv_Object put
-    // there. Returns false when `ttype` is not a float matrix (nothing to unpack).
+    // there. Returns false when there is nothing here to unpack.
+    //
+    // A DOUBLE matrix is declined not because it is laid out differently - it is not, the
+    // demotion makes a dmat4 a mat4 in the shader and a mat4-shaped slot here - but because it
+    // is ROUTED differently: the caller's component-by-component EbtDouble branch has to widen
+    // each float back to the queried type, and it undoes the same padding itself.
     Bool TryGatherFloatMatrixColumns(const glslang::TType* ttype, const char* pBase, void* params) {
         if (ttype == nullptr || !ttype->isMatrix() || ttype->getBasicType() == glslang::EbtDouble) return false;
         const Int columns = ttype->getMatrixCols();
@@ -909,7 +914,13 @@ namespace MobileGL::MG_Impl::GLImpl {
             }
 
             if (!TryGatherFloatMatrixColumns(ttype, pUBO + offset, params)) {
-                Memcpy(params, pUBO + offset, size);
+                // Never more than the uniform actually occupies. `size` is the GL type size,
+                // which for a `double` uniform is twice its storage - every 64-bit float is
+                // narrowed before the module reaches a backend, so the slot holds floats. The
+                // typed entry points (glGetUniformdv and friends) go through
+                // GetUniformScalar_State, which converts component by component; this raw
+                // copy has no type to convert with, so it is bounded rather than converted.
+                Memcpy(params, pUBO + offset, std::min<SizeT>(size, span));
             }
         }
         // TODO: handle 1i variant as texture unit
@@ -960,22 +971,27 @@ namespace MobileGL::MG_Impl::GLImpl {
             if (TryGatherFloatMatrixColumns(ttype, pUBO + offset, params)) return;
         }
 
-        // A double-precision uniform is the one case where the stored component type can
-        // differ from the queried one for a non-opaque uniform, and the difference is not
-        // just a reinterpretation: it is twice as wide, so a raw copy would overrun the
-        // caller's buffer as well as return nonsense. Read component by component and let
-        // GL's conversion rules (7.6: round to nearest for the integer queries) apply.
+        // A double-precision uniform is the one case where the stored component type differs
+        // from the DECLARED one for a non-opaque uniform: the shader's 64-bit floats are
+        // narrowed to 32 bits before the module reaches a backend
+        // (ShaderTranspiler::DemoteFloat64Pass), so what is in the global UBO is a float per
+        // component, laid out exactly like the float-typed twin of this uniform - std140
+        // 16-byte column stride for a matrix included. Reading it as a GLdouble would return
+        // two components reinterpreted as one. Read component by component and let GL's
+        // conversion rules (7.6: round to nearest for the integer queries) apply; the value
+        // widens back to the queried type, having lost precision at the glUniform*d that
+        // stored it and not here.
         if (ttype->getBasicType() == glslang::EbtDouble) {
             const Int columns = ttype->isMatrix() ? ttype->getMatrixCols() : 1;
             const Int rows = ttype->isMatrix() ? ttype->getMatrixRows()
                                                : (ttype->isVector() ? ttype->getVectorSize() : 1);
-            // The slot the linker handed out is exactly `columns` columns wide, so it also
-            // states the column stride - which for a double matrix is not a float's 16 bytes.
-            const SizeT columnStride = columns > 0 ? size / static_cast<SizeT>(columns) : size;
+            // std140 gives every matrix column its own 16-byte slot; a non-matrix is one
+            // tightly packed run and never reaches the stride at all.
+            const SizeT columnStride = 4 * sizeof(GLfloat);
             for (Int column = 0; column < columns; ++column) {
                 for (Int row = 0; row < rows; ++row) {
-                    GLdouble component = 0.0;
-                    Memcpy(&component, pUBO + offset + column * columnStride + row * sizeof(GLdouble),
+                    GLfloat component = 0.0f;
+                    Memcpy(&component, pUBO + offset + column * columnStride + row * sizeof(GLfloat),
                            sizeof(component));
                     if constexpr (std::is_integral_v<T>) {
                         // Rounded to the nearest integer and clamped into the queried type's
@@ -1248,36 +1264,39 @@ namespace MobileGL::MG_Impl::GLImpl {
         }
     }
 
-    // glUniform*d / glUniformMatrix*dv. The vector forms need nothing beyond the shared
-    // upload template - it is already typed on the component - but a matrix does: the
-    // column stride the linker used for a double matrix is not the 16 bytes a float one
-    // gets. It is not guessed here; the slot the uniform was given is exactly `columns`
-    // columns wide, so dividing states the stride the rest of the pipeline agreed on.
-    template <typename Program>
-    void UniformMatrixdv_Object(Program& programObject, GLint location, GLsizei count, GLboolean transpose,
-                                const GLdouble* value, Int columns, Int rows) {
-        const SizeT slotSize = programObject.GetUniformSizesInBytes(location);
-        const SizeT columnStride = columns > 0 ? slotSize / static_cast<SizeT>(columns) : slotSize;
-        const SizeT componentCount = static_cast<SizeT>(columns) * static_cast<SizeT>(rows);
-        Vector<GLdouble> column(static_cast<SizeT>(rows));
-        for (GLint matrix = 0; matrix < count; ++matrix) {
-            if (matrix > 0 && !programObject.UniformLocationsAliasSameUniform(location, location + matrix)) break;
-            if (!programObject.IsValidUniformLocation(location + matrix)) {
-                RecordInvalidUniformLocationError(__func__, location + matrix, "the current program object");
-                return;
-            }
-            const GLdouble* source = value + matrix * componentCount;
-            for (Int c = 0; c < columns; ++c) {
-                for (Int r = 0; r < rows; ++r) {
-                    column[r] = transpose == GL_TRUE ? source[r * columns + c] : source[c * rows + r];
-                }
-                Uniform_State<1>(programObject, location + matrix, column.data(), c * columnStride);
-                for (Int r = 1; r < rows; ++r) {
-                    Uniform_State<1>(programObject, location + matrix, column.data() + r,
-                                     c * columnStride + r * sizeof(GLdouble));
-                }
-            }
+    // glUniform*d / glUniformMatrix*dv. Neither needs a layout of its own any more: the
+    // transpile chain narrows every 64-bit float in the shader to 32 bits
+    // (ShaderTranspiler::DemoteFloat64Pass) and the global UBO is laid out by reflecting that
+    // demoted module, so a double uniform's storage IS a float uniform's - same offset, same
+    // 4-byte components, same std140 column padding for matrices. Narrowing here, at the one
+    // place the 64-bit value enters, and then handing the bytes to the ordinary float upload
+    // path is what keeps the two in step; a separate double-shaped layout here would write
+    // 8-byte components into 4-byte slots and silently address the wrong ones.
+    //
+    // The narrowing is the same static_cast the shader's own arithmetic now performs, so the
+    // value the shader reads is the value glUniform*d was given, at float precision.
+    template <GLsizei ItemCount>
+    void UniformvNarrowed_State(GLint location, GLsizei count, const GLdouble* value) {
+        if (value == nullptr || count <= 0) {
+            // Same shape as the float entry points: the location validation still runs, and a
+            // null pointer is left to fault exactly where glUniform*fv would.
+            Uniformv_State<ItemCount>(location, count, reinterpret_cast<const GLfloat*>(value));
+            return;
         }
+        Vector<GLfloat> narrowed(static_cast<SizeT>(count) * ItemCount);
+        for (SizeT i = 0; i < narrowed.size(); ++i) narrowed[i] = static_cast<GLfloat>(value[i]);
+        Uniformv_State<ItemCount>(location, count, narrowed.data());
+    }
+
+    template <GLsizei ItemCount>
+    void ProgramUniformvNarrowed_State(GLuint program, GLint location, GLsizei count, const GLdouble* value) {
+        if (value == nullptr || count <= 0) {
+            ProgramUniformv_State<ItemCount>(program, location, count, reinterpret_cast<const GLfloat*>(value));
+            return;
+        }
+        Vector<GLfloat> narrowed(static_cast<SizeT>(count) * ItemCount);
+        for (SizeT i = 0; i < narrowed.size(); ++i) narrowed[i] = static_cast<GLfloat>(value[i]);
+        ProgramUniformv_State<ItemCount>(program, location, count, narrowed.data());
     }
 
     // glUniformMatrix*fv / glProgramUniformMatrix*fv, every shape (square and non-square).
@@ -1324,6 +1343,22 @@ namespace MobileGL::MG_Impl::GLImpl {
                 }
             }
         }
+    }
+
+    // glUniformMatrix*dv / glProgramUniformMatrix*dv. Narrowed to the float form and handed
+    // straight to it: after DemoteFloat64Pass a `dmat4` uniform is a `mat4` in the shader and a
+    // mat4-shaped slot in the global UBO, columns padded to a vec4 and all. Everything else
+    // about the call - transpose handling, the array-element walk, the opaque-uniform refusal -
+    // is then the one implementation both spellings share.
+    template <typename Program>
+    void UniformMatrixdv_Object(Program& programObject, GLint location, GLsizei count, GLboolean transpose,
+                                const GLdouble* value, Int columns, Int rows) {
+        if (value == nullptr || count <= 0) return;
+        const SizeT componentCount = static_cast<SizeT>(columns) * static_cast<SizeT>(rows);
+        Vector<GLfloat> narrowed(static_cast<SizeT>(count) * componentCount);
+        for (SizeT i = 0; i < narrowed.size(); ++i) narrowed[i] = static_cast<GLfloat>(value[i]);
+        UniformMatrixfv_Object(programObject, "glUniformMatrixdv", location, count, transpose, narrowed.data(),
+                               columns, rows, "the current program object");
     }
 
     // Helper function to transpose a 2x2 matrix
@@ -2089,71 +2124,71 @@ namespace MobileGL::MG_Impl::GLImpl {
     }
     void Uniform1d(GLint location, GLdouble v0) {
         const GLdouble v[] = {v0};
-        Uniformv_State<1>(location, 1, v);
+        UniformvNarrowed_State<1>(location, 1, v);
     }
 
     void Uniform1dv(GLint location, GLsizei count, const GLdouble* value) {
-        Uniformv_State<1>(location, count, value);
+        UniformvNarrowed_State<1>(location, count, value);
     }
 
     void ProgramUniform1d(GLuint program, GLint location, GLdouble v0) {
         const GLdouble v[] = {v0};
-        ProgramUniformv_State<1>(program, location, 1, v);
+        ProgramUniformvNarrowed_State<1>(program, location, 1, v);
     }
 
     void ProgramUniform1dv(GLuint program, GLint location, GLsizei count, const GLdouble* value) {
-        ProgramUniformv_State<1>(program, location, count, value);
+        ProgramUniformvNarrowed_State<1>(program, location, count, value);
     }
     void Uniform2d(GLint location, GLdouble v0, GLdouble v1) {
         const GLdouble v[] = {v0, v1};
-        Uniformv_State<2>(location, 1, v);
+        UniformvNarrowed_State<2>(location, 1, v);
     }
 
     void Uniform2dv(GLint location, GLsizei count, const GLdouble* value) {
-        Uniformv_State<2>(location, count, value);
+        UniformvNarrowed_State<2>(location, count, value);
     }
 
     void ProgramUniform2d(GLuint program, GLint location, GLdouble v0, GLdouble v1) {
         const GLdouble v[] = {v0, v1};
-        ProgramUniformv_State<2>(program, location, 1, v);
+        ProgramUniformvNarrowed_State<2>(program, location, 1, v);
     }
 
     void ProgramUniform2dv(GLuint program, GLint location, GLsizei count, const GLdouble* value) {
-        ProgramUniformv_State<2>(program, location, count, value);
+        ProgramUniformvNarrowed_State<2>(program, location, count, value);
     }
     void Uniform3d(GLint location, GLdouble v0, GLdouble v1, GLdouble v2) {
         const GLdouble v[] = {v0, v1, v2};
-        Uniformv_State<3>(location, 1, v);
+        UniformvNarrowed_State<3>(location, 1, v);
     }
 
     void Uniform3dv(GLint location, GLsizei count, const GLdouble* value) {
-        Uniformv_State<3>(location, count, value);
+        UniformvNarrowed_State<3>(location, count, value);
     }
 
     void ProgramUniform3d(GLuint program, GLint location, GLdouble v0, GLdouble v1, GLdouble v2) {
         const GLdouble v[] = {v0, v1, v2};
-        ProgramUniformv_State<3>(program, location, 1, v);
+        ProgramUniformvNarrowed_State<3>(program, location, 1, v);
     }
 
     void ProgramUniform3dv(GLuint program, GLint location, GLsizei count, const GLdouble* value) {
-        ProgramUniformv_State<3>(program, location, count, value);
+        ProgramUniformvNarrowed_State<3>(program, location, count, value);
     }
     void Uniform4d(GLint location, GLdouble v0, GLdouble v1, GLdouble v2, GLdouble v3) {
         const GLdouble v[] = {v0, v1, v2, v3};
-        Uniformv_State<4>(location, 1, v);
+        UniformvNarrowed_State<4>(location, 1, v);
     }
 
     void Uniform4dv(GLint location, GLsizei count, const GLdouble* value) {
-        Uniformv_State<4>(location, count, value);
+        UniformvNarrowed_State<4>(location, count, value);
     }
 
     void ProgramUniform4d(GLuint program, GLint location, GLdouble v0, GLdouble v1, GLdouble v2, GLdouble v3) {
         const GLdouble v[] = {v0, v1, v2, v3};
-        ProgramUniformv_State<4>(program, location, 1, v);
+        ProgramUniformvNarrowed_State<4>(program, location, 1, v);
     }
 
     void ProgramUniform4dv(GLuint program, GLint location, GLsizei count, const GLdouble* value) {
-        ProgramUniformv_State<4>(program, location, count, value);
+        ProgramUniformvNarrowed_State<4>(program, location, count, value);
     }
     void UniformMatrix2dv(GLint location, GLsizei count, GLboolean transpose, const GLdouble* value) {
         if (location == -1) return;

@@ -539,6 +539,15 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         if (MG_Util::Async::AsyncShaderCompileEnabled()) {
             extensions.push_back(E_GL_KHR_parallel_shader_compile);
         }
+        // GL_ARB_gpu_shader_fp64 is opt-in (MOBILEGL_ADVERTISE_FP64). Every `double` in a
+        // shader compiles and runs already - it is narrowed to 32 bits before the module
+        // reaches this backend - so an application that simply uses doubles needs nothing
+        // advertised. What the extension additionally promises is 64-bit PRECISION, which no
+        // mobile GPU has and the narrowing cannot fake, so advertising it by default would
+        // make an application that checks the string take a path MobileGL cannot honour.
+        if (MG_Config::Features.AdvertiseFp64) {
+            extensions.push_back(E_GL_ARB_gpu_shader_fp64);
+        }
         // GL_ARB_timer_query gates MC's F3 GPU% (LWJGL checks the extension string);
         // only advertised when the device actually supports timestamp queries and the
         // MOBILEGL_DISABLE_TIMERQUERY escape hatch is off.
@@ -877,7 +886,27 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                     DynParams::PerLayerFramebufferAttachmentBit(TextureTarget::TextureCubeMapArray);
             }
         }
-        m_dynamicParameters.SupportsFloat64VertexAttributes = m_vulkanCaps.SupportsShaderFloat64;
+        // Never, on any device, and no longer for the reason it used to be. It used to track
+        // shaderFloat64 because a `dvec3` input needed the Float64 capability to exist in the
+        // module at all; a 64-bit vertex FETCH was already impossible (VK_FORMAT_R64*_SFLOAT is
+        // optional and lavapipe reports zero bufferFeatures for all four), so the attribute
+        // arrived as its 32-bit word pair and PackDoubleVertexInputsPass bitcast it back.
+        //
+        // The shader half of that is gone: every 64-bit float is narrowed before any module
+        // reaches a backend (ShaderTranspiler::DemoteFloat64Pass), so there is no `double` input
+        // left to bitcast INTO, and feeding a UINT-formatted attribute to what is now a `float`
+        // input would be silent garbage. Reconstructing the value would mean decoding the
+        // IEEE-754 double bit pattern in the shader - software fp64, which is precisely what the
+        // demotion exists to avoid - and on Espryt it would additionally need the ES driver to
+        // fetch 2N uint components where the application declared N doubles, which a dvec3 or
+        // dvec4 cannot even express within one attribute location.
+        //
+        // So glVertexAttribLFormat / glVertexAttribLPointer are declined here exactly as they
+        // already were on Espryt and on every real mobile device (Adreno and Mali both report
+        // shaderFloat64 == VK_FALSE), and for the same visible reason. A `dvec3` INPUT still
+        // compiles and draws - it is a `vec3` after demotion - as long as the application feeds
+        // it with glVertexAttribPointer(GL_FLOAT) rather than 64-bit data.
+        m_dynamicParameters.SupportsFloat64VertexAttributes = false;
         m_dynamicParameters.MaxShaderStorageBlockSize =
             std::min(m_vulkanCaps.MaxShaderStorageBlockSize, kMaxAdvertisedShaderStorageBlockSize);
         if (m_vulkanCaps.SupportsShaderSubgroup) {
