@@ -51,6 +51,15 @@ namespace MobileGL::MG_Impl::GLImpl {
         constexpr GLint kFrontendMaxTessControlAtomicCounters = 0;
         constexpr GLint kFrontendMaxTessEvaluationAtomicCounters = 0;
         constexpr GLint kFrontendMaxVertexAtomicCounters = 0;
+        // Zero counters means zero buffers to hold them. These have to be ANSWERED rather than
+        // left to the default INVALID_ENUM: a well-behaved application queries the limit exactly
+        // to find out that the stage cannot do this, and an error instead both leaves its output
+        // untouched (so it reads uninitialised memory and may conclude the opposite) and leaves a
+        // GL error pending that surfaces at whatever unrelated call checks next.
+        constexpr GLint kFrontendMaxGeometryAtomicCounterBuffers = 0;
+        constexpr GLint kFrontendMaxTessControlAtomicCounterBuffers = 0;
+        constexpr GLint kFrontendMaxTessEvaluationAtomicCounterBuffers = 0;
+        constexpr GLint kFrontendMaxVertexAtomicCounterBuffers = 0;
         // One atomic counter is a uint, and a buffer never has to hold more counters than the
         // combined limit the frontend advertises. GL 4.6 table 23.63 floors this at 32 bytes.
         constexpr GLint kFrontendMaxAtomicCounterBufferSize =
@@ -1458,6 +1467,9 @@ namespace MobileGL::MG_Impl::GLImpl {
         case GL_MAX_GEOMETRY_ATOMIC_COUNTERS:
             *params = kFrontendMaxGeometryAtomicCounters;
             return;
+        case GL_MAX_GEOMETRY_ATOMIC_COUNTER_BUFFERS:
+            *params = kFrontendMaxGeometryAtomicCounterBuffers;
+            return;
         case GL_MAX_GEOMETRY_SHADER_STORAGE_BLOCKS:
             *params = ClampStorageBlockCount(16); // TODO
             return;
@@ -1514,8 +1526,14 @@ namespace MobileGL::MG_Impl::GLImpl {
         case GL_MAX_TESS_CONTROL_ATOMIC_COUNTERS:
             *params = kFrontendMaxTessControlAtomicCounters;
             return;
+        case GL_MAX_TESS_CONTROL_ATOMIC_COUNTER_BUFFERS:
+            *params = kFrontendMaxTessControlAtomicCounterBuffers;
+            return;
         case GL_MAX_TESS_EVALUATION_ATOMIC_COUNTERS:
             *params = kFrontendMaxTessEvaluationAtomicCounters;
+            return;
+        case GL_MAX_TESS_EVALUATION_ATOMIC_COUNTER_BUFFERS:
+            *params = kFrontendMaxTessEvaluationAtomicCounterBuffers;
             return;
         case GL_MAX_TESS_CONTROL_IMAGE_UNIFORMS:
             *params = 0;
@@ -1543,6 +1561,9 @@ namespace MobileGL::MG_Impl::GLImpl {
             return;
         case GL_MAX_VERTEX_ATOMIC_COUNTERS:
             *params = kFrontendMaxVertexAtomicCounters;
+            return;
+        case GL_MAX_VERTEX_ATOMIC_COUNTER_BUFFERS:
+            *params = kFrontendMaxVertexAtomicCounterBuffers;
             return;
         case GL_MAX_VERTEX_IMAGE_UNIFORMS:
             *params = MG_Backend::pActiveBackendObject

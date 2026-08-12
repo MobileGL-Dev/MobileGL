@@ -1490,6 +1490,34 @@ namespace MobileGL::MG_Backend::DirectGLES {
                    g_GLESFuncs.glVertexBindingDivisor != nullptr;
         }
 
+        // Draw state, not VAO state: set by the baseInstance draw entry points around
+        // PrepareForDraw and back to zero as soon as the draw is issued.
+        Uint32 g_pendingFetchBaseInstance = 0;
+
+        void SetPendingFetchBaseInstance(Uint32 baseInstance) {
+            g_pendingFetchBaseInstance = baseInstance;
+        }
+
+        Uint32 GetPendingFetchBaseInstance() {
+            return g_pendingFetchBaseInstance;
+        }
+
+        // The "+ baseInstance" of GL's instanced-array element index, expressed as a byte shift
+        // of the array's own offset. Only divisor'd arrays step per instance, so only they move.
+        //
+        // baseInstance is added to the ELEMENT index, not to instance/divisor - the divisor
+        // therefore does not appear here, and the shift is a whole number of strides.
+        //
+        // A resolved stride of zero is the binding model's "never advance" (see
+        // VertexAttribute::Stride), so such an array reads the same element for every instance
+        // and a baseInstance cannot move it. The arithmetic already yields zero for that case.
+        inline SizeT BaseInstanceByteShift(const MG_State::GLState::VertexAttribute& attrib, Uint32 baseInstance) {
+            if (baseInstance == 0 || attrib.Divisor == 0) {
+                return 0;
+            }
+            return static_cast<SizeT>(baseInstance) * static_cast<SizeT>(attrib.Stride);
+        }
+
         // Declares one attribute through the ES binding-point API, the only spelling that can
         // carry a stride of zero. Returns false when the attribute has no usable buffer, in
         // which case nothing was emitted.
@@ -1547,7 +1575,16 @@ namespace MobileGL::MG_Backend::DirectGLES {
             const Uint16 currentIndexBufferVersion = stateVAOObject->GetIndexBufferBindingSlot().GetVersion();
             const Bool attributesDirty = !m_hasSyncedConfigVersion || m_syncedConfigVersion != currentConfigVersion;
             const Bool indexBufferDirty = currentIndexBufferVersion != m_syncedIndexBufferVersion;
-            if (!attributesDirty && !indexBufferDirty) {
+
+            // The baseInstance shift lives in the attribute offsets the driver already holds, so
+            // a change of baseInstance has to re-emit the divisor'd arrays even when the frontend
+            // config version says nothing moved - and equally has to un-shift them for the next
+            // draw that carries no baseInstance. Resting state is 0 on both sides, so a program
+            // that never calls a *BaseInstance entry point never pays for this compare.
+            const Uint32 fetchBaseInstance = g_pendingFetchBaseInstance;
+            const Bool baseInstanceDirty = m_syncedFetchBaseInstance != fetchBaseInstance;
+            const Bool emitAttributes = attributesDirty || baseInstanceDirty;
+            if (!emitAttributes && !indexBufferDirty) {
                 return;
             }
 
@@ -1555,8 +1592,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
             const auto& allAttributeVersions = stateVAOObject->GetAllAttributeVersions();
             const auto& allAttributes = stateVAOObject->GetAllAttributes();
-            for (Uint attribIndex = 0; attribIndex < allAttributes.size() && attributesDirty; ++attribIndex) {
+            for (Uint attribIndex = 0; attribIndex < allAttributes.size() && emitAttributes; ++attribIndex) {
                 const auto& attrib = allAttributes[attribIndex];
+                // Only the divisor'd arrays carry the shift, and only an enabled one is worth
+                // re-emitting - a disabled array has no pointer the draw could fetch through,
+                // and may well have no buffer to bind either.
+                const Bool needsSyncBaseInstance = baseInstanceDirty && attrib.Enabled && attrib.Divisor != 0;
                 Bool needsSyncSwitch = allAttributeVersions[attribIndex].SwitchVersion !=
                                        m_syncedAttributeVersions[attribIndex].SwitchVersion;
                 if (needsSyncSwitch) {
@@ -1571,7 +1612,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                        m_syncedAttributeVersions[attribIndex].FormatVersion;
                 Bool needsSyncBuffer = allAttributeVersions[attribIndex].BufferVersion !=
                                        m_syncedAttributeVersions[attribIndex].BufferVersion;
-                if (!needsSyncFormat && !needsSyncBuffer) continue;
+                if (!needsSyncFormat && !needsSyncBuffer && !needsSyncBaseInstance) continue;
 
                 // Defence in depth. The frontend already declines glVertexAttribLFormat on this
                 // backend (SupportsFloat64VertexAttributes is false - ES has no GL_DOUBLE vertex
@@ -1611,6 +1652,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     if (!SyncZeroStrideAttribute(attribIndex, attrib)) {
                         continue;
                     }
+                    // No BaseInstanceByteShift here on purpose: a zero stride never advances, so
+                    // the shift is zero by construction and adding it would only obscure that.
                     if (needsSyncFormat) {
                         g_GLESFuncs.glVertexBindingDivisor(attribIndex, attrib.Divisor);
                     }
@@ -1641,16 +1684,18 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     } // start from a clean slate so the check below is about THIS call
                 }
 
+                const SizeT fetchOffset = attrib.Offset + BaseInstanceByteShift(attrib, fetchBaseInstance);
+
                 if (!attrib.IsInteger) {
                     // GL_BGRA is passed to the driver as the size argument (the driver reorders BGRA).
                     const GLint glSize = attrib.IsBgra ? static_cast<GLint>(GL_BGRA) : attrib.Size;
                     g_GLESFuncs.glVertexAttribPointer(
                         attribIndex, glSize, MG_Util::ConvertDataTypeToGLEnum(attrib.Type),
-                        attrib.Normalized ? GL_TRUE : GL_FALSE, attrib.Stride, (const void*)attrib.Offset);
+                        attrib.Normalized ? GL_TRUE : GL_FALSE, attrib.Stride, (const void*)fetchOffset);
                 } else {
                     g_GLESFuncs.glVertexAttribIPointer(attribIndex, attrib.Size,
                                                        MG_Util::ConvertDataTypeToGLEnum(attrib.Type), attrib.Stride,
-                                                       (const void*)attrib.Offset);
+                                                       (const void*)fetchOffset);
                 }
 
                 if (formatMayBeRefused && g_GLESFuncs.glGetError() != GL_NO_ERROR) {
@@ -1693,6 +1738,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 m_syncedAttributeVersions = allAttributeVersions;
                 m_syncedConfigVersion = currentConfigVersion;
                 m_hasSyncedConfigVersion = true;
+            }
+            if (emitAttributes) {
+                m_syncedFetchBaseInstance = fetchBaseInstance;
             }
         }
 

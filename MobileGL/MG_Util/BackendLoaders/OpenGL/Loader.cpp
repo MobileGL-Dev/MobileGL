@@ -540,6 +540,10 @@ namespace MobileGL::MG_Util::BackendLoader {
             INIT_GLES_FUNC_OPTIONAL(glMultiDrawArraysIndirectEXT)
             INIT_GLES_FUNC_OPTIONAL(glMultiDrawElementsIndirectEXT)
             INIT_GLES_FUNC_OPTIONAL(glMultiDrawElementsBaseVertexEXT)
+
+            INIT_GLES_FUNC_OPTIONAL(glDrawArraysInstancedBaseInstanceEXT)
+            INIT_GLES_FUNC_OPTIONAL(glDrawElementsInstancedBaseInstanceEXT)
+            INIT_GLES_FUNC_OPTIONAL(glDrawElementsInstancedBaseVertexBaseInstanceEXT)
         }
     }
 
@@ -851,6 +855,9 @@ namespace MobileGL::MG_Util::BackendLoader {
         // Resolved into caps.TextureBufferSupport below, once the ES version is also known.
         Bool hasExtTextureBuffer = false;
         Bool hasOesTextureBuffer = false;
+        // Combined with the three entry points below; DirectGLES emulates baseInstance when this
+        // comes out false, so a stub pointer counting as support would silently break the draws.
+        Bool hasBaseInstanceExtension = false;
         for (GLint i = 0; i < extCount; ++i) {
             const char* extension = (const char*)glesFuncs.glGetStringi(GL_EXTENSIONS, i);
             if (extension) {
@@ -891,7 +898,7 @@ namespace MobileGL::MG_Util::BackendLoader {
                     hasOesTextureBuffer = true;
                 }
                 if (std::strcmp(extension, "GL_EXT_base_instance") == 0) {
-                    caps.SupportsBaseInstance = true;
+                    hasBaseInstanceExtension = true;
                 }
                 if (std::strcmp(extension, "GL_EXT_disjoint_timer_query") == 0) {
                     caps.SupportsDisjointTimerQuery = true;
@@ -929,6 +936,12 @@ namespace MobileGL::MG_Util::BackendLoader {
         caps.SupportsMultiDrawElementsBaseVertex = hasDrawElementsBaseVertexExtension &&
                                                    hasMultiDrawArraysExtension &&
                                                    glesFuncs.glMultiDrawElementsBaseVertexEXT != nullptr;
+        // All three, not any: DirectGLES picks native-vs-emulated once per draw entry point off
+        // this single flag, so a driver that resolved only some of them must count as absent.
+        caps.SupportsBaseInstance = hasBaseInstanceExtension &&
+                                    glesFuncs.glDrawArraysInstancedBaseInstanceEXT != nullptr &&
+                                    glesFuncs.glDrawElementsInstancedBaseInstanceEXT != nullptr &&
+                                    glesFuncs.glDrawElementsInstancedBaseVertexBaseInstanceEXT != nullptr;
         // Core from ES 3.2 on, so an extension string is not required there; below 3.2 the
         // extension is, and the pointer still has to have resolved either way.
         const Bool esAtLeast32 = caps.GLESVersion.Major > 3 ||
@@ -963,6 +976,8 @@ namespace MobileGL::MG_Util::BackendLoader {
         MGLOG_I("    draw elements base vertex (ES 3.2 core or EXT/OES_draw_elements_base_vertex): %s",
                 caps.SupportsDrawElementsBaseVertex ? "yes" : "no");
         MGLOG_I("    compute shaders (ES 3.1 core): %s", caps.SupportsComputeShader ? "yes" : "no");
+        MGLOG_I("    base instance (EXT_base_instance; emulated by attribute offsets when absent): %s",
+                caps.SupportsBaseInstance ? "yes" : "no");
 
         MGLOG_I("OpenGL ES capabilities:");
         glesFuncs.glGetIntegerv(GL_UNIFORM_BUFFER_OFFSET_ALIGNMENT, &caps.UniformBufferOffsetAlignment);

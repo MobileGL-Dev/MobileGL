@@ -466,6 +466,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
             Uint32 m_syncedConfigVersion = 0;
             Array<MG_State::GLState::VertexAttributeVersion, MG_State::GLState::VertexArrayObject::MAX_VERTEX_ATTRIBS>
                 m_syncedAttributeVersions;
+            // Byte shift currently baked into the instanced arrays' offsets by the baseInstance
+            // emulation (see SetPendingFetchBaseInstance). It is draw state, not VAO state, so it
+            // is deliberately NOT covered by the config version: the frontend never bumps for it.
+            // Kept here because it describes what was last EMITTED, which is what the next sync
+            // has to correct.
+            Uint32 m_syncedFetchBaseInstance = 0;
         };
 
         extern StateBackendObjectRegistry<MG_State::GLState::VertexArrayObject, BackendVertexArrayObject>
@@ -479,6 +485,23 @@ namespace MobileGL::MG_Backend::DirectGLES {
         void InvalidateVAOBindingCache();
         // ES resets the binding to 0 when the currently bound VAO is deleted.
         void NoteVAOIdDeleted(Uint id);
+
+        // baseInstance emulation for drivers without GL_EXT_base_instance. GL fetches an
+        // instanced array at element "floor(instance / divisor) + baseInstance", and ES has no
+        // way to say the "+ baseInstance" part - so it is folded into the attribute's own byte
+        // offset (baseInstance * stride) for every divisor'd array, which is exactly equivalent.
+        // Must be set BEFORE PrepareForDraw so the VAO sync sees it, and cleared after the draw
+        // so the next one refetches from element 0; ScopedFetchBaseInstance does both.
+        void SetPendingFetchBaseInstance(Uint32 baseInstance);
+        Uint32 GetPendingFetchBaseInstance();
+
+        class ScopedFetchBaseInstance {
+        public:
+            explicit ScopedFetchBaseInstance(Uint32 baseInstance) { SetPendingFetchBaseInstance(baseInstance); }
+            ~ScopedFetchBaseInstance() { SetPendingFetchBaseInstance(0); }
+            ScopedFetchBaseInstance(const ScopedFetchBaseInstance&) = delete;
+            ScopedFetchBaseInstance& operator=(const ScopedFetchBaseInstance&) = delete;
+        };
     } // namespace VertexArrayImpl
 
     namespace TextureImpl {

@@ -620,6 +620,34 @@ namespace MobileGL::MG_Impl::GLImpl {
         return std::max(MG_Backend::pActiveBackendObject->GetDynamicParameters().MaxSamples, 1);
     }
 
+    // GL_MAX_SAMPLES is the ceiling over all formats; an integer format has its own, lower
+    // one (GL_MAX_INTEGER_SAMPLES) and GL 4.6 core 9.2.4 makes exceeding it INVALID_OPERATION.
+    // The multisample TEXTURE path already resolves the limit per format
+    // (GL_Texture.cpp, GetMaxTextureSamplesForFormat); renderbuffers only ever compared
+    // against GL_MAX_SAMPLES, so on a driver where the two differ - Adreno reports
+    // GL_MAX_SAMPLES 4 and GL_MAX_INTEGER_SAMPLES 1 - an integer renderbuffer accepted a
+    // sample count the format cannot deliver, and said GL_NO_ERROR about it.
+    Int GetMaxRenderbufferSamplesForFormat_State(TextureInternalFormat format) {
+        if (MG_Backend::pActiveBackendObject == nullptr) {
+            return std::numeric_limits<Int>::max();
+        }
+        const auto& dynamicParameters = MG_Backend::pActiveBackendObject->GetDynamicParameters();
+
+        GLenum normalizedInternalFormat = MG_Util::ConvertTextureInternalFormatToGLEnum(format);
+        GLenum normalizedFormat = GL_RGBA;
+        GLenum normalizedType = GL_UNSIGNED_BYTE;
+        MG_Util::TextureFormatProcessor::NormalizePixelFormat(normalizedInternalFormat,
+                                                              PixelFormatNormalizeOptionBit::None,
+                                                              &normalizedInternalFormat, &normalizedFormat,
+                                                              &normalizedType);
+        const Bool isIntegerFormat = normalizedFormat == GL_RED_INTEGER || normalizedFormat == GL_RG_INTEGER ||
+                                     normalizedFormat == GL_RGB_INTEGER || normalizedFormat == GL_RGBA_INTEGER;
+        if (!isIntegerFormat) {
+            return GetMaxRenderbufferSamples_State();
+        }
+        return std::max(dynamicParameters.MaxIntegerSamples, 1);
+    }
+
     Bool ValidateRenderbufferStorageSize_State(GLsizei width, GLsizei height, const char* caller) {
         if (width < 0 || height < 0) {
             MG_State::pGLContext->RecordError(
@@ -641,7 +669,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         return true;
     }
 
-    Bool ValidateRenderbufferStorageSamples_State(GLsizei samples, const char* caller) {
+    Bool ValidateRenderbufferStorageSamples_State(GLsizei samples, TextureInternalFormat format, const char* caller) {
         if (samples < 0) {
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidValue,
@@ -649,9 +677,10 @@ namespace MobileGL::MG_Impl::GLImpl {
             return false;
         }
 
-        const Int maxSamples = GetMaxRenderbufferSamples_State();
+        // TODO: Resolve the remaining per-internalformat renderbuffer sample limits once
+        // glGetInternalformativ is backed; integer formats are handled below.
+        const Int maxSamples = GetMaxRenderbufferSamplesForFormat_State(format);
         if (samples > maxSamples) {
-            // TODO: Use per-internalformat renderbuffer sample limits once glGetInternalformativ is backed.
             // GL 4.6 core 9.2.4 makes asking for more samples than the format supports
             // INVALID_OPERATION, not INVALID_VALUE - the count is well formed, this format just
             // cannot deliver it. Only a negative count is INVALID_VALUE.
@@ -659,7 +688,7 @@ namespace MobileGL::MG_Impl::GLImpl {
                 ErrorCode::InvalidOperation,
                 MakeUnique<GenericErrorInfo>(
                     "MG_Impl/GLImpl", caller,
-                    std::format("Sample count {} exceeds GL_MAX_SAMPLES ({}).", samples, maxSamples)));
+                    std::format("Sample count {} exceeds this format's sample limit ({}).", samples, maxSamples)));
             return false;
         }
         return true;
@@ -684,7 +713,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         TextureInternalFormat format = MG_Util::ConvertGLEnumToTextureInternalFormat(internalformat);
         if (!TextureImpl::ValidateTextureInternalFormat(format)) return;
 
-        if (!ValidateRenderbufferStorageSamples_State(samples, kCaller)) return;
+        if (!ValidateRenderbufferStorageSamples_State(samples, format, kCaller)) return;
         if (!ValidateRenderbufferStorageSize_State(width, height, kCaller)) return;
 
         renderbufferObject->AllocateStorage({width, height});
@@ -931,7 +960,8 @@ namespace MobileGL::MG_Impl::GLImpl {
 
         TextureInternalFormat format = MG_Util::ConvertGLEnumToTextureInternalFormat(internalformat);
         if (!TextureImpl::ValidateTextureInternalFormat(format)) return;
-        if (!ValidateRenderbufferStorageSamples_State(samples, "NamedRenderbufferStorageMultisample_State")) return;
+        if (!ValidateRenderbufferStorageSamples_State(samples, format, "NamedRenderbufferStorageMultisample_State"))
+            return;
         if (!ValidateRenderbufferStorageSize_State(width, height, "NamedRenderbufferStorageMultisample_State")) return;
 
         renderbufferObject->AllocateStorage({width, height});

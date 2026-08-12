@@ -136,6 +136,48 @@ void main() {
             return data;
         }
 
+        // As CapturePoints, but through the baseInstance entry point, and on a capture buffer
+        // of its own.
+        //
+        // Kept separate from CapturePoints rather than defaulting a parameter, for two
+        // reasons. Every existing caller stays on the draw command that carries no
+        // baseInstance at all, so the negative control is a DIFFERENT command rather than
+        // the same one passed a zero. And baseInstance is the first thing here that needs
+        // several captures in ONE test, which the shared helper cannot currently do: a
+        // second capture into the same buffer object comes back empty on DirectVulkan
+        // (respecifying a buffer that is bound to a transform-feedback binding point does
+        // not reach that binding - reproduced with two plain CapturePoints calls, so it is
+        // neither about baseInstance nor about this helper). A fresh buffer per capture
+        // sidesteps it; without that, this scenario would be pinning that bug instead.
+        std::vector<float> CaptureOwnBufferBaseInstance(GLuint program, int vertexCount, int instanceCount,
+                                                        GLuint baseInstance, bool useBaseInstanceCommand) {
+            const std::size_t floats = static_cast<std::size_t>(vertexCount) * instanceCount * 16;
+            std::vector<float> poison(floats, kPoison);
+            GLuint xfbBuffer = 0;
+            glGenBuffers(1, &xfbBuffer);
+            glBindBufferBase(GL_TRANSFORM_FEEDBACK_BUFFER, 0, xfbBuffer);
+            glBufferData(GL_TRANSFORM_FEEDBACK_BUFFER, static_cast<GLsizeiptr>(floats * sizeof(float)), poison.data(),
+                         GL_DYNAMIC_DRAW);
+
+            glEnable(GL_RASTERIZER_DISCARD);
+            glUseProgram(program);
+            glBeginTransformFeedback(GL_POINTS);
+            if (useBaseInstanceCommand) {
+                glDrawArraysInstancedBaseInstance(GL_POINTS, 0, vertexCount, instanceCount, baseInstance);
+            } else {
+                glDrawArraysInstanced(GL_POINTS, 0, vertexCount, instanceCount);
+            }
+            glEndTransformFeedback();
+            glDisable(GL_RASTERIZER_DISCARD);
+
+            std::vector<float> data(floats, kPoison);
+            glGetBufferSubData(GL_TRANSFORM_FEEDBACK_BUFFER, 0, static_cast<GLsizeiptr>(floats * sizeof(float)),
+                               data.data());
+            glUseProgram(0);
+            glDeleteBuffers(1, &xfbBuffer);
+            return data;
+        }
+
         // point p, attribute a, component c
         float At(const std::vector<float>& data, int point, int attrib, int component) {
             const std::size_t index = static_cast<std::size_t>(point) * 16 + attrib * 4 + component;
@@ -345,6 +387,105 @@ void main() {
         glDisableVertexAttribArray(0);
         glDisableVertexAttribArray(1);
         glDeleteBuffers(1, &vbo);
+    }
+
+    // baseInstance moves the ELEMENT the instanced arrays start at. DirectGLES has no
+    // ES entry point that says so on the drivers we ship against (GL_EXT_base_instance
+    // is absent on Adreno), so it folds the shift into the attribute's own offset - and
+    // the thing that made this worth pinning is that the value used to reach the shader
+    // uniform for gl_BaseInstance and NEVER the fetch, so a draw could report a base
+    // instance it had not actually read from.
+    //
+    // The three draws are the point. Zero first as a negative control, so a backend that
+    // simply ignored baseInstance could not pass on the middle draw alone; and zero AGAIN
+    // last, because the shift is emitted into per-attribute state the VAO twin memoises -
+    // leaving it applied would make every subsequent ordinary draw fetch from the wrong
+    // element, which is a far worse bug than the one being fixed.
+    TEST_F(VertexAttribBindingScenario, BaseInstanceMovesTheInstancedArraysStartElement) {
+        if (!Ready()) GTEST_SKIP();
+        ResetCurrentAttribs();
+
+        const float instanceData[] = {10.0f, 20.0f, 30.0f, 40.0f};
+        GLuint vbo = 0;
+        glGenBuffers(1, &vbo);
+        glBindBuffer(GL_ARRAY_BUFFER, vbo);
+        glBufferData(GL_ARRAY_BUFFER, sizeof(instanceData), instanceData, GL_STATIC_DRAW);
+        glBindBuffer(GL_ARRAY_BUFFER, 0);
+
+        glVertexAttribFormat(0, 1, GL_FLOAT, GL_FALSE, 0);
+        glVertexAttribBinding(0, 0);
+        glBindVertexBuffer(0, vbo, 0, 4);
+        glVertexBindingDivisor(0, 1);
+        glEnableVertexAttribArray(0);
+
+        const std::vector<float> atZero = CaptureOwnBufferBaseInstance(m_program, 1, 2, 0, true);
+        EXPECT_TRUE(Vec4Is(atZero, 0, 0, 10.0f, 0.0f, 0.0f, 1.0f));
+        EXPECT_TRUE(Vec4Is(atZero, 1, 0, 20.0f, 0.0f, 0.0f, 1.0f));
+
+        const std::vector<float> atTwo = CaptureOwnBufferBaseInstance(m_program, 1, 2, 2, true);
+        EXPECT_TRUE(Vec4Is(atTwo, 0, 0, 30.0f, 0.0f, 0.0f, 1.0f));
+        EXPECT_TRUE(Vec4Is(atTwo, 1, 0, 40.0f, 0.0f, 0.0f, 1.0f));
+
+        // Nothing about the vertex array changed between these two draws, so only a
+        // backend that actively un-shifts on a baseInstance change gets back to 10/20.
+        const std::vector<float> backToZero = CaptureOwnBufferBaseInstance(m_program, 1, 2, 0, true);
+        EXPECT_TRUE(Vec4Is(backToZero, 0, 0, 10.0f, 0.0f, 0.0f, 1.0f));
+        EXPECT_TRUE(Vec4Is(backToZero, 1, 0, 20.0f, 0.0f, 0.0f, 1.0f));
+
+        // And a draw command with no baseInstance parameter at all must be unaffected by
+        // the one that came before it.
+        const std::vector<float> plain = CaptureOwnBufferBaseInstance(m_program, 1, 2, 0, false);
+        EXPECT_TRUE(Vec4Is(plain, 0, 0, 10.0f, 0.0f, 0.0f, 1.0f));
+        EXPECT_TRUE(Vec4Is(plain, 1, 0, 20.0f, 0.0f, 0.0f, 1.0f));
+
+        glDisableVertexAttribArray(0);
+        glDeleteBuffers(1, &vbo);
+    }
+
+    // baseInstance is defined against the instanced arrays only: an array with divisor 0
+    // advances per VERTEX and its start element is "first", which baseInstance does not
+    // touch. An emulation that shifted by offset without checking the divisor would move
+    // this one too, and nothing in the case above would notice.
+    TEST_F(VertexAttribBindingScenario, BaseInstanceLeavesPerVertexArraysWhereTheyWere) {
+        if (!Ready()) GTEST_SKIP();
+        ResetCurrentAttribs();
+
+        const float perVertex[] = {1.0f, 2.0f, 3.0f, 4.0f};
+        const float perInstance[] = {10.0f, 20.0f, 30.0f, 40.0f};
+        GLuint buffers[2] = {0, 0};
+        glGenBuffers(2, buffers);
+        glBindBuffer(GL_ARRAY_BUFFER, buffers[0]);
+        glBufferData(GL_ARRAY_BUFFER, sizeof(perVertex), perVertex, GL_STATIC_DRAW);
+        glBindBuffer(GL_ARRAY_BUFFER, buffers[1]);
+        glBufferData(GL_ARRAY_BUFFER, sizeof(perInstance), perInstance, GL_STATIC_DRAW);
+        glBindBuffer(GL_ARRAY_BUFFER, 0);
+
+        glVertexAttribFormat(0, 1, GL_FLOAT, GL_FALSE, 0);
+        glVertexAttribBinding(0, 0);
+        glBindVertexBuffer(0, buffers[0], 0, 4);
+        glVertexBindingDivisor(0, 0);
+        glEnableVertexAttribArray(0);
+
+        glVertexAttribFormat(1, 1, GL_FLOAT, GL_FALSE, 0);
+        glVertexAttribBinding(1, 1);
+        glBindVertexBuffer(1, buffers[1], 0, 4);
+        glVertexBindingDivisor(1, 1);
+        glEnableVertexAttribArray(1);
+
+        // 2 vertices x 2 instances, baseInstance 2. Points come out instance-major.
+        const std::vector<float> data = CaptureOwnBufferBaseInstance(m_program, 2, 2, 2, true);
+        EXPECT_TRUE(Vec4Is(data, 0, 0, 1.0f, 0.0f, 0.0f, 1.0f));
+        EXPECT_TRUE(Vec4Is(data, 1, 0, 2.0f, 0.0f, 0.0f, 1.0f));
+        EXPECT_TRUE(Vec4Is(data, 2, 0, 1.0f, 0.0f, 0.0f, 1.0f));
+        EXPECT_TRUE(Vec4Is(data, 3, 0, 2.0f, 0.0f, 0.0f, 1.0f));
+        EXPECT_TRUE(Vec4Is(data, 0, 1, 30.0f, 0.0f, 0.0f, 1.0f));
+        EXPECT_TRUE(Vec4Is(data, 1, 1, 30.0f, 0.0f, 0.0f, 1.0f));
+        EXPECT_TRUE(Vec4Is(data, 2, 1, 40.0f, 0.0f, 0.0f, 1.0f));
+        EXPECT_TRUE(Vec4Is(data, 3, 1, 40.0f, 0.0f, 0.0f, 1.0f));
+
+        glDisableVertexAttribArray(0);
+        glDisableVertexAttribArray(1);
+        glDeleteBuffers(2, buffers);
     }
 
     // Two attributes on one binding point at different relative offsets, plus a

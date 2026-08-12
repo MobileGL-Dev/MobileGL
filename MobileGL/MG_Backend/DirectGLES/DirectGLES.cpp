@@ -3591,13 +3591,32 @@ namespace MobileGL::MG_Backend::DirectGLES {
         g_GLESFuncs.glDrawRangeElements(mode, start, end, count, type, indices);
     }
 
+    // True when the driver will apply baseInstance to the vertex fetch itself, in which case the
+    // attribute-offset emulation must stay out of the way. SetCurrentBaseInstance is orthogonal
+    // and runs either way - it feeds the shader's gl_BaseInstance, not the fetch.
+    inline Bool UseNativeBaseInstance() {
+        return g_GLESCapabilities.SupportsBaseInstance;
+    }
+
+    // The emulated shift has to be in place before PrepareForDraw, because that is what syncs the
+    // VAO; a zero here is what un-shifts the arrays for the next ordinary draw.
+    inline Uint32 EmulatedFetchBaseInstance(GLuint baseinstance) {
+        return UseNativeBaseInstance() ? 0u : static_cast<Uint32>(baseinstance);
+    }
+
     void DrawElementsInstancedBaseVertexBaseInstance(GLenum mode, GLsizei count, GLenum type, const void* indices,
                                                      GLsizei instancecount, GLint basevertex, GLuint baseinstance) {
         DrawSyncFlags syncBit = DrawSyncBit::IndexBuffer | DrawSyncBit::Instancing;
+        const VertexArrayImpl::ScopedFetchBaseInstance fetchScope(EmulatedFetchBaseInstance(baseinstance));
         PrepareForDraw(syncBit);
         SetCurrentBaseInstance(baseinstance);
         SetCurrentBaseVertex(basevertex);
-        g_GLESFuncs.glDrawElementsInstancedBaseVertex(mode, count, type, indices, instancecount, basevertex);
+        if (UseNativeBaseInstance()) {
+            g_GLESFuncs.glDrawElementsInstancedBaseVertexBaseInstanceEXT(mode, count, type, indices, instancecount,
+                                                                        basevertex, baseinstance);
+        } else {
+            g_GLESFuncs.glDrawElementsInstancedBaseVertex(mode, count, type, indices, instancecount, basevertex);
+        }
         SetCurrentBaseVertex(0);
         SetCurrentBaseInstance(0);
     }
@@ -3614,9 +3633,15 @@ namespace MobileGL::MG_Backend::DirectGLES {
     void DrawElementsInstancedBaseInstance(GLenum mode, GLsizei count, GLenum type, const void* indices,
                                            GLsizei instancecount, GLuint baseinstance) {
         DrawSyncFlags syncBit = DrawSyncBit::IndexBuffer | DrawSyncBit::Instancing;
+        const VertexArrayImpl::ScopedFetchBaseInstance fetchScope(EmulatedFetchBaseInstance(baseinstance));
         PrepareForDraw(syncBit);
         SetCurrentBaseInstance(baseinstance);
-        g_GLESFuncs.glDrawElementsInstanced(mode, count, type, indices, instancecount);
+        if (UseNativeBaseInstance()) {
+            g_GLESFuncs.glDrawElementsInstancedBaseInstanceEXT(mode, count, type, indices, instancecount,
+                                                              baseinstance);
+        } else {
+            g_GLESFuncs.glDrawElementsInstanced(mode, count, type, indices, instancecount);
+        }
         SetCurrentBaseInstance(0);
     }
 
@@ -3652,9 +3677,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
     void DrawArraysInstancedBaseInstance(GLenum mode, GLint first, GLsizei count, GLsizei instancecount,
                                          GLuint baseinstance) {
         DrawSyncFlags syncBit = DrawSyncBit::Instancing;
+        const VertexArrayImpl::ScopedFetchBaseInstance fetchScope(EmulatedFetchBaseInstance(baseinstance));
         PrepareForDraw(syncBit);
         SetCurrentBaseInstance(baseinstance);
-        g_GLESFuncs.glDrawArraysInstanced(mode, first, count, instancecount);
+        if (UseNativeBaseInstance()) {
+            g_GLESFuncs.glDrawArraysInstancedBaseInstanceEXT(mode, first, count, instancecount, baseinstance);
+        } else {
+            g_GLESFuncs.glDrawArraysInstanced(mode, first, count, instancecount);
+        }
         SetCurrentBaseInstance(0);
     }
 

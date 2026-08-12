@@ -352,8 +352,10 @@ namespace MobileGL::MG_Util::SelfTest {
                 builder.Pass("GL_EXT_base_instance", "supported (native baseInstance draws)");
             } else {
                 builder.Info("GL_EXT_base_instance",
-                             "not supported; no impact: the native indirect path deliberately does not "
-                             "rely on it (shader-side emulation handles baseInstance semantics)");
+                             "not supported; direct baseInstance draws are emulated by shifting the "
+                             "instanced arrays' attribute offsets, and gl_BaseInstance by a uniform. "
+                             "The one gap is an INDIRECT draw whose command carries a non-zero "
+                             "baseInstance and is executed natively: its vertex fetch is not shifted");
             }
             // Both multi-draw rows gate on the capability flags, not the entry-point pointers:
             // eglGetProcAddress may hand back a non-NULL stub for these on drivers without the
