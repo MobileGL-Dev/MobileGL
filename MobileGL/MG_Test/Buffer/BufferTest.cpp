@@ -480,6 +480,58 @@ TEST_F(BufferTest, BindBufferRangeZeroUnbindsBindingPoint) {
     EXPECT_EQ(MobileGL::MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
 }
 
+// GL 4.6 core tables 23.4/23.5: *_BUFFER_START and *_BUFFER_SIZE report the (offset, size) pair
+// glBindBufferRange was ASKED for. They are not clamped to the buffer's storage - a range may
+// legally name bytes the buffer does not have, and glBufferData may resize the buffer afterwards
+// without the binding's reported window moving. The size arm used to intersect the recorded range
+// with the buffer's current size, so binding a range on a still-empty buffer (glGenBuffers with no
+// glBufferData - exactly what KHR-GL43.shader_storage_buffer_object.basic-binding does) answered 0
+// while START still answered the offset, an internally inconsistent pair no driver reports.
+TEST_F(BufferTest, IndexedBufferSizeQueryReportsTheRequestedSizeNotTheBuffersStorage) {
+    GLint ssboAlignment = 0;
+    MobileGL::MG_Impl::GLImpl::GetIntegerv(GL_SHADER_STORAGE_BUFFER_OFFSET_ALIGNMENT, &ssboAlignment);
+    ASSERT_GT(ssboAlignment, 0);
+    const GLintptr offset = ssboAlignment;
+    const GLsizeiptr size = 512;
+
+    GLuint buffer = 0;
+    MobileGL::MG_Impl::GLImpl::GenBuffers(1, &buffer);
+    // Deliberately no glBufferData: the name exists, the storage does not.
+    MobileGL::MG_Impl::GLImpl::BindBufferRange(GL_SHADER_STORAGE_BUFFER, 1, buffer, offset, size);
+    ASSERT_EQ(MobileGL::MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    GLint start32 = 0;
+    GLint size32 = 0;
+    GLint64 start64 = 0;
+    GLint64 size64 = 0;
+    MobileGL::MG_Impl::GLImpl::GetIntegeri_v(GL_SHADER_STORAGE_BUFFER_START, 1, &start32);
+    MobileGL::MG_Impl::GLImpl::GetIntegeri_v(GL_SHADER_STORAGE_BUFFER_SIZE, 1, &size32);
+    MobileGL::MG_Impl::GLImpl::GetInteger64i_v(GL_SHADER_STORAGE_BUFFER_START, 1, &start64);
+    MobileGL::MG_Impl::GLImpl::GetInteger64i_v(GL_SHADER_STORAGE_BUFFER_SIZE, 1, &size64);
+    EXPECT_EQ(start32, static_cast<GLint>(offset));
+    EXPECT_EQ(size32, static_cast<GLint>(size));
+    EXPECT_EQ(start64, static_cast<GLint64>(offset));
+    EXPECT_EQ(size64, static_cast<GLint64>(size));
+
+    // Giving the buffer storage afterwards does not move the window either way.
+    MobileGL::MG_Impl::GLImpl::BindBuffer(GL_SHADER_STORAGE_BUFFER, buffer);
+    MobileGL::MG_Impl::GLImpl::BufferData(GL_SHADER_STORAGE_BUFFER, offset + size, nullptr, GL_DYNAMIC_DRAW);
+    MobileGL::MG_Impl::GLImpl::GetIntegeri_v(GL_SHADER_STORAGE_BUFFER_SIZE, 1, &size32);
+    EXPECT_EQ(size32, static_cast<GLint>(size));
+
+    // glBindBufferBase binds the whole buffer and reports (0, 0), not the buffer's size.
+    MobileGL::MG_Impl::GLImpl::BindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, buffer);
+    MobileGL::MG_Impl::GLImpl::GetIntegeri_v(GL_SHADER_STORAGE_BUFFER_START, 1, &start32);
+    MobileGL::MG_Impl::GLImpl::GetIntegeri_v(GL_SHADER_STORAGE_BUFFER_SIZE, 1, &size32);
+    EXPECT_EQ(start32, 0);
+    EXPECT_EQ(size32, 0);
+
+    MobileGL::MG_Impl::GLImpl::BindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, 0);
+    MobileGL::MG_Impl::GLImpl::BindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
+    MobileGL::MG_Impl::GLImpl::DeleteBuffers(1, &buffer);
+    EXPECT_EQ(MobileGL::MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+}
+
 TEST_F(BufferTest, GetInteger64vMaxShaderStorageBlockSize) {
     GLint64 maxSsboBlockSize = 0;
     MobileGL::MG_Impl::GLImpl::GetInteger64v(GL_MAX_SHADER_STORAGE_BLOCK_SIZE, &maxSsboBlockSize);
