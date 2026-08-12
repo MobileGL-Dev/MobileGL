@@ -17,6 +17,7 @@
 #include <MG_Util/Metrics/TextureMetrics.h>
 #include <MG_State/GLState/Core.h>
 #include <MG_State/GLState/ErrorState/Error.h>
+#include <MG_State/GLState/TextureState/TextureObjectBuffer.h>
 #include <MG_Impl/GLImpl/Framebuffer/GL_Framebuffer.h>
 #include <MG_Util/BackendLoaders/OpenGL/Loader.h>
 #include <MG_Util/Converters/GLToStr/GLEnumConverter.h>
@@ -1326,11 +1327,47 @@ namespace MobileGL::MG_Backend::DirectGLES {
                    backendTarget == TextureTarget::Texture2DMultisampleArray;
         }
 
+        // Which image units currently hold a WRITABLE buffer texture, and how many. Kept here
+        // rather than recomputed per draw because the frontend tracks 192 image units and
+        // almost every program uses none of them: the draw path pays one integer test.
+        //
+        // Maintained by SyncImageTextureBinding, which is the single funnel for an image-unit
+        // change on this backend - glBindImageTextures is a frontend loop over
+        // glBindImageTexture, and the whole-sweep SyncImageTextureBindings goes through it too.
+        // Anything that clears a binding WITHOUT coming through here (a deleted texture, a
+        // recreated context) can only leave a bit set for a unit that no longer has one; the
+        // sweep re-reads the binding, finds nothing to mark, and CLEARS the bit on its way past.
+        // So the error is self-healing, and in the direction that costs one wasted look rather
+        // than one missed write.
+        static Array<Bool, MG_State::GLState::TextureState::MAX_TEXTURE_IMAGE_UNITS>
+            g_writableImageBufferUnits{};
+        static Uint g_writableImageBufferUnitCount = 0;
+
+        static Bool IsWritableImageBufferTexture(const MG_State::GLState::ImageTextureBinding& binding) {
+            return binding.Texture != nullptr && binding.Access != GL_READ_ONLY &&
+                   binding.Texture->GetStorageType() == TextureStorageType::Buffer;
+        }
+
+        static void TrackWritableImageBufferUnit(Uint unit, Bool writableBufferTexture) {
+            Bool& tracked = g_writableImageBufferUnits[unit];
+            if (tracked == writableBufferTexture) return;
+            tracked = writableBufferTexture;
+            // Written as two guarded steps rather than one signed add: the count is unsigned,
+            // and a decrement that ever ran one time too many would not saturate at zero, it
+            // would wrap to four billion and defeat the early-out for the rest of the process.
+            if (writableBufferTexture) {
+                ++g_writableImageBufferUnitCount;
+            } else if (g_writableImageBufferUnitCount > 0) {
+                --g_writableImageBufferUnitCount;
+            }
+        }
+
         void SyncImageTextureBinding(Uint unit) {
 #ifdef TRACY_ENABLE
             ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
             auto& imageBinding = MG_State::pGLContext->GetImageTextureBinding(static_cast<Int>(unit));
+            TrackWritableImageBufferUnit(unit, IsWritableImageBufferTexture(imageBinding));
             if (!imageBinding.Texture) {
                 g_GLESFuncs.glBindImageTexture(unit, 0, 0, GL_FALSE, 0, GL_READ_ONLY, GL_RGBA8);
                 return;
@@ -1341,6 +1378,34 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 SupportsLayeredImageBinding(imageBinding.Texture->GetTarget()) ? imageBinding.Layered : GL_FALSE;
             g_GLESFuncs.glBindImageTexture(unit, backendTexture->GetBackendTextureId(), imageBinding.Level,
                                            layered, imageBinding.Layer, imageBinding.Access, imageBinding.Format);
+        }
+
+        // A buffer texture bound to a WRITABLE image unit is a buffer the shader is about to
+        // write, and those writes land in the ES driver's buffer object - behind the frontend's
+        // CPU shadow, which is what MapBuffer and GetBufferSubData read. Same flag, and for the
+        // same reason, as MarkShaderStorageBuffersGpuWritten does for a storage block; the
+        // difference is only which binding the shader reaches the buffer through. A GL_READ_ONLY
+        // binding is left alone: marking it would make the next map wait on - and then re-read -
+        // a dispatch that could not have changed a byte of it.
+        //
+        // Called from the draw and dispatch preparations rather than from the eager sync
+        // glBindImageTexture performs: that one runs before any shader has touched the buffer,
+        // and flagging there would pull the driver's copy over a shadow the application may
+        // still be writing into.
+        void MarkWritableImageBufferTexturesGpuWritten() {
+            if (g_writableImageBufferUnitCount == 0) return;
+            for (Uint unit = 0; unit < g_writableImageBufferUnits.size(); ++unit) {
+                if (!g_writableImageBufferUnits[unit]) continue;
+                const auto& imageBinding = MG_State::pGLContext->GetImageTextureBinding(static_cast<Int>(unit));
+                if (!IsWritableImageBufferTexture(imageBinding)) {
+                    TrackWritableImageBufferUnit(unit, false);
+                    continue;
+                }
+                auto* textureBuffer =
+                    static_cast<MG_State::GLState::TextureObjectBuffer*>(imageBinding.Texture.get());
+                const auto& bufferObject = textureBuffer->GetBufferBindingSlot().GetBoundObject();
+                if (bufferObject) bufferObject->MarkGpuWritten();
+            }
         }
 
         void SyncImageTextureBindings() {
@@ -2258,6 +2323,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                           syncBit & DrawSyncBit::IndirectBuffer);
         VertexArrayImpl::SyncCurrentVAO(currentVAO, vaoTwin);
         TextureImpl::SyncNeccessaryTextures(textureKeys);
+        // A draw writes through its image units too - the conformance case that found this
+        // stores into a buffer texture from the FRAGMENT stage, not from a dispatch.
+        TextureImpl::MarkWritableImageBufferTexturesGpuWritten();
         FramebufferImpl::SyncCurrentFBO();
         PrgramImpl::SyncCurrentProgram(currentProgram);
         RenderStateImpl::SyncRenderState();
@@ -3116,6 +3184,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         BufferImpl::SyncComputeBuffers(includeDispatchIndirectBuffer);
         TextureImpl::SyncNeccessaryTextures(textureKeys);
         TextureImpl::SyncImageTextureBindings();
+        TextureImpl::MarkWritableImageBufferTexturesGpuWritten();
         PrgramImpl::SyncCurrentProgram(currentProgram);
 
         if (!currentProgram || !currentProgram->GetLinkStatus() || !currentProgram->GetSpirvStatus()) {
