@@ -722,10 +722,14 @@ namespace MobileGL::MG_Impl::GLImpl {
                     *data = 0;
                     return;
                 }
+                // GL 4.6 core table 23.4/23.5: *_BUFFER_SIZE reports the size glBindBufferRange
+                // was ASKED for, verbatim. It is not clamped to the buffer's storage, and it does
+                // not follow the buffer when a later glBufferData resizes it - a range may legally
+                // name bytes the buffer does not have yet. Clamping it here answered 0 for the
+                // common conformance shape of binding a range on a buffer that has no storage
+                // yet (KHR-GL43.shader_storage_buffer_object.basic-binding).
                 const Range1D range = bindingPoint.GetRange();
-                const auto start = std::min(range.start, bufferObject->GetSize());
-                const auto end = std::min(range.end, bufferObject->GetSize());
-                *data = static_cast<GLint>(end - start);
+                *data = static_cast<GLint>(range.end - range.start);
                 return;
             }
             default:
@@ -951,9 +955,8 @@ namespace MobileGL::MG_Impl::GLImpl {
                     *data = 0;
                     return;
                 }
-                const auto start = std::min(range.start, bufferObject->GetSize());
-                const auto end = std::min(range.end, bufferObject->GetSize());
-                *data = static_cast<GLint64>(end - start);
+                // Verbatim, unclamped - see the GetIntegeri_v arm.
+                *data = static_cast<GLint64>(range.end - range.start);
                 return;
             }
             default:

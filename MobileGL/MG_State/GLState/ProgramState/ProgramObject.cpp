@@ -90,8 +90,11 @@ namespace MobileGL::MG_State::GLState {
         // A node that settled as Cancelled published nothing, so m_spirv stays empty with
         // spirvStatus false: linked, queryable, not drawable. Nothing to repair.
 
-        // Before the version bump, and before any caller can read the shadow: the writes the
-        // application made while the layout did not exist yet.
+        // Order matters, and it is the GL order. The shadow arrives zero-filled; the shaders'
+        // declared uniform initializers are what it should actually start from, and only then
+        // do the application's own writes - the ones it made while the layout did not exist
+        // yet - land on top. Seeding after the replay would clobber them.
+        ApplyUniformInitialValues();
         ReplayBufferedUniformWrites();
 
         // The THIRD version bump of this link (enqueue, phase-A publish, phase-B publish), and
@@ -124,6 +127,93 @@ namespace MobileGL::MG_State::GLState {
                                                              .byteSize = static_cast<Uint>(byteSize),
                                                              .dataOffset = static_cast<Uint>(dataOffset)});
         return true;
+    }
+
+    // "uniform vec3 v = vec3(10, 20, 30);" - legal desktop GLSL since 1.20, and the value is
+    // what the uniform reads until glUniform* replaces it (and again after every relink).
+    // MobileGL parses with Vulkan-relaxed rules, which sweep default-block uniforms into
+    // MGL_GLOBAL_UBO; a block member cannot carry an initializer in SPIR-V, so glslang hands
+    // the folded constants over as a side-channel (TIntermediate::getUniformInitializers) and
+    // this is where they are honoured. Without it every such uniform silently read zero -
+    // which is what half of KHR-GL43.shader_storage_buffer_object was actually failing on.
+    //
+    // Writes go straight into the shadow rather than through glUniform*: this runs INSIDE the
+    // phase-B publish, so re-entering the join gate is not available, and the location space
+    // reflection assigns (one location per array element) is all that is needed.
+    void ProgramObject::ApplyUniformInitialValues() const {
+        // Through the phase-A gate, not off m_artifacts directly: phase B can be joined by a
+        // caller that has not read anything phase A publishes yet, and reading the raw field
+        // there would find the PREVIOUS link's block (or an empty one) and drop every
+        // initializer without a trace. Artifacts() is a no-op once phase A is in.
+        const auto& initializers = Artifacts().uniformInitialValues;
+        if (initializers.empty()) return;
+        if (m_spirv.globalUboScratch.empty() || m_spirv.uniformOffsets.empty()) {
+            // Phase B published no shadow (cancelled, or superseded by a relink). The program
+            // is not drawable; there is nowhere for these to land.
+            return;
+        }
+
+        Uint8* const scratch = m_spirv.globalUboScratch.data();
+        const SizeT uboSize = m_spirv.globalUboScratch.size();
+
+        for (const auto& init : initializers) {
+            // Scalars per array ELEMENT. A matrix element carries cols * rows of them, laid
+            // out column by column - which is also the order glslang folded them in.
+            const Int columns = init.matrixCols;
+            const Int rows = init.matrixRows;
+            const Int componentsPerElement = columns > 0 ? columns * rows : init.vectorSize;
+            const Int elements = init.arraySize;
+            if (componentsPerElement <= 0 || elements <= 0) continue;
+
+            const Bool isFloat = init.basicType == glslang::EbtFloat || init.basicType == glslang::EbtFloat16;
+            const Bool isInt = init.basicType == glslang::EbtInt || init.basicType == glslang::EbtUint ||
+                               init.basicType == glslang::EbtBool;
+            // Anything else (fp64, 64-bit integers) has no 32-bit shadow encoding here, and a
+            // half-written uniform is worse than an untouched one.
+            if (!isFloat && !isInt) continue;
+            const SizeT provided = isFloat ? init.floatValues.size() : init.intValues.size();
+            if (provided < static_cast<SizeT>(componentsPerElement) * static_cast<SizeT>(elements)) continue;
+
+            const Int baseLocation = GetUniformLocation(init.name);
+            if (baseLocation < 0) continue; // optimized away, or not a default-block uniform
+
+            for (Int element = 0; element < elements; ++element) {
+                const Int location = baseLocation + element;
+                if (element > 0 && !UniformLocationsAliasSameUniform(baseLocation, location)) break;
+                if (!IsValidUniformLocation(location)) break;
+                const Uint offset = GetUniformOffset(static_cast<Uint>(location));
+                if (offset == kInvalidUniformOffset) continue;
+
+                // std140 pads every column of a float matrix out to a vec4, so the columns of
+                // a mat3 are 16 bytes apart even though each carries 12. The slot's own span
+                // states the stride the rest of the pipeline agreed on rather than guessing it.
+                const SizeT slotSpan = GetUniformStorageSpanInBytes(static_cast<Uint>(location));
+                const SizeT columnStride =
+                    columns > 0 ? slotSpan / static_cast<SizeT>(columns) : slotSpan;
+                const Int componentsPerColumn = columns > 0 ? rows : componentsPerElement;
+                const Int columnCount = columns > 0 ? columns : 1;
+
+                for (Int column = 0; column < columnCount; ++column) {
+                    const SizeT byteOffset = static_cast<SizeT>(offset) + static_cast<SizeT>(column) * columnStride;
+                    const SizeT writeSize = static_cast<SizeT>(componentsPerColumn) * sizeof(Uint32);
+                    if (byteOffset + writeSize > uboSize) break;
+                    const SizeT firstComponent = static_cast<SizeT>(element) * componentsPerElement +
+                                                 static_cast<SizeT>(column) * componentsPerColumn;
+                    for (Int component = 0; component < componentsPerColumn; ++component) {
+                        const SizeT source = firstComponent + static_cast<SizeT>(component);
+                        Uint8* const destination = scratch + byteOffset + component * sizeof(Uint32);
+                        if (isFloat) {
+                            const Float value = static_cast<Float>(init.floatValues[source]);
+                            std::memcpy(destination, &value, sizeof(value));
+                        } else {
+                            const Int32 value = static_cast<Int32>(init.intValues[source]);
+                            std::memcpy(destination, &value, sizeof(value));
+                        }
+                    }
+                }
+            }
+        }
+        MarkUBOContentDirty();
     }
 
     void ProgramObject::ReplayBufferedUniformWrites() const {
@@ -234,6 +324,7 @@ namespace MobileGL::MG_State::GLState {
         artifacts.glBlockIndexToTProgram.clear();
         artifacts.tProgramBlockIndexToGl.clear();
         artifacts.linkedExplicitUniformLocations.clear();
+        artifacts.uniformInitialValues.clear();
         artifacts.uniformIndexInTProgram.clear();
         artifacts.uniformSamplerOrImageUnitIndex.clear();
         artifacts.explicitOpaqueUniformBindings.clear();

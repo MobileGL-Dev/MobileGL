@@ -60,6 +60,7 @@ add_executable(MobileGLIntegrationTest
     Scenarios/ClearThenReadPixelsScenario.cpp
     Scenarios/DepthStencilReadbackScenario.cpp
     Scenarios/SsboArrayLengthScenario.cpp
+    Scenarios/UniformInitializerScenario.cpp
     Scenarios/SwizzleAccessRoutineScenario.cpp
     Scenarios/ProgramPipelineScenario.cpp
 )
