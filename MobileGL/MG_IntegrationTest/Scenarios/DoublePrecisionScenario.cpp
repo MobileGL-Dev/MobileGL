@@ -314,5 +314,44 @@ void main() {
             EXPECT_EQ(glGetError(), static_cast<GLenum>(GL_NO_ERROR));
         }
 
+        TEST_F(DoublePrecisionScenario, TheFp64ExtensionIsNotAdvertised) {
+            if (!Ready()) return;
+            // The shader above compiled, linked and ran without the extension string, which is
+            // the point: an application does not need GL_ARB_gpu_shader_fp64 advertised to USE
+            // doubles here. What the string additionally promises is 64-bit precision, and that
+            // is the one thing the demotion cannot deliver - so it stays off unless
+            // MOBILEGL_ADVERTISE_FP64 asks for it, and an application that branches on the
+            // string keeps taking its float path.
+            GLint extensionCount = 0;
+            glGetIntegerv(GL_NUM_EXTENSIONS, &extensionCount);
+            ASSERT_GT(extensionCount, 0);
+            bool advertised = false;
+            for (GLint i = 0; i < extensionCount; ++i) {
+                const char* name = reinterpret_cast<const char*>(glGetStringi(GL_EXTENSIONS, static_cast<GLuint>(i)));
+                if (name != nullptr && std::string(name) == "GL_ARB_gpu_shader_fp64") advertised = true;
+            }
+            EXPECT_FALSE(advertised);
+            EXPECT_EQ(glGetError(), static_cast<GLenum>(GL_NO_ERROR));
+        }
+
+        TEST_F(DoublePrecisionScenario, A64BitVertexFormatIsDeclinedOnEveryBackend) {
+            if (!Ready()) return;
+            // The demotion leaves no 64-bit shader input to feed, so there is nothing a 64-bit
+            // vertex FETCH could be fetched into - on either backend, and no longer only on the
+            // ones whose device lacks shaderFloat64. Declined loudly rather than accepted and
+            // drawn as garbage; the matching POST row says the same thing at startup.
+            GLuint vao = 0;
+            glGenVertexArrays(1, &vao);
+            glBindVertexArray(vao);
+            while (glGetError() != GL_NO_ERROR) {}
+
+            glVertexAttribLFormat(0, 3, GL_DOUBLE, 0);
+            EXPECT_EQ(glGetError(), static_cast<GLenum>(GL_INVALID_OPERATION));
+
+            glBindVertexArray(0);
+            glDeleteVertexArrays(1, &vao);
+            while (glGetError() != GL_NO_ERROR) {}
+        }
+
     } // namespace
 } // namespace MGITest

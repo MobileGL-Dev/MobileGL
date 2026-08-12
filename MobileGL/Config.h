@@ -82,6 +82,14 @@ namespace MobileGL::MG_Config {
 #endif
         // MOBILEGL_DISABLE_SUBGROUP: force-disable Vulkan shader subgroup support.
         Bool DisableSubgroup = false;
+        // MOBILEGL_ADVERTISE_FP64: add GL_ARB_gpu_shader_fp64 to the advertised extension
+        // string. `double` in a shader always WORKS - it is narrowed to 32 bits before any
+        // module reaches a backend (ShaderTranspiler::DemoteFloat64Pass) - but the extension
+        // promises 64-bit precision, and that is the one thing the narrowing cannot deliver.
+        // Off by default so an application that checks the string before using doubles keeps
+        // its float path; on for measuring what the conformance suite makes of the demoted
+        // precision. See the DemoteFloat64Pass header and the "fp64" POST row.
+        Bool AdvertiseFp64 = false;
         // MOBILEGL_MAGMA_R11G11B10F_FALLBACK: use fallback format for R11G11B10F on Vulkan.
         Bool MagmaR11G11B10FFallback = false;
         // MOBILEGL_MAGMA_FRAMESINFLIGHT: requested Magma frames in flight, defaulting to 3.
