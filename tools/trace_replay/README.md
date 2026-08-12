@@ -527,3 +527,49 @@ worker threads, `segfault at 8`, `error 4`, all at one instruction. It dies
 immediately after program 58 links, on a draw logged as
 `Using raw depth fetch sampler on unit 13`. Debug that repro under gdb before
 reaching for the 13-commit bisect.
+
+#### What the crash actually is
+
+Run the ANGLE invocation under `gdb -batch` with `handle SIGSEGV stop nopass`
+(apitrace installs its own handler, so gdb has to stop first). The faulting
+thread is `llvmpipe-0`, and:
+
+```
+rip 0x7fffea1f7a28   ->  "No symbol matches $rip", in no shared object
+rax 0x0
+=> cmpl   $0x0,0x8(%rax)      <-- fault: deref of NULL+8
+   vmovdqa %ymm5,0xac0(%rsp)
+   je     ...
+   mov    (%rax),%rax
+```
+
+`rip` belongs to no library, so this is **llvmpipe's JIT-compiled fragment
+shader**, not Mesa C code - which is why the backtrace is garbage (the "frames"
+are SIMD shader constants: `0x3c800000` = 0.015625f, `0x42800000` = 64.0f,
+`0xffc00000` = NaN). Do not chase that backtrace.
+
+The CI kernel log records the instruction immediately before the fault:
+`mov 0x13c0(%rsp,%rax,8),%rax`. So the shape is: **index a stack-resident
+pointer table by a unit number, get NULL back, then null-check-and-follow it.**
+That is a per-texture-unit descriptor lookup. A sampler in this shader resolves
+to a texture unit for which the ANGLE/lavapipe side has no valid descriptor, and
+llvmpipe's JIT dereferences it instead of returning the (0,0,0,1) that sampling
+an incomplete texture is required to give - so the crash itself is a **driver
+bug**, whatever state we hand it.
+
+The draw is program 58 (fragment shader 60), a deferred reflection/solid
+composite ending `texBuffer0 = reflectionData; texBuffer3 = solidColor;`, with
+20+ samplers declared (`colortex0..7`, `depthtex0..2`, `shadowtex0/1`,
+`shadowcolor0`, `noisetex`, `gtexture`, `normals`, `specular`, `gaux2`,
+`transmittanceTex`) against `GL_MAX_TEXTURE_IMAGE_UNITS = 32`. The last state
+operation logged before the fault is `Using raw depth fetch sampler on unit 13`
+- `GetRawDepthFetchSampler()->Bind(unit)` in `DirectGLES.cpp`, which puts a
+dedicated sampler object on the unit when a `sampler2D` uniform reads a
+depth-format texture. Mesa GLES takes that same path 90 times in this trace
+without crashing; ANGLE dies on the second one.
+
+Still unproven: **which** sampler/unit holds the NULL descriptor. Unit 13 is the
+prime suspect because it is the last thing logged, not because it has been
+shown to be the NULL entry. Nothing in the debugger points at a specific
+MobileGL emission commit, so the held 13-commit bisect does **not** collapse to
+a one-commit confirmation on this evidence.
