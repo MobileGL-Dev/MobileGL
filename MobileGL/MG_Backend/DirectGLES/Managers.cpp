@@ -4427,6 +4427,21 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
             auto& shaderSpirvs = stateProgramObject->GetGeneratedSpirv();
 
+            // Blocks a transform-feedback capture request names a member of ("StageData" of
+            // "StageData.attrib[0]"). The Adreno ES driver accepts such a request, links, and
+            // then captures nothing at all for it, so those blocks - and ONLY those - get
+            // flattened into per-member variables below, in EVERY stage, so a producer and its
+            // consumer keep matching. gl_PerVertex members ("gl_Position") carry no block
+            // prefix and so never enter this set.
+            std::set<String> xfbCaptureBlockNames;
+            for (const auto& xfbVarying : stateProgramObject->GetTransformFeedbackVaryings()) {
+                const SizeT dot = xfbVarying.name.find('.');
+                if (dot != String::npos && dot > 0) {
+                    xfbCaptureBlockNames.insert(xfbVarying.name.substr(0, dot));
+                }
+            }
+            std::set<String> flattenedXfbBlockNames;
+
             for (int index = 0; index < attachedShaders.size(); ++index) {
                 auto& shader = attachedShaders[index];
                 GLenum glShaderType = MG_Util::ConvertShaderStageToGLEnum(shader->GetShaderStage());
@@ -4482,6 +4497,25 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     // - which is not free: it cost the create-indirect retrace 0.15 SSIM the
                     // first time this gate was missing.
                     effectiveSpirv = &splitArrayInputSpirv;
+                }
+
+                // Adopt the rewritten module only when THIS stage actually had one of the
+                // blocks - the optimizer hands back a re-serialised copy either way, and taking
+                // that copy for a module it did not rewrite is not free (it cost the
+                // create-indirect retrace 0.15 SSIM when the array-input split first missed
+                // this gate). The report has to be per stage, not cumulative: a fragment shader
+                // consuming the same block reports a name the vertex stage already reported,
+                // and its own rewrite must still be taken or the two stages stop matching.
+                Vector<unsigned int> flattenedXfbSpirv;
+                std::set<String> stageFlattenedXfbBlockNames;
+                if (!xfbCaptureBlockNames.empty() &&
+                    MG_Util::ShaderTranspiler::ShaderCompiler::FlattenXfbInterfaceBlocksForEssl(
+                        *effectiveSpirv, xfbCaptureBlockNames, stageFlattenedXfbBlockNames,
+                        flattenedXfbSpirv) &&
+                    !flattenedXfbSpirv.empty() && !stageFlattenedXfbBlockNames.empty()) {
+                    effectiveSpirv = &flattenedXfbSpirv;
+                    flattenedXfbBlockNames.insert(stageFlattenedXfbBlockNames.begin(),
+                                                  stageFlattenedXfbBlockNames.end());
                 }
 
                 // ESSL stage-matches uniform blocks by member precision, but SPIRV-Cross prints
@@ -4692,8 +4726,23 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 const auto& xfbVaryings = stateProgramObject->GetTransformFeedbackVaryings();
                 Vector<const GLchar*> xfbNames;
                 xfbNames.reserve(xfbVaryings.size());
-                for (const auto& xfbVarying : xfbVaryings) {
-                    xfbNames.push_back(xfbVarying.name.c_str());
+                // A block this build flattened no longer HAS the member the application asked
+                // for; it has the variable that replaced it. Everything else - including a
+                // member of a block that was left alone - keeps the application's spelling.
+                // Storage first, pointers after: xfbNames holds pointers into these strings.
+                Vector<String> rewrittenXfbNames(xfbVaryings.size());
+                for (SizeT nameIndex = 0; nameIndex < xfbVaryings.size(); ++nameIndex) {
+                    String flatName;
+                    if (!flattenedXfbBlockNames.empty() &&
+                        MG_Util::ShaderTranspiler::ShaderCompiler::RewriteXfbCaptureNameForFlattenedBlock(
+                            xfbVaryings[nameIndex].name, flattenedXfbBlockNames, flatName)) {
+                        rewrittenXfbNames[nameIndex] = std::move(flatName);
+                    } else {
+                        rewrittenXfbNames[nameIndex] = xfbVaryings[nameIndex].name;
+                    }
+                }
+                for (const auto& xfbName : rewrittenXfbNames) {
+                    xfbNames.push_back(xfbName.c_str());
                 }
                 MGLOG_D("Declaring %zu transform feedback varyings on program %u", xfbNames.size(),
                         m_backendProgramId);

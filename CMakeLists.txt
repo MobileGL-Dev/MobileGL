@@ -279,6 +279,7 @@ set(SOURCE_FILES
     MobileGL/MG_Util/ShaderTranspiler/SpirvPasses/DemoteFloat64Pass.cpp
     MobileGL/MG_Util/ShaderTranspiler/SpirvPasses/LowerDrawParametersPass.cpp
     MobileGL/MG_Util/ShaderTranspiler/SpirvPasses/PackDoubleVertexInputsPass.cpp
+    MobileGL/MG_Util/ShaderTranspiler/SpirvPasses/FlattenXfbInterfaceBlocksPass.cpp
     MobileGL/MG_Util/ShaderTranspiler/SpirvPasses/SplitArrayVertexInputsPass.cpp
     MobileGL/MG_Util/ShaderTranspiler/SpirvPasses/RebaseInstanceIndexPass.cpp
     MobileGL/MG_Util/ShaderTranspiler/SpirvPasses/ZeroBaseVertexPass.cpp

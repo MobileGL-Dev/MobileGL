@@ -12,6 +12,8 @@
 #include "glslang/TVarEntryInfo.h"
 #include "glslang/TMglGlslIoResolver.h"
 
+#include <set>
+
 namespace MobileGL {
     namespace MG_Util {
         namespace ShaderTranspiler {
@@ -34,6 +36,23 @@ namespace MobileGL {
                 // driver. Only for the DirectGLES transpile path.
                 static bool SplitArrayVertexInputsForEssl(const Vector<Uint32>& inputBinary,
                                                           Vector<uint32_t>& outputBinary);
+                // Replaces the named interface BLOCKS with one variable per member, named
+                // "<Block>_<member>", shadowing the block itself so the body is untouched. The
+                // Adreno ES driver silently captures NOTHING for a transform-feedback varying
+                // named as a block member, so a capture list that names one has to be respelled
+                // - and the declaration with it. `flattenedBlockNames` reports which blocks
+                // this stage actually rewrote, which is what the capture list must follow.
+                // Only for the DirectGLES transpile path.
+                static bool FlattenXfbInterfaceBlocksForEssl(const Vector<Uint32>& inputBinary,
+                                                             const std::set<String>& blockNames,
+                                                             std::set<String>& flattenedBlockNames,
+                                                             Vector<uint32_t>& outputBinary);
+                // The capture request "StageData.attrib[0]" as the pass above renamed it,
+                // "StageData_attrib[0]", or false when it does not name a member of a block
+                // that was flattened.
+                static bool RewriteXfbCaptureNameForFlattenedBlock(const String& captureName,
+                                                                   const std::set<String>& flattenedBlockNames,
+                                                                   String& outName);
                 // Drops RelaxedPrecision member decorations from uniform-block structs so
                 // SPIRV-Cross prints the same (highp) member precision in every stage; ES
                 // drivers reject cross-stage uniform blocks whose member precisions differ.
