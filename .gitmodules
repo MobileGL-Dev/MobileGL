@@ -7,9 +7,6 @@
 [submodule "3rdparty/SPIRV-Cross"]
 	path = 3rdparty/SPIRV-Cross
 	url = https://github.com/KhronosGroup/SPIRV-Cross.git
-[submodule "include/FastSTL"]
-	path = include/FastSTL
-	url = https://github.com/MobileGL-Dev/FastSTL.git
 [submodule "3rdparty/tracy"]
 	path = 3rdparty/tracy
 	url = https://github.com/wolfpld/tracy.git
@@ -34,3 +31,6 @@
 [submodule "3rdparty/asio"]
 	path = 3rdparty/asio
 	url = https://github.com/chriskohlhoff/asio.git
+[submodule "include/ska"]
+	path = include/ska
+	url = https://github.com/MobileGL-Dev/flat_hash_map.git

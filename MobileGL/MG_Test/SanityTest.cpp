@@ -33,7 +33,7 @@
 #include <MG_Util/ShaderTranspiler/ShaderCompiler.h>
 #include <MG_Util/ShaderTranspiler/ShaderSourceProcessor.h>
 #include <MG_Util/Debug/Log.h>
-#include <FastSTL/UnorderedMap.h>
+#include <MG_Util/Types.h>
 
 namespace {
     class DynamicParameterBackend final : public MobileGL::MG_Backend::BackendObject {
@@ -1998,16 +1998,20 @@ TEST(DirectGLESStateGuards, DefaultFramebufferBindGoesThroughShadow) {
     EXPECT_EQ(mocks.log.Count("BindFramebuffer:"), 3u);
 }
 
-// FastSTL::unordered_map::erase(iterator) regression coverage. The open-addressing
-// iterator constructor snaps forward from a tombstoned slot to the successor, so
-// erase must NOT advance the rebuilt iterator again: the old double-advance skipped
-// one live element per erase, and erasing the element in the highest occupied
-// bucket pushed the returned index past bucket_count where it never compared equal
-// to end() again - erase-while-iterating sweeps (pipeline/program cache eviction)
-// then ran off the bucket array and fed garbage handles to vkDestroyPipeline
-// (device crash on first mass eviction during world load).
-TEST(FastSTLSanity, EraseWhileIteratingVisitsEveryElementExactlyOnce) {
-    FastSTL::unordered_map<MobileGL::Uint64, MobileGL::Uint64> map;
+// UnorderedMap::erase(iterator) contract coverage. Erase-while-iterating sweeps
+// (pipeline/program cache eviction) depend on `it = map.erase(it)` naming the next
+// live element exactly once: a sweep that skips entries leaks them, and one that
+// runs off the end feeds garbage handles to vkDestroyPipeline (device crash on the
+// first mass eviction during world load - the failure FastSTL's double-advancing
+// erase actually produced before it was fixed).
+//
+// These pin the behaviour the call sites rely on, not one map's implementation, so
+// they are written against MobileGL::UnorderedMap and survive changing what it
+// names. Under ska::flat_hash_map the mechanism is different - erase backward-shifts
+// the rest of the probe cluster into the hole and hands back the same slot, which
+// now holds the shifted-in successor - but the observable contract is the same.
+TEST(UnorderedMapSanity, EraseWhileIteratingVisitsEveryElementExactlyOnce) {
+    MobileGL::UnorderedMap<MobileGL::Uint64, MobileGL::Uint64> map;
     constexpr MobileGL::Uint64 kCount = 1000;
     for (MobileGL::Uint64 key = 0; key < kCount; ++key) {
         map.emplace(key * 0x9e3779b97f4a7c15ull, key);
@@ -2024,8 +2028,8 @@ TEST(FastSTLSanity, EraseWhileIteratingVisitsEveryElementExactlyOnce) {
     EXPECT_EQ(map.size(), 0u);
 }
 
-TEST(FastSTLSanity, EraseReturnsTheSuccessorElement) {
-    FastSTL::unordered_map<MobileGL::Uint32, MobileGL::Uint32> map;
+TEST(UnorderedMapSanity, EraseReturnsTheSuccessorElement) {
+    MobileGL::UnorderedMap<MobileGL::Uint32, MobileGL::Uint32> map;
     for (MobileGL::Uint32 key = 1; key <= 64; ++key) {
         map.emplace(key, key);
     }
@@ -2048,10 +2052,16 @@ TEST(FastSTLSanity, EraseReturnsTheSuccessorElement) {
     EXPECT_EQ(map.size(), 64u - erased);
 }
 
-TEST(FastSTLSanity, ErasingTheOnlyElementReturnsEnd) {
-    FastSTL::unordered_map<MobileGL::Uint32, MobileGL::Uint32> map;
+TEST(UnorderedMapSanity, ErasingTheOnlyElementReturnsEnd) {
+    using Map = MobileGL::UnorderedMap<MobileGL::Uint32, MobileGL::Uint32>;
+    Map map;
     map.emplace(42u, 1u);
-    auto next = map.erase(map.begin());
+
+    // Spell the type: erase(iterator) hands back a proxy that is convertible to an
+    // iterator but is not one, because finding the next element is not free and the
+    // callers that discard the result should not pay for it. `auto next = ...` binds
+    // the proxy instead, and then nothing it is compared against compiles.
+    Map::iterator next = map.erase(map.begin());
     EXPECT_EQ(next, map.end());
     EXPECT_TRUE(map.empty());
 }
