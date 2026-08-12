@@ -66,6 +66,7 @@ add_executable(MobileGLIntegrationTest
     Scenarios/ImageLoadStoreSsoScenario.cpp
     Scenarios/SsboDeclarationFormScenario.cpp
     Scenarios/Glsl420DeclarationScenario.cpp
+    Scenarios/FragmentOutputArrayIndexScenario.cpp
 )
 
 target_include_directories(MobileGLIntegrationTest PRIVATE

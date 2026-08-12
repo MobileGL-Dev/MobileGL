@@ -20,6 +20,7 @@
 #include <MG_Util/Converters/GLToStr/GLEnumConverter.h>
 #include <MG_Util/ShaderTranspiler/ShaderCompiler.h>
 #include <MG_Util/ShaderTranspiler/ShaderSourceProcessor.h>
+#include <MG_Util/ShaderTranspiler/SpirvPasses/LegalizeFragmentOutputIndexPass.h>
 #include <MG_Util/ShaderTranspiler/SpirvPasses/RenameSamplerFunctionParameterPass.h>
 #include <MG_Util/ShaderTranspiler/Types.h>
 #include <MG_Util/ShaderTranspiler/glslang/UniformTraverser.h>
@@ -3078,4 +3079,249 @@ void main() {
     EXPECT_FALSE(AnyLocationOnUniformStorage(optimized));
     EXPECT_EQ(ShaderCompiler::SpirvValidationFailureCount(), failuresBefore)
         << "the stripped module must validate clean";
+}
+
+// --- Fragment-output array indexing (GLSL ES needs a constant integral expression) -------------
+//
+// SPIR-V lets a fragment shader index an output array with any integer; GLSL ES does not
+// (GLSL ES 3.00 4.3.6). SPIRV-Cross carries the dynamic index straight into the ESSL, a strict
+// driver rejects the shader, the program links nothing, and every draw using it silently draws
+// nothing - which is what empties the translucent layer of improved-transparency-minecraft-26.3
+// on the Android DirectGLES (ANGLE) lane while Mesa, being lenient, renders it correctly.
+namespace {
+    Vector<Uint32> CompileFragmentToRawSpirv(const String& source) {
+        using namespace MG_Util::ShaderTranspiler;
+        ShaderAttrib shaderAttrib{.shaderType = GL_FRAGMENT_SHADER, .sourceStr = source};
+        auto shaderResult = ShaderCompiler::CompileShader(shaderAttrib);
+        if (!shaderResult) {
+            ADD_FAILURE() << shaderResult.error().log;
+            return {};
+        }
+        ProgramAttrib programAttrib{.shaders = {shaderResult.value()}};
+        auto programResult = ShaderCompiler::LinkProgram(programAttrib);
+        if (!programResult) {
+            ADD_FAILURE() << programResult.error().log;
+            return {};
+        }
+        ProgramBinaryAttrib binaryAttrib{.shaderTypes = {GL_FRAGMENT_SHADER},
+                                         .program = *programResult.value()};
+        auto binaryResult = ShaderCompiler::GetSpirvBinaryFromProgram(binaryAttrib);
+        if (!binaryResult || binaryResult->size() != 1u) {
+            ADD_FAILURE() << (binaryResult ? "unexpected module count" : binaryResult.error().log);
+            return {};
+        }
+        return binaryResult->front();
+    }
+
+    String DisassembleSpirv(const Vector<Uint32>& binary) {
+        spvtools::SpirvTools tools(SPV_ENV_VULKAN_1_1);
+        String text;
+        tools.Disassemble(binary, &text);
+        return text;
+    }
+
+    // Every `name[` in the emitted ESSL is followed by a digit. A surviving dynamic index reads
+    // `coeff[attachmentIndex]` or `coeff[_123]`, which is the exact construct ES compilers refuse.
+    bool AllArrayIndicesAreLiterals(const String& essl, const String& name) {
+        const String needle = name + "[";
+        SizeT offset = 0;
+        bool sawAny = false;
+        while ((offset = essl.find(needle, offset)) != String::npos) {
+            const SizeT indexStart = offset + needle.size();
+            if (indexStart >= essl.size()) return false;
+            // A declaration (`out vec4 coeff[2];`) and a constant index both read as a digit.
+            if (std::isdigit(static_cast<unsigned char>(essl[indexStart])) == 0) return false;
+            sawAny = true;
+            offset = indexStart;
+        }
+        return sawAny;
+    }
+
+    String DecompileToEssl(const Vector<Uint32>& binary) {
+        using namespace MG_Util::ShaderTranspiler;
+        SpvcSession session(binary, SessionUsageBit::Transpile);
+        auto essl = ShaderCompiler::DecompileShader(session);
+        if (!essl) {
+            ADD_FAILURE() << "decompile errc: " << essl.error().errc << "\nlog: " << essl.error().log;
+            return {};
+        }
+        return essl.value();
+    }
+} // namespace
+
+// The shape Minecraft 26.3's OIT coefficient shader has: the index comes from a loop counter, so
+// the stock folding chain (loop-control hint, ssa-rewrite, loop-unroll, ccp, simplification,
+// dead-branch-elim) turns every write into a constant-indexed one and the fallback never runs.
+TEST_F(ProgramUtilTest, LoopDerivedFragmentOutputIndexFoldsToConstantIndices) {
+    using namespace MG_Util::ShaderTranspiler;
+
+    const Vector<Uint32> raw = CompileFragmentToRawSpirv(R"(#version 330 core
+out vec4 coeff[2];
+in vec4 vColor;
+in float vDepth;
+void main() {
+    for (int attachmentIndex = 0; attachmentIndex < 2; ++attachmentIndex) {
+        for (int i = 0; i < 4; ++i) {
+            coeff[attachmentIndex][i] = vColor[i] * float(attachmentIndex + i) * vDepth;
+        }
+    }
+}
+)");
+    ASSERT_FALSE(raw.empty());
+    ASSERT_TRUE(LegalizeFragmentOutputIndexPass::BinaryHasDynamicOutputIndexing(raw))
+        << "the fixture must reproduce the defect before the fix is asked to remove it:\n"
+        << DisassembleSpirv(raw);
+
+    SpirvValidationScope validationOn(true);
+    const Uint64 failuresBefore = ShaderCompiler::SpirvValidationFailureCount();
+
+    Vector<Uint32> legalized;
+    ASSERT_TRUE(ShaderCompiler::LegalizeFragmentOutputIndexingForEssl(raw, legalized));
+    ASSERT_FALSE(legalized.empty());
+
+    const String disassembly = DisassembleSpirv(legalized);
+    EXPECT_FALSE(LegalizeFragmentOutputIndexPass::BinaryHasDynamicOutputIndexing(legalized))
+        << "no fragment output may be left indexed by anything but a constant:\n" << disassembly;
+    EXPECT_EQ(disassembly.find("OpSwitch"), String::npos)
+        << "a loop-derived index must fold, not fall back to the switch lowering:\n" << disassembly;
+    EXPECT_EQ(ShaderCompiler::SpirvValidationFailureCount(), failuresBefore)
+        << "the legalized module must stay validator-clean";
+
+    const String essl = DecompileToEssl(legalized);
+    ASSERT_FALSE(essl.empty());
+    EXPECT_TRUE(AllArrayIndicesAreLiterals(essl, "coeff"))
+        << "the generated ESSL still indexes a fragment output with a non-constant:\n" << essl;
+}
+
+// The fallback half: an index computed from a uniform cannot be folded by any amount of
+// unrolling, so the write becomes a switch over the array's range and the read becomes
+// constant-indexed loads combined with selects.
+TEST_F(ProgramUtilTest, GenuinelyDynamicFragmentOutputIndexLowersToConstantSwitch) {
+    using namespace MG_Util::ShaderTranspiler;
+
+    const Vector<Uint32> raw = CompileFragmentToRawSpirv(R"(#version 330 core
+uniform int uTarget;
+out vec4 coeff[2];
+in vec4 vColor;
+void main() {
+    coeff[0] = vColor;
+    coeff[1] = vColor * 0.5;
+    coeff[uTarget] = coeff[uTarget] * 2.0;
+}
+)");
+    ASSERT_FALSE(raw.empty());
+    ASSERT_TRUE(LegalizeFragmentOutputIndexPass::BinaryHasDynamicOutputIndexing(raw))
+        << DisassembleSpirv(raw);
+
+    SpirvValidationScope validationOn(true);
+    const Uint64 failuresBefore = ShaderCompiler::SpirvValidationFailureCount();
+
+    Vector<Uint32> legalized;
+    ASSERT_TRUE(ShaderCompiler::LegalizeFragmentOutputIndexingForEssl(raw, legalized));
+    ASSERT_FALSE(legalized.empty());
+
+    const String disassembly = DisassembleSpirv(legalized);
+    EXPECT_FALSE(LegalizeFragmentOutputIndexPass::BinaryHasDynamicOutputIndexing(legalized))
+        << "the uniform-driven index must be lowered away:\n" << disassembly;
+    EXPECT_NE(disassembly.find("OpSwitch"), String::npos)
+        << "the dynamic write must become a switch over the array range:\n" << disassembly;
+    EXPECT_NE(disassembly.find("OpSelect"), String::npos)
+        << "the dynamic read must become constant-indexed loads and a select:\n" << disassembly;
+    EXPECT_EQ(ShaderCompiler::SpirvValidationFailureCount(), failuresBefore)
+        << "the lowered module must stay validator-clean:\n" << disassembly;
+
+    const String essl = DecompileToEssl(legalized);
+    ASSERT_FALSE(essl.empty());
+    EXPECT_TRUE(AllArrayIndicesAreLiterals(essl, "coeff"))
+        << "the generated ESSL still indexes a fragment output with a non-constant:\n" << essl;
+}
+
+// The bound on the folding half. The index here IS loop-derived, so unrolling would fold it -
+// but the loop runs 512 times, and fully unrolling it would multiply the shader by 512 to save
+// a switch with two cases. Past the trip-count cap the loop is left alone and the fallback takes
+// it, which is cheap in the array length instead of the trip count.
+TEST_F(ProgramUtilTest, ALoopTooLongToUnrollFallsBackToTheSwitchLowering) {
+    using namespace MG_Util::ShaderTranspiler;
+
+    const Vector<Uint32> raw = CompileFragmentToRawSpirv(R"(#version 330 core
+out vec4 coeff[2];
+in vec4 vColor;
+void main() {
+    coeff[0] = vec4(0.0);
+    coeff[1] = vec4(0.0);
+    for (int i = 0; i < 512; ++i) {
+        coeff[i % 2] += vColor * 0.001;
+    }
+}
+)");
+    ASSERT_FALSE(raw.empty());
+    ASSERT_TRUE(LegalizeFragmentOutputIndexPass::BinaryHasDynamicOutputIndexing(raw));
+
+    SpirvValidationScope validationOn(true);
+    const Uint64 failuresBefore = ShaderCompiler::SpirvValidationFailureCount();
+
+    Vector<Uint32> legalized;
+    ASSERT_TRUE(ShaderCompiler::LegalizeFragmentOutputIndexingForEssl(raw, legalized));
+    ASSERT_FALSE(legalized.empty());
+
+    const String disassembly = DisassembleSpirv(legalized);
+    EXPECT_FALSE(LegalizeFragmentOutputIndexPass::BinaryHasDynamicOutputIndexing(legalized))
+        << "the index must be legalized even when the loop is left standing:\n" << disassembly;
+    EXPECT_NE(disassembly.find("OpLoopMerge"), String::npos)
+        << "a 512-trip loop must NOT be unrolled - that is the whole point of the cap:\n"
+        << disassembly;
+    EXPECT_NE(disassembly.find("OpSwitch"), String::npos)
+        << "with the loop standing, the write must go through the switch lowering:\n" << disassembly;
+    EXPECT_EQ(ShaderCompiler::SpirvValidationFailureCount(), failuresBefore)
+        << "lowering inside a loop body must stay validator-clean:\n" << disassembly;
+
+    const String essl = DecompileToEssl(legalized);
+    ASSERT_FALSE(essl.empty());
+    EXPECT_TRUE(AllArrayIndicesAreLiterals(essl, "coeff"))
+        << "the generated ESSL still indexes a fragment output with a non-constant:\n" << essl;
+}
+
+// The gate: a fragment shader that never indexes an output array dynamically must come back byte
+// for byte, so no shader that did not need this pays for it or is perturbed by it.
+TEST_F(ProgramUtilTest, FragmentWithoutDynamicOutputIndexingIsPassedThroughUnchanged) {
+    using namespace MG_Util::ShaderTranspiler;
+
+    const Vector<Uint32> raw = CompileFragmentToRawSpirv(R"(#version 330 core
+out vec4 coeff[2];
+in vec4 vColor;
+void main() {
+    for (int i = 0; i < 4; ++i) {
+        coeff[0][i] = vColor[i];
+    }
+    coeff[1] = vColor;
+}
+)");
+    ASSERT_FALSE(raw.empty());
+    ASSERT_FALSE(LegalizeFragmentOutputIndexPass::BinaryHasDynamicOutputIndexing(raw));
+
+    Vector<Uint32> legalized;
+    ASSERT_TRUE(ShaderCompiler::LegalizeFragmentOutputIndexingForEssl(raw, legalized));
+    EXPECT_EQ(legalized, raw) << "the module must not be rewritten - not even re-serialized - when "
+                                 "nothing indexes a fragment output dynamically";
+}
+
+// Stages other than fragment may index an output array dynamically in ESSL (the array here is a
+// varying, not a draw buffer), so detection must not fire on them at all.
+TEST_F(ProgramUtilTest, DynamicOutputIndexingOutsideTheFragmentStageIsNotDetected) {
+    using namespace MG_Util::ShaderTranspiler;
+
+    const Vector<Uint32> raw = CompileVertexToRawSpirv(R"(#version 330 core
+in vec3 a_Position;
+out vec4 v_Values[2];
+uniform int uTarget;
+void main() {
+    v_Values[0] = vec4(0.0);
+    v_Values[1] = vec4(1.0);
+    v_Values[uTarget] = vec4(a_Position, 1.0);
+    gl_Position = vec4(a_Position, 1.0);
+}
+)");
+    ASSERT_FALSE(raw.empty());
+    EXPECT_FALSE(LegalizeFragmentOutputIndexPass::BinaryHasDynamicOutputIndexing(raw))
+        << "only fragment outputs carry the constant-index rule:\n" << DisassembleSpirv(raw);
 }
