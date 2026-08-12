@@ -2391,8 +2391,18 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
     }
 
-    // How many descriptors to declare for an ARRAY of opaque uniforms (samplers, images) at
-    // one binding - or 0, meaning this binding cannot be described and must be declined.
+    // How many descriptors to declare for an ARRAY of opaque uniforms (samplers, images) at one
+    // binding. A returned count is always DECLARED in the descriptor set layout; `outDeclined`
+    // says whether the binding can also be RESOLVED at draw time, or whether the program has to
+    // be refused instead.
+    //
+    // Those are deliberately two different things. The layout must keep describing what the
+    // shader declares even for a binding MobileGL cannot resolve: a descriptor the shader reads
+    // and the layout omits is not a missing draw, it is an undefined descriptor access, and
+    // lavapipe segfaults on it inside pipeline creation - in a JIT worker thread, before any
+    // draw runs, which is why removing the binding produced a flaky crash rather than a clean
+    // refusal. Declining is done by refusing the draw (VkProgramObject::declinedDescriptors),
+    // not by shrinking the layout.
     //
     // Two separate things have to hold, and neither is checkable from the SPIR-V alone:
     //
@@ -2414,16 +2424,21 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     static Uint32 DescriptorCountForOpaqueUniformArray(const MG_State::GLState::ProgramObject& program,
                                                        const String& uniformName, Uint32 binding, Int baseLocation,
                                                        Uint32 reflectedCount, Uint32 maxBindings,
-                                                       const char* kindLabel) {
+                                                       const char* kindLabel, Bool& outDeclined) {
         const Uint32 count = std::max<Uint32>(1u, reflectedCount);
         if (count == 1) {
             return 1u;
         }
         if (count > maxBindings) {
+            // Nothing legal to declare: the count would not fit a VkDescriptorSetLayoutBinding
+            // this device accepts, and it would narrow badly into the Uint16 that carries it
+            // (65536 becomes 0). The layout ends up inconsistent with the shader whatever we do,
+            // so declare what we can and refuse the draw.
             MGLOG_I("ProgramFactory::ReflectLayout: %s array '%s' at binding %u has %u elements, past the %u "
                     "this device can describe - declining the program",
                     kindLabel, uniformName.c_str(), binding, count, maxBindings);
-            return 0u;
+            outDeclined = true;
+            return maxBindings;
         }
         if (baseLocation < 0 ||
             !program.UniformLocationsAliasSameUniform(baseLocation, baseLocation + static_cast<Int>(count - 1u))) {
@@ -2432,7 +2447,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                     "is the usual cause, and MobileGL declines it rather than resolve elements onto a "
                     "neighbouring uniform",
                     kindLabel, uniformName.c_str(), binding, count, baseLocation);
-            return 0u;
+            outDeclined = true;
         }
         return count;
     }
@@ -2454,6 +2469,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         entry.dynamicBindings.clear();
         entry.bindingDescriptorCounts.assign(m_maxBindings, 1);
         entry.arrayedUniformBlockIndicesByBinding.clear();
+        entry.declinedDescriptors = false;
 
         // Use SpvcSession (Reflection mode) to reflect all SPIR-V modules in a single pass per module
         for (const auto& module : spirv) {
@@ -2673,6 +2689,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                 "descriptor array with no frontend uniform location (a multi-dimensional array "
                                 "of samplers or images is the known cause)",
                                 uniformName.c_str(), binding, sampler->count);
+                        entry.declinedDescriptors = true;
+                        // Declared, not resolved - see DescriptorCountForOpaqueUniformArray for
+                        // why the layout keeps describing a binding the draw path will refuse.
+                        entry.bindingDescriptorCounts[binding] =
+                            static_cast<Uint16>(std::min<Uint32>(sampler->count, m_maxBindings));
+                        continue;
                     }
                     entry.bindingKinds[binding] = DescriptorBindingKind::None;
                     continue;
@@ -2694,12 +2716,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                     // DescriptorCountForOpaqueUniformArray for what "declined" costs and why
                     // the reflection's reserved extent - not SPIRV-Reflect's flattened count -
                     // is what the per-element resolve can actually address.
-                    const Uint32 imageArrayCount = DescriptorCountForOpaqueUniformArray(
-                        program, uniformName, binding, location, sampler->count, m_maxBindings, "image");
-                    if (imageArrayCount == 0) {
-                        entry.bindingKinds[binding] = DescriptorBindingKind::None;
-                        continue;
-                    }
+                    const Uint32 imageArrayCount =
+                        DescriptorCountForOpaqueUniformArray(program, uniformName, binding, location, sampler->count,
+                                                             m_maxBindings, "image", entry.declinedDescriptors);
                     entry.bindingDescriptorCounts[binding] = static_cast<Uint16>(imageArrayCount);
 
                     const VkFormat reflectedFormat =
@@ -2741,12 +2760,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                     // only element 0 - so elements 1..N read a descriptor nobody had written
                     // (KHR-GL42.shading_language_420pack.binding_sampler_array; lavapipe faults
                     // inside the JIT-ed shader rather than reporting).
-                    const Uint32 samplerArrayCount = DescriptorCountForOpaqueUniformArray(
-                        program, uniformName, binding, location, sampler->count, m_maxBindings, "sampler");
-                    if (samplerArrayCount == 0) {
-                        entry.bindingKinds[binding] = DescriptorBindingKind::None;
-                        continue;
-                    }
+                    const Uint32 samplerArrayCount =
+                        DescriptorCountForOpaqueUniformArray(program, uniformName, binding, location, sampler->count,
+                                                             m_maxBindings, "sampler", entry.declinedDescriptors);
                     entry.bindingDescriptorCounts[binding] = static_cast<Uint16>(samplerArrayCount);
 
                     const SamplerNumericDomain numericDomain = UniformTypeToSamplerNumericDomain(uniformType);

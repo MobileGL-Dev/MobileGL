@@ -93,6 +93,24 @@ void main()
 }
 )";
 
+        // Same declaration one dimension deeper. GLSL 4.30 arrays of arrays are legal here, and
+        // the elements still take consecutive units (1..4) in declaration order - but the two
+        // reflections disagree about how to count them, which is the whole point of this case.
+        constexpr const char* kSamplerArrayOfArraysFS = R"(#version 430 core
+layout(binding = 1) uniform sampler2D goku[2][2];
+out vec4 o_color;
+void main()
+{
+    const vec2 uv = vec2(0.5, 0.5);
+    int bad = 0;
+    if (texture(goku[0][0], uv) != vec4(1.0, 0.0, 0.0, 1.0)) bad |= 1;
+    if (texture(goku[0][1], uv) != vec4(0.0, 0.0, 1.0, 1.0)) bad |= 2;
+    if (texture(goku[1][0], uv) != vec4(1.0, 1.0, 0.0, 1.0)) bad |= 4;
+    if (texture(goku[1][1], uv) != vec4(0.0, 1.0, 1.0, 1.0)) bad |= 8;
+    o_color = vec4(float(bad) / 255.0, bad == 0 ? 1.0 : 0.0, 0.0, 1.0);
+}
+)";
+
         constexpr const char* kBlockArrayFS = R"(#version 420 core
 layout(std140, binding = 2) uniform GOKU
 {
@@ -233,6 +251,17 @@ void main() { o_color = vec4(0.0, 1.0, 0.0, 1.0); }
                 return image.At(gl.Width() / 2, gl.Height() / 2);
             }
 
+            // An array of ARRAYS is declined by Magma (ProgramFactory::ReflectLayout logs it and
+            // VkProgramObject::declinedDescriptors then refuses every draw), which is a defined
+            // outcome the case below can assert. Espryt has no such gate: it bakes the units the
+            // frontend reports into its ESSL, and since the binding-qualifier seeding does not
+            // walk the inner dimension every element reports unit 0 - so it samples one texture
+            // four times and paints a mismatch. That gap is in the FRONTEND, one level below
+            // either backend, and fixing it is the feature that would make this shape work
+            // everywhere; it is not part of wiring descriptor arrays through Magma, so the
+            // Espryt arm is SCOPED and the reflection half is asserted on both backends.
+            bool MultiDimensionalSamplerArraysAreDeclined() const { return Gl().BackendName() == "DirectVulkan"; }
+
             // Same shape, different gap: with the compile fixed, this shader now links on
             // both backends but paints nothing on Magma - the atomic counter becomes a
             // buffer descriptor there and that half is not wired up yet (the conformance
@@ -291,6 +320,71 @@ void main() { o_color = vec4(0.0, 1.0, 0.0, 1.0); }
         EXPECT_EQ(FirstGLError(), 0u);
         EXPECT_EQ(centre.r, 0) << "sampler array elements that read the wrong texture: " << BadElements(centre.r);
         EXPECT_EQ(centre.g, 255) << "the draw did not reach the fragment stage at all";
+    }
+
+    // An array of ARRAYS of samplers is the shape the two reflections count differently:
+    // SPIRV-Reflect reports one binding of 4 flattened descriptors, while the frontend hands out
+    // uniform locations along the outer dimension only and keys the uniform by its full
+    // "goku[0][0]" spelling. Magma therefore cannot address elements 1..3 of that binding, and
+    // the contract this case pins is that it says so and DECLINES - the failure it must never
+    // return to is resolving those elements onto whatever uniform got the next locations, which
+    // is a silently wrong texture rather than a missing draw.
+    //
+    // Deliberately weak on the pixels for that reason: what is asserted on every backend is that
+    // the program builds, the draw raises no GL error, and the process survives. Where the
+    // descriptors do resolve, the colours are checked too.
+    TEST_F(Glsl420DeclarationScenario, AnArrayOfSamplerArraysIsHonouredOrDeclinedCleanly) {
+        if (!Ready()) return;
+
+        static const std::uint8_t colors[kElements][4] = {
+            {255, 0, 0, 255}, {0, 0, 255, 255}, {255, 255, 0, 255}, {0, 255, 255, 255}};
+        MakeElementTextures(colors);
+
+        std::string error;
+        const GLuint program = CompileProgram(kQuadVS, kSamplerArrayOfArraysFS, &error);
+        if (program == 0) {
+            GTEST_SKIP() << "the frontend does not build an array of sampler arrays: " << error;
+        }
+        m_programs.push_back(program);
+
+        // The reflection DOES reserve one location per flattened element, in the order
+        // SPIRV-Reflect flattens them - which is the whole reason baseLocation + element is the
+        // right addressing rule for a descriptor array, and would be right for this shape too.
+        // What is missing is one level up: the `layout(binding = 1)` unit seeding walks the outer
+        // dimension only, so all four elements report unit 0 instead of 1..4. That is why this
+        // shape is declined rather than supported, and it is asserted here because the day the
+        // seeding learns arrays of arrays, the decline should be revisited rather than kept.
+        glUseProgram(program);
+        for (int outer = 0; outer < 2; ++outer) {
+            for (int inner = 0; inner < 2; ++inner) {
+                const std::string name = "goku[" + std::to_string(outer) + "][" + std::to_string(inner) + "]";
+                EXPECT_EQ(glGetUniformLocation(program, name.c_str()), outer * 2 + inner)
+                    << name << " should hold the flattened element's own location";
+            }
+        }
+        glUseProgram(0);
+
+        const Rgba8 centre = DrawAndRead(program);
+        EXPECT_EQ(FirstGLError(), 0u) << "declining a descriptor array must not raise a GL error";
+
+        if (!MultiDimensionalSamplerArraysAreDeclined()) {
+            GTEST_SKIP() << "the frontend's binding-qualifier seeding does not walk an array of arrays, so "
+                         << Gl().BackendName() << " samples unit 0 for every element; the locations "
+                         << "asserted above are the half of this case it can answer";
+        }
+
+        // Three outcomes are possible and only two are acceptable. Green means every element
+        // sampled its own unit. Black - the untouched clear - means the program was declined and
+        // painted nothing, which is the documented Magma outcome. A non-zero red channel is the
+        // third: the draw DID reach the fragment stage and elements read the wrong textures,
+        // which is exactly the silent mismatch this decline exists to prevent.
+        if (centre.g == 255) {
+            EXPECT_EQ(centre.r, 0) << "elements of the array of arrays that read the wrong texture: "
+                                   << BadElements(centre.r);
+            return;
+        }
+        EXPECT_EQ(centre.r, 0) << "the array of arrays was not resolved, but the draw still painted "
+                                  "a mismatch instead of being declined: " << BadElements(centre.r);
     }
 
     // Instance k of a uniform block array sits on buffer binding point N+k - again both as

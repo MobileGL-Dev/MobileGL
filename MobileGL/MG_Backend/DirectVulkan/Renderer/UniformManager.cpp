@@ -541,6 +541,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
     Bool UniformManager::ProgramSamplesOnlySingleLevelTextures(
         const MG_State::GLState::ProgramObject& program, const ProgramFactory::VkProgramObject& programObj) {
+        // A declined program never draws (see VkProgramObject::declinedDescriptors), and its
+        // declined binding has no resolvable uniform location - so there is nothing to prove
+        // about the textures it would have sampled.
+        if (programObj.declinedDescriptors) {
+            return false;
+        }
         Bool sawSampler = false;
         for (Uint32 binding = 0; binding < programObj.bindingKinds.size(); ++binding) {
             if (programObj.bindingKinds[binding] != ProgramFactory::DescriptorBindingKind::CombinedImageSampler) {
@@ -961,6 +967,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         if (outBindingRecords != nullptr) {
             outBindingRecords->clear();
         }
+        // Nothing to prepare for a program the bind path is going to refuse; its declined
+        // binding has no uniform location to resolve a texture through either.
+        if (programObj.declinedDescriptors) {
+            return true;
+        }
 
         const Uint32 bindingCount =
             std::min<Uint32>(m_maxBindings, static_cast<Uint32>(programObj.bindingKinds.size()));
@@ -998,6 +1009,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     Bool UniformManager::SampledBindingsUnchanged(const MG_State::GLState::ProgramObject& program,
                                                   const ProgramFactory::VkProgramObject& programObj,
                                                   const Vector<SampledBindingRecord>& previousRecords) const {
+        // A declined program takes the full path every time and is refused there.
+        if (programObj.declinedDescriptors) {
+            return false;
+        }
         SizeT recordIndex = 0;
         // Iterate only the bindings this program declares (ascending), exactly like
         // BindProgramUniformBuffers: this runs per draw whenever the texture bind
@@ -1040,6 +1055,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         outTextures.clear();
         MOBILEGL_ASSERT(MG_State::pGLContext != nullptr,
                         "CollectStorageImageTextures: GL context is null");
+        // Same as the sampled walk: a declined program is refused at bind time, and its declined
+        // binding has no uniform location to reach an image unit through.
+        if (programObj.declinedDescriptors) {
+            return true;
+        }
 
         const Uint32 bindingCount =
             std::min<Uint32>(m_maxBindings, static_cast<Uint32>(programObj.bindingKinds.size()));
@@ -1456,6 +1476,17 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                                              VkPipelineBindPoint bindPoint,
                                                              const SamplerBindingOverride* samplerBindingOverride,
                                                              Bool samplerDescriptorsUnchangedHint) {
+        // ReflectLayout could not describe one of this program's descriptors and dropped it from
+        // the layout, which leaves the layout disagreeing with the shader. Refusing here is what
+        // makes that a DECLINE rather than a fault: the draw setup skips the draw on a false
+        // return, so the shader never runs against a descriptor the layout does not declare -
+        // which on lavapipe is a segfault inside the JIT-ed shader, and on a hardware driver is
+        // whatever it chooses. ReflectLayout already said why, once, at MGLOG_I.
+        if (programObj.declinedDescriptors) {
+            MGLOG_D("UniformDescriptorBinder::BindProgramUniformBuffers: refusing a program whose descriptor layout "
+                    "was declined at reflection");
+            return false;
+        }
         auto& frame = m_frames[frameIndex];
         if (frame.descriptorPools.empty()) {
             MGLOG_E("UniformDescriptorBinder::BindProgramUniformBuffers failed: frame descriptor pools are invalid");

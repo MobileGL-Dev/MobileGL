@@ -86,8 +86,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             Vector<Uint32> activeBindings;
             Vector<Uint32> dynamicBindings;
             Vector<Int> uniformBlockIndexByBinding;
-            // Descriptor count per binding (1 except for UBO instance arrays, which occupy one
-            // binding with descriptorCount = N).
+            // Descriptor count per binding (1 except for a descriptor ARRAY - a UBO or storage
+            // block instance array, an image uniform array or a sampler uniform array - each of
+            // which occupies one binding with descriptorCount = N).
             Vector<Uint16> bindingDescriptorCounts;
             // Per-element GL uniform block indices for arrayed UBO bindings (count > 1);
             // element 0 of a non-arrayed binding stays in uniformBlockIndexByBinding.
@@ -103,6 +104,14 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             // Set once during ReflectLayout so the per-draw path can skip the whole
             // storage-image preparation for the overwhelming majority of programs.
             Bool hasStorageImages = false;
+            // ReflectLayout found a descriptor it cannot describe and dropped it from the
+            // layout. That leaves a layout the shader disagrees with, so this program must
+            // never reach a draw: BindProgramUniformBuffers refuses outright, and the draw
+            // setup skips the draw exactly as it does for any other bind failure. Dropping the
+            // binding WITHOUT refusing the draw is what a shader reading an undeclared
+            // descriptor looks like, and lavapipe segfaults inside the JIT-ed shader on it.
+            // The reason was logged at MGLOG_I when the binding was declined.
+            Bool declinedDescriptors = false;
             Int globalUboBinding = -1;
             Uint32 activeVertexInputLocationMask = 0;
             Array<GLenum, kMaxVertexInputLocations> vertexInputTypes{};
@@ -147,6 +156,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 storageBlockNameByBinding = std::move(other.storageBlockNameByBinding);
                 storageBlockIndexByBinding = std::move(other.storageBlockIndexByBinding);
                 hasStorageImages = other.hasStorageImages;
+                declinedDescriptors = other.declinedDescriptors;
                 globalUboBinding = other.globalUboBinding;
                 activeVertexInputLocationMask = other.activeVertexInputLocationMask;
                 vertexInputTypes = other.vertexInputTypes;
@@ -161,6 +171,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 other.descriptorSetLayout = VK_NULL_HANDLE;
                 other.pipelineLayout = VK_NULL_HANDLE;
                 other.hasStorageImages = false;
+                other.declinedDescriptors = false;
                 other.globalUboBinding = -1;
                 other.activeVertexInputLocationMask = 0;
                 other.activeFragmentOutputLocationMask = 0;
@@ -196,6 +207,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 storageBlockNameByBinding = std::move(other.storageBlockNameByBinding);
                 storageBlockIndexByBinding = std::move(other.storageBlockIndexByBinding);
                 hasStorageImages = other.hasStorageImages;
+                declinedDescriptors = other.declinedDescriptors;
                 globalUboBinding = other.globalUboBinding;
                 activeVertexInputLocationMask = other.activeVertexInputLocationMask;
                 vertexInputTypes = other.vertexInputTypes;
@@ -210,6 +222,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 other.descriptorSetLayout = VK_NULL_HANDLE;
                 other.pipelineLayout = VK_NULL_HANDLE;
                 other.hasStorageImages = false;
+                other.declinedDescriptors = false;
                 other.globalUboBinding = -1;
                 other.activeVertexInputLocationMask = 0;
                 other.activeFragmentOutputLocationMask = 0;
