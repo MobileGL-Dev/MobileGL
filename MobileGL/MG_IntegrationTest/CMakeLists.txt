@@ -72,6 +72,7 @@ add_executable(MobileGLIntegrationTest
     Scenarios/BufferTextureScenario.cpp
     Scenarios/VertexAttribBindingScenario.cpp
     Scenarios/XfbCaptureBufferReuseScenario.cpp
+    Scenarios/VertexArrayEnableDisableScenario.cpp
 )
 
 target_include_directories(MobileGLIntegrationTest PRIVATE
