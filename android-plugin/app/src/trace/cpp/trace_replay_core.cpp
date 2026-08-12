@@ -154,6 +154,11 @@ bool LoadMobileGL(const Request& request, std::string& error) {
     } else {
         unsetenv("MOBILEGL_AVOID_SAMPLER_MIPMAP_MIN_FILTER");
     }
+    if (request.avoidAngleLlvmpipeExplicitLodBias) {
+        setenv("MOBILEGL_AVOID_EXPLICIT_LOD_BIAS", "1", 1);
+    } else {
+        unsetenv("MOBILEGL_AVOID_EXPLICIT_LOD_BIAS");
+    }
     if (request.coherentAsFlush) {
         setenv("MOBILEGL_COHERENT_AS_FLUSH", "1", 1);
     } else {
@@ -792,6 +797,8 @@ bool WriteResultJson(const Request& request, const Result& result) {
     file << "  \"usePbuffer\": " << (request.usePbuffer ? "true" : "false") << ",\n";
     file << "  \"avoidAngleLlvmpipeSamplerMipmapMinFilter\": "
          << (request.avoidAngleLlvmpipeSamplerMipmapMinFilter ? "true" : "false") << ",\n";
+    file << "  \"avoidAngleLlvmpipeExplicitLodBias\": "
+         << (request.avoidAngleLlvmpipeExplicitLodBias ? "true" : "false") << ",\n";
     file << "  \"holdMs\": " << request.holdMs << ",\n";
     file << "  \"mismatchPixels\": " << result.mismatchPixels << "\n";
     file << "}\n";

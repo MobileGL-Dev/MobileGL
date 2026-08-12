@@ -89,6 +89,13 @@ namespace MobileGL::MG_Config {
         // MOBILEGL_AVOID_SAMPLER_MIPMAP_MIN_FILTER: avoid mipmap min filters in samplers,
         // resolves certain rendering bugs on ANGLE + llvmpipe.
         Bool AvoidSamplerMipmapMinFilter = false;
+        // MOBILEGL_AVOID_EXPLICIT_LOD_BIAS: leave an already-explicit LOD argument alone when
+        // emulating GL_TEXTURE_LOD_BIAS, instead of adding the bias uniform to it. Injecting
+        // the uniform turns a compile-time-constant LOD into a runtime expression, which
+        // sends ANGLE + llvmpipe down a mip-selection path that dereferences a NULL
+        // descriptor and kills the process. Deviates from spec (Vulkan adds the bias to
+        // OpImageSampleExplicitLod), so it is an avoidance for that stack only.
+        Bool AvoidExplicitLodBias = false;
         // MOBILEGL_COHERENT_AS_FLUSH: app-compat for engines (e.g. Flywheel) that write
         // GPU-read data through persistent GL_MAP_FLUSH_EXPLICIT_BIT maps they never
         // flush. Persistent FLUSH_EXPLICIT map requests are rewritten to coherent

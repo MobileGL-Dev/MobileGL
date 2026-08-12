@@ -114,6 +114,7 @@ public final class TraceReplayActivity extends Activity {
                 request.useAngle,
                 request.usePbuffer,
                 request.avoidAngleLlvmpipeSamplerMipmapMinFilter,
+                request.avoidAngleLlvmpipeExplicitLodBias,
                 request.coherentAsFlush
         );
         Log.i(TAG, result.toString());
@@ -145,6 +146,7 @@ public final class TraceReplayActivity extends Activity {
             boolean useAngle,
             boolean usePbuffer,
             boolean avoidAngleLlvmpipeSamplerMipmapMinFilter,
+            boolean avoidAngleLlvmpipeExplicitLodBias,
             boolean coherentAsFlush
     );
 
@@ -168,6 +170,7 @@ public final class TraceReplayActivity extends Activity {
         final boolean useAngle;
         final boolean usePbuffer;
         final boolean avoidAngleLlvmpipeSamplerMipmapMinFilter;
+        final boolean avoidAngleLlvmpipeExplicitLodBias;
         final boolean coherentAsFlush;
 
         private TraceReplayRequest(
@@ -190,6 +193,7 @@ public final class TraceReplayActivity extends Activity {
                 boolean useAngle,
                 boolean usePbuffer,
                 boolean avoidAngleLlvmpipeSamplerMipmapMinFilter,
+                boolean avoidAngleLlvmpipeExplicitLodBias,
                 boolean coherentAsFlush
         ) {
             this.tracePath = tracePath;
@@ -211,6 +215,7 @@ public final class TraceReplayActivity extends Activity {
             this.useAngle = useAngle;
             this.usePbuffer = usePbuffer;
             this.avoidAngleLlvmpipeSamplerMipmapMinFilter = avoidAngleLlvmpipeSamplerMipmapMinFilter;
+            this.avoidAngleLlvmpipeExplicitLodBias = avoidAngleLlvmpipeExplicitLodBias;
             this.coherentAsFlush = coherentAsFlush;
         }
 
@@ -237,6 +242,7 @@ public final class TraceReplayActivity extends Activity {
                     intent.getBooleanExtra("use_angle", false),
                     intent.getBooleanExtra("use_pbuffer", false),
                     intent.getBooleanExtra("avoid_angle_llvmpipe_sampler_mipmap_min_filter", false),
+                    intent.getBooleanExtra("avoid_angle_llvmpipe_explicit_lod_bias", false),
                     intent.getBooleanExtra("coherent_as_flush", false)
             );
         }

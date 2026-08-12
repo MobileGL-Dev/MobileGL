@@ -184,6 +184,8 @@ def run_case(case, backend):
         command.append("--use-pbuffer")
     if backend_info["use_angle"] and case["name"] == BLISS_CASE:
         command.append("--avoid-angle-llvmpipe-sampler-mipmap-min-filter")
+    if backend_info["use_angle"] and case.get("avoid_angle_llvmpipe_explicit_lod_bias"):
+        command.append("--avoid-angle-llvmpipe-explicit-lod-bias")
     if case.get("coherent_as_flush"):
         command.append("--coherent-as-flush")
     env = dict(**__import__("os").environ)

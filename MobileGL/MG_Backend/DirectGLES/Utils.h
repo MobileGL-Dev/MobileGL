@@ -183,7 +183,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // the bound texture's (or sampler object's) value into it; a shader whose samplers
         // all have a zero bias is therefore unaffected. Returns the source unchanged when
         // there is nothing to rewrite.
-        String EmulateTextureLodBias(const String& glslCode);
+        //
+        // avoidExplicitLodBias leaves lookups that already carry an explicit LOD untouched,
+        // so their constant level stays constant; only the implicit-LOD forms take the bias.
+        // Off by default and only ever set on ANGLE + llvmpipe, where injecting the uniform
+        // into a constant LOD crashes the driver (MOBILEGL_AVOID_EXPLICIT_LOD_BIAS).
+        String EmulateTextureLodBias(const String& glslCode, Bool avoidExplicitLodBias = false);
     } // namespace PrgramImpl
 
     namespace Utils {

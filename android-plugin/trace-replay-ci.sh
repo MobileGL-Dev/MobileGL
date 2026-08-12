@@ -29,6 +29,7 @@ Usage:
     --crop-height N \
     [--use-pbuffer] \
     [--avoid-angle-llvmpipe-sampler-mipmap-min-filter] \
+    [--avoid-angle-llvmpipe-explicit-lod-bias] \
     [--coherent-as-flush] \
     --timeout-seconds N
 
@@ -40,6 +41,9 @@ Set MOBILEGL_RETRACE_USE_PBUFFER=1 or pass --use-pbuffer to run DirectGLES
 against an offscreen EGL pbuffer instead of the Activity surface.
 Pass --avoid-angle-llvmpipe-sampler-mipmap-min-filter for DirectGLES traces that
 need ANGLE llvmpipe sampler mipmap filters downgraded to avoid driver stalls.
+Pass --avoid-angle-llvmpipe-explicit-lod-bias for DirectGLES traces whose shaders
+sample with an explicit LOD that ANGLE llvmpipe cannot take a LOD bias on
+(MOBILEGL_AVOID_EXPLICIT_LOD_BIAS=1).
 Pass --coherent-as-flush for traces whose engine writes persistent
 GL_MAP_FLUSH_EXPLICIT_BIT maps it never flushes (MOBILEGL_COHERENT_AS_FLUSH=1).
 EOF
@@ -98,6 +102,7 @@ crop_width=""
 crop_height=""
 use_pbuffer=0
 avoid_angle_llvmpipe_sampler_mipmap_min_filter=0
+avoid_angle_llvmpipe_explicit_lod_bias=0
 coherent_as_flush=0
 timeout_seconds=""
 
@@ -132,6 +137,10 @@ while [ "$#" -gt 0 ]; do
     --use-pbuffer) use_pbuffer=1; shift 1 ;;
     --avoid-angle-llvmpipe-sampler-mipmap-min-filter)
       avoid_angle_llvmpipe_sampler_mipmap_min_filter=1
+      shift 1
+      ;;
+    --avoid-angle-llvmpipe-explicit-lod-bias)
+      avoid_angle_llvmpipe_explicit_lod_bias=1
       shift 1
       ;;
     --coherent-as-flush) coherent_as_flush=1; shift 1 ;;
@@ -319,6 +328,9 @@ run_retrace() {
   fi
   if [ "${avoid_angle_llvmpipe_sampler_mipmap_min_filter}" -eq 1 ] && [ "${backend}" = "DirectGLES" ]; then
     set -- "$@" --ez avoid_angle_llvmpipe_sampler_mipmap_min_filter true
+  fi
+  if [ "${avoid_angle_llvmpipe_explicit_lod_bias}" -eq 1 ] && [ "${backend}" = "DirectGLES" ]; then
+    set -- "$@" --ez avoid_angle_llvmpipe_explicit_lod_bias true
   fi
   if [ "${coherent_as_flush}" -eq 1 ]; then
     set -- "$@" --ez coherent_as_flush true

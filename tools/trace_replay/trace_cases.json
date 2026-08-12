@@ -181,7 +181,8 @@
       "name": "minecraft-1.21.4-fabric-iris-sundial-lite-in-world",
       "trace_archive": "minecraft-1.21.4-fabric-iris-sundial-lite-in-world.tgz",
       "golden": "minecraft-1.21.4-fabric-iris-sundial-lite-in-world.0000150023.png",
-      "target_call": 150023
+      "target_call": 150023,
+      "avoid_angle_llvmpipe_explicit_lod_bias": true
     },
     {
       "name": "minecraft-1.21.4-fabric-iris-complementary-reimagined-in-world",

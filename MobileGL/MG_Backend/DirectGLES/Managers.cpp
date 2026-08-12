@@ -55,6 +55,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
         return g_GLESCapabilities.AvoidSamplerMipmapMinFilter;
     }
 
+    static Bool ShouldAvoidExplicitLodBiasOnAngleLlvmpipe() {
+        // IsAngleLlvmpipeRenderer combined with the MOBILEGL_AVOID_EXPLICIT_LOD_BIAS
+        // feature toggle, both resolved in FillInGLESCapabilities.
+        return g_GLESCapabilities.AvoidExplicitLodBias;
+    }
+
     static GLenum ResolveBackendMinFilter(const SamplerParameters& samplerParams,
                                           Bool avoidMipmapMinFilter) {
         GLenum filter = MG_Util::ConvertSamplerFilterModeToGLEnum(samplerParams.minFilter,
@@ -4466,7 +4472,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 source = ProcessOutColorLocations(source);
                 source = ForceFlatIntegerVaryings(source, glShaderType);
                 source = BroadcastLegacyFragColor(std::move(source), glShaderType, m_fragColorBroadcastCount);
-                source = EmulateTextureLodBias(source);
+                source = EmulateTextureLodBias(source, ShouldAvoidExplicitLodBiasOnAngleLlvmpipe());
                 source = EmulateBaseInstanceInVertexShader(std::move(source), glShaderType);
                 source = PromoteDrawParameterGlobalsToUniforms(std::move(source), glShaderType);
                 source = ForceSupporterOutput(source);

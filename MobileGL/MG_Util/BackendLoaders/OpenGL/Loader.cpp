@@ -1343,6 +1343,8 @@ namespace MobileGL::MG_Util::BackendLoader {
             caps.IsAngleRenderer && caps.GLESRendererString.find("llvmpipe") != String::npos;
         caps.AvoidSamplerMipmapMinFilter =
             caps.IsAngleLlvmpipeRenderer && MG_Config::Features.AvoidSamplerMipmapMinFilter;
+        caps.AvoidExplicitLodBias =
+            caps.IsAngleLlvmpipeRenderer && MG_Config::Features.AvoidExplicitLodBias;
         MGLOG_I("    GL_EXT_disjoint_timer_query supported: %s",
                 caps.SupportsDisjointTimerQuery ? "true" : "false");
         MGLOG_I("    GL_KHR_parallel_shader_compile supported: %s",
@@ -1351,6 +1353,7 @@ namespace MobileGL::MG_Util::BackendLoader {
         MGLOG_I("    ANGLE llvmpipe renderer: %s", caps.IsAngleLlvmpipeRenderer ? "true" : "false");
         MGLOG_I("    Avoid sampler mipmap min filter: %s",
                 caps.AvoidSamplerMipmapMinFilter ? "true" : "false");
+        MGLOG_I("    Avoid explicit LOD bias: %s", caps.AvoidExplicitLodBias ? "true" : "false");
 
         return true;
     }

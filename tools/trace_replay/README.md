@@ -275,7 +275,10 @@ default; pass `--ez use_pbuffer true` to use the offscreen pbuffer path. Always
 process-local. For cases registered with `coherent_as_flush` (Flywheel-style
 unflushed persistent maps, e.g. the Create fixtures), pass
 `--ez coherent_as_flush true` so the replay runs with
-`MOBILEGL_COHERENT_AS_FLUSH=1`.
+`MOBILEGL_COHERENT_AS_FLUSH=1`. For cases registered with
+`avoid_angle_llvmpipe_explicit_lod_bias` (DirectGLES on ANGLE llvmpipe, e.g. the
+sundial-lite fixture), pass `--ez avoid_angle_llvmpipe_explicit_lod_bias true` so
+the replay runs with `MOBILEGL_AVOID_EXPLICIT_LOD_BIAS=1`.
 
 ## Reproducing the Android DirectGLES lane on Linux (ANGLE on lavapipe)
 

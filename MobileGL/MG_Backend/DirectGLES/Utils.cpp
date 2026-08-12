@@ -957,7 +957,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
         } // namespace
 
-        String EmulateTextureLodBias(const String& glslCode) {
+        String EmulateTextureLodBias(const String& glslCode, Bool avoidExplicitLodBias) {
 #ifdef TRACY_ENABLE
             ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
@@ -1018,6 +1018,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 if (samplerIt == samplerNames.end()) continue;
 
                 const String& biasName = samplerIt->second;
+                if (form->explicitLodArg >= 0 && avoidExplicitLodBias) {
+                    // The lookup already names its level; leaving it alone keeps a constant
+                    // LOD constant. Costs the bias on explicit-LOD lookups only.
+                    continue;
+                }
                 if (form->explicitLodArg >= 0) {
                     // Explicit LOD: the bias adds to it, as Vulkan does for
                     // OpImageSampleExplicitLod and as the CTS reference expects.
