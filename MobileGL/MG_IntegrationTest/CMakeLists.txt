@@ -60,6 +60,7 @@ add_executable(MobileGLIntegrationTest
     Scenarios/FragCoordOriginScenario.cpp
     Scenarios/ClearThenReadPixelsScenario.cpp
     Scenarios/DepthStencilReadbackScenario.cpp
+    Scenarios/DepthStencilReadbackMatrixScenario.cpp
     Scenarios/SsboArrayLengthScenario.cpp
     Scenarios/DoublePrecisionScenario.cpp
     Scenarios/UniformInitializerScenario.cpp
@@ -240,6 +241,8 @@ mgl_itest_join_environment(MGL_ITEST_VULKAN_ENVIRONMENT
     "MOBILEGL_BACKEND_TYPE=DirectVulkan" ${MGL_ITEST_VULKAN_ENV})
 mgl_itest_join_environment(MGL_ITEST_VULKAN_ASYNC_ENVIRONMENT
     "MOBILEGL_BACKEND_TYPE=DirectVulkan" "MOBILEGL_ASYNC_SHADER_COMPILE=1" ${MGL_ITEST_VULKAN_ENV})
+mgl_itest_join_environment(MGL_ITEST_GLES_FORCED_DS_ENVIRONMENT
+    "MOBILEGL_BACKEND_TYPE=DirectGLES" "MOBILEGL_ESPRYT_FORCE_DS_READBACK_EMULATION=1" ${MGL_ITEST_COMMON_ENV})
 
 # TIMEOUT on every entry: a GPU test that wedges must fail the run, not hang it.
 set(MGL_ITEST_TIMEOUT 120)
@@ -286,4 +289,22 @@ gtest_discover_tests(MobileGLIntegrationTest
         LABELS integration-gpu
         TIMEOUT ${MGL_ITEST_TIMEOUT}
         ENVIRONMENT "${MGL_ITEST_VULKAN_ASYNC_ENVIRONMENT}"
+)
+
+# A fourth registration, of the depth/stencil readback scenarios, with the ES
+# shader-sampling emulation forced on. Not paranoia - without it these scenarios are
+# UNFALSIFIABLE on the machines this suite runs on: OpenGL ES has no depth or stencil
+# readback in core, but Mesa accepts the reads anyway, so on llvmpipe every one of them
+# goes green through a native path that the Adreno device does not have. Deleting the
+# entire emulation left all of them passing. With the flag the native spellings are off
+# the table and only the path the device actually takes remains. DirectGLES only - the
+# emulation is DirectGLES's.
+gtest_discover_tests(MobileGLIntegrationTest
+    TEST_PREFIX "DirectGLES.ForcedDepthStencilEmulation."
+    TEST_FILTER "DepthStencilReadback*Scenario.*"
+    DISCOVERY_TIMEOUT 30
+    PROPERTIES
+        LABELS integration-gpu
+        TIMEOUT ${MGL_ITEST_TIMEOUT}
+        ENVIRONMENT "${MGL_ITEST_GLES_FORCED_DS_ENVIRONMENT}"
 )

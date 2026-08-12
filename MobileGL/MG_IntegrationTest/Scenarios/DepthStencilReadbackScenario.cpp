@@ -58,12 +58,12 @@ namespace MGITest {
 
         class DepthStencilReadbackScenario : public ScenarioTest {
         protected:
-            // DirectGLES reads depth and stencil back through the ES driver, which has no
-            // guaranteed path for either (GL_NV_read_depth / GL_NV_read_stencil are optional and
-            // absent on both the Adreno device and Mesa's ES). That gap is tracked separately as
-            // the packed_depth_stencil cluster and needs a shader-sampling emulation, not this
-            // change; asserting it here would only pin a known-missing feature.
-            bool BackendReadsDepthStencil() const { return Gl().BackendName() == "DirectVulkan"; }
+            // Both backends now answer these reads. DirectGLES has no native ES path for
+            // either aspect (GL_NV_read_depth / GL_NV_read_stencil are optional and absent on
+            // both the Adreno device and Mesa's ES), so it stages the attachment into a
+            // scratch depth texture and samples it into a colour target; the assertions below
+            // are the same either way, which is the point.
+            bool BackendReadsDepthStencil() const { return true; }
 
             float ReadDepthAt(int x, int y) const {
                 float depth = kDepthPoison;
