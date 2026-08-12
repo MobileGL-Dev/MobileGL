@@ -11,6 +11,9 @@ on:
 jobs:
   build-linux:
     runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      contents: read
     env:
       BUILD_DIR: build-linux
       CCACHE_BASEDIR: ${{ github.workspace }}
@@ -34,12 +37,11 @@ jobs:
         uses: lukka/get-cmake@v4.3.3
 
       - name: Restore ccache
-        uses: actions/cache@v5
+        uses: actions/cache/restore@v5
         with:
           path: .ccache
-          key: ${{ runner.os }}-test-${{ github.job }}-ccache-${{ github.ref_name }}-${{ github.run_id }}
+          key: ${{ runner.os }}-test-${{ github.job }}-ccache-v1
           restore-keys: |
-            ${{ runner.os }}-test-${{ github.job }}-ccache-${{ github.ref_name }}-
             ${{ runner.os }}-test-${{ github.job }}-ccache-
 
       - name: Prepare Vulkan SDK
@@ -96,6 +98,28 @@ jobs:
       - name: Show ccache stats
         if: always()
         run: ccache --show-stats
+
+      # Rewrite one rolling entry per job on the default branch. The upload stays
+      # cumulative - it carries every object restored at the top of this run plus
+      # the few TUs that actually changed - but Actions cache keys are immutable,
+      # so the superseded blob has to be released before the same key can be
+      # re-uploaded. Running after the build means a failed build leaves the
+      # existing entry untouched. The other trigger branches restore this entry
+      # rather than each writing one of their own.
+      - name: Release superseded ccache entry
+        if: github.ref_name == github.event.repository.default_branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CACHE_KEY: ${{ runner.os }}-test-${{ github.job }}-ccache-v1
+        run: gh cache delete "${CACHE_KEY}" || true
+
+      - name: Save ccache
+        if: github.ref_name == github.event.repository.default_branch
+        continue-on-error: true
+        uses: actions/cache/save@v5
+        with:
+          path: .ccache
+          key: ${{ runner.os }}-test-${{ github.job }}-ccache-v1
 
       - name: Package Linux runtime
         run: |
@@ -320,6 +344,9 @@ jobs:
       - build-linux
       - test
       - benchmark
+    permissions:
+      actions: write
+      contents: read
     env:
       BUILD_DIR: build-retrace
       CCACHE_BASEDIR: ${{ github.workspace }}
@@ -344,12 +371,11 @@ jobs:
         uses: lukka/get-cmake@v4.3.3
 
       - name: Restore ccache
-        uses: actions/cache@v5
+        uses: actions/cache/restore@v5
         with:
           path: .ccache
-          key: ${{ runner.os }}-test-${{ github.job }}-ccache-${{ github.ref_name }}-${{ github.run_id }}
+          key: ${{ runner.os }}-test-${{ github.job }}-ccache-v1
           restore-keys: |
-            ${{ runner.os }}-test-${{ github.job }}-ccache-${{ github.ref_name }}-
             ${{ runner.os }}-test-${{ github.job }}-ccache-
 
       - name: Prepare Vulkan SDK
@@ -414,6 +440,21 @@ jobs:
       - name: Show ccache stats
         if: always()
         run: ccache --show-stats
+
+      - name: Release superseded ccache entry
+        if: github.ref_name == github.event.repository.default_branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CACHE_KEY: ${{ runner.os }}-test-${{ github.job }}-ccache-v1
+        run: gh cache delete "${CACHE_KEY}" || true
+
+      - name: Save ccache
+        if: github.ref_name == github.event.repository.default_branch
+        continue-on-error: true
+        uses: actions/cache/save@v5
+        with:
+          path: .ccache
+          key: ${{ runner.os }}-test-${{ github.job }}-ccache-v1
 
       - name: Normalize CTest command paths
         run: |
