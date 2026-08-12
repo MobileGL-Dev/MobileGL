@@ -121,12 +121,6 @@ void main() { color = vec4(0, 1, 0, 1); }
         ExpectLinked(p);
         ClearErrors();
 
-        // KNOWN GAP, not an expectation: a separable FRAGMENT program's own inputs are not
-        // in the reflection at all - glslang builds the "pipe input" list from the vertex
-        // stage unless EShReflectionIntermediateIO is set, and setting that makes a
-        // vertex-only separable program report its VS outputs as fragment outputs, which
-        // fails ValidateFragmentOutputLocations and breaks glCreateShaderProgramv. So
-        // GL_PROGRAM_INPUT is empty here until that validation is stage-aware.
         EXPECT_EQ(Interfaceiv(p, GL_PROGRAM_OUTPUT, GL_ACTIVE_RESOURCES), 1);
         EXPECT_EQ(Interfaceiv(p, GL_PROGRAM_OUTPUT, GL_MAX_NAME_LENGTH), 6);
 
@@ -804,6 +798,163 @@ void main(void) {
         EXPECT_EQ(TakeError(), GL_NO_ERROR);
     }
 
+    // ------------------------------------------------------------- uniform-block-types --
+    // GL_REFERENCED_BY_*_SHADER is per block INSTANCE. An array of uniform blocks enumerates
+    // one resource per element, and only the elements a stage actually dereferences are
+    // referenced by it - declaring the array is not referencing every element.
+    TEST_F(ProgramInterfaceTest, ArrayedUniformBlockReferencedByIsPerElement) {
+        const char* vs = R"(#version 430
+in vec4 position;
+uniform SimpleBlock { mat3x2 a; mat4 b; vec4 c; };
+void main(void) {
+  float tmp = a[0][1] * b[1][2] * c.x;
+  gl_Position = position * tmp;
+}
+)";
+        const char* fs = R"(#version 430
+uniform TrickyBlock { mat4 b; uint c; } e[2];
+out vec4 color;
+void main() { color = vec4(0, 1, 0, 1) * e[0].b[0][0]; }
+)";
+        const GLuint p = MakeProgram(vs, fs);
+        BindAttribLocation(p, 0, "position");
+        BindFragDataLocation(p, 0, "color");
+        LinkProgram(p);
+        ExpectLinked(p);
+        ClearErrors();
+
+        EXPECT_EQ(Interfaceiv(p, GL_UNIFORM_BLOCK, GL_ACTIVE_RESOURCES), 3);
+        ExpectResource(p, GL_UNIFORM_BLOCK, "TrickyBlock[0]", "TrickyBlock[0]");
+        ExpectResource(p, GL_UNIFORM_BLOCK, "TrickyBlock[1]", "TrickyBlock[1]");
+
+        const std::vector<GLenum> refProps = {GL_REFERENCED_BY_VERTEX_SHADER, GL_REFERENCED_BY_FRAGMENT_SHADER};
+        EXPECT_EQ(PropsOf(p, GL_UNIFORM_BLOCK, "SimpleBlock", refProps), (std::vector<GLint>{1, 0}));
+        EXPECT_EQ(PropsOf(p, GL_UNIFORM_BLOCK, "TrickyBlock[0]", refProps), (std::vector<GLint>{0, 1}));
+        EXPECT_EQ(PropsOf(p, GL_UNIFORM_BLOCK, "TrickyBlock[1]", refProps), (std::vector<GLint>{0, 0}))
+            << "the unreferenced element of a block array must not inherit its sibling's stages";
+        EXPECT_EQ(TakeError(), GL_NO_ERROR);
+    }
+
+    // The boundary of the rule above, and the case that caught it on device
+    // (KHR-GL43.program_interface_query.ssb-types): a SHADER STORAGE block array's buffer
+    // variables reflect under ONE subscript-free spelling shared by every element, so a union
+    // over them credits element 0 and starves every other element - even the ones the shader
+    // plainly reads. Storage blocks keep glslang's own mask, and both elements here must report
+    // the fragment stage.
+    TEST_F(ProgramInterfaceTest, ArrayedStorageBlockKeepsGlslangStagesForEveryElement) {
+        const char* vs = R"(#version 430
+in vec4 position;
+void main(void) { gl_Position = position; }
+)";
+        const char* fs = R"(#version 430
+layout(binding = 4) buffer SimpleStorage { vec4 a; } ss[2];
+out vec4 color;
+void main() { color = ss[0].a + ss[1].a; }
+)";
+        const GLuint p = MakeProgram(vs, fs);
+        BindAttribLocation(p, 0, "position");
+        BindFragDataLocation(p, 0, "color");
+        LinkProgram(p);
+        ExpectLinked(p);
+        ClearErrors();
+
+        const std::vector<GLenum> refProps = {GL_REFERENCED_BY_VERTEX_SHADER, GL_REFERENCED_BY_FRAGMENT_SHADER};
+        for (const char* name : {"SimpleStorage[0]", "SimpleStorage[1]"}) {
+            EXPECT_EQ(PropsOf(p, GL_SHADER_STORAGE_BLOCK, name, refProps), (std::vector<GLint>{0, 1}))
+                << "for " << name << ": a storage block the fragment stage reads must say so";
+        }
+        EXPECT_EQ(TakeError(), GL_NO_ERROR);
+    }
+
+    // --------------------------------------------------------- separate-programs-vertex --
+    // A vertex-only separable program's OUTPUT interface is its own stage outputs, and an
+    // inter-stage block enumerates as its members: "Color.r", and "gl_Position" for the
+    // anonymous gl_PerVertex redeclaration - never the block instance name "vs_color".
+    TEST_F(ProgramInterfaceTest, SeparableVertexProgramEnumeratesItsOwnOutputBlockMembers) {
+        const char* vs = R"(#version 430 core
+layout(location = 0) in vec4 in_vertex;
+out Color { float r, g, b; vec4 iLikePie; } vs_color;
+out gl_PerVertex { vec4 gl_Position; };
+uniform float u;
+uniform vec4 v;
+void main() {
+  gl_Position = in_vertex;
+  vs_color.r = u; vs_color.g = 0.0; vs_color.b = 0.0; vs_color.iLikePie = v;
+}
+)";
+        const GLuint p = CreateShaderProgramv(GL_VERTEX_SHADER, 1, &vs);
+        ExpectLinked(p);
+        ClearErrors();
+
+        // Exactly 5: the four Color members plus gl_Position. The anonymous gl_PerVertex
+        // redeclaration drops gl_PointSize and gl_ClipDistance, which glslang keeps in the
+        // block type as hidden members rather than erasing.
+        EXPECT_EQ(Interfaceiv(p, GL_PROGRAM_INPUT, GL_ACTIVE_RESOURCES), 1);
+        EXPECT_EQ(Interfaceiv(p, GL_PROGRAM_INPUT, GL_MAX_NAME_LENGTH), 10);
+        EXPECT_EQ(Interfaceiv(p, GL_PROGRAM_OUTPUT, GL_ACTIVE_RESOURCES), 5);
+        EXPECT_EQ(Interfaceiv(p, GL_PROGRAM_OUTPUT, GL_MAX_NAME_LENGTH), 15);
+
+        ExpectResource(p, GL_PROGRAM_INPUT, "in_vertex", "in_vertex");
+        for (const char* name : {"Color.r", "Color.g", "Color.b", "Color.iLikePie", "gl_Position"}) {
+            ExpectResource(p, GL_PROGRAM_OUTPUT, name, name);
+        }
+        EXPECT_EQ(GetProgramResourceIndex(p, GL_PROGRAM_OUTPUT, "vs_color"), GL_INVALID_INDEX)
+            << "the block instance is not the resource; its members are";
+
+        // A vertex-stage output has no color number, hence no index either, and it is not
+        // per-patch. NAME_LENGTH/TYPE/ARRAY_SIZE come from the member, not the block.
+        EXPECT_EQ(PropsOf(p, GL_PROGRAM_OUTPUT, "Color.iLikePie",
+                          {GL_NAME_LENGTH, GL_TYPE, GL_ARRAY_SIZE, GL_REFERENCED_BY_COMPUTE_SHADER,
+                           GL_REFERENCED_BY_FRAGMENT_SHADER, GL_REFERENCED_BY_GEOMETRY_SHADER,
+                           GL_REFERENCED_BY_TESS_CONTROL_SHADER, GL_REFERENCED_BY_TESS_EVALUATION_SHADER,
+                           GL_REFERENCED_BY_VERTEX_SHADER, GL_IS_PER_PATCH, GL_LOCATION_INDEX}),
+                  (std::vector<GLint>{15, GL_FLOAT_VEC4, 1, 0, 0, 0, 0, 0, 1, 0, -1}));
+        EXPECT_EQ(TakeError(), GL_NO_ERROR);
+    }
+
+    // ------------------------------------------------------- separate-programs-geometry --
+    // Both boundaries are a middle stage here. The input block carries an instance name
+    // (gl_in[]) so its members are prefixed with the BLOCK name, and the arrayed-ness of the
+    // block itself is dropped: "gl_PerVertex.gl_Position", array size 1.
+    TEST_F(ProgramInterfaceTest, SeparableGeometryProgramEnumeratesBothBlockBoundaries) {
+        const char* gs = R"(#version 430
+layout(triangles) in;
+layout(triangle_strip, max_vertices = 4) out;
+out gl_PerVertex { vec4 gl_Position; float gl_PointSize; float gl_ClipDistance[]; };
+in gl_PerVertex { vec4 gl_Position; float gl_PointSize; float gl_ClipDistance[]; } gl_in[];
+void main() {
+  gl_Position = vec4(-1, 1, 0, 1); EmitVertex();
+  gl_Position = gl_in[0].gl_Position; EmitVertex();
+  EndPrimitive();
+}
+)";
+        const GLuint p = CreateShaderProgramv(GL_GEOMETRY_SHADER, 1, &gs);
+        ExpectLinked(p);
+        ClearErrors();
+
+        ExpectResource(p, GL_PROGRAM_INPUT, "gl_PerVertex.gl_Position", "gl_PerVertex.gl_Position");
+        ExpectResource(p, GL_PROGRAM_OUTPUT, "gl_Position", "gl_Position");
+        // A non-fragment stage's outputs are varyings: no color number, so no color index.
+        EXPECT_EQ(PropsOf(p, GL_PROGRAM_OUTPUT, "gl_Position", {GL_LOCATION_INDEX}), (std::vector<GLint>{-1}));
+
+        const std::vector<GLenum> stageProps = {
+            GL_NAME_LENGTH,
+            GL_TYPE,
+            GL_ARRAY_SIZE,
+            GL_REFERENCED_BY_COMPUTE_SHADER,
+            GL_REFERENCED_BY_FRAGMENT_SHADER,
+            GL_REFERENCED_BY_GEOMETRY_SHADER,
+            GL_REFERENCED_BY_TESS_CONTROL_SHADER,
+            GL_REFERENCED_BY_TESS_EVALUATION_SHADER,
+            GL_REFERENCED_BY_VERTEX_SHADER,
+            GL_IS_PER_PATCH};
+        EXPECT_EQ(PropsOf(p, GL_PROGRAM_INPUT, "gl_PerVertex.gl_Position", stageProps),
+                  (std::vector<GLint>{25, GL_FLOAT_VEC4, 1, 0, 0, 1, 0, 0, 0, 0}));
+        EXPECT_EQ(PropsOf(p, GL_PROGRAM_OUTPUT, "gl_Position", stageProps),
+                  (std::vector<GLint>{12, GL_FLOAT_VEC4, 1, 0, 0, 1, 0, 0, 0, 0}));
+        EXPECT_EQ(TakeError(), GL_NO_ERROR);
+    }
+
     // ------------------------------------------------------- separate-programs-fragment --
     TEST_F(ProgramInterfaceTest, SeparableFragmentProgramSeparatesUniformsFromBufferVariables) {
         const char* fs = R"(#version 430
@@ -817,11 +968,12 @@ void main() { fs_color = vs_color + x + a; }
         ExpectLinked(p);
         ClearErrors();
 
-        // KNOWN GAP, not an expectation - the same one SimpleShaders documents: a separable
-        // FRAGMENT program's own inputs are absent from the glslang reflection, so
-        // GL_PROGRAM_INPUT is empty. Spec-correct values here would be 1 and 9 ("vs_color").
-        EXPECT_EQ(Interfaceiv(p, GL_PROGRAM_INPUT, GL_ACTIVE_RESOURCES), 0);
-        EXPECT_EQ(Interfaceiv(p, GL_PROGRAM_INPUT, GL_MAX_NAME_LENGTH), 0);
+        // GL_PROGRAM_INPUT is the input interface of the program's FIRST stage, which for a
+        // separable fragment program is the fragment stage: "vs_color", name length 9.
+        EXPECT_EQ(Interfaceiv(p, GL_PROGRAM_INPUT, GL_ACTIVE_RESOURCES), 1);
+        EXPECT_EQ(Interfaceiv(p, GL_PROGRAM_INPUT, GL_MAX_NAME_LENGTH), 9);
+        EXPECT_EQ(GetProgramResourceIndex(p, GL_PROGRAM_INPUT, "vs_color"), 0u);
+        EXPECT_EQ(ResourceName(p, GL_PROGRAM_INPUT, 0), "vs_color");
         EXPECT_EQ(Interfaceiv(p, GL_PROGRAM_OUTPUT, GL_ACTIVE_RESOURCES), 1);
         EXPECT_EQ(Interfaceiv(p, GL_PROGRAM_OUTPUT, GL_MAX_NAME_LENGTH), 9);
         // The buffer variable is NOT a uniform, even though the frontend reflection keeps

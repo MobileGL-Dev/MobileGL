@@ -563,8 +563,20 @@ namespace MobileGL::MG_State::GLState {
         //  - SharedStd140UBO: a DECLARED uniform block is active even when no member is
         //    ever read (reflected from the linker objects). PreprocessShaderSource coerces
         //    every block to std140, so this covers all of them.
+        //  - IntermediateIO: GL_PROGRAM_INPUT is the input interface of the program's FIRST
+        //    stage and GL_PROGRAM_OUTPUT the output interface of its LAST one. Without this
+        //    glslang hardcodes those boundaries to vertex/fragment, so a separable program
+        //    made of one non-vertex stage has an empty input interface and one made of a
+        //    non-fragment stage an empty output interface
+        //    (KHR-GL43.program_interface_query.separate-programs-*).
+        //  - UnwrapIOBlocks: an inter-stage interface block enumerates as its MEMBERS -
+        //    "Color.r", and "gl_Position" for an anonymous gl_PerVertex - not as the block
+        //    instance. Only reachable through IntermediateIO: a vertex stage's inputs and a
+        //    fragment stage's outputs can never be blocks, so this is inert for a program
+        //    whose boundary stages are the hardcoded ones.
         if (!artifacts.program->buildReflection(EShReflectionStrictArraySuffix | EShReflectionBasicArraySuffix |
-                                                EShReflectionAllBlockVariables | EShReflectionSharedStd140UBO)) {
+                                                EShReflectionAllBlockVariables | EShReflectionSharedStd140UBO |
+                                                EShReflectionIntermediateIO | EShReflectionUnwrapIOBlocks)) {
             artifacts.linkStatus = false;
             artifacts.infoLog = "Build reflection failed.";
             DeferLog(std::format("ProgramObject {}: DoReflection - buildReflection() returned false",
@@ -852,7 +864,14 @@ namespace MobileGL::MG_State::GLState {
         }
 
         // ------------ attributes (vertex in) ---------------
-        Int inCount = artifacts.program->getNumPipeInputs();
+        // The pipe-input list is the input interface of the program's FIRST stage, which is only
+        // the vertex attribute set when the program actually HAS a vertex stage. A separable
+        // fragment/geometry/tessellation program reflects its own stage inputs here, and those are
+        // varyings - registering them as vertex attributes would hand glGetActiveAttrib and the
+        // attribute location table interstage varyings.
+        Int inCount = artifacts.program->getIntermediate(EShLangVertex) != nullptr
+                          ? artifacts.program->getNumPipeInputs()
+                          : 0;
         MGLOG_D("ProgramObject %u: Reflection - pipe input count (attributes) = %d", in.externalIndex, inCount);
 
         Int maxLoc = -1;
@@ -951,6 +970,11 @@ namespace MobileGL::MG_State::GLState {
 
     Bool ProgramLinkTask::ValidateFragmentOutputLocations() {
         if (!artifacts.program) return false;
+        // The pipe-output list is the output interface of the program's LAST stage. Only a
+        // fragment stage's outputs are color numbers indexed against GL_MAX_DRAW_BUFFERS; a
+        // separable vertex/geometry/tessellation program's outputs are varyings, and holding
+        // them to the draw-buffer range fails the link of every such program.
+        if (artifacts.program->getIntermediate(EShLangFragment) == nullptr) return true;
 
         UnorderedMap<Int, String> colorNumberOwners;
         const Int outputCount = artifacts.program->getNumPipeOutputs();
