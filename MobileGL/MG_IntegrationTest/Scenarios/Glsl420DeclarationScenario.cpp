@@ -233,19 +233,6 @@ void main() { o_color = vec4(0.0, 1.0, 0.0, 1.0); }
                 return image.At(gl.Width() / 2, gl.Height() / 2);
             }
 
-            // Magma turns a sampler array into ONE descriptor with descriptorCount = N, and
-            // ProgramFactory::ReflectLayout refuses any descriptor array that is not a
-            // dynamic UBO (MG_Backend/DirectVulkan/Renderer/ProgramFactory.cpp - "descriptor
-            // arrays are unsupported for this descriptor kind"), so program creation fails
-            // and the draw samples descriptors that were never written. On a hardware driver
-            // that reads back as wrong pixels; under lavapipe it is a segfault in the
-            // rasterizer thread. Supporting it means carrying an element dimension through
-            // UniformManager's per-binding location tables, which is a feature, not a fix -
-            // so this case is SCOPED rather than disabled, because the frontend half it also
-            // covers (the seeded units) is real on both backends and is asserted below
-            // before the draw.
-            bool SamplerArrayDescriptorsAreSupported() const { return Gl().BackendName() != "DirectVulkan"; }
-
             // Same shape, different gap: with the compile fixed, this shader now links on
             // both backends but paints nothing on Magma - the atomic counter becomes a
             // buffer descriptor there and that half is not wired up yet (the conformance
@@ -299,11 +286,6 @@ void main() { o_color = vec4(0.0, 1.0, 0.0, 1.0); }
             EXPECT_EQ(unit, 1 + i) << name << " should default to texture unit " << (1 + i);
         }
         glUseProgram(0);
-
-        if (!SamplerArrayDescriptorsAreSupported()) {
-            GTEST_SKIP() << "sampler descriptor arrays are unimplemented on " << Gl().BackendName()
-                         << "; the seeded units above are the half of this case it can answer";
-        }
 
         const Rgba8 centre = DrawAndRead(program);
         EXPECT_EQ(FirstGLError(), 0u);

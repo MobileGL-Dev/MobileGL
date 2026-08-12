@@ -1837,9 +1837,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                     // A descriptor ARRAY occupies one binding with descriptorCount = N, and is
                     // supported for exactly the kinds that have a per-element resolve path in
                     // UniformManager::BindProgramUniformBuffers: UBO instance arrays
-                    // (uniform Block {...} b[N];), storage-block instance arrays, and image
-                    // uniform arrays. Anything else must fail program creation cleanly rather
-                    // than continue with corrupt state.
+                    // (uniform Block {...} b[N];), storage-block instance arrays, image uniform
+                    // arrays, and combined-image-sampler arrays (uniform sampler2D s[N];).
+                    // Anything else - a uniform TEXEL buffer array is the one remaining kind -
+                    // must fail program creation cleanly rather than continue with corrupt state.
                     //
                     // Getting listed here is not cosmetic: a kind that is rejected leaves
                     // GetOrCreateProgram's MOBILEGL_ASSERT(remapOk) as the only complaint, and
@@ -1848,12 +1849,16 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                     // unification and the set->0 normalisation this function exists to do. A
                     // program with an image array plus any second descriptor got aliased
                     // bindings out of that, and a DEBUG build trapped on the same program.
+                    // Which is also why the message below is MGLOG_I: MGLOG_E is compiled out
+                    // of an INFO build, so a refusal that only said MGLOG_E said nothing at all
+                    // in the builds that ship.
                     const Bool arraySupportedForKind =
                         kind == ProgramFactory::DescriptorBindingKind::UniformBufferDynamic ||
                         kind == ProgramFactory::DescriptorBindingKind::StorageBuffer ||
-                        kind == ProgramFactory::DescriptorBindingKind::StorageImage;
+                        kind == ProgramFactory::DescriptorBindingKind::StorageImage ||
+                        kind == ProgramFactory::DescriptorBindingKind::CombinedImageSampler;
                     if (binding->count != 1 && !arraySupportedForKind) {
-                        MGLOG_E("ProgramFactory: descriptor arrays are unsupported for this descriptor "
+                        MGLOG_I("ProgramFactory: descriptor arrays are unsupported for this descriptor "
                                 "kind (name='%s' count=%u type=%d)",
                                 binding->name ? binding->name : "<null>", binding->count,
                                 static_cast<Int>(binding->descriptor_type));
@@ -2386,6 +2391,52 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
     }
 
+    // How many descriptors to declare for an ARRAY of opaque uniforms (samplers, images) at
+    // one binding - or 0, meaning this binding cannot be described and must be declined.
+    //
+    // Two separate things have to hold, and neither is checkable from the SPIR-V alone:
+    //
+    //  * the count has to fit a VkDescriptorSetLayoutBinding this device will accept, and fit
+    //    the Uint16 it is stored in (65536 would narrow to 0) and the scratch the bind path
+    //    reserves from it;
+    //  * the frontend reflection has to have RESERVED that many consecutive uniform locations
+    //    for this uniform, because the per-element resolve paths address element k as
+    //    baseLocation + k. SPIRV-Reflect's `count` is the FLATTENED element count, while GL
+    //    locations follow the OUTER dimension only (ProgramObject::GetUniformArraySizeByTIndex
+    //    answers TType::getOuterArraySize()). For a one-dimensional array the two agree; for
+    //    `uniform sampler2D g[2][3]` SPIR-V says 6 where the reflection reserved 2, and
+    //    elements 2..5 would silently resolve onto whichever uniform got the next locations.
+    //
+    // Asking the reflection whether baseLocation and baseLocation + count - 1 are slots of the
+    // SAME uniform tests exactly that precondition, without this code having to model how
+    // glslang chooses to lay an array of arrays out - if a future glslang reserves all six, the
+    // check passes and the per-element paths are right for it too.
+    static Uint32 DescriptorCountForOpaqueUniformArray(const MG_State::GLState::ProgramObject& program,
+                                                       const String& uniformName, Uint32 binding, Int baseLocation,
+                                                       Uint32 reflectedCount, Uint32 maxBindings,
+                                                       const char* kindLabel) {
+        const Uint32 count = std::max<Uint32>(1u, reflectedCount);
+        if (count == 1) {
+            return 1u;
+        }
+        if (count > maxBindings) {
+            MGLOG_I("ProgramFactory::ReflectLayout: %s array '%s' at binding %u has %u elements, past the %u "
+                    "this device can describe - declining the program",
+                    kindLabel, uniformName.c_str(), binding, count, maxBindings);
+            return 0u;
+        }
+        if (baseLocation < 0 ||
+            !program.UniformLocationsAliasSameUniform(baseLocation, baseLocation + static_cast<Int>(count - 1u))) {
+            MGLOG_I("ProgramFactory::ReflectLayout: %s array '%s' at binding %u spans %u descriptors but the "
+                    "reflection reserved fewer uniform locations for it (base=%d) - a multi-dimensional array "
+                    "is the usual cause, and MobileGL declines it rather than resolve elements onto a "
+                    "neighbouring uniform",
+                    kindLabel, uniformName.c_str(), binding, count, baseLocation);
+            return 0u;
+        }
+        return count;
+    }
+
     void ProgramFactory::ReflectLayout(const MG_State::GLState::ProgramObject& program,
                                        const Vector<Vector<Uint>>& spirv, VkProgramObject& entry) const {
         // Initialize layout vectors
@@ -2608,6 +2659,21 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
                 const Int location = program.GetUniformLocation(uniformName);
                 if (location < 0) {
+                    // A uniform with no location is ordinarily one GL never made active, and
+                    // dropping it is routine. An ARRAY reaching here is not routine: it is the
+                    // multi-dimensional case. `uniform sampler2D g[2][3]` arrives from
+                    // SPIRV-Reflect as one binding of 6 descriptors named "g", while the frontend
+                    // reflection keys an array of arrays by its full "[0]"-terminated spelling
+                    // ("g[0][0]"), so no base location resolves and the per-element paths have
+                    // nothing to count from. Declining is the honest answer - but it has to SAY
+                    // so at a level that survives a release build, because dropping the binding
+                    // leaves the shader reading a descriptor the layout never declared.
+                    if (sampler->count > 1) {
+                        MGLOG_I("ProgramFactory::ReflectLayout: declining '%s' at binding %u - a %u-element "
+                                "descriptor array with no frontend uniform location (a multi-dimensional array "
+                                "of samplers or images is the known cause)",
+                                uniformName.c_str(), binding, sampler->count);
+                    }
                     entry.bindingKinds[binding] = DescriptorBindingKind::None;
                     continue;
                 }
@@ -2624,15 +2690,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                     // a storage BLOCK array, whose elements take consecutive GL binding points
                     // from the declared one, each element of an image array carries its own
                     // independently assigned image unit - see ResolveStorageImageDescriptor.
-                    // Bounds-checked like the UBO array path above: descriptorCount goes
-                    // straight into a VkDescriptorSetLayoutBinding, and the bind path reserves
-                    // scratch from it, so an absurd array size has to be refused here rather
-                    // than narrowed into a Uint16 (where 65536 would become 0).
-                    const Uint32 imageArrayCount = std::max<Uint32>(1u, sampler->count);
-                    if (imageArrayCount > m_maxBindings) {
-                        MGLOG_E("ProgramFactory::ReflectLayout: image array '%s' at binding %u has %u elements, "
-                                "past the %u this device can describe",
-                                uniformName.c_str(), binding, imageArrayCount, m_maxBindings);
+                    // Bounds- and extent-checked like the UBO array path above; see
+                    // DescriptorCountForOpaqueUniformArray for what "declined" costs and why
+                    // the reflection's reserved extent - not SPIRV-Reflect's flattened count -
+                    // is what the per-element resolve can actually address.
+                    const Uint32 imageArrayCount = DescriptorCountForOpaqueUniformArray(
+                        program, uniformName, binding, location, sampler->count, m_maxBindings, "image");
+                    if (imageArrayCount == 0) {
                         entry.bindingKinds[binding] = DescriptorBindingKind::None;
                         continue;
                     }
@@ -2668,6 +2732,23 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                 "ProgramFactory::ReflectLayout: failed to resolve texture target for '%s'",
                                 uniformName.c_str());
                 if (descriptorKind == DescriptorBindingKind::CombinedImageSampler) {
+                    // An ARRAY of sampler uniforms is ONE binding carrying `count` descriptors,
+                    // exactly like the image array above, and for the same reason: GLSL 4.20
+                    // gives `layout(binding = 1) uniform sampler2D goku[4]` one declaration
+                    // spanning texture units 1..4, each element with its own glUniform1i-assigned
+                    // unit. Leaving descriptorCount at 1 declared a single-descriptor binding
+                    // while the shader indexed descriptors 1..3 of it, and the bind path wrote
+                    // only element 0 - so elements 1..N read a descriptor nobody had written
+                    // (KHR-GL42.shading_language_420pack.binding_sampler_array; lavapipe faults
+                    // inside the JIT-ed shader rather than reporting).
+                    const Uint32 samplerArrayCount = DescriptorCountForOpaqueUniformArray(
+                        program, uniformName, binding, location, sampler->count, m_maxBindings, "sampler");
+                    if (samplerArrayCount == 0) {
+                        entry.bindingKinds[binding] = DescriptorBindingKind::None;
+                        continue;
+                    }
+                    entry.bindingDescriptorCounts[binding] = static_cast<Uint16>(samplerArrayCount);
+
                     const SamplerNumericDomain numericDomain = UniformTypeToSamplerNumericDomain(uniformType);
                     MOBILEGL_ASSERT(numericDomain != SamplerNumericDomain::Unknown,
                                     "ProgramFactory::ReflectLayout: failed to resolve sampler numeric domain "
