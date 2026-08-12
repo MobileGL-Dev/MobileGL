@@ -27,6 +27,7 @@
 #include "SpirvPasses/ZeroBaseVertexPass.h"
 #include "SpirvPasses/NormalizeRectCoordinatesPass.h"
 #include "SpirvPasses/Lower1DArrayImagesPass.h"
+#include "SpirvPasses/BakeImageFormatsPass.h"
 #include "SpirvPasses/PrivateToEntryLocalPass.h"
 #include "SpirvPasses/StripUniformLocationsPass.h"
 #include "SpirvPasses/StripUboMemberRelaxedPrecisionPass.h"
@@ -684,6 +685,35 @@ namespace MobileGL {
 
                 return RunOptimizerChecked("SplitArrayVertexInputsForEssl", optimizer, inputBinary,
                                            outputBinary);
+            }
+
+            bool ShaderCompiler::BakeImageFormatsForEssl(const Vector<Uint32>& inputBinary,
+                                                         const UnorderedMap<String, Uint>& glFormatByName,
+                                                         Vector<uint32_t>& outputBinary) {
+                using namespace spvtools;
+                if (glFormatByName.empty()) return false;
+                Optimizer optimizer(SPV_ENV_VULKAN_1_1);
+                optimizer.RegisterPass(BakeImageFormatsPass::CreateBakeImageFormatsPass(glFormatByName));
+
+                return RunOptimizerChecked("BakeImageFormatsForEssl", optimizer, inputBinary, outputBinary);
+            }
+
+            bool ShaderCompiler::DeclaresFormatlessStorageImage(const Vector<Uint32>& binary) {
+                return BakeImageFormatsPass::DeclaresFormatlessStorageImage(binary);
+            }
+
+            bool ShaderCompiler::GLInternalFormatIsCoreEsslImageFormat(Uint glInternalFormat) {
+                return BakeImageFormatsPass::IsCoreEsslImageFormat(
+                    BakeImageFormatsPass::SpirvImageFormatFromGLInternalFormat(glInternalFormat));
+            }
+
+            String ShaderCompiler::EsslImageFormatSpelling(Uint glInternalFormat) {
+                return BakeImageFormatsPass::EsslSpellingOfGLInternalFormat(glInternalFormat);
+            }
+
+            bool ShaderCompiler::SpirvCrossCanPrintEsslImageFormat(Uint glInternalFormat) {
+                return BakeImageFormatsPass::IsSpirvCrossEsslPrintableFormat(
+                    BakeImageFormatsPass::SpirvImageFormatFromGLInternalFormat(glInternalFormat));
             }
 
             bool ShaderCompiler::FlattenXfbInterfaceBlocksForEssl(const Vector<Uint32>& inputBinary,

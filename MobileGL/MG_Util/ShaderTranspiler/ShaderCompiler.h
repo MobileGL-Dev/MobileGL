@@ -97,6 +97,32 @@ namespace MobileGL {
                 // but a handful. See Lower1DArrayImagesPass for what it declines and why.
                 static bool Lower1DArrayImagesForEssl(const Vector<Uint32>& inputBinary,
                                                       Vector<uint32_t>& outputBinary);
+                // Gives each format-less storage image the format bound to its image unit, so
+                // the emitted ESSL can carry the format layout qualifier GLSL ES requires of
+                // every image and desktop GLSL lets a writeonly declaration omit. `glFormatByName`
+                // maps uniform name to the glBindImageTexture format of the unit it addresses.
+                // DirectGLES transpile path only - Vulkan takes an Unknown-format storage image
+                // natively. See BakeImageFormatsPass for what it declines and why.
+                static bool BakeImageFormatsForEssl(const Vector<Uint32>& inputBinary,
+                                                    const UnorderedMap<String, Uint>& glFormatByName,
+                                                    Vector<uint32_t>& outputBinary);
+                // Whether the module declares a storage image with no format qualifier at all,
+                // i.e. whether BakeImageFormatsForEssl could change anything. One module parse,
+                // so the ~every shader that declares none pays no optimizer run.
+                static bool DeclaresFormatlessStorageImage(const Vector<Uint32>& binary);
+                // Whether the GL internal format's image-format spelling is one GLSL ES has in
+                // core. False both for a format ES only reaches through GL_NV_image_formats and
+                // for one with no image-format spelling at all, so a caller that has to decide
+                // whether to emit the extension directive can ask this one question.
+                static bool GLInternalFormatIsCoreEsslImageFormat(Uint glInternalFormat);
+                // The ESSL layout-qualifier spelling of a GL internal format ("r8ui", "rgba32f"),
+                // empty when the format has no image-format spelling at all.
+                static String EsslImageFormatSpelling(Uint glInternalFormat);
+                // Whether SPIRV-Cross will print that format when it targets ESSL. It throws on
+                // the ones it calls desktop-only - taking the whole stage with it - so a caller
+                // must not ask BakeImageFormatsForEssl for those, and completes them in the
+                // emitted text instead.
+                static bool SpirvCrossCanPrintEsslImageFormat(Uint glInternalFormat);
                 static bool RebaseInstanceIndexForVulkan(const Vector<Uint32>& inputBinary,
                                                          Vector<uint32_t>& outputBinary);
                 // Builds the non-indexed-draw variant of a vertex shader: every gl_BaseVertex

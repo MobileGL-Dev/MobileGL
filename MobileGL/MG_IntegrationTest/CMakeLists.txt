@@ -70,6 +70,7 @@ add_executable(MobileGLIntegrationTest
     Scenarios/ProgramPipelineScenario.cpp
     Scenarios/ImageLoadStoreSsoScenario.cpp
     Scenarios/ImageTargetKindScenario.cpp
+    Scenarios/ImageFormatQualifierScenario.cpp
     Scenarios/SsboDeclarationFormScenario.cpp
     Scenarios/Glsl420DeclarationScenario.cpp
     Scenarios/FragmentOutputArrayIndexScenario.cpp

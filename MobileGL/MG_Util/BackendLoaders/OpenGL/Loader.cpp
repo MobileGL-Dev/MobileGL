@@ -912,6 +912,9 @@ namespace MobileGL::MG_Util::BackendLoader {
                 if (std::strcmp(extension, "GL_NV_shader_noperspective_interpolation") == 0) {
                     caps.SupportsNoperspectiveInterpolation = true;
                 }
+                if (std::strcmp(extension, "GL_NV_image_formats") == 0) {
+                    caps.SupportsExtendedImageFormats = true;
+                }
                 if (std::strcmp(extension, "GL_OES_shader_multisample_interpolation") == 0) {
                     caps.SupportsShaderMultisampleInterpolation = true;
                 }

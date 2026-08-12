@@ -16,9 +16,11 @@
 #include <MG_Backend/DirectGLES/Utils.h>
 
 using namespace MobileGL;
+using MobileGL::MG_Backend::DirectGLES::PrgramImpl::BakeImageFormatQualifiers;
 using MobileGL::MG_Backend::DirectGLES::PrgramImpl::ForceFlatIntegerVaryings;
 using MobileGL::MG_Backend::DirectGLES::PrgramImpl::IMAGE_WRITE_ALIAS_PREFIX;
 using MobileGL::MG_Backend::DirectGLES::PrgramImpl::RemoveLayoutBinding;
+using MobileGL::MG_Backend::DirectGLES::PrgramImpl::RequestExtendedImageFormats;
 using MobileGL::MG_Backend::DirectGLES::PrgramImpl::SplitReadWriteImageUniforms;
 
 namespace {
@@ -434,4 +436,117 @@ void main() { tes_gs_coord = tcs_tes_coord[0]; }
     EXPECT_TRUE(Contains(out, "layout(location = 1) in vec2 tcs_tes_coord[];")) << out;
     EXPECT_TRUE(Contains(out, "layout(location = 1) out vec2 tes_gs_coord;")) << out;
     EXPECT_EQ(CountOf(out, "flat"), 0u) << out;
+}
+
+// --- image format qualifier completion ---------------------------------------------------------
+//
+// GLSL ES requires a format layout qualifier on every image; desktop GLSL lets a writeonly
+// declaration omit one. The format is normally written into the SPIR-V before SPIRV-Cross runs
+// (BakeImageFormatsPass), but SPIRV-Cross THROWS rather than printing the formats it calls
+// desktop-only for ESSL - r8ui among them - so those are completed here, on the emitted text.
+
+// The KHR-GL4x.packed_depth_stencil.stencil_texturing stencil half: `writeonly uniform uimage2D`
+// with GL_R8UI bound to its unit.
+TEST(BakeImageFormatQualifiersTest, AFormatlessDeclarationGetsTheBoundFormat) {
+    const String source = R"(#version 320 es
+layout(binding = 1) uniform writeonly highp uimage2D uni_image;
+void main() { imageStore(uni_image, ivec2(0), uvec4(15u)); }
+)";
+    const String out = BakeImageFormatQualifiers(source, {{"uni_image", "r8ui"}});
+    EXPECT_TRUE(Contains(out, "layout(r8ui, binding = 1) uniform writeonly highp uimage2D uni_image;")) << out;
+}
+
+// A declaration with NO layout at all still has to end up with one, or the driver rejects it for
+// exactly the reason this pass exists.
+TEST(BakeImageFormatQualifiersTest, ADeclarationWithNoLayoutGetsOne) {
+    const String source = R"(#version 320 es
+uniform writeonly highp uimage2D uni_image;
+void main() { imageStore(uni_image, ivec2(0), uvec4(1u)); }
+)";
+    const String out = BakeImageFormatQualifiers(source, {{"uni_image", "r16i"}});
+    EXPECT_TRUE(Contains(out, "layout(r16i) uniform writeonly highp uimage2D uni_image;")) << out;
+}
+
+// A DECLARED format is authoritative and must survive, whatever the map says - the frontend never
+// puts a declared image in the map, and the pass must not depend on that being true.
+TEST(BakeImageFormatQualifiersTest, ADeclaredFormatIsNeverOverwritten) {
+    const String source = R"(#version 320 es
+layout(binding = 1, rgba8ui) uniform writeonly highp uimage2D uni_image;
+void main() { imageStore(uni_image, ivec2(0), uvec4(1u)); }
+)";
+    const String out = BakeImageFormatQualifiers(source, {{"uni_image", "r8ui"}});
+    EXPECT_EQ(out, source) << out;
+}
+
+// Only the named uniform. A second image in the same shader - format-less because the pass
+// declined it, or because its unit holds nothing - must be left exactly as it is.
+TEST(BakeImageFormatQualifiersTest, OnlyTheNamedUniformIsTouched) {
+    const String source = R"(#version 320 es
+layout(binding = 0) uniform writeonly highp uimage2D named;
+layout(binding = 1) uniform writeonly highp uimage2D other;
+void main() { imageStore(named, ivec2(0), uvec4(1u)); imageStore(other, ivec2(0), uvec4(2u)); }
+)";
+    const String out = BakeImageFormatQualifiers(source, {{"named", "r8ui"}});
+    EXPECT_TRUE(Contains(out, "layout(r8ui, binding = 0) uniform writeonly highp uimage2D named;")) << out;
+    EXPECT_TRUE(Contains(out, "layout(binding = 1) uniform writeonly highp uimage2D other;")) << out;
+}
+
+// The format the pass writes has to survive the two passes that run after it, or nothing was
+// gained: the read+write split copies declarations, and the binding strip edits layout qualifiers.
+TEST(BakeImageFormatQualifiersTest, TheWrittenFormatSurvivesTheLaterImagePasses) {
+    const String source = R"(#version 320 es
+layout(binding = 3) uniform writeonly highp uimage2D uni_image;
+void main() { imageStore(uni_image, ivec2(0), uvec4(1u)); }
+)";
+    String out = BakeImageFormatQualifiers(source, {{"uni_image", "r8ui"}});
+    out = SplitReadWriteImageUniforms(out);
+    out = RemoveLayoutBinding(out);
+    EXPECT_TRUE(Contains(out, "r8ui")) << out;
+    EXPECT_TRUE(Contains(out, "binding = 3")) << out;
+}
+
+TEST(BakeImageFormatQualifiersTest, AnEmptyMapOrAnImagelessShaderIsANoOp) {
+    const String withImage = R"(#version 320 es
+layout(binding = 1) uniform writeonly highp uimage2D uni_image;
+void main() { imageStore(uni_image, ivec2(0), uvec4(1u)); }
+)";
+    EXPECT_EQ(BakeImageFormatQualifiers(withImage, {}), withImage);
+
+    const String withoutImage = R"(#version 320 es
+layout(location = 0) out highp vec4 mg_FragColor;
+void main() { mg_FragColor = vec4(1.0); }
+)";
+    EXPECT_EQ(BakeImageFormatQualifiers(withoutImage, {{"uni_image", "r8ui"}}), withoutImage);
+}
+
+// --- GL_NV_image_formats directive --------------------------------------------------------------
+
+TEST(RequestExtendedImageFormatsTest, TheDirectiveGoesRightAfterTheVersionLine) {
+    const String source = R"(#version 320 es
+layout(r8ui, binding = 1) uniform writeonly highp uimage2D uni_image;
+void main() { imageStore(uni_image, ivec2(0), uvec4(1u)); }
+)";
+    const String out = RequestExtendedImageFormats(source, true);
+    EXPECT_TRUE(Contains(out, "#version 320 es\n#extension GL_NV_image_formats : require\n")) << out;
+}
+
+// Never speculatively: `#extension` naming an extension the driver does not advertise is itself a
+// compile error, so the caller's "not needed" answer has to be honoured exactly.
+TEST(RequestExtendedImageFormatsTest, NotNeededMeansNotEmitted) {
+    const String source = R"(#version 320 es
+layout(rgba8ui, binding = 1) uniform writeonly highp uimage2D uni_image;
+void main() { imageStore(uni_image, ivec2(0), uvec4(1u)); }
+)";
+    EXPECT_EQ(RequestExtendedImageFormats(source, false), source);
+}
+
+TEST(RequestExtendedImageFormatsTest, AnAlreadyPresentDirectiveIsNotDuplicated) {
+    const String source = R"(#version 320 es
+#extension GL_NV_image_formats : require
+layout(r8ui, binding = 1) uniform writeonly highp uimage2D uni_image;
+void main() { imageStore(uni_image, ivec2(0), uvec4(1u)); }
+)";
+    const String out = RequestExtendedImageFormats(source, true);
+    EXPECT_EQ(out, source);
+    EXPECT_EQ(CountOf(out, "GL_NV_image_formats"), 1u) << out;
 }

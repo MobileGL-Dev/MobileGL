@@ -137,6 +137,26 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // ES 3.2 needs no directive at all and an EXT driver already has the right one.
         String RetargetTextureBufferExtension(String glslCode,
                                               MG_External::GLESCapabilities::TextureBufferTier tier);
+        // Adds `#extension GL_NV_image_formats : require` when the shader carries an image
+        // format qualifier GLSL ES has no core spelling for. SPIRV-Cross prints the format and
+        // asks for nothing, so the request has to be made here. `needed` is the caller's answer,
+        // because only it knows which formats are in play AND whether the driver advertises the
+        // extension - requesting an unadvertised extension is itself a compile error, so this is
+        // never emitted speculatively. A no-op when not needed or already present.
+        String RequestExtendedImageFormats(String glslCode, Bool needed);
+        // Writes a format layout qualifier into the image declarations named in
+        // `esslFormatByUniformName` that still have none. The completion half of the image-format
+        // bake, and ONLY that: the SPIR-V pass (BakeImageFormatsPass) is what normally puts the
+        // format in, but SPIRV-Cross throws rather than printing the formats it calls
+        // desktop-only when it targets ESSL - r8ui among them, which is what the stencil half of
+        // KHR-GL4x.packed_depth_stencil.stencil_texturing binds - and a throw loses the whole
+        // stage. So those formats stay out of the module and are spelled here instead, on the
+        // emitted text, where nothing can refuse them.
+        //
+        // Declarations that already carry a format are left exactly as they are, whoever wrote
+        // it. Must run before RemoveLayoutBinding, which is where an image's layout qualifier
+        // stops being safe to edit by hand.
+        String BakeImageFormatQualifiers(String glslCode, const UnorderedMap<String, String>& esslFormatByUniformName);
         String RemoveLayoutBinding(const String& glslCode);
         // Prefix of the writeonly half a read+write image uniform is split into (see
         // SplitReadWriteImageUniforms); the suffix is the image's own name.

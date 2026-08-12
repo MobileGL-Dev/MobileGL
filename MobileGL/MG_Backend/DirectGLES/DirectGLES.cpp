@@ -2195,7 +2195,15 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 twin->GetUnormFallbackClampOutputMask() != g_unormFallbackClampOutputMask ||
                 twin->GetFragColorBroadcastCount() != g_fragColorBroadcastCount ||
                 twin->GetShaderStorageBlockBindingSignature() !=
-                    ComputeShaderStorageBlockBindingSignature(*currentProgram)) {
+                    ComputeShaderStorageBlockBindingSignature(*currentProgram) ||
+                // A fourth of the same shape, and the reason glBindImageTexture itself does
+                // nothing: GLSL ES demands a format layout qualifier on an image where desktop
+                // GLSL lets a writeonly declaration omit one, so a format-less declaration is
+                // compiled against the format the application BOUND, and a rebind to a
+                // different one makes what was built wrong. Asked of the twin because only it
+                // knows which units its own images address - and answered by an empty-vector
+                // test for every program that declares its formats, which is nearly all of them.
+                !twin->ImageUnitFormatsStillMatch()) {
                 twin->SyncToBackend(currentProgram);
             }
             g_currentDrawFrontendProgram = currentProgram.get();
