@@ -155,6 +155,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
     // (possibly GPU-written) indirect command buffer, so its declaration expands into a
     // std430 SSBO view of that buffer indexed by a CPU-computed word index, with the plain
     // mg_BaseInstance uniform as the fallback for non-indirect draws.
+    //
+    // The word index is stored ONE-BASED, so that zero - the value every GLSL uniform starts
+    // at - is the "not an indirect draw" sentinel. Nothing seeds this uniform before a
+    // program's first draw, and the non-indirect draw entry points never write it at all, so a
+    // zero-based index with a negative sentinel would leave every such draw reading
+    // mg_indirectWords[0] out of a storage buffer no one bound. That is not a silent zero on a
+    // real driver: it returned garbage on Adreno, and a garbage gl_BaseInstance pushed the CTS
+    // shader_draw_parameters geometry clean off screen.
     String PromoteDrawParameterGlobalsToUniforms(String source, GLenum shaderType) {
         if (shaderType != GL_VERTEX_SHADER) {
             return source;
@@ -208,12 +216,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
                          " { highp uint mg_indirectWords[]; };\n";
             if (rebaseInstanceId) {
                 machinery += String("#define ") + ZERO_BASED_INSTANCE_ID_NAME + " (gl_InstanceID - ((" +
-                             BASE_INSTANCE_WORD_INDEX_UNIFORM_NAME + " >= 0) ? int(mg_indirectWords[uint(" +
-                             BASE_INSTANCE_WORD_INDEX_UNIFORM_NAME + ")]) : 0))\n";
+                             BASE_INSTANCE_WORD_INDEX_UNIFORM_NAME + " > 0) ? int(mg_indirectWords[uint(" +
+                             BASE_INSTANCE_WORD_INDEX_UNIFORM_NAME + " - 1)]) : 0))\n";
             }
             machinery += String("#define ") + BASE_INSTANCE_LOWERED_NAME + " ((" +
-                         BASE_INSTANCE_WORD_INDEX_UNIFORM_NAME + " >= 0) ? int(mg_indirectWords[uint(" +
-                         BASE_INSTANCE_WORD_INDEX_UNIFORM_NAME + ")]) : " + BASE_INSTANCE_UNIFORM_NAME + ")";
+                         BASE_INSTANCE_WORD_INDEX_UNIFORM_NAME + " > 0) ? int(mg_indirectWords[uint(" +
+                         BASE_INSTANCE_WORD_INDEX_UNIFORM_NAME + " - 1)]) : " + BASE_INSTANCE_UNIFORM_NAME + ")";
             source.replace(pos, declaration.size(), machinery);
             break;
         }
@@ -4594,6 +4602,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
             m_baseInstanceUniformLocation = g_GLESFuncs.glGetUniformLocation(m_backendProgramId,
                                                                              BASE_INSTANCE_UNIFORM_NAME);
             m_drawIdUniformLocation = g_GLESFuncs.glGetUniformLocation(m_backendProgramId, DRAW_ID_UNIFORM_NAME);
+            m_baseVertexUniformLocation = g_GLESFuncs.glGetUniformLocation(m_backendProgramId,
+                                                                           BASE_VERTEX_UNIFORM_NAME);
             m_baseInstanceWordIndexUniformLocation =
                 g_GLESFuncs.glGetUniformLocation(m_backendProgramId, BASE_INSTANCE_WORD_INDEX_UNIFORM_NAME);
             // The mg_IndirectParams block binding is baked into the ESSL (ES cannot rebind
@@ -4772,14 +4782,21 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 g_GLESFuncs.glUniform1i(m_baseInstanceUniformLocation, static_cast<GLint>(baseInstance));
             }
             // A direct value disables the indirect-command-buffer read.
+            SetBaseInstanceWordIndex(-1);
+        }
+
+        // The uniform is written one-based so that its GLSL initial value, zero, already reads
+        // as "no indirect command" - see PromoteDrawParameterGlobalsToUniforms.
+        void BackendProgramObjectImpl::SetBaseInstanceWordIndex(Int32 wordIndex) const {
             if (m_baseInstanceWordIndexUniformLocation >= 0) {
-                g_GLESFuncs.glUniform1i(m_baseInstanceWordIndexUniformLocation, -1);
+                g_GLESFuncs.glUniform1i(m_baseInstanceWordIndexUniformLocation,
+                                        wordIndex < 0 ? 0 : wordIndex + 1);
             }
         }
 
-        void BackendProgramObjectImpl::SetBaseInstanceWordIndex(Int32 wordIndex) const {
-            if (m_baseInstanceWordIndexUniformLocation >= 0) {
-                g_GLESFuncs.glUniform1i(m_baseInstanceWordIndexUniformLocation, wordIndex);
+        void BackendProgramObjectImpl::SetBaseVertex(Int32 baseVertex) const {
+            if (m_baseVertexUniformLocation >= 0) {
+                g_GLESFuncs.glUniform1i(m_baseVertexUniformLocation, baseVertex);
             }
         }
 

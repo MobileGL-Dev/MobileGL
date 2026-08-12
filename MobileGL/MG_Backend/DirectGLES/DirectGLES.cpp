@@ -2905,9 +2905,38 @@ namespace MobileGL::MG_Backend::DirectGLES {
         }
     }
 
+    void SetCurrentBaseVertex(Int32 baseVertex) {
+        if (const auto program = GetCurrentBackendProgram()) {
+            program->SetBaseVertex(baseVertex);
+        }
+    }
+
     Bool CurrentProgramReadsDrawID() {
         const auto program = GetCurrentBackendProgram();
         return program != nullptr && program->ReadsDrawID();
+    }
+
+    Bool CurrentProgramReadsBaseVertex() {
+        const auto program = GetCurrentBackendProgram();
+        return program != nullptr && program->ReadsBaseVertex();
+    }
+
+    // The two questions above, asked from BEFORE PrepareForDraw - where neither can be
+    // answered honestly. GetCurrentBackendProgram only sees a twin that a previous draw
+    // already synced, and a twin from before a relink still carries the previous link's
+    // uniform locations, so "no" there means "not known yet" at least as often as it
+    // means no. The multi-draw compute tier has to decide whether to flatten a batch
+    // before PrepareForDraw runs (its dispatch cannot come after the draw state), and
+    // flattening a batch that turns out to need per-sub-draw values is unrecoverable -
+    // so an unanswerable program counts as needing them.
+    Bool CurrentProgramMayNeedPerSubDrawBuiltins(Bool batchCarriesBaseVertices) {
+        const auto& currentProgram = MG_State::pGLContext->GetProgramForDraw();
+        const auto program = GetCurrentBackendProgram();
+        if (!currentProgram || program == nullptr ||
+            program->GetSyncedLinkVersion() != currentProgram->GetLinkVersion()) {
+            return true;
+        }
+        return program->ReadsDrawID() || (batchCarriesBaseVertices && program->ReadsBaseVertex());
     }
 
     static Bool SupportsNativeIndirectDraws() {
@@ -2947,16 +2976,28 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                                      resource->id);
                 }
             }
+            // gl_BaseVertex has no SSBO view of its own: the command's baseVertex word is read
+            // from the CPU shadow, so a command whose baseVertex a compute shader wrote this
+            // frame is not observable here (baseInstance is, through the view above). Feeding
+            // the stale-but-usually-correct shadow beats leaving the uniform at the previous
+            // draw's value, which is what a program reading gl_BaseVertex saw before.
+            const Bool feedBaseVertex = CurrentProgramReadsBaseVertex();
             for (GLsizei i = 0; i < drawcount; ++i) {
                 const SizeT cmdByteOffset = commandOffset + static_cast<SizeT>(i) * stride;
                 SetCurrentDrawID(static_cast<Uint32>(i));
                 if (paramsBinding >= 0 && backendProgram) {
                     // baseInstance is the 5th word of DrawElementsIndirectCommand.
                     backendProgram->SetBaseInstanceWordIndex(static_cast<Int32>((cmdByteOffset + 16) / 4));
+                    if (feedBaseVertex) {
+                        DrawElementsIndirectCommand cmd{};
+                        std::memcpy(&cmd, commandBytes + static_cast<SizeT>(i) * stride, sizeof(cmd));
+                        SetCurrentBaseVertex(cmd.baseVertex);
+                    }
                 } else {
                     DrawElementsIndirectCommand cmd{};
                     std::memcpy(&cmd, commandBytes + static_cast<SizeT>(i) * stride, sizeof(cmd));
                     SetCurrentBaseInstance(cmd.baseInstance);
+                    SetCurrentBaseVertex(cmd.baseVertex);
                 }
                 g_GLESFuncs.glDrawElementsIndirect(mode, type, reinterpret_cast<const void*>(cmdByteOffset));
             }
@@ -2969,6 +3010,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 }
                 SetCurrentDrawID(static_cast<Uint32>(i));
                 SetCurrentBaseInstance(cmd.baseInstance);
+                SetCurrentBaseVertex(cmd.baseVertex);
                 const auto indexByteOffset = static_cast<SizeT>(cmd.firstIndex) * indexSize;
                 g_GLESFuncs.glDrawElementsInstancedBaseVertex(
                     mode, static_cast<GLsizei>(cmd.count), type, reinterpret_cast<const GLvoid*>(indexByteOffset),
@@ -2977,12 +3019,18 @@ namespace MobileGL::MG_Backend::DirectGLES {
         }
         SetCurrentDrawID(0);
         SetCurrentBaseInstance(0);
+        SetCurrentBaseVertex(0);
     }
 
     static void ExecuteArraysIndirectCommands(GLenum mode, const Uint8* commandBytes, SizeT commandOffset,
                                               const SharedPtr<MG_State::GLState::BufferObject>& drawIndirectBuffer,
                                               GLsizei drawcount, GLsizei stride, const char* label) {
         (void)label;
+        // DrawArraysIndirectCommand has no baseVertex word, so gl_BaseVertex is zero for every
+        // command here. Written BEFORE the draws, not merely restored after them: the previous
+        // draw is what leaves a stale value, and restoring afterwards would only protect the
+        // NEXT draw while these commands ran with the stale one.
+        SetCurrentBaseVertex(0);
         const Bool useNative = drawIndirectBuffer != nullptr && SupportsNativeIndirectDraws();
         if (useNative) {
             const auto backendProgram = GetCurrentBackendProgram();
@@ -3269,7 +3317,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
         DrawSyncFlags syncBit = DrawSyncBit::IndexBuffer;
         PrepareForDraw(syncBit);
         CheckPrimitiveRestartSupported(type);
+        SetCurrentBaseVertex(basevertex);
         g_GLESFuncs.glDrawElementsBaseVertex(mode, count, type, indices, basevertex);
+        SetCurrentBaseVertex(0);
     }
 
     void MultiDrawArrays(GLenum mode, const GLint* first, const GLsizei* count, GLsizei drawcount) {
@@ -3279,6 +3329,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
         DrawSyncFlags syncBit = DrawSyncBit::None;
         PrepareForDraw(syncBit);
 
+        // This loop IS the emulation - there is no batched tier for the non-indexed form -
+        // so each sub-draw has to be given its own gl_DrawID here, exactly as the indexed
+        // ladder and the indirect executors do. Without it every sub-draw of a
+        // glMultiDrawArrays read draw index 0.
+        const Bool feedDrawID = CurrentProgramReadsDrawID();
         const auto& currentVAO = MG_State::pGLContext->GetBoundVertexArray();
         for (GLsizei i = 0; i < drawcount; ++i) {
             // Client-side arrays are uploaded per sub-draw range, like the single DrawArrays path.
@@ -3288,8 +3343,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     (*backendVAOSlot)->SyncClientSideAttributesForDrawArrays(currentVAO, first[i], count[i]);
                 }
             }
+            if (feedDrawID) SetCurrentDrawID(static_cast<Uint32>(i));
             g_GLESFuncs.glDrawArrays(mode, first[i], count[i]);
         }
+        if (feedDrawID) SetCurrentDrawID(0);
     }
 
     // Both glMultiDrawElements entry points are emulated - ES has neither in core - by the
@@ -3403,6 +3460,15 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return;
         }
 
+        // Both counts are read from the CPU shadow, which a buffer with no shadow does not
+        // have - MappedData() is null there and the reads below would be a null dereference,
+        // not a wrong picture. The DirectVulkan twin declines the same way.
+        if (parameterBuffer->MappedData() == nullptr || drawBuffer->MappedData() == nullptr) {
+            MGLOG_E("MultiDrawElementsIndirectCount skipped: CPU fallback cannot read the parameter or "
+                    "draw-indirect buffer");
+            return;
+        }
+
         Uint32 actualDrawCount = 0;
         std::memcpy(&actualDrawCount, parameterBuffer->MappedData() + drawcount, sizeof(actualDrawCount));
         actualDrawCount = std::min<Uint32>(actualDrawCount, static_cast<Uint32>(maxdrawcount));
@@ -3444,11 +3510,79 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                       drawcount, stride, "MultiDrawArraysIndirect");
     }
 
+    // The non-indexed twin of MultiDrawElementsIndirectCount, and structurally identical to it:
+    // ES has no GL_PARAMETER_BUFFER at all, so the draw count is read from the CPU shadow of the
+    // bound one and the batch degenerates into an ordinary indirect multi-draw of that many
+    // commands. Missing from the backend table until now, which made every
+    // glMultiDrawArraysIndirectCount an INVALID_OPERATION ("backend does not support
+    // indirect-parameter array draws") on DirectGLES while the extension was advertised.
+    void MultiDrawArraysIndirectCount(GLenum mode, const void* indirect, GLintptr drawcount, GLsizei maxdrawcount,
+                                      GLsizei stride) {
+#if MOBILEGL_LOG_ACTIVE_LEVEL <= MOBILEGL_LOG_LEVEL_DEBUG && MOBILEGL_ENABLE_SCOPE_MARKER
+        DebugImpl::OpenGLScopeMarker marker(__func__);
+#endif
+        if (maxdrawcount <= 0) {
+            return;
+        }
+        if (stride == 0) {
+            stride = sizeof(DrawArraysIndirectCommand);
+        }
+        if (stride < static_cast<GLsizei>(sizeof(DrawArraysIndirectCommand))) {
+            MGLOG_E("MultiDrawArraysIndirectCount skipped: stride %d is smaller than command size %zu",
+                    stride, sizeof(DrawArraysIndirectCommand));
+            return;
+        }
+
+        DrawSyncFlags syncBit = DrawSyncBit::IndirectBuffer | DrawSyncBit::Instancing;
+        PrepareForDraw(syncBit);
+
+        auto drawBuffer = MG_State::pGLContext->GetBufferBindingSlot(BufferTarget::DrawIndirect).GetBoundObject();
+        auto parameterBuffer = MG_State::pGLContext->GetBufferBindingSlot(BufferTarget::Parameter).GetBoundObject();
+        if (!drawBuffer) {
+            MGLOG_E("MultiDrawArraysIndirectCount skipped: no GL_DRAW_INDIRECT_BUFFER is bound");
+            return;
+        }
+        if (!parameterBuffer) {
+            MGLOG_E("MultiDrawArraysIndirectCount skipped: no GL_PARAMETER_BUFFER is bound");
+            return;
+        }
+
+        drawBuffer->SyncPersistentMappedRange();
+        parameterBuffer->SyncPersistentMappedRange();
+
+        const SizeT commandOffset = reinterpret_cast<SizeT>(indirect);
+        const SizeT commandBytes = commandOffset + static_cast<SizeT>(stride) * static_cast<SizeT>(maxdrawcount - 1) +
+            sizeof(DrawArraysIndirectCommand);
+        if (commandBytes > drawBuffer->GetSize()) {
+            MGLOG_E("MultiDrawArraysIndirectCount skipped: invalid GL_DRAW_INDIRECT_BUFFER binding or range");
+            return;
+        }
+        if (drawcount < 0 || static_cast<SizeT>(drawcount) + sizeof(Uint32) > parameterBuffer->GetSize()) {
+            MGLOG_E("MultiDrawArraysIndirectCount skipped: invalid GL_PARAMETER_BUFFER binding or range");
+            return;
+        }
+
+        // See the indexed twin: no CPU shadow means no count to read, not a wrong one.
+        if (parameterBuffer->MappedData() == nullptr || drawBuffer->MappedData() == nullptr) {
+            MGLOG_E("MultiDrawArraysIndirectCount skipped: CPU fallback cannot read the parameter or "
+                    "draw-indirect buffer");
+            return;
+        }
+
+        Uint32 actualDrawCount = 0;
+        std::memcpy(&actualDrawCount, parameterBuffer->MappedData() + drawcount, sizeof(actualDrawCount));
+        actualDrawCount = std::min<Uint32>(actualDrawCount, static_cast<Uint32>(maxdrawcount));
+        ExecuteArraysIndirectCommands(mode, drawBuffer->MappedData() + commandOffset, commandOffset, drawBuffer,
+                                      static_cast<GLsizei>(actualDrawCount), stride, "MultiDrawArraysIndirectCount");
+    }
+
     void DrawRangeElementsBaseVertex(GLenum mode, GLuint start, GLuint end, GLsizei count, GLenum type,
                                      const void* indices, GLint basevertex) {
         DrawSyncFlags syncBit = DrawSyncBit::IndexBuffer;
         PrepareForDraw(syncBit);
+        SetCurrentBaseVertex(basevertex);
         g_GLESFuncs.glDrawRangeElementsBaseVertex(mode, start, end, count, type, indices, basevertex);
+        SetCurrentBaseVertex(0);
     }
 
     void DrawRangeElements(GLenum mode, GLuint start, GLuint end, GLsizei count, GLenum type, const void* indices) {
@@ -3462,7 +3596,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
         DrawSyncFlags syncBit = DrawSyncBit::IndexBuffer | DrawSyncBit::Instancing;
         PrepareForDraw(syncBit);
         SetCurrentBaseInstance(baseinstance);
+        SetCurrentBaseVertex(basevertex);
         g_GLESFuncs.glDrawElementsInstancedBaseVertex(mode, count, type, indices, instancecount, basevertex);
+        SetCurrentBaseVertex(0);
         SetCurrentBaseInstance(0);
     }
 
@@ -3470,7 +3606,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                          GLsizei instancecount, GLint basevertex) {
         DrawSyncFlags syncBit = DrawSyncBit::IndexBuffer | DrawSyncBit::Instancing;
         PrepareForDraw(syncBit);
+        SetCurrentBaseVertex(basevertex);
         g_GLESFuncs.glDrawElementsInstancedBaseVertex(mode, count, type, indices, instancecount, basevertex);
+        SetCurrentBaseVertex(0);
     }
 
     void DrawElementsInstancedBaseInstance(GLenum mode, GLsizei count, GLenum type, const void* indices,

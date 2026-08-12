@@ -82,14 +82,26 @@ namespace MobileGL::MG_Backend::DirectGLES {
     // GLES core supports only GL_PRIMITIVE_RESTART_FIXED_INDEX. Throws when the app enabled
     // the arbitrary GL_PRIMITIVE_RESTART with a non-fixed index for this index type.
     void CheckPrimitiveRestartSupported(GLenum indexType);
-    // Feed the current program's gl_BaseInstance / gl_DrawID emulation uniforms. Both are
-    // no-ops when the program does not read the corresponding builtin.
+    // Feed the current program's gl_BaseInstance / gl_DrawID / gl_BaseVertex emulation
+    // uniforms. All are no-ops when the program does not read the corresponding builtin.
     void SetCurrentBaseInstance(Uint32 baseInstance);
     void SetCurrentDrawID(Uint32 drawId);
+    // GL's gl_BaseVertex is the base-vertex parameter of an indexed draw and zero for every
+    // command that has none - including all the DrawArrays forms - so every draw path that
+    // does not carry one must leave this at zero rather than inherit the last draw's value.
+    void SetCurrentBaseVertex(Int32 baseVertex);
     // True when the current program actually reads gl_DrawID, i.e. when a batched
     // (single driver call) multi-draw tier would have to feed it one value for the whole
     // batch and would therefore be wrong.
     Bool CurrentProgramReadsDrawID();
+    // Same question for gl_BaseVertex: a batched multi-draw tier cannot give each sub-draw
+    // its own base vertex through a uniform either.
+    Bool CurrentProgramReadsBaseVertex();
+    // Both of the above, conservatively, for a caller that must decide BEFORE PrepareForDraw
+    // has synced the program - where "does not read it" is indistinguishable from "cannot be
+    // asked yet". Answers true whenever the backend twin is missing or predates the current
+    // link.
+    Bool CurrentProgramMayNeedPerSubDrawBuiltins(Bool batchCarriesBaseVertices);
 
     template <typename StateObject, typename BackendObject>
     class StateBackendObjectRegistry {
@@ -1025,9 +1037,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
             void SetBaseInstance(Uint32 baseInstance) const;
             void SetBaseInstanceWordIndex(Int32 wordIndex) const;
             void SetDrawID(Uint32 drawId) const;
+            void SetBaseVertex(Int32 baseVertex) const;
             // True when the transpiled program kept a gl_DrawID uniform, i.e. SetDrawID
             // actually reaches a shader read rather than being discarded.
             Bool ReadsDrawID() const { return m_drawIdUniformLocation >= 0; }
+            // Same for gl_BaseVertex: only a program that reads it pays for the per-draw
+            // uniform write, and only such a program needs the reset after one.
+            Bool ReadsBaseVertex() const { return m_baseVertexUniformLocation >= 0; }
             Int GetIndirectParamsBinding() const { return m_indirectParamsBinding; }
             Uint GetBackendProgramId() const { return m_backendProgramId; }
             // False when the last SyncToBackend could not produce a usable program (a
@@ -1077,6 +1093,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             Uint m_backendGlobalUBOId = 0;
             Int m_baseInstanceUniformLocation = -1;
             Int m_drawIdUniformLocation = -1;
+            Int m_baseVertexUniformLocation = -1;
             Int m_baseInstanceWordIndexUniformLocation = -1;
             Int m_indirectParamsBinding = -1;
             Uint32 m_snormFallbackClampOutputMask = 0;
