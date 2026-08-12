@@ -346,14 +346,48 @@ void main() {
 
     EXPECT_NE(rewritten.find("int instance = mg_ZeroBasedInstanceID + mg_BaseInstanceLowered;"),
               MobileGL::String::npos);
-    EXPECT_NE(rewritten.find("#define mg_ZeroBasedInstanceID (gl_InstanceID - ((mg_BaseInstanceWordIndex >= 0) ? "
-                             "int(mg_indirectWords[uint(mg_BaseInstanceWordIndex)]) : 0))"),
+    // One-based word index: zero is the "not an indirect draw" sentinel because that is
+    // the value a GLSL uniform starts at and no draw path writes it before the first draw.
+    EXPECT_NE(rewritten.find("#define mg_ZeroBasedInstanceID (gl_InstanceID - ((mg_BaseInstanceWordIndex > 0) ? "
+                             "int(mg_indirectWords[uint(mg_BaseInstanceWordIndex - 1)]) : 0))"),
               MobileGL::String::npos);
     EXPECT_NE(rewritten.find(
                   "layout(std430, binding = 12) readonly buffer mg_IndirectParams { highp uint mg_indirectWords[]; };"),
               MobileGL::String::npos);
     // The one inside the #define machinery must be the only surviving gl_InstanceID.
     EXPECT_EQ(CountOccurrences(rewritten, "gl_InstanceID"), 1u);
+}
+
+// The sentinel itself, on the builtin it exists for. A zero-based index with a
+// negative "off" value made every NON-indirect draw of such a program read
+// mg_indirectWords[0] out of a storage buffer nothing had bound - the uniform starts
+// at zero and no non-indirect draw path writes it - which is where the CTS
+// shader_draw_parameters cases lost their geometry on Adreno. Pinned as text because
+// this contract lives in two places at once: the generated ESSL below and the +1 that
+// BackendProgramObjectImpl::SetBaseInstanceWordIndex applies.
+TEST(DirectGLESSanity, TheIndirectWordIndexIsOneBasedSoItsUnwrittenValueMeansNotIndirect) {
+    const ScopedGLESCapabilitiesOverride capsGuard;
+    auto& caps = MobileGL::MG_Backend::DirectGLES::g_GLESCapabilities;
+    caps.IndirectDrawInstanceIdIncludesBaseInstance = false;
+    caps.MaxShaderStorageBufferBindings = 13;
+
+    const MobileGL::String source = R"(#version 310 es
+highp int mg_BaseInstanceLowered;
+void main() {
+    gl_Position = vec4(float(mg_BaseInstanceLowered));
+}
+)";
+
+    const auto rewritten = MobileGL::MG_Backend::DirectGLES::PromoteDrawParameterGlobalsToUniforms(
+        source, GL_VERTEX_SHADER);
+
+    EXPECT_NE(rewritten.find("#define mg_BaseInstanceLowered ((mg_BaseInstanceWordIndex > 0) ? "
+                             "int(mg_indirectWords[uint(mg_BaseInstanceWordIndex - 1)]) : mg_BaseInstance)"),
+              MobileGL::String::npos)
+        << rewritten;
+    // A zero-based form would spell either of these; neither may survive.
+    EXPECT_EQ(rewritten.find("mg_BaseInstanceWordIndex >= 0"), MobileGL::String::npos);
+    EXPECT_EQ(rewritten.find("uint(mg_BaseInstanceWordIndex)"), MobileGL::String::npos);
 }
 
 TEST(DirectGLESSanity, KeepsInstanceIdWhenIndirectDrawsAreConforming) {

@@ -65,6 +65,12 @@ namespace MobileGL {
                 static bool LowerRectImages(const Vector<Uint32>& inputBinary, Vector<uint32_t>& outputBinary);
                 static bool RebaseInstanceIndexForVulkan(const Vector<Uint32>& inputBinary,
                                                          Vector<uint32_t>& outputBinary);
+                // Builds the non-indexed-draw variant of a vertex shader: every gl_BaseVertex
+                // read becomes zero, which is what GL defines for a command carrying no
+                // baseVertex parameter while Vulkan's builtin would report firstVertex.
+                // See ZeroBaseVertexPass.
+                static bool ZeroBaseVertexForVulkan(const Vector<Uint32>& inputBinary,
+                                                    Vector<uint32_t>& outputBinary);
                 // Re-declares 64-bit float vertex inputs as their 32-bit unsigned word pair
                 // (double -> uvec2, dvec2 -> uvec4) and bitcasts them back to double at entry, so no
                 // VK_FORMAT_R64*_SFLOAT is needed - lavapipe advertises none of them for vertex

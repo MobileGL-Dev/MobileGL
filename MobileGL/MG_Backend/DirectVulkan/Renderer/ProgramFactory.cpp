@@ -1979,13 +1979,27 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     // cannot be corrected and instanced draws with a non-zero baseInstance misrender; this
     // detects the case so the user gets one warning instead of silent corruption.
     Bool ProgramFactory::ReflectedReadsInstanceIndexBuiltin(const SpvReflectShaderModule& reflectModule) {
+        return ReflectedDeclaresInputBuiltin(reflectModule, SpvBuiltInInstanceIndex);
+    }
+
+    // GL's gl_BaseVertex and Vulkan's BaseVertex agree for indexed draws and disagree for every
+    // other command, so a program declaring the builtin needs the ZeroBaseVertex variant when a
+    // non-indexed draw uses it (see CompileOptionBit::ZeroBaseVertex). "Declares" rather than
+    // "reads" is the honest word and the useful one: the zeroing pass keeps the variable, so
+    // both variants of a program answer this question identically.
+    Bool ProgramFactory::ReflectedReadsBaseVertexBuiltin(const SpvReflectShaderModule& reflectModule) {
+        return ReflectedDeclaresInputBuiltin(reflectModule, SpvBuiltInBaseVertex);
+    }
+
+    Bool ProgramFactory::ReflectedDeclaresInputBuiltin(const SpvReflectShaderModule& reflectModule,
+                                                       SpvBuiltIn builtin) {
         for (Uint32 entryIndex = 0; entryIndex < reflectModule.entry_point_count; ++entryIndex) {
             const SpvReflectEntryPoint& entryPoint = reflectModule.entry_points[entryIndex];
             for (Uint32 variableIndex = 0; variableIndex < entryPoint.input_variable_count; ++variableIndex) {
                 const SpvReflectInterfaceVariable* variable = entryPoint.input_variables[variableIndex];
                 if (variable != nullptr &&
                     (variable->decoration_flags & SPV_REFLECT_DECORATION_BUILT_IN) != 0 &&
-                    variable->built_in == SpvBuiltInInstanceIndex) {
+                    variable->built_in == builtin) {
                     return true;
                 }
             }
@@ -2244,6 +2258,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                              VkProgramObject& entry) const {
         entry.activeVertexInputLocationMask = 0;
         entry.vertexInputTypes.fill(0);
+        entry.readsBaseVertexBuiltin = false;
 
         for (SizeT moduleIndex = 0; moduleIndex < shaders.size() && moduleIndex < spirv.size(); ++moduleIndex) {
             if (!shaders[moduleIndex] || shaders[moduleIndex]->GetShaderStage() != ShaderStage::Vertex) {
@@ -2264,6 +2279,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             if (createResult != SPV_REFLECT_RESULT_SUCCESS) {
                 continue;
             }
+
+            entry.readsBaseVertexBuiltin = ReflectedReadsBaseVertexBuiltin(reflectModule);
 
             if (!m_shaderDrawParametersEnabled && ReflectedReadsInstanceIndexBuiltin(reflectModule)) {
                 static Bool s_warnedInstanceIndexUnsupported = false;
@@ -2909,6 +2926,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // a FragCoordYFlip variant also depends on the baked default-framebuffer height, so
         // that height rides in the free high half of the key. Flags occupy the low bits, and a
         // height cannot exceed the 16 bits a swapchain extent fits in.
+        //
+        // "The low bits" is load-bearing and was until now only a comment: a flag that reached
+        // bit 16 would alias the height and two different variants would share one memo slot.
+        static_assert(static_cast<Uint>(CompileOptionBit::ZeroBaseVertex) < (1u << 16),
+                      "CompileOptionBit values must stay below bit 16: GetOrCreateProgram packs the "
+                      "default-framebuffer height into the high half of the same memo key");
         const Uint memoKey = (flags & CompileOptionBit::FragCoordYFlip)
                                  ? (flags.GetRaw() | (m_defaultFramebufferHeight << 16))
                                  : flags.GetRaw();
@@ -3023,6 +3046,26 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 } else {
                     MGLOG_E("ProgramFactory: failed to rebase gl_InstanceID for program %u; "
                             "instanced draws with a non-zero baseInstance may render incorrectly",
+                            program.GetExternalIndex());
+                }
+            }
+
+            // The non-indexed variant of a vertex stage that reads gl_BaseVertex: GL wants zero
+            // there, Vulkan's builtin would hand it the draw's firstVertex. Requested per draw
+            // through CompileOptionBit::ZeroBaseVertex, so the indexed variant of the same
+            // program keeps the native builtin and stays correct for glDrawElementsBaseVertex
+            // and for the baseVertex word of an indexed indirect command.
+            if (shaders[i] && shaders[i]->GetShaderStage() == ShaderStage::Vertex &&
+                (flags & CompileOptionBit::ZeroBaseVertex)) {
+                Vector<Uint> zeroedSpirv;
+                if (MG_Util::ShaderTranspiler::ShaderCompiler::ZeroBaseVertexForVulkan(moduleSpirvs[i],
+                                                                                       zeroedSpirv)) {
+                    moduleSpirvs[i] = std::move(zeroedSpirv);
+                } else {
+                    // Failing open keeps the native builtin, which is the pre-fix behavior:
+                    // gl_BaseVertex reads firstVertex on a DrawArrays instead of zero.
+                    MGLOG_E("ProgramFactory: failed to zero gl_BaseVertex for program %u; non-indexed "
+                            "draws will read the draw's first vertex from it instead of zero",
                             program.GetExternalIndex());
                 }
             }

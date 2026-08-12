@@ -773,6 +773,19 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         ProgramFactory::CompileOptionFlags m_lastLodBaseFlags = {};
         ProgramFactory::CompileOptionFlags m_lastLodResultFlags = {};
 
+        // Does the current program's vertex stage declare the BaseVertex builtin? A property
+        // of the program's SPIR-V, so (lifetime id, backend-state version) is the whole key.
+        //
+        // Memoized rather than re-asked because asking means resolving the UN-zeroed program
+        // variant, and a program that only ever draws non-indexed would then compile a variant
+        // no draw uses AND re-stamp its use every draw, so the idle sweep could never retire
+        // it. With the memo the answer is known before the first lookup and only the variant
+        // the draw actually needs is resolved.
+        Bool m_lastBaseVertexQueryValid = false;
+        Uint64 m_lastBaseVertexProgramLifetimeId = 0;
+        Uint32 m_lastBaseVertexProgramVersion = 0;
+        Bool m_lastBaseVertexReads = false;
+
         // Snapshot behind TrySetupDrawFastPath. Values only: the program and
         // render-pass caches are open-addressing maps whose entries move on
         // insert, so no pointers into them are cached; the pipeline handle is

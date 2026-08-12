@@ -60,6 +60,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             // PositionYFlip (the two are the same fact about the same draws) except under a
             // quarter turn, which this renderer does not convert rectangles for either.
             FragCoordYFlip = 1 << 7,
+            // Replaces the vertex stage's gl_BaseVertex reads with zero. GL defines the builtin
+            // as zero for every drawing command that has no baseVertex parameter - all the
+            // DrawArrays forms - while Vulkan's BaseVertex reports firstVertex there. Set only
+            // for a non-indexed draw whose program actually reads the builtin, so nothing else
+            // acquires a second program/pipeline variant. See ZeroBaseVertexPass.
+            ZeroBaseVertex = 1 << 8,
         };
         using CompileOptionFlags = Flags<CompileOptionBit>;
         using HashType = Uint64;
@@ -129,6 +135,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             // gl_FragDepth); shader-computed depth is immune to the cross-pipeline
             // position-invariance quirk (see PipelineFactory::ShouldSuppressDepthWrite).
             Bool fragmentReplacesDepth = false;
+            // The vertex module declares the BaseVertex builtin. Selects the ZeroBaseVertex
+            // program variant for non-indexed draws, and is deliberately a property of the
+            // PROGRAM rather than of the variant: the zeroed variant leaves the variable
+            // declared, so both variants answer the same and the draw path can ask either.
+            Bool readsBaseVertexBuiltin = false;
             // Frame-boundary counter value of the last GetOrCreateProgram hit; drives
             // cache eviction (see OnFrameBoundary). Mutable: the draw snapshot's memoised
             // entry pointer re-stamps use through a const reference (StampProgramUse).
@@ -179,6 +190,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 producerOutputComponentCount = other.producerOutputComponentCount;
                 fragmentInputComponentCount = other.fragmentInputComponentCount;
                 fragmentReplacesDepth = other.fragmentReplacesDepth;
+                readsBaseVertexBuiltin = other.readsBaseVertexBuiltin;
                 lastUsedFrame = other.lastUsedFrame;
                 other.hash = 0;
                 other.descriptorSetLayout = VK_NULL_HANDLE;
@@ -192,6 +204,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 other.producerOutputComponentCount = 0;
                 other.fragmentInputComponentCount = 0;
                 other.fragmentReplacesDepth = false;
+                other.readsBaseVertexBuiltin = false;
                 other.lastUsedFrame = 0;
             }
             VkProgramObject& operator=(VkProgramObject&& other) noexcept {
@@ -231,6 +244,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 producerOutputComponentCount = other.producerOutputComponentCount;
                 fragmentInputComponentCount = other.fragmentInputComponentCount;
                 fragmentReplacesDepth = other.fragmentReplacesDepth;
+                readsBaseVertexBuiltin = other.readsBaseVertexBuiltin;
                 lastUsedFrame = other.lastUsedFrame;
                 other.hash = 0;
                 other.descriptorSetLayout = VK_NULL_HANDLE;
@@ -244,6 +258,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 other.producerOutputComponentCount = 0;
                 other.fragmentInputComponentCount = 0;
                 other.fragmentReplacesDepth = false;
+                other.readsBaseVertexBuiltin = false;
                 other.lastUsedFrame = 0;
                 return *this;
             }
@@ -341,6 +356,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // True when an entry point reads the InstanceIndex builtin. Only gates a diagnostic:
         // without shaderDrawParameters such a shader cannot have gl_InstanceID rebased.
         static Bool ReflectedReadsInstanceIndexBuiltin(const SpvReflectShaderModule& reflectModule);
+        // True when an entry point declares the BaseVertex builtin, i.e. when a non-indexed
+        // draw with this program has to take the ZeroBaseVertex variant.
+        static Bool ReflectedReadsBaseVertexBuiltin(const SpvReflectShaderModule& reflectModule);
+        // Shared by the two above: does any entry point list an input variable decorated with
+        // this builtin?
+        static Bool ReflectedDeclaresInputBuiltin(const SpvReflectShaderModule& reflectModule, SpvBuiltIn builtin);
 
     private:
         struct ProgramLookupCache {

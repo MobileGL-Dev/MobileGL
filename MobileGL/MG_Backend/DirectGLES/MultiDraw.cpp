@@ -274,17 +274,22 @@ namespace MobileGL::MG_Backend::DirectGLES::MultiDrawImpl {
         // the batch's own shape - not the driver - rules it out; the compute tier keeps
         // its remaining feasibility checks inside its implementation, where the data it
         // has to walk is already in hand.
-        GLESMultiDrawMode ResolveTierForBatch(Bool programReadsDrawID, Bool hasIndexBuffer) {
+        GLESMultiDrawMode ResolveTierForBatch(Bool programReadsDrawID, Bool perSubDrawBaseVertex,
+                                              Bool hasIndexBuffer) {
             ResolveTierOnce();
             GLESMultiDrawMode tier = g_resolvedTier;
 
             // Batched tiers issue one driver entry for the whole batch, so the emulated
             // gl_DrawID uniform can only hold one value across every sub-draw. A program
             // that reads gl_DrawID gets an unrolled tier, which feeds each sub-draw its
-            // own index (the spec's value); nothing else observes the difference.
+            // own index (the spec's value); nothing else observes the difference. The
+            // emulated gl_BaseVertex is one uniform for the same reason, so a batch whose
+            // sub-draws carry their own base vertices unrolls too - even the Ext tier,
+            // which hands the driver the whole basevertex array, can only leave ONE value
+            // in the uniform the shader reads.
             const Bool batched = tier == GLESMultiDrawMode::Ext || tier == GLESMultiDrawMode::MultiIndirect ||
                                  tier == GLESMultiDrawMode::Compute;
-            if (batched && programReadsDrawID) {
+            if (batched && (programReadsDrawID || perSubDrawBaseVertex)) {
                 tier = SupportsTier(GLESMultiDrawMode::BaseVertex) ? GLESMultiDrawMode::BaseVertex
                                                                    : GLESMultiDrawMode::DrawElements;
             }
@@ -371,7 +376,8 @@ namespace MobileGL::MG_Backend::DirectGLES::MultiDrawImpl {
         // ---------------------------------------------------------------------------
 
         Bool RunIndirect(GLenum mode, const GLsizei* count, GLenum type, const GLvoid* const* indices,
-                         GLsizei drawcount, const GLint* basevertex, Bool batched, Bool feedDrawID) {
+                         GLsizei drawcount, const GLint* basevertex, Bool batched, Bool feedDrawID,
+                         Bool feedBaseVertex) {
             if (!SupportsTier(batched ? GLESMultiDrawMode::MultiIndirect : GLESMultiDrawMode::Indirect)) return false;
             const SizeT indexSize = IndexTypeSize(type);
             if (indexSize == 0) return false;
@@ -413,10 +419,12 @@ namespace MobileGL::MG_Backend::DirectGLES::MultiDrawImpl {
             } else {
                 for (GLsizei i = 0; i < drawcount; ++i) {
                     if (feedDrawID) SetCurrentDrawID(static_cast<Uint32>(i));
+                    if (feedBaseVertex) SetCurrentBaseVertex(basevertex ? basevertex[i] : 0);
                     const SizeT commandOffset = commandBase + static_cast<SizeT>(i) * sizeof(DrawElementsIndirectCommand);
                     g_GLESFuncs.glDrawElementsIndirect(mode, type, reinterpret_cast<const void*>(commandOffset));
                 }
                 if (feedDrawID) SetCurrentDrawID(0);
+                if (feedBaseVertex) SetCurrentBaseVertex(0);
             }
             BufferImpl::BindBufferId(GL_DRAW_INDIRECT_BUFFER, previousIndirectBinding);
             NoteTierExecuted(batched ? GLESMultiDrawMode::MultiIndirect : GLESMultiDrawMode::Indirect);
@@ -428,15 +436,17 @@ namespace MobileGL::MG_Backend::DirectGLES::MultiDrawImpl {
         // ---------------------------------------------------------------------------
 
         Bool RunBaseVertexLoop(GLenum mode, const GLsizei* count, GLenum type, const GLvoid* const* indices,
-                               GLsizei drawcount, const GLint* basevertex, Bool feedDrawID) {
+                               GLsizei drawcount, const GLint* basevertex, Bool feedDrawID, Bool feedBaseVertex) {
             if (!SupportsTier(GLESMultiDrawMode::BaseVertex)) return false;
             for (GLsizei i = 0; i < drawcount; ++i) {
                 if (count[i] <= 0) continue;
                 if (feedDrawID) SetCurrentDrawID(static_cast<Uint32>(i));
+                if (feedBaseVertex) SetCurrentBaseVertex(basevertex ? basevertex[i] : 0);
                 g_GLESFuncs.glDrawElementsBaseVertex(mode, count[i], type, indices[i],
                                                      basevertex ? basevertex[i] : 0);
             }
             if (feedDrawID) SetCurrentDrawID(0);
+            if (feedBaseVertex) SetCurrentBaseVertex(0);
             NoteTierExecuted(GLESMultiDrawMode::BaseVertex);
             return true;
         }
@@ -446,7 +456,8 @@ namespace MobileGL::MG_Backend::DirectGLES::MultiDrawImpl {
         // ---------------------------------------------------------------------------
 
         Bool RunRebasedDrawElements(GLenum mode, const GLsizei* count, GLenum type, const GLvoid* const* indices,
-                                    GLsizei drawcount, const GLint* basevertex, Bool feedDrawID) {
+                                    GLsizei drawcount, const GLint* basevertex, Bool feedDrawID,
+                                    Bool feedBaseVertex) {
             const SizeT indexSize = IndexTypeSize(type);
             if (indexSize == 0) return false;
 
@@ -500,11 +511,16 @@ namespace MobileGL::MG_Backend::DirectGLES::MultiDrawImpl {
             for (GLsizei i = 0; i < drawcount; ++i) {
                 if (count[i] <= 0) continue;
                 if (feedDrawID) SetCurrentDrawID(static_cast<Uint32>(i));
+                // The base vertex is folded into the rewritten index stream here, so the
+                // driver sees none - but gl_BaseVertex still has to report the value the
+                // application passed for this sub-draw.
+                if (feedBaseVertex) SetCurrentBaseVertex(basevertex ? basevertex[i] : 0);
                 g_GLESFuncs.glDrawElements(mode, count[i], GL_UNSIGNED_INT,
                                            reinterpret_cast<const void*>(indexBase + cursor * sizeof(Uint32)));
                 cursor += static_cast<SizeT>(count[i]);
             }
             if (feedDrawID) SetCurrentDrawID(0);
+            if (feedBaseVertex) SetCurrentBaseVertex(0);
             BufferImpl::BindBufferId(GL_ELEMENT_ARRAY_BUFFER, previousIndexBinding);
             NoteTierExecuted(GLESMultiDrawMode::DrawElements);
             return true;
@@ -837,8 +853,15 @@ void main() {
         // afterwards would mean unpicking the program, SSBO and index bindings
         // PrepareForDraw just made, and a dispatch inside an open transform feedback
         // span is not legal at all. On success it hands back a flattened index stream.
+        // A batch whose sub-draws carry their own base vertices cannot be flattened either
+        // when the program reads gl_BaseVertex: one draw call leaves one uniform value.
+        // Asked conservatively because this decision precedes PrepareForDraw - see
+        // CurrentProgramMayNeedPerSubDrawBuiltins. Flattening is the irreversible half:
+        // once the batch is one draw the values are gone, whereas declining to flatten only
+        // costs the unrolled tier.
         FlattenedStream flattened;
-        if (ResolvedTier() == GLESMultiDrawMode::Compute && !CurrentProgramReadsDrawID()) {
+        if (ResolvedTier() == GLESMultiDrawMode::Compute &&
+            !CurrentProgramMayNeedPerSubDrawBuiltins(basevertex != nullptr)) {
             FlattenWithCompute(mode, count, type, indices, drawcount, basevertex, flattened);
         }
 
@@ -852,8 +875,11 @@ void main() {
             return;
         }
 
+        // Now that PrepareForDraw has synced the program, both questions have real answers;
+        // the tier choice and the per-sub-draw feeds use those, not the guess above.
         const Bool feedDrawID = CurrentProgramReadsDrawID();
-        const GLESMultiDrawMode tier = ResolveTierForBatch(feedDrawID, hasIndexBuffer);
+        const Bool feedBaseVertex = basevertex != nullptr && CurrentProgramReadsBaseVertex();
+        const GLESMultiDrawMode tier = ResolveTierForBatch(feedDrawID, feedBaseVertex, hasIndexBuffer);
 
         Bool drawn = false;
         switch (tier) {
@@ -861,16 +887,19 @@ void main() {
             drawn = RunExt(mode, count, type, indices, drawcount, basevertex);
             break;
         case GLESMultiDrawMode::MultiIndirect:
-            drawn = RunIndirect(mode, count, type, indices, drawcount, basevertex, /*batched=*/true, feedDrawID);
+            drawn = RunIndirect(mode, count, type, indices, drawcount, basevertex, /*batched=*/true, feedDrawID,
+                                feedBaseVertex);
             break;
         case GLESMultiDrawMode::Indirect:
-            drawn = RunIndirect(mode, count, type, indices, drawcount, basevertex, /*batched=*/false, feedDrawID);
+            drawn = RunIndirect(mode, count, type, indices, drawcount, basevertex, /*batched=*/false, feedDrawID,
+                                feedBaseVertex);
             break;
         case GLESMultiDrawMode::BaseVertex:
-            drawn = RunBaseVertexLoop(mode, count, type, indices, drawcount, basevertex, feedDrawID);
+            drawn = RunBaseVertexLoop(mode, count, type, indices, drawcount, basevertex, feedDrawID, feedBaseVertex);
             break;
         case GLESMultiDrawMode::DrawElements:
-            drawn = RunRebasedDrawElements(mode, count, type, indices, drawcount, basevertex, feedDrawID);
+            drawn = RunRebasedDrawElements(mode, count, type, indices, drawcount, basevertex, feedDrawID,
+                                           feedBaseVertex);
             break;
         case GLESMultiDrawMode::Compute:
             // Its pre-pass ran above; reaching here means it declined this batch's shape.
@@ -883,8 +912,13 @@ void main() {
         // below are the floor: a base-vertex replay where the driver has one, and the
         // rewritten index stream where it does not. Both are safe for any batch these
         // entry points can receive.
-        if (!drawn) drawn = RunBaseVertexLoop(mode, count, type, indices, drawcount, basevertex, feedDrawID);
-        if (!drawn) drawn = RunRebasedDrawElements(mode, count, type, indices, drawcount, basevertex, feedDrawID);
+        if (!drawn) {
+            drawn = RunBaseVertexLoop(mode, count, type, indices, drawcount, basevertex, feedDrawID, feedBaseVertex);
+        }
+        if (!drawn) {
+            drawn = RunRebasedDrawElements(mode, count, type, indices, drawcount, basevertex, feedDrawID,
+                                           feedBaseVertex);
+        }
         if (!drawn) {
             MGLOG_E("DirectGLES multi-draw: no usable tier for a %d sub-draw batch (mode 0x%x, type 0x%x); "
                     "the batch was dropped",
