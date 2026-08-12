@@ -21,6 +21,7 @@
 #include "SpirvPasses/DemoteFloat64Pass.h"
 #include "SpirvPasses/LowerDrawParametersPass.h"
 #include "SpirvPasses/PackDoubleVertexInputsPass.h"
+#include "SpirvPasses/FlattenXfbInterfaceBlocksPass.h"
 #include "SpirvPasses/SplitArrayVertexInputsPass.h"
 #include "SpirvPasses/RebaseInstanceIndexPass.h"
 #include "SpirvPasses/ZeroBaseVertexPass.h"
@@ -682,6 +683,26 @@ namespace MobileGL {
 
                 return RunOptimizerChecked("SplitArrayVertexInputsForEssl", optimizer, inputBinary,
                                            outputBinary);
+            }
+
+            bool ShaderCompiler::FlattenXfbInterfaceBlocksForEssl(const Vector<Uint32>& inputBinary,
+                                                                  const std::set<String>& blockNames,
+                                                                  std::set<String>& flattenedBlockNames,
+                                                                  Vector<uint32_t>& outputBinary) {
+                using namespace spvtools;
+                if (blockNames.empty()) return false;
+                Optimizer optimizer(SPV_ENV_VULKAN_1_1);
+                optimizer.RegisterPass(FlattenXfbInterfaceBlocksPass::CreateFlattenXfbInterfaceBlocksPass(
+                    blockNames, &flattenedBlockNames));
+
+                return RunOptimizerChecked("FlattenXfbInterfaceBlocksForEssl", optimizer, inputBinary,
+                                           outputBinary);
+            }
+
+            bool ShaderCompiler::RewriteXfbCaptureNameForFlattenedBlock(
+                const String& captureName, const std::set<String>& flattenedBlockNames, String& outName) {
+                return FlattenXfbInterfaceBlocksPass::RewriteCaptureName(captureName, flattenedBlockNames,
+                                                                         outName);
             }
 
             bool ShaderCompiler::PackDoubleVertexInputsForVulkan(const Vector<Uint32>& inputBinary,

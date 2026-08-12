@@ -4,6 +4,7 @@ add_executable(
         SpirvPassTest
         SpirvPassTest.cpp
         DemoteFloat64Test.cpp
+        FlattenXfbInterfaceBlocksTest.cpp
 )
 
 target_include_directories(SpirvPassTest PRIVATE

@@ -462,4 +462,72 @@ void main() {
         glDeleteProgram(program);
     }
 
+    // Same program, but every one of the 16 elements is asked for a DIFFERENT current value.
+    //
+    // An input array occupies one location per element (GL 4.6 core 11.1.1), so `in vec4 a[16]`
+    // at location 0 is active on 0..15 - and the whole location span is what a backend reads to
+    // decide which attributes need their current value pushed. Reflection used to record the
+    // span of the ELEMENT type only, so a 16-element array claimed exactly one location: every
+    // element above the first silently read the (0,0,0,1) an unwritten input defaults to instead
+    // of the value glVertexAttrib4f had set. The test above could not see it, because the only
+    // element it reads a current value from is element 0 - the one location the array did claim.
+    TEST_F(VertexAttribBindingScenario, EveryInputArrayElementGetsItsOwnCurrentValue) {
+        if (!Ready()) GTEST_SKIP();
+
+        const std::string vs = R"(#version 430 core
+layout(location = 0) in vec4 vs_in_attrib[16];
+out StageData {
+  vec4 attrib[16];
+} vs_out;
+void main() {
+  for (int i = 0; i < vs_in_attrib.length(); ++i) {
+    vs_out.attrib[i] = vs_in_attrib[i];
+  }
+}
+)";
+        std::vector<std::string> names;
+        for (int i = 0; i < 16; ++i) names.push_back("StageData.attrib[" + std::to_string(i) + "]");
+        std::vector<const char*> varyings;
+        for (const auto& n : names) varyings.push_back(n.c_str());
+
+        std::string log;
+        const GLuint program = BuildCaptureProgram(vs, varyings, &log);
+        ASSERT_NE(program, 0u) << "capture program did not link: " << log;
+
+        // Distinct in every component, and never (0,0,0,1): the value an element that was
+        // skipped would report has to be distinguishable from every value that was asked for.
+        for (GLuint i = 0; i < 16; ++i) {
+            const float base = static_cast<float>(i) + 1.0f;
+            glVertexAttrib4f(i, base, base + 100.0f, base + 200.0f, base + 300.0f);
+        }
+
+        constexpr std::size_t kFloatsPerPoint = 64;
+        std::vector<float> poison(kFloatsPerPoint, kPoison);
+        glBindBufferBase(GL_TRANSFORM_FEEDBACK_BUFFER, 0, m_xfbo);
+        glBufferData(GL_TRANSFORM_FEEDBACK_BUFFER, static_cast<GLsizeiptr>(poison.size() * sizeof(float)),
+                     poison.data(), GL_DYNAMIC_DRAW);
+        glEnable(GL_RASTERIZER_DISCARD);
+        glUseProgram(program);
+        glBeginTransformFeedback(GL_POINTS);
+        glDrawArrays(GL_POINTS, 0, 1);
+        glEndTransformFeedback();
+        glDisable(GL_RASTERIZER_DISCARD);
+
+        std::vector<float> data(poison.size(), kPoison);
+        glGetBufferSubData(GL_TRANSFORM_FEEDBACK_BUFFER, 0,
+                           static_cast<GLsizeiptr>(data.size() * sizeof(float)), data.data());
+        glUseProgram(0);
+
+        for (int element = 0; element < 16; ++element) {
+            const float base = static_cast<float>(element) + 1.0f;
+            EXPECT_FLOAT_EQ(data[element * 4 + 0], base) << "element " << element;
+            EXPECT_FLOAT_EQ(data[element * 4 + 1], base + 100.0f) << "element " << element;
+            EXPECT_FLOAT_EQ(data[element * 4 + 2], base + 200.0f) << "element " << element;
+            EXPECT_FLOAT_EQ(data[element * 4 + 3], base + 300.0f) << "element " << element;
+        }
+
+        for (GLuint i = 0; i < 16; ++i) glVertexAttrib4f(i, 0.0f, 0.0f, 0.0f, 0.0f);
+        glDeleteProgram(program);
+    }
+
 } // namespace MGITest
