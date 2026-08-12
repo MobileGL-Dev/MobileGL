@@ -111,10 +111,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
         const VulkanRendererConfig& m_config;
         VkPhysicalDevice m_physicalDevice = VK_NULL_HANDLE;
-        // Values are heap-allocated: FastSTL::unordered_map is open-addressing,
-        // so INSERT invalidates references to stored values. The draw path (and
-        // the VAOs' state-pointer memos) hold entry pointers across inserts;
-        // only the unique_ptr cell moves, never the pointee.
+        // Values are heap-allocated: UnorderedMap is open-addressing, so INSERT
+        // invalidates references to stored values - and so does ERASE, which shifts
+        // the rest of the probe cluster into the hole and therefore moves entries
+        // other than the erased one. The draw path (and the VAOs' state-pointer
+        // memos) hold entry pointers across both; only the unique_ptr cell moves,
+        // never the pointee.
         UnorderedMap<HashType, UniquePtr<BackendVertexInputState>> m_cache;
         // Monotonic frame-boundary counter (bumped in OnFrameBoundary) for cache aging.
         Uint64 m_frameBoundaryCounter = 0;

@@ -8660,7 +8660,7 @@ void main() {
         // blit binding below: for a renderbuffer/texture that has never been part of any
         // render pass yet (e.g. a GL_NONE draw buffer slot whose attachment is only ever
         // touched via an explicit glReadBuffer), materializing lazily creates its backing
-        // Vulkan resource for the first time. UnorderedMap (FastSTL, open-addressing) may
+        // Vulkan resource for the first time. UnorderedMap is open-addressing and may
         // rehash on that insertion, invalidating any RenderbufferResource*/TextureResource*
         // obtained beforehand - so ResolveColorBlitBinding's cached `trackedLayout` pointer
         // must be taken AFTER this, never before it.

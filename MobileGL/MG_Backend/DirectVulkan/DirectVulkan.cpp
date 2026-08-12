@@ -805,8 +805,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // Resolve the index BEFORE taking the reference, and bounds-check the way the
         // sibling getter does. GetShaderStorageBlockIndex re-enters GetProgramResourceCache,
         // which indexes g_programResourceCaches and can therefore insert - and that map is
-        // FastSTL's open-addressed unordered_map, whose rehash MOVES its buckets, so a
-        // reference taken before the call is left dangling. Binding a program's storage block
+        // open-addressed, so a rehash MOVES its entries and a reference taken before the
+        // call is left dangling. Binding a program's storage block
         // while another program's entry was still absent from the cache was a reproducible
         // segfault (ProgramPipelineScenario's two storage-block cases, in one process).
         const GLuint blockIndex = GetShaderStorageBlockIndex(*programObject, storageBlockName);

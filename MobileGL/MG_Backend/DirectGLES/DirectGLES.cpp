@@ -605,10 +605,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // Cached address of g_xfbObjects[g_currentXfbName]: PrepareForDraw consults
             // CurrentXfb on EVERY draw (StartPendingTransformFeedback) and the map
             // lookup was pure per-draw overhead for the overwhelmingly common no-capture
-            // case. FastSTL's open addressing keeps values in the bucket array, so ANY
-            // insert can rehash and move them (and erase/clear can too): every site that
-            // mutates the map or rebinds the current name resets this to null instead of
-            // reasoning about stability, and CurrentXfb re-resolves lazily.
+            // case. Open addressing keeps values in the bucket array, so ANY insert can
+            // rehash and move them - and erase moves them too, by shifting the rest of the
+            // probe cluster into the hole, which reaches entries other than the erased one.
+            // Every site that mutates the map or rebinds the current name resets this to
+            // null instead of reasoning about stability, and CurrentXfb re-resolves lazily.
             XfbObjectState* g_currentXfbState = nullptr;
 
             XfbObjectState& CurrentXfb() {
@@ -883,7 +884,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             if (it->second.esId != 0 && g_GLESFuncs.glDeleteTransformFeedbacks != nullptr) {
                 g_GLESFuncs.glDeleteTransformFeedbacks(1, &it->second.esId);
             }
-            g_currentXfbState = nullptr; // erase can move values (open addressing)
+            g_currentXfbState = nullptr; // erase shifts the probe cluster, moving other entries
             g_xfbObjects.erase(it);
             // The frontend reverts to the default object when the bound one is deleted.
             if (g_currentXfbName == name) {
@@ -5172,8 +5173,19 @@ namespace MobileGL::MG_Backend::DirectGLES {
                           const SharedPtr<MG_State::GLState::ITextureObject>& dstTexture,
                           GLenum dstTarget, GLint dstLevel, GLint dstX, GLint dstY, GLint dstZ,
                           GLsizei srcWidth, GLsizei srcHeight, GLsizei srcDepth) {
-        auto& srcBackendTexture = TextureImpl::SyncTextureObjectToBackend(srcTexture);
-        auto& dstBackendTexture = TextureImpl::SyncTextureObjectToBackend(dstTexture);
+        // BY VALUE, not by reference. SyncTextureObjectToBackend hands back a reference to a
+        // slot inside the backend texture registry, and the second call mutates that very map:
+        // GetOrCreate indexes it (an insert relocates entries - by rehashing, and also by
+        // robin-hood displacement well under the load factor), and Find drops any
+        // entry whose state object has expired - which, with the map open-addressed and erasing
+        // by shifting the probe cluster backwards, relocates entries other than the erased one.
+        // Either way a reference taken by the first call is stale by the time the second returns,
+        // and it is read four more times below. Copying the SharedPtr costs two refcount bumps on
+        // a path that is already doing a texture copy.
+        const SharedPtr<TextureImpl::BackendTextureObject> srcBackendTexture =
+            TextureImpl::SyncTextureObjectToBackend(srcTexture);
+        const SharedPtr<TextureImpl::BackendTextureObject> dstBackendTexture =
+            TextureImpl::SyncTextureObjectToBackend(dstTexture);
 
         const Bool srcIsDepth = MG_Util::IsDepthFormatInternalFormat(srcTexture->GetFormat());
         const Bool dstIsDepth = MG_Util::IsDepthFormatInternalFormat(dstTexture->GetFormat());

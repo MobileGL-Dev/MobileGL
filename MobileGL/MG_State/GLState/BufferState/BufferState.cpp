@@ -67,9 +67,13 @@ namespace MobileGL::MG_State::GLState {
                         }
                     }
                 }
-                // Key-based erase skips FastSTL's successor-iterator scan, which is
-                // pure overhead here and dominates delete-heavy frames.
-                m_bufferObjects.erase(index);
+                // Erase through the iterator already in hand: erase(key) would repeat the
+                // find() above, and the successor scan that once made key-based
+                // erase the cheaper of the two no longer happens here - erase(iterator)
+                // hands back an unconverted proxy, and the scan is what converting it
+                // would cost. The unbind loops above touch only the binding arrays, so
+                // `it` is still live.
+                m_bufferObjects.erase(it);
             }
             m_indexGenerator.Delete(index);
         }

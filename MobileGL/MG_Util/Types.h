@@ -55,9 +55,37 @@ namespace MobileGL {
     using SizeT = std::size_t;
     template <typename T, SizeT N>
     using Array = std::array<T, N>;
+    // ska::flat_hash_map, the same table MobileGlues settled on, at the same commit.
+    //
+    // Open addressing with robin-hood probing. Any insert, emplace, operator[],
+    // reserve or rehash invalidates every iterator, reference and pointer into the
+    // map - and NOT only by rehashing: robin-hood insertion swaps the entry being
+    // placed against the occupant whenever it has travelled further from its desired
+    // position, so an insert well under the load factor still relocates entries.
+    // Erase relocates too, and less obviously - deletion shifts the rest of the probe
+    // cluster backwards, so erasing one key can move a DIFFERENT key's element.
+    // Where a mapped value's address has to outlive later mutation, the map holds a
+    // UniquePtr/SharedPtr and the pointee stays put; those sites say so where they
+    // are declared.
+    //
+    // Erase destroys the mapped value BEFORE it repairs the probe cluster, so a
+    // mapped-value destructor that re-enters the same map sees a hole in the middle
+    // of a chain and a stale size: a re-entrant find() misses every key past the hole.
+    // Nothing does that today; do not be the first without checking.
+    //
+    // Its value_type is pair<Key, T> with the key exposed mutably, so `it->first =`
+    // compiles and silently corrupts the table - the one sharp edge this map has
+    // that a node-based one does not. Note the Allocator default matches that
+    // value_type: pair<Key, T>, not pair<const Key, T>.
+    //
+    // T must be move-ASSIGNABLE, not merely move-constructible: robin-hood probing
+    // swaps the entry being inserted against the one already in the slot whenever it
+    // has travelled further from its desired position. A move-only RAII type that
+    // declares a destructor gets no implicit move assignment, so it needs an explicit
+    // one or the table will not instantiate (see RenderPassEntry).
     template <typename Key, typename T, class Hash = std::hash<Key>, class KeyEqual = std::equal_to<Key>,
-              class Allocator = std::allocator<std::pair<const Key, T>>>
-    using UnorderedMap = FastSTL::unordered_map<Key, T, Hash, KeyEqual, Allocator>;
+              class Allocator = std::allocator<std::pair<Key, T>>>
+    using UnorderedMap = ska::flat_hash_map<Key, T, Hash, KeyEqual, Allocator>;
     template <typename T>
     inline constexpr std::remove_reference_t<T>&& Move(T&& t) noexcept {
         return static_cast<std::remove_reference_t<T>&&>(t);

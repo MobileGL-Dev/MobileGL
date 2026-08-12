@@ -101,6 +101,42 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             std::swap(layers, that.layers);
             std::swap(lastUsedFrame, that.lastUsedFrame);
         }
+        // Move ASSIGNMENT, not just construction. The move constructor above and the
+        // destructor below each independently suppress the implicit one, which left the
+        // type move-constructible but not move-assignable - and therefore not swappable,
+        // which std::swap(pair&, pair&) requires. That was invisible while UnorderedMap
+        // only ever move-CONSTRUCTED an element into a fresh slot. ska::flat_hash_map
+        // probes robin-hood: inserting swaps the entry being placed against the one
+        // already sitting in the slot whenever it has travelled further from its desired
+        // position, so the mapped type has to be swappable or the table fails to
+        // instantiate at all.
+        //
+        // SWAP SEMANTICS, exactly like the move constructor: this does not release the
+        // destination's handles, it parks them in `that`, which destroys them when it
+        // dies. That is correct for the only caller - std::swap, whose temporary expires
+        // immediately - and it is what keeps the three-move sequence from destroying a
+        // live render pass. It is NOT correct for a hand-written `a = std::move(b)` where
+        // `a` held live handles and `b` outlives the statement: those handles would then
+        // survive until `b` dies. There is no such caller; add a destroy-then-steal
+        // assignment before writing one.
+        RenderPassEntry& operator=(RenderPassEntry&& that) noexcept {
+            if (this != &that) {
+                std::swap(hash, that.hash);
+                std::swap(renderPass, that.renderPass);
+                std::swap(framebuffer, that.framebuffer);
+                std::swap(compatibilityHash, that.compatibilityHash);
+                std::swap(pendingClearAttachments, that.pendingClearAttachments);
+                std::swap(trackedAttachmentLayouts, that.trackedAttachmentLayouts);
+                std::swap(attachmentCount, that.attachmentCount);
+                std::swap(colorAttachmentCount, that.colorAttachmentCount);
+                std::swap(hasDepthStencilAttachment, that.hasDepthStencilAttachment);
+                std::swap(sampleCount, that.sampleCount);
+                std::swap(extent, that.extent);
+                std::swap(layers, that.layers);
+                std::swap(lastUsedFrame, that.lastUsedFrame);
+            }
+            return *this;
+        }
         RenderPassEntry(
             Uint64 hash,
             VkRenderPass renderpass,
@@ -315,26 +351,30 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             Uint64 deferredAtFrame = 0;
         };
 
-        // Node-based std::unordered_map, deliberately not FastSTL's open-addressing UnorderedMap:
+        // Node-based std::unordered_map, deliberately NOT the open-addressing UnorderedMap:
         // callers cache a RenderbufferResource* - or a bare &resource->layout - and then make further
         // calls that touch this map. BlitFramebuffer is the one that bit: it resolves the source and
         // destination colour bindings (ResolveColorBlitBinding caches &rbResource->layout), then
-        // materializes the source's pending clear, which looks that same resource up again. FastSTL's
-        // operator[] runs its load-factor check before find_key and reallocates the whole bucket array
-        // when occupancy crosses it, so even a plain lookup relocates every element; erase only
-        // tombstones and never decrements the occupancy, so the doubling keeps firing. After a
-        // relocation the cached pointer names freed storage still holding the pre-clear
-        // VK_IMAGE_LAYOUT_UNDEFINED, and BlitFramebuffer bails out at "source image layout is
-        // undefined", silently dropping the blit - renderbuffers_storage_multisample read back zero
-        // instead of the clear colour on exactly the iterations that grew the table.
+        // materializes the source's pending clear, which looks that same resource up again. Growing
+        // an open-addressed table relocates every element, so the cached pointer went on to name
+        // freed storage still holding the pre-clear VK_IMAGE_LAYOUT_UNDEFINED; BlitFramebuffer bailed
+        // out at "source image layout is undefined", silently dropping the blit -
+        // renderbuffers_storage_multisample read back zero instead of the clear colour on exactly the
+        // iterations that grew the table.
         //
         // Reordering the materialize ahead of the resolves - the fix ReadPixels got - does not cover
         // this: the destination resolve still runs after the source pointer is taken. The depth blit,
         // GetOrCreateRenderPass's depthRenderbufferResource and ReadDepthStencilPixels cache the same
         // kind of pointer, so the invariant belongs in the container rather than in a per-call-site
-        // ordering rule. m_textureResources is node-based for the same reason. This buys stability
-        // across rehash and insert only - erase still invalidates the erased element, which is safe
-        // here because a renderbuffer that is an FBO attachment is held alive by that attachment.
+        // ordering rule. m_textureResources is node-based for the same reason.
+        //
+        // The case for keeping this node-based got STRONGER with ska::flat_hash_map, so do not read
+        // the paragraph above as merely historical: ska erases by shifting the rest of the probe
+        // cluster backwards into the hole, so erasing one renderbuffer relocates OTHER renderbuffers'
+        // entries - a cached pointer can now be invalidated by a key it has nothing to do with, which
+        // no call-site ordering rule can defend against. (What did change: ska's operator[] returns on
+        // a hit before it runs its grow check, so a plain lookup of a PRESENT key no longer relocates.
+        // That narrows the insert hazard; it does not touch the erase one.)
         std::unordered_map<MG_State::GLState::RenderbufferObject*, RenderbufferResource> m_renderbufferResources;
         UnorderedMap<MG_State::GLState::RenderbufferObject*, PendingRenderbufferClear> m_pendingRenderbufferClears;
         Vector<DeferredRenderbufferRelease> m_deferredRenderbufferReleases;

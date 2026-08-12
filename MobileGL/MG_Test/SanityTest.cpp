@@ -33,7 +33,8 @@
 #include <MG_Util/ShaderTranspiler/ShaderCompiler.h>
 #include <MG_Util/ShaderTranspiler/ShaderSourceProcessor.h>
 #include <MG_Util/Debug/Log.h>
-#include <FastSTL/UnorderedMap.h>
+#include <MG_Util/Types.h>
+#include <set>
 
 namespace {
     class DynamicParameterBackend final : public MobileGL::MG_Backend::BackendObject {
@@ -1998,34 +1999,51 @@ TEST(DirectGLESStateGuards, DefaultFramebufferBindGoesThroughShadow) {
     EXPECT_EQ(mocks.log.Count("BindFramebuffer:"), 3u);
 }
 
-// FastSTL::unordered_map::erase(iterator) regression coverage. The open-addressing
-// iterator constructor snaps forward from a tombstoned slot to the successor, so
-// erase must NOT advance the rebuilt iterator again: the old double-advance skipped
-// one live element per erase, and erasing the element in the highest occupied
-// bucket pushed the returned index past bucket_count where it never compared equal
-// to end() again - erase-while-iterating sweeps (pipeline/program cache eviction)
-// then ran off the bucket array and fed garbage handles to vkDestroyPipeline
-// (device crash on first mass eviction during world load).
-TEST(FastSTLSanity, EraseWhileIteratingVisitsEveryElementExactlyOnce) {
-    FastSTL::unordered_map<MobileGL::Uint64, MobileGL::Uint64> map;
+// UnorderedMap::erase(iterator) contract coverage. Erase-while-iterating sweeps
+// (pipeline/program cache eviction) depend on `it = map.erase(it)` naming the next
+// live element exactly once: a sweep that skips entries leaks them, and one that
+// runs off the end feeds garbage handles to vkDestroyPipeline (device crash on the
+// first mass eviction during world load - the failure FastSTL's double-advancing
+// erase actually produced before it was fixed).
+//
+// These pin the behaviour the call sites rely on, not one map's implementation, so
+// they are written against MobileGL::UnorderedMap and survive changing what it
+// names. Under ska::flat_hash_map the mechanism is different - erase backward-shifts
+// the rest of the probe cluster into the hole and hands back the same slot, which
+// now holds the shifted-in successor - but the observable contract is the same.
+TEST(UnorderedMapSanity, EraseWhileIteratingVisitsEveryElementExactlyOnce) {
+    MobileGL::UnorderedMap<MobileGL::Uint64, MobileGL::Uint64> map;
     constexpr MobileGL::Uint64 kCount = 1000;
     for (MobileGL::Uint64 key = 0; key < kCount; ++key) {
         map.emplace(key * 0x9e3779b97f4a7c15ull, key);
     }
     ASSERT_EQ(map.size(), kCount);
 
+    // Record WHICH keys the sweep hands back, not just how many. A count alone cannot
+    // tell a correct sweep from one that visits some element twice and misses another,
+    // which is exactly the shape a backward-shift bug takes: the shift rewrites the
+    // probe cluster, so a defect duplicates or strands elements rather than changing
+    // the tally.
+    std::set<MobileGL::Uint64> visitedKeys;
     MobileGL::SizeT visited = 0;
     for (auto it = map.begin(); it != map.end();) {
+        const MobileGL::Uint64 key = it->first;
+        EXPECT_TRUE(visitedKeys.insert(key).second) << "key " << key << " was visited twice";
         it = map.erase(it);
         ++visited;
-        ASSERT_LE(visited, kCount); // old code: runaway past end / skipped entries
+        ASSERT_LE(visited, kCount); // runaway past end / skipped entries
     }
     EXPECT_EQ(visited, kCount);
+    EXPECT_EQ(visitedKeys.size(), kCount);
+    for (MobileGL::Uint64 key = 0; key < kCount; ++key) {
+        EXPECT_TRUE(visitedKeys.count(key * 0x9e3779b97f4a7c15ull) != 0)
+            << "key " << key << " was never visited by the sweep";
+    }
     EXPECT_EQ(map.size(), 0u);
 }
 
-TEST(FastSTLSanity, EraseReturnsTheSuccessorElement) {
-    FastSTL::unordered_map<MobileGL::Uint32, MobileGL::Uint32> map;
+TEST(UnorderedMapSanity, EraseReturnsTheSuccessorElement) {
+    MobileGL::UnorderedMap<MobileGL::Uint32, MobileGL::Uint32> map;
     for (MobileGL::Uint32 key = 1; key <= 64; ++key) {
         map.emplace(key, key);
     }
@@ -2033,25 +2051,48 @@ TEST(FastSTLSanity, EraseReturnsTheSuccessorElement) {
     // Erasing every other visited element must still visit all 64 exactly once:
     // the iterator returned by erase names the very next element, not one past it.
     MobileGL::SizeT visited = 0;
-    MobileGL::SizeT erased = 0;
+    std::set<MobileGL::Uint32> erasedKeys;
+    std::set<MobileGL::Uint32> keptKeys;
     for (auto it = map.begin(); it != map.end();) {
         ++visited;
+        const MobileGL::Uint32 key = it->first;
         if ((visited & 1) != 0) {
+            erasedKeys.insert(key);
             it = map.erase(it);
-            ++erased;
         } else {
+            keptKeys.insert(key);
             ++it;
         }
         ASSERT_LE(visited, 64u);
     }
     EXPECT_EQ(visited, 64u);
-    EXPECT_EQ(map.size(), 64u - erased);
+    EXPECT_EQ(erasedKeys.size() + keptKeys.size(), 64u);
+    EXPECT_EQ(map.size(), keptKeys.size());
+
+    // The interleaved erases rewrite probe clusters underneath the cursor, so the real
+    // question is not how many elements the loop counted but whether the table still
+    // resolves every key correctly afterwards. A stranded element stays in size() but
+    // stops being findable; a duplicated one answers for a key it does not own.
+    for (const MobileGL::Uint32 key : keptKeys) {
+        const auto found = map.find(key);
+        ASSERT_NE(found, map.end()) << "surviving key " << key << " is no longer findable";
+        EXPECT_EQ(found->second, key) << "key " << key << " resolves to the wrong value";
+    }
+    for (const MobileGL::Uint32 key : erasedKeys) {
+        EXPECT_EQ(map.find(key), map.end()) << "erased key " << key << " is still findable";
+    }
 }
 
-TEST(FastSTLSanity, ErasingTheOnlyElementReturnsEnd) {
-    FastSTL::unordered_map<MobileGL::Uint32, MobileGL::Uint32> map;
+TEST(UnorderedMapSanity, ErasingTheOnlyElementReturnsEnd) {
+    using Map = MobileGL::UnorderedMap<MobileGL::Uint32, MobileGL::Uint32>;
+    Map map;
     map.emplace(42u, 1u);
-    auto next = map.erase(map.begin());
+
+    // Spell the type: erase(iterator) hands back a proxy that is convertible to an
+    // iterator but is not one, because finding the next element is not free and the
+    // callers that discard the result should not pay for it. `auto next = ...` binds
+    // the proxy instead, and then nothing it is compared against compiles.
+    Map::iterator next = map.erase(map.begin());
     EXPECT_EQ(next, map.end());
     EXPECT_TRUE(map.empty());
 }

@@ -49,8 +49,8 @@
 #include <stacktrace>
 #endif
 
-// Include FastSTL
-#include <FastSTL/UnorderedMap.h>
+// Include ska::flat_hash_map
+#include <ska/flat_hash_map.hpp>
 
 // Include xxHash
 #include <xxhash.h>

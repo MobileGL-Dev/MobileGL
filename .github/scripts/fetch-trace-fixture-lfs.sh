@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=trace-fixture-lib.sh
+. "${script_dir}/trace-fixture-lib.sh"
+
 if [ "$#" -lt 1 ] || [ "$#" -gt 2 ]; then
   echo "usage: $0 <trace-case> [fixture-dir]" >&2
   exit 2
@@ -61,57 +65,6 @@ if [ "${case_name}" = "OpenRA" ]; then
   done
   exit 0
 fi
-
-get_lfs_metadata() {
-  local file="$1"
-  local pointer
-  local expected_oid
-  local expected_size
-
-  if ! pointer="$(git show "HEAD:${file}" 2>/dev/null)"; then
-    echo "failed to read tracked fixture metadata: ${file}" >&2
-    return 1
-  fi
-  if ! grep -q '^version https://git-lfs.github.com/spec/v1$' <<< "${pointer}"; then
-    echo "tracked fixture is not a Git LFS pointer: ${file}" >&2
-    return 1
-  fi
-
-  expected_oid="$(awk '$1 == "oid" && $2 ~ /^sha256:/ { sub(/^sha256:/, "", $2); print $2 }' <<< "${pointer}")"
-  expected_size="$(awk '$1 == "size" { print $2 }' <<< "${pointer}")"
-  if ! [[ "${expected_oid}" =~ ^[0-9a-f]{64}$ ]] || ! [[ "${expected_size}" =~ ^[0-9]+$ ]]; then
-    echo "invalid Git LFS pointer metadata: ${file}" >&2
-    return 1
-  fi
-
-  printf '%s %s\n' "${expected_oid}" "${expected_size}"
-}
-
-verify_fixture_file() {
-  local downloaded_file="$1"
-  local display_name="$2"
-  local expected_oid="$3"
-  local expected_size="$4"
-  local actual_oid
-  local actual_size
-
-  if [ ! -f "${downloaded_file}" ]; then
-    echo "fixture file is missing: ${display_name}" >&2
-    return 1
-  fi
-
-  actual_size="$(wc -c < "${downloaded_file}" | tr -d '[:space:]')"
-  if [ "${actual_size}" != "${expected_size}" ]; then
-    echo "fixture size mismatch for ${display_name}: expected ${expected_size}, got ${actual_size}" >&2
-    return 1
-  fi
-
-  actual_oid="$(sha256sum "${downloaded_file}" | awk '{ print $1 }')"
-  if [ "${actual_oid}" != "${expected_oid}" ]; then
-    echo "fixture SHA-256 mismatch for ${display_name}: expected ${expected_oid}, got ${actual_oid}" >&2
-    return 1
-  fi
-}
 
 fetch_file_from_mirror() {
   local file="$1"
