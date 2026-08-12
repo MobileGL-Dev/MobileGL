@@ -251,3 +251,76 @@ process-local. For cases registered with `coherent_as_flush` (Flywheel-style
 unflushed persistent maps, e.g. the Create fixtures), pass
 `--ez coherent_as_flush true` so the replay runs with
 `MOBILEGL_COHERENT_AS_FLUSH=1`.
+
+## Reproducing the Android DirectGLES lane on Linux (ANGLE on lavapipe)
+
+The APK workflow's DirectGLES lane is not the same stack as the Linux one, which
+is why a case can be green here and red there:
+
+| lane | stack |
+| --- | --- |
+| Linux `Test` retrace, DirectGLES | Espryt -> Mesa GLES -> llvmpipe |
+| Android `APK` retrace, DirectGLES | Espryt -> **ANGLE** -> Mesa Vulkan (lavapipe) |
+| Android `APK` retrace, DirectVulkan | Magma -> lavapipe (no ANGLE) |
+
+Only the Android DirectGLES lane puts ANGLE in the middle, so an ANGLE
+translation difference shows up in exactly one of the six combinations. That
+stack can be reproduced on Linux without an emulator, which is far faster to
+iterate on than a CI round trip. The Android emulator SDK ships a glibc ANGLE:
+
+```sh
+ANGLE=$ANDROID_SDK_ROOT/emulator/lib64/gles_angle
+mkdir -p ~/angle-farm && cd ~/angle-farm
+# MobileGL dlopens these two names; ANGLE's own libEGL then dlopens the
+# unsuffixed libGLESv2.so from the same directory - without that symlink it
+# loads a truncated entry-point table and dies on a missing EGL function.
+ln -sf $ANGLE/libEGL.so    libEGL_angle.so
+ln -sf $ANGLE/libGLESv2.so libGLESv2_angle.so
+ln -sf $ANGLE/libEGL.so    libEGL.so
+ln -sf $ANGLE/libGLESv2.so libGLESv2.so
+ln -sf $ANGLE/libvulkan.so.1 libvulkan.so.1   # else eglInitialize fails
+
+MOBILEGL_USE_ANGLE=1 \
+LD_LIBRARY_PATH=~/angle-farm:/path/to/build/ \
+VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json \
+ANGLE_DEFAULT_PLATFORM=vulkan \
+  ./mobilegl_trace_replay --trace trace.trace --golden golden.png \
+    --target-call N --width 854 --height 480 --backend DirectGLES \
+    --output outdir --pbuffer-surface
+```
+
+`ANGLE_DEFAULT_PLATFORM=vulkan` is required: ANGLE otherwise picks its OpenGL
+backend and you get `ANGLE (Mesa, llvmpipe ..., OpenGL 4.6 (Core Profile))`
+instead of the CI-shaped `ANGLE (Mesa, Vulkan 1.x (llvmpipe ...))`. Check
+`MOBILEGL_TRACE_GL_RENDERER` in `outdir/retrace.log` before trusting a result.
+Run the binary directly rather than through `ctest`, whose `ENVIRONMENT`
+property overrides these variables. Build with clang, not gcc: gcc rejects
+`GLXImpl.cpp` under `-Wchanges-meaning`.
+
+### improved-transparency-minecraft-26.3 on the ANGLE lane
+
+This case has never passed on the Android DirectGLES lane. It renders correctly
+everywhere else, including Android DirectVulkan on the same emulator. The
+rendered frame loses the whole translucent layer - clouds and water are absent
+while opaque geometry is pixel-exact - so the compositing chain never receives
+the translucent content rather than blending it wrongly.
+
+It is not a MobileGL defect. Replaying the fixture through the recipe above and
+through Mesa GLES, with a `MOBILEGL_LOG_LEVEL_DEBUG` build, gives
+SSIM 1.000000 on Mesa and 0.970127 on ANGLE while MobileGL issues a
+**byte-identical GL call stream** - 2698222 calls, same names, same order, same
+arguments, the only difference being how often the app polls
+`glClientWaitSync`. Both drivers are asked for exactly the same thing and
+disagree about the pixels, so the divergence is below MobileGL, in ANGLE's
+GLES-to-Vulkan translation (or in something we emit that is legal but
+underspecified and the two implementations resolve differently).
+
+Do not "fix" this by editing the DirectGLES blend or draw-buffer paths. Two
+candidates were tested and ruled out: per-attachment blend equations are both
+recorded and applied correctly on ANGLE (`glBlendEquationSeparatei` with GL_MAX
+on one attachment reads back as GL_MAX and rasterizes as GL_MAX), and the GLES
+draw-buffer slot restriction is already handled by
+`BackendFramebufferObject::RecomputeBackendColorSlots`. Narrowing this further
+means bisecting inside the frame to find which GLES construct ANGLE mistranslates;
+the accommodation, once known, belongs with the existing
+`--avoid-angle-llvmpipe-*` flags rather than in shared backend code.
