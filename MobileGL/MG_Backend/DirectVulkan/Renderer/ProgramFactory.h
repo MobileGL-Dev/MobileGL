@@ -129,6 +129,14 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 hash = other.hash;
                 stages = std::move(other.stages);
                 modules = std::move(other.modules);
+                // Must travel with `modules`: these digests name the SPIR-V those exact
+                // shader modules were built from, and the pipeline-failure diagnostics
+                // print the two together. Leaving it behind used to merely lose the
+                // digests on a rehash; now that the cache is a robin-hood table, insertion
+                // SWAPS two entries, and a field that no move touches stays behind in the
+                // slot - pairing one program's modules with another program's digests, so
+                // a pipeline failure would be reported against the wrong SPIR-V.
+                stageSpirvDigests = std::move(other.stageSpirvDigests);
                 descriptorSetLayout = other.descriptorSetLayout;
                 pipelineLayout = other.pipelineLayout;
                 bindingKinds = std::move(other.bindingKinds);
@@ -178,6 +186,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 hash = other.hash;
                 stages = std::move(other.stages);
                 modules = std::move(other.modules);
+                stageSpirvDigests = std::move(other.stageSpirvDigests); // travels with `modules` - see the move ctor
                 descriptorSetLayout = other.descriptorSetLayout;
                 pipelineLayout = other.pipelineLayout;
                 bindingKinds = std::move(other.bindingKinds);
@@ -244,6 +253,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 }
                 modules.clear();
                 stages.clear();
+                stageSpirvDigests.clear(); // the modules they describe are gone
             }
         };
 

@@ -5175,7 +5175,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                           GLsizei srcWidth, GLsizei srcHeight, GLsizei srcDepth) {
         // BY VALUE, not by reference. SyncTextureObjectToBackend hands back a reference to a
         // slot inside the backend texture registry, and the second call mutates that very map:
-        // GetOrCreate indexes it (an insert rehashes and moves every entry), and Find drops any
+        // GetOrCreate indexes it (an insert relocates entries - by rehashing, and also by
+        // robin-hood displacement well under the load factor), and Find drops any
         // entry whose state object has expired - which, with the map open-addressed and erasing
         // by shifting the probe cluster backwards, relocates entries other than the erased one.
         // Either way a reference taken by the first call is stale by the time the second returns,

@@ -101,18 +101,24 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             std::swap(layers, that.layers);
             std::swap(lastUsedFrame, that.lastUsedFrame);
         }
-        // Move ASSIGNMENT, not just construction. The destructor below suppresses the
-        // implicit one, which left the type move-constructible but not move-assignable -
-        // and therefore not swappable, which std::swap(pair&, pair&) requires. That was
-        // invisible while UnorderedMap only ever move-CONSTRUCTED an element into a fresh
-        // slot. ska::flat_hash_map probes robin-hood: inserting swaps the entry being
-        // placed against the one already sitting in the slot whenever it has travelled
-        // further from its desired position, so the mapped type has to be swappable or the
-        // whole table fails to instantiate.
+        // Move ASSIGNMENT, not just construction. The move constructor above and the
+        // destructor below each independently suppress the implicit one, which left the
+        // type move-constructible but not move-assignable - and therefore not swappable,
+        // which std::swap(pair&, pair&) requires. That was invisible while UnorderedMap
+        // only ever move-CONSTRUCTED an element into a fresh slot. ska::flat_hash_map
+        // probes robin-hood: inserting swaps the entry being placed against the one
+        // already sitting in the slot whenever it has travelled further from its desired
+        // position, so the mapped type has to be swappable or the table fails to
+        // instantiate at all.
         //
-        // Swap-based, exactly like the move constructor: our old handles land in `that`
-        // and are destroyed when it dies, so ownership stays with a single object and no
-        // VkRenderPass/VkFramebuffer is leaked or double-destroyed.
+        // SWAP SEMANTICS, exactly like the move constructor: this does not release the
+        // destination's handles, it parks them in `that`, which destroys them when it
+        // dies. That is correct for the only caller - std::swap, whose temporary expires
+        // immediately - and it is what keeps the three-move sequence from destroying a
+        // live render pass. It is NOT correct for a hand-written `a = std::move(b)` where
+        // `a` held live handles and `b` outlives the statement: those handles would then
+        // survive until `b` dies. There is no such caller; add a destroy-then-steal
+        // assignment before writing one.
         RenderPassEntry& operator=(RenderPassEntry&& that) noexcept {
             if (this != &that) {
                 std::swap(hash, that.hash);

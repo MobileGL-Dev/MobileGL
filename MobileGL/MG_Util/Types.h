@@ -57,13 +57,21 @@ namespace MobileGL {
     using Array = std::array<T, N>;
     // ska::flat_hash_map, the same table MobileGlues settled on, at the same commit.
     //
-    // Open addressing with robin-hood probing, so a rehash moves the elements: any
-    // insert, emplace, operator[], reserve or rehash invalidates every iterator,
-    // reference and pointer into the map. Erase does too, and less obviously -
-    // deletion shifts the rest of the probe cluster backwards, so erasing one key
-    // can move a DIFFERENT key's element. Where a mapped value's address has to
-    // outlive later mutation, the map holds a UniquePtr/SharedPtr and the pointee
-    // stays put; those sites say so where they are declared.
+    // Open addressing with robin-hood probing. Any insert, emplace, operator[],
+    // reserve or rehash invalidates every iterator, reference and pointer into the
+    // map - and NOT only by rehashing: robin-hood insertion swaps the entry being
+    // placed against the occupant whenever it has travelled further from its desired
+    // position, so an insert well under the load factor still relocates entries.
+    // Erase relocates too, and less obviously - deletion shifts the rest of the probe
+    // cluster backwards, so erasing one key can move a DIFFERENT key's element.
+    // Where a mapped value's address has to outlive later mutation, the map holds a
+    // UniquePtr/SharedPtr and the pointee stays put; those sites say so where they
+    // are declared.
+    //
+    // Erase destroys the mapped value BEFORE it repairs the probe cluster, so a
+    // mapped-value destructor that re-enters the same map sees a hole in the middle
+    // of a chain and a stale size: a re-entrant find() misses every key past the hole.
+    // Nothing does that today; do not be the first without checking.
     //
     // Its value_type is pair<Key, T> with the key exposed mutably, so `it->first =`
     // compiles and silently corrupts the table - the one sharp edge this map has

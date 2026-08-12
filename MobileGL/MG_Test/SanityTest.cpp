@@ -34,6 +34,7 @@
 #include <MG_Util/ShaderTranspiler/ShaderSourceProcessor.h>
 #include <MG_Util/Debug/Log.h>
 #include <MG_Util/Types.h>
+#include <set>
 
 namespace {
     class DynamicParameterBackend final : public MobileGL::MG_Backend::BackendObject {
@@ -2018,13 +2019,26 @@ TEST(UnorderedMapSanity, EraseWhileIteratingVisitsEveryElementExactlyOnce) {
     }
     ASSERT_EQ(map.size(), kCount);
 
+    // Record WHICH keys the sweep hands back, not just how many. A count alone cannot
+    // tell a correct sweep from one that visits some element twice and misses another,
+    // which is exactly the shape a backward-shift bug takes: the shift rewrites the
+    // probe cluster, so a defect duplicates or strands elements rather than changing
+    // the tally.
+    std::set<MobileGL::Uint64> visitedKeys;
     MobileGL::SizeT visited = 0;
     for (auto it = map.begin(); it != map.end();) {
+        const MobileGL::Uint64 key = it->first;
+        EXPECT_TRUE(visitedKeys.insert(key).second) << "key " << key << " was visited twice";
         it = map.erase(it);
         ++visited;
-        ASSERT_LE(visited, kCount); // old code: runaway past end / skipped entries
+        ASSERT_LE(visited, kCount); // runaway past end / skipped entries
     }
     EXPECT_EQ(visited, kCount);
+    EXPECT_EQ(visitedKeys.size(), kCount);
+    for (MobileGL::Uint64 key = 0; key < kCount; ++key) {
+        EXPECT_TRUE(visitedKeys.count(key * 0x9e3779b97f4a7c15ull) != 0)
+            << "key " << key << " was never visited by the sweep";
+    }
     EXPECT_EQ(map.size(), 0u);
 }
 
@@ -2037,19 +2051,36 @@ TEST(UnorderedMapSanity, EraseReturnsTheSuccessorElement) {
     // Erasing every other visited element must still visit all 64 exactly once:
     // the iterator returned by erase names the very next element, not one past it.
     MobileGL::SizeT visited = 0;
-    MobileGL::SizeT erased = 0;
+    std::set<MobileGL::Uint32> erasedKeys;
+    std::set<MobileGL::Uint32> keptKeys;
     for (auto it = map.begin(); it != map.end();) {
         ++visited;
+        const MobileGL::Uint32 key = it->first;
         if ((visited & 1) != 0) {
+            erasedKeys.insert(key);
             it = map.erase(it);
-            ++erased;
         } else {
+            keptKeys.insert(key);
             ++it;
         }
         ASSERT_LE(visited, 64u);
     }
     EXPECT_EQ(visited, 64u);
-    EXPECT_EQ(map.size(), 64u - erased);
+    EXPECT_EQ(erasedKeys.size() + keptKeys.size(), 64u);
+    EXPECT_EQ(map.size(), keptKeys.size());
+
+    // The interleaved erases rewrite probe clusters underneath the cursor, so the real
+    // question is not how many elements the loop counted but whether the table still
+    // resolves every key correctly afterwards. A stranded element stays in size() but
+    // stops being findable; a duplicated one answers for a key it does not own.
+    for (const MobileGL::Uint32 key : keptKeys) {
+        const auto found = map.find(key);
+        ASSERT_NE(found, map.end()) << "surviving key " << key << " is no longer findable";
+        EXPECT_EQ(found->second, key) << "key " << key << " resolves to the wrong value";
+    }
+    for (const MobileGL::Uint32 key : erasedKeys) {
+        EXPECT_EQ(map.find(key), map.end()) << "erased key " << key << " is still findable";
+    }
 }
 
 TEST(UnorderedMapSanity, ErasingTheOnlyElementReturnsEnd) {
