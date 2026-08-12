@@ -3315,6 +3315,29 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     MGLOG_D("%s(%s:%d) ES error %s", func, file, line, MG_Util::ConvertGLEnumToString(err).c_str());
                 });
             }
+
+            // GL_DEPTH_STENCIL_TEXTURE_MODE (GL_ARB_stencil_texturing / ES 3.1 core): which aspect
+            // of a packed depth/stencil image a sampler reads. Until this was forwarded the
+            // frontend kept the mode as a pure shadow - glGetTexParameter answered it, sampling
+            // ignored it - so a usampler2D bound to a D24S8 texture in STENCIL_INDEX mode read the
+            // depth aspect. Texture state rather than sampler state, so multisample targets take
+            // it too (ES 3.1 8.10 lists it among the three pnames they accept). It is only sent
+            // when it has moved, which for the overwhelming majority of textures is never.
+            const Bool supportsStencilTextureMode =
+                g_GLESCapabilities.GLESVersion.Major > 3 ||
+                (g_GLESCapabilities.GLESVersion.Major == 3 && g_GLESCapabilities.GLESVersion.Minor >= 1);
+            if (supportsStencilTextureMode) {
+                const GLenum depthStencilTextureMode = stateTextureObject->GetDepthStencilTextureMode();
+                if (m_cacheDepthStencilTextureMode != depthStencilTextureMode) {
+                    g_GLESFuncs.glTexParameteri(target, GL_DEPTH_STENCIL_TEXTURE_MODE,
+                                                static_cast<GLint>(depthStencilTextureMode));
+                    m_cacheDepthStencilTextureMode = depthStencilTextureMode;
+                    DebugImpl::ErrorLopper::Loop([file = __FILE__, line = __LINE__, func = __func__](GLenum err) {
+                        MGLOG_D("%s(%s:%d) ES error %s", func, file, line,
+                                MG_Util::ConvertGLEnumToString(err).c_str());
+                    });
+                }
+            }
         }
 
         void ActivateTextureUnit(Uint unit) {

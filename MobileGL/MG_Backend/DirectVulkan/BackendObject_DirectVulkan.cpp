@@ -517,6 +517,15 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             E_GL_ARB_gpu_shader_int64, E_GL_KHR_debug, E_GL_ARB_gpu_shader5, E_GL_ARB_multi_bind,
             E_GL_ARB_shading_language_420pack, E_GL_ARB_vertex_attrib_binding, E_GL_ARB_shader_image_size,
             E_GL_ARB_explicit_attrib_location,
+            // Core since GL 3.1 and implemented for every version advertised here. The string
+            // matters because applications gate the ENTRY POINTS on it rather than on the
+            // version: a caller that finds the extension missing never resolves
+            // glGetUniformBlockIndex / glUniformBlockBinding, and one that then uses uniform
+            // blocks anyway calls through a null pointer.
+            E_GL_ARB_uniform_buffer_object,
+            // Sampling the stencil aspect through DEPTH_STENCIL_TEXTURE_MODE. Core from 4.3,
+            // so on a 4.0 context the string is the only way to reach it.
+            E_GL_ARB_stencil_texturing,
             // Advertised with GL_NUM_PROGRAM_BINARY_FORMATS = 0, which the
             // extension explicitly permits. It is also the only thing that
             // exposes glProgramParameteri before GL 4.1.

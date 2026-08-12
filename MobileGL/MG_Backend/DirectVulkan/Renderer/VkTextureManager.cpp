@@ -950,7 +950,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
         const TextureFormatInfo formatInfo = ResolveTextureFormatInfo(texture.GetFormat());
         const VkComponentMapping sampledComponents = ResolveSampledViewComponents(texture, formatInfo);
-        const VkImageAspectFlags sampledAspect = ResolveSampledImageViewAspectMask(resource->aspect);
+        const VkImageAspectFlags sampledAspect =
+            ResolveSampledImageViewAspectMask(resource->aspect, texture.GetDepthStencilTextureMode());
         perMipSampledView = CreateImageView(resource->image, resource->format, sampledAspect, resource->viewType,
                                             mipLevel, 1, 0, resource->arrayLayers, &sampledComponents);
         if (perMipSampledView == VK_NULL_HANDLE) {
@@ -2238,7 +2239,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         if (resource.fullView == VK_NULL_HANDLE) {
             return false;
         }
-        const VkImageAspectFlags sampledAspect = ResolveSampledImageViewAspectMask(resource.aspect);
+        const VkImageAspectFlags sampledAspect =
+            ResolveSampledImageViewAspectMask(resource.aspect, texture.GetDepthStencilTextureMode());
         resource.sampledView = CreateImageView(resource.image, resource.format, sampledAspect, resource.viewType,
                                                baseMipLevel, levelCount, 0, resource.arrayLayers, &sampledComponents);
         if (resource.sampledView == VK_NULL_HANDLE) {
@@ -2860,9 +2862,18 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
     }
 
-    VkImageAspectFlags VkTextureManager::ResolveSampledImageViewAspectMask(VkImageAspectFlags imageAspect) {
+    VkImageAspectFlags VkTextureManager::ResolveSampledImageViewAspectMask(VkImageAspectFlags imageAspect,
+                                                                           GLenum depthStencilTextureMode) {
         if ((imageAspect & VK_IMAGE_ASPECT_COLOR_BIT) != 0) {
             return VK_IMAGE_ASPECT_COLOR_BIT;
+        }
+        // A sampled view of a combined depth/stencil image may name exactly one aspect
+        // (VUID-VkDescriptorImageInfo-imageView-01976), and GL_DEPTH_STENCIL_TEXTURE_MODE is
+        // what picks it - the whole content of GL_ARB_stencil_texturing. Depth stays the
+        // default, so nothing that never sets the mode changes shape. The texture's params
+        // version moves with the mode, which is what makes the cached views be rebuilt.
+        if (depthStencilTextureMode == GL_STENCIL_INDEX && (imageAspect & VK_IMAGE_ASPECT_STENCIL_BIT) != 0) {
+            return VK_IMAGE_ASPECT_STENCIL_BIT;
         }
         if ((imageAspect & VK_IMAGE_ASPECT_DEPTH_BIT) != 0) {
             return VK_IMAGE_ASPECT_DEPTH_BIT;

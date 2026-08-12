@@ -699,6 +699,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
             FloatVec4 m_cacheBorderColor = {0.0f, 0.0f, 0.0f, 0.0f};
             Vec4<TextureSwizzleParam> m_cacheSwizzleParams = {TextureSwizzleParam::Red, TextureSwizzleParam::Green,
                                                               TextureSwizzleParam::Blue, TextureSwizzleParam::Alpha};
+            // GL_DEPTH_STENCIL_TEXTURE_MODE. GL_DEPTH_COMPONENT is the GL and ES default, so a
+            // texture that never asks for the stencil aspect never emits the call. The
+            // depth/stencil readback and replicate-blit emulations also write this parameter
+            // raw, but only ever on their own scratch textures (never on an application
+            // texture), so they cannot desynchronise this cache.
+            GLenum m_cacheDepthStencilTextureMode = GL_DEPTH_COMPONENT;
             Uint16 m_syncedSamplerVersion = 0;
             Uint16 m_syncedTextureParamsVersion = 0;
         };

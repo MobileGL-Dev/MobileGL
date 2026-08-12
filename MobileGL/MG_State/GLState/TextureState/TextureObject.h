@@ -117,7 +117,15 @@ namespace MobileGL::MG_State::GLState {
         void SetFixedSampleLocations(Bool fixedSampleLocations) override;
         Uint64 GetLifetimeId() const override;
         GLenum GetDepthStencilTextureMode() const override { return m_depthStencilTextureMode; }
-        void SetDepthStencilTextureMode(GLenum mode) override { m_depthStencilTextureMode = mode; }
+        // Bumps the params version like every other backend-visible texture parameter: the mode
+        // decides which ASPECT of a packed depth/stencil image a sampler reads, which DirectGLES
+        // forwards as a texture parameter and DirectVulkan bakes into the sampled image view. A
+        // silent write here would leave both backends showing the aspect they last built.
+        void SetDepthStencilTextureMode(GLenum mode) override {
+            if (m_depthStencilTextureMode == mode) return;
+            m_depthStencilTextureMode = mode;
+            ++m_textureParamsVersion;
+        }
 
     protected:
         static Uint64 AllocateLifetimeId();

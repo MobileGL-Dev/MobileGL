@@ -1651,6 +1651,43 @@ TEST_F(TextureTest, AnUncompressedRespecificationClearsTheCompressedTag) {
     EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
 }
 
+// GL_DEPTH_STENCIL_TEXTURE_MODE used to be a pure frontend shadow: stored, answered by
+// glGetTexParameter, and never shown to a backend. Sampling therefore always read the depth
+// aspect however the mode was set, which is the whole of
+// KHR-GL3x.packed_depth_stencil.stencil_texturing. Both backends pick the aspect up through the
+// texture-params version - DirectGLES re-emits glTexParameteri when it moves, DirectVulkan
+// rebuilds the sampled image view - so the version bump is the load-bearing part, and a
+// no-op write must not spend one (every bump costs DirectVulkan a view recreation).
+TEST_F(TextureTest, DepthStencilTextureModeIsBackendVisibleThroughTheParamsVersion) {
+    GLuint texture = 0;
+    MG_Impl::GLImpl::GenTextures(1, &texture);
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, texture);
+    MG_Impl::GLImpl::TexStorage2D(GL_TEXTURE_2D, 1, GL_DEPTH24_STENCIL8, 8, 8);
+    ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    const auto textureObject = MG_State::pGLContext->GetTextureObject(texture);
+    ASSERT_NE(textureObject, nullptr);
+    EXPECT_EQ(textureObject->GetDepthStencilTextureMode(), static_cast<GLenum>(GL_DEPTH_COMPONENT));
+
+    const Uint16 initialVersion = textureObject->GetTextureParamsVersion();
+    MG_Impl::GLImpl::TexParameteri(GL_TEXTURE_2D, GL_DEPTH_STENCIL_TEXTURE_MODE, GL_STENCIL_INDEX);
+    ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+    EXPECT_EQ(textureObject->GetDepthStencilTextureMode(), static_cast<GLenum>(GL_STENCIL_INDEX));
+    EXPECT_NE(textureObject->GetTextureParamsVersion(), initialVersion);
+
+    // Re-writing the value already in force is not a change and must not invalidate anything.
+    const Uint16 settledVersion = textureObject->GetTextureParamsVersion();
+    MG_Impl::GLImpl::TexParameteri(GL_TEXTURE_2D, GL_DEPTH_STENCIL_TEXTURE_MODE, GL_STENCIL_INDEX);
+    ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+    EXPECT_EQ(textureObject->GetTextureParamsVersion(), settledVersion);
+
+    // ...and going back to the depth aspect is a change again.
+    MG_Impl::GLImpl::TexParameteri(GL_TEXTURE_2D, GL_DEPTH_STENCIL_TEXTURE_MODE, GL_DEPTH_COMPONENT);
+    ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+    EXPECT_EQ(textureObject->GetDepthStencilTextureMode(), static_cast<GLenum>(GL_DEPTH_COMPONENT));
+    EXPECT_NE(textureObject->GetTextureParamsVersion(), settledVersion);
+}
+
 namespace {
     // 8x8 RGTC1: 2x2 blocks of 8 bytes, so the stored image is 32 bytes and one block row is 16.
     constexpr GLsizei kRgtc1Size8x8 = 32;

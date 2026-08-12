@@ -1259,7 +1259,15 @@ namespace MobileGL::MG_Impl::GLImpl {
                 MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", functionName, "instancecount must be non-negative."));
             return;
         }
-        if (!MG_State::pGLContext->ValidateTransformFeedbackName(id)) {
+        // "id is not the name of a transform feedback object" has to mean the same thing here
+        // as it does to glIsTransformFeedback, and the two predicates are not interchangeable:
+        // a name glGenTransformFeedbacks handed out is only reserved until it is first bound,
+        // and only the bind turns it into an object (GL 4.6 core 13.2.1). ValidateTransformFeedbackName
+        // answers the reservation question - the right one for glBindTransformFeedback, which is
+        // what turns a reserved name into an object - so using it here let a generated-but-unbound
+        // name through to the completed-span check below and raised INVALID_OPERATION where the
+        // spec asks for INVALID_VALUE. Name 0 is the default object and always drawable.
+        if (id != 0 && !MG_State::pGLContext->IsTransformFeedbackObject(id)) {
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidValue,
                 MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", functionName,
