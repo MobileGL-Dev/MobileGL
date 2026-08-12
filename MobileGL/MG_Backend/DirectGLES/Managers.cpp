@@ -4497,6 +4497,161 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return signature;
         }
 
+        namespace {
+            // The GL internal format bound to an image unit right now. GL_NONE for a unit
+            // outside the frontend's array, which cannot be addressed at all.
+            Uint BoundImageUnitFormat(Int unit) {
+                if (unit < 0 || unit >= MG_State::GLState::TextureState::MAX_TEXTURE_IMAGE_UNITS) return 0;
+                return static_cast<Uint>(MG_State::pGLContext->GetImageTextureBinding(unit).Format);
+            }
+
+            // Combines one (unit, format) pair into a running digest. Commutative, so the order
+            // the uniforms are walked in cannot change the answer, and mixed rather than summed
+            // so a unit and a format cannot trade places between two pairs and cancel out.
+            Uint64 MixImageUnitFormat(Uint64 signature, Int unit, Uint format) {
+                Uint64 entry = static_cast<Uint64>(static_cast<Uint32>(unit)) + 0x9e3779b97f4a7c15ull;
+                entry ^= static_cast<Uint64>(format) + 0xbf58476d1ce4e5b9ull + (entry << 6) + (entry >> 2);
+                return signature + entry;
+            }
+
+            // Reflection names an array uniform after its first element ("g_image[0]") at every
+            // location it spans; SPIR-V names the variable once, without the subscript. This is
+            // the name both sides agree on.
+            String ImageUniformBaseName(const String& reflectionName) {
+                if (reflectionName.size() >= 3 && reflectionName.compare(reflectionName.size() - 3, 3, "[0]") == 0) {
+                    return reflectionName.substr(0, reflectionName.size() - 3);
+                }
+                return reflectionName;
+            }
+
+            // Whether a glslang layout format is one GLSL ES has in core; the rest reach ES only
+            // through GL_NV_image_formats. Asked of DECLARED formats, which this backend passes
+            // through untouched - the emitted ESSL still has to be legal for the driver.
+            Bool IsCoreEsslLayoutFormat(glslang::TLayoutFormat format) {
+                switch (format) {
+                case glslang::ElfRgba32f:
+                case glslang::ElfRgba16f:
+                case glslang::ElfR32f:
+                case glslang::ElfRgba8:
+                case glslang::ElfRgba8Snorm:
+                case glslang::ElfRgba32i:
+                case glslang::ElfRgba16i:
+                case glslang::ElfRgba8i:
+                case glslang::ElfR32i:
+                case glslang::ElfRgba32ui:
+                case glslang::ElfRgba16ui:
+                case glslang::ElfRgba8ui:
+                case glslang::ElfR32ui:
+                    return true;
+                default:
+                    return false;
+                }
+            }
+        } // namespace
+
+        // What the format bake needs from the frontend, collected in one walk of the uniform
+        // reflection: which image uniforms declared NO format (the only ones a bake may touch -
+        // a declared format is authoritative and stays), what the units they address currently
+        // hold, and whether any format in play - declared or baked - is outside the ES core set.
+        ImageFormatBakeInputs CollectImageFormatBakeInputs(
+            const MG_State::GLState::ProgramObject& stateProgramObject) {
+            ImageFormatBakeInputs inputs;
+            const Uint maxUniformLoc = stateProgramObject.GetMaxUniformLocation();
+            for (Uint loc = 0; loc <= maxUniformLoc; ++loc) {
+                const auto& name = stateProgramObject.GetUniformName(loc);
+                if (name.empty()) continue;
+                if (!IsImageUniformType(stateProgramObject.GetUniformType(loc))) continue;
+                const glslang::TType* type = stateProgramObject.GetUniformTType(loc);
+                if (type == nullptr) continue;
+                if (type->getQualifier().hasFormat()) {
+                    // Declared, and therefore left exactly as written - but a non-core spelling
+                    // still needs the extension directive to survive the ES compiler.
+                    if (!IsCoreEsslLayoutFormat(type->getQualifier().getFormat())) {
+                        inputs.needsExtendedImageFormats = true;
+                    }
+                    continue;
+                }
+                const Int unit = stateProgramObject.GetUniformSamplerOrImageUnitIndex(loc);
+                if (unit < 0 || unit >= MG_State::GLState::TextureState::MAX_TEXTURE_IMAGE_UNITS) continue;
+                const Uint boundFormat = BoundImageUnitFormat(unit);
+
+                // Every format-less uniform contributes to the rebuild key, including one whose
+                // unit holds nothing yet: an image bound for the first time AFTER the link has
+                // to move the key, or the program built against "nothing bound" would never be
+                // rebuilt against the real format.
+                inputs.units.push_back(unit);
+                inputs.signature = MixImageUnitFormat(inputs.signature, unit, boundFormat);
+
+                if (boundFormat == 0) continue;
+                if (!MG_Util::ShaderTranspiler::ShaderCompiler::GLInternalFormatIsCoreEsslImageFormat(boundFormat)) {
+                    // Outside the GLSL ES core set, so the emitted ESSL only compiles with
+                    // GL_NV_image_formats. Without the extension there is no legal spelling at
+                    // all, and baking one would trade a "no format qualifier" compile error for
+                    // an "unsupported format" one - so the image is left format-less. Its unit
+                    // stays in the key, so a rebind to a core format still rebuilds and works.
+                    if (!g_GLESCapabilities.SupportsExtendedImageFormats) {
+                        MGLOG_D("Image uniform '%s' has no declared format and its unit %d holds 0x%x, which GLSL ES "
+                                "core cannot spell and this driver has no GL_NV_image_formats for.",
+                                name.c_str(), unit, boundFormat);
+                        continue;
+                    }
+                    inputs.needsExtendedImageFormats = true;
+                }
+                const String baseName = ImageUniformBaseName(name);
+                const auto existing = inputs.glFormatByUniformName.find(baseName);
+                if (existing == inputs.glFormatByUniformName.end()) {
+                    inputs.glFormatByUniformName.emplace(baseName, boundFormat);
+                } else if (existing->second != boundFormat) {
+                    // An ARRAY whose elements were pointed at units holding different formats.
+                    // One declaration carries one qualifier, so there is no spelling for it, and
+                    // the uniform is left format-less rather than given a format that is wrong
+                    // for all but one element. Marked in place with GL_NONE and swept below -
+                    // never by erasing here, because the entry is reached again by the array's
+                    // remaining elements and a flat hash map must not be mutated structurally
+                    // while an iterator into it is live.
+                    existing->second = 0;
+                }
+            }
+            for (const auto& entry : inputs.glFormatByUniformName) {
+                if (entry.second == 0) inputs.conflictedNames.push_back(entry.first);
+            }
+            for (const auto& conflicted : inputs.conflictedNames) {
+                inputs.glFormatByUniformName.erase(conflicted);
+            }
+            // Split off the ones SPIRV-Cross will not print. They cannot go through the module -
+            // it throws for them when targeting ESSL, and the stage is lost - so they are spelled
+            // into the emitted text instead. Collected first, erased after, because a flat hash
+            // map must not be restructured while it is being walked.
+            Vector<String> textCompleted;
+            for (const auto& entry : inputs.glFormatByUniformName) {
+                if (MG_Util::ShaderTranspiler::ShaderCompiler::SpirvCrossCanPrintEsslImageFormat(entry.second)) {
+                    continue;
+                }
+                String spelling = MG_Util::ShaderTranspiler::ShaderCompiler::EsslImageFormatSpelling(entry.second);
+                if (spelling.empty()) continue; // no image-format spelling at all; nothing to write
+                inputs.esslFormatQualifierByUniformName.emplace(entry.first, Move(spelling));
+                textCompleted.push_back(entry.first);
+            }
+            for (const auto& name : textCompleted) {
+                inputs.glFormatByUniformName.erase(name);
+            }
+            return inputs;
+        }
+
+        Uint64 BackendProgramObjectImpl::ComputeImageUnitFormatSignature() const {
+            if (m_formatlessImageUnits.empty()) return 0; // all but a handful of programs
+            Uint64 signature = 0;
+            for (const Int unit : m_formatlessImageUnits) {
+                signature = MixImageUnitFormat(signature, unit, BoundImageUnitFormat(unit));
+            }
+            return signature;
+        }
+
+        Bool BackendProgramObjectImpl::ImageUnitFormatsStillMatch() const {
+            if (m_formatlessImageUnits.empty()) return m_imageUnitFormatSignature == 0;
+            return ComputeImageUnitFormatSignature() == m_imageUnitFormatSignature;
+        }
+
         void BackendProgramObjectImpl::SyncToBackend(
             const SharedPtr<MG_State::GLState::ProgramObject>& stateProgramObject) {
 #ifdef TRACY_ENABLE
@@ -4537,6 +4692,18 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // this build current - the draw path compares the signature and rebuilds on a change.
             const auto& storageBlockBindingOverrides = stateProgramObject->GetShaderStorageBlockBindingOverrides();
             m_shaderStorageBlockBindingSignature = ComputeShaderStorageBlockBindingSignature(*stateProgramObject);
+            // The same shape again for image FORMATS: what a format-less image declaration
+            // compiles to depends on live glBindImageTexture state, so the pairs it was built
+            // against are recorded here and compared per draw (ImageUnitFormatsStillMatch).
+            // Taken BEFORE the transpile loop so both the bake and the key see one snapshot.
+            const ImageFormatBakeInputs imageFormatBake = CollectImageFormatBakeInputs(*stateProgramObject);
+            m_formatlessImageUnits = imageFormatBake.units;
+            m_imageUnitFormatSignature = imageFormatBake.signature;
+            for (const auto& conflicted : imageFormatBake.conflictedNames) {
+                MGLOG_D("Image uniform '%s' of program %u declares no format and its elements address units with "
+                        "different bound formats; left format-less.",
+                        conflicted.c_str(), stateProgramObject->GetExternalIndex());
+            }
 
             // Detach all existing shaders
             GLint attachedCount = 0;
@@ -4719,6 +4886,25 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     effectiveSpirv = &arrayImageSpirv;
                 }
 
+                // GLSL ES has no format-less image: `writeonly uniform uimage2D` is legal desktop
+                // GLSL 4.2 and an Adreno ES compile error ("all images have to define layout
+                // format"), which loses the whole program. Give each such image the format the
+                // application bound to its unit - the one GL's format-class rules make correct -
+                // so SPIRV-Cross prints a qualifier. AFTER the 1D-array lowering above, which
+                // also rewrites image types, so this one is looking at the final shapes.
+                //
+                // Gated on the module actually declaring one: the map is empty for every program
+                // whose images all declare formats, and the cheap probe keeps a program that has
+                // an unbound format-less image from paying an optimizer round trip per stage.
+                Vector<unsigned int> imageFormatSpirv;
+                if (!imageFormatBake.glFormatByUniformName.empty() &&
+                    MG_Util::ShaderTranspiler::ShaderCompiler::DeclaresFormatlessStorageImage(*effectiveSpirv) &&
+                    MG_Util::ShaderTranspiler::ShaderCompiler::BakeImageFormatsForEssl(
+                        *effectiveSpirv, imageFormatBake.glFormatByUniformName, imageFormatSpirv) &&
+                    !imageFormatSpirv.empty()) {
+                    effectiveSpirv = &imageFormatSpirv;
+                }
+
                 // GLSL ES demands a constant integral expression to index a fragment output
                 // array; SPIR-V does not, so a shader that writes coeff[i] from a loop
                 // reaches SPIRV-Cross intact and comes out as ESSL a strict driver rejects
@@ -4786,8 +4972,24 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // because a header concern reads better before the body ones.
                 source = RetargetTextureBufferExtension(std::move(source),
                                                         g_GLESCapabilities.TextureBufferSupport);
+                // The other header-level rewrite, and next to that one for the same reason. The
+                // formats it covers are both the ones the bake above put into the module and the
+                // ones the application declared itself - either can be outside the thirteen GLSL
+                // ES has in core, and neither reaches the driver without this directive.
+                source = RequestExtendedImageFormats(std::move(source),
+                                                     imageFormatBake.needsExtendedImageFormats &&
+                                                         g_GLESCapabilities.SupportsExtendedImageFormats);
 
                 source = RebindImageUniformsToFrontendUnits(std::move(source), stateProgramObject);
+                // The completion half of the format bake, for the formats SPIRV-Cross throws on
+                // rather than prints (r8ui and the rest of its desktop-only set). Empty for every
+                // program whose format-less images bound a format the module could carry, which
+                // is the normal case - those were baked into the SPIR-V above and this pass finds
+                // their declarations already qualified. AFTER the rebind, so the layout qualifier
+                // it edits is the one that already exists; BEFORE the split and the binding
+                // strip, so both halves of a split image inherit the format.
+                source = BakeImageFormatQualifiers(std::move(source),
+                                                   imageFormatBake.esslFormatQualifierByUniformName);
                 // Wedged between those two on purpose:
                 //  * AFTER RebindImageUniformsToFrontendUnits, so the binding it copies onto
                 //    both halves of a split image is already the frontend texture unit (and so

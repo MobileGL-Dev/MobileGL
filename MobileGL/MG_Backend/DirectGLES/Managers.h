@@ -1122,6 +1122,28 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // stale as one built before a relink - while the sampler half, which really is
             // re-issued per draw, needs nothing of the sort.
             Uint32 GetSyncedImageUnitVersion() const { return m_syncedImageUnitVersion; }
+            // Whether the (unit, bound format) pairs this program's FORMAT-LESS image uniforms
+            // resolve to are still the ones its ESSL was generated against.
+            //
+            // A fourth condition of the same family as the three above, and the only one that
+            // reads live state rather than a program-side counter, because that is where the
+            // dependency actually is. GLSL ES requires a format layout qualifier on every image
+            // where desktop GLSL lets a writeonly declaration omit one, and the only correct
+            // qualifier is whatever glBindImageTexture named - so a declaration with no format
+            // is compiled against the BINDING, and a rebind to a different format makes the
+            // built program wrong. Keyed on the units the program's own images address (cached
+            // at sync, since a unit can only move by glUniform1i, which bumps the image-unit
+            // version above and forces a re-sync anyway), so the cost on a program with no
+            // format-less image - which is all but a handful - is one empty-vector test.
+            //
+            // Deliberately NOT reached from glBindImageTexture: that entry point must never
+            // trigger a build (same constraint as glShaderStorageBlockBinding). It moves the
+            // state and this comparison notices at the next Prepare, which is also what makes
+            // an image first bound AFTER link work.
+            Bool ImageUnitFormatsStillMatch() const;
+            // The value ImageUnitFormatsStillMatch() compares against, recomputed from live
+            // image-unit state. 0 when the program has no format-less image uniform.
+            Uint64 ComputeImageUnitFormatSignature() const;
 
         private:
             void CacheResourceLocations(const SharedPtr<MG_State::GLState::ProgramObject>& stateProgramObject);
@@ -1155,6 +1177,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
             BufferImpl::UboRingAllocation m_globalUboRingAllocation;
             Uint32 m_syncedLinkVersion = ~0u;
             Uint32 m_syncedImageUnitVersion = ~0u;
+            // Image units addressed by the program's FORMAT-LESS image uniforms, and the digest
+            // of the (unit, format) pairs the generated ESSL baked. Empty/0 for every program
+            // that declares a format on all of its images, which is the overwhelming majority -
+            // and what keeps the per-draw comparison free for them.
+            Vector<Int> m_formatlessImageUnits;
+            Uint64 m_imageUnitFormatSignature = 0;
             SamplerPassMemo m_samplerPassMemo;
         };
 
@@ -1197,6 +1225,40 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // has to rebuild it. Computed from the values, so re-setting a block to the binding it
         // already has costs nothing. 0 when nothing was ever rebound.
         Uint64 ComputeShaderStorageBlockBindingSignature(
+            const MG_State::GLState::ProgramObject& stateProgramObject);
+
+        // Everything the image-format bake needs from one walk of a program's uniform
+        // reflection. GLSL ES requires a format layout qualifier on every image uniform;
+        // desktop GLSL lets a writeonly (or readonly) declaration omit one, and the only
+        // format that is CORRECT to substitute is whatever glBindImageTexture named for the
+        // unit that uniform addresses - so the transpile bakes it in and the build is keyed
+        // on it.
+        struct ImageFormatBakeInputs {
+            // Uniform name (SPIR-V spelling, i.e. an array named once, unsubscripted) to the GL
+            // internal format to bake. Holds only uniforms that DECLARED no format; a declared
+            // one is authoritative and is never overridden.
+            UnorderedMap<String, Uint> glFormatByUniformName;
+            // The same uniforms whose format SPIRV-Cross REFUSES to print for ESSL (it throws on
+            // its desktop-only set, which loses the stage), paired with the ESSL spelling to
+            // write into the emitted declaration instead. Disjoint from the map above by
+            // construction: a format is baked into the module or completed in the text, never
+            // both. r8ui - the stencil half of the packed_depth_stencil case - lands here.
+            UnorderedMap<String, String> esslFormatQualifierByUniformName;
+            // Units those uniforms address, kept so the draw path can re-read their formats
+            // without walking the reflection again.
+            Vector<Int> units;
+            // Digest of the (unit, format) pairs above. 0 when the program has no format-less
+            // image uniform, which is all but a handful.
+            Uint64 signature = 0;
+            // Array uniforms whose elements resolved to units holding DIFFERENT formats: one
+            // declaration carries one qualifier, so there is nothing correct to bake and they
+            // are dropped from the map above. Kept for diagnostics.
+            Vector<String> conflictedNames;
+            // Some format in play - declared or baked - is outside the GLSL ES core image
+            // format set, so the emitted ESSL needs the GL_NV_image_formats directive.
+            Bool needsExtendedImageFormats = false;
+        };
+        ImageFormatBakeInputs CollectImageFormatBakeInputs(
             const MG_State::GLState::ProgramObject& stateProgramObject);
     } // namespace PrgramImpl
 

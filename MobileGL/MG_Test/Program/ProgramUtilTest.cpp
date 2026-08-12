@@ -3689,3 +3689,316 @@ void main() { ssb.sum = uint(imageSize(i0).x) + imageLoad(i0, ivec2(0, 0)).r; }
     EXPECT_EQ(Count1DArrayStorageImageTypes(lowered), 1u)
         << "declining means the 1D-array type is still there for the driver to reject";
 }
+
+// --- image format qualifier bake (BakeImageFormatsPass) ---------------------------------------
+//
+// Desktop GLSL 4.2 lets a writeonly image declaration omit its format layout qualifier; GLSL ES
+// requires one of every image, and Adreno says so as "all images have to define layout format",
+// losing the whole program. The only correct qualifier to substitute is the format the
+// application passed to glBindImageTexture for that unit, so the transpile bakes it in.
+
+namespace {
+    Uint CountSpirvOpcode(const String& disassembly, const String& opcode) {
+        Uint count = 0;
+        SizeT offset = 0;
+        const String needle = opcode + " ";
+        while ((offset = disassembly.find(needle, offset)) != String::npos) {
+            count += 1;
+            offset += needle.size();
+        }
+        return count;
+    }
+
+    constexpr Uint kGlR32ui = 0x8236;
+    constexpr Uint kGlRgba32ui = 0x8D70;
+    constexpr Uint kGlR8ui = 0x8232;
+    constexpr Uint kGlR32f = 0x822E;
+} // namespace
+
+// The KHR-GL4x.packed_depth_stencil.stencil_texturing compute shader, reduced: one format-less
+// writeonly image, and a bind of a concrete format to the unit it addresses. (The DEPTH half of
+// that case binds GL_R32F; the stencil half's GL_R8UI is one SPIRV-Cross will not print and takes
+// the text route instead - see the test below.)
+TEST_F(ProgramUtilTest, BakeImageFormatsGivesAFormatlessImageTheFormatBoundToItsUnit) {
+    using namespace MG_Util::ShaderTranspiler;
+
+    const Vector<Uint32> spirv = BuildSpirvForStage(R"(#version 430 core
+layout (local_size_x = 1) in;
+writeonly uniform uimage2D uni_image;
+void main() { imageStore(uni_image, ivec2(gl_GlobalInvocationID.xy), uvec4(15u, 0u, 0u, 0u)); }
+)",
+                                                   GL_COMPUTE_SHADER);
+    ASSERT_FALSE(spirv.empty());
+    ASSERT_TRUE(ShaderCompiler::DeclaresFormatlessStorageImage(spirv))
+        << "the fixture must reproduce the defect before the fix is asked to remove it:\n"
+        << DisassembleSpirv(spirv);
+    // Precondition: SPIRV-Cross prints no format for it, which is the ESSL the driver refuses.
+    EXPECT_EQ(DecompileToEssl(spirv).find("r32ui"), String::npos);
+
+    SpirvValidationScope validationOn(true);
+    const Uint64 failuresBefore = ShaderCompiler::SpirvValidationFailureCount();
+
+    Vector<Uint32> baked;
+    ASSERT_TRUE(ShaderCompiler::BakeImageFormatsForEssl(spirv, {{"uni_image", kGlR32ui}}, baked));
+    ASSERT_FALSE(baked.empty());
+    EXPECT_FALSE(ShaderCompiler::DeclaresFormatlessStorageImage(baked)) << DisassembleSpirv(baked);
+    EXPECT_EQ(ShaderCompiler::SpirvValidationFailureCount(), failuresBefore)
+        << "the baked module must stay validator-clean:\n"
+        << DisassembleSpirv(baked);
+
+    const String essl = DecompileToEssl(baked);
+    ASSERT_FALSE(essl.empty());
+    EXPECT_NE(essl.find("r32ui"), String::npos)
+        << "the bound format must reach the declaration as a layout qualifier:\n" << essl;
+    EXPECT_NE(essl.find("writeonly"), String::npos)
+        << "the access qualifier the declaration already had must survive:\n" << essl;
+}
+
+// SPIRV-Cross THROWS rather than printing the formats it calls desktop-only when it targets ESSL
+// (Compiler::is_desktop_only_format), and a throw loses the whole stage - so baking one of those
+// into the module would trade a missing qualifier for a missing shader. They are left format-less
+// here and completed on the emitted text instead (PrgramImpl::BakeImageFormatQualifiers). r8ui,
+// which the stencil half of the packed_depth_stencil case binds, is one of them.
+TEST_F(ProgramUtilTest, BakeImageFormatsLeavesTheFormatsSpirvCrossRefusesToPrint) {
+    using namespace MG_Util::ShaderTranspiler;
+
+    ASSERT_FALSE(ShaderCompiler::SpirvCrossCanPrintEsslImageFormat(kGlR8ui))
+        << "if SPIRV-Cross ever learns to print r8ui for ES, the text completion can go";
+    ASSERT_TRUE(ShaderCompiler::SpirvCrossCanPrintEsslImageFormat(kGlR32ui));
+    EXPECT_EQ(ShaderCompiler::EsslImageFormatSpelling(kGlR8ui), "r8ui");
+    EXPECT_EQ(ShaderCompiler::EsslImageFormatSpelling(0x8051 /*GL_RGB8*/), "");
+
+    const Vector<Uint32> spirv = BuildSpirvForStage(R"(#version 430 core
+layout (local_size_x = 1) in;
+writeonly uniform uimage2D uni_image;
+void main() { imageStore(uni_image, ivec2(0), uvec4(15u)); }
+)",
+                                                   GL_COMPUTE_SHADER);
+    ASSERT_FALSE(spirv.empty());
+
+    Vector<Uint32> baked;
+    ASSERT_TRUE(ShaderCompiler::BakeImageFormatsForEssl(spirv, {{"uni_image", kGlR8ui}}, baked));
+    EXPECT_EQ(baked, spirv) << "a format SPIRV-Cross cannot print must leave the module untouched";
+    // ...and the stage still transpiles, which is the whole point of declining.
+    EXPECT_FALSE(DecompileToEssl(baked).empty());
+}
+
+// A DECLARED format is authoritative: GL requires the qualifier, the bind format and the
+// texture's internal format to be in the same class, but the qualifier is what the shader is
+// specified to read the memory as, and a bake that overrode it would change what the shader does.
+TEST_F(ProgramUtilTest, BakeImageFormatsNeverOverridesADeclaredFormat) {
+    using namespace MG_Util::ShaderTranspiler;
+
+    const Vector<Uint32> spirv = BuildSpirvForStage(R"(#version 430 core
+layout (local_size_x = 1) in;
+layout (binding = 0, rgba32ui) writeonly uniform uimage2D uni_image;
+void main() { imageStore(uni_image, ivec2(0), uvec4(1u)); }
+)",
+                                                   GL_COMPUTE_SHADER);
+    ASSERT_FALSE(spirv.empty());
+    ASSERT_FALSE(ShaderCompiler::DeclaresFormatlessStorageImage(spirv));
+
+    Vector<Uint32> baked;
+    // Even asked to, with a format of the right component class.
+    ASSERT_TRUE(ShaderCompiler::BakeImageFormatsForEssl(spirv, {{"uni_image", kGlR32ui}}, baked));
+    EXPECT_EQ(baked, spirv) << "a module with nothing format-less must pass through byte for byte";
+    EXPECT_NE(DecompileToEssl(baked).find("rgba32ui"), String::npos);
+}
+
+// Review finding. Every use has to be one the retype can carry end to end, and the decision has
+// to be made BEFORE anything is mutated - a half-retyped module is not something a later decline
+// could undo. An image handed to a FUNCTION is the shape that reaches SPIRV-Cross intact (nothing
+// in the ESSL chain inlines), and its OpFunctionCall is a use this pass does not follow.
+TEST_F(ProgramUtilTest, BakeImageFormatsDeclinesAnImagePassedToAFunction) {
+    using namespace MG_Util::ShaderTranspiler;
+
+    const Vector<Uint32> spirv = BuildSpirvForStage(R"(#version 430 core
+layout (local_size_x = 1) in;
+writeonly uniform uimage2D uni_image;
+void writeIt(writeonly uimage2D img) { imageStore(img, ivec2(0), uvec4(1u)); }
+void main() { writeIt(uni_image); }
+)",
+                                                   GL_COMPUTE_SHADER);
+    ASSERT_FALSE(spirv.empty());
+    ASSERT_TRUE(ShaderCompiler::DeclaresFormatlessStorageImage(spirv));
+
+    SpirvValidationScope validationOn(true);
+    const Uint64 failuresBefore = ShaderCompiler::SpirvValidationFailureCount();
+
+    Vector<Uint32> baked;
+    ASSERT_TRUE(ShaderCompiler::BakeImageFormatsForEssl(spirv, {{"uni_image", kGlR32ui}}, baked));
+    EXPECT_EQ(baked, spirv) << "a shape the retype cannot follow must leave the module untouched, "
+                               "not partly rewritten:\n"
+                            << DisassembleSpirv(baked);
+    EXPECT_EQ(ShaderCompiler::SpirvValidationFailureCount(), failuresBefore);
+}
+
+// spirv-val requires the Image Format's component class to agree with the OpTypeImage's Sampled
+// Type. Binding a uint format to a float image is an application error GL leaves undefined;
+// baking it would turn that into an INVALID module, which is strictly worse than the compile
+// error the shader already has, so the image is left format-less.
+TEST_F(ProgramUtilTest, BakeImageFormatsDeclinesAFormatOfTheWrongComponentClass) {
+    using namespace MG_Util::ShaderTranspiler;
+
+    const Vector<Uint32> spirv = BuildSpirvForStage(R"(#version 430 core
+layout (local_size_x = 1) in;
+writeonly uniform image2D uni_image;
+void main() { imageStore(uni_image, ivec2(0), vec4(1.0)); }
+)",
+                                                   GL_COMPUTE_SHADER);
+    ASSERT_FALSE(spirv.empty());
+
+    SpirvValidationScope validationOn(true);
+    const Uint64 failuresBefore = ShaderCompiler::SpirvValidationFailureCount();
+
+    Vector<Uint32> baked;
+    ASSERT_TRUE(ShaderCompiler::BakeImageFormatsForEssl(spirv, {{"uni_image", kGlR32ui}}, baked));
+    EXPECT_EQ(baked, spirv) << "a declined module must be handed back untouched, not partly rewritten";
+    EXPECT_EQ(ShaderCompiler::SpirvValidationFailureCount(), failuresBefore);
+
+    // ...and the same image with a float bind format is baked, so the decline above is about the
+    // class and not about the pass refusing float images.
+    Vector<Uint32> bakedFloat;
+    ASSERT_TRUE(ShaderCompiler::BakeImageFormatsForEssl(spirv, {{"uni_image", kGlR32f}}, bakedFloat));
+    EXPECT_NE(DecompileToEssl(bakedFloat).find("r32f"), String::npos) << DisassembleSpirv(bakedFloat);
+}
+
+// Two format-less images of the same type share ONE OpTypeImage. Giving them different formats
+// therefore cannot be an in-place edit of that type - each needs its own declaration, and the
+// variable, the loads and (for arrays) the access chains all have to follow.
+TEST_F(ProgramUtilTest, BakeImageFormatsSplitsATypeTwoImagesShareWhenTheirFormatsDiffer) {
+    using namespace MG_Util::ShaderTranspiler;
+
+    const Vector<Uint32> spirv = BuildSpirvForStage(R"(#version 430 core
+layout (local_size_x = 1) in;
+writeonly uniform uimage2D imgA;
+writeonly uniform uimage2D imgB;
+void main() {
+    imageStore(imgA, ivec2(0), uvec4(1u));
+    imageStore(imgB, ivec2(0), uvec4(2u));
+}
+)",
+                                                   GL_COMPUTE_SHADER);
+    ASSERT_FALSE(spirv.empty());
+    ASSERT_EQ(CountSpirvOpcode(DisassembleSpirv(spirv), "OpTypeImage"), 1u)
+        << "the fixture must have the two images sharing one type:\n" << DisassembleSpirv(spirv);
+
+    SpirvValidationScope validationOn(true);
+    const Uint64 failuresBefore = ShaderCompiler::SpirvValidationFailureCount();
+
+    Vector<Uint32> baked;
+    ASSERT_TRUE(ShaderCompiler::BakeImageFormatsForEssl(
+        spirv, {{"imgA", kGlR32ui}, {"imgB", kGlRgba32ui}}, baked));
+    ASSERT_FALSE(baked.empty());
+    EXPECT_EQ(ShaderCompiler::SpirvValidationFailureCount(), failuresBefore)
+        << "splitting the shared type must not leave a dangling or duplicate declaration:\n"
+        << DisassembleSpirv(baked);
+    EXPECT_FALSE(ShaderCompiler::DeclaresFormatlessStorageImage(baked));
+
+    const String essl = DecompileToEssl(baked);
+    ASSERT_FALSE(essl.empty());
+    EXPECT_NE(essl.find("r32ui"), String::npos) << essl;
+    EXPECT_NE(essl.find("rgba32ui"), String::npos) << essl;
+}
+
+// The mirror of the split: when the module ALREADY declares the type the bake wants, the two must
+// be JOINED, not duplicated. SPIR-V forbids two identical non-aggregate type declarations, and
+// that is exactly the defect an earlier image pass shipped and a reviewer caught.
+TEST_F(ProgramUtilTest, BakeImageFormatsJoinsATypeTheModuleAlreadyDeclares) {
+    using namespace MG_Util::ShaderTranspiler;
+
+    const Vector<Uint32> spirv = BuildSpirvForStage(R"(#version 430 core
+layout (local_size_x = 1) in;
+writeonly uniform uimage2D formatless;
+layout (binding = 1, r32ui) writeonly uniform uimage2D declared;
+void main() {
+    imageStore(formatless, ivec2(0), uvec4(1u));
+    imageStore(declared, ivec2(0), uvec4(2u));
+}
+)",
+                                                   GL_COMPUTE_SHADER);
+    ASSERT_FALSE(spirv.empty());
+    ASSERT_EQ(CountSpirvOpcode(DisassembleSpirv(spirv), "OpTypeImage"), 2u)
+        << "the fixture needs one Unknown-format and one r32ui image type:\n" << DisassembleSpirv(spirv);
+
+    SpirvValidationScope validationOn(true);
+    const Uint64 failuresBefore = ShaderCompiler::SpirvValidationFailureCount();
+
+    Vector<Uint32> baked;
+    ASSERT_TRUE(ShaderCompiler::BakeImageFormatsForEssl(spirv, {{"formatless", kGlR32ui}}, baked));
+    ASSERT_FALSE(baked.empty());
+    EXPECT_EQ(ShaderCompiler::SpirvValidationFailureCount(), failuresBefore)
+        << "the baked image collided with the module's own r32ui image and left a duplicate type:\n"
+        << DisassembleSpirv(baked);
+    EXPECT_EQ(CountSpirvOpcode(DisassembleSpirv(baked), "OpTypeImage"), 1u)
+        << "the two identical image types must be the same declaration:\n" << DisassembleSpirv(baked);
+}
+
+// An ARRAY of format-less images: the variable's type is a pointer to an array, every use goes
+// through an OpAccessChain, and all three levels have to be rebuilt for the load to still type-check.
+TEST_F(ProgramUtilTest, BakeImageFormatsRetypesAnArrayOfFormatlessImagesThroughItsAccessChains) {
+    using namespace MG_Util::ShaderTranspiler;
+
+    const Vector<Uint32> spirv = BuildSpirvForStage(R"(#version 430 core
+layout (local_size_x = 1) in;
+writeonly uniform uimage2D imgs[2];
+void main() {
+    for (int i = 0; i < 2; ++i) imageStore(imgs[i], ivec2(0), uvec4(uint(i)));
+}
+)",
+                                                   GL_COMPUTE_SHADER);
+    ASSERT_FALSE(spirv.empty());
+    ASSERT_TRUE(ShaderCompiler::DeclaresFormatlessStorageImage(spirv));
+
+    SpirvValidationScope validationOn(true);
+    const Uint64 failuresBefore = ShaderCompiler::SpirvValidationFailureCount();
+
+    Vector<Uint32> baked;
+    ASSERT_TRUE(ShaderCompiler::BakeImageFormatsForEssl(spirv, {{"imgs", kGlR32ui}}, baked));
+    ASSERT_FALSE(baked.empty());
+    EXPECT_FALSE(ShaderCompiler::DeclaresFormatlessStorageImage(baked)) << DisassembleSpirv(baked);
+    EXPECT_EQ(ShaderCompiler::SpirvValidationFailureCount(), failuresBefore)
+        << "the array and pointer types above the image must have been rebuilt too:\n"
+        << DisassembleSpirv(baked);
+    EXPECT_NE(DecompileToEssl(baked).find("r32ui"), String::npos);
+}
+
+// A SAMPLED image's format operand is Unknown in every GLSL dialect and has no qualifier to bake;
+// only storage images (Sampled == 2) are in scope.
+TEST_F(ProgramUtilTest, BakeImageFormatsLeavesSampledImagesAlone) {
+    using namespace MG_Util::ShaderTranspiler;
+
+    const Vector<Uint32> spirv = BuildSpirvForStage(R"(#version 430 core
+uniform usampler2D uni_sampler;
+out uvec4 fragColor;
+in vec2 vUv;
+void main() { fragColor = texture(uni_sampler, vUv); }
+)",
+                                                   GL_FRAGMENT_SHADER);
+    ASSERT_FALSE(spirv.empty());
+    EXPECT_FALSE(ShaderCompiler::DeclaresFormatlessStorageImage(spirv))
+        << "a sampled image must not read as a format-less STORAGE image:\n" << DisassembleSpirv(spirv);
+
+    Vector<Uint32> baked;
+    ASSERT_TRUE(ShaderCompiler::BakeImageFormatsForEssl(spirv, {{"uni_sampler", kGlR32ui}}, baked));
+    EXPECT_EQ(baked, spirv) << "a sampled image must pass through byte for byte";
+}
+
+// The core/extended split the emitted ESSL depends on: GLSL ES has thirteen image formats, and a
+// bind format outside them only compiles with GL_NV_image_formats - which the backend must not
+// request on a driver that does not advertise it.
+TEST_F(ProgramUtilTest, EsslCoreImageFormatSetIsTheThirteenTheSpecLists) {
+    using namespace MG_Util::ShaderTranspiler;
+
+    EXPECT_TRUE(ShaderCompiler::GLInternalFormatIsCoreEsslImageFormat(kGlR32ui));
+    EXPECT_TRUE(ShaderCompiler::GLInternalFormatIsCoreEsslImageFormat(kGlRgba32ui));
+    EXPECT_TRUE(ShaderCompiler::GLInternalFormatIsCoreEsslImageFormat(kGlR32f));
+    EXPECT_TRUE(ShaderCompiler::GLInternalFormatIsCoreEsslImageFormat(0x8058 /*GL_RGBA8*/));
+    // The stencil half of KHR-GL4x.packed_depth_stencil.stencil_texturing binds this one, and it
+    // is NOT core - the whole reason the directive machinery exists.
+    EXPECT_FALSE(ShaderCompiler::GLInternalFormatIsCoreEsslImageFormat(kGlR8ui));
+    EXPECT_FALSE(ShaderCompiler::GLInternalFormatIsCoreEsslImageFormat(0x822D /*GL_R16F*/));
+    // Not an image format at all.
+    EXPECT_FALSE(ShaderCompiler::GLInternalFormatIsCoreEsslImageFormat(0x8051 /*GL_RGB8*/));
+    EXPECT_FALSE(ShaderCompiler::GLInternalFormatIsCoreEsslImageFormat(0 /*GL_NONE*/));
+}

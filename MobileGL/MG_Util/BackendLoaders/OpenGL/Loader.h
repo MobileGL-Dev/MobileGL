@@ -1138,6 +1138,14 @@ namespace MobileGL {
             // SPIRV-Cross's `#extension ... : require` would fail to compile and MobileGL falls back
             // to stripping the NoPerspective decoration (smooth interpolation) via StripNoPerspectivePass.
             Bool SupportsNoperspectiveInterpolation = false;
+            // GL_NV_image_formats is present: the driver accepts the image format qualifiers GL
+            // has and GLSL ES core does not (the one- and two-channel formats, the 16-bit and
+            // snorm ones - r8ui, rg16f, rgba16 and the rest of GL table 8.26). GLSL ES core has
+            // only thirteen, so without this an image whose bound format is outside that set has
+            // no legal spelling in the generated ESSL at all, and the directive must not be
+            // emitted either - `#extension` on a name the driver does not advertise is itself a
+            // compile error.
+            Bool SupportsExtendedImageFormats = false;
             // GLES 3.2 core or GL_OES_shader_multisample_interpolation exposes
             // interpolateAtOffset and the three fragment-offset limit queries.
             Bool SupportsShaderMultisampleInterpolation = false;

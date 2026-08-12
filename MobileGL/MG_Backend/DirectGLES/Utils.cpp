@@ -535,6 +535,92 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return glslCode;
         }
 
+        String RequestExtendedImageFormats(String glslCode, Bool needed) {
+#ifdef TRACY_ENABLE
+            ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
+#endif
+            // GLSL ES core has thirteen image formats; GL has forty. SPIRV-Cross prints whatever
+            // format the OpTypeImage carries and asks for no extension for it, so an r8ui or
+            // rg16f image - declared as such, or baked from the bound one - reaches the driver as
+            // a format its core language does not know. GL_NV_image_formats is the only thing
+            // that adds them, and it has to be requested by name.
+            //
+            // The caller decides `needed`: it knows which formats are in play (from the uniform
+            // reflection and the image-unit bindings) and whether the driver advertises the
+            // extension at all - `#extension` on an unadvertised name is itself a hard error, so
+            // this must never be emitted speculatively.
+            static constexpr const char* kDirective = "#extension GL_NV_image_formats : require\n";
+            static constexpr const char* kExtName = "GL_NV_image_formats";
+            if (!needed || glslCode.find(kExtName) != String::npos) {
+                return glslCode;
+            }
+            // After the #version line, which must stay first. Everything else about the header is
+            // order-insensitive, and ForceSupporterOutput's scan for the LAST #extension
+            // directive still finds whichever one that is.
+            const SizeT versionPos = glslCode.find("#version");
+            if (versionPos == String::npos) {
+                return kDirective + glslCode;
+            }
+            const SizeT lineEnd = glslCode.find('\n', versionPos);
+            if (lineEnd == String::npos) {
+                return glslCode + "\n" + kDirective;
+            }
+            glslCode.insert(lineEnd + 1, kDirective);
+            return glslCode;
+        }
+
+        String BakeImageFormatQualifiers(String glslCode,
+                                         const UnorderedMap<String, String>& esslFormatByUniformName) {
+#ifdef TRACY_ENABLE
+            ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
+#endif
+            if (esslFormatByUniformName.empty() || glslCode.find("image") == String::npos) {
+                return glslCode;
+            }
+            // Same declaration shape RebindImageUniformsToFrontendUnits matches, and for the same
+            // reason: one line, one image uniform, the name in group 3.
+            static const std::regex imageDeclRegex(
+                R"((layout\s*\(([^)]*)\)\s*)?uniform\s+(?:(?:readonly|writeonly|coherent|volatile|restrict|highp|mediump|lowp)\s+)*[iu]?image[A-Za-z0-9]+\s+([A-Za-z_][A-Za-z0-9_]*)\s*(\[[^\]]*\])?\s*;)");
+            // Every image format spelling GLSL has, so a declaration that already carries one is
+            // recognised whatever it says - the caller's map is consulted only for declarations
+            // with NO format, never to override a written one.
+            static const std::regex existingFormatRegex(
+                R"(\b(rgba32f|rgba16f|rg32f|rg16f|r11f_g11f_b10f|r32f|r16f|rgba16|rgb10_a2|rg16|rg8|r16|r8|rgba16_snorm|rgba8_snorm|rg16_snorm|rg8_snorm|r16_snorm|r8_snorm|rgba32i|rgba16i|rgba8i|rg32i|rg16i|rg8i|r32i|r16i|r8i|rgba32ui|rgba16ui|rgba8ui|rgb10_a2ui|rg32ui|rg16ui|rg8ui|r32ui|r16ui|r8ui)\b)");
+
+            String result;
+            result.reserve(glslCode.size());
+            SizeT lineStart = 0;
+            while (lineStart <= glslCode.size()) {
+                const SizeT lineEnd = glslCode.find('\n', lineStart);
+                const Bool lastLine = lineEnd == String::npos;
+                String line = glslCode.substr(lineStart, lastLine ? String::npos : lineEnd - lineStart);
+
+                std::smatch match;
+                if (std::regex_search(line, match, imageDeclRegex)) {
+                    const String name = match[3].str();
+                    const auto formatIt = esslFormatByUniformName.find(name);
+                    const String layoutContents = match[2].matched ? match[2].str() : String();
+                    if (formatIt != esslFormatByUniformName.end() && !formatIt->second.empty() &&
+                        !std::regex_search(layoutContents, existingFormatRegex)) {
+                        if (match[1].matched) {
+                            const SizeT layoutOpen = line.find('(', match.position(1));
+                            line.insert(layoutOpen + 1, formatIt->second + ", ");
+                        } else {
+                            line.insert(match.position(0), "layout(" + formatIt->second + ") ");
+                        }
+                    }
+                }
+
+                result += line;
+                if (lastLine) {
+                    break;
+                }
+                result += '\n';
+                lineStart = lineEnd + 1;
+            }
+            return result;
+        }
+
         String RemoveLayoutBinding(const String& glslCode) {
 #ifdef TRACY_ENABLE
             ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
