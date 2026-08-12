@@ -163,6 +163,33 @@ build-test/tools/trace_replay/mobilegl_trace_replay \
   --ssim-threshold 0.99
 ```
 
+## Dumping framebuffer attachments mid-frame
+
+`--target-call` snapshots one framebuffer. To see *inside* a frame - which
+intermediate render target a pass actually produced - pass
+`--dump-fbo-attachments CALL:DIR[:FBO,FBO,...]`, repeatably:
+
+```sh
+build-test/tools/trace_replay/mobilegl_trace_replay \
+  --trace trace.trace --golden golden.png --output out --target-call 2667619 \
+  --dump-fbo-attachments 2666231:out/fbos-before \
+  --dump-fbo-attachments 2666232:out/fbos-after
+```
+
+At each call boundary it walks every live framebuffer object (or only the named
+ones), reads back every colour attachment and the depth attachment, and writes
+`fbo<N>-att<M>.png` / `fbo<N>-depth.png` plus a `manifest.txt` line per
+attachment recording the attached object, size, internal format, component type
+and per-channel min/max/mean and a content hash. Attachments are read as floats
+whatever their storage, so HDR accumulation buffers stay legible in the
+statistics even though the PNG has to clamp.
+
+The manifest is the useful part when comparing two drivers: dump the same call
+on both stacks and `diff`/`paste` the two manifests, and the first attachment
+whose hash differs names the pass that diverged. Read-side and pixel-pack state
+is saved and restored, so the replay continues unperturbed; without the flag
+nothing is installed and the replay is byte-for-byte what it was.
+
 Run the macOS native-window DirectVulkan retrace matrix and render the same
 HTML overview shape as CI:
 
@@ -305,25 +332,50 @@ rendered frame loses the whole translucent layer - clouds and water are absent
 while opaque geometry is pixel-exact - so the compositing chain never receives
 the translucent content rather than blending it wrongly.
 
-It is not a MobileGL defect. Replaying the fixture through the recipe above and
-through Mesa GLES, with a `MOBILEGL_LOG_LEVEL_DEBUG` build, gives
-SSIM 1.000000 on Mesa and 0.970127 on ANGLE while MobileGL issues a
-**byte-identical GL call stream** - 2698222 calls, same names, same order, same
-arguments, the only difference being how often the app polls
-`glClientWaitSync`. Both drivers are asked for exactly the same thing and
-disagree about the pixels, so the divergence is below MobileGL, in ANGLE's
-GLES-to-Vulkan translation (or in something we emit that is legal but
-underspecified and the two implementations resolve differently).
+**It is two defects in the ESSL we generate, and both are ours.** Replaying the
+fixture through the recipe above and through Mesa GLES, with a
+`MOBILEGL_LOG_LEVEL_DEBUG` build, gives SSIM 1.000000 on Mesa and 0.970127 on
+ANGLE while the *frontend* call stream is byte-identical - 2698222 calls, same
+names, same order, same arguments, the only difference being how often the app
+polls `glClientWaitSync`. That comparison is what misled the earlier
+investigation: it is the app-to-MobileGL direction. It says nothing about the
+GLES and ESSL MobileGL emits *downwards*, which is where the two lanes part.
 
-Do not "fix" this by editing the DirectGLES blend or draw-buffer paths. Two
-candidates were tested and ruled out: per-attachment blend equations are both
-recorded and applied correctly on ANGLE (`glBlendEquationSeparatei` with GL_MAX
-on one attachment reads back as GL_MAX and rasterizes as GL_MAX), and the GLES
-draw-buffer slot restriction is already handled by
-`BackendFramebufferObject::RecomputeBackendColorSlots`. Narrowing this further
-means bisecting inside the frame to find which GLES construct ANGLE mistranslates;
-the accommodation, once known, belongs with the existing
-`--avoid-angle-llvmpipe-*` flags rather than in shared backend code.
+Two shaders that MobileGL generates fail to compile on ANGLE and link no
+program at all, so every draw that uses them is a silent no-op:
+
+| # | ANGLE compile error | what it is | what disappears |
+| --- | --- | --- | --- |
+| A | `0:2: 'GL_EXT_texture_buffer' : extension is not supported` then `'isamplerBuffer' : Illegal use of reserved word` | the cloud vertex shader emits `#extension GL_EXT_texture_buffer : require` and `uniform highp isamplerBuffer CloudFaces` unconditionally | clouds |
+| B | `'[' : array indexes for fragment outputs must be constant integral expressions` | the OIT coefficient fragment shader declares `layout(location = 0) out highp vec4 coeff[2];` and writes `coeff[attachmentIndex][i]` from a loop | the whole translucent accumulation |
+
+Neither is an ANGLE mistranslation:
+
+- **A is a capability gap we do not guard.** Minecraft 26.3 builds clouds
+  entirely from `gl_VertexID` plus `texelFetch` on a buffer texture
+  (`glTexBuffer(GL_TEXTURE_BUFFER, GL_R8I, ...)`). Mesa GLES advertises
+  `GL_EXT_texture_buffer` and `GL_OES_texture_buffer`; this ANGLE advertises
+  neither (142 extensions against Mesa's 162), and MobileGL's reported
+  `GL_MAX_TEXTURE_BUFFER_SIZE` drops to the 65536 default because it cannot
+  query one. We emit the `require` line anyway.
+- **B is a GLSL ES rule we violate.** Fragment output arrays must be indexed
+  with constant integral expressions; SPIRV-Cross hands us a loop-variable
+  index and Mesa's compiler accepts it, ANGLE does not. Any strict ES driver
+  rejects this shader, so it is not ANGLE-specific in principle - it is
+  Mesa's leniency that hides it on the Linux lane.
+
+There is therefore **no honest harness accommodation**: no
+`--avoid-angle-llvmpipe-*` flag can conjure a missing extension or make an
+illegal shader legal, so the fixture stays red on the Android DirectGLES lane.
+Fixing it means fixing the emitters - emulating buffer textures where the ES
+driver has none, and rewriting non-constant fragment-output indexing into a
+switch over constant indices - which is shared backend work, not harness work.
+
+Two earlier candidates remain correctly ruled out and should not be re-walked:
+per-attachment blend equations are both recorded and applied correctly on ANGLE
+(`glBlendEquationSeparatei` with GL_MAX on one attachment reads back as GL_MAX
+and rasterizes as GL_MAX), and the GLES draw-buffer slot restriction is already
+handled by `BackendFramebufferObject::RecomputeBackendColorSlots`.
 
 #### Where in the frame it goes wrong
 
@@ -346,11 +398,39 @@ fine. The two stacks already disagree at 2667445, before the composite runs,
 which points at the translucent accumulation targets the composite samples
 rather than at the composite draw itself.
 
-That is as far as this went. What is still unknown is **which** GLES construct
-in the accumulation chain ANGLE translates differently - naming it needs the
-intermediate FBO attachments dumped either side of 2667488 on both stacks,
-which the replay CLI cannot currently do (it snapshots one framebuffer, not all
-attachments). Until it is named there is nothing to put behind an
-`--avoid-angle-llvmpipe-*` flag and nothing precise enough to file upstream, so
-the fixture stays red on the Android DirectGLES lane rather than being papered
-over.
+#### Which attachment, and which draw
+
+`--dump-fbo-attachments` on both stacks pins it to a single draw. Comparing the
+manifests at three call boundaries, over all 30 live framebuffers:
+
+| call | what has just run | verdict |
+| --- | --- | --- |
+| 2665649 | depth blit, before the translucent chain | every OIT target identical on both stacks |
+| 2666231 | all entity/particle translucent draws done | still identical: FBO 21 att0 (texture 1554, RGBA32F) reads `c1 max=178.98 mean=1.81046` on Mesa against `179 / 1.8105` on ANGLE |
+| 2666232 | the cloud draw - `glDrawElementsInstancedBaseVertex(count=221706)` with `GL_TEXTURE_BUFFER` bound | Mesa moves to `c1 max=1727.87 mean=70.2899`; **ANGLE does not move at all** |
+
+At the golden point the same holds for the rest of the chain: texture 1555 (the
+translucent colour accumulation) has mean 0.105617 on Mesa against 0.00403189 on
+ANGLE, and texture 1556 (the alpha/coefficient target, FBO 26 attachment 1) is
+alpha `max=1.34863 mean=0.261387` on Mesa and **identically zero** on ANGLE -
+never written, because defect B linked no program for that pass. Everything
+outside the translucent chain matches: the opaque terrain, the block atlas and
+its mips, and the GUI targets differ only in the last float ULP.
+
+So the earlier reading of the SSIM bisect was right about the location and wrong
+about the cause. The composite at 2667488 is innocent; it faithfully composites
+accumulation buffers that two failed shader compiles left empty.
+
+Reproduce with:
+
+```sh
+for stack in mesa angle; do ... --target-call 2666232 \
+  --dump-fbo-attachments 2666232:out-$stack/fbos ; done
+paste out-mesa/fbos/manifest.txt out-angle/fbos/manifest.txt
+```
+
+and read the compile errors straight out of `mobilegl.log`:
+
+```sh
+grep -aE 'Shader compilation failed|linking failed' out-angle/mobilegl.log
+```
