@@ -573,3 +573,50 @@ prime suspect because it is the last thing logged, not because it has been
 shown to be the NULL entry. Nothing in the debugger points at a specific
 MobileGL emission commit, so the held 13-commit bisect does **not** collapse to
 a one-commit confirmation on this evidence.
+
+#### The sampler state is not the trigger
+
+A temporary probe in the sampler-unit sync (archived, never landed) logged, for
+every sampler uniform of every draw, the tuple `(uniform location, uniform type,
+resolved unit, bound texture id, internal format, completeness)`. Run on both
+stacks and diffed:
+
+- **No unit is missing a texture and none is incomplete.** Across the entire
+  ANGLE run there are zero `tex=NONE` and zero `complete=0` tuples. The
+  "sampler uniform points at a unit with nothing bound" theory is dead.
+- Unit 13 - the raw-depth-fetch unit, and the prime suspect from the previous
+  leg - holds `tex=64`, a depth format, `complete=1`. It is exonerated as a
+  dangling binding.
+- **The crashing draw's state is identical on both stacks.** Its 14 tuples match
+  the passing Mesa run exactly, and Mesa executes the very tuple
+  `loc=35 type=GL_SAMPLER_2D unit=13 tex=64 complete=1` **45 times** without
+  crashing. ANGLE dies the first time it reaches it.
+
+So nothing in the sampler->unit->texture mapping distinguishes the crash. What
+the diff did turn up is one genuine divergence, ~80 tuples upstream: ANGLE's
+compiler reports an **extra live sampler uniform** that Mesa's does not, and it
+aliases a unit already in use -
+
+```
+angle: loc=3  type=GL_SAMPLER_2D unit=0 tex=76   <- both stacks
+angle: loc=14 type=GL_SAMPLER_2D unit=0 tex=76   <- ANGLE only
+mesa : (no loc=14; stream continues one tuple ahead from here)
+```
+
+Two sampler uniforms resolving to the same unit is the subject of
+`b6a2bf08 [Fix] (DirectGLES): resolve an aliased texture unit by the sampler's
+type`, which sits **inside** the `8025745f..5a400e02` regression window - the
+first concrete link between that window and this crash. It is a lead, not a
+proven cause: it is upstream of the fault and the two runs still agree on the
+crashing draw itself.
+
+**Fix shape: avoidance, not correctness.** Nothing here shows MobileGL in the
+wrong - our state at the faulting draw is exactly the state a passing driver
+handles 45 times over. Sampling is required to be safe whatever the binding, so
+the NULL-deref is the driver's bug. Any change on our side is therefore working
+around a driver defect and should be scoped and named as such, ideally behind
+the `--avoid-angle-llvmpipe-*` family rather than in shared backend paths. The
+ingredient the probe did **not** capture, and the next thing to instrument, is
+the *sampler object* bound to the unit: unit 13 takes a depth-format texture
+through a plain `GL_SAMPLER_2D` with the raw-depth-fetch sampler override, while
+unit 12 takes another depth texture as `GL_SAMPLER_2D_SHADOW` in the same draw.
