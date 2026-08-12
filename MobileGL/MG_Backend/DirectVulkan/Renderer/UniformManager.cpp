@@ -1443,7 +1443,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
         writes.reserve(m_maxBindings);
         bufferInfos.reserve(m_maxBindings + uboArrayExtra + ssboArrayExtra);
-        imageInfos.reserve(m_maxBindings);
+        // ssboArrayExtra sums EVERY arrayed binding's surplus, image arrays included, so it is
+        // the right worst case for this container too now that a storage-image binding pushes
+        // one info per element. Reserving only m_maxBindings here was exact while every binding
+        // pushed exactly one - and would have let the vector reallocate under an image array,
+        // dangling every pImageInfo already recorded in `writes` (including the sampler
+        // branch's &imageInfos.back()) before vkUpdateDescriptorSets reads them.
+        imageInfos.reserve(m_maxBindings + ssboArrayExtra);
         texelBufferViews.reserve(m_maxBindings);
         dynamicOffsets.reserve(programObj.dynamicBindings.size() + uboArrayExtra);
 

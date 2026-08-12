@@ -264,6 +264,125 @@ void main()
         gl.EndFrame();
     }
 
+    // An image ARRAY sharing a program with another descriptor, which is the shape that makes
+    // the SPIR-V binding remap load-bearing.
+    //
+    // The remap (ProgramFactory::RemapDescriptorBindingsForVulkan) is what unifies bindings
+    // across stages and normalises every descriptor onto set 0; glslang hands it per-stage
+    // numbering that starts at 0 in EACH stage. It used to refuse any descriptor array that was
+    // not a UBO, and its only complaint was an assert that compiles out above DEBUG - so a
+    // release build carried on with the un-remapped numbering and a program holding an image
+    // array plus a second descriptor could see the two alias onto one binding, while a DEBUG
+    // build trapped on the very same program.
+    //
+    // A case with ONE descriptor cannot see any of that: with a single resource there is nothing
+    // to collide with and skipping the remap is indistinguishable from running it. Hence this
+    // one - an image array AND a uniform block in the same fragment program, with the block
+    // supplying the value that gets stored, so a mis-assigned binding shows up as the wrong
+    // colour rather than as nothing at all.
+    TEST_F(ImageLoadStoreSsoScenario, AnImageArrayAlongsideAnotherDescriptorKeepsBothBindings) {
+        if (!Ready()) return;
+        if (!ImagesAreUsable()) GTEST_SKIP() << "fewer than 8 image units";
+        if (!PerElementImageUnitsAreHonoured()) {
+            GTEST_SKIP() << "non-consecutive per-element image units cannot be baked into ESSL";
+        }
+        HeadlessGL& gl = Gl();
+
+        constexpr int kWidth = 8;
+        constexpr int kHeight = 8;
+        constexpr int kLayers = 2;
+
+        static const char* kMixedFS = R"(#version 420 core
+layout(rgba32f) uniform image2D g_image[2];
+layout(std140) uniform Value { vec4 u_value; };
+void main()
+{
+    for (int i = 0; i < g_image.length(); ++i) {
+        imageStore(g_image[i], ivec2(gl_FragCoord), u_value);
+    }
+    discard;
+}
+)";
+        const GLuint vs = MakeSeparable(GL_VERTEX_SHADER, kSsoVS);
+        const GLuint fs = MakeSeparable(GL_FRAGMENT_SHADER, kMixedFS);
+        if (vs == 0 || fs == 0) return;
+
+        // Consecutive units here on purpose: this case is about the two descriptor KINDS
+        // coexisting, not about non-consecutive assignment, which the case above covers.
+        for (int i = 0; i < 2; ++i) {
+            const std::string name = "g_image[" + std::to_string(i) + "]";
+            const GLint loc = glGetUniformLocation(fs, name.c_str());
+            ASSERT_NE(loc, -1) << "no location for " << name;
+            glProgramUniform1i(fs, loc, i);
+        }
+
+        const GLfloat value[4] = {7.0f, 7.0f, 7.0f, 7.0f};
+        GLuint ubo = 0;
+        glGenBuffers(1, &ubo);
+        glBindBuffer(GL_UNIFORM_BUFFER, ubo);
+        glBufferData(GL_UNIFORM_BUFFER, sizeof(value), value, GL_STATIC_DRAW);
+        const GLuint blockIndex = glGetUniformBlockIndex(fs, "Value");
+        ASSERT_NE(blockIndex, GL_INVALID_INDEX);
+        glUniformBlockBinding(fs, blockIndex, 0);
+        glBindBufferBase(GL_UNIFORM_BUFFER, 0, ubo);
+        glBindBuffer(GL_UNIFORM_BUFFER, 0);
+        ASSERT_EQ(FirstGLError(), 0u) << "uniform block setup errored";
+
+        const GLuint pipeline = MakePipeline();
+        glUseProgramStages(pipeline, GL_VERTEX_SHADER_BIT, vs);
+        glUseProgramStages(pipeline, GL_FRAGMENT_SHADER_BIT, fs);
+
+        GLuint texture = 0;
+        glGenTextures(1, &texture);
+        glBindTexture(GL_TEXTURE_2D_ARRAY, texture);
+        glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        const std::vector<float> zeros(static_cast<size_t>(kWidth) * kHeight * kLayers * 4, 0.0f);
+        glTexImage3D(GL_TEXTURE_2D_ARRAY, 0, GL_RGBA32F, kWidth, kHeight, kLayers, 0, GL_RGBA, GL_FLOAT, zeros.data());
+        glBindImageTexture(0, texture, 0, GL_FALSE, 0, GL_READ_WRITE, GL_RGBA32F);
+        glBindImageTexture(1, texture, 0, GL_FALSE, 1, GL_READ_WRITE, GL_RGBA32F);
+        ASSERT_EQ(FirstGLError(), 0u) << "image texture setup errored";
+
+        GLuint vao = 0;
+        glGenVertexArrays(1, &vao);
+        glBindVertexArray(vao);
+        BindDefaultFramebuffer();
+        glViewport(0, 0, kWidth, kHeight);
+        glDisable(GL_SCISSOR_TEST);
+        glDisable(GL_DEPTH_TEST);
+        glUseProgram(0);
+        glBindProgramPipeline(pipeline);
+        glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+        glMemoryBarrier(GL_TEXTURE_UPDATE_BARRIER_BIT | GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
+        EXPECT_EQ(FirstGLError(), 0u) << "the mixed-descriptor pipeline draw leaked a GL error";
+
+        std::vector<float> readback(static_cast<size_t>(kWidth) * kHeight * kLayers * 4, -1.0f);
+        glBindTexture(GL_TEXTURE_2D_ARRAY, texture);
+        glGetTexImage(GL_TEXTURE_2D_ARRAY, 0, GL_RGBA, GL_FLOAT, readback.data());
+        ASSERT_EQ(FirstGLError(), 0u) << "reading the array texture back errored";
+
+        for (int layer = 0; layer < kLayers; ++layer) {
+            int offenders = 0;
+            float firstSeen = 0.0f;
+            for (size_t i = 0; i < static_cast<size_t>(kWidth) * kHeight * 4; ++i) {
+                const size_t index = static_cast<size_t>(layer) * kHeight * kWidth * 4 + i;
+                if (readback[index] != 7.0f) {
+                    if (offenders == 0) firstSeen = readback[index];
+                    ++offenders;
+                }
+            }
+            EXPECT_EQ(offenders, 0) << "layer " << layer << ": " << offenders
+                                    << " components are not the uniform block's value; first was " << firstSeen
+                                    << " (an image-array binding and a uniform block did not both survive)";
+        }
+
+        glBindVertexArray(0);
+        glDeleteVertexArrays(1, &vao);
+        glDeleteTextures(1, &texture);
+        glDeleteBuffers(1, &ubo);
+        gl.EndFrame();
+    }
+
     // The same units, reassigned BETWEEN draws through the same pipeline. This is the half that
     // the composite cache key change put weight on: the composite object now survives a
     // glProgramUniform1i, so nothing rebuilds by accident and the new unit has to be carried by

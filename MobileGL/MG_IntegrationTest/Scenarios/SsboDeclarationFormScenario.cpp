@@ -260,17 +260,21 @@ void main() { o_color = vec4(0.0, 1.0, 0.0, 1.0); }
     // arrays. Nothing errors anywhere, which is why this reads as a silent drop.
     //
     // So the fix is neither of the two candidates this was opened on - it is not a descriptor
-    // that goes missing and not a name that fails a lookup (forms 0-5 cover the block-array and
-    // no-binding-qualifier shapes those hypotheses rest on, and all six pass on both backends).
-    // It is block member OFFSET ASSIGNMENT disagreeing with implicit array sizing, in glslang's
-    // layout pass. That is a shared-frontend change with the blast radius of every std140/std430
+    // that goes missing and not a name that fails a lookup. Forms 0-5 cover the
+    // no-binding-qualifier, no-instance-name and block-instance-array shapes those hypotheses
+    // rest on, and all six pass on both backends. (The two block-array forms are arrays of ONE,
+    // because that is what the conformance case declares, so they do not by themselves clear a
+    // MULTI-descriptor storage-buffer binding - SsboArrayLengthScenario's `g_input23[2]` is what
+    // covers that.) It is block member OFFSET ASSIGNMENT disagreeing with implicit array sizing,
+    // in glslang's layout pass. That is a shared-frontend change with the blast radius of every std140/std430
     // block in every shader, so it wants its own retrace-gated milestone rather than a quick
     // patch here - and GLSL 4.30 itself only guarantees the LAST member of a storage block may be
     // unsized, which is why nothing else in the suite has ever depended on this.
     //
-    // Kept as compiled, running, SKIPPED cases rather than deleted or commented out: the
-    // reproduction and the reflected layout above are the whole asset, and the diagnostic in
-    // RunForm prints the offsets the moment the skip is lifted.
+    // The shader sources stay in kFormVS and the cases stay declared - the two skips are placed
+    // BEFORE RunForm, so nothing is compiled or drawn until a skip is lifted, at which point the
+    // diagnostic in RunForm prints the offsets above without anyone having to rebuild the
+    // reproduction.
     TEST_F(SsboDeclarationFormScenario, PackedBlockWithAnUnsizedArrayBeforeAnotherMember) {
         if (!Ready()) return;
         if (!StorageBlocksInVertexStage()) GTEST_SKIP() << "no vertex-stage shader storage blocks";

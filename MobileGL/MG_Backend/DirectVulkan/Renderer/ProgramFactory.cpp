@@ -1834,10 +1834,25 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 for (auto* binding : bindings) {
                     MOBILEGL_ASSERT(binding != nullptr, "ProgramFactory: null descriptor binding reflection record");
                     const auto kind = ReflectDescriptorTypeToBindingKind(binding->descriptor_type);
-                    // UBO instance arrays (uniform Block {...} b[N];) occupy one binding with
-                    // descriptorCount = N; other descriptor arrays stay unsupported and must
-                    // fail program creation cleanly rather than continue with corrupt state.
-                    if (binding->count != 1 && kind != ProgramFactory::DescriptorBindingKind::UniformBufferDynamic) {
+                    // A descriptor ARRAY occupies one binding with descriptorCount = N, and is
+                    // supported for exactly the kinds that have a per-element resolve path in
+                    // UniformManager::BindProgramUniformBuffers: UBO instance arrays
+                    // (uniform Block {...} b[N];), storage-block instance arrays, and image
+                    // uniform arrays. Anything else must fail program creation cleanly rather
+                    // than continue with corrupt state.
+                    //
+                    // Getting listed here is not cosmetic: a kind that is rejected leaves
+                    // GetOrCreateProgram's MOBILEGL_ASSERT(remapOk) as the only complaint, and
+                    // that assert compiles out above DEBUG - so a release build SILENTLY kept
+                    // glslang's per-stage auto-mapped binding numbers, skipping the cross-stage
+                    // unification and the set->0 normalisation this function exists to do. A
+                    // program with an image array plus any second descriptor got aliased
+                    // bindings out of that, and a DEBUG build trapped on the same program.
+                    const Bool arraySupportedForKind =
+                        kind == ProgramFactory::DescriptorBindingKind::UniformBufferDynamic ||
+                        kind == ProgramFactory::DescriptorBindingKind::StorageBuffer ||
+                        kind == ProgramFactory::DescriptorBindingKind::StorageImage;
+                    if (binding->count != 1 && !arraySupportedForKind) {
                         MGLOG_E("ProgramFactory: descriptor arrays are unsupported for this descriptor "
                                 "kind (name='%s' count=%u type=%d)",
                                 binding->name ? binding->name : "<null>", binding->count,
@@ -2609,8 +2624,19 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                     // a storage BLOCK array, whose elements take consecutive GL binding points
                     // from the declared one, each element of an image array carries its own
                     // independently assigned image unit - see ResolveStorageImageDescriptor.
-                    entry.bindingDescriptorCounts[binding] =
-                        static_cast<Uint16>(std::max<Uint32>(1u, sampler->count));
+                    // Bounds-checked like the UBO array path above: descriptorCount goes
+                    // straight into a VkDescriptorSetLayoutBinding, and the bind path reserves
+                    // scratch from it, so an absurd array size has to be refused here rather
+                    // than narrowed into a Uint16 (where 65536 would become 0).
+                    const Uint32 imageArrayCount = std::max<Uint32>(1u, sampler->count);
+                    if (imageArrayCount > m_maxBindings) {
+                        MGLOG_E("ProgramFactory::ReflectLayout: image array '%s' at binding %u has %u elements, "
+                                "past the %u this device can describe",
+                                uniformName.c_str(), binding, imageArrayCount, m_maxBindings);
+                        entry.bindingKinds[binding] = DescriptorBindingKind::None;
+                        continue;
+                    }
+                    entry.bindingDescriptorCounts[binding] = static_cast<Uint16>(imageArrayCount);
 
                     const VkFormat reflectedFormat =
                         ConvertSpirvImageFormatToVkFormat(sampler->image.image_format);
