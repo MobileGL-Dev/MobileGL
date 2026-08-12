@@ -2779,6 +2779,29 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                                        &glType, TextureTarget::TextureBuffer);
 
                 if (needsRegeneration) {
+                    // Desktop GL has had buffer textures core since 3.1 and MobileGL advertises a
+                    // 4.x context, so glTexBuffer is a legal call the app may make on any driver -
+                    // but ES only gained them in 3.2, and g_GLESFuncs.glTexBuffer is simply null
+                    // below that without EXT/OES_texture_buffer. Calling it was an unconditional
+                    // null dereference. There is no conformant way to refuse the call (it is valid
+                    // in the context MobileGL claims), so the texture is left unbacked and the
+                    // reason is stated once per respecify at a level that survives the shipped
+                    // INFO build - MGLOG_E is compiled out there, which is exactly how this class
+                    // of defect stays invisible.
+                    if (!AreBufferTexturesSupported()) {
+                        if (m_bufferTextureUnsupportedReported) {
+                            break;
+                        }
+                        m_bufferTextureUnsupportedReported = true;
+                        MGLOG_I("Texture buffer %u cannot be backed: this ES driver has no buffer "
+                                "textures (%s). Every draw sampling it will read zero and every "
+                                "shader declaring a samplerBuffer will fail to compile. MobileGL "
+                                "still advertises GL_MAX_TEXTURE_BUFFER_SIZE = %d because an "
+                                "OpenGL 4.x context may not report 0.",
+                                stateTextureObject->GetExternalIndex(), GetBufferTextureTierName(),
+                                g_GLESCapabilities.MaxTextureBufferSize);
+                        break;
+                    }
                     MGLOG_D("Texture state changed significantly or not initialized, regenerating texture buffer with "
                             "ID: %u, buffer ID: %u, buffer size: %zu, format: %s",
                             m_backendTextureId, backendId, buffer->GetSize(),
@@ -4297,6 +4320,26 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 String source;
                 auto& spirvCode = shaderSpirvs[index];
 
+                // A samplerBuffer is core in the OpenGL 3.1+ context MobileGL advertises but needs
+                // ES 3.2 or EXT/OES_texture_buffer on the host. Without it SPIRV-Cross emits
+                // `#extension GL_EXT_texture_buffer : require` and the driver rejects both that
+                // and the isamplerBuffer keyword - the program never links and every draw using it
+                // becomes a silent no-op. Say so here, naming the stage, instead of leaving a
+                // driver info log the shipped INFO build compiles out (MGLOG_E is inactive there).
+                // Gated on the capability so the module walk never runs on a healthy driver.
+                if (!AreBufferTexturesSupported() &&
+                    MG_Util::ShaderTranspiler::ShaderCompiler::ModuleDeclaresBufferTextureSampler(spirvCode)) {
+                    MGLOG_I("Program %u stage %s samples a buffer texture, which this ES driver "
+                            "cannot provide (%s). The shader will not compile and the program will "
+                            "not link; every draw using it is a no-op.",
+                            m_backendProgramId,
+                            MG_Util::ConvertGLEnumToString(glShaderType).c_str(),
+                            GetBufferTextureTierName());
+                    m_backendProgramUsable = false;
+                    g_GLESFuncs.glDeleteShader(backendShaderId);
+                    continue;
+                }
+
                 // ESSL cannot express gl_DrawID/gl_BaseInstance/gl_BaseVertex; demote them to
                 // plain globals (mg_*) before handing the module to SPIRV-Cross.
                 Vector<unsigned int> loweredSpirv;
@@ -4398,6 +4441,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 }
 
                 source = result;
+
+                // First in the chain because it is the only header-level rewrite: it edits
+                // #extension directives and never the body, so it is independent of every pass
+                // below and running it early keeps the directive block correct for
+                // ForceSupporterOutput, which scans for the last #extension line to decide where
+                // its precision statements go.
+                source = RetargetTextureBufferExtension(std::move(source),
+                                                        g_GLESCapabilities.TextureBufferSupport);
 
                 source = RebindImageUniformsToFrontendUnits(std::move(source), stateProgramObject);
                 // Wedged between those two on purpose:

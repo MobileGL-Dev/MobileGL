@@ -435,6 +435,69 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return result;
         }
 
+        String RetargetTextureBufferExtension(String glslCode,
+                                              MG_External::GLESCapabilities::TextureBufferTier tier) {
+#ifdef TRACY_ENABLE
+            ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
+#endif
+            // SPIRV-Cross hardcodes the EXT spelling: CompilerGLSL::type_to_glsl emits
+            // require_extension_internal("GL_EXT_texture_buffer") for any Dim=Buffer image
+            // whenever it targets ESSL below 320, with no OES alternative and no way to
+            // configure it. GL_OES_texture_buffer is functionally identical but is a separate
+            // directive, and `#extension <name> : require` on a name the driver does not
+            // advertise is a hard compile error - so on an OES-only driver the emitted shader
+            // fails to compile for the sake of one token.
+            //
+            // Deliberately a directive rewrite and nothing more. The alternative - teaching the
+            // SPIR-V to stop asking for the extension - is not available: the requirement is
+            // synthesized by SPIRV-Cross from the image type itself, not carried in the module,
+            // so there is nothing upstream to strip. Everything about the shader body that
+            // actually uses the buffer texture is identical between the two extensions.
+            using Tier = MG_External::GLESCapabilities::TextureBufferTier;
+            if (tier != Tier::ExtensionOES) {
+                return glslCode;
+            }
+            static constexpr const char* kExtName = "GL_EXT_texture_buffer";
+            static constexpr const char* kOesName = "GL_OES_texture_buffer";
+            constexpr SizeT kExtNameLength = 21; // strlen("GL_EXT_texture_buffer")
+            static_assert(sizeof("GL_EXT_texture_buffer") - 1 == kExtNameLength, "name length drifted");
+            static_assert(sizeof("GL_OES_texture_buffer") - 1 == kExtNameLength,
+                          "the two spellings must be the same length for the in-place replace");
+
+            // Only rewrite the name where it is the subject of an #extension directive. The same
+            // token can legitimately appear in a comment SPIRV-Cross carried through, and a
+            // shader that merely mentions the string must not be edited.
+            SizeT searchFrom = 0;
+            while (true) {
+                const SizeT hit = glslCode.find(kExtName, searchFrom);
+                if (hit == String::npos) {
+                    break;
+                }
+                searchFrom = hit + kExtNameLength;
+
+                // Walk back to the start of the line and require that it is an #extension
+                // directive, allowing whitespace between '#' and the keyword.
+                SizeT lineStart = glslCode.rfind('\n', hit);
+                lineStart = (lineStart == String::npos) ? 0 : lineStart + 1;
+                SizeT cursor = lineStart;
+                while (cursor < hit && std::isspace(static_cast<unsigned char>(glslCode[cursor]))) {
+                    ++cursor;
+                }
+                if (cursor >= hit || glslCode[cursor] != '#') {
+                    continue;
+                }
+                ++cursor;
+                while (cursor < hit && std::isspace(static_cast<unsigned char>(glslCode[cursor]))) {
+                    ++cursor;
+                }
+                if (glslCode.compare(cursor, 9, "extension") != 0) {
+                    continue;
+                }
+                glslCode.replace(hit, kExtNameLength, kOesName);
+            }
+            return glslCode;
+        }
+
         String RemoveLayoutBinding(const String& glslCode) {
 #ifdef TRACY_ENABLE
             ZoneScopedC(TRACY_ZONECOLOR_BACKEND);

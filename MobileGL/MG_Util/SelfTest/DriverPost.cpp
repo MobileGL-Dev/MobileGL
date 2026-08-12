@@ -422,6 +422,57 @@ namespace MobileGL::MG_Util::SelfTest {
                              "map array texture gets no driver storage at all, so sampling one reads nothing "
                              "and rendering to one does not reach the screen");
             }
+            // FAIL, not WARN: buffer textures are CORE in OpenGL 3.1 and MobileGL advertises a 4.x
+            // context, so an application may use one without asking - and nothing degrades
+            // gracefully when they are absent. The texture gets no driver storage (glTexBuffer does
+            // not exist), and, worse, every shader declaring a samplerBuffer fails to compile
+            // outright, because SPIRV-Cross emits `#extension GL_EXT_texture_buffer : require` for
+            // it below ESSL 320. The program then never links and every draw using it silently
+            // draws nothing - which is how Minecraft 26.3, whose cloud layer is built entirely from
+            // gl_VertexID plus texelFetch on a GL_R8I buffer texture, loses its clouds.
+            // The limit is stated on every tier because it is the one number an application can
+            // read, and on the None tier it is knowingly a fiction (see below).
+            {
+                using Tier = MG_External::GLESCapabilities::TextureBufferTier;
+                const Int advertisedLimit = caps.MaxTextureBufferSize;
+                switch (caps.TextureBufferSupport) {
+                case Tier::CoreEs32:
+                    builder.Pass("Buffer textures",
+                                 format("core in ES 3.2; GL_MAX_TEXTURE_BUFFER_SIZE = {} is the "
+                                        "driver's own answer, and ESSL 320 needs no #extension "
+                                        "directive to declare a samplerBuffer",
+                                        advertisedLimit));
+                    break;
+                case Tier::ExtensionEXT:
+                    builder.Pass("Buffer textures",
+                                 format("GL_EXT_texture_buffer; GL_MAX_TEXTURE_BUFFER_SIZE = {} is "
+                                        "the driver's own answer, and the directive SPIRV-Cross "
+                                        "emits (GL_EXT_texture_buffer) is the one this driver wants",
+                                        advertisedLimit));
+                    break;
+                case Tier::ExtensionOES:
+                    builder.Pass("Buffer textures",
+                                 format("GL_OES_texture_buffer; GL_MAX_TEXTURE_BUFFER_SIZE = {} is "
+                                        "the driver's own answer. SPIRV-Cross hardcodes the EXT "
+                                        "spelling, so MobileGL retargets the emitted #extension "
+                                        "directive to the OES one this driver advertises",
+                                        advertisedLimit));
+                    break;
+                case Tier::None:
+                default:
+                    builder.Fail("Buffer textures",
+                                 format("not supported (pre-ES 3.2 without GL_EXT/OES_texture_buffer); "
+                                        "glTexBuffer does not exist, so a buffer texture gets no storage, "
+                                        "and any shader declaring a samplerBuffer fails to compile and "
+                                        "leaves its program unlinked - every draw using it is a silent "
+                                        "no-op. MobileGL still reports GL_MAX_TEXTURE_BUFFER_SIZE = {}: "
+                                        "the value is a floor it cannot honour, kept because an OpenGL "
+                                        "4.x context may not answer 0 and GL has no way to say that a "
+                                        "core feature is missing",
+                                        advertisedLimit));
+                    break;
+                }
+            }
             // Reported rather than probed: this one cannot come out any other way. OpenGL ES has no
             // double-precision vertex format and ESSL has no fp64 type, so there is no driver and no
             // extension that could make it work - the row exists so the loss is named at startup
@@ -1727,6 +1778,29 @@ namespace MobileGL::MG_Util::SelfTest {
             builder.Pass("dualSrcBlend", "GL_SRC1_* dual-source blend factors supported");
         } else {
             builder.Warn("dualSrcBlend", "unsupported; GL_SRC1_* dual-source blend factors hard-fail at draw");
+        }
+        // The Magma counterpart of the GLES "Buffer textures" row, so the two sections can be
+        // read side by side. Vulkan has no optional-feature bit here: a uniform texel buffer is
+        // core, and maxTexelBufferElements has a spec floor of 65536 - exactly the GL 3.1 floor
+        // for GL_MAX_TEXTURE_BUFFER_SIZE - so this backend can always back a buffer texture and
+        // the row exists to state the limit MobileGL derives its advertisement from, not to
+        // report a risk. A driver below the floor would be non-conformant, hence the Warn.
+        {
+            const Uint32 maxTexelBufferElements = properties.limits.maxTexelBufferElements;
+            constexpr Uint32 kGL31MinTextureBufferSize = 65536;
+            if (maxTexelBufferElements >= kGL31MinTextureBufferSize) {
+                builder.Pass("maxTexelBufferElements",
+                             format("{}; uniform texel buffers are core in Vulkan, so buffer textures "
+                                    "need no extension and MobileGL advertises "
+                                    "GL_MAX_TEXTURE_BUFFER_SIZE from this limit",
+                                    maxTexelBufferElements));
+            } else {
+                builder.Warn("maxTexelBufferElements",
+                             format("{} (< {}); below the OpenGL 3.1 floor for "
+                                    "GL_MAX_TEXTURE_BUFFER_SIZE, so a conformant application may "
+                                    "create a buffer texture larger than this driver can view",
+                                    maxTexelBufferElements, kGL31MinTextureBufferSize));
+            }
         }
         {
             VkImageFormatProperties sliceProbe{};

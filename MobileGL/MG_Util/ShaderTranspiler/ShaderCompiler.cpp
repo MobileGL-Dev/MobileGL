@@ -30,6 +30,8 @@
 #include "SpirvPasses/LegalizeFragmentOutputIndexPass.h"
 #include "spirv-tools/libspirv.h"
 #include "spirv-tools/optimizer.hpp"
+#include "source/opt/build_module.h"
+#include "source/opt/ir_context.h"
 
 #include "ShaderSourceProcessor.h"
 #include <MG_Backend/BackendObjects.h>
@@ -536,6 +538,32 @@ namespace MobileGL {
 
             Uint64 ShaderCompiler::SpirvValidationFailureCount() {
                 return g_spirvValidationFailures.load(std::memory_order_relaxed);
+            }
+
+            Bool ShaderCompiler::ModuleDeclaresBufferTextureSampler(const Vector<Uint32>& spirv) {
+                // Callers gate this on the driver LACKING buffer textures, so the module build
+                // here only ever happens on a degraded driver that is about to fail the compile
+                // anyway - it is not on the healthy path.
+                std::unique_ptr<spvtools::opt::IRContext> context = spvtools::BuildModule(
+                    SPV_ENV_VULKAN_1_1, MakeSpirvMessageConsumer("ModuleDeclaresBufferTextureSampler"),
+                    spirv.data(), spirv.size());
+                if (!context) {
+                    // Unparseable here means unusable downstream too; let the ordinary transpile
+                    // path produce the error rather than inventing a capability verdict from it.
+                    return false;
+                }
+                for (const spvtools::opt::Instruction& type : context->types_values()) {
+                    if (type.opcode() != spv::Op::OpTypeImage) {
+                        continue;
+                    }
+                    // OpTypeImage operands: Sampled Type, Dim, Depth, Arrayed, MS, Sampled, Format.
+                    // Dim is operand 1; SpvDimBuffer is what samplerBuffer/isamplerBuffer/
+                    // usamplerBuffer all lower to, whatever their sampled type.
+                    if (static_cast<spv::Dim>(type.GetSingleWordInOperand(1)) == spv::Dim::Buffer) {
+                        return true;
+                    }
+                }
+                return false;
             }
 
             bool ShaderCompiler::SanitizeAndOptimizeBinary(const Vector<Uint32>& inputBinary,

@@ -133,6 +133,16 @@ namespace MobileGL {
                 // total.
                 static Uint64 SpirvValidationFailureCount();
                 static Uint64 NoteSpirvValidationFailure();
+
+                // True when the module declares any buffer-texture sampler - a samplerBuffer,
+                // isamplerBuffer or usamplerBuffer, i.e. an OpTypeImage with Dim = Buffer.
+                // DirectGLES asks before handing the transpiled ESSL to the driver: buffer
+                // textures are core in the OpenGL 3.1+ context MobileGL advertises but need
+                // ES 3.2 or EXT/OES_texture_buffer on the host, and on a driver without them
+                // SPIRV-Cross's `#extension ... : require` makes the shader uncompilable. The
+                // check exists so that failure can be reported as the missing capability it is,
+                // naming the shader, rather than as a driver info log nobody sees.
+                static Bool ModuleDeclaresBufferTextureSampler(const Vector<Uint32>& spirv);
             };
         } // namespace ShaderTranspiler
     } // namespace MG_Util

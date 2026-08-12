@@ -626,6 +626,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
             Bool m_isInitialized = false;
             Bool m_imageBindableStorageRequired = false;
             Bool m_backendStorageImmutable = false;
+            // Latches the "this driver has no buffer textures" report to once per texture. The
+            // report is emitted from the respecify path, which bails before recording the state
+            // it was asked to apply - so without the latch the texture stays permanently dirty
+            // and every draw of every frame logs the same line.
+            Bool m_bufferTextureUnsupportedReported = false;
             StateTextureBasicInfo m_prevTextureInfo;
             // Frontend content version at the last completed mipmap sync. The per-draw
             // clean probe compares this before rebuilding shape info and scanning

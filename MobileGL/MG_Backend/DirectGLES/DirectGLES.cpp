@@ -7233,6 +7233,30 @@ namespace MobileGL::MG_Backend::DirectGLES {
                g_GLESFuncs.glGetQueryObjectui64vEXT;
     }
 
+    Bool AreBufferTexturesSupported() {
+        // The tier already folds in the resolved-pointer requirement (see FillInGLESCapabilities),
+        // but the pointer is re-checked here because the tier is only meaningful once the
+        // capabilities have been filled in, and callers may run before that.
+        return g_GLESCapabilities.TextureBufferSupport !=
+                   MG_External::GLESCapabilities::TextureBufferTier::None &&
+               g_GLESFuncs.glTexBuffer != nullptr;
+    }
+
+    const char* GetBufferTextureTierName() {
+        using Tier = MG_External::GLESCapabilities::TextureBufferTier;
+        switch (g_GLESCapabilities.TextureBufferSupport) {
+        case Tier::CoreEs32:
+            return "core (ES 3.2)";
+        case Tier::ExtensionEXT:
+            return "GL_EXT_texture_buffer";
+        case Tier::ExtensionOES:
+            return "GL_OES_texture_buffer";
+        case Tier::None:
+        default:
+            return "unsupported";
+        }
+    }
+
     BackendQueryHandle BeginTimeElapsedQuery() {
         // Query objects can only be created on the thread that owns the ES
         // context (MC's F3 profiler queries on the render thread, which

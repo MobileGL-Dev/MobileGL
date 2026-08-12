@@ -841,6 +841,9 @@ namespace MobileGL::MG_Util::BackendLoader {
         Bool hasMultiDrawIndirectExtension = false;
         Bool hasDrawElementsBaseVertexExtension = false;
         Bool hasMultiDrawArraysExtension = false;
+        // Resolved into caps.TextureBufferSupport below, once the ES version is also known.
+        Bool hasExtTextureBuffer = false;
+        Bool hasOesTextureBuffer = false;
         for (GLint i = 0; i < extCount; ++i) {
             const char* extension = (const char*)glesFuncs.glGetStringi(GL_EXTENSIONS, i);
             if (extension) {
@@ -873,6 +876,12 @@ namespace MobileGL::MG_Util::BackendLoader {
                 if (std::strcmp(extension, "GL_EXT_texture_cube_map_array") == 0 ||
                     std::strcmp(extension, "GL_OES_texture_cube_map_array") == 0) {
                     caps.SupportsTextureCubeMapArray = true;
+                }
+                if (std::strcmp(extension, "GL_EXT_texture_buffer") == 0) {
+                    hasExtTextureBuffer = true;
+                }
+                if (std::strcmp(extension, "GL_OES_texture_buffer") == 0) {
+                    hasOesTextureBuffer = true;
                 }
                 if (std::strcmp(extension, "GL_EXT_base_instance") == 0) {
                     caps.SupportsBaseInstance = true;
@@ -1050,7 +1059,12 @@ namespace MobileGL::MG_Util::BackendLoader {
         glesFuncs.glGetIntegerv(GL_MAX_COMPUTE_UNIFORM_BLOCKS, &maxComputeUniformBlocks);
         glesFuncs.glGetIntegerv(GL_MAX_COMPUTE_WORK_GROUP_INVOCATIONS, &maxComputeWorkGroupInvocations);
         glesFuncs.glGetIntegerv(GL_MAX_SHADER_STORAGE_BUFFER_BINDINGS, &maxShaderStorageBufferBindings);
-        glesFuncs.glGetIntegerv(GL_MAX_TEXTURE_BUFFER_SIZE, &maxTextureBufferSize);
+        // GL_MAX_TEXTURE_BUFFER_SIZE is deliberately NOT batched here: like
+        // GL_TEXTURE_BUFFER_OFFSET_ALIGNMENT below, the pname only exists once buffer textures do,
+        // so on a driver without them it raises GL_INVALID_ENUM, leaves the local at MobileGL's own
+        // floor, and - because nothing drains the queue until the alignment probe far below - lets
+        // that error be misattributed to any query in between. It is queried in the guarded block
+        // that resolves caps.TextureBufferSupport instead.
         glesFuncs.glGetIntegerv(GL_MAX_UNIFORM_BUFFER_BINDINGS, &maxUniformBufferBindings);
         glesFuncs.glGetIntegerv(GL_MAX_UNIFORM_BLOCK_SIZE, &maxUniformBlockSize);
         glesFuncs.glGetIntegerv(GL_MAX_IMAGE_UNITS, &maxImageUnits);
@@ -1100,6 +1114,62 @@ namespace MobileGL::MG_Util::BackendLoader {
         if (caps.GLESVersion.Major > 3 || (caps.GLESVersion.Major == 3 && caps.GLESVersion.Minor >= 2)) {
             caps.SupportsTextureBorderClamp = true;
             caps.SupportsTextureCubeMapArray = true;
+        }
+        // Buffer-texture tier. Core from ES 3.2 on; below that the EXT spelling is preferred over
+        // the OES one purely because SPIRV-Cross emits GL_EXT_texture_buffer natively, so a driver
+        // with both needs no directive retargeting. The entry point has to have resolved either
+        // way - the extension string alone is not support (see the multi-draw note above).
+        {
+            const Bool textureBufferIsCore =
+                caps.GLESVersion.Major > 3 || (caps.GLESVersion.Major == 3 && caps.GLESVersion.Minor >= 2);
+            using Tier = MG_External::GLESCapabilities::TextureBufferTier;
+            if (glesFuncs.glTexBuffer == nullptr) {
+                caps.TextureBufferSupport = Tier::None;
+            } else if (textureBufferIsCore) {
+                caps.TextureBufferSupport = Tier::CoreEs32;
+            } else if (hasExtTextureBuffer) {
+                caps.TextureBufferSupport = Tier::ExtensionEXT;
+            } else if (hasOesTextureBuffer) {
+                caps.TextureBufferSupport = Tier::ExtensionOES;
+            } else {
+                caps.TextureBufferSupport = Tier::None;
+            }
+
+            if (caps.TextureBufferSupport != Tier::None) {
+                // Drain first: an error left by any earlier probe would otherwise read as this
+                // query having failed, and the value would be discarded as a non-answer.
+                if (glesFuncs.glGetError) {
+                    while (glesFuncs.glGetError() != GL_NO_ERROR) {
+                    }
+                }
+                glesFuncs.glGetIntegerv(GL_MAX_TEXTURE_BUFFER_SIZE, &maxTextureBufferSize);
+                if (glesFuncs.glGetError) {
+                    Bool queryFailed = false;
+                    while (glesFuncs.glGetError() != GL_NO_ERROR) {
+                        queryFailed = true;
+                    }
+                    caps.MaxTextureBufferSizeIsDriverReported = !queryFailed;
+                } else {
+                    caps.MaxTextureBufferSizeIsDriverReported = true;
+                }
+            }
+            // On the None tier the local keeps MobileGL's floor and
+            // MaxTextureBufferSizeIsDriverReported stays false. The floor, not 0, is what the
+            // frontend goes on advertising: MobileGL reports an OpenGL 4.x context, where buffer
+            // textures are core and GL_MAX_TEXTURE_BUFFER_SIZE has a spec minimum of 65536, so 0
+            // would be an illegal answer that no conformant app is prepared to read (several
+            // divide by it or size an allocation with it). The dishonesty is contained by making
+            // the missing capability loud instead - at capability init here, at glTexBuffer, at
+            // program build, and as its own driver POST row - because GL offers no way to say
+            // "buffer textures exist but cannot work".
+            if (caps.TextureBufferSupport == Tier::None) {
+                MGLOG_I("    Buffer textures: UNSUPPORTED (ES %d.%d core needs 3.2, and neither "
+                        "GL_EXT_texture_buffer nor GL_OES_texture_buffer is present). Any shader "
+                        "sampling a samplerBuffer will fail to compile, and MobileGL keeps "
+                        "advertising GL_MAX_TEXTURE_BUFFER_SIZE = %d because a GL 4.x context may "
+                        "not report 0.",
+                        caps.GLESVersion.Major, caps.GLESVersion.Minor, maxTextureBufferSize);
+            }
         }
         if (caps.SupportsTextureFilterAnisotropy) {
             GLfloat maxTextureMaxAnisotropy = 1.0f;
@@ -1215,7 +1285,8 @@ namespace MobileGL::MG_Util::BackendLoader {
         MGLOG_I("    GL_MAX_COMPUTE_UNIFORM_BLOCKS: %d", caps.MaxComputeUniformBlocks);
         MGLOG_I("    GL_MAX_COMPUTE_WORK_GROUP_INVOCATIONS: %d", caps.MaxComputeWorkGroupInvocations);
         MGLOG_I("    GL_MAX_SHADER_STORAGE_BUFFER_BINDINGS: %d", caps.MaxShaderStorageBufferBindings);
-        MGLOG_I("    GL_MAX_TEXTURE_BUFFER_SIZE: %d", caps.MaxTextureBufferSize);
+        MGLOG_I("    GL_MAX_TEXTURE_BUFFER_SIZE: %d%s", caps.MaxTextureBufferSize,
+                caps.MaxTextureBufferSizeIsDriverReported ? "" : " (MobileGL floor - the driver has no buffer textures to ask)");
         MGLOG_I("    GL_MAX_UNIFORM_BUFFER_BINDINGS: %d", caps.MaxUniformBufferBindings);
         MGLOG_I("    GL_MAX_UNIFORM_BLOCK_SIZE: %d", caps.MaxUniformBlockSize);
         MGLOG_I("    GL_MAX_IMAGE_UNITS: %d", caps.MaxImageUnits);

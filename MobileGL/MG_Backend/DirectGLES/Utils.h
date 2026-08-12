@@ -130,6 +130,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // drawBufferCount <= 1, i.e. for everything but a framebuffer that actually
         // enables several draw buffers, so the ordinary single-target shader is untouched.
         String BroadcastLegacyFragColor(String glslCode, GLenum shaderType, Uint drawBufferCount);
+        // SPIRV-Cross emits `#extension GL_EXT_texture_buffer : require` for every buffer-texture
+        // sampler when it targets ESSL below 320, and offers no way to ask for the OES spelling.
+        // On a driver that advertises only GL_OES_texture_buffer that directive is a compile
+        // error, so the name is retargeted in the emitted source. A no-op on every other tier:
+        // ES 3.2 needs no directive at all and an EXT driver already has the right one.
+        String RetargetTextureBufferExtension(String glslCode,
+                                              MG_External::GLESCapabilities::TextureBufferTier tier);
         String RemoveLayoutBinding(const String& glslCode);
         // Prefix of the writeonly half a read+write image uniform is split into (see
         // SplitReadWriteImageUniforms); the suffix is the image's own name.

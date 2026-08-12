@@ -3324,3 +3324,160 @@ void main() {
     EXPECT_FALSE(LegalizeFragmentOutputIndexPass::BinaryHasDynamicOutputIndexing(raw))
         << "only fragment outputs carry the constant-index rule:\n" << DisassembleSpirv(raw);
 }
+
+// ---------------------------------------------------------------------------------------
+// Buffer-texture samplers (samplerBuffer / isamplerBuffer / usamplerBuffer)
+//
+// Buffer textures are core in OpenGL 3.1 and MobileGL advertises a 4.x context, so an
+// application may sample one without asking. On the ES side they only became core in 3.2,
+// and SPIRV-Cross emits `#extension GL_EXT_texture_buffer : require` for any Dim=Buffer
+// image it renders below ESSL 320. On a driver with neither EXT_ nor OES_texture_buffer that
+// directive - and the isamplerBuffer keyword behind it - fail to compile, the program never
+// links, and every draw using it is a silent no-op. DirectGLES asks the detector below so it
+// can name that as the missing capability it is, instead of leaving a driver info log the
+// shipped INFO build compiles out.
+// ---------------------------------------------------------------------------------------
+
+namespace {
+    // Compiles `source` for `stage` and returns the module, or fails the calling test.
+    Vector<Uint32> BuildSpirvForStage(const String& source, GLenum stage) {
+        using namespace MG_Util::ShaderTranspiler;
+        ShaderAttrib attrib{.shaderType = stage, .sourceStr = source};
+        auto res = ShaderCompiler::CompileShader(attrib);
+        if (!res) {
+            ADD_FAILURE() << "compile errc: " << res.error().errc << "\nlog: " << res.error().log;
+            return {};
+        }
+        ProgramAttrib programAttrib{.shaders = {res.value()}};
+        auto program_res = ShaderCompiler::LinkProgram(programAttrib);
+        if (!program_res) {
+            ADD_FAILURE() << "link errc: " << program_res.error().errc << "\nlog: " << program_res.error().log;
+            return {};
+        }
+        ProgramBinaryAttrib binaryAttrib{.shaderTypes = {stage}, .program = *program_res.value()};
+        auto bin_res = ShaderCompiler::GetSpirvBinaryFromProgram(binaryAttrib);
+        if (!bin_res) {
+            ADD_FAILURE() << "spirv errc: " << bin_res.error().errc << "\nlog: " << bin_res.error().log;
+            return {};
+        }
+        if (bin_res.value().size() != 1u) {
+            ADD_FAILURE() << "expected exactly one module, got " << bin_res.value().size();
+            return {};
+        }
+        return bin_res.value()[0];
+    }
+} // namespace
+
+// The shape of Minecraft 26.3's cloud vertex shader: no vertex attributes at all, the whole
+// geometry read out of a GL_R8I buffer texture indexed by gl_VertexID.
+TEST_F(ProgramUtilTest, BufferTextureSamplerIsDetectedInTheModule) {
+    using namespace MG_Util::ShaderTranspiler;
+
+    String vs = R"(#version 330 core
+uniform isamplerBuffer CloudFaces;
+out vec4 vColor;
+void main() {
+    int face = texelFetch(CloudFaces, gl_VertexID).r;
+    vColor = vec4(float(face) / 255.0);
+    gl_Position = vec4(0.0, 0.0, 0.0, 1.0);
+}
+)";
+    const Vector<Uint32> spirv = BuildSpirvForStage(vs, GL_VERTEX_SHADER);
+    ASSERT_FALSE(spirv.empty());
+    EXPECT_TRUE(ShaderCompiler::ModuleDeclaresBufferTextureSampler(spirv))
+        << "an isamplerBuffer must be recognised as a buffer texture";
+}
+
+// The float and unsigned spellings lower to the same Dim=Buffer image with a different
+// sampled type, so all three have to be caught by the same check.
+TEST_F(ProgramUtilTest, FloatAndUnsignedBufferSamplersAreDetectedToo) {
+    using namespace MG_Util::ShaderTranspiler;
+
+    String floatFs = R"(#version 330 core
+uniform samplerBuffer Data;
+out vec4 fragColor;
+void main() { fragColor = texelFetch(Data, 3); }
+)";
+    const Vector<Uint32> floatSpirv = BuildSpirvForStage(floatFs, GL_FRAGMENT_SHADER);
+    ASSERT_FALSE(floatSpirv.empty());
+    EXPECT_TRUE(ShaderCompiler::ModuleDeclaresBufferTextureSampler(floatSpirv));
+
+    String uintFs = R"(#version 330 core
+uniform usamplerBuffer Data;
+out vec4 fragColor;
+void main() { fragColor = vec4(texelFetch(Data, 3)); }
+)";
+    const Vector<Uint32> uintSpirv = BuildSpirvForStage(uintFs, GL_FRAGMENT_SHADER);
+    ASSERT_FALSE(uintSpirv.empty());
+    EXPECT_TRUE(ShaderCompiler::ModuleDeclaresBufferTextureSampler(uintSpirv));
+}
+
+// The negative control that keeps the detector from turning into "declares any sampler":
+// an ordinary sampler2D must not put a program on the unsupported path on a driver that is
+// perfectly able to run it.
+TEST_F(ProgramUtilTest, OrdinaryTextureSamplersAreNotBufferTextures) {
+    using namespace MG_Util::ShaderTranspiler;
+
+    String fs = R"(#version 330 core
+uniform sampler2D Albedo;
+uniform isampler2D Ids;
+in vec2 vUv;
+out vec4 fragColor;
+void main() { fragColor = texture(Albedo, vUv) + vec4(texelFetch(Ids, ivec2(0), 0)); }
+)";
+    const Vector<Uint32> spirv = BuildSpirvForStage(fs, GL_FRAGMENT_SHADER);
+    ASSERT_FALSE(spirv.empty());
+    EXPECT_FALSE(ShaderCompiler::ModuleDeclaresBufferTextureSampler(spirv))
+        << "only Dim=Buffer images are buffer textures";
+}
+
+// Pins the SPIRV-Cross behaviour the whole defect rests on: below ESSL 320 it synthesizes an
+// EXT_texture_buffer requirement from the image type itself. There is nothing in the module
+// to strip - which is why the OES driver is served by retargeting the emitted directive
+// (RetargetTextureBufferExtension) rather than by rewriting the SPIR-V.
+TEST_F(ProgramUtilTest, BufferTextureSamplerEmitsTheExtDirectiveInEssl) {
+    using namespace MG_Util::ShaderTranspiler;
+
+    String fs = R"(#version 330 core
+uniform isamplerBuffer Data;
+out vec4 fragColor;
+void main() { fragColor = vec4(texelFetch(Data, 3)); }
+)";
+    const Vector<Uint32> spirv = BuildSpirvForStage(fs, GL_FRAGMENT_SHADER);
+    ASSERT_FALSE(spirv.empty());
+
+    // Emitted at ESSL 310 the way DirectGLES does on an ES 3.1 host (ShaderCompiler's own
+    // DecompileShader helper hardcodes 320, where the question does not arise). This is the
+    // version the defect lives at: the emulator SDK's ANGLE is ES 3.1 with neither extension.
+    auto emitAt = [&spirv](unsigned version) -> String {
+        SpvcSession session(spirv, SessionUsageBit::Transpile);
+        spvc_compiler_options options;
+        session.CreateOptions(&options);
+        spvc_compiler_options_set_uint(options, SPVC_COMPILER_OPTION_GLSL_VERSION, version);
+        spvc_compiler_options_set_bool(options, SPVC_COMPILER_OPTION_GLSL_ES, SPVC_TRUE);
+        spvc_compiler_options_set_bool(options, SPVC_COMPILER_OPTION_GLSL_VULKAN_SEMANTICS, SPVC_FALSE);
+        session.SetOptions(options);
+        const char* result = nullptr;
+        session.Compile(&result);
+        return result ? String(result) : String();
+    };
+
+    const String essl310 = emitAt(310);
+    ASSERT_FALSE(essl310.empty()) << "ESSL 310 emission failed outright";
+    EXPECT_NE(essl310.find("isamplerBuffer"), String::npos)
+        << "the buffer sampler must survive to ESSL:\n" << essl310;
+    EXPECT_NE(essl310.find("GL_EXT_texture_buffer"), String::npos)
+        << "SPIRV-Cross requires EXT_texture_buffer below ESSL 320, and hardcodes that spelling - "
+           "which is the whole reason an OES-only driver needs the emitted directive retargeted:\n"
+        << essl310;
+
+    // At 320 buffer textures are ES core, so there is no directive to get wrong. This half is
+    // what makes the ES 3.2 tier a Pass with nothing to do rather than a silent dependency.
+    const String essl320 = emitAt(320);
+    ASSERT_FALSE(essl320.empty()) << "ESSL 320 emission failed outright";
+    EXPECT_NE(essl320.find("isamplerBuffer"), String::npos) << essl320;
+    EXPECT_EQ(essl320.find("GL_EXT_texture_buffer"), String::npos)
+        << "ES 3.2 has buffer textures in core; requiring the extension there would be wrong:\n"
+        << essl320;
+
+}

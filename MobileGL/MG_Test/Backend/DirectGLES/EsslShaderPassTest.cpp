@@ -253,3 +253,90 @@ void main()
 )";
     EXPECT_EQ(SplitReadWriteImageUniforms(source), source);
 }
+
+// ---------------------------------------------------------------------------------------
+// RetargetTextureBufferExtension
+//
+// Buffer textures are core in the OpenGL 3.1+ context MobileGL advertises, but in ES they
+// only became core in 3.2; below that they need EXT_texture_buffer or OES_texture_buffer.
+// SPIRV-Cross hardcodes the EXT spelling for every Dim=Buffer image it emits below ESSL 320
+// and offers no way to ask for the other one, so on a driver that advertises only the OES
+// name the `: require` is a hard compile error over a single token.
+// ---------------------------------------------------------------------------------------
+
+using Tier = MobileGL::MG_External::GLESCapabilities::TextureBufferTier;
+using MobileGL::MG_Backend::DirectGLES::PrgramImpl::RetargetTextureBufferExtension;
+
+namespace {
+    // What SPIRV-Cross actually emits for `uniform isamplerBuffer CloudFaces;` at ESSL 310 -
+    // the shape that empties Minecraft 26.3's cloud layer on a driver without the extension.
+    const String kBufferTextureShader = R"(#version 310 es
+#extension GL_EXT_texture_buffer : require
+precision highp float;
+uniform highp isamplerBuffer CloudFaces;
+layout(location = 0) out highp vec4 mg_FragColor;
+void main()
+{
+    mg_FragColor = vec4(texelFetch(CloudFaces, gl_VertexID).r);
+}
+)";
+} // namespace
+
+TEST(RetargetTextureBufferExtensionTest, OesOnlyDriverGetsTheOesDirective) {
+    const String out = RetargetTextureBufferExtension(kBufferTextureShader, Tier::ExtensionOES);
+    EXPECT_TRUE(Contains(out, "#extension GL_OES_texture_buffer : require"))
+        << "the OES driver's own spelling must reach the directive:\n" << out;
+    EXPECT_FALSE(Contains(out, "GL_EXT_texture_buffer"))
+        << "the EXT spelling this driver does not advertise must be gone:\n" << out;
+    // Only the directive changes; the declaration and the fetch are identical between the two
+    // extensions and must not be touched.
+    EXPECT_TRUE(Contains(out, "uniform highp isamplerBuffer CloudFaces;"));
+    EXPECT_TRUE(Contains(out, "texelFetch(CloudFaces, gl_VertexID)"));
+}
+
+TEST(RetargetTextureBufferExtensionTest, ExtDriverKeepsWhatSpirvCrossEmitted) {
+    EXPECT_EQ(RetargetTextureBufferExtension(kBufferTextureShader, Tier::ExtensionEXT),
+              kBufferTextureShader);
+}
+
+// ES 3.2 needs no directive at all, and SPIRV-Cross emits none at ESSL 320 - but a shader
+// that arrived with one anyway must not be rewritten to a name the pass was not asked for.
+TEST(RetargetTextureBufferExtensionTest, CoreAndUnsupportedTiersAreNoOps) {
+    EXPECT_EQ(RetargetTextureBufferExtension(kBufferTextureShader, Tier::CoreEs32),
+              kBufferTextureShader);
+    EXPECT_EQ(RetargetTextureBufferExtension(kBufferTextureShader, Tier::None),
+              kBufferTextureShader);
+}
+
+// The name is only the subject of a rewrite where it is the subject of an #extension
+// directive. A shader that merely mentions it - in a comment SPIRV-Cross carried through, or
+// in an identifier - is not an extension request and must come out byte-identical.
+TEST(RetargetTextureBufferExtensionTest, OnlyExtensionDirectivesAreRewritten) {
+    const String source = R"(#version 310 es
+// GL_EXT_texture_buffer is what this shader would need
+precision highp float;
+uniform highp float GL_EXT_texture_buffer_lookalike;
+layout(location = 0) out highp vec4 mg_FragColor;
+void main()
+{
+    mg_FragColor = vec4(GL_EXT_texture_buffer_lookalike);
+}
+)";
+    EXPECT_EQ(RetargetTextureBufferExtension(source, Tier::ExtensionOES), source);
+}
+
+// Whitespace between '#' and the keyword is legal in GLSL, and a shader carrying several
+// extension directives must have exactly the one retargeted.
+TEST(RetargetTextureBufferExtensionTest, SpacedDirectiveIsRewrittenAndNeighboursAreLeftAlone) {
+    const String source = R"(#version 310 es
+#  extension GL_EXT_texture_buffer : require
+#extension GL_EXT_shader_io_blocks : require
+precision highp float;
+void main() {}
+)";
+    const String out = RetargetTextureBufferExtension(source, Tier::ExtensionOES);
+    EXPECT_TRUE(Contains(out, "#  extension GL_OES_texture_buffer : require")) << out;
+    EXPECT_TRUE(Contains(out, "#extension GL_EXT_shader_io_blocks : require"))
+        << "an unrelated extension must survive untouched:\n" << out;
+    EXPECT_EQ(CountOf(out, "GL_OES_texture_buffer"), 1u);
+}

@@ -1151,6 +1151,16 @@ namespace MobileGL::MG_Backend::DirectGLES {
         m_dynamicParameters.MaxComputeUniformBlocks = m_GLESCapabilities.MaxComputeUniformBlocks;
         m_dynamicParameters.MaxComputeWorkGroupInvocations = m_GLESCapabilities.MaxComputeWorkGroupInvocations;
         m_dynamicParameters.MaxShaderStorageBufferBindings = m_GLESCapabilities.MaxShaderStorageBufferBindings;
+        // This is the number glGetIntegerv(GL_MAX_TEXTURE_BUFFER_SIZE) hands the application, and
+        // on a host without buffer textures it is knowingly a floor MobileGL cannot honour rather
+        // than a driver answer (m_GLESCapabilities.MaxTextureBufferSizeIsDriverReported says
+        // which). Reporting 0 instead was considered and rejected: MobileGL advertises an OpenGL
+        // 4.x context, where buffer textures are core and the limit has a spec minimum of 65536,
+        // so 0 is not a legal answer and applications are not written to survive it. GL offers no
+        // way to say "this core feature is missing", so the honesty is carried outside the limit:
+        // FillInGLESCapabilities logs the tier, glTexBuffer and the program build each name the
+        // missing capability at MGLOG_I, and the driver POST carries a "Buffer textures" row that
+        // FAILs on this tier.
         m_dynamicParameters.MaxTextureBufferSize = m_GLESCapabilities.MaxTextureBufferSize;
         m_dynamicParameters.TextureBufferOffsetAlignment = m_GLESCapabilities.TextureBufferOffsetAlignment;
         m_dynamicParameters.MaxUniformBufferBindings = m_GLESCapabilities.MaxUniformBufferBindings;
