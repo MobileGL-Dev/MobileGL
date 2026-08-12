@@ -459,9 +459,13 @@ namespace MobileGL {
                             candidate.loads.push_back(user);
                             return;
                         }
-                        // OpImageTexelPointer takes the image POINTER and yields a pointer to the
-                        // sampled type, which the format operand does not enter into.
-                        if (user->opcode() == spv::Op::OpImageTexelPointer) return;
+                        // OpImageTexelPointer is DECLINED, not allowed through. Its result type
+                        // does not depend on the format, but spirv-val requires the image behind
+                        // an atomic to be r32i/r32ui/r32f, so baking any other format here would
+                        // turn a module the validator accepts (Unknown is exempt) into one it
+                        // rejects. GLSL cannot express an atomic on a format-less image anyway -
+                        // the format qualifier is what makes an image atomic legal - so nothing
+                        // reachable is being given up.
                         rewritable = false;
                     });
                     if (!rewritable) continue;
@@ -475,7 +479,6 @@ namespace MobileGL {
                                 candidate.loads.push_back(user);
                                 return;
                             }
-                            if (user->opcode() == spv::Op::OpImageTexelPointer) return;
                             rewritable = false;
                         });
                     }
@@ -558,8 +561,8 @@ namespace MobileGL {
                 // new operand's definition comes last - the join case is exactly where those two
                 // differ, and putting the clone after the original alone is what left an
                 // OpVariable naming a pointer type declared below it.
-                auto cloneTypeWithOperand = [&](Instruction* original, uint32_t operandIndex,
-                                                uint32_t value) -> uint32_t {
+                auto cloneTypeWithOperand = [&](Instruction* original, uint32_t operandIndex, uint32_t value,
+                                                bool valueIsId) -> uint32_t {
                     const auto cacheKey = std::make_pair(original->result_id(), value);
                     const auto cached = cloneCache.find(cacheKey);
                     if (cached != cloneCache.end()) return cached->second;
@@ -580,7 +583,11 @@ namespace MobileGL {
                         return existing;
                     }
                     const uint32_t newId = clone->result_id();
-                    Instruction* anchor = laterInGlobals(original, defUseMgr->GetDef(value));
+                    // Only an ID operand names a definition the clone has to sit behind. The
+                    // format operand is a LITERAL, and looking it up would resolve some unrelated
+                    // instruction that happens to carry that number as its result id.
+                    Instruction* anchor =
+                        valueIsId ? laterInGlobals(original, defUseMgr->GetDef(value)) : original;
                     if (anchor == nullptr) return 0;
                     Instruction* inserted = clone.release();
                     inserted->InsertAfter(anchor);
@@ -598,7 +605,8 @@ namespace MobileGL {
                 bool changed = false;
                 for (Candidate& candidate : candidates) {
                     const uint32_t newImageId = cloneTypeWithOperand(candidate.chain.imageType, kImageFormatOperand,
-                                                                    static_cast<uint32_t>(candidate.format));
+                                                                    static_cast<uint32_t>(candidate.format),
+                                                                    /*valueIsId=*/false);
                     if (newImageId == 0) return Status::Failure;
 
                     // The pointer-to-image type every access chain and every single-image
@@ -606,11 +614,11 @@ namespace MobileGL {
                     uint32_t newPointeeId = newImageId;
                     if (candidate.chain.arrayType != nullptr) {
                         newPointeeId = cloneTypeWithOperand(candidate.chain.arrayType, kArrayElementOperand,
-                                                            newImageId);
+                                                            newImageId, /*valueIsId=*/true);
                         if (newPointeeId == 0) return Status::Failure;
                     }
                     const uint32_t newVariablePointerId = cloneTypeWithOperand(
-                        candidate.chain.pointerType, kPointerPointeeOperand, newPointeeId);
+                        candidate.chain.pointerType, kPointerPointeeOperand, newPointeeId, /*valueIsId=*/true);
                     if (newVariablePointerId == 0) return Status::Failure;
 
                     candidate.variable->SetResultType(newVariablePointerId);
@@ -630,7 +638,7 @@ namespace MobileGL {
                         Instruction* oldResultType = defUseMgr->GetDef(accessChain->type_id());
                         if (oldResultType == nullptr) return Status::Failure;
                         const uint32_t newResultType =
-                            cloneTypeWithOperand(oldResultType, kPointerPointeeOperand, newImageId);
+                            cloneTypeWithOperand(oldResultType, kPointerPointeeOperand, newImageId, /*valueIsId=*/true);
                         if (newResultType == 0) return Status::Failure;
                         accessChain->SetResultType(newResultType);
                         defUseMgr->AnalyzeInstUse(accessChain);

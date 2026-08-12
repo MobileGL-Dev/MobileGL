@@ -3805,6 +3805,34 @@ void main() { imageStore(uni_image, ivec2(0), uvec4(1u)); }
     EXPECT_NE(DecompileToEssl(baked).find("rgba32ui"), String::npos);
 }
 
+// Review finding. Every use has to be one the retype can carry end to end, and the decision has
+// to be made BEFORE anything is mutated - a half-retyped module is not something a later decline
+// could undo. An image handed to a FUNCTION is the shape that reaches SPIRV-Cross intact (nothing
+// in the ESSL chain inlines), and its OpFunctionCall is a use this pass does not follow.
+TEST_F(ProgramUtilTest, BakeImageFormatsDeclinesAnImagePassedToAFunction) {
+    using namespace MG_Util::ShaderTranspiler;
+
+    const Vector<Uint32> spirv = BuildSpirvForStage(R"(#version 430 core
+layout (local_size_x = 1) in;
+writeonly uniform uimage2D uni_image;
+void writeIt(writeonly uimage2D img) { imageStore(img, ivec2(0), uvec4(1u)); }
+void main() { writeIt(uni_image); }
+)",
+                                                   GL_COMPUTE_SHADER);
+    ASSERT_FALSE(spirv.empty());
+    ASSERT_TRUE(ShaderCompiler::DeclaresFormatlessStorageImage(spirv));
+
+    SpirvValidationScope validationOn(true);
+    const Uint64 failuresBefore = ShaderCompiler::SpirvValidationFailureCount();
+
+    Vector<Uint32> baked;
+    ASSERT_TRUE(ShaderCompiler::BakeImageFormatsForEssl(spirv, {{"uni_image", kGlR32ui}}, baked));
+    EXPECT_EQ(baked, spirv) << "a shape the retype cannot follow must leave the module untouched, "
+                               "not partly rewritten:\n"
+                            << DisassembleSpirv(baked);
+    EXPECT_EQ(ShaderCompiler::SpirvValidationFailureCount(), failuresBefore);
+}
+
 // spirv-val requires the Image Format's component class to agree with the OpTypeImage's Sampled
 // Type. Binding a uint format to a float image is an application error GL leaves undefined;
 // baking it would turn that into an INVALID module, which is strictly worse than the compile
