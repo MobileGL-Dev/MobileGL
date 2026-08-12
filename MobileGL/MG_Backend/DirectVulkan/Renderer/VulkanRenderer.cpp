@@ -5821,7 +5821,40 @@ void main() {
                 m_lastLodParamsSum = 0;  // filled below once the sampled set is known
             }
         }
-        const auto& programObj = m_programFactory->GetOrCreateProgram(program, transformFlags);
+        // GL's gl_BaseVertex is zero for every command without a baseVertex parameter, while
+        // Vulkan's builtin reports the draw's firstVertex; a non-indexed draw therefore takes
+        // the zeroed program variant. The question is about the program's SPIR-V, not about
+        // this draw, so it is memoized on (program lifetime, backend-state version): only the
+        // very first draw of a program pays the extra lookup, and a program used exclusively
+        // with non-indexed draws never resolves - never compiles, never re-stamps - the
+        // variant no draw of it would use.
+        const Bool nonIndexedDraw = !(aspects & DrawSetupAspect::IndexBuffer);
+        const Uint64 baseVertexProgramLifetimeId = program.GetLifetimeId();
+        const Uint32 baseVertexProgramVersion = program.GetBackendStateVersion();
+        const Bool baseVertexQueryKnown = m_lastBaseVertexQueryValid &&
+                                          m_lastBaseVertexProgramLifetimeId == baseVertexProgramLifetimeId &&
+                                          m_lastBaseVertexProgramVersion == baseVertexProgramVersion;
+        if (baseVertexQueryKnown && nonIndexedDraw && m_lastBaseVertexReads) {
+            transformFlags |= ProgramFactory::CompileOptionBit::ZeroBaseVertex;
+        }
+        const ProgramFactory::VkProgramObject* resolvedProgramObj =
+            &m_programFactory->GetOrCreateProgram(program, transformFlags);
+        if (!baseVertexQueryKnown) {
+            // Read the answer out of the entry BEFORE any second lookup: that lookup may
+            // insert and move every entry of the open-addressing cache, dangling the
+            // reference. The zeroing pass leaves the variable declared, so the variant just
+            // resolved answers the same as the base one either way.
+            const Bool readsBaseVertex = resolvedProgramObj->readsBaseVertexBuiltin;
+            m_lastBaseVertexQueryValid = true;
+            m_lastBaseVertexProgramLifetimeId = baseVertexProgramLifetimeId;
+            m_lastBaseVertexProgramVersion = baseVertexProgramVersion;
+            m_lastBaseVertexReads = readsBaseVertex;
+            if (nonIndexedDraw && readsBaseVertex) {
+                transformFlags |= ProgramFactory::CompileOptionBit::ZeroBaseVertex;
+                resolvedProgramObj = &m_programFactory->GetOrCreateProgram(program, transformFlags);
+            }
+        }
+        const auto& programObj = *resolvedProgramObj;
         // For the snapshot's memoised entry pointer: if anything below inserts into the
         // program cache (blit/aux program compiles), the epoch moves and the snapshot
         // stores no pointer for this draw - the fast path then re-looks-up once.

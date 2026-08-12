@@ -21,6 +21,7 @@
 #include "SpirvPasses/LowerDrawParametersPass.h"
 #include "SpirvPasses/PackDoubleVertexInputsPass.h"
 #include "SpirvPasses/RebaseInstanceIndexPass.h"
+#include "SpirvPasses/ZeroBaseVertexPass.h"
 #include "SpirvPasses/NormalizeRectCoordinatesPass.h"
 #include "SpirvPasses/PrivateToEntryLocalPass.h"
 #include "SpirvPasses/StripUniformLocationsPass.h"
@@ -756,6 +757,15 @@ namespace MobileGL {
 
                 return RunOptimizerChecked("RebaseInstanceIndexForVulkan", optimizer, inputBinary,
                                            outputBinary);
+            }
+
+            bool ShaderCompiler::ZeroBaseVertexForVulkan(const Vector<Uint32>& inputBinary,
+                                                         Vector<uint32_t>& outputBinary) {
+                using namespace spvtools;
+                Optimizer optimizer(SPV_ENV_VULKAN_1_1);
+                optimizer.RegisterPass(ZeroBaseVertexPass::CreateZeroBaseVertexPass());
+
+                return RunOptimizerChecked("ZeroBaseVertexForVulkan", optimizer, inputBinary, outputBinary);
             }
 
             bool ShaderCompiler::DecoratePositionInvariantForVulkan(const Vector<Uint32>& inputBinary,
