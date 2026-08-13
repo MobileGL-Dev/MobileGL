@@ -4208,21 +4208,27 @@ TEST_F(TextureTest, CopyImageSubDataRejectsSampleCountMismatch) {
     MG_Backend::gBackendFunctionsTable.GL.CopyImageSubData = RecordCopyImageSubData;
     g_copyImageSubDataCall = {};
 
-    // Two DIFFERENT counts are the whole point, so the case needs an implementation that offers
-    // more than one. The unit-test context has no real backend behind GL_MAX_SAMPLES.
+    // Two DIFFERENT counts are the whole point, so the case needs a context that can actually
+    // create multisample storage - which this unit-test binary, with no backend behind the
+    // renderable-format and sample-count queries, may not be able to. The precondition is
+    // checked on the state objects rather than assumed, so this can only ever skip or test the
+    // real rule; it can never pass vacuously.
     GLint maxSamples = 1;
     MG_Impl::GLImpl::GetIntegerv(GL_MAX_SAMPLES, &maxSamples);
-    if (maxSamples < 2) {
-        GTEST_SKIP() << "GL_MAX_SAMPLES is " << maxSamples << "; no two distinct sample counts to disagree about";
-    }
-
     GLuint srcTexture = 0;
     GLuint dstTexture = 0;
     MG_Impl::GLImpl::CreateTextures(GL_TEXTURE_2D_MULTISAMPLE, 1, &srcTexture);
     MG_Impl::GLImpl::CreateTextures(GL_TEXTURE_2D_MULTISAMPLE, 1, &dstTexture);
     MG_Impl::GLImpl::TextureStorage2DMultisample(srcTexture, 1, GL_RGBA8, 8, 8, GL_FALSE);
-    MG_Impl::GLImpl::TextureStorage2DMultisample(dstTexture, maxSamples, GL_RGBA8, 8, 8, GL_FALSE);
-    ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+    MG_Impl::GLImpl::TextureStorage2DMultisample(dstTexture, std::max(maxSamples, 2), GL_RGBA8, 8, 8, GL_FALSE);
+    DrainPendingGlErrors();
+
+    const Int srcSamples = MG_State::pGLContext->GetTextureObject(srcTexture)->GetSamples();
+    const Int dstSamples = MG_State::pGLContext->GetTextureObject(dstTexture)->GetSamples();
+    if (srcSamples == dstSamples) {
+        GTEST_SKIP() << "this context could not give the two textures different sample counts (both " << srcSamples
+                     << "); nothing for the rule to reject";
+    }
 
     MG_Impl::GLImpl::CopyImageSubData(srcTexture, GL_TEXTURE_2D_MULTISAMPLE, 0, 0, 0, 0, dstTexture,
                                       GL_TEXTURE_2D_MULTISAMPLE, 0, 0, 0, 0, 1, 1, 1);
@@ -4252,6 +4258,58 @@ TEST_F(TextureTest, CopyImageSubDataForwardsTheWholeLayerRangeToTheBackend) {
     EXPECT_EQ(g_copyImageSubDataCall.SrcZ, 2);
     EXPECT_EQ(g_copyImageSubDataCall.DstZ, 5);
     EXPECT_EQ(g_copyImageSubDataCall.Depth, 7);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+}
+
+// The shape KHR-GL43.copy_image.invalid_object ends on once the invalid-name cases are answered
+// correctly: two ordinary glTexImage2D textures, no storage object, one texel copied from the
+// origin. Nothing about it is exotic, which is exactly why it is worth a case of its own - every
+// rule added to this validator is a new way to reject it.
+TEST_F(TextureTest, CopyImageSubDataAcceptsAPlainMutableTexImage2DPair) {
+    const ScopedTextureBackendFunctionsOverride backendGuard;
+    MG_Backend::gBackendFunctionsTable.GL.CopyImageSubData = RecordCopyImageSubData;
+    g_copyImageSubDataCall = {};
+
+    GLuint srcTexture = 0;
+    GLuint dstTexture = 0;
+    MG_Impl::GLImpl::GenTextures(1, &srcTexture);
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, srcTexture);
+    MG_Impl::GLImpl::TexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 16, 16, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    MG_Impl::GLImpl::TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_BASE_LEVEL, 0);
+    MG_Impl::GLImpl::TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, 0);
+    MG_Impl::GLImpl::GenTextures(1, &dstTexture);
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, dstTexture);
+    MG_Impl::GLImpl::TexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 16, 16, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    MG_Impl::GLImpl::TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_BASE_LEVEL, 0);
+    MG_Impl::GLImpl::TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, 0);
+    ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    MG_Impl::GLImpl::CopyImageSubData(srcTexture, GL_TEXTURE_2D, 0, 0, 0, 0, dstTexture, GL_TEXTURE_2D, 0, 0, 0, 0,
+                                      1, 1, 1);
+    EXPECT_TRUE(g_copyImageSubDataCall.Called);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    // ...and again after the names have been through a delete/regenerate cycle, which is what the
+    // conformance case does between its sub-cases: it deletes an object to make it invalid, then
+    // builds the next pair from names the allocator hands straight back.
+    MG_Impl::GLImpl::DeleteTextures(1, &srcTexture);
+    MG_Impl::GLImpl::DeleteTextures(1, &dstTexture);
+    DrainPendingGlErrors();
+    g_copyImageSubDataCall = {};
+
+    GLuint reusedSrc = 0;
+    GLuint reusedDst = 0;
+    MG_Impl::GLImpl::GenTextures(1, &reusedSrc);
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, reusedSrc);
+    MG_Impl::GLImpl::TexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 16, 16, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    MG_Impl::GLImpl::GenTextures(1, &reusedDst);
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, reusedDst);
+    MG_Impl::GLImpl::TexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 16, 16, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    MG_Impl::GLImpl::CopyImageSubData(reusedSrc, GL_TEXTURE_2D, 0, 0, 0, 0, reusedDst, GL_TEXTURE_2D, 0, 0, 0, 0, 1,
+                                      1, 1);
+    EXPECT_TRUE(g_copyImageSubDataCall.Called);
     EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
 }
 
