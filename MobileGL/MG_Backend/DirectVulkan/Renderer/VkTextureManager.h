@@ -388,12 +388,24 @@ public:
     static Bool AreSampledImageViewFormatsCompatible(VkFormat imageFormat, VkFormat viewFormat);
     static Bool AreStorageImageViewFormatsCompatible(VkFormat imageFormat, VkFormat viewFormat);
 
+    // Moves `image` to `newLayout` and writes the new layout back through `trackedLayout`.
+    //
+    // The barrier covers EVERY array layer of the image, and there is deliberately no layer
+    // parameter to say otherwise: layout here is tracked per IMAGE (one `TextureResource::layout`,
+    // or one caller-owned variable), so a barrier narrower than the image would leave the layers it
+    // skipped in the old layout while the tracker claims they moved. Every transfer against a
+    // framebuffer attachment above layer 0 - glReadPixels, glBlitFramebuffer, glCopyTexSubImage,
+    // glCopyImageSubData - then ran its copy on a layer no barrier had transitioned.
+    //
+    // The mip range IS a parameter, because mip levels really are transitioned piecewise (see
+    // UpdateTrackedImageLayoutAfterAttachmentWrite and the mipmap generation loops): those callers
+    // move the complement of the level they wrote so the whole image converges on one layout again.
+    // Nothing does, or can, do that per layer.
     static Bool TransitionImageLayout(VkCommandBuffer commandBuffer, VkImage image, VkImageLayout& trackedLayout,
                                VkImageLayout newLayout, VkPipelineStageFlags srcStageMask,
                                VkPipelineStageFlags dstStageMask, VkAccessFlags srcAccessMask,
                                VkAccessFlags dstAccessMask, VkImageAspectFlags aspectMask,
-                               Uint32 baseMipLevel = 0, Uint32 levelCount = 1,
-                               Uint32 layerCount = 1);
+                               Uint32 baseMipLevel = 0, Uint32 levelCount = 1);
 
     SizeT CollectGarbage();
 

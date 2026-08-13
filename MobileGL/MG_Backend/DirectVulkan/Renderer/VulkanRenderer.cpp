@@ -7113,7 +7113,7 @@ void main() {
         Bool ok = VkTextureManager::TransitionImageLayout(
             commandBuffer, resource->image, resource->layout, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
             srcStageMask, VK_PIPELINE_STAGE_TRANSFER_BIT, srcAccessMask, VK_ACCESS_TRANSFER_WRITE_BIT,
-            resource->aspect, 0, resource->mipLevels, resource->arrayLayers);
+            resource->aspect, 0, resource->mipLevels);
         MOBILEGL_ASSERT(ok,
                         "MaterializePendingClearForTexture: failed to transition textureId=%d to TRANSFER_DST",
                         texture.GetExternalIndex());
@@ -7231,8 +7231,7 @@ void main() {
         ok = VkTextureManager::TransitionImageLayout(
             commandBuffer, resource->image, clearLayout, sampledLayout,
             VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT,
-            VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT, resource->aspect, 0, resource->mipLevels,
-            resource->arrayLayers);
+            VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT, resource->aspect, 0, resource->mipLevels);
         MOBILEGL_ASSERT(ok,
                         "MaterializePendingClearForTexture: failed to transition textureId=%d to sampled layout",
                         texture.GetExternalIndex());
@@ -7270,7 +7269,7 @@ void main() {
         Bool ok = VkTextureManager::TransitionImageLayout(
             commandBuffer, resource->image, resource->layout, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
             srcStageMask, VK_PIPELINE_STAGE_TRANSFER_BIT, srcAccessMask, VK_ACCESS_TRANSFER_WRITE_BIT,
-            resource->aspect, 0, 1, 1);
+            resource->aspect, 0, 1);
         MOBILEGL_ASSERT(ok,
                         "MaterializePendingClearForRenderbuffer: failed to transition renderbuffer %u to TRANSFER_DST",
                         renderbuffer->GetExternalIndex());
@@ -7321,7 +7320,7 @@ void main() {
             VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
                 VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT |
                 VK_ACCESS_TRANSFER_READ_BIT,
-            resource->aspect, 0, 1, 1);
+            resource->aspect, 0, 1);
         MOBILEGL_ASSERT(ok,
                         "MaterializePendingClearForRenderbuffer: failed to transition renderbuffer %u to steady layout",
                         renderbuffer->GetExternalIndex());
@@ -7928,6 +7927,9 @@ void main() {
             VkPipelineStageFlags srcStageMask = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
             VkAccessFlags srcAccessMask = 0;
             GetImageTransitionSourceState(srcOriginalLayout, srcStageMask, srcAccessMask);
+            // Both blit regions below name `baseArrayLayer` from their binding, and a layered depth
+            // attachment puts that above 0. These barriers carry a mip range only - their layer
+            // range is every layer (see VkTextureManager::TransitionImageLayout).
             if (readIsDefaultFbo) {
                 VkImageLayout srcTrackedLayout = srcOriginalLayout;
                 Bool ok = VkTextureManager::TransitionImageLayout(
@@ -8755,30 +8757,22 @@ void main() {
         VkAccessFlags srcAccessMask = 0;
         GetImageTransitionSourceState(srcOriginalLayout, srcStageMask, srcAccessMask);
         VkImageLayout srcCopyLayout = srcOriginalLayout;
-        // The barrier has to name every layer the copy touches, not just layer 0 - otherwise the
-        // slice fix above lands the copy on layers the barrier never transitioned, which is the
-        // same defect one level down. TransitionImageLayout always starts its range at
-        // baseArrayLayer 0, so VK_REMAINING_ARRAY_LAYERS is the whole range and a superset of
-        // [baseSlice, baseSlice + depth).
-        //
-        // Not `arrayLayers`, which is 1 for a 3D image: MobileGL creates 3D images
-        // 2D_ARRAY_COMPATIBLE, and a literal 1 on one of those means "every depth slice" today but
-        // "depth slice 0" once VK_KHR_maintenance9 is enabled - i.e. it would silently become a
-        // single-slice barrier again on a newer driver. The validation layer says so by name.
-        static constexpr Uint32 kAllLayers = VK_REMAINING_ARRAY_LAYERS;
+        // The barriers below name a MIP range only. Their layer range is not a parameter:
+        // TransitionImageLayout always covers every layer of the image, which is a superset of the
+        // [baseSlice, baseSlice + depth) the slice mapping above hands the copy.
         if (srcOriginalLayout == VK_IMAGE_LAYOUT_UNDEFINED) {
             Bool srcReady = VkTextureManager::TransitionImageLayout(
                 frame.commandBuffer, srcResource->image, srcResource->layout, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                 srcStageMask, VK_PIPELINE_STAGE_TRANSFER_BIT,
                 srcAccessMask, VK_ACCESS_TRANSFER_READ_BIT,
-                srcResource->aspect, 0, srcResource->mipLevels, kAllLayers);
+                srcResource->aspect, 0, srcResource->mipLevels);
             MOBILEGL_ASSERT(srcReady, "%s: failed to transition undefined source image", __func__);
             srcCopyLayout = srcResource->layout;
         } else {
             Bool srcReady = VkTextureManager::TransitionImageLayout(
                 frame.commandBuffer, srcResource->image, srcCopyLayout, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                 srcStageMask, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                srcAccessMask, VK_ACCESS_TRANSFER_READ_BIT, copyAspectMask, srcMipLevel, 1, kAllLayers);
+                srcAccessMask, VK_ACCESS_TRANSFER_READ_BIT, copyAspectMask, srcMipLevel, 1);
             MOBILEGL_ASSERT(srcReady, "%s: failed to transition source image", __func__);
         }
 
@@ -8791,14 +8785,14 @@ void main() {
                 frame.commandBuffer, dstResource->image, dstResource->layout, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                 dstStageMask, VK_PIPELINE_STAGE_TRANSFER_BIT,
                 dstAccessMask, VK_ACCESS_TRANSFER_WRITE_BIT,
-                dstResource->aspect, 0, dstResource->mipLevels, kAllLayers);
+                dstResource->aspect, 0, dstResource->mipLevels);
             MOBILEGL_ASSERT(dstReady, "%s: failed to transition undefined destination image", __func__);
             dstCopyLayout = dstResource->layout;
         } else {
             Bool dstReady = VkTextureManager::TransitionImageLayout(
                 frame.commandBuffer, dstResource->image, dstCopyLayout, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                 dstStageMask, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                dstAccessMask, VK_ACCESS_TRANSFER_WRITE_BIT, copyAspectMask, dstMipLevel, 1, kAllLayers);
+                dstAccessMask, VK_ACCESS_TRANSFER_WRITE_BIT, copyAspectMask, dstMipLevel, 1);
             MOBILEGL_ASSERT(dstReady, "%s: failed to transition destination image", __func__);
         }
 
@@ -8840,13 +8834,13 @@ void main() {
                 frame.commandBuffer, srcResource->image, srcResource->layout, srcRestoreLayout,
                 VK_PIPELINE_STAGE_TRANSFER_BIT, srcRestoreStageMask,
                 VK_ACCESS_TRANSFER_READ_BIT, srcRestoreAccessMask,
-                srcResource->aspect, 0, srcResource->mipLevels, kAllLayers);
+                srcResource->aspect, 0, srcResource->mipLevels);
             MOBILEGL_ASSERT(srcRestored, "%s: failed to restore undefined source image layout", __func__);
         } else {
             Bool srcRestored = VkTextureManager::TransitionImageLayout(
                 frame.commandBuffer, srcResource->image, srcCopyLayout, srcRestoreLayout,
                 VK_PIPELINE_STAGE_TRANSFER_BIT, srcRestoreStageMask,
-                VK_ACCESS_TRANSFER_READ_BIT, srcRestoreAccessMask, copyAspectMask, srcMipLevel, 1, kAllLayers);
+                VK_ACCESS_TRANSFER_READ_BIT, srcRestoreAccessMask, copyAspectMask, srcMipLevel, 1);
             MOBILEGL_ASSERT(srcRestored, "%s: failed to restore source image layout", __func__);
         }
 
@@ -8858,13 +8852,13 @@ void main() {
                 frame.commandBuffer, dstResource->image, dstResource->layout, dstRestoreLayout,
                 VK_PIPELINE_STAGE_TRANSFER_BIT, dstRestoreStageMask,
                 VK_ACCESS_TRANSFER_WRITE_BIT, dstRestoreAccessMask,
-                dstResource->aspect, 0, dstResource->mipLevels, kAllLayers);
+                dstResource->aspect, 0, dstResource->mipLevels);
             MOBILEGL_ASSERT(dstRestored, "%s: failed to restore undefined destination image layout", __func__);
         } else {
             Bool dstRestored = VkTextureManager::TransitionImageLayout(
                 frame.commandBuffer, dstResource->image, dstCopyLayout, dstRestoreLayout,
                 VK_PIPELINE_STAGE_TRANSFER_BIT, dstRestoreStageMask,
-                VK_ACCESS_TRANSFER_WRITE_BIT, dstRestoreAccessMask, copyAspectMask, dstMipLevel, 1, kAllLayers);
+                VK_ACCESS_TRANSFER_WRITE_BIT, dstRestoreAccessMask, copyAspectMask, dstMipLevel, 1);
             MOBILEGL_ASSERT(dstRestored, "%s: failed to restore destination image layout", __func__);
         }
 
@@ -9023,6 +9017,9 @@ void main() {
         VkPipelineStageFlags srcStageMask = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
         VkAccessFlags srcAccessMask = 0;
         GetImageTransitionSourceState(srcOriginalLayout, srcStageMask, srcAccessMask);
+        // The copy below reads `srcBinding.baseArrayLayer`, which for a glFramebufferTextureLayer
+        // attachment is any layer of the array - the barrier covers all of them (see
+        // VkTextureManager::TransitionImageLayout), so the layer being read is one it moved.
         if (readIsDefaultFbo) {
             VkImageLayout trackedLayout = srcOriginalLayout;
             Bool ok = VkTextureManager::TransitionImageLayout(
@@ -9825,14 +9822,13 @@ void main() {
         VkPipelineStageFlags srcStageMask = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
         VkAccessFlags srcAccessMask = 0;
         GetImageTransitionSourceState(originalLayout, srcStageMask, srcAccessMask);
-        // The copy below reads EVERY layer of the level, so the barrier has to name every layer
-        // too; a layerCount of 1 left an array texture's layers 1.. in whatever layout they were
-        // last left in while the transfer read them.
+        // The copy below reads EVERY layer of the level, which is exactly the range
+        // TransitionImageLayout barriers cover.
         Bool ok = VkTextureManager::TransitionImageLayout(
             frame.commandBuffer, resource->image, resource->layout, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
             srcStageMask, VK_PIPELINE_STAGE_TRANSFER_BIT,
             srcAccessMask, VK_ACCESS_TRANSFER_READ_BIT, resource->aspect,
-            static_cast<Uint32>(level), 1, VK_REMAINING_ARRAY_LAYERS);
+            static_cast<Uint32>(level), 1);
         MOBILEGL_ASSERT(ok, "%s: failed to transition texture image", __func__);
 
         VkBufferImageCopy copyRegion{};
@@ -9852,7 +9848,7 @@ void main() {
             frame.commandBuffer, resource->image, resource->layout, originalLayout,
             VK_PIPELINE_STAGE_TRANSFER_BIT, restoreStageMask,
             VK_ACCESS_TRANSFER_READ_BIT, restoreAccessMask, resource->aspect,
-            static_cast<Uint32>(level), 1, VK_REMAINING_ARRAY_LAYERS);
+            static_cast<Uint32>(level), 1);
         MOBILEGL_ASSERT(ok, "%s: failed to restore texture image layout", __func__);
 
         if (!SubmitReadbackCommandsAndWait(frame)) {
@@ -9960,7 +9956,7 @@ void main() {
             Bool transitioned = VkTextureManager::TransitionImageLayout(
                 frame.commandBuffer, resource->image, resource->layout, finalLayout,
                 VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-                0, VK_ACCESS_SHADER_READ_BIT, resource->aspect, 0, resource->mipLevels, resource->arrayLayers);
+                0, VK_ACCESS_SHADER_READ_BIT, resource->aspect, 0, resource->mipLevels);
             MOBILEGL_ASSERT(transitioned, "GenerateMipmap: failed to transition uninitialized mip chain");
             return;
         }
