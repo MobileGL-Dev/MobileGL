@@ -151,6 +151,22 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             // PROGRAM rather than of the variant: the zeroed variant leaves the variable
             // declared, so both variants answer the same and the draw path can ask either.
             Bool readsBaseVertexBuiltin = false;
+            // This program has a tessellation EVALUATION stage and no tessellation CONTROL
+            // stage. GL allows that (4.6 core 11.2.2: with no control shader the input patch
+            // is passed through unmodified, the output patch size is PATCH_VERTICES, and the
+            // levels come from the PATCH_DEFAULT_*_LEVEL state); Vulkan does not - either both
+            // tessellation stages are present or neither
+            // (VUID-VkGraphicsPipelineCreateInfo-pStages-00730). So the draw path has to supply
+            // the pass-through stage GL describes; see GetOrCreatePassthroughTessControlStage.
+            Bool needsPassthroughTessControl = false;
+            // ...and the pass-through this renderer can synthesize carries gl_Position and
+            // nothing else, so it is only correct when the evaluation stage's inputs are
+            // built-ins. A user-defined varying would arrive at the evaluation stage
+            // UNWRITTEN once a control stage sits between it and the vertex stage, which is
+            // silently wrong pixels rather than a crash - so those programs are declined
+            // instead (PipelineFactory::CreatePipeline refuses the pipeline and the draw is
+            // skipped). See ReflectPassthroughTessControlNeed.
+            Bool passthroughTessControlEmulatable = false;
             // Frame-boundary counter value of the last GetOrCreateProgram hit; drives
             // cache eviction (see OnFrameBoundary). Mutable: the draw snapshot's memoised
             // entry pointer re-stamps use through a const reference (StampProgramUse).
@@ -202,6 +218,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 fragmentInputComponentCount = other.fragmentInputComponentCount;
                 fragmentReplacesDepth = other.fragmentReplacesDepth;
                 readsBaseVertexBuiltin = other.readsBaseVertexBuiltin;
+                needsPassthroughTessControl = other.needsPassthroughTessControl;
+                passthroughTessControlEmulatable = other.passthroughTessControlEmulatable;
                 lastUsedFrame = other.lastUsedFrame;
                 other.hash = 0;
                 other.descriptorSetLayout = VK_NULL_HANDLE;
@@ -216,6 +234,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 other.fragmentInputComponentCount = 0;
                 other.fragmentReplacesDepth = false;
                 other.readsBaseVertexBuiltin = false;
+                other.needsPassthroughTessControl = false;
+                other.passthroughTessControlEmulatable = false;
                 other.lastUsedFrame = 0;
             }
             VkProgramObject& operator=(VkProgramObject&& other) noexcept {
@@ -256,6 +276,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 fragmentInputComponentCount = other.fragmentInputComponentCount;
                 fragmentReplacesDepth = other.fragmentReplacesDepth;
                 readsBaseVertexBuiltin = other.readsBaseVertexBuiltin;
+                needsPassthroughTessControl = other.needsPassthroughTessControl;
+                passthroughTessControlEmulatable = other.passthroughTessControlEmulatable;
                 lastUsedFrame = other.lastUsedFrame;
                 other.hash = 0;
                 other.descriptorSetLayout = VK_NULL_HANDLE;
@@ -270,6 +292,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 other.fragmentInputComponentCount = 0;
                 other.fragmentReplacesDepth = false;
                 other.readsBaseVertexBuiltin = false;
+                other.needsPassthroughTessControl = false;
+                other.passthroughTessControlEmulatable = false;
                 other.lastUsedFrame = 0;
                 return *this;
             }
@@ -321,7 +345,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
               m_unformattedFloatStorageImagesEnabled(unformattedFloatStorageImagesEnabled) {
             VkProgramObject::s_device = device;
         }
-        ~ProgramFactory() = default;
+        // Destroys the pass-through tessellation control modules. Runs while the device is
+        // still alive for the same reason ~VkProgramObject's does: this factory outlives
+        // nothing that owns the device.
+        ~ProgramFactory();
         ProgramFactory(const ProgramFactory&) = delete;
 
         HashType ComputeHash(const MG_State::GLState::ProgramObject& program, CompileOptionFlags flags) const;
@@ -374,6 +401,27 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // this builtin?
         static Bool ReflectedDeclaresInputBuiltin(const SpvReflectShaderModule& reflectModule, SpvBuiltIn builtin);
 
+        // The pass-through tessellation control stage GL 4.6 core 11.2.2 describes for a
+        // program that has an evaluation stage and no control stage, for an input patch of
+        // `patchVertices` control points. Returned BY VALUE (a stage description is a POD, and
+        // the cache below is a rehashing map, so a pointer into it would not survive the next
+        // distinct patch size). `.module == VK_NULL_HANDLE` means the stage could not be built:
+        // the caller then has no control stage to inject, and CreatePipeline refuses the
+        // pipeline rather than handing the driver a half-tessellated one.
+        //
+        // Keyed on the patch size because GL takes the output patch size from PATCH_VERTICES,
+        // which is draw state, not link state - the CTS case that motivated this links at the
+        // default 3 and draws at 4. The pipeline cache already re-keys on patchControlPoints,
+        // so the module a pipeline was built with is part of that pipeline's identity.
+        // Compiling is bounded by the number of distinct patch sizes a program draws with
+        // (MAX_PATCH_VERTICES = 32 in the worst case, one or two in practice) and only ever
+        // happens for the rare program that has no control stage at all.
+        VkPipelineShaderStageCreateInfo GetOrCreatePassthroughTessControlStage(Uint32 patchVertices);
+
+        // Source of the module above. Exposed for tests: the generated GLSL is the whole
+        // contract with the evaluation stage, so it is worth pinning independently of a device.
+        static String BuildPassthroughTessControlSource(Uint32 patchVertices);
+
     private:
         struct ProgramLookupCache {
             const MG_State::GLState::ProgramObject* program = nullptr;
@@ -391,6 +439,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                         VkProgramObject& entry) const;
         void ReflectLayout(const MG_State::GLState::ProgramObject& program, const Vector<Vector<Uint>>& spirv,
                            VkProgramObject& entry) const;
+        // Fills needsPassthroughTessControl / passthroughTessControlEmulatable off the linked
+        // modules. Const and reflection-only: it decides nothing about the pipeline, it only
+        // records what the evaluation stage's input interface is made of.
+        void ReflectPassthroughTessControlNeed(const Vector<SharedPtr<MG_State::GLState::ShaderObject>>& shaders,
+                                               const Vector<Vector<Uint>>& spirv,
+                                               VkProgramObject& entry) const;
 
         VkDevice m_device = VK_NULL_HANDLE;
         Uint32 m_maxBindings = 0;
@@ -411,6 +465,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // See GetCacheStructureEpoch(). Starts at 1 so a zero-initialized memo can never match.
         Uint64 m_cacheStructureEpoch = 1;
         IEvictionObserver* m_evictionObserver = nullptr;
+        // Pass-through tessellation control stages by input patch size. Never evicted: at most
+        // MAX_PATCH_VERTICES entries exist for the lifetime of the device, and every pipeline
+        // ever built from one keeps referencing its module. A failed build is cached as
+        // VK_NULL_HANDLE so a broken generator costs one compile, not one per draw.
+        UnorderedMap<Uint32, VkPipelineShaderStageCreateInfo> m_passthroughTessControlStages;
         static inline XXH64_state_t* m_hashState = XXH64_createState();
     };
 } // namespace MobileGL::MG_Backend::DirectVulkan

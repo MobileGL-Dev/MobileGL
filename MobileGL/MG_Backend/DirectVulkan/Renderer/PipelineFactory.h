@@ -71,6 +71,17 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             Bool fragmentReplacesDepth = false;
             Array<VkPipelineColorBlendAttachmentState, kMaxColorAttachments> colorBlendAttachments{};
             const Vector<VkPipelineShaderStageCreateInfo>* stages = nullptr;
+            // The tessellation control stage this renderer synthesized for a program that has
+            // an evaluation stage and none of its own (GL 4.6 core 11.2.2 gives such a program a
+            // fixed-function pass-through; Vulkan has no such thing and
+            // VUID-VkGraphicsPipelineCreateInfo-pStages-00730 forbids the half-tessellated
+            // pipeline outright). Appended to `stages` at creation. A null module means the
+            // renderer could not build one, and CreatePipeline refuses the pipeline - the same
+            // refusal it applies when `stages` itself is half-tessellated.
+            //
+            // NOT hashed: it is a pure function of the program and of patchControlPoints, both
+            // of which ComputeHash already mixes in.
+            VkPipelineShaderStageCreateInfo passthroughTessControlStage{};
             const VkPipelineVertexInputStateCreateInfo* vertexInputState = nullptr;
             // Diagnostic only; may be null. Read solely from the pipeline-creation failure path.
             const Vector<ShaderStageSpirvDigest>* stageSpirvDigests = nullptr;

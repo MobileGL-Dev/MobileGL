@@ -3,6 +3,7 @@ cmake_minimum_required(VERSION 3.14)
 add_executable(
         PipelineQuirkTest
         PipelineQuirkTest.cpp
+        PassthroughTessControlTest.cpp
 )
 
 target_include_directories(PipelineQuirkTest PRIVATE
