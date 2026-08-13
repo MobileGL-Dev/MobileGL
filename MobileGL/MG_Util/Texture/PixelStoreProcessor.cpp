@@ -259,6 +259,25 @@ namespace MobileGL::MG_Util::PixelStoreProcessor {
             }
         }
 
+        // The one client (format, type) pair whose word is bit-identical to the packed internal
+        // word, if any. Everything else has to go through the decode/encode conversion.
+        Bool IsRawPackedPixelPair(PackedInternalKind kind, TextureInputFormat format,
+                                  TexturePixelDataType type) {
+            switch (kind) {
+            case PackedInternalKind::UNorm2101010Rev:
+                return format == TextureInputFormat::RGBA && type == TexturePixelDataType::UnsignedInt2101010Rev;
+            case PackedInternalKind::UInt2101010Rev:
+                return format == TextureInputFormat::RGBAInteger &&
+                       type == TexturePixelDataType::UnsignedInt2101010Rev;
+            case PackedInternalKind::FloatR11G11B10:
+                return format == TextureInputFormat::RGB && type == TexturePixelDataType::UnsignedInt101111Rev;
+            case PackedInternalKind::FloatRGB9E5:
+                return format == TextureInputFormat::RGB && type == TexturePixelDataType::UnsignedInt5999Rev;
+            default:
+                return false;
+            }
+        }
+
         Uint32 EncodePackedInternalWordFloat(PackedInternalKind kind, const Float rgba[4]) {
             switch (kind) {
             case PackedInternalKind::UNorm2101010Rev: {
@@ -431,10 +450,7 @@ namespace MobileGL::MG_Util::PixelStoreProcessor {
                     return false;
                 }
                 // The client word already equals the packed internal word (memcpy fast path).
-                if (hasPackedInternal && type == TexturePixelDataType::UnsignedInt2101010Rev &&
-                    (format == TextureInputFormat::RGBA || format == TextureInputFormat::RGBAInteger) &&
-                    (packedInternal.kind == PackedInternalKind::UNorm2101010Rev ||
-                     packedInternal.kind == PackedInternalKind::UInt2101010Rev)) {
+                if (hasPackedInternal && IsRawPackedPixelPair(packedInternal.kind, format, type)) {
                     return false;
                 }
             } else {
@@ -458,11 +474,7 @@ namespace MobileGL::MG_Util::PixelStoreProcessor {
                     // GL_RGB, which the state layer already enforces.
                     if (mapping.isInteger || mapping.channelCount != 3) return false;
                     // The client word already equals the packed internal word.
-                    if (hasPackedInternal &&
-                        ((packedInternal.kind == PackedInternalKind::FloatRGB9E5 &&
-                          type == TexturePixelDataType::UnsignedInt5999Rev) ||
-                         (packedInternal.kind == PackedInternalKind::FloatR11G11B10 &&
-                          type == TexturePixelDataType::UnsignedInt101111Rev))) {
+                    if (hasPackedInternal && IsRawPackedPixelPair(packedInternal.kind, format, type)) {
                         return false;
                     }
                     break;
@@ -764,6 +776,15 @@ namespace MobileGL::MG_Util::PixelStoreProcessor {
             }
         }
     } // namespace
+
+    Bool IsRawPackedPixelTransfer(TextureInternalFormat internalFormat, TextureInputFormat clientFormat,
+                                  TexturePixelDataType clientType) {
+        InternalPackedLayout packedInternal{};
+        if (!GetInternalPackedLayout(internalFormat, packedInternal)) {
+            return false;
+        }
+        return IsRawPackedPixelPair(packedInternal.kind, clientFormat, clientType);
+    }
 
     // assume 8 bit per channel
     // swizzle.size() == channel count

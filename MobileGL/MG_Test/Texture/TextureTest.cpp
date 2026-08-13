@@ -3179,6 +3179,193 @@ TEST_F(TextureTest, DecodeShadowDataToWideRGBACoversComponentAndPackedLayouts) {
     }
 }
 
+// ---- GL_RGB9_E5 raw-preserving transfer --------------------------------------------------------
+// RGB9_E5 packs three 9-bit mantissas against one shared 5-bit exponent, so a value has several
+// legal encodings (shift the exponent up, shift every mantissa down). The spec's encode algorithm
+// (GL 4.6 8.5.2) always emits the canonical one, which makes decode-to-float / re-encode
+// value-preserving but NOT bit-preserving. glTexImage followed by glGetTexImage has to hand the
+// application its own bits back, so a client (format, type) whose word already IS the storage word
+// must move verbatim. GL CTS KHR-GL43.copy_image caught the round trip turning the uploaded
+// 0xf8fc0000 into 0xe7e00000 ("CopyImageSubData modified contents of source image") and a copied-in
+// 0x60000000 into 0x00000000 ("CopyImageSubData stored invalid data in copied region").
+
+namespace {
+    Uint32 RoundTripSharedExponentWord(Uint32 word) {
+        Float rgb[3];
+        MG_Util::DecodeSharedExponentRGB9E5(word, rgb);
+        return MG_Util::EncodeSharedExponentRGB9E5(rgb);
+    }
+} // namespace
+
+TEST(SharedExponentRGB9E5Test, EncodeReproducesCanonicalWordsExactly) {
+    // Canonical encodings - the ones the spec algorithm emits - must survive a decode/encode round
+    // trip untouched, or every conversion INTO RGB9_E5 would be off as well.
+    const Uint32 canonical[] = {
+        0x00000000u, // all zero
+        0x0FFFFFFFu, // exponent 1, every mantissa saturated (smallest normalized exponent in use)
+        0x000003FFu, // exponent 0: the denormal range, mantissas 511 / 1 / 0
+        0x81010100u, // (1.0, 0.5, 0.25)
+        0xE7E00000u, // (0, 0, 8064) - what the CTS round trip produced
+        0xFFFFFFFFu, // exponent 31 with saturated mantissas = the largest representable texel
+    };
+    for (const Uint32 word : canonical) {
+        EXPECT_EQ(RoundTripSharedExponentWord(word), word) << "word 0x" << std::hex << word;
+        // Encoding is idempotent: a second pass may not drift either.
+        EXPECT_EQ(RoundTripSharedExponentWord(RoundTripSharedExponentWord(word)), word);
+    }
+}
+
+TEST(SharedExponentRGB9E5Test, EncodeCanonicalizesRedundantWords) {
+    // The exact QPA signatures. Both pairs hold the same value, so the encoder is not wrong - which
+    // is why the fix has to be a raw path rather than an encoder change.
+    Float observed[3];
+    MG_Util::DecodeSharedExponentRGB9E5(0xF8FC0000u, observed);
+    Float canonical[3];
+    MG_Util::DecodeSharedExponentRGB9E5(0xE7E00000u, canonical);
+    EXPECT_EQ(observed[2], 8064.0f);
+    EXPECT_EQ(canonical[2], 8064.0f);
+    EXPECT_EQ(RoundTripSharedExponentWord(0xF8FC0000u), 0xE7E00000u);
+
+    // Exponent 12 with all-zero mantissas is still the value zero, and canonicalizes to the
+    // all-zero word.
+    EXPECT_EQ(RoundTripSharedExponentWord(0x60000000u), 0x00000000u);
+    // Mantissa 1 at exponent 1 renormalizes down into the denormal range.
+    EXPECT_EQ(RoundTripSharedExponentWord(0x08000001u), 0x00000002u);
+}
+
+TEST(SharedExponentRGB9E5Test, RawPackedPixelTransferCoversOnlyIdenticalLayouts) {
+    using MG_Util::PixelStoreProcessor::IsRawPackedPixelTransfer;
+
+    // The four pairs whose client word is bit-identical to the packed storage word.
+    EXPECT_TRUE(IsRawPackedPixelTransfer(TextureInternalFormat::RGB9E5, TextureInputFormat::RGB,
+                                         TexturePixelDataType::UnsignedInt5999Rev));
+    EXPECT_TRUE(IsRawPackedPixelTransfer(TextureInternalFormat::R11FG11FB10F, TextureInputFormat::RGB,
+                                         TexturePixelDataType::UnsignedInt101111Rev));
+    EXPECT_TRUE(IsRawPackedPixelTransfer(TextureInternalFormat::RGB10A2, TextureInputFormat::RGBA,
+                                         TexturePixelDataType::UnsignedInt2101010Rev));
+    EXPECT_TRUE(IsRawPackedPixelTransfer(TextureInternalFormat::RGB10A2UI, TextureInputFormat::RGBAInteger,
+                                         TexturePixelDataType::UnsignedInt2101010Rev));
+
+    // A different packed float layout of the same width is still a conversion.
+    EXPECT_FALSE(IsRawPackedPixelTransfer(TextureInternalFormat::RGB9E5, TextureInputFormat::RGB,
+                                          TexturePixelDataType::UnsignedInt101111Rev));
+    EXPECT_FALSE(IsRawPackedPixelTransfer(TextureInternalFormat::R11FG11FB10F, TextureInputFormat::RGB,
+                                          TexturePixelDataType::UnsignedInt5999Rev));
+    // So is a component client type, or the same word against a component internal format.
+    EXPECT_FALSE(IsRawPackedPixelTransfer(TextureInternalFormat::RGB9E5, TextureInputFormat::RGB,
+                                          TexturePixelDataType::Float));
+    EXPECT_FALSE(IsRawPackedPixelTransfer(TextureInternalFormat::RGB8, TextureInputFormat::RGB,
+                                          TexturePixelDataType::UnsignedInt5999Rev));
+    EXPECT_FALSE(IsRawPackedPixelTransfer(TextureInternalFormat::RGBA32F, TextureInputFormat::RGBA,
+                                          TexturePixelDataType::UnsignedInt2101010Rev));
+    // Integerness has to line up too: the normalized and integer 10/10/10/2 words are not the
+    // same client layout even though they are the same bit field.
+    EXPECT_FALSE(IsRawPackedPixelTransfer(TextureInternalFormat::RGB10A2, TextureInputFormat::RGBAInteger,
+                                          TexturePixelDataType::UnsignedInt2101010Rev));
+    EXPECT_FALSE(IsRawPackedPixelTransfer(TextureInternalFormat::RGB10A2UI, TextureInputFormat::RGBA,
+                                          TexturePixelDataType::UnsignedInt2101010Rev));
+    EXPECT_FALSE(IsRawPackedPixelTransfer(TextureInternalFormat::Unknown, TextureInputFormat::RGB,
+                                          TexturePixelDataType::UnsignedInt5999Rev));
+}
+
+TEST_F(TextureTest, TexImage2DRGB9E5KeepsNonCanonicalClientWords) {
+    // Upload direction: GL_RGB / GL_UNSIGNED_INT_5_9_9_9_REV into GL_RGB9_E5 stores the client
+    // words untouched, including the redundant encodings the CTS generates.
+    GLuint texture = 0;
+    MG_Impl::GLImpl::GenTextures(1, &texture);
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, texture);
+
+    const Uint32 words[] = {0xF8FC0000u, 0x60000000u, 0x08000001u, 0x0FFFFFFFu};
+    MG_Impl::GLImpl::PixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    MG_Impl::GLImpl::TexImage2D(GL_TEXTURE_2D, 0, GL_RGB9_E5, 4, 1, 0, GL_RGB, GL_UNSIGNED_INT_5_9_9_9_REV, words);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    const auto* stored = GetBoundTexture2DLevelBytes(texture);
+    ASSERT_NE(stored, nullptr);
+    Uint32 readBack[4] = {};
+    std::memcpy(readBack, stored, sizeof(readBack));
+    for (Int i = 0; i < 4; ++i) {
+        EXPECT_EQ(readBack[i], words[i]) << "texel " << i;
+    }
+
+    MG_Impl::GLImpl::PixelStorei(GL_UNPACK_ALIGNMENT, 4);
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, 0);
+}
+
+TEST_F(TextureTest, TexImage2DRGB9E5FromOtherPackedFloatTypeStillConverts) {
+    // Negative control for the raw path: a genuinely different client layout keeps the
+    // decode-to-float / re-encode conversion.
+    GLuint texture = 0;
+    MG_Impl::GLImpl::GenTextures(1, &texture);
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, texture);
+
+    // 10F_11F_11F_REV word holding (1.0, 0.5, 0.25) - see the packed readback encode tests.
+    const Uint32 packedFloatWord = 0x681C03C0u;
+    MG_Impl::GLImpl::PixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    MG_Impl::GLImpl::TexImage2D(GL_TEXTURE_2D, 0, GL_RGB9_E5, 1, 1, 0, GL_RGB, GL_UNSIGNED_INT_10F_11F_11F_REV,
+                                &packedFloatWord);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    const auto* stored = GetBoundTexture2DLevelBytes(texture);
+    ASSERT_NE(stored, nullptr);
+    Uint32 word = 0;
+    std::memcpy(&word, stored, sizeof(word));
+    const Float rgb[3] = {1.0f, 0.5f, 0.25f};
+    EXPECT_EQ(word, MG_Util::EncodeSharedExponentRGB9E5(rgb));
+    EXPECT_NE(word, packedFloatWord) << "the raw path must not swallow a real conversion";
+
+    MG_Impl::GLImpl::PixelStorei(GL_UNPACK_ALIGNMENT, 4);
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, 0);
+}
+
+TEST_F(TextureTest, StorePackedWordsToClientCopiesWordsVerbatimUnderPackParams) {
+    // Readback direction: the raw store copies the words bit-for-bit while still honoring the
+    // client-side PACK addressing (alignment, skip rows/pixels) and GL_PACK_SWAP_BYTES.
+    namespace ReadbackImpl = MG_Backend::DirectGLES::ReadbackImpl;
+
+    const Uint32 source[] = {0xF8FC0000u, 0x60000000u, 0x08000001u,  // row 0
+                             0x0FFFFFFFu, 0xFFFFFFFFu, 0x00000000u}; // row 1
+    constexpr Uint32 kFill = 0xDEADBEEFu;
+    Uint32 destination[16];
+    std::fill(std::begin(destination), std::end(destination), kFill);
+
+    MG_Impl::GLImpl::PixelStorei(GL_PACK_ALIGNMENT, 8); // rows of 3 words (12 B) pad to 16 B
+    MG_Impl::GLImpl::PixelStorei(GL_PACK_SKIP_ROWS, 1);
+    MG_Impl::GLImpl::PixelStorei(GL_PACK_SKIP_PIXELS, 1);
+    ASSERT_TRUE(ReadbackImpl::StorePackedWordsToClient(reinterpret_cast<const Uint8*>(source), /*width=*/3,
+                                                       /*sliceHeight=*/2, /*sliceCount=*/1,
+                                                       GL_UNSIGNED_INT_5_9_9_9_REV, destination,
+                                                       /*applyPackImageParams=*/false));
+    // Row 0 lands at SKIP_ROWS * 16 + SKIP_PIXELS * 4 = 20 bytes = word 5; row 1 one 16-byte
+    // stride further along, at word 9.
+    for (Int i = 0; i < 3; ++i) {
+        EXPECT_EQ(destination[5 + i], source[i]) << "row 0 texel " << i;
+        EXPECT_EQ(destination[9 + i], source[3 + i]) << "row 1 texel " << i;
+    }
+    // The skipped region and the row padding stay untouched.
+    EXPECT_EQ(destination[0], kFill);
+    EXPECT_EQ(destination[4], kFill);
+    EXPECT_EQ(destination[8], kFill);
+    EXPECT_EQ(destination[12], kFill);
+
+    // GL_PACK_SWAP_BYTES reverses each 4-byte word.
+    std::fill(std::begin(destination), std::end(destination), kFill);
+    MG_Impl::GLImpl::PixelStorei(GL_PACK_SKIP_ROWS, 0);
+    MG_Impl::GLImpl::PixelStorei(GL_PACK_SKIP_PIXELS, 0);
+    MG_Impl::GLImpl::PixelStorei(GL_PACK_ALIGNMENT, 1);
+    MG_Impl::GLImpl::PixelStorei(GL_PACK_SWAP_BYTES, GL_TRUE);
+    ASSERT_TRUE(ReadbackImpl::StorePackedWordsToClient(reinterpret_cast<const Uint8*>(source), /*width=*/3,
+                                                       /*sliceHeight=*/1, /*sliceCount=*/1,
+                                                       GL_UNSIGNED_INT_5_9_9_9_REV, destination,
+                                                       /*applyPackImageParams=*/false));
+    EXPECT_EQ(destination[0], 0x0000FCF8u); // byte-reversed 0xF8FC0000
+    EXPECT_EQ(destination[1], 0x00000060u);
+
+    MG_Impl::GLImpl::PixelStorei(GL_PACK_SWAP_BYTES, GL_FALSE);
+    MG_Impl::GLImpl::PixelStorei(GL_PACK_ALIGNMENT, 4);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+}
+
 // GL 4.6 core table 23.18: GL_TEXTURE_COMPARE_FUNC takes the whole eight-function depth-compare
 // range. The validator used to start it at GL_LEQUAL, which sits in the middle of the contiguous
 // GL_NEVER..GL_ALWAYS block, so NEVER/LESS/EQUAL were rejected while GREATER/NOTEQUAL/GEQUAL only
