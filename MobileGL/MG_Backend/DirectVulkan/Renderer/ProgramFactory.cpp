@@ -1997,6 +1997,29 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         return ReflectedDeclaresInputBuiltin(reflectModule, SpvBuiltInBaseVertex);
     }
 
+    // gl_ViewportIndex on the last pre-rasterization stage. glslang emits it natively for Vulkan
+    // (BuiltIn ViewportIndex plus OpCapability MultiViewport), and nothing in the SpirvPasses
+    // chain touches it, so a plain reflection of the declared output builtins is the whole test.
+    Bool ProgramFactory::ReflectedWritesViewportIndexBuiltin(const SpvReflectShaderModule& reflectModule) {
+        return ReflectedDeclaresOutputBuiltin(reflectModule, SpvBuiltInViewportIndex);
+    }
+
+    Bool ProgramFactory::ReflectedDeclaresOutputBuiltin(const SpvReflectShaderModule& reflectModule,
+                                                       SpvBuiltIn builtin) {
+        for (Uint32 entryIndex = 0; entryIndex < reflectModule.entry_point_count; ++entryIndex) {
+            const SpvReflectEntryPoint& entryPoint = reflectModule.entry_points[entryIndex];
+            for (Uint32 variableIndex = 0; variableIndex < entryPoint.output_variable_count; ++variableIndex) {
+                const SpvReflectInterfaceVariable* variable = entryPoint.output_variables[variableIndex];
+                if (variable != nullptr &&
+                    (variable->decoration_flags & SPV_REFLECT_DECORATION_BUILT_IN) != 0 &&
+                    variable->built_in == builtin) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
     Bool ProgramFactory::ReflectedDeclaresInputBuiltin(const SpvReflectShaderModule& reflectModule,
                                                        SpvBuiltIn builtin) {
         for (Uint32 entryIndex = 0; entryIndex < reflectModule.entry_point_count; ++entryIndex) {
@@ -2336,6 +2359,46 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
             spvReflectDestroyShaderModule(&reflectModule);
             break;
+        }
+    }
+
+    // Which pre-rasterization stage assigns gl_ViewportIndex is not fixed: GL 4.1 allows only the
+    // geometry stage, ARB_shader_viewport_layer_array/GL 4.6 also the vertex and tessellation
+    // evaluation stages. Rather than guess which one is last, every non-fragment, non-compute
+    // module is asked - one writer anywhere means this program's draws need a multi-viewport
+    // pipeline, and a false positive costs only a wider viewportCount.
+    void ProgramFactory::ReflectViewportIndexUsage(const Vector<SharedPtr<MG_State::GLState::ShaderObject>>& shaders,
+                                                   const Vector<Vector<Uint>>& spirv,
+                                                   VkProgramObject& entry) const {
+        entry.writesViewportIndexBuiltin = false;
+
+        for (SizeT moduleIndex = 0; moduleIndex < shaders.size() && moduleIndex < spirv.size(); ++moduleIndex) {
+            if (!shaders[moduleIndex]) continue;
+            const ShaderStage stage = shaders[moduleIndex]->GetShaderStage();
+            if (stage == ShaderStage::Fragment || stage == ShaderStage::Compute) continue;
+
+            const auto& module = spirv[moduleIndex];
+            if (module.empty()) continue;
+
+            SpvReflectShaderModule reflectModule{};
+            const SpvReflectResult createResult =
+                spvReflectCreateShaderModule(module.size() * sizeof(Uint), module.data(), &reflectModule);
+            if (createResult != SPV_REFLECT_RESULT_SUCCESS) {
+                // Fail toward the wide pipeline. Missing a real gl_ViewportIndex writer would
+                // silently collapse every viewport onto 0 (the exact bug this reflection exists
+                // to fix); over-declaring costs one extra viewport slot on a program that never
+                // uses it.
+                MGLOG_E_ONCE("ProgramFactory::ReflectViewportIndexUsage: reflection failed (result=%d); assuming the "
+                             "program writes gl_ViewportIndex",
+                             static_cast<Int>(createResult));
+                entry.writesViewportIndexBuiltin = true;
+                continue;
+            }
+
+            if (ReflectedWritesViewportIndexBuiltin(reflectModule)) {
+                entry.writesViewportIndexBuiltin = true;
+            }
+            spvReflectDestroyShaderModule(&reflectModule);
         }
     }
 
@@ -3189,6 +3252,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         ValidateRasterizationStageInterface(shaders, moduleSpirvs, entry, program.GetExternalIndex());
 #endif
         ReflectVertexInputs(shaders, moduleSpirvs, entry);
+        ReflectViewportIndexUsage(shaders, moduleSpirvs, entry);
         ReflectFragmentOutputs(shaders, moduleSpirvs, entry);
         ReflectPassthroughTessControlNeed(shaders, moduleSpirvs, entry);
         ReflectLayout(program, moduleSpirvs, entry);

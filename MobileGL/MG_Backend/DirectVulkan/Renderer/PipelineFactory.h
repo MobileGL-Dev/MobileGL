@@ -42,6 +42,14 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             Bool primitiveRestartEnable = false;
             // GL_PATCH_VERTICES; only read for a PATCH_LIST topology.
             Uint32 patchControlPoints = 3;
+            // How many of ARB_viewport_array's viewports this pipeline rasterizes into. 1 for
+            // every program that never assigns gl_ViewportIndex, which is all of them outside the
+            // conformance suite - the wide shape costs a longer vkCmdSetViewport/Scissor per state
+            // change and can cost hardware fast paths, so it is opt-in per program. Baked into the
+            // pipeline (viewportCount is not dynamic without VK_EXT_extended_dynamic_state) and
+            // therefore hashed; the DYNAMIC viewport/scissor arrays the draw pushes must have
+            // exactly this many elements (VUID-vkCmdDraw-viewportCount-03417/-03418).
+            Uint32 viewportCount = 1;
             VkPolygonMode polygonMode = VK_POLYGON_MODE_FILL;
             VkCullModeFlags cullMode = VK_CULL_MODE_BACK_BIT;
             VkFrontFace frontFace = VK_FRONT_FACE_CLOCKWISE;

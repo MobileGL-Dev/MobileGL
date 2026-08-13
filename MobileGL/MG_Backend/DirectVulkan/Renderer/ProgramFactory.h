@@ -151,6 +151,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             // PROGRAM rather than of the variant: the zeroed variant leaves the variable
             // declared, so both variants answer the same and the draw path can ask either.
             Bool readsBaseVertexBuiltin = false;
+            // Some pre-rasterization stage assigns gl_ViewportIndex. Its pipeline declares
+            // viewportCount = the renderer's rasterizable viewport count instead of 1, and its
+            // draws push the whole viewport/scissor array; every other program keeps the
+            // single-viewport fast path untouched. Part of the program's identity (folded into
+            // the pipeline hash through programHash), so no memo can serve the wrong shape.
+            Bool writesViewportIndexBuiltin = false;
             // This program has a tessellation EVALUATION stage and no tessellation CONTROL
             // stage. GL allows that (4.6 core 11.2.2: with no control shader the input patch
             // is passed through unmodified, the output patch size is PATCH_VERTICES, and the
@@ -400,6 +406,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // Shared by the two above: does any entry point list an input variable decorated with
         // this builtin?
         static Bool ReflectedDeclaresInputBuiltin(const SpvReflectShaderModule& reflectModule, SpvBuiltIn builtin);
+        // True when an entry point writes the ViewportIndex builtin (gl_ViewportIndex), i.e. when
+        // the program can route primitives to a viewport other than 0 and its pipeline therefore
+        // has to declare more than one. Asks about OUTPUT variables because that is the direction
+        // a pre-rasterization stage declares it in.
+        static Bool ReflectedWritesViewportIndexBuiltin(const SpvReflectShaderModule& reflectModule);
+        static Bool ReflectedDeclaresOutputBuiltin(const SpvReflectShaderModule& reflectModule, SpvBuiltIn builtin);
 
         // The pass-through tessellation control stage GL 4.6 core 11.2.2 describes for a
         // program that has an evaluation stage and no control stage, for an input patch of
@@ -434,6 +446,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         void ReflectVertexInputs(const Vector<SharedPtr<MG_State::GLState::ShaderObject>>& shaders,
                      const Vector<Vector<Uint>>& spirv,
                      VkProgramObject& entry) const;
+        void ReflectViewportIndexUsage(const Vector<SharedPtr<MG_State::GLState::ShaderObject>>& shaders,
+                                       const Vector<Vector<Uint>>& spirv,
+                                       VkProgramObject& entry) const;
         void ReflectFragmentOutputs(const Vector<SharedPtr<MG_State::GLState::ShaderObject>>& shaders,
                         const Vector<Vector<Uint>>& spirv,
                         VkProgramObject& entry) const;

@@ -4,6 +4,7 @@ add_executable(
         PipelineQuirkTest
         PipelineQuirkTest.cpp
         PassthroughTessControlTest.cpp
+        ViewportIndexReflectionTest.cpp
 )
 
 target_include_directories(PipelineQuirkTest PRIVATE
