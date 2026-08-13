@@ -5563,6 +5563,56 @@ namespace MobileGL::MG_Backend::DirectGLES {
         g_GLESFuncs.glMemoryBarrierByRegion(barriers);
     }
 
+    // One endpoint of a glCopyImageSubData, expressed the way the ES driver stores it.
+    //
+    // The frontend hands this backend the target the APPLICATION named, and three of the
+    // targets core GL has do not exist in ES at all. They are not missing here either - the
+    // texture managers already store a 1D texture as a height-1 2D one, a 1D array as a
+    // height-1 2D array and a rectangle texture as a plain 2D one (MapToBackendTextureTarget) -
+    // but glCopyImageSubData was the one path that never asked for that translation and passed
+    // 0x84F5 / 0x0DE0 / 0x8C18 straight through. ES rejects the enum, the copy does not happen,
+    // and with the error only asserted on (asserts are compiled out of an INFO build) the
+    // destination silently keeps whatever it held.
+    //
+    // The 1D-array case is not just a rename: GL addresses its layers with y/height while the
+    // ES 2D array that backs it addresses them with z/depth, so the two axes swap with the
+    // target.
+    struct GLESCopyImageEndpoint {
+        GLenum target = GL_TEXTURE_2D;
+        GLint x = 0;
+        GLint y = 0;
+        GLint z = 0;
+    };
+
+    static GLESCopyImageEndpoint MakeGLESCopyImageEndpoint(GLenum appTarget, GLint x, GLint y, GLint z) {
+        const TextureTarget stateTarget = MG_Util::ConvertGLEnumToTextureTarget(appTarget);
+        GLESCopyImageEndpoint endpoint{};
+        endpoint.target = TextureImpl::ConvertTextureTargetToBackendGLEnum(stateTarget);
+        if (stateTarget == TextureTarget::Texture1DArray) {
+            endpoint.x = x;
+            endpoint.y = 0;
+            endpoint.z = y;
+            return endpoint;
+        }
+        endpoint.x = x;
+        endpoint.y = y;
+        endpoint.z = z;
+        return endpoint;
+    }
+
+    // The region extent swaps the same two axes for a 1D array, and does so for whichever side
+    // of the copy is one - GL forbids a copy whose two endpoints disagree about how many layers
+    // move, so at most one of the two can be a 1D array only in the degenerate single-layer
+    // case, where the swap is the identity anyway.
+    static void ApplyGLESCopyImageExtent(GLenum appSrcTarget, GLenum appDstTarget, GLsizei& height, GLsizei& depth) {
+        const TextureTarget srcStateTarget = MG_Util::ConvertGLEnumToTextureTarget(appSrcTarget);
+        const TextureTarget dstStateTarget = MG_Util::ConvertGLEnumToTextureTarget(appDstTarget);
+        if (srcStateTarget != TextureTarget::Texture1DArray && dstStateTarget != TextureTarget::Texture1DArray) {
+            return;
+        }
+        std::swap(height, depth);
+    }
+
     void CopyImageSubData(const SharedPtr<MG_State::GLState::ITextureObject>& srcTexture,
                           GLenum srcTarget, GLint srcLevel, GLint srcX, GLint srcY, GLint srcZ,
                           const SharedPtr<MG_State::GLState::ITextureObject>& dstTexture,
@@ -5592,6 +5642,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return;
         }
 
+        const GLESCopyImageEndpoint src = MakeGLESCopyImageEndpoint(srcTarget, srcX, srcY, srcZ);
+        const GLESCopyImageEndpoint dst = MakeGLESCopyImageEndpoint(dstTarget, dstX, dstY, dstZ);
+        GLsizei copyHeight = srcHeight;
+        GLsizei copyDepth = srcDepth;
+        ApplyGLESCopyImageExtent(srcTarget, dstTarget, copyHeight, copyDepth);
+
         const Bool srcIsDepth = MG_Util::IsDepthFormatInternalFormat(srcTexture->GetFormat());
         const Bool dstIsDepth = MG_Util::IsDepthFormatInternalFormat(dstTexture->GetFormat());
         const Bool srcStencil = MG_Util::IsStencilFormatInternalFormat(srcTexture->GetFormat());
@@ -5599,12 +5655,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
         if (srcIsDepth || dstIsDepth || srcStencil || dstStencil) {
             MOBILEGL_ASSERT(srcIsDepth && dstIsDepth && !srcStencil && !dstStencil,
                             "DirectGLES CopyImageSubData only supports depth-only image copies.");
-            MOBILEGL_ASSERT(srcTarget == GL_TEXTURE_2D && dstTarget == GL_TEXTURE_2D,
+            MOBILEGL_ASSERT(src.target == GL_TEXTURE_2D && dst.target == GL_TEXTURE_2D,
                             "DirectGLES depth CopyImageSubData only supports GL_TEXTURE_2D.");
-            MOBILEGL_ASSERT(srcZ == 0 && dstZ == 0 && srcDepth == 1,
+            MOBILEGL_ASSERT(src.z == 0 && dst.z == 0 && copyDepth == 1,
                             "DirectGLES depth CopyImageSubData only supports single-layer copies.");
-            BlitDepthTexture2D(srcBackendTexture->GetBackendTextureId(), srcLevel, srcX, srcY, srcWidth, srcHeight,
-                               dstBackendTexture->GetBackendTextureId(), dstLevel, dstX, dstY, srcWidth, srcHeight);
+            BlitDepthTexture2D(srcBackendTexture->GetBackendTextureId(), srcLevel, src.x, src.y, srcWidth, copyHeight,
+                               dstBackendTexture->GetBackendTextureId(), dstLevel, dst.x, dst.y, srcWidth, copyHeight);
             return;
         }
 
@@ -5615,29 +5671,43 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // with the always-live helper so a stale flag cannot misroute a
             // succeeded native copy into the 2D-only fallback.
             ClearGLErrors();
-            g_GLESFuncs.glCopyImageSubData(srcBackendTexture->GetBackendTextureId(), srcTarget, srcLevel, srcX, srcY, srcZ,
-                                           dstBackendTexture->GetBackendTextureId(), dstTarget, dstLevel, dstX, dstY, dstZ,
-                                           srcWidth, srcHeight, srcDepth);
+            g_GLESFuncs.glCopyImageSubData(srcBackendTexture->GetBackendTextureId(), src.target, srcLevel, src.x, src.y, src.z,
+                                           dstBackendTexture->GetBackendTextureId(), dst.target, dstLevel, dst.x, dst.y, dst.z,
+                                           srcWidth, copyHeight, copyDepth);
             const GLenum copyImageError = g_GLESFuncs.glGetError();
             if (copyImageError == GL_NO_ERROR) {
                 return;
             }
             MOBILEGL_ASSERT(IsColorOnlyFormat(srcTexture->GetFormat()) && IsColorOnlyFormat(dstTexture->GetFormat()),
                             "DirectGLES CopyImageSubData only supports color-only or depth-only copies.");
-            MOBILEGL_ASSERT(srcTarget == GL_TEXTURE_2D && dstTarget == GL_TEXTURE_2D,
+            MOBILEGL_ASSERT(src.target == GL_TEXTURE_2D && dst.target == GL_TEXTURE_2D,
                             "DirectGLES color CopyImageSubData only supports GL_TEXTURE_2D.");
-            MOBILEGL_ASSERT(srcZ == 0 && dstZ == 0 && srcDepth == 1,
+            MOBILEGL_ASSERT(src.z == 0 && dst.z == 0 && copyDepth == 1,
                             "DirectGLES color CopyImageSubData only supports single-layer copies.");
-            CopyR32FTexture2D(srcBackendTexture->GetBackendTextureId(), srcLevel, srcX, srcY, srcWidth, srcHeight,
-                              dstBackendTexture->GetBackendTextureId(), dstTarget, dstLevel, dstX, dstY);
+            CopyR32FTexture2D(srcBackendTexture->GetBackendTextureId(), srcLevel, src.x, src.y, srcWidth, copyHeight,
+                              dstBackendTexture->GetBackendTextureId(), dst.target, dstLevel, dst.x, dst.y);
             return;
         }
 
         ClearGLErrors();
-        g_GLESFuncs.glCopyImageSubData(srcBackendTexture->GetBackendTextureId(), srcTarget, srcLevel, srcX, srcY, srcZ,
-                                       dstBackendTexture->GetBackendTextureId(), dstTarget, dstLevel, dstX, dstY, dstZ,
-                                       srcWidth, srcHeight, srcDepth);
-        AssertNoGLError("glCopyImageSubData");
+        g_GLESFuncs.glCopyImageSubData(srcBackendTexture->GetBackendTextureId(), src.target, srcLevel, src.x, src.y, src.z,
+                                       dstBackendTexture->GetBackendTextureId(), dst.target, dstLevel, dst.x, dst.y, dst.z,
+                                       srcWidth, copyHeight, copyDepth);
+        // Every error condition glCopyImageSubData has was already ruled out by the frontend
+        // validator, so a driver error here is an internal invariant violation, not something
+        // the application can provoke. Say so where an INFO build can still see it, then trap
+        // in the builds that trap - the previous bare assert left a release build with a
+        // destination that silently kept its old contents.
+        const GLenum copyImageError = g_GLESFuncs.glGetError();
+        if (copyImageError != GL_NO_ERROR) {
+            MGLOG_E_ONCE("glCopyImageSubData failed: %s. src target=%s (app %s), dst target=%s (app %s)",
+                         MG_Util::ConvertGLEnumToString(copyImageError).c_str(),
+                         MG_Util::ConvertGLEnumToString(src.target).c_str(),
+                         MG_Util::ConvertGLEnumToString(srcTarget).c_str(),
+                         MG_Util::ConvertGLEnumToString(dst.target).c_str(),
+                         MG_Util::ConvertGLEnumToString(dstTarget).c_str());
+            MOBILEGL_ASSERT(false, "glCopyImageSubData failed after frontend validation accepted the request.");
+        }
     }
 
     void BindImageTexture(GLuint unit, GLuint texture, GLint level, GLboolean layered, GLint layer, GLenum access,
