@@ -305,7 +305,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // texture/sampler resolution, completeness probe, sync, layout handling, sampler
         // and view lookups - would recompute the identical descriptor.
         if (trustUnchangedHint && descriptorMemoUsable && binding < m_samplerResolveMemo.size() &&
-            m_samplerResolveMemo[binding].infoValid) {
+            m_samplerResolveMemo[binding].infoValid &&
+            m_samplerResolveMemo[binding].infoProgramLifetimeId == program.GetLifetimeId()) {
             outImageInfo = m_samplerResolveMemo[binding].info;
             return true;
         }
@@ -504,6 +505,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         if (binding < m_samplerResolveMemo.size()) {
             if (descriptorMemoUsable) {
                 m_samplerResolveMemo[binding].info = outImageInfo;
+                m_samplerResolveMemo[binding].infoProgramLifetimeId = program.GetLifetimeId();
                 m_samplerResolveMemo[binding].infoValid = true;
             } else {
                 // An arrayed binding publishes nothing here, and clears what a previous program

@@ -341,8 +341,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // lifetime id, so a freed-and-reallocated sampler or texture at the same heap address
         // always gets a fresh id and misses (a raw pointer would false-hit that ABA) - so a
         // stale guess can only miss and fall through to the hash, never resolve wrong. Still
-        // reset each frame alongside the descriptor-set cache. Indexed by binding.
+        // reset each frame alongside the descriptor-set cache. Indexed by binding, but the
+        // whole-descriptor entry is additionally keyed by program lifetime: Vulkan binding
+        // numbers are layout-local and unrelated programs routinely reuse binding 0/1.
         struct SamplerResolveMemo {
+            Uint64 infoProgramLifetimeId = 0;
             Uint64 samplerLifetimeId = 0;
             Uint64 textureLifetimeId = 0;
             VkSampler sampler = VK_NULL_HANDLE;

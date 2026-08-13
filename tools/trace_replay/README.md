@@ -11,6 +11,8 @@ The bundled fixtures cover:
   ![Minecraft 1.21.4 startup golden](fixtures/minecraft-1.21.4-startup.0000092195.png)
 - minecraft-1.21.4-main-menu: captured from Minecraft 1.21.4's main menu.
   ![Minecraft 1.21.4 main menu golden](fixtures/minecraft-1.21.4-main-menu.0000481787.png)
+- minecraft-1.21.11-main-menu: captured from Minecraft 1.21.11's main menu on a Pixel 8 Pro through FCL MobileGL.
+  ![Minecraft 1.21.11 main menu golden](fixtures/minecraft-1.21.11-main-menu.0000205347.png)
 - minecraft-1.17-main-menu-854: captured from Minecraft 1.17's 854x480 main menu through FCL MobileGL capture.
   ![Minecraft 1.17 854x480 main menu golden](fixtures/minecraft-1.17-main-menu-854.0000117757.png)
 - minecraft-1.21.4-in-world: captured from Minecraft 1.21.4 after entering a singleplayer world.

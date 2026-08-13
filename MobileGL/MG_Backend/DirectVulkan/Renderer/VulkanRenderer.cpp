@@ -238,11 +238,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     // nothing else across all of gl33.
     //
     // The mapping below is derived from - and at full extent exactly reproduces - the pixel
-    // mapping RemapDefaultFboReadbackToGLOrientation has always used:
+    // mapping VulkanRenderer::RemapDefaultFramebufferReadback uses:
     //     identity : image(x, H-1-y)      -> flip Y
     //     180      : image(W-1-x, y)      -> mirror X (the rotation already flips the rows)
-    // Quarter turns swap the axes; nothing in this renderer models that (the readback declines to
-    // remap them and the viewport path only rescales), so they are left exactly as they were.
+    // Quarter turns swap the axes and are handled by MapDefaultFramebufferReadbackRect rather than
+    // this same-axis helper.
     struct DefaultFramebufferRectMapping {
         Bool flipY = false;
         Bool mirrorX = false;
@@ -2151,47 +2151,6 @@ void main() {
             return static_cast<Uint8>(value * 255.0f + 0.5f);
         }
 
-        // Re-order the copied BLOCK - not the whole image - from the default framebuffer's stored
-        // orientation into GL's. The caller has already aimed the copy at the right place with
-        // MapDefaultFramebufferRectAxis, so what arrives here is exactly the requested
-        // rectWidth x rectHeight rect, and all that is left is the order of rows (identity) or of
-        // columns (180) WITHIN it.
-        //
-        // This used to iterate the full swapchain extent and index both sides with that stride,
-        // which is why its caller could only use it on an exact full-extent read - and why every
-        // partial glReadPixels of the default framebuffer came back in Vulkan row order. Only
-        // identity/180 share the swapchain extent with the default framebuffer; 90/270 swap
-        // extents and are still declined.
-        static Bool RemapDefaultFboReadbackToGLOrientation(const Uint8* rawPixels,
-                                                            Uint32 rectWidth,
-                                                            Uint32 rectHeight,
-                                                            VkSurfaceTransformFlagBitsKHR preTransform,
-                                                            SizeT texelSize,
-                                                            Uint8* outPixels) {
-            if (IsQuarterTurnPreTransform(preTransform)) {
-                return false;
-            }
-            if (rectWidth == 0 || rectHeight == 0 || texelSize == 0) {
-                return false;
-            }
-            const DefaultFramebufferRectMapping mapping = GetDefaultFramebufferRectMapping(preTransform);
-            const SizeT rowBytes = static_cast<SizeT>(rectWidth) * texelSize;
-            for (Uint32 outY = 0; outY < rectHeight; ++outY) {
-                const Uint32 srcY = mapping.flipY ? (rectHeight - 1 - outY) : outY;
-                const Uint8* srcRow = rawPixels + static_cast<SizeT>(srcY) * rowBytes;
-                Uint8* dstRow = outPixels + static_cast<SizeT>(outY) * rowBytes;
-                if (!mapping.mirrorX) {
-                    Memcpy(dstRow, srcRow, rowBytes);
-                    continue;
-                }
-                for (Uint32 outX = 0; outX < rectWidth; ++outX) {
-                    Memcpy(dstRow + static_cast<SizeT>(outX) * texelSize,
-                           srcRow + static_cast<SizeT>(rectWidth - 1 - outX) * texelSize, texelSize);
-                }
-            }
-            return true;
-        }
-
         static SizeT AlignPixelRow(SizeT rowBytes, Int alignment) {
             const SizeT resolvedAlignment = static_cast<SizeT>(std::max(alignment, 1));
             return (rowBytes + resolvedAlignment - 1) & ~(resolvedAlignment - 1);
@@ -2736,6 +2695,95 @@ void main() {
             return 0;
         }
         return formatInfo.texel_block_size;
+    }
+
+    Bool VulkanRenderer::MapDefaultFramebufferReadbackRect(
+            GLint x, GLint y, GLsizei width, GLsizei height, VkExtent2D imageExtent,
+            VkSurfaceTransformFlagBitsKHR preTransform, VkOffset2D* imageOffset,
+            VkExtent2D* imageCopyExtent) {
+        if (width <= 0 || height <= 0 || imageOffset == nullptr || imageCopyExtent == nullptr) {
+            return false;
+        }
+
+        const Int imageWidth = static_cast<Int>(imageExtent.width);
+        const Int imageHeight = static_cast<Int>(imageExtent.height);
+        Int mappedX = x;
+        Int mappedY = y;
+        Uint32 mappedWidth = static_cast<Uint32>(width);
+        Uint32 mappedHeight = static_cast<Uint32>(height);
+
+        // InsertPositionFixup first flips GL Y and then applies the surface transform. In pixel
+        // coordinates that gives these half-open rectangle mappings into the stored image:
+        //   identity: (x, H-y-h), 90: (y, x), 180: (W-x-w, y), 270: (H-y-h, W-x-w).
+        // Quarter turns also transpose the copied block's extent.
+        switch (preTransform) {
+        case VK_SURFACE_TRANSFORM_ROTATE_90_BIT_KHR:
+            mappedX = y;
+            mappedY = x;
+            mappedWidth = static_cast<Uint32>(height);
+            mappedHeight = static_cast<Uint32>(width);
+            break;
+        case VK_SURFACE_TRANSFORM_ROTATE_180_BIT_KHR:
+            mappedX = imageWidth - x - width;
+            mappedY = y;
+            break;
+        case VK_SURFACE_TRANSFORM_ROTATE_270_BIT_KHR:
+            mappedX = imageWidth - y - height;
+            mappedY = imageHeight - x - width;
+            mappedWidth = static_cast<Uint32>(height);
+            mappedHeight = static_cast<Uint32>(width);
+            break;
+        default:
+            mappedY = imageHeight - y - height;
+            break;
+        }
+
+        if (mappedX < 0 || mappedY < 0 || mappedWidth > imageExtent.width ||
+            mappedHeight > imageExtent.height ||
+            static_cast<Uint64>(mappedX) + mappedWidth > imageExtent.width ||
+            static_cast<Uint64>(mappedY) + mappedHeight > imageExtent.height) {
+            return false;
+        }
+        *imageOffset = {mappedX, mappedY};
+        *imageCopyExtent = {mappedWidth, mappedHeight};
+        return true;
+    }
+
+    Bool VulkanRenderer::RemapDefaultFramebufferReadback(
+            const Uint8* rawPixels, Uint32 logicalWidth, Uint32 logicalHeight,
+            VkSurfaceTransformFlagBitsKHR preTransform, SizeT texelSize, Uint8* outPixels) {
+        if (rawPixels == nullptr || outPixels == nullptr || logicalWidth == 0 || logicalHeight == 0 ||
+            texelSize == 0) {
+            return false;
+        }
+
+        const Uint32 rawWidth = IsQuarterTurnPreTransform(preTransform) ? logicalHeight : logicalWidth;
+        for (Uint32 outY = 0; outY < logicalHeight; ++outY) {
+            for (Uint32 outX = 0; outX < logicalWidth; ++outX) {
+                Uint32 srcX = outX;
+                Uint32 srcY = outY;
+                switch (preTransform) {
+                case VK_SURFACE_TRANSFORM_ROTATE_90_BIT_KHR:
+                    srcX = outY;
+                    srcY = outX;
+                    break;
+                case VK_SURFACE_TRANSFORM_ROTATE_180_BIT_KHR:
+                    srcX = logicalWidth - 1 - outX;
+                    break;
+                case VK_SURFACE_TRANSFORM_ROTATE_270_BIT_KHR:
+                    srcX = logicalHeight - 1 - outY;
+                    srcY = logicalWidth - 1 - outX;
+                    break;
+                default:
+                    srcY = logicalHeight - 1 - outY;
+                    break;
+                }
+                Memcpy(outPixels + (static_cast<SizeT>(outY) * logicalWidth + outX) * texelSize,
+                       rawPixels + (static_cast<SizeT>(srcY) * rawWidth + srcX) * texelSize,
+                       texelSize);
+            }
+        }
+        return true;
     }
 
     Bool VulkanRenderer::ConvertReadbackPixels(const Uint8* sourcePixels, VkFormat sourceFormat,
@@ -9138,19 +9186,18 @@ void main() {
         // The GL rect, aimed at the default framebuffer's stored orientation. Using the GL y
         // verbatim copied rows [y, y+h) counted from the TOP of the image, i.e. the wrong band for
         // every read that was not full-height.
-        Int32 copyOffsetX = x;
-        Int32 copyOffsetY = y;
+        VkOffset2D copyOffset{x, y};
+        VkExtent2D copyExtent{static_cast<Uint32>(width), static_cast<Uint32>(height)};
         if (readIsDefaultFbo) {
             const VkExtent2D defaultFboExtent = m_swapchainObject.GetExtent();
-            const DefaultFramebufferRectMapping mapping =
-                GetDefaultFramebufferRectMapping(m_swapchainObject.GetPreTransform());
-            copyOffsetX = MapDefaultFramebufferRectAxis(x, width, static_cast<Int>(defaultFboExtent.width),
-                                                        mapping.mirrorX);
-            copyOffsetY = MapDefaultFramebufferRectAxis(y, height, static_cast<Int>(defaultFboExtent.height),
-                                                        mapping.flipY);
+            const Bool mapped = MapDefaultFramebufferReadbackRect(
+                x, y, width, height, defaultFboExtent, m_swapchainObject.GetPreTransform(), &copyOffset,
+                &copyExtent);
+            MOBILEGL_ASSERT(mapped, "ReadPixels: default framebuffer read rectangle is out of bounds");
+            if (!mapped) return;
         }
-        copyRegion.imageOffset = {copyOffsetX, copyOffsetY, static_cast<Int32>(srcBinding.depthOffset)};
-        copyRegion.imageExtent = {static_cast<Uint32>(width), static_cast<Uint32>(height), 1};
+        copyRegion.imageOffset = {copyOffset.x, copyOffset.y, static_cast<Int32>(srcBinding.depthOffset)};
+        copyRegion.imageExtent = {copyExtent.width, copyExtent.height, 1};
         vkCmdCopyImageToBuffer(frame.commandBuffer, srcBinding.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                                readback.GetHandle(), 1, &copyRegion);
 
@@ -9192,16 +9239,14 @@ void main() {
             // already aimed with the same mapping. The gate is exactly what made every partial
             // read of the default framebuffer come back in Vulkan row order.
             Vector<Uint8> remapped(static_cast<SizeT>(width) * static_cast<SizeT>(height) * sourceTexelSize);
-            if (RemapDefaultFboReadbackToGLOrientation(mapped, static_cast<Uint32>(width),
-                                                       static_cast<Uint32>(height), preTransform, sourceTexelSize,
-                                                       remapped.data())) {
+            if (RemapDefaultFramebufferReadback(mapped, static_cast<Uint32>(width),
+                                                static_cast<Uint32>(height), preTransform, sourceTexelSize,
+                                                remapped.data())) {
                 PackReadbackToClientOrPbo(remapped.data(), srcFormat, width, height, 1, format, type, pixels,
                                           /*applyPackImageParams=*/false, /*applyReadColorClamp=*/true);
                 return;
             }
-            // Only a quarter-turn pre-transform reaches this, and nothing in this renderer models
-            // one. MGLOG_I because the INFO builds are the ones that run conformance.
-            MGLOG_D("DirectVulkan::ReadPixels: default-FBO remap declined (w=%d h=%d preTransform=%d); falling back "
+            MGLOG_D("DirectVulkan::ReadPixels: default-FBO remap failed (w=%d h=%d preTransform=%d); falling back "
                     "to raw readback",
                     width, height, static_cast<Int>(preTransform));
         }
@@ -9582,16 +9627,15 @@ void main() {
         // The swapchain's depth/stencil image is stored display-side-up like its colour twin, so
         // the GL rect has to be mapped into that space before the copy and the copied rows
         // re-oriented afterwards - the same two halves the colour ReadPixels path applies.
-        Int32 copyOffsetX = x;
-        Int32 copyOffsetY = y;
+        VkOffset2D copyOffset{x, y};
+        VkExtent2D copyExtent{static_cast<Uint32>(width), static_cast<Uint32>(height)};
         if (defaultFramebufferOrientation) {
             const VkExtent2D defaultFboExtent = m_swapchainObject.GetExtent();
-            const DefaultFramebufferRectMapping mapping =
-                GetDefaultFramebufferRectMapping(m_swapchainObject.GetPreTransform());
-            copyOffsetX = MapDefaultFramebufferRectAxis(x, width, static_cast<Int>(defaultFboExtent.width),
-                                                        mapping.mirrorX);
-            copyOffsetY = MapDefaultFramebufferRectAxis(y, height, static_cast<Int>(defaultFboExtent.height),
-                                                        mapping.flipY);
+            const Bool mapped = MapDefaultFramebufferReadbackRect(
+                x, y, width, height, defaultFboExtent, m_swapchainObject.GetPreTransform(), &copyOffset,
+                &copyExtent);
+            MOBILEGL_ASSERT(mapped, "ReadDepthStencilPixels: default framebuffer read rectangle is out of bounds");
+            if (!mapped) return;
         }
 
         VkBufferImageCopy regions[2]{};
@@ -9603,8 +9647,8 @@ void main() {
             region.imageSubresource.mipLevel = mipLevel;
             region.imageSubresource.baseArrayLayer = baseArrayLayer;
             region.imageSubresource.layerCount = 1;
-            region.imageOffset = {copyOffsetX, copyOffsetY, 0};
-            region.imageExtent = {static_cast<Uint32>(width), static_cast<Uint32>(height), 1};
+            region.imageOffset = {copyOffset.x, copyOffset.y, 0};
+            region.imageExtent = {copyExtent.width, copyExtent.height, 1};
         }
         if (wantStencil) {
             auto& region = regions[regionCount++];
@@ -9613,8 +9657,8 @@ void main() {
             region.imageSubresource.mipLevel = mipLevel;
             region.imageSubresource.baseArrayLayer = baseArrayLayer;
             region.imageSubresource.layerCount = 1;
-            region.imageOffset = {copyOffsetX, copyOffsetY, 0};
-            region.imageExtent = {static_cast<Uint32>(width), static_cast<Uint32>(height), 1};
+            region.imageOffset = {copyOffset.x, copyOffset.y, 0};
+            region.imageExtent = {copyExtent.width, copyExtent.height, 1};
         }
         vkCmdCopyImageToBuffer(frame.commandBuffer, image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, readback.GetHandle(),
                                regionCount, regions);
@@ -9648,23 +9692,21 @@ void main() {
             Bool remapped = true;
             if (wantDepth && depthCopyBytes > 0) {
                 remappedDepth.resize(pixelCount * depthCopyBytes);
-                remapped = RemapDefaultFboReadbackToGLOrientation(depthSrc, static_cast<Uint32>(width),
-                                                                  static_cast<Uint32>(height), preTransform,
-                                                                  depthCopyBytes, remappedDepth.data());
+                remapped = RemapDefaultFramebufferReadback(depthSrc, static_cast<Uint32>(width),
+                                                           static_cast<Uint32>(height), preTransform,
+                                                           depthCopyBytes, remappedDepth.data());
             }
             if (remapped && wantStencil) {
                 remappedStencil.resize(pixelCount);
-                remapped = RemapDefaultFboReadbackToGLOrientation(stencilSrc, static_cast<Uint32>(width),
-                                                                  static_cast<Uint32>(height), preTransform, 1,
-                                                                  remappedStencil.data());
+                remapped = RemapDefaultFramebufferReadback(stencilSrc, static_cast<Uint32>(width),
+                                                           static_cast<Uint32>(height), preTransform, 1,
+                                                           remappedStencil.data());
             }
             if (remapped) {
                 if (!remappedDepth.empty()) depthSrc = remappedDepth.data();
                 if (!remappedStencil.empty()) stencilSrc = remappedStencil.data();
             } else {
-                // Only a quarter-turn pre-transform reaches this, and nothing in this renderer
-                // models one. MGLOG_I because the INFO builds are the ones that run conformance.
-                MGLOG_D("DirectVulkan::ReadDepthStencilPixels: default-FBO remap declined (w=%d h=%d "
+                MGLOG_D("DirectVulkan::ReadDepthStencilPixels: default-FBO remap failed (w=%d h=%d "
                         "preTransform=%d); falling back to raw readback",
                         width, height, static_cast<Int>(preTransform));
             }

@@ -936,6 +936,45 @@ TEST(DirectVulkanSanity, ReadbackUsesTheSourceFormatTexelSize) {
     EXPECT_EQ(VulkanRenderer::GetReadbackTexelSize(VK_FORMAT_R32G32B32A32_SFLOAT), 16u);
 }
 
+TEST(DirectVulkanSanity, DefaultFramebufferQuarterTurnReadbackMapsRectAndPixels) {
+    using MobileGL::MG_Backend::DirectVulkan::VulkanRenderer;
+    using MobileGL::Uint8;
+
+    VkOffset2D offset{};
+    VkExtent2D copyExtent{};
+    ASSERT_TRUE(VulkanRenderer::MapDefaultFramebufferReadbackRect(
+        1, 0, 2, 1, VkExtent2D{2, 3}, VK_SURFACE_TRANSFORM_ROTATE_90_BIT_KHR,
+        &offset, &copyExtent));
+    EXPECT_EQ(offset.x, 0);
+    EXPECT_EQ(offset.y, 1);
+    EXPECT_EQ(copyExtent.width, 1u);
+    EXPECT_EQ(copyExtent.height, 2u);
+
+    ASSERT_TRUE(VulkanRenderer::MapDefaultFramebufferReadbackRect(
+        1, 0, 2, 1, VkExtent2D{2, 3}, VK_SURFACE_TRANSFORM_ROTATE_270_BIT_KHR,
+        &offset, &copyExtent));
+    EXPECT_EQ(offset.x, 1);
+    EXPECT_EQ(offset.y, 0);
+    EXPECT_EQ(copyExtent.width, 1u);
+    EXPECT_EQ(copyExtent.height, 2u);
+
+    // Logical GL rows, bottom to top, are abc / def. The display-oriented swapchain blocks are
+    // transposed in opposite directions for 90 and 270 degrees.
+    const Uint8 raw90[] = {'a', 'd', 'b', 'e', 'c', 'f'};
+    const Uint8 raw270[] = {'f', 'c', 'e', 'b', 'd', 'a'};
+    const Uint8 expected[] = {'a', 'b', 'c', 'd', 'e', 'f'};
+    Uint8 result[sizeof(expected)]{};
+
+    ASSERT_TRUE(VulkanRenderer::RemapDefaultFramebufferReadback(
+        raw90, 3, 2, VK_SURFACE_TRANSFORM_ROTATE_90_BIT_KHR, 1, result));
+    EXPECT_TRUE(std::equal(std::begin(expected), std::end(expected), std::begin(result)));
+
+    std::fill(std::begin(result), std::end(result), 0);
+    ASSERT_TRUE(VulkanRenderer::RemapDefaultFramebufferReadback(
+        raw270, 3, 2, VK_SURFACE_TRANSFORM_ROTATE_270_BIT_KHR, 1, result));
+    EXPECT_TRUE(std::equal(std::begin(expected), std::end(expected), std::begin(result)));
+}
+
 TEST(DirectVulkanSanity, ReadbackConvertsRgba8AndRgba16fPixels) {
     using MobileGL::MG_Backend::DirectVulkan::VulkanRenderer;
     using MobileGL::MG_Util::EncodeFloatToHalfBits;

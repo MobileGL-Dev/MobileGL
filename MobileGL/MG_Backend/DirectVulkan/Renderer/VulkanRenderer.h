@@ -229,6 +229,18 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                     GLint dstY, GLint width, GLint height, VkImageLayout srcRestoreLayout,
                                     VkImageLayout dstRestoreLayout, Bool stencilAspect);
         static SizeT GetReadbackTexelSize(VkFormat sourceFormat);
+        // Map a GL bottom-left-origin rectangle into the display-oriented swapchain image.
+        // Quarter-turn surface transforms swap the copy extent's axes.
+        static Bool MapDefaultFramebufferReadbackRect(GLint x, GLint y, GLsizei width, GLsizei height,
+                                                      VkExtent2D imageExtent,
+                                                      VkSurfaceTransformFlagBitsKHR preTransform,
+                                                      VkOffset2D* imageOffset, VkExtent2D* imageCopyExtent);
+        // Reorder a tightly packed block copied with MapDefaultFramebufferReadbackRect back into
+        // GL row order. The input block has swapped dimensions for 90/270 degree transforms.
+        static Bool RemapDefaultFramebufferReadback(const Uint8* rawPixels, Uint32 logicalWidth,
+                                                    Uint32 logicalHeight,
+                                                    VkSurfaceTransformFlagBitsKHR preTransform,
+                                                    SizeT texelSize, Uint8* outPixels);
         static Bool ConvertReadbackPixels(const Uint8* sourcePixels, VkFormat sourceFormat,
                                           GLsizei width, GLsizei height, GLenum destinationFormat,
                                           GLenum destinationType, SizeT destinationRowStride,
