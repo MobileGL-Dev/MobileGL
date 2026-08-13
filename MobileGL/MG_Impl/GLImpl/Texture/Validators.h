@@ -50,8 +50,32 @@ namespace MobileGL::MG_Impl::GLImpl::TextureImpl {
                                          TextureTarget target);
     Bool ValidateTextureSubImageOffsets(const SharedPtr<MG_State::GLState::ITextureObject>& textureObject, Int xoffset,
                                         Int width, Int yoffset = 0, Int height = 0, Int zoffset = 0, Int depth = 0);
-    // Exact base-format equality - what glCopyImageSubData's format compatibility needs.
-    Bool ValidateBaseInternalFormatMatch(TextureInternalFormat format1, TextureInternalFormat format2);
+    // The texel block of one glCopyImageSubData endpoint, resolved to the two things the
+    // compatibility rule actually asks about. `compressed` is not redundant with a block bigger
+    // than 1x1: it is what distinguishes "compressed, and so the region is measured in texels of
+    // a blocked image" from "uncompressed, and so it is measured in texels".
+    struct CopyImageTexelBlock {
+        SizeT byteSize = 0;
+        Uint blockWidth = 1;
+        Uint blockHeight = 1;
+        Bool compressed = false;
+    };
+    // `compressedFormat` is the GLenum a glCompressedTexImage* upload recorded for the level, or
+    // GL_NONE. It has to be asked for separately because MobileGL stores every compressed format
+    // in uncompressed storage (ConvertGLEnumToTextureInternalFormat), so the TextureInternalFormat
+    // alone can no longer tell a BPTC image from the RGBA8 backing it.
+    CopyImageTexelBlock ResolveCopyImageTexelBlock(TextureInternalFormat format, GLenum compressedFormat);
+    // GL 4.6 core 18.3.2: the two images must be COMPATIBLE, and compatible means their texel
+    // blocks are the same SIZE - not that they share a base internal format. RGBA32UI into
+    // RGBA32F is legal (both 128-bit) while RGBA8 into RGBA32F is not, and a compressed image
+    // pairs with an uncompressed one whose texel is as big as the compressed block.
+    Bool ValidateCopyImageFormatCompatibility(const CopyImageTexelBlock& srcBlock,
+                                              const CopyImageTexelBlock& dstBlock);
+    // GL 4.6 core 18.3.2: for a compressed image the region's origin must sit on a block
+    // boundary and its size must be a whole number of blocks - unless the edge it runs to is
+    // the edge of the image.
+    Bool ValidateCopyImageBlockAlignment(const CopyImageTexelBlock& block, Int x, Int y, Int width, Int height,
+                                         Int imageWidth, Int imageHeight, const char* endpointName);
     // GL 4.6 SS 8.6 subset rule for glCopyTexImage*: the read buffer must supply every component
     // the requested internalformat asks for, but may supply more.
     Bool ValidateCopyTexImageBaseFormatSubset(TextureInternalFormat destFormat, TextureInternalFormat srcFormat);

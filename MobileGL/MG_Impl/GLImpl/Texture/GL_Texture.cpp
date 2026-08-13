@@ -3382,12 +3382,84 @@ namespace MobileGL::MG_Impl::GLImpl {
                          dstY, dstZ, srcWidth, srcHeight, srcDepth);
     }
 
+    namespace {
+        // The eleven targets GL 4.6 core 18.3.2 accepts. GL_TEXTURE_BUFFER, the six cube FACE
+        // enums and every PROXY enum all convert to a TextureTarget this frontend recognises,
+        // so ValidateTextureTarget lets them through; here they are INVALID_ENUM.
+        Bool ValidateCopyImageTarget(GLenum target, const char* endpointName) {
+            switch (target) {
+            case GL_RENDERBUFFER:
+            case GL_TEXTURE_1D:
+            case GL_TEXTURE_1D_ARRAY:
+            case GL_TEXTURE_2D:
+            case GL_TEXTURE_2D_ARRAY:
+            case GL_TEXTURE_2D_MULTISAMPLE:
+            case GL_TEXTURE_2D_MULTISAMPLE_ARRAY:
+            case GL_TEXTURE_3D:
+            case GL_TEXTURE_CUBE_MAP:
+            case GL_TEXTURE_CUBE_MAP_ARRAY:
+            case GL_TEXTURE_RECTANGLE:
+                return true;
+            default:
+                break;
+            }
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidEnum,
+                MakeUnique<GenericErrorInfo>(
+                    "MG_Impl/GLImpl", "ValidateCopyImageSubData_State",
+                    std::format("{} is not a target glCopyImageSubData accepts as the {}.",
+                                MG_Util::ConvertGLEnumToString(target), endpointName)));
+            return false;
+        }
+
+        IntVec3 GetCopyImageLevelSize(const SharedPtr<MG_State::GLState::ITextureObject>& textureObject,
+                                      TextureUploadTarget uploadTarget, GLint level) {
+            const auto* mipmapTexture = MG_State::GLState::AsMipmapTexture(textureObject.get());
+            if (!mipmapTexture) return textureObject->GetBaseSize();
+            return mipmapTexture->GetMipmapTexelSize(uploadTarget, static_cast<Uint>(level));
+        }
+
+        // glCopyImageSubData names an object that must already exist, and GL 4.6 core 18.3.2
+        // spells the failure INVALID_VALUE - "if either name does not correspond to a valid
+        // object". The shared ValidateTextureObject says INVALID_OPERATION, which is right for
+        // the ~30 entry points that reach it through a BOUND object (where the name was never
+        // in question and the fault is the binding), so this is a local rule rather than a
+        // change to the helper.
+        Bool ValidateCopyImageObjectExists(const SharedPtr<MG_State::GLState::ITextureObject>& textureObject,
+                                           const char* endpointName) {
+            if (textureObject) return true;
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidValue,
+                MakeUnique<GenericErrorInfo>(
+                    "MG_Impl/GLImpl", "ValidateCopyImageSubData_State",
+                    std::format("The {} name does not correspond to an existing image object.", endpointName)));
+            return false;
+        }
+
+        // Same split for the target/object disagreement: GL 4.6 core 18.3.2 makes a target that
+        // does not match the object INVALID_ENUM, where the shared uniformity helper records
+        // INVALID_OPERATION for the upload paths that share it.
+        Bool ValidateCopyImageTargetMatchesObject(const SharedPtr<MG_State::GLState::ITextureObject>& textureObject,
+                                                  TextureTarget target, const char* endpointName) {
+            if (!textureObject || textureObject->GetTarget() == target) return true;
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidEnum,
+                MakeUnique<GenericErrorInfo>(
+                    "MG_Impl/GLImpl", "ValidateCopyImageSubData_State",
+                    std::format("The {} target {} does not match the target the object was created with ({}).",
+                                endpointName, MG_Util::ConvertTextureTargetToString(target),
+                                MG_Util::ConvertTextureTargetToString(textureObject->GetTarget()))));
+            return false;
+        }
+    } // namespace
+
     Bool ValidateCopyImageSubData_State(const SharedPtr<MG_State::GLState::ITextureObject>& srcTexture,
-                                        GLenum srcTarget, GLint srcLevel,
+                                        GLenum srcTarget, GLint srcLevel, GLint srcX, GLint srcY,
                                         const SharedPtr<MG_State::GLState::ITextureObject>& dstTexture,
-                                        GLenum dstTarget, GLint dstLevel,
+                                        GLenum dstTarget, GLint dstLevel, GLint dstX, GLint dstY,
                                         GLsizei srcWidth, GLsizei srcHeight, GLsizei srcDepth) {
-        if (!TextureImpl::ValidateTextureObject(srcTexture) || !TextureImpl::ValidateTextureObject(dstTexture)) {
+        if (!ValidateCopyImageObjectExists(srcTexture, "source") ||
+            !ValidateCopyImageObjectExists(dstTexture, "destination")) {
             return false;
         }
         const auto srcTextureTarget = MG_Util::ConvertGLEnumToTextureTarget(srcTarget);
@@ -3396,8 +3468,13 @@ namespace MobileGL::MG_Impl::GLImpl {
             !TextureImpl::ValidateTextureTarget(dstTextureTarget)) {
             return false;
         }
-        if (!TextureImpl::ValidateTextureTargetUniformity(srcTexture, srcTextureTarget) ||
-            !TextureImpl::ValidateTextureTargetUniformity(dstTexture, dstTextureTarget)) {
+        // GL_TEXTURE_BUFFER and the cube FACE enums convert to a target this frontend knows, but
+        // 18.3.2 does not accept them here - only the eleven whole-image targets do.
+        if (!ValidateCopyImageTarget(srcTarget, "source") || !ValidateCopyImageTarget(dstTarget, "destination")) {
+            return false;
+        }
+        if (!ValidateCopyImageTargetMatchesObject(srcTexture, srcTextureTarget, "source") ||
+            !ValidateCopyImageTargetMatchesObject(dstTexture, dstTextureTarget, "destination")) {
             return false;
         }
         if (!TextureImpl::ValidateTextureLevelNumber(srcLevel) ||
@@ -3425,7 +3502,44 @@ namespace MobileGL::MG_Impl::GLImpl {
         if (srcWidth == 0 || srcHeight == 0 || srcDepth == 0) {
             return false;
         }
-        if (!TextureImpl::ValidateBaseInternalFormatMatch(srcTexture->GetFormat(), dstTexture->GetFormat())) {
+        // A multisample image can only be copied to one with the same sample count, and a
+        // single-sample image reports zero - so this one comparison is also what rejects
+        // copying between a multisample target and a non-multisample one.
+        if (srcTexture->GetSamples() != dstTexture->GetSamples()) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidOperation,
+                MakeUnique<GenericErrorInfo>(
+                    "MG_Impl/GLImpl", __func__,
+                    std::format("The two images have different sample counts ({} vs. {}).",
+                                srcTexture->GetSamples(), dstTexture->GetSamples())));
+            return false;
+        }
+        // 18.3.2: both images must be complete. An incomplete one has no defined texels to copy
+        // and no defined storage to copy into.
+        if (!srcTexture->IsComplete() || !dstTexture->IsComplete()) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidOperation,
+                MakeUnique<GenericErrorInfo>(
+                    "MG_Impl/GLImpl", __func__,
+                    std::format("A copied image is incomplete (source complete: {}, destination complete: {}).",
+                                srcTexture->IsComplete(), dstTexture->IsComplete())));
+            return false;
+        }
+        const auto srcUploadTarget = GetPrimaryUploadTarget(srcTexture);
+        const auto dstUploadTarget = GetPrimaryUploadTarget(dstTexture);
+        const auto srcBlock = TextureImpl::ResolveCopyImageTexelBlock(
+            srcTexture->GetFormat(), GetCompressedLevelFormat(srcTexture, srcUploadTarget, srcLevel));
+        const auto dstBlock = TextureImpl::ResolveCopyImageTexelBlock(
+            dstTexture->GetFormat(), GetCompressedLevelFormat(dstTexture, dstUploadTarget, dstLevel));
+        if (!TextureImpl::ValidateCopyImageFormatCompatibility(srcBlock, dstBlock)) {
+            return false;
+        }
+        const IntVec3 srcLevelSize = GetCopyImageLevelSize(srcTexture, srcUploadTarget, srcLevel);
+        const IntVec3 dstLevelSize = GetCopyImageLevelSize(dstTexture, dstUploadTarget, dstLevel);
+        if (!TextureImpl::ValidateCopyImageBlockAlignment(srcBlock, srcX, srcY, srcWidth, srcHeight,
+                                                          srcLevelSize.x(), srcLevelSize.y(), "source") ||
+            !TextureImpl::ValidateCopyImageBlockAlignment(dstBlock, dstX, dstY, srcWidth, srcHeight,
+                                                          dstLevelSize.x(), dstLevelSize.y(), "destination")) {
             return false;
         }
         return true;
@@ -5600,10 +5714,15 @@ namespace MobileGL::MG_Impl::GLImpl {
     void CopyImageSubData(GLuint srcName, GLenum srcTarget, GLint srcLevel, GLint srcX, GLint srcY, GLint srcZ,
                           GLuint dstName, GLenum dstTarget, GLint dstLevel, GLint dstX, GLint dstY, GLint dstZ,
                           GLsizei srcWidth, GLsizei srcHeight, GLsizei srcDepth) {
-        auto srcTexture = GetTextureObjectByName(srcName, __func__);
-        auto dstTexture = GetTextureObjectByName(dstName, __func__);
-        if (!ValidateCopyImageSubData_State(srcTexture, srcTarget, srcLevel, dstTexture, dstTarget, dstLevel,
-                                            srcWidth, srcHeight, srcDepth)) {
+        // A missing name is INVALID_VALUE here, where GetTextureObjectByName's own diagnostic is
+        // INVALID_OPERATION - so resolve through the plain lookup, which answers a null
+        // SharedPtr, and let the validator record the error this entry point owes.
+        const SharedPtr<MG_State::GLState::ITextureObject> srcTexture =
+            MG_State::pGLContext->GetTextureObject(srcName);
+        const SharedPtr<MG_State::GLState::ITextureObject> dstTexture =
+            MG_State::pGLContext->GetTextureObject(dstName);
+        if (!ValidateCopyImageSubData_State(srcTexture, srcTarget, srcLevel, srcX, srcY, dstTexture, dstTarget,
+                                            dstLevel, dstX, dstY, srcWidth, srcHeight, srcDepth)) {
             return;
         }
         CopyImageSubData_Backend(srcTexture, srcTarget, srcLevel, srcX, srcY, srcZ, dstTexture, dstTarget, dstLevel,

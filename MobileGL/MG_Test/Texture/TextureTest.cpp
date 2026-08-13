@@ -4033,3 +4033,248 @@ TEST_F(TextureTest, TexStorage2DLeavesAGenericCompressedFormatUncompressed) {
     EXPECT_EQ(compressed, GL_FALSE);
     EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
 }
+
+// ===================== glCopyImageSubData validation (KHR-GL43.copy_image) =====================
+//
+// Every case below is a mechanism the conformance group caught in the field, and each one is
+// pinned here because the backend cannot: a wrongly ACCEPTED copy shows up only as wrong pixels
+// on a device, and a wrongly REJECTED one shows up only as a conformance failure.
+
+namespace {
+    struct CopyImageSubDataCall {
+        Bool Called = false;
+        GLenum SrcTarget = GL_NONE;
+        GLenum DstTarget = GL_NONE;
+        GLint SrcZ = -1;
+        GLint DstZ = -1;
+        GLsizei Depth = -1;
+    } g_copyImageSubDataCall;
+
+    void RecordCopyImageSubData(const SharedPtr<MG_State::GLState::ITextureObject>& srcTexture, GLenum srcTarget,
+                                GLint srcLevel, GLint srcX, GLint srcY, GLint srcZ,
+                                const SharedPtr<MG_State::GLState::ITextureObject>& dstTexture, GLenum dstTarget,
+                                GLint dstLevel, GLint dstX, GLint dstY, GLint dstZ, GLsizei srcWidth,
+                                GLsizei srcHeight, GLsizei srcDepth) {
+        (void)srcTexture;
+        (void)srcLevel;
+        (void)srcX;
+        (void)srcY;
+        (void)dstTexture;
+        (void)dstLevel;
+        (void)dstX;
+        (void)dstY;
+        (void)srcWidth;
+        (void)srcHeight;
+        g_copyImageSubDataCall = {true, srcTarget, dstTarget, srcZ, dstZ, srcDepth};
+    }
+
+    // Two storage-backed 2D textures of the requested formats, so a copy between them is a legal
+    // call in every respect except the one the test is about.
+    void MakeCopyImagePair(GLenum srcFormat, GLenum dstFormat, GLuint& srcTexture, GLuint& dstTexture,
+                           GLsizei levels = 1, GLsizei extent = 8) {
+        MG_Impl::GLImpl::CreateTextures(GL_TEXTURE_2D, 1, &srcTexture);
+        MG_Impl::GLImpl::CreateTextures(GL_TEXTURE_2D, 1, &dstTexture);
+        MG_Impl::GLImpl::TextureStorage2D(srcTexture, levels, srcFormat, extent, extent);
+        MG_Impl::GLImpl::TextureStorage2D(dstTexture, levels, dstFormat, extent, extent);
+    }
+} // namespace
+
+// GL 4.6 core 18.3.2 compatibility is texel-block SIZE, not base internal format. RGB10_A2 and
+// R11F_G11F_B10F are both 32-bit and their bases differ (RGBA vs RGB); the old exact-base-format
+// predicate rejected the pair, which is what took down the whole cross-format half of the
+// conformance matrix on both backends.
+TEST_F(TextureTest, CopyImageSubDataAcceptsEqualTexelSizeAcrossDifferentBaseFormats) {
+    const ScopedTextureBackendFunctionsOverride backendGuard;
+    MG_Backend::gBackendFunctionsTable.GL.CopyImageSubData = RecordCopyImageSubData;
+    g_copyImageSubDataCall = {};
+
+    GLuint srcTexture = 0;
+    GLuint dstTexture = 0;
+    MakeCopyImagePair(GL_RGB10_A2, GL_R11F_G11F_B10F, srcTexture, dstTexture);
+    ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    MG_Impl::GLImpl::CopyImageSubData(srcTexture, GL_TEXTURE_2D, 0, 0, 0, 0, dstTexture, GL_TEXTURE_2D, 0, 0, 0, 0,
+                                      4, 4, 1);
+    EXPECT_TRUE(g_copyImageSubDataCall.Called);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+}
+
+// The other half of the same rule: equal base format is not sufficient either. RGBA8 and RGBA32F
+// are both RGBA and 32 vs 128 bits, so the copy is illegal.
+TEST_F(TextureTest, CopyImageSubDataRejectsDifferentTexelSizesWithTheSameBaseFormat) {
+    const ScopedTextureBackendFunctionsOverride backendGuard;
+    MG_Backend::gBackendFunctionsTable.GL.CopyImageSubData = RecordCopyImageSubData;
+    g_copyImageSubDataCall = {};
+
+    GLuint srcTexture = 0;
+    GLuint dstTexture = 0;
+    MakeCopyImagePair(GL_RGBA8, GL_RGBA32F, srcTexture, dstTexture);
+    ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    MG_Impl::GLImpl::CopyImageSubData(srcTexture, GL_TEXTURE_2D, 0, 0, 0, 0, dstTexture, GL_TEXTURE_2D, 0, 0, 0, 0,
+                                      4, 4, 1);
+    EXPECT_FALSE(g_copyImageSubDataCall.Called);
+    ExpectSingleGlError(GL_INVALID_OPERATION);
+}
+
+// ...and the pairing that is legal purely because the sizes agree, across integer-ness too.
+TEST_F(TextureTest, CopyImageSubDataAcceptsIntegerAndFloatOfTheSameTexelSize) {
+    const ScopedTextureBackendFunctionsOverride backendGuard;
+    MG_Backend::gBackendFunctionsTable.GL.CopyImageSubData = RecordCopyImageSubData;
+    g_copyImageSubDataCall = {};
+
+    GLuint srcTexture = 0;
+    GLuint dstTexture = 0;
+    MakeCopyImagePair(GL_RGBA32UI, GL_RGBA32F, srcTexture, dstTexture);
+    ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    MG_Impl::GLImpl::CopyImageSubData(srcTexture, GL_TEXTURE_2D, 0, 0, 0, 0, dstTexture, GL_TEXTURE_2D, 0, 0, 0, 0,
+                                      4, 4, 1);
+    EXPECT_TRUE(g_copyImageSubDataCall.Called);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+}
+
+// 18.3.2 spells a name that is not an object INVALID_VALUE. The shared texture-object validator
+// says INVALID_OPERATION, which is right for the entry points that reach an object through a
+// BINDING - hence a rule local to this entry point rather than a change to the helper.
+TEST_F(TextureTest, CopyImageSubDataNonExistentNameIsInvalidValue) {
+    const ScopedTextureBackendFunctionsOverride backendGuard;
+    MG_Backend::gBackendFunctionsTable.GL.CopyImageSubData = RecordCopyImageSubData;
+    g_copyImageSubDataCall = {};
+
+    MG_Impl::GLImpl::CopyImageSubData(4242, GL_TEXTURE_2D, 0, 0, 0, 0, 4243, GL_TEXTURE_2D, 0, 0, 0, 0, 1, 1, 1);
+    EXPECT_FALSE(g_copyImageSubDataCall.Called);
+    ExpectSingleGlError(GL_INVALID_VALUE);
+}
+
+// A target that disagrees with the object it names is INVALID_ENUM, not the INVALID_OPERATION the
+// shared target-uniformity validator records for the upload paths.
+TEST_F(TextureTest, CopyImageSubDataTargetNotMatchingTheObjectIsInvalidEnum) {
+    const ScopedTextureBackendFunctionsOverride backendGuard;
+    MG_Backend::gBackendFunctionsTable.GL.CopyImageSubData = RecordCopyImageSubData;
+    g_copyImageSubDataCall = {};
+
+    GLuint srcTexture = 0;
+    GLuint dstTexture = 0;
+    MakeCopyImagePair(GL_RGBA8, GL_RGBA8, srcTexture, dstTexture);
+    ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    MG_Impl::GLImpl::CopyImageSubData(srcTexture, GL_TEXTURE_2D, 0, 0, 0, 0, dstTexture, GL_TEXTURE_2D_ARRAY, 0, 0,
+                                      0, 0, 1, 1, 1);
+    EXPECT_FALSE(g_copyImageSubDataCall.Called);
+    ExpectSingleGlError(GL_INVALID_ENUM);
+}
+
+// The eleven whole-image targets only: a cube FACE converts to a target the frontend knows, so the
+// generic target validator lets it through, but 18.3.2 does not accept it here.
+TEST_F(TextureTest, CopyImageSubDataRejectsTargetsOutsideTheSpecList) {
+    const ScopedTextureBackendFunctionsOverride backendGuard;
+    MG_Backend::gBackendFunctionsTable.GL.CopyImageSubData = RecordCopyImageSubData;
+    g_copyImageSubDataCall = {};
+
+    GLuint srcTexture = 0;
+    GLuint dstTexture = 0;
+    MakeCopyImagePair(GL_RGBA8, GL_RGBA8, srcTexture, dstTexture);
+    ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    MG_Impl::GLImpl::CopyImageSubData(srcTexture, GL_TEXTURE_CUBE_MAP_POSITIVE_X, 0, 0, 0, 0, dstTexture,
+                                      GL_TEXTURE_2D, 0, 0, 0, 0, 1, 1, 1);
+    EXPECT_FALSE(g_copyImageSubDataCall.Called);
+    ExpectSingleGlError(GL_INVALID_ENUM);
+}
+
+// A level the image does not have is INVALID_VALUE; a single-level texture asked for level 1 used
+// to reach the backend with whatever the storage layer answered for that level.
+TEST_F(TextureTest, CopyImageSubDataRejectsLevelTheImageDoesNotHave) {
+    const ScopedTextureBackendFunctionsOverride backendGuard;
+    MG_Backend::gBackendFunctionsTable.GL.CopyImageSubData = RecordCopyImageSubData;
+    g_copyImageSubDataCall = {};
+
+    GLuint srcTexture = 0;
+    GLuint dstTexture = 0;
+    MakeCopyImagePair(GL_RGBA8, GL_RGBA8, srcTexture, dstTexture);
+    ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    MG_Impl::GLImpl::CopyImageSubData(srcTexture, GL_TEXTURE_2D, 0, 0, 0, 0, dstTexture, GL_TEXTURE_2D, 1, 0, 0, 0,
+                                      1, 1, 1);
+    EXPECT_FALSE(g_copyImageSubDataCall.Called);
+    ExpectSingleGlError(GL_INVALID_VALUE);
+}
+
+// Sample counts must match. A single-sample image reports zero, so this same comparison is also
+// what refuses a copy between a multisample target and a non-multisample one.
+TEST_F(TextureTest, CopyImageSubDataRejectsSampleCountMismatch) {
+    const ScopedTextureBackendFunctionsOverride backendGuard;
+    MG_Backend::gBackendFunctionsTable.GL.CopyImageSubData = RecordCopyImageSubData;
+    g_copyImageSubDataCall = {};
+
+    // Two DIFFERENT counts are the whole point, so the case needs an implementation that offers
+    // more than one. The unit-test context has no real backend behind GL_MAX_SAMPLES.
+    GLint maxSamples = 1;
+    MG_Impl::GLImpl::GetIntegerv(GL_MAX_SAMPLES, &maxSamples);
+    if (maxSamples < 2) {
+        GTEST_SKIP() << "GL_MAX_SAMPLES is " << maxSamples << "; no two distinct sample counts to disagree about";
+    }
+
+    GLuint srcTexture = 0;
+    GLuint dstTexture = 0;
+    MG_Impl::GLImpl::CreateTextures(GL_TEXTURE_2D_MULTISAMPLE, 1, &srcTexture);
+    MG_Impl::GLImpl::CreateTextures(GL_TEXTURE_2D_MULTISAMPLE, 1, &dstTexture);
+    MG_Impl::GLImpl::TextureStorage2DMultisample(srcTexture, 1, GL_RGBA8, 8, 8, GL_FALSE);
+    MG_Impl::GLImpl::TextureStorage2DMultisample(dstTexture, maxSamples, GL_RGBA8, 8, 8, GL_FALSE);
+    ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    MG_Impl::GLImpl::CopyImageSubData(srcTexture, GL_TEXTURE_2D_MULTISAMPLE, 0, 0, 0, 0, dstTexture,
+                                      GL_TEXTURE_2D_MULTISAMPLE, 0, 0, 0, 0, 1, 1, 1);
+    EXPECT_FALSE(g_copyImageSubDataCall.Called);
+    ExpectSingleGlError(GL_INVALID_OPERATION);
+}
+
+// The layer range has to survive the frontend intact. Both backends used to drop it - DirectVulkan
+// pinned baseArrayLayer/layerCount at 0/1 - so a 12-layer copy moved one layer and said nothing;
+// this pins the frontend half of that contract.
+TEST_F(TextureTest, CopyImageSubDataForwardsTheWholeLayerRangeToTheBackend) {
+    const ScopedTextureBackendFunctionsOverride backendGuard;
+    MG_Backend::gBackendFunctionsTable.GL.CopyImageSubData = RecordCopyImageSubData;
+    g_copyImageSubDataCall = {};
+
+    GLuint srcTexture = 0;
+    GLuint dstTexture = 0;
+    MG_Impl::GLImpl::CreateTextures(GL_TEXTURE_2D_ARRAY, 1, &srcTexture);
+    MG_Impl::GLImpl::CreateTextures(GL_TEXTURE_2D_ARRAY, 1, &dstTexture);
+    MG_Impl::GLImpl::TextureStorage3D(srcTexture, 1, GL_RGBA8, 8, 8, 12);
+    MG_Impl::GLImpl::TextureStorage3D(dstTexture, 1, GL_RGBA8, 8, 8, 12);
+    ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    MG_Impl::GLImpl::CopyImageSubData(srcTexture, GL_TEXTURE_2D_ARRAY, 0, 0, 0, 2, dstTexture, GL_TEXTURE_2D_ARRAY,
+                                      0, 0, 0, 5, 4, 4, 7);
+    EXPECT_TRUE(g_copyImageSubDataCall.Called);
+    EXPECT_EQ(g_copyImageSubDataCall.SrcZ, 2);
+    EXPECT_EQ(g_copyImageSubDataCall.DstZ, 5);
+    EXPECT_EQ(g_copyImageSubDataCall.Depth, 7);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+}
+
+// A rectangle target reaches the backend as itself. The translation to the GL_TEXTURE_2D the ES
+// driver actually stores it in belongs to DirectGLES, not here - and putting it here would break
+// DirectVulkan, which needs the real target to tell an array copy from a flat one.
+TEST_F(TextureTest, CopyImageSubDataPassesTheRectangleTargetThroughUntranslated) {
+    const ScopedTextureBackendFunctionsOverride backendGuard;
+    MG_Backend::gBackendFunctionsTable.GL.CopyImageSubData = RecordCopyImageSubData;
+    g_copyImageSubDataCall = {};
+
+    GLuint srcTexture = 0;
+    GLuint dstTexture = 0;
+    MG_Impl::GLImpl::CreateTextures(GL_TEXTURE_RECTANGLE, 1, &srcTexture);
+    MG_Impl::GLImpl::CreateTextures(GL_TEXTURE_RECTANGLE, 1, &dstTexture);
+    MG_Impl::GLImpl::TextureStorage2D(srcTexture, 1, GL_RGBA8, 8, 8);
+    MG_Impl::GLImpl::TextureStorage2D(dstTexture, 1, GL_RGBA8, 8, 8);
+    ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    MG_Impl::GLImpl::CopyImageSubData(srcTexture, GL_TEXTURE_RECTANGLE, 0, 0, 0, 0, dstTexture, GL_TEXTURE_RECTANGLE,
+                                      0, 0, 0, 0, 4, 4, 1);
+    EXPECT_TRUE(g_copyImageSubDataCall.Called);
+    EXPECT_EQ(g_copyImageSubDataCall.SrcTarget, static_cast<GLenum>(GL_TEXTURE_RECTANGLE));
+    EXPECT_EQ(g_copyImageSubDataCall.DstTarget, static_cast<GLenum>(GL_TEXTURE_RECTANGLE));
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+}
