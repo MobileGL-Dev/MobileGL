@@ -16,6 +16,7 @@
 #include <MG_State/GLState/ErrorState/ErrorInfo.h>
 #include <MG_Util/Converters/GLToStr/GLEnumConverter.h>
 #include <MG_Util/Converters/GLToMG/BufferEnumConverter.h>
+#include <MG_Util/Converters/GLToMG/RenderStateEnumConverter.h>
 #include <MG_Util/Converters/MGToGL/FramebufferEnumConverter.h>
 #include <MG_Util/Converters/MGToGL/ErrorCodeConverter.h>
 #include <MG_Util/Converters/MGToGL/TextureEnumConverter.h>
@@ -27,6 +28,11 @@
 #include <MG_Backend/BackendObjects.h>
 
 namespace MobileGL::MG_Impl::GLImpl {
+    // Declared rather than #included from GL_RenderState.h on purpose: that header also declares
+    // a free function named BlendEquation, which would hide the ::MobileGL::BlendEquation enum
+    // this file's blend-state queries name unqualified.
+    GLboolean IsEnabledi(GLenum target, GLuint index);
+
     namespace {
         enum class IndexedBufferQueryKind {
             Binding,
@@ -339,24 +345,68 @@ namespace MobileGL::MG_Impl::GLImpl {
             return sampler ? static_cast<GLint>(sampler->GetExternalIndex()) : 0;
         }
 
-        // The ARB_viewport_array indexed rectangles. MobileGL keeps exactly one viewport, one
-        // scissor box and one depth range, so every in-range index answers with that single
-        // value - but it has to come from the frontend state the non-indexed getters read.
-        // The generic path at the bottom of GetIntegeri_v is a raw backend passthrough that
-        // has no case for these, so routing them through it returned zeros.
+        // The ARB_viewport_array indexed rectangles. Each of these is genuinely per-viewport
+        // frontend state (RenderStateParameters::Viewports / ScissorBoxes / DepthRanges), so the
+        // indexed getters must read the indexed storage - the generic path at the bottom of
+        // GetIntegeri_v is a raw backend passthrough that has no case for them and returned
+        // zeros, and routing them to the NON-indexed getter (what this used to do) answered every
+        // index with viewport 0's value, which is what
+        // KHR-GL43.viewport_array.{viewport,scissor,depth_range}_api caught.
         Bool IsIndexedViewportQuery(GLenum target) {
             return target == GL_VIEWPORT || target == GL_SCISSOR_BOX || target == GL_DEPTH_RANGE;
         }
 
-        // ARB_viewport_array: `index` selects a viewport and MAX_VIEWPORTS bounds it.
+        // Component count of an indexed viewport-array query, so every width of getter writes the
+        // caller's whole buffer instead of just element 0 (GL 4.6 core 22.1).
+        GLsizei IndexedViewportQueryComponents(GLenum target) {
+            return target == GL_DEPTH_RANGE ? 2 : 4;
+        }
+
+        // ARB_viewport_array: `index` selects a viewport and MAX_VIEWPORTS bounds it. The bound is
+        // the frontend's own state width, which is also exactly what GL_MAX_VIEWPORTS reports -
+        // taking it from the backend caps instead would let a device limit of 1 (a Vulkan device
+        // without the multiViewport feature) make index 1 illegal even though the state exists.
         Bool ValidateViewportQueryIndex(GLuint index, const char* caller) {
-            GLint maxViewports = 0;
-            GetIntegerv(GL_MAX_VIEWPORTS, &maxViewports);
-            if (index < static_cast<GLuint>(std::max(maxViewports, 1))) return true;
+            if (index < RenderStateParameters::MAX_VIEWPORTS) return true;
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidValue,
                 MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller, "Viewport index is out of range."));
             return false;
+        }
+
+        // The indexed viewport/scissor/depth-range state as floats, which is the widest lossless
+        // shape MobileGL stores (the viewport really is float state; the scissor box is integral
+        // and well inside float's exact range, and every depth range is in [0, 1]). Every indexed
+        // getter width funnels through this so they can never disagree with each other.
+        void ReadIndexedViewportStateFloat(GLenum target, GLuint index, GLfloat* out) {
+            switch (target) {
+            case GL_VIEWPORT: {
+                const FloatVec4& viewport = MG_State::pGLContext->GetViewportIndexed(index);
+                out[0] = viewport.x();
+                out[1] = viewport.y();
+                out[2] = viewport.z();
+                out[3] = viewport.w();
+                return;
+            }
+            case GL_SCISSOR_BOX: {
+                const IntVec4& box = MG_State::pGLContext->GetScissorBoxIndexed(index);
+                out[0] = static_cast<GLfloat>(box.x());
+                out[1] = static_cast<GLfloat>(box.y());
+                out[2] = static_cast<GLfloat>(box.z());
+                out[3] = static_cast<GLfloat>(box.w());
+                return;
+            }
+            case GL_DEPTH_RANGE: {
+                const FloatVec2& range = MG_State::pGLContext->GetDepthRangeIndexed(index);
+                out[0] = range.x();
+                out[1] = range.y();
+                return;
+            }
+            default:
+                MOBILEGL_ASSERT(false, "ReadIndexedViewportStateFloat: unexpected target 0x%x",
+                                static_cast<Uint32>(target));
+                return;
+            }
         }
 
         void CopyIntsToBooleans(const GLint* src, SizeT count, GLboolean* dst) {
@@ -629,6 +679,17 @@ namespace MobileGL::MG_Impl::GLImpl {
             params[1] = dynamicParameters.ViewportBoundsRangeMax;
             return;
         }
+        // Viewport 0's rectangle, verbatim. Falling through to the integer width below would
+        // round the fractional rectangle a glViewportIndexedf(0, ...) is allowed to set, and
+        // glGetFloatv(GL_VIEWPORT) is a lossless query of float state.
+        case GL_VIEWPORT: {
+            const FloatVec4& viewport = MG_State::pGLContext->GetViewportIndexed(0);
+            params[0] = viewport.x();
+            params[1] = viewport.y();
+            params[2] = viewport.z();
+            params[3] = viewport.w();
+            return;
+        }
         case GL_MIN_FRAGMENT_INTERPOLATION_OFFSET:
         case GL_MAX_FRAGMENT_INTERPOLATION_OFFSET:
         case GL_FRAGMENT_INTERPOLATION_OFFSET_BITS: {
@@ -792,15 +853,32 @@ namespace MobileGL::MG_Impl::GLImpl {
             return;
         }
 
+        // GL 4.6 core 22.1: an indexed query answers EVERY indexed state, and GL_SCISSOR_TEST is
+        // indexed by viewport just like GL_BLEND is by draw buffer. Without this the integer
+        // width fell through to the backend passthrough and answered GL_INVALID_ENUM, which is
+        // the sticky error KHR-GL43.viewport_array.queries trips over at its next error check.
+        if (MG_Util::ConvertGLEnumToCapabilityInput(target) != CapabilityInput::Unknown) {
+            *data = IsEnabledi(target, index);
+            return;
+        }
+
         switch (target) {
         // ARB_viewport_array queries the indexed rectangles through glGetIntegeri_v as well
-        // (gl4cMultiBindTests and the viewport_array group both do). The frontend keeps one
-        // viewport and one scissor box, so every in-range index reports that one.
+        // (gl4cMultiBindTests and the viewport_array group both do).
         case GL_VIEWPORT:
         case GL_SCISSOR_BOX:
+        case GL_DEPTH_RANGE: {
             if (!ValidateViewportQueryIndex(index, __func__)) return;
-            GetIntegerv(target, data);
+            GLfloat values[4] = {};
+            ReadIndexedViewportStateFloat(target, index, values);
+            const GLsizei components = IndexedViewportQueryComponents(target);
+            for (GLsizei i = 0; i < components; ++i) {
+                // Round, not truncate: glGetIntegerv on floating-point state rounds to nearest
+                // (GL 4.6 core 22.2), so a 255.875-wide viewport reads back as 256 and not 255.
+                data[i] = static_cast<GLint>(std::lround(values[i]));
+            }
             return;
+        }
         // The vertex buffer binding points of the vertex array object that is bound. Indexed by
         // binding point, not by attribute (GL 4.6 core 10.3.1).
         case GL_VERTEX_BINDING_BUFFER:
@@ -927,7 +1005,10 @@ namespace MobileGL::MG_Impl::GLImpl {
         }
         if (IsIndexedViewportQuery(target)) {
             if (!ValidateViewportQueryIndex(index, __func__)) return;
-            GetFloatv(target, data);
+            // Verbatim, NOT via the integer width: the viewport is float state and
+            // KHR-GL43.viewport_array.viewport_api compares the read-back with ==, so a
+            // glViewportIndexedf(i, 0.125f, ...) has to come back as 0.125f exactly.
+            ReadIndexedViewportStateFloat(target, index, data);
             return;
         }
         GLint ints[4] = {};
@@ -944,7 +1025,12 @@ namespace MobileGL::MG_Impl::GLImpl {
         }
         if (IsIndexedViewportQuery(target)) {
             if (!ValidateViewportQueryIndex(index, __func__)) return;
-            GetDoublev(target, data);
+            GLfloat values[4] = {};
+            ReadIndexedViewportStateFloat(target, index, values);
+            const GLsizei components = IndexedViewportQueryComponents(target);
+            for (GLsizei i = 0; i < components; ++i) {
+                data[i] = static_cast<GLdouble>(values[i]);
+            }
             return;
         }
         GLint ints[4] = {};
@@ -1020,7 +1106,12 @@ namespace MobileGL::MG_Impl::GLImpl {
         // frontend-only value simply is not in the driver's table.
         GLint values[4] = {};
         GetIntegeri_v(target, index, values);
-        *data = static_cast<GLint64>(values[0]);
+        // The viewport-array rectangles are the only multi-component indexed state here; every
+        // other pname is scalar, so widening element 0 alone would silently truncate them.
+        const GLsizei components = IsIndexedViewportQuery(target) ? IndexedViewportQueryComponents(target) : 1;
+        for (GLsizei i = 0; i < components; ++i) {
+            data[i] = static_cast<GLint64>(values[i]);
+        }
     }
 
     void GetInteger64v(GLenum pname, GLint64* params) {
@@ -2192,7 +2283,15 @@ namespace MobileGL::MG_Impl::GLImpl {
             params[1] = dynamicParameters.MaxViewportHeight;
             break;
         case GL_MAX_VIEWPORTS:
-            *params = dynamicParameters.MaxViewports;
+            // The frontend's own state width, not the backend's device limit. GL 4.3 core
+            // requires MAX_VIEWPORTS >= 16 and every indexed viewport entry point validates
+            // against RenderStateParameters::MAX_VIEWPORTS, so reporting anything else would
+            // either advertise viewports the state cannot hold or reject indices it can. A
+            // Vulkan device without the multiViewport feature reports maxViewports == 1, which
+            // limits what can be RASTERIZED to more than one rectangle (see the multiViewport
+            // gate in VulkanRenderer), not what the GL state can hold; caps.MaxViewports keeps
+            // carrying that device number for exactly that decision.
+            *params = static_cast<GLint>(RenderStateParameters::MAX_VIEWPORTS);
             break;
         case GL_MINOR_VERSION:
             *params = rendererInfo.RendererGLInfo.TargetGLVersion.Minor;

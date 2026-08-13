@@ -1600,7 +1600,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 !g_hasSyncedRenderState || std::memcmp(currentBytes + kBlendSpanEnd, syncedBytes + kBlendSpanEnd,
                                                        sizeof(RenderStateParameters) - kBlendSpanEnd) != 0;
 
-            IntVec4 backendViewport = parameters.Viewport;
+            IntVec4 backendViewport = MG_State::pGLContext->GetViewport();
             if (backendViewport.z() <= 0 || backendViewport.w() <= 0) {
                 Int surfaceWidth = 0;
                 Int surfaceHeight = 0;
@@ -1614,7 +1614,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 g_syncedBackendViewport = backendViewport;
             }
 
-            // All 12 capability bools live after LogicOp in the struct, i.e. in the tail span.
+            // Every capability bool (and the scissor-test mask below) lives after LogicOp in the
+            // struct, i.e. in the tail span.
             if (tailSpanDirty) {
 #define SYNC_CAPABILITY(cap_mg, cap_gl)                                                                                \
     if (forceFullPush || parameters.cap_mg##Enabled != g_syncedRenderStateParameters.cap_mg##Enabled) {                                 \
@@ -1633,11 +1634,26 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 SYNC_CAPABILITY(SampleMask, GL_SAMPLE_MASK);
                 SYNC_CAPABILITY(PolygonOffsetFill, GL_POLYGON_OFFSET_FILL);
                 SYNC_CAPABILITY(RasterizerDiscard, GL_RASTERIZER_DISCARD);
-                SYNC_CAPABILITY(ScissorTest, GL_SCISSOR_TEST);
                 SYNC_CAPABILITY(StencilTest, GL_STENCIL_TEST);
                 SYNC_CAPABILITY(CullFace, GL_CULL_FACE);
 
 #undef SYNC_CAPABILITY
+
+                // GL_SCISSOR_TEST is per-viewport enable state (ARB_viewport_array), so it is a
+                // 16-bit mask and not a "<Name>Enabled" bool the macro above could key off. ES
+                // has exactly one scissor rectangle and one scissor enable, so only bit 0 - the
+                // index every ES draw rasterizes against - can be forwarded; a program that
+                // enables the test for viewport 3 alone gets viewport 0's answer here. That is
+                // the same limitation as the unemulated gl_ViewportIndex on this backend and is
+                // why the multi-viewport half of KHR-GL43.viewport_array stays red on Espryt.
+                {
+                    const Bool scissorTest = (parameters.ScissorTestEnabledMask & 1u) != 0;
+                    const Bool syncedScissorTest =
+                        (g_syncedRenderStateParameters.ScissorTestEnabledMask & 1u) != 0;
+                    if (forceFullPush || scissorTest != syncedScissorTest) {
+                        scissorTest ? g_GLESFuncs.glEnable(GL_SCISSOR_TEST) : g_GLESFuncs.glDisable(GL_SCISSOR_TEST);
+                    }
+                }
             }
 
             if (tailSpanDirty && g_GLESCapabilities.SupportsClipDistance) {
@@ -1864,8 +1880,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 if (forceFullPush || parameters.DepthMask != g_syncedRenderStateParameters.DepthMask) {
                     g_GLESFuncs.glDepthMask(parameters.DepthMask ? GL_TRUE : GL_FALSE);
                 }
-                if (forceFullPush || parameters.DepthRange != g_syncedRenderStateParameters.DepthRange) {
-                    g_GLESFuncs.glDepthRangef(parameters.DepthRange.x(), parameters.DepthRange.y());
+                if (forceFullPush || parameters.DepthRanges[0] != g_syncedRenderStateParameters.DepthRanges[0]) {
+                    g_GLESFuncs.glDepthRangef(parameters.DepthRanges[0].x(), parameters.DepthRanges[0].y());
                 }
             }
 
@@ -2003,7 +2019,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
               // everything drawn with GL_SCISSOR_TEST enabled before the app's first glScissor
               // is clipped away - Minecraft 26.2 keeps only its unscissored sky and hand and
               // loses the terrain and the whole GUI.
-                IntVec4 backendScissorBox = parameters.ScissorBox;
+                IntVec4 backendScissorBox = parameters.ScissorBoxes[0];
                 if (backendScissorBox.z() <= 0 || backendScissorBox.w() <= 0) {
                     Int surfaceWidth = 0;
                     Int surfaceHeight = 0;
@@ -4762,7 +4778,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
     // restores the app state on exit, tracked via the render-state shadow.
     class ScopedScissorDisable {
     public:
-        ScopedScissorDisable() : m_wasEnabled(RenderStateImpl::g_syncedRenderStateParameters.ScissorTestEnabled) {
+        ScopedScissorDisable()
+            : m_wasEnabled((RenderStateImpl::g_syncedRenderStateParameters.ScissorTestEnabledMask & 1u) != 0) {
             if (m_wasEnabled) g_GLESFuncs.glDisable(GL_SCISSOR_TEST);
         }
         ~ScopedScissorDisable() {

@@ -206,6 +206,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         XXHASH_VERIFY(
             XXH64_update(m_hashState, &payload.primitiveRestartEnable, sizeof(payload.primitiveRestartEnable)));
         XXHASH_VERIFY(XXH64_update(m_hashState, &payload.patchControlPoints, sizeof(payload.patchControlPoints)));
+        XXHASH_VERIFY(XXH64_update(m_hashState, &payload.viewportCount, sizeof(payload.viewportCount)));
         XXHASH_VERIFY(XXH64_update(m_hashState, &payload.polygonMode, sizeof(payload.polygonMode)));
         XXHASH_VERIFY(XXH64_update(m_hashState, &payload.cullMode, sizeof(payload.cullMode)));
         XXHASH_VERIFY(XXH64_update(m_hashState, &payload.frontFace, sizeof(payload.frontFace)));
@@ -406,8 +407,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         tessellation.patchControlPoints = payload.patchControlPoints;
 
         VkPipelineViewportStateCreateInfo vpci{VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO};
-        vpci.viewportCount = 1;
-        vpci.scissorCount = 1;
+        // Both counts move together: GL has one scissor rectangle per viewport, and Vulkan
+        // requires viewportCount == scissorCount whenever both are dynamic
+        // (VUID-VkPipelineViewportStateCreateInfo-scissorCount-04136). The caller has already
+        // clamped this to the device's multiViewport capability.
+        vpci.viewportCount = std::max<Uint32>(payload.viewportCount, 1u);
+        vpci.scissorCount = vpci.viewportCount;
 
         VkPipelineRasterizationStateCreateInfo raster{VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};
         raster.polygonMode = payload.polygonMode;

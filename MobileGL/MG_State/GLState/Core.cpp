@@ -712,8 +712,16 @@ namespace MobileGL::MG_State {
             m_renderState.SetViewport(viewport);
         }
 
-        const IntVec4& GLContext::GetViewport() const {
+        IntVec4 GLContext::GetViewport() const {
             return m_renderState.GetViewport();
+        }
+
+        void GLContext::SetViewportIndexed(Uint index, FloatVec4 viewport) {
+            m_renderState.SetViewportIndexed(index, viewport);
+        }
+
+        const FloatVec4& GLContext::GetViewportIndexed(Uint index) const {
+            return m_renderState.GetViewportIndexed(index);
         }
 
         void GLContext::SetLineWidth(Float width) {
@@ -953,6 +961,14 @@ namespace MobileGL::MG_State {
             return m_renderState.GetDepthRange();
         }
 
+        void GLContext::SetDepthRangeIndexed(Uint index, FloatVec2 range) {
+            m_renderState.SetDepthRangeIndexed(index, range);
+        }
+
+        const FloatVec2& GLContext::GetDepthRangeIndexed(Uint index) const {
+            return m_renderState.GetDepthRangeIndexed(index);
+        }
+
         void GLContext::SetSampleCoverage(Float value, Bool invert) {
             m_renderState.SetSampleCoverage(value, invert);
         }
@@ -1015,6 +1031,14 @@ namespace MobileGL::MG_State {
 
         const IntVec4& GLContext::GetScissorBox() const {
             return m_renderState.GetScissorBox();
+        }
+
+        void GLContext::SetScissorBoxIndexed(Uint index, IntVec4 box) {
+            m_renderState.SetScissorBoxIndexed(index, box);
+        }
+
+        const IntVec4& GLContext::GetScissorBoxIndexed(Uint index) const {
+            return m_renderState.GetScissorBoxIndexed(index);
         }
 
         // Framebuffer

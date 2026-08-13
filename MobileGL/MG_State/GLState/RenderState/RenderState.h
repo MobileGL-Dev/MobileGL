@@ -220,8 +220,22 @@ namespace MobileGL {
     };
 
     struct RenderStateParameters {
+        // ARB_viewport_array / GL 4.6 core 13.6.1: the viewport, the scissor rectangle, the depth
+        // range and the scissor-test enable are all arrays indexed by gl_ViewportIndex, and the
+        // spec floor for MAX_VIEWPORTS is 16. MobileGL advertises exactly 16 on both backends, so
+        // this is also what GL_MAX_VIEWPORTS reports (see the backend loaders' caps.MaxViewports).
+        static constexpr Uint MAX_VIEWPORTS = 16;
+
         // Rasterization
-        IntVec4 Viewport = IntVec4(0, 0, 0, 0); // x, y, width, height
+        // The viewport rectangle is FLOAT state as of GL 4.1 - ViewportIndexedf writes fractional
+        // values and GetFloati_v(GL_VIEWPORT) must hand them back bit-exact
+        // (KHR-GL43.viewport_array.viewport_api compares with ==, no tolerance). glViewport's
+        // integers are simply one way to write it. Index 0 is what a program that never assigns
+        // gl_ViewportIndex rasterizes against, and what the classic glViewport /
+        // glGetIntegerv(GL_VIEWPORT) pair addresses. Both backends rasterize the rectangle
+        // rounded back to integers; the STATE stays exact, which is the half the conformance
+        // suite checks (see the KNOWN INFIDELITY note in AdvertisedLimitsScenario.cpp).
+        Array<FloatVec4, MAX_VIEWPORTS> Viewports{}; // x, y, width, height
         Float LineWidth = 1.0f;
         Float PointSize = 1.0f;
         // GL_PATCH_VERTICES: how many vertices one tessellation patch consumes.
@@ -247,7 +261,13 @@ namespace MobileGL {
         Float ClearDepth = 1.0f;
         Uint32 ClearStencil = 0;
         FloatVec4 BlendColor = FloatVec4(0.0f, 0.0f, 0.0f, 0.0f);
-        FloatVec2 DepthRange = FloatVec2(0.0f, 1.0f);
+        // Per-viewport depth range (glDepthRangeIndexed / glDepthRangeArrayv). Every entry is
+        // initialized to (0, 1) in RenderState's constructor - a default member initializer would
+        // not survive the Array<> aggregate. Kept float rather than double: DepthRangeArrayv takes
+        // GLdouble, but the value reaches the hardware as VkViewport::minDepth/maxDepth (float) on
+        // Magma and glDepthRangef on Espryt, so a double store would only widen the readback and
+        // then lose it again at the same place.
+        Array<FloatVec2, MAX_VIEWPORTS> DepthRanges{};
         Float SampleCoverageValue = 1.0f;
         Bool SampleCoverageInvert = false;
         Uint32 SampleMaskValue = 0xffffffffu;
@@ -299,10 +319,15 @@ namespace MobileGL {
         Bool SampleAlphaToOneEnabled = false;
         Bool SampleCoverageEnabled = false;
         Bool SampleMaskEnabled = false;
-        Bool ScissorTestEnabled = false;
         Bool StencilTestEnabled = false;
         Bool ProgramPointSizeEnabled = false;
-        IntVec4 ScissorBox = IntVec4(0, 0, 0, 0); // x, y, width, height
+        // glEnable(GL_SCISSOR_TEST) enables the test for EVERY viewport, glEnablei for one
+        // (GL 4.6 core 17.3.2), so this is 16 bits and not a bool. Bit 0 is what the classic
+        // glIsEnabled(GL_SCISSOR_TEST) reports and what both backends currently consume. Unlike
+        // ClipDistanceEnabledMask below it DOES bump the pipeline version, because DirectGLES
+        // turns it into a real glEnable/glDisable.
+        Uint32 ScissorTestEnabledMask = 0;
+        Array<IntVec4, MAX_VIEWPORTS> ScissorBoxes{}; // x, y, width, height
         // glEnable(GL_CLIP_DISTANCE0 + i) for i in [0, 8), one bit each. A bitmask rather than
         // eight bools because every consumer wants the set, not an individual flag, and because
         // the SYNC_CAPABILITY/SET_CAPABILITY macros key off a "<Name>Enabled" field name that
@@ -323,8 +348,14 @@ namespace MobileGL {
                 const RenderStateParameters& GetAllParameters() const;
 
                 // Rasterization
+                // ARB_viewport_array defines glViewport as ViewportIndexedf on EVERY index, so the
+                // classic setter broadcasts; GetViewport answers for index 0 (rounded to the
+                // integers glGetIntegerv(GL_VIEWPORT) and both backends want) and is BY VALUE for
+                // that reason. The indexed pair is the verbatim float state.
                 void SetViewport(IntVec4 viewport); // x, y, width, height
-                const IntVec4& GetViewport() const; // x, y, width, height
+                IntVec4 GetViewport() const;        // x, y, width, height, viewport 0, rounded
+                void SetViewportIndexed(Uint index, FloatVec4 viewport);
+                const FloatVec4& GetViewportIndexed(Uint index) const;
                 void SetLineWidth(Float width);
                 Float GetLineWidth() const;
                 void SetPointSize(Float size);
@@ -400,8 +431,12 @@ namespace MobileGL {
                 Uint32 GetClearStencil() const;
                 void SetBlendColor(FloatVec4 color);
                 const FloatVec4& GetBlendColor() const;
+                // glDepthRange(f) writes every viewport's range (ARB_viewport_array); the indexed
+                // pair is glDepthRangeIndexed / glDepthRangeArrayv. GetDepthRange answers index 0.
                 void SetDepthRange(FloatVec2 range);
                 const FloatVec2& GetDepthRange() const;
+                void SetDepthRangeIndexed(Uint index, FloatVec2 range);
+                const FloatVec2& GetDepthRangeIndexed(Uint index) const;
                 void SetSampleCoverage(Float value, Bool invert);
                 Float GetSampleCoverageValue() const;
                 Bool GetSampleCoverageInvert() const;
@@ -421,9 +456,12 @@ namespace MobileGL {
                 void SetProvokingVertexMode(ProvokingVertexMode mode);
                 ProvokingVertexMode GetProvokingVertexMode() const;
 
-                // Scissor
+                // Scissor. glScissor writes every rectangle (ARB_viewport_array); GetScissorBox
+                // answers for index 0.
                 void SetScissorBox(IntVec4 box);      // x, y, width, height
                 const IntVec4& GetScissorBox() const; // x, y, width, height
+                void SetScissorBoxIndexed(Uint index, IntVec4 box);
+                const IntVec4& GetScissorBoxIndexed(Uint index) const;
 
             private:
                 // Bump both: any state change invalidates the draw snapshot, and this one also

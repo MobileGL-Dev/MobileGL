@@ -547,6 +547,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // needs no feature). Both cached at device creation and drive a hard-fail-at-draw when absent.
         Bool m_dualSrcBlendFeatureEnabled = false;
         Bool m_primitiveTopologyListRestartFeatureEnabled = false;
+        // multiViewport gates rasterizing into more than one of ARB_viewport_array's 16 viewports
+        // (gl_ViewportIndex). m_maxRasterizableViewports is min(MAX_VIEWPORTS, device limit), or 1
+        // when the feature is off, and is the viewportCount a gl_ViewportIndex-writing pipeline
+        // declares - it is NOT what GL_MAX_VIEWPORTS reports, which is the frontend state width.
+        Bool m_multiViewportFeatureEnabled = false;
+        Uint32 m_maxRasterizableViewports = 1;
         // Union of shader stages sampled-read barriers may name; built at device creation
         // because geometry/tessellation stage bits are invalid in a barrier when their
         // feature is off (VUID-vkCmdPipelineBarrier-srcStageMask-04090/-04091), and
@@ -830,6 +836,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             // re-resolve just the pipeline against the active pass; a change that
             // flips it must fall back to the full path's pass selection.
             Bool drawUsesDepthStencil = false;
+            // The snapshotting draw's pipeline viewportCount. A pure function of the PROGRAM
+            // (writesViewportIndexBuiltin) and of a device feature fixed at renderer init, both
+            // of which the programLifetimeId/programVersion guards above already pin - carried
+            // here so the fast path does not re-fetch the program object to re-derive it.
+            Uint32 viewportCount = 1;
             IntVec2 renderPassExtent = {0, 0};
             // colorAttachmentCount of the snapshotting draw's render pass: the
             // pipeline-state hash input, so the fast path can refresh that hash and
@@ -1120,7 +1131,22 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // The per-draw dynamic-state tail (viewport, scissor, blend constants, depth
         // bias, line width, stencil), gated behind one render-state-parameters-version
         // compare per command buffer - see the gate fields in DynamicStateShadow.
-        void ApplyDynamicDrawStateTail(FrameContext::FrameData& frame, const IntVec2& extent, Bool isDefaultFbo);
+        // viewportCount is the bound pipeline's declared viewport count: 1 for every program that
+        // does not write gl_ViewportIndex (the memoized fast path), otherwise the renderer's
+        // rasterizable viewport count, which takes the unmemoized array path.
+        void ApplyDynamicDrawStateTail(FrameContext::FrameData& frame, const IntVec2& extent, Bool isDefaultFbo,
+                                       Uint32 viewportCount = 1);
+        void ApplyMultiViewportDynamicState(VkCommandBuffer commandBuffer, Uint32 viewportCount, const IntVec2& extent,
+                                            VkSurfaceTransformFlagBitsKHR preTransform, Bool isDefaultFbo);
+        VkRect2D ComputeGLScissorRect(Uint32 index, const IntVec2& extent,
+                                      VkSurfaceTransformFlagBitsKHR preTransform, Bool isDefaultFbo) const;
+        // How many viewports a draw with this program rasterizes into: 1 unless the program
+        // assigns gl_ViewportIndex AND the device enabled multiViewport. Both the pipeline's
+        // baked viewportCount and the dynamic arrays come from this one answer, so they cannot
+        // disagree.
+        Uint32 ResolveDrawViewportCount(Bool programWritesViewportIndex) const {
+            return programWritesViewportIndex && m_multiViewportFeatureEnabled ? m_maxRasterizableViewports : 1u;
+        }
 
         Bool UploadAndBindVertexBuffers(VkCommandBuffer commandBuffer, const MG_State::GLState::VertexArrayObject& vao,
                                         const ProgramFactory::VkProgramObject& programObj,

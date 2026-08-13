@@ -1000,7 +1000,11 @@ namespace MobileGL::MG_Util::BackendLoader {
         GLfloat smoothLineWidthRange[2] = {1.0f, 1.0f};
         GLfloat smoothLineWidthGranularity = 1.0f;
         GLfloat aliasedPointSizeRange[2] = {1.0f, 1.0f};
-        GLfloat viewportBoundsRange[2] = {0.0f, 0.0f};
+        // GL 4.6 core table 23.60 sets the MINIMUM VIEWPORT_BOUNDS_RANGE at [-32768, 32767], and
+        // KHR-GL43.viewport_array.queries asserts exactly that floor. GLES has no such query, so
+        // the glGetFloatv below raises GL_INVALID_ENUM and leaves this untouched - starting it at
+        // {0, 0} advertised a range that admits no viewport origin at all.
+        GLfloat viewportBoundsRange[2] = {-32768.0f, 32767.0f};
         GLint maxViewportDims[2] = {16384, 16384};
         GLint viewportSubpixelBits = 0;
         GLint max3DTextureSize = 16384;
@@ -1289,8 +1293,12 @@ namespace MobileGL::MG_Util::BackendLoader {
         caps.MaxViewports = maxViewports;
         caps.MaxViewportWidth = maxViewportDims[0];
         caps.MaxViewportHeight = maxViewportDims[1];
-        caps.ViewportBoundsRangeMin = viewportBoundsRange[0];
-        caps.ViewportBoundsRangeMax = viewportBoundsRange[1];
+        // Only ever WIDER than the core minimum: a driver that answered the query is allowed to
+        // exceed the floor but never to sit inside it, and a driver that rejected the query left
+        // the floor in place. Written as a clamp rather than a plain assignment so a partial
+        // write (one component answered, the other not) cannot narrow the range either.
+        caps.ViewportBoundsRangeMin = std::min(viewportBoundsRange[0], -32768.0f);
+        caps.ViewportBoundsRangeMax = std::max(viewportBoundsRange[1], 32767.0f);
         caps.ViewportSubpixelBits = viewportSubpixelBits;
         caps.MinFragmentInterpolationOffset =
             std::isfinite(minFragmentInterpolationOffset) && minFragmentInterpolationOffset <= -0.5f

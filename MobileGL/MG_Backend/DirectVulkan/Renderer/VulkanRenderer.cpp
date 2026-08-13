@@ -335,19 +335,19 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // Complete input inventory of ApplyDynamicDrawStateTail, one line per reader
         // (each accessor it replaces is a verified plain field read of the same
         // RenderStateParameters field - RenderState.cpp):
-        //   ApplyGLViewportState    : Viewport, DepthRange, + extent/isDefaultFbo/preTransform
+        //   ApplyGLViewportState    : Viewports[0], DepthRanges[0], + extent/isDefaultFbo/preTransform
         //   ApplyBlendConstants     : BlendColor
         //   ApplyPolygonOffsetState : PolygonOffsetUnits, PolygonOffsetFactor
         //   ApplyLineWidthState     : LineWidth (see the caveat below)
         //   ApplyStencilState       : StencilStates[0..1].{ValueMask, WriteMask, Ref}
-        //   scissor rect            : ScissorTestEnabled, ScissorBox,
+        //   scissor rect            : ScissorTestEnabledMask bit 0, ScissorBoxes[0],
         //                             + extent/isDefaultFbo/preTransform
         // Caveat, unchanged from the version-only gate: ApplyLineWidthState also clamps
         // to the ACTIVE BACKEND OBJECT's aliased line-width range. Those are device
         // limits queried once at backend init and constant for the renderer's lifetime,
         // so they are not part of the key (the version gate never covered them either).
         struct DynamicTailKey {
-            Int viewport[4] = {0, 0, 0, 0};
+            Float viewport[4] = {0.0f, 0.0f, 0.0f, 0.0f};
             Float depthRange[2] = {0.0f, 0.0f};
             Float blendColor[4] = {0.0f, 0.0f, 0.0f, 0.0f};
             Float polygonOffsetFactor = 0.0f;
@@ -437,12 +437,30 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
     }
 
-    static void ApplyGLViewportState(VkCommandBuffer commandBuffer,
-                                     const IntVec2& framebufferExtent,
-                                     VkSurfaceTransformFlagBitsKHR preTransform,
-                                     Bool isDefaultFramebuffer) {
-        const IntVec4& viewportState = MG_State::pGLContext->GetViewport();
-        const FloatVec2& depthRange = MG_State::pGLContext->GetDepthRange();
+    // One viewport of the ARB_viewport_array state, mapped into Vulkan's frame. Split out of
+    // ApplyGLViewportState so the multi-viewport path derives index i through EXACTLY the same
+    // arithmetic as index 0 - the default-framebuffer Y-flip and pre-transform rotation
+    // especially, which is the classic way a multi-viewport port comes out upside down for every
+    // index but the one that was tested.
+    static VkViewport ComputeGLViewport(Uint32 index,
+                                        const IntVec2& framebufferExtent,
+                                        VkSurfaceTransformFlagBitsKHR preTransform,
+                                        Bool isDefaultFramebuffer) {
+        // Snapped to integers. The viewport is float STATE (glViewportIndexedf may set a
+        // fractional origin, and GetFloati_v hands it back verbatim), but what rasterizes here is
+        // the rounded rectangle - a deliberate, documented infidelity rather than a spec claim:
+        // MobileGL passes the driver's VIEWPORT_SUBPIXEL_BITS through, so it does advertise
+        // subpixel viewport precision it does not deliver. Nothing in KHR-GL43.viewport_array or
+        // in Minecraft sets a fractional viewport (the conformance checks are all on the state
+        // round trip), which is why the honest-but-lossy path was kept over widening every
+        // default-framebuffer Y-flip/pre-transform helper to floats. See the KNOWN INFIDELITY
+        // note in MG_IntegrationTest/Scenarios/AdvertisedLimitsScenario.cpp.
+        const FloatVec4& stored = MG_State::pGLContext->GetViewportIndexed(index);
+        const IntVec4 viewportState(static_cast<Int>(std::lround(stored.x())),
+                                    static_cast<Int>(std::lround(stored.y())),
+                                    static_cast<Int>(std::lround(stored.z())),
+                                    static_cast<Int>(std::lround(stored.w())));
+        const FloatVec2& depthRange = MG_State::pGLContext->GetDepthRangeIndexed(index);
         const IntVec2 logicalExtent = isDefaultFramebuffer
             ? ResolveDefaultFramebufferLogicalExtent(preTransform, framebufferExtent)
             : framebufferExtent;
@@ -477,6 +495,14 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         viewport.height = static_cast<float>(viewportHeight);
         viewport.minDepth = depthRange.x();
         viewport.maxDepth = depthRange.y();
+        return viewport;
+    }
+
+    static void ApplyGLViewportState(VkCommandBuffer commandBuffer,
+                                     const IntVec2& framebufferExtent,
+                                     VkSurfaceTransformFlagBitsKHR preTransform,
+                                     Bool isDefaultFramebuffer) {
+        const VkViewport viewport = ComputeGLViewport(0, framebufferExtent, preTransform, isDefaultFramebuffer);
         auto& shadow = g_dynamicStateShadow;
         if (shadow.viewportValid && shadow.viewport.x == viewport.x && shadow.viewport.y == viewport.y &&
             shadow.viewport.width == viewport.width && shadow.viewport.height == viewport.height &&
@@ -4879,6 +4905,7 @@ void main() {
             .topology = vkTopology,
             .primitiveRestartEnable = primitiveRestartEnabled,
             .patchControlPoints = static_cast<Uint32>(MG_State::pGLContext->GetPatchVertices()),
+            .viewportCount = ResolveDrawViewportCount(programObj.writesViewportIndexBuiltin),
             .polygonMode = effectivePolygonMode,
             .cullMode = cullFaceEnabled
                 ? MG_Util::ConvertCullFaceModeToVkEnum(MG_State::pGLContext->GetCullFaceMode(), invertClockwise)
@@ -5321,9 +5348,71 @@ void main() {
     }
 
 
-    void VulkanRenderer::ApplyDynamicDrawStateTail(FrameContext::FrameData& frame, const IntVec2& extent,
-                                                   Bool isDefaultFbo) {
+    // The scissor rectangle Vulkan needs for ARB_viewport_array index `index`. Vulkan has no
+    // per-viewport scissor-test TOGGLE - a scissor rectangle always applies - so an index whose
+    // GL scissor test is disabled gets the whole framebuffer, which is exactly "the test always
+    // passes" (GL 4.6 core 17.3.2).
+    VkRect2D VulkanRenderer::ComputeGLScissorRect(Uint32 index, const IntVec2& extent,
+                                                  VkSurfaceTransformFlagBitsKHR preTransform,
+                                                  Bool isDefaultFbo) const {
+        const auto& parameters = MG_State::pGLContext->GetRenderStateParameters();
+        if ((parameters.ScissorTestEnabledMask & (1u << index)) == 0) {
+            VkRect2D full{};
+            full.offset = {0, 0};
+            full.extent = {static_cast<Uint32>(extent.x()), static_cast<Uint32>(extent.y())};
+            return full;
+        }
+        const IntVec4& scissorBox = parameters.ScissorBoxes[index];
+        return isDefaultFbo ? MakeDefaultFramebufferScissorRect(scissorBox, extent, preTransform)
+                            : MakeClampedScissorRect(scissorBox, extent);
+    }
+
+    // The wide half of ApplyDynamicDrawStateTail: a pipeline built for a gl_ViewportIndex-writing
+    // program declares viewportCount > 1, and Vulkan then requires that many viewports AND that
+    // many scissors to have been set before the draw
+    // (VUID-vkCmdDraw-viewportCount-03417/-03418). Deliberately unmemoized: only conformance
+    // shaders reach it, the single-element dynamic-state shadow cannot describe an array, and
+    // leaving that shadow invalidated is what makes the next ordinary draw re-push its own
+    // single viewport instead of believing the array's element 0 is already bound.
+    void VulkanRenderer::ApplyMultiViewportDynamicState(VkCommandBuffer commandBuffer, Uint32 viewportCount,
+                                                        const IntVec2& extent,
+                                                        VkSurfaceTransformFlagBitsKHR preTransform,
+                                                        Bool isDefaultFbo) {
+        MOBILEGL_ASSERT(viewportCount <= RenderStateParameters::MAX_VIEWPORTS,
+                        "ApplyMultiViewportDynamicState: viewportCount=%u exceeds the indexed state width",
+                        viewportCount);
+        const Uint32 count = std::min<Uint32>(viewportCount, RenderStateParameters::MAX_VIEWPORTS);
+
+        Array<VkViewport, RenderStateParameters::MAX_VIEWPORTS> viewports{};
+        Array<VkRect2D, RenderStateParameters::MAX_VIEWPORTS> scissors{};
+        for (Uint32 i = 0; i < count; ++i) {
+            viewports[i] = ComputeGLViewport(i, extent, preTransform, isDefaultFbo);
+            scissors[i] = ComputeGLScissorRect(i, extent, preTransform, isDefaultFbo);
+        }
+        vkCmdSetViewport(commandBuffer, 0, count, viewports.data());
+        vkCmdSetScissor(commandBuffer, 0, count, scissors.data());
+
         auto& shadow = g_dynamicStateShadow;
+        shadow.viewportValid = false;
+        shadow.scissorValid = false;
+        shadow.dynamicTailValid = false;
+    }
+
+    void VulkanRenderer::ApplyDynamicDrawStateTail(FrameContext::FrameData& frame, const IntVec2& extent,
+                                                   Bool isDefaultFbo, Uint32 viewportCount) {
+        auto& shadow = g_dynamicStateShadow;
+        if (viewportCount > 1) {
+            // The other five Apply* still run: blend constants, depth bias, line width and the
+            // stencil masks are not per-viewport and a multi-viewport draw needs them just as
+            // much. Only the viewport/scissor pair takes the array shape.
+            ApplyBlendConstants(frame.commandBuffer);
+            ApplyPolygonOffsetState(frame.commandBuffer);
+            ApplyLineWidthState(frame.commandBuffer);
+            ApplyStencilState(frame.commandBuffer);
+            ApplyMultiViewportDynamicState(frame.commandBuffer, viewportCount, extent,
+                                           m_swapchainObject.GetPreTransform(), isDefaultFbo);
+            return;
+        }
         // One compare for the whole tail: see the gate's declaration in
         // DynamicStateShadow for why (version, extent, default-FBO flag) pins every
         // input the six Apply* below read.
@@ -5342,12 +5431,14 @@ void main() {
         DynamicStateShadow::DynamicTailKey key;
         {
             const RenderStateParameters& p = MG_State::pGLContext->GetRenderStateParameters();
-            key.viewport[0] = p.Viewport.x();
-            key.viewport[1] = p.Viewport.y();
-            key.viewport[2] = p.Viewport.z();
-            key.viewport[3] = p.Viewport.w();
-            key.depthRange[0] = p.DepthRange.x();
-            key.depthRange[1] = p.DepthRange.y();
+            // Viewport 0 and its depth range: ApplyGLViewportState reads exactly those two
+            // (per-index state for indices > 0 is keyed separately, see multiViewportKey below).
+            key.viewport[0] = p.Viewports[0].x();
+            key.viewport[1] = p.Viewports[0].y();
+            key.viewport[2] = p.Viewports[0].z();
+            key.viewport[3] = p.Viewports[0].w();
+            key.depthRange[0] = p.DepthRanges[0].x();
+            key.depthRange[1] = p.DepthRanges[0].y();
             key.blendColor[0] = p.BlendColor.x();
             key.blendColor[1] = p.BlendColor.y();
             key.blendColor[2] = p.BlendColor.z();
@@ -5362,11 +5453,11 @@ void main() {
                 key.stencilWriteMask[face] = p.StencilStates[face].WriteMask;
                 key.stencilRef[face] = p.StencilStates[face].Ref;
             }
-            key.scissorEnabled = p.ScissorTestEnabled;
-            key.scissorBox[0] = p.ScissorBox.x();
-            key.scissorBox[1] = p.ScissorBox.y();
-            key.scissorBox[2] = p.ScissorBox.z();
-            key.scissorBox[3] = p.ScissorBox.w();
+            key.scissorEnabled = (p.ScissorTestEnabledMask & 1u) != 0;
+            key.scissorBox[0] = p.ScissorBoxes[0].x();
+            key.scissorBox[1] = p.ScissorBoxes[0].y();
+            key.scissorBox[2] = p.ScissorBoxes[0].z();
+            key.scissorBox[3] = p.ScissorBoxes[0].w();
             key.extentX = extent.x();
             key.extentY = extent.y();
             key.preTransform = static_cast<Uint32>(preTransform);
@@ -5759,7 +5850,7 @@ void main() {
             const Bool idxUploadOk = UploadAndBindIndexBuffer(frame, vao, pIndexBufferView);
             MOBILEGL_ASSERT(idxUploadOk, "SetupDraw fast path: failed to upload index buffer");
         }
-        ApplyDynamicDrawStateTail(frame, snap.renderPassExtent, snap.drawFboIsDefault);
+        ApplyDynamicDrawStateTail(frame, snap.renderPassExtent, snap.drawFboIsDefault, snap.viewportCount);
         return true;
     }
 
@@ -6199,7 +6290,8 @@ void main() {
             MOBILEGL_ASSERT(idxUploadOk, "SetupDraw skipped: failed to upload index buffer");
         }
 
-        ApplyDynamicDrawStateTail(frame, renderPassEntry->extent, drawFbo->IsDefaultFramebuffer());
+        ApplyDynamicDrawStateTail(frame, renderPassEntry->extent, drawFbo->IsDefaultFramebuffer(),
+                                  ResolveDrawViewportCount(programObj.writesViewportIndexBuiltin));
 
         // Snapshot the fully resolved configuration for the consecutive-draw
         // fast path (see TrySetupDrawFastPath).
@@ -6218,6 +6310,7 @@ void main() {
                 snap.drawFbo = drawFbo.get();
                 snap.fboVersion = drawFbo->GetObjectVersion();
                 snap.drawFboIsDefault = drawFboIsDefault;
+                snap.viewportCount = ResolveDrawViewportCount(programObj.writesViewportIndexBuiltin);
                 snap.renderStateVersion = MG_State::pGLContext->GetPipelineStateVersion();
                 snap.bindGeneration = MG_State::pGLContext->GetTextureBindGeneration();
                 snap.baseTransformFlags = GetBaseTransformFlagsRaw(drawFboIsDefault);
@@ -12214,6 +12307,28 @@ void main() {
         m_fillModeNonSolidFeatureEnabled = deviceFeatures.fillModeNonSolid == VK_TRUE;
         deviceFeatures.dualSrcBlend = supportedDeviceFeatures.dualSrcBlend;
         m_dualSrcBlendFeatureEnabled = deviceFeatures.dualSrcBlend == VK_TRUE;
+        // ARB_viewport_array rasterization. Without multiViewport a pipeline may declare exactly
+        // one viewport (VUID-VkPipelineViewportStateCreateInfo-viewportCount-01216), so a shader's
+        // gl_ViewportIndex can only ever select viewport 0 and the other fifteen rectangles are
+        // state with nowhere to go. The GL state stays 16 wide either way - GL 4.3 core requires
+        // MAX_VIEWPORTS >= 16 and that is a frontend promise, not a device one; this gate decides
+        // only whether a DRAW can rasterize into more than one of them.
+        deviceFeatures.multiViewport = supportedDeviceFeatures.multiViewport;
+        m_multiViewportFeatureEnabled = deviceFeatures.multiViewport == VK_TRUE;
+        m_maxRasterizableViewports =
+            m_multiViewportFeatureEnabled
+                ? std::min<Uint32>(RenderStateParameters::MAX_VIEWPORTS,
+                                   std::max<Uint32>(m_physicalDevice.properties.limits.maxViewports, 1u))
+                : 1u;
+        MGLOG_I("Vulkan: multiViewport %s; rasterizable viewports=%u (device limit %u, GL state width %u)",
+                m_multiViewportFeatureEnabled ? "enabled" : "UNAVAILABLE", m_maxRasterizableViewports,
+                m_physicalDevice.properties.limits.maxViewports,
+                static_cast<Uint32>(RenderStateParameters::MAX_VIEWPORTS));
+        if (!m_multiViewportFeatureEnabled) {
+            MGLOG_W("Vulkan: the device does not support the multiViewport feature; gl_ViewportIndex will always "
+                    "select viewport 0 and per-viewport scissor/depth-range state past index 0 cannot be "
+                    "rasterized (the state itself is still stored and queryable)");
+        }
         deviceFeatures.logicOp = supportedDeviceFeatures.logicOp;
         deviceFeatures.shaderClipDistance = supportedDeviceFeatures.shaderClipDistance;
         deviceFeatures.shaderCullDistance = supportedDeviceFeatures.shaderCullDistance;
