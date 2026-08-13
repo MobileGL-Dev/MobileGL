@@ -471,9 +471,55 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         blend.attachmentCount = payload.colorAttachmentCount;
         blend.pAttachments = colorAttachments.empty() ? nullptr : colorAttachments.data();
 
+        // A GL program may have a tessellation EVALUATION stage and no CONTROL stage: GL 4.6 core
+        // 11.2.2 gives it a fixed-function pass-through instead. Vulkan has no such stage, and
+        // VUID-VkGraphicsPipelineCreateInfo-pStages-00730 requires both tessellation stages or
+        // neither - so the renderer synthesizes the pass-through GL describes and hands it in
+        // here (see ProgramFactory::GetOrCreatePassthroughTessControlStage).
+        //
+        // The refusal below is what keeps the half-tessellated shape away from the driver when
+        // there is no synthesized stage to add - because Mali does not reject it, it dereferences
+        // null INSIDE vkCreateGraphicsPipelines and takes the process down (SIGSEGV, fault addr
+        // 0x34, on Mali-G715/r54p2 and Mali-G925/r49p1 alike; Adreno and lavapipe merely render
+        // wrong). Returning VK_NULL_HANDLE routes this through the same path a driver rejection
+        // takes: the draw is skipped, nothing is memoised, and the process survives.
+        const Vector<VkPipelineShaderStageCreateInfo>* effectiveStages = payload.stages;
+        Vector<VkPipelineShaderStageCreateInfo> stagesWithPassthrough;
+        if (payload.passthroughTessControlStage.module != VK_NULL_HANDLE) {
+            stagesWithPassthrough = *payload.stages;
+            stagesWithPassthrough.push_back(payload.passthroughTessControlStage);
+            effectiveStages = &stagesWithPassthrough;
+        }
+        {
+            VkShaderStageFlags stagesPresent = 0;
+            for (const auto& stageInfo : *effectiveStages) {
+                stagesPresent |= stageInfo.stage;
+            }
+            const Bool hasTessControl = (stagesPresent & VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT) != 0;
+            const Bool hasTessEval = (stagesPresent & VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT) != 0;
+            if (hasTessControl != hasTessEval) {
+                // MGLOG_I, and latched: _E is compiled out of the INFO-level builds CTS and the
+                // shipping app run, which is exactly where this refusal is the only explanation
+                // for a missing draw. Latched because failures are deliberately not memoised - a
+                // program in this state re-enters here once per draw, every frame.
+                static Bool s_warnedHalfTessellatedPipeline = false;
+                if (!s_warnedHalfTessellatedPipeline) {
+                    s_warnedHalfTessellatedPipeline = true;
+                    MGLOG_I("PipelineFactory::CreatePipeline: refusing a pipeline with %s tessellation stage and "
+                            "no %s stage (VUID-VkGraphicsPipelineCreateInfo-pStages-00730). programHash=0x%llx "
+                            "patchControlPoints=%u. Its draws are skipped; logged once.",
+                            hasTessEval ? "an evaluation" : "a control",
+                            hasTessEval ? "control" : "evaluation",
+                            static_cast<unsigned long long>(payload.programHash),
+                            payload.patchControlPoints);
+                }
+                return VK_NULL_HANDLE;
+            }
+        }
+
         VkGraphicsPipelineCreateInfo gpi{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
-        gpi.stageCount = static_cast<Uint32>(payload.stages->size());
-        gpi.pStages = payload.stages->data();
+        gpi.stageCount = static_cast<Uint32>(effectiveStages->size());
+        gpi.pStages = effectiveStages->data();
         gpi.pVertexInputState = payload.vertexInputState;
         gpi.pInputAssemblyState = &ia;
         gpi.pTessellationState =

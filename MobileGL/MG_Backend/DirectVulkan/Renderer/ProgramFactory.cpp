@@ -3190,6 +3190,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 #endif
         ReflectVertexInputs(shaders, moduleSpirvs, entry);
         ReflectFragmentOutputs(shaders, moduleSpirvs, entry);
+        ReflectPassthroughTessControlNeed(shaders, moduleSpirvs, entry);
         ReflectLayout(program, moduleSpirvs, entry);
         // A failed remap means the modules kept glslang's per-stage auto-mapped binding numbers -
         // no cross-stage unification, no set->0 normalisation - so the bindings this layout
@@ -3246,5 +3247,236 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 ++it;
             }
         }
+    }
+
+    ProgramFactory::~ProgramFactory() {
+        for (auto& entry : m_passthroughTessControlStages) {
+            if (entry.second.module != VK_NULL_HANDLE) {
+                vkDestroyShaderModule(m_device, entry.second.module, nullptr);
+            }
+        }
+    }
+
+    String ProgramFactory::BuildPassthroughTessControlSource(Uint32 patchVertices) {
+        // The stage GL 4.6 core 11.2.2 describes when a program has an evaluation shader and no
+        // control shader: "the input patch is passed through unmodified", the output patch has
+        // as many vertices as the input one (PATCH_VERTICES), and the levels come from the
+        // PATCH_DEFAULT_OUTER_LEVEL / PATCH_DEFAULT_INNER_LEVEL state.
+        //
+        // Those two levels default to 1.0 and are baked here as literals because
+        // glPatchParameterfv - their only setter - is not implemented in this frontend (it is a
+        // stub in MG_Impl/GLImpl/Exporting/Definitions.cpp). Implementing that entry point means
+        // making the levels a parameter of this source AND of the cache key in
+        // GetOrCreatePassthroughTessControlStage; the two must move together, so they are named
+        // together here.
+        //
+        // gl_out carries gl_Position and nothing else on purpose. The evaluation stage that
+        // reads it was linked against the VERTEX stage directly, so its input gl_PerVertex holds
+        // exactly the built-ins that stage used, and its user-defined inputs (if any) come
+        // straight off the vertex stage's outputs - which a control stage sitting in between
+        // would leave unwritten. ReflectPassthroughTessControlNeed refuses those programs rather
+        // than let this write a partial interface.
+        //
+        // All four outer levels and both inner levels are written unconditionally: writing a
+        // level the evaluation stage's domain does not use is legal and ignored, and it saves
+        // this from having to know the domain.
+        String source = "#version 450 core\n";
+        source += "layout(vertices = " + std::to_string(patchVertices) + ") out;\n";
+        // gl_in and gl_out are redeclared to the exact gl_PerVertex the FRONTEND's linked programs
+        // carry - gl_Position, gl_PointSize, gl_ClipDistance[1], in that order - because Vulkan
+        // matches built-in interface blocks by their whole shape, and the two obvious spellings
+        // are both wrong:
+        //   * narrowing the block to gl_Position alone makes the evaluation stage read a patch of
+        //     zeroes (degenerate triangles, nothing rasterized), and
+        //   * taking glslang's DEFAULT block for a standalone control stage yields FOUR members -
+        //     it appends gl_CullDistance - where a linked vertex+evaluation program has three.
+        // PassthroughTessControlTest.MatchesTheFrontendPerVertexBlock is the latch: it links a
+        // vertex+evaluation program through this same compiler and fails if the two shapes ever
+        // stop agreeing, rather than letting the mismatch show up as a black frame.
+        //
+        // Only gl_Position is written. gl_PointSize is declared but left alone deliberately:
+        // writing it from a tessellation stage requires the shaderTessellationAndGeometryPointSize
+        // feature, which this renderer does not enable, so a program whose evaluation stage reads
+        // gl_in[].gl_PointSize gets an undefined point size instead of the vertex stage's - a gap
+        // this trades for not making every tessellated pipeline depend on an optional feature.
+        source += "in gl_PerVertex {\n"
+                  "    vec4 gl_Position;\n"
+                  "    float gl_PointSize;\n"
+                  "    float gl_ClipDistance[1];\n"
+                  "} gl_in[gl_MaxPatchVertices];\n";
+        source += "out gl_PerVertex {\n"
+                  "    vec4 gl_Position;\n"
+                  "    float gl_PointSize;\n"
+                  "    float gl_ClipDistance[1];\n"
+                  "} gl_out[];\n";
+        source += "void main() {\n";
+        source += "    gl_out[gl_InvocationID].gl_Position = gl_in[gl_InvocationID].gl_Position;\n";
+        source += "    gl_TessLevelOuter[0] = 1.0;\n";
+        source += "    gl_TessLevelOuter[1] = 1.0;\n";
+        source += "    gl_TessLevelOuter[2] = 1.0;\n";
+        source += "    gl_TessLevelOuter[3] = 1.0;\n";
+        source += "    gl_TessLevelInner[0] = 1.0;\n";
+        source += "    gl_TessLevelInner[1] = 1.0;\n";
+        source += "}\n";
+        return source;
+    }
+
+    VkPipelineShaderStageCreateInfo ProgramFactory::GetOrCreatePassthroughTessControlStage(Uint32 patchVertices) {
+        // A cached VK_NULL_HANDLE is a remembered failure, not a miss: returning it keeps a
+        // generator that cannot compile from re-running glslang on every draw.
+        const auto cached = m_passthroughTessControlStages.find(patchVertices);
+        if (cached != m_passthroughTessControlStages.end()) {
+            return cached->second;
+        }
+
+        VkPipelineShaderStageCreateInfo stage{VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
+        stage.stage = VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT;
+        stage.module = VK_NULL_HANDLE;
+        stage.pName = "main";
+
+        using namespace MG_Util::ShaderTranspiler;
+        const String source = BuildPassthroughTessControlSource(patchVertices);
+        // Same compile configuration as every other stage of every other program: this runs on
+        // the GL thread (the draw path), so the live compile env is the right one, and flags=0
+        // is the Vulkan-targeting form (CompileForOpenGL is what the GLES backend adds).
+        const SharedPtr<const CompileEnv>& env = GetCurrentCompileEnv();
+        ShaderAttrib shaderAttrib{.shaderType = GL_TESS_CONTROL_SHADER,
+                                  .sourceStr = source,
+                                  .flags = 0,
+                                  .env = env.get()};
+        auto compiled = ShaderCompiler::CompileShader(shaderAttrib);
+        if (!compiled) {
+            MGLOG_I("ProgramFactory: could not compile the pass-through tessellation control stage for "
+                    "patchVertices=%u; a program with an evaluation stage and no control stage cannot draw. %s",
+                    patchVertices, compiled.error().log.c_str());
+            m_passthroughTessControlStages.emplace(patchVertices, stage);
+            return stage;
+        }
+
+        ProgramAttrib programAttrib{};
+        programAttrib.shaders.push_back(compiled.value());
+        auto linked = ShaderCompiler::LinkProgram(programAttrib);
+        if (!linked) {
+            MGLOG_I("ProgramFactory: could not link the pass-through tessellation control stage for "
+                    "patchVertices=%u. %s", patchVertices, linked.error().log.c_str());
+            m_passthroughTessControlStages.emplace(patchVertices, stage);
+            return stage;
+        }
+
+        ProgramBinaryAttrib binaryAttrib{.shaderTypes = {GL_TESS_CONTROL_SHADER}, .program = *linked.value()};
+        auto binary = ShaderCompiler::GetSpirvBinaryFromProgram(binaryAttrib);
+        if (!binary || binary.value().empty() || binary.value().front().empty()) {
+            MGLOG_I("ProgramFactory: could not generate SPIR-V for the pass-through tessellation control stage "
+                    "for patchVertices=%u", patchVertices);
+            m_passthroughTessControlStages.emplace(patchVertices, stage);
+            return stage;
+        }
+
+        const Vector<Uint>& spirv = binary.value().front();
+#if MOBILEGL_LOG_ACTIVE_LEVEL <= MOBILEGL_LOG_LEVEL_DEBUG
+        ValidateTransformedSpirv(spirv, ShaderStage::TessControl, 0);
+#else
+        if (MG_Util::ShaderTranspiler::ShaderCompiler::SpirvValidationEnabled()) {
+            ValidateTransformedSpirv(spirv, ShaderStage::TessControl, 0);
+        }
+#endif
+
+        VkShaderModuleCreateInfo smci{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
+        smci.codeSize = spirv.size() * sizeof(Uint);
+        smci.pCode = spirv.data();
+        VkShaderModule module = VK_NULL_HANDLE;
+        const VkResult result = vkCreateShaderModule(m_device, &smci, nullptr, &module);
+        if (result != VK_SUCCESS) {
+            MGLOG_I("ProgramFactory: vkCreateShaderModule failed (%d) for the pass-through tessellation control "
+                    "stage for patchVertices=%u", static_cast<Int>(result), patchVertices);
+            m_passthroughTessControlStages.emplace(patchVertices, stage);
+            return stage;
+        }
+
+        stage.module = module;
+        MGLOG_I("ProgramFactory: built the pass-through tessellation control stage for patchVertices=%u "
+                "(GL 4.6 11.2.2; Vulkan has no fixed-function equivalent)", patchVertices);
+        m_passthroughTessControlStages.emplace(patchVertices, stage);
+        return stage;
+    }
+
+    void ProgramFactory::ReflectPassthroughTessControlNeed(
+        const Vector<SharedPtr<MG_State::GLState::ShaderObject>>& shaders,
+        const Vector<Vector<Uint>>& spirv,
+        VkProgramObject& entry) const {
+        entry.needsPassthroughTessControl = false;
+        entry.passthroughTessControlEmulatable = false;
+
+        Bool hasTessEval = false;
+        Bool hasTessControl = false;
+        SizeT tessEvalModuleIndex = 0;
+        for (SizeT i = 0; i < shaders.size(); ++i) {
+            if (!shaders[i]) continue;
+            const auto stage = shaders[i]->GetShaderStage();
+            if (stage == ShaderStage::TessControl) hasTessControl = true;
+            if (stage == ShaderStage::TessEval) {
+                hasTessEval = true;
+                tessEvalModuleIndex = i;
+            }
+        }
+        if (!hasTessEval || hasTessControl) return;
+
+        entry.needsPassthroughTessControl = true;
+
+        if (tessEvalModuleIndex >= spirv.size() || spirv[tessEvalModuleIndex].empty()) return;
+        const auto& module = spirv[tessEvalModuleIndex];
+
+        SpvReflectShaderModule reflectModule{};
+        const SpvReflectResult createResult =
+            spvReflectCreateShaderModule(module.size() * sizeof(Uint), module.data(), &reflectModule);
+        if (createResult != SPV_REFLECT_RESULT_SUCCESS) {
+            MGLOG_I("ProgramFactory::ReflectPassthroughTessControlNeed: reflection failed (result=%d); the "
+                    "evaluation stage's inputs are unknown, so the pass-through is not offered",
+                    static_cast<Int>(createResult));
+            return;
+        }
+
+        uint32_t inputCount = 0;
+        SpvReflectResult reflectResult = spvReflectEnumerateInputVariables(&reflectModule, &inputCount, nullptr);
+        Vector<SpvReflectInterfaceVariable*> inputs(inputCount);
+        if (reflectResult == SPV_REFLECT_RESULT_SUCCESS && inputCount > 0) {
+            reflectResult = spvReflectEnumerateInputVariables(&reflectModule, &inputCount, inputs.data());
+        }
+        if (reflectResult != SPV_REFLECT_RESULT_SUCCESS) {
+            spvReflectDestroyShaderModule(&reflectModule);
+            return;
+        }
+
+        // The question is only ever "does this stage read anything a control stage would have to
+        // forward", and the answer is: does it have a LOCATION. A located input is a user-defined
+        // varying (or a per-patch input), which the vertex stage writes today and would stop
+        // reaching once a control stage sits in between - the pass-through carries gl_Position and
+        // nothing else, so such a program is declined instead of being handed undefined values.
+        // Everything without a location is a built-in: gl_in, gl_TessCoord, gl_PatchVerticesIn,
+        // gl_PrimitiveID, gl_TessLevel*, all either forwarded or generated for the evaluation
+        // stage by the tessellator itself.
+        //
+        // This deliberately does NOT judge on SpvReflectInterfaceVariable::built_in. gl_in is an
+        // array of interface blocks, and for those SPIRV-Reflect reports built_in == -1 on the
+        // block AND leaves every member's built_in at 0 - which is SpvBuiltInPosition, so a
+        // member walk reads "Position, Position, Position" for a {Position, PointSize,
+        // ClipDistance} block and would accept anything on the strength of parse garbage. The
+        // location, by contrast, is decorated on the OpVariable and is what SPIRV-Reflect reads
+        // straight through.
+        constexpr Uint32 kNoLocation = 0xFFFFFFFFu;
+        Bool emulatable = true;
+        for (auto* input : inputs) {
+            if (input == nullptr) continue;
+            if (input->location == kNoLocation) continue;
+            MGLOG_I("ProgramFactory: a tessellation evaluation stage with no control stage reads the "
+                    "user-defined input '%s' at location=%u; a synthesized control stage cannot forward it, so "
+                    "this program's draws are declined rather than fed an undefined varying",
+                    input->name != nullptr ? input->name : "<null>", input->location);
+            emulatable = false;
+            break;
+        }
+
+        spvReflectDestroyShaderModule(&reflectModule);
+        entry.passthroughTessControlEmulatable = emulatable;
     }
 } // namespace MobileGL::MG_Backend::DirectVulkan

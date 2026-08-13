@@ -4883,6 +4883,26 @@ void main() {
             .vertexInputState = pipelineVertexInputState,
             .stageSpirvDigests = &programObj.stageSpirvDigests
         };
+        // A program with a tessellation evaluation stage and no control stage relies on GL's
+        // fixed-function pass-through (GL 4.6 core 11.2.2), which Vulkan does not have. Build the
+        // stage GL describes for THIS draw's patch size - PATCH_VERTICES is draw state, not link
+        // state, so it is only knowable here - and hand it to the pipeline. Where the
+        // pass-through cannot stand in for what the evaluation stage actually reads, nothing is
+        // attached and CreatePipeline refuses the pipeline, which skips the draw.
+        //
+        // Gated on the PATCH topology as well, and that gate is load-bearing rather than an
+        // optimisation: patchControlPoints is only meaningful for a patch draw, and a pipeline
+        // that carries tessellation stages while its topology is anything else violates
+        // VUID-VkGraphicsPipelineCreateInfo-topology-00737 - the same class of invalid input as
+        // the missing control stage, on the same driver. Such a draw is illegal in GL too (a
+        // program with a tessellation stage may only be drawn with GL_PATCHES), so nothing legal
+        // loses its pass-through here; what it does lose is the pipeline, because the refusal
+        // below then sees an evaluation stage with no control stage and declines.
+        if (programObj.needsPassthroughTessControl && programObj.passthroughTessControlEmulatable &&
+            vkTopology == VK_PRIMITIVE_TOPOLOGY_PATCH_LIST) {
+            payload.passthroughTessControlStage =
+                m_programFactory->GetOrCreatePassthroughTessControlStage(payload.patchControlPoints);
+        }
         if (!payload.stencilTestEnable) {
             payload.frontStencilFailOp = VK_STENCIL_OP_KEEP;
             payload.frontStencilPassOp = VK_STENCIL_OP_KEEP;
