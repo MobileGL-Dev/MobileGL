@@ -446,9 +446,15 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                         const IntVec2& framebufferExtent,
                                         VkSurfaceTransformFlagBitsKHR preTransform,
                                         Bool isDefaultFramebuffer) {
-        // Rounded to integers on purpose: MobileGL advertises GL_VIEWPORT_SUBPIXEL_BITS = 0, so
-        // the fractional rectangle glViewportIndexedf can store is exact as STATE and snapped
-        // when it rasterizes.
+        // Snapped to integers. The viewport is float STATE (glViewportIndexedf may set a
+        // fractional origin, and GetFloati_v hands it back verbatim), but what rasterizes here is
+        // the rounded rectangle - a deliberate, documented infidelity rather than a spec claim:
+        // MobileGL passes the driver's VIEWPORT_SUBPIXEL_BITS through, so it does advertise
+        // subpixel viewport precision it does not deliver. Nothing in KHR-GL43.viewport_array or
+        // in Minecraft sets a fractional viewport (the conformance checks are all on the state
+        // round trip), which is why the honest-but-lossy path was kept over widening every
+        // default-framebuffer Y-flip/pre-transform helper to floats. See the KNOWN INFIDELITY
+        // note in MG_IntegrationTest/Scenarios/AdvertisedLimitsScenario.cpp.
         const FloatVec4& stored = MG_State::pGLContext->GetViewportIndexed(index);
         const IntVec4 viewportState(static_cast<Int>(std::lround(stored.x())),
                                     static_cast<Int>(std::lround(stored.y())),

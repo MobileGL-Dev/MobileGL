@@ -232,8 +232,9 @@ namespace MobileGL {
         // (KHR-GL43.viewport_array.viewport_api compares with ==, no tolerance). glViewport's
         // integers are simply one way to write it. Index 0 is what a program that never assigns
         // gl_ViewportIndex rasterizes against, and what the classic glViewport /
-        // glGetIntegerv(GL_VIEWPORT) pair addresses; both backends consume index 0 only, rounded
-        // back to integers (GL_VIEWPORT_SUBPIXEL_BITS is 0, so rounding is the honest answer).
+        // glGetIntegerv(GL_VIEWPORT) pair addresses. Both backends rasterize the rectangle
+        // rounded back to integers; the STATE stays exact, which is the half the conformance
+        // suite checks (see the KNOWN INFIDELITY note in AdvertisedLimitsScenario.cpp).
         Array<FloatVec4, MAX_VIEWPORTS> Viewports{}; // x, y, width, height
         Float LineWidth = 1.0f;
         Float PointSize = 1.0f;

@@ -1614,7 +1614,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 g_syncedBackendViewport = backendViewport;
             }
 
-            // All 12 capability bools live after LogicOp in the struct, i.e. in the tail span.
+            // Every capability bool (and the scissor-test mask below) lives after LogicOp in the
+            // struct, i.e. in the tail span.
             if (tailSpanDirty) {
 #define SYNC_CAPABILITY(cap_mg, cap_gl)                                                                                \
     if (forceFullPush || parameters.cap_mg##Enabled != g_syncedRenderStateParameters.cap_mg##Enabled) {                                 \

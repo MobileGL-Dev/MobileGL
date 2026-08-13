@@ -199,5 +199,61 @@ namespace MGITest {
                    "derived component limits are computed in";
         }
 
+        // ARB_viewport_array's own limits. They are advertised from three different places -
+        // GL_MAX_VIEWPORTS from the frontend's indexed state width, the bounds range and the
+        // subpixel bits from the backend caps table - and each backend fills that table from a
+        // different source, so all three are checked on both lanes.
+        //
+        // GL_VIEWPORT_BOUNDS_RANGE is the one that shipped wrong: GLES has no such query, the
+        // DirectGLES loader's glGetFloatv(GL_VIEWPORT_BOUNDS_RANGE) therefore raised
+        // GL_INVALID_ENUM and left the probe's zero-initialized array in place, and MobileGL
+        // advertised [0, 0] - a range that admits no viewport origin at all, and the check that
+        // kept KHR-GL43.viewport_array.queries red on Espryt after the indexed-state work.
+        TEST_F(AdvertisedLimitsScenario, ViewportArrayLimitsMeetTheirGL43Floors) {
+            GLint maxViewports = -1;
+            glGetIntegerv(GL_MAX_VIEWPORTS, &maxViewports);
+            ASSERT_EQ(FirstGLError(), GLenum(GL_NO_ERROR));
+            EXPECT_GE(maxViewports, 16) << "GL 4.3 core table 23.53 sets the MAX_VIEWPORTS minimum at 16";
+            EXPECT_LE(maxViewports, 256) << "one viewport rectangle of indexed state is allocated per advertised "
+                                            "viewport, and the CTS sizes its arrays off this number";
+
+            GLfloat boundsRange[2] = {1.0f, -1.0f};
+            glGetFloatv(GL_VIEWPORT_BOUNDS_RANGE, boundsRange);
+            ASSERT_EQ(FirstGLError(), GLenum(GL_NO_ERROR));
+            EXPECT_LE(boundsRange[0], -32768.0f)
+                << "GL 4.6 core table 23.60 sets the VIEWPORT_BOUNDS_RANGE minimum at [-32768, 32767]; got ["
+                << boundsRange[0] << ", " << boundsRange[1] << "]";
+            EXPECT_GE(boundsRange[1], 32767.0f)
+                << "GL 4.6 core table 23.60 sets the VIEWPORT_BOUNDS_RANGE minimum at [-32768, 32767]; got ["
+                << boundsRange[0] << ", " << boundsRange[1] << "]";
+
+            // KNOWN INFIDELITY, pinned here rather than hidden. MobileGL reports the driver's own
+            // VIEWPORT_SUBPIXEL_BITS (4 on llvmpipe, i.e. 1/16-pixel viewport precision), but the
+            // float viewport rectangle glViewportIndexedf stores is snapped to integers on its
+            // way to both backends (ComputeGLViewport, DirectGLES SyncRenderState). The STATE
+            // round trip is exact - which is all KHR-GL43.viewport_array.viewport_api checks, and
+            // all this cluster set out to fix - so the gap is in rasterization only: a fractional
+            // viewport origin rasterizes as if it had been rounded. Nothing in the suite or in
+            // Minecraft sets one. Only the spec floor is asserted; tightening this to EQ(0) would
+            // mean advertising no subpixel precision at all, which is a separate decision about a
+            // limit MobileGL currently passes through from the driver.
+            GLint subpixelBits = -1;
+            glGetIntegerv(GL_VIEWPORT_SUBPIXEL_BITS, &subpixelBits);
+            ASSERT_EQ(FirstGLError(), GLenum(GL_NO_ERROR));
+            EXPECT_GE(subpixelBits, 0) << "GL 4.6 core table 23.60: VIEWPORT_SUBPIXEL_BITS has a minimum of 0, and "
+                                          "a negative value is what a sign-flipped uint32 looks like";
+
+            GLint viewportDims[2] = {-1, -1};
+            glGetIntegerv(GL_MAX_VIEWPORT_DIMS, viewportDims);
+            ASSERT_EQ(FirstGLError(), GLenum(GL_NO_ERROR));
+            GLint maxRenderbufferSize = -1;
+            glGetIntegerv(GL_MAX_RENDERBUFFER_SIZE, &maxRenderbufferSize);
+            ASSERT_EQ(FirstGLError(), GLenum(GL_NO_ERROR));
+            // GL 4.6 core 13.6.1: MAX_VIEWPORT_DIMS must be at least as large as the largest
+            // renderable surface, or a full-size framebuffer could not be fully viewported.
+            EXPECT_GE(viewportDims[0], maxRenderbufferSize);
+            EXPECT_GE(viewportDims[1], maxRenderbufferSize);
+        }
+
     } // namespace
 } // namespace MGITest
