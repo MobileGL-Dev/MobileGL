@@ -79,6 +79,7 @@ add_executable(MobileGLIntegrationTest
     Scenarios/XfbCaptureBufferReuseScenario.cpp
     Scenarios/VertexArrayEnableDisableScenario.cpp
     Scenarios/CopyImageLevelRangeScenario.cpp
+    Scenarios/CopyImageLayeredScenario.cpp
 )
 
 target_include_directories(MobileGLIntegrationTest PRIVATE
