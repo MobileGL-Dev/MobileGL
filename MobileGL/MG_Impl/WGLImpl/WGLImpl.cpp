@@ -215,7 +215,7 @@ namespace MobileGL::MG_Impl::WGLImpl {
             Uint32 width = 0;
             Uint32 height = 0;
             if (!QueryClientSize(hwnd, width, height)) {
-                MGLOG_E("wgl: GetClientRect failed for HWND %p", hwnd);
+                MGLOG_E_ONCE("wgl: GetClientRect failed for HWND %p", hwnd);
                 return nullptr;
             }
 
@@ -227,7 +227,7 @@ namespace MobileGL::MG_Impl::WGLImpl {
             EGLSurface surface =
                 EGLImpl::CreatePlatformWindowSurface(context.Display, context.Config, hwnd, attribs);
             if (surface == EGL_NO_SURFACE) {
-                MGLOG_E("wgl: failed to create window surface for HWND %p (%ux%u)", hwnd, width, height);
+                MGLOG_E_ONCE("wgl: failed to create window surface for HWND %p (%ux%u)", hwnd, width, height);
                 return nullptr;
             }
 
@@ -244,7 +244,7 @@ namespace MobileGL::MG_Impl::WGLImpl {
             const std::lock_guard<std::recursive_mutex> lock(RegistryMutex());
             EGLDisplay display = EnsureDisplay();
             if (display == EGL_NO_DISPLAY) {
-                MGLOG_E("wgl: no EGL display");
+                MGLOG_E_ONCE("wgl: no EGL display");
                 return nullptr;
             }
             EGLImpl::BindAPI(EGL_OPENGL_API);
@@ -275,13 +275,13 @@ namespace MobileGL::MG_Impl::WGLImpl {
             EGLConfig config = nullptr;
             EGLint configCount = 0;
             if (!EGLImpl::ChooseConfig(display, configAttribs, &config, 1, &configCount) || configCount <= 0) {
-                MGLOG_E("wgl: eglChooseConfig failed");
+                MGLOG_E_ONCE("wgl: eglChooseConfig failed");
                 return nullptr;
             }
 
             EGLContext eglContext = EGLImpl::CreateContext(display, config, shareContext, contextAttribs);
             if (eglContext == EGL_NO_CONTEXT) {
-                MGLOG_E("wgl: eglCreateContext failed");
+                MGLOG_E_ONCE("wgl: eglCreateContext failed");
                 return nullptr;
             }
 
@@ -612,7 +612,7 @@ namespace MobileGL::MG_Impl::WGLImpl {
         auto& surfaces = WindowSurfaces();
         auto it = surfaces.find(hwnd);
         if (it == surfaces.end()) {
-            MGLOG_W("wglSwapBuffers: no surface for HWND %p", hwnd);
+            MGLOG_W_ONCE("wglSwapBuffers: no surface for HWND %p", hwnd);
             return FALSE;
         }
         SyncSurfaceSize(hwnd, it->second);
@@ -685,7 +685,7 @@ namespace MobileGL::MG_Impl::WGLImpl {
         }
 
         if (!EGLImpl::MakeCurrent(object->Display, surface->Surface, surface->Surface, object->Context)) {
-            MGLOG_E("wglMakeCurrent: eglMakeCurrent failed (hdc=%p, hglrc=%p)", hdc, hglrc);
+            MGLOG_E_ONCE("wglMakeCurrent: eglMakeCurrent failed (hdc=%p, hglrc=%p)", hdc, hglrc);
             return FALSE;
         }
         t_current = {hdc, hglrc};

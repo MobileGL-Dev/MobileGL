@@ -149,7 +149,7 @@ namespace MobileGL::MG_Impl::GLXImpl {
                     fns->Sync = reinterpret_cast<decltype(fns->Sync)>(dlsym(fns->Library, "XSync"));
                 }
                 if (!fns->Valid()) {
-                    MGLOG_E("glx: failed to load libX11 entry points");
+                    MGLOG_E_ONCE("glx: failed to load libX11 entry points");
                 }
                 return fns;
             }();
@@ -314,7 +314,7 @@ namespace MobileGL::MG_Impl::GLXImpl {
             Uint32 width = 0;
             Uint32 height = 0;
             if (!QueryDrawableSize(dpy, drawable, width, height)) {
-                MGLOG_E("glx: XGetGeometry failed for drawable 0x%lx", drawable);
+                MGLOG_E_ONCE("glx: XGetGeometry failed for drawable 0x%lx", drawable);
                 return nullptr;
             }
 
@@ -326,7 +326,7 @@ namespace MobileGL::MG_Impl::GLXImpl {
             EGLSurface surface = EGLImpl::CreatePlatformWindowSurface(
                 context.Display, context.Config, reinterpret_cast<void*>(drawable), attribs);
             if (surface == EGL_NO_SURFACE) {
-                MGLOG_E("glx: failed to create window surface for drawable 0x%lx (%ux%u)", drawable,
+                MGLOG_E_ONCE("glx: failed to create window surface for drawable 0x%lx (%ux%u)", drawable,
                         width, height);
                 return nullptr;
             }
@@ -347,7 +347,7 @@ namespace MobileGL::MG_Impl::GLXImpl {
             const std::lock_guard<std::recursive_mutex> lock(RegistryMutex());
             EGLDisplay display = EnsureDisplay();
             if (display == EGL_NO_DISPLAY) {
-                MGLOG_E("glx: no EGL display");
+                MGLOG_E_ONCE("glx: no EGL display");
                 return nullptr;
             }
             EGLImpl::BindAPI(EGL_OPENGL_API);
@@ -376,13 +376,13 @@ namespace MobileGL::MG_Impl::GLXImpl {
             EGLint configCount = 0;
             if (!EGLImpl::ChooseConfig(display, configAttribs, &config, 1, &configCount) ||
                 configCount <= 0) {
-                MGLOG_E("glx: eglChooseConfig failed");
+                MGLOG_E_ONCE("glx: eglChooseConfig failed");
                 return nullptr;
             }
 
             EGLContext eglContext = EGLImpl::CreateContext(display, config, shareContext, contextAttribs);
             if (eglContext == EGL_NO_CONTEXT) {
-                MGLOG_E("glx: eglCreateContext failed");
+                MGLOG_E_ONCE("glx: eglCreateContext failed");
                 return nullptr;
             }
 
@@ -931,7 +931,7 @@ namespace MobileGL::MG_Impl::GLXImpl {
 
         if (!EGLImpl::MakeCurrent(object->Display, surface->Surface, surface->Surface,
                                   object->Context)) {
-            MGLOG_E("glx: eglMakeCurrent failed (drawable=0x%lx, ctx=%p)", drawable, context);
+            MGLOG_E_ONCE("glx: eglMakeCurrent failed (drawable=0x%lx, ctx=%p)", drawable, context);
             return 0;
         }
         t_current = {dpy, drawable, drawable, context};
@@ -943,7 +943,7 @@ namespace MobileGL::MG_Impl::GLXImpl {
         if (context && draw != read) {
             // MobileGL's backends reject split draw/read surfaces; bind the draw
             // drawable for both, which is what every real caller here needs.
-            MGLOG_W("glx: glXMakeContextCurrent draw 0x%lx != read 0x%lx, using draw for both", draw,
+            MGLOG_W_ONCE("glx: glXMakeContextCurrent draw 0x%lx != read 0x%lx, using draw for both", draw,
                     read);
         }
         const int result = MakeCurrent(dpy, draw, context);
@@ -958,7 +958,7 @@ namespace MobileGL::MG_Impl::GLXImpl {
         auto& surfaces = DrawableSurfaces();
         auto it = surfaces.find(drawable);
         if (it == surfaces.end()) {
-            MGLOG_W("glx: glXSwapBuffers with no surface for drawable 0x%lx", drawable);
+            MGLOG_W_ONCE("glx: glXSwapBuffers with no surface for drawable 0x%lx", drawable);
             return;
         }
         SyncSurfaceSize(dpy, drawable, it->second);

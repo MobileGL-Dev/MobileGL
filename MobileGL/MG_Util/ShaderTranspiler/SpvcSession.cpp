@@ -95,7 +95,7 @@ namespace MobileGL {
                 if (member.array.dims_count > 1) {
                     // Arrays of arrays of structs cannot be declared in the GL 3.3-era GLSL
                     // MobileGL ingests; record the base so at least element 0 resolves.
-                    MGLOG_W("FlattenGlobalUboMember: multi-dimensional struct array '%s' is not supported, "
+                    MGLOG_W_ONCE("FlattenGlobalUboMember: multi-dimensional struct array '%s' is not supported, "
                             "flattening element 0 only",
                             name.c_str());
                 }

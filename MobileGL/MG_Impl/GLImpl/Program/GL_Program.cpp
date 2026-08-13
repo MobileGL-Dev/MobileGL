@@ -908,7 +908,7 @@ namespace MobileGL::MG_Impl::GLImpl {
             const SizeT span = UniformStorageSpanInBytes(ttype, size);
             if (pUBO == nullptr || offset == MG_State::GLState::ProgramObject::kInvalidUniformOffset ||
                 offset + span > programObject->GetUBOSize()) {
-                MGLOG_E("%s: uniform at program %u location %d has no backing storage; returning nothing", __func__,
+                MGLOG_E_ONCE("%s: uniform at program %u location %d has no backing storage; returning nothing", __func__,
                         program, location);
                 return;
             }
@@ -962,7 +962,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         const SizeT span = UniformStorageSpanInBytes(ttype, size);
         if (pUBO == nullptr || offset == MG_State::GLState::ProgramObject::kInvalidUniformOffset ||
             offset + span > programObject->GetUBOSize()) {
-            MGLOG_E("%s: uniform at program %u location %d has no backing storage; returning nothing", __func__,
+            MGLOG_E_ONCE("%s: uniform at program %u location %d has no backing storage; returning nothing", __func__,
                     program, location);
             return;
         }
@@ -1062,7 +1062,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         if (!initialized) {
             const auto& activeBackendObject = MG_Backend::pActiveBackendObject;
             if (!activeBackendObject) {
-                MGLOG_E("activeBackendObject is not initialized!");
+                MGLOG_E_ONCE("activeBackendObject is not initialized!");
                 return;
             }
             const auto& rendererInfo = activeBackendObject->GetRendererInfo();
@@ -1152,7 +1152,7 @@ namespace MobileGL::MG_Impl::GLImpl {
             SizeT writeSize = ItemCount * sizeof(T);
             if (size < writeSize) {
                 // Metadata bug: degrade to a clamped copy instead of killing the process.
-                MGLOG_E("%s: uniform size mismatch at program %u location %u: expected at least %zu bytes, got %zu "
+                MGLOG_E_ONCE("%s: uniform size mismatch at program %u location %u: expected at least %zu bytes, got %zu "
                         "bytes; clamping",
                         __func__, programObject.GetExternalIndex(), location, ItemCount * sizeof(T), size);
                 writeSize = size;
@@ -1173,7 +1173,7 @@ namespace MobileGL::MG_Impl::GLImpl {
                 offset + byteOffsetInsideUniform + writeSize > uboSize) {
                 // Should not happen: linking gives every settable uniform backing
                 // storage. Log and drop the write instead of faulting.
-                MGLOG_E("%s: uniform at program %u location %u has no backing storage (ubo=%p offset=%u size=%zu "
+                MGLOG_E_ONCE("%s: uniform at program %u location %u has no backing storage (ubo=%p offset=%u size=%zu "
                         "uboSize=%zu); dropping write",
                         __func__, programObject.GetExternalIndex(), location, static_cast<void*>(pUBO), offset,
                         writeSize, uboSize);
@@ -1807,7 +1807,7 @@ namespace MobileGL::MG_Impl::GLImpl {
             break;
         }
         default:
-            MGLOG_E("%s: unknown pname = %p %s", __func__, pname, MG_Util::ConvertGLEnumToString(pname).c_str());
+            MGLOG_D("%s: unknown pname = %p %s", __func__, pname, MG_Util::ConvertGLEnumToString(pname).c_str());
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidEnum,
                 MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,

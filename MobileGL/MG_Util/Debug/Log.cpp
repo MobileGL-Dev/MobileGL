@@ -115,7 +115,13 @@ namespace MobileGL {
 #endif
 
 #if MOBILEGL_LOG_ENABLE_ANDROID && defined(__ANDROID__)
-            __android_log_print(androidLogLevel, "MobileGL", "%s", out.c_str());
+            // Without the trailing newline that the file sink needs: logcat terminates
+            // records itself, so handing it an already-newline-terminated string made
+            // every MobileGL log occupy TWO logcat records, the second one empty. That
+            // halved the useful depth of every `adb logcat -t N` window the CI
+            // diagnostics read (android-plugin/trace-replay-ci.sh).
+            __android_log_print(androidLogLevel, "MobileGL", "%.*s", static_cast<int>(out.size() - 1),
+                                out.c_str());
 #endif
 
             WriteToFile(out.c_str());

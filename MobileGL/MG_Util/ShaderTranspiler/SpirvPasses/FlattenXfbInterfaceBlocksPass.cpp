@@ -203,7 +203,7 @@ namespace MobileGL {
                     static_cast<spv::ExecutionModel>(entryPoint->GetSingleWordInOperand(0));
                 if (executionModel == spv::ExecutionModel::Geometry ||
                     executionModel == spv::ExecutionModel::TessellationControl) {
-                    MGLOG_I("FlattenXfbInterfaceBlocksPass: execution model %u publishes outputs outside "
+                    MGLOG_D("FlattenXfbInterfaceBlocksPass: execution model %u publishes outputs outside "
                             "the entry point's return; leaving its blocks declared as blocks",
                             static_cast<Uint32>(executionModel));
                     return Status::SuccessWithoutChange;
@@ -302,7 +302,7 @@ namespace MobileGL {
                         target.members.push_back(member);
                     }
                     if (!usable || target.members.empty()) {
-                        MGLOG_I("FlattenXfbInterfaceBlocksPass: block '%s' has a member this pass cannot "
+                        MGLOG_D("FlattenXfbInterfaceBlocksPass: block '%s' has a member this pass cannot "
                                 "place; leaving it declared as a block",
                                 blockName.c_str());
                         continue;
@@ -370,7 +370,7 @@ namespace MobileGL {
                                     continue;
                                 }
                                 if (derivedPointers.count(operand.words[0]) == 0) continue;
-                                MGLOG_I("FlattenXfbInterfaceBlocksPass: interface block %%%u reaches a "
+                                MGLOG_D("FlattenXfbInterfaceBlocksPass: interface block %%%u reaches a "
                                         "SPIR-V opcode %u that this pass cannot follow; leaving it "
                                         "declared as a block",
                                         operand.words[0], static_cast<Uint32>(opcode));

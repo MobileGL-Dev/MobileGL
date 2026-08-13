@@ -25,12 +25,12 @@
 #define DECLARE_GL_FUNCTION_STUB_HEAD(type, name, ...) MOBILEGL_GL_API type gl##name(__VA_ARGS__) {
 
 #define DECLARE_GL_FUNCTION_STUB_END(type, name, ...)                                                                  \
-    MGLOG_W("Stub function: %s(...)", __FUNCTION__);                                                                   \
+    MGLOG_W_ONCE("Stub function: %s(...)", __FUNCTION__);                                                                   \
     return (type)1;                                                                                                    \
     }
 
 #define DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(type, name, ...)                                                        \
-    MGLOG_W("Stub function: %s(...)", __FUNCTION__);                                                                   \
+    MGLOG_W_ONCE("Stub function: %s(...)", __FUNCTION__);                                                                   \
     }
 
 #define DECLARE_GL_FUNCTION_HEAD(type, name, ...) MOBILEGL_GL_API type gl##name(__VA_ARGS__) {
@@ -2585,7 +2585,7 @@ DECLARE_GL_FUNCTION_STUB_HEAD(void, BindTransformFeedbackNV, GLenum target, GLui
 DECLARE_GL_FUNCTION_STUB_HEAD(void, DeleteTransformFeedbacksNV, GLsizei n, const GLuint* ids) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, DeleteTransformFeedbacksNV, n, ids)
 DECLARE_GL_FUNCTION_STUB_HEAD(void, GenTransformFeedbacksNV, GLsizei n, GLuint* ids) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, GenTransformFeedbacksNV, n, ids)
 MOBILEGL_GL_API GLboolean glIsTransformFeedbackNV(GLuint id) {
-    MGLOG_W("Stub function: %s(...)", __FUNCTION__);
+    MGLOG_W_ONCE("Stub function: %s(...)", __FUNCTION__);
     return GL_FALSE;
 }
 DECLARE_GL_FUNCTION_STUB_HEAD(void, PauseTransformFeedbackNV, void) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, PauseTransformFeedbackNV, )
@@ -3181,5 +3181,5 @@ MOBILEGL_GL_API void glVertexAttribDivisorARB(GLuint index, GLuint divisor) {
 }
 
 MOBILEGL_GL_API void glWindowRectanglesEXT(GLenum mode, GLsizei count, const GLint* box) {
-    MGLOG_W("Stub function: %s(...)", __FUNCTION__);
+    MGLOG_W_ONCE("Stub function: %s(...)", __FUNCTION__);
 }

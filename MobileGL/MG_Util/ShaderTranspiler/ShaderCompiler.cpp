@@ -463,11 +463,10 @@ namespace MobileGL {
                             case SPV_MSG_FATAL:
                             case SPV_MSG_INTERNAL_ERROR:
                             case SPV_MSG_ERROR:
-                                // MGLOG_I, deliberately: at the INFO compile level of every
-                                // CI/WSL/retrace build, MGLOG_E and MGLOG_W are compiled out
-                                // (Log.h orders DEBUG < WARN < ERROR < INFO) and the VUID
-                                // would never reach a log.
-                                MGLOG_I("[spirv] %s: %s (word index %zu)", site, text, position.index);
+                                // Unlatched: only reachable with the validation switch armed,
+                                // and every VUID names a different defect. (Parked at MGLOG_I
+                                // until the Log.h ordering fix made E live at INFO.)
+                                MGLOG_E("[spirv] %s: %s (word index %zu)", site, text, position.index);
                                 break;
                             default:
                                 MGLOG_D("[spirv] %s: %s", site, text);
@@ -486,7 +485,7 @@ namespace MobileGL {
                     spvtools::SpirvTools tools(SPV_ENV_VULKAN_1_1);
                     tools.SetMessageConsumer(MakeSpirvMessageConsumer(site));
                     if (!tools.Validate(binary)) {
-                        MGLOG_I("[spirv] %s: produced a module that fails validation (failure #%llu)",
+                        MGLOG_E("[spirv] %s: produced a module that fails validation (failure #%llu)",
                                 site,
                                 static_cast<unsigned long long>(
                                     ShaderCompiler::NoteSpirvValidationFailure()));
@@ -837,10 +836,10 @@ namespace MobileGL {
                 }
 
                 if (LegalizeFragmentOutputIndexPass::BinaryHasDynamicOutputIndexing(outputBinary)) {
-                    // MGLOG_I, deliberately: MGLOG_E/W are compiled out at the INFO level every
-                    // CI and retrace build uses, and this is precisely the diagnostic that has
-                    // to survive to explain a shader the driver is about to reject.
-                    MGLOG_I("[spirv] LegalizeFragmentOutputIndexingForEssl: a fragment output is still "
+                    // MGLOG_W, latched: this runs per shader compile, and shader packs compile
+                    // lazily mid-session, so an unlatched line here is unbounded runtime noise.
+                    // (Parked at MGLOG_I until the Log.h ordering fix made W live at INFO.)
+                    MGLOG_W_ONCE("[spirv] LegalizeFragmentOutputIndexingForEssl: a fragment output is still "
                             "indexed dynamically; a strict ES driver will reject this shader");
                 }
                 return true;
@@ -866,9 +865,8 @@ namespace MobileGL {
                 // access path there is no correct answer to substitute, because the ES texture
                 // genuinely has a height the GL one does not.
                 //
-                // MGLOG_I, deliberately: MGLOG_E/W are compiled out at the INFO level every CI,
-                // retrace and release build uses, and this is exactly the diagnostic that has to
-                // survive to explain the shader the driver is about to reject.
+                // MGLOG_W, latched: per shader compile, and shader packs compile lazily
+                // mid-session. (Parked at MGLOG_I until the Log.h ordering fix made W live.)
                 const auto traits = Lower1DArrayImagesPass::InspectBinary(inputBinary);
                 // The overwhelmingly common answer, and the reason the inspection exists: no
                 // 1D-array storage image, so the module is handed back byte for byte without an
@@ -879,7 +877,7 @@ namespace MobileGL {
                     return true;
                 }
                 if (traits.queriesImageSize) {
-                    MGLOG_I("[spirv] Lower1DArrayImagesForEssl: the module queries the size of a 1D-array "
+                    MGLOG_W_ONCE("[spirv] Lower1DArrayImagesForEssl: the module queries the size of a 1D-array "
                             "storage image, which cannot be answered in the 2D-array shape ES stores it in; "
                             "leaving the module alone, and a strict ES driver will reject it");
                     outputBinary = inputBinary;

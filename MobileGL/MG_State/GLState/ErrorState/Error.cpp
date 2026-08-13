@@ -14,10 +14,10 @@
 namespace MobileGL::MG_State::GLState {
     void ErrorState::RecordError(ErrorCode code, UniquePtr<ErrorInfo> info) {
         if (code == ErrorCode::NoError) {
-            MGLOG_E("Recording Non-OpenGL error:\n%s", info->toString().c_str());
+            MGLOG_D("Recording Non-OpenGL error:\n%s", info->toString().c_str());
             m_nonGLErrors.push_back(MakeUnique<Error>(code, Move(info)));
         } else {
-            MGLOG_E("Recording OpenGL error (%s):\n%s",
+            MGLOG_D("Recording OpenGL error (%s):\n%s",
                     MG_Util::ConvertGLEnumToString(MG_Util::ConvertErrorCodeToGLEnum(code)).c_str(),
                     info->toString().c_str());
             // GL error semantics are sticky flags, not a queue (GL 3.3 core §2.5): with multiple

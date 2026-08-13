@@ -517,7 +517,7 @@ namespace MobileGL {
                 // parameter queries on the initial state); every size stays 0.
                 break;
             default:
-                MGLOG_W("Unimplemented internal format in GetComponentSizesForInternalFormat: %d",
+                MGLOG_W_ONCE("Unimplemented internal format in GetComponentSizesForInternalFormat: %d",
                         static_cast<Int>(internal));
                 break;
             }

@@ -975,13 +975,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             return resource->sampledView;
         }
         if (!AreSampledImageViewFormatsCompatible(resource->format, format)) {
-            MGLOG_E("%s: incompatible sampled image view format=%d for textureId=%d imageFormat=%d",
+            MGLOG_E_ONCE("%s: incompatible sampled image view format=%d for textureId=%d imageFormat=%d",
                     __func__, static_cast<Int>(format), texture.GetExternalIndex(),
                     static_cast<Int>(resource->format));
             return VK_NULL_HANDLE;
         }
         if ((resource->imageCreateFlags & VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT) == 0) {
-            MGLOG_E("%s: textureId=%d needs mutable image format=%d for sampled view format=%d",
+            MGLOG_E_ONCE("%s: textureId=%d needs mutable image format=%d for sampled view format=%d",
                     __func__, texture.GetExternalIndex(), static_cast<Int>(resource->format),
                     static_cast<Int>(format));
             return VK_NULL_HANDLE;
@@ -1001,7 +1001,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         VkFormatProperties formatProperties{};
         vkGetPhysicalDeviceFormatProperties(m_physicalDevice, format, &formatProperties);
         if ((formatProperties.optimalTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT) == 0) {
-            MGLOG_E("%s: sampled image view format=%d lacks VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT "
+            MGLOG_E_ONCE("%s: sampled image view format=%d lacks VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT "
                     "for textureId=%d (available=0x%x)",
                     __func__, static_cast<Int>(format), texture.GetExternalIndex(),
                     static_cast<Uint32>(formatProperties.optimalTilingFeatures));
@@ -1015,7 +1015,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             resource->sampledBaseMipLevel, resource->sampledLevelCount, 0, resource->arrayLayers,
             &sampledComponents, VK_IMAGE_USAGE_SAMPLED_BIT);
         if (view == VK_NULL_HANDLE) {
-            MGLOG_E("%s: failed to create sampled image view textureId=%d imageFormat=%d viewFormat=%d",
+            MGLOG_E_ONCE("%s: failed to create sampled image view textureId=%d imageFormat=%d viewFormat=%d",
                     __func__, texture.GetExternalIndex(), static_cast<Int>(resource->format),
                     static_cast<Int>(format));
             return VK_NULL_HANDLE;
@@ -1043,14 +1043,14 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             format = resource->format;
         }
         if (!AreStorageImageViewFormatsCompatible(resource->format, format)) {
-            MGLOG_E("%s: incompatible storage image view format=%d for textureId=%d imageFormat=%d",
+            MGLOG_E_ONCE("%s: incompatible storage image view format=%d for textureId=%d imageFormat=%d",
                     __func__, static_cast<Int>(format), texture.GetExternalIndex(),
                     static_cast<Int>(resource->format));
             return VK_NULL_HANDLE;
         }
         if (format != resource->format &&
             (resource->imageCreateFlags & VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT) == 0) {
-            MGLOG_E("%s: textureId=%d needs mutable image format=%d for storage view format=%d",
+            MGLOG_E_ONCE("%s: textureId=%d needs mutable image format=%d for storage view format=%d",
                     __func__, texture.GetExternalIndex(), static_cast<Int>(resource->format),
                     static_cast<Int>(format));
             return VK_NULL_HANDLE;
@@ -1070,7 +1070,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 viewType = VK_IMAGE_VIEW_TYPE_2D;
                 break;
             case VK_IMAGE_VIEW_TYPE_3D:
-                MGLOG_E("%s: non-layered 3D storage views are unsupported for textureId=%d",
+                MGLOG_E_ONCE("%s: non-layered 3D storage views are unsupported for textureId=%d",
                         __func__, texture.GetExternalIndex());
                 return VK_NULL_HANDLE;
             default:
@@ -1079,7 +1079,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
             if (viewType != resource->viewType) {
                 if (layer < 0 || static_cast<Uint32>(layer) >= resource->arrayLayers) {
-                    MGLOG_E("%s: storage image layer=%d is out of range for textureId=%d arrayLayers=%u",
+                    MGLOG_E_ONCE("%s: storage image layer=%d is out of range for textureId=%d arrayLayers=%u",
                             __func__, layer, texture.GetExternalIndex(), resource->arrayLayers);
                     return VK_NULL_HANDLE;
                 }
@@ -1114,7 +1114,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         VkFormatProperties formatProperties{};
         vkGetPhysicalDeviceFormatProperties(m_physicalDevice, format, &formatProperties);
         if ((formatProperties.optimalTilingFeatures & requiredFormatFeatures) != requiredFormatFeatures) {
-            MGLOG_E("%s: storage image view format=%d lacks required features=0x%x for textureId=%d "
+            MGLOG_E_ONCE("%s: storage image view format=%d lacks required features=0x%x for textureId=%d "
                     "(available=0x%x)",
                     __func__, static_cast<Int>(format), static_cast<Uint32>(requiredFormatFeatures),
                     texture.GetExternalIndex(), static_cast<Uint32>(formatProperties.optimalTilingFeatures));
@@ -1125,7 +1125,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                                  mipLevel, 1, baseArrayLayer, layerCount, nullptr,
                                                  VK_IMAGE_USAGE_STORAGE_BIT);
         if (view == VK_NULL_HANDLE) {
-            MGLOG_E("%s: failed to create storage image view for textureId=%d mip=%u imageFormat=%d viewFormat=%d",
+            MGLOG_E_ONCE("%s: failed to create storage image view for textureId=%d mip=%u imageFormat=%d viewFormat=%d",
                     __func__, texture.GetExternalIndex(), mipLevel, static_cast<Int>(resource->format),
                     static_cast<Int>(format));
             return VK_NULL_HANDLE;
@@ -1223,7 +1223,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             return true;
         }
         if (resource->layout == VK_IMAGE_LAYOUT_UNDEFINED) {
-            MGLOG_W("TransitionTextureForSampling: textureId=%d is still in VK_IMAGE_LAYOUT_UNDEFINED before sampling",
+            MGLOG_W_ONCE("TransitionTextureForSampling: textureId=%d is still in VK_IMAGE_LAYOUT_UNDEFINED before sampling",
                     texture.GetExternalIndex());
         }
 
@@ -1574,7 +1574,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             // targets this manager has no Vulkan image shape for yet (cube map arrays above all).
             // Declining the sync leaves the texture unbacked - wrong, but recoverable - where an
             // assertion would take the whole process down instead.
-            MGLOG_W("SyncTextureResource: unsupported uploadTarget=%s textureTarget=%s textureId=%d size=(%d,%d,%d) "
+            MGLOG_W_ONCE("SyncTextureResource: unsupported uploadTarget=%s textureTarget=%s textureId=%d size=(%d,%d,%d) "
                     "mipLevels=%u vkViewType=%d",
                     MG_Util::ConvertTextureUploadTargetToString(uploadTarget).c_str(),
                     MG_Util::ConvertTextureTargetToString(texture.GetTarget()).c_str(), texture.GetExternalIndex(),
@@ -1803,7 +1803,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 // Losing reinterpreted views only degrades the formatless-image feature for
                 // this texture; failing creation would lose the texture entirely, so retry
                 // as a plain immutable-format image.
-                MGLOG_W("%s: mutable image format=%d is unsupported for textureId=%d; creating "
+                MGLOG_W_ONCE("%s: mutable image format=%d is unsupported for textureId=%d; creating "
                         "without VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT (format reinterpretation "
                         "will be unavailable for it)",
                         __func__, static_cast<Int>(format), texture.GetExternalIndex());
@@ -1821,7 +1821,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 // Losing 2D-array compatibility only costs per-slice framebuffer attachment for this
                 // format; failing creation would lose the texture entirely. Remembered so later syncs
                 // neither reprobe nor flag-mismatch against this image and recreate it.
-                MGLOG_W("%s: VK_IMAGE_CREATE_2D_ARRAY_COMPATIBLE_BIT is unsupported for format=%d "
+                MGLOG_W_ONCE("%s: VK_IMAGE_CREATE_2D_ARRAY_COMPATIBLE_BIT is unsupported for format=%d "
                         "textureId=%d; creating without it (per-slice framebuffer attachment will be "
                         "unavailable for it)",
                         __func__, static_cast<Int>(format), texture.GetExternalIndex());
@@ -1853,7 +1853,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         const VkResult createImageResult =
             vmaCreateImage(m_allocator, &imageInfo, &allocationInfo, &resource.image, &resource.allocation, nullptr);
         if (createImageResult != VK_SUCCESS) {
-            MGLOG_F("SyncTextureResource: vmaCreateImage failed (%d) textureId=%d extent=%ux%u depth=%u layers=%u "
+            // E_ONCE, not F: the comment above says it - this is a soft failure the caller
+            // recovers from, and it re-fires on every sync of every texture the driver refuses.
+            MGLOG_E_ONCE("SyncTextureResource: vmaCreateImage failed (%d) textureId=%d extent=%ux%u depth=%u layers=%u "
                     "mips=%u samples=%d format=%d",
                     createImageResult, texture.GetExternalIndex(), imageInfo.extent.width, imageInfo.extent.height,
                     imageInfo.extent.depth, imageInfo.arrayLayers, imageInfo.mipLevels,
@@ -2426,7 +2428,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             const Bool srcIsD24S8 = outResource.format == VK_FORMAT_D24_UNORM_S8_UINT;
             const Bool srcIsD32FS8 = outResource.format == VK_FORMAT_D32_SFLOAT_S8_UINT;
             if (!srcIsD24S8 && !srcIsD32FS8) {
-                MGLOG_E("UploadDirtyMipLevels: unsupported combined depth-stencil format %d for textureId=%d",
+                MGLOG_E_ONCE("UploadDirtyMipLevels: unsupported combined depth-stencil format %d for textureId=%d",
                         static_cast<Int>(outResource.format), mipmapTexture.GetExternalIndex());
                 for (const auto& item : uploadItems) {
                     mipmapTexture.MarkStorageDirty(item.target, item.level, false);

@@ -110,7 +110,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             const VkFormat sourceVkFormat =
                 ToVkVertexFormat(attr.Type, attr.Size, attr.Normalized, attr.IsInteger, attr.IsBgra, attr.IsLong);
             if (sourceVkFormat == VK_FORMAT_UNDEFINED) {
-                MGLOG_E("Unsupported vertex attribute layout (location=%u, type=%s, size=%d): the array is "
+                MGLOG_E_ONCE("Unsupported vertex attribute layout (location=%u, type=%s, size=%d): the array is "
                         "enabled but cannot be mapped to a VkFormat",
                         location, MG_Util::ConvertDataTypeToString(attr.Type).c_str(), attr.Size);
                 unsupportedAttribMask |= (1u << location);
@@ -125,7 +125,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                     if (fallbackFormat != VK_FORMAT_UNDEFINED && SupportsVertexBufferFormat(fallbackFormat)) {
                         vkFormat = fallbackFormat;
                         conversion = VertexStreamConversion::ScaledIntegerToFloat32;
-                        MGLOG_W("Vertex attribute location=%u format=%d lacks "
+                        MGLOG_W_ONCE("Vertex attribute location=%u format=%d lacks "
                                 "VK_FORMAT_FEATURE_VERTEX_BUFFER_BIT; using float32 stream format=%d "
                                 "(type=%s size=%d normalized=%s integer=%s)",
                                 location, static_cast<Int>(sourceVkFormat), static_cast<Int>(vkFormat),
@@ -135,7 +135,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 }
 
                 if (conversion == VertexStreamConversion::None) {
-                    MGLOG_E("Unsupported Vulkan vertex format (location=%u, format=%d, type=%s, size=%d): "
+                    MGLOG_E_ONCE("Unsupported Vulkan vertex format (location=%u, format=%d, type=%s, size=%d): "
                             "VK_FORMAT_FEATURE_VERTEX_BUFFER_BIT is unavailable and no semantic fallback exists",
                             location, static_cast<Int>(sourceVkFormat),
                             MG_Util::ConvertDataTypeToString(attr.Type).c_str(), attr.Size);
@@ -146,7 +146,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
             const SizeT attribByteSize = GetAttributeByteSize(attr.Type, attr.Size, attr.IsBgra);
             if (attribByteSize == 0) {
-                MGLOG_E("Vertex attribute with unknown component size (location=%u, type=%s): the array is "
+                MGLOG_E_ONCE("Vertex attribute with unknown component size (location=%u, type=%s): the array is "
                         "enabled but cannot be sized",
                         location, MG_Util::ConvertDataTypeToString(attr.Type).c_str());
                 unsupportedAttribMask |= (1u << location);
@@ -175,7 +175,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 // unless VK_EXT_legacy_vertex_attributes is available, so deinterleave this one
                 // attribute into a tightly packed transient stream without changing its format.
                 conversion = VertexStreamConversion::Repack;
-                MGLOG_W("Vertex attribute location=%u uses Vulkan-incompatible alignment "
+                MGLOG_W_ONCE("Vertex attribute location=%u uses Vulkan-incompatible alignment "
                         "(offset=%zu stride=%u required=%zu); using a tightly packed stream",
                         location, attr.Offset, sourceStride, requiredAlignment);
             }

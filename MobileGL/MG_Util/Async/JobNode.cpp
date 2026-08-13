@@ -32,11 +32,11 @@ namespace MobileGL::MG_Util::Async {
             try {
                 continuation();
             } catch (const std::exception& e) {
-                MGLOG_E("JobNode: a terminal continuation threw (%s); it has been contained, but whatever it "
+                MGLOG_E_ONCE("JobNode: a terminal continuation threw (%s); it has been contained, but whatever it "
                         "was going to do did not happen",
                         e.what());
             } catch (...) {
-                MGLOG_E("JobNode: a terminal continuation threw a non-std exception; it has been contained, "
+                MGLOG_E_ONCE("JobNode: a terminal continuation threw a non-std exception; it has been contained, "
                         "but whatever it was going to do did not happen");
             }
         }
@@ -165,7 +165,7 @@ namespace MobileGL::MG_Util::Async {
             Vector<String> lines;
             lines.swap(node.diagnostics.logLines);
             for (const String& line : lines) {
-                MGLOG_W("%s", line.c_str());
+                MGLOG_D("%s", line.c_str());
             }
         }
 

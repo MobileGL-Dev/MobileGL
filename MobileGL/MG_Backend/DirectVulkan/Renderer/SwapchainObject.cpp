@@ -157,7 +157,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
         MGLOG_I("Got %d surface formats:", swapchainCapabilities.surfaceFormats.size());
         for (const auto& sf : swapchainCapabilities.surfaceFormats) {
-            MGLOG_I("    [%s, %s]", string_VkFormat(sf.format), string_VkColorSpaceKHR(sf.colorSpace));
+            MGLOG_D("    [%s, %s]", string_VkFormat(sf.format), string_VkColorSpaceKHR(sf.colorSpace));
         }
 
         const auto pickedSurfaceFormat = ChooseSwapchainSurfaceFormat(swapchainCapabilities.surfaceFormats);
@@ -166,7 +166,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
         MGLOG_I("Got %d present modes:", swapchainCapabilities.presentModes.size());
         for (const auto& pm : swapchainCapabilities.presentModes) {
-            MGLOG_I("    %s", string_VkPresentModeKHR(pm));
+            MGLOG_D("    %s", string_VkPresentModeKHR(pm));
         }
 
         const auto presentMode = ChooseSwapchainPresentMode(swapchainCapabilities.presentModes);

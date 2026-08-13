@@ -269,7 +269,7 @@ namespace MobileGL::MG_Impl::NSOpenGLImpl {
             }
             id metalLayerClass = reinterpret_cast<id>(objc_getClass("CAMetalLayer"));
             if (!metalLayerClass) {
-                MGLOG_E("NSOpenGLImpl: CAMetalLayer class not found");
+                MGLOG_E_ONCE("NSOpenGLImpl: CAMetalLayer class not found");
                 return nil;
             }
 
@@ -310,7 +310,7 @@ namespace MobileGL::MG_Impl::NSOpenGLImpl {
                                                        static_cast<GLint>(geometry.DrawableSize.width),
                                                        static_cast<GLint>(geometry.DrawableSize.height));
             if (error != kCGLNoError) {
-                MGLOG_E("NSOpenGLImpl: failed to attach drawable: %s", CGLImpl::ErrorString(error));
+                MGLOG_E_ONCE("NSOpenGLImpl: failed to attach drawable: %s", CGLImpl::ErrorString(error));
             }
         }
 
@@ -325,7 +325,7 @@ namespace MobileGL::MG_Impl::NSOpenGLImpl {
             }
             const auto error = CGLImpl::SetCurrentContext(context);
             if (error != kCGLNoError) {
-                MGLOG_E("NSOpenGLImpl: makeCurrentContext failed: %s", CGLImpl::ErrorString(error));
+                MGLOG_E_ONCE("NSOpenGLImpl: makeCurrentContext failed: %s", CGLImpl::ErrorString(error));
             }
         }
 
@@ -345,7 +345,7 @@ namespace MobileGL::MG_Impl::NSOpenGLImpl {
             }
             const auto error = CGLImpl::FlushDrawable(context);
             if (error != kCGLNoError) {
-                MGLOG_E("NSOpenGLImpl: flushBuffer failed: %s", CGLImpl::ErrorString(error));
+                MGLOG_E_ONCE("NSOpenGLImpl: flushBuffer failed: %s", CGLImpl::ErrorString(error));
             }
         }
 
@@ -377,7 +377,7 @@ namespace MobileGL::MG_Impl::NSOpenGLImpl {
                                                        static_cast<GLint>(geometry.DrawableSize.width),
                                                        static_cast<GLint>(geometry.DrawableSize.height));
             if (error != kCGLNoError) {
-                MGLOG_E("NSOpenGLImpl: update failed to attach drawable: %s", CGLImpl::ErrorString(error));
+                MGLOG_E_ONCE("NSOpenGLImpl: update failed to attach drawable: %s", CGLImpl::ErrorString(error));
                 return;
             }
             CGLImpl::UpdateContext(context);
@@ -421,7 +421,7 @@ namespace MobileGL::MG_Impl::NSOpenGLImpl {
             SEL selector = sel_registerName(selectorName);
             Method method = class_getInstanceMethod(cls, selector);
             if (!method) {
-                MGLOG_W("NSOpenGLImpl: missing instance method %s", selectorName);
+                MGLOG_W_ONCE("NSOpenGLImpl: missing instance method %s", selectorName);
                 return;
             }
             if (original) {
@@ -434,7 +434,7 @@ namespace MobileGL::MG_Impl::NSOpenGLImpl {
             SEL selector = sel_registerName(selectorName);
             Method method = class_getClassMethod(cls, selector);
             if (!method) {
-                MGLOG_W("NSOpenGLImpl: missing class method %s", selectorName);
+                MGLOG_W_ONCE("NSOpenGLImpl: missing class method %s", selectorName);
                 return;
             }
             method_setImplementation(method, replacement);
@@ -444,7 +444,7 @@ namespace MobileGL::MG_Impl::NSOpenGLImpl {
             Class pixelFormatClass = objc_getClass("NSOpenGLPixelFormat");
             Class contextClass = objc_getClass("NSOpenGLContext");
             if (!pixelFormatClass || !contextClass) {
-                MGLOG_W("NSOpenGLImpl: NSOpenGL classes are not loaded; hooks not installed");
+                MGLOG_W_ONCE("NSOpenGLImpl: NSOpenGL classes are not loaded; hooks not installed");
                 return false;
             }
 

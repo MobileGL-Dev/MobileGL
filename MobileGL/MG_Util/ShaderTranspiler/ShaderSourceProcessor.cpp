@@ -1275,7 +1275,7 @@ namespace MobileGL {
                     // matches (e.g. the pack shipped a new shader revision), the affected device
                     // silently falls back to the driver's miscompiled path. Make that visible.
                     if (CountToken(tokens, "subgroupInclusiveAdd") > 0) {
-                        MGLOG_W("%s: subgroupInclusiveAdd present but the linear prefix-scan template "
+                        MGLOG_W_ONCE("%s: subgroupInclusiveAdd present but the linear prefix-scan template "
                                 "did not match; the wide-subgroup rewrite was NOT applied",
                                 __func__);
                     }
@@ -1357,7 +1357,7 @@ namespace MobileGL {
                             continue;
                         }
                         if (quirk.Apply(quirkContext, source)) {
-                            MGLOG_I("ApplyShaderSourceQuirks: applied '%s'%s", quirk.name,
+                            MGLOG_D("ApplyShaderSourceQuirks: applied '%s'%s", quirk.name,
                                     quirkOverride == MG_Config::QuirkOverride::ForceOn ? " (forced on)" : "");
                         }
                     }

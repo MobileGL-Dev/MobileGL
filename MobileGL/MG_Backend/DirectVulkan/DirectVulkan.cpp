@@ -269,14 +269,14 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 drawBuffer->SyncPersistentMappedRange();
                 const SizeT commandOffset = reinterpret_cast<SizeT>(indirect);
                 if (drawBuffer->MappedData() == nullptr || commandOffset + requiredBytes > drawBuffer->GetSize()) {
-                    MGLOG_E("%s skipped: invalid GL_DRAW_INDIRECT_BUFFER binding or range", label);
+                    MGLOG_E_ONCE("%s skipped: invalid GL_DRAW_INDIRECT_BUFFER binding or range", label);
                     return nullptr;
                 }
                 return drawBuffer->MappedData() + commandOffset;
             }
 
             if (!indirect) {
-                MGLOG_E("%s skipped: indirect pointer is null", label);
+                MGLOG_E_ONCE("%s skipped: indirect pointer is null", label);
                 return nullptr;
             }
 
@@ -398,7 +398,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             stride = sizeof(DrawArraysIndirectCommand);
         }
         if (stride < static_cast<GLsizei>(sizeof(DrawArraysIndirectCommand))) {
-            MGLOG_E("MultiDrawArraysIndirect skipped: stride %d is smaller than command size %zu",
+            MGLOG_E_ONCE("MultiDrawArraysIndirect skipped: stride %d is smaller than command size %zu",
                     stride, sizeof(DrawArraysIndirectCommand));
             return;
         }
@@ -446,20 +446,20 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             stride = sizeof(DrawArraysIndirectCommand);
         }
         if (stride < static_cast<GLsizei>(sizeof(DrawArraysIndirectCommand))) {
-            MGLOG_E("MultiDrawArraysIndirectCount skipped: stride %d is smaller than command size %zu",
+            MGLOG_E_ONCE("MultiDrawArraysIndirectCount skipped: stride %d is smaller than command size %zu",
                     stride, sizeof(DrawArraysIndirectCommand));
             return;
         }
 
         auto parameterBuffer = MG_State::pGLContext->GetBufferBindingSlot(BufferTarget::Parameter).GetBoundObject();
         if (!parameterBuffer || drawcount < 0 || static_cast<SizeT>(drawcount) + sizeof(Uint32) > parameterBuffer->GetSize()) {
-            MGLOG_E("MultiDrawArraysIndirectCount skipped: invalid GL_PARAMETER_BUFFER binding or range");
+            MGLOG_E_ONCE("MultiDrawArraysIndirectCount skipped: invalid GL_PARAMETER_BUFFER binding or range");
             return;
         }
 
         parameterBuffer->SyncPersistentMappedRange();
         if (parameterBuffer->MappedData() == nullptr) {
-            MGLOG_E("MultiDrawArraysIndirectCount skipped: CPU fallback cannot read parameter buffer");
+            MGLOG_E_ONCE("MultiDrawArraysIndirectCount skipped: CPU fallback cannot read parameter buffer");
             return;
         }
 
@@ -513,7 +513,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
         const SizeT indexSize = MG_Util::GetGLTypeSize(type);
         if (indexSize == 0) {
-            MGLOG_E("DrawElementsIndirect skipped: unsupported index type 0x%x", type);
+            MGLOG_E_ONCE("DrawElementsIndirect skipped: unsupported index type 0x%x", type);
             return;
         }
 
@@ -1009,7 +1009,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // shift - the hardware divide was the hottest instruction of this loop.
         const SizeT indexSize = MG_Util::GetGLTypeSize(type);
         if (indexSize == 0) {
-            MGLOG_E("MultiDrawElements skipped: unsupported index type 0x%x", type);
+            MGLOG_E_ONCE("MultiDrawElements skipped: unsupported index type 0x%x", type);
             return;
         }
         const Uint32 indexSizeShift = static_cast<Uint32>(std::countr_zero(indexSize));

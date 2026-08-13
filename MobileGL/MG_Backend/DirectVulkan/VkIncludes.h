@@ -74,6 +74,18 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 // The context line (__VA_ARGS__ = its own format string + args) must be a SEPARATE log
 // call: appending its format to the base format while its arguments precede the base
 // arguments makes every conversion read the wrong slot (a %s pulling an int crashes).
+//
+// MGLOG_F and deliberately NOT latched. VK_VERIFY is the invariant-check macro: a Vulkan call
+// MobileGL believes it has already made legal came back non-success, which is a
+// should-never-happen state, not an expected failure mode a user hits. Those fast-fail loudly
+// and keep saying so - the log-quietness rules that latch W/E cover expected failures (driver
+// capability gaps, app misuse), not broken internal invariants. MOBILEGL_ASSERT below traps in
+// a DEBUG build; MGLOG_F is what makes the same condition visible in an INFO test run, where
+// the assert is compiled out by contract.
+//
+// A soft, recoverable failure must therefore NOT be routed through VK_VERIFY. Check the
+// VkResult directly and report it with MGLOG_E_ONCE - see VkTextureManager::SyncTextureResource,
+// where a driver legitimately refuses an image the format pre-check accepted.
 #define VK_VERIFY(expr, ...)                                                                                           \
     do {                                                                                                               \
         VkResult _vk_verify_result = (expr);                                                                           \

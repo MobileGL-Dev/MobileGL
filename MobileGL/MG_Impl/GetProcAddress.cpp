@@ -1403,7 +1403,7 @@ namespace MobileGL::MG_Impl {
         GETPROC(glFramebufferTextureMultiviewOVR, name);
         // GETPROC(glNamedFramebufferTextureMultiviewOVR, name);
 
-        MGLOG_W("GetProcAddress(%s) = nullptr!", name);
+        MGLOG_D("GetProcAddress(%s) = nullptr!", name);
         return nullptr;
     }
 } // namespace MobileGL::MG_Impl
