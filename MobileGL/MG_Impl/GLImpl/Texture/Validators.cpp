@@ -353,6 +353,63 @@ namespace MobileGL::MG_Impl::GLImpl::TextureImpl {
         return true;
     }
 
+    Bool ValidateTextureLevelExists(const SharedPtr<MG_State::GLState::ITextureObject>& textureObject, Int level,
+                                    const char* caller) {
+        // A null object is somebody else's error to report - ValidateTextureObject runs
+        // first at every call site and has already recorded it.
+        if (!textureObject) return false;
+
+        const auto* mipmapTexture = MG_State::GLState::AsMipmapTexture(textureObject.get());
+        if (mipmapTexture == nullptr) {
+            // The only non-mipmap storage class is a buffer texture, and GL_TEXTURE_BUFFER is
+            // not a target glCopyImageSubData accepts at all (it is in the CTS's invalid-target
+            // set). Declining here is not the error code the spec asks for - that would be
+            // INVALID_ENUM from a target check this validator is not - but it does keep a
+            // texture with no image levels whatsoever from reaching a backend that would
+            // dereference a backend texture it never created.
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidOperation,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller,
+                                             "Texture has no mipmap levels to address."));
+            return false;
+        }
+
+        // What this number is, exactly, because two other things are almost it and neither is
+        // safe to assume: it is the number of level SLOTS the shadow has allocated - holes
+        // included, since MipmapStorage::AllocateLevel grows to level+1 and never fills the gap.
+        // For a cube map MipmapUploadTargetArray reports face +X's chain rather than the union.
+        //
+        // The guarantee that matters is one-sided: this count is always >= the level count the
+        // backends derive (VkTextureManager::GetUploadMipLevelCount stops at the first level
+        // with a non-positive extent, so it can only be shorter). That is the safe direction -
+        // no copy to a level the texture genuinely has is ever rejected here. It is NOT an
+        // exact match, so the backends keep their own range guard for the band in between: a
+        // chain with a hole (level 0 and 2 defined, 1 not) is accepted by this predicate and
+        // declined by the backend, which is a silent no-op rather than a copy. That band is a
+        // backend storage limitation, not a validation one - rejecting it here with
+        // INVALID_VALUE would be refusing a copy the spec permits.
+        const Uint levelCount = mipmapTexture->GetMipmapLevelCount();
+
+        if (levelCount == 0) {
+            // No image has ever been defined on this texture, so the fault is the texture,
+            // not the number: GL 4.6 core 18.3.2 asks for INVALID_OPERATION when an object a
+            // copy names is an incomplete texture.
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidOperation,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller,
+                                             "Texture has no image defined at any level."));
+            return false;
+        }
+        if (level < 0 || static_cast<Uint>(level) >= levelCount) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidValue,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller,
+                                             "Texture level does not exist in this texture."));
+            return false;
+        }
+        return true;
+    }
+
     Bool ValidateTextureObject(const SharedPtr<MG_State::GLState::ITextureObject>& textureObject) {
         if (!textureObject) {
             MG_State::pGLContext->RecordError(

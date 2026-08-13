@@ -30,6 +30,16 @@ namespace MobileGL::MG_Impl::GLImpl::TextureImpl {
                                                           TextureInternalFormat internalFormat,
                                                           TexturePixelDataType type);
     Bool ValidateTextureLevelWithUploadTarget(TextureUploadTarget target, Int level);
+    // "Is <level> a level this texture actually has?", which ValidateTextureLevelNumber above
+    // does NOT answer - that one only bounds the index by GL_MAX_TEXTURE_SIZE and knows nothing
+    // about the object. Entry points that resolve a level straight into a backend image
+    // subresource need this one: a level the texture never had is GL_INVALID_VALUE (GL 4.6 core
+    // 18.3.2), and passing it through instead reaches the driver as an out-of-range subresource.
+    // Note the error split is per-entry-point, so this is not universally reusable:
+    // glClearTexImage owes INVALID_OPERATION for the same out-of-range level and spells its own
+    // copy of this predicate in GL_Texture.cpp (GetClearTextureObject).
+    Bool ValidateTextureLevelExists(const SharedPtr<MG_State::GLState::ITextureObject>& textureObject, Int level,
+                                    const char* caller);
     Bool ValidateTextureObject(const SharedPtr<MG_State::GLState::ITextureObject>& textureObject);
     // Rejects the per-target default texture objects (name 0) with GL_INVALID_OPERATION for entry
     // points that require a GenTextures-created texture, e.g. TexStorage* ("An INVALID_OPERATION

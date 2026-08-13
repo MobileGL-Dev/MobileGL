@@ -8529,12 +8529,31 @@ void main() {
 
         auto* srcResource = m_textureManager->SyncTextureAndGetDescriptor(*srcTexture);
         auto* dstResource = m_textureManager->SyncTextureAndGetDescriptor(*dstTexture);
-        MOBILEGL_ASSERT(srcResource != nullptr && dstResource != nullptr,
-                        "CopyImageSubData failed to sync source or destination texture.");
-        MOBILEGL_ASSERT(srcLevel >= 0 && dstLevel >= 0 &&
-                        static_cast<Uint32>(srcLevel) < srcResource->mipLevels &&
-                        static_cast<Uint32>(dstLevel) < dstResource->mipLevels,
-                        "CopyImageSubData mip level is out of range.");
+        // Real checks, not MOBILEGL_ASSERT: the assertions this replaces compile to nothing in
+        // a release build, which is where both observed failures happened - a null resource
+        // dereferenced right below (lavapipe) and a mip level the VkImage does not have handed
+        // to vkCmdCopyImage (Adreno, SIGSEGV inside the driver). Neither is caught downstream:
+        // an out-of-range subresource is a promise the driver takes at face value.
+        //
+        // _ONCE, because the severity is right but the repetition is not: MGLOG_E is the level
+        // the project logs failures at and it IS live at the default MOBILEGL_LOG_ACTIVE_LEVEL,
+        // so an application that reissues the same rejected copy every frame would otherwise
+        // print at ERROR every frame. Once per site says the same thing and says it in a log
+        // somebody can still read.
+        //
+        // The frontend validator (ValidateTextureLevelExists) is what produces the
+        // GL_INVALID_VALUE the application is actually owed. This guard exists so the next gap
+        // up there declines a copy instead of taking the process down.
+        if (srcResource == nullptr || dstResource == nullptr) {
+            MGLOG_E_ONCE("%s: source or destination texture failed to sync; declining the copy", __func__);
+            return;
+        }
+        if (srcLevel < 0 || dstLevel < 0 || static_cast<Uint32>(srcLevel) >= srcResource->mipLevels ||
+            static_cast<Uint32>(dstLevel) >= dstResource->mipLevels) {
+            MGLOG_E_ONCE("%s: mip level out of range (src %d of %u, dst %d of %u); declining the copy", __func__,
+                         srcLevel, srcResource->mipLevels, dstLevel, dstResource->mipLevels);
+            return;
+        }
         const VkImageAspectFlags copyAspectMask =
             srcResource->aspect & dstResource->aspect &
             (VK_IMAGE_ASPECT_COLOR_BIT | VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT);
@@ -8548,12 +8567,23 @@ void main() {
         const Uint32 srcMipHeight = std::max(1u, srcResource->extent.height >> srcMipLevel);
         const Uint32 dstMipWidth = std::max(1u, dstResource->extent.width >> dstMipLevel);
         const Uint32 dstMipHeight = std::max(1u, dstResource->extent.height >> dstMipLevel);
-        MOBILEGL_ASSERT(srcX >= 0 && srcY >= 0 && dstX >= 0 && dstY >= 0 &&
-                        static_cast<Uint32>(srcX + srcWidth) <= srcMipWidth &&
-                        static_cast<Uint32>(srcY + srcHeight) <= srcMipHeight &&
-                        static_cast<Uint32>(dstX + srcWidth) <= dstMipWidth &&
-                        static_cast<Uint32>(dstY + srcHeight) <= dstMipHeight,
-                        "CopyImageSubData region is outside source or destination bounds.");
+        // Promoted for the same reason as the level range above, and it is the same bug class:
+        // a VkImageCopy whose region runs past the image is an out-of-bounds promise to the
+        // driver, and the frontend does not check the region at all (there is a CTS sibling,
+        // copy_image.exceeding_boundaries, that asks for exactly this input). Nothing legal is
+        // lost by declining - a copy that reads or writes outside the image was never going to
+        // produce a correct result, it was going to produce whatever the driver did next.
+        if (srcX < 0 || srcY < 0 || dstX < 0 || dstY < 0 ||
+            static_cast<Uint32>(srcX + srcWidth) > srcMipWidth ||
+            static_cast<Uint32>(srcY + srcHeight) > srcMipHeight ||
+            static_cast<Uint32>(dstX + srcWidth) > dstMipWidth ||
+            static_cast<Uint32>(dstY + srcHeight) > dstMipHeight) {
+            MGLOG_E_ONCE("%s: region outside image bounds (src %dx%d+%d+%d of %ux%u, dst +%d+%d of %ux%u); "
+                         "declining the copy",
+                         __func__, srcWidth, srcHeight, srcX, srcY, srcMipWidth, srcMipHeight, dstX, dstY,
+                         dstMipWidth, dstMipHeight);
+            return;
+        }
 
         const Bool clearReady = MaterializePendingClearForTexture(frame.commandBuffer, *srcTexture);
         MOBILEGL_ASSERT(clearReady, "%s: failed to materialize pending clear for source textureId=%d",
