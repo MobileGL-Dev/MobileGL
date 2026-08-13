@@ -498,14 +498,15 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             const Bool hasTessControl = (stagesPresent & VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT) != 0;
             const Bool hasTessEval = (stagesPresent & VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT) != 0;
             if (hasTessControl != hasTessEval) {
-                // MGLOG_I, and latched: _E is compiled out of the INFO-level builds CTS and the
-                // shipping app run, which is exactly where this refusal is the only explanation
-                // for a missing draw. Latched because failures are deliberately not memoised - a
-                // program in this state re-enters here once per draw, every frame.
+                // Latched, and the latch is the point: a failed creation is deliberately never
+                // memoised (see GetOrCreatePipeline), so a program in this state re-enters here
+                // once per draw, every frame - and a refusal diagnostic that repeats per draw is
+                // noise, not a diagnostic. One line names the program; the draws it explains are
+                // all the same draw.
                 static Bool s_warnedHalfTessellatedPipeline = false;
                 if (!s_warnedHalfTessellatedPipeline) {
                     s_warnedHalfTessellatedPipeline = true;
-                    MGLOG_I("PipelineFactory::CreatePipeline: refusing a pipeline with %s tessellation stage and "
+                    MGLOG_E("PipelineFactory::CreatePipeline: refusing a pipeline with %s tessellation stage and "
                             "no %s stage (VUID-VkGraphicsPipelineCreateInfo-pStages-00730). programHash=0x%llx "
                             "patchControlPoints=%u. Its draws are skipped; logged once.",
                             hasTessEval ? "an evaluation" : "a control",

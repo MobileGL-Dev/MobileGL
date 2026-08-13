@@ -3346,7 +3346,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                   .env = env.get()};
         auto compiled = ShaderCompiler::CompileShader(shaderAttrib);
         if (!compiled) {
-            MGLOG_I("ProgramFactory: could not compile the pass-through tessellation control stage for "
+            MGLOG_E("ProgramFactory: could not compile the pass-through tessellation control stage for "
                     "patchVertices=%u; a program with an evaluation stage and no control stage cannot draw. %s",
                     patchVertices, compiled.error().log.c_str());
             m_passthroughTessControlStages.emplace(patchVertices, stage);
@@ -3357,7 +3357,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         programAttrib.shaders.push_back(compiled.value());
         auto linked = ShaderCompiler::LinkProgram(programAttrib);
         if (!linked) {
-            MGLOG_I("ProgramFactory: could not link the pass-through tessellation control stage for "
+            MGLOG_E("ProgramFactory: could not link the pass-through tessellation control stage for "
                     "patchVertices=%u. %s", patchVertices, linked.error().log.c_str());
             m_passthroughTessControlStages.emplace(patchVertices, stage);
             return stage;
@@ -3366,7 +3366,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         ProgramBinaryAttrib binaryAttrib{.shaderTypes = {GL_TESS_CONTROL_SHADER}, .program = *linked.value()};
         auto binary = ShaderCompiler::GetSpirvBinaryFromProgram(binaryAttrib);
         if (!binary || binary.value().empty() || binary.value().front().empty()) {
-            MGLOG_I("ProgramFactory: could not generate SPIR-V for the pass-through tessellation control stage "
+            MGLOG_E("ProgramFactory: could not generate SPIR-V for the pass-through tessellation control stage "
                     "for patchVertices=%u", patchVertices);
             m_passthroughTessControlStages.emplace(patchVertices, stage);
             return stage;
@@ -3387,14 +3387,14 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         VkShaderModule module = VK_NULL_HANDLE;
         const VkResult result = vkCreateShaderModule(m_device, &smci, nullptr, &module);
         if (result != VK_SUCCESS) {
-            MGLOG_I("ProgramFactory: vkCreateShaderModule failed (%d) for the pass-through tessellation control "
+            MGLOG_E("ProgramFactory: vkCreateShaderModule failed (%d) for the pass-through tessellation control "
                     "stage for patchVertices=%u", static_cast<Int>(result), patchVertices);
             m_passthroughTessControlStages.emplace(patchVertices, stage);
             return stage;
         }
 
         stage.module = module;
-        MGLOG_I("ProgramFactory: built the pass-through tessellation control stage for patchVertices=%u "
+        MGLOG_D("ProgramFactory: built the pass-through tessellation control stage for patchVertices=%u "
                 "(GL 4.6 11.2.2; Vulkan has no fixed-function equivalent)", patchVertices);
         m_passthroughTessControlStages.emplace(patchVertices, stage);
         return stage;
@@ -3430,7 +3430,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         const SpvReflectResult createResult =
             spvReflectCreateShaderModule(module.size() * sizeof(Uint), module.data(), &reflectModule);
         if (createResult != SPV_REFLECT_RESULT_SUCCESS) {
-            MGLOG_I("ProgramFactory::ReflectPassthroughTessControlNeed: reflection failed (result=%d); the "
+            MGLOG_E("ProgramFactory::ReflectPassthroughTessControlNeed: reflection failed (result=%d); the "
                     "evaluation stage's inputs are unknown, so the pass-through is not offered",
                     static_cast<Int>(createResult));
             return;
@@ -3468,7 +3468,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         for (auto* input : inputs) {
             if (input == nullptr) continue;
             if (input->location == kNoLocation) continue;
-            MGLOG_I("ProgramFactory: a tessellation evaluation stage with no control stage reads the "
+            MGLOG_E("ProgramFactory: a tessellation evaluation stage with no control stage reads the "
                     "user-defined input '%s' at location=%u; a synthesized control stage cannot forward it, so "
                     "this program's draws are declined rather than fed an undefined varying",
                     input->name != nullptr ? input->name : "<null>", input->location);
