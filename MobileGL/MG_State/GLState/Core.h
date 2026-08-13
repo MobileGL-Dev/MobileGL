@@ -198,8 +198,10 @@ namespace MobileGL {
                 // Only the pipeline-relevant subset - see RenderState::m_pipelineStateVersion.
                 Uint GetPipelineStateVersion() const;
                 const RenderStateParameters& GetRenderStateParameters() const;
-                void SetViewport(IntVec4 viewport); // x, y, width, height
-                const IntVec4& GetViewport() const; // x, y, width, height
+                void SetViewport(IntVec4 viewport); // x, y, width, height; writes ALL viewports
+                IntVec4 GetViewport() const;        // x, y, width, height; viewport 0, rounded
+                void SetViewportIndexed(Uint index, FloatVec4 viewport);
+                const FloatVec4& GetViewportIndexed(Uint index) const;
                 void SetLineWidth(Float width);
                 Float GetLineWidth() const;
                 void SetPointSize(Float size);
@@ -260,8 +262,10 @@ namespace MobileGL {
                 Uint32 GetClearStencil() const;
                 void SetBlendColor(FloatVec4 color);
                 const FloatVec4& GetBlendColor() const;
-                void SetDepthRange(FloatVec2 range);
+                void SetDepthRange(FloatVec2 range); // writes ALL viewports' depth ranges
                 const FloatVec2& GetDepthRange() const;
+                void SetDepthRangeIndexed(Uint index, FloatVec2 range);
+                const FloatVec2& GetDepthRangeIndexed(Uint index) const;
                 void SetSampleCoverage(Float value, Bool invert);
                 Float GetSampleCoverageValue() const;
                 Bool GetSampleCoverageInvert() const;
@@ -276,8 +280,10 @@ namespace MobileGL {
                 FrontFaceMode GetFrontFaceMode() const;
                 void SetProvokingVertexMode(ProvokingVertexMode mode);
                 ProvokingVertexMode GetProvokingVertexMode() const;
-                void SetScissorBox(IntVec4 box);      // x, y, width, height
-                const IntVec4& GetScissorBox() const; // x, y, width, height
+                void SetScissorBox(IntVec4 box);      // x, y, width, height; writes ALL rectangles
+                const IntVec4& GetScissorBox() const; // x, y, width, height; rectangle 0
+                void SetScissorBoxIndexed(Uint index, IntVec4 box);
+                const IntVec4& GetScissorBoxIndexed(Uint index) const;
 
                 // Transform feedback. The fields below are the state of the transform
                 // feedback object currently bound to GL_TRANSFORM_FEEDBACK; see the object

@@ -20,26 +20,116 @@ namespace MobileGL::MG_Impl::GLImpl {
         return std::clamp(static_cast<Float>(value), 0.0f, 1.0f);
     }
 
-    static Bool ValidateIndexedBlendCapability(GLenum target, GLuint index, const char* functionName) {
-        if (target != GL_BLEND) {
+    // GL 4.6 core 17.3.2 and 22.1 give exactly two indexed capabilities: GL_BLEND, indexed by
+    // draw buffer, and GL_SCISSOR_TEST, indexed by viewport. They have DIFFERENT bounds
+    // (MAX_DRAW_BUFFERS vs MAX_VIEWPORTS), so the limit is picked per target rather than shared.
+    static Bool ValidateIndexedCapability(GLenum target, GLuint index, const char* functionName) {
+        GLuint limit = 0;
+        const char* indexName = nullptr;
+        switch (target) {
+        case GL_BLEND:
+            limit = MG_State::GLState::FramebufferObject::MAX_DRAW_BUFFERS;
+            indexName = "Buffer";
+            break;
+        case GL_SCISSOR_TEST:
+            limit = RenderStateParameters::MAX_VIEWPORTS;
+            indexName = "Viewport";
+            break;
+        default:
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidEnum,
                 MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", functionName,
-                                             "Only GL_BLEND is supported for indexed capability state."));
+                                             "Only GL_BLEND and GL_SCISSOR_TEST are supported for indexed "
+                                             "capability state."));
             return false;
         }
 
-        if (index >= MG_State::GLState::FramebufferObject::MAX_DRAW_BUFFERS) {
+        if (index >= limit) {
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidValue,
-                MakeUnique<GenericErrorInfo>(
-                    "MG_Impl/GLImpl", functionName,
-                    "Buffer index " + std::to_string(index) + " is out of range. Max supported is " +
-                        std::to_string(MG_State::GLState::FramebufferObject::MAX_DRAW_BUFFERS - 1) + "."));
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", functionName,
+                                             String(indexName) + " index " + std::to_string(index) +
+                                                 " is out of range. Max supported is " + std::to_string(limit - 1) +
+                                                 "."));
             return false;
         }
 
         return true;
+    }
+
+    // ------------------ ARB_viewport_array parameter validation ------------------
+    // All three families share the same two shapes, so they share the two checkers. GL 4.6 core
+    // 13.6.1/17.3.2: an out-of-range index is GL_INVALID_VALUE, and so is a negative width or
+    // height. `first + count == MAX_VIEWPORTS` is LEGAL - only strictly greater is an error,
+    // which KHR-GL43.viewport_array.api_errors checks explicitly in both directions.
+    static Bool ValidateViewportIndex(GLuint index, const char* functionName) {
+        if (index < RenderStateParameters::MAX_VIEWPORTS) return true;
+
+        MG_State::pGLContext->RecordError(
+            ErrorCode::InvalidValue,
+            MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", functionName,
+                                         "Viewport index " + std::to_string(index) +
+                                             " is out of range. Max supported is " +
+                                             std::to_string(RenderStateParameters::MAX_VIEWPORTS - 1) + "."));
+        return false;
+    }
+
+    static Bool ValidateViewportRange(GLuint first, GLsizei count, const char* functionName) {
+        if (count < 0) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidValue,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", functionName, "count must not be negative."));
+            return false;
+        }
+        // Widened before adding: first is a GLuint and count a GLsizei, so `first + count` in
+        // 32 bits can wrap past MAX_VIEWPORTS and let an out-of-range range through.
+        const Uint64 last = static_cast<Uint64>(first) + static_cast<Uint64>(count);
+        if (last > RenderStateParameters::MAX_VIEWPORTS) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidValue,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", functionName,
+                                             "first (" + std::to_string(first) + ") + count (" +
+                                                 std::to_string(count) + ") exceeds GL_MAX_VIEWPORTS (" +
+                                                 std::to_string(RenderStateParameters::MAX_VIEWPORTS) + ")."));
+            return false;
+        }
+        return true;
+    }
+
+    template <typename T>
+    static Bool ValidateNonNegativeExtent(T width, T height, const char* functionName) {
+        if (width >= T(0) && height >= T(0)) return true;
+
+        MG_State::pGLContext->RecordError(
+            ErrorCode::InvalidValue,
+            MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", functionName, "Width and height must be non-negative."));
+        return false;
+    }
+
+    // The array forms are all-or-nothing: one bad element rejects the whole call with a SINGLE
+    // GL_INVALID_VALUE and leaves every rectangle untouched. api_errors relies on both halves -
+    // it passes a full 16-element array with exactly one negative extent and then asserts the
+    // error queue holds exactly one entry.
+    template <typename T>
+    static Bool ValidateArrayExtents(GLsizei count, const T* v, const char* functionName) {
+        for (GLsizei i = 0; i < count; ++i) {
+            if (v[i * 4 + 2] >= T(0) && v[i * 4 + 3] >= T(0)) continue;
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidValue,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", functionName,
+                                             "Width and height must be non-negative (element " + std::to_string(i) +
+                                                 ")."));
+            return false;
+        }
+        return true;
+    }
+
+    static Bool ValidateNonNullArray(const void* v, const char* functionName) {
+        if (v != nullptr) return true;
+        MG_State::pGLContext->RecordError(
+            ErrorCode::InvalidValue,
+            MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", functionName, "value pointer cannot be null."));
+        return false;
     }
 
     static Bool TryConvertBlendEquation(GLenum mode, const char* functionName,
@@ -93,14 +183,68 @@ namespace MobileGL::MG_Impl::GLImpl {
     }
 
     void Viewport_State(GLint x, GLint y, GLsizei width, GLsizei height) {
-        if (width < 0 || height < 0) {
-            MG_State::pGLContext->RecordError(ErrorCode::InvalidValue,
-                                              MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", "Viewport_State",
-                                                                           "Width abd height must be non-negative."));
-            return;
-        }
+        if (!ValidateNonNegativeExtent(width, height, "Viewport_State")) return;
 
         MG_State::pGLContext->SetViewport(IntVec4(x, y, width, height));
+    }
+
+    // ------------------ ARB_viewport_array setters ------------------
+    void ViewportArrayv_State(GLuint first, GLsizei count, const GLfloat* v) {
+        if (!ValidateViewportRange(first, count, "ViewportArrayv_State")) return;
+        if (count == 0) return;
+        if (!ValidateNonNullArray(v, "ViewportArrayv_State")) return;
+        if (!ValidateArrayExtents(count, v, "ViewportArrayv_State")) return;
+
+        for (GLsizei i = 0; i < count; ++i) {
+            MG_State::pGLContext->SetViewportIndexed(first + static_cast<GLuint>(i),
+                                                     FloatVec4(v[i * 4 + 0], v[i * 4 + 1], v[i * 4 + 2], v[i * 4 + 3]));
+        }
+    }
+
+    void ViewportIndexedf_State(GLuint index, GLfloat x, GLfloat y, GLfloat w, GLfloat h) {
+        if (!ValidateViewportIndex(index, "ViewportIndexedf_State")) return;
+        if (!ValidateNonNegativeExtent(w, h, "ViewportIndexedf_State")) return;
+
+        MG_State::pGLContext->SetViewportIndexed(index, FloatVec4(x, y, w, h));
+    }
+
+    void ScissorArrayv_State(GLuint first, GLsizei count, const GLint* v) {
+        if (!ValidateViewportRange(first, count, "ScissorArrayv_State")) return;
+        if (count == 0) return;
+        if (!ValidateNonNullArray(v, "ScissorArrayv_State")) return;
+        if (!ValidateArrayExtents(count, v, "ScissorArrayv_State")) return;
+
+        for (GLsizei i = 0; i < count; ++i) {
+            MG_State::pGLContext->SetScissorBoxIndexed(first + static_cast<GLuint>(i),
+                                                       IntVec4(v[i * 4 + 0], v[i * 4 + 1], v[i * 4 + 2], v[i * 4 + 3]));
+        }
+    }
+
+    void ScissorIndexed_State(GLuint index, GLint left, GLint bottom, GLsizei width, GLsizei height) {
+        if (!ValidateViewportIndex(index, "ScissorIndexed_State")) return;
+        if (!ValidateNonNegativeExtent(width, height, "ScissorIndexed_State")) return;
+
+        MG_State::pGLContext->SetScissorBoxIndexed(index, IntVec4(left, bottom, width, height));
+    }
+
+    void DepthRangeArrayv_State(GLuint first, GLsizei count, const GLdouble* v) {
+        if (!ValidateViewportRange(first, count, "DepthRangeArrayv_State")) return;
+        if (count == 0) return;
+        if (!ValidateNonNullArray(v, "DepthRangeArrayv_State")) return;
+
+        for (GLsizei i = 0; i < count; ++i) {
+            MG_State::pGLContext->SetDepthRangeIndexed(
+                first + static_cast<GLuint>(i),
+                FloatVec2(ClampUnitFloat(static_cast<GLfloat>(v[i * 2 + 0])),
+                          ClampUnitFloat(static_cast<GLfloat>(v[i * 2 + 1]))));
+        }
+    }
+
+    void DepthRangeIndexed_State(GLuint index, GLdouble n, GLdouble f) {
+        if (!ValidateViewportIndex(index, "DepthRangeIndexed_State")) return;
+
+        MG_State::pGLContext->SetDepthRangeIndexed(
+            index, FloatVec2(ClampUnitFloat(static_cast<GLfloat>(n)), ClampUnitFloat(static_cast<GLfloat>(f))));
     }
 
     void StencilOpSeparate_State(GLenum face, GLenum sfail, GLenum dpfail, GLenum dppass) {
@@ -175,12 +319,7 @@ namespace MobileGL::MG_Impl::GLImpl {
     }
 
     void Scissor_State(GLint x, GLint y, GLsizei width, GLsizei height) {
-        if (width < 0 || height < 0) {
-            MG_State::pGLContext->RecordError(ErrorCode::InvalidValue,
-                                              MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", "Scissor_State",
-                                                                           "Width abd height must be non-negative."));
-            return;
-        }
+        if (!ValidateNonNegativeExtent(width, height, "Scissor_State")) return;
 
         MG_State::pGLContext->SetScissorBox(IntVec4(x, y, width, height));
     }
@@ -336,7 +475,7 @@ namespace MobileGL::MG_Impl::GLImpl {
     }
 
     GLboolean IsEnabledi_State(GLenum target, GLuint index) {
-        if (!ValidateIndexedBlendCapability(target, index, "IsEnabledi_State")) {
+        if (!ValidateIndexedCapability(target, index, "IsEnabledi_State")) {
             return GL_FALSE;
         }
 
@@ -392,7 +531,14 @@ namespace MobileGL::MG_Impl::GLImpl {
         }
         GLint values[4] = {};
         GetIntegeri_v(target, index, values);
-        *data = values[0] != 0 ? GL_TRUE : GL_FALSE;
+        // The ARB_viewport_array rectangles are the only multi-component indexed state that
+        // reaches here; writing element 0 alone would leave the caller's other three untouched.
+        const GLsizei components = target == GL_VIEWPORT || target == GL_SCISSOR_BOX
+            ? 4
+            : (target == GL_DEPTH_RANGE ? 2 : 1);
+        for (GLsizei i = 0; i < components; ++i) {
+            data[i] = values[i] != 0 ? GL_TRUE : GL_FALSE;
+        }
     }
 
     GLboolean IsEnabled_State(GLenum cap) {
@@ -725,7 +871,7 @@ namespace MobileGL::MG_Impl::GLImpl {
     }
 
     void Disablei_State(GLenum target, GLuint index) {
-        if (!ValidateIndexedBlendCapability(target, index, "Disablei_State")) {
+        if (!ValidateIndexedCapability(target, index, "Disablei_State")) {
             return;
         }
 
@@ -743,7 +889,7 @@ namespace MobileGL::MG_Impl::GLImpl {
     }
 
     void Enablei_State(GLenum target, GLuint index) {
-        if (!ValidateIndexedBlendCapability(target, index, "Enablei_State")) {
+        if (!ValidateIndexedCapability(target, index, "Enablei_State")) {
             return;
         }
 
@@ -795,6 +941,44 @@ namespace MobileGL::MG_Impl::GLImpl {
 
     void Viewport(GLint x, GLint y, GLsizei width, GLsizei height) {
         Viewport_State(x, y, width, height);
+    }
+
+    void ViewportArrayv(GLuint first, GLsizei count, const GLfloat* v) {
+        ViewportArrayv_State(first, count, v);
+    }
+
+    void ViewportIndexedf(GLuint index, GLfloat x, GLfloat y, GLfloat w, GLfloat h) {
+        ViewportIndexedf_State(index, x, y, w, h);
+    }
+
+    void ViewportIndexedfv(GLuint index, const GLfloat* v) {
+        // The index is validated before the pointer is touched: glViewportIndexedfv(MAX, nullptr)
+        // must be one GL_INVALID_VALUE, not a null dereference.
+        if (!ValidateViewportIndex(index, "ViewportIndexedfv")) return;
+        if (!ValidateNonNullArray(v, "ViewportIndexedfv")) return;
+        ViewportIndexedf_State(index, v[0], v[1], v[2], v[3]);
+    }
+
+    void ScissorArrayv(GLuint first, GLsizei count, const GLint* v) {
+        ScissorArrayv_State(first, count, v);
+    }
+
+    void ScissorIndexed(GLuint index, GLint left, GLint bottom, GLsizei width, GLsizei height) {
+        ScissorIndexed_State(index, left, bottom, width, height);
+    }
+
+    void ScissorIndexedv(GLuint index, const GLint* v) {
+        if (!ValidateViewportIndex(index, "ScissorIndexedv")) return;
+        if (!ValidateNonNullArray(v, "ScissorIndexedv")) return;
+        ScissorIndexed_State(index, v[0], v[1], v[2], v[3]);
+    }
+
+    void DepthRangeArrayv(GLuint first, GLsizei count, const GLdouble* v) {
+        DepthRangeArrayv_State(first, count, v);
+    }
+
+    void DepthRangeIndexed(GLuint index, GLdouble n, GLdouble f) {
+        DepthRangeIndexed_State(index, n, f);
     }
 
     void StencilOpSeparate(GLenum face, GLenum sfail, GLenum dpfail, GLenum dppass) {

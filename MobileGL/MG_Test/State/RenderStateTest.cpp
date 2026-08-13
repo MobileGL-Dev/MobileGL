@@ -6,11 +6,20 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 // End of Source File Header
 //
-// Indexed capability state (glEnablei/glDisablei/glIsEnabledi) exists only for GL_BLEND in this
-// stack. Every other capability must come back as GL_INVALID_ENUM per GL 4.6 sec. 17.3.3 - and,
-// far more importantly, must come back at all: RenderState::SetCapabilityIndexed and
-// IsCapabilityEnabledIndexed used to answer a non-blend capability with THROW_UNIMPL_EXCEPTION,
+// Indexed capability state (glEnablei/glDisablei/glIsEnabledi) exists for exactly two
+// capabilities: GL_BLEND, indexed by draw buffer, and GL_SCISSOR_TEST, indexed by viewport
+// (ARB_viewport_array). Every other capability must come back as GL_INVALID_ENUM per GL 4.6
+// sec. 17.3.3 - and, far more importantly, must come back at all: RenderState::SetCapabilityIndexed
+// and IsCapabilityEnabledIndexed used to answer a non-blend capability with THROW_UNIMPL_EXCEPTION,
 // which unwinds a C++ exception through the C GL ABI and terminates the process.
+//
+// The second half of this file is the ARB_viewport_array indexed rectangle state. Every one of
+// glViewportArrayv/glViewportIndexedf(v)/glScissorArrayv/glScissorIndexed(v)/glDepthRangeArrayv/
+// glDepthRangeIndexed was a MGLOG_W_ONCE stub that raised no error and stored nothing, and the
+// indexed getters answered EVERY index with viewport 0's value, so a set/get round trip silently
+// reported the initial state. The assertions below are deliberately state-shaped rather than
+// render-shaped: this IS the state machine, and the rendering half (gl_ViewportIndex routing) is
+// asserted separately in MG_IntegrationTest/Scenarios/ViewportArrayScenario.cpp.
 
 #include <gtest/gtest.h>
 
@@ -21,6 +30,7 @@
 #include <MG_Impl/GLImpl/RenderState/GL_RenderState.h>
 #include <MG_State/GLState/Core.h>
 #include <MG_State/GLState/FramebufferState/FramebufferObject.h>
+#include <MG_State/GLState/RenderState/RenderState.h>
 
 using namespace MobileGL;
 
@@ -50,10 +60,11 @@ namespace {
     };
 } // namespace
 
-TEST_F(RenderStateTest, IndexedCapabilityTogglesRejectNonBlendCapabilities) {
+TEST_F(RenderStateTest, IndexedCapabilityTogglesRejectNonIndexedCapabilities) {
     // GL_CLIP_DISTANCE0 is a real capability, just not an indexed one - the shape an application or
-    // a CTS negative test would hit.
-    for (const GLenum cap : {GL_CLIP_DISTANCE0, GL_DEPTH_TEST, GL_SCISSOR_TEST}) {
+    // a CTS negative test would hit. GL_SCISSOR_TEST used to be in this list and is not any more:
+    // ARB_viewport_array makes it the second indexed capability (see the tests below).
+    for (const GLenum cap : {GL_CLIP_DISTANCE0, GL_DEPTH_TEST, GL_STENCIL_TEST}) {
         MG_Impl::GLImpl::Enablei(cap, 0);
         ExpectSingleGlError(GL_INVALID_ENUM);
 
@@ -88,4 +99,463 @@ TEST_F(RenderStateTest, IndexedBlendTogglesStillWork) {
     EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
     EXPECT_EQ(MG_Impl::GLImpl::IsEnabledi(GL_BLEND, 1), GL_FALSE);
     EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+}
+
+// ---------------------------------------------------------------------------------------------
+// ARB_viewport_array: indexed viewport / scissor / depth-range state
+// ---------------------------------------------------------------------------------------------
+
+namespace {
+    constexpr GLuint kMaxViewports = RenderStateParameters::MAX_VIEWPORTS;
+
+    Array<Array<GLfloat, 4>, kMaxViewports> ReadAllViewports() {
+        Array<Array<GLfloat, 4>, kMaxViewports> out{};
+        for (GLuint i = 0; i < kMaxViewports; ++i) {
+            MG_Impl::GLImpl::GetFloati_v(GL_VIEWPORT, i, out[i].data());
+        }
+        return out;
+    }
+
+    Array<Array<GLdouble, 2>, kMaxViewports> ReadAllDepthRanges() {
+        Array<Array<GLdouble, 2>, kMaxViewports> out{};
+        for (GLuint i = 0; i < kMaxViewports; ++i) {
+            MG_Impl::GLImpl::GetDoublei_v(GL_DEPTH_RANGE, i, out[i].data());
+        }
+        return out;
+    }
+} // namespace
+
+TEST_F(RenderStateTest, ScissorTestIsIndexedByViewport) {
+    // The exact shape of KHR-GL43.viewport_array.scissor_test_state_api's toggle loop: one index
+    // is flipped and EVERY index is read back, so a broadcast masquerading as an indexed write
+    // cannot pass.
+    MG_Impl::GLImpl::Disable(GL_SCISSOR_TEST);
+    ExpectSingleGlError(GL_NO_ERROR);
+
+    for (GLuint toggled = 0; toggled < kMaxViewports; ++toggled) {
+        MG_Impl::GLImpl::Enablei(GL_SCISSOR_TEST, toggled);
+        EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR) << "index " << toggled;
+        for (GLuint i = 0; i < kMaxViewports; ++i) {
+            EXPECT_EQ(MG_Impl::GLImpl::IsEnabledi(GL_SCISSOR_TEST, i), i == toggled ? GL_TRUE : GL_FALSE)
+                << "enabled index " << toggled << ", read index " << i;
+        }
+        MG_Impl::GLImpl::Disablei(GL_SCISSOR_TEST, toggled);
+        EXPECT_EQ(MG_Impl::GLImpl::IsEnabledi(GL_SCISSOR_TEST, toggled), GL_FALSE);
+    }
+    ExpectSingleGlError(GL_NO_ERROR);
+}
+
+TEST_F(RenderStateTest, NonIndexedScissorTestEnableWritesEveryViewport) {
+    // GL 4.6 core 17.3.2: Enable/Disable(SCISSOR_TEST) is "for all viewports". Reading only
+    // index 0 back would let a broadcast-less implementation through, so every index is checked.
+    MG_Impl::GLImpl::Enable(GL_SCISSOR_TEST);
+    for (GLuint i = 0; i < kMaxViewports; ++i) {
+        EXPECT_EQ(MG_Impl::GLImpl::IsEnabledi(GL_SCISSOR_TEST, i), GL_TRUE) << "index " << i;
+    }
+    // ... and the non-indexed query answers for viewport 0 (GL 4.6 core 22.1).
+    EXPECT_EQ(MG_Impl::GLImpl::IsEnabled(GL_SCISSOR_TEST), GL_TRUE);
+
+    MG_Impl::GLImpl::Disable(GL_SCISSOR_TEST);
+    for (GLuint i = 0; i < kMaxViewports; ++i) {
+        EXPECT_EQ(MG_Impl::GLImpl::IsEnabledi(GL_SCISSOR_TEST, i), GL_FALSE) << "index " << i;
+    }
+    EXPECT_EQ(MG_Impl::GLImpl::IsEnabled(GL_SCISSOR_TEST), GL_FALSE);
+
+    // An indexed enable on a NON-zero index must not move the non-indexed answer.
+    MG_Impl::GLImpl::Enablei(GL_SCISSOR_TEST, 3);
+    EXPECT_EQ(MG_Impl::GLImpl::IsEnabled(GL_SCISSOR_TEST), GL_FALSE);
+    MG_Impl::GLImpl::Enablei(GL_SCISSOR_TEST, 0);
+    EXPECT_EQ(MG_Impl::GLImpl::IsEnabled(GL_SCISSOR_TEST), GL_TRUE);
+
+    MG_Impl::GLImpl::Disable(GL_SCISSOR_TEST);
+    ExpectSingleGlError(GL_NO_ERROR);
+}
+
+TEST_F(RenderStateTest, ScissorTestEnableRejectsAnOutOfRangeViewportIndex) {
+    MG_Impl::GLImpl::Enablei(GL_SCISSOR_TEST, kMaxViewports);
+    ExpectSingleGlError(GL_INVALID_VALUE);
+
+    MG_Impl::GLImpl::Disablei(GL_SCISSOR_TEST, kMaxViewports);
+    ExpectSingleGlError(GL_INVALID_VALUE);
+
+    EXPECT_EQ(MG_Impl::GLImpl::IsEnabledi(GL_SCISSOR_TEST, kMaxViewports), GL_FALSE);
+    ExpectSingleGlError(GL_INVALID_VALUE);
+
+    // MAX_VIEWPORTS - 1 is the last LEGAL index and must stay silent.
+    MG_Impl::GLImpl::Enablei(GL_SCISSOR_TEST, kMaxViewports - 1);
+    ExpectSingleGlError(GL_NO_ERROR);
+    MG_Impl::GLImpl::Disablei(GL_SCISSOR_TEST, kMaxViewports - 1);
+    ExpectSingleGlError(GL_NO_ERROR);
+}
+
+TEST_F(RenderStateTest, MaxViewportsMatchesTheIndexedStateWidth) {
+    // The advertised limit and the width of the state arrays are the same number by
+    // construction; a divergence would make some index simultaneously legal to the CTS and
+    // out of range to the setters.
+    GLint maxViewports = 0;
+    MG_Impl::GLImpl::GetIntegerv(GL_MAX_VIEWPORTS, &maxViewports);
+    ExpectSingleGlError(GL_NO_ERROR);
+    EXPECT_EQ(maxViewports, static_cast<GLint>(kMaxViewports));
+    EXPECT_GE(maxViewports, 16) << "GL 4.3 core requires MAX_VIEWPORTS >= 16";
+}
+
+TEST_F(RenderStateTest, ViewportArrayvRoundTripsThroughEveryGetterWidth) {
+    Array<GLfloat, kMaxViewports * 4> written{};
+    for (GLuint i = 0; i < kMaxViewports; ++i) {
+        written[i * 4 + 0] = static_cast<GLfloat>(i) + 0.125f;
+        written[i * 4 + 1] = static_cast<GLfloat>(i) + 0.25f;
+        written[i * 4 + 2] = static_cast<GLfloat>(64 + i);
+        written[i * 4 + 3] = static_cast<GLfloat>(32 + i);
+    }
+    MG_Impl::GLImpl::ViewportArrayv(0, kMaxViewports, written.data());
+    ExpectSingleGlError(GL_NO_ERROR);
+
+    for (GLuint i = 0; i < kMaxViewports; ++i) {
+        GLfloat asFloat[4] = {};
+        MG_Impl::GLImpl::GetFloati_v(GL_VIEWPORT, i, asFloat);
+        // Bit-exact: the fractional origin is the whole point of float viewport state, and the
+        // CTS compares with == (0.125 and 0.25 are exact binary fractions, so this is fair).
+        EXPECT_EQ(asFloat[0], written[i * 4 + 0]) << "index " << i << " must round-trip verbatim";
+        EXPECT_EQ(asFloat[1], written[i * 4 + 1]) << "index " << i;
+        EXPECT_EQ(asFloat[2], written[i * 4 + 2]) << "index " << i;
+        EXPECT_EQ(asFloat[3], written[i * 4 + 3]) << "index " << i;
+
+        GLdouble asDouble[4] = {};
+        MG_Impl::GLImpl::GetDoublei_v(GL_VIEWPORT, i, asDouble);
+        for (int c = 0; c < 4; ++c) {
+            EXPECT_EQ(asDouble[c], static_cast<GLdouble>(written[i * 4 + c])) << "index " << i << " component " << c;
+        }
+
+        // The integer widths round to nearest rather than truncate; the .5+ case is pinned by
+        // ViewportRoundsRatherThanTruncatesForIntegerQueries below.
+        GLint asInt[4] = {};
+        MG_Impl::GLImpl::GetIntegeri_v(GL_VIEWPORT, i, asInt);
+        EXPECT_EQ(asInt[2], static_cast<GLint>(64 + i)) << "index " << i;
+        EXPECT_EQ(asInt[3], static_cast<GLint>(32 + i)) << "index " << i;
+
+        GLint64 asInt64[4] = {};
+        MG_Impl::GLImpl::GetInteger64i_v(GL_VIEWPORT, i, asInt64);
+        for (int c = 0; c < 4; ++c) {
+            EXPECT_EQ(asInt64[c], static_cast<GLint64>(asInt[c])) << "index " << i << " component " << c;
+        }
+
+        GLboolean asBool[4] = {};
+        MG_Impl::GLImpl::GetBooleani_v(GL_VIEWPORT, i, asBool);
+        EXPECT_EQ(asBool[2], GL_TRUE) << "index " << i << ": a non-zero width is GL_TRUE";
+    }
+    ExpectSingleGlError(GL_NO_ERROR);
+}
+
+TEST_F(RenderStateTest, ViewportRoundsRatherThanTruncatesForIntegerQueries) {
+    MG_Impl::GLImpl::ViewportIndexedf(2, 0.0f, 0.0f, 255.875f, 63.5f);
+    ExpectSingleGlError(GL_NO_ERROR);
+
+    GLint asInt[4] = {};
+    MG_Impl::GLImpl::GetIntegeri_v(GL_VIEWPORT, 2, asInt);
+    EXPECT_EQ(asInt[2], 256);
+    EXPECT_EQ(asInt[3], 64);
+
+    GLfloat asFloat[4] = {};
+    MG_Impl::GLImpl::GetFloati_v(GL_VIEWPORT, 2, asFloat);
+    EXPECT_EQ(asFloat[2], 255.875f) << "the integer query must not disturb the stored float";
+    ExpectSingleGlError(GL_NO_ERROR);
+}
+
+TEST_F(RenderStateTest, ViewportIndexedWritesTouchExactlyOneIndex) {
+    MG_Impl::GLImpl::Viewport(0, 0, 8, 8);
+    const auto before = ReadAllViewports();
+
+    for (GLuint target = 0; target < kMaxViewports; ++target) {
+        const GLfloat value[4] = {0.375f, 0.375f, 0.625f, 0.625f};
+        // Alternate the two indexed entry points so both are covered by the isolation claim.
+        if (target % 2 == 0) {
+            MG_Impl::GLImpl::ViewportIndexedf(target, value[0], value[1], value[2], value[3]);
+        } else {
+            MG_Impl::GLImpl::ViewportIndexedfv(target, value);
+        }
+        ExpectSingleGlError(GL_NO_ERROR);
+
+        const auto after = ReadAllViewports();
+        for (GLuint i = 0; i < kMaxViewports; ++i) {
+            if (i == target) {
+                EXPECT_EQ(after[i][0], value[0]) << "index " << i;
+                EXPECT_EQ(after[i][2], value[2]) << "index " << i;
+            } else {
+                EXPECT_EQ(after[i], before[i]) << "write to " << target << " disturbed index " << i;
+            }
+        }
+        MG_Impl::GLImpl::ViewportIndexedf(target, before[target][0], before[target][1], before[target][2],
+                                          before[target][3]);
+    }
+    ExpectSingleGlError(GL_NO_ERROR);
+}
+
+TEST_F(RenderStateTest, ClassicViewportWritesEveryIndexAndIsVisibleThroughIndexZero) {
+    // Both directions of the aliasing. ARB_viewport_array defines glViewport as ViewportIndexedf
+    // on every index, and glGetIntegerv(GL_VIEWPORT) as viewport 0.
+    MG_Impl::GLImpl::ViewportIndexedf(5, 1.0f, 2.0f, 3.0f, 4.0f);
+    MG_Impl::GLImpl::Viewport(0, 0, 1, 1);
+    ExpectSingleGlError(GL_NO_ERROR);
+    for (GLuint i = 0; i < kMaxViewports; ++i) {
+        GLfloat data[4] = {};
+        MG_Impl::GLImpl::GetFloati_v(GL_VIEWPORT, i, data);
+        EXPECT_EQ(data[0], 0.0f) << "index " << i;
+        EXPECT_EQ(data[2], 1.0f) << "glViewport must overwrite index " << i;
+    }
+
+    MG_Impl::GLImpl::ViewportIndexedf(0, 4.0f, 5.0f, 6.0f, 7.0f);
+    GLint classic[4] = {};
+    MG_Impl::GLImpl::GetIntegerv(GL_VIEWPORT, classic);
+    EXPECT_EQ(classic[0], 4);
+    EXPECT_EQ(classic[2], 6);
+    GLfloat classicFloat[4] = {};
+    MG_Impl::GLImpl::GetFloatv(GL_VIEWPORT, classicFloat);
+    EXPECT_EQ(classicFloat[2], 6.0f);
+    // Index 5 keeps its own value: writing index 0 is not a broadcast.
+    GLfloat other[4] = {};
+    MG_Impl::GLImpl::GetFloati_v(GL_VIEWPORT, 5, other);
+    EXPECT_EQ(other[2], 1.0f);
+    ExpectSingleGlError(GL_NO_ERROR);
+}
+
+TEST_F(RenderStateTest, ScissorBoxRoundTripsPerIndexAndAliasesIndexZero) {
+    Array<GLint, kMaxViewports * 4> written{};
+    for (GLuint i = 0; i < kMaxViewports; ++i) {
+        written[i * 4 + 0] = static_cast<GLint>(i);
+        written[i * 4 + 1] = static_cast<GLint>(i * 2);
+        written[i * 4 + 2] = static_cast<GLint>(16 + i);
+        written[i * 4 + 3] = static_cast<GLint>(8 + i);
+    }
+    MG_Impl::GLImpl::ScissorArrayv(0, kMaxViewports, written.data());
+    ExpectSingleGlError(GL_NO_ERROR);
+
+    for (GLuint i = 0; i < kMaxViewports; ++i) {
+        GLint readBack[4] = {};
+        MG_Impl::GLImpl::GetIntegeri_v(GL_SCISSOR_BOX, i, readBack);
+        for (int c = 0; c < 4; ++c) {
+            EXPECT_EQ(readBack[c], written[i * 4 + c]) << "index " << i << " component " << c;
+        }
+    }
+
+    // Indexed writes stay indexed; both spellings.
+    MG_Impl::GLImpl::ScissorIndexed(4, 4, 4, 8, 8);
+    const GLint indexedV[4] = {9, 9, 12, 12};
+    MG_Impl::GLImpl::ScissorIndexedv(7, indexedV);
+    ExpectSingleGlError(GL_NO_ERROR);
+    GLint probe[4] = {};
+    MG_Impl::GLImpl::GetIntegeri_v(GL_SCISSOR_BOX, 4, probe);
+    EXPECT_EQ(probe[2], 8);
+    MG_Impl::GLImpl::GetIntegeri_v(GL_SCISSOR_BOX, 7, probe);
+    EXPECT_EQ(probe[2], 12);
+    MG_Impl::GLImpl::GetIntegeri_v(GL_SCISSOR_BOX, 5, probe);
+    EXPECT_EQ(probe[2], static_cast<GLint>(16 + 5)) << "index 5 must be untouched";
+
+    // glScissor writes every rectangle, and glGetIntegerv(GL_SCISSOR_BOX) reports rectangle 0.
+    MG_Impl::GLImpl::Scissor(2, 3, 5, 6);
+    for (GLuint i = 0; i < kMaxViewports; ++i) {
+        MG_Impl::GLImpl::GetIntegeri_v(GL_SCISSOR_BOX, i, probe);
+        EXPECT_EQ(probe[0], 2) << "index " << i;
+        EXPECT_EQ(probe[2], 5) << "index " << i;
+    }
+    GLint classic[4] = {};
+    MG_Impl::GLImpl::GetIntegerv(GL_SCISSOR_BOX, classic);
+    EXPECT_EQ(classic[2], 5);
+    ExpectSingleGlError(GL_NO_ERROR);
+}
+
+TEST_F(RenderStateTest, DepthRangeRoundTripsPerIndexAndAliasesIndexZero) {
+    Array<GLdouble, kMaxViewports * 2> written{};
+    for (GLuint i = 0; i < kMaxViewports; ++i) {
+        // Exact binary fractions, like the CTS uses: a float-backed store round-trips them.
+        written[i * 2 + 0] = static_cast<GLdouble>(i) / 16.0;
+        written[i * 2 + 1] = 1.0 - static_cast<GLdouble>(i) / 16.0;
+    }
+    MG_Impl::GLImpl::DepthRangeArrayv(0, kMaxViewports, written.data());
+    ExpectSingleGlError(GL_NO_ERROR);
+
+    const auto readBack = ReadAllDepthRanges();
+    for (GLuint i = 0; i < kMaxViewports; ++i) {
+        EXPECT_EQ(readBack[i][0], written[i * 2 + 0]) << "index " << i;
+        EXPECT_EQ(readBack[i][1], written[i * 2 + 1]) << "index " << i;
+    }
+
+    MG_Impl::GLImpl::DepthRangeIndexed(9, 0.25, 0.75);
+    ExpectSingleGlError(GL_NO_ERROR);
+    GLdouble probe[2] = {};
+    MG_Impl::GLImpl::GetDoublei_v(GL_DEPTH_RANGE, 9, probe);
+    EXPECT_EQ(probe[0], 0.25);
+    EXPECT_EQ(probe[1], 0.75);
+    MG_Impl::GLImpl::GetDoublei_v(GL_DEPTH_RANGE, 8, probe);
+    EXPECT_EQ(probe[0], 8.0 / 16.0) << "index 8 must be untouched";
+
+    GLfloat asFloat[2] = {};
+    MG_Impl::GLImpl::GetFloati_v(GL_DEPTH_RANGE, 9, asFloat);
+    EXPECT_EQ(asFloat[0], 0.25f);
+    EXPECT_EQ(asFloat[1], 0.75f);
+
+    // glDepthRange writes every range; glGetDoublev(GL_DEPTH_RANGE) reports range 0.
+    MG_Impl::GLImpl::DepthRange(0.0, 1.0);
+    for (GLuint i = 0; i < kMaxViewports; ++i) {
+        MG_Impl::GLImpl::GetDoublei_v(GL_DEPTH_RANGE, i, probe);
+        EXPECT_EQ(probe[0], 0.0) << "index " << i;
+        EXPECT_EQ(probe[1], 1.0) << "index " << i;
+    }
+    MG_Impl::GLImpl::DepthRangeIndexed(0, 0.125, 0.875);
+    GLdouble classic[2] = {};
+    MG_Impl::GLImpl::GetDoublev(GL_DEPTH_RANGE, classic);
+    EXPECT_EQ(classic[0], 0.125);
+    EXPECT_EQ(classic[1], 0.875);
+    MG_Impl::GLImpl::DepthRange(0.0, 1.0);
+    ExpectSingleGlError(GL_NO_ERROR);
+}
+
+TEST_F(RenderStateTest, IndexedRectangleSettersRejectAnOutOfRangeIndex) {
+    const GLfloat viewport[4] = {0.0f, 0.0f, 1.0f, 1.0f};
+    const GLint scissor[4] = {0, 0, 1, 1};
+
+    for (const GLuint index : {kMaxViewports, kMaxViewports + 1}) {
+        MG_Impl::GLImpl::ViewportIndexedf(index, 0.0f, 0.0f, 1.0f, 1.0f);
+        ExpectSingleGlError(GL_INVALID_VALUE);
+        MG_Impl::GLImpl::ViewportIndexedfv(index, viewport);
+        ExpectSingleGlError(GL_INVALID_VALUE);
+        MG_Impl::GLImpl::ScissorIndexed(index, 0, 0, 1, 1);
+        ExpectSingleGlError(GL_INVALID_VALUE);
+        MG_Impl::GLImpl::ScissorIndexedv(index, scissor);
+        ExpectSingleGlError(GL_INVALID_VALUE);
+        MG_Impl::GLImpl::DepthRangeIndexed(index, 0.0, 1.0);
+        ExpectSingleGlError(GL_INVALID_VALUE);
+    }
+
+    // The last legal index must stay silent - api_errors checks both sides of the boundary.
+    MG_Impl::GLImpl::ViewportIndexedf(kMaxViewports - 1, 0.0f, 0.0f, 1.0f, 1.0f);
+    ExpectSingleGlError(GL_NO_ERROR);
+    MG_Impl::GLImpl::ScissorIndexed(kMaxViewports - 1, 0, 0, 1, 1);
+    ExpectSingleGlError(GL_NO_ERROR);
+    MG_Impl::GLImpl::DepthRangeIndexed(kMaxViewports - 1, 0.0, 1.0);
+    ExpectSingleGlError(GL_NO_ERROR);
+}
+
+TEST_F(RenderStateTest, ArraySettersRejectAnOutOfRangeRangeButAcceptAnExactlyFullOne) {
+    Array<GLfloat, kMaxViewports * 4> viewports{};
+    Array<GLint, kMaxViewports * 4> scissors{};
+    Array<GLdouble, kMaxViewports * 2> depths{};
+    for (GLuint i = 0; i < kMaxViewports; ++i) {
+        viewports[i * 4 + 2] = 1.0f;
+        viewports[i * 4 + 3] = 1.0f;
+        scissors[i * 4 + 2] = 1;
+        scissors[i * 4 + 3] = 1;
+        depths[i * 2 + 1] = 1.0;
+    }
+
+    // first == MAX_VIEWPORTS, and first + count > MAX_VIEWPORTS.
+    MG_Impl::GLImpl::ViewportArrayv(kMaxViewports, 1, viewports.data());
+    ExpectSingleGlError(GL_INVALID_VALUE);
+    MG_Impl::GLImpl::ViewportArrayv(1, kMaxViewports, viewports.data());
+    ExpectSingleGlError(GL_INVALID_VALUE);
+    MG_Impl::GLImpl::ScissorArrayv(kMaxViewports, 1, scissors.data());
+    ExpectSingleGlError(GL_INVALID_VALUE);
+    MG_Impl::GLImpl::ScissorArrayv(1, kMaxViewports, scissors.data());
+    ExpectSingleGlError(GL_INVALID_VALUE);
+    MG_Impl::GLImpl::DepthRangeArrayv(kMaxViewports, 1, depths.data());
+    ExpectSingleGlError(GL_INVALID_VALUE);
+    MG_Impl::GLImpl::DepthRangeArrayv(1, kMaxViewports, depths.data());
+    ExpectSingleGlError(GL_INVALID_VALUE);
+
+    // first + count == MAX_VIEWPORTS is LEGAL - the off-by-one an ">=" bound would get wrong,
+    // and one KHR-GL43.viewport_array.api_errors asserts explicitly.
+    MG_Impl::GLImpl::ViewportArrayv(1, kMaxViewports - 1, viewports.data());
+    ExpectSingleGlError(GL_NO_ERROR);
+    MG_Impl::GLImpl::ScissorArrayv(1, kMaxViewports - 1, scissors.data());
+    ExpectSingleGlError(GL_NO_ERROR);
+    MG_Impl::GLImpl::DepthRangeArrayv(1, kMaxViewports - 1, depths.data());
+    ExpectSingleGlError(GL_NO_ERROR);
+
+    // A negative count is GL_INVALID_VALUE and must not be read as a huge unsigned length.
+    MG_Impl::GLImpl::ViewportArrayv(0, -1, viewports.data());
+    ExpectSingleGlError(GL_INVALID_VALUE);
+    MG_Impl::GLImpl::ScissorArrayv(0, -1, scissors.data());
+    ExpectSingleGlError(GL_INVALID_VALUE);
+    MG_Impl::GLImpl::DepthRangeArrayv(0, -1, depths.data());
+    ExpectSingleGlError(GL_INVALID_VALUE);
+}
+
+TEST_F(RenderStateTest, NegativeExtentsAreRejectedWithoutDisturbingState) {
+    MG_Impl::GLImpl::Viewport(0, 0, 4, 4);
+    MG_Impl::GLImpl::Scissor(0, 0, 4, 4);
+    ExpectSingleGlError(GL_NO_ERROR);
+
+    MG_Impl::GLImpl::Viewport(0, 0, -1, 1);
+    ExpectSingleGlError(GL_INVALID_VALUE);
+    MG_Impl::GLImpl::Viewport(0, 0, 1, -1);
+    ExpectSingleGlError(GL_INVALID_VALUE);
+    MG_Impl::GLImpl::Scissor(0, 0, -1, 1);
+    ExpectSingleGlError(GL_INVALID_VALUE);
+    MG_Impl::GLImpl::Scissor(0, 0, 1, -1);
+    ExpectSingleGlError(GL_INVALID_VALUE);
+
+    for (GLuint index = 0; index < kMaxViewports; ++index) {
+        MG_Impl::GLImpl::ViewportIndexedf(index, 0.0f, 0.0f, -1.0f, 1.0f);
+        ExpectSingleGlError(GL_INVALID_VALUE);
+        MG_Impl::GLImpl::ViewportIndexedf(index, 0.0f, 0.0f, 1.0f, -1.0f);
+        ExpectSingleGlError(GL_INVALID_VALUE);
+
+        const GLfloat badW[4] = {0.0f, 0.0f, -1.0f, 1.0f};
+        MG_Impl::GLImpl::ViewportIndexedfv(index, badW);
+        ExpectSingleGlError(GL_INVALID_VALUE);
+
+        MG_Impl::GLImpl::ScissorIndexed(index, 0, 0, -1, 1);
+        ExpectSingleGlError(GL_INVALID_VALUE);
+        const GLint badH[4] = {0, 0, 1, -1};
+        MG_Impl::GLImpl::ScissorIndexedv(index, badH);
+        ExpectSingleGlError(GL_INVALID_VALUE);
+
+        // The array form must reject the WHOLE call for one bad element, exactly once, and
+        // leave every rectangle alone - api_errors submits a full 16-element array with a
+        // single negative extent and then requires the error queue to hold one entry.
+        Array<GLfloat, kMaxViewports * 4> viewports{};
+        Array<GLint, kMaxViewports * 4> scissors{};
+        for (GLuint i = 0; i < kMaxViewports; ++i) {
+            viewports[i * 4 + 2] = 1.0f;
+            viewports[i * 4 + 3] = 1.0f;
+            scissors[i * 4 + 2] = 1;
+            scissors[i * 4 + 3] = 1;
+        }
+        viewports[index * 4 + 2] = -1.0f;
+        scissors[index * 4 + 3] = -1;
+        MG_Impl::GLImpl::ViewportArrayv(0, kMaxViewports, viewports.data());
+        ExpectSingleGlError(GL_INVALID_VALUE);
+        MG_Impl::GLImpl::ScissorArrayv(0, kMaxViewports, scissors.data());
+        ExpectSingleGlError(GL_INVALID_VALUE);
+    }
+
+    // Nothing above may have landed.
+    GLint viewport[4] = {};
+    MG_Impl::GLImpl::GetIntegeri_v(GL_VIEWPORT, 0, viewport);
+    EXPECT_EQ(viewport[2], 4);
+    EXPECT_EQ(viewport[3], 4);
+    GLint scissor[4] = {};
+    MG_Impl::GLImpl::GetIntegeri_v(GL_SCISSOR_BOX, 0, scissor);
+    EXPECT_EQ(scissor[2], 4);
+    EXPECT_EQ(scissor[3], 4);
+    ExpectSingleGlError(GL_NO_ERROR);
+}
+
+TEST_F(RenderStateTest, IndexedRectangleQueriesRejectAnOutOfRangeIndex) {
+    GLint ints[4] = {};
+    GLfloat floats[4] = {};
+    GLdouble doubles[4] = {};
+
+    MG_Impl::GLImpl::GetIntegeri_v(GL_SCISSOR_BOX, kMaxViewports, ints);
+    ExpectSingleGlError(GL_INVALID_VALUE);
+    MG_Impl::GLImpl::GetFloati_v(GL_VIEWPORT, kMaxViewports, floats);
+    ExpectSingleGlError(GL_INVALID_VALUE);
+    MG_Impl::GLImpl::GetDoublei_v(GL_DEPTH_RANGE, kMaxViewports, doubles);
+    ExpectSingleGlError(GL_INVALID_VALUE);
+
+    MG_Impl::GLImpl::GetIntegeri_v(GL_SCISSOR_BOX, kMaxViewports - 1, ints);
+    ExpectSingleGlError(GL_NO_ERROR);
+    MG_Impl::GLImpl::GetFloati_v(GL_VIEWPORT, kMaxViewports - 1, floats);
+    ExpectSingleGlError(GL_NO_ERROR);
+    MG_Impl::GLImpl::GetDoublei_v(GL_DEPTH_RANGE, kMaxViewports - 1, doubles);
+    ExpectSingleGlError(GL_NO_ERROR);
 }

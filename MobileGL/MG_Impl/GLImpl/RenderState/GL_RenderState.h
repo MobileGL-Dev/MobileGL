@@ -20,6 +20,16 @@ namespace MobileGL::MG_Impl::GLImpl {
     void Enablei(GLenum target, GLuint index);
     void BlendFunc(GLenum sfactor, GLenum dfactor);
     void Viewport(GLint x, GLint y, GLsizei width, GLsizei height);
+    // ARB_viewport_array (core since GL 4.1). Every one of these addresses the same 16-element
+    // indexed state the classic glViewport/glScissor/glDepthRange trio broadcasts to.
+    void ViewportArrayv(GLuint first, GLsizei count, const GLfloat* v);
+    void ViewportIndexedf(GLuint index, GLfloat x, GLfloat y, GLfloat w, GLfloat h);
+    void ViewportIndexedfv(GLuint index, const GLfloat* v);
+    void ScissorArrayv(GLuint first, GLsizei count, const GLint* v);
+    void ScissorIndexed(GLuint index, GLint left, GLint bottom, GLsizei width, GLsizei height);
+    void ScissorIndexedv(GLuint index, const GLint* v);
+    void DepthRangeArrayv(GLuint first, GLsizei count, const GLdouble* v);
+    void DepthRangeIndexed(GLuint index, GLdouble n, GLdouble f);
     void StencilOpSeparate(GLenum face, GLenum sfail, GLenum dpfail, GLenum dppass);
     void StencilOp(GLenum fail, GLenum zfail, GLenum zpass);
     void StencilMaskSeparate(GLenum face, GLuint mask);

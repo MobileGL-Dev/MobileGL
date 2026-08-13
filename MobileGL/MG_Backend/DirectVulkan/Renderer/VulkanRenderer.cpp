@@ -335,19 +335,19 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // Complete input inventory of ApplyDynamicDrawStateTail, one line per reader
         // (each accessor it replaces is a verified plain field read of the same
         // RenderStateParameters field - RenderState.cpp):
-        //   ApplyGLViewportState    : Viewport, DepthRange, + extent/isDefaultFbo/preTransform
+        //   ApplyGLViewportState    : Viewports[0], DepthRanges[0], + extent/isDefaultFbo/preTransform
         //   ApplyBlendConstants     : BlendColor
         //   ApplyPolygonOffsetState : PolygonOffsetUnits, PolygonOffsetFactor
         //   ApplyLineWidthState     : LineWidth (see the caveat below)
         //   ApplyStencilState       : StencilStates[0..1].{ValueMask, WriteMask, Ref}
-        //   scissor rect            : ScissorTestEnabled, ScissorBox,
+        //   scissor rect            : ScissorTestEnabledMask bit 0, ScissorBoxes[0],
         //                             + extent/isDefaultFbo/preTransform
         // Caveat, unchanged from the version-only gate: ApplyLineWidthState also clamps
         // to the ACTIVE BACKEND OBJECT's aliased line-width range. Those are device
         // limits queried once at backend init and constant for the renderer's lifetime,
         // so they are not part of the key (the version gate never covered them either).
         struct DynamicTailKey {
-            Int viewport[4] = {0, 0, 0, 0};
+            Float viewport[4] = {0.0f, 0.0f, 0.0f, 0.0f};
             Float depthRange[2] = {0.0f, 0.0f};
             Float blendColor[4] = {0.0f, 0.0f, 0.0f, 0.0f};
             Float polygonOffsetFactor = 0.0f;
@@ -5342,12 +5342,14 @@ void main() {
         DynamicStateShadow::DynamicTailKey key;
         {
             const RenderStateParameters& p = MG_State::pGLContext->GetRenderStateParameters();
-            key.viewport[0] = p.Viewport.x();
-            key.viewport[1] = p.Viewport.y();
-            key.viewport[2] = p.Viewport.z();
-            key.viewport[3] = p.Viewport.w();
-            key.depthRange[0] = p.DepthRange.x();
-            key.depthRange[1] = p.DepthRange.y();
+            // Viewport 0 and its depth range: ApplyGLViewportState reads exactly those two
+            // (per-index state for indices > 0 is keyed separately, see multiViewportKey below).
+            key.viewport[0] = p.Viewports[0].x();
+            key.viewport[1] = p.Viewports[0].y();
+            key.viewport[2] = p.Viewports[0].z();
+            key.viewport[3] = p.Viewports[0].w();
+            key.depthRange[0] = p.DepthRanges[0].x();
+            key.depthRange[1] = p.DepthRanges[0].y();
             key.blendColor[0] = p.BlendColor.x();
             key.blendColor[1] = p.BlendColor.y();
             key.blendColor[2] = p.BlendColor.z();
@@ -5362,11 +5364,11 @@ void main() {
                 key.stencilWriteMask[face] = p.StencilStates[face].WriteMask;
                 key.stencilRef[face] = p.StencilStates[face].Ref;
             }
-            key.scissorEnabled = p.ScissorTestEnabled;
-            key.scissorBox[0] = p.ScissorBox.x();
-            key.scissorBox[1] = p.ScissorBox.y();
-            key.scissorBox[2] = p.ScissorBox.z();
-            key.scissorBox[3] = p.ScissorBox.w();
+            key.scissorEnabled = (p.ScissorTestEnabledMask & 1u) != 0;
+            key.scissorBox[0] = p.ScissorBoxes[0].x();
+            key.scissorBox[1] = p.ScissorBoxes[0].y();
+            key.scissorBox[2] = p.ScissorBoxes[0].z();
+            key.scissorBox[3] = p.ScissorBoxes[0].w();
             key.extentX = extent.x();
             key.extentY = extent.y();
             key.preTransform = static_cast<Uint32>(preTransform);
