@@ -80,6 +80,7 @@ add_executable(MobileGLIntegrationTest
     Scenarios/VertexArrayEnableDisableScenario.cpp
     Scenarios/CopyImageLevelRangeScenario.cpp
     Scenarios/CopyImageLayeredScenario.cpp
+    Scenarios/LayeredAttachmentBarrierScenario.cpp
 )
 
 target_include_directories(MobileGLIntegrationTest PRIVATE

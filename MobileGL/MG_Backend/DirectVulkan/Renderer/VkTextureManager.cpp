@@ -300,8 +300,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         Bool ok = VkTextureManager::TransitionImageLayout(
             commandBuffer, newResource.image, newResource.layout, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
             VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
-            0, VK_ACCESS_TRANSFER_WRITE_BIT, newResource.aspect, 0, newResource.mipLevels,
-            newResource.arrayLayers);
+            0, VK_ACCESS_TRANSFER_WRITE_BIT, newResource.aspect, 0, newResource.mipLevels);
         MOBILEGL_ASSERT(ok, "PreserveTextureContentsOnRecreate: failed to prepare destination image");
 
         VkImageLayout srcTrackedLayout = oldResource.layout;
@@ -311,8 +310,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         ok = VkTextureManager::TransitionImageLayout(
             commandBuffer, oldResource.image, srcTrackedLayout, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
             srcStageMask, VK_PIPELINE_STAGE_TRANSFER_BIT,
-            srcAccessMask, VK_ACCESS_TRANSFER_READ_BIT, oldResource.aspect, 0, preservedMipLevels,
-            oldResource.arrayLayers);
+            srcAccessMask, VK_ACCESS_TRANSFER_READ_BIT, oldResource.aspect, 0, preservedMipLevels);
         MOBILEGL_ASSERT(ok, "PreserveTextureContentsOnRecreate: failed to prepare source image");
 
         Vector<VkImageCopy> copyRegions;
@@ -344,8 +342,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         ok = VkTextureManager::TransitionImageLayout(
             commandBuffer, newResource.image, newResource.layout, oldResource.layout,
             VK_PIPELINE_STAGE_TRANSFER_BIT, dstStageMask,
-            VK_ACCESS_TRANSFER_WRITE_BIT, dstAccessMask, newResource.aspect, 0, newResource.mipLevels,
-            newResource.arrayLayers);
+            VK_ACCESS_TRANSFER_WRITE_BIT, dstAccessMask, newResource.aspect, 0, newResource.mipLevels);
         MOBILEGL_ASSERT(ok, "PreserveTextureContentsOnRecreate: failed to restore destination layout");
 
         VK_VERIFY(vkEndCommandBuffer(commandBuffer), "vkEndCommandBuffer(texture preserve)");
@@ -1191,7 +1188,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 const Bool lowerTransitioned = TransitionImageLayout(
                     commandBuffer, resource.image, lowerMipLayout, newLayout,
                     srcStageMask, dstStageMask, srcAccessMask, dstAccessMask,
-                    resource.aspect, 0, writtenMipLevel, resource.arrayLayers);
+                    resource.aspect, 0, writtenMipLevel);
                 MOBILEGL_ASSERT(lowerTransitioned,
                                 "UpdateTrackedImageLayoutAfterAttachmentWrite: failed to transition lower mip levels for textureId=%d",
                                 texture->GetExternalIndex());
@@ -1203,8 +1200,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 const Bool upperTransitioned = TransitionImageLayout(
                     commandBuffer, resource.image, upperMipLayout, newLayout,
                     srcStageMask, dstStageMask, srcAccessMask, dstAccessMask,
-                    resource.aspect, upperBaseMipLevel, resource.mipLevels - upperBaseMipLevel,
-                    resource.arrayLayers);
+                    resource.aspect, upperBaseMipLevel, resource.mipLevels - upperBaseMipLevel);
                 MOBILEGL_ASSERT(upperTransitioned,
                                 "UpdateTrackedImageLayoutAfterAttachmentWrite: failed to transition upper mip levels for textureId=%d",
                                 texture->GetExternalIndex());
@@ -1257,8 +1253,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
         const Bool ok = TransitionImageLayout(commandBuffer, resource->image, resource->layout, targetLayout, srcStageMask,
                                               s_sampledReadStages, srcAccessMask,
-                                              VK_ACCESS_SHADER_READ_BIT, resource->aspect, 0, resource->mipLevels,
-                                              resource->arrayLayers);
+                                              VK_ACCESS_SHADER_READ_BIT, resource->aspect, 0, resource->mipLevels);
         MOBILEGL_ASSERT(ok, "TransitionTextureForSampling: transition failed for textureId=%d", texture.GetExternalIndex());
         // Pre-pass stream bookkeeping: a command referencing the image was recorded.
         StampResourceRecordingUse(*resource);
@@ -1288,7 +1283,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                               VK_IMAGE_LAYOUT_GENERAL, srcStageMask,
                                               VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, srcAccessMask,
                                               VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT,
-                                              resource->aspect, 0, resource->mipLevels, resource->arrayLayers);
+                                              resource->aspect, 0, resource->mipLevels);
         MOBILEGL_ASSERT(ok, "TransitionTextureForStorageImage: transition failed for textureId=%d",
                         texture.GetExternalIndex());
         // Pre-pass stream bookkeeping: a command referencing the image was recorded.
@@ -1355,8 +1350,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                                  VkImageLayout& trackedLayout, VkImageLayout newLayout,
                                                  VkPipelineStageFlags srcStageMask, VkPipelineStageFlags dstStageMask,
                                                  VkAccessFlags srcAccessMask, VkAccessFlags dstAccessMask,
-                                                 VkImageAspectFlags aspectMask, Uint32 baseMipLevel, Uint32 levelCount,
-                                                 Uint32 layerCount) {
+                                                 VkImageAspectFlags aspectMask, Uint32 baseMipLevel,
+                                                 Uint32 levelCount) {
         MOBILEGL_ASSERT(image != VK_NULL_HANDLE, "TransitionImageLayout: m_image == VK_NULL_HANDLE");
         MOBILEGL_ASSERT(!((dstAccessMask & VK_ACCESS_TRANSFER_READ_BIT) != 0 &&
                           (dstStageMask & VK_PIPELINE_STAGE_TRANSFER_BIT) == 0),
@@ -1381,7 +1376,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         barrier.subresourceRange.baseMipLevel = baseMipLevel;
         barrier.subresourceRange.levelCount = levelCount;
         barrier.subresourceRange.baseArrayLayer = 0;
-        barrier.subresourceRange.layerCount = layerCount;
+        // Every layer, always - see the declaration for why layout tracking leaves no other
+        // correct answer. VK_REMAINING_ARRAY_LAYERS rather than the image's own `arrayLayers`
+        // because those are not the same number for a 3D image: MobileGL creates 3D images
+        // 2D_ARRAY_COMPATIBLE and their arrayLayers is 1, which today Vulkan reads as "all depth
+        // slices" but will read as "depth slice 0" once VK_KHR_maintenance9 is enabled. The
+        // validation layer warns about that literal 1 by name.
+        barrier.subresourceRange.layerCount = VK_REMAINING_ARRAY_LAYERS;
         vkCmdPipelineBarrier(commandBuffer, srcStageMask, dstStageMask, 0, 0, nullptr, 0, nullptr, 1, &barrier);
 
         trackedLayout = newLayout;
@@ -2605,7 +2606,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                         VK_PIPELINE_STAGE_TRANSFER_BIT,
                                         uploadSrcAccessMask,
                                         VK_ACCESS_TRANSFER_WRITE_BIT,
-                                        aspectMask, 0, outResource.mipLevels, outResource.arrayLayers);
+                                        aspectMask, 0, outResource.mipLevels);
         MOBILEGL_ASSERT(ok, "TransitionImageLayout to VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL failed");
 
         // Array textures keep their GL "depth" in VkImage array layers, so the
@@ -2709,7 +2710,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                    s_sampledReadStages,
                                    VK_ACCESS_TRANSFER_WRITE_BIT,
                                    VK_ACCESS_SHADER_READ_BIT,
-                                   aspectMask, 0, outResource.mipLevels, outResource.arrayLayers);
+                                   aspectMask, 0, outResource.mipLevels);
         MOBILEGL_ASSERT(ok, "TransitionImageLayout to sampled read-only layout failed");
         outResource.layout = finalLayout;
 
