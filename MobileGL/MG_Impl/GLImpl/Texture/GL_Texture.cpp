@@ -3404,6 +3404,17 @@ namespace MobileGL::MG_Impl::GLImpl {
             !TextureImpl::ValidateTextureLevelNumber(dstLevel)) {
             return false;
         }
+        // ValidateTextureLevelNumber only bounds the index by GL_MAX_TEXTURE_SIZE; it cannot
+        // see that this particular texture stops at level 0. Both backends turn <level> into an
+        // image subresource with no further checking (DirectVulkan builds a VkImageCopy from it,
+        // DirectGLES forwards it to the ES copy), so a level the texture never had reached the
+        // driver as an out-of-range mip index - on Adreno that is a SIGSEGV inside
+        // vkCmdCopyImage, which is what KHR-GL43.copy_image.non_existent_mipmap used to do to
+        // the whole glcts process. The answer the spec asks for is GL_INVALID_VALUE.
+        if (!TextureImpl::ValidateTextureLevelExists(srcTexture, srcLevel, __func__) ||
+            !TextureImpl::ValidateTextureLevelExists(dstTexture, dstLevel, __func__)) {
+            return false;
+        }
         if (srcWidth < 0 || srcHeight < 0 || srcDepth < 0) {
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidValue,

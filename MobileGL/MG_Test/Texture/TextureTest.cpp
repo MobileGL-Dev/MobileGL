@@ -1651,6 +1651,100 @@ TEST_F(TextureTest, AnUncompressedRespecificationClearsTheCompressedTag) {
     EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
 }
 
+namespace {
+    // A 16x16 RGBA8 texture with exactly `levelCount` levels, defined the way
+    // KHR-GL43.copy_image.non_existent_mipmap defines its textures - glTexImage2D per
+    // level, NOT glTexStorage2D, because an immutable allocation defines the whole chain
+    // up front and so cannot express "level 1 does not exist".
+    GLuint MakeCopyImageTexture(int levelCount) {
+        GLuint texture = 0;
+        MG_Impl::GLImpl::GenTextures(1, &texture);
+        MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, texture);
+        for (int level = 0; level < levelCount; ++level) {
+            const GLsizei extent = 16 >> level;
+            MG_Impl::GLImpl::TexImage2D(GL_TEXTURE_2D, level, GL_RGBA8, extent, extent, 0, GL_RGBA, GL_UNSIGNED_BYTE,
+                                        nullptr);
+        }
+        return texture;
+    }
+} // namespace
+
+// KHR-GL43.copy_image.non_existent_mipmap. Level 1 of a texture that has only level 0 is
+// not a level: GL 4.6 core 18.3.2 asks for GL_INVALID_VALUE. Until this check existed the
+// level travelled all the way into the backends, and DirectVulkan built a VkImageCopy
+// naming mip 1 of a VkImage created with one mip - which Adreno answered with a SIGSEGV
+// inside vkCmdCopyImage, killing the glcts process in the middle of a negative test.
+TEST_F(TextureTest, CopyImageSubDataRejectsALevelTheTextureDoesNotHave) {
+    const GLuint src = MakeCopyImageTexture(1);
+    const GLuint dst = MakeCopyImageTexture(1);
+    ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    MG_Impl::GLImpl::CopyImageSubData(src, GL_TEXTURE_2D, 1, 0, 0, 0, dst, GL_TEXTURE_2D, 0, 0, 0, 0, 1, 1, 1);
+    ExpectSingleGlError(GL_INVALID_VALUE);
+
+    MG_Impl::GLImpl::CopyImageSubData(src, GL_TEXTURE_2D, 0, 0, 0, 0, dst, GL_TEXTURE_2D, 1, 0, 0, 0, 1, 1, 1);
+    ExpectSingleGlError(GL_INVALID_VALUE);
+
+    MG_Impl::GLImpl::CopyImageSubData(src, GL_TEXTURE_2D, 1, 0, 0, 0, dst, GL_TEXTURE_2D, 1, 0, 0, 0, 1, 1, 1);
+    ExpectSingleGlError(GL_INVALID_VALUE);
+}
+
+// The negative control, and the reason the pair below asks for a zero-sized copy: a
+// validator that answered GL_INVALID_VALUE to every non-zero level would satisfy the test
+// above. The two calls here are IDENTICAL except for how many levels the textures have,
+// and a zero extent makes the validator decline the copy without an error just after the
+// level check - so the level count is the only thing either assertion can be reading, and
+// no backend (there is none in this binary) is ever reached.
+TEST_F(TextureTest, CopyImageSubDataAcceptsALevelTheTextureDoesHave) {
+    const GLuint oneLevelSrc = MakeCopyImageTexture(1);
+    const GLuint oneLevelDst = MakeCopyImageTexture(1);
+    const GLuint twoLevelSrc = MakeCopyImageTexture(2);
+    const GLuint twoLevelDst = MakeCopyImageTexture(2);
+    ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    MG_Impl::GLImpl::CopyImageSubData(oneLevelSrc, GL_TEXTURE_2D, 1, 0, 0, 0, oneLevelDst, GL_TEXTURE_2D, 1, 0, 0, 0,
+                                      0, 0, 0);
+    ExpectSingleGlError(GL_INVALID_VALUE);
+
+    MG_Impl::GLImpl::CopyImageSubData(twoLevelSrc, GL_TEXTURE_2D, 1, 0, 0, 0, twoLevelDst, GL_TEXTURE_2D, 1, 0, 0, 0,
+                                      0, 0, 0);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR) << "level 1 of a two-level texture is a level";
+
+    // And the boundary from the other side: two levels means 0 and 1, not 2.
+    MG_Impl::GLImpl::CopyImageSubData(twoLevelSrc, GL_TEXTURE_2D, 2, 0, 0, 0, twoLevelDst, GL_TEXTURE_2D, 0, 0, 0, 0,
+                                      0, 0, 0);
+    ExpectSingleGlError(GL_INVALID_VALUE);
+}
+
+// A texture that has never been given an image is a different fault from a level out of
+// range, and the spec spells it differently: an incomplete object named by a copy is
+// GL_INVALID_OPERATION. Worth pinning because the natural implementation of the check
+// above - level >= levelCount - reports INVALID_VALUE for level 0 of a texture whose level
+// count is zero, which is the wrong answer to the wrong question.
+//
+// BOTH textures are imageless on purpose, and that is the whole point rather than symmetry
+// for its own sake. With one imageless and one RGBA8 texture the format comparison further
+// down already rejected the call, so the case proved nothing about this check. With both
+// imageless the formats are Unknown == Unknown, they MATCH, and every validator downstream
+// waves the call through - which is how the second crash in this entry point was found: the
+// call reached DirectVulkan, SyncTextureAndGetDescriptor returned nothing for a texture with
+// no image, and the release build (where the guarding MOBILEGL_ASSERT expands to nothing)
+// dereferenced it. Reproduced deterministically on lavapipe by
+// KHR-GL43.copy_image.functional_src_target_texture_2d_array_..._dst_format_rgb9_e5.
+TEST_F(TextureTest, CopyImageSubDataRejectsTwoTexturesWithNoImageAtAll) {
+    GLuint firstEmpty = 0;
+    GLuint secondEmpty = 0;
+    MG_Impl::GLImpl::GenTextures(1, &firstEmpty);
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, firstEmpty);
+    MG_Impl::GLImpl::GenTextures(1, &secondEmpty);
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, secondEmpty);
+    ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    MG_Impl::GLImpl::CopyImageSubData(firstEmpty, GL_TEXTURE_2D, 0, 0, 0, 0, secondEmpty, GL_TEXTURE_2D, 0, 0, 0, 0,
+                                      1, 1, 1);
+    ExpectSingleGlError(GL_INVALID_OPERATION);
+}
+
 // GL_DEPTH_STENCIL_TEXTURE_MODE used to be a pure frontend shadow: stored, answered by
 // glGetTexParameter, and never shown to a backend. Sampling therefore always read the depth
 // aspect however the mode was set, which is the whole of

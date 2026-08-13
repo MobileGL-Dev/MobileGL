@@ -5581,6 +5581,16 @@ namespace MobileGL::MG_Backend::DirectGLES {
             TextureImpl::SyncTextureObjectToBackend(srcTexture);
         const SharedPtr<TextureImpl::BackendTextureObject> dstBackendTexture =
             TextureImpl::SyncTextureObjectToBackend(dstTexture);
+        // The DirectVulkan half of this entry point died exactly here, on a texture whose sync
+        // produced nothing - and it died in a release build, where the MOBILEGL_ASSERT that was
+        // supposed to catch it expands to nothing. The four GetBackendTextureId() calls below
+        // are the same dereference. The frontend validator is what keeps this unreachable and
+        // what reports the error the application is owed; declining is only how a future gap up
+        // there stops being a crash. See the level guard in VulkanRenderer::CopyImageSubData.
+        if (!srcBackendTexture || !dstBackendTexture) {
+            MGLOG_E_ONCE("%s: source or destination texture failed to sync; declining the copy", __func__);
+            return;
+        }
 
         const Bool srcIsDepth = MG_Util::IsDepthFormatInternalFormat(srcTexture->GetFormat());
         const Bool dstIsDepth = MG_Util::IsDepthFormatInternalFormat(dstTexture->GetFormat());
