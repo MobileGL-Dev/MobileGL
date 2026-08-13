@@ -302,7 +302,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             .requiredFlags = requiredFlags,
         });
         if (!created || resource.buffer.Map() == nullptr) {
-            MGLOG_E("VkBufferManager::CreateResidentStorage failed (size=%llu)",
+            MGLOG_E_ONCE("VkBufferManager::CreateResidentStorage failed (size=%llu)",
                     static_cast<unsigned long long>(size));
             resource.buffer.Destroy();
             resource.storageSize = 0;
@@ -324,7 +324,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             return false;
         }
         if (!resource.buffer.Upload(bufferObject.MappedData(), size, 0)) {
-            MGLOG_E("VkBufferManager::SwapStorageAndUploadAll: upload failed");
+            MGLOG_E_ONCE("VkBufferManager::SwapStorageAndUploadAll: upload failed");
             resource.pendingFullUpload = true;
             return false;
         }
@@ -409,7 +409,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
 
         if (!resource->buffer.Upload(bufferObject.MappedData(), size, 0)) {
-            MGLOG_E("VkBufferManager::OnRespecify: in-place upload failed");
+            MGLOG_E_ONCE("VkBufferManager::OnRespecify: in-place upload failed");
             resource->pendingFullUpload = true;
         }
     }
@@ -434,7 +434,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         if (!IsResourceBusy(*resource)) {
             if (!resource->buffer.Upload(bufferObject.MappedData() + offset,
                                          static_cast<VkDeviceSize>(size), static_cast<VkDeviceSize>(offset))) {
-                MGLOG_E("VkBufferManager::OnSubData: host upload failed");
+                MGLOG_E_ONCE("VkBufferManager::OnSubData: host upload failed");
                 resource->pendingFullUpload = true;
             }
             return;
@@ -471,7 +471,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         if ((appAccess & BufferMappingAccessBit::Unsynchronized) || !IsResourceBusy(*resource)) {
             if (!resource->buffer.Upload(bufferObject.MappedData() + offset,
                                          static_cast<VkDeviceSize>(size), static_cast<VkDeviceSize>(offset))) {
-                MGLOG_E("VkBufferManager::OnFlushMappedRange: host upload failed");
+                MGLOG_E_ONCE("VkBufferManager::OnFlushMappedRange: host upload failed");
                 resource->pendingFullUpload = true;
             }
             return;
@@ -563,7 +563,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
         const VkDeviceSize size = static_cast<VkDeviceSize>(bufferObject->GetSize());
         if (size == 0) {
-            MGLOG_E("VkBufferManager::AcquireResidentSlice failed: buffer size is zero");
+            MGLOG_E_ONCE("VkBufferManager::AcquireResidentSlice failed: buffer size is zero");
             return false;
         }
 
@@ -585,7 +585,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 return false;
             }
             if (!resource->buffer.Upload(bufferObject->MappedData(), size, 0)) {
-                MGLOG_E("VkBufferManager::AcquireResidentSlice failed: initial upload failed");
+                MGLOG_E_ONCE("VkBufferManager::AcquireResidentSlice failed: initial upload failed");
                 resource->buffer.Destroy();
                 resource->storageSize = 0;
                 resource->usageFlags = 0;
@@ -620,7 +620,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
         const VkDeviceSize size = static_cast<VkDeviceSize>(bufferObject->GetSize());
         if (size == 0) {
-            MGLOG_E("VkBufferManager::AcquireStreamedSlice failed: buffer size is zero");
+            MGLOG_E_ONCE("VkBufferManager::AcquireStreamedSlice failed: buffer size is zero");
             return false;
         }
 

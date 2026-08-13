@@ -56,7 +56,7 @@ extern "C" HGLRC WINAPI wglCreateLayerContext(HDC hdc, int iLayerPlane) {
 }
 
 extern "C" BOOL WINAPI wglCopyContext(HGLRC, HGLRC, UINT) {
-    MGLOG_W("wglCopyContext is not supported");
+    MGLOG_W_ONCE("wglCopyContext is not supported");
     SetLastError(ERROR_NOT_SUPPORTED);
     return FALSE;
 }
@@ -132,24 +132,24 @@ extern "C" DWORD WINAPI wglSwapMultipleBuffers(UINT n, CONST WGLSWAP* ps) {
 // ---- Font rendering (legacy immediate-mode feature; not supported) ----
 
 extern "C" BOOL WINAPI wglUseFontBitmapsA(HDC, DWORD, DWORD, DWORD) {
-    MGLOG_W("wglUseFontBitmapsA is not supported");
+    MGLOG_W_ONCE("wglUseFontBitmapsA is not supported");
     return FALSE;
 }
 
 extern "C" BOOL WINAPI wglUseFontBitmapsW(HDC, DWORD, DWORD, DWORD) {
-    MGLOG_W("wglUseFontBitmapsW is not supported");
+    MGLOG_W_ONCE("wglUseFontBitmapsW is not supported");
     return FALSE;
 }
 
 extern "C" BOOL WINAPI wglUseFontOutlinesA(HDC, DWORD, DWORD, DWORD, FLOAT, FLOAT, int,
                                                  LPGLYPHMETRICSFLOAT) {
-    MGLOG_W("wglUseFontOutlinesA is not supported");
+    MGLOG_W_ONCE("wglUseFontOutlinesA is not supported");
     return FALSE;
 }
 
 extern "C" BOOL WINAPI wglUseFontOutlinesW(HDC, DWORD, DWORD, DWORD, FLOAT, FLOAT, int,
                                                  LPGLYPHMETRICSFLOAT) {
-    MGLOG_W("wglUseFontOutlinesW is not supported");
+    MGLOG_W_ONCE("wglUseFontOutlinesW is not supported");
     return FALSE;
 }
 

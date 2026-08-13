@@ -76,7 +76,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         const VkResult result =
             vmaCreateBuffer(m_allocator, &bufferInfo, &allocationInfo, &m_buffer, &m_allocation, nullptr);
         if (result != VK_SUCCESS) {
-            MGLOG_E("VkBufferObject::Create failed: vmaCreateBuffer returned %d", result);
+            MGLOG_E_ONCE("VkBufferObject::Create failed: vmaCreateBuffer returned %d", result);
             m_allocator = nullptr;
             m_buffer = VK_NULL_HANDLE;
             m_allocation = nullptr;
@@ -108,7 +108,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
         const VkResult mapResult = vmaMapMemory(m_allocator, m_allocation, &m_mappedData);
         if (mapResult != VK_SUCCESS || m_mappedData == nullptr) {
-            MGLOG_E("VkBufferObject::Map failed: vmaMapMemory returned %d", mapResult);
+            MGLOG_E_ONCE("VkBufferObject::Map failed: vmaMapMemory returned %d", mapResult);
             m_mappedData = nullptr;
             return nullptr;
         }
@@ -138,14 +138,14 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         const Bool wasMapped = IsMapped();
         void* mapped = wasMapped ? m_mappedData : Map();
         if (mapped == nullptr) {
-            MGLOG_E("VkBufferObject::Upload failed: unable to map buffer");
+            MGLOG_E_ONCE("VkBufferObject::Upload failed: unable to map buffer");
             return false;
         }
 
         Memcpy(static_cast<Uint8*>(mapped) + offset, data, static_cast<SizeT>(size));
         const VkResult flushResult = vmaFlushAllocation(m_allocator, m_allocation, offset, size);
         if (flushResult != VK_SUCCESS) {
-            MGLOG_E("VkBufferObject::Upload failed: vmaFlushAllocation returned %d", flushResult);
+            MGLOG_E_ONCE("VkBufferObject::Upload failed: vmaFlushAllocation returned %d", flushResult);
             if (!wasMapped) {
                 Unmap();
             }
@@ -170,7 +170,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
         const VkResult result = vmaInvalidateAllocation(m_allocator, m_allocation, offset, resolvedSize);
         if (result != VK_SUCCESS) {
-            MGLOG_E("VkBufferObject::Invalidate failed: vmaInvalidateAllocation returned %d", result);
+            MGLOG_E_ONCE("VkBufferObject::Invalidate failed: vmaInvalidateAllocation returned %d", result);
             return false;
         }
         return true;

@@ -255,7 +255,7 @@ namespace MobileGL::MG_State::GLState {
                 static_cast<SizeT>(offset) + write.byteOffsetInUniform + write.byteSize > uboSize) {
                 // Same verdict the live write path reaches for a uniform without backing
                 // storage: log and drop, rather than fault.
-                MGLOG_E("ProgramObject %u: buffered uniform write at location %u has no backing storage "
+                MGLOG_E_ONCE("ProgramObject %u: buffered uniform write at location %u has no backing storage "
                         "(offset=%u size=%u uboSize=%zu); dropping write",
                         m_externalIndex, write.location, offset, write.byteSize, uboSize);
                 continue;
@@ -436,7 +436,7 @@ namespace MobileGL::MG_State::GLState {
         defaultFS->Compile(); // TODO: use a global default FS object.
         auto status = defaultFS->GetCompileStatus();
         if (!status) {
-            MGLOG_E("ProgramObject %u: Failed to compile default fragment shader. InfoLog:\n%s", m_externalIndex,
+            MGLOG_E_ONCE("ProgramObject %u: Failed to compile default fragment shader. InfoLog:\n%s", m_externalIndex,
                     defaultFS->GetInfoLog().c_str());
             return;
         }

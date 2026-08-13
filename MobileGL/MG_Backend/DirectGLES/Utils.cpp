@@ -1176,7 +1176,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
             for (GLenum err = g_GLESFuncs.glGetError(); err != GL_NO_ERROR; err = g_GLESFuncs.glGetError()) {
-                MGLOG_E("-> GLES Error: %s", MG_Util::ConvertGLEnumToString(err).c_str());
+                MGLOG_D("-> GLES Error: %s", MG_Util::ConvertGLEnumToString(err).c_str());
             }
         }
 
@@ -1642,7 +1642,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                     static_cast<SizeT>(sliceCount - 1) * dstImageStride +
                                     static_cast<SizeT>(sliceHeight - 1) * dstRowStride + dstRowBytes;
             if (requiredSize > pixelPackBufferObject->GetSize()) {
-                MGLOG_E("Readback conversion: pixel pack buffer is too small");
+                MGLOG_E_ONCE("Readback conversion: pixel pack buffer is too small");
                 return true;
             }
         }

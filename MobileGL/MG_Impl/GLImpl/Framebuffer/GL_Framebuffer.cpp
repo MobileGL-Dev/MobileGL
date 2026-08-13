@@ -547,7 +547,7 @@ namespace MobileGL::MG_Impl::GLImpl {
                                       GLint dstX1, GLint dstY1, GLbitfield mask, GLenum filter) {
         auto blitNamedFramebuffer = MG_Backend::gBackendFunctionsTable.GL.BlitNamedFramebuffer;
         if (!blitNamedFramebuffer) {
-            MGLOG_E("glBlitNamedFramebuffer skipped: backend does not implement explicit framebuffer blit.");
+            MGLOG_E_ONCE("glBlitNamedFramebuffer skipped: backend does not implement explicit framebuffer blit.");
             return;
         }
         blitNamedFramebuffer(readFramebuffer, drawFramebuffer, srcX0, srcY0, srcX1, srcY1, dstX0, dstY0, dstX1,
@@ -558,7 +558,7 @@ namespace MobileGL::MG_Impl::GLImpl {
                                          GLenum buffer, GLint drawbuffer, const GLfloat* value) {
         auto clearNamedFramebufferfv = MG_Backend::gBackendFunctionsTable.GL.ClearNamedFramebufferfv;
         if (!clearNamedFramebufferfv) {
-            MGLOG_E("glClearNamedFramebufferfv skipped: backend does not implement explicit framebuffer clear.");
+            MGLOG_E_ONCE("glClearNamedFramebufferfv skipped: backend does not implement explicit framebuffer clear.");
             return;
         }
         clearNamedFramebufferfv(framebuffer, buffer, drawbuffer, value);
@@ -568,7 +568,7 @@ namespace MobileGL::MG_Impl::GLImpl {
                                          GLenum buffer, GLint drawbuffer, GLfloat depth, GLint stencil) {
         auto clearNamedFramebufferfi = MG_Backend::gBackendFunctionsTable.GL.ClearNamedFramebufferfi;
         if (!clearNamedFramebufferfi) {
-            MGLOG_E("glClearNamedFramebufferfi skipped: backend does not implement explicit framebuffer clear.");
+            MGLOG_E_ONCE("glClearNamedFramebufferfi skipped: backend does not implement explicit framebuffer clear.");
             return;
         }
         clearNamedFramebufferfi(framebuffer, buffer, drawbuffer, depth, stencil);
@@ -578,7 +578,7 @@ namespace MobileGL::MG_Impl::GLImpl {
                                          GLenum buffer, GLint drawbuffer, const GLint* value) {
         auto clearNamedFramebufferiv = MG_Backend::gBackendFunctionsTable.GL.ClearNamedFramebufferiv;
         if (!clearNamedFramebufferiv) {
-            MGLOG_E("glClearNamedFramebufferiv skipped: backend does not implement explicit framebuffer clear.");
+            MGLOG_E_ONCE("glClearNamedFramebufferiv skipped: backend does not implement explicit framebuffer clear.");
             return;
         }
         clearNamedFramebufferiv(framebuffer, buffer, drawbuffer, value);
@@ -588,7 +588,7 @@ namespace MobileGL::MG_Impl::GLImpl {
                                           GLenum buffer, GLint drawbuffer, const GLuint* value) {
         auto clearNamedFramebufferuiv = MG_Backend::gBackendFunctionsTable.GL.ClearNamedFramebufferuiv;
         if (!clearNamedFramebufferuiv) {
-            MGLOG_E("glClearNamedFramebufferuiv skipped: backend does not implement explicit framebuffer clear.");
+            MGLOG_E_ONCE("glClearNamedFramebufferuiv skipped: backend does not implement explicit framebuffer clear.");
             return;
         }
         clearNamedFramebufferuiv(framebuffer, buffer, drawbuffer, value);

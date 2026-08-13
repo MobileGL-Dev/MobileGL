@@ -28,7 +28,7 @@ namespace MobileGL {
                 // DrawArrays/DrawElements rewrite line loops into closed indexed
                 // strips; entry points without that rewrite (instanced/indirect)
                 // degrade to an open strip, which only misses the closing segment.
-                MGLOG_W("GL_LINE_LOOP without index rewrite; drawing as LINE_STRIP");
+                MGLOG_W_ONCE("GL_LINE_LOOP without index rewrite; drawing as LINE_STRIP");
                 return VK_PRIMITIVE_TOPOLOGY_LINE_STRIP;
             case GL_LINES_ADJACENCY:
                 return VK_PRIMITIVE_TOPOLOGY_LINE_LIST_WITH_ADJACENCY;
@@ -43,7 +43,7 @@ namespace MobileGL {
                 // state (patchControlPoints), not part of the topology.
                 return VK_PRIMITIVE_TOPOLOGY_PATCH_LIST;
             default:
-                MGLOG_W("Unrecognized primitive topology");
+                MGLOG_W_ONCE("Unrecognized primitive topology");
                 return VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
             }
         }
@@ -57,7 +57,7 @@ namespace MobileGL {
             case GL_POINT:
                 return VK_POLYGON_MODE_POINT;
             default:
-                MGLOG_W("Unrecognized polygon mode");
+                MGLOG_W_ONCE("Unrecognized polygon mode");
                 return VK_POLYGON_MODE_FILL;
             }
         }
@@ -73,7 +73,7 @@ namespace MobileGL {
             case CullFaceMode::Unknown:
             case CullFaceMode::CullFaceModeCount:
             default:
-                MGLOG_W("Unrecognized cull face mode");
+                MGLOG_W_ONCE("Unrecognized cull face mode");
                 return VK_CULL_MODE_BACK_BIT;
             }
         }

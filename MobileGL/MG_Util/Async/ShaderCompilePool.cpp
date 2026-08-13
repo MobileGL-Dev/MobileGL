@@ -281,7 +281,7 @@ namespace MobileGL::MG_Util::Async {
                 enqueued = true;
             }
         } catch (...) {
-            MGLOG_E("ShaderCompilePool::Post: enqueue failed; cancelling the job so its joiner "
+            MGLOG_E_ONCE("ShaderCompilePool::Post: enqueue failed; cancelling the job so its joiner "
                     "cannot block forever");
             if (node) node->Cancel();
             return;

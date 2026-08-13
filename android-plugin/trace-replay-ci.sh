@@ -187,7 +187,11 @@ collect_run_diagnostics() {
   if [ "${adb_state}" != "device" ]; then
     return
   fi
-  "${ADB}" logcat -d -t 2000 > "${diagnostics_dir}/logcat.txt" || true
+  # Depth matters, not just content: is_infrastructure_failure below decides "the emulator
+  # broke, retry" by finding a system_server crash in this window, and MobileGL logs into the
+  # same buffer under its own tag. A tail that is too short lets routine MobileGL output evict
+  # the crash line and charges an infrastructure fault to the trace under test.
+  "${ADB}" logcat -d -t 20000 > "${diagnostics_dir}/logcat.txt" || true
   adb_device_path shell pidof "${package_name}" > "${diagnostics_dir}/pidof.txt" 2>&1 || true
   adb_device_path shell dumpsys activity activities > "${diagnostics_dir}/activity.txt" 2>&1 || true
   adb_device_path shell run-as "${package_name}" ls -laR "${app_dir}" > "${diagnostics_dir}/app-files.txt" 2>&1 || true

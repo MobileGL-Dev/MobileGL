@@ -16,5 +16,25 @@ target_link_libraries(
         ${LINK_LIBRARIES}
 )
 
+# The log-severity ordering and the MOBILEGL_ASSERT gate keyed to it. Links gtest
+# (not gtest_main): the suite needs its own main() to point MOBILEGL_LOG_FILE_PATH at a
+# temp file before anything in the process logs and latches the sink's FILE*.
+add_executable(
+        LogLevelTest
+        LogLevelTest.cpp
+)
+
+target_include_directories(LogLevelTest PRIVATE
+        ${MGL_ROOT}/include
+        ${MGL_ROOT}/MobileGL
+)
+
+target_link_libraries(
+        LogLevelTest PRIVATE
+        GTest::gtest
+        ${LINK_LIBRARIES}
+)
+
 include(GoogleTest)
 gtest_discover_tests(JobNodeTest DISCOVERY_TIMEOUT 30 PROPERTIES LABELS unit)
+gtest_discover_tests(LogLevelTest DISCOVERY_TIMEOUT 30 PROPERTIES LABELS unit)

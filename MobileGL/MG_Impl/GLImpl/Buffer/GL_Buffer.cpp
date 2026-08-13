@@ -149,7 +149,7 @@ namespace MobileGL::MG_Impl::GLImpl {
             // quietly writing a differently-sized pattern.
             const SizeT sourceSize = MG_Util::GetInputBytesPerPixel(inputFormat, pixelType);
             if (sourceSize != elementSize) {
-                MGLOG_W("%s: clear pattern is %zu bytes but internalformat 0x%X stores %zu; "
+                MGLOG_W_ONCE("%s: clear pattern is %zu bytes but internalformat 0x%X stores %zu; "
                         "converting between them is not implemented",
                         GetBufferOpName(op), sourceSize, internalformat, elementSize);
             }

@@ -594,9 +594,10 @@ namespace MobileGL::MG_Util::BackendLoader {
 #endif // !_WIN32
 
         if (!eglLib) {
-            // MGLOG_F, not MGLOG_E: at the INFO log level every shipping and CI build
-            // uses, MGLOG_E is compiled out (Log.h orders DEBUG < WARN < ERROR < INFO),
-            // so this diagnosis was invisible in precisely the builds that needed it.
+            // MGLOG_F, not MGLOG_E: with no EGL there is no rendering at all, so this is a
+            // bring-up abort rather than a recoverable error. It was forced to F while the
+            // Log.h ordering compiled MGLOG_E out of every shipping and CI build; F is still
+            // the right level on its own merits, so it stays.
             MGLOG_F("Failed to open EGL library: none of libEGL.so.1 / libEGL.so could be "
                     "dlopened; every EGL entry point will be null");
             return;
@@ -986,6 +987,12 @@ namespace MobileGL::MG_Util::BackendLoader {
                 caps.SupportsBaseInstance ? "yes" : "no");
         MGLOG_I("    clip distances (EXT_clip_cull_distance): %s", caps.SupportsClipDistance ? "yes" : "no");
 
+        // LOAD-BEARING STRING, not just a banner. android-plugin/trace-replay-ci.sh's
+        // is_angle_surface_lost() greps mobilegl.log for exactly "OpenGL ES capabilities:" to
+        // decide whether MobileGL got far enough to have a working context: if the probe ran,
+        // a later surface loss is a real defect rather than an emulator fault worth retrying.
+        // Demoting this line, renaming it, or moving it before the context is usable silently
+        // inverts that retry logic. It is init-phase, so MGLOG_I is correct and it stays.
         MGLOG_I("OpenGL ES capabilities:");
         glesFuncs.glGetIntegerv(GL_UNIFORM_BUFFER_OFFSET_ALIGNMENT, &caps.UniformBufferOffsetAlignment);
         MGLOG_I("    GL_UNIFORM_BUFFER_OFFSET_ALIGNMENT: %d", caps.UniformBufferOffsetAlignment);

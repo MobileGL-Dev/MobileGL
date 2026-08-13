@@ -82,7 +82,7 @@ namespace MobileGL {
                         // 6 or 8 uint32 components has no single vertex format, and GL spreads such
                         // an input over two attribute locations. Left alone; the vertex-input
                         // factory declines the matching attribute for the same reason.
-                        MGLOG_E("PackDoubleVertexInputsPass: vertex input %%%u is a %u-component 64-bit "
+                        MGLOG_E_ONCE("PackDoubleVertexInputsPass: vertex input %%%u is a %u-component 64-bit "
                                 "float; only double and dvec2 inputs can be packed",
                                 inst.result_id(), components);
                         continue;

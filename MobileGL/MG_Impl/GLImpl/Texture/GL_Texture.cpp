@@ -621,7 +621,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         // the process down, which is never an acceptable answer to a query - see the same reasoning
         // above for the compressed-format path.
         void RecordUnsupportedLevelQueryStorage(const char* caller, GLenum pname) {
-            MGLOG_I("%s: glGetTexLevelParameter(pname=%s) is not implemented for texture-buffer "
+            MGLOG_W_ONCE("%s: glGetTexLevelParameter(pname=%s) is not implemented for texture-buffer "
                     "storage; recording GL_INVALID_OPERATION instead of terminating",
                     caller, MG_Util::ConvertGLEnumToString(pname).c_str());
             MG_State::pGLContext->RecordError(
@@ -870,7 +870,7 @@ namespace MobileGL::MG_Impl::GLImpl {
                 MG_Util::GetInputBytesPerPixel(MG_Util::ConvertGLEnumToTextureInputFormat(format),
                                                MG_Util::ConvertGLEnumToTexturePixelDataType(type));
             if (readBytesPerTexel != bytesPerTexel) {
-                MGLOG_I("%s: cannot copy into a %zu-byte texel from a %zu-byte readback layout", caller,
+                MGLOG_W_ONCE("%s: cannot copy into a %zu-byte texel from a %zu-byte readback layout", caller,
                         bytesPerTexel, readBytesPerTexel);
                 return false;
             }
@@ -1490,7 +1490,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         if (xoffset + width > static_cast<GLsizei>(texelSize.x()) ||
             yoffset + height > static_cast<GLsizei>(texelSize.y()) ||
             zoffset + depth > static_cast<GLsizei>(texelSize.z())) {
-            MGLOG_E("TexSubImage3D_State: Specified region exceeds texture level dimensions");
+            MGLOG_E_ONCE("TexSubImage3D_State: Specified region exceeds texture level dimensions");
             free(processedPixels);
             return;
         }
@@ -1599,7 +1599,7 @@ namespace MobileGL::MG_Impl::GLImpl {
             {width, height, 1}, false, inputSize);
 
         if (!processedPixels || inputSize == 0) {
-            MGLOG_E("TexSubImage2D_State: Failed to process pixel data for TexSubImage2D, width: %d, height: %d", width,
+            MGLOG_E_ONCE("TexSubImage2D_State: Failed to process pixel data for TexSubImage2D, width: %d, height: %d", width,
                     height);
             if (processedPixels) free(processedPixels);
             return;
@@ -1613,7 +1613,7 @@ namespace MobileGL::MG_Impl::GLImpl {
 
         if (xoffset + width > static_cast<GLsizei>(texelSize.x()) ||
             yoffset + height > static_cast<GLsizei>(texelSize.y())) {
-            MGLOG_E("TexSubImage2D_State: Specified region exceeds texture dimensions");
+            MGLOG_E_ONCE("TexSubImage2D_State: Specified region exceeds texture dimensions");
             free(processedPixels);
             return;
         }
@@ -2164,7 +2164,7 @@ namespace MobileGL::MG_Impl::GLImpl {
 
         if (processedPixels && imageSize > 0) {
             if (imageSize != internalBytes) {
-                MGLOG_W("%s: Processed pixel data size (%zu) does not match expected size (%zu). "
+                MGLOG_W_ONCE("%s: Processed pixel data size (%zu) does not match expected size (%zu). "
                         "This may indicate an alignment or processing issue.",
                         __func__, imageSize, internalBytes);
             }
@@ -2310,7 +2310,7 @@ namespace MobileGL::MG_Impl::GLImpl {
 
         if (processedPixels && imageSize > 0) {
             if (imageSize != internalBytes) {
-                MGLOG_W("TexImage2D_State: Processed pixel data size (%zu) does not match expected size (%zu). "
+                MGLOG_W_ONCE("TexImage2D_State: Processed pixel data size (%zu) does not match expected size (%zu). "
                         "This may indicate an alignment or processing issue.",
                         imageSize, internalBytes);
             }
@@ -3643,10 +3643,11 @@ namespace MobileGL::MG_Impl::GLImpl {
         // an application has every right to expect from it. Before this existed the call answered
         // GL_INVALID_ENUM, which was wrong but at least visible; a silent success that leaves the
         // sampled texels untouched is the kind of thing that costs a day to find from the other
-        // end. MGLOG_I, not _W: warnings are compiled out at the level everything ships at.
+        // end. MGLOG_W is the right level and now survives at INFO; it sat at MGLOG_I only
+        // while the Log.h ordering compiled warnings out of the builds that ship.
         static std::atomic<Bool> announcedNoCodec{false};
         if (!announcedNoCodec.exchange(true)) {
-            MGLOG_I("%s: the compressed blocks are stored verbatim and returned by "
+            MGLOG_W("%s: the compressed blocks are stored verbatim and returned by "
                     "glGetCompressedTexImage, but there is no BC/ETC decoder here, so they do not "
                     "reach the texels this level SAMPLES as. Upload through glTexSubImage2D for "
                     "that.",

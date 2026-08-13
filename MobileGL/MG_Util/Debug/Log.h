@@ -9,15 +9,51 @@
 #pragma once
 #include <Includes.h>
 
+#include <atomic>
+
+// Severity order, ascending. MOBILEGL_LOG_ACTIVE_LEVEL names the LOWEST severity that is
+// compiled in, so every level at or above it survives and everything below it becomes a
+// no-op: the production default INFO admits I/W/E/F and drops only D.
+//
+// This ordering was inverted until 2026-08-13 (DEBUG < WARN < ERROR < INFO < FATAL), which
+// silently compiled MGLOG_W and MGLOG_E out of every production and CI build and cost
+// several real diagnostic blackouts. Do not reorder without re-reading every
+// `#if MOBILEGL_LOG_ACTIVE_LEVEL <= ...` in the tree.
+//
+// These five constants are duplicated verbatim in Defines.h, which needs them for the
+// MOBILEGL_ASSERT gate in translation units that do not include Log.h. Keep both copies
+// in sync; the values are load-bearing, not cosmetic.
 #define MOBILEGL_LOG_LEVEL_DEBUG 0
-#define MOBILEGL_LOG_LEVEL_WARN 1
-#define MOBILEGL_LOG_LEVEL_ERROR 2
-#define MOBILEGL_LOG_LEVEL_INFO 3
+#define MOBILEGL_LOG_LEVEL_INFO 1
+#define MOBILEGL_LOG_LEVEL_WARN 2
+#define MOBILEGL_LOG_LEVEL_ERROR 3
 #define MOBILEGL_LOG_LEVEL_FATAL 4
 
 #define MOBILEGL_LOG_INTERNAL(levelTag, androidLogLevel, fmt, ...)                                                     \
     do {                                                                                                               \
         MobileGL::MG_Util::Debug::Log(levelTag, androidLogLevel, fmt, ##__VA_ARGS__);                                  \
+    } while (0)
+
+// Emit `inner` at most once per call site, for the life of the process.
+//
+// Production logging is not allowed to repeat: a diagnostic on a per-draw or per-frame
+// path costs frame time on every occurrence and buries the rest of the log. Anything at
+// W or E that sits on such a path must either be latched with one of the _ONCE forms
+// below or be demoted to MGLOG_D, which production compiles out entirely.
+//
+// The latch is a function-local atomic - zero-initialised before any dynamic
+// initialisation runs, so it is safe from any thread at any time, needs no guard
+// variable, and costs one relaxed test-and-set on the already-cold failure path. Note
+// that the latch is per CALL SITE, not per subject: a site that reports "texture %u is
+// unsupported" reports only the first such texture. That is the intended trade - the
+// first occurrence is what a user shares for troubleshooting, and MGLOG_D still shows
+// every occurrence in a dev build.
+#define MOBILEGL_LOG_ONCE_INTERNAL(inner, fmt, ...)                                                                    \
+    do {                                                                                                               \
+        static ::std::atomic_flag mobileglLogOnceLatch;                                                                \
+        if (!mobileglLogOnceLatch.test_and_set(::std::memory_order_relaxed)) {                                         \
+            inner(fmt, ##__VA_ARGS__);                                                                                 \
+        }                                                                                                              \
     } while (0)
 
 #if MOBILEGL_LOG_ACTIVE_LEVEL <= MOBILEGL_LOG_LEVEL_DEBUG
@@ -52,6 +88,37 @@
 #define MGLOG_F(fmt, ...) MOBILEGL_LOG_INTERNAL("FATAL", ANDROID_LOG_FATAL, fmt, ##__VA_ARGS__)
 #else
 #define MGLOG_F(fmt, ...)                                                                                              \
+    {}
+#endif
+
+// One-shot forms. Each is gated on its own level so that a suppressed level leaves no
+// latch behind - MGLOG_D_ONCE in a production build is nothing at all, not a byte of
+// state plus a test-and-set.
+#if MOBILEGL_LOG_ACTIVE_LEVEL <= MOBILEGL_LOG_LEVEL_DEBUG
+#define MGLOG_D_ONCE(fmt, ...) MOBILEGL_LOG_ONCE_INTERNAL(MGLOG_D, fmt, ##__VA_ARGS__)
+#else
+#define MGLOG_D_ONCE(fmt, ...)                                                                                         \
+    {}
+#endif
+
+#if MOBILEGL_LOG_ACTIVE_LEVEL <= MOBILEGL_LOG_LEVEL_INFO
+#define MGLOG_I_ONCE(fmt, ...) MOBILEGL_LOG_ONCE_INTERNAL(MGLOG_I, fmt, ##__VA_ARGS__)
+#else
+#define MGLOG_I_ONCE(fmt, ...)                                                                                         \
+    {}
+#endif
+
+#if MOBILEGL_LOG_ACTIVE_LEVEL <= MOBILEGL_LOG_LEVEL_WARN
+#define MGLOG_W_ONCE(fmt, ...) MOBILEGL_LOG_ONCE_INTERNAL(MGLOG_W, fmt, ##__VA_ARGS__)
+#else
+#define MGLOG_W_ONCE(fmt, ...)                                                                                         \
+    {}
+#endif
+
+#if MOBILEGL_LOG_ACTIVE_LEVEL <= MOBILEGL_LOG_LEVEL_ERROR
+#define MGLOG_E_ONCE(fmt, ...) MOBILEGL_LOG_ONCE_INTERNAL(MGLOG_E, fmt, ##__VA_ARGS__)
+#else
+#define MGLOG_E_ONCE(fmt, ...)                                                                                         \
     {}
 #endif
 

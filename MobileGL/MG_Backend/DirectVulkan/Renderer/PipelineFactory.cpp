@@ -259,7 +259,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // is the correct price for a broken pipeline and is bounded by the draw itself being
         // skipped.
         if (pipeline == VK_NULL_HANDLE) {
-            MGLOG_I("PipelineFactory::GetOrCreatePipeline: creation failed for hash=0x%llx "
+            // Unlatched, like the CreatePipeline report it accompanies: a pipeline MobileGL
+            // assembled and the driver refused is a broken invariant, not an expected failure,
+            // so it stays loud for as long as it is reachable. Raised from MGLOG_I once the
+            // Log.h ordering fix made MGLOG_E live in INFO builds.
+            MGLOG_E("PipelineFactory::GetOrCreatePipeline: creation failed for hash=0x%llx "
                     "programHash=0x%llx; not caching the failure",
                     static_cast<unsigned long long>(hash),
                     static_cast<unsigned long long>(payload.programHash));
@@ -506,7 +510,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 static Bool s_warnedHalfTessellatedPipeline = false;
                 if (!s_warnedHalfTessellatedPipeline) {
                     s_warnedHalfTessellatedPipeline = true;
-                    MGLOG_E("PipelineFactory::CreatePipeline: refusing a pipeline with %s tessellation stage and "
+                    MGLOG_E_ONCE("PipelineFactory::CreatePipeline: refusing a pipeline with %s tessellation stage and "
                             "no %s stage (VUID-VkGraphicsPipelineCreateInfo-pStages-00730). programHash=0x%llx "
                             "patchControlPoints=%u. Its draws are skipped; logged once.",
                             hasTessEval ? "an evaluation" : "a control",
@@ -537,6 +541,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
         VkPipeline pipeline = VK_NULL_HANDLE;
         const VkResult result = vkCreateGraphicsPipelines(m_device, m_pipelineCache, 1, &gpi, nullptr, &pipeline);
+        // Loud, at MGLOG_F, and deliberately NOT latched. vkCreateGraphicsPipelines refusing a
+        // pipeline MobileGL assembled is a should-never-happen state, and the driver's own
+        // answer is VK_ERROR_UNKNOWN - no information at all - so this dump is the entire
+        // diagnosis. It is not an expected failure mode, so the one-shot rule that quiets W/E
+        // does not apply: while this is reachable it should keep saying so on every draw.
+        // GetOrCreatePipeline deliberately does not cache the failure, which is what makes that
+        // repetition happen; if the repetition ever needs to stop, fix the pipeline, not the log.
         if (result != VK_SUCCESS) {
             MGLOG_F("PipelineFactory::CreatePipeline failed: result=%s (%d) programHash=0x%llx vertexInputHash=0x%llx stageCount=%u topology=%s(%d) colorAttachmentCount=%u samples=%s(%d) subpass=%u",
                     VkResultToString(result),
@@ -569,8 +580,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                     payload.vertexInputState->vertexAttributeDescriptionCount);
             // The driver's own answer is VK_ERROR_UNKNOWN, i.e. no information at all, so the only
             // way to work out WHICH shader it choked on (the open sampler-array-in-struct
-            // investigation) is to name the modules. MGLOG_I, not _D/_E: this must survive in the
-            // INFO-level builds that CTS actually runs against.
+            // investigation) is to name the modules. MGLOG_I, not _D: this is part of a
+            // should-never-happen report and must survive in the INFO-level builds that CTS
+            // actually runs against, alongside the MGLOG_F lines above.
             if (payload.stageSpirvDigests) {
                 for (SizeT i = 0; i < payload.stageSpirvDigests->size(); ++i) {
                     const auto& digest = (*payload.stageSpirvDigests)[i];

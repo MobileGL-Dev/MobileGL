@@ -157,7 +157,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
             VkDescriptorPool initialPool = VK_NULL_HANDLE;
             if (!CreateDescriptorPool(m_setsPerFrame, initialPool)) {
-                MGLOG_E("UniformDescriptorBinder::Initialize failed: cannot create frame descriptor pool %u",
+                MGLOG_E_ONCE("UniformDescriptorBinder::Initialize failed: cannot create frame descriptor pool %u",
                         frameIndex);
                 Shutdown();
                 return false;
@@ -345,13 +345,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             fallbackHolder = GetFallbackTexture(preferredTarget);
             texture = fallbackHolder.get();
             if (texture == nullptr) {
-                MGLOG_E("ResolveSamplerDescriptor: no fallback texture available for binding=%u ('%s') "
+                MGLOG_E_ONCE("ResolveSamplerDescriptor: no fallback texture available for binding=%u ('%s') "
                         "location=%d unit=%d target=%d",
                         binding, programObj.samplerNameByBinding[binding].c_str(), location, unit,
                         static_cast<Int>(preferredTarget));
                 return false;
             }
-            MGLOG_W(
+            MGLOG_W_ONCE(
                 "ResolveSamplerDescriptor: using fallback texture for unbound sampler binding=%u ('%s') location=%d unit=%d target=%d",
                 binding, programObj.samplerNameByBinding[binding].c_str(), location, unit,
                 static_cast<Int>(preferredTarget));
@@ -360,7 +360,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         const MG_State::GLState::SamplerObject* samplerToUse =
             samplerOverride ? samplerOverride.get() : texture->GetSamplerObject().get();
         if (samplerToUse == nullptr) {
-            MGLOG_E(
+            MGLOG_E_ONCE(
                 "ResolveSamplerDescriptor: sampler binding %u ('%s') has no sampler object (textureId=%d location=%d unit=%d)",
                 binding, programObj.samplerNameByBinding[binding].c_str(), texture->GetExternalIndex(), location,
                 unit);
@@ -368,7 +368,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
         VkTextureManager::TextureResource* resource = m_textureManager->SyncTextureAndGetDescriptor(*texture);
         if (resource == nullptr) {
-            MGLOG_E(
+            MGLOG_E_ONCE(
                 "ResolveSamplerDescriptor: sampler binding %u ('%s') failed to create/sync texture resource (textureId=%d target=%d location=%d unit=%d)",
                 binding, programObj.samplerNameByBinding[binding].c_str(), texture->GetExternalIndex(),
                 static_cast<Int>(texture->GetTarget()), location, unit);
@@ -380,7 +380,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             Int attachmentLevel = 0;
             if (drawFbo &&
                 FindFramebufferAttachmentForTexture(*drawFbo, *texture, attachmentType, attachmentLevel)) {
-                MGLOG_W("ResolveSamplerDescriptor: framebuffer feedback loop detected: textureId=%d is bound "
+                MGLOG_W_ONCE("ResolveSamplerDescriptor: framebuffer feedback loop detected: textureId=%d is bound "
                         "for sampling at binding=%u, but is also attached to drawFbo=%u as %s (level=%d, "
                         "trackedLayout=%d)",
                         texture->GetExternalIndex(), binding, drawFbo->GetExternalIndex(),
@@ -390,7 +390,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
             const Bool readyForSampling = m_textureManager->TransitionTextureForSampling(commandBuffer, *texture);
             if (!readyForSampling) {
-                MGLOG_E("ResolveSamplerDescriptor: failed to transition textureId=%d for sampler binding=%u",
+                MGLOG_E_ONCE("ResolveSamplerDescriptor: failed to transition textureId=%d for sampler binding=%u",
                         texture->GetExternalIndex(), binding);
                 return false;
             }
@@ -432,7 +432,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             }
         }
         if (sampledViewFormat == VK_FORMAT_UNDEFINED) {
-            MGLOG_E("ResolveSamplerDescriptor: no compatible sampled view for binding=%u ('%s') "
+            MGLOG_E_ONCE("ResolveSamplerDescriptor: no compatible sampled view for binding=%u ('%s') "
                     "textureId=%d imageFormat=%d numericDomain=%d",
                     binding, programObj.samplerNameByBinding[binding].c_str(), texture->GetExternalIndex(),
                     static_cast<Int>(resource->format), static_cast<Int>(numericDomain));
@@ -445,7 +445,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 ? resource->sampledView
                 : m_textureManager->GetOrCreateSampledImageView(*texture, sampledViewFormat);
         if (sampledImageView == VK_NULL_HANDLE) {
-            MGLOG_E("ResolveSamplerDescriptor: failed to resolve sampled view for binding=%u ('%s') "
+            MGLOG_E_ONCE("ResolveSamplerDescriptor: failed to resolve sampled view for binding=%u ('%s') "
                     "textureId=%d imageFormat=%d viewFormat=%d numericDomain=%d",
                     binding, programObj.samplerNameByBinding[binding].c_str(), texture->GetExternalIndex(),
                     static_cast<Int>(resource->format), static_cast<Int>(sampledViewFormat),
@@ -671,14 +671,14 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
         SharedPtr<MG_State::GLState::ITextureObject> texture;
         if (!ResolveSamplerTexture(program, programObj, binding, texture) || texture == nullptr) {
-            MGLOG_E("ResolveTexelBufferDescriptor: texture buffer binding %u ('%s') is unbound", binding,
+            MGLOG_E_ONCE("ResolveTexelBufferDescriptor: texture buffer binding %u ('%s') is unbound", binding,
                     programObj.samplerNameByBinding[binding].c_str());
             return false;
         }
 
         if (texture->GetStorageType() != TextureStorageType::Buffer ||
             texture->GetTarget() != TextureTarget::TextureBuffer) {
-            MGLOG_E(
+            MGLOG_E_ONCE(
                 "ResolveTexelBufferDescriptor: binding %u ('%s') expected texture buffer, got textureId=%u target=%d storage=%d",
                 binding, programObj.samplerNameByBinding[binding].c_str(), texture->GetExternalIndex(),
                 static_cast<Int>(texture->GetTarget()), static_cast<Int>(texture->GetStorageType()));
@@ -688,14 +688,14 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         auto* textureBuffer = static_cast<MG_State::GLState::TextureObjectBuffer*>(texture.get());
         const auto& bufferObject = textureBuffer->GetBufferBindingSlot().GetBoundObject();
         if (bufferObject == nullptr) {
-            MGLOG_E("ResolveTexelBufferDescriptor: texture buffer binding %u ('%s') has no GL buffer bound",
+            MGLOG_E_ONCE("ResolveTexelBufferDescriptor: texture buffer binding %u ('%s') has no GL buffer bound",
                     binding, programObj.samplerNameByBinding[binding].c_str());
             return false;
         }
 
         BufferSlice slice{};
         if (!m_bufferManager->AcquireResidentSlice(BufferKind::TextureBuffer, bufferObject, slice) || !slice.IsValid()) {
-            MGLOG_E("ResolveTexelBufferDescriptor: failed to sync GL buffer %u for texture buffer %u",
+            MGLOG_E_ONCE("ResolveTexelBufferDescriptor: failed to sync GL buffer %u for texture buffer %u",
                     bufferObject->GetExternalIndex(), texture->GetExternalIndex());
             return false;
         }
@@ -703,7 +703,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         const auto internalFormat = textureBuffer->GetFormat();
         const VkFormat vkFormat = MG_Util::ConvertTextureInternalFormatToVkEnum(internalFormat);
         if (vkFormat == VK_FORMAT_UNDEFINED) {
-            MGLOG_E("ResolveTexelBufferDescriptor: unsupported texture buffer internal format %d",
+            MGLOG_E_ONCE("ResolveTexelBufferDescriptor: unsupported texture buffer internal format %d",
                     static_cast<Int>(internalFormat));
             return false;
         }
@@ -719,7 +719,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             viewRange = (viewRange / texelSize) * texelSize;
         }
         if (viewRange == 0) {
-            MGLOG_E("ResolveTexelBufferDescriptor: texture buffer %u has empty view range", texture->GetExternalIndex());
+            MGLOG_E_ONCE("ResolveTexelBufferDescriptor: texture buffer %u has empty view range", texture->GetExternalIndex());
             return false;
         }
 
@@ -733,7 +733,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         VkBufferView bufferView = VK_NULL_HANDLE;
         const VkResult result = vkCreateBufferView(m_device, &viewInfo, nullptr, &bufferView);
         if (result != VK_SUCCESS || bufferView == VK_NULL_HANDLE) {
-            MGLOG_E("ResolveTexelBufferDescriptor: vkCreateBufferView failed result=%d format=%d range=%zu",
+            MGLOG_E_ONCE("ResolveTexelBufferDescriptor: vkCreateBufferView failed result=%d format=%d range=%zu",
                     result, static_cast<Int>(vkFormat), static_cast<SizeT>(viewRange));
             return false;
         }
@@ -769,13 +769,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
         const Int location = programObj.samplerUniformLocationByBinding[binding];
         if (location < 0) {
-            MGLOG_E("ResolveStorageTexelBufferDescriptor: binding %u ('%s') has no uniform location", binding,
+            MGLOG_E_ONCE("ResolveStorageTexelBufferDescriptor: binding %u ('%s') has no uniform location", binding,
                     programObj.samplerNameByBinding[binding].c_str());
             return false;
         }
         const Int imageUnit = program.GetUniformSamplerOrImageUnitIndex(static_cast<Uint>(location));
         if (imageUnit < 0 || imageUnit >= MG_State::GLState::TextureState::MAX_TEXTURE_IMAGE_UNITS) {
-            MGLOG_E("ResolveStorageTexelBufferDescriptor: image unit %d out of range for binding %u", imageUnit,
+            MGLOG_E_ONCE("ResolveStorageTexelBufferDescriptor: image unit %d out of range for binding %u", imageUnit,
                     binding);
             return false;
         }
@@ -783,13 +783,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         auto& imageBinding = MG_State::pGLContext->GetImageTextureBinding(imageUnit);
         const auto& texture = imageBinding.Texture;
         if (texture == nullptr) {
-            MGLOG_E("ResolveStorageTexelBufferDescriptor: image unit %d is unbound for binding %u", imageUnit,
+            MGLOG_E_ONCE("ResolveStorageTexelBufferDescriptor: image unit %d is unbound for binding %u", imageUnit,
                     binding);
             return false;
         }
         if (texture->GetStorageType() != TextureStorageType::Buffer ||
             texture->GetTarget() != TextureTarget::TextureBuffer) {
-            MGLOG_E("ResolveStorageTexelBufferDescriptor: binding %u ('%s') expected a texture buffer on image "
+            MGLOG_E_ONCE("ResolveStorageTexelBufferDescriptor: binding %u ('%s') expected a texture buffer on image "
                     "unit %d, got textureId=%u target=%d storage=%d",
                     binding, programObj.samplerNameByBinding[binding].c_str(), imageUnit,
                     texture->GetExternalIndex(), static_cast<Int>(texture->GetTarget()),
@@ -800,7 +800,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         auto* textureBuffer = static_cast<MG_State::GLState::TextureObjectBuffer*>(texture.get());
         const auto& bufferObject = textureBuffer->GetBufferBindingSlot().GetBoundObject();
         if (bufferObject == nullptr) {
-            MGLOG_E("ResolveStorageTexelBufferDescriptor: texture buffer on image unit %d has no GL buffer bound",
+            MGLOG_E_ONCE("ResolveStorageTexelBufferDescriptor: texture buffer on image unit %d has no GL buffer bound",
                     imageUnit);
             return false;
         }
@@ -819,7 +819,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         BufferSlice slice{};
         if (!m_bufferManager->AcquireResidentSlice(BufferKind::TextureBuffer, bufferObject, slice) ||
             !slice.IsValid()) {
-            MGLOG_E("ResolveStorageTexelBufferDescriptor: failed to sync GL buffer %u for texture buffer %u",
+            MGLOG_E_ONCE("ResolveStorageTexelBufferDescriptor: failed to sync GL buffer %u for texture buffer %u",
                     bufferObject->GetExternalIndex(), texture->GetExternalIndex());
             return false;
         }
@@ -842,7 +842,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             vkFormat = resourceFormat;
         }
         if (vkFormat == VK_FORMAT_UNDEFINED) {
-            MGLOG_E("ResolveStorageTexelBufferDescriptor: unsupported image buffer format (internal=%d bind=0x%x)",
+            MGLOG_E_ONCE("ResolveStorageTexelBufferDescriptor: unsupported image buffer format (internal=%d bind=0x%x)",
                     static_cast<Int>(internalFormat), imageBinding.Format);
             return false;
         }
@@ -862,7 +862,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             viewRange = (viewRange / texelSize) * texelSize;
         }
         if (viewRange == 0) {
-            MGLOG_E("ResolveStorageTexelBufferDescriptor: texture buffer %u has empty view range",
+            MGLOG_E_ONCE("ResolveStorageTexelBufferDescriptor: texture buffer %u has empty view range",
                     texture->GetExternalIndex());
             return false;
         }
@@ -877,7 +877,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         VkBufferView bufferView = VK_NULL_HANDLE;
         const VkResult result = vkCreateBufferView(m_device, &viewInfo, nullptr, &bufferView);
         if (result != VK_SUCCESS || bufferView == VK_NULL_HANDLE) {
-            MGLOG_E("ResolveStorageTexelBufferDescriptor: vkCreateBufferView failed result=%d format=%d range=%zu",
+            MGLOG_E_ONCE("ResolveStorageTexelBufferDescriptor: vkCreateBufferView failed result=%d format=%d range=%zu",
                     result, static_cast<Int>(vkFormat), static_cast<SizeT>(viewRange));
             return false;
         }
@@ -914,7 +914,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         auto& bindingPoint = MG_State::pGLContext->GetBufferBindingPoint(BufferTarget::ShaderStorage, frontendBinding);
         const auto& bufferObject = bindingPoint.GetBoundObject();
         if (bufferObject == nullptr) {
-            MGLOG_E("ResolveStorageBufferDescriptor: no SSBO bound at frontend binding %u for block '%s'",
+            MGLOG_E_ONCE("ResolveStorageBufferDescriptor: no SSBO bound at frontend binding %u for block '%s'",
                     frontendBinding, programObj.storageBlockNameByBinding[binding].c_str());
             return false;
         }
@@ -929,7 +929,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
         BufferSlice slice{};
         if (!m_bufferManager->AcquireResidentSlice(BufferKind::ShaderStorage, bufferObject, slice) || !slice.IsValid()) {
-            MGLOG_E("ResolveStorageBufferDescriptor: failed to sync GL buffer %u for block '%s'",
+            MGLOG_E_ONCE("ResolveStorageBufferDescriptor: failed to sync GL buffer %u for block '%s'",
                     bufferObject->GetExternalIndex(), programObj.storageBlockNameByBinding[binding].c_str());
             return false;
         }
@@ -943,7 +943,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             rangeEnd = bufferSize;
         }
         if (rangeEnd <= rangeStart) {
-            MGLOG_E("ResolveStorageBufferDescriptor: empty SSBO range for block '%s'",
+            MGLOG_E_ONCE("ResolveStorageBufferDescriptor: empty SSBO range for block '%s'",
                     programObj.storageBlockNameByBinding[binding].c_str());
             return false;
         }
@@ -967,7 +967,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
         const Int baseLocation = programObj.samplerUniformLocationByBinding[binding];
         if (baseLocation < 0) {
-            MGLOG_E("ResolveStorageImageDescriptor: storage image binding %u has no uniform location", binding);
+            MGLOG_E_ONCE("ResolveStorageImageDescriptor: storage image binding %u has no uniform location", binding);
             return false;
         }
         // Per ELEMENT, and this is where an image array differs from a storage-block array: GL
@@ -979,26 +979,26 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // uniform.
         const Int location = baseLocation + static_cast<Int>(element);
         if (!program.UniformLocationsAliasSameUniform(baseLocation, location)) {
-            MGLOG_E("ResolveStorageImageDescriptor: binding %u element %u is past the end of its image array",
+            MGLOG_E_ONCE("ResolveStorageImageDescriptor: binding %u element %u is past the end of its image array",
                     binding, element);
             return false;
         }
         const Int imageUnit = program.GetUniformSamplerOrImageUnitIndex(static_cast<Uint>(location));
         if (imageUnit < 0 || imageUnit >= MG_State::GLState::TextureState::MAX_TEXTURE_IMAGE_UNITS) {
-            MGLOG_E("ResolveStorageImageDescriptor: image unit %d out of range for binding %u",
+            MGLOG_E_ONCE("ResolveStorageImageDescriptor: image unit %d out of range for binding %u",
                     imageUnit, binding);
             return false;
         }
 
         auto& imageBinding = MG_State::pGLContext->GetImageTextureBinding(imageUnit);
         if (imageBinding.Texture == nullptr) {
-            MGLOG_E("ResolveStorageImageDescriptor: image unit %d is unbound for binding %u", imageUnit, binding);
+            MGLOG_E_ONCE("ResolveStorageImageDescriptor: image unit %d is unbound for binding %u", imageUnit, binding);
             return false;
         }
 
         const Bool ready = m_textureManager->TransitionTextureForStorageImage(commandBuffer, *imageBinding.Texture);
         if (!ready) {
-            MGLOG_E("ResolveStorageImageDescriptor: failed to transition textureId=%d for image unit %d",
+            MGLOG_E_ONCE("ResolveStorageImageDescriptor: failed to transition textureId=%d for image unit %d",
                     imageBinding.Texture->GetExternalIndex(), imageUnit);
             return false;
         }
@@ -1018,7 +1018,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         const VkFormat viewFormat = ResolveStorageImageViewFormat(
             reflectedFormat, imageBinding.Format, resource->format, useBindingFormat);
         if (viewFormat == VK_FORMAT_UNDEFINED) {
-            MGLOG_E("ResolveStorageImageDescriptor: unsupported glBindImageTexture format=0x%x "
+            MGLOG_E_ONCE("ResolveStorageImageDescriptor: unsupported glBindImageTexture format=0x%x "
                     "for binding=%u imageUnit=%d textureId=%d bindingPolicy=%s",
                     imageBinding.Format, binding, imageUnit, imageBinding.Texture->GetExternalIndex(),
                     useBindingFormat ? "true" : "false");
@@ -1027,7 +1027,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         const VkImageView view = m_textureManager->GetOrCreateStorageImageView(
             *imageBinding.Texture, mipLevel, viewFormat, imageBinding.Layered != GL_FALSE, imageBinding.Layer);
         if (view == VK_NULL_HANDLE) {
-            MGLOG_E("ResolveStorageImageDescriptor: failed to resolve storage view textureId=%d mip=%u "
+            MGLOG_E_ONCE("ResolveStorageImageDescriptor: failed to resolve storage view textureId=%d mip=%u "
                     "bindingFormat=0x%x imageFormat=%d reflectedFormat=%d selectedFormat=%d bindingPolicy=%s",
                     imageBinding.Texture->GetExternalIndex(), mipLevel, imageBinding.Format,
                     static_cast<Int>(resource->format), static_cast<Int>(reflectedFormat),
@@ -1048,7 +1048,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // Report that there is no fallback and let the caller decline the draw - aborting the
         // process over an unbound sampler is never the right answer.
         if (target != TextureTarget::Texture2D && target != TextureTarget::TextureRectangle) {
-            MGLOG_E("UniformManager::GetFallbackTexture: no fallback exists for target=%d",
+            MGLOG_E_ONCE("UniformManager::GetFallbackTexture: no fallback exists for target=%d",
                     static_cast<Int>(target));
             return nullptr;
         }
@@ -1224,13 +1224,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 continue;
             }
             if (binding >= programObj.samplerUniformLocationByBinding.size()) {
-                MGLOG_E("CollectStorageImageTextures: binding %u has no uniform-location mapping", binding);
+                MGLOG_E_ONCE("CollectStorageImageTextures: binding %u has no uniform-location mapping", binding);
                 return false;
             }
 
             const Int baseLocation = programObj.samplerUniformLocationByBinding[binding];
             if (baseLocation < 0) {
-                MGLOG_E("CollectStorageImageTextures: binding %u has no image uniform location", binding);
+                MGLOG_E_ONCE("CollectStorageImageTextures: binding %u has no image uniform location", binding);
                 return false;
             }
             // Per ELEMENT, for the same reason the sampled walk above is: an image ARRAY is one
@@ -1242,20 +1242,20 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             for (Uint32 element = 0; element < descriptorCount; ++element) {
                 const Int location = ResolveDescriptorElementLocation(program, baseLocation, element);
                 if (location < 0) {
-                    MGLOG_E("CollectStorageImageTextures: binding %u element %u is past the end of its image array",
+                    MGLOG_E_ONCE("CollectStorageImageTextures: binding %u element %u is past the end of its image array",
                             binding, element);
                     return false;
                 }
                 const Int imageUnit = program.GetUniformSamplerOrImageUnitIndex(static_cast<Uint>(location));
                 if (imageUnit < 0 || imageUnit >= MG_State::GLState::TextureState::MAX_TEXTURE_IMAGE_UNITS) {
-                    MGLOG_E("CollectStorageImageTextures: image unit %d is invalid for binding %u element %u",
+                    MGLOG_E_ONCE("CollectStorageImageTextures: image unit %d is invalid for binding %u element %u",
                             imageUnit, binding, element);
                     return false;
                 }
 
                 auto* texture = MG_State::pGLContext->GetImageTextureBinding(imageUnit).Texture.get();
                 if (texture == nullptr) {
-                    MGLOG_E("CollectStorageImageTextures: image unit %d is unbound for binding %u element %u",
+                    MGLOG_E_ONCE("CollectStorageImageTextures: image unit %d is unbound for binding %u element %u",
                             imageUnit, binding, element);
                     return false;
                 }
@@ -1406,7 +1406,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         const Uint64 descriptorCount64 =
             static_cast<Uint64>(maxSets) * static_cast<Uint64>(std::min(m_maxBindings, kEstimatedBindingsPerSet));
         if (descriptorCount64 > static_cast<Uint64>(std::numeric_limits<Uint32>::max())) {
-            MGLOG_E("UniformDescriptorBinder::CreateDescriptorPool failed: descriptorCount overflow");
+            MGLOG_E_ONCE("UniformDescriptorBinder::CreateDescriptorPool failed: descriptorCount overflow");
             return false;
         }
 
@@ -1438,7 +1438,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
         const VkResult result = vkCreateDescriptorPool(m_device, &poolInfo, nullptr, &outPool);
         if (result != VK_SUCCESS) {
-            MGLOG_E("UniformDescriptorBinder::CreateDescriptorPool failed: vkCreateDescriptorPool returned %d",
+            MGLOG_E_ONCE("UniformDescriptorBinder::CreateDescriptorPool failed: vkCreateDescriptorPool returned %d",
                     result);
             return false;
         }
@@ -1457,7 +1457,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
         VkDescriptorPool grownPool = VK_NULL_HANDLE;
         if (!CreateDescriptorPool(grownMaxSets, grownPool)) {
-            MGLOG_E("UniformDescriptorBinder::GrowFrameDescriptorPool failed: cannot create grown pool (%u -> %u sets)",
+            MGLOG_E_ONCE("UniformDescriptorBinder::GrowFrameDescriptorPool failed: cannot create grown pool (%u -> %u sets)",
                     currentMaxSets, grownMaxSets);
             return false;
         }
@@ -1516,7 +1516,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             VkResult allocResult = AllocateDescriptorSetsFromActivePool(frameIndex, programObj, outDescriptorSet);
             if (allocResult == VK_ERROR_OUT_OF_POOL_MEMORY || allocResult == VK_ERROR_FRAGMENTED_POOL) {
                 if (!GrowFrameDescriptorPool(frame, frameIndex)) {
-                    MGLOG_E("UniformDescriptorBinder::AcquireDescriptorSet failed: descriptor pool growth failed");
+                    MGLOG_E_ONCE("UniformDescriptorBinder::AcquireDescriptorSet failed: descriptor pool growth failed");
                     return allocResult;
                 }
                 allocResult = AllocateDescriptorSetsFromActivePool(frameIndex, programObj, outDescriptorSet);
@@ -1647,7 +1647,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
         auto& frame = m_frames[frameIndex];
         if (frame.descriptorPools.empty()) {
-            MGLOG_E("UniformDescriptorBinder::BindProgramUniformBuffers failed: frame descriptor pools are invalid");
+            MGLOG_E_ONCE("UniformDescriptorBinder::BindProgramUniformBuffers failed: frame descriptor pools are invalid");
             return false;
         }
         if (frame.activeDescriptorPoolIndex >= frame.descriptorPools.size()) {
@@ -1784,7 +1784,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 VkBufferView bufferView = VK_NULL_HANDLE;
                 if (!ResolveTexelBufferDescriptor(program, programObj, binding, frameIndex, bufferView) ||
                     bufferView == VK_NULL_HANDLE) {
-                    MGLOG_E(
+                    MGLOG_E_ONCE(
                         "UniformDescriptorBinder::BindProgramUniformBuffers failed: texture buffer binding %u has no valid descriptor",
                         binding);
                     return false;
@@ -1803,7 +1803,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 VkBufferView bufferView = VK_NULL_HANDLE;
                 if (!ResolveStorageTexelBufferDescriptor(program, programObj, binding, frameIndex, bufferView) ||
                     bufferView == VK_NULL_HANDLE) {
-                    MGLOG_E("UniformDescriptorBinder::BindProgramUniformBuffers failed: image buffer binding %u "
+                    MGLOG_E_ONCE("UniformDescriptorBinder::BindProgramUniformBuffers failed: image buffer binding %u "
                             "has no valid descriptor",
                             binding);
                     return false;
@@ -1823,7 +1823,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 for (Uint32 element = 0; element < descriptorCount; ++element) {
                     VkDescriptorBufferInfo bufferInfo{};
                     if (!ResolveStorageBufferDescriptor(program, programObj, binding, element, bufferInfo)) {
-                        MGLOG_E(
+                        MGLOG_E_ONCE(
                             "UniformDescriptorBinder::BindProgramUniformBuffers failed: storage buffer binding %u "
                             "element %u has no valid descriptor",
                             binding, element);
@@ -1850,7 +1850,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                     VkDescriptorImageInfo imageInfo{};
                     if (!ResolveStorageImageDescriptor(commandBuffer, program, programObj, binding, element,
                                                        imageInfo)) {
-                        MGLOG_E(
+                        MGLOG_E_ONCE(
                             "UniformDescriptorBinder::BindProgramUniformBuffers failed: storage image binding %u "
                             "element %u has no valid descriptor",
                             binding, element);
@@ -1892,14 +1892,14 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                                             imageInfo, samplerDescriptorsUnchangedHint);
                     }
                     if (!hasImage) {
-                        MGLOG_E(
+                        MGLOG_E_ONCE(
                             "UniformDescriptorBinder::BindProgramUniformBuffers failed: sampler binding %u element %u "
                             "has no valid texture descriptor",
                             binding, element);
                         return false;
                     }
                     if (imageInfo.sampler == VK_NULL_HANDLE || imageInfo.imageView == VK_NULL_HANDLE) {
-                        MGLOG_E(
+                        MGLOG_E_ONCE(
                             "UniformDescriptorBinder::BindProgramUniformBuffers failed: sampler binding %u element %u "
                             "has null sampler or imageView",
                             binding, element);
@@ -1973,7 +1973,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         } else {
             VkResult allocResult = AcquireDescriptorSet(frameIndex, programObj, descriptorSet);
             if (allocResult != VK_SUCCESS || descriptorSet == VK_NULL_HANDLE) {
-                MGLOG_E("UniformDescriptorBinder::BindProgramUniformBuffers failed: descriptor set acquire returned %d",
+                MGLOG_E_ONCE("UniformDescriptorBinder::BindProgramUniformBuffers failed: descriptor set acquire returned %d",
                         allocResult);
                 return false;
             }

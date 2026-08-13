@@ -383,7 +383,7 @@ namespace MobileGL::MG_Impl::GLImpl {
 
         MGLOG_D("glGetString, name: %s", MG_Util::ConvertGLEnumToString(name).c_str());
         if (!activeBackendObject) {
-            MGLOG_E("activeBackendObject is not initialized!");
+            MGLOG_E_ONCE("activeBackendObject is not initialized!");
             return (GLubyte*)"Unknown";
         }
 
@@ -442,7 +442,7 @@ namespace MobileGL::MG_Impl::GLImpl {
 
         const auto& activeBackendObject = MG_Backend::pActiveBackendObject;
         if (!activeBackendObject) {
-            MGLOG_E("activeBackendObject is not initialized!");
+            MGLOG_E_ONCE("activeBackendObject is not initialized!");
             return (GLubyte*)"Unknown";
         }
         const auto& rendererInfo = activeBackendObject->GetRendererInfo();
@@ -1954,7 +1954,7 @@ namespace MobileGL::MG_Impl::GLImpl {
 
         const auto& activeBackendObject = MG_Backend::pActiveBackendObject;
         if (!activeBackendObject) {
-            MGLOG_E("activeBackendObject is not initialized!");
+            MGLOG_E_ONCE("activeBackendObject is not initialized!");
             return;
         }
         const auto& rendererInfo = activeBackendObject->GetRendererInfo();
@@ -2248,7 +2248,7 @@ namespace MobileGL::MG_Impl::GLImpl {
             *params = static_cast<GLint>(std::lround(dynamicParameters.MaxTextureMaxAnisotropy));
             break;
         default:
-            MGLOG_E("glGetIntegerv: Invalid enum %s (0x%X)", MG_Util::ConvertGLEnumToString(pname).c_str(), pname);
+            MGLOG_D("glGetIntegerv: Invalid enum %s (0x%X)", MG_Util::ConvertGLEnumToString(pname).c_str(), pname);
             MG_State::pGLContext->RecordError(ErrorCode::InvalidEnum,
                                               MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", "GetIntegerv",
                                                                            std::format("Invalid enum: 0x{:X}", pname)));

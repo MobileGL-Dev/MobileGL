@@ -166,32 +166,32 @@ MOBILEGL_GLX_API int glXSwapIntervalSGI(int interval) {
 
 // Legacy entry points some loaders probe for; harmless no-op stubs.
 MOBILEGL_GLX_API void glXCopyContext(Display*, void*, void*, unsigned long) {
-    MGLOG_W("glx: glXCopyContext is not supported");
+    MGLOG_W_ONCE("glx: glXCopyContext is not supported");
 }
 
 MOBILEGL_GLX_API unsigned long glXCreateGLXPixmap(Display*, void*, unsigned long) {
-    MGLOG_W("glx: glXCreateGLXPixmap is not supported");
+    MGLOG_W_ONCE("glx: glXCreateGLXPixmap is not supported");
     return 0;
 }
 
 MOBILEGL_GLX_API void glXDestroyGLXPixmap(Display*, unsigned long) {}
 
 MOBILEGL_GLX_API unsigned long glXCreatePixmap(Display*, void*, unsigned long, const int*) {
-    MGLOG_W("glx: glXCreatePixmap is not supported");
+    MGLOG_W_ONCE("glx: glXCreatePixmap is not supported");
     return 0;
 }
 
 MOBILEGL_GLX_API void glXDestroyPixmap(Display*, unsigned long) {}
 
 MOBILEGL_GLX_API unsigned long glXCreatePbuffer(Display*, void*, const int*) {
-    MGLOG_W("glx: glXCreatePbuffer is not supported");
+    MGLOG_W_ONCE("glx: glXCreatePbuffer is not supported");
     return 0;
 }
 
 MOBILEGL_GLX_API void glXDestroyPbuffer(Display*, unsigned long) {}
 
 MOBILEGL_GLX_API void glXUseXFont(unsigned long, int, int, int) {
-    MGLOG_W("glx: glXUseXFont is not supported");
+    MGLOG_W_ONCE("glx: glXUseXFont is not supported");
 }
 
 MOBILEGL_GLX_API void glXSelectEvent(Display*, unsigned long, unsigned long) {}

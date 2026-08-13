@@ -252,7 +252,7 @@ namespace MobileGL::MG_Backend::DirectGLES::MultiDrawImpl {
             g_resolvedTier =
                 ResolveTier(g_GLESCapabilities, g_GLESFuncs, MG_Config::Features.EsprytMultiDrawMode,
                             &g_tierResolution);
-            MGLOG_I("DirectGLES multi-draw: %s", g_tierResolution.c_str());
+            MGLOG_D("DirectGLES multi-draw: %s", g_tierResolution.c_str());
         }
 
         // Which tiers have already announced themselves, one bit per GLESMultiDrawMode.
@@ -267,7 +267,7 @@ namespace MobileGL::MG_Backend::DirectGLES::MultiDrawImpl {
             const Uint32 bit = 1u << static_cast<Uint32>(tier);
             if (g_announcedTiers & bit) return;
             g_announcedTiers |= bit;
-            MGLOG_I("DirectGLES multi-draw: first batch executed via tier \"%s\"", TierName(tier));
+            MGLOG_D("DirectGLES multi-draw: first batch executed via tier \"%s\"", TierName(tier));
         }
 
         // The tier this particular batch can actually take. A tier is demoted here when
@@ -490,7 +490,7 @@ namespace MobileGL::MG_Backend::DirectGLES::MultiDrawImpl {
                 const Uint8* source = ResolveSubDrawIndices(indexBuffer, indexBufferBytes, indexBufferSize, indices[i],
                                                             subDrawCount, indexSize);
                 if (!source) {
-                    MGLOG_E("DirectGLES multi-draw (drawelements tier): sub-draw %d reads outside the bound index "
+                    MGLOG_E_ONCE("DirectGLES multi-draw (drawelements tier): sub-draw %d reads outside the bound index "
                             "buffer; skipping the batch",
                             i);
                     return false;
@@ -596,7 +596,7 @@ void main() {
 
             const GLuint shader = g_GLESFuncs.glCreateShader(GL_COMPUTE_SHADER);
             if (shader == 0) {
-                MGLOG_E("DirectGLES multi-draw (compute tier): glCreateShader(GL_COMPUTE_SHADER) failed");
+                MGLOG_E_ONCE("DirectGLES multi-draw (compute tier): glCreateShader(GL_COMPUTE_SHADER) failed");
                 return false;
             }
             const char* source = kFlattenComputeSource;
@@ -607,14 +607,14 @@ void main() {
             if (status != GL_TRUE) {
                 char log[1024] = {};
                 g_GLESFuncs.glGetShaderInfoLog(shader, sizeof(log) - 1, nullptr, log);
-                MGLOG_E("DirectGLES multi-draw (compute tier): index-flattening shader failed to compile: %s", log);
+                MGLOG_E_ONCE("DirectGLES multi-draw (compute tier): index-flattening shader failed to compile: %s", log);
                 g_GLESFuncs.glDeleteShader(shader);
                 return false;
             }
 
             const GLuint program = g_GLESFuncs.glCreateProgram();
             if (program == 0) {
-                MGLOG_E("DirectGLES multi-draw (compute tier): glCreateProgram failed");
+                MGLOG_E_ONCE("DirectGLES multi-draw (compute tier): glCreateProgram failed");
                 g_GLESFuncs.glDeleteShader(shader);
                 return false;
             }
@@ -625,7 +625,7 @@ void main() {
             if (status != GL_TRUE) {
                 char log[1024] = {};
                 g_GLESFuncs.glGetProgramInfoLog(program, sizeof(log) - 1, nullptr, log);
-                MGLOG_E("DirectGLES multi-draw (compute tier): index-flattening program failed to link: %s", log);
+                MGLOG_E_ONCE("DirectGLES multi-draw (compute tier): index-flattening program failed to link: %s", log);
                 g_GLESFuncs.glDeleteProgram(program);
                 return false;
             }
@@ -635,7 +635,7 @@ void main() {
             g_uDrawCount = g_GLESFuncs.glGetUniformLocation(program, "uDrawCount");
             g_uTotalIndices = g_GLESFuncs.glGetUniformLocation(program, "uTotalIndices");
             g_computeProgramFailed = false;
-            MGLOG_I("DirectGLES multi-draw: index-flattening compute program ready (id %u)", program);
+            MGLOG_D("DirectGLES multi-draw: index-flattening compute program ready (id %u)", program);
             return true;
         }
 
@@ -920,7 +920,7 @@ void main() {
                                            feedBaseVertex);
         }
         if (!drawn) {
-            MGLOG_E("DirectGLES multi-draw: no usable tier for a %d sub-draw batch (mode 0x%x, type 0x%x); "
+            MGLOG_E_ONCE("DirectGLES multi-draw: no usable tier for a %d sub-draw batch (mode 0x%x, type 0x%x); "
                     "the batch was dropped",
                     drawcount, mode, type);
         }

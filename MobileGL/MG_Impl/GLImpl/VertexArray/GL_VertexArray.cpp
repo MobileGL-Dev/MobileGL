@@ -527,7 +527,7 @@ namespace MobileGL::MG_Impl::GLImpl {
 
         if (!MG_Backend::pActiveBackendObject ||
             !MG_Backend::pActiveBackendObject->GetDynamicParameters().SupportsFloat64VertexAttributes) {
-            MGLOG_I("VertexAttribLFormat: attribute %u asked for a 64-bit (GL_DOUBLE) format, but this "
+            MGLOG_W_ONCE("VertexAttribLFormat: attribute %u asked for a 64-bit (GL_DOUBLE) format, but this "
                     "backend has no double-precision vertex attribute support - see the "
                     "\"64-bit vertex attributes\" / \"shaderFloat64\" POST row for what that costs",
                     attribindex);

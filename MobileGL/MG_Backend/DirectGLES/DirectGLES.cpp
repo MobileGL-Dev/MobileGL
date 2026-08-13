@@ -261,14 +261,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
             drawBuffer->SyncPersistentMappedRange();
             const SizeT commandOffset = reinterpret_cast<SizeT>(indirect);
             if (commandOffset + requiredBytes > drawBuffer->GetSize()) {
-                MGLOG_E("%s skipped: invalid GL_DRAW_INDIRECT_BUFFER binding or range", label);
+                MGLOG_E_ONCE("%s skipped: invalid GL_DRAW_INDIRECT_BUFFER binding or range", label);
                 return nullptr;
             }
             return drawBuffer->MappedData() + commandOffset;
         }
 
         if (!indirect) {
-            MGLOG_E("%s skipped: indirect pointer is null", label);
+            MGLOG_E_ONCE("%s skipped: indirect pointer is null", label);
             return nullptr;
         }
 
@@ -341,7 +341,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
                 auto* backendResource = EnsureBufferResource(obj);
                 if (!backendResource || backendResource->id == 0) {
-                    MGLOG_E("No backend buffer found for %s binding point %zu.",
+                    MGLOG_E_ONCE("No backend buffer found for %s binding point %zu.",
                             MG_Util::ConvertGLEnumToString(glTarget).c_str(), i);
                     continue;
                 }
@@ -385,7 +385,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
             auto* backendResource = EnsureBufferResource(bufferObject);
             if (!backendResource || backendResource->id == 0) {
-                MGLOG_E("No backend buffer found for %s.", MG_Util::ConvertGLEnumToString(glTarget).c_str());
+                MGLOG_E_ONCE("No backend buffer found for %s.", MG_Util::ConvertGLEnumToString(glTarget).c_str());
                 return;
             }
             BindBufferId(glTarget, backendResource->id);
@@ -410,7 +410,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // PBO is not needed since it should be handled in frontend
 
             if (!currentVAOObject) {
-                MGLOG_E("No VAO is currently bound, cannot sync necessary buffers.");
+                MGLOG_E_ONCE("No VAO is currently bound, cannot sync necessary buffers.");
                 return;
             }
 
@@ -643,7 +643,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                                                     static_cast<GLintptr>(target.start),
                                                                     static_cast<GLsizeiptr>(size), GL_MAP_READ_BIT);
                         if (mapped == nullptr) {
-                            MGLOG_E("EndTransformFeedback: failed to map backend buffer %u for capture readback",
+                            MGLOG_E_ONCE("EndTransformFeedback: failed to map backend buffer %u for capture readback",
                                     target.backendId);
                             continue;
                         }
@@ -709,7 +709,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                                                   static_cast<GLsizeiptr>(packedStride * vertices),
                                                                   GL_MAP_READ_BIT);
                 if (packed == nullptr) {
-                    MGLOG_E("EndTransformFeedback: failed to map the scatter capture buffer");
+                    MGLOG_E_ONCE("EndTransformFeedback: failed to map the scatter capture buffer");
                     return;
                 }
 
@@ -935,7 +935,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             g_backendVertexArrayObjects.CollectGarbageIfNeeded();
 
             if (!currentVAOObject || !vaoTwin) {
-                MGLOG_E("No VAO is currently bound, cannot sync current VAO.");
+                MGLOG_E_ONCE("No VAO is currently bound, cannot sync current VAO.");
                 return;
             }
 
@@ -999,7 +999,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     g_GLESFuncs.glVertexAttribI4uiv(location, currentValue.uintValue.data());
                     break;
                 case MG_State::GLState::VertexAttribBaseType::Unsupported:
-                    MGLOG_E("SyncCurrentVertexAttributeValues: program=%u location=%u has no enabled array and its "
+                    MGLOG_E_ONCE("SyncCurrentVertexAttributeValues: program=%u location=%u has no enabled array and its "
                             "shader input type 0x%x is not supported as a current generic vertex attribute",
                             program->GetExternalIndex(), location, program->GetAttribType(location));
                     break;
@@ -1469,7 +1469,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 }
 
                 if (!currentFBO) {
-                    MGLOG_E("No FBO is currently bound, cannot sync current FBO.");
+                    MGLOG_E_ONCE("No FBO is currently bound, cannot sync current FBO.");
                     continue;
                 }
 
@@ -2240,7 +2240,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             if (twin) {
                 twin->Bind(target);
             } else {
-                MGLOG_E("No backend FBO found (maybe not synced) for current %s FBO, cannot bind FBO.",
+                MGLOG_E_ONCE("No backend FBO found (maybe not synced) for current %s FBO, cannot bind FBO.",
                         (target == FramebufferTarget::Read ? "READ" : "DRAW"));
             }
         } else {
@@ -2844,7 +2844,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                         (GLintptr)range.start, (GLintptr)(range.end - range.start));
                                 }
                             } else {
-                                MGLOG_E("No backend buffer found for UBO binding, cannot bind UBO.");
+                                MGLOG_E_ONCE("No backend buffer found for UBO binding, cannot bind UBO.");
                             }
                         }
                     }
@@ -2976,7 +2976,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             } else {
                 g_GLESFuncs.glUseProgram(0);
                 PrgramImpl::g_lastUsedBackendProgramId = 0;
-                MGLOG_E("No backend program found (maybe not synced) for current program, cannot use program.");
+                MGLOG_E_ONCE("No backend program found (maybe not synced) for current program, cannot use program.");
             }
         }
     }
@@ -3213,13 +3213,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
     GLuint GetBackendProgramId(GLuint program) {
         if (!MG_State::pGLContext->ValidateProgramName(program)) {
-            MGLOG_E("Invalid frontend program object: %u", program);
+            MGLOG_E_ONCE("Invalid frontend program object: %u", program);
             return 0;
         }
 
         auto& programObject = MG_State::pGLContext->GetProgramObject(program);
         if (!programObject) {
-            MGLOG_E("Program object %u is null.", program);
+            MGLOG_E_ONCE("Program object %u is null.", program);
             return 0;
         }
 
@@ -3486,7 +3486,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             stride = sizeof(DrawElementsIndirectCommand);
         }
         if (stride < static_cast<GLsizei>(sizeof(DrawElementsIndirectCommand))) {
-            MGLOG_E("MultiDrawElementsIndirect skipped: stride %d is smaller than command size %zu",
+            MGLOG_E_ONCE("MultiDrawElementsIndirect skipped: stride %d is smaller than command size %zu",
                     stride, sizeof(DrawElementsIndirectCommand));
             return;
         }
@@ -3496,7 +3496,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
         const SizeT indexSize = MG_Util::GetGLTypeSize(type);
         if (indexSize == 0) {
-            MGLOG_E("MultiDrawElementsIndirect skipped: unsupported index type 0x%x", type);
+            MGLOG_E_ONCE("MultiDrawElementsIndirect skipped: unsupported index type 0x%x", type);
             return;
         }
 
@@ -3526,7 +3526,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             stride = sizeof(DrawElementsIndirectCommand);
         }
         if (stride < static_cast<GLsizei>(sizeof(DrawElementsIndirectCommand))) {
-            MGLOG_E("MultiDrawElementsIndirectCount skipped: stride %d is smaller than command size %zu",
+            MGLOG_E_ONCE("MultiDrawElementsIndirectCount skipped: stride %d is smaller than command size %zu",
                     stride, sizeof(DrawElementsIndirectCommand));
             return;
         }
@@ -3536,18 +3536,18 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
         const SizeT indexSize = MG_Util::GetGLTypeSize(type);
         if (indexSize == 0) {
-            MGLOG_E("MultiDrawElementsIndirectCount skipped: unsupported index type 0x%x", type);
+            MGLOG_E_ONCE("MultiDrawElementsIndirectCount skipped: unsupported index type 0x%x", type);
             return;
         }
 
         auto drawBuffer = MG_State::pGLContext->GetBufferBindingSlot(BufferTarget::DrawIndirect).GetBoundObject();
         auto parameterBuffer = MG_State::pGLContext->GetBufferBindingSlot(BufferTarget::Parameter).GetBoundObject();
         if (!drawBuffer) {
-            MGLOG_E("MultiDrawElementsIndirectCount skipped: no GL_DRAW_INDIRECT_BUFFER is bound");
+            MGLOG_E_ONCE("MultiDrawElementsIndirectCount skipped: no GL_DRAW_INDIRECT_BUFFER is bound");
             return;
         }
         if (!parameterBuffer) {
-            MGLOG_E("MultiDrawElementsIndirectCount skipped: no GL_PARAMETER_BUFFER is bound");
+            MGLOG_E_ONCE("MultiDrawElementsIndirectCount skipped: no GL_PARAMETER_BUFFER is bound");
             return;
         }
 
@@ -3558,11 +3558,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
         const SizeT commandBytes = commandOffset + static_cast<SizeT>(stride) * static_cast<SizeT>(maxdrawcount - 1) +
             sizeof(DrawElementsIndirectCommand);
         if (commandBytes > drawBuffer->GetSize()) {
-            MGLOG_E("MultiDrawElementsIndirectCount skipped: invalid GL_DRAW_INDIRECT_BUFFER binding or range");
+            MGLOG_E_ONCE("MultiDrawElementsIndirectCount skipped: invalid GL_DRAW_INDIRECT_BUFFER binding or range");
             return;
         }
         if (drawcount < 0 || static_cast<SizeT>(drawcount) + sizeof(Uint32) > parameterBuffer->GetSize()) {
-            MGLOG_E("MultiDrawElementsIndirectCount skipped: invalid GL_PARAMETER_BUFFER binding or range");
+            MGLOG_E_ONCE("MultiDrawElementsIndirectCount skipped: invalid GL_PARAMETER_BUFFER binding or range");
             return;
         }
 
@@ -3570,7 +3570,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // have - MappedData() is null there and the reads below would be a null dereference,
         // not a wrong picture. The DirectVulkan twin declines the same way.
         if (parameterBuffer->MappedData() == nullptr || drawBuffer->MappedData() == nullptr) {
-            MGLOG_E("MultiDrawElementsIndirectCount skipped: CPU fallback cannot read the parameter or "
+            MGLOG_E_ONCE("MultiDrawElementsIndirectCount skipped: CPU fallback cannot read the parameter or "
                     "draw-indirect buffer");
             return;
         }
@@ -3594,7 +3594,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             stride = sizeof(DrawArraysIndirectCommand);
         }
         if (stride < static_cast<GLsizei>(sizeof(DrawArraysIndirectCommand))) {
-            MGLOG_E("MultiDrawArraysIndirect skipped: stride %d is smaller than command size %zu",
+            MGLOG_E_ONCE("MultiDrawArraysIndirect skipped: stride %d is smaller than command size %zu",
                     stride, sizeof(DrawArraysIndirectCommand));
             return;
         }
@@ -3634,7 +3634,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             stride = sizeof(DrawArraysIndirectCommand);
         }
         if (stride < static_cast<GLsizei>(sizeof(DrawArraysIndirectCommand))) {
-            MGLOG_E("MultiDrawArraysIndirectCount skipped: stride %d is smaller than command size %zu",
+            MGLOG_E_ONCE("MultiDrawArraysIndirectCount skipped: stride %d is smaller than command size %zu",
                     stride, sizeof(DrawArraysIndirectCommand));
             return;
         }
@@ -3645,11 +3645,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
         auto drawBuffer = MG_State::pGLContext->GetBufferBindingSlot(BufferTarget::DrawIndirect).GetBoundObject();
         auto parameterBuffer = MG_State::pGLContext->GetBufferBindingSlot(BufferTarget::Parameter).GetBoundObject();
         if (!drawBuffer) {
-            MGLOG_E("MultiDrawArraysIndirectCount skipped: no GL_DRAW_INDIRECT_BUFFER is bound");
+            MGLOG_E_ONCE("MultiDrawArraysIndirectCount skipped: no GL_DRAW_INDIRECT_BUFFER is bound");
             return;
         }
         if (!parameterBuffer) {
-            MGLOG_E("MultiDrawArraysIndirectCount skipped: no GL_PARAMETER_BUFFER is bound");
+            MGLOG_E_ONCE("MultiDrawArraysIndirectCount skipped: no GL_PARAMETER_BUFFER is bound");
             return;
         }
 
@@ -3660,17 +3660,17 @@ namespace MobileGL::MG_Backend::DirectGLES {
         const SizeT commandBytes = commandOffset + static_cast<SizeT>(stride) * static_cast<SizeT>(maxdrawcount - 1) +
             sizeof(DrawArraysIndirectCommand);
         if (commandBytes > drawBuffer->GetSize()) {
-            MGLOG_E("MultiDrawArraysIndirectCount skipped: invalid GL_DRAW_INDIRECT_BUFFER binding or range");
+            MGLOG_E_ONCE("MultiDrawArraysIndirectCount skipped: invalid GL_DRAW_INDIRECT_BUFFER binding or range");
             return;
         }
         if (drawcount < 0 || static_cast<SizeT>(drawcount) + sizeof(Uint32) > parameterBuffer->GetSize()) {
-            MGLOG_E("MultiDrawArraysIndirectCount skipped: invalid GL_PARAMETER_BUFFER binding or range");
+            MGLOG_E_ONCE("MultiDrawArraysIndirectCount skipped: invalid GL_PARAMETER_BUFFER binding or range");
             return;
         }
 
         // See the indexed twin: no CPU shadow means no count to read, not a wrong one.
         if (parameterBuffer->MappedData() == nullptr || drawBuffer->MappedData() == nullptr) {
-            MGLOG_E("MultiDrawArraysIndirectCount skipped: CPU fallback cannot read the parameter or "
+            MGLOG_E_ONCE("MultiDrawArraysIndirectCount skipped: CPU fallback cannot read the parameter or "
                     "draw-indirect buffer");
             return;
         }
@@ -3763,7 +3763,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
         const SizeT indexSize = MG_Util::GetGLTypeSize(type);
         if (indexSize == 0) {
-            MGLOG_E("DrawElementsIndirect skipped: unsupported index type 0x%x", type);
+            MGLOG_E_ONCE("DrawElementsIndirect skipped: unsupported index type 0x%x", type);
             return;
         }
 
@@ -3960,7 +3960,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         g_GLESFuncs.glBindFramebuffer(GL_DRAW_FRAMEBUFFER, static_cast<GLuint>(previousDraw));
         FramebufferImpl::InvalidateFramebufferBindingCache();
         if (!resolved) {
-            MGLOG_E("BlitFramebuffer: multisample resolve fallback failed");
+            MGLOG_E_ONCE("BlitFramebuffer: multisample resolve fallback failed");
         }
         return resolved;
     }
@@ -4259,7 +4259,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 s_stencilProgram = BuildProgram(kStencilFragmentSource);
                 if (s_depthProgram == 0 || s_stencilProgram == 0) {
                     s_programsFailed = true;
-                    MGLOG_E("BlitFramebuffer: could not build the multisample replicate programs");
+                    MGLOG_E_ONCE("BlitFramebuffer: could not build the multisample replicate programs");
                     return false;
                 }
                 s_depthUvTransform = g_GLESFuncs.glGetUniformLocation(s_depthProgram, "uUvTransform");
@@ -4463,7 +4463,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         g_GLESFuncs.glBindFramebuffer(GL_READ_FRAMEBUFFER, static_cast<GLuint>(previousRead));
         FramebufferImpl::InvalidateFramebufferBindingCache();
         if (!ok) {
-            MGLOG_E("BlitFramebuffer: could not stage the source for the multisample replicate");
+            MGLOG_E_ONCE("BlitFramebuffer: could not stage the source for the multisample replicate");
             return false;
         }
 
@@ -4532,7 +4532,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
         // Everything the pass disturbed goes back through emulationState's destructor.
         if (!replicated) {
-            MGLOG_E("BlitFramebuffer: multisample replicate fallback failed");
+            MGLOG_E_ONCE("BlitFramebuffer: multisample replicate fallback failed");
         }
         return replicated;
     }
@@ -4567,7 +4567,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // outright, desktop GL replicates the source sample into every destination one.
             if (ReplicateBlitIntoMultisampleDraw(srcX0, srcY0, srcX1, srcY1, dstX0, dstY0, dstX1, dstY1, mask)) {
                 if ((mask & GL_COLOR_BUFFER_BIT) != 0) {
-                    MGLOG_E("BlitFramebuffer: colour replicate into a multisample draw framebuffer is not emulated");
+                    MGLOG_E_ONCE("BlitFramebuffer: colour replicate into a multisample draw framebuffer is not emulated");
                 }
             }
             return;
@@ -4668,7 +4668,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
         auto textureTarget = MG_Util::ConvertGLEnumToTextureTarget(target);
         if (!TextureImpl::IsSupportedTextureTarget(textureTarget)) {
-            MGLOG_E("    Texture target %s is not supported, skipping.",
+            MGLOG_E_ONCE("    Texture target %s is not supported, skipping.",
                     MG_Util::ConvertTextureTargetToString(textureTarget).c_str());
             return false;
         }
@@ -4677,7 +4677,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         {
             const auto& textureObject = bindingSlot.GetBoundObject();
             if (!textureObject) {
-                MGLOG_W("%s: Texture target %s does not have texture bound.", __func__,
+                MGLOG_D("%s: Texture target %s does not have texture bound.", __func__,
                         MG_Util::ConvertTextureTargetToString(textureTarget).c_str());
             }
 
@@ -4926,7 +4926,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return true;
         }
 
-        MGLOG_E("%s failed: %s. target=%s, format=%s", operation,
+        MGLOG_E_ONCE("%s failed: %s. target=%s, format=%s", operation,
                 MG_Util::ConvertGLEnumToString(err).c_str(),
                 MG_Util::ConvertGLEnumToString(target).c_str(),
                 MG_Util::ConvertTextureInternalFormatToString(format).c_str());
@@ -5262,7 +5262,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                         .GetBoundObject();
         auto* backendTextureSlot = TextureImpl::g_backendTextureObjects.Find(textureObject.get());
         if (!backendTextureSlot || !*backendTextureSlot) {
-            MGLOG_E("CopyTexSubImage2D: No backend texture found for texture %u.",
+            MGLOG_E_ONCE("CopyTexSubImage2D: No backend texture found for texture %u.",
                     textureObject ? textureObject->GetExternalIndex() : 0);
             return;
         }
@@ -5313,7 +5313,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                                     static_cast<Uint>(currentTex), target, level, isStencilFormat);
 
             if (g_GLESFuncs.glCheckFramebufferStatus(GL_DRAW_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
-                MGLOG_E("ES glCheckFramebufferStatus(GL_DRAW_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE");
+                MGLOG_E_ONCE("ES glCheckFramebufferStatus(GL_DRAW_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE");
                 return;
             }
 
@@ -5357,7 +5357,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                         .GetBoundObject();
         auto* backendTextureSlot = TextureImpl::g_backendTextureObjects.Find(textureObject.get());
         if (!backendTextureSlot || !*backendTextureSlot) {
-            MGLOG_E("CopyTexSubImage2D: No backend texture found for texture %u.",
+            MGLOG_E_ONCE("CopyTexSubImage2D: No backend texture found for texture %u.",
                     textureObject ? textureObject->GetExternalIndex() : 0);
             return;
         }
@@ -5395,7 +5395,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 MGLOG_D("ES error (%s:%d): %s", file, line, MG_Util::ConvertGLEnumToString(err).c_str());
             });
             if (g_GLESFuncs.glCheckFramebufferStatus(GL_DRAW_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
-                MGLOG_E("ES glCheckFramebufferStatus(GL_DRAW_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE");
+                MGLOG_E_ONCE("ES glCheckFramebufferStatus(GL_DRAW_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE");
                 return;
             }
 
@@ -6002,7 +6002,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             MG_State::pGLContext->GetBufferBindingSlot(BufferTarget::PixelPack).GetBoundObject();
         const SizeT pboOffset = reinterpret_cast<SizeT>(pixels);
         if (pixelPackBufferObject && pboOffset + packedSize > pixelPackBufferObject->GetSize()) {
-            MGLOG_E("ReadPixels: %s readback PBO is too small", what);
+            MGLOG_E_ONCE("ReadPixels: %s readback PBO is too small", what);
             return false;
         }
         Vector<Uint8> rowBuf(rowBytes);
@@ -6156,7 +6156,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 s_stencilProgram = ReplicateBlitImpl::BuildProgram(kStencilFetchFragmentSource);
                 if (s_depthProgram == 0 || s_stencilProgram == 0) {
                     s_programsFailed = true;
-                    MGLOG_E("ReadPixels: could not build the depth/stencil readback programs");
+                    MGLOG_E_ONCE("ReadPixels: could not build the depth/stencil readback programs");
                     return false;
                 }
                 s_depthUvTransform = g_GLESFuncs.glGetUniformLocation(s_depthProgram, "uUvTransform");
@@ -6414,7 +6414,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             ClearGLErrors();
             g_GLESFuncs.glDrawArrays(GL_TRIANGLES, 0, 3);
             if (g_GLESFuncs.glGetError() != GL_NO_ERROR) {
-                MGLOG_E("ReadPixels: the %s conversion pass failed", stencilAspect ? "stencil" : "depth");
+                MGLOG_E_ONCE("ReadPixels: the %s conversion pass failed", stencilAspect ? "stencil" : "depth");
                 return false;
             }
 
@@ -6430,7 +6430,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             g_GLESFuncs.glReadPixels(0, 0, width, height, GL_RGBA_INTEGER, GL_UNSIGNED_INT, outWords.data());
             const GLenum readError = g_GLESFuncs.glGetError();
             if (readError != GL_NO_ERROR) {
-                MGLOG_E("ReadPixels: could not read the %s conversion target back: %s",
+                MGLOG_E_ONCE("ReadPixels: could not read the %s conversion target back: %s",
                         stencilAspect ? "stencil" : "depth", MG_Util::ConvertGLEnumToString(readError).c_str());
                 return false;
             }
@@ -6450,20 +6450,20 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
             FramebufferImpl::BindFramebufferId(GL_DRAW_FRAMEBUFFER, slot.framebuffer);
             if (!StageAspect(slot, candidates, stencilAspect, isDefault, x, y, width, height)) {
-                MGLOG_E("ReadPixels: no ES-compatible scratch format for the %s source",
+                MGLOG_E_ONCE("ReadPixels: no ES-compatible scratch format for the %s source",
                         stencilAspect ? "stencil" : "depth");
                 return false;
             }
 
             if (!EnsureColorTexture(width, height)) {
-                MGLOG_E("ReadPixels: could not allocate the depth/stencil conversion target");
+                MGLOG_E_ONCE("ReadPixels: could not allocate the depth/stencil conversion target");
                 return false;
             }
             FramebufferImpl::BindFramebufferId(GL_DRAW_FRAMEBUFFER, s_colorFramebuffer);
             g_GLESFuncs.glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
                                                s_colorTexture, 0);
             if (g_GLESFuncs.glCheckFramebufferStatus(GL_DRAW_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
-                MGLOG_E("ReadPixels: the depth/stencil conversion target is not renderable");
+                MGLOG_E_ONCE("ReadPixels: the depth/stencil conversion target is not renderable");
                 return false;
             }
 
@@ -6568,7 +6568,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         if (DepthStencilSamplingReadImpl::Read(x, y, width, height, &outDepth, /*outStencil=*/nullptr)) {
             return true;
         }
-        MGLOG_E("ReadPixels: no depth readback path is available: native reads failed with %s and the "
+        MGLOG_E_ONCE("ReadPixels: no depth readback path is available: native reads failed with %s and the "
                 "sampling emulation could not service the source",
                 MG_Util::ConvertGLEnumToString(floatError).c_str());
         return false;
@@ -6672,7 +6672,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         if (DepthStencilSamplingReadImpl::Read(x, y, width, height, /*outDepth=*/nullptr, &outStencil)) {
             return true;
         }
-        MGLOG_E("ReadPixels: no stencil readback path is available: native reads failed with %s and the "
+        MGLOG_E_ONCE("ReadPixels: no stencil readback path is available: native reads failed with %s and the "
                 "sampling emulation could not service the source",
                 MG_Util::ConvertGLEnumToString(packedError).c_str());
         return false;
@@ -6977,7 +6977,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         const Bool integerAttachment =
             attachmentComponentType == GL_INT || attachmentComponentType == GL_UNSIGNED_INT;
         if (mapping.isInteger != integerAttachment) {
-            MGLOG_E("Readback conversion: integer-ness of format %s does not match the read buffer, skipping",
+            MGLOG_E_ONCE("Readback conversion: integer-ness of format %s does not match the read buffer, skipping",
                     MG_Util::ConvertGLEnumToString(format).c_str());
             return true;
         }
@@ -7053,7 +7053,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
         }
         if (wideType == GL_NONE) {
-            MGLOG_E("Readback conversion: ES accepted no wide read type for format %s type %s, skipping readback",
+            MGLOG_E_ONCE("Readback conversion: ES accepted no wide read type for format %s type %s, skipping readback",
                     MG_Util::ConvertGLEnumToString(format).c_str(), MG_Util::ConvertGLEnumToString(type).c_str());
             return true;
         }
@@ -7236,7 +7236,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         const Bool convertible = GetReadbackChannelMapping(format, conversionMapping) &&
                                  GetReadbackDstPixelSize(conversionMapping, type) != 0;
         if (!useNativeReadback && !convertible) {
-            MGLOG_E("ReadPixels: format %s with type %s is not implemented yet, skipping readback",
+            MGLOG_E_ONCE("ReadPixels: format %s with type %s is not implemented yet, skipping readback",
                     MG_Util::ConvertGLEnumToString(format).c_str(), MG_Util::ConvertGLEnumToString(type).c_str());
             return;
         }
@@ -7257,7 +7257,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         MGLOG_D("ReadPixels: GL_READ_FRAMEBUFFER status = %s", MG_Util::ConvertGLEnumToString(fbStatus).c_str());
 
         if (fbStatus != GL_FRAMEBUFFER_COMPLETE) {
-            MGLOG_E("ReadPixels: bound READ FBO is not complete");
+            MGLOG_E_ONCE("ReadPixels: bound READ FBO is not complete");
             return;
         }
         // ES only guarantees GL_RGBA/GL_UNSIGNED_BYTE and GL_RGBA_INTEGER/GL_(UNSIGNED_)INT for the
@@ -7282,7 +7282,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 MGLOG_D("ReadPixels: finished via client-format conversion");
                 return;
             }
-            MGLOG_E("ReadPixels: format %s with type %s is not implemented yet, skipping readback",
+            MGLOG_E_ONCE("ReadPixels: format %s with type %s is not implemented yet, skipping readback",
                     MG_Util::ConvertGLEnumToString(format).c_str(), MG_Util::ConvertGLEnumToString(type).c_str());
             return;
         }
@@ -7315,7 +7315,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             auto* backendResource = BufferImpl::EnsureBufferResource(pixelPackBufferObject);
             MGLOG_D("ReadPixels: Using PBO %u", pixelPackBufferObject->GetExternalIndex());
             if (!backendResource || backendResource->id == 0) {
-                MGLOG_E("ReadPixels: No backend buffer found for PBO %u.",
+                MGLOG_E_ONCE("ReadPixels: No backend buffer found for PBO %u.",
                         pixelPackBufferObject ? pixelPackBufferObject->GetExternalIndex() : 0);
                 return;
             }
@@ -7347,7 +7347,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 MGLOG_D("ReadPixels: finished via client-format conversion after native failure");
                 return;
             }
-            MGLOG_E("ReadPixels: native read of %s/%s failed (%s) and no conversion path covers it, "
+            MGLOG_E_ONCE("ReadPixels: native read of %s/%s failed (%s) and no conversion path covers it, "
                     "skipping readback",
                     MG_Util::ConvertGLEnumToString(format).c_str(), MG_Util::ConvertGLEnumToString(type).c_str(),
                     MG_Util::ConvertGLEnumToString(nativeReadError).c_str());
@@ -7367,7 +7367,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 MGLOG_D("ReadPixels: Unmapping PBO");
                 g_GLESFuncs.glUnmapBuffer(GL_PIXEL_PACK_BUFFER);
             } else {
-                MGLOG_E("ReadPixels: glMapBufferRange returned nullptr");
+                MGLOG_E_ONCE("ReadPixels: glMapBufferRange returned nullptr");
             }
         }
         MGLOG_D("ReadPixels: finished");
@@ -7403,7 +7403,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         const Bool convertible = GetReadbackChannelMapping(format, conversionMapping) &&
                                  GetReadbackDstPixelSize(conversionMapping, type) != 0;
         if (!useNativeReadback && !convertible) {
-            MGLOG_E("GetTexImage: format %s with type %s is not implemented yet, skipping readback",
+            MGLOG_E_ONCE("GetTexImage: format %s with type %s is not implemented yet, skipping readback",
                     MG_Util::ConvertGLEnumToString(format).c_str(), MG_Util::ConvertGLEnumToString(type).c_str());
             return;
         }
@@ -7431,7 +7431,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         auto* backendTextureSlot = TextureImpl::g_backendTextureObjects.Find(textureObject.get());
 
         if (!backendTextureSlot || !*backendTextureSlot) {
-            MGLOG_E("GetTexImage: No backend texture found for texture %u.",
+            MGLOG_E_ONCE("GetTexImage: No backend texture found for texture %u.",
                     textureObject ? textureObject->GetExternalIndex() : 0);
             return;
         }
@@ -7499,7 +7499,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         MGLOG_D("GetTexImage: texture storage type = %d", (int)storageType);
 
         if (storageType == TextureStorageType::Buffer) {
-            MGLOG_E("GetTexImage: Texture storage type Buffer is not supported.");
+            MGLOG_E_ONCE("GetTexImage: Texture storage type Buffer is not supported.");
             return;
         }
 
@@ -7511,7 +7511,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // levelRange.y() is GL_TEXTURE_MAX_LEVEL, an inclusive level index — a single-level
         // texture has range [0, 0] and level 0 must be readable.
         if (static_cast<Uint>(level) < levelRange.x() || static_cast<Uint>(level) > levelRange.y()) {
-            MGLOG_E("GetTexImage: Requested level %d is out of range (base level %u, max level %u), skipping readback",
+            MGLOG_E_ONCE("GetTexImage: Requested level %d is out of range (base level %u, max level %u), skipping readback",
                     level, levelRange.x(), levelRange.y());
             return;
         }
@@ -7608,15 +7608,15 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 return;
             }
             if (!tempFBOComplete) {
-                MGLOG_E("GetTexImage: READ FBO incomplete and no shadow copy available, skipping readback");
+                MGLOG_E_ONCE("GetTexImage: READ FBO incomplete and no shadow copy available, skipping readback");
                 return;
             }
-            MGLOG_E("GetTexImage: format %s with type %s is not implemented yet, skipping readback",
+            MGLOG_E_ONCE("GetTexImage: format %s with type %s is not implemented yet, skipping readback",
                     MG_Util::ConvertGLEnumToString(format).c_str(), MG_Util::ConvertGLEnumToString(type).c_str());
             return;
         }
         if (!tempFBOComplete) {
-            MGLOG_E("GetTexImage: bound READ FBO is not complete");
+            MGLOG_E_ONCE("GetTexImage: bound READ FBO is not complete");
             return;
         }
 
@@ -7644,7 +7644,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             auto* backendResource = BufferImpl::EnsureBufferResource(pixelPackBufferObject);
             MGLOG_D("GetTexImage: Using PBO %u", pixelPackBufferObject->GetExternalIndex());
             if (!backendResource || backendResource->id == 0) {
-                MGLOG_E("GetTexImage: No backend buffer found for PBO %u.",
+                MGLOG_E_ONCE("GetTexImage: No backend buffer found for PBO %u.",
                         pixelPackBufferObject ? pixelPackBufferObject->GetExternalIndex() : 0);
                 return;
             }
@@ -7680,7 +7680,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 MGLOG_D("ReadPixels: Unmapping PBO");
                 g_GLESFuncs.glUnmapBuffer(GL_PIXEL_PACK_BUFFER);
             } else {
-                MGLOG_E("ReadPixels: glMapBufferRange returned nullptr");
+                MGLOG_E_ONCE("ReadPixels: glMapBufferRange returned nullptr");
             }
         }
 
@@ -8067,7 +8067,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             if (g_requestedSwapInterval < 0) return;
             if (!g_EGLFuncs.eglSwapInterval || g_Display == EGL_NO_DISPLAY || g_Surface == EGL_NO_SURFACE) return;
             const EGLBoolean ok = g_EGLFuncs.eglSwapInterval(g_Display, g_requestedSwapInterval);
-            MGLOG_I("DirectGLES: applied native swap interval %d (%s)", g_requestedSwapInterval,
+            MGLOG_D("DirectGLES: applied native swap interval %d (%s)", g_requestedSwapInterval,
                     ok ? "ok" : "failed");
         }
     } // namespace
@@ -8178,12 +8178,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
     Bool MakeCurrent() {
         if (!g_EGLFuncs.eglMakeCurrent || g_Display == EGL_NO_DISPLAY || g_Surface == EGL_NO_SURFACE ||
             g_Context == EGL_NO_CONTEXT) {
-            MGLOG_E("DirectGLES::MakeCurrent failed: EGL display/surface/context is not initialized");
+            MGLOG_E_ONCE("DirectGLES::MakeCurrent failed: EGL display/surface/context is not initialized");
             return false;
         }
         if (!g_EGLFuncs.eglMakeCurrent(g_Display, g_Surface, g_Surface, g_Context)) {
             const EGLint error = g_EGLFuncs.eglGetError ? g_EGLFuncs.eglGetError() : EGL_SUCCESS;
-            MGLOG_E("DirectGLES::MakeCurrent failed: native eglMakeCurrent returned error 0x%04x", error);
+            MGLOG_E_ONCE("DirectGLES::MakeCurrent failed: native eglMakeCurrent returned error 0x%04x", error);
             return false;
         }
         InvalidateEglVerifiedStamp();
@@ -8216,7 +8216,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         }
         if (!g_EGLFuncs.eglMakeCurrent(g_Display, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT)) {
             const EGLint error = g_EGLFuncs.eglGetError ? g_EGLFuncs.eglGetError() : EGL_SUCCESS;
-            MGLOG_E("DirectGLES::ReleaseCurrent failed: native eglMakeCurrent returned error 0x%04x", error);
+            MGLOG_E_ONCE("DirectGLES::ReleaseCurrent failed: native eglMakeCurrent returned error 0x%04x", error);
             return false;
         }
         // Clearing the global owner works from ANY thread (a release request can

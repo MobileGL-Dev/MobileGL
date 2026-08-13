@@ -21,7 +21,7 @@ namespace MobileGL::MG_Impl::EGLImpl {
 
         EGLStateContext* GetState() {
             if (!MG_State::pEGLContext) {
-                MGLOG_E("pEGLContext is null. MG_State may not be initialized.");
+                MGLOG_E_ONCE("pEGLContext is null. MG_State may not be initialized.");
             }
             return MG_State::pEGLContext.get();
         }
@@ -146,7 +146,7 @@ namespace MobileGL::MG_Impl::EGLImpl {
 
         auto* backendObject = GetBackendObject(state);
         if (!backendObject) {
-            MGLOG_E("activeBackendObject not initialized!");
+            MGLOG_E_ONCE("activeBackendObject not initialized!");
             state->DestroySurface(dpy, surface);
             return EGL_NO_SURFACE;
         }
@@ -172,11 +172,11 @@ namespace MobileGL::MG_Impl::EGLImpl {
 
         auto* backendObject = GetBackendObject(state);
         if (!backendObject) {
-            MGLOG_E("activeBackendObject not initialized!");
+            MGLOG_E_ONCE("activeBackendObject not initialized!");
             return EGL_FALSE;
         }
         if (!backendObject->SwapEGLBuffers(dpy, draw)) {
-            MGLOG_E("eglSwapBuffers failed on thread=%s dpy=%p draw=%p", CurrentThreadIdString().c_str(), dpy, draw);
+            MGLOG_E_ONCE("eglSwapBuffers failed on thread=%s dpy=%p draw=%p", CurrentThreadIdString().c_str(), dpy, draw);
             state->SetError(EGL_BAD_SURFACE);
             return EGL_FALSE;
         }
@@ -211,7 +211,7 @@ namespace MobileGL::MG_Impl::EGLImpl {
 
         auto* backendObject = GetBackendObject(state);
         if (!backendObject) {
-            MGLOG_E("activeBackendObject not initialized!");
+            MGLOG_E_ONCE("activeBackendObject not initialized!");
             return EGL_FALSE;
         }
         if (!backendObject->InitializeEGLDisplay(dpy, major, minor)) {
@@ -265,7 +265,7 @@ namespace MobileGL::MG_Impl::EGLImpl {
         if (releaseCurrentRequest) {
             if (auto* backendObject = MG_Backend::pActiveBackendObject.get()) {
                 if (!backendObject->MakeEGLCurrent(dpy, draw, read, ctx)) {
-                    MGLOG_E("eglMakeCurrent release failed in backend thread=%s", threadId.c_str());
+                    MGLOG_E_ONCE("eglMakeCurrent release failed in backend thread=%s", threadId.c_str());
                     state->MakeCurrent(oldDisplay, oldDraw, oldRead, oldContext);
                     state->SetError(EGL_BAD_ACCESS);
                     return EGL_FALSE;
@@ -277,12 +277,12 @@ namespace MobileGL::MG_Impl::EGLImpl {
 
         auto* backendObject = GetBackendObject(state);
         if (!backendObject) {
-            MGLOG_E("activeBackendObject not initialized!");
+            MGLOG_E_ONCE("activeBackendObject not initialized!");
             state->MakeCurrent(oldDisplay, oldDraw, oldRead, oldContext);
             return EGL_FALSE;
         }
         if (!backendObject->MakeEGLCurrent(dpy, draw, read, ctx)) {
-            MGLOG_E("eglMakeCurrent backend attach failed thread=%s dpy=%p draw=%p read=%p ctx=%p", threadId.c_str(),
+            MGLOG_E_ONCE("eglMakeCurrent backend attach failed thread=%s dpy=%p draw=%p read=%p ctx=%p", threadId.c_str(),
                     dpy, draw, read, ctx);
             state->SetError(EGL_BAD_ACCESS);
             state->MakeCurrent(oldDisplay, oldDraw, oldRead, oldContext);
@@ -703,7 +703,7 @@ namespace MobileGL::MG_Impl::EGLImpl {
 
         auto* backendObject = GetBackendObject(state);
         if (!backendObject) {
-            MGLOG_E("activeBackendObject not initialized!");
+            MGLOG_E_ONCE("activeBackendObject not initialized!");
             state->DestroySurface(dpy, surface);
             return EGL_NO_SURFACE;
         }
@@ -726,7 +726,7 @@ namespace MobileGL::MG_Impl::EGLImpl {
         }
         auto* backendObject = GetBackendObject(state);
         if (!backendObject) {
-            MGLOG_E("activeBackendObject not initialized!");
+            MGLOG_E_ONCE("activeBackendObject not initialized!");
             return EGL_FALSE;
         }
         width = std::max<EGLint>(width, 1);
@@ -764,7 +764,7 @@ namespace MobileGL::MG_Impl::EGLImpl {
         MGLOG_D("eglGetProcAddress(%s)", name);
         void* proc = MG_Impl::GetProcAddress(name);
         if (!proc) {
-            MGLOG_W("Failed to get function: %s", name);
+            MGLOG_D("Failed to get function: %s", name);
             return nullptr;
         }
         return (__eglMustCastToProperFunctionPointerType)proc;

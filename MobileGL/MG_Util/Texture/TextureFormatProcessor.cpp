@@ -455,7 +455,7 @@ namespace MobileGL::MG_Util::TextureFormatProcessor {
                 break;
 
             default:
-                MGLOG_E("NormalizePixelFormat: outFormat: unhandled internalFormat: %s",
+                MGLOG_E_ONCE("NormalizePixelFormat: outFormat: unhandled internalFormat: %s",
                         MG_Util::ConvertGLEnumToString(internalFormat).c_str());
                 // Fallback handling for other formats
                 // Try to infer format from internal format name
@@ -676,7 +676,7 @@ namespace MobileGL::MG_Util::TextureFormatProcessor {
                 break;
 
             default:
-                MGLOG_E("NormalizePixelFormat: outType: unhandled internalFormat: %s",
+                MGLOG_E_ONCE("NormalizePixelFormat: outType: unhandled internalFormat: %s",
                         MG_Util::ConvertGLEnumToString(internalFormat).c_str());
                 // Fallback handling for other formats
                 *outType = GL_UNSIGNED_BYTE;

@@ -52,11 +52,15 @@
 // that includes Defines.h without Log.h both tokens would silently evaluate to 0 in the
 // preprocessor conditional - enabling the assert in exactly the INFO-level builds it is
 // documented to be compiled out of. Log.h redefines them identically, which is legal.
+//
+// Severity order, ascending: DEBUG < INFO < WARN < ERROR < FATAL. MOBILEGL_LOG_ACTIVE_LEVEL
+// names the lowest severity compiled in, so the production default INFO keeps I/W/E/F and
+// drops only D. Any edit here must be mirrored in Log.h.
 #ifndef MOBILEGL_LOG_LEVEL_DEBUG
 #define MOBILEGL_LOG_LEVEL_DEBUG 0
-#define MOBILEGL_LOG_LEVEL_WARN 1
-#define MOBILEGL_LOG_LEVEL_ERROR 2
-#define MOBILEGL_LOG_LEVEL_INFO 3
+#define MOBILEGL_LOG_LEVEL_INFO 1
+#define MOBILEGL_LOG_LEVEL_WARN 2
+#define MOBILEGL_LOG_LEVEL_ERROR 3
 #define MOBILEGL_LOG_LEVEL_FATAL 4
 #endif
 
@@ -91,6 +95,12 @@
 #endif
 
 // =============================== Utils ================================ //
+// Asserts are live in exactly the builds where MGLOG_D is live, i.e. DEBUG builds only;
+// an INFO build (the production default) compiles them out. DEBUG is the lowest severity
+// in the ordering above, so "ACTIVE <= DEBUG" is true only for ACTIVE == DEBUG - the same
+// gate MGLOG_D uses in Log.h. That equivalence is what makes this gate survive the
+// 2026-08-13 renumbering unchanged; the contract is and stays
+// "INFO builds: asserts OFF; DEBUG builds: asserts ON".
 #if MOBILEGL_LOG_ACTIVE_LEVEL <= MOBILEGL_LOG_LEVEL_DEBUG
     #define MOBILEGL_ASSERT(condition, ...)                                                                                \
         do {                                                                                                               \

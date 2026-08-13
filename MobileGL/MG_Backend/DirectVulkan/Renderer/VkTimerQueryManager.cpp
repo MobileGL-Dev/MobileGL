@@ -15,7 +15,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         MOBILEGL_ASSERT(initInfo.device != VK_NULL_HANDLE, "VkTimerQueryManager::Initialize requires valid VkDevice");
         MOBILEGL_ASSERT(initInfo.frameCount > 0, "VkTimerQueryManager::Initialize requires non-zero frame count");
         if (initInfo.timestampValidBits == 0 || initInfo.timestampPeriodNs <= 0.0f || initInfo.slotsPerPool == 0) {
-            MGLOG_W("VkTimerQueryManager: timestamps unsupported (validBits=%u, period=%f, slots=%u)",
+            MGLOG_W_ONCE("VkTimerQueryManager: timestamps unsupported (validBits=%u, period=%f, slots=%u)",
                     initInfo.timestampValidBits, initInfo.timestampPeriodNs, initInfo.slotsPerPool);
             return false;
         }
@@ -35,7 +35,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         for (auto& poolState : m_pools) {
             const VkResult result = vkCreateQueryPool(m_device, &poolInfo, nullptr, &poolState.pool);
             if (result != VK_SUCCESS) {
-                MGLOG_E("VkTimerQueryManager: vkCreateQueryPool failed with %s", VkResultToString(result));
+                MGLOG_E_ONCE("VkTimerQueryManager: vkCreateQueryPool failed with %s", VkResultToString(result));
                 Shutdown();
                 return false;
             }
@@ -90,7 +90,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         auto& poolState = m_pools[frameIndex];
         if (poolState.cursor >= m_slotsPerPool) {
             if (!poolState.exhaustionWarned) {
-                MGLOG_W("VkTimerQueryManager: frame %u timestamp pool exhausted (%u slots); further timer queries "
+                MGLOG_W_ONCE("VkTimerQueryManager: frame %u timestamp pool exhausted (%u slots); further timer queries "
                         "this frame fall back to the frontend path",
                         frameIndex, m_slotsPerPool);
                 poolState.exhaustionWarned = true;
@@ -120,7 +120,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             m_device, m_pools[record.poolIndex].pool, record.slot, 1, sizeof(resultWithAvailability),
             resultWithAvailability, sizeof(Uint64), VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WITH_AVAILABILITY_BIT);
         if (result != VK_SUCCESS && result != VK_NOT_READY) {
-            MGLOG_E("VkTimerQueryManager: vkGetQueryPoolResults failed with %s", VkResultToString(result));
+            MGLOG_E_ONCE("VkTimerQueryManager: vkGetQueryPoolResults failed with %s", VkResultToString(result));
             return false;
         }
         if (resultWithAvailability[1] == 0) {

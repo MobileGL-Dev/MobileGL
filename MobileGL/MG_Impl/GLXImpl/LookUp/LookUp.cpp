@@ -31,7 +31,7 @@ namespace MG_Impl::GLXImpl {
 #endif
         void* proc = MobileGL::MG_Impl::GetProcAddress(name);
         if (!proc) {
-            MGLOG_W("Failed to get function: %s", (const char*)name);
+            MGLOG_D("Failed to get function: %s", (const char*)name);
             return nullptr;
         }
 

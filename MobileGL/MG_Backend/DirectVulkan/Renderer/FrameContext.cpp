@@ -205,7 +205,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // commands away. The device is gone on that path anyway - stay silent-safe
         // rather than trade a lost device for a barrier into a closed buffer.
         if (frame.hasCommandBufferRecorded) {
-            MGLOG_E("TransitionToPresent: command buffer already closed; skipping the present barrier");
+            MGLOG_E_ONCE("TransitionToPresent: command buffer already closed; skipping the present barrier");
             return false;
         }
 

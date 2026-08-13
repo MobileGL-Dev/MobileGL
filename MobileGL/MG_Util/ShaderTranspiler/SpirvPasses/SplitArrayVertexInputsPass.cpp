@@ -128,7 +128,7 @@ namespace MobileGL {
                     const Uint32 elementTypeId = typeMgr->GetId(arrayType->element_type());
                     const Uint32 locationsPerElement = LocationsPerElement(arrayType->element_type());
                     if (elementTypeId == 0 || locationsPerElement == 0) {
-                        MGLOG_I("SplitArrayVertexInputsPass: vertex input %%%u is an array whose element "
+                        MGLOG_D("SplitArrayVertexInputsPass: vertex input %%%u is an array whose element "
                                 "type has no single-location mapping; leaving it declared as an array",
                                 inst.result_id());
                         continue;
@@ -195,7 +195,7 @@ namespace MobileGL {
                                     continue;
                                 }
                                 if (derivedPointers.count(operand.words[0]) == 0) continue;
-                                MGLOG_I("SplitArrayVertexInputsPass: array vertex input %%%u reaches a "
+                                MGLOG_D("SplitArrayVertexInputsPass: array vertex input %%%u reaches a "
                                         "SPIR-V opcode %u that this pass cannot follow; leaving it "
                                         "declared as an "
                                         "array",

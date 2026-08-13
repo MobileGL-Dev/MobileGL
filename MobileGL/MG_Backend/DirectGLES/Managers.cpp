@@ -598,7 +598,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 void* ptr = g_GLESFuncs.glMapBufferRange(TempBufferTarget, 0, static_cast<GLsizeiptr>(size),
                                                          GL_MAP_WRITE_BIT | kMapPersistentBit | kMapCoherentBit);
                 if (!ptr) {
-                    MGLOG_E("Ops_AcquirePersistentMap: glMapBufferRange(persistent) failed for buffer %u",
+                    MGLOG_E_ONCE("Ops_AcquirePersistentMap: glMapBufferRange(persistent) failed for buffer %u",
                             resource->id);
                     resource->persistentMapped = false;
                     resource->persistentPtr = nullptr;
@@ -716,7 +716,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                         resource->syncedChangeSerial = bufferObject.GetChangeSerial();
                         return;
                     }
-                    MGLOG_E("Failed to map buffer with ID: %u for flush, falling back to glBufferSubData",
+                    MGLOG_E_ONCE("Failed to map buffer with ID: %u for flush, falling back to glBufferSubData",
                             resource->id);
                 }
                 UploadRangeNow(*resource, bufferObject, range.start, range.end);
@@ -739,7 +739,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 void* mapped = g_GLESFuncs.glMapBufferRange(TempBufferTarget, 0, static_cast<GLsizeiptr>(size),
                                                             GL_MAP_READ_BIT);
                 if (mapped == nullptr) {
-                    MGLOG_E("Ops_ReadbackFromGpu: glMapBufferRange(read) failed for buffer %u", resource->id);
+                    MGLOG_E_ONCE("Ops_ReadbackFromGpu: glMapBufferRange(read) failed for buffer %u", resource->id);
                     return;
                 }
                 bufferObject.WritebackFromBackend({mapped, size}, 0);
@@ -993,8 +993,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 } else {
                     g_GLESFuncs.glGenBuffers(1, &resource->id);
                     if (resource->id == 0) {
-                        MGLOG_E("Failed to generate buffer object.");
-                        MGLOG_E("ES glGetError(): %s",
+                        MGLOG_E_ONCE("Failed to generate buffer object.");
+                        MGLOG_E_ONCE("ES glGetError(): %s",
                                 MG_Util::ConvertGLEnumToString(g_GLESFuncs.glGetError()).c_str());
                         return resource;
                     }
@@ -1224,7 +1224,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     }
                 }
                 if (id == 0) {
-                    MGLOG_E("Global-UBO ring: persistent storage creation failed (%zu bytes); "
+                    MGLOG_E_ONCE("Global-UBO ring: persistent storage creation failed (%zu bytes); "
                             "falling back to glBufferSubData uploads.",
                             newSize);
                     g_uboRing.creationFailed = true;
@@ -1470,8 +1470,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
             m_clientAttributeBufferIds.fill(0);
             g_GLESFuncs.glGenVertexArrays(1, &m_backendVAOId);
             if (m_backendVAOId == 0) {
-                MGLOG_E("Failed to generate vertex array object.");
-                MGLOG_E("ES glGetError(): %s", MG_Util::ConvertGLEnumToString(g_GLESFuncs.glGetError()).c_str());
+                MGLOG_E_ONCE("Failed to generate vertex array object.");
+                MGLOG_E_ONCE("ES glGetError(): %s", MG_Util::ConvertGLEnumToString(g_GLESFuncs.glGetError()).c_str());
             } else {
                 MGLOG_D("Generated vertex array object with ID: %u.", m_backendVAOId);
             }
@@ -1529,13 +1529,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
         inline Bool BindAttributeBuffer(const MG_State::GLState::VertexAttribute& attrib) {
             const auto& bufferObject = attrib.Buffer;
             if (!bufferObject) {
-                MGLOG_W("Attribute has no bound buffer, skipping.");
+                MGLOG_W_ONCE("Attribute has no bound buffer, skipping.");
                 return false;
             }
 
             auto* backendResource = BufferImpl::EnsureBufferResource(bufferObject);
             if (!backendResource || backendResource->id == 0) {
-                MGLOG_E("No backend buffer found for attribute's buffer, cannot bind attribute.");
+                MGLOG_E_ONCE("No backend buffer found for attribute's buffer, cannot bind attribute.");
                 return false;
             }
 
@@ -1586,12 +1586,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
         inline Bool SyncZeroStrideAttribute(Uint attribIndex, const MG_State::GLState::VertexAttribute& attrib) {
             const auto& bufferObject = attrib.Buffer;
             if (!bufferObject) {
-                MGLOG_W("Zero-stride attribute %u has no bound buffer, skipping.", attribIndex);
+                MGLOG_W_ONCE("Zero-stride attribute %u has no bound buffer, skipping.", attribIndex);
                 return false;
             }
             auto* backendResource = BufferImpl::EnsureBufferResource(bufferObject);
             if (!backendResource || backendResource->id == 0) {
-                MGLOG_E("No backend buffer for zero-stride attribute %u, cannot bind it.", attribIndex);
+                MGLOG_E_ONCE("No backend buffer for zero-stride attribute %u, cannot bind it.", attribIndex);
                 return false;
             }
 
@@ -1621,7 +1621,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
             if (!stateVAOObject) {
-                MGLOG_E("State VAO object is null, cannot sync to backend.");
+                MGLOG_E_ONCE("State VAO object is null, cannot sync to backend.");
                 return;
             }
 
@@ -1694,7 +1694,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // because the array stayed enabled with no pointer the failed call could set.
                 // The type test therefore covers the storage, not the spelling.
                 if (attrib.IsLong || attrib.Type == DataType::Float64) {
-                    MGLOG_I("DirectGLES: vertex attribute %u is a 64-bit (GL_DOUBLE) array, which this "
+                    MGLOG_W_ONCE("DirectGLES: vertex attribute %u is a 64-bit (GL_DOUBLE) array, which this "
                             "backend cannot feed - disabling the array",
                             attribIndex);
                     g_GLESFuncs.glDisableVertexAttribArray(attribIndex);
@@ -1761,7 +1761,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 }
 
                 if (formatMayBeRefused && g_GLESFuncs.glGetError() != GL_NO_ERROR) {
-                    MGLOG_I("DirectGLES: the driver refused the vertex format of attribute %u "
+                    MGLOG_W_ONCE("DirectGLES: the driver refused the vertex format of attribute %u "
                             "(size=%d bgra=%d type=%s) - disabling the array so the draw cannot "
                             "fetch through a pointer the driver never accepted",
                             attribIndex, attrib.Size, attrib.IsBgra ? 1 : 0,
@@ -1784,7 +1784,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                         BufferImpl::BindBufferId(GL_ELEMENT_ARRAY_BUFFER, backendResource->id);
                         indexBufferSynced = true;
                     } else {
-                        MGLOG_W("No backend buffer found for index buffer binding, cannot bind index buffer.");
+                        MGLOG_W_ONCE("No backend buffer found for index buffer binding, cannot bind index buffer.");
                     }
                 } else {
                     g_GLESFuncs.glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
@@ -1842,7 +1842,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 if (bufferId == 0) {
                     g_GLESFuncs.glGenBuffers(1, &bufferId);
                     if (bufferId == 0) {
-                        MGLOG_E("Failed to create client-side vertex attribute upload buffer.");
+                        MGLOG_E_ONCE("Failed to create client-side vertex attribute upload buffer.");
                         continue;
                     }
                 }
@@ -1877,8 +1877,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
             g_GLESFuncs.glGenTextures(1, &m_backendTextureId);
             m_contextGeneration = g_backendContextGeneration;
             if (m_backendTextureId == 0) {
-                MGLOG_E("Failed to generate texture object.");
-                MGLOG_E("ES glGetError(): %s", MG_Util::ConvertGLEnumToString(g_GLESFuncs.glGetError()).c_str());
+                MGLOG_E_ONCE("Failed to generate texture object.");
+                MGLOG_E_ONCE("ES glGetError(): %s", MG_Util::ConvertGLEnumToString(g_GLESFuncs.glGetError()).c_str());
             } else {
                 MGLOG_D("Generated texture object with ID: %u.", m_backendTextureId);
             }
@@ -1956,8 +1956,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
             g_GLESFuncs.glGenTextures(1, &m_backendTextureId);
             m_contextGeneration = g_backendContextGeneration;
             if (m_backendTextureId == 0) {
-                MGLOG_E("Failed to regenerate texture object.");
-                MGLOG_E("ES glGetError(): %s", MG_Util::ConvertGLEnumToString(g_GLESFuncs.glGetError()).c_str());
+                MGLOG_E_ONCE("Failed to regenerate texture object.");
+                MGLOG_E_ONCE("ES glGetError(): %s", MG_Util::ConvertGLEnumToString(g_GLESFuncs.glGetError()).c_str());
             } else {
                 MGLOG_D("Regenerated texture object with ID: %u.", m_backendTextureId);
             }
@@ -2391,7 +2391,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         void BackendTextureObject::SyncMipmapsToBackend(
             const SharedPtr<MG_State::GLState::ITextureObject>& stateTextureObject) {
             if (!stateTextureObject) {
-                MGLOG_E("State texture object is null, cannot sync to backend.");
+                MGLOG_E_ONCE("State texture object is null, cannot sync to backend.");
                 return;
             }
 
@@ -2424,7 +2424,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             MGLOG_D("    Texture target for syncing is %s",
                     MG_Util::ConvertTextureTargetToString(targetInternal).c_str());
             if (!IsSupportedTextureTarget(targetInternal)) {
-                MGLOG_E("    Texture target %s is not supported, skipping.",
+                MGLOG_E_ONCE("    Texture target %s is not supported, skipping.",
                         MG_Util::ConvertTextureTargetToString(targetInternal).c_str());
                 return;
             }
@@ -2576,7 +2576,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                     static_cast<GLsizei>(uploadSize.z()), 0, glFormat, glType, uploadData);
                                 break;
                             default:
-                                MGLOG_E("Unhandled texture target %s",
+                                MGLOG_E_ONCE("Unhandled texture target %s",
                                         MG_Util::ConvertTextureTargetToString(stateTextureObject->GetTarget()).c_str());
                                 break;
                             }
@@ -2654,7 +2654,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                                        static_cast<GLsizei>(storageSize.z()));
                             break;
                         default:
-                            MGLOG_E("Unhandled immutable texture target %s",
+                            MGLOG_E_ONCE("Unhandled immutable texture target %s",
                                     MG_Util::ConvertTextureTargetToString(targetInternal).c_str());
                             break;
                         }
@@ -2776,7 +2776,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                     break;
                                 }
                                 default: {
-                                    MGLOG_E("Unhandled texture target %s",
+                                    MGLOG_E_ONCE("Unhandled texture target %s",
                                             MG_Util::ConvertTextureTargetToString(textureTarget).c_str());
                                 }
                                 }
@@ -2828,7 +2828,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
                             auto byteSize = textureMipmapObject->GetMipmapByteSize(uploadTarget, level);
                             if (byteSize == 0) {
-                                MGLOG_W("Mipmap level %d has no data, skipping update.", level);
+                                MGLOG_D("Mipmap level %d has no data, skipping update.", level);
                                 continue;
                             }
 
@@ -2979,7 +2979,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                 }
                                 break;
                             default:
-                                MGLOG_E("Unhandled texture target %s",
+                                MGLOG_E_ONCE("Unhandled texture target %s",
                                         MG_Util::ConvertTextureTargetToString(stateTextureObject->GetTarget()).c_str());
                                 break;
                             }
@@ -3007,7 +3007,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // Need to sync texture buffer if not synced yet
                 auto* backendBufferResource = BufferImpl::EnsureBufferResource(buffer);
                 if (!backendBufferResource || backendBufferResource->id == 0) {
-                    MGLOG_E("Failed to sync backing buffer for texture buffer with ID: %u",
+                    MGLOG_E_ONCE("Failed to sync backing buffer for texture buffer with ID: %u",
                             stateTextureObject->GetExternalIndex());
                     return;
                 }
@@ -3026,15 +3026,15 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     // below that without EXT/OES_texture_buffer. Calling it was an unconditional
                     // null dereference. There is no conformant way to refuse the call (it is valid
                     // in the context MobileGL claims), so the texture is left unbacked and the
-                    // reason is stated once per respecify at a level that survives the shipped
-                    // INFO build - MGLOG_E is compiled out there, which is exactly how this class
-                    // of defect stays invisible.
+                    // reason is stated once per object, latched by the flag below. It was parked
+                    // at MGLOG_I while the level ordering compiled MGLOG_W out of INFO builds;
+                    // W is the correct level and now survives there.
                     if (!AreBufferTexturesSupported()) {
                         if (m_bufferTextureUnsupportedReported) {
                             break;
                         }
                         m_bufferTextureUnsupportedReported = true;
-                        MGLOG_I("Texture buffer %u cannot be backed: this ES driver has no buffer "
+                        MGLOG_W("Texture buffer %u cannot be backed: this ES driver has no buffer "
                                 "textures (%s). Every draw sampling it will read zero and every "
                                 "shader declaring a samplerBuffer will fail to compile. MobileGL "
                                 "still advertises GL_MAX_TEXTURE_BUFFER_SIZE = %d because an "
@@ -3062,7 +3062,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     } else if (!CallTexBufferRange(GL_TEXTURE_BUFFER, glInternalFormat, backendId,
                                                    static_cast<GLintptr>(rangeOffset),
                                                    static_cast<GLsizeiptr>(rangeSize))) {
-                        MGLOG_I("Texture buffer %u names a sub-range but the driver has no "
+                        MGLOG_W_ONCE("Texture buffer %u names a sub-range but the driver has no "
                                 "glTexBufferRange; binding the whole buffer instead",
                                 stateTextureObject->GetExternalIndex());
                         CallTexBuffer(GL_TEXTURE_BUFFER, glInternalFormat, backendId);
@@ -3080,7 +3080,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // TextureStorageType is {Mipmap, Buffer}, both handled above, so this is a
                 // backstop for a state object that grew a new storage kind. Skipping the upload
                 // renders wrong; throwing unwinds through the C GL ABI and kills the process.
-                MGLOG_I("DirectGLES texture sync: no upload path for storage type %d on texture %u; "
+                MGLOG_E_ONCE("DirectGLES texture sync: no upload path for storage type %d on texture %u; "
                         "skipping this sync",
                         static_cast<int>(stateTextureObject->GetStorageType()),
                         stateTextureObject->GetExternalIndex());
@@ -3115,7 +3115,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 #endif
 
             if (!stateTextureObject) {
-                MGLOG_E("State texture object is null, cannot sync to backend.");
+                MGLOG_E_ONCE("State texture object is null, cannot sync to backend.");
                 return;
             }
 
@@ -3136,7 +3136,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             MGLOG_D("    Texture target for syncing is %s",
                     MG_Util::ConvertTextureTargetToString(targetInternal).c_str());
             if (!IsSupportedTextureTarget(targetInternal)) {
-                MGLOG_E("    Texture target %s is not supported, skipping.",
+                MGLOG_E_ONCE("    Texture target %s is not supported, skipping.",
                         MG_Util::ConvertTextureTargetToString(targetInternal).c_str());
                 return;
             }
@@ -3225,7 +3225,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 #endif
 
             if (!stateTextureObject) {
-                MGLOG_E("State texture object is null, cannot sync to backend.");
+                MGLOG_E_ONCE("State texture object is null, cannot sync to backend.");
                 return;
             }
 
@@ -3245,7 +3245,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             MGLOG_D("    Texture target for syncing is %s",
                     MG_Util::ConvertTextureTargetToString(targetInternal).c_str());
             if (!IsSupportedTextureTarget(targetInternal)) {
-                MGLOG_E("    Texture target %s is not supported, skipping.",
+                MGLOG_E_ONCE("    Texture target %s is not supported, skipping.",
                         MG_Util::ConvertTextureTargetToString(targetInternal).c_str());
                 return;
             }
@@ -3393,8 +3393,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
             g_GLESFuncs.glGenFramebuffers(1, &m_backendFBOId);
             m_contextGeneration = g_backendContextGeneration;
             if (m_backendFBOId == 0) {
-                MGLOG_E("Failed to generate framebuffer object.");
-                MGLOG_E("ES glGetError(): %s", MG_Util::ConvertGLEnumToString(g_GLESFuncs.glGetError()).c_str());
+                MGLOG_E_ONCE("Failed to generate framebuffer object.");
+                MGLOG_E_ONCE("ES glGetError(): %s", MG_Util::ConvertGLEnumToString(g_GLESFuncs.glGetError()).c_str());
             } else {
                 MGLOG_D("Generated framebuffer object with ID: %u.", m_backendFBOId);
             }
@@ -3530,7 +3530,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     backendTextureObject = newTextureSlot;
                 }
                 if (!backendTextureObject) {
-                    MGLOG_E("%s: No backend texture found for FBO attachment, cannot bind texture.", __func__);
+                    MGLOG_E_ONCE("%s: No backend texture found for FBO attachment, cannot bind texture.", __func__);
                     return false;
                 }
                 backendTextureObject->SyncMipmapsToBackend(textureObject);
@@ -3899,7 +3899,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
             if (!stateFBOObject) {
-                MGLOG_E("State FBO object is null, cannot sync to backend.");
+                MGLOG_E_ONCE("State FBO object is null, cannot sync to backend.");
                 return;
             }
             MGLOG_D("Syncing FBO with backend ID %u to backend for state ID %u, as %s FBO", m_backendFBOId,
@@ -4418,8 +4418,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
 #endif
             m_backendProgramId = g_GLESFuncs.glCreateProgram();
             if (m_backendProgramId == 0) {
-                MGLOG_E("Failed to create program object in backend.");
-                MGLOG_E("ES glGetError(): %s", MG_Util::ConvertGLEnumToString(g_GLESFuncs.glGetError()).c_str());
+                MGLOG_E_ONCE("Failed to create program object in backend.");
+                MGLOG_E_ONCE("ES glGetError(): %s", MG_Util::ConvertGLEnumToString(g_GLESFuncs.glGetError()).c_str());
 
             } else {
                 MGLOG_D("Created backend program object with ID: %u", m_backendProgramId);
@@ -4658,7 +4658,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
             if (!stateProgramObject) {
-                MGLOG_E("State program object is null, skipping backend sync.");
+                MGLOG_E_ONCE("State program object is null, skipping backend sync.");
                 return;
             }
             // Recorded before either early return below, so Use() can always name the GL
@@ -4671,7 +4671,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // a LINK_STATUS it already reported true, so "linked but not drawable" is the
             // answer, and this is where the ES backend expresses it.
             if (!stateProgramObject->GetLinkStatus() || !stateProgramObject->GetSpirvStatus()) {
-                MGLOG_E("Program object is not linked or has no generated SPIR-V, skipping backend sync. State "
+                MGLOG_E_ONCE("Program object is not linked or has no generated SPIR-V, skipping backend sync. State "
                         "program ID: %u",
                         stateProgramObject->GetExternalIndex());
                 return;
@@ -4763,7 +4763,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 GLuint backendShaderId = g_GLESFuncs.glCreateShader(glShaderType);
 
                 if (backendShaderId == 0) {
-                    MGLOG_E("Failed to create backend shader for attachment.");
+                    MGLOG_E_ONCE("Failed to create backend shader for attachment.");
                     continue;
                 }
                 String source;
@@ -4773,12 +4773,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // ES 3.2 or EXT/OES_texture_buffer on the host. Without it SPIRV-Cross emits
                 // `#extension GL_EXT_texture_buffer : require` and the driver rejects both that
                 // and the isamplerBuffer keyword - the program never links and every draw using it
-                // becomes a silent no-op. Say so here, naming the stage, instead of leaving a
-                // driver info log the shipped INFO build compiles out (MGLOG_E is inactive there).
+                // becomes a silent no-op. Say so here, naming the stage. Deliberately unlatched:
+                // this is bounded by program count, and which stage failed is the whole point.
                 // Gated on the capability so the module walk never runs on a healthy driver.
                 if (!AreBufferTexturesSupported() &&
                     MG_Util::ShaderTranspiler::ShaderCompiler::ModuleDeclaresBufferTextureSampler(spirvCode)) {
-                    MGLOG_I("Program %u stage %s samples a buffer texture, which this ES driver "
+                    MGLOG_E("Program %u stage %s samples a buffer texture, which this ES driver "
                             "cannot provide (%s). The shader will not compile and the program will "
                             "not link; every draw using it is a no-op.",
                             m_backendProgramId,
@@ -4947,14 +4947,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 spvcSession.Compile(&result);
 
                 if (!result) {
-                    // MGLOG_I, for the same reason as the compile- and link-failure diagnostics
-                    // below: every CI, retrace and release build compiles at
-                    // MOBILEGL_LOG_LEVEL_INFO, where MGLOG_E expands to nothing. A stage that
+                    // MGLOG_E, unlatched, like the compile- and link-failure diagnostics below:
+                    // one line per failing stage is bounded by program count and naming the
+                    // stage is the entire diagnostic value. A stage that
                     // never reaches the driver leaves the program short of that stage, so the
                     // link fails with an EMPTY driver info log - the least debuggable failure
                     // MobileGL can produce, and what hid the whole
                     // KHR-GL43.vertex_attrib_binding family behind "the draw captured zeros".
-                    MGLOG_I("Shader transpilation to ESSL failed. State program ID: %u, stage: %s, "
+                    MGLOG_E("Shader transpilation to ESSL failed. State program ID: %u, stage: %s, "
                             "SPIRV-Cross error: %s",
                             stateProgramObject->GetExternalIndex(),
                             MG_Util::ConvertGLEnumToString(glShaderType).c_str(),
@@ -5041,14 +5041,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     Vector<GLchar> log(static_cast<SizeT>(logLength) + 1, '\0');
                     g_GLESFuncs.glGetShaderInfoLog(backendShaderId, logLength, nullptr, log.data());
                     log.back() = '\0';
-                    // MGLOG_I, deliberately. Every CI, retrace and release build compiles at
-                    // MOBILEGL_LOG_LEVEL_INFO, where MGLOG_E and MGLOG_W expand to nothing
-                    // (Log.h orders DEBUG < WARN < ERROR < INFO), so this diagnostic used to
-                    // exist only in debug builds: the Android retrace artifact carried 294
-                    // INFO lines and zero ERROR lines while two generated shaders were being
-                    // rejected outright, and the lane could not say why it was rendering an
-                    // empty translucent layer. A shader the driver refuses is never noise.
-                    MGLOG_I("Shader compilation failed. State program ID: %u, stage: %s, backend shader ID: "
+                    // MGLOG_E, unlatched. This was parked at MGLOG_I while the level ordering
+                    // compiled E and W out of every INFO build: the Android retrace artifact
+                    // carried 294 INFO lines and zero ERROR lines while two generated shaders
+                    // were being rejected outright, and the lane could not say why it was
+                    // rendering an empty translucent layer. A shader the driver refuses is
+                    // never noise, and one line per refused shader is bounded by program count.
+                    MGLOG_E("Shader compilation failed. State program ID: %u, stage: %s, backend shader ID: "
                             "%u, driver log: %s",
                             stateProgramObject->GetExternalIndex(),
                             MG_Util::ConvertGLEnumToString(glShaderType).c_str(), backendShaderId,
@@ -5132,7 +5131,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // MGLOG_I for the same reason as the compile failure above: a program that
                 // links nothing no-ops every draw that uses it, and that has to be readable
                 // in an INFO-level artifact.
-                MGLOG_I("Program linking failed. State program ID: %u, backend program ID: %u, driver log: %s",
+                MGLOG_E("Program linking failed. State program ID: %u, backend program ID: %u, driver log: %s",
                         stateProgramObject->GetExternalIndex(), m_backendProgramId, log.data());
             } else {
                 MGLOG_D("Program linked successfully. ID: %u", m_backendProgramId);
@@ -5224,7 +5223,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                         m_globalUboBackendBlockSize = static_cast<Int>(blockDataSize);
                     }
                 } else {
-                    MGLOG_W("Program %u has frontend global UBO storage, but backend has no %s block.",
+                    MGLOG_W_ONCE("Program %u has frontend global UBO storage, but backend has no %s block.",
                             stateProgramObject->GetExternalIndex(), MG_Util::ShaderTranspiler::GLOBAL_UBO_NAME);
                 }
             }
@@ -5300,13 +5299,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 return;
             }
             if (!m_backendProgramUsable) {
-                // MGLOG_I, not MGLOG_W: at MOBILEGL_LOG_LEVEL_INFO - the level the shipped
-                // fordebug builds compile at - only I and F survive, and this is precisely the
-                // line those builds need. Every draw made with this program renders nothing and
-                // raises no GL error, so without it the only symptom is a framebuffer that kept
-                // its clear colour. The early return above keeps it to at most one line per
-                // program state change, not one per draw.
-                MGLOG_I("Backend program for GL program %u is unusable (a shader failed to transpile, "
+                // Every draw made with this program renders nothing and raises no GL error, so
+                // without this line the only symptom is a framebuffer that kept its clear
+                // colour. Latched: the early return above only dedupes CONSECUTIVE binds, so an
+                // app alternating a healthy and a broken program would otherwise log every
+                // single draw. Parked at MGLOG_I until the level ordering was fixed.
+                MGLOG_E_ONCE("Backend program for GL program %u is unusable (a shader failed to transpile, "
                         "compile or link); binding program 0 - draws with it will render nothing",
                         m_frontendProgramId);
             }
@@ -5354,8 +5352,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
             g_GLESFuncs.glGenSamplers(1, &m_backendSamplerId);
             m_contextGeneration = g_backendContextGeneration;
             if (m_backendSamplerId == 0) {
-                MGLOG_E("Failed to generate sampler object.");
-                MGLOG_E("ES glGetError(): %s", MG_Util::ConvertGLEnumToString(g_GLESFuncs.glGetError()).c_str());
+                MGLOG_E_ONCE("Failed to generate sampler object.");
+                MGLOG_E_ONCE("ES glGetError(): %s", MG_Util::ConvertGLEnumToString(g_GLESFuncs.glGetError()).c_str());
             } else {
                 MGLOG_D("Generated sampler object with ID: %u.", m_backendSamplerId);
             }
@@ -5387,7 +5385,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
             if (!stateSamplerObject) {
-                MGLOG_E("State sampler object is null, cannot sync to backend.");
+                MGLOG_E_ONCE("State sampler object is null, cannot sync to backend.");
                 return;
             }
 
@@ -5498,8 +5496,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
             g_GLESFuncs.glGenRenderbuffers(1, &m_backendRBOId);
             m_contextGeneration = g_backendContextGeneration;
             if (m_backendRBOId == 0) {
-                MGLOG_E("Failed to generate renderbuffer object.");
-                MGLOG_E("ES glGetError(): %s", MG_Util::ConvertGLEnumToString(g_GLESFuncs.glGetError()).c_str());
+                MGLOG_E_ONCE("Failed to generate renderbuffer object.");
+                MGLOG_E_ONCE("ES glGetError(): %s", MG_Util::ConvertGLEnumToString(g_GLESFuncs.glGetError()).c_str());
             }
         }
 
@@ -5531,7 +5529,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
             if (!stateRBOObject) {
-                MGLOG_E("State RBO object is null, cannot sync to backend.");
+                MGLOG_E_ONCE("State RBO object is null, cannot sync to backend.");
                 return;
             }
 

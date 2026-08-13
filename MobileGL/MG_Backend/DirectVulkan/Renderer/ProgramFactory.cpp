@@ -376,12 +376,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             spv_diagnostic diagnostic = nullptr;
             const spv_result_t result = spvValidateWithOptions(context, options, &binary, &diagnostic);
             if (result != SPV_SUCCESS) {
-                // MGLOG_I, not E: at the INFO compile level of the CI/test lanes that arm
-                // the validation switch, MGLOG_E is compiled out (Log.h orders
-                // DEBUG < WARN < ERROR < INFO) and the VUID would never reach a log. The
-                // latch is what a test harness asserts on.
+                // MGLOG_E, unlatched: reaching here already requires the validation switch to
+                // be armed, which bounds the volume, and each VUID names a different defect.
+                // (Parked at MGLOG_I until the Log.h level ordering was fixed, when E was
+                // compiled out of every INFO build.) The latch is what a test harness asserts on.
                 MG_Util::ShaderTranspiler::ShaderCompiler::NoteSpirvValidationFailure();
-                MGLOG_I(
+                MGLOG_E(
                     "ProgramFactory::ValidateTransformedSpirv: validation failed for stage=%d program=%u result=%d index=%zu msg=%s",
                     static_cast<Int>(shaderStage),
                     programExternalIndex,
@@ -1266,7 +1266,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                     for (SizeT i = 1; i < group.offsets.size(); ++i) {
                         if (group.elementBytes == 0 ||
                             group.offsets[i] != group.offsets[i - 1] + group.elementBytes) {
-                            MGLOG_I("XfbCaptureDecoratePass: block member %u of type %%%u is captured with a "
+                            MGLOG_D("XfbCaptureDecoratePass: block member %u of type %%%u is captured with a "
                                     "non-contiguous element set; the capture layout will differ from GL's",
                                     key.second, key.first);
                             break;
@@ -1855,16 +1855,16 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                     // unification and the set->0 normalisation this function exists to do. A
                     // program with an image array plus any second descriptor got aliased
                     // bindings out of that, and a DEBUG build trapped on the same program.
-                    // Which is also why the message below is MGLOG_I: MGLOG_E is compiled out
-                    // of an INFO build, so a refusal that only said MGLOG_E said nothing at all
-                    // in the builds that ship.
+                    // The refusal below is MGLOG_E and per-program-compile, so it reports every
+                    // program it declines. It spent time at MGLOG_I because the old level
+                    // ordering compiled E out of the builds that ship.
                     const Bool arraySupportedForKind =
                         kind == ProgramFactory::DescriptorBindingKind::UniformBufferDynamic ||
                         kind == ProgramFactory::DescriptorBindingKind::StorageBuffer ||
                         kind == ProgramFactory::DescriptorBindingKind::StorageImage ||
                         kind == ProgramFactory::DescriptorBindingKind::CombinedImageSampler;
                     if (binding->count != 1 && !arraySupportedForKind) {
-                        MGLOG_I("ProgramFactory: descriptor arrays are unsupported for this descriptor "
+                        MGLOG_E("ProgramFactory: descriptor arrays are unsupported for this descriptor "
                                 "kind (name='%s' count=%u type=%d)",
                                 binding->name ? binding->name : "<null>", binding->count,
                                 static_cast<Int>(binding->descriptor_type));
@@ -2468,7 +2468,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             // inert; a device whose binding cap is smaller than a shader's array is not a
             // configuration MobileGL can serve at all. Needs a >maxBindings-element array to
             // reach (256 on desktop, ~16 on mobile).
-            MGLOG_I("ProgramFactory::ReflectLayout: %s array '%s' at binding %u has %u elements, past the %u "
+            MGLOG_D("ProgramFactory::ReflectLayout: %s array '%s' at binding %u has %u elements, past the %u "
                     "this device can describe - declining the program",
                     kindLabel, uniformName.c_str(), binding, count, maxBindings);
             outDeclined = true;
@@ -2476,7 +2476,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
         if (baseLocation < 0 ||
             !program.UniformLocationsAliasSameUniform(baseLocation, baseLocation + static_cast<Int>(count - 1u))) {
-            MGLOG_I("ProgramFactory::ReflectLayout: %s array '%s' at binding %u spans %u descriptors but the "
+            MGLOG_D("ProgramFactory::ReflectLayout: %s array '%s' at binding %u spans %u descriptors but the "
                     "reflection reserved fewer uniform locations for it (base=%d) - a multi-dimensional array "
                     "is the usual cause, and MobileGL declines it rather than resolve elements onto a "
                     "neighbouring uniform",
@@ -2713,7 +2713,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                     // a Uint16 on the way, where 65536 would silently become 0.
                     const Uint32 storageArrayCount = std::max<Uint32>(1u, sampler->count);
                     if (storageArrayCount > m_maxBindings) {
-                        MGLOG_I("ProgramFactory::ReflectLayout: storage block array '%s' at binding %u has %u "
+                        MGLOG_D("ProgramFactory::ReflectLayout: storage block array '%s' at binding %u has %u "
                                 "elements, past the %u this device can describe - declining the program",
                                 uniformName.c_str(), binding, storageArrayCount, m_maxBindings);
                         entry.declinedDescriptors = true;
@@ -2736,7 +2736,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                     // so at a level that survives a release build, because dropping the binding
                     // leaves the shader reading a descriptor the layout never declared.
                     if (sampler->count > 1) {
-                        MGLOG_I("ProgramFactory::ReflectLayout: declining '%s' at binding %u - a %u-element "
+                        MGLOG_E("ProgramFactory::ReflectLayout: declining '%s' at binding %u - a %u-element "
                                 "descriptor array with no frontend uniform location (a multi-dimensional array "
                                 "of samplers or images is the known cause)",
                                 uniformName.c_str(), binding, sampler->count);
@@ -3201,7 +3201,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // "the layout and the shader disagree", so route it through that. Set AFTER ReflectLayout,
         // which clears the flag.
         if (!remapOk) {
-            MGLOG_I("ProgramFactory::GetOrCreateProgram: declining program %u - its descriptor bindings could not "
+            MGLOG_E("ProgramFactory::GetOrCreateProgram: declining program %u - its descriptor bindings could not "
                     "be remapped, so the layout does not describe what the shader reads",
                     program.GetExternalIndex());
             entry.declinedDescriptors = true;
