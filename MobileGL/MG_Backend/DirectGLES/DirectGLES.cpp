@@ -7177,6 +7177,22 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return false;
         }
 
+        // glGetTexImage returns the stored texels, and for a packed internal format read with the
+        // matching client type the shadow word already IS the client word. Decoding it to float and
+        // re-encoding would canonicalize an RGB9_E5 shared exponent (0xf8fc0000 -> 0xe7e00000: the
+        // same value, different bits), so those pairs copy the words straight through.
+        if (MG_Util::PixelStoreProcessor::IsRawPackedPixelTransfer(
+                textureMipmapObject->GetFormat(), MG_Util::ConvertGLEnumToTextureInputFormat(format),
+                MG_Util::ConvertGLEnumToTexturePixelDataType(type))) {
+            if (!ReadbackImpl::StorePackedWordsToClient(static_cast<const Uint8*>(shadow), width, sliceHeight,
+                                                        sliceCount, type, pixels, applyPackImageParams)) {
+                return false;
+            }
+            MGLOG_D("GetTexImage: copied %s/%s verbatim from the CPU shadow copy",
+                    MG_Util::ConvertGLEnumToString(format).c_str(), MG_Util::ConvertGLEnumToString(type).c_str());
+            return true;
+        }
+
         Vector<Uint8> wide;
         Bool isInteger = false;
         Bool isSigned = false;

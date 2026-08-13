@@ -26,6 +26,7 @@
 #include "MG_Util/Converters/MGToVk/TextureEnumConverter.h"
 #include "MG_Util/Math/HalfFloat.h"
 #include "MG_Util/Metrics/TextureMetrics.h"
+#include "MG_Util/Texture/PixelStoreProcessor.h"
 #include <Config.h>
 #include <algorithm>
 #include <cstdlib>
@@ -2621,6 +2622,24 @@ void main() {
             }
         }
 
+        // The GL internal format a packed VkFormat stores, for the raw-word readback test below.
+        // Only the packed 32-bit layouts MobileGL keeps natively need an entry; anything else takes
+        // the wide decode path.
+        static TextureInternalFormat GetPackedReadbackInternalFormat(VkFormat format) {
+            switch (format) {
+            case VK_FORMAT_E5B9G9R9_UFLOAT_PACK32:
+                return TextureInternalFormat::RGB9E5;
+            case VK_FORMAT_B10G11R11_UFLOAT_PACK32:
+                return TextureInternalFormat::R11FG11FB10F;
+            case VK_FORMAT_A2B10G10R10_UNORM_PACK32:
+                return TextureInternalFormat::RGB10A2;
+            case VK_FORMAT_A2B10G10R10_UINT_PACK32:
+                return TextureInternalFormat::RGB10A2UI;
+            default:
+                return TextureInternalFormat::Unknown;
+            }
+        }
+
         static Bool PackReadbackToClientOrPbo(const Uint8* srcPixels, VkFormat srcFormat, GLsizei width,
                                               GLsizei sliceHeight, GLsizei sliceCount, GLenum format, GLenum type,
                                               void* pixels, Bool applyPackImageParams,
@@ -2634,6 +2653,18 @@ void main() {
                 DirectGLES::ReadbackImpl::GetReadbackDstPixelSize(mapping, type) == 0) {
                 MGLOG_E_ONCE("DirectVulkan readback skipped: unsupported format=0x%x type=0x%x", format, type);
                 return false;
+            }
+
+            // A packed image read with the matching client type hands back its own words: the
+            // decode-to-float / re-encode round trip is lossy in the bits (it canonicalizes an
+            // RGB9_E5 shared exponent), which glGetTexImage must not do. Left to the wide path when
+            // GL_CLAMP_READ_COLOR may still have to act, i.e. for glReadPixels.
+            if (!applyReadColorClamp &&
+                MG_Util::PixelStoreProcessor::IsRawPackedPixelTransfer(
+                    GetPackedReadbackInternalFormat(srcFormat), MG_Util::ConvertGLEnumToTextureInputFormat(format),
+                    MG_Util::ConvertGLEnumToTexturePixelDataType(type))) {
+                return DirectGLES::ReadbackImpl::StorePackedWordsToClient(srcPixels, width, sliceHeight, sliceCount,
+                                                                          type, pixels, applyPackImageParams);
             }
 
             Vector<Uint8> wide;

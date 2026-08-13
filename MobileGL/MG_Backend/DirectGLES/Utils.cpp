@@ -1596,94 +1596,124 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return (rowBytes + align - 1) / align * align;
         }
 
-    // Repacks wide RGBA(_INTEGER) rows into the client's (format, type) layout, honoring the
-        // client-side PACK parameters and the bound pixel-pack buffer. `wide` holds
-        // `sliceHeight * sliceCount` rows of `width` texels (slice-major, tightly stacked),
-        // 4 components x GetReadbackComponentSize(wideType) bytes each.
+        // Walks the client-side destination the PACK parameters describe and hands each row to
+        // `fillRow(slice, row, dstRow)`, which writes width * dstPixelBytes bytes of finished client
+        // texels. Shared by the converting and the raw-word stores so both address the destination -
+        // and feed the bound pixel-pack buffer - identically.
         // applyPackImageParams: GL_PACK_IMAGE_HEIGHT / GL_PACK_SKIP_IMAGES apply only to GetTexImage
         // of 3D/array images; ReadPixels and 2D GetTexImage ignore them (GL 3.3 sections 4.3.1, 6.1.4).
         // Per the GL addressing rules, slice k row j lands at
         // SKIP_IMAGES*imageStride + SKIP_ROWS*rowStride + SKIP_PIXELS*pixelBytes
         //   + k*imageStride + j*rowStride, with imageStride = max(IMAGE_HEIGHT, sliceHeight)*rowStride.
-        Bool StoreWideRowsToClient(const Uint8* wide, GLenum wideType, GLsizei width, GLsizei sliceHeight,
-                                   GLsizei sliceCount, const ReadbackChannelMapping& mapping, GLenum type,
-                                   void* pixels, Bool applyPackImageParams) {
-        const SizeT dstPixelBytes = GetReadbackDstPixelSize(mapping, type);
-        if (dstPixelBytes == 0) {
-            return false;
-        }
-        PackedReadbackLayout packedLayout{};
-        const Bool isPackedType = GetPackedReadbackLayout(type, packedLayout);
-        const SizeT dstComponentSize = GetReadbackComponentSize(type);
+        template <typename FillRow>
+        static Bool StoreClientRows(SizeT dstPixelBytes, SizeT swapGroupSize, GLsizei width, GLsizei sliceHeight,
+                                    GLsizei sliceCount, void* pixels, Bool applyPackImageParams, FillRow&& fillRow) {
+            const auto& pixelPackBufferObject =
+                MG_State::pGLContext->GetBufferBindingSlot(BufferTarget::PixelPack).GetBoundObject();
 
-        const auto& pixelPackBufferObject =
-            MG_State::pGLContext->GetBufferBindingSlot(BufferTarget::PixelPack).GetBoundObject();
+            // Destination layout is computed from the client-side PACK parameters; only the actual pixel
+            // rows are written so skip regions of the destination stay untouched.
+            const auto packParams = MG_State::pGLContext->GetPixelStoreParameters(false);
+            const SizeT rowPixels = static_cast<SizeT>(packParams.RowLength > 0 ? packParams.RowLength : width);
+            const SizeT dstRowStride = AlignReadbackRow(rowPixels * dstPixelBytes, packParams.Alignment);
+            const SizeT imageRows =
+                applyPackImageParams && packParams.ImageHeight > 0
+                    ? static_cast<SizeT>(packParams.ImageHeight)
+                    : static_cast<SizeT>(sliceHeight);
+            const SizeT dstImageStride = imageRows * dstRowStride;
+            const SizeT skipImages =
+                applyPackImageParams ? static_cast<SizeT>(std::max(packParams.SkipImages, 0)) : SizeT{0};
+            const SizeT dstSkipOffset = skipImages * dstImageStride +
+                                        static_cast<SizeT>(std::max(packParams.SkipRows, 0)) * dstRowStride +
+                                        static_cast<SizeT>(std::max(packParams.SkipPixels, 0)) * dstPixelBytes;
+            const SizeT dstRowBytes = static_cast<SizeT>(width) * dstPixelBytes;
 
-        // Destination layout is computed from the client-side PACK parameters; only the actual pixel
-        // rows are written so skip regions of the destination stay untouched.
-        const auto packParams = MG_State::pGLContext->GetPixelStoreParameters(false);
-        const SizeT rowPixels = static_cast<SizeT>(packParams.RowLength > 0 ? packParams.RowLength : width);
-        const SizeT dstRowStride = AlignReadbackRow(rowPixels * dstPixelBytes, packParams.Alignment);
-        const SizeT imageRows =
-            applyPackImageParams && packParams.ImageHeight > 0
-                ? static_cast<SizeT>(packParams.ImageHeight)
-                : static_cast<SizeT>(sliceHeight);
-        const SizeT dstImageStride = imageRows * dstRowStride;
-        const SizeT skipImages =
-            applyPackImageParams ? static_cast<SizeT>(std::max(packParams.SkipImages, 0)) : SizeT{0};
-        const SizeT dstSkipOffset = skipImages * dstImageStride +
-                                    static_cast<SizeT>(std::max(packParams.SkipRows, 0)) * dstRowStride +
-                                    static_cast<SizeT>(std::max(packParams.SkipPixels, 0)) * dstPixelBytes;
-        const SizeT dstRowBytes = static_cast<SizeT>(width) * dstPixelBytes;
-
-        const SizeT pboBaseOffset = reinterpret_cast<SizeT>(pixels); // with a PBO, `pixels` is an offset
-        if (pixelPackBufferObject) {
-            const SizeT requiredSize = pboBaseOffset + dstSkipOffset +
-                                    static_cast<SizeT>(sliceCount - 1) * dstImageStride +
-                                    static_cast<SizeT>(sliceHeight - 1) * dstRowStride + dstRowBytes;
-            if (requiredSize > pixelPackBufferObject->GetSize()) {
-                MGLOG_E_ONCE("Readback conversion: pixel pack buffer is too small");
-                return true;
+            const SizeT pboBaseOffset = reinterpret_cast<SizeT>(pixels); // with a PBO, `pixels` is an offset
+            if (pixelPackBufferObject) {
+                const SizeT requiredSize = pboBaseOffset + dstSkipOffset +
+                                        static_cast<SizeT>(sliceCount - 1) * dstImageStride +
+                                        static_cast<SizeT>(sliceHeight - 1) * dstRowStride + dstRowBytes;
+                if (requiredSize > pixelPackBufferObject->GetSize()) {
+                    MGLOG_E_ONCE("Readback conversion: pixel pack buffer is too small");
+                    return true;
+                }
             }
-        }
 
-        const SizeT srcComponentSize = GetReadbackComponentSize(wideType);
-        const SizeT srcPixelBytes = 4 * srcComponentSize;
-        Vector<Uint8> convertedRow(dstRowBytes);
+            Vector<Uint8> convertedRow(dstRowBytes);
 
-        for (GLsizei slice = 0; slice < sliceCount; ++slice) {
-            for (GLsizei row = 0; row < sliceHeight; ++row) {
-                const SizeT flatRow = static_cast<SizeT>(slice) * static_cast<SizeT>(sliceHeight) +
-                                   static_cast<SizeT>(row);
-                const Uint8* srcRow = wide + flatRow * static_cast<SizeT>(width) * srcPixelBytes;
-                ConvertWideReadbackRow(srcRow, convertedRow.data(), static_cast<SizeT>(width), wideType,
-                                                  mapping, type);
+            for (GLsizei slice = 0; slice < sliceCount; ++slice) {
+                for (GLsizei row = 0; row < sliceHeight; ++row) {
+                    fillRow(slice, row, convertedRow.data());
 
-                if (packParams.SwapBytes) {
-                    const SizeT groupSize = isPackedType ? packedLayout.byteSize : dstComponentSize;
-                    if (groupSize > 1) {
-                        for (SizeT offset = 0; offset + groupSize <= dstRowBytes; offset += groupSize) {
-                            std::reverse(convertedRow.data() + offset, convertedRow.data() + offset + groupSize);
+                    if (packParams.SwapBytes && swapGroupSize > 1) {
+                        for (SizeT offset = 0; offset + swapGroupSize <= dstRowBytes; offset += swapGroupSize) {
+                            std::reverse(convertedRow.data() + offset, convertedRow.data() + offset + swapGroupSize);
                         }
                     }
-                }
 
-                const SizeT dstOffset = dstSkipOffset + static_cast<SizeT>(slice) * dstImageStride +
-                                     static_cast<SizeT>(row) * dstRowStride;
-                if (pixelPackBufferObject) {
-                    pixelPackBufferObject->WritebackFromBackend({convertedRow.data(), dstRowBytes},
-                                                             pboBaseOffset + dstOffset);
-                } else {
-                    Memcpy(static_cast<Uint8*>(pixels) + dstOffset, convertedRow.data(), dstRowBytes);
+                    const SizeT dstOffset = dstSkipOffset + static_cast<SizeT>(slice) * dstImageStride +
+                                         static_cast<SizeT>(row) * dstRowStride;
+                    if (pixelPackBufferObject) {
+                        pixelPackBufferObject->WritebackFromBackend({convertedRow.data(), dstRowBytes},
+                                                                 pboBaseOffset + dstOffset);
+                    } else {
+                        Memcpy(static_cast<Uint8*>(pixels) + dstOffset, convertedRow.data(), dstRowBytes);
+                    }
                 }
             }
-        }
             if (pixelPackBufferObject) {
                 // WritebackFromBackend bumps change serials with no backend op; re-open
                 // the buffer draw-clean memos (once for the whole row loop).
                 BufferImpl::BumpBufferMutationEpoch();
             }
             return true;
+        }
+
+        // Repacks wide RGBA(_INTEGER) rows into the client's (format, type) layout, honoring the
+        // client-side PACK parameters and the bound pixel-pack buffer. `wide` holds
+        // `sliceHeight * sliceCount` rows of `width` texels (slice-major, tightly stacked),
+        // 4 components x GetReadbackComponentSize(wideType) bytes each.
+        Bool StoreWideRowsToClient(const Uint8* wide, GLenum wideType, GLsizei width, GLsizei sliceHeight,
+                                   GLsizei sliceCount, const ReadbackChannelMapping& mapping, GLenum type,
+                                   void* pixels, Bool applyPackImageParams) {
+            const SizeT dstPixelBytes = GetReadbackDstPixelSize(mapping, type);
+            if (dstPixelBytes == 0) {
+                return false;
+            }
+            PackedReadbackLayout packedLayout{};
+            const Bool isPackedType = GetPackedReadbackLayout(type, packedLayout);
+            const SizeT swapGroupSize = isPackedType ? packedLayout.byteSize : GetReadbackComponentSize(type);
+            const SizeT srcPixelBytes = 4 * GetReadbackComponentSize(wideType);
+
+            return StoreClientRows(dstPixelBytes, swapGroupSize, width, sliceHeight, sliceCount, pixels,
+                                   applyPackImageParams,
+                                   [&](GLsizei slice, GLsizei row, Uint8* dstRow) {
+                                       const SizeT flatRow = static_cast<SizeT>(slice) *
+                                                                 static_cast<SizeT>(sliceHeight) +
+                                                             static_cast<SizeT>(row);
+                                       const Uint8* srcRow =
+                                           wide + flatRow * static_cast<SizeT>(width) * srcPixelBytes;
+                                       ConvertWideReadbackRow(srcRow, dstRow, static_cast<SizeT>(width), wideType,
+                                                              mapping, type);
+                                   });
+        }
+
+        Bool StorePackedWordsToClient(const Uint8* srcWords, GLsizei width, GLsizei sliceHeight, GLsizei sliceCount,
+                                      GLenum type, void* pixels, Bool applyPackImageParams) {
+            PackedReadbackLayout packedLayout{};
+            if (!GetPackedReadbackLayout(type, packedLayout) || packedLayout.byteSize != 4) {
+                return false;
+            }
+            const SizeT srcRowBytes = static_cast<SizeT>(width) * 4;
+
+            return StoreClientRows(4, packedLayout.byteSize, width, sliceHeight, sliceCount, pixels,
+                                   applyPackImageParams,
+                                   [&](GLsizei slice, GLsizei row, Uint8* dstRow) {
+                                       const SizeT flatRow = static_cast<SizeT>(slice) *
+                                                                 static_cast<SizeT>(sliceHeight) +
+                                                             static_cast<SizeT>(row);
+                                       Memcpy(dstRow, srcWords + flatRow * srcRowBytes, srcRowBytes);
+                                   });
         }
     } // namespace ReadbackImpl
 } // namespace MobileGL::MG_Backend::DirectGLES
