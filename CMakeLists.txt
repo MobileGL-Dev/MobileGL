@@ -182,6 +182,7 @@ set(ENABLE_SPVREMAPPER         OFF CACHE BOOL "Enable SPVRemapper" FORCE)
 set(ENABLE_OPT                 ON  CACHE BOOL "Enable SPIRV-Tools opt usage in glslang" FORCE)
 set(BUILD_EXTERNAL             ON  CACHE BOOL "Build external deps in External/" FORCE)
 set(ENABLE_GLSLANG_INSTALL     OFF CACHE BOOL "Install glslang targets" FORCE)
+set(SPIRV_SKIP_EXECUTABLES     ON  CACHE BOOL "Skip building SPIRV-Tools executables" FORCE)
 
 set(SPIRV_CROSS_C_API          ON  CACHE BOOL "Enable C API" FORCE)
 set(SPIRV_CROSS_ENABLE_GLSL    ON  CACHE BOOL "Enable GLSL backend" FORCE)
