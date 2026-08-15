@@ -2692,11 +2692,13 @@ out vec4 fragColor;
 float fma
     (float a, float b, float c) { return a * b + c; }
 float sinh(float x, float y) { return x * y; }
+float length_squared(vec3 value) { return dot(value, value); }
 float round(float x) { return floor(x + 0.5); }
 float min3(float a, float b, float c) { return min(min(a, b), c); }
 
 void main() {
-    fragColor = vec4(fma(0.1, 0.2, 0.3), sinh(0.4, 2.0), round(1.25), min3(0.1, 0.2, 0.3));
+    fragColor = vec4(fma(0.1, 0.2, 0.3), sinh(0.4, 2.0), round(1.25),
+                     min3(0.1, 0.2, 0.3) + length_squared(vec3(0.1, 0.2, 0.3)));
 }
 )";
     GLuint vs = CompileShaderChecked(GL_VERTEX_SHADER, vsSource);
@@ -2707,6 +2709,7 @@ void main() {
         if (essl.find("fragColor") == String::npos) continue; // fragment module only
         EXPECT_NE(essl.find("mg_fma("), String::npos) << essl;
         EXPECT_NE(essl.find("mg_sinh("), String::npos) << essl;
+        EXPECT_NE(essl.find("mg_length_squared("), String::npos) << essl;
         EXPECT_NE(essl.find("mg_round("), String::npos) << essl;
         EXPECT_NE(essl.find("mg_min3("), String::npos) << essl;
         EXPECT_EQ(essl.find("float fma("), String::npos) << essl;

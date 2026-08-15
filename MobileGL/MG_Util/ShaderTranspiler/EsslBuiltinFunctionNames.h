@@ -61,7 +61,7 @@ namespace MobileGL {
                 "imageAtomicXor", "imageLoad", "imageSize", "imageStore", "imulExtended",
                 "intBitsToFloat", "interpolateAtCentroid", "interpolateAtOffset",
                 "interpolateAtSample", "inverse", "inversesqrt", "isinf", "isnan",
-                "ldexp", "length", "lessThan", "lessThanEqual", "log", "log2",
+                "ldexp", "length", "length_squared", "lessThan", "lessThanEqual", "log", "log2",
                 "matrixCompMult", "max", "max3", "memoryBarrier",
                 "memoryBarrierAtomicCounter", "memoryBarrierBuffer", "memoryBarrierImage",
                 "memoryBarrierShared", "mid3", "min", "min3", "mix", "mod", "modf",

@@ -19,23 +19,27 @@ namespace MobileGL {
     namespace MG_Util {
         namespace ShaderTranspiler {
             namespace {
-                constexpr const char* kConflictingName = "sampler";
-                constexpr const char* kCompatName = "MGL_COMPAT_sampler";
+                const char* GetCompatName(StringView name) {
+                    if (name == "sampler") return "MGL_COMPAT_sampler";
+                    if (name == "new") return "MGL_COMPAT_new";
+                    return nullptr;
+                }
 
-                Bool IsNamedSamplerFunctionParameter(spvtools::opt::IRContext* context,
-                                                     spvtools::opt::Instruction& nameInst) {
+                const char* GetConflictingFunctionParameterCompatName(spvtools::opt::IRContext* context,
+                                                                       spvtools::opt::Instruction& nameInst) {
                     if (nameInst.opcode() != spv::Op::OpName || nameInst.NumInOperands() < 2) {
-                        return false;
+                        return nullptr;
                     }
 
-                    if (nameInst.GetInOperand(1).AsString() != kConflictingName) {
-                        return false;
+                    const char* compatName = GetCompatName(nameInst.GetInOperand(1).AsString());
+                    if (compatName == nullptr) {
+                        return nullptr;
                     }
 
                     auto* defUseMgr = context->get_def_use_mgr();
                     const Uint32 targetId = nameInst.GetSingleWordInOperand(0);
                     const auto* target = defUseMgr->GetDef(targetId);
-                    return target != nullptr && target->opcode() == spv::Op::OpFunctionParameter;
+                    return target != nullptr && target->opcode() == spv::Op::OpFunctionParameter ? compatName : nullptr;
                 }
             } // namespace
 
@@ -44,12 +48,13 @@ namespace MobileGL {
                 auto* irContext = context();
 
                 for (auto& debugInst : irContext->debugs2()) {
-                    if (!IsNamedSamplerFunctionParameter(irContext, debugInst)) {
+                    const char* compatName = GetConflictingFunctionParameterCompatName(irContext, debugInst);
+                    if (compatName == nullptr) {
                         continue;
                     }
 
                     debugInst.SetInOperand(
-                        1, spvtools::utils::MakeVector<spvtools::opt::Operand::OperandData>(kCompatName));
+                        1, spvtools::utils::MakeVector<spvtools::opt::Operand::OperandData>(compatName));
                     modified = true;
                 }
 

@@ -52,20 +52,24 @@ TEST_F(ProgramUtilTest, RenameSamplerFunctionParameterInSpirvPass) {
                OpEntryPoint Fragment %main "main" %outColor
                OpExecutionMode %main OriginUpperLeft
                OpName %globalSampler "sampler"
+               OpName %globalNew "new"
                OpName %paramSampler "sampler"
+               OpName %paramNew "new"
                OpName %main "main"
                OpDecorate %outColor Location 0
        %void = OpTypeVoid
       %float = OpTypeFloat 32
     %v4float = OpTypeVector %float 4
      %mainFn = OpTypeFunction %void
-    %paramFn = OpTypeFunction %void %float
+    %paramFn = OpTypeFunction %void %float %float
   %outV4Ptr = OpTypePointer Output %v4float
  %privatePtr = OpTypePointer Private %float
    %outColor = OpVariable %outV4Ptr Output
 %globalSampler = OpVariable %privatePtr Private
+    %globalNew = OpVariable %privatePtr Private
      %helper = OpFunction %void None %paramFn
 %paramSampler = OpFunctionParameter %float
+    %paramNew = OpFunctionParameter %float
  %helperBody = OpLabel
                OpReturn
                OpFunctionEnd
@@ -91,6 +95,7 @@ TEST_F(ProgramUtilTest, RenameSamplerFunctionParameterInSpirvPass) {
     ASSERT_TRUE(tools.Disassemble(outputBinary, &outputText));
 
     EXPECT_NE(outputText.find("\"MGL_COMPAT_sampler\""), String::npos);
+    EXPECT_NE(outputText.find("\"MGL_COMPAT_new\""), String::npos);
 
     SizeT exactSamplerNameCount = 0;
     SizeT searchOffset = 0;
@@ -99,6 +104,14 @@ TEST_F(ProgramUtilTest, RenameSamplerFunctionParameterInSpirvPass) {
         searchOffset += std::strlen("\"sampler\"");
     }
     EXPECT_EQ(exactSamplerNameCount, 1u);
+
+    SizeT exactNewNameCount = 0;
+    searchOffset = 0;
+    while ((searchOffset = outputText.find("\"new\"", searchOffset)) != String::npos) {
+        ++exactNewNameCount;
+        searchOffset += std::strlen("\"new\"");
+    }
+    EXPECT_EQ(exactNewNameCount, 1u);
 }
 
 TEST_F(ProgramUtilTest, UnformattedFloatStorageImagesKeepIntegerAtomicImagesTyped) {
